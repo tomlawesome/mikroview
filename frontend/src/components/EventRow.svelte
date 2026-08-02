@@ -10,7 +10,7 @@
   )
 </script>
 
-<div class="row" title={event.raw}>
+<div class="row row-{event.action}" title={event.raw}>
   <span class="cell time">{formatTime(event.time)}</span>
   <span class="cell device">{deviceName}</span>
   <span class="cell action"><ActionBadge action={event.action} /></span>
@@ -28,16 +28,51 @@
   }
 
   .cell {
-    padding: 5px 10px;
+    padding: 9px 10px;
     border-bottom: 1px solid var(--border);
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
-    font-size: 12px;
+    font-size: 14px;
+    line-height: 1.4;
   }
 
   .row:hover .cell {
     background: var(--bg-hover);
+  }
+
+  .row-accept .cell {
+    background: var(--row-accept-bg);
+  }
+  .row-drop .cell {
+    background: var(--row-drop-bg);
+  }
+  .row-reject .cell {
+    background: var(--row-reject-bg);
+  }
+  .row-log .cell {
+    background: var(--row-log-bg);
+  }
+  .row-unknown .cell {
+    background: var(--row-unknown-bg);
+  }
+
+  /* Same specificity as `.row:hover .cell` above; defined after it so
+     source order lets these win on hover instead of the plain --bg-hover. */
+  .row-accept:hover .cell {
+    background: var(--row-accept-bg-hover);
+  }
+  .row-drop:hover .cell {
+    background: var(--row-drop-bg-hover);
+  }
+  .row-reject:hover .cell {
+    background: var(--row-reject-bg-hover);
+  }
+  .row-log:hover .cell {
+    background: var(--row-log-bg-hover);
+  }
+  .row-unknown:hover .cell {
+    background: var(--row-unknown-bg-hover);
   }
 
   .time,
@@ -61,7 +96,7 @@
   }
 
   .iface {
-    color: var(--fg-dim);
-    font-size: 11px;
+    color: var(--fg-muted);
+    font-size: 13px;
   }
 </style>

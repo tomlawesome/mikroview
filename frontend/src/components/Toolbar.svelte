@@ -1,13 +1,17 @@
 <script lang="ts">
   import { appState } from '../lib/state.svelte'
   import { formatEps } from '../lib/format'
+  import { themeState } from '../lib/theme.svelte'
   import ConnectionIndicator from './ConnectionIndicator.svelte'
   import DeviceStatus from './DeviceStatus.svelte'
+  import LogoLockup from './LogoLockup.svelte'
+
+  const themeLabels = { system: 'Theme: System', light: 'Theme: Light', dark: 'Theme: Dark' }
 </script>
 
 <header class="toolbar">
   <div class="brand">
-    <span class="logo">MikroView</span>
+    <LogoLockup size={21} />
     <ConnectionIndicator />
   </div>
 
@@ -39,6 +43,13 @@
     <button onclick={() => appState.clearBuffer()} title="Clear the local event buffer">
       Clear
     </button>
+
+    <button
+      onclick={() => themeState.cycle()}
+      title="Cycle theme: system → light → dark"
+    >
+      {themeLabels[themeState.pref]}
+    </button>
   </div>
 </header>
 
@@ -59,13 +70,6 @@
     gap: 14px;
   }
 
-  .logo {
-    font-weight: 700;
-    font-size: 14px;
-    letter-spacing: 0.02em;
-    color: var(--fg);
-  }
-
   .controls {
     display: flex;
     align-items: center;
@@ -75,9 +79,9 @@
 
   .eps {
     font-family: var(--font-mono);
-    font-size: 12px;
+    font-size: 13px;
     color: var(--fg-muted);
-    padding-right: 8px;
+    padding-right: 10px;
     border-right: 1px solid var(--border);
   }
 
@@ -86,8 +90,8 @@
     border: 1px solid var(--border);
     color: var(--fg-muted);
     border-radius: 5px;
-    padding: 5px 11px;
-    font-size: 12px;
+    padding: 7px 13px;
+    font-size: 13px;
   }
 
   button:hover {

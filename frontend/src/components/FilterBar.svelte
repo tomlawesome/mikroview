@@ -85,8 +85,8 @@
     border: 1px solid var(--border);
     color: var(--fg);
     border-radius: 5px;
-    padding: 6px 9px;
-    font-size: 12px;
+    padding: 8px 10px;
+    font-size: 14px;
     min-width: 0;
   }
 
@@ -101,11 +101,11 @@
   }
 
   input[type='text'] {
-    width: 130px;
+    width: 145px;
   }
 
   input[inputmode='numeric'] {
-    width: 70px;
+    width: 80px;
   }
 
   .rule {
@@ -118,8 +118,8 @@
     border: 1px solid var(--border);
     color: var(--fg-muted);
     border-radius: 5px;
-    padding: 6px 12px;
-    font-size: 12px;
+    padding: 8px 14px;
+    font-size: 14px;
   }
 
   .clear:hover {

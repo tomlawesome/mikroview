@@ -1,11 +1,16 @@
 <script lang="ts">
   import { appState } from './lib/state.svelte'
   import { liveSocket } from './lib/ws'
+  import { themeState } from './lib/theme.svelte'
   import Toolbar from './components/Toolbar.svelte'
   import FilterBar from './components/FilterBar.svelte'
   import LiveTable from './components/LiveTable.svelte'
 
   const STATS_REFRESH_MS = 5000
+
+  $effect(() => {
+    themeState.apply()
+  })
 
   $effect(() => {
     appState.loadInitial().catch(() => {

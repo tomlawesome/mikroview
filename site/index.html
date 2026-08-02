@@ -1,0 +1,583 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>MikroView — RouterOS firewall live view</title>
+<meta name="description" content="A real-time RouterOS firewall live view. See every connection accepted, dropped, or rejected, and by which rule. Self-hosted, single container, near-zero load on the router." />
+<link rel="icon" type="image/svg+xml" href="img/logo-mark.svg" />
+<style>
+  :root {
+    --bg: #0b0e14;
+    --bg-elevated: #12161f;
+    --bg-hover: #171c27;
+    --border: #232a38;
+    --fg: #eceef2;
+    --fg-muted: #9aa3b2;
+    --fg-dim: #6b7686;
+    --accent: #4d9fff;
+    --brand: #2f6fe0;
+    --accept: #3ecf7e;
+    --accept-bg: rgba(62, 207, 126, 0.1);
+    --drop: #f5a623;
+    --drop-bg: rgba(245, 166, 35, 0.1);
+    --reject: #ef4444;
+    --reject-bg: rgba(239, 68, 68, 0.1);
+    --unknown: #838d9e;
+    --unknown-bg: rgba(131, 141, 158, 0.08);
+    --font-sans: -apple-system, 'Segoe UI', system-ui, Roboto, sans-serif;
+    --font-mono: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+    color-scheme: dark;
+  }
+  :root[data-theme='light'] {
+    --bg: #f6f7f9;
+    --bg-elevated: #ffffff;
+    --bg-hover: #eef0f3;
+    --border: #e1e4e9;
+    --fg: #12141a;
+    --fg-muted: #4b5462;
+    --fg-dim: #6b7280;
+    color-scheme: light;
+  }
+  @media (prefers-color-scheme: light) {
+    :root:not([data-theme='dark']) {
+      --bg: #f6f7f9;
+      --bg-elevated: #ffffff;
+      --bg-hover: #eef0f3;
+      --border: #e1e4e9;
+      --fg: #12141a;
+      --fg-muted: #4b5462;
+      --fg-dim: #6b7280;
+      color-scheme: light;
+    }
+  }
+
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--fg);
+    font-family: var(--font-sans);
+    -webkit-font-smoothing: antialiased;
+  }
+  img { max-width: 100%; display: block; }
+  ::selection { background: var(--accent); color: #fff; }
+
+  .wrap { max-width: 1080px; margin: 0 auto; padding: 0 28px; }
+
+  /* ---------- header ---------- */
+  header.site {
+    position: sticky;
+    top: 0;
+    z-index: 10;
+    background: color-mix(in srgb, var(--bg) 88%, transparent);
+    backdrop-filter: blur(10px);
+    border-bottom: 1px solid var(--border);
+  }
+  header.site .wrap {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding-top: 16px;
+    padding-bottom: 16px;
+  }
+  .brand {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-weight: 700;
+    font-size: 16px;
+    letter-spacing: -0.01em;
+  }
+  .brand img { width: 26px; height: 26px; }
+  .brand .accent { color: var(--accent); }
+  nav.site-nav { display: flex; align-items: center; gap: 22px; }
+  nav.site-nav a {
+    color: var(--fg-muted);
+    text-decoration: none;
+    font-size: 14px;
+  }
+  nav.site-nav a:hover { color: var(--fg); }
+  .btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 14px;
+    font-weight: 600;
+    padding: 9px 16px;
+    border-radius: 7px;
+    text-decoration: none;
+    border: 1px solid transparent;
+    cursor: pointer;
+    font-family: inherit;
+  }
+  .btn-primary { background: var(--brand); color: #fff; }
+  .btn-primary:hover { background: #2560c9; }
+  .btn-ghost { border-color: var(--border); color: var(--fg); background: transparent; }
+  .btn-ghost:hover { border-color: var(--fg-muted); }
+  .theme-toggle {
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--fg-muted);
+    border-radius: 7px;
+    padding: 8px 12px;
+    font-size: 13px;
+    font-family: var(--font-mono);
+    cursor: pointer;
+  }
+  .theme-toggle:hover { color: var(--fg); border-color: var(--fg-muted); }
+
+  /* ---------- hero ---------- */
+  .hero { position: relative; overflow: hidden; padding: 88px 0 64px; }
+  .hero-bg {
+    position: absolute;
+    inset: 0;
+    background:
+      radial-gradient(900px 420px at 82% -10%, rgba(45, 111, 224, 0.16), transparent 60%),
+      radial-gradient(600px 320px at 0% 100%, rgba(62, 207, 126, 0.06), transparent 60%);
+    pointer-events: none;
+  }
+  .hero-grid {
+    position: absolute;
+    inset: 0;
+    background-image:
+      linear-gradient(rgba(128, 140, 160, 0.06) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(128, 140, 160, 0.06) 1px, transparent 1px);
+    background-size: 42px 42px;
+    -webkit-mask-image: linear-gradient(to bottom, black, transparent 75%);
+    mask-image: linear-gradient(to bottom, black, transparent 75%);
+    pointer-events: none;
+  }
+  :root[data-theme='light'] .hero-grid { background-image:
+      linear-gradient(rgba(30, 40, 60, 0.05) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(30, 40, 60, 0.05) 1px, transparent 1px); }
+
+  .hero .wrap { position: relative; display: grid; grid-template-columns: 1fr; gap: 40px; }
+  .eyebrow {
+    font-family: var(--font-mono);
+    font-size: 12.5px;
+    letter-spacing: 0.09em;
+    text-transform: uppercase;
+    color: var(--accept);
+    margin: 0 0 18px;
+  }
+  .eyebrow::before { content: '● '; }
+  h1 {
+    font-family: var(--font-mono);
+    font-size: clamp(32px, 5vw, 52px);
+    line-height: 1.12;
+    letter-spacing: -0.01em;
+    margin: 0 0 22px;
+    max-width: 16ch;
+    text-wrap: balance;
+  }
+  h1 .accent { color: var(--accent); }
+  .hero-sub {
+    font-size: 17.5px;
+    line-height: 1.65;
+    color: var(--fg-muted);
+    max-width: 54ch;
+    margin: 0 0 30px;
+  }
+  .hero-sub code {
+    font-family: var(--font-mono);
+    background: var(--bg-elevated);
+    border: 1px solid var(--border);
+    padding: 1px 6px;
+    border-radius: 4px;
+    font-size: 0.9em;
+    color: var(--fg);
+  }
+  .hero-ctas { display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 56px; }
+
+  /* ---------- live feed demo ---------- */
+  .feed-panel {
+    background: var(--bg-elevated);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    overflow: hidden;
+    box-shadow: 0 30px 80px -30px rgba(0, 0, 0, 0.5);
+  }
+  .feed-chrome {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 14px;
+    border-bottom: 1px solid var(--border);
+  }
+  .feed-dots { display: flex; gap: 6px; }
+  .feed-dots span { width: 9px; height: 9px; border-radius: 50%; background: var(--border); }
+  .feed-chrome-label {
+    font-family: var(--font-mono);
+    font-size: 12px;
+    color: var(--fg-dim);
+    margin-left: 4px;
+  }
+  .feed-live {
+    margin-left: auto;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--accept);
+  }
+  .feed-live .dot {
+    width: 6px; height: 6px; border-radius: 50%; background: var(--accept);
+    box-shadow: 0 0 6px var(--accept);
+    animation: blink 1.6s ease-in-out infinite;
+  }
+  @keyframes blink { 0%, 100% { opacity: 1 } 50% { opacity: 0.35 } }
+
+  .feed-rows {
+    height: 262px;
+    overflow: hidden;
+    font-family: var(--font-mono);
+    font-size: 12.5px;
+    display: flex;
+    flex-direction: column;
+    justify-content: flex-end;
+  }
+  .feed-row {
+    display: grid;
+    grid-template-columns: 62px 74px 1fr 100px;
+    gap: 10px;
+    align-items: center;
+    padding: 8px 14px;
+    border-bottom: 1px solid var(--border);
+    white-space: nowrap;
+    overflow: hidden;
+    animation: feed-in 0.4s ease-out;
+  }
+  @keyframes feed-in {
+    from { opacity: 0; transform: translateY(6px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+  .feed-row .t { color: var(--fg-dim); }
+  .feed-row .badge {
+    display: inline-block;
+    font-size: 10.5px;
+    font-weight: 700;
+    padding: 2px 7px;
+    border-radius: 4px;
+    text-align: center;
+  }
+  .feed-row .addrs { color: var(--fg); overflow: hidden; text-overflow: ellipsis; }
+  .feed-row .rule { color: var(--fg-muted); text-align: right; overflow: hidden; text-overflow: ellipsis; }
+  .feed-row.accept { background: var(--accept-bg); }
+  .feed-row.accept .badge { color: var(--accept); background: rgba(62, 207, 126, 0.16); }
+  .feed-row.drop { background: var(--drop-bg); }
+  .feed-row.drop .badge { color: var(--drop); background: rgba(245, 166, 35, 0.16); }
+  .feed-row.reject { background: var(--reject-bg); }
+  .feed-row.reject .badge { color: var(--reject); background: rgba(239, 68, 68, 0.16); }
+
+  @media (prefers-reduced-motion: reduce) {
+    .feed-row { animation: none; }
+    .feed-live .dot { animation: none; }
+  }
+
+  /* ---------- features ---------- */
+  .features { padding: 30px 0 76px; }
+  .section-label {
+    font-family: var(--font-mono);
+    font-size: 12px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--fg-dim);
+    margin: 0 0 14px;
+  }
+  .feature-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+    gap: 1px;
+    background: var(--border);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    overflow: hidden;
+  }
+  .feature-card { background: var(--bg-elevated); padding: 26px 24px; }
+  .feature-card h3 {
+    font-size: 15.5px;
+    margin: 0 0 10px;
+    display: flex;
+    align-items: center;
+    gap: 9px;
+  }
+  .feature-card h3 .chip {
+    width: 7px; height: 7px; border-radius: 50%; background: var(--accent); flex: none;
+  }
+  .feature-card p { margin: 0; font-size: 14px; line-height: 1.6; color: var(--fg-muted); }
+
+  /* ---------- screenshot ---------- */
+  .proof { padding: 20px 0 40px; }
+  .proof-frame {
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    overflow: hidden;
+    box-shadow: 0 40px 100px -40px rgba(0, 0, 0, 0.55);
+  }
+  .proof-frame .chrome {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 14px;
+    background: var(--bg-elevated);
+    border-bottom: 1px solid var(--border);
+  }
+  .proof-frame .chrome span { width: 9px; height: 9px; border-radius: 50%; background: var(--border); }
+  .proof-frame img[data-theme-img='light'] { display: none; }
+  :root[data-theme='light'] .proof-frame img[data-theme-img='dark'] { display: none; }
+  :root[data-theme='light'] .proof-frame img[data-theme-img='light'] { display: block; }
+  @media (prefers-color-scheme: light) {
+    :root:not([data-theme='dark']) .proof-frame img[data-theme-img='dark'] { display: none; }
+    :root:not([data-theme='dark']) .proof-frame img[data-theme-img='light'] { display: block; }
+  }
+
+  /* ---------- quickstart ---------- */
+  .quickstart { padding: 20px 0 84px; }
+  .terminal {
+    background: #0a0d13;
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    overflow: hidden;
+    max-width: 720px;
+  }
+  :root[data-theme='light'] .terminal { background: #14161d; }
+  .terminal .chrome {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 14px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  }
+  .terminal .chrome span { width: 9px; height: 9px; border-radius: 50%; background: rgba(255, 255, 255, 0.15); }
+  .terminal pre {
+    margin: 0;
+    padding: 20px 22px 22px;
+    font-family: var(--font-mono);
+    font-size: 13.5px;
+    line-height: 1.8;
+    color: #d7dbe2;
+    overflow-x: auto;
+  }
+  .terminal .prompt { color: #6b7686; }
+  .terminal .cmd { color: #eceef2; }
+  .terminal .flag { color: #8ec1ff; }
+  .terminal .val { color: #7fd99a; }
+  .quickstart-note { margin-top: 16px; font-size: 14px; color: var(--fg-muted); }
+  .quickstart-note a { color: var(--accent); }
+
+  /* ---------- footer ---------- */
+  footer.site {
+    border-top: 1px solid var(--border);
+    padding: 32px 0 48px;
+  }
+  footer.site .wrap {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 16px;
+    flex-wrap: wrap;
+  }
+  footer.site p {
+    margin: 0;
+    font-size: 12.5px;
+    color: var(--fg-dim);
+    max-width: 60ch;
+    line-height: 1.6;
+  }
+  footer.site a { color: var(--fg-dim); }
+
+  @media (max-width: 640px) {
+    .hero { padding: 56px 0 40px; }
+    .feed-row { grid-template-columns: 50px 62px 1fr; }
+    .feed-row .rule { display: none; }
+  }
+</style>
+</head>
+<body>
+
+<header class="site">
+  <div class="wrap">
+    <a class="brand" href="#top" style="text-decoration:none;color:inherit;">
+      <img src="img/logo-mark.svg" width="26" height="26" alt="" />
+      Mikro<span class="accent">View</span>
+    </a>
+    <nav class="site-nav">
+      <a href="#features">Features</a>
+      <a href="#screenshot">Screenshot</a>
+      <a href="#quickstart">Quickstart</a>
+      <button class="theme-toggle" id="theme-toggle" type="button">Theme: System</button>
+      <a class="btn btn-primary" href="https://github.com/tomlawesome/mikroview">GitHub →</a>
+    </nav>
+  </div>
+</header>
+
+<section class="hero" id="top">
+  <div class="hero-bg"></div>
+  <div class="hero-grid"></div>
+  <div class="wrap">
+    <div>
+      <p class="eyebrow">RouterOS · Firewall live view</p>
+      <h1>See what your<br/>firewall <span class="accent">just did.</span></h1>
+      <p class="hero-sub">
+        MikroView turns RouterOS's firewall log into a real-time, filterable live
+        view — like OPNsense's live view, for RouterOS. Every connection, accepted,
+        dropped, or rejected, and by which rule. Syslog-based, so there's no API
+        access and no credentials on the router — just <code>docker compose up</code>.
+      </p>
+      <div class="hero-ctas">
+        <a class="btn btn-primary" href="https://github.com/tomlawesome/mikroview">View on GitHub</a>
+        <a class="btn btn-ghost" href="#quickstart">Quickstart →</a>
+      </div>
+    </div>
+
+    <div class="feed-panel" role="img" aria-label="Animated preview of the MikroView live table">
+      <div class="feed-chrome">
+        <div class="feed-dots"><span></span><span></span><span></span></div>
+        <span class="feed-chrome-label">live view — WAN</span>
+        <span class="feed-live"><span class="dot"></span>LIVE</span>
+      </div>
+      <div class="feed-rows" id="feed-rows"></div>
+    </div>
+  </div>
+</section>
+
+<section class="features" id="features">
+  <div class="wrap">
+    <p class="section-label">Why syslog, not the API</p>
+    <div class="feature-grid">
+      <div class="feature-card">
+        <h3><span class="chip"></span>Push, not poll</h3>
+        <p>RouterOS forwards firewall log lines over syslog. No API access, no
+        credentials, no polling loop hammering the router — just a stream it was
+        already capable of sending.</p>
+      </div>
+      <div class="feature-card">
+        <h3><span class="chip"></span>The verdict, not just the packet</h3>
+        <p>Every row is color-coded by what actually happened — accepted, dropped,
+        rejected — and which rule made that call, decoded from a short
+        log-prefix convention.</p>
+      </div>
+      <div class="feature-card">
+        <h3><span class="chip"></span>One container, 15MB</h3>
+        <p>A single Go binary with the UI embedded, shipped in a distroless
+        image. <code>docker compose up</code> and you're watching traffic.</p>
+      </div>
+      <div class="feature-card">
+        <h3><span class="chip"></span>Filter like you mean it</h3>
+        <p>Device, IP or CIDR, port, protocol, interface, rule label — all
+        client-side, all instant, no round-trip to the server.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="proof" id="screenshot">
+  <div class="wrap">
+    <p class="section-label">In your browser</p>
+    <div class="proof-frame">
+      <div class="chrome"><span></span><span></span><span></span></div>
+      <img data-theme-img="dark" src="img/live-view-dark.png" alt="MikroView live view, dark theme, showing accepted, dropped, and rejected RouterOS firewall connections" />
+      <img data-theme-img="light" src="img/live-view-light.png" alt="MikroView live view, light theme, showing accepted, dropped, and rejected RouterOS firewall connections" />
+    </div>
+  </div>
+</section>
+
+<section class="quickstart" id="quickstart">
+  <div class="wrap">
+    <p class="section-label">Quickstart</p>
+    <div class="terminal">
+      <div class="chrome"><span></span><span></span><span></span></div>
+      <pre><span class="prompt">$</span> <span class="cmd">docker run -d --name mikroview \</span>
+    <span class="flag">-p</span> <span class="val">514:1514/udp</span> <span class="flag">-p</span> <span class="val">514:1514/tcp</span> <span class="flag">-p</span> <span class="val">8080:8080</span> \
+    ghcr.io/tomlawesome/mikroview:latest</pre>
+    </div>
+    <p class="quickstart-note">
+      Then point RouterOS at it — two commands and a log-prefix convention,
+      see <a href="https://github.com/tomlawesome/mikroview/blob/main/docs/routeros-setup.md">docs/routeros-setup.md</a>.
+    </p>
+  </div>
+</section>
+
+<footer class="site">
+  <div class="wrap">
+    <p>
+      MikroView is an independent, community project. It is not affiliated
+      with or endorsed by MikroTik. RouterOS is a trademark of MikroTikls SIA.
+    </p>
+    <a href="https://github.com/tomlawesome/mikroview">github.com/tomlawesome/mikroview</a>
+  </div>
+</footer>
+
+<script>
+  // ---- theme toggle (mirrors the app's own system/light/dark cycle) ----
+  (function () {
+    var order = ['system', 'light', 'dark'];
+    var pref = localStorage.getItem('mikroview-site-theme') || 'system';
+    var btn = document.getElementById('theme-toggle');
+    function apply() {
+      if (pref === 'system') document.documentElement.removeAttribute('data-theme');
+      else document.documentElement.setAttribute('data-theme', pref);
+      btn.textContent = 'Theme: ' + pref.charAt(0).toUpperCase() + pref.slice(1);
+      localStorage.setItem('mikroview-site-theme', pref);
+    }
+    btn.addEventListener('click', function () {
+      pref = order[(order.indexOf(pref) + 1) % order.length];
+      apply();
+    });
+    apply();
+  })();
+
+  // ---- animated hero live-feed ----
+  (function () {
+    var container = document.getElementById('feed-rows');
+    var reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+    var sample = [
+      { a: 'accept', chain: 'forward', src: '192.168.88.14:51230', dst: '1.1.1.1:443', rule: 'lan-wan' },
+      { a: 'drop', chain: 'input', src: '185.220.101.4:52301', dst: '203.0.113.9:8291', rule: 'input-def' },
+      { a: 'accept', chain: 'input', src: '192.168.88.10:60112', dst: '192.168.88.1:22', rule: 'mgmt-ssh' },
+      { a: 'drop', chain: 'input', src: '45.148.10.23:33812', dst: '203.0.113.9:3389', rule: 'invalid' },
+      { a: 'reject', chain: 'forward', src: '192.168.88.21:54986', dst: '104.21.5.12:6881', rule: 'no-torrent' },
+      { a: 'accept', chain: 'forward', src: '192.168.88.50:60836', dst: '142.250.187.14:443', rule: 'lan-wan' },
+      { a: 'drop', chain: 'input', src: '196.251.71.9:41902', dst: '203.0.113.9:23', rule: 'input-def' },
+      { a: 'accept', chain: 'forward', src: '192.168.88.33:50230', dst: '1.1.1.1:53', rule: 'lan-dns' },
+      { a: 'drop', chain: 'input', src: '89.248.165.31:19274', dst: '203.0.113.9:5900', rule: 'input-def' },
+      { a: 'accept', chain: 'forward', src: '192.168.88.12:58286', dst: '185.199.108.153:443', rule: 'lan-wan' },
+    ];
+
+    var labels = { accept: 'ACCEPT', drop: 'DROP', reject: 'REJECT' };
+    var MAX_ROWS = 7;
+    var i = 0;
+
+    function now() {
+      var d = new Date();
+      function p(n) { return String(n).padStart(2, '0'); }
+      return p(d.getHours()) + ':' + p(d.getMinutes()) + ':' + p(d.getSeconds());
+    }
+
+    function addRow() {
+      var e = sample[i % sample.length];
+      i++;
+      var row = document.createElement('div');
+      row.className = 'feed-row ' + e.a;
+      row.innerHTML =
+        '<span class="t">' + now() + '</span>' +
+        '<span class="badge">' + labels[e.a] + '</span>' +
+        '<span class="addrs">' + e.src + ' → ' + e.dst + '</span>' +
+        '<span class="rule">' + e.rule + '</span>';
+      container.appendChild(row);
+      while (container.children.length > MAX_ROWS) {
+        container.removeChild(container.firstChild);
+      }
+    }
+
+    for (var n = 0; n < MAX_ROWS; n++) addRow();
+    if (!reduceMotion) setInterval(addRow, 1100);
+  })();
+</script>
+
+</body>
+</html>

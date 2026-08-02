@@ -1,4 +1,10 @@
-# MikroView
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="brand/logo-lockup-dark.svg">
+    <source media="(prefers-color-scheme: light)" srcset="brand/logo-lockup-light.svg">
+    <img src="brand/logo-lockup-dark.svg" alt="MikroView" width="280">
+  </picture>
+</p>
 
 A real-time firewall "live view" for RouterOS, in the spirit of
 OPNsense's live view: see every connection attempt as it happens,
@@ -9,6 +15,15 @@ Ships as a single Docker container. RouterOS pushes firewall log lines
 to it over syslog (no API access, no credentials, near-zero load on the
 router); MikroView parses, stores, and streams them to a fast, dark,
 dependency-light web UI.
+
+<p align="center">
+  <img src="docs/screenshots/live-view-dark.png" alt="MikroView live view showing accepted (green), dropped (amber), and rejected (red) RouterOS firewall connections" width="820" />
+</p>
+
+A one-page overview with the same screenshots lives in
+[`site/`](site/index.html) (open `site/index.html` directly, or serve the
+directory statically) — see [`brand/`](brand/BRANDING.md) for the logo
+assets and color tokens behind it.
 
 ## Quickstart
 
@@ -88,9 +103,11 @@ printf '<134>Jan 15 10:22:31 MikroTik A|lan-wan|forward: in:ether1 out:bridge1, 
   configuration (syslog forwarding, log-prefix convention)
 - [docs/configuration.md](docs/configuration.md) — config.yaml
   reference, env vars, API reference
+- [brand/BRANDING.md](brand/BRANDING.md) — logo files, color tokens,
+  how to regenerate the PNG exports
 
 ## Not (yet) included
 
 Deliberately deferred rather than half-built: authentication (trusted-LAN
-only by design), CI, TLS syslog, multi-arch images, config hot-reload,
+only by design), TLS syslog, multi-arch images, config hot-reload,
 server-side WebSocket filtering, CSV/JSON export.
