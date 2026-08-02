@@ -7,17 +7,18 @@ import (
 
 func mkEvent(t time.Time, device string, action Action) Event {
 	return Event{
-		Time:      t,
-		DeviceID:  device,
-		Action:    action,
-		Protocol:  "TCP",
-		SrcIP:     "192.168.1.50",
-		SrcPort:   1234,
-		DstIP:     "1.2.3.4",
-		DstPort:   443,
-		Chain:     "forward",
-		RuleLabel: "lan-wan",
-		Raw:       "raw line",
+		Time:       t,
+		ReceivedAt: t,
+		DeviceID:   device,
+		Action:     action,
+		Protocol:   "TCP",
+		SrcIP:      "192.168.1.50",
+		SrcPort:    1234,
+		DstIP:      "1.2.3.4",
+		DstPort:    443,
+		Chain:      "forward",
+		RuleLabel:  "lan-wan",
+		Raw:        "raw line",
 	}
 }
 

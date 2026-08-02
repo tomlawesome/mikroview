@@ -102,6 +102,58 @@ func TestParse(t *testing.T) {
 				Length: 60,
 			},
 		},
+		{
+			// srcnat/masquerade: translated source address is parenthesized
+			// mid-annotation, original dst repeated at the end. The parser
+			// doesn't assume this shape -- it diffs against the already-
+			// parsed main tuple to find the address that changed.
+			name: "srcnat with parenthesized translated source",
+			msg:  "A|masq|srcnat: in:ether1 out:ether2, proto UDP, 10.0.0.3:51258->1.1.1.1:53, NAT (203.0.113.10:51258->1.1.1.1:53), len 73",
+			want: Parsed{
+				Action: store.ActionAccept, RuleLabel: "masq", Chain: "srcnat",
+				InInterface: "ether1", OutInterface: "ether2",
+				Protocol: "UDP",
+				SrcIP:    "10.0.0.3", SrcPort: 51258,
+				DstIP: "1.1.1.1", DstPort: 53,
+				NatIP: "203.0.113.10", NatPort: 51258,
+				NatRaw: "(203.0.113.10:51258->1.1.1.1:53)",
+				Length: 73,
+			},
+		},
+		{
+			// dstnat/port-forward: translated destination address trails
+			// the annotation instead of leading it -- a different shape
+			// from the srcnat case above, still resolved by diffing.
+			name: "dstnat with trailing translated destination",
+			msg:  "A|dnat|dstnat: in:ether1 out:ether2, proto TCP (SYN), 203.0.113.5:51234->203.0.113.10:8080, NAT 203.0.113.5:51234->(10.0.0.5:8080), len 60",
+			want: Parsed{
+				Action: store.ActionAccept, RuleLabel: "dnat", Chain: "dstnat",
+				InInterface: "ether1", OutInterface: "ether2",
+				Protocol: "TCP", Flags: "SYN",
+				SrcIP: "203.0.113.5", SrcPort: 51234,
+				DstIP: "203.0.113.10", DstPort: 8080,
+				NatIP: "10.0.0.5", NatPort: 8080,
+				NatRaw: "203.0.113.5:51234->(10.0.0.5:8080)",
+				Length: 60,
+			},
+		},
+		{
+			// A truncated line missing the closing ")" on the proto detail
+			// must not swallow every field after it (see splitTopLevel):
+			// the address pair and length should still parse even though
+			// the ICMP detail itself is incomplete.
+			name: "unterminated proto parenthetical still yields later fields",
+			msg:  "A|lan-wan|forward: in:ether1 out:bridge1, connection-state:new, proto ICMP (type 8, code 0, 10.0.0.5->1.2.3.4, len 84",
+			want: Parsed{
+				Action: store.ActionAccept, RuleLabel: "lan-wan", Chain: "forward",
+				InInterface: "ether1", OutInterface: "bridge1",
+				ConnState: "new",
+				Protocol:  "ICMP", Flags: "type 8",
+				SrcIP:  "10.0.0.5",
+				DstIP:  "1.2.3.4",
+				Length: 84,
+			},
+		},
 	}
 
 	for _, tt := range tests {

@@ -21,6 +21,9 @@ func TestResolveConfiguredDevice(t *testing.T) {
 	if len(devices) != 1 || !devices[0].Configured || devices[0].EventCount != 1 {
 		t.Errorf("unexpected device state: %+v", devices)
 	}
+	if devices[0].FirstSeen.IsZero() {
+		t.Errorf("expected FirstSeen to be set for a configured device, got zero value")
+	}
 }
 
 func TestResolveAutoDiscoversUnknownSource(t *testing.T) {

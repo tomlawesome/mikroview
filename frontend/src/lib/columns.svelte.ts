@@ -13,6 +13,7 @@ export const COLUMNS: ColumnDef[] = [
   { key: 'chain', label: 'Chain' },
   { key: 'source', label: 'Source' },
   { key: 'destination', label: 'Destination' },
+  { key: 'nat', label: 'NAT' },
   { key: 'proto', label: 'Proto' },
   { key: 'iface', label: 'Interfaces' },
   { key: 'rule', label: 'Rule' },
@@ -26,7 +27,7 @@ export const COLUMNS: ColumnDef[] = [
 // it stops flexing and holds the size they chose.
 type Width = number | null
 
-const DEFAULT_WIDTHS: Width[] = [104, 150, 92, 88, null, null, 74, 160, null]
+const DEFAULT_WIDTHS: Width[] = [104, 150, 92, 88, null, null, null, 74, 160, null]
 const MIN_WIDTH = 56
 const STORAGE_KEY = 'mikroview-column-widths-v2'
 

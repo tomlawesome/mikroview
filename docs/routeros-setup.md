@@ -94,6 +94,28 @@ log-prefix=...`), not something to paste in blind:
 /ip firewall filter add chain=forward action=drop log=yes log-prefix="D|fwd-def|"
 ```
 
+### NAT rules (optional)
+
+The same `log=yes log-prefix="..."` convention works on `/ip firewall nat`
+rules too — no separate setup needed. Add the topic forward for NAT the
+same way as step 2 covers firewall/info, then tag the NAT rules you care
+about:
+
+```
+/system logging add topics=firewall,info action=mikroview
+/ip firewall nat set <rule-number> log=yes log-prefix="A|port-fwd|"
+```
+
+Events from a NAT rule show up with `chain` set to `srcnat` or `dstnat`
+(whichever the rule belongs to). If RouterOS includes its translated-
+address annotation in the log line, MikroView shows the post-NAT address
+alongside the original source/destination. RouterOS doesn't document a
+fixed format for that annotation, so MikroView parses it defensively
+(diffing against the already-known address pair rather than assuming a
+fixed layout) — if a translated address ever looks wrong for your
+RouterOS version, the untouched raw line is still available in the row's
+tooltip for comparison.
+
 ## 4. Verify
 
 On the router, confirm entries are being generated and sent:

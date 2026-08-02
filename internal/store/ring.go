@@ -55,8 +55,17 @@ func (s *Store) Insert(e Event) Event {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	now := time.Now()
+
 	s.nextID++
 	e.ID = s.nextID
+	// Production callers never set ReceivedAt, so it's always stamped here
+	// with the ingest goroutine's own clock. Tests are allowed to pre-set it
+	// to simulate events received at a specific past time for retention-
+	// window assertions.
+	if e.ReceivedAt.IsZero() {
+		e.ReceivedAt = now
+	}
 
 	s.buf[s.head] = e
 	s.head = (s.head + 1) % s.capacity
@@ -67,10 +76,10 @@ func (s *Store) Insert(e Event) Event {
 	s.total++
 	s.totalByAction[e.Action]++
 
-	now := time.Now().Unix()
-	idx := now % 60
-	if s.secBucketTime[idx] != now {
-		s.secBucketTime[idx] = now
+	sec := now.Unix()
+	idx := sec % 60
+	if s.secBucketTime[idx] != sec {
+		s.secBucketTime[idx] = sec
 		s.secBuckets[idx] = 0
 	}
 	s.secBuckets[idx]++
