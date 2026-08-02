@@ -1,6 +1,19 @@
 import { fetchDevices, fetchEvents, fetchStats } from './api'
 import { MAX_CLIENT_EVENTS } from './constants'
-import { emptyFilters, type Device, type Filters, type FirewallEvent, type Stats } from './types'
+import { retentionState } from './retention.svelte'
+import {
+  emptyFilters,
+  type ClientEvent,
+  type Device,
+  type Filters,
+  type FirewallEvent,
+  type Stats,
+} from './types'
+
+function stamp(events: FirewallEvent[]): ClientEvent[] {
+  const receivedAt = Date.now()
+  return events.map((e) => ({ ...e, receivedAt }))
+}
 
 export type ConnState = 'connecting' | 'open' | 'closed'
 
@@ -17,7 +30,7 @@ export type ConnState = 'connecting' | 'open' | 'closed'
 // `events` with that server-filtered baseline, so the two layers
 // together cover both "instant" and "actually complete" filtering.
 class AppState {
-  events = $state<FirewallEvent[]>([])
+  events = $state<ClientEvent[]>([])
   filters = $state<Filters>(emptyFilters())
   devices = $state<Device[]>([])
   stats = $state<Stats | null>(null)
@@ -26,26 +39,41 @@ class AppState {
   pendingCount = $state(0)
   autoscroll = $state(true)
 
-  private pendingBuffer: FirewallEvent[] = []
+  // Updated periodically by App.svelte (see tick()) so the age-based cutoff
+  // in filteredEvents actually re-evaluates over time, not just when the
+  // buffer itself changes.
+  now = $state(Date.now())
 
-  filteredEvents = $derived.by(() => applyFilters(this.events, this.filters))
+  private pendingBuffer: ClientEvent[] = []
+
+  filteredEvents = $derived.by(() => {
+    const cutoff =
+      retentionState.maxAgeMinutes === null ? null : this.now - retentionState.maxAgeMinutes * 60_000
+    const events = cutoff === null ? this.events : this.events.filter((e) => e.receivedAt >= cutoff)
+    return applyFilters(events, this.filters)
+  })
 
   hasActiveFilters = $derived.by(() => Object.values(this.filters).some((v) => v !== ''))
 
+  tick() {
+    this.now = Date.now()
+  }
+
   setInitialEvents(events: FirewallEvent[]) {
-    this.events = events.slice(-MAX_CLIENT_EVENTS)
+    this.events = stamp(events).slice(-MAX_CLIENT_EVENTS)
   }
 
   appendLive(newEvents: FirewallEvent[]) {
     if (newEvents.length === 0) return
+    const stamped = stamp(newEvents)
     if (this.paused) {
       // Capped the same way as `events` below -- otherwise leaving the
       // view paused for a while grows this without bound.
-      this.pendingBuffer = [...this.pendingBuffer, ...newEvents].slice(-MAX_CLIENT_EVENTS)
+      this.pendingBuffer = [...this.pendingBuffer, ...stamped].slice(-MAX_CLIENT_EVENTS)
       this.pendingCount = this.pendingBuffer.length
       return
     }
-    this.events = [...this.events, ...newEvents].slice(-MAX_CLIENT_EVENTS)
+    this.events = [...this.events, ...stamped].slice(-MAX_CLIENT_EVENTS)
   }
 
   togglePause() {
