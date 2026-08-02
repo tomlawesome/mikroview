@@ -90,7 +90,7 @@
   {#if event.ruleLabel}
     <button
       class="cell rule cell-btn"
-      onclick={() => appState.setFilter('rule', event.ruleLabel)}
+      onclick={() => (appState.filters = { ...appState.filters, rule: event.ruleLabel, ruleRegex: false })}
       title="Filter to rule: {event.ruleLabel}"
     >
       {event.ruleLabel}

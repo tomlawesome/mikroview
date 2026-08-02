@@ -58,13 +58,24 @@
     aria-label="Interface"
   />
 
-  <input
-    type="text"
-    placeholder="Rule / label contains…"
-    bind:value={appState.filters.rule}
-    class="rule"
-    aria-label="Rule label search"
-  />
+  <div class="rule-group">
+    <input
+      type="text"
+      placeholder={appState.filters.ruleRegex ? 'Rule / raw line regex…' : 'Rule / label contains…'}
+      bind:value={appState.filters.rule}
+      class="rule"
+      aria-label={appState.filters.ruleRegex ? 'Rule/raw line regex search' : 'Rule label search'}
+    />
+    <button
+      class="regex-toggle"
+      class:active={appState.filters.ruleRegex}
+      onclick={() => (appState.filters.ruleRegex = !appState.filters.ruleRegex)}
+      title="Treat the rule search above as a regular expression (matches rule label or raw log line)"
+      aria-pressed={appState.filters.ruleRegex}
+    >
+      .*
+    </button>
+  </div>
 
   {#if appState.hasActiveFilters}
     <button class="clear" onclick={() => appState.resetFilters()}>Clear filters</button>
@@ -111,9 +122,37 @@
     width: 80px;
   }
 
+  .rule-group {
+    display: flex;
+    gap: 4px;
+    flex: 1 1 200px;
+  }
+
   .rule {
     width: 200px;
     flex: 1 1 200px;
+  }
+
+  .regex-toggle {
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--fg-dim);
+    border-radius: 5px;
+    padding: 0 10px;
+    font-family: var(--font-mono);
+    font-size: 13px;
+    flex: none;
+  }
+
+  .regex-toggle:hover {
+    color: var(--fg-muted);
+    border-color: var(--fg-muted);
+  }
+
+  .regex-toggle.active {
+    color: var(--accent);
+    border-color: var(--accent);
+    background: var(--bg);
   }
 
   .clear {

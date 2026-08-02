@@ -157,6 +157,34 @@ func TestQueryFilters(t *testing.T) {
 			t.Errorf("got %v", ids(res.Events))
 		}
 	})
+
+	t.Run("by rule regex", func(t *testing.T) {
+		res := s.Query(Query{Rule: "^inval", RuleRegex: true, Limit: 10})
+		if len(res.Events) != 1 || res.Events[0].RuleLabel != "invalid" {
+			t.Errorf("got %v", ids(res.Events))
+		}
+	})
+
+	t.Run("rule regex is case-insensitive", func(t *testing.T) {
+		res := s.Query(Query{Rule: "INVALID", RuleRegex: true, Limit: 10})
+		if len(res.Events) != 1 || res.Events[0].RuleLabel != "invalid" {
+			t.Errorf("got %v", ids(res.Events))
+		}
+	})
+
+	t.Run("rule regex also matches against the raw line", func(t *testing.T) {
+		res := s.Query(Query{Rule: `raw.line`, RuleRegex: true, Limit: 10})
+		if len(res.Events) != 2 {
+			t.Errorf("expected regex to match both events' raw line, got %v", ids(res.Events))
+		}
+	})
+
+	t.Run("invalid regex pattern disables rule filtering rather than erroring", func(t *testing.T) {
+		res := s.Query(Query{Rule: "(unterminated[", RuleRegex: true, Limit: 10})
+		if len(res.Events) != 2 {
+			t.Errorf("expected an invalid pattern to leave both events unfiltered, got %v", ids(res.Events))
+		}
+	})
 }
 
 func TestStats(t *testing.T) {

@@ -91,6 +91,7 @@ export interface Filters {
   ip: string
   port: string
   rule: string
+  ruleRegex: boolean
 }
 
 export function emptyFilters(): Filters {
@@ -103,6 +104,7 @@ export function emptyFilters(): Filters {
     ip: '',
     port: '',
     rule: '',
+    ruleRegex: false,
   }
 }
 
@@ -119,5 +121,6 @@ export function filtersFromSearchParams(params: URLSearchParams): Filters {
     ip: params.get('ip') ?? '',
     port: params.get('port') ?? '',
     rule: params.get('rule') ?? '',
+    ruleRegex: params.get('ruleRegex') === 'true',
   }
 }

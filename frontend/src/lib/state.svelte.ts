@@ -54,7 +54,12 @@ class AppState {
     return applyFilters(events, this.filters)
   })
 
-  hasActiveFilters = $derived.by(() => Object.values(this.filters).some((v) => v !== ''))
+  // ruleRegex is excluded here: it's a modifier on `rule`, not a filter of
+  // its own, so toggling it on with an empty rule shouldn't count as an
+  // active filter (it's a boolean, so `!== ''` would always be true).
+  hasActiveFilters = $derived.by(() =>
+    Object.entries(this.filters).some(([k, v]) => k !== 'ruleRegex' && v !== ''),
+  )
 
   tick() {
     this.now = Date.now()
@@ -146,8 +151,20 @@ function applyFilters(events: FirewallEvent[], f: Filters): FirewallEvent[] {
       if (e.srcPort !== p && e.dstPort !== p) return false
     }
     if (f.rule) {
-      const needle = f.rule.toLowerCase()
-      if (!e.ruleLabel.toLowerCase().includes(needle) && !e.raw.toLowerCase().includes(needle)) return false
+      if (f.ruleRegex) {
+        // An invalid pattern disables the filter (matches internal/store/
+        // query.go's behavior) rather than throwing or hiding everything
+        // -- the user is probably still mid-typing it.
+        try {
+          const re = new RegExp(f.rule, 'i')
+          if (!re.test(e.ruleLabel) && !re.test(e.raw)) return false
+        } catch {
+          // invalid regex: no-op, treat as unfiltered
+        }
+      } else {
+        const needle = f.rule.toLowerCase()
+        if (!e.ruleLabel.toLowerCase().includes(needle) && !e.raw.toLowerCase().includes(needle)) return false
+      }
     }
     return true
   })

@@ -13,6 +13,7 @@ export function buildQuery(filters: Partial<Filters> & { limit?: number; sinceId
   if (filters.ip) params.set('ip', filters.ip)
   if (filters.port) params.set('port', filters.port)
   if (filters.rule) params.set('rule', filters.rule)
+  if (filters.rule && filters.ruleRegex) params.set('ruleRegex', 'true')
   if (filters.limit) params.set('limit', String(filters.limit))
   if (filters.sinceId) params.set('sinceId', String(filters.sinceId))
   const qs = params.toString()
