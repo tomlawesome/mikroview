@@ -99,6 +99,16 @@
     font-size: 14px;
   }
   nav.site-nav a:hover { color: var(--fg); }
+  .ai-badge {
+    font-family: var(--font-mono);
+    font-size: 11.5px;
+    color: var(--fg-dim);
+    border: 1px solid var(--border);
+    border-radius: 5px;
+    padding: 5px 10px;
+    white-space: nowrap;
+    cursor: help;
+  }
   .btn {
     display: inline-flex;
     align-items: center;
@@ -380,6 +390,7 @@
     gap: 16px;
     flex-wrap: wrap;
   }
+  .footer-notes { display: flex; flex-direction: column; gap: 8px; }
   footer.site p {
     margin: 0;
     font-size: 12.5px;
@@ -387,6 +398,7 @@
     max-width: 60ch;
     line-height: 1.6;
   }
+  footer.site p strong { color: var(--fg-muted); }
   footer.site a { color: var(--fg-dim); }
 
   @media (max-width: 640px) {
@@ -408,6 +420,7 @@
       <a href="#features">Features</a>
       <a href="#screenshot">Screenshot</a>
       <a href="#quickstart">Quickstart</a>
+      <span class="ai-badge" title="MikroView was coded by Claude under human direction">Coded by Claude</span>
       <button class="theme-toggle" id="theme-toggle" type="button">Theme: System</button>
       <a class="btn btn-primary" href="https://github.com/tomlawesome/mikroview">GitHub →</a>
     </nav>
@@ -503,10 +516,14 @@
 
 <footer class="site">
   <div class="wrap">
-    <p>
-      MikroView is an independent, community project. It is not affiliated
-      with or endorsed by MikroTik. RouterOS is a trademark of MikroTikls SIA.
-    </p>
+    <div class="footer-notes">
+      <p>
+        MikroView is an independent, community project. It is not affiliated
+        with or endorsed by MikroTik. RouterOS is a trademark of MikroTikls SIA.
+      </p>
+      <p><strong>Development disclosure:</strong> MikroView was coded by
+      Claude under human direction.</p>
+    </div>
     <a href="https://github.com/tomlawesome/mikroview">github.com/tomlawesome/mikroview</a>
   </div>
 </footer>
