@@ -3,9 +3,9 @@
   --bg-elevated: #12161f;
   --bg-hover: #171c27;
   --border: #232a38;
-  --fg: #d7dbe2;
-  --fg-muted: #838d9e;
-  --fg-dim: #545e6e;
+  --fg: #eceef2;
+  --fg-muted: #9aa3b2;
+  --fg-dim: #6b7686;
   --accent: #4d9fff;
 
   --accept: #3ecf7e;
@@ -14,8 +14,23 @@
   --drop-bg: rgba(245, 166, 35, 0.12);
   --reject: #ef4444;
   --reject-bg: rgba(239, 68, 68, 0.12);
+  --log: #38bdf8;
+  --log-bg: rgba(56, 189, 248, 0.12);
   --unknown: #838d9e;
   --unknown-bg: rgba(131, 141, 158, 0.12);
+
+  /* Full-row fill, one per action, at lower alpha than the badge tints
+     above since this washes the entire row rather than a small pill. */
+  --row-accept-bg: rgba(62, 207, 126, 0.09);
+  --row-accept-bg-hover: rgba(62, 207, 126, 0.15);
+  --row-drop-bg: rgba(245, 166, 35, 0.09);
+  --row-drop-bg-hover: rgba(245, 166, 35, 0.15);
+  --row-reject-bg: rgba(239, 68, 68, 0.09);
+  --row-reject-bg-hover: rgba(239, 68, 68, 0.15);
+  --row-log-bg: rgba(56, 189, 248, 0.07);
+  --row-log-bg-hover: rgba(56, 189, 248, 0.13);
+  --row-unknown-bg: rgba(131, 141, 158, 0.06);
+  --row-unknown-bg-hover: rgba(131, 141, 158, 0.11);
 
   --font-sans: -apple-system, 'Segoe UI', system-ui, Roboto, sans-serif;
   --font-mono: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
@@ -34,10 +49,21 @@
   --bg-elevated: #ffffff;
   --bg-hover: #eef0f3;
   --border: #e1e4e9;
-  --fg: #1a1d24;
-  --fg-muted: #5c6472;
-  --fg-dim: #99a1ad;
+  --fg: #12141a;
+  --fg-muted: #4b5462;
+  --fg-dim: #6b7280;
   color-scheme: light;
+
+  --row-accept-bg: rgba(22, 163, 74, 0.1);
+  --row-accept-bg-hover: rgba(22, 163, 74, 0.17);
+  --row-drop-bg: rgba(217, 119, 6, 0.1);
+  --row-drop-bg-hover: rgba(217, 119, 6, 0.17);
+  --row-reject-bg: rgba(220, 38, 38, 0.1);
+  --row-reject-bg-hover: rgba(220, 38, 38, 0.17);
+  --row-log-bg: rgba(2, 132, 199, 0.08);
+  --row-log-bg-hover: rgba(2, 132, 199, 0.14);
+  --row-unknown-bg: rgba(100, 110, 125, 0.07);
+  --row-unknown-bg-hover: rgba(100, 110, 125, 0.13);
 }
 
 @media (prefers-color-scheme: light) {
@@ -46,10 +72,21 @@
     --bg-elevated: #ffffff;
     --bg-hover: #eef0f3;
     --border: #e1e4e9;
-    --fg: #1a1d24;
-    --fg-muted: #5c6472;
-    --fg-dim: #99a1ad;
+    --fg: #12141a;
+    --fg-muted: #4b5462;
+    --fg-dim: #6b7280;
     color-scheme: light;
+
+    --row-accept-bg: rgba(22, 163, 74, 0.1);
+    --row-accept-bg-hover: rgba(22, 163, 74, 0.17);
+    --row-drop-bg: rgba(217, 119, 6, 0.1);
+    --row-drop-bg-hover: rgba(217, 119, 6, 0.17);
+    --row-reject-bg: rgba(220, 38, 38, 0.1);
+    --row-reject-bg-hover: rgba(220, 38, 38, 0.17);
+    --row-log-bg: rgba(2, 132, 199, 0.08);
+    --row-log-bg-hover: rgba(2, 132, 199, 0.14);
+    --row-unknown-bg: rgba(100, 110, 125, 0.07);
+    --row-unknown-bg-hover: rgba(100, 110, 125, 0.13);
   }
 }
 
@@ -65,7 +102,7 @@ body {
 
 body {
   font-family: var(--font-sans);
-  font-size: 13px;
+  font-size: 14px;
 }
 
 #app {

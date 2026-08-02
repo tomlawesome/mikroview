@@ -18,11 +18,11 @@
   .badge {
     display: inline-block;
     font-family: var(--font-mono);
-    font-size: 11px;
-    font-weight: 600;
+    font-size: 12.5px;
+    font-weight: 700;
     letter-spacing: 0.03em;
-    padding: 2px 7px;
-    border-radius: 3px;
+    padding: 3px 8px;
+    border-radius: 4px;
     line-height: 1.5;
     white-space: nowrap;
   }
@@ -42,7 +42,11 @@
     background: var(--reject-bg);
   }
 
-  .badge-log,
+  .badge-log {
+    color: var(--log);
+    background: var(--log-bg);
+  }
+
   .badge-unknown {
     color: var(--unknown);
     background: var(--unknown-bg);

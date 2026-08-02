@@ -1,0 +1,11 @@
+listen:
+  syslogUdp: ":1514"
+  syslogTcp: ":1514"
+  http: ":8080"
+store:
+  retention: 24h
+  maxEvents: 200000
+devices:
+  - id: core
+    name: "Core Router"
+    sourceIp: 127.0.0.2

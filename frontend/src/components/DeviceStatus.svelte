@@ -37,14 +37,14 @@
 
   .none {
     color: var(--fg-dim);
-    font-size: 12px;
+    font-size: 13px;
   }
 
   .device {
     display: inline-flex;
     align-items: center;
     gap: 6px;
-    font-size: 12px;
+    font-size: 13px;
     color: var(--fg-muted);
   }
 
@@ -62,7 +62,7 @@
   }
 
   .unregistered {
-    font-size: 10px;
+    font-size: 11px;
     color: var(--drop);
     border: 1px solid var(--drop);
     border-radius: 3px;
