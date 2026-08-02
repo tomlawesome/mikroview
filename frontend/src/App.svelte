@@ -29,6 +29,10 @@
 
     const interval = setInterval(() => {
       appState.refreshDevicesAndStats().catch(() => {})
+      // Also drives the age-based display cutoff in filteredEvents -- it
+      // needs *something* to re-trigger it periodically, since "an entry
+      // aged past the cutoff" isn't itself a change to any $state value.
+      appState.tick()
     }, STATS_REFRESH_MS)
 
     return () => {

@@ -2,10 +2,16 @@
   import { appState } from '../lib/state.svelte'
   import { formatEps } from '../lib/format'
   import { themeState } from '../lib/theme.svelte'
+  import { retentionState, MAX_AGE_OPTIONS } from '../lib/retention.svelte'
   import ConnectionIndicator from './ConnectionIndicator.svelte'
   import DeviceStatus from './DeviceStatus.svelte'
   import LogoLockup from './LogoLockup.svelte'
   import ThemeMenu from './ThemeMenu.svelte'
+
+  function onMaxAgeChange(e: Event) {
+    const raw = (e.target as HTMLSelectElement).value
+    retentionState.set(raw === 'null' ? null : Number(raw))
+  }
 
   const modeLabels = { system: 'Auto', light: 'Light', dark: 'Dark' }
 </script>
@@ -24,6 +30,17 @@
         {formatEps(appState.stats.eventsPerSecond)}/s
       </span>
     {/if}
+
+    <select
+      value={retentionState.maxAgeMinutes === null ? 'null' : String(retentionState.maxAgeMinutes)}
+      onchange={onMaxAgeChange}
+      title="How long events stay visible in the live view"
+      aria-label="Display duration"
+    >
+      {#each MAX_AGE_OPTIONS as opt (opt.value)}
+        <option value={opt.value === null ? 'null' : String(opt.value)}>{opt.label}</option>
+      {/each}
+    </select>
 
     <button
       class:active={appState.autoscroll}
@@ -88,13 +105,23 @@
     border-right: 1px solid var(--border);
   }
 
-  button {
+  button,
+  select {
     background: transparent;
     border: 1px solid var(--border);
     color: var(--fg-muted);
     border-radius: 5px;
     padding: 7px 13px;
     font-size: 13px;
+  }
+
+  select {
+    background: var(--bg);
+  }
+
+  select:focus {
+    outline: none;
+    border-color: var(--accent);
   }
 
   button:hover {

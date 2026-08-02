@@ -26,6 +26,16 @@ export interface FirewallEvent {
   raw: string
 }
 
+// A FirewallEvent as held in the client-side buffer, stamped with the
+// browser's own receipt time. Used for age-based display expiry (see
+// lib/retention.svelte.ts) instead of the event's own `time` field, for
+// the same reason the backend windows on its own receipt clock rather
+// than the RouterOS device's self-reported one: a device's clock isn't
+// guaranteed accurate, but "when this browser got it" always is.
+export interface ClientEvent extends FirewallEvent {
+  receivedAt: number
+}
+
 // Mirrors internal/device/registry.go's Info.
 export interface Device {
   id: string
