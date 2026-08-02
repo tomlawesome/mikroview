@@ -40,33 +40,59 @@ only known from *which rule* logged the packet. MikroView decodes this
 from the rule's `log-prefix`, using a compact convention:
 
 ```
-<ACTION>|<rule-slug>
+<ACTION>|<rule-slug>|
 ```
 
 - `A` = accept, `D` = drop, `R` = reject, `L` = log-only/passthrough
 - `rule-slug` is a short, human-meaningful label (lowercase, hyphens)
+- **the trailing `|` is required** — RouterOS concatenates the log-prefix
+  directly onto the log message with no guaranteed separating space, so
+  without a hard terminator there'd be no reliable way to tell where the
+  prefix ends and the rest of the message begins. A prefix missing the
+  trailing `|` won't be recognized at all — every event will show up as
+  action "unknown" (`?`), un-colored, un-labeled.
 
-**Keep the whole prefix to 15 characters or fewer.** RouterOS's log
-formatter is known to corrupt/overwrite adjacent fields once a log-prefix
-gets much past ~20 characters — 15 stays safely clear of that.
+**Keep the whole prefix to 15 characters or fewer** (trailing `|`
+included). RouterOS's log formatter is known to corrupt/overwrite
+adjacent fields once a log-prefix gets much past ~20 characters — 15
+stays safely clear of that.
 
-Add `log=yes log-prefix="..."` to each rule you want visible in the live
-view:
+### The universal part: tag rules you already have
+
+You almost certainly already have a firewall rule set. The only thing
+that matters is adding `log=yes` and a `log-prefix` to the rules you
+want visible — don't recreate your rules, edit them in place. Find the
+rule number with `/ip firewall filter print`, then:
 
 ```
-/ip firewall filter add chain=input connection-state=established,related action=accept log=yes log-prefix="A|est-rel"
-/ip firewall filter add chain=input connection-state=invalid action=drop log=yes log-prefix="D|invalid"
-/ip firewall filter add chain=input protocol=tcp dst-port=22 src-address-list=mgmt action=accept log=yes log-prefix="A|mgmt-ssh"
-/ip firewall filter add chain=input action=drop log=yes log-prefix="D|input-def"
-/ip firewall filter add chain=forward action=accept log=yes log-prefix="A|lan-wan"
-/ip firewall filter add chain=forward action=drop log=yes log-prefix="D|fwd-def"
+/ip firewall filter set <rule-number> log=yes log-prefix="A|wan-in|"
 ```
+
+(`A` here because that example rule accepts traffic — use `D`/`R`/`L`
+for a drop/reject/log-only rule instead.) Repeat for whichever rules you
+want to see in the live view — your default drop rule and a couple of
+accept rules is a good starting point.
 
 Rules without a `log-prefix` (or without `log=yes` at all) still work —
 they show up with action "unknown" and no rule label, since MikroView has
-no way to know what RouterOS decided without one. Adding the prefix is
-what makes the live view actually tell you *why* a connection was
-allowed or blocked, not just that traffic happened.
+no way to know what RouterOS decided without one.
+
+### If you're starting from a blank firewall
+
+The rules below are an *illustrative example*, not a universal script —
+they assume things like a `mgmt` address-list existing and specific
+chain/interface naming that won't match your setup. Treat them as a
+reference for the pattern (match condition + `action=` + `log=yes
+log-prefix=...`), not something to paste in blind:
+
+```
+/ip firewall filter add chain=input connection-state=established,related action=accept log=yes log-prefix="A|est-rel|"
+/ip firewall filter add chain=input connection-state=invalid action=drop log=yes log-prefix="D|invalid|"
+/ip firewall filter add chain=input protocol=tcp dst-port=22 src-address-list=mgmt action=accept log=yes log-prefix="A|mgmt-ssh|"
+/ip firewall filter add chain=input action=drop log=yes log-prefix="D|input-def|"
+/ip firewall filter add chain=forward action=accept log=yes log-prefix="A|lan-wan|"
+/ip firewall filter add chain=forward action=drop log=yes log-prefix="D|fwd-def|"
+```
 
 ## 4. Verify
 

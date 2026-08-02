@@ -18,17 +18,25 @@ export const COLUMNS: ColumnDef[] = [
   { key: 'rule', label: 'Rule' },
 ]
 
-const DEFAULT_WIDTHS = [104, 150, 92, 88, 190, 190, 74, 160, 220]
-const MIN_WIDTH = 56
-const STORAGE_KEY = 'mikroview-column-widths'
+// null = flexible (shares remaining width with other flexible columns,
+// via `minmax(0, 1fr)`) -- the default for anything whose content length
+// varies a lot (addresses, rule labels). A number is a fixed px width,
+// used for naturally-bounded content (timestamps, badges, protocol) and
+// for any column once the user has actually dragged it, at which point
+// it stops flexing and holds the size they chose.
+type Width = number | null
 
-function loadInitial(): number[] {
+const DEFAULT_WIDTHS: Width[] = [104, 150, 92, 88, null, null, 74, 160, null]
+const MIN_WIDTH = 56
+const STORAGE_KEY = 'mikroview-column-widths-v2'
+
+function loadInitial(): Width[] {
   try {
     const raw = localStorage.getItem(STORAGE_KEY)
     if (raw) {
       const parsed = JSON.parse(raw)
       if (Array.isArray(parsed) && parsed.length === DEFAULT_WIDTHS.length) {
-        return parsed.map((w) => Math.max(MIN_WIDTH, Number(w) || 0))
+        return parsed.map((w) => (w === null ? null : Math.max(MIN_WIDTH, Number(w) || 0)))
       }
     }
   } catch {
@@ -42,25 +50,11 @@ function loadInitial(): number[] {
 // row and the event rows below it live in the same CSS Grid container, so
 // a single template string here drives both.
 class ColumnState {
-  widths = $state<number[]>(loadInitial())
+  widths = $state<Width[]>(loadInitial())
 
-  gridTemplate = $derived(this.widths.map((w) => `${w}px`).join(' '))
-
-  // Cumulative right-edge offset of each column, in px -- used to place
-  // resize handles in a single overlay layer rather than nested inside
-  // each header cell (nesting them hits a CSS stacking-context trap: a
-  // sticky header cell's own z-index scopes its children's z-index, so a
-  // handle overlapping the *next* cell can't paint above that cell's
-  // content no matter how high its z-index is set).
-  offsets = $derived.by(() => {
-    const out: number[] = []
-    let sum = 0
-    for (const w of this.widths) {
-      sum += w
-      out.push(sum)
-    }
-    return out
-  })
+  gridTemplate = $derived(
+    this.widths.map((w) => (w === null ? 'minmax(0, 1fr)' : `${w}px`)).join(' '),
+  )
 
   isDefault = $derived(this.widths.every((w, i) => w === DEFAULT_WIDTHS[i]))
 
