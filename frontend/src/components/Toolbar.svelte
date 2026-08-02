@@ -3,6 +3,7 @@
   import { formatEps } from '../lib/format'
   import { themeState } from '../lib/theme.svelte'
   import { retentionState, MAX_AGE_OPTIONS } from '../lib/retention.svelte'
+  import { downloadEventsCsv } from '../lib/export'
   import ConnectionIndicator from './ConnectionIndicator.svelte'
   import DeviceStatus from './DeviceStatus.svelte'
   import LogoLockup from './LogoLockup.svelte'
@@ -60,6 +61,14 @@
 
     <button onclick={() => appState.clearBuffer()} title="Clear the local event buffer">
       Clear
+    </button>
+
+    <button
+      onclick={() => downloadEventsCsv(appState.filteredEvents)}
+      disabled={appState.filteredEvents.length === 0}
+      title="Export the currently shown/filtered events to a CSV file"
+    >
+      Export
     </button>
 
     <ThemeMenu />
@@ -132,5 +141,15 @@
   button.active {
     color: var(--accent);
     border-color: var(--accent);
+  }
+
+  button:disabled {
+    opacity: 0.5;
+    cursor: default;
+  }
+
+  button:disabled:hover {
+    color: var(--fg-muted);
+    border-color: var(--border);
   }
 </style>
