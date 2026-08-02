@@ -25,6 +25,20 @@ Then follow [docs/routeros-setup.md](docs/routeros-setup.md) to point
 your RouterOS device(s) at the container, and open
 `http://<docker-host>:8080`.
 
+### Prebuilt image
+
+Every push to `main` builds and publishes an image via GitHub Actions
+(see `.github/workflows/docker.yml`):
+
+```sh
+docker pull ghcr.io/tomlawesome/mikroview:latest
+```
+
+If `docker pull` reports the image as not found/unauthorized, the GHCR
+package is likely still set to private — open the package settings on
+GitHub (repo → Packages → mikroview) and set visibility to public, or
+`docker login ghcr.io` first with a PAT that has `read:packages` scope.
+
 ## How it works
 
 - **Ingestion**: RouterOS forwards firewall log lines via
