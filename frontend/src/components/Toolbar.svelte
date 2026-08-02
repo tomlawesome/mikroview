@@ -8,6 +8,7 @@
   import DeviceStatus from './DeviceStatus.svelte'
   import LogoLockup from './LogoLockup.svelte'
   import ThemeMenu from './ThemeMenu.svelte'
+  import TopRulesMenu from './TopRulesMenu.svelte'
 
   function onMaxAgeChange(e: Event) {
     const raw = (e.target as HTMLSelectElement).value
@@ -70,6 +71,8 @@
     >
       Export
     </button>
+
+    <TopRulesMenu />
 
     <ThemeMenu />
 
