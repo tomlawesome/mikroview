@@ -95,6 +95,13 @@ class AppState {
     this.filters = emptyFilters()
   }
 
+  // Sets a single filter field, used by click-to-filter cells in
+  // EventRow.svelte. Reassigns the whole object (rather than mutating one
+  // property) so it composes the same way resetFilters()/apply() do.
+  setFilter<K extends keyof Filters>(key: K, value: Filters[K]) {
+    this.filters = { ...this.filters, [key]: value }
+  }
+
   async loadInitial() {
     // Uses whatever's already in this.filters -- App.svelte sets this from
     // the URL's query string (if present) before calling loadInitial(), so
