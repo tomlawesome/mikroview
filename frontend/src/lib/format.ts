@@ -22,6 +22,12 @@ export function countryFlag(code?: string): string {
   return String.fromCodePoint(...points)
 }
 
+export function formatHM(iso: string): string {
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return iso
+  return d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', hour12: false })
+}
+
 export function formatEps(eps: number): string {
   if (eps < 1) return eps.toFixed(1)
   return Math.round(eps).toString()

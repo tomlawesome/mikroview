@@ -36,6 +36,7 @@ func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 		"total":            stats.Total,
 		"byAction":         stats.ByAction,
 		"topRules":         stats.TopRules,
+		"timeSeries":       stats.TimeSeries,
 		"eventsPerSecond":  stats.EventsPerSecond,
 		"capacity":         stats.Capacity,
 		"count":            stats.Count,

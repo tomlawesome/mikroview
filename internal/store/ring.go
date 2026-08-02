@@ -14,6 +14,24 @@ import (
 // leaderboard, not a full dump of every rule label ever seen.
 const topRulesLimit = 10
 
+// timeSeriesMinutes is how much history Stats.TimeSeries covers, at
+// 1-minute resolution.
+const timeSeriesMinutes = 60
+
+// actionSlots fixes which array index each Action occupies in
+// minuteBuckets, so per-minute-per-action counts live in a plain array
+// instead of allocating a map on every Insert.
+var actionSlots = [...]Action{ActionAccept, ActionDrop, ActionReject, ActionLog, ActionUnknown}
+
+func actionSlot(a Action) int {
+	for i, s := range actionSlots {
+		if s == a {
+			return i
+		}
+	}
+	return len(actionSlots) - 1 // unrecognized action folds into the unknown slot
+}
+
 // Store is a fixed-capacity ring buffer of Events, safe for concurrent use.
 // The intended access pattern is a single writer goroutine calling Insert
 // (fed by a buffered channel from the syslog listeners) and many readers
@@ -37,6 +55,14 @@ type Store struct {
 	// lazily the next time that slot is reused for a new second.
 	secBuckets    [60]uint64
 	secBucketTime [60]int64
+
+	// minuteBuckets/minuteBucketTime implement the same lazily-reset
+	// rolling-bucket trick as secBuckets above, but per-minute and broken
+	// down by action, for Stats.TimeSeries -- bucket i holds counts for
+	// unix minute minuteBucketTime[i], reset the next time that slot is
+	// reused for a new minute.
+	minuteBuckets    [timeSeriesMinutes][len(actionSlots)]uint64
+	minuteBucketTime [timeSeriesMinutes]int64
 }
 
 // New creates a Store holding at most capacity events, logically windowed
@@ -94,6 +120,14 @@ func (s *Store) Insert(e Event) Event {
 	}
 	s.secBuckets[idx]++
 
+	minute := sec / 60
+	midx := minute % timeSeriesMinutes
+	if s.minuteBucketTime[midx] != minute {
+		s.minuteBucketTime[midx] = minute
+		s.minuteBuckets[midx] = [len(actionSlots)]uint64{}
+	}
+	s.minuteBuckets[midx][actionSlot(e.Action)]++
+
 	return e
 }
 
@@ -103,11 +137,20 @@ type RuleCount struct {
 	Count uint64 `json:"count"`
 }
 
+// TimeBucket is one point in Stats.TimeSeries: counts by action for a
+// single one-minute window. ByAction omits actions with a zero count for
+// that minute rather than listing all five every time.
+type TimeBucket struct {
+	Time     time.Time         `json:"time"`
+	ByAction map[Action]uint64 `json:"byAction"`
+}
+
 // Stats is a point-in-time snapshot of store-wide counters.
 type Stats struct {
 	Total           uint64            `json:"total"`
 	ByAction        map[Action]uint64 `json:"byAction"`
 	TopRules        []RuleCount       `json:"topRules"`
+	TimeSeries      []TimeBucket      `json:"timeSeries"`
 	EventsPerSecond float64           `json:"eventsPerSecond"`
 	Capacity        int               `json:"capacity"`
 	Count           int               `json:"count"`
@@ -153,10 +196,30 @@ func (s *Store) Stats() Stats {
 		}
 	}
 
+	nowMinute := now / 60
+	timeSeries := make([]TimeBucket, timeSeriesMinutes)
+	for i := 0; i < timeSeriesMinutes; i++ {
+		minute := nowMinute - int64(timeSeriesMinutes-1-i)
+		idx := minute % timeSeriesMinutes
+		if idx < 0 {
+			idx += timeSeriesMinutes
+		}
+		byAction := make(map[Action]uint64, len(actionSlots))
+		if s.minuteBucketTime[idx] == minute {
+			for slot, a := range actionSlots {
+				if c := s.minuteBuckets[idx][slot]; c > 0 {
+					byAction[a] = c
+				}
+			}
+		}
+		timeSeries[i] = TimeBucket{Time: time.Unix(minute*60, 0).UTC(), ByAction: byAction}
+	}
+
 	return Stats{
 		Total:           s.total,
 		ByAction:        byAction,
 		TopRules:        topRules,
+		TimeSeries:      timeSeries,
 		EventsPerSecond: float64(sum) / window,
 		Capacity:        s.capacity,
 		Count:           s.count,
