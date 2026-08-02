@@ -8,6 +8,9 @@
   import LiveTable from './components/LiveTable.svelte'
 
   const STATS_REFRESH_MS = 5000
+  const FILTER_DEBOUNCE_MS = 300
+
+  let firstFilterRun = true
 
   $effect(() => {
     themeState.apply()
@@ -32,6 +35,23 @@
       liveSocket.disconnect()
       clearInterval(interval)
     }
+  })
+
+  $effect(() => {
+    // Reading every field off appState.filters here is what makes this
+    // effect re-run on any filter change (Svelte 5's fine-grained
+    // reactivity tracks each property access as its own dependency).
+    const snapshot = { ...appState.filters }
+    if (firstFilterRun) {
+      // Skip the run that fires on mount -- loadInitial() above already
+      // covers the unfiltered initial fetch.
+      firstFilterRun = false
+      return
+    }
+    const timer = setTimeout(() => {
+      appState.refetchWithFilters().catch(() => {})
+    }, FILTER_DEBOUNCE_MS)
+    return () => clearTimeout(timer)
   })
 </script>
 

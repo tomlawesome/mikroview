@@ -4,12 +4,18 @@ import { emptyFilters, type Device, type Filters, type FirewallEvent, type Stats
 
 export type ConnState = 'connecting' | 'open' | 'closed'
 
-// Central reactive state for the live view. Filtering is deliberately
-// client-side against the in-memory `events` buffer: the WebSocket tail
-// pushes every new event unfiltered, so changing a filter is instant with
-// no server round-trip. The initial/"load older" REST calls, by contrast,
-// filter server-side against the much larger retained buffer — see
-// lib/api.ts.
+// Central reactive state for the live view. The WebSocket tail pushes
+// every new event unfiltered into `events`; `filteredEvents` re-filters
+// that buffer client-side on every render, which is what makes toggling a
+// filter feel instant with no round-trip for events already in the
+// buffer. But `events` itself only ever holds up to MAX_CLIENT_EVENTS
+// recent items, so a filter matching something outside that window (an
+// older event, a device that hasn't logged recently, etc.) would show
+// nothing even though the server's much larger retained buffer has
+// matches -- refetchWithFilters() (wired up to run on filter changes in
+// App.svelte) re-queries the server with the active filters and replaces
+// `events` with that server-filtered baseline, so the two layers
+// together cover both "instant" and "actually complete" filtering.
 class AppState {
   events = $state<FirewallEvent[]>([])
   filters = $state<Filters>(emptyFilters())
@@ -33,7 +39,9 @@ class AppState {
   appendLive(newEvents: FirewallEvent[]) {
     if (newEvents.length === 0) return
     if (this.paused) {
-      this.pendingBuffer.push(...newEvents)
+      // Capped the same way as `events` below -- otherwise leaving the
+      // view paused for a while grows this without bound.
+      this.pendingBuffer = [...this.pendingBuffer, ...newEvents].slice(-MAX_CLIENT_EVENTS)
       this.pendingCount = this.pendingBuffer.length
       return
     }
@@ -68,6 +76,14 @@ class AppState {
     this.setInitialEvents(eventsRes.events)
     this.devices = devices
     this.stats = stats
+  }
+
+  // Re-queries the server with the current filters and replaces `events`
+  // with the result. See the class doc comment above for why this needs
+  // to exist alongside client-side filtering, not instead of it.
+  async refetchWithFilters() {
+    const res = await fetchEvents({ ...this.filters, limit: 500 })
+    this.setInitialEvents(res.events)
   }
 
   async refreshDevicesAndStats() {
