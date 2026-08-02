@@ -96,8 +96,12 @@ class AppState {
   }
 
   async loadInitial() {
+    // Uses whatever's already in this.filters -- App.svelte sets this from
+    // the URL's query string (if present) before calling loadInitial(), so
+    // a shared/bookmarked filtered link loads pre-filtered instead of
+    // fetching everything and only filtering after the fact.
     const [eventsRes, devices, stats] = await Promise.all([
-      fetchEvents({ limit: 500 }),
+      fetchEvents({ ...this.filters, limit: 500 }),
       fetchDevices(),
       fetchStats(),
     ])

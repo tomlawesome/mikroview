@@ -3,6 +3,8 @@
   import { liveSocket } from './lib/ws'
   import { themeState } from './lib/theme.svelte'
   import { colorwayState } from './lib/colorway.svelte'
+  import { buildQuery } from './lib/api'
+  import { filtersFromSearchParams } from './lib/types'
   import Toolbar from './components/Toolbar.svelte'
   import FilterBar from './components/FilterBar.svelte'
   import LiveTable from './components/LiveTable.svelte'
@@ -11,6 +13,13 @@
   const FILTER_DEBOUNCE_MS = 300
 
   let firstFilterRun = true
+
+  // Runs once at startup, before the effects below, so a bookmarked or
+  // shared filtered link loads pre-filtered from the very first fetch.
+  const initialParams = new URLSearchParams(location.search)
+  if ([...initialParams.keys()].length > 0) {
+    appState.filters = filtersFromSearchParams(initialParams)
+  }
 
   $effect(() => {
     themeState.apply()
@@ -46,9 +55,16 @@
     // effect re-run on any filter change (Svelte 5's fine-grained
     // reactivity tracks each property access as its own dependency).
     const snapshot = { ...appState.filters }
+
+    // Keep the URL in sync so the current filtered view is always a
+    // shareable/bookmarkable link -- replaceState (not pushState) so
+    // typing in a filter field doesn't spam browser history.
+    const qs = buildQuery(snapshot)
+    history.replaceState(null, '', location.pathname + qs)
+
     if (firstFilterRun) {
-      // Skip the run that fires on mount -- loadInitial() above already
-      // covers the unfiltered initial fetch.
+      // Skip the network refetch on mount -- loadInitial() above already
+      // covers the (possibly URL-filtered) initial fetch.
       firstFilterRun = false
       return
     }

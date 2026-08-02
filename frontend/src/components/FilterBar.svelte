@@ -1,6 +1,7 @@
 <script lang="ts">
   import { appState } from '../lib/state.svelte'
   import type { Action } from '../lib/types'
+  import FilterPresetsMenu from './FilterPresetsMenu.svelte'
 
   const actions: { value: Action | ''; label: string }[] = [
     { value: '', label: 'Any action' },
@@ -13,6 +14,8 @@
 </script>
 
 <div class="bar">
+  <FilterPresetsMenu />
+
   <select bind:value={appState.filters.device} aria-label="Device">
     <option value="">Any device</option>
     {#each appState.devices as d (d.id)}
