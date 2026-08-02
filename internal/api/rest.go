@@ -35,6 +35,7 @@ func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"total":            stats.Total,
 		"byAction":         stats.ByAction,
+		"topRules":         stats.TopRules,
 		"eventsPerSecond":  stats.EventsPerSecond,
 		"capacity":         stats.Capacity,
 		"count":            stats.Count,

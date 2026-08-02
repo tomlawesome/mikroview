@@ -5,9 +5,14 @@
 package store
 
 import (
+	"sort"
 	"sync"
 	"time"
 )
+
+// topRulesLimit caps how many entries Stats.TopRules returns -- a
+// leaderboard, not a full dump of every rule label ever seen.
+const topRulesLimit = 10
 
 // Store is a fixed-capacity ring buffer of Events, safe for concurrent use.
 // The intended access pattern is a single writer goroutine calling Insert
@@ -23,6 +28,7 @@ type Store struct {
 	window   time.Duration
 
 	totalByAction map[Action]uint64
+	totalByRule   map[string]uint64
 	total         uint64
 
 	// secBuckets/secBucketTime implement a rolling per-second event-rate
@@ -44,6 +50,7 @@ func New(capacity int, window time.Duration) *Store {
 		capacity:      capacity,
 		window:        window,
 		totalByAction: make(map[Action]uint64),
+		totalByRule:   make(map[string]uint64),
 	}
 }
 
@@ -75,6 +82,9 @@ func (s *Store) Insert(e Event) Event {
 
 	s.total++
 	s.totalByAction[e.Action]++
+	if e.RuleLabel != "" {
+		s.totalByRule[e.RuleLabel]++
+	}
 
 	sec := now.Unix()
 	idx := sec % 60
@@ -87,10 +97,17 @@ func (s *Store) Insert(e Event) Event {
 	return e
 }
 
+// RuleCount is one entry in Stats.TopRules.
+type RuleCount struct {
+	Rule  string `json:"rule"`
+	Count uint64 `json:"count"`
+}
+
 // Stats is a point-in-time snapshot of store-wide counters.
 type Stats struct {
 	Total           uint64            `json:"total"`
 	ByAction        map[Action]uint64 `json:"byAction"`
+	TopRules        []RuleCount       `json:"topRules"`
 	EventsPerSecond float64           `json:"eventsPerSecond"`
 	Capacity        int               `json:"capacity"`
 	Count           int               `json:"count"`
@@ -106,6 +123,20 @@ func (s *Store) Stats() Stats {
 	byAction := make(map[Action]uint64, len(s.totalByAction))
 	for k, v := range s.totalByAction {
 		byAction[k] = v
+	}
+
+	topRules := make([]RuleCount, 0, len(s.totalByRule))
+	for rule, count := range s.totalByRule {
+		topRules = append(topRules, RuleCount{Rule: rule, Count: count})
+	}
+	sort.Slice(topRules, func(i, j int) bool {
+		if topRules[i].Count != topRules[j].Count {
+			return topRules[i].Count > topRules[j].Count
+		}
+		return topRules[i].Rule < topRules[j].Rule // stable tie-break, not insertion order
+	})
+	if len(topRules) > topRulesLimit {
+		topRules = topRules[:topRulesLimit]
 	}
 
 	now := time.Now().Unix()
@@ -125,6 +156,7 @@ func (s *Store) Stats() Stats {
 	return Stats{
 		Total:           s.total,
 		ByAction:        byAction,
+		TopRules:        topRules,
 		EventsPerSecond: float64(sum) / window,
 		Capacity:        s.capacity,
 		Count:           s.count,

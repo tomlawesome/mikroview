@@ -178,6 +178,37 @@ func TestStats(t *testing.T) {
 	}
 }
 
+func TestStatsTopRules(t *testing.T) {
+	s := New(100, time.Hour)
+	now := time.Now()
+
+	lanWan := mkEvent(now, "core", ActionAccept)
+	lanWan.RuleLabel = "lan-wan"
+	s.Insert(lanWan)
+	s.Insert(lanWan)
+	s.Insert(lanWan)
+
+	wanDef := mkEvent(now, "core", ActionDrop)
+	wanDef.RuleLabel = "wan-in-def"
+	s.Insert(wanDef)
+	s.Insert(wanDef)
+
+	unlabeled := mkEvent(now, "core", ActionDrop)
+	unlabeled.RuleLabel = ""
+	s.Insert(unlabeled)
+
+	stats := s.Stats()
+	if len(stats.TopRules) != 2 {
+		t.Fatalf("expected 2 distinct labeled rules (unlabeled excluded), got %v", stats.TopRules)
+	}
+	if stats.TopRules[0].Rule != "lan-wan" || stats.TopRules[0].Count != 3 {
+		t.Errorf("expected lan-wan first with count 3, got %+v", stats.TopRules[0])
+	}
+	if stats.TopRules[1].Rule != "wan-in-def" || stats.TopRules[1].Count != 2 {
+		t.Errorf("expected wan-in-def second with count 2, got %+v", stats.TopRules[1])
+	}
+}
+
 func ids(events []Event) []uint64 {
 	out := make([]uint64, len(events))
 	for i, e := range events {

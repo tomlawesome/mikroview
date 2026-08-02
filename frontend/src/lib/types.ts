@@ -55,10 +55,17 @@ export interface EventsResult {
   serverTime: string
 }
 
+// Mirrors internal/store/ring.go's RuleCount.
+export interface RuleCount {
+  rule: string
+  count: number
+}
+
 // Mirrors internal/api/rest.go's handleStats response.
 export interface Stats {
   total: number
   byAction: Partial<Record<Action, number>>
+  topRules: RuleCount[]
   eventsPerSecond: number
   capacity: number
   count: number
