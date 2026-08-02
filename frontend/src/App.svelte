@@ -2,6 +2,7 @@
   import { appState } from './lib/state.svelte'
   import { liveSocket } from './lib/ws'
   import { themeState } from './lib/theme.svelte'
+  import { colorwayState } from './lib/colorway.svelte'
   import Toolbar from './components/Toolbar.svelte'
   import FilterBar from './components/FilterBar.svelte'
   import LiveTable from './components/LiveTable.svelte'
@@ -10,6 +11,10 @@
 
   $effect(() => {
     themeState.apply()
+  })
+
+  $effect(() => {
+    colorwayState.apply()
   })
 
   $effect(() => {
