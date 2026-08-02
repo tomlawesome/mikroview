@@ -49,7 +49,7 @@ class AppState {
 
   filteredEvents = $derived.by(() => {
     const cutoff =
-      retentionState.maxAgeMinutes === null ? null : this.now - retentionState.maxAgeMinutes * 60_000
+      retentionState.maxAgeSeconds === null ? null : this.now - retentionState.maxAgeSeconds * 1000
     const events = cutoff === null ? this.events : this.events.filter((e) => e.receivedAt >= cutoff)
     return applyFilters(events, this.filters)
   })
