@@ -1,6 +1,7 @@
 <script lang="ts">
   import type { FirewallEvent } from '../lib/types'
   import { countryFlag, formatAddr, formatTime } from '../lib/format'
+  import { appState } from '../lib/state.svelte'
   import ActionBadge from './ActionBadge.svelte'
 
   let { event, deviceName }: { event: FirewallEvent; deviceName: string } = $props()
@@ -15,21 +16,88 @@
 
 <div class="row row-{event.action}" title={event.raw}>
   <span class="cell time">{formatTime(event.time)}</span>
-  <span class="cell device">{deviceName}</span>
-  <span class="cell action"><ActionBadge action={event.action} /></span>
-  <span class="cell chain">{event.chain || '—'}</span>
-  <span class="cell addr" title={event.srcCountry}
-    >{srcFlag ? `${srcFlag} ` : ''}{formatAddr(event.srcIp, event.srcPort)}</span
+
+  <button
+    class="cell device cell-btn"
+    onclick={() => appState.setFilter('device', event.deviceId)}
+    title="Filter to device: {deviceName}"
   >
-  <span class="cell addr" title={event.dstCountry}
-    >{dstFlag ? `${dstFlag} ` : ''}{formatAddr(event.dstIp, event.dstPort)}</span
+    {deviceName}
+  </button>
+
+  <button
+    class="cell action cell-btn"
+    onclick={() => appState.setFilter('action', event.action)}
+    title="Filter to action: {event.action}"
   >
+    <ActionBadge action={event.action} />
+  </button>
+
+  {#if event.chain}
+    <button
+      class="cell chain cell-btn"
+      onclick={() => appState.setFilter('chain', event.chain)}
+      title="Filter to chain: {event.chain}"
+    >
+      {event.chain}
+    </button>
+  {:else}
+    <span class="cell chain">—</span>
+  {/if}
+
+  {#if event.srcIp}
+    <button
+      class="cell addr cell-btn"
+      title="Filter to IP: {event.srcIp}"
+      onclick={() => appState.setFilter('ip', event.srcIp ?? '')}
+    >
+      {srcFlag ? `${srcFlag} ` : ''}{formatAddr(event.srcIp, event.srcPort)}
+    </button>
+  {:else}
+    <span class="cell addr">—</span>
+  {/if}
+
+  {#if event.dstIp}
+    <button
+      class="cell addr cell-btn"
+      title="Filter to IP: {event.dstIp}"
+      onclick={() => appState.setFilter('ip', event.dstIp ?? '')}
+    >
+      {dstFlag ? `${dstFlag} ` : ''}{formatAddr(event.dstIp, event.dstPort)}
+    </button>
+  {:else}
+    <span class="cell addr">—</span>
+  {/if}
+
   <span class="cell addr nat" class:has-value={!!event.natIp} title={event.natRaw}>
     {event.natIp ? `→ ${formatAddr(event.natIp, event.natPort)}` : '—'}
   </span>
-  <span class="cell proto">{event.protocol || '—'}</span>
+
+  {#if event.protocol}
+    <button
+      class="cell proto cell-btn"
+      onclick={() => appState.setFilter('protocol', event.protocol ?? '')}
+      title="Filter to protocol: {event.protocol}"
+    >
+      {event.protocol}
+    </button>
+  {:else}
+    <span class="cell proto">—</span>
+  {/if}
+
   <span class="cell iface">{ifaces}</span>
-  <span class="cell rule">{event.ruleLabel || '—'}</span>
+
+  {#if event.ruleLabel}
+    <button
+      class="cell rule cell-btn"
+      onclick={() => appState.setFilter('rule', event.ruleLabel)}
+      title="Filter to rule: {event.ruleLabel}"
+    >
+      {event.ruleLabel}
+    </button>
+  {:else}
+    <span class="cell rule">—</span>
+  {/if}
 </div>
 
 <style>
@@ -117,5 +185,22 @@
   .iface {
     color: var(--fg-muted);
     font-size: 13px;
+  }
+
+  /* Reset button chrome on click-to-filter cells so they read exactly
+     like the plain-text cells they replace -- only a hover underline
+     hints they're interactive. */
+  .cell-btn {
+    background: none;
+    border: none;
+    font: inherit;
+    color: inherit;
+    text-align: left;
+    cursor: pointer;
+    width: 100%;
+  }
+
+  .cell-btn:hover {
+    text-decoration: underline;
   }
 </style>
