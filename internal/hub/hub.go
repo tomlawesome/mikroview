@@ -4,6 +4,7 @@ package hub
 
 import (
 	"sync"
+	"sync/atomic"
 
 	"github.com/tomlawesome/mikroview/internal/store"
 )
@@ -16,6 +17,11 @@ const clientQueueSize = 2000
 type client struct {
 	id   uint64
 	send chan store.Event
+	// dropped counts events evicted from this client's queue because it
+	// fell behind (see Broadcast). Exposed via Register's dropped
+	// accessor so the WS handler can tell the browser it's missing
+	// events, rather than that silently never showing up anywhere.
+	dropped atomic.Uint64
 }
 
 // Hub fans out newly inserted events to connected WebSocket clients. Every
@@ -32,10 +38,11 @@ func New() *Hub {
 	return &Hub{clients: make(map[uint64]*client)}
 }
 
-// Register adds a new client and returns its event channel plus an
-// unregister function the caller must invoke exactly once when the
-// connection ends.
-func (h *Hub) Register() (events <-chan store.Event, unregister func()) {
+// Register adds a new client and returns its event channel, a function
+// reporting how many events have been dropped for it so far (see
+// Broadcast), and an unregister function the caller must invoke exactly
+// once when the connection ends.
+func (h *Hub) Register() (events <-chan store.Event, dropped func() uint64, unregister func()) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 
@@ -53,7 +60,7 @@ func (h *Hub) Register() (events <-chan store.Event, unregister func()) {
 		})
 	}
 
-	return c.send, unreg
+	return c.send, c.dropped.Load, unreg
 }
 
 // Broadcast delivers e to every connected client's queue. If a client's
@@ -70,6 +77,7 @@ func (h *Hub) Broadcast(e store.Event) {
 		default:
 			select {
 			case <-c.send:
+				c.dropped.Add(1)
 			default:
 			}
 			select {

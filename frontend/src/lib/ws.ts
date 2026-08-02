@@ -7,6 +7,7 @@ const MAX_BACKOFF_MS = 5000
 interface WSEnvelope {
   type: string
   events?: FirewallEvent[]
+  dropped?: number
 }
 
 // LiveSocket is the client side of the live-tail feed: connects to
@@ -39,6 +40,9 @@ export class LiveSocket {
     ws.onopen = () => {
       this.backoff = MIN_BACKOFF_MS
       appState.connState = 'open'
+      // A new connection is a new server-side client registration, whose
+      // dropped counter starts back at 0 -- see hub.go.
+      appState.wsDropped = 0
     }
 
     ws.onmessage = (ev) => {
@@ -50,6 +54,10 @@ export class LiveSocket {
       }
       if (msg.type === 'events' && msg.events) {
         appState.appendLive(msg.events)
+      }
+      if (typeof msg.dropped === 'number') {
+        // Cumulative total for this connection, not a delta -- see ws.go.
+        appState.wsDropped = msg.dropped
       }
     }
 

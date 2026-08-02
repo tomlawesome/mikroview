@@ -9,7 +9,7 @@ import (
 
 func TestBroadcastDeliversToRegisteredClient(t *testing.T) {
 	h := New()
-	events, unregister := h.Register()
+	events, _, unregister := h.Register()
 	defer unregister()
 
 	h.Broadcast(store.Event{ID: 1})
@@ -26,8 +26,8 @@ func TestBroadcastDeliversToRegisteredClient(t *testing.T) {
 
 func TestBroadcastFanOutToMultipleClients(t *testing.T) {
 	h := New()
-	e1, u1 := h.Register()
-	e2, u2 := h.Register()
+	e1, _, u1 := h.Register()
+	e2, _, u2 := h.Register()
 	defer u1()
 	defer u2()
 
@@ -47,7 +47,7 @@ func TestBroadcastFanOutToMultipleClients(t *testing.T) {
 
 func TestBroadcastNeverBlocksOnFullSlowClient(t *testing.T) {
 	h := New()
-	_, unregister := h.Register() // never drained
+	_, _, unregister := h.Register() // never drained
 	defer unregister()
 
 	done := make(chan struct{})
@@ -65,9 +65,23 @@ func TestBroadcastNeverBlocksOnFullSlowClient(t *testing.T) {
 	}
 }
 
+func TestBroadcastReportsDroppedCount(t *testing.T) {
+	h := New()
+	_, dropped, unregister := h.Register() // never drained
+	defer unregister()
+
+	for i := 0; i < clientQueueSize+50; i++ {
+		h.Broadcast(store.Event{ID: uint64(i)})
+	}
+
+	if got := dropped(); got != 50 {
+		t.Errorf("dropped() = %d, want 50 (queue holds %d, so the next 50 each evict one)", got, clientQueueSize)
+	}
+}
+
 func TestUnregisterStopsDelivery(t *testing.T) {
 	h := New()
-	events, unregister := h.Register()
+	events, _, unregister := h.Register()
 	unregister()
 
 	h.Broadcast(store.Event{ID: 1})
