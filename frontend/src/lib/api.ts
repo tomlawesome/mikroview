@@ -1,6 +1,9 @@
 import type { Device, EventsResult, Filters, Stats } from './types'
 
-function buildQuery(filters: Partial<Filters> & { limit?: number; sinceId?: number }): string {
+// Exported so lib/state.svelte.ts can build the same query-param shape for
+// the URL bar (see App.svelte's filter-sync effect) without duplicating
+// the "which filter fields are non-empty" logic.
+export function buildQuery(filters: Partial<Filters> & { limit?: number; sinceId?: number }): string {
   const params = new URLSearchParams()
   if (filters.device) params.set('device', filters.device)
   if (filters.action) params.set('action', filters.action)

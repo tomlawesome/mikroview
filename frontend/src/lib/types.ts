@@ -96,3 +96,19 @@ export function emptyFilters(): Filters {
     rule: '',
   }
 }
+
+// Reconstructs a Filters object from a URL's query string, using the same
+// param names lib/api.ts's buildQuery writes -- what makes a filtered view
+// shareable/bookmarkable as a plain link. Unknown params are ignored.
+export function filtersFromSearchParams(params: URLSearchParams): Filters {
+  return {
+    device: params.get('device') ?? '',
+    action: (params.get('action') as Action | null) ?? '',
+    protocol: params.get('protocol') ?? '',
+    chain: params.get('chain') ?? '',
+    interface: params.get('interface') ?? '',
+    ip: params.get('ip') ?? '',
+    port: params.get('port') ?? '',
+    rule: params.get('rule') ?? '',
+  }
+}
