@@ -3,6 +3,7 @@ package syslog
 import (
 	"bufio"
 	"context"
+	"log"
 	"net"
 	"time"
 )
@@ -30,14 +31,26 @@ func ServeTCP(ctx context.Context, ln net.Listener, out chan<- RawMessage) error
 		ln.Close()
 	}()
 
+	var tempDelay time.Duration
 	for {
 		conn, err := ln.Accept()
 		if err != nil {
 			if ctx.Err() != nil {
 				return nil
 			}
+			if tempDelay == 0 {
+				tempDelay = 5 * time.Millisecond
+			} else {
+				tempDelay *= 2
+			}
+			if max := time.Second; tempDelay > max {
+				tempDelay = max
+			}
+			log.Printf("syslog: tcp accept error: %v; retrying in %v", err, tempDelay)
+			time.Sleep(tempDelay)
 			continue
 		}
+		tempDelay = 0
 		go handleTCPConn(ctx, conn, out)
 	}
 }

@@ -59,8 +59,11 @@ func (r *Registry) Resolve(sourceIP string, now time.Time) (deviceID string) {
 
 	info, ok := r.byIP[key]
 	if !ok {
-		info = &Info{ID: key, Name: key, SourceIP: key, FirstSeen: now}
+		info = &Info{ID: key, Name: key, SourceIP: key}
 		r.byIP[key] = info
+	}
+	if info.FirstSeen.IsZero() {
+		info.FirstSeen = now
 	}
 	info.LastSeen = now
 	info.EventCount++

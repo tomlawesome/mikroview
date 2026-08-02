@@ -2,6 +2,7 @@ package syslog
 
 import (
 	"context"
+	"log"
 	"net"
 	"time"
 )
@@ -43,14 +44,26 @@ func ServeUDP(ctx context.Context, conn net.PacketConn, out chan<- RawMessage) e
 	}()
 
 	buf := make([]byte, 16*1024)
+	var tempDelay time.Duration
 	for {
 		n, remote, err := conn.ReadFrom(buf)
 		if err != nil {
 			if ctx.Err() != nil {
 				return nil
 			}
+			if tempDelay == 0 {
+				tempDelay = 5 * time.Millisecond
+			} else {
+				tempDelay *= 2
+			}
+			if max := time.Second; tempDelay > max {
+				tempDelay = max
+			}
+			log.Printf("syslog: udp read error: %v; retrying in %v", err, tempDelay)
+			time.Sleep(tempDelay)
 			continue
 		}
+		tempDelay = 0
 		data := make([]byte, n)
 		copy(data, buf[:n])
 		host, _, _ := net.SplitHostPort(remote.String())

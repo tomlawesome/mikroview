@@ -17,6 +17,9 @@
   <span class="cell chain">{event.chain || '—'}</span>
   <span class="cell addr">{formatAddr(event.srcIp, event.srcPort)}</span>
   <span class="cell addr">{formatAddr(event.dstIp, event.dstPort)}</span>
+  <span class="cell addr nat" class:has-value={!!event.natIp} title={event.natRaw}>
+    {event.natIp ? `→ ${formatAddr(event.natIp, event.natPort)}` : '—'}
+  </span>
   <span class="cell proto">{event.protocol || '—'}</span>
   <span class="cell iface">{ifaces}</span>
   <span class="cell rule">{event.ruleLabel || '—'}</span>
@@ -84,6 +87,15 @@
 
   .addr {
     color: var(--fg);
+  }
+
+  .nat {
+    color: var(--fg-dim);
+  }
+
+  .nat.has-value {
+    color: var(--accent);
+    font-weight: 600;
   }
 
   .device {

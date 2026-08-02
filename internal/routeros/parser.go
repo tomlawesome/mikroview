@@ -30,6 +30,11 @@ type Parsed struct {
 	DstIP   string
 	DstPort int
 
+	// NatIP/NatPort/NatRaw: see store.Event's fields of the same name.
+	NatIP   string
+	NatPort int
+	NatRaw  string
+
 	Length int
 	Flags  string
 
@@ -76,6 +81,12 @@ func Parse(msg string) Parsed {
 			if n, err := strconv.Atoi(strings.TrimSpace(strings.TrimPrefix(seg, "len "))); err == nil {
 				p.Length = n
 			}
+		case strings.HasPrefix(seg, "NAT "):
+			// Must be checked before the generic "->" case below: a NAT
+			// annotation also contains "->" internally, and would
+			// otherwise be misparsed as (and overwrite) the main address
+			// pair.
+			parseNAT(seg, &p)
 		case strings.Contains(seg, "->"):
 			parseAddrPair(seg, &p)
 		}
@@ -158,6 +169,40 @@ func parseAddrPair(seg string, p *Parsed) {
 	p.DstIP, p.DstPort = splitHostPort(strings.TrimSpace(right))
 }
 
+// parseNAT decodes the "NAT (...)" annotation RouterOS appends to a
+// srcnat/dstnat chain's log line for a connection that has been
+// translated. MikroTik doesn't document a fixed grammar for this
+// annotation, and real-world examples disagree on where the translated
+// address sits relative to the original tuple and any parentheses, so
+// this doesn't assume a position: it extracts every address:port token in
+// the segment and picks whichever one does NOT match the already-parsed
+// main src/dst tuple (parseAddrPair runs on an earlier segment before
+// this one, since it appears earlier in the raw line) -- that's the
+// translated address, regardless of the annotation's exact shape. NatRaw
+// keeps the verbatim text too, so nothing is lost if this guess is wrong.
+func parseNAT(seg string, p *Parsed) {
+	detail := strings.TrimSpace(strings.TrimPrefix(seg, "NAT "))
+	p.NatRaw = detail
+
+	for _, tok := range strings.Split(detail, "->") {
+		tok = strings.Trim(strings.TrimSpace(tok), "()")
+		if tok == "" {
+			continue
+		}
+		ip, port := splitHostPort(tok)
+		if ip == "" {
+			continue
+		}
+		if ip == p.SrcIP && port == p.SrcPort {
+			continue
+		}
+		if ip == p.DstIP && port == p.DstPort {
+			continue
+		}
+		p.NatIP, p.NatPort = ip, port
+	}
+}
+
 // splitHostPort handles IPv4/hostname "host:port", bracketed IPv6
 // "[addr]:port" or "[addr]", and bare hosts with no port. Bare
 // (unbracketed) IPv6 addresses are not reliably split from a trailing
@@ -187,6 +232,15 @@ func splitHostPort(s string) (string, int) {
 // because ICMP's "proto ICMP (type 8, code 0)" contains the field
 // separator ", " inside its own parenthetical detail.
 func splitTopLevel(s, sep string) []string {
+	if strings.Count(s, "(") != strings.Count(s, ")") {
+		// Unbalanced parens (e.g. a truncated log line) would otherwise
+		// leave depth stuck above 0 for the rest of the string, silently
+		// merging every remaining field into one segment. Falling back to a
+		// naive split loses paren-awareness for this line, but that's a far
+		// smaller loss than dropping every field after the break.
+		return strings.Split(s, sep)
+	}
+
 	var out []string
 	depth := 0
 	start := 0

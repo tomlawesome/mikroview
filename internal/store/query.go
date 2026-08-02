@@ -46,6 +46,14 @@ type Result struct {
 // never touches events outside the window at all, which is the same
 // asymptotic win a binary-searched window bound would give without the
 // extra bookkeeping.
+//
+// The window boundary is checked against Event.ReceivedAt, not Event.Time:
+// ReceivedAt is the server's own receipt clock and is guaranteed monotonic
+// with insertion order (single ingest goroutine). Event.Time is the
+// RouterOS device's self-reported clock, which is not guaranteed monotonic
+// across devices (or even a single device whose clock jumps) — breaking on
+// it would let one stale-clocked event truncate the scan early and silently
+// drop older-but-still-in-window events.
 func (s *Store) Query(q Query) Result {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -91,7 +99,7 @@ func (s *Store) Query(q Query) Result {
 		if e.ID <= q.SinceID {
 			break
 		}
-		if e.Time.Before(windowStart) {
+		if e.ReceivedAt.Before(windowStart) {
 			break
 		}
 		if !matchesFilters(e, q, ipNet, ip) {
