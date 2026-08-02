@@ -35,6 +35,7 @@ class AppState {
   devices = $state<Device[]>([])
   stats = $state<Stats | null>(null)
   connState = $state<ConnState>('connecting')
+  wsDropped = $state(0)
   paused = $state(false)
   pendingCount = $state(0)
   autoscroll = $state(true)

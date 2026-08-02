@@ -26,8 +26,9 @@ var upgrader = websocket.Upgrader{
 }
 
 type wsEnvelope struct {
-	Type   string        `json:"type"`
-	Events []store.Event `json:"events,omitempty"`
+	Type    string        `json:"type"`
+	Events  []store.Event `json:"events,omitempty"`
+	Dropped uint64        `json:"dropped,omitempty"`
 }
 
 // handleWS serves the live-tail feed: after the client has loaded a
@@ -42,7 +43,7 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 	}
 	defer conn.Close()
 
-	events, unregister := s.Hub.Register()
+	events, dropped, unregister := s.Hub.Register()
 	defer unregister()
 
 	conn.SetReadDeadline(time.Now().Add(wsPongTimeout))
@@ -75,7 +76,10 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 			return true
 		}
 		conn.SetWriteDeadline(time.Now().Add(wsWriteTimeout))
-		if err := conn.WriteJSON(wsEnvelope{Type: "events", Events: batch}); err != nil {
+		// Dropped is the cumulative total for this connection, not a delta
+		// -- the client just needs to know "have I ever missed events,"
+		// not track deltas itself.
+		if err := conn.WriteJSON(wsEnvelope{Type: "events", Events: batch, Dropped: dropped()}); err != nil {
 			return false
 		}
 		batch = batch[:0]

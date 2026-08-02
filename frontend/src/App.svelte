@@ -6,6 +6,7 @@
   import { buildQuery } from './lib/api'
   import { filtersFromSearchParams } from './lib/types'
   import Toolbar from './components/Toolbar.svelte'
+  import ConnectionBanner from './components/ConnectionBanner.svelte'
   import FilterBar from './components/FilterBar.svelte'
   import LiveTable from './components/LiveTable.svelte'
 
@@ -76,6 +77,7 @@
 </script>
 
 <Toolbar />
+<ConnectionBanner />
 <main>
   <FilterBar />
   <LiveTable />
