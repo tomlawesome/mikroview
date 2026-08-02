@@ -13,6 +13,19 @@ func TestParse(t *testing.T) {
 		want Parsed
 	}{
 		{
+			name: "RouterOS topic tag literally embedded ahead of the prefix",
+			msg:  "firewall,info A|r21| forward: in:mgnt out:dmz, connection-state:new, proto TCP (SYN), 10.0.0.5:51234->1.2.3.4:443, len 60",
+			want: Parsed{
+				Action: store.ActionAccept, RuleLabel: "r21", Chain: "forward",
+				InInterface: "mgnt", OutInterface: "dmz",
+				ConnState: "new",
+				Protocol:  "TCP", Flags: "SYN",
+				SrcIP: "10.0.0.5", SrcPort: 51234,
+				DstIP: "1.2.3.4", DstPort: 443,
+				Length: 60,
+			},
+		},
+		{
 			name: "accept tcp with prefix and src-mac",
 			msg:  "A|lan-wan|forward: in:ether1 out:bridge1, connection-state:new src-mac aa:bb:cc:dd:ee:ff, proto TCP (SYN), 192.168.1.50:51234->1.2.3.4:443, len 60",
 			want: Parsed{

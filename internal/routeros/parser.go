@@ -43,6 +43,7 @@ type Parsed struct {
 // leaves the rest zero-valued rather than rejecting the line.
 func Parse(msg string) Parsed {
 	p := Parsed{Raw: msg}
+	msg = stripTopics(msg)
 
 	action, label, rest := stripPrefix(msg)
 	p.Action, p.RuleLabel = action, label
@@ -81,6 +82,38 @@ func Parse(msg string) Parsed {
 	}
 
 	return p
+}
+
+// stripTopics removes a leading RouterOS topic tag (e.g. "firewall,info ")
+// if the message starts with one. Whether topics are included as literal
+// text in the forwarded syslog message body -- ahead of our own
+// log-prefix -- turns out to depend on the router (observed on a real
+// device sending "firewall,info A|r21| forward: ..."), so this can't
+// assume either way; it detects the shape instead.
+func stripTopics(msg string) string {
+	sp := strings.IndexByte(msg, ' ')
+	if sp <= 0 {
+		return msg
+	}
+	for _, word := range strings.Split(msg[:sp], ",") {
+		if !isTopicWord(word) {
+			return msg
+		}
+	}
+	return msg[sp+1:]
+}
+
+func isTopicWord(s string) bool {
+	if s == "" {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if !(c >= 'a' && c <= 'z' || c >= '0' && c <= '9' || c == '_' || c == '-') {
+			return false
+		}
+	}
+	return true
 }
 
 func parseInOut(seg string, p *Parsed) {
