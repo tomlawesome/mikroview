@@ -63,11 +63,18 @@ export interface RuleCount {
   count: number
 }
 
+// Mirrors internal/store/ring.go's TimeBucket.
+export interface TimeBucket {
+  time: string
+  byAction: Partial<Record<Action, number>>
+}
+
 // Mirrors internal/api/rest.go's handleStats response.
 export interface Stats {
   total: number
   byAction: Partial<Record<Action, number>>
   topRules: RuleCount[]
+  timeSeries: TimeBucket[]
   eventsPerSecond: number
   capacity: number
   count: number

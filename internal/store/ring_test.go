@@ -209,6 +209,36 @@ func TestStatsTopRules(t *testing.T) {
 	}
 }
 
+func TestStatsTimeSeries(t *testing.T) {
+	s := New(100, time.Hour)
+	now := time.Now()
+
+	s.Insert(mkEvent(now, "core", ActionAccept))
+	s.Insert(mkEvent(now, "core", ActionAccept))
+	s.Insert(mkEvent(now, "core", ActionDrop))
+
+	stats := s.Stats()
+	if len(stats.TimeSeries) != timeSeriesMinutes {
+		t.Fatalf("expected %d buckets, got %d", timeSeriesMinutes, len(stats.TimeSeries))
+	}
+	for i := 1; i < len(stats.TimeSeries); i++ {
+		if !stats.TimeSeries[i].Time.After(stats.TimeSeries[i-1].Time) {
+			t.Fatalf("buckets not in chronological order at index %d: %v then %v",
+				i, stats.TimeSeries[i-1].Time, stats.TimeSeries[i].Time)
+		}
+	}
+
+	last := stats.TimeSeries[len(stats.TimeSeries)-1]
+	if last.ByAction[ActionAccept] != 2 || last.ByAction[ActionDrop] != 1 {
+		t.Errorf("expected current-minute bucket {accept:2, drop:1}, got %v", last.ByAction)
+	}
+
+	first := stats.TimeSeries[0]
+	if len(first.ByAction) != 0 {
+		t.Errorf("expected an empty (not nil) ByAction map for an idle minute, got %v", first.ByAction)
+	}
+}
+
 func ids(events []Event) []uint64 {
 	out := make([]uint64, len(events))
 	for i, e := range events {

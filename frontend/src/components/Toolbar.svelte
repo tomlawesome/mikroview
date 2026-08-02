@@ -9,6 +9,7 @@
   import LogoLockup from './LogoLockup.svelte'
   import ThemeMenu from './ThemeMenu.svelte'
   import TopRulesMenu from './TopRulesMenu.svelte'
+  import ChartMenu from './ChartMenu.svelte'
 
   function onMaxAgeChange(e: Event) {
     const raw = (e.target as HTMLSelectElement).value
@@ -73,6 +74,8 @@
     </button>
 
     <TopRulesMenu />
+
+    <ChartMenu />
 
     <ThemeMenu />
 
