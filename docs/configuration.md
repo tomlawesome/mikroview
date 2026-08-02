@@ -44,6 +44,25 @@ host. If `config.yaml` isn't world-readable (or owned by a matching
 uid/gid), the container will fail to start with a permission error —
 `chmod 644 deploy/config.yaml` after editing it.
 
+## GeoIP country flags (optional)
+
+mikroview can show a country flag next to public source/destination
+addresses, using a MaxMind GeoLite2 (or paid GeoIP2) **Country** or
+**City** database. This is entirely opt-in: mikroview doesn't bundle a
+database or call out to MaxMind at runtime, since their license requires
+you to create your own free account to obtain one.
+
+1. Sign up for a free [MaxMind GeoLite2 account](https://www.maxmind.com/en/geolite2/signup)
+   and download `GeoLite2-Country.mmdb` (or generate a license key and use
+   their `geoipupdate` tool to keep it current).
+2. Mount the `.mmdb` file into the container and point mikroview at it
+   with `MIKROVIEW_GEOIP_DB_PATH` (or `geoip.dbPath` in `config.yaml`, or
+   `-geoip-db` for local development).
+
+If the path is unset, empty, or the file can't be opened/parsed, mikroview
+logs a note at startup and simply shows no flags — this is never a fatal
+error.
+
 ## Environment variables
 
 Override individual scalar settings without a mounted file:
@@ -56,11 +75,13 @@ Override individual scalar settings without a mounted file:
 | `MIKROVIEW_LISTEN_HTTP` | `listen.http` |
 | `MIKROVIEW_STORE_RETENTION` | `store.retention` |
 | `MIKROVIEW_STORE_MAX_EVENTS` | `store.maxEvents` |
+| `MIKROVIEW_GEOIP_DB_PATH` | `geoip.dbPath` (see [GeoIP country flags](#geoip-country-flags-optional)) |
 
 ## CLI flags (local development)
 
-`-syslog-udp`, `-syslog-tcp`, `-http`, `-retention`, `-max-events` — see
-`go run . -h`. Devices can only be configured via YAML, not flags.
+`-syslog-udp`, `-syslog-tcp`, `-http`, `-retention`, `-max-events`,
+`-geoip-db` — see `go run . -h`. Devices can only be configured via YAML,
+not flags.
 
 ## API reference
 

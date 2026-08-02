@@ -14,6 +14,12 @@ store:
   retention: 24h
   maxEvents: 200000
 
+# Optional: shows a country flag next to public IPs in the UI. Requires
+# your own MaxMind GeoLite2 database -- see docs/configuration.md. Left
+# unset, no flags are shown; this is never required.
+# geoip:
+#   dbPath: /etc/mikroview/GeoLite2-Country.mmdb
+
 # Devices are matched by the syslog source IP mikroview sees them from.
 # Sources not listed here still appear in the UI, auto-discovered and
 # labelled with their IP -- add them here once you know which is which.

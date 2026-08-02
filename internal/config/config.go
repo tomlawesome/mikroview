@@ -35,9 +35,18 @@ type Store struct {
 	MaxEvents int           `yaml:"maxEvents"`
 }
 
+// GeoIP is entirely optional -- see internal/geoip. Left empty, the
+// country-flag feature just doesn't show anything; there is no default
+// database bundled or fetched, since MaxMind requires a free account to
+// obtain one.
+type GeoIP struct {
+	DBPath string `yaml:"dbPath"`
+}
+
 type Config struct {
 	Listen  Listen   `yaml:"listen"`
 	Store   Store    `yaml:"store"`
+	GeoIP   GeoIP    `yaml:"geoip"`
 	Devices []Device `yaml:"devices"`
 }
 
@@ -107,6 +116,9 @@ func applyEnv(cfg *Config) {
 			cfg.Store.MaxEvents = n
 		}
 	}
+	if v := os.Getenv("MIKROVIEW_GEOIP_DB_PATH"); v != "" {
+		cfg.GeoIP.DBPath = v
+	}
 }
 
 func applyFlags(cfg *Config, args []string) error {
@@ -116,6 +128,7 @@ func applyFlags(cfg *Config, args []string) error {
 	httpAddr := fs.String("http", cfg.Listen.HTTP, "HTTP listen address")
 	retention := fs.Duration("retention", cfg.Store.Retention, "event retention window")
 	maxEvents := fs.Int("max-events", cfg.Store.MaxEvents, "max events held in the ring buffer")
+	geoipDB := fs.String("geoip-db", cfg.GeoIP.DBPath, "path to a MaxMind GeoLite2/GeoIP2 Country or City .mmdb file (optional; omit to disable country flags)")
 
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -126,5 +139,6 @@ func applyFlags(cfg *Config, args []string) error {
 	cfg.Listen.HTTP = *httpAddr
 	cfg.Store.Retention = *retention
 	cfg.Store.MaxEvents = *maxEvents
+	cfg.GeoIP.DBPath = *geoipDB
 	return nil
 }

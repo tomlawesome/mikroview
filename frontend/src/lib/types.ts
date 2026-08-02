@@ -21,6 +21,8 @@ export interface FirewallEvent {
   natIp?: string
   natPort?: number
   natRaw?: string
+  srcCountry?: string
+  dstCountry?: string
   length?: number
   flags?: string
   raw: string

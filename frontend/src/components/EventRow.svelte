@@ -1,6 +1,6 @@
 <script lang="ts">
   import type { FirewallEvent } from '../lib/types'
-  import { formatAddr, formatTime } from '../lib/format'
+  import { countryFlag, formatAddr, formatTime } from '../lib/format'
   import ActionBadge from './ActionBadge.svelte'
 
   let { event, deviceName }: { event: FirewallEvent; deviceName: string } = $props()
@@ -8,6 +8,9 @@
   const ifaces = $derived(
     [event.inInterface, event.outInterface].filter(Boolean).join(' → ') || '—',
   )
+
+  const srcFlag = $derived(countryFlag(event.srcCountry))
+  const dstFlag = $derived(countryFlag(event.dstCountry))
 </script>
 
 <div class="row row-{event.action}" title={event.raw}>
@@ -15,8 +18,12 @@
   <span class="cell device">{deviceName}</span>
   <span class="cell action"><ActionBadge action={event.action} /></span>
   <span class="cell chain">{event.chain || '—'}</span>
-  <span class="cell addr">{formatAddr(event.srcIp, event.srcPort)}</span>
-  <span class="cell addr">{formatAddr(event.dstIp, event.dstPort)}</span>
+  <span class="cell addr" title={event.srcCountry}
+    >{srcFlag ? `${srcFlag} ` : ''}{formatAddr(event.srcIp, event.srcPort)}</span
+  >
+  <span class="cell addr" title={event.dstCountry}
+    >{dstFlag ? `${dstFlag} ` : ''}{formatAddr(event.dstIp, event.dstPort)}</span
+  >
   <span class="cell addr nat" class:has-value={!!event.natIp} title={event.natRaw}>
     {event.natIp ? `→ ${formatAddr(event.natIp, event.natPort)}` : '—'}
   </span>
