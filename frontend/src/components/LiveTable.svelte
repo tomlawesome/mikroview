@@ -5,15 +5,36 @@
   import EventRow from './EventRow.svelte'
 
   let bodyEl: HTMLDivElement | undefined = $state()
+  let gridEl: HTMLDivElement | undefined = $state()
+  let headerEls: (HTMLDivElement | undefined)[] = $state([])
   let dragIndex = $state<number | null>(null)
   let dragStartX = 0
   let dragStartWidth = 0
+
   // Absolutely-positioned children can't rely on percentage/inset-based
   // height (top:0;bottom:0) inside a grid item whose own height comes
   // from `align-self: stretch` -- that height isn't "definite" enough for
   // the browser to resolve the children against, so it collapses to 0.
   // Measuring the real header row height in JS sidesteps that entirely.
   let headerHeight = $state(38)
+
+  // Resize handles are positioned from *measured* column boundaries
+  // (getBoundingClientRect), not computed from columnState.widths --
+  // several columns are `minmax(0, 1fr)` by default so they fill the
+  // available width, and there's no way to know a flexible column's
+  // actual rendered size without asking the DOM. Recomputed whenever the
+  // grid's own size or template changes.
+  let handleOffsets = $state<number[]>([])
+
+  function measureOffsets() {
+    if (!gridEl) return
+    const gridLeft = gridEl.getBoundingClientRect().left
+    handleOffsets = headerEls.slice(0, -1).map((el) => {
+      if (!el) return 0
+      const r = el.getBoundingClientRect()
+      return r.left - gridLeft + r.width
+    })
+  }
 
   const deviceNames = $derived.by(() => {
     const map = new Map<string, string>()
@@ -30,7 +51,7 @@
   function startResize(index: number, e: PointerEvent) {
     dragIndex = index
     dragStartX = e.clientX
-    dragStartWidth = columnState.widths[index]
+    dragStartWidth = headerEls[index]?.getBoundingClientRect().width ?? 120
     window.addEventListener('pointermove', onResizeMove)
     window.addEventListener('pointerup', endResize, { once: true })
     e.preventDefault()
@@ -47,6 +68,21 @@
   }
 
   $effect(() => {
+    // re-measure whenever the column template changes (resize, reset) or
+    // the header row's own height/content changes
+    columnState.gridTemplate
+    headerHeight
+    requestAnimationFrame(measureOffsets)
+  })
+
+  $effect(() => {
+    if (!gridEl) return
+    const ro = new ResizeObserver(() => measureOffsets())
+    ro.observe(gridEl)
+    return () => ro.disconnect()
+  })
+
+  $effect(() => {
     rendered.length // re-run this effect whenever the rendered set changes
     if (appState.autoscroll && !appState.paused && bodyEl) {
       requestAnimationFrame(() => {
@@ -58,9 +94,9 @@
 
 <div class="table-wrap">
   <div class="body scrollbar" bind:this={bodyEl}>
-    <div class="grid" style="grid-template-columns: {columnState.gridTemplate}">
+    <div class="grid" bind:this={gridEl} style="grid-template-columns: {columnState.gridTemplate}">
       {#each COLUMNS as col, i (col.key)}
-        <div class="header-cell" bind:clientHeight={headerHeight}>
+        <div class="header-cell" bind:this={headerEls[i]} bind:clientHeight={headerHeight}>
           <span class="label-text">{col.label}</span>
         </div>
       {/each}
@@ -70,7 +106,7 @@
           <span
             class="resizer"
             class:active={dragIndex === i}
-            style="left: {columnState.offsets[i] - 5}px"
+            style="left: {(handleOffsets[i] ?? 0) - 5}px"
             onpointerdown={(e) => startResize(i, e)}
             ondblclick={() => columnState.reset()}
             role="separator"
@@ -114,6 +150,7 @@
   .grid {
     display: grid;
     align-content: start;
+    min-width: 100%;
   }
 
   .header-cell {
@@ -138,12 +175,13 @@
   }
 
   /* A single overlay layer for all resize handles, rather than nesting a
-     handle inside each header cell -- see the comment on
-     lib/columns.svelte.ts's `offsets` for why. Placed explicitly into the
-     header row (row 1) so it overlaps the header cells; height is set
-     from JS (see headerHeight) rather than CSS stretch, since an
-     absolutely-positioned child can't resolve top/bottom insets against a
-     grid item whose own height comes from align-self: stretch. */
+     handle inside each header cell -- a sticky header cell's own z-index
+     scopes its children's z-index, so a handle overlapping the *next*
+     cell can't paint above that cell's content no matter how high its
+     z-index is set. Height is set from JS (see headerHeight) rather than
+     CSS stretch, since an absolutely-positioned child can't resolve
+     top/bottom insets against a grid item whose own height comes from
+     align-self: stretch. */
   .resize-overlay {
     grid-column: 1 / -1;
     grid-row: 1;
@@ -161,12 +199,26 @@
     cursor: col-resize;
     pointer-events: auto;
     touch-action: none;
+    display: flex;
+    justify-content: center;
   }
 
-  .resizer:hover,
-  .resizer.active {
+  /* A clearly-visible divider line at rest, so the resize affordance is
+     discoverable without having to hover the exact pixel boundary first
+     -- brightens and widens further on hover/drag. */
+  .resizer::after {
+    content: '';
+    width: 2px;
+    height: 60%;
+    border-radius: 1px;
+    background: var(--fg-dim);
+  }
+
+  .resizer:hover::after,
+  .resizer.active::after {
+    width: 3px;
+    height: 100%;
     background: var(--accent);
-    opacity: 0.4;
   }
 
   .empty {
