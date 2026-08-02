@@ -8,14 +8,16 @@ import (
 
 	"github.com/tomlawesome/mikroview/internal/device"
 	"github.com/tomlawesome/mikroview/internal/hub"
+	"github.com/tomlawesome/mikroview/internal/reputation"
 	"github.com/tomlawesome/mikroview/internal/store"
 )
 
 type Server struct {
-	Store     *store.Store
-	Devices   *device.Registry
-	Hub       *hub.Hub
-	StartTime time.Time
+	Store      *store.Store
+	Devices    *device.Registry
+	Hub        *hub.Hub
+	Reputation *reputation.Client
+	StartTime  time.Time
 }
 
 // Routes builds the /api/* handler. Static frontend asset serving is
@@ -27,5 +29,6 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("GET /api/devices", s.handleDevices)
 	mux.HandleFunc("GET /api/stats", s.handleStats)
 	mux.HandleFunc("GET /api/ws", s.handleWS)
+	mux.HandleFunc("GET /api/lookup/ip/{ip}", s.handleIPLookup)
 	return mux
 }
