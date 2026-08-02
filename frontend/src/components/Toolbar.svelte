@@ -5,8 +5,9 @@
   import ConnectionIndicator from './ConnectionIndicator.svelte'
   import DeviceStatus from './DeviceStatus.svelte'
   import LogoLockup from './LogoLockup.svelte'
+  import ThemeMenu from './ThemeMenu.svelte'
 
-  const themeLabels = { system: 'Theme: System', light: 'Theme: Light', dark: 'Theme: Dark' }
+  const modeLabels = { system: 'Auto', light: 'Light', dark: 'Dark' }
 </script>
 
 <header class="toolbar">
@@ -44,11 +45,13 @@
       Clear
     </button>
 
+    <ThemeMenu />
+
     <button
       onclick={() => themeState.cycle()}
-      title="Cycle theme: system → light → dark"
+      title="Cycle light/dark mode: system → light → dark"
     >
-      {themeLabels[themeState.pref]}
+      {modeLabels[themeState.pref]}
     </button>
   </div>
 </header>

@@ -90,6 +90,29 @@
   }
 }
 
+/* ---------- colorways ----------
+   Each colorway only overrides --accent (light + dark variant) -- the
+   neutrals and the accept/drop/reject/log semantic colors stay constant
+   across colorways on purpose, since those carry traffic-state meaning
+   and shouldn't shift with a cosmetic preference. "signal" (blue) is the
+   default and needs no override, since it's what :root already defines. */
+[data-colorway='pulse'] { --accent: #f472b6; }
+[data-colorway='nebula'] { --accent: #a78bfa; }
+[data-colorway='frequency'] { --accent: #22d3ee; }
+[data-colorway='mono'] { --accent: #94a3b8; }
+
+[data-colorway='pulse'][data-theme='light'] { --accent: #db2777; }
+[data-colorway='nebula'][data-theme='light'] { --accent: #7c3aed; }
+[data-colorway='frequency'][data-theme='light'] { --accent: #0891b2; }
+[data-colorway='mono'][data-theme='light'] { --accent: #475569; }
+
+@media (prefers-color-scheme: light) {
+  [data-colorway='pulse']:not([data-theme='dark']) { --accent: #db2777; }
+  [data-colorway='nebula']:not([data-theme='dark']) { --accent: #7c3aed; }
+  [data-colorway='frequency']:not([data-theme='dark']) { --accent: #0891b2; }
+  [data-colorway='mono']:not([data-theme='dark']) { --accent: #475569; }
+}
+
 * {
   box-sizing: border-box;
 }
