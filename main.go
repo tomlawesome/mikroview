@@ -12,6 +12,7 @@ import (
 	"github.com/tomlawesome/mikroview/internal/api"
 	"github.com/tomlawesome/mikroview/internal/config"
 	"github.com/tomlawesome/mikroview/internal/device"
+	"github.com/tomlawesome/mikroview/internal/geoip"
 	"github.com/tomlawesome/mikroview/internal/hub"
 	"github.com/tomlawesome/mikroview/internal/routeros"
 	"github.com/tomlawesome/mikroview/internal/store"
@@ -28,6 +29,11 @@ func main() {
 	st := store.New(cfg.Store.MaxEvents, cfg.Store.Retention)
 	devices := device.NewRegistry(cfg.Devices)
 	h := hub.New()
+	geo, err := geoip.Open(cfg.GeoIP.DBPath)
+	if err != nil {
+		log.Printf("geoip: %v (country flags disabled)", err)
+	}
+	defer geo.Close()
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -45,7 +51,7 @@ func main() {
 		}
 	}()
 
-	go ingest(ctx, raw, st, devices, h)
+	go ingest(ctx, raw, st, devices, h, geo)
 
 	srv := &api.Server{Store: st, Devices: devices, Hub: h, StartTime: time.Now()}
 
@@ -77,7 +83,7 @@ func main() {
 // store, and hands the stored (ID-assigned) event to the hub for
 // broadcast. Keeping this on one goroutine means Store and the device
 // Registry never need to arbitrate concurrent writers.
-func ingest(ctx context.Context, raw <-chan syslog.RawMessage, st *store.Store, devices *device.Registry, h *hub.Hub) {
+func ingest(ctx context.Context, raw <-chan syslog.RawMessage, st *store.Store, devices *device.Registry, h *hub.Hub, geo *geoip.Lookup) {
 	for {
 		select {
 		case <-ctx.Done():
@@ -86,6 +92,8 @@ func ingest(ctx context.Context, raw <-chan syslog.RawMessage, st *store.Store, 
 			env := syslog.ParseEnvelope(rm.Data, rm.RecvTime)
 			parsed := routeros.Parse(env.Message)
 			deviceID := devices.Resolve(rm.SourceIP, rm.RecvTime)
+			srcCountry, _ := geo.Country(parsed.SrcIP)
+			dstCountry, _ := geo.Country(parsed.DstIP)
 
 			e := store.Event{
 				Time:         env.Timestamp,
@@ -103,6 +111,8 @@ func ingest(ctx context.Context, raw <-chan syslog.RawMessage, st *store.Store, 
 				SrcPort:      parsed.SrcPort,
 				DstIP:        parsed.DstIP,
 				DstPort:      parsed.DstPort,
+				SrcCountry:   srcCountry,
+				DstCountry:   dstCountry,
 				NatIP:        parsed.NatIP,
 				NatPort:      parsed.NatPort,
 				NatRaw:       parsed.NatRaw,

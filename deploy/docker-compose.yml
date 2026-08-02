@@ -13,5 +13,10 @@ services:
       - "8080:8080"
     volumes:
       - ./config.yaml:/etc/mikroview/config.yaml:ro
+      # Optional -- see docs/configuration.md's GeoIP section. Requires
+      # your own MaxMind GeoLite2 database; uncomment both this and the
+      # env var below once you have one.
+      # - ./GeoLite2-Country.mmdb:/etc/mikroview/GeoLite2-Country.mmdb:ro
     environment:
       - MIKROVIEW_CONFIG=/etc/mikroview/config.yaml
+      # - MIKROVIEW_GEOIP_DB_PATH=/etc/mikroview/GeoLite2-Country.mmdb

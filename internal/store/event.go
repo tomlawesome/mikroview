@@ -38,6 +38,12 @@ type Event struct {
 	DstIP   string `json:"dstIp,omitempty"`
 	DstPort int    `json:"dstPort,omitempty"`
 
+	// SrcCountry/DstCountry are ISO 3166-1 alpha-2 codes from an optional
+	// GeoIP lookup (see internal/geoip) -- empty whenever GeoIP isn't
+	// configured, the address is private, or it has no match.
+	SrcCountry string `json:"srcCountry,omitempty"`
+	DstCountry string `json:"dstCountry,omitempty"`
+
 	// NatIP/NatPort are the post-translation address for a srcnat/dstnat
 	// chain event (which side depends on Chain: srcnat replaces src,
 	// dstnat replaces dst). Empty for chains that don't perform NAT.
