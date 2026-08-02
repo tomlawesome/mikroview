@@ -1,0 +1,177 @@
+// Package routeros decodes the body of a RouterOS firewall log message
+// (the part after the syslog envelope has already been stripped) into
+// structured fields.
+package routeros
+
+import (
+	"strconv"
+	"strings"
+
+	"github.com/tomlawesome/mikroview/internal/store"
+)
+
+// Parsed holds the fields decoded from a single firewall log line. It
+// deliberately mirrors the subset of store.Event that this package has
+// enough information to fill in; the caller (which knows the device,
+// receive time, etc.) assembles the full Event.
+type Parsed struct {
+	Action    store.Action
+	RuleLabel string
+	Chain     string
+
+	InInterface  string
+	OutInterface string
+	ConnState    string
+	Protocol     string
+	SrcMAC       string
+
+	SrcIP   string
+	SrcPort int
+	DstIP   string
+	DstPort int
+
+	Length int
+	Flags  string
+
+	Raw string
+}
+
+// Parse decodes a single RouterOS firewall log message body into its
+// structured fields. It never errors: firewall log shape varies across
+// chains, protocols, and RouterOS versions (ICMP has no ports, some chains
+// omit src-mac, etc.), so this extracts whatever fields it recognizes and
+// leaves the rest zero-valued rather than rejecting the line.
+func Parse(msg string) Parsed {
+	p := Parsed{Raw: msg}
+
+	action, label, rest := stripPrefix(msg)
+	p.Action, p.RuleLabel = action, label
+	if p.Action == "" {
+		p.Action = store.ActionUnknown
+	}
+
+	chain, body, ok := strings.Cut(rest, ":")
+	if ok {
+		p.Chain = strings.TrimSpace(chain)
+		rest = strings.TrimSpace(body)
+	} else {
+		rest = strings.TrimSpace(rest)
+	}
+
+	for _, seg := range splitTopLevel(rest, ", ") {
+		seg = strings.TrimSpace(seg)
+		switch {
+		case strings.HasPrefix(seg, "in:"):
+			parseInOut(seg, &p)
+		case strings.HasPrefix(seg, "out:"):
+			p.OutInterface = strings.TrimSpace(strings.TrimPrefix(seg, "out:"))
+		case strings.HasPrefix(seg, "connection-state:"):
+			parseConnState(seg, &p)
+		case strings.HasPrefix(seg, "src-mac "):
+			p.SrcMAC = strings.TrimSpace(strings.TrimPrefix(seg, "src-mac "))
+		case strings.HasPrefix(seg, "proto "):
+			parseProto(seg, &p)
+		case strings.HasPrefix(seg, "len "):
+			if n, err := strconv.Atoi(strings.TrimSpace(strings.TrimPrefix(seg, "len "))); err == nil {
+				p.Length = n
+			}
+		case strings.Contains(seg, "->"):
+			parseAddrPair(seg, &p)
+		}
+	}
+
+	return p
+}
+
+func parseInOut(seg string, p *Parsed) {
+	v := strings.TrimPrefix(seg, "in:")
+	if in, out, found := strings.Cut(v, " out:"); found {
+		p.InInterface = strings.TrimSpace(in)
+		p.OutInterface = strings.TrimSpace(out)
+		return
+	}
+	p.InInterface = strings.TrimSpace(v)
+}
+
+func parseConnState(seg string, p *Parsed) {
+	v := strings.TrimPrefix(seg, "connection-state:")
+	if state, mac, found := strings.Cut(v, " src-mac "); found {
+		p.ConnState = strings.TrimSpace(state)
+		p.SrcMAC = strings.TrimSpace(mac)
+		return
+	}
+	p.ConnState = strings.TrimSpace(v)
+}
+
+func parseProto(seg string, p *Parsed) {
+	v := strings.TrimPrefix(seg, "proto ")
+	if proto, detail, found := strings.Cut(v, " ("); found {
+		p.Protocol = strings.TrimSpace(proto)
+		p.Flags = strings.TrimSuffix(detail, ")")
+		return
+	}
+	p.Protocol = strings.TrimSpace(v)
+}
+
+// parseAddrPair handles "src:port->dst:port" (IPv4/TCP/UDP), bracketed
+// IPv6 "[src]:port->[dst]:port", and portless pairs like ICMP's
+// "src->dst".
+func parseAddrPair(seg string, p *Parsed) {
+	left, right, ok := strings.Cut(seg, "->")
+	if !ok {
+		return
+	}
+	p.SrcIP, p.SrcPort = splitHostPort(strings.TrimSpace(left))
+	p.DstIP, p.DstPort = splitHostPort(strings.TrimSpace(right))
+}
+
+// splitHostPort handles IPv4/hostname "host:port", bracketed IPv6
+// "[addr]:port" or "[addr]", and bare hosts with no port. Bare
+// (unbracketed) IPv6 addresses are not reliably split from a trailing
+// port, since the address itself contains colons — RouterOS brackets IPv6
+// in its ip6 firewall logs, so this is not expected to occur in practice.
+func splitHostPort(s string) (string, int) {
+	if strings.HasPrefix(s, "[") {
+		if end := strings.IndexByte(s, ']'); end >= 0 {
+			host := s[1:end]
+			if port, ok := strings.CutPrefix(s[end+1:], ":"); ok {
+				if n, err := strconv.Atoi(port); err == nil {
+					return host, n
+				}
+			}
+			return host, 0
+		}
+	}
+	if idx := strings.LastIndexByte(s, ':'); idx >= 0 {
+		if n, err := strconv.Atoi(s[idx+1:]); err == nil {
+			return s[:idx], n
+		}
+	}
+	return s, 0
+}
+
+// splitTopLevel splits s on sep, but never inside parentheses — needed
+// because ICMP's "proto ICMP (type 8, code 0)" contains the field
+// separator ", " inside its own parenthetical detail.
+func splitTopLevel(s, sep string) []string {
+	var out []string
+	depth := 0
+	start := 0
+	for i := 0; i < len(s); i++ {
+		switch s[i] {
+		case '(':
+			depth++
+		case ')':
+			if depth > 0 {
+				depth--
+			}
+		}
+		if depth == 0 && strings.HasPrefix(s[i:], sep) {
+			out = append(out, s[start:i])
+			i += len(sep) - 1
+			start = i + 1
+		}
+	}
+	out = append(out, s[start:])
+	return out
+}
