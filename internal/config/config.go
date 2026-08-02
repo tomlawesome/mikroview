@@ -43,11 +43,19 @@ type GeoIP struct {
 	DBPath string `yaml:"dbPath"`
 }
 
+// Reputation is entirely optional -- see internal/reputation. Shodan's
+// InternetDB source needs no key and is always used; AbuseIPDB is only
+// queried if a key is configured here.
+type Reputation struct {
+	AbuseIPDBKey string `yaml:"abuseIPDBKey"`
+}
+
 type Config struct {
-	Listen  Listen   `yaml:"listen"`
-	Store   Store    `yaml:"store"`
-	GeoIP   GeoIP    `yaml:"geoip"`
-	Devices []Device `yaml:"devices"`
+	Listen     Listen     `yaml:"listen"`
+	Store      Store      `yaml:"store"`
+	GeoIP      GeoIP      `yaml:"geoip"`
+	Reputation Reputation `yaml:"reputation"`
+	Devices    []Device   `yaml:"devices"`
 }
 
 func defaults() Config {
@@ -118,6 +126,9 @@ func applyEnv(cfg *Config) {
 	}
 	if v := os.Getenv("MIKROVIEW_GEOIP_DB_PATH"); v != "" {
 		cfg.GeoIP.DBPath = v
+	}
+	if v := os.Getenv("MIKROVIEW_ABUSEIPDB_KEY"); v != "" {
+		cfg.Reputation.AbuseIPDBKey = v
 	}
 }
 

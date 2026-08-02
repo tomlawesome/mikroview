@@ -14,6 +14,7 @@ import (
 	"github.com/tomlawesome/mikroview/internal/device"
 	"github.com/tomlawesome/mikroview/internal/geoip"
 	"github.com/tomlawesome/mikroview/internal/hub"
+	"github.com/tomlawesome/mikroview/internal/reputation"
 	"github.com/tomlawesome/mikroview/internal/routeros"
 	"github.com/tomlawesome/mikroview/internal/store"
 	"github.com/tomlawesome/mikroview/internal/syslog"
@@ -34,6 +35,7 @@ func main() {
 		log.Printf("geoip: %v (country flags disabled)", err)
 	}
 	defer geo.Close()
+	rep := reputation.New(cfg.Reputation.AbuseIPDBKey)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -53,7 +55,7 @@ func main() {
 
 	go ingest(ctx, raw, st, devices, h, geo)
 
-	srv := &api.Server{Store: st, Devices: devices, Hub: h, StartTime: time.Now()}
+	srv := &api.Server{Store: st, Devices: devices, Hub: h, Reputation: rep, StartTime: time.Now()}
 
 	rootMux := http.NewServeMux()
 	rootMux.Handle("/api/", srv.Routes())
