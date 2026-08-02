@@ -1,0 +1,8 @@
+.git
+mikroview
+*.log
+node_modules
+frontend/node_modules
+frontend/dist
+web/dist/*
+!web/dist/index.html

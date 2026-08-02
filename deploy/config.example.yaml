@@ -1,0 +1,26 @@
+# Copy this file to config.yaml (git-ignored) and edit for your setup:
+#   cp deploy/config.example.yaml deploy/config.yaml
+#
+# See docs/configuration.md for the full precedence rules and
+# docs/routeros-setup.md for the RouterOS-side commands that make devices
+# show up here.
+
+listen:
+  syslogUdp: ":1514"
+  syslogTcp: ":1514"
+  http: ":8080"
+
+store:
+  retention: 24h
+  maxEvents: 200000
+
+# Devices are matched by the syslog source IP mikroview sees them from.
+# Sources not listed here still appear in the UI, auto-discovered and
+# labelled with their IP -- add them here once you know which is which.
+devices:
+  - id: core-router
+    name: "Core Router"
+    sourceIp: 192.168.1.1
+  # - id: branch-office
+  #   name: "Branch Office"
+  #   sourceIp: 203.0.113.5

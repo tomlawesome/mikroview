@@ -1,0 +1,17 @@
+services:
+  mikroview:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    ports:
+      # Host 514 -> the conventional syslog port RouterOS targets; the
+      # container listens on 1514 internally since it runs as a non-root
+      # user that can't bind <1024 (see Dockerfile).
+      - "514:1514/udp"
+      - "514:1514/tcp"
+      - "8080:8080"
+    volumes:
+      - ./config.yaml:/etc/mikroview/config.yaml:ro
+    environment:
+      - MIKROVIEW_CONFIG=/etc/mikroview/config.yaml
