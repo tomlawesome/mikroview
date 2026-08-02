@@ -55,6 +55,7 @@ func parseQuery(r *http.Request) store.Query {
 		Interface: qs.Get("interface"),
 		IP:        qs.Get("ip"),
 		Rule:      qs.Get("rule"),
+		RuleRegex: qs.Get("ruleRegex") == "true",
 	}
 	if v := qs.Get("port"); v != "" {
 		if n, err := strconv.Atoi(v); err == nil {

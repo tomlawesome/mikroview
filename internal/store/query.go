@@ -2,6 +2,7 @@ package store
 
 import (
 	"net"
+	"regexp"
 	"strings"
 	"time"
 )
@@ -21,7 +22,8 @@ type Query struct {
 	Interface string
 	IP        string // matches src or dst; accepts a bare IP or CIDR
 	Port      int    // matches src or dst port
-	Rule      string // substring match against the rule label / raw line
+	Rule      string // substring match (or regex, if RuleRegex) against the rule label / raw line
+	RuleRegex bool
 	Since     time.Time
 	SinceID   uint64 // only return events with ID > SinceID
 	Limit     int
@@ -82,6 +84,17 @@ func (s *Store) Query(q Query) Result {
 		}
 	}
 
+	// Compiled once here rather than per-event in matchesFilters. Go's
+	// regexp uses RE2, which is immune to catastrophic backtracking, so an
+	// arbitrary user-supplied pattern can't blow up scan time the way a
+	// backtracking engine's could. An invalid pattern is treated as "no
+	// rule filter" rather than an error -- likely means the user is still
+	// mid-typing it.
+	var ruleRe *regexp.Regexp
+	if q.RuleRegex && q.Rule != "" {
+		ruleRe, _ = regexp.Compile("(?i)" + q.Rule)
+	}
+
 	matched := make([]Event, 0, min(limit, s.count))
 	hasMore := false
 
@@ -102,7 +115,7 @@ func (s *Store) Query(q Query) Result {
 		if e.ReceivedAt.Before(windowStart) {
 			break
 		}
-		if !matchesFilters(e, q, ipNet, ip) {
+		if !matchesFilters(e, q, ipNet, ip, ruleRe) {
 			continue
 		}
 		if len(matched) >= limit {
@@ -119,7 +132,7 @@ func (s *Store) Query(q Query) Result {
 	return Result{Events: matched, HasMore: hasMore, WindowStart: windowStart, ServerTime: now}
 }
 
-func matchesFilters(e Event, q Query, ipNet *net.IPNet, ip net.IP) bool {
+func matchesFilters(e Event, q Query, ipNet *net.IPNet, ip net.IP, ruleRe *regexp.Regexp) bool {
 	if q.Device != "" && e.DeviceID != q.Device {
 		return false
 	}
@@ -154,9 +167,15 @@ func matchesFilters(e Event, q Query, ipNet *net.IPNet, ip net.IP) bool {
 		return false
 	}
 	if q.Rule != "" {
-		needle := strings.ToLower(q.Rule)
-		if !strings.Contains(strings.ToLower(e.RuleLabel), needle) && !strings.Contains(strings.ToLower(e.Raw), needle) {
-			return false
+		if q.RuleRegex {
+			if ruleRe != nil && !ruleRe.MatchString(e.RuleLabel) && !ruleRe.MatchString(e.Raw) {
+				return false
+			}
+		} else {
+			needle := strings.ToLower(q.Rule)
+			if !strings.Contains(strings.ToLower(e.RuleLabel), needle) && !strings.Contains(strings.ToLower(e.Raw), needle) {
+				return false
+			}
 		}
 	}
 	return true
