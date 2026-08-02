@@ -45,13 +45,15 @@
 }
 
 :root[data-theme='light'] {
-  --bg: #f6f7f9;
-  --bg-elevated: #ffffff;
-  --bg-hover: #eef0f3;
-  --border: #e1e4e9;
-  --fg: #12141a;
-  --fg-muted: #4b5462;
-  --fg-dim: #6b7280;
+  /* See the @media block below for why these are softer than a plain
+     white-page/near-black-text pair. */
+  --bg: #dedad2;
+  --bg-elevated: #ece9e3;
+  --bg-hover: #e0dcd4;
+  --border: #cfc9bd;
+  --fg: #34312c;
+  --fg-muted: #635e54;
+  --fg-dim: #8c8677;
   color-scheme: light;
 
   --row-accept-bg: rgba(22, 163, 74, 0.1);
@@ -68,13 +70,18 @@
 
 @media (prefers-color-scheme: light) {
   :root:not([data-theme='dark']) {
-    --bg: #f6f7f9;
-    --bg-elevated: #ffffff;
-    --bg-hover: #eef0f3;
-    --border: #e1e4e9;
-    --fg: #12141a;
-    --fg-muted: #4b5462;
-    --fg-dim: #6b7280;
+    /* Softer than a stark white-page/near-black-text pair on purpose:
+       pure #fff panels next to near-black (#12141a) text read as glary
+       under normal room lighting despite passing contrast checks easily.
+       This keeps body text comfortably above WCAG AAA (~9-10:1) while
+       trimming both ends toward a gentler warm-neutral gray. */
+    --bg: #dedad2;
+    --bg-elevated: #ece9e3;
+    --bg-hover: #e0dcd4;
+    --border: #cfc9bd;
+    --fg: #34312c;
+    --fg-muted: #635e54;
+    --fg-dim: #8c8677;
     color-scheme: light;
 
     --row-accept-bg: rgba(22, 163, 74, 0.1);
