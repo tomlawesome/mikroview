@@ -12,6 +12,12 @@
 
   const STATS_REFRESH_MS = 5000
   const FILTER_DEBOUNCE_MS = 300
+  // Drives the age-based display cutoff in appState.filteredEvents. Needs
+  // its own fast interval, separate from STATS_REFRESH_MS: the shortest
+  // display-duration option is 5s (see retention.svelte.ts), and pruning
+  // only every 5s would make that setting nearly useless -- entries would
+  // sit stale for up to a full extra cycle before disappearing.
+  const TICK_MS = 250
 
   let firstFilterRun = true
 
@@ -37,17 +43,16 @@
     })
     liveSocket.connect()
 
-    const interval = setInterval(() => {
+    const statsInterval = setInterval(() => {
       appState.refreshDevicesAndStats().catch(() => {})
-      // Also drives the age-based display cutoff in filteredEvents -- it
-      // needs *something* to re-trigger it periodically, since "an entry
-      // aged past the cutoff" isn't itself a change to any $state value.
-      appState.tick()
     }, STATS_REFRESH_MS)
+
+    const tickInterval = setInterval(() => appState.tick(), TICK_MS)
 
     return () => {
       liveSocket.disconnect()
-      clearInterval(interval)
+      clearInterval(statsInterval)
+      clearInterval(tickInterval)
     }
   })
 

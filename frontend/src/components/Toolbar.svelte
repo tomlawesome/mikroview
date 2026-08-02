@@ -35,7 +35,7 @@
     {/if}
 
     <select
-      value={retentionState.maxAgeMinutes === null ? 'null' : String(retentionState.maxAgeMinutes)}
+      value={retentionState.maxAgeSeconds === null ? 'null' : String(retentionState.maxAgeSeconds)}
       onchange={onMaxAgeChange}
       title="How long events stay visible in the live view"
       aria-label="Display duration"
