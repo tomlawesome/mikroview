@@ -8,8 +8,6 @@
   import DeviceStatus from './DeviceStatus.svelte'
   import LogoLockup from './LogoLockup.svelte'
   import ThemeMenu from './ThemeMenu.svelte'
-  import TopRulesMenu from './TopRulesMenu.svelte'
-  import ChartMenu from './ChartMenu.svelte'
 
   function onMaxAgeChange(e: Event) {
     const raw = (e.target as HTMLSelectElement).value
@@ -73,9 +71,13 @@
       Export
     </button>
 
-    <TopRulesMenu />
-
-    <ChartMenu />
+    <button
+      class:active={appState.dashboardOpen}
+      onclick={() => (appState.dashboardOpen = !appState.dashboardOpen)}
+      title="Event charts and traffic breakdowns"
+    >
+      Dashboard
+    </button>
 
     <ThemeMenu />
 
@@ -147,6 +149,11 @@
   button.active {
     color: var(--accent);
     border-color: var(--accent);
+    background: var(--accent-bg);
+  }
+
+  button.active:hover {
+    background: var(--accent-bg-hover);
   }
 
   button:disabled {

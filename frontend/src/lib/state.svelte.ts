@@ -30,6 +30,7 @@ export type ConnState = 'connecting' | 'open' | 'closed'
 // `events` with that server-filtered baseline, so the two layers
 // together cover both "instant" and "actually complete" filtering.
 class AppState {
+  dashboardOpen = $state(false)
   events = $state<ClientEvent[]>([])
   filters = $state<Filters>(emptyFilters())
   devices = $state<Device[]>([])

@@ -1,8 +1,9 @@
 <script lang="ts">
   import type { FirewallEvent } from '../lib/types'
-  import { countryFlag, formatAddr, formatTime } from '../lib/format'
+  import { countryFlag, formatAddr, formatTime, isPublicIp } from '../lib/format'
   import { appState } from '../lib/state.svelte'
   import ActionBadge from './ActionBadge.svelte'
+  import IpInvestigateButton from './IpInvestigateButton.svelte'
 
   let { event, deviceName }: { event: FirewallEvent; deviceName: string } = $props()
 
@@ -46,25 +47,35 @@
   {/if}
 
   {#if event.srcIp}
-    <button
-      class="cell addr cell-btn"
-      title="Filter to IP: {event.srcIp}"
-      onclick={() => appState.setFilter('ip', event.srcIp ?? '')}
-    >
-      {srcFlag ? `${srcFlag} ` : ''}{formatAddr(event.srcIp, event.srcPort)}
-    </button>
+    <span class="cell addr">
+      <button
+        class="cell-btn addr-btn"
+        title="Filter to IP: {event.srcIp}"
+        onclick={() => appState.setFilter('ip', event.srcIp ?? '')}
+      >
+        {srcFlag ? `${srcFlag} ` : ''}{formatAddr(event.srcIp, event.srcPort)}
+      </button>
+      {#if isPublicIp(event.srcIp)}
+        <IpInvestigateButton ip={event.srcIp} />
+      {/if}
+    </span>
   {:else}
     <span class="cell addr">—</span>
   {/if}
 
   {#if event.dstIp}
-    <button
-      class="cell addr cell-btn"
-      title="Filter to IP: {event.dstIp}"
-      onclick={() => appState.setFilter('ip', event.dstIp ?? '')}
-    >
-      {dstFlag ? `${dstFlag} ` : ''}{formatAddr(event.dstIp, event.dstPort)}
-    </button>
+    <span class="cell addr">
+      <button
+        class="cell-btn addr-btn"
+        title="Filter to IP: {event.dstIp}"
+        onclick={() => appState.setFilter('ip', event.dstIp ?? '')}
+      >
+        {dstFlag ? `${dstFlag} ` : ''}{formatAddr(event.dstIp, event.dstPort)}
+      </button>
+      {#if isPublicIp(event.dstIp)}
+        <IpInvestigateButton ip={event.dstIp} />
+      {/if}
+    </span>
   {:else}
     <span class="cell addr">—</span>
   {/if}
@@ -202,5 +213,23 @@
 
   .cell-btn:hover {
     text-decoration: underline;
+  }
+
+  /* Address cells hold both the click-to-filter button and (for public
+     IPs) the investigate trigger side by side -- overflow/ellipsis moves
+     from `.cell` (which now just lays the two out) onto the filter
+     button itself, since that's the element with the actual long text. */
+  .cell.addr {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+  }
+
+  .addr-btn {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 </style>

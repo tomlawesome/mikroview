@@ -114,4 +114,4 @@ printf '<134>Jan 15 10:22:31 MikroTik A|lan-wan|forward: in:ether1 out:bridge1, 
 
 Deliberately deferred rather than half-built: authentication (trusted-LAN
 only by design), TLS syslog, multi-arch images, config hot-reload,
-server-side WebSocket filtering, CSV/JSON export.
+server-side WebSocket filtering, JSON export.

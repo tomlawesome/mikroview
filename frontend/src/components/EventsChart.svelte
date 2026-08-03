@@ -208,7 +208,7 @@
     display: flex;
     flex-direction: column;
     gap: 8px;
-    width: 460px;
+    width: 100%;
   }
 
   .header {
@@ -306,7 +306,7 @@
   }
 
   .crosshair {
-    stroke: var(--fg-dim);
+    stroke: var(--accent);
     stroke-width: 1;
     stroke-dasharray: 2 2;
   }
