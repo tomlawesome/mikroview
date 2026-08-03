@@ -29,26 +29,26 @@
   }
 
   .conn-open {
-    color: var(--accept);
+    color: var(--accept-tinted);
   }
   .conn-open .dot {
-    background: var(--accept);
-    box-shadow: 0 0 6px var(--accept);
+    background: var(--accept-tinted);
+    box-shadow: 0 0 6px var(--accept-tinted);
   }
 
   .conn-connecting {
-    color: var(--drop);
+    color: var(--drop-tinted);
   }
   .conn-connecting .dot {
-    background: var(--drop);
+    background: var(--drop-tinted);
     animation: pulse 1s ease-in-out infinite;
   }
 
   .conn-closed {
-    color: var(--reject);
+    color: var(--reject-tinted);
   }
   .conn-closed .dot {
-    background: var(--reject);
+    background: var(--reject-tinted);
   }
 
   @keyframes pulse {

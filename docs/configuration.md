@@ -63,6 +63,25 @@ If the path is unset, empty, or the file can't be opened/parsed, mikroview
 logs a note at startup and simply shows no flags — this is never a fatal
 error.
 
+## IP reputation lookup (optional)
+
+Clicking the "investigate" affordance next to a public source/destination
+IP in the live view queries a threat-intel source and shows the result in
+a popover (open ports, hostnames, known CVEs, abuse score). This proxies
+through the backend so no key ever reaches the browser, and caches each
+IP briefly to conserve free-tier quota.
+
+- **Shodan InternetDB** — free, keyless, always used, no configuration
+  needed.
+- **AbuseIPDB** — optional, needs an API key (free tier: 1000 lookups/
+  day). Set `reputation.abuseIPDBKey` in `config.yaml` or the
+  `MIKROVIEW_ABUSEIPDB_KEY` env var. Adds abuse score, report count,
+  country, and ISP to the result.
+
+Unconfigured, the feature still works with Shodan-only results; private/
+loopback/link-local addresses are rejected server-side regardless of
+configuration.
+
 ## Environment variables
 
 Override individual scalar settings without a mounted file:
@@ -76,6 +95,7 @@ Override individual scalar settings without a mounted file:
 | `MIKROVIEW_STORE_RETENTION` | `store.retention` |
 | `MIKROVIEW_STORE_MAX_EVENTS` | `store.maxEvents` |
 | `MIKROVIEW_GEOIP_DB_PATH` | `geoip.dbPath` (see [GeoIP country flags](#geoip-country-flags-optional)) |
+| `MIKROVIEW_ABUSEIPDB_KEY` | `reputation.abuseIPDBKey` (see [IP reputation lookup](#ip-reputation-lookup-optional)) |
 
 ## CLI flags (local development)
 
@@ -92,6 +112,7 @@ not flags.
 | `GET /api/devices` | known devices (configured + auto-discovered) |
 | `GET /api/stats` | totals, per-action counts, rolling events/sec |
 | `GET /api/ws` | live-tail WebSocket feed |
+| `GET /api/lookup/ip/{ip}` | on-demand reputation/threat-intel lookup for one public IP (see [IP reputation lookup](#ip-reputation-lookup-optional)) |
 
 `/api/events` query parameters: `device`, `action` (`accept`/`drop`/
 `reject`/`log`/`unknown`), `protocol`, `chain`, `interface`, `ip` (exact

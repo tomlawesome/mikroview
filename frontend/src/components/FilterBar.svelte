@@ -152,7 +152,7 @@
   .regex-toggle.active {
     color: var(--accent);
     border-color: var(--accent);
-    background: var(--bg);
+    background: var(--accent-bg);
   }
 
   .clear {

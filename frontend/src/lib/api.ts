@@ -1,4 +1,4 @@
-import type { Device, EventsResult, Filters, Stats } from './types'
+import type { Device, EventsResult, Filters, ReputationResult, Stats } from './types'
 
 // Exported so lib/state.svelte.ts can build the same query-param shape for
 // the URL bar (see App.svelte's filter-sync effect) without duplicating
@@ -38,5 +38,11 @@ export async function fetchDevices(): Promise<Device[]> {
 export async function fetchStats(): Promise<Stats> {
   const res = await fetch('/api/stats')
   if (!res.ok) throw new Error(`fetchStats: ${res.status}`)
+  return res.json()
+}
+
+export async function lookupIp(ip: string): Promise<ReputationResult> {
+  const res = await fetch(`/api/lookup/ip/${encodeURIComponent(ip)}`)
+  if (!res.ok) throw new Error(`lookupIp: ${res.status}`)
   return res.json()
 }

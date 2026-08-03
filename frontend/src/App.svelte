@@ -9,6 +9,8 @@
   import ConnectionBanner from './components/ConnectionBanner.svelte'
   import FilterBar from './components/FilterBar.svelte'
   import LiveTable from './components/LiveTable.svelte'
+  import DashboardOverlay from './components/DashboardOverlay.svelte'
+  import IpLookupPopover from './components/IpLookupPopover.svelte'
 
   const STATS_REFRESH_MS = 5000
   const FILTER_DEBOUNCE_MS = 300
@@ -87,6 +89,8 @@
   <FilterBar />
   <LiveTable />
 </main>
+<DashboardOverlay />
+<IpLookupPopover />
 
 <style>
   main {

@@ -82,6 +82,19 @@ export interface Stats {
   connectedClients: number
 }
 
+// Mirrors internal/reputation/reputation.go's Result.
+export interface ReputationResult {
+  ip: string
+  ports?: number[]
+  hostnames?: string[]
+  vulns?: string[]
+  tags?: string[]
+  abuseScore?: number
+  totalReports?: number
+  countryCode?: string
+  isp?: string
+}
+
 export interface Filters {
   device: string
   action: Action | ''
