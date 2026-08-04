@@ -62,7 +62,13 @@ class AppState {
     Object.entries(this.filters).some(([k, v]) => k !== 'ruleRegex' && v !== ''),
   )
 
+  // Skipped while paused so the age-based display-duration cutoff in
+  // filteredEvents freezes at the moment of pausing instead of continuing
+  // to age out whatever's on screen -- otherwise a short "Last Xs" window
+  // would keep shrinking the paused view out from under you, defeating
+  // the point of pausing to look at something before it scrolls past.
   tick() {
+    if (this.paused) return
     this.now = Date.now()
   }
 

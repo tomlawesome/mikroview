@@ -69,7 +69,9 @@ GitHub (repo → Packages → mikroview) and set visibility to public, or
   log-prefix convention that makes "accept vs. drop vs. reject" and the
   responsible rule visible at all.
 - **Storage**: in-memory only, a fixed-capacity ring buffer windowed to
-  a configurable retention period (default 24h) — no database.
+  a configurable retention period (default 24h) — no database, and no
+  disk persistence. All retained events are lost on restart, redeploy,
+  or crash; MikroView is a live/recent-history view, not a log archive.
 - **Live updates**: a WebSocket pushes new events to the browser in
   real time; historical/filtered queries go through a REST endpoint
   against the retained buffer. See
