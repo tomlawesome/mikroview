@@ -17,6 +17,17 @@ services:
       # your own MaxMind GeoLite2 database; uncomment both this and the
       # env var below once you have one.
       # - ./GeoLite2-Country.mmdb:/etc/mikroview/GeoLite2-Country.mmdb:ro
+      # Optional -- persists behavioral flags (port scans, activity
+      # spikes, etc; see docs/configuration.md's "Behavioral flags"
+      # section) across restarts. Uncomment both this and the env var
+      # below to enable. Left commented, flags still work, they just
+      # reset on restart like everything else in mikroview. The
+      # container runs as uid 65532 (distroless nonroot), which won't
+      # own a freshly created host directory -- `mkdir -p flags-data &&
+      # chmod 777 flags-data` is the simplest fix if you hit a
+      # permission error at startup.
+      # - ./flags-data:/var/lib/mikroview
     environment:
       - MIKROVIEW_CONFIG=/etc/mikroview/config.yaml
       # - MIKROVIEW_GEOIP_DB_PATH=/etc/mikroview/GeoLite2-Country.mmdb
+      # - MIKROVIEW_FLAGS_STORE_PATH=/var/lib/mikroview/flags.json
