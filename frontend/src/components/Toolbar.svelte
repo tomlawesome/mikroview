@@ -110,6 +110,7 @@
   .controls {
     display: flex;
     align-items: center;
+    flex-wrap: wrap;
     gap: 8px;
     margin-left: auto;
   }

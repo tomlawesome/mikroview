@@ -164,11 +164,63 @@
     background: var(--row-unknown-bg-hover);
   }
 
+  /* The row-tint backgrounds above are deliberately translucent (washed
+     over --bg-elevated), which is fine while every cell scrolls together
+     -- but .time stays pinned in place (see below) while later columns
+     scroll underneath it, so its translucent background would let their
+     text bleed through. A background shorthand only allows a plain color
+     in its *last* layer, so the tint is wrapped as a same-color-to-itself
+     gradient (a valid image layer) over an opaque --bg-elevated color
+     layer -- both painted within this cell's own box before the sticky
+     cell is composited over the page, flattening it to one opaque paint. */
+  .row-accept .time {
+    background: linear-gradient(var(--row-accept-bg), var(--row-accept-bg)), var(--bg-elevated);
+  }
+  .row-drop .time {
+    background: linear-gradient(var(--row-drop-bg), var(--row-drop-bg)), var(--bg-elevated);
+  }
+  .row-reject .time {
+    background: linear-gradient(var(--row-reject-bg), var(--row-reject-bg)), var(--bg-elevated);
+  }
+  .row-log .time {
+    background: linear-gradient(var(--row-log-bg), var(--row-log-bg)), var(--bg-elevated);
+  }
+  .row-unknown .time {
+    background: linear-gradient(var(--row-unknown-bg), var(--row-unknown-bg)), var(--bg-elevated);
+  }
+  .row-accept:hover .time {
+    background: linear-gradient(var(--row-accept-bg-hover), var(--row-accept-bg-hover)), var(--bg-elevated);
+  }
+  .row-drop:hover .time {
+    background: linear-gradient(var(--row-drop-bg-hover), var(--row-drop-bg-hover)), var(--bg-elevated);
+  }
+  .row-reject:hover .time {
+    background: linear-gradient(var(--row-reject-bg-hover), var(--row-reject-bg-hover)), var(--bg-elevated);
+  }
+  .row-log:hover .time {
+    background: linear-gradient(var(--row-log-bg-hover), var(--row-log-bg-hover)), var(--bg-elevated);
+  }
+  .row-unknown:hover .time {
+    background: linear-gradient(var(--row-unknown-bg-hover), var(--row-unknown-bg-hover)), var(--bg-elevated);
+  }
+
   .time,
   .addr,
   .proto {
     font-family: var(--font-mono);
     color: var(--fg-muted);
+  }
+
+  /* Keeps the timestamp in view while horizontally scrolling the table on
+     narrow viewports, where the full column set no longer fits -- without
+     it there's no fixed reference point tying a scrolled-out row back to
+     when it happened. Background comes from the existing .row-* rules
+     above (same specificity, .cell), so it stays opaque over the cells
+     scrolling underneath it. */
+  .time {
+    position: sticky;
+    left: 0;
+    z-index: 1;
   }
 
   .addr {
