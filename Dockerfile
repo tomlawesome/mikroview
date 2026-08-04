@@ -23,4 +23,8 @@ FROM gcr.io/distroless/static-debian12:nonroot
 COPY --from=backend /out/mikroview /mikroview
 USER nonroot:nonroot
 EXPOSE 1514/udp 1514/tcp 8080/tcp
+# No shell/curl/wget in this image, so the binary checks itself -- see
+# runHealthcheck in main.go.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+  CMD ["/mikroview", "-healthcheck"]
 ENTRYPOINT ["/mikroview"]
