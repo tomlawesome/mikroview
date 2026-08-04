@@ -57,13 +57,33 @@ func TestHandleWSBatchesMultipleEvents(t *testing.T) {
 		s.Hub.Broadcast(store.Event{ID: uint64(i)})
 	}
 
+	// Batching means these 5 rapid broadcasts should arrive in very few
+	// frames -- but not necessarily exactly one. This test's own setup
+	// sleep (above) is the same duration as wsBatchInterval, so the
+	// server's flush ticker can legitimately fire in the middle of the
+	// broadcast loop and split it across two frames; that's a real,
+	// valid outcome of the ticker/channel race, not a bug, so asserting
+	// on a single frame here was flaky by construction. Accumulate
+	// across frames instead, and only fail if batching isn't happening
+	// at all (i.e. one frame per event).
 	conn.SetReadDeadline(time.Now().Add(2 * time.Second))
-	var env wsEnvelope
-	if err := conn.ReadJSON(&env); err != nil {
-		t.Fatalf("ReadJSON failed: %v", err)
+	seen := map[uint64]bool{}
+	frames := 0
+	for len(seen) < 5 && frames < 5 {
+		var env wsEnvelope
+		if err := conn.ReadJSON(&env); err != nil {
+			t.Fatalf("ReadJSON failed after %d/5 events in %d frames: %v", len(seen), frames, err)
+		}
+		frames++
+		for _, e := range env.Events {
+			seen[e.ID] = true
+		}
 	}
 
-	if len(env.Events) != 5 {
-		t.Errorf("expected all 5 events batched into one frame, got %d", len(env.Events))
+	if len(seen) != 5 {
+		t.Errorf("expected all 5 events to arrive, got %d across %d frames", len(seen), frames)
+	}
+	if frames > 2 {
+		t.Errorf("expected batching to deliver 5 rapid events in at most 2 frames, took %d", frames)
 	}
 }

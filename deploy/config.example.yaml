@@ -44,6 +44,17 @@ store:
 #   criticalPortWindow: 5m
 #   globalSpikeMultiplier: 4
 #   globalSpikeMinEPS: 5
+#   distributedBruteForceThreshold: 10
+#   distributedBruteForceWindow: 5m
+#   outboundAnomalyThreshold: 25
+#   outboundAnomalyWindow: 5m
+#   internalReconThreshold: 10
+#   internalReconWindow: 60s
+#   ruleSpikeMultiplier: 5
+#   ruleSpikeMinRate: 0.2
+#   ruleSpikeWindow: 60s
+#   repeatedDropsThreshold: 10
+#   repeatedDropsWindow: 15m
 
 # Devices are matched by the syslog source IP mikroview sees them from.
 # Sources not listed here still appear in the UI, auto-discovered and
