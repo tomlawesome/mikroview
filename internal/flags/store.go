@@ -24,10 +24,15 @@ import (
 type Type string
 
 const (
-	TypePortScan      Type = "port_scan"
-	TypeActivitySpike Type = "activity_spike"
-	TypeCriticalPort  Type = "critical_port"
-	TypeGlobalSpike   Type = "global_spike"
+	TypePortScan              Type = "port_scan"
+	TypeActivitySpike         Type = "activity_spike"
+	TypeCriticalPort          Type = "critical_port"
+	TypeGlobalSpike           Type = "global_spike"
+	TypeDistributedBruteForce Type = "distributed_brute_force"
+	TypeOutboundAnomaly       Type = "outbound_anomaly"
+	TypeInternalRecon         Type = "internal_recon"
+	TypeRuleSpike             Type = "rule_spike"
+	TypeRepeatedDrops         Type = "repeated_drops"
 )
 
 // maxFlags bounds the store the same way every other buffer in mikroview

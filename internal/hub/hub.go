@@ -12,7 +12,16 @@ import (
 // clientQueueSize bounds how many pending events a single slow client can
 // accumulate before newer events start evicting older queued ones — a
 // stalled browser tab must never be able to push back on ingestion.
-const clientQueueSize = 2000
+//
+// Generous on purpose: a backgrounded/throttled browser tab (very common
+// in practice -- mikroview left open in a background tab while working
+// elsewhere) can stall its WS read loop for well beyond what a small
+// buffer covers, and the resulting "N events dropped" banner reads as
+// alarming even though nothing is actually wrong. At ~a few hundred
+// bytes per store.Event, even a much larger buffer is a few MB per
+// connected client at worst -- trivial for the handful of concurrent
+// viewers this tool is scoped for.
+const clientQueueSize = 20_000
 
 type client struct {
 	id   uint64

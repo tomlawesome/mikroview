@@ -30,6 +30,46 @@ type Config struct {
 	CriticalPortWindow     time.Duration
 	GlobalSpikeMultiplier  float64
 	GlobalSpikeMinEPS      float64
+
+	// DistributedBruteForceThreshold+Window: the inverse of the
+	// critical-port detector -- many distinct external sources hitting
+	// the *same* critical port, rather than one source hitting it
+	// repeatedly. The signature of a botnet/credential-stuffing campaign
+	// against one service.
+	DistributedBruteForceThreshold int
+	DistributedBruteForceWindow    time.Duration
+
+	// OutboundAnomalyThreshold+Window: a LAN source contacting an
+	// unusual number of distinct external destinations -- one of the
+	// strongest signals of a compromised/malware-infected device
+	// (C2 beaconing, botnet participation).
+	OutboundAnomalyThreshold int
+	OutboundAnomalyWindow    time.Duration
+
+	// InternalReconThreshold+Window: a LAN source contacting an unusual
+	// number of distinct *internal* destinations -- a network sweep,
+	// the classic lateral-movement signature of an attacker who already
+	// has a foothold on the LAN.
+	InternalReconThreshold int
+	InternalReconWindow    time.Duration
+
+	// RuleSpikeMultiplier+MinRate+Window: a firewall rule firing at a
+	// large multiple of its own historical rate -- same EMA-baseline
+	// technique as the global spike detector, applied per rule instead
+	// of network-wide, so a normally-quiet rule suddenly lighting up is
+	// visible even if it doesn't move the network-wide total.
+	RuleSpikeMultiplier float64
+	RuleSpikeMinRate    float64
+	RuleSpikeWindow     time.Duration
+
+	// RepeatedDropsThreshold+Window: the same (source, destination port)
+	// pair repeatedly getting dropped/rejected against a locally-hosted
+	// service. Aimed at self-hosters: often this is a misconfigured
+	// port-forward (the real client keeps retrying a port that's not
+	// actually open the way they think), not necessarily an attack --
+	// framed as "worth a look," not "critical," in the UI.
+	RepeatedDropsThreshold int
+	RepeatedDropsWindow    time.Duration
 }
 
 // DefaultConfig returns sensible defaults for a home/small-office
@@ -49,6 +89,22 @@ func DefaultConfig() Config {
 		CriticalPortWindow:     5 * time.Minute,
 		GlobalSpikeMultiplier:  4,
 		GlobalSpikeMinEPS:      5,
+
+		DistributedBruteForceThreshold: 10,
+		DistributedBruteForceWindow:    5 * time.Minute,
+
+		OutboundAnomalyThreshold: 25,
+		OutboundAnomalyWindow:    5 * time.Minute,
+
+		InternalReconThreshold: 10,
+		InternalReconWindow:    60 * time.Second,
+
+		RuleSpikeMultiplier: 5,
+		RuleSpikeMinRate:    0.2, // events/sec -- ~12/min, below which "5x" isn't meaningful
+		RuleSpikeWindow:     60 * time.Second,
+
+		RepeatedDropsThreshold: 10,
+		RepeatedDropsWindow:    15 * time.Minute,
 	}
 }
 
@@ -81,16 +137,24 @@ type Detector struct {
 	cfg Config
 	fs  *flags.Store
 
-	perSource    map[string]*sourceWindow
-	criticalHits map[string][]time.Time
+	perSource       map[string]*sourceWindow
+	criticalHits    map[string][]time.Time
+	criticalPortIPs map[int]*portSources
+	destWindows     map[string]*destWindow
+	ruleWindows     map[string]*ruleWindow
+	dropPairs       map[string][]time.Time
 }
 
 func New(cfg Config, fs *flags.Store) *Detector {
 	return &Detector{
-		cfg:          cfg,
-		fs:           fs,
-		perSource:    make(map[string]*sourceWindow),
-		criticalHits: make(map[string][]time.Time),
+		cfg:             cfg,
+		fs:              fs,
+		perSource:       make(map[string]*sourceWindow),
+		criticalHits:    make(map[string][]time.Time),
+		criticalPortIPs: make(map[int]*portSources),
+		destWindows:     make(map[string]*destWindow),
+		ruleWindows:     make(map[string]*ruleWindow),
+		dropPairs:       make(map[string][]time.Time),
 	}
 }
 
@@ -102,8 +166,30 @@ func (d *Detector) Observe(e store.Event) {
 	now := e.ReceivedAt
 
 	d.observeScanAndSpike(e, now)
-	if e.DstPort != 0 && isCriticalPort(d.cfg.CriticalPorts, e.DstPort) && isPublic(e.SrcIP) {
+
+	srcPublic := isPublic(e.SrcIP)
+	if e.DstPort != 0 && isCriticalPort(d.cfg.CriticalPorts, e.DstPort) && srcPublic {
 		d.observeCriticalPort(e, now)
+		d.observeDistributedBruteForce(e, now)
+	}
+
+	if !srcPublic && e.DstIP != "" {
+		// source is on the LAN -- track where it's going, split by
+		// whether the destination is also internal (recon/lateral
+		// movement) or external (possible C2/exfiltration).
+		d.observeDestSpread(e, now)
+	}
+
+	if e.RuleLabel != "" {
+		d.observeRuleRate(e, now)
+	}
+
+	if e.DstIP != "" && e.DstPort != 0 && !isPublic(e.DstIP) && (e.Action == store.ActionDrop || e.Action == store.ActionReject) {
+		// destination is a locally-hosted service, and this attempt was
+		// refused -- track repeats regardless of whether the source is
+		// internal or external, unlike the critical-port detector this
+		// isn't restricted to a curated port list or to external sources.
+		d.observeRepeatedDrops(e, now)
 	}
 }
 

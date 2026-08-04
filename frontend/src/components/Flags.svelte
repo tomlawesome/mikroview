@@ -13,14 +13,47 @@
     activity_spike: 'Activity spike',
     critical_port: 'Critical-port attempts',
     global_spike: 'Network-wide volume spike',
+    distributed_brute_force: 'Distributed brute-force',
+    outbound_anomaly: 'Outbound anomaly',
+    internal_recon: 'Internal reconnaissance',
+    rule_spike: 'Rule hit-rate spike',
+    repeated_drops: 'Repeated drops on a port',
   }
 
   const active = $derived(flagsState.list.filter((f) => !f.cleared))
   const cleared = $derived(flagsState.list.filter((f) => f.cleared).slice(0, 20))
 
+  // What a flag's target actually *is* varies by detector -- most are a
+  // plain source IP, but distributed_brute_force is keyed by port,
+  // rule_spike by rule label, repeated_drops by "ip -> port N", and
+  // global_spike has no filterable target at all. Filtering on the
+  // right field (rather than always assuming "ip") is what makes this
+  // click-through actually land on a sensible pre-filtered view.
+  function isFilterable(f: Flag): boolean {
+    return f.type !== 'global_spike'
+  }
+
   function filterToTarget(f: Flag) {
-    if (f.target === 'global') return
-    appState.setFilter('ip', f.target)
+    switch (f.type) {
+      case 'port_scan':
+      case 'activity_spike':
+      case 'critical_port':
+      case 'outbound_anomaly':
+      case 'internal_recon':
+        appState.setFilter('ip', f.target)
+        break
+      case 'distributed_brute_force':
+        appState.setFilter('port', f.target.replace(/^port /, ''))
+        break
+      case 'rule_spike':
+        appState.setFilter('rule', f.target)
+        break
+      case 'repeated_drops':
+        appState.setFilter('ip', f.target.split(' -> ')[0])
+        break
+      case 'global_spike':
+        return
+    }
     flagsState.open = false
   }
 
@@ -40,7 +73,7 @@
           <li class="card">
             <div class="card-main">
               <span class="type">{TYPE_LABELS[f.type]}</span>
-              {#if f.target !== 'global'}
+              {#if isFilterable(f)}
                 <button class="target" onclick={() => filterToTarget(f)} title="Filter the live view to {f.target}">
                   {f.target}
                 </button>

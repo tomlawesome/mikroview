@@ -24,11 +24,6 @@ dependency-light web UI.
   <img src="docs/screenshots/live-view-dark.png" alt="MikroView live view showing accepted (green), dropped (amber), and rejected (red) RouterOS firewall connections" width="820" />
 </p>
 
-A one-page overview with the same screenshots lives in
-[`site/`](site/index.html) (open `site/index.html` directly, or serve the
-directory statically) — see [`brand/`](brand/BRANDING.md) for the logo
-assets and color tokens behind it.
-
 ## Quickstart
 
 ```sh
@@ -46,17 +41,9 @@ your RouterOS device(s) at the container, and open
 
 ### Prebuilt image
 
-Every push to `main` builds and publishes an image via GitHub Actions
-(see `.github/workflows/docker.yml`):
-
 ```sh
 docker pull ghcr.io/tomlawesome/mikroview:latest
 ```
-
-If `docker pull` reports the image as not found/unauthorized, the GHCR
-package is likely still set to private — open the package settings on
-GitHub (repo → Packages → mikroview) and set visibility to public, or
-`docker login ghcr.io` first with a PAT that has `read:packages` scope.
 
 ## How it works
 

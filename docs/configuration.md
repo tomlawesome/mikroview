@@ -109,6 +109,17 @@ flags:
   criticalPortWindow: 5m
   globalSpikeMultiplier: 4
   globalSpikeMinEPS: 5
+  distributedBruteForceThreshold: 10
+  distributedBruteForceWindow: 5m
+  outboundAnomalyThreshold: 25
+  outboundAnomalyWindow: 5m
+  internalReconThreshold: 10
+  internalReconWindow: 60s
+  ruleSpikeMultiplier: 5
+  ruleSpikeMinRate: 0.2
+  ruleSpikeWindow: 60s
+  repeatedDropsThreshold: 10
+  repeatedDropsWindow: 15m
 ```
 
 - **`storePath`** — where raised/cleared flags are persisted, as a small
@@ -141,6 +152,41 @@ flags:
   rather than needing to be hand-tuned. `globalSpikeMinEPS` is a floor
   below which a "spike" isn't worth flagging (e.g. 2 events/s against a
   0.5 events/s baseline is technically 4x, but not meaningfully busy).
+- **Distributed brute-force** — `distributedBruteForceThreshold`+
+  *distinct* external source IPs hitting the *same* critical port within
+  `distributedBruteForceWindow`. The inverse of critical-port attempts
+  (which is one source hitting a port repeatedly): this is many
+  different sources hammering one port, the signature of a
+  botnet/credential-stuffing campaign rather than a single noisy
+  scanner.
+- **Outbound anomaly** — a LAN source contacting
+  `outboundAnomalyThreshold`+ distinct *external* destinations within
+  `outboundAnomalyWindow`. One of the strongest signals of a
+  compromised/malware-infected device (C2 beaconing, botnet
+  participation) available without a separate security product —
+  nothing else notices "this device just started talking to 30 IPs it's
+  never touched before."
+- **Internal reconnaissance** — a LAN source contacting
+  `internalReconThreshold`+ distinct *internal* destinations within
+  `internalReconWindow`. A network sweep: the classic lateral-movement
+  signature of an attacker who already has a foothold on the LAN,
+  probing for what else is reachable.
+- **Rule hit-rate spike** — a firewall rule's own hit rate vs. a
+  slow-moving baseline of *that rule specifically* (same EMA technique
+  as the global spike, just scoped per rule), at `ruleSpikeMultiplier`×
+  or more. Catches a normally-quiet rule suddenly lighting up even when
+  it's nowhere near large enough to move the network-wide total —
+  `ruleSpikeMinRate` (events/sec) is the same kind of noise floor as
+  `globalSpikeMinEPS`.
+- **Repeated drops on a port** — the same (source, destination port)
+  pair getting dropped/rejected `repeatedDropsThreshold`+ times within
+  `repeatedDropsWindow`, against a *locally-hosted* service (unlike
+  critical-port attempts, not restricted to a curated port list or to
+  external sources). Aimed at self-hosters: this is very often a
+  misconfigured port-forward or firewall rule — the real client keeps
+  retrying a port that isn't actually open the way you think — rather
+  than necessarily an attack, so treat it as "worth a look," not
+  "critical."
 
 A flag is raised once per (detector, source) pair and updated in place
 on re-firing (count/last-seen bumped, not duplicated) until a human
@@ -172,6 +218,17 @@ Override individual scalar settings without a mounted file:
 | `MIKROVIEW_FLAGS_CRITICAL_PORT_WINDOW` | `flags.criticalPortWindow` |
 | `MIKROVIEW_FLAGS_GLOBAL_SPIKE_MULTIPLIER` | `flags.globalSpikeMultiplier` |
 | `MIKROVIEW_FLAGS_GLOBAL_SPIKE_MIN_EPS` | `flags.globalSpikeMinEPS` |
+| `MIKROVIEW_FLAGS_DISTRIBUTED_BRUTE_FORCE_THRESHOLD` | `flags.distributedBruteForceThreshold` |
+| `MIKROVIEW_FLAGS_DISTRIBUTED_BRUTE_FORCE_WINDOW` | `flags.distributedBruteForceWindow` |
+| `MIKROVIEW_FLAGS_OUTBOUND_ANOMALY_THRESHOLD` | `flags.outboundAnomalyThreshold` |
+| `MIKROVIEW_FLAGS_OUTBOUND_ANOMALY_WINDOW` | `flags.outboundAnomalyWindow` |
+| `MIKROVIEW_FLAGS_INTERNAL_RECON_THRESHOLD` | `flags.internalReconThreshold` |
+| `MIKROVIEW_FLAGS_INTERNAL_RECON_WINDOW` | `flags.internalReconWindow` |
+| `MIKROVIEW_FLAGS_RULE_SPIKE_MULTIPLIER` | `flags.ruleSpikeMultiplier` |
+| `MIKROVIEW_FLAGS_RULE_SPIKE_MIN_RATE` | `flags.ruleSpikeMinRate` |
+| `MIKROVIEW_FLAGS_RULE_SPIKE_WINDOW` | `flags.ruleSpikeWindow` |
+| `MIKROVIEW_FLAGS_REPEATED_DROPS_THRESHOLD` | `flags.repeatedDropsThreshold` |
+| `MIKROVIEW_FLAGS_REPEATED_DROPS_WINDOW` | `flags.repeatedDropsWindow` |
 
 ## CLI flags (local development)
 
