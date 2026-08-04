@@ -9,6 +9,7 @@ import (
 
 	"github.com/tomlawesome/mikroview/internal/config"
 	"github.com/tomlawesome/mikroview/internal/device"
+	"github.com/tomlawesome/mikroview/internal/flags"
 	"github.com/tomlawesome/mikroview/internal/hub"
 	"github.com/tomlawesome/mikroview/internal/reputation"
 	"github.com/tomlawesome/mikroview/internal/store"
@@ -16,11 +17,13 @@ import (
 
 func newTestServer() (*Server, *store.Store) {
 	st := store.New(1000, time.Hour)
+	fs, _ := flags.Open("")
 	s := &Server{
 		Store:      st,
 		Devices:    device.NewRegistry([]config.Device{{ID: "core", Name: "Core", SourceIP: "192.168.1.1"}}),
 		Hub:        hub.New(),
 		Reputation: reputation.New(""),
+		Flags:      fs,
 		StartTime:  time.Now(),
 	}
 	return s, st
