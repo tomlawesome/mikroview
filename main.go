@@ -65,7 +65,22 @@ func main() {
 		rootMux.Handle("/", http.FileServer(http.FS(frontend)))
 	}
 
-	httpServer := &http.Server{Addr: cfg.Listen.HTTP, Handler: rootMux}
+	httpServer := &http.Server{
+		Addr:    cfg.Listen.HTTP,
+		Handler: rootMux,
+		// Bounds a slow client trickling headers/body in to tie up a
+		// connection indefinitely (the WS listener, syslog listeners, and
+		// hub already have their own backpressure/deadline handling --
+		// this was the one place in the request path without any). None
+		// of these continue to apply once /api/ws hijacks a connection:
+		// the WS handler manages its own read/write deadlines from that
+		// point on (see internal/api/ws.go), and Go's server stops
+		// enforcing these on a connection once it's been hijacked.
+		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       15 * time.Second,
+		WriteTimeout:      15 * time.Second,
+		IdleTimeout:       120 * time.Second,
+	}
 
 	go func() {
 		<-ctx.Done()
