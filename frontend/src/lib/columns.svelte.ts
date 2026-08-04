@@ -12,7 +12,9 @@ export const COLUMNS: ColumnDef[] = [
   { key: 'action', label: 'Action' },
   { key: 'chain', label: 'Chain' },
   { key: 'source', label: 'Source' },
+  { key: 'srcPort', label: 'Src port' },
   { key: 'destination', label: 'Destination' },
+  { key: 'dstPort', label: 'Dst port' },
   { key: 'nat', label: 'NAT' },
   { key: 'proto', label: 'Proto' },
   { key: 'iface', label: 'Interfaces' },
@@ -27,9 +29,13 @@ export const COLUMNS: ColumnDef[] = [
 // it stops flexing and holds the size they chose.
 type Width = number | null
 
-const DEFAULT_WIDTHS: Width[] = [104, 150, 92, 88, null, null, null, 74, 160, null]
+const DEFAULT_WIDTHS: Width[] = [104, 150, 92, 88, null, 76, null, 76, null, 74, 160, null]
 const MIN_WIDTH = 56
-const STORAGE_KEY = 'mikroview-column-widths-v2'
+// v3: added the srcPort/dstPort columns (previously inline in the address
+// cells) -- bumped so anyone with a v2 width array saved just falls back
+// to the new defaults instead of applying stale widths to a different
+// column set.
+const STORAGE_KEY = 'mikroview-column-widths-v3'
 
 function loadInitial(): Width[] {
   try {

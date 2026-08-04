@@ -51,6 +51,18 @@
     aria-label="Port"
   />
 
+  <select bind:value={appState.filters.srcScope} aria-label="Source scope" title="Restrict by whether the source is on your LAN">
+    <option value="">Any source</option>
+    <option value="internal">Internal source</option>
+    <option value="external">External source</option>
+  </select>
+
+  <select bind:value={appState.filters.dstScope} aria-label="Destination scope" title="Restrict by whether the destination is on your LAN">
+    <option value="">Any destination</option>
+    <option value="internal">Internal destination</option>
+    <option value="external">External destination</option>
+  </select>
+
   <input
     type="text"
     placeholder="Interface"

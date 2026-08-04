@@ -1,5 +1,6 @@
 <script lang="ts">
   import { appState } from '../lib/state.svelte'
+  import { flagsState } from '../lib/flags.svelte'
   import { formatEps } from '../lib/format'
   import { themeState } from '../lib/theme.svelte'
   import { retentionState, MAX_AGE_OPTIONS } from '../lib/retention.svelte'
@@ -76,7 +77,18 @@
       onclick={() => (appState.dashboardOpen = !appState.dashboardOpen)}
       title="Event charts and traffic breakdowns"
     >
-      Dashboard
+      Metrics
+    </button>
+
+    <button
+      class:active={flagsState.open}
+      onclick={() => (flagsState.open = !flagsState.open)}
+      title="Behavioral flags: port scans, activity spikes, critical-port attempts, and volume spikes"
+    >
+      Flags
+      {#if flagsState.activeCount > 0}
+        <span class="flags-badge">{flagsState.activeCount}</span>
+      {/if}
     </button>
 
     <ThemeMenu />
@@ -160,6 +172,22 @@
   button:disabled {
     opacity: 0.5;
     cursor: default;
+  }
+
+  .flags-badge {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 16px;
+    height: 16px;
+    padding: 0 4px;
+    margin-left: 6px;
+    border-radius: 8px;
+    background: var(--reject);
+    color: #fff;
+    font-size: 11px;
+    font-weight: 700;
+    line-height: 1;
   }
 
   button:disabled:hover {

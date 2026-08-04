@@ -1,22 +1,18 @@
 <script lang="ts">
-  // Large centered modal for the dashboard charts, layered over the live
-  // view rather than replacing it -- keeps the live table's state (scroll
-  // position, pause, filters) untouched underneath while the dashboard is
-  // open, and closing it is just closing an overlay, not navigating back.
-  import { appState } from '../lib/state.svelte'
-  import Dashboard from './Dashboard.svelte'
+  // Same modal-over-the-live-view pattern as DashboardOverlay -- layered
+  // rather than replacing the live view, so closing it is just closing
+  // an overlay, not navigating back.
+  import { flagsState } from '../lib/flags.svelte'
+  import Flags from './Flags.svelte'
 
   function close() {
-    appState.dashboardOpen = false
+    flagsState.open = false
   }
 
   function onKeydown(e: KeyboardEvent) {
     if (e.key === 'Escape') close()
   }
 
-  // Only close when the backdrop itself is clicked, not a bubbled click
-  // from inside the modal -- avoids needing a second click handler (and
-  // the a11y warning that comes with attaching one) just to stop it.
   function onBackdropClick(e: MouseEvent) {
     if (e.target === e.currentTarget) close()
   }
@@ -24,14 +20,14 @@
 
 <svelte:window onkeydown={onKeydown} />
 
-{#if appState.dashboardOpen}
+{#if flagsState.open}
   <div class="backdrop" onclick={onBackdropClick} role="presentation">
-    <div class="modal" role="dialog" aria-modal="true" aria-label="Metrics" tabindex="-1">
+    <div class="modal" role="dialog" aria-modal="true" aria-label="Flags" tabindex="-1">
       <div class="modal-header">
-        <span class="title">Metrics</span>
-        <button class="close" onclick={close} aria-label="Close metrics">✕</button>
+        <span class="title">Flags</span>
+        <button class="close" onclick={close} aria-label="Close flags">✕</button>
       </div>
-      <Dashboard />
+      <Flags />
     </div>
   </div>
 {/if}
@@ -51,7 +47,7 @@
   .modal {
     width: 100%;
     height: 100%;
-    max-width: 1400px;
+    max-width: 800px;
     background: var(--bg);
     border: 1px solid var(--border);
     border-radius: 10px;

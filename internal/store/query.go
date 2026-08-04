@@ -12,6 +12,18 @@ const (
 	maxLimit     = 5000
 )
 
+// Scope restricts a query to only-internal or only-external addresses on
+// one side of a connection. ScopeAny (the zero value) applies no
+// restriction, so an unset Query field behaves exactly as before this was
+// added.
+type Scope string
+
+const (
+	ScopeAny      Scope = ""
+	ScopeInternal Scope = "internal"
+	ScopeExternal Scope = "external"
+)
+
 // Query describes a filtered, windowed read against the Store. Zero values
 // mean "no filter" for that field.
 type Query struct {
@@ -22,6 +34,8 @@ type Query struct {
 	Interface string
 	IP        string // matches src or dst; accepts a bare IP or CIDR
 	Port      int    // matches src or dst port
+	SrcScope  Scope  // restrict SrcIP to only-internal or only-external
+	DstScope  Scope  // restrict DstIP to only-internal or only-external
 	Rule      string // substring match (or regex, if RuleRegex) against the rule label / raw line
 	RuleRegex bool
 	Since     time.Time
@@ -166,6 +180,9 @@ func matchesFilters(e Event, q Query, ipNet *net.IPNet, ip net.IP, ruleRe *regex
 	if q.Port != 0 && e.SrcPort != q.Port && e.DstPort != q.Port {
 		return false
 	}
+	if !scopeMatches(q.SrcScope, e.SrcIP) || !scopeMatches(q.DstScope, e.DstIP) {
+		return false
+	}
 	if q.Rule != "" {
 		if q.RuleRegex {
 			if ruleRe != nil && !ruleRe.MatchString(e.RuleLabel) && !ruleRe.MatchString(e.Raw) {
@@ -179,4 +196,38 @@ func matchesFilters(e Event, q Query, ipNet *net.IPNet, ip net.IP, ruleRe *regex
 		}
 	}
 	return true
+}
+
+// scopeMatches reports whether addr satisfies scope. ScopeAny always
+// matches (including an empty/unparseable addr, since most events don't
+// have both a src and dst address -- e.g. ICMP has no ports but this
+// applies equally to any address field). A specific scope excludes an
+// address that can't be parsed at all, rather than guessing: an
+// unclassifiable address shouldn't satisfy "only show me internal" or
+// "only show me external."
+func scopeMatches(scope Scope, addr string) bool {
+	if scope == ScopeAny {
+		return true
+	}
+	ip := net.ParseIP(addr)
+	if ip == nil {
+		return false
+	}
+	public := isPublicIP(ip)
+	if scope == ScopeInternal {
+		return !public
+	}
+	return public // ScopeExternal
+}
+
+// isPublicIP mirrors the same small check every other package that needs
+// it (internal/geoip, internal/reputation, internal/detect) keeps its own
+// copy of, rather than sharing one -- consistent with how this codebase
+// already does it.
+func isPublicIP(ip net.IP) bool {
+	return !ip.IsPrivate() &&
+		!ip.IsLoopback() &&
+		!ip.IsUnspecified() &&
+		!ip.IsLinkLocalUnicast() &&
+		!ip.IsLinkLocalMulticast()
 }

@@ -53,7 +53,7 @@
         title="Filter to IP: {event.srcIp}"
         onclick={() => appState.setFilter('ip', event.srcIp ?? '')}
       >
-        {srcFlag ? `${srcFlag} ` : ''}{formatAddr(event.srcIp, event.srcPort)}
+        {srcFlag ? `${srcFlag} ` : ''}{event.srcIp}
       </button>
       {#if isPublicIp(event.srcIp)}
         <IpInvestigateButton ip={event.srcIp} />
@@ -63,6 +63,18 @@
     <span class="cell addr">—</span>
   {/if}
 
+  {#if event.srcPort}
+    <button
+      class="cell port cell-btn"
+      title="Filter to port: {event.srcPort}"
+      onclick={() => appState.setFilter('port', String(event.srcPort))}
+    >
+      {event.srcPort}
+    </button>
+  {:else}
+    <span class="cell port">—</span>
+  {/if}
+
   {#if event.dstIp}
     <span class="cell addr">
       <button
@@ -70,7 +82,7 @@
         title="Filter to IP: {event.dstIp}"
         onclick={() => appState.setFilter('ip', event.dstIp ?? '')}
       >
-        {dstFlag ? `${dstFlag} ` : ''}{formatAddr(event.dstIp, event.dstPort)}
+        {dstFlag ? `${dstFlag} ` : ''}{event.dstIp}
       </button>
       {#if isPublicIp(event.dstIp)}
         <IpInvestigateButton ip={event.dstIp} />
@@ -78,6 +90,18 @@
     </span>
   {:else}
     <span class="cell addr">—</span>
+  {/if}
+
+  {#if event.dstPort}
+    <button
+      class="cell port cell-btn"
+      title="Filter to port: {event.dstPort}"
+      onclick={() => appState.setFilter('port', String(event.dstPort))}
+    >
+      {event.dstPort}
+    </button>
+  {:else}
+    <span class="cell port">—</span>
   {/if}
 
   <span class="cell addr nat" class:has-value={!!event.natIp} title={event.natRaw}>
@@ -206,6 +230,7 @@
 
   .time,
   .addr,
+  .port,
   .proto {
     font-family: var(--font-mono);
     color: var(--fg-muted);
@@ -267,10 +292,11 @@
     text-decoration: underline;
   }
 
-  /* Address cells hold both the click-to-filter button and (for public
-     IPs) the investigate trigger side by side -- overflow/ellipsis moves
-     from `.cell` (which now just lays the two out) onto the filter
-     button itself, since that's the element with the actual long text. */
+  /* Address cells hold the IP filter button and (for public IPs) the
+     investigate trigger side by side -- overflow/ellipsis moves from
+     `.cell` (which now just lays the two out) onto the filter button
+     itself, since that's the element with the actual long text. Port is
+     its own column now (see .port below), not crammed in here. */
   .cell.addr {
     display: flex;
     align-items: center;
@@ -283,5 +309,9 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+  }
+
+  .port {
+    text-align: right;
   }
 </style>

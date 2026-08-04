@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -50,11 +51,47 @@ type Reputation struct {
 	AbuseIPDBKey string `yaml:"abuseIPDBKey"`
 }
 
+// Flags configures internal/detect's behavioral detectors and
+// internal/flags' persistence -- see both packages' docs for what each
+// threshold means and why the defaults are what they are. StorePath left
+// empty is a fully supported, deliberate choice: detection still runs
+// and flags still work, they just don't survive a restart, consistent
+// with the rest of mikroview (see SECURITY.md).
+type Flags struct {
+	StorePath              string        `yaml:"storePath"`
+	PortScanThreshold      int           `yaml:"portScanThreshold"`
+	PortScanWindow         time.Duration `yaml:"portScanWindow"`
+	ActivitySpikeThreshold int           `yaml:"activitySpikeThreshold"`
+	ActivitySpikeWindow    time.Duration `yaml:"activitySpikeWindow"`
+	CriticalPorts          []int         `yaml:"criticalPorts"`
+	CriticalPortThreshold  int           `yaml:"criticalPortThreshold"`
+	CriticalPortWindow     time.Duration `yaml:"criticalPortWindow"`
+	GlobalSpikeMultiplier  float64       `yaml:"globalSpikeMultiplier"`
+	GlobalSpikeMinEPS      float64       `yaml:"globalSpikeMinEPS"`
+
+	DistributedBruteForceThreshold int           `yaml:"distributedBruteForceThreshold"`
+	DistributedBruteForceWindow    time.Duration `yaml:"distributedBruteForceWindow"`
+
+	OutboundAnomalyThreshold int           `yaml:"outboundAnomalyThreshold"`
+	OutboundAnomalyWindow    time.Duration `yaml:"outboundAnomalyWindow"`
+
+	InternalReconThreshold int           `yaml:"internalReconThreshold"`
+	InternalReconWindow    time.Duration `yaml:"internalReconWindow"`
+
+	RuleSpikeMultiplier float64       `yaml:"ruleSpikeMultiplier"`
+	RuleSpikeMinRate    float64       `yaml:"ruleSpikeMinRate"`
+	RuleSpikeWindow     time.Duration `yaml:"ruleSpikeWindow"`
+
+	RepeatedDropsThreshold int           `yaml:"repeatedDropsThreshold"`
+	RepeatedDropsWindow    time.Duration `yaml:"repeatedDropsWindow"`
+}
+
 type Config struct {
 	Listen     Listen     `yaml:"listen"`
 	Store      Store      `yaml:"store"`
 	GeoIP      GeoIP      `yaml:"geoip"`
 	Reputation Reputation `yaml:"reputation"`
+	Flags      Flags      `yaml:"flags"`
 	Devices    []Device   `yaml:"devices"`
 }
 
@@ -68,6 +105,37 @@ func defaults() Config {
 		Store: Store{
 			Retention: 24 * time.Hour,
 			MaxEvents: 200_000,
+		},
+		// Mirrors internal/detect.DefaultConfig() -- kept as separate
+		// literal values (rather than importing internal/detect here) so
+		// this package stays a dependency-free leaf that every feature
+		// package can build on, not the other way around.
+		Flags: Flags{
+			PortScanThreshold:      15,
+			PortScanWindow:         60 * time.Second,
+			ActivitySpikeThreshold: 200,
+			ActivitySpikeWindow:    60 * time.Second,
+			CriticalPorts:          []int{21, 22, 23, 445, 3389, 5900, 8291, 8728, 8729},
+			CriticalPortThreshold:  5,
+			CriticalPortWindow:     5 * time.Minute,
+			GlobalSpikeMultiplier:  4,
+			GlobalSpikeMinEPS:      5,
+
+			DistributedBruteForceThreshold: 10,
+			DistributedBruteForceWindow:    5 * time.Minute,
+
+			OutboundAnomalyThreshold: 25,
+			OutboundAnomalyWindow:    5 * time.Minute,
+
+			InternalReconThreshold: 10,
+			InternalReconWindow:    60 * time.Second,
+
+			RuleSpikeMultiplier: 5,
+			RuleSpikeMinRate:    0.2,
+			RuleSpikeWindow:     60 * time.Second,
+
+			RepeatedDropsThreshold: 10,
+			RepeatedDropsWindow:    15 * time.Minute,
 		},
 	}
 }
@@ -130,6 +198,126 @@ func applyEnv(cfg *Config) {
 	if v := os.Getenv("MIKROVIEW_ABUSEIPDB_KEY"); v != "" {
 		cfg.Reputation.AbuseIPDBKey = v
 	}
+	if v := os.Getenv("MIKROVIEW_FLAGS_STORE_PATH"); v != "" {
+		cfg.Flags.StorePath = v
+	}
+	if v := os.Getenv("MIKROVIEW_FLAGS_PORT_SCAN_THRESHOLD"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			cfg.Flags.PortScanThreshold = n
+		}
+	}
+	if v := os.Getenv("MIKROVIEW_FLAGS_PORT_SCAN_WINDOW"); v != "" {
+		if d, err := time.ParseDuration(v); err == nil {
+			cfg.Flags.PortScanWindow = d
+		}
+	}
+	if v := os.Getenv("MIKROVIEW_FLAGS_ACTIVITY_SPIKE_THRESHOLD"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			cfg.Flags.ActivitySpikeThreshold = n
+		}
+	}
+	if v := os.Getenv("MIKROVIEW_FLAGS_ACTIVITY_SPIKE_WINDOW"); v != "" {
+		if d, err := time.ParseDuration(v); err == nil {
+			cfg.Flags.ActivitySpikeWindow = d
+		}
+	}
+	if v := os.Getenv("MIKROVIEW_FLAGS_CRITICAL_PORTS"); v != "" {
+		if ports, ok := parseIntList(v); ok {
+			cfg.Flags.CriticalPorts = ports
+		}
+	}
+	if v := os.Getenv("MIKROVIEW_FLAGS_CRITICAL_PORT_THRESHOLD"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			cfg.Flags.CriticalPortThreshold = n
+		}
+	}
+	if v := os.Getenv("MIKROVIEW_FLAGS_CRITICAL_PORT_WINDOW"); v != "" {
+		if d, err := time.ParseDuration(v); err == nil {
+			cfg.Flags.CriticalPortWindow = d
+		}
+	}
+	if v := os.Getenv("MIKROVIEW_FLAGS_GLOBAL_SPIKE_MULTIPLIER"); v != "" {
+		if f, err := strconv.ParseFloat(v, 64); err == nil {
+			cfg.Flags.GlobalSpikeMultiplier = f
+		}
+	}
+	if v := os.Getenv("MIKROVIEW_FLAGS_GLOBAL_SPIKE_MIN_EPS"); v != "" {
+		if f, err := strconv.ParseFloat(v, 64); err == nil {
+			cfg.Flags.GlobalSpikeMinEPS = f
+		}
+	}
+	if v := os.Getenv("MIKROVIEW_FLAGS_DISTRIBUTED_BRUTE_FORCE_THRESHOLD"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			cfg.Flags.DistributedBruteForceThreshold = n
+		}
+	}
+	if v := os.Getenv("MIKROVIEW_FLAGS_DISTRIBUTED_BRUTE_FORCE_WINDOW"); v != "" {
+		if d, err := time.ParseDuration(v); err == nil {
+			cfg.Flags.DistributedBruteForceWindow = d
+		}
+	}
+	if v := os.Getenv("MIKROVIEW_FLAGS_OUTBOUND_ANOMALY_THRESHOLD"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			cfg.Flags.OutboundAnomalyThreshold = n
+		}
+	}
+	if v := os.Getenv("MIKROVIEW_FLAGS_OUTBOUND_ANOMALY_WINDOW"); v != "" {
+		if d, err := time.ParseDuration(v); err == nil {
+			cfg.Flags.OutboundAnomalyWindow = d
+		}
+	}
+	if v := os.Getenv("MIKROVIEW_FLAGS_INTERNAL_RECON_THRESHOLD"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			cfg.Flags.InternalReconThreshold = n
+		}
+	}
+	if v := os.Getenv("MIKROVIEW_FLAGS_INTERNAL_RECON_WINDOW"); v != "" {
+		if d, err := time.ParseDuration(v); err == nil {
+			cfg.Flags.InternalReconWindow = d
+		}
+	}
+	if v := os.Getenv("MIKROVIEW_FLAGS_RULE_SPIKE_MULTIPLIER"); v != "" {
+		if f, err := strconv.ParseFloat(v, 64); err == nil {
+			cfg.Flags.RuleSpikeMultiplier = f
+		}
+	}
+	if v := os.Getenv("MIKROVIEW_FLAGS_RULE_SPIKE_MIN_RATE"); v != "" {
+		if f, err := strconv.ParseFloat(v, 64); err == nil {
+			cfg.Flags.RuleSpikeMinRate = f
+		}
+	}
+	if v := os.Getenv("MIKROVIEW_FLAGS_RULE_SPIKE_WINDOW"); v != "" {
+		if d, err := time.ParseDuration(v); err == nil {
+			cfg.Flags.RuleSpikeWindow = d
+		}
+	}
+	if v := os.Getenv("MIKROVIEW_FLAGS_REPEATED_DROPS_THRESHOLD"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			cfg.Flags.RepeatedDropsThreshold = n
+		}
+	}
+	if v := os.Getenv("MIKROVIEW_FLAGS_REPEATED_DROPS_WINDOW"); v != "" {
+		if d, err := time.ParseDuration(v); err == nil {
+			cfg.Flags.RepeatedDropsWindow = d
+		}
+	}
+}
+
+// parseIntList parses a comma-separated list of integers (e.g. a port
+// list from an env var). Any single malformed entry invalidates the
+// whole value -- like every other env var here, a bad value is ignored
+// in favor of whatever was already set, rather than partially applied.
+func parseIntList(v string) ([]int, bool) {
+	parts := strings.Split(v, ",")
+	out := make([]int, 0, len(parts))
+	for _, p := range parts {
+		n, err := strconv.Atoi(strings.TrimSpace(p))
+		if err != nil {
+			return nil, false
+		}
+		out = append(out, n)
+	}
+	return out, true
 }
 
 func applyFlags(cfg *Config, args []string) error {
