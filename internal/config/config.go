@@ -68,6 +68,22 @@ type Flags struct {
 	CriticalPortWindow     time.Duration `yaml:"criticalPortWindow"`
 	GlobalSpikeMultiplier  float64       `yaml:"globalSpikeMultiplier"`
 	GlobalSpikeMinEPS      float64       `yaml:"globalSpikeMinEPS"`
+
+	DistributedBruteForceThreshold int           `yaml:"distributedBruteForceThreshold"`
+	DistributedBruteForceWindow    time.Duration `yaml:"distributedBruteForceWindow"`
+
+	OutboundAnomalyThreshold int           `yaml:"outboundAnomalyThreshold"`
+	OutboundAnomalyWindow    time.Duration `yaml:"outboundAnomalyWindow"`
+
+	InternalReconThreshold int           `yaml:"internalReconThreshold"`
+	InternalReconWindow    time.Duration `yaml:"internalReconWindow"`
+
+	RuleSpikeMultiplier float64       `yaml:"ruleSpikeMultiplier"`
+	RuleSpikeMinRate    float64       `yaml:"ruleSpikeMinRate"`
+	RuleSpikeWindow     time.Duration `yaml:"ruleSpikeWindow"`
+
+	RepeatedDropsThreshold int           `yaml:"repeatedDropsThreshold"`
+	RepeatedDropsWindow    time.Duration `yaml:"repeatedDropsWindow"`
 }
 
 type Config struct {
@@ -104,6 +120,22 @@ func defaults() Config {
 			CriticalPortWindow:     5 * time.Minute,
 			GlobalSpikeMultiplier:  4,
 			GlobalSpikeMinEPS:      5,
+
+			DistributedBruteForceThreshold: 10,
+			DistributedBruteForceWindow:    5 * time.Minute,
+
+			OutboundAnomalyThreshold: 25,
+			OutboundAnomalyWindow:    5 * time.Minute,
+
+			InternalReconThreshold: 10,
+			InternalReconWindow:    60 * time.Second,
+
+			RuleSpikeMultiplier: 5,
+			RuleSpikeMinRate:    0.2,
+			RuleSpikeWindow:     60 * time.Second,
+
+			RepeatedDropsThreshold: 10,
+			RepeatedDropsWindow:    15 * time.Minute,
 		},
 	}
 }
@@ -212,6 +244,61 @@ func applyEnv(cfg *Config) {
 	if v := os.Getenv("MIKROVIEW_FLAGS_GLOBAL_SPIKE_MIN_EPS"); v != "" {
 		if f, err := strconv.ParseFloat(v, 64); err == nil {
 			cfg.Flags.GlobalSpikeMinEPS = f
+		}
+	}
+	if v := os.Getenv("MIKROVIEW_FLAGS_DISTRIBUTED_BRUTE_FORCE_THRESHOLD"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			cfg.Flags.DistributedBruteForceThreshold = n
+		}
+	}
+	if v := os.Getenv("MIKROVIEW_FLAGS_DISTRIBUTED_BRUTE_FORCE_WINDOW"); v != "" {
+		if d, err := time.ParseDuration(v); err == nil {
+			cfg.Flags.DistributedBruteForceWindow = d
+		}
+	}
+	if v := os.Getenv("MIKROVIEW_FLAGS_OUTBOUND_ANOMALY_THRESHOLD"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			cfg.Flags.OutboundAnomalyThreshold = n
+		}
+	}
+	if v := os.Getenv("MIKROVIEW_FLAGS_OUTBOUND_ANOMALY_WINDOW"); v != "" {
+		if d, err := time.ParseDuration(v); err == nil {
+			cfg.Flags.OutboundAnomalyWindow = d
+		}
+	}
+	if v := os.Getenv("MIKROVIEW_FLAGS_INTERNAL_RECON_THRESHOLD"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			cfg.Flags.InternalReconThreshold = n
+		}
+	}
+	if v := os.Getenv("MIKROVIEW_FLAGS_INTERNAL_RECON_WINDOW"); v != "" {
+		if d, err := time.ParseDuration(v); err == nil {
+			cfg.Flags.InternalReconWindow = d
+		}
+	}
+	if v := os.Getenv("MIKROVIEW_FLAGS_RULE_SPIKE_MULTIPLIER"); v != "" {
+		if f, err := strconv.ParseFloat(v, 64); err == nil {
+			cfg.Flags.RuleSpikeMultiplier = f
+		}
+	}
+	if v := os.Getenv("MIKROVIEW_FLAGS_RULE_SPIKE_MIN_RATE"); v != "" {
+		if f, err := strconv.ParseFloat(v, 64); err == nil {
+			cfg.Flags.RuleSpikeMinRate = f
+		}
+	}
+	if v := os.Getenv("MIKROVIEW_FLAGS_RULE_SPIKE_WINDOW"); v != "" {
+		if d, err := time.ParseDuration(v); err == nil {
+			cfg.Flags.RuleSpikeWindow = d
+		}
+	}
+	if v := os.Getenv("MIKROVIEW_FLAGS_REPEATED_DROPS_THRESHOLD"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			cfg.Flags.RepeatedDropsThreshold = n
+		}
+	}
+	if v := os.Getenv("MIKROVIEW_FLAGS_REPEATED_DROPS_WINDOW"); v != "" {
+		if d, err := time.ParseDuration(v); err == nil {
+			cfg.Flags.RepeatedDropsWindow = d
 		}
 	}
 }
