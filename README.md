@@ -45,6 +45,25 @@ your RouterOS device(s) at the container, and open
 docker pull ghcr.io/tomlawesome/mikroview:latest
 ```
 
+Or run it directly with Compose, without cloning the repo:
+
+```yaml
+services:
+  mikroview:
+    image: ghcr.io/tomlawesome/mikroview:latest
+    restart: unless-stopped
+    ports:
+      - "514:1514/udp"
+      - "514:1514/tcp"
+      - "8080:8080"
+    volumes:
+      - ./config.yaml:/etc/mikroview/config.yaml:ro
+    environment:
+      - MIKROVIEW_CONFIG=/etc/mikroview/config.yaml
+```
+
+Create `config.yaml` next to it first (see [`deploy/config.example.yaml`](deploy/config.example.yaml) for the full option reference), then `docker compose up -d`.
+
 ## How it works
 
 - **Ingestion**: RouterOS forwards firewall log lines via
