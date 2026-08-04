@@ -25,12 +25,22 @@ with devices you don't control.**
 
 ## Data handling
 
-- **No persistence.** Events live in an in-memory ring buffer only —
-  there is no database and nothing is written to disk. Restarting,
-  redeploying, or crashing the process discards all retained history.
-  MikroView is a live/recent-history view, not a log archive; if you need
-  durable logs, forward RouterOS's syslog output to a second, dedicated
-  logging destination as well.
+- **No persistence for events.** Events live in an in-memory ring buffer
+  only — there is no database. Restarting, redeploying, or crashing the
+  process discards all retained history. MikroView is a live/recent-
+  history view, not a log archive; if you need durable logs, forward
+  RouterOS's syslog output to a second, dedicated logging destination as
+  well.
+- **One deliberate exception: behavioral flags.** If `flags.storePath` /
+  `MIKROVIEW_FLAGS_STORE_PATH` is configured, raised flags (port scans,
+  activity spikes, critical-port attempts, volume spikes -- see
+  [docs/configuration.md](docs/configuration.md)) are persisted to a
+  small JSON file, since a flag is meant to stay visible until a human
+  clears it. This file contains the IP addresses that triggered a flag
+  and a short human-readable description -- treat it with the same care
+  as `config.yaml` (see "Recommended deployment hardening" below). Left
+  unconfigured (the default), flags behave like everything else: they
+  work, they just reset on restart.
 - **No secrets reach the browser.** The optional AbuseIPDB API key
   (`reputation.abuseIPDBKey` / `MIKROVIEW_ABUSEIPDB_KEY`) is read
   server-side only and used solely to call AbuseIPDB's API from the
@@ -75,6 +85,11 @@ damage a hostile or misbehaving LAN device can do:
 - The rule/raw-line search filter is matched with Go's RE2 engine, which
   has no catastrophic-backtracking behavior — an expensive or malicious
   regex in a filter can't peg a CPU core (`internal/store/query.go`).
+- The behavioral detectors (`internal/detect`) bound their per-source
+  tracking state the same way every other buffer in mikroview has an
+  explicit ceiling — a scan using many spoofed or ephemeral source IPs
+  can't grow that state without bound; the least-recently-active source
+  is evicted first once the cap is reached.
 - The container image is built on `distroless/static-debian12:nonroot`:
   no shell, no package manager, and it runs as a non-root user.
 
@@ -96,6 +111,9 @@ damage a hostile or misbehaving LAN device can do:
   (`reputation.abuseIPDBKey`) if you've configured one; prefer the
   `MIKROVIEW_ABUSEIPDB_KEY` env var over the YAML field if the file
   itself might be more widely readable than your environment.
+- The same applies if you've enabled flag persistence (`flags.storePath`)
+  — the resulting file holds real IP addresses and short descriptions of
+  what they triggered, so keep it off a shared filesystem the same way.
 
 ## Reporting a vulnerability
 

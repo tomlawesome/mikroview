@@ -72,6 +72,15 @@ GitHub (repo → Packages → mikroview) and set visibility to public, or
   a configurable retention period (default 24h) — no database, and no
   disk persistence. All retained events are lost on restart, redeploy,
   or crash; MikroView is a live/recent-history view, not a log archive.
+  The one deliberate exception is behavioral flags (see below), which
+  can optionally persist to a small JSON file since they're meant to
+  stay visible until a human clears them.
+- **Behavioral flags**: watches for port scans, per-source activity
+  spikes, repeated attempts against critical ports (SSH, RDP, Winbox,
+  ...) from external IPs, and network-wide volume spikes — each raises a
+  flag for a human to review and clear, never an automatic action. See
+  [docs/configuration.md](docs/configuration.md) for the detectors and
+  their thresholds.
 - **Live updates**: a WebSocket pushes new events to the browser in
   real time; historical/filtered queries go through a REST endpoint
   against the retained buffer. See
