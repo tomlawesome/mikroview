@@ -38,15 +38,14 @@
     font-weight: 700;
     font-style: italic;
     line-height: 1;
-    color: var(--fg-dim);
+    color: var(--accent);
     background: transparent;
-    border: 1px solid var(--border);
+    border: 1px solid var(--accent);
     border-radius: 50%;
     cursor: pointer;
   }
 
   .investigate:hover {
-    color: var(--accent);
-    border-color: var(--accent);
+    background: var(--accent-bg-hover);
   }
 </style>
