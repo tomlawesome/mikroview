@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -31,6 +32,15 @@ import (
 const globalSpikeCheckInterval = 10 * time.Second
 
 func main() {
+	// The runtime image is distroless (no shell, no curl/wget), so Docker's
+	// HEALTHCHECK -- and any orchestrator's readiness probe -- can't shell
+	// out to check the app; the binary has to check itself instead. Config
+	// is loaded from file/env only here (not os.Args) since this runs as a
+	// standalone HEALTHCHECK CMD with no other flags to parse.
+	if len(os.Args) > 1 && os.Args[1] == "-healthcheck" {
+		os.Exit(runHealthcheck())
+	}
+
 	cfg, err := config.Load(os.Getenv("MIKROVIEW_CONFIG"), os.Args[1:])
 	if err != nil {
 		log.Fatalf("config: %v", err)
@@ -149,6 +159,34 @@ func main() {
 	if err := httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		log.Fatalf("http server: %v", err)
 	}
+}
+
+// runHealthcheck backs the `-healthcheck` mode used by the container's
+// HEALTHCHECK (see Dockerfile). It hits the app's own /api/healthz over
+// loopback and returns a process exit code, rather than opening any
+// listeners itself.
+func runHealthcheck() int {
+	cfg, err := config.Load(os.Getenv("MIKROVIEW_CONFIG"), nil)
+	if err != nil {
+		log.Printf("healthcheck: config: %v", err)
+		return 1
+	}
+	addr := cfg.Listen.HTTP
+	if strings.HasPrefix(addr, ":") {
+		addr = "127.0.0.1" + addr
+	}
+	client := http.Client{Timeout: 3 * time.Second}
+	resp, err := client.Get("http://" + addr + "/api/healthz")
+	if err != nil {
+		log.Printf("healthcheck: %v", err)
+		return 1
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		log.Printf("healthcheck: unexpected status %d", resp.StatusCode)
+		return 1
+	}
+	return 0
 }
 
 // ingest is the single store-writer goroutine: it parses each raw syslog
