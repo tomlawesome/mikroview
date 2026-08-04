@@ -80,3 +80,86 @@ func TestServeTCPHandlesMultipleConnections(t *testing.T) {
 		}
 	}
 }
+
+func TestServeTCPRejectsBeyondConnectionLimit(t *testing.T) {
+	orig := maxTCPConnections
+	maxTCPConnections = 1
+	defer func() { maxTCPConnections = orig }()
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr := ln.Addr().String()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	out := make(chan RawMessage, 4)
+	go ServeTCP(ctx, ln, out)
+
+	// Holds its slot open (never sends a full line) so the second
+	// connection below has to be rejected rather than just queued behind
+	// a fast-finishing first one.
+	holder, err := net.Dial("tcp", addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer holder.Close()
+	if _, err := holder.Write([]byte("keep me open")); err != nil {
+		t.Fatal(err)
+	}
+
+	// Give the accept loop time to register the first connection's slot
+	// before dialing the second.
+	time.Sleep(50 * time.Millisecond)
+
+	rejected, err := net.Dial("tcp", addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rejected.Close()
+
+	// A rejected connection is closed immediately by the server; the
+	// client observes this as EOF on read (possibly after the write
+	// below succeeds into the OS send buffer before the close lands).
+	rejected.SetReadDeadline(time.Now().Add(2 * time.Second))
+	buf := make([]byte, 1)
+	_, readErr := rejected.Read(buf)
+	if readErr == nil {
+		t.Fatal("expected the over-limit connection to be closed by the server, got a successful read")
+	}
+}
+
+func TestServeTCPClosesIdleConnection(t *testing.T) {
+	origTimeout := tcpIdleTimeout
+	tcpIdleTimeout = 100 * time.Millisecond
+	defer func() { tcpIdleTimeout = origTimeout }()
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr := ln.Addr().String()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	out := make(chan RawMessage, 4)
+	go ServeTCP(ctx, ln, out)
+
+	conn, err := net.Dial("tcp", addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+
+	// Send nothing and wait past the idle timeout -- the server should
+	// close its side, which this end observes as EOF.
+	conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	buf := make([]byte, 1)
+	_, readErr := conn.Read(buf)
+	if readErr == nil {
+		t.Fatal("expected the idle connection to be closed by the server, got a successful read")
+	}
+}
