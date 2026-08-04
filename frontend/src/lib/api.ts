@@ -1,4 +1,4 @@
-import type { Device, EventsResult, Filters, ReputationResult, Stats } from './types'
+import type { Device, EventsResult, Filters, Flag, ReputationResult, Stats } from './types'
 
 // Exported so lib/state.svelte.ts can build the same query-param shape for
 // the URL bar (see App.svelte's filter-sync effect) without duplicating
@@ -12,6 +12,8 @@ export function buildQuery(filters: Partial<Filters> & { limit?: number; sinceId
   if (filters.interface) params.set('interface', filters.interface)
   if (filters.ip) params.set('ip', filters.ip)
   if (filters.port) params.set('port', filters.port)
+  if (filters.srcScope) params.set('srcScope', filters.srcScope)
+  if (filters.dstScope) params.set('dstScope', filters.dstScope)
   if (filters.rule) params.set('rule', filters.rule)
   if (filters.rule && filters.ruleRegex) params.set('ruleRegex', 'true')
   if (filters.limit) params.set('limit', String(filters.limit))
@@ -45,4 +47,16 @@ export async function lookupIp(ip: string): Promise<ReputationResult> {
   const res = await fetch(`/api/lookup/ip/${encodeURIComponent(ip)}`)
   if (!res.ok) throw new Error(`lookupIp: ${res.status}`)
   return res.json()
+}
+
+export async function fetchFlags(): Promise<Flag[]> {
+  const res = await fetch('/api/flags')
+  if (!res.ok) throw new Error(`fetchFlags: ${res.status}`)
+  const body = await res.json()
+  return body.flags ?? []
+}
+
+export async function clearFlag(id: string): Promise<void> {
+  const res = await fetch(`/api/flags/${encodeURIComponent(id)}/clear`, { method: 'POST' })
+  if (!res.ok) throw new Error(`clearFlag: ${res.status}`)
 }

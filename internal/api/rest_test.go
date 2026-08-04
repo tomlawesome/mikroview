@@ -9,6 +9,7 @@ import (
 
 	"github.com/tomlawesome/mikroview/internal/config"
 	"github.com/tomlawesome/mikroview/internal/device"
+	"github.com/tomlawesome/mikroview/internal/flags"
 	"github.com/tomlawesome/mikroview/internal/hub"
 	"github.com/tomlawesome/mikroview/internal/reputation"
 	"github.com/tomlawesome/mikroview/internal/store"
@@ -16,11 +17,13 @@ import (
 
 func newTestServer() (*Server, *store.Store) {
 	st := store.New(1000, time.Hour)
+	fs, _ := flags.Open("")
 	s := &Server{
 		Store:      st,
 		Devices:    device.NewRegistry([]config.Device{{ID: "core", Name: "Core", SourceIP: "192.168.1.1"}}),
 		Hub:        hub.New(),
 		Reputation: reputation.New(""),
+		Flags:      fs,
 		StartTime:  time.Now(),
 	}
 	return s, st
@@ -70,6 +73,45 @@ func TestHandleEventsFiltering(t *testing.T) {
 	}
 	if len(res.Events) != 1 || res.Events[0].Action != store.ActionDrop {
 		t.Errorf("unexpected result: %+v", res.Events)
+	}
+}
+
+func TestHandleEventsScopeFiltering(t *testing.T) {
+	s, st := newTestServer()
+	ts := httptest.NewServer(s.Routes())
+	defer ts.Close()
+
+	now := time.Now()
+	st.Insert(store.Event{Time: now, DeviceID: "core", Action: store.ActionAccept, SrcIP: "10.0.0.1", DstIP: "8.8.8.8"})
+	st.Insert(store.Event{Time: now, DeviceID: "core", Action: store.ActionDrop, SrcIP: "203.0.113.9", DstIP: "10.0.0.5"})
+
+	resp, err := http.Get(ts.URL + "/api/events?srcScope=internal")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	var res store.Result
+	if err := json.NewDecoder(resp.Body).Decode(&res); err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Events) != 1 || res.Events[0].Action != store.ActionAccept {
+		t.Errorf("expected only the event with a private SrcIP, got %+v", res.Events)
+	}
+
+	// a malformed scope value falls back to "any" rather than erroring or
+	// matching nothing
+	resp2, err := http.Get(ts.URL + "/api/events?srcScope=not-a-real-scope")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp2.Body.Close()
+	var res2 store.Result
+	if err := json.NewDecoder(resp2.Body).Decode(&res2); err != nil {
+		t.Fatal(err)
+	}
+	if len(res2.Events) != 2 {
+		t.Errorf("expected a malformed scope value to be ignored (both events returned), got %+v", res2.Events)
 	}
 }
 

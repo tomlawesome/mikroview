@@ -24,11 +24,6 @@ dependency-light web UI.
   <img src="docs/screenshots/live-view-dark.png" alt="MikroView live view showing accepted (green), dropped (amber), and rejected (red) RouterOS firewall connections" width="820" />
 </p>
 
-A one-page overview with the same screenshots lives in
-[`site/`](site/index.html) (open `site/index.html` directly, or serve the
-directory statically) — see [`brand/`](brand/BRANDING.md) for the logo
-assets and color tokens behind it.
-
 ## Quickstart
 
 ```sh
@@ -46,17 +41,28 @@ your RouterOS device(s) at the container, and open
 
 ### Prebuilt image
 
-Every push to `main` builds and publishes an image via GitHub Actions
-(see `.github/workflows/docker.yml`):
-
 ```sh
 docker pull ghcr.io/tomlawesome/mikroview:latest
 ```
 
-If `docker pull` reports the image as not found/unauthorized, the GHCR
-package is likely still set to private — open the package settings on
-GitHub (repo → Packages → mikroview) and set visibility to public, or
-`docker login ghcr.io` first with a PAT that has `read:packages` scope.
+Or run it directly with Compose, without cloning the repo:
+
+```yaml
+services:
+  mikroview:
+    image: ghcr.io/tomlawesome/mikroview:latest
+    restart: unless-stopped
+    ports:
+      - "514:1514/udp"
+      - "514:1514/tcp"
+      - "8080:8080"
+    volumes:
+      - ./config.yaml:/etc/mikroview/config.yaml:ro
+    environment:
+      - MIKROVIEW_CONFIG=/etc/mikroview/config.yaml
+```
+
+Create `config.yaml` next to it first (see [`deploy/config.example.yaml`](deploy/config.example.yaml) for the full option reference), then `docker compose up -d`.
 
 ## How it works
 
@@ -69,7 +75,18 @@ GitHub (repo → Packages → mikroview) and set visibility to public, or
   log-prefix convention that makes "accept vs. drop vs. reject" and the
   responsible rule visible at all.
 - **Storage**: in-memory only, a fixed-capacity ring buffer windowed to
-  a configurable retention period (default 24h) — no database.
+  a configurable retention period (default 24h) — no database, and no
+  disk persistence. All retained events are lost on restart, redeploy,
+  or crash; MikroView is a live/recent-history view, not a log archive.
+  The one deliberate exception is behavioral flags (see below), which
+  can optionally persist to a small JSON file since they're meant to
+  stay visible until a human clears them.
+- **Behavioral flags**: watches for port scans, per-source activity
+  spikes, repeated attempts against critical ports (SSH, RDP, Winbox,
+  ...) from external IPs, and network-wide volume spikes — each raises a
+  flag for a human to review and clear, never an automatic action. See
+  [docs/configuration.md](docs/configuration.md) for the detectors and
+  their thresholds.
 - **Live updates**: a WebSocket pushes new events to the browser in
   real time; historical/filtered queries go through a REST endpoint
   against the retained buffer. See
