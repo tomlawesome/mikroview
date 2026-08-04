@@ -26,10 +26,10 @@
 
 {#if appState.dashboardOpen}
   <div class="backdrop" onclick={onBackdropClick} role="presentation">
-    <div class="modal" role="dialog" aria-modal="true" aria-label="Dashboard" tabindex="-1">
+    <div class="modal" role="dialog" aria-modal="true" aria-label="Metrics" tabindex="-1">
       <div class="modal-header">
-        <span class="title">Dashboard</span>
-        <button class="close" onclick={close} aria-label="Close dashboard">✕</button>
+        <span class="title">Metrics</span>
+        <button class="close" onclick={close} aria-label="Close metrics">✕</button>
       </div>
       <Dashboard />
     </div>

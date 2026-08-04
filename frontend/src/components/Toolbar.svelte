@@ -77,7 +77,7 @@
       onclick={() => (appState.dashboardOpen = !appState.dashboardOpen)}
       title="Event charts and traffic breakdowns"
     >
-      Dashboard
+      Metrics
     </button>
 
     <button

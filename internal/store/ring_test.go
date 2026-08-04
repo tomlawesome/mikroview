@@ -185,6 +185,61 @@ func TestQueryFilters(t *testing.T) {
 			t.Errorf("expected an invalid pattern to leave both events unfiltered, got %v", ids(res.Events))
 		}
 	})
+
+	t.Run("by src scope internal", func(t *testing.T) {
+		// both events have a private SrcIP (10.0.0.x) -- should match both
+		res := s.Query(Query{SrcScope: ScopeInternal, Limit: 10})
+		if len(res.Events) != 2 {
+			t.Errorf("expected both events (private SrcIP) to match, got %v", ids(res.Events))
+		}
+	})
+
+	t.Run("by src scope external", func(t *testing.T) {
+		res := s.Query(Query{SrcScope: ScopeExternal, Limit: 10})
+		if len(res.Events) != 0 {
+			t.Errorf("expected no events (neither has a public SrcIP), got %v", ids(res.Events))
+		}
+	})
+
+	t.Run("by dst scope external", func(t *testing.T) {
+		// both events have a public DstIP (8.8.8.8, 1.1.1.1) -- should match both
+		res := s.Query(Query{DstScope: ScopeExternal, Limit: 10})
+		if len(res.Events) != 2 {
+			t.Errorf("expected both events (public DstIP) to match, got %v", ids(res.Events))
+		}
+	})
+
+	t.Run("src and dst scope combine", func(t *testing.T) {
+		res := s.Query(Query{SrcScope: ScopeInternal, DstScope: ScopeExternal, Limit: 10})
+		if len(res.Events) != 2 {
+			t.Errorf("expected both events (internal src, external dst) to match, got %v", ids(res.Events))
+		}
+	})
+}
+
+func TestScopeMatches(t *testing.T) {
+	cases := []struct {
+		name  string
+		scope Scope
+		addr  string
+		want  bool
+	}{
+		{"any always matches, even empty", ScopeAny, "", true},
+		{"internal matches a private IP", ScopeInternal, "192.168.1.1", true},
+		{"internal rejects a public IP", ScopeInternal, "8.8.8.8", false},
+		{"internal rejects an unparseable address", ScopeInternal, "not-an-ip", false},
+		{"external matches a public IP", ScopeExternal, "8.8.8.8", true},
+		{"external rejects a private IP", ScopeExternal, "10.0.0.1", false},
+		{"external rejects an empty address", ScopeExternal, "", false},
+		{"internal matches loopback", ScopeInternal, "127.0.0.1", true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := scopeMatches(c.scope, c.addr); got != c.want {
+				t.Errorf("scopeMatches(%q, %q) = %v, want %v", c.scope, c.addr, got, c.want)
+			}
+		})
+	}
 }
 
 func TestStats(t *testing.T) {
