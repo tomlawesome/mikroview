@@ -96,7 +96,12 @@
   <div class="body scrollbar" bind:this={bodyEl}>
     <div class="grid" bind:this={gridEl} style="grid-template-columns: {columnState.gridTemplate}">
       {#each COLUMNS as col, i (col.key)}
-        <div class="header-cell" bind:this={headerEls[i]} bind:clientHeight={headerHeight}>
+        <div
+          class="header-cell"
+          class:sticky-col={col.key === 'time'}
+          bind:this={headerEls[i]}
+          bind:clientHeight={headerHeight}
+        >
           <span class="label-text">{col.label}</span>
         </div>
       {/each}
@@ -145,6 +150,7 @@
   .body {
     flex: 1;
     overflow: auto;
+    -webkit-overflow-scrolling: touch;
   }
 
   .grid {
@@ -172,6 +178,15 @@
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
+  }
+
+  /* Mirrors EventRow's .time sticky positioning so the header stays
+     aligned with the sticky timestamp column beneath it while the table
+     scrolls horizontally. */
+  .sticky-col {
+    position: sticky;
+    left: 0;
+    z-index: 3;
   }
 
   /* A single overlay layer for all resize handles, rather than nesting a
