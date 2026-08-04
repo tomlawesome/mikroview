@@ -95,6 +95,21 @@ export interface ReputationResult {
   isp?: string
 }
 
+// Mirrors internal/flags.Flag's JSON tags.
+export type FlagType = 'port_scan' | 'activity_spike' | 'critical_port' | 'global_spike'
+
+export interface Flag {
+  id: string
+  type: FlagType
+  target: string
+  detail: string
+  count: number
+  firstSeen: string
+  lastSeen: string
+  cleared: boolean
+  clearedAt?: string
+}
+
 export interface Filters {
   device: string
   action: Action | ''

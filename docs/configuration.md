@@ -82,6 +82,72 @@ Unconfigured, the feature still works with Shodan-only results; private/
 loopback/link-local addresses are rejected server-side regardless of
 configuration.
 
+## Behavioral flags (optional, on by default)
+
+mikroview watches the ingested event stream for a small set of patterns
+worth a human's attention, and raises a **flag** (visible in the UI, in
+`GET /api/flags`) for each one -- never an automatic action. This is an
+"interrogation helper," not an intrusion-prevention system: nothing here
+blocks, drops, or reports traffic anywhere. If you're running a proper
+IPS alongside mikroview (e.g. CrowdSec), this is meant to complement it,
+not duplicate it -- see the detector descriptions below for what each one
+is actually good at spotting.
+
+Detection itself is always on and needs no configuration; every
+threshold below has a sensible default and is only worth changing for an
+unusually quiet or unusually busy network.
+
+```yaml
+flags:
+  storePath: "/var/lib/mikroview/flags.json"
+  portScanThreshold: 15
+  portScanWindow: 60s
+  activitySpikeThreshold: 200
+  activitySpikeWindow: 60s
+  criticalPorts: [21, 22, 23, 445, 3389, 5900, 8291, 8728, 8729]
+  criticalPortThreshold: 5
+  criticalPortWindow: 5m
+  globalSpikeMultiplier: 4
+  globalSpikeMinEPS: 5
+```
+
+- **`storePath`** — where raised/cleared flags are persisted, as a small
+  JSON file. This is the one deliberate exception to mikroview's
+  otherwise in-memory-only design (see [SECURITY.md](../SECURITY.md)): a
+  flag is meant to stay visible until a human clears it, so unlike
+  everything else it survives a restart. Left empty (the default),
+  flags still work, they just reset like everything else does. If you
+  set this in the container, mount a volume for its parent directory —
+  see `deploy/docker-compose.yml`.
+- **Port scan** — one source touching `portScanThreshold`+ distinct
+  destination ports within `portScanWindow`. Applies to any source,
+  internal or external.
+- **Activity spike** — one source generating `activitySpikeThreshold`+
+  events within `activitySpikeWindow`. A simple absolute threshold
+  rather than a per-source historical baseline, deliberately — it's far
+  less state to keep and easy to reason about; tune the threshold to
+  your own network's normal volume if the default doesn't fit.
+- **Critical-port attempts** — `criticalPortThreshold`+ attempts against
+  one of `criticalPorts` within `criticalPortWindow`, from an *external*
+  source only (a LAN device reaching your own router's Winbox port is
+  normal; the same from the internet usually isn't). The default port
+  list covers SSH/Telnet/FTP/SMB/RDP/VNC and RouterOS's own
+  Winbox/API ports (8291/8728/8729) — worth watching precisely because
+  they're MikroTik-specific and a common target once a scanner has
+  fingerprinted a device as RouterOS.
+- **Global volume spike** — current events/sec vs. a slow-moving
+  baseline of itself (an exponential moving average, not a fixed
+  number), so it adapts to your network's real traffic level over time
+  rather than needing to be hand-tuned. `globalSpikeMinEPS` is a floor
+  below which a "spike" isn't worth flagging (e.g. 2 events/s against a
+  0.5 events/s baseline is technically 4x, but not meaningfully busy).
+
+A flag is raised once per (detector, source) pair and updated in place
+on re-firing (count/last-seen bumped, not duplicated) until a human
+clears it via the UI or `POST /api/flags/{id}/clear`. Clearing an
+already-active-again source re-raises it as a fresh entry rather than
+silently resurrecting the old one.
+
 ## Environment variables
 
 Override individual scalar settings without a mounted file:
@@ -96,6 +162,16 @@ Override individual scalar settings without a mounted file:
 | `MIKROVIEW_STORE_MAX_EVENTS` | `store.maxEvents` |
 | `MIKROVIEW_GEOIP_DB_PATH` | `geoip.dbPath` (see [GeoIP country flags](#geoip-country-flags-optional)) |
 | `MIKROVIEW_ABUSEIPDB_KEY` | `reputation.abuseIPDBKey` (see [IP reputation lookup](#ip-reputation-lookup-optional)) |
+| `MIKROVIEW_FLAGS_STORE_PATH` | `flags.storePath` |
+| `MIKROVIEW_FLAGS_PORT_SCAN_THRESHOLD` | `flags.portScanThreshold` |
+| `MIKROVIEW_FLAGS_PORT_SCAN_WINDOW` | `flags.portScanWindow` |
+| `MIKROVIEW_FLAGS_ACTIVITY_SPIKE_THRESHOLD` | `flags.activitySpikeThreshold` |
+| `MIKROVIEW_FLAGS_ACTIVITY_SPIKE_WINDOW` | `flags.activitySpikeWindow` |
+| `MIKROVIEW_FLAGS_CRITICAL_PORTS` | `flags.criticalPorts` (comma-separated, e.g. `22,3389,8291`) |
+| `MIKROVIEW_FLAGS_CRITICAL_PORT_THRESHOLD` | `flags.criticalPortThreshold` |
+| `MIKROVIEW_FLAGS_CRITICAL_PORT_WINDOW` | `flags.criticalPortWindow` |
+| `MIKROVIEW_FLAGS_GLOBAL_SPIKE_MULTIPLIER` | `flags.globalSpikeMultiplier` |
+| `MIKROVIEW_FLAGS_GLOBAL_SPIKE_MIN_EPS` | `flags.globalSpikeMinEPS` |
 
 ## CLI flags (local development)
 
@@ -113,6 +189,8 @@ not flags.
 | `GET /api/stats` | totals, per-action counts, rolling events/sec |
 | `GET /api/ws` | live-tail WebSocket feed |
 | `GET /api/lookup/ip/{ip}` | on-demand reputation/threat-intel lookup for one public IP (see [IP reputation lookup](#ip-reputation-lookup-optional)) |
+| `GET /api/flags` | active + cleared behavioral flags (see [Behavioral flags](#behavioral-flags-optional-on-by-default)) |
+| `POST /api/flags/{id}/clear` | mark one flag as cleared |
 
 `/api/events` query parameters: `device`, `action` (`accept`/`drop`/
 `reject`/`log`/`unknown`), `protocol`, `chain`, `interface`, `ip` (exact
