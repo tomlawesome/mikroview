@@ -60,6 +60,22 @@ func main() {
 		CriticalPortWindow:     cfg.Flags.CriticalPortWindow,
 		GlobalSpikeMultiplier:  cfg.Flags.GlobalSpikeMultiplier,
 		GlobalSpikeMinEPS:      cfg.Flags.GlobalSpikeMinEPS,
+
+		DistributedBruteForceThreshold: cfg.Flags.DistributedBruteForceThreshold,
+		DistributedBruteForceWindow:    cfg.Flags.DistributedBruteForceWindow,
+
+		OutboundAnomalyThreshold: cfg.Flags.OutboundAnomalyThreshold,
+		OutboundAnomalyWindow:    cfg.Flags.OutboundAnomalyWindow,
+
+		InternalReconThreshold: cfg.Flags.InternalReconThreshold,
+		InternalReconWindow:    cfg.Flags.InternalReconWindow,
+
+		RuleSpikeMultiplier: cfg.Flags.RuleSpikeMultiplier,
+		RuleSpikeMinRate:    cfg.Flags.RuleSpikeMinRate,
+		RuleSpikeWindow:     cfg.Flags.RuleSpikeWindow,
+
+		RepeatedDropsThreshold: cfg.Flags.RepeatedDropsThreshold,
+		RepeatedDropsWindow:    cfg.Flags.RepeatedDropsWindow,
 	}
 	detector := detect.New(detectCfg, fs)
 	globalSpike := detect.NewGlobalSpikeDetector(detectCfg, fs)

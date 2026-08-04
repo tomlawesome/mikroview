@@ -96,7 +96,16 @@ export interface ReputationResult {
 }
 
 // Mirrors internal/flags.Flag's JSON tags.
-export type FlagType = 'port_scan' | 'activity_spike' | 'critical_port' | 'global_spike'
+export type FlagType =
+  | 'port_scan'
+  | 'activity_spike'
+  | 'critical_port'
+  | 'global_spike'
+  | 'distributed_brute_force'
+  | 'outbound_anomaly'
+  | 'internal_recon'
+  | 'rule_spike'
+  | 'repeated_drops'
 
 export interface Flag {
   id: string
