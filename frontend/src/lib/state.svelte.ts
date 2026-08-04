@@ -1,5 +1,6 @@
 import { fetchDevices, fetchEvents, fetchStats } from './api'
 import { MAX_CLIENT_EVENTS } from './constants'
+import { isPublicIp } from './format'
 import { retentionState } from './retention.svelte'
 import {
   emptyFilters,
@@ -156,6 +157,22 @@ function applyFilters(events: FirewallEvent[], f: Filters): FirewallEvent[] {
     if (f.port) {
       const p = Number(f.port)
       if (e.srcPort !== p && e.dstPort !== p) return false
+    }
+    // An address that can't be classified (missing, or -- see isPublicIp's
+    // own IPv4-only caveat -- IPv6) satisfies neither "internal" nor
+    // "external", mirroring internal/store/query.go's scopeMatches: a
+    // specific scope excludes rather than guesses.
+    if (f.srcScope) {
+      if (!e.srcIp) return false
+      const external = isPublicIp(e.srcIp)
+      if (f.srcScope === 'internal' && external) return false
+      if (f.srcScope === 'external' && !external) return false
+    }
+    if (f.dstScope) {
+      if (!e.dstIp) return false
+      const external = isPublicIp(e.dstIp)
+      if (f.dstScope === 'internal' && external) return false
+      if (f.dstScope === 'external' && !external) return false
     }
     if (f.rule) {
       if (f.ruleRegex) {

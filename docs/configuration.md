@@ -252,7 +252,10 @@ not flags.
 `/api/events` query parameters: `device`, `action` (`accept`/`drop`/
 `reject`/`log`/`unknown`), `protocol`, `chain`, `interface`, `ip` (exact
 or CIDR, matches source or destination), `port` (matches source or
-destination), `rule` (substring match), `since` (RFC3339), `sinceId`
+destination), `srcScope`/`dstScope` (`internal` or `external`, restricts
+that side of the connection to a private/LAN or public address
+respectively -- an address that can't be parsed satisfies neither),
+`rule` (substring match), `since` (RFC3339), `sinceId`
 (cursor), `limit` (default 500, max 5000).
 
 ## Live updates: server vs. client filtering

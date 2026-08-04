@@ -119,6 +119,9 @@ export interface Flag {
   clearedAt?: string
 }
 
+// Mirrors internal/store's Scope.
+export type Scope = '' | 'internal' | 'external'
+
 export interface Filters {
   device: string
   action: Action | ''
@@ -127,6 +130,8 @@ export interface Filters {
   interface: string
   ip: string
   port: string
+  srcScope: Scope
+  dstScope: Scope
   rule: string
   ruleRegex: boolean
 }
@@ -140,9 +145,18 @@ export function emptyFilters(): Filters {
     interface: '',
     ip: '',
     port: '',
+    srcScope: '',
+    dstScope: '',
     rule: '',
     ruleRegex: false,
   }
+}
+
+// Accepts only the two recognized scope values -- anything else
+// (including missing/malformed) falls back to '' (any), mirroring
+// internal/api's parseScope.
+function parseScope(v: string | null): Scope {
+  return v === 'internal' || v === 'external' ? v : ''
 }
 
 // Reconstructs a Filters object from a URL's query string, using the same
@@ -157,6 +171,8 @@ export function filtersFromSearchParams(params: URLSearchParams): Filters {
     interface: params.get('interface') ?? '',
     ip: params.get('ip') ?? '',
     port: params.get('port') ?? '',
+    srcScope: parseScope(params.get('srcScope')),
+    dstScope: parseScope(params.get('dstScope')),
     rule: params.get('rule') ?? '',
     ruleRegex: params.get('ruleRegex') === 'true',
   }
