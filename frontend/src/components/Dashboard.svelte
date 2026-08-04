@@ -92,4 +92,15 @@
     border-radius: 8px;
     padding: 14px 16px;
   }
+
+  /* 360px cards plus the grid's own 14px padding no longer fit under
+     ~390px viewports, forcing a horizontal scrollbar on the modal for a
+     single-column layout that doesn't need one. */
+  @media (max-width: 420px) {
+    .dashboard {
+      grid-template-columns: 1fr;
+      padding: 10px;
+      gap: 10px;
+    }
+  }
 </style>
