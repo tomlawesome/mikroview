@@ -27,6 +27,35 @@ store:
 # reputation:
 #   abuseIPDBKey: your-abuseipdb-api-key
 
+# Behavioral flags (port scans, activity spikes, critical-port attempts,
+# volume spikes) are always on with sensible defaults -- nothing below is
+# required. Uncomment storePath to persist raised flags across restarts
+# (see deploy/docker-compose.yml for the matching volume mount); leave it
+# unset and flags still work, they just reset like everything else in
+# mikroview. See docs/configuration.md for what each threshold means.
+# flags:
+#   storePath: /var/lib/mikroview/flags.json
+#   portScanThreshold: 15
+#   portScanWindow: 60s
+#   activitySpikeThreshold: 200
+#   activitySpikeWindow: 60s
+#   criticalPorts: [21, 22, 23, 445, 3389, 5900, 8291, 8728, 8729]
+#   criticalPortThreshold: 5
+#   criticalPortWindow: 5m
+#   globalSpikeMultiplier: 4
+#   globalSpikeMinEPS: 5
+#   distributedBruteForceThreshold: 10
+#   distributedBruteForceWindow: 5m
+#   outboundAnomalyThreshold: 25
+#   outboundAnomalyWindow: 5m
+#   internalReconThreshold: 10
+#   internalReconWindow: 60s
+#   ruleSpikeMultiplier: 5
+#   ruleSpikeMinRate: 0.2
+#   ruleSpikeWindow: 60s
+#   repeatedDropsThreshold: 10
+#   repeatedDropsWindow: 15m
+
 # Devices are matched by the syslog source IP mikroview sees them from.
 # Sources not listed here still appear in the UI, auto-discovered and
 # labelled with their IP -- add them here once you know which is which.
