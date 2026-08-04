@@ -3,6 +3,7 @@
   import { liveSocket } from './lib/ws'
   import { themeState } from './lib/theme.svelte'
   import { colorwayState } from './lib/colorway.svelte'
+  import { flagsState } from './lib/flags.svelte'
   import { buildQuery } from './lib/api'
   import { filtersFromSearchParams } from './lib/types'
   import Toolbar from './components/Toolbar.svelte'
@@ -10,6 +11,7 @@
   import FilterBar from './components/FilterBar.svelte'
   import LiveTable from './components/LiveTable.svelte'
   import DashboardOverlay from './components/DashboardOverlay.svelte'
+  import FlagsOverlay from './components/FlagsOverlay.svelte'
   import IpLookupPopover from './components/IpLookupPopover.svelte'
 
   const STATS_REFRESH_MS = 5000
@@ -44,9 +46,11 @@
       // the table once it connects, and the next stats poll will retry
     })
     liveSocket.connect()
+    flagsState.refresh().catch(() => {})
 
     const statsInterval = setInterval(() => {
       appState.refreshDevicesAndStats().catch(() => {})
+      flagsState.refresh().catch(() => {})
     }, STATS_REFRESH_MS)
 
     const tickInterval = setInterval(() => appState.tick(), TICK_MS)
@@ -90,6 +94,7 @@
   <LiveTable />
 </main>
 <DashboardOverlay />
+<FlagsOverlay />
 <IpLookupPopover />
 
 <style>
