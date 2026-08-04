@@ -168,4 +168,24 @@
     color: var(--fg);
     border-color: var(--fg-muted);
   }
+
+  /* Below this width the fixed input widths (145px/200px/80px) leave
+     several fields too narrow to comfortably type into once wrapped one
+     per line -- let them fill the row instead. */
+  @media (max-width: 520px) {
+    .bar {
+      flex-direction: column;
+      align-items: stretch;
+    }
+
+    input[type='text'],
+    input[inputmode='numeric'],
+    select {
+      width: 100%;
+    }
+
+    .rule-group {
+      flex: 1 1 auto;
+    }
+  }
 </style>
