@@ -56,6 +56,12 @@ services:
       - "514:1514/udp"
       - "514:1514/tcp"
       - "8080:8080"
+    healthcheck:
+      test: ["CMD", "/mikroview", "-healthcheck"]
+      interval: 30s
+      timeout: 5s
+      start_period: 10s
+      retries: 3
     volumes:
       - ./config.yaml:/etc/mikroview/config.yaml:ro
     environment:
