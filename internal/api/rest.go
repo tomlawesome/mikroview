@@ -54,6 +54,8 @@ func parseQuery(r *http.Request) store.Query {
 		Chain:     qs.Get("chain"),
 		Interface: qs.Get("interface"),
 		IP:        qs.Get("ip"),
+		SrcScope:  parseScope(qs.Get("srcScope")),
+		DstScope:  parseScope(qs.Get("dstScope")),
 		Rule:      qs.Get("rule"),
 		RuleRegex: qs.Get("ruleRegex") == "true",
 	}
@@ -78,6 +80,19 @@ func parseQuery(r *http.Request) store.Query {
 		}
 	}
 	return q
+}
+
+// parseScope accepts only the two recognized scope values -- anything
+// else (including unset/empty) falls back to store.ScopeAny rather than
+// erroring, the same "ignore rather than fail" treatment every other
+// malformed query param here gets.
+func parseScope(v string) store.Scope {
+	switch store.Scope(v) {
+	case store.ScopeInternal, store.ScopeExternal:
+		return store.Scope(v)
+	default:
+		return store.ScopeAny
+	}
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {

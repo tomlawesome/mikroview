@@ -12,6 +12,8 @@ export function buildQuery(filters: Partial<Filters> & { limit?: number; sinceId
   if (filters.interface) params.set('interface', filters.interface)
   if (filters.ip) params.set('ip', filters.ip)
   if (filters.port) params.set('port', filters.port)
+  if (filters.srcScope) params.set('srcScope', filters.srcScope)
+  if (filters.dstScope) params.set('dstScope', filters.dstScope)
   if (filters.rule) params.set('rule', filters.rule)
   if (filters.rule && filters.ruleRegex) params.set('ruleRegex', 'true')
   if (filters.limit) params.set('limit', String(filters.limit))

@@ -76,6 +76,45 @@ func TestHandleEventsFiltering(t *testing.T) {
 	}
 }
 
+func TestHandleEventsScopeFiltering(t *testing.T) {
+	s, st := newTestServer()
+	ts := httptest.NewServer(s.Routes())
+	defer ts.Close()
+
+	now := time.Now()
+	st.Insert(store.Event{Time: now, DeviceID: "core", Action: store.ActionAccept, SrcIP: "10.0.0.1", DstIP: "8.8.8.8"})
+	st.Insert(store.Event{Time: now, DeviceID: "core", Action: store.ActionDrop, SrcIP: "203.0.113.9", DstIP: "10.0.0.5"})
+
+	resp, err := http.Get(ts.URL + "/api/events?srcScope=internal")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	var res store.Result
+	if err := json.NewDecoder(resp.Body).Decode(&res); err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Events) != 1 || res.Events[0].Action != store.ActionAccept {
+		t.Errorf("expected only the event with a private SrcIP, got %+v", res.Events)
+	}
+
+	// a malformed scope value falls back to "any" rather than erroring or
+	// matching nothing
+	resp2, err := http.Get(ts.URL + "/api/events?srcScope=not-a-real-scope")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp2.Body.Close()
+	var res2 store.Result
+	if err := json.NewDecoder(resp2.Body).Decode(&res2); err != nil {
+		t.Fatal(err)
+	}
+	if len(res2.Events) != 2 {
+		t.Errorf("expected a malformed scope value to be ignored (both events returned), got %+v", res2.Events)
+	}
+}
+
 func TestHandleDevices(t *testing.T) {
 	s, _ := newTestServer()
 	ts := httptest.NewServer(s.Routes())
