@@ -25,6 +25,9 @@ type portSources struct {
 // port rather than source, so unlike the per-source maps this one is
 // naturally bounded by len(Config.CriticalPorts) and needs no eviction.
 func (d *Detector) observeDistributedBruteForce(e store.Event, now time.Time) {
+	if !isTrackableConnState(e) {
+		return
+	}
 	p, ok := d.criticalPortIPs[e.DstPort]
 	if !ok {
 		p = &portSources{}

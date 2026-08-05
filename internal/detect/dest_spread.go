@@ -39,6 +39,9 @@ type destWindow struct {
 // an external source's destination spread isn't meaningful here, since
 // it's just internet background noise scanning many networks, not one.
 func (d *Detector) observeDestSpread(e store.Event, now time.Time) {
+	if !isTrackableConnState(e) {
+		return
+	}
 	w, ok := d.destWindows[e.SrcIP]
 	if !ok {
 		if len(d.destWindows) >= maxTrackedSources {

@@ -194,6 +194,9 @@ func (d *Detector) Observe(e store.Event) {
 }
 
 func (d *Detector) observeScanAndSpike(e store.Event, now time.Time) {
+	if !isTrackableConnState(e) {
+		return
+	}
 	w, ok := d.perSource[e.SrcIP]
 	if !ok {
 		if len(d.perSource) >= maxTrackedSources {
@@ -247,6 +250,9 @@ func (d *Detector) observeScanAndSpike(e store.Event, now time.Time) {
 }
 
 func (d *Detector) observeCriticalPort(e store.Event, now time.Time) {
+	if !isTrackableConnState(e) {
+		return
+	}
 	hits, ok := d.criticalHits[e.SrcIP]
 	if !ok && len(d.criticalHits) >= maxTrackedSources {
 		d.evictOldestCriticalSource()
@@ -306,6 +312,22 @@ func isCriticalPort(ports []int, p int) bool {
 		}
 	}
 	return false
+}
+
+// isTrackableConnState reports whether e should count toward the scan/
+// spike/recon/critical-port/distributed-brute-force detectors below.
+// RouterOS commonly logs both directions of an established connection on
+// a single stateful accept rule -- without this filter, a busy server's
+// ordinary *return* traffic (many distinct client ephemeral ports, many
+// distinct clients) trivially crosses thresholds meant to catch new
+// connection attempts, producing false positives on any host that's just
+// legitimately busy (see the flag detail these detectors' Add calls
+// write, and mikroview issue #35). Empty ConnState -- a log line without
+// one, or one routeros.Parse couldn't recognize -- is treated as
+// trackable rather than discarded, so setups that don't log connection
+// state at all keep today's behavior.
+func isTrackableConnState(e store.Event) bool {
+	return e.ConnState == "" || e.ConnState == "new"
 }
 
 // isPublic mirrors the same small check internal/geoip and

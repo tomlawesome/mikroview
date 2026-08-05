@@ -21,6 +21,47 @@ func evt(srcIP string, dstPort int, at time.Time) store.Event {
 	return store.Event{SrcIP: srcIP, DstIP: "192.168.1.1", DstPort: dstPort, ReceivedAt: at}
 }
 
+// evtState builds an event with an explicit ConnState -- mirrors evt()'s
+// shape (see below) for the connState-filtering tests, since evt() always
+// leaves ConnState at its zero value ("").
+func evtState(srcIP string, dstPort int, connState string, at time.Time) store.Event {
+	e := evt(srcIP, dstPort, at)
+	e.ConnState = connState
+	return e
+}
+
+func TestScanAndSpikeIgnoreEstablishedTraffic(t *testing.T) {
+	// Reproduces the false-positive pattern a busy server produces when a
+	// RouterOS ruleset logs both directions of an established connection:
+	// many "established" events with distinct ports (the *client's*
+	// varying ephemeral port) and high volume must not trip the port-scan
+	// or activity-spike detectors, even though a "new"-only version of the
+	// same traffic would.
+	cfg := DefaultConfig()
+	cfg.PortScanThreshold = 3
+	cfg.ActivitySpikeThreshold = 3
+	cfg.PortScanWindow = time.Minute
+	cfg.ActivitySpikeWindow = time.Minute
+	d, fs := newTestDetector(t, cfg)
+
+	now := time.Now()
+	for port := 1; port <= 5; port++ {
+		d.Observe(evtState("192.168.1.10", port, "established", now.Add(time.Duration(port)*time.Millisecond)))
+	}
+	if len(fs.List()) != 0 {
+		t.Fatalf("expected established-state traffic to never trip port-scan/activity-spike, got %+v", fs.List())
+	}
+
+	// The same volume of "new" traffic still flags as before -- confirms
+	// this is a state filter, not an accidental threshold change.
+	for port := 1; port <= 5; port++ {
+		d.Observe(evtState("192.168.1.11", port, "new", now.Add(time.Duration(port)*time.Millisecond)))
+	}
+	if len(fs.List()) == 0 {
+		t.Fatalf("expected new-state traffic to still trip port-scan/activity-spike")
+	}
+}
+
 func TestPortScanFlagsAtThreshold(t *testing.T) {
 	cfg := DefaultConfig()
 	cfg.PortScanThreshold = 5
