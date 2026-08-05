@@ -343,8 +343,20 @@ func (s *Store) ApplyReputationSnapshot(t Type, target string, snapshot reputati
 	}
 
 	f.Reputation = &snapshot
+
+	// The applied floor is the strongest of two independent signals:
+	// AbuseIPDB's abuse score, and its IsTor/UsageType fields (issue
+	// #58) -- a Tor exit node or hosting-provider address is worth
+	// floor-raising even when the target has no abuse reports at all,
+	// since those are compositionally different kinds of evidence.
+	floor := -1
 	if snapshot.AbuseScore != nil {
-		floor := *snapshot.AbuseScore
+		floor = *snapshot.AbuseScore
+	}
+	if riskFloor, ok := snapshot.RiskFloor(); ok && riskFloor > floor {
+		floor = riskFloor
+	}
+	if floor >= 0 {
 		if f.ReputationFloor == nil || floor > *f.ReputationFloor {
 			v := floor
 			f.ReputationFloor = &v

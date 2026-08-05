@@ -109,6 +109,10 @@ export interface ReputationResult {
   totalReports?: number
   countryCode?: string
   isp?: string
+  // usageType/isTor (issue #58): AbuseIPDB-only, same as abuseScore --
+  // absent when that source isn't configured or has nothing to report.
+  usageType?: string
+  isTor?: boolean
 }
 
 // Mirrors internal/flags.Flag's JSON tags.
