@@ -86,6 +86,9 @@ func main() {
 
 		RepeatedDropsThreshold: cfg.Flags.RepeatedDropsThreshold,
 		RepeatedDropsWindow:    cfg.Flags.RepeatedDropsWindow,
+
+		HostActivityMultiplier:    cfg.Flags.HostActivityMultiplier,
+		HostActivityWarmupSamples: cfg.Flags.HostActivityWarmupSamples,
 	}
 	detector := detect.New(detectCfg, fs)
 	globalSpike := detect.NewGlobalSpikeDetector(detectCfg, fs)

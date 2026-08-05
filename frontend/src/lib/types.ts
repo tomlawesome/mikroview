@@ -117,6 +117,11 @@ export interface Flag {
   lastSeen: string
   cleared: boolean
   clearedAt?: string
+  // 0-100, present only for detectors that make a statistical judgment
+  // call rather than a deterministic threshold crossing (currently just
+  // activity_spike's per-host baseline) -- absent means "not scored," not
+  // "zero confidence."
+  confidence?: number
 }
 
 // Mirrors internal/store's Scope.
