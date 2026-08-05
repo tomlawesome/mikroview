@@ -53,6 +53,9 @@ services:
     image: ghcr.io/tomlawesome/mikroview:latest
     restart: unless-stopped
     ports:
+      # Host 514 -> the conventional syslog port RouterOS targets; the
+      # container listens on 1514 internally since it runs as a non-root
+      # user that can't bind <1024 (see Dockerfile).
       - "514:1514/udp"
       - "514:1514/tcp"
       - "8080:8080"
@@ -64,11 +67,32 @@ services:
       retries: 3
     volumes:
       - ./config.yaml:/etc/mikroview/config.yaml:ro
+      # Optional -- see docs/configuration.md's GeoIP section. Requires
+      # your own MaxMind GeoLite2 database; uncomment both this and the
+      # env var below once you have one.
+      # - ./GeoLite2-Country.mmdb:/etc/mikroview/GeoLite2-Country.mmdb:ro
+      # Optional -- persists behavioral flags (port scans, activity
+      # spikes, etc; see docs/configuration.md's "Behavioral flags"
+      # section) and/or local accounts (see "Authentication") across
+      # restarts. Uncomment this and whichever env var(s) below you need
+      # -- both files live in the same directory. Flags are fully
+      # optional (left unconfigured, they still work, just reset on
+      # restart); accounts are not the same way -- if you create one,
+      # this volume and MIKROVIEW_AUTH_STORE_PATH must both be set
+      # first, or account creation is refused rather than creating one
+      # that would vanish on restart. The container runs as uid 65532
+      # (distroless nonroot), which won't own a freshly created host
+      # directory -- `mkdir -p flags-data && chmod 777 flags-data` is
+      # the simplest fix if you hit a permission error at startup.
+      # - ./flags-data:/var/lib/mikroview
     environment:
       - MIKROVIEW_CONFIG=/etc/mikroview/config.yaml
+      # - MIKROVIEW_GEOIP_DB_PATH=/etc/mikroview/GeoLite2-Country.mmdb
+      # - MIKROVIEW_FLAGS_STORE_PATH=/var/lib/mikroview/flags.json
+      # - MIKROVIEW_AUTH_STORE_PATH=/var/lib/mikroview/users.json
 ```
 
-Create `config.yaml` next to it first (see [`deploy/config.example.yaml`](deploy/config.example.yaml) for the full option reference), then `docker compose up -d`.
+Create `config.yaml` next to it first (see [`deploy/config.example.yaml`](deploy/config.example.yaml) for the full option reference), then `docker compose up -d`. This mirrors [`deploy/docker-compose.yml`](deploy/docker-compose.yml) exactly, just swapping the local `build:` for the prebuilt `image:`.
 
 ## How it works
 
@@ -100,14 +124,19 @@ Create `config.yaml` next to it first (see [`deploy/config.example.yaml`](deploy
   server/client filtering split.
 - **UI**: Svelte, no component framework, dark professional theme,
   ~50KB JS bundle.
+- **Authentication**: fully open until you create the first local
+  account, at which point it becomes required for everything except the
+  health check — Argon2id-hashed passwords, opaque server-side sessions,
+  self-registration for the first (super-admin) account only. See
+  [docs/configuration.md](docs/configuration.md) and
+  [SECURITY.md](SECURITY.md) for the threat model and setup.
 - **Deployment**: multi-stage Docker build, final image based on
   distroless `nonroot`, embeds the built frontend into the Go binary via
-  `go:embed` — one process, one image, no auth (intended for a trusted
-  LAN — see [docs/configuration.md](docs/configuration.md)).
+  `go:embed` — one process, one image.
 
 ## Development
 
-Requires Go 1.23+ and Node 22+.
+Requires Go 1.25+ and Node 22+.
 
 ```sh
 make dev-backend    # go run ., syslog on :1514, http on :8080
@@ -135,6 +164,6 @@ printf '<134>Jan 15 10:22:31 MikroTik A|lan-wan|forward: in:ether1 out:bridge1, 
 
 ## Not (yet) included
 
-Deliberately deferred rather than half-built: authentication (trusted-LAN
-only by design), TLS syslog, multi-arch images, config hot-reload,
+Deliberately deferred rather than half-built: SSO/OIDC (local accounts
+only for now), TLS syslog, multi-arch images, config hot-reload,
 server-side WebSocket filtering, JSON export.
