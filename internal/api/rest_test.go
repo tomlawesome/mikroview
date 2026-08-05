@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -18,10 +19,23 @@ import (
 	"github.com/tomlawesome/mikroview/internal/store"
 )
 
-func newTestServer() (*Server, *store.Store) {
+// newTestServer's Auth defaults to the "disabled" state (see
+// auth.Store.Disable) -- zero users, but a deliberate, permanent
+// opt-out, not the tightened "undecided" bootstrap state (see
+// requireAuth). Matches every non-auth-specific test's assumption of a
+// fully open API; auth_test.go exercises the undecided/active states
+// explicitly where that's the point of the test.
+func newTestServer(t *testing.T) (*Server, *store.Store) {
+	t.Helper()
 	st := store.New(1000, time.Hour)
 	fs, _ := flags.Open("")
-	authStore, _ := auth.Open("") // unpersisted, zero users -- auth inactive, matches every existing test's assumption of a fully open API
+	authStore, err := auth.Open(filepath.Join(t.TempDir(), "users.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := authStore.Disable(); err != nil {
+		t.Fatal(err)
+	}
 	s := &Server{
 		Store:            st,
 		Devices:          device.NewRegistry([]config.Device{{ID: "core", Name: "Core", SourceIP: "192.168.1.1"}}),
@@ -38,7 +52,7 @@ func newTestServer() (*Server, *store.Store) {
 }
 
 func TestHandleHealthz(t *testing.T) {
-	s, _ := newTestServer()
+	s, _ := newTestServer(t)
 	ts := httptest.NewServer(s.Routes())
 	defer ts.Close()
 
@@ -61,7 +75,7 @@ func TestHandleHealthz(t *testing.T) {
 }
 
 func TestHandleEventsFiltering(t *testing.T) {
-	s, st := newTestServer()
+	s, st := newTestServer(t)
 	ts := httptest.NewServer(s.Routes())
 	defer ts.Close()
 
@@ -85,7 +99,7 @@ func TestHandleEventsFiltering(t *testing.T) {
 }
 
 func TestHandleEventsScopeFiltering(t *testing.T) {
-	s, st := newTestServer()
+	s, st := newTestServer(t)
 	ts := httptest.NewServer(s.Routes())
 	defer ts.Close()
 
@@ -124,7 +138,7 @@ func TestHandleEventsScopeFiltering(t *testing.T) {
 }
 
 func TestHandleEventsUntilFiltering(t *testing.T) {
-	s, st := newTestServer()
+	s, st := newTestServer(t)
 	ts := httptest.NewServer(s.Routes())
 	defer ts.Close()
 
@@ -151,7 +165,7 @@ func TestHandleEventsUntilFiltering(t *testing.T) {
 // lookback: given a center timestamp and window, the endpoint should
 // return only events within that window, matching the source IP.
 func TestHandleEventsAroundWindow(t *testing.T) {
-	s, st := newTestServer()
+	s, st := newTestServer(t)
 	ts := httptest.NewServer(s.Routes())
 	defer ts.Close()
 
@@ -180,7 +194,7 @@ func TestHandleEventsAroundWindow(t *testing.T) {
 }
 
 func TestHandleDevices(t *testing.T) {
-	s, _ := newTestServer()
+	s, _ := newTestServer(t)
 	ts := httptest.NewServer(s.Routes())
 	defer ts.Close()
 
@@ -202,7 +216,7 @@ func TestHandleDevices(t *testing.T) {
 }
 
 func TestHandleCriticalPorts(t *testing.T) {
-	s, _ := newTestServer()
+	s, _ := newTestServer(t)
 	s.CriticalPorts = []int{22, 3389, 8291}
 	ts := httptest.NewServer(s.Routes())
 	defer ts.Close()
@@ -225,7 +239,7 @@ func TestHandleCriticalPorts(t *testing.T) {
 }
 
 func TestHandleStats(t *testing.T) {
-	s, st := newTestServer()
+	s, st := newTestServer(t)
 	ts := httptest.NewServer(s.Routes())
 	defer ts.Close()
 

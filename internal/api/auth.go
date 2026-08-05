@@ -42,18 +42,33 @@ type contextKey int
 
 const userContextKey contextKey = iota
 
-// exemptPaths lists routes reachable without a session -- either because
-// they must work before one exists (register, login, session-status
-// polling) or because they're already established precedent for staying
-// open regardless of auth (healthz, hit by Docker's own HEALTHCHECK).
-// Logout is included too: calling it without a session is a harmless
-// no-op, not worth a 401 for.
+// exemptPaths lists routes reachable without a session once auth is
+// active -- either because they must work before one exists (register,
+// login, session-status polling) or because they're already established
+// precedent for staying open regardless of auth (healthz, hit by
+// Docker's own HEALTHCHECK). Logout is included too: calling it without
+// a session is a harmless no-op, not worth a 401 for.
 var exemptPaths = map[string]bool{
 	"/api/healthz":       true,
 	"/api/auth/session":  true,
 	"/api/auth/register": true,
 	"/api/auth/login":    true,
 	"/api/auth/logout":   true,
+}
+
+// bootstrapExemptPaths lists the (smaller) set of routes reachable
+// while no account exists yet *and* auth hasn't been explicitly
+// disabled -- only what's needed to show and complete the one-time
+// choice screen (create an account, or skip auth for this deployment).
+// Deliberately narrower than exemptPaths: everything else 401s during
+// this window, closing the gap where live data (events/flags/stats)
+// used to be readable by anyone who reached mikroview before a decision
+// was made (see requireAuth's doc comment).
+var bootstrapExemptPaths = map[string]bool{
+	"/api/healthz":       true,
+	"/api/auth/session":  true,
+	"/api/auth/register": true,
+	"/api/auth/skip":     true,
 }
 
 // sessionUser resolves r's session cookie to a user, if any -- shared by
@@ -83,16 +98,31 @@ func (s *Server) sessionUser(r *http.Request, now time.Time) (*auth.User, bool) 
 	return user, true
 }
 
-// requireAuth is a no-op while zero users exist (mikroview's default,
-// fully-open behavior) -- the moment one exists, every request except
-// exemptPaths needs a valid session cookie.
+// requireAuth has three states, checked in order:
+//
+//  1. Disabled (s.Auth.Disabled()): a deliberate, permanent opt-out --
+//     everyone reached the same "skip auth" choice this deployment made
+//     on first boot. Fully open, indefinitely, same shape as (2) below
+//     but without the path restriction, since there's no pending
+//     decision left to protect.
+//  2. Undecided (Count()==0, not disabled): only bootstrapExemptPaths
+//     stay reachable -- just enough to show and complete the one-time
+//     choice screen. Everything else 401s, closing the window where
+//     live data (events/flags/stats) used to be readable by anyone who
+//     reached mikroview before a decision was made.
+//  3. Active (Count()>0): today's exact behavior -- CSRF header +
+//     exemptPaths + session cookie.
 func (s *Server) requireAuth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if s.Auth.Disabled() {
+			next.ServeHTTP(w, r)
+			return
+		}
 		if s.Auth.Count() == 0 {
-			// Fully open, exactly like today, whenever no account exists --
-			// including for mutating requests, so this never changes
-			// behavior for an unconfigured deployment (see csrfHeaderName's
-			// doc comment: there's no session cookie worth protecting yet).
+			if !bootstrapExemptPaths[r.URL.Path] {
+				http.Error(w, "setup required", http.StatusServiceUnavailable)
+				return
+			}
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -156,6 +186,11 @@ func (s *Server) clearSessionCookie(w http.ResponseWriter) {
 }
 
 type sessionResponse struct {
+	// AuthDisabled: this deployment permanently opted out of auth (see
+	// auth.Store.Disable) -- checked first by the frontend, since it
+	// takes priority over SetupRequired (Count()==0 no longer implies
+	// "show the choice screen" once a choice has actually been made).
+	AuthDisabled  bool   `json:"authDisabled"`
 	SetupRequired bool   `json:"setupRequired"`
 	Authenticated bool   `json:"authenticated"`
 	Username      string `json:"username,omitempty"`
@@ -165,15 +200,35 @@ type sessionResponse struct {
 // handleAuthSession always returns 200 -- it reports state, it doesn't
 // gate access (requireAuth exempts it for exactly this reason). The
 // frontend calls this once on load to decide whether to render the
-// first-run setup form, a login form, or the live app.
+// first-run choice screen, a login form, or the live app.
 func (s *Server) handleAuthSession(w http.ResponseWriter, r *http.Request) {
-	resp := sessionResponse{SetupRequired: s.Auth.Count() == 0}
+	resp := sessionResponse{
+		AuthDisabled:  s.Auth.Disabled(),
+		SetupRequired: s.Auth.Count() == 0,
+	}
 	if user, ok := s.sessionUser(r, time.Now()); ok {
 		resp.Authenticated = true
 		resp.Username = user.Username
 		resp.Role = string(user.Role)
 	}
 	writeJSON(w, http.StatusOK, resp)
+}
+
+// handleAuthSkip permanently disables authentication for this
+// deployment (see auth.Store.Disable) -- only reachable while
+// Count()==0 (requireAuth's bootstrap-exempt window; Disable itself
+// also refuses otherwise, as a second guard). No session is created;
+// there's nothing to log into.
+func (s *Server) handleAuthSkip(w http.ResponseWriter, r *http.Request) {
+	if err := s.Auth.Disable(); err != nil {
+		status := http.StatusInternalServerError
+		if err == auth.ErrRegistrationClosed {
+			status = http.StatusConflict
+		}
+		http.Error(w, err.Error(), status)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"disabled": true})
 }
 
 type credentialsRequest struct {
@@ -194,7 +249,7 @@ func (s *Server) handleAuthRegister(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		status := http.StatusInternalServerError
 		switch err {
-		case auth.ErrRegistrationClosed:
+		case auth.ErrRegistrationClosed, auth.ErrAuthDisabled:
 			status = http.StatusConflict
 		case auth.ErrNotPersisted:
 			status = http.StatusServiceUnavailable
@@ -258,14 +313,12 @@ type createUserRequest struct {
 // only way to create a user once self-registration has closed (see
 // auth.Store.Register's one-time-only behavior).
 func (s *Server) handleAuthCreateUser(w http.ResponseWriter, r *http.Request) {
-	if s.Auth.Count() == 0 {
-		// Not in exemptPaths, so requireAuth already let this through
-		// unauthenticated (matches "everything is open at zero users") --
-		// but there's no admin yet to have called this as, and the
-		// intended bootstrap path is /api/auth/register, not this one.
-		http.Error(w, "no account exists yet -- register the first account via /api/auth/register", http.StatusConflict)
-		return
-	}
+	// While no account exists (undecided or disabled), there's no admin
+	// to have called this as -- caller is nil either way (requireAuth's
+	// bootstrap-exempt window blocks this path entirely during
+	// "undecided," and "disabled" bypasses the session check that would
+	// otherwise set it), so this one check covers every zero-account
+	// case without needing to special-case why Count() is still 0.
 	caller := userFromContext(r)
 	if caller == nil || caller.Role != auth.RoleAdmin {
 		http.Error(w, "admin role required", http.StatusForbidden)

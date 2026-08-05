@@ -12,12 +12,21 @@
     submitLabel,
     onsubmit,
     confirmPassword = false,
+    skipLabel,
+    skipHint,
+    onskip,
   }: {
     title: string
     subtitle: string
     submitLabel: string
     onsubmit: (username: string, password: string) => Promise<string | null>
     confirmPassword?: boolean
+    // skipLabel/skipHint/onskip: an optional secondary "continue without
+    // an account" action (see AuthSetup.svelte) -- absent entirely for
+    // the login screen, which has no equivalent choice.
+    skipLabel?: string
+    skipHint?: string
+    onskip?: () => Promise<string | null>
   } = $props()
 
   let username = $state('')
@@ -25,6 +34,11 @@
   let passwordConfirm = $state('')
   let error = $state<string | null>(null)
   let submitting = $state(false)
+  // Requires an explicit second click past a visible explanation --
+  // this is a permanent, only-CLI-reversible decision, so it shouldn't
+  // be reachable by one accidental click (see the plan's "informed
+  // choice, not accidental click" requirement).
+  let confirmingSkip = $state(false)
 
   async function handleSubmit(e: Event) {
     e.preventDefault()
@@ -37,6 +51,15 @@
 
     submitting = true
     const result = await onsubmit(username, password)
+    submitting = false
+    if (result) error = result
+  }
+
+  async function handleSkip() {
+    if (!onskip) return
+    error = null
+    submitting = true
+    const result = await onskip()
     submitting = false
     if (result) error = result
   }
@@ -70,6 +93,26 @@
     {/if}
 
     <button type="submit" disabled={submitting}>{submitting ? 'Please wait…' : submitLabel}</button>
+
+    {#if onskip}
+      <div class="skip">
+        {#if !confirmingSkip}
+          <button type="button" class="link" onclick={() => (confirmingSkip = true)} disabled={submitting}>
+            {skipLabel}
+          </button>
+        {:else}
+          <p class="skip-hint">{skipHint}</p>
+          <div class="skip-actions">
+            <button type="button" class="link" onclick={() => (confirmingSkip = false)} disabled={submitting}>
+              Cancel
+            </button>
+            <button type="button" class="danger-link" onclick={handleSkip} disabled={submitting}>
+              {submitting ? 'Please wait…' : 'Yes, continue without an account'}
+            </button>
+          </div>
+        {/if}
+      </div>
+    {/if}
   </form>
 </div>
 
@@ -155,6 +198,68 @@
   }
 
   button:disabled {
+    opacity: 0.5;
+    cursor: default;
+  }
+
+  .skip {
+    width: 100%;
+    margin-top: 4px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .link {
+    background: none;
+    border: none;
+    width: auto;
+    margin: 0;
+    padding: 0;
+    color: var(--fg-muted);
+    font-size: 12px;
+    text-decoration: underline;
+  }
+
+  .link:hover {
+    opacity: 0.85;
+    color: var(--fg);
+  }
+
+  .skip-hint {
+    width: 100%;
+    margin: 0;
+    font-size: 12px;
+    line-height: 1.5;
+    color: var(--fg-muted);
+    text-align: center;
+  }
+
+  .skip-actions {
+    display: flex;
+    gap: 14px;
+    align-items: center;
+  }
+
+  .danger-link {
+    background: none;
+    border: none;
+    width: auto;
+    margin: 0;
+    padding: 0;
+    color: var(--reject);
+    font-size: 12px;
+    font-weight: 600;
+    text-decoration: underline;
+  }
+
+  .danger-link:hover {
+    opacity: 0.85;
+  }
+
+  .danger-link:disabled,
+  .link:disabled {
     opacity: 0.5;
     cursor: default;
   }
