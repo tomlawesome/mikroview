@@ -18,6 +18,7 @@
   import AuthSetup from './components/AuthSetup.svelte'
   import AuthLogin from './components/AuthLogin.svelte'
   import AddUserOverlay from './components/AddUserOverlay.svelte'
+  import DetectorSettingsOverlay from './components/DetectorSettingsOverlay.svelte'
 
   // Any polling call that fails with a 401 (an expired or reset-
   // invalidated session -- see internal/api's sessionUser) bounces to
@@ -135,6 +136,7 @@
   <IpLookupPopover />
   <PortLookupPopover />
   <AddUserOverlay />
+  <DetectorSettingsOverlay />
 {/if}
 
 <style>

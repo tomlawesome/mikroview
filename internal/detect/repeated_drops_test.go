@@ -86,3 +86,45 @@ func TestRepeatedDropsTracksEachPortIndependently(t *testing.T) {
 		t.Fatalf("expected 2+2 split across two ports to stay below the threshold=3 for either, got %+v", fs.List())
 	}
 }
+
+func TestRepeatedDropsHostsAndPortsScopeCombineWithAND(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.RepeatedDropsThreshold = 3
+	cfg.PortScanThreshold = 1000
+	cfg.ActivitySpikeThreshold = 1000
+
+	seed := DefaultSettingsMap()
+	seed[DetectorRepeatedDrops] = Settings{
+		Enabled: true,
+		Scope: Scope{
+			Hosts: []string{"203.0.113.9"}, HostsMode: ListModeAllow,
+			Ports: []int{25565}, PortsMode: ListModeAllow,
+		},
+	}
+	d, fs := newTestDetectorWithSettings(t, cfg, seed)
+
+	now := time.Now()
+	// Host matches, port doesn't -- AND means this must not flag.
+	for i := 0; i < 5; i++ {
+		d.Observe(dropEvt("203.0.113.9", "192.168.1.50", 8080, now.Add(time.Duration(i)*time.Second)))
+	}
+	if len(fs.List()) != 0 {
+		t.Fatalf("expected a host-only match (wrong port) to never flag, got %+v", fs.List())
+	}
+
+	// Port matches, host doesn't -- AND means this must not flag either.
+	for i := 0; i < 5; i++ {
+		d.Observe(dropEvt("203.0.113.10", "192.168.1.50", 25565, now.Add(time.Duration(i)*time.Second)))
+	}
+	if len(fs.List()) != 0 {
+		t.Fatalf("expected a port-only match (wrong host) to never flag, got %+v", fs.List())
+	}
+
+	// Both match -- now it should flag.
+	for i := 0; i < 5; i++ {
+		d.Observe(dropEvt("203.0.113.9", "192.168.1.50", 25565, now.Add(time.Duration(i)*time.Second)))
+	}
+	if len(fs.List()) != 1 {
+		t.Fatalf("expected a host+port match to flag, got %+v", fs.List())
+	}
+}

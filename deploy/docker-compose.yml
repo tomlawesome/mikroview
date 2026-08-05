@@ -25,9 +25,11 @@ services:
       # - ./GeoLite2-Country.mmdb:/etc/mikroview/GeoLite2-Country.mmdb:ro
       # Optional -- persists behavioral flags (port scans, activity
       # spikes, etc; see docs/configuration.md's "Behavioral flags"
-      # section) and/or local accounts (see "Authentication") across
-      # restarts. Uncomment this and whichever env var(s) below you need
-      # -- both files live in the same directory. Flags are fully
+      # section), per-detector on/off+scope toggles made via the live
+      # admin UI (see "Per-detector toggles"), and/or local accounts
+      # (see "Authentication") across restarts. Uncomment this and
+      # whichever env var(s) below you need -- all three files live in
+      # the same directory. Flags and detector settings are fully
       # optional (left unconfigured, they still work, just reset on
       # restart); accounts are not the same way -- if you create one,
       # this volume and MIKROVIEW_AUTH_STORE_PATH must both be set
@@ -41,4 +43,5 @@ services:
       - MIKROVIEW_CONFIG=/etc/mikroview/config.yaml
       # - MIKROVIEW_GEOIP_DB_PATH=/etc/mikroview/GeoLite2-Country.mmdb
       # - MIKROVIEW_FLAGS_STORE_PATH=/var/lib/mikroview/flags.json
+      # - MIKROVIEW_FLAGS_DETECTOR_SETTINGS_STORE_PATH=/var/lib/mikroview/detector-settings.json
       # - MIKROVIEW_AUTH_STORE_PATH=/var/lib/mikroview/users.json

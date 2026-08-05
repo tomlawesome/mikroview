@@ -123,6 +123,35 @@ export type FlagType =
   | 'rule_spike'
   | 'repeated_drops'
 
+// Mirrors internal/detect.DetectorName -- same 9 string values as
+// FlagType, kept as a distinct alias since they're the same thing only
+// by coincidence today (see that type's doc comment).
+export type DetectorName = FlagType
+
+// Mirrors internal/detect.ListMode.
+export type ListMode = '' | 'allow' | 'deny'
+
+// Mirrors internal/detect.Scope's JSON tags. See that type's doc
+// comment (and docs/configuration.md's "Per-detector toggles" section)
+// for exactly which fields each detector consults.
+export interface DetectorScope {
+  hosts?: string[]
+  hostsMode?: ListMode
+  ports?: number[]
+  portsMode?: ListMode
+  classification?: Scope
+  rules?: string[]
+  rulesMode?: ListMode
+}
+
+// Mirrors internal/detect.Settings' JSON tags, plus the detector's own
+// name (as returned by GET /api/detectors).
+export interface DetectorSettings {
+  name: DetectorName
+  enabled: boolean
+  scope: DetectorScope
+}
+
 export interface Flag {
   id: string
   type: FlagType

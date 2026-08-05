@@ -158,8 +158,9 @@ type sourceWindow struct {
 // single-writer assumption internal/store and internal/device make, so
 // like them it takes no lock of its own.
 type Detector struct {
-	cfg Config
-	fs  *flags.Store
+	cfg      Config
+	fs       *flags.Store
+	settings *SettingsStore
 
 	perSource       map[string]*sourceWindow
 	criticalHits    map[string][]time.Time
@@ -169,10 +170,23 @@ type Detector struct {
 	dropPairs       map[string][]time.Time
 }
 
+// New constructs a Detector with every detector enabled and unscoped --
+// see NewWithSettings for per-detector on/off + scope control (issue
+// #44). Kept for callers (and the ~30 existing tests) that don't need
+// that control.
 func New(cfg Config, fs *flags.Store) *Detector {
+	return NewWithSettings(cfg, fs, AllEnabledSettingsStore())
+}
+
+// NewWithSettings is New, but backed by an explicit, live, mutable
+// SettingsStore -- Observe consults it on every call, so toggling a
+// detector on/off or narrowing its scope via settings.Set takes effect
+// on the very next event, no restart needed.
+func NewWithSettings(cfg Config, fs *flags.Store, settings *SettingsStore) *Detector {
 	return &Detector{
 		cfg:             cfg,
 		fs:              fs,
+		settings:        settings,
 		perSource:       make(map[string]*sourceWindow),
 		criticalHits:    make(map[string][]time.Time),
 		criticalPortIPs: make(map[int]*portSources),
@@ -193,19 +207,29 @@ func (d *Detector) Observe(e store.Event) {
 
 	srcPublic := isPublic(e.SrcIP)
 	if e.DstPort != 0 && isCriticalPort(d.cfg.CriticalPorts, e.DstPort) && srcPublic {
-		d.observeCriticalPort(e, now)
-		d.observeDistributedBruteForce(e, now)
+		if cp := d.settings.Get(DetectorCriticalPort); cp.Enabled &&
+			scopeMatchesHost(cp.Scope, e.SrcIP) && scopeMatchesPort(cp.Scope, e.DstPort) {
+			d.observeCriticalPort(e, now)
+		}
+		if dbf := d.settings.Get(DetectorDistributedBruteForce); dbf.Enabled &&
+			scopeMatchesHost(dbf.Scope, e.SrcIP) && scopeMatchesPort(dbf.Scope, e.DstPort) {
+			d.observeDistributedBruteForce(e, now)
+		}
 	}
 
 	if !srcPublic && e.DstIP != "" {
 		// source is on the LAN -- track where it's going, split by
 		// whether the destination is also internal (recon/lateral
-		// movement) or external (possible C2/exfiltration).
+		// movement) or external (possible C2/exfiltration). Gated inside
+		// observeDestSpread itself (outbound-anomaly and internal-recon
+		// are independently toggleable but share window state).
 		d.observeDestSpread(e, now)
 	}
 
 	if e.RuleLabel != "" {
-		d.observeRuleRate(e, now)
+		if rs := d.settings.Get(DetectorRuleSpike); rs.Enabled && scopeMatchesRule(rs.Scope, e.RuleLabel) {
+			d.observeRuleRate(e, now)
+		}
 	}
 
 	if e.DstIP != "" && e.DstPort != 0 && !isPublic(e.DstIP) && (e.Action == store.ActionDrop || e.Action == store.ActionReject) {
@@ -213,7 +237,10 @@ func (d *Detector) Observe(e store.Event) {
 		// refused -- track repeats regardless of whether the source is
 		// internal or external, unlike the critical-port detector this
 		// isn't restricted to a curated port list or to external sources.
-		d.observeRepeatedDrops(e, now)
+		if rd := d.settings.Get(DetectorRepeatedDrops); rd.Enabled &&
+			scopeMatchesHost(rd.Scope, e.SrcIP) && scopeMatchesPort(rd.Scope, e.DstPort) {
+			d.observeRepeatedDrops(e, now)
+		}
 	}
 }
 
@@ -221,6 +248,19 @@ func (d *Detector) observeScanAndSpike(e store.Event, now time.Time) {
 	if !isTrackableConnState(e) {
 		return
 	}
+
+	// Independently toggleable even though they share sourceWindow/
+	// w.samples below -- both consulted once up front so a detector
+	// that's off contributes no work beyond this pair of settings
+	// lookups, and short-circuits entirely if neither wants this source.
+	ps := d.settings.Get(DetectorPortScan)
+	as := d.settings.Get(DetectorActivitySpike)
+	psActive := ps.Enabled && scopeMatchesHost(ps.Scope, e.SrcIP)
+	asActive := as.Enabled && scopeMatchesHost(as.Scope, e.SrcIP)
+	if !psActive && !asActive {
+		return
+	}
+
 	w, ok := d.perSource[e.SrcIP]
 	if !ok {
 		if len(d.perSource) >= maxTrackedSources {
@@ -228,6 +268,15 @@ func (d *Detector) observeScanAndSpike(e store.Event, now time.Time) {
 		}
 		w = &sourceWindow{}
 		d.perSource[e.SrcIP] = w
+	}
+	if !asActive {
+		// Mark the baseline stale rather than leaving it be: w.primed
+		// otherwise stays true from whenever activity-spike was last
+		// active, so the *next* time it's active again,
+		// checkHostActivityBaseline would instantly compare against a
+		// baseline that's since gone stale instead of cleanly re-priming
+		// (see that function's own w.primed handling).
+		w.primed = false
 	}
 	w.lastActivity = now
 	w.samples = append(w.samples, sample{at: now, port: e.DstPort})
@@ -255,16 +304,23 @@ func (d *Detector) observeScanAndSpike(e store.Event, now time.Time) {
 	spikeCount := 0
 	distinctPorts := make(map[int]struct{})
 	for _, s := range w.samples {
-		if !s.at.Before(spikeCutoff) {
+		if asActive && !s.at.Before(spikeCutoff) {
 			spikeCount++
 		}
-		if !s.at.Before(scanCutoff) && s.port != 0 {
+		if psActive && !s.at.Before(scanCutoff) && s.port != 0 && scopeMatchesPort(ps.Scope, s.port) {
 			distinctPorts[s.port] = struct{}{}
 		}
 	}
 
-	d.checkHostActivityBaseline(w, e.SrcIP, spikeCount, now)
-	if len(distinctPorts) >= d.cfg.PortScanThreshold {
+	// Skipped entirely while inactive, rather than kept warm: the EMA
+	// baseline self-protects on re-prime (see checkHostActivityBaseline
+	// -- the first call after w.primed resets only primes, it never
+	// fires), so re-priming after a period of being off is the safer
+	// behavior, not a gap.
+	if asActive {
+		d.checkHostActivityBaseline(w, e.SrcIP, spikeCount, now)
+	}
+	if psActive && len(distinctPorts) >= d.cfg.PortScanThreshold {
 		d.fs.Add(flags.TypePortScan, e.SrcIP,
 			fmt.Sprintf("%d distinct destination ports in %s", len(distinctPorts), d.cfg.PortScanWindow), now)
 	}

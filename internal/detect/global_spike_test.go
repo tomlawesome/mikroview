@@ -80,3 +80,59 @@ func TestGlobalSpikeBaselineAdaptsSoRepeatedNormalTrafficStopsFlagging(t *testin
 		t.Errorf("expected the baseline to have adapted to sustained 40eps traffic, but a new flag was raised (before=%d, after=%d)", before, after)
 	}
 }
+
+func TestGlobalSpikeDisabledNeverFires(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.GlobalSpikeMultiplier = 4
+	cfg.GlobalSpikeMinEPS = 5
+
+	fs, err := flags.Open("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	seed := DefaultSettingsMap()
+	seed[DetectorGlobalSpike] = Settings{Enabled: false}
+	settings, err := OpenSettingsStore("", seed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	g := NewGlobalSpikeDetectorWithSettings(cfg, fs, settings)
+
+	now := time.Now()
+	g.Check(10, now)
+	g.Check(1000, now.Add(time.Second)) // would trivially spike if enabled
+	if len(fs.List()) != 0 {
+		t.Fatalf("expected a disabled global-spike detector to never fire, got %+v", fs.List())
+	}
+}
+
+func TestGlobalSpikeReenableRePrimesRatherThanFlaggingImmediately(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.GlobalSpikeMultiplier = 4
+	cfg.GlobalSpikeMinEPS = 5
+
+	fs, err := flags.Open("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	seed := DefaultSettingsMap()
+	settings, err := OpenSettingsStore("", seed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	g := NewGlobalSpikeDetectorWithSettings(cfg, fs, settings)
+
+	now := time.Now()
+	g.Check(10, now) // primes baseline at 10
+
+	settings.Set(DetectorGlobalSpike, Settings{Enabled: false})
+	g.Check(1000, now.Add(time.Second)) // no-op while disabled
+
+	settings.Set(DetectorGlobalSpike, Settings{Enabled: true})
+	// First call after re-enabling should only re-prime, not immediately
+	// compare 1000 against the stale baseline of 10.
+	g.Check(1000, now.Add(2*time.Second))
+	if len(fs.List()) != 0 {
+		t.Fatalf("expected the first reading after re-enabling to only re-prime, got %+v", fs.List())
+	}
+}
