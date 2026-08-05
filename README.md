@@ -37,7 +37,9 @@ docker compose up -d --build
 
 Then follow [docs/routeros-setup.md](docs/routeros-setup.md) to point
 your RouterOS device(s) at the container, and open
-`https://<docker-host>:8080`. mikroview serves TLS by default with a
+`https://<docker-host>` (port 443). A plain `http://<docker-host>`
+request on port 80 redirects there automatically. mikroview serves TLS
+by default with a
 self-generated certificate (see [docs/configuration.md](docs/configuration.md#tls)),
 so your browser will show an untrusted-certificate warning on first
 visit until you import that certificate -- expected for a self-hosted
@@ -63,9 +65,12 @@ services:
       # user that can't bind <1024 (see Dockerfile).
       - "514:1514/udp"
       - "514:1514/tcp"
-      # HTTPS by default -- see the Quickstart above and
-      # docs/configuration.md's "TLS" section.
-      - "8080:8080"
+      # HTTPS by default, on the conventional port -- see the Quickstart
+      # above and docs/configuration.md's "TLS" section.
+      - "443:8080"
+      # A plain-HTTP listener that only ever redirects to the HTTPS
+      # port above -- never serves real content.
+      - "80:8081"
     healthcheck:
       test: ["CMD", "/mikroview", "-healthcheck"]
       interval: 30s
@@ -106,6 +111,10 @@ services:
       # only safe if this port is unreachable except from your own
       # isolated-network reverse proxy.
       # - MIKROVIEW_TLS_ENABLED=false
+      # Disables the plain-HTTP redirect-only listener above -- only
+      # needed if you've removed the "80:8081" port mapping too (e.g.
+      # your reverse proxy handles the HTTP->HTTPS redirect itself).
+      # - MIKROVIEW_LISTEN_HTTP_REDIRECT=
 
 volumes:
   mikroview-data:
