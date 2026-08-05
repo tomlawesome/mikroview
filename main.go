@@ -6,7 +6,7 @@ import (
 	"crypto/sha256"
 	"crypto/tls"
 	"fmt"
-	"log"
+	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
@@ -22,6 +22,7 @@ import (
 	"github.com/tomlawesome/mikroview/internal/flags"
 	"github.com/tomlawesome/mikroview/internal/geoip"
 	"github.com/tomlawesome/mikroview/internal/hub"
+	"github.com/tomlawesome/mikroview/internal/logging"
 	"github.com/tomlawesome/mikroview/internal/naming"
 	"github.com/tomlawesome/mikroview/internal/notify"
 	"github.com/tomlawesome/mikroview/internal/reputation"
@@ -77,37 +78,46 @@ func main() {
 		os.Exit(runEnableAuthSetup())
 	}
 
+	configLog := logging.New("config")
 	cfg, err := config.Load(os.Getenv("MIKROVIEW_CONFIG"), os.Args[1:])
 	if err != nil {
-		log.Fatalf("config: %v", err)
+		configLog.Error(err.Error())
+		os.Exit(1)
 	}
+	// Every component logger created before this point (configLog above)
+	// still picks up the level -- SetLevel adjusts the shared threshold
+	// in place, not a per-logger setting fixed at New() time.
+	logging.SetLevel(cfg.Log.Level)
 
 	st := store.New(cfg.Store.MaxEvents, cfg.Store.Retention)
 	devices := device.NewRegistry(cfg.Devices)
 	h := hub.New()
+	geoLog := logging.New("geoip")
 	geo, err := geoip.Open(cfg.GeoIP.DBPath)
 	if err != nil {
-		log.Printf("geoip: %v (country flags disabled)", err)
+		geoLog.Warn(fmt.Sprintf("%v (country flags disabled)", err))
 	}
 	defer geo.Close()
 	rep := reputation.New(cfg.Reputation.AbuseIPDBKey)
 
+	flagsLog := logging.New("flags")
 	fs, err := flags.Open(cfg.Flags.StorePath)
 	if err != nil {
-		log.Printf("flags: %v (continuing with in-memory-only flag state)", err)
+		flagsLog.Warn(fmt.Sprintf("%v (continuing with in-memory-only flag state)", err))
 	}
 
+	authLog := logging.New("auth")
 	authStore, err := auth.Open(cfg.Auth.StorePath)
 	if err != nil {
-		log.Printf("auth: %v (continuing with in-memory-only, unpersisted account state)", err)
+		authLog.Warn(fmt.Sprintf("%v (continuing with in-memory-only, unpersisted account state)", err))
 	}
 	switch {
 	case authStore.Count() > 0:
-		log.Printf("auth: %d account(s) registered -- authentication is active", authStore.Count())
+		authLog.Info(fmt.Sprintf("%d account(s) registered -- authentication is active", authStore.Count()))
 	case authStore.Disabled():
-		log.Printf("auth: explicitly disabled for this deployment -- mikroview is fully open (run -enable-auth-setup to reverse this)")
+		authLog.Warn("explicitly disabled for this deployment -- mikroview is fully open (run -enable-auth-setup to reverse this)")
 	default:
-		log.Printf("auth: no decision made yet -- mikroview is showing the first-run choice screen (see docs/configuration.md)")
+		authLog.Info("no decision made yet -- mikroview is showing the first-run choice screen (see docs/configuration.md)")
 	}
 	detectCfg := detect.Config{
 		PortScanThreshold:      cfg.Flags.PortScanThreshold,
@@ -161,9 +171,10 @@ func main() {
 			},
 		}
 	}
+	detectorsLog := logging.New("detectors")
 	detectorSettings, err := detect.OpenSettingsStore(cfg.Flags.DetectorSettingsStorePath, seed)
 	if err != nil {
-		log.Printf("detector settings: %v (continuing with in-memory-only detector toggle state)", err)
+		detectorsLog.Warn(fmt.Sprintf("%v (continuing with in-memory-only detector toggle state)", err))
 	}
 	detector := detect.NewWithSettings(detectCfg, fs, detectorSettings).WithReputation(rep)
 	globalSpike := detect.NewGlobalSpikeDetectorWithSettings(detectCfg, fs, detectorSettings)
@@ -205,12 +216,14 @@ func main() {
 
 	go func() {
 		if err := syslog.ListenUDP(ctx, cfg.Listen.SyslogUDP, raw); err != nil && ctx.Err() == nil {
-			log.Fatalf("syslog udp listener: %v", err)
+			logging.New("syslog-udp").Error(err.Error())
+			os.Exit(1)
 		}
 	}()
 	go func() {
 		if err := syslog.ListenTCP(ctx, cfg.Listen.SyslogTCP, raw); err != nil && ctx.Err() == nil {
-			log.Fatalf("syslog tcp listener: %v", err)
+			logging.New("syslog-tcp").Error(err.Error())
+			os.Exit(1)
 		}
 	}()
 
@@ -249,7 +262,7 @@ func main() {
 	rootMux := http.NewServeMux()
 	rootMux.Handle("/api/", srv.Routes())
 	if frontend, err := web.DistFS(); err != nil {
-		log.Printf("frontend: %v (serving API only)", err)
+		logging.New("frontend").Warn(fmt.Sprintf("%v (serving API only)", err))
 	} else {
 		rootMux.Handle("/", http.FileServer(http.FS(frontend)))
 	}
@@ -269,6 +282,12 @@ func main() {
 		ReadTimeout:       15 * time.Second,
 		WriteTimeout:      15 * time.Second,
 		IdleTimeout:       120 * time.Second,
+		// Routes Go's own internal server diagnostics (TLS handshake
+		// errors from misbehaving clients, etc.) through the same
+		// formatted/leveled output as everything mikroview logs itself,
+		// rather than the stdlib default logger's unformatted stderr
+		// lines being the one exception.
+		ErrorLog: slog.NewLogLogger(logging.New("http").Handler(), slog.LevelWarn),
 	}
 
 	// TLS (on by default -- see internal/config.TLS's doc comment for
@@ -276,6 +295,7 @@ func main() {
 	// registered directly on rootMux, not routed through api.Server,
 	// since it's not an API concern -- and only when mikroview generated
 	// its own CA, never for an operator-supplied cert.
+	tlsLog := logging.New("tls")
 	scheme := "http"
 	if cfg.TLS.Enabled {
 		scheme = "https"
@@ -286,11 +306,12 @@ func main() {
 			StorePath: cfg.TLS.StorePath,
 		})
 		if err != nil {
-			log.Fatalf("tls: %v", err)
+			tlsLog.Error(err.Error())
+			os.Exit(1)
 		}
 		if caCertPEM != nil {
 			fingerprint := sha256.Sum256(cert.Certificate[0])
-			log.Printf("tls: generated a local CA (leaf fingerprint %x) -- served at /ca.crt for your browser or reverse proxy to trust", fingerprint)
+			tlsLog.Info(fmt.Sprintf("generated a local CA (leaf fingerprint %x) -- served at /ca.crt for your browser or reverse proxy to trust", fingerprint))
 			rootMux.HandleFunc("GET /ca.crt", func(w http.ResponseWriter, r *http.Request) {
 				w.Header().Set("Content-Type", "application/x-pem-file")
 				w.Write(caCertPEM)
@@ -298,7 +319,7 @@ func main() {
 		}
 		httpServer.TLSConfig = &tls.Config{Certificates: []tls.Certificate{cert}}
 	} else {
-		log.Printf("tls: disabled (tls.enabled=false) -- mikroview is serving plain HTTP on %s. Safe ONLY if this listener is unreachable except from your own reverse proxy over an isolated network -- never expose this port to a LAN or the internet in this mode.", cfg.Listen.HTTP)
+		tlsLog.Warn(fmt.Sprintf("disabled (tls.enabled=false) -- mikroview is serving plain HTTP on %s. Safe ONLY if this listener is unreachable except from your own reverse proxy over an isolated network -- never expose this port to a LAN or the internet in this mode.", cfg.Listen.HTTP))
 	}
 
 	go func() {
@@ -308,7 +329,7 @@ func main() {
 		httpServer.Shutdown(shutdownCtx)
 	}()
 
-	log.Printf("mikroview: %s on %s, syslog udp/tcp on %s/%s", scheme, cfg.Listen.HTTP, cfg.Listen.SyslogUDP, cfg.Listen.SyslogTCP)
+	logging.New("mikroview").Info(fmt.Sprintf("%s on %s, syslog udp/tcp on %s/%s", scheme, cfg.Listen.HTTP, cfg.Listen.SyslogUDP, cfg.Listen.SyslogTCP))
 	var serveErr error
 	if cfg.TLS.Enabled {
 		serveErr = httpServer.ListenAndServeTLS("", "")
@@ -316,7 +337,8 @@ func main() {
 		serveErr = httpServer.ListenAndServe()
 	}
 	if serveErr != nil && serveErr != http.ErrServerClosed {
-		log.Fatalf("http server: %v", serveErr)
+		logging.New("http").Error(serveErr.Error())
+		os.Exit(1)
 	}
 }
 
@@ -325,9 +347,10 @@ func main() {
 // loopback and returns a process exit code, rather than opening any
 // listeners itself.
 func runHealthcheck() int {
+	logger := logging.New("healthcheck")
 	cfg, err := config.Load(os.Getenv("MIKROVIEW_CONFIG"), nil)
 	if err != nil {
-		log.Printf("healthcheck: config: %v", err)
+		logger.Error(fmt.Sprintf("loading config: %v", err))
 		return 1
 	}
 	addr := cfg.Listen.HTTP
@@ -345,12 +368,12 @@ func runHealthcheck() int {
 	}
 	resp, err := client.Get(scheme + "://" + addr + "/api/healthz")
 	if err != nil {
-		log.Printf("healthcheck: %v", err)
+		logger.Error(err.Error())
 		return 1
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		log.Printf("healthcheck: unexpected status %d", resp.StatusCode)
+		logger.Error(fmt.Sprintf("unexpected status %d", resp.StatusCode))
 		return 1
 	}
 	return 0
@@ -377,7 +400,7 @@ func openAuthStoreForCLI(cmd string) (*auth.Store, error) {
 func runListUsers() int {
 	store, err := openAuthStoreForCLI("-list-users")
 	if err != nil {
-		log.Printf("list-users: %v", err)
+		logging.New("list-users").Error(err.Error())
 		return 1
 	}
 
@@ -398,13 +421,14 @@ func runListUsers() int {
 // an account itself; the operator (or whoever loads the UI next) still
 // completes setup through the normal create-account form.
 func runEnableAuthSetup() int {
+	logger := logging.New("enable-auth-setup")
 	store, err := openAuthStoreForCLI("-enable-auth-setup")
 	if err != nil {
-		log.Printf("enable-auth-setup: %v", err)
+		logger.Error(err.Error())
 		return 1
 	}
 	if err := store.EnableSetup(); err != nil {
-		log.Printf("enable-auth-setup: %v", err)
+		logger.Error(err.Error())
 		return 1
 	}
 	fmt.Println("Auth setup re-enabled -- the create-account form will be shown again on next load.")
@@ -419,30 +443,31 @@ func runEnableAuthSetup() int {
 // Revokes every existing session for that user, so a stolen session
 // cookie doesn't survive a deliberate credential reset.
 func runResetPassword(args []string) int {
+	logger := logging.New("reset-password")
 	if len(args) < 1 {
-		log.Printf("reset-password: usage: mikroview -reset-password <username>")
+		fmt.Fprintln(os.Stderr, "usage: mikroview -reset-password <username>")
 		return 1
 	}
 	username := args[0]
 
 	store, err := openAuthStoreForCLI("-reset-password")
 	if err != nil {
-		log.Printf("reset-password: %v", err)
+		logger.Error(err.Error())
 		return 1
 	}
 	if _, ok := store.ByUsername(username); !ok {
-		log.Printf("reset-password: no such user %q -- run -list-users to see existing accounts", username)
+		logger.Error(fmt.Sprintf("no such user %q -- run -list-users to see existing accounts", username))
 		return 1
 	}
 
 	password, err := readPasswordTwice()
 	if err != nil {
-		log.Printf("reset-password: %v", err)
+		logger.Error(err.Error())
 		return 1
 	}
 
 	if err := store.SetPassword(username, password, time.Now()); err != nil {
-		log.Printf("reset-password: %v", err)
+		logger.Error(err.Error())
 		return 1
 	}
 	fmt.Printf("Password for %q updated.\n", username)

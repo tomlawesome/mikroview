@@ -251,6 +251,25 @@ func TestTLSDefaultsToEnabledWithSecureCookie(t *testing.T) {
 	}
 }
 
+func TestLogLevelDefaultsToInfoAndEnvOverrides(t *testing.T) {
+	cfg, err := Load("", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Log.Level != "info" {
+		t.Errorf("Log.Level = %q, want the default \"info\"", cfg.Log.Level)
+	}
+
+	t.Setenv("MIKROVIEW_LOG_LEVEL", "debug")
+	cfg, err = Load("", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Log.Level != "debug" {
+		t.Errorf("Log.Level = %q, want the env override \"debug\"", cfg.Log.Level)
+	}
+}
+
 // TestDefaultStoragePathsUnderVarLibMikroview confirms every persistence
 // path is writable out of the box (see the Dockerfile creating/owning
 // /var/lib/mikroview) rather than silently no-op-ing until an operator

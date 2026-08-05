@@ -2,10 +2,14 @@ package syslog
 
 import (
 	"context"
-	"log"
+	"fmt"
 	"net"
 	"time"
+
+	"github.com/tomlawesome/mikroview/internal/logging"
 )
+
+var udpLog = logging.New("syslog-udp")
 
 // RawMessage is one received syslog datagram/line, before envelope
 // parsing, together with the metadata (source IP, receive time) that only
@@ -59,7 +63,7 @@ func ServeUDP(ctx context.Context, conn net.PacketConn, out chan<- RawMessage) e
 			if max := time.Second; tempDelay > max {
 				tempDelay = max
 			}
-			log.Printf("syslog: udp read error: %v; retrying in %v", err, tempDelay)
+			udpLog.Warn(fmt.Sprintf("read error: %v; retrying in %v", err, tempDelay))
 			time.Sleep(tempDelay)
 			continue
 		}

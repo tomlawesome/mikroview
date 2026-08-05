@@ -3,11 +3,15 @@ package syslog
 import (
 	"bufio"
 	"context"
-	"log"
+	"fmt"
 	"net"
 	"sync/atomic"
 	"time"
+
+	"github.com/tomlawesome/mikroview/internal/logging"
 )
+
+var tcpLog = logging.New("syslog-tcp")
 
 // maxTCPConnections bounds concurrent RouterOS remote-protocol=tcp
 // connections. Unlike UDP (a stateless per-datagram receive loop) or the
@@ -87,7 +91,7 @@ func ServeTCP(ctx context.Context, ln net.Listener, out chan<- RawMessage) error
 			if max := time.Second; tempDelay > max {
 				tempDelay = max
 			}
-			log.Printf("syslog: tcp accept error: %v; retrying in %v", err, tempDelay)
+			tcpLog.Warn(fmt.Sprintf("accept error: %v; retrying in %v", err, tempDelay))
 			time.Sleep(tempDelay)
 			continue
 		}
@@ -102,7 +106,7 @@ func ServeTCP(ctx context.Context, ln net.Listener, out chan<- RawMessage) error
 		default:
 			// At capacity: reject immediately rather than queuing, so the
 			// accept loop itself never blocks waiting for a slot to free up.
-			log.Printf("syslog: tcp connection limit (%d) reached, rejecting %s", maxTCPConnections, conn.RemoteAddr())
+			tcpLog.Warn(fmt.Sprintf("connection limit (%d) reached, rejecting %s", maxTCPConnections, conn.RemoteAddr()))
 			conn.Close()
 		}
 	}

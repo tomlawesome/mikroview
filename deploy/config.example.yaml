@@ -14,6 +14,12 @@ store:
   retention: 24h
   maxEvents: 200000
 
+# Leveled, colorized server log output (see docs/configuration.md's
+# "Logging" section) -- level defaults to info already, uncomment only
+# to change it. One of debug/info/warn/error.
+# log:
+#   level: info
+
 # Optional: shows a country flag next to public IPs in the UI. Requires
 # your own MaxMind GeoLite2 database -- see docs/configuration.md. Left
 # unset, no flags are shown; this is never required.
