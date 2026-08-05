@@ -3,6 +3,8 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"crypto/tls"
 	"fmt"
 	"log"
 	"net/http"
@@ -24,6 +26,7 @@ import (
 	"github.com/tomlawesome/mikroview/internal/notify"
 	"github.com/tomlawesome/mikroview/internal/reputation"
 	"github.com/tomlawesome/mikroview/internal/routeros"
+	"github.com/tomlawesome/mikroview/internal/servertls"
 	"github.com/tomlawesome/mikroview/internal/store"
 	"github.com/tomlawesome/mikroview/internal/syslog"
 	"github.com/tomlawesome/mikroview/web"
@@ -258,6 +261,36 @@ func main() {
 		IdleTimeout:       120 * time.Second,
 	}
 
+	// TLS (on by default -- see internal/config.TLS's doc comment for
+	// why, and the one documented reason to disable it). /ca.crt is
+	// registered directly on rootMux, not routed through api.Server,
+	// since it's not an API concern -- and only when mikroview generated
+	// its own CA, never for an operator-supplied cert.
+	scheme := "http"
+	if cfg.TLS.Enabled {
+		scheme = "https"
+		cert, caCertPEM, err := servertls.Load(servertls.Config{
+			CertFile:  cfg.TLS.CertFile,
+			KeyFile:   cfg.TLS.KeyFile,
+			Hosts:     cfg.TLS.Hosts,
+			StorePath: cfg.TLS.StorePath,
+		})
+		if err != nil {
+			log.Fatalf("tls: %v", err)
+		}
+		if caCertPEM != nil {
+			fingerprint := sha256.Sum256(cert.Certificate[0])
+			log.Printf("tls: generated a local CA (leaf fingerprint %x) -- served at /ca.crt for your browser or reverse proxy to trust", fingerprint)
+			rootMux.HandleFunc("GET /ca.crt", func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/x-pem-file")
+				w.Write(caCertPEM)
+			})
+		}
+		httpServer.TLSConfig = &tls.Config{Certificates: []tls.Certificate{cert}}
+	} else {
+		log.Printf("tls: disabled (tls.enabled=false) -- mikroview is serving plain HTTP on %s. Safe ONLY if this listener is unreachable except from your own reverse proxy over an isolated network -- never expose this port to a LAN or the internet in this mode.", cfg.Listen.HTTP)
+	}
+
 	go func() {
 		<-ctx.Done()
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -265,9 +298,15 @@ func main() {
 		httpServer.Shutdown(shutdownCtx)
 	}()
 
-	log.Printf("mikroview: http on %s, syslog udp/tcp on %s/%s", cfg.Listen.HTTP, cfg.Listen.SyslogUDP, cfg.Listen.SyslogTCP)
-	if err := httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-		log.Fatalf("http server: %v", err)
+	log.Printf("mikroview: %s on %s, syslog udp/tcp on %s/%s", scheme, cfg.Listen.HTTP, cfg.Listen.SyslogUDP, cfg.Listen.SyslogTCP)
+	var serveErr error
+	if cfg.TLS.Enabled {
+		serveErr = httpServer.ListenAndServeTLS("", "")
+	} else {
+		serveErr = httpServer.ListenAndServe()
+	}
+	if serveErr != nil && serveErr != http.ErrServerClosed {
+		log.Fatalf("http server: %v", serveErr)
 	}
 }
 
@@ -285,8 +324,16 @@ func runHealthcheck() int {
 	if strings.HasPrefix(addr, ":") {
 		addr = "127.0.0.1" + addr
 	}
+	scheme := "http"
 	client := http.Client{Timeout: 3 * time.Second}
-	resp, err := client.Get("http://" + addr + "/api/healthz")
+	if cfg.TLS.Enabled {
+		scheme = "https"
+		// Checking itself, from inside the same container -- there's no
+		// trust boundary being crossed by skipping verification of its
+		// own (possibly self-signed) certificate here.
+		client.Transport = &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}}
+	}
+	resp, err := client.Get(scheme + "://" + addr + "/api/healthz")
 	if err != nil {
 		log.Printf("healthcheck: %v", err)
 		return 1
