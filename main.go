@@ -194,6 +194,7 @@ func main() {
 		Reputation:       rep,
 		Flags:            fs,
 		DetectorSettings: detectorSettings,
+		CriticalPorts:    cfg.Flags.CriticalPorts,
 		Auth:             authStore,
 		Sessions:         auth.NewSessionStore(cfg.Auth.SessionTTL),
 		LoginLimiter:     auth.NewLoginLimiter(loginLimiterThreshold, loginLimiterWindow),

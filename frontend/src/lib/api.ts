@@ -83,6 +83,13 @@ export async function fetchDevices(): Promise<Device[]> {
   return body.devices ?? []
 }
 
+export async function fetchCriticalPorts(): Promise<number[]> {
+  const res = await fetch('/api/critical-ports')
+  if (!res.ok) throw new ApiError(`fetchCriticalPorts: ${res.status}`, res.status)
+  const body = await res.json()
+  return body.ports ?? []
+}
+
 export async function fetchStats(): Promise<Stats> {
   const res = await fetch('/api/stats')
   if (!res.ok) throw new ApiError(`fetchStats: ${res.status}`, res.status)

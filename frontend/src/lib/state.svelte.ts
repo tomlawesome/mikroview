@@ -19,10 +19,12 @@ function stamp(events: FirewallEvent[]): ClientEvent[] {
 export type ConnState = 'connecting' | 'open' | 'closed'
 
 // 'live' is the scrolling event table + filter bar; 'metrics' is the
-// dashboard (see Dashboard.svelte). A real (if minimal) view switch --
-// only one is ever mounted at a time -- rather than a modal layered over
-// the live table, which used to leave LiveTable running underneath.
-export type View = 'live' | 'metrics'
+// dashboard (see Dashboard.svelte); 'control-ports' is the SSH/Telnet/
+// control-port tracking tab (see ControlPorts.svelte). A real (if
+// minimal) view switch -- only one is ever mounted at a time -- rather
+// than a modal layered over the live table, which used to leave
+// LiveTable running underneath.
+export type View = 'live' | 'metrics' | 'control-ports'
 
 // Central reactive state for the live view. The WebSocket tail pushes
 // every new event unfiltered into `events`; `filteredEvents` re-filters
@@ -57,16 +59,25 @@ class AppState {
 
   filteredEvents = $derived.by(() => this.filteredBy(this.filters))
 
+  // The age-cutoff half of filteredBy's pipeline, exposed on its own for
+  // a consumer that needs the display-duration-windowed buffer but can't
+  // express its own match criteria as a Filters object -- e.g.
+  // ControlPorts.svelte's "destination port is any one of several
+  // configured control ports" OR-match, which Filters.port (a single
+  // value) can't represent.
+  ageFilteredEvents(): ClientEvent[] {
+    const cutoff =
+      retentionState.maxAgeSeconds === null ? null : this.now - retentionState.maxAgeSeconds * 1000
+    return cutoff === null ? this.events : this.events.filter((e) => e.receivedAt >= cutoff)
+  }
+
   // Applies the same age-cutoff-then-filter pipeline as filteredEvents,
   // but against an arbitrary Filters object rather than appState.filters --
   // what lets a custom top-talkers widget (lib/topTalkers.svelte.ts) track
   // its own independent criteria regardless of whatever filter is
   // currently active in the live view's FilterBar.
   filteredBy(filters: Filters): FirewallEvent[] {
-    const cutoff =
-      retentionState.maxAgeSeconds === null ? null : this.now - retentionState.maxAgeSeconds * 1000
-    const events = cutoff === null ? this.events : this.events.filter((e) => e.receivedAt >= cutoff)
-    return applyFilters(events, filters)
+    return applyFilters(this.ageFilteredEvents(), filters)
   }
 
   // ruleRegex is excluded here: it's a modifier on `rule`, not a filter of
