@@ -13,7 +13,7 @@
   import LiveTable from './components/LiveTable.svelte'
   import Dashboard from './components/Dashboard.svelte'
   import ControlPorts from './components/ControlPorts.svelte'
-  import FlagsOverlay from './components/FlagsOverlay.svelte'
+  import Flags from './components/Flags.svelte'
   import IpLookupPopover from './components/IpLookupPopover.svelte'
   import PortLookupPopover from './components/PortLookupPopover.svelte'
   import AuthSetup from './components/AuthSetup.svelte'
@@ -137,11 +137,12 @@
       <LiveTable />
     {:else if appState.view === 'control-ports'}
       <ControlPorts />
+    {:else if appState.view === 'flags'}
+      <Flags />
     {:else}
       <Dashboard />
     {/if}
   </main>
-  <FlagsOverlay />
   <IpLookupPopover />
   <PortLookupPopover />
   <AddUserOverlay />
