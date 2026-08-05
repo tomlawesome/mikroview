@@ -30,8 +30,8 @@ jobs:
     outputs:
       auth: ${{ steps.filter.outputs.auth }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: dorny/paths-filter@v3
+      - uses: actions/checkout@v7
+      - uses: dorny/paths-filter@v4
         id: filter
         with:
           filters: |
@@ -51,16 +51,16 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7
         with:
-          go-version: '1.25.12'
+          go-version: '1.26.5'
       - run: go build ./...
       - run: go vet ./...
       - run: go test ./...
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: '22'
       - run: |
@@ -78,11 +78,11 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7
         with:
-          go-version: '1.25.12'
+          go-version: '1.26.5'
       - name: Race-detector tests (auth + API)
         run: go test -race ./internal/auth/... ./internal/api/...
       - name: govulncheck
@@ -90,7 +90,7 @@ jobs:
           go install golang.org/x/vuln/cmd/govulncheck@latest
           govulncheck ./...
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: '22'
       - name: npm audit
@@ -109,7 +109,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Build image
         run: docker build --tag mikroview:test .
@@ -125,8 +125,12 @@ jobs:
 
       - name: Wait for healthz
         run: |
+          # TLS is on by default (self-signed, generated on first start --
+          # see internal/servertls) -- -k skips verification since this is
+          # just confirming the server answers, not validating a cert
+          # chain.
           for attempt in $(seq 1 20); do
-            if curl --fail --silent --show-error http://127.0.0.1:8080/api/healthz >/dev/null; then
+            if curl -k --fail --silent --show-error https://127.0.0.1:8080/api/healthz >/dev/null; then
               exit 0
             fi
             sleep 1

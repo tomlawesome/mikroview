@@ -86,3 +86,120 @@ func TestRepeatedDropsTracksEachPortIndependently(t *testing.T) {
 		t.Fatalf("expected 2+2 split across two ports to stay below the threshold=3 for either, got %+v", fs.List())
 	}
 }
+
+func TestRepeatedDropsHostsAndPortsScopeCombineWithAND(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.RepeatedDropsThreshold = 3
+	cfg.PortScanThreshold = 1000
+	cfg.ActivitySpikeThreshold = 1000
+
+	seed := DefaultSettingsMap()
+	seed[DetectorRepeatedDrops] = Settings{
+		Enabled: true,
+		Scope: Scope{
+			Hosts: []string{"203.0.113.9"}, HostsMode: ListModeAllow,
+			Ports: []int{25565}, PortsMode: ListModeAllow,
+		},
+	}
+	d, fs := newTestDetectorWithSettings(t, cfg, seed)
+
+	now := time.Now()
+	// Host matches, port doesn't -- AND means this must not flag.
+	for i := 0; i < 5; i++ {
+		d.Observe(dropEvt("203.0.113.9", "192.168.1.50", 8080, now.Add(time.Duration(i)*time.Second)))
+	}
+	if len(fs.List()) != 0 {
+		t.Fatalf("expected a host-only match (wrong port) to never flag, got %+v", fs.List())
+	}
+
+	// Port matches, host doesn't -- AND means this must not flag either.
+	for i := 0; i < 5; i++ {
+		d.Observe(dropEvt("203.0.113.10", "192.168.1.50", 25565, now.Add(time.Duration(i)*time.Second)))
+	}
+	if len(fs.List()) != 0 {
+		t.Fatalf("expected a port-only match (wrong host) to never flag, got %+v", fs.List())
+	}
+
+	// Both match -- now it should flag.
+	for i := 0; i < 5; i++ {
+		d.Observe(dropEvt("203.0.113.9", "192.168.1.50", 25565, now.Add(time.Duration(i)*time.Second)))
+	}
+	if len(fs.List()) != 1 {
+		t.Fatalf("expected a host+port match to flag, got %+v", fs.List())
+	}
+}
+
+func TestRepeatedDropsConfidenceScalesWithOvershoot(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.RepeatedDropsThreshold = 5
+	cfg.PortScanThreshold = 1000
+	cfg.ActivitySpikeThreshold = 1000
+
+	now := time.Now()
+
+	justOver, fs := newTestDetector(t, cfg)
+	for i := 0; i < 5; i++ {
+		justOver.Observe(dropEvt("203.0.113.9", "192.168.1.50", 25565, now.Add(time.Duration(i)*time.Second)))
+	}
+	list := fs.List()
+	if len(list) != 1 || list[0].Confidence == nil || *list[0].Confidence != 0 {
+		t.Fatalf("expected 0%% confidence exactly at threshold, got %+v", list)
+	}
+
+	wellOver, fs2 := newTestDetector(t, cfg)
+	for i := 0; i < 15; i++ {
+		wellOver.Observe(dropEvt("203.0.113.9", "192.168.1.50", 25565, now.Add(time.Duration(i)*time.Second)))
+	}
+	list2 := fs2.List()
+	if len(list2) != 1 || list2[0].Confidence == nil || *list2[0].Confidence != 100 {
+		t.Fatalf("expected 100%% confidence at the overshoot ceiling, got %+v", list2)
+	}
+}
+
+func TestRepeatedDropsEvidenceCapturesNATInfo(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.RepeatedDropsThreshold = 3
+	cfg.PortScanThreshold = 1000
+	cfg.ActivitySpikeThreshold = 1000
+	d, fs := newTestDetector(t, cfg)
+
+	now := time.Now()
+	for i := 0; i < 3; i++ {
+		e := dropEvt("203.0.113.9", "192.168.1.50", 25565, now.Add(time.Duration(i)*time.Second))
+		e.SrcCountry = "NL"
+		e.NatIP = "10.0.0.5"
+		e.NatPort = 8080
+		e.NatRaw = "NAT (10.0.0.5:8080->192.168.1.50:25565)"
+		d.Observe(e)
+	}
+
+	list := fs.List()
+	if len(list) != 1 {
+		t.Fatalf("expected one flag, got %+v", list)
+	}
+	if list[0].Country != "NL" {
+		t.Errorf("expected Country to be threaded through, got %q", list[0].Country)
+	}
+	nat := list[0].Evidence.NAT
+	if nat == nil || nat.IP != "10.0.0.5" || nat.Port != 8080 {
+		t.Errorf("expected NAT evidence to be captured, got %+v", nat)
+	}
+}
+
+func TestRepeatedDropsEvidenceOmitsNATWhenAbsent(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.RepeatedDropsThreshold = 3
+	cfg.PortScanThreshold = 1000
+	cfg.ActivitySpikeThreshold = 1000
+	d, fs := newTestDetector(t, cfg)
+
+	now := time.Now()
+	for i := 0; i < 3; i++ {
+		d.Observe(dropEvt("203.0.113.9", "192.168.1.50", 25565, now.Add(time.Duration(i)*time.Second)))
+	}
+
+	list := fs.List()
+	if len(list) != 1 || list[0].Evidence.NAT != nil {
+		t.Errorf("expected no NAT evidence when the event had none, got %+v", list)
+	}
+}
