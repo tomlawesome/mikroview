@@ -205,6 +205,60 @@ func TestVerifyIDTokenRejectsWrongIssuer(t *testing.T) {
 	}
 }
 
+// TestHTTPTimeoutBoundsAHungProvider proves the timeout wiring (New's
+// defaultHTTPTimeout, reapplied in Exchange/VerifyIDToken via
+// oidc.ClientContext) actually takes effect end to end, not just that
+// the client field gets set -- a provider that never responds to the
+// token request must fail within the configured timeout, not hang the
+// caller indefinitely.
+func TestHTTPTimeoutBoundsAHungProvider(t *testing.T) {
+	fp := newFakeProvider(t)
+	fp.nextIDToken = fp.signRS256(t, fp.defaultClaims("test-client", "nonce-1")) // never actually reached; just avoids an unrelated t.Fatal-from-goroutine if the hang doesn't block as expected
+	hang := make(chan struct{})
+	t.Cleanup(func() { close(hang) })
+	fp.server.Config.Handler = wrapHang(fp.server.Config.Handler, hang)
+
+	c, err := New(context.Background(), Config{
+		IssuerURL:    fp.issuer(),
+		ClientID:     "test-client",
+		ClientSecret: "test-secret",
+		RedirectURL:  "https://mikroview.example/api/auth/oidc/callback",
+		HTTPTimeout:  100 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := c.Exchange(context.Background(), "any-code", "any-verifier")
+		done <- err
+	}()
+
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("Exchange against a hung /token endpoint returned no error")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Exchange did not respect HTTPTimeout -- still blocked well past it")
+	}
+}
+
+// wrapHang makes every /token request block until hang is closed,
+// simulating a provider that's up (accepts the connection) but never
+// responds -- the scenario an HTTP client Timeout guards against, as
+// opposed to a connection-refused/DNS failure that fails fast on its
+// own regardless of any timeout setting.
+func wrapHang(next http.Handler, hang chan struct{}) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/token" {
+			<-hang
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
 func TestExchangeSendsCodeVerifier(t *testing.T) {
 	fp := newFakeProvider(t)
 	c := testClient(t, fp)
