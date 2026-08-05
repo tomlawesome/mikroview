@@ -12,6 +12,8 @@
       result.totalReports != null ||
       !!result.isp ||
       !!result.countryCode ||
+      !!result.usageType ||
+      !!result.isTor ||
       !!result.ports?.length ||
       !!result.hostnames?.length ||
       !!result.vulns?.length,
@@ -44,6 +46,18 @@
       <div class="row">
         <span class="label">Country</span>
         <span class="value">{result.countryCode}</span>
+      </div>
+    {/if}
+    {#if result.usageType}
+      <div class="row">
+        <span class="label">Usage type</span>
+        <span class="value">{result.usageType}</span>
+      </div>
+    {/if}
+    {#if result.isTor}
+      <div class="row">
+        <span class="label">Tor</span>
+        <span class="value high">Exit node</span>
       </div>
     {/if}
     {#if result.ports?.length}

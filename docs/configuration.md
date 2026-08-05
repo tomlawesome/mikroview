@@ -376,6 +376,19 @@ applied to the underlying event) and, for `port_scan`,
 translation info when the triggering event had one. `GET /api/flags`
 exposes all of this as `reputation`, `country`, and `evidence` fields.
 
+**Tor/hosting-provider signal (issue #58).** AbuseIPDB's response
+already includes an `isTor` flag and a `usageType` classification (e.g.
+"Data Center/Web Hosting/Transit") that mikroview now captures alongside
+the abuse score. Either one also contributes to the confidence floor,
+using the same floor-raise-only reasoning as the abuse score itself,
+with the *strongest* of the two independent signals applied: a Tor exit
+node raises the floor to 60, a hosting/data-center address to 30 --
+deliberately smaller than a real abuse score, since neither is proof of
+malice on its own (Tor use isn't illegal, and plenty of legitimate
+scanners/CDNs/bots run from hosting providers too). Both are starting
+points, not calibrated values. Shown in the expanded reputation detail
+alongside ISP/country whenever present.
+
 A flag is raised once per (detector, source) pair and updated in place
 on re-firing (count/last-seen bumped, not duplicated) until a human
 clears it via the UI or `POST /api/flags/{id}/clear`. Clearing an
