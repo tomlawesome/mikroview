@@ -49,11 +49,20 @@ const userContextKey contextKey = iota
 // Docker's own HEALTHCHECK). Logout is included too: calling it without
 // a session is a harmless no-op, not worth a 401 for.
 var exemptPaths = map[string]bool{
-	"/api/healthz":       true,
-	"/api/auth/session":  true,
-	"/api/auth/register": true,
-	"/api/auth/login":    true,
-	"/api/auth/logout":   true,
+	"/api/healthz":         true,
+	"/api/auth/session":    true,
+	"/api/auth/register":   true,
+	"/api/auth/login":      true,
+	"/api/auth/logout":     true,
+	// Both are GET (a top-level browser redirect/navigation the provider
+	// issues, not a fetch() the frontend controls) so isSafeMethod
+	// already exempts them from the CSRF-header check above -- being
+	// listed here is what exempts them from requiring an existing
+	// session, which is the actual point: a login has to work before a
+	// session exists. State/nonce/PKCE (see oidc.go) are the callback's
+	// real protection against a forged request, not the session check.
+	"/api/auth/oidc/login":    true,
+	"/api/auth/oidc/callback": true,
 }
 
 // bootstrapExemptPaths lists the (smaller) set of routes reachable
@@ -69,6 +78,11 @@ var bootstrapExemptPaths = map[string]bool{
 	"/api/auth/session":  true,
 	"/api/auth/register": true,
 	"/api/auth/skip":     true,
+	// So the very first-ever login can happen via SSO -- symmetric with
+	// /api/auth/register already being bootstrap-exempt for the local-
+	// password path.
+	"/api/auth/oidc/login":    true,
+	"/api/auth/oidc/callback": true,
 }
 
 // sessionUser resolves r's session cookie to a user, if any -- shared by
@@ -195,6 +209,10 @@ type sessionResponse struct {
 	Authenticated bool   `json:"authenticated"`
 	Username      string `json:"username,omitempty"`
 	Role          string `json:"role,omitempty"`
+	// SSOAvailable tells the frontend whether to render the "Sign in
+	// with SSO" link at all -- true whenever s.OIDC is configured,
+	// regardless of the other fields above.
+	SSOAvailable bool `json:"ssoAvailable"`
 }
 
 // handleAuthSession always returns 200 -- it reports state, it doesn't
@@ -205,6 +223,7 @@ func (s *Server) handleAuthSession(w http.ResponseWriter, r *http.Request) {
 	resp := sessionResponse{
 		AuthDisabled:  s.Auth.Disabled(),
 		SetupRequired: s.Auth.Count() == 0,
+		SSOAvailable:  s.OIDC != nil,
 	}
 	if user, ok := s.sessionUser(r, time.Now()); ok {
 		resp.Authenticated = true
