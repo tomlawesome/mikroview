@@ -136,7 +136,7 @@ Create `config.yaml` next to it first (see [`deploy/config.example.yaml`](deploy
 
 ## Development
 
-Requires Go 1.25+ and Node 22+.
+Requires Go 1.26+ and Node 22+.
 
 ```sh
 make dev-backend    # go run ., syslog on :1514, http on :8080
