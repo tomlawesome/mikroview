@@ -238,6 +238,48 @@ func TestNotifyPushoverEnvVarsOverrideDefaults(t *testing.T) {
 	}
 }
 
+func TestTLSDefaultsToEnabledWithSecureCookie(t *testing.T) {
+	cfg, err := Load("", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.TLS.Enabled {
+		t.Error("expected TLS.Enabled to default to true")
+	}
+	if !cfg.Auth.SecureCookie {
+		t.Error("expected Auth.SecureCookie to default to true, matching TLS being on by default")
+	}
+}
+
+func TestTLSEnvVarsOverrideDefaults(t *testing.T) {
+	t.Setenv("MIKROVIEW_TLS_ENABLED", "false")
+	t.Setenv("MIKROVIEW_TLS_CERT_FILE", "/etc/mikroview/tls.crt")
+	t.Setenv("MIKROVIEW_TLS_KEY_FILE", "/etc/mikroview/tls.key")
+	t.Setenv("MIKROVIEW_TLS_HOSTS", "mikroview.local, 192.168.1.50")
+	t.Setenv("MIKROVIEW_TLS_STORE_PATH", "/var/lib/mikroview/tls")
+
+	cfg, err := Load("", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.TLS.Enabled {
+		t.Error("expected TLS.Enabled = false")
+	}
+	if cfg.TLS.CertFile != "/etc/mikroview/tls.crt" {
+		t.Errorf("TLS.CertFile = %v, want /etc/mikroview/tls.crt", cfg.TLS.CertFile)
+	}
+	if cfg.TLS.KeyFile != "/etc/mikroview/tls.key" {
+		t.Errorf("TLS.KeyFile = %v, want /etc/mikroview/tls.key", cfg.TLS.KeyFile)
+	}
+	wantHosts := []string{"mikroview.local", "192.168.1.50"}
+	if len(cfg.TLS.Hosts) != len(wantHosts) || cfg.TLS.Hosts[0] != wantHosts[0] || cfg.TLS.Hosts[1] != wantHosts[1] {
+		t.Errorf("TLS.Hosts = %v, want %v", cfg.TLS.Hosts, wantHosts)
+	}
+	if cfg.TLS.StorePath != "/var/lib/mikroview/tls" {
+		t.Errorf("TLS.StorePath = %v, want /var/lib/mikroview/tls", cfg.TLS.StorePath)
+	}
+}
+
 func TestFlagsCriticalPortsMalformedEntryIgnoresWholeValue(t *testing.T) {
 	t.Setenv("MIKROVIEW_FLAGS_CRITICAL_PORTS", "22,not-a-port,3389")
 
