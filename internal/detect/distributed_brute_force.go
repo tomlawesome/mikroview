@@ -51,7 +51,8 @@ func (d *Detector) observeDistributedBruteForce(e store.Event, now time.Time) {
 
 	if len(distinct) >= d.cfg.DistributedBruteForceThreshold {
 		target := fmt.Sprintf("port %d", e.DstPort)
-		d.fs.Add(flags.TypeDistributedBruteForce, target,
-			fmt.Sprintf("%d distinct source IPs in %s", len(distinct), d.cfg.DistributedBruteForceWindow), now)
+		d.fs.AddWithConfidence(flags.TypeDistributedBruteForce, target,
+			fmt.Sprintf("%d distinct source IPs in %s", len(distinct), d.cfg.DistributedBruteForceWindow),
+			overshootConfidence(len(distinct), d.cfg.DistributedBruteForceThreshold), now)
 	}
 }

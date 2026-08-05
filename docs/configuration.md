@@ -257,19 +257,36 @@ flags:
   than necessarily an attack, so treat it as "worth a look," not
   "critical."
 
-**Confidence score.** The activity-spike detector (currently the only
-one making a statistical judgment call rather than a deterministic
-threshold crossing) attaches a `confidence` percentage to each flag it
-raises, shown in the UI as e.g. "73% confidence". It's deliberately not
-a black-box number: it combines (1) how much history backs the host's
-baseline and (2) how far the current reading deviates from it, and the
-flag's own detail text spells out the actual baseline value, observed
-value, and sample count behind the score — mikroview's job is to put
-that information in front of you, not to make the call for you. Flags
-from every other detector have no `confidence` field at all (`null` in
-`GET /api/flags`) rather than an implied 100% — a plain threshold
-crossing is exactly as trustworthy as the count it reports, so a
-percentage there would be noise.
+**Confidence score.** Every detector except global-volume-spike and
+rule-hit-rate-spike attaches a `confidence` percentage (0-100) to each
+flag it raises, shown in the UI as e.g. "73% confidence" — but not all
+of them mean the same thing by it, and it's worth knowing which kind
+you're looking at:
+
+- **Statistical (activity-spike only).** The only detector making a
+  real statistical judgment call rather than a deterministic threshold
+  crossing: it combines (1) how much history backs the host's baseline
+  and (2) how far the current reading deviates from it (a z-score). The
+  flag's own detail text spells out the actual baseline value, observed
+  value, and sample count behind the score.
+- **Overshoot-based (port-scan, critical-port, distributed
+  brute-force, outbound anomaly, internal reconnaissance, repeated
+  drops).** These six are plain threshold crossings with no history or
+  baseline behind them, so their confidence instead measures *how far
+  past the threshold* the observed count is: just crossed reads low,
+  three times the threshold or more reads 100%. This is a materially
+  weaker claim than activity-spike's statistical score — it says
+  nothing about whether the pattern is unusual for that specific
+  source, only how large it is relative to the configured line. Treat a
+  95% overshoot-based flag as "well past the configured threshold," not
+  "95% likely to be malicious."
+- **Not yet scored (global volume spike, rule hit-rate spike).** Both
+  already track a slow-moving EMA baseline internally (same technique
+  activity-spike uses), just without a confidence score attached yet —
+  a known gap, filed separately.
+
+`confidence` is `null` in `GET /api/flags` for a detector that doesn't
+score at all, never an implied 100%.
 
 A flag is raised once per (detector, source) pair and updated in place
 on re-firing (count/last-seen bumped, not duplicated) until a human

@@ -128,3 +128,30 @@ func TestRepeatedDropsHostsAndPortsScopeCombineWithAND(t *testing.T) {
 		t.Fatalf("expected a host+port match to flag, got %+v", fs.List())
 	}
 }
+
+func TestRepeatedDropsConfidenceScalesWithOvershoot(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.RepeatedDropsThreshold = 5
+	cfg.PortScanThreshold = 1000
+	cfg.ActivitySpikeThreshold = 1000
+
+	now := time.Now()
+
+	justOver, fs := newTestDetector(t, cfg)
+	for i := 0; i < 5; i++ {
+		justOver.Observe(dropEvt("203.0.113.9", "192.168.1.50", 25565, now.Add(time.Duration(i)*time.Second)))
+	}
+	list := fs.List()
+	if len(list) != 1 || list[0].Confidence == nil || *list[0].Confidence != 0 {
+		t.Fatalf("expected 0%% confidence exactly at threshold, got %+v", list)
+	}
+
+	wellOver, fs2 := newTestDetector(t, cfg)
+	for i := 0; i < 15; i++ {
+		wellOver.Observe(dropEvt("203.0.113.9", "192.168.1.50", 25565, now.Add(time.Duration(i)*time.Second)))
+	}
+	list2 := fs2.List()
+	if len(list2) != 1 || list2[0].Confidence == nil || *list2[0].Confidence != 100 {
+		t.Fatalf("expected 100%% confidence at the overshoot ceiling, got %+v", list2)
+	}
+}

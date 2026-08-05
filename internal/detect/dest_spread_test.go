@@ -1,6 +1,7 @@
 package detect
 
 import (
+	"fmt"
 	"testing"
 	"time"
 
@@ -182,5 +183,59 @@ func TestOutboundAnomalyAndInternalReconToggleIndependently(t *testing.T) {
 	}
 	if sawRecon {
 		t.Error("expected internal_recon to never fire while disabled, even on the same shared window")
+	}
+}
+
+func TestOutboundAnomalyConfidenceScalesWithOvershoot(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.OutboundAnomalyThreshold = 5
+	cfg.PortScanThreshold = 1000
+	cfg.ActivitySpikeThreshold = 1000
+
+	now := time.Now()
+
+	justOver, fs := newTestDetector(t, cfg)
+	for i := 1; i <= 5; i++ {
+		justOver.Observe(lanEvt("192.168.1.50", fmt.Sprintf("203.0.113.%d", i), now.Add(time.Duration(i)*time.Second)))
+	}
+	list := fs.List()
+	if len(list) != 1 || list[0].Confidence == nil || *list[0].Confidence != 0 {
+		t.Fatalf("expected 0%% confidence exactly at threshold, got %+v", list)
+	}
+
+	wellOver, fs2 := newTestDetector(t, cfg)
+	for i := 1; i <= 15; i++ {
+		wellOver.Observe(lanEvt("192.168.1.50", fmt.Sprintf("203.0.113.%d", i), now.Add(time.Duration(i)*time.Second)))
+	}
+	list2 := fs2.List()
+	if len(list2) != 1 || list2[0].Confidence == nil || *list2[0].Confidence != 100 {
+		t.Fatalf("expected 100%% confidence at the overshoot ceiling, got %+v", list2)
+	}
+}
+
+func TestInternalReconConfidenceScalesWithOvershoot(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.InternalReconThreshold = 5
+	cfg.PortScanThreshold = 1000
+	cfg.ActivitySpikeThreshold = 1000
+
+	now := time.Now()
+
+	justOver, fs := newTestDetector(t, cfg)
+	for i := 1; i <= 5; i++ {
+		justOver.Observe(lanEvt("192.168.1.50", fmt.Sprintf("192.168.1.%d", i+10), now.Add(time.Duration(i)*time.Second)))
+	}
+	list := fs.List()
+	if len(list) != 1 || list[0].Confidence == nil || *list[0].Confidence != 0 {
+		t.Fatalf("expected 0%% confidence exactly at threshold, got %+v", list)
+	}
+
+	wellOver, fs2 := newTestDetector(t, cfg)
+	for i := 1; i <= 15; i++ {
+		wellOver.Observe(lanEvt("192.168.1.50", fmt.Sprintf("192.168.1.%d", i+10), now.Add(time.Duration(i)*time.Second)))
+	}
+	list2 := fs2.List()
+	if len(list2) != 1 || list2[0].Confidence == nil || *list2[0].Confidence != 100 {
+		t.Fatalf("expected 100%% confidence at the overshoot ceiling, got %+v", list2)
 	}
 }

@@ -1,6 +1,7 @@
 package detect
 
 import (
+	"fmt"
 	"testing"
 	"time"
 
@@ -99,5 +100,34 @@ func TestDistributedBruteForceRespectsPortsScope(t *testing.T) {
 	}
 	if len(fs.List()) != 1 {
 		t.Fatalf("expected the non-denylisted port to still flag, got %+v", fs.List())
+	}
+}
+
+func TestDistributedBruteForceConfidenceScalesWithOvershoot(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.DistributedBruteForceThreshold = 5
+	cfg.CriticalPorts = []int{22}
+	cfg.CriticalPortThreshold = 1000
+	cfg.PortScanThreshold = 1000
+	cfg.ActivitySpikeThreshold = 1000
+
+	now := time.Now()
+
+	justOver, fs := newTestDetector(t, cfg)
+	for i := 0; i < 5; i++ {
+		justOver.Observe(evt(fmt.Sprintf("198.51.100.%d", i+1), 22, now))
+	}
+	list := fs.List()
+	if len(list) != 1 || list[0].Confidence == nil || *list[0].Confidence != 0 {
+		t.Fatalf("expected 0%% confidence exactly at threshold, got %+v", list)
+	}
+
+	wellOver, fs2 := newTestDetector(t, cfg)
+	for i := 0; i < 15; i++ {
+		wellOver.Observe(evt(fmt.Sprintf("198.51.100.%d", i+1), 22, now))
+	}
+	list2 := fs2.List()
+	if len(list2) != 1 || list2[0].Confidence == nil || *list2[0].Confidence != 100 {
+		t.Fatalf("expected 100%% confidence at the overshoot ceiling, got %+v", list2)
 	}
 }
