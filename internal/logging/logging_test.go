@@ -10,18 +10,18 @@ import (
 func TestFormatLineNoColorLayout(t *testing.T) {
 	ts := "18:43:44"
 	got := formatLine(ts, slog.LevelInfo, "auth", "no decision made yet", false)
-	want := "18:43:44 [INFO]  auth        │ no decision made yet\n"
+	want := "18:43:44 INFO  auth        │ no decision made yet\n"
 	if got != want {
 		t.Errorf("formatLine =\n%q\nwant\n%q", got, want)
 	}
 }
 
 func TestFormatLineErrorLevelNoDoubleSpace(t *testing.T) {
-	// [ERROR] is one character wider than [INFO]/[WARN], so it should
-	// get one space before the component, not two -- otherwise the │
-	// column drifts out of alignment on error lines specifically.
+	// ERROR is one character wider than INFO/WARN, so it should get one
+	// space before the component, not two -- otherwise the │ column
+	// drifts out of alignment on error lines specifically.
 	got := formatLine("18:43:46", slog.LevelError, "syslog-udp", "bind: address already in use", false)
-	want := "18:43:46 [ERROR] syslog-udp  │ bind: address already in use\n"
+	want := "18:43:46 ERROR syslog-udp  │ bind: address already in use\n"
 	if got != want {
 		t.Errorf("formatLine =\n%q\nwant\n%q", got, want)
 	}
@@ -39,7 +39,7 @@ func TestFormatLineLongComponentDoesNotTruncate(t *testing.T) {
 
 func TestFormatLineColorWrapsLevelAndDimsTheRest(t *testing.T) {
 	got := formatLine("18:43:44", slog.LevelWarn, "flags", "permission denied", true)
-	if !strings.Contains(got, ansiYellow+"[WARN] "+ansiReset) {
+	if !strings.Contains(got, ansiYellow+"WARN "+ansiReset) {
 		t.Errorf("expected the level token colored yellow and reset, got %q", got)
 	}
 	if !strings.Contains(got, ansiDim+"18:43:44"+ansiReset) {
@@ -85,7 +85,7 @@ func TestNewAttachesComponentAndHandleRendersIt(t *testing.T) {
 	logger.Info("generated a local CA")
 
 	got := buf.String()
-	if !strings.Contains(got, "[INFO]") {
+	if !strings.Contains(got, "INFO") {
 		t.Errorf("expected an INFO line, got %q", got)
 	}
 	if !strings.Contains(got, "tls") {
