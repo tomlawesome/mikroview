@@ -11,6 +11,7 @@ import (
 	"github.com/tomlawesome/mikroview/internal/device"
 	"github.com/tomlawesome/mikroview/internal/flags"
 	"github.com/tomlawesome/mikroview/internal/hub"
+	"github.com/tomlawesome/mikroview/internal/oidc"
 	"github.com/tomlawesome/mikroview/internal/reputation"
 	"github.com/tomlawesome/mikroview/internal/store"
 )
@@ -38,6 +39,14 @@ type Server struct {
 	Sessions     *auth.SessionStore
 	LoginLimiter *auth.LoginLimiter
 	SecureCookie bool
+
+	// OIDC/OIDCState: see oidc.go. Both nil unless cfg.OIDC.IssuerURL was
+	// set and provider discovery succeeded at startup -- every OIDC
+	// handler checks for nil and 404s, so a misconfigured or absent OIDC
+	// block never affects local auth, the same nil-means-disabled
+	// convention Reputation already uses elsewhere on this struct.
+	OIDC      *oidc.Client
+	OIDCState *oidc.StateCodec
 }
 
 // Routes builds the /api/* handler. Static frontend asset serving is
@@ -66,6 +75,9 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("POST /api/auth/login", s.handleAuthLogin)
 	mux.HandleFunc("POST /api/auth/logout", s.handleAuthLogout)
 	mux.HandleFunc("POST /api/auth/users", s.handleAuthCreateUser)
+
+	mux.HandleFunc("GET /api/auth/oidc/login", s.handleOIDCLogin)
+	mux.HandleFunc("GET /api/auth/oidc/callback", s.handleOIDCCallback)
 
 	return s.requireAuth(mux)
 }
