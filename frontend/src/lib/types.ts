@@ -92,6 +92,7 @@ export interface Stats {
 
 // Mirrors internal/api/auth.go's sessionResponse.
 export interface AuthSession {
+  authDisabled: boolean
   setupRequired: boolean
   authenticated: boolean
   username?: string
@@ -109,6 +110,10 @@ export interface ReputationResult {
   totalReports?: number
   countryCode?: string
   isp?: string
+  // usageType/isTor (issue #58): AbuseIPDB-only, same as abuseScore --
+  // absent when that source isn't configured or has nothing to report.
+  usageType?: string
+  isTor?: boolean
 }
 
 // Mirrors internal/flags.Flag's JSON tags.
@@ -122,6 +127,53 @@ export type FlagType =
   | 'internal_recon'
   | 'rule_spike'
   | 'repeated_drops'
+  | 'low_slow_scan'
+
+// Mirrors internal/detect.DetectorName -- same 9 string values as
+// FlagType, kept as a distinct alias since they're the same thing only
+// by coincidence today (see that type's doc comment).
+export type DetectorName = FlagType
+
+// Mirrors internal/detect.ListMode.
+export type ListMode = '' | 'allow' | 'deny'
+
+// Mirrors internal/detect.Scope's JSON tags. See that type's doc
+// comment (and docs/configuration.md's "Per-detector toggles" section)
+// for exactly which fields each detector consults.
+export interface DetectorScope {
+  hosts?: string[]
+  hostsMode?: ListMode
+  ports?: number[]
+  portsMode?: ListMode
+  classification?: Scope
+  rules?: string[]
+  rulesMode?: ListMode
+}
+
+// Mirrors internal/detect.Settings' JSON tags, plus the detector's own
+// name (as returned by GET /api/detectors).
+export interface DetectorSettings {
+  name: DetectorName
+  enabled: boolean
+  scope: DetectorScope
+}
+
+// Mirrors internal/flags.NATInfo's JSON tags.
+export interface NATInfo {
+  ip?: string
+  port?: number
+  raw?: string
+}
+
+// Mirrors internal/flags.Evidence's JSON tags -- structured supporting
+// detail beyond a flag's free-text `detail` string. Which fields a given
+// flag actually has depends on its type; see internal/detect.Scope's
+// doc comment (or docs/configuration.md) for exactly which.
+export interface Evidence {
+  ports?: number[]
+  hosts?: string[]
+  nat?: NATInfo
+}
 
 export interface Flag {
   id: string
@@ -138,6 +190,17 @@ export interface Flag {
   // activity_spike's per-host baseline) -- absent means "not scored," not
   // "zero confidence."
   confidence?: number
+  // A reputation snapshot captured *at raise time* (not fetched live) --
+  // only present for single-IP detectors with a reputation key
+  // configured. Reuses ReputationResult rather than a separate type.
+  reputation?: ReputationResult
+  // The target's ISO 3166-1 alpha-2 country code, from the same GeoIP
+  // lookup already applied to the underlying event -- absent for an
+  // internal target or when GeoIP isn't configured.
+  country?: string
+  // Structured supporting evidence -- see Evidence's own doc comment.
+  // Absent/empty for detectors with nothing beyond `detail` to show.
+  evidence?: Evidence
 }
 
 // Mirrors internal/store's Scope.

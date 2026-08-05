@@ -1,4 +1,14 @@
-import type { AuthSession, Device, EventsResult, Filters, Flag, ReputationResult, Stats } from './types'
+import type {
+  AuthSession,
+  DetectorScope,
+  DetectorSettings,
+  Device,
+  EventsResult,
+  Filters,
+  Flag,
+  ReputationResult,
+  Stats,
+} from './types'
 
 // Thrown instead of a plain Error by every fetch* function below --
 // carries the HTTP status so a caller (App.svelte's polling effect) can
@@ -23,6 +33,14 @@ export class ApiError extends Error {
 async function postJSON(url: string, body: unknown = {}): Promise<Response> {
   return fetch(url, {
     method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'mikroview' },
+    body: JSON.stringify(body),
+  })
+}
+
+async function putJSON(url: string, body: unknown = {}): Promise<Response> {
+  return fetch(url, {
+    method: 'PUT',
     headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'mikroview' },
     body: JSON.stringify(body),
   })
@@ -63,6 +81,13 @@ export async function fetchDevices(): Promise<Device[]> {
   if (!res.ok) throw new ApiError(`fetchDevices: ${res.status}`, res.status)
   const body = await res.json()
   return body.devices ?? []
+}
+
+export async function fetchCriticalPorts(): Promise<number[]> {
+  const res = await fetch('/api/critical-ports')
+  if (!res.ok) throw new ApiError(`fetchCriticalPorts: ${res.status}`, res.status)
+  const body = await res.json()
+  return body.ports ?? []
 }
 
 export async function fetchStats(): Promise<Stats> {
@@ -110,6 +135,17 @@ export async function login(username: string, password: string): Promise<string 
   return (await res.text()) || `login: ${res.status}`
 }
 
+// skipAuthSetup permanently disables authentication for this deployment
+// (see internal/auth.Store.Disable). Only reachable during the one-time
+// first-run choice -- reversing it afterward is CLI-only by design
+// (mikroview -enable-auth-setup), not something this function or any
+// other API call can do.
+export async function skipAuthSetup(): Promise<string | null> {
+  const res = await postJSON('/api/auth/skip')
+  if (res.ok) return null
+  return (await res.text()) || `skipAuthSetup: ${res.status}`
+}
+
 export async function logout(): Promise<void> {
   await postJSON('/api/auth/logout')
 }
@@ -118,4 +154,21 @@ export async function createUser(username: string, password: string, role: 'admi
   const res = await postJSON('/api/auth/users', { username, password, role })
   if (res.ok) return null
   return (await res.text()) || `createUser: ${res.status}`
+}
+
+export async function fetchDetectorSettings(): Promise<DetectorSettings[]> {
+  const res = await fetch('/api/detectors')
+  if (!res.ok) throw new ApiError(`fetchDetectorSettings: ${res.status}`, res.status)
+  const body = await res.json()
+  return body.detectors ?? []
+}
+
+export async function updateDetectorSettings(
+  name: string,
+  enabled: boolean,
+  scope: DetectorScope,
+): Promise<string | null> {
+  const res = await putJSON(`/api/detectors/${encodeURIComponent(name)}`, { enabled, scope })
+  if (res.ok) return null
+  return (await res.text()) || `updateDetectorSettings: ${res.status}`
 }

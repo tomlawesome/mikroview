@@ -13,14 +13,15 @@ import (
 	"github.com/tomlawesome/mikroview/internal/auth"
 )
 
-// newAuthTestServer is newTestServer with a real (temp-file-backed) auth
-// store swapped in -- newTestServer's own Auth is deliberately
-// unpersisted (matching every non-auth test's assumption of a fully
-// open API with zero users), so Register/CreateUser would refuse with
-// ErrNotPersisted against it.
+// newAuthTestServer is newTestServer with a fresh, undecided (neither
+// disabled nor already holding an account) auth store swapped in --
+// newTestServer's own Auth defaults to disabled (matching every non-
+// auth-specific test's assumption of a fully open API), so tests that
+// actually exercise the register/login/bootstrap flow need this
+// pristine state instead.
 func newAuthTestServer(t *testing.T) *Server {
 	t.Helper()
-	s, _ := newTestServer()
+	s, _ := newTestServer(t)
 	authStore, err := auth.Open(filepath.Join(t.TempDir(), "users.json"))
 	if err != nil {
 		t.Fatal(err)
@@ -51,8 +52,10 @@ func postJSON(t *testing.T, client *http.Client, url string, body any) *http.Res
 	return resp
 }
 
-func TestUnprotectedWhileZeroUsersExist(t *testing.T) {
-	s, _ := newTestServer()
+func TestUnprotectedOnceAuthDisabled(t *testing.T) {
+	// newTestServer's Auth already defaults to disabled -- see its own
+	// doc comment.
+	s, _ := newTestServer(t)
 	ts := httptest.NewServer(s.Routes())
 	defer ts.Close()
 
@@ -62,12 +65,99 @@ func TestUnprotectedWhileZeroUsersExist(t *testing.T) {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		t.Errorf("expected the API to stay fully open with zero users, got %d", resp.StatusCode)
+		t.Errorf("expected the API to stay fully open once auth is disabled, got %d", resp.StatusCode)
+	}
+}
+
+// TestUndecidedStateRestrictsToBootstrapPaths covers the gap the old
+// blanket-open zero-account behavior left: before a real decision has
+// been made (neither an account created nor auth explicitly skipped),
+// live data must not be readable by whoever happens to reach mikroview
+// first.
+func TestUndecidedStateRestrictsToBootstrapPaths(t *testing.T) {
+	s := newAuthTestServer(t) // fresh, undecided -- see its own doc comment
+	ts := httptest.NewServer(s.Routes())
+	defer ts.Close()
+
+	resp, err := http.Get(ts.URL + "/api/events")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusServiceUnavailable {
+		t.Errorf("expected /api/events to be blocked while undecided, got %d", resp.StatusCode)
+	}
+}
+
+func TestUndecidedStateAllowsBootstrapPaths(t *testing.T) {
+	s := newAuthTestServer(t)
+	ts := httptest.NewServer(s.Routes())
+	defer ts.Close()
+
+	for _, path := range []string{"/api/healthz", "/api/auth/session"} {
+		resp, err := http.Get(ts.URL + path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			t.Errorf("expected %s to stay reachable while undecided, got %d", path, resp.StatusCode)
+		}
+	}
+}
+
+func TestAuthSkipDisablesAuthPermanently(t *testing.T) {
+	s := newAuthTestServer(t)
+	ts := httptest.NewServer(s.Routes())
+	defer ts.Close()
+
+	resp := postJSON(t, &http.Client{}, ts.URL+"/api/auth/skip", map[string]any{})
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected skip to succeed, got %d", resp.StatusCode)
+	}
+
+	// Previously-blocked paths are now open, exactly like the disabled
+	// default.
+	events, err := http.Get(ts.URL + "/api/events")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer events.Body.Close()
+	if events.StatusCode != http.StatusOK {
+		t.Errorf("expected /api/events to be open after skipping auth, got %d", events.StatusCode)
+	}
+
+	// Registration must not be usable afterward -- re-enabling is
+	// CLI-only (see auth.Store.EnableSetup), not something a client can
+	// trigger by just calling register directly.
+	reg := postJSON(t, &http.Client{}, ts.URL+"/api/auth/register", credentialsRequest{Username: "admin", Password: "password123"})
+	defer reg.Body.Close()
+	if reg.StatusCode != http.StatusConflict {
+		t.Errorf("expected register to be refused once auth is disabled, got %d", reg.StatusCode)
+	}
+}
+
+func TestAuthSessionReportsAuthDisabled(t *testing.T) {
+	s, _ := newTestServer(t)
+	ts := httptest.NewServer(s.Routes())
+	defer ts.Close()
+
+	resp, err := http.Get(ts.URL + "/api/auth/session")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	var body sessionResponse
+	json.NewDecoder(resp.Body).Decode(&body)
+	if !body.AuthDisabled {
+		t.Errorf("expected authDisabled=true, got %+v", body)
 	}
 }
 
 func TestAuthSessionReportsSetupRequired(t *testing.T) {
-	s, _ := newTestServer()
+	s, _ := newTestServer(t)
 	ts := httptest.NewServer(s.Routes())
 	defer ts.Close()
 
@@ -326,7 +416,7 @@ func TestMutatingRequestWithoutCSRFHeaderIsRejectedOnceAuthActive(t *testing.T) 
 func TestMutatingRequestWithoutCSRFHeaderAllowedWhileAuthInactive(t *testing.T) {
 	// Zero users -- must behave exactly like before this feature existed,
 	// including for mutating requests (see requireAuth's doc comment).
-	s, _ := newTestServer()
+	s, _ := newTestServer(t)
 	ts := httptest.NewServer(s.Routes())
 	defer ts.Close()
 

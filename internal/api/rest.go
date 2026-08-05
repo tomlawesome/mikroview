@@ -30,6 +30,13 @@ func (s *Server) handleDevices(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"devices": s.Devices.List()})
 }
 
+// handleCriticalPorts serves the configured control-port list (issue #34)
+// -- read-only, no admin gate, since the tracking tab it feeds needs to
+// work for any signed-in user, not just admins.
+func (s *Server) handleCriticalPorts(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]any{"ports": s.CriticalPorts})
+}
+
 func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 	stats := s.Store.Stats()
 	writeJSON(w, http.StatusOK, map[string]any{
@@ -67,6 +74,27 @@ func parseQuery(r *http.Request) store.Query {
 	if v := qs.Get("since"); v != "" {
 		if t, err := time.Parse(time.RFC3339, v); err == nil {
 			q.Since = t
+		}
+	}
+	if v := qs.Get("until"); v != "" {
+		if t, err := time.Parse(time.RFC3339, v); err == nil {
+			q.Until = t
+		}
+	}
+	// around+window (issue #29) is sugar for a bounded before/after
+	// lookback centered on a timestamp -- overrides since/until if both
+	// forms are present, since specifying a center point and specifying
+	// explicit bounds are two ways of asking for the same thing.
+	if v := qs.Get("around"); v != "" {
+		if t, err := time.Parse(time.RFC3339, v); err == nil {
+			window := 5 * time.Minute
+			if wv := qs.Get("window"); wv != "" {
+				if d, err := time.ParseDuration(wv); err == nil {
+					window = d
+				}
+			}
+			q.Since = t.Add(-window)
+			q.Until = t.Add(window)
 		}
 	}
 	if v := qs.Get("sinceId"); v != "" {

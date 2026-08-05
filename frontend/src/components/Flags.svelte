@@ -5,8 +5,29 @@
   // acting on traffic itself.
   import { flagsState } from '../lib/flags.svelte'
   import { appState } from '../lib/state.svelte'
-  import { formatHM } from '../lib/format'
+  import { formatHM, countryFlag } from '../lib/format'
+  import ReputationDetails from './ReputationDetails.svelte'
   import type { Flag, FlagType } from '../lib/types'
+
+  let expandedId: string | null = $state(null)
+
+  function toggleExpanded(id: string) {
+    expandedId = expandedId === id ? null : id
+  }
+
+  // Only true when there's actually something beyond `detail` to show --
+  // avoids a dead "Details" button on flags with nothing extra (most
+  // global_spike/rule_spike flags, or any flag when no reputation key is
+  // configured).
+  function hasExpandableDetail(f: Flag): boolean {
+    return (
+      !!f.country ||
+      !!f.reputation ||
+      !!f.evidence?.ports?.length ||
+      !!f.evidence?.hosts?.length ||
+      !!f.evidence?.nat
+    )
+  }
 
   const TYPE_LABELS: Record<FlagType, string> = {
     port_scan: 'Port scan',
@@ -18,6 +39,7 @@
     internal_recon: 'Internal reconnaissance',
     rule_spike: 'Rule hit-rate spike',
     repeated_drops: 'Repeated drops on a port',
+    low_slow_scan: 'Low-and-slow port scan',
   }
 
   const active = $derived(flagsState.list.filter((f) => !f.cleared))
@@ -40,6 +62,7 @@
       case 'critical_port':
       case 'outbound_anomaly':
       case 'internal_recon':
+      case 'low_slow_scan':
         appState.setFilter('ip', f.target)
         break
       case 'distributed_brute_force':
@@ -98,13 +121,49 @@
               {:else}
                 <span class="target target-global">network-wide</span>
               {/if}
+              {#if f.country}
+                <span class="country" title={f.country}>{countryFlag(f.country)}</span>
+              {/if}
             </div>
             <p class="detail">{f.detail}</p>
             <div class="meta">
               <span>first seen {formatHM(f.firstSeen)}</span>
               <span>last seen {formatHM(f.lastSeen)}</span>
               <span>fired {f.count}×</span>
+              {#if hasExpandableDetail(f)}
+                <button class="details-toggle" onclick={() => toggleExpanded(f.id)}>
+                  {expandedId === f.id ? 'Hide details' : 'Details'}
+                </button>
+              {/if}
             </div>
+            {#if expandedId === f.id}
+              <div class="expanded">
+                {#if f.evidence?.ports?.length}
+                  <div class="ev-row">
+                    <span class="ev-label">Ports touched</span>
+                    <span class="ev-value">{f.evidence.ports.join(', ')}</span>
+                  </div>
+                {/if}
+                {#if f.evidence?.hosts?.length}
+                  <div class="ev-row">
+                    <span class="ev-label">Hosts involved</span>
+                    <span class="ev-value">{f.evidence.hosts.join(', ')}</span>
+                  </div>
+                {/if}
+                {#if f.evidence?.nat}
+                  <div class="ev-row">
+                    <span class="ev-label">NAT</span>
+                    <span class="ev-value">
+                      {f.evidence.nat.ip}{f.evidence.nat.port ? `:${f.evidence.nat.port}` : ''}
+                      {#if f.evidence.nat.raw}<br /><span class="ev-raw">{f.evidence.nat.raw}</span>{/if}
+                    </span>
+                  </div>
+                {/if}
+                {#if f.reputation}
+                  <ReputationDetails result={f.reputation} />
+                {/if}
+              </div>
+            {/if}
             <button class="clear" onclick={() => clear(f.id)}>Clear</button>
           </li>
         {/each}
@@ -250,11 +309,64 @@
     color: var(--fg-muted);
   }
 
+  .country {
+    font-size: 14px;
+  }
+
   .meta {
     margin-top: 6px;
     display: flex;
+    align-items: center;
     gap: 12px;
     font-size: 12px;
+    color: var(--fg-dim);
+  }
+
+  .details-toggle {
+    background: transparent;
+    border: none;
+    color: var(--accent);
+    padding: 0;
+    font-size: 12px;
+    text-decoration: underline;
+    text-decoration-color: transparent;
+  }
+
+  .details-toggle:hover {
+    text-decoration-color: currentColor;
+  }
+
+  .expanded {
+    margin-top: 8px;
+    padding-top: 8px;
+    border-top: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+
+  .ev-row {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 10px;
+    font-size: 13px;
+  }
+
+  .ev-label {
+    color: var(--fg-muted);
+    flex: none;
+  }
+
+  .ev-value {
+    color: var(--fg);
+    text-align: right;
+    overflow-wrap: anywhere;
+    font-family: var(--font-mono);
+  }
+
+  .ev-raw {
+    font-size: 11px;
     color: var(--fg-dim);
   }
 

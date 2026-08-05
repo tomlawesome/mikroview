@@ -1,6 +1,7 @@
 <script lang="ts">
   import { appState } from '../lib/state.svelte'
   import { flagsState } from '../lib/flags.svelte'
+  import { detectorSettingsState } from '../lib/detectorSettings.svelte'
   import { authState } from '../lib/auth.svelte'
   import { formatEps } from '../lib/format'
   import { themeState } from '../lib/theme.svelte'
@@ -84,6 +85,14 @@
     </button>
 
     <button
+      class:active={appState.view === 'control-ports'}
+      onclick={() => (appState.view = appState.view === 'control-ports' ? 'live' : 'control-ports')}
+      title="SSH/Telnet/control-port attempts, accepted and denied"
+    >
+      Control ports
+    </button>
+
+    <button
       class:active={flagsState.open}
       onclick={() => (flagsState.open = !flagsState.open)}
       title="Behavioral flags: port scans, activity spikes, critical-port attempts, and volume spikes"
@@ -103,12 +112,27 @@
       {modeLabels[themeState.pref]}
     </button>
 
+    {#if authState.state === 'authenticated' && authState.role === 'admin'}
+      <button onclick={() => (authState.showAddUser = true)} title="Create an additional account">
+        Add user
+      </button>
+    {/if}
+    {#if (authState.state === 'authenticated' && authState.role === 'admin') || authState.state === 'auth-disabled'}
+      <!-- The backend's callerIsAdminOrOpen treats Count()==0 (true in
+           auth-disabled, since Disable only succeeds pre-account) as
+           admin-equivalent for this endpoint -- matching that here
+           rather than hiding a control that would actually work. -->
+      <button
+        onclick={() => {
+          detectorSettingsState.open = true
+          detectorSettingsState.refresh()
+        }}
+        title="Toggle behavioral detectors on/off and restrict their scope"
+      >
+        Detectors
+      </button>
+    {/if}
     {#if authState.state === 'authenticated'}
-      {#if authState.role === 'admin'}
-        <button onclick={() => (authState.showAddUser = true)} title="Create an additional account">
-          Add user
-        </button>
-      {/if}
       <button onclick={() => authState.logout()} title="Sign out {authState.username}">
         Sign out ({authState.username})
       </button>
