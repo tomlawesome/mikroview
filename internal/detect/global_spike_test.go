@@ -106,6 +106,78 @@ func TestGlobalSpikeDisabledNeverFires(t *testing.T) {
 	}
 }
 
+// TestGlobalSpikeFlagsCarryConfidence covers issue #59: the flag itself
+// should carry a non-nil confidence score (the same z-score-against-EMA
+// approach host_baseline.go uses), without changing when a flag fires
+// (see the other tests in this file for that -- unchanged).
+func TestGlobalSpikeFlagsCarryConfidence(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.GlobalSpikeMultiplier = 4
+	cfg.GlobalSpikeMinEPS = 5
+	cfg.GlobalSpikeWarmupSamples = 20
+	g, fs := newTestGlobalSpike(t, cfg)
+
+	now := time.Now()
+	g.Check(10, now) // primes baseline at 10
+
+	g.Check(60, now.Add(time.Second)) // 6x baseline, well above minimum
+	list := fs.List()
+	if len(list) != 1 {
+		t.Fatalf("expected exactly one flag, got %+v", list)
+	}
+	if list[0].Confidence == nil {
+		t.Fatal("expected the global_spike flag to carry a confidence score, got nil")
+	}
+	if *list[0].Confidence < 0 || *list[0].Confidence > 100 {
+		t.Errorf("expected confidence in [0, 100], got %d", *list[0].Confidence)
+	}
+}
+
+// TestGlobalSpikeConfidenceGrowsWithSampleHistory confirms the history
+// component actually moves the score: an identical relative spike
+// should read as more confident once the baseline has more samples
+// behind it, all else equal.
+func TestGlobalSpikeConfidenceGrowsWithSampleHistory(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.GlobalSpikeMultiplier = 4
+	cfg.GlobalSpikeMinEPS = 5
+	cfg.GlobalSpikeWarmupSamples = 20
+	g, fs := newTestGlobalSpike(t, cfg)
+
+	now := time.Now()
+	g.Check(10, now) // primes baseline, sampleCount=1
+
+	// A handful of steady readings to build some variance/history
+	// without letting the baseline drift far from 10.
+	for i := 0; i < 3; i++ {
+		g.Check(10, now.Add(time.Duration(i+1)*time.Second))
+	}
+	g.Check(60, now.Add(4*time.Second)) // spike with a short history
+	early := fs.List()
+	if len(early) != 1 || early[0].Confidence == nil {
+		t.Fatalf("expected one confident flag from the early spike, got %+v", early)
+	}
+	earlyConfidence := *early[0].Confidence
+
+	// Fresh detector, same spike, but with a much longer steady history
+	// first.
+	g2, fs2 := newTestGlobalSpike(t, cfg)
+	g2.Check(10, now)
+	for i := 0; i < 19; i++ {
+		g2.Check(10, now.Add(time.Duration(i+1)*time.Second))
+	}
+	g2.Check(60, now.Add(20*time.Second))
+	late := fs2.List()
+	if len(late) != 1 || late[0].Confidence == nil {
+		t.Fatalf("expected one confident flag from the late spike, got %+v", late)
+	}
+	lateConfidence := *late[0].Confidence
+
+	if lateConfidence <= earlyConfidence {
+		t.Errorf("expected more sample history to read as more confident for an equivalent spike: early=%d, late=%d", earlyConfidence, lateConfidence)
+	}
+}
+
 func TestGlobalSpikeReenableRePrimesRatherThanFlaggingImmediately(t *testing.T) {
 	cfg := DefaultConfig()
 	cfg.GlobalSpikeMultiplier = 4
