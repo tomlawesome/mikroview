@@ -1,0 +1,179 @@
+// Package oidc is mikroview's OIDC/SSO relying-party layer: provider
+// discovery, the Authorization Code + PKCE flow, and ID token
+// verification. Protocol-only and provider-agnostic -- it knows nothing
+// about mikroview's own User/Session model (see internal/auth for the
+// identity storage and JIT-provisioning side of issue #43). Nothing
+// here assumes local auth doesn't exist; this is a strictly additive
+// integration on top of it.
+package oidc
+
+import (
+	"context"
+	"crypto/subtle"
+	"fmt"
+
+	"github.com/coreos/go-oidc/v3/oidc"
+	"golang.org/x/oauth2"
+)
+
+// Config holds the settings needed to talk to one OIDC provider --
+// sourced from internal/config.OIDC, kept as plain fields here (not
+// importing internal/config) for the same dependency-direction reason
+// internal/detect.Config duplicates internal/config's own thresholds
+// rather than importing it: this package stays a leaf.
+type Config struct {
+	IssuerURL    string
+	ClientID     string
+	ClientSecret string
+	RedirectURL  string
+	Scopes       []string
+}
+
+// Identity is the only data mikroview trusts out of a verified ID
+// token. Issuer+Subject are the immutable identity key (see
+// internal/auth.Store.FindOrCreateOIDCUser) -- Email/PreferredUsername
+// are display hints only, never used to match an existing account.
+type Identity struct {
+	Issuer            string
+	Subject           string
+	Nonce             string
+	Email             string
+	EmailVerified     bool
+	PreferredUsername string
+}
+
+// Client is a configured connection to one OIDC provider -- discovery
+// (the .well-known document + JWKS) happens once, in New, not per
+// request.
+type Client struct {
+	oauth2Config oauth2.Config
+	verifier     *oidc.IDTokenVerifier
+}
+
+// New performs provider discovery and builds a Client ready to start
+// login flows. Fails if the issuer's .well-known/openid-configuration
+// document can't be fetched/parsed -- callers should treat this the
+// same as any other optional-integration startup failure (see
+// main.go), not crash the whole process over it.
+func New(ctx context.Context, cfg Config) (*Client, error) {
+	provider, err := oidc.NewProvider(ctx, cfg.IssuerURL)
+	if err != nil {
+		return nil, fmt.Errorf("oidc: discovering provider at %s: %w", cfg.IssuerURL, err)
+	}
+
+	scopes := cfg.Scopes
+	if len(scopes) == 0 {
+		scopes = []string{oidc.ScopeOpenID, "profile", "email"}
+	} else {
+		hasOpenID := false
+		for _, s := range scopes {
+			if s == oidc.ScopeOpenID {
+				hasOpenID = true
+				break
+			}
+		}
+		if !hasOpenID {
+			scopes = append([]string{oidc.ScopeOpenID}, scopes...)
+		}
+	}
+
+	return &Client{
+		oauth2Config: oauth2.Config{
+			ClientID:     cfg.ClientID,
+			ClientSecret: cfg.ClientSecret,
+			RedirectURL:  cfg.RedirectURL,
+			Endpoint:     provider.Endpoint(),
+			Scopes:       scopes,
+		},
+		// SupportedSigningAlgs is set explicitly to an asymmetric-only
+		// allowlist -- go-oidc already defaults to RS256-only if left
+		// unset, but this stays explicit and auditable in mikroview's
+		// own code rather than implied by a library default a future
+		// dependency bump could silently change, and covers Authentik
+		// deployments configured for ES256 as well as the RS256
+		// default. HS256 and "none" are never accepted under any
+		// circumstance -- this is the algorithm-confusion defense.
+		verifier: provider.Verifier(&oidc.Config{
+			ClientID:             cfg.ClientID,
+			SupportedSigningAlgs: []string{oidc.RS256, oidc.ES256, oidc.PS256},
+		}),
+	}, nil
+}
+
+// AuthCodeURL builds the URL to redirect the browser to for login --
+// state is an opaque CSRF token, nonce defends against ID token
+// replay, and codeVerifier is the PKCE verifier (its S256 challenge is
+// derived automatically by oauth2.S256ChallengeOption). Callers must
+// persist all three (see FlowState/StateCodec) and compare them
+// against what comes back from Exchange/VerifyIDToken.
+func (c *Client) AuthCodeURL(state, nonce, codeVerifier string) string {
+	return c.oauth2Config.AuthCodeURL(state,
+		oidc.Nonce(nonce),
+		oauth2.S256ChallengeOption(codeVerifier),
+	)
+}
+
+// Exchange trades an authorization code for tokens, presenting
+// codeVerifier so the provider can confirm it matches the challenge
+// sent in AuthCodeURL -- the actual PKCE proof-of-possession check.
+func (c *Client) Exchange(ctx context.Context, code, codeVerifier string) (*oauth2.Token, error) {
+	tok, err := c.oauth2Config.Exchange(ctx, code, oauth2.VerifierOption(codeVerifier))
+	if err != nil {
+		return nil, fmt.Errorf("oidc: exchanging authorization code: %w", err)
+	}
+	return tok, nil
+}
+
+// ErrNoIDToken is returned by VerifyIDToken if the token response has
+// no id_token field at all -- a malformed/non-compliant provider
+// response, not a normal failure mode.
+var ErrNoIDToken = fmt.Errorf("oidc: token response contained no id_token")
+
+// VerifyIDToken extracts and cryptographically verifies tok's ID token
+// (signature against the provider's JWKS, issuer, audience, and
+// expiry -- see New's SupportedSigningAlgs for the accepted algorithm
+// allowlist) and returns the claims mikroview trusts. Callers MUST
+// separately compare the returned Identity.Nonce against the nonce
+// generated for this flow (see VerifyNonce) -- go-oidc's Verify does
+// not check nonce itself, and neither does this method, since the
+// expected value is only known to whoever holds the flow state.
+func (c *Client) VerifyIDToken(ctx context.Context, tok *oauth2.Token) (*Identity, error) {
+	raw, ok := tok.Extra("id_token").(string)
+	if !ok || raw == "" {
+		return nil, ErrNoIDToken
+	}
+
+	idToken, err := c.verifier.Verify(ctx, raw)
+	if err != nil {
+		return nil, fmt.Errorf("oidc: verifying id_token: %w", err)
+	}
+
+	var claims struct {
+		Email             string `json:"email"`
+		EmailVerified     bool   `json:"email_verified"`
+		PreferredUsername string `json:"preferred_username"`
+	}
+	if err := idToken.Claims(&claims); err != nil {
+		return nil, fmt.Errorf("oidc: decoding id_token claims: %w", err)
+	}
+
+	return &Identity{
+		Issuer:            idToken.Issuer,
+		Subject:           idToken.Subject,
+		Nonce:             idToken.Nonce,
+		Email:             claims.Email,
+		EmailVerified:     claims.EmailVerified,
+		PreferredUsername: claims.PreferredUsername,
+	}, nil
+}
+
+// VerifyNonce reports whether got matches want using a constant-time
+// comparison -- called by internal/api's OIDC callback handler after
+// VerifyIDToken, comparing Identity.Nonce against the FlowState.Nonce
+// stored for this login attempt. Not a secret-equality check in the
+// cryptographic sense (the nonce isn't confidential), but consistent
+// with how every other compare-then-branch security check in this
+// codebase is written, and cheap enough that there's no reason not to.
+func VerifyNonce(got, want string) bool {
+	return subtle.ConstantTimeCompare([]byte(got), []byte(want)) == 1
+}
