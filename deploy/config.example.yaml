@@ -55,6 +55,28 @@ store:
 #   ruleSpikeWindow: 60s
 #   repeatedDropsThreshold: 10
 #   repeatedDropsWindow: 15m
+#   hostActivityMultiplier: 3
+#   hostActivityWarmupSamples: 20
+
+# Optional: friendly display names shown in place of a raw RouterOS rule
+# label (e.g. "r13") or a raw host IP, everywhere they appear in the UI
+# and CSV export. Filtering/grouping still uses the raw value -- these
+# are display-only. See docs/configuration.md.
+# ruleNames:
+#   r13: "Block known scanners"
+# hostNames:
+#   192.168.1.50: "Living room NAS"
+
+# Optional: local authentication. Mikroview stays fully open (today's
+# behavior) until you create the first account through the web UI --
+# storePath must be set (and its volume mounted, see
+# deploy/docker-compose.yml) before you do, or account creation is
+# refused rather than creating one that vanishes on restart. See
+# SECURITY.md and docs/configuration.md's "Authentication" section.
+# auth:
+#   storePath: /var/lib/mikroview/users.json
+#   secureCookie: false
+#   sessionTTL: 24h
 
 # Devices are matched by the syslog source IP mikroview sees them from.
 # Sources not listed here still appear in the UI, auto-discovered and

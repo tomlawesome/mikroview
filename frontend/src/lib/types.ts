@@ -8,6 +8,10 @@ export interface FirewallEvent {
   sourceIp: string
   action: Action
   ruleLabel: string
+  // ruleName is a user-configured friendly display name for ruleLabel
+  // (see docs/configuration.md's "Friendly names") -- undefined if none
+  // is configured. ruleLabel stays the raw value for filtering/grouping.
+  ruleName?: string
   chain: string
   inInterface?: string
   outInterface?: string
@@ -18,6 +22,10 @@ export interface FirewallEvent {
   srcPort?: number
   dstIp?: string
   dstPort?: number
+  // srcHostName/dstHostName are the same friendly-name relationship as
+  // ruleName, but for srcIp/dstIp.
+  srcHostName?: string
+  dstHostName?: string
   natIp?: string
   natPort?: number
   natRaw?: string
@@ -82,6 +90,14 @@ export interface Stats {
   connectedClients: number
 }
 
+// Mirrors internal/api/auth.go's sessionResponse.
+export interface AuthSession {
+  setupRequired: boolean
+  authenticated: boolean
+  username?: string
+  role?: 'admin' | 'user'
+}
+
 // Mirrors internal/reputation/reputation.go's Result.
 export interface ReputationResult {
   ip: string
@@ -117,6 +133,11 @@ export interface Flag {
   lastSeen: string
   cleared: boolean
   clearedAt?: string
+  // 0-100, present only for detectors that make a statistical judgment
+  // call rather than a deterministic threshold crossing (currently just
+  // activity_spike's per-host baseline) -- absent means "not scored," not
+  // "zero confidence."
+  confidence?: number
 }
 
 // Mirrors internal/store's Scope.

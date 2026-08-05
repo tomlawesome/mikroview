@@ -82,6 +82,55 @@ Unconfigured, the feature still works with Shodan-only results; private/
 loopback/link-local addresses are rejected server-side regardless of
 configuration.
 
+## Port lookup
+
+Clicking the "i" affordance next to a source/destination port shows what
+that port is commonly used for (`frontend/src/lib/commonPorts.ts`) --
+standard/well-known services, common databases, common self-hosted apps,
+remote access, VPN, messaging, and a few ports historically associated
+with malware/backdoors. Unlike the IP lookup above, this is pure local
+static data with no network call: only shown for ports with a known
+entry, and there's no way to configure or disable it.
+
+It's a curated reference, not an exhaustive IANA registry dump -- if a
+port you care about is missing, add an entry to `commonPorts.ts`.
+
+**`tools/docker-ports/list-exposed-ports.sh`** is a separate, standalone
+companion script (not part of the running app) for self-hosters: run it
+directly on a Docker host to list every running container's published
+ports, flagging which are bound to a public interface (`0.0.0.0`/`::`)
+versus loopback-only (`127.0.0.1`/`::1`) -- useful for cross-referencing
+"what does mikroview say this port usually is" against "what's actually
+listening on it, on this host."
+
+## Friendly names (optional)
+
+RouterOS auto-generates a rule identifier (e.g. `r13`) in the log line
+when a firewall rule has no `comment=` set, and every host only ever
+shows up as a raw IP. `config.yaml`'s `ruleNames`/`hostNames` maps let
+you give either a friendly display name, shown in place of the raw value
+everywhere it appears (live table, CSV export) -- the raw value (rule
+label, IP) is always still what filtering, grouping, and the hover
+tooltip use, this is display-only.
+
+```yaml
+ruleNames:
+  r13: "Block known scanners"
+hostNames:
+  192.168.1.50: "Living room NAS"
+```
+
+Both are YAML-only (like `devices`) rather than env-var-configurable --
+a map doesn't translate cleanly to an env var without an awkward
+numbered-key scheme, the same reasoning `devices` already follows. A
+rule or host not listed still displays exactly as it does today (the
+raw label/IP), so this is purely additive.
+
+Setting a `comment=` on the rule in RouterOS itself is the more durable
+fix for rule names specifically, if you're able to -- `ruleNames` is for
+when you can't or don't want to edit RouterOS config directly, or want a
+different name in mikroview than the RouterOS comment.
+
 ## Behavioral flags (optional, on by default)
 
 mikroview watches the ingested event stream for a small set of patterns
@@ -96,6 +145,15 @@ is actually good at spotting.
 Detection itself is always on and needs no configuration; every
 threshold below has a sensible default and is only worth changing for an
 unusually quiet or unusually busy network.
+
+The port-scan, activity-spike, critical-port, distributed-brute-force,
+internal-recon, and outbound-anomaly detectors only count events whose
+RouterOS-reported connection state is `new` (or absent, for setups that
+don't log connection state at all) -- if your ruleset logs both
+directions of an established connection on the same rule, a busy host's
+ordinary return traffic would otherwise look identical to new connection
+attempts and trigger false positives purely from being legitimately
+busy.
 
 ```yaml
 flags:
@@ -120,6 +178,8 @@ flags:
   ruleSpikeWindow: 60s
   repeatedDropsThreshold: 10
   repeatedDropsWindow: 15m
+  hostActivityMultiplier: 3
+  hostActivityWarmupSamples: 20
 ```
 
 - **`storePath`** — where raised/cleared flags are persisted, as a small
@@ -133,11 +193,20 @@ flags:
 - **Port scan** — one source touching `portScanThreshold`+ distinct
   destination ports within `portScanWindow`. Applies to any source,
   internal or external.
-- **Activity spike** — one source generating `activitySpikeThreshold`+
-  events within `activitySpikeWindow`. A simple absolute threshold
-  rather than a per-source historical baseline, deliberately — it's far
-  less state to keep and easy to reason about; tune the threshold to
-  your own network's normal volume if the default doesn't fit.
+- **Activity spike** — one source's own event rate vs. a slow-moving
+  baseline *of that specific host* (same EMA technique the global-spike
+  and rule-spike detectors use, just scoped per source), at
+  `hostActivityMultiplier`× or more, and still gated by an absolute
+  floor of `activitySpikeThreshold`+ events within `activitySpikeWindow`
+  so a nearly-idle host doesn't "spike" from one extra event. A host
+  that's always busy is judged against its own normal rather than one
+  number applied to every host equally — fixes the false-positive
+  pattern where a legitimately busy server (e.g. a database with many
+  clients) got flagged just for being itself. `hostActivityWarmupSamples`
+  is how many observations a host needs before a flag can reach full
+  confidence (see below) — a brand-new source with almost no history
+  can't produce a high-confidence flag no matter how extreme its first
+  few readings look.
 - **Critical-port attempts** — `criticalPortThreshold`+ attempts against
   one of `criticalPorts` within `criticalPortWindow`, from an *external*
   source only (a LAN device reaching your own router's Winbox port is
@@ -188,11 +257,79 @@ flags:
   than necessarily an attack, so treat it as "worth a look," not
   "critical."
 
+**Confidence score.** The activity-spike detector (currently the only
+one making a statistical judgment call rather than a deterministic
+threshold crossing) attaches a `confidence` percentage to each flag it
+raises, shown in the UI as e.g. "73% confidence". It's deliberately not
+a black-box number: it combines (1) how much history backs the host's
+baseline and (2) how far the current reading deviates from it, and the
+flag's own detail text spells out the actual baseline value, observed
+value, and sample count behind the score — mikroview's job is to put
+that information in front of you, not to make the call for you. Flags
+from every other detector have no `confidence` field at all (`null` in
+`GET /api/flags`) rather than an implied 100% — a plain threshold
+crossing is exactly as trustworthy as the count it reports, so a
+percentage there would be noise.
+
 A flag is raised once per (detector, source) pair and updated in place
 on re-firing (count/last-seen bumped, not duplicated) until a human
 clears it via the UI or `POST /api/flags/{id}/clear`. Clearing an
 already-active-again source re-raises it as a fresh entry rather than
 silently resurrecting the old one.
+
+## Authentication (optional, opt-in by creating an account)
+
+Mikroview stays fully open -- today's behavior -- until you create the
+first account. The moment one exists, every request except
+`GET /api/healthz` requires a valid session, permanently, from then on.
+See [SECURITY.md](../SECURITY.md) for the full threat-model writeup;
+this section is the configuration reference.
+
+```yaml
+auth:
+  storePath: "/var/lib/mikroview/users.json"
+  secureCookie: false
+  sessionTTL: 24h
+```
+
+- **`storePath`** — where accounts are persisted, as a small JSON file
+  (usernames + Argon2id password hashes, never plaintext). Unlike
+  `flags.storePath`, this is not optional once you create an account:
+  mikroview refuses to create one without a configured, writable path,
+  since an account that doesn't survive a restart would either lock
+  everyone out or silently reopen the deployment. Mount a volume for its
+  parent directory the same way you would for flag persistence -- see
+  `deploy/docker-compose.yml`.
+- **`secureCookie`** — sets the session cookie's `Secure` flag. Off by
+  default since mikroview is very commonly run over plain HTTP on a
+  trusted LAN; turn this on once mikroview sits behind TLS.
+- **`sessionTTL`** — the idle timeout: a session's expiry slides forward
+  on each authenticated request, so this is "how long you can go without
+  activity before needing to log in again," not a fixed session
+  lifetime.
+
+**Creating the first account** is done through the web UI itself, not a
+CLI command: while no account exists, mikroview shows a one-time setup
+form instead of a login form, and whoever completes it becomes the
+admin. Don't leave mikroview reachable by more than a trusted network
+before completing this step.
+
+**Adding more accounts** afterward is admin-only, either via the "Add
+user" control in the toolbar or `POST /api/auth/users`.
+
+**Account recovery** is a CLI command, deliberately outside the web
+UI/API entirely -- container/host access is the trust anchor, so a
+locked-out admin isn't dependent on the system they're locked out of:
+
+```sh
+mikroview -list-users             # usernames + roles, no password hashes
+mikroview -reset-password admin   # prompts for a new password (no echo), twice to confirm
+```
+
+A password reset immediately invalidates every existing session for that
+account, including on an already-running server -- you don't need to
+restart mikroview after running `-reset-password` for the new password
+to take effect.
 
 ## Environment variables
 
@@ -229,12 +366,22 @@ Override individual scalar settings without a mounted file:
 | `MIKROVIEW_FLAGS_RULE_SPIKE_WINDOW` | `flags.ruleSpikeWindow` |
 | `MIKROVIEW_FLAGS_REPEATED_DROPS_THRESHOLD` | `flags.repeatedDropsThreshold` |
 | `MIKROVIEW_FLAGS_REPEATED_DROPS_WINDOW` | `flags.repeatedDropsWindow` |
+| `MIKROVIEW_FLAGS_HOST_ACTIVITY_MULTIPLIER` | `flags.hostActivityMultiplier` |
+| `MIKROVIEW_FLAGS_HOST_ACTIVITY_WARMUP_SAMPLES` | `flags.hostActivityWarmupSamples` |
+| `MIKROVIEW_AUTH_STORE_PATH` | `auth.storePath` (see [Authentication](#authentication-optional-opt-in-by-creating-an-account)) |
+| `MIKROVIEW_AUTH_SECURE_COOKIE` | `auth.secureCookie` |
+| `MIKROVIEW_AUTH_SESSION_TTL` | `auth.sessionTTL` |
 
 ## CLI flags (local development)
 
 `-syslog-udp`, `-syslog-tcp`, `-http`, `-retention`, `-max-events`,
-`-geoip-db` — see `go run . -h`. Devices can only be configured via YAML,
-not flags.
+`-geoip-db` — see `go run . -h`. Devices, rule/host names, and auth
+config can only be set via YAML/env, not flags.
+
+`-healthcheck`, `-list-users`, `-reset-password <username>` are
+standalone modes -- each does its one job and exits, rather than
+starting the server. See [Authentication](#authentication-optional-opt-in-by-creating-an-account)
+for the latter two.
 
 ## API reference
 
@@ -248,6 +395,18 @@ not flags.
 | `GET /api/lookup/ip/{ip}` | on-demand reputation/threat-intel lookup for one public IP (see [IP reputation lookup](#ip-reputation-lookup-optional)) |
 | `GET /api/flags` | active + cleared behavioral flags (see [Behavioral flags](#behavioral-flags-optional-on-by-default)) |
 | `POST /api/flags/{id}/clear` | mark one flag as cleared |
+| `GET /api/auth/session` | current auth state (setup-required / authenticated / not) -- always 200, never gated |
+| `POST /api/auth/register` | create the first (admin) account -- only while zero accounts exist |
+| `POST /api/auth/login` | sign in, sets the session cookie |
+| `POST /api/auth/logout` | sign out, clears the session cookie |
+| `POST /api/auth/users` | admin-only: create an additional account |
+
+Every route above `/api/auth/session`/`/register`/`/login`/`/logout` and
+`/api/healthz` requires a valid session once an account exists -- see
+[Authentication](#authentication-optional-opt-in-by-creating-an-account).
+Every mutating (`POST`) request also requires an
+`X-Requested-With: mikroview` header once an account exists (a CSRF
+mitigation, see SECURITY.md).
 
 `/api/events` query parameters: `device`, `action` (`accept`/`drop`/
 `reject`/`log`/`unknown`), `protocol`, `chain`, `interface`, `ip` (exact

@@ -70,6 +70,18 @@ type Config struct {
 	// framed as "worth a look," not "critical," in the UI.
 	RepeatedDropsThreshold int
 	RepeatedDropsWindow    time.Duration
+
+	// HostActivityMultiplier+WarmupSamples: per-host adaptive baseline for
+	// activity-spike, replacing a single fixed threshold with each
+	// source's own EMA baseline (same technique GlobalSpikeMultiplier
+	// uses network-wide -- see host_baseline.go). ActivitySpikeThreshold
+	// above still applies as an absolute floor: a host's rate must clear
+	// both its own baseline by this multiple *and* the floor, so a nearly
+	// idle host doesn't "spike" from one extra event. WarmupSamples is
+	// how many observations a host needs before a flag can reach full
+	// confidence -- see Flag.Confidence.
+	HostActivityMultiplier   float64
+	HostActivityWarmupSamples int
 }
 
 // DefaultConfig returns sensible defaults for a home/small-office
@@ -105,6 +117,9 @@ func DefaultConfig() Config {
 
 		RepeatedDropsThreshold: 10,
 		RepeatedDropsWindow:    15 * time.Minute,
+
+		HostActivityMultiplier:    3,
+		HostActivityWarmupSamples: 20,
 	}
 }
 
@@ -125,6 +140,15 @@ type sample struct {
 type sourceWindow struct {
 	samples      []sample
 	lastActivity time.Time
+
+	// Per-host activity baseline (see host_baseline.go): an EMA mean and
+	// variance of this source's own event rate, primed on first sight
+	// rather than compared against anything until there's a prior value
+	// to compare to.
+	baseline    float64
+	variance    float64
+	primed      bool
+	sampleCount int
 }
 
 // Detector tracks per-source rolling-window state for the port-scan,
@@ -194,6 +218,9 @@ func (d *Detector) Observe(e store.Event) {
 }
 
 func (d *Detector) observeScanAndSpike(e store.Event, now time.Time) {
+	if !isTrackableConnState(e) {
+		return
+	}
 	w, ok := d.perSource[e.SrcIP]
 	if !ok {
 		if len(d.perSource) >= maxTrackedSources {
@@ -236,10 +263,7 @@ func (d *Detector) observeScanAndSpike(e store.Event, now time.Time) {
 		}
 	}
 
-	if spikeCount >= d.cfg.ActivitySpikeThreshold {
-		d.fs.Add(flags.TypeActivitySpike, e.SrcIP,
-			fmt.Sprintf("%d events in %s", spikeCount, d.cfg.ActivitySpikeWindow), now)
-	}
+	d.checkHostActivityBaseline(w, e.SrcIP, spikeCount, now)
 	if len(distinctPorts) >= d.cfg.PortScanThreshold {
 		d.fs.Add(flags.TypePortScan, e.SrcIP,
 			fmt.Sprintf("%d distinct destination ports in %s", len(distinctPorts), d.cfg.PortScanWindow), now)
@@ -247,6 +271,9 @@ func (d *Detector) observeScanAndSpike(e store.Event, now time.Time) {
 }
 
 func (d *Detector) observeCriticalPort(e store.Event, now time.Time) {
+	if !isTrackableConnState(e) {
+		return
+	}
 	hits, ok := d.criticalHits[e.SrcIP]
 	if !ok && len(d.criticalHits) >= maxTrackedSources {
 		d.evictOldestCriticalSource()
@@ -306,6 +333,22 @@ func isCriticalPort(ports []int, p int) bool {
 		}
 	}
 	return false
+}
+
+// isTrackableConnState reports whether e should count toward the scan/
+// spike/recon/critical-port/distributed-brute-force detectors below.
+// RouterOS commonly logs both directions of an established connection on
+// a single stateful accept rule -- without this filter, a busy server's
+// ordinary *return* traffic (many distinct client ephemeral ports, many
+// distinct clients) trivially crosses thresholds meant to catch new
+// connection attempts, producing false positives on any host that's just
+// legitimately busy (see the flag detail these detectors' Add calls
+// write, and mikroview issue #35). Empty ConnState -- a log line without
+// one, or one routeros.Parse couldn't recognize -- is treated as
+// trackable rather than discarded, so setups that don't log connection
+// state at all keep today's behavior.
+func isTrackableConnState(e store.Event) bool {
+	return e.ConnState == "" || e.ConnState == "new"
 }
 
 // isPublic mirrors the same small check internal/geoip and

@@ -1,6 +1,7 @@
 <script lang="ts">
   import { appState } from '../lib/state.svelte'
   import { flagsState } from '../lib/flags.svelte'
+  import { authState } from '../lib/auth.svelte'
   import { formatEps } from '../lib/format'
   import { themeState } from '../lib/theme.svelte'
   import { retentionState, MAX_AGE_OPTIONS } from '../lib/retention.svelte'
@@ -27,54 +28,56 @@
   <DeviceStatus />
 
   <div class="controls">
-    {#if appState.stats}
-      <span class="eps" title="Events per second (10s rolling average)">
-        {formatEps(appState.stats.eventsPerSecond)}/s
-      </span>
+    {#if appState.view === 'live'}
+      {#if appState.stats}
+        <span class="eps" title="Events per second (10s rolling average)">
+          {formatEps(appState.stats.eventsPerSecond)}/s
+        </span>
+      {/if}
+
+      <select
+        value={retentionState.maxAgeSeconds === null ? 'null' : String(retentionState.maxAgeSeconds)}
+        onchange={onMaxAgeChange}
+        title="How long events stay visible in the live view"
+        aria-label="Display duration"
+      >
+        {#each MAX_AGE_OPTIONS as opt (opt.value)}
+          <option value={opt.value === null ? 'null' : String(opt.value)}>{opt.label}</option>
+        {/each}
+      </select>
+
+      <button
+        class:active={appState.autoscroll}
+        onclick={() => (appState.autoscroll = !appState.autoscroll)}
+        title="Auto-scroll to newest events"
+      >
+        Autoscroll
+      </button>
+
+      <button
+        class:active={appState.paused}
+        onclick={() => appState.togglePause()}
+        title={appState.paused ? 'Resume live updates' : 'Pause live updates'}
+      >
+        {appState.paused ? `Resume${appState.pendingCount ? ` (${appState.pendingCount})` : ''}` : 'Pause'}
+      </button>
+
+      <button onclick={() => appState.clearBuffer()} title="Clear the local event buffer">
+        Clear
+      </button>
+
+      <button
+        onclick={() => downloadEventsCsv(appState.filteredEvents)}
+        disabled={appState.filteredEvents.length === 0}
+        title="Export the currently shown/filtered events to a CSV file"
+      >
+        Export
+      </button>
     {/if}
 
-    <select
-      value={retentionState.maxAgeSeconds === null ? 'null' : String(retentionState.maxAgeSeconds)}
-      onchange={onMaxAgeChange}
-      title="How long events stay visible in the live view"
-      aria-label="Display duration"
-    >
-      {#each MAX_AGE_OPTIONS as opt (opt.value)}
-        <option value={opt.value === null ? 'null' : String(opt.value)}>{opt.label}</option>
-      {/each}
-    </select>
-
     <button
-      class:active={appState.autoscroll}
-      onclick={() => (appState.autoscroll = !appState.autoscroll)}
-      title="Auto-scroll to newest events"
-    >
-      Autoscroll
-    </button>
-
-    <button
-      class:active={appState.paused}
-      onclick={() => appState.togglePause()}
-      title={appState.paused ? 'Resume live updates' : 'Pause live updates'}
-    >
-      {appState.paused ? `Resume${appState.pendingCount ? ` (${appState.pendingCount})` : ''}` : 'Pause'}
-    </button>
-
-    <button onclick={() => appState.clearBuffer()} title="Clear the local event buffer">
-      Clear
-    </button>
-
-    <button
-      onclick={() => downloadEventsCsv(appState.filteredEvents)}
-      disabled={appState.filteredEvents.length === 0}
-      title="Export the currently shown/filtered events to a CSV file"
-    >
-      Export
-    </button>
-
-    <button
-      class:active={appState.dashboardOpen}
-      onclick={() => (appState.dashboardOpen = !appState.dashboardOpen)}
+      class:active={appState.view === 'metrics'}
+      onclick={() => (appState.view = appState.view === 'metrics' ? 'live' : 'metrics')}
       title="Event charts and traffic breakdowns"
     >
       Metrics
@@ -99,6 +102,17 @@
     >
       {modeLabels[themeState.pref]}
     </button>
+
+    {#if authState.state === 'authenticated'}
+      {#if authState.role === 'admin'}
+        <button onclick={() => (authState.showAddUser = true)} title="Create an additional account">
+          Add user
+        </button>
+      {/if}
+      <button onclick={() => authState.logout()} title="Sign out {authState.username}">
+        Sign out ({authState.username})
+      </button>
+    {/if}
   </div>
 </header>
 

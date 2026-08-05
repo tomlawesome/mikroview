@@ -7,8 +7,10 @@
   // stays in sync with whatever filters/retention are active there.
   import { appState } from '../lib/state.svelte'
   import type { Action } from '../lib/types'
+  import { topNBy } from '../lib/topN'
   import EventsChart from './EventsChart.svelte'
   import BarList from './BarList.svelte'
+  import CustomTopTalkers from './CustomTopTalkers.svelte'
 
   const ACTION_LABELS: Record<Action, string> = {
     accept: 'Accept',
@@ -19,19 +21,6 @@
   }
 
   const TOP_N = 10
-
-  function topNBy<T>(items: T[], keyOf: (item: T) => string | undefined, n: number) {
-    const counts = new Map<string, number>()
-    for (const item of items) {
-      const key = keyOf(item)
-      if (!key) continue
-      counts.set(key, (counts.get(key) ?? 0) + 1)
-    }
-    return [...counts.entries()]
-      .sort((a, b) => b[1] - a[1])
-      .slice(0, n)
-      .map(([label, count]) => ({ label, count }))
-  }
 
   const topRuleRows = $derived(
     (appState.stats?.topRules ?? []).map((r) => ({ label: r.rule, count: r.count })),
@@ -71,6 +60,7 @@
   <BarList title="Protocol breakdown" rows={protocolRows} />
   <BarList title="Top talkers (source IP)" rows={topTalkerRows} />
   <BarList title="Event volume by device" rows={deviceRows} emptyMessage="No devices seen yet" />
+  <CustomTopTalkers />
 </div>
 
 <style>
