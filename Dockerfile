@@ -13,9 +13,15 @@ COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
 COPY --from=frontend /src/frontend/dist ./web/dist
-RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/mikroview .
+# VERSION is passed by .github/workflows/docker.yml as the short commit
+# SHA it's building from -- stamped into the binary so it can identify
+# itself at boot (see main.go's version var and logVersionAndMigration).
+# Left at its default for a plain `docker build` with no --build-arg,
+# which falls back to main.go's own "dev" default.
+ARG VERSION=dev
+RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w -X main.version=${VERSION}" -o /out/mikroview .
 # Every optional persistence path (flags/detector-settings/auth/TLS --
-# see internal/config's defaultDataDir) defaults under here, so it needs
+# see internal/config's DefaultDataDir) defaults under here, so it needs
 # to exist and be owned by the runtime user out of the box. Created here
 # rather than in the final stage: distroless has no shell, so it has no
 # way to run `mkdir` itself -- this empty, correctly-owned directory is

@@ -28,8 +28,12 @@ type Config struct {
 	CriticalPorts          []int
 	CriticalPortThreshold  int
 	CriticalPortWindow     time.Duration
-	GlobalSpikeMultiplier  float64
-	GlobalSpikeMinEPS      float64
+	GlobalSpikeMultiplier float64
+	GlobalSpikeMinEPS     float64
+	// GlobalSpikeWarmupSamples: how many Check() calls the network-wide
+	// EMA baseline needs before a flag can reach full confidence -- same
+	// role as HostActivityWarmupSamples, see Flag.Confidence.
+	GlobalSpikeWarmupSamples int
 
 	// DistributedBruteForceThreshold+Window: the inverse of the
 	// critical-port detector -- many distinct external sources hitting
@@ -61,6 +65,10 @@ type Config struct {
 	RuleSpikeMultiplier float64
 	RuleSpikeMinRate    float64
 	RuleSpikeWindow     time.Duration
+	// RuleSpikeWarmupSamples: how many observations a given rule's own
+	// EMA baseline needs before a flag can reach full confidence -- same
+	// role as HostActivityWarmupSamples, see Flag.Confidence.
+	RuleSpikeWarmupSamples int
 
 	// RepeatedDropsThreshold+Window: the same (source, destination port)
 	// pair repeatedly getting dropped/rejected against a locally-hosted
@@ -130,8 +138,9 @@ func DefaultConfig() Config {
 		CriticalPorts:          []int{21, 22, 23, 445, 3389, 5900, 8291, 8728, 8729},
 		CriticalPortThreshold:  5,
 		CriticalPortWindow:     5 * time.Minute,
-		GlobalSpikeMultiplier:  4,
-		GlobalSpikeMinEPS:      5,
+		GlobalSpikeMultiplier:    4,
+		GlobalSpikeMinEPS:        5,
+		GlobalSpikeWarmupSamples: 20,
 
 		DistributedBruteForceThreshold: 10,
 		DistributedBruteForceWindow:    5 * time.Minute,
@@ -142,9 +151,10 @@ func DefaultConfig() Config {
 		InternalReconThreshold: 10,
 		InternalReconWindow:    60 * time.Second,
 
-		RuleSpikeMultiplier: 5,
-		RuleSpikeMinRate:    0.2, // events/sec -- ~12/min, below which "5x" isn't meaningful
-		RuleSpikeWindow:     60 * time.Second,
+		RuleSpikeMultiplier:    5,
+		RuleSpikeMinRate:       0.2, // events/sec -- ~12/min, below which "5x" isn't meaningful
+		RuleSpikeWindow:        60 * time.Second,
+		RuleSpikeWarmupSamples: 20,
 
 		RepeatedDropsThreshold: 10,
 		RepeatedDropsWindow:    15 * time.Minute,
