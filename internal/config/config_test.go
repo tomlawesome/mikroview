@@ -181,6 +181,47 @@ func TestLowSlowScanEnvVarsOverrideDefaults(t *testing.T) {
 	}
 }
 
+func TestNotifySMTPEnvVarsOverrideDefaults(t *testing.T) {
+	t.Setenv("MIKROVIEW_NOTIFY_BATCH_WINDOW", "15s")
+	t.Setenv("MIKROVIEW_NOTIFY_SMTP_HOST", "smtp.example.com")
+	t.Setenv("MIKROVIEW_NOTIFY_SMTP_PORT", "587")
+	t.Setenv("MIKROVIEW_NOTIFY_SMTP_USERNAME", "alerts")
+	t.Setenv("MIKROVIEW_NOTIFY_SMTP_PASSWORD", "hunter2")
+	t.Setenv("MIKROVIEW_NOTIFY_SMTP_TLS_MODE", "starttls")
+	t.Setenv("MIKROVIEW_NOTIFY_SMTP_FROM", "mikroview@example.com")
+	t.Setenv("MIKROVIEW_NOTIFY_SMTP_TO", "ops@example.com, oncall@example.com")
+
+	cfg, err := Load("", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Notify.BatchWindow != 15*time.Second {
+		t.Errorf("BatchWindow = %v, want 15s", cfg.Notify.BatchWindow)
+	}
+	if cfg.Notify.SMTP.Host != "smtp.example.com" {
+		t.Errorf("SMTP.Host = %v, want smtp.example.com", cfg.Notify.SMTP.Host)
+	}
+	if cfg.Notify.SMTP.Port != 587 {
+		t.Errorf("SMTP.Port = %v, want 587", cfg.Notify.SMTP.Port)
+	}
+	if cfg.Notify.SMTP.Username != "alerts" {
+		t.Errorf("SMTP.Username = %v, want alerts", cfg.Notify.SMTP.Username)
+	}
+	if cfg.Notify.SMTP.Password != "hunter2" {
+		t.Errorf("SMTP.Password = %v, want hunter2", cfg.Notify.SMTP.Password)
+	}
+	if cfg.Notify.SMTP.TLSMode != "starttls" {
+		t.Errorf("SMTP.TLSMode = %v, want starttls", cfg.Notify.SMTP.TLSMode)
+	}
+	if cfg.Notify.SMTP.From != "mikroview@example.com" {
+		t.Errorf("SMTP.From = %v, want mikroview@example.com", cfg.Notify.SMTP.From)
+	}
+	wantTo := []string{"ops@example.com", "oncall@example.com"}
+	if len(cfg.Notify.SMTP.To) != len(wantTo) || cfg.Notify.SMTP.To[0] != wantTo[0] || cfg.Notify.SMTP.To[1] != wantTo[1] {
+		t.Errorf("SMTP.To = %v, want %v", cfg.Notify.SMTP.To, wantTo)
+	}
+}
+
 func TestFlagsCriticalPortsMalformedEntryIgnoresWholeValue(t *testing.T) {
 	t.Setenv("MIKROVIEW_FLAGS_CRITICAL_PORTS", "22,not-a-port,3389")
 

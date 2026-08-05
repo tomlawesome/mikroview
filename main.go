@@ -21,6 +21,7 @@ import (
 	"github.com/tomlawesome/mikroview/internal/geoip"
 	"github.com/tomlawesome/mikroview/internal/hub"
 	"github.com/tomlawesome/mikroview/internal/naming"
+	"github.com/tomlawesome/mikroview/internal/notify"
 	"github.com/tomlawesome/mikroview/internal/reputation"
 	"github.com/tomlawesome/mikroview/internal/routeros"
 	"github.com/tomlawesome/mikroview/internal/store"
@@ -156,6 +157,26 @@ func main() {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+
+	// Notify (issue #30): send-only email alerting on newly-raised flags,
+	// through the operator's own external mail relay. Disabled unless a
+	// host is configured -- same "empty means off" convention as
+	// Reputation.AbuseIPDBKey/GeoIP.DBPath.
+	if cfg.Notify.SMTP.Host != "" {
+		dispatcher := notify.NewDispatcher(cfg.Notify.BatchWindow, []notify.Notifier{
+			notify.NewSMTPNotifier(notify.SMTPConfig{
+				Host:     cfg.Notify.SMTP.Host,
+				Port:     cfg.Notify.SMTP.Port,
+				Username: cfg.Notify.SMTP.Username,
+				Password: cfg.Notify.SMTP.Password,
+				TLSMode:  notify.TLSMode(cfg.Notify.SMTP.TLSMode),
+				From:     cfg.Notify.SMTP.From,
+				To:       cfg.Notify.SMTP.To,
+			}),
+		})
+		go dispatcher.Run(ctx)
+		fs.WithOnRaise(dispatcher.Enqueue)
+	}
 
 	raw := make(chan syslog.RawMessage, 4096)
 
