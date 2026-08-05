@@ -36,15 +36,30 @@ services:
       # /var/lib/mikroview by default (no config needed -- see
       # internal/config's defaultDataDir) -- the container creates and
       # owns that directory itself, so all of it already survives a
-      # simple `docker compose restart`. Uncomment this bind mount only
-      # if you want it to also survive `docker compose down`/image
-      # updates/container recreation, not just restarts. The container
-      # runs as uid 65532 (distroless nonroot), which won't own a
-      # freshly created host directory -- `mkdir -p data && chmod 777
-      # data` is the simplest fix if you hit a permission error at
-      # startup (this replaces whatever's already baked into the image
-      # at this path, same as any bind mount).
+      # simple `docker compose restart`. You only need one of the two
+      # options below if you want it to also survive `docker compose
+      # down`/image updates/container recreation, not just restarts.
+      #
+      # Option A -- bind mount (a host directory you can browse/back up
+      # directly). The container runs as uid/gid 65532 (distroless's
+      # `nonroot` account -- see the Dockerfile's --chown), which won't
+      # own a freshly created host directory, so pick one before
+      # starting:
+      #   mkdir -p data && sudo chown 65532:65532 data   # preferred: exact ownership
+      #   mkdir -p data && chmod 777 data                # no root on the host
+      # This replaces whatever's already baked into the image at this
+      # path, same as any bind mount. See README.md's "Persistent data:
+      # bind mount vs. named volume" section for the full explanation.
       # - ./data:/var/lib/mikroview
+      #
+      # Option B -- a named volume instead (Docker-managed, not a host
+      # path you can browse directly). No chown/chmod needed: on first
+      # use, Docker populates an empty named volume from the image's own
+      # /var/lib/mikroview, which is already correctly owned -- the
+      # permission problem in Option A doesn't apply here. Uncomment
+      # this line AND the top-level `volumes:` key at the bottom of this
+      # file together.
+      # - mikroview-data:/var/lib/mikroview
     environment:
       - MIKROVIEW_CONFIG=/etc/mikroview/config.yaml
       # - MIKROVIEW_GEOIP_DB_PATH=/etc/mikroview/GeoLite2-Country.mmdb
@@ -65,3 +80,8 @@ services:
       # port reaches a LAN or the internet directly. See
       # docs/configuration.md's "TLS" section before using this.
       # - MIKROVIEW_TLS_ENABLED=false
+
+# Only needed alongside Option B above (the named-volume alternative to
+# a bind mount) -- uncomment both together.
+# volumes:
+#   mikroview-data:

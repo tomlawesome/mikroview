@@ -88,15 +88,25 @@ services:
       # and the self-generated TLS certificate all persist to
       # /var/lib/mikroview by default (no config needed) -- the
       # container creates and owns that directory itself, so all of it
-      # already survives a simple `docker compose restart`. Uncomment
-      # this bind mount only if you want it to also survive
-      # `docker compose down`/image updates/container recreation, not
-      # just restarts. The container runs as uid 65532 (distroless
-      # nonroot), which won't own a freshly created host directory --
-      # `mkdir -p data && chmod 777 data` is the simplest fix if you hit
-      # a permission error at startup (this replaces whatever's already
-      # baked into the image at this path, same as any bind mount).
+      # already survives a simple `docker compose restart`. You only
+      # need one of the two options below if you want it to also
+      # survive `docker compose down`/image updates/container
+      # recreation, not just restarts.
+      #
+      # Option A -- bind mount (a host directory you can browse/back up
+      # directly). The container runs as uid/gid 65532 (distroless's
+      # `nonroot` account), which won't own a freshly created host
+      # directory, so pick one before starting -- see "Persistent data:
+      # bind mount vs. named volume" below.
       # - ./data:/var/lib/mikroview
+      #
+      # Option B -- a named volume instead (Docker-managed, not a host
+      # path you can browse directly). No chown/chmod needed: on first
+      # use, Docker populates an empty named volume from the image's own
+      # /var/lib/mikroview, which is already correctly owned. Uncomment
+      # this line AND the top-level `volumes:` key at the bottom of this
+      # snippet together.
+      # - mikroview-data:/var/lib/mikroview
     environment:
       - MIKROVIEW_CONFIG=/etc/mikroview/config.yaml
       # - MIKROVIEW_GEOIP_DB_PATH=/etc/mikroview/GeoLite2-Country.mmdb
@@ -117,9 +127,59 @@ services:
       # port reaches a LAN or the internet directly. See
       # docs/configuration.md's "TLS" section before using this.
       # - MIKROVIEW_TLS_ENABLED=false
+
+# Only needed alongside Option B above (the named-volume alternative to
+# a bind mount) -- uncomment both together.
+# volumes:
+#   mikroview-data:
 ```
 
 Create `config.yaml` next to it first (see [`deploy/config.example.yaml`](deploy/config.example.yaml) for the full option reference), then `docker compose up -d`. This mirrors [`deploy/docker-compose.yml`](deploy/docker-compose.yml) exactly, just swapping the local `build:` for the prebuilt `image:`.
+
+### Persistent data: bind mount vs. named volume
+
+mikroview runs as a fixed non-root user inside the container —
+**uid `65532`, gid `65532`** (distroless's built-in `nonroot` account,
+same identity used by the `--chown` in the Dockerfile). It can't chown a
+host directory the way a root-run container could, so a bind mount over
+`/var/lib/mikroview` (Option A above) needs to already be
+readable/writable by that uid/gid. This only matters if you've
+uncommented that bind mount line — without it, the container's own
+internal storage is already correctly owned and none of this applies.
+
+**Avoiding this entirely**: use a named volume instead (Option B
+above). Docker populates a fresh named volume from the image's own
+`/var/lib/mikroview` on first use, ownership included, so there's no
+host-side chown/chmod step at all — the tradeoff is that you can't
+`cat`/`cp`/back up the files directly from the host the way you can
+with a bind mount; you'd go through `docker run --rm -v
+mikroview-data:/data ... ` or `docker cp` instead.
+
+If you do want a bind mount (Option A), pick one:
+
+```sh
+# Preferred: exact uid/gid ownership, nothing broader
+mkdir -p data
+sudo chown 65532:65532 data
+```
+
+```sh
+# No root available on the host: open it up to everyone instead
+mkdir -p data
+chmod 777 data
+```
+
+The same fix applies to any other host path you bind-mount over a
+`/var/lib/mikroview/*` sub-path (e.g. `flags.storePath`, `auth.storePath`,
+`tls.storePath` — see [docs/configuration.md](docs/configuration.md)), or
+over `/etc/mikroview/GeoLite2-Country.mmdb` if you ever mount that
+read-write. Read-only mounts like `config.yaml` don't need either fix —
+world-readable (`chmod 644`, as in the Quickstart above) is enough, since
+the container only needs to read it, not own it.
+
+If you skip this, mikroview logs `permission denied` at startup and
+falls back to in-memory-only state rather than crashing — annoying (you
+lose flags/accounts/TLS cert on every restart) but not fatal.
 
 ## How it works
 
