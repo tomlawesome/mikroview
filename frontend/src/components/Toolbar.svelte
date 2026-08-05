@@ -123,8 +123,13 @@
            admin-equivalent for this endpoint -- matching that here
            rather than hiding a control that would actually work. -->
       <button
+        class:active={appState.view === 'detectors'}
         onclick={() => {
-          detectorSettingsState.open = true
+          if (appState.view === 'detectors') {
+            appState.view = 'live'
+            return
+          }
+          appState.view = 'detectors'
           detectorSettingsState.refresh()
         }}
         title="Toggle behavioral detectors on/off and restrict their scope"
