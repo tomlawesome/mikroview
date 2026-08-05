@@ -92,6 +92,51 @@ func TestQuerySinceIDCursor(t *testing.T) {
 	}
 }
 
+func TestQueryUntilBoundsTheUpperEdge(t *testing.T) {
+	s := New(100, time.Hour)
+	now := time.Now()
+	for i := 0; i < 5; i++ {
+		s.Insert(mkEvent(now.Add(time.Duration(i)*time.Second), "core", ActionAccept))
+	}
+
+	res := s.Query(Query{Until: now.Add(2 * time.Second), Limit: 10})
+	if len(res.Events) != 3 || res.Events[0].ID != 1 || res.Events[2].ID != 3 {
+		t.Errorf("expected IDs [1,2,3] (events at or before Until), got %v", ids(res.Events))
+	}
+}
+
+func TestQuerySinceAndUntilBoundABeforeAfterWindow(t *testing.T) {
+	s := New(100, time.Hour)
+	now := time.Now()
+	for i := 0; i < 10; i++ {
+		s.Insert(mkEvent(now.Add(time.Duration(i)*time.Second), "core", ActionAccept))
+	}
+
+	// A "before/after a timestamp" lookback (issue #29): center on event #5
+	// (now+4s), 2s either side.
+	center := now.Add(4 * time.Second)
+	res := s.Query(Query{Since: center.Add(-2 * time.Second), Until: center.Add(2 * time.Second), Limit: 10})
+	if len(res.Events) != 5 || res.Events[0].ID != 3 || res.Events[4].ID != 7 {
+		t.Errorf("expected IDs [3..7] centered on the timestamp, got %v", ids(res.Events))
+	}
+}
+
+func TestQueryWindowStartReportsRetentionTruncation(t *testing.T) {
+	s := New(100, time.Hour)
+	now := time.Now()
+	s.Insert(mkEvent(now, "core", ActionAccept))
+
+	// Ask for far more history than the 1h retention actually holds --
+	// WindowStart in the response should report the *actual* applied
+	// lower bound, not silently honor the requested one, so a caller can
+	// tell "before" context was truncated by retention.
+	requestedSince := now.Add(-24 * time.Hour)
+	res := s.Query(Query{Since: requestedSince, Limit: 10})
+	if !res.WindowStart.After(requestedSince) {
+		t.Errorf("expected WindowStart (%v) to be clamped later than the requested Since (%v)", res.WindowStart, requestedSince)
+	}
+}
+
 func TestQueryFilters(t *testing.T) {
 	s := New(100, time.Hour)
 	now := time.Now()
