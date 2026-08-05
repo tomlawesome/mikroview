@@ -93,8 +93,8 @@
     </button>
 
     <button
-      class:active={flagsState.open}
-      onclick={() => (flagsState.open = !flagsState.open)}
+      class:active={appState.view === 'flags'}
+      onclick={() => (appState.view = appState.view === 'flags' ? 'live' : 'flags')}
       title="Behavioral flags: port scans, activity spikes, critical-port attempts, and volume spikes"
     >
       Flags
