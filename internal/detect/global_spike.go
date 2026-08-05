@@ -25,7 +25,12 @@ type GlobalSpikeDetector struct {
 	fs       *flags.Store
 	settings *SettingsStore
 	baseline float64
+	variance float64
 	primed   bool
+	// sampleCount backs the confidence score's history component (see
+	// emaConfidence) -- capped at GlobalSpikeWarmupSamples, same
+	// warmup-then-cap pattern as sourceWindow.sampleCount.
+	sampleCount int
 }
 
 // NewGlobalSpikeDetector constructs a detector that's always enabled --
@@ -54,19 +59,32 @@ func (g *GlobalSpikeDetector) Check(currentEPS float64, now time.Time) {
 		// next reading instead of instantly comparing against whatever
 		// the baseline happened to be when it was switched off.
 		g.primed = false
+		g.sampleCount = 0
 		return
 	}
 
 	if !g.primed {
 		g.baseline = currentEPS
+		g.variance = 0
 		g.primed = true
+		g.sampleCount = 1
 		return
 	}
 
-	if currentEPS >= g.cfg.GlobalSpikeMinEPS && g.baseline > 0 && currentEPS >= g.baseline*g.cfg.GlobalSpikeMultiplier {
-		g.fs.Add(flags.TypeGlobalSpike, "global",
-			fmt.Sprintf("%.1f events/s vs a baseline of %.1f", currentEPS, g.baseline), now)
+	prevBaseline := g.baseline
+	// The firing condition itself is unchanged from before confidence
+	// scoring existed (issue #59): only the confidence attached to a
+	// flag that already fires is new, not when it fires.
+	if currentEPS >= g.cfg.GlobalSpikeMinEPS && prevBaseline > 0 && currentEPS >= prevBaseline*g.cfg.GlobalSpikeMultiplier {
+		z := emaZScore(currentEPS, prevBaseline, g.variance)
+		confidence := emaConfidence(z, g.sampleCount, g.cfg.GlobalSpikeWarmupSamples)
+		g.fs.AddWithConfidence(flags.TypeGlobalSpike, "global",
+			fmt.Sprintf("%.1f events/s vs a baseline of %.1f (based on %d samples, %.1fσ above normal)", currentEPS, prevBaseline, g.sampleCount, z),
+			confidence, now)
 	}
 
-	g.baseline = emaAlpha*currentEPS + (1-emaAlpha)*g.baseline
+	g.baseline, g.variance = emaUpdate(currentEPS, g.baseline, g.variance)
+	if g.sampleCount < g.cfg.GlobalSpikeWarmupSamples {
+		g.sampleCount++
+	}
 }
