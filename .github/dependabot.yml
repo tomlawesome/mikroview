@@ -15,6 +15,11 @@ updates:
       interval: weekly
     target-branch: dev
     open-pull-requests-limit: 10
+    ignore:
+      # svelte-check@4.7.4's peer range is ^5.0.0 || ^6.0.0 -- TS 7
+      # breaks `npm run check`. Drop this once svelte-check supports it.
+      - dependency-name: "typescript"
+        versions: ["7.x"]
 
   # The Go/Node base images pinned in Dockerfile -- exactly the kind of
   # drift that left this project on an unsupported Go patch version with

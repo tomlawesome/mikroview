@@ -44,6 +44,40 @@ host. If `config.yaml` isn't world-readable (or owned by a matching
 uid/gid), the container will fail to start with a permission error —
 `chmod 644 deploy/config.yaml` after editing it.
 
+## Logging
+
+Mikroview's own server output (not event data -- see `store.retention`
+above) is leveled and colorized, one line per entry:
+
+```
+18:43:44 [INFO]  auth        │ no decision made yet -- showing the first-run choice screen
+18:43:45 [WARN]  flags       │ permission denied opening flags.json -- continuing in-memory-only
+18:43:46 [ERROR] syslog-udp  │ listen udp :1514: bind: address already in use
+```
+
+```yaml
+log:
+  level: info
+```
+
+- **`level`** — one of `debug`/`info`/`warn`/`error` (case-insensitive).
+  Defaults to `info`. Anything unrecognized (a typo, an empty value)
+  falls back to `info` silently, the same way every other malformed
+  value in this app degrades rather than failing startup over a log
+  setting.
+- **Color** follows the [NO_COLOR](https://no-color.org) convention and
+  auto-disables when stdout isn't a terminal -- piping to a file,
+  `docker logs | grep`, or a log collector all see plain text, not raw
+  ANSI escapes.
+- The component column (`auth`, `tls`, `flags`, `syslog-udp`, `http`,
+  ...) identifies which part of mikroview logged the line -- the same
+  names used throughout this doc and SECURITY.md for the pieces they
+  refer to.
+- This does **not** apply to the CLI recovery commands' own output
+  (`-list-users`' table, `-reset-password`'s password prompts and
+  success message, etc.) -- those print directly to stdout/stderr for
+  scripting/piping, not through this leveled path.
+
 ## GeoIP country flags (optional)
 
 mikroview can show a country flag next to public source/destination
@@ -147,7 +181,8 @@ threshold below has a sensible default and is only worth changing for an
 unusually quiet or unusually busy network.
 
 The port-scan, activity-spike, critical-port, distributed-brute-force,
-internal-recon, and outbound-anomaly detectors only count events whose
+internal-recon, outbound-anomaly, and low-and-slow-port-scan detectors
+only count events whose
 RouterOS-reported connection state is `new` (or absent, for setups that
 don't log connection state at all) -- if your ruleset logs both
 directions of an established connection on the same rule, a busy host's
@@ -180,6 +215,12 @@ flags:
   repeatedDropsWindow: 15m
   hostActivityMultiplier: 3
   hostActivityWarmupSamples: 20
+  lowSlowScanWindow: 3h
+  lowSlowScanPortThreshold: 8
+  lowSlowScanHostThreshold: 5
+  lowSlowScanMinObservation: 45m
+  lowSlowScanDropRatio: 0.8
+  lowSlowScanBaselineMultiplier: 3
 ```
 
 - **`storePath`** — where raised/cleared flags are persisted, as a small
@@ -256,20 +297,131 @@ flags:
   retrying a port that isn't actually open the way you think — rather
   than necessarily an attack, so treat it as "worth a look," not
   "critical."
+- **Low-and-slow port scan** — a scan deliberately paced to stay under
+  the fast port-scan detector's short `portScanWindow`. Judged over the
+  much longer `lowSlowScanWindow` (hours, not seconds), and deliberately
+  *not* a single "distinct ports per hour" threshold — that alone is
+  exactly the kind of thing container orchestration, health checks, and
+  browsers legitimately trip. Instead, all of the following must hold at
+  once before anything fires:
+  - **Destination breadth on both axes** — `lowSlowScanPortThreshold`+
+    distinct destination ports *and* `lowSlowScanHostThreshold`+ distinct
+    destination hosts within the window. A real scan spans many
+    host:port pairs, not many ports probed against one already-known
+    host (that's the fast port-scan detector's job) or one port probed
+    against many known hosts.
+  - **A source's own destination-breadth rate vs. its own baseline** —
+    same per-source EMA technique as activity-spike, at
+    `lowSlowScanBaselineMultiplier`× or more, so a source that always
+    talks to many destinations isn't flagged just for continuing to do
+    what it always does.
+  - **A high drop/reject ratio** — at least `lowSlowScanDropRatio` of the
+    source's tracked attempts within the window must have been refused.
+    Paced scan traffic against a target mostly gets dropped/rejected;
+    legitimate low-rate access to real services mostly gets accepted.
+  - **A minimum observation floor** — a source must have been under
+    observation for at least `lowSlowScanMinObservation` before it's
+    eligible to fire at all, so a source only seen briefly can't produce
+    a flag no matter how its first few readings look.
 
-**Confidence score.** The activity-spike detector (currently the only
-one making a statistical judgment call rather than a deterministic
-threshold crossing) attaches a `confidence` percentage to each flag it
-raises, shown in the UI as e.g. "73% confidence". It's deliberately not
-a black-box number: it combines (1) how much history backs the host's
-baseline and (2) how far the current reading deviates from it, and the
-flag's own detail text spells out the actual baseline value, observed
-value, and sample count behind the score — mikroview's job is to put
-that information in front of you, not to make the call for you. Flags
-from every other detector have no `confidence` field at all (`null` in
-`GET /api/flags`) rather than an implied 100% — a plain threshold
-crossing is exactly as trustworthy as the count it reports, so a
-percentage there would be noise.
+  Confidence is the *minimum* of four sub-scores (port overshoot, host
+  overshoot, drop-ratio strength, baseline deviation) — the
+  weakest-clearing signal bounds the overall score, consistent with
+  requiring several independent signals rather than trusting the
+  strongest one alone.
+
+**Confidence score.** Every detector except global-volume-spike and
+rule-hit-rate-spike attaches a `confidence` percentage (0-100) to each
+flag it raises, shown in the UI as e.g. "73% confidence" — but not all
+of them mean the same thing by it, and it's worth knowing which kind
+you're looking at:
+
+- **Statistical (activity-spike only).** The only detector making a
+  real statistical judgment call rather than a deterministic threshold
+  crossing: it combines (1) how much history backs the host's baseline
+  and (2) how far the current reading deviates from it (a z-score). The
+  flag's own detail text spells out the actual baseline value, observed
+  value, and sample count behind the score.
+- **Overshoot-based (port-scan, critical-port, distributed
+  brute-force, outbound anomaly, internal reconnaissance, repeated
+  drops).** These six are plain threshold crossings with no history or
+  baseline behind them, so their confidence instead measures *how far
+  past the threshold* the observed count is: just crossed reads low,
+  three times the threshold or more reads 100%. This is a materially
+  weaker claim than activity-spike's statistical score — it says
+  nothing about whether the pattern is unusual for that specific
+  source, only how large it is relative to the configured line. Treat a
+  95% overshoot-based flag as "well past the configured threshold," not
+  "95% likely to be malicious."
+- **Composite (low-and-slow port scan only).** The minimum of four
+  sub-scores — port overshoot, host overshoot, drop-ratio strength, and
+  baseline deviation (the last computed the same way as activity-spike's
+  statistical score). Reflects "how convincingly did the *weakest*
+  required signal clear," not an average or the strongest signal alone —
+  deliberately conservative, since this detector already requires
+  several independent things to be true before it fires at all.
+- **Not yet scored (global volume spike, rule hit-rate spike).** Both
+  already track a slow-moving EMA baseline internally (same technique
+  activity-spike uses), just without a confidence score attached yet —
+  a known gap, filed separately.
+
+`confidence` is `null` in `GET /api/flags` for a detector that doesn't
+score at all, never an implied 100%.
+
+**Reputation-informed floor (optional, requires an AbuseIPDB key).**
+When `reputation.abuseIPDBKey` is configured (see
+[IP reputation lookup](#ip-reputation-lookup-optional)), `critical_port`,
+`port_scan`, `activity_spike`, `repeated_drops`, and `low_slow_scan`
+additionally get an
+async, best-effort AbuseIPDB lookup against the flag's source IP the
+first time it's raised (not on every re-fire). If the IP has a known
+abuse score, that score becomes a *floor* on the flag's confidence —
+`finalConfidence = max(existingConfidence, abuseScore)` — never a
+replacement and never a reduction: a clean or unavailable reputation
+result is absence of evidence, not evidence of innocence, so it's never
+allowed to pull an already-higher score down. `distributed_brute_force`
+and `outbound_anomaly` get the same treatment, but against a *sampled
+group* rather than one IP (they're keyed by many distinct source IPs or
+destinations, not a single one) — up to 10 members are sampled, and at
+least 3 of them must actually return reputation data before the
+aggregate (their mean score, discounted by how much of the sample was
+actually filled) is trusted enough to apply. `internal_recon` is
+excluded because its destinations are internal LAN IPs and reputation
+data doesn't exist for private ranges at all; `rule_spike` is excluded
+because its target is a rule label, not an IP. This reuses the same
+`internal/reputation.Client` and 15-minute cache the on-demand IP-lookup
+popover already uses, so a manual lookup you've just done and an async
+detector check for the same IP share results rather than double-querying
+AbuseIPDB.
+
+The same lookup also captures a **reputation snapshot** on the flag
+(abuse score, report count, ISP, Shodan ports/hostnames/vulns where
+available) *as of when it resolved* -- not fetched live later, since the
+point is what the target looked like when it fired, not what it looks
+like now. It's stored regardless of whether AbuseIPDB is configured
+(the keyless Shodan source alone is still worth capturing) -- only the
+confidence floor specifically needs an AbuseIPDB score. Only ever set
+for the five single-IP detectors above; the sampled-group detectors
+have no single coherent snapshot to attach. Expandable in the UI
+alongside the target's country (from the same GeoIP lookup already
+applied to the underlying event) and, for `port_scan`,
+`distributed_brute_force`, `outbound_anomaly`, `internal_recon`, and
+`low_slow_scan`, the specific ports/hosts actually involved -- and for any detector, NAT
+translation info when the triggering event had one. `GET /api/flags`
+exposes all of this as `reputation`, `country`, and `evidence` fields.
+
+**Tor/hosting-provider signal (issue #58).** AbuseIPDB's response
+already includes an `isTor` flag and a `usageType` classification (e.g.
+"Data Center/Web Hosting/Transit") that mikroview now captures alongside
+the abuse score. Either one also contributes to the confidence floor,
+using the same floor-raise-only reasoning as the abuse score itself,
+with the *strongest* of the two independent signals applied: a Tor exit
+node raises the floor to 60, a hosting/data-center address to 30 --
+deliberately smaller than a real abuse score, since neither is proof of
+malice on its own (Tor use isn't illegal, and plenty of legitimate
+scanners/CDNs/bots run from hosting providers too). Both are starting
+points, not calibrated values. Shown in the expanded reputation detail
+alongside ISP/country whenever present.
 
 A flag is raised once per (detector, source) pair and updated in place
 on re-firing (count/last-seen bumped, not duplicated) until a human
@@ -277,42 +429,181 @@ clears it via the UI or `POST /api/flags/{id}/clear`. Clearing an
 already-active-again source re-raises it as a fresh entry rather than
 silently resurrecting the old one.
 
-## Authentication (optional, opt-in by creating an account)
+## Notifications (optional)
 
-Mikroview stays fully open -- today's behavior -- until you create the
-first account. The moment one exists, every request except
-`GET /api/healthz` requires a valid session, permanently, from then on.
-See [SECURITY.md](../SECURITY.md) for the full threat-model writeup;
-this section is the configuration reference.
+Flags are only visible if someone has the mikroview UI open. `notify`
+sends an alert through one or more external channels whenever a new
+flag *episode* is raised (a first-ever raise, or a revival after a human
+clears an already-cleared flag -- never a plain re-fire of an
+already-active one, so a noisy detector doesn't re-alert on every
+event). Each channel below is independently enabled by its own
+identifying field being set (`smtp.host`, `pushover.token`) -- configure
+any combination of zero, one, or both; every enabled channel shares one
+`batchWindow`.
+
+```yaml
+notify:
+  # batchWindow: how often pending flags are flushed to every enabled
+  # channel -- a fixed interval, not a quiet-period debounce, so a
+  # sustained flood of flags during a real incident still gets a
+  # bounded max delay before alerting rather than the window
+  # continuously resetting.
+  batchWindow: 60s
+  smtp:
+    host: "smtp.example.com"
+    port: 587
+    # username left empty means no AUTH is attempted, for an open local
+    # relay (e.g. a Postfix instance on the same host/network).
+    username: "alerts@example.com"
+    password: "changeme"
+    # "" (plaintext, local relay only), "starttls" (upgrade after
+    # connecting, typically port 587), or "implicit" (TLS from the
+    # first byte, typically port 465).
+    tlsMode: "starttls"
+    from: "mikroview@example.com"
+    to: ["ops@example.com", "oncall@example.com"]
+  pushover:
+    # From your Pushover application (https://pushover.net/apps) and
+    # account/group, respectively -- no VAPID keys, no service worker,
+    # no per-browser subscription management, just this pair.
+    token: "your-application-token"
+    user: "your-user-or-group-key"
+```
+
+Left with an empty `smtp.host`/`pushover.token` (the default), that
+channel is simply never dispatched to -- no relay or app is assumed.
+`smtp.password`/`pushover.token`/`pushover.user` can also be set via env
+vars instead of the config file (see the table below), same
+secret-via-env precedent as `MIKROVIEW_ABUSEIPDB_KEY`.
+
+One notification covers every flag raised within a `batchWindow`: title/
+subject `mikroview: N new flag(s)`, one line per flag (type, target,
+detail, confidence, first-seen) -- Pushover's message additionally caps
+at 10 lines with a "...and N more" trailer, since its message field is
+much smaller than an email body. Built around a shared
+`internal/notify.Notifier`/`Dispatcher` so both channels reuse the same
+batching rather than each implementing their own; true device push (web
+push API, VAPID keys, service worker) is a separate, not-yet-built
+target scoped alongside PWA feasibility, since a lot of that plumbing
+overlaps with making the frontend a PWA at all.
+
+## Per-detector toggles and scope restrictions (optional)
+
+Every detector above defaults to enabled and unscoped -- this section
+lets you turn one off entirely, or narrow where it applies, without
+touching its thresholds. Settings live in two places that layer
+together:
+
+- **`config.yaml`** sets the *starting point* on boot (`flags.detectors`
+  below).
+- **A live, admin-only UI** ("Detectors" in the toolbar, visible once
+  signed in as an admin) can override that starting point without a
+  restart -- takes effect on the very next ingested event. A live change
+  persists to `detectorSettingsStorePath` (same optional-persistence
+  contract as `flags.storePath` above: left unset, a live toggle still
+  works, it just resets to `config.yaml`'s values on restart) and, once
+  persisted, is what future restarts seed from -- `config.yaml`'s values
+  are only ever consulted the *first* time that file doesn't exist yet.
+
+```yaml
+flags:
+  detectorSettingsStorePath: "/var/lib/mikroview/detector-settings.json"
+  detectors:
+    critical_port:
+      enabled: true
+      scope:
+        hosts: ["203.0.113.0/24"]
+        hostsMode: deny
+        ports: [22, 3389]
+        portsMode: allow
+        classification: external
+    rule_spike:
+      enabled: false
+```
+
+Each detector under `detectors` is optional -- an omitted detector keeps
+today's default (enabled, unscoped). Within one detector's `scope`, every
+field is also optional and independently combines with the others by
+**AND**: an event only counts toward that detector if it satisfies every
+restriction you've actually set. Within one field (`hosts`, `ports`, or
+`rules`), `*Mode` is either `allow` (only listed entries are admitted) or
+`deny` (listed entries are excluded) -- never both directions on the same
+field at once. `hosts` entries accept a bare IP or a CIDR.
+
+Not every field means something to every detector -- a detector only
+consults the axes relevant to how it's keyed:
+
+| Detector | `hosts` + `classification` restrict | `ports` restrict | `rules` restrict |
+|---|---|---|---|
+| `port_scan` | which source IPs are tracked at all | which distinct ports *count* toward the scan total (not which events are tracked) | -- |
+| `activity_spike` | which source IPs are tracked at all | -- | -- |
+| `critical_port` | source IP | the effective subset of `criticalPorts` this instance reacts to | -- |
+| `distributed_brute_force` | which source IPs count toward a port's distinct-source total | the effective subset of `criticalPorts` | -- |
+| `outbound_anomaly` | which source (LAN) IPs are watched | -- | -- |
+| `internal_recon` | which source (LAN) IPs are watched | -- | -- |
+| `rule_spike` | -- | -- | which rule labels this detector reacts to |
+| `repeated_drops` | source IP | destination port | -- |
+| `global_spike` | -- (network-wide, not keyed by anything per-source) | -- | -- |
+| `low_slow_scan` | which source IPs are tracked at all | which distinct ports *count* toward its own breadth total | -- |
+
+`global_spike` only ever consults `enabled` -- it's a single network-wide
+aggregate, not tied to any particular host, port, or rule, so scoping it
+wouldn't mean anything.
+
+## Authentication
+
+The first time mikroview loads with no accounts and no prior decision,
+it shows a one-time choice screen instead of the live view: **create
+the admin account**, or **continue without an account** ("skip"). See
+[SECURITY.md](../SECURITY.md) for the full threat-model writeup; this
+section is the configuration reference.
 
 ```yaml
 auth:
   storePath: "/var/lib/mikroview/users.json"
-  secureCookie: false
+  secureCookie: true
   sessionTTL: 24h
 ```
 
-- **`storePath`** — where accounts are persisted, as a small JSON file
-  (usernames + Argon2id password hashes, never plaintext). Unlike
-  `flags.storePath`, this is not optional once you create an account:
-  mikroview refuses to create one without a configured, writable path,
-  since an account that doesn't survive a restart would either lock
-  everyone out or silently reopen the deployment. Mount a volume for its
-  parent directory the same way you would for flag persistence -- see
-  `deploy/docker-compose.yml`.
-- **`secureCookie`** — sets the session cookie's `Secure` flag. Off by
-  default since mikroview is very commonly run over plain HTTP on a
-  trusted LAN; turn this on once mikroview sits behind TLS.
+- **`storePath`** — where accounts (and the skip/disabled decision) are
+  persisted, as a small JSON file (usernames + Argon2id password hashes,
+  never plaintext). Defaults to `/var/lib/mikroview/users.json`, which
+  the Dockerfile creates and owns -- no configuration needed for the
+  zero-config case. Mount a volume over `/var/lib/mikroview` if you want
+  the decision (and any accounts) to survive container recreation, not
+  just process restarts -- see `deploy/docker-compose.yml`.
+- **`secureCookie`** — sets the session cookie's `Secure` flag. On by
+  default, matching [TLS](#tls) being on by default -- there's no other
+  kind of connection to have a session on. Only turn this off if you've
+  also set `tls.enabled: false`, or sessions won't work at all.
 - **`sessionTTL`** — the idle timeout: a session's expiry slides forward
   on each authenticated request, so this is "how long you can go without
   activity before needing to log in again," not a fixed session
   lifetime.
 
-**Creating the first account** is done through the web UI itself, not a
-CLI command: while no account exists, mikroview shows a one-time setup
-form instead of a login form, and whoever completes it becomes the
-admin. Don't leave mikroview reachable by more than a trusted network
-before completing this step.
+**If you create an account**, every request except `GET /api/healthz`
+and the login/session endpoints requires a valid session, permanently,
+from then on. Whoever completes the form becomes the admin.
+
+**If you skip**, mikroview stays fully open indefinitely -- the same
+behavior an older mikroview had by accident, but now a deliberate,
+persisted choice rather than "nobody got around to setting up auth
+yet." Before deciding, weigh who can reach the deployment: skipping is
+reasonable on a network you already trust as much as the router itself,
+not on anything broader.
+
+**Reversing a skip** is CLI-only, by design: nothing in the web UI or
+API can re-enable auth once skipped, so a visitor to an open deployment
+can never unilaterally impose a login requirement on everyone else.
+
+```sh
+mikroview -enable-auth-setup
+```
+
+re-arms the choice screen (it does not create an account itself -- the
+next person to load mikroview, or you, still completes the create-
+account form). Requires container/host access, the same trust anchor as
+the recovery commands below.
 
 **Adding more accounts** afterward is admin-only, either via the "Add
 user" control in the toolbar or `POST /api/auth/users`.
@@ -331,6 +622,74 @@ account, including on an already-running server -- you don't need to
 restart mikroview after running `-reset-password` for the new password
 to take effect.
 
+## TLS
+
+Mikroview serves TLS by default, on its one existing listener -- no
+second port. See [SECURITY.md](../SECURITY.md#tls) for the full
+reasoning; this section is the configuration reference.
+
+```yaml
+tls:
+  enabled: true
+  # Your own cert (a real domain + ACME, a corporate CA, etc) -- takes
+  # priority over the self-generated one below if both are set.
+  certFile: ""
+  keyFile: ""
+  # Hostnames/IPs a generated certificate should cover (SANs) --
+  # whatever you'll actually use to reach mikroview. Defaults to
+  # localhost/127.0.0.1 if empty -- still fully encrypted either way,
+  # just only strictly verifiable under those names unless you add your
+  # own.
+  hosts: []
+  # Persists the self-generated CA + certificate across restarts, so
+  # the trust step only happens once. Optional, same contract as
+  # flags.storePath.
+  storePath: "/var/lib/mikroview/tls"
+```
+
+- **`enabled`** — on by default. The one supported reason to set this
+  `false` is a deployment where mikroview's listener is *provably* only
+  reachable from your own reverse proxy over an isolated docker network
+  -- never published to a LAN or the internet at all. In that specific
+  topology the RP already owns TLS termination for real clients, and
+  there's no bypass surface for mikroview to additionally protect on
+  that internal hop. Never set this `false` if mikroview's port is
+  reachable from a LAN or the internet in any other way -- doing so
+  serves the app, credentials included, in cleartext. Logged clearly at
+  startup whenever it's off, so it's never a silent state.
+- **`certFile`/`keyFile`** — your own certificate. Skips local-CA
+  generation entirely when both are set.
+- **`hosts`** — SANs for a self-generated certificate. Left empty, the
+  generated cert only covers `localhost`/`127.0.0.1` -- connections from
+  any other name/IP are still fully encrypted, just not strictly
+  verifiable against that name without adding it here.
+- **`storePath`** — where a generated CA + certificate persist across
+  restarts. Left unset, TLS still works, it just regenerates (and needs
+  re-trusting) every restart -- the same optional-persistence contract
+  `flags.storePath` has.
+
+**Zero-config default**: with no `certFile`/`keyFile`, mikroview
+generates its own local certificate authority and a leaf certificate on
+first start (`internal/servertls`). This CA is trust-on-first-use, not a
+globally trusted root -- your browser will show an untrusted-certificate
+warning on first visit until you import it, the same one-time step
+Proxmox/TrueNAS/pfSense's own self-signed admin UIs already ask for. The
+CA is served at `GET /ca.crt`, unauthenticated (only when one was
+actually generated), specifically so a browser or reverse proxy can
+fetch it to establish trust; its fingerprint is also logged at startup
+if you'd rather verify it out-of-band than trust-on-first-use blindly.
+
+**Reverse proxy in front, with your own single ingress**: point your
+RP's *upstream/backend* target at `https://mikroview:PORT` instead of
+`http://mikroview:PORT` -- same host, same port, no new port opened
+anywhere. Your RP's client-facing side is completely untouched. Every
+mainstream reverse proxy supports backend/upstream TLS (Caddy's
+`reverse_proxy https://...`, Traefik's backend TLS transport, nginx's
+`proxy_pass https://...`), typically via either skipping strict
+verification for that specific upstream (reasonable here, since you
+configured that upstream address yourself) or trusting mikroview's
+local CA explicitly (more correct, and what `/ca.crt` is for).
+
 ## Environment variables
 
 Override individual scalar settings without a mounted file:
@@ -343,6 +702,7 @@ Override individual scalar settings without a mounted file:
 | `MIKROVIEW_LISTEN_HTTP` | `listen.http` |
 | `MIKROVIEW_STORE_RETENTION` | `store.retention` |
 | `MIKROVIEW_STORE_MAX_EVENTS` | `store.maxEvents` |
+| `MIKROVIEW_LOG_LEVEL` | `log.level` (see [Logging](#logging)) |
 | `MIKROVIEW_GEOIP_DB_PATH` | `geoip.dbPath` (see [GeoIP country flags](#geoip-country-flags-optional)) |
 | `MIKROVIEW_ABUSEIPDB_KEY` | `reputation.abuseIPDBKey` (see [IP reputation lookup](#ip-reputation-lookup-optional)) |
 | `MIKROVIEW_FLAGS_STORE_PATH` | `flags.storePath` |
@@ -368,9 +728,31 @@ Override individual scalar settings without a mounted file:
 | `MIKROVIEW_FLAGS_REPEATED_DROPS_WINDOW` | `flags.repeatedDropsWindow` |
 | `MIKROVIEW_FLAGS_HOST_ACTIVITY_MULTIPLIER` | `flags.hostActivityMultiplier` |
 | `MIKROVIEW_FLAGS_HOST_ACTIVITY_WARMUP_SAMPLES` | `flags.hostActivityWarmupSamples` |
-| `MIKROVIEW_AUTH_STORE_PATH` | `auth.storePath` (see [Authentication](#authentication-optional-opt-in-by-creating-an-account)) |
+| `MIKROVIEW_FLAGS_LOW_SLOW_SCAN_WINDOW` | `flags.lowSlowScanWindow` |
+| `MIKROVIEW_FLAGS_LOW_SLOW_SCAN_PORT_THRESHOLD` | `flags.lowSlowScanPortThreshold` |
+| `MIKROVIEW_FLAGS_LOW_SLOW_SCAN_HOST_THRESHOLD` | `flags.lowSlowScanHostThreshold` |
+| `MIKROVIEW_FLAGS_LOW_SLOW_SCAN_MIN_OBSERVATION` | `flags.lowSlowScanMinObservation` |
+| `MIKROVIEW_FLAGS_LOW_SLOW_SCAN_DROP_RATIO` | `flags.lowSlowScanDropRatio` |
+| `MIKROVIEW_FLAGS_LOW_SLOW_SCAN_BASELINE_MULTIPLIER` | `flags.lowSlowScanBaselineMultiplier` |
+| `MIKROVIEW_FLAGS_DETECTOR_SETTINGS_STORE_PATH` | `flags.detectorSettingsStorePath` (see [Per-detector toggles](#per-detector-toggles-and-scope-restrictions-optional)) |
+| `MIKROVIEW_AUTH_STORE_PATH` | `auth.storePath` (see [Authentication](#authentication)) |
 | `MIKROVIEW_AUTH_SECURE_COOKIE` | `auth.secureCookie` |
 | `MIKROVIEW_AUTH_SESSION_TTL` | `auth.sessionTTL` |
+| `MIKROVIEW_TLS_ENABLED` | `tls.enabled` (see [TLS](#tls)) |
+| `MIKROVIEW_TLS_CERT_FILE` | `tls.certFile` |
+| `MIKROVIEW_TLS_KEY_FILE` | `tls.keyFile` |
+| `MIKROVIEW_TLS_HOSTS` | `tls.hosts` (comma-separated) |
+| `MIKROVIEW_TLS_STORE_PATH` | `tls.storePath` |
+| `MIKROVIEW_NOTIFY_BATCH_WINDOW` | `notify.batchWindow` (see [Notifications](#notifications-optional)) |
+| `MIKROVIEW_NOTIFY_SMTP_HOST` | `notify.smtp.host` |
+| `MIKROVIEW_NOTIFY_SMTP_PORT` | `notify.smtp.port` |
+| `MIKROVIEW_NOTIFY_SMTP_USERNAME` | `notify.smtp.username` |
+| `MIKROVIEW_NOTIFY_SMTP_PASSWORD` | `notify.smtp.password` |
+| `MIKROVIEW_NOTIFY_SMTP_TLS_MODE` | `notify.smtp.tlsMode` |
+| `MIKROVIEW_NOTIFY_SMTP_FROM` | `notify.smtp.from` |
+| `MIKROVIEW_NOTIFY_SMTP_TO` | `notify.smtp.to` (comma-separated) |
+| `MIKROVIEW_NOTIFY_PUSHOVER_TOKEN` | `notify.pushover.token` |
+| `MIKROVIEW_NOTIFY_PUSHOVER_USER` | `notify.pushover.user` |
 
 ## CLI flags (local development)
 
@@ -378,23 +760,27 @@ Override individual scalar settings without a mounted file:
 `-geoip-db` — see `go run . -h`. Devices, rule/host names, and auth
 config can only be set via YAML/env, not flags.
 
-`-healthcheck`, `-list-users`, `-reset-password <username>` are
-standalone modes -- each does its one job and exits, rather than
-starting the server. See [Authentication](#authentication-optional-opt-in-by-creating-an-account)
-for the latter two.
+`-healthcheck`, `-list-users`, `-reset-password <username>`,
+`-enable-auth-setup` are standalone modes -- each does its one job and
+exits, rather than starting the server. See
+[Authentication](#authentication) for the latter three.
 
 ## API reference
 
 | Endpoint | Description |
 |---|---|
 | `GET /api/healthz` | liveness/uptime check |
+| `GET /ca.crt` | mikroview's self-generated CA certificate, unauthenticated -- only present when TLS is on and mikroview generated its own CA (never for a supplied cert or `tls.enabled: false`); see [TLS](#tls) |
 | `GET /api/events` | filtered, windowed historical query (see below) |
 | `GET /api/devices` | known devices (configured + auto-discovered) |
+| `GET /api/critical-ports` | the configured `flags.criticalPorts` list -- feeds the "Control ports" tracking tab (issue #34), open to any signed-in user, not admin-gated |
 | `GET /api/stats` | totals, per-action counts, rolling events/sec |
 | `GET /api/ws` | live-tail WebSocket feed |
 | `GET /api/lookup/ip/{ip}` | on-demand reputation/threat-intel lookup for one public IP (see [IP reputation lookup](#ip-reputation-lookup-optional)) |
 | `GET /api/flags` | active + cleared behavioral flags (see [Behavioral flags](#behavioral-flags-optional-on-by-default)) |
 | `POST /api/flags/{id}/clear` | mark one flag as cleared |
+| `GET /api/detectors` | admin-only (open while zero accounts exist): every detector's live enabled+scope (see [Per-detector toggles](#per-detector-toggles-and-scope-restrictions-optional)) |
+| `PUT /api/detectors/{name}` | admin-only (open while zero accounts exist): replace one detector's enabled+scope wholesale |
 | `GET /api/auth/session` | current auth state (setup-required / authenticated / not) -- always 200, never gated |
 | `POST /api/auth/register` | create the first (admin) account -- only while zero accounts exist |
 | `POST /api/auth/login` | sign in, sets the session cookie |
@@ -403,8 +789,8 @@ for the latter two.
 
 Every route above `/api/auth/session`/`/register`/`/login`/`/logout` and
 `/api/healthz` requires a valid session once an account exists -- see
-[Authentication](#authentication-optional-opt-in-by-creating-an-account).
-Every mutating (`POST`) request also requires an
+[Authentication](#authentication).
+Every mutating (`POST`/`PUT`) request also requires an
 `X-Requested-With: mikroview` header once an account exists (a CSRF
 mitigation, see SECURITY.md).
 
@@ -414,8 +800,28 @@ or CIDR, matches source or destination), `port` (matches source or
 destination), `srcScope`/`dstScope` (`internal` or `external`, restricts
 that side of the connection to a private/LAN or public address
 respectively -- an address that can't be parsed satisfies neither),
-`rule` (substring match), `since` (RFC3339), `sinceId`
+`rule` (substring match), `since` (RFC3339), `until` (RFC3339, an
+optional upper bound -- paired with `since` this gives a bounded
+before/after window instead of an open-ended tail to now), `sinceId`
 (cursor), `limit` (default 500, max 5000).
+
+**Bounded before/after lookback (issue #29).** `around` (RFC3339) +
+`window` (a duration, e.g. `5m`, default `5m`) is sugar for `since`/
+`until` centered on a timestamp -- overrides them if both forms are
+given. Meant for pulling "what was this IP doing right before/after X"
+from an external signal (a honeypot hit, a manual investigation
+trigger), combined with `ip`:
+
+```
+GET /api/events?ip=203.0.113.9&around=2026-01-15T14:32:00Z&window=10m
+```
+
+"Before" context is inherently capped by the in-memory retention window
+(`store.retention`) -- older history simply doesn't exist. Rather than
+silently truncating, the response's `windowStart` field always reports
+the *actual* applied lower bound, so a caller comparing it against the
+`since` (or `around`-`window`) it requested can tell whether it got
+truncated by retention.
 
 ## Live updates: server vs. client filtering
 

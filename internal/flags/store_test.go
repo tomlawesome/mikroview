@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/tomlawesome/mikroview/internal/reputation"
 )
 
 func TestOpenEmptyPathIsUsable(t *testing.T) {
@@ -249,5 +251,267 @@ func TestPruneEvictsOldestClearedFlagsOverCap(t *testing.T) {
 		if f.Target == "3.3.3.3" && f.Cleared {
 			t.Error("the active flag should never be evicted or altered by pruning")
 		}
+	}
+}
+
+func TestAddReportsNewEpisode(t *testing.T) {
+	s, _ := Open("")
+	now := time.Now()
+
+	if isNew := s.Add(TypePortScan, "1.1.1.1", "first", now); !isNew {
+		t.Error("expected the first-ever raise to report a new episode")
+	}
+	if isNew := s.Add(TypePortScan, "1.1.1.1", "re-fire", now.Add(time.Second)); isNew {
+		t.Error("expected a plain re-fire of an active flag to not report a new episode")
+	}
+
+	id := flagID(TypePortScan, "1.1.1.1")
+	s.Clear(id, now.Add(2*time.Second))
+	if isNew := s.Add(TypePortScan, "1.1.1.1", "revived", now.Add(3*time.Second)); !isNew {
+		t.Error("expected a revival from cleared to report a new episode")
+	}
+}
+
+func TestRaiseConfidenceFloorOnlyRaises(t *testing.T) {
+	s, _ := Open("")
+	now := time.Now()
+
+	s.AddWithConfidence(TypeCriticalPort, "203.0.113.9", "detail", 20, now)
+
+	s.RaiseConfidenceFloor(TypeCriticalPort, "203.0.113.9", 10)
+	if c := *s.List()[0].Confidence; c != 20 {
+		t.Errorf("expected a lower floor to be a no-op, got confidence %d", c)
+	}
+
+	s.RaiseConfidenceFloor(TypeCriticalPort, "203.0.113.9", 90)
+	if c := *s.List()[0].Confidence; c != 90 {
+		t.Errorf("expected a higher floor to raise confidence, got %d", c)
+	}
+
+	s.RaiseConfidenceFloor(TypeCriticalPort, "203.0.113.9", 50)
+	if c := *s.List()[0].Confidence; c != 90 {
+		t.Errorf("expected a subsequent lower floor to still be a no-op, got %d", c)
+	}
+
+	// Unknown ID -- no-op, not an error.
+	s.RaiseConfidenceFloor(TypeCriticalPort, "203.0.113.99", 100)
+}
+
+func TestRaiseConfidenceFloorSurvivesAPlainRefire(t *testing.T) {
+	s, _ := Open("")
+	now := time.Now()
+
+	s.AddWithConfidence(TypeCriticalPort, "203.0.113.9", "detail", 20, now)
+	s.RaiseConfidenceFloor(TypeCriticalPort, "203.0.113.9", 90)
+
+	// A later re-fire with a lower fresh confidence must not discard the
+	// reputation floor established earlier in the same episode.
+	s.AddWithConfidence(TypeCriticalPort, "203.0.113.9", "re-fire, lower overshoot", 15, now.Add(time.Second))
+	if c := *s.List()[0].Confidence; c != 90 {
+		t.Errorf("expected the reputation floor to survive a plain re-fire's lower confidence, got %d", c)
+	}
+
+	// A later re-fire with a higher fresh confidence than the floor
+	// should win on its own merits.
+	s.AddWithConfidence(TypeCriticalPort, "203.0.113.9", "re-fire, higher overshoot", 95, now.Add(2*time.Second))
+	if c := *s.List()[0].Confidence; c != 95 {
+		t.Errorf("expected a fresh confidence above the floor to win, got %d", c)
+	}
+}
+
+func TestRaiseConfidenceFloorResetOnRevival(t *testing.T) {
+	s, _ := Open("")
+	now := time.Now()
+
+	s.AddWithConfidence(TypeCriticalPort, "203.0.113.9", "detail", 20, now)
+	s.RaiseConfidenceFloor(TypeCriticalPort, "203.0.113.9", 90)
+	s.Clear(flagID(TypeCriticalPort, "203.0.113.9"), now.Add(time.Second))
+
+	s.AddWithConfidence(TypeCriticalPort, "203.0.113.9", "revived episode", 15, now.Add(2*time.Second))
+	if c := *s.List()[0].Confidence; c != 15 {
+		t.Errorf("expected a revived episode to start its confidence history fresh (no stale reputation floor), got %d", c)
+	}
+}
+
+func TestAddWithDetailPersistsEvidenceAndCountry(t *testing.T) {
+	s, _ := Open("")
+	now := time.Now()
+
+	evidence := Evidence{
+		Ports: []int{22, 3389},
+		Hosts: []string{"192.168.1.5"},
+		NAT:   &NATInfo{IP: "10.0.0.5", Port: 8080, Raw: "NAT (10.0.0.5:8080->192.168.1.5:80)"},
+	}
+	s.AddWithDetail(TypePortScan, "203.0.113.9", "detail", 42, evidence, "US", now)
+
+	f := s.List()[0]
+	if f.Country != "US" {
+		t.Errorf("expected Country to be set, got %q", f.Country)
+	}
+	if len(f.Evidence.Ports) != 2 || len(f.Evidence.Hosts) != 1 || f.Evidence.NAT == nil {
+		t.Fatalf("expected the full evidence to be persisted, got %+v", f.Evidence)
+	}
+	if f.Evidence.NAT.IP != "10.0.0.5" || f.Evidence.NAT.Port != 8080 {
+		t.Errorf("expected NAT detail to round-trip, got %+v", f.Evidence.NAT)
+	}
+
+	// A plain re-fire recomputes evidence fresh, same as Detail already does.
+	s.AddWithDetail(TypePortScan, "203.0.113.9", "detail", 42, Evidence{Ports: []int{22}}, "US", now.Add(time.Second))
+	f = s.List()[0]
+	if len(f.Evidence.Ports) != 1 || len(f.Evidence.Hosts) != 0 {
+		t.Errorf("expected evidence to reflect the latest call, got %+v", f.Evidence)
+	}
+}
+
+func TestApplyReputationSnapshotSetsSnapshotAndFloor(t *testing.T) {
+	s, _ := Open("")
+	now := time.Now()
+	s.AddWithConfidence(TypeCriticalPort, "203.0.113.9", "detail", 10, now)
+
+	score := 88
+	reports := 42
+	s.ApplyReputationSnapshot(TypeCriticalPort, "203.0.113.9", reputation.Result{
+		IP: "203.0.113.9", AbuseScore: &score, TotalReports: &reports, ISP: "Example Hosting",
+	})
+
+	f := s.List()[0]
+	if f.Reputation == nil || f.Reputation.ISP != "Example Hosting" {
+		t.Fatalf("expected the reputation snapshot to be stored, got %+v", f.Reputation)
+	}
+	if f.Confidence == nil || *f.Confidence != 88 {
+		t.Errorf("expected the AbuseScore to raise the confidence floor, got %+v", f.Confidence)
+	}
+}
+
+func TestApplyReputationSnapshotWithoutAbuseScoreStillStoresSnapshot(t *testing.T) {
+	s, _ := Open("")
+	now := time.Now()
+	s.AddWithConfidence(TypeCriticalPort, "203.0.113.9", "detail", 10, now)
+
+	// Shodan-only result -- no AbuseIPDB key configured, so AbuseScore is nil.
+	s.ApplyReputationSnapshot(TypeCriticalPort, "203.0.113.9", reputation.Result{
+		IP: "203.0.113.9", Ports: []int{22, 80}, Vulns: []string{"CVE-2021-1234"},
+	})
+
+	f := s.List()[0]
+	if f.Reputation == nil || len(f.Reputation.Vulns) != 1 {
+		t.Fatalf("expected the Shodan-only snapshot to still be stored, got %+v", f.Reputation)
+	}
+	if f.Confidence == nil || *f.Confidence != 10 {
+		t.Errorf("expected confidence to be untouched without an AbuseScore, got %+v", f.Confidence)
+	}
+}
+
+func TestApplyReputationSnapshotIsTorRaisesFloorWithoutAbuseScore(t *testing.T) {
+	s, _ := Open("")
+	now := time.Now()
+	s.AddWithConfidence(TypeCriticalPort, "203.0.113.9", "detail", 10, now)
+
+	s.ApplyReputationSnapshot(TypeCriticalPort, "203.0.113.9", reputation.Result{
+		IP: "203.0.113.9", IsTor: true,
+	})
+
+	f := s.List()[0]
+	if f.Confidence == nil || *f.Confidence != reputation.TorExitNodeFloor {
+		t.Errorf("expected IsTor to raise confidence to %d, got %+v", reputation.TorExitNodeFloor, f.Confidence)
+	}
+}
+
+func TestApplyReputationSnapshotHostingUsageTypeRaisesFloor(t *testing.T) {
+	s, _ := Open("")
+	now := time.Now()
+	s.AddWithConfidence(TypeCriticalPort, "203.0.113.9", "detail", 10, now)
+
+	s.ApplyReputationSnapshot(TypeCriticalPort, "203.0.113.9", reputation.Result{
+		IP: "203.0.113.9", UsageType: "Data Center/Web Hosting/Transit",
+	})
+
+	f := s.List()[0]
+	if f.Confidence == nil || *f.Confidence != reputation.HostingProviderFloor {
+		t.Errorf("expected a hosting usageType to raise confidence to %d, got %+v", reputation.HostingProviderFloor, f.Confidence)
+	}
+}
+
+func TestApplyReputationSnapshotStrongerSignalWins(t *testing.T) {
+	s, _ := Open("")
+	now := time.Now()
+
+	// AbuseScore (80) beats IsTor's floor (60).
+	s.AddWithConfidence(TypeCriticalPort, "203.0.113.9", "detail", 10, now)
+	highScore := 80
+	s.ApplyReputationSnapshot(TypeCriticalPort, "203.0.113.9", reputation.Result{AbuseScore: &highScore, IsTor: true})
+	if f := s.List()[0]; f.Confidence == nil || *f.Confidence != 80 {
+		t.Errorf("expected the higher AbuseScore to win, got %+v", f.Confidence)
+	}
+
+	// IsTor's floor (60) beats a low AbuseScore (10).
+	s.AddWithConfidence(TypeCriticalPort, "203.0.113.10", "detail", 10, now)
+	lowScore := 10
+	s.ApplyReputationSnapshot(TypeCriticalPort, "203.0.113.10", reputation.Result{AbuseScore: &lowScore, IsTor: true})
+	var found *Flag
+	for _, f := range s.List() {
+		if f.Target == "203.0.113.10" {
+			found = &f
+		}
+	}
+	if found == nil || found.Confidence == nil || *found.Confidence != reputation.TorExitNodeFloor {
+		t.Errorf("expected the higher RiskFloor to win over a low AbuseScore, got %+v", found)
+	}
+}
+
+func TestApplyReputationSnapshotUnknownIDIsNoOp(t *testing.T) {
+	s, _ := Open("")
+	score := 90
+	s.ApplyReputationSnapshot(TypeCriticalPort, "203.0.113.99", reputation.Result{AbuseScore: &score})
+	if len(s.List()) != 0 {
+		t.Errorf("expected no flag to be created for an unknown ID, got %+v", s.List())
+	}
+}
+
+func TestReputationSnapshotResetOnRevival(t *testing.T) {
+	s, _ := Open("")
+	now := time.Now()
+	s.AddWithConfidence(TypeCriticalPort, "203.0.113.9", "detail", 10, now)
+	score := 90
+	s.ApplyReputationSnapshot(TypeCriticalPort, "203.0.113.9", reputation.Result{IP: "203.0.113.9", AbuseScore: &score})
+	s.Clear(flagID(TypeCriticalPort, "203.0.113.9"), now.Add(time.Second))
+
+	s.AddWithConfidence(TypeCriticalPort, "203.0.113.9", "revived episode", 15, now.Add(2*time.Second))
+	if f := s.List()[0]; f.Reputation != nil {
+		t.Errorf("expected a revived episode to start with no stale reputation snapshot, got %+v", f.Reputation)
+	}
+}
+
+func TestOnRaiseFiresOnNewEpisodeOnly(t *testing.T) {
+	s, _ := Open("")
+	var raised []Flag
+	s.WithOnRaise(func(f Flag) {
+		raised = append(raised, f)
+	})
+	now := time.Now()
+
+	s.Add(TypePortScan, "203.0.113.9", "first", now)
+	if len(raised) != 1 || raised[0].Detail != "first" {
+		t.Fatalf("expected onRaise to fire once for the first-ever raise, got %+v", raised)
+	}
+
+	s.Add(TypePortScan, "203.0.113.9", "re-fire", now.Add(time.Second))
+	if len(raised) != 1 {
+		t.Fatalf("expected a plain re-fire to not trigger onRaise, got %d calls", len(raised))
+	}
+
+	id := flagID(TypePortScan, "203.0.113.9")
+	s.Clear(id, now.Add(2*time.Second))
+	s.Add(TypePortScan, "203.0.113.9", "revived", now.Add(3*time.Second))
+	if len(raised) != 2 || raised[1].Detail != "revived" {
+		t.Fatalf("expected a revival from cleared to trigger onRaise again, got %+v", raised)
+	}
+}
+
+func TestOnRaiseNotSetIsNoOp(t *testing.T) {
+	s, _ := Open("")
+	// No WithOnRaise call -- Add must not panic on a nil hook.
+	if isNew := s.Add(TypePortScan, "203.0.113.9", "detail", time.Now()); !isNew {
+		t.Error("expected the raise itself to still succeed with no hook configured")
 	}
 }

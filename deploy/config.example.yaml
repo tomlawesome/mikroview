@@ -14,6 +14,12 @@ store:
   retention: 24h
   maxEvents: 200000
 
+# Leveled, colorized server log output (see docs/configuration.md's
+# "Logging" section) -- level defaults to info already, uncomment only
+# to change it. One of debug/info/warn/error.
+# log:
+#   level: info
+
 # Optional: shows a country flag next to public IPs in the UI. Requires
 # your own MaxMind GeoLite2 database -- see docs/configuration.md. Left
 # unset, no flags are shown; this is never required.
@@ -29,10 +35,11 @@ store:
 
 # Behavioral flags (port scans, activity spikes, critical-port attempts,
 # volume spikes) are always on with sensible defaults -- nothing below is
-# required. Uncomment storePath to persist raised flags across restarts
-# (see deploy/docker-compose.yml for the matching volume mount); leave it
-# unset and flags still work, they just reset like everything else in
-# mikroview. See docs/configuration.md for what each threshold means.
+# required. storePath already defaults to /var/lib/mikroview/flags.json
+# (see deploy/docker-compose.yml for the matching volume mount if you
+# want it to survive container recreation, not just restarts) -- only
+# uncomment this block to move that path or change a threshold. See
+# docs/configuration.md for what each threshold means.
 # flags:
 #   storePath: /var/lib/mikroview/flags.json
 #   portScanThreshold: 15
@@ -57,6 +64,27 @@ store:
 #   repeatedDropsWindow: 15m
 #   hostActivityMultiplier: 3
 #   hostActivityWarmupSamples: 20
+#
+#   # Per-detector on/off + scope restrictions -- every detector defaults
+#   # to enabled and unscoped; a live admin-only UI toggle can override
+#   # these at runtime without a restart (persisted separately to
+#   # detectorSettingsStorePath below, seeded from these values the first
+#   # time that file doesn't exist yet). See docs/configuration.md's
+#   # "Per-detector toggles" section for the full per-detector field
+#   # table (not every detector consults every scope field) and the
+#   # allow/deny + AND-combination rules.
+#   detectorSettingsStorePath: /var/lib/mikroview/detector-settings.json
+#   detectors:
+#     critical_port:
+#       enabled: true
+#       scope:
+#         hosts: []
+#         hostsMode: ""
+#         ports: []
+#         portsMode: ""
+#         classification: ""
+#         rules: []
+#         rulesMode: ""
 
 # Optional: friendly display names shown in place of a raw RouterOS rule
 # label (e.g. "r13") or a raw host IP, everywhere they appear in the UI
@@ -67,16 +95,51 @@ store:
 # hostNames:
 #   192.168.1.50: "Living room NAS"
 
-# Optional: local authentication. Mikroview stays fully open (today's
-# behavior) until you create the first account through the web UI --
-# storePath must be set (and its volume mounted, see
-# deploy/docker-compose.yml) before you do, or account creation is
-# refused rather than creating one that vanishes on restart. See
-# SECURITY.md and docs/configuration.md's "Authentication" section.
+# Local authentication. storePath already defaults to
+# /var/lib/mikroview/users.json (see deploy/docker-compose.yml for the
+# matching volume mount if you want it to survive container recreation,
+# not just restarts) -- only uncomment this block to move that path or
+# change sessionTTL. The first time mikroview loads, it presents a
+# one-time choice: create the admin account, or explicitly skip auth
+# for this deployment -- see SECURITY.md and docs/configuration.md's
+# "Authentication" section for that flow and how to reverse a skip
+# later (CLI-only, by design).
 # auth:
 #   storePath: /var/lib/mikroview/users.json
-#   secureCookie: false
+#   secureCookie: true
 #   sessionTTL: 24h
+
+# TLS is on by default and needs no configuration to work -- mikroview
+# generates its own local CA + certificate on first start, already
+# persisted to /var/lib/mikroview/tls by default. Only uncomment this
+# block to move that path, or point certFile/keyFile at your own cert
+# instead of generating one. See SECURITY.md and docs/configuration.md's
+# "TLS" section, including the one documented reason to set
+# enabled: false.
+# tls:
+#   enabled: true
+#   certFile: ""
+#   keyFile: ""
+#   hosts: []
+#   storePath: /var/lib/mikroview/tls
+
+# Optional: email/push alerting on newly-raised behavioral flags,
+# batched rather than one message per flag. See docs/configuration.md's
+# "Notifications" section for the full field reference and the
+# reasoning behind batchWindow being a fixed interval, not a debounce.
+# notify:
+#   batchWindow: 60s
+#   smtp:
+#     host: ""
+#     port: 587
+#     username: ""
+#     password: ""
+#     tlsMode: "starttls"
+#     from: ""
+#     to: []
+#   pushover:
+#     token: ""
+#     user: ""
 
 # Devices are matched by the syslog source IP mikroview sees them from.
 # Sources not listed here still appear in the UI, auto-discovered and

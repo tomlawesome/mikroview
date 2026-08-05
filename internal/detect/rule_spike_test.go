@@ -99,3 +99,29 @@ func TestRuleSpikeTracksEachRuleIndependently(t *testing.T) {
 		t.Fatalf("expected only rule-a to be flagged, got %+v", list)
 	}
 }
+
+func TestRuleSpikeRespectsRulesDenylist(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.RuleSpikeWindow = time.Minute
+	cfg.RuleSpikeMultiplier = 3
+	cfg.RuleSpikeMinRate = 0.05
+	cfg.PortScanThreshold = 1000
+	cfg.ActivitySpikeThreshold = 1000
+
+	seed := DefaultSettingsMap()
+	seed[DetectorRuleSpike] = Settings{
+		Enabled: true,
+		Scope:   Scope{Rules: []string{"noisy-rule"}, RulesMode: ListModeDeny},
+	}
+	d, fs := newTestDetectorWithSettings(t, cfg, seed)
+
+	now := time.Now()
+	d.Observe(ruleEvt("noisy-rule", now))
+	next := now.Add(cfg.RuleSpikeWindow + time.Second)
+	for i := 0; i < 10; i++ {
+		d.Observe(ruleEvt("noisy-rule", next.Add(time.Duration(i)*time.Millisecond)))
+	}
+	if len(fs.List()) != 0 {
+		t.Fatalf("expected the denylisted rule to never flag, got %+v", fs.List())
+	}
+}
