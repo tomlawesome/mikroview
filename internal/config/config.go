@@ -51,6 +51,38 @@ type Reputation struct {
 	AbuseIPDBKey string `yaml:"abuseIPDBKey"`
 }
 
+// SMTP configures send-only email alerting on newly-raised flags (issue
+// #30) -- no inbound mailbox, no auth flows beyond these client creds,
+// relayed through the operator's own external mail server. See
+// internal/notify.SMTPConfig for the runtime shape this maps onto.
+type SMTP struct {
+	Host string `yaml:"host"`
+	Port int    `yaml:"port"`
+	// Username left empty means no AUTH is attempted, for an open local
+	// relay (e.g. a Postfix instance on the same host/network).
+	Username string `yaml:"username"`
+	Password string `yaml:"password"`
+	// TLSMode is "" (plaintext, local relay only), "starttls" (upgrade
+	// after connecting, typically port 587), or "implicit" (TLS from the
+	// first byte, typically port 465).
+	TLSMode string   `yaml:"tlsMode"`
+	From    string   `yaml:"from"`
+	To      []string `yaml:"to"`
+}
+
+// Notify is entirely optional -- see internal/notify. Left with an
+// empty SMTP.Host, notifications are simply never dispatched; no
+// default relay is assumed.
+type Notify struct {
+	// BatchWindow: how often pending flags are flushed to every
+	// configured channel -- a fixed interval, not a quiet-period
+	// debounce, so a sustained flood of flags during a real incident
+	// still gets a bounded max delay before alerting rather than the
+	// window continuously resetting. See internal/notify.Dispatcher.
+	BatchWindow time.Duration `yaml:"batchWindow"`
+	SMTP        SMTP          `yaml:"smtp"`
+}
+
 // Auth configures internal/auth's local authentication. Unlike Flags'
 // StorePath, StorePath here is not truly optional -- mikroview stays
 // fully open (today's behavior) as long as no user account exists, but
@@ -165,6 +197,7 @@ type Config struct {
 	Reputation Reputation `yaml:"reputation"`
 	Flags      Flags      `yaml:"flags"`
 	Auth       Auth       `yaml:"auth"`
+	Notify     Notify     `yaml:"notify"`
 	Devices    []Device   `yaml:"devices"`
 
 	// RuleNames/HostNames are optional friendly-display-name maps -- see
@@ -230,6 +263,9 @@ func defaults() Config {
 		},
 		Auth: Auth{
 			SessionTTL: 24 * time.Hour,
+		},
+		Notify: Notify{
+			BatchWindow: 60 * time.Second,
 		},
 	}
 }
@@ -451,12 +487,60 @@ func applyEnv(cfg *Config) {
 			cfg.Auth.SessionTTL = d
 		}
 	}
+	if v := os.Getenv("MIKROVIEW_NOTIFY_BATCH_WINDOW"); v != "" {
+		if d, err := time.ParseDuration(v); err == nil {
+			cfg.Notify.BatchWindow = d
+		}
+	}
+	if v := os.Getenv("MIKROVIEW_NOTIFY_SMTP_HOST"); v != "" {
+		cfg.Notify.SMTP.Host = v
+	}
+	if v := os.Getenv("MIKROVIEW_NOTIFY_SMTP_PORT"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			cfg.Notify.SMTP.Port = n
+		}
+	}
+	if v := os.Getenv("MIKROVIEW_NOTIFY_SMTP_USERNAME"); v != "" {
+		cfg.Notify.SMTP.Username = v
+	}
+	// Password is the one field here worth a secret-via-env path even
+	// with a config file in play, same reasoning MIKROVIEW_ABUSEIPDB_KEY
+	// already establishes -- a credential doesn't have to sit in
+	// config.yaml just because the rest of the block does.
+	if v := os.Getenv("MIKROVIEW_NOTIFY_SMTP_PASSWORD"); v != "" {
+		cfg.Notify.SMTP.Password = v
+	}
+	if v := os.Getenv("MIKROVIEW_NOTIFY_SMTP_TLS_MODE"); v != "" {
+		cfg.Notify.SMTP.TLSMode = v
+	}
+	if v := os.Getenv("MIKROVIEW_NOTIFY_SMTP_FROM"); v != "" {
+		cfg.Notify.SMTP.From = v
+	}
+	if v := os.Getenv("MIKROVIEW_NOTIFY_SMTP_TO"); v != "" {
+		cfg.Notify.SMTP.To = parseStringList(v)
+	}
 }
 
 // parseIntList parses a comma-separated list of integers (e.g. a port
 // list from an env var). Any single malformed entry invalidates the
 // whole value -- like every other env var here, a bad value is ignored
 // in favor of whatever was already set, rather than partially applied.
+// parseStringList parses a comma-separated list of plain strings (e.g.
+// notify.smtp.to's recipient addresses from an env var). Unlike
+// parseIntList, there's no format to validate here -- any entry is a
+// valid recipient as far as this package is concerned -- so it never
+// fails, just splits and trims.
+func parseStringList(v string) []string {
+	parts := strings.Split(v, ",")
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		if trimmed := strings.TrimSpace(p); trimmed != "" {
+			out = append(out, trimmed)
+		}
+	}
+	return out
+}
+
 func parseIntList(v string) ([]int, bool) {
 	parts := strings.Split(v, ",")
 	out := make([]int, 0, len(parts))
