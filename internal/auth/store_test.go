@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -231,5 +232,131 @@ func TestSeparateProcessPasswordResetIsPickedUpByRunningStore(t *testing.T) {
 	}
 	if _, err := serverStore.Authenticate("admin", "old-password", time.Now()); err == nil {
 		t.Error("expected the old password to stop working after the external reset")
+	}
+}
+
+func TestDisableOnlyWhenNoAccounts(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "users.json")
+	s, _ := Open(path)
+
+	if s.Disabled() {
+		t.Fatal("expected a fresh store to not be disabled")
+	}
+	if err := s.Disable(); err != nil {
+		t.Fatalf("expected Disable to succeed with zero accounts, got %v", err)
+	}
+	if !s.Disabled() {
+		t.Error("expected Disabled() to report true after Disable()")
+	}
+
+	// Once an account exists, Disable must refuse -- disabling auth out
+	// from under an existing account isn't this method's job.
+	s2, _ := Open(filepath.Join(t.TempDir(), "users2.json"))
+	s2.Register("admin", "password123", time.Now())
+	if err := s2.Disable(); err != ErrRegistrationClosed {
+		t.Errorf("expected Disable to refuse once an account exists, got %v", err)
+	}
+}
+
+func TestDisableRefusesWhenNotPersisted(t *testing.T) {
+	s, _ := Open("")
+	if err := s.Disable(); err != ErrNotPersisted {
+		t.Errorf("expected ErrNotPersisted for an unconfigured store, got %v", err)
+	}
+}
+
+func TestEnableSetupClearsDisabled(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "users.json")
+	s, _ := Open(path)
+	if err := s.Disable(); err != nil {
+		t.Fatal(err)
+	}
+	if !s.Disabled() {
+		t.Fatal("expected the store to be disabled before EnableSetup")
+	}
+
+	if err := s.EnableSetup(); err != nil {
+		t.Fatal(err)
+	}
+	if s.Disabled() {
+		t.Error("expected EnableSetup to clear the disabled flag")
+	}
+
+	// The setup form should be usable again -- Register must not be
+	// refused by anything left over from the prior Disable.
+	if _, err := s.Register("admin", "password123", time.Now()); err != nil {
+		t.Errorf("expected Register to succeed after EnableSetup, got %v", err)
+	}
+}
+
+// TestSeparateProcessEnableSetupIsPickedUpByRunningStore mirrors
+// TestSeparateProcessPasswordResetIsPickedUpByRunningStore, but for
+// -enable-auth-setup -- the CLI tool's whole point is taking effect on
+// an already-running server without a restart.
+func TestSeparateProcessEnableSetupIsPickedUpByRunningStore(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "users.json")
+
+	serverStore, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := serverStore.Disable(); err != nil {
+		t.Fatal(err)
+	}
+	if !serverStore.Disabled() {
+		t.Fatal("expected the server's store to be disabled")
+	}
+
+	cliStore, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(10 * time.Millisecond) // see the password-reset test's identical reasoning
+	if err := cliStore.EnableSetup(); err != nil {
+		t.Fatal(err)
+	}
+
+	if serverStore.Disabled() {
+		t.Error("expected the running server's store to pick up the externally-cleared disabled flag")
+	}
+}
+
+func TestOpenReadsLegacyBareArrayFormat(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "users.json")
+	legacy := `[{"id":"u1","username":"admin","passwordHash":"$argon2id$fake","role":"admin","createdAt":"2026-01-01T00:00:00Z"}]`
+	if err := os.WriteFile(path, []byte(legacy), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	s, err := Open(path)
+	if err != nil {
+		t.Fatalf("expected a legacy bare-array file to still load, got %v", err)
+	}
+	if s.Count() != 1 {
+		t.Fatalf("expected 1 user loaded from the legacy format, got %d", s.Count())
+	}
+	if s.Disabled() {
+		t.Error("expected a legacy file (no disabled key at all) to load as Disabled: false")
+	}
+	if u, ok := s.ByUsername("admin"); !ok || u.ID != "u1" {
+		t.Errorf("expected the legacy user to be readable by username, got %+v, %v", u, ok)
+	}
+}
+
+func TestOpenReadsNewObjectFormat(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "users.json")
+	// Round-trip through the store's own writer -- the true contract is
+	// "whatever Store.persistLocked writes, Store.Open can read back."
+	s1, _ := Open(path)
+	if err := s1.Disable(); err != nil {
+		t.Fatal(err)
+	}
+
+	s2, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !s2.Disabled() {
+		t.Error("expected the object-format file to round-trip Disabled: true")
 	}
 }

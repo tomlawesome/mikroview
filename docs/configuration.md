@@ -516,13 +516,13 @@ consults the axes relevant to how it's keyed:
 aggregate, not tied to any particular host, port, or rule, so scoping it
 wouldn't mean anything.
 
-## Authentication (optional, opt-in by creating an account)
+## Authentication
 
-Mikroview stays fully open -- today's behavior -- until you create the
-first account. The moment one exists, every request except
-`GET /api/healthz` requires a valid session, permanently, from then on.
-See [SECURITY.md](../SECURITY.md) for the full threat-model writeup;
-this section is the configuration reference.
+The first time mikroview loads with no accounts and no prior decision,
+it shows a one-time choice screen instead of the live view: **create
+the admin account**, or **continue without an account** ("skip"). See
+[SECURITY.md](../SECURITY.md) for the full threat-model writeup; this
+section is the configuration reference.
 
 ```yaml
 auth:
@@ -531,14 +531,13 @@ auth:
   sessionTTL: 24h
 ```
 
-- **`storePath`** — where accounts are persisted, as a small JSON file
-  (usernames + Argon2id password hashes, never plaintext). Unlike
-  `flags.storePath`, this is not optional once you create an account:
-  mikroview refuses to create one without a configured, writable path,
-  since an account that doesn't survive a restart would either lock
-  everyone out or silently reopen the deployment. Mount a volume for its
-  parent directory the same way you would for flag persistence -- see
-  `deploy/docker-compose.yml`.
+- **`storePath`** — where accounts (and the skip/disabled decision) are
+  persisted, as a small JSON file (usernames + Argon2id password hashes,
+  never plaintext). Defaults to `/var/lib/mikroview/users.json`, which
+  the Dockerfile creates and owns -- no configuration needed for the
+  zero-config case. Mount a volume over `/var/lib/mikroview` if you want
+  the decision (and any accounts) to survive container recreation, not
+  just process restarts -- see `deploy/docker-compose.yml`.
 - **`secureCookie`** — sets the session cookie's `Secure` flag. On by
   default, matching [TLS](#tls) being on by default -- there's no other
   kind of connection to have a session on. Only turn this off if you've
@@ -548,11 +547,29 @@ auth:
   activity before needing to log in again," not a fixed session
   lifetime.
 
-**Creating the first account** is done through the web UI itself, not a
-CLI command: while no account exists, mikroview shows a one-time setup
-form instead of a login form, and whoever completes it becomes the
-admin. Don't leave mikroview reachable by more than a trusted network
-before completing this step.
+**If you create an account**, every request except `GET /api/healthz`
+and the login/session endpoints requires a valid session, permanently,
+from then on. Whoever completes the form becomes the admin.
+
+**If you skip**, mikroview stays fully open indefinitely -- the same
+behavior an older mikroview had by accident, but now a deliberate,
+persisted choice rather than "nobody got around to setting up auth
+yet." Before deciding, weigh who can reach the deployment: skipping is
+reasonable on a network you already trust as much as the router itself,
+not on anything broader.
+
+**Reversing a skip** is CLI-only, by design: nothing in the web UI or
+API can re-enable auth once skipped, so a visitor to an open deployment
+can never unilaterally impose a login requirement on everyone else.
+
+```sh
+mikroview -enable-auth-setup
+```
+
+re-arms the choice screen (it does not create an account itself -- the
+next person to load mikroview, or you, still completes the create-
+account form). Requires container/host access, the same trust anchor as
+the recovery commands below.
 
 **Adding more accounts** afterward is admin-only, either via the "Add
 user" control in the toolbar or `POST /api/auth/users`.
@@ -683,7 +700,7 @@ Override individual scalar settings without a mounted file:
 | `MIKROVIEW_FLAGS_LOW_SLOW_SCAN_DROP_RATIO` | `flags.lowSlowScanDropRatio` |
 | `MIKROVIEW_FLAGS_LOW_SLOW_SCAN_BASELINE_MULTIPLIER` | `flags.lowSlowScanBaselineMultiplier` |
 | `MIKROVIEW_FLAGS_DETECTOR_SETTINGS_STORE_PATH` | `flags.detectorSettingsStorePath` (see [Per-detector toggles](#per-detector-toggles-and-scope-restrictions-optional)) |
-| `MIKROVIEW_AUTH_STORE_PATH` | `auth.storePath` (see [Authentication](#authentication-optional-opt-in-by-creating-an-account)) |
+| `MIKROVIEW_AUTH_STORE_PATH` | `auth.storePath` (see [Authentication](#authentication)) |
 | `MIKROVIEW_AUTH_SECURE_COOKIE` | `auth.secureCookie` |
 | `MIKROVIEW_AUTH_SESSION_TTL` | `auth.sessionTTL` |
 | `MIKROVIEW_TLS_ENABLED` | `tls.enabled` (see [TLS](#tls)) |
@@ -708,10 +725,10 @@ Override individual scalar settings without a mounted file:
 `-geoip-db` — see `go run . -h`. Devices, rule/host names, and auth
 config can only be set via YAML/env, not flags.
 
-`-healthcheck`, `-list-users`, `-reset-password <username>` are
-standalone modes -- each does its one job and exits, rather than
-starting the server. See [Authentication](#authentication-optional-opt-in-by-creating-an-account)
-for the latter two.
+`-healthcheck`, `-list-users`, `-reset-password <username>`,
+`-enable-auth-setup` are standalone modes -- each does its one job and
+exits, rather than starting the server. See
+[Authentication](#authentication) for the latter three.
 
 ## API reference
 
@@ -737,7 +754,7 @@ for the latter two.
 
 Every route above `/api/auth/session`/`/register`/`/login`/`/logout` and
 `/api/healthz` requires a valid session once an account exists -- see
-[Authentication](#authentication-optional-opt-in-by-creating-an-account).
+[Authentication](#authentication).
 Every mutating (`POST`/`PUT`) request also requires an
 `X-Requested-With: mikroview` header once an account exists (a CSRF
 mitigation, see SECURITY.md).

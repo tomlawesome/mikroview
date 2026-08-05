@@ -69,6 +69,13 @@ func main() {
 	if len(os.Args) > 1 && os.Args[1] == "-reset-password" {
 		os.Exit(runResetPassword(os.Args[2:]))
 	}
+	// -enable-auth-setup: the only way to re-arm the web setup form after
+	// a deployment has explicitly skipped auth (see auth.Store.Disable) --
+	// deliberately CLI-only, not exposed via any API endpoint, so a UI
+	// visitor can never unilaterally re-impose auth for everyone else.
+	if len(os.Args) > 1 && os.Args[1] == "-enable-auth-setup" {
+		os.Exit(runEnableAuthSetup())
+	}
 
 	cfg, err := config.Load(os.Getenv("MIKROVIEW_CONFIG"), os.Args[1:])
 	if err != nil {
@@ -94,10 +101,13 @@ func main() {
 	if err != nil {
 		log.Printf("auth: %v (continuing with in-memory-only, unpersisted account state)", err)
 	}
-	if authStore.Count() > 0 {
+	switch {
+	case authStore.Count() > 0:
 		log.Printf("auth: %d account(s) registered -- authentication is active", authStore.Count())
-	} else {
-		log.Printf("auth: no accounts registered -- mikroview is fully open until one is created (see docs/configuration.md)")
+	case authStore.Disabled():
+		log.Printf("auth: explicitly disabled for this deployment -- mikroview is fully open (run -enable-auth-setup to reverse this)")
+	default:
+		log.Printf("auth: no decision made yet -- mikroview is showing the first-run choice screen (see docs/configuration.md)")
 	}
 	detectCfg := detect.Config{
 		PortScanThreshold:      cfg.Flags.PortScanThreshold,
@@ -379,6 +389,25 @@ func runListUsers() int {
 	for _, u := range users {
 		fmt.Printf("%s\t%s\n", u.Username, u.Role)
 	}
+	return 0
+}
+
+// runEnableAuthSetup backs `-enable-auth-setup` -- clears a prior
+// explicit "skip auth" decision (see auth.Store.Disable) so the web
+// setup form becomes reachable again on next load. It does not create
+// an account itself; the operator (or whoever loads the UI next) still
+// completes setup through the normal create-account form.
+func runEnableAuthSetup() int {
+	store, err := openAuthStoreForCLI("-enable-auth-setup")
+	if err != nil {
+		log.Printf("enable-auth-setup: %v", err)
+		return 1
+	}
+	if err := store.EnableSetup(); err != nil {
+		log.Printf("enable-auth-setup: %v", err)
+		return 1
+	}
+	fmt.Println("Auth setup re-enabled -- the create-account form will be shown again on next load.")
 	return 0
 }
 

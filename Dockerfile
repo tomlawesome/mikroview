@@ -14,6 +14,13 @@ RUN go mod download
 COPY . .
 COPY --from=frontend /src/frontend/dist ./web/dist
 RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/mikroview .
+# Every optional persistence path (flags/detector-settings/auth/TLS --
+# see internal/config's defaultDataDir) defaults under here, so it needs
+# to exist and be owned by the runtime user out of the box. Created here
+# rather than in the final stage: distroless has no shell, so it has no
+# way to run `mkdir` itself -- this empty, correctly-owned directory is
+# just copied in below.
+RUN mkdir -p /var/lib/mikroview
 
 # --- runtime ------------------------------------------------------------
 # distroless nonroot: uid 65532 can't bind ports <1024, hence the app's
@@ -21,6 +28,7 @@ RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/mikrovi
 # conventional host port 514 to it.
 FROM gcr.io/distroless/static-debian12:nonroot
 COPY --from=backend /out/mikroview /mikroview
+COPY --from=backend --chown=65532:65532 /var/lib/mikroview /var/lib/mikroview
 USER nonroot:nonroot
 # 8080/tcp serves HTTPS by default (TLS is on unless tls.enabled: false
 # -- see docs/configuration.md's "TLS" section).

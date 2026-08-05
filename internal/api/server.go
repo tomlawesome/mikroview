@@ -62,6 +62,7 @@ func (s *Server) Routes() http.Handler {
 
 	mux.HandleFunc("GET /api/auth/session", s.handleAuthSession)
 	mux.HandleFunc("POST /api/auth/register", s.handleAuthRegister)
+	mux.HandleFunc("POST /api/auth/skip", s.handleAuthSkip)
 	mux.HandleFunc("POST /api/auth/login", s.handleAuthLogin)
 	mux.HandleFunc("POST /api/auth/logout", s.handleAuthLogout)
 	mux.HandleFunc("POST /api/auth/users", s.handleAuthCreateUser)

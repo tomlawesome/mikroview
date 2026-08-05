@@ -29,10 +29,11 @@ store:
 
 # Behavioral flags (port scans, activity spikes, critical-port attempts,
 # volume spikes) are always on with sensible defaults -- nothing below is
-# required. Uncomment storePath to persist raised flags across restarts
-# (see deploy/docker-compose.yml for the matching volume mount); leave it
-# unset and flags still work, they just reset like everything else in
-# mikroview. See docs/configuration.md for what each threshold means.
+# required. storePath already defaults to /var/lib/mikroview/flags.json
+# (see deploy/docker-compose.yml for the matching volume mount if you
+# want it to survive container recreation, not just restarts) -- only
+# uncomment this block to move that path or change a threshold. See
+# docs/configuration.md for what each threshold means.
 # flags:
 #   storePath: /var/lib/mikroview/flags.json
 #   portScanThreshold: 15
@@ -88,23 +89,27 @@ store:
 # hostNames:
 #   192.168.1.50: "Living room NAS"
 
-# Optional: local authentication. Mikroview stays fully open (today's
-# behavior) until you create the first account through the web UI --
-# storePath must be set (and its volume mounted, see
-# deploy/docker-compose.yml) before you do, or account creation is
-# refused rather than creating one that vanishes on restart. See
-# SECURITY.md and docs/configuration.md's "Authentication" section.
+# Local authentication. storePath already defaults to
+# /var/lib/mikroview/users.json (see deploy/docker-compose.yml for the
+# matching volume mount if you want it to survive container recreation,
+# not just restarts) -- only uncomment this block to move that path or
+# change sessionTTL. The first time mikroview loads, it presents a
+# one-time choice: create the admin account, or explicitly skip auth
+# for this deployment -- see SECURITY.md and docs/configuration.md's
+# "Authentication" section for that flow and how to reverse a skip
+# later (CLI-only, by design).
 # auth:
 #   storePath: /var/lib/mikroview/users.json
 #   secureCookie: true
 #   sessionTTL: 24h
 
 # TLS is on by default and needs no configuration to work -- mikroview
-# generates its own local CA + certificate on first start. Uncomment
-# storePath to persist that CA across restarts (same pattern as
-# flags.storePath), or point certFile/keyFile at your own cert instead
-# of generating one. See SECURITY.md and docs/configuration.md's "TLS"
-# section, including the one documented reason to set enabled: false.
+# generates its own local CA + certificate on first start, already
+# persisted to /var/lib/mikroview/tls by default. Only uncomment this
+# block to move that path, or point certFile/keyFile at your own cert
+# instead of generating one. See SECURITY.md and docs/configuration.md's
+# "TLS" section, including the one documented reason to set
+# enabled: false.
 # tls:
 #   enabled: true
 #   certFile: ""
