@@ -9,6 +9,10 @@ listen:
   syslogUdp: ":1514"
   syslogTcp: ":1514"
   http: ":8080"
+  # Redirect-only -- bounces a plain HTTP request to the HTTPS listener
+  # above, never serves the app itself. Set to "" to disable (e.g. if
+  # your own reverse proxy handles the HTTP->HTTPS redirect instead).
+  httpRedirect: ":8081"
 
 store:
   retention: 24h

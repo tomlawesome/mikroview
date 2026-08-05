@@ -86,6 +86,40 @@ devices:
 	})
 }
 
+func TestListenHTTPRedirectDefaultsAndOverrides(t *testing.T) {
+	t.Run("defaults to :8081", func(t *testing.T) {
+		cfg, err := Load("", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if cfg.Listen.HTTPRedirect != ":8081" {
+			t.Errorf("Listen.HTTPRedirect = %q, want %q", cfg.Listen.HTTPRedirect, ":8081")
+		}
+	})
+
+	t.Run("env overrides default", func(t *testing.T) {
+		t.Setenv("MIKROVIEW_LISTEN_HTTP_REDIRECT", ":9081")
+		cfg, err := Load("", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if cfg.Listen.HTTPRedirect != ":9081" {
+			t.Errorf("Listen.HTTPRedirect = %q, want the env value :9081", cfg.Listen.HTTPRedirect)
+		}
+	})
+
+	t.Run("flag overrides env, empty string disables it", func(t *testing.T) {
+		t.Setenv("MIKROVIEW_LISTEN_HTTP_REDIRECT", ":9081")
+		cfg, err := Load("", []string{"-http-redirect", ""})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if cfg.Listen.HTTPRedirect != "" {
+			t.Errorf("Listen.HTTPRedirect = %q, want empty (disabled)", cfg.Listen.HTTPRedirect)
+		}
+	})
+}
+
 func TestFlagsEnvVarsOverrideDefaults(t *testing.T) {
 	t.Setenv("MIKROVIEW_FLAGS_STORE_PATH", "/data/flags.json")
 	t.Setenv("MIKROVIEW_FLAGS_PORT_SCAN_THRESHOLD", "30")
