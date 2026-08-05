@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/tomlawesome/mikroview/internal/reputation"
 )
 
 func TestOpenEmptyPathIsUsable(t *testing.T) {
@@ -328,5 +330,97 @@ func TestRaiseConfidenceFloorResetOnRevival(t *testing.T) {
 	s.AddWithConfidence(TypeCriticalPort, "203.0.113.9", "revived episode", 15, now.Add(2*time.Second))
 	if c := *s.List()[0].Confidence; c != 15 {
 		t.Errorf("expected a revived episode to start its confidence history fresh (no stale reputation floor), got %d", c)
+	}
+}
+
+func TestAddWithDetailPersistsEvidenceAndCountry(t *testing.T) {
+	s, _ := Open("")
+	now := time.Now()
+
+	evidence := Evidence{
+		Ports: []int{22, 3389},
+		Hosts: []string{"192.168.1.5"},
+		NAT:   &NATInfo{IP: "10.0.0.5", Port: 8080, Raw: "NAT (10.0.0.5:8080->192.168.1.5:80)"},
+	}
+	s.AddWithDetail(TypePortScan, "203.0.113.9", "detail", 42, evidence, "US", now)
+
+	f := s.List()[0]
+	if f.Country != "US" {
+		t.Errorf("expected Country to be set, got %q", f.Country)
+	}
+	if len(f.Evidence.Ports) != 2 || len(f.Evidence.Hosts) != 1 || f.Evidence.NAT == nil {
+		t.Fatalf("expected the full evidence to be persisted, got %+v", f.Evidence)
+	}
+	if f.Evidence.NAT.IP != "10.0.0.5" || f.Evidence.NAT.Port != 8080 {
+		t.Errorf("expected NAT detail to round-trip, got %+v", f.Evidence.NAT)
+	}
+
+	// A plain re-fire recomputes evidence fresh, same as Detail already does.
+	s.AddWithDetail(TypePortScan, "203.0.113.9", "detail", 42, Evidence{Ports: []int{22}}, "US", now.Add(time.Second))
+	f = s.List()[0]
+	if len(f.Evidence.Ports) != 1 || len(f.Evidence.Hosts) != 0 {
+		t.Errorf("expected evidence to reflect the latest call, got %+v", f.Evidence)
+	}
+}
+
+func TestApplyReputationSnapshotSetsSnapshotAndFloor(t *testing.T) {
+	s, _ := Open("")
+	now := time.Now()
+	s.AddWithConfidence(TypeCriticalPort, "203.0.113.9", "detail", 10, now)
+
+	score := 88
+	reports := 42
+	s.ApplyReputationSnapshot(TypeCriticalPort, "203.0.113.9", reputation.Result{
+		IP: "203.0.113.9", AbuseScore: &score, TotalReports: &reports, ISP: "Example Hosting",
+	})
+
+	f := s.List()[0]
+	if f.Reputation == nil || f.Reputation.ISP != "Example Hosting" {
+		t.Fatalf("expected the reputation snapshot to be stored, got %+v", f.Reputation)
+	}
+	if f.Confidence == nil || *f.Confidence != 88 {
+		t.Errorf("expected the AbuseScore to raise the confidence floor, got %+v", f.Confidence)
+	}
+}
+
+func TestApplyReputationSnapshotWithoutAbuseScoreStillStoresSnapshot(t *testing.T) {
+	s, _ := Open("")
+	now := time.Now()
+	s.AddWithConfidence(TypeCriticalPort, "203.0.113.9", "detail", 10, now)
+
+	// Shodan-only result -- no AbuseIPDB key configured, so AbuseScore is nil.
+	s.ApplyReputationSnapshot(TypeCriticalPort, "203.0.113.9", reputation.Result{
+		IP: "203.0.113.9", Ports: []int{22, 80}, Vulns: []string{"CVE-2021-1234"},
+	})
+
+	f := s.List()[0]
+	if f.Reputation == nil || len(f.Reputation.Vulns) != 1 {
+		t.Fatalf("expected the Shodan-only snapshot to still be stored, got %+v", f.Reputation)
+	}
+	if f.Confidence == nil || *f.Confidence != 10 {
+		t.Errorf("expected confidence to be untouched without an AbuseScore, got %+v", f.Confidence)
+	}
+}
+
+func TestApplyReputationSnapshotUnknownIDIsNoOp(t *testing.T) {
+	s, _ := Open("")
+	score := 90
+	s.ApplyReputationSnapshot(TypeCriticalPort, "203.0.113.99", reputation.Result{AbuseScore: &score})
+	if len(s.List()) != 0 {
+		t.Errorf("expected no flag to be created for an unknown ID, got %+v", s.List())
+	}
+}
+
+func TestReputationSnapshotResetOnRevival(t *testing.T) {
+	s, _ := Open("")
+	now := time.Now()
+	s.AddWithConfidence(TypeCriticalPort, "203.0.113.9", "detail", 10, now)
+	score := 90
+	s.ApplyReputationSnapshot(TypeCriticalPort, "203.0.113.9", reputation.Result{IP: "203.0.113.9", AbuseScore: &score})
+	s.Clear(flagID(TypeCriticalPort, "203.0.113.9"), now.Add(time.Second))
+
+	s.AddWithConfidence(TypeCriticalPort, "203.0.113.9", "revived episode", 15, now.Add(2*time.Second))
+	if f := s.List()[0]; f.Reputation != nil {
+		t.Errorf("expected a revived episode to start with no stale reputation snapshot, got %+v", f.Reputation)
 	}
 }

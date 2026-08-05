@@ -155,3 +155,51 @@ func TestRepeatedDropsConfidenceScalesWithOvershoot(t *testing.T) {
 		t.Fatalf("expected 100%% confidence at the overshoot ceiling, got %+v", list2)
 	}
 }
+
+func TestRepeatedDropsEvidenceCapturesNATInfo(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.RepeatedDropsThreshold = 3
+	cfg.PortScanThreshold = 1000
+	cfg.ActivitySpikeThreshold = 1000
+	d, fs := newTestDetector(t, cfg)
+
+	now := time.Now()
+	for i := 0; i < 3; i++ {
+		e := dropEvt("203.0.113.9", "192.168.1.50", 25565, now.Add(time.Duration(i)*time.Second))
+		e.SrcCountry = "NL"
+		e.NatIP = "10.0.0.5"
+		e.NatPort = 8080
+		e.NatRaw = "NAT (10.0.0.5:8080->192.168.1.50:25565)"
+		d.Observe(e)
+	}
+
+	list := fs.List()
+	if len(list) != 1 {
+		t.Fatalf("expected one flag, got %+v", list)
+	}
+	if list[0].Country != "NL" {
+		t.Errorf("expected Country to be threaded through, got %q", list[0].Country)
+	}
+	nat := list[0].Evidence.NAT
+	if nat == nil || nat.IP != "10.0.0.5" || nat.Port != 8080 {
+		t.Errorf("expected NAT evidence to be captured, got %+v", nat)
+	}
+}
+
+func TestRepeatedDropsEvidenceOmitsNATWhenAbsent(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.RepeatedDropsThreshold = 3
+	cfg.PortScanThreshold = 1000
+	cfg.ActivitySpikeThreshold = 1000
+	d, fs := newTestDetector(t, cfg)
+
+	now := time.Now()
+	for i := 0; i < 3; i++ {
+		d.Observe(dropEvt("203.0.113.9", "192.168.1.50", 25565, now.Add(time.Duration(i)*time.Second)))
+	}
+
+	list := fs.List()
+	if len(list) != 1 || list[0].Evidence.NAT != nil {
+		t.Errorf("expected no NAT evidence when the event had none, got %+v", list)
+	}
+}

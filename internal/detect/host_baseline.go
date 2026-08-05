@@ -39,8 +39,10 @@ const hostActivityMinSamples = 5
 //
 // currentRate is spikeCount from the caller's already-computed window
 // (see observeScanAndSpike) -- events in ActivitySpikeWindow, reused
-// rather than recomputed.
-func (d *Detector) checkHostActivityBaseline(w *sourceWindow, srcIP string, currentRate int, now time.Time) {
+// rather than recomputed. srcCountry is the triggering event's already-
+// GeoIP-resolved SrcCountry, threaded through so the raised flag can
+// carry it without a second lookup.
+func (d *Detector) checkHostActivityBaseline(w *sourceWindow, srcIP, srcCountry string, currentRate int, now time.Time) {
 	rate := float64(currentRate)
 
 	if !w.primed {
@@ -84,7 +86,7 @@ func (d *Detector) checkHostActivityBaseline(w *sourceWindow, srcIP string, curr
 			"%d events in %s vs a baseline of %.1f for this host (based on %d samples, %.1fσ above normal)",
 			currentRate, d.cfg.ActivitySpikeWindow, prevBaseline, w.sampleCount, z,
 		)
-		isNew := d.fs.AddWithConfidence(flags.TypeActivitySpike, srcIP, detail, confidence, now)
+		isNew := d.fs.AddWithDetail(flags.TypeActivitySpike, srcIP, detail, confidence, flags.Evidence{}, srcCountry, now)
 		d.maybeCheckReputation(flags.TypeActivitySpike, srcIP, srcIP, isNew)
 	}
 
