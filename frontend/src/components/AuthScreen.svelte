@@ -21,9 +21,13 @@
     submitLabel: string
     onsubmit: (username: string, password: string) => Promise<string | null>
     confirmPassword?: boolean
-    // skipLabel/skipHint/onskip: an optional secondary "continue without
-    // an account" action (see AuthSetup.svelte) -- absent entirely for
-    // the login screen, which has no equivalent choice.
+    // skipLabel/skipHint/onskip: an optional secondary "run with no
+    // authentication" action (see AuthSetup.svelte) -- absent entirely
+    // for the login screen, which has no equivalent choice. skipLabel is
+    // the small red link on the create-account form; clicking it swaps
+    // the whole card to a dedicated warning screen (skipHint) rather
+    // than expanding inline, so the decision doesn't compete visually
+    // with the form above it.
     skipLabel?: string
     skipHint?: string
     onskip?: () => Promise<string | null>
@@ -34,10 +38,10 @@
   let passwordConfirm = $state('')
   let error = $state<string | null>(null)
   let submitting = $state(false)
-  // Requires an explicit second click past a visible explanation --
-  // this is a permanent, only-CLI-reversible decision, so it shouldn't
-  // be reachable by one accidental click (see the plan's "informed
-  // choice, not accidental click" requirement).
+  // Requires clicking through to a separate warning screen rather than
+  // reacting to one click on the form -- this is a permanent, only-
+  // CLI-reversible decision (see the plan's "informed choice, not
+  // accidental click" requirement).
   let confirmingSkip = $state(false)
 
   async function handleSubmit(e: Event) {
@@ -66,54 +70,63 @@
 </script>
 
 <div class="screen">
-  <form class="card" onsubmit={handleSubmit}>
+  <div class="card">
     <LogoLockup size={26} />
-    <h1>{title}</h1>
-    <p class="subtitle">{subtitle}</p>
 
-    <label>
-      <span>Username</span>
-      <input type="text" autocomplete="username" bind:value={username} required />
-    </label>
+    {#if confirmingSkip}
+      <!-- A distinct warning screen, not just an inline expansion --
+           same card, same logo, but the create-account form is gone
+           entirely so there's nothing to visually compete with the
+           warning while deciding. -->
+      <h1 class="warning-heading">Warning</h1>
+      <p class="warning-text">{skipHint}</p>
 
-    <label>
-      <span>Password</span>
-      <input type="password" autocomplete={confirmPassword ? 'new-password' : 'current-password'} bind:value={password} required />
-    </label>
+      {#if error}
+        <p class="error">{error}</p>
+      {/if}
 
-    {#if confirmPassword}
-      <label>
-        <span>Confirm password</span>
-        <input type="password" autocomplete="new-password" bind:value={passwordConfirm} required />
-      </label>
-    {/if}
+      <button type="button" class="danger" onclick={handleSkip} disabled={submitting}>
+        {submitting ? 'Please wait…' : 'Continue Without Authentication'}
+      </button>
+      <button type="button" class="link" onclick={() => (confirmingSkip = false)} disabled={submitting}>
+        Cancel
+      </button>
+    {:else}
+      <form class="form-body" onsubmit={handleSubmit}>
+        <h1>{title}</h1>
+        <p class="subtitle">{subtitle}</p>
 
-    {#if error}
-      <p class="error">{error}</p>
-    {/if}
+        <label>
+          <span>Username</span>
+          <input type="text" autocomplete="username" bind:value={username} required />
+        </label>
 
-    <button type="submit" disabled={submitting}>{submitting ? 'Please wait…' : submitLabel}</button>
+        <label>
+          <span>Password</span>
+          <input type="password" autocomplete={confirmPassword ? 'new-password' : 'current-password'} bind:value={password} required />
+        </label>
 
-    {#if onskip}
-      <div class="skip">
-        {#if !confirmingSkip}
-          <button type="button" class="link" onclick={() => (confirmingSkip = true)} disabled={submitting}>
-            {skipLabel}
-          </button>
-        {:else}
-          <p class="skip-hint">{skipHint}</p>
-          <div class="skip-actions">
-            <button type="button" class="link" onclick={() => (confirmingSkip = false)} disabled={submitting}>
-              Cancel
-            </button>
-            <button type="button" class="danger-link" onclick={handleSkip} disabled={submitting}>
-              {submitting ? 'Please wait…' : 'Yes, continue without an account'}
-            </button>
-          </div>
+        {#if confirmPassword}
+          <label>
+            <span>Confirm password</span>
+            <input type="password" autocomplete="new-password" bind:value={passwordConfirm} required />
+          </label>
         {/if}
-      </div>
+
+        {#if error}
+          <p class="error">{error}</p>
+        {/if}
+
+        <button type="submit" disabled={submitting}>{submitting ? 'Please wait…' : submitLabel}</button>
+      </form>
+
+      {#if onskip}
+        <button type="button" class="danger-link" onclick={() => (confirmingSkip = true)} disabled={submitting}>
+          {skipLabel}
+        </button>
+      {/if}
     {/if}
-  </form>
+  </div>
 </div>
 
 <style>
@@ -138,6 +151,14 @@
     padding: 32px 28px;
   }
 
+  .form-body {
+    width: 100%;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 12px;
+  }
+
   h1 {
     margin: 4px 0 0;
     font-size: 16px;
@@ -148,6 +169,24 @@
     margin: 0 0 8px;
     font-size: 13px;
     color: var(--fg-muted);
+    text-align: center;
+  }
+
+  .warning-heading {
+    margin: 4px 0 0;
+    font-size: 26px;
+    font-weight: 700;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    color: var(--reject);
+  }
+
+  .warning-text {
+    width: 100%;
+    margin: 0 0 8px;
+    font-size: 13px;
+    line-height: 1.6;
+    color: var(--reject);
     text-align: center;
   }
 
@@ -202,20 +241,17 @@
     cursor: default;
   }
 
-  .skip {
-    width: 100%;
-    margin-top: 4px;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    gap: 8px;
+  .danger {
+    background: var(--reject);
+    border: 1px solid var(--reject);
+    color: #fff;
   }
 
   .link {
     background: none;
     border: none;
     width: auto;
-    margin: 0;
+    margin-top: 2px;
     padding: 0;
     color: var(--fg-muted);
     font-size: 12px;
@@ -225,21 +261,6 @@
   .link:hover {
     opacity: 0.85;
     color: var(--fg);
-  }
-
-  .skip-hint {
-    width: 100%;
-    margin: 0;
-    font-size: 12px;
-    line-height: 1.5;
-    color: var(--fg-muted);
-    text-align: center;
-  }
-
-  .skip-actions {
-    display: flex;
-    gap: 14px;
-    align-items: center;
   }
 
   .danger-link {
