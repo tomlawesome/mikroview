@@ -47,6 +47,17 @@ type Store struct {
 	MaxEvents int           `yaml:"maxEvents"`
 }
 
+// Log controls mikroview's own server log output -- see
+// internal/logging. Doesn't apply to the CLI recovery commands
+// (-list-users, -reset-password's prompts, etc.), which print directly
+// to stdout/stderr for scripting/piping, not through this leveled path.
+type Log struct {
+	// Level is one of debug/info/warn/error (case-insensitive); anything
+	// else falls back to info silently, same as every other malformed
+	// value in this package (see internal/logging.SetLevel).
+	Level string `yaml:"level"`
+}
+
 // GeoIP is entirely optional -- see internal/geoip. Left empty, the
 // country-flag feature just doesn't show anything; there is no default
 // database bundled or fetched, since MaxMind requires a free account to
@@ -254,6 +265,7 @@ type Flags struct {
 type Config struct {
 	Listen     Listen     `yaml:"listen"`
 	Store      Store      `yaml:"store"`
+	Log        Log        `yaml:"log"`
 	GeoIP      GeoIP      `yaml:"geoip"`
 	Reputation Reputation `yaml:"reputation"`
 	Flags      Flags      `yaml:"flags"`
@@ -281,6 +293,9 @@ func defaults() Config {
 		Store: Store{
 			Retention: 24 * time.Hour,
 			MaxEvents: 200_000,
+		},
+		Log: Log{
+			Level: "info",
 		},
 		// Mirrors internal/detect.DefaultConfig() -- kept as separate
 		// literal values (rather than importing internal/detect here) so
@@ -392,6 +407,9 @@ func applyEnv(cfg *Config) {
 		if n, err := strconv.Atoi(v); err == nil {
 			cfg.Store.MaxEvents = n
 		}
+	}
+	if v := os.Getenv("MIKROVIEW_LOG_LEVEL"); v != "" {
+		cfg.Log.Level = v
 	}
 	if v := os.Getenv("MIKROVIEW_GEOIP_DB_PATH"); v != "" {
 		cfg.GeoIP.DBPath = v

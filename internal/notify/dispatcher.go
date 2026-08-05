@@ -2,11 +2,13 @@ package notify
 
 import (
 	"context"
-	"log"
 	"time"
 
 	"github.com/tomlawesome/mikroview/internal/flags"
+	"github.com/tomlawesome/mikroview/internal/logging"
 )
+
+var logger = logging.New("notify")
 
 // queueSize bounds pending the same way hub.clientQueueSize bounds a
 // WebSocket client's queue -- flags fire far less often than raw
@@ -41,7 +43,7 @@ func (d *Dispatcher) Enqueue(f flags.Flag) {
 	select {
 	case d.pending <- f:
 	default:
-		log.Printf("notify: dropped a flag notification -- dispatcher queue full")
+		logger.Warn("dropped a flag notification -- dispatcher queue full")
 	}
 }
 
@@ -74,7 +76,7 @@ func (d *Dispatcher) flush(batch []flags.Flag) []flags.Flag {
 	}
 	for _, n := range d.notifiers {
 		if err := n.Send(batch); err != nil {
-			log.Printf("notify: %v", err)
+			logger.Warn(err.Error())
 		}
 	}
 	return nil
