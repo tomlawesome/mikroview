@@ -1,7 +1,9 @@
 <script lang="ts">
-  // Same modal-over-the-live-view pattern as DashboardOverlay -- layered
-  // rather than replacing the live view, so closing it is just closing
-  // an overlay, not navigating back.
+  // A modal layered over the live view (unlike Metrics, which is a
+  // separate view -- see appState.view in lib/state.svelte.ts) --
+  // closing it is just closing an overlay, not navigating back. Flags
+  // are meant to be glanceable alongside the live table, not a
+  // destination you navigate to.
   import { flagsState } from '../lib/flags.svelte'
   import Flags from './Flags.svelte'
 
