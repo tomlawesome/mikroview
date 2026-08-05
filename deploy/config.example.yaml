@@ -51,6 +51,7 @@ store:
 #   criticalPortWindow: 5m
 #   globalSpikeMultiplier: 4
 #   globalSpikeMinEPS: 5
+#   globalSpikeWarmupSamples: 20
 #   distributedBruteForceThreshold: 10
 #   distributedBruteForceWindow: 5m
 #   outboundAnomalyThreshold: 25
@@ -60,6 +61,7 @@ store:
 #   ruleSpikeMultiplier: 5
 #   ruleSpikeMinRate: 0.2
 #   ruleSpikeWindow: 60s
+#   ruleSpikeWarmupSamples: 20
 #   repeatedDropsThreshold: 10
 #   repeatedDropsWindow: 15m
 #   hostActivityMultiplier: 3

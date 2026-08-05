@@ -52,6 +52,41 @@ func TestRuleSpikeFlagsWellAboveOwnBaseline(t *testing.T) {
 	}
 }
 
+// TestRuleSpikeFlagsCarryConfidence covers issue #59: same z-score-
+// against-EMA-baseline confidence host_baseline.go established, applied
+// to rule_spike -- without changing when a flag fires (see the other
+// tests in this file for that -- unchanged).
+func TestRuleSpikeFlagsCarryConfidence(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.RuleSpikeWindow = time.Minute
+	cfg.RuleSpikeMultiplier = 4
+	cfg.RuleSpikeMinRate = 0.05
+	cfg.PortScanThreshold = 1000
+	cfg.ActivitySpikeThreshold = 1000
+	d, fs := newTestDetector(t, cfg)
+
+	now := time.Now()
+	for i := 0; i < 3; i++ {
+		d.Observe(ruleEvt("no-torrent", now.Add(time.Duration(i)*10*time.Second)))
+	}
+
+	next := now.Add(cfg.RuleSpikeWindow + time.Second)
+	for i := 0; i < 20; i++ {
+		d.Observe(ruleEvt("no-torrent", next.Add(time.Duration(i)*time.Millisecond)))
+	}
+
+	list := fs.List()
+	if len(list) != 1 {
+		t.Fatalf("expected exactly one flag, got %+v", list)
+	}
+	if list[0].Confidence == nil {
+		t.Fatal("expected the rule_spike flag to carry a confidence score, got nil")
+	}
+	if *list[0].Confidence < 0 || *list[0].Confidence > 100 {
+		t.Errorf("expected confidence in [0, 100], got %d", *list[0].Confidence)
+	}
+}
+
 func TestRuleSpikeIgnoresLowAbsoluteRate(t *testing.T) {
 	cfg := DefaultConfig()
 	cfg.RuleSpikeWindow = time.Minute

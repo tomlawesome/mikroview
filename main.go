@@ -127,8 +127,9 @@ func main() {
 		CriticalPorts:          cfg.Flags.CriticalPorts,
 		CriticalPortThreshold:  cfg.Flags.CriticalPortThreshold,
 		CriticalPortWindow:     cfg.Flags.CriticalPortWindow,
-		GlobalSpikeMultiplier:  cfg.Flags.GlobalSpikeMultiplier,
-		GlobalSpikeMinEPS:      cfg.Flags.GlobalSpikeMinEPS,
+		GlobalSpikeMultiplier:    cfg.Flags.GlobalSpikeMultiplier,
+		GlobalSpikeMinEPS:        cfg.Flags.GlobalSpikeMinEPS,
+		GlobalSpikeWarmupSamples: cfg.Flags.GlobalSpikeWarmupSamples,
 
 		DistributedBruteForceThreshold: cfg.Flags.DistributedBruteForceThreshold,
 		DistributedBruteForceWindow:    cfg.Flags.DistributedBruteForceWindow,
@@ -139,9 +140,10 @@ func main() {
 		InternalReconThreshold: cfg.Flags.InternalReconThreshold,
 		InternalReconWindow:    cfg.Flags.InternalReconWindow,
 
-		RuleSpikeMultiplier: cfg.Flags.RuleSpikeMultiplier,
-		RuleSpikeMinRate:    cfg.Flags.RuleSpikeMinRate,
-		RuleSpikeWindow:     cfg.Flags.RuleSpikeWindow,
+		RuleSpikeMultiplier:    cfg.Flags.RuleSpikeMultiplier,
+		RuleSpikeMinRate:       cfg.Flags.RuleSpikeMinRate,
+		RuleSpikeWindow:        cfg.Flags.RuleSpikeWindow,
+		RuleSpikeWarmupSamples: cfg.Flags.RuleSpikeWarmupSamples,
 
 		RepeatedDropsThreshold: cfg.Flags.RepeatedDropsThreshold,
 		RepeatedDropsWindow:    cfg.Flags.RepeatedDropsWindow,

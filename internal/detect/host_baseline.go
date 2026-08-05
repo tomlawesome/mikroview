@@ -2,23 +2,10 @@ package detect
 
 import (
 	"fmt"
-	"math"
 	"time"
 
 	"github.com/tomlawesome/mikroview/internal/flags"
 )
-
-// hostActivityMinZ is the minimum "standard deviations above this host's
-// own normal" before a reading is even considered -- below this, normal
-// variance in a host's own traffic is a perfectly ordinary explanation,
-// not an anomaly worth a human's attention.
-const hostActivityMinZ = 2.0
-
-// hostActivityFullConfidenceZ is the deviation at which the confidence
-// score's deviation component maxes out. Chosen well above hostActivityMinZ
-// so confidence actually scales across the range a real flag can occur
-// in, rather than every flag reading close to 100%.
-const hostActivityFullConfidenceZ = 6.0
 
 // hostActivityMinSamples is a hard floor: a host with fewer prior
 // observations than this can never raise a flag, no matter how extreme
@@ -54,33 +41,15 @@ func (d *Detector) checkHostActivityBaseline(w *sourceWindow, srcIP, srcCountry 
 	}
 
 	prevBaseline := w.baseline
-	stddev := math.Sqrt(w.variance)
-
-	var z float64
-	switch {
-	case stddev > 0:
-		z = (rate - prevBaseline) / stddev
-	case rate > prevBaseline:
-		// Perfectly steady baseline so far (variance still 0) and this
-		// reading is above it -- genuinely unusual for this host, but
-		// with no variance estimate yet to size it against. Capped well
-		// below hostActivityFullConfidenceZ so a tiny sample count still
-		// can't reach full deviation-confidence on its own; sampleCount's
-		// own gate below is what actually holds this back.
-		z = hostActivityFullConfidenceZ
-	default:
-		z = 0
-	}
+	z := emaZScore(rate, prevBaseline, w.variance)
 
 	if w.sampleCount >= hostActivityMinSamples &&
-		z >= hostActivityMinZ &&
+		z >= emaMinZ &&
 		rate >= float64(d.cfg.ActivitySpikeThreshold) &&
 		prevBaseline > 0 &&
 		rate >= prevBaseline*d.cfg.HostActivityMultiplier {
 
-		historyConfidence := math.Min(1, float64(w.sampleCount)/float64(d.cfg.HostActivityWarmupSamples))
-		deviationConfidence := math.Min(1, math.Max(0, (z-hostActivityMinZ)/(hostActivityFullConfidenceZ-hostActivityMinZ)))
-		confidence := int(math.Round(historyConfidence * deviationConfidence * 100))
+		confidence := emaConfidence(z, w.sampleCount, d.cfg.HostActivityWarmupSamples)
 
 		detail := fmt.Sprintf(
 			"%d events in %s vs a baseline of %.1f for this host (based on %d samples, %.1fσ above normal)",
@@ -90,14 +59,10 @@ func (d *Detector) checkHostActivityBaseline(w *sourceWindow, srcIP, srcCountry 
 		d.maybeCheckReputation(flags.TypeActivitySpike, srcIP, srcIP, isNew)
 	}
 
-	// EMA update: standard exponentially-weighted mean/variance -- same
-	// alpha as GlobalSpikeDetector/observeRuleRate, applied after the
-	// check above so the flag (if any) compares against the baseline as
-	// it stood *before* this reading, not after.
-	diff := rate - w.baseline
-	incr := emaAlpha * diff
-	w.baseline += incr
-	w.variance = (1 - emaAlpha) * (w.variance + diff*incr)
+	// EMA update, applied after the check above so the flag (if any)
+	// compares against the baseline as it stood *before* this reading,
+	// not after.
+	w.baseline, w.variance = emaUpdate(rate, w.baseline, w.variance)
 	if w.sampleCount < d.cfg.HostActivityWarmupSamples {
 		w.sampleCount++
 	}
