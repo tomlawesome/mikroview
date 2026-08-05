@@ -424,3 +424,37 @@ func TestReputationSnapshotResetOnRevival(t *testing.T) {
 		t.Errorf("expected a revived episode to start with no stale reputation snapshot, got %+v", f.Reputation)
 	}
 }
+
+func TestOnRaiseFiresOnNewEpisodeOnly(t *testing.T) {
+	s, _ := Open("")
+	var raised []Flag
+	s.WithOnRaise(func(f Flag) {
+		raised = append(raised, f)
+	})
+	now := time.Now()
+
+	s.Add(TypePortScan, "203.0.113.9", "first", now)
+	if len(raised) != 1 || raised[0].Detail != "first" {
+		t.Fatalf("expected onRaise to fire once for the first-ever raise, got %+v", raised)
+	}
+
+	s.Add(TypePortScan, "203.0.113.9", "re-fire", now.Add(time.Second))
+	if len(raised) != 1 {
+		t.Fatalf("expected a plain re-fire to not trigger onRaise, got %d calls", len(raised))
+	}
+
+	id := flagID(TypePortScan, "203.0.113.9")
+	s.Clear(id, now.Add(2*time.Second))
+	s.Add(TypePortScan, "203.0.113.9", "revived", now.Add(3*time.Second))
+	if len(raised) != 2 || raised[1].Detail != "revived" {
+		t.Fatalf("expected a revival from cleared to trigger onRaise again, got %+v", raised)
+	}
+}
+
+func TestOnRaiseNotSetIsNoOp(t *testing.T) {
+	s, _ := Open("")
+	// No WithOnRaise call -- Add must not panic on a nil hook.
+	if isNew := s.Add(TypePortScan, "203.0.113.9", "detail", time.Now()); !isNew {
+		t.Error("expected the raise itself to still succeed with no hook configured")
+	}
+}

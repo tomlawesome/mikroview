@@ -136,6 +136,22 @@ type Store struct {
 	mu   sync.RWMutex
 	path string
 	byID map[string]*Flag
+
+	// onRaise, if set via WithOnRaise, is called after a new flag episode
+	// is raised (first-ever raise or a revival from Cleared -- the same
+	// "isNew" Add/AddWithConfidence/AddWithDetail already report) --
+	// never on a plain re-fire of an already-active flag, so a noisy
+	// detector doesn't re-alert on every event. Must not block: see
+	// internal/notify.Dispatcher.Enqueue's contract, the intended caller.
+	onRaise func(Flag)
+}
+
+// WithOnRaise sets the hook called on every new flag episode -- see
+// onRaise's own doc comment. Chainable, mirroring
+// internal/detect.Detector.WithReputation's shape.
+func (s *Store) WithOnRaise(fn func(Flag)) *Store {
+	s.onRaise = fn
+	return s
 }
 
 // Open loads path if it exists (a missing file is the expected first-run
@@ -190,14 +206,18 @@ func flagID(t Type, target string) string {
 // re-triggering a reputation lookup on every re-fire of an ongoing flag
 // (see RaiseConfidenceFloor).
 func (s *Store) Add(t Type, target, detail string, now time.Time) bool {
-	return s.add(t, target, detail, nil, Evidence{}, "", now)
+	isNew, f := s.add(t, target, detail, nil, Evidence{}, "", now)
+	s.maybeNotify(isNew, f)
+	return isNew
 }
 
 // AddWithConfidence is Add, but for a detector that can express how
 // confident it is in this specific flag (0-100) rather than a simple
 // deterministic threshold crossing -- see Flag.Confidence.
 func (s *Store) AddWithConfidence(t Type, target, detail string, confidence int, now time.Time) bool {
-	return s.add(t, target, detail, &confidence, Evidence{}, "", now)
+	isNew, f := s.add(t, target, detail, &confidence, Evidence{}, "", now)
+	s.maybeNotify(isNew, f)
+	return isNew
 }
 
 // AddWithDetail is AddWithConfidence, plus structured evidence and a
@@ -205,10 +225,21 @@ func (s *Store) AddWithConfidence(t Type, target, detail string, confidence int,
 // exactly what was touched, not just a count -- see Evidence and
 // Flag.Country.
 func (s *Store) AddWithDetail(t Type, target, detail string, confidence int, evidence Evidence, country string, now time.Time) bool {
-	return s.add(t, target, detail, &confidence, evidence, country, now)
+	isNew, f := s.add(t, target, detail, &confidence, evidence, country, now)
+	s.maybeNotify(isNew, f)
+	return isNew
 }
 
-func (s *Store) add(t Type, target, detail string, confidence *int, evidence Evidence, country string, now time.Time) bool {
+// maybeNotify fires onRaise for a newly-raised episode -- called after
+// add() has returned (its deferred unlock has already fired), so the
+// hook never runs while s.mu is held.
+func (s *Store) maybeNotify(isNew bool, f Flag) {
+	if isNew && s.onRaise != nil {
+		s.onRaise(f)
+	}
+}
+
+func (s *Store) add(t Type, target, detail string, confidence *int, evidence Evidence, country string, now time.Time) (bool, Flag) {
 	id := flagID(t, target)
 
 	s.mu.Lock()
@@ -237,7 +268,7 @@ func (s *Store) add(t Type, target, detail string, confidence *int, evidence Evi
 
 	s.pruneLocked()
 	s.persistLocked()
-	return isNew
+	return isNew, *f
 }
 
 // mergeConfidence combines a detector's freshly computed confidence
