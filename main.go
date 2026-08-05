@@ -297,6 +297,7 @@ func main() {
 	names := naming.Resolver{Rules: cfg.RuleNames, Hosts: cfg.HostNames}
 
 	go ingest(ctx, raw, st, devices, h, geo, detector, names)
+	go detector.Run(ctx)
 
 	go func() {
 		ticker := time.NewTicker(globalSpikeCheckInterval)
@@ -604,7 +605,12 @@ func readPasswordTwice() (string, error) {
 // message, resolves device identity, inserts the resulting Event into the
 // store, and hands the stored (ID-assigned) event to the hub for
 // broadcast. Keeping this on one goroutine means Store and the device
-// Registry never need to arbitrate concurrent writers.
+// Registry never need to arbitrate concurrent writers. Detection is
+// handed off via detector.Enqueue rather than run inline here -- a slow
+// or backed-up detection pass must never delay store insertion or
+// WebSocket broadcast (see detect.Detector.Enqueue/Run, and the
+// dedicated detection-worker goroutine main() starts alongside this
+// one).
 func ingest(ctx context.Context, raw <-chan syslog.RawMessage, st *store.Store, devices *device.Registry, h *hub.Hub, geo *geoip.Lookup, detector *detect.Detector, names naming.Resolver) {
 	for {
 		select {
@@ -648,7 +654,7 @@ func ingest(ctx context.Context, raw <-chan syslog.RawMessage, st *store.Store, 
 
 			stored := st.Insert(e)
 			h.Broadcast(stored)
-			detector.Observe(stored)
+			detector.Enqueue(stored)
 		}
 	}
 }
