@@ -6,6 +6,7 @@
   // by that container's overflow, which an absolutely-positioned popover
   // anchored inside the table would be.
   import { ipLookupState } from '../lib/ipLookup.svelte'
+  import ReputationDetails from './ReputationDetails.svelte'
 
   const POPOVER_WIDTH = 260
 
@@ -40,20 +41,6 @@
     const y = Math.min(a.y + 6, window.innerHeight - 60)
     return `left: ${Math.max(8, x)}px; top: ${y}px`
   })
-
-  const hasIntel = $derived.by(() => {
-    const r = ipLookupState.result
-    if (!r) return false
-    return (
-      r.abuseScore != null ||
-      r.totalReports != null ||
-      !!r.isp ||
-      !!r.countryCode ||
-      !!r.ports?.length ||
-      !!r.hostnames?.length ||
-      !!r.vulns?.length
-    )
-  })
 </script>
 
 <svelte:window onkeydown={onKeydown} />
@@ -76,55 +63,7 @@
     {:else if ipLookupState.error}
       <div class="status error">{ipLookupState.error}</div>
     {:else if ipLookupState.result}
-      {@const r = ipLookupState.result}
-      {#if !hasIntel}
-        <div class="status">No intel found for this IP</div>
-      {:else}
-        <div class="rows">
-          {#if r.abuseScore != null}
-            <div class="row">
-              <span class="label">Abuse score</span>
-              <span class="value" class:high={r.abuseScore >= 50}>{r.abuseScore}/100</span>
-            </div>
-          {/if}
-          {#if r.totalReports != null}
-            <div class="row">
-              <span class="label">Reports</span>
-              <span class="value">{r.totalReports}</span>
-            </div>
-          {/if}
-          {#if r.isp}
-            <div class="row">
-              <span class="label">ISP</span>
-              <span class="value">{r.isp}</span>
-            </div>
-          {/if}
-          {#if r.countryCode}
-            <div class="row">
-              <span class="label">Country</span>
-              <span class="value">{r.countryCode}</span>
-            </div>
-          {/if}
-          {#if r.ports?.length}
-            <div class="row">
-              <span class="label">Open ports</span>
-              <span class="value">{r.ports.join(', ')}</span>
-            </div>
-          {/if}
-          {#if r.hostnames?.length}
-            <div class="row">
-              <span class="label">Hostnames</span>
-              <span class="value">{r.hostnames.join(', ')}</span>
-            </div>
-          {/if}
-          {#if r.vulns?.length}
-            <div class="row">
-              <span class="label">Vulns</span>
-              <span class="value">{r.vulns.join(', ')}</span>
-            </div>
-          {/if}
-        </div>
-      {/if}
+      <ReputationDetails result={ipLookupState.result} />
     {/if}
   </div>
 {/if}
@@ -179,34 +118,5 @@
 
   .status.error {
     color: var(--reject);
-  }
-
-  .rows {
-    display: flex;
-    flex-direction: column;
-    gap: 5px;
-  }
-
-  .row {
-    display: flex;
-    align-items: baseline;
-    justify-content: space-between;
-    gap: 10px;
-  }
-
-  .label {
-    color: var(--fg-muted);
-    flex: none;
-  }
-
-  .value {
-    color: var(--fg);
-    text-align: right;
-    overflow-wrap: anywhere;
-  }
-
-  .value.high {
-    color: var(--reject);
-    font-weight: 600;
   }
 </style>

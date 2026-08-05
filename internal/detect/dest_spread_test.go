@@ -239,3 +239,39 @@ func TestInternalReconConfidenceScalesWithOvershoot(t *testing.T) {
 		t.Fatalf("expected 100%% confidence at the overshoot ceiling, got %+v", list2)
 	}
 }
+
+func TestOutboundAnomalyAndInternalReconEvidenceCapturesDestinations(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.OutboundAnomalyThreshold = 3
+	cfg.InternalReconThreshold = 3
+	cfg.PortScanThreshold = 1000
+	cfg.ActivitySpikeThreshold = 1000
+	d, fs := newTestDetector(t, cfg)
+
+	now := time.Now()
+	externals := []string{"203.0.113.1", "203.0.113.2", "203.0.113.3"}
+	internals := []string{"192.168.1.1", "192.168.1.2", "192.168.1.3"}
+	for i, dst := range externals {
+		d.Observe(lanEvt("192.168.1.50", dst, now.Add(time.Duration(i)*time.Second)))
+	}
+	for i, dst := range internals {
+		d.Observe(lanEvt("192.168.1.50", dst, now.Add(time.Duration(i)*time.Second)))
+	}
+
+	var outbound, recon *flags.Flag
+	list := fs.List()
+	for i := range list {
+		switch list[i].Type {
+		case flags.TypeOutboundAnomaly:
+			outbound = &list[i]
+		case flags.TypeInternalRecon:
+			recon = &list[i]
+		}
+	}
+	if outbound == nil || len(outbound.Evidence.Hosts) != 3 {
+		t.Errorf("expected outbound_anomaly evidence to list the 3 external destinations, got %+v", outbound)
+	}
+	if recon == nil || len(recon.Evidence.Hosts) != 3 {
+		t.Errorf("expected internal_recon evidence to list the 3 internal destinations, got %+v", recon)
+	}
+}

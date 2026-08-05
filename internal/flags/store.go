@@ -19,6 +19,8 @@ import (
 	"sort"
 	"sync"
 	"time"
+
+	"github.com/tomlawesome/mikroview/internal/reputation"
 )
 
 type Type string
@@ -42,6 +44,35 @@ const (
 // expected to be hit in normal use. A var rather than a const so tests
 // can shrink it without creating 1000+ flags.
 var maxFlags = 1000
+
+// Evidence is structured supporting detail beyond the free-text Detail
+// string -- which detector populates which field:
+//   - Ports: port_scan's distinct ports touched (capped, see
+//     internal/detect's maxEvidencePorts).
+//   - Hosts: distributed_brute_force's distinct source IPs,
+//     outbound_anomaly's/internal_recon's distinct destinations
+//     (capped, see internal/detect's maxEvidenceHosts).
+//   - NAT: repeated_drops' triggering event's NAT translation info,
+//     when present.
+//
+// Zero value (all fields empty/nil) is valid and common -- most
+// detectors (critical_port, activity_spike, rule_spike, global_spike)
+// have nothing here at all, since their Detail string already says
+// everything there is to say.
+type Evidence struct {
+	Ports []int    `json:"ports,omitempty"`
+	Hosts []string `json:"hosts,omitempty"`
+	NAT   *NATInfo `json:"nat,omitempty"`
+}
+
+// NATInfo is one event's NAT translation detail (store.Event's
+// NatIP/NatPort/NatRaw), attached to a flag's Evidence when the
+// triggering event had one.
+type NATInfo struct {
+	IP   string `json:"ip,omitempty"`
+	Port int    `json:"port,omitempty"`
+	Raw  string `json:"raw,omitempty"`
+}
 
 // Flag is one raised, human-clearable signal.
 type Flag struct {
@@ -70,6 +101,24 @@ type Flag struct {
 	// been applied (either not configured, not looked up yet, or the
 	// target has no reputation data).
 	ReputationFloor *int `json:"reputationFloor,omitempty"`
+	// Reputation is a snapshot of the target's reputation *as of when
+	// this episode's async lookup resolved*, not fetched live on read --
+	// the point is "what did this look like when it fired." Only ever
+	// set for single-IP detectors (see internal/detect's
+	// maybeCheckReputation) -- group detectors' async check still
+	// informs ReputationFloor/Confidence the same way, but there's no
+	// single coherent snapshot to attach when many different IPs were
+	// sampled.
+	Reputation *reputation.Result `json:"reputation,omitempty"`
+	// Country is the target's ISO 3166-1 alpha-2 code, from the same
+	// GeoIP lookup already performed at ingest time
+	// (store.Event.SrcCountry) -- captured synchronously at raise time,
+	// no extra lookup. Empty for an internal target or when GeoIP isn't
+	// configured.
+	Country string `json:"country,omitempty"`
+	// Evidence is structured supporting detail beyond Detail -- see
+	// Evidence's own doc comment.
+	Evidence Evidence `json:"evidence,omitzero"`
 }
 
 // Store holds every known flag, active and cleared, keyed by a stable ID
@@ -135,17 +184,25 @@ func flagID(t Type, target string) string {
 // re-triggering a reputation lookup on every re-fire of an ongoing flag
 // (see RaiseConfidenceFloor).
 func (s *Store) Add(t Type, target, detail string, now time.Time) bool {
-	return s.add(t, target, detail, nil, now)
+	return s.add(t, target, detail, nil, Evidence{}, "", now)
 }
 
 // AddWithConfidence is Add, but for a detector that can express how
 // confident it is in this specific flag (0-100) rather than a simple
 // deterministic threshold crossing -- see Flag.Confidence.
 func (s *Store) AddWithConfidence(t Type, target, detail string, confidence int, now time.Time) bool {
-	return s.add(t, target, detail, &confidence, now)
+	return s.add(t, target, detail, &confidence, Evidence{}, "", now)
 }
 
-func (s *Store) add(t Type, target, detail string, confidence *int, now time.Time) bool {
+// AddWithDetail is AddWithConfidence, plus structured evidence and a
+// country code, for a detector whose behavior is best explained by
+// exactly what was touched, not just a count -- see Evidence and
+// Flag.Country.
+func (s *Store) AddWithDetail(t Type, target, detail string, confidence int, evidence Evidence, country string, now time.Time) bool {
+	return s.add(t, target, detail, &confidence, evidence, country, now)
+}
+
+func (s *Store) add(t Type, target, detail string, confidence *int, evidence Evidence, country string, now time.Time) bool {
 	id := flagID(t, target)
 
 	s.mu.Lock()
@@ -163,9 +220,12 @@ func (s *Store) add(t Type, target, detail string, confidence *int, now time.Tim
 		f.ClearedAt = time.Time{}
 		f.Count = 0
 		f.ReputationFloor = nil // a revived flag starts its confidence history fresh
+		f.Reputation = nil      // ...and its detail history, including any stale reputation snapshot
 	}
 	f.Detail = detail
 	f.Confidence = mergeConfidence(confidence, f.ReputationFloor)
+	f.Evidence = evidence
+	f.Country = country
 	f.LastSeen = now
 	f.Count++
 
@@ -223,6 +283,41 @@ func (s *Store) RaiseConfidenceFloor(t Type, target string, floor int) {
 	if changed {
 		s.persistLocked()
 	}
+}
+
+// ApplyReputationSnapshot records target's reputation lookup result on
+// the flag (see Flag.Reputation) and, if it includes an AbuseIPDB
+// score, raises the confidence floor from it too -- same floor-raise-
+// only reasoning as RaiseConfidenceFloor: a clean/absent score is
+// absence of evidence, not evidence of innocence. Only meaningful for
+// the single-IP reputation path (see internal/detect's
+// maybeCheckReputation) -- the group path has no single snapshot to
+// attach and keeps using RaiseConfidenceFloor directly. No-ops if the
+// flag is no longer known.
+func (s *Store) ApplyReputationSnapshot(t Type, target string, snapshot reputation.Result) {
+	id := flagID(t, target)
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	f, ok := s.byID[id]
+	if !ok {
+		return
+	}
+
+	f.Reputation = &snapshot
+	if snapshot.AbuseScore != nil {
+		floor := *snapshot.AbuseScore
+		if f.ReputationFloor == nil || floor > *f.ReputationFloor {
+			v := floor
+			f.ReputationFloor = &v
+		}
+		if f.Confidence == nil || floor > *f.Confidence {
+			v := floor
+			f.Confidence = &v
+		}
+	}
+	s.persistLocked()
 }
 
 // Clear marks id as cleared. It reports whether an active flag with that
