@@ -5,7 +5,6 @@ import type { DetectorScope, DetectorSettings } from './types'
 // -- admin-only, mirrors flags.svelte.ts's shape.
 class DetectorSettingsState {
   list = $state<DetectorSettings[]>([])
-  open = $state(false)
 
   async refresh() {
     this.list = await fetchDetectorSettings()
