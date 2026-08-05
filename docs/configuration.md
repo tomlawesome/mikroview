@@ -514,7 +514,7 @@ this section is the configuration reference.
 ```yaml
 auth:
   storePath: "/var/lib/mikroview/users.json"
-  secureCookie: false
+  secureCookie: true
   sessionTTL: 24h
 ```
 
@@ -526,9 +526,10 @@ auth:
   everyone out or silently reopen the deployment. Mount a volume for its
   parent directory the same way you would for flag persistence -- see
   `deploy/docker-compose.yml`.
-- **`secureCookie`** — sets the session cookie's `Secure` flag. Off by
-  default since mikroview is very commonly run over plain HTTP on a
-  trusted LAN; turn this on once mikroview sits behind TLS.
+- **`secureCookie`** — sets the session cookie's `Secure` flag. On by
+  default, matching [TLS](#tls) being on by default -- there's no other
+  kind of connection to have a session on. Only turn this off if you've
+  also set `tls.enabled: false`, or sessions won't work at all.
 - **`sessionTTL`** — the idle timeout: a session's expiry slides forward
   on each authenticated request, so this is "how long you can go without
   activity before needing to log in again," not a fixed session
@@ -556,6 +557,74 @@ A password reset immediately invalidates every existing session for that
 account, including on an already-running server -- you don't need to
 restart mikroview after running `-reset-password` for the new password
 to take effect.
+
+## TLS
+
+Mikroview serves TLS by default, on its one existing listener -- no
+second port. See [SECURITY.md](../SECURITY.md#tls) for the full
+reasoning; this section is the configuration reference.
+
+```yaml
+tls:
+  enabled: true
+  # Your own cert (a real domain + ACME, a corporate CA, etc) -- takes
+  # priority over the self-generated one below if both are set.
+  certFile: ""
+  keyFile: ""
+  # Hostnames/IPs a generated certificate should cover (SANs) --
+  # whatever you'll actually use to reach mikroview. Defaults to
+  # localhost/127.0.0.1 if empty -- still fully encrypted either way,
+  # just only strictly verifiable under those names unless you add your
+  # own.
+  hosts: []
+  # Persists the self-generated CA + certificate across restarts, so
+  # the trust step only happens once. Optional, same contract as
+  # flags.storePath.
+  storePath: "/var/lib/mikroview/tls"
+```
+
+- **`enabled`** — on by default. The one supported reason to set this
+  `false` is a deployment where mikroview's listener is *provably* only
+  reachable from your own reverse proxy over an isolated docker network
+  -- never published to a LAN or the internet at all. In that specific
+  topology the RP already owns TLS termination for real clients, and
+  there's no bypass surface for mikroview to additionally protect on
+  that internal hop. Never set this `false` if mikroview's port is
+  reachable from a LAN or the internet in any other way -- doing so
+  serves the app, credentials included, in cleartext. Logged clearly at
+  startup whenever it's off, so it's never a silent state.
+- **`certFile`/`keyFile`** — your own certificate. Skips local-CA
+  generation entirely when both are set.
+- **`hosts`** — SANs for a self-generated certificate. Left empty, the
+  generated cert only covers `localhost`/`127.0.0.1` -- connections from
+  any other name/IP are still fully encrypted, just not strictly
+  verifiable against that name without adding it here.
+- **`storePath`** — where a generated CA + certificate persist across
+  restarts. Left unset, TLS still works, it just regenerates (and needs
+  re-trusting) every restart -- the same optional-persistence contract
+  `flags.storePath` has.
+
+**Zero-config default**: with no `certFile`/`keyFile`, mikroview
+generates its own local certificate authority and a leaf certificate on
+first start (`internal/servertls`). This CA is trust-on-first-use, not a
+globally trusted root -- your browser will show an untrusted-certificate
+warning on first visit until you import it, the same one-time step
+Proxmox/TrueNAS/pfSense's own self-signed admin UIs already ask for. The
+CA is served at `GET /ca.crt`, unauthenticated (only when one was
+actually generated), specifically so a browser or reverse proxy can
+fetch it to establish trust; its fingerprint is also logged at startup
+if you'd rather verify it out-of-band than trust-on-first-use blindly.
+
+**Reverse proxy in front, with your own single ingress**: point your
+RP's *upstream/backend* target at `https://mikroview:PORT` instead of
+`http://mikroview:PORT` -- same host, same port, no new port opened
+anywhere. Your RP's client-facing side is completely untouched. Every
+mainstream reverse proxy supports backend/upstream TLS (Caddy's
+`reverse_proxy https://...`, Traefik's backend TLS transport, nginx's
+`proxy_pass https://...`), typically via either skipping strict
+verification for that specific upstream (reasonable here, since you
+configured that upstream address yourself) or trusting mikroview's
+local CA explicitly (more correct, and what `/ca.crt` is for).
 
 ## Environment variables
 
@@ -604,6 +673,11 @@ Override individual scalar settings without a mounted file:
 | `MIKROVIEW_AUTH_STORE_PATH` | `auth.storePath` (see [Authentication](#authentication-optional-opt-in-by-creating-an-account)) |
 | `MIKROVIEW_AUTH_SECURE_COOKIE` | `auth.secureCookie` |
 | `MIKROVIEW_AUTH_SESSION_TTL` | `auth.sessionTTL` |
+| `MIKROVIEW_TLS_ENABLED` | `tls.enabled` (see [TLS](#tls)) |
+| `MIKROVIEW_TLS_CERT_FILE` | `tls.certFile` |
+| `MIKROVIEW_TLS_KEY_FILE` | `tls.keyFile` |
+| `MIKROVIEW_TLS_HOSTS` | `tls.hosts` (comma-separated) |
+| `MIKROVIEW_TLS_STORE_PATH` | `tls.storePath` |
 | `MIKROVIEW_NOTIFY_BATCH_WINDOW` | `notify.batchWindow` (see [Notifications](#notifications-optional)) |
 | `MIKROVIEW_NOTIFY_SMTP_HOST` | `notify.smtp.host` |
 | `MIKROVIEW_NOTIFY_SMTP_PORT` | `notify.smtp.port` |
@@ -631,6 +705,7 @@ for the latter two.
 | Endpoint | Description |
 |---|---|
 | `GET /api/healthz` | liveness/uptime check |
+| `GET /ca.crt` | mikroview's self-generated CA certificate, unauthenticated -- only present when TLS is on and mikroview generated its own CA (never for a supplied cert or `tls.enabled: false`); see [TLS](#tls) |
 | `GET /api/events` | filtered, windowed historical query (see below) |
 | `GET /api/devices` | known devices (configured + auto-discovered) |
 | `GET /api/critical-ports` | the configured `flags.criticalPorts` list -- feeds the "Control ports" tracking tab (issue #34), open to any signed-in user, not admin-gated |

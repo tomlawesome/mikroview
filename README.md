@@ -37,7 +37,12 @@ docker compose up -d --build
 
 Then follow [docs/routeros-setup.md](docs/routeros-setup.md) to point
 your RouterOS device(s) at the container, and open
-`http://<docker-host>:8080`.
+`https://<docker-host>:8080`. mikroview serves TLS by default with a
+self-generated certificate (see [docs/configuration.md](docs/configuration.md#tls)),
+so your browser will show an untrusted-certificate warning on first
+visit until you import that certificate -- expected for a self-hosted
+admin interface with no external CA, same as Proxmox/TrueNAS/pfSense's
+own web UIs.
 
 ### Prebuilt image
 
@@ -58,6 +63,14 @@ services:
       # user that can't bind <1024 (see Dockerfile).
       - "514:1514/udp"
       - "514:1514/tcp"
+      # HTTPS by default (TLS is on unless tls.enabled: false) --
+      # https://localhost:8080 after starting, not http://. With no
+      # tls.certFile/keyFile configured below, mikroview generates its
+      # own local CA + certificate on first start and your browser will
+      # show an untrusted-certificate warning until you import that CA
+      # (fetch it from /ca.crt, or check the startup log for its
+      # fingerprint) -- see docs/configuration.md's "TLS" section,
+      # including the one supported reason to set tls.enabled: false.
       - "8080:8080"
     healthcheck:
       test: ["CMD", "/mikroview", "-healthcheck"]
@@ -87,12 +100,31 @@ services:
       # directory -- `mkdir -p flags-data && chmod 777 flags-data` is
       # the simplest fix if you hit a permission error at startup.
       # - ./flags-data:/var/lib/mikroview
+      # Optional -- persists mikroview's self-generated local CA +
+      # certificate (see docs/configuration.md's "TLS" section) across
+      # restarts, so the browser/reverse-proxy trust step only happens
+      # once instead of every restart. Not needed at all if you're
+      # supplying your own cert via MIKROVIEW_TLS_CERT_FILE/KEY_FILE, or
+      # don't mind re-trusting a fresh CA each restart.
+      # - ./tls-data:/var/lib/mikroview/tls
     environment:
       - MIKROVIEW_CONFIG=/etc/mikroview/config.yaml
       # - MIKROVIEW_GEOIP_DB_PATH=/etc/mikroview/GeoLite2-Country.mmdb
       # - MIKROVIEW_FLAGS_STORE_PATH=/var/lib/mikroview/flags.json
       # - MIKROVIEW_FLAGS_DETECTOR_SETTINGS_STORE_PATH=/var/lib/mikroview/detector-settings.json
       # - MIKROVIEW_AUTH_STORE_PATH=/var/lib/mikroview/users.json
+      # TLS is on by default and needs no configuration to work -- these
+      # are only for customizing it.
+      # - MIKROVIEW_TLS_STORE_PATH=/var/lib/mikroview/tls
+      # - MIKROVIEW_TLS_HOSTS=192.168.1.50,mikroview.local
+      # - MIKROVIEW_TLS_CERT_FILE=/etc/mikroview/tls.crt
+      # - MIKROVIEW_TLS_KEY_FILE=/etc/mikroview/tls.key
+      # Only set this if mikroview's port above is NOT published/
+      # reachable from anywhere except your own reverse proxy over an
+      # isolated docker network -- never on a deployment where this
+      # port reaches a LAN or the internet directly. See
+      # docs/configuration.md's "TLS" section before using this.
+      # - MIKROVIEW_TLS_ENABLED=false
 ```
 
 Create `config.yaml` next to it first (see [`deploy/config.example.yaml`](deploy/config.example.yaml) for the full option reference), then `docker compose up -d`. This mirrors [`deploy/docker-compose.yml`](deploy/docker-compose.yml) exactly, just swapping the local `build:` for the prebuilt `image:`.
@@ -142,8 +174,8 @@ Create `config.yaml` next to it first (see [`deploy/config.example.yaml`](deploy
 Requires Go 1.26+ and Node 22+.
 
 ```sh
-make dev-backend    # go run ., syslog on :1514, http on :8080
-make dev-frontend   # vite dev server on :5173, proxies /api to :8080
+make dev-backend    # go run ., syslog on :1514, https on :8080 (TLS on by default -- see docs/configuration.md#tls)
+make dev-frontend   # vite dev server on :5173, proxies /api to :8080 over TLS
 make test           # go test ./... + svelte-check
 make build           # full build: frontend -> web/dist -> single Go binary
 make docker          # docker build -t mikroview .

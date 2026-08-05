@@ -1,13 +1,15 @@
 # Security policy
 
 MikroView was originally built for one specific deployment shape: a
-single instance, on a trusted home/office LAN, with no authentication.
-As of the local-auth feature, that's now **conditional**: mikroview
-stays fully open (the original behavior) until you create the first
-account, at which point authentication is required for everything except
-`/api/healthz`. This document makes both states' threat model explicit,
-since neither is the kind of thing that should be left implicit for
-anyone deciding whether/how to deploy this.
+single instance, on a trusted home/office LAN, with no authentication,
+over plain HTTP. Two things have since changed that: local accounts
+(mikroview stays fully open, the original behavior, until you create the
+first account, at which point authentication is required for everything
+except `/api/healthz`), and TLS being on by default -- an app serving
+real login credentials and session cookies has no business doing so over
+cleartext, LAN or not (see "TLS" below). This document makes all of
+that explicit, since none of it is the kind of thing that should be left
+implicit for anyone deciding whether/how to deploy this.
 
 ## Threat model
 
@@ -51,13 +53,11 @@ either way.
   to revoke, no signing-key management, but lost on a server restart
   (re-login is required; this does not affect account survival, which is
   persisted separately -- see "Data handling").
-- **The session cookie's `Secure` flag is off by default**
-  (`auth.secureCookie` / `MIKROVIEW_AUTH_SECURE_COOKIE`) because
-  mikroview is very commonly run over plain HTTP on a trusted LAN, and
-  forcing `Secure` would silently break login on any non-TLS deployment.
-  If you run mikroview behind TLS (directly or via a reverse proxy), turn
-  this on -- until you do, the session cookie (and your password, during
-  login) crosses the network in cleartext.
+- **The session cookie's `Secure` flag is on by default**
+  (`auth.secureCookie` / `MIKROVIEW_AUTH_SECURE_COOKIE`), matching TLS
+  being on by default -- see "TLS" below. Only turn this off if you've
+  also set `tls.enabled: false`, or sessions won't work at all (a
+  `Secure` cookie is never sent back over a plain connection).
 - **A lightweight CSRF mitigation** requires a custom header
   (`X-Requested-With: mikroview`) on every mutating request once an
   account exists -- `SameSite=Lax` cookies already block a cross-site
@@ -78,6 +78,40 @@ either way.
   they're locked out of. A password reset immediately invalidates every
   existing session for that account, including on an already-running
   server.
+
+## TLS
+
+- **On by default, on mikroview's one existing listener** -- no second
+  port. A reverse proxy in front doesn't close the underlying problem on
+  its own: mikroview's own listener stays fully reachable and functional
+  over plain HTTP regardless of whether an RP exists upstream, so anyone
+  who reaches it directly (by IP, by habit, by not knowing the RP's
+  hostname) gets the same authenticated app in cleartext. TLS at
+  mikroview's own listener closes that regardless of how it's reached.
+- **Zero-config default: a self-generated local CA + certificate**
+  (`internal/servertls`), persisted across restarts if `tls.storePath`
+  is configured (optional, same contract as `flags.storePath`) so the
+  trust step is a one-time cost. This CA is trust-on-first-use, not a
+  globally trusted root -- fine for an admin interface on infrastructure
+  you already control, not a substitute for a real cert if you have one
+  (`tls.certFile`/`tls.keyFile` take priority over generation).
+- **The CA is served at `/ca.crt`, unauthenticated** (only when
+  mikroview generated one -- never for a supplied cert), specifically so
+  a browser or reverse proxy can fetch it to establish trust. Its
+  fingerprint is also logged at startup for out-of-band verification
+  instead of blind trust-on-first-use, if you want it.
+- **One documented exception**: `tls.enabled: false` keeps mikroview's
+  listener on plain HTTP, same as before this feature existed. This is
+  **only** safe when mikroview's listener is provably unreachable except
+  from your own reverse proxy over an isolated docker network -- never
+  published to a LAN or the internet. In that specific topology the RP
+  already owns TLS termination for real clients, and there's no bypass
+  surface for mikroview to additionally protect on that internal hop.
+  Logged clearly at startup whenever set, so it's never a silent state.
+  See [docs/configuration.md](docs/configuration.md#tls) for the
+  reverse-proxy backend-TLS pattern this is an alternative to (pointing
+  your RP's upstream at `https://mikroview:PORT` instead, which needs no
+  new port and works for every other topology).
 
 ## Data handling
 
@@ -121,9 +155,9 @@ either way.
 
 | Listener | Auth | TLS | Notes |
 |---|---|---|---|
-| HTTP (`api.Server` + static UI) | Session cookie, once an account exists; open otherwise | None by default | Set `auth.secureCookie` once TLS is terminated in front of mikroview — see "Authentication" above. `/api/healthz` always stays open. |
-| Syslog UDP/TCP | None | None | Accepts and parses any line from any source as if it were a real RouterOS device -- unaffected by whether an account exists. |
-| WebSocket (`/api/ws`) | Session cookie + same-origin check, once an account exists; open otherwise | None by default | `CheckOrigin` is permissive only while no account exists — see `internal/api/ws.go`. |
+| HTTP (`api.Server` + static UI) | Session cookie, once an account exists; open otherwise | On by default (self-generated or supplied) | See "TLS" above for the zero-config default and the one supported reason (`tls.enabled: false`) to disable it. `/api/healthz` always stays open. |
+| Syslog UDP/TCP | None | None | Accepts and parses any line from any source as if it were a real RouterOS device -- unaffected by whether an account exists. TLS doesn't apply here; RouterOS's syslog protocol has no TLS mode. |
+| WebSocket (`/api/ws`) | Session cookie + same-origin check, once an account exists; open otherwise | Follows the HTTP listener (`wss://` when TLS is on) | `CheckOrigin` is permissive only while no account exists — see `internal/api/ws.go`. |
 
 ## Hardening already in place
 
@@ -172,9 +206,12 @@ damage a hostile or misbehaving LAN device can do:
   [docs/configuration.md](docs/configuration.md) for the full option
   reference.
 - If you need to view MikroView from outside that LAN, put it behind a
-  VPN (e.g. WireGuard/Tailscale) rather than port-forwarding or reverse-
-  proxying it onto the open internet. There is no login screen to stop
-  anyone who reaches it.
+  VPN (e.g. WireGuard/Tailscale) rather than port-forwarding it onto the
+  open internet -- an account (see "Authentication" above) and TLS (see
+  "TLS" above) both being on by default meaningfully raise the bar
+  versus mikroview's original no-auth/no-TLS posture, but neither is a
+  substitute for not exposing an admin interface to the open internet at
+  all in the first place.
 - Keep `config.yaml` itself off of any shared/multi-tenant filesystem —
   besides router names/IPs, it may also hold your AbuseIPDB API key
   (`reputation.abuseIPDBKey`) if you've configured one; prefer the
@@ -188,9 +225,11 @@ damage a hostile or misbehaving LAN device can do:
   wider than a trusted LAN means anyone who reaches it first claims the
   admin account. Keep `auth.storePath`'s file off a shared filesystem
   too, same reasoning as the flags file.
-- Turn on `auth.secureCookie` once mikroview sits behind TLS (directly or
-  via a reverse proxy) — without it, the session cookie and login
-  credentials cross the network in cleartext.
+- TLS is already on by default (see "TLS" above) -- there's nothing to
+  turn on. If you've deliberately set `tls.enabled: false`, double-check
+  it against that section's exact safe-use precondition (an isolated
+  reverse-proxy network, never a directly reachable port) before relying
+  on it.
 
 ## Reporting a vulnerability
 

@@ -104,17 +104,54 @@ type Notify struct {
 // See docs/configuration.md's "Authentication" section.
 type Auth struct {
 	StorePath string `yaml:"storePath"`
-	// SecureCookie sets the session cookie's Secure flag. Off by default
-	// because mikroview is very commonly deployed over plain HTTP on a
-	// trusted LAN -- forcing Secure would silently break login on any
-	// non-TLS deployment. Turn this on once you have TLS terminated
-	// somewhere in front of mikroview.
+	// SecureCookie sets the session cookie's Secure flag. Defaults to
+	// true, matching TLS.Enabled's own default -- mikroview serves TLS
+	// out of the box now, so there's no other kind of connection to have
+	// a session on. Only turn this off if you've also set
+	// tls.enabled: false (see that field's doc comment for the one
+	// supported reason to), or sessions won't work at all: a Secure
+	// cookie is never sent back over a plain connection.
 	SecureCookie bool `yaml:"secureCookie"`
 	// SessionTTL is the idle timeout: a session's expiry slides forward
 	// on each authenticated request, so this is "how long you can go
 	// without activity before needing to log in again," not a fixed
 	// session lifetime.
 	SessionTTL time.Duration `yaml:"sessionTTL"`
+}
+
+// TLS configures mikroview's own listener -- on by default: a browser
+// secure-context requirement was only ever a symptom of the real
+// problem, which is that an app serving real login credentials and
+// session cookies has no business doing so over cleartext, LAN or not
+// (see docs/configuration.md's "TLS" section for the full reasoning).
+// See internal/servertls for exactly how a certificate is obtained.
+type TLS struct {
+	// Enabled defaults to true. The one documented reason to set this
+	// false is a deployment where mikroview's listener is provably only
+	// reachable from your own reverse proxy over an isolated docker
+	// network -- never published to the LAN/host at all -- so there's no
+	// bypass surface for TLS to protect against on that hop, and the RP
+	// already owns TLS termination for real clients. Never set this
+	// false if mikroview's port is reachable from a LAN or the internet
+	// in any other way.
+	Enabled bool `yaml:"enabled"`
+	// CertFile/KeyFile: your own cert (a real domain + ACME, a corporate
+	// CA, etc) -- takes priority over generation if both are set.
+	CertFile string `yaml:"certFile"`
+	KeyFile  string `yaml:"keyFile"`
+	// Hosts: hostnames/IPs a generated certificate should cover (SANs)
+	// -- whatever you'll actually use to reach mikroview (a LAN IP, the
+	// docker-compose service name a reverse proxy uses as its upstream,
+	// a .local hostname). Defaults to localhost/127.0.0.1 if unset --
+	// still fully encrypted either way, just only strictly verifiable
+	// under those names unless you add your own.
+	Hosts []string `yaml:"hosts"`
+	// StorePath: where a generated CA + certificate persist across
+	// restarts, so the trust step (importing the CA into your browser or
+	// reverse proxy) is a one-time cost rather than a per-restart one.
+	// Optional, same contract as flags.storePath: left unset, TLS still
+	// works, it just regenerates (and needs re-trusting) every restart.
+	StorePath string `yaml:"storePath"`
 }
 
 // DetectorScope is DetectorSettings' host/port/rule/classification
@@ -211,6 +248,7 @@ type Config struct {
 	Flags      Flags      `yaml:"flags"`
 	Auth       Auth       `yaml:"auth"`
 	Notify     Notify     `yaml:"notify"`
+	TLS        TLS        `yaml:"tls"`
 	Devices    []Device   `yaml:"devices"`
 
 	// RuleNames/HostNames are optional friendly-display-name maps -- see
@@ -275,7 +313,11 @@ func defaults() Config {
 			LowSlowScanBaselineMultiplier: 3,
 		},
 		Auth: Auth{
-			SessionTTL: 24 * time.Hour,
+			SessionTTL:   24 * time.Hour,
+			SecureCookie: true,
+		},
+		TLS: TLS{
+			Enabled: true,
 		},
 		Notify: Notify{
 			BatchWindow: 60 * time.Second,
@@ -537,6 +579,23 @@ func applyEnv(cfg *Config) {
 	}
 	if v := os.Getenv("MIKROVIEW_NOTIFY_PUSHOVER_USER"); v != "" {
 		cfg.Notify.Pushover.User = v
+	}
+	if v := os.Getenv("MIKROVIEW_TLS_ENABLED"); v != "" {
+		if b, err := strconv.ParseBool(v); err == nil {
+			cfg.TLS.Enabled = b
+		}
+	}
+	if v := os.Getenv("MIKROVIEW_TLS_CERT_FILE"); v != "" {
+		cfg.TLS.CertFile = v
+	}
+	if v := os.Getenv("MIKROVIEW_TLS_KEY_FILE"); v != "" {
+		cfg.TLS.KeyFile = v
+	}
+	if v := os.Getenv("MIKROVIEW_TLS_HOSTS"); v != "" {
+		cfg.TLS.Hosts = parseStringList(v)
+	}
+	if v := os.Getenv("MIKROVIEW_TLS_STORE_PATH"); v != "" {
+		cfg.TLS.StorePath = v
 	}
 }
 

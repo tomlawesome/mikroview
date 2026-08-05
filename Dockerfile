@@ -22,6 +22,8 @@ RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/mikrovi
 FROM gcr.io/distroless/static-debian12:nonroot
 COPY --from=backend /out/mikroview /mikroview
 USER nonroot:nonroot
+# 8080/tcp serves HTTPS by default (TLS is on unless tls.enabled: false
+# -- see docs/configuration.md's "TLS" section).
 EXPOSE 1514/udp 1514/tcp 8080/tcp
 # No shell/curl/wget in this image, so the binary checks itself -- see
 # runHealthcheck in main.go.

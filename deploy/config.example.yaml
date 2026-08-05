@@ -96,8 +96,39 @@ store:
 # SECURITY.md and docs/configuration.md's "Authentication" section.
 # auth:
 #   storePath: /var/lib/mikroview/users.json
-#   secureCookie: false
+#   secureCookie: true
 #   sessionTTL: 24h
+
+# TLS is on by default and needs no configuration to work -- mikroview
+# generates its own local CA + certificate on first start. Uncomment
+# storePath to persist that CA across restarts (same pattern as
+# flags.storePath), or point certFile/keyFile at your own cert instead
+# of generating one. See SECURITY.md and docs/configuration.md's "TLS"
+# section, including the one documented reason to set enabled: false.
+# tls:
+#   enabled: true
+#   certFile: ""
+#   keyFile: ""
+#   hosts: []
+#   storePath: /var/lib/mikroview/tls
+
+# Optional: email/push alerting on newly-raised behavioral flags,
+# batched rather than one message per flag. See docs/configuration.md's
+# "Notifications" section for the full field reference and the
+# reasoning behind batchWindow being a fixed interval, not a debounce.
+# notify:
+#   batchWindow: 60s
+#   smtp:
+#     host: ""
+#     port: 587
+#     username: ""
+#     password: ""
+#     tlsMode: "starttls"
+#     from: ""
+#     to: []
+#   pushover:
+#     token: ""
+#     user: ""
 
 # Devices are matched by the syslog source IP mikroview sees them from.
 # Sources not listed here still appear in the UI, auto-discovered and
