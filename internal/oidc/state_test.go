@@ -1,6 +1,7 @@
 package oidc
 
 import (
+	"encoding/base64"
 	"testing"
 	"time"
 )
@@ -65,13 +66,24 @@ func TestFlowStateDecodeRejectsTamperedCiphertext(t *testing.T) {
 		t.Fatalf("Encode: %v", err)
 	}
 
-	// Flip the last character -- corrupts the base64 tail / GCM auth
-	// tag without necessarily breaking base64 decodability outright,
-	// exercising the AEAD-open failure path specifically rather than
-	// just the base64-parse failure path below.
-	tampered := []byte(encoded)
-	tampered[len(tampered)-1] ^= 1
-	if _, err := codec.Decode(string(tampered), 10*time.Minute, time.Now()); err != ErrFlowStateInvalid {
+	// Flip a bit in the middle of the *decoded* bytes, not a character
+	// of the base64 text -- base64's last one or two characters can
+	// carry as few as 2 real bits (the rest is structural zero padding
+	// Go's non-strict decoder doesn't validate), so an ASCII-level XOR
+	// on the text near either end has a real, if rare, chance of only
+	// touching a padding bit and silently round-tripping to the same
+	// underlying byte. Flipping a byte in the middle of the actual
+	// ciphertext, then re-encoding, unambiguously corrupts real data
+	// every time, regardless of how the plaintext length (which varies
+	// with FlowState.IssuedAt's trailing-zero-trimmed fractional
+	// seconds) happens to align base64's 3-byte grouping.
+	sealed, err := base64.RawURLEncoding.DecodeString(encoded)
+	if err != nil {
+		t.Fatalf("decoding own Encode output: %v", err)
+	}
+	sealed[len(sealed)/2] ^= 1
+	tampered := base64.RawURLEncoding.EncodeToString(sealed)
+	if _, err := codec.Decode(tampered, 10*time.Minute, time.Now()); err != ErrFlowStateInvalid {
 		t.Errorf("Decode(tampered) = %v, want ErrFlowStateInvalid", err)
 	}
 }
