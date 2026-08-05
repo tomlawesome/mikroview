@@ -1,5 +1,5 @@
 # --- frontend build -------------------------------------------------------
-FROM node:22-alpine AS frontend
+FROM node:26-alpine AS frontend
 WORKDIR /src/frontend
 COPY frontend/package.json frontend/package-lock.json ./
 RUN npm ci
@@ -7,7 +7,7 @@ COPY frontend/ ./
 RUN npm run build
 
 # --- backend build ----------------------------------------------------------
-FROM golang:1.25.12-alpine AS backend
+FROM golang:1.26.5-alpine AS backend
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
