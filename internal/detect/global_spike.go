@@ -23,12 +23,22 @@ const emaAlpha = 0.02
 type GlobalSpikeDetector struct {
 	cfg      Config
 	fs       *flags.Store
+	settings *SettingsStore
 	baseline float64
 	primed   bool
 }
 
+// NewGlobalSpikeDetector constructs a detector that's always enabled --
+// see NewGlobalSpikeDetectorWithSettings for on/off control (issue #44;
+// global spike is network-wide, not keyed by anything per-source, so it
+// has no scope, only Enabled). Kept for callers and existing tests that
+// don't need that control.
 func NewGlobalSpikeDetector(cfg Config, fs *flags.Store) *GlobalSpikeDetector {
-	return &GlobalSpikeDetector{cfg: cfg, fs: fs}
+	return NewGlobalSpikeDetectorWithSettings(cfg, fs, AllEnabledSettingsStore())
+}
+
+func NewGlobalSpikeDetectorWithSettings(cfg Config, fs *flags.Store, settings *SettingsStore) *GlobalSpikeDetector {
+	return &GlobalSpikeDetector{cfg: cfg, fs: fs, settings: settings}
 }
 
 // Check updates the baseline with the current EPS reading and raises a
@@ -38,6 +48,15 @@ func NewGlobalSpikeDetector(cfg Config, fs *flags.Store) *GlobalSpikeDetector {
 // on essentially idle traffic). The very first call only primes the
 // baseline -- there's nothing to compare against yet.
 func (g *GlobalSpikeDetector) Check(currentEPS float64, now time.Time) {
+	if !g.settings.Get(DetectorGlobalSpike).Enabled {
+		// Marks the baseline stale rather than leaving the EMA running
+		// on data nobody asked to watch: re-enabling re-primes on the
+		// next reading instead of instantly comparing against whatever
+		// the baseline happened to be when it was switched off.
+		g.primed = false
+		return
+	}
+
 	if !g.primed {
 		g.baseline = currentEPS
 		g.primed = true

@@ -19,6 +19,17 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// defaultDataDir is where every optional persistence path defaults to
+// living, out of the box -- flags, detector settings, accounts, and the
+// self-generated TLS certificate. The Dockerfile creates this directory
+// owned by the nonroot user, so all of it is writable (and persists
+// across simple process restarts) with zero configuration; surviving a
+// full container *recreation* additionally needs a volume mounted over
+// this same path, documented in deploy/docker-compose.yml rather than
+// forced -- an operator who doesn't want any of this persisted can
+// still point any of these at "" to opt back out per field.
+const defaultDataDir = "/var/lib/mikroview"
+
 type Device struct {
 	ID       string `yaml:"id"`
 	Name     string `yaml:"name"`
@@ -36,6 +47,17 @@ type Store struct {
 	MaxEvents int           `yaml:"maxEvents"`
 }
 
+// Log controls mikroview's own server log output -- see
+// internal/logging. Doesn't apply to the CLI recovery commands
+// (-list-users, -reset-password's prompts, etc.), which print directly
+// to stdout/stderr for scripting/piping, not through this leveled path.
+type Log struct {
+	// Level is one of debug/info/warn/error (case-insensitive); anything
+	// else falls back to info silently, same as every other malformed
+	// value in this package (see internal/logging.SetLevel).
+	Level string `yaml:"level"`
+}
+
 // GeoIP is entirely optional -- see internal/geoip. Left empty, the
 // country-flag feature just doesn't show anything; there is no default
 // database bundled or fetched, since MaxMind requires a free account to
@@ -51,6 +73,51 @@ type Reputation struct {
 	AbuseIPDBKey string `yaml:"abuseIPDBKey"`
 }
 
+// SMTP configures send-only email alerting on newly-raised flags (issue
+// #30) -- no inbound mailbox, no auth flows beyond these client creds,
+// relayed through the operator's own external mail server. See
+// internal/notify.SMTPConfig for the runtime shape this maps onto.
+type SMTP struct {
+	Host string `yaml:"host"`
+	Port int    `yaml:"port"`
+	// Username left empty means no AUTH is attempted, for an open local
+	// relay (e.g. a Postfix instance on the same host/network).
+	Username string `yaml:"username"`
+	Password string `yaml:"password"`
+	// TLSMode is "" (plaintext, local relay only), "starttls" (upgrade
+	// after connecting, typically port 587), or "implicit" (TLS from the
+	// first byte, typically port 465).
+	TLSMode string   `yaml:"tlsMode"`
+	From    string   `yaml:"from"`
+	To      []string `yaml:"to"`
+}
+
+// Pushover configures push notifications on newly-raised flags (issue
+// #31) via Pushover (https://pushover.net) -- the simpler of the two
+// push targets scoped in that issue: no VAPID keys, no service worker,
+// no per-browser subscription management, just an application token and
+// a user/group key.
+type Pushover struct {
+	Token string `yaml:"token"`
+	User  string `yaml:"user"`
+}
+
+// Notify is entirely optional -- see internal/notify. Each channel
+// (SMTP, Pushover) is independently enabled by whether its own
+// identifying field is set (SMTP.Host, Pushover.Token) -- any
+// combination of zero, one, or both may be configured at once, and
+// every enabled channel shares the same BatchWindow/Dispatcher.
+type Notify struct {
+	// BatchWindow: how often pending flags are flushed to every
+	// configured channel -- a fixed interval, not a quiet-period
+	// debounce, so a sustained flood of flags during a real incident
+	// still gets a bounded max delay before alerting rather than the
+	// window continuously resetting. See internal/notify.Dispatcher.
+	BatchWindow time.Duration `yaml:"batchWindow"`
+	SMTP        SMTP          `yaml:"smtp"`
+	Pushover    Pushover      `yaml:"pushover"`
+}
+
 // Auth configures internal/auth's local authentication. Unlike Flags'
 // StorePath, StorePath here is not truly optional -- mikroview stays
 // fully open (today's behavior) as long as no user account exists, but
@@ -59,17 +126,82 @@ type Reputation struct {
 // See docs/configuration.md's "Authentication" section.
 type Auth struct {
 	StorePath string `yaml:"storePath"`
-	// SecureCookie sets the session cookie's Secure flag. Off by default
-	// because mikroview is very commonly deployed over plain HTTP on a
-	// trusted LAN -- forcing Secure would silently break login on any
-	// non-TLS deployment. Turn this on once you have TLS terminated
-	// somewhere in front of mikroview.
+	// SecureCookie sets the session cookie's Secure flag. Defaults to
+	// true, matching TLS.Enabled's own default -- mikroview serves TLS
+	// out of the box now, so there's no other kind of connection to have
+	// a session on. Only turn this off if you've also set
+	// tls.enabled: false (see that field's doc comment for the one
+	// supported reason to), or sessions won't work at all: a Secure
+	// cookie is never sent back over a plain connection.
 	SecureCookie bool `yaml:"secureCookie"`
 	// SessionTTL is the idle timeout: a session's expiry slides forward
 	// on each authenticated request, so this is "how long you can go
 	// without activity before needing to log in again," not a fixed
 	// session lifetime.
 	SessionTTL time.Duration `yaml:"sessionTTL"`
+}
+
+// TLS configures mikroview's own listener -- on by default: a browser
+// secure-context requirement was only ever a symptom of the real
+// problem, which is that an app serving real login credentials and
+// session cookies has no business doing so over cleartext, LAN or not
+// (see docs/configuration.md's "TLS" section for the full reasoning).
+// See internal/servertls for exactly how a certificate is obtained.
+type TLS struct {
+	// Enabled defaults to true. The one documented reason to set this
+	// false is a deployment where mikroview's listener is provably only
+	// reachable from your own reverse proxy over an isolated docker
+	// network -- never published to the LAN/host at all -- so there's no
+	// bypass surface for TLS to protect against on that hop, and the RP
+	// already owns TLS termination for real clients. Never set this
+	// false if mikroview's port is reachable from a LAN or the internet
+	// in any other way.
+	Enabled bool `yaml:"enabled"`
+	// CertFile/KeyFile: your own cert (a real domain + ACME, a corporate
+	// CA, etc) -- takes priority over generation if both are set.
+	CertFile string `yaml:"certFile"`
+	KeyFile  string `yaml:"keyFile"`
+	// Hosts: hostnames/IPs a generated certificate should cover (SANs)
+	// -- whatever you'll actually use to reach mikroview (a LAN IP, the
+	// docker-compose service name a reverse proxy uses as its upstream,
+	// a .local hostname). Defaults to localhost/127.0.0.1 if unset --
+	// still fully encrypted either way, just only strictly verifiable
+	// under those names unless you add your own.
+	Hosts []string `yaml:"hosts"`
+	// StorePath: where a generated CA + certificate persist across
+	// restarts, so the trust step (importing the CA into your browser or
+	// reverse proxy) is a one-time cost rather than a per-restart one.
+	// Optional, same contract as flags.storePath: left unset, TLS still
+	// works, it just regenerates (and needs re-trusting) every restart.
+	StorePath string `yaml:"storePath"`
+}
+
+// DetectorScope is DetectorSettings' host/port/rule/classification
+// restriction, as plain yaml-tagged fields rather than importing
+// internal/detect -- same reasoning Flags already gives for duplicating
+// detect.Config's thresholds: this package stays a dependency-free
+// leaf. See internal/detect.Scope's doc comment for exactly which
+// fields each detector consults and what "" for a Mode/Classification
+// field means (no restriction).
+type DetectorScope struct {
+	Hosts          []string `yaml:"hosts"`
+	HostsMode      string   `yaml:"hostsMode"`
+	Ports          []int    `yaml:"ports"`
+	PortsMode      string   `yaml:"portsMode"`
+	Classification string   `yaml:"classification"`
+	Rules          []string `yaml:"rules"`
+	RulesMode      string   `yaml:"rulesMode"`
+}
+
+// DetectorSettings is one detector's config.yaml-configurable starting
+// point -- enabled by default, unscoped. A live admin-only UI toggle
+// (see docs/configuration.md's "Per-detector toggles" section) can
+// override this at runtime without a restart, persisted separately to
+// DetectorSettingsStorePath; these YAML values are only ever the seed
+// for the first run, not re-read afterward.
+type DetectorSettings struct {
+	Enabled bool          `yaml:"enabled"`
+	Scope   DetectorScope `yaml:"scope"`
 }
 
 // Flags configures internal/detect's behavioral detectors and
@@ -108,15 +240,38 @@ type Flags struct {
 
 	HostActivityMultiplier    float64 `yaml:"hostActivityMultiplier"`
 	HostActivityWarmupSamples int     `yaml:"hostActivityWarmupSamples"`
+
+	// LowSlowScan* (issue #20): see internal/detect.Config's matching
+	// fields for what each one means -- duplicated here rather than
+	// imported, same as every other Flags field.
+	LowSlowScanWindow             time.Duration `yaml:"lowSlowScanWindow"`
+	LowSlowScanPortThreshold      int           `yaml:"lowSlowScanPortThreshold"`
+	LowSlowScanHostThreshold      int           `yaml:"lowSlowScanHostThreshold"`
+	LowSlowScanMinObservation     time.Duration `yaml:"lowSlowScanMinObservation"`
+	LowSlowScanDropRatio          float64       `yaml:"lowSlowScanDropRatio"`
+	LowSlowScanBaselineMultiplier float64       `yaml:"lowSlowScanBaselineMultiplier"`
+
+	// DetectorSettingsStorePath persists live UI on/off+scope toggles
+	// (see internal/detect.SettingsStore) so they survive a restart --
+	// same optional-persistence contract as StorePath above. Detectors
+	// map is YAML-only (no env var), same rationale as RuleNames/
+	// HostNames/Devices below: a structured per-detector record doesn't
+	// map cleanly onto env vars. Keyed by detector name (e.g.
+	// "port_scan", "rule_spike" -- see internal/detect.DetectorName).
+	DetectorSettingsStorePath string                      `yaml:"detectorSettingsStorePath"`
+	Detectors                 map[string]DetectorSettings `yaml:"detectors"`
 }
 
 type Config struct {
 	Listen     Listen     `yaml:"listen"`
 	Store      Store      `yaml:"store"`
+	Log        Log        `yaml:"log"`
 	GeoIP      GeoIP      `yaml:"geoip"`
 	Reputation Reputation `yaml:"reputation"`
 	Flags      Flags      `yaml:"flags"`
 	Auth       Auth       `yaml:"auth"`
+	Notify     Notify     `yaml:"notify"`
+	TLS        TLS        `yaml:"tls"`
 	Devices    []Device   `yaml:"devices"`
 
 	// RuleNames/HostNames are optional friendly-display-name maps -- see
@@ -138,6 +293,9 @@ func defaults() Config {
 		Store: Store{
 			Retention: 24 * time.Hour,
 			MaxEvents: 200_000,
+		},
+		Log: Log{
+			Level: "info",
 		},
 		// Mirrors internal/detect.DefaultConfig() -- kept as separate
 		// literal values (rather than importing internal/detect here) so
@@ -172,9 +330,28 @@ func defaults() Config {
 
 			HostActivityMultiplier:    3,
 			HostActivityWarmupSamples: 20,
+
+			LowSlowScanWindow:             3 * time.Hour,
+			LowSlowScanPortThreshold:      8,
+			LowSlowScanHostThreshold:      5,
+			LowSlowScanMinObservation:     45 * time.Minute,
+			LowSlowScanDropRatio:          0.8,
+			LowSlowScanBaselineMultiplier: 3,
+
+			StorePath:                 defaultDataDir + "/flags.json",
+			DetectorSettingsStorePath: defaultDataDir + "/detector-settings.json",
 		},
 		Auth: Auth{
-			SessionTTL: 24 * time.Hour,
+			StorePath:    defaultDataDir + "/users.json",
+			SessionTTL:   24 * time.Hour,
+			SecureCookie: true,
+		},
+		TLS: TLS{
+			Enabled:   true,
+			StorePath: defaultDataDir + "/tls",
+		},
+		Notify: Notify{
+			BatchWindow: 60 * time.Second,
 		},
 	}
 }
@@ -230,6 +407,9 @@ func applyEnv(cfg *Config) {
 		if n, err := strconv.Atoi(v); err == nil {
 			cfg.Store.MaxEvents = n
 		}
+	}
+	if v := os.Getenv("MIKROVIEW_LOG_LEVEL"); v != "" {
+		cfg.Log.Level = v
 	}
 	if v := os.Getenv("MIKROVIEW_GEOIP_DB_PATH"); v != "" {
 		cfg.GeoIP.DBPath = v
@@ -350,6 +530,39 @@ func applyEnv(cfg *Config) {
 			cfg.Flags.HostActivityWarmupSamples = n
 		}
 	}
+	if v := os.Getenv("MIKROVIEW_FLAGS_LOW_SLOW_SCAN_WINDOW"); v != "" {
+		if d, err := time.ParseDuration(v); err == nil {
+			cfg.Flags.LowSlowScanWindow = d
+		}
+	}
+	if v := os.Getenv("MIKROVIEW_FLAGS_LOW_SLOW_SCAN_PORT_THRESHOLD"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			cfg.Flags.LowSlowScanPortThreshold = n
+		}
+	}
+	if v := os.Getenv("MIKROVIEW_FLAGS_LOW_SLOW_SCAN_HOST_THRESHOLD"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			cfg.Flags.LowSlowScanHostThreshold = n
+		}
+	}
+	if v := os.Getenv("MIKROVIEW_FLAGS_LOW_SLOW_SCAN_MIN_OBSERVATION"); v != "" {
+		if d, err := time.ParseDuration(v); err == nil {
+			cfg.Flags.LowSlowScanMinObservation = d
+		}
+	}
+	if v := os.Getenv("MIKROVIEW_FLAGS_LOW_SLOW_SCAN_DROP_RATIO"); v != "" {
+		if f, err := strconv.ParseFloat(v, 64); err == nil {
+			cfg.Flags.LowSlowScanDropRatio = f
+		}
+	}
+	if v := os.Getenv("MIKROVIEW_FLAGS_LOW_SLOW_SCAN_BASELINE_MULTIPLIER"); v != "" {
+		if f, err := strconv.ParseFloat(v, 64); err == nil {
+			cfg.Flags.LowSlowScanBaselineMultiplier = f
+		}
+	}
+	if v := os.Getenv("MIKROVIEW_FLAGS_DETECTOR_SETTINGS_STORE_PATH"); v != "" {
+		cfg.Flags.DetectorSettingsStorePath = v
+	}
 	if v := os.Getenv("MIKROVIEW_AUTH_STORE_PATH"); v != "" {
 		cfg.Auth.StorePath = v
 	}
@@ -363,12 +576,83 @@ func applyEnv(cfg *Config) {
 			cfg.Auth.SessionTTL = d
 		}
 	}
+	if v := os.Getenv("MIKROVIEW_NOTIFY_BATCH_WINDOW"); v != "" {
+		if d, err := time.ParseDuration(v); err == nil {
+			cfg.Notify.BatchWindow = d
+		}
+	}
+	if v := os.Getenv("MIKROVIEW_NOTIFY_SMTP_HOST"); v != "" {
+		cfg.Notify.SMTP.Host = v
+	}
+	if v := os.Getenv("MIKROVIEW_NOTIFY_SMTP_PORT"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			cfg.Notify.SMTP.Port = n
+		}
+	}
+	if v := os.Getenv("MIKROVIEW_NOTIFY_SMTP_USERNAME"); v != "" {
+		cfg.Notify.SMTP.Username = v
+	}
+	// Password is the one field here worth a secret-via-env path even
+	// with a config file in play, same reasoning MIKROVIEW_ABUSEIPDB_KEY
+	// already establishes -- a credential doesn't have to sit in
+	// config.yaml just because the rest of the block does.
+	if v := os.Getenv("MIKROVIEW_NOTIFY_SMTP_PASSWORD"); v != "" {
+		cfg.Notify.SMTP.Password = v
+	}
+	if v := os.Getenv("MIKROVIEW_NOTIFY_SMTP_TLS_MODE"); v != "" {
+		cfg.Notify.SMTP.TLSMode = v
+	}
+	if v := os.Getenv("MIKROVIEW_NOTIFY_SMTP_FROM"); v != "" {
+		cfg.Notify.SMTP.From = v
+	}
+	if v := os.Getenv("MIKROVIEW_NOTIFY_SMTP_TO"); v != "" {
+		cfg.Notify.SMTP.To = parseStringList(v)
+	}
+	if v := os.Getenv("MIKROVIEW_NOTIFY_PUSHOVER_TOKEN"); v != "" {
+		cfg.Notify.Pushover.Token = v
+	}
+	if v := os.Getenv("MIKROVIEW_NOTIFY_PUSHOVER_USER"); v != "" {
+		cfg.Notify.Pushover.User = v
+	}
+	if v := os.Getenv("MIKROVIEW_TLS_ENABLED"); v != "" {
+		if b, err := strconv.ParseBool(v); err == nil {
+			cfg.TLS.Enabled = b
+		}
+	}
+	if v := os.Getenv("MIKROVIEW_TLS_CERT_FILE"); v != "" {
+		cfg.TLS.CertFile = v
+	}
+	if v := os.Getenv("MIKROVIEW_TLS_KEY_FILE"); v != "" {
+		cfg.TLS.KeyFile = v
+	}
+	if v := os.Getenv("MIKROVIEW_TLS_HOSTS"); v != "" {
+		cfg.TLS.Hosts = parseStringList(v)
+	}
+	if v := os.Getenv("MIKROVIEW_TLS_STORE_PATH"); v != "" {
+		cfg.TLS.StorePath = v
+	}
 }
 
 // parseIntList parses a comma-separated list of integers (e.g. a port
 // list from an env var). Any single malformed entry invalidates the
 // whole value -- like every other env var here, a bad value is ignored
 // in favor of whatever was already set, rather than partially applied.
+// parseStringList parses a comma-separated list of plain strings (e.g.
+// notify.smtp.to's recipient addresses from an env var). Unlike
+// parseIntList, there's no format to validate here -- any entry is a
+// valid recipient as far as this package is concerned -- so it never
+// fails, just splits and trims.
+func parseStringList(v string) []string {
+	parts := strings.Split(v, ",")
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		if trimmed := strings.TrimSpace(p); trimmed != "" {
+			out = append(out, trimmed)
+		}
+	}
+	return out
+}
+
 func parseIntList(v string) ([]int, bool) {
 	parts := strings.Split(v, ",")
 	out := make([]int, 0, len(parts))

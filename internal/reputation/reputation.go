@@ -13,6 +13,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"strings"
 	"sync"
 	"time"
 )
@@ -39,6 +40,54 @@ type Result struct {
 	TotalReports *int     `json:"totalReports,omitempty"`
 	CountryCode  string   `json:"countryCode,omitempty"`
 	ISP          string   `json:"isp,omitempty"`
+	// UsageType and IsTor (issue #58) are AbuseIPDB fields already
+	// present in its "check" response but not previously parsed --
+	// AbuseIPDB does classify hosting/data-center IP space via
+	// UsageType (e.g. "Data Center/Web Hosting/Transit"), resolving
+	// that issue's open question about whether a usable signal exists
+	// in a source mikroview already calls. Both are AbuseIPDB-only,
+	// same as AbuseScore/TotalReports -- empty/false if that source
+	// isn't configured.
+	UsageType string `json:"usageType,omitempty"`
+	IsTor     bool   `json:"isTor,omitempty"`
+}
+
+// TorExitNodeFloor/HostingProviderFloor: starting-point confidence
+// floors for RiskFloor's two signals -- deliberately smaller than a
+// real AbuseIPDB abuse score, since neither is proof of malice on its
+// own (Tor use isn't illegal, and plenty of legitimate scanners/CDNs/
+// bots run from hosting providers too). Tuned as a reasonable starting
+// point, not a calibrated value -- worth revisiting once there's real
+// usage data to judge false-positive rate against.
+const (
+	TorExitNodeFloor     = 60
+	HostingProviderFloor = 30
+)
+
+// RiskFloor returns a confidence floor derived from IsTor/UsageType, if
+// either signal applies (issue #58) -- a Tor exit node is treated as
+// the stronger signal, checked first. ok is false if neither applies,
+// meaning this result contributes no floor from these two fields (a
+// caller should not treat that as "confirmed clean," same absence-of-
+// evidence reasoning flags.Store.RaiseConfidenceFloor already documents
+// for AbuseScore).
+func (r Result) RiskFloor() (floor int, ok bool) {
+	if r.IsTor {
+		return TorExitNodeFloor, true
+	}
+	if isHostingUsageType(r.UsageType) {
+		return HostingProviderFloor, true
+	}
+	return 0, false
+}
+
+// isHostingUsageType matches AbuseIPDB's documented "Data Center/Web
+// Hosting/Transit" usageType value (and near variants) rather than an
+// exact string equality -- resilient to AbuseIPDB tweaking casing/
+// wording without needing a mikroview release to keep matching.
+func isHostingUsageType(usageType string) bool {
+	lower := strings.ToLower(usageType)
+	return strings.Contains(lower, "hosting") || strings.Contains(lower, "data center")
 }
 
 type cacheEntry struct {
@@ -114,6 +163,8 @@ func (c *Client) Lookup(ctx context.Context, ipStr string) (Result, error) {
 		TotalReports: abuse.TotalReports,
 		CountryCode:  abuse.CountryCode,
 		ISP:          abuse.ISP,
+		UsageType:    abuse.UsageType,
+		IsTor:        abuse.IsTor,
 	}
 
 	c.mu.Lock()
@@ -179,6 +230,8 @@ func fetchAbuseIPDB(ctx context.Context, client *http.Client, key, ip string) Re
 			TotalReports         int    `json:"totalReports"`
 			CountryCode          string `json:"countryCode"`
 			ISP                  string `json:"isp"`
+			UsageType            string `json:"usageType"`
+			IsTor                bool   `json:"isTor"`
 		} `json:"data"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
@@ -192,6 +245,8 @@ func fetchAbuseIPDB(ctx context.Context, client *http.Client, key, ip string) Re
 		TotalReports: &reports,
 		CountryCode:  body.Data.CountryCode,
 		ISP:          body.Data.ISP,
+		UsageType:    body.Data.UsageType,
+		IsTor:        body.Data.IsTor,
 	}
 }
 
