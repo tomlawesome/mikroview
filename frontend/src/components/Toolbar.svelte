@@ -1,6 +1,7 @@
 <script lang="ts">
   import { appState } from '../lib/state.svelte'
   import { flagsState } from '../lib/flags.svelte'
+  import { authState } from '../lib/auth.svelte'
   import { formatEps } from '../lib/format'
   import { themeState } from '../lib/theme.svelte'
   import { retentionState, MAX_AGE_OPTIONS } from '../lib/retention.svelte'
@@ -101,6 +102,17 @@
     >
       {modeLabels[themeState.pref]}
     </button>
+
+    {#if authState.state === 'authenticated'}
+      {#if authState.role === 'admin'}
+        <button onclick={() => (authState.showAddUser = true)} title="Create an additional account">
+          Add user
+        </button>
+      {/if}
+      <button onclick={() => authState.logout()} title="Sign out {authState.username}">
+        Sign out ({authState.username})
+      </button>
+    {/if}
   </div>
 </header>
 

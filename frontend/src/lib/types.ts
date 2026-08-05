@@ -90,6 +90,14 @@ export interface Stats {
   connectedClients: number
 }
 
+// Mirrors internal/api/auth.go's sessionResponse.
+export interface AuthSession {
+  setupRequired: boolean
+  authenticated: boolean
+  username?: string
+  role?: 'admin' | 'user'
+}
+
 // Mirrors internal/reputation/reputation.go's Result.
 export interface ReputationResult {
   ip: string
