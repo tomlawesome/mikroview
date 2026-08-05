@@ -70,9 +70,21 @@ type SMTP struct {
 	To      []string `yaml:"to"`
 }
 
-// Notify is entirely optional -- see internal/notify. Left with an
-// empty SMTP.Host, notifications are simply never dispatched; no
-// default relay is assumed.
+// Pushover configures push notifications on newly-raised flags (issue
+// #31) via Pushover (https://pushover.net) -- the simpler of the two
+// push targets scoped in that issue: no VAPID keys, no service worker,
+// no per-browser subscription management, just an application token and
+// a user/group key.
+type Pushover struct {
+	Token string `yaml:"token"`
+	User  string `yaml:"user"`
+}
+
+// Notify is entirely optional -- see internal/notify. Each channel
+// (SMTP, Pushover) is independently enabled by whether its own
+// identifying field is set (SMTP.Host, Pushover.Token) -- any
+// combination of zero, one, or both may be configured at once, and
+// every enabled channel shares the same BatchWindow/Dispatcher.
 type Notify struct {
 	// BatchWindow: how often pending flags are flushed to every
 	// configured channel -- a fixed interval, not a quiet-period
@@ -81,6 +93,7 @@ type Notify struct {
 	// window continuously resetting. See internal/notify.Dispatcher.
 	BatchWindow time.Duration `yaml:"batchWindow"`
 	SMTP        SMTP          `yaml:"smtp"`
+	Pushover    Pushover      `yaml:"pushover"`
 }
 
 // Auth configures internal/auth's local authentication. Unlike Flags'
@@ -518,6 +531,12 @@ func applyEnv(cfg *Config) {
 	}
 	if v := os.Getenv("MIKROVIEW_NOTIFY_SMTP_TO"); v != "" {
 		cfg.Notify.SMTP.To = parseStringList(v)
+	}
+	if v := os.Getenv("MIKROVIEW_NOTIFY_PUSHOVER_TOKEN"); v != "" {
+		cfg.Notify.Pushover.Token = v
+	}
+	if v := os.Getenv("MIKROVIEW_NOTIFY_PUSHOVER_USER"); v != "" {
+		cfg.Notify.Pushover.User = v
 	}
 }
 

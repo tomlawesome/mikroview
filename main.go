@@ -158,22 +158,32 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	// Notify (issue #30): send-only email alerting on newly-raised flags,
-	// through the operator's own external mail relay. Disabled unless a
-	// host is configured -- same "empty means off" convention as
-	// Reputation.AbuseIPDBKey/GeoIP.DBPath.
+	// Notify (issues #30/#31): alerting on newly-raised flags outside the
+	// UI, through whichever channels are configured -- each independently
+	// enabled by its own identifying field being set (same "empty means
+	// off" convention as Reputation.AbuseIPDBKey/GeoIP.DBPath), sharing
+	// one Dispatcher/BatchWindow. No dispatcher goroutine is started at
+	// all if nothing is configured.
+	var notifiers []notify.Notifier
 	if cfg.Notify.SMTP.Host != "" {
-		dispatcher := notify.NewDispatcher(cfg.Notify.BatchWindow, []notify.Notifier{
-			notify.NewSMTPNotifier(notify.SMTPConfig{
-				Host:     cfg.Notify.SMTP.Host,
-				Port:     cfg.Notify.SMTP.Port,
-				Username: cfg.Notify.SMTP.Username,
-				Password: cfg.Notify.SMTP.Password,
-				TLSMode:  notify.TLSMode(cfg.Notify.SMTP.TLSMode),
-				From:     cfg.Notify.SMTP.From,
-				To:       cfg.Notify.SMTP.To,
-			}),
-		})
+		notifiers = append(notifiers, notify.NewSMTPNotifier(notify.SMTPConfig{
+			Host:     cfg.Notify.SMTP.Host,
+			Port:     cfg.Notify.SMTP.Port,
+			Username: cfg.Notify.SMTP.Username,
+			Password: cfg.Notify.SMTP.Password,
+			TLSMode:  notify.TLSMode(cfg.Notify.SMTP.TLSMode),
+			From:     cfg.Notify.SMTP.From,
+			To:       cfg.Notify.SMTP.To,
+		}))
+	}
+	if cfg.Notify.Pushover.Token != "" {
+		notifiers = append(notifiers, notify.NewPushoverNotifier(notify.PushoverConfig{
+			Token: cfg.Notify.Pushover.Token,
+			User:  cfg.Notify.Pushover.User,
+		}))
+	}
+	if len(notifiers) > 0 {
+		dispatcher := notify.NewDispatcher(cfg.Notify.BatchWindow, notifiers)
 		go dispatcher.Run(ctx)
 		fs.WithOnRaise(dispatcher.Enqueue)
 	}
