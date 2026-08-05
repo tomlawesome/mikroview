@@ -63,14 +63,8 @@ services:
       # user that can't bind <1024 (see Dockerfile).
       - "514:1514/udp"
       - "514:1514/tcp"
-      # HTTPS by default (TLS is on unless tls.enabled: false) --
-      # https://localhost:8080 after starting, not http://. With no
-      # tls.certFile/keyFile configured below, mikroview generates its
-      # own local CA + certificate on first start and your browser will
-      # show an untrusted-certificate warning until you import that CA
-      # (fetch it from /ca.crt, or check the startup log for its
-      # fingerprint) -- see docs/configuration.md's "TLS" section,
-      # including the one supported reason to set tls.enabled: false.
+      # HTTPS by default -- see the Quickstart above and
+      # docs/configuration.md's "TLS" section.
       - "8080:8080"
     healthcheck:
       test: ["CMD", "/mikroview", "-healthcheck"]
@@ -84,29 +78,16 @@ services:
       # your own MaxMind GeoLite2 database; uncomment both this and the
       # env var below once you have one.
       # - ./GeoLite2-Country.mmdb:/etc/mikroview/GeoLite2-Country.mmdb:ro
-      # Behavioral flags, detector on/off+scope toggles, local accounts,
-      # and the self-generated TLS certificate all persist to
-      # /var/lib/mikroview by default (no config needed) -- the
-      # container creates and owns that directory itself, so all of it
-      # already survives a simple `docker compose restart`. You only
-      # need one of the two options below if you want it to also
-      # survive `docker compose down`/image updates/container
-      # recreation, not just restarts.
-      #
-      # Option A -- bind mount (a host directory you can browse/back up
-      # directly). The container runs as uid/gid 65532 (distroless's
-      # `nonroot` account), which won't own a freshly created host
-      # directory, so pick one before starting -- see "Persistent data:
-      # bind mount vs. named volume" below.
+      # Persists flags/accounts/detector settings/the TLS cert across
+      # container recreation, not just restarts -- see "Persistent
+      # data" below for what this is and the bind-mount alternative.
+      - mikroview-data:/var/lib/mikroview
+      # Alternative to the named volume above: a bind mount, if you want
+      # to browse/back up the files directly from the host. Comment out
+      # the line above and uncomment this one instead (not both) -- see
+      # "Persistent data" below for the permissions step this needs
+      # first.
       # - ./data:/var/lib/mikroview
-      #
-      # Option B -- a named volume instead (Docker-managed, not a host
-      # path you can browse directly). No chown/chmod needed: on first
-      # use, Docker populates an empty named volume from the image's own
-      # /var/lib/mikroview, which is already correctly owned. Uncomment
-      # this line AND the top-level `volumes:` key at the bottom of this
-      # snippet together.
-      # - mikroview-data:/var/lib/mikroview
     environment:
       - MIKROVIEW_CONFIG=/etc/mikroview/config.yaml
       # - MIKROVIEW_GEOIP_DB_PATH=/etc/mikroview/GeoLite2-Country.mmdb
@@ -121,41 +102,39 @@ services:
       # - MIKROVIEW_TLS_HOSTS=192.168.1.50,mikroview.local
       # - MIKROVIEW_TLS_CERT_FILE=/etc/mikroview/tls.crt
       # - MIKROVIEW_TLS_KEY_FILE=/etc/mikroview/tls.key
-      # Only set this if mikroview's port above is NOT published/
-      # reachable from anywhere except your own reverse proxy over an
-      # isolated docker network -- never on a deployment where this
-      # port reaches a LAN or the internet directly. See
-      # docs/configuration.md's "TLS" section before using this.
+      # Read docs/configuration.md's "TLS" section before using this --
+      # only safe if this port is unreachable except from your own
+      # isolated-network reverse proxy.
       # - MIKROVIEW_TLS_ENABLED=false
 
-# Only needed alongside Option B above (the named-volume alternative to
-# a bind mount) -- uncomment both together.
-# volumes:
-#   mikroview-data:
+volumes:
+  mikroview-data:
 ```
 
 Create `config.yaml` next to it first (see [`deploy/config.example.yaml`](deploy/config.example.yaml) for the full option reference), then `docker compose up -d`. This mirrors [`deploy/docker-compose.yml`](deploy/docker-compose.yml) exactly, just swapping the local `build:` for the prebuilt `image:`.
 
-### Persistent data: bind mount vs. named volume
+### Persistent data
 
-mikroview runs as a fixed non-root user inside the container —
-**uid `65532`, gid `65532`** (distroless's built-in `nonroot` account,
-same identity used by the `--chown` in the Dockerfile). It can't chown a
-host directory the way a root-run container could, so a bind mount over
-`/var/lib/mikroview` (Option A above) needs to already be
-readable/writable by that uid/gid. This only matters if you've
-uncommented that bind mount line — without it, the container's own
-internal storage is already correctly owned and none of this applies.
+By default, both compose files above mount a **named volume** over
+`/var/lib/mikroview` -- where flags, local accounts, detector on/off
+toggles, and the self-generated TLS certificate all persist. This is
+the default deliberately: once you've set up authentication or have
+flags worth keeping, losing them on every `docker compose down` or
+image update -- not just a plain restart -- would be a bad surprise,
+not an edge case. Docker populates a fresh named volume from the
+image's own `/var/lib/mikroview` on first use, ownership included, so
+there's no setup step needed.
 
-**Avoiding this entirely**: use a named volume instead (Option B
-above). Docker populates a fresh named volume from the image's own
-`/var/lib/mikroview` on first use, ownership included, so there's no
-host-side chown/chmod step at all — the tradeoff is that you can't
-`cat`/`cp`/back up the files directly from the host the way you can
-with a bind mount; you'd go through `docker run --rm -v
-mikroview-data:/data ... ` or `docker cp` instead.
-
-If you do want a bind mount (Option A), pick one:
+The tradeoff is that you can't `cat`/`cp`/back up the files directly
+from the host the way you can with a bind mount -- you'd go through
+`docker run --rm -v mikroview-data:/data ...` or `docker cp` instead.
+If you want that direct host access, switch to the commented-out bind
+mount in either compose file (`./data:/var/lib/mikroview`) instead of
+the named volume -- but it needs one extra step first: mikroview runs
+as a fixed non-root user inside the container, **uid `65532`, gid
+`65532`** (distroless's built-in `nonroot` account, same identity used
+by the `--chown` in the Dockerfile), which can't chown a host directory
+the way a root-run container could. Pick one before starting:
 
 ```sh
 # Preferred: exact uid/gid ownership, nothing broader
@@ -177,9 +156,10 @@ read-write. Read-only mounts like `config.yaml` don't need either fix —
 world-readable (`chmod 644`, as in the Quickstart above) is enough, since
 the container only needs to read it, not own it.
 
-If you skip this, mikroview logs `permission denied` at startup and
-falls back to in-memory-only state rather than crashing — annoying (you
-lose flags/accounts/TLS cert on every restart) but not fatal.
+If a bind mount is misconfigured (wrong ownership), mikroview logs
+`permission denied` at startup and falls back to in-memory-only state
+rather than crashing — annoying (you lose flags/accounts/TLS cert on
+every restart) but not fatal.
 
 ## How it works
 

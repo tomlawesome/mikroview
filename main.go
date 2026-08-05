@@ -50,6 +50,53 @@ const (
 	loginLimiterWindow    = 5 * time.Minute
 )
 
+// version is stamped at build time via -ldflags "-X main.version=<git-
+// short-sha>" (see Dockerfile and .github/workflows/docker.yml) --
+// "dev" is the fallback for a plain `go build .`/`go run .` with no
+// ldflags, so local development never shows a blank or misleading
+// value. A registry digest isn't something the binary can know about
+// itself (it's computed from the pushed image after build), so the
+// commit it was built from is the practical, achievable stand-in for
+// "which build is this."
+var version = "dev"
+
+// versionMarkerPath persists the last-seen version so a restart can
+// tell a routine restart (same version) apart from a real upgrade (the
+// image changed) -- worth telling the operator about, since "did my
+// `docker compose pull` actually pick up the new image" is a common
+// point of confusion otherwise.
+var versionMarkerPath = config.DefaultDataDir + "/version"
+
+// versionBootMessage returns the one line to log for this boot's
+// version check, given the version string previously persisted (""
+// if none, or unreadable) and the current build version -- a single
+// line either way, not a routine "no upgrade" line on every ordinary
+// restart plus a separate upgrade line, since only one of those is
+// ever useful on a given boot.
+func versionBootMessage(prev, current string) string {
+	prev = strings.TrimSpace(prev)
+	if prev != "" && prev != current {
+		return fmt.Sprintf("upgraded from %s to %s", prev, current)
+	}
+	return fmt.Sprintf("version %s", current)
+}
+
+// logVersionAndMigration logs versionBootMessage's result and updates
+// the persisted marker for next time. Like every other optional
+// persistence in this codebase (see flags.Open's doc comment), a
+// read/write failure is never fatal -- it just means upgrade detection
+// silently doesn't work until the underlying path issue is fixed.
+func logVersionAndMigration(logger *slog.Logger) {
+	prev, err := os.ReadFile(versionMarkerPath)
+	if err != nil && !os.IsNotExist(err) {
+		logger.Warn(fmt.Sprintf("reading version marker: %v", err))
+	}
+	logger.Info(versionBootMessage(string(prev), version))
+	if err := os.WriteFile(versionMarkerPath, []byte(version), 0o600); err != nil {
+		logger.Warn(fmt.Sprintf("writing version marker: %v (upgrade detection won't work on the next restart)", err))
+	}
+}
+
 func main() {
 	// The runtime image is distroless (no shell, no curl/wget), so Docker's
 	// HEALTHCHECK -- and any orchestrator's readiness probe -- can't shell
@@ -89,6 +136,9 @@ func main() {
 	// in place, not a per-logger setting fixed at New() time.
 	logging.SetLevel(cfg.Log.Level)
 
+	logging.PrintBanner()
+	logVersionAndMigration(logging.New("mikroview"))
+
 	st := store.New(cfg.Store.MaxEvents, cfg.Store.Retention)
 	devices := device.NewRegistry(cfg.Devices)
 	h := hub.New()
@@ -127,8 +177,9 @@ func main() {
 		CriticalPorts:          cfg.Flags.CriticalPorts,
 		CriticalPortThreshold:  cfg.Flags.CriticalPortThreshold,
 		CriticalPortWindow:     cfg.Flags.CriticalPortWindow,
-		GlobalSpikeMultiplier:  cfg.Flags.GlobalSpikeMultiplier,
-		GlobalSpikeMinEPS:      cfg.Flags.GlobalSpikeMinEPS,
+		GlobalSpikeMultiplier:    cfg.Flags.GlobalSpikeMultiplier,
+		GlobalSpikeMinEPS:        cfg.Flags.GlobalSpikeMinEPS,
+		GlobalSpikeWarmupSamples: cfg.Flags.GlobalSpikeWarmupSamples,
 
 		DistributedBruteForceThreshold: cfg.Flags.DistributedBruteForceThreshold,
 		DistributedBruteForceWindow:    cfg.Flags.DistributedBruteForceWindow,
@@ -139,9 +190,10 @@ func main() {
 		InternalReconThreshold: cfg.Flags.InternalReconThreshold,
 		InternalReconWindow:    cfg.Flags.InternalReconWindow,
 
-		RuleSpikeMultiplier: cfg.Flags.RuleSpikeMultiplier,
-		RuleSpikeMinRate:    cfg.Flags.RuleSpikeMinRate,
-		RuleSpikeWindow:     cfg.Flags.RuleSpikeWindow,
+		RuleSpikeMultiplier:    cfg.Flags.RuleSpikeMultiplier,
+		RuleSpikeMinRate:       cfg.Flags.RuleSpikeMinRate,
+		RuleSpikeWindow:        cfg.Flags.RuleSpikeWindow,
+		RuleSpikeWarmupSamples: cfg.Flags.RuleSpikeWarmupSamples,
 
 		RepeatedDropsThreshold: cfg.Flags.RepeatedDropsThreshold,
 		RepeatedDropsWindow:    cfg.Flags.RepeatedDropsWindow,

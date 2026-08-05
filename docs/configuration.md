@@ -50,15 +50,29 @@ Mikroview's own server output (not event data -- see `store.retention`
 above) is leveled and colorized, one line per entry:
 
 ```
-18:43:44 [INFO]  auth        │ no decision made yet -- showing the first-run choice screen
-18:43:45 [WARN]  flags       │ permission denied opening flags.json -- continuing in-memory-only
-18:43:46 [ERROR] syslog-udp  │ listen udp :1514: bind: address already in use
+18:43:44 INFO  auth        │ no decision made yet -- showing the first-run choice screen
+18:43:45 WARN  flags       │ permission denied opening flags.json -- continuing in-memory-only
+18:43:46 ERROR syslog-udp  │ listen udp :1514: bind: address already in use
 ```
 
 ```yaml
 log:
   level: info
 ```
+
+**On boot**, before the leveled log lines start, mikroview prints its
+ASCII wordmark once (plain text, not a log line -- always shown,
+regardless of `level` or whether stdout is a terminal), followed by a
+`version` line identifying which build is running -- the short commit
+SHA it was built from (see `.github/workflows/docker.yml`), the
+practical stand-in for a registry digest since a binary can't know its
+own digest at build time. If the persisted version marker
+(`/var/lib/mikroview/version`) doesn't match the running build, that
+line reads `upgraded from <old> to <new>` instead -- confirming a
+`docker compose pull`/image update actually took effect, versus a
+routine restart on the same build. This boot sequence doesn't apply to
+the CLI recovery commands (`-healthcheck`, `-list-users`, etc.) --
+only the real server-start path.
 
 - **`level`** — one of `debug`/`info`/`warn`/`error` (case-insensitive).
   Defaults to `info`. Anything unrecognized (a typo, an empty value)
@@ -202,6 +216,7 @@ flags:
   criticalPortWindow: 5m
   globalSpikeMultiplier: 4
   globalSpikeMinEPS: 5
+  globalSpikeWarmupSamples: 20
   distributedBruteForceThreshold: 10
   distributedBruteForceWindow: 5m
   outboundAnomalyThreshold: 25
@@ -211,6 +226,7 @@ flags:
   ruleSpikeMultiplier: 5
   ruleSpikeMinRate: 0.2
   ruleSpikeWindow: 60s
+  ruleSpikeWarmupSamples: 20
   repeatedDropsThreshold: 10
   repeatedDropsWindow: 15m
   hostActivityMultiplier: 3
@@ -262,6 +278,11 @@ flags:
   rather than needing to be hand-tuned. `globalSpikeMinEPS` is a floor
   below which a "spike" isn't worth flagging (e.g. 2 events/s against a
   0.5 events/s baseline is technically 4x, but not meaningfully busy).
+  Flags carry a confidence score (same z-score-against-baseline approach
+  as activity spike) rather than firing on the multiplier alone;
+  `globalSpikeWarmupSamples` is how many `Check()` cycles the baseline
+  needs before a flag can reach full confidence -- this only affects the
+  confidence number, never whether or when a flag fires.
 - **Distributed brute-force** — `distributedBruteForceThreshold`+
   *distinct* external source IPs hitting the *same* critical port within
   `distributedBruteForceWindow`. The inverse of critical-port attempts
@@ -287,7 +308,11 @@ flags:
   or more. Catches a normally-quiet rule suddenly lighting up even when
   it's nowhere near large enough to move the network-wide total —
   `ruleSpikeMinRate` (events/sec) is the same kind of noise floor as
-  `globalSpikeMinEPS`.
+  `globalSpikeMinEPS`. Flags carry a confidence score the same way
+  global volume spike does; `ruleSpikeWarmupSamples` plays the same role
+  as `globalSpikeWarmupSamples` -- how many observations this specific
+  rule's baseline needs before a flag can reach full confidence, not a
+  factor in whether or when it fires.
 - **Repeated drops on a port** — the same (source, destination port)
   pair getting dropped/rejected `repeatedDropsThreshold`+ times within
   `repeatedDropsWindow`, against a *locally-hosted* service (unlike
@@ -715,6 +740,7 @@ Override individual scalar settings without a mounted file:
 | `MIKROVIEW_FLAGS_CRITICAL_PORT_WINDOW` | `flags.criticalPortWindow` |
 | `MIKROVIEW_FLAGS_GLOBAL_SPIKE_MULTIPLIER` | `flags.globalSpikeMultiplier` |
 | `MIKROVIEW_FLAGS_GLOBAL_SPIKE_MIN_EPS` | `flags.globalSpikeMinEPS` |
+| `MIKROVIEW_FLAGS_GLOBAL_SPIKE_WARMUP_SAMPLES` | `flags.globalSpikeWarmupSamples` |
 | `MIKROVIEW_FLAGS_DISTRIBUTED_BRUTE_FORCE_THRESHOLD` | `flags.distributedBruteForceThreshold` |
 | `MIKROVIEW_FLAGS_DISTRIBUTED_BRUTE_FORCE_WINDOW` | `flags.distributedBruteForceWindow` |
 | `MIKROVIEW_FLAGS_OUTBOUND_ANOMALY_THRESHOLD` | `flags.outboundAnomalyThreshold` |
@@ -724,6 +750,7 @@ Override individual scalar settings without a mounted file:
 | `MIKROVIEW_FLAGS_RULE_SPIKE_MULTIPLIER` | `flags.ruleSpikeMultiplier` |
 | `MIKROVIEW_FLAGS_RULE_SPIKE_MIN_RATE` | `flags.ruleSpikeMinRate` |
 | `MIKROVIEW_FLAGS_RULE_SPIKE_WINDOW` | `flags.ruleSpikeWindow` |
+| `MIKROVIEW_FLAGS_RULE_SPIKE_WARMUP_SAMPLES` | `flags.ruleSpikeWarmupSamples` |
 | `MIKROVIEW_FLAGS_REPEATED_DROPS_THRESHOLD` | `flags.repeatedDropsThreshold` |
 | `MIKROVIEW_FLAGS_REPEATED_DROPS_WINDOW` | `flags.repeatedDropsWindow` |
 | `MIKROVIEW_FLAGS_HOST_ACTIVITY_MULTIPLIER` | `flags.hostActivityMultiplier` |

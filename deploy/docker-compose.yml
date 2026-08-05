@@ -10,14 +10,8 @@ services:
       # user that can't bind <1024 (see Dockerfile).
       - "514:1514/udp"
       - "514:1514/tcp"
-      # HTTPS by default (TLS is on unless tls.enabled: false) --
-      # https://localhost:8080 after starting, not http://. With no
-      # tls.certFile/keyFile configured below, mikroview generates its
-      # own local CA + certificate on first start and your browser will
-      # show an untrusted-certificate warning until you import that CA
-      # (fetch it from /ca.crt, or check the startup log for its
-      # fingerprint) -- see docs/configuration.md's "TLS" section,
-      # including the one supported reason to set tls.enabled: false.
+      # HTTPS by default -- see README.md's Quickstart and
+      # docs/configuration.md's "TLS" section.
       - "8080:8080"
     healthcheck:
       test: ["CMD", "/mikroview", "-healthcheck"]
@@ -31,35 +25,17 @@ services:
       # your own MaxMind GeoLite2 database; uncomment both this and the
       # env var below once you have one.
       # - ./GeoLite2-Country.mmdb:/etc/mikroview/GeoLite2-Country.mmdb:ro
-      # Behavioral flags, detector on/off+scope toggles, local accounts,
-      # and the self-generated TLS certificate all persist to
-      # /var/lib/mikroview by default (no config needed -- see
-      # internal/config's defaultDataDir) -- the container creates and
-      # owns that directory itself, so all of it already survives a
-      # simple `docker compose restart`. You only need one of the two
-      # options below if you want it to also survive `docker compose
-      # down`/image updates/container recreation, not just restarts.
-      #
-      # Option A -- bind mount (a host directory you can browse/back up
-      # directly). The container runs as uid/gid 65532 (distroless's
-      # `nonroot` account -- see the Dockerfile's --chown), which won't
-      # own a freshly created host directory, so pick one before
-      # starting:
-      #   mkdir -p data && sudo chown 65532:65532 data   # preferred: exact ownership
-      #   mkdir -p data && chmod 777 data                # no root on the host
-      # This replaces whatever's already baked into the image at this
-      # path, same as any bind mount. See README.md's "Persistent data:
-      # bind mount vs. named volume" section for the full explanation.
+      # Persists flags/accounts/detector settings/the TLS cert across
+      # container recreation, not just restarts -- see README.md's
+      # "Persistent data" section for what this is and the bind-mount
+      # alternative below.
+      - mikroview-data:/var/lib/mikroview
+      # Alternative to the named volume above: a bind mount, if you want
+      # to browse/back up the files directly from the host. Comment out
+      # the line above and uncomment this one instead (not both) -- see
+      # README.md's "Persistent data" section for the permissions step
+      # this needs first.
       # - ./data:/var/lib/mikroview
-      #
-      # Option B -- a named volume instead (Docker-managed, not a host
-      # path you can browse directly). No chown/chmod needed: on first
-      # use, Docker populates an empty named volume from the image's own
-      # /var/lib/mikroview, which is already correctly owned -- the
-      # permission problem in Option A doesn't apply here. Uncomment
-      # this line AND the top-level `volumes:` key at the bottom of this
-      # file together.
-      # - mikroview-data:/var/lib/mikroview
     environment:
       - MIKROVIEW_CONFIG=/etc/mikroview/config.yaml
       # - MIKROVIEW_GEOIP_DB_PATH=/etc/mikroview/GeoLite2-Country.mmdb
@@ -74,14 +50,10 @@ services:
       # - MIKROVIEW_TLS_HOSTS=192.168.1.50,mikroview.local
       # - MIKROVIEW_TLS_CERT_FILE=/etc/mikroview/tls.crt
       # - MIKROVIEW_TLS_KEY_FILE=/etc/mikroview/tls.key
-      # Only set this if mikroview's port above is NOT published/
-      # reachable from anywhere except your own reverse proxy over an
-      # isolated docker network -- never on a deployment where this
-      # port reaches a LAN or the internet directly. See
-      # docs/configuration.md's "TLS" section before using this.
+      # Read docs/configuration.md's "TLS" section before using this --
+      # only safe if this port is unreachable except from your own
+      # isolated-network reverse proxy.
       # - MIKROVIEW_TLS_ENABLED=false
 
-# Only needed alongside Option B above (the named-volume alternative to
-# a bind mount) -- uncomment both together.
-# volumes:
-#   mikroview-data:
+volumes:
+  mikroview-data:
