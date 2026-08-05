@@ -131,3 +131,27 @@ func TestDistributedBruteForceConfidenceScalesWithOvershoot(t *testing.T) {
 		t.Fatalf("expected 100%% confidence at the overshoot ceiling, got %+v", list2)
 	}
 }
+
+func TestDistributedBruteForceEvidenceCapturesSourceHosts(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.DistributedBruteForceThreshold = 3
+	cfg.CriticalPorts = []int{22}
+	cfg.CriticalPortThreshold = 1000
+	cfg.PortScanThreshold = 1000
+	cfg.ActivitySpikeThreshold = 1000
+	d, fs := newTestDetector(t, cfg)
+
+	now := time.Now()
+	ips := []string{"198.51.100.1", "198.51.100.2", "198.51.100.3"}
+	for i, ip := range ips {
+		d.Observe(evt(ip, 22, now.Add(time.Duration(i)*time.Second)))
+	}
+
+	list := fs.List()
+	if len(list) != 1 {
+		t.Fatalf("expected one flag, got %+v", list)
+	}
+	if got := list[0].Evidence.Hosts; len(got) != 3 {
+		t.Errorf("expected the evidence to list all 3 distinct source hosts, got %v", got)
+	}
+}

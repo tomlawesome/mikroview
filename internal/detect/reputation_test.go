@@ -117,6 +117,49 @@ func TestCriticalPortAppliesReputationFloor(t *testing.T) {
 	}
 	close(fake.release)
 	waitForConfidence(t, fs, "198.51.100.4", 85)
+
+	for _, f := range fs.List() {
+		if f.Target == "198.51.100.4" {
+			if f.Reputation == nil || f.Reputation.AbuseScore == nil || *f.Reputation.AbuseScore != 85 {
+				t.Errorf("expected the reputation snapshot to be stored on the flag, got %+v", f.Reputation)
+			}
+		}
+	}
+}
+
+func TestReputationSnapshotCapturedWithoutAbuseScore(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.CriticalPortThreshold = 3
+	cfg.CriticalPorts = []int{22}
+	cfg.PortScanThreshold = 1000
+	cfg.ActivitySpikeThreshold = 1000
+
+	// Fake left with no score set for this IP -- simulates a Shodan-only
+	// result (no AbuseIPDB key configured).
+	fake := newFakeReputation()
+	d, fs := newTestDetector(t, cfg)
+	d.WithReputation(fake)
+
+	now := time.Now()
+	for i := 0; i < 3; i++ {
+		d.Observe(evt("198.51.100.4", 22, now.Add(time.Duration(i)*time.Second)))
+	}
+	expectStarted(t, fake.started)
+	close(fake.release)
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		for _, f := range fs.List() {
+			if f.Target == "198.51.100.4" && f.Reputation != nil {
+				if f.Confidence == nil || *f.Confidence != overshootConfidence(3, cfg.CriticalPortThreshold) {
+					t.Errorf("expected confidence to stay behavior-only without an AbuseScore, got %+v", f.Confidence)
+				}
+				return
+			}
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatal("timed out waiting for the reputation snapshot to be stored")
 }
 
 func TestReputationLookupOnlyFiresOnNewEpisode(t *testing.T) {

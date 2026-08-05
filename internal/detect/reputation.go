@@ -95,10 +95,14 @@ func (d *Detector) maybeCheckReputation(t flags.Type, target, ip string, isNewEp
 		ctx, cancel := context.WithTimeout(context.Background(), reputationLookupTimeout)
 		defer cancel()
 		result, err := d.reputation.Lookup(ctx, ip)
-		if err != nil || result.AbuseScore == nil {
+		if err != nil {
 			return
 		}
-		d.fs.RaiseConfidenceFloor(t, target, *result.AbuseScore)
+		// Stored even without an AbuseScore -- a Shodan-only result (no
+		// AbuseIPDB key configured) is still worth capturing as a
+		// snapshot; ApplyReputationSnapshot only raises the confidence
+		// floor when a score is actually present.
+		d.fs.ApplyReputationSnapshot(t, target, result)
 	}()
 }
 

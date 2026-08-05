@@ -327,12 +327,13 @@ func (d *Detector) observeScanAndSpike(e store.Event, now time.Time) {
 	// fires), so re-priming after a period of being off is the safer
 	// behavior, not a gap.
 	if asActive {
-		d.checkHostActivityBaseline(w, e.SrcIP, spikeCount, now)
+		d.checkHostActivityBaseline(w, e.SrcIP, e.SrcCountry, spikeCount, now)
 	}
 	if psActive && len(distinctPorts) >= d.cfg.PortScanThreshold {
-		isNew := d.fs.AddWithConfidence(flags.TypePortScan, e.SrcIP,
+		isNew := d.fs.AddWithDetail(flags.TypePortScan, e.SrcIP,
 			fmt.Sprintf("%d distinct destination ports in %s", len(distinctPorts), d.cfg.PortScanWindow),
-			overshootConfidence(len(distinctPorts), d.cfg.PortScanThreshold), now)
+			overshootConfidence(len(distinctPorts), d.cfg.PortScanThreshold),
+			flags.Evidence{Ports: sortedPortsCapped(distinctPorts)}, e.SrcCountry, now)
 		d.maybeCheckReputation(flags.TypePortScan, e.SrcIP, e.SrcIP, isNew)
 	}
 }
@@ -356,9 +357,10 @@ func (d *Detector) observeCriticalPort(e store.Event, now time.Time) {
 	d.criticalHits[e.SrcIP] = hits
 
 	if len(hits) >= d.cfg.CriticalPortThreshold {
-		isNew := d.fs.AddWithConfidence(flags.TypeCriticalPort, e.SrcIP,
+		isNew := d.fs.AddWithDetail(flags.TypeCriticalPort, e.SrcIP,
 			fmt.Sprintf("%d attempts against port %d in %s", len(hits), e.DstPort, d.cfg.CriticalPortWindow),
-			overshootConfidence(len(hits), d.cfg.CriticalPortThreshold), now)
+			overshootConfidence(len(hits), d.cfg.CriticalPortThreshold),
+			flags.Evidence{}, e.SrcCountry, now)
 		// e.SrcIP is already guaranteed public here -- Observe only calls
 		// observeCriticalPort when srcPublic is true.
 		d.maybeCheckReputation(flags.TypeCriticalPort, e.SrcIP, e.SrcIP, isNew)

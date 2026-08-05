@@ -152,6 +152,23 @@ export interface DetectorSettings {
   scope: DetectorScope
 }
 
+// Mirrors internal/flags.NATInfo's JSON tags.
+export interface NATInfo {
+  ip?: string
+  port?: number
+  raw?: string
+}
+
+// Mirrors internal/flags.Evidence's JSON tags -- structured supporting
+// detail beyond a flag's free-text `detail` string. Which fields a given
+// flag actually has depends on its type; see internal/detect.Scope's
+// doc comment (or docs/configuration.md) for exactly which.
+export interface Evidence {
+  ports?: number[]
+  hosts?: string[]
+  nat?: NATInfo
+}
+
 export interface Flag {
   id: string
   type: FlagType
@@ -167,6 +184,17 @@ export interface Flag {
   // activity_spike's per-host baseline) -- absent means "not scored," not
   // "zero confidence."
   confidence?: number
+  // A reputation snapshot captured *at raise time* (not fetched live) --
+  // only present for single-IP detectors with a reputation key
+  // configured. Reuses ReputationResult rather than a separate type.
+  reputation?: ReputationResult
+  // The target's ISO 3166-1 alpha-2 country code, from the same GeoIP
+  // lookup already applied to the underlying event -- absent for an
+  // internal target or when GeoIP isn't configured.
+  country?: string
+  // Structured supporting evidence -- see Evidence's own doc comment.
+  // Absent/empty for detectors with nothing beyond `detail` to show.
+  evidence?: Evidence
 }
 
 // Mirrors internal/store's Scope.

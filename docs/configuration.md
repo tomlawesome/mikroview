@@ -313,6 +313,22 @@ popover already uses, so a manual lookup you've just done and an async
 detector check for the same IP share results rather than double-querying
 AbuseIPDB.
 
+The same lookup also captures a **reputation snapshot** on the flag
+(abuse score, report count, ISP, Shodan ports/hostnames/vulns where
+available) *as of when it resolved* -- not fetched live later, since the
+point is what the target looked like when it fired, not what it looks
+like now. It's stored regardless of whether AbuseIPDB is configured
+(the keyless Shodan source alone is still worth capturing) -- only the
+confidence floor specifically needs an AbuseIPDB score. Only ever set
+for the four single-IP detectors above; the sampled-group detectors
+have no single coherent snapshot to attach. Expandable in the UI
+alongside the target's country (from the same GeoIP lookup already
+applied to the underlying event) and, for `port_scan`,
+`distributed_brute_force`, `outbound_anomaly`, and `internal_recon`,
+the specific ports/hosts actually involved -- and for any detector, NAT
+translation info when the triggering event had one. `GET /api/flags`
+exposes all of this as `reputation`, `country`, and `evidence` fields.
+
 A flag is raised once per (detector, source) pair and updated in place
 on re-firing (count/last-seen bumped, not duplicated) until a human
 clears it via the UI or `POST /api/flags/{id}/clear`. Clearing an

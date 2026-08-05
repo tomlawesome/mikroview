@@ -196,10 +196,10 @@ func TestActivitySpikeNeverFiresBeforeMinimumSampleFloor(t *testing.T) {
 	ip := "198.51.100.9"
 	now := time.Now()
 
-	d.checkHostActivityBaseline(w, ip, 1, now) // primes: sampleCount=1
+	d.checkHostActivityBaseline(w, ip, "", 1, now) // primes: sampleCount=1
 
 	for i := 0; i < hostActivityMinSamples-1; i++ {
-		d.checkHostActivityBaseline(w, ip, 100, now.Add(time.Duration(i+1)*time.Second))
+		d.checkHostActivityBaseline(w, ip, "", 100, now.Add(time.Duration(i+1)*time.Second))
 		if len(fs.List()) != 0 {
 			t.Fatalf("expected no flag while sampleCount < hostActivityMinSamples (call %d), got %+v", i+2, fs.List())
 		}
@@ -504,5 +504,83 @@ func TestCriticalPortConfidenceScalesWithOvershoot(t *testing.T) {
 	list2 := fs2.List()
 	if len(list2) != 1 || list2[0].Confidence == nil || *list2[0].Confidence != 100 {
 		t.Fatalf("expected 100%% confidence at the overshoot ceiling, got %+v", list2)
+	}
+}
+
+// evtCountry is evt() with an explicit SrcCountry, for tests asserting
+// a flag's Country field is threaded through from the triggering event.
+func evtCountry(srcIP, country string, dstPort int, at time.Time) store.Event {
+	e := evt(srcIP, dstPort, at)
+	e.SrcCountry = country
+	return e
+}
+
+func TestPortScanEvidenceCapturesTouchedPorts(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.PortScanThreshold = 3
+	cfg.PortScanWindow = time.Minute
+	cfg.ActivitySpikeThreshold = 1000
+	d, fs := newTestDetector(t, cfg)
+
+	now := time.Now()
+	for port := 1; port <= 3; port++ {
+		d.Observe(evtCountry("203.0.113.9", "DE", port, now.Add(time.Duration(port)*time.Millisecond)))
+	}
+
+	list := fs.List()
+	if len(list) != 1 {
+		t.Fatalf("expected one flag, got %+v", list)
+	}
+	if list[0].Country != "DE" {
+		t.Errorf("expected Country to be threaded through from the event, got %q", list[0].Country)
+	}
+	if got := list[0].Evidence.Ports; len(got) != 3 || got[0] != 1 || got[2] != 3 {
+		t.Errorf("expected the evidence to list the touched ports sorted, got %v", got)
+	}
+}
+
+func TestCriticalPortCarriesCountry(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.CriticalPortThreshold = 1
+	cfg.CriticalPorts = []int{22}
+	cfg.PortScanThreshold = 1000
+	cfg.ActivitySpikeThreshold = 1000
+	d, fs := newTestDetector(t, cfg)
+
+	d.Observe(evtCountry("198.51.100.4", "RU", 22, time.Now()))
+
+	list := fs.List()
+	if len(list) != 1 || list[0].Country != "RU" {
+		t.Fatalf("expected Country to be threaded through, got %+v", list)
+	}
+}
+
+func TestActivitySpikeCarriesCountry(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.ActivitySpikeThreshold = 2
+	cfg.ActivitySpikeWindow = time.Second
+	cfg.PortScanThreshold = 1000
+	cfg.HostActivityMultiplier = 3
+	cfg.HostActivityWarmupSamples = 20
+
+	d, fs := newTestDetector(t, cfg)
+	ip := "198.51.100.4"
+	now := time.Now()
+	tick := time.Duration(0)
+
+	for i := 0; i < 25; i++ {
+		base := now.Add(tick)
+		d.Observe(evtCountry(ip, "FR", 100, base))
+		d.Observe(evtCountry(ip, "FR", 101, base.Add(10*time.Millisecond)))
+		tick += 2 * time.Second
+	}
+	spikeBase := now.Add(tick)
+	for i := 0; i < 10; i++ {
+		d.Observe(evtCountry(ip, "FR", 200+i, spikeBase.Add(time.Duration(i)*10*time.Millisecond)))
+	}
+
+	list := fs.List()
+	if len(list) != 1 || list[0].Country != "FR" {
+		t.Fatalf("expected Country to be threaded through activity_spike, got %+v", list)
 	}
 }
