@@ -11,7 +11,7 @@ import (
 )
 
 func TestHandleFlagsList(t *testing.T) {
-	s, _ := newTestServer()
+	s, _ := newTestServer(t)
 	s.Flags.Add(flags.TypePortScan, "203.0.113.9", "20 distinct ports in 60s", time.Now())
 
 	ts := httptest.NewServer(s.Routes())
@@ -38,7 +38,7 @@ func TestHandleFlagsList(t *testing.T) {
 }
 
 func TestHandleFlagsClear(t *testing.T) {
-	s, _ := newTestServer()
+	s, _ := newTestServer(t)
 	s.Flags.Add(flags.TypeActivitySpike, "198.51.100.4", "500 events in 60s", time.Now())
 	id := s.Flags.List()[0].ID
 
@@ -71,7 +71,7 @@ func TestHandleFlagsClear(t *testing.T) {
 }
 
 func TestHandleFlagsClearUnknownID(t *testing.T) {
-	s, _ := newTestServer()
+	s, _ := newTestServer(t)
 	ts := httptest.NewServer(s.Routes())
 	defer ts.Close()
 

@@ -2,7 +2,16 @@
   import { appState } from '../lib/state.svelte'
   import { MAX_RENDERED_ROWS } from '../lib/constants'
   import { COLUMNS, columnState } from '../lib/columns.svelte'
+  import type { ClientEvent } from '../lib/types'
   import EventRow from './EventRow.svelte'
+
+  // Both optional -- default to the live view's own state, so the
+  // existing `<LiveTable />` call site (App.svelte's 'live' branch)
+  // needs no change. A caller with its own independent event set (e.g.
+  // ControlPorts.svelte, filtered by control-port destination rather
+  // than the global FilterBar) still gets the same columns, resize
+  // handles, and EventRow click-to-filter behavior for free.
+  let { events, emptyMessage }: { events?: ClientEvent[]; emptyMessage?: string } = $props()
 
   let bodyEl: HTMLDivElement | undefined = $state()
   let gridEl: HTMLDivElement | undefined = $state()
@@ -42,7 +51,7 @@
     return map
   })
 
-  const rendered = $derived(appState.filteredEvents.slice(-MAX_RENDERED_ROWS))
+  const rendered = $derived((events ?? appState.filteredEvents).slice(-MAX_RENDERED_ROWS))
 
   function deviceName(id: string): string {
     return deviceNames.get(id) ?? id
@@ -127,9 +136,10 @@
     </div>
     {#if rendered.length === 0}
       <div class="empty">
-        {appState.events.length === 0
-          ? 'Waiting for events…'
-          : 'No events match the current filters.'}
+        {emptyMessage ??
+          (appState.events.length === 0
+            ? 'Waiting for events…'
+            : 'No events match the current filters.')}
       </div>
     {/if}
   </div>

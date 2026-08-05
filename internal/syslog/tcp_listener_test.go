@@ -132,9 +132,8 @@ func TestServeTCPRejectsBeyondConnectionLimit(t *testing.T) {
 }
 
 func TestServeTCPClosesIdleConnection(t *testing.T) {
-	origTimeout := tcpIdleTimeout
-	tcpIdleTimeout = 100 * time.Millisecond
-	defer func() { tcpIdleTimeout = origTimeout }()
+	origTimeoutNS := tcpIdleTimeoutNS.Swap(int64(100 * time.Millisecond))
+	defer tcpIdleTimeoutNS.Store(origTimeoutNS)
 
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {

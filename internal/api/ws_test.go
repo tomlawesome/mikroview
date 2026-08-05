@@ -11,7 +11,7 @@ import (
 )
 
 func TestHandleWSBroadcastsInsertedEvents(t *testing.T) {
-	s, _ := newTestServer()
+	s, _ := newTestServer(t)
 	ts := httptest.NewServer(s.Routes())
 	defer ts.Close()
 
@@ -40,7 +40,7 @@ func TestHandleWSBroadcastsInsertedEvents(t *testing.T) {
 }
 
 func TestHandleWSBatchesMultipleEvents(t *testing.T) {
-	s, _ := newTestServer()
+	s, _ := newTestServer(t)
 	ts := httptest.NewServer(s.Routes())
 	defer ts.Close()
 

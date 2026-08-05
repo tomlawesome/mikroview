@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/tomlawesome/mikroview/internal/auth"
+	"github.com/tomlawesome/mikroview/internal/detect"
 	"github.com/tomlawesome/mikroview/internal/device"
 	"github.com/tomlawesome/mikroview/internal/flags"
 	"github.com/tomlawesome/mikroview/internal/hub"
@@ -15,12 +16,19 @@ import (
 )
 
 type Server struct {
-	Store      *store.Store
-	Devices    *device.Registry
-	Hub        *hub.Hub
-	Reputation *reputation.Client
-	Flags      *flags.Store
-	StartTime  time.Time
+	Store            *store.Store
+	Devices          *device.Registry
+	Hub              *hub.Hub
+	Reputation       *reputation.Client
+	Flags            *flags.Store
+	DetectorSettings *detect.SettingsStore
+	// CriticalPorts is the configured control-port list (issue #34's
+	// tracking tab) -- exposed read-only via GET /api/critical-ports,
+	// deliberately not behind handleDetectorSettingsList's admin gate
+	// (see that handler's callerIsAdminOrOpen) since a non-admin user
+	// account still needs it to render the tab.
+	CriticalPorts []int
+	StartTime     time.Time
 
 	// Auth/Sessions/LoginLimiter/SecureCookie: see auth.go. Auth is
 	// always non-nil (internal/auth.Open("") returns a usable, empty,
@@ -42,14 +50,19 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("GET /api/healthz", s.handleHealthz)
 	mux.HandleFunc("GET /api/events", s.handleEvents)
 	mux.HandleFunc("GET /api/devices", s.handleDevices)
+	mux.HandleFunc("GET /api/critical-ports", s.handleCriticalPorts)
 	mux.HandleFunc("GET /api/stats", s.handleStats)
 	mux.HandleFunc("GET /api/ws", s.handleWS)
 	mux.HandleFunc("GET /api/lookup/ip/{ip}", s.handleIPLookup)
 	mux.HandleFunc("GET /api/flags", s.handleFlagsList)
 	mux.HandleFunc("POST /api/flags/{id}/clear", s.handleFlagsClear)
 
+	mux.HandleFunc("GET /api/detectors", s.handleDetectorSettingsList)
+	mux.HandleFunc("PUT /api/detectors/{name}", s.handleDetectorSettingsUpdate)
+
 	mux.HandleFunc("GET /api/auth/session", s.handleAuthSession)
 	mux.HandleFunc("POST /api/auth/register", s.handleAuthRegister)
+	mux.HandleFunc("POST /api/auth/skip", s.handleAuthSkip)
 	mux.HandleFunc("POST /api/auth/login", s.handleAuthLogin)
 	mux.HandleFunc("POST /api/auth/logout", s.handleAuthLogout)
 	mux.HandleFunc("POST /api/auth/users", s.handleAuthCreateUser)

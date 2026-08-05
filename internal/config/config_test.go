@@ -149,6 +149,186 @@ func TestHostActivityEnvVarsOverrideDefaults(t *testing.T) {
 	}
 }
 
+func TestLowSlowScanEnvVarsOverrideDefaults(t *testing.T) {
+	t.Setenv("MIKROVIEW_FLAGS_LOW_SLOW_SCAN_WINDOW", "90m")
+	t.Setenv("MIKROVIEW_FLAGS_LOW_SLOW_SCAN_PORT_THRESHOLD", "12")
+	t.Setenv("MIKROVIEW_FLAGS_LOW_SLOW_SCAN_HOST_THRESHOLD", "7")
+	t.Setenv("MIKROVIEW_FLAGS_LOW_SLOW_SCAN_MIN_OBSERVATION", "20m")
+	t.Setenv("MIKROVIEW_FLAGS_LOW_SLOW_SCAN_DROP_RATIO", "0.6")
+	t.Setenv("MIKROVIEW_FLAGS_LOW_SLOW_SCAN_BASELINE_MULTIPLIER", "4.5")
+
+	cfg, err := Load("", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Flags.LowSlowScanWindow != 90*time.Minute {
+		t.Errorf("LowSlowScanWindow = %v, want 90m", cfg.Flags.LowSlowScanWindow)
+	}
+	if cfg.Flags.LowSlowScanPortThreshold != 12 {
+		t.Errorf("LowSlowScanPortThreshold = %v, want 12", cfg.Flags.LowSlowScanPortThreshold)
+	}
+	if cfg.Flags.LowSlowScanHostThreshold != 7 {
+		t.Errorf("LowSlowScanHostThreshold = %v, want 7", cfg.Flags.LowSlowScanHostThreshold)
+	}
+	if cfg.Flags.LowSlowScanMinObservation != 20*time.Minute {
+		t.Errorf("LowSlowScanMinObservation = %v, want 20m", cfg.Flags.LowSlowScanMinObservation)
+	}
+	if cfg.Flags.LowSlowScanDropRatio != 0.6 {
+		t.Errorf("LowSlowScanDropRatio = %v, want 0.6", cfg.Flags.LowSlowScanDropRatio)
+	}
+	if cfg.Flags.LowSlowScanBaselineMultiplier != 4.5 {
+		t.Errorf("LowSlowScanBaselineMultiplier = %v, want 4.5", cfg.Flags.LowSlowScanBaselineMultiplier)
+	}
+}
+
+func TestNotifySMTPEnvVarsOverrideDefaults(t *testing.T) {
+	t.Setenv("MIKROVIEW_NOTIFY_BATCH_WINDOW", "15s")
+	t.Setenv("MIKROVIEW_NOTIFY_SMTP_HOST", "smtp.example.com")
+	t.Setenv("MIKROVIEW_NOTIFY_SMTP_PORT", "587")
+	t.Setenv("MIKROVIEW_NOTIFY_SMTP_USERNAME", "alerts")
+	t.Setenv("MIKROVIEW_NOTIFY_SMTP_PASSWORD", "hunter2")
+	t.Setenv("MIKROVIEW_NOTIFY_SMTP_TLS_MODE", "starttls")
+	t.Setenv("MIKROVIEW_NOTIFY_SMTP_FROM", "mikroview@example.com")
+	t.Setenv("MIKROVIEW_NOTIFY_SMTP_TO", "ops@example.com, oncall@example.com")
+
+	cfg, err := Load("", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Notify.BatchWindow != 15*time.Second {
+		t.Errorf("BatchWindow = %v, want 15s", cfg.Notify.BatchWindow)
+	}
+	if cfg.Notify.SMTP.Host != "smtp.example.com" {
+		t.Errorf("SMTP.Host = %v, want smtp.example.com", cfg.Notify.SMTP.Host)
+	}
+	if cfg.Notify.SMTP.Port != 587 {
+		t.Errorf("SMTP.Port = %v, want 587", cfg.Notify.SMTP.Port)
+	}
+	if cfg.Notify.SMTP.Username != "alerts" {
+		t.Errorf("SMTP.Username = %v, want alerts", cfg.Notify.SMTP.Username)
+	}
+	if cfg.Notify.SMTP.Password != "hunter2" {
+		t.Errorf("SMTP.Password = %v, want hunter2", cfg.Notify.SMTP.Password)
+	}
+	if cfg.Notify.SMTP.TLSMode != "starttls" {
+		t.Errorf("SMTP.TLSMode = %v, want starttls", cfg.Notify.SMTP.TLSMode)
+	}
+	if cfg.Notify.SMTP.From != "mikroview@example.com" {
+		t.Errorf("SMTP.From = %v, want mikroview@example.com", cfg.Notify.SMTP.From)
+	}
+	wantTo := []string{"ops@example.com", "oncall@example.com"}
+	if len(cfg.Notify.SMTP.To) != len(wantTo) || cfg.Notify.SMTP.To[0] != wantTo[0] || cfg.Notify.SMTP.To[1] != wantTo[1] {
+		t.Errorf("SMTP.To = %v, want %v", cfg.Notify.SMTP.To, wantTo)
+	}
+}
+
+func TestNotifyPushoverEnvVarsOverrideDefaults(t *testing.T) {
+	t.Setenv("MIKROVIEW_NOTIFY_PUSHOVER_TOKEN", "tok123")
+	t.Setenv("MIKROVIEW_NOTIFY_PUSHOVER_USER", "usr456")
+
+	cfg, err := Load("", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Notify.Pushover.Token != "tok123" {
+		t.Errorf("Pushover.Token = %v, want tok123", cfg.Notify.Pushover.Token)
+	}
+	if cfg.Notify.Pushover.User != "usr456" {
+		t.Errorf("Pushover.User = %v, want usr456", cfg.Notify.Pushover.User)
+	}
+}
+
+func TestTLSDefaultsToEnabledWithSecureCookie(t *testing.T) {
+	cfg, err := Load("", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.TLS.Enabled {
+		t.Error("expected TLS.Enabled to default to true")
+	}
+	if !cfg.Auth.SecureCookie {
+		t.Error("expected Auth.SecureCookie to default to true, matching TLS being on by default")
+	}
+}
+
+func TestLogLevelDefaultsToInfoAndEnvOverrides(t *testing.T) {
+	cfg, err := Load("", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Log.Level != "info" {
+		t.Errorf("Log.Level = %q, want the default \"info\"", cfg.Log.Level)
+	}
+
+	t.Setenv("MIKROVIEW_LOG_LEVEL", "debug")
+	cfg, err = Load("", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Log.Level != "debug" {
+		t.Errorf("Log.Level = %q, want the env override \"debug\"", cfg.Log.Level)
+	}
+}
+
+// TestDefaultStoragePathsUnderVarLibMikroview confirms every persistence
+// path is writable out of the box (see the Dockerfile creating/owning
+// /var/lib/mikroview) rather than silently no-op-ing until an operator
+// configures a storePath -- the auth.storePath case in particular used
+// to mean the web setup form's only path (create an account) failed at
+// submission with ErrNotPersisted.
+func TestDefaultStoragePathsUnderVarLibMikroview(t *testing.T) {
+	cfg, err := Load("", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cases := map[string]string{
+		"Flags.StorePath":                 cfg.Flags.StorePath,
+		"Flags.DetectorSettingsStorePath": cfg.Flags.DetectorSettingsStorePath,
+		"Auth.StorePath":                  cfg.Auth.StorePath,
+		"TLS.StorePath":                   cfg.TLS.StorePath,
+	}
+	want := map[string]string{
+		"Flags.StorePath":                 "/var/lib/mikroview/flags.json",
+		"Flags.DetectorSettingsStorePath": "/var/lib/mikroview/detector-settings.json",
+		"Auth.StorePath":                  "/var/lib/mikroview/users.json",
+		"TLS.StorePath":                   "/var/lib/mikroview/tls",
+	}
+	for field, got := range cases {
+		if got != want[field] {
+			t.Errorf("%s = %q, want %q", field, got, want[field])
+		}
+	}
+}
+
+func TestTLSEnvVarsOverrideDefaults(t *testing.T) {
+	t.Setenv("MIKROVIEW_TLS_ENABLED", "false")
+	t.Setenv("MIKROVIEW_TLS_CERT_FILE", "/etc/mikroview/tls.crt")
+	t.Setenv("MIKROVIEW_TLS_KEY_FILE", "/etc/mikroview/tls.key")
+	t.Setenv("MIKROVIEW_TLS_HOSTS", "mikroview.local, 192.168.1.50")
+	t.Setenv("MIKROVIEW_TLS_STORE_PATH", "/var/lib/mikroview/tls")
+
+	cfg, err := Load("", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.TLS.Enabled {
+		t.Error("expected TLS.Enabled = false")
+	}
+	if cfg.TLS.CertFile != "/etc/mikroview/tls.crt" {
+		t.Errorf("TLS.CertFile = %v, want /etc/mikroview/tls.crt", cfg.TLS.CertFile)
+	}
+	if cfg.TLS.KeyFile != "/etc/mikroview/tls.key" {
+		t.Errorf("TLS.KeyFile = %v, want /etc/mikroview/tls.key", cfg.TLS.KeyFile)
+	}
+	wantHosts := []string{"mikroview.local", "192.168.1.50"}
+	if len(cfg.TLS.Hosts) != len(wantHosts) || cfg.TLS.Hosts[0] != wantHosts[0] || cfg.TLS.Hosts[1] != wantHosts[1] {
+		t.Errorf("TLS.Hosts = %v, want %v", cfg.TLS.Hosts, wantHosts)
+	}
+	if cfg.TLS.StorePath != "/var/lib/mikroview/tls" {
+		t.Errorf("TLS.StorePath = %v, want /var/lib/mikroview/tls", cfg.TLS.StorePath)
+	}
+}
+
 func TestFlagsCriticalPortsMalformedEntryIgnoresWholeValue(t *testing.T) {
 	t.Setenv("MIKROVIEW_FLAGS_CRITICAL_PORTS", "22,not-a-port,3389")
 
