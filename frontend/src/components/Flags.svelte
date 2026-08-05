@@ -39,6 +39,7 @@
     internal_recon: 'Internal reconnaissance',
     rule_spike: 'Rule hit-rate spike',
     repeated_drops: 'Repeated drops on a port',
+    low_slow_scan: 'Low-and-slow port scan',
   }
 
   const active = $derived(flagsState.list.filter((f) => !f.cleared))
@@ -61,6 +62,7 @@
       case 'critical_port':
       case 'outbound_anomaly':
       case 'internal_recon':
+      case 'low_slow_scan':
         appState.setFilter('ip', f.target)
         break
       case 'distributed_brute_force':
