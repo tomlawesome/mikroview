@@ -42,8 +42,9 @@ func (d *Detector) observeRepeatedDrops(e store.Event, now time.Time) {
 		target := fmt.Sprintf("%s -> port %d", e.SrcIP, e.DstPort)
 		detail := fmt.Sprintf("%d attempts against %s:%d dropped in %s -- check whether this port is meant to be open",
 			len(hits), e.DstIP, e.DstPort, d.cfg.RepeatedDropsWindow)
-		d.fs.AddWithConfidence(flags.TypeRepeatedDrops, target, detail,
+		isNew := d.fs.AddWithConfidence(flags.TypeRepeatedDrops, target, detail,
 			overshootConfidence(len(hits), d.cfg.RepeatedDropsThreshold), now)
+		d.maybeCheckReputation(flags.TypeRepeatedDrops, target, e.SrcIP, isNew)
 	}
 }
 

@@ -288,6 +288,31 @@ you're looking at:
 `confidence` is `null` in `GET /api/flags` for a detector that doesn't
 score at all, never an implied 100%.
 
+**Reputation-informed floor (optional, requires an AbuseIPDB key).**
+When `reputation.abuseIPDBKey` is configured (see
+[IP reputation lookup](#ip-reputation-lookup-optional)), `critical_port`,
+`port_scan`, `activity_spike`, and `repeated_drops` additionally get an
+async, best-effort AbuseIPDB lookup against the flag's source IP the
+first time it's raised (not on every re-fire). If the IP has a known
+abuse score, that score becomes a *floor* on the flag's confidence —
+`finalConfidence = max(existingConfidence, abuseScore)` — never a
+replacement and never a reduction: a clean or unavailable reputation
+result is absence of evidence, not evidence of innocence, so it's never
+allowed to pull an already-higher score down. `distributed_brute_force`
+and `outbound_anomaly` get the same treatment, but against a *sampled
+group* rather than one IP (they're keyed by many distinct source IPs or
+destinations, not a single one) — up to 10 members are sampled, and at
+least 3 of them must actually return reputation data before the
+aggregate (their mean score, discounted by how much of the sample was
+actually filled) is trusted enough to apply. `internal_recon` is
+excluded because its destinations are internal LAN IPs and reputation
+data doesn't exist for private ranges at all; `rule_spike` is excluded
+because its target is a rule label, not an IP. This reuses the same
+`internal/reputation.Client` and 15-minute cache the on-demand IP-lookup
+popover already uses, so a manual lookup you've just done and an async
+detector check for the same IP share results rather than double-querying
+AbuseIPDB.
+
 A flag is raised once per (detector, source) pair and updated in place
 on re-firing (count/last-seen bumped, not duplicated) until a human
 clears it via the UI or `POST /api/flags/{id}/clear`. Clearing an

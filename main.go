@@ -144,7 +144,7 @@ func main() {
 	if err != nil {
 		log.Printf("detector settings: %v (continuing with in-memory-only detector toggle state)", err)
 	}
-	detector := detect.NewWithSettings(detectCfg, fs, detectorSettings)
+	detector := detect.NewWithSettings(detectCfg, fs, detectorSettings).WithReputation(rep)
 	globalSpike := detect.NewGlobalSpikeDetectorWithSettings(detectCfg, fs, detectorSettings)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
