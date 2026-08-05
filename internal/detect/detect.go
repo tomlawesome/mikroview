@@ -9,6 +9,7 @@
 package detect
 
 import (
+	"context"
 	"fmt"
 	"net"
 	"time"
@@ -180,6 +181,13 @@ func DefaultConfig() Config {
 // it without needing thousands of distinct source IPs.
 var maxTrackedSources = 4096
 
+// observeQueueSize bounds Detector's async detection queue (see Enqueue/
+// Run) -- sized to the same tier as main.go's raw syslog channel (4096),
+// since Enqueue is offered once per stored event, the same rate as
+// ingestion itself (unlike internal/notify's much smaller queue, which
+// only receives newly-raised flags, a far rarer event).
+const observeQueueSize = 4096
+
 type sample struct {
 	at   time.Time
 	port int
@@ -201,10 +209,12 @@ type sourceWindow struct {
 
 // Detector tracks per-source rolling-window state for the port-scan,
 // activity-spike, and critical-port detectors, raising flags into fs
-// when a threshold is crossed. It's intended to be called only from
-// mikroview's single ingest goroutine (see main.go) -- the same
+// when a threshold is crossed. Observe itself is intended to be called
+// only from a single detection-worker goroutine (see Run) -- the same
 // single-writer assumption internal/store and internal/device make, so
-// like them it takes no lock of its own.
+// like them it takes no lock of its own. Enqueue, in contrast, is safe
+// to call from any goroutine (mikroview's ingest goroutine calls it) --
+// it only ever hands an event off across a channel to that worker.
 type Detector struct {
 	cfg      Config
 	fs       *flags.Store
@@ -225,6 +235,10 @@ type Detector struct {
 	ruleWindows     map[string]*ruleWindow
 	dropPairs       map[string][]time.Time
 	lowSlowWindows  map[string]*lowSlowWindow
+
+	// observeQueue backs Enqueue/Run -- see observeQueueSize's doc
+	// comment for the sizing rationale.
+	observeQueue chan store.Event
 }
 
 // New constructs a Detector with every detector enabled and unscoped --
@@ -252,6 +266,39 @@ func NewWithSettings(cfg Config, fs *flags.Store, settings *SettingsStore) *Dete
 		ruleWindows:     make(map[string]*ruleWindow),
 		dropPairs:       make(map[string][]time.Time),
 		lowSlowWindows:  make(map[string]*lowSlowWindow),
+		observeQueue:    make(chan store.Event, observeQueueSize),
+	}
+}
+
+// Enqueue hands e off to the detection-worker goroutine (see Run)
+// without ever blocking the caller -- a non-blocking select/default
+// send, silently dropping e if the queue is full. Mirrors
+// internal/syslog/udp_listener.go's ServeUDP (drop, don't log per-drop:
+// logging on every drop during exactly the overload condition this
+// guards against would itself add load), not internal/notify.
+// Dispatcher.Enqueue's per-drop logging -- a dropped flag notification
+// is rare enough to log; a detection queue backing up under sustained
+// high-volume traffic is not. mikroview's ingest goroutine calls this
+// so a slow or backed-up detection pass never delays event storage or
+// WebSocket broadcast, only detection itself.
+func (d *Detector) Enqueue(e store.Event) {
+	select {
+	case d.observeQueue <- e:
+	default:
+	}
+}
+
+// Run drains observeQueue, calling Observe for each event in order,
+// until ctx is done. Meant to run in its own goroutine, separate from
+// whatever goroutine calls Enqueue -- see Detector's doc comment.
+func (d *Detector) Run(ctx context.Context) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case e := <-d.observeQueue:
+			d.Observe(e)
+		}
 	}
 }
 
