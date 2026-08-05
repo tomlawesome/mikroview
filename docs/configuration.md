@@ -382,22 +382,25 @@ clears it via the UI or `POST /api/flags/{id}/clear`. Clearing an
 already-active-again source re-raises it as a fresh entry rather than
 silently resurrecting the old one.
 
-## Email notifications (optional, requires an SMTP relay)
+## Notifications (optional)
 
-Flags are only visible if someone has the mikroview UI open. Configuring
-`notify.smtp` sends a plain-text email through your own external mail
-relay whenever a new flag *episode* is raised (a first-ever raise, or a
-revival after a human clears an already-cleared flag -- never a plain
-re-fire of an already-active one, so a noisy detector doesn't re-alert
-on every event). Send-only: mikroview never reads a mailbox, and there's
-no auth flow beyond the SMTP client credentials below.
+Flags are only visible if someone has the mikroview UI open. `notify`
+sends an alert through one or more external channels whenever a new
+flag *episode* is raised (a first-ever raise, or a revival after a human
+clears an already-cleared flag -- never a plain re-fire of an
+already-active one, so a noisy detector doesn't re-alert on every
+event). Each channel below is independently enabled by its own
+identifying field being set (`smtp.host`, `pushover.token`) -- configure
+any combination of zero, one, or both; every enabled channel shares one
+`batchWindow`.
 
 ```yaml
 notify:
-  # batchWindow: how often pending flags are flushed into one email --
-  # a fixed interval, not a quiet-period debounce, so a sustained flood
-  # of flags during a real incident still gets a bounded max delay
-  # before alerting rather than the window continuously resetting.
+  # batchWindow: how often pending flags are flushed to every enabled
+  # channel -- a fixed interval, not a quiet-period debounce, so a
+  # sustained flood of flags during a real incident still gets a
+  # bounded max delay before alerting rather than the window
+  # continuously resetting.
   batchWindow: 60s
   smtp:
     host: "smtp.example.com"
@@ -412,19 +415,30 @@ notify:
     tlsMode: "starttls"
     from: "mikroview@example.com"
     to: ["ops@example.com", "oncall@example.com"]
+  pushover:
+    # From your Pushover application (https://pushover.net/apps) and
+    # account/group, respectively -- no VAPID keys, no service worker,
+    # no per-browser subscription management, just this pair.
+    token: "your-application-token"
+    user: "your-user-or-group-key"
 ```
 
-Left with an empty `smtp.host` (the default), notifications are simply
-never dispatched -- no relay is assumed. `smtp.password` can also be set
-via the `MIKROVIEW_NOTIFY_SMTP_PASSWORD` env var instead of the config
-file, same secret-via-env precedent as `MIKROVIEW_ABUSEIPDB_KEY`.
+Left with an empty `smtp.host`/`pushover.token` (the default), that
+channel is simply never dispatched to -- no relay or app is assumed.
+`smtp.password`/`pushover.token`/`pushover.user` can also be set via env
+vars instead of the config file (see the table below), same
+secret-via-env precedent as `MIKROVIEW_ABUSEIPDB_KEY`.
 
-One email covers every flag raised within a `batchWindow`: subject
-`mikroview: N new flag(s)`, one line per flag (type, target, detail,
-confidence, first-seen). Built to be the first of possibly several
-notification channels (see `internal/notify.Notifier`) -- push
-notifications are a separate, not-yet-built issue that will plug into
-the same batching dispatcher rather than duplicating it.
+One notification covers every flag raised within a `batchWindow`: title/
+subject `mikroview: N new flag(s)`, one line per flag (type, target,
+detail, confidence, first-seen) -- Pushover's message additionally caps
+at 10 lines with a "...and N more" trailer, since its message field is
+much smaller than an email body. Built around a shared
+`internal/notify.Notifier`/`Dispatcher` so both channels reuse the same
+batching rather than each implementing their own; true device push (web
+push API, VAPID keys, service worker) is a separate, not-yet-built
+target scoped alongside PWA feasibility, since a lot of that plumbing
+overlaps with making the frontend a PWA at all.
 
 ## Per-detector toggles and scope restrictions (optional)
 
@@ -590,7 +604,7 @@ Override individual scalar settings without a mounted file:
 | `MIKROVIEW_AUTH_STORE_PATH` | `auth.storePath` (see [Authentication](#authentication-optional-opt-in-by-creating-an-account)) |
 | `MIKROVIEW_AUTH_SECURE_COOKIE` | `auth.secureCookie` |
 | `MIKROVIEW_AUTH_SESSION_TTL` | `auth.sessionTTL` |
-| `MIKROVIEW_NOTIFY_BATCH_WINDOW` | `notify.batchWindow` (see [Email notifications](#email-notifications-optional-requires-an-smtp-relay)) |
+| `MIKROVIEW_NOTIFY_BATCH_WINDOW` | `notify.batchWindow` (see [Notifications](#notifications-optional)) |
 | `MIKROVIEW_NOTIFY_SMTP_HOST` | `notify.smtp.host` |
 | `MIKROVIEW_NOTIFY_SMTP_PORT` | `notify.smtp.port` |
 | `MIKROVIEW_NOTIFY_SMTP_USERNAME` | `notify.smtp.username` |
@@ -598,6 +612,8 @@ Override individual scalar settings without a mounted file:
 | `MIKROVIEW_NOTIFY_SMTP_TLS_MODE` | `notify.smtp.tlsMode` |
 | `MIKROVIEW_NOTIFY_SMTP_FROM` | `notify.smtp.from` |
 | `MIKROVIEW_NOTIFY_SMTP_TO` | `notify.smtp.to` (comma-separated) |
+| `MIKROVIEW_NOTIFY_PUSHOVER_TOKEN` | `notify.pushover.token` |
+| `MIKROVIEW_NOTIFY_PUSHOVER_USER` | `notify.pushover.user` |
 
 ## CLI flags (local development)
 
