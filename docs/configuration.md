@@ -277,6 +277,60 @@ clears it via the UI or `POST /api/flags/{id}/clear`. Clearing an
 already-active-again source re-raises it as a fresh entry rather than
 silently resurrecting the old one.
 
+## Authentication (optional, opt-in by creating an account)
+
+Mikroview stays fully open -- today's behavior -- until you create the
+first account. The moment one exists, every request except
+`GET /api/healthz` requires a valid session, permanently, from then on.
+See [SECURITY.md](../SECURITY.md) for the full threat-model writeup;
+this section is the configuration reference.
+
+```yaml
+auth:
+  storePath: "/var/lib/mikroview/users.json"
+  secureCookie: false
+  sessionTTL: 24h
+```
+
+- **`storePath`** — where accounts are persisted, as a small JSON file
+  (usernames + Argon2id password hashes, never plaintext). Unlike
+  `flags.storePath`, this is not optional once you create an account:
+  mikroview refuses to create one without a configured, writable path,
+  since an account that doesn't survive a restart would either lock
+  everyone out or silently reopen the deployment. Mount a volume for its
+  parent directory the same way you would for flag persistence -- see
+  `deploy/docker-compose.yml`.
+- **`secureCookie`** — sets the session cookie's `Secure` flag. Off by
+  default since mikroview is very commonly run over plain HTTP on a
+  trusted LAN; turn this on once mikroview sits behind TLS.
+- **`sessionTTL`** — the idle timeout: a session's expiry slides forward
+  on each authenticated request, so this is "how long you can go without
+  activity before needing to log in again," not a fixed session
+  lifetime.
+
+**Creating the first account** is done through the web UI itself, not a
+CLI command: while no account exists, mikroview shows a one-time setup
+form instead of a login form, and whoever completes it becomes the
+admin. Don't leave mikroview reachable by more than a trusted network
+before completing this step.
+
+**Adding more accounts** afterward is admin-only, either via the "Add
+user" control in the toolbar or `POST /api/auth/users`.
+
+**Account recovery** is a CLI command, deliberately outside the web
+UI/API entirely -- container/host access is the trust anchor, so a
+locked-out admin isn't dependent on the system they're locked out of:
+
+```sh
+mikroview -list-users             # usernames + roles, no password hashes
+mikroview -reset-password admin   # prompts for a new password (no echo), twice to confirm
+```
+
+A password reset immediately invalidates every existing session for that
+account, including on an already-running server -- you don't need to
+restart mikroview after running `-reset-password` for the new password
+to take effect.
+
 ## Environment variables
 
 Override individual scalar settings without a mounted file:
@@ -314,12 +368,20 @@ Override individual scalar settings without a mounted file:
 | `MIKROVIEW_FLAGS_REPEATED_DROPS_WINDOW` | `flags.repeatedDropsWindow` |
 | `MIKROVIEW_FLAGS_HOST_ACTIVITY_MULTIPLIER` | `flags.hostActivityMultiplier` |
 | `MIKROVIEW_FLAGS_HOST_ACTIVITY_WARMUP_SAMPLES` | `flags.hostActivityWarmupSamples` |
+| `MIKROVIEW_AUTH_STORE_PATH` | `auth.storePath` (see [Authentication](#authentication-optional-opt-in-by-creating-an-account)) |
+| `MIKROVIEW_AUTH_SECURE_COOKIE` | `auth.secureCookie` |
+| `MIKROVIEW_AUTH_SESSION_TTL` | `auth.sessionTTL` |
 
 ## CLI flags (local development)
 
 `-syslog-udp`, `-syslog-tcp`, `-http`, `-retention`, `-max-events`,
-`-geoip-db` — see `go run . -h`. Devices can only be configured via YAML,
-not flags.
+`-geoip-db` — see `go run . -h`. Devices, rule/host names, and auth
+config can only be set via YAML/env, not flags.
+
+`-healthcheck`, `-list-users`, `-reset-password <username>` are
+standalone modes -- each does its one job and exits, rather than
+starting the server. See [Authentication](#authentication-optional-opt-in-by-creating-an-account)
+for the latter two.
 
 ## API reference
 
@@ -333,6 +395,18 @@ not flags.
 | `GET /api/lookup/ip/{ip}` | on-demand reputation/threat-intel lookup for one public IP (see [IP reputation lookup](#ip-reputation-lookup-optional)) |
 | `GET /api/flags` | active + cleared behavioral flags (see [Behavioral flags](#behavioral-flags-optional-on-by-default)) |
 | `POST /api/flags/{id}/clear` | mark one flag as cleared |
+| `GET /api/auth/session` | current auth state (setup-required / authenticated / not) -- always 200, never gated |
+| `POST /api/auth/register` | create the first (admin) account -- only while zero accounts exist |
+| `POST /api/auth/login` | sign in, sets the session cookie |
+| `POST /api/auth/logout` | sign out, clears the session cookie |
+| `POST /api/auth/users` | admin-only: create an additional account |
+
+Every route above `/api/auth/session`/`/register`/`/login`/`/logout` and
+`/api/healthz` requires a valid session once an account exists -- see
+[Authentication](#authentication-optional-opt-in-by-creating-an-account).
+Every mutating (`POST`) request also requires an
+`X-Requested-With: mikroview` header once an account exists (a CSRF
+mitigation, see SECURITY.md).
 
 `/api/events` query parameters: `device`, `action` (`accept`/`drop`/
 `reject`/`log`/`unknown`), `protocol`, `chain`, `interface`, `ip` (exact

@@ -51,6 +51,27 @@ type Reputation struct {
 	AbuseIPDBKey string `yaml:"abuseIPDBKey"`
 }
 
+// Auth configures internal/auth's local authentication. Unlike Flags'
+// StorePath, StorePath here is not truly optional -- mikroview stays
+// fully open (today's behavior) as long as no user account exists, but
+// the moment one is created it's required for that account to survive a
+// restart, so registration refuses to proceed without it configured.
+// See docs/configuration.md's "Authentication" section.
+type Auth struct {
+	StorePath string `yaml:"storePath"`
+	// SecureCookie sets the session cookie's Secure flag. Off by default
+	// because mikroview is very commonly deployed over plain HTTP on a
+	// trusted LAN -- forcing Secure would silently break login on any
+	// non-TLS deployment. Turn this on once you have TLS terminated
+	// somewhere in front of mikroview.
+	SecureCookie bool `yaml:"secureCookie"`
+	// SessionTTL is the idle timeout: a session's expiry slides forward
+	// on each authenticated request, so this is "how long you can go
+	// without activity before needing to log in again," not a fixed
+	// session lifetime.
+	SessionTTL time.Duration `yaml:"sessionTTL"`
+}
+
 // Flags configures internal/detect's behavioral detectors and
 // internal/flags' persistence -- see both packages' docs for what each
 // threshold means and why the defaults are what they are. StorePath left
@@ -95,6 +116,7 @@ type Config struct {
 	GeoIP      GeoIP      `yaml:"geoip"`
 	Reputation Reputation `yaml:"reputation"`
 	Flags      Flags      `yaml:"flags"`
+	Auth       Auth       `yaml:"auth"`
 	Devices    []Device   `yaml:"devices"`
 
 	// RuleNames/HostNames are optional friendly-display-name maps -- see
@@ -150,6 +172,9 @@ func defaults() Config {
 
 			HostActivityMultiplier:    3,
 			HostActivityWarmupSamples: 20,
+		},
+		Auth: Auth{
+			SessionTTL: 24 * time.Hour,
 		},
 	}
 }
@@ -323,6 +348,19 @@ func applyEnv(cfg *Config) {
 	if v := os.Getenv("MIKROVIEW_FLAGS_HOST_ACTIVITY_WARMUP_SAMPLES"); v != "" {
 		if n, err := strconv.Atoi(v); err == nil {
 			cfg.Flags.HostActivityWarmupSamples = n
+		}
+	}
+	if v := os.Getenv("MIKROVIEW_AUTH_STORE_PATH"); v != "" {
+		cfg.Auth.StorePath = v
+	}
+	if v := os.Getenv("MIKROVIEW_AUTH_SECURE_COOKIE"); v != "" {
+		if b, err := strconv.ParseBool(v); err == nil {
+			cfg.Auth.SecureCookie = b
+		}
+	}
+	if v := os.Getenv("MIKROVIEW_AUTH_SESSION_TTL"); v != "" {
+		if d, err := time.ParseDuration(v); err == nil {
+			cfg.Auth.SessionTTL = d
 		}
 	}
 }

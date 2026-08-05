@@ -67,6 +67,17 @@ store:
 # hostNames:
 #   192.168.1.50: "Living room NAS"
 
+# Optional: local authentication. Mikroview stays fully open (today's
+# behavior) until you create the first account through the web UI --
+# storePath must be set (and its volume mounted, see
+# deploy/docker-compose.yml) before you do, or account creation is
+# refused rather than creating one that vanishes on restart. See
+# SECURITY.md and docs/configuration.md's "Authentication" section.
+# auth:
+#   storePath: /var/lib/mikroview/users.json
+#   secureCookie: false
+#   sessionTTL: 24h
+
 # Devices are matched by the syslog source IP mikroview sees them from.
 # Sources not listed here still appear in the UI, auto-discovered and
 # labelled with their IP -- add them here once you know which is which.

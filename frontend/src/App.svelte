@@ -4,7 +4,8 @@
   import { themeState } from './lib/theme.svelte'
   import { colorwayState } from './lib/colorway.svelte'
   import { flagsState } from './lib/flags.svelte'
-  import { buildQuery } from './lib/api'
+  import { authState } from './lib/auth.svelte'
+  import { buildQuery, ApiError } from './lib/api'
   import { filtersFromSearchParams } from './lib/types'
   import Toolbar from './components/Toolbar.svelte'
   import ConnectionBanner from './components/ConnectionBanner.svelte'
@@ -14,6 +15,18 @@
   import FlagsOverlay from './components/FlagsOverlay.svelte'
   import IpLookupPopover from './components/IpLookupPopover.svelte'
   import PortLookupPopover from './components/PortLookupPopover.svelte'
+  import AuthSetup from './components/AuthSetup.svelte'
+  import AuthLogin from './components/AuthLogin.svelte'
+  import AddUserOverlay from './components/AddUserOverlay.svelte'
+
+  // Any polling call that fails with a 401 (an expired or reset-
+  // invalidated session -- see internal/api's sessionUser) bounces to
+  // the login view instead of failing silently forever.
+  function handleApiError(err: unknown) {
+    if (err instanceof ApiError && err.status === 401) {
+      authState.handleUnauthorized()
+    }
+  }
 
   const STATS_REFRESH_MS = 5000
   const FILTER_DEBOUNCE_MS = 300
@@ -41,17 +54,27 @@
     colorwayState.apply()
   })
 
+  // Runs once on mount, unconditionally -- everything else in this file
+  // waits on its result (authState.state) before doing anything that
+  // needs a session.
   $effect(() => {
-    appState.loadInitial().catch(() => {
-      // initial load failure is non-fatal: the WS tail will still populate
-      // the table once it connects, and the next stats poll will retry
-    })
+    authState.check()
+  })
+
+  $effect(() => {
+    // Reading authState.state here is what makes this effect re-run the
+    // moment it flips to/from 'authenticated' (login, logout, or a 401
+    // bouncing back to the login view) -- same fine-grained reactivity
+    // the filter-sync effect below relies on.
+    if (authState.state !== 'authenticated') return
+
+    appState.loadInitial().catch(handleApiError)
     liveSocket.connect()
-    flagsState.refresh().catch(() => {})
+    flagsState.refresh().catch(handleApiError)
 
     const statsInterval = setInterval(() => {
-      appState.refreshDevicesAndStats().catch(() => {})
-      flagsState.refresh().catch(() => {})
+      appState.refreshDevicesAndStats().catch(handleApiError)
+      flagsState.refresh().catch(handleApiError)
     }, STATS_REFRESH_MS)
 
     const tickInterval = setInterval(() => appState.tick(), TICK_MS)
@@ -64,6 +87,8 @@
   })
 
   $effect(() => {
+    if (authState.state !== 'authenticated') return
+
     // Reading every field off appState.filters here is what makes this
     // effect re-run on any filter change (Svelte 5's fine-grained
     // reactivity tracks each property access as its own dependency).
@@ -82,25 +107,35 @@
       return
     }
     const timer = setTimeout(() => {
-      appState.refetchWithFilters().catch(() => {})
+      appState.refetchWithFilters().catch(handleApiError)
     }, FILTER_DEBOUNCE_MS)
     return () => clearTimeout(timer)
   })
 </script>
 
-<Toolbar />
-<ConnectionBanner />
-<main>
-  {#if appState.view === 'live'}
-    <FilterBar />
-    <LiveTable />
-  {:else}
-    <Dashboard />
-  {/if}
-</main>
-<FlagsOverlay />
-<IpLookupPopover />
-<PortLookupPopover />
+{#if authState.state === 'loading'}
+  <!-- Deliberately blank rather than a spinner -- this resolves within
+       one fetch round-trip on the same origin, not worth the flash. -->
+{:else if authState.state === 'setup-required'}
+  <AuthSetup />
+{:else if authState.state === 'unauthenticated'}
+  <AuthLogin />
+{:else}
+  <Toolbar />
+  <ConnectionBanner />
+  <main>
+    {#if appState.view === 'live'}
+      <FilterBar />
+      <LiveTable />
+    {:else}
+      <Dashboard />
+    {/if}
+  </main>
+  <FlagsOverlay />
+  <IpLookupPopover />
+  <PortLookupPopover />
+  <AddUserOverlay />
+{/if}
 
 <style>
   main {

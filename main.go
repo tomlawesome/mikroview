@@ -1,7 +1,9 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
@@ -11,6 +13,7 @@ import (
 	"time"
 
 	"github.com/tomlawesome/mikroview/internal/api"
+	"github.com/tomlawesome/mikroview/internal/auth"
 	"github.com/tomlawesome/mikroview/internal/config"
 	"github.com/tomlawesome/mikroview/internal/detect"
 	"github.com/tomlawesome/mikroview/internal/device"
@@ -23,6 +26,7 @@ import (
 	"github.com/tomlawesome/mikroview/internal/store"
 	"github.com/tomlawesome/mikroview/internal/syslog"
 	"github.com/tomlawesome/mikroview/web"
+	"golang.org/x/term"
 )
 
 // globalSpikeCheckInterval is how often the global volume-spike detector
@@ -32,6 +36,15 @@ import (
 // to feel "live" to a person.
 const globalSpikeCheckInterval = 10 * time.Second
 
+// loginLimiter{Threshold,Window}: brute-force protection on
+// POST /api/auth/login (see internal/auth.LoginLimiter) -- an internal
+// hardening constant, not exposed via config, same tier as ws.go's
+// wsPongTimeout/wsPingInterval.
+const (
+	loginLimiterThreshold = 5
+	loginLimiterWindow    = 5 * time.Minute
+)
+
 func main() {
 	// The runtime image is distroless (no shell, no curl/wget), so Docker's
 	// HEALTHCHECK -- and any orchestrator's readiness probe -- can't shell
@@ -40,6 +53,17 @@ func main() {
 	// standalone HEALTHCHECK CMD with no other flags to parse.
 	if len(os.Args) > 1 && os.Args[1] == "-healthcheck" {
 		os.Exit(runHealthcheck())
+	}
+	// -list-users/-reset-password: the account-recovery path (see
+	// docs/configuration.md's "Authentication" section) -- container/
+	// host access is the trust anchor for these, deliberately outside
+	// the web UI/API entirely, so a locked-out admin isn't dependent on
+	// the very system they're locked out of.
+	if len(os.Args) > 1 && os.Args[1] == "-list-users" {
+		os.Exit(runListUsers())
+	}
+	if len(os.Args) > 1 && os.Args[1] == "-reset-password" {
+		os.Exit(runResetPassword(os.Args[2:]))
 	}
 
 	cfg, err := config.Load(os.Getenv("MIKROVIEW_CONFIG"), os.Args[1:])
@@ -60,6 +84,16 @@ func main() {
 	fs, err := flags.Open(cfg.Flags.StorePath)
 	if err != nil {
 		log.Printf("flags: %v (continuing with in-memory-only flag state)", err)
+	}
+
+	authStore, err := auth.Open(cfg.Auth.StorePath)
+	if err != nil {
+		log.Printf("auth: %v (continuing with in-memory-only, unpersisted account state)", err)
+	}
+	if authStore.Count() > 0 {
+		log.Printf("auth: %d account(s) registered -- authentication is active", authStore.Count())
+	} else {
+		log.Printf("auth: no accounts registered -- mikroview is fully open until one is created (see docs/configuration.md)")
 	}
 	detectCfg := detect.Config{
 		PortScanThreshold:      cfg.Flags.PortScanThreshold,
@@ -127,7 +161,18 @@ func main() {
 		}
 	}()
 
-	srv := &api.Server{Store: st, Devices: devices, Hub: h, Reputation: rep, Flags: fs, StartTime: time.Now()}
+	srv := &api.Server{
+		Store:        st,
+		Devices:      devices,
+		Hub:          h,
+		Reputation:   rep,
+		Flags:        fs,
+		Auth:         authStore,
+		Sessions:     auth.NewSessionStore(cfg.Auth.SessionTTL),
+		LoginLimiter: auth.NewLoginLimiter(loginLimiterThreshold, loginLimiterWindow),
+		SecureCookie: cfg.Auth.SecureCookie,
+		StartTime:    time.Now(),
+	}
 
 	rootMux := http.NewServeMux()
 	rootMux.Handle("/api/", srv.Routes())
@@ -193,6 +238,107 @@ func runHealthcheck() int {
 		return 1
 	}
 	return 0
+}
+
+// openAuthStoreForCLI is shared by runListUsers/runResetPassword: both
+// need a real, persisted auth.Store and both refuse identically if one
+// isn't configured -- an ephemeral store would make either command
+// pointless (list nothing meaningful, or reset a password that vanishes
+// on the next restart).
+func openAuthStoreForCLI(cmd string) (*auth.Store, error) {
+	cfg, err := config.Load(os.Getenv("MIKROVIEW_CONFIG"), nil)
+	if err != nil {
+		return nil, fmt.Errorf("config: %w", err)
+	}
+	if cfg.Auth.StorePath == "" {
+		return nil, fmt.Errorf("auth.storePath is not configured -- %s has nothing persisted to work with", cmd)
+	}
+	return auth.Open(cfg.Auth.StorePath)
+}
+
+// runListUsers backs `-list-users` -- usernames and roles only, no
+// password hashes, to help an operator pick which account to reset.
+func runListUsers() int {
+	store, err := openAuthStoreForCLI("-list-users")
+	if err != nil {
+		log.Printf("list-users: %v", err)
+		return 1
+	}
+
+	users := store.List()
+	if len(users) == 0 {
+		fmt.Println("No accounts exist yet.")
+		return 0
+	}
+	for _, u := range users {
+		fmt.Printf("%s\t%s\n", u.Username, u.Role)
+	}
+	return 0
+}
+
+// runResetPassword backs `-reset-password <username>` -- the account-
+// recovery path. Prompts for the new password twice (no echo) rather
+// than accepting it as a CLI argument or env var, so it never touches
+// shell history, process args, or `docker inspect` output; container/
+// host access (the ability to exec this at all) is the trust anchor.
+// Revokes every existing session for that user, so a stolen session
+// cookie doesn't survive a deliberate credential reset.
+func runResetPassword(args []string) int {
+	if len(args) < 1 {
+		log.Printf("reset-password: usage: mikroview -reset-password <username>")
+		return 1
+	}
+	username := args[0]
+
+	store, err := openAuthStoreForCLI("-reset-password")
+	if err != nil {
+		log.Printf("reset-password: %v", err)
+		return 1
+	}
+	if _, ok := store.ByUsername(username); !ok {
+		log.Printf("reset-password: no such user %q -- run -list-users to see existing accounts", username)
+		return 1
+	}
+
+	password, err := readPasswordTwice()
+	if err != nil {
+		log.Printf("reset-password: %v", err)
+		return 1
+	}
+
+	if err := store.SetPassword(username, password, time.Now()); err != nil {
+		log.Printf("reset-password: %v", err)
+		return 1
+	}
+	fmt.Printf("Password for %q updated.\n", username)
+	return 0
+}
+
+// readPasswordTwice prompts for a password without echoing it to the
+// terminal, and again to confirm -- a mistyped new password on a
+// recovery tool is nearly as bad as staying locked out.
+func readPasswordTwice() (string, error) {
+	fmt.Print("New password: ")
+	first, err := term.ReadPassword(int(os.Stdin.Fd()))
+	fmt.Println()
+	if err != nil {
+		return "", fmt.Errorf("read password: %w", err)
+	}
+
+	fmt.Print("Confirm new password: ")
+	second, err := term.ReadPassword(int(os.Stdin.Fd()))
+	fmt.Println()
+	if err != nil {
+		return "", fmt.Errorf("read password confirmation: %w", err)
+	}
+
+	if !bytes.Equal(first, second) {
+		return "", fmt.Errorf("passwords did not match")
+	}
+	if len(first) == 0 {
+		return "", fmt.Errorf("password cannot be empty")
+	}
+	return string(first), nil
 }
 
 // ingest is the single store-writer goroutine: it parses each raw syslog

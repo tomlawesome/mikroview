@@ -2,6 +2,7 @@ package api
 
 import (
 	"net/http"
+	"net/url"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -16,13 +17,39 @@ const (
 	wsPingInterval  = 30 * time.Second
 )
 
-// CheckOrigin always allows: this is a trusted-LAN, no-auth deployment by
-// explicit design (see docs/configuration.md), so origin checking would
-// add friction without adding real protection.
+// CheckOrigin always allows at the gorilla/websocket-upgrader level --
+// the actual origin check happens in handleWS below, where s (and so
+// s.Auth.Count()) is in scope. Splitting it out to a standalone function
+// wouldn't have access to that without awkward global state.
 var upgrader = websocket.Upgrader{
 	ReadBufferSize:  1024,
 	WriteBufferSize: 4096,
 	CheckOrigin:     func(r *http.Request) bool { return true },
+}
+
+// checkOrigin allows any origin while auth is inactive (zero users --
+// mikroview's default, fully-open, trusted-LAN deployment, where origin
+// checking would add friction without adding real protection). Once
+// auth is active, a session cookie is a real credential, and cookies
+// are attached to cross-site requests regardless of CORS/fetch-origin
+// rules -- SameSite=Lax alone isn't a guaranteed defense for a WebSocket
+// upgrade specifically, so this check is required, not redundant with
+// requireAuth's cookie check: same-origin is what actually stops a
+// malicious page from opening a WS connection using a victim's cookie.
+func (s *Server) checkOrigin(r *http.Request) bool {
+	if s.Auth.Count() == 0 {
+		return true
+	}
+	origin := r.Header.Get("Origin")
+	if origin == "" {
+		// No Origin header at all is normal for a same-origin
+		// non-browser client (curl, server-to-server) -- browsers always
+		// send one on a cross-site request, so its absence isn't the
+		// attack this check defends against.
+		return true
+	}
+	u, err := url.Parse(origin)
+	return err == nil && u.Host == r.Host
 }
 
 type wsEnvelope struct {
@@ -37,6 +64,10 @@ type wsEnvelope struct {
 // whichever comes first) into a single WS frame. The frontend applies
 // filters client-side — see docs/configuration.md for the rationale.
 func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
+	if !s.checkOrigin(r) {
+		http.Error(w, "cross-origin WebSocket connections are not allowed", http.StatusForbidden)
+		return
+	}
 	conn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
 		return
