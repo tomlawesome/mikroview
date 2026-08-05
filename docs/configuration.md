@@ -103,6 +103,34 @@ versus loopback-only (`127.0.0.1`/`::1`) -- useful for cross-referencing
 "what does mikroview say this port usually is" against "what's actually
 listening on it, on this host."
 
+## Friendly names (optional)
+
+RouterOS auto-generates a rule identifier (e.g. `r13`) in the log line
+when a firewall rule has no `comment=` set, and every host only ever
+shows up as a raw IP. `config.yaml`'s `ruleNames`/`hostNames` maps let
+you give either a friendly display name, shown in place of the raw value
+everywhere it appears (live table, CSV export) -- the raw value (rule
+label, IP) is always still what filtering, grouping, and the hover
+tooltip use, this is display-only.
+
+```yaml
+ruleNames:
+  r13: "Block known scanners"
+hostNames:
+  192.168.1.50: "Living room NAS"
+```
+
+Both are YAML-only (like `devices`) rather than env-var-configurable --
+a map doesn't translate cleanly to an env var without an awkward
+numbered-key scheme, the same reasoning `devices` already follows. A
+rule or host not listed still displays exactly as it does today (the
+raw label/IP), so this is purely additive.
+
+Setting a `comment=` on the rule in RouterOS itself is the more durable
+fix for rule names specifically, if you're able to -- `ruleNames` is for
+when you can't or don't want to edit RouterOS config directly, or want a
+different name in mikroview than the RouterOS comment.
+
 ## Behavioral flags (optional, on by default)
 
 mikroview watches the ingested event stream for a small set of patterns
