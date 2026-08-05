@@ -1,4 +1,5 @@
 import { createUser, fetchAuthSession, login, logout, register, skipAuthSetup } from './api'
+import type { AuthSession } from './types'
 
 // 'loading' only lasts for the initial check() call on app boot; after
 // that it's always one of the other four. App.svelte renders a
@@ -16,6 +17,30 @@ class AuthState {
   // Drives AddUserOverlay -- mirrors flagsState.open's pattern (a modal
   // toggled from Toolbar, mounted at the App root).
   showAddUser = $state(false)
+  // Whether the backend has OIDC/SSO configured at all -- gates
+  // rendering the "Sign in with SSO" link (see AuthLogin.svelte/
+  // AuthSetup.svelte). Independent of state above: SSO can be
+  // available in every state except 'authenticated'.
+  ssoAvailable = $state(false)
+  // Set by consumeSSOErrorFromURL() below after a failed OIDC callback
+  // redirect (see internal/api/oidc.go's redirectWithSSOError) --
+  // deliberately one generic message regardless of the opaque error
+  // code, never the raw code/provider text surfaced to the user.
+  ssoError = $state<string | null>(null)
+
+  // Reads and strips a ?ssoError=<code> query param left by a failed
+  // OIDC callback redirect -- called once on App.svelte's mount. Uses
+  // history.replaceState (not pushState) so a page refresh afterward
+  // doesn't re-show the message, same reasoning appState's filter-sync
+  // effect already applies to its own URL updates.
+  consumeSSOErrorFromURL() {
+    const params = new URLSearchParams(location.search)
+    if (!params.has('ssoError')) return
+    this.ssoError = 'SSO sign-in failed -- try again, or sign in with your password below.'
+    params.delete('ssoError')
+    const qs = params.toString()
+    history.replaceState(null, '', location.pathname + (qs ? `?${qs}` : ''))
+  }
 
   async check() {
     try {
@@ -29,13 +54,8 @@ class AuthState {
     }
   }
 
-  private apply(session: {
-    authDisabled: boolean
-    setupRequired: boolean
-    authenticated: boolean
-    username?: string
-    role?: string
-  }) {
+  private apply(session: AuthSession) {
+    this.ssoAvailable = session.ssoAvailable
     // authDisabled takes priority: once a deployment has explicitly
     // skipped auth, Count()==0 no longer implies "show the choice
     // screen" -- a choice has already been made.
