@@ -190,6 +190,39 @@ type TLS struct {
 	StorePath string `yaml:"storePath"`
 }
 
+// OIDC configures optional SSO login via an external OIDC provider
+// (issue #43, Authentik-targeted but any standard OIDC provider works)
+// on top of, never instead of, local password auth -- see
+// internal/oidc for the protocol implementation and
+// internal/auth.Store.FindOrCreateOIDCUser for identity storage/JIT
+// provisioning. Empty IssuerURL means OIDC is not configured, the same
+// "empty means opt-out, no separate enabled bool" contract
+// Reputation.AbuseIPDBKey/GeoIP.DBPath already use -- there's no
+// scenario where a fully-populated OIDC block should be silently
+// inert, unlike Notify's SMTP/Pushover (each independently optional
+// *within* one shared block), so a bare bool would be redundant here.
+type OIDC struct {
+	IssuerURL    string `yaml:"issuerUrl"`
+	ClientID     string `yaml:"clientId"`
+	ClientSecret string `yaml:"clientSecret"`
+	// PublicBaseURL is the externally-reachable origin used to build the
+	// redirect_uri registered at the provider (PublicBaseURL +
+	// "/api/auth/oidc/callback") -- required whenever IssuerURL is set.
+	// Deliberately never inferred from a request's Host/X-Forwarded-Host
+	// header: doing so is a known redirect_uri-confusion vulnerability
+	// class, since the exact-match registration at the provider is the
+	// actual defense, and only holds if mikroview never constructs it
+	// from client-influenced input. Covers both deployment modes this
+	// app already supports: mikroview's own self-signed TLS on a LAN
+	// IP/hostname (e.g. "https://192.168.1.10:8443"), or fronted by a
+	// reverse proxy terminating a real domain (e.g.
+	// "https://mikroview.example.com").
+	PublicBaseURL string `yaml:"publicBaseUrl"`
+	// Scopes defaults to {openid, profile, email} if empty -- see
+	// internal/oidc.New.
+	Scopes []string `yaml:"scopes"`
+}
+
 // DetectorScope is DetectorSettings' host/port/rule/classification
 // restriction, as plain yaml-tagged fields rather than importing
 // internal/detect -- same reasoning Flags already gives for duplicating
@@ -288,6 +321,7 @@ type Config struct {
 	Auth       Auth       `yaml:"auth"`
 	Notify     Notify     `yaml:"notify"`
 	TLS        TLS        `yaml:"tls"`
+	OIDC       OIDC       `yaml:"oidc"`
 	Devices    []Device   `yaml:"devices"`
 
 	// RuleNames/HostNames are optional friendly-display-name maps -- see
@@ -662,6 +696,24 @@ func applyEnv(cfg *Config) {
 	}
 	if v := os.Getenv("MIKROVIEW_TLS_STORE_PATH"); v != "" {
 		cfg.TLS.StorePath = v
+	}
+	if v := os.Getenv("MIKROVIEW_OIDC_ISSUER_URL"); v != "" {
+		cfg.OIDC.IssuerURL = v
+	}
+	if v := os.Getenv("MIKROVIEW_OIDC_CLIENT_ID"); v != "" {
+		cfg.OIDC.ClientID = v
+	}
+	// Secret-via-env, same precedent as MIKROVIEW_NOTIFY_SMTP_PASSWORD/
+	// MIKROVIEW_ABUSEIPDB_KEY -- a credential doesn't have to sit in
+	// config.yaml just because the rest of the block does.
+	if v := os.Getenv("MIKROVIEW_OIDC_CLIENT_SECRET"); v != "" {
+		cfg.OIDC.ClientSecret = v
+	}
+	if v := os.Getenv("MIKROVIEW_OIDC_PUBLIC_BASE_URL"); v != "" {
+		cfg.OIDC.PublicBaseURL = v
+	}
+	if v := os.Getenv("MIKROVIEW_OIDC_SCOPES"); v != "" {
+		cfg.OIDC.Scopes = parseStringList(v)
 	}
 }
 

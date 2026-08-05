@@ -378,6 +378,77 @@ func TestTLSEnvVarsOverrideDefaults(t *testing.T) {
 	}
 }
 
+func TestOIDCDefaultsToDisabled(t *testing.T) {
+	cfg, err := Load("", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.OIDC.IssuerURL != "" {
+		t.Errorf("OIDC.IssuerURL = %q, want empty (OIDC not configured by default)", cfg.OIDC.IssuerURL)
+	}
+}
+
+func TestOIDCEnvVarsOverrideDefaults(t *testing.T) {
+	t.Setenv("MIKROVIEW_OIDC_ISSUER_URL", "https://idp.example")
+	t.Setenv("MIKROVIEW_OIDC_CLIENT_ID", "mikroview")
+	t.Setenv("MIKROVIEW_OIDC_CLIENT_SECRET", "s3cret")
+	t.Setenv("MIKROVIEW_OIDC_PUBLIC_BASE_URL", "https://mikroview.example.com")
+	t.Setenv("MIKROVIEW_OIDC_SCOPES", "openid, profile, email, groups")
+
+	cfg, err := Load("", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.OIDC.IssuerURL != "https://idp.example" {
+		t.Errorf("OIDC.IssuerURL = %q, want https://idp.example", cfg.OIDC.IssuerURL)
+	}
+	if cfg.OIDC.ClientID != "mikroview" {
+		t.Errorf("OIDC.ClientID = %q, want mikroview", cfg.OIDC.ClientID)
+	}
+	if cfg.OIDC.ClientSecret != "s3cret" {
+		t.Errorf("OIDC.ClientSecret = %q, want s3cret", cfg.OIDC.ClientSecret)
+	}
+	if cfg.OIDC.PublicBaseURL != "https://mikroview.example.com" {
+		t.Errorf("OIDC.PublicBaseURL = %q, want https://mikroview.example.com", cfg.OIDC.PublicBaseURL)
+	}
+	wantScopes := []string{"openid", "profile", "email", "groups"}
+	if len(cfg.OIDC.Scopes) != len(wantScopes) {
+		t.Fatalf("OIDC.Scopes = %v, want %v", cfg.OIDC.Scopes, wantScopes)
+	}
+	for i, s := range wantScopes {
+		if cfg.OIDC.Scopes[i] != s {
+			t.Errorf("OIDC.Scopes[%d] = %q, want %q", i, cfg.OIDC.Scopes[i], s)
+		}
+	}
+}
+
+func TestOIDCYAMLOverridesDefaultsAndFlagsIsNotRequired(t *testing.T) {
+	dir := t.TempDir()
+	yamlPath := filepath.Join(dir, "config.yaml")
+	err := os.WriteFile(yamlPath, []byte(`
+oidc:
+  issuerUrl: "https://idp.example"
+  clientId: "mikroview"
+  publicBaseUrl: "https://mikroview.example.com"
+`), 0o644)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := Load(yamlPath, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.OIDC.IssuerURL != "https://idp.example" || cfg.OIDC.ClientID != "mikroview" || cfg.OIDC.PublicBaseURL != "https://mikroview.example.com" {
+		t.Errorf("OIDC from yaml = %+v, missing an expected field", cfg.OIDC)
+	}
+	// clientSecret wasn't set in the yaml above and no env var is set in
+	// this test -- confirms nothing else silently fills it in.
+	if cfg.OIDC.ClientSecret != "" {
+		t.Errorf("OIDC.ClientSecret = %q, want empty", cfg.OIDC.ClientSecret)
+	}
+}
+
 func TestFlagsCriticalPortsMalformedEntryIgnoresWholeValue(t *testing.T) {
 	t.Setenv("MIKROVIEW_FLAGS_CRITICAL_PORTS", "22,not-a-port,3389")
 
