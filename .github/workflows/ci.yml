@@ -55,7 +55,7 @@ jobs:
 
       - uses: actions/setup-go@v7
         with:
-          go-version: '1.25.12'
+          go-version: '1.26.5'
       - run: go build ./...
       - run: go vet ./...
       - run: go test ./...
@@ -82,7 +82,7 @@ jobs:
 
       - uses: actions/setup-go@v7
         with:
-          go-version: '1.25.12'
+          go-version: '1.26.5'
       - name: Race-detector tests (auth + API)
         run: go test -race ./internal/auth/... ./internal/api/...
       - name: govulncheck
