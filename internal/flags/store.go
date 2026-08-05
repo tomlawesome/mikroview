@@ -35,6 +35,12 @@ const (
 	TypeInternalRecon         Type = "internal_recon"
 	TypeRuleSpike             Type = "rule_spike"
 	TypeRepeatedDrops         Type = "repeated_drops"
+	// TypeLowSlowScan (issue #20): a port scan deliberately paced to stay
+	// under TypePortScan's short-burst threshold -- judged over hours by
+	// several independent signals (destination breadth, per-source EMA
+	// baseline, drop/reject ratio, reputation) rather than one count. See
+	// internal/detect/low_slow_scan.go.
+	TypeLowSlowScan Type = "low_slow_scan"
 )
 
 // maxFlags bounds the store the same way every other buffer in mikroview

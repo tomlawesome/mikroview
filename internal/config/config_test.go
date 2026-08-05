@@ -149,6 +149,38 @@ func TestHostActivityEnvVarsOverrideDefaults(t *testing.T) {
 	}
 }
 
+func TestLowSlowScanEnvVarsOverrideDefaults(t *testing.T) {
+	t.Setenv("MIKROVIEW_FLAGS_LOW_SLOW_SCAN_WINDOW", "90m")
+	t.Setenv("MIKROVIEW_FLAGS_LOW_SLOW_SCAN_PORT_THRESHOLD", "12")
+	t.Setenv("MIKROVIEW_FLAGS_LOW_SLOW_SCAN_HOST_THRESHOLD", "7")
+	t.Setenv("MIKROVIEW_FLAGS_LOW_SLOW_SCAN_MIN_OBSERVATION", "20m")
+	t.Setenv("MIKROVIEW_FLAGS_LOW_SLOW_SCAN_DROP_RATIO", "0.6")
+	t.Setenv("MIKROVIEW_FLAGS_LOW_SLOW_SCAN_BASELINE_MULTIPLIER", "4.5")
+
+	cfg, err := Load("", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Flags.LowSlowScanWindow != 90*time.Minute {
+		t.Errorf("LowSlowScanWindow = %v, want 90m", cfg.Flags.LowSlowScanWindow)
+	}
+	if cfg.Flags.LowSlowScanPortThreshold != 12 {
+		t.Errorf("LowSlowScanPortThreshold = %v, want 12", cfg.Flags.LowSlowScanPortThreshold)
+	}
+	if cfg.Flags.LowSlowScanHostThreshold != 7 {
+		t.Errorf("LowSlowScanHostThreshold = %v, want 7", cfg.Flags.LowSlowScanHostThreshold)
+	}
+	if cfg.Flags.LowSlowScanMinObservation != 20*time.Minute {
+		t.Errorf("LowSlowScanMinObservation = %v, want 20m", cfg.Flags.LowSlowScanMinObservation)
+	}
+	if cfg.Flags.LowSlowScanDropRatio != 0.6 {
+		t.Errorf("LowSlowScanDropRatio = %v, want 0.6", cfg.Flags.LowSlowScanDropRatio)
+	}
+	if cfg.Flags.LowSlowScanBaselineMultiplier != 4.5 {
+		t.Errorf("LowSlowScanBaselineMultiplier = %v, want 4.5", cfg.Flags.LowSlowScanBaselineMultiplier)
+	}
+}
+
 func TestFlagsCriticalPortsMalformedEntryIgnoresWholeValue(t *testing.T) {
 	t.Setenv("MIKROVIEW_FLAGS_CRITICAL_PORTS", "22,not-a-port,3389")
 

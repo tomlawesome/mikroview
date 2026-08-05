@@ -137,6 +137,16 @@ type Flags struct {
 	HostActivityMultiplier    float64 `yaml:"hostActivityMultiplier"`
 	HostActivityWarmupSamples int     `yaml:"hostActivityWarmupSamples"`
 
+	// LowSlowScan* (issue #20): see internal/detect.Config's matching
+	// fields for what each one means -- duplicated here rather than
+	// imported, same as every other Flags field.
+	LowSlowScanWindow             time.Duration `yaml:"lowSlowScanWindow"`
+	LowSlowScanPortThreshold      int           `yaml:"lowSlowScanPortThreshold"`
+	LowSlowScanHostThreshold      int           `yaml:"lowSlowScanHostThreshold"`
+	LowSlowScanMinObservation     time.Duration `yaml:"lowSlowScanMinObservation"`
+	LowSlowScanDropRatio          float64       `yaml:"lowSlowScanDropRatio"`
+	LowSlowScanBaselineMultiplier float64       `yaml:"lowSlowScanBaselineMultiplier"`
+
 	// DetectorSettingsStorePath persists live UI on/off+scope toggles
 	// (see internal/detect.SettingsStore) so they survive a restart --
 	// same optional-persistence contract as StorePath above. Detectors
@@ -210,6 +220,13 @@ func defaults() Config {
 
 			HostActivityMultiplier:    3,
 			HostActivityWarmupSamples: 20,
+
+			LowSlowScanWindow:             3 * time.Hour,
+			LowSlowScanPortThreshold:      8,
+			LowSlowScanHostThreshold:      5,
+			LowSlowScanMinObservation:     45 * time.Minute,
+			LowSlowScanDropRatio:          0.8,
+			LowSlowScanBaselineMultiplier: 3,
 		},
 		Auth: Auth{
 			SessionTTL: 24 * time.Hour,
@@ -386,6 +403,36 @@ func applyEnv(cfg *Config) {
 	if v := os.Getenv("MIKROVIEW_FLAGS_HOST_ACTIVITY_WARMUP_SAMPLES"); v != "" {
 		if n, err := strconv.Atoi(v); err == nil {
 			cfg.Flags.HostActivityWarmupSamples = n
+		}
+	}
+	if v := os.Getenv("MIKROVIEW_FLAGS_LOW_SLOW_SCAN_WINDOW"); v != "" {
+		if d, err := time.ParseDuration(v); err == nil {
+			cfg.Flags.LowSlowScanWindow = d
+		}
+	}
+	if v := os.Getenv("MIKROVIEW_FLAGS_LOW_SLOW_SCAN_PORT_THRESHOLD"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			cfg.Flags.LowSlowScanPortThreshold = n
+		}
+	}
+	if v := os.Getenv("MIKROVIEW_FLAGS_LOW_SLOW_SCAN_HOST_THRESHOLD"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			cfg.Flags.LowSlowScanHostThreshold = n
+		}
+	}
+	if v := os.Getenv("MIKROVIEW_FLAGS_LOW_SLOW_SCAN_MIN_OBSERVATION"); v != "" {
+		if d, err := time.ParseDuration(v); err == nil {
+			cfg.Flags.LowSlowScanMinObservation = d
+		}
+	}
+	if v := os.Getenv("MIKROVIEW_FLAGS_LOW_SLOW_SCAN_DROP_RATIO"); v != "" {
+		if f, err := strconv.ParseFloat(v, 64); err == nil {
+			cfg.Flags.LowSlowScanDropRatio = f
+		}
+	}
+	if v := os.Getenv("MIKROVIEW_FLAGS_LOW_SLOW_SCAN_BASELINE_MULTIPLIER"); v != "" {
+		if f, err := strconv.ParseFloat(v, 64); err == nil {
+			cfg.Flags.LowSlowScanBaselineMultiplier = f
 		}
 	}
 	if v := os.Getenv("MIKROVIEW_FLAGS_DETECTOR_SETTINGS_STORE_PATH"); v != "" {

@@ -122,6 +122,7 @@ export type FlagType =
   | 'internal_recon'
   | 'rule_spike'
   | 'repeated_drops'
+  | 'low_slow_scan'
 
 // Mirrors internal/detect.DetectorName -- same 9 string values as
 // FlagType, kept as a distinct alias since they're the same thing only

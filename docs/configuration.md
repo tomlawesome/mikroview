@@ -147,7 +147,8 @@ threshold below has a sensible default and is only worth changing for an
 unusually quiet or unusually busy network.
 
 The port-scan, activity-spike, critical-port, distributed-brute-force,
-internal-recon, and outbound-anomaly detectors only count events whose
+internal-recon, outbound-anomaly, and low-and-slow-port-scan detectors
+only count events whose
 RouterOS-reported connection state is `new` (or absent, for setups that
 don't log connection state at all) -- if your ruleset logs both
 directions of an established connection on the same rule, a busy host's
@@ -180,6 +181,12 @@ flags:
   repeatedDropsWindow: 15m
   hostActivityMultiplier: 3
   hostActivityWarmupSamples: 20
+  lowSlowScanWindow: 3h
+  lowSlowScanPortThreshold: 8
+  lowSlowScanHostThreshold: 5
+  lowSlowScanMinObservation: 45m
+  lowSlowScanDropRatio: 0.8
+  lowSlowScanBaselineMultiplier: 3
 ```
 
 - **`storePath`** — where raised/cleared flags are persisted, as a small
@@ -256,6 +263,38 @@ flags:
   retrying a port that isn't actually open the way you think — rather
   than necessarily an attack, so treat it as "worth a look," not
   "critical."
+- **Low-and-slow port scan** — a scan deliberately paced to stay under
+  the fast port-scan detector's short `portScanWindow`. Judged over the
+  much longer `lowSlowScanWindow` (hours, not seconds), and deliberately
+  *not* a single "distinct ports per hour" threshold — that alone is
+  exactly the kind of thing container orchestration, health checks, and
+  browsers legitimately trip. Instead, all of the following must hold at
+  once before anything fires:
+  - **Destination breadth on both axes** — `lowSlowScanPortThreshold`+
+    distinct destination ports *and* `lowSlowScanHostThreshold`+ distinct
+    destination hosts within the window. A real scan spans many
+    host:port pairs, not many ports probed against one already-known
+    host (that's the fast port-scan detector's job) or one port probed
+    against many known hosts.
+  - **A source's own destination-breadth rate vs. its own baseline** —
+    same per-source EMA technique as activity-spike, at
+    `lowSlowScanBaselineMultiplier`× or more, so a source that always
+    talks to many destinations isn't flagged just for continuing to do
+    what it always does.
+  - **A high drop/reject ratio** — at least `lowSlowScanDropRatio` of the
+    source's tracked attempts within the window must have been refused.
+    Paced scan traffic against a target mostly gets dropped/rejected;
+    legitimate low-rate access to real services mostly gets accepted.
+  - **A minimum observation floor** — a source must have been under
+    observation for at least `lowSlowScanMinObservation` before it's
+    eligible to fire at all, so a source only seen briefly can't produce
+    a flag no matter how its first few readings look.
+
+  Confidence is the *minimum* of four sub-scores (port overshoot, host
+  overshoot, drop-ratio strength, baseline deviation) — the
+  weakest-clearing signal bounds the overall score, consistent with
+  requiring several independent signals rather than trusting the
+  strongest one alone.
 
 **Confidence score.** Every detector except global-volume-spike and
 rule-hit-rate-spike attaches a `confidence` percentage (0-100) to each
@@ -280,6 +319,13 @@ you're looking at:
   source, only how large it is relative to the configured line. Treat a
   95% overshoot-based flag as "well past the configured threshold," not
   "95% likely to be malicious."
+- **Composite (low-and-slow port scan only).** The minimum of four
+  sub-scores — port overshoot, host overshoot, drop-ratio strength, and
+  baseline deviation (the last computed the same way as activity-spike's
+  statistical score). Reflects "how convincingly did the *weakest*
+  required signal clear," not an average or the strongest signal alone —
+  deliberately conservative, since this detector already requires
+  several independent things to be true before it fires at all.
 - **Not yet scored (global volume spike, rule hit-rate spike).** Both
   already track a slow-moving EMA baseline internally (same technique
   activity-spike uses), just without a confidence score attached yet —
@@ -291,7 +337,8 @@ score at all, never an implied 100%.
 **Reputation-informed floor (optional, requires an AbuseIPDB key).**
 When `reputation.abuseIPDBKey` is configured (see
 [IP reputation lookup](#ip-reputation-lookup-optional)), `critical_port`,
-`port_scan`, `activity_spike`, and `repeated_drops` additionally get an
+`port_scan`, `activity_spike`, `repeated_drops`, and `low_slow_scan`
+additionally get an
 async, best-effort AbuseIPDB lookup against the flag's source IP the
 first time it's raised (not on every re-fire). If the IP has a known
 abuse score, that score becomes a *floor* on the flag's confidence —
@@ -320,12 +367,12 @@ point is what the target looked like when it fired, not what it looks
 like now. It's stored regardless of whether AbuseIPDB is configured
 (the keyless Shodan source alone is still worth capturing) -- only the
 confidence floor specifically needs an AbuseIPDB score. Only ever set
-for the four single-IP detectors above; the sampled-group detectors
+for the five single-IP detectors above; the sampled-group detectors
 have no single coherent snapshot to attach. Expandable in the UI
 alongside the target's country (from the same GeoIP lookup already
 applied to the underlying event) and, for `port_scan`,
-`distributed_brute_force`, `outbound_anomaly`, and `internal_recon`,
-the specific ports/hosts actually involved -- and for any detector, NAT
+`distributed_brute_force`, `outbound_anomaly`, `internal_recon`, and
+`low_slow_scan`, the specific ports/hosts actually involved -- and for any detector, NAT
 translation info when the triggering event had one. `GET /api/flags`
 exposes all of this as `reputation`, `country`, and `evidence` fields.
 
@@ -392,6 +439,7 @@ consults the axes relevant to how it's keyed:
 | `rule_spike` | -- | -- | which rule labels this detector reacts to |
 | `repeated_drops` | source IP | destination port | -- |
 | `global_spike` | -- (network-wide, not keyed by anything per-source) | -- | -- |
+| `low_slow_scan` | which source IPs are tracked at all | which distinct ports *count* toward its own breadth total | -- |
 
 `global_spike` only ever consults `enabled` -- it's a single network-wide
 aggregate, not tied to any particular host, port, or rule, so scoping it
@@ -488,6 +536,12 @@ Override individual scalar settings without a mounted file:
 | `MIKROVIEW_FLAGS_REPEATED_DROPS_WINDOW` | `flags.repeatedDropsWindow` |
 | `MIKROVIEW_FLAGS_HOST_ACTIVITY_MULTIPLIER` | `flags.hostActivityMultiplier` |
 | `MIKROVIEW_FLAGS_HOST_ACTIVITY_WARMUP_SAMPLES` | `flags.hostActivityWarmupSamples` |
+| `MIKROVIEW_FLAGS_LOW_SLOW_SCAN_WINDOW` | `flags.lowSlowScanWindow` |
+| `MIKROVIEW_FLAGS_LOW_SLOW_SCAN_PORT_THRESHOLD` | `flags.lowSlowScanPortThreshold` |
+| `MIKROVIEW_FLAGS_LOW_SLOW_SCAN_HOST_THRESHOLD` | `flags.lowSlowScanHostThreshold` |
+| `MIKROVIEW_FLAGS_LOW_SLOW_SCAN_MIN_OBSERVATION` | `flags.lowSlowScanMinObservation` |
+| `MIKROVIEW_FLAGS_LOW_SLOW_SCAN_DROP_RATIO` | `flags.lowSlowScanDropRatio` |
+| `MIKROVIEW_FLAGS_LOW_SLOW_SCAN_BASELINE_MULTIPLIER` | `flags.lowSlowScanBaselineMultiplier` |
 | `MIKROVIEW_FLAGS_DETECTOR_SETTINGS_STORE_PATH` | `flags.detectorSettingsStorePath` (see [Per-detector toggles](#per-detector-toggles-and-scope-restrictions-optional)) |
 | `MIKROVIEW_AUTH_STORE_PATH` | `auth.storePath` (see [Authentication](#authentication-optional-opt-in-by-creating-an-account)) |
 | `MIKROVIEW_AUTH_SECURE_COOKIE` | `auth.secureCookie` |

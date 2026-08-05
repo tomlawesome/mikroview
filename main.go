@@ -124,6 +124,13 @@ func main() {
 
 		HostActivityMultiplier:    cfg.Flags.HostActivityMultiplier,
 		HostActivityWarmupSamples: cfg.Flags.HostActivityWarmupSamples,
+
+		LowSlowScanWindow:             cfg.Flags.LowSlowScanWindow,
+		LowSlowScanPortThreshold:      cfg.Flags.LowSlowScanPortThreshold,
+		LowSlowScanHostThreshold:      cfg.Flags.LowSlowScanHostThreshold,
+		LowSlowScanMinObservation:     cfg.Flags.LowSlowScanMinObservation,
+		LowSlowScanDropRatio:          cfg.Flags.LowSlowScanDropRatio,
+		LowSlowScanBaselineMultiplier: cfg.Flags.LowSlowScanBaselineMultiplier,
 	}
 	seed := detect.DefaultSettingsMap()
 	for name, ds := range cfg.Flags.Detectors {

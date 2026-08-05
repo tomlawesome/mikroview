@@ -30,15 +30,17 @@ const (
 	DetectorInternalRecon         DetectorName = "internal_recon"
 	DetectorRuleSpike             DetectorName = "rule_spike"
 	DetectorRepeatedDrops         DetectorName = "repeated_drops"
+	DetectorLowSlowScan           DetectorName = "low_slow_scan"
 )
 
-// AllDetectorNames is the canonical, stable-ordered list of all 9 --
+// AllDetectorNames is the canonical, stable-ordered list of all 10 --
 // used to seed defaults and so the API always reports every detector
 // even if only some have been customized.
 var AllDetectorNames = []DetectorName{
 	DetectorPortScan, DetectorActivitySpike, DetectorCriticalPort,
 	DetectorGlobalSpike, DetectorDistributedBruteForce, DetectorOutboundAnomaly,
 	DetectorInternalRecon, DetectorRuleSpike, DetectorRepeatedDrops,
+	DetectorLowSlowScan,
 }
 
 // IsValidDetectorName reports whether n is one of AllDetectorNames.
@@ -104,6 +106,10 @@ func isValidListMode(m ListMode) bool {
 //   - RepeatedDrops: Hosts/HostsMode restricts source IP, Ports/PortsMode
 //     restricts destination port -- both meaningful, AND'd.
 //     Classification, Rules ignored.
+//   - LowSlowScan: same as PortScan -- Hosts/HostsMode + Classification
+//     restrict which SOURCE IPs are tracked; Ports/PortsMode restricts
+//     which distinct destination ports count toward its own breadth
+//     threshold. Rules ignored.
 //   - GlobalSpike: every Scope field ignored; only Settings.Enabled
 //     applies (network-wide aggregate, not keyed by anything
 //     per-source). Scope is still present for structural uniformity
