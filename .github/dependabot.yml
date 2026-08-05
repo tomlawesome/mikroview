@@ -1,0 +1,33 @@
+version: 2
+updates:
+  # Go module dependencies (go.mod/go.sum).
+  - package-ecosystem: gomod
+    directory: /
+    schedule:
+      interval: weekly
+    target-branch: dev
+    open-pull-requests-limit: 10
+
+  # Frontend dependencies (frontend/package.json).
+  - package-ecosystem: npm
+    directory: /frontend
+    schedule:
+      interval: weekly
+    target-branch: dev
+    open-pull-requests-limit: 10
+
+  # The Go/Node base images pinned in Dockerfile -- exactly the kind of
+  # drift that left this project on an unsupported Go patch version with
+  # unpatched stdlib CVEs until this pass caught it manually.
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: weekly
+    target-branch: dev
+
+  # Action versions pinned in .github/workflows/*.yml.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    target-branch: dev
