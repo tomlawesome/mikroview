@@ -14,8 +14,8 @@ class AuthState {
   state = $state<AuthViewState>('loading')
   username = $state('')
   role = $state<'admin' | 'user' | ''>('')
-  // Drives AddUserOverlay -- mirrors flagsState.open's pattern (a modal
-  // toggled from Toolbar, mounted at the App root).
+  // Drives AddUserOverlay -- a modal toggled from Toolbar, mounted at the
+  // App root.
   showAddUser = $state(false)
   // Whether the backend has OIDC/SSO configured at all -- gates
   // rendering the "Sign in with SSO" link (see AuthLogin.svelte/
