@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/tomlawesome/mikroview/internal/auth"
 	"github.com/tomlawesome/mikroview/internal/device"
 	"github.com/tomlawesome/mikroview/internal/flags"
 	"github.com/tomlawesome/mikroview/internal/hub"
@@ -20,10 +21,22 @@ type Server struct {
 	Reputation *reputation.Client
 	Flags      *flags.Store
 	StartTime  time.Time
+
+	// Auth/Sessions/LoginLimiter/SecureCookie: see auth.go. Auth is
+	// always non-nil (internal/auth.Open("") returns a usable, empty,
+	// unpersisted store) -- mikroview stays fully open as long as it has
+	// zero users, exactly like every other request path today.
+	Auth         *auth.Store
+	Sessions     *auth.SessionStore
+	LoginLimiter *auth.LoginLimiter
+	SecureCookie bool
 }
 
 // Routes builds the /api/* handler. Static frontend asset serving is
-// mounted separately once the embedded build exists.
+// mounted separately once the embedded build exists. requireAuth wraps
+// every route except the ones that must work before a session exists
+// (healthz, and the specific auth endpoints that are unauthenticated by
+// nature -- see auth.go's exemptPaths).
 func (s *Server) Routes() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/healthz", s.handleHealthz)
@@ -34,5 +47,12 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("GET /api/lookup/ip/{ip}", s.handleIPLookup)
 	mux.HandleFunc("GET /api/flags", s.handleFlagsList)
 	mux.HandleFunc("POST /api/flags/{id}/clear", s.handleFlagsClear)
-	return mux
+
+	mux.HandleFunc("GET /api/auth/session", s.handleAuthSession)
+	mux.HandleFunc("POST /api/auth/register", s.handleAuthRegister)
+	mux.HandleFunc("POST /api/auth/login", s.handleAuthLogin)
+	mux.HandleFunc("POST /api/auth/logout", s.handleAuthLogout)
+	mux.HandleFunc("POST /api/auth/users", s.handleAuthCreateUser)
+
+	return s.requireAuth(mux)
 }

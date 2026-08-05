@@ -60,6 +60,16 @@
   async function clear(id: string) {
     await flagsState.clear(id)
   }
+
+  // Graded rather than a single color for every value -- a 12% confidence
+  // score and a 95% one shouldn't read as equally worth attention at a
+  // glance, mirroring the severity coloring ActionBadge already uses
+  // elsewhere.
+  function confidenceTier(c: number): 'low' | 'medium' | 'high' {
+    if (c >= 70) return 'high'
+    if (c >= 40) return 'medium'
+    return 'low'
+  }
 </script>
 
 <div class="flags scrollbar">
@@ -73,6 +83,14 @@
           <li class="card">
             <div class="card-main">
               <span class="type">{TYPE_LABELS[f.type]}</span>
+              {#if f.confidence != null}
+                <span
+                  class="confidence confidence-{confidenceTier(f.confidence)}"
+                  title="How confident this specific flag is, based on how much history backs it and how far it deviates from normal -- not how confident mikroview is overall"
+                >
+                  {f.confidence}% confidence
+                </span>
+              {/if}
               {#if isFilterable(f)}
                 <button class="target" onclick={() => filterToTarget(f)} title="Filter the live view to {f.target}">
                   {f.target}
@@ -179,6 +197,28 @@
     background: var(--accent-bg);
     border-radius: 4px;
     padding: 2px 7px;
+  }
+
+  .confidence {
+    font-size: 11px;
+    font-weight: 600;
+    border-radius: 4px;
+    padding: 2px 7px;
+  }
+
+  .confidence-low {
+    color: var(--fg-muted);
+    background: var(--bg-hover);
+  }
+
+  .confidence-medium {
+    color: var(--drop);
+    background: var(--drop-bg);
+  }
+
+  .confidence-high {
+    color: var(--reject);
+    background: var(--reject-bg);
   }
 
   .target {

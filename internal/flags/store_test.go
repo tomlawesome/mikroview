@@ -69,6 +69,26 @@ func TestAddCreatesNewFlag(t *testing.T) {
 	}
 }
 
+func TestAddLeavesConfidenceNil(t *testing.T) {
+	s, _ := Open("")
+	s.Add(TypePortScan, "1.2.3.4", "20 ports in 60s", time.Now())
+
+	f := s.List()[0]
+	if f.Confidence != nil {
+		t.Errorf("expected a plain Add to leave Confidence nil (not scored), got %v", *f.Confidence)
+	}
+}
+
+func TestAddWithConfidenceSetsConfidence(t *testing.T) {
+	s, _ := Open("")
+	s.AddWithConfidence(TypeActivitySpike, "1.2.3.4", "5x baseline", 73, time.Now())
+
+	f := s.List()[0]
+	if f.Confidence == nil || *f.Confidence != 73 {
+		t.Errorf("expected Confidence=73, got %+v", f.Confidence)
+	}
+}
+
 func TestAddUpdatesExistingActiveFlagInPlace(t *testing.T) {
 	s, _ := Open("")
 	t0 := time.Now()
@@ -166,7 +186,7 @@ func TestPersistenceRoundTrip(t *testing.T) {
 	}
 	now := time.Now().UTC().Truncate(time.Millisecond)
 	s1.Add(TypeCriticalPort, "5.6.7.8", "6 attempts on port 22 in 5m", now)
-	s1.Add(TypeGlobalSpike, "global", "eps 40 vs baseline 8", now)
+	s1.AddWithConfidence(TypeActivitySpike, "9.9.9.9", "5x baseline", 82, now)
 	id := s1.List()[0].ID
 	s1.Clear(id, now.Add(time.Minute))
 
@@ -177,6 +197,12 @@ func TestPersistenceRoundTrip(t *testing.T) {
 	list := s2.List()
 	if len(list) != 2 {
 		t.Fatalf("expected 2 persisted flags after reopening, got %d: %+v", len(list), list)
+	}
+
+	for _, f := range list {
+		if f.Target == "9.9.9.9" && (f.Confidence == nil || *f.Confidence != 82) {
+			t.Errorf("expected Confidence=82 to survive persistence, got %+v", f.Confidence)
+		}
 	}
 
 	var sawCleared, sawActive bool
