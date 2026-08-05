@@ -10,9 +10,10 @@
   import ConnectionBanner from './components/ConnectionBanner.svelte'
   import FilterBar from './components/FilterBar.svelte'
   import LiveTable from './components/LiveTable.svelte'
-  import DashboardOverlay from './components/DashboardOverlay.svelte'
+  import Dashboard from './components/Dashboard.svelte'
   import FlagsOverlay from './components/FlagsOverlay.svelte'
   import IpLookupPopover from './components/IpLookupPopover.svelte'
+  import PortLookupPopover from './components/PortLookupPopover.svelte'
 
   const STATS_REFRESH_MS = 5000
   const FILTER_DEBOUNCE_MS = 300
@@ -90,12 +91,16 @@
 <Toolbar />
 <ConnectionBanner />
 <main>
-  <FilterBar />
-  <LiveTable />
+  {#if appState.view === 'live'}
+    <FilterBar />
+    <LiveTable />
+  {:else}
+    <Dashboard />
+  {/if}
 </main>
-<DashboardOverlay />
 <FlagsOverlay />
 <IpLookupPopover />
+<PortLookupPopover />
 
 <style>
   main {

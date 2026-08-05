@@ -82,6 +82,27 @@ Unconfigured, the feature still works with Shodan-only results; private/
 loopback/link-local addresses are rejected server-side regardless of
 configuration.
 
+## Port lookup
+
+Clicking the "i" affordance next to a source/destination port shows what
+that port is commonly used for (`frontend/src/lib/commonPorts.ts`) --
+standard/well-known services, common databases, common self-hosted apps,
+remote access, VPN, messaging, and a few ports historically associated
+with malware/backdoors. Unlike the IP lookup above, this is pure local
+static data with no network call: only shown for ports with a known
+entry, and there's no way to configure or disable it.
+
+It's a curated reference, not an exhaustive IANA registry dump -- if a
+port you care about is missing, add an entry to `commonPorts.ts`.
+
+**`tools/docker-ports/list-exposed-ports.sh`** is a separate, standalone
+companion script (not part of the running app) for self-hosters: run it
+directly on a Docker host to list every running container's published
+ports, flagging which are bound to a public interface (`0.0.0.0`/`::`)
+versus loopback-only (`127.0.0.1`/`::1`) -- useful for cross-referencing
+"what does mikroview say this port usually is" against "what's actually
+listening on it, on this host."
+
 ## Behavioral flags (optional, on by default)
 
 mikroview watches the ingested event stream for a small set of patterns
@@ -96,6 +117,15 @@ is actually good at spotting.
 Detection itself is always on and needs no configuration; every
 threshold below has a sensible default and is only worth changing for an
 unusually quiet or unusually busy network.
+
+The port-scan, activity-spike, critical-port, distributed-brute-force,
+internal-recon, and outbound-anomaly detectors only count events whose
+RouterOS-reported connection state is `new` (or absent, for setups that
+don't log connection state at all) -- if your ruleset logs both
+directions of an established connection on the same rule, a busy host's
+ordinary return traffic would otherwise look identical to new connection
+attempts and trigger false positives purely from being legitimately
+busy.
 
 ```yaml
 flags:

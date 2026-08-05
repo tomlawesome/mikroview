@@ -4,6 +4,8 @@
   import { appState } from '../lib/state.svelte'
   import ActionBadge from './ActionBadge.svelte'
   import IpInvestigateButton from './IpInvestigateButton.svelte'
+  import PortInvestigateButton from './PortInvestigateButton.svelte'
+  import { lookupPort } from '../lib/commonPorts'
 
   let { event, deviceName }: { event: FirewallEvent; deviceName: string } = $props()
 
@@ -64,13 +66,18 @@
   {/if}
 
   {#if event.srcPort}
-    <button
-      class="cell port cell-btn"
-      title="Filter to port: {event.srcPort}"
-      onclick={() => appState.setFilter('port', String(event.srcPort))}
-    >
-      {event.srcPort}
-    </button>
+    <span class="cell port">
+      <button
+        class="cell-btn port-btn"
+        title="Filter to port: {event.srcPort}"
+        onclick={() => appState.setFilter('port', String(event.srcPort))}
+      >
+        {event.srcPort}
+      </button>
+      {#if lookupPort(event.srcPort)}
+        <PortInvestigateButton port={event.srcPort} />
+      {/if}
+    </span>
   {:else}
     <span class="cell port">—</span>
   {/if}
@@ -93,13 +100,18 @@
   {/if}
 
   {#if event.dstPort}
-    <button
-      class="cell port cell-btn"
-      title="Filter to port: {event.dstPort}"
-      onclick={() => appState.setFilter('port', String(event.dstPort))}
-    >
-      {event.dstPort}
-    </button>
+    <span class="cell port">
+      <button
+        class="cell-btn port-btn"
+        title="Filter to port: {event.dstPort}"
+        onclick={() => appState.setFilter('port', String(event.dstPort))}
+      >
+        {event.dstPort}
+      </button>
+      {#if lookupPort(event.dstPort)}
+        <PortInvestigateButton port={event.dstPort} />
+      {/if}
+    </span>
   {:else}
     <span class="cell port">—</span>
   {/if}
@@ -311,7 +323,19 @@
     white-space: nowrap;
   }
 
-  .port {
+  /* Same side-by-side shape as .cell.addr above (filter button + optional
+     investigate trigger), but right-aligned since port numbers are
+     numeric. */
+  .cell.port {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 4px;
+  }
+
+  .port-btn {
+    flex: none;
+    width: auto;
     text-align: right;
   }
 </style>
