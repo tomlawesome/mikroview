@@ -50,15 +50,29 @@ Mikroview's own server output (not event data -- see `store.retention`
 above) is leveled and colorized, one line per entry:
 
 ```
-18:43:44 [INFO]  auth        │ no decision made yet -- showing the first-run choice screen
-18:43:45 [WARN]  flags       │ permission denied opening flags.json -- continuing in-memory-only
-18:43:46 [ERROR] syslog-udp  │ listen udp :1514: bind: address already in use
+18:43:44 INFO  auth        │ no decision made yet -- showing the first-run choice screen
+18:43:45 WARN  flags       │ permission denied opening flags.json -- continuing in-memory-only
+18:43:46 ERROR syslog-udp  │ listen udp :1514: bind: address already in use
 ```
 
 ```yaml
 log:
   level: info
 ```
+
+**On boot**, before the leveled log lines start, mikroview prints its
+ASCII wordmark once (plain text, not a log line -- always shown,
+regardless of `level` or whether stdout is a terminal), followed by a
+`version` line identifying which build is running -- the short commit
+SHA it was built from (see `.github/workflows/docker.yml`), the
+practical stand-in for a registry digest since a binary can't know its
+own digest at build time. If the persisted version marker
+(`/var/lib/mikroview/version`) doesn't match the running build, that
+line reads `upgraded from <old> to <new>` instead -- confirming a
+`docker compose pull`/image update actually took effect, versus a
+routine restart on the same build. This boot sequence doesn't apply to
+the CLI recovery commands (`-healthcheck`, `-list-users`, etc.) --
+only the real server-start path.
 
 - **`level`** — one of `debug`/`info`/`warn`/`error` (case-insensitive).
   Defaults to `info`. Anything unrecognized (a typo, an empty value)
