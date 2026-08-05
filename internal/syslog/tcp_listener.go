@@ -5,6 +5,7 @@ import (
 	"context"
 	"log"
 	"net"
+	"sync/atomic"
 	"time"
 )
 
@@ -19,15 +20,29 @@ import (
 // rejection path without opening 256+ real sockets.
 var maxTCPConnections = 256
 
-// tcpIdleTimeout closes a connection that has gone this long without a
+// tcpIdleTimeoutNS closes a connection that has gone this long without a
 // complete line, so a connection that never sends anything (or stalls
 // mid-stream) doesn't hold its slot in maxTCPConnections forever. It's an
 // idle timeout, not a connection lifetime cap -- reset after every line,
 // so an actively-streaming router is never disconnected for staying
 // connected too long.
 //
-// A var rather than a const so tests can shrink it below 10 real minutes.
-var tcpIdleTimeout = 10 * time.Minute
+// Nanoseconds in an atomic.Int64 rather than a plain time.Duration var:
+// tests shrink this below 10 real minutes while a connection's
+// handling goroutine (handleTCPConn, below) may still be reading it, and
+// there's no Go-level happens-before edge between "the test observed the
+// connection close over the socket" and "the goroutine that closed it has
+// truly finished" -- only a proven physical ordering, which the race
+// detector doesn't trust. Atomic access sidesteps needing that proof.
+var tcpIdleTimeoutNS atomic.Int64
+
+func init() {
+	tcpIdleTimeoutNS.Store(int64(10 * time.Minute))
+}
+
+func tcpIdleTimeout() time.Duration {
+	return time.Duration(tcpIdleTimeoutNS.Load())
+}
 
 // ListenTCP binds addr and serves it until ctx is done.
 func ListenTCP(ctx context.Context, addr string, out chan<- RawMessage) error {
@@ -105,9 +120,9 @@ func handleTCPConn(ctx context.Context, conn net.Conn, out chan<- RawMessage) {
 
 	scanner := bufio.NewScanner(conn)
 	scanner.Buffer(make([]byte, 0, 16*1024), 64*1024)
-	conn.SetReadDeadline(time.Now().Add(tcpIdleTimeout))
+	conn.SetReadDeadline(time.Now().Add(tcpIdleTimeout()))
 	for scanner.Scan() {
-		conn.SetReadDeadline(time.Now().Add(tcpIdleTimeout))
+		conn.SetReadDeadline(time.Now().Add(tcpIdleTimeout()))
 		line := scanner.Bytes()
 		if len(line) == 0 {
 			continue
