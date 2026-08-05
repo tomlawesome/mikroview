@@ -18,6 +18,12 @@ function stamp(events: FirewallEvent[]): ClientEvent[] {
 
 export type ConnState = 'connecting' | 'open' | 'closed'
 
+// 'live' is the scrolling event table + filter bar; 'metrics' is the
+// dashboard (see Dashboard.svelte). A real (if minimal) view switch --
+// only one is ever mounted at a time -- rather than a modal layered over
+// the live table, which used to leave LiveTable running underneath.
+export type View = 'live' | 'metrics'
+
 // Central reactive state for the live view. The WebSocket tail pushes
 // every new event unfiltered into `events`; `filteredEvents` re-filters
 // that buffer client-side on every render, which is what makes toggling a
@@ -31,7 +37,7 @@ export type ConnState = 'connecting' | 'open' | 'closed'
 // `events` with that server-filtered baseline, so the two layers
 // together cover both "instant" and "actually complete" filtering.
 class AppState {
-  dashboardOpen = $state(false)
+  view = $state<View>('live')
   events = $state<ClientEvent[]>([])
   filters = $state<Filters>(emptyFilters())
   devices = $state<Device[]>([])
@@ -49,12 +55,19 @@ class AppState {
 
   private pendingBuffer: ClientEvent[] = []
 
-  filteredEvents = $derived.by(() => {
+  filteredEvents = $derived.by(() => this.filteredBy(this.filters))
+
+  // Applies the same age-cutoff-then-filter pipeline as filteredEvents,
+  // but against an arbitrary Filters object rather than appState.filters --
+  // what lets a custom top-talkers widget (lib/topTalkers.svelte.ts) track
+  // its own independent criteria regardless of whatever filter is
+  // currently active in the live view's FilterBar.
+  filteredBy(filters: Filters): FirewallEvent[] {
     const cutoff =
       retentionState.maxAgeSeconds === null ? null : this.now - retentionState.maxAgeSeconds * 1000
     const events = cutoff === null ? this.events : this.events.filter((e) => e.receivedAt >= cutoff)
-    return applyFilters(events, this.filters)
-  })
+    return applyFilters(events, filters)
+  }
 
   // ruleRegex is excluded here: it's a modifier on `rule`, not a filter of
   // its own, so toggling it on with an empty rule shouldn't count as an

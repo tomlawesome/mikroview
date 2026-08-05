@@ -25,7 +25,13 @@ type Event struct {
 
 	Action    Action `json:"action"`
 	RuleLabel string `json:"ruleLabel"`
-	Chain     string `json:"chain"`
+	// RuleName is a user-configured friendly name for RuleLabel (see
+	// internal/naming, internal/config's RuleNames) -- empty if none is
+	// configured. RuleLabel itself is always the raw value RouterOS
+	// reported (e.g. "r13"); filtering/grouping stays keyed on that, this
+	// is display-only.
+	RuleName string `json:"ruleName,omitempty"`
+	Chain    string `json:"chain"`
 
 	InInterface  string `json:"inInterface,omitempty"`
 	OutInterface string `json:"outInterface,omitempty"`
@@ -37,6 +43,13 @@ type Event struct {
 	SrcPort int    `json:"srcPort,omitempty"`
 	DstIP   string `json:"dstIp,omitempty"`
 	DstPort int    `json:"dstPort,omitempty"`
+
+	// SrcHostName/DstHostName are user-configured friendly names for
+	// SrcIP/DstIP (see internal/naming, internal/config's HostNames) --
+	// empty if none is configured. Same display-only relationship to
+	// SrcIP/DstIP that RuleName has to RuleLabel.
+	SrcHostName string `json:"srcHostName,omitempty"`
+	DstHostName string `json:"dstHostName,omitempty"`
 
 	// SrcCountry/DstCountry are ISO 3166-1 alpha-2 codes from an optional
 	// GeoIP lookup (see internal/geoip) -- empty whenever GeoIP isn't

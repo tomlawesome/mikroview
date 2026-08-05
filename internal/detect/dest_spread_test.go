@@ -12,6 +12,32 @@ func lanEvt(srcIP, dstIP string, at time.Time) store.Event {
 	return store.Event{SrcIP: srcIP, DstIP: dstIP, DstPort: 443, ReceivedAt: at}
 }
 
+func lanEvtState(srcIP, dstIP, connState string, at time.Time) store.Event {
+	e := lanEvt(srcIP, dstIP, at)
+	e.ConnState = connState
+	return e
+}
+
+func TestInternalReconIgnoresEstablishedTraffic(t *testing.T) {
+	// The database-server false positive reported in mikroview#35/#36:
+	// a busy server's established-connection return traffic to many
+	// distinct clients must not look like network recon.
+	cfg := DefaultConfig()
+	cfg.InternalReconThreshold = 3
+	cfg.OutboundAnomalyThreshold = 1000
+	cfg.PortScanThreshold = 1000
+	cfg.ActivitySpikeThreshold = 1000
+	d, fs := newTestDetector(t, cfg)
+
+	now := time.Now()
+	for i := 1; i <= 5; i++ {
+		d.Observe(lanEvtState("192.168.1.20", "192.168.1."+string(rune('0'+i)), "established", now.Add(time.Duration(i)*time.Second)))
+	}
+	if len(fs.List()) != 0 {
+		t.Fatalf("expected established-state traffic to never trip internal-recon, got %+v", fs.List())
+	}
+}
+
 func TestOutboundAnomalyFlagsManyDistinctExternalDestinations(t *testing.T) {
 	cfg := DefaultConfig()
 	cfg.OutboundAnomalyThreshold = 5
