@@ -8,6 +8,10 @@ export interface FirewallEvent {
   sourceIp: string
   action: Action
   ruleLabel: string
+  // ruleName is a user-configured friendly display name for ruleLabel
+  // (see docs/configuration.md's "Friendly names") -- undefined if none
+  // is configured. ruleLabel stays the raw value for filtering/grouping.
+  ruleName?: string
   chain: string
   inInterface?: string
   outInterface?: string
@@ -18,6 +22,10 @@ export interface FirewallEvent {
   srcPort?: number
   dstIp?: string
   dstPort?: number
+  // srcHostName/dstHostName are the same friendly-name relationship as
+  // ruleName, but for srcIp/dstIp.
+  srcHostName?: string
+  dstHostName?: string
   natIp?: string
   natPort?: number
   natRaw?: string

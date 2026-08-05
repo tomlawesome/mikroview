@@ -17,6 +17,7 @@ import (
 	"github.com/tomlawesome/mikroview/internal/flags"
 	"github.com/tomlawesome/mikroview/internal/geoip"
 	"github.com/tomlawesome/mikroview/internal/hub"
+	"github.com/tomlawesome/mikroview/internal/naming"
 	"github.com/tomlawesome/mikroview/internal/reputation"
 	"github.com/tomlawesome/mikroview/internal/routeros"
 	"github.com/tomlawesome/mikroview/internal/store"
@@ -109,7 +110,9 @@ func main() {
 		}
 	}()
 
-	go ingest(ctx, raw, st, devices, h, geo, detector)
+	names := naming.Resolver{Rules: cfg.RuleNames, Hosts: cfg.HostNames}
+
+	go ingest(ctx, raw, st, devices, h, geo, detector, names)
 
 	go func() {
 		ticker := time.NewTicker(globalSpikeCheckInterval)
@@ -197,7 +200,7 @@ func runHealthcheck() int {
 // store, and hands the stored (ID-assigned) event to the hub for
 // broadcast. Keeping this on one goroutine means Store and the device
 // Registry never need to arbitrate concurrent writers.
-func ingest(ctx context.Context, raw <-chan syslog.RawMessage, st *store.Store, devices *device.Registry, h *hub.Hub, geo *geoip.Lookup, detector *detect.Detector) {
+func ingest(ctx context.Context, raw <-chan syslog.RawMessage, st *store.Store, devices *device.Registry, h *hub.Hub, geo *geoip.Lookup, detector *detect.Detector, names naming.Resolver) {
 	for {
 		select {
 		case <-ctx.Done():
@@ -215,6 +218,7 @@ func ingest(ctx context.Context, raw <-chan syslog.RawMessage, st *store.Store, 
 				SourceIP:     rm.SourceIP,
 				Action:       parsed.Action,
 				RuleLabel:    parsed.RuleLabel,
+				RuleName:     names.Rule(parsed.RuleLabel),
 				Chain:        parsed.Chain,
 				InInterface:  parsed.InInterface,
 				OutInterface: parsed.OutInterface,
@@ -225,6 +229,8 @@ func ingest(ctx context.Context, raw <-chan syslog.RawMessage, st *store.Store, 
 				SrcPort:      parsed.SrcPort,
 				DstIP:        parsed.DstIP,
 				DstPort:      parsed.DstPort,
+				SrcHostName:  names.Host(parsed.SrcIP),
+				DstHostName:  names.Host(parsed.DstIP),
 				SrcCountry:   srcCountry,
 				DstCountry:   dstCountry,
 				NatIP:        parsed.NatIP,
