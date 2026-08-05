@@ -84,32 +84,24 @@ services:
       # your own MaxMind GeoLite2 database; uncomment both this and the
       # env var below once you have one.
       # - ./GeoLite2-Country.mmdb:/etc/mikroview/GeoLite2-Country.mmdb:ro
-      # Optional -- persists behavioral flags (port scans, activity
-      # spikes, etc; see docs/configuration.md's "Behavioral flags"
-      # section), per-detector on/off+scope toggles made via the live
-      # admin UI (see "Per-detector toggles"), and/or local accounts
-      # (see "Authentication") across restarts. Uncomment this and
-      # whichever env var(s) below you need -- all three files live in
-      # the same directory. Flags and detector settings are fully
-      # optional (left unconfigured, they still work, just reset on
-      # restart); accounts are not the same way -- if you create one,
-      # this volume and MIKROVIEW_AUTH_STORE_PATH must both be set
-      # first, or account creation is refused rather than creating one
-      # that would vanish on restart. The container runs as uid 65532
-      # (distroless nonroot), which won't own a freshly created host
-      # directory -- `mkdir -p flags-data && chmod 777 flags-data` is
-      # the simplest fix if you hit a permission error at startup.
-      # - ./flags-data:/var/lib/mikroview
-      # Optional -- persists mikroview's self-generated local CA +
-      # certificate (see docs/configuration.md's "TLS" section) across
-      # restarts, so the browser/reverse-proxy trust step only happens
-      # once instead of every restart. Not needed at all if you're
-      # supplying your own cert via MIKROVIEW_TLS_CERT_FILE/KEY_FILE, or
-      # don't mind re-trusting a fresh CA each restart.
-      # - ./tls-data:/var/lib/mikroview/tls
+      # Behavioral flags, detector on/off+scope toggles, local accounts,
+      # and the self-generated TLS certificate all persist to
+      # /var/lib/mikroview by default (no config needed) -- the
+      # container creates and owns that directory itself, so all of it
+      # already survives a simple `docker compose restart`. Uncomment
+      # this bind mount only if you want it to also survive
+      # `docker compose down`/image updates/container recreation, not
+      # just restarts. The container runs as uid 65532 (distroless
+      # nonroot), which won't own a freshly created host directory --
+      # `mkdir -p data && chmod 777 data` is the simplest fix if you hit
+      # a permission error at startup (this replaces whatever's already
+      # baked into the image at this path, same as any bind mount).
+      # - ./data:/var/lib/mikroview
     environment:
       - MIKROVIEW_CONFIG=/etc/mikroview/config.yaml
       # - MIKROVIEW_GEOIP_DB_PATH=/etc/mikroview/GeoLite2-Country.mmdb
+      # Only needed to move a store somewhere other than the default
+      # /var/lib/mikroview/*.json -- see docs/configuration.md.
       # - MIKROVIEW_FLAGS_STORE_PATH=/var/lib/mikroview/flags.json
       # - MIKROVIEW_FLAGS_DETECTOR_SETTINGS_STORE_PATH=/var/lib/mikroview/detector-settings.json
       # - MIKROVIEW_AUTH_STORE_PATH=/var/lib/mikroview/users.json
@@ -159,10 +151,13 @@ Create `config.yaml` next to it first (see [`deploy/config.example.yaml`](deploy
   server/client filtering split.
 - **UI**: Svelte, no component framework, dark professional theme,
   ~50KB JS bundle.
-- **Authentication**: fully open until you create the first local
-  account, at which point it becomes required for everything except the
-  health check — Argon2id-hashed passwords, opaque server-side sessions,
-  self-registration for the first (super-admin) account only. See
+- **Authentication**: a one-time choice on first load — create the admin
+  account, or explicitly skip auth for this deployment. Creating an
+  account makes it required for everything except the health check
+  (Argon2id-hashed passwords, opaque server-side sessions,
+  self-registration for the first/super-admin account only); skipping
+  leaves mikroview fully open, and reversing that later is CLI-only by
+  design (`mikroview -enable-auth-setup`). See
   [docs/configuration.md](docs/configuration.md) and
   [SECURITY.md](SECURITY.md) for the threat model and setup.
 - **Deployment**: multi-stage Docker build, final image based on

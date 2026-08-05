@@ -34,7 +34,7 @@ func putJSON(t *testing.T, client *http.Client, url string, body any) *http.Resp
 }
 
 func TestHandleDetectorSettingsListDefaultsAllEnabled(t *testing.T) {
-	s, _ := newTestServer()
+	s, _ := newTestServer(t)
 	ts := httptest.NewServer(s.Routes())
 	defer ts.Close()
 
@@ -64,7 +64,7 @@ func TestHandleDetectorSettingsListDefaultsAllEnabled(t *testing.T) {
 }
 
 func TestHandleDetectorSettingsUpdateThenListReflectsIt(t *testing.T) {
-	s, _ := newTestServer()
+	s, _ := newTestServer(t)
 	ts := httptest.NewServer(s.Routes())
 	defer ts.Close()
 
@@ -91,7 +91,7 @@ func TestHandleDetectorSettingsUpdateThenListReflectsIt(t *testing.T) {
 }
 
 func TestHandleDetectorSettingsUpdateUnknownName(t *testing.T) {
-	s, _ := newTestServer()
+	s, _ := newTestServer(t)
 	ts := httptest.NewServer(s.Routes())
 	defer ts.Close()
 
@@ -103,7 +103,7 @@ func TestHandleDetectorSettingsUpdateUnknownName(t *testing.T) {
 }
 
 func TestHandleDetectorSettingsUpdateInvalidMode(t *testing.T) {
-	s, _ := newTestServer()
+	s, _ := newTestServer(t)
 	ts := httptest.NewServer(s.Routes())
 	defer ts.Close()
 

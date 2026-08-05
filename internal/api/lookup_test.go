@@ -11,7 +11,7 @@ import (
 // depend on internet access being available in the test environment.
 // The success path (real Shodan/AbuseIPDB responses) isn't covered here.
 func TestHandleIPLookupRejectsNonPublicIP(t *testing.T) {
-	s, _ := newTestServer()
+	s, _ := newTestServer(t)
 	ts := httptest.NewServer(s.Routes())
 	defer ts.Close()
 

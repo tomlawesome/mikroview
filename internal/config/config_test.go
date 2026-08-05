@@ -251,6 +251,36 @@ func TestTLSDefaultsToEnabledWithSecureCookie(t *testing.T) {
 	}
 }
 
+// TestDefaultStoragePathsUnderVarLibMikroview confirms every persistence
+// path is writable out of the box (see the Dockerfile creating/owning
+// /var/lib/mikroview) rather than silently no-op-ing until an operator
+// configures a storePath -- the auth.storePath case in particular used
+// to mean the web setup form's only path (create an account) failed at
+// submission with ErrNotPersisted.
+func TestDefaultStoragePathsUnderVarLibMikroview(t *testing.T) {
+	cfg, err := Load("", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cases := map[string]string{
+		"Flags.StorePath":                 cfg.Flags.StorePath,
+		"Flags.DetectorSettingsStorePath": cfg.Flags.DetectorSettingsStorePath,
+		"Auth.StorePath":                  cfg.Auth.StorePath,
+		"TLS.StorePath":                   cfg.TLS.StorePath,
+	}
+	want := map[string]string{
+		"Flags.StorePath":                 "/var/lib/mikroview/flags.json",
+		"Flags.DetectorSettingsStorePath": "/var/lib/mikroview/detector-settings.json",
+		"Auth.StorePath":                  "/var/lib/mikroview/users.json",
+		"TLS.StorePath":                   "/var/lib/mikroview/tls",
+	}
+	for field, got := range cases {
+		if got != want[field] {
+			t.Errorf("%s = %q, want %q", field, got, want[field])
+		}
+	}
+}
+
 func TestTLSEnvVarsOverrideDefaults(t *testing.T) {
 	t.Setenv("MIKROVIEW_TLS_ENABLED", "false")
 	t.Setenv("MIKROVIEW_TLS_CERT_FILE", "/etc/mikroview/tls.crt")

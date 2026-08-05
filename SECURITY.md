@@ -3,9 +3,9 @@
 MikroView was originally built for one specific deployment shape: a
 single instance, on a trusted home/office LAN, with no authentication,
 over plain HTTP. Two things have since changed that: local accounts
-(mikroview stays fully open, the original behavior, until you create the
-first account, at which point authentication is required for everything
-except `/api/healthz`), and TLS being on by default -- an app serving
+(on first load, mikroview presents a one-time choice -- create the
+admin account, or explicitly skip auth for this deployment; see
+"Authentication" below), and TLS being on by default -- an app serving
 real login credentials and session cookies has no business doing so over
 cleartext, LAN or not (see "TLS" below). This document makes all of
 that explicit, since none of it is the kind of thing that should be left
@@ -13,14 +13,21 @@ implicit for anyone deciding whether/how to deploy this.
 
 ## Threat model
 
-**Before an account exists**, mikroview has no authentication and
-assumes network-level trust instead. Anyone who can reach its HTTP port
-can view all retained firewall events (including source/destination IPs,
-ports, and the "investigate this IP" reputation lookup) and, indirectly,
-everyone's router configuration as reflected in `config.yaml`'s device
-list. Anyone who can reach its syslog port can inject fabricated events —
-the syslog listeners accept any well-formed line from any source and
-never authenticate the sender as a real RouterOS device.
+**Before a decision is made** (the brief window between first load and
+completing the choice screen), mikroview restricts every endpoint except
+the handful needed to render and complete that screen -- there is no
+window where live event data is readable before someone has actually
+decided how this deployment should behave.
+
+**If auth is skipped**, mikroview has no authentication and assumes
+network-level trust instead, exactly like older versions of mikroview
+did unconditionally. Anyone who can reach its HTTP port can view all
+retained firewall events (including source/destination IPs, ports, and
+the "investigate this IP" reputation lookup) and, indirectly, everyone's
+router configuration as reflected in `config.yaml`'s device list. Anyone
+who can reach its syslog port can inject fabricated events — the syslog
+listeners accept any well-formed line from any source and never
+authenticate the sender as a real RouterOS device.
 
 This is fine on a LAN you already trust every device on. **It is not
 safe to expose mikroview's HTTP or syslog ports to the internet, to an
@@ -29,8 +36,8 @@ control** -- and this matters more than it used to: mikroview now
 accumulates real network-activity insight (behavioral flags, per-host
 baselines, friendly host/rule names) that an unauthenticated visitor
 could use to scout a network without needing to prove anything, which is
-the reason authentication exists at all. Creating an account as early as
-practical is strongly recommended for any deployment reachable by more
+the reason authentication exists at all. Creating an account rather than
+skipping is strongly recommended for any deployment reachable by more
 than you.
 
 **Once an account exists**, every request except `/api/healthz` requires
@@ -45,10 +52,20 @@ either way.
 - **Local accounts only, no SSO yet.** Username/password, Argon2id-hashed
   (`internal/auth`). OIDC/SSO is tracked separately and not required for
   this to be complete.
-- **The first account is created via the web UI**, not a CLI command --
-  whoever completes that one-time setup form becomes the admin. Don't
-  leave mikroview reachable by an untrusted network before completing
-  it: whoever gets there first claims the admin account.
+- **The first-run choice is made via the web UI**, not a CLI command --
+  whoever loads mikroview first sees a one-time screen offering "create
+  the admin account" or "continue without an account." Don't leave
+  mikroview reachable by an untrusted network before this is resolved:
+  whoever gets there first makes the choice, and if they create an
+  account, they claim the admin role.
+- **Skipping is a permanent, deliberate decision, not a default you fall
+  into.** Once skipped, mikroview stays fully open indefinitely -- there
+  is no way to re-enable auth from the web UI or any API call. Reversing
+  it requires `mikroview -enable-auth-setup` (container/host access),
+  which only re-arms the choice screen; it does not create an account by
+  itself. This is intentional: it means nobody who can merely reach the
+  running app -- as opposed to the host it runs on -- can unilaterally
+  impose or remove authentication for everyone else.
 - **Sessions are opaque, server-side, and in-memory** (not JWTs) -- easy
   to revoke, no signing-key management, but lost on a server restart
   (re-login is required; this does not affect account survival, which is
@@ -121,23 +138,23 @@ either way.
   history view, not a log archive; if you need durable logs, forward
   RouterOS's syslog output to a second, dedicated logging destination as
   well.
-- **Two deliberate exceptions: behavioral flags, and accounts.** If
-  `flags.storePath` / `MIKROVIEW_FLAGS_STORE_PATH` is configured, raised
+- **Two deliberate exceptions: behavioral flags, and accounts.** Raised
   flags (port scans, activity spikes, critical-port attempts, volume
-  spikes -- see [docs/configuration.md](docs/configuration.md)) are
-  persisted to a small JSON file, since a flag is meant to stay visible
-  until a human clears it. This file contains the IP addresses that
-  triggered a flag and a short human-readable description -- treat it
-  with the same care as `config.yaml` (see "Recommended deployment
-  hardening" below). Left unconfigured (the default), flags behave like
-  everything else: they work, they just reset on restart. **Accounts are
-  not optional the same way**: once you create one, `auth.storePath` /
-  `MIKROVIEW_AUTH_STORE_PATH` must be configured and writable, or the
-  account would vanish on restart -- mikroview refuses to create one
-  otherwise, rather than silently creating an account that either locks
-  everyone out or (worse) silently reopens once it's gone. This file
-  contains usernames and Argon2id password hashes (never plaintext
-  passwords) -- treat it with at least the same care as the flags file.
+  spikes -- see [docs/configuration.md](docs/configuration.md)) and
+  accounts (plus the create/skip decision) are both persisted to small
+  JSON files under `/var/lib/mikroview` by default (`flags.storePath` /
+  `auth.storePath`), which the container creates and owns -- no
+  configuration needed for either to survive a process restart. The
+  flags file contains the IP addresses that triggered a flag and a short
+  human-readable description; the accounts file contains usernames and
+  Argon2id password hashes (never plaintext passwords). Treat both with
+  the same care as `config.yaml` (see "Recommended deployment hardening"
+  below). Neither survives *container recreation* (as opposed to a
+  simple restart) unless you mount a volume over `/var/lib/mikroview` --
+  for accounts specifically, that means the create/skip decision itself
+  reverts to undecided on recreation without a volume, which re-shows
+  the first-run choice screen rather than silently reopening or silently
+  re-gating the deployment.
 - **No secrets reach the browser.** The optional AbuseIPDB API key
   (`reputation.abuseIPDBKey` / `MIKROVIEW_ABUSEIPDB_KEY`) is read
   server-side only and used solely to call AbuseIPDB's API from the
@@ -155,9 +172,9 @@ either way.
 
 | Listener | Auth | TLS | Notes |
 |---|---|---|---|
-| HTTP (`api.Server` + static UI) | Session cookie, once an account exists; open otherwise | On by default (self-generated or supplied) | See "TLS" above for the zero-config default and the one supported reason (`tls.enabled: false`) to disable it. `/api/healthz` always stays open. |
-| Syslog UDP/TCP | None | None | Accepts and parses any line from any source as if it were a real RouterOS device -- unaffected by whether an account exists. TLS doesn't apply here; RouterOS's syslog protocol has no TLS mode. |
-| WebSocket (`/api/ws`) | Session cookie + same-origin check, once an account exists; open otherwise | Follows the HTTP listener (`wss://` when TLS is on) | `CheckOrigin` is permissive only while no account exists — see `internal/api/ws.go`. |
+| HTTP (`api.Server` + static UI) | Session cookie once an account exists; restricted to the choice-screen endpoints while undecided; fully open once skipped | On by default (self-generated or supplied) | See "TLS" above for the zero-config default and the one supported reason (`tls.enabled: false`) to disable it. `/api/healthz` always stays open. |
+| Syslog UDP/TCP | None | None | Accepts and parses any line from any source as if it were a real RouterOS device -- unaffected by auth state. TLS doesn't apply here; RouterOS's syslog protocol has no TLS mode. |
+| WebSocket (`/api/ws`) | Session cookie + same-origin check, once an account exists; blocked entirely while undecided (not in the choice-screen exemption list); open, no origin check, once skipped | Follows the HTTP listener (`wss://` when TLS is on) | `CheckOrigin` is permissive whenever `Auth.Count() == 0` (undecided or skipped) — moot for "undecided", since `requireAuth` never lets the request reach this handler in that state. See `internal/api/ws.go`. |
 
 ## Hardening already in place
 
@@ -207,19 +224,20 @@ damage a hostile or misbehaving LAN device can do:
   reference.
 - If you need to view MikroView from outside that LAN, put it behind a
   VPN (e.g. WireGuard/Tailscale) rather than port-forwarding it onto the
-  open internet -- an account (see "Authentication" above) and TLS (see
-  "TLS" above) both being on by default meaningfully raise the bar
-  versus mikroview's original no-auth/no-TLS posture, but neither is a
-  substitute for not exposing an admin interface to the open internet at
-  all in the first place.
+  open internet -- creating an account rather than skipping (see
+  "Authentication" above), plus TLS being on by default (see "TLS"
+  above), meaningfully raise the bar versus mikroview's original
+  no-auth/no-TLS posture, but neither is a substitute for not exposing
+  an admin interface to the open internet at all in the first place.
 - Keep `config.yaml` itself off of any shared/multi-tenant filesystem —
   besides router names/IPs, it may also hold your AbuseIPDB API key
   (`reputation.abuseIPDBKey`) if you've configured one; prefer the
   `MIKROVIEW_ABUSEIPDB_KEY` env var over the YAML field if the file
   itself might be more widely readable than your environment.
-- The same applies if you've enabled flag persistence (`flags.storePath`)
-  — the resulting file holds real IP addresses and short descriptions of
-  what they triggered, so keep it off a shared filesystem the same way.
+- The same applies to `flags.storePath`'s default file under
+  `/var/lib/mikroview` — it holds real IP addresses and short
+  descriptions of what they triggered, so keep it off a shared
+  filesystem the same way.
 - **Create an account before exposing mikroview beyond a fully trusted
   network** — see "Authentication" above; leaving it open on anything
   wider than a trusted LAN means anyone who reaches it first claims the
