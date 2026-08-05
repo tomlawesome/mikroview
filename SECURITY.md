@@ -49,9 +49,37 @@ either way.
 
 ## Authentication
 
-- **Local accounts only, no SSO yet.** Username/password, Argon2id-hashed
-  (`internal/auth`). OIDC/SSO is tracked separately and not required for
-  this to be complete.
+- **Local accounts (username/password, Argon2id-hashed, `internal/auth`),
+  plus optional OIDC/SSO.** SSO is strictly additive -- local login keeps
+  working unmodified whether or not it's configured. See
+  [docs/configuration.md](docs/configuration.md#single-sign-on-oidcsso)
+  for setup; the security-relevant properties are below.
+  - **Identity is `(issuer, subject)` only, never email/username.** A
+    provider-side email or username reassignment can never silently
+    inherit an existing mikroview account -- the display name shown
+    for a JIT-provisioned account is a hint only, and falls back to a
+    generated one on any collision with an existing account.
+  - **Only asymmetric-signed ID tokens are accepted** (RS256/ES256/PS256)
+    -- HS256 and `none` are rejected outright by an explicit allowlist,
+    not by trusting whatever the provider's discovery document claims to
+    support, closing the classic "resign with the public key as an HMAC
+    secret" algorithm-confusion attack.
+  - **Authorization Code + PKCE always**, with CSRF `state` and a
+    replay-resistant `nonce`, both checked with constant-time comparison.
+    The in-flight login's PKCE verifier/state/nonce are held in an
+    AES-256-GCM-sealed, `HttpOnly` cookie -- confidential and
+    tamper-evident, cleared after a single use regardless of outcome.
+  - **`redirect_uri` is built only from `oidc.publicBaseUrl`**, never
+    from a request's `Host`/`X-Forwarded-Host` header -- deriving it
+    from client-influenced input is a known vulnerability class.
+  - **A misconfigured or unreachable provider degrades to "SSO
+    unavailable"** (logged once at startup) and never affects local
+    login.
+  - Verified end-to-end against a real, freshly bootstrapped Authentik
+    instance (not just unit tests): the full redirect → real login form
+    → PKCE exchange → RS256 token verification → account provisioning →
+    session flow, including a repeat login correctly reusing the same
+    account.
 - **The first-run choice is made via the web UI**, not a CLI command --
   whoever loads mikroview first sees a one-time screen offering "create
   the admin account" or "continue without an account." Don't leave
