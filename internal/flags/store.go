@@ -54,6 +54,13 @@ type Flag struct {
 	LastSeen  time.Time `json:"lastSeen"`
 	Cleared   bool      `json:"cleared"`
 	ClearedAt time.Time `json:"clearedAt,omitzero"`
+	// Confidence is 0-100, set only by detectors that make a statistical
+	// judgment call rather than a deterministic threshold crossing (e.g.
+	// the per-host activity baseline -- see internal/detect/host_baseline.go).
+	// nil (omitted from JSON) means "not scored" -- a plain threshold
+	// detector is exactly as confident as the count it reports, so
+	// attaching a number there would be noise, not signal.
+	Confidence *int `json:"confidence,omitempty"`
 }
 
 // Store holds every known flag, active and cleared, keyed by a stable ID
@@ -115,6 +122,17 @@ func flagID(t Type, target string) string {
 // is worth a new signal, not a silently-suppressed repeat of something
 // they already looked at.
 func (s *Store) Add(t Type, target, detail string, now time.Time) {
+	s.add(t, target, detail, nil, now)
+}
+
+// AddWithConfidence is Add, but for a detector that can express how
+// confident it is in this specific flag (0-100) rather than a simple
+// deterministic threshold crossing -- see Flag.Confidence.
+func (s *Store) AddWithConfidence(t Type, target, detail string, confidence int, now time.Time) {
+	s.add(t, target, detail, &confidence, now)
+}
+
+func (s *Store) add(t Type, target, detail string, confidence *int, now time.Time) {
 	id := flagID(t, target)
 
 	s.mu.Lock()
@@ -131,6 +149,7 @@ func (s *Store) Add(t Type, target, detail string, now time.Time) {
 		f.Count = 0
 	}
 	f.Detail = detail
+	f.Confidence = confidence
 	f.LastSeen = now
 	f.Count++
 
