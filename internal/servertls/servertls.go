@@ -65,13 +65,23 @@ type Config struct {
 // unauthenticated path so a browser or reverse proxy can fetch it to
 // establish trust) -- nil when CertFile/KeyFile were used instead, since
 // there's no mikroview-generated CA in that case.
-func Load(cfg Config) (tls.Certificate, []byte, error) {
+//
+// The two error returns are deliberately distinct. err is fatal --
+// nothing usable to serve at all (an operator-supplied cert failed to
+// load, or generation itself failed) -- the caller should stop
+// starting. persistErr is never fatal: generation already succeeded, so
+// the returned cert is genuinely usable, it just didn't make it to disk
+// (e.g. a read-only root filesystem -- see the "hardened container"
+// smoke test), meaning every restart will regenerate -- and re-trust --
+// a fresh CA instead of reusing this one. The caller should log it as a
+// warning, not treat it as startup failure.
+func Load(cfg Config) (cert tls.Certificate, caCertPEM []byte, persistErr error, err error) {
 	if cfg.CertFile != "" && cfg.KeyFile != "" {
 		cert, err := tls.LoadX509KeyPair(cfg.CertFile, cfg.KeyFile)
 		if err != nil {
-			return tls.Certificate{}, nil, fmt.Errorf("servertls: loading %s/%s: %w", cfg.CertFile, cfg.KeyFile, err)
+			return tls.Certificate{}, nil, nil, fmt.Errorf("servertls: loading %s/%s: %w", cfg.CertFile, cfg.KeyFile, err)
 		}
-		return cert, nil, nil
+		return cert, nil, nil, nil
 	}
 
 	hosts := cfg.Hosts
@@ -89,32 +99,28 @@ func Load(cfg Config) (tls.Certificate, []byte, error) {
 		var err error
 		ca, err = generateCA()
 		if err != nil {
-			return tls.Certificate{}, nil, fmt.Errorf("servertls: generating local CA: %w", err)
+			return tls.Certificate{}, nil, nil, fmt.Errorf("servertls: generating local CA: %w", err)
 		}
 	}
 
 	if cfg.StorePath != "" {
 		if cert, ok := loadStoredLeaf(cfg.StorePath, sortedHosts); ok {
-			return cert, ca.certPEM, nil
+			return cert, ca.certPEM, nil, nil
 		}
 	}
 
-	cert, err := generateLeaf(ca, sortedHosts)
+	leaf, err := generateLeaf(ca, sortedHosts)
 	if err != nil {
-		return tls.Certificate{}, nil, fmt.Errorf("servertls: generating leaf certificate: %w", err)
+		return tls.Certificate{}, nil, nil, fmt.Errorf("servertls: generating leaf certificate: %w", err)
 	}
 
 	if cfg.StorePath != "" {
-		// Persistence failing is never fatal -- generation already
-		// succeeded, so mikroview still starts; it just means the next
-		// restart regenerates (a fresh CA, a fresh trust step) instead
-		// of reusing this one. Same "swallow write failures, in-memory
-		// state stays correct either way" reasoning
-		// detect.SettingsStore.persistLocked already documents.
-		saveStored(cfg.StorePath, ca, cert, sortedHosts)
+		if saveErr := saveStored(cfg.StorePath, ca, leaf, sortedHosts); saveErr != nil {
+			persistErr = fmt.Errorf("servertls: persisting to %s: %w", cfg.StorePath, saveErr)
+		}
 	}
 
-	return cert, ca.certPEM, nil
+	return leaf, ca.certPEM, persistErr, nil
 }
 
 type caPair struct {
@@ -291,32 +297,51 @@ func loadStoredLeaf(storePath string, sortedHosts []string) (tls.Certificate, bo
 	return cert, true
 }
 
-func saveStored(storePath string, ca *caPair, cert tls.Certificate, sortedHosts []string) {
+// saveStored returns the first error it hits (e.g. a read-only
+// filesystem -- see the "hardened container" smoke test) rather than
+// silently discarding it: persistence failing is still never fatal to
+// Load (the caller already has a working in-memory cert regardless),
+// but an operator running with a read-only root filesystem deserves to
+// know the CA is being regenerated -- and re-trusted -- on every
+// restart instead of persisting once, the same way flags/auth/detector-
+// settings all surface their own persistence failures as a warning.
+func saveStored(storePath string, ca *caPair, cert tls.Certificate, sortedHosts []string) error {
 	if err := os.MkdirAll(storePath, 0o700); err != nil {
-		return
+		return fmt.Errorf("creating %s: %w", storePath, err)
 	}
 	caCertPath, caKeyPath, leafCertPath, leafKeyPath, metaPath := storePaths(storePath)
 
 	caKeyDER, err := x509.MarshalECPrivateKey(ca.key)
 	if err != nil {
-		return
+		return fmt.Errorf("marshaling CA key: %w", err)
 	}
 	caKeyPEM := pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: caKeyDER})
-	os.WriteFile(caCertPath, ca.certPEM, filePermission)
-	os.WriteFile(caKeyPath, caKeyPEM, filePermission)
+	if err := os.WriteFile(caCertPath, ca.certPEM, filePermission); err != nil {
+		return fmt.Errorf("writing %s: %w", caCertPath, err)
+	}
+	if err := os.WriteFile(caKeyPath, caKeyPEM, filePermission); err != nil {
+		return fmt.Errorf("writing %s: %w", caKeyPath, err)
+	}
 
 	leafKeyDER, err := x509.MarshalECPrivateKey(cert.PrivateKey.(*ecdsa.PrivateKey))
 	if err != nil {
-		return
+		return fmt.Errorf("marshaling leaf key: %w", err)
 	}
 	leafCertPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: cert.Certificate[0]})
 	leafKeyPEM := pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: leafKeyDER})
-	os.WriteFile(leafCertPath, leafCertPEM, filePermission)
-	os.WriteFile(leafKeyPath, leafKeyPEM, filePermission)
+	if err := os.WriteFile(leafCertPath, leafCertPEM, filePermission); err != nil {
+		return fmt.Errorf("writing %s: %w", leafCertPath, err)
+	}
+	if err := os.WriteFile(leafKeyPath, leafKeyPEM, filePermission); err != nil {
+		return fmt.Errorf("writing %s: %w", leafKeyPath, err)
+	}
 
 	metaData, err := json.Marshal(leafMeta{Hosts: sortedHosts})
 	if err != nil {
-		return
+		return fmt.Errorf("marshaling leaf metadata: %w", err)
 	}
-	os.WriteFile(metaPath, metaData, filePermission)
+	if err := os.WriteFile(metaPath, metaData, filePermission); err != nil {
+		return fmt.Errorf("writing %s: %w", metaPath, err)
+	}
+	return nil
 }
