@@ -299,7 +299,7 @@ func main() {
 	scheme := "http"
 	if cfg.TLS.Enabled {
 		scheme = "https"
-		cert, caCertPEM, err := servertls.Load(servertls.Config{
+		cert, caCertPEM, persistErr, err := servertls.Load(servertls.Config{
 			CertFile:  cfg.TLS.CertFile,
 			KeyFile:   cfg.TLS.KeyFile,
 			Hosts:     cfg.TLS.Hosts,
@@ -308,6 +308,9 @@ func main() {
 		if err != nil {
 			tlsLog.Error(err.Error())
 			os.Exit(1)
+		}
+		if persistErr != nil {
+			tlsLog.Warn(fmt.Sprintf("%v (continuing with an unpersisted certificate -- every restart will generate a fresh, untrusted-again CA)", persistErr))
 		}
 		if caCertPEM != nil {
 			fingerprint := sha256.Sum256(cert.Certificate[0])

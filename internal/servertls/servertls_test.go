@@ -26,7 +26,7 @@ func leafOf(t *testing.T, cert tls.Certificate) *x509.Certificate {
 }
 
 func TestGenerateCoversConfiguredHosts(t *testing.T) {
-	cert, caPEM, err := Load(Config{Hosts: []string{"mikroview.local", "192.168.1.50"}})
+	cert, caPEM, _, err := Load(Config{Hosts: []string{"mikroview.local", "192.168.1.50"}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -43,7 +43,7 @@ func TestGenerateCoversConfiguredHosts(t *testing.T) {
 }
 
 func TestGenerateDefaultsHostsWhenUnset(t *testing.T) {
-	cert, _, err := Load(Config{})
+	cert, _, _, err := Load(Config{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -60,11 +60,11 @@ func TestPersistenceRoundTrip(t *testing.T) {
 	dir := t.TempDir()
 	cfg := Config{Hosts: []string{"mikroview.local"}, StorePath: dir}
 
-	cert1, caPEM1, err := Load(cfg)
+	cert1, caPEM1, _, err := Load(cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
-	cert2, caPEM2, err := Load(cfg)
+	cert2, caPEM2, _, err := Load(cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -80,11 +80,11 @@ func TestPersistenceRoundTrip(t *testing.T) {
 func TestHostsChangeRegeneratesLeafButKeepsCA(t *testing.T) {
 	dir := t.TempDir()
 
-	cert1, caPEM1, err := Load(Config{Hosts: []string{"mikroview.local"}, StorePath: dir})
+	cert1, caPEM1, _, err := Load(Config{Hosts: []string{"mikroview.local"}, StorePath: dir})
 	if err != nil {
 		t.Fatal(err)
 	}
-	cert2, caPEM2, err := Load(Config{Hosts: []string{"mikroview.local", "other.local"}, StorePath: dir})
+	cert2, caPEM2, _, err := Load(Config{Hosts: []string{"mikroview.local", "other.local"}, StorePath: dir})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -141,7 +141,7 @@ func TestNearExpiryLeafIsRenewed(t *testing.T) {
 	}
 	saveStored(dir, ca, nearExpiry, hosts)
 
-	cert, caPEM, err := Load(Config{Hosts: hosts, StorePath: dir})
+	cert, caPEM, _, err := Load(Config{Hosts: hosts, StorePath: dir})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -153,11 +153,39 @@ func TestNearExpiryLeafIsRenewed(t *testing.T) {
 	}
 }
 
+// TestUnwritableStorePathSurfacesPersistErrButStillLoads reproduces the
+// "hardened container" (--read-only root filesystem) scenario found via
+// the CI smoke test: generation must still succeed and return a usable
+// cert, but the caller needs to know persistence silently failed so it
+// can warn an operator, rather than the CA quietly regenerating (and
+// needing to be re-trusted) on every restart with no indication why.
+func TestUnwritableStorePathSurfacesPersistErrButStillLoads(t *testing.T) {
+	parent := t.TempDir()
+	if err := os.Chmod(parent, 0o500); err != nil { // read+execute, no write
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chmod(parent, 0o700) }) // let t.TempDir() clean up
+
+	storePath := filepath.Join(parent, "tls")
+
+	cert, caPEM, persistErr, err := Load(Config{Hosts: []string{"mikroview.local"}, StorePath: storePath})
+	if err != nil {
+		t.Fatalf("expected Load to still succeed with an unwritable store path, got err: %v", err)
+	}
+	if persistErr == nil {
+		t.Error("expected a non-nil persistErr for an unwritable store path")
+	}
+	if caPEM == nil {
+		t.Error("expected a usable generated CA despite the persist failure")
+	}
+	_ = leafOf(t, cert)
+}
+
 func TestFilesSkipGeneration(t *testing.T) {
 	dir := t.TempDir()
 	certPath, keyPath := writeThrowawayCert(t, dir)
 
-	cert, caPEM, err := Load(Config{CertFile: certPath, KeyFile: keyPath})
+	cert, caPEM, _, err := Load(Config{CertFile: certPath, KeyFile: keyPath})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -179,7 +207,7 @@ func TestCorruptStoreFallsBackToRegeneration(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	cert, caPEM, err := Load(Config{StorePath: dir})
+	cert, caPEM, _, err := Load(Config{StorePath: dir})
 	if err != nil {
 		t.Fatalf("expected a corrupt store to be treated as absent, not fail Load: %v", err)
 	}
