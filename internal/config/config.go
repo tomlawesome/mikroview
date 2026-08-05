@@ -19,7 +19,7 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// defaultDataDir is where every optional persistence path defaults to
+// DefaultDataDir is where every optional persistence path defaults to
 // living, out of the box -- flags, detector settings, accounts, and the
 // self-generated TLS certificate. The Dockerfile creates this directory
 // owned by the nonroot user, so all of it is writable (and persists
@@ -28,7 +28,7 @@ import (
 // this same path, documented in deploy/docker-compose.yml rather than
 // forced -- an operator who doesn't want any of this persisted can
 // still point any of these at "" to opt back out per field.
-const defaultDataDir = "/var/lib/mikroview"
+const DefaultDataDir = "/var/lib/mikroview"
 
 type Device struct {
 	ID       string `yaml:"id"`
@@ -219,8 +219,9 @@ type Flags struct {
 	CriticalPorts          []int         `yaml:"criticalPorts"`
 	CriticalPortThreshold  int           `yaml:"criticalPortThreshold"`
 	CriticalPortWindow     time.Duration `yaml:"criticalPortWindow"`
-	GlobalSpikeMultiplier  float64       `yaml:"globalSpikeMultiplier"`
-	GlobalSpikeMinEPS      float64       `yaml:"globalSpikeMinEPS"`
+	GlobalSpikeMultiplier    float64       `yaml:"globalSpikeMultiplier"`
+	GlobalSpikeMinEPS        float64       `yaml:"globalSpikeMinEPS"`
+	GlobalSpikeWarmupSamples int           `yaml:"globalSpikeWarmupSamples"`
 
 	DistributedBruteForceThreshold int           `yaml:"distributedBruteForceThreshold"`
 	DistributedBruteForceWindow    time.Duration `yaml:"distributedBruteForceWindow"`
@@ -231,9 +232,10 @@ type Flags struct {
 	InternalReconThreshold int           `yaml:"internalReconThreshold"`
 	InternalReconWindow    time.Duration `yaml:"internalReconWindow"`
 
-	RuleSpikeMultiplier float64       `yaml:"ruleSpikeMultiplier"`
-	RuleSpikeMinRate    float64       `yaml:"ruleSpikeMinRate"`
-	RuleSpikeWindow     time.Duration `yaml:"ruleSpikeWindow"`
+	RuleSpikeMultiplier    float64       `yaml:"ruleSpikeMultiplier"`
+	RuleSpikeMinRate       float64       `yaml:"ruleSpikeMinRate"`
+	RuleSpikeWindow        time.Duration `yaml:"ruleSpikeWindow"`
+	RuleSpikeWarmupSamples int           `yaml:"ruleSpikeWarmupSamples"`
 
 	RepeatedDropsThreshold int           `yaml:"repeatedDropsThreshold"`
 	RepeatedDropsWindow    time.Duration `yaml:"repeatedDropsWindow"`
@@ -309,8 +311,9 @@ func defaults() Config {
 			CriticalPorts:          []int{21, 22, 23, 445, 3389, 5900, 8291, 8728, 8729},
 			CriticalPortThreshold:  5,
 			CriticalPortWindow:     5 * time.Minute,
-			GlobalSpikeMultiplier:  4,
-			GlobalSpikeMinEPS:      5,
+			GlobalSpikeMultiplier:    4,
+			GlobalSpikeMinEPS:        5,
+			GlobalSpikeWarmupSamples: 20,
 
 			DistributedBruteForceThreshold: 10,
 			DistributedBruteForceWindow:    5 * time.Minute,
@@ -321,9 +324,10 @@ func defaults() Config {
 			InternalReconThreshold: 10,
 			InternalReconWindow:    60 * time.Second,
 
-			RuleSpikeMultiplier: 5,
-			RuleSpikeMinRate:    0.2,
-			RuleSpikeWindow:     60 * time.Second,
+			RuleSpikeMultiplier:    5,
+			RuleSpikeMinRate:       0.2,
+			RuleSpikeWindow:        60 * time.Second,
+			RuleSpikeWarmupSamples: 20,
 
 			RepeatedDropsThreshold: 10,
 			RepeatedDropsWindow:    15 * time.Minute,
@@ -338,17 +342,17 @@ func defaults() Config {
 			LowSlowScanDropRatio:          0.8,
 			LowSlowScanBaselineMultiplier: 3,
 
-			StorePath:                 defaultDataDir + "/flags.json",
-			DetectorSettingsStorePath: defaultDataDir + "/detector-settings.json",
+			StorePath:                 DefaultDataDir + "/flags.json",
+			DetectorSettingsStorePath: DefaultDataDir + "/detector-settings.json",
 		},
 		Auth: Auth{
-			StorePath:    defaultDataDir + "/users.json",
+			StorePath:    DefaultDataDir + "/users.json",
 			SessionTTL:   24 * time.Hour,
 			SecureCookie: true,
 		},
 		TLS: TLS{
 			Enabled:   true,
-			StorePath: defaultDataDir + "/tls",
+			StorePath: DefaultDataDir + "/tls",
 		},
 		Notify: Notify{
 			BatchWindow: 60 * time.Second,
@@ -465,6 +469,11 @@ func applyEnv(cfg *Config) {
 			cfg.Flags.GlobalSpikeMinEPS = f
 		}
 	}
+	if v := os.Getenv("MIKROVIEW_FLAGS_GLOBAL_SPIKE_WARMUP_SAMPLES"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			cfg.Flags.GlobalSpikeWarmupSamples = n
+		}
+	}
 	if v := os.Getenv("MIKROVIEW_FLAGS_DISTRIBUTED_BRUTE_FORCE_THRESHOLD"); v != "" {
 		if n, err := strconv.Atoi(v); err == nil {
 			cfg.Flags.DistributedBruteForceThreshold = n
@@ -508,6 +517,11 @@ func applyEnv(cfg *Config) {
 	if v := os.Getenv("MIKROVIEW_FLAGS_RULE_SPIKE_WINDOW"); v != "" {
 		if d, err := time.ParseDuration(v); err == nil {
 			cfg.Flags.RuleSpikeWindow = d
+		}
+	}
+	if v := os.Getenv("MIKROVIEW_FLAGS_RULE_SPIKE_WARMUP_SAMPLES"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			cfg.Flags.RuleSpikeWarmupSamples = n
 		}
 	}
 	if v := os.Getenv("MIKROVIEW_FLAGS_REPEATED_DROPS_THRESHOLD"); v != "" {
