@@ -201,6 +201,29 @@ func TestHandleDevices(t *testing.T) {
 	}
 }
 
+func TestHandleCriticalPorts(t *testing.T) {
+	s, _ := newTestServer()
+	s.CriticalPorts = []int{22, 3389, 8291}
+	ts := httptest.NewServer(s.Routes())
+	defer ts.Close()
+
+	resp, err := http.Get(ts.URL + "/api/critical-ports")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	var body struct {
+		Ports []int `json:"ports"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	if len(body.Ports) != 3 || body.Ports[0] != 22 {
+		t.Errorf("unexpected ports: %+v", body.Ports)
+	}
+}
+
 func TestHandleStats(t *testing.T) {
 	s, st := newTestServer()
 	ts := httptest.NewServer(s.Routes())
