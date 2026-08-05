@@ -17,6 +17,7 @@ listen:
   syslogUdp: ":1514"
   syslogTcp: ":1514"
   http: ":8080"
+  httpRedirect: ":8081"
 
 store:
   retention: 24h
@@ -649,9 +650,24 @@ to take effect.
 
 ## TLS
 
-Mikroview serves TLS by default, on its one existing listener -- no
-second port. See [SECURITY.md](../SECURITY.md#tls) for the full
-reasoning; this section is the configuration reference.
+Mikroview serves TLS by default on its main listener -- the
+application itself is never served over plain HTTP. See
+[SECURITY.md](../SECURITY.md#tls) for the full reasoning; this section
+is the configuration reference.
+
+A second listener, `listen.httpRedirect` (default `:8081`, mapped to
+host port 80 by `deploy/docker-compose.yml`), exists only to redirect a
+plain HTTP request to HTTPS -- it never serves the application itself.
+It's only started while `tls.enabled` is true (nothing to redirect to
+otherwise), and only started at all if non-empty -- set it to `""` to
+disable it, e.g. if your own reverse proxy already handles the
+HTTP->HTTPS redirect. The redirect target is built by stripping any
+port off the request's `Host` header and assuming HTTPS is reachable on
+the browser-default 443, which holds for the default compose port
+mapping (host `443` -> this listener); if you've remapped the HTTPS
+port to something else externally, either disable this listener and
+redirect at your reverse proxy instead, or accept that the `Location`
+header will still point at `:443`.
 
 ```yaml
 tls:
@@ -725,6 +741,7 @@ Override individual scalar settings without a mounted file:
 | `MIKROVIEW_LISTEN_SYSLOG_UDP` | `listen.syslogUdp` |
 | `MIKROVIEW_LISTEN_SYSLOG_TCP` | `listen.syslogTcp` |
 | `MIKROVIEW_LISTEN_HTTP` | `listen.http` |
+| `MIKROVIEW_LISTEN_HTTP_REDIRECT` | `listen.httpRedirect` |
 | `MIKROVIEW_STORE_RETENTION` | `store.retention` |
 | `MIKROVIEW_STORE_MAX_EVENTS` | `store.maxEvents` |
 | `MIKROVIEW_LOG_LEVEL` | `log.level` (see [Logging](#logging)) |

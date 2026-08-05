@@ -7,6 +7,7 @@ import (
 	"crypto/tls"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -95,6 +96,20 @@ func logVersionAndMigration(logger *slog.Logger) {
 	if err := os.WriteFile(versionMarkerPath, []byte(version), 0o600); err != nil {
 		logger.Warn(fmt.Sprintf("writing version marker: %v (upgrade detection won't work on the next restart)", err))
 	}
+}
+
+// httpsRedirectTarget builds the Location for redirecting a plain-HTTP
+// request to HTTPS -- strips any port off the request's Host header and
+// assumes HTTPS is reachable on the browser-default 443 (see
+// config.Listen.HTTPRedirect's doc comment for when that assumption
+// doesn't hold), preserving the original path/query/method-relevant
+// URI otherwise.
+func httpsRedirectTarget(r *http.Request) string {
+	host := r.Host
+	if h, _, err := net.SplitHostPort(host); err == nil {
+		host = h
+	}
+	return "https://" + host + r.URL.RequestURI()
 }
 
 func main() {
@@ -373,6 +388,35 @@ func main() {
 			})
 		}
 		httpServer.TLSConfig = &tls.Config{Certificates: []tls.Certificate{cert}}
+		if cfg.Listen.HTTPRedirect != "" {
+			redirectLog := logging.New("http-redirect")
+			redirectServer := &http.Server{
+				Addr: cfg.Listen.HTTPRedirect,
+				// The only job here is bouncing a client that guessed
+				// plain HTTP over to the real HTTPS listener -- strips
+				// any port off the request's Host header and assumes
+				// HTTPS is reachable on the browser-default 443 (see
+				// Listen.HTTPRedirect's doc comment for when that
+				// assumption doesn't hold).
+				Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					http.Redirect(w, r, httpsRedirectTarget(r), http.StatusPermanentRedirect)
+				}),
+				ReadHeaderTimeout: 10 * time.Second,
+				ErrorLog:          slog.NewLogLogger(redirectLog.Handler(), slog.LevelWarn),
+			}
+			go func() {
+				<-ctx.Done()
+				shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				defer cancel()
+				redirectServer.Shutdown(shutdownCtx)
+			}()
+			go func() {
+				redirectLog.Info(fmt.Sprintf("redirecting plain HTTP on %s -> https", cfg.Listen.HTTPRedirect))
+				if err := redirectServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+					redirectLog.Error(err.Error())
+				}
+			}()
+		}
 	} else {
 		tlsLog.Warn(fmt.Sprintf("disabled (tls.enabled=false) -- mikroview is serving plain HTTP on %s. Safe ONLY if this listener is unreachable except from your own reverse proxy over an isolated network -- never expose this port to a LAN or the internet in this mode.", cfg.Listen.HTTP))
 	}

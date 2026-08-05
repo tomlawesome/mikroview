@@ -98,13 +98,20 @@ either way.
 
 ## TLS
 
-- **On by default, on mikroview's one existing listener** -- no second
-  port. A reverse proxy in front doesn't close the underlying problem on
-  its own: mikroview's own listener stays fully reachable and functional
-  over plain HTTP regardless of whether an RP exists upstream, so anyone
-  who reaches it directly (by IP, by habit, by not knowing the RP's
-  hostname) gets the same authenticated app in cleartext. TLS at
-  mikroview's own listener closes that regardless of how it's reached.
+- **On by default, on mikroview's main listener** -- the application
+  itself is never served over plain HTTP. A reverse proxy in front
+  doesn't close the underlying problem on its own: mikroview's own
+  listener stays fully reachable and functional over plain HTTP
+  regardless of whether an RP exists upstream, so anyone who reaches it
+  directly (by IP, by habit, by not knowing the RP's hostname) gets the
+  same authenticated app in cleartext. TLS at mikroview's own listener
+  closes that regardless of how it's reached.
+- **A second, redirect-only listener** (`listen.httpRedirect`, off by
+  setting it to `""`) exists purely so a client that guesses plain HTTP
+  gets bounced to HTTPS instead of a connection reset -- it serves
+  nothing but a 308 redirect to the HTTPS listener, never the
+  application itself, so it doesn't reopen the cleartext-exposure gap
+  the point above closes.
 - **Zero-config default: a self-generated local CA + certificate**
   (`internal/servertls`), persisted across restarts if `tls.storePath`
   is configured (optional, same contract as `flags.storePath`) so the
