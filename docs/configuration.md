@@ -44,6 +44,40 @@ host. If `config.yaml` isn't world-readable (or owned by a matching
 uid/gid), the container will fail to start with a permission error —
 `chmod 644 deploy/config.yaml` after editing it.
 
+## Logging
+
+Mikroview's own server output (not event data -- see `store.retention`
+above) is leveled and colorized, one line per entry:
+
+```
+18:43:44 [INFO]  auth        │ no decision made yet -- showing the first-run choice screen
+18:43:45 [WARN]  flags       │ permission denied opening flags.json -- continuing in-memory-only
+18:43:46 [ERROR] syslog-udp  │ listen udp :1514: bind: address already in use
+```
+
+```yaml
+log:
+  level: info
+```
+
+- **`level`** — one of `debug`/`info`/`warn`/`error` (case-insensitive).
+  Defaults to `info`. Anything unrecognized (a typo, an empty value)
+  falls back to `info` silently, the same way every other malformed
+  value in this app degrades rather than failing startup over a log
+  setting.
+- **Color** follows the [NO_COLOR](https://no-color.org) convention and
+  auto-disables when stdout isn't a terminal -- piping to a file,
+  `docker logs | grep`, or a log collector all see plain text, not raw
+  ANSI escapes.
+- The component column (`auth`, `tls`, `flags`, `syslog-udp`, `http`,
+  ...) identifies which part of mikroview logged the line -- the same
+  names used throughout this doc and SECURITY.md for the pieces they
+  refer to.
+- This does **not** apply to the CLI recovery commands' own output
+  (`-list-users`' table, `-reset-password`'s password prompts and
+  success message, etc.) -- those print directly to stdout/stderr for
+  scripting/piping, not through this leveled path.
+
 ## GeoIP country flags (optional)
 
 mikroview can show a country flag next to public source/destination
@@ -668,6 +702,7 @@ Override individual scalar settings without a mounted file:
 | `MIKROVIEW_LISTEN_HTTP` | `listen.http` |
 | `MIKROVIEW_STORE_RETENTION` | `store.retention` |
 | `MIKROVIEW_STORE_MAX_EVENTS` | `store.maxEvents` |
+| `MIKROVIEW_LOG_LEVEL` | `log.level` (see [Logging](#logging)) |
 | `MIKROVIEW_GEOIP_DB_PATH` | `geoip.dbPath` (see [GeoIP country flags](#geoip-country-flags-optional)) |
 | `MIKROVIEW_ABUSEIPDB_KEY` | `reputation.abuseIPDBKey` (see [IP reputation lookup](#ip-reputation-lookup-optional)) |
 | `MIKROVIEW_FLAGS_STORE_PATH` | `flags.storePath` |

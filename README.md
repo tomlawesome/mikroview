@@ -151,6 +151,9 @@ Create `config.yaml` next to it first (see [`deploy/config.example.yaml`](deploy
   server/client filtering split.
 - **UI**: Svelte, no component framework, dark professional theme,
   ~50KB JS bundle.
+- **Logging**: leveled (debug/info/warn/error) and colorized server
+  output, auto-plain when piped or `NO_COLOR` is set. See
+  [docs/configuration.md](docs/configuration.md)'s "Logging" section.
 - **Authentication**: a one-time choice on first load — create the admin
   account, or explicitly skip auth for this deployment. Creating an
   account makes it required for everything except the health check
