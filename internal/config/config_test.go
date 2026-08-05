@@ -97,22 +97,24 @@ func TestFlagsEnvVarsOverrideDefaults(t *testing.T) {
 	t.Setenv("MIKROVIEW_FLAGS_CRITICAL_PORT_WINDOW", "10m")
 	t.Setenv("MIKROVIEW_FLAGS_GLOBAL_SPIKE_MULTIPLIER", "6.5")
 	t.Setenv("MIKROVIEW_FLAGS_GLOBAL_SPIKE_MIN_EPS", "2.5")
+	t.Setenv("MIKROVIEW_FLAGS_GLOBAL_SPIKE_WARMUP_SAMPLES", "50")
 
 	cfg, err := Load("", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	want := Flags{
-		StorePath:              "/data/flags.json",
-		PortScanThreshold:      30,
-		PortScanWindow:         2 * time.Minute,
-		ActivitySpikeThreshold: 500,
-		ActivitySpikeWindow:    30 * time.Second,
-		CriticalPorts:          []int{22, 3389, 8291},
-		CriticalPortThreshold:  10,
-		CriticalPortWindow:     10 * time.Minute,
-		GlobalSpikeMultiplier:  6.5,
-		GlobalSpikeMinEPS:      2.5,
+		StorePath:                "/data/flags.json",
+		PortScanThreshold:        30,
+		PortScanWindow:           2 * time.Minute,
+		ActivitySpikeThreshold:   500,
+		ActivitySpikeWindow:      30 * time.Second,
+		CriticalPorts:            []int{22, 3389, 8291},
+		CriticalPortThreshold:    10,
+		CriticalPortWindow:       10 * time.Minute,
+		GlobalSpikeMultiplier:    6.5,
+		GlobalSpikeMinEPS:        2.5,
+		GlobalSpikeWarmupSamples: 50,
 	}
 	if cfg.Flags.StorePath != want.StorePath ||
 		cfg.Flags.PortScanThreshold != want.PortScanThreshold ||
@@ -123,7 +125,8 @@ func TestFlagsEnvVarsOverrideDefaults(t *testing.T) {
 		cfg.Flags.CriticalPortThreshold != want.CriticalPortThreshold ||
 		cfg.Flags.CriticalPortWindow != want.CriticalPortWindow ||
 		cfg.Flags.GlobalSpikeMultiplier != want.GlobalSpikeMultiplier ||
-		cfg.Flags.GlobalSpikeMinEPS != want.GlobalSpikeMinEPS {
+		cfg.Flags.GlobalSpikeMinEPS != want.GlobalSpikeMinEPS ||
+		cfg.Flags.GlobalSpikeWarmupSamples != want.GlobalSpikeWarmupSamples {
 		t.Errorf("Flags = %+v, want %+v", cfg.Flags, want)
 	}
 	for i, p := range want.CriticalPorts {
@@ -146,6 +149,18 @@ func TestHostActivityEnvVarsOverrideDefaults(t *testing.T) {
 	}
 	if cfg.Flags.HostActivityWarmupSamples != 40 {
 		t.Errorf("HostActivityWarmupSamples = %v, want 40", cfg.Flags.HostActivityWarmupSamples)
+	}
+}
+
+func TestRuleSpikeWarmupSamplesEnvVarOverridesDefault(t *testing.T) {
+	t.Setenv("MIKROVIEW_FLAGS_RULE_SPIKE_WARMUP_SAMPLES", "35")
+
+	cfg, err := Load("", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Flags.RuleSpikeWarmupSamples != 35 {
+		t.Errorf("RuleSpikeWarmupSamples = %v, want 35", cfg.Flags.RuleSpikeWarmupSamples)
 	}
 }
 
