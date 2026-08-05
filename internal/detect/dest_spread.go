@@ -42,6 +42,19 @@ func (d *Detector) observeDestSpread(e store.Event, now time.Time) {
 	if !isTrackableConnState(e) {
 		return
 	}
+
+	// Independently toggleable even though they share destWindow/
+	// w.samples below -- both consulted once up front so a detector
+	// that's off contributes no work beyond this pair of settings
+	// lookups, and short-circuits entirely if neither wants this event.
+	oa := d.settings.Get(DetectorOutboundAnomaly)
+	ir := d.settings.Get(DetectorInternalRecon)
+	oaActive := oa.Enabled && scopeMatchesHost(oa.Scope, e.SrcIP)
+	irActive := ir.Enabled && scopeMatchesHost(ir.Scope, e.SrcIP)
+	if !oaActive && !irActive {
+		return
+	}
+
 	w, ok := d.destWindows[e.SrcIP]
 	if !ok {
 		if len(d.destWindows) >= maxTrackedSources {
@@ -75,19 +88,19 @@ func (d *Detector) observeDestSpread(e store.Event, now time.Time) {
 			continue
 		}
 		if isPublic(s.dstIP) {
-			if !s.at.Before(outboundCutoff) {
+			if oaActive && !s.at.Before(outboundCutoff) {
 				external[s.dstIP] = struct{}{}
 			}
-		} else if !s.at.Before(reconCutoff) {
+		} else if irActive && !s.at.Before(reconCutoff) {
 			internal[s.dstIP] = struct{}{}
 		}
 	}
 
-	if len(external) >= d.cfg.OutboundAnomalyThreshold {
+	if oaActive && len(external) >= d.cfg.OutboundAnomalyThreshold {
 		d.fs.Add(flags.TypeOutboundAnomaly, e.SrcIP,
 			fmt.Sprintf("%d distinct external destinations in %s", len(external), d.cfg.OutboundAnomalyWindow), now)
 	}
-	if len(internal) >= d.cfg.InternalReconThreshold {
+	if irActive && len(internal) >= d.cfg.InternalReconThreshold {
 		d.fs.Add(flags.TypeInternalRecon, e.SrcIP,
 			fmt.Sprintf("%d distinct internal destinations in %s", len(internal), d.cfg.InternalReconWindow), now)
 	}

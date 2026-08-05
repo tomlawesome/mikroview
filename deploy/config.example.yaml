@@ -57,6 +57,27 @@ store:
 #   repeatedDropsWindow: 15m
 #   hostActivityMultiplier: 3
 #   hostActivityWarmupSamples: 20
+#
+#   # Per-detector on/off + scope restrictions -- every detector defaults
+#   # to enabled and unscoped; a live admin-only UI toggle can override
+#   # these at runtime without a restart (persisted separately to
+#   # detectorSettingsStorePath below, seeded from these values the first
+#   # time that file doesn't exist yet). See docs/configuration.md's
+#   # "Per-detector toggles" section for the full per-detector field
+#   # table (not every detector consults every scope field) and the
+#   # allow/deny + AND-combination rules.
+#   detectorSettingsStorePath: /var/lib/mikroview/detector-settings.json
+#   detectors:
+#     critical_port:
+#       enabled: true
+#       scope:
+#         hosts: []
+#         hostsMode: ""
+#         ports: []
+#         portsMode: ""
+#         classification: ""
+#         rules: []
+#         rulesMode: ""
 
 # Optional: friendly display names shown in place of a raw RouterOS rule
 # label (e.g. "r13") or a raw host IP, everywhere they appear in the UI

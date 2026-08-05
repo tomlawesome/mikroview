@@ -1,6 +1,7 @@
 <script lang="ts">
   import { appState } from '../lib/state.svelte'
   import { flagsState } from '../lib/flags.svelte'
+  import { detectorSettingsState } from '../lib/detectorSettings.svelte'
   import { authState } from '../lib/auth.svelte'
   import { formatEps } from '../lib/format'
   import { themeState } from '../lib/theme.svelte'
@@ -107,6 +108,15 @@
       {#if authState.role === 'admin'}
         <button onclick={() => (authState.showAddUser = true)} title="Create an additional account">
           Add user
+        </button>
+        <button
+          onclick={() => {
+            detectorSettingsState.open = true
+            detectorSettingsState.refresh()
+          }}
+          title="Toggle behavioral detectors on/off and restrict their scope"
+        >
+          Detectors
         </button>
       {/if}
       <button onclick={() => authState.logout()} title="Sign out {authState.username}">

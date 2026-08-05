@@ -277,6 +277,68 @@ clears it via the UI or `POST /api/flags/{id}/clear`. Clearing an
 already-active-again source re-raises it as a fresh entry rather than
 silently resurrecting the old one.
 
+## Per-detector toggles and scope restrictions (optional)
+
+Every detector above defaults to enabled and unscoped -- this section
+lets you turn one off entirely, or narrow where it applies, without
+touching its thresholds. Settings live in two places that layer
+together:
+
+- **`config.yaml`** sets the *starting point* on boot (`flags.detectors`
+  below).
+- **A live, admin-only UI** ("Detectors" in the toolbar, visible once
+  signed in as an admin) can override that starting point without a
+  restart -- takes effect on the very next ingested event. A live change
+  persists to `detectorSettingsStorePath` (same optional-persistence
+  contract as `flags.storePath` above: left unset, a live toggle still
+  works, it just resets to `config.yaml`'s values on restart) and, once
+  persisted, is what future restarts seed from -- `config.yaml`'s values
+  are only ever consulted the *first* time that file doesn't exist yet.
+
+```yaml
+flags:
+  detectorSettingsStorePath: "/var/lib/mikroview/detector-settings.json"
+  detectors:
+    critical_port:
+      enabled: true
+      scope:
+        hosts: ["203.0.113.0/24"]
+        hostsMode: deny
+        ports: [22, 3389]
+        portsMode: allow
+        classification: external
+    rule_spike:
+      enabled: false
+```
+
+Each detector under `detectors` is optional -- an omitted detector keeps
+today's default (enabled, unscoped). Within one detector's `scope`, every
+field is also optional and independently combines with the others by
+**AND**: an event only counts toward that detector if it satisfies every
+restriction you've actually set. Within one field (`hosts`, `ports`, or
+`rules`), `*Mode` is either `allow` (only listed entries are admitted) or
+`deny` (listed entries are excluded) -- never both directions on the same
+field at once. `hosts` entries accept a bare IP or a CIDR.
+
+Not every field means something to every detector -- a detector only
+consults the axes relevant to how it's keyed:
+
+| Detector | `hosts` + `classification` restrict | `ports` restrict | `rules` restrict |
+|---|---|---|---|
+| `port_scan` | which source IPs are tracked at all | which distinct ports *count* toward the scan total (not which events are tracked) | -- |
+| `activity_spike` | which source IPs are tracked at all | -- | -- |
+| `critical_port` | source IP | the effective subset of `criticalPorts` this instance reacts to | -- |
+| `distributed_brute_force` | which source IPs count toward a port's distinct-source total | the effective subset of `criticalPorts` | -- |
+| `outbound_anomaly` | which source (LAN) IPs are watched | -- | -- |
+| `internal_recon` | which source (LAN) IPs are watched | -- | -- |
+| `rule_spike` | -- | -- | which rule labels this detector reacts to |
+| `repeated_drops` | source IP | destination port | -- |
+| `global_spike` | -- (network-wide, not keyed by anything per-source) | -- | -- |
+
+`global_spike` only ever consults `enabled` -- it's a single network-wide
+aggregate, not tied to any particular host, port, or rule, so scoping it
+wouldn't mean anything.
+
 ## Authentication (optional, opt-in by creating an account)
 
 Mikroview stays fully open -- today's behavior -- until you create the
@@ -368,6 +430,7 @@ Override individual scalar settings without a mounted file:
 | `MIKROVIEW_FLAGS_REPEATED_DROPS_WINDOW` | `flags.repeatedDropsWindow` |
 | `MIKROVIEW_FLAGS_HOST_ACTIVITY_MULTIPLIER` | `flags.hostActivityMultiplier` |
 | `MIKROVIEW_FLAGS_HOST_ACTIVITY_WARMUP_SAMPLES` | `flags.hostActivityWarmupSamples` |
+| `MIKROVIEW_FLAGS_DETECTOR_SETTINGS_STORE_PATH` | `flags.detectorSettingsStorePath` (see [Per-detector toggles](#per-detector-toggles-and-scope-restrictions-optional)) |
 | `MIKROVIEW_AUTH_STORE_PATH` | `auth.storePath` (see [Authentication](#authentication-optional-opt-in-by-creating-an-account)) |
 | `MIKROVIEW_AUTH_SECURE_COOKIE` | `auth.secureCookie` |
 | `MIKROVIEW_AUTH_SESSION_TTL` | `auth.sessionTTL` |
@@ -395,6 +458,8 @@ for the latter two.
 | `GET /api/lookup/ip/{ip}` | on-demand reputation/threat-intel lookup for one public IP (see [IP reputation lookup](#ip-reputation-lookup-optional)) |
 | `GET /api/flags` | active + cleared behavioral flags (see [Behavioral flags](#behavioral-flags-optional-on-by-default)) |
 | `POST /api/flags/{id}/clear` | mark one flag as cleared |
+| `GET /api/detectors` | admin-only (open while zero accounts exist): every detector's live enabled+scope (see [Per-detector toggles](#per-detector-toggles-and-scope-restrictions-optional)) |
+| `PUT /api/detectors/{name}` | admin-only (open while zero accounts exist): replace one detector's enabled+scope wholesale |
 | `GET /api/auth/session` | current auth state (setup-required / authenticated / not) -- always 200, never gated |
 | `POST /api/auth/register` | create the first (admin) account -- only while zero accounts exist |
 | `POST /api/auth/login` | sign in, sets the session cookie |
@@ -404,7 +469,7 @@ for the latter two.
 Every route above `/api/auth/session`/`/register`/`/login`/`/logout` and
 `/api/healthz` requires a valid session once an account exists -- see
 [Authentication](#authentication-optional-opt-in-by-creating-an-account).
-Every mutating (`POST`) request also requires an
+Every mutating (`POST`/`PUT`) request also requires an
 `X-Requested-With: mikroview` header once an account exists (a CSRF
 mitigation, see SECURITY.md).
 
