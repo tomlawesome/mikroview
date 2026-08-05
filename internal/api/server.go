@@ -22,7 +22,13 @@ type Server struct {
 	Reputation       *reputation.Client
 	Flags            *flags.Store
 	DetectorSettings *detect.SettingsStore
-	StartTime        time.Time
+	// CriticalPorts is the configured control-port list (issue #34's
+	// tracking tab) -- exposed read-only via GET /api/critical-ports,
+	// deliberately not behind handleDetectorSettingsList's admin gate
+	// (see that handler's callerIsAdminOrOpen) since a non-admin user
+	// account still needs it to render the tab.
+	CriticalPorts []int
+	StartTime     time.Time
 
 	// Auth/Sessions/LoginLimiter/SecureCookie: see auth.go. Auth is
 	// always non-nil (internal/auth.Open("") returns a usable, empty,
@@ -44,6 +50,7 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("GET /api/healthz", s.handleHealthz)
 	mux.HandleFunc("GET /api/events", s.handleEvents)
 	mux.HandleFunc("GET /api/devices", s.handleDevices)
+	mux.HandleFunc("GET /api/critical-ports", s.handleCriticalPorts)
 	mux.HandleFunc("GET /api/stats", s.handleStats)
 	mux.HandleFunc("GET /api/ws", s.handleWS)
 	mux.HandleFunc("GET /api/lookup/ip/{ip}", s.handleIPLookup)

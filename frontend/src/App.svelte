@@ -12,6 +12,7 @@
   import FilterBar from './components/FilterBar.svelte'
   import LiveTable from './components/LiveTable.svelte'
   import Dashboard from './components/Dashboard.svelte'
+  import ControlPorts from './components/ControlPorts.svelte'
   import FlagsOverlay from './components/FlagsOverlay.svelte'
   import IpLookupPopover from './components/IpLookupPopover.svelte'
   import PortLookupPopover from './components/PortLookupPopover.svelte'
@@ -128,6 +129,8 @@
     {#if appState.view === 'live'}
       <FilterBar />
       <LiveTable />
+    {:else if appState.view === 'control-ports'}
+      <ControlPorts />
     {:else}
       <Dashboard />
     {/if}

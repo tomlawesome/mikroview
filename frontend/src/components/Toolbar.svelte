@@ -85,6 +85,14 @@
     </button>
 
     <button
+      class:active={appState.view === 'control-ports'}
+      onclick={() => (appState.view = appState.view === 'control-ports' ? 'live' : 'control-ports')}
+      title="SSH/Telnet/control-port attempts, accepted and denied"
+    >
+      Control ports
+    </button>
+
+    <button
       class:active={flagsState.open}
       onclick={() => (flagsState.open = !flagsState.open)}
       title="Behavioral flags: port scans, activity spikes, critical-port attempts, and volume spikes"
