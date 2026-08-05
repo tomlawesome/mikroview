@@ -402,6 +402,63 @@ func TestApplyReputationSnapshotWithoutAbuseScoreStillStoresSnapshot(t *testing.
 	}
 }
 
+func TestApplyReputationSnapshotIsTorRaisesFloorWithoutAbuseScore(t *testing.T) {
+	s, _ := Open("")
+	now := time.Now()
+	s.AddWithConfidence(TypeCriticalPort, "203.0.113.9", "detail", 10, now)
+
+	s.ApplyReputationSnapshot(TypeCriticalPort, "203.0.113.9", reputation.Result{
+		IP: "203.0.113.9", IsTor: true,
+	})
+
+	f := s.List()[0]
+	if f.Confidence == nil || *f.Confidence != reputation.TorExitNodeFloor {
+		t.Errorf("expected IsTor to raise confidence to %d, got %+v", reputation.TorExitNodeFloor, f.Confidence)
+	}
+}
+
+func TestApplyReputationSnapshotHostingUsageTypeRaisesFloor(t *testing.T) {
+	s, _ := Open("")
+	now := time.Now()
+	s.AddWithConfidence(TypeCriticalPort, "203.0.113.9", "detail", 10, now)
+
+	s.ApplyReputationSnapshot(TypeCriticalPort, "203.0.113.9", reputation.Result{
+		IP: "203.0.113.9", UsageType: "Data Center/Web Hosting/Transit",
+	})
+
+	f := s.List()[0]
+	if f.Confidence == nil || *f.Confidence != reputation.HostingProviderFloor {
+		t.Errorf("expected a hosting usageType to raise confidence to %d, got %+v", reputation.HostingProviderFloor, f.Confidence)
+	}
+}
+
+func TestApplyReputationSnapshotStrongerSignalWins(t *testing.T) {
+	s, _ := Open("")
+	now := time.Now()
+
+	// AbuseScore (80) beats IsTor's floor (60).
+	s.AddWithConfidence(TypeCriticalPort, "203.0.113.9", "detail", 10, now)
+	highScore := 80
+	s.ApplyReputationSnapshot(TypeCriticalPort, "203.0.113.9", reputation.Result{AbuseScore: &highScore, IsTor: true})
+	if f := s.List()[0]; f.Confidence == nil || *f.Confidence != 80 {
+		t.Errorf("expected the higher AbuseScore to win, got %+v", f.Confidence)
+	}
+
+	// IsTor's floor (60) beats a low AbuseScore (10).
+	s.AddWithConfidence(TypeCriticalPort, "203.0.113.10", "detail", 10, now)
+	lowScore := 10
+	s.ApplyReputationSnapshot(TypeCriticalPort, "203.0.113.10", reputation.Result{AbuseScore: &lowScore, IsTor: true})
+	var found *Flag
+	for _, f := range s.List() {
+		if f.Target == "203.0.113.10" {
+			found = &f
+		}
+	}
+	if found == nil || found.Confidence == nil || *found.Confidence != reputation.TorExitNodeFloor {
+		t.Errorf("expected the higher RiskFloor to win over a low AbuseScore, got %+v", found)
+	}
+}
+
 func TestApplyReputationSnapshotUnknownIDIsNoOp(t *testing.T) {
 	s, _ := Open("")
 	score := 90
