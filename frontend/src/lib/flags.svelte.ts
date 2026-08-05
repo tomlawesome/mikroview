@@ -8,7 +8,6 @@ import type { Flag } from './types'
 // presets each get their own state module in this codebase.
 class FlagsState {
   list = $state<Flag[]>([])
-  open = $state(false)
 
   activeCount = $derived(this.list.filter((f) => !f.cleared).length)
 

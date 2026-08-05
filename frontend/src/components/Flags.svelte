@@ -7,6 +7,7 @@
   import { appState } from '../lib/state.svelte'
   import { formatHM, countryFlag } from '../lib/format'
   import ReputationDetails from './ReputationDetails.svelte'
+  import BarList from './BarList.svelte'
   import type { Flag, FlagType } from '../lib/types'
 
   let expandedId: string | null = $state(null)
@@ -42,8 +43,33 @@
     low_slow_scan: 'Low-and-slow port scan',
   }
 
-  const active = $derived(flagsState.list.filter((f) => !f.cleared))
+  // Sorted by firstSeen (not the fetch response's lastSeen-desc order --
+  // see internal/flags.Store.List()) so a flag's position is fixed the
+  // moment it first appears. lastSeen updates on every re-fire, not just
+  // creation, so sorting by it made an already-visible flag you're
+  // reading jump to the top of the list the instant it (or anything
+  // else) re-fired on the next 5s poll -- jarring for something you're
+  // mid-read on. Only a genuinely new flag entering the active set now
+  // changes the ordering, which is the expected kind of layout change.
+  const active = $derived(
+    flagsState.list
+      .filter((f) => !f.cleared)
+      .sort((a, b) => new Date(b.firstSeen).getTime() - new Date(a.firstSeen).getTime()),
+  )
   const cleared = $derived(flagsState.list.filter((f) => f.cleared).slice(0, 20))
+
+  // "Active flags by type" summary panel -- only types with at least one
+  // active flag, ranked by count like every other BarList panel.
+  const typeBreakdown = $derived(
+    Object.entries(
+      active.reduce<Partial<Record<FlagType, number>>>((counts, f) => {
+        counts[f.type] = (counts[f.type] ?? 0) + 1
+        return counts
+      }, {}),
+    )
+      .map(([type, count]) => ({ label: TYPE_LABELS[type as FlagType], count: count ?? 0 }))
+      .sort((a, b) => b.count - a.count),
+  )
 
   // What a flag's target actually *is* varies by detector -- most are a
   // plain source IP, but distributed_brute_force is keyed by port,
@@ -77,7 +103,7 @@
       case 'global_spike':
         return
     }
-    flagsState.open = false
+    appState.view = 'live'
   }
 
   async function clear(id: string) {
@@ -96,6 +122,8 @@
 </script>
 
 <div class="flags scrollbar">
+  <BarList title="Active flags by type" rows={typeBreakdown} emptyMessage="Nothing flagged right now." />
+
   <section aria-labelledby="active-heading">
     <h2 id="active-heading">Active ({active.length})</h2>
     {#if active.length === 0}
@@ -199,7 +227,7 @@
     flex: 1;
     min-height: 0;
     overflow-y: auto;
-    padding: 14px 16px;
+    padding: 14px;
     display: flex;
     flex-direction: column;
     gap: 20px;
