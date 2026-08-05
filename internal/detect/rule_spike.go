@@ -12,7 +12,12 @@ type ruleWindow struct {
 	samples      []time.Time
 	lastActivity time.Time
 	baseline     float64 // EMA of events/sec for this rule
+	variance     float64
 	primed       bool
+	// sampleCount backs the confidence score's history component (see
+	// emaConfidence) -- capped at RuleSpikeWarmupSamples, same warmup-
+	// then-cap pattern as sourceWindow.sampleCount.
+	sampleCount int
 }
 
 // observeRuleRate tracks each rule's own hit rate against a slow-moving
@@ -48,16 +53,28 @@ func (d *Detector) observeRuleRate(e store.Event, now time.Time) {
 
 	if !w.primed {
 		w.baseline = currentRate
+		w.variance = 0
 		w.primed = true
+		w.sampleCount = 1
 		return
 	}
 
-	if currentRate >= d.cfg.RuleSpikeMinRate && w.baseline > 0 && currentRate >= w.baseline*d.cfg.RuleSpikeMultiplier {
-		d.fs.Add(flags.TypeRuleSpike, e.RuleLabel,
-			fmt.Sprintf("%.1f hits/s vs a baseline of %.1f for this rule", currentRate, w.baseline), now)
+	prevBaseline := w.baseline
+	// The firing condition itself is unchanged from before confidence
+	// scoring existed (issue #59): only the confidence attached to a
+	// flag that already fires is new, not when it fires.
+	if currentRate >= d.cfg.RuleSpikeMinRate && prevBaseline > 0 && currentRate >= prevBaseline*d.cfg.RuleSpikeMultiplier {
+		z := emaZScore(currentRate, prevBaseline, w.variance)
+		confidence := emaConfidence(z, w.sampleCount, d.cfg.RuleSpikeWarmupSamples)
+		d.fs.AddWithConfidence(flags.TypeRuleSpike, e.RuleLabel,
+			fmt.Sprintf("%.1f hits/s vs a baseline of %.1f for this rule (based on %d samples, %.1fσ above normal)", currentRate, prevBaseline, w.sampleCount, z),
+			confidence, now)
 	}
 
-	w.baseline = emaAlpha*currentRate + (1-emaAlpha)*w.baseline
+	w.baseline, w.variance = emaUpdate(currentRate, w.baseline, w.variance)
+	if w.sampleCount < d.cfg.RuleSpikeWarmupSamples {
+		w.sampleCount++
+	}
 }
 
 func (d *Detector) evictOldestRuleWindow() {
