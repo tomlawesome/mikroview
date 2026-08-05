@@ -35,11 +35,10 @@ store:
 
 # Behavioral flags (port scans, activity spikes, critical-port attempts,
 # volume spikes) are always on with sensible defaults -- nothing below is
-# required. storePath already defaults to /var/lib/mikroview/flags.json
-# (see deploy/docker-compose.yml for the matching volume mount if you
-# want it to survive container recreation, not just restarts) -- only
-# uncomment this block to move that path or change a threshold. See
-# docs/configuration.md for what each threshold means.
+# required. storePath already defaults to /var/lib/mikroview/flags.json,
+# which deploy/docker-compose.yml already persists in a named volume by
+# default -- only uncomment this block to move that path or change a
+# threshold. See docs/configuration.md for what each threshold means.
 # flags:
 #   storePath: /var/lib/mikroview/flags.json
 #   portScanThreshold: 15
