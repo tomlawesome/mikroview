@@ -52,10 +52,10 @@
     <span class="cell addr">
       <button
         class="cell-btn addr-btn"
-        title="Filter to IP: {event.srcIp}"
+        title={event.srcHostName ? `${event.srcHostName} — filter to IP: ${event.srcIp}` : `Filter to IP: ${event.srcIp}`}
         onclick={() => appState.setFilter('ip', event.srcIp ?? '')}
       >
-        {srcFlag ? `${srcFlag} ` : ''}{event.srcIp}
+        {srcFlag ? `${srcFlag} ` : ''}{event.srcHostName || event.srcIp}
       </button>
       {#if isPublicIp(event.srcIp)}
         <IpInvestigateButton ip={event.srcIp} />
@@ -86,10 +86,10 @@
     <span class="cell addr">
       <button
         class="cell-btn addr-btn"
-        title="Filter to IP: {event.dstIp}"
+        title={event.dstHostName ? `${event.dstHostName} — filter to IP: ${event.dstIp}` : `Filter to IP: ${event.dstIp}`}
         onclick={() => appState.setFilter('ip', event.dstIp ?? '')}
       >
-        {dstFlag ? `${dstFlag} ` : ''}{event.dstIp}
+        {dstFlag ? `${dstFlag} ` : ''}{event.dstHostName || event.dstIp}
       </button>
       {#if isPublicIp(event.dstIp)}
         <IpInvestigateButton ip={event.dstIp} />
@@ -138,9 +138,9 @@
     <button
       class="cell rule cell-btn"
       onclick={() => (appState.filters = { ...appState.filters, rule: event.ruleLabel, ruleRegex: false })}
-      title="Filter to rule: {event.ruleLabel}"
+      title={event.ruleName ? `${event.ruleName} — filter to rule: ${event.ruleLabel}` : `Filter to rule: ${event.ruleLabel}`}
     >
-      {event.ruleLabel}
+      {event.ruleName || event.ruleLabel}
     </button>
   {:else}
     <span class="cell rule">—</span>

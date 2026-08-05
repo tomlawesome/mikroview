@@ -55,6 +55,17 @@ store:
 #   ruleSpikeWindow: 60s
 #   repeatedDropsThreshold: 10
 #   repeatedDropsWindow: 15m
+#   hostActivityMultiplier: 3
+#   hostActivityWarmupSamples: 20
+
+# Optional: friendly display names shown in place of a raw RouterOS rule
+# label (e.g. "r13") or a raw host IP, everywhere they appear in the UI
+# and CSV export. Filtering/grouping still uses the raw value -- these
+# are display-only. See docs/configuration.md.
+# ruleNames:
+#   r13: "Block known scanners"
+# hostNames:
+#   192.168.1.50: "Living room NAS"
 
 # Devices are matched by the syslog source IP mikroview sees them from.
 # Sources not listed here still appear in the UI, auto-discovered and

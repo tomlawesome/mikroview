@@ -96,6 +96,14 @@ type Config struct {
 	Reputation Reputation `yaml:"reputation"`
 	Flags      Flags      `yaml:"flags"`
 	Devices    []Device   `yaml:"devices"`
+
+	// RuleNames/HostNames are optional friendly-display-name maps -- see
+	// internal/naming. Keyed by the raw value RouterOS reports (a rule
+	// label like "r13", a host IP), same lookup-table shape rather than
+	// Devices' structured-record shape since there's nothing else to
+	// store per entry.
+	RuleNames map[string]string `yaml:"ruleNames"`
+	HostNames map[string]string `yaml:"hostNames"`
 }
 
 func defaults() Config {
