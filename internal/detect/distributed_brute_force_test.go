@@ -68,3 +68,36 @@ func TestDistributedBruteForceIgnoresPrivateSources(t *testing.T) {
 		t.Fatalf("expected private sources to be excluded (matches critical-port's own external-only scope), got %+v", fs.List())
 	}
 }
+
+func TestDistributedBruteForceRespectsPortsScope(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.DistributedBruteForceThreshold = 3
+	cfg.CriticalPorts = []int{22, 23}
+	cfg.CriticalPortThreshold = 1000
+	cfg.PortScanThreshold = 1000
+	cfg.ActivitySpikeThreshold = 1000
+
+	seed := DefaultSettingsMap()
+	seed[DetectorDistributedBruteForce] = Settings{
+		Enabled: true,
+		Scope:   Scope{Ports: []int{22}, PortsMode: ListModeDeny},
+	}
+	d, fs := newTestDetectorWithSettings(t, cfg, seed)
+
+	now := time.Now()
+	for i := 0; i < 3; i++ {
+		src := []string{"198.51.100.1", "198.51.100.2", "198.51.100.3"}[i]
+		d.Observe(evt(src, 22, now)) // denylisted port
+	}
+	if len(fs.List()) != 0 {
+		t.Fatalf("expected the denylisted port to never flag, got %+v", fs.List())
+	}
+
+	for i := 0; i < 3; i++ {
+		src := []string{"198.51.100.1", "198.51.100.2", "198.51.100.3"}[i]
+		d.Observe(evt(src, 23, now))
+	}
+	if len(fs.List()) != 1 {
+		t.Fatalf("expected the non-denylisted port to still flag, got %+v", fs.List())
+	}
+}

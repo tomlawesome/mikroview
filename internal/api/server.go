@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/tomlawesome/mikroview/internal/auth"
+	"github.com/tomlawesome/mikroview/internal/detect"
 	"github.com/tomlawesome/mikroview/internal/device"
 	"github.com/tomlawesome/mikroview/internal/flags"
 	"github.com/tomlawesome/mikroview/internal/hub"
@@ -15,12 +16,13 @@ import (
 )
 
 type Server struct {
-	Store      *store.Store
-	Devices    *device.Registry
-	Hub        *hub.Hub
-	Reputation *reputation.Client
-	Flags      *flags.Store
-	StartTime  time.Time
+	Store            *store.Store
+	Devices          *device.Registry
+	Hub              *hub.Hub
+	Reputation       *reputation.Client
+	Flags            *flags.Store
+	DetectorSettings *detect.SettingsStore
+	StartTime        time.Time
 
 	// Auth/Sessions/LoginLimiter/SecureCookie: see auth.go. Auth is
 	// always non-nil (internal/auth.Open("") returns a usable, empty,
@@ -47,6 +49,9 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("GET /api/lookup/ip/{ip}", s.handleIPLookup)
 	mux.HandleFunc("GET /api/flags", s.handleFlagsList)
 	mux.HandleFunc("POST /api/flags/{id}/clear", s.handleFlagsClear)
+
+	mux.HandleFunc("GET /api/detectors", s.handleDetectorSettingsList)
+	mux.HandleFunc("PUT /api/detectors/{name}", s.handleDetectorSettingsUpdate)
 
 	mux.HandleFunc("GET /api/auth/session", s.handleAuthSession)
 	mux.HandleFunc("POST /api/auth/register", s.handleAuthRegister)

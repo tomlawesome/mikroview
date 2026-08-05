@@ -125,8 +125,27 @@ func main() {
 		HostActivityMultiplier:    cfg.Flags.HostActivityMultiplier,
 		HostActivityWarmupSamples: cfg.Flags.HostActivityWarmupSamples,
 	}
-	detector := detect.New(detectCfg, fs)
-	globalSpike := detect.NewGlobalSpikeDetector(detectCfg, fs)
+	seed := detect.DefaultSettingsMap()
+	for name, ds := range cfg.Flags.Detectors {
+		seed[detect.DetectorName(name)] = detect.Settings{
+			Enabled: ds.Enabled,
+			Scope: detect.Scope{
+				Hosts:          ds.Scope.Hosts,
+				HostsMode:      detect.ListMode(ds.Scope.HostsMode),
+				Ports:          ds.Scope.Ports,
+				PortsMode:      detect.ListMode(ds.Scope.PortsMode),
+				Classification: store.Scope(ds.Scope.Classification),
+				Rules:          ds.Scope.Rules,
+				RulesMode:      detect.ListMode(ds.Scope.RulesMode),
+			},
+		}
+	}
+	detectorSettings, err := detect.OpenSettingsStore(cfg.Flags.DetectorSettingsStorePath, seed)
+	if err != nil {
+		log.Printf("detector settings: %v (continuing with in-memory-only detector toggle state)", err)
+	}
+	detector := detect.NewWithSettings(detectCfg, fs, detectorSettings)
+	globalSpike := detect.NewGlobalSpikeDetectorWithSettings(detectCfg, fs, detectorSettings)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -162,16 +181,17 @@ func main() {
 	}()
 
 	srv := &api.Server{
-		Store:        st,
-		Devices:      devices,
-		Hub:          h,
-		Reputation:   rep,
-		Flags:        fs,
-		Auth:         authStore,
-		Sessions:     auth.NewSessionStore(cfg.Auth.SessionTTL),
-		LoginLimiter: auth.NewLoginLimiter(loginLimiterThreshold, loginLimiterWindow),
-		SecureCookie: cfg.Auth.SecureCookie,
-		StartTime:    time.Now(),
+		Store:            st,
+		Devices:          devices,
+		Hub:              h,
+		Reputation:       rep,
+		Flags:            fs,
+		DetectorSettings: detectorSettings,
+		Auth:             authStore,
+		Sessions:         auth.NewSessionStore(cfg.Auth.SessionTTL),
+		LoginLimiter:     auth.NewLoginLimiter(loginLimiterThreshold, loginLimiterWindow),
+		SecureCookie:     cfg.Auth.SecureCookie,
+		StartTime:        time.Now(),
 	}
 
 	rootMux := http.NewServeMux()

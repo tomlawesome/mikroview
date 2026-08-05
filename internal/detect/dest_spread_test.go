@@ -121,3 +121,66 @@ func TestDestSpreadClassifiesEachDestinationIndependently(t *testing.T) {
 		t.Fatalf("expected 2 internal + 2 external destinations to stay below both (threshold=3) thresholds, got %+v", fs.List())
 	}
 }
+
+func TestOutboundAnomalyRespectsHostsScope(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.OutboundAnomalyThreshold = 3
+	cfg.PortScanThreshold = 1000
+	cfg.ActivitySpikeThreshold = 1000
+
+	seed := DefaultSettingsMap()
+	seed[DetectorOutboundAnomaly] = Settings{
+		Enabled: true,
+		Scope:   Scope{Hosts: []string{"192.168.1.50"}, HostsMode: ListModeAllow},
+	}
+	d, fs := newTestDetectorWithSettings(t, cfg, seed)
+
+	now := time.Now()
+	for i, dst := range []string{"203.0.113.1", "203.0.113.2", "203.0.113.3"} {
+		d.Observe(lanEvt("192.168.1.99", dst, now.Add(time.Duration(i)*time.Second))) // not in the allowlist
+	}
+	if len(fs.List()) != 0 {
+		t.Fatalf("expected a source outside the allowlist to never flag, got %+v", fs.List())
+	}
+
+	for i, dst := range []string{"203.0.113.1", "203.0.113.2", "203.0.113.3"} {
+		d.Observe(lanEvt("192.168.1.50", dst, now.Add(time.Duration(i)*time.Second)))
+	}
+	if len(fs.List()) != 1 {
+		t.Fatalf("expected the allowlisted source to still flag, got %+v", fs.List())
+	}
+}
+
+func TestOutboundAnomalyAndInternalReconToggleIndependently(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.OutboundAnomalyThreshold = 2
+	cfg.InternalReconThreshold = 2
+	cfg.PortScanThreshold = 1000
+	cfg.ActivitySpikeThreshold = 1000
+
+	seed := DefaultSettingsMap()
+	seed[DetectorInternalRecon] = Settings{Enabled: false}
+	d, fs := newTestDetectorWithSettings(t, cfg, seed)
+
+	now := time.Now()
+	d.Observe(lanEvt("192.168.1.50", "203.0.113.1", now))
+	d.Observe(lanEvt("192.168.1.50", "203.0.113.2", now))
+	d.Observe(lanEvt("192.168.1.50", "192.168.1.5", now))
+	d.Observe(lanEvt("192.168.1.50", "192.168.1.6", now))
+
+	sawOutbound, sawRecon := false, false
+	for _, f := range fs.List() {
+		switch f.Type {
+		case flags.TypeOutboundAnomaly:
+			sawOutbound = true
+		case flags.TypeInternalRecon:
+			sawRecon = true
+		}
+	}
+	if !sawOutbound {
+		t.Error("expected outbound_anomaly to still fire while enabled")
+	}
+	if sawRecon {
+		t.Error("expected internal_recon to never fire while disabled, even on the same shared window")
+	}
+}

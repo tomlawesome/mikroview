@@ -72,6 +72,34 @@ type Auth struct {
 	SessionTTL time.Duration `yaml:"sessionTTL"`
 }
 
+// DetectorScope is DetectorSettings' host/port/rule/classification
+// restriction, as plain yaml-tagged fields rather than importing
+// internal/detect -- same reasoning Flags already gives for duplicating
+// detect.Config's thresholds: this package stays a dependency-free
+// leaf. See internal/detect.Scope's doc comment for exactly which
+// fields each detector consults and what "" for a Mode/Classification
+// field means (no restriction).
+type DetectorScope struct {
+	Hosts          []string `yaml:"hosts"`
+	HostsMode      string   `yaml:"hostsMode"`
+	Ports          []int    `yaml:"ports"`
+	PortsMode      string   `yaml:"portsMode"`
+	Classification string   `yaml:"classification"`
+	Rules          []string `yaml:"rules"`
+	RulesMode      string   `yaml:"rulesMode"`
+}
+
+// DetectorSettings is one detector's config.yaml-configurable starting
+// point -- enabled by default, unscoped. A live admin-only UI toggle
+// (see docs/configuration.md's "Per-detector toggles" section) can
+// override this at runtime without a restart, persisted separately to
+// DetectorSettingsStorePath; these YAML values are only ever the seed
+// for the first run, not re-read afterward.
+type DetectorSettings struct {
+	Enabled bool          `yaml:"enabled"`
+	Scope   DetectorScope `yaml:"scope"`
+}
+
 // Flags configures internal/detect's behavioral detectors and
 // internal/flags' persistence -- see both packages' docs for what each
 // threshold means and why the defaults are what they are. StorePath left
@@ -108,6 +136,16 @@ type Flags struct {
 
 	HostActivityMultiplier    float64 `yaml:"hostActivityMultiplier"`
 	HostActivityWarmupSamples int     `yaml:"hostActivityWarmupSamples"`
+
+	// DetectorSettingsStorePath persists live UI on/off+scope toggles
+	// (see internal/detect.SettingsStore) so they survive a restart --
+	// same optional-persistence contract as StorePath above. Detectors
+	// map is YAML-only (no env var), same rationale as RuleNames/
+	// HostNames/Devices below: a structured per-detector record doesn't
+	// map cleanly onto env vars. Keyed by detector name (e.g.
+	// "port_scan", "rule_spike" -- see internal/detect.DetectorName).
+	DetectorSettingsStorePath string                      `yaml:"detectorSettingsStorePath"`
+	Detectors                 map[string]DetectorSettings `yaml:"detectors"`
 }
 
 type Config struct {
@@ -349,6 +387,9 @@ func applyEnv(cfg *Config) {
 		if n, err := strconv.Atoi(v); err == nil {
 			cfg.Flags.HostActivityWarmupSamples = n
 		}
+	}
+	if v := os.Getenv("MIKROVIEW_FLAGS_DETECTOR_SETTINGS_STORE_PATH"); v != "" {
+		cfg.Flags.DetectorSettingsStorePath = v
 	}
 	if v := os.Getenv("MIKROVIEW_AUTH_STORE_PATH"); v != "" {
 		cfg.Auth.StorePath = v

@@ -9,6 +9,7 @@ import (
 
 	"github.com/tomlawesome/mikroview/internal/auth"
 	"github.com/tomlawesome/mikroview/internal/config"
+	"github.com/tomlawesome/mikroview/internal/detect"
 	"github.com/tomlawesome/mikroview/internal/device"
 	"github.com/tomlawesome/mikroview/internal/flags"
 	"github.com/tomlawesome/mikroview/internal/hub"
@@ -21,15 +22,16 @@ func newTestServer() (*Server, *store.Store) {
 	fs, _ := flags.Open("")
 	authStore, _ := auth.Open("") // unpersisted, zero users -- auth inactive, matches every existing test's assumption of a fully open API
 	s := &Server{
-		Store:        st,
-		Devices:      device.NewRegistry([]config.Device{{ID: "core", Name: "Core", SourceIP: "192.168.1.1"}}),
-		Hub:          hub.New(),
-		Reputation:   reputation.New(""),
-		Flags:        fs,
-		Auth:         authStore,
-		Sessions:     auth.NewSessionStore(time.Hour),
-		LoginLimiter: auth.NewLoginLimiter(10, time.Minute),
-		StartTime:    time.Now(),
+		Store:            st,
+		Devices:          device.NewRegistry([]config.Device{{ID: "core", Name: "Core", SourceIP: "192.168.1.1"}}),
+		Hub:              hub.New(),
+		Reputation:       reputation.New(""),
+		Flags:            fs,
+		DetectorSettings: detect.AllEnabledSettingsStore(),
+		Auth:             authStore,
+		Sessions:         auth.NewSessionStore(time.Hour),
+		LoginLimiter:     auth.NewLoginLimiter(10, time.Minute),
+		StartTime:        time.Now(),
 	}
 	return s, st
 }
