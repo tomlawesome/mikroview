@@ -84,7 +84,8 @@ func (d *Detector) checkHostActivityBaseline(w *sourceWindow, srcIP string, curr
 			"%d events in %s vs a baseline of %.1f for this host (based on %d samples, %.1fσ above normal)",
 			currentRate, d.cfg.ActivitySpikeWindow, prevBaseline, w.sampleCount, z,
 		)
-		d.fs.AddWithConfidence(flags.TypeActivitySpike, srcIP, detail, confidence, now)
+		isNew := d.fs.AddWithConfidence(flags.TypeActivitySpike, srcIP, detail, confidence, now)
+		d.maybeCheckReputation(flags.TypeActivitySpike, srcIP, srcIP, isNew)
 	}
 
 	// EMA update: standard exponentially-weighted mean/variance -- same
