@@ -1,10 +1,14 @@
 name: CI
 
+# Three-lane model: dev (light, fast feedback) -> preview (heavier gate,
+# publishes the release candidate image) -> main (promotion only, always
+# gets a full audit regardless of what changed -- see the `security` and
+# `container` jobs' `if:` conditions below).
 on:
   push:
-    branches: [main, dev]
+    branches: [main, preview, dev]
   pull_request:
-    branches: [main, dev]
+    branches: [main, preview, dev]
   workflow_dispatch: {}
 
 concurrency:
@@ -15,6 +19,33 @@ permissions:
   contents: read
 
 jobs:
+  # Detects whether this change touches anything auth-related, so the
+  # security job can run on every dev/preview change that's actually
+  # relevant without adding overhead to every other change -- except a
+  # PR targeting main, which always gets the full audit regardless (see
+  # each downstream job's `if:`).
+  changes:
+    name: Detect changed areas
+    runs-on: ubuntu-latest
+    outputs:
+      auth: ${{ steps.filter.outputs.auth }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            auth:
+              - 'internal/auth/**'
+              - 'internal/api/auth.go'
+              - 'internal/api/auth_test.go'
+              - 'internal/api/ws.go'
+              - 'frontend/src/lib/auth.svelte.ts'
+              - 'frontend/src/components/Auth*.svelte'
+              - 'frontend/src/components/AddUserOverlay.svelte'
+              - 'go.mod'
+              - 'go.sum'
+
   test:
     name: Go + frontend tests
     runs-on: ubuntu-latest
@@ -24,7 +55,7 @@ jobs:
 
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.23.4'
+          go-version: '1.25.12'
       - run: go build ./...
       - run: go vet ./...
       - run: go test ./...
@@ -37,8 +68,44 @@ jobs:
           npm ci
           npx svelte-check --tsconfig ./tsconfig.app.json
 
+  # Targeted: only runs when auth-related paths changed (see `changes`
+  # above) -- except a PR into main, which gets it unconditionally as
+  # part of the full pre-release audit, regardless of what changed.
+  security:
+    name: Security (auth-focused)
+    needs: changes
+    if: needs.changes.outputs.auth == 'true' || github.base_ref == 'main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25.12'
+      - name: Race-detector tests (auth + API)
+        run: go test -race ./internal/auth/... ./internal/api/...
+      - name: govulncheck
+        run: |
+          go install golang.org/x/vuln/cmd/govulncheck@latest
+          govulncheck ./...
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: npm audit
+        run: |
+          cd frontend
+          npm ci
+          npm audit --audit-level=high
+
+  # Not run on dev (see the on.push/pull_request branch lists above
+  # already excluding it isn't possible per-job, so this gates itself):
+  # dev stays fast/light on purpose. Preview and main both get the real
+  # container smoke test.
   container:
     name: Container smoke test
+    if: github.base_ref != 'dev' && github.ref_name != 'dev'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
