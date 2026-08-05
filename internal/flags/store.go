@@ -61,6 +61,15 @@ type Flag struct {
 	// detector is exactly as confident as the count it reports, so
 	// attaching a number there would be noise, not signal.
 	Confidence *int `json:"confidence,omitempty"`
+	// ReputationFloor is the last reputation-informed minimum confidence
+	// applied to this flag (see RaiseConfidenceFloor, internal/detect's
+	// async AbuseIPDB-informed check) -- reapplied against Confidence on
+	// every subsequent re-fire so a later, purely behavioral confidence
+	// recompute never silently discards reputation evidence gathered
+	// earlier in the same episode. nil means no reputation floor has
+	// been applied (either not configured, not looked up yet, or the
+	// target has no reputation data).
+	ReputationFloor *int `json:"reputationFloor,omitempty"`
 }
 
 // Store holds every known flag, active and cleared, keyed by a stable ID
@@ -120,19 +129,76 @@ func flagID(t Type, target string) string {
 // as a fresh episode (FirstSeen and Count reset) rather than left
 // cleared -- once a human has dismissed a flag, the behavior recurring
 // is worth a new signal, not a silently-suppressed repeat of something
-// they already looked at.
-func (s *Store) Add(t Type, target, detail string, now time.Time) {
-	s.add(t, target, detail, nil, now)
+// they already looked at. Reports whether this call started a new
+// episode (first-ever raise, or a revival) as opposed to updating an
+// already-active flag in place -- internal/detect uses this to avoid
+// re-triggering a reputation lookup on every re-fire of an ongoing flag
+// (see RaiseConfidenceFloor).
+func (s *Store) Add(t Type, target, detail string, now time.Time) bool {
+	return s.add(t, target, detail, nil, now)
 }
 
 // AddWithConfidence is Add, but for a detector that can express how
 // confident it is in this specific flag (0-100) rather than a simple
 // deterministic threshold crossing -- see Flag.Confidence.
-func (s *Store) AddWithConfidence(t Type, target, detail string, confidence int, now time.Time) {
-	s.add(t, target, detail, &confidence, now)
+func (s *Store) AddWithConfidence(t Type, target, detail string, confidence int, now time.Time) bool {
+	return s.add(t, target, detail, &confidence, now)
 }
 
-func (s *Store) add(t Type, target, detail string, confidence *int, now time.Time) {
+func (s *Store) add(t Type, target, detail string, confidence *int, now time.Time) bool {
+	id := flagID(t, target)
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	f, ok := s.byID[id]
+	isNew := !ok
+	if !ok {
+		f = &Flag{ID: id, Type: t, Target: target, FirstSeen: now}
+		s.byID[id] = f
+	} else if f.Cleared {
+		isNew = true
+		f.FirstSeen = now
+		f.Cleared = false
+		f.ClearedAt = time.Time{}
+		f.Count = 0
+		f.ReputationFloor = nil // a revived flag starts its confidence history fresh
+	}
+	f.Detail = detail
+	f.Confidence = mergeConfidence(confidence, f.ReputationFloor)
+	f.LastSeen = now
+	f.Count++
+
+	s.pruneLocked()
+	s.persistLocked()
+	return isNew
+}
+
+// mergeConfidence combines a detector's freshly computed confidence
+// with any previously applied reputation floor -- the floor must
+// survive a plain re-fire's confidence recompute, or a later, purely
+// behavioral update would silently discard reputation evidence gathered
+// earlier in the same episode.
+func mergeConfidence(fresh, floor *int) *int {
+	switch {
+	case floor == nil:
+		return fresh
+	case fresh == nil || *floor > *fresh:
+		v := *floor
+		return &v
+	default:
+		return fresh
+	}
+}
+
+// RaiseConfidenceFloor raises id's confidence to at least floor, if the
+// flag is still known and floor is higher than its current score or
+// previously applied floor. Never lowers an existing score -- a
+// clean/unavailable reputation result is absence of evidence, not
+// evidence of innocence. Called asynchronously by internal/detect, well
+// after the triggering event -- safe to call from any goroutine, same
+// as every other Store method.
+func (s *Store) RaiseConfidenceFloor(t Type, target string, floor int) {
 	id := flagID(t, target)
 
 	s.mu.Lock()
@@ -140,21 +206,23 @@ func (s *Store) add(t Type, target, detail string, confidence *int, now time.Tim
 
 	f, ok := s.byID[id]
 	if !ok {
-		f = &Flag{ID: id, Type: t, Target: target, FirstSeen: now}
-		s.byID[id] = f
-	} else if f.Cleared {
-		f.FirstSeen = now
-		f.Cleared = false
-		f.ClearedAt = time.Time{}
-		f.Count = 0
+		return
 	}
-	f.Detail = detail
-	f.Confidence = confidence
-	f.LastSeen = now
-	f.Count++
 
-	s.pruneLocked()
-	s.persistLocked()
+	changed := false
+	if f.ReputationFloor == nil || floor > *f.ReputationFloor {
+		v := floor
+		f.ReputationFloor = &v
+		changed = true
+	}
+	if f.Confidence == nil || floor > *f.Confidence {
+		v := floor
+		f.Confidence = &v
+		changed = true
+	}
+	if changed {
+		s.persistLocked()
+	}
 }
 
 // Clear marks id as cleared. It reports whether an active flag with that

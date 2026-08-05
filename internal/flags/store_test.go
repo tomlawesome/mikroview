@@ -251,3 +251,82 @@ func TestPruneEvictsOldestClearedFlagsOverCap(t *testing.T) {
 		}
 	}
 }
+
+func TestAddReportsNewEpisode(t *testing.T) {
+	s, _ := Open("")
+	now := time.Now()
+
+	if isNew := s.Add(TypePortScan, "1.1.1.1", "first", now); !isNew {
+		t.Error("expected the first-ever raise to report a new episode")
+	}
+	if isNew := s.Add(TypePortScan, "1.1.1.1", "re-fire", now.Add(time.Second)); isNew {
+		t.Error("expected a plain re-fire of an active flag to not report a new episode")
+	}
+
+	id := flagID(TypePortScan, "1.1.1.1")
+	s.Clear(id, now.Add(2*time.Second))
+	if isNew := s.Add(TypePortScan, "1.1.1.1", "revived", now.Add(3*time.Second)); !isNew {
+		t.Error("expected a revival from cleared to report a new episode")
+	}
+}
+
+func TestRaiseConfidenceFloorOnlyRaises(t *testing.T) {
+	s, _ := Open("")
+	now := time.Now()
+
+	s.AddWithConfidence(TypeCriticalPort, "203.0.113.9", "detail", 20, now)
+
+	s.RaiseConfidenceFloor(TypeCriticalPort, "203.0.113.9", 10)
+	if c := *s.List()[0].Confidence; c != 20 {
+		t.Errorf("expected a lower floor to be a no-op, got confidence %d", c)
+	}
+
+	s.RaiseConfidenceFloor(TypeCriticalPort, "203.0.113.9", 90)
+	if c := *s.List()[0].Confidence; c != 90 {
+		t.Errorf("expected a higher floor to raise confidence, got %d", c)
+	}
+
+	s.RaiseConfidenceFloor(TypeCriticalPort, "203.0.113.9", 50)
+	if c := *s.List()[0].Confidence; c != 90 {
+		t.Errorf("expected a subsequent lower floor to still be a no-op, got %d", c)
+	}
+
+	// Unknown ID -- no-op, not an error.
+	s.RaiseConfidenceFloor(TypeCriticalPort, "203.0.113.99", 100)
+}
+
+func TestRaiseConfidenceFloorSurvivesAPlainRefire(t *testing.T) {
+	s, _ := Open("")
+	now := time.Now()
+
+	s.AddWithConfidence(TypeCriticalPort, "203.0.113.9", "detail", 20, now)
+	s.RaiseConfidenceFloor(TypeCriticalPort, "203.0.113.9", 90)
+
+	// A later re-fire with a lower fresh confidence must not discard the
+	// reputation floor established earlier in the same episode.
+	s.AddWithConfidence(TypeCriticalPort, "203.0.113.9", "re-fire, lower overshoot", 15, now.Add(time.Second))
+	if c := *s.List()[0].Confidence; c != 90 {
+		t.Errorf("expected the reputation floor to survive a plain re-fire's lower confidence, got %d", c)
+	}
+
+	// A later re-fire with a higher fresh confidence than the floor
+	// should win on its own merits.
+	s.AddWithConfidence(TypeCriticalPort, "203.0.113.9", "re-fire, higher overshoot", 95, now.Add(2*time.Second))
+	if c := *s.List()[0].Confidence; c != 95 {
+		t.Errorf("expected a fresh confidence above the floor to win, got %d", c)
+	}
+}
+
+func TestRaiseConfidenceFloorResetOnRevival(t *testing.T) {
+	s, _ := Open("")
+	now := time.Now()
+
+	s.AddWithConfidence(TypeCriticalPort, "203.0.113.9", "detail", 20, now)
+	s.RaiseConfidenceFloor(TypeCriticalPort, "203.0.113.9", 90)
+	s.Clear(flagID(TypeCriticalPort, "203.0.113.9"), now.Add(time.Second))
+
+	s.AddWithConfidence(TypeCriticalPort, "203.0.113.9", "revived episode", 15, now.Add(2*time.Second))
+	if c := *s.List()[0].Confidence; c != 15 {
+		t.Errorf("expected a revived episode to start its confidence history fresh (no stale reputation floor), got %d", c)
+	}
+}

@@ -162,6 +162,14 @@ type Detector struct {
 	fs       *flags.Store
 	settings *SettingsStore
 
+	// reputation and lookupSlots back the async, best-effort
+	// confidence-floor lookups in reputation.go -- see WithReputation.
+	// reputation is nil unless WithReputation is called explicitly
+	// (never by New/NewWithSettings themselves, so tests never make
+	// real network calls by default).
+	reputation  reputationLookup
+	lookupSlots chan struct{}
+
 	perSource       map[string]*sourceWindow
 	criticalHits    map[string][]time.Time
 	criticalPortIPs map[int]*portSources
@@ -187,6 +195,7 @@ func NewWithSettings(cfg Config, fs *flags.Store, settings *SettingsStore) *Dete
 		cfg:             cfg,
 		fs:              fs,
 		settings:        settings,
+		lookupSlots:     make(chan struct{}, reputationLookupConcurrency),
 		perSource:       make(map[string]*sourceWindow),
 		criticalHits:    make(map[string][]time.Time),
 		criticalPortIPs: make(map[int]*portSources),
@@ -321,9 +330,10 @@ func (d *Detector) observeScanAndSpike(e store.Event, now time.Time) {
 		d.checkHostActivityBaseline(w, e.SrcIP, spikeCount, now)
 	}
 	if psActive && len(distinctPorts) >= d.cfg.PortScanThreshold {
-		d.fs.AddWithConfidence(flags.TypePortScan, e.SrcIP,
+		isNew := d.fs.AddWithConfidence(flags.TypePortScan, e.SrcIP,
 			fmt.Sprintf("%d distinct destination ports in %s", len(distinctPorts), d.cfg.PortScanWindow),
 			overshootConfidence(len(distinctPorts), d.cfg.PortScanThreshold), now)
+		d.maybeCheckReputation(flags.TypePortScan, e.SrcIP, e.SrcIP, isNew)
 	}
 }
 
@@ -346,9 +356,12 @@ func (d *Detector) observeCriticalPort(e store.Event, now time.Time) {
 	d.criticalHits[e.SrcIP] = hits
 
 	if len(hits) >= d.cfg.CriticalPortThreshold {
-		d.fs.AddWithConfidence(flags.TypeCriticalPort, e.SrcIP,
+		isNew := d.fs.AddWithConfidence(flags.TypeCriticalPort, e.SrcIP,
 			fmt.Sprintf("%d attempts against port %d in %s", len(hits), e.DstPort, d.cfg.CriticalPortWindow),
 			overshootConfidence(len(hits), d.cfg.CriticalPortThreshold), now)
+		// e.SrcIP is already guaranteed public here -- Observe only calls
+		// observeCriticalPort when srcPublic is true.
+		d.maybeCheckReputation(flags.TypeCriticalPort, e.SrcIP, e.SrcIP, isNew)
 	}
 }
 
