@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"testing"
 	"time"
 
@@ -119,6 +120,62 @@ func TestHandleEventsScopeFiltering(t *testing.T) {
 	}
 	if len(res2.Events) != 2 {
 		t.Errorf("expected a malformed scope value to be ignored (both events returned), got %+v", res2.Events)
+	}
+}
+
+func TestHandleEventsUntilFiltering(t *testing.T) {
+	s, st := newTestServer()
+	ts := httptest.NewServer(s.Routes())
+	defer ts.Close()
+
+	now := time.Now()
+	old := st.Insert(store.Event{Time: now.Add(-time.Minute), ReceivedAt: now.Add(-time.Minute), DeviceID: "core", Action: store.ActionAccept, SrcIP: "10.0.0.1", DstIP: "8.8.8.8"})
+	st.Insert(store.Event{Time: now, ReceivedAt: now, DeviceID: "core", Action: store.ActionAccept, SrcIP: "10.0.0.1", DstIP: "8.8.8.8"})
+
+	resp, err := http.Get(ts.URL + "/api/events?until=" + url.QueryEscape(old.ReceivedAt.Add(30*time.Second).Format(time.RFC3339)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	var res store.Result
+	if err := json.NewDecoder(resp.Body).Decode(&res); err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Events) != 1 || res.Events[0].ID != old.ID {
+		t.Errorf("expected only the event before Until, got %+v", res.Events)
+	}
+}
+
+// TestHandleEventsAroundWindow covers issue #29's bounded before/after
+// lookback: given a center timestamp and window, the endpoint should
+// return only events within that window, matching the source IP.
+func TestHandleEventsAroundWindow(t *testing.T) {
+	s, st := newTestServer()
+	ts := httptest.NewServer(s.Routes())
+	defer ts.Close()
+
+	now := time.Now()
+	tooEarly := now.Add(-time.Hour)
+	center := now
+	tooLate := now.Add(time.Hour)
+	st.Insert(store.Event{Time: tooEarly, ReceivedAt: tooEarly, DeviceID: "core", Action: store.ActionAccept, SrcIP: "203.0.113.9", DstIP: "8.8.8.8"})
+	inWindow := st.Insert(store.Event{Time: center, ReceivedAt: center, DeviceID: "core", Action: store.ActionAccept, SrcIP: "203.0.113.9", DstIP: "8.8.8.8"})
+	st.Insert(store.Event{Time: tooLate, ReceivedAt: tooLate, DeviceID: "core", Action: store.ActionAccept, SrcIP: "203.0.113.9", DstIP: "8.8.8.8"})
+
+	reqURL := ts.URL + "/api/events?ip=203.0.113.9&around=" + url.QueryEscape(center.Format(time.RFC3339)) + "&window=5m"
+	resp, err := http.Get(reqURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	var res store.Result
+	if err := json.NewDecoder(resp.Body).Decode(&res); err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Events) != 1 || res.Events[0].ID != inWindow.ID {
+		t.Errorf("expected only the event within the 5m window around the center timestamp, got %+v", res.Events)
 	}
 }
 

@@ -39,8 +39,15 @@ type Query struct {
 	Rule      string // substring match (or regex, if RuleRegex) against the rule label / raw line
 	RuleRegex bool
 	Since     time.Time
-	SinceID   uint64 // only return events with ID > SinceID
-	Limit     int
+	// Until is an optional upper bound (issue #29) -- paired with Since
+	// this lets a caller pull a bounded before/after window around a
+	// timestamp (e.g. "what was this IP doing right before/after a
+	// honeypot hit"), not just an open-ended tail from Since to now.
+	// Zero value means no upper bound, same "unset means no filter"
+	// convention as every other Query field.
+	Until   time.Time
+	SinceID uint64 // only return events with ID > SinceID
+	Limit   int
 }
 
 // Result is the response to a Query.
@@ -70,6 +77,15 @@ type Result struct {
 // across devices (or even a single device whose clock jumps) — breaking on
 // it would let one stale-clocked event truncate the scan early and silently
 // drop older-but-still-in-window events.
+//
+// A "before/after a timestamp" lookback (issue #29 -- e.g. pulling what an
+// IP was doing around an external signal like a honeypot hit) is just
+// Since/Until set to a window centered on that timestamp; no separate mode
+// is needed. WindowStart in the returned Result already reports the actual
+// applied lower bound (clamped to the retention window if Since asked for
+// more history than exists), so a caller comparing it against the Since it
+// requested can tell whether "before" context was truncated by retention
+// rather than being silently missing.
 func (s *Store) Query(q Query) Result {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -128,6 +144,12 @@ func (s *Store) Query(q Query) Result {
 		}
 		if e.ReceivedAt.Before(windowStart) {
 			break
+		}
+		// Until can't break the scan the way windowStart/SinceID do -- we're
+		// walking newest-to-oldest, so an event past Until is skipped, not
+		// a signal that everything older is also out of range.
+		if !q.Until.IsZero() && e.ReceivedAt.After(q.Until) {
+			continue
 		}
 		if !matchesFilters(e, q, ipNet, ip, ruleRe) {
 			continue

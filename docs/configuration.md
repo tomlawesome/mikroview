@@ -591,8 +591,28 @@ or CIDR, matches source or destination), `port` (matches source or
 destination), `srcScope`/`dstScope` (`internal` or `external`, restricts
 that side of the connection to a private/LAN or public address
 respectively -- an address that can't be parsed satisfies neither),
-`rule` (substring match), `since` (RFC3339), `sinceId`
+`rule` (substring match), `since` (RFC3339), `until` (RFC3339, an
+optional upper bound -- paired with `since` this gives a bounded
+before/after window instead of an open-ended tail to now), `sinceId`
 (cursor), `limit` (default 500, max 5000).
+
+**Bounded before/after lookback (issue #29).** `around` (RFC3339) +
+`window` (a duration, e.g. `5m`, default `5m`) is sugar for `since`/
+`until` centered on a timestamp -- overrides them if both forms are
+given. Meant for pulling "what was this IP doing right before/after X"
+from an external signal (a honeypot hit, a manual investigation
+trigger), combined with `ip`:
+
+```
+GET /api/events?ip=203.0.113.9&around=2026-01-15T14:32:00Z&window=10m
+```
+
+"Before" context is inherently capped by the in-memory retention window
+(`store.retention`) -- older history simply doesn't exist. Rather than
+silently truncating, the response's `windowStart` field always reports
+the *actual* applied lower bound, so a caller comparing it against the
+`since` (or `around`-`window`) it requested can tell whether it got
+truncated by retention.
 
 ## Live updates: server vs. client filtering
 
