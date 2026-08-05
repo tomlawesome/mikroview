@@ -47,6 +47,10 @@
   if ([...initialParams.keys()].length > 0) {
     appState.filters = filtersFromSearchParams(initialParams)
   }
+  // Also runs once at startup, independent of the filter params above --
+  // strips and surfaces a failed OIDC callback's ?ssoError= (see
+  // internal/api/oidc.go's redirectWithSSOError).
+  authState.consumeSSOErrorFromURL()
 
   $effect(() => {
     themeState.apply()
