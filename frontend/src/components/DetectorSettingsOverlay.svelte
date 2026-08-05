@@ -17,6 +17,7 @@
     internal_recon: 'Internal reconnaissance',
     rule_spike: 'Rule hit-rate spike',
     repeated_drops: 'Repeated drops on a port',
+    low_slow_scan: 'Low-and-slow port scan',
   }
 
   // Which scope fields apply to each detector -- kept in sync with
@@ -33,6 +34,7 @@
     rule_spike: ['rules'],
     repeated_drops: ['hosts', 'ports'],
     global_spike: [],
+    low_slow_scan: ['hosts', 'classification', 'ports'],
   }
 
   let expanded = $state<DetectorName | null>(null)

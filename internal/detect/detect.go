@@ -82,6 +82,37 @@ type Config struct {
 	// confidence -- see Flag.Confidence.
 	HostActivityMultiplier   float64
 	HostActivityWarmupSamples int
+
+	// LowSlowScanWindow+... (issue #20): a port scan deliberately paced to
+	// stay under PortScanWindow's short-burst threshold -- one new
+	// port/host every few minutes rather than fifteen in a minute. Judged
+	// over hours, gated by several independent signals rather than one
+	// count, so an equally slow but perfectly ordinary pattern (a browser
+	// or health check slowly accumulating distinct destinations) doesn't
+	// trip it -- see each field's own doc comment.
+	LowSlowScanWindow time.Duration
+	// LowSlowScanPortThreshold+HostThreshold: destination *breadth*, not
+	// just port breadth -- both must independently cross their own
+	// threshold before this axis is satisfied.
+	LowSlowScanPortThreshold int
+	LowSlowScanHostThreshold int
+	// LowSlowScanMinObservation: a source must have been under observation
+	// (first sample to now) for at least this long before it's eligible to
+	// fire at all -- the "no flag from too little history" floor, scaled
+	// to this detector's much longer window since a low-and-slow source
+	// may generate very few events overall (a sample-count floor like
+	// activity-spike's wouldn't mean the same thing here).
+	LowSlowScanMinObservation time.Duration
+	// LowSlowScanDropRatio: the minimum fraction of this source's tracked
+	// attempts (within the window) that were drop/reject rather than
+	// accept -- paced scan traffic mostly gets refused; legitimate
+	// low-rate access to real services mostly gets accepted.
+	LowSlowScanDropRatio float64
+	// LowSlowScanBaselineMultiplier: this source's own destination-breadth
+	// rate must also clear a multiple of its own EMA baseline (same
+	// per-host-baseline technique as activity-spike/#38 -- see
+	// host_baseline.go), not just the absolute thresholds above.
+	LowSlowScanBaselineMultiplier float64
 }
 
 // DefaultConfig returns sensible defaults for a home/small-office
@@ -120,6 +151,13 @@ func DefaultConfig() Config {
 
 		HostActivityMultiplier:    3,
 		HostActivityWarmupSamples: 20,
+
+		LowSlowScanWindow:             3 * time.Hour,
+		LowSlowScanPortThreshold:      8,
+		LowSlowScanHostThreshold:      5,
+		LowSlowScanMinObservation:     45 * time.Minute,
+		LowSlowScanDropRatio:          0.8,
+		LowSlowScanBaselineMultiplier: 3,
 	}
 }
 
@@ -176,6 +214,7 @@ type Detector struct {
 	destWindows     map[string]*destWindow
 	ruleWindows     map[string]*ruleWindow
 	dropPairs       map[string][]time.Time
+	lowSlowWindows  map[string]*lowSlowWindow
 }
 
 // New constructs a Detector with every detector enabled and unscoped --
@@ -202,6 +241,7 @@ func NewWithSettings(cfg Config, fs *flags.Store, settings *SettingsStore) *Dete
 		destWindows:     make(map[string]*destWindow),
 		ruleWindows:     make(map[string]*ruleWindow),
 		dropPairs:       make(map[string][]time.Time),
+		lowSlowWindows:  make(map[string]*lowSlowWindow),
 	}
 }
 
@@ -213,6 +253,7 @@ func (d *Detector) Observe(e store.Event) {
 	now := e.ReceivedAt
 
 	d.observeScanAndSpike(e, now)
+	d.observeLowSlowScan(e, now)
 
 	srcPublic := isPublic(e.SrcIP)
 	if e.DstPort != 0 && isCriticalPort(d.cfg.CriticalPorts, e.DstPort) && srcPublic {
