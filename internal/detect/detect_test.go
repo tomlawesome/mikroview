@@ -99,24 +99,97 @@ func TestPortScanIgnoresSamplesOutsideWindow(t *testing.T) {
 	}
 }
 
-func TestActivitySpikeFlagsAtThreshold(t *testing.T) {
+func TestActivitySpikeIgnoresSteadyBaselineTraffic(t *testing.T) {
+	// A host with a low but perfectly steady rate should never flag, no
+	// matter how long it keeps going -- this is exactly the false-positive
+	// pattern (a naturally busy host) the per-host baseline replaced the
+	// old fixed threshold to fix.
 	cfg := DefaultConfig()
-	cfg.ActivitySpikeThreshold = 5
-	cfg.ActivitySpikeWindow = time.Minute
-	// keep the port-scan threshold high so it doesn't also fire and
-	// muddy this test's assertion
+	cfg.ActivitySpikeThreshold = 2
+	cfg.ActivitySpikeWindow = time.Second
 	cfg.PortScanThreshold = 1000
-	d, fs := newTestDetector(t, cfg)
 
+	d, fs := newTestDetector(t, cfg)
 	now := time.Now()
-	for i := 0; i < 5; i++ {
-		// same dest port every time -- a burst of activity, not a scan
-		d.Observe(evt("198.51.100.4", 443, now.Add(time.Duration(i)*time.Second)))
+	tick := time.Duration(0)
+	for i := 0; i < 30; i++ {
+		base := now.Add(tick)
+		d.Observe(evt("198.51.100.4", 100, base))
+		d.Observe(evt("198.51.100.4", 101, base.Add(10*time.Millisecond)))
+		tick += 2 * time.Second
+	}
+
+	if len(fs.List()) != 0 {
+		t.Fatalf("expected steady baseline traffic to never flag, got %+v", fs.List())
+	}
+}
+
+func TestActivitySpikeFlagsGenuineDeviationFromHostsOwnBaseline(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.ActivitySpikeThreshold = 2
+	cfg.ActivitySpikeWindow = time.Second
+	cfg.PortScanThreshold = 1000
+	cfg.HostActivityMultiplier = 3
+	cfg.HostActivityWarmupSamples = 20
+
+	d, fs := newTestDetector(t, cfg)
+	ip := "198.51.100.4"
+	now := time.Now()
+	tick := time.Duration(0)
+
+	// Warm up a steady baseline of ~2 events/window, spaced more than
+	// ActivitySpikeWindow apart so each tick's window doesn't accumulate
+	// into the next.
+	for i := 0; i < 25; i++ {
+		base := now.Add(tick)
+		d.Observe(evt(ip, 100, base))
+		d.Observe(evt(ip, 101, base.Add(10*time.Millisecond)))
+		tick += 2 * time.Second
+	}
+	if len(fs.List()) != 0 {
+		t.Fatalf("expected the warm-up phase itself to never flag, got %+v", fs.List())
+	}
+
+	// A genuine spike: well above the floor and several times the
+	// established baseline, all within one window.
+	spikeBase := now.Add(tick)
+	for i := 0; i < 10; i++ {
+		d.Observe(evt(ip, 200+i, spikeBase.Add(time.Duration(i)*10*time.Millisecond)))
 	}
 
 	list := fs.List()
-	if len(list) != 1 || list[0].Type != flags.TypeActivitySpike || list[0].Target != "198.51.100.4" {
-		t.Fatalf("expected an activity_spike flag for 198.51.100.4, got %+v", list)
+	if len(list) != 1 || list[0].Type != flags.TypeActivitySpike || list[0].Target != ip {
+		t.Fatalf("expected an activity_spike flag for %s, got %+v", ip, list)
+	}
+	if list[0].Confidence == nil || *list[0].Confidence <= 0 || *list[0].Confidence > 100 {
+		t.Fatalf("expected a confidence score in (0, 100], got %+v", list[0].Confidence)
+	}
+}
+
+func TestActivitySpikeNeverFiresBeforeMinimumSampleFloor(t *testing.T) {
+	// Calls checkHostActivityBaseline directly with a hand-controlled
+	// rate, sidestepping observeScanAndSpike's cumulative-window counting
+	// (where a tight burst's rate climbs with every call regardless of
+	// sampleCount, making "no flag from a cold start" otherwise ambiguous
+	// to assert by hand). Feeds the same extreme, easily-threshold-
+	// clearing reading repeatedly -- proves the hard floor, not just that
+	// nothing happened to be extreme enough yet.
+	cfg := DefaultConfig()
+	cfg.ActivitySpikeThreshold = 1
+	cfg.HostActivityMultiplier = 2
+	d, fs := newTestDetector(t, cfg)
+
+	w := &sourceWindow{}
+	ip := "198.51.100.9"
+	now := time.Now()
+
+	d.checkHostActivityBaseline(w, ip, 1, now) // primes: sampleCount=1
+
+	for i := 0; i < hostActivityMinSamples-1; i++ {
+		d.checkHostActivityBaseline(w, ip, 100, now.Add(time.Duration(i+1)*time.Second))
+		if len(fs.List()) != 0 {
+			t.Fatalf("expected no flag while sampleCount < hostActivityMinSamples (call %d), got %+v", i+2, fs.List())
+		}
 	}
 }
 

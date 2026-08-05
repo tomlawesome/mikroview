@@ -133,6 +133,22 @@ func TestFlagsEnvVarsOverrideDefaults(t *testing.T) {
 	}
 }
 
+func TestHostActivityEnvVarsOverrideDefaults(t *testing.T) {
+	t.Setenv("MIKROVIEW_FLAGS_HOST_ACTIVITY_MULTIPLIER", "4.5")
+	t.Setenv("MIKROVIEW_FLAGS_HOST_ACTIVITY_WARMUP_SAMPLES", "40")
+
+	cfg, err := Load("", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Flags.HostActivityMultiplier != 4.5 {
+		t.Errorf("HostActivityMultiplier = %v, want 4.5", cfg.Flags.HostActivityMultiplier)
+	}
+	if cfg.Flags.HostActivityWarmupSamples != 40 {
+		t.Errorf("HostActivityWarmupSamples = %v, want 40", cfg.Flags.HostActivityWarmupSamples)
+	}
+}
+
 func TestFlagsCriticalPortsMalformedEntryIgnoresWholeValue(t *testing.T) {
 	t.Setenv("MIKROVIEW_FLAGS_CRITICAL_PORTS", "22,not-a-port,3389")
 

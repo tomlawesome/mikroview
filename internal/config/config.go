@@ -84,6 +84,9 @@ type Flags struct {
 
 	RepeatedDropsThreshold int           `yaml:"repeatedDropsThreshold"`
 	RepeatedDropsWindow    time.Duration `yaml:"repeatedDropsWindow"`
+
+	HostActivityMultiplier    float64 `yaml:"hostActivityMultiplier"`
+	HostActivityWarmupSamples int     `yaml:"hostActivityWarmupSamples"`
 }
 
 type Config struct {
@@ -136,6 +139,9 @@ func defaults() Config {
 
 			RepeatedDropsThreshold: 10,
 			RepeatedDropsWindow:    15 * time.Minute,
+
+			HostActivityMultiplier:    3,
+			HostActivityWarmupSamples: 20,
 		},
 	}
 }
@@ -299,6 +305,16 @@ func applyEnv(cfg *Config) {
 	if v := os.Getenv("MIKROVIEW_FLAGS_REPEATED_DROPS_WINDOW"); v != "" {
 		if d, err := time.ParseDuration(v); err == nil {
 			cfg.Flags.RepeatedDropsWindow = d
+		}
+	}
+	if v := os.Getenv("MIKROVIEW_FLAGS_HOST_ACTIVITY_MULTIPLIER"); v != "" {
+		if f, err := strconv.ParseFloat(v, 64); err == nil {
+			cfg.Flags.HostActivityMultiplier = f
+		}
+	}
+	if v := os.Getenv("MIKROVIEW_FLAGS_HOST_ACTIVITY_WARMUP_SAMPLES"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			cfg.Flags.HostActivityWarmupSamples = n
 		}
 	}
 }

@@ -150,6 +150,8 @@ flags:
   ruleSpikeWindow: 60s
   repeatedDropsThreshold: 10
   repeatedDropsWindow: 15m
+  hostActivityMultiplier: 3
+  hostActivityWarmupSamples: 20
 ```
 
 - **`storePath`** — where raised/cleared flags are persisted, as a small
@@ -163,11 +165,20 @@ flags:
 - **Port scan** — one source touching `portScanThreshold`+ distinct
   destination ports within `portScanWindow`. Applies to any source,
   internal or external.
-- **Activity spike** — one source generating `activitySpikeThreshold`+
-  events within `activitySpikeWindow`. A simple absolute threshold
-  rather than a per-source historical baseline, deliberately — it's far
-  less state to keep and easy to reason about; tune the threshold to
-  your own network's normal volume if the default doesn't fit.
+- **Activity spike** — one source's own event rate vs. a slow-moving
+  baseline *of that specific host* (same EMA technique the global-spike
+  and rule-spike detectors use, just scoped per source), at
+  `hostActivityMultiplier`× or more, and still gated by an absolute
+  floor of `activitySpikeThreshold`+ events within `activitySpikeWindow`
+  so a nearly-idle host doesn't "spike" from one extra event. A host
+  that's always busy is judged against its own normal rather than one
+  number applied to every host equally — fixes the false-positive
+  pattern where a legitimately busy server (e.g. a database with many
+  clients) got flagged just for being itself. `hostActivityWarmupSamples`
+  is how many observations a host needs before a flag can reach full
+  confidence (see below) — a brand-new source with almost no history
+  can't produce a high-confidence flag no matter how extreme its first
+  few readings look.
 - **Critical-port attempts** — `criticalPortThreshold`+ attempts against
   one of `criticalPorts` within `criticalPortWindow`, from an *external*
   source only (a LAN device reaching your own router's Winbox port is
@@ -218,6 +229,20 @@ flags:
   than necessarily an attack, so treat it as "worth a look," not
   "critical."
 
+**Confidence score.** The activity-spike detector (currently the only
+one making a statistical judgment call rather than a deterministic
+threshold crossing) attaches a `confidence` percentage to each flag it
+raises, shown in the UI as e.g. "73% confidence". It's deliberately not
+a black-box number: it combines (1) how much history backs the host's
+baseline and (2) how far the current reading deviates from it, and the
+flag's own detail text spells out the actual baseline value, observed
+value, and sample count behind the score — mikroview's job is to put
+that information in front of you, not to make the call for you. Flags
+from every other detector have no `confidence` field at all (`null` in
+`GET /api/flags`) rather than an implied 100% — a plain threshold
+crossing is exactly as trustworthy as the count it reports, so a
+percentage there would be noise.
+
 A flag is raised once per (detector, source) pair and updated in place
 on re-firing (count/last-seen bumped, not duplicated) until a human
 clears it via the UI or `POST /api/flags/{id}/clear`. Clearing an
@@ -259,6 +284,8 @@ Override individual scalar settings without a mounted file:
 | `MIKROVIEW_FLAGS_RULE_SPIKE_WINDOW` | `flags.ruleSpikeWindow` |
 | `MIKROVIEW_FLAGS_REPEATED_DROPS_THRESHOLD` | `flags.repeatedDropsThreshold` |
 | `MIKROVIEW_FLAGS_REPEATED_DROPS_WINDOW` | `flags.repeatedDropsWindow` |
+| `MIKROVIEW_FLAGS_HOST_ACTIVITY_MULTIPLIER` | `flags.hostActivityMultiplier` |
+| `MIKROVIEW_FLAGS_HOST_ACTIVITY_WARMUP_SAMPLES` | `flags.hostActivityWarmupSamples` |
 
 ## CLI flags (local development)
 
