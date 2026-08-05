@@ -74,7 +74,48 @@ var (
 	// is a legitimate, expected outcome worth distinguishing (unlike
 	// Authenticate, this isn't a login attempt an attacker controls).
 	ErrUserNotFound = errors.New("auth: no such user")
+	// ErrAuthDisabled is returned by Register once this deployment has
+	// explicitly opted out of authentication (see Disable) -- refusing
+	// registration here, not just at the API-routing layer, is what
+	// makes EnableSetup's CLI-only re-arming actually load-bearing:
+	// without this check, a client could bypass the UI entirely and
+	// POST straight to /api/auth/register (still reachable while
+	// disabled -- see internal/api's requireAuth) to unilaterally
+	// re-impose auth for everyone, exactly what EnableSetup's doc
+	// comment says this design prevents.
+	ErrAuthDisabled = errors.New("auth: this deployment has disabled authentication -- run -enable-auth-setup to allow creating an account again")
 )
+
+// storeFile is the on-disk shape -- an object wrapping the user list
+// plus the Disabled marker (see Store.Disable), rather than a bare
+// array. storeFile.UnmarshalJSON below stays compatible with a
+// pre-Disabled-state file (a bare `[]User` array, written by every
+// mikroview version before this one) so an existing deployment's
+// accounts still load correctly, treated as Disabled: false.
+type storeFile struct {
+	Disabled bool    `json:"disabled"`
+	Users    []*User `json:"users"`
+}
+
+func (f *storeFile) UnmarshalJSON(data []byte) error {
+	type shape storeFile // avoids infinite recursion into this method
+	var s shape
+	if err := json.Unmarshal(data, &s); err == nil {
+		*f = storeFile(s)
+		return nil
+	}
+	// A top-level JSON array can't unmarshal into a struct -- that's
+	// exactly the pre-Disabled-state legacy shape, so this is where a
+	// genuinely malformed file also gets one more (correct) chance to
+	// report its real error, not this fallback's.
+	var legacy []*User
+	if err := json.Unmarshal(data, &legacy); err != nil {
+		return err
+	}
+	f.Users = legacy
+	f.Disabled = false
+	return nil
+}
 
 // Store persists user accounts to a JSON file. Unlike internal/flags'
 // Store, persistence is not optional: an empty path leaves Store usable
@@ -85,13 +126,20 @@ type Store struct {
 	path   string
 	byID   map[string]*User
 	byName map[string]string // lowercased username -> ID
+	// disabled records a deliberate, permanent opt-out of authentication
+	// for this deployment -- see Disabled/Disable/EnableSetup. Distinct
+	// from len(byID)==0, which just means "no account yet, decision
+	// still pending" (see internal/api's requireAuth for how the two
+	// states are gated differently).
+	disabled bool
 	// mtime tracks the store file's modification time as of the last
 	// load, so a running server can pick up a change made by a separate
-	// process -- namely the CLI recovery tool (`-reset-password`),
-	// which opens its own independent Store and writes to the same
-	// file. Without this, a password reset would silently have no
-	// effect on an already-running server until it restarts, defeating
-	// the point of a recovery tool that shouldn't require one.
+	// process -- namely the CLI recovery tools (`-reset-password`,
+	// `-enable-auth-setup`), which each open their own independent
+	// Store and write to the same file. Without this, a password reset
+	// (or re-arming the setup flow) would silently have no effect on an
+	// already-running server until it restarts, defeating the point of
+	// a recovery tool that shouldn't require one.
 	mtime time.Time
 }
 
@@ -118,14 +166,15 @@ func Open(path string) (*Store, error) {
 		return s, err
 	}
 
-	var list []*User
-	if err := json.Unmarshal(data, &list); err != nil {
+	var file storeFile
+	if err := json.Unmarshal(data, &file); err != nil {
 		return s, err
 	}
-	for _, u := range list {
+	for _, u := range file.Users {
 		s.byID[u.ID] = u
 		s.byName[strings.ToLower(u.Username)] = u.ID
 	}
+	s.disabled = file.Disabled
 	s.mtime = info.ModTime()
 	return s, nil
 }
@@ -155,8 +204,8 @@ func (s *Store) reloadIfStale() {
 	if err != nil {
 		return
 	}
-	var list []*User
-	if err := json.Unmarshal(data, &list); err != nil {
+	var file storeFile
+	if err := json.Unmarshal(data, &file); err != nil {
 		return
 	}
 
@@ -168,14 +217,15 @@ func (s *Store) reloadIfStale() {
 	if !info.ModTime().After(s.mtime) {
 		return
 	}
-	byID := make(map[string]*User, len(list))
-	byName := make(map[string]string, len(list))
-	for _, u := range list {
+	byID := make(map[string]*User, len(file.Users))
+	byName := make(map[string]string, len(file.Users))
+	for _, u := range file.Users {
 		byID[u.ID] = u
 		byName[strings.ToLower(u.Username)] = u.ID
 	}
 	s.byID = byID
 	s.byName = byName
+	s.disabled = file.Disabled
 	s.mtime = info.ModTime()
 }
 
@@ -192,6 +242,57 @@ func (s *Store) Count() int {
 	return len(s.byID)
 }
 
+// Disabled reports whether this deployment has explicitly opted out of
+// authentication (see Disable) -- distinct from Count()==0, which just
+// means "no account yet, decision still pending." Reloads first (see
+// reloadIfStale) so a live server picks up a change made by the CLI
+// recovery tool (`-enable-auth-setup`) without needing a restart, same
+// as Authenticate/Get/List already do for password resets.
+func (s *Store) Disabled() bool {
+	s.reloadIfStale()
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.disabled
+}
+
+// Disable permanently opts this deployment out of authentication --
+// only callable while Count()==0: disabling auth out from under
+// existing accounts isn't this method's job, and is never exposed
+// anywhere (internal/api's handleAuthSkip is the only caller, itself
+// only reachable during the pre-decision bootstrap window). Persists
+// immediately.
+func (s *Store) Disable() error {
+	if !s.Persisted() {
+		return ErrNotPersisted
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(s.byID) > 0 {
+		return ErrRegistrationClosed
+	}
+	s.disabled = true
+	s.persistLocked()
+	return nil
+}
+
+// EnableSetup clears a prior Disable, re-arming the web setup form so
+// /api/auth/register (and the choice screen in front of it) becomes
+// reachable again. Deliberately not exposed via any API endpoint a
+// browser could reach -- only internal/main.go's `-enable-auth-setup`
+// CLI mode calls this, so a UI visitor can never re-impose auth for
+// everyone else without host/container access (the same trust anchor
+// `-reset-password`/`-list-users` already rely on).
+func (s *Store) EnableSetup() error {
+	if !s.Persisted() {
+		return ErrNotPersisted
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.disabled = false
+	s.persistLocked()
+	return nil
+}
+
 // Register creates the very first account, always as RoleAdmin,
 // regardless of what a future caller might pass -- there is no role
 // parameter because there's no meaningful choice: the first person to
@@ -200,6 +301,9 @@ func (s *Store) Count() int {
 func (s *Store) Register(username, password string, now time.Time) (*User, error) {
 	if !s.Persisted() {
 		return nil, ErrNotPersisted
+	}
+	if s.Disabled() {
+		return nil, ErrAuthDisabled
 	}
 	if s.Count() > 0 {
 		return nil, ErrRegistrationClosed
@@ -367,7 +471,7 @@ func (s *Store) persistLocked() {
 	}
 	sort.Slice(list, func(i, j int) bool { return list[i].Username < list[j].Username })
 
-	data, err := json.MarshalIndent(list, "", "  ")
+	data, err := json.MarshalIndent(storeFile{Disabled: s.disabled, Users: list}, "", "  ")
 	if err != nil {
 		return
 	}

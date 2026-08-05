@@ -4,11 +4,14 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
+	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/tomlawesome/mikroview/internal/auth"
 	"github.com/tomlawesome/mikroview/internal/config"
+	"github.com/tomlawesome/mikroview/internal/detect"
 	"github.com/tomlawesome/mikroview/internal/device"
 	"github.com/tomlawesome/mikroview/internal/flags"
 	"github.com/tomlawesome/mikroview/internal/hub"
@@ -16,26 +19,40 @@ import (
 	"github.com/tomlawesome/mikroview/internal/store"
 )
 
-func newTestServer() (*Server, *store.Store) {
+// newTestServer's Auth defaults to the "disabled" state (see
+// auth.Store.Disable) -- zero users, but a deliberate, permanent
+// opt-out, not the tightened "undecided" bootstrap state (see
+// requireAuth). Matches every non-auth-specific test's assumption of a
+// fully open API; auth_test.go exercises the undecided/active states
+// explicitly where that's the point of the test.
+func newTestServer(t *testing.T) (*Server, *store.Store) {
+	t.Helper()
 	st := store.New(1000, time.Hour)
 	fs, _ := flags.Open("")
-	authStore, _ := auth.Open("") // unpersisted, zero users -- auth inactive, matches every existing test's assumption of a fully open API
+	authStore, err := auth.Open(filepath.Join(t.TempDir(), "users.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := authStore.Disable(); err != nil {
+		t.Fatal(err)
+	}
 	s := &Server{
-		Store:        st,
-		Devices:      device.NewRegistry([]config.Device{{ID: "core", Name: "Core", SourceIP: "192.168.1.1"}}),
-		Hub:          hub.New(),
-		Reputation:   reputation.New(""),
-		Flags:        fs,
-		Auth:         authStore,
-		Sessions:     auth.NewSessionStore(time.Hour),
-		LoginLimiter: auth.NewLoginLimiter(10, time.Minute),
-		StartTime:    time.Now(),
+		Store:            st,
+		Devices:          device.NewRegistry([]config.Device{{ID: "core", Name: "Core", SourceIP: "192.168.1.1"}}),
+		Hub:              hub.New(),
+		Reputation:       reputation.New(""),
+		Flags:            fs,
+		DetectorSettings: detect.AllEnabledSettingsStore(),
+		Auth:             authStore,
+		Sessions:         auth.NewSessionStore(time.Hour),
+		LoginLimiter:     auth.NewLoginLimiter(10, time.Minute),
+		StartTime:        time.Now(),
 	}
 	return s, st
 }
 
 func TestHandleHealthz(t *testing.T) {
-	s, _ := newTestServer()
+	s, _ := newTestServer(t)
 	ts := httptest.NewServer(s.Routes())
 	defer ts.Close()
 
@@ -58,7 +75,7 @@ func TestHandleHealthz(t *testing.T) {
 }
 
 func TestHandleEventsFiltering(t *testing.T) {
-	s, st := newTestServer()
+	s, st := newTestServer(t)
 	ts := httptest.NewServer(s.Routes())
 	defer ts.Close()
 
@@ -82,7 +99,7 @@ func TestHandleEventsFiltering(t *testing.T) {
 }
 
 func TestHandleEventsScopeFiltering(t *testing.T) {
-	s, st := newTestServer()
+	s, st := newTestServer(t)
 	ts := httptest.NewServer(s.Routes())
 	defer ts.Close()
 
@@ -120,8 +137,64 @@ func TestHandleEventsScopeFiltering(t *testing.T) {
 	}
 }
 
+func TestHandleEventsUntilFiltering(t *testing.T) {
+	s, st := newTestServer(t)
+	ts := httptest.NewServer(s.Routes())
+	defer ts.Close()
+
+	now := time.Now()
+	old := st.Insert(store.Event{Time: now.Add(-time.Minute), ReceivedAt: now.Add(-time.Minute), DeviceID: "core", Action: store.ActionAccept, SrcIP: "10.0.0.1", DstIP: "8.8.8.8"})
+	st.Insert(store.Event{Time: now, ReceivedAt: now, DeviceID: "core", Action: store.ActionAccept, SrcIP: "10.0.0.1", DstIP: "8.8.8.8"})
+
+	resp, err := http.Get(ts.URL + "/api/events?until=" + url.QueryEscape(old.ReceivedAt.Add(30*time.Second).Format(time.RFC3339)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	var res store.Result
+	if err := json.NewDecoder(resp.Body).Decode(&res); err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Events) != 1 || res.Events[0].ID != old.ID {
+		t.Errorf("expected only the event before Until, got %+v", res.Events)
+	}
+}
+
+// TestHandleEventsAroundWindow covers issue #29's bounded before/after
+// lookback: given a center timestamp and window, the endpoint should
+// return only events within that window, matching the source IP.
+func TestHandleEventsAroundWindow(t *testing.T) {
+	s, st := newTestServer(t)
+	ts := httptest.NewServer(s.Routes())
+	defer ts.Close()
+
+	now := time.Now()
+	tooEarly := now.Add(-time.Hour)
+	center := now
+	tooLate := now.Add(time.Hour)
+	st.Insert(store.Event{Time: tooEarly, ReceivedAt: tooEarly, DeviceID: "core", Action: store.ActionAccept, SrcIP: "203.0.113.9", DstIP: "8.8.8.8"})
+	inWindow := st.Insert(store.Event{Time: center, ReceivedAt: center, DeviceID: "core", Action: store.ActionAccept, SrcIP: "203.0.113.9", DstIP: "8.8.8.8"})
+	st.Insert(store.Event{Time: tooLate, ReceivedAt: tooLate, DeviceID: "core", Action: store.ActionAccept, SrcIP: "203.0.113.9", DstIP: "8.8.8.8"})
+
+	reqURL := ts.URL + "/api/events?ip=203.0.113.9&around=" + url.QueryEscape(center.Format(time.RFC3339)) + "&window=5m"
+	resp, err := http.Get(reqURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	var res store.Result
+	if err := json.NewDecoder(resp.Body).Decode(&res); err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Events) != 1 || res.Events[0].ID != inWindow.ID {
+		t.Errorf("expected only the event within the 5m window around the center timestamp, got %+v", res.Events)
+	}
+}
+
 func TestHandleDevices(t *testing.T) {
-	s, _ := newTestServer()
+	s, _ := newTestServer(t)
 	ts := httptest.NewServer(s.Routes())
 	defer ts.Close()
 
@@ -142,8 +215,31 @@ func TestHandleDevices(t *testing.T) {
 	}
 }
 
+func TestHandleCriticalPorts(t *testing.T) {
+	s, _ := newTestServer(t)
+	s.CriticalPorts = []int{22, 3389, 8291}
+	ts := httptest.NewServer(s.Routes())
+	defer ts.Close()
+
+	resp, err := http.Get(ts.URL + "/api/critical-ports")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	var body struct {
+		Ports []int `json:"ports"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	if len(body.Ports) != 3 || body.Ports[0] != 22 {
+		t.Errorf("unexpected ports: %+v", body.Ports)
+	}
+}
+
 func TestHandleStats(t *testing.T) {
-	s, st := newTestServer()
+	s, st := newTestServer(t)
 	ts := httptest.NewServer(s.Routes())
 	defer ts.Close()
 
