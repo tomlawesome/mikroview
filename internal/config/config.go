@@ -19,7 +19,7 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// defaultDataDir is where every optional persistence path defaults to
+// DefaultDataDir is where every optional persistence path defaults to
 // living, out of the box -- flags, detector settings, accounts, and the
 // self-generated TLS certificate. The Dockerfile creates this directory
 // owned by the nonroot user, so all of it is writable (and persists
@@ -28,7 +28,7 @@ import (
 // this same path, documented in deploy/docker-compose.yml rather than
 // forced -- an operator who doesn't want any of this persisted can
 // still point any of these at "" to opt back out per field.
-const defaultDataDir = "/var/lib/mikroview"
+const DefaultDataDir = "/var/lib/mikroview"
 
 type Device struct {
 	ID       string `yaml:"id"`
@@ -342,17 +342,17 @@ func defaults() Config {
 			LowSlowScanDropRatio:          0.8,
 			LowSlowScanBaselineMultiplier: 3,
 
-			StorePath:                 defaultDataDir + "/flags.json",
-			DetectorSettingsStorePath: defaultDataDir + "/detector-settings.json",
+			StorePath:                 DefaultDataDir + "/flags.json",
+			DetectorSettingsStorePath: DefaultDataDir + "/detector-settings.json",
 		},
 		Auth: Auth{
-			StorePath:    defaultDataDir + "/users.json",
+			StorePath:    DefaultDataDir + "/users.json",
 			SessionTTL:   24 * time.Hour,
 			SecureCookie: true,
 		},
 		TLS: TLS{
 			Enabled:   true,
-			StorePath: defaultDataDir + "/tls",
+			StorePath: DefaultDataDir + "/tls",
 		},
 		Notify: Notify{
 			BatchWindow: 60 * time.Second,

@@ -171,12 +171,12 @@ func levelColor(level slog.Level) string {
 	}
 }
 
-// formatLine renders "HH:MM:SS [LEVEL]  component │ message\n" -- the
-// two-space gaps after [INFO]/[WARN] and after short component names
-// are the bracket/column padding lining up with [ERROR] and the
-// longest common component name, not stray whitespace.
+// formatLine renders "HH:MM:SS LEVEL  component │ message\n" -- the
+// gaps after INFO/WARN and after short component names are the level/
+// column padding lining up with ERROR and the longest common component
+// name, not stray whitespace.
 func formatLine(ts string, level slog.Level, component, message string, color bool) string {
-	levelToken := fmt.Sprintf("%-7s", "["+levelWord(level)+"]")
+	levelToken := fmt.Sprintf("%-5s", levelWord(level))
 	componentToken := fmt.Sprintf("%-*s", componentWidth, component)
 
 	if !color {
