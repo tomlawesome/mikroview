@@ -26,6 +26,7 @@ import (
 	"github.com/tomlawesome/mikroview/internal/logging"
 	"github.com/tomlawesome/mikroview/internal/naming"
 	"github.com/tomlawesome/mikroview/internal/notify"
+	"github.com/tomlawesome/mikroview/internal/oidc"
 	"github.com/tomlawesome/mikroview/internal/reputation"
 	"github.com/tomlawesome/mikroview/internal/routeros"
 	"github.com/tomlawesome/mikroview/internal/servertls"
@@ -312,6 +313,47 @@ func main() {
 		}
 	}()
 
+	// SSO (issue #43): additive on top of local auth, never a
+	// replacement -- see internal/oidc and auth.Store.
+	// FindOrCreateOIDCUser. A misconfigured or unreachable provider must
+	// never take down local login, so every failure path here just
+	// leaves srv.OIDC nil (SSO unavailable, 404 on its routes) rather
+	// than exiting -- the same degrade-not-crash contract GeoIP/Flags/
+	// Auth/DetectorSettings already have above for their own optional
+	// persistence/integrations.
+	var oidcClient *oidc.Client
+	var oidcState *oidc.StateCodec
+	oidcLog := logging.New("oidc")
+	switch {
+	case cfg.OIDC.IssuerURL == "":
+		// Not configured -- no log line, same as every other disabled-
+		// by-default optional integration (GeoIP, Reputation, Notify).
+	case cfg.OIDC.PublicBaseURL == "":
+		oidcLog.Error("oidc.issuerUrl is set but oidc.publicBaseUrl is not -- SSO login is unavailable until it's configured (see docs/configuration.md)")
+	case cfg.OIDC.ClientID == "" || cfg.OIDC.ClientSecret == "":
+		oidcLog.Error("oidc.issuerUrl is set but oidc.clientId/oidc.clientSecret are not -- SSO login is unavailable until both are configured")
+	default:
+		client, err := oidc.New(ctx, oidc.Config{
+			IssuerURL:    cfg.OIDC.IssuerURL,
+			ClientID:     cfg.OIDC.ClientID,
+			ClientSecret: cfg.OIDC.ClientSecret,
+			// PublicBaseURL, not a request's Host header -- see
+			// config.OIDC.PublicBaseURL's doc comment for why deriving
+			// this from client-influenced input would be a real
+			// redirect_uri-confusion vulnerability.
+			RedirectURL: strings.TrimRight(cfg.OIDC.PublicBaseURL, "/") + "/api/auth/oidc/callback",
+			Scopes:      cfg.OIDC.Scopes,
+		})
+		if err != nil {
+			oidcLog.Error(fmt.Sprintf("%v (SSO login is unavailable)", err))
+		} else if state, err := oidc.NewStateCodec(); err != nil {
+			oidcLog.Error(fmt.Sprintf("%v (SSO login is unavailable)", err))
+		} else {
+			oidcClient, oidcState = client, state
+			oidcLog.Info(fmt.Sprintf("SSO login active against %s", cfg.OIDC.IssuerURL))
+		}
+	}
+
 	srv := &api.Server{
 		Store:            st,
 		Devices:          devices,
@@ -324,6 +366,8 @@ func main() {
 		Sessions:         auth.NewSessionStore(cfg.Auth.SessionTTL),
 		LoginLimiter:     auth.NewLoginLimiter(loginLimiterThreshold, loginLimiterWindow),
 		SecureCookie:     cfg.Auth.SecureCookie,
+		OIDC:             oidcClient,
+		OIDCState:        oidcState,
 		StartTime:        time.Now(),
 	}
 
