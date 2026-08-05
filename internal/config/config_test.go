@@ -222,6 +222,22 @@ func TestNotifySMTPEnvVarsOverrideDefaults(t *testing.T) {
 	}
 }
 
+func TestNotifyPushoverEnvVarsOverrideDefaults(t *testing.T) {
+	t.Setenv("MIKROVIEW_NOTIFY_PUSHOVER_TOKEN", "tok123")
+	t.Setenv("MIKROVIEW_NOTIFY_PUSHOVER_USER", "usr456")
+
+	cfg, err := Load("", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Notify.Pushover.Token != "tok123" {
+		t.Errorf("Pushover.Token = %v, want tok123", cfg.Notify.Pushover.Token)
+	}
+	if cfg.Notify.Pushover.User != "usr456" {
+		t.Errorf("Pushover.User = %v, want usr456", cfg.Notify.Pushover.User)
+	}
+}
+
 func TestFlagsCriticalPortsMalformedEntryIgnoresWholeValue(t *testing.T) {
 	t.Setenv("MIKROVIEW_FLAGS_CRITICAL_PORTS", "22,not-a-port,3389")
 
