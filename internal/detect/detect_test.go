@@ -450,3 +450,59 @@ func TestEveryDetectorDisabledEntirelySuppressesItsFlagType(t *testing.T) {
 		})
 	}
 }
+
+func TestPortScanConfidenceScalesWithOvershoot(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.PortScanThreshold = 5
+	cfg.PortScanWindow = time.Minute
+	cfg.ActivitySpikeThreshold = 1000
+
+	now := time.Now()
+
+	justOver, fs := newTestDetector(t, cfg)
+	for port := 1; port <= 5; port++ {
+		justOver.Observe(evt("203.0.113.9", port, now.Add(time.Duration(port)*time.Millisecond)))
+	}
+	list := fs.List()
+	if len(list) != 1 || list[0].Confidence == nil || *list[0].Confidence != 0 {
+		t.Fatalf("expected 0%% confidence exactly at threshold, got %+v", list)
+	}
+
+	wellOver, fs2 := newTestDetector(t, cfg)
+	for port := 1; port <= 15; port++ {
+		wellOver.Observe(evt("203.0.113.9", port, now.Add(time.Duration(port)*time.Millisecond)))
+	}
+	list2 := fs2.List()
+	if len(list2) != 1 || list2[0].Confidence == nil || *list2[0].Confidence != 100 {
+		t.Fatalf("expected 100%% confidence at the overshoot ceiling, got %+v", list2)
+	}
+}
+
+func TestCriticalPortConfidenceScalesWithOvershoot(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.CriticalPortThreshold = 5
+	cfg.CriticalPortWindow = time.Minute
+	cfg.CriticalPorts = []int{22}
+	cfg.PortScanThreshold = 1000
+	cfg.ActivitySpikeThreshold = 1000
+
+	now := time.Now()
+
+	justOver, fs := newTestDetector(t, cfg)
+	for i := 0; i < 5; i++ {
+		justOver.Observe(evt("198.51.100.4", 22, now.Add(time.Duration(i)*time.Second)))
+	}
+	list := fs.List()
+	if len(list) != 1 || list[0].Confidence == nil || *list[0].Confidence != 0 {
+		t.Fatalf("expected 0%% confidence exactly at threshold, got %+v", list)
+	}
+
+	wellOver, fs2 := newTestDetector(t, cfg)
+	for i := 0; i < 15; i++ {
+		wellOver.Observe(evt("198.51.100.4", 22, now.Add(time.Duration(i)*time.Second)))
+	}
+	list2 := fs2.List()
+	if len(list2) != 1 || list2[0].Confidence == nil || *list2[0].Confidence != 100 {
+		t.Fatalf("expected 100%% confidence at the overshoot ceiling, got %+v", list2)
+	}
+}

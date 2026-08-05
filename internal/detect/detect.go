@@ -321,8 +321,9 @@ func (d *Detector) observeScanAndSpike(e store.Event, now time.Time) {
 		d.checkHostActivityBaseline(w, e.SrcIP, spikeCount, now)
 	}
 	if psActive && len(distinctPorts) >= d.cfg.PortScanThreshold {
-		d.fs.Add(flags.TypePortScan, e.SrcIP,
-			fmt.Sprintf("%d distinct destination ports in %s", len(distinctPorts), d.cfg.PortScanWindow), now)
+		d.fs.AddWithConfidence(flags.TypePortScan, e.SrcIP,
+			fmt.Sprintf("%d distinct destination ports in %s", len(distinctPorts), d.cfg.PortScanWindow),
+			overshootConfidence(len(distinctPorts), d.cfg.PortScanThreshold), now)
 	}
 }
 
@@ -345,8 +346,9 @@ func (d *Detector) observeCriticalPort(e store.Event, now time.Time) {
 	d.criticalHits[e.SrcIP] = hits
 
 	if len(hits) >= d.cfg.CriticalPortThreshold {
-		d.fs.Add(flags.TypeCriticalPort, e.SrcIP,
-			fmt.Sprintf("%d attempts against port %d in %s", len(hits), e.DstPort, d.cfg.CriticalPortWindow), now)
+		d.fs.AddWithConfidence(flags.TypeCriticalPort, e.SrcIP,
+			fmt.Sprintf("%d attempts against port %d in %s", len(hits), e.DstPort, d.cfg.CriticalPortWindow),
+			overshootConfidence(len(hits), d.cfg.CriticalPortThreshold), now)
 	}
 }
 

@@ -97,12 +97,14 @@ func (d *Detector) observeDestSpread(e store.Event, now time.Time) {
 	}
 
 	if oaActive && len(external) >= d.cfg.OutboundAnomalyThreshold {
-		d.fs.Add(flags.TypeOutboundAnomaly, e.SrcIP,
-			fmt.Sprintf("%d distinct external destinations in %s", len(external), d.cfg.OutboundAnomalyWindow), now)
+		d.fs.AddWithConfidence(flags.TypeOutboundAnomaly, e.SrcIP,
+			fmt.Sprintf("%d distinct external destinations in %s", len(external), d.cfg.OutboundAnomalyWindow),
+			overshootConfidence(len(external), d.cfg.OutboundAnomalyThreshold), now)
 	}
 	if irActive && len(internal) >= d.cfg.InternalReconThreshold {
-		d.fs.Add(flags.TypeInternalRecon, e.SrcIP,
-			fmt.Sprintf("%d distinct internal destinations in %s", len(internal), d.cfg.InternalReconWindow), now)
+		d.fs.AddWithConfidence(flags.TypeInternalRecon, e.SrcIP,
+			fmt.Sprintf("%d distinct internal destinations in %s", len(internal), d.cfg.InternalReconWindow),
+			overshootConfidence(len(internal), d.cfg.InternalReconThreshold), now)
 	}
 }
 
