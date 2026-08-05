@@ -9,7 +9,7 @@ import (
 )
 
 type ruleWindow struct {
-	samples      []time.Time
+	hits         *countRing // replaces a []time.Time hit list, sized to RuleSpikeWindow
 	lastActivity time.Time
 	baseline     float64 // EMA of events/sec for this rule
 	variance     float64
@@ -34,22 +34,13 @@ func (d *Detector) observeRuleRate(e store.Event, now time.Time) {
 		if len(d.ruleWindows) >= maxTrackedSources {
 			d.evictOldestRuleWindow()
 		}
-		w = &ruleWindow{}
+		w = &ruleWindow{hits: newCountRing(d.cfg.RuleSpikeWindow)}
 		d.ruleWindows[e.RuleLabel] = w
 	}
 	w.lastActivity = now
-	w.samples = append(w.samples, now)
+	w.hits.Add(now, true)
 
-	cutoff := now.Add(-d.cfg.RuleSpikeWindow)
-	i := 0
-	for i < len(w.samples) && w.samples[i].Before(cutoff) {
-		i++
-	}
-	if i > 0 {
-		w.samples = w.samples[i:]
-	}
-
-	currentRate := float64(len(w.samples)) / d.cfg.RuleSpikeWindow.Seconds()
+	currentRate := float64(w.hits.Count(now, d.cfg.RuleSpikeWindow)) / d.cfg.RuleSpikeWindow.Seconds()
 
 	if !w.primed {
 		w.baseline = currentRate
