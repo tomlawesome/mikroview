@@ -11,10 +11,21 @@ import (
 	"context"
 	"crypto/subtle"
 	"fmt"
+	"net/http"
+	"time"
 
 	"github.com/coreos/go-oidc/v3/oidc"
 	"golang.org/x/oauth2"
 )
+
+// defaultHTTPTimeout bounds every HTTP call this package makes to the
+// provider (discovery, JWKS, token exchange) -- without it, a slow or
+// hung IdP could block a login (or mikroview's own startup, for
+// discovery) indefinitely. go-oidc/x/oauth2 share one mechanism for
+// this (oidc.ClientContext, which sets the same context key
+// oauth2.HTTPClient does), so setting it once in New and re-applying it
+// in every method below covers all three call sites.
+const defaultHTTPTimeout = 10 * time.Second
 
 // Config holds the settings needed to talk to one OIDC provider --
 // sourced from internal/config.OIDC, kept as plain fields here (not
@@ -27,6 +38,10 @@ type Config struct {
 	ClientSecret string
 	RedirectURL  string
 	Scopes       []string
+	// HTTPTimeout overrides defaultHTTPTimeout if non-zero -- exists
+	// mainly so tests can shrink it rather than wait out the real
+	// default against a deliberately slow fake provider.
+	HTTPTimeout time.Duration
 }
 
 // Identity is the only data mikroview trusts out of a verified ID
@@ -48,6 +63,7 @@ type Identity struct {
 type Client struct {
 	oauth2Config oauth2.Config
 	verifier     *oidc.IDTokenVerifier
+	httpClient   *http.Client
 }
 
 // New performs provider discovery and builds a Client ready to start
@@ -56,6 +72,13 @@ type Client struct {
 // same as any other optional-integration startup failure (see
 // main.go), not crash the whole process over it.
 func New(ctx context.Context, cfg Config) (*Client, error) {
+	timeout := cfg.HTTPTimeout
+	if timeout <= 0 {
+		timeout = defaultHTTPTimeout
+	}
+	httpClient := &http.Client{Timeout: timeout}
+	ctx = oidc.ClientContext(ctx, httpClient)
+
 	provider, err := oidc.NewProvider(ctx, cfg.IssuerURL)
 	if err != nil {
 		return nil, fmt.Errorf("oidc: discovering provider at %s: %w", cfg.IssuerURL, err)
@@ -78,6 +101,7 @@ func New(ctx context.Context, cfg Config) (*Client, error) {
 	}
 
 	return &Client{
+		httpClient: httpClient,
 		oauth2Config: oauth2.Config{
 			ClientID:     cfg.ClientID,
 			ClientSecret: cfg.ClientSecret,
@@ -117,6 +141,7 @@ func (c *Client) AuthCodeURL(state, nonce, codeVerifier string) string {
 // codeVerifier so the provider can confirm it matches the challenge
 // sent in AuthCodeURL -- the actual PKCE proof-of-possession check.
 func (c *Client) Exchange(ctx context.Context, code, codeVerifier string) (*oauth2.Token, error) {
+	ctx = oidc.ClientContext(ctx, c.httpClient)
 	tok, err := c.oauth2Config.Exchange(ctx, code, oauth2.VerifierOption(codeVerifier))
 	if err != nil {
 		return nil, fmt.Errorf("oidc: exchanging authorization code: %w", err)
@@ -143,6 +168,9 @@ func (c *Client) VerifyIDToken(ctx context.Context, tok *oauth2.Token) (*Identit
 		return nil, ErrNoIDToken
 	}
 
+	// Verify may need to fetch the provider's JWKS (e.g. on first use,
+	// or after a key rotation) -- bounded the same way Exchange/New are.
+	ctx = oidc.ClientContext(ctx, c.httpClient)
 	idToken, err := c.verifier.Verify(ctx, raw)
 	if err != nil {
 		return nil, fmt.Errorf("oidc: verifying id_token: %w", err)
