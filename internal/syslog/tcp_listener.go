@@ -116,9 +116,21 @@ func ServeTCP(ctx context.Context, ln net.Listener, out chan<- RawMessage) error
 func handleTCPConn(ctx context.Context, conn net.Conn, out chan<- RawMessage) {
 	defer conn.Close()
 
+	// done, closed when this function returns, lets the watcher below
+	// exit as soon as *this* connection ends -- not only on process
+	// shutdown. Without it, this goroutine leaked on every ordinary
+	// disconnect (every idle-timeout, every client reconnect), since it
+	// only ever watched ctx.Done() (server lifetime), never this
+	// connection's own end. Mirrors internal/api/ws.go's reader
+	// goroutine, which already gets this right the same way.
+	done := make(chan struct{})
+	defer close(done)
 	go func() {
-		<-ctx.Done()
-		conn.Close()
+		select {
+		case <-ctx.Done():
+			conn.Close()
+		case <-done:
+		}
 	}()
 
 	host, _, _ := net.SplitHostPort(conn.RemoteAddr().String())
