@@ -83,9 +83,10 @@ services:
       # your own MaxMind GeoLite2 database; uncomment both this and the
       # env var below once you have one.
       # - ./GeoLite2-Country.mmdb:/etc/mikroview/GeoLite2-Country.mmdb:ro
-      # Persists flags/accounts/detector settings/the TLS cert across
-      # container recreation, not just restarts -- see "Persistent
-      # data" below for what this is and the bind-mount alternative.
+      # Persists flags/accounts/detector settings/the new-device MAC
+      # registry/the TLS cert across container recreation, not just
+      # restarts -- see "Persistent data" below for what this is and
+      # the bind-mount alternative.
       - mikroview-data:/var/lib/mikroview
       # Alternative to the named volume above: a bind mount, if you want
       # to browse/back up the files directly from the host. Comment out
@@ -101,6 +102,7 @@ services:
       # - MIKROVIEW_FLAGS_STORE_PATH=/var/lib/mikroview/flags.json
       # - MIKROVIEW_FLAGS_DETECTOR_SETTINGS_STORE_PATH=/var/lib/mikroview/detector-settings.json
       # - MIKROVIEW_AUTH_STORE_PATH=/var/lib/mikroview/users.json
+      # - MIKROVIEW_DEVICE_MAC_STORE_PATH=/var/lib/mikroview/mac-registry.json
       # TLS is on by default and needs no configuration to work -- these
       # are only for customizing it.
       # - MIKROVIEW_TLS_STORE_PATH=/var/lib/mikroview/tls
@@ -126,13 +128,13 @@ Create `config.yaml` next to it first (see [`deploy/config.example.yaml`](deploy
 
 By default, both compose files above mount a **named volume** over
 `/var/lib/mikroview` -- where flags, local accounts, detector on/off
-toggles, and the self-generated TLS certificate all persist. This is
-the default deliberately: once you've set up authentication or have
-flags worth keeping, losing them on every `docker compose down` or
-image update -- not just a plain restart -- would be a bad surprise,
-not an edge case. Docker populates a fresh named volume from the
-image's own `/var/lib/mikroview` on first use, ownership included, so
-there's no setup step needed.
+toggles, the new-device detector's MAC registry, and the self-generated
+TLS certificate all persist. This is the default deliberately: once
+you've set up authentication or have flags worth keeping, losing them
+on every `docker compose down` or image update -- not just a plain
+restart -- would be a bad surprise, not an edge case. Docker populates
+a fresh named volume from the image's own `/var/lib/mikroview` on first
+use, ownership included, so there's no setup step needed.
 
 The tradeoff is that you can't `cat`/`cp`/back up the files directly
 from the host the way you can with a bind mount -- you'd go through
