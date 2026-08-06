@@ -17,6 +17,7 @@
   import Detectors from './components/Detectors.svelte'
   import Entities from './components/Entities.svelte'
   import Fleet from './components/Fleet.svelte'
+  import AuditLog from './components/AuditLog.svelte'
   import IpLookupPopover from './components/IpLookupPopover.svelte'
   import PortLookupPopover from './components/PortLookupPopover.svelte'
   import AuthSetup from './components/AuthSetup.svelte'
@@ -148,6 +149,8 @@
       <Entities />
     {:else if appState.view === 'fleet'}
       <Fleet />
+    {:else if appState.view === 'audit'}
+      <AuditLog />
     {:else}
       <Dashboard />
     {/if}

@@ -3,6 +3,7 @@
   import { flagsState } from '../lib/flags.svelte'
   import { detectorSettingsState } from '../lib/detectorSettings.svelte'
   import { entitiesState } from '../lib/entities.svelte'
+  import { auditState } from '../lib/audit.svelte'
   import { authState } from '../lib/auth.svelte'
   import { themeState, type ThemePref } from '../lib/theme.svelte'
   import { COLORWAYS, colorwayState } from '../lib/colorway.svelte'
@@ -46,6 +47,16 @@
     } else {
       appState.view = 'entities'
       entitiesState.refresh()
+    }
+    open = false
+  }
+
+  function toggleAudit() {
+    if (appState.view === 'audit') {
+      appState.view = 'live'
+    } else {
+      appState.view = 'audit'
+      auditState.refresh()
     }
     open = false
   }
@@ -164,6 +175,19 @@
             title="Manage persisted host/rule labels and tags"
           >
             Entities
+          </button>
+
+          <!-- Same strict gate as Entities above -- GET /api/audit uses
+               callerIsAdmin, not callerIsAdminOrOpen (see
+               internal/api/audit.go), so this stays hidden while auth
+               is disabled too. -->
+          <button
+            class="option"
+            class:active={appState.view === 'audit'}
+            onclick={toggleAudit}
+            title="Review admin-privileged actions: user/token/entity/detector changes"
+          >
+            Audit log
           </button>
         {/if}
       </div>

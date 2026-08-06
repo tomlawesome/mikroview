@@ -439,6 +439,7 @@ func TestDefaultStoragePathsUnderVarLibMikroview(t *testing.T) {
 		"Flags.RuleUsageStorePath":        cfg.Flags.RuleUsageStorePath,
 		"Auth.StorePath":                  cfg.Auth.StorePath,
 		"Entities.StorePath":              cfg.Entities.StorePath,
+		"Audit.StorePath":                 cfg.Audit.StorePath,
 		"Auth.TokensStorePath":            cfg.Auth.TokensStorePath,
 		"TLS.StorePath":                   cfg.TLS.StorePath,
 		"DeviceMAC.StorePath":             cfg.DeviceMAC.StorePath,
@@ -449,6 +450,7 @@ func TestDefaultStoragePathsUnderVarLibMikroview(t *testing.T) {
 		"Flags.RuleUsageStorePath":        "/var/lib/mikroview/rule-usage.json",
 		"Auth.StorePath":                  "/var/lib/mikroview/users.json",
 		"Entities.StorePath":              "/var/lib/mikroview/entities.json",
+		"Audit.StorePath":                 "/var/lib/mikroview/audit.json",
 		"Auth.TokensStorePath":            "/var/lib/mikroview/tokens.json",
 		"TLS.StorePath":                   "/var/lib/mikroview/tls",
 		"DeviceMAC.StorePath":             "/var/lib/mikroview/mac-registry.json",
@@ -498,6 +500,18 @@ func TestEntitiesEnvVarOverridesDefault(t *testing.T) {
 	}
 	if cfg.Entities.StorePath != "/data/entities.json" {
 		t.Errorf("Entities.StorePath = %v, want /data/entities.json", cfg.Entities.StorePath)
+	}
+}
+
+func TestAuditEnvVarOverridesDefault(t *testing.T) {
+	t.Setenv("MIKROVIEW_AUDIT_STORE_PATH", "/data/audit.json")
+
+	cfg, err := Load("", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Audit.StorePath != "/data/audit.json" {
+		t.Errorf("Audit.StorePath = %v, want /data/audit.json", cfg.Audit.StorePath)
 	}
 }
 
