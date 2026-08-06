@@ -116,6 +116,7 @@ func (s *Store) Touch(rule string, now time.Time) {
 	u.LastSeen = now
 	u.Count++
 
+	s.pruneLocked()
 	s.persistLocked()
 }
 
@@ -169,6 +170,42 @@ func (s *Store) Stale(maxAge time.Duration, now time.Time) []Usage {
 // A var rather than a const so tests that need every call to persist
 // immediately can shrink it, same convention as flags.persistMinInterval.
 var persistMinInterval = time.Second
+
+// maxRuleEntries bounds byRule, which is keyed on the rule label parsed
+// straight out of a syslog line -- an entirely unauthenticated input.
+// Anything able to reach the syslog port chooses these keys, so without
+// a cap a flood of unique labels grows this map without limit and,
+// once persisted, the on-disk file with it. Mirrors the existing caps
+// on device.MACRegistry (50k) and flags.Store (1000), both of which
+// bound the same class of attacker-influenced key.
+//
+// 20k is far above any plausible real deployment: a rule label comes
+// from a RouterOS log-prefix an operator configured by hand, so real
+// installs have tens, not thousands. A var rather than a const so tests
+// can shrink it.
+var maxRuleEntries = 20_000
+
+// pruneLocked evicts the least-recently-seen entries once the store is
+// over maxRuleEntries. Oldest-LastSeen-first, matching
+// device.MACRegistry.pruneLocked: under a flood of junk labels the real
+// rules are the ones still being touched, so they are exactly the ones
+// this keeps.
+func (s *Store) pruneLocked() {
+	over := len(s.byRule) - maxRuleEntries
+	if over <= 0 {
+		return
+	}
+
+	all := make([]*Usage, 0, len(s.byRule))
+	for _, u := range s.byRule {
+		all = append(all, u)
+	}
+	sort.Slice(all, func(i, j int) bool { return all[i].LastSeen.Before(all[j].LastSeen) })
+
+	for i := 0; i < over && i < len(all); i++ {
+		delete(s.byRule, all[i].Rule)
+	}
+}
 
 // persistLocked writes the current state to disk if persistence is
 // configured and enough time has passed since the last write. Write
