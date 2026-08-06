@@ -35,7 +35,7 @@ func (d *Detector) observeRepeatedDrops(e store.Event, now time.Time) {
 	w, ok := d.dropPairs[key]
 	if !ok {
 		if len(d.dropPairs) >= maxTrackedSources {
-			d.evictOldestDropPair()
+			evictOldestByActivity(d.dropPairs)
 		}
 		w = &dropPairWindow{hits: newCountRing(d.cfg.RepeatedDropsWindow)}
 		d.dropPairs[key] = w
@@ -59,16 +59,4 @@ func (d *Detector) observeRepeatedDrops(e store.Event, now time.Time) {
 	}
 }
 
-func (d *Detector) evictOldestDropPair() {
-	var oldestKey string
-	var oldest time.Time
-	first := true
-	for k, w := range d.dropPairs {
-		if first || w.lastActivity.Before(oldest) {
-			oldestKey, oldest, first = k, w.lastActivity, false
-		}
-	}
-	if oldestKey != "" {
-		delete(d.dropPairs, oldestKey)
-	}
-}
+func (w *dropPairWindow) lastActivityTime() time.Time { return w.lastActivity }
