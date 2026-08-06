@@ -36,10 +36,10 @@ func FuzzParseEnvelope(f *testing.F) {
 	f.Add([]byte("<>"))
 	f.Add([]byte("<"))
 	f.Add([]byte(">"))
-	f.Add([]byte("Aug  6 20:15:04"))       // timestamp with nothing after it
-	f.Add([]byte("Aug  6 20:15:04 "))      // trailing space, no hostname
-	f.Add([]byte("Aug  6 20:15:04 host"))  // hostname with no message
-	f.Add([]byte("Xxx 99 99:99:99 h m"))   // well-shaped but invalid timestamp
+	f.Add([]byte("Aug  6 20:15:04"))      // timestamp with nothing after it
+	f.Add([]byte("Aug  6 20:15:04 "))     // trailing space, no hostname
+	f.Add([]byte("Aug  6 20:15:04 host")) // hostname with no message
+	f.Add([]byte("Xxx 99 99:99:99 h m"))  // well-shaped but invalid timestamp
 	f.Add([]byte(""))
 	f.Add([]byte("\r\n"))
 	f.Add([]byte("\x00<134>\x00"))
