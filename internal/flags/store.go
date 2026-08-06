@@ -15,14 +15,18 @@ package flags
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
+	"github.com/tomlawesome/mikroview/internal/reputation"
 	"os"
 	"path/filepath"
 	"sort"
 	"sync"
 	"time"
 
-	"github.com/tomlawesome/mikroview/internal/reputation"
+	"github.com/tomlawesome/mikroview/internal/logging"
 )
+
+var persistLog = logging.New("flags")
 
 type Type string
 
@@ -818,11 +822,20 @@ func (s *Store) persistLocked() {
 
 	data, err := json.MarshalIndent(persistedState{Flags: s.listLocked(), Excluded: excluded}, "", "  ")
 	if err != nil {
+		persistLog.Error(fmt.Sprintf("encoding %s for persistence failed: %v -- this change exists only in memory and will be lost on restart", s.path, err))
 		return
 	}
 	tmp := s.path + ".tmp"
 	if err := os.WriteFile(tmp, data, 0o600); err != nil {
+		persistLog.Error(fmt.Sprintf("writing %s failed: %v -- this change exists only in memory and will be lost on restart", tmp, err))
 		return
 	}
-	os.Rename(tmp, s.path) // same filesystem, so this is atomic
+	// Same filesystem, so the rename itself is atomic -- but it can
+	// still fail (read-only remount, permissions change), and a
+	// silent failure here means the caller believes a write landed
+	// when it did not.
+	if err := os.Rename(tmp, s.path); err != nil {
+		persistLog.Error(fmt.Sprintf("replacing %s failed: %v -- this change exists only in memory and will be lost on restart", s.path, err))
+		return
+	}
 }
