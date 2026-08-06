@@ -20,9 +20,9 @@ import (
 )
 
 type Server struct {
-	Store   *store.Store
-	Devices *device.Registry
-	Hub     *hub.Hub
+	Store            *store.Store
+	Devices          *device.Registry
+	Hub              *hub.Hub
 	Reputation       *reputation.Client
 	Flags            *flags.Store
 	DetectorSettings *detect.SettingsStore

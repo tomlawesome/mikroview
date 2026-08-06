@@ -36,9 +36,9 @@ func FuzzParse(f *testing.F) {
 	f.Add("A|x|y: 1.2.3.4:->5.6.7.8:, len 60")                  // colons with no port digits
 	f.Add(":")
 	f.Add("")
-	f.Add("len 99999999999999999999999") // integer overflow bait
-	f.Add(strings.Repeat("a:", 5000))    // deeply repetitive, no valid structure
-	f.Add("\x00\x00\x00")                // NUL bytes
+	f.Add("len 99999999999999999999999")                          // integer overflow bait
+	f.Add(strings.Repeat("a:", 5000))                             // deeply repetitive, no valid structure
+	f.Add("\x00\x00\x00")                                         // NUL bytes
 	f.Add("A|\xff\xfe|forward: proto TCP, \xff:1->\xfe:2, len 1") // invalid UTF-8
 
 	f.Fuzz(func(t *testing.T, msg string) {
