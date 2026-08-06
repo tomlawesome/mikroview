@@ -442,7 +442,7 @@ func buildRanges(prefixes []netip.Prefix) []rangeEntry {
 			merged[n-1].cidr = ""
 			continue
 		}
-		merged = append(merged, rangeEntry{lo: r.lo, hi: r.hi, cidr: r.cidr})
+		merged = append(merged, rangeEntry(r))
 	}
 	return merged
 }

@@ -2,13 +2,18 @@ package device
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/tomlawesome/mikroview/internal/logging"
 )
+
+var persistLog = logging.New("device-mac")
 
 // MACEntry is one LAN client MAC address' first/last-seen history.
 type MACEntry struct {
@@ -201,11 +206,20 @@ func (r *MACRegistry) persistLocked() {
 	}
 	data, err := json.MarshalIndent(r.listLocked(), "", "  ")
 	if err != nil {
+		persistLog.Error(fmt.Sprintf("encoding %s for persistence failed: %v -- this change exists only in memory and will be lost on restart", r.path, err))
 		return
 	}
 	tmp := r.path + ".tmp"
 	if err := os.WriteFile(tmp, data, 0o600); err != nil {
+		persistLog.Error(fmt.Sprintf("writing %s failed: %v -- this change exists only in memory and will be lost on restart", tmp, err))
 		return
 	}
-	os.Rename(tmp, r.path) // same filesystem, so this is atomic
+	// Same filesystem, so the rename itself is atomic -- but it can
+	// still fail (read-only remount, permissions change), and a
+	// silent failure here means the caller believes a write landed
+	// when it did not.
+	if err := os.Rename(tmp, r.path); err != nil {
+		persistLog.Error(fmt.Sprintf("replacing %s failed: %v -- this change exists only in memory and will be lost on restart", r.path, err))
+		return
+	}
 }
