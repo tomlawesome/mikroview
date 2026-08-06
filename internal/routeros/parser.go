@@ -213,7 +213,7 @@ func splitHostPort(s string) (string, int) {
 		if end := strings.IndexByte(s, ']'); end >= 0 {
 			host := s[1:end]
 			if port, ok := strings.CutPrefix(s[end+1:], ":"); ok {
-				if n, err := strconv.Atoi(port); err == nil {
+				if n, ok := parsePort(port); ok {
 					return host, n
 				}
 			}
@@ -221,11 +221,28 @@ func splitHostPort(s string) (string, int) {
 		}
 	}
 	if idx := strings.LastIndexByte(s, ':'); idx >= 0 {
-		if n, err := strconv.Atoi(s[idx+1:]); err == nil {
+		if n, ok := parsePort(s[idx+1:]); ok {
 			return s[:idx], n
 		}
 	}
 	return s, 0
+}
+
+// parsePort accepts only a legal TCP/UDP port. strconv.Atoi alone
+// happily returns -1 or 99999, and this parser's input is entirely
+// attacker-controlled -- the syslog listeners are unauthenticated, so
+// anything that can reach port 514 chooses these bytes. An impossible
+// port doesn't stay cosmetic: it becomes a detector key (port-scan
+// distinct-port sets, critical-port comparisons) and a flag target, so
+// it pollutes detection state and the UI with values no real packet
+// could carry. Out-of-range reads as "no port parsed" (0), matching
+// what splitHostPort already returns for input it can't parse at all.
+func parsePort(s string) (int, bool) {
+	n, err := strconv.Atoi(s)
+	if err != nil || n < 0 || n > 65535 {
+		return 0, false
+	}
+	return n, true
 }
 
 // splitTopLevel splits s on sep, but never inside parentheses — needed

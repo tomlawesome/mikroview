@@ -101,6 +101,71 @@ type Server struct {
 	OIDCState *oidc.StateCodec
 }
 
+// route is one registered endpoint. Routes are declared as data rather
+// than as direct mux.HandleFunc calls so the full set is enumerable at
+// runtime -- http.ServeMux keeps its patterns in unexported fields, so
+// without this there is no way for a test to ask "what endpoints exist?"
+// and therefore no way to assert that every one of them has a
+// deliberate access level. internal/api's authorization-matrix test
+// depends on that enumeration; see authz_matrix_test.go for why (a real
+// permission gap shipped precisely because nothing forced that question
+// to be answered for a new route).
+type route struct {
+	method  string
+	path    string
+	handler http.HandlerFunc
+}
+
+// routes returns every /api/* endpoint. Order is irrelevant to
+// ServeMux's matching (it is longest-pattern-wins, not first-match), so
+// these stay grouped by area for readability.
+func (s *Server) routes() []route {
+	return []route{
+		{http.MethodGet, "/api/healthz", s.handleHealthz},
+		{http.MethodGet, "/api/events", s.handleEvents},
+		{http.MethodGet, "/api/devices", s.handleDevices},
+		{http.MethodGet, "/api/rules", s.handleRules},
+		{http.MethodGet, "/api/critical-ports", s.handleCriticalPorts},
+		{http.MethodGet, "/api/stats", s.handleStats},
+		{http.MethodGet, "/api/ws", s.handleWS},
+		{http.MethodGet, "/api/lookup/ip/{ip}", s.handleIPLookup},
+		{http.MethodGet, "/api/flags", s.handleFlagsList},
+		{http.MethodPost, "/api/flags/{id}/clear", s.handleFlagsClear},
+		{http.MethodPost, "/api/flags/{id}/clear-permanent", s.handleFlagsClearPermanent},
+		{http.MethodGet, "/api/flags/exclusions", s.handleExclusionsList},
+		{http.MethodDelete, "/api/flags/exclusions/{id}", s.handleExclusionRemove},
+
+		{http.MethodGet, "/api/detectors", s.handleDetectorSettingsList},
+		{http.MethodPut, "/api/detectors/{name}", s.handleDetectorSettingsUpdate},
+
+		{http.MethodGet, "/api/entities", s.handleEntitiesList},
+		{http.MethodPost, "/api/entities", s.handleEntitiesUpsert},
+		{http.MethodDelete, "/api/entities", s.handleEntitiesDelete},
+
+		{http.MethodGet, "/api/audit", s.handleAuditList},
+
+		{http.MethodGet, "/api/auth/session", s.handleAuthSession},
+		{http.MethodPost, "/api/auth/register", s.handleAuthRegister},
+		{http.MethodPost, "/api/auth/skip", s.handleAuthSkip},
+		{http.MethodPost, "/api/auth/login", s.handleAuthLogin},
+		{http.MethodPost, "/api/auth/logout", s.handleAuthLogout},
+		{http.MethodPost, "/api/auth/users", s.handleAuthCreateUser},
+
+		// Admin-only token management (issue #101) -- gated the same way
+		// POST /api/auth/users is (see handleTokensCreate/
+		// handleTokensList/handleTokensRevoke). The tokens themselves
+		// grant access through a completely separate, deliberately
+		// minimal mux -- see requireAuth's bearer-token branch in
+		// auth.go -- not through anything registered here.
+		{http.MethodPost, "/api/tokens", s.handleTokensCreate},
+		{http.MethodGet, "/api/tokens", s.handleTokensList},
+		{http.MethodDelete, "/api/tokens/{id}", s.handleTokensRevoke},
+
+		{http.MethodGet, "/api/auth/oidc/login", s.handleOIDCLogin},
+		{http.MethodGet, "/api/auth/oidc/callback", s.handleOIDCCallback},
+	}
+}
+
 // Routes builds the /api/* handler. Static frontend asset serving is
 // mounted separately once the embedded build exists. requireAuth wraps
 // every route except the ones that must work before a session exists
@@ -108,48 +173,8 @@ type Server struct {
 // nature -- see auth.go's exemptPaths).
 func (s *Server) Routes() http.Handler {
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /api/healthz", s.handleHealthz)
-	mux.HandleFunc("GET /api/events", s.handleEvents)
-	mux.HandleFunc("GET /api/devices", s.handleDevices)
-	mux.HandleFunc("GET /api/rules", s.handleRules)
-	mux.HandleFunc("GET /api/critical-ports", s.handleCriticalPorts)
-	mux.HandleFunc("GET /api/stats", s.handleStats)
-	mux.HandleFunc("GET /api/ws", s.handleWS)
-	mux.HandleFunc("GET /api/lookup/ip/{ip}", s.handleIPLookup)
-	mux.HandleFunc("GET /api/flags", s.handleFlagsList)
-	mux.HandleFunc("POST /api/flags/{id}/clear", s.handleFlagsClear)
-	mux.HandleFunc("POST /api/flags/{id}/clear-permanent", s.handleFlagsClearPermanent)
-	mux.HandleFunc("GET /api/flags/exclusions", s.handleExclusionsList)
-	mux.HandleFunc("DELETE /api/flags/exclusions/{id}", s.handleExclusionRemove)
-
-	mux.HandleFunc("GET /api/detectors", s.handleDetectorSettingsList)
-	mux.HandleFunc("PUT /api/detectors/{name}", s.handleDetectorSettingsUpdate)
-
-	mux.HandleFunc("GET /api/entities", s.handleEntitiesList)
-	mux.HandleFunc("POST /api/entities", s.handleEntitiesUpsert)
-	mux.HandleFunc("DELETE /api/entities", s.handleEntitiesDelete)
-
-	mux.HandleFunc("GET /api/audit", s.handleAuditList)
-
-	mux.HandleFunc("GET /api/auth/session", s.handleAuthSession)
-	mux.HandleFunc("POST /api/auth/register", s.handleAuthRegister)
-	mux.HandleFunc("POST /api/auth/skip", s.handleAuthSkip)
-	mux.HandleFunc("POST /api/auth/login", s.handleAuthLogin)
-	mux.HandleFunc("POST /api/auth/logout", s.handleAuthLogout)
-	mux.HandleFunc("POST /api/auth/users", s.handleAuthCreateUser)
-
-	// Admin-only token management (issue #101) -- gated the same way
-	// POST /api/auth/users is (see handleTokensCreate/handleTokensList/
-	// handleTokensRevoke). The tokens themselves grant access through a
-	// completely separate, deliberately minimal mux -- see requireAuth's
-	// bearer-token branch in auth.go -- not through anything registered
-	// here.
-	mux.HandleFunc("POST /api/tokens", s.handleTokensCreate)
-	mux.HandleFunc("GET /api/tokens", s.handleTokensList)
-	mux.HandleFunc("DELETE /api/tokens/{id}", s.handleTokensRevoke)
-
-	mux.HandleFunc("GET /api/auth/oidc/login", s.handleOIDCLogin)
-	mux.HandleFunc("GET /api/auth/oidc/callback", s.handleOIDCCallback)
-
+	for _, r := range s.routes() {
+		mux.HandleFunc(r.method+" "+r.path, r.handler)
+	}
 	return s.requireAuth(mux)
 }
