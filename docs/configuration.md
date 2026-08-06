@@ -758,7 +758,11 @@ the browser-default 443, which holds for the default compose port
 mapping (host `443` -> this listener); if you've remapped the HTTPS
 port to something else externally, either disable this listener and
 redirect at your reverse proxy instead, or accept that the `Location`
-header will still point at `:443`.
+header will still point at `:443`. If `tls.hosts` is set, the `Host`
+header is validated against it (falling back to the first configured
+host on a mismatch) rather than echoed unconditionally -- only
+relevant if something other than a real browser navigation reaches
+this listener directly.
 
 ```yaml
 tls:

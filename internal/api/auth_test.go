@@ -120,6 +120,34 @@ func TestAuthErrorsNeverLeakInternalErrorText(t *testing.T) {
 	}
 }
 
+// A request body decoded with no size cap means memory allocation
+// proportional to body size, on an endpoint reachable with no
+// credentials at all (login) -- this proves an oversized body is
+// rejected rather than read in full.
+func TestOversizedJSONBodyIsRejected(t *testing.T) {
+	s, _ := newTestServer(t)
+	ts := httptest.NewServer(s.Routes())
+	defer ts.Close()
+
+	oversized := strings.Repeat("a", maxJSONBodyBytes+1)
+	body := `{"username":"` + oversized + `","password":"x"}`
+	req, err := http.NewRequest(http.MethodPost, ts.URL+"/api/auth/login", strings.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set(csrfHeaderName, csrfHeaderValue)
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("expected an oversized body to be rejected with 400, got %d", resp.StatusCode)
+	}
+}
+
 func TestUndecidedStateAllowsBootstrapPaths(t *testing.T) {
 	s := newAuthTestServer(t)
 	ts := httptest.NewServer(s.Routes())

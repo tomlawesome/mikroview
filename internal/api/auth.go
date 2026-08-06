@@ -2,7 +2,6 @@ package api
 
 import (
 	"context"
-	"encoding/json"
 	"net"
 	"net/http"
 	"strings"
@@ -307,7 +306,7 @@ type credentialsRequest struct {
 // account, always as admin -- see auth.Store.Register.
 func (s *Server) handleAuthRegister(w http.ResponseWriter, r *http.Request) {
 	var req credentialsRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := decodeJSONBody(w, r, &req); err != nil {
 		http.Error(w, "invalid request body", http.StatusBadRequest)
 		return
 	}
@@ -338,7 +337,7 @@ func (s *Server) handleAuthRegister(w http.ResponseWriter, r *http.Request) {
 // username.
 func (s *Server) handleAuthLogin(w http.ResponseWriter, r *http.Request) {
 	var req credentialsRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := decodeJSONBody(w, r, &req); err != nil {
 		http.Error(w, "invalid request body", http.StatusBadRequest)
 		return
 	}
@@ -395,7 +394,7 @@ func (s *Server) handleAuthCreateUser(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req createUserRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := decodeJSONBody(w, r, &req); err != nil {
 		http.Error(w, "invalid request body", http.StatusBadRequest)
 		return
 	}
