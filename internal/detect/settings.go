@@ -11,7 +11,7 @@ import (
 	"github.com/tomlawesome/mikroview/internal/store"
 )
 
-// DetectorName identifies one of the 9 behavioral detectors for settings
+// DetectorName identifies one of the 12 behavioral detectors for settings
 // purposes. Deliberately a separate enum from flags.Type (not reused
 // directly) even though the string values match 1:1 today -- settings
 // are keyed by detector, and "detector" and "flag type" are only the
@@ -31,6 +31,7 @@ const (
 	DetectorRuleSpike             DetectorName = "rule_spike"
 	DetectorRepeatedDrops         DetectorName = "repeated_drops"
 	DetectorLowSlowScan           DetectorName = "low_slow_scan"
+	DetectorOffHoursActivity      DetectorName = "off_hours_activity"
 	// DetectorDeviceSilence (issue #98): the "gone quiet" counterpart to
 	// DetectorGlobalSpike -- ticker-based, not per-event, and (like
 	// GlobalSpike) ignores every Scope field, only Settings.Enabled
@@ -38,14 +39,14 @@ const (
 	DetectorDeviceSilence DetectorName = "device_silence"
 )
 
-// AllDetectorNames is the canonical, stable-ordered list of all 11 --
+// AllDetectorNames is the canonical, stable-ordered list of all 12 --
 // used to seed defaults and so the API always reports every detector
 // even if only some have been customized.
 var AllDetectorNames = []DetectorName{
 	DetectorPortScan, DetectorActivitySpike, DetectorCriticalPort,
 	DetectorGlobalSpike, DetectorDistributedBruteForce, DetectorOutboundAnomaly,
 	DetectorInternalRecon, DetectorRuleSpike, DetectorRepeatedDrops,
-	DetectorLowSlowScan, DetectorDeviceSilence,
+	DetectorLowSlowScan, DetectorOffHoursActivity, DetectorDeviceSilence,
 }
 
 // IsValidDetectorName reports whether n is one of AllDetectorNames.
@@ -115,6 +116,9 @@ func isValidListMode(m ListMode) bool {
 //     restrict which SOURCE IPs are tracked; Ports/PortsMode restricts
 //     which distinct destination ports count toward its own breadth
 //     threshold. Rules ignored.
+//   - OffHoursActivity: same as ActivitySpike -- Hosts/HostsMode +
+//     Classification restrict which source IPs are tracked; Ports,
+//     Rules ignored (not keyed by destination).
 //   - GlobalSpike, DeviceSilence: every Scope field ignored; only
 //     Settings.Enabled applies (network-wide aggregate / per-configured-
 //     device sweep, not keyed by anything a Scope restricts). Scope is

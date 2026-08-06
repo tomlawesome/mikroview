@@ -147,6 +147,7 @@ export type FlagType =
   | 'rule_spike'
   | 'repeated_drops'
   | 'low_slow_scan'
+  | 'off_hours_activity'
   | 'device_silence'
   // new_device (issue #103 phase 1): raised directly from the ingest
   // path (main.go), not through internal/detect like every other flag
@@ -162,7 +163,7 @@ export type FlagType =
   // new_device above, not an oversight.
   | 'stale_rule'
 
-// Mirrors internal/detect.DetectorName's 11 string values. No longer a
+// Mirrors internal/detect.DetectorName's 12 string values. No longer a
 // FlagType alias (see new_device/stale_rule above) -- kept as its own
 // literal union now that FlagType has entries with no matching detector.
 export type DetectorName =
@@ -176,6 +177,7 @@ export type DetectorName =
   | 'rule_spike'
   | 'repeated_drops'
   | 'low_slow_scan'
+  | 'off_hours_activity'
   | 'device_silence'
 
 // Mirrors internal/detect.ListMode.

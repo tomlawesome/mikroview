@@ -322,6 +322,17 @@ type Flags struct {
 	LowSlowScanDropRatio          float64       `yaml:"lowSlowScanDropRatio"`
 	LowSlowScanBaselineMultiplier float64       `yaml:"lowSlowScanBaselineMultiplier"`
 
+	// OffHours* (issue #104): see internal/detect.Config's matching
+	// fields for what each one means -- duplicated here rather than
+	// imported, same as every other Flags field. OffHoursStartHour/
+	// EndHour (0-23, server-local time) is the fixed clock window this
+	// detector is willing to fire in; OffHoursMinSampleDays/MinCount are
+	// the false-positive guard's two independent floors.
+	OffHoursStartHour     int `yaml:"offHoursStartHour"`
+	OffHoursEndHour       int `yaml:"offHoursEndHour"`
+	OffHoursMinSampleDays int `yaml:"offHoursMinSampleDays"`
+	OffHoursMinCount      int `yaml:"offHoursMinCount"`
+
 	// DeviceStaleAfter (issue #98): see internal/detect.Config's matching
 	// field for what this means and why the default sits where it does.
 	// 0 disables the device-silence detector entirely.
@@ -446,6 +457,15 @@ func defaults() Config {
 			LowSlowScanMinObservation:     45 * time.Minute,
 			LowSlowScanDropRatio:          0.8,
 			LowSlowScanBaselineMultiplier: 3,
+
+			// 23:00-06:00: a conservative, common-denominator quiet
+			// period for a home/small-office network -- see
+			// internal/detect/off_hours.go's doc comment for why a
+			// fixed window was chosen over a per-host-learned one.
+			OffHoursStartHour:     23,
+			OffHoursEndHour:       6,
+			OffHoursMinSampleDays: 14,
+			OffHoursMinCount:      5,
 
 			DeviceStaleAfter: 15 * time.Minute,
 
@@ -690,6 +710,26 @@ func applyEnv(cfg *Config) {
 	if v := os.Getenv("MIKROVIEW_FLAGS_LOW_SLOW_SCAN_BASELINE_MULTIPLIER"); v != "" {
 		if f, err := strconv.ParseFloat(v, 64); err == nil {
 			cfg.Flags.LowSlowScanBaselineMultiplier = f
+		}
+	}
+	if v := os.Getenv("MIKROVIEW_FLAGS_OFF_HOURS_START_HOUR"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			cfg.Flags.OffHoursStartHour = n
+		}
+	}
+	if v := os.Getenv("MIKROVIEW_FLAGS_OFF_HOURS_END_HOUR"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			cfg.Flags.OffHoursEndHour = n
+		}
+	}
+	if v := os.Getenv("MIKROVIEW_FLAGS_OFF_HOURS_MIN_SAMPLE_DAYS"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			cfg.Flags.OffHoursMinSampleDays = n
+		}
+	}
+	if v := os.Getenv("MIKROVIEW_FLAGS_OFF_HOURS_MIN_COUNT"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			cfg.Flags.OffHoursMinCount = n
 		}
 	}
 	if v := os.Getenv("MIKROVIEW_FLAGS_DEVICE_STALE_AFTER"); v != "" {

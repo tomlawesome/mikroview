@@ -230,6 +230,30 @@ func TestLowSlowScanEnvVarsOverrideDefaults(t *testing.T) {
 	}
 }
 
+func TestOffHoursEnvVarsOverrideDefaults(t *testing.T) {
+	t.Setenv("MIKROVIEW_FLAGS_OFF_HOURS_START_HOUR", "22")
+	t.Setenv("MIKROVIEW_FLAGS_OFF_HOURS_END_HOUR", "5")
+	t.Setenv("MIKROVIEW_FLAGS_OFF_HOURS_MIN_SAMPLE_DAYS", "21")
+	t.Setenv("MIKROVIEW_FLAGS_OFF_HOURS_MIN_COUNT", "8")
+
+	cfg, err := Load("", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Flags.OffHoursStartHour != 22 {
+		t.Errorf("OffHoursStartHour = %v, want 22", cfg.Flags.OffHoursStartHour)
+	}
+	if cfg.Flags.OffHoursEndHour != 5 {
+		t.Errorf("OffHoursEndHour = %v, want 5", cfg.Flags.OffHoursEndHour)
+	}
+	if cfg.Flags.OffHoursMinSampleDays != 21 {
+		t.Errorf("OffHoursMinSampleDays = %v, want 21", cfg.Flags.OffHoursMinSampleDays)
+	}
+	if cfg.Flags.OffHoursMinCount != 8 {
+		t.Errorf("OffHoursMinCount = %v, want 8", cfg.Flags.OffHoursMinCount)
+	}
+}
+
 func TestStaleRuleDefaults(t *testing.T) {
 	cfg, err := Load("", nil)
 	if err != nil {
