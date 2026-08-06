@@ -268,7 +268,16 @@ damage a hostile or misbehaving LAN device can do:
   besides router names/IPs, it may also hold your AbuseIPDB API key
   (`reputation.abuseIPDBKey`) if you've configured one; prefer the
   `MIKROVIEW_ABUSEIPDB_KEY` env var over the YAML field if the file
-  itself might be more widely readable than your environment.
+  itself might be more widely readable than your environment. The same
+  applies to any credentials configured under `notify` -- SMTP's
+  `notify.smtp.password`, Pushover's `notify.pushover.token`, and any
+  auth header set under `notify.webhook.headers` (e.g. a bearer token
+  for ntfy/Home Assistant/n8n) -- `notify.smtp.password` and
+  `notify.pushover.token`/`.user` have env var equivalents (see
+  [docs/configuration.md](docs/configuration.md)) for the same reason;
+  `notify.webhook.headers` is YAML-only, so if it holds a real secret,
+  that's one more reason to keep `config.yaml` itself off a shared
+  filesystem.
 - The same applies to `flags.storePath`'s default file under
   `/var/lib/mikroview` — it holds real IP addresses and short
   descriptions of what they triggered, so keep it off a shared
