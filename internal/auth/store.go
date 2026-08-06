@@ -19,6 +19,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
@@ -113,7 +114,23 @@ var (
 	// (issuer, subject) pair is already linked to a *different* user --
 	// an OIDC identity can back at most one local account.
 	ErrOIDCIdentityTaken = errors.New("auth: this SSO identity is already linked to a different account")
+	// ErrPasswordTooShort is returned by createLocked/SetPassword for a
+	// password under minPasswordLength -- LoginLimiter meaningfully
+	// slows brute-forcing a weak password but doesn't prevent it, so
+	// this is the actual floor. Deliberately not checked inside
+	// HashPassword itself: that function also hashes two non-user-
+	// chosen values (dummyHash's fixed timing-comparison string, and
+	// FindOrCreateOIDCUser's random unmatchable-hash input for SSO-only
+	// accounts), neither of which should be subject to a password
+	// policy at all.
+	ErrPasswordTooShort = fmt.Errorf("auth: password must be at least %d characters", minPasswordLength)
 )
+
+// minPasswordLength is enforced at every path that sets a user-chosen
+// password (createLocked, SetPassword) -- self-registration, admin-
+// created accounts, and the CLI reset-password tool all funnel through
+// one of those two, so there's exactly one place this needs to live.
+const minPasswordLength = 8
 
 // storeFile is the on-disk shape -- an object wrapping the user list
 // plus the Disabled marker (see Store.Disable), rather than a bare
@@ -154,7 +171,7 @@ type Store struct {
 	mu        sync.RWMutex
 	path      string
 	byID      map[string]*User
-	byName    map[string]string // lowercased username -> ID
+	byName    map[string]string  // lowercased username -> ID
 	oidcIndex map[oidcKey]string // (issuer, subject) -> ID, see ByOIDCIdentity
 	// disabled records a deliberate, permanent opt-out of authentication
 	// for this deployment -- see Disabled/Disable/EnableSetup. Distinct
@@ -201,6 +218,15 @@ func Open(path string) (*Store, error) {
 		return s, err
 	}
 	for _, u := range file.Users {
+		// A JSON array containing `null` unmarshals successfully into a
+		// nil *User -- valid JSON, so the err check above doesn't catch
+		// it. Skipping it here is what actually delivers this store's
+		// "a corrupted file shouldn't block startup" intent (see
+		// SECURITY.md); relying on the unmarshal error alone doesn't
+		// cover every way a file can be malformed.
+		if u == nil {
+			continue
+		}
 		s.byID[u.ID] = u
 		s.byName[strings.ToLower(u.Username)] = u.ID
 		if u.OIDCIssuer != "" {
@@ -254,6 +280,9 @@ func (s *Store) reloadIfStale() {
 	byName := make(map[string]string, len(file.Users))
 	oidcIndex := make(map[oidcKey]string, len(file.Users))
 	for _, u := range file.Users {
+		if u == nil { // see Open's identical guard for why this is needed
+			continue
+		}
 		byID[u.ID] = u
 		byName[strings.ToLower(u.Username)] = u.ID
 		if u.OIDCIssuer != "" {
@@ -361,6 +390,9 @@ func (s *Store) CreateUser(username, password string, role Role, now time.Time) 
 }
 
 func (s *Store) createLocked(username, password string, role Role, now time.Time) (*User, error) {
+	if len(password) < minPasswordLength {
+		return nil, ErrPasswordTooShort
+	}
 	hash, err := HashPassword(password)
 	if err != nil {
 		return nil, err
@@ -629,6 +661,9 @@ func (s *Store) ByUsername(username string) (*User, bool) {
 // CLI tool runs in a different process from the live server, so it has
 // no way to reach into that server's in-memory SessionStore directly.
 func (s *Store) SetPassword(username, newPassword string, now time.Time) error {
+	if len(newPassword) < minPasswordLength {
+		return ErrPasswordTooShort
+	}
 	hash, err := HashPassword(newPassword)
 	if err != nil {
 		return err
