@@ -26,6 +26,14 @@ export interface FirewallEvent {
   // ruleName, but for srcIp/dstIp.
   srcHostName?: string
   dstHostName?: string
+  // srcPortName/dstPortName (issue #109): same friendly-name
+  // relationship, but for srcPort/dstPort -- undefined whenever the port
+  // is 0/absent or has no matching entity. Unlike ruleName/hostName,
+  // there is no config.yaml fallback source for these (see
+  // internal/naming.Resolver.Port's doc comment): an entity is the only
+  // way a port ever gets a name.
+  srcPortName?: string
+  dstPortName?: string
   natIp?: string
   natPort?: number
   natRaw?: string
@@ -204,19 +212,31 @@ export interface DetectorSettings {
   scope: DetectorScope
 }
 
-// Mirrors internal/entities.Entity's JSON tags (issue #107) -- a
-// persisted, admin-manageable (type, key) -> label/tags record. type is
+// Mirrors internal/entities.Entity's JSON tags (issue #107). type is
 // deliberately a plain string, not a closed union, mirroring the
-// backend's own "extensible, not a fixed enum" choice (sibling issue
-// #109 adds "port" later); 'host'/'rule' below are just the two values
-// this UI knows how to label today, not a validation allowlist.
-export type EntityType = 'host' | 'rule' | (string & {})
+// backend's own "extensible, not a fixed enum" choice (internal/
+// entities.Store never validates Type); 'host'/'rule'/'port' below are
+// just the values this UI knows how to label/discover today, not a
+// validation allowlist -- an arbitrary string still round-trips fine.
+export type EntityType = 'host' | 'rule' | 'port' | (string & {})
 
 export interface Entity {
   type: EntityType
   key: string
   label?: string
   tags?: string[]
+}
+
+// Mirrors internal/rules.Usage's JSON tags (issue #103) -- one rule
+// label's lifetime firing record, served by GET /api/rules. Used by the
+// Entities panel (issue #109) as the "discovered but unnamed rules"
+// source: every rule label mikroview has ever seen fire, independent of
+// whether it currently has an entity/label.
+export interface RuleUsage {
+  rule: string
+  firstSeen: string
+  lastSeen: string
+  count: number
 }
 
 // Mirrors internal/flags.NATInfo's JSON tags.
