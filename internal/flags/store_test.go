@@ -362,7 +362,13 @@ func TestAddReportsNewEpisode(t *testing.T) {
 // than introducing a second, different notion of flag "activity."
 func TestTimeSeriesCountsOnlyNewEpisodes(t *testing.T) {
 	s, _ := Open("")
-	now := time.Now()
+	// Pinned to :10s past the minute, not time.Now() directly -- the
+	// offsets below run up to +4s, and a bare time.Now() base
+	// occasionally lands within 4s of a minute boundary, pushing the
+	// revival into the next minute's bucket and flaking this test (hit
+	// in CI once already). A fixed offset from a truncated minute
+	// guarantees every timestamp below stays in the same bucket.
+	now := time.Now().Truncate(time.Minute).Add(10 * time.Second)
 
 	s.Add(TypePortScan, "1.1.1.1", "first", now)
 	series := s.TimeSeries()
