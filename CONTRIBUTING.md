@@ -1,5 +1,24 @@
 # Contributing
 
+## Local development
+
+Requires Go 1.26+ and Node 22+.
+
+```sh
+make dev-backend    # go run ., syslog on :1514, https on :8080 (TLS on by default -- see docs/configuration.md#tls)
+make dev-frontend   # vite dev server on :5173, proxies /api to :8080 over TLS
+make test           # go test ./... + svelte-check
+make build           # full build: frontend -> web/dist -> single Go binary
+make docker          # docker build -t mikroview .
+```
+
+Feed it fixture syslog lines without a real router, e.g.:
+
+```sh
+printf '<134>Jan 15 10:22:31 MikroTik A|lan-wan|forward: in:ether1 out:bridge1, connection-state:new, proto TCP (SYN), 192.168.1.50:51234->1.2.3.4:443, len 60' \
+  | nc -u -w1 127.0.0.1 1514
+```
+
 ## Branching
 
 Three lanes, same model as this project's sibling repos (`birdcage`):
