@@ -295,7 +295,7 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	// Notify (issues #30/#31): alerting on newly-raised flags outside the
+	// Notify (issues #30/#31/#96): alerting on newly-raised flags outside the
 	// UI, through whichever channels are configured -- each independently
 	// enabled by its own identifying field being set (same "empty means
 	// off" convention as Reputation.AbuseIPDBKey/GeoIP.DBPath), sharing
@@ -317,6 +317,12 @@ func main() {
 		notifiers = append(notifiers, notify.NewPushoverNotifier(notify.PushoverConfig{
 			Token: cfg.Notify.Pushover.Token,
 			User:  cfg.Notify.Pushover.User,
+		}))
+	}
+	if cfg.Notify.Webhook.URL != "" {
+		notifiers = append(notifiers, notify.NewWebhookNotifier(notify.WebhookConfig{
+			URL:     cfg.Notify.Webhook.URL,
+			Headers: cfg.Notify.Webhook.Headers,
 		}))
 	}
 	if len(notifiers) > 0 {

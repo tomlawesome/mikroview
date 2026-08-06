@@ -287,6 +287,38 @@ func TestNotifyPushoverEnvVarsOverrideDefaults(t *testing.T) {
 	}
 }
 
+func TestNotifyWebhookURLEnvVarOverridesDefault(t *testing.T) {
+	t.Setenv("MIKROVIEW_NOTIFY_WEBHOOK_URL", "https://ntfy.example.com/mikroview-alerts")
+
+	cfg, err := Load("", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Notify.Webhook.URL != "https://ntfy.example.com/mikroview-alerts" {
+		t.Errorf("Webhook.URL = %v, want https://ntfy.example.com/mikroview-alerts", cfg.Notify.Webhook.URL)
+	}
+}
+
+func TestNotifyWebhookHeadersLoadFromYAML(t *testing.T) {
+	dir := t.TempDir()
+	path := dir + "/config.yaml"
+	yaml := "notify:\n  webhook:\n    url: \"https://example.com/hook\"\n    headers:\n      Authorization: \"Bearer tok123\"\n"
+	if err := os.WriteFile(path, []byte(yaml), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := Load(path, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Notify.Webhook.URL != "https://example.com/hook" {
+		t.Errorf("Webhook.URL = %v, want https://example.com/hook", cfg.Notify.Webhook.URL)
+	}
+	if cfg.Notify.Webhook.Headers["Authorization"] != "Bearer tok123" {
+		t.Errorf("Webhook.Headers[Authorization] = %v, want Bearer tok123", cfg.Notify.Webhook.Headers["Authorization"])
+	}
+}
+
 func TestTLSDefaultsToEnabledWithSecureCookie(t *testing.T) {
 	cfg, err := Load("", nil)
 	if err != nil {
