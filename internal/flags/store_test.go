@@ -362,7 +362,13 @@ func TestAddReportsNewEpisode(t *testing.T) {
 // than introducing a second, different notion of flag "activity."
 func TestTimeSeriesCountsOnlyNewEpisodes(t *testing.T) {
 	s, _ := Open("")
-	now := time.Now()
+	// Pinned to the start of the current minute. TimeSeries buckets by
+	// minute and this test reads the final bucket, so a plain
+	// time.Now() made it flaky: started late enough in a minute, the
+	// +4s revival below landed in the *next* bucket and the count came
+	// back 1 instead of 2. Truncating guarantees every timestamp here
+	// shares one bucket regardless of when the suite runs.
+	now := time.Now().Truncate(time.Minute)
 
 	s.Add(TypePortScan, "1.1.1.1", "first", now)
 	series := s.TimeSeries()

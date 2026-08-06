@@ -2,13 +2,17 @@ package api
 
 import (
 	"encoding/json"
+	"fmt"
+	"github.com/tomlawesome/mikroview/internal/device"
+	"github.com/tomlawesome/mikroview/internal/store"
 	"net/http"
 	"strconv"
 	"time"
 
-	"github.com/tomlawesome/mikroview/internal/device"
-	"github.com/tomlawesome/mikroview/internal/store"
+	"github.com/tomlawesome/mikroview/internal/logging"
 )
+
+var apiLog = logging.New("api")
 
 func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
@@ -185,7 +189,15 @@ func parseScope(v string) store.Scope {
 func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	json.NewEncoder(w).Encode(v)
+	// The status line and headers are already on the wire by this point,
+	// so a failure here cannot be turned into a 500 -- the client will
+	// see a truncated body regardless. Log it rather than discard it:
+	// silently serving a half-written response is the kind of fault that
+	// otherwise only ever surfaces as an unreproducible frontend parse
+	// error.
+	if err := json.NewEncoder(w).Encode(v); err != nil {
+		apiLog.Warn(fmt.Sprintf("writing JSON response failed after %d was already sent: %v", status, err))
+	}
 }
 
 // maxJSONBodyBytes bounds every JSON request body this API accepts --
