@@ -889,20 +889,11 @@ whoever loads mikroview next, indistinguishable from a real fresh
 install in both behavior and the logs. A missing file (no persistence
 configured, or a genuine first-ever boot) is unaffected and boots
 normally either way -- only a file that exists but won't parse triggers
-this.
-
-```sh
-mikroview -reset-auth
-```
-
-is the recovery path: it refuses to touch a file that actually loads
-without error (so it can't be used to accidentally wipe a working
-deployment), and moves a genuinely broken file aside to a
-`<path>.broken-<unix-seconds>` sibling rather than deleting it, so
-there's something to inspect afterward. Restore the original file from
-a backup if you have one, instead of running this, whenever that's an
-option -- this command's outcome is "start over with no accounts," not
-data recovery.
+this. The startup error names the exact path; restore it from a backup
+if you have one, or move/delete it and restart to consciously re-arm
+the first-run setup screen -- container/host access is the trust
+anchor here, the same as the recovery commands above, so there's no
+separate CLI mode for what `mv`/`rm` already does.
 
 ## API tokens (read-only)
 
@@ -1214,9 +1205,9 @@ Override individual scalar settings without a mounted file:
 names, and auth config can only be set via YAML/env, not flags.
 
 `-healthcheck`, `-list-users`, `-reset-password <username>`,
-`-enable-auth-setup`, `-reset-auth` are standalone modes -- each does
-its one job and exits, rather than starting the server. See
-[Authentication](#authentication) for the latter four.
+`-enable-auth-setup` are standalone modes -- each does its one job and
+exits, rather than starting the server. See
+[Authentication](#authentication) for the latter three.
 
 ## API reference
 
