@@ -28,8 +28,12 @@ const hostActivityMinSamples = 5
 // (see observeScanAndSpike) -- events in ActivitySpikeWindow, reused
 // rather than recomputed. srcCountry is the triggering event's already-
 // GeoIP-resolved SrcCountry, threaded through so the raised flag can
-// carry it without a second lookup.
-func (d *Detector) checkHostActivityBaseline(w *sourceWindow, srcIP, srcCountry string, currentRate int, now time.Time) {
+// carry it without a second lookup. iface is the triggering event's
+// InInterface, threaded through so the flag's confidence can be scored
+// against Config.VPNInterfaces (issue #105, see vpn.go) -- an empty
+// string (or one that matches no configured VPN pattern) leaves scoring
+// completely unchanged.
+func (d *Detector) checkHostActivityBaseline(w *sourceWindow, srcIP, srcCountry, iface string, currentRate int, now time.Time) {
 	rate := float64(currentRate)
 
 	if !w.primed {
@@ -49,12 +53,15 @@ func (d *Detector) checkHostActivityBaseline(w *sourceWindow, srcIP, srcCountry 
 		prevBaseline > 0 &&
 		rate >= prevBaseline*d.cfg.HostActivityMultiplier {
 
-		confidence := emaConfidence(z, w.sampleCount, d.cfg.HostActivityWarmupSamples)
+		confidence := d.vpnBoostConfidence(emaConfidence(z, w.sampleCount, d.cfg.HostActivityWarmupSamples), iface)
 
 		detail := fmt.Sprintf(
 			"%d events in %s vs a baseline of %.1f for this host (based on %d samples, %.1fσ above normal)",
 			currentRate, d.cfg.ActivitySpikeWindow, prevBaseline, w.sampleCount, z,
 		)
+		if isVPNInterface(d.cfg.VPNInterfaces, iface) {
+			detail += fmt.Sprintf(" -- arrived via VPN interface %q, scored more confidently as an already-authenticated remote peer", iface)
+		}
 		isNew := d.fs.AddWithDetail(flags.TypeActivitySpike, srcIP, detail, confidence, flags.Evidence{}, srcCountry, now)
 		d.maybeCheckReputation(flags.TypeActivitySpike, srcIP, srcIP, isNew)
 	}
