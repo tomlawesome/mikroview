@@ -3,6 +3,7 @@ package device
 
 import (
 	"net"
+	"sort"
 	"sync"
 	"time"
 
@@ -31,6 +32,22 @@ type Registry struct {
 	mu   sync.RWMutex
 	byIP map[string]*Info
 }
+
+// maxDiscoveredDevices bounds how many *auto-discovered* sources the
+// registry retains. Resolve creates an entry for any previously-unseen
+// syslog source IP, and over UDP that address is trivially spoofable --
+// an attacker needs no connection, no handshake and no credentials to
+// mint an unbounded number of distinct keys and exhaust memory.
+//
+// Configured devices are never counted against this cap or evicted by
+// it: those are routers the operator declared in config.yaml, and
+// losing one to a flood of forged packets would be the attack
+// succeeding by another route. Only discovered entries are evictable.
+//
+// 4096 matches internal/detect's maxTrackedSources, which bounds the
+// same class of per-source state for the same reason. A var so tests
+// can shrink it.
+var maxDiscoveredDevices = 4096
 
 func NewRegistry(configured []config.Device) *Registry {
 	r := &Registry{byIP: make(map[string]*Info)}
@@ -67,7 +84,30 @@ func (r *Registry) Resolve(sourceIP string, now time.Time) (deviceID string) {
 	}
 	info.LastSeen = now
 	info.EventCount++
+	r.pruneLocked()
 	return info.ID
+}
+
+// pruneLocked evicts the least-recently-seen *discovered* devices once
+// they exceed maxDiscoveredDevices. Oldest-LastSeen-first, mirroring
+// MACRegistry.pruneLocked -- under a flood of spoofed sources the
+// genuine routers are the ones still sending, so they are exactly the
+// ones this keeps. Configured devices are skipped entirely.
+func (r *Registry) pruneLocked() {
+	discovered := make([]*Info, 0, len(r.byIP))
+	for _, info := range r.byIP {
+		if !info.Configured {
+			discovered = append(discovered, info)
+		}
+	}
+	over := len(discovered) - maxDiscoveredDevices
+	if over <= 0 {
+		return
+	}
+	sort.Slice(discovered, func(i, j int) bool { return discovered[i].LastSeen.Before(discovered[j].LastSeen) })
+	for i := 0; i < over && i < len(discovered); i++ {
+		delete(r.byIP, discovered[i].SourceIP)
+	}
 }
 
 // List returns a snapshot of all known devices, configured and
