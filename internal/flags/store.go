@@ -42,6 +42,14 @@ const (
 	// baseline, drop/reject ratio, reputation) rather than one count. See
 	// internal/detect/low_slow_scan.go.
 	TypeLowSlowScan Type = "low_slow_scan"
+	// TypeNewDevice (issue #103 phase 1): raised the first time
+	// mikroview ever sees a given store.Event.SrcMAC, per
+	// internal/device.MACRegistry's persisted history -- deterministic,
+	// fires once per genuinely-new MAC, no threshold/window to tune.
+	// Raised directly from the ingest path (main.go), not from
+	// internal/detect like every other Type here, since it needs no
+	// rolling-window state, just a yes/no "seen before" lookup.
+	TypeNewDevice Type = "new_device"
 	// TypeStaleRule (issue #102): a firewall rule that fired at some
 	// point (recorded in internal/rules' long-lived usage record) but
 	// hasn't fired again in a long time -- either dead weight or an

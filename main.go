@@ -218,6 +218,16 @@ func main() {
 		flagsLog.Warn(fmt.Sprintf("%v (continuing with in-memory-only flag state)", err))
 	}
 
+	// macRegistry backs the new-device/new-MAC detector (issue #103
+	// phase 1) -- see internal/device.MACRegistry's doc comment for why
+	// this needs its own persisted store distinct from devices above
+	// (that one tracks router source IPs, not LAN client MACs).
+	macLog := logging.New("device-mac")
+	macRegistry, err := device.OpenMACRegistry(cfg.DeviceMAC.StorePath)
+	if err != nil {
+		macLog.Warn(fmt.Sprintf("%v (continuing with in-memory-only MAC registry)", err))
+	}
+
 	// RuleUsage (issue #102): a long-lived, persisted per-rule
 	// FirstSeen/LastSeen/Count record backing the stale-rule detector --
 	// see internal/rules' doc comment for why this can't just reuse
@@ -372,7 +382,7 @@ func main() {
 
 	names := naming.Resolver{Rules: cfg.RuleNames, Hosts: cfg.HostNames}
 
-	go ingest(ctx, raw, st, devices, h, geo, detector, ru, names)
+	go ingest(ctx, raw, st, devices, macRegistry, fs, h, geo, detector, ru, names)
 	go detector.Run(ctx)
 
 	go func() {
@@ -764,14 +774,14 @@ func readPasswordTwice() (string, error) {
 // WebSocket broadcast (see detect.Detector.Enqueue/Run, and the
 // dedicated detection-worker goroutine main() starts alongside this
 // one).
-func ingest(ctx context.Context, raw <-chan syslog.RawMessage, st *store.Store, devices *device.Registry, h *hub.Hub, geo *geoip.Lookup, detector *detect.Detector, ru *rules.Store, names naming.Resolver) {
+func ingest(ctx context.Context, raw <-chan syslog.RawMessage, st *store.Store, devices *device.Registry, macRegistry *device.MACRegistry, fs *flags.Store, h *hub.Hub, geo *geoip.Lookup, detector *detect.Detector, ru *rules.Store, names naming.Resolver) {
 	ingestLog := logging.New("ingest")
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case rm := <-raw:
-			ingestOneRecovered(ingestLog, rm, st, devices, h, geo, detector, ru, names)
+			ingestOneRecovered(ingestLog, rm, st, devices, macRegistry, fs, h, geo, detector, ru, names)
 		}
 	}
 }
@@ -782,7 +792,7 @@ func ingest(ctx context.Context, raw <-chan syslog.RawMessage, st *store.Store, 
 // still end the entire ingest goroutine for good on the first bad
 // message (silently stopping all future event processing) rather than
 // just dropping that one message. See logging.Recover's doc comment.
-func ingestOneRecovered(logger *slog.Logger, rm syslog.RawMessage, st *store.Store, devices *device.Registry, h *hub.Hub, geo *geoip.Lookup, detector *detect.Detector, ru *rules.Store, names naming.Resolver) {
+func ingestOneRecovered(logger *slog.Logger, rm syslog.RawMessage, st *store.Store, devices *device.Registry, macRegistry *device.MACRegistry, fs *flags.Store, h *hub.Hub, geo *geoip.Lookup, detector *detect.Detector, ru *rules.Store, names naming.Resolver) {
 	defer logging.Recover(logger)
 
 	env := syslog.ParseEnvelope(rm.Data, rm.RecvTime)
@@ -790,6 +800,31 @@ func ingestOneRecovered(logger *slog.Logger, rm syslog.RawMessage, st *store.Sto
 	deviceID := devices.Resolve(rm.SourceIP, rm.RecvTime)
 	srcCountry, _ := geo.Country(parsed.SrcIP)
 	dstCountry, _ := geo.Country(parsed.DstIP)
+
+	// New-device/new-MAC detection (issue #103 phase 1): a deterministic,
+	// once-per-MAC check, so it's raised directly here rather than
+	// through detect.Detector's async worker like every other flag type
+	// -- there's no rolling-window state to maintain, just a "seen
+	// before" lookup against macRegistry's persisted history. Skips
+	// events with no SrcMAC (MACRegistry.Seen already no-ops for those,
+	// but checking here first avoids taking its lock at all on the
+	// common WAN-side-rule case where SrcMAC is never present). No
+	// confidence score attached (plain Add, not AddWithDetail/
+	// AddWithConfidence): "is this MAC new" is a deterministic yes/no,
+	// but that's a different question from "is this a threat" -- a truly
+	// new device is very often entirely benign (a phone joining the
+	// Wi-Fi), so fabricating a numeric confidence here would misleadingly
+	// imply a threat judgment this detector doesn't make. Same "not
+	// scored" contract as Flag.Confidence's nil case. The target is a
+	// MAC, not an IP, so -- same as TypeRuleSpike's rule-label target --
+	// there's no meaningful Country to attach either.
+	if parsed.SrcMAC != "" && macRegistry.Seen(parsed.SrcMAC, rm.RecvTime) {
+		detail := fmt.Sprintf("first traffic seen from MAC %s", parsed.SrcMAC)
+		if parsed.SrcIP != "" {
+			detail = fmt.Sprintf("first traffic seen from MAC %s (source IP %s)", parsed.SrcMAC, parsed.SrcIP)
+		}
+		fs.Add(flags.TypeNewDevice, parsed.SrcMAC, detail, rm.RecvTime)
+	}
 
 	e := store.Event{
 		Time:         env.Timestamp,
