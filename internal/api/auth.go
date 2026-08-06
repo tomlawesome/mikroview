@@ -2,14 +2,16 @@ package api
 
 import (
 	"context"
-	"encoding/json"
 	"net"
 	"net/http"
 	"strings"
 	"time"
 
 	"github.com/tomlawesome/mikroview/internal/auth"
+	"github.com/tomlawesome/mikroview/internal/logging"
 )
+
+var authLog = logging.New("auth-api")
 
 const sessionCookieName = "mikroview_session"
 
@@ -49,11 +51,11 @@ const userContextKey contextKey = iota
 // Docker's own HEALTHCHECK). Logout is included too: calling it without
 // a session is a harmless no-op, not worth a 401 for.
 var exemptPaths = map[string]bool{
-	"/api/healthz":         true,
-	"/api/auth/session":    true,
-	"/api/auth/register":   true,
-	"/api/auth/login":      true,
-	"/api/auth/logout":     true,
+	"/api/healthz":       true,
+	"/api/auth/session":  true,
+	"/api/auth/register": true,
+	"/api/auth/login":    true,
+	"/api/auth/logout":   true,
 	// Both are GET (a top-level browser redirect/navigation the provider
 	// issues, not a fetch() the frontend controls) so isSafeMethod
 	// already exempts them from the CSRF-header check above -- being
@@ -135,6 +137,21 @@ func (s *Server) requireAuth(next http.Handler) http.Handler {
 		if s.Auth.Count() == 0 {
 			if !bootstrapExemptPaths[r.URL.Path] {
 				http.Error(w, "setup required", http.StatusServiceUnavailable)
+				return
+			}
+			// No session exists yet to carry a CSRF check the normal
+			// way, but /api/auth/register and /api/auth/skip are the
+			// two highest-consequence endpoints in the app -- one
+			// creates the permanent admin account, the other
+			// permanently disables auth for the deployment -- and
+			// without this, a bare cross-site <form> POST (no
+			// SameSite cookie needed, since none exists yet) could
+			// make that irreversible choice on a victim's behalf.
+			// Every other bootstrap-exempt path is GET, so
+			// isSafeMethod already exempts it here without needing a
+			// path-specific check.
+			if !isSafeMethod(r.Method) && r.Header.Get(csrfHeaderName) != csrfHeaderValue {
+				http.Error(w, "missing required header", http.StatusForbidden)
 				return
 			}
 			next.ServeHTTP(w, r)
@@ -233,6 +250,36 @@ func (s *Server) handleAuthSession(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, resp)
 }
 
+// authErrorMessages maps the internal/auth sentinel errors a client can
+// plausibly trigger to a message worth showing them -- internal/auth's
+// own error text is written for a developer reading Go source (e.g.
+// ErrNotPersisted's "refusing to create a user that would not survive
+// a restart"), not for a stranger looking at a login screen. Anything
+// not listed here (including a genuinely unexpected error, e.g. a
+// crypto/rand failure inside HashPassword) falls back to a generic
+// message via writeAuthError -- never echoed verbatim to the client,
+// only logged server-side.
+var authErrorMessages = map[error]string{
+	auth.ErrRegistrationClosed: "registration is closed -- an account already exists",
+	auth.ErrAuthDisabled:       "authentication has been disabled for this deployment",
+	auth.ErrNotPersisted:       "this deployment has no persistent storage configured -- an administrator needs to set one up before an account can be created",
+	auth.ErrUsernameTaken:      "that username is already taken",
+	auth.ErrPasswordTooShort:   auth.ErrPasswordTooShort.Error(), // already phrased for an end user
+}
+
+// writeAuthError translates err into a safe, user-facing message via
+// authErrorMessages (falling back to a generic one for anything not
+// listed, logging the real error server-side so it's still
+// diagnosable) and writes it with status.
+func writeAuthError(w http.ResponseWriter, err error, status int) {
+	msg, ok := authErrorMessages[err]
+	if !ok {
+		authLog.Warn(err.Error())
+		msg = "unable to complete the request"
+	}
+	http.Error(w, msg, status)
+}
+
 // handleAuthSkip permanently disables authentication for this
 // deployment (see auth.Store.Disable) -- only reachable while
 // Count()==0 (requireAuth's bootstrap-exempt window; Disable itself
@@ -244,7 +291,7 @@ func (s *Server) handleAuthSkip(w http.ResponseWriter, r *http.Request) {
 		if err == auth.ErrRegistrationClosed {
 			status = http.StatusConflict
 		}
-		http.Error(w, err.Error(), status)
+		writeAuthError(w, err, status)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"disabled": true})
@@ -259,7 +306,7 @@ type credentialsRequest struct {
 // account, always as admin -- see auth.Store.Register.
 func (s *Server) handleAuthRegister(w http.ResponseWriter, r *http.Request) {
 	var req credentialsRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := decodeJSONBody(w, r, &req); err != nil {
 		http.Error(w, "invalid request body", http.StatusBadRequest)
 		return
 	}
@@ -272,8 +319,10 @@ func (s *Server) handleAuthRegister(w http.ResponseWriter, r *http.Request) {
 			status = http.StatusConflict
 		case auth.ErrNotPersisted:
 			status = http.StatusServiceUnavailable
+		case auth.ErrPasswordTooShort:
+			status = http.StatusBadRequest
 		}
-		http.Error(w, err.Error(), status)
+		writeAuthError(w, err, status)
 		return
 	}
 
@@ -288,7 +337,7 @@ func (s *Server) handleAuthRegister(w http.ResponseWriter, r *http.Request) {
 // username.
 func (s *Server) handleAuthLogin(w http.ResponseWriter, r *http.Request) {
 	var req credentialsRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := decodeJSONBody(w, r, &req); err != nil {
 		http.Error(w, "invalid request body", http.StatusBadRequest)
 		return
 	}
@@ -345,7 +394,7 @@ func (s *Server) handleAuthCreateUser(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req createUserRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := decodeJSONBody(w, r, &req); err != nil {
 		http.Error(w, "invalid request body", http.StatusBadRequest)
 		return
 	}
@@ -357,10 +406,13 @@ func (s *Server) handleAuthCreateUser(w http.ResponseWriter, r *http.Request) {
 	user, err := s.Auth.CreateUser(req.Username, req.Password, role, time.Now())
 	if err != nil {
 		status := http.StatusInternalServerError
-		if err == auth.ErrUsernameTaken {
+		switch err {
+		case auth.ErrUsernameTaken:
 			status = http.StatusConflict
+		case auth.ErrPasswordTooShort:
+			status = http.StatusBadRequest
 		}
-		http.Error(w, err.Error(), status)
+		writeAuthError(w, err, status)
 		return
 	}
 	writeJSON(w, http.StatusCreated, map[string]any{"username": user.Username, "role": user.Role})

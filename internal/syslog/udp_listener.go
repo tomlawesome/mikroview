@@ -68,13 +68,24 @@ func ServeUDP(ctx context.Context, conn net.PacketConn, out chan<- RawMessage) e
 			continue
 		}
 		tempDelay = 0
-		data := make([]byte, n)
-		copy(data, buf[:n])
-		host, _, _ := net.SplitHostPort(remote.String())
+		handleUDPDatagramRecovered(buf[:n], remote, out)
+	}
+}
 
-		select {
-		case out <- RawMessage{SourceIP: host, Data: data, RecvTime: time.Now()}:
-		default:
-		}
+// handleUDPDatagramRecovered isolates panic recovery to a single
+// datagram -- see logging.Recover's doc comment for why this can't
+// just be a defer at the top of ServeUDP's loop (it would end the
+// whole listener goroutine after the first bad datagram instead of
+// just dropping that one).
+func handleUDPDatagramRecovered(buf []byte, remote net.Addr, out chan<- RawMessage) {
+	defer logging.Recover(udpLog)
+
+	data := make([]byte, len(buf))
+	copy(data, buf)
+	host, _, _ := net.SplitHostPort(remote.String())
+
+	select {
+	case out <- RawMessage{SourceIP: host, Data: data, RecvTime: time.Now()}:
+	default:
 	}
 }

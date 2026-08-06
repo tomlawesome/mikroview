@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/tomlawesome/mikroview/internal/flags"
+	"github.com/tomlawesome/mikroview/internal/logging"
 	"github.com/tomlawesome/mikroview/internal/reputation"
 )
 
@@ -92,6 +93,7 @@ func (d *Detector) maybeCheckReputation(t flags.Type, target, ip string, isNewEp
 	}
 	go func() {
 		defer func() { <-d.lookupSlots }()
+		defer logging.Recover(logger)
 		ctx, cancel := context.WithTimeout(context.Background(), reputationLookupTimeout)
 		defer cancel()
 		result, err := d.reputation.Lookup(ctx, ip)
@@ -184,6 +186,7 @@ func (d *Detector) maybeCheckGroupReputation(t flags.Type, target string, member
 		}
 		go func() {
 			defer func() { <-d.lookupSlots }()
+			defer logging.Recover(logger)
 			ctx, cancel := context.WithTimeout(context.Background(), reputationLookupTimeout)
 			defer cancel()
 			result, err := d.reputation.Lookup(ctx, ip)
