@@ -215,6 +215,40 @@ every restart) but not fatal.
   [docs/configuration.md](docs/configuration.md) and
   [SECURITY.md](SECURITY.md) for the threat model and setup.
 
+## Security levels
+
+Auth isn't one setting — the choice you make trades off convenience
+against how much a compromise of the mikroview host itself can expose.
+From least to most isolated:
+
+1. **No auth (explicitly skipped).** No barrier at all; anyone who can
+   reach the app has full access. Only appropriate on a fully trusted
+   network.
+2. **Local accounts (username/password, default once auth is
+   enabled).** Simplest to set up, but account data — usernames and
+   roles, including who's the admin — lives in a plaintext file on the
+   same host mikroview runs on. There's no separation between "the app
+   is compromised" and "the account data is readable": a leaked
+   backup, a misconfigured mount, or anything that exposes that one
+   file hands over who to target, and local login security then
+   depends entirely on password strength.
+3. **OIDC/SSO (recommended when available).** The real credential
+   lives with your external identity provider (Authentik, Keycloak,
+   Entra ID, ...), never on the mikroview host — compromising the host
+   doesn't expose anything usable against an SSO-provisioned account.
+   Local and SSO accounts can coexist.
+4. **(Planned) Off-box database backend.** Moving persisted state to a
+   separately-secured, network-restricted database closes the "read
+   one file, get everything" exposure that local accounts still have
+   today — tracked in
+   [issue #131](https://github.com/tomlawesome/mikroview/issues/131).
+
+Pick the level that matches your network: skip auth only on a network
+you already trust completely, use local accounts if you accept that
+tradeoff, and prefer SSO wherever you have an identity provider
+available. Full detail and the reasoning behind each is in
+[SECURITY.md](SECURITY.md#authentication).
+
 ## Docs
 
 - [docs/routeros-setup.md](docs/routeros-setup.md) — RouterOS-side
