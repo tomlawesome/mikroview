@@ -310,6 +310,11 @@ func main() {
 		LowSlowScanDropRatio:          cfg.Flags.LowSlowScanDropRatio,
 		LowSlowScanBaselineMultiplier: cfg.Flags.LowSlowScanBaselineMultiplier,
 
+		OffHoursStartHour:     cfg.Flags.OffHoursStartHour,
+		OffHoursEndHour:       cfg.Flags.OffHoursEndHour,
+		OffHoursMinSampleDays: cfg.Flags.OffHoursMinSampleDays,
+		OffHoursMinCount:      cfg.Flags.OffHoursMinCount,
+
 		DeviceStaleAfter: cfg.Flags.DeviceStaleAfter,
 	}
 	seed := detect.DefaultSettingsMap()

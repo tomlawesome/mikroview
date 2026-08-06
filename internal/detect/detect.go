@@ -135,6 +135,34 @@ type Config struct {
 	// host_baseline.go), not just the absolute thresholds above.
 	LowSlowScanBaselineMultiplier float64
 
+	// OffHoursStartHour/EndHour (issue #104): the clock window (0-23,
+	// server-local time, start inclusive/end exclusive) this detector is
+	// willing to fire in at all -- wraps past midnight when Start > End
+	// (e.g. 23, 6 means 23:00-06:00). A fixed, operator-set window rather
+	// than a per-host-learned "quiet period": see off_hours.go's package
+	// doc comment for why. Every hour's baseline is still tracked
+	// continuously regardless of this window (see sourceWindow.hourly),
+	// so narrowing or widening it later doesn't lose history that was
+	// already being collected.
+	OffHoursStartHour int
+	OffHoursEndHour   int
+	// OffHoursMinSampleDays: the hard floor on off_hours.go's per-hour
+	// baseline -- that specific hour must have been observed on at least
+	// this many distinct prior days before a flag can fire for it at
+	// all, no matter how extreme the count. One busy night isn't a
+	// baseline; this is what makes that structurally impossible rather
+	// than just unlikely. Also doubles as emaConfidence's warmupSamples
+	// for this detector: once a hour bucket clears this floor it's
+	// already trusted, so confidence beyond that point is driven purely
+	// by the z-score.
+	OffHoursMinSampleDays int
+	// OffHoursMinCount: an absolute floor on top of the z-score/baseline
+	// check -- a host that's never been seen at some hour has a
+	// near-zero baseline, so even a handful of events there would read
+	// as a huge deviation by z-score alone. Mirrors
+	// ActivitySpikeThreshold's role alongside HostActivityMultiplier in
+	// checkHostActivityBaseline.
+	OffHoursMinCount int
 	// DeviceStaleAfter (issue #98): how long a configured device's
 	// LastSeen may go without updating before DeviceSilenceDetector
 	// raises TypeDeviceSilence for it. Needs to sit comfortably above
@@ -191,6 +219,15 @@ func DefaultConfig() Config {
 		LowSlowScanDropRatio:          0.8,
 		LowSlowScanBaselineMultiplier: 3,
 
+		// 23:00-06:00: a conservative, common-denominator quiet period
+		// for a home/small-office network -- see off_hours.go's doc
+		// comment for why a fixed window was chosen over a per-host-
+		// learned one.
+		OffHoursStartHour:     23,
+		OffHoursEndHour:       6,
+		OffHoursMinSampleDays: 14,
+		OffHoursMinCount:      5,
+
 		DeviceStaleAfter: 15 * time.Minute,
 	}
 }
@@ -230,6 +267,33 @@ type sourceWindow struct {
 	variance    float64
 	primed      bool
 	sampleCount int
+
+	// hourly is off_hours.go's per-hour-of-day counterpart to
+	// baseline/variance above: 24 independent EMA baselines, one per
+	// clock hour, each tracking how many events this source typically
+	// produces during that specific hour. Unlike baseline/variance
+	// (which judge every observation against one rolling-window rate),
+	// each entry here only advances once per calendar day -- see
+	// hourlyDay/hourlyCount below and checkOffHoursActivity's own doc
+	// comment for why daily granularity is what "distinct prior days of
+	// history" (sampleDays) actually requires.
+	hourly [24]struct {
+		baseline   float64
+		variance   float64
+		sampleDays int
+	}
+	// hourlyDay is the calendar day (server-local "2006-01-02") each
+	// hour bucket is currently accumulating hourlyCount for -- "" if
+	// that hour has never been observed. checkOffHoursActivity folds the
+	// previous day's hourlyCount into hourly[h]'s EMA (and advances
+	// sampleDays) the moment a later day is first seen at that hour,
+	// then starts today's count fresh.
+	hourlyDay [24]string
+	// hourlyCount is today's (hourlyDay[h]'s) running event count for
+	// hour h, not yet folded into hourly[h]'s baseline -- this is the
+	// "current count" checkOffHoursActivity compares against that
+	// baseline, live, as events arrive.
+	hourlyCount [24]int
 }
 
 // Detector tracks per-source rolling-window state for the port-scan,
@@ -371,6 +435,7 @@ func (d *Detector) Observe(e store.Event) {
 
 	d.observeScanAndSpike(e, now)
 	d.observeLowSlowScan(e, now)
+	d.observeOffHours(e, now)
 
 	srcPublic := isPublic(e.SrcIP)
 	if e.DstPort != 0 && isCriticalPort(d.cfg.CriticalPorts, e.DstPort) && srcPublic {

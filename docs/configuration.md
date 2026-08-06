@@ -196,8 +196,8 @@ threshold below has a sensible default and is only worth changing for an
 unusually quiet or unusually busy network.
 
 The port-scan, activity-spike, critical-port, distributed-brute-force,
-internal-recon, outbound-anomaly, and low-and-slow-port-scan detectors
-only count events whose
+internal-recon, outbound-anomaly, low-and-slow-port-scan, and
+off-hours-activity detectors only count events whose
 RouterOS-reported connection state is `new` (or absent, for setups that
 don't log connection state at all) -- if your ruleset logs both
 directions of an established connection on the same rule, a busy host's
@@ -238,6 +238,10 @@ flags:
   lowSlowScanMinObservation: 45m
   lowSlowScanDropRatio: 0.8
   lowSlowScanBaselineMultiplier: 3
+  offHoursStartHour: 23
+  offHoursEndHour: 6
+  offHoursMinSampleDays: 14
+  offHoursMinCount: 5
   deviceStaleAfter: 15m
   ruleUsageStorePath: "/var/lib/mikroview/rule-usage.json"
   staleRuleDays: 30
@@ -402,17 +406,55 @@ flags:
   high enough (or clear flags as they come up) if it's too noisy for
   your ruleset.
 
+- **Off-hours activity** — a source active during a fixed clock window
+  (`offHoursStartHour`-`offHoursEndHour`, wrapping past midnight, 23:00-
+  06:00 by default) it has no established history of being active in.
+  Extends the same per-host EMA baseline technique activity-spike uses,
+  but tracked 24 times over — one independent baseline per hour of the
+  day — rather than once per host, so "usual for this host at 3am" and
+  "usual for this host at 3pm" are judged separately. Deliberately
+  *not* "any activity inside the configured window": that alone fires
+  on trivial noise (a phone syncing, a scheduled job, a clock-skewed
+  IoT device) with nothing to judge it against. Two independent floors
+  gate every flag, both required:
+  - **`offHoursMinSampleDays`** — that specific hour must have been
+    observed on at least this many distinct *prior days* before a flag
+    can fire for it at all, no matter how extreme the count. A single
+    busy night isn't a baseline; this is what makes firing on one
+    impossible rather than just unlikely.
+  - **`offHoursMinCount`** — an absolute floor on top of the z-score
+    check. A host never before seen at some hour has a near-zero
+    baseline for it, so even a handful of events there would look like
+    a huge deviation by z-score alone — this is the same role
+    `activitySpikeThreshold` plays alongside `hostActivityMultiplier`
+    for activity-spike.
+
+  Every hour's baseline is tracked continuously regardless of the
+  configured window — only whether a flag can *fire* is restricted to
+  hours inside it, so widening or narrowing the window later doesn't
+  discard history already being collected. "Off-hours" here is a fixed,
+  operator-set window rather than a per-host-learned quiet period — an
+  explicit design choice (the issue that scoped this feature left it
+  open): a learned window has its own bootstrapping problem (deciding
+  which hours are "quiet" needs the same history this detector is
+  already gated on) and is harder for a human reviewing a flag to
+  sanity-check than a plain clock range. Revisit if real-world use shows
+  a fixed window doesn't fit typical deployments well.
+
 **Confidence score.** Every detector except global-volume-spike and
 rule-hit-rate-spike attaches a `confidence` percentage (0-100) to each
 flag it raises, shown in the UI as e.g. "73% confidence" — but not all
 of them mean the same thing by it, and it's worth knowing which kind
 you're looking at:
 
-- **Statistical (activity-spike only).** The only detector making a
+- **Statistical (activity-spike, off-hours activity).** These two make a
   real statistical judgment call rather than a deterministic threshold
-  crossing: it combines (1) how much history backs the host's baseline
-  and (2) how far the current reading deviates from it (a z-score). The
-  flag's own detail text spells out the actual baseline value, observed
+  crossing: each combines (1) how much history backs the relevant
+  baseline and (2) how far the current reading deviates from it (a
+  z-score). Off-hours activity applies this per hour-of-day rather than
+  once per host — "how much history" is that specific hour's distinct
+  prior days (`offHoursMinSampleDays`), not overall event count. Both
+  flags' own detail text spells out the actual baseline value, observed
   value, and sample count behind the score.
 - **Overshoot-based (port-scan, critical-port, distributed
   brute-force, outbound anomaly, internal reconnaissance, repeated
@@ -448,7 +490,8 @@ score at all, never an implied 100%.
 **Reputation-informed floor (optional, requires an AbuseIPDB key).**
 When `reputation.abuseIPDBKey` is configured (see
 [IP reputation lookup](#ip-reputation-lookup-optional)), `critical_port`,
-`port_scan`, `activity_spike`, `repeated_drops`, and `low_slow_scan`
+`port_scan`, `activity_spike`, `repeated_drops`, `low_slow_scan`, and
+`off_hours_activity`
 additionally get an
 async, best-effort AbuseIPDB lookup against the flag's source IP the
 first time it's raised (not on every re-fire). If the IP has a known
@@ -478,7 +521,7 @@ point is what the target looked like when it fired, not what it looks
 like now. It's stored regardless of whether AbuseIPDB is configured
 (the keyless Shodan source alone is still worth capturing) -- only the
 confidence floor specifically needs an AbuseIPDB score. Only ever set
-for the five single-IP detectors above; the sampled-group detectors
+for the six single-IP detectors above; the sampled-group detectors
 have no single coherent snapshot to attach. Expandable in the UI
 alongside the target's country (from the same GeoIP lookup already
 applied to the underlying event) and, for `port_scan`,
@@ -698,6 +741,7 @@ consults the axes relevant to how it's keyed:
 | `repeated_drops` | source IP | destination port | -- |
 | `global_spike` | -- (network-wide, not keyed by anything per-source) | -- | -- |
 | `low_slow_scan` | which source IPs are tracked at all | which distinct ports *count* toward its own breadth total | -- |
+| `off_hours_activity` | which source IPs are tracked at all | -- | -- |
 | `device_silence` | -- (a per-configured-device sweep, not keyed by host/port/rule) | -- | -- |
 
 `global_spike` and `device_silence` only ever consult `enabled` -- the
@@ -1049,6 +1093,10 @@ Override individual scalar settings without a mounted file:
 | `MIKROVIEW_FLAGS_LOW_SLOW_SCAN_MIN_OBSERVATION` | `flags.lowSlowScanMinObservation` |
 | `MIKROVIEW_FLAGS_LOW_SLOW_SCAN_DROP_RATIO` | `flags.lowSlowScanDropRatio` |
 | `MIKROVIEW_FLAGS_LOW_SLOW_SCAN_BASELINE_MULTIPLIER` | `flags.lowSlowScanBaselineMultiplier` |
+| `MIKROVIEW_FLAGS_OFF_HOURS_START_HOUR` | `flags.offHoursStartHour` |
+| `MIKROVIEW_FLAGS_OFF_HOURS_END_HOUR` | `flags.offHoursEndHour` |
+| `MIKROVIEW_FLAGS_OFF_HOURS_MIN_SAMPLE_DAYS` | `flags.offHoursMinSampleDays` |
+| `MIKROVIEW_FLAGS_OFF_HOURS_MIN_COUNT` | `flags.offHoursMinCount` |
 | `MIKROVIEW_FLAGS_DEVICE_STALE_AFTER` | `flags.deviceStaleAfter` |
 | `MIKROVIEW_FLAGS_RULE_USAGE_STORE_PATH` | `flags.ruleUsageStorePath` |
 | `MIKROVIEW_FLAGS_STALE_RULE_DAYS` | `flags.staleRuleDays` |
