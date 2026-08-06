@@ -126,32 +126,17 @@ IP briefly to conserve free-tier quota.
   day). Set `reputation.abuseIPDBKey` in `config.yaml` or the
   `MIKROVIEW_ABUSEIPDB_KEY` env var. Adds abuse score, report count,
   country, and ISP to the result.
-- **GreyNoise Community API** (issue #113) — optional, needs a free
-  registered API key (despite GreyNoise's own marketing describing this
-  tier as keyless — see `internal/reputation.GreyNoiseClient`'s doc
-  comment for why this app requires one anyway rather than assuming
-  keyless access that doesn't actually work). Set
-  `reputation.greyNoise.apiKey` in `config.yaml` or the
-  `MIKROVIEW_GREYNOISE_KEY` env var. Answers a different question than
-  AbuseIPDB: not "has this IP been reported abusive" but "is this IP
-  part of known internet-wide scanning/research activity, and has
-  GreyNoise itself classified that activity malicious" — adds
-  `classification`, `noise`, `riot`, and `actorName` to the result.
 
-When more than one paid/keyed source is configured, results are merged
-by `internal/reputation.Aggregator`: numeric/boolean signals combine
-worst-case-wins (the higher abuse score, `isTor`/`noise`/`riot` OR'd
-together), descriptive fields (country, ISP, classification, actor name)
-take the first source that has an answer. A source that errors, times
-out, or isn't configured just contributes nothing to the merge rather
-than failing the whole lookup.
+  GreyNoise was evaluated as a second live source (issue #113 Part A)
+  and removed again: its Community API's free tier is 50 lookups/*week*,
+  shared with the GreyNoise Visualizer web UI, not a usable quota for a
+  live monitoring tool — no code from that integration remains.
 
 Every behavioral flag's confidence floor is also informed by whichever
-sources are configured (see "Behavioral flags" below) — an abuse score,
-a Tor-exit/hosting-provider classification, or a GreyNoise "malicious"
-verdict against the flag's source IP all raise (never lower) that flag's
-confidence, the same way local blocklist matches do (see "Local IP/CIDR
-blocklist matching" below).
+sources are configured (see "Behavioral flags" below) — an abuse score
+or a Tor-exit/hosting-provider classification against the flag's source
+IP raises (never lowers) that flag's confidence, the same way local
+blocklist matches do (see "Local IP/CIDR blocklist matching" below).
 
 Unconfigured, the feature still works with Shodan-only results; private/
 loopback/link-local addresses are rejected server-side regardless of
@@ -1212,7 +1197,6 @@ Override individual scalar settings without a mounted file:
 | `MIKROVIEW_LOG_LEVEL` | `log.level` (see [Logging](#logging)) |
 | `MIKROVIEW_GEOIP_DB_PATH` | `geoip.dbPath` (see [GeoIP country flags](#geoip-country-flags-optional)) |
 | `MIKROVIEW_ABUSEIPDB_KEY` | `reputation.abuseIPDBKey` (see [IP reputation lookup](#ip-reputation-lookup-optional)) |
-| `MIKROVIEW_GREYNOISE_KEY` | `reputation.greyNoise.apiKey` |
 | `MIKROVIEW_FLAGS_STORE_PATH` | `flags.storePath` |
 | `MIKROVIEW_FLAGS_PORT_SCAN_THRESHOLD` | `flags.portScanThreshold` |
 | `MIKROVIEW_FLAGS_PORT_SCAN_WINDOW` | `flags.portScanWindow` |

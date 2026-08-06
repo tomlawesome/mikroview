@@ -21,12 +21,7 @@ type Server struct {
 	Store   *store.Store
 	Devices *device.Registry
 	Hub     *hub.Hub
-	// Reputation is reputation.Source rather than the concrete *Client
-	// (issue #113 Part A) so this can hold either a lone *Client or a
-	// *reputation.Aggregator wrapping it plus a second live source
-	// (e.g. GreyNoise) -- see main.go for which one is actually
-	// constructed, decided by whether a second source is configured.
-	Reputation       reputation.Source
+	Reputation       *reputation.Client
 	Flags            *flags.Store
 	DetectorSettings *detect.SettingsStore
 	// Entities is the persisted, admin-manageable (type, key) -> label/
