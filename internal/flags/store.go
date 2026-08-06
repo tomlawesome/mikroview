@@ -78,6 +78,30 @@ const (
 	// TypeGlobalSpike already sets with "global". See
 	// internal/detect/stale_rule.go.
 	TypeStaleRule Type = "stale_rule"
+	// TypeKnownBadIP (issue #113 Part B): a source IP matching a
+	// locally-cached CIDR range from a vetted, curated threat-intel feed
+	// (Spamhaus DROP/EDROP by default -- see internal/blocklist's doc
+	// comment for the full menu and why an arbitrary user-supplied URL
+	// isn't offered instead). Raised directly, independent of any
+	// behavioral threshold -- presence on a list Spamhaus is confident
+	// is entirely malicious-controlled is itself the signal, not a
+	// byproduct of volume or pattern. Target is the source IP, same
+	// convention as TypePortScan/TypeActivitySpike/TypeCriticalPort.
+	//
+	// Also feeds RaiseConfidenceFloor for every other currently-active
+	// source-IP-keyed flag on the same target (see
+	// internal/detect/known_bad_ip.go's knownBadReinforcedTypes) -- the
+	// same reinforcement role internal/detect's async AbuseIPDB/
+	// GreyNoise-informed checks already play for those flags (see
+	// maybeCheckReputation), just synchronous, since a local lookup
+	// needs no network round-trip to resolve. Raised directly from
+	// internal/detect.Observe, not gated by DetectorName/Scope like
+	// every per-event behavioral detector above -- same "no matching
+	// detector-settings entry" exception new_device/stale_rule already
+	// established (see frontend/src/lib/types.ts's FlagType doc
+	// comment): there's no threshold to tune and no scope narrower than
+	// "this exact list membership check."
+	TypeKnownBadIP Type = "known_bad_ip"
 )
 
 // maxFlags bounds the store the same way every other buffer in mikroview

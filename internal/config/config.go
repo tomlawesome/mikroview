@@ -84,7 +84,20 @@ type GeoIP struct {
 // InternetDB source needs no key and is always used; AbuseIPDB is only
 // queried if a key is configured here.
 type Reputation struct {
-	AbuseIPDBKey string `yaml:"abuseIPDBKey"`
+	AbuseIPDBKey string    `yaml:"abuseIPDBKey"`
+	GreyNoise    GreyNoise `yaml:"greyNoise"`
+}
+
+// GreyNoise configures internal/reputation's second live source (issue
+// #113 Part A) -- see internal/reputation.GreyNoiseClient's doc comment
+// for why, unlike Shodan's InternetDB, this really does need a key
+// despite GreyNoise's own "Community API" marketing suggesting
+// otherwise. Empty APIKey means GreyNoise is never queried, same
+// "empty means opt-out" convention as Reputation.AbuseIPDBKey --
+// mikroview falls back to AbuseIPDB+Shodan alone (today's behavior)
+// with nothing else to configure.
+type GreyNoise struct {
+	APIKey string `yaml:"apiKey"`
 }
 
 // SMTP configures send-only email alerting on newly-raised flags (issue
@@ -387,6 +400,29 @@ type DeviceMAC struct {
 	StorePath string `yaml:"storePath"`
 }
 
+// Blocklist configures internal/blocklist's local IP/CIDR "known-bad"
+// matching against a small, vetted menu of free threat-intel feeds
+// (issue #113 Part B) -- see that package's own doc comment for the
+// full menu, why it's a fixed menu rather than an arbitrary URL field,
+// and how the refresh cadence/entry-count cap were decided.
+//
+// On by default with Spamhaus's DROP+EDROP lists -- the issue's own
+// recommended starting point: small, free, no registration, and
+// curated specifically to only include netblocks Spamhaus is confident
+// are entirely malicious-controlled, a safe "flag on sight" default
+// unlike a larger, noisier aggregated list would be. Set sources to an
+// empty list (`sources: []`) to disable local blocklist matching
+// entirely. Refresh cadence is intentionally not configurable here --
+// see internal/blocklist.RefreshInterval's doc comment.
+type Blocklist struct {
+	// Sources is a list of internal/blocklist.Source values (e.g.
+	// "spamhaus_drop", "spamhaus_edrop", "emerging_threats_compromised")
+	// -- an unrecognized entry is logged and skipped at startup, not a
+	// fatal error, same degrade-not-crash contract as every other
+	// optional integration in this codebase.
+	Sources []string `yaml:"sources"`
+}
+
 type Config struct {
 	Listen     Listen     `yaml:"listen"`
 	Store      Store      `yaml:"store"`
@@ -401,6 +437,7 @@ type Config struct {
 	OIDC       OIDC       `yaml:"oidc"`
 	Devices    []Device   `yaml:"devices"`
 	DeviceMAC  DeviceMAC  `yaml:"deviceMac"`
+	Blocklist  Blocklist  `yaml:"blocklist"`
 
 	// RuleNames/HostNames are optional friendly-display-name maps -- see
 	// internal/naming. Keyed by the raw value RouterOS reports (a rule
@@ -503,6 +540,14 @@ func defaults() Config {
 		DeviceMAC: DeviceMAC{
 			StorePath: DefaultDataDir + "/mac-registry.json",
 		},
+		Blocklist: Blocklist{
+			// Mirrors internal/blocklist.DefaultSources -- kept as a
+			// literal here (rather than importing internal/blocklist)
+			// so this package stays a dependency-free leaf, same
+			// reasoning Flags already gives for duplicating
+			// internal/detect.Config's own defaults.
+			Sources: []string{"spamhaus_drop", "spamhaus_edrop"},
+		},
 		Notify: Notify{
 			BatchWindow: 60 * time.Second,
 		},
@@ -572,6 +617,12 @@ func applyEnv(cfg *Config) {
 	}
 	if v := os.Getenv("MIKROVIEW_ABUSEIPDB_KEY"); v != "" {
 		cfg.Reputation.AbuseIPDBKey = v
+	}
+	// Secret-via-env, same precedent as MIKROVIEW_ABUSEIPDB_KEY --
+	// a credential doesn't have to sit in config.yaml just because the
+	// rest of the block does.
+	if v := os.Getenv("MIKROVIEW_GREYNOISE_KEY"); v != "" {
+		cfg.Reputation.GreyNoise.APIKey = v
 	}
 	if v := os.Getenv("MIKROVIEW_FLAGS_STORE_PATH"); v != "" {
 		cfg.Flags.StorePath = v
@@ -868,6 +919,9 @@ func applyEnv(cfg *Config) {
 	}
 	if v := os.Getenv("MIKROVIEW_DEVICE_MAC_STORE_PATH"); v != "" {
 		cfg.DeviceMAC.StorePath = v
+	}
+	if v := os.Getenv("MIKROVIEW_BLOCKLIST_SOURCES"); v != "" {
+		cfg.Blocklist.Sources = parseStringList(v)
 	}
 }
 

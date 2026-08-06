@@ -50,6 +50,23 @@ type Result struct {
 	// isn't configured.
 	UsageType string `json:"usageType,omitempty"`
 	IsTor     bool   `json:"isTor,omitempty"`
+	// Classification/Noise/Riot/ActorName (issue #113 Part A) are
+	// GreyNoise-only fields (see greynoise.go) -- empty/false if that
+	// source isn't configured, same "just omits its fields" contract as
+	// every other source-specific field on this struct. GreyNoise
+	// answers a different question than AbuseScore: not "has this IP
+	// been reported abusive," but "is this IP part of known internet-
+	// wide scanning/research activity" -- Classification is GreyNoise's
+	// own "malicious"/"benign"/"unknown" verdict, Noise is true for any
+	// IP GreyNoise has observed mass-scanning the internet (regardless
+	// of intent), Riot is true for a known-legitimate business service
+	// (e.g. a public DNS resolver) GreyNoise tracks specifically to
+	// suppress false positives, and ActorName is GreyNoise's
+	// identification of the scanning actor/organization when known.
+	Classification string `json:"classification,omitempty"`
+	Noise          bool   `json:"noise,omitempty"`
+	Riot           bool   `json:"riot,omitempty"`
+	ActorName      string `json:"actorName,omitempty"`
 }
 
 // TorExitNodeFloor/HostingProviderFloor: starting-point confidence
@@ -62,18 +79,38 @@ type Result struct {
 const (
 	TorExitNodeFloor     = 60
 	HostingProviderFloor = 30
+	// GreyNoiseMaliciousFloor (issue #113 Part A): GreyNoise's own
+	// "malicious" classification, deliberately not tied to
+	// TorExitNodeFloor/HostingProviderFloor's tier -- GreyNoise reserves
+	// that verdict for internet-wide scanners/attackers it has directly
+	// observed and classified as malicious, not merely "runs from a
+	// data center" or "uses Tor" (both of which have plenty of
+	// legitimate uses, per those two floors' own doc comments), so a
+	// stronger floor than either is warranted here. Deliberately *not*
+	// applied for Noise alone (a true but unclassified/benign scanner,
+	// e.g. security research crawling the whole internet) -- that's
+	// exactly the "background noise, not a targeted threat" distinction
+	// GreyNoise exists to make (see Result.Classification's doc
+	// comment), so noise without a malicious classification contributes
+	// no floor at all.
+	GreyNoiseMaliciousFloor = 70
 )
 
-// RiskFloor returns a confidence floor derived from IsTor/UsageType, if
-// either signal applies (issue #58) -- a Tor exit node is treated as
-// the stronger signal, checked first. ok is false if neither applies,
-// meaning this result contributes no floor from these two fields (a
+// RiskFloor returns a confidence floor derived from IsTor/UsageType/
+// Classification, if any signal applies (issue #58, extended by issue
+// #113 Part A for GreyNoise's Classification) -- checked in descending
+// floor order so the strongest applicable signal wins outright rather
+// than being averaged with weaker ones. ok is false if none applies,
+// meaning this result contributes no floor from any of these fields (a
 // caller should not treat that as "confirmed clean," same absence-of-
 // evidence reasoning flags.Store.RaiseConfidenceFloor already documents
 // for AbuseScore).
 func (r Result) RiskFloor() (floor int, ok bool) {
 	if r.IsTor {
 		return TorExitNodeFloor, true
+	}
+	if strings.EqualFold(r.Classification, "malicious") {
+		return GreyNoiseMaliciousFloor, true
 	}
 	if isHostingUsageType(r.UsageType) {
 		return HostingProviderFloor, true
