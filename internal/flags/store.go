@@ -91,9 +91,9 @@ const (
 	// Also feeds RaiseConfidenceFloor for every other currently-active
 	// source-IP-keyed flag on the same target (see
 	// internal/detect/known_bad_ip.go's knownBadReinforcedTypes) -- the
-	// same reinforcement role internal/detect's async AbuseIPDB/
-	// GreyNoise-informed checks already play for those flags (see
-	// maybeCheckReputation), just synchronous, since a local lookup
+	// same reinforcement role internal/detect's async AbuseIPDB-informed
+	// checks already play for those flags (see maybeCheckReputation),
+	// just synchronous, since a local lookup
 	// needs no network round-trip to resolve. Raised directly from
 	// internal/detect.Observe, not gated by DetectorName/Scope like
 	// every per-event behavioral detector above -- same "no matching

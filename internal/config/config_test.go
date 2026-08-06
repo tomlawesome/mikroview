@@ -658,28 +658,6 @@ blocklist:
 	}
 }
 
-func TestGreyNoiseAPIKeyEnvVarOverridesDefault(t *testing.T) {
-	t.Setenv("MIKROVIEW_GREYNOISE_KEY", "test-greynoise-key")
-
-	cfg, err := Load("", nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if cfg.Reputation.GreyNoise.APIKey != "test-greynoise-key" {
-		t.Errorf("Reputation.GreyNoise.APIKey = %q, want test-greynoise-key", cfg.Reputation.GreyNoise.APIKey)
-	}
-}
-
-func TestGreyNoiseAPIKeyDefaultsToEmpty(t *testing.T) {
-	cfg, err := Load("", nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if cfg.Reputation.GreyNoise.APIKey != "" {
-		t.Errorf("Reputation.GreyNoise.APIKey = %q, want empty by default", cfg.Reputation.GreyNoise.APIKey)
-	}
-}
-
 func TestFlagsCriticalPortsMalformedEntryIgnoresWholeValue(t *testing.T) {
 	t.Setenv("MIKROVIEW_FLAGS_CRITICAL_PORTS", "22,not-a-port,3389")
 
