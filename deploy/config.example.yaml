@@ -113,6 +113,7 @@ store:
 #   storePath: /var/lib/mikroview/users.json
 #   secureCookie: true
 #   sessionTTL: 24h
+#   tokensStorePath: /var/lib/mikroview/tokens.json
 
 # TLS is on by default and needs no configuration to work -- mikroview
 # generates its own local CA + certificate on first start, already

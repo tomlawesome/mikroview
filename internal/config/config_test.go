@@ -332,6 +332,17 @@ func TestTLSDefaultsToEnabledWithSecureCookie(t *testing.T) {
 	}
 }
 
+func TestAuthTokensStorePathEnvOverrides(t *testing.T) {
+	t.Setenv("MIKROVIEW_AUTH_TOKENS_STORE_PATH", "/custom/tokens.json")
+	cfg, err := Load("", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Auth.TokensStorePath != "/custom/tokens.json" {
+		t.Errorf("Auth.TokensStorePath = %q, want the env override %q", cfg.Auth.TokensStorePath, "/custom/tokens.json")
+	}
+}
+
 func TestLogLevelDefaultsToInfoAndEnvOverrides(t *testing.T) {
 	cfg, err := Load("", nil)
 	if err != nil {
@@ -366,12 +377,14 @@ func TestDefaultStoragePathsUnderVarLibMikroview(t *testing.T) {
 		"Flags.StorePath":                 cfg.Flags.StorePath,
 		"Flags.DetectorSettingsStorePath": cfg.Flags.DetectorSettingsStorePath,
 		"Auth.StorePath":                  cfg.Auth.StorePath,
+		"Auth.TokensStorePath":            cfg.Auth.TokensStorePath,
 		"TLS.StorePath":                   cfg.TLS.StorePath,
 	}
 	want := map[string]string{
 		"Flags.StorePath":                 "/var/lib/mikroview/flags.json",
 		"Flags.DetectorSettingsStorePath": "/var/lib/mikroview/detector-settings.json",
 		"Auth.StorePath":                  "/var/lib/mikroview/users.json",
+		"Auth.TokensStorePath":            "/var/lib/mikroview/tokens.json",
 		"TLS.StorePath":                   "/var/lib/mikroview/tls",
 	}
 	for field, got := range cases {
