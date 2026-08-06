@@ -12,6 +12,14 @@ func dropPairKey(srcIP string, dstPort int) string {
 	return fmt.Sprintf("%s->%d", srcIP, dstPort)
 }
 
+// dropPairWindow tracks one (srcIP, dstPort) pair's recent drop/reject
+// hits -- a countRing plus the lastActivity eviction needs, replacing a
+// bare []time.Time hit list.
+type dropPairWindow struct {
+	hits         *countRing
+	lastActivity time.Time
+}
+
 // observeRepeatedDrops tracks the same (source, destination port) pair
 // repeatedly getting dropped/rejected against a locally-hosted service --
 // unlike the critical-port detector, this isn't restricted to a curated
@@ -24,30 +32,28 @@ func dropPairKey(srcIP string, dstPort int) string {
 // to avoid flagging ordinary internet background-scan noise.
 func (d *Detector) observeRepeatedDrops(e store.Event, now time.Time) {
 	key := dropPairKey(e.SrcIP, e.DstPort)
-	hits, ok := d.dropPairs[key]
-	if !ok && len(d.dropPairs) >= maxTrackedSources {
-		d.evictOldestDropPair()
+	w, ok := d.dropPairs[key]
+	if !ok {
+		if len(d.dropPairs) >= maxTrackedSources {
+			d.evictOldestDropPair()
+		}
+		w = &dropPairWindow{hits: newCountRing(d.cfg.RepeatedDropsWindow)}
+		d.dropPairs[key] = w
 	}
-	hits = append(hits, now)
+	w.lastActivity = now
+	w.hits.Add(now, true)
+	count := w.hits.Count(now, d.cfg.RepeatedDropsWindow)
 
-	cutoff := now.Add(-d.cfg.RepeatedDropsWindow)
-	i := 0
-	for i < len(hits) && hits[i].Before(cutoff) {
-		i++
-	}
-	hits = hits[i:]
-	d.dropPairs[key] = hits
-
-	if len(hits) >= d.cfg.RepeatedDropsThreshold {
+	if count >= d.cfg.RepeatedDropsThreshold {
 		target := fmt.Sprintf("%s -> port %d", e.SrcIP, e.DstPort)
 		detail := fmt.Sprintf("%d attempts against %s:%d dropped in %s -- check whether this port is meant to be open",
-			len(hits), e.DstIP, e.DstPort, d.cfg.RepeatedDropsWindow)
+			count, e.DstIP, e.DstPort, d.cfg.RepeatedDropsWindow)
 		var nat *flags.NATInfo
 		if e.NatIP != "" || e.NatRaw != "" {
 			nat = &flags.NATInfo{IP: e.NatIP, Port: e.NatPort, Raw: e.NatRaw}
 		}
 		isNew := d.fs.AddWithDetail(flags.TypeRepeatedDrops, target, detail,
-			overshootConfidence(len(hits), d.cfg.RepeatedDropsThreshold),
+			overshootConfidence(count, d.cfg.RepeatedDropsThreshold),
 			flags.Evidence{NAT: nat}, e.SrcCountry, now)
 		d.maybeCheckReputation(flags.TypeRepeatedDrops, target, e.SrcIP, isNew)
 	}
@@ -57,13 +63,9 @@ func (d *Detector) evictOldestDropPair() {
 	var oldestKey string
 	var oldest time.Time
 	first := true
-	for k, hits := range d.dropPairs {
-		if len(hits) == 0 {
-			continue
-		}
-		last := hits[len(hits)-1]
-		if first || last.Before(oldest) {
-			oldestKey, oldest, first = k, last, false
+	for k, w := range d.dropPairs {
+		if first || w.lastActivity.Before(oldest) {
+			oldestKey, oldest, first = k, w.lastActivity, false
 		}
 	}
 	if oldestKey != "" {

@@ -1,15 +1,22 @@
 // Package auth implements mikroview's local username/password
 // authentication: user accounts (this file), Argon2id password hashing
 // (password.go), in-memory sessions (session.go), and login-attempt
-// rate limiting (ratelimit.go).
+// rate limiting (ratelimit.go). It also owns OIDC/SSO identity storage
+// and just-in-time provisioning (FindOrCreateOIDCUser below) -- the
+// OIDC protocol itself (discovery, the auth-code+PKCE exchange, ID
+// token verification) lives in the separate, provider-agnostic
+// internal/oidc package, which this package doesn't import; a User
+// provisioned via OIDC is just a User, indistinguishable to Session/
+// SessionStore from one created by Register/CreateUser.
 //
 // Mikroview stays fully open (today's behavior) until the first local
-// user is created -- see Store.Count(), consulted by internal/api's
-// auth middleware. Nothing here ever assumes OIDC/SSO exists; that's a
-// separate, later addition on top of this.
+// or OIDC-provisioned user is created -- see Store.Count(), consulted
+// by internal/api's auth middleware.
 package auth
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"os"
@@ -46,6 +53,24 @@ type User struct {
 	// field works across that boundary since both are read from/written
 	// to the same persisted store.
 	PasswordChangedAt time.Time `json:"passwordChangedAt,omitzero"`
+	// OIDCIssuer/OIDCSubject identify this account's linked SSO identity,
+	// if any -- both empty for a purely local-password account. Together
+	// they're the immutable identity key FindOrCreateOIDCUser matches
+	// on, deliberately never email or username (see that method's doc
+	// comment for why). A local-password account can also carry these
+	// (see LinkOIDCIdentity) once linked to an SSO identity, in which
+	// case both login paths reach the same account.
+	OIDCIssuer  string `json:"oidcIssuer,omitempty"`
+	OIDCSubject string `json:"oidcSubject,omitempty"`
+}
+
+// oidcKey is (issuer, subject) as a map key -- a struct rather than a
+// delimited string concatenation, so there's no theoretical risk of one
+// issuer/subject pair's serialized form colliding with a different
+// pair's.
+type oidcKey struct {
+	issuer  string
+	subject string
 }
 
 var (
@@ -84,6 +109,10 @@ var (
 	// re-impose auth for everyone, exactly what EnableSetup's doc
 	// comment says this design prevents.
 	ErrAuthDisabled = errors.New("auth: this deployment has disabled authentication -- run -enable-auth-setup to allow creating an account again")
+	// ErrOIDCIdentityTaken is returned by LinkOIDCIdentity when the
+	// (issuer, subject) pair is already linked to a *different* user --
+	// an OIDC identity can back at most one local account.
+	ErrOIDCIdentityTaken = errors.New("auth: this SSO identity is already linked to a different account")
 )
 
 // storeFile is the on-disk shape -- an object wrapping the user list
@@ -122,10 +151,11 @@ func (f *storeFile) UnmarshalJSON(data []byte) error {
 // (so mikroview still boots fine with auth unconfigured) but Register/
 // CreateUser refuse to add a user in that state -- see ErrNotPersisted.
 type Store struct {
-	mu     sync.RWMutex
-	path   string
-	byID   map[string]*User
-	byName map[string]string // lowercased username -> ID
+	mu        sync.RWMutex
+	path      string
+	byID      map[string]*User
+	byName    map[string]string // lowercased username -> ID
+	oidcIndex map[oidcKey]string // (issuer, subject) -> ID, see ByOIDCIdentity
 	// disabled records a deliberate, permanent opt-out of authentication
 	// for this deployment -- see Disabled/Disable/EnableSetup. Distinct
 	// from len(byID)==0, which just means "no account yet, decision
@@ -144,7 +174,7 @@ type Store struct {
 }
 
 func Open(path string) (*Store, error) {
-	s := &Store{path: path, byID: make(map[string]*User), byName: make(map[string]string)}
+	s := &Store{path: path, byID: make(map[string]*User), byName: make(map[string]string), oidcIndex: make(map[oidcKey]string)}
 	if path == "" {
 		return s, nil
 	}
@@ -173,6 +203,9 @@ func Open(path string) (*Store, error) {
 	for _, u := range file.Users {
 		s.byID[u.ID] = u
 		s.byName[strings.ToLower(u.Username)] = u.ID
+		if u.OIDCIssuer != "" {
+			s.oidcIndex[oidcKey{issuer: u.OIDCIssuer, subject: u.OIDCSubject}] = u.ID
+		}
 	}
 	s.disabled = file.Disabled
 	s.mtime = info.ModTime()
@@ -219,12 +252,17 @@ func (s *Store) reloadIfStale() {
 	}
 	byID := make(map[string]*User, len(file.Users))
 	byName := make(map[string]string, len(file.Users))
+	oidcIndex := make(map[oidcKey]string, len(file.Users))
 	for _, u := range file.Users {
 		byID[u.ID] = u
 		byName[strings.ToLower(u.Username)] = u.ID
+		if u.OIDCIssuer != "" {
+			oidcIndex[oidcKey{issuer: u.OIDCIssuer, subject: u.OIDCSubject}] = u.ID
+		}
 	}
 	s.byID = byID
 	s.byName = byName
+	s.oidcIndex = oidcIndex
 	s.disabled = file.Disabled
 	s.mtime = info.ModTime()
 }
@@ -349,6 +387,170 @@ func (s *Store) createLocked(username, password string, role Role, now time.Time
 
 	cp := *u
 	return &cp, nil
+}
+
+// ByOIDCIdentity looks up the user linked to the given (issuer,
+// subject) pair, if any.
+func (s *Store) ByOIDCIdentity(issuer, subject string) (*User, bool) {
+	s.reloadIfStale()
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	u, ok := s.byID[s.oidcIndex[oidcKey{issuer: issuer, subject: subject}]]
+	if !ok {
+		return nil, false
+	}
+	cp := *u
+	return &cp, true
+}
+
+// FindOrCreateOIDCUser looks up the user for (issuer, subject), or
+// just-in-time provisions one if this identity has never signed in
+// before -- the reported bool is true exactly when a new account was
+// created. Unlike Register, this is never gated by Count() > 0:
+// Register's one-time-only rule exists to close the *self-service local
+// registration form* after the first account, but has no bearing on
+// admin-driven creation (CreateUser) or, here, an identity provider
+// vouching for someone -- every never-before-seen (issuer, subject)
+// pair is provisioned regardless of how many accounts already exist,
+// which is what "no pre-registration required" (issue #43) means.
+//
+// usernameHint (typically the ID token's preferred_username or email
+// claim) is used as the new account's Username only if it's non-empty
+// and not already taken by a *different* user -- it is a display
+// convenience only, never part of the identity key, and this method
+// never attaches a login to an existing account merely because it
+// shares that hint: an IdP-side email/username reassignment must never
+// silently inherit a pre-existing mikroview account. On any collision
+// (or an empty hint) a deterministic synthetic username is used
+// instead, derived from (issuer, subject) so a retried provisioning
+// attempt (e.g. a network blip between JIT-create and the caller
+// creating a session) lands on the same account rather than racing
+// itself.
+//
+// The very first user -- local or OIDC, whichever happens first --
+// becomes RoleAdmin, the same rule Register already applies; every
+// later account (from either path) is RoleUser, decided under this
+// method's own write lock rather than a separate Count() pre-check, so
+// this doesn't add a second copy of the (pre-existing, unrelated to
+// this issue) narrow TOCTOU window Register's own pre-lock Count()
+// check already has.
+func (s *Store) FindOrCreateOIDCUser(issuer, subject, usernameHint string, now time.Time) (user *User, created bool, err error) {
+	if !s.Persisted() {
+		return nil, false, ErrNotPersisted
+	}
+	if s.Disabled() {
+		return nil, false, ErrAuthDisabled
+	}
+
+	s.reloadIfStale()
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	key := oidcKey{issuer: issuer, subject: subject}
+	if id, ok := s.oidcIndex[key]; ok {
+		if u, ok := s.byID[id]; ok {
+			u.LastLogin = now
+			s.persistLocked()
+			cp := *u
+			return &cp, false, nil
+		}
+	}
+
+	// A real, freshly generated, unmatchable Argon2id hash -- not "" --
+	// so a local-login attempt against this username takes the same
+	// time as a genuine wrong-password attempt. VerifyPassword's
+	// malformed-hash guard returns false before ever running Argon2id
+	// for an empty/malformed hash, which would otherwise let an
+	// attacker distinguish "this username is SSO-only" from the
+	// response time alone.
+	unmatchable, err := HashPassword(newID())
+	if err != nil {
+		return nil, false, err
+	}
+
+	role := RoleUser
+	if len(s.byID) == 0 {
+		role = RoleAdmin
+	}
+
+	u := &User{
+		ID:           newID(),
+		Username:     s.uniqueUsernameLocked(usernameHint, issuer, subject),
+		PasswordHash: unmatchable,
+		Role:         role,
+		CreatedAt:    now,
+		LastLogin:    now,
+		OIDCIssuer:   issuer,
+		OIDCSubject:  subject,
+	}
+	s.byID[u.ID] = u
+	s.byName[strings.ToLower(u.Username)] = u.ID
+	s.oidcIndex[key] = u.ID
+	s.persistLocked()
+
+	cp := *u
+	return &cp, true, nil
+}
+
+// uniqueUsernameLocked picks hint if it's non-empty and not already
+// taken, otherwise a deterministic synthetic username derived from
+// (issuer, subject) -- see FindOrCreateOIDCUser's doc comment. Callers
+// must hold s.mu.
+func (s *Store) uniqueUsernameLocked(hint, issuer, subject string) string {
+	hint = strings.TrimSpace(hint)
+	if hint != "" {
+		if _, taken := s.byName[strings.ToLower(hint)]; !taken {
+			return hint
+		}
+	}
+	sum := sha256.Sum256([]byte(issuer + "\x00" + subject))
+	full := hex.EncodeToString(sum[:])
+	// Grows the slice of the hash used until a free username is found --
+	// deterministic and idempotent for the same (issuer, subject) across
+	// retries, since it always starts from the same hash. A collision at
+	// the shortest length is exceptionally unlikely on its own; growing
+	// further makes it vanishingly so without ever depending on
+	// randomness for reproducibility.
+	for n := 8; n <= len(full); n += 8 {
+		candidate := "oidc-" + full[:n]
+		if _, taken := s.byName[strings.ToLower(candidate)]; !taken {
+			return candidate
+		}
+	}
+	return "oidc-" + newID() // practically unreachable
+}
+
+// LinkOIDCIdentity attaches (issuer, subject) to an existing user by
+// ID -- the low-level primitive a future "connect SSO to my account"
+// endpoint would use (an authenticated local user proving they also
+// control an OIDC identity), not itself exposed via any API in issue
+// #43. Idempotent for the same user; fails with ErrOIDCIdentityTaken if
+// that identity is already linked to a *different* user.
+func (s *Store) LinkOIDCIdentity(userID, issuer, subject string, now time.Time) error {
+	if !s.Persisted() {
+		return ErrNotPersisted
+	}
+	s.reloadIfStale()
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	u, ok := s.byID[userID]
+	if !ok {
+		return ErrUserNotFound
+	}
+
+	key := oidcKey{issuer: issuer, subject: subject}
+	if existingID, ok := s.oidcIndex[key]; ok && existingID != userID {
+		return ErrOIDCIdentityTaken
+	}
+
+	u.OIDCIssuer = issuer
+	u.OIDCSubject = subject
+	s.oidcIndex[key] = userID
+	s.persistLocked()
+	return nil
 }
 
 // Authenticate verifies username/password and, on success, records

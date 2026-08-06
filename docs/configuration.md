@@ -17,6 +17,7 @@ listen:
   syslogUdp: ":1514"
   syslogTcp: ":1514"
   http: ":8080"
+  httpRedirect: ":8081"
 
 store:
   retention: 24h
@@ -647,11 +648,117 @@ account, including on an already-running server -- you don't need to
 restart mikroview after running `-reset-password` for the new password
 to take effect.
 
+## Single sign-on (OIDC/SSO)
+
+Optional, additive on top of [local authentication](#authentication) above
+-- local login keeps working unmodified whether or not this is
+configured. Tested against [Authentik](https://goauthentik.io/), but
+works with any standard OIDC provider (generic discovery, no
+Authentik-specific behavior).
+
+```yaml
+oidc:
+  issuerUrl: "https://authentik.example.com/application/o/mikroview/"
+  clientId: "mikroview"
+  clientSecret: "changeme"
+  publicBaseUrl: "https://mikroview.example.com"
+  scopes: ["openid", "profile", "email"] # this is the default if omitted
+```
+
+- **`issuerUrl`** — the provider's issuer URL (Authentik: your
+  application's **OpenID Configuration Issuer**, found on the
+  provider's overview page -- it ends in `/application/o/<slug>/`, not
+  just your Authentik host). Empty (the default) means SSO is not
+  configured at all -- no separate `enabled` flag, since there's no
+  scenario where a fully-populated block should be silently inert.
+- **`clientId`/`clientSecret`** — from the provider's confidential
+  OAuth2/OIDC client registration (see the Authentik walkthrough
+  below). `clientSecret` can also be set via
+  `MIKROVIEW_OIDC_CLIENT_SECRET` instead of `config.yaml`, the same
+  secret-via-env precedent `notify.smtp.password`/`reputation.abuseIPDBKey`
+  already have.
+- **`publicBaseUrl`** — mikroview's own externally-reachable origin,
+  used to build the `redirect_uri` registered at the provider
+  (`publicBaseUrl` + `/api/auth/oidc/callback`). Required whenever
+  `issuerUrl` is set. Deliberately never inferred from a request's
+  `Host` header -- doing so is a known `redirect_uri`-confusion
+  vulnerability class. Covers either deployment mode this app
+  supports: mikroview's own self-signed TLS on a LAN IP/hostname
+  (`https://192.168.1.10:8443`), or fronted by a reverse proxy
+  terminating a real domain (`https://mikroview.example.com`).
+- **`scopes`** — defaults to `openid`, `profile`, `email` if omitted.
+  `openid` is always required regardless of what's listed.
+
+**Identity**: an account is matched by the immutable `(issuer, subject)`
+pair from the verified ID token, never by email or username -- an
+identity provider reassigning someone's email must never silently
+inherit a different mikroview account. A first-ever login via SSO
+just-in-time creates a local account (no pre-registration step), using
+the ID token's `preferred_username`/`email` claim as a display name
+only if it's free; otherwise a stable synthetic username is generated.
+The very first account overall (local or SSO, whichever happens first)
+becomes admin; every account after that is a regular user.
+
+**Security**: only asymmetric-signed ID tokens are ever accepted
+(RS256/ES256/PS256) -- HS256 and `none` are rejected outright,
+regardless of what the provider's discovery document claims to
+support. The Authorization Code flow always uses PKCE. A misconfigured
+or unreachable provider degrades to "SSO unavailable" (logged, once,
+at startup) rather than affecting local login in any way.
+
+**Authentik setup walkthrough**:
+
+1. **Applications → Providers → Create**, type **OAuth2/OpenID
+   Provider**.
+   - **Client type**: Confidential.
+   - **Redirect URIs**: strict match, `https://<publicBaseUrl>/api/auth/oidc/callback`.
+   - **Signing Key**: pick a certificate (Authentik ships a self-signed
+     one out of the box) -- **do not leave this unset**. Authentik's
+     `id_token_signing_alg_values_supported` in its discovery document
+     depends entirely on this being assigned; without it, token signing
+     may not use an algorithm mikroview's allowlist accepts.
+   - Note the generated **Client ID**/**Client Secret**.
+2. **Applications → Applications → Create**, bind it to the provider
+   above. Its slug is what appears in the issuer URL
+   (`/application/o/<slug>/`).
+3. Under the provider's **Property mappings**, make sure the standard
+   `openid`, `profile`, and `email` scope mappings are attached (they
+   usually are by default) -- these are what put `email`/
+   `preferred_username` in the ID token for mikroview's username hint.
+4. Set mikroview's `oidc.issuerUrl` to
+   `https://<your-authentik-host>/application/o/<slug>/` (the exact
+   value shown as **OpenID Configuration Issuer** on the provider's
+   overview page -- confirm by fetching
+   `<issuerUrl>/.well-known/openid-configuration` and checking
+   `id_token_signing_alg_values_supported` includes `RS256`).
+
+Verified end-to-end against a real, freshly bootstrapped Authentik
+instance (provider + application configured via Authentik's own API):
+the full redirect → real Authentik login form → PKCE code exchange →
+RS256 ID token verification → JIT account provisioning → mikroview
+session flow, including a second login correctly reusing the same
+account rather than creating a duplicate.
+
 ## TLS
 
-Mikroview serves TLS by default, on its one existing listener -- no
-second port. See [SECURITY.md](../SECURITY.md#tls) for the full
-reasoning; this section is the configuration reference.
+Mikroview serves TLS by default on its main listener -- the
+application itself is never served over plain HTTP. See
+[SECURITY.md](../SECURITY.md#tls) for the full reasoning; this section
+is the configuration reference.
+
+A second listener, `listen.httpRedirect` (default `:8081`, mapped to
+host port 80 by `deploy/docker-compose.yml`), exists only to redirect a
+plain HTTP request to HTTPS -- it never serves the application itself.
+It's only started while `tls.enabled` is true (nothing to redirect to
+otherwise), and only started at all if non-empty -- set it to `""` to
+disable it, e.g. if your own reverse proxy already handles the
+HTTP->HTTPS redirect. The redirect target is built by stripping any
+port off the request's `Host` header and assuming HTTPS is reachable on
+the browser-default 443, which holds for the default compose port
+mapping (host `443` -> this listener); if you've remapped the HTTPS
+port to something else externally, either disable this listener and
+redirect at your reverse proxy instead, or accept that the `Location`
+header will still point at `:443`.
 
 ```yaml
 tls:
@@ -725,6 +832,7 @@ Override individual scalar settings without a mounted file:
 | `MIKROVIEW_LISTEN_SYSLOG_UDP` | `listen.syslogUdp` |
 | `MIKROVIEW_LISTEN_SYSLOG_TCP` | `listen.syslogTcp` |
 | `MIKROVIEW_LISTEN_HTTP` | `listen.http` |
+| `MIKROVIEW_LISTEN_HTTP_REDIRECT` | `listen.httpRedirect` |
 | `MIKROVIEW_STORE_RETENTION` | `store.retention` |
 | `MIKROVIEW_STORE_MAX_EVENTS` | `store.maxEvents` |
 | `MIKROVIEW_LOG_LEVEL` | `log.level` (see [Logging](#logging)) |
@@ -770,6 +878,11 @@ Override individual scalar settings without a mounted file:
 | `MIKROVIEW_TLS_KEY_FILE` | `tls.keyFile` |
 | `MIKROVIEW_TLS_HOSTS` | `tls.hosts` (comma-separated) |
 | `MIKROVIEW_TLS_STORE_PATH` | `tls.storePath` |
+| `MIKROVIEW_OIDC_ISSUER_URL` | `oidc.issuerUrl` (see [Single sign-on](#single-sign-on-oidcsso)) |
+| `MIKROVIEW_OIDC_CLIENT_ID` | `oidc.clientId` |
+| `MIKROVIEW_OIDC_CLIENT_SECRET` | `oidc.clientSecret` |
+| `MIKROVIEW_OIDC_PUBLIC_BASE_URL` | `oidc.publicBaseUrl` |
+| `MIKROVIEW_OIDC_SCOPES` | `oidc.scopes` (comma-separated) |
 | `MIKROVIEW_NOTIFY_BATCH_WINDOW` | `notify.batchWindow` (see [Notifications](#notifications-optional)) |
 | `MIKROVIEW_NOTIFY_SMTP_HOST` | `notify.smtp.host` |
 | `MIKROVIEW_NOTIFY_SMTP_PORT` | `notify.smtp.port` |

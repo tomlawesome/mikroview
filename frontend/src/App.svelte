@@ -13,13 +13,13 @@
   import LiveTable from './components/LiveTable.svelte'
   import Dashboard from './components/Dashboard.svelte'
   import ControlPorts from './components/ControlPorts.svelte'
-  import FlagsOverlay from './components/FlagsOverlay.svelte'
+  import Flags from './components/Flags.svelte'
+  import Detectors from './components/Detectors.svelte'
   import IpLookupPopover from './components/IpLookupPopover.svelte'
   import PortLookupPopover from './components/PortLookupPopover.svelte'
   import AuthSetup from './components/AuthSetup.svelte'
   import AuthLogin from './components/AuthLogin.svelte'
   import AddUserOverlay from './components/AddUserOverlay.svelte'
-  import DetectorSettingsOverlay from './components/DetectorSettingsOverlay.svelte'
 
   // Any polling call that fails with a 401 (an expired or reset-
   // invalidated session -- see internal/api's sessionUser) bounces to
@@ -47,6 +47,10 @@
   if ([...initialParams.keys()].length > 0) {
     appState.filters = filtersFromSearchParams(initialParams)
   }
+  // Also runs once at startup, independent of the filter params above --
+  // strips and surfaces a failed OIDC callback's ?ssoError= (see
+  // internal/api/oidc.go's redirectWithSSOError).
+  authState.consumeSSOErrorFromURL()
 
   $effect(() => {
     themeState.apply()
@@ -133,15 +137,17 @@
       <LiveTable />
     {:else if appState.view === 'control-ports'}
       <ControlPorts />
+    {:else if appState.view === 'flags'}
+      <Flags />
+    {:else if appState.view === 'detectors'}
+      <Detectors />
     {:else}
       <Dashboard />
     {/if}
   </main>
-  <FlagsOverlay />
   <IpLookupPopover />
   <PortLookupPopover />
   <AddUserOverlay />
-  <DetectorSettingsOverlay />
 {/if}
 
 <style>

@@ -49,9 +49,37 @@ either way.
 
 ## Authentication
 
-- **Local accounts only, no SSO yet.** Username/password, Argon2id-hashed
-  (`internal/auth`). OIDC/SSO is tracked separately and not required for
-  this to be complete.
+- **Local accounts (username/password, Argon2id-hashed, `internal/auth`),
+  plus optional OIDC/SSO.** SSO is strictly additive -- local login keeps
+  working unmodified whether or not it's configured. See
+  [docs/configuration.md](docs/configuration.md#single-sign-on-oidcsso)
+  for setup; the security-relevant properties are below.
+  - **Identity is `(issuer, subject)` only, never email/username.** A
+    provider-side email or username reassignment can never silently
+    inherit an existing mikroview account -- the display name shown
+    for a JIT-provisioned account is a hint only, and falls back to a
+    generated one on any collision with an existing account.
+  - **Only asymmetric-signed ID tokens are accepted** (RS256/ES256/PS256)
+    -- HS256 and `none` are rejected outright by an explicit allowlist,
+    not by trusting whatever the provider's discovery document claims to
+    support, closing the classic "resign with the public key as an HMAC
+    secret" algorithm-confusion attack.
+  - **Authorization Code + PKCE always**, with CSRF `state` and a
+    replay-resistant `nonce`, both checked with constant-time comparison.
+    The in-flight login's PKCE verifier/state/nonce are held in an
+    AES-256-GCM-sealed, `HttpOnly` cookie -- confidential and
+    tamper-evident, cleared after a single use regardless of outcome.
+  - **`redirect_uri` is built only from `oidc.publicBaseUrl`**, never
+    from a request's `Host`/`X-Forwarded-Host` header -- deriving it
+    from client-influenced input is a known vulnerability class.
+  - **A misconfigured or unreachable provider degrades to "SSO
+    unavailable"** (logged once at startup) and never affects local
+    login.
+  - Verified end-to-end against a real, freshly bootstrapped Authentik
+    instance (not just unit tests): the full redirect → real login form
+    → PKCE exchange → RS256 token verification → account provisioning →
+    session flow, including a repeat login correctly reusing the same
+    account.
 - **The first-run choice is made via the web UI**, not a CLI command --
   whoever loads mikroview first sees a one-time screen offering "create
   the admin account" or "continue without an account." Don't leave
@@ -98,13 +126,20 @@ either way.
 
 ## TLS
 
-- **On by default, on mikroview's one existing listener** -- no second
-  port. A reverse proxy in front doesn't close the underlying problem on
-  its own: mikroview's own listener stays fully reachable and functional
-  over plain HTTP regardless of whether an RP exists upstream, so anyone
-  who reaches it directly (by IP, by habit, by not knowing the RP's
-  hostname) gets the same authenticated app in cleartext. TLS at
-  mikroview's own listener closes that regardless of how it's reached.
+- **On by default, on mikroview's main listener** -- the application
+  itself is never served over plain HTTP. A reverse proxy in front
+  doesn't close the underlying problem on its own: mikroview's own
+  listener stays fully reachable and functional over plain HTTP
+  regardless of whether an RP exists upstream, so anyone who reaches it
+  directly (by IP, by habit, by not knowing the RP's hostname) gets the
+  same authenticated app in cleartext. TLS at mikroview's own listener
+  closes that regardless of how it's reached.
+- **A second, redirect-only listener** (`listen.httpRedirect`, off by
+  setting it to `""`) exists purely so a client that guesses plain HTTP
+  gets bounced to HTTPS instead of a connection reset -- it serves
+  nothing but a 308 redirect to the HTTPS listener, never the
+  application itself, so it doesn't reopen the cleartext-exposure gap
+  the point above closes.
 - **Zero-config default: a self-generated local CA + certificate**
   (`internal/servertls`), persisted across restarts if `tls.storePath`
   is configured (optional, same contract as `flags.storePath`) so the

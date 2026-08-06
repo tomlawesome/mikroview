@@ -9,6 +9,7 @@
 package detect
 
 import (
+	"context"
 	"fmt"
 	"net"
 	"time"
@@ -180,13 +181,22 @@ func DefaultConfig() Config {
 // it without needing thousands of distinct source IPs.
 var maxTrackedSources = 4096
 
-type sample struct {
-	at   time.Time
-	port int
-}
+// observeQueueSize bounds Detector's async detection queue (see Enqueue/
+// Run) -- sized to the same tier as main.go's raw syslog channel (4096),
+// since Enqueue is offered once per stored event, the same rate as
+// ingestion itself (unlike internal/notify's much smaller queue, which
+// only receives newly-raised flags, a far rarer event).
+const observeQueueSize = 4096
 
 type sourceWindow struct {
-	samples      []sample
+	// spikes/ports replace a single []sample slice with two purpose-
+	// sized rings (see window.go): spikes is a plain event count over
+	// ActivitySpikeWindow, ports is the distinct-destination-port set
+	// over PortScanWindow -- split because each is sized to its own
+	// detector's window, which can differ.
+	spikes *countRing
+	ports  *distinctRing[int]
+
 	lastActivity time.Time
 
 	// Per-host activity baseline (see host_baseline.go): an EMA mean and
@@ -201,10 +211,12 @@ type sourceWindow struct {
 
 // Detector tracks per-source rolling-window state for the port-scan,
 // activity-spike, and critical-port detectors, raising flags into fs
-// when a threshold is crossed. It's intended to be called only from
-// mikroview's single ingest goroutine (see main.go) -- the same
+// when a threshold is crossed. Observe itself is intended to be called
+// only from a single detection-worker goroutine (see Run) -- the same
 // single-writer assumption internal/store and internal/device make, so
-// like them it takes no lock of its own.
+// like them it takes no lock of its own. Enqueue, in contrast, is safe
+// to call from any goroutine (mikroview's ingest goroutine calls it) --
+// it only ever hands an event off across a channel to that worker.
 type Detector struct {
 	cfg      Config
 	fs       *flags.Store
@@ -219,12 +231,16 @@ type Detector struct {
 	lookupSlots chan struct{}
 
 	perSource       map[string]*sourceWindow
-	criticalHits    map[string][]time.Time
+	criticalHits    map[string]*criticalWindow
 	criticalPortIPs map[int]*portSources
 	destWindows     map[string]*destWindow
 	ruleWindows     map[string]*ruleWindow
-	dropPairs       map[string][]time.Time
+	dropPairs       map[string]*dropPairWindow
 	lowSlowWindows  map[string]*lowSlowWindow
+
+	// observeQueue backs Enqueue/Run -- see observeQueueSize's doc
+	// comment for the sizing rationale.
+	observeQueue chan store.Event
 }
 
 // New constructs a Detector with every detector enabled and unscoped --
@@ -246,12 +262,45 @@ func NewWithSettings(cfg Config, fs *flags.Store, settings *SettingsStore) *Dete
 		settings:        settings,
 		lookupSlots:     make(chan struct{}, reputationLookupConcurrency),
 		perSource:       make(map[string]*sourceWindow),
-		criticalHits:    make(map[string][]time.Time),
+		criticalHits:    make(map[string]*criticalWindow),
 		criticalPortIPs: make(map[int]*portSources),
 		destWindows:     make(map[string]*destWindow),
 		ruleWindows:     make(map[string]*ruleWindow),
-		dropPairs:       make(map[string][]time.Time),
+		dropPairs:       make(map[string]*dropPairWindow),
 		lowSlowWindows:  make(map[string]*lowSlowWindow),
+		observeQueue:    make(chan store.Event, observeQueueSize),
+	}
+}
+
+// Enqueue hands e off to the detection-worker goroutine (see Run)
+// without ever blocking the caller -- a non-blocking select/default
+// send, silently dropping e if the queue is full. Mirrors
+// internal/syslog/udp_listener.go's ServeUDP (drop, don't log per-drop:
+// logging on every drop during exactly the overload condition this
+// guards against would itself add load), not internal/notify.
+// Dispatcher.Enqueue's per-drop logging -- a dropped flag notification
+// is rare enough to log; a detection queue backing up under sustained
+// high-volume traffic is not. mikroview's ingest goroutine calls this
+// so a slow or backed-up detection pass never delays event storage or
+// WebSocket broadcast, only detection itself.
+func (d *Detector) Enqueue(e store.Event) {
+	select {
+	case d.observeQueue <- e:
+	default:
+	}
+}
+
+// Run drains observeQueue, calling Observe for each event in order,
+// until ctx is done. Meant to run in its own goroutine, separate from
+// whatever goroutine calls Enqueue -- see Detector's doc comment.
+func (d *Detector) Run(ctx context.Context) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case e := <-d.observeQueue:
+			d.Observe(e)
+		}
 	}
 }
 
@@ -326,7 +375,10 @@ func (d *Detector) observeScanAndSpike(e store.Event, now time.Time) {
 		if len(d.perSource) >= maxTrackedSources {
 			d.evictOldestSource()
 		}
-		w = &sourceWindow{}
+		w = &sourceWindow{
+			spikes: newCountRing(d.cfg.ActivitySpikeWindow),
+			ports:  newDistinctRing[int](d.cfg.PortScanWindow),
+		}
 		d.perSource[e.SrcIP] = w
 	}
 	if !asActive {
@@ -339,38 +391,12 @@ func (d *Detector) observeScanAndSpike(e store.Event, now time.Time) {
 		w.primed = false
 	}
 	w.lastActivity = now
-	w.samples = append(w.samples, sample{at: now, port: e.DstPort})
-
-	// Prune to the larger of the two windows this state feeds, then
-	// compute both metrics from what's left -- a straightforward O(window
-	// size) scan per event rather than incremental counters, which is
-	// plenty fast at the traffic volumes this tool is scoped for (see
-	// internal/store's package doc on its own default capacity).
-	window := d.cfg.PortScanWindow
-	if d.cfg.ActivitySpikeWindow > window {
-		window = d.cfg.ActivitySpikeWindow
-	}
-	cutoff := now.Add(-window)
-	i := 0
-	for i < len(w.samples) && w.samples[i].at.Before(cutoff) {
-		i++
-	}
-	if i > 0 {
-		w.samples = w.samples[i:]
-	}
-
-	spikeCutoff := now.Add(-d.cfg.ActivitySpikeWindow)
-	scanCutoff := now.Add(-d.cfg.PortScanWindow)
-	spikeCount := 0
-	distinctPorts := make(map[int]struct{})
-	for _, s := range w.samples {
-		if asActive && !s.at.Before(spikeCutoff) {
-			spikeCount++
-		}
-		if psActive && !s.at.Before(scanCutoff) && s.port != 0 && scopeMatchesPort(ps.Scope, s.port) {
-			distinctPorts[s.port] = struct{}{}
-		}
-	}
+	// Recorded unconditionally (like the old shared w.samples slice was)
+	// regardless of which of psActive/asActive is on -- only the query
+	// below is gated per-detector, so re-enabling a detector later sees
+	// the samples that accumulated while it was off.
+	w.spikes.Add(now, true)
+	w.ports.Add(now, e.DstPort)
 
 	// Skipped entirely while inactive, rather than kept warm: the EMA
 	// baseline self-protects on re-prime (see checkHostActivityBaseline
@@ -378,39 +404,55 @@ func (d *Detector) observeScanAndSpike(e store.Event, now time.Time) {
 	// fires), so re-priming after a period of being off is the safer
 	// behavior, not a gap.
 	if asActive {
+		spikeCount := w.spikes.Count(now, d.cfg.ActivitySpikeWindow)
 		d.checkHostActivityBaseline(w, e.SrcIP, e.SrcCountry, spikeCount, now)
 	}
-	if psActive && len(distinctPorts) >= d.cfg.PortScanThreshold {
-		isNew := d.fs.AddWithDetail(flags.TypePortScan, e.SrcIP,
-			fmt.Sprintf("%d distinct destination ports in %s", len(distinctPorts), d.cfg.PortScanWindow),
-			overshootConfidence(len(distinctPorts), d.cfg.PortScanThreshold),
-			flags.Evidence{Ports: sortedPortsCapped(distinctPorts)}, e.SrcCountry, now)
-		d.maybeCheckReputation(flags.TypePortScan, e.SrcIP, e.SrcIP, isNew)
+	if psActive {
+		// port 0 and scope are both query-time filters (not applied at
+		// Add) so a live SettingsStore.Set narrowing the port scope takes
+		// effect on the very next event, not only once old samples age
+		// out of the window.
+		portFilter := func(p int) bool { return p != 0 && scopeMatchesPort(ps.Scope, p) }
+		portCount := w.ports.Count(now, d.cfg.PortScanWindow, portFilter)
+		if portCount >= d.cfg.PortScanThreshold {
+			distinctPorts := w.ports.Values(now, d.cfg.PortScanWindow, portFilter)
+			isNew := d.fs.AddWithDetail(flags.TypePortScan, e.SrcIP,
+				fmt.Sprintf("%d distinct destination ports in %s", portCount, d.cfg.PortScanWindow),
+				overshootConfidence(portCount, d.cfg.PortScanThreshold),
+				flags.Evidence{Ports: sortedPortsCapped(distinctPorts)}, e.SrcCountry, now)
+			d.maybeCheckReputation(flags.TypePortScan, e.SrcIP, e.SrcIP, isNew)
+		}
 	}
+}
+
+// criticalWindow tracks one source IP's recent attempts against any
+// critical port -- a countRing plus the lastActivity eviction needs,
+// replacing a bare []time.Time hit list.
+type criticalWindow struct {
+	hits         *countRing
+	lastActivity time.Time
 }
 
 func (d *Detector) observeCriticalPort(e store.Event, now time.Time) {
 	if !isTrackableConnState(e) {
 		return
 	}
-	hits, ok := d.criticalHits[e.SrcIP]
-	if !ok && len(d.criticalHits) >= maxTrackedSources {
-		d.evictOldestCriticalSource()
+	w, ok := d.criticalHits[e.SrcIP]
+	if !ok {
+		if len(d.criticalHits) >= maxTrackedSources {
+			d.evictOldestCriticalSource()
+		}
+		w = &criticalWindow{hits: newCountRing(d.cfg.CriticalPortWindow)}
+		d.criticalHits[e.SrcIP] = w
 	}
-	hits = append(hits, now)
+	w.lastActivity = now
+	w.hits.Add(now, true)
+	count := w.hits.Count(now, d.cfg.CriticalPortWindow)
 
-	cutoff := now.Add(-d.cfg.CriticalPortWindow)
-	i := 0
-	for i < len(hits) && hits[i].Before(cutoff) {
-		i++
-	}
-	hits = hits[i:]
-	d.criticalHits[e.SrcIP] = hits
-
-	if len(hits) >= d.cfg.CriticalPortThreshold {
+	if count >= d.cfg.CriticalPortThreshold {
 		isNew := d.fs.AddWithDetail(flags.TypeCriticalPort, e.SrcIP,
-			fmt.Sprintf("%d attempts against port %d in %s", len(hits), e.DstPort, d.cfg.CriticalPortWindow),
-			overshootConfidence(len(hits), d.cfg.CriticalPortThreshold),
+			fmt.Sprintf("%d attempts against port %d in %s", count, e.DstPort, d.cfg.CriticalPortWindow),
+			overshootConfidence(count, d.cfg.CriticalPortThreshold),
 			flags.Evidence{}, e.SrcCountry, now)
 		// e.SrcIP is already guaranteed public here -- Observe only calls
 		// observeCriticalPort when srcPublic is true.
@@ -436,13 +478,9 @@ func (d *Detector) evictOldestCriticalSource() {
 	var oldestKey string
 	var oldest time.Time
 	first := true
-	for k, hits := range d.criticalHits {
-		if len(hits) == 0 {
-			continue
-		}
-		last := hits[len(hits)-1]
-		if first || last.Before(oldest) {
-			oldestKey, oldest, first = k, last, false
+	for k, w := range d.criticalHits {
+		if first || w.lastActivity.Before(oldest) {
+			oldestKey, oldest, first = k, w.lastActivity, false
 		}
 	}
 	if oldestKey != "" {

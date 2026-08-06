@@ -40,6 +40,20 @@ type Listen struct {
 	SyslogUDP string `yaml:"syslogUdp"`
 	SyslogTCP string `yaml:"syslogTcp"`
 	HTTP      string `yaml:"http"`
+	// HTTPRedirect: a second, plain-HTTP-only listener whose sole job is
+	// redirecting to the HTTPS listener above -- lets a browser/client
+	// that guesses port 80 get bounced to the real thing instead of a
+	// connection reset. Only started when tls.enabled is true (nothing
+	// to redirect to otherwise). Same optional-empty-string contract as
+	// the storage paths: set to "" to disable it entirely. The redirect
+	// target is built by stripping any port off the request's Host
+	// header and assuming HTTPS is reachable on the browser-default 443
+	// -- true for docker-compose.yml's own default mapping (host 443 ->
+	// this container's HTTPS port). If you've mapped HTTPS to a
+	// different external port, either disable this (set to "") and
+	// handle the redirect at your reverse proxy instead, or accept that
+	// the Location header will point at :443 regardless.
+	HTTPRedirect string `yaml:"httpRedirect"`
 }
 
 type Store struct {
@@ -176,6 +190,39 @@ type TLS struct {
 	StorePath string `yaml:"storePath"`
 }
 
+// OIDC configures optional SSO login via an external OIDC provider
+// (issue #43, Authentik-targeted but any standard OIDC provider works)
+// on top of, never instead of, local password auth -- see
+// internal/oidc for the protocol implementation and
+// internal/auth.Store.FindOrCreateOIDCUser for identity storage/JIT
+// provisioning. Empty IssuerURL means OIDC is not configured, the same
+// "empty means opt-out, no separate enabled bool" contract
+// Reputation.AbuseIPDBKey/GeoIP.DBPath already use -- there's no
+// scenario where a fully-populated OIDC block should be silently
+// inert, unlike Notify's SMTP/Pushover (each independently optional
+// *within* one shared block), so a bare bool would be redundant here.
+type OIDC struct {
+	IssuerURL    string `yaml:"issuerUrl"`
+	ClientID     string `yaml:"clientId"`
+	ClientSecret string `yaml:"clientSecret"`
+	// PublicBaseURL is the externally-reachable origin used to build the
+	// redirect_uri registered at the provider (PublicBaseURL +
+	// "/api/auth/oidc/callback") -- required whenever IssuerURL is set.
+	// Deliberately never inferred from a request's Host/X-Forwarded-Host
+	// header: doing so is a known redirect_uri-confusion vulnerability
+	// class, since the exact-match registration at the provider is the
+	// actual defense, and only holds if mikroview never constructs it
+	// from client-influenced input. Covers both deployment modes this
+	// app already supports: mikroview's own self-signed TLS on a LAN
+	// IP/hostname (e.g. "https://192.168.1.10:8443"), or fronted by a
+	// reverse proxy terminating a real domain (e.g.
+	// "https://mikroview.example.com").
+	PublicBaseURL string `yaml:"publicBaseUrl"`
+	// Scopes defaults to {openid, profile, email} if empty -- see
+	// internal/oidc.New.
+	Scopes []string `yaml:"scopes"`
+}
+
 // DetectorScope is DetectorSettings' host/port/rule/classification
 // restriction, as plain yaml-tagged fields rather than importing
 // internal/detect -- same reasoning Flags already gives for duplicating
@@ -274,6 +321,7 @@ type Config struct {
 	Auth       Auth       `yaml:"auth"`
 	Notify     Notify     `yaml:"notify"`
 	TLS        TLS        `yaml:"tls"`
+	OIDC       OIDC       `yaml:"oidc"`
 	Devices    []Device   `yaml:"devices"`
 
 	// RuleNames/HostNames are optional friendly-display-name maps -- see
@@ -288,9 +336,10 @@ type Config struct {
 func defaults() Config {
 	return Config{
 		Listen: Listen{
-			SyslogUDP: ":1514",
-			SyslogTCP: ":1514",
-			HTTP:      ":8080",
+			SyslogUDP:    ":1514",
+			SyslogTCP:    ":1514",
+			HTTP:         ":8080",
+			HTTPRedirect: ":8081",
 		},
 		Store: Store{
 			Retention: 24 * time.Hour,
@@ -401,6 +450,9 @@ func applyEnv(cfg *Config) {
 	}
 	if v := os.Getenv("MIKROVIEW_LISTEN_HTTP"); v != "" {
 		cfg.Listen.HTTP = v
+	}
+	if v := os.Getenv("MIKROVIEW_LISTEN_HTTP_REDIRECT"); v != "" {
+		cfg.Listen.HTTPRedirect = v
 	}
 	if v := os.Getenv("MIKROVIEW_STORE_RETENTION"); v != "" {
 		if d, err := time.ParseDuration(v); err == nil {
@@ -645,6 +697,24 @@ func applyEnv(cfg *Config) {
 	if v := os.Getenv("MIKROVIEW_TLS_STORE_PATH"); v != "" {
 		cfg.TLS.StorePath = v
 	}
+	if v := os.Getenv("MIKROVIEW_OIDC_ISSUER_URL"); v != "" {
+		cfg.OIDC.IssuerURL = v
+	}
+	if v := os.Getenv("MIKROVIEW_OIDC_CLIENT_ID"); v != "" {
+		cfg.OIDC.ClientID = v
+	}
+	// Secret-via-env, same precedent as MIKROVIEW_NOTIFY_SMTP_PASSWORD/
+	// MIKROVIEW_ABUSEIPDB_KEY -- a credential doesn't have to sit in
+	// config.yaml just because the rest of the block does.
+	if v := os.Getenv("MIKROVIEW_OIDC_CLIENT_SECRET"); v != "" {
+		cfg.OIDC.ClientSecret = v
+	}
+	if v := os.Getenv("MIKROVIEW_OIDC_PUBLIC_BASE_URL"); v != "" {
+		cfg.OIDC.PublicBaseURL = v
+	}
+	if v := os.Getenv("MIKROVIEW_OIDC_SCOPES"); v != "" {
+		cfg.OIDC.Scopes = parseStringList(v)
+	}
 }
 
 // parseIntList parses a comma-separated list of integers (e.g. a port
@@ -685,6 +755,7 @@ func applyFlags(cfg *Config, args []string) error {
 	syslogUDP := fs.String("syslog-udp", cfg.Listen.SyslogUDP, "syslog UDP listen address")
 	syslogTCP := fs.String("syslog-tcp", cfg.Listen.SyslogTCP, "syslog TCP listen address")
 	httpAddr := fs.String("http", cfg.Listen.HTTP, "HTTP listen address")
+	httpRedirectAddr := fs.String("http-redirect", cfg.Listen.HTTPRedirect, "HTTP listen address for the redirect-to-HTTPS-only listener (empty disables it)")
 	retention := fs.Duration("retention", cfg.Store.Retention, "event retention window")
 	maxEvents := fs.Int("max-events", cfg.Store.MaxEvents, "max events held in the ring buffer")
 	geoipDB := fs.String("geoip-db", cfg.GeoIP.DBPath, "path to a MaxMind GeoLite2/GeoIP2 Country or City .mmdb file (optional; omit to disable country flags)")
@@ -696,6 +767,7 @@ func applyFlags(cfg *Config, args []string) error {
 	cfg.Listen.SyslogUDP = *syslogUDP
 	cfg.Listen.SyslogTCP = *syslogTCP
 	cfg.Listen.HTTP = *httpAddr
+	cfg.Listen.HTTPRedirect = *httpRedirectAddr
 	cfg.Store.Retention = *retention
 	cfg.Store.MaxEvents = *maxEvents
 	cfg.GeoIP.DBPath = *geoipDB
