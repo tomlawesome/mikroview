@@ -11,6 +11,7 @@ import type {
   Filters,
   Flag,
   FlagTimeBucket,
+  Healthz,
   ReputationResult,
   RuleUsage,
   Stats,
@@ -123,6 +124,12 @@ export async function fetchCriticalPorts(): Promise<number[]> {
   if (!res.ok) throw new ApiError(`fetchCriticalPorts: ${res.status}`, res.status)
   const body = await res.json()
   return body.ports ?? []
+}
+
+export async function fetchHealthz(): Promise<Healthz> {
+  const res = await fetch('/api/healthz')
+  if (!res.ok) throw new ApiError(`fetchHealthz: ${res.status}`, res.status)
+  return res.json()
 }
 
 export async function fetchStats(): Promise<Stats> {
