@@ -1013,3 +1013,38 @@ func TestPruneStillPrefersClearedFlags(t *testing.T) {
 		t.Error("the active flag was evicted while cleared flags remained; cleared flags must be shed first")
 	}
 }
+
+// TestClearedCountSurvivesReload guards a bug introduced alongside the
+// clearedCount optimisation: pruneLocked skips its scan when
+// clearedCount is zero, so a store reloaded from disk with cleared
+// flags but a zero counter would silently never evict them again --
+// the exact leak the counter was added to make cheap to avoid.
+func TestClearedCountSurvivesReload(t *testing.T) {
+	// persistLocked throttles real writes to persistMinInterval, so
+	// without shrinking it nothing reaches disk and this would test an
+	// empty file rather than the reload path.
+	prevInterval := persistMinInterval
+	persistMinInterval = 0
+	t.Cleanup(func() { persistMinInterval = prevInterval })
+
+	path := filepath.Join(t.TempDir(), "flags.json")
+	s1, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	for i := 0; i < 5; i++ {
+		target := fmt.Sprintf("203.0.113.%d", i)
+		s1.Add(TypePortScan, target, "d", now)
+		s1.Clear(flagID(TypePortScan, target), now.Add(time.Second))
+	}
+	s1.Add(TypePortScan, "198.51.100.1", "still active", now)
+
+	s2, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := s2.clearedCount; got != 5 {
+		t.Errorf("clearedCount after reload = %d, want 5 -- a stale zero disables cleared-flag eviction entirely", got)
+	}
+}
