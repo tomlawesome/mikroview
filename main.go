@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/tomlawesome/mikroview/internal/api"
+	"github.com/tomlawesome/mikroview/internal/audit"
 	"github.com/tomlawesome/mikroview/internal/auth"
 	"github.com/tomlawesome/mikroview/internal/config"
 	"github.com/tomlawesome/mikroview/internal/detect"
@@ -314,6 +315,16 @@ func main() {
 	if err != nil {
 		tokensLog.Warn(fmt.Sprintf("%v (continuing with in-memory-only, unpersisted token state)", err))
 	}
+
+	// Audit (issue #112): the persisted admin-action accountability log --
+	// same optional-persistence, degrade-not-crash contract as every other
+	// store above (a missing/unwritable path just means entries don't
+	// survive a restart, not that mikroview fails to start).
+	auditLog := logging.New("audit")
+	auditStore, err := audit.Open(cfg.Audit.StorePath)
+	if err != nil {
+		auditLog.Warn(fmt.Sprintf("%v (continuing with in-memory-only, unpersisted audit log)", err))
+	}
 	detectCfg := detect.Config{
 		PortScanThreshold:        cfg.Flags.PortScanThreshold,
 		PortScanWindow:           cfg.Flags.PortScanWindow,
@@ -552,6 +563,7 @@ func main() {
 		DetectorSettings: detectorSettings,
 		Entities:         entityStore,
 		Rules:            ru,
+		Audit:            auditStore,
 		CriticalPorts:    cfg.Flags.CriticalPorts,
 		DeviceStaleAfter: cfg.Flags.DeviceStaleAfter,
 		Auth:             authStore,
