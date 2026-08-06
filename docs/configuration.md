@@ -358,12 +358,13 @@ open question about which flag actions belong here:
   logged -- that endpoint isn't admin-gated at all (any signed-in user
   can clear a flag), and this is an audit log of *admin* actions.
 - **A permanent flag exclusion** (`POST /api/flags/{id}/clear-permanent`)
-  is **also not** logged, for the same reason: despite the lasting
-  "never flag this again" consequence, that endpoint is likewise open to
-  any signed-in user, not admin-gated (see its own doc comment in
-  `internal/api/flags.go`). Only *removing* an exclusion
-  (`DELETE /api/flags/exclusions/{id}`) is actually admin-gated, and is
-  logged.
+  **is** logged, and is admin-only. It was previously open to any
+  signed-in user and unlogged; that was tightened because an exclusion
+  permanently suppresses detection for that (detector, target) until
+  someone notices and undoes it, which is not something a non-admin --
+  or a single compromised low-privilege credential -- should be able to
+  do silently. Removing an exclusion
+  (`DELETE /api/flags/exclusions/{id}`) is admin-gated and logged too.
 
 Reviewed from **Menu → Audit log** (admin-only, and -- unlike Detectors'
 gate -- **not** shown while auth is disabled, matching Entities' own
@@ -743,7 +744,8 @@ already-active-again source re-raises it as a fresh entry rather than
 silently resurrecting the old one.
 
 Alongside the plain Clear action, "Clear, never flag again" (`POST
-/api/flags/{id}/clear-permanent`) clears the flag *and* permanently
+/api/flags/{id}/clear-permanent`, **admin-only** once an account exists,
+and recorded in the audit log) clears the flag *and* permanently
 excludes that exact (detector, target) pair -- from then on it never
 raises again, silently, until the exclusion is removed. This is
 deliberately permanent rather than a timed snooze: a time-limited mute
@@ -1388,7 +1390,7 @@ exits, rather than starting the server. See
 | `GET /api/lookup/ip/{ip}` | on-demand reputation/threat-intel lookup for one public IP (see [IP reputation lookup](#ip-reputation-lookup-optional)) |
 | `GET /api/flags` | active + cleared behavioral flags, plus the last hour of newly-raised-episode counts by type at 1-minute resolution (issue #100, feeds the dashboard's flags-over-time chart) (see [Behavioral flags](#behavioral-flags-optional-on-by-default)) |
 | `POST /api/flags/{id}/clear` | mark one flag as cleared |
-| `POST /api/flags/{id}/clear-permanent` | clear one flag *and* permanently exclude its (detector, target) pair going forward |
+| `POST /api/flags/{id}/clear-permanent` | admin-only (open while zero accounts exist): clear one flag *and* permanently exclude its (detector, target) pair going forward. Audit-logged |
 | `GET /api/flags/exclusions` | admin-only (open while zero accounts exist): every currently-excluded (detector, target) pair |
 | `DELETE /api/flags/exclusions/{id}` | admin-only (open while zero accounts exist): remove one exclusion, letting that pair raise again |
 | `GET /api/detectors` | admin-only (open while zero accounts exist): every detector's live enabled+scope (see [Per-detector toggles](#per-detector-toggles-and-scope-restrictions-optional)) |

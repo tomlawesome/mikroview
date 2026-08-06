@@ -39,6 +39,7 @@
     'device_silence',
     'new_device',
     'stale_rule',
+    'known_bad_ip',
   ]
 
   // Same labels Flags.svelte uses -- duplicated rather than shared,
@@ -59,6 +60,7 @@
     device_silence: 'Device gone quiet',
     new_device: 'New device',
     stale_rule: 'Stale firewall rule',
+    known_bad_ip: 'Known-bad IP (blocklist match)',
   }
 
   const W = 460
