@@ -71,6 +71,16 @@ services:
       # A plain-HTTP listener that only ever redirects to the HTTPS
       # port above -- never serves real content.
       - "80:8081"
+    # Container hardening -- defense in depth on top of the image
+    # already being distroless + non-root. mikroview binds only
+    # unprivileged ports inside the container (which is why the
+    # mappings above exist), so it needs no capabilities at all, and
+    # every path it writes to is a mount -- see "Persistent data".
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    read_only: true
     healthcheck:
       test: ["CMD", "/mikroview", "-healthcheck"]
       interval: 30s
