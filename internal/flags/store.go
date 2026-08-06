@@ -137,6 +137,10 @@ type Store struct {
 	path string
 	byID map[string]*Flag
 
+	// lastPersist backs persistLocked's rate limiting -- see
+	// persistMinInterval.
+	lastPersist time.Time
+
 	// onRaise, if set via WithOnRaise, is called after a new flag episode
 	// is raised (first-ever raise or a revival from Cleared -- the same
 	// "isNew" Add/AddWithConfidence/AddWithDetail already report) --
@@ -186,6 +190,16 @@ func Open(path string) (*Store, error) {
 		return s, err
 	}
 	for _, f := range list {
+		// A JSON array containing `null` (e.g. `[null]`, or a real entry
+		// followed by one) unmarshals successfully into a nil *Flag --
+		// valid JSON, so the err check above never catches it. Skipping
+		// it here is what actually delivers this function's documented
+		// "a malformed file is treated as empty rather than failing"
+		// contract; relying on the unmarshal error alone doesn't cover
+		// every way a file can be malformed.
+		if f == nil {
+			continue
+		}
 		s.byID[f.ID] = f
 	}
 	return s, nil
@@ -205,6 +219,14 @@ func flagID(t Type, target string) string {
 // already-active flag in place -- internal/detect uses this to avoid
 // re-triggering a reputation lookup on every re-fire of an ongoing flag
 // (see RaiseConfidenceFloor).
+//
+// No production detector calls this directly anymore -- every real
+// call site was migrated to AddWithConfidence/AddWithDetail once
+// confidence scoring landed (issue #39/#57). Kept as the simplest
+// lifecycle primitive (raise/re-fire/clear/revive/prune) for tests that
+// don't care about confidence scoring, the same reasoning New/
+// DefaultConfig are kept in internal/detect for tests that don't need
+// their own full configurability.
 func (s *Store) Add(t Type, target, detail string, now time.Time) bool {
 	isNew, f := s.add(t, target, detail, nil, Evidence{}, "", now)
 	s.maybeNotify(isNew, f)
@@ -428,14 +450,42 @@ func (s *Store) pruneLocked() {
 	}
 }
 
+// persistMinInterval rate-limits persistLocked's actual disk writes --
+// a detector re-firing on an active flag calls this on every single
+// matching event for as long as the condition holds, not once per
+// episode, so sustained high-rate traffic (a real port scan, the exact
+// condition detection exists to catch) used to mean a full JSON
+// marshal + atomic rename on every event, directly on the detection
+// hot path. The trade-off: the very latest state is only durably
+// persisted once another persistLocked call arrives after this
+// interval elapses, so a change made right before mikroview crashes or
+// is killed can be lost for up to this long -- an explicit, bounded
+// version of the same "best-effort, not critical state" trade-off this
+// package's own doc comment already makes for flags persistence in
+// general (in-memory state, which every read goes through, is always
+// immediately correct regardless).
+//
+// A var rather than a const so tests that need every call to persist
+// immediately (e.g. a round-trip test with no delay between calls) can
+// shrink it, same convention as maxFlags/maxTrackedSources/
+// maxTCPConnections elsewhere in this codebase.
+var persistMinInterval = time.Second
+
 // persistLocked writes the current state to disk if persistence is
-// configured. Write failures are swallowed rather than surfaced to
-// Add/Clear's callers: the in-memory state (which every read goes
-// through) stays correct either way, so a transient disk issue degrades
-// to "won't survive a restart right now" rather than breaking live use.
+// configured and enough time has passed since the last write -- see
+// persistMinInterval. Write failures are swallowed rather than
+// surfaced to Add/Clear's callers: the in-memory state (which every
+// read goes through) stays correct either way, so a transient disk
+// issue degrades to "won't survive a restart right now" rather than
+// breaking live use.
 func (s *Store) persistLocked() {
 	if s.path == "" {
 		return
+	}
+	if now := time.Now(); now.Sub(s.lastPersist) < persistMinInterval {
+		return
+	} else {
+		s.lastPersist = now
 	}
 	data, err := json.MarshalIndent(s.listLocked(), "", "  ")
 	if err != nil {
