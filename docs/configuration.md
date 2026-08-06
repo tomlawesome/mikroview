@@ -879,6 +879,31 @@ account, including on an already-running server -- you don't need to
 restart mikroview after running `-reset-password` for the new password
 to take effect.
 
+**A corrupt or unreadable accounts file refuses to boot, rather than
+silently reopening.** If `auth.storePath` points at a file that exists
+but can't be loaded, mikroview exits immediately with an error rather
+than falling back to an empty, zero-account state -- the same state a
+genuine fresh install starts from, which would otherwise mean a lost or
+corrupted accounts file silently presents the first-run setup screen to
+whoever loads mikroview next, indistinguishable from a real fresh
+install in both behavior and the logs. A missing file (no persistence
+configured, or a genuine first-ever boot) is unaffected and boots
+normally either way -- only a file that exists but won't parse triggers
+this.
+
+```sh
+mikroview -reset-auth
+```
+
+is the recovery path: it refuses to touch a file that actually loads
+without error (so it can't be used to accidentally wipe a working
+deployment), and moves a genuinely broken file aside to a
+`<path>.broken-<unix-seconds>` sibling rather than deleting it, so
+there's something to inspect afterward. Restore the original file from
+a backup if you have one, instead of running this, whenever that's an
+option -- this command's outcome is "start over with no accounts," not
+data recovery.
+
 ## API tokens (read-only)
 
 For a separate service to pull mikroview's data over the network with
@@ -1189,9 +1214,9 @@ Override individual scalar settings without a mounted file:
 names, and auth config can only be set via YAML/env, not flags.
 
 `-healthcheck`, `-list-users`, `-reset-password <username>`,
-`-enable-auth-setup` are standalone modes -- each does its one job and
-exits, rather than starting the server. See
-[Authentication](#authentication) for the latter three.
+`-enable-auth-setup`, `-reset-auth` are standalone modes -- each does
+its one job and exits, rather than starting the server. See
+[Authentication](#authentication) for the latter four.
 
 ## API reference
 

@@ -1,12 +1,17 @@
 package main
 
 import (
+	"errors"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/tomlawesome/mikroview/internal/auth"
 	"github.com/tomlawesome/mikroview/internal/detect"
 	"github.com/tomlawesome/mikroview/internal/device"
 	"github.com/tomlawesome/mikroview/internal/flags"
@@ -243,5 +248,173 @@ func TestSecurityHeadersSetOnEveryResponse(t *testing.T) {
 	securityHeaders(inner, true).ServeHTTP(rr2, httptest.NewRequest(http.MethodGet, "/", nil))
 	if rr2.Header().Get("Strict-Transport-Security") == "" {
 		t.Error("expected an HSTS header when hsts=true")
+	}
+}
+
+// TestAuthShouldFailClosed pins the exact predicate main() boots against:
+// a non-nil auth.Open error with a configured store path is the only case
+// that must refuse to start. Both "no persistence configured" (storePath
+// == "", err always nil per auth.Open) and "file genuinely doesn't exist"
+// (a real fresh install, err == nil) must keep booting normally.
+func TestAuthShouldFailClosed(t *testing.T) {
+	someErr := errors.New("boom")
+
+	cases := []struct {
+		name      string
+		err       error
+		storePath string
+		want      bool
+	}{
+		{"corrupt file with configured path fails closed", someErr, "/var/lib/mikroview/accounts.json", true},
+		{"nil error never fails closed regardless of path", nil, "/var/lib/mikroview/accounts.json", false},
+		{"nil error with unconfigured path never fails closed", nil, "", false},
+		{"error with unconfigured path never fails closed", someErr, "", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := authShouldFailClosed(tc.err, tc.storePath); got != tc.want {
+				t.Errorf("authShouldFailClosed(%v, %q) = %v, want %v", tc.err, tc.storePath, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestAuthOpenErrorShapeDrivesFailClosed proves the real-world trigger for
+// authShouldFailClosed against the actual auth.Store.Open implementation
+// (not just the predicate in isolation): a file that exists but fails to
+// parse produces a non-nil error, while a path with no file at all (fresh
+// install) does not -- the exact distinction main()'s boot sequence relies
+// on to tell "was configured, now broken" apart from "never configured".
+func TestAuthOpenErrorShapeDrivesFailClosed(t *testing.T) {
+	dir := t.TempDir()
+
+	freshPath := filepath.Join(dir, "fresh", "accounts.json")
+	_, err := auth.Open(freshPath)
+	if err != nil {
+		t.Fatalf("auth.Open on a not-yet-created path returned an error, want nil (fresh install must still boot): %v", err)
+	}
+	if authShouldFailClosed(err, freshPath) {
+		t.Error("authShouldFailClosed reported true for a genuine fresh install")
+	}
+
+	corruptPath := filepath.Join(dir, "accounts.json")
+	if err := os.WriteFile(corruptPath, []byte("{not valid json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err = auth.Open(corruptPath)
+	if err == nil {
+		t.Fatal("auth.Open on a corrupt existing file returned nil error, want non-nil")
+	}
+	if !authShouldFailClosed(err, corruptPath) {
+		t.Error("authShouldFailClosed reported false for a corrupt existing accounts file")
+	}
+}
+
+// TestRunResetAuthRefusesWorkingFile is the safety rail on the recovery
+// tool itself: it must never touch a file that actually loads without
+// error, since silently wiping a working deployment's accounts would turn
+// a recovery command into the very footgun it exists to prevent.
+func TestRunResetAuthRefusesWorkingFile(t *testing.T) {
+	dir := t.TempDir()
+	storePath := filepath.Join(dir, "accounts.json")
+
+	st, err := auth.Open(storePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.Register("admin", "correct horse battery staple", time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.ReadFile(storePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	t.Setenv("MIKROVIEW_CONFIG", "")
+	t.Setenv("MIKROVIEW_AUTH_STORE_PATH", storePath)
+
+	if code := runResetAuth(); code != 1 {
+		t.Errorf("runResetAuth() on a working file = %d, want 1 (refuse)", code)
+	}
+	after, err := os.ReadFile(storePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(before) != string(after) {
+		t.Error("runResetAuth modified a working accounts file, want it untouched")
+	}
+}
+
+// TestRunResetAuthNoOpsOnMissingFile covers an operator running
+// -reset-auth against a deployment that was never configured with
+// persisted accounts in the first place -- nothing to reset, so it must
+// report success without creating anything.
+func TestRunResetAuthNoOpsOnMissingFile(t *testing.T) {
+	dir := t.TempDir()
+	storePath := filepath.Join(dir, "accounts.json")
+
+	t.Setenv("MIKROVIEW_CONFIG", "")
+	t.Setenv("MIKROVIEW_AUTH_STORE_PATH", storePath)
+
+	if code := runResetAuth(); code != 0 {
+		t.Errorf("runResetAuth() on a never-created path = %d, want 0", code)
+	}
+	if _, err := os.Stat(storePath); !os.IsNotExist(err) {
+		t.Errorf("runResetAuth created %q, want it left absent", storePath)
+	}
+}
+
+// TestRunResetAuthRenamesCorruptFile is the actual recovery path this
+// segment's security fix depends on: given a genuinely broken accounts
+// file, -reset-auth must move it aside (never delete it -- it's the only
+// forensic evidence of what happened) so the next restart reaches the
+// legitimate first-run setup screen instead of refusing to boot forever.
+func TestRunResetAuthRenamesCorruptFile(t *testing.T) {
+	dir := t.TempDir()
+	storePath := filepath.Join(dir, "accounts.json")
+	if err := os.WriteFile(storePath, []byte("{not valid json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Setenv("MIKROVIEW_CONFIG", "")
+	t.Setenv("MIKROVIEW_AUTH_STORE_PATH", storePath)
+
+	if code := runResetAuth(); code != 0 {
+		t.Errorf("runResetAuth() on a corrupt file = %d, want 0", code)
+	}
+	if _, err := os.Stat(storePath); !os.IsNotExist(err) {
+		t.Errorf("runResetAuth left %q in place, want it moved aside", storePath)
+	}
+
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var found bool
+	for _, e := range entries {
+		if strings.HasPrefix(e.Name(), "accounts.json.broken-") {
+			found = true
+			data, err := os.ReadFile(filepath.Join(dir, e.Name()))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(data) != "{not valid json" {
+				t.Errorf("renamed backup content = %q, want the original corrupt content preserved", data)
+			}
+		}
+	}
+	if !found {
+		t.Errorf("expected a %s.broken-<unix> sibling in %s, entries: %v", "accounts.json", dir, entries)
+	}
+
+	// The corrupt file is gone, so a subsequent boot must see this exactly
+	// like a fresh install: auth.Open returns a nil error, and
+	// authShouldFailClosed agrees it's safe to continue.
+	_, err = auth.Open(storePath)
+	if err != nil {
+		t.Fatalf("auth.Open after runResetAuth returned an error, want the fresh-install nil: %v", err)
+	}
+	if authShouldFailClosed(err, storePath) {
+		t.Error("authShouldFailClosed reported true after a successful reset, want the boot to proceed")
 	}
 }
