@@ -116,6 +116,12 @@ const (
 // can shrink it without creating 1000+ flags.
 var maxFlags = 1000
 
+// maxFlagsHardCeiling bounds the store even when every flag is still
+// active. maxFlags above is a soft target that only sheds *cleared*
+// flags; without a hard stop, unauthenticated input can grow the active
+// set without limit (see pruneLocked). A var so tests can shrink it.
+var maxFlagsHardCeiling = 5000
+
 // flagTimeSeriesMinutes is how much history Store.TimeSeries covers, at
 // 1-minute resolution -- same window/resolution as
 // internal/store/ring.go's Stats.TimeSeries, for visual/temporal
@@ -773,6 +779,30 @@ func (s *Store) pruneLocked() {
 
 	for i := 0; i < over && i < len(cleared); i++ {
 		delete(s.byID, cleared[i].ID)
+	}
+
+	// Hard ceiling. Preferring to evict cleared flags is right -- an
+	// active flag is something a human still needs to see, so it should
+	// outlive reviewed noise. But "never evict an active flag" is only
+	// safe if the number of active flags is bounded, and it is not:
+	// flag targets come from unauthenticated syslog, so an attacker can
+	// mint distinct ones as fast as they can send packets. Proven: 40k
+	// spoofed MACs produced 40k live flags and drove ingest to a crawl.
+	//
+	// Past maxFlagsHardCeiling the store therefore sheds oldest-first
+	// regardless of state. Losing the oldest alert is strictly better
+	// than losing the process, and the ceiling sits far enough above
+	// maxFlags that a real deployment never reaches it.
+	if len(s.byID) <= maxFlagsHardCeiling {
+		return
+	}
+	all := make([]*Flag, 0, len(s.byID))
+	for _, f := range s.byID {
+		all = append(all, f)
+	}
+	sort.Slice(all, func(i, j int) bool { return all[i].FirstSeen.Before(all[j].FirstSeen) })
+	for i := 0; i < len(s.byID)-maxFlagsHardCeiling && i < len(all); i++ {
+		delete(s.byID, all[i].ID)
 	}
 }
 

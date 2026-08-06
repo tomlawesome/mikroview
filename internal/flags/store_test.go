@@ -1,13 +1,13 @@
 package flags
 
 import (
+	"fmt"
+	"github.com/tomlawesome/mikroview/internal/reputation"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
-
-	"github.com/tomlawesome/mikroview/internal/reputation"
 )
 
 func TestOpenEmptyPathIsUsable(t *testing.T) {
@@ -948,5 +948,68 @@ func TestOpenReadsLegacyBareArrayFormat(t *testing.T) {
 	}
 	if len(s.ListExclusions()) != 0 {
 		t.Errorf("expected a legacy file to start with no exclusions, got %+v", s.ListExclusions())
+	}
+}
+
+// TestActiveFlagsCannotGrowUnbounded is the regression test for a
+// resource-exhaustion vector reachable from unauthenticated syslog.
+//
+// pruneLocked prefers to evict cleared flags, which is the right
+// instinct: an active flag is something a human still needs to see.
+// But "never evict an active flag" is only safe if the active set is
+// bounded, and flag targets come straight from log lines an attacker
+// controls -- so it was not. Proven before this fix: ~40k spoofed MAC
+// addresses produced ~40k live flags and drove ingest to a crawl.
+func TestActiveFlagsCannotGrowUnbounded(t *testing.T) {
+	prevCeiling := maxFlagsHardCeiling
+	prevSoft := maxFlags
+	maxFlagsHardCeiling = 200
+	maxFlags = 50
+	t.Cleanup(func() {
+		maxFlagsHardCeiling = prevCeiling
+		maxFlags = prevSoft
+	})
+
+	s, _ := Open("")
+	now := time.Now()
+	// Every flag stays ACTIVE -- nothing is ever cleared, which is the
+	// case the old prune could not handle at all.
+	for i := 0; i < 5000; i++ {
+		s.Add(TypeNewDevice, fmt.Sprintf("aa:bb:cc:dd:%02x:%02x", i>>8, i&0xff), "spoofed", now.Add(time.Duration(i)*time.Millisecond))
+	}
+
+	if got := len(s.List()); got > maxFlagsHardCeiling {
+		t.Errorf("store holds %d flags with none cleared, want <= %d", got, maxFlagsHardCeiling)
+	}
+}
+
+// TestPruneStillPrefersClearedFlags: the hard ceiling must not change
+// the normal behaviour -- below it, reviewed noise is shed first and
+// active alerts survive.
+func TestPruneStillPrefersClearedFlags(t *testing.T) {
+	prevSoft := maxFlags
+	maxFlags = 10
+	t.Cleanup(func() { maxFlags = prevSoft })
+
+	s, _ := Open("")
+	now := time.Now()
+
+	// One active flag raised first, so it is the oldest of all.
+	s.Add(TypePortScan, "203.0.113.1", "real alert", now)
+
+	for i := 0; i < 100; i++ {
+		target := fmt.Sprintf("198.51.100.%d", i)
+		s.Add(TypePortScan, target, "noise", now.Add(time.Duration(i+1)*time.Millisecond))
+		s.Clear(flagID(TypePortScan, target), now.Add(time.Duration(i+1)*time.Second))
+	}
+
+	var found bool
+	for _, f := range s.List() {
+		if f.Target == "203.0.113.1" && !f.Cleared {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("the active flag was evicted while cleared flags remained; cleared flags must be shed first")
 	}
 }
