@@ -180,17 +180,20 @@ fix for rule names specifically, if you're able to -- `ruleNames` is for
 when you can't or don't want to edit RouterOS config directly, or want a
 different name in mikroview than the RouterOS comment.
 
-## Entities: UI-managed host/rule labels and tags (optional)
+## Entities: UI-managed host/rule/port labels and tags (optional)
 
 `ruleNames`/`hostNames` above are YAML-only: a label survives a restart,
 but changing one means editing `config.yaml` and restarting the
 container. **Entities** are the same idea (a label attached to a rule
-label or host IP), plus open-ended tags, managed live from the UI
-(**Menu → Entities**, admin-only) with no restart needed -- the shared
-foundation behind the mail-sender allowlist below (issue #108) and
-richer IP/port/rule aliasing, so the record shape is deliberately
-generic (`type`, `key`, `label`, `tags`) rather than shaped around either
-one specifically.
+label, host IP, or -- issue #109 -- a port number), plus open-ended
+tags, managed live from the UI (**Menu → Entities**, admin-only) with no
+restart needed -- the shared foundation two features build on (a
+mail-sender allowlist, and this IP/port/rule aliasing UI), so the record
+shape is deliberately generic (`type`, `key`, `label`, `tags`) rather
+than shaped around either one specifically. `type` is a free-form
+string, not a closed set -- `host`, `rule`, and `port` are just the
+values mikroview's own display sites (the live table, CSV export,
+`internal/naming.Resolver`) know to look up, not a validation allowlist.
 
 ```yaml
 entities:
@@ -212,11 +215,22 @@ with a marker persisted alongside the entities themselves, not by
 every entity later (one at a time, from the UI) does not cause them to
 reappear on the next restart. `ruleNames`/`hostNames` stay supported
 afterward as a YAML-only fallback for a rule/host with no matching
-entity.
+entity. Ports have no `config.yaml`-level equivalent -- entities are the
+only way a port ever gets a friendly name.
 
 Entities are managed via `GET`/`POST`/`DELETE /api/entities`
 (admin-gated the same way `POST /api/auth/users` is -- see
 [API reference](#api-reference)), or the **Entities** panel in the menu.
+That panel is also where you'd go to name something *without* already
+knowing its raw IP/rule label/port number: a **Discovered** section
+lists hosts, rules, and ports seen in live traffic that don't have a
+label yet (mirroring the auto-discovered-device pattern the **Fleet**
+view already uses for RouterOS sources), each with a one-click "Name it"
+action. Discovered rules come from mikroview's own unbounded-time
+per-rule usage record (`GET /api/rules`); discovered hosts/ports are
+derived from the events currently loaded in your browser tab, so that
+list is only as complete as what's been seen there so far -- the entity
+itself, once named, is fully persisted regardless.
 
 ## Behavioral flags (optional, on by default)
 
@@ -1163,7 +1177,7 @@ Override individual scalar settings without a mounted file:
 | `MIKROVIEW_AUTH_STORE_PATH` | `auth.storePath` (see [Authentication](#authentication)) |
 | `MIKROVIEW_AUTH_SECURE_COOKIE` | `auth.secureCookie` |
 | `MIKROVIEW_AUTH_SESSION_TTL` | `auth.sessionTTL` |
-| `MIKROVIEW_ENTITIES_STORE_PATH` | `entities.storePath` (see [Entities](#entities-ui-managed-hostrule-labels-and-tags-optional)) |
+| `MIKROVIEW_ENTITIES_STORE_PATH` | `entities.storePath` (see [Entities](#entities-ui-managed-hostruleport-labels-and-tags-optional)) |
 | `MIKROVIEW_AUTH_TOKENS_STORE_PATH` | `auth.tokensStorePath` (see [API tokens](#api-tokens-read-only)) |
 | `MIKROVIEW_TLS_ENABLED` | `tls.enabled` (see [TLS](#tls)) |
 | `MIKROVIEW_TLS_CERT_FILE` | `tls.certFile` |
@@ -1208,17 +1222,18 @@ exits, rather than starting the server. See
 | `GET /api/events` | filtered, windowed historical query (see below) |
 | `GET /api/devices` | known devices (configured + auto-discovered), each with a `status` of `live`/`stale`/`never_seen` (issue #98, see [Behavioral flags](#behavioral-flags-optional-on-by-default)'s "Device silence" entry) -- feeds the Fleet view |
 | `GET /api/critical-ports` | the configured `flags.criticalPorts` list -- feeds the "Control ports" tracking tab (issue #34), open to any signed-in user, not admin-gated |
+| `GET /api/rules` | every rule label mikroview has ever seen fire, with first/last-seen time and count (`internal/rules.Store`) -- the "discovered but unnamed rules" source for the Entities panel (see [Entities](#entities-ui-managed-hostruleport-labels-and-tags-optional)), open to any signed-in user, not admin-gated |
 | `GET /api/stats` | totals, per-action counts, rolling events/sec |
 | `GET /api/ws` | live-tail WebSocket feed |
 | `GET /api/lookup/ip/{ip}` | on-demand reputation/threat-intel lookup for one public IP (see [IP reputation lookup](#ip-reputation-lookup-optional)) |
-| `GET /api/flags` | active + cleared behavioral flags (see [Behavioral flags](#behavioral-flags-optional-on-by-default)) |
+| `GET /api/flags` | active + cleared behavioral flags, plus the last hour of newly-raised-episode counts by type at 1-minute resolution (issue #100, feeds the dashboard's flags-over-time chart) (see [Behavioral flags](#behavioral-flags-optional-on-by-default)) |
 | `POST /api/flags/{id}/clear` | mark one flag as cleared |
 | `POST /api/flags/{id}/clear-permanent` | clear one flag *and* permanently exclude its (detector, target) pair going forward |
 | `GET /api/flags/exclusions` | admin-only (open while zero accounts exist): every currently-excluded (detector, target) pair |
 | `DELETE /api/flags/exclusions/{id}` | admin-only (open while zero accounts exist): remove one exclusion, letting that pair raise again |
 | `GET /api/detectors` | admin-only (open while zero accounts exist): every detector's live enabled+scope (see [Per-detector toggles](#per-detector-toggles-and-scope-restrictions-optional)) |
 | `PUT /api/detectors/{name}` | admin-only (open while zero accounts exist): replace one detector's enabled+scope wholesale |
-| `GET /api/entities` | admin-only (**not** open while zero accounts exist -- see [Entities](#entities-ui-managed-hostrule-labels-and-tags-optional)): every persisted entity |
+| `GET /api/entities` | admin-only (**not** open while zero accounts exist -- see [Entities](#entities-ui-managed-hostruleport-labels-and-tags-optional)): every persisted entity |
 | `POST /api/entities` | admin-only: create or replace (upsert) one entity, identified by `(type, key)` in the JSON body |
 | `DELETE /api/entities` | admin-only: remove the entity identified by `(type, key)` in the JSON body |
 | `GET /api/auth/session` | current auth state (setup-required / authenticated / not) -- always 200, never gated |

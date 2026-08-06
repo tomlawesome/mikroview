@@ -24,13 +24,21 @@ import (
 
 // Known Type values. Type is deliberately a plain string, not a closed
 // Go enum with validation against it (contrast flags.Type) -- sibling
-// issues extend the set (#109 adds "port") and this store's job is to
-// hold whatever type/key pair a caller gives it, not to gatekeep which
-// types exist. TypeHost/TypeRule exist only so callers that already know
-// their type at compile time don't need a raw string literal.
+// issues extend the set (issue #109 adds TypePort) and this store's job
+// is to hold whatever type/key pair a caller gives it, not to gatekeep
+// which types exist. TypeHost/TypeRule/TypePort exist only so callers
+// that already know their type at compile time don't need a raw string
+// literal.
 const (
 	TypeHost = "host"
 	TypeRule = "rule"
+	// TypePort keys an entity by a port number formatted as a decimal
+	// string (e.g. "8291" for RouterOS's Winbox port), not an int --
+	// same "Key is always a string" contract every other Type follows,
+	// so Store never needs a type-specific comparison/parse path (see
+	// internal/naming.Resolver.Port, which does the int-to-string
+	// conversion at the one call site that actually has an int).
+	TypePort = "port"
 )
 
 // Entity is one persisted record: a friendly label and/or free-form tags

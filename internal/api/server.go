@@ -14,6 +14,7 @@ import (
 	"github.com/tomlawesome/mikroview/internal/hub"
 	"github.com/tomlawesome/mikroview/internal/oidc"
 	"github.com/tomlawesome/mikroview/internal/reputation"
+	"github.com/tomlawesome/mikroview/internal/rules"
 	"github.com/tomlawesome/mikroview/internal/store"
 )
 
@@ -31,6 +32,16 @@ type Server struct {
 	// Open("") returns a usable, empty, unpersisted store), same
 	// always-usable convention as Flags/DetectorSettings above.
 	Entities *entities.Store
+	// Rules is the persisted, long-lived per-rule-label usage record
+	// (issue #103's internal/rules.Store) -- exposed read-only via GET
+	// /api/rules (issue #109) as the "discovered but unnamed rules"
+	// source for the Entities admin panel: every rule label ever seen
+	// firing, independent of the store's retention window, mirroring
+	// device.Registry's own "auto-discovered, shown even before
+	// configured/labeled" pattern. Always non-nil (internal/rules.
+	// Open("") returns a usable, empty, unpersisted store), same
+	// always-usable convention as Entities/Flags/DetectorSettings above.
+	Rules *rules.Store
 	// CriticalPorts is the configured control-port list (issue #34's
 	// tracking tab) -- exposed read-only via GET /api/critical-ports,
 	// deliberately not behind handleDetectorSettingsList's admin gate
@@ -80,6 +91,7 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("GET /api/healthz", s.handleHealthz)
 	mux.HandleFunc("GET /api/events", s.handleEvents)
 	mux.HandleFunc("GET /api/devices", s.handleDevices)
+	mux.HandleFunc("GET /api/rules", s.handleRules)
 	mux.HandleFunc("GET /api/critical-ports", s.handleCriticalPorts)
 	mux.HandleFunc("GET /api/stats", s.handleStats)
 	mux.HandleFunc("GET /api/ws", s.handleWS)
