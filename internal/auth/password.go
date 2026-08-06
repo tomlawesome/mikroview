@@ -10,13 +10,21 @@ import (
 	"golang.org/x/crypto/argon2"
 )
 
-// Argon2id parameters for a small self-hosted service -- RFC 9106's
-// lower-resource recommendation (64 MiB memory, 1 pass, 4 threads).
+// Argon2id parameters for a small self-hosted service -- RFC 9106 §4's
+// memory-constrained profile (64 MiB memory, 3 passes, 4 threads,
+// t=3), not its high-memory profile (t=1, but only ever recommended
+// paired with several GiB of memory, impractical here). An earlier
+// version of this code paired this profile's 64 MiB memory value with
+// the *other* profile's t=1, landing on a combination RFC 9106 doesn't
+// actually recommend and that's measurably weaker against offline
+// cracking of an exfiltrated users.json than either real profile.
 // Encoded into every hash string, so changing these later doesn't
-// invalidate existing hashes -- only new ones use the new parameters.
+// invalidate existing hashes -- only new ones use the new parameters
+// (VerifyPassword reads memory/time/threads back out of the hash
+// string itself, never from these constants).
 const (
 	argon2Memory  uint32 = 64 * 1024 // KiB
-	argon2Time    uint32 = 1
+	argon2Time    uint32 = 3
 	argon2Threads uint8  = 4
 	argon2KeyLen  uint32 = 32
 	argon2SaltLen        = 16
