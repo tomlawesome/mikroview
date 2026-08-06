@@ -28,13 +28,26 @@ func TestHandleFlagsList(t *testing.T) {
 	}
 
 	var body struct {
-		Flags []flags.Flag `json:"flags"`
+		Flags      []flags.Flag           `json:"flags"`
+		TimeSeries []flags.FlagTimeBucket `json:"timeSeries"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
 		t.Fatal(err)
 	}
 	if len(body.Flags) != 1 || body.Flags[0].Target != "203.0.113.9" || body.Flags[0].Type != flags.TypePortScan {
 		t.Errorf("unexpected flags: %+v", body.Flags)
+	}
+
+	// Same 60-entry fixed-width-window shape as GET /api/stats's
+	// timeSeries (internal/store/ring.go's Stats.TimeSeries), and the one
+	// new episode raised above should land in the current minute's
+	// bucket.
+	if len(body.TimeSeries) != 60 {
+		t.Fatalf("expected 60 time series buckets, got %d", len(body.TimeSeries))
+	}
+	last := body.TimeSeries[len(body.TimeSeries)-1]
+	if last.ByType[flags.TypePortScan] != 1 {
+		t.Errorf("expected the just-raised port_scan episode in the latest bucket, got %+v", last.ByType)
 	}
 }
 

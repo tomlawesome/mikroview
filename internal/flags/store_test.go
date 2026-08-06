@@ -354,6 +354,107 @@ func TestAddReportsNewEpisode(t *testing.T) {
 	}
 }
 
+// TestTimeSeriesCountsOnlyNewEpisodes is the granularity contract
+// FlagsChart depends on: a bucket counts an episode start (first-ever
+// raise, or a revival from Cleared), never a plain re-fire of an
+// already-active flag -- the same "isNew" distinction Add already
+// reports and onRaise already keys off of, kept consistent here rather
+// than introducing a second, different notion of flag "activity."
+func TestTimeSeriesCountsOnlyNewEpisodes(t *testing.T) {
+	s, _ := Open("")
+	now := time.Now()
+
+	s.Add(TypePortScan, "1.1.1.1", "first", now)
+	series := s.TimeSeries()
+	last := series[len(series)-1]
+	if got := last.ByType[TypePortScan]; got != 1 {
+		t.Fatalf("expected 1 new episode counted after the first raise, got %d (bucket=%+v)", got, last)
+	}
+
+	// A plain re-fire of the still-active flag must not bump the bucket.
+	s.Add(TypePortScan, "1.1.1.1", "re-fire", now.Add(time.Second))
+	s.Add(TypePortScan, "1.1.1.1", "re-fire again", now.Add(2*time.Second))
+	series = s.TimeSeries()
+	last = series[len(series)-1]
+	if got := last.ByType[TypePortScan]; got != 1 {
+		t.Errorf("expected re-fires to leave the bucket at 1, got %d (bucket=%+v)", got, last)
+	}
+
+	// A revival from Cleared is a new episode and must bump it again.
+	id := flagID(TypePortScan, "1.1.1.1")
+	s.Clear(id, now.Add(3*time.Second))
+	s.Add(TypePortScan, "1.1.1.1", "revived", now.Add(4*time.Second))
+	series = s.TimeSeries()
+	last = series[len(series)-1]
+	if got := last.ByType[TypePortScan]; got != 2 {
+		t.Errorf("expected a revival to bump the bucket to 2, got %d (bucket=%+v)", got, last)
+	}
+}
+
+// TestTimeSeriesBucketsByType proves distinct Types land in separate
+// counters within the same minute, and that a Type with a zero count
+// for a given minute is omitted from that bucket's ByType map (same
+// "omit rather than list every known value" convention as
+// internal/store/ring.go's TimeBucket.ByAction).
+func TestTimeSeriesBucketsByType(t *testing.T) {
+	s, _ := Open("")
+	now := time.Now()
+
+	s.Add(TypePortScan, "1.1.1.1", "d1", now)
+	s.Add(TypeCriticalPort, "2.2.2.2", "d2", now)
+	s.Add(TypeCriticalPort, "3.3.3.3", "d3", now)
+
+	series := s.TimeSeries()
+	last := series[len(series)-1]
+	if last.ByType[TypePortScan] != 1 {
+		t.Errorf("expected 1 port_scan episode, got %+v", last.ByType)
+	}
+	if last.ByType[TypeCriticalPort] != 2 {
+		t.Errorf("expected 2 critical_port episodes, got %+v", last.ByType)
+	}
+	if _, ok := last.ByType[TypeGlobalSpike]; ok {
+		t.Errorf("expected a Type with zero episodes this minute to be omitted, got %+v", last.ByType)
+	}
+}
+
+// TestTimeSeriesReturnsFixedWidthWindow proves TimeSeries always returns
+// flagTimeSeriesMinutes entries, oldest first, even when nothing has
+// ever been raised -- same fixed-width-window contract as
+// internal/store/ring.go's Stats.TimeSeries, so FlagsChart can render a
+// consistent x-axis regardless of how much history actually exists yet.
+func TestTimeSeriesReturnsFixedWidthWindow(t *testing.T) {
+	s, _ := Open("")
+	series := s.TimeSeries()
+	if len(series) != flagTimeSeriesMinutes {
+		t.Fatalf("expected %d buckets, got %d", flagTimeSeriesMinutes, len(series))
+	}
+	for i, b := range series {
+		if len(b.ByType) != 0 {
+			t.Errorf("expected an empty store to report zero episodes in every bucket, bucket %d = %+v", i, b)
+		}
+	}
+	for i := 1; i < len(series); i++ {
+		if !series[i].Time.After(series[i-1].Time) {
+			t.Fatalf("expected strictly increasing bucket times, got %v then %v at index %d", series[i-1].Time, series[i].Time, i)
+		}
+	}
+}
+
+// TestTimeSeriesExcludedTargetNeverCounted proves a permanently-excluded
+// (Type, Target) pair -- which add() silently no-ops for, before isNew
+// is ever determined -- doesn't sneak into the bucket history either.
+func TestTimeSeriesExcludedTargetNeverCounted(t *testing.T) {
+	s, _ := Open("")
+	s.Exclude(TypePortScan, "1.1.1.1")
+	s.Add(TypePortScan, "1.1.1.1", "should be a no-op", time.Now())
+
+	series := s.TimeSeries()
+	last := series[len(series)-1]
+	if got := last.ByType[TypePortScan]; got != 0 {
+		t.Errorf("expected an excluded target's Add to never reach the bucket counter, got %d", got)
+	}
+}
+
 func TestRaiseConfidenceFloorOnlyRaises(t *testing.T) {
 	s, _ := Open("")
 	now := time.Now()

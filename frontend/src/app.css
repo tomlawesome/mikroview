@@ -19,6 +19,41 @@
   --unknown: #838d9e;
   --unknown-bg: rgba(131, 141, 158, 0.12);
 
+  /* Flag-type chart colors (FlagsChart.svelte) -- fixed and
+     theme-invariant, same convention as --accept/--drop/--reject/--log/
+     --unknown above (those four are reused directly for the first four
+     flag types below; --unknown is reused for device_silence, a
+     deliberate semantic fit for "gone quiet"/no-signal). The 9 new hues
+     were chosen and ordered with the dataviz skill's validator
+     (scripts/validate_palette.js): with 14 total categorical series --
+     well past the ~8 an OKLab-CVD-safe palette can guarantee -- every
+     *adjacent* pair in this declared order clears both the CVD-ΔE and
+     full-color-vision-ΔE floors in light and dark; a handful of
+     non-adjacent pairs among the violet/fuchsia/pink family (rendered
+     together only if several rare detector types fire in the same hour)
+     fall into the 6-8 "legal only with secondary encoding" band -- the
+     mitigation is the same one already applied to the 5-color action
+     palette this extends: a persistent legend with text labels, so
+     identity never depends on color alone. */
+  /* Underscored, not hyphenated, to match flags.Type's raw string values
+     (e.g. "port_scan") exactly -- FlagsChart.svelte builds these var
+     names directly off a flag type string (`--flag-${type}`) rather than
+     hyphenating first. */
+  --flag-port_scan: var(--accept);
+  --flag-activity_spike: var(--drop);
+  --flag-critical_port: var(--reject);
+  --flag-global_spike: var(--log);
+  --flag-distributed_brute_force: #6366f1;
+  --flag-outbound_anomaly: #eab308;
+  --flag-internal_recon: #9333ea;
+  --flag-rule_spike: #65a30d;
+  --flag-repeated_drops: #c026d3;
+  --flag-low_slow_scan: #0d9488;
+  --flag-off_hours_activity: #92400e;
+  --flag-device_silence: var(--unknown);
+  --flag-new_device: #db2777;
+  --flag-stale_rule: #0891b2;
+
   /* Nudged toward the active colorway's --accent (see the [data-colorway]
      rules below) before being washed to a low-alpha row fill just below
      -- so the row backgrounds actually feel different per colorway,
