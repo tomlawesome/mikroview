@@ -39,6 +39,13 @@ func (s *Server) handleFlagsClear(w http.ResponseWriter, r *http.Request) {
 // exclusions (handleExclusionsList/handleExclusionRemove below) is the
 // admin-gated half of this feature, since that's the part where a
 // mistake would otherwise be unrecoverable.
+//
+// Deliberately NOT audit-logged (issue #112), for the same reason
+// handleFlagsClear above isn't: this is an admin-action audit log, and
+// neither handler actually requires an admin caller -- see this
+// function's own "open to any caller" note above. Only
+// handleExclusionRemove below (truly admin-gated, via
+// callerIsAdminOrOpen) is logged.
 func (s *Server) handleFlagsClearPermanent(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	ok := s.Flags.ClearAndExclude(id, time.Now())
@@ -59,7 +66,9 @@ func (s *Server) handleExclusionsList(w http.ResponseWriter, r *http.Request) {
 // handleExclusionRemove reverses one exclusion, letting its (Type,
 // Target) raise again going forward -- admin-only, same gate as
 // handleExclusionsList. Removing an unknown exclusion ID is not an
-// error, same "no-op, not an error" reasoning as handleFlagsClear.
+// error, same "no-op, not an error" reasoning as handleFlagsClear --
+// only logged to the audit trail when an exclusion was actually found
+// and removed, since a no-op on an unknown ID isn't a meaningful action.
 func (s *Server) handleExclusionRemove(w http.ResponseWriter, r *http.Request) {
 	if !s.callerIsAdminOrOpen(r) {
 		http.Error(w, "admin role required", http.StatusForbidden)
@@ -67,5 +76,8 @@ func (s *Server) handleExclusionRemove(w http.ResponseWriter, r *http.Request) {
 	}
 	id := r.PathValue("id")
 	removed := s.Flags.RemoveExclusionByID(id)
+	if removed {
+		s.Audit.Record(auditActor(r), "flag.exclusion_remove", id, "")
+	}
 	writeJSON(w, http.StatusOK, map[string]any{"removed": removed})
 }
