@@ -114,21 +114,66 @@ func (s *Server) sessionUser(r *http.Request, now time.Time) (*auth.User, bool) 
 	return user, true
 }
 
-// requireAuth has three states, checked in order:
+// readOnlyRoutes is the only handler set a bearer API token (issue
+// #101) can ever reach -- deliberately its own separate *http.ServeMux
+// with just these four GET routes registered, rather than a per-request
+// allowlist check layered in front of the real mux. That's what makes
+// "a token can never reach a write/clear/config endpoint" structural:
+// there is no code path from a bearer-authenticated request to
+// handleFlagsClear, handleDetectorSettingsUpdate, handleAuthCreateUser,
+// etc. -- those handlers are simply never registered on this mux, so a
+// request for any of them (regardless of method) falls through to
+// ServeMux's own 404, the same as a route that never existed.
+func (s *Server) readOnlyRoutes() http.Handler {
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /api/events", s.handleEvents)
+	mux.HandleFunc("GET /api/flags", s.handleFlagsList)
+	mux.HandleFunc("GET /api/stats", s.handleStats)
+	mux.HandleFunc("GET /api/devices", s.handleDevices)
+	return mux
+}
+
+const bearerPrefix = "Bearer "
+
+// bearerToken extracts the raw token value from an Authorization: Bearer
+// <token> header, if present in that exact form -- any other
+// Authorization scheme (or none at all) is not this package's concern
+// and falls through to the normal session-cookie path.
+func bearerToken(r *http.Request) (string, bool) {
+	h := r.Header.Get("Authorization")
+	if !strings.HasPrefix(h, bearerPrefix) {
+		return "", false
+	}
+	return strings.TrimPrefix(h, bearerPrefix), true
+}
+
+// requireAuth has three states, checked in order, plus a fourth check
+// (bearer tokens) nested inside the third:
 //
 //  1. Disabled (s.Auth.Disabled()): a deliberate, permanent opt-out --
 //     everyone reached the same "skip auth" choice this deployment made
 //     on first boot. Fully open, indefinitely, same shape as (2) below
 //     but without the path restriction, since there's no pending
-//     decision left to protect.
+//     decision left to protect. A bearer token header is ignored here
+//     (not even validated) -- an invalid/revoked token must never turn
+//     an otherwise fully-open deployment into a 401.
 //  2. Undecided (Count()==0, not disabled): only bootstrapExemptPaths
 //     stay reachable -- just enough to show and complete the one-time
 //     choice screen. Everything else 401s, closing the window where
 //     live data (events/flags/stats) used to be readable by anyone who
-//     reached mikroview before a decision was made.
-//  3. Active (Count()>0): today's exact behavior -- CSRF header +
-//     exemptPaths + session cookie.
+//     reached mikroview before a decision was made. Tokens can't
+//     meaningfully exist yet either (creating one requires an admin,
+//     and there is none), so this stays unchanged.
+//  3. Active (Count()>0): CSRF header + exemptPaths + (session cookie OR
+//     bearer token). A bearer token is checked first, before the CSRF/
+//     exempt-path logic below, since it identifies a non-browser,
+//     service-to-service caller -- CSRF is a browser-cookie-specific
+//     mitigation that doesn't apply to it. A valid token is dispatched
+//     to readOnlyRoutes, never to next (the full mux); an invalid or
+//     revoked one is rejected outright with 401, not silently treated
+//     as "no token" and passed through to the session-cookie check.
 func (s *Server) requireAuth(next http.Handler) http.Handler {
+	readOnly := s.readOnlyRoutes()
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if s.Auth.Disabled() {
 			next.ServeHTTP(w, r)
@@ -157,6 +202,16 @@ func (s *Server) requireAuth(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
+
+		if raw, ok := bearerToken(r); ok {
+			if _, valid := s.Tokens.Authenticate(raw, time.Now()); valid {
+				readOnly.ServeHTTP(w, r)
+				return
+			}
+			http.Error(w, "invalid or revoked token", http.StatusUnauthorized)
+			return
+		}
+
 		if !isSafeMethod(r.Method) && r.Header.Get(csrfHeaderName) != csrfHeaderValue {
 			http.Error(w, "missing required header", http.StatusForbidden)
 			return

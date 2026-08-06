@@ -31,6 +31,7 @@ import (
 	"github.com/tomlawesome/mikroview/internal/oidc"
 	"github.com/tomlawesome/mikroview/internal/reputation"
 	"github.com/tomlawesome/mikroview/internal/routeros"
+	"github.com/tomlawesome/mikroview/internal/rules"
 	"github.com/tomlawesome/mikroview/internal/servertls"
 	"github.com/tomlawesome/mikroview/internal/store"
 	"github.com/tomlawesome/mikroview/internal/syslog"
@@ -44,6 +45,14 @@ import (
 // enough for the detector's own EMA baseline to track real trends, not
 // to feel "live" to a person.
 const globalSpikeCheckInterval = 10 * time.Second
+
+// deviceSilenceCheckInterval is how often DeviceSilenceDetector re-checks
+// every configured device's LastSeen against Config.DeviceStaleAfter.
+// Coarser than globalSpikeCheckInterval on purpose: DeviceStaleAfter's
+// own default (15m) means a device going quiet is detected within this
+// interval of crossing the threshold, which doesn't need EMA-baseline-
+// tracking-grade freshness to be useful to an operator.
+const deviceSilenceCheckInterval = 1 * time.Minute
 
 // loginLimiter{Threshold,Window}: brute-force protection on
 // POST /api/auth/login (see internal/auth.LoginLimiter) -- an internal
@@ -218,6 +227,27 @@ func main() {
 		flagsLog.Warn(fmt.Sprintf("%v (continuing with in-memory-only flag state)", err))
 	}
 
+	// macRegistry backs the new-device/new-MAC detector (issue #103
+	// phase 1) -- see internal/device.MACRegistry's doc comment for why
+	// this needs its own persisted store distinct from devices above
+	// (that one tracks router source IPs, not LAN client MACs).
+	macLog := logging.New("device-mac")
+	macRegistry, err := device.OpenMACRegistry(cfg.DeviceMAC.StorePath)
+	if err != nil {
+		macLog.Warn(fmt.Sprintf("%v (continuing with in-memory-only MAC registry)", err))
+	}
+
+	// RuleUsage (issue #102): a long-lived, persisted per-rule
+	// FirstSeen/LastSeen/Count record backing the stale-rule detector --
+	// see internal/rules' doc comment for why this can't just reuse
+	// internal/store's totalByRule (in-memory, windowed to the store's
+	// short retention period).
+	rulesLog := logging.New("rules")
+	ru, err := rules.Open(cfg.Flags.RuleUsageStorePath)
+	if err != nil {
+		rulesLog.Warn(fmt.Sprintf("%v (continuing with in-memory-only rule-usage state)", err))
+	}
+
 	authLog := logging.New("auth")
 	authStore, err := auth.Open(cfg.Auth.StorePath)
 	if err != nil {
@@ -248,6 +278,17 @@ func main() {
 	}
 	if n := entityStore.Seed(cfg.RuleNames, cfg.HostNames); n > 0 {
 		entitiesLog.Info(fmt.Sprintf("imported %d entries from config.yaml's ruleNames/hostNames (now UI-editable)", n))
+	}
+
+	// Tokens (issue #101): read-only API bearer tokens for service-to-
+	// service access -- optional persistence, same degrade-not-crash
+	// contract as Flags/DetectorSettings above (a missing/unwritable path
+	// just means token creation refuses with ErrTokenNotPersisted, not
+	// that mikroview fails to start).
+	tokensLog := logging.New("tokens")
+	tokenStore, err := auth.OpenTokenStore(cfg.Auth.TokensStorePath)
+	if err != nil {
+		tokensLog.Warn(fmt.Sprintf("%v (continuing with in-memory-only, unpersisted token state)", err))
 	}
 	detectCfg := detect.Config{
 		PortScanThreshold:        cfg.Flags.PortScanThreshold,
@@ -287,6 +328,13 @@ func main() {
 		LowSlowScanMinObservation:     cfg.Flags.LowSlowScanMinObservation,
 		LowSlowScanDropRatio:          cfg.Flags.LowSlowScanDropRatio,
 		LowSlowScanBaselineMultiplier: cfg.Flags.LowSlowScanBaselineMultiplier,
+
+		OffHoursStartHour:     cfg.Flags.OffHoursStartHour,
+		OffHoursEndHour:       cfg.Flags.OffHoursEndHour,
+		OffHoursMinSampleDays: cfg.Flags.OffHoursMinSampleDays,
+		OffHoursMinCount:      cfg.Flags.OffHoursMinCount,
+
+		DeviceStaleAfter: cfg.Flags.DeviceStaleAfter,
 	}
 	seed := detect.DefaultSettingsMap()
 	for name, ds := range cfg.Flags.Detectors {
@@ -310,11 +358,13 @@ func main() {
 	}
 	detector := detect.NewWithSettings(detectCfg, fs, detectorSettings).WithReputation(rep)
 	globalSpike := detect.NewGlobalSpikeDetectorWithSettings(detectCfg, fs, detectorSettings)
+	deviceSilence := detect.NewDeviceSilenceDetectorWithSettings(detectCfg, fs, detectorSettings, devices)
+	staleRule := detect.NewStaleRuleDetector(ru, fs, time.Duration(cfg.Flags.StaleRuleDays)*24*time.Hour)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	// Notify (issues #30/#31): alerting on newly-raised flags outside the
+	// Notify (issues #30/#31/#96): alerting on newly-raised flags outside the
 	// UI, through whichever channels are configured -- each independently
 	// enabled by its own identifying field being set (same "empty means
 	// off" convention as Reputation.AbuseIPDBKey/GeoIP.DBPath), sharing
@@ -336,6 +386,12 @@ func main() {
 		notifiers = append(notifiers, notify.NewPushoverNotifier(notify.PushoverConfig{
 			Token: cfg.Notify.Pushover.Token,
 			User:  cfg.Notify.Pushover.User,
+		}))
+	}
+	if cfg.Notify.Webhook.URL != "" {
+		notifiers = append(notifiers, notify.NewWebhookNotifier(notify.WebhookConfig{
+			URL:     cfg.Notify.Webhook.URL,
+			Headers: cfg.Notify.Webhook.Headers,
 		}))
 	}
 	if len(notifiers) > 0 {
@@ -364,7 +420,7 @@ func main() {
 	// migration/precedence design.
 	names := naming.Resolver{Rules: cfg.RuleNames, Hosts: cfg.HostNames, Entities: entityStore}
 
-	go ingest(ctx, raw, st, devices, h, geo, detector, names)
+	go ingest(ctx, raw, st, devices, macRegistry, fs, h, geo, detector, ru, names)
 	go detector.Run(ctx)
 
 	go func() {
@@ -379,6 +435,44 @@ func main() {
 				func() {
 					defer logging.Recover(spikeLog)
 					globalSpike.Check(st.Stats().EventsPerSecond, time.Now())
+				}()
+			}
+		}
+	}()
+
+	go func() {
+		silenceLog := logging.New("device-silence")
+		ticker := time.NewTicker(deviceSilenceCheckInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				func() {
+					defer logging.Recover(silenceLog)
+					deviceSilence.Check(time.Now())
+				}()
+			}
+		}
+	}()
+
+	// Stale-rule sweep (issue #102): coarse by design (see
+	// StaleRuleCheckInterval's doc comment) -- staleness is judged in
+	// days, so there's no benefit to checking anywhere near as often as
+	// the global-spike ticker above.
+	go func() {
+		staleRuleLog := logging.New("stale-rule")
+		ticker := time.NewTicker(cfg.Flags.StaleRuleCheckInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				func() {
+					defer logging.Recover(staleRuleLog)
+					staleRule.Check(time.Now())
 				}()
 			}
 		}
@@ -434,10 +528,12 @@ func main() {
 		DetectorSettings: detectorSettings,
 		Entities:         entityStore,
 		CriticalPorts:    cfg.Flags.CriticalPorts,
+		DeviceStaleAfter: cfg.Flags.DeviceStaleAfter,
 		Auth:             authStore,
 		Sessions:         auth.NewSessionStore(cfg.Auth.SessionTTL),
 		LoginLimiter:     auth.NewLoginLimiter(loginLimiterThreshold, loginLimiterWindow),
 		SecureCookie:     cfg.Auth.SecureCookie,
+		Tokens:           tokenStore,
 		OIDC:             oidcClient,
 		OIDCState:        oidcState,
 		StartTime:        time.Now(),
@@ -735,14 +831,14 @@ func readPasswordTwice() (string, error) {
 // WebSocket broadcast (see detect.Detector.Enqueue/Run, and the
 // dedicated detection-worker goroutine main() starts alongside this
 // one).
-func ingest(ctx context.Context, raw <-chan syslog.RawMessage, st *store.Store, devices *device.Registry, h *hub.Hub, geo *geoip.Lookup, detector *detect.Detector, names naming.Resolver) {
+func ingest(ctx context.Context, raw <-chan syslog.RawMessage, st *store.Store, devices *device.Registry, macRegistry *device.MACRegistry, fs *flags.Store, h *hub.Hub, geo *geoip.Lookup, detector *detect.Detector, ru *rules.Store, names naming.Resolver) {
 	ingestLog := logging.New("ingest")
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case rm := <-raw:
-			ingestOneRecovered(ingestLog, rm, st, devices, h, geo, detector, names)
+			ingestOneRecovered(ingestLog, rm, st, devices, macRegistry, fs, h, geo, detector, ru, names)
 		}
 	}
 }
@@ -753,7 +849,7 @@ func ingest(ctx context.Context, raw <-chan syslog.RawMessage, st *store.Store, 
 // still end the entire ingest goroutine for good on the first bad
 // message (silently stopping all future event processing) rather than
 // just dropping that one message. See logging.Recover's doc comment.
-func ingestOneRecovered(logger *slog.Logger, rm syslog.RawMessage, st *store.Store, devices *device.Registry, h *hub.Hub, geo *geoip.Lookup, detector *detect.Detector, names naming.Resolver) {
+func ingestOneRecovered(logger *slog.Logger, rm syslog.RawMessage, st *store.Store, devices *device.Registry, macRegistry *device.MACRegistry, fs *flags.Store, h *hub.Hub, geo *geoip.Lookup, detector *detect.Detector, ru *rules.Store, names naming.Resolver) {
 	defer logging.Recover(logger)
 
 	env := syslog.ParseEnvelope(rm.Data, rm.RecvTime)
@@ -761,6 +857,31 @@ func ingestOneRecovered(logger *slog.Logger, rm syslog.RawMessage, st *store.Sto
 	deviceID := devices.Resolve(rm.SourceIP, rm.RecvTime)
 	srcCountry, _ := geo.Country(parsed.SrcIP)
 	dstCountry, _ := geo.Country(parsed.DstIP)
+
+	// New-device/new-MAC detection (issue #103 phase 1): a deterministic,
+	// once-per-MAC check, so it's raised directly here rather than
+	// through detect.Detector's async worker like every other flag type
+	// -- there's no rolling-window state to maintain, just a "seen
+	// before" lookup against macRegistry's persisted history. Skips
+	// events with no SrcMAC (MACRegistry.Seen already no-ops for those,
+	// but checking here first avoids taking its lock at all on the
+	// common WAN-side-rule case where SrcMAC is never present). No
+	// confidence score attached (plain Add, not AddWithDetail/
+	// AddWithConfidence): "is this MAC new" is a deterministic yes/no,
+	// but that's a different question from "is this a threat" -- a truly
+	// new device is very often entirely benign (a phone joining the
+	// Wi-Fi), so fabricating a numeric confidence here would misleadingly
+	// imply a threat judgment this detector doesn't make. Same "not
+	// scored" contract as Flag.Confidence's nil case. The target is a
+	// MAC, not an IP, so -- same as TypeRuleSpike's rule-label target --
+	// there's no meaningful Country to attach either.
+	if parsed.SrcMAC != "" && macRegistry.Seen(parsed.SrcMAC, rm.RecvTime) {
+		detail := fmt.Sprintf("first traffic seen from MAC %s", parsed.SrcMAC)
+		if parsed.SrcIP != "" {
+			detail = fmt.Sprintf("first traffic seen from MAC %s (source IP %s)", parsed.SrcMAC, parsed.SrcIP)
+		}
+		fs.Add(flags.TypeNewDevice, parsed.SrcMAC, detail, rm.RecvTime)
+	}
 
 	e := store.Event{
 		Time:         env.Timestamp,
@@ -794,4 +915,10 @@ func ingestOneRecovered(logger *slog.Logger, rm syslog.RawMessage, st *store.Sto
 	stored := st.Insert(e)
 	h.Broadcast(stored)
 	detector.Enqueue(stored)
+	// Keeps internal/rules' long-lived per-rule usage record in sync with
+	// internal/store/ring.go's own totalByRule bump inside Insert above --
+	// same per-event trigger, so RuleUsage never drifts out of step with
+	// what the store itself just counted (see internal/rules.Store.Touch's
+	// doc comment for why this lives here rather than as a separate pass).
+	ru.Touch(stored.RuleLabel, stored.ReceivedAt)
 }

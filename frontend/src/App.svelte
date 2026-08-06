@@ -16,11 +16,13 @@
   import Flags from './components/Flags.svelte'
   import Detectors from './components/Detectors.svelte'
   import Entities from './components/Entities.svelte'
+  import Fleet from './components/Fleet.svelte'
   import IpLookupPopover from './components/IpLookupPopover.svelte'
   import PortLookupPopover from './components/PortLookupPopover.svelte'
   import AuthSetup from './components/AuthSetup.svelte'
   import AuthLogin from './components/AuthLogin.svelte'
   import AddUserOverlay from './components/AddUserOverlay.svelte'
+  import TokensOverlay from './components/TokensOverlay.svelte'
 
   // Any polling call that fails with a 401 (an expired or reset-
   // invalidated session -- see internal/api's sessionUser) bounces to
@@ -144,6 +146,8 @@
       <Detectors />
     {:else if appState.view === 'entities'}
       <Entities />
+    {:else if appState.view === 'fleet'}
+      <Fleet />
     {:else}
       <Dashboard />
     {/if}
@@ -151,6 +155,7 @@
   <IpLookupPopover />
   <PortLookupPopover />
   <AddUserOverlay />
+  <TokensOverlay />
 {/if}
 
 <style>
