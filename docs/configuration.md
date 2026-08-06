@@ -216,15 +216,20 @@ a warning — see the `blocklist` component in server logs.
 own sorted, non-overlapping address ranges — O(log n) per feed, never a
 linear scan, regardless of list size, since this runs on every single
 ingested event. Combined entries across every enabled feed are capped at
-10,000 (`internal/blocklist`'s `maxTotalEntries`) — roughly 5-10x
-Spamhaus DROP+EDROP's own documented combined size, comfortable headroom
-for that list to grow, and enough room to also enable Emerging Threats'
-larger list without immediately hitting the cap. A feed that would push
-the combined total over this cap has its excess entries truncated (a
-partially-loaded list still catches most of what it would have) rather
-than being rejected outright; a truncation is logged. Multiple feeds may
-be enabled simultaneously — each is matched independently, so enabling
-more than one only ever adds coverage, never conflicts.
+100,000 (`internal/blocklist`'s `maxTotalEntries`) — measured, not
+estimated: today's real combined feed size (Spamhaus DROP+EDROP +
+Emerging Threats) is ~2.2k entries, and benchmarking this package's
+actual lookup and daily-rebuild paths shows neither is remotely close to
+a real ceiling until well past 100,000 (rebuild takes ~33ms and ~7.5MB
+at that size; per-event lookup cost barely changes even at 5 million
+entries). 100,000 is real headroom over current usage, not a number
+chosen to avoid a performance cliff that's actually much further out. A
+feed that would push the combined total over this cap has its excess
+entries truncated (a partially-loaded list still catches most of what
+it would have) rather than being rejected outright; a truncation is
+logged. Multiple feeds may be enabled simultaneously — each is matched
+independently, so enabling more than one only ever adds coverage, never
+conflicts.
 
 **Firing behavior.** A match raises `known_bad_ip` directly against the
 source IP, with a fixed high confidence (Spamhaus's own curation policy

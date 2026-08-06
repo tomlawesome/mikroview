@@ -138,27 +138,30 @@ const (
 	// every *enabled* feed, enforced during Refresh (see its doc
 	// comment) -- the answer to issue #113's explicitly-left-open
 	// "exact entry-count performance ceiling" question, resolved here
-	// rather than left unresolved:
+	// with real measurements rather than estimates:
 	//
-	// Spamhaus DROP+EDROP combined is documented (by the issue itself,
-	// and Spamhaus's own published stats) at roughly 1-2k CIDR ranges --
-	// this package couldn't verify that against a live fetch while
-	// implementing (no outbound network access in the dev sandbox used
-	// to build this), so 10,000 is deliberately set at ~5-10x that
-	// figure: comfortable headroom for Spamhaus's own list to grow
-	// materially over time, room to also enable the much larger
-	// Emerging Threats compromised-IPs feed without immediately hitting
-	// the cap, while still keeping the absolute worst case (every
-	// enabled feed maxed out) at a size where an O(log n) binary search
-	// and the underlying sorted-slice memory footprint are trivial
-	// (tens of microseconds and well under a megabyte -- see
-	// blocklist_test.go's benchmark-shaped correctness test). A feed
-	// that would push the combined total over this cap has its excess
-	// entries truncated (see Refresh), not rejected outright -- a
+	// A live fetch confirms current real sizes: Spamhaus DROP+EDROP
+	// combined is ~1.7k CIDR ranges, Emerging Threats compromised-IPs is
+	// ~0.6k individual addresses -- ~2.2k combined today, nowhere near
+	// even the old 10,000 cap. Separately, benchmarking searchRanges and
+	// buildRanges directly (this package's actual hot-path lookup and
+	// Refresh-time rebuild) shows neither is remotely close to a real
+	// ceiling at 10,000: Match-path lookups cost ~100-150ns whether the
+	// table holds 10k or 5 million entries (O(log n) barely moves), and
+	// a full daily rebuild takes ~3ms at 10k, ~33ms at 100k, and still
+	// only ~280ms at 1 million, with memory scaling linearly at ~76
+	// bytes/entry (~7.5MB at 100k). 100,000 is chosen as real headroom
+	// (~45x today's actual combined feed size, not just ~5x) while
+	// staying an order of magnitude below where memory footprint would
+	// start to be worth another look on constrained self-hosted
+	// hardware -- there's no technical reason to go further than that
+	// without a concrete feed on the menu that would actually need it.
+	// A feed that would push the combined total over this cap has its
+	// excess entries truncated (see Refresh), not rejected outright -- a
 	// partially-loaded list still catches most of what it would have,
 	// which is strictly better than the alternative of loading nothing
 	// at all from that feed.
-	maxTotalEntries = 10_000
+	maxTotalEntries = 100_000
 	// RefreshInterval is fixed, not user-configurable -- see the
 	// package doc comment for why (avoiding over-polling Spamhaus/ET's
 	// free infrastructure was an explicit issue #113 requirement, not
