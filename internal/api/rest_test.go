@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/tomlawesome/mikroview/internal/audit"
 	"github.com/tomlawesome/mikroview/internal/auth"
 	"github.com/tomlawesome/mikroview/internal/config"
 	"github.com/tomlawesome/mikroview/internal/detect"
@@ -44,6 +45,7 @@ func newTestServer(t *testing.T) (*Server, *store.Store) {
 		t.Fatal(err)
 	}
 	ru, _ := rules.Open("")
+	as, _ := audit.Open("")
 	s := &Server{
 		Store:            st,
 		Devices:          device.NewRegistry([]config.Device{{ID: "core", Name: "Core", SourceIP: "192.168.1.1"}}),
@@ -53,6 +55,7 @@ func newTestServer(t *testing.T) (*Server, *store.Store) {
 		DetectorSettings: detect.AllEnabledSettingsStore(),
 		Entities:         es,
 		Rules:            ru,
+		Audit:            as,
 		Auth:             authStore,
 		Sessions:         auth.NewSessionStore(time.Hour),
 		LoginLimiter:     auth.NewLoginLimiter(10, time.Minute),

@@ -17,7 +17,9 @@ import (
 	"time"
 
 	"github.com/tomlawesome/mikroview/internal/api"
+	"github.com/tomlawesome/mikroview/internal/audit"
 	"github.com/tomlawesome/mikroview/internal/auth"
+	"github.com/tomlawesome/mikroview/internal/blocklist"
 	"github.com/tomlawesome/mikroview/internal/config"
 	"github.com/tomlawesome/mikroview/internal/detect"
 	"github.com/tomlawesome/mikroview/internal/device"
@@ -229,6 +231,9 @@ func main() {
 		geoLog.Warn(fmt.Sprintf("%v (country flags disabled)", err))
 	}
 	defer geo.Close()
+	// rep: always built (AbuseIPDBKey empty just means that one source
+	// inside it stays inert; Shodan InternetDB is free/keyless and
+	// always queried).
 	rep := reputation.New(cfg.Reputation.AbuseIPDBKey)
 
 	flagsLog := logging.New("flags")
@@ -260,8 +265,32 @@ func main() {
 
 	authLog := logging.New("auth")
 	authStore, err := auth.Open(cfg.Auth.StorePath)
-	if err != nil {
-		authLog.Warn(fmt.Sprintf("%v (continuing with in-memory-only, unpersisted account state)", err))
+	// A non-nil error from auth.Open, when persistence is actually
+	// configured, ALWAYS means "the accounts file exists but couldn't be
+	// read/parsed" -- Open returns (store, nil) for both "no persistence
+	// configured" and "file genuinely doesn't exist yet" (see its own
+	// doc comment), so this is never reached by a true fresh install.
+	// Falling through to the normal boot sequence here used to mean the
+	// in-memory store's Count() reads 0, which is *exactly* the state
+	// requireAuth treats as "no decision made yet" -- silently
+	// presenting a stranger with the first-run setup wizard on a
+	// previously-authenticated instance, indistinguishable in the logs
+	// from a genuine fresh install. That's a fail-OPEN on a security
+	// control, not an acceptable degrade-and-continue case like every
+	// other optional store above. Refuse to start instead: recovering
+	// requires an explicit, conscious operator action, and container/
+	// host access (the same trust anchor as every other CLI recovery
+	// path) is already sufficient to take it directly -- move or delete
+	// the broken file and restart, no dedicated CLI mode needed for
+	// something `mv`/`rm` already does.
+	if authShouldFailClosed(err, cfg.Auth.StorePath) {
+		authLog.Error(fmt.Sprintf(
+			"accounts file at %q exists but could not be loaded: %v -- refusing to start with authentication in an unknown state. "+
+				"If this deployment previously had accounts configured, this is NOT a fresh install: restore the file from a backup, "+
+				"or move/delete %q and restart to consciously re-arm the first-run setup screen (container/host access is required either way).",
+			cfg.Auth.StorePath, err, cfg.Auth.StorePath,
+		))
+		os.Exit(1)
 	}
 	switch {
 	case authStore.Count() > 0:
@@ -299,6 +328,16 @@ func main() {
 	tokenStore, err := auth.OpenTokenStore(cfg.Auth.TokensStorePath)
 	if err != nil {
 		tokensLog.Warn(fmt.Sprintf("%v (continuing with in-memory-only, unpersisted token state)", err))
+	}
+
+	// Audit (issue #112): the persisted admin-action accountability log --
+	// same optional-persistence, degrade-not-crash contract as every other
+	// store above (a missing/unwritable path just means entries don't
+	// survive a restart, not that mikroview fails to start).
+	auditLog := logging.New("audit")
+	auditStore, err := audit.Open(cfg.Audit.StorePath)
+	if err != nil {
+		auditLog.Warn(fmt.Sprintf("%v (continuing with in-memory-only, unpersisted audit log)", err))
 	}
 	detectCfg := detect.Config{
 		PortScanThreshold:        cfg.Flags.PortScanThreshold,
@@ -366,7 +405,18 @@ func main() {
 	if err != nil {
 		detectorsLog.Warn(fmt.Sprintf("%v (continuing with in-memory-only detector toggle state)", err))
 	}
-	detector := detect.NewWithSettings(detectCfg, fs, detectorSettings).WithReputation(rep)
+	// bl (issue #113 Part B): always constructed, even with zero enabled
+	// sources (cfg.Blocklist.Sources == []) -- Match/Refresh are both
+	// harmless no-ops in that case (see internal/blocklist.Blocklist's
+	// doc comment), same "always non-nil, off means inert" convention
+	// Reputation/Auth/Entities already use elsewhere in this file. Only
+	// the refresh goroutines below are actually skipped when disabled
+	// (see bl.HasFeeds()), so a fully-disabled deployment starts zero
+	// extra goroutines for this feature.
+	blocklistLog := logging.New("blocklist")
+	bl := blocklist.New(cfg.Blocklist.Sources, blocklistLog)
+
+	detector := detect.NewWithSettings(detectCfg, fs, detectorSettings).WithReputation(rep).WithKnownBadIPs(bl)
 	globalSpike := detect.NewGlobalSpikeDetectorWithSettings(detectCfg, fs, detectorSettings)
 	deviceSilence := detect.NewDeviceSilenceDetectorWithSettings(detectCfg, fs, detectorSettings, devices)
 	staleRule := detect.NewStaleRuleDetector(ru, fs, time.Duration(cfg.Flags.StaleRuleDays)*24*time.Hour)
@@ -488,6 +538,40 @@ func main() {
 		}
 	}()
 
+	// Local blocklist refresh (issue #113 Part B): a fixed daily cycle
+	// (blocklist.RefreshInterval, not configurable -- see that const's
+	// doc comment), same ticker/select/recover shape as the stale-rule
+	// sweep just above. Skipped entirely if no source is enabled
+	// (bl.HasFeeds() false), so a deployment that's disabled this
+	// feature via `blocklist.sources: []` starts zero extra goroutines
+	// for it. The first Refresh runs immediately, in its own goroutine,
+	// rather than blocking startup on Spamhaus/ET's reachability --
+	// same "never block startup on an optional external integration"
+	// contract GeoIP/Auth/Rules above already have; until it completes,
+	// Blocklist.Match just reports no matches (see that method's own
+	// doc comment), not an error.
+	if bl.HasFeeds() {
+		go func() {
+			defer logging.Recover(blocklistLog)
+			bl.Refresh(ctx)
+		}()
+		go func() {
+			ticker := time.NewTicker(blocklist.RefreshInterval)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-ticker.C:
+					func() {
+						defer logging.Recover(blocklistLog)
+						bl.Refresh(ctx)
+					}()
+				}
+			}
+		}()
+	}
+
 	// SSO (issue #43): additive on top of local auth, never a
 	// replacement -- see internal/oidc and auth.Store.
 	// FindOrCreateOIDCUser. A misconfigured or unreachable provider must
@@ -538,6 +622,7 @@ func main() {
 		DetectorSettings: detectorSettings,
 		Entities:         entityStore,
 		Rules:            ru,
+		Audit:            auditStore,
 		CriticalPorts:    cfg.Flags.CriticalPorts,
 		DeviceStaleAfter: cfg.Flags.DeviceStaleAfter,
 		Auth:             authStore,
@@ -774,6 +859,20 @@ func runEnableAuthSetup() int {
 	}
 	fmt.Println("Auth setup re-enabled -- the create-account form will be shown again on next load.")
 	return 0
+}
+
+// authShouldFailClosed reports whether main()'s boot sequence should
+// refuse to start rather than continue with an unauthenticated,
+// zero-account in-memory auth.Store. err is auth.Open's own return
+// value; storePath is the configured auth.storePath. auth.Open only
+// ever returns a non-nil error when a persistence path IS configured
+// and the file at it exists but couldn't be read/parsed -- both "no
+// persistence configured" (storePath == "") and "file genuinely
+// doesn't exist yet" (a real fresh install) return a nil error, so
+// requiring storePath != "" here is belt-and-braces rather than the
+// actual distinguishing signal, which is err itself.
+func authShouldFailClosed(err error, storePath string) bool {
+	return err != nil && storePath != ""
 }
 
 // runResetPassword backs `-reset-password <username>` -- the account-
