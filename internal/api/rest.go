@@ -57,6 +57,18 @@ func (s *Server) handleDevices(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"devices": views})
 }
 
+// handleRules serves every rule label mikroview has ever seen fire
+// (internal/rules.Store, issue #103's persisted, unbounded-time usage
+// record), each with its first/last-seen time and count -- issue #109's
+// "discovered but unnamed" source for the Entities admin panel, the same
+// role GET /api/devices already plays for auto-discovered hosts. Not
+// admin-gated, same as GET /api/devices: this is read-only usage data,
+// not the entity records themselves (POST/DELETE /api/entities stay
+// admin-only).
+func (s *Server) handleRules(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]any{"rules": s.Rules.List()})
+}
+
 // deviceStatus computes info's fleet-health status as of now -- see
 // deviceView.Status for what each value means. A device with no events
 // yet is "never_seen" regardless of DeviceStaleAfter (there's no elapsed

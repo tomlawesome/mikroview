@@ -31,11 +31,11 @@
   </div>
   <div class="line2">
     <span class="addr">
-      {#if event.srcIp}{srcFlag ? `${srcFlag} ` : ''}{event.srcHostName || event.srcIp}{#if event.srcPort}<span class="port">:{event.srcPort}</span>{/if}{:else}&mdash;{/if}
+      {#if event.srcIp}{srcFlag ? `${srcFlag} ` : ''}{event.srcHostName || event.srcIp}{#if event.srcPort}<span class="port">:{event.srcPortName || event.srcPort}</span>{/if}{:else}&mdash;{/if}
     </span>
     <span class="arrow">&rarr;</span>
     <span class="addr dst">
-      {#if event.dstIp}{event.dstHostName || event.dstIp}{#if event.dstPort}<span class="port">:{event.dstPort}</span>{/if}{:else}&mdash;{/if}
+      {#if event.dstIp}{event.dstHostName || event.dstIp}{#if event.dstPort}<span class="port">:{event.dstPortName || event.dstPort}</span>{/if}{:else}&mdash;{/if}
     </span>
   </div>
   <div class="line3">
