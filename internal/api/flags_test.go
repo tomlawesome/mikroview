@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/tomlawesome/mikroview/internal/audit"
 	"github.com/tomlawesome/mikroview/internal/auth"
 	"github.com/tomlawesome/mikroview/internal/flags"
 )
@@ -312,5 +313,80 @@ func TestHandleExclusionsListRequiresAdminOnceAccountExists(t *testing.T) {
 	defer adminResp.Body.Close()
 	if adminResp.StatusCode != http.StatusOK {
 		t.Errorf("expected 200 for an admin session on the exclusions list, got %d", adminResp.StatusCode)
+	}
+}
+
+// TestHandleFlagsClearPermanentRequiresAdminOnceAccountExists is the
+// regression test for the permission gap this endpoint used to have: it
+// was open to any authenticated caller, so a plain user-role account --
+// or one compromised credential -- could permanently suppress detection
+// for a (Type, Target) of their choosing, unlogged. A plain Clear stays
+// open (it's reversible; the flag simply raises again), which is the
+// distinction the gate is drawn on.
+func TestHandleFlagsClearPermanentRequiresAdminOnceAccountExists(t *testing.T) {
+	s := newAuthTestServer(t)
+	s.Flags.Add(flags.TypePortScan, "203.0.113.9", "port scan", time.Now())
+	flagID := s.Flags.List()[0].ID
+	ts := httptest.NewServer(s.Routes())
+	defer ts.Close()
+
+	postJSON(t, &http.Client{}, ts.URL+"/api/auth/register", credentialsRequest{Username: "admin", Password: "password123"}).Body.Close()
+	if _, err := s.Auth.CreateUser("viewer", "password456", auth.RoleUser, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+
+	viewerClient := &http.Client{Jar: mustCookieJar(t)}
+	postJSON(t, viewerClient, ts.URL+"/api/auth/login", credentialsRequest{Username: "viewer", Password: "password456"}).Body.Close()
+
+	resp := postJSON(t, viewerClient, ts.URL+"/api/flags/"+flagID+"/clear-permanent", nil)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusForbidden {
+		t.Errorf("expected 403 for a non-admin clear-permanent, got %d", resp.StatusCode)
+	}
+	if got := len(s.Flags.ListExclusions()); got != 0 {
+		t.Errorf("a rejected non-admin request still created %d exclusion(s); it must have no effect", got)
+	}
+
+	// The same caller may still clear the flag the ordinary, reversible
+	// way -- the gate is on permanence, not on touching flags at all.
+	plainClear := postJSON(t, viewerClient, ts.URL+"/api/flags/"+flagID+"/clear", nil)
+	plainClear.Body.Close()
+	if plainClear.StatusCode != http.StatusOK {
+		t.Errorf("expected a non-admin plain clear to still succeed, got %d", plainClear.StatusCode)
+	}
+}
+
+// TestHandleFlagsClearPermanentIsAuditLogged pins the other half of the
+// fix: now that this action is genuinely admin-gated, it belongs in the
+// admin audit trail -- previously it was deliberately excluded on the
+// grounds that it wasn't admin-only.
+func TestHandleFlagsClearPermanentIsAuditLogged(t *testing.T) {
+	s := newAuthTestServer(t)
+	s.Flags.Add(flags.TypePortScan, "203.0.113.9", "port scan", time.Now())
+	flagID := s.Flags.List()[0].ID
+	ts := httptest.NewServer(s.Routes())
+	defer ts.Close()
+
+	adminClient := &http.Client{Jar: mustCookieJar(t)}
+	postJSON(t, adminClient, ts.URL+"/api/auth/register", credentialsRequest{Username: "admin", Password: "password123"}).Body.Close()
+	postJSON(t, adminClient, ts.URL+"/api/auth/login", credentialsRequest{Username: "admin", Password: "password123"}).Body.Close()
+
+	resp := postJSON(t, adminClient, ts.URL+"/api/flags/"+flagID+"/clear-permanent", nil)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected an admin clear-permanent to succeed, got %d", resp.StatusCode)
+	}
+
+	var found bool
+	for _, e := range s.Audit.Query(audit.Query{}).Entries {
+		if e.Action == "flag.clear_permanent" && e.Target == flagID {
+			found = true
+			if e.Actor != "admin" {
+				t.Errorf("audit entry actor = %q, want admin", e.Actor)
+			}
+		}
+	}
+	if !found {
+		t.Errorf("expected a flag.clear_permanent audit entry for %s, got: %+v", flagID, s.Audit.Query(audit.Query{}).Entries)
 	}
 }
