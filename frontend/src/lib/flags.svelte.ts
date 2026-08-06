@@ -1,4 +1,4 @@
-import { clearFlag, fetchFlags } from './api'
+import { clearFlag, clearFlagPermanent, fetchFlags } from './api'
 import type { Flag } from './types'
 
 // Behavioral flags (port scans, activity spikes, critical-port attempts,
@@ -36,6 +36,30 @@ class FlagsState {
 
     try {
       await clearFlag(id)
+    } catch (err) {
+      flag.cleared = wasCleared
+      flag.clearedAt = previousClearedAt
+      throw err
+    }
+  }
+
+  // "Clear and never flag this again" -- same optimistic-update
+  // reasoning as clear() above (instant feedback, revert on failure),
+  // plus the permanent exclusion this adds server-side. There's no
+  // client-visible "excluded" flag state to revert beyond the clear
+  // itself; a caller that also renders an exclusions list (see
+  // exclusions.svelte.ts) is expected to refresh() that separately.
+  async clearPermanent(id: string) {
+    const flag = this.list.find((f) => f.id === id)
+    if (!flag || flag.cleared) return
+
+    const wasCleared = flag.cleared
+    const previousClearedAt = flag.clearedAt
+    flag.cleared = true
+    flag.clearedAt = new Date().toISOString()
+
+    try {
+      await clearFlagPermanent(id)
     } catch (err) {
       flag.cleared = wasCleared
       flag.clearedAt = previousClearedAt

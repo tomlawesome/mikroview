@@ -4,11 +4,37 @@
   // action here is a human reviewing and clearing a flag, never mikroview
   // acting on traffic itself.
   import { flagsState } from '../lib/flags.svelte'
+  import { exclusionsState } from '../lib/exclusions.svelte'
   import { appState } from '../lib/state.svelte'
+  import { authState } from '../lib/auth.svelte'
   import { formatHM, countryFlag } from '../lib/format'
   import ReputationDetails from './ReputationDetails.svelte'
   import BarList from './BarList.svelte'
   import type { Flag, FlagType } from '../lib/types'
+
+  // Same admin-or-open gate NavMenu already uses for the Detectors view
+  // (mirrors the backend's callerIsAdminOrOpen: Count()==0 is
+  // admin-equivalent since there's no admin to gate against yet).
+  const isAdminOrOpen = $derived(
+    (authState.state === 'authenticated' && authState.role === 'admin') || authState.state === 'auth-disabled',
+  )
+
+  let showExclusions = $state(false)
+  let removingExclusion = $state<string | null>(null)
+
+  function toggleExclusions() {
+    showExclusions = !showExclusions
+    if (showExclusions) exclusionsState.refresh()
+  }
+
+  async function removeExclusion(id: string) {
+    removingExclusion = id
+    try {
+      await exclusionsState.remove(id)
+    } finally {
+      removingExclusion = null
+    }
+  }
 
   let expandedId: string | null = $state(null)
 
@@ -110,6 +136,16 @@
     await flagsState.clear(id)
   }
 
+  // "Clear and never flag this again" -- permanently excludes this
+  // flag's exact (Type, Target) going forward (see internal/flags.
+  // Store.Exclude's doc comment for why this is a deliberate permanent
+  // suppression, not a timed snooze). Reviewing/undoing an exclusion
+  // made by mistake is the admin-only "Manage exclusions" panel below,
+  // not a confirmation dialog here.
+  async function clearPermanent(id: string) {
+    await flagsState.clearPermanent(id)
+  }
+
   // Graded rather than a single color for every value -- a 12% confidence
   // score and a 95% one shouldn't read as equally worth attention at a
   // glance, mirroring the severity coloring ActionBadge already uses
@@ -192,7 +228,16 @@
                 {/if}
               </div>
             {/if}
-            <button class="clear" onclick={() => clear(f.id)}>Clear</button>
+            <div class="actions">
+              <button class="clear" onclick={() => clear(f.id)}>Clear</button>
+              <button
+                class="clear clear-permanent"
+                onclick={() => clearPermanent(f.id)}
+                title="Clear this flag and permanently stop {TYPE_LABELS[f.type]} from ever raising again for {f.target} -- reversible from Manage exclusions below (admin only)."
+              >
+                Clear, never flag again
+              </button>
+            </div>
           </li>
         {/each}
       </ul>
@@ -220,6 +265,44 @@
       </ul>
     {/if}
   </section>
+
+  {#if isAdminOrOpen}
+    <section aria-labelledby="exclusions-heading">
+      <div class="exclusions-header">
+        <h2 id="exclusions-heading">Permanent exclusions</h2>
+        <button class="exclusions-toggle" onclick={toggleExclusions}>
+          {showExclusions ? 'Hide' : 'Manage exclusions'}
+        </button>
+      </div>
+      {#if showExclusions}
+        <p class="exclusions-intro">
+          Every (detector, target) pair permanently silenced via "Clear, never flag again" -- removing one here lets
+          it raise normally again, undoing a mistaken exclusion.
+        </p>
+        {#if exclusionsState.list.length === 0}
+          <p class="empty">No permanent exclusions.</p>
+        {:else}
+          <ul class="list">
+            {#each exclusionsState.list as e (e.id)}
+              <li class="card exclusion-card">
+                <div class="card-main">
+                  <span class="type">{TYPE_LABELS[e.type]}</span>
+                  <span class="target">{e.target === 'global' ? 'network-wide' : e.target}</span>
+                </div>
+                <button
+                  class="clear"
+                  disabled={removingExclusion === e.id}
+                  onclick={() => removeExclusion(e.id)}
+                >
+                  {removingExclusion === e.id ? 'Removing…' : 'Remove exclusion'}
+                </button>
+              </li>
+            {/each}
+          </ul>
+        {/if}
+      {/if}
+    </section>
+  {/if}
 </div>
 
 <style>
@@ -262,12 +345,21 @@
     background: var(--bg-elevated);
     border: 1px solid var(--border);
     border-radius: 8px;
-    padding: 10px 90px 10px 12px;
+    padding: 10px 150px 10px 12px;
   }
 
   .cleared-card {
     opacity: 0.7;
     padding-right: 12px;
+  }
+
+  .exclusion-card {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding-right: 12px;
+    flex-wrap: wrap;
   }
 
   .card-main {
@@ -398,10 +490,65 @@
     color: var(--fg-dim);
   }
 
-  .clear {
+  .actions {
     position: absolute;
     top: 10px;
     right: 12px;
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 6px;
+    width: 138px;
+  }
+
+  .clear {
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--fg-muted);
+    border-radius: 5px;
+    padding: 5px 10px;
+    font-size: 12px;
+    white-space: nowrap;
+  }
+
+  .clear:hover {
+    color: var(--fg);
+    border-color: var(--fg-muted);
+  }
+
+  .clear:disabled {
+    opacity: 0.5;
+    cursor: default;
+  }
+
+  /* Distinct (not identical to Clear) so a permanent action reads as
+     more deliberate than the plain, fully-reversible Clear next to it --
+     a warning tint rather than a scarier confirmation dialog, since
+     it's still undoable from Manage exclusions below (admin only). */
+  .clear-permanent {
+    border-color: var(--drop);
+    color: var(--drop);
+  }
+
+  .clear-permanent:hover {
+    background: var(--drop-bg);
+    color: var(--drop);
+    border-color: var(--drop);
+  }
+
+  .exclusions-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    margin-bottom: 10px;
+  }
+
+  .exclusions-header h2 {
+    margin: 0;
+  }
+
+  .exclusions-toggle {
     background: transparent;
     border: 1px solid var(--border);
     color: var(--fg-muted);
@@ -410,8 +557,15 @@
     font-size: 12px;
   }
 
-  .clear:hover {
+  .exclusions-toggle:hover {
     color: var(--fg);
     border-color: var(--fg-muted);
+  }
+
+  .exclusions-intro {
+    margin: 0 0 10px;
+    font-size: 12px;
+    color: var(--fg-muted);
+    max-width: 70ch;
   }
 </style>
