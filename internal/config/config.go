@@ -116,11 +116,24 @@ type Pushover struct {
 	User  string `yaml:"user"`
 }
 
+// Webhook configures a generic JSON-POST notification channel on
+// newly-raised flags (issue #96) -- covers ntfy, Discord, Slack, Home
+// Assistant, n8n, and anything else without a bespoke integration of
+// its own. Headers is a plain map rather than a single bearer-token
+// field since those receivers each expect auth in a different header
+// (Authorization: Bearer ..., a custom X-... header, etc) -- set
+// whichever header(s) your receiver needs. See
+// internal/notify.WebhookConfig for the runtime shape this maps onto.
+type Webhook struct {
+	URL     string            `yaml:"url"`
+	Headers map[string]string `yaml:"headers"`
+}
+
 // Notify is entirely optional -- see internal/notify. Each channel
-// (SMTP, Pushover) is independently enabled by whether its own
-// identifying field is set (SMTP.Host, Pushover.Token) -- any
-// combination of zero, one, or both may be configured at once, and
-// every enabled channel shares the same BatchWindow/Dispatcher.
+// (SMTP, Pushover, Webhook) is independently enabled by whether its own
+// identifying field is set (SMTP.Host, Pushover.Token, Webhook.URL) --
+// any combination may be configured at once, and every enabled channel
+// shares the same BatchWindow/Dispatcher.
 type Notify struct {
 	// BatchWindow: how often pending flags are flushed to every
 	// configured channel -- a fixed interval, not a quiet-period
@@ -130,6 +143,7 @@ type Notify struct {
 	BatchWindow time.Duration `yaml:"batchWindow"`
 	SMTP        SMTP          `yaml:"smtp"`
 	Pushover    Pushover      `yaml:"pushover"`
+	Webhook     Webhook       `yaml:"webhook"`
 }
 
 // Auth configures internal/auth's local authentication. Unlike Flags'
@@ -692,6 +706,13 @@ func applyEnv(cfg *Config) {
 	if v := os.Getenv("MIKROVIEW_NOTIFY_PUSHOVER_USER"); v != "" {
 		cfg.Notify.Pushover.User = v
 	}
+	if v := os.Getenv("MIKROVIEW_NOTIFY_WEBHOOK_URL"); v != "" {
+		cfg.Notify.Webhook.URL = v
+	}
+	// Headers is deliberately not env-configurable: it's a map, not a
+	// scalar, same "structured value doesn't map cleanly onto one env
+	// var" reasoning Flags.Detectors/Devices/RuleNames/HostNames already
+	// give for staying YAML-only.
 	if v := os.Getenv("MIKROVIEW_TLS_ENABLED"); v != "" {
 		if b, err := strconv.ParseBool(v); err == nil {
 			cfg.TLS.Enabled = b

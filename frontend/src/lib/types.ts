@@ -187,6 +187,16 @@ export interface Evidence {
   nat?: NATInfo
 }
 
+// Mirrors internal/flags.Exclusion's JSON tags -- one permanently-
+// excluded (Type, Target) pair (see flags.svelte.ts's clearPermanent and
+// exclusions.svelte.ts). id is the same flagID(Type, Target) key a
+// Flag's own id already uses.
+export interface Exclusion {
+  id: string
+  type: FlagType
+  target: string
+}
+
 export interface Flag {
   id: string
   type: FlagType

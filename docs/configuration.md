@@ -455,6 +455,20 @@ clears it via the UI or `POST /api/flags/{id}/clear`. Clearing an
 already-active-again source re-raises it as a fresh entry rather than
 silently resurrecting the old one.
 
+Alongside the plain Clear action, "Clear, never flag again" (`POST
+/api/flags/{id}/clear-permanent`) clears the flag *and* permanently
+excludes that exact (detector, target) pair -- from then on it never
+raises again, silently, until the exclusion is removed. This is
+deliberately permanent rather than a timed snooze: a time-limited mute
+either re-fires once it expires (nothing was solved) or it doesn't
+(permanent exclusion was what was wanted all along), so there's no
+in-between "snooze" option. Because "permanent" shouldn't mean
+"unrecoverable by mistake," every current exclusion is listed (and can
+be removed, re-enabling that pair) from the Flags tab's "Manage
+exclusions" panel -- admin-only once an account exists, open to anyone
+while mikroview is still in its fully-open zero-account state, same as
+every other admin-gated endpoint (see [Authentication](#authentication)).
+
 ## Notifications (optional)
 
 Flags are only visible if someone has the mikroview UI open. `notify`
@@ -463,9 +477,9 @@ flag *episode* is raised (a first-ever raise, or a revival after a human
 clears an already-cleared flag -- never a plain re-fire of an
 already-active one, so a noisy detector doesn't re-alert on every
 event). Each channel below is independently enabled by its own
-identifying field being set (`smtp.host`, `pushover.token`) -- configure
-any combination of zero, one, or both; every enabled channel shares one
-`batchWindow`.
+identifying field being set (`smtp.host`, `pushover.token`,
+`webhook.url`) -- configure any combination of zero, one, two, or all
+three; every enabled channel shares one `batchWindow`.
 
 ```yaml
 notify:
@@ -494,20 +508,43 @@ notify:
     # no per-browser subscription management, just this pair.
     token: "your-application-token"
     user: "your-user-or-group-key"
+  webhook:
+    # Any HTTPS endpoint that accepts a JSON POST -- ntfy, Discord
+    # (via a webhook URL's own payload adapter or a receiving proxy),
+    # Slack (same), Home Assistant's webhook trigger, n8n, or a
+    # bespoke receiver of your own. No bespoke per-service integration
+    # here on purpose -- this is the "everything else" channel.
+    url: "https://ntfy.example.com/mikroview-alerts"
+    # headers: arbitrary extra headers sent with every POST -- most
+    # commonly auth, since ntfy/Home Assistant/n8n-style receivers each
+    # expect it in a different header rather than agreeing on one
+    # convention. Optional; omit entirely for a receiver that needs no
+    # auth (e.g. an unauthenticated local ntfy topic).
+    headers:
+      Authorization: "Bearer changeme"
+      # X-Custom-Header: "some-other-receiver-specific-value"
 ```
 
-Left with an empty `smtp.host`/`pushover.token` (the default), that
-channel is simply never dispatched to -- no relay or app is assumed.
-`smtp.password`/`pushover.token`/`pushover.user` can also be set via env
-vars instead of the config file (see the table below), same
-secret-via-env precedent as `MIKROVIEW_ABUSEIPDB_KEY`.
+Left with an empty `smtp.host`/`pushover.token`/`webhook.url` (the
+default), that channel is simply never dispatched to -- no relay, app,
+or endpoint is assumed. `smtp.password`/`pushover.token`/`pushover.user`/
+`webhook.url` can also be set via env vars instead of the config file
+(see the table below), same secret-via-env precedent as
+`MIKROVIEW_ABUSEIPDB_KEY`; `webhook.headers` is YAML-only (a map doesn't
+map cleanly onto one env var, same reasoning `flags.detectors` and the
+device/naming maps already give).
 
 One notification covers every flag raised within a `batchWindow`: title/
 subject `mikroview: N new flag(s)`, one line per flag (type, target,
 detail, confidence, first-seen) -- Pushover's message additionally caps
 at 10 lines with a "...and N more" trailer, since its message field is
-much smaller than an email body. Built around a shared
-`internal/notify.Notifier`/`Dispatcher` so both channels reuse the same
+much smaller than an email body. The webhook channel instead POSTs a
+JSON body shaped `{"title": "...", "count": N, "flags": [...]}`, where
+each entry in `flags` is the same flag record the UI itself renders
+(type, target, detail, count, first/last seen, confidence) -- a generic
+consumer gets the full structured batch to template off of, rather than
+a pre-rendered string. Built around a shared
+`internal/notify.Notifier`/`Dispatcher` so every channel reuses the same
 batching rather than each implementing their own; true device push (web
 push API, VAPID keys, service worker) is a separate, not-yet-built
 target scoped alongside PWA feasibility, since a lot of that plumbing
@@ -945,6 +982,7 @@ Override individual scalar settings without a mounted file:
 | `MIKROVIEW_NOTIFY_SMTP_TO` | `notify.smtp.to` (comma-separated) |
 | `MIKROVIEW_NOTIFY_PUSHOVER_TOKEN` | `notify.pushover.token` |
 | `MIKROVIEW_NOTIFY_PUSHOVER_USER` | `notify.pushover.user` |
+| `MIKROVIEW_NOTIFY_WEBHOOK_URL` | `notify.webhook.url` |
 
 ## CLI flags (local development)
 
@@ -971,6 +1009,9 @@ exits, rather than starting the server. See
 | `GET /api/lookup/ip/{ip}` | on-demand reputation/threat-intel lookup for one public IP (see [IP reputation lookup](#ip-reputation-lookup-optional)) |
 | `GET /api/flags` | active + cleared behavioral flags (see [Behavioral flags](#behavioral-flags-optional-on-by-default)) |
 | `POST /api/flags/{id}/clear` | mark one flag as cleared |
+| `POST /api/flags/{id}/clear-permanent` | clear one flag *and* permanently exclude its (detector, target) pair going forward |
+| `GET /api/flags/exclusions` | admin-only (open while zero accounts exist): every currently-excluded (detector, target) pair |
+| `DELETE /api/flags/exclusions/{id}` | admin-only (open while zero accounts exist): remove one exclusion, letting that pair raise again |
 | `GET /api/detectors` | admin-only (open while zero accounts exist): every detector's live enabled+scope (see [Per-detector toggles](#per-detector-toggles-and-scope-restrictions-optional)) |
 | `PUT /api/detectors/{name}` | admin-only (open while zero accounts exist): replace one detector's enabled+scope wholesale |
 | `GET /api/auth/session` | current auth state (setup-required / authenticated / not) -- always 200, never gated |
