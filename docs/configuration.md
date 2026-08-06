@@ -455,6 +455,45 @@ clears it via the UI or `POST /api/flags/{id}/clear`. Clearing an
 already-active-again source re-raises it as a fresh entry rather than
 silently resurrecting the old one.
 
+## New-device detection (optional, on by default)
+
+Raises a `new_device` flag the first time mikroview ever sees a given
+LAN client MAC address (`store.Event.SrcMAC`). Unlike every detector
+above, this isn't a threshold-crossing or a statistical judgment -- it's
+a deterministic "have I ever seen this MAC before," so there's nothing
+to tune: it fires exactly once per genuinely-new MAC, the moment it's
+first observed, and never again for that same MAC.
+
+```yaml
+deviceMac:
+  storePath: "/var/lib/mikroview/mac-registry.json"
+```
+
+- **`storePath`** — where the registry of every MAC address mikroview
+  has ever seen (just a MAC plus first/last-seen timestamps) is
+  persisted, as a small JSON file. This needs its own store, separate
+  from `flags.storePath` above: it must survive a restart for "new" to
+  mean anything at all -- the 24h event-retention window alone is
+  nowhere near long enough. Left empty (not the default), detection
+  still runs, it just starts with an empty registry -- and so treats
+  every MAC as new again -- on every restart. Same optional-persistence
+  contract as `flags.storePath`; if you set this in the container, mount
+  a volume for its parent directory -- see `deploy/docker-compose.yml`.
+
+**Coverage.** `SrcMAC` is only present on RouterOS log lines from
+LAN-side/bridge-aware firewall rules -- by the time traffic reaches a
+WAN-side rule, its Layer 2 source-MAC information is already gone
+(that's how routing works, not a mikroview limitation). If your
+firewall ruleset only logs WAN-side traffic, this detector simply never
+fires; that's a data-availability gap, not a bug.
+
+**No confidence score.** "Is this MAC new" is a deterministic yes/no,
+but a brand-new device on your network is very often entirely benign (a
+phone joining the Wi-Fi) -- there's no meaningful numeric judgment call
+to attach on top of the deterministic fact. `confidence` is always
+`null` for `new_device` flags in `GET /api/flags`, same as the two "not
+yet scored" detectors above.
+
 ## Notifications (optional)
 
 Flags are only visible if someone has the mikroview UI open. `notify`
@@ -897,6 +936,7 @@ Override individual scalar settings without a mounted file:
 | `MIKROVIEW_NOTIFY_SMTP_TO` | `notify.smtp.to` (comma-separated) |
 | `MIKROVIEW_NOTIFY_PUSHOVER_TOKEN` | `notify.pushover.token` |
 | `MIKROVIEW_NOTIFY_PUSHOVER_USER` | `notify.pushover.user` |
+| `MIKROVIEW_DEVICE_MAC_STORE_PATH` | `deviceMac.storePath` (see [New-device detection](#new-device-detection-optional-on-by-default)) |
 
 ## CLI flags (local development)
 

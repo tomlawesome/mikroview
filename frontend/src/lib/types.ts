@@ -129,11 +129,28 @@ export type FlagType =
   | 'rule_spike'
   | 'repeated_drops'
   | 'low_slow_scan'
+  // new_device (issue #103 phase 1): raised directly from the ingest
+  // path (main.go), not through internal/detect like every other flag
+  // type above -- see internal/flags.TypeNewDevice. This is exactly the
+  // divergence DetectorName's doc comment below used to warn about: it
+  // has no corresponding detector-settings entry (no on/off toggle, no
+  // scope), so it must NOT be added to DetectorName.
+  | 'new_device'
 
-// Mirrors internal/detect.DetectorName -- same 9 string values as
-// FlagType, kept as a distinct alias since they're the same thing only
-// by coincidence today (see that type's doc comment).
-export type DetectorName = FlagType
+// Mirrors internal/detect.DetectorName's 10 string values. No longer a
+// FlagType alias (see new_device above) -- kept as its own literal union
+// now that a FlagType exists with no matching detector.
+export type DetectorName =
+  | 'port_scan'
+  | 'activity_spike'
+  | 'critical_port'
+  | 'global_spike'
+  | 'distributed_brute_force'
+  | 'outbound_anomaly'
+  | 'internal_recon'
+  | 'rule_spike'
+  | 'repeated_drops'
+  | 'low_slow_scan'
 
 // Mirrors internal/detect.ListMode.
 export type ListMode = '' | 'allow' | 'deny'

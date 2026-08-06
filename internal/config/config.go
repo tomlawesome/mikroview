@@ -311,6 +311,17 @@ type Flags struct {
 	Detectors                 map[string]DetectorSettings `yaml:"detectors"`
 }
 
+// DeviceMAC configures internal/device's MACRegistry (issue #103 phase
+// 1) -- the new-MAC detector's persisted per-SrcMAC FirstSeen/LastSeen
+// history. Optional persistence, same contract as Flags.StorePath: left
+// empty, the detector still runs, it just starts with an empty registry
+// on every restart instead of remembering every MAC mikroview has ever
+// logged traffic from -- and "new" only means anything against history
+// well beyond the 24h event-retention window.
+type DeviceMAC struct {
+	StorePath string `yaml:"storePath"`
+}
+
 type Config struct {
 	Listen     Listen     `yaml:"listen"`
 	Store      Store      `yaml:"store"`
@@ -323,6 +334,7 @@ type Config struct {
 	TLS        TLS        `yaml:"tls"`
 	OIDC       OIDC       `yaml:"oidc"`
 	Devices    []Device   `yaml:"devices"`
+	DeviceMAC  DeviceMAC  `yaml:"deviceMac"`
 
 	// RuleNames/HostNames are optional friendly-display-name maps -- see
 	// internal/naming. Keyed by the raw value RouterOS reports (a rule
@@ -402,6 +414,9 @@ func defaults() Config {
 		TLS: TLS{
 			Enabled:   true,
 			StorePath: DefaultDataDir + "/tls",
+		},
+		DeviceMAC: DeviceMAC{
+			StorePath: DefaultDataDir + "/mac-registry.json",
 		},
 		Notify: Notify{
 			BatchWindow: 60 * time.Second,
@@ -714,6 +729,9 @@ func applyEnv(cfg *Config) {
 	}
 	if v := os.Getenv("MIKROVIEW_OIDC_SCOPES"); v != "" {
 		cfg.OIDC.Scopes = parseStringList(v)
+	}
+	if v := os.Getenv("MIKROVIEW_DEVICE_MAC_STORE_PATH"); v != "" {
+		cfg.DeviceMAC.StorePath = v
 	}
 }
 

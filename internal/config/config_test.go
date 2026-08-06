@@ -335,12 +335,14 @@ func TestDefaultStoragePathsUnderVarLibMikroview(t *testing.T) {
 		"Flags.DetectorSettingsStorePath": cfg.Flags.DetectorSettingsStorePath,
 		"Auth.StorePath":                  cfg.Auth.StorePath,
 		"TLS.StorePath":                   cfg.TLS.StorePath,
+		"DeviceMAC.StorePath":             cfg.DeviceMAC.StorePath,
 	}
 	want := map[string]string{
 		"Flags.StorePath":                 "/var/lib/mikroview/flags.json",
 		"Flags.DetectorSettingsStorePath": "/var/lib/mikroview/detector-settings.json",
 		"Auth.StorePath":                  "/var/lib/mikroview/users.json",
 		"TLS.StorePath":                   "/var/lib/mikroview/tls",
+		"DeviceMAC.StorePath":             "/var/lib/mikroview/mac-registry.json",
 	}
 	for field, got := range cases {
 		if got != want[field] {
@@ -446,6 +448,38 @@ oidc:
 	// this test -- confirms nothing else silently fills it in.
 	if cfg.OIDC.ClientSecret != "" {
 		t.Errorf("OIDC.ClientSecret = %q, want empty", cfg.OIDC.ClientSecret)
+	}
+}
+
+func TestDeviceMACStorePathEnvVarOverridesDefault(t *testing.T) {
+	t.Setenv("MIKROVIEW_DEVICE_MAC_STORE_PATH", "/data/mac-registry.json")
+
+	cfg, err := Load("", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.DeviceMAC.StorePath != "/data/mac-registry.json" {
+		t.Errorf("DeviceMAC.StorePath = %q, want the env value /data/mac-registry.json", cfg.DeviceMAC.StorePath)
+	}
+}
+
+func TestDeviceMACStorePathYAMLOverridesDefault(t *testing.T) {
+	dir := t.TempDir()
+	yamlPath := filepath.Join(dir, "config.yaml")
+	err := os.WriteFile(yamlPath, []byte(`
+deviceMac:
+  storePath: "/data/mac-registry.json"
+`), 0o644)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := Load(yamlPath, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.DeviceMAC.StorePath != "/data/mac-registry.json" {
+		t.Errorf("DeviceMAC.StorePath = %q, want the yaml value /data/mac-registry.json", cfg.DeviceMAC.StorePath)
 	}
 }
 

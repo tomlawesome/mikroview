@@ -41,6 +41,14 @@ const (
 	// baseline, drop/reject ratio, reputation) rather than one count. See
 	// internal/detect/low_slow_scan.go.
 	TypeLowSlowScan Type = "low_slow_scan"
+	// TypeNewDevice (issue #103 phase 1): raised the first time
+	// mikroview ever sees a given store.Event.SrcMAC, per
+	// internal/device.MACRegistry's persisted history -- deterministic,
+	// fires once per genuinely-new MAC, no threshold/window to tune.
+	// Raised directly from the ingest path (main.go), not from
+	// internal/detect like every other Type here, since it needs no
+	// rolling-window state, just a yes/no "seen before" lookup.
+	TypeNewDevice Type = "new_device"
 )
 
 // maxFlags bounds the store the same way every other buffer in mikroview

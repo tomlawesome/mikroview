@@ -173,23 +173,28 @@ either way.
   history view, not a log archive; if you need durable logs, forward
   RouterOS's syslog output to a second, dedicated logging destination as
   well.
-- **Two deliberate exceptions: behavioral flags, and accounts.** Raised
-  flags (port scans, activity spikes, critical-port attempts, volume
-  spikes -- see [docs/configuration.md](docs/configuration.md)) and
-  accounts (plus the create/skip decision) are both persisted to small
-  JSON files under `/var/lib/mikroview` by default (`flags.storePath` /
-  `auth.storePath`), which the container creates and owns -- no
-  configuration needed for either to survive a process restart. The
-  flags file contains the IP addresses that triggered a flag and a short
-  human-readable description; the accounts file contains usernames and
-  Argon2id password hashes (never plaintext passwords). Treat both with
-  the same care as `config.yaml` (see "Recommended deployment hardening"
-  below). Neither survives *container recreation* (as opposed to a
-  simple restart) unless you mount a volume over `/var/lib/mikroview` --
-  for accounts specifically, that means the create/skip decision itself
-  reverts to undecided on recreation without a volume, which re-shows
-  the first-run choice screen rather than silently reopening or silently
-  re-gating the deployment.
+- **Three deliberate exceptions: behavioral flags, accounts, and the
+  new-device MAC registry.** Raised flags (port scans, activity spikes,
+  critical-port attempts, volume spikes -- see
+  [docs/configuration.md](docs/configuration.md)), accounts (plus the
+  create/skip decision), and the new-device detector's per-MAC
+  first/last-seen history are all persisted to small JSON files under
+  `/var/lib/mikroview` by default (`flags.storePath` / `auth.storePath`
+  / `deviceMac.storePath`), which the container creates and owns -- no
+  configuration needed for any of the three to survive a process
+  restart. The flags file contains the IP addresses that triggered a
+  flag and a short human-readable description; the accounts file
+  contains usernames and Argon2id password hashes (never plaintext
+  passwords); the MAC registry file contains LAN client MAC addresses
+  and timestamps only, nothing else. Treat all three with the same care
+  as `config.yaml` (see "Recommended deployment hardening" below). None
+  survive *container recreation* (as opposed to a simple restart) unless
+  you mount a volume over `/var/lib/mikroview` -- for accounts
+  specifically, that means the create/skip decision itself reverts to
+  undecided on recreation without a volume, which re-shows the
+  first-run choice screen rather than silently reopening or silently
+  re-gating the deployment; for the MAC registry, it means every MAC
+  looks "new" again after a recreation without a volume.
 - **No secrets reach the browser.** The optional AbuseIPDB API key
   (`reputation.abuseIPDBKey` / `MIKROVIEW_ABUSEIPDB_KEY`) is read
   server-side only and used solely to call AbuseIPDB's API from the
