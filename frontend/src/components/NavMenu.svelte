@@ -5,6 +5,9 @@
   import { authState } from '../lib/auth.svelte'
   import { themeState, type ThemePref } from '../lib/theme.svelte'
   import { COLORWAYS, colorwayState } from '../lib/colorway.svelte'
+  import { retentionState, MAX_AGE_OPTIONS } from '../lib/retention.svelte'
+  import { downloadEventsCsv } from '../lib/export'
+  import { viewportState } from '../lib/viewport.svelte'
 
   let open = $state(false)
   let rootEl: HTMLDivElement | undefined = $state()
@@ -38,6 +41,11 @@
 
   const modeLabels: Record<ThemePref, string> = { system: 'Auto', light: 'Light', dark: 'Dark' }
   const modeOptions: ThemePref[] = ['system', 'light', 'dark']
+
+  function onMaxAgeChange(e: Event) {
+    const raw = (e.target as HTMLSelectElement).value
+    retentionState.set(raw === 'null' ? null : Number(raw))
+  }
 </script>
 
 <div class="nav-menu" bind:this={rootEl}>
@@ -58,7 +66,22 @@
   </button>
 
   {#if open}
-    <div class="menu" role="menu">
+    {#if viewportState.isMobile}
+      <!-- Fixed dropdown positioning (right:0 relative to the trigger)
+           assumes the trigger stays at the toolbar's right edge -- at
+           mobile widths the toolbar's controls wrap onto their own
+           lines (issue #85) and the trigger can end up on the left,
+           which pushed a right-anchored dropdown mostly off-screen. A
+           bottom sheet is viewport-anchored instead, immune to wherever
+           the trigger lands, and matches the visual language every
+           other mobile panel here already uses (EventDetailSheet,
+           FilterBar's drawer). -->
+      <div class="scrim" onclick={() => (open = false)} role="presentation"></div>
+    {/if}
+    <div class="menu" class:mobile-sheet={viewportState.isMobile} role="menu">
+      {#if viewportState.isMobile}
+        <div class="handle"></div>
+      {/if}
       <div class="section">
         <div class="section-label">Views</div>
 
@@ -107,6 +130,43 @@
           </button>
         {/if}
       </div>
+
+      {#if viewportState.isMobile && appState.view === 'live'}
+        <!-- Toolbar.svelte hides the display-duration select and Export
+             button below the mobile breakpoint (issue #85) to keep the
+             always-inline live-view controls (pause/autoscroll/clear)
+             from overflowing a phone-width header -- folded in here
+             instead, since they're touched far less often. -->
+        <div class="divider"></div>
+
+        <div class="section">
+          <div class="section-label">Live view</div>
+
+          <label class="option select-option">
+            Display duration
+            <select
+              value={retentionState.maxAgeSeconds === null ? 'null' : String(retentionState.maxAgeSeconds)}
+              onchange={onMaxAgeChange}
+              aria-label="Display duration"
+            >
+              {#each MAX_AGE_OPTIONS as opt (opt.value)}
+                <option value={opt.value === null ? 'null' : String(opt.value)}>{opt.label}</option>
+              {/each}
+            </select>
+          </label>
+
+          <button
+            class="option"
+            onclick={() => {
+              downloadEventsCsv(appState.filteredEvents)
+              open = false
+            }}
+            disabled={appState.filteredEvents.length === 0}
+          >
+            Export to CSV
+          </button>
+        </div>
+      {/if}
 
       <div class="divider"></div>
 
@@ -234,6 +294,37 @@
     z-index: 20;
   }
 
+  .scrim {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.55);
+    z-index: 30;
+  }
+
+  .menu.mobile-sheet {
+    position: fixed;
+    left: 0;
+    right: 0;
+    top: auto;
+    bottom: 0;
+    min-width: 0;
+    max-height: 80vh;
+    overflow-y: auto;
+    border-radius: 16px 16px 0 0;
+    border-bottom: none;
+    padding: 10px 10px calc(14px + env(safe-area-inset-bottom));
+    z-index: 31;
+  }
+
+  .handle {
+    width: 36px;
+    height: 4px;
+    border-radius: 2px;
+    background: var(--border);
+    margin: 0 auto 8px;
+    flex: none;
+  }
+
   .section {
     display: flex;
     flex-direction: column;
@@ -303,5 +394,34 @@
 
   .flags-badge.inline {
     margin-left: auto;
+  }
+
+  .select-option {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    cursor: default;
+  }
+
+  .select-option select {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    color: var(--fg);
+    border-radius: 5px;
+    padding: 5px 8px;
+    font-size: 12px;
+  }
+
+  /* 44px minimum touch target (issue #85) -- the trigger and every
+     dropdown option are the primary way a phone-width user reaches
+     every view/appearance/account action, so this is the single
+     highest-value place for this pass. */
+  @media (max-width: 700px) {
+    .trigger,
+    .option,
+    .select-option select {
+      min-height: 44px;
+    }
   }
 </style>
