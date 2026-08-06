@@ -89,6 +89,41 @@ func TestDispatcherFlushesOnCancel(t *testing.T) {
 	}
 }
 
+// TestFlagsStoreOnRaiseStillWiresDispatcherEnqueue is a regression test
+// for issue #100: flags.Store grew a second piece of per-Add bookkeeping
+// (a rolling per-minute bucket counter for FlagsChart, see
+// flags.Store.TimeSeries) implemented as store-internal logic inside
+// add() itself, specifically so it would never need to touch the
+// pluggable onRaise hook that main.go wires up exactly as done here --
+// fs.WithOnRaise(dispatcher.Enqueue). onRaise is a single-slot callback
+// (flags.Store.WithOnRaise's doc comment): a second WithOnRaise call, or
+// any implementation that takes over that slot for the new bucket
+// counter, would silently stop every SMTP/Pushover/webhook notification
+// with no compile error and no runtime signal. This proves the real
+// wiring main.go uses -- a real flags.Store, WithOnRaise(dispatcher.
+// Enqueue), a real Dispatcher.Run -- still delivers a newly-raised flag
+// to a Notifier end to end.
+func TestFlagsStoreOnRaiseStillWiresDispatcherEnqueue(t *testing.T) {
+	fake := &fakeNotifier{}
+	d := NewDispatcher(30*time.Millisecond, []Notifier{fake})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go d.Run(ctx)
+
+	fs, err := flags.Open("")
+	if err != nil {
+		t.Fatalf("flags.Open(\"\") returned an error: %v", err)
+	}
+	fs.WithOnRaise(d.Enqueue) // exactly main.go's fs.WithOnRaise(dispatcher.Enqueue)
+
+	fs.Add(flags.TypePortScan, "203.0.113.9", "20 distinct ports in 60s", time.Now())
+
+	batches := waitForBatches(t, fake, 1)
+	if len(batches[0]) != 1 || batches[0][0].Target != "203.0.113.9" {
+		t.Fatalf("expected the newly-raised flag to reach the notifier, got %+v", batches)
+	}
+}
+
 func TestDispatcherDropsWhenQueueFull(t *testing.T) {
 	fake := &fakeNotifier{}
 	// Never runs Run -- pending is never drained, so it fills up.

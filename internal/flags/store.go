@@ -88,6 +88,12 @@ const (
 // can shrink it without creating 1000+ flags.
 var maxFlags = 1000
 
+// flagTimeSeriesMinutes is how much history Store.TimeSeries covers, at
+// 1-minute resolution -- same window/resolution as
+// internal/store/ring.go's Stats.TimeSeries, for visual/temporal
+// consistency between EventsChart and FlagsChart on the frontend.
+const flagTimeSeriesMinutes = 60
+
 // Evidence is structured supporting detail beyond the free-text Detail
 // string -- which detector populates which field:
 //   - Ports: port_scan's distinct ports touched (capped, see
@@ -164,6 +170,18 @@ type Flag struct {
 	Evidence Evidence `json:"evidence,omitzero"`
 }
 
+// FlagTimeBucket is one point in Store.TimeSeries: counts of newly-raised
+// episodes by Type for a single one-minute window -- same shape
+// convention as internal/store/ring.go's TimeBucket. ByType omits types
+// with a zero count for that minute rather than listing every known
+// Type every time. Counts episode starts (Add/AddWithConfidence/
+// AddWithDetail's isNew), not every re-fire -- see bumpTimeSeriesLocked's
+// doc comment for why.
+type FlagTimeBucket struct {
+	Time   time.Time       `json:"time"`
+	ByType map[Type]uint64 `json:"byType"`
+}
+
 // Exclusion is one permanently-excluded (Type, Target) pair -- see
 // Store.Exclude's doc comment. ID is the same flagID(Type, Target) key
 // flags themselves use, included so a caller (the admin exclusions API)
@@ -204,6 +222,23 @@ type Store struct {
 	// lastPersist backs persistLocked's rate limiting -- see
 	// persistMinInterval.
 	lastPersist time.Time
+
+	// minuteBuckets/minuteBucketTime implement the same lazily-reset
+	// rolling-bucket trick as internal/store/ring.go's Store.minuteBuckets
+	// (bucket i holds counts for unix minute minuteBucketTime[i], reset
+	// the next time that slot is reused for a new minute), but counting
+	// newly-raised flag episodes broken down by Type instead of raw
+	// events by Action. A map per slot rather than ring.go's fixed
+	// actionSlots array: Action has five, permanently fixed, values and
+	// Insert is a hot path, so ring.go trades a bit of flexibility for
+	// avoiding a map allocation on every call; Type already has 14
+	// values, keeps growing as detectors are added, and add() is called
+	// far less often (a detector firing, not every raw event), so a map
+	// is the better trade here. Populated directly in add() itself, not
+	// via the onRaise hook -- see bumpTimeSeriesLocked's doc comment for
+	// why that distinction matters.
+	minuteBuckets    [flagTimeSeriesMinutes]map[Type]uint64
+	minuteBucketTime [flagTimeSeriesMinutes]int64
 
 	// onRaise, if set via WithOnRaise, is called after a new flag episode
 	// is raised (first-ever raise or a revival from Cleared -- the same
@@ -387,9 +422,73 @@ func (s *Store) add(t Type, target, detail string, confidence *int, evidence Evi
 	f.LastSeen = now
 	f.Count++
 
+	if isNew {
+		s.bumpTimeSeriesLocked(t, now)
+	}
+
 	s.pruneLocked()
 	s.persistLocked()
 	return isNew, *f
+}
+
+// bumpTimeSeriesLocked records one new-or-revived episode of Type t at
+// time now in the rolling per-minute bucket history (see
+// minuteBuckets/minuteBucketTime's doc comment). Called directly from
+// add() itself -- store-internal bookkeeping, not routed through the
+// pluggable onRaise callback -- because onRaise is a single-slot hook
+// already claimed by internal/notify.Dispatcher.Enqueue (see main.go's
+// fs.WithOnRaise(dispatcher.Enqueue)); wiring this counter through
+// WithOnRaise a second time would silently overwrite that assignment
+// (whichever caller sets it last wins, with no compile-time or runtime
+// signal) and stop every SMTP/Pushover/webhook notification. Must be
+// called with s.mu already held.
+func (s *Store) bumpTimeSeriesLocked(t Type, now time.Time) {
+	minute := now.Unix() / 60
+	idx := minute % flagTimeSeriesMinutes
+	if idx < 0 {
+		idx += flagTimeSeriesMinutes
+	}
+	if s.minuteBucketTime[idx] != minute {
+		s.minuteBucketTime[idx] = minute
+		s.minuteBuckets[idx] = make(map[Type]uint64, 1)
+	}
+	s.minuteBuckets[idx][t]++
+}
+
+// TimeSeries returns the last flagTimeSeriesMinutes minutes of newly-
+// raised-episode counts by Type, oldest first, one entry per minute
+// including empty ones -- the same fixed-width-window shape convention
+// as internal/store/ring.go's Stats.TimeSeries, for FlagsChart. Like
+// ring.go's rolling buckets, this only ever reflects activity since this
+// Store was constructed: no historical backfill/persistence across a
+// restart (see this package's own doc comment on what mikroview does
+// and doesn't persist).
+func (s *Store) TimeSeries() []FlagTimeBucket {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.timeSeriesLocked()
+}
+
+func (s *Store) timeSeriesLocked() []FlagTimeBucket {
+	nowMinute := time.Now().Unix() / 60
+	out := make([]FlagTimeBucket, flagTimeSeriesMinutes)
+	for i := 0; i < flagTimeSeriesMinutes; i++ {
+		minute := nowMinute - int64(flagTimeSeriesMinutes-1-i)
+		idx := minute % flagTimeSeriesMinutes
+		if idx < 0 {
+			idx += flagTimeSeriesMinutes
+		}
+		byType := make(map[Type]uint64, len(s.minuteBuckets[idx]))
+		if s.minuteBucketTime[idx] == minute {
+			for typ, c := range s.minuteBuckets[idx] {
+				if c > 0 {
+					byType[typ] = c
+				}
+			}
+		}
+		out[i] = FlagTimeBucket{Time: time.Unix(minute*60, 0).UTC(), ByType: byType}
+	}
+	return out
 }
 
 // mergeConfidence combines a detector's freshly computed confidence

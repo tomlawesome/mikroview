@@ -9,6 +9,7 @@ import type {
   Exclusion,
   Filters,
   Flag,
+  FlagTimeBucket,
   ReputationResult,
   RuleUsage,
   Stats,
@@ -135,11 +136,20 @@ export async function lookupIp(ip: string): Promise<ReputationResult> {
   return res.json()
 }
 
-export async function fetchFlags(): Promise<Flag[]> {
+// Mirrors internal/api/flags.go's handleFlagsList response: the flag
+// list plus the last hour of newly-raised-episode counts by type (see
+// FlagTimeBucket) for FlagsChart -- one endpoint, same convention
+// GET /api/stats already uses for its own timeSeries field.
+export interface FlagsResponse {
+  flags: Flag[]
+  timeSeries: FlagTimeBucket[]
+}
+
+export async function fetchFlags(): Promise<FlagsResponse> {
   const res = await fetch('/api/flags')
   if (!res.ok) throw new ApiError(`fetchFlags: ${res.status}`, res.status)
   const body = await res.json()
-  return body.flags ?? []
+  return { flags: body.flags ?? [], timeSeries: body.timeSeries ?? [] }
 }
 
 export async function clearFlag(id: string): Promise<void> {
