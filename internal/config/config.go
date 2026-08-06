@@ -177,6 +177,16 @@ type Auth struct {
 	TokensStorePath string `yaml:"tokensStorePath"`
 }
 
+// Entities configures internal/entities' persisted, admin-manageable
+// (type, key) -> label/tags store (issue #107) -- the shared foundation
+// a future mail-sender allowlist and UI-managed IP/port/rule aliasing
+// both build on. StorePath left empty is a fully supported, deliberate
+// choice, same optional-persistence contract as Flags.StorePath: the
+// store still works, entities just don't survive a restart.
+type Entities struct {
+	StorePath string `yaml:"storePath"`
+}
+
 // TLS configures mikroview's own listener -- on by default: a browser
 // secure-context requirement was only ever a symptom of the real
 // problem, which is that an app serving real login credentials and
@@ -385,6 +395,7 @@ type Config struct {
 	Reputation Reputation `yaml:"reputation"`
 	Flags      Flags      `yaml:"flags"`
 	Auth       Auth       `yaml:"auth"`
+	Entities   Entities   `yaml:"entities"`
 	Notify     Notify     `yaml:"notify"`
 	TLS        TLS        `yaml:"tls"`
 	OIDC       OIDC       `yaml:"oidc"`
@@ -481,6 +492,9 @@ func defaults() Config {
 			SessionTTL:      24 * time.Hour,
 			SecureCookie:    true,
 			TokensStorePath: DefaultDataDir + "/tokens.json",
+		},
+		Entities: Entities{
+			StorePath: DefaultDataDir + "/entities.json",
 		},
 		TLS: TLS{
 			Enabled:   true,
@@ -765,6 +779,9 @@ func applyEnv(cfg *Config) {
 		if d, err := time.ParseDuration(v); err == nil {
 			cfg.Auth.SessionTTL = d
 		}
+	}
+	if v := os.Getenv("MIKROVIEW_ENTITIES_STORE_PATH"); v != "" {
+		cfg.Entities.StorePath = v
 	}
 	if v := os.Getenv("MIKROVIEW_AUTH_TOKENS_STORE_PATH"); v != "" {
 		cfg.Auth.TokensStorePath = v

@@ -438,6 +438,7 @@ func TestDefaultStoragePathsUnderVarLibMikroview(t *testing.T) {
 		"Flags.DetectorSettingsStorePath": cfg.Flags.DetectorSettingsStorePath,
 		"Flags.RuleUsageStorePath":        cfg.Flags.RuleUsageStorePath,
 		"Auth.StorePath":                  cfg.Auth.StorePath,
+		"Entities.StorePath":              cfg.Entities.StorePath,
 		"Auth.TokensStorePath":            cfg.Auth.TokensStorePath,
 		"TLS.StorePath":                   cfg.TLS.StorePath,
 		"DeviceMAC.StorePath":             cfg.DeviceMAC.StorePath,
@@ -447,6 +448,7 @@ func TestDefaultStoragePathsUnderVarLibMikroview(t *testing.T) {
 		"Flags.DetectorSettingsStorePath": "/var/lib/mikroview/detector-settings.json",
 		"Flags.RuleUsageStorePath":        "/var/lib/mikroview/rule-usage.json",
 		"Auth.StorePath":                  "/var/lib/mikroview/users.json",
+		"Entities.StorePath":              "/var/lib/mikroview/entities.json",
 		"Auth.TokensStorePath":            "/var/lib/mikroview/tokens.json",
 		"TLS.StorePath":                   "/var/lib/mikroview/tls",
 		"DeviceMAC.StorePath":             "/var/lib/mikroview/mac-registry.json",
@@ -484,6 +486,18 @@ func TestTLSEnvVarsOverrideDefaults(t *testing.T) {
 	}
 	if cfg.TLS.StorePath != "/var/lib/mikroview/tls" {
 		t.Errorf("TLS.StorePath = %v, want /var/lib/mikroview/tls", cfg.TLS.StorePath)
+	}
+}
+
+func TestEntitiesEnvVarOverridesDefault(t *testing.T) {
+	t.Setenv("MIKROVIEW_ENTITIES_STORE_PATH", "/data/entities.json")
+
+	cfg, err := Load("", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Entities.StorePath != "/data/entities.json" {
+		t.Errorf("Entities.StorePath = %v, want /data/entities.json", cfg.Entities.StorePath)
 	}
 }
 

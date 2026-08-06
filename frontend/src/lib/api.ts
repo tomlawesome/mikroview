@@ -4,6 +4,7 @@ import type {
   DetectorScope,
   DetectorSettings,
   Device,
+  Entity,
   EventsResult,
   Exclusion,
   Filters,
@@ -50,11 +51,19 @@ async function putJSON(url: string, body: unknown = {}): Promise<Response> {
 
 // Same CSRF mitigation header as postJSON/putJSON -- DELETE isn't a
 // "safe" method either (see internal/api's isSafeMethod), so it's
-// required here too.
-async function deleteJSON(url: string): Promise<Response> {
+// required here too. body is optional: most DELETE endpoints identify
+// their target via the URL path (a plain ID), but /api/entities
+// identifies which record to remove via a JSON body instead (see
+// internal/api's handleEntitiesDelete) -- an arbitrary entity Key never
+// has to round-trip through a URL at all this way.
+async function deleteJSON(url: string, body?: unknown): Promise<Response> {
   return fetch(url, {
     method: 'DELETE',
-    headers: { 'X-Requested-With': 'mikroview' },
+    headers:
+      body === undefined
+        ? { 'X-Requested-With': 'mikroview' }
+        : { 'Content-Type': 'application/json', 'X-Requested-With': 'mikroview' },
+    body: body === undefined ? undefined : JSON.stringify(body),
   })
 }
 
@@ -206,6 +215,32 @@ export async function updateDetectorSettings(
   const res = await putJSON(`/api/detectors/${encodeURIComponent(name)}`, { enabled, scope })
   if (res.ok) return null
   return (await res.text()) || `updateDetectorSettings: ${res.status}`
+}
+
+// fetchEntities/upsertEntity/deleteEntity: admin-only CRUD over
+// internal/entities' persisted (type, key) -> label/tags store (issue
+// #107) -- the shared foundation a future mail-sender allowlist and
+// UI-managed IP/port/rule aliasing both build on.
+export async function fetchEntities(): Promise<Entity[]> {
+  const res = await fetch('/api/entities')
+  if (!res.ok) throw new ApiError(`fetchEntities: ${res.status}`, res.status)
+  const body = await res.json()
+  return body.entities ?? []
+}
+
+// upsertEntity creates a new entity, or replaces an existing one in
+// place, identified by (type, key) -- used for both "add" and "edit" in
+// the admin panel, mirroring the backend's own single Upsert primitive.
+export async function upsertEntity(entity: Entity): Promise<string | null> {
+  const res = await postJSON('/api/entities', entity)
+  if (res.ok) return null
+  return (await res.text()) || `upsertEntity: ${res.status}`
+}
+
+export async function deleteEntity(type: string, key: string): Promise<string | null> {
+  const res = await deleteJSON('/api/entities', { type, key })
+  if (res.ok) return null
+  return (await res.text()) || `deleteEntity: ${res.status}`
 }
 
 // Admin-only read-only API token management (issue #101) -- see

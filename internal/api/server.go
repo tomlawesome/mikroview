@@ -9,6 +9,7 @@ import (
 	"github.com/tomlawesome/mikroview/internal/auth"
 	"github.com/tomlawesome/mikroview/internal/detect"
 	"github.com/tomlawesome/mikroview/internal/device"
+	"github.com/tomlawesome/mikroview/internal/entities"
 	"github.com/tomlawesome/mikroview/internal/flags"
 	"github.com/tomlawesome/mikroview/internal/hub"
 	"github.com/tomlawesome/mikroview/internal/oidc"
@@ -23,6 +24,13 @@ type Server struct {
 	Reputation       *reputation.Client
 	Flags            *flags.Store
 	DetectorSettings *detect.SettingsStore
+	// Entities is the persisted, admin-manageable (type, key) -> label/
+	// tags store backing GET/POST/DELETE /api/entities (issue #107) --
+	// the shared foundation for a future mail-sender allowlist and
+	// UI-managed IP/port/rule aliasing. Always non-nil (internal/entities.
+	// Open("") returns a usable, empty, unpersisted store), same
+	// always-usable convention as Flags/DetectorSettings above.
+	Entities *entities.Store
 	// CriticalPorts is the configured control-port list (issue #34's
 	// tracking tab) -- exposed read-only via GET /api/critical-ports,
 	// deliberately not behind handleDetectorSettingsList's admin gate
@@ -84,6 +92,10 @@ func (s *Server) Routes() http.Handler {
 
 	mux.HandleFunc("GET /api/detectors", s.handleDetectorSettingsList)
 	mux.HandleFunc("PUT /api/detectors/{name}", s.handleDetectorSettingsUpdate)
+
+	mux.HandleFunc("GET /api/entities", s.handleEntitiesList)
+	mux.HandleFunc("POST /api/entities", s.handleEntitiesUpsert)
+	mux.HandleFunc("DELETE /api/entities", s.handleEntitiesDelete)
 
 	mux.HandleFunc("GET /api/auth/session", s.handleAuthSession)
 	mux.HandleFunc("POST /api/auth/register", s.handleAuthRegister)
