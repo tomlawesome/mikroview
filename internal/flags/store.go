@@ -78,6 +78,19 @@ const (
 	// TypeGlobalSpike already sets with "global". See
 	// internal/detect/stale_rule.go.
 	TypeStaleRule Type = "stale_rule"
+	// TypeUnexpectedMailSender (issue #108): a LAN source originating an
+	// outbound connection to an external destination on an SMTP port
+	// (25, 465, 587) that isn't tagged "trusted-mail-sender" in
+	// internal/entities' store -- a host with no established, admin-
+	// acknowledged reason to send mail suddenly doing so is a strong,
+	// simple, deterministic compromised-device/spambot signal, distinct
+	// from TypeOutboundAnomaly (dest_spread.go), which only fires on
+	// distinct-destination-*count* spread over a window -- a single new
+	// SMTP connection to one destination wouldn't trip that on its own.
+	// Deterministic like TypeNewDevice/TypeStaleRule above -- no
+	// threshold or window to tune, just "has this untagged source ever
+	// done this before." See internal/detect/mail_sender.go.
+	TypeUnexpectedMailSender Type = "unexpected_mail_sender"
 )
 
 // maxFlags bounds the store the same way every other buffer in mikroview
@@ -100,8 +113,8 @@ var maxFlags = 1000
 //
 // Zero value (all fields empty/nil) is valid and common -- most
 // detectors (critical_port, activity_spike, rule_spike, global_spike,
-// stale_rule) have nothing here at all, since their Detail string already says
-// everything there is to say.
+// stale_rule, unexpected_mail_sender) have nothing here at all, since
+// their Detail string already says everything there is to say.
 type Evidence struct {
 	Ports []int    `json:"ports,omitempty"`
 	Hosts []string `json:"hosts,omitempty"`

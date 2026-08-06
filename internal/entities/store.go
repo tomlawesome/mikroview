@@ -240,6 +240,28 @@ func (s *Store) Label(entityType, key string) string {
 	return e.Label
 }
 
+// HasTag reports whether the entity at (entityType, key) has tag among
+// its Tags -- a small membership helper so a caller that only needs a
+// yes/no answer (e.g. internal/detect's mail-sender allowlist, issue
+// #108) doesn't have to reimplement a linear List() scan at each call
+// site. A missing entity, or one with no matching tag, both report
+// false. Same direct O(1)-lookup-then-linear-tag-scan shape as Label
+// above -- Tags lists are expected to be small (a handful at most).
+func (s *Store) HasTag(entityType, key, tag string) bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	e, ok := s.byID[id(entityType, key)]
+	if !ok {
+		return false
+	}
+	for _, t := range e.Tags {
+		if t == tag {
+			return true
+		}
+	}
+	return false
+}
+
 // Seed imports config.yaml's legacy RuleNames/HostNames maps
 // (internal/config.Config.RuleNames/HostNames) as Entity records, but
 // only the first time it's ever called against a given persisted store

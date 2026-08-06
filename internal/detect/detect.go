@@ -15,6 +15,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/tomlawesome/mikroview/internal/entities"
 	"github.com/tomlawesome/mikroview/internal/flags"
 	"github.com/tomlawesome/mikroview/internal/logging"
 	"github.com/tomlawesome/mikroview/internal/store"
@@ -317,6 +318,14 @@ type Detector struct {
 	reputation  reputationLookup
 	lookupSlots chan struct{}
 
+	// entities backs observeMailSender's trusted-mail-sender allowlist
+	// check (issue #108) -- see WithEntities. nil unless WithEntities is
+	// called explicitly (never by New/NewWithSettings themselves, so
+	// tests that don't care about the allowlist just see every untagged
+	// source flagged, the same "nil is a valid no-op" contract
+	// reputation above uses).
+	entities *entities.Store
+
 	perSource       map[string]*sourceWindow
 	criticalHits    map[string]*criticalWindow
 	criticalPortIPs map[int]*portSources
@@ -456,6 +465,15 @@ func (d *Detector) Observe(e store.Event) {
 		// observeDestSpread itself (outbound-anomaly and internal-recon
 		// are independently toggleable but share window state).
 		d.observeDestSpread(e, now)
+
+		// internal-source -> external-destination on an SMTP port (issue
+		// #108) -- always on, unlike the DetectorName-backed checks
+		// above/below, since this is deterministic (see
+		// observeMailSender's doc comment) rather than a scoped,
+		// tunable threshold.
+		if isPublic(e.DstIP) && isMailPort(e.DstPort) {
+			d.observeMailSender(e, now)
+		}
 	}
 
 	if e.RuleLabel != "" {

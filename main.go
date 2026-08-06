@@ -356,7 +356,7 @@ func main() {
 	if err != nil {
 		detectorsLog.Warn(fmt.Sprintf("%v (continuing with in-memory-only detector toggle state)", err))
 	}
-	detector := detect.NewWithSettings(detectCfg, fs, detectorSettings).WithReputation(rep)
+	detector := detect.NewWithSettings(detectCfg, fs, detectorSettings).WithReputation(rep).WithEntities(entityStore)
 	globalSpike := detect.NewGlobalSpikeDetectorWithSettings(detectCfg, fs, detectorSettings)
 	deviceSilence := detect.NewDeviceSilenceDetectorWithSettings(detectCfg, fs, detectorSettings, devices)
 	staleRule := detect.NewStaleRuleDetector(ru, fs, time.Duration(cfg.Flags.StaleRuleDays)*24*time.Hour)

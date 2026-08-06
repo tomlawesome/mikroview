@@ -407,3 +407,36 @@ func TestCountReflectsStoreSize(t *testing.T) {
 		t.Errorf("expected Count()==1 after a delete, got %d", s.Count())
 	}
 }
+
+func TestHasTagReportsMembership(t *testing.T) {
+	s, _ := Open("")
+	if _, err := s.Upsert(Entity{Type: TypeHost, Key: "192.168.1.50", Tags: []string{"trusted-mail-sender", "other"}}); err != nil {
+		t.Fatal(err)
+	}
+	if !s.HasTag(TypeHost, "192.168.1.50", "trusted-mail-sender") {
+		t.Error("expected HasTag to find a tag present on the entity")
+	}
+	if !s.HasTag(TypeHost, "192.168.1.50", "other") {
+		t.Error("expected HasTag to find a second tag present on the entity")
+	}
+	if s.HasTag(TypeHost, "192.168.1.50", "nope") {
+		t.Error("expected HasTag to report false for a tag not present")
+	}
+}
+
+func TestHasTagFalseForUnknownEntity(t *testing.T) {
+	s, _ := Open("")
+	if s.HasTag(TypeHost, "192.168.1.50", "trusted-mail-sender") {
+		t.Error("expected HasTag to report false for an entity that doesn't exist")
+	}
+}
+
+func TestHasTagFalseWhenEntityHasNoTags(t *testing.T) {
+	s, _ := Open("")
+	if _, err := s.Upsert(Entity{Type: TypeHost, Key: "192.168.1.50", Label: "no tags here"}); err != nil {
+		t.Fatal(err)
+	}
+	if s.HasTag(TypeHost, "192.168.1.50", "trusted-mail-sender") {
+		t.Error("expected HasTag to report false for an entity with no tags")
+	}
+}
