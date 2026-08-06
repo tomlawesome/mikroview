@@ -12,11 +12,23 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"sync/atomic"
 	"time"
 
 	"github.com/tomlawesome/mikroview/internal/flags"
+	"github.com/tomlawesome/mikroview/internal/logging"
 	"github.com/tomlawesome/mikroview/internal/store"
 )
+
+var logger = logging.New("detect")
+
+// observeQueueDropLogInterval bounds how often a full observeQueue
+// actually logs -- sustained overload is exactly the scenario this
+// guards against, so logging every single drop would itself add load
+// at the worst possible moment. A periodic summary is enough to make
+// an otherwise-invisible "detection silently fell behind" condition
+// observable without that cost.
+const observeQueueDropLogInterval = 30 * time.Second
 
 // Config holds every detector's tunable thresholds, sourced from
 // internal/config so an operator can adjust them (or the critical port
@@ -29,8 +41,8 @@ type Config struct {
 	CriticalPorts          []int
 	CriticalPortThreshold  int
 	CriticalPortWindow     time.Duration
-	GlobalSpikeMultiplier float64
-	GlobalSpikeMinEPS     float64
+	GlobalSpikeMultiplier  float64
+	GlobalSpikeMinEPS      float64
 	// GlobalSpikeWarmupSamples: how many Check() calls the network-wide
 	// EMA baseline needs before a flag can reach full confidence -- same
 	// role as HostActivityWarmupSamples, see Flag.Confidence.
@@ -89,7 +101,7 @@ type Config struct {
 	// idle host doesn't "spike" from one extra event. WarmupSamples is
 	// how many observations a host needs before a flag can reach full
 	// confidence -- see Flag.Confidence.
-	HostActivityMultiplier   float64
+	HostActivityMultiplier    float64
 	HostActivityWarmupSamples int
 
 	// LowSlowScanWindow+... (issue #20): a port scan deliberately paced to
@@ -132,13 +144,13 @@ type Config struct {
 // target once a scanner has fingerprinted a device as RouterOS.
 func DefaultConfig() Config {
 	return Config{
-		PortScanThreshold:      15,
-		PortScanWindow:         60 * time.Second,
-		ActivitySpikeThreshold: 200,
-		ActivitySpikeWindow:    60 * time.Second,
-		CriticalPorts:          []int{21, 22, 23, 445, 3389, 5900, 8291, 8728, 8729},
-		CriticalPortThreshold:  5,
-		CriticalPortWindow:     5 * time.Minute,
+		PortScanThreshold:        15,
+		PortScanWindow:           60 * time.Second,
+		ActivitySpikeThreshold:   200,
+		ActivitySpikeWindow:      60 * time.Second,
+		CriticalPorts:            []int{21, 22, 23, 445, 3389, 5900, 8291, 8728, 8729},
+		CriticalPortThreshold:    5,
+		CriticalPortWindow:       5 * time.Minute,
 		GlobalSpikeMultiplier:    4,
 		GlobalSpikeMinEPS:        5,
 		GlobalSpikeWarmupSamples: 20,
@@ -241,6 +253,11 @@ type Detector struct {
 	// observeQueue backs Enqueue/Run -- see observeQueueSize's doc
 	// comment for the sizing rationale.
 	observeQueue chan store.Event
+
+	// droppedEvents/lastDropLogNanos back Enqueue's rate-limited
+	// overload logging -- see observeQueueDropLogInterval.
+	droppedEvents    atomic.Uint64
+	lastDropLogNanos atomic.Int64
 }
 
 // New constructs a Detector with every detector enabled and unscoped --
@@ -274,19 +291,37 @@ func NewWithSettings(cfg Config, fs *flags.Store, settings *SettingsStore) *Dete
 
 // Enqueue hands e off to the detection-worker goroutine (see Run)
 // without ever blocking the caller -- a non-blocking select/default
-// send, silently dropping e if the queue is full. Mirrors
-// internal/syslog/udp_listener.go's ServeUDP (drop, don't log per-drop:
-// logging on every drop during exactly the overload condition this
-// guards against would itself add load), not internal/notify.
-// Dispatcher.Enqueue's per-drop logging -- a dropped flag notification
-// is rare enough to log; a detection queue backing up under sustained
-// high-volume traffic is not. mikroview's ingest goroutine calls this
-// so a slow or backed-up detection pass never delays event storage or
-// WebSocket broadcast, only detection itself.
+// send, dropping e if the queue is full. mikroview's ingest goroutine
+// calls this so a slow or backed-up detection pass never delays event
+// storage or WebSocket broadcast, only detection itself -- a dropped
+// event is still stored/broadcast normally, it just isn't fed through
+// the detectors.
 func (d *Detector) Enqueue(e store.Event) {
 	select {
 	case d.observeQueue <- e:
 	default:
+		d.recordDroppedEvent()
+	}
+}
+
+// recordDroppedEvent tracks an Enqueue drop and logs a rate-limited
+// summary -- logging every single drop would itself add load during
+// exactly the sustained-overload condition this is meant to surface
+// (same reasoning internal/syslog/udp_listener.go's ServeUDP uses to
+// justify never logging a drop at all), but staying silent forever --
+// this function's predecessor -- left a real failure mode invisible:
+// detection can silently fall behind with zero operator-facing signal,
+// unlike a backed-up ingest goroutine, which at least shows up as
+// dropped-syslog-packet symptoms elsewhere.
+func (d *Detector) recordDroppedEvent() {
+	total := d.droppedEvents.Add(1)
+	now := time.Now().UnixNano()
+	last := d.lastDropLogNanos.Load()
+	if now-last < int64(observeQueueDropLogInterval) {
+		return
+	}
+	if d.lastDropLogNanos.CompareAndSwap(last, now) {
+		logger.Warn(fmt.Sprintf("detection queue full -- %d event(s) dropped from detection so far (still stored/broadcast normally)", total))
 	}
 }
 
@@ -299,9 +334,21 @@ func (d *Detector) Run(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case e := <-d.observeQueue:
-			d.Observe(e)
+			d.observeRecovered(e)
 		}
 	}
+}
+
+// observeRecovered isolates Observe's panic-recovery to a single event
+// rather than Run's whole lifetime -- recover only unwinds as far as
+// the nearest deferring function, so if the defer lived in Run itself
+// instead, one bad event would still end Run for good (silently
+// stopping all future detection) rather than just being skipped. See
+// logging.Recover's doc comment for why this is needed at all: nothing
+// else in Go contains a panic in a goroutine like this one.
+func (d *Detector) observeRecovered(e store.Event) {
+	defer logging.Recover(logger)
+	d.Observe(e)
 }
 
 // Observe feeds one stored event through every per-event detector.
@@ -373,7 +420,7 @@ func (d *Detector) observeScanAndSpike(e store.Event, now time.Time) {
 	w, ok := d.perSource[e.SrcIP]
 	if !ok {
 		if len(d.perSource) >= maxTrackedSources {
-			d.evictOldestSource()
+			evictOldestByActivity(d.perSource)
 		}
 		w = &sourceWindow{
 			spikes: newCountRing(d.cfg.ActivitySpikeWindow),
@@ -440,7 +487,7 @@ func (d *Detector) observeCriticalPort(e store.Event, now time.Time) {
 	w, ok := d.criticalHits[e.SrcIP]
 	if !ok {
 		if len(d.criticalHits) >= maxTrackedSources {
-			d.evictOldestCriticalSource()
+			evictOldestByActivity(d.criticalHits)
 		}
 		w = &criticalWindow{hits: newCountRing(d.cfg.CriticalPortWindow)}
 		d.criticalHits[e.SrcIP] = w
@@ -460,31 +507,32 @@ func (d *Detector) observeCriticalPort(e store.Event, now time.Time) {
 	}
 }
 
-func (d *Detector) evictOldestSource() {
-	var oldestKey string
-	var oldest time.Time
-	first := true
-	for k, w := range d.perSource {
-		if first || w.lastActivity.Before(oldest) {
-			oldestKey, oldest, first = k, w.lastActivity, false
-		}
-	}
-	if oldestKey != "" {
-		delete(d.perSource, oldestKey)
-	}
+// activeWindow is implemented by every per-key detector state struct
+// (sourceWindow, criticalWindow, destWindow, ruleWindow, dropPairWindow,
+// lowSlowWindow) purely so evictOldestByActivity can be generic over
+// all of them -- they otherwise share no behavior, just this one field.
+type activeWindow interface {
+	lastActivityTime() time.Time
 }
 
-func (d *Detector) evictOldestCriticalSource() {
+func (w *sourceWindow) lastActivityTime() time.Time   { return w.lastActivity }
+func (w *criticalWindow) lastActivityTime() time.Time { return w.lastActivity }
+
+// evictOldestByActivity removes the least-recently-active entry from m
+// -- shared by every per-key detector state map once it hits
+// maxTrackedSources, replacing what used to be six structurally
+// identical hand-copied functions (one per map's value type).
+func evictOldestByActivity[V activeWindow](m map[string]V) {
 	var oldestKey string
 	var oldest time.Time
 	first := true
-	for k, w := range d.criticalHits {
-		if first || w.lastActivity.Before(oldest) {
-			oldestKey, oldest, first = k, w.lastActivity, false
+	for k, w := range m {
+		if first || w.lastActivityTime().Before(oldest) {
+			oldestKey, oldest, first = k, w.lastActivityTime(), false
 		}
 	}
 	if oldestKey != "" {
-		delete(d.criticalHits, oldestKey)
+		delete(m, oldestKey)
 	}
 }
 
