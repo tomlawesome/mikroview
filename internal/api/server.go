@@ -57,6 +57,13 @@ type Server struct {
 	// device with at least one event is always reported "live".
 	DeviceStaleAfter time.Duration
 	StartTime        time.Time
+	// Version is main.version (the build-time-stamped short commit SHA,
+	// "dev" for a plain local build) -- passed in rather than read
+	// directly since internal/api can't import main. Surfaced on
+	// GET /api/healthz, the one endpoint reachable with no auth and no
+	// session regardless of deployment state, so "which build am I
+	// running" is checkable without any special access.
+	Version string
 
 	// Auth/Sessions/LoginLimiter/SecureCookie: see auth.go. Auth is
 	// always non-nil (internal/auth.Open("") returns a usable, empty,
