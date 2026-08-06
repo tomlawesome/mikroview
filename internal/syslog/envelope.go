@@ -39,7 +39,20 @@ func ParseEnvelope(raw []byte, recvTime time.Time) Envelope {
 
 	if strings.HasPrefix(rest, "<") {
 		if end := strings.IndexByte(rest, '>'); end > 0 && end <= 4 {
-			if pri, err := strconv.Atoi(rest[1:end]); err == nil {
+			// A syslog PRI is 0-191 (RFC 3164 s4.1.1): facility 0-23,
+			// severity 0-7. Atoi alone accepts anything that fits the
+			// <=4-char window, so "<192>" yielded facility 24 and
+			// "<9999>" facility 1249 -- values no conforming sender can
+			// produce. This input is unauthenticated (any host that can
+			// reach the syslog port picks these bytes), so the range
+			// check is the difference between "absent" and "attacker
+			// chose it". Out-of-range leaves both fields at their -1
+			// sentinel and the PRI text in Message, the same as any
+			// other prefix that doesn't parse.
+			//
+			// Nothing consumes Facility/Severity today -- this keeps
+			// them honest for whoever first filters or alerts on them.
+			if pri, err := strconv.Atoi(rest[1:end]); err == nil && pri >= 0 && pri <= 191 {
 				env.Facility = pri / 8
 				env.Severity = pri % 8
 				rest = rest[end+1:]
