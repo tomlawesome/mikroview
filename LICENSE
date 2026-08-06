@@ -1,0 +1,62 @@
+MikroView Personal & Non-Commercial License
+Copyright (c) 2026 Tom Lawson. All rights reserved.
+
+This is not an OSI-approved open source license. It is a
+source-available license: the code is public and free to use under the
+terms below, but redistribution and commercial use are restricted.
+
+1. Personal use
+   You may download, install, run, and use the Software free of charge
+   for your own personal, non-commercial purposes — including running
+   it on your own home network, homelab, or personal equipment.
+
+2. Modification
+   You may modify the Software for your own personal use under
+   Section 1. Modifications you make remain subject to this license
+   and to the restrictions in Section 3.
+
+3. No redistribution
+   You may not distribute, publish, sublicense, sell, rent, or
+   otherwise make available the Software or any modified version of
+   it — in whole or in part, in source or compiled form — to any third
+   party, except as permitted in Section 4.
+
+4. Contributions
+   The sole exception to Section 3 is submitting a pull request or
+   other patch to the official MikroView repository at
+   https://github.com/tomlawesome/mikroview, proposing that your
+   change be incorporated into the project. By submitting a
+   contribution, you grant the copyright holder a perpetual,
+   worldwide, royalty-free license to use, modify, and distribute that
+   contribution as part of the Software, under this license or a
+   successor license chosen by the copyright holder. You retain no
+   right to distribute your contribution outside of this repository.
+
+5. No commercial use
+   You may not use the Software, or any modified version of it, for
+   any commercial purpose — including operating it as part of a paid
+   product or service, using it in the course of a business's
+   operations, or reselling or rebranding it — without the copyright
+   holder's prior written permission. To request a commercial license,
+   contact tom@tomlawson.io.
+
+6. Ownership
+   The copyright holder retains all right, title, and interest in and
+   to the Software as distributed by the project. This license grants
+   you the rights described above and no others; it does not transfer
+   any ownership interest in the Software to you.
+
+7. Termination
+   This license terminates automatically if you breach any of its
+   terms. Upon termination you must stop using the Software and
+   destroy any copies in your possession.
+
+8. No warranty
+   THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+   EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+   MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE, AND
+   NONINFRINGEMENT. IN NO EVENT SHALL THE COPYRIGHT HOLDER BE LIABLE
+   FOR ANY CLAIM, DAMAGES, OR OTHER LIABILITY, WHETHER IN AN ACTION OF
+   CONTRACT, TORT, OR OTHERWISE, ARISING FROM, OUT OF, OR IN
+   CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+   SOFTWARE.
