@@ -1,23 +1,17 @@
 <script lang="ts">
   import { appState } from '../lib/state.svelte'
-  import { flagsState } from '../lib/flags.svelte'
-  import { detectorSettingsState } from '../lib/detectorSettings.svelte'
-  import { authState } from '../lib/auth.svelte'
   import { formatEps } from '../lib/format'
-  import { themeState } from '../lib/theme.svelte'
   import { retentionState, MAX_AGE_OPTIONS } from '../lib/retention.svelte'
   import { downloadEventsCsv } from '../lib/export'
   import ConnectionIndicator from './ConnectionIndicator.svelte'
   import DeviceStatus from './DeviceStatus.svelte'
   import LogoLockup from './LogoLockup.svelte'
-  import ThemeMenu from './ThemeMenu.svelte'
+  import NavMenu from './NavMenu.svelte'
 
   function onMaxAgeChange(e: Event) {
     const raw = (e.target as HTMLSelectElement).value
     retentionState.set(raw === 'null' ? null : Number(raw))
   }
-
-  const modeLabels = { system: 'Auto', light: 'Light', dark: 'Dark' }
 </script>
 
 <header class="toolbar">
@@ -76,72 +70,7 @@
       </button>
     {/if}
 
-    <button
-      class:active={appState.view === 'metrics'}
-      onclick={() => (appState.view = appState.view === 'metrics' ? 'live' : 'metrics')}
-      title="Event charts and traffic breakdowns"
-    >
-      Metrics
-    </button>
-
-    <button
-      class:active={appState.view === 'control-ports'}
-      onclick={() => (appState.view = appState.view === 'control-ports' ? 'live' : 'control-ports')}
-      title="SSH/Telnet/control-port attempts, accepted and denied"
-    >
-      Control ports
-    </button>
-
-    <button
-      class:active={appState.view === 'flags'}
-      onclick={() => (appState.view = appState.view === 'flags' ? 'live' : 'flags')}
-      title="Behavioral flags: port scans, activity spikes, critical-port attempts, and volume spikes"
-    >
-      Flags
-      {#if flagsState.activeCount > 0}
-        <span class="flags-badge">{flagsState.activeCount}</span>
-      {/if}
-    </button>
-
-    <ThemeMenu />
-
-    <button
-      onclick={() => themeState.cycle()}
-      title="Cycle light/dark mode: system → light → dark"
-    >
-      {modeLabels[themeState.pref]}
-    </button>
-
-    {#if authState.state === 'authenticated' && authState.role === 'admin'}
-      <button onclick={() => (authState.showAddUser = true)} title="Create an additional account">
-        Add user
-      </button>
-    {/if}
-    {#if (authState.state === 'authenticated' && authState.role === 'admin') || authState.state === 'auth-disabled'}
-      <!-- The backend's callerIsAdminOrOpen treats Count()==0 (true in
-           auth-disabled, since Disable only succeeds pre-account) as
-           admin-equivalent for this endpoint -- matching that here
-           rather than hiding a control that would actually work. -->
-      <button
-        class:active={appState.view === 'detectors'}
-        onclick={() => {
-          if (appState.view === 'detectors') {
-            appState.view = 'live'
-            return
-          }
-          appState.view = 'detectors'
-          detectorSettingsState.refresh()
-        }}
-        title="Toggle behavioral detectors on/off and restrict their scope"
-      >
-        Detectors
-      </button>
-    {/if}
-    {#if authState.state === 'authenticated'}
-      <button onclick={() => authState.logout()} title="Sign out {authState.username}">
-        Sign out ({authState.username})
-      </button>
-    {/if}
+    <NavMenu />
   </div>
 </header>
 
@@ -215,22 +144,6 @@
   button:disabled {
     opacity: 0.5;
     cursor: default;
-  }
-
-  .flags-badge {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    min-width: 16px;
-    height: 16px;
-    padding: 0 4px;
-    margin-left: 6px;
-    border-radius: 8px;
-    background: var(--reject);
-    color: #fff;
-    font-size: 11px;
-    font-weight: 700;
-    line-height: 1;
   }
 
   button:disabled:hover {
