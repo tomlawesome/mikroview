@@ -232,6 +232,50 @@ derived from the events currently loaded in your browser tab, so that
 list is only as complete as what's been seen there so far -- the entity
 itself, once named, is fully persisted regardless.
 
+## Audit log: admin action accountability (optional)
+
+Every admin-privileged mutation -- creating a user, changing a detector's
+enabled/scope settings, upserting or deleting an entity, creating or
+revoking an API token, or removing a permanent flag exclusion -- is
+recorded to a persisted, admin-only audit log (issue #112), so there's a
+record of *who* made each of those changes and *when*. This is
+deliberately narrower than a full request/access log: only mutations are
+recorded, never reads (viewing a page, listing users) -- matching what
+"audit log" conventionally means and what's actually useful for
+accountability.
+
+```yaml
+audit:
+  # Where audit log entries are persisted, as a small JSON file. Same
+  # optional-persistence contract as entities.storePath: left unset, the
+  # log still works, entries just don't survive a restart. If you set
+  # this in the container, mount a volume for its parent directory --
+  # see deploy/docker-compose.yml.
+  storePath: "/var/lib/mikroview/audit.json"
+```
+
+Two deliberate scoping decisions, both from issue #112's own explicit
+open question about which flag actions belong here:
+
+- **A plain flag clear** (`POST /api/flags/{id}/clear`) is **not**
+  logged -- that endpoint isn't admin-gated at all (any signed-in user
+  can clear a flag), and this is an audit log of *admin* actions.
+- **A permanent flag exclusion** (`POST /api/flags/{id}/clear-permanent`)
+  is **also not** logged, for the same reason: despite the lasting
+  "never flag this again" consequence, that endpoint is likewise open to
+  any signed-in user, not admin-gated (see its own doc comment in
+  `internal/api/flags.go`). Only *removing* an exclusion
+  (`DELETE /api/flags/exclusions/{id}`) is actually admin-gated, and is
+  logged.
+
+Reviewed from **Menu → Audit log** (admin-only, and -- unlike Detectors'
+gate -- **not** shown while auth is disabled, matching Entities' own
+stricter gate: there's no "admin" concept once auth itself has been
+opted out of). Backed by `GET /api/audit`, a windowed query over the
+persisted log (see [API reference](#api-reference)) -- the same
+`since`/`until`/`limit` convention `GET /api/events` already uses, minus
+that endpoint's event-specific filters.
+
 ## Behavioral flags (optional, on by default)
 
 mikroview watches the ingested event stream for a small set of patterns
@@ -1174,6 +1218,7 @@ Override individual scalar settings without a mounted file:
 | `MIKROVIEW_AUTH_SECURE_COOKIE` | `auth.secureCookie` |
 | `MIKROVIEW_AUTH_SESSION_TTL` | `auth.sessionTTL` |
 | `MIKROVIEW_ENTITIES_STORE_PATH` | `entities.storePath` (see [Entities](#entities-ui-managed-hostruleport-labels-and-tags-optional)) |
+| `MIKROVIEW_AUDIT_STORE_PATH` | `audit.storePath` (see [Audit log](#audit-log-admin-action-accountability-optional)) |
 | `MIKROVIEW_AUTH_TOKENS_STORE_PATH` | `auth.tokensStorePath` (see [API tokens](#api-tokens-read-only)) |
 | `MIKROVIEW_TLS_ENABLED` | `tls.enabled` (see [TLS](#tls)) |
 | `MIKROVIEW_TLS_CERT_FILE` | `tls.certFile` |
@@ -1232,6 +1277,7 @@ exits, rather than starting the server. See
 | `GET /api/entities` | admin-only (**not** open while zero accounts exist -- see [Entities](#entities-ui-managed-hostruleport-labels-and-tags-optional)): every persisted entity |
 | `POST /api/entities` | admin-only: create or replace (upsert) one entity, identified by `(type, key)` in the JSON body |
 | `DELETE /api/entities` | admin-only: remove the entity identified by `(type, key)` in the JSON body |
+| `GET /api/audit` | admin-only (**not** open while zero accounts exist, same as `/api/entities`): a windowed slice of the admin action audit log (see [Audit log](#audit-log-admin-action-accountability-optional)), newest activity last, accepting `since`/`until`/`limit` query params like `GET /api/events` |
 | `GET /api/auth/session` | current auth state (setup-required / authenticated / not) -- always 200, never gated |
 | `POST /api/auth/register` | create the first (admin) account -- only while zero accounts exist |
 | `POST /api/auth/skip` | explicitly disable auth for this deployment -- only while zero accounts exist; reversing later is CLI-only (`-enable-auth-setup`) |

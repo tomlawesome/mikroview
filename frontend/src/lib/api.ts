@@ -1,5 +1,6 @@
 import type {
   ApiToken,
+  AuditResult,
   AuthSession,
   DetectorScope,
   DetectorSettings,
@@ -285,4 +286,16 @@ export async function revokeToken(id: string): Promise<string | null> {
   const res = await deleteJSON(`/api/tokens/${encodeURIComponent(id)}`)
   if (res.ok) return null
   return (await res.text()) || `revokeToken: ${res.status}`
+}
+
+// fetchAuditLog serves a windowed slice of the admin-action audit log
+// (issue #112) -- admin-only (see internal/api/audit.go's callerIsAdmin
+// gate, the same strict check fetchEntities/fetchTokens use). No
+// filter/pagination UI yet (limit defaults server-side to the most
+// recent 200 entries, see internal/audit.defaultLimit) -- this is a
+// simple, read-only accountability list, not a searchable log viewer.
+export async function fetchAuditLog(): Promise<AuditResult> {
+  const res = await fetch('/api/audit')
+  if (!res.ok) throw new ApiError(`fetchAuditLog: ${res.status}`, res.status)
+  return res.json()
 }

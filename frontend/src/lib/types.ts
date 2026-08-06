@@ -227,6 +227,28 @@ export interface Entity {
   tags?: string[]
 }
 
+// Mirrors internal/audit.Entry's JSON tags (issue #112) -- one recorded
+// admin-privileged mutation (user created, entity upserted/deleted, API
+// token created/revoked, detector setting changed, flag exclusion
+// removed). action is deliberately a plain string, not a closed union,
+// same "extensible, not gatekept client-side" reasoning EntityType above
+// already follows for the backend's own internal/audit.Entry.Action.
+export interface AuditEntry {
+  id: number
+  timestamp: string
+  actor: string
+  action: string
+  target: string
+  detail?: string
+}
+
+// Mirrors internal/audit.Result's JSON tags -- the response to
+// GET /api/audit, same HasMore-signals-truncation shape as EventsResult.
+export interface AuditResult {
+  entries: AuditEntry[]
+  hasMore: boolean
+}
+
 // Mirrors internal/rules.Usage's JSON tags (issue #103) -- one rule
 // label's lifetime firing record, served by GET /api/rules. Used by the
 // Entities panel (issue #109) as the "discovered but unnamed rules"
