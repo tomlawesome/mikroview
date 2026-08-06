@@ -9,6 +9,7 @@
   import type { Action } from '../lib/types'
   import { topNBy } from '../lib/topN'
   import EventsChart from './EventsChart.svelte'
+  import FlagsChart from './FlagsChart.svelte'
   import BarList from './BarList.svelte'
   import CustomTopTalkers from './CustomTopTalkers.svelte'
 
@@ -54,6 +55,9 @@
 <div class="dashboard scrollbar">
   <div class="panel wide">
     <EventsChart />
+  </div>
+  <div class="panel wide">
+    <FlagsChart />
   </div>
   <BarList title="Top rules" rows={topRuleRows} emptyMessage="No labeled rules seen yet" />
   <BarList title="Action breakdown" rows={actionRows} />

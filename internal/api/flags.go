@@ -7,9 +7,16 @@ import (
 
 // handleFlagsList serves every known flag, active and cleared -- the
 // frontend decides how much cleared history to keep showing (see
-// docs/configuration.md).
+// docs/configuration.md) -- plus the last hour of newly-raised-episode
+// counts by Type at 1-minute resolution (flags.Store.TimeSeries), for
+// FlagsChart. Same shape convention as GET /api/stats's timeSeries
+// field (internal/store/ring.go's Stats.TimeSeries) -- added alongside
+// the existing flags array rather than as a new endpoint.
 func (s *Server) handleFlagsList(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]any{"flags": s.Flags.List()})
+	writeJSON(w, http.StatusOK, map[string]any{
+		"flags":      s.Flags.List(),
+		"timeSeries": s.Flags.TimeSeries(),
+	})
 }
 
 // handleFlagsClear marks one flag as cleared. Clearing an unknown or
