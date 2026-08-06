@@ -1,15 +1,18 @@
 package main
 
 import (
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/tomlawesome/mikroview/internal/auth"
 	"github.com/tomlawesome/mikroview/internal/detect"
 	"github.com/tomlawesome/mikroview/internal/device"
 	"github.com/tomlawesome/mikroview/internal/flags"
@@ -277,5 +280,64 @@ func TestRunVersionPrintsTheBareVersionString(t *testing.T) {
 	}
 	if got := strings.TrimRight(string(out), "\n"); got != "test-sha1234" {
 		t.Errorf("runVersion() printed %q, want %q", got, "test-sha1234")
+	}
+}
+
+// TestAuthShouldFailClosed pins the exact predicate main() boots against:
+// a non-nil auth.Open error with a configured store path is the only case
+// that must refuse to start. Both "no persistence configured" (storePath
+// == "", err always nil per auth.Open) and "file genuinely doesn't exist"
+// (a real fresh install, err == nil) must keep booting normally.
+func TestAuthShouldFailClosed(t *testing.T) {
+	someErr := errors.New("boom")
+
+	cases := []struct {
+		name      string
+		err       error
+		storePath string
+		want      bool
+	}{
+		{"corrupt file with configured path fails closed", someErr, "/var/lib/mikroview/accounts.json", true},
+		{"nil error never fails closed regardless of path", nil, "/var/lib/mikroview/accounts.json", false},
+		{"nil error with unconfigured path never fails closed", nil, "", false},
+		{"error with unconfigured path never fails closed", someErr, "", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := authShouldFailClosed(tc.err, tc.storePath); got != tc.want {
+				t.Errorf("authShouldFailClosed(%v, %q) = %v, want %v", tc.err, tc.storePath, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestAuthOpenErrorShapeDrivesFailClosed proves the real-world trigger for
+// authShouldFailClosed against the actual auth.Store.Open implementation
+// (not just the predicate in isolation): a file that exists but fails to
+// parse produces a non-nil error, while a path with no file at all (fresh
+// install) does not -- the exact distinction main()'s boot sequence relies
+// on to tell "was configured, now broken" apart from "never configured".
+func TestAuthOpenErrorShapeDrivesFailClosed(t *testing.T) {
+	dir := t.TempDir()
+
+	freshPath := filepath.Join(dir, "fresh", "accounts.json")
+	_, err := auth.Open(freshPath)
+	if err != nil {
+		t.Fatalf("auth.Open on a not-yet-created path returned an error, want nil (fresh install must still boot): %v", err)
+	}
+	if authShouldFailClosed(err, freshPath) {
+		t.Error("authShouldFailClosed reported true for a genuine fresh install")
+	}
+
+	corruptPath := filepath.Join(dir, "accounts.json")
+	if err := os.WriteFile(corruptPath, []byte("{not valid json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err = auth.Open(corruptPath)
+	if err == nil {
+		t.Fatal("auth.Open on a corrupt existing file returned nil error, want non-nil")
+	}
+	if !authShouldFailClosed(err, corruptPath) {
+		t.Error("authShouldFailClosed reported false for a corrupt existing accounts file")
 	}
 }
