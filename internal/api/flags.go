@@ -32,23 +32,34 @@ func (s *Server) handleFlagsClear(w http.ResponseWriter, r *http.Request) {
 // handleFlagsClearPermanent is handleFlagsClear plus a permanent
 // exclusion of the flag's (Type, Target) in the same step -- the
 // "Clear and never flag this again" action (see flags.Store.
-// ClearAndExclude). Open to any caller the same as handleFlagsClear;
-// the exclusion itself isn't a sensitive read, and gating this one
-// endpoint while leaving the plain clear open would be an inconsistent
-// permission model for the same UI action. Reviewing/removing existing
-// exclusions (handleExclusionsList/handleExclusionRemove below) is the
-// admin-gated half of this feature, since that's the part where a
-// mistake would otherwise be unrecoverable.
+// ClearAndExclude).
 //
-// Deliberately NOT audit-logged (issue #112), for the same reason
-// handleFlagsClear above isn't: this is an admin-action audit log, and
-// neither handler actually requires an admin caller -- see this
-// function's own "open to any caller" note above. Only
-// handleExclusionRemove below (truly admin-gated, via
-// callerIsAdminOrOpen) is logged.
+// Admin-only, and audit-logged. This deliberately does NOT match
+// handleFlagsClear's open-to-any-caller model, despite the two being
+// adjacent buttons on the same UI row, because they differ in the one
+// way that matters here: a plain clear is reversible (the flag can
+// simply raise again on the next matching event), while an exclusion
+// permanently suppresses detection for that (Type, Target) until an
+// admin notices and undoes it. Leaving it open let any authenticated
+// non-admin -- or a single compromised low-privilege account -- blind
+// this deployment's detection for a target of their choosing, with no
+// record of who did it. For a tool whose entire purpose is surfacing
+// suspicious activity, silently losing that coverage is the more
+// expensive failure than a bit of permission-model asymmetry.
+//
+// The exclusion's reviewability (handleExclusionsList) and its undo
+// (handleExclusionRemove) were already admin-gated; this brings the
+// action that creates one into line with them.
 func (s *Server) handleFlagsClearPermanent(w http.ResponseWriter, r *http.Request) {
+	if !s.callerIsAdminOrOpen(r) {
+		http.Error(w, "admin role required", http.StatusForbidden)
+		return
+	}
 	id := r.PathValue("id")
 	ok := s.Flags.ClearAndExclude(id, time.Now())
+	if ok {
+		s.Audit.Record(auditActor(r), "flag.clear_permanent", id, "")
+	}
 	writeJSON(w, http.StatusOK, map[string]any{"cleared": ok, "excluded": ok})
 }
 

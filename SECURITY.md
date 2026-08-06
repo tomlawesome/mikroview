@@ -86,6 +86,20 @@ either way.
   mikroview reachable by an untrusted network before this is resolved:
   whoever gets there first makes the choice, and if they create an
   account, they claim the admin role.
+- **"Whoever gets there first" means exactly one winner, enforced
+  atomically.** The first-run decision is resolved under a single lock:
+  concurrent attempts cannot all succeed, and registering an account
+  cannot interleave with skipping auth. Both preconditions are
+  re-checked with the write lock held rather than before taking it,
+  which matters because password hashing (Argon2id, ~100ms by design)
+  runs first and would otherwise leave a wide window. Without this, N
+  simultaneous registrations would each create an admin, and a
+  registration racing a skip could leave a deployment holding a real
+  admin account while still reporting auth as disabled -- i.e. serving
+  every request unauthenticated while the operator's own registration
+  returned success and gave them no reason to suspect otherwise.
+  Regression tests exercise both races directly
+  (`internal/auth/store_test.go`).
 - **Skipping is a permanent, deliberate decision, not a default you fall
   into.** Once skipped, mikroview stays fully open indefinitely -- there
   is no way to re-enable auth from the web UI or any API call. Reversing
