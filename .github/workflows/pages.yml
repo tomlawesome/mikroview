@@ -1,0 +1,60 @@
+name: pages
+
+# Publishes site/ as the project's public marketing page on GitHub
+# Pages. Only fires on main -- the site represents the released state
+# of the project, same reasoning as docker.yml only ever publishing
+# from preview/main, never dev.
+#
+# site/ itself doesn't carry its own copies of the screenshots/logo --
+# those already live in docs/screenshots/ and brand/ as the single
+# source of truth (referenced from README.md and BRANDING.md too).
+# This workflow assembles them into the deployed artifact at build
+# time, so there's no duplicated binary content to keep in sync in git.
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'site/**'
+      - 'docs/screenshots/live-view-dark.png'
+      - 'docs/screenshots/live-view-light.png'
+      - 'brand/logo-mark.svg'
+      - '.github/workflows/pages.yml'
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Assemble the deploy artifact
+        run: |
+          mkdir -p _site/img
+          cp -r site/. _site/
+          cp docs/screenshots/live-view-dark.png _site/img/live-view-dark.png
+          cp docs/screenshots/live-view-light.png _site/img/live-view-light.png
+          cp brand/logo-mark.svg _site/img/logo-mark.svg
+
+      - uses: actions/upload-pages-artifact@v4
+        with:
+          path: _site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

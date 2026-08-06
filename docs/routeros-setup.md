@@ -128,8 +128,11 @@ Then check MikroView picked it up — either watch the live view in the
 browser, or:
 
 ```
-curl http://<mikroview-host>:8080/api/devices
+curl -k https://<mikroview-host>/api/devices
 ```
+
+(`-k` skips certificate verification — expected against MikroView's
+self-generated certificate; see the main README's Quickstart.)
 
 A router that's sending traffic but isn't yet in `config.yaml` still
 shows up here, labelled by its source IP with `"configured": false` —

@@ -7,6 +7,7 @@ import (
 	"crypto/tls"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -25,6 +26,7 @@ import (
 	"github.com/tomlawesome/mikroview/internal/logging"
 	"github.com/tomlawesome/mikroview/internal/naming"
 	"github.com/tomlawesome/mikroview/internal/notify"
+	"github.com/tomlawesome/mikroview/internal/oidc"
 	"github.com/tomlawesome/mikroview/internal/reputation"
 	"github.com/tomlawesome/mikroview/internal/routeros"
 	"github.com/tomlawesome/mikroview/internal/servertls"
@@ -95,6 +97,20 @@ func logVersionAndMigration(logger *slog.Logger) {
 	if err := os.WriteFile(versionMarkerPath, []byte(version), 0o600); err != nil {
 		logger.Warn(fmt.Sprintf("writing version marker: %v (upgrade detection won't work on the next restart)", err))
 	}
+}
+
+// httpsRedirectTarget builds the Location for redirecting a plain-HTTP
+// request to HTTPS -- strips any port off the request's Host header and
+// assumes HTTPS is reachable on the browser-default 443 (see
+// config.Listen.HTTPRedirect's doc comment for when that assumption
+// doesn't hold), preserving the original path/query/method-relevant
+// URI otherwise.
+func httpsRedirectTarget(r *http.Request) string {
+	host := r.Host
+	if h, _, err := net.SplitHostPort(host); err == nil {
+		host = h
+	}
+	return "https://" + host + r.URL.RequestURI()
 }
 
 func main() {
@@ -282,6 +298,7 @@ func main() {
 	names := naming.Resolver{Rules: cfg.RuleNames, Hosts: cfg.HostNames}
 
 	go ingest(ctx, raw, st, devices, h, geo, detector, names)
+	go detector.Run(ctx)
 
 	go func() {
 		ticker := time.NewTicker(globalSpikeCheckInterval)
@@ -296,6 +313,47 @@ func main() {
 		}
 	}()
 
+	// SSO (issue #43): additive on top of local auth, never a
+	// replacement -- see internal/oidc and auth.Store.
+	// FindOrCreateOIDCUser. A misconfigured or unreachable provider must
+	// never take down local login, so every failure path here just
+	// leaves srv.OIDC nil (SSO unavailable, 404 on its routes) rather
+	// than exiting -- the same degrade-not-crash contract GeoIP/Flags/
+	// Auth/DetectorSettings already have above for their own optional
+	// persistence/integrations.
+	var oidcClient *oidc.Client
+	var oidcState *oidc.StateCodec
+	oidcLog := logging.New("oidc")
+	switch {
+	case cfg.OIDC.IssuerURL == "":
+		// Not configured -- no log line, same as every other disabled-
+		// by-default optional integration (GeoIP, Reputation, Notify).
+	case cfg.OIDC.PublicBaseURL == "":
+		oidcLog.Error("oidc.issuerUrl is set but oidc.publicBaseUrl is not -- SSO login is unavailable until it's configured (see docs/configuration.md)")
+	case cfg.OIDC.ClientID == "" || cfg.OIDC.ClientSecret == "":
+		oidcLog.Error("oidc.issuerUrl is set but oidc.clientId/oidc.clientSecret are not -- SSO login is unavailable until both are configured")
+	default:
+		client, err := oidc.New(ctx, oidc.Config{
+			IssuerURL:    cfg.OIDC.IssuerURL,
+			ClientID:     cfg.OIDC.ClientID,
+			ClientSecret: cfg.OIDC.ClientSecret,
+			// PublicBaseURL, not a request's Host header -- see
+			// config.OIDC.PublicBaseURL's doc comment for why deriving
+			// this from client-influenced input would be a real
+			// redirect_uri-confusion vulnerability.
+			RedirectURL: strings.TrimRight(cfg.OIDC.PublicBaseURL, "/") + "/api/auth/oidc/callback",
+			Scopes:      cfg.OIDC.Scopes,
+		})
+		if err != nil {
+			oidcLog.Error(fmt.Sprintf("%v (SSO login is unavailable)", err))
+		} else if state, err := oidc.NewStateCodec(); err != nil {
+			oidcLog.Error(fmt.Sprintf("%v (SSO login is unavailable)", err))
+		} else {
+			oidcClient, oidcState = client, state
+			oidcLog.Info(fmt.Sprintf("SSO login active against %s", cfg.OIDC.IssuerURL))
+		}
+	}
+
 	srv := &api.Server{
 		Store:            st,
 		Devices:          devices,
@@ -308,6 +366,8 @@ func main() {
 		Sessions:         auth.NewSessionStore(cfg.Auth.SessionTTL),
 		LoginLimiter:     auth.NewLoginLimiter(loginLimiterThreshold, loginLimiterWindow),
 		SecureCookie:     cfg.Auth.SecureCookie,
+		OIDC:             oidcClient,
+		OIDCState:        oidcState,
 		StartTime:        time.Now(),
 	}
 
@@ -373,6 +433,35 @@ func main() {
 			})
 		}
 		httpServer.TLSConfig = &tls.Config{Certificates: []tls.Certificate{cert}}
+		if cfg.Listen.HTTPRedirect != "" {
+			redirectLog := logging.New("http-redirect")
+			redirectServer := &http.Server{
+				Addr: cfg.Listen.HTTPRedirect,
+				// The only job here is bouncing a client that guessed
+				// plain HTTP over to the real HTTPS listener -- strips
+				// any port off the request's Host header and assumes
+				// HTTPS is reachable on the browser-default 443 (see
+				// Listen.HTTPRedirect's doc comment for when that
+				// assumption doesn't hold).
+				Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					http.Redirect(w, r, httpsRedirectTarget(r), http.StatusPermanentRedirect)
+				}),
+				ReadHeaderTimeout: 10 * time.Second,
+				ErrorLog:          slog.NewLogLogger(redirectLog.Handler(), slog.LevelWarn),
+			}
+			go func() {
+				<-ctx.Done()
+				shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				defer cancel()
+				redirectServer.Shutdown(shutdownCtx)
+			}()
+			go func() {
+				redirectLog.Info(fmt.Sprintf("redirecting plain HTTP on %s -> https", cfg.Listen.HTTPRedirect))
+				if err := redirectServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+					redirectLog.Error(err.Error())
+				}
+			}()
+		}
 	} else {
 		tlsLog.Warn(fmt.Sprintf("disabled (tls.enabled=false) -- mikroview is serving plain HTTP on %s. Safe ONLY if this listener is unreachable except from your own reverse proxy over an isolated network -- never expose this port to a LAN or the internet in this mode.", cfg.Listen.HTTP))
 	}
@@ -560,7 +649,12 @@ func readPasswordTwice() (string, error) {
 // message, resolves device identity, inserts the resulting Event into the
 // store, and hands the stored (ID-assigned) event to the hub for
 // broadcast. Keeping this on one goroutine means Store and the device
-// Registry never need to arbitrate concurrent writers.
+// Registry never need to arbitrate concurrent writers. Detection is
+// handed off via detector.Enqueue rather than run inline here -- a slow
+// or backed-up detection pass must never delay store insertion or
+// WebSocket broadcast (see detect.Detector.Enqueue/Run, and the
+// dedicated detection-worker goroutine main() starts alongside this
+// one).
 func ingest(ctx context.Context, raw <-chan syslog.RawMessage, st *store.Store, devices *device.Registry, h *hub.Hub, geo *geoip.Lookup, detector *detect.Detector, names naming.Resolver) {
 	for {
 		select {
@@ -604,7 +698,7 @@ func ingest(ctx context.Context, raw <-chan syslog.RawMessage, st *store.Store, 
 
 			stored := st.Insert(e)
 			h.Broadcast(stored)
-			detector.Observe(stored)
+			detector.Enqueue(stored)
 		}
 	}
 }
