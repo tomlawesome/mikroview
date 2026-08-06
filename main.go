@@ -250,8 +250,32 @@ func main() {
 
 	authLog := logging.New("auth")
 	authStore, err := auth.Open(cfg.Auth.StorePath)
-	if err != nil {
-		authLog.Warn(fmt.Sprintf("%v (continuing with in-memory-only, unpersisted account state)", err))
+	// A non-nil error from auth.Open, when persistence is actually
+	// configured, ALWAYS means "the accounts file exists but couldn't be
+	// read/parsed" -- Open returns (store, nil) for both "no persistence
+	// configured" and "file genuinely doesn't exist yet" (see its own
+	// doc comment), so this is never reached by a true fresh install.
+	// Falling through to the normal boot sequence here used to mean the
+	// in-memory store's Count() reads 0, which is *exactly* the state
+	// requireAuth treats as "no decision made yet" -- silently
+	// presenting a stranger with the first-run setup wizard on a
+	// previously-authenticated instance, indistinguishable in the logs
+	// from a genuine fresh install. That's a fail-OPEN on a security
+	// control, not an acceptable degrade-and-continue case like every
+	// other optional store above. Refuse to start instead: recovering
+	// requires an explicit, conscious operator action, and container/
+	// host access (the same trust anchor as every other CLI recovery
+	// path) is already sufficient to take it directly -- move or delete
+	// the broken file and restart, no dedicated CLI mode needed for
+	// something `mv`/`rm` already does.
+	if authShouldFailClosed(err, cfg.Auth.StorePath) {
+		authLog.Error(fmt.Sprintf(
+			"accounts file at %q exists but could not be loaded: %v -- refusing to start with authentication in an unknown state. "+
+				"If this deployment previously had accounts configured, this is NOT a fresh install: restore the file from a backup, "+
+				"or move/delete %q and restart to consciously re-arm the first-run setup screen (container/host access is required either way).",
+			cfg.Auth.StorePath, err, cfg.Auth.StorePath,
+		))
+		os.Exit(1)
 	}
 	switch {
 	case authStore.Count() > 0:
@@ -754,6 +778,20 @@ func runEnableAuthSetup() int {
 	}
 	fmt.Println("Auth setup re-enabled -- the create-account form will be shown again on next load.")
 	return 0
+}
+
+// authShouldFailClosed reports whether main()'s boot sequence should
+// refuse to start rather than continue with an unauthenticated,
+// zero-account in-memory auth.Store. err is auth.Open's own return
+// value; storePath is the configured auth.storePath. auth.Open only
+// ever returns a non-nil error when a persistence path IS configured
+// and the file at it exists but couldn't be read/parsed -- both "no
+// persistence configured" (storePath == "") and "file genuinely
+// doesn't exist yet" (a real fresh install) return a nil error, so
+// requiring storePath != "" here is belt-and-braces rather than the
+// actual distinguishing signal, which is err itself.
+func authShouldFailClosed(err error, storePath string) bool {
+	return err != nil && storePath != ""
 }
 
 // runResetPassword backs `-reset-password <username>` -- the account-

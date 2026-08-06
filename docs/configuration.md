@@ -879,6 +879,22 @@ account, including on an already-running server -- you don't need to
 restart mikroview after running `-reset-password` for the new password
 to take effect.
 
+**A corrupt or unreadable accounts file refuses to boot, rather than
+silently reopening.** If `auth.storePath` points at a file that exists
+but can't be loaded, mikroview exits immediately with an error rather
+than falling back to an empty, zero-account state -- the same state a
+genuine fresh install starts from, which would otherwise mean a lost or
+corrupted accounts file silently presents the first-run setup screen to
+whoever loads mikroview next, indistinguishable from a real fresh
+install in both behavior and the logs. A missing file (no persistence
+configured, or a genuine first-ever boot) is unaffected and boots
+normally either way -- only a file that exists but won't parse triggers
+this. The startup error names the exact path; restore it from a backup
+if you have one, or move/delete it and restart to consciously re-arm
+the first-run setup screen -- container/host access is the trust
+anchor here, the same as the recovery commands above, so there's no
+separate CLI mode for what `mv`/`rm` already does.
+
 ## API tokens (read-only)
 
 For a separate service to pull mikroview's data over the network with

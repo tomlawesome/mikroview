@@ -94,6 +94,21 @@ either way.
   itself. This is intentional: it means nobody who can merely reach the
   running app -- as opposed to the host it runs on -- can unilaterally
   impose or remove authentication for everyone else.
+- **A corrupt or unreadable accounts file fails closed, not open.**
+  mikroview refuses to start (rather than silently falling back to an
+  empty, zero-account state) if the accounts file exists but can't be
+  loaded -- a fresh install (no file at all) is unaffected and boots
+  normally. Without this, a lost/corrupted accounts file would look
+  identical, on the next restart, to a genuine fresh install: the
+  first-run setup screen, reachable by whoever gets there first, on a
+  deployment that previously had real accounts. Recovering is a
+  container/host-access action, the same trust anchor as the other
+  recovery commands below: restore the file from a backup, or move/
+  delete it (the boot-failure log message names the exact path) and
+  restart to consciously re-arm the first-run setup screen -- no
+  dedicated CLI mode for this, since an operator who can already run
+  `mikroview -reset-password`/`-enable-auth-setup` can already `mv` or
+  `rm` a file on the same host.
 - **Sessions are opaque, server-side, and in-memory** (not JWTs) -- easy
   to revoke, no signing-key management, but lost on a server restart
   (re-login is required; this does not affect account survival, which is
