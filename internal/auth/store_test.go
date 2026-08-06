@@ -50,6 +50,28 @@ func TestRegisterCreatesAdminAndClosesAfterFirstUser(t *testing.T) {
 	}
 }
 
+func TestPasswordTooShortRejectedOnRegisterCreateAndReset(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "users.json")
+	s, _ := Open(path)
+
+	if _, err := s.Register("admin", "short1", time.Now()); err != ErrPasswordTooShort {
+		t.Errorf("Register: expected ErrPasswordTooShort for a %d-char password, got %v", len("short1"), err)
+	}
+	if s.Count() != 0 {
+		t.Fatalf("expected no account to have been created, got %d", s.Count())
+	}
+
+	if _, err := s.Register("admin", "password123", time.Now()); err != nil {
+		t.Fatalf("Register with a long-enough password should succeed, got %v", err)
+	}
+	if _, err := s.CreateUser("second", "tiny", RoleUser, time.Now()); err != ErrPasswordTooShort {
+		t.Errorf("CreateUser: expected ErrPasswordTooShort, got %v", err)
+	}
+	if err := s.SetPassword("admin", "abc", time.Now()); err != ErrPasswordTooShort {
+		t.Errorf("SetPassword: expected ErrPasswordTooShort, got %v", err)
+	}
+}
+
 func TestCreateUserAllowsAdditionalAccountsAtAnyRole(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "users.json")
 	s, _ := Open(path)
@@ -340,6 +362,53 @@ func TestOpenReadsLegacyBareArrayFormat(t *testing.T) {
 	}
 	if u, ok := s.ByUsername("admin"); !ok || u.ID != "u1" {
 		t.Errorf("expected the legacy user to be readable by username, got %+v, %v", u, ok)
+	}
+}
+
+// A JSON array containing null is syntactically valid, so it unmarshals
+// without error into a slice with a nil *User element -- before the
+// fix, the next line (indexing u.ID) paniced, and since nothing in
+// this codebase recovers a panic from every goroutine (see
+// internal/logging.Recover), that meant crashing the entire process on
+// mikroview startup, not a graceful degrade.
+func TestOpenSkipsNilArrayElements(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "users.json")
+	data := `{"disabled":false,"users":[null,{"id":"u1","username":"admin","passwordHash":"$argon2id$fake","role":"admin","createdAt":"2026-01-01T00:00:00Z"},null]}`
+	if err := os.WriteFile(path, []byte(data), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	s, err := Open(path) // must not panic
+	if err != nil {
+		t.Fatalf("Open() returned an unexpected error: %v", err)
+	}
+	if s.Count() != 1 {
+		t.Fatalf("expected the one real user to survive, got %d", s.Count())
+	}
+	if u, ok := s.ByUsername("admin"); !ok || u.ID != "u1" {
+		t.Errorf("expected the real user's data to be intact, got %+v, %v", u, ok)
+	}
+}
+
+// Same bug, reached through the other code path that parses a
+// storeFile: reloadIfStale, which a live server calls on every read
+// once a separate process (a CLI recovery tool) has touched the file.
+func TestReloadIfStaleSkipsNilArrayElements(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "users.json")
+
+	s, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	data := `{"disabled":false,"users":[null,{"id":"u1","username":"admin","passwordHash":"$argon2id$fake","role":"admin","createdAt":"2026-01-01T00:00:00Z"}]}`
+	if err := os.WriteFile(path, []byte(data), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(10 * time.Millisecond) // see other mtime-staleness tests' identical reasoning
+
+	if u, ok := s.ByUsername("admin"); !ok || u.ID != "u1" { // triggers reloadIfStale; must not panic
+		t.Errorf("expected the externally-written user to be picked up, got %+v, %v", u, ok)
 	}
 }
 

@@ -3,10 +3,12 @@ package api
 import (
 	"bytes"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/cookiejar"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -86,6 +88,35 @@ func TestUndecidedStateRestrictsToBootstrapPaths(t *testing.T) {
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusServiceUnavailable {
 		t.Errorf("expected /api/events to be blocked while undecided, got %d", resp.StatusCode)
+	}
+}
+
+// internal/auth's sentinel errors are written for a developer (e.g.
+// ErrNotPersisted's "refusing to create a user that would not survive
+// a restart"), not a stranger looking at a login screen -- this proves
+// that text never reaches the HTTP response body, regardless of which
+// auth error is triggered.
+func TestAuthErrorsNeverLeakInternalErrorText(t *testing.T) {
+	s, _ := newTestServer(t)
+	unpersisted, err := auth.Open("") // triggers ErrNotPersisted on Register
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.Auth = unpersisted
+	ts := httptest.NewServer(s.Routes())
+	defer ts.Close()
+
+	resp := postJSON(t, &http.Client{}, ts.URL+"/api/auth/register", credentialsRequest{Username: "admin", Password: "password123"})
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(body), "auth:") {
+		t.Errorf("expected internal/auth's raw error text never to reach the client, got body: %q", body)
+	}
+	if resp.StatusCode != http.StatusServiceUnavailable {
+		t.Errorf("expected 503 for ErrNotPersisted, got %d", resp.StatusCode)
 	}
 }
 
