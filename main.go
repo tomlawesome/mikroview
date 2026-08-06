@@ -186,13 +186,13 @@ func main() {
 		authLog.Info("no decision made yet -- mikroview is showing the first-run choice screen (see docs/configuration.md)")
 	}
 	detectCfg := detect.Config{
-		PortScanThreshold:      cfg.Flags.PortScanThreshold,
-		PortScanWindow:         cfg.Flags.PortScanWindow,
-		ActivitySpikeThreshold: cfg.Flags.ActivitySpikeThreshold,
-		ActivitySpikeWindow:    cfg.Flags.ActivitySpikeWindow,
-		CriticalPorts:          cfg.Flags.CriticalPorts,
-		CriticalPortThreshold:  cfg.Flags.CriticalPortThreshold,
-		CriticalPortWindow:     cfg.Flags.CriticalPortWindow,
+		PortScanThreshold:        cfg.Flags.PortScanThreshold,
+		PortScanWindow:           cfg.Flags.PortScanWindow,
+		ActivitySpikeThreshold:   cfg.Flags.ActivitySpikeThreshold,
+		ActivitySpikeWindow:      cfg.Flags.ActivitySpikeWindow,
+		CriticalPorts:            cfg.Flags.CriticalPorts,
+		CriticalPortThreshold:    cfg.Flags.CriticalPortThreshold,
+		CriticalPortWindow:       cfg.Flags.CriticalPortWindow,
 		GlobalSpikeMultiplier:    cfg.Flags.GlobalSpikeMultiplier,
 		GlobalSpikeMinEPS:        cfg.Flags.GlobalSpikeMinEPS,
 		GlobalSpikeWarmupSamples: cfg.Flags.GlobalSpikeWarmupSamples,
@@ -301,6 +301,7 @@ func main() {
 	go detector.Run(ctx)
 
 	go func() {
+		spikeLog := logging.New("global-spike")
 		ticker := time.NewTicker(globalSpikeCheckInterval)
 		defer ticker.Stop()
 		for {
@@ -308,7 +309,10 @@ func main() {
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				globalSpike.Check(st.Stats().EventsPerSecond, time.Now())
+				func() {
+					defer logging.Recover(spikeLog)
+					globalSpike.Check(st.Stats().EventsPerSecond, time.Now())
+				}()
 			}
 		}
 	}()
@@ -656,49 +660,62 @@ func readPasswordTwice() (string, error) {
 // dedicated detection-worker goroutine main() starts alongside this
 // one).
 func ingest(ctx context.Context, raw <-chan syslog.RawMessage, st *store.Store, devices *device.Registry, h *hub.Hub, geo *geoip.Lookup, detector *detect.Detector, names naming.Resolver) {
+	ingestLog := logging.New("ingest")
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case rm := <-raw:
-			env := syslog.ParseEnvelope(rm.Data, rm.RecvTime)
-			parsed := routeros.Parse(env.Message)
-			deviceID := devices.Resolve(rm.SourceIP, rm.RecvTime)
-			srcCountry, _ := geo.Country(parsed.SrcIP)
-			dstCountry, _ := geo.Country(parsed.DstIP)
-
-			e := store.Event{
-				Time:         env.Timestamp,
-				DeviceID:     deviceID,
-				SourceIP:     rm.SourceIP,
-				Action:       parsed.Action,
-				RuleLabel:    parsed.RuleLabel,
-				RuleName:     names.Rule(parsed.RuleLabel),
-				Chain:        parsed.Chain,
-				InInterface:  parsed.InInterface,
-				OutInterface: parsed.OutInterface,
-				ConnState:    parsed.ConnState,
-				Protocol:     parsed.Protocol,
-				SrcMAC:       parsed.SrcMAC,
-				SrcIP:        parsed.SrcIP,
-				SrcPort:      parsed.SrcPort,
-				DstIP:        parsed.DstIP,
-				DstPort:      parsed.DstPort,
-				SrcHostName:  names.Host(parsed.SrcIP),
-				DstHostName:  names.Host(parsed.DstIP),
-				SrcCountry:   srcCountry,
-				DstCountry:   dstCountry,
-				NatIP:        parsed.NatIP,
-				NatPort:      parsed.NatPort,
-				NatRaw:       parsed.NatRaw,
-				Length:       parsed.Length,
-				Flags:        parsed.Flags,
-				Raw:          parsed.Raw,
-			}
-
-			stored := st.Insert(e)
-			h.Broadcast(stored)
-			detector.Enqueue(stored)
+			ingestOneRecovered(ingestLog, rm, st, devices, h, geo, detector, names)
 		}
 	}
+}
+
+// ingestOneRecovered isolates panic recovery to a single message
+// rather than ingest's whole lifetime -- recover only unwinds as far as
+// the nearest deferring function, so a defer in ingest itself would
+// still end the entire ingest goroutine for good on the first bad
+// message (silently stopping all future event processing) rather than
+// just dropping that one message. See logging.Recover's doc comment.
+func ingestOneRecovered(logger *slog.Logger, rm syslog.RawMessage, st *store.Store, devices *device.Registry, h *hub.Hub, geo *geoip.Lookup, detector *detect.Detector, names naming.Resolver) {
+	defer logging.Recover(logger)
+
+	env := syslog.ParseEnvelope(rm.Data, rm.RecvTime)
+	parsed := routeros.Parse(env.Message)
+	deviceID := devices.Resolve(rm.SourceIP, rm.RecvTime)
+	srcCountry, _ := geo.Country(parsed.SrcIP)
+	dstCountry, _ := geo.Country(parsed.DstIP)
+
+	e := store.Event{
+		Time:         env.Timestamp,
+		DeviceID:     deviceID,
+		SourceIP:     rm.SourceIP,
+		Action:       parsed.Action,
+		RuleLabel:    parsed.RuleLabel,
+		RuleName:     names.Rule(parsed.RuleLabel),
+		Chain:        parsed.Chain,
+		InInterface:  parsed.InInterface,
+		OutInterface: parsed.OutInterface,
+		ConnState:    parsed.ConnState,
+		Protocol:     parsed.Protocol,
+		SrcMAC:       parsed.SrcMAC,
+		SrcIP:        parsed.SrcIP,
+		SrcPort:      parsed.SrcPort,
+		DstIP:        parsed.DstIP,
+		DstPort:      parsed.DstPort,
+		SrcHostName:  names.Host(parsed.SrcIP),
+		DstHostName:  names.Host(parsed.DstIP),
+		SrcCountry:   srcCountry,
+		DstCountry:   dstCountry,
+		NatIP:        parsed.NatIP,
+		NatPort:      parsed.NatPort,
+		NatRaw:       parsed.NatRaw,
+		Length:       parsed.Length,
+		Flags:        parsed.Flags,
+		Raw:          parsed.Raw,
+	}
+
+	stored := st.Insert(e)
+	h.Broadcast(stored)
+	detector.Enqueue(stored)
 }

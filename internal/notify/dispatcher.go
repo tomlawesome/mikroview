@@ -75,9 +75,18 @@ func (d *Dispatcher) flush(batch []flags.Flag) []flags.Flag {
 		return batch
 	}
 	for _, n := range d.notifiers {
-		if err := n.Send(batch); err != nil {
-			logger.Warn(err.Error())
-		}
+		sendRecovered(n, batch)
 	}
 	return nil
+}
+
+// sendRecovered isolates one Notifier's Send call so a panic in a
+// single (possibly future, possibly third-party-ish) notifier
+// implementation can't take down Run and silently end all further
+// notification delivery -- see logging.Recover's doc comment.
+func sendRecovered(n Notifier, batch []flags.Flag) {
+	defer logging.Recover(logger)
+	if err := n.Send(batch); err != nil {
+		logger.Warn(err.Error())
+	}
 }

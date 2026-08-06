@@ -16,6 +16,7 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"runtime/debug"
 	"strings"
 	"sync"
 
@@ -59,6 +60,41 @@ func colorEnabled() bool {
 // they always did with log.Printf.
 func New(component string) *slog.Logger {
 	return slog.New(sharedHandler).With(slog.String("component", component))
+}
+
+// Recover must be deferred directly -- `defer logging.Recover(logger)`
+// -- never wrapped in another closure (`defer func() {
+// logging.Recover(logger) }()` looks equivalent but is a real, common
+// Go footgun: recover() only stops a panic when called directly by the
+// function that was itself deferred. One layer of closure in between
+// means recover() is no longer being called "directly" by the deferred
+// call, so it returns nil and the panic keeps propagating exactly as
+// if this were never called at all -- silently, since nothing about it
+// looks wrong until it's actually exercised by a real panic. Logs and
+// swallows an in-flight panic instead of letting it propagate.
+//
+// Go gives no default containment for a panic in a goroutine: only
+// net/http's own per-request goroutine gets an automatic recover, and
+// that protection doesn't extend to any goroutine spawned from within a
+// handler, let alone mikroview's independently-started long-running
+// goroutines (ingestion, detection, notification dispatch, the syslog
+// listeners, ...). An unrecovered panic in any one of them takes down
+// the entire process -- every connected browser's WebSocket, both
+// syslog listeners, the whole in-memory event buffer -- not just the
+// subsystem it happened in. Call this at the smallest unit of work a
+// goroutine repeats (once per event/message/connection, not once for
+// the goroutine's entire lifetime) so a single bad input degrades that
+// one unit of work rather than silently ending the goroutine for good.
+func Recover(logger *slog.Logger) {
+	if r := recover(); r != nil {
+		// handler.Handle (below) only ever renders a record's plain
+		// Message plus its "component" attr -- every other structured
+		// attr (slog.Any/slog.String key-value pairs) is silently
+		// dropped. Baking the panic value and stack trace directly
+		// into the message is the only way they actually reach the
+		// log output this package produces.
+		logger.Error(fmt.Sprintf("recovered from panic: %v\n%s", r, debug.Stack()))
+	}
 }
 
 // SetLevel parses one of debug/info/warn/error (case-insensitive) and
