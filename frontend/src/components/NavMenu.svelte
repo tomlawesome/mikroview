@@ -2,6 +2,7 @@
   import { appState, type View } from '../lib/state.svelte'
   import { flagsState } from '../lib/flags.svelte'
   import { detectorSettingsState } from '../lib/detectorSettings.svelte'
+  import { entitiesState } from '../lib/entities.svelte'
   import { authState } from '../lib/auth.svelte'
   import { themeState, type ThemePref } from '../lib/theme.svelte'
   import { COLORWAYS, colorwayState } from '../lib/colorway.svelte'
@@ -35,6 +36,16 @@
     } else {
       appState.view = 'detectors'
       detectorSettingsState.refresh()
+    }
+    open = false
+  }
+
+  function toggleEntities() {
+    if (appState.view === 'entities') {
+      appState.view = 'live'
+    } else {
+      appState.view = 'entities'
+      entitiesState.refresh()
     }
     open = false
   }
@@ -136,6 +147,23 @@
             title="Toggle behavioral detectors on/off and restrict their scope"
           >
             Detectors
+          </button>
+        {/if}
+
+        {#if authState.state === 'authenticated' && authState.role === 'admin'}
+          <!-- Stricter than Detectors' gate above -- entities management
+               mirrors internal/api's callerIsAdmin (the same check
+               POST /api/auth/users uses), not callerIsAdminOrOpen, so
+               there's deliberately no "also show while auth is
+               disabled" branch here (see internal/api/entities.go's own
+               doc comment for why). -->
+          <button
+            class="option"
+            class:active={appState.view === 'entities'}
+            onclick={toggleEntities}
+            title="Manage persisted host/rule labels and tags"
+          >
+            Entities
           </button>
         {/if}
       </div>

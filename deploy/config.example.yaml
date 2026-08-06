@@ -118,6 +118,18 @@ store:
 # hostNames:
 #   192.168.1.50: "Living room NAS"
 
+# Optional: the live, UI-managed counterpart to ruleNames/hostNames
+# above (Menu -> Entities, admin-only) -- a label/tags record per
+# (type, key), editable with no restart, taking precedence over
+# ruleNames/hostNames for any key it has a label for. storePath already
+# defaults to /var/lib/mikroview/entities.json; only uncomment this
+# block to move that path. The first time mikroview boots against an
+# empty entities store, it imports any existing ruleNames/hostNames as
+# entities automatically -- see docs/configuration.md's "Entities"
+# section.
+# entities:
+#   storePath: /var/lib/mikroview/entities.json
+
 # Local authentication. storePath already defaults to
 # /var/lib/mikroview/users.json (see deploy/docker-compose.yml for the
 # matching volume mount if you want it to survive container recreation,

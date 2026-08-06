@@ -7,17 +7,9 @@ import (
 	"github.com/tomlawesome/mikroview/internal/auth"
 )
 
-// callerIsAdmin gates every token-management endpoint the same way
-// handleAuthCreateUser is gated -- caller is nil whenever no admin
-// exists to have called this (requireAuth's bootstrap-exempt window
-// blocks this path entirely while undecided, and "disabled" bypasses
-// the session check that would otherwise set it), so this one check
-// covers every zero-account case without special-casing why.
-func callerIsAdmin(r *http.Request) bool {
-	caller := userFromContext(r)
-	return caller != nil && caller.Role == auth.RoleAdmin
-}
-
+// callerIsAdmin (shared, defined in auth.go) gates every token-
+// management endpoint here the same way it gates handleAuthCreateUser
+// and internal/entities' admin-only CRUD.
 type createTokenRequest struct {
 	Name string `json:"name"`
 }

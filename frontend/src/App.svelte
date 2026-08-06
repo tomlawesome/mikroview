@@ -15,6 +15,7 @@
   import ControlPorts from './components/ControlPorts.svelte'
   import Flags from './components/Flags.svelte'
   import Detectors from './components/Detectors.svelte'
+  import Entities from './components/Entities.svelte'
   import Fleet from './components/Fleet.svelte'
   import IpLookupPopover from './components/IpLookupPopover.svelte'
   import PortLookupPopover from './components/PortLookupPopover.svelte'
@@ -143,6 +144,8 @@
       <Flags />
     {:else if appState.view === 'detectors'}
       <Detectors />
+    {:else if appState.view === 'entities'}
+      <Entities />
     {:else if appState.view === 'fleet'}
       <Fleet />
     {:else}
