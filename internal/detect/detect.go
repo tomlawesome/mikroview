@@ -15,8 +15,11 @@ import (
 	"time"
 
 	"github.com/tomlawesome/mikroview/internal/flags"
+	"github.com/tomlawesome/mikroview/internal/logging"
 	"github.com/tomlawesome/mikroview/internal/store"
 )
+
+var logger = logging.New("detect")
 
 // Config holds every detector's tunable thresholds, sourced from
 // internal/config so an operator can adjust them (or the critical port
@@ -29,8 +32,8 @@ type Config struct {
 	CriticalPorts          []int
 	CriticalPortThreshold  int
 	CriticalPortWindow     time.Duration
-	GlobalSpikeMultiplier float64
-	GlobalSpikeMinEPS     float64
+	GlobalSpikeMultiplier  float64
+	GlobalSpikeMinEPS      float64
 	// GlobalSpikeWarmupSamples: how many Check() calls the network-wide
 	// EMA baseline needs before a flag can reach full confidence -- same
 	// role as HostActivityWarmupSamples, see Flag.Confidence.
@@ -89,7 +92,7 @@ type Config struct {
 	// idle host doesn't "spike" from one extra event. WarmupSamples is
 	// how many observations a host needs before a flag can reach full
 	// confidence -- see Flag.Confidence.
-	HostActivityMultiplier   float64
+	HostActivityMultiplier    float64
 	HostActivityWarmupSamples int
 
 	// LowSlowScanWindow+... (issue #20): a port scan deliberately paced to
@@ -132,13 +135,13 @@ type Config struct {
 // target once a scanner has fingerprinted a device as RouterOS.
 func DefaultConfig() Config {
 	return Config{
-		PortScanThreshold:      15,
-		PortScanWindow:         60 * time.Second,
-		ActivitySpikeThreshold: 200,
-		ActivitySpikeWindow:    60 * time.Second,
-		CriticalPorts:          []int{21, 22, 23, 445, 3389, 5900, 8291, 8728, 8729},
-		CriticalPortThreshold:  5,
-		CriticalPortWindow:     5 * time.Minute,
+		PortScanThreshold:        15,
+		PortScanWindow:           60 * time.Second,
+		ActivitySpikeThreshold:   200,
+		ActivitySpikeWindow:      60 * time.Second,
+		CriticalPorts:            []int{21, 22, 23, 445, 3389, 5900, 8291, 8728, 8729},
+		CriticalPortThreshold:    5,
+		CriticalPortWindow:       5 * time.Minute,
 		GlobalSpikeMultiplier:    4,
 		GlobalSpikeMinEPS:        5,
 		GlobalSpikeWarmupSamples: 20,
@@ -299,9 +302,21 @@ func (d *Detector) Run(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case e := <-d.observeQueue:
-			d.Observe(e)
+			d.observeRecovered(e)
 		}
 	}
+}
+
+// observeRecovered isolates Observe's panic-recovery to a single event
+// rather than Run's whole lifetime -- recover only unwinds as far as
+// the nearest deferring function, so if the defer lived in Run itself
+// instead, one bad event would still end Run for good (silently
+// stopping all future detection) rather than just being skipped. See
+// logging.Recover's doc comment for why this is needed at all: nothing
+// else in Go contains a panic in a goroutine like this one.
+func (d *Detector) observeRecovered(e store.Event) {
+	defer logging.Recover(logger)
+	d.Observe(e)
 }
 
 // Observe feeds one stored event through every per-event detector.

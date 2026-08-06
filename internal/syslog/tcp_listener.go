@@ -101,6 +101,7 @@ func ServeTCP(ctx context.Context, ln net.Listener, out chan<- RawMessage) error
 		case slots <- struct{}{}:
 			go func() {
 				defer func() { <-slots }()
+				defer logging.Recover(tcpLog)
 				handleTCPConn(ctx, conn, out)
 			}()
 		default:
