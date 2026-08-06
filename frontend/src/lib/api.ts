@@ -1,4 +1,5 @@
 import type {
+  ApiToken,
   AuthSession,
   DetectorScope,
   DetectorSettings,
@@ -43,6 +44,13 @@ async function putJSON(url: string, body: unknown = {}): Promise<Response> {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'mikroview' },
     body: JSON.stringify(body),
+  })
+}
+
+async function deleteJSON(url: string): Promise<Response> {
+  return fetch(url, {
+    method: 'DELETE',
+    headers: { 'X-Requested-With': 'mikroview' },
   })
 }
 
@@ -171,4 +179,26 @@ export async function updateDetectorSettings(
   const res = await putJSON(`/api/detectors/${encodeURIComponent(name)}`, { enabled, scope })
   if (res.ok) return null
   return (await res.text()) || `updateDetectorSettings: ${res.status}`
+}
+
+// Admin-only read-only API token management (issue #101) -- see
+// internal/api/tokens.go. createToken's response is the only place the
+// raw bearer value is ever returned; fetchTokens never includes it.
+export async function fetchTokens(): Promise<ApiToken[]> {
+  const res = await fetch('/api/tokens')
+  if (!res.ok) throw new ApiError(`fetchTokens: ${res.status}`, res.status)
+  const body = await res.json()
+  return body.tokens ?? []
+}
+
+export async function createToken(name: string): Promise<ApiToken | string> {
+  const res = await postJSON('/api/tokens', { name })
+  if (res.ok) return res.json()
+  return (await res.text()) || `createToken: ${res.status}`
+}
+
+export async function revokeToken(id: string): Promise<string | null> {
+  const res = await deleteJSON(`/api/tokens/${encodeURIComponent(id)}`)
+  if (res.ok) return null
+  return (await res.text()) || `revokeToken: ${res.status}`
 }

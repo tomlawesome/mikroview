@@ -153,6 +153,14 @@ type Auth struct {
 	// without activity before needing to log in again," not a fixed
 	// session lifetime.
 	SessionTTL time.Duration `yaml:"sessionTTL"`
+	// TokensStorePath: where read-only API bearer tokens (issue #101)
+	// persist across restarts, as a small JSON file (names + SHA-256
+	// hashes, never the raw bearer values). Unlike StorePath above, this
+	// one really is optional the way Flags.StorePath is -- an operator
+	// who never creates a token doesn't need it, and a missing/unwritable
+	// path just means token creation refuses (ErrTokenNotPersisted)
+	// rather than mikroview failing to start.
+	TokensStorePath string `yaml:"tokensStorePath"`
 }
 
 // TLS configures mikroview's own listener -- on by default: a browser
@@ -258,14 +266,14 @@ type DetectorSettings struct {
 // and flags still work, they just don't survive a restart, consistent
 // with the rest of mikroview (see SECURITY.md).
 type Flags struct {
-	StorePath              string        `yaml:"storePath"`
-	PortScanThreshold      int           `yaml:"portScanThreshold"`
-	PortScanWindow         time.Duration `yaml:"portScanWindow"`
-	ActivitySpikeThreshold int           `yaml:"activitySpikeThreshold"`
-	ActivitySpikeWindow    time.Duration `yaml:"activitySpikeWindow"`
-	CriticalPorts          []int         `yaml:"criticalPorts"`
-	CriticalPortThreshold  int           `yaml:"criticalPortThreshold"`
-	CriticalPortWindow     time.Duration `yaml:"criticalPortWindow"`
+	StorePath                string        `yaml:"storePath"`
+	PortScanThreshold        int           `yaml:"portScanThreshold"`
+	PortScanWindow           time.Duration `yaml:"portScanWindow"`
+	ActivitySpikeThreshold   int           `yaml:"activitySpikeThreshold"`
+	ActivitySpikeWindow      time.Duration `yaml:"activitySpikeWindow"`
+	CriticalPorts            []int         `yaml:"criticalPorts"`
+	CriticalPortThreshold    int           `yaml:"criticalPortThreshold"`
+	CriticalPortWindow       time.Duration `yaml:"criticalPortWindow"`
 	GlobalSpikeMultiplier    float64       `yaml:"globalSpikeMultiplier"`
 	GlobalSpikeMinEPS        float64       `yaml:"globalSpikeMinEPS"`
 	GlobalSpikeWarmupSamples int           `yaml:"globalSpikeWarmupSamples"`
@@ -353,13 +361,13 @@ func defaults() Config {
 		// this package stays a dependency-free leaf that every feature
 		// package can build on, not the other way around.
 		Flags: Flags{
-			PortScanThreshold:      15,
-			PortScanWindow:         60 * time.Second,
-			ActivitySpikeThreshold: 200,
-			ActivitySpikeWindow:    60 * time.Second,
-			CriticalPorts:          []int{21, 22, 23, 445, 3389, 5900, 8291, 8728, 8729},
-			CriticalPortThreshold:  5,
-			CriticalPortWindow:     5 * time.Minute,
+			PortScanThreshold:        15,
+			PortScanWindow:           60 * time.Second,
+			ActivitySpikeThreshold:   200,
+			ActivitySpikeWindow:      60 * time.Second,
+			CriticalPorts:            []int{21, 22, 23, 445, 3389, 5900, 8291, 8728, 8729},
+			CriticalPortThreshold:    5,
+			CriticalPortWindow:       5 * time.Minute,
 			GlobalSpikeMultiplier:    4,
 			GlobalSpikeMinEPS:        5,
 			GlobalSpikeWarmupSamples: 20,
@@ -395,9 +403,10 @@ func defaults() Config {
 			DetectorSettingsStorePath: DefaultDataDir + "/detector-settings.json",
 		},
 		Auth: Auth{
-			StorePath:    DefaultDataDir + "/users.json",
-			SessionTTL:   24 * time.Hour,
-			SecureCookie: true,
+			StorePath:       DefaultDataDir + "/users.json",
+			SessionTTL:      24 * time.Hour,
+			SecureCookie:    true,
+			TokensStorePath: DefaultDataDir + "/tokens.json",
 		},
 		TLS: TLS{
 			Enabled:   true,
@@ -641,6 +650,9 @@ func applyEnv(cfg *Config) {
 		if d, err := time.ParseDuration(v); err == nil {
 			cfg.Auth.SessionTTL = d
 		}
+	}
+	if v := os.Getenv("MIKROVIEW_AUTH_TOKENS_STORE_PATH"); v != "" {
+		cfg.Auth.TokensStorePath = v
 	}
 	if v := os.Getenv("MIKROVIEW_NOTIFY_BATCH_WINDOW"); v != "" {
 		if d, err := time.ParseDuration(v); err == nil {

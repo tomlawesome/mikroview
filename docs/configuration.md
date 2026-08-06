@@ -589,6 +589,7 @@ auth:
   storePath: "/var/lib/mikroview/users.json"
   secureCookie: true
   sessionTTL: 24h
+  tokensStorePath: "/var/lib/mikroview/tokens.json"
 ```
 
 - **`storePath`** — where accounts (and the skip/disabled decision) are
@@ -606,6 +607,11 @@ auth:
   on each authenticated request, so this is "how long you can go without
   activity before needing to log in again," not a fixed session
   lifetime.
+- **`tokensStorePath`** — where [API tokens](#api-tokens-read-only) are
+  persisted, as a small JSON file (names + SHA-256 hashes, never the raw
+  bearer values). Defaults to `/var/lib/mikroview/tokens.json`. Unlike
+  `storePath`, this really is optional: a deployment that never creates
+  a token doesn't need it.
 
 **If you create an account**, every request except `GET /api/healthz`
 and the login/session endpoints requires a valid session, permanently,
@@ -647,6 +653,47 @@ A password reset immediately invalidates every existing session for that
 account, including on an already-running server -- you don't need to
 restart mikroview after running `-reset-password` for the new password
 to take effect.
+
+## API tokens (read-only)
+
+For a separate service to pull mikroview's data over the network with
+no browser involved -- e.g. a companion OpenCanary-dashboard project
+cross-referencing incidents against mikroview's event/flag history -- a
+session cookie doesn't work: there's no login flow to hold one. API
+tokens are a long-lived bearer credential for exactly that case,
+admin-created from the "API tokens" panel in the menu's Account section
+(or directly via the API below).
+
+**Scope is deliberately narrow: read-only, four endpoints, nothing
+else.** A valid token grants `Authorization: Bearer <token>` access to:
+
+- `GET /api/events`
+- `GET /api/flags`
+- `GET /api/stats`
+- `GET /api/devices`
+
+and *nothing* else -- no clearing a flag, no changing a detector, no
+managing users or other tokens, regardless of the method or path
+requested. This isn't a per-request permission check that a future
+handler could accidentally bypass: a bearer-authenticated request is
+routed to a completely separate, minimal internal router that simply
+has no other handler registered on it, so there is no code path from a
+valid token to anything else, structurally rather than by convention.
+
+A token's raw value is shown exactly once, at creation, and is not
+recoverable afterward -- only the SHA-256 hash of it is ever persisted
+(not Argon2id: that cost exists to slow down guessing a low-entropy,
+human-chosen password, and a token's value is already a 128-bit random
+string, well outside brute-forceable range). Losing the value means
+issuing a new token; there's no way to view an existing one again.
+
+There is no expiry -- like sessions and accounts, a token stays valid
+until explicitly revoked from the same panel (or `DELETE
+/api/tokens/{id}`).
+
+```sh
+curl -H "Authorization: Bearer <token>" https://mikroview.example.com/api/events
+```
 
 ## Single sign-on (OIDC/SSO)
 
@@ -877,6 +924,7 @@ Override individual scalar settings without a mounted file:
 | `MIKROVIEW_AUTH_STORE_PATH` | `auth.storePath` (see [Authentication](#authentication)) |
 | `MIKROVIEW_AUTH_SECURE_COOKIE` | `auth.secureCookie` |
 | `MIKROVIEW_AUTH_SESSION_TTL` | `auth.sessionTTL` |
+| `MIKROVIEW_AUTH_TOKENS_STORE_PATH` | `auth.tokensStorePath` (see [API tokens](#api-tokens-read-only)) |
 | `MIKROVIEW_TLS_ENABLED` | `tls.enabled` (see [TLS](#tls)) |
 | `MIKROVIEW_TLS_CERT_FILE` | `tls.certFile` |
 | `MIKROVIEW_TLS_KEY_FILE` | `tls.keyFile` |
@@ -931,13 +979,19 @@ exits, rather than starting the server. See
 | `POST /api/auth/login` | sign in, sets the session cookie |
 | `POST /api/auth/logout` | sign out, clears the session cookie |
 | `POST /api/auth/users` | admin-only: create an additional account |
+| `POST /api/tokens` | admin-only: create a read-only API token (see [API tokens](#api-tokens-read-only)) -- returns the raw value once |
+| `GET /api/tokens` | admin-only: list tokens (name/created/last-used, never the value or hash) |
+| `DELETE /api/tokens/{id}` | admin-only: revoke a token |
 | `GET /api/auth/oidc/login` | start the SSO flow -- a top-level browser redirect to the configured provider, only present when [OIDC](#single-sign-on-oidcsso) is configured |
 | `GET /api/auth/oidc/callback` | the provider's redirect target completing the SSO flow -- see [Single sign-on](#single-sign-on-oidcsso) |
 
 Every route above `/api/auth/session`/`/register`/`/login`/`/logout` and
 `/api/healthz` requires a valid session once an account exists -- see
-[Authentication](#authentication).
-Every mutating (`POST`/`PUT`) request also requires an
+[Authentication](#authentication). `GET /api/events`, `/flags`, `/stats`,
+and `/devices` additionally accept a valid `Authorization: Bearer
+<token>` header instead of a session (see [API tokens](#api-tokens-read-only));
+no other route accepts one.
+Every mutating (`POST`/`PUT`/`DELETE`) request also requires an
 `X-Requested-With: mikroview` header once an account exists (a CSRF
 mitigation, see SECURITY.md).
 
