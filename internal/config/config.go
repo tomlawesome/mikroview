@@ -187,6 +187,17 @@ type Entities struct {
 	StorePath string `yaml:"storePath"`
 }
 
+// Audit configures internal/audit's persisted admin-action accountability
+// log (issue #112) -- who created a user, changed a detector setting,
+// upserted/deleted an entity, created or revoked an API token, or removed
+// a permanent flag exclusion. StorePath left empty is a fully supported,
+// deliberate choice, same optional-persistence contract as
+// Entities.StorePath: the log still works, entries just don't survive a
+// restart.
+type Audit struct {
+	StorePath string `yaml:"storePath"`
+}
+
 // TLS configures mikroview's own listener -- on by default: a browser
 // secure-context requirement was only ever a symptom of the real
 // problem, which is that an app serving real login credentials and
@@ -396,6 +407,7 @@ type Config struct {
 	Flags      Flags      `yaml:"flags"`
 	Auth       Auth       `yaml:"auth"`
 	Entities   Entities   `yaml:"entities"`
+	Audit      Audit      `yaml:"audit"`
 	Notify     Notify     `yaml:"notify"`
 	TLS        TLS        `yaml:"tls"`
 	OIDC       OIDC       `yaml:"oidc"`
@@ -495,6 +507,9 @@ func defaults() Config {
 		},
 		Entities: Entities{
 			StorePath: DefaultDataDir + "/entities.json",
+		},
+		Audit: Audit{
+			StorePath: DefaultDataDir + "/audit.json",
 		},
 		TLS: TLS{
 			Enabled:   true,
@@ -782,6 +797,9 @@ func applyEnv(cfg *Config) {
 	}
 	if v := os.Getenv("MIKROVIEW_ENTITIES_STORE_PATH"); v != "" {
 		cfg.Entities.StorePath = v
+	}
+	if v := os.Getenv("MIKROVIEW_AUDIT_STORE_PATH"); v != "" {
+		cfg.Audit.StorePath = v
 	}
 	if v := os.Getenv("MIKROVIEW_AUTH_TOKENS_STORE_PATH"); v != "" {
 		cfg.Auth.TokensStorePath = v
