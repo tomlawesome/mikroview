@@ -36,6 +36,10 @@ func newTestServer(t *testing.T) (*Server, *store.Store) {
 	if err := authStore.Disable(); err != nil {
 		t.Fatal(err)
 	}
+	tokenStore, err := auth.OpenTokenStore(filepath.Join(t.TempDir(), "tokens.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
 	s := &Server{
 		Store:            st,
 		Devices:          device.NewRegistry([]config.Device{{ID: "core", Name: "Core", SourceIP: "192.168.1.1"}}),
@@ -46,6 +50,7 @@ func newTestServer(t *testing.T) (*Server, *store.Store) {
 		Auth:             authStore,
 		Sessions:         auth.NewSessionStore(time.Hour),
 		LoginLimiter:     auth.NewLoginLimiter(10, time.Minute),
+		Tokens:           tokenStore,
 		StartTime:        time.Now(),
 	}
 	return s, st

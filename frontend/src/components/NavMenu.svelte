@@ -232,6 +232,16 @@
             >
               Add user
             </button>
+            <button
+              class="option"
+              onclick={() => {
+                authState.showTokens = true
+                open = false
+              }}
+              title="Create/revoke read-only API bearer tokens for scripted access"
+            >
+              API tokens
+            </button>
             <div class="divider"></div>
           {/if}
 

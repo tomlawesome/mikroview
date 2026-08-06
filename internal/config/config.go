@@ -116,11 +116,24 @@ type Pushover struct {
 	User  string `yaml:"user"`
 }
 
+// Webhook configures a generic JSON-POST notification channel on
+// newly-raised flags (issue #96) -- covers ntfy, Discord, Slack, Home
+// Assistant, n8n, and anything else without a bespoke integration of
+// its own. Headers is a plain map rather than a single bearer-token
+// field since those receivers each expect auth in a different header
+// (Authorization: Bearer ..., a custom X-... header, etc) -- set
+// whichever header(s) your receiver needs. See
+// internal/notify.WebhookConfig for the runtime shape this maps onto.
+type Webhook struct {
+	URL     string            `yaml:"url"`
+	Headers map[string]string `yaml:"headers"`
+}
+
 // Notify is entirely optional -- see internal/notify. Each channel
-// (SMTP, Pushover) is independently enabled by whether its own
-// identifying field is set (SMTP.Host, Pushover.Token) -- any
-// combination of zero, one, or both may be configured at once, and
-// every enabled channel shares the same BatchWindow/Dispatcher.
+// (SMTP, Pushover, Webhook) is independently enabled by whether its own
+// identifying field is set (SMTP.Host, Pushover.Token, Webhook.URL) --
+// any combination may be configured at once, and every enabled channel
+// shares the same BatchWindow/Dispatcher.
 type Notify struct {
 	// BatchWindow: how often pending flags are flushed to every
 	// configured channel -- a fixed interval, not a quiet-period
@@ -130,6 +143,7 @@ type Notify struct {
 	BatchWindow time.Duration `yaml:"batchWindow"`
 	SMTP        SMTP          `yaml:"smtp"`
 	Pushover    Pushover      `yaml:"pushover"`
+	Webhook     Webhook       `yaml:"webhook"`
 }
 
 // Auth configures internal/auth's local authentication. Unlike Flags'
@@ -153,6 +167,14 @@ type Auth struct {
 	// without activity before needing to log in again," not a fixed
 	// session lifetime.
 	SessionTTL time.Duration `yaml:"sessionTTL"`
+	// TokensStorePath: where read-only API bearer tokens (issue #101)
+	// persist across restarts, as a small JSON file (names + SHA-256
+	// hashes, never the raw bearer values). Unlike StorePath above, this
+	// one really is optional the way Flags.StorePath is -- an operator
+	// who never creates a token doesn't need it, and a missing/unwritable
+	// path just means token creation refuses (ErrTokenNotPersisted)
+	// rather than mikroview failing to start.
+	TokensStorePath string `yaml:"tokensStorePath"`
 }
 
 // TLS configures mikroview's own listener -- on by default: a browser
@@ -258,14 +280,14 @@ type DetectorSettings struct {
 // and flags still work, they just don't survive a restart, consistent
 // with the rest of mikroview (see SECURITY.md).
 type Flags struct {
-	StorePath              string        `yaml:"storePath"`
-	PortScanThreshold      int           `yaml:"portScanThreshold"`
-	PortScanWindow         time.Duration `yaml:"portScanWindow"`
-	ActivitySpikeThreshold int           `yaml:"activitySpikeThreshold"`
-	ActivitySpikeWindow    time.Duration `yaml:"activitySpikeWindow"`
-	CriticalPorts          []int         `yaml:"criticalPorts"`
-	CriticalPortThreshold  int           `yaml:"criticalPortThreshold"`
-	CriticalPortWindow     time.Duration `yaml:"criticalPortWindow"`
+	StorePath                string        `yaml:"storePath"`
+	PortScanThreshold        int           `yaml:"portScanThreshold"`
+	PortScanWindow           time.Duration `yaml:"portScanWindow"`
+	ActivitySpikeThreshold   int           `yaml:"activitySpikeThreshold"`
+	ActivitySpikeWindow      time.Duration `yaml:"activitySpikeWindow"`
+	CriticalPorts            []int         `yaml:"criticalPorts"`
+	CriticalPortThreshold    int           `yaml:"criticalPortThreshold"`
+	CriticalPortWindow       time.Duration `yaml:"criticalPortWindow"`
 	GlobalSpikeMultiplier    float64       `yaml:"globalSpikeMultiplier"`
 	GlobalSpikeMinEPS        float64       `yaml:"globalSpikeMinEPS"`
 	GlobalSpikeWarmupSamples int           `yaml:"globalSpikeWarmupSamples"`
@@ -305,6 +327,23 @@ type Flags struct {
 	// 0 disables the device-silence detector entirely.
 	DeviceStaleAfter time.Duration `yaml:"deviceStaleAfter"`
 
+	// StaleRule* (issue #102): flags a firewall rule that fired at some
+	// point but hasn't fired again in a long time -- either dead weight
+	// or an unnecessary hole, worth a human's attention either way. See
+	// internal/rules (the long-lived per-rule usage record this reads
+	// from) and internal/detect.StaleRuleDetector (the sweep itself).
+	//
+	// RuleUsageStorePath persists that usage record so "hasn't fired in
+	// 30 days" survives a restart -- same optional-persistence contract
+	// as StorePath above (empty disables persistence, not the feature).
+	// StaleRuleDays is how long a rule must go quiet before it's
+	// considered stale. StaleRuleCheckInterval is how often the sweep
+	// re-checks (see main.go's staleRuleCheckInterval-style ticker) --
+	// coarse by design, since staleness is judged in days, not seconds.
+	RuleUsageStorePath     string        `yaml:"ruleUsageStorePath"`
+	StaleRuleDays          int           `yaml:"staleRuleDays"`
+	StaleRuleCheckInterval time.Duration `yaml:"staleRuleCheckInterval"`
+
 	// DetectorSettingsStorePath persists live UI on/off+scope toggles
 	// (see internal/detect.SettingsStore) so they survive a restart --
 	// same optional-persistence contract as StorePath above. Detectors
@@ -314,6 +353,17 @@ type Flags struct {
 	// "port_scan", "rule_spike" -- see internal/detect.DetectorName).
 	DetectorSettingsStorePath string                      `yaml:"detectorSettingsStorePath"`
 	Detectors                 map[string]DetectorSettings `yaml:"detectors"`
+}
+
+// DeviceMAC configures internal/device's MACRegistry (issue #103 phase
+// 1) -- the new-MAC detector's persisted per-SrcMAC FirstSeen/LastSeen
+// history. Optional persistence, same contract as Flags.StorePath: left
+// empty, the detector still runs, it just starts with an empty registry
+// on every restart instead of remembering every MAC mikroview has ever
+// logged traffic from -- and "new" only means anything against history
+// well beyond the 24h event-retention window.
+type DeviceMAC struct {
+	StorePath string `yaml:"storePath"`
 }
 
 type Config struct {
@@ -328,6 +378,7 @@ type Config struct {
 	TLS        TLS        `yaml:"tls"`
 	OIDC       OIDC       `yaml:"oidc"`
 	Devices    []Device   `yaml:"devices"`
+	DeviceMAC  DeviceMAC  `yaml:"deviceMac"`
 
 	// RuleNames/HostNames are optional friendly-display-name maps -- see
 	// internal/naming. Keyed by the raw value RouterOS reports (a rule
@@ -358,13 +409,13 @@ func defaults() Config {
 		// this package stays a dependency-free leaf that every feature
 		// package can build on, not the other way around.
 		Flags: Flags{
-			PortScanThreshold:      15,
-			PortScanWindow:         60 * time.Second,
-			ActivitySpikeThreshold: 200,
-			ActivitySpikeWindow:    60 * time.Second,
-			CriticalPorts:          []int{21, 22, 23, 445, 3389, 5900, 8291, 8728, 8729},
-			CriticalPortThreshold:  5,
-			CriticalPortWindow:     5 * time.Minute,
+			PortScanThreshold:        15,
+			PortScanWindow:           60 * time.Second,
+			ActivitySpikeThreshold:   200,
+			ActivitySpikeWindow:      60 * time.Second,
+			CriticalPorts:            []int{21, 22, 23, 445, 3389, 5900, 8291, 8728, 8729},
+			CriticalPortThreshold:    5,
+			CriticalPortWindow:       5 * time.Minute,
 			GlobalSpikeMultiplier:    4,
 			GlobalSpikeMinEPS:        5,
 			GlobalSpikeWarmupSamples: 20,
@@ -398,17 +449,25 @@ func defaults() Config {
 
 			DeviceStaleAfter: 15 * time.Minute,
 
+			RuleUsageStorePath:     DefaultDataDir + "/rule-usage.json",
+			StaleRuleDays:          30,
+			StaleRuleCheckInterval: time.Hour,
+
 			StorePath:                 DefaultDataDir + "/flags.json",
 			DetectorSettingsStorePath: DefaultDataDir + "/detector-settings.json",
 		},
 		Auth: Auth{
-			StorePath:    DefaultDataDir + "/users.json",
-			SessionTTL:   24 * time.Hour,
-			SecureCookie: true,
+			StorePath:       DefaultDataDir + "/users.json",
+			SessionTTL:      24 * time.Hour,
+			SecureCookie:    true,
+			TokensStorePath: DefaultDataDir + "/tokens.json",
 		},
 		TLS: TLS{
 			Enabled:   true,
 			StorePath: DefaultDataDir + "/tls",
+		},
+		DeviceMAC: DeviceMAC{
+			StorePath: DefaultDataDir + "/mac-registry.json",
 		},
 		Notify: Notify{
 			BatchWindow: 60 * time.Second,
@@ -638,6 +697,19 @@ func applyEnv(cfg *Config) {
 			cfg.Flags.DeviceStaleAfter = d
 		}
 	}
+	if v := os.Getenv("MIKROVIEW_FLAGS_RULE_USAGE_STORE_PATH"); v != "" {
+		cfg.Flags.RuleUsageStorePath = v
+	}
+	if v := os.Getenv("MIKROVIEW_FLAGS_STALE_RULE_DAYS"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			cfg.Flags.StaleRuleDays = n
+		}
+	}
+	if v := os.Getenv("MIKROVIEW_FLAGS_STALE_RULE_CHECK_INTERVAL"); v != "" {
+		if d, err := time.ParseDuration(v); err == nil {
+			cfg.Flags.StaleRuleCheckInterval = d
+		}
+	}
 	if v := os.Getenv("MIKROVIEW_FLAGS_DETECTOR_SETTINGS_STORE_PATH"); v != "" {
 		cfg.Flags.DetectorSettingsStorePath = v
 	}
@@ -653,6 +725,9 @@ func applyEnv(cfg *Config) {
 		if d, err := time.ParseDuration(v); err == nil {
 			cfg.Auth.SessionTTL = d
 		}
+	}
+	if v := os.Getenv("MIKROVIEW_AUTH_TOKENS_STORE_PATH"); v != "" {
+		cfg.Auth.TokensStorePath = v
 	}
 	if v := os.Getenv("MIKROVIEW_NOTIFY_BATCH_WINDOW"); v != "" {
 		if d, err := time.ParseDuration(v); err == nil {
@@ -692,6 +767,13 @@ func applyEnv(cfg *Config) {
 	if v := os.Getenv("MIKROVIEW_NOTIFY_PUSHOVER_USER"); v != "" {
 		cfg.Notify.Pushover.User = v
 	}
+	if v := os.Getenv("MIKROVIEW_NOTIFY_WEBHOOK_URL"); v != "" {
+		cfg.Notify.Webhook.URL = v
+	}
+	// Headers is deliberately not env-configurable: it's a map, not a
+	// scalar, same "structured value doesn't map cleanly onto one env
+	// var" reasoning Flags.Detectors/Devices/RuleNames/HostNames already
+	// give for staying YAML-only.
 	if v := os.Getenv("MIKROVIEW_TLS_ENABLED"); v != "" {
 		if b, err := strconv.ParseBool(v); err == nil {
 			cfg.TLS.Enabled = b
@@ -726,6 +808,9 @@ func applyEnv(cfg *Config) {
 	}
 	if v := os.Getenv("MIKROVIEW_OIDC_SCOPES"); v != "" {
 		cfg.OIDC.Scopes = parseStringList(v)
+	}
+	if v := os.Getenv("MIKROVIEW_DEVICE_MAC_STORE_PATH"); v != "" {
+		cfg.DeviceMAC.StorePath = v
 	}
 }
 
