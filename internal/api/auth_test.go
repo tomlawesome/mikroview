@@ -138,6 +138,53 @@ func TestAuthSkipDisablesAuthPermanently(t *testing.T) {
 	}
 }
 
+// A bare cross-site <form method=POST> (or a JSON-CSRF fetch) can't set
+// a custom header, so a request missing csrfHeaderName during the
+// undecided (Count()==0) bootstrap window must be rejected for the two
+// endpoints that make an irreversible, deployment-wide choice --
+// otherwise a tricked victim's browser could disable auth or plant an
+// attacker-controlled admin account with no direct network access
+// required from the attacker at all.
+func TestBootstrapMutatingEndpointsRequireCSRFHeader(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		path string
+		body any
+	}{
+		{"skip", "/api/auth/skip", map[string]any{}},
+		{"register", "/api/auth/register", credentialsRequest{Username: "admin", Password: "password123"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := newAuthTestServer(t)
+			ts := httptest.NewServer(s.Routes())
+			defer ts.Close()
+
+			b, err := json.Marshal(tc.body)
+			if err != nil {
+				t.Fatal(err)
+			}
+			req, err := http.NewRequest(http.MethodPost, ts.URL+tc.path, bytes.NewReader(b))
+			if err != nil {
+				t.Fatal(err)
+			}
+			req.Header.Set("Content-Type", "application/json")
+			// Deliberately no csrfHeaderName -- this is the request
+			// shape a cross-site form/fetch can actually produce.
+			resp, err := http.DefaultClient.Do(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer resp.Body.Close()
+			if resp.StatusCode != http.StatusForbidden {
+				t.Errorf("expected %s without the CSRF header to be rejected with 403 during the bootstrap window, got %d", tc.path, resp.StatusCode)
+			}
+			if s.Auth.Count() != 0 || s.Auth.Disabled() {
+				t.Error("the forged request must not have taken effect")
+			}
+		})
+	}
+}
+
 func TestAuthSessionReportsAuthDisabled(t *testing.T) {
 	s, _ := newTestServer(t)
 	ts := httptest.NewServer(s.Routes())
