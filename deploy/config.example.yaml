@@ -35,24 +35,8 @@ store:
 # lookups/day. AbuseIPDB's abuse score also feeds the confidence floor
 # of behavioral flags raised against the same source IP -- see
 # docs/configuration.md's "IP reputation lookup" section.
-#
-# greyNoise.apiKey (issue #113) enables GreyNoise's Community API as a
-# second live source alongside AbuseIPDB/Shodan -- despite GreyNoise's
-# own marketing describing this as keyless, it does in practice require
-# a free registered API key (see internal/reputation.GreyNoiseClient's
-# doc comment). GreyNoise answers a different question than AbuseIPDB:
-# not "has this IP been reported abusive" but "is this IP part of known
-# internet-wide scanning/research activity, and is that activity
-# classified malicious" -- useful for telling background internet noise
-# apart from a targeted threat. When both AbuseIPDB and GreyNoise are
-# configured, results are merged (worst-case/most-cautious value wins
-# per field -- see internal/reputation.Aggregator's doc comment).
-# Left unset, only AbuseIPDB+Shodan results are shown, same as before
-# this feature existed.
 # reputation:
 #   abuseIPDBKey: your-abuseipdb-api-key
-#   greyNoise:
-#     apiKey: your-greynoise-community-api-key
 
 # Behavioral flags (port scans, activity spikes, critical-port attempts,
 # volume spikes) are always on with sensible defaults -- nothing below is

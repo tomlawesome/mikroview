@@ -84,20 +84,7 @@ type GeoIP struct {
 // InternetDB source needs no key and is always used; AbuseIPDB is only
 // queried if a key is configured here.
 type Reputation struct {
-	AbuseIPDBKey string    `yaml:"abuseIPDBKey"`
-	GreyNoise    GreyNoise `yaml:"greyNoise"`
-}
-
-// GreyNoise configures internal/reputation's second live source (issue
-// #113 Part A) -- see internal/reputation.GreyNoiseClient's doc comment
-// for why, unlike Shodan's InternetDB, this really does need a key
-// despite GreyNoise's own "Community API" marketing suggesting
-// otherwise. Empty APIKey means GreyNoise is never queried, same
-// "empty means opt-out" convention as Reputation.AbuseIPDBKey --
-// mikroview falls back to AbuseIPDB+Shodan alone (today's behavior)
-// with nothing else to configure.
-type GreyNoise struct {
-	APIKey string `yaml:"apiKey"`
+	AbuseIPDBKey string `yaml:"abuseIPDBKey"`
 }
 
 // SMTP configures send-only email alerting on newly-raised flags (issue
@@ -617,12 +604,6 @@ func applyEnv(cfg *Config) {
 	}
 	if v := os.Getenv("MIKROVIEW_ABUSEIPDB_KEY"); v != "" {
 		cfg.Reputation.AbuseIPDBKey = v
-	}
-	// Secret-via-env, same precedent as MIKROVIEW_ABUSEIPDB_KEY --
-	// a credential doesn't have to sit in config.yaml just because the
-	// rest of the block does.
-	if v := os.Getenv("MIKROVIEW_GREYNOISE_KEY"); v != "" {
-		cfg.Reputation.GreyNoise.APIKey = v
 	}
 	if v := os.Getenv("MIKROVIEW_FLAGS_STORE_PATH"); v != "" {
 		cfg.Flags.StorePath = v

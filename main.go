@@ -220,20 +220,10 @@ func main() {
 		geoLog.Warn(fmt.Sprintf("%v (country flags disabled)", err))
 	}
 	defer geo.Close()
-	// rep (issue #113 Part A): always built (AbuseIPDBKey empty just
-	// means that one source inside it stays inert, same as before this
-	// issue). reputationSource is what actually gets handed to the
-	// detector/API server -- a lone *reputation.Client unless a second
-	// live source (GreyNoise) is configured, in which case it's wrapped
-	// in an Aggregator alongside it. Kept as two separate variables
-	// (rather than reassigning rep's own type) so the concrete *Client
-	// is still available by its own name if a future caller needs it
-	// specifically; every current caller only needs the interface.
+	// rep: always built (AbuseIPDBKey empty just means that one source
+	// inside it stays inert; Shodan InternetDB is free/keyless and
+	// always queried).
 	rep := reputation.New(cfg.Reputation.AbuseIPDBKey)
-	var reputationSource reputation.Source = rep
-	if cfg.Reputation.GreyNoise.APIKey != "" {
-		reputationSource = reputation.NewAggregator(rep, reputation.NewGreyNoiseClient(cfg.Reputation.GreyNoise.APIKey))
-	}
 
 	flagsLog := logging.New("flags")
 	fs, err := flags.Open(cfg.Flags.StorePath)
@@ -381,7 +371,7 @@ func main() {
 	blocklistLog := logging.New("blocklist")
 	bl := blocklist.New(cfg.Blocklist.Sources, blocklistLog)
 
-	detector := detect.NewWithSettings(detectCfg, fs, detectorSettings).WithReputation(reputationSource).WithKnownBadIPs(bl)
+	detector := detect.NewWithSettings(detectCfg, fs, detectorSettings).WithReputation(rep).WithKnownBadIPs(bl)
 	globalSpike := detect.NewGlobalSpikeDetectorWithSettings(detectCfg, fs, detectorSettings)
 	deviceSilence := detect.NewDeviceSilenceDetectorWithSettings(detectCfg, fs, detectorSettings, devices)
 	staleRule := detect.NewStaleRuleDetector(ru, fs, time.Duration(cfg.Flags.StaleRuleDays)*24*time.Hour)
@@ -582,7 +572,7 @@ func main() {
 		Store:            st,
 		Devices:          devices,
 		Hub:              h,
-		Reputation:       reputationSource,
+		Reputation:       rep,
 		Flags:            fs,
 		DetectorSettings: detectorSettings,
 		Entities:         entityStore,

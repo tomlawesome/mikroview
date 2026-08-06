@@ -13,8 +13,7 @@ import (
 // internal/detect depends on -- kept as a small interface (rather than
 // depending on the concrete type) purely so tests can inject a fake
 // without needing a real Spamhaus/Emerging Threats fetch, same reasoning
-// reputationLookup's doc comment gives for the AbuseIPDB/GreyNoise-
-// informed path.
+// reputationLookup's doc comment gives for the AbuseIPDB-informed path.
 type knownBadIPLookup interface {
 	Match(ip string) (blocklist.MatchResult, bool)
 }
@@ -22,14 +21,14 @@ type knownBadIPLookup interface {
 // knownBadIPConfidence is the confidence TypeKnownBadIP is raised at,
 // and the floor applied to any other currently-active source-IP-keyed
 // flag for the same target (see knownBadReinforcedTypes below) --
-// deliberately high: unlike AbuseIPDB's crowd-sourced abuse score or
-// GreyNoise's classification, Spamhaus DROP/EDROP is hand-curated
-// specifically to only include netblocks Spamhaus is confident are
-// entirely malicious-controlled (see internal/blocklist's doc comment)
-// -- a match is about as strong a signal as this codebase has, stronger
-// than reputation.TorExitNodeFloor/HostingProviderFloor/
-// GreyNoiseMaliciousFloor (60/30/70), though deliberately short of 100
-// since no automated signal should ever claim absolute certainty.
+// deliberately high: unlike AbuseIPDB's crowd-sourced abuse score,
+// Spamhaus DROP/EDROP is hand-curated specifically to only include
+// netblocks Spamhaus is confident are entirely malicious-controlled
+// (see internal/blocklist's doc comment) -- a match is about as strong
+// a signal as this codebase has, stronger than
+// reputation.TorExitNodeFloor/HostingProviderFloor (60/30), though
+// deliberately short of 100 since no automated signal should ever
+// claim absolute certainty.
 const knownBadIPConfidence = 90
 
 // knownBadReinforcedTypes is every flags.Type whose Target convention is
