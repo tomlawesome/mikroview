@@ -49,11 +49,11 @@ const userContextKey contextKey = iota
 // Docker's own HEALTHCHECK). Logout is included too: calling it without
 // a session is a harmless no-op, not worth a 401 for.
 var exemptPaths = map[string]bool{
-	"/api/healthz":         true,
-	"/api/auth/session":    true,
-	"/api/auth/register":   true,
-	"/api/auth/login":      true,
-	"/api/auth/logout":     true,
+	"/api/healthz":       true,
+	"/api/auth/session":  true,
+	"/api/auth/register": true,
+	"/api/auth/login":    true,
+	"/api/auth/logout":   true,
 	// Both are GET (a top-level browser redirect/navigation the provider
 	// issues, not a fetch() the frontend controls) so isSafeMethod
 	// already exempts them from the CSRF-header check above -- being
@@ -135,6 +135,21 @@ func (s *Server) requireAuth(next http.Handler) http.Handler {
 		if s.Auth.Count() == 0 {
 			if !bootstrapExemptPaths[r.URL.Path] {
 				http.Error(w, "setup required", http.StatusServiceUnavailable)
+				return
+			}
+			// No session exists yet to carry a CSRF check the normal
+			// way, but /api/auth/register and /api/auth/skip are the
+			// two highest-consequence endpoints in the app -- one
+			// creates the permanent admin account, the other
+			// permanently disables auth for the deployment -- and
+			// without this, a bare cross-site <form> POST (no
+			// SameSite cookie needed, since none exists yet) could
+			// make that irreversible choice on a victim's behalf.
+			// Every other bootstrap-exempt path is GET, so
+			// isSafeMethod already exempts it here without needing a
+			// path-specific check.
+			if !isSafeMethod(r.Method) && r.Header.Get(csrfHeaderName) != csrfHeaderValue {
+				http.Error(w, "missing required header", http.StatusForbidden)
 				return
 			}
 			next.ServeHTTP(w, r)
