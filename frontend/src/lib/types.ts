@@ -274,6 +274,15 @@ export interface Flag {
   evidence?: Evidence
 }
 
+// Mirrors internal/flags.FlagTimeBucket's JSON tags -- same shape
+// convention as TimeBucket above, but counting newly-raised flag
+// episodes by Type instead of raw events by Action. byType omits types
+// with a zero count for a given minute.
+export interface FlagTimeBucket {
+  time: string
+  byType: Partial<Record<FlagType, number>>
+}
+
 // Mirrors internal/store's Scope.
 export type Scope = '' | 'internal' | 'external'
 
