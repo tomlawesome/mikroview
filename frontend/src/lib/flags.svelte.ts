@@ -1,5 +1,5 @@
 import { clearFlag, clearFlagPermanent, fetchFlags } from './api'
-import type { Flag } from './types'
+import type { Flag, FlagTimeBucket } from './types'
 
 const IPV4_RE = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/
 
@@ -41,6 +41,10 @@ export function extractSourceIp(target: string): string | null {
 // presets each get their own state module in this codebase.
 class FlagsState {
   list = $state<Flag[]>([])
+  // Last hour of newly-raised-episode counts by type at 1-minute
+  // resolution (see internal/flags.Store.TimeSeries), for FlagsChart --
+  // fetched alongside list in the same GET /api/flags response.
+  timeSeries = $state<FlagTimeBucket[]>([])
 
   activeCount = $derived(this.list.filter((f) => !f.cleared).length)
 
@@ -69,7 +73,9 @@ class FlagsState {
   })
 
   async refresh() {
-    this.list = await fetchFlags()
+    const res = await fetchFlags()
+    this.list = res.flags
+    this.timeSeries = res.timeSeries
   }
 
   // Updates the flag locally the instant the user clicks Clear, rather
