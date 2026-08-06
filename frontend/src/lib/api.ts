@@ -10,6 +10,7 @@ import type {
   Filters,
   Flag,
   ReputationResult,
+  RuleUsage,
   Stats,
 } from './types'
 
@@ -102,6 +103,17 @@ export async function fetchDevices(): Promise<Device[]> {
   if (!res.ok) throw new ApiError(`fetchDevices: ${res.status}`, res.status)
   const body = await res.json()
   return body.devices ?? []
+}
+
+// fetchRules serves every rule label mikroview has ever seen fire (issue
+// #103's internal/rules.Store, via GET /api/rules) -- issue #109's
+// "discovered but unnamed rules" source for the Entities panel, the same
+// role fetchDevices already plays for auto-discovered hosts.
+export async function fetchRules(): Promise<RuleUsage[]> {
+  const res = await fetch('/api/rules')
+  if (!res.ok) throw new ApiError(`fetchRules: ${res.status}`, res.status)
+  const body = await res.json()
+  return body.rules ?? []
 }
 
 export async function fetchCriticalPorts(): Promise<number[]> {

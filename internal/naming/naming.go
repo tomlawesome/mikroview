@@ -1,16 +1,24 @@
 // Package naming resolves friendly display names for firewall rule
-// labels and host IPs from two layers: internal/config's static
-// RuleNames/HostNames maps (config-driven only, no auto-discovery or
-// liveness tracking the way internal/device's Registry has, since a
-// rule label or a host IP doesn't have a "connection" to observe the
-// way a syslog source does), and, taking precedence when set,
-// internal/entities' live, admin-manageable Store (issue #107) -- so an
-// alias edited in the UI overrides the YAML-configured one for the same
-// key without a restart, while config.yaml stays a fully supported
-// fallback for anything not (yet) given an entity.
+// labels, host IPs, and (issue #109) ports from two layers: internal/
+// config's static RuleNames/HostNames maps (config-driven only, no
+// auto-discovery or liveness tracking the way internal/device's
+// Registry has, since a rule label or a host IP doesn't have a
+// "connection" to observe the way a syslog source does), and, taking
+// precedence when set, internal/entities' live, admin-manageable Store
+// (issue #107) -- so an alias edited in the UI overrides the
+// YAML-configured one for the same key without a restart, while
+// config.yaml stays a fully supported fallback for anything not (yet)
+// given an entity. Ports have no config.yaml-level equivalent of
+// RuleNames/HostNames (that predates port aliasing entirely, issue
+// #109), so Port has no fallback map to consult -- an entity is the
+// only source, same as every other lookup once no entity exists.
 package naming
 
-import "github.com/tomlawesome/mikroview/internal/entities"
+import (
+	"strconv"
+
+	"github.com/tomlawesome/mikroview/internal/entities"
+)
 
 // Resolver holds the configured name maps and resolves against them. The
 // zero value is usable -- nil maps/Entities just miss every lookup -- so
@@ -47,4 +55,20 @@ func (r Resolver) Host(ip string) string {
 		}
 	}
 	return r.Hosts[ip]
+}
+
+// Port returns the friendly name for a port number, against
+// internal/entities records of type "port" (issue #109), keyed by the
+// port formatted as a decimal string -- there is no config.yaml-level
+// fallback (see this package's doc comment), so a miss here always
+// means "" rather than falling through to a second map. port <= 0 --
+// SrcPort/DstPort's own "0 means no port" convention (internal/store/
+// event.go, e.g. non-TCP/UDP protocols) -- always misses without
+// consulting the store at all, the same way Rule/Host never look up an
+// empty label/IP.
+func (r Resolver) Port(port int) string {
+	if port <= 0 || r.Entities == nil {
+		return ""
+	}
+	return r.Entities.Label(entities.TypePort, strconv.Itoa(port))
 }

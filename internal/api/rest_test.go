@@ -17,6 +17,7 @@ import (
 	"github.com/tomlawesome/mikroview/internal/flags"
 	"github.com/tomlawesome/mikroview/internal/hub"
 	"github.com/tomlawesome/mikroview/internal/reputation"
+	"github.com/tomlawesome/mikroview/internal/rules"
 	"github.com/tomlawesome/mikroview/internal/store"
 )
 
@@ -42,6 +43,7 @@ func newTestServer(t *testing.T) (*Server, *store.Store) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	ru, _ := rules.Open("")
 	s := &Server{
 		Store:            st,
 		Devices:          device.NewRegistry([]config.Device{{ID: "core", Name: "Core", SourceIP: "192.168.1.1"}}),
@@ -50,6 +52,7 @@ func newTestServer(t *testing.T) (*Server, *store.Store) {
 		Flags:            fs,
 		DetectorSettings: detect.AllEnabledSettingsStore(),
 		Entities:         es,
+		Rules:            ru,
 		Auth:             authStore,
 		Sessions:         auth.NewSessionStore(time.Hour),
 		LoginLimiter:     auth.NewLoginLimiter(10, time.Minute),
@@ -330,6 +333,47 @@ func TestDeviceStatus(t *testing.T) {
 				t.Errorf("deviceStatus() = %q, want %q", got, tt.want)
 			}
 		})
+	}
+}
+
+// TestHandleRules covers issue #109's "discovered but unnamed rules"
+// source: GET /api/rules must serve every rule label internal/rules.Store
+// has ever seen fire (via Touch), not just what's currently loaded --
+// mirroring TestHandleDevices' shape for the analogous device endpoint.
+func TestHandleRules(t *testing.T) {
+	s, _ := newTestServer(t)
+	now := time.Now()
+	s.Rules.Touch("r13", now)
+	s.Rules.Touch("r13", now)
+	s.Rules.Touch("r99", now.Add(-time.Hour))
+
+	ts := httptest.NewServer(s.Routes())
+	defer ts.Close()
+
+	resp, err := http.Get(ts.URL + "/api/rules")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	var body struct {
+		Rules []rules.Usage `json:"rules"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	if len(body.Rules) != 2 {
+		t.Fatalf("expected 2 rules, got %d: %+v", len(body.Rules), body.Rules)
+	}
+	byRule := map[string]rules.Usage{}
+	for _, u := range body.Rules {
+		byRule[u.Rule] = u
+	}
+	if byRule["r13"].Count != 2 {
+		t.Errorf("expected r13's count = 2, got %d", byRule["r13"].Count)
+	}
+	if byRule["r99"].Count != 1 {
+		t.Errorf("expected r99's count = 1, got %d", byRule["r99"].Count)
 	}
 }
 
