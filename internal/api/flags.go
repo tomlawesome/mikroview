@@ -21,3 +21,44 @@ func (s *Server) handleFlagsClear(w http.ResponseWriter, r *http.Request) {
 	cleared := s.Flags.Clear(id, time.Now())
 	writeJSON(w, http.StatusOK, map[string]any{"cleared": cleared})
 }
+
+// handleFlagsClearPermanent is handleFlagsClear plus a permanent
+// exclusion of the flag's (Type, Target) in the same step -- the
+// "Clear and never flag this again" action (see flags.Store.
+// ClearAndExclude). Open to any caller the same as handleFlagsClear;
+// the exclusion itself isn't a sensitive read, and gating this one
+// endpoint while leaving the plain clear open would be an inconsistent
+// permission model for the same UI action. Reviewing/removing existing
+// exclusions (handleExclusionsList/handleExclusionRemove below) is the
+// admin-gated half of this feature, since that's the part where a
+// mistake would otherwise be unrecoverable.
+func (s *Server) handleFlagsClearPermanent(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	ok := s.Flags.ClearAndExclude(id, time.Now())
+	writeJSON(w, http.StatusOK, map[string]any{"cleared": ok, "excluded": ok})
+}
+
+// handleExclusionsList serves every permanently-excluded (Type, Target)
+// pair -- admin-only (see callerIsAdminOrOpen), since this is the
+// "undo a mistake" surface for handleFlagsClearPermanent.
+func (s *Server) handleExclusionsList(w http.ResponseWriter, r *http.Request) {
+	if !s.callerIsAdminOrOpen(r) {
+		http.Error(w, "admin role required", http.StatusForbidden)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"exclusions": s.Flags.ListExclusions()})
+}
+
+// handleExclusionRemove reverses one exclusion, letting its (Type,
+// Target) raise again going forward -- admin-only, same gate as
+// handleExclusionsList. Removing an unknown exclusion ID is not an
+// error, same "no-op, not an error" reasoning as handleFlagsClear.
+func (s *Server) handleExclusionRemove(w http.ResponseWriter, r *http.Request) {
+	if !s.callerIsAdminOrOpen(r) {
+		http.Error(w, "admin role required", http.StatusForbidden)
+		return
+	}
+	id := r.PathValue("id")
+	removed := s.Flags.RemoveExclusionByID(id)
+	writeJSON(w, http.StatusOK, map[string]any{"removed": removed})
+}

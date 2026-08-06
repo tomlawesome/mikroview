@@ -65,6 +65,9 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("GET /api/lookup/ip/{ip}", s.handleIPLookup)
 	mux.HandleFunc("GET /api/flags", s.handleFlagsList)
 	mux.HandleFunc("POST /api/flags/{id}/clear", s.handleFlagsClear)
+	mux.HandleFunc("POST /api/flags/{id}/clear-permanent", s.handleFlagsClearPermanent)
+	mux.HandleFunc("GET /api/flags/exclusions", s.handleExclusionsList)
+	mux.HandleFunc("DELETE /api/flags/exclusions/{id}", s.handleExclusionRemove)
 
 	mux.HandleFunc("GET /api/detectors", s.handleDetectorSettingsList)
 	mux.HandleFunc("PUT /api/detectors/{name}", s.handleDetectorSettingsUpdate)
