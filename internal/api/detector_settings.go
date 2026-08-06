@@ -1,7 +1,6 @@
 package api
 
 import (
-	"encoding/json"
 	"net/http"
 
 	"github.com/tomlawesome/mikroview/internal/auth"
@@ -66,7 +65,7 @@ func (s *Server) handleDetectorSettingsUpdate(w http.ResponseWriter, r *http.Req
 	}
 
 	var req updateDetectorSettingsRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := decodeJSONBody(w, r, &req); err != nil {
 		http.Error(w, "invalid request body", http.StatusBadRequest)
 		return
 	}

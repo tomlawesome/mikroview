@@ -128,3 +128,23 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.WriteHeader(status)
 	json.NewEncoder(w).Encode(v)
 }
+
+// maxJSONBodyBytes bounds every JSON request body this API accepts --
+// every payload here is small, bounded structured data (credentials, a
+// username/role, one detector's Scope config), so 64 KiB is already
+// generous headroom, not a tight fit. Without this, json.NewDecoder
+// would read an unbounded body into memory before ever validating it,
+// including on endpoints reachable before authentication (login,
+// register) -- a handful of concurrent large-bodied requests from an
+// unauthenticated client would mean memory allocation proportional to
+// body size with no credentials required, a straightforward DoS.
+const maxJSONBodyBytes = 64 * 1024
+
+// decodeJSONBody is json.NewDecoder(r.Body).Decode(v), wrapped with
+// http.MaxBytesReader -- see maxJSONBodyBytes. Every handler that
+// accepts a JSON body should read it through this, not r.Body
+// directly.
+func decodeJSONBody(w http.ResponseWriter, r *http.Request, v any) error {
+	r.Body = http.MaxBytesReader(w, r.Body, maxJSONBodyBytes)
+	return json.NewDecoder(r.Body).Decode(v)
+}
