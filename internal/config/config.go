@@ -322,6 +322,23 @@ type Flags struct {
 	LowSlowScanDropRatio          float64       `yaml:"lowSlowScanDropRatio"`
 	LowSlowScanBaselineMultiplier float64       `yaml:"lowSlowScanBaselineMultiplier"`
 
+	// StaleRule* (issue #102): flags a firewall rule that fired at some
+	// point but hasn't fired again in a long time -- either dead weight
+	// or an unnecessary hole, worth a human's attention either way. See
+	// internal/rules (the long-lived per-rule usage record this reads
+	// from) and internal/detect.StaleRuleDetector (the sweep itself).
+	//
+	// RuleUsageStorePath persists that usage record so "hasn't fired in
+	// 30 days" survives a restart -- same optional-persistence contract
+	// as StorePath above (empty disables persistence, not the feature).
+	// StaleRuleDays is how long a rule must go quiet before it's
+	// considered stale. StaleRuleCheckInterval is how often the sweep
+	// re-checks (see main.go's staleRuleCheckInterval-style ticker) --
+	// coarse by design, since staleness is judged in days, not seconds.
+	RuleUsageStorePath     string        `yaml:"ruleUsageStorePath"`
+	StaleRuleDays          int           `yaml:"staleRuleDays"`
+	StaleRuleCheckInterval time.Duration `yaml:"staleRuleCheckInterval"`
+
 	// DetectorSettingsStorePath persists live UI on/off+scope toggles
 	// (see internal/detect.SettingsStore) so they survive a restart --
 	// same optional-persistence contract as StorePath above. Detectors
@@ -412,6 +429,10 @@ func defaults() Config {
 			LowSlowScanMinObservation:     45 * time.Minute,
 			LowSlowScanDropRatio:          0.8,
 			LowSlowScanBaselineMultiplier: 3,
+
+			RuleUsageStorePath:     DefaultDataDir + "/rule-usage.json",
+			StaleRuleDays:          30,
+			StaleRuleCheckInterval: time.Hour,
 
 			StorePath:                 DefaultDataDir + "/flags.json",
 			DetectorSettingsStorePath: DefaultDataDir + "/detector-settings.json",
@@ -647,6 +668,19 @@ func applyEnv(cfg *Config) {
 	if v := os.Getenv("MIKROVIEW_FLAGS_LOW_SLOW_SCAN_BASELINE_MULTIPLIER"); v != "" {
 		if f, err := strconv.ParseFloat(v, 64); err == nil {
 			cfg.Flags.LowSlowScanBaselineMultiplier = f
+		}
+	}
+	if v := os.Getenv("MIKROVIEW_FLAGS_RULE_USAGE_STORE_PATH"); v != "" {
+		cfg.Flags.RuleUsageStorePath = v
+	}
+	if v := os.Getenv("MIKROVIEW_FLAGS_STALE_RULE_DAYS"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			cfg.Flags.StaleRuleDays = n
+		}
+	}
+	if v := os.Getenv("MIKROVIEW_FLAGS_STALE_RULE_CHECK_INTERVAL"); v != "" {
+		if d, err := time.ParseDuration(v); err == nil {
+			cfg.Flags.StaleRuleCheckInterval = d
 		}
 	}
 	if v := os.Getenv("MIKROVIEW_FLAGS_DETECTOR_SETTINGS_STORE_PATH"); v != "" {
