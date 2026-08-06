@@ -230,6 +230,42 @@ func TestLowSlowScanEnvVarsOverrideDefaults(t *testing.T) {
 	}
 }
 
+func TestStaleRuleDefaults(t *testing.T) {
+	cfg, err := Load("", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Flags.StaleRuleDays != 30 {
+		t.Errorf("StaleRuleDays = %v, want 30", cfg.Flags.StaleRuleDays)
+	}
+	if cfg.Flags.StaleRuleCheckInterval != time.Hour {
+		t.Errorf("StaleRuleCheckInterval = %v, want 1h", cfg.Flags.StaleRuleCheckInterval)
+	}
+	if cfg.Flags.RuleUsageStorePath != "/var/lib/mikroview/rule-usage.json" {
+		t.Errorf("RuleUsageStorePath = %q, want /var/lib/mikroview/rule-usage.json", cfg.Flags.RuleUsageStorePath)
+	}
+}
+
+func TestStaleRuleEnvVarsOverrideDefaults(t *testing.T) {
+	t.Setenv("MIKROVIEW_FLAGS_RULE_USAGE_STORE_PATH", "/data/rule-usage.json")
+	t.Setenv("MIKROVIEW_FLAGS_STALE_RULE_DAYS", "45")
+	t.Setenv("MIKROVIEW_FLAGS_STALE_RULE_CHECK_INTERVAL", "30m")
+
+	cfg, err := Load("", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Flags.RuleUsageStorePath != "/data/rule-usage.json" {
+		t.Errorf("RuleUsageStorePath = %q, want /data/rule-usage.json", cfg.Flags.RuleUsageStorePath)
+	}
+	if cfg.Flags.StaleRuleDays != 45 {
+		t.Errorf("StaleRuleDays = %v, want 45", cfg.Flags.StaleRuleDays)
+	}
+	if cfg.Flags.StaleRuleCheckInterval != 30*time.Minute {
+		t.Errorf("StaleRuleCheckInterval = %v, want 30m", cfg.Flags.StaleRuleCheckInterval)
+	}
+}
+
 func TestNotifySMTPEnvVarsOverrideDefaults(t *testing.T) {
 	t.Setenv("MIKROVIEW_NOTIFY_BATCH_WINDOW", "15s")
 	t.Setenv("MIKROVIEW_NOTIFY_SMTP_HOST", "smtp.example.com")
@@ -333,12 +369,14 @@ func TestDefaultStoragePathsUnderVarLibMikroview(t *testing.T) {
 	cases := map[string]string{
 		"Flags.StorePath":                 cfg.Flags.StorePath,
 		"Flags.DetectorSettingsStorePath": cfg.Flags.DetectorSettingsStorePath,
+		"Flags.RuleUsageStorePath":        cfg.Flags.RuleUsageStorePath,
 		"Auth.StorePath":                  cfg.Auth.StorePath,
 		"TLS.StorePath":                   cfg.TLS.StorePath,
 	}
 	want := map[string]string{
 		"Flags.StorePath":                 "/var/lib/mikroview/flags.json",
 		"Flags.DetectorSettingsStorePath": "/var/lib/mikroview/detector-settings.json",
+		"Flags.RuleUsageStorePath":        "/var/lib/mikroview/rule-usage.json",
 		"Auth.StorePath":                  "/var/lib/mikroview/users.json",
 		"TLS.StorePath":                   "/var/lib/mikroview/tls",
 	}

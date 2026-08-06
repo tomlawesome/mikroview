@@ -238,6 +238,9 @@ flags:
   lowSlowScanMinObservation: 45m
   lowSlowScanDropRatio: 0.8
   lowSlowScanBaselineMultiplier: 3
+  ruleUsageStorePath: "/var/lib/mikroview/rule-usage.json"
+  staleRuleDays: 30
+  staleRuleCheckInterval: 1h
 ```
 
 - **`storePath`** — where raised/cleared flags are persisted, as a small
@@ -356,6 +359,33 @@ flags:
   requiring several independent signals rather than trusting the
   strongest one alone.
 
+- **Stale rule (issue #102)** — a firewall rule that hasn't fired in
+  `staleRuleDays`+ days, either dead weight or, worse, an unnecessary
+  hole — flagging it for review closes attack surface at essentially no
+  cost. Unlike every other detector above, this one doesn't watch the
+  live event stream: it reads a separate, long-lived per-rule
+  `firstSeen`/`lastSeen`/`count` record (persisted to
+  `ruleUsageStorePath`, same optional-persistence contract as
+  `flags.storePath`) that's updated on every ingested event alongside
+  `internal/store`'s own in-memory rule counters, then periodically
+  swept every `staleRuleCheckInterval` for anything past the threshold.
+  That separate record exists specifically because `internal/store`'s
+  counters are windowed to `store.retention` (24h by default) — nowhere
+  near long enough to notice "hasn't fired in a month." **Accepted
+  trade-off:** mikroview only sees a rule when it fires in syslog, with
+  no visibility into the router's actual configured rule set (it's
+  passive-syslog-only) — so a rule you've already removed will keep
+  surfacing as stale until you manually clear the flag. Harmless: the
+  implied suggestion ("consider removing this") is a no-op if it's
+  already gone, and the alternative failure mode — a genuinely
+  forgotten, still-open rule going unflagged — is worse. Unlike every
+  other detector, stale-rule doesn't currently support the live
+  enable/scope toggle described in [Per-detector
+  toggles](#per-detector-toggles-and-scope-restrictions-optional), and
+  doesn't attach a confidence score (see below) — set `staleRuleDays`
+  high enough (or clear flags as they come up) if it's too noisy for
+  your ruleset.
+
 **Confidence score.** Every detector except global-volume-spike and
 rule-hit-rate-spike attaches a `confidence` percentage (0-100) to each
 flag it raises, shown in the UI as e.g. "73% confidence" — but not all
@@ -390,6 +420,9 @@ you're looking at:
   already track a slow-moving EMA baseline internally (same technique
   activity-spike uses), just without a confidence score attached yet —
   a known gap, filed separately.
+- **Not scored (stale rule).** A deterministic "has this rule's
+  `lastSeen` crossed `staleRuleDays`" check with no baseline or
+  overshoot concept behind it at all — there's nothing to score.
 
 `confidence` is `null` in `GET /api/flags` for a detector that doesn't
 score at all, never an implied 100%.
@@ -873,6 +906,9 @@ Override individual scalar settings without a mounted file:
 | `MIKROVIEW_FLAGS_LOW_SLOW_SCAN_MIN_OBSERVATION` | `flags.lowSlowScanMinObservation` |
 | `MIKROVIEW_FLAGS_LOW_SLOW_SCAN_DROP_RATIO` | `flags.lowSlowScanDropRatio` |
 | `MIKROVIEW_FLAGS_LOW_SLOW_SCAN_BASELINE_MULTIPLIER` | `flags.lowSlowScanBaselineMultiplier` |
+| `MIKROVIEW_FLAGS_RULE_USAGE_STORE_PATH` | `flags.ruleUsageStorePath` |
+| `MIKROVIEW_FLAGS_STALE_RULE_DAYS` | `flags.staleRuleDays` |
+| `MIKROVIEW_FLAGS_STALE_RULE_CHECK_INTERVAL` | `flags.staleRuleCheckInterval` |
 | `MIKROVIEW_FLAGS_DETECTOR_SETTINGS_STORE_PATH` | `flags.detectorSettingsStorePath` (see [Per-detector toggles](#per-detector-toggles-and-scope-restrictions-optional)) |
 | `MIKROVIEW_AUTH_STORE_PATH` | `auth.storePath` (see [Authentication](#authentication)) |
 | `MIKROVIEW_AUTH_SECURE_COOKIE` | `auth.secureCookie` |

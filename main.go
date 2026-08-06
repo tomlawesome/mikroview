@@ -30,6 +30,7 @@ import (
 	"github.com/tomlawesome/mikroview/internal/oidc"
 	"github.com/tomlawesome/mikroview/internal/reputation"
 	"github.com/tomlawesome/mikroview/internal/routeros"
+	"github.com/tomlawesome/mikroview/internal/rules"
 	"github.com/tomlawesome/mikroview/internal/servertls"
 	"github.com/tomlawesome/mikroview/internal/store"
 	"github.com/tomlawesome/mikroview/internal/syslog"
@@ -217,6 +218,17 @@ func main() {
 		flagsLog.Warn(fmt.Sprintf("%v (continuing with in-memory-only flag state)", err))
 	}
 
+	// RuleUsage (issue #102): a long-lived, persisted per-rule
+	// FirstSeen/LastSeen/Count record backing the stale-rule detector --
+	// see internal/rules' doc comment for why this can't just reuse
+	// internal/store's totalByRule (in-memory, windowed to the store's
+	// short retention period).
+	rulesLog := logging.New("rules")
+	ru, err := rules.Open(cfg.Flags.RuleUsageStorePath)
+	if err != nil {
+		rulesLog.Warn(fmt.Sprintf("%v (continuing with in-memory-only rule-usage state)", err))
+	}
+
 	authLog := logging.New("auth")
 	authStore, err := auth.Open(cfg.Auth.StorePath)
 	if err != nil {
@@ -291,6 +303,7 @@ func main() {
 	}
 	detector := detect.NewWithSettings(detectCfg, fs, detectorSettings).WithReputation(rep)
 	globalSpike := detect.NewGlobalSpikeDetectorWithSettings(detectCfg, fs, detectorSettings)
+	staleRule := detect.NewStaleRuleDetector(ru, fs, time.Duration(cfg.Flags.StaleRuleDays)*24*time.Hour)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -342,7 +355,7 @@ func main() {
 
 	names := naming.Resolver{Rules: cfg.RuleNames, Hosts: cfg.HostNames}
 
-	go ingest(ctx, raw, st, devices, h, geo, detector, names)
+	go ingest(ctx, raw, st, devices, h, geo, detector, ru, names)
 	go detector.Run(ctx)
 
 	go func() {
@@ -357,6 +370,27 @@ func main() {
 				func() {
 					defer logging.Recover(spikeLog)
 					globalSpike.Check(st.Stats().EventsPerSecond, time.Now())
+				}()
+			}
+		}
+	}()
+
+	// Stale-rule sweep (issue #102): coarse by design (see
+	// StaleRuleCheckInterval's doc comment) -- staleness is judged in
+	// days, so there's no benefit to checking anywhere near as often as
+	// the global-spike ticker above.
+	go func() {
+		staleRuleLog := logging.New("stale-rule")
+		ticker := time.NewTicker(cfg.Flags.StaleRuleCheckInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				func() {
+					defer logging.Recover(staleRuleLog)
+					staleRule.Check(time.Now())
 				}()
 			}
 		}
@@ -712,14 +746,14 @@ func readPasswordTwice() (string, error) {
 // WebSocket broadcast (see detect.Detector.Enqueue/Run, and the
 // dedicated detection-worker goroutine main() starts alongside this
 // one).
-func ingest(ctx context.Context, raw <-chan syslog.RawMessage, st *store.Store, devices *device.Registry, h *hub.Hub, geo *geoip.Lookup, detector *detect.Detector, names naming.Resolver) {
+func ingest(ctx context.Context, raw <-chan syslog.RawMessage, st *store.Store, devices *device.Registry, h *hub.Hub, geo *geoip.Lookup, detector *detect.Detector, ru *rules.Store, names naming.Resolver) {
 	ingestLog := logging.New("ingest")
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case rm := <-raw:
-			ingestOneRecovered(ingestLog, rm, st, devices, h, geo, detector, names)
+			ingestOneRecovered(ingestLog, rm, st, devices, h, geo, detector, ru, names)
 		}
 	}
 }
@@ -730,7 +764,7 @@ func ingest(ctx context.Context, raw <-chan syslog.RawMessage, st *store.Store, 
 // still end the entire ingest goroutine for good on the first bad
 // message (silently stopping all future event processing) rather than
 // just dropping that one message. See logging.Recover's doc comment.
-func ingestOneRecovered(logger *slog.Logger, rm syslog.RawMessage, st *store.Store, devices *device.Registry, h *hub.Hub, geo *geoip.Lookup, detector *detect.Detector, names naming.Resolver) {
+func ingestOneRecovered(logger *slog.Logger, rm syslog.RawMessage, st *store.Store, devices *device.Registry, h *hub.Hub, geo *geoip.Lookup, detector *detect.Detector, ru *rules.Store, names naming.Resolver) {
 	defer logging.Recover(logger)
 
 	env := syslog.ParseEnvelope(rm.Data, rm.RecvTime)
@@ -771,4 +805,10 @@ func ingestOneRecovered(logger *slog.Logger, rm syslog.RawMessage, st *store.Sto
 	stored := st.Insert(e)
 	h.Broadcast(stored)
 	detector.Enqueue(stored)
+	// Keeps internal/rules' long-lived per-rule usage record in sync with
+	// internal/store/ring.go's own totalByRule bump inside Insert above --
+	// same per-event trigger, so RuleUsage never drifts out of step with
+	// what the store itself just counted (see internal/rules.Store.Touch's
+	// doc comment for why this lives here rather than as a separate pass).
+	ru.Touch(stored.RuleLabel, stored.ReceivedAt)
 }

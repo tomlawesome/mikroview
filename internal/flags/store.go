@@ -41,6 +41,14 @@ const (
 	// baseline, drop/reject ratio, reputation) rather than one count. See
 	// internal/detect/low_slow_scan.go.
 	TypeLowSlowScan Type = "low_slow_scan"
+	// TypeStaleRule (issue #102): a firewall rule that fired at some
+	// point (recorded in internal/rules' long-lived usage record) but
+	// hasn't fired again in a long time -- either dead weight or an
+	// unnecessary hole, worth a human's attention either way. Target is
+	// the rule label, not an IP, same non-IP-target precedent
+	// TypeGlobalSpike already sets with "global". See
+	// internal/detect/stale_rule.go.
+	TypeStaleRule Type = "stale_rule"
 )
 
 // maxFlags bounds the store the same way every other buffer in mikroview
@@ -62,8 +70,8 @@ var maxFlags = 1000
 //     when present.
 //
 // Zero value (all fields empty/nil) is valid and common -- most
-// detectors (critical_port, activity_spike, rule_spike, global_spike)
-// have nothing here at all, since their Detail string already says
+// detectors (critical_port, activity_spike, rule_spike, global_spike,
+// stale_rule) have nothing here at all, since their Detail string already says
 // everything there is to say.
 type Evidence struct {
 	Ports []int    `json:"ports,omitempty"`
@@ -84,7 +92,7 @@ type NATInfo struct {
 type Flag struct {
 	ID        string    `json:"id"`
 	Type      Type      `json:"type"`
-	Target    string    `json:"target"` // source IP, or "global" for TypeGlobalSpike
+	Target    string    `json:"target"` // source IP, "global" for TypeGlobalSpike, or a rule label for TypeRuleSpike/TypeStaleRule
 	Detail    string    `json:"detail"` // human-readable specifics, e.g. "23 distinct ports in 60s"
 	Count     int       `json:"count"`  // times this detector has re-fired for this target since the flag was (re-)raised
 	FirstSeen time.Time `json:"firstSeen"`
