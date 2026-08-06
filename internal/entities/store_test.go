@@ -285,25 +285,23 @@ func TestSeedImportsWhenEmpty(t *testing.T) {
 	}
 }
 
-// TestSeedIsANoOpOnceStoreIsNonEmpty is what makes Seed safe to call
-// unconditionally on every boot: once the store holds anything at all
-// (whether from a prior Seed or a user's own edits, including deleting
-// every imported entity), it must never re-import and silently undo a
-// user's changes.
-func TestSeedIsANoOpOnceStoreIsNonEmpty(t *testing.T) {
+// TestSeedIsANoOpOnceAlreadySeeded is what makes Seed safe to call
+// unconditionally on every boot: a second call, even with different
+// config maps than the first, must never import anything more.
+func TestSeedIsANoOpOnceAlreadySeeded(t *testing.T) {
 	s, _ := Open("")
-	if _, err := s.Upsert(Entity{Type: TypeHost, Key: "10.0.0.1", Label: "user-added"}); err != nil {
-		t.Fatal(err)
+	if n := s.Seed(map[string]string{"r13": "WAN input"}, nil); n != 1 {
+		t.Fatalf("expected the first Seed to import 1 entity, got %d", n)
 	}
 
-	n := s.Seed(map[string]string{"r13": "WAN input"}, nil)
+	n := s.Seed(map[string]string{"r99": "should never appear"}, map[string]string{"10.0.0.1": "should never appear"})
 	if n != 0 {
-		t.Errorf("expected Seed to report 0 imports once the store is non-empty, got %d", n)
+		t.Errorf("expected a second Seed call to report 0 imports, got %d", n)
 	}
 
 	list := s.List()
-	if len(list) != 1 || list[0].Key != "10.0.0.1" {
-		t.Errorf("expected Seed to leave the existing entity untouched and import nothing, got %+v", list)
+	if len(list) != 1 || list[0].Key != "r13" {
+		t.Errorf("expected only the first Seed's entity to exist, got %+v", list)
 	}
 }
 
@@ -314,6 +312,83 @@ func TestSeedWithNoConfiguredNamesIsANoOp(t *testing.T) {
 	}
 	if len(s.List()) != 0 {
 		t.Errorf("expected the store to remain empty, got %+v", s.List())
+	}
+}
+
+// TestSeedWithNothingToImportStillMarksSeeded proves Seed's "already
+// ran" bookkeeping is independent of whether anything was actually
+// imported -- a first call with nothing configured must still block a
+// later call from importing something that's since appeared in
+// config.yaml. Seed's contract is "the first-ever boot's decision
+// point," not "keep importing until the store has something."
+func TestSeedWithNothingToImportStillMarksSeeded(t *testing.T) {
+	s, _ := Open("")
+	if n := s.Seed(nil, nil); n != 0 {
+		t.Fatalf("expected the first Seed (nothing configured) to import 0, got %d", n)
+	}
+
+	n := s.Seed(map[string]string{"r13": "added to config.yaml after the first boot"}, nil)
+	if n != 0 {
+		t.Errorf("expected a later Seed call to still be a no-op, got %d", n)
+	}
+	if len(s.List()) != 0 {
+		t.Errorf("expected the store to remain empty, got %+v", s.List())
+	}
+}
+
+// TestSeedDoesNotReimportAfterFullDeletionAcrossRestart reproduces the
+// real bug this store's Seed used to have: gating purely on "is the
+// store currently empty" made a deliberate full deletion (via this same
+// package's own Delete, exposed through the admin-only DELETE
+// /api/entities endpoint) indistinguishable, on the next restart, from
+// "migration never ran" -- main.go calls Seed unconditionally on every
+// boot, so an empty store used to mean silently resurrecting exactly
+// the aliases an admin just deliberately removed. The persisted Seeded
+// marker (see storeFile) is what fixes this: it survives across
+// deleting every entity, and across reopening the store entirely.
+func TestSeedDoesNotReimportAfterFullDeletionAcrossRestart(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "entities.json")
+
+	s1, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ruleNames := map[string]string{"r13": "WAN input"}
+	hostNames := map[string]string{"192.168.1.1": "core router"}
+	if n := s1.Seed(ruleNames, hostNames); n != 2 {
+		t.Fatalf("expected the first Seed to import 2 entities, got %d", n)
+	}
+
+	// An admin deletes every entity, one at a time, via the store's own
+	// Delete -- exactly what DELETE /api/entities does.
+	if !s1.Delete(TypeRule, "r13") {
+		t.Fatal("expected deleting the seeded rule entity to succeed")
+	}
+	if !s1.Delete(TypeHost, "192.168.1.1") {
+		t.Fatal("expected deleting the seeded host entity to succeed")
+	}
+	if len(s1.List()) != 0 {
+		t.Fatalf("expected the store to be genuinely empty after deleting everything, got %+v", s1.List())
+	}
+
+	// Simulate a process restart: reopen the same persisted file.
+	s2, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(s2.List()) != 0 {
+		t.Fatalf("expected the reopened store to start empty (the deletions persisted), got %+v", s2.List())
+	}
+
+	// main.go calls Seed unconditionally on every boot, with the same
+	// config.yaml maps as before -- this must stay a no-op, not
+	// resurrect what the admin deleted.
+	n := s2.Seed(ruleNames, hostNames)
+	if n != 0 {
+		t.Errorf("expected Seed to report 0 after a full deletion + restart, got %d", n)
+	}
+	if list := s2.List(); len(list) != 0 {
+		t.Errorf("expected the deleted entities to stay deleted across a restart, got %+v", list)
 	}
 }
 

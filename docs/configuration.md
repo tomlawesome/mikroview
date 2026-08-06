@@ -202,16 +202,17 @@ entities:
   storePath: "/var/lib/mikroview/entities.json"
 ```
 
-**One-time migration**: the first time mikroview boots against an empty
-entities store, if `ruleNames`/`hostNames` are non-empty it imports each
-entry as an entity (`type: rule`/`type: host`, `key` = the map key,
-`label` = the map value) so an existing deployment's aliases become
-UI-editable instead of disappearing on upgrade. This only ever runs
-against an *empty* store -- once any entity exists (imported or
-added by hand), it never runs again, so deleting every entity later
-doesn't cause them to reappear on the next restart. `ruleNames`/
-`hostNames` stay supported afterward as a YAML-only fallback for a
-rule/host with no matching entity.
+**One-time migration**: the very first time mikroview boots against a
+given entities store, if `ruleNames`/`hostNames` are non-empty it
+imports each entry as an entity (`type: rule`/`type: host`, `key` = the
+map key, `label` = the map value) so an existing deployment's aliases
+become UI-editable instead of disappearing on upgrade. This is tracked
+with a marker persisted alongside the entities themselves, not by
+"is the store currently empty" -- so it really is one-time: deleting
+every entity later (one at a time, from the UI) does not cause them to
+reappear on the next restart. `ruleNames`/`hostNames` stay supported
+afterward as a YAML-only fallback for a rule/host with no matching
+entity.
 
 Entities are managed via `GET`/`POST`/`DELETE /api/entities`
 (admin-gated the same way `POST /api/auth/users` is -- see

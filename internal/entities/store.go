@@ -54,12 +54,59 @@ func id(entityType, key string) string {
 	return entityType + ":" + key
 }
 
+// storeFile is the on-disk shape -- an object wrapping the entity list
+// plus a Seeded marker, not a bare array, mirroring auth.Store's own
+// storeFile{Disabled, Users} (see internal/auth/store.go). The marker is
+// what makes Seed's "should this run" decision independent of whether
+// the store happens to be empty *right now* -- without it, an admin
+// deleting every entity via the UI (this same package's own Delete,
+// exposed through the admin-only DELETE /api/entities endpoint) would
+// look, on the next restart, identical to "migration never ran,"
+// silently resurrecting the config.yaml aliases they just deliberately
+// removed. storeFile.UnmarshalJSON stays compatible with a bare
+// `[]*Entity` array -- this package's original on-disk shape, before
+// this fix -- for the same reason auth.Store's own legacy-array
+// fallback exists: nothing written by an earlier build should fail to
+// load. A file recovered via that legacy path decodes with Seeded false
+// (the pre-fix shape never recorded it), which is the correct, safe
+// interpretation -- it predates this marker entirely, so Seed must be
+// free to run once more against it.
+type storeFile struct {
+	Seeded   bool      `json:"seeded"`
+	Entities []*Entity `json:"entities"`
+}
+
+func (f *storeFile) UnmarshalJSON(data []byte) error {
+	type shape storeFile // avoids infinite recursion into this method
+	var s shape
+	if err := json.Unmarshal(data, &s); err == nil {
+		*f = storeFile(s)
+		return nil
+	}
+	// A top-level JSON array can't unmarshal into a struct -- that's
+	// exactly the legacy pre-fix shape, so this is where a genuinely
+	// malformed file also gets one more (correct) chance to report its
+	// real error, not this fallback's.
+	var legacy []*Entity
+	if err := json.Unmarshal(data, &legacy); err != nil {
+		return err
+	}
+	f.Entities = legacy
+	f.Seeded = false
+	return nil
+}
+
 // Store holds every known entity, keyed by (Type, Key). The zero value
 // is not usable; construct with Open.
 type Store struct {
 	mu   sync.RWMutex
 	path string
 	byID map[string]*Entity
+	// seeded records whether Seed has already run against this store,
+	// persisted so the decision survives a restart -- see storeFile's
+	// doc comment and Seed's for why this can't just be inferred from
+	// len(byID).
+	seeded bool
 }
 
 // Open loads path if it exists (a missing file is the expected
@@ -88,11 +135,11 @@ func Open(path string) (*Store, error) {
 		return s, err
 	}
 
-	var list []*Entity
-	if err := json.Unmarshal(data, &list); err != nil {
+	var file storeFile
+	if err := json.Unmarshal(data, &file); err != nil {
 		return s, err
 	}
-	for _, e := range list {
+	for _, e := range file.Entities {
 		// A JSON array containing `null` is syntactically valid and
 		// unmarshals into a nil *Entity -- skipped here for the same
 		// reason flags.Open/auth.Store.Open skip it: a malformed file
@@ -102,6 +149,7 @@ func Open(path string) (*Store, error) {
 		}
 		s.byID[id(e.Type, e.Key)] = e
 	}
+	s.seeded = file.Seeded
 	return s, nil
 }
 
@@ -164,8 +212,11 @@ func (s *Store) listLocked() []Entity {
 	return out
 }
 
-// Count returns the number of known entities -- used by Seed (and by a
-// caller like main.go) to decide whether the store is still empty.
+// Count returns the number of known entities -- a general-purpose
+// utility for a caller that wants to know the store's size (e.g. a
+// future admin UI affordance). Not used by Seed, which is gated by the
+// persisted Seeded marker instead -- see Seed's own doc comment for why
+// "currently empty" isn't a safe proxy for "never seeded."
 func (s *Store) Count() int {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -191,20 +242,31 @@ func (s *Store) Label(entityType, key string) string {
 
 // Seed imports config.yaml's legacy RuleNames/HostNames maps
 // (internal/config.Config.RuleNames/HostNames) as Entity records, but
-// only if the store is currently empty -- the one-time upgrade path
-// documented in issue #107: an existing deployment's YAML-only aliases
-// become UI-editable Entity records on first boot after upgrading,
-// without losing them. Idempotent to call on every startup regardless:
-// once the store holds anything at all (whether from this import or a
-// user's own edits since), it never runs again and never overwrites a
-// user's deletions. Returns the number of entities imported.
+// only the first time it's ever called against a given persisted store
+// -- the one-time upgrade path documented in issue #107: an existing
+// deployment's YAML-only aliases become UI-editable Entity records on
+// first boot after upgrading, without losing them.
+//
+// Gated on the persisted Seeded marker (see storeFile), deliberately
+// *not* on "is the store currently empty" -- an admin can delete every
+// entity one at a time via the UI (Delete, behind DELETE
+// /api/entities), which leaves the store genuinely empty on purpose.
+// Inferring "never seeded" from "empty" would make that indistinguishable
+// from a fresh store on the next restart (main.go calls Seed
+// unconditionally on every boot) and silently resurrect exactly the
+// aliases the admin just removed. Once seeded, it stays seeded --
+// regardless of whether anything was actually imported (e.g. both maps
+// were empty) or how many entities exist afterward -- so this is safe
+// and cheap to call unconditionally on every startup. Returns the
+// number of entities imported (0 once already seeded).
 func (s *Store) Seed(ruleNames, hostNames map[string]string) int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if len(s.byID) > 0 {
+	if s.seeded {
 		return 0
 	}
+	s.seeded = true
 
 	imported := 0
 	for key, label := range ruleNames {
@@ -222,9 +284,14 @@ func (s *Store) Seed(ruleNames, hostNames map[string]string) int {
 		imported++
 	}
 
-	if imported > 0 {
-		s.persistLocked()
-	}
+	// Always persist, even when nothing was imported -- what's being
+	// recorded is "the migration decision point has already passed,"
+	// not "something was imported," so a later restart must never
+	// re-evaluate it either way (e.g. an operator adding ruleNames to
+	// config.yaml well after the first-ever boot must not have them
+	// suddenly appear -- Seed's contract is first-boot-only, not
+	// "import whatever's configured until the store has something").
+	s.persistLocked()
 	return imported
 }
 
@@ -233,15 +300,20 @@ func (s *Store) Seed(ruleNames, hostNames map[string]string) int {
 // interval here -- entity mutations are rare, admin-only, interactive
 // actions (add/edit/remove one record at a time), not a high-rate
 // detection hot path, so there's nothing to rate-limit. Write failures
-// are swallowed rather than surfaced to Upsert/Delete's callers: the
-// in-memory state (which every read goes through) stays correct either
-// way, so a transient disk issue degrades to "won't survive a restart
-// right now" rather than breaking live use.
+// are swallowed rather than surfaced to Upsert/Delete/Seed's callers:
+// the in-memory state (which every read goes through) stays correct
+// either way, so a transient disk issue degrades to "won't survive a
+// restart right now" rather than breaking live use.
 func (s *Store) persistLocked() {
 	if s.path == "" {
 		return
 	}
-	data, err := json.MarshalIndent(s.listLocked(), "", "  ")
+	list := s.listLocked()
+	ptrs := make([]*Entity, len(list))
+	for i := range list {
+		ptrs[i] = &list[i]
+	}
+	data, err := json.MarshalIndent(storeFile{Seeded: s.seeded, Entities: ptrs}, "", "  ")
 	if err != nil {
 		return
 	}
