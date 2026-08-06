@@ -37,7 +37,9 @@ docker compose up -d --build
 
 Then follow [docs/routeros-setup.md](docs/routeros-setup.md) to point
 your RouterOS device(s) at the container, and open
-`https://<docker-host>:8080`. mikroview serves TLS by default with a
+`https://<docker-host>` (port 443). A plain `http://<docker-host>`
+request on port 80 redirects there automatically. mikroview serves TLS
+by default with a
 self-generated certificate (see [docs/configuration.md](docs/configuration.md#tls)),
 so your browser will show an untrusted-certificate warning on first
 visit until you import that certificate -- expected for a self-hosted
@@ -63,9 +65,12 @@ services:
       # user that can't bind <1024 (see Dockerfile).
       - "514:1514/udp"
       - "514:1514/tcp"
-      # HTTPS by default -- see the Quickstart above and
-      # docs/configuration.md's "TLS" section.
-      - "8080:8080"
+      # HTTPS by default, on the conventional port -- see the Quickstart
+      # above and docs/configuration.md's "TLS" section.
+      - "443:8080"
+      # A plain-HTTP listener that only ever redirects to the HTTPS
+      # port above -- never serves real content.
+      - "80:8081"
     healthcheck:
       test: ["CMD", "/mikroview", "-healthcheck"]
       interval: 30s
@@ -106,6 +111,10 @@ services:
       # only safe if this port is unreachable except from your own
       # isolated-network reverse proxy.
       # - MIKROVIEW_TLS_ENABLED=false
+      # Disables the plain-HTTP redirect-only listener above -- only
+      # needed if you've removed the "80:8081" port mapping too (e.g.
+      # your reverse proxy handles the HTTP->HTTPS redirect itself).
+      # - MIKROVIEW_LISTEN_HTTP_REDIRECT=
 
 volumes:
   mikroview-data:
@@ -161,7 +170,7 @@ If a bind mount is misconfigured (wrong ownership), mikroview logs
 rather than crashing — annoying (you lose flags/accounts/TLS cert on
 every restart) but not fatal.
 
-## How it works
+## Features
 
 - **Ingestion**: RouterOS forwards firewall log lines via
   `/system logging` over syslog (UDP or TCP). No polling, no RouterOS
@@ -198,33 +207,11 @@ every restart) but not fatal.
   account, or explicitly skip auth for this deployment. Creating an
   account makes it required for everything except the health check
   (Argon2id-hashed passwords, opaque server-side sessions,
-  self-registration for the first/super-admin account only); skipping
-  leaves mikroview fully open, and reversing that later is CLI-only by
-  design (`mikroview -enable-auth-setup`). See
+  self-registration for the first/super-admin account only). Local
+  accounts and single sign-on via an external OIDC identity provider
+  (e.g. Authentik, Keycloak, Entra ID) can both be enabled at once. See
   [docs/configuration.md](docs/configuration.md) and
   [SECURITY.md](SECURITY.md) for the threat model and setup.
-- **Deployment**: multi-stage Docker build, final image based on
-  distroless `nonroot`, embeds the built frontend into the Go binary via
-  `go:embed` — one process, one image.
-
-## Development
-
-Requires Go 1.26+ and Node 22+.
-
-```sh
-make dev-backend    # go run ., syslog on :1514, https on :8080 (TLS on by default -- see docs/configuration.md#tls)
-make dev-frontend   # vite dev server on :5173, proxies /api to :8080 over TLS
-make test           # go test ./... + svelte-check
-make build           # full build: frontend -> web/dist -> single Go binary
-make docker          # docker build -t mikroview .
-```
-
-Feed it fixture syslog lines without a real router, e.g.:
-
-```sh
-printf '<134>Jan 15 10:22:31 MikroTik A|lan-wan|forward: in:ether1 out:bridge1, connection-state:new, proto TCP (SYN), 192.168.1.50:51234->1.2.3.4:443, len 60' \
-  | nc -u -w1 127.0.0.1 1514
-```
 
 ## Docs
 
@@ -234,9 +221,12 @@ printf '<134>Jan 15 10:22:31 MikroTik A|lan-wan|forward: in:ether1 out:bridge1, 
   reference, env vars, API reference
 - [brand/BRANDING.md](brand/BRANDING.md) — logo files, color tokens,
   how to regenerate the PNG exports
+- [CONTRIBUTING.md](CONTRIBUTING.md) — branching model and local
+  development setup, for anyone submitting a pull request
 
-## Not (yet) included
+## License
 
-Deliberately deferred rather than half-built: SSO/OIDC (local accounts
-only for now), TLS syslog, multi-arch images, config hot-reload,
-server-side WebSocket filtering, JSON export.
+MikroView is source-available, not open source: free to use and
+modify for personal/non-commercial purposes, no redistribution or
+commercial use without permission. See [LICENSE](LICENSE) for the
+full terms.

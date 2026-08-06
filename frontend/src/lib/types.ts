@@ -97,6 +97,7 @@ export interface AuthSession {
   authenticated: boolean
   username?: string
   role?: 'admin' | 'user'
+  ssoAvailable: boolean
 }
 
 // Mirrors internal/reputation/reputation.go's Result.

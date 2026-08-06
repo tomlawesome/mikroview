@@ -25,7 +25,7 @@
   // critical_port's own DstPort match: an *attempt against* a control
   // port, not any traffic that happens to touch one on either side.
   const controlPortEvents = $derived(
-    appState.ageFilteredEvents().filter((e) => {
+    appState.ageFilteredEvents.filter((e) => {
       if (!e.dstPort || !criticalPortsState.ports.includes(e.dstPort)) return false
       if (e.connState && e.connState !== 'new') return false
       if (scopeFilter !== 'any') {

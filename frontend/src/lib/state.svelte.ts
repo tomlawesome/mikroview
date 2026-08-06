@@ -20,11 +20,13 @@ export type ConnState = 'connecting' | 'open' | 'closed'
 
 // 'live' is the scrolling event table + filter bar; 'metrics' is the
 // dashboard (see Dashboard.svelte); 'control-ports' is the SSH/Telnet/
-// control-port tracking tab (see ControlPorts.svelte). A real (if
-// minimal) view switch -- only one is ever mounted at a time -- rather
-// than a modal layered over the live table, which used to leave
-// LiveTable running underneath.
-export type View = 'live' | 'metrics' | 'control-ports'
+// control-port tracking tab (see ControlPorts.svelte); 'flags' is the
+// behavioral-flags review tab (see Flags.svelte); 'detectors' is the
+// admin-only per-detector on/off + scope settings tab (see
+// Detectors.svelte). A real (if minimal) view switch -- only one is ever
+// mounted at a time -- rather than a modal layered over the live table,
+// which used to leave LiveTable running underneath.
+export type View = 'live' | 'metrics' | 'control-ports' | 'flags' | 'detectors'
 
 // Central reactive state for the live view. The WebSocket tail pushes
 // every new event unfiltered into `events`; `filteredEvents` re-filters
@@ -57,19 +59,37 @@ class AppState {
 
   private pendingBuffer: ClientEvent[] = []
 
+  // WS batches land here (plain push, not a $state reassignment) and get
+  // flushed into `events` on a fixed cadence by the interval started in the
+  // constructor, rather than reassigning `events` once per batch frame --
+  // appendLive can run as often as every ~50ms under sustained load, and
+  // every reassignment of a $state array forces filteredEvents/
+  // ageFilteredEvents to recompute their full scan over up to
+  // MAX_CLIENT_EVENTS items. Batching the writes caps that recompute rate
+  // to FLUSH_INTERVAL_MS regardless of WS traffic.
+  private incomingBuffer: ClientEvent[] = []
+  private static readonly FLUSH_INTERVAL_MS = 175
+
+  constructor() {
+    setInterval(() => this.flushIncoming(), AppState.FLUSH_INTERVAL_MS)
+  }
+
   filteredEvents = $derived.by(() => this.filteredBy(this.filters))
 
-  // The age-cutoff half of filteredBy's pipeline, exposed on its own for
-  // a consumer that needs the display-duration-windowed buffer but can't
-  // express its own match criteria as a Filters object -- e.g.
-  // ControlPorts.svelte's "destination port is any one of several
-  // configured control ports" OR-match, which Filters.port (a single
-  // value) can't represent.
-  ageFilteredEvents(): ClientEvent[] {
+  // The age-cutoff half of filteredBy's pipeline, exposed as its own
+  // memoized derived (rather than a plain method) so ControlPorts.svelte
+  // and every configured CustomTopTalkerCard widget -- both of which need
+  // the display-duration-windowed buffer but can't express their own match
+  // criteria as a Filters object, e.g. ControlPorts.svelte's "destination
+  // port is any one of several configured control ports" OR-match, which
+  // Filters.port (a single value) can't represent -- read the same cached
+  // scan instead of each independently re-filtering up to MAX_CLIENT_EVENTS
+  // items on every tick.
+  ageFilteredEvents = $derived.by(() => {
     const cutoff =
       retentionState.maxAgeSeconds === null ? null : this.now - retentionState.maxAgeSeconds * 1000
     return cutoff === null ? this.events : this.events.filter((e) => e.receivedAt >= cutoff)
-  }
+  })
 
   // Applies the same age-cutoff-then-filter pipeline as filteredEvents,
   // but against an arbitrary Filters object rather than appState.filters --
@@ -77,7 +97,7 @@ class AppState {
   // its own independent criteria regardless of whatever filter is
   // currently active in the live view's FilterBar.
   filteredBy(filters: Filters): FirewallEvent[] {
-    return applyFilters(this.ageFilteredEvents(), filters)
+    return applyFilters(this.ageFilteredEvents, filters)
   }
 
   // ruleRegex is excluded here: it's a modifier on `rule`, not a filter of
@@ -111,7 +131,21 @@ class AppState {
       this.pendingCount = this.pendingBuffer.length
       return
     }
-    this.events = [...this.events, ...stamped].slice(-MAX_CLIENT_EVENTS)
+    // Buffered, not written straight to `events` -- see incomingBuffer's
+    // doc comment above. flushIncoming (on its own interval) is what
+    // actually lands these in `events`.
+    this.incomingBuffer.push(...stamped)
+  }
+
+  // Runs on FLUSH_INTERVAL_MS regardless of WS traffic -- a no-op tick
+  // when nothing arrived is cheap; skipping the reassignment entirely here
+  // (rather than reassigning an unchanged `events` to itself) avoids
+  // spuriously invalidating filteredEvents/ageFilteredEvents when the feed
+  // is idle.
+  private flushIncoming() {
+    if (this.incomingBuffer.length === 0) return
+    this.events = [...this.events, ...this.incomingBuffer].slice(-MAX_CLIENT_EVENTS)
+    this.incomingBuffer = []
   }
 
   togglePause() {
@@ -127,6 +161,7 @@ class AppState {
     this.events = []
     this.pendingBuffer = []
     this.pendingCount = 0
+    this.incomingBuffer = []
   }
 
   resetFilters() {

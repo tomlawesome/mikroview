@@ -37,8 +37,11 @@ COPY --from=backend /out/mikroview /mikroview
 COPY --from=backend --chown=65532:65532 /var/lib/mikroview /var/lib/mikroview
 USER nonroot:nonroot
 # 8080/tcp serves HTTPS by default (TLS is on unless tls.enabled: false
-# -- see docs/configuration.md's "TLS" section).
-EXPOSE 1514/udp 1514/tcp 8080/tcp
+# -- see docs/configuration.md's "TLS" section). 8081/tcp is a
+# redirect-only listener that bounces plain HTTP to HTTPS -- see
+# Listen.HTTPRedirect's doc comment in internal/config/config.go --
+# docker-compose.yml maps the conventional host ports 443/80 to these.
+EXPOSE 1514/udp 1514/tcp 8080/tcp 8081/tcp
 # No shell/curl/wget in this image, so the binary checks itself -- see
 # runHealthcheck in main.go.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \

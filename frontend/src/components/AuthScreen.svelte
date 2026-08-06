@@ -5,6 +5,7 @@
   // replaces App.svelte's entire main content, same as Metrics being an
   // independent view rather than an overlay.
   import LogoLockup from './LogoLockup.svelte'
+  import { authState } from '../lib/auth.svelte'
 
   let {
     title,
@@ -15,6 +16,7 @@
     skipLabel,
     skipHint,
     onskip,
+    ssoAvailable = false,
   }: {
     title: string
     subtitle: string
@@ -31,6 +33,12 @@
     skipLabel?: string
     skipHint?: string
     onskip?: () => Promise<string | null>
+    // ssoAvailable: whether the backend has OIDC/SSO configured (see
+    // authState.ssoAvailable) -- renders a secondary "Sign in with SSO"
+    // link below the form. A plain <a>, not a button/fetch call: this
+    // has to be a real top-level browser navigation for the OAuth
+    // redirect to work at all, so clicking it leaves the SPA entirely.
+    ssoAvailable?: boolean
   } = $props()
 
   let username = $state('')
@@ -72,6 +80,10 @@
 <div class="screen">
   <div class="card">
     <LogoLockup size={26} />
+
+    {#if authState.ssoError}
+      <p class="error">{authState.ssoError}</p>
+    {/if}
 
     {#if confirmingSkip}
       <!-- A distinct warning screen, not just an inline expansion --
@@ -118,6 +130,11 @@
         {/if}
 
         <button type="submit" disabled={submitting}>{submitting ? 'Please wait…' : submitLabel}</button>
+
+        {#if ssoAvailable}
+          <div class="divider"><span>or</span></div>
+          <a class="sso-link" href="/api/auth/oidc/login">Sign in with SSO</a>
+        {/if}
       </form>
 
       {#if onskip}
@@ -245,6 +262,44 @@
     background: var(--reject);
     border: 1px solid var(--reject);
     color: #fff;
+  }
+
+  .divider {
+    width: 100%;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-top: 4px;
+    color: var(--fg-dim);
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+
+  .divider::before,
+  .divider::after {
+    content: '';
+    flex: 1;
+    height: 1px;
+    background: var(--border);
+  }
+
+  .sso-link {
+    width: 100%;
+    box-sizing: border-box;
+    text-align: center;
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--fg-muted);
+    border-radius: 5px;
+    padding: 10px;
+    font-size: 14px;
+    text-decoration: none;
+  }
+
+  .sso-link:hover {
+    color: var(--fg);
+    border-color: var(--fg-muted);
   }
 
   .link {
