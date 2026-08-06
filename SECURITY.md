@@ -123,6 +123,20 @@ either way.
   they're locked out of. A password reset immediately invalidates every
   existing session for that account, including on an already-running
   server.
+- **API tokens (`internal/auth.Token`, issue #101) are read-only and
+  scoped by construction, not by convention.** A valid
+  `Authorization: Bearer <token>` request is routed to a completely
+  separate, minimal internal router carrying only `GET /api/events`,
+  `/flags`, `/stats`, and `/devices` -- there is no handler for anything
+  else registered on it, so no code path exists from a bearer token to a
+  write, clear, or config endpoint, regardless of the method or path
+  requested. Tokens are admin-created/revoked only (`POST`/`GET`/`DELETE
+  /api/tokens`); the raw value is shown exactly once, at creation, and
+  only its SHA-256 hash is ever persisted (Argon2id is deliberately not
+  used here -- that cost exists to slow down guessing a low-entropy,
+  human-chosen password, and a token's value is already a 128-bit random
+  string). There is no expiry; a token is valid until explicitly
+  revoked, same as a session or account.
 
 ## TLS
 
@@ -173,28 +187,33 @@ either way.
   history view, not a log archive; if you need durable logs, forward
   RouterOS's syslog output to a second, dedicated logging destination as
   well.
-- **Three deliberate exceptions: behavioral flags, accounts, and the
-  new-device MAC registry.** Raised flags (port scans, activity spikes,
-  critical-port attempts, volume spikes -- see
-  [docs/configuration.md](docs/configuration.md)), accounts (plus the
-  create/skip decision), and the new-device detector's per-MAC
-  first/last-seen history are all persisted to small JSON files under
-  `/var/lib/mikroview` by default (`flags.storePath` / `auth.storePath`
-  / `deviceMac.storePath`), which the container creates and owns -- no
-  configuration needed for any of the three to survive a process
-  restart. The flags file contains the IP addresses that triggered a
-  flag and a short human-readable description; the accounts file
-  contains usernames and Argon2id password hashes (never plaintext
-  passwords); the MAC registry file contains LAN client MAC addresses
-  and timestamps only, nothing else. Treat all three with the same care
-  as `config.yaml` (see "Recommended deployment hardening" below). None
-  survive *container recreation* (as opposed to a simple restart) unless
-  you mount a volume over `/var/lib/mikroview` -- for accounts
-  specifically, that means the create/skip decision itself reverts to
-  undecided on recreation without a volume, which re-shows the
-  first-run choice screen rather than silently reopening or silently
-  re-gating the deployment; for the MAC registry, it means every MAC
-  looks "new" again after a recreation without a volume.
+- **Deliberate exceptions: behavioral flags, accounts, API tokens, the
+  stale-rule usage record, and the new-device MAC registry.** Raised
+  flags (port scans, activity spikes, critical-port attempts, volume
+  spikes -- see [docs/configuration.md](docs/configuration.md)),
+  accounts (plus the create/skip decision), API tokens, the per-rule
+  first/last-seen usage record backing the stale-rule detector, and the
+  new-device detector's per-MAC first/last-seen history are each
+  persisted to small JSON files under `/var/lib/mikroview` by default
+  (`flags.storePath` / `auth.storePath` / `auth.tokensStorePath` /
+  `flags.ruleUsageStorePath` / `deviceMac.storePath`), which the
+  container creates and owns -- no configuration needed for any of them
+  to survive a process restart. The flags file contains the IP addresses
+  that triggered a flag and a short human-readable description; the
+  accounts file contains usernames and Argon2id password hashes (never
+  plaintext passwords); the tokens file contains token names and
+  SHA-256 hashes (never the raw bearer values); the rule-usage file
+  contains rule labels and timestamps only; the MAC registry file
+  contains LAN client MAC addresses and timestamps only. Treat all of
+  these with the same care as `config.yaml` (see "Recommended
+  deployment hardening" below). None survive *container recreation* (as
+  opposed to a simple restart) unless you mount a volume over
+  `/var/lib/mikroview` -- for accounts specifically, that means the
+  create/skip decision itself reverts to undecided on recreation
+  without a volume, which re-shows the first-run choice screen rather
+  than silently reopening or silently re-gating the deployment; for the
+  MAC registry, it means every MAC looks "new" again after a recreation
+  without a volume.
 - **No secrets reach the browser.** The optional AbuseIPDB API key
   (`reputation.abuseIPDBKey` / `MIKROVIEW_ABUSEIPDB_KEY`) is read
   server-side only and used solely to call AbuseIPDB's API from the
@@ -212,7 +231,7 @@ either way.
 
 | Listener | Auth | TLS | Notes |
 |---|---|---|---|
-| HTTP (`api.Server` + static UI) | Session cookie once an account exists; restricted to the choice-screen endpoints while undecided; fully open once skipped | On by default (self-generated or supplied) | See "TLS" above for the zero-config default and the one supported reason (`tls.enabled: false`) to disable it. `/api/healthz` always stays open. |
+| HTTP (`api.Server` + static UI) | Session cookie once an account exists (or an API bearer token, read-only, for four `GET` routes only — see "API tokens" above); restricted to the choice-screen endpoints while undecided; fully open once skipped | On by default (self-generated or supplied) | See "TLS" above for the zero-config default and the one supported reason (`tls.enabled: false`) to disable it. `/api/healthz` always stays open. |
 | Syslog UDP/TCP | None | None | Accepts and parses any line from any source as if it were a real RouterOS device -- unaffected by auth state. TLS doesn't apply here; RouterOS's syslog protocol has no TLS mode. |
 | WebSocket (`/api/ws`) | Session cookie + same-origin check, once an account exists; blocked entirely while undecided (not in the choice-screen exemption list); open, no origin check, once skipped | Follows the HTTP listener (`wss://` when TLS is on) | `CheckOrigin` is permissive whenever `Auth.Count() == 0` (undecided or skipped) — moot for "undecided", since `requireAuth` never lets the request reach this handler in that state. See `internal/api/ws.go`. |
 
@@ -273,7 +292,16 @@ damage a hostile or misbehaving LAN device can do:
   besides router names/IPs, it may also hold your AbuseIPDB API key
   (`reputation.abuseIPDBKey`) if you've configured one; prefer the
   `MIKROVIEW_ABUSEIPDB_KEY` env var over the YAML field if the file
-  itself might be more widely readable than your environment.
+  itself might be more widely readable than your environment. The same
+  applies to any credentials configured under `notify` -- SMTP's
+  `notify.smtp.password`, Pushover's `notify.pushover.token`, and any
+  auth header set under `notify.webhook.headers` (e.g. a bearer token
+  for ntfy/Home Assistant/n8n) -- `notify.smtp.password` and
+  `notify.pushover.token`/`.user` have env var equivalents (see
+  [docs/configuration.md](docs/configuration.md)) for the same reason;
+  `notify.webhook.headers` is YAML-only, so if it holds a real secret,
+  that's one more reason to keep `config.yaml` itself off a shared
+  filesystem.
 - The same applies to `flags.storePath`'s default file under
   `/var/lib/mikroview` — it holds real IP addresses and short
   descriptions of what they triggered, so keep it off a shared

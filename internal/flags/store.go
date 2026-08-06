@@ -13,6 +13,7 @@
 package flags
 
 import (
+	"bytes"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -49,6 +50,14 @@ const (
 	// internal/detect like every other Type here, since it needs no
 	// rolling-window state, just a yes/no "seen before" lookup.
 	TypeNewDevice Type = "new_device"
+	// TypeStaleRule (issue #102): a firewall rule that fired at some
+	// point (recorded in internal/rules' long-lived usage record) but
+	// hasn't fired again in a long time -- either dead weight or an
+	// unnecessary hole, worth a human's attention either way. Target is
+	// the rule label, not an IP, same non-IP-target precedent
+	// TypeGlobalSpike already sets with "global". See
+	// internal/detect/stale_rule.go.
+	TypeStaleRule Type = "stale_rule"
 )
 
 // maxFlags bounds the store the same way every other buffer in mikroview
@@ -70,8 +79,8 @@ var maxFlags = 1000
 //     when present.
 //
 // Zero value (all fields empty/nil) is valid and common -- most
-// detectors (critical_port, activity_spike, rule_spike, global_spike)
-// have nothing here at all, since their Detail string already says
+// detectors (critical_port, activity_spike, rule_spike, global_spike,
+// stale_rule) have nothing here at all, since their Detail string already says
 // everything there is to say.
 type Evidence struct {
 	Ports []int    `json:"ports,omitempty"`
@@ -92,7 +101,7 @@ type NATInfo struct {
 type Flag struct {
 	ID        string    `json:"id"`
 	Type      Type      `json:"type"`
-	Target    string    `json:"target"` // source IP, or "global" for TypeGlobalSpike
+	Target    string    `json:"target"` // source IP, "global" for TypeGlobalSpike, or a rule label for TypeRuleSpike/TypeStaleRule
 	Detail    string    `json:"detail"` // human-readable specifics, e.g. "23 distinct ports in 60s"
 	Count     int       `json:"count"`  // times this detector has re-fired for this target since the flag was (re-)raised
 	FirstSeen time.Time `json:"firstSeen"`
@@ -135,6 +144,28 @@ type Flag struct {
 	Evidence Evidence `json:"evidence,omitzero"`
 }
 
+// Exclusion is one permanently-excluded (Type, Target) pair -- see
+// Store.Exclude's doc comment. ID is the same flagID(Type, Target) key
+// flags themselves use, included so a caller (the admin exclusions API)
+// can operate on an entry without recomputing it and without ambiguity
+// from splitting it back apart (Target can itself contain ":", e.g. an
+// IPv6 address, which would make that split ambiguous).
+type Exclusion struct {
+	ID     string `json:"id"`
+	Type   Type   `json:"type"`
+	Target string `json:"target"`
+}
+
+// persistedState is the on-disk JSON shape written by persistLocked and
+// read back by Open -- see both of their doc comments for why this is
+// an object (flags + exclusions) rather than the bare `[]*Flag` array
+// this package used before permanent exclusions existed, and how Open
+// stays able to read a pre-upgrade file in that older shape.
+type persistedState struct {
+	Flags    []Flag      `json:"flags"`
+	Excluded []Exclusion `json:"excluded,omitempty"`
+}
+
 // Store holds every known flag, active and cleared, keyed by a stable ID
 // derived from (Type, Target) -- there is at most one entry per detector
 // per target, ever; re-firing updates it in place, and clearing just
@@ -144,6 +175,11 @@ type Store struct {
 	mu   sync.RWMutex
 	path string
 	byID map[string]*Flag
+
+	// excluded holds every permanently-excluded (Type, Target) pair, same
+	// flagID key as byID -- see Store.Exclude's doc comment. Checked at
+	// the top of add() so an excluded pair never raises again.
+	excluded map[string]Exclusion
 
 	// lastPersist backs persistLocked's rate limiting -- see
 	// persistMinInterval.
@@ -175,8 +211,17 @@ func (s *Store) WithOnRaise(fn func(Flag)) *Store {
 // not critical state. Either way the returned Store is always safe to
 // use unconditionally; a non-nil error is only ever informational, for
 // the caller to log.
+//
+// Reads either of two on-disk shapes: the current `{"flags":[...],
+// "excluded":[...]}` object persistLocked now writes, or the bare
+// `[...]` array of flags this package wrote before permanent exclusions
+// existed -- so a file from before this feature shipped still loads
+// cleanly (with no exclusions, which is exactly correct for it) rather
+// than being treated as malformed. Distinguished by the first
+// non-whitespace byte, since persistLocked always writes one shape or
+// the other, never something ambiguous between them.
 func Open(path string) (*Store, error) {
-	s := &Store{path: path, byID: make(map[string]*Flag)}
+	s := &Store{path: path, byID: make(map[string]*Flag), excluded: make(map[string]Exclusion)}
 	if path == "" {
 		return s, nil
 	}
@@ -193,22 +238,38 @@ func Open(path string) (*Store, error) {
 		return s, err
 	}
 
-	var list []*Flag
-	if err := json.Unmarshal(data, &list); err != nil {
+	if trimmed := bytes.TrimSpace(data); len(trimmed) > 0 && trimmed[0] == '[' {
+		var list []*Flag
+		if err := json.Unmarshal(data, &list); err != nil {
+			return s, err
+		}
+		for _, f := range list {
+			// A JSON array containing `null` (e.g. `[null]`, or a real
+			// entry followed by one) unmarshals successfully into a nil
+			// *Flag -- valid JSON, so the err check above never catches
+			// it. Skipping it here is what actually delivers this
+			// function's documented "a malformed file is treated as
+			// empty rather than failing" contract; relying on the
+			// unmarshal error alone doesn't cover every way a file can
+			// be malformed.
+			if f == nil {
+				continue
+			}
+			s.byID[f.ID] = f
+		}
+		return s, nil
+	}
+
+	var state persistedState
+	if err := json.Unmarshal(data, &state); err != nil {
 		return s, err
 	}
-	for _, f := range list {
-		// A JSON array containing `null` (e.g. `[null]`, or a real entry
-		// followed by one) unmarshals successfully into a nil *Flag --
-		// valid JSON, so the err check above never catches it. Skipping
-		// it here is what actually delivers this function's documented
-		// "a malformed file is treated as empty rather than failing"
-		// contract; relying on the unmarshal error alone doesn't cover
-		// every way a file can be malformed.
-		if f == nil {
-			continue
-		}
-		s.byID[f.ID] = f
+	for _, f := range state.Flags {
+		f := f
+		s.byID[f.ID] = &f
+	}
+	for _, e := range state.Excluded {
+		s.excluded[e.ID] = e
 	}
 	return s, nil
 }
@@ -274,6 +335,16 @@ func (s *Store) add(t Type, target, detail string, confidence *int, evidence Evi
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
+	// A permanently excluded (Type, Target) never raises, silently -- no
+	// entry is created, updated, or revived, and the caller sees "not a
+	// new episode" so nothing downstream (notifications, reputation
+	// lookups) fires either. See Store.Exclude's doc comment for why
+	// this is a deliberate permanent no-op rather than a raise that then
+	// gets auto-cleared.
+	if _, excluded := s.excluded[id]; excluded {
+		return false, Flag{}
+	}
 
 	f, ok := s.byID[id]
 	isNew := !ok
@@ -417,6 +488,106 @@ func (s *Store) Clear(id string, now time.Time) bool {
 	return true
 }
 
+// ClearAndExclude is the "Clear and never flag this again" action:
+// clears id's current episode (if still active) and permanently
+// excludes its (Type, Target) going forward, in one atomic step under a
+// single lock. Reports whether id was known at all, the same true/false
+// contract as Clear -- an unknown ID is a no-op, not an error, for the
+// same reason Clear's doc comment gives. Unlike Clear, this succeeds
+// (and still records the exclusion) even if the flag was already
+// cleared, since the point of this call is future suppression, not the
+// current episode's state.
+func (s *Store) ClearAndExclude(id string, now time.Time) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	f, ok := s.byID[id]
+	if !ok {
+		return false
+	}
+	if !f.Cleared {
+		f.Cleared = true
+		f.ClearedAt = now
+	}
+	if _, already := s.excluded[id]; !already {
+		s.excluded[id] = Exclusion{ID: id, Type: f.Type, Target: f.Target}
+	}
+	s.persistLocked()
+	return true
+}
+
+// Exclude permanently marks (t, target) as excluded -- from this call
+// on, add() (and so every Add/AddWithConfidence/AddWithDetail call) is a
+// silent no-op for that exact pair, forever, until a matching
+// RemoveExclusion/RemoveExclusionByID call. This is deliberately
+// permanent, not a timer: an earlier "snooze with expiry" design was
+// rejected as pointless -- it either re-fires once the snooze ends
+// (nothing was solved) or it doesn't (permanent exclusion was what was
+// wanted all along). Idempotent: excluding an already-excluded pair is a
+// no-op.
+func (s *Store) Exclude(t Type, target string) {
+	id := flagID(t, target)
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if _, already := s.excluded[id]; already {
+		return
+	}
+	s.excluded[id] = Exclusion{ID: id, Type: t, Target: target}
+	s.persistLocked()
+}
+
+// RemoveExclusion reverses Exclude for (t, target), letting that pair
+// raise again going forward -- existing flag history (if any) is
+// untouched either way. Reports whether an exclusion was actually
+// present, same true/false contract as Clear.
+func (s *Store) RemoveExclusion(t Type, target string) bool {
+	return s.RemoveExclusionByID(flagID(t, target))
+}
+
+// RemoveExclusionByID is RemoveExclusion, keyed directly by the same ID
+// Exclusion.ID/Flag.ID already use -- what the admin exclusions API
+// (which lists Exclusion values, not raw (Type, Target) pairs) actually
+// has on hand to act on.
+func (s *Store) RemoveExclusionByID(id string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if _, ok := s.excluded[id]; !ok {
+		return false
+	}
+	delete(s.excluded, id)
+	s.persistLocked()
+	return true
+}
+
+// Excluded reports whether (t, target) is currently permanently
+// excluded -- exposed for callers/tests that want to check without
+// going through Add's side effects.
+func (s *Store) Excluded(t Type, target string) bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	_, ok := s.excluded[flagID(t, target)]
+	return ok
+}
+
+// ListExclusions returns every currently-excluded (Type, Target) pair,
+// sorted by ID for a stable display order -- the admin-only surface
+// (see internal/api's callerIsAdminOrOpen-gated exclusions endpoints)
+// that lets a permanent exclusion made by mistake actually be undone.
+func (s *Store) ListExclusions() []Exclusion {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	out := make([]Exclusion, 0, len(s.excluded))
+	for _, e := range s.excluded {
+		out = append(out, e)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
+	return out
+}
+
 // List returns every known flag, active and cleared, most-recently-
 // active first.
 func (s *Store) List() []Flag {
@@ -479,13 +650,13 @@ func (s *Store) pruneLocked() {
 // maxTCPConnections elsewhere in this codebase.
 var persistMinInterval = time.Second
 
-// persistLocked writes the current state to disk if persistence is
-// configured and enough time has passed since the last write -- see
-// persistMinInterval. Write failures are swallowed rather than
-// surfaced to Add/Clear's callers: the in-memory state (which every
-// read goes through) stays correct either way, so a transient disk
-// issue degrades to "won't survive a restart right now" rather than
-// breaking live use.
+// persistLocked writes the current state -- flags and exclusions alike,
+// see persistedState -- to disk if persistence is configured and enough
+// time has passed since the last write -- see persistMinInterval. Write
+// failures are swallowed rather than surfaced to Add/Clear/Exclude's
+// callers: the in-memory state (which every read goes through) stays
+// correct either way, so a transient disk issue degrades to "won't
+// survive a restart right now" rather than breaking live use.
 func (s *Store) persistLocked() {
 	if s.path == "" {
 		return
@@ -495,7 +666,14 @@ func (s *Store) persistLocked() {
 	} else {
 		s.lastPersist = now
 	}
-	data, err := json.MarshalIndent(s.listLocked(), "", "  ")
+
+	excluded := make([]Exclusion, 0, len(s.excluded))
+	for _, e := range s.excluded {
+		excluded = append(excluded, e)
+	}
+	sort.Slice(excluded, func(i, j int) bool { return excluded[i].ID < excluded[j].ID })
+
+	data, err := json.MarshalIndent(persistedState{Flags: s.listLocked(), Excluded: excluded}, "", "  ")
 	if err != nil {
 		return
 	}

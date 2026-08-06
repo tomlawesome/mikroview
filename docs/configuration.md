@@ -238,6 +238,9 @@ flags:
   lowSlowScanMinObservation: 45m
   lowSlowScanDropRatio: 0.8
   lowSlowScanBaselineMultiplier: 3
+  ruleUsageStorePath: "/var/lib/mikroview/rule-usage.json"
+  staleRuleDays: 30
+  staleRuleCheckInterval: 1h
 ```
 
 - **`storePath`** — where raised/cleared flags are persisted, as a small
@@ -356,6 +359,33 @@ flags:
   requiring several independent signals rather than trusting the
   strongest one alone.
 
+- **Stale rule (issue #102)** — a firewall rule that hasn't fired in
+  `staleRuleDays`+ days, either dead weight or, worse, an unnecessary
+  hole — flagging it for review closes attack surface at essentially no
+  cost. Unlike every other detector above, this one doesn't watch the
+  live event stream: it reads a separate, long-lived per-rule
+  `firstSeen`/`lastSeen`/`count` record (persisted to
+  `ruleUsageStorePath`, same optional-persistence contract as
+  `flags.storePath`) that's updated on every ingested event alongside
+  `internal/store`'s own in-memory rule counters, then periodically
+  swept every `staleRuleCheckInterval` for anything past the threshold.
+  That separate record exists specifically because `internal/store`'s
+  counters are windowed to `store.retention` (24h by default) — nowhere
+  near long enough to notice "hasn't fired in a month." **Accepted
+  trade-off:** mikroview only sees a rule when it fires in syslog, with
+  no visibility into the router's actual configured rule set (it's
+  passive-syslog-only) — so a rule you've already removed will keep
+  surfacing as stale until you manually clear the flag. Harmless: the
+  implied suggestion ("consider removing this") is a no-op if it's
+  already gone, and the alternative failure mode — a genuinely
+  forgotten, still-open rule going unflagged — is worse. Unlike every
+  other detector, stale-rule doesn't currently support the live
+  enable/scope toggle described in [Per-detector
+  toggles](#per-detector-toggles-and-scope-restrictions-optional), and
+  doesn't attach a confidence score (see below) — set `staleRuleDays`
+  high enough (or clear flags as they come up) if it's too noisy for
+  your ruleset.
+
 **Confidence score.** Every detector except global-volume-spike and
 rule-hit-rate-spike attaches a `confidence` percentage (0-100) to each
 flag it raises, shown in the UI as e.g. "73% confidence" — but not all
@@ -390,6 +420,9 @@ you're looking at:
   already track a slow-moving EMA baseline internally (same technique
   activity-spike uses), just without a confidence score attached yet —
   a known gap, filed separately.
+- **Not scored (stale rule).** A deterministic "has this rule's
+  `lastSeen` crossed `staleRuleDays`" check with no baseline or
+  overshoot concept behind it at all — there's nothing to score.
 
 `confidence` is `null` in `GET /api/flags` for a detector that doesn't
 score at all, never an implied 100%.
@@ -455,6 +488,20 @@ clears it via the UI or `POST /api/flags/{id}/clear`. Clearing an
 already-active-again source re-raises it as a fresh entry rather than
 silently resurrecting the old one.
 
+Alongside the plain Clear action, "Clear, never flag again" (`POST
+/api/flags/{id}/clear-permanent`) clears the flag *and* permanently
+excludes that exact (detector, target) pair -- from then on it never
+raises again, silently, until the exclusion is removed. This is
+deliberately permanent rather than a timed snooze: a time-limited mute
+either re-fires once it expires (nothing was solved) or it doesn't
+(permanent exclusion was what was wanted all along), so there's no
+in-between "snooze" option. Because "permanent" shouldn't mean
+"unrecoverable by mistake," every current exclusion is listed (and can
+be removed, re-enabling that pair) from the Flags tab's "Manage
+exclusions" panel -- admin-only once an account exists, open to anyone
+while mikroview is still in its fully-open zero-account state, same as
+every other admin-gated endpoint (see [Authentication](#authentication)).
+
 ## New-device detection (optional, on by default)
 
 Raises a `new_device` flag the first time mikroview ever sees a given
@@ -502,9 +549,9 @@ flag *episode* is raised (a first-ever raise, or a revival after a human
 clears an already-cleared flag -- never a plain re-fire of an
 already-active one, so a noisy detector doesn't re-alert on every
 event). Each channel below is independently enabled by its own
-identifying field being set (`smtp.host`, `pushover.token`) -- configure
-any combination of zero, one, or both; every enabled channel shares one
-`batchWindow`.
+identifying field being set (`smtp.host`, `pushover.token`,
+`webhook.url`) -- configure any combination of zero, one, two, or all
+three; every enabled channel shares one `batchWindow`.
 
 ```yaml
 notify:
@@ -533,20 +580,43 @@ notify:
     # no per-browser subscription management, just this pair.
     token: "your-application-token"
     user: "your-user-or-group-key"
+  webhook:
+    # Any HTTPS endpoint that accepts a JSON POST -- ntfy, Discord
+    # (via a webhook URL's own payload adapter or a receiving proxy),
+    # Slack (same), Home Assistant's webhook trigger, n8n, or a
+    # bespoke receiver of your own. No bespoke per-service integration
+    # here on purpose -- this is the "everything else" channel.
+    url: "https://ntfy.example.com/mikroview-alerts"
+    # headers: arbitrary extra headers sent with every POST -- most
+    # commonly auth, since ntfy/Home Assistant/n8n-style receivers each
+    # expect it in a different header rather than agreeing on one
+    # convention. Optional; omit entirely for a receiver that needs no
+    # auth (e.g. an unauthenticated local ntfy topic).
+    headers:
+      Authorization: "Bearer changeme"
+      # X-Custom-Header: "some-other-receiver-specific-value"
 ```
 
-Left with an empty `smtp.host`/`pushover.token` (the default), that
-channel is simply never dispatched to -- no relay or app is assumed.
-`smtp.password`/`pushover.token`/`pushover.user` can also be set via env
-vars instead of the config file (see the table below), same
-secret-via-env precedent as `MIKROVIEW_ABUSEIPDB_KEY`.
+Left with an empty `smtp.host`/`pushover.token`/`webhook.url` (the
+default), that channel is simply never dispatched to -- no relay, app,
+or endpoint is assumed. `smtp.password`/`pushover.token`/`pushover.user`/
+`webhook.url` can also be set via env vars instead of the config file
+(see the table below), same secret-via-env precedent as
+`MIKROVIEW_ABUSEIPDB_KEY`; `webhook.headers` is YAML-only (a map doesn't
+map cleanly onto one env var, same reasoning `flags.detectors` and the
+device/naming maps already give).
 
 One notification covers every flag raised within a `batchWindow`: title/
 subject `mikroview: N new flag(s)`, one line per flag (type, target,
 detail, confidence, first-seen) -- Pushover's message additionally caps
 at 10 lines with a "...and N more" trailer, since its message field is
-much smaller than an email body. Built around a shared
-`internal/notify.Notifier`/`Dispatcher` so both channels reuse the same
+much smaller than an email body. The webhook channel instead POSTs a
+JSON body shaped `{"title": "...", "count": N, "flags": [...]}`, where
+each entry in `flags` is the same flag record the UI itself renders
+(type, target, detail, count, first/last seen, confidence) -- a generic
+consumer gets the full structured batch to template off of, rather than
+a pre-rendered string. Built around a shared
+`internal/notify.Notifier`/`Dispatcher` so every channel reuses the same
 batching rather than each implementing their own; true device push (web
 push API, VAPID keys, service worker) is a separate, not-yet-built
 target scoped alongside PWA feasibility, since a lot of that plumbing
@@ -628,6 +698,7 @@ auth:
   storePath: "/var/lib/mikroview/users.json"
   secureCookie: true
   sessionTTL: 24h
+  tokensStorePath: "/var/lib/mikroview/tokens.json"
 ```
 
 - **`storePath`** — where accounts (and the skip/disabled decision) are
@@ -645,6 +716,11 @@ auth:
   on each authenticated request, so this is "how long you can go without
   activity before needing to log in again," not a fixed session
   lifetime.
+- **`tokensStorePath`** — where [API tokens](#api-tokens-read-only) are
+  persisted, as a small JSON file (names + SHA-256 hashes, never the raw
+  bearer values). Defaults to `/var/lib/mikroview/tokens.json`. Unlike
+  `storePath`, this really is optional: a deployment that never creates
+  a token doesn't need it.
 
 **If you create an account**, every request except `GET /api/healthz`
 and the login/session endpoints requires a valid session, permanently,
@@ -686,6 +762,47 @@ A password reset immediately invalidates every existing session for that
 account, including on an already-running server -- you don't need to
 restart mikroview after running `-reset-password` for the new password
 to take effect.
+
+## API tokens (read-only)
+
+For a separate service to pull mikroview's data over the network with
+no browser involved -- e.g. a companion OpenCanary-dashboard project
+cross-referencing incidents against mikroview's event/flag history -- a
+session cookie doesn't work: there's no login flow to hold one. API
+tokens are a long-lived bearer credential for exactly that case,
+admin-created from the "API tokens" panel in the menu's Account section
+(or directly via the API below).
+
+**Scope is deliberately narrow: read-only, four endpoints, nothing
+else.** A valid token grants `Authorization: Bearer <token>` access to:
+
+- `GET /api/events`
+- `GET /api/flags`
+- `GET /api/stats`
+- `GET /api/devices`
+
+and *nothing* else -- no clearing a flag, no changing a detector, no
+managing users or other tokens, regardless of the method or path
+requested. This isn't a per-request permission check that a future
+handler could accidentally bypass: a bearer-authenticated request is
+routed to a completely separate, minimal internal router that simply
+has no other handler registered on it, so there is no code path from a
+valid token to anything else, structurally rather than by convention.
+
+A token's raw value is shown exactly once, at creation, and is not
+recoverable afterward -- only the SHA-256 hash of it is ever persisted
+(not Argon2id: that cost exists to slow down guessing a low-entropy,
+human-chosen password, and a token's value is already a 128-bit random
+string, well outside brute-forceable range). Losing the value means
+issuing a new token; there's no way to view an existing one again.
+
+There is no expiry -- like sessions and accounts, a token stays valid
+until explicitly revoked from the same panel (or `DELETE
+/api/tokens/{id}`).
+
+```sh
+curl -H "Authorization: Bearer <token>" https://mikroview.example.com/api/events
+```
 
 ## Single sign-on (OIDC/SSO)
 
@@ -912,10 +1029,14 @@ Override individual scalar settings without a mounted file:
 | `MIKROVIEW_FLAGS_LOW_SLOW_SCAN_MIN_OBSERVATION` | `flags.lowSlowScanMinObservation` |
 | `MIKROVIEW_FLAGS_LOW_SLOW_SCAN_DROP_RATIO` | `flags.lowSlowScanDropRatio` |
 | `MIKROVIEW_FLAGS_LOW_SLOW_SCAN_BASELINE_MULTIPLIER` | `flags.lowSlowScanBaselineMultiplier` |
+| `MIKROVIEW_FLAGS_RULE_USAGE_STORE_PATH` | `flags.ruleUsageStorePath` |
+| `MIKROVIEW_FLAGS_STALE_RULE_DAYS` | `flags.staleRuleDays` |
+| `MIKROVIEW_FLAGS_STALE_RULE_CHECK_INTERVAL` | `flags.staleRuleCheckInterval` |
 | `MIKROVIEW_FLAGS_DETECTOR_SETTINGS_STORE_PATH` | `flags.detectorSettingsStorePath` (see [Per-detector toggles](#per-detector-toggles-and-scope-restrictions-optional)) |
 | `MIKROVIEW_AUTH_STORE_PATH` | `auth.storePath` (see [Authentication](#authentication)) |
 | `MIKROVIEW_AUTH_SECURE_COOKIE` | `auth.secureCookie` |
 | `MIKROVIEW_AUTH_SESSION_TTL` | `auth.sessionTTL` |
+| `MIKROVIEW_AUTH_TOKENS_STORE_PATH` | `auth.tokensStorePath` (see [API tokens](#api-tokens-read-only)) |
 | `MIKROVIEW_TLS_ENABLED` | `tls.enabled` (see [TLS](#tls)) |
 | `MIKROVIEW_TLS_CERT_FILE` | `tls.certFile` |
 | `MIKROVIEW_TLS_KEY_FILE` | `tls.keyFile` |
@@ -937,6 +1058,7 @@ Override individual scalar settings without a mounted file:
 | `MIKROVIEW_NOTIFY_PUSHOVER_TOKEN` | `notify.pushover.token` |
 | `MIKROVIEW_NOTIFY_PUSHOVER_USER` | `notify.pushover.user` |
 | `MIKROVIEW_DEVICE_MAC_STORE_PATH` | `deviceMac.storePath` (see [New-device detection](#new-device-detection-optional-on-by-default)) |
+| `MIKROVIEW_NOTIFY_WEBHOOK_URL` | `notify.webhook.url` |
 
 ## CLI flags (local development)
 
@@ -963,6 +1085,9 @@ exits, rather than starting the server. See
 | `GET /api/lookup/ip/{ip}` | on-demand reputation/threat-intel lookup for one public IP (see [IP reputation lookup](#ip-reputation-lookup-optional)) |
 | `GET /api/flags` | active + cleared behavioral flags (see [Behavioral flags](#behavioral-flags-optional-on-by-default)) |
 | `POST /api/flags/{id}/clear` | mark one flag as cleared |
+| `POST /api/flags/{id}/clear-permanent` | clear one flag *and* permanently exclude its (detector, target) pair going forward |
+| `GET /api/flags/exclusions` | admin-only (open while zero accounts exist): every currently-excluded (detector, target) pair |
+| `DELETE /api/flags/exclusions/{id}` | admin-only (open while zero accounts exist): remove one exclusion, letting that pair raise again |
 | `GET /api/detectors` | admin-only (open while zero accounts exist): every detector's live enabled+scope (see [Per-detector toggles](#per-detector-toggles-and-scope-restrictions-optional)) |
 | `PUT /api/detectors/{name}` | admin-only (open while zero accounts exist): replace one detector's enabled+scope wholesale |
 | `GET /api/auth/session` | current auth state (setup-required / authenticated / not) -- always 200, never gated |
@@ -971,13 +1096,19 @@ exits, rather than starting the server. See
 | `POST /api/auth/login` | sign in, sets the session cookie |
 | `POST /api/auth/logout` | sign out, clears the session cookie |
 | `POST /api/auth/users` | admin-only: create an additional account |
+| `POST /api/tokens` | admin-only: create a read-only API token (see [API tokens](#api-tokens-read-only)) -- returns the raw value once |
+| `GET /api/tokens` | admin-only: list tokens (name/created/last-used, never the value or hash) |
+| `DELETE /api/tokens/{id}` | admin-only: revoke a token |
 | `GET /api/auth/oidc/login` | start the SSO flow -- a top-level browser redirect to the configured provider, only present when [OIDC](#single-sign-on-oidcsso) is configured |
 | `GET /api/auth/oidc/callback` | the provider's redirect target completing the SSO flow -- see [Single sign-on](#single-sign-on-oidcsso) |
 
 Every route above `/api/auth/session`/`/register`/`/login`/`/logout` and
 `/api/healthz` requires a valid session once an account exists -- see
-[Authentication](#authentication).
-Every mutating (`POST`/`PUT`) request also requires an
+[Authentication](#authentication). `GET /api/events`, `/flags`, `/stats`,
+and `/devices` additionally accept a valid `Authorization: Bearer
+<token>` header instead of a session (see [API tokens](#api-tokens-read-only));
+no other route accepts one.
+Every mutating (`POST`/`PUT`/`DELETE`) request also requires an
 `X-Requested-With: mikroview` header once an account exists (a CSRF
 mitigation, see SECURITY.md).
 

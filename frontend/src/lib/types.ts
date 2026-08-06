@@ -100,6 +100,17 @@ export interface AuthSession {
   ssoAvailable: boolean
 }
 
+// Mirrors internal/api/tokens.go's tokenResponse. value is present only
+// in the response to creating a token (see api.ts's createToken) --
+// never on a listed token, and never recoverable afterward.
+export interface ApiToken {
+  id: string
+  name: string
+  createdAt: string
+  lastUsedAt?: string
+  value?: string
+}
+
 // Mirrors internal/reputation/reputation.go's Result.
 export interface ReputationResult {
   ip: string
@@ -191,6 +202,16 @@ export interface Evidence {
   ports?: number[]
   hosts?: string[]
   nat?: NATInfo
+}
+
+// Mirrors internal/flags.Exclusion's JSON tags -- one permanently-
+// excluded (Type, Target) pair (see flags.svelte.ts's clearPermanent and
+// exclusions.svelte.ts). id is the same flagID(Type, Target) key a
+// Flag's own id already uses.
+export interface Exclusion {
+  id: string
+  type: FlagType
+  target: string
 }
 
 export interface Flag {

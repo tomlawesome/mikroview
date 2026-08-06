@@ -230,6 +230,42 @@ func TestLowSlowScanEnvVarsOverrideDefaults(t *testing.T) {
 	}
 }
 
+func TestStaleRuleDefaults(t *testing.T) {
+	cfg, err := Load("", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Flags.StaleRuleDays != 30 {
+		t.Errorf("StaleRuleDays = %v, want 30", cfg.Flags.StaleRuleDays)
+	}
+	if cfg.Flags.StaleRuleCheckInterval != time.Hour {
+		t.Errorf("StaleRuleCheckInterval = %v, want 1h", cfg.Flags.StaleRuleCheckInterval)
+	}
+	if cfg.Flags.RuleUsageStorePath != "/var/lib/mikroview/rule-usage.json" {
+		t.Errorf("RuleUsageStorePath = %q, want /var/lib/mikroview/rule-usage.json", cfg.Flags.RuleUsageStorePath)
+	}
+}
+
+func TestStaleRuleEnvVarsOverrideDefaults(t *testing.T) {
+	t.Setenv("MIKROVIEW_FLAGS_RULE_USAGE_STORE_PATH", "/data/rule-usage.json")
+	t.Setenv("MIKROVIEW_FLAGS_STALE_RULE_DAYS", "45")
+	t.Setenv("MIKROVIEW_FLAGS_STALE_RULE_CHECK_INTERVAL", "30m")
+
+	cfg, err := Load("", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Flags.RuleUsageStorePath != "/data/rule-usage.json" {
+		t.Errorf("RuleUsageStorePath = %q, want /data/rule-usage.json", cfg.Flags.RuleUsageStorePath)
+	}
+	if cfg.Flags.StaleRuleDays != 45 {
+		t.Errorf("StaleRuleDays = %v, want 45", cfg.Flags.StaleRuleDays)
+	}
+	if cfg.Flags.StaleRuleCheckInterval != 30*time.Minute {
+		t.Errorf("StaleRuleCheckInterval = %v, want 30m", cfg.Flags.StaleRuleCheckInterval)
+	}
+}
+
 func TestNotifySMTPEnvVarsOverrideDefaults(t *testing.T) {
 	t.Setenv("MIKROVIEW_NOTIFY_BATCH_WINDOW", "15s")
 	t.Setenv("MIKROVIEW_NOTIFY_SMTP_HOST", "smtp.example.com")
@@ -287,6 +323,38 @@ func TestNotifyPushoverEnvVarsOverrideDefaults(t *testing.T) {
 	}
 }
 
+func TestNotifyWebhookURLEnvVarOverridesDefault(t *testing.T) {
+	t.Setenv("MIKROVIEW_NOTIFY_WEBHOOK_URL", "https://ntfy.example.com/mikroview-alerts")
+
+	cfg, err := Load("", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Notify.Webhook.URL != "https://ntfy.example.com/mikroview-alerts" {
+		t.Errorf("Webhook.URL = %v, want https://ntfy.example.com/mikroview-alerts", cfg.Notify.Webhook.URL)
+	}
+}
+
+func TestNotifyWebhookHeadersLoadFromYAML(t *testing.T) {
+	dir := t.TempDir()
+	path := dir + "/config.yaml"
+	yaml := "notify:\n  webhook:\n    url: \"https://example.com/hook\"\n    headers:\n      Authorization: \"Bearer tok123\"\n"
+	if err := os.WriteFile(path, []byte(yaml), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := Load(path, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Notify.Webhook.URL != "https://example.com/hook" {
+		t.Errorf("Webhook.URL = %v, want https://example.com/hook", cfg.Notify.Webhook.URL)
+	}
+	if cfg.Notify.Webhook.Headers["Authorization"] != "Bearer tok123" {
+		t.Errorf("Webhook.Headers[Authorization] = %v, want Bearer tok123", cfg.Notify.Webhook.Headers["Authorization"])
+	}
+}
+
 func TestTLSDefaultsToEnabledWithSecureCookie(t *testing.T) {
 	cfg, err := Load("", nil)
 	if err != nil {
@@ -297,6 +365,17 @@ func TestTLSDefaultsToEnabledWithSecureCookie(t *testing.T) {
 	}
 	if !cfg.Auth.SecureCookie {
 		t.Error("expected Auth.SecureCookie to default to true, matching TLS being on by default")
+	}
+}
+
+func TestAuthTokensStorePathEnvOverrides(t *testing.T) {
+	t.Setenv("MIKROVIEW_AUTH_TOKENS_STORE_PATH", "/custom/tokens.json")
+	cfg, err := Load("", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Auth.TokensStorePath != "/custom/tokens.json" {
+		t.Errorf("Auth.TokensStorePath = %q, want the env override %q", cfg.Auth.TokensStorePath, "/custom/tokens.json")
 	}
 }
 
@@ -333,14 +412,18 @@ func TestDefaultStoragePathsUnderVarLibMikroview(t *testing.T) {
 	cases := map[string]string{
 		"Flags.StorePath":                 cfg.Flags.StorePath,
 		"Flags.DetectorSettingsStorePath": cfg.Flags.DetectorSettingsStorePath,
+		"Flags.RuleUsageStorePath":        cfg.Flags.RuleUsageStorePath,
 		"Auth.StorePath":                  cfg.Auth.StorePath,
+		"Auth.TokensStorePath":            cfg.Auth.TokensStorePath,
 		"TLS.StorePath":                   cfg.TLS.StorePath,
 		"DeviceMAC.StorePath":             cfg.DeviceMAC.StorePath,
 	}
 	want := map[string]string{
 		"Flags.StorePath":                 "/var/lib/mikroview/flags.json",
 		"Flags.DetectorSettingsStorePath": "/var/lib/mikroview/detector-settings.json",
+		"Flags.RuleUsageStorePath":        "/var/lib/mikroview/rule-usage.json",
 		"Auth.StorePath":                  "/var/lib/mikroview/users.json",
+		"Auth.TokensStorePath":            "/var/lib/mikroview/tokens.json",
 		"TLS.StorePath":                   "/var/lib/mikroview/tls",
 		"DeviceMAC.StorePath":             "/var/lib/mikroview/mac-registry.json",
 	}

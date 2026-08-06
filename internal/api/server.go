@@ -40,6 +40,11 @@ type Server struct {
 	LoginLimiter *auth.LoginLimiter
 	SecureCookie bool
 
+	// Tokens holds read-only API bearer tokens (issue #101) -- always
+	// non-nil (internal/auth.OpenTokenStore("") returns a usable, empty,
+	// unpersisted store), same nil-never convention as Auth above.
+	Tokens *auth.TokenStore
+
 	// OIDC/OIDCState: see oidc.go. Both nil unless cfg.OIDC.IssuerURL was
 	// set and provider discovery succeeded at startup -- every OIDC
 	// handler checks for nil and 404s, so a misconfigured or absent OIDC
@@ -65,6 +70,9 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("GET /api/lookup/ip/{ip}", s.handleIPLookup)
 	mux.HandleFunc("GET /api/flags", s.handleFlagsList)
 	mux.HandleFunc("POST /api/flags/{id}/clear", s.handleFlagsClear)
+	mux.HandleFunc("POST /api/flags/{id}/clear-permanent", s.handleFlagsClearPermanent)
+	mux.HandleFunc("GET /api/flags/exclusions", s.handleExclusionsList)
+	mux.HandleFunc("DELETE /api/flags/exclusions/{id}", s.handleExclusionRemove)
 
 	mux.HandleFunc("GET /api/detectors", s.handleDetectorSettingsList)
 	mux.HandleFunc("PUT /api/detectors/{name}", s.handleDetectorSettingsUpdate)
@@ -75,6 +83,16 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("POST /api/auth/login", s.handleAuthLogin)
 	mux.HandleFunc("POST /api/auth/logout", s.handleAuthLogout)
 	mux.HandleFunc("POST /api/auth/users", s.handleAuthCreateUser)
+
+	// Admin-only token management (issue #101) -- gated the same way
+	// POST /api/auth/users is (see handleTokensCreate/handleTokensList/
+	// handleTokensRevoke). The tokens themselves grant access through a
+	// completely separate, deliberately minimal mux -- see requireAuth's
+	// bearer-token branch in auth.go -- not through anything registered
+	// here.
+	mux.HandleFunc("POST /api/tokens", s.handleTokensCreate)
+	mux.HandleFunc("GET /api/tokens", s.handleTokensList)
+	mux.HandleFunc("DELETE /api/tokens/{id}", s.handleTokensRevoke)
 
 	mux.HandleFunc("GET /api/auth/oidc/login", s.handleOIDCLogin)
 	mux.HandleFunc("GET /api/auth/oidc/callback", s.handleOIDCCallback)
