@@ -18,6 +18,7 @@ import (
 
 	"github.com/tomlawesome/mikroview/internal/api"
 	"github.com/tomlawesome/mikroview/internal/auth"
+	"github.com/tomlawesome/mikroview/internal/blocklist"
 	"github.com/tomlawesome/mikroview/internal/config"
 	"github.com/tomlawesome/mikroview/internal/detect"
 	"github.com/tomlawesome/mikroview/internal/device"
@@ -219,7 +220,20 @@ func main() {
 		geoLog.Warn(fmt.Sprintf("%v (country flags disabled)", err))
 	}
 	defer geo.Close()
+	// rep (issue #113 Part A): always built (AbuseIPDBKey empty just
+	// means that one source inside it stays inert, same as before this
+	// issue). reputationSource is what actually gets handed to the
+	// detector/API server -- a lone *reputation.Client unless a second
+	// live source (GreyNoise) is configured, in which case it's wrapped
+	// in an Aggregator alongside it. Kept as two separate variables
+	// (rather than reassigning rep's own type) so the concrete *Client
+	// is still available by its own name if a future caller needs it
+	// specifically; every current caller only needs the interface.
 	rep := reputation.New(cfg.Reputation.AbuseIPDBKey)
+	var reputationSource reputation.Source = rep
+	if cfg.Reputation.GreyNoise.APIKey != "" {
+		reputationSource = reputation.NewAggregator(rep, reputation.NewGreyNoiseClient(cfg.Reputation.GreyNoise.APIKey))
+	}
 
 	flagsLog := logging.New("flags")
 	fs, err := flags.Open(cfg.Flags.StorePath)
@@ -356,7 +370,18 @@ func main() {
 	if err != nil {
 		detectorsLog.Warn(fmt.Sprintf("%v (continuing with in-memory-only detector toggle state)", err))
 	}
-	detector := detect.NewWithSettings(detectCfg, fs, detectorSettings).WithReputation(rep)
+	// bl (issue #113 Part B): always constructed, even with zero enabled
+	// sources (cfg.Blocklist.Sources == []) -- Match/Refresh are both
+	// harmless no-ops in that case (see internal/blocklist.Blocklist's
+	// doc comment), same "always non-nil, off means inert" convention
+	// Reputation/Auth/Entities already use elsewhere in this file. Only
+	// the refresh goroutines below are actually skipped when disabled
+	// (see bl.HasFeeds()), so a fully-disabled deployment starts zero
+	// extra goroutines for this feature.
+	blocklistLog := logging.New("blocklist")
+	bl := blocklist.New(cfg.Blocklist.Sources, blocklistLog)
+
+	detector := detect.NewWithSettings(detectCfg, fs, detectorSettings).WithReputation(reputationSource).WithKnownBadIPs(bl)
 	globalSpike := detect.NewGlobalSpikeDetectorWithSettings(detectCfg, fs, detectorSettings)
 	deviceSilence := detect.NewDeviceSilenceDetectorWithSettings(detectCfg, fs, detectorSettings, devices)
 	staleRule := detect.NewStaleRuleDetector(ru, fs, time.Duration(cfg.Flags.StaleRuleDays)*24*time.Hour)
@@ -478,6 +503,40 @@ func main() {
 		}
 	}()
 
+	// Local blocklist refresh (issue #113 Part B): a fixed daily cycle
+	// (blocklist.RefreshInterval, not configurable -- see that const's
+	// doc comment), same ticker/select/recover shape as the stale-rule
+	// sweep just above. Skipped entirely if no source is enabled
+	// (bl.HasFeeds() false), so a deployment that's disabled this
+	// feature via `blocklist.sources: []` starts zero extra goroutines
+	// for it. The first Refresh runs immediately, in its own goroutine,
+	// rather than blocking startup on Spamhaus/ET's reachability --
+	// same "never block startup on an optional external integration"
+	// contract GeoIP/Auth/Rules above already have; until it completes,
+	// Blocklist.Match just reports no matches (see that method's own
+	// doc comment), not an error.
+	if bl.HasFeeds() {
+		go func() {
+			defer logging.Recover(blocklistLog)
+			bl.Refresh(ctx)
+		}()
+		go func() {
+			ticker := time.NewTicker(blocklist.RefreshInterval)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-ticker.C:
+					func() {
+						defer logging.Recover(blocklistLog)
+						bl.Refresh(ctx)
+					}()
+				}
+			}
+		}()
+	}
+
 	// SSO (issue #43): additive on top of local auth, never a
 	// replacement -- see internal/oidc and auth.Store.
 	// FindOrCreateOIDCUser. A misconfigured or unreachable provider must
@@ -523,7 +582,7 @@ func main() {
 		Store:            st,
 		Devices:          devices,
 		Hub:              h,
-		Reputation:       rep,
+		Reputation:       reputationSource,
 		Flags:            fs,
 		DetectorSettings: detectorSettings,
 		Entities:         entityStore,

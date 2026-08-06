@@ -604,6 +604,82 @@ deviceMac:
 	}
 }
 
+func TestBlocklistDefaultsToSpamhausDropAndEdrop(t *testing.T) {
+	cfg, err := Load("", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"spamhaus_drop", "spamhaus_edrop"}
+	if len(cfg.Blocklist.Sources) != len(want) {
+		t.Fatalf("Blocklist.Sources = %v, want %v", cfg.Blocklist.Sources, want)
+	}
+	for i, s := range want {
+		if cfg.Blocklist.Sources[i] != s {
+			t.Errorf("Blocklist.Sources[%d] = %q, want %q", i, cfg.Blocklist.Sources[i], s)
+		}
+	}
+}
+
+func TestBlocklistSourcesEnvVarOverridesDefault(t *testing.T) {
+	t.Setenv("MIKROVIEW_BLOCKLIST_SOURCES", "spamhaus_drop,emerging_threats_compromised")
+
+	cfg, err := Load("", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"spamhaus_drop", "emerging_threats_compromised"}
+	if len(cfg.Blocklist.Sources) != len(want) {
+		t.Fatalf("Blocklist.Sources = %v, want %v", cfg.Blocklist.Sources, want)
+	}
+	for i, s := range want {
+		if cfg.Blocklist.Sources[i] != s {
+			t.Errorf("Blocklist.Sources[%d] = %q, want %q", i, cfg.Blocklist.Sources[i], s)
+		}
+	}
+}
+
+func TestBlocklistSourcesYAMLCanDisableEntirely(t *testing.T) {
+	dir := t.TempDir()
+	yamlPath := filepath.Join(dir, "config.yaml")
+	err := os.WriteFile(yamlPath, []byte(`
+blocklist:
+  sources: []
+`), 0o644)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := Load(yamlPath, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.Blocklist.Sources) != 0 {
+		t.Errorf("Blocklist.Sources = %v, want empty (disabled)", cfg.Blocklist.Sources)
+	}
+}
+
+func TestGreyNoiseAPIKeyEnvVarOverridesDefault(t *testing.T) {
+	t.Setenv("MIKROVIEW_GREYNOISE_KEY", "test-greynoise-key")
+
+	cfg, err := Load("", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Reputation.GreyNoise.APIKey != "test-greynoise-key" {
+		t.Errorf("Reputation.GreyNoise.APIKey = %q, want test-greynoise-key", cfg.Reputation.GreyNoise.APIKey)
+	}
+}
+
+func TestGreyNoiseAPIKeyDefaultsToEmpty(t *testing.T) {
+	cfg, err := Load("", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Reputation.GreyNoise.APIKey != "" {
+		t.Errorf("Reputation.GreyNoise.APIKey = %q, want empty by default", cfg.Reputation.GreyNoise.APIKey)
+	}
+}
+
 func TestFlagsCriticalPortsMalformedEntryIgnoresWholeValue(t *testing.T) {
 	t.Setenv("MIKROVIEW_FLAGS_CRITICAL_PORTS", "22,not-a-port,3389")
 
