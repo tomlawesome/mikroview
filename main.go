@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"slices"
 	"strings"
 	"syscall"
 	"time"
@@ -99,16 +100,60 @@ func logVersionAndMigration(logger *slog.Logger) {
 	}
 }
 
+// securityHeaders wraps next, setting baseline defense-in-depth headers
+// on every response -- absent entirely before this fix. The frontend
+// doesn't use {@html}/innerHTML anywhere (Svelte's default auto-
+// escaping is intact), so there's no known current XSS path this CSP
+// closes, but its absence removed a layer against any future
+// regression; X-Frame-Options is independently load-bearing today,
+// closing a real clickjacking gap -- without it, mikroview's UI could
+// be iframed by any third-party page, and every mutating action a
+// signed-in user's own browser performs (add user, clear a flag,
+// toggle a detector, log out) correctly carries the session cookie and
+// CSRF header regardless, since it's the *real* page's own JS issuing
+// the request -- clickjacking tricks the user into clicking through an
+// invisible overlay, it doesn't need to bypass either check. hsts is a
+// separate opt-in -- see its call site's doc comment.
+func securityHeaders(next http.Handler, hsts bool) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		h := w.Header()
+		h.Set("X-Content-Type-Options", "nosniff")
+		h.Set("X-Frame-Options", "DENY")
+		h.Set("Content-Security-Policy", "default-src 'self'")
+		if hsts {
+			h.Set("Strict-Transport-Security", "max-age=15552000; includeSubDomains")
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
 // httpsRedirectTarget builds the Location for redirecting a plain-HTTP
 // request to HTTPS -- strips any port off the request's Host header and
 // assumes HTTPS is reachable on the browser-default 443 (see
 // config.Listen.HTTPRedirect's doc comment for when that assumption
 // doesn't hold), preserving the original path/query/method-relevant
 // URI otherwise.
-func httpsRedirectTarget(r *http.Request) string {
+//
+// A normal browser navigation's Host header always names wherever the
+// user actually typed/clicked, so echoing it back is fine -- but a
+// client connecting directly (curl -H "Host: evil.example.com" ...)
+// controls it completely, turning an unvalidated echo into an open
+// redirect. allowedHosts (cfg.TLS.Hosts, the operator-declared SAN
+// list -- exactly the hostnames this deployment is meant to be reached
+// as) is the known-good set to check against: a Host outside it falls
+// back to allowedHosts[0], a real configured target, instead of
+// whatever the request claimed. If allowedHosts is empty (TLS.Hosts
+// left unconfigured, so servertls auto-detects instead -- see
+// internal/servertls's own defaultHosts), there's no explicit ground
+// truth available here to validate against, so this falls back to the
+// prior echo-Host behavior.
+func httpsRedirectTarget(r *http.Request, allowedHosts []string) string {
 	host := r.Host
 	if h, _, err := net.SplitHostPort(host); err == nil {
 		host = h
+	}
+	if len(allowedHosts) > 0 && !slices.Contains(allowedHosts, host) {
+		host = allowedHosts[0]
 	}
 	return "https://" + host + r.URL.RequestURI()
 }
@@ -384,8 +429,16 @@ func main() {
 	}
 
 	httpServer := &http.Server{
-		Addr:    cfg.Listen.HTTP,
-		Handler: rootMux,
+		Addr: cfg.Listen.HTTP,
+		// HSTS is opt-in, not tied to tls.enabled alone: it commits a
+		// browser to HTTPS-only for this exact host for the whole
+		// max-age, which is a worse failure mode than usual for a
+		// self-hosted appliance if the operator later changes hostname
+		// or drops back to plain HTTP -- only worth that trade-off once
+		// they've supplied their own real certificate (cfg.TLS.CertFile
+		// set), not for the self-generated default every fresh install
+		// starts with.
+		Handler: securityHeaders(rootMux, cfg.TLS.Enabled && cfg.TLS.CertFile != ""),
 		// Bounds a slow client trickling headers/body in to tie up a
 		// connection indefinitely (the WS listener, syslog listeners, and
 		// hub already have their own backpressure/deadline handling --
@@ -448,7 +501,7 @@ func main() {
 				// Listen.HTTPRedirect's doc comment for when that
 				// assumption doesn't hold).
 				Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-					http.Redirect(w, r, httpsRedirectTarget(r), http.StatusPermanentRedirect)
+					http.Redirect(w, r, httpsRedirectTarget(r, cfg.TLS.Hosts), http.StatusPermanentRedirect)
 				}),
 				ReadHeaderTimeout: 10 * time.Second,
 				ErrorLog:          slog.NewLogLogger(redirectLog.Handler(), slog.LevelWarn),
