@@ -70,6 +70,14 @@ store:
 #   hostActivityMultiplier: 3
 #   hostActivityWarmupSamples: 20
 #
+#   # How long a *configured* device's last-seen time may go without
+#   # updating before it's reported "stale" (GET /api/devices, feeds the
+#   # Fleet view) and raises a device_silence flag -- a router that's
+#   # crashed, rebooted, lost network, or had its syslog config wiped.
+#   # Needs to sit comfortably above normal syslog gaps; 0 disables this
+#   # detector entirely. See docs/configuration.md.
+#   deviceStaleAfter: 15m
+#
 #   # Per-detector on/off + scope restrictions -- every detector defaults
 #   # to enabled and unscoped; a live admin-only UI toggle can override
 #   # these at runtime without a restart (persisted separately to
@@ -90,6 +98,16 @@ store:
 #         classification: ""
 #         rules: []
 #         rulesMode: ""
+
+# New-device detection: raises a flag the first time mikroview ever sees
+# a given LAN client MAC address -- deterministic, no threshold to tune.
+# storePath already defaults to /var/lib/mikroview/mac-registry.json
+# (see deploy/docker-compose.yml for the matching volume mount) -- only
+# uncomment this block to move that path. See docs/configuration.md's
+# "New-device detection" section, including the WAN-side-only-ruleset
+# coverage caveat.
+# deviceMac:
+#   storePath: /var/lib/mikroview/mac-registry.json
 
 # Optional: friendly display names shown in place of a raw RouterOS rule
 # label (e.g. "r13") or a raw host IP, everywhere they appear in the UI
@@ -113,6 +131,7 @@ store:
 #   storePath: /var/lib/mikroview/users.json
 #   secureCookie: true
 #   sessionTTL: 24h
+#   tokensStorePath: /var/lib/mikroview/tokens.json
 
 # TLS is on by default and needs no configuration to work -- mikroview
 # generates its own local CA + certificate on first start, already

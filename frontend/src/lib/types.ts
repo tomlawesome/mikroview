@@ -46,7 +46,8 @@ export interface ClientEvent extends FirewallEvent {
   receivedAt: number
 }
 
-// Mirrors internal/device/registry.go's Info.
+// Mirrors internal/device/registry.go's Info, plus internal/api/rest.go's
+// handleDevices-computed `status` (see that file's deviceView/deviceStatus).
 export interface Device {
   id: string
   name: string
@@ -55,6 +56,12 @@ export interface Device {
   firstSeen: string
   lastSeen: string
   eventCount: number
+  // status (issue #98): "live" (an event within the configured staleness
+  // threshold), "stale" (LastSeen is older than that threshold), or
+  // "never_seen" (configured, but zero events ever received). Computed
+  // server-side, read-time, on every GET /api/devices -- always fresh,
+  // never a value this client itself has to derive or keep in sync.
+  status: 'live' | 'stale' | 'never_seen'
 }
 
 // Mirrors internal/store/query.go's Result.
@@ -100,6 +107,17 @@ export interface AuthSession {
   ssoAvailable: boolean
 }
 
+// Mirrors internal/api/tokens.go's tokenResponse. value is present only
+// in the response to creating a token (see api.ts's createToken) --
+// never on a listed token, and never recoverable afterward.
+export interface ApiToken {
+  id: string
+  name: string
+  createdAt: string
+  lastUsedAt?: string
+  value?: string
+}
+
 // Mirrors internal/reputation/reputation.go's Result.
 export interface ReputationResult {
   ip: string
@@ -130,11 +148,37 @@ export type FlagType =
   | 'repeated_drops'
   | 'low_slow_scan'
   | 'off_hours_activity'
+  | 'device_silence'
+  // new_device (issue #103 phase 1): raised directly from the ingest
+  // path (main.go), not through internal/detect like every other flag
+  // type above -- see internal/flags.TypeNewDevice. This is exactly the
+  // divergence DetectorName's doc comment below used to warn about: it
+  // has no corresponding detector-settings entry (no on/off toggle, no
+  // scope), so it must NOT be added to DetectorName.
+  | 'new_device'
+  // stale_rule (issue #102): raised by a standalone periodic sweep (see
+  // internal/detect.StaleRuleDetector), not the generic per-event
+  // detector-enable/scope pipeline every DetectorName-backed type goes
+  // through -- same "no matching detector-settings entry" exception as
+  // new_device above, not an oversight.
+  | 'stale_rule'
 
-// Mirrors internal/detect.DetectorName -- same string values as
-// FlagType, kept as a distinct alias since they're the same thing only
-// by coincidence today (see that type's doc comment).
-export type DetectorName = FlagType
+// Mirrors internal/detect.DetectorName's 12 string values. No longer a
+// FlagType alias (see new_device/stale_rule above) -- kept as its own
+// literal union now that FlagType has entries with no matching detector.
+export type DetectorName =
+  | 'port_scan'
+  | 'activity_spike'
+  | 'critical_port'
+  | 'global_spike'
+  | 'distributed_brute_force'
+  | 'outbound_anomaly'
+  | 'internal_recon'
+  | 'rule_spike'
+  | 'repeated_drops'
+  | 'low_slow_scan'
+  | 'off_hours_activity'
+  | 'device_silence'
 
 // Mirrors internal/detect.ListMode.
 export type ListMode = '' | 'allow' | 'deny'
@@ -175,6 +219,16 @@ export interface Evidence {
   ports?: number[]
   hosts?: string[]
   nat?: NATInfo
+}
+
+// Mirrors internal/flags.Exclusion's JSON tags -- one permanently-
+// excluded (Type, Target) pair (see flags.svelte.ts's clearPermanent and
+// exclusions.svelte.ts). id is the same flagID(Type, Target) key a
+// Flag's own id already uses.
+export interface Exclusion {
+  id: string
+  type: FlagType
+  target: string
 }
 
 export interface Flag {

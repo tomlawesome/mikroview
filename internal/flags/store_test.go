@@ -597,3 +597,249 @@ func TestOnRaiseNotSetIsNoOp(t *testing.T) {
 		t.Error("expected the raise itself to still succeed with no hook configured")
 	}
 }
+
+// TestExcludedTargetNeverRaises is the core contract this feature
+// exists for: once excluded, (Type, Target) must never raise again --
+// not once, not after being raised-then-cleared elsewhere, and not
+// across many repeated calls (proving it's a durable exclusion, not a
+// one-shot suppression that resets after the first blocked call).
+func TestExcludedTargetNeverRaises(t *testing.T) {
+	s, _ := Open("")
+	now := time.Now()
+
+	s.Exclude(TypePortScan, "203.0.113.9")
+
+	if isNew := s.Add(TypePortScan, "203.0.113.9", "20 ports in 60s", now); isNew {
+		t.Error("expected Add on an excluded target to report no new episode")
+	}
+	if len(s.List()) != 0 {
+		t.Fatalf("expected an excluded target to raise nothing at all, got %+v", s.List())
+	}
+
+	// Repeated re-fires: still nothing, every time.
+	for i := 0; i < 5; i++ {
+		s.Add(TypePortScan, "203.0.113.9", "re-fire", now.Add(time.Duration(i)*time.Second))
+	}
+	if len(s.List()) != 0 {
+		t.Fatalf("expected repeated Add calls on an excluded target to keep raising nothing, got %+v", s.List())
+	}
+
+	// AddWithConfidence/AddWithDetail go through the same add() -- must
+	// be silenced too, not just the plain Add path.
+	s.AddWithConfidence(TypePortScan, "203.0.113.9", "detail", 90, now)
+	s.AddWithDetail(TypePortScan, "203.0.113.9", "detail", 90, Evidence{Ports: []int{22}}, "US", now)
+	if len(s.List()) != 0 {
+		t.Fatalf("expected AddWithConfidence/AddWithDetail to also be silenced, got %+v", s.List())
+	}
+
+	// A different (Type, Target) pair is unaffected.
+	s.Add(TypePortScan, "203.0.113.10", "unrelated target", now)
+	if len(s.List()) != 1 {
+		t.Errorf("expected the exclusion to be scoped to its exact (Type, Target), got %+v", s.List())
+	}
+	s.Add(TypeActivitySpike, "203.0.113.9", "same target, different type", now)
+	if len(s.List()) != 2 {
+		t.Errorf("expected the exclusion to be scoped to its exact Type too, got %+v", s.List())
+	}
+}
+
+// TestExcludeIsPermanentNotRaiseThenAutoClear guards specifically
+// against the rejected "raise then immediately auto-clear" alternative
+// design the issue calls out -- an excluded target must never even
+// briefly appear in the store, cleared or otherwise.
+func TestExcludeIsPermanentNotRaiseThenAutoClear(t *testing.T) {
+	s, _ := Open("")
+	s.Exclude(TypeCriticalPort, "198.51.100.4")
+	s.Add(TypeCriticalPort, "198.51.100.4", "6 attempts on port 22", time.Now())
+
+	if len(s.List()) != 0 {
+		t.Fatalf("expected an excluded target to never appear in the store at all (not raised-then-cleared), got %+v", s.List())
+	}
+}
+
+func TestClearAndExcludeClearsAndPreventsFutureRaises(t *testing.T) {
+	s, _ := Open("")
+	now := time.Now()
+
+	s.Add(TypePortScan, "203.0.113.9", "20 ports in 60s", now)
+	id := s.List()[0].ID
+
+	if ok := s.ClearAndExclude(id, now.Add(time.Minute)); !ok {
+		t.Fatal("expected ClearAndExclude on a known ID to succeed")
+	}
+
+	list := s.List()
+	if len(list) != 1 || !list[0].Cleared {
+		t.Fatalf("expected the flag to be marked cleared, got %+v", list)
+	}
+	if !s.Excluded(TypePortScan, "203.0.113.9") {
+		t.Error("expected ClearAndExclude to record the exclusion")
+	}
+
+	// The whole point: it must never raise again after this.
+	s.Add(TypePortScan, "203.0.113.9", "re-fire attempt", now.Add(2*time.Minute))
+	list = s.List()
+	if len(list) != 1 || !list[0].Cleared || list[0].Detail != "20 ports in 60s" {
+		t.Errorf("expected the excluded target to stay cleared and untouched by further Add calls, got %+v", list)
+	}
+}
+
+func TestClearAndExcludeUnknownIDReturnsFalse(t *testing.T) {
+	s, _ := Open("")
+	if s.ClearAndExclude("nonexistent", time.Now()) {
+		t.Error("expected ClearAndExclude on an unknown ID to return false")
+	}
+	if len(s.ListExclusions()) != 0 {
+		t.Error("expected no exclusion to be recorded for an unknown ID")
+	}
+}
+
+func TestExcludeIsIdempotent(t *testing.T) {
+	s, _ := Open("")
+	s.Exclude(TypePortScan, "203.0.113.9")
+	s.Exclude(TypePortScan, "203.0.113.9")
+
+	if len(s.ListExclusions()) != 1 {
+		t.Errorf("expected excluding the same pair twice to still yield one entry, got %+v", s.ListExclusions())
+	}
+}
+
+func TestRemoveExclusionReEnablesRaising(t *testing.T) {
+	s, _ := Open("")
+	now := time.Now()
+
+	s.Exclude(TypePortScan, "203.0.113.9")
+	s.Add(TypePortScan, "203.0.113.9", "should be suppressed", now)
+	if len(s.List()) != 0 {
+		t.Fatal("expected the flag to be suppressed while excluded")
+	}
+
+	if !s.RemoveExclusion(TypePortScan, "203.0.113.9") {
+		t.Fatal("expected RemoveExclusion on a known exclusion to return true")
+	}
+	if s.Excluded(TypePortScan, "203.0.113.9") {
+		t.Error("expected Excluded to report false after removal")
+	}
+
+	s.Add(TypePortScan, "203.0.113.9", "should raise again now", now.Add(time.Second))
+	list := s.List()
+	if len(list) != 1 || list[0].Detail != "should raise again now" {
+		t.Errorf("expected the target to raise normally again after RemoveExclusion, got %+v", list)
+	}
+}
+
+func TestRemoveExclusionUnknownReturnsFalse(t *testing.T) {
+	s, _ := Open("")
+	if s.RemoveExclusion(TypePortScan, "203.0.113.9") {
+		t.Error("expected RemoveExclusion on a never-excluded pair to return false")
+	}
+}
+
+func TestRemoveExclusionByID(t *testing.T) {
+	s, _ := Open("")
+	s.Exclude(TypePortScan, "203.0.113.9")
+	id := flagID(TypePortScan, "203.0.113.9")
+
+	if !s.RemoveExclusionByID(id) {
+		t.Fatal("expected RemoveExclusionByID on a known exclusion ID to return true")
+	}
+	if s.RemoveExclusionByID(id) {
+		t.Error("expected a second RemoveExclusionByID call to return false (already removed)")
+	}
+}
+
+func TestListExclusionsSortedByID(t *testing.T) {
+	s, _ := Open("")
+	s.Exclude(TypePortScan, "203.0.113.9")
+	s.Exclude(TypeActivitySpike, "198.51.100.4")
+
+	list := s.ListExclusions()
+	if len(list) != 2 {
+		t.Fatalf("expected 2 exclusions, got %d: %+v", len(list), list)
+	}
+	for i := 1; i < len(list); i++ {
+		if list[i-1].ID > list[i].ID {
+			t.Errorf("expected exclusions sorted by ID, got %+v", list)
+		}
+	}
+	for _, e := range list {
+		if e.Target == "203.0.113.9" && e.Type != TypePortScan {
+			t.Errorf("expected the (type, target) pair to round-trip intact, got %+v", e)
+		}
+	}
+}
+
+// TestExclusionPersistenceRoundTrip proves the exclusion survives a
+// process restart (Open() round-trip), same as TestPersistenceRoundTrip
+// already proves for flags themselves -- the whole point of a
+// "permanent" exclusion is that it stays permanent across restarts, not
+// just for the life of the current process.
+func TestExclusionPersistenceRoundTrip(t *testing.T) {
+	orig := persistMinInterval
+	persistMinInterval = 0
+	defer func() { persistMinInterval = orig }()
+
+	path := filepath.Join(t.TempDir(), "flags.json")
+
+	s1, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s1.Exclude(TypePortScan, "203.0.113.9")
+	s1.Exclude(TypeCriticalPort, "198.51.100.4")
+	// Also persist an ordinary active flag alongside the exclusions, to
+	// prove the two coexist correctly in the same file.
+	s1.Add(TypeActivitySpike, "10.0.0.5", "5x baseline", time.Now())
+
+	s2, err := Open(path)
+	if err != nil {
+		t.Fatalf("re-opening the persisted store failed: %v", err)
+	}
+
+	if !s2.Excluded(TypePortScan, "203.0.113.9") {
+		t.Error("expected the first exclusion to survive reopening")
+	}
+	if !s2.Excluded(TypeCriticalPort, "198.51.100.4") {
+		t.Error("expected the second exclusion to survive reopening")
+	}
+	if len(s2.ListExclusions()) != 2 {
+		t.Errorf("expected exactly 2 persisted exclusions, got %+v", s2.ListExclusions())
+	}
+	if len(s2.List()) != 1 {
+		t.Errorf("expected the ordinary flag to also survive reopening alongside the exclusions, got %+v", s2.List())
+	}
+
+	// And the reopened store must still actually enforce the exclusion,
+	// not just report it via Excluded().
+	s2.Add(TypePortScan, "203.0.113.9", "should stay suppressed after reload", time.Now())
+	for _, f := range s2.List() {
+		if f.Type == TypePortScan && f.Target == "203.0.113.9" {
+			t.Errorf("expected the reloaded exclusion to still suppress raises, got %+v", f)
+		}
+	}
+}
+
+// TestOpenReadsLegacyBareArrayFormat proves a flags.json file written
+// before this feature existed (a bare `[...]` array of flags, no
+// exclusions wrapper) still loads correctly -- an existing deployment
+// upgrading mikroview must not lose its flag history or start treating
+// that file as malformed just because the on-disk shape changed.
+func TestOpenReadsLegacyBareArrayFormat(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "flags.json")
+	data := `[{"id":"port_scan:1.2.3.4","type":"port_scan","target":"1.2.3.4","detail":"legacy entry"}]`
+	if err := os.WriteFile(path, []byte(data), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	s, err := Open(path)
+	if err != nil {
+		t.Fatalf("Open() on a legacy bare-array file returned an unexpected error: %v", err)
+	}
+	list := s.List()
+	if len(list) != 1 || list[0].Detail != "legacy entry" {
+		t.Fatalf("expected the legacy flag to load intact, got %+v", list)
+	}
+	if len(s.ListExclusions()) != 0 {
+		t.Errorf("expected a legacy file to start with no exclusions, got %+v", s.ListExclusions())
+	}
+}

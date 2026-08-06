@@ -1,9 +1,11 @@
 import type {
+  ApiToken,
   AuthSession,
   DetectorScope,
   DetectorSettings,
   Device,
   EventsResult,
+  Exclusion,
   Filters,
   Flag,
   ReputationResult,
@@ -43,6 +45,16 @@ async function putJSON(url: string, body: unknown = {}): Promise<Response> {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'mikroview' },
     body: JSON.stringify(body),
+  })
+}
+
+// Same CSRF mitigation header as postJSON/putJSON -- DELETE isn't a
+// "safe" method either (see internal/api's isSafeMethod), so it's
+// required here too.
+async function deleteJSON(url: string): Promise<Response> {
+  return fetch(url, {
+    method: 'DELETE',
+    headers: { 'X-Requested-With': 'mikroview' },
   })
 }
 
@@ -114,6 +126,29 @@ export async function clearFlag(id: string): Promise<void> {
   if (!res.ok) throw new ApiError(`clearFlag: ${res.status}`, res.status)
 }
 
+// clearFlagPermanent is clearFlag plus a permanent exclusion of that
+// flag's (Type, Target) in the same step -- "Clear and never flag this
+// again" (see internal/flags.Store.ClearAndExclude).
+export async function clearFlagPermanent(id: string): Promise<void> {
+  const res = await postJSON(`/api/flags/${encodeURIComponent(id)}/clear-permanent`)
+  if (!res.ok) throw new ApiError(`clearFlagPermanent: ${res.status}`, res.status)
+}
+
+// fetchExclusions/removeExclusion: admin-only (see internal/api's
+// callerIsAdminOrOpen gate on both endpoints) "undo a mistake" surface
+// for permanent exclusions.
+export async function fetchExclusions(): Promise<Exclusion[]> {
+  const res = await fetch('/api/flags/exclusions')
+  if (!res.ok) throw new ApiError(`fetchExclusions: ${res.status}`, res.status)
+  const body = await res.json()
+  return body.exclusions ?? []
+}
+
+export async function removeExclusion(id: string): Promise<void> {
+  const res = await deleteJSON(`/api/flags/exclusions/${encodeURIComponent(id)}`)
+  if (!res.ok) throw new ApiError(`removeExclusion: ${res.status}`, res.status)
+}
+
 export async function fetchAuthSession(): Promise<AuthSession> {
   const res = await fetch('/api/auth/session')
   if (!res.ok) throw new ApiError(`fetchAuthSession: ${res.status}`, res.status)
@@ -171,4 +206,26 @@ export async function updateDetectorSettings(
   const res = await putJSON(`/api/detectors/${encodeURIComponent(name)}`, { enabled, scope })
   if (res.ok) return null
   return (await res.text()) || `updateDetectorSettings: ${res.status}`
+}
+
+// Admin-only read-only API token management (issue #101) -- see
+// internal/api/tokens.go. createToken's response is the only place the
+// raw bearer value is ever returned; fetchTokens never includes it.
+export async function fetchTokens(): Promise<ApiToken[]> {
+  const res = await fetch('/api/tokens')
+  if (!res.ok) throw new ApiError(`fetchTokens: ${res.status}`, res.status)
+  const body = await res.json()
+  return body.tokens ?? []
+}
+
+export async function createToken(name: string): Promise<ApiToken | string> {
+  const res = await postJSON('/api/tokens', { name })
+  if (res.ok) return res.json()
+  return (await res.text()) || `createToken: ${res.status}`
+}
+
+export async function revokeToken(id: string): Promise<string | null> {
+  const res = await deleteJSON(`/api/tokens/${encodeURIComponent(id)}`)
+  if (res.ok) return null
+  return (await res.text()) || `revokeToken: ${res.status}`
 }
