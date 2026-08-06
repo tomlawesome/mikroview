@@ -169,6 +169,16 @@ func httpsRedirectTarget(r *http.Request, allowedHosts []string) string {
 }
 
 func main() {
+	// -version: prints the build-time-stamped commit SHA (see the
+	// `version` var above) and exits -- no config load, no network,
+	// nothing else needed, so it's checked before every other mode
+	// below. The intended use is `docker exec <container> mikroview
+	// -version` against a running deployment, so the output is the bare
+	// string only (no "version:" prefix, no trailing punctuation) --
+	// easy to capture in a script without trimming anything first.
+	if len(os.Args) > 1 && os.Args[1] == "-version" {
+		os.Exit(runVersion())
+	}
 	// The runtime image is distroless (no shell, no curl/wget), so Docker's
 	// HEALTHCHECK -- and any orchestrator's readiness probe -- can't shell
 	// out to check the app; the binary has to check itself instead. Config
@@ -538,6 +548,7 @@ func main() {
 		OIDC:             oidcClient,
 		OIDCState:        oidcState,
 		StartTime:        time.Now(),
+		Version:          version,
 	}
 
 	rootMux := http.NewServeMux()
@@ -661,6 +672,15 @@ func main() {
 		logging.New("http").Error(serveErr.Error())
 		os.Exit(1)
 	}
+}
+
+// runVersion backs the `-version` mode -- prints the build-time-stamped
+// commit SHA (the `version` var above, "dev" for a plain local build)
+// and nothing else, so `docker exec <container> mikroview -version`
+// output is directly usable in a script without trimming a prefix.
+func runVersion() int {
+	fmt.Println(version)
+	return 0
 }
 
 // runHealthcheck backs the `-healthcheck` mode used by the container's

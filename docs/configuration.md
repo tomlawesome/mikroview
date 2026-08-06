@@ -1182,11 +1182,32 @@ Override individual scalar settings without a mounted file:
 | `MIKROVIEW_DEVICE_MAC_STORE_PATH` | `deviceMac.storePath` (see [New-device detection](#new-device-detection-optional-on-by-default)) |
 | `MIKROVIEW_NOTIFY_WEBHOOK_URL` | `notify.webhook.url` |
 
+## Checking your version
+
+There is no semantic version -- mikroview doesn't cut releases or tag
+versions today, only images built from `preview`/`main` (see
+`.github/workflows/docker.yml`; pushing to `dev` deliberately publishes
+no image at all). The build identifier is the short git commit SHA it
+was built from, and it's checkable three ways, all showing the same
+value:
+
+- `docker exec <container> mikroview -version` -- prints the bare SHA
+  and nothing else, easy to capture in a script.
+- `GET /api/healthz`'s `version` field -- reachable with no auth and no
+  session regardless of deployment state, same as the rest of that
+  endpoint.
+- The account menu in the UI (bottom, below Sign out/appearance) --
+  small, muted text, always visible regardless of auth state.
+
+A plain local `go run .`/`go build .` (no `-ldflags`) shows `dev`
+instead of a commit SHA.
+
 ## CLI flags (local development)
 
-`-syslog-udp`, `-syslog-tcp`, `-http`, `-http-redirect`, `-retention`,
-`-max-events`, `-geoip-db` — see `go run . -h`. Devices, rule/host
-names, and auth config can only be set via YAML/env, not flags.
+`-version`, `-syslog-udp`, `-syslog-tcp`, `-http`, `-http-redirect`,
+`-retention`, `-max-events`, `-geoip-db` — see `go run . -h`. Devices,
+rule/host names, and auth config can only be set via YAML/env, not
+flags.
 
 `-healthcheck`, `-list-users`, `-reset-password <username>`,
 `-enable-auth-setup` are standalone modes -- each does its one job and
@@ -1197,7 +1218,7 @@ exits, rather than starting the server. See
 
 | Endpoint | Description |
 |---|---|
-| `GET /api/healthz` | liveness/uptime check |
+| `GET /api/healthz` | liveness/uptime/version check |
 | `GET /ca.crt` | mikroview's self-generated CA certificate, unauthenticated -- only present when TLS is on and mikroview generated its own CA (never for a supplied cert or `tls.enabled: false`); see [TLS](#tls) |
 | `GET /api/events` | filtered, windowed historical query (see below) |
 | `GET /api/devices` | known devices (configured + auto-discovered), each with a `status` of `live`/`stale`/`never_seen` (issue #98, see [Behavioral flags](#behavioral-flags-optional-on-by-default)'s "Device silence" entry) -- feeds the Fleet view |

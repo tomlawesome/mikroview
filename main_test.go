@@ -1,9 +1,12 @@
 package main
 
 import (
+	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -243,5 +246,36 @@ func TestSecurityHeadersSetOnEveryResponse(t *testing.T) {
 	securityHeaders(inner, true).ServeHTTP(rr2, httptest.NewRequest(http.MethodGet, "/", nil))
 	if rr2.Header().Get("Strict-Transport-Security") == "" {
 		t.Error("expected an HSTS header when hsts=true")
+	}
+}
+
+// TestRunVersionPrintsTheBareVersionString proves runVersion's whole
+// contract: the printed line is exactly the version string, nothing
+// else -- `docker exec <container> mikroview -version` output has to be
+// directly usable in a script without any trimming.
+func TestRunVersionPrintsTheBareVersionString(t *testing.T) {
+	prevVersion := version
+	version = "test-sha1234"
+	defer func() { version = prevVersion }()
+
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	prevStdout := os.Stdout
+	os.Stdout = w
+	code := runVersion()
+	w.Close()
+	os.Stdout = prevStdout
+
+	out, err := io.ReadAll(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if code != 0 {
+		t.Errorf("runVersion() = %d, want 0", code)
+	}
+	if got := strings.TrimRight(string(out), "\n"); got != "test-sha1234" {
+		t.Errorf("runVersion() printed %q, want %q", got, "test-sha1234")
 	}
 }
