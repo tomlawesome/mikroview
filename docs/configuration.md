@@ -126,10 +126,117 @@ IP briefly to conserve free-tier quota.
   day). Set `reputation.abuseIPDBKey` in `config.yaml` or the
   `MIKROVIEW_ABUSEIPDB_KEY` env var. Adds abuse score, report count,
   country, and ISP to the result.
+- **GreyNoise Community API** (issue #113) — optional, needs a free
+  registered API key (despite GreyNoise's own marketing describing this
+  tier as keyless — see `internal/reputation.GreyNoiseClient`'s doc
+  comment for why this app requires one anyway rather than assuming
+  keyless access that doesn't actually work). Set
+  `reputation.greyNoise.apiKey` in `config.yaml` or the
+  `MIKROVIEW_GREYNOISE_KEY` env var. Answers a different question than
+  AbuseIPDB: not "has this IP been reported abusive" but "is this IP
+  part of known internet-wide scanning/research activity, and has
+  GreyNoise itself classified that activity malicious" — adds
+  `classification`, `noise`, `riot`, and `actorName` to the result.
+
+When more than one paid/keyed source is configured, results are merged
+by `internal/reputation.Aggregator`: numeric/boolean signals combine
+worst-case-wins (the higher abuse score, `isTor`/`noise`/`riot` OR'd
+together), descriptive fields (country, ISP, classification, actor name)
+take the first source that has an answer. A source that errors, times
+out, or isn't configured just contributes nothing to the merge rather
+than failing the whole lookup.
+
+Every behavioral flag's confidence floor is also informed by whichever
+sources are configured (see "Behavioral flags" below) — an abuse score,
+a Tor-exit/hosting-provider classification, or a GreyNoise "malicious"
+verdict against the flag's source IP all raise (never lower) that flag's
+confidence, the same way local blocklist matches do (see "Local IP/CIDR
+blocklist matching" below).
 
 Unconfigured, the feature still works with Shodan-only results; private/
 loopback/link-local addresses are rejected server-side regardless of
 configuration.
+
+## Local IP/CIDR blocklist matching (optional, on by default)
+
+Independent of the live reputation lookups above (which run on demand,
+against public IPs a human clicks "investigate" on), mikroview also
+maintains a small local cache of known-malicious CIDR ranges from a
+vetted menu of free threat-intel feeds, and checks every ingested
+event's source IP against it — raising a `known_bad_ip` flag directly on
+a match, regardless of any behavioral threshold. This isn't a
+"detector" in the `flags.detectors`/scope sense above (see
+"Per-detector toggles"): there's no threshold to tune and no scope
+narrower than "does this exact IP fall in a range on the list," so it
+has no matching entry there, the same precedent `new_device`/
+`stale_rule` already set.
+
+```yaml
+blocklist:
+  sources:
+    - spamhaus_drop
+    - spamhaus_edrop
+```
+
+- **`sources`** — which feeds from the vetted menu to enable. This is
+  deliberately *not* an arbitrary URL field: both the trust story (an
+  operator ticking "Spamhaus DROP" is trusting mikroview's own vetting
+  of that source, not whatever URL they happen to type) and the
+  performance ceiling (every enabled list is consulted on the hot
+  per-event ingest path — see below) depend on the menu staying small,
+  fixed, and enumerable. An unrecognized entry is logged and skipped at
+  startup, not fatal. Set to an empty list (`sources: []`) to disable
+  local blocklist matching entirely.
+
+  The menu today:
+  - **`spamhaus_drop`** / **`spamhaus_edrop`** (on by default) —
+    [Spamhaus's DROP and EDROP lists](https://www.spamhaus.org/drop/):
+    small (documented at roughly 1-2k CIDR ranges combined), free, no
+    registration, and deliberately conservative — Spamhaus only lists
+    netblocks they're confident are entirely malicious-controlled
+    (hijacked/stolen allocations, bulletproof hosting), which fits
+    "safe to flag on sight, no behavioral corroboration needed" far
+    better than a larger, noisier aggregated list would.
+  - **`emerging_threats_compromised`** (opt-in, not part of the
+    default) — [Emerging Threats' compromised-IPs
+    list](https://rules.emergingthreats.net/blockrules/compromised-ips.txt):
+    also free and requiring no registration, but a much larger,
+    faster-changing list of individual compromised hosts rather than
+    curated netblocks.
+
+**Refresh** is a fixed daily cycle, deliberately not configurable — an
+explicit decision to avoid over-polling Spamhaus/Emerging Threats' free
+infrastructure, not an oversight. The first fetch happens in the
+background at startup (never blocking it); if a refresh fails for a
+given feed (network issue, upstream outage), that feed keeps serving
+whatever it last successfully fetched rather than going blind, and logs
+a warning — see the `blocklist` component in server logs.
+
+**Performance.** Matching is a per-feed binary search over that feed's
+own sorted, non-overlapping address ranges — O(log n) per feed, never a
+linear scan, regardless of list size, since this runs on every single
+ingested event. Combined entries across every enabled feed are capped at
+10,000 (`internal/blocklist`'s `maxTotalEntries`) — roughly 5-10x
+Spamhaus DROP+EDROP's own documented combined size, comfortable headroom
+for that list to grow, and enough room to also enable Emerging Threats'
+larger list without immediately hitting the cap. A feed that would push
+the combined total over this cap has its excess entries truncated (a
+partially-loaded list still catches most of what it would have) rather
+than being rejected outright; a truncation is logged. Multiple feeds may
+be enabled simultaneously — each is matched independently, so enabling
+more than one only ever adds coverage, never conflicts.
+
+**Firing behavior.** A match raises `known_bad_ip` directly against the
+source IP, with a fixed high confidence (Spamhaus's own curation policy
+— only netblocks they're confident are entirely malicious-controlled —
+makes this about as strong a signal as this app has). It also raises the
+confidence floor (see `RaiseConfidenceFloor`) of any other currently
+active, source-IP-keyed flag for that same address (`port_scan`,
+`activity_spike`, `critical_port`, `outbound_anomaly`, `internal_recon`,
+`low_slow_scan`, `off_hours_activity`) — the same reinforcement role the
+live reputation lookups above already play for those flags, just
+resolved synchronously (a local lookup needs no network round-trip)
+instead of asynchronously.
 
 ## Port lookup
 
@@ -1100,6 +1207,7 @@ Override individual scalar settings without a mounted file:
 | `MIKROVIEW_LOG_LEVEL` | `log.level` (see [Logging](#logging)) |
 | `MIKROVIEW_GEOIP_DB_PATH` | `geoip.dbPath` (see [GeoIP country flags](#geoip-country-flags-optional)) |
 | `MIKROVIEW_ABUSEIPDB_KEY` | `reputation.abuseIPDBKey` (see [IP reputation lookup](#ip-reputation-lookup-optional)) |
+| `MIKROVIEW_GREYNOISE_KEY` | `reputation.greyNoise.apiKey` |
 | `MIKROVIEW_FLAGS_STORE_PATH` | `flags.storePath` |
 | `MIKROVIEW_FLAGS_PORT_SCAN_THRESHOLD` | `flags.portScanThreshold` |
 | `MIKROVIEW_FLAGS_PORT_SCAN_WINDOW` | `flags.portScanWindow` |
@@ -1167,6 +1275,7 @@ Override individual scalar settings without a mounted file:
 | `MIKROVIEW_NOTIFY_PUSHOVER_USER` | `notify.pushover.user` |
 | `MIKROVIEW_DEVICE_MAC_STORE_PATH` | `deviceMac.storePath` (see [New-device detection](#new-device-detection-optional-on-by-default)) |
 | `MIKROVIEW_NOTIFY_WEBHOOK_URL` | `notify.webhook.url` |
+| `MIKROVIEW_BLOCKLIST_SOURCES` | `blocklist.sources` (comma-separated, see [Local IP/CIDR blocklist matching](#local-ipcidr-blocklist-matching-optional-on-by-default)) -- note an empty env var value is treated as unset, same as every other list env var here, so *disabling* the feature (`sources: []`) needs the YAML file, not this variable |
 
 ## CLI flags (local development)
 
