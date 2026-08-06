@@ -322,6 +322,11 @@ type Flags struct {
 	LowSlowScanDropRatio          float64       `yaml:"lowSlowScanDropRatio"`
 	LowSlowScanBaselineMultiplier float64       `yaml:"lowSlowScanBaselineMultiplier"`
 
+	// DeviceStaleAfter (issue #98): see internal/detect.Config's matching
+	// field for what this means and why the default sits where it does.
+	// 0 disables the device-silence detector entirely.
+	DeviceStaleAfter time.Duration `yaml:"deviceStaleAfter"`
+
 	// StaleRule* (issue #102): flags a firewall rule that fired at some
 	// point but hasn't fired again in a long time -- either dead weight
 	// or an unnecessary hole, worth a human's attention either way. See
@@ -441,6 +446,8 @@ func defaults() Config {
 			LowSlowScanMinObservation:     45 * time.Minute,
 			LowSlowScanDropRatio:          0.8,
 			LowSlowScanBaselineMultiplier: 3,
+
+			DeviceStaleAfter: 15 * time.Minute,
 
 			RuleUsageStorePath:     DefaultDataDir + "/rule-usage.json",
 			StaleRuleDays:          30,
@@ -683,6 +690,11 @@ func applyEnv(cfg *Config) {
 	if v := os.Getenv("MIKROVIEW_FLAGS_LOW_SLOW_SCAN_BASELINE_MULTIPLIER"); v != "" {
 		if f, err := strconv.ParseFloat(v, 64); err == nil {
 			cfg.Flags.LowSlowScanBaselineMultiplier = f
+		}
+	}
+	if v := os.Getenv("MIKROVIEW_FLAGS_DEVICE_STALE_AFTER"); v != "" {
+		if d, err := time.ParseDuration(v); err == nil {
+			cfg.Flags.DeviceStaleAfter = d
 		}
 	}
 	if v := os.Getenv("MIKROVIEW_FLAGS_RULE_USAGE_STORE_PATH"); v != "" {

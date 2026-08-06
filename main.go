@@ -45,6 +45,14 @@ import (
 // to feel "live" to a person.
 const globalSpikeCheckInterval = 10 * time.Second
 
+// deviceSilenceCheckInterval is how often DeviceSilenceDetector re-checks
+// every configured device's LastSeen against Config.DeviceStaleAfter.
+// Coarser than globalSpikeCheckInterval on purpose: DeviceStaleAfter's
+// own default (15m) means a device going quiet is detected within this
+// interval of crossing the threshold, which doesn't need EMA-baseline-
+// tracking-grade freshness to be useful to an operator.
+const deviceSilenceCheckInterval = 1 * time.Minute
+
 // loginLimiter{Threshold,Window}: brute-force protection on
 // POST /api/auth/login (see internal/auth.LoginLimiter) -- an internal
 // hardening constant, not exposed via config, same tier as ws.go's
@@ -301,6 +309,8 @@ func main() {
 		LowSlowScanMinObservation:     cfg.Flags.LowSlowScanMinObservation,
 		LowSlowScanDropRatio:          cfg.Flags.LowSlowScanDropRatio,
 		LowSlowScanBaselineMultiplier: cfg.Flags.LowSlowScanBaselineMultiplier,
+
+		DeviceStaleAfter: cfg.Flags.DeviceStaleAfter,
 	}
 	seed := detect.DefaultSettingsMap()
 	for name, ds := range cfg.Flags.Detectors {
@@ -324,6 +334,7 @@ func main() {
 	}
 	detector := detect.NewWithSettings(detectCfg, fs, detectorSettings).WithReputation(rep)
 	globalSpike := detect.NewGlobalSpikeDetectorWithSettings(detectCfg, fs, detectorSettings)
+	deviceSilence := detect.NewDeviceSilenceDetectorWithSettings(detectCfg, fs, detectorSettings, devices)
 	staleRule := detect.NewStaleRuleDetector(ru, fs, time.Duration(cfg.Flags.StaleRuleDays)*24*time.Hour)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -402,6 +413,23 @@ func main() {
 		}
 	}()
 
+	go func() {
+		silenceLog := logging.New("device-silence")
+		ticker := time.NewTicker(deviceSilenceCheckInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				func() {
+					defer logging.Recover(silenceLog)
+					deviceSilence.Check(time.Now())
+				}()
+			}
+		}
+	}()
+
 	// Stale-rule sweep (issue #102): coarse by design (see
 	// StaleRuleCheckInterval's doc comment) -- staleness is judged in
 	// days, so there's no benefit to checking anywhere near as often as
@@ -472,6 +500,7 @@ func main() {
 		Flags:            fs,
 		DetectorSettings: detectorSettings,
 		CriticalPorts:    cfg.Flags.CriticalPorts,
+		DeviceStaleAfter: cfg.Flags.DeviceStaleAfter,
 		Auth:             authStore,
 		Sessions:         auth.NewSessionStore(cfg.Auth.SessionTTL),
 		LoginLimiter:     auth.NewLoginLimiter(loginLimiterThreshold, loginLimiterWindow),
