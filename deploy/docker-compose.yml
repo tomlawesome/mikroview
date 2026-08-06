@@ -32,10 +32,10 @@ services:
       # your own MaxMind GeoLite2 database; uncomment both this and the
       # env var below once you have one.
       # - ./GeoLite2-Country.mmdb:/etc/mikroview/GeoLite2-Country.mmdb:ro
-      # Persists flags/accounts/detector settings/the TLS cert across
-      # container recreation, not just restarts -- see README.md's
-      # "Persistent data" section for what this is and the bind-mount
-      # alternative below.
+      # Persists flags/accounts/detector settings/the new-device MAC
+      # registry/the TLS cert across container recreation, not just
+      # restarts -- see README.md's "Persistent data" section for what
+      # this is and the bind-mount alternative below.
       - mikroview-data:/var/lib/mikroview
       # Alternative to the named volume above: a bind mount, if you want
       # to browse/back up the files directly from the host. Comment out
@@ -51,6 +51,7 @@ services:
       # - MIKROVIEW_FLAGS_STORE_PATH=/var/lib/mikroview/flags.json
       # - MIKROVIEW_FLAGS_DETECTOR_SETTINGS_STORE_PATH=/var/lib/mikroview/detector-settings.json
       # - MIKROVIEW_AUTH_STORE_PATH=/var/lib/mikroview/users.json
+      # - MIKROVIEW_DEVICE_MAC_STORE_PATH=/var/lib/mikroview/mac-registry.json
       # - MIKROVIEW_AUTH_TOKENS_STORE_PATH=/var/lib/mikroview/tokens.json
       # TLS is on by default and needs no configuration to work -- these
       # are only for customizing it.
