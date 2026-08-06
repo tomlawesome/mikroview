@@ -28,9 +28,10 @@ type detectorEntry struct {
 }
 
 // handleDetectorSettingsList serves every detector's current live
-// on/off + scope settings, always all 9 (from detect.AllDetectorNames)
-// regardless of whether each has ever been customized -- see
-// docs/configuration.md's "Per-detector toggles" section.
+// on/off + scope settings, always all of them (from
+// detect.AllDetectorNames) regardless of whether each has ever been
+// customized -- see docs/configuration.md's "Per-detector toggles"
+// section.
 func (s *Server) handleDetectorSettingsList(w http.ResponseWriter, r *http.Request) {
 	if !s.callerIsAdminOrOpen(r) {
 		http.Error(w, "admin role required", http.StatusForbidden)

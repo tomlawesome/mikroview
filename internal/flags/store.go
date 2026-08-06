@@ -41,6 +41,16 @@ const (
 	// baseline, drop/reject ratio, reputation) rather than one count. See
 	// internal/detect/low_slow_scan.go.
 	TypeLowSlowScan Type = "low_slow_scan"
+	// TypeOffHoursActivity (issue #104): a host active during a clock
+	// window it has no established history of being active in --
+	// deliberately *not* "any activity inside a fixed off-hours window,"
+	// since a naive version of that fires on trivial noise (a phone
+	// syncing, a scheduled job) with nothing to judge it against. Judged
+	// per hour-of-day against that specific host's own EMA baseline *for
+	// that specific hour*, gated by both an absolute count floor and a
+	// minimum number of distinct prior days of history at that hour --
+	// see internal/detect/off_hours.go.
+	TypeOffHoursActivity Type = "off_hours_activity"
 )
 
 // maxFlags bounds the store the same way every other buffer in mikroview

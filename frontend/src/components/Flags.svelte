@@ -41,6 +41,7 @@
     rule_spike: 'Rule hit-rate spike',
     repeated_drops: 'Repeated drops on a port',
     low_slow_scan: 'Low-and-slow port scan',
+    off_hours_activity: 'Off-hours activity',
   }
 
   // Sorted by firstSeen (not the fetch response's lastSeen-desc order --
@@ -89,6 +90,7 @@
       case 'outbound_anomaly':
       case 'internal_recon':
       case 'low_slow_scan':
+      case 'off_hours_activity':
         appState.setFilter('ip', f.target)
         break
       case 'distributed_brute_force':

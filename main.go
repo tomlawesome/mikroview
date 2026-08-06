@@ -268,6 +268,11 @@ func main() {
 		LowSlowScanMinObservation:     cfg.Flags.LowSlowScanMinObservation,
 		LowSlowScanDropRatio:          cfg.Flags.LowSlowScanDropRatio,
 		LowSlowScanBaselineMultiplier: cfg.Flags.LowSlowScanBaselineMultiplier,
+
+		OffHoursStartHour:     cfg.Flags.OffHoursStartHour,
+		OffHoursEndHour:       cfg.Flags.OffHoursEndHour,
+		OffHoursMinSampleDays: cfg.Flags.OffHoursMinSampleDays,
+		OffHoursMinCount:      cfg.Flags.OffHoursMinCount,
 	}
 	seed := detect.DefaultSettingsMap()
 	for name, ds := range cfg.Flags.Detectors {

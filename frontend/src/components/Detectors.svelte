@@ -104,6 +104,14 @@
         'Hosts/Classification restrict which source IPs are tracked. Ports restricts which distinct destination ports count toward its breadth threshold, same as port scan.',
       example: 'Exclude a monitoring/health-check host that legitimately probes many ports slowly: Hosts = 192.168.1.100, mode = deny.',
     },
+    off_hours_activity: {
+      label: 'Off-hours activity',
+      explanation:
+        'Flags a source active during a fixed clock window (23:00-06:00 by default) it has no established history of being active in. Judged per hour-of-day against that specific host’s own adaptive baseline for that specific hour (same EMA technique as activity spike, tracked 24 times over -- once per hour), and gated by two independent floors before anything can fire: that hour must have at least 14 distinct prior days of history behind it (a single busy night isn’t a baseline), and the current count must clear an absolute floor of 5 events, not just look large against a near-zero baseline. A naive "any activity in this window" version was deliberately rejected -- a phone syncing or a scheduled job at 3am shouldn’t be indistinguishable from a real deviation.',
+      scopeNote:
+        "Hosts/Classification restrict which source IPs this detector watches, same as activity spike. Ports and rule labels don't apply -- it isn't keyed by destination.",
+      example: 'Exclude a host with a legitimate overnight job (backup, sync): Hosts = 192.168.1.40, mode = deny.',
+    },
   }
 
   // Which scope fields apply to each detector -- kept in sync with
@@ -121,6 +129,7 @@
     repeated_drops: ['hosts', 'ports'],
     global_spike: [],
     low_slow_scan: ['hosts', 'classification', 'ports'],
+    off_hours_activity: ['hosts', 'classification'],
   }
 
   let expanded = $state<DetectorName | null>(null)

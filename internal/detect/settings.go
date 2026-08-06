@@ -11,7 +11,7 @@ import (
 	"github.com/tomlawesome/mikroview/internal/store"
 )
 
-// DetectorName identifies one of the 9 behavioral detectors for settings
+// DetectorName identifies one of the 11 behavioral detectors for settings
 // purposes. Deliberately a separate enum from flags.Type (not reused
 // directly) even though the string values match 1:1 today -- settings
 // are keyed by detector, and "detector" and "flag type" are only the
@@ -31,16 +31,17 @@ const (
 	DetectorRuleSpike             DetectorName = "rule_spike"
 	DetectorRepeatedDrops         DetectorName = "repeated_drops"
 	DetectorLowSlowScan           DetectorName = "low_slow_scan"
+	DetectorOffHoursActivity      DetectorName = "off_hours_activity"
 )
 
-// AllDetectorNames is the canonical, stable-ordered list of all 10 --
+// AllDetectorNames is the canonical, stable-ordered list of all 11 --
 // used to seed defaults and so the API always reports every detector
 // even if only some have been customized.
 var AllDetectorNames = []DetectorName{
 	DetectorPortScan, DetectorActivitySpike, DetectorCriticalPort,
 	DetectorGlobalSpike, DetectorDistributedBruteForce, DetectorOutboundAnomaly,
 	DetectorInternalRecon, DetectorRuleSpike, DetectorRepeatedDrops,
-	DetectorLowSlowScan,
+	DetectorLowSlowScan, DetectorOffHoursActivity,
 }
 
 // IsValidDetectorName reports whether n is one of AllDetectorNames.
@@ -110,6 +111,9 @@ func isValidListMode(m ListMode) bool {
 //     restrict which SOURCE IPs are tracked; Ports/PortsMode restricts
 //     which distinct destination ports count toward its own breadth
 //     threshold. Rules ignored.
+//   - OffHoursActivity: same as ActivitySpike -- Hosts/HostsMode +
+//     Classification restrict which source IPs are tracked; Ports,
+//     Rules ignored (not keyed by destination).
 //   - GlobalSpike: every Scope field ignored; only Settings.Enabled
 //     applies (network-wide aggregate, not keyed by anything
 //     per-source). Scope is still present for structural uniformity
