@@ -3,7 +3,7 @@
   // "Behavioral flags" section) -- an interrogation aid, not an IPS: every
   // action here is a human reviewing and clearing a flag, never mikroview
   // acting on traffic itself.
-  import { flagsState } from '../lib/flags.svelte'
+  import { flagsState, extractSourceIp } from '../lib/flags.svelte'
   import { appState } from '../lib/state.svelte'
   import { formatHM, countryFlag } from '../lib/format'
   import ReputationDetails from './ReputationDetails.svelte'
@@ -14,6 +14,15 @@
 
   function toggleExpanded(id: string) {
     expandedId = expandedId === id ? null : id
+  }
+
+  // Which source IP's campaign card (see below) is currently expanded to
+  // show its individual member flags -- null means every campaign card
+  // is collapsed to just its summary row.
+  let expandedGroup: string | null = $state(null)
+
+  function toggleGroup(sourceIp: string) {
+    expandedGroup = expandedGroup === sourceIp ? null : sourceIp
   }
 
   // Only true when there's actually something beyond `detail` to show --
@@ -57,6 +66,51 @@
       .sort((a, b) => new Date(b.firstSeen).getTime() - new Date(a.firstSeen).getTime()),
   )
   const cleared = $derived(flagsState.list.filter((f) => f.cleared).slice(0, 20))
+
+  // "One actor, several signals" (issue #106): active flags sharing a
+  // normalized source IP (flagsState.groupedBySource -- see that
+  // derived's own doc comment for exactly which target shapes qualify)
+  // collapse into a single campaign card instead of N separate cards,
+  // in the same firstSeen-desc order `active` already uses. Each source
+  // IP is represented once, at the position of its most-recent flag;
+  // everything ungroupable (a lone flag from that source, or a target
+  // with no single source IP to correlate on at all) renders exactly as
+  // before.
+  type ActiveItem = { kind: 'single'; flag: Flag } | { kind: 'group'; sourceIp: string; flags: Flag[] }
+
+  const activeItems = $derived.by((): ActiveItem[] => {
+    const seen = new Set<string>()
+    const items: ActiveItem[] = []
+    for (const f of active) {
+      const ip = extractSourceIp(f.target)
+      const group = ip ? flagsState.groupedBySource.get(ip) : undefined
+      if (ip && group) {
+        if (seen.has(ip)) continue
+        seen.add(ip)
+        items.push({ kind: 'group', sourceIp: ip, flags: group })
+      } else {
+        items.push({ kind: 'single', flag: f })
+      }
+    }
+    return items
+  })
+
+  function groupTypeLabels(flags: Flag[]): string {
+    return [...new Set(flags.map((f) => TYPE_LABELS[f.type]))].join(' · ')
+  }
+
+  function groupFirstSeen(flags: Flag[]): string {
+    return flags.reduce((min, f) => (new Date(f.firstSeen) < new Date(min) ? f.firstSeen : min), flags[0].firstSeen)
+  }
+
+  function groupLastSeen(flags: Flag[]): string {
+    return flags.reduce((max, f) => (new Date(f.lastSeen) > new Date(max) ? f.lastSeen : max), flags[0].lastSeen)
+  }
+
+  function filterToSource(sourceIp: string) {
+    appState.setFilter('ip', sourceIp)
+    appState.view = 'live'
+  }
 
   // "Active flags by type" summary panel -- only types with at least one
   // active flag, ranked by count like every other BarList panel.
@@ -124,76 +178,114 @@
 <div class="flags scrollbar">
   <BarList title="Active flags by type" rows={typeBreakdown} emptyMessage="Nothing flagged right now." />
 
+  {#snippet flagCard(f: Flag)}
+    <li class="card">
+      <div class="card-main">
+        <span class="type">{TYPE_LABELS[f.type]}</span>
+        {#if f.confidence != null}
+          <span
+            class="confidence confidence-{confidenceTier(f.confidence)}"
+            title="How confident this specific flag is, based on how much history backs it and how far it deviates from normal -- not how confident mikroview is overall"
+          >
+            {f.confidence}% confidence
+          </span>
+        {/if}
+        {#if isFilterable(f)}
+          <button class="target" onclick={() => filterToTarget(f)} title="Filter the live view to {f.target}">
+            {f.target}
+          </button>
+        {:else}
+          <span class="target target-global">network-wide</span>
+        {/if}
+        {#if f.country}
+          <span class="country" title={f.country}>{countryFlag(f.country)}</span>
+        {/if}
+      </div>
+      <p class="detail">{f.detail}</p>
+      <div class="meta">
+        <span>first seen {formatHM(f.firstSeen)}</span>
+        <span>last seen {formatHM(f.lastSeen)}</span>
+        <span>fired {f.count}×</span>
+        {#if hasExpandableDetail(f)}
+          <button class="details-toggle" onclick={() => toggleExpanded(f.id)}>
+            {expandedId === f.id ? 'Hide details' : 'Details'}
+          </button>
+        {/if}
+      </div>
+      {#if expandedId === f.id}
+        <div class="expanded">
+          {#if f.evidence?.ports?.length}
+            <div class="ev-row">
+              <span class="ev-label">Ports touched</span>
+              <span class="ev-value">{f.evidence.ports.join(', ')}</span>
+            </div>
+          {/if}
+          {#if f.evidence?.hosts?.length}
+            <div class="ev-row">
+              <span class="ev-label">Hosts involved</span>
+              <span class="ev-value">{f.evidence.hosts.join(', ')}</span>
+            </div>
+          {/if}
+          {#if f.evidence?.nat}
+            <div class="ev-row">
+              <span class="ev-label">NAT</span>
+              <span class="ev-value">
+                {f.evidence.nat.ip}{f.evidence.nat.port ? `:${f.evidence.nat.port}` : ''}
+                {#if f.evidence.nat.raw}<br /><span class="ev-raw">{f.evidence.nat.raw}</span>{/if}
+              </span>
+            </div>
+          {/if}
+          {#if f.reputation}
+            <ReputationDetails result={f.reputation} />
+          {/if}
+        </div>
+      {/if}
+      <button class="clear" onclick={() => clear(f.id)}>Clear</button>
+    </li>
+  {/snippet}
+
   <section aria-labelledby="active-heading">
     <h2 id="active-heading">Active ({active.length})</h2>
     {#if active.length === 0}
       <p class="empty">Nothing flagged right now.</p>
     {:else}
       <ul class="list">
-        {#each active as f (f.id)}
-          <li class="card">
-            <div class="card-main">
-              <span class="type">{TYPE_LABELS[f.type]}</span>
-              {#if f.confidence != null}
-                <span
-                  class="confidence confidence-{confidenceTier(f.confidence)}"
-                  title="How confident this specific flag is, based on how much history backs it and how far it deviates from normal -- not how confident mikroview is overall"
+        {#each activeItems as item (item.kind === 'group' ? `group:${item.sourceIp}` : item.flag.id)}
+          {#if item.kind === 'single'}
+            {@render flagCard(item.flag)}
+          {:else}
+            <li class="card campaign-card">
+              <div class="campaign-header">
+                <button
+                  class="campaign-toggle"
+                  onclick={() => toggleGroup(item.sourceIp)}
+                  aria-expanded={expandedGroup === item.sourceIp}
                 >
-                  {f.confidence}% confidence
-                </span>
-              {/if}
-              {#if isFilterable(f)}
-                <button class="target" onclick={() => filterToTarget(f)} title="Filter the live view to {f.target}">
-                  {f.target}
+                  <span class="campaign-caret">{expandedGroup === item.sourceIp ? '▾' : '▸'}</span>
+                  <span class="campaign-count">{item.flags.length} related flags from this source</span>
                 </button>
-              {:else}
-                <span class="target target-global">network-wide</span>
-              {/if}
-              {#if f.country}
-                <span class="country" title={f.country}>{countryFlag(f.country)}</span>
-              {/if}
-            </div>
-            <p class="detail">{f.detail}</p>
-            <div class="meta">
-              <span>first seen {formatHM(f.firstSeen)}</span>
-              <span>last seen {formatHM(f.lastSeen)}</span>
-              <span>fired {f.count}×</span>
-              {#if hasExpandableDetail(f)}
-                <button class="details-toggle" onclick={() => toggleExpanded(f.id)}>
-                  {expandedId === f.id ? 'Hide details' : 'Details'}
+                <button
+                  class="target campaign-source"
+                  onclick={() => filterToSource(item.sourceIp)}
+                  title="Filter the live view to {item.sourceIp}"
+                >
+                  {item.sourceIp}
                 </button>
-              {/if}
-            </div>
-            {#if expandedId === f.id}
-              <div class="expanded">
-                {#if f.evidence?.ports?.length}
-                  <div class="ev-row">
-                    <span class="ev-label">Ports touched</span>
-                    <span class="ev-value">{f.evidence.ports.join(', ')}</span>
-                  </div>
-                {/if}
-                {#if f.evidence?.hosts?.length}
-                  <div class="ev-row">
-                    <span class="ev-label">Hosts involved</span>
-                    <span class="ev-value">{f.evidence.hosts.join(', ')}</span>
-                  </div>
-                {/if}
-                {#if f.evidence?.nat}
-                  <div class="ev-row">
-                    <span class="ev-label">NAT</span>
-                    <span class="ev-value">
-                      {f.evidence.nat.ip}{f.evidence.nat.port ? `:${f.evidence.nat.port}` : ''}
-                      {#if f.evidence.nat.raw}<br /><span class="ev-raw">{f.evidence.nat.raw}</span>{/if}
-                    </span>
-                  </div>
-                {/if}
-                {#if f.reputation}
-                  <ReputationDetails result={f.reputation} />
-                {/if}
               </div>
-            {/if}
-            <button class="clear" onclick={() => clear(f.id)}>Clear</button>
-          </li>
+              <div class="campaign-summary">
+                <span class="campaign-types">{groupTypeLabels(item.flags)}</span>
+                <span>first seen {formatHM(groupFirstSeen(item.flags))}</span>
+                <span>last seen {formatHM(groupLastSeen(item.flags))}</span>
+              </div>
+              {#if expandedGroup === item.sourceIp}
+                <ul class="list campaign-members">
+                  {#each item.flags as f (f.id)}
+                    {@render flagCard(f)}
+                  {/each}
+                </ul>
+              {/if}
+            </li>
+          {/if}
         {/each}
       </ul>
     {/if}
@@ -268,6 +360,68 @@
   .cleared-card {
     opacity: 0.7;
     padding-right: 12px;
+  }
+
+  /* No single Clear action at the campaign level (clearing happens per
+     member flag, inside the expanded list below), so unlike a plain
+     .card it doesn't need to reserve .clear's right-hand padding. */
+  .campaign-card {
+    padding: 10px 12px;
+  }
+
+  .campaign-header {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+  }
+
+  .campaign-toggle {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    background: transparent;
+    border: none;
+    padding: 0;
+    color: var(--fg);
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+  }
+
+  .campaign-caret {
+    color: var(--fg-muted);
+    font-size: 11px;
+    width: 10px;
+    display: inline-block;
+  }
+
+  .campaign-count {
+    color: var(--fg);
+  }
+
+  .campaign-source.target {
+    font-weight: 600;
+  }
+
+  .campaign-summary {
+    margin-top: 6px;
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 12px;
+    font-size: 12px;
+    color: var(--fg-dim);
+  }
+
+  .campaign-types {
+    color: var(--fg-muted);
+  }
+
+  .campaign-members {
+    margin-top: 10px;
+    padding-top: 10px;
+    border-top: 1px solid var(--border);
   }
 
   .card-main {
