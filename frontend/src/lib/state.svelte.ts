@@ -205,7 +205,21 @@ class AppState {
   }
 }
 
-function applyFilters(events: FirewallEvent[], f: Filters): FirewallEvent[] {
+export function applyFilters(events: FirewallEvent[], f: Filters): FirewallEvent[] {
+  // Compiled once per applyFilters call, not once per event -- this
+  // used to construct a new RegExp inside the per-event filter
+  // callback below, recompiling the same pattern for every one of up
+  // to 5000 events on every call (as often as every ~200ms under
+  // load, see this file's batching comment above).
+  let ruleRe: RegExp | null = null
+  if (f.rule && f.ruleRegex) {
+    try {
+      ruleRe = new RegExp(f.rule, 'i')
+    } catch {
+      // invalid regex: no-op, treat as unfiltered -- same as before
+    }
+  }
+
   return events.filter((e) => {
     if (f.device && e.deviceId !== f.device) return false
     if (f.action && e.action !== f.action) return false
@@ -237,13 +251,11 @@ function applyFilters(events: FirewallEvent[], f: Filters): FirewallEvent[] {
       if (f.ruleRegex) {
         // An invalid pattern disables the filter (matches internal/store/
         // query.go's behavior) rather than throwing or hiding everything
-        // -- the user is probably still mid-typing it.
-        try {
-          const re = new RegExp(f.rule, 'i')
-          if (!re.test(e.ruleLabel) && !re.test(e.raw)) return false
-        } catch {
-          // invalid regex: no-op, treat as unfiltered
-        }
+        // -- the user is probably still mid-typing it. ruleRe is null in
+        // exactly that case (see above), so every event falls through
+        // unfiltered by rule, uniformly -- same behavior as each event
+        // independently hitting the same construction error used to be.
+        if (ruleRe && !ruleRe.test(e.ruleLabel) && !ruleRe.test(e.raw)) return false
       } else {
         const needle = f.rule.toLowerCase()
         if (!e.ruleLabel.toLowerCase().includes(needle) && !e.raw.toLowerCase().includes(needle)) return false
