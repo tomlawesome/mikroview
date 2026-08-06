@@ -3,6 +3,7 @@ package flags
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -28,6 +29,31 @@ func TestOpenMissingFileIsUsable(t *testing.T) {
 	}
 	if len(s.List()) != 0 {
 		t.Errorf("expected an empty store, got %d flags", len(s.List()))
+	}
+}
+
+// A JSON array containing null is syntactically valid, so it unmarshals
+// without error into a slice with a nil *Flag element -- before the
+// fix, the very next line (indexing f.ID) paniced on that nil pointer,
+// contradicting Open's own documented "malformed file never blocks
+// startup" contract.
+func TestOpenSkipsNilArrayElements(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "flags.json")
+	data := `[null, {"id":"port_scan:1.2.3.4","type":"port_scan","target":"1.2.3.4"}, null]`
+	if err := os.WriteFile(path, []byte(data), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	s, err := Open(path) // must not panic
+	if err != nil {
+		t.Fatalf("Open() returned an unexpected error: %v", err)
+	}
+	list := s.List()
+	if len(list) != 1 {
+		t.Fatalf("expected the one real entry to survive, got %d: %+v", len(list), list)
+	}
+	if list[0].Target != "1.2.3.4" {
+		t.Errorf("expected the real flag's data to be intact, got %+v", list[0])
 	}
 }
 
@@ -179,7 +205,63 @@ func TestListOrdersMostRecentlyActiveFirst(t *testing.T) {
 	}
 }
 
+// TestPersistLockedRateLimitsWrites proves the debounce actually skips
+// disk writes within the window (not just that it compiles) -- a
+// sustained re-fire burst (the scenario this exists for) must not hit
+// disk once per event.
+func TestPersistLockedRateLimitsWrites(t *testing.T) {
+	orig := persistMinInterval
+	persistMinInterval = 80 * time.Millisecond
+	defer func() { persistMinInterval = orig }()
+
+	path := filepath.Join(t.TempDir(), "flags.json")
+	s, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	now := time.Now()
+	s.Add(TypePortScan, "1.1.1.1", "first", now)
+	firstWrite, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("expected the first Add to write immediately (empty lastPersist), got: %v", err)
+	}
+
+	// Within the debounce window: must NOT reach disk yet.
+	s.Add(TypePortScan, "2.2.2.2", "second, still within the window", now)
+	stillFirst, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(stillFirst) != string(firstWrite) {
+		t.Errorf("expected the second Add (within %v of the first) to be rate-limited, but the file changed", persistMinInterval)
+	}
+
+	// Past the window: the next call must flush the latest state.
+	time.Sleep(persistMinInterval + 20*time.Millisecond)
+	s.Add(TypePortScan, "3.3.3.3", "third, after the window", now)
+	final, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(s.List()) != 3 {
+		t.Fatalf("in-memory state should always have all 3 regardless of persistence timing, got %d", len(s.List()))
+	}
+	if !strings.Contains(string(final), "3.3.3.3") {
+		t.Errorf("expected the post-window write to include all 3 flags, got:\n%s", final)
+	}
+}
+
 func TestPersistenceRoundTrip(t *testing.T) {
+	// Every Add/Clear below happens back-to-back with no real delay --
+	// persistMinInterval's rate limiting would otherwise skip all but
+	// the first write, and reopening immediately after would read stale
+	// data. Real callers spread naturally over wall-clock time; this
+	// test doesn't.
+	orig := persistMinInterval
+	persistMinInterval = 0
+	defer func() { persistMinInterval = orig }()
+
 	path := filepath.Join(t.TempDir(), "nested", "flags.json")
 
 	s1, err := Open(path)
