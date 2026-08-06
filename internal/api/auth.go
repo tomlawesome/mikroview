@@ -377,18 +377,28 @@ type createUserRequest struct {
 	Role     string `json:"role"`
 }
 
+// callerIsAdmin reports whether r's authenticated caller is an admin --
+// the strict check every admin-only mutation of *account-equivalent*
+// state (user management, and internal/entities' admin-gated CRUD) uses.
+// While no account exists (undecided or disabled), there's no admin to
+// have called this as -- caller is nil either way (requireAuth's
+// bootstrap-exempt window blocks this path entirely during "undecided,"
+// and "disabled" bypasses the session check that would otherwise set
+// it), so this one check covers every zero-account case without needing
+// to special-case why Count() is still 0. Unlike
+// callerIsAdminOrOpen (detector_settings.go), there is deliberately no
+// "no users yet" bypass here: creating a user, or editing an entity
+// record, has no meaning before an admin exists.
+func callerIsAdmin(r *http.Request) bool {
+	caller := userFromContext(r)
+	return caller != nil && caller.Role == auth.RoleAdmin
+}
+
 // handleAuthCreateUser lets an existing admin add another account -- the
 // only way to create a user once self-registration has closed (see
 // auth.Store.Register's one-time-only behavior).
 func (s *Server) handleAuthCreateUser(w http.ResponseWriter, r *http.Request) {
-	// While no account exists (undecided or disabled), there's no admin
-	// to have called this as -- caller is nil either way (requireAuth's
-	// bootstrap-exempt window blocks this path entirely during
-	// "undecided," and "disabled" bypasses the session check that would
-	// otherwise set it), so this one check covers every zero-account
-	// case without needing to special-case why Count() is still 0.
-	caller := userFromContext(r)
-	if caller == nil || caller.Role != auth.RoleAdmin {
+	if !callerIsAdmin(r) {
 		http.Error(w, "admin role required", http.StatusForbidden)
 		return
 	}

@@ -159,6 +159,21 @@ export interface DetectorSettings {
   scope: DetectorScope
 }
 
+// Mirrors internal/entities.Entity's JSON tags (issue #107) -- a
+// persisted, admin-manageable (type, key) -> label/tags record. type is
+// deliberately a plain string, not a closed union, mirroring the
+// backend's own "extensible, not a fixed enum" choice (sibling issue
+// #109 adds "port" later); 'host'/'rule' below are just the two values
+// this UI knows how to label today, not a validation allowlist.
+export type EntityType = 'host' | 'rule' | (string & {})
+
+export interface Entity {
+  type: EntityType
+  key: string
+  label?: string
+  tags?: string[]
+}
+
 // Mirrors internal/flags.NATInfo's JSON tags.
 export interface NATInfo {
   ip?: string

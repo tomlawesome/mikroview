@@ -334,12 +334,14 @@ func TestDefaultStoragePathsUnderVarLibMikroview(t *testing.T) {
 		"Flags.StorePath":                 cfg.Flags.StorePath,
 		"Flags.DetectorSettingsStorePath": cfg.Flags.DetectorSettingsStorePath,
 		"Auth.StorePath":                  cfg.Auth.StorePath,
+		"Entities.StorePath":              cfg.Entities.StorePath,
 		"TLS.StorePath":                   cfg.TLS.StorePath,
 	}
 	want := map[string]string{
 		"Flags.StorePath":                 "/var/lib/mikroview/flags.json",
 		"Flags.DetectorSettingsStorePath": "/var/lib/mikroview/detector-settings.json",
 		"Auth.StorePath":                  "/var/lib/mikroview/users.json",
+		"Entities.StorePath":              "/var/lib/mikroview/entities.json",
 		"TLS.StorePath":                   "/var/lib/mikroview/tls",
 	}
 	for field, got := range cases {
@@ -375,6 +377,18 @@ func TestTLSEnvVarsOverrideDefaults(t *testing.T) {
 	}
 	if cfg.TLS.StorePath != "/var/lib/mikroview/tls" {
 		t.Errorf("TLS.StorePath = %v, want /var/lib/mikroview/tls", cfg.TLS.StorePath)
+	}
+}
+
+func TestEntitiesEnvVarOverridesDefault(t *testing.T) {
+	t.Setenv("MIKROVIEW_ENTITIES_STORE_PATH", "/data/entities.json")
+
+	cfg, err := Load("", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Entities.StorePath != "/data/entities.json" {
+		t.Errorf("Entities.StorePath = %v, want /data/entities.json", cfg.Entities.StorePath)
 	}
 }
 

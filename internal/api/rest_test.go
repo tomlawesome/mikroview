@@ -13,6 +13,7 @@ import (
 	"github.com/tomlawesome/mikroview/internal/config"
 	"github.com/tomlawesome/mikroview/internal/detect"
 	"github.com/tomlawesome/mikroview/internal/device"
+	"github.com/tomlawesome/mikroview/internal/entities"
 	"github.com/tomlawesome/mikroview/internal/flags"
 	"github.com/tomlawesome/mikroview/internal/hub"
 	"github.com/tomlawesome/mikroview/internal/reputation"
@@ -29,6 +30,7 @@ func newTestServer(t *testing.T) (*Server, *store.Store) {
 	t.Helper()
 	st := store.New(1000, time.Hour)
 	fs, _ := flags.Open("")
+	es, _ := entities.Open("")
 	authStore, err := auth.Open(filepath.Join(t.TempDir(), "users.json"))
 	if err != nil {
 		t.Fatal(err)
@@ -43,6 +45,7 @@ func newTestServer(t *testing.T) (*Server, *store.Store) {
 		Reputation:       reputation.New(""),
 		Flags:            fs,
 		DetectorSettings: detect.AllEnabledSettingsStore(),
+		Entities:         es,
 		Auth:             authStore,
 		Sessions:         auth.NewSessionStore(time.Hour),
 		LoginLimiter:     auth.NewLoginLimiter(10, time.Minute),

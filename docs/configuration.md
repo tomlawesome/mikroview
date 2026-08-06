@@ -180,6 +180,43 @@ fix for rule names specifically, if you're able to -- `ruleNames` is for
 when you can't or don't want to edit RouterOS config directly, or want a
 different name in mikroview than the RouterOS comment.
 
+## Entities: UI-managed host/rule labels and tags (optional)
+
+`ruleNames`/`hostNames` above are YAML-only: a label survives a restart,
+but changing one means editing `config.yaml` and restarting the
+container. **Entities** are the same idea (a label attached to a rule
+label or host IP), plus open-ended tags, managed live from the UI
+(**Menu → Entities**, admin-only) with no restart needed -- the shared
+foundation two upcoming features build on (a mail-sender allowlist, and
+richer IP/port/rule aliasing), so the record shape is deliberately
+generic (`type`, `key`, `label`, `tags`) rather than shaped around either
+one specifically.
+
+```yaml
+entities:
+  # Where entity records are persisted, as a small JSON file. Same
+  # optional-persistence contract as flags.storePath: left unset,
+  # entities still work, they just don't survive a restart. If you set
+  # this in the container, mount a volume for its parent directory --
+  # see deploy/docker-compose.yml.
+  storePath: "/var/lib/mikroview/entities.json"
+```
+
+**One-time migration**: the first time mikroview boots against an empty
+entities store, if `ruleNames`/`hostNames` are non-empty it imports each
+entry as an entity (`type: rule`/`type: host`, `key` = the map key,
+`label` = the map value) so an existing deployment's aliases become
+UI-editable instead of disappearing on upgrade. This only ever runs
+against an *empty* store -- once any entity exists (imported or
+added by hand), it never runs again, so deleting every entity later
+doesn't cause them to reappear on the next restart. `ruleNames`/
+`hostNames` stay supported afterward as a YAML-only fallback for a
+rule/host with no matching entity.
+
+Entities are managed via `GET`/`POST`/`DELETE /api/entities`
+(admin-gated the same way `POST /api/auth/users` is -- see
+[API reference](#api-reference)), or the **Entities** panel in the menu.
+
 ## Behavioral flags (optional, on by default)
 
 mikroview watches the ingested event stream for a small set of patterns
@@ -877,6 +914,7 @@ Override individual scalar settings without a mounted file:
 | `MIKROVIEW_AUTH_STORE_PATH` | `auth.storePath` (see [Authentication](#authentication)) |
 | `MIKROVIEW_AUTH_SECURE_COOKIE` | `auth.secureCookie` |
 | `MIKROVIEW_AUTH_SESSION_TTL` | `auth.sessionTTL` |
+| `MIKROVIEW_ENTITIES_STORE_PATH` | `entities.storePath` (see [Entities](#entities-ui-managed-hostrule-labels-and-tags-optional)) |
 | `MIKROVIEW_TLS_ENABLED` | `tls.enabled` (see [TLS](#tls)) |
 | `MIKROVIEW_TLS_CERT_FILE` | `tls.certFile` |
 | `MIKROVIEW_TLS_KEY_FILE` | `tls.keyFile` |
@@ -925,6 +963,9 @@ exits, rather than starting the server. See
 | `POST /api/flags/{id}/clear` | mark one flag as cleared |
 | `GET /api/detectors` | admin-only (open while zero accounts exist): every detector's live enabled+scope (see [Per-detector toggles](#per-detector-toggles-and-scope-restrictions-optional)) |
 | `PUT /api/detectors/{name}` | admin-only (open while zero accounts exist): replace one detector's enabled+scope wholesale |
+| `GET /api/entities` | admin-only (**not** open while zero accounts exist -- see [Entities](#entities-ui-managed-hostrule-labels-and-tags-optional)): every persisted entity |
+| `POST /api/entities` | admin-only: create or replace (upsert) one entity, identified by `(type, key)` in the JSON body |
+| `DELETE /api/entities` | admin-only: remove the entity identified by `(type, key)` in the JSON body |
 | `GET /api/auth/session` | current auth state (setup-required / authenticated / not) -- always 200, never gated |
 | `POST /api/auth/register` | create the first (admin) account -- only while zero accounts exist |
 | `POST /api/auth/skip` | explicitly disable auth for this deployment -- only while zero accounts exist; reversing later is CLI-only (`-enable-auth-setup`) |
@@ -937,7 +978,7 @@ exits, rather than starting the server. See
 Every route above `/api/auth/session`/`/register`/`/login`/`/logout` and
 `/api/healthz` requires a valid session once an account exists -- see
 [Authentication](#authentication).
-Every mutating (`POST`/`PUT`) request also requires an
+Every mutating (`POST`/`PUT`/`DELETE`) request also requires an
 `X-Requested-With: mikroview` header once an account exists (a CSRF
 mitigation, see SECURITY.md).
 
