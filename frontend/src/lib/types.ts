@@ -92,6 +92,18 @@ export interface TimeBucket {
   byAction: Partial<Record<Action, number>>
 }
 
+// Mirrors internal/api/rest.go's handleHealthz response. version is the
+// build-time-stamped short commit SHA ("dev" for a plain local build) --
+// the same value `mikroview -version` prints, and the only place a
+// running deployment's build is checkable without host/container
+// access.
+export interface Healthz {
+  status: string
+  time: string
+  uptime: string
+  version: string
+}
+
 // Mirrors internal/api/rest.go's handleStats response.
 export interface Stats {
   total: number

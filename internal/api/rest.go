@@ -12,9 +12,10 @@ import (
 
 func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
-		"status": "ok",
-		"time":   time.Now().UTC(),
-		"uptime": time.Since(s.StartTime).String(),
+		"status":  "ok",
+		"time":    time.Now().UTC(),
+		"uptime":  time.Since(s.StartTime).String(),
+		"version": s.Version,
 	})
 }
 

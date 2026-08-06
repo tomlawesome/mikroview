@@ -61,6 +61,7 @@ func newTestServer(t *testing.T) (*Server, *store.Store) {
 		LoginLimiter:     auth.NewLoginLimiter(10, time.Minute),
 		Tokens:           tokenStore,
 		StartTime:        time.Now(),
+		Version:          "test-version",
 	}
 	return s, st
 }
@@ -85,6 +86,9 @@ func TestHandleHealthz(t *testing.T) {
 	}
 	if body["status"] != "ok" {
 		t.Errorf("status field = %v, want ok", body["status"])
+	}
+	if body["version"] != "test-version" {
+		t.Errorf("version field = %v, want test-version", body["version"])
 	}
 }
 

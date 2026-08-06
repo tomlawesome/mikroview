@@ -10,6 +10,9 @@
   import { retentionState, MAX_AGE_OPTIONS } from '../lib/retention.svelte'
   import { downloadEventsCsv } from '../lib/export'
   import { viewportState } from '../lib/viewport.svelte'
+  import { versionState } from '../lib/version.svelte'
+
+  versionState.ensureLoaded()
 
   let open = $state(false)
   let rootEl: HTMLDivElement | undefined = $state()
@@ -309,6 +312,13 @@
           </button>
         </div>
       {/if}
+
+      {#if versionState.version}
+        <div class="divider"></div>
+        <div class="version" title="Build version -- also available via GET /api/healthz or `mikroview -version`">
+          {versionState.version}
+        </div>
+      {/if}
     </div>
   {/if}
 </div>
@@ -482,6 +492,14 @@
     border-radius: 5px;
     padding: 5px 8px;
     font-size: 12px;
+  }
+
+  .version {
+    padding: 4px 9px 2px;
+    font-size: 11px;
+    font-family: var(--font-mono);
+    color: var(--fg-dim);
+    text-align: center;
   }
 
   /* 44px minimum touch target (issue #85) -- the trigger and every
