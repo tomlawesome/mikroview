@@ -105,6 +105,15 @@
 
         <button
           class="option"
+          class:active={appState.view === 'fleet'}
+          onclick={() => toggleView('fleet')}
+          title="Every known RouterOS device: live/stale/never-seen status, last-seen, and event counts"
+        >
+          Fleet
+        </button>
+
+        <button
+          class="option"
           class:active={appState.view === 'flags'}
           onclick={() => toggleView('flags')}
           title="Behavioral flags: port scans, activity spikes, critical-port attempts, and volume spikes"

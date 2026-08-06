@@ -104,6 +104,11 @@
         'Hosts/Classification restrict which source IPs are tracked. Ports restricts which distinct destination ports count toward its breadth threshold, same as port scan.',
       example: 'Exclude a monitoring/health-check host that legitimately probes many ports slowly: Hosts = 192.168.1.100, mode = deny.',
     },
+    device_silence: {
+      label: 'Device gone quiet',
+      explanation:
+        "Checks every configured router's last-seen time on a fixed interval, flagging one that hasn't sent any syslog in at least the configured staleness threshold (15 minutes by default). Unlike every other detector here, this isn't a pattern in the traffic -- it's the absence of it, so it's the one way mikroview notices a router that's stopped talking entirely (crashed, rebooted, lost network, or had its syslog config wiped) rather than a router that's merely quiet right now. A device that's never sent anything at all doesn't count -- see the Fleet view for that state instead.",
+    },
   }
 
   // Which scope fields apply to each detector -- kept in sync with
@@ -121,6 +126,7 @@
     repeated_drops: ['hosts', 'ports'],
     global_spike: [],
     low_slow_scan: ['hosts', 'classification', 'ports'],
+    device_silence: [],
   }
 
   let expanded = $state<DetectorName | null>(null)
@@ -248,7 +254,7 @@
         <div class="card-scope">
           {#if SCOPE_FIELDS[d.name].length === 0}
             <span class="scope-label">Scope</span>
-            <p class="no-scope">No scope restrictions apply to this detector -- it's a network-wide aggregate, not keyed by any host, port, or rule. Only the on/off toggle applies.</p>
+            <p class="no-scope">No scope restrictions apply to this detector -- it isn't keyed by any host, port, or rule. Only the on/off toggle applies.</p>
           {:else}
             <div class="scope-status">
               <span class="scope-label">Scope</span>

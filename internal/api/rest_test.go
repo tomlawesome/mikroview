@@ -220,6 +220,116 @@ func TestHandleDevices(t *testing.T) {
 	}
 }
 
+// TestHandleDevicesReportsStatus covers the issue #98 fleet-health status
+// field end to end through the real HTTP handler: a device that's never
+// sent anything is "never_seen", one that's sent something recently is
+// "live", and one whose last event is older than DeviceStaleAfter is
+// "stale".
+func TestHandleDevicesReportsStatus(t *testing.T) {
+	s, _ := newTestServer(t)
+	s.DeviceStaleAfter = 10 * time.Minute
+
+	// newTestServer's "core" device is configured but has never had
+	// Resolve called for it -- exactly the "never_seen" case.
+	s.Devices.Resolve("203.0.113.9", time.Now()) // an auto-discovered, currently-live device
+	s.Devices.Resolve("198.51.100.1", time.Now().Add(-30*time.Minute))
+	s.Devices.Resolve("198.51.100.1", time.Now().Add(-30*time.Minute)) // same source, stays stale either way
+
+	ts := httptest.NewServer(s.Routes())
+	defer ts.Close()
+
+	resp, err := http.Get(ts.URL + "/api/devices")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	var body struct {
+		Devices []struct {
+			ID     string `json:"id"`
+			Status string `json:"status"`
+		} `json:"devices"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+
+	byID := map[string]string{}
+	for _, d := range body.Devices {
+		byID[d.ID] = d.Status
+	}
+	if byID["core"] != "never_seen" {
+		t.Errorf("expected core's status = never_seen (configured, zero events), got %q", byID["core"])
+	}
+	if byID["203.0.113.9"] != "live" {
+		t.Errorf("expected 203.0.113.9's status = live (just resolved), got %q", byID["203.0.113.9"])
+	}
+	if byID["198.51.100.1"] != "stale" {
+		t.Errorf("expected 198.51.100.1's status = stale (last seen 30m ago, threshold 10m), got %q", byID["198.51.100.1"])
+	}
+}
+
+// TestDeviceStatus is a direct, table-driven unit test of deviceStatus's
+// three-way classification -- the HTTP-level test above already covers
+// it end to end, this pins the exact boundary/zero-threshold behavior
+// deviceStatus's own doc comment promises.
+func TestDeviceStatus(t *testing.T) {
+	now := time.Now()
+
+	tests := []struct {
+		name       string
+		info       device.Info
+		staleAfter time.Duration
+		want       string
+	}{
+		{
+			name:       "never seen regardless of threshold",
+			info:       device.Info{LastSeen: time.Time{}},
+			staleAfter: 10 * time.Minute,
+			want:       "never_seen",
+		},
+		{
+			name:       "well within threshold",
+			info:       device.Info{LastSeen: now.Add(-time.Minute)},
+			staleAfter: 10 * time.Minute,
+			want:       "live",
+		},
+		{
+			name:       "exactly at threshold counts as stale",
+			info:       device.Info{LastSeen: now.Add(-10 * time.Minute)},
+			staleAfter: 10 * time.Minute,
+			want:       "stale",
+		},
+		{
+			name:       "one second under threshold is still live",
+			info:       device.Info{LastSeen: now.Add(-10*time.Minute + time.Second)},
+			staleAfter: 10 * time.Minute,
+			want:       "live",
+		},
+		{
+			name:       "well past threshold",
+			info:       device.Info{LastSeen: now.Add(-time.Hour)},
+			staleAfter: 10 * time.Minute,
+			want:       "stale",
+		},
+		{
+			name:       "zero threshold disables staleness entirely",
+			info:       device.Info{LastSeen: now.Add(-30 * 24 * time.Hour)},
+			staleAfter: 0,
+			want:       "live",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := deviceStatus(tt.info, tt.staleAfter, now)
+			if got != tt.want {
+				t.Errorf("deviceStatus() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestHandleCriticalPorts(t *testing.T) {
 	s, _ := newTestServer(t)
 	s.CriticalPorts = []int{22, 3389, 8291}
