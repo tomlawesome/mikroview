@@ -455,6 +455,20 @@ clears it via the UI or `POST /api/flags/{id}/clear`. Clearing an
 already-active-again source re-raises it as a fresh entry rather than
 silently resurrecting the old one.
 
+Alongside the plain Clear action, "Clear, never flag again" (`POST
+/api/flags/{id}/clear-permanent`) clears the flag *and* permanently
+excludes that exact (detector, target) pair -- from then on it never
+raises again, silently, until the exclusion is removed. This is
+deliberately permanent rather than a timed snooze: a time-limited mute
+either re-fires once it expires (nothing was solved) or it doesn't
+(permanent exclusion was what was wanted all along), so there's no
+in-between "snooze" option. Because "permanent" shouldn't mean
+"unrecoverable by mistake," every current exclusion is listed (and can
+be removed, re-enabling that pair) from the Flags tab's "Manage
+exclusions" panel -- admin-only once an account exists, open to anyone
+while mikroview is still in its fully-open zero-account state, same as
+every other admin-gated endpoint (see [Authentication](#authentication)).
+
 ## Notifications (optional)
 
 Flags are only visible if someone has the mikroview UI open. `notify`
@@ -923,6 +937,9 @@ exits, rather than starting the server. See
 | `GET /api/lookup/ip/{ip}` | on-demand reputation/threat-intel lookup for one public IP (see [IP reputation lookup](#ip-reputation-lookup-optional)) |
 | `GET /api/flags` | active + cleared behavioral flags (see [Behavioral flags](#behavioral-flags-optional-on-by-default)) |
 | `POST /api/flags/{id}/clear` | mark one flag as cleared |
+| `POST /api/flags/{id}/clear-permanent` | clear one flag *and* permanently exclude its (detector, target) pair going forward |
+| `GET /api/flags/exclusions` | admin-only (open while zero accounts exist): every currently-excluded (detector, target) pair |
+| `DELETE /api/flags/exclusions/{id}` | admin-only (open while zero accounts exist): remove one exclusion, letting that pair raise again |
 | `GET /api/detectors` | admin-only (open while zero accounts exist): every detector's live enabled+scope (see [Per-detector toggles](#per-detector-toggles-and-scope-restrictions-optional)) |
 | `PUT /api/detectors/{name}` | admin-only (open while zero accounts exist): replace one detector's enabled+scope wholesale |
 | `GET /api/auth/session` | current auth state (setup-required / authenticated / not) -- always 200, never gated |
