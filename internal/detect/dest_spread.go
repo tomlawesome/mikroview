@@ -64,7 +64,7 @@ func (d *Detector) observeDestSpread(e store.Event, now time.Time) {
 	w, ok := d.destWindows[e.SrcIP]
 	if !ok {
 		if len(d.destWindows) >= maxTrackedSources {
-			d.evictOldestDestWindow()
+			evictOldestByActivity(d.destWindows)
 		}
 		w = &destWindow{
 			external: newDistinctRing[string](d.cfg.OutboundAnomalyWindow),
@@ -108,16 +108,4 @@ func (d *Detector) observeDestSpread(e store.Event, now time.Time) {
 	}
 }
 
-func (d *Detector) evictOldestDestWindow() {
-	var oldestKey string
-	var oldest time.Time
-	first := true
-	for k, w := range d.destWindows {
-		if first || w.lastActivity.Before(oldest) {
-			oldestKey, oldest, first = k, w.lastActivity, false
-		}
-	}
-	if oldestKey != "" {
-		delete(d.destWindows, oldestKey)
-	}
-}
+func (w *destWindow) lastActivityTime() time.Time { return w.lastActivity }

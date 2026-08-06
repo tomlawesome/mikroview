@@ -758,7 +758,11 @@ the browser-default 443, which holds for the default compose port
 mapping (host `443` -> this listener); if you've remapped the HTTPS
 port to something else externally, either disable this listener and
 redirect at your reverse proxy instead, or accept that the `Location`
-header will still point at `:443`.
+header will still point at `:443`. If `tls.hosts` is set, the `Host`
+header is validated against it (falling back to the first configured
+host on a mismatch) rather than echoed unconditionally -- only
+relevant if something other than a real browser navigation reaches
+this listener directly.
 
 ```yaml
 tls:
@@ -896,9 +900,9 @@ Override individual scalar settings without a mounted file:
 
 ## CLI flags (local development)
 
-`-syslog-udp`, `-syslog-tcp`, `-http`, `-retention`, `-max-events`,
-`-geoip-db` — see `go run . -h`. Devices, rule/host names, and auth
-config can only be set via YAML/env, not flags.
+`-syslog-udp`, `-syslog-tcp`, `-http`, `-http-redirect`, `-retention`,
+`-max-events`, `-geoip-db` — see `go run . -h`. Devices, rule/host
+names, and auth config can only be set via YAML/env, not flags.
 
 `-healthcheck`, `-list-users`, `-reset-password <username>`,
 `-enable-auth-setup` are standalone modes -- each does its one job and
@@ -923,9 +927,12 @@ exits, rather than starting the server. See
 | `PUT /api/detectors/{name}` | admin-only (open while zero accounts exist): replace one detector's enabled+scope wholesale |
 | `GET /api/auth/session` | current auth state (setup-required / authenticated / not) -- always 200, never gated |
 | `POST /api/auth/register` | create the first (admin) account -- only while zero accounts exist |
+| `POST /api/auth/skip` | explicitly disable auth for this deployment -- only while zero accounts exist; reversing later is CLI-only (`-enable-auth-setup`) |
 | `POST /api/auth/login` | sign in, sets the session cookie |
 | `POST /api/auth/logout` | sign out, clears the session cookie |
 | `POST /api/auth/users` | admin-only: create an additional account |
+| `GET /api/auth/oidc/login` | start the SSO flow -- a top-level browser redirect to the configured provider, only present when [OIDC](#single-sign-on-oidcsso) is configured |
+| `GET /api/auth/oidc/callback` | the provider's redirect target completing the SSO flow -- see [Single sign-on](#single-sign-on-oidcsso) |
 
 Every route above `/api/auth/session`/`/register`/`/login`/`/logout` and
 `/api/healthz` requires a valid session once an account exists -- see

@@ -3,10 +3,12 @@ package api
 import (
 	"bytes"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/cookiejar"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -89,6 +91,63 @@ func TestUndecidedStateRestrictsToBootstrapPaths(t *testing.T) {
 	}
 }
 
+// internal/auth's sentinel errors are written for a developer (e.g.
+// ErrNotPersisted's "refusing to create a user that would not survive
+// a restart"), not a stranger looking at a login screen -- this proves
+// that text never reaches the HTTP response body, regardless of which
+// auth error is triggered.
+func TestAuthErrorsNeverLeakInternalErrorText(t *testing.T) {
+	s, _ := newTestServer(t)
+	unpersisted, err := auth.Open("") // triggers ErrNotPersisted on Register
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.Auth = unpersisted
+	ts := httptest.NewServer(s.Routes())
+	defer ts.Close()
+
+	resp := postJSON(t, &http.Client{}, ts.URL+"/api/auth/register", credentialsRequest{Username: "admin", Password: "password123"})
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(body), "auth:") {
+		t.Errorf("expected internal/auth's raw error text never to reach the client, got body: %q", body)
+	}
+	if resp.StatusCode != http.StatusServiceUnavailable {
+		t.Errorf("expected 503 for ErrNotPersisted, got %d", resp.StatusCode)
+	}
+}
+
+// A request body decoded with no size cap means memory allocation
+// proportional to body size, on an endpoint reachable with no
+// credentials at all (login) -- this proves an oversized body is
+// rejected rather than read in full.
+func TestOversizedJSONBodyIsRejected(t *testing.T) {
+	s, _ := newTestServer(t)
+	ts := httptest.NewServer(s.Routes())
+	defer ts.Close()
+
+	oversized := strings.Repeat("a", maxJSONBodyBytes+1)
+	body := `{"username":"` + oversized + `","password":"x"}`
+	req, err := http.NewRequest(http.MethodPost, ts.URL+"/api/auth/login", strings.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set(csrfHeaderName, csrfHeaderValue)
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("expected an oversized body to be rejected with 400, got %d", resp.StatusCode)
+	}
+}
+
 func TestUndecidedStateAllowsBootstrapPaths(t *testing.T) {
 	s := newAuthTestServer(t)
 	ts := httptest.NewServer(s.Routes())
@@ -135,6 +194,53 @@ func TestAuthSkipDisablesAuthPermanently(t *testing.T) {
 	defer reg.Body.Close()
 	if reg.StatusCode != http.StatusConflict {
 		t.Errorf("expected register to be refused once auth is disabled, got %d", reg.StatusCode)
+	}
+}
+
+// A bare cross-site <form method=POST> (or a JSON-CSRF fetch) can't set
+// a custom header, so a request missing csrfHeaderName during the
+// undecided (Count()==0) bootstrap window must be rejected for the two
+// endpoints that make an irreversible, deployment-wide choice --
+// otherwise a tricked victim's browser could disable auth or plant an
+// attacker-controlled admin account with no direct network access
+// required from the attacker at all.
+func TestBootstrapMutatingEndpointsRequireCSRFHeader(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		path string
+		body any
+	}{
+		{"skip", "/api/auth/skip", map[string]any{}},
+		{"register", "/api/auth/register", credentialsRequest{Username: "admin", Password: "password123"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := newAuthTestServer(t)
+			ts := httptest.NewServer(s.Routes())
+			defer ts.Close()
+
+			b, err := json.Marshal(tc.body)
+			if err != nil {
+				t.Fatal(err)
+			}
+			req, err := http.NewRequest(http.MethodPost, ts.URL+tc.path, bytes.NewReader(b))
+			if err != nil {
+				t.Fatal(err)
+			}
+			req.Header.Set("Content-Type", "application/json")
+			// Deliberately no csrfHeaderName -- this is the request
+			// shape a cross-site form/fetch can actually produce.
+			resp, err := http.DefaultClient.Do(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer resp.Body.Close()
+			if resp.StatusCode != http.StatusForbidden {
+				t.Errorf("expected %s without the CSRF header to be rejected with 403 during the bootstrap window, got %d", tc.path, resp.StatusCode)
+			}
+			if s.Auth.Count() != 0 || s.Auth.Disabled() {
+				t.Error("the forged request must not have taken effect")
+			}
+		})
 	}
 }
 

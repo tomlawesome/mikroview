@@ -32,7 +32,7 @@ func (d *Detector) observeRuleRate(e store.Event, now time.Time) {
 	w, ok := d.ruleWindows[e.RuleLabel]
 	if !ok {
 		if len(d.ruleWindows) >= maxTrackedSources {
-			d.evictOldestRuleWindow()
+			evictOldestByActivity(d.ruleWindows)
 		}
 		w = &ruleWindow{hits: newCountRing(d.cfg.RuleSpikeWindow)}
 		d.ruleWindows[e.RuleLabel] = w
@@ -68,16 +68,4 @@ func (d *Detector) observeRuleRate(e store.Event, now time.Time) {
 	}
 }
 
-func (d *Detector) evictOldestRuleWindow() {
-	var oldestKey string
-	var oldest time.Time
-	first := true
-	for k, w := range d.ruleWindows {
-		if first || w.lastActivity.Before(oldest) {
-			oldestKey, oldest, first = k, w.lastActivity, false
-		}
-	}
-	if oldestKey != "" {
-		delete(d.ruleWindows, oldestKey)
-	}
-}
+func (w *ruleWindow) lastActivityTime() time.Time { return w.lastActivity }

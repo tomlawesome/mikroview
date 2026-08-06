@@ -9,13 +9,6 @@ import (
 	"github.com/tomlawesome/mikroview/internal/store"
 )
 
-// lowSlowScanMinZ/lowSlowScanFullConfidenceZ mirror host_baseline.go's
-// hostActivityMinZ/hostActivityFullConfidenceZ -- same z-score shape,
-// applied to this detector's own breadth metric instead of raw event
-// rate.
-const lowSlowScanMinZ = 2.0
-const lowSlowScanFullConfidenceZ = 6.0
-
 // lowSlowScanWarmupSamples is smaller than activity-spike's
 // HostActivityWarmupSamples (20) -- each sample here already represents
 // a whole LowSlowScanWindow-sized snapshot of a source's behavior
@@ -67,7 +60,7 @@ func (d *Detector) observeLowSlowScan(e store.Event, now time.Time) {
 	w, ok := d.lowSlowWindows[e.SrcIP]
 	if !ok {
 		if len(d.lowSlowWindows) >= maxTrackedSources {
-			d.evictOldestLowSlowWindow()
+			evictOldestByActivity(d.lowSlowWindows)
 		}
 		w = &lowSlowWindow{
 			firstSeen: now,
@@ -95,17 +88,7 @@ func (d *Detector) observeLowSlowScan(e store.Event, now time.Time) {
 
 	if w.primed {
 		prevBaseline := w.baseline
-		stddev := math.Sqrt(w.variance)
-
-		var z float64
-		switch {
-		case stddev > 0:
-			z = (breadth - prevBaseline) / stddev
-		case breadth > prevBaseline:
-			z = lowSlowScanFullConfidenceZ
-		default:
-			z = 0
-		}
+		z := emaZScore(breadth, prevBaseline, w.variance)
 
 		observedLongEnough := now.Sub(w.firstSeen) >= d.cfg.LowSlowScanMinObservation
 		breadthCleared := portCount >= d.cfg.LowSlowScanPortThreshold &&
@@ -115,13 +98,11 @@ func (d *Detector) observeLowSlowScan(e store.Event, now time.Time) {
 			dropRatio = float64(dropCount) / float64(total)
 		}
 		dropCleared := total > 0 && dropRatio >= d.cfg.LowSlowScanDropRatio
-		baselineCleared := z >= lowSlowScanMinZ && prevBaseline > 0 &&
+		baselineCleared := z >= emaMinZ && prevBaseline > 0 &&
 			breadth >= prevBaseline*d.cfg.LowSlowScanBaselineMultiplier
 
 		if observedLongEnough && breadthCleared && dropCleared && baselineCleared {
-			historyConfidence := math.Min(1, float64(w.sampleCount)/float64(lowSlowScanWarmupSamples))
-			deviationConfidence := math.Min(1, math.Max(0, (z-lowSlowScanMinZ)/(lowSlowScanFullConfidenceZ-lowSlowScanMinZ)))
-			baselineConfidence := int(math.Round(historyConfidence * deviationConfidence * 100))
+			baselineConfidence := emaConfidence(z, w.sampleCount, lowSlowScanWarmupSamples)
 			dropConfidence := int(math.Round(math.Min(1, math.Max(0, (dropRatio-d.cfg.LowSlowScanDropRatio)/(1-d.cfg.LowSlowScanDropRatio))) * 100))
 			portConfidence := overshootConfidence(portCount, d.cfg.LowSlowScanPortThreshold)
 			hostConfidence := overshootConfidence(hostCount, d.cfg.LowSlowScanHostThreshold)
@@ -162,25 +143,10 @@ func (d *Detector) observeLowSlowScan(e store.Event, now time.Time) {
 		w.sampleCount = 1
 		return
 	}
-	diff := breadth - w.baseline
-	incr := emaAlpha * diff
-	w.baseline += incr
-	w.variance = (1 - emaAlpha) * (w.variance + diff*incr)
+	w.baseline, w.variance = emaUpdate(breadth, w.baseline, w.variance)
 	if w.sampleCount < lowSlowScanWarmupSamples {
 		w.sampleCount++
 	}
 }
 
-func (d *Detector) evictOldestLowSlowWindow() {
-	var oldestKey string
-	var oldest time.Time
-	first := true
-	for k, w := range d.lowSlowWindows {
-		if first || w.lastActivity.Before(oldest) {
-			oldestKey, oldest, first = k, w.lastActivity, false
-		}
-	}
-	if oldestKey != "" {
-		delete(d.lowSlowWindows, oldestKey)
-	}
-}
+func (w *lowSlowWindow) lastActivityTime() time.Time { return w.lastActivity }

@@ -165,11 +165,11 @@ func scopeMatchesHost(sc Scope, ip string) bool {
 }
 
 func scopeMatchesPort(sc Scope, port int) bool {
-	return matchesIntList(sc.Ports, sc.PortsMode, port)
+	return matchesList(sc.Ports, sc.PortsMode, port)
 }
 
 func scopeMatchesRule(sc Scope, rule string) bool {
-	return matchesStringList(sc.Rules, sc.RulesMode, rule)
+	return matchesList(sc.Rules, sc.RulesMode, rule)
 }
 
 func matchesHostList(list []string, mode ListMode, ip string) bool {
@@ -202,24 +202,12 @@ func hostEntryMatches(entry, ip string) bool {
 	return entry == ip
 }
 
-func matchesIntList(list []int, mode ListMode, v int) bool {
-	if len(list) == 0 {
-		return true
-	}
-	hit := false
-	for _, entry := range list {
-		if entry == v {
-			hit = true
-			break
-		}
-	}
-	if mode == ListModeDeny {
-		return !hit
-	}
-	return hit
-}
-
-func matchesStringList(list []string, mode ListMode, v string) bool {
+// matchesList reports whether v is admitted by list under mode -- an
+// empty list always matches (no restriction configured), an allow-list
+// admits only members, a deny-list admits everything except members.
+// Generic over comparable so both the int (port) and string (rule
+// label) scope checks below share one implementation.
+func matchesList[T comparable](list []T, mode ListMode, v T) bool {
 	if len(list) == 0 {
 		return true
 	}

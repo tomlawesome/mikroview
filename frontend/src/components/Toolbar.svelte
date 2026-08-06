@@ -3,6 +3,7 @@
   import { formatEps } from '../lib/format'
   import { retentionState, MAX_AGE_OPTIONS } from '../lib/retention.svelte'
   import { downloadEventsCsv } from '../lib/export'
+  import { viewportState } from '../lib/viewport.svelte'
   import ConnectionIndicator from './ConnectionIndicator.svelte'
   import DeviceStatus from './DeviceStatus.svelte'
   import LogoLockup from './LogoLockup.svelte'
@@ -30,16 +31,18 @@
         </span>
       {/if}
 
-      <select
-        value={retentionState.maxAgeSeconds === null ? 'null' : String(retentionState.maxAgeSeconds)}
-        onchange={onMaxAgeChange}
-        title="How long events stay visible in the live view"
-        aria-label="Display duration"
-      >
-        {#each MAX_AGE_OPTIONS as opt (opt.value)}
-          <option value={opt.value === null ? 'null' : String(opt.value)}>{opt.label}</option>
-        {/each}
-      </select>
+      {#if !viewportState.isMobile}
+        <select
+          value={retentionState.maxAgeSeconds === null ? 'null' : String(retentionState.maxAgeSeconds)}
+          onchange={onMaxAgeChange}
+          title="How long events stay visible in the live view"
+          aria-label="Display duration"
+        >
+          {#each MAX_AGE_OPTIONS as opt (opt.value)}
+            <option value={opt.value === null ? 'null' : String(opt.value)}>{opt.label}</option>
+          {/each}
+        </select>
+      {/if}
 
       <button
         class:active={appState.autoscroll}
@@ -61,13 +64,15 @@
         Clear
       </button>
 
-      <button
-        onclick={() => downloadEventsCsv(appState.filteredEvents)}
-        disabled={appState.filteredEvents.length === 0}
-        title="Export the currently shown/filtered events to a CSV file"
-      >
-        Export
-      </button>
+      {#if !viewportState.isMobile}
+        <button
+          onclick={() => downloadEventsCsv(appState.filteredEvents)}
+          disabled={appState.filteredEvents.length === 0}
+          title="Export the currently shown/filtered events to a CSV file"
+        >
+          Export
+        </button>
+      {/if}
     {/if}
 
     <NavMenu />
@@ -149,5 +154,18 @@
   button:disabled:hover {
     color: var(--fg-muted);
     border-color: var(--border);
+  }
+
+  /* 44px minimum touch target (issue #85) for the toolbar's own
+     always-inline live-view controls -- desktop's 7px vertical padding
+     above is comfortable with a mouse but too cramped to tap
+     reliably. Scoped to this component's own buttons/select only
+     (Svelte's default style scoping), not a global rule that could
+     collide with smaller fixed-size icon buttons elsewhere. */
+  @media (max-width: 700px) {
+    button,
+    select {
+      min-height: 44px;
+    }
   }
 </style>
