@@ -101,13 +101,14 @@ either way.
   normally. Without this, a lost/corrupted accounts file would look
   identical, on the next restart, to a genuine fresh install: the
   first-run setup screen, reachable by whoever gets there first, on a
-  deployment that previously had real accounts. Recovering requires
-  `mikroview -reset-auth` (container/host access, same trust anchor as
-  the other recovery commands below) -- it refuses to touch a file that
-  actually loads fine, and moves a genuinely broken one aside (never
-  deletes it) rather than wiping it outright, so the next restart
-  reaches the legitimate first-run screen instead of looking like an
-  unexplained reopening.
+  deployment that previously had real accounts. Recovering is a
+  container/host-access action, the same trust anchor as the other
+  recovery commands below: restore the file from a backup, or move/
+  delete it (the boot-failure log message names the exact path) and
+  restart to consciously re-arm the first-run setup screen -- no
+  dedicated CLI mode for this, since an operator who can already run
+  `mikroview -reset-password`/`-enable-auth-setup` can already `mv` or
+  `rm` a file on the same host.
 - **Sessions are opaque, server-side, and in-memory** (not JWTs) -- easy
   to revoke, no signing-key management, but lost on a server restart
   (re-login is required; this does not affect account survival, which is
