@@ -195,6 +195,16 @@ func main() {
 	if len(os.Args) > 1 && os.Args[1] == "-enable-auth-setup" {
 		os.Exit(runEnableAuthSetup())
 	}
+	// -reset-auth: the explicit, CLI-only recovery path for a corrupt or
+	// unreadable accounts file (see the fail-closed check around
+	// auth.Open in main()'s normal boot sequence). Deliberately requires
+	// a conscious operator action rather than ever happening as a side
+	// effect of a routine restart -- a self-hoster (or an attacker who
+	// merely got the file corrupted, not necessarily read) must not be
+	// able to silently reopen a previously-authenticated deployment.
+	if len(os.Args) > 1 && os.Args[1] == "-reset-auth" {
+		os.Exit(runResetAuth())
+	}
 
 	configLog := logging.New("config")
 	cfg, err := config.Load(os.Getenv("MIKROVIEW_CONFIG"), os.Args[1:])
@@ -250,8 +260,30 @@ func main() {
 
 	authLog := logging.New("auth")
 	authStore, err := auth.Open(cfg.Auth.StorePath)
-	if err != nil {
-		authLog.Warn(fmt.Sprintf("%v (continuing with in-memory-only, unpersisted account state)", err))
+	// A non-nil error from auth.Open, when persistence is actually
+	// configured, ALWAYS means "the accounts file exists but couldn't be
+	// read/parsed" -- Open returns (store, nil) for both "no persistence
+	// configured" and "file genuinely doesn't exist yet" (see its own
+	// doc comment), so this is never reached by a true fresh install.
+	// Falling through to the normal boot sequence here used to mean the
+	// in-memory store's Count() reads 0, which is *exactly* the state
+	// requireAuth treats as "no decision made yet" -- silently
+	// presenting a stranger with the first-run setup wizard on a
+	// previously-authenticated instance, indistinguishable in the logs
+	// from a genuine fresh install. That's a fail-OPEN on a security
+	// control, not an acceptable degrade-and-continue case like every
+	// other optional store above. Refuse to start instead, and require
+	// an explicit operator action (-reset-auth) to consciously
+	// acknowledge the loss before the setup wizard becomes reachable
+	// again -- see runResetAuth's doc comment.
+	if authShouldFailClosed(err, cfg.Auth.StorePath) {
+		authLog.Error(fmt.Sprintf(
+			"accounts file at %q exists but could not be loaded: %v -- refusing to start with authentication in an unknown state. "+
+				"If this deployment previously had accounts configured, this is NOT a fresh install: restore the file from a backup, "+
+				"or run `mikroview -reset-auth` to acknowledge the loss and consciously re-arm the first-run setup screen.",
+			cfg.Auth.StorePath, err,
+		))
+		os.Exit(1)
 	}
 	switch {
 	case authStore.Count() > 0:
@@ -753,6 +785,70 @@ func runEnableAuthSetup() int {
 		return 1
 	}
 	fmt.Println("Auth setup re-enabled -- the create-account form will be shown again on next load.")
+	return 0
+}
+
+// authShouldFailClosed reports whether main()'s boot sequence should
+// refuse to start rather than continue with an unauthenticated,
+// zero-account in-memory auth.Store. err is auth.Open's own return
+// value; storePath is the configured auth.storePath. auth.Open only
+// ever returns a non-nil error when a persistence path IS configured
+// and the file at it exists but couldn't be read/parsed -- both "no
+// persistence configured" (storePath == "") and "file genuinely
+// doesn't exist yet" (a real fresh install) return a nil error, so
+// requiring storePath != "" here is belt-and-braces rather than the
+// actual distinguishing signal, which is err itself.
+func authShouldFailClosed(err error, storePath string) bool {
+	return err != nil && storePath != ""
+}
+
+// runResetAuth backs `-reset-auth` -- the explicit recovery path when
+// the accounts file exists but is corrupt/unreadable (see main()'s
+// fail-closed auth.Open check). Refuses to touch a file that actually
+// loads fine, on the theory that an operator invoking this command is
+// responding to a boot failure they just saw, not casually resetting a
+// working deployment -- if it turns out to load cleanly, something else
+// is wrong and silently wiping it would destroy real accounts. On a
+// genuinely broken file, renames (never deletes) it to a timestamped
+// `.broken-<unix-seconds>` sibling -- evidence for whoever investigates
+// later -- so the next normal boot sees a plain "file doesn't exist"
+// state and reaches the legitimate first-run setup screen, the same
+// path a real fresh install takes.
+func runResetAuth() int {
+	logger := logging.New("reset-auth")
+	cfg, err := config.Load(os.Getenv("MIKROVIEW_CONFIG"), nil)
+	if err != nil {
+		logger.Error(fmt.Sprintf("config: %v", err))
+		return 1
+	}
+	if cfg.Auth.StorePath == "" {
+		fmt.Println("auth.storePath is not configured -- nothing persisted to reset.")
+		return 0
+	}
+
+	// os.Stat first: auth.Open returns a nil error both when the file
+	// loads fine AND when it doesn't exist at all, so checking existence
+	// before "loads without error" is what keeps a never-configured
+	// deployment from hitting the "refuse, working file" branch below.
+	if _, statErr := os.Stat(cfg.Auth.StorePath); os.IsNotExist(statErr) {
+		fmt.Printf("%q does not exist -- there is nothing to reset; a normal restart will already show the first-run setup screen.\n", cfg.Auth.StorePath)
+		return 0
+	}
+
+	if _, err := auth.Open(cfg.Auth.StorePath); err == nil {
+		fmt.Printf("%q loads without error -- refusing to touch a working accounts file. "+
+			"If mikroview still refused to start, the problem is something other than this file; "+
+			"nothing was changed here.\n", cfg.Auth.StorePath)
+		return 1
+	}
+
+	backupPath := fmt.Sprintf("%s.broken-%d", cfg.Auth.StorePath, time.Now().Unix())
+	if err := os.Rename(cfg.Auth.StorePath, backupPath); err != nil {
+		logger.Error(fmt.Sprintf("failed to move the broken accounts file aside: %v", err))
+		return 1
+	}
+	fmt.Printf("Moved the unreadable accounts file to %q for later inspection. "+
+		"The next restart will show the first-run setup screen, same as a fresh install.\n", backupPath)
 	return 0
 }
 
