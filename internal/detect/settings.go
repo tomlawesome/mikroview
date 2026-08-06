@@ -31,16 +31,21 @@ const (
 	DetectorRuleSpike             DetectorName = "rule_spike"
 	DetectorRepeatedDrops         DetectorName = "repeated_drops"
 	DetectorLowSlowScan           DetectorName = "low_slow_scan"
+	// DetectorDeviceSilence (issue #98): the "gone quiet" counterpart to
+	// DetectorGlobalSpike -- ticker-based, not per-event, and (like
+	// GlobalSpike) ignores every Scope field, only Settings.Enabled
+	// applies. See DeviceSilenceDetector.
+	DetectorDeviceSilence DetectorName = "device_silence"
 )
 
-// AllDetectorNames is the canonical, stable-ordered list of all 10 --
+// AllDetectorNames is the canonical, stable-ordered list of all 11 --
 // used to seed defaults and so the API always reports every detector
 // even if only some have been customized.
 var AllDetectorNames = []DetectorName{
 	DetectorPortScan, DetectorActivitySpike, DetectorCriticalPort,
 	DetectorGlobalSpike, DetectorDistributedBruteForce, DetectorOutboundAnomaly,
 	DetectorInternalRecon, DetectorRuleSpike, DetectorRepeatedDrops,
-	DetectorLowSlowScan,
+	DetectorLowSlowScan, DetectorDeviceSilence,
 }
 
 // IsValidDetectorName reports whether n is one of AllDetectorNames.
@@ -110,11 +115,11 @@ func isValidListMode(m ListMode) bool {
 //     restrict which SOURCE IPs are tracked; Ports/PortsMode restricts
 //     which distinct destination ports count toward its own breadth
 //     threshold. Rules ignored.
-//   - GlobalSpike: every Scope field ignored; only Settings.Enabled
-//     applies (network-wide aggregate, not keyed by anything
-//     per-source). Scope is still present for structural uniformity
-//     (one type, one JSON/YAML shape across all 9), not because it does
-//     anything.
+//   - GlobalSpike, DeviceSilence: every Scope field ignored; only
+//     Settings.Enabled applies (network-wide aggregate / per-configured-
+//     device sweep, not keyed by anything a Scope restricts). Scope is
+//     still present for structural uniformity (one type, one JSON/YAML
+//     shape across all detectors), not because it does anything.
 //
 // Hosts entries accept a bare IP or a CIDR, mirroring store.Query.IP's
 // existing convention.

@@ -76,7 +76,9 @@
     rule_spike: 'Rule hit-rate spike',
     repeated_drops: 'Repeated drops on a port',
     low_slow_scan: 'Low-and-slow port scan',
+    device_silence: 'Device gone quiet',
     new_device: 'New device',
+    stale_rule: 'Stale firewall rule',
   }
 
   // Sorted by firstSeen (not the fetch response's lastSeen-desc order --
@@ -154,13 +156,14 @@
 
   // What a flag's target actually *is* varies by detector -- most are a
   // plain source IP, but distributed_brute_force is keyed by port,
-  // rule_spike by rule label, repeated_drops by "ip -> port N", and
-  // global_spike has no filterable target at all. new_device's target is
-  // a MAC address (see internal/flags.TypeNewDevice) -- the live view's
-  // Filters has no MAC field to filter on, so it's not filterable
-  // either, same as global_spike. Filtering on the right field (rather
-  // than always assuming "ip") is what makes this click-through
-  // actually land on a sensible pre-filtered view.
+  // rule_spike/stale_rule by rule label, repeated_drops by
+  // "ip -> port N", device_silence by a device ID, and global_spike has
+  // no filterable target at all. new_device's target is a MAC address
+  // (see internal/flags.TypeNewDevice) -- the live view's Filters has no
+  // MAC field to filter on, so it's not filterable either, same as
+  // global_spike. Filtering on the right field (rather than always
+  // assuming "ip") is what makes this click-through actually land on a
+  // sensible pre-filtered view.
   function isFilterable(f: Flag): boolean {
     return f.type !== 'global_spike' && f.type !== 'new_device'
   }
@@ -179,10 +182,14 @@
         appState.setFilter('port', f.target.replace(/^port /, ''))
         break
       case 'rule_spike':
+      case 'stale_rule':
         appState.setFilter('rule', f.target)
         break
       case 'repeated_drops':
         appState.setFilter('ip', f.target.split(' -> ')[0])
+        break
+      case 'device_silence':
+        appState.setFilter('device', f.target)
         break
       case 'global_spike':
       case 'new_device':

@@ -46,7 +46,8 @@ export interface ClientEvent extends FirewallEvent {
   receivedAt: number
 }
 
-// Mirrors internal/device/registry.go's Info.
+// Mirrors internal/device/registry.go's Info, plus internal/api/rest.go's
+// handleDevices-computed `status` (see that file's deviceView/deviceStatus).
 export interface Device {
   id: string
   name: string
@@ -55,6 +56,12 @@ export interface Device {
   firstSeen: string
   lastSeen: string
   eventCount: number
+  // status (issue #98): "live" (an event within the configured staleness
+  // threshold), "stale" (LastSeen is older than that threshold), or
+  // "never_seen" (configured, but zero events ever received). Computed
+  // server-side, read-time, on every GET /api/devices -- always fresh,
+  // never a value this client itself has to derive or keep in sync.
+  status: 'live' | 'stale' | 'never_seen'
 }
 
 // Mirrors internal/store/query.go's Result.
@@ -140,6 +147,7 @@ export type FlagType =
   | 'rule_spike'
   | 'repeated_drops'
   | 'low_slow_scan'
+  | 'device_silence'
   // new_device (issue #103 phase 1): raised directly from the ingest
   // path (main.go), not through internal/detect like every other flag
   // type above -- see internal/flags.TypeNewDevice. This is exactly the
@@ -147,10 +155,16 @@ export type FlagType =
   // has no corresponding detector-settings entry (no on/off toggle, no
   // scope), so it must NOT be added to DetectorName.
   | 'new_device'
+  // stale_rule (issue #102): raised by a standalone periodic sweep (see
+  // internal/detect.StaleRuleDetector), not the generic per-event
+  // detector-enable/scope pipeline every DetectorName-backed type goes
+  // through -- same "no matching detector-settings entry" exception as
+  // new_device above, not an oversight.
+  | 'stale_rule'
 
-// Mirrors internal/detect.DetectorName's 10 string values. No longer a
-// FlagType alias (see new_device above) -- kept as its own literal union
-// now that a FlagType exists with no matching detector.
+// Mirrors internal/detect.DetectorName's 11 string values. No longer a
+// FlagType alias (see new_device/stale_rule above) -- kept as its own
+// literal union now that FlagType has entries with no matching detector.
 export type DetectorName =
   | 'port_scan'
   | 'activity_spike'
@@ -162,6 +176,7 @@ export type DetectorName =
   | 'rule_spike'
   | 'repeated_drops'
   | 'low_slow_scan'
+  | 'device_silence'
 
 // Mirrors internal/detect.ListMode.
 export type ListMode = '' | 'allow' | 'deny'

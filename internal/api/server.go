@@ -29,7 +29,15 @@ type Server struct {
 	// (see that handler's callerIsAdminOrOpen) since a non-admin user
 	// account still needs it to render the tab.
 	CriticalPorts []int
-	StartTime     time.Time
+	// DeviceStaleAfter (issue #98) is how long a device's LastSeen may go
+	// without updating before GET /api/devices reports it as "stale" --
+	// same threshold detect.DeviceSilenceDetector uses to raise an actual
+	// flag (see internal/detect/device_silence.go), duplicated here
+	// purely so this read-time status computation doesn't need to import
+	// internal/detect for one number. Zero means "not configured": every
+	// device with at least one event is always reported "live".
+	DeviceStaleAfter time.Duration
+	StartTime        time.Time
 
 	// Auth/Sessions/LoginLimiter/SecureCookie: see auth.go. Auth is
 	// always non-nil (internal/auth.Open("") returns a usable, empty,

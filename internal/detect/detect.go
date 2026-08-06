@@ -134,6 +134,15 @@ type Config struct {
 	// per-host-baseline technique as activity-spike/#38 -- see
 	// host_baseline.go), not just the absolute thresholds above.
 	LowSlowScanBaselineMultiplier float64
+
+	// DeviceStaleAfter (issue #98): how long a configured device's
+	// LastSeen may go without updating before DeviceSilenceDetector
+	// raises TypeDeviceSilence for it. Needs to sit comfortably above
+	// normal syslog gaps (RouterOS doesn't emit a steady heartbeat, just
+	// events as they happen) so an ordinarily quiet stretch never false-
+	// positives. Zero disables the detector entirely -- see
+	// DeviceSilenceDetector.Check.
+	DeviceStaleAfter time.Duration
 }
 
 // DefaultConfig returns sensible defaults for a home/small-office
@@ -181,6 +190,8 @@ func DefaultConfig() Config {
 		LowSlowScanMinObservation:     45 * time.Minute,
 		LowSlowScanDropRatio:          0.8,
 		LowSlowScanBaselineMultiplier: 3,
+
+		DeviceStaleAfter: 15 * time.Minute,
 	}
 }
 
