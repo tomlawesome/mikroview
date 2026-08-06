@@ -70,6 +70,22 @@ store:
 #   hostActivityMultiplier: 3
 #   hostActivityWarmupSamples: 20
 #
+#   # Optional (issue #105): interface-name patterns (glob syntax --
+#   # exact "wireguard1" or prefix-style "wireguard*") identifying which
+#   # of RouterOS's InInterface values correspond to a configured VPN
+#   # tunnel. When a port-scan/activity-spike/outbound-anomaly/internal-
+#   # recon anomaly's triggering event arrived via a matching interface,
+#   # its confidence score is boosted by vpnConfidenceMultiplier
+#   # (clamped to 100) -- an already-authenticated remote peer behaving
+#   # anomalously is a stronger signal than an ordinary LAN device doing
+#   # the same. Left empty (the default), this is a complete no-op --
+#   # every confidence score is unaffected. See docs/configuration.md's
+#   # "VPN interface confidence boost" section.
+#   vpnInterfaces: []
+#   # vpnInterfaces:
+#   #   - wireguard1
+#   vpnConfidenceMultiplier: 1.5
+#
 #   # How long a *configured* device's last-seen time may go without
 #   # updating before it's reported "stale" (GET /api/devices, feeds the
 #   # Fleet view) and raises a device_silence flag -- a router that's

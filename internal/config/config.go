@@ -374,6 +374,18 @@ type Flags struct {
 	// "port_scan", "rule_spike" -- see internal/detect.DetectorName).
 	DetectorSettingsStorePath string                      `yaml:"detectorSettingsStorePath"`
 	Detectors                 map[string]DetectorSettings `yaml:"detectors"`
+
+	// VPNInterfaces/VPNConfidenceMultiplier (issue #105): see
+	// internal/detect.Config's matching fields for what each one means
+	// and why the default (empty VPNInterfaces, so this whole feature is
+	// inert until configured) is what it is -- duplicated here rather
+	// than imported, same as every other Flags field. VPNInterfaces
+	// entries are glob patterns (path.Match syntax) matched against
+	// store.Event.InInterface, e.g. "wireguard1" (exact) or "wireguard*"
+	// (prefix) for whatever name RouterOS assigns your WireGuard
+	// interface.
+	VPNInterfaces           []string `yaml:"vpnInterfaces"`
+	VPNConfidenceMultiplier float64  `yaml:"vpnConfidenceMultiplier"`
 }
 
 // DeviceMAC configures internal/device's MACRegistry (issue #103 phase
@@ -486,6 +498,13 @@ func defaults() Config {
 
 			StorePath:                 DefaultDataDir + "/flags.json",
 			DetectorSettingsStorePath: DefaultDataDir + "/detector-settings.json",
+
+			// VPNInterfaces is empty by default -- see its doc comment
+			// for why that's the deliberate, backward-compatible no-op
+			// starting point. VPNConfidenceMultiplier mirrors
+			// internal/detect.DefaultConfig()'s own default so setting
+			// only vpnInterfaces in config.yaml is enough to opt in.
+			VPNConfidenceMultiplier: 1.5,
 		},
 		Auth: Auth{
 			StorePath:       DefaultDataDir + "/users.json",
@@ -766,6 +785,14 @@ func applyEnv(cfg *Config) {
 	}
 	if v := os.Getenv("MIKROVIEW_FLAGS_DETECTOR_SETTINGS_STORE_PATH"); v != "" {
 		cfg.Flags.DetectorSettingsStorePath = v
+	}
+	if v := os.Getenv("MIKROVIEW_FLAGS_VPN_INTERFACES"); v != "" {
+		cfg.Flags.VPNInterfaces = parseStringList(v)
+	}
+	if v := os.Getenv("MIKROVIEW_FLAGS_VPN_CONFIDENCE_MULTIPLIER"); v != "" {
+		if f, err := strconv.ParseFloat(v, 64); err == nil {
+			cfg.Flags.VPNConfidenceMultiplier = f
+		}
 	}
 	if v := os.Getenv("MIKROVIEW_AUTH_STORE_PATH"); v != "" {
 		cfg.Auth.StorePath = v
