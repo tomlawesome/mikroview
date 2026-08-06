@@ -41,6 +41,16 @@ const (
 	// baseline, drop/reject ratio, reputation) rather than one count. See
 	// internal/detect/low_slow_scan.go.
 	TypeLowSlowScan Type = "low_slow_scan"
+	// TypeDeviceSilence (issue #98): a configured RouterOS device that
+	// should be sending syslog has gone quiet for longer than
+	// detect.Config.DeviceStaleAfter -- absence of events, not a pattern
+	// within them, so it's raised by a periodic sweep (see
+	// internal/detect/device_silence.go) rather than any per-event path.
+	// Target is the device's configured ID, not an IP. Deliberately the
+	// same string value as detect.DetectorDeviceSilence, like every
+	// other detector/flag-type pair in this codebase (see
+	// DetectorName's doc comment).
+	TypeDeviceSilence Type = "device_silence"
 )
 
 // maxFlags bounds the store the same way every other buffer in mikroview
@@ -84,7 +94,7 @@ type NATInfo struct {
 type Flag struct {
 	ID        string    `json:"id"`
 	Type      Type      `json:"type"`
-	Target    string    `json:"target"` // source IP, or "global" for TypeGlobalSpike
+	Target    string    `json:"target"` // source IP, "global" for TypeGlobalSpike, or a device ID for TypeDeviceSilence
 	Detail    string    `json:"detail"` // human-readable specifics, e.g. "23 distinct ports in 60s"
 	Count     int       `json:"count"`  // times this detector has re-fired for this target since the flag was (re-)raised
 	FirstSeen time.Time `json:"firstSeen"`

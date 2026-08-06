@@ -46,7 +46,8 @@ export interface ClientEvent extends FirewallEvent {
   receivedAt: number
 }
 
-// Mirrors internal/device/registry.go's Info.
+// Mirrors internal/device/registry.go's Info, plus internal/api/rest.go's
+// handleDevices-computed `status` (see that file's deviceView/deviceStatus).
 export interface Device {
   id: string
   name: string
@@ -55,6 +56,12 @@ export interface Device {
   firstSeen: string
   lastSeen: string
   eventCount: number
+  // status (issue #98): "live" (an event within the configured staleness
+  // threshold), "stale" (LastSeen is older than that threshold), or
+  // "never_seen" (configured, but zero events ever received). Computed
+  // server-side, read-time, on every GET /api/devices -- always fresh,
+  // never a value this client itself has to derive or keep in sync.
+  status: 'live' | 'stale' | 'never_seen'
 }
 
 // Mirrors internal/store/query.go's Result.
@@ -129,8 +136,9 @@ export type FlagType =
   | 'rule_spike'
   | 'repeated_drops'
   | 'low_slow_scan'
+  | 'device_silence'
 
-// Mirrors internal/detect.DetectorName -- same 9 string values as
+// Mirrors internal/detect.DetectorName -- same 11 string values as
 // FlagType, kept as a distinct alias since they're the same thing only
 // by coincidence today (see that type's doc comment).
 export type DetectorName = FlagType

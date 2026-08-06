@@ -300,6 +300,11 @@ type Flags struct {
 	LowSlowScanDropRatio          float64       `yaml:"lowSlowScanDropRatio"`
 	LowSlowScanBaselineMultiplier float64       `yaml:"lowSlowScanBaselineMultiplier"`
 
+	// DeviceStaleAfter (issue #98): see internal/detect.Config's matching
+	// field for what this means and why the default sits where it does.
+	// 0 disables the device-silence detector entirely.
+	DeviceStaleAfter time.Duration `yaml:"deviceStaleAfter"`
+
 	// DetectorSettingsStorePath persists live UI on/off+scope toggles
 	// (see internal/detect.SettingsStore) so they survive a restart --
 	// same optional-persistence contract as StorePath above. Detectors
@@ -390,6 +395,8 @@ func defaults() Config {
 			LowSlowScanMinObservation:     45 * time.Minute,
 			LowSlowScanDropRatio:          0.8,
 			LowSlowScanBaselineMultiplier: 3,
+
+			DeviceStaleAfter: 15 * time.Minute,
 
 			StorePath:                 DefaultDataDir + "/flags.json",
 			DetectorSettingsStorePath: DefaultDataDir + "/detector-settings.json",
@@ -624,6 +631,11 @@ func applyEnv(cfg *Config) {
 	if v := os.Getenv("MIKROVIEW_FLAGS_LOW_SLOW_SCAN_BASELINE_MULTIPLIER"); v != "" {
 		if f, err := strconv.ParseFloat(v, 64); err == nil {
 			cfg.Flags.LowSlowScanBaselineMultiplier = f
+		}
+	}
+	if v := os.Getenv("MIKROVIEW_FLAGS_DEVICE_STALE_AFTER"); v != "" {
+		if d, err := time.ParseDuration(v); err == nil {
+			cfg.Flags.DeviceStaleAfter = d
 		}
 	}
 	if v := os.Getenv("MIKROVIEW_FLAGS_DETECTOR_SETTINGS_STORE_PATH"); v != "" {

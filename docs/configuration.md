@@ -238,6 +238,7 @@ flags:
   lowSlowScanMinObservation: 45m
   lowSlowScanDropRatio: 0.8
   lowSlowScanBaselineMultiplier: 3
+  deviceStaleAfter: 15m
 ```
 
 - **`storePath`** — where raised/cleared flags are persisted, as a small
@@ -355,6 +356,21 @@ flags:
   weakest-clearing signal bounds the overall score, consistent with
   requiring several independent signals rather than trusting the
   strongest one alone.
+- **Device silence (issue #98)** — a *configured* device (`devices` in
+  this file, `Configured: true` in `GET /api/devices`) whose `lastSeen`
+  hasn't advanced in `deviceStaleAfter`. Unlike every other detector
+  above, this isn't a per-event pattern — it's the *absence* of events —
+  so it's checked periodically (same ticker-based shape as global volume
+  spike) rather than as events arrive. Only devices that have sent at
+  least one event are eligible: a freshly configured device that hasn't
+  said anything yet is "never seen," a distinct state `GET /api/devices`
+  also reports, not "gone silent." Auto-discovered sources (seen on the
+  wire but not listed in `devices`) are never eligible either — there's
+  no expected cadence to fall silent from. Set `deviceStaleAfter: 0` to
+  disable this detector entirely; the default (15m) sits well above
+  RouterOS's normal bursty syslog gaps so an ordinarily quiet stretch
+  never false-positives. The flag's target is the device's configured
+  `id`, not an IP.
 
 **Confidence score.** Every detector except global-volume-spike and
 rule-hit-rate-spike attaches a `confidence` percentage (0-100) to each
@@ -370,10 +386,12 @@ you're looking at:
   value, and sample count behind the score.
 - **Overshoot-based (port-scan, critical-port, distributed
   brute-force, outbound anomaly, internal reconnaissance, repeated
-  drops).** These six are plain threshold crossings with no history or
-  baseline behind them, so their confidence instead measures *how far
-  past the threshold* the observed count is: just crossed reads low,
-  three times the threshold or more reads 100%. This is a materially
+  drops, device silence).** These seven are plain threshold crossings
+  with no history or baseline behind them, so their confidence instead
+  measures *how far past the threshold* the observed count is: just
+  crossed reads low, three times the threshold or more reads 100%. For
+  device silence specifically, the "count" is how long the device has
+  gone quiet relative to `deviceStaleAfter`. This is a materially
   weaker claim than activity-spike's statistical score — it says
   nothing about whether the pattern is unusual for that specific
   source, only how large it is relative to the configured line. Treat a
@@ -571,10 +589,12 @@ consults the axes relevant to how it's keyed:
 | `repeated_drops` | source IP | destination port | -- |
 | `global_spike` | -- (network-wide, not keyed by anything per-source) | -- | -- |
 | `low_slow_scan` | which source IPs are tracked at all | which distinct ports *count* toward its own breadth total | -- |
+| `device_silence` | -- (a per-configured-device sweep, not keyed by host/port/rule) | -- | -- |
 
-`global_spike` only ever consults `enabled` -- it's a single network-wide
-aggregate, not tied to any particular host, port, or rule, so scoping it
-wouldn't mean anything.
+`global_spike` and `device_silence` only ever consult `enabled` -- the
+former is a single network-wide aggregate, the latter a periodic sweep
+over the whole configured device list, neither tied to any particular
+host, port, or rule, so scoping either wouldn't mean anything.
 
 ## Authentication
 
@@ -873,6 +893,7 @@ Override individual scalar settings without a mounted file:
 | `MIKROVIEW_FLAGS_LOW_SLOW_SCAN_MIN_OBSERVATION` | `flags.lowSlowScanMinObservation` |
 | `MIKROVIEW_FLAGS_LOW_SLOW_SCAN_DROP_RATIO` | `flags.lowSlowScanDropRatio` |
 | `MIKROVIEW_FLAGS_LOW_SLOW_SCAN_BASELINE_MULTIPLIER` | `flags.lowSlowScanBaselineMultiplier` |
+| `MIKROVIEW_FLAGS_DEVICE_STALE_AFTER` | `flags.deviceStaleAfter` |
 | `MIKROVIEW_FLAGS_DETECTOR_SETTINGS_STORE_PATH` | `flags.detectorSettingsStorePath` (see [Per-detector toggles](#per-detector-toggles-and-scope-restrictions-optional)) |
 | `MIKROVIEW_AUTH_STORE_PATH` | `auth.storePath` (see [Authentication](#authentication)) |
 | `MIKROVIEW_AUTH_SECURE_COOKIE` | `auth.secureCookie` |
@@ -916,7 +937,7 @@ exits, rather than starting the server. See
 | `GET /api/healthz` | liveness/uptime check |
 | `GET /ca.crt` | mikroview's self-generated CA certificate, unauthenticated -- only present when TLS is on and mikroview generated its own CA (never for a supplied cert or `tls.enabled: false`); see [TLS](#tls) |
 | `GET /api/events` | filtered, windowed historical query (see below) |
-| `GET /api/devices` | known devices (configured + auto-discovered) |
+| `GET /api/devices` | known devices (configured + auto-discovered), each with a `status` of `live`/`stale`/`never_seen` (issue #98, see [Behavioral flags](#behavioral-flags-optional-on-by-default)'s "Device silence" entry) -- feeds the Fleet view |
 | `GET /api/critical-ports` | the configured `flags.criticalPorts` list -- feeds the "Control ports" tracking tab (issue #34), open to any signed-in user, not admin-gated |
 | `GET /api/stats` | totals, per-action counts, rolling events/sec |
 | `GET /api/ws` | live-tail WebSocket feed |
