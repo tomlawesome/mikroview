@@ -32,8 +32,9 @@ store:
 
 # Optional: enables AbuseIPDB in the "investigate this IP" popover
 # (Shodan InternetDB is always used, no key needed). Free tier: 1000
-# lookups/day. See docs/configuration.md. Left unset, only Shodan results
-# are shown.
+# lookups/day. AbuseIPDB's abuse score also feeds the confidence floor
+# of behavioral flags raised against the same source IP -- see
+# docs/configuration.md's "IP reputation lookup" section.
 # reputation:
 #   abuseIPDBKey: your-abuseipdb-api-key
 
@@ -108,6 +109,25 @@ store:
 # coverage caveat.
 # deviceMac:
 #   storePath: /var/lib/mikroview/mac-registry.json
+
+# Local IP/CIDR blocklist matching (issue #113 Part B): raises a
+# known_bad_ip flag directly when a source IP falls inside a CIDR range
+# from one of the vetted feeds below -- independent of any behavioral
+# threshold, and also reinforces the confidence floor of any other
+# active flag for that same source IP. On by default with Spamhaus's
+# DROP+EDROP lists (small, free, no registration, curated to only
+# include netblocks Spamhaus is confident are entirely
+# malicious-controlled). This is a fixed, vetted menu, not an arbitrary
+# URL field -- see internal/blocklist's doc comment and
+# docs/configuration.md for the full menu, why, and how the refresh
+# cadence/entry-count cap were decided. Refresh is a fixed daily cycle,
+# not configurable. Set sources to an empty list to disable this
+# feature entirely.
+# blocklist:
+#   sources:
+#     - spamhaus_drop
+#     - spamhaus_edrop
+#     # - emerging_threats_compromised  # opt-in: larger, faster-changing, individual-IP list
 
 # Optional: friendly display names shown in place of a raw RouterOS rule
 # label (e.g. "r13") or a raw host IP, everywhere they appear in the UI

@@ -170,6 +170,14 @@ export type FlagType =
   // through -- same "no matching detector-settings entry" exception as
   // new_device above, not an oversight.
   | 'stale_rule'
+  // known_bad_ip (issue #113 Part B): a source IP matching a locally-
+  // cached CIDR range from a vetted threat-intel feed (Spamhaus DROP/
+  // EDROP by default -- see internal/blocklist's doc comment). Raised
+  // directly from internal/detect.Observe on a deterministic list-
+  // membership check, not gated by DetectorName/Scope -- same "no
+  // matching detector-settings entry" exception as new_device/stale_rule
+  // above.
+  | 'known_bad_ip'
 
 // Mirrors internal/detect.DetectorName's 12 string values. No longer a
 // FlagType alias (see new_device/stale_rule above) -- kept as its own
