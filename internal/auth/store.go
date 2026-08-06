@@ -395,6 +395,28 @@ func (s *Store) Register(username, password string, now time.Time) (*User, error
 	// optimization for the cross-process case, not the correctness
 	// boundary.
 	s.reloadIfStale()
+
+	// Cheap rejection BEFORE hashing. HashPassword is Argon2id at 64
+	// MiB, and /api/auth/register is unauthenticated and rate-limit-free
+	// in every auth state -- so without this, a ~60-byte POST that is
+	// going to be refused anyway still costs 64 MiB and ~66ms, and a
+	// handful of concurrent ones OOM-kill the container. Measured at
+	// ~1 GiB peak heap for 16 concurrent requests, all of which
+	// correctly returned "registration closed".
+	//
+	// This is a fast path, NOT the correctness boundary: it reads the
+	// guard's fields without holding the write lock, so it can race.
+	// registrationOpenGuard re-checks under the lock inside
+	// createLocked, and that remains what actually guarantees exactly
+	// one account can be self-registered.
+	if err := func() error {
+		s.mu.RLock()
+		defer s.mu.RUnlock()
+		return registrationOpenGuard(s)
+	}(); err != nil {
+		return nil, err
+	}
+
 	return s.createLocked(username, password, RoleAdmin, now, registrationOpenGuard)
 }
 
