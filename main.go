@@ -21,6 +21,7 @@ import (
 	"github.com/tomlawesome/mikroview/internal/config"
 	"github.com/tomlawesome/mikroview/internal/detect"
 	"github.com/tomlawesome/mikroview/internal/device"
+	"github.com/tomlawesome/mikroview/internal/entities"
 	"github.com/tomlawesome/mikroview/internal/flags"
 	"github.com/tomlawesome/mikroview/internal/geoip"
 	"github.com/tomlawesome/mikroview/internal/hub"
@@ -261,6 +262,24 @@ func main() {
 		authLog.Info("no decision made yet -- mikroview is showing the first-run choice screen (see docs/configuration.md)")
 	}
 
+	// entities (issue #107): the persisted, admin-manageable (type, key)
+	// -> label/tags store backing GET/POST/DELETE /api/entities -- the
+	// shared foundation a future mail-sender allowlist and UI-managed
+	// IP/port/rule aliasing both build on. Seed is the one-time upgrade
+	// path: an existing deployment's YAML-only cfg.RuleNames/HostNames
+	// become UI-editable Entity records the first time it boots against
+	// an empty store, and never re-import again afterward (even if a
+	// user later deletes every one of them) -- see Store.Seed's own doc
+	// comment.
+	entitiesLog := logging.New("entities")
+	entityStore, err := entities.Open(cfg.Entities.StorePath)
+	if err != nil {
+		entitiesLog.Warn(fmt.Sprintf("%v (continuing with in-memory-only entity state)", err))
+	}
+	if n := entityStore.Seed(cfg.RuleNames, cfg.HostNames); n > 0 {
+		entitiesLog.Info(fmt.Sprintf("imported %d entries from config.yaml's ruleNames/hostNames (now UI-editable)", n))
+	}
+
 	// Tokens (issue #101): read-only API bearer tokens for service-to-
 	// service access -- optional persistence, same degrade-not-crash
 	// contract as Flags/DetectorSettings above (a missing/unwritable path
@@ -396,7 +415,10 @@ func main() {
 		}
 	}()
 
-	names := naming.Resolver{Rules: cfg.RuleNames, Hosts: cfg.HostNames}
+	// Entities takes precedence over Rules/Hosts for any key it has a
+	// label for -- see naming.Resolver's doc comment and issue #107's
+	// migration/precedence design.
+	names := naming.Resolver{Rules: cfg.RuleNames, Hosts: cfg.HostNames, Entities: entityStore}
 
 	go ingest(ctx, raw, st, devices, macRegistry, fs, h, geo, detector, ru, names)
 	go detector.Run(ctx)
@@ -504,6 +526,7 @@ func main() {
 		Reputation:       rep,
 		Flags:            fs,
 		DetectorSettings: detectorSettings,
+		Entities:         entityStore,
 		CriticalPorts:    cfg.Flags.CriticalPorts,
 		DeviceStaleAfter: cfg.Flags.DeviceStaleAfter,
 		Auth:             authStore,
