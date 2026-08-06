@@ -153,3 +153,28 @@ func TestHandleIsSafeForConcurrentUse(t *testing.T) {
 		t.Errorf("expected 20 complete lines with no interleaving corruption, got %d newlines", got)
 	}
 }
+
+// TestRecoverMustBeDeferredDirectly guards the exact footgun Recover's
+// own doc comment warns about: recover() only stops a panic when
+// called directly by the function that was itself deferred. Wrapping
+// the call in another closure (`defer func() { Recover(logger) }()`)
+// looks equivalent but silently doesn't work -- this test would crash
+// with an unrecovered panic if Recover (or its calling convention) ever
+// regressed to that pattern.
+func TestRecoverMustBeDeferredDirectly(t *testing.T) {
+	var buf strings.Builder
+	h := &handler{w: &buf, level: slog.LevelInfo, color: false, mu: &sync.Mutex{}}
+	logger := slog.New(h).With(slog.String("component", "recover-test"))
+
+	func() {
+		defer Recover(logger)
+		panic("boom")
+	}()
+
+	if !strings.Contains(buf.String(), "recovered from panic") {
+		t.Errorf("expected a logged recovery, got %q", buf.String())
+	}
+	if !strings.Contains(buf.String(), "boom") {
+		t.Errorf("expected the panic value in the log line, got %q", buf.String())
+	}
+}
