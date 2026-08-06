@@ -1,6 +1,39 @@
 import { clearFlag, fetchFlags } from './api'
 import type { Flag } from './types'
 
+const IPV4_RE = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/
+
+function isIpAddress(value: string): boolean {
+  const m = value.match(IPV4_RE)
+  if (m) return m.slice(1).every((octet) => Number(octet) <= 255)
+  // Loose IPv6 check -- this only needs to decide "does this look like a
+  // single IP" for grouping purposes, not fully validate address syntax
+  // (unlike isPublicIp in format.ts, which is deliberately IPv4-only for
+  // its own narrower purpose).
+  return value.includes(':') && /^[0-9a-fA-F:]+$/.test(value)
+}
+
+// Extracts the leading source IP from a flag's `target` for campaign
+// grouping (issue #106), or null if the target isn't a single-source-IP
+// shape to correlate on. `target` varies by detector (see
+// internal/flags.Flag's doc comment and internal/detect/*.go):
+//   - bare source IP for most per-host detectors (port_scan,
+//     activity_spike, critical_port, outbound_anomaly, internal_recon,
+//     low_slow_scan)
+//   - "<ip> -> port <N>" for repeated_drops -- the port suffix is
+//     stripped here for grouping purposes only; the flag's own
+//     detail/display still shows the full composite target
+//   - "port <N>" for distributed_brute_force -- no single source IP
+//   - a rule label for rule_spike -- no single source IP
+//   - "global" for global_spike -- no single actor at all
+// The latter three (and anything else that isn't IP-shaped after
+// stripping the repeated_drops suffix) return null so they're excluded
+// from grouping rather than mis-grouped under a bogus shared key.
+export function extractSourceIp(target: string): string | null {
+  const withoutDropsSuffix = target.replace(/ -> port \d+$/, '')
+  return isIpAddress(withoutDropsSuffix) ? withoutDropsSuffix : null
+}
+
 // Behavioral flags (port scans, activity spikes, critical-port attempts,
 // global volume spikes -- see internal/detect) raised server-side and
 // reviewed/cleared by a human here. Kept as its own small module rather
@@ -10,6 +43,30 @@ class FlagsState {
   list = $state<Flag[]>([])
 
   activeCount = $derived(this.list.filter((f) => !f.cleared).length)
+
+  // Groups *active* flags by normalized source IP (see extractSourceIp)
+  // so "one actor, several signals" -- a port scan, then a critical-port
+  // hit, then a reputation-triggered flag, all from the same host --
+  // reads as one correlated unit in Flags.svelte instead of N unrelated
+  // entries (issue #106). Cleared flags are left out: they've already
+  // been reviewed, so there's nothing left to correlate them toward.
+  // Only IPs with more than one active flag are kept -- a group of one
+  // is just a normal flag, not a campaign worth calling out.
+  groupedBySource = $derived.by(() => {
+    const groups = new Map<string, Flag[]>()
+    for (const f of this.list) {
+      if (f.cleared) continue
+      const ip = extractSourceIp(f.target)
+      if (!ip) continue
+      const existing = groups.get(ip)
+      if (existing) existing.push(f)
+      else groups.set(ip, [f])
+    }
+    for (const [ip, flags] of groups) {
+      if (flags.length < 2) groups.delete(ip)
+    }
+    return groups
+  })
 
   async refresh() {
     this.list = await fetchFlags()
