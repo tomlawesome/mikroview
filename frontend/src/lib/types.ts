@@ -100,6 +100,17 @@ export interface AuthSession {
   ssoAvailable: boolean
 }
 
+// Mirrors internal/api/tokens.go's tokenResponse. value is present only
+// in the response to creating a token (see api.ts's createToken) --
+// never on a listed token, and never recoverable afterward.
+export interface ApiToken {
+  id: string
+  name: string
+  createdAt: string
+  lastUsedAt?: string
+  value?: string
+}
+
 // Mirrors internal/reputation/reputation.go's Result.
 export interface ReputationResult {
   ip: string

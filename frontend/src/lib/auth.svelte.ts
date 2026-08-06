@@ -17,6 +17,9 @@ class AuthState {
   // Drives AddUserOverlay -- a modal toggled from Toolbar, mounted at the
   // App root.
   showAddUser = $state(false)
+  // Drives TokensOverlay (issue #101) -- same pattern as showAddUser
+  // above, toggled from NavMenu's admin-only Account section.
+  showTokens = $state(false)
   // Whether the backend has OIDC/SSO configured at all -- gates
   // rendering the "Sign in with SSO" link (see AuthLogin.svelte/
   // AuthSetup.svelte). Independent of state above: SSO can be

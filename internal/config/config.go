@@ -167,6 +167,14 @@ type Auth struct {
 	// without activity before needing to log in again," not a fixed
 	// session lifetime.
 	SessionTTL time.Duration `yaml:"sessionTTL"`
+	// TokensStorePath: where read-only API bearer tokens (issue #101)
+	// persist across restarts, as a small JSON file (names + SHA-256
+	// hashes, never the raw bearer values). Unlike StorePath above, this
+	// one really is optional the way Flags.StorePath is -- an operator
+	// who never creates a token doesn't need it, and a missing/unwritable
+	// path just means token creation refuses (ErrTokenNotPersisted)
+	// rather than mikroview failing to start.
+	TokensStorePath string `yaml:"tokensStorePath"`
 }
 
 // TLS configures mikroview's own listener -- on by default: a browser
@@ -409,9 +417,10 @@ func defaults() Config {
 			DetectorSettingsStorePath: DefaultDataDir + "/detector-settings.json",
 		},
 		Auth: Auth{
-			StorePath:    DefaultDataDir + "/users.json",
-			SessionTTL:   24 * time.Hour,
-			SecureCookie: true,
+			StorePath:       DefaultDataDir + "/users.json",
+			SessionTTL:      24 * time.Hour,
+			SecureCookie:    true,
+			TokensStorePath: DefaultDataDir + "/tokens.json",
 		},
 		TLS: TLS{
 			Enabled:   true,
@@ -655,6 +664,9 @@ func applyEnv(cfg *Config) {
 		if d, err := time.ParseDuration(v); err == nil {
 			cfg.Auth.SessionTTL = d
 		}
+	}
+	if v := os.Getenv("MIKROVIEW_AUTH_TOKENS_STORE_PATH"); v != "" {
+		cfg.Auth.TokensStorePath = v
 	}
 	if v := os.Getenv("MIKROVIEW_NOTIFY_BATCH_WINDOW"); v != "" {
 		if d, err := time.ParseDuration(v); err == nil {

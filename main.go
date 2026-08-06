@@ -230,6 +230,17 @@ func main() {
 	default:
 		authLog.Info("no decision made yet -- mikroview is showing the first-run choice screen (see docs/configuration.md)")
 	}
+
+	// Tokens (issue #101): read-only API bearer tokens for service-to-
+	// service access -- optional persistence, same degrade-not-crash
+	// contract as Flags/DetectorSettings above (a missing/unwritable path
+	// just means token creation refuses with ErrTokenNotPersisted, not
+	// that mikroview fails to start).
+	tokensLog := logging.New("tokens")
+	tokenStore, err := auth.OpenTokenStore(cfg.Auth.TokensStorePath)
+	if err != nil {
+		tokensLog.Warn(fmt.Sprintf("%v (continuing with in-memory-only, unpersisted token state)", err))
+	}
 	detectCfg := detect.Config{
 		PortScanThreshold:        cfg.Flags.PortScanThreshold,
 		PortScanWindow:           cfg.Flags.PortScanWindow,
@@ -421,6 +432,7 @@ func main() {
 		Sessions:         auth.NewSessionStore(cfg.Auth.SessionTTL),
 		LoginLimiter:     auth.NewLoginLimiter(loginLimiterThreshold, loginLimiterWindow),
 		SecureCookie:     cfg.Auth.SecureCookie,
+		Tokens:           tokenStore,
 		OIDC:             oidcClient,
 		OIDCState:        oidcState,
 		StartTime:        time.Now(),
