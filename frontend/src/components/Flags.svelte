@@ -80,6 +80,7 @@
     device_silence: 'Device gone quiet',
     new_device: 'New device',
     stale_rule: 'Stale firewall rule',
+    known_bad_ip: 'Known-bad IP (blocklist match)',
   }
 
   // Sorted by firstSeen (not the fetch response's lastSeen-desc order --
@@ -178,6 +179,7 @@
       case 'internal_recon':
       case 'low_slow_scan':
       case 'off_hours_activity':
+      case 'known_bad_ip':
         appState.setFilter('ip', f.target)
         break
       case 'distributed_brute_force':

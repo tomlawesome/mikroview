@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/tomlawesome/mikroview/internal/audit"
 	"github.com/tomlawesome/mikroview/internal/auth"
 	"github.com/tomlawesome/mikroview/internal/detect"
 	"github.com/tomlawesome/mikroview/internal/device"
@@ -19,9 +20,9 @@ import (
 )
 
 type Server struct {
-	Store            *store.Store
-	Devices          *device.Registry
-	Hub              *hub.Hub
+	Store   *store.Store
+	Devices *device.Registry
+	Hub     *hub.Hub
 	Reputation       *reputation.Client
 	Flags            *flags.Store
 	DetectorSettings *detect.SettingsStore
@@ -42,6 +43,18 @@ type Server struct {
 	// Open("") returns a usable, empty, unpersisted store), same
 	// always-usable convention as Entities/Flags/DetectorSettings above.
 	Rules *rules.Store
+	// Audit is the persisted, admin-only accountability log of every
+	// admin-privileged mutation (issue #112) -- who created a user,
+	// changed a detector setting, upserted/deleted an entity, created or
+	// revoked an API token, or removed a permanent flag exclusion (see
+	// flags.go's handleExclusionRemove; the flag-clear handlers
+	// deliberately don't record here -- see their own doc comments).
+	// Deliberately separate from Flags: this is about actions taken *in*
+	// mikroview, not behavior mikroview observes on the network. Always
+	// non-nil (internal/audit.Open("") returns a usable, empty,
+	// unpersisted store), same always-usable convention as Entities/
+	// Flags/DetectorSettings above.
+	Audit *audit.Store
 	// CriticalPorts is the configured control-port list (issue #34's
 	// tracking tab) -- exposed read-only via GET /api/critical-ports,
 	// deliberately not behind handleDetectorSettingsList's admin gate
@@ -115,6 +128,8 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("GET /api/entities", s.handleEntitiesList)
 	mux.HandleFunc("POST /api/entities", s.handleEntitiesUpsert)
 	mux.HandleFunc("DELETE /api/entities", s.handleEntitiesDelete)
+
+	mux.HandleFunc("GET /api/audit", s.handleAuditList)
 
 	mux.HandleFunc("GET /api/auth/session", s.handleAuthSession)
 	mux.HandleFunc("POST /api/auth/register", s.handleAuthRegister)

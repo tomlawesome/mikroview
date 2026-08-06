@@ -65,12 +65,13 @@ const (
 )
 
 // RiskFloor returns a confidence floor derived from IsTor/UsageType, if
-// either signal applies (issue #58) -- a Tor exit node is treated as
-// the stronger signal, checked first. ok is false if neither applies,
-// meaning this result contributes no floor from these two fields (a
-// caller should not treat that as "confirmed clean," same absence-of-
-// evidence reasoning flags.Store.RaiseConfidenceFloor already documents
-// for AbuseScore).
+// either signal applies (issue #58) -- checked in descending floor
+// order so the strongest applicable signal wins outright rather than
+// being averaged with a weaker one. ok is false if neither applies,
+// meaning this result contributes no floor from either field (a caller
+// should not treat that as "confirmed clean," same absence-of-evidence
+// reasoning flags.Store.RaiseConfidenceFloor already documents for
+// AbuseScore).
 func (r Result) RiskFloor() (floor int, ok bool) {
 	if r.IsTor {
 		return TorExitNodeFloor, true
