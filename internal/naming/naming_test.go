@@ -110,3 +110,50 @@ func TestEntityWithNoLabelFallsThroughToConfigMap(t *testing.T) {
 		t.Errorf("Host(\"192.168.1.50\") = %q, want the config.yaml fallback since the entity has no label", got)
 	}
 }
+
+// TestResolverPort covers issue #109's addition: a port entity resolves
+// by its decimal-string key, and -- unlike Rule/Host -- there is no
+// config.yaml map to fall back to, so a miss is always "".
+func TestResolverPort(t *testing.T) {
+	es, _ := entities.Open("")
+	if _, err := es.Upsert(entities.Entity{Type: entities.TypePort, Key: "8291", Label: "Winbox"}); err != nil {
+		t.Fatal(err)
+	}
+
+	r := Resolver{Entities: es}
+
+	if got := r.Port(8291); got != "Winbox" {
+		t.Errorf("Port(8291) = %q, want \"Winbox\"", got)
+	}
+	if got := r.Port(443); got != "" {
+		t.Errorf("Port(443) = %q, want empty (no entity, no fallback map)", got)
+	}
+}
+
+// TestResolverPortZeroAndNegativeAlwaysMiss covers SrcPort/DstPort's own
+// "0 means no port" convention (internal/store/event.go) -- Port must
+// never look up "0" as though it were a real port, even if some future
+// caller mistakenly upserted an entity keyed "0" or a negative value.
+func TestResolverPortZeroAndNegativeAlwaysMiss(t *testing.T) {
+	es, _ := entities.Open("")
+	if _, err := es.Upsert(entities.Entity{Type: entities.TypePort, Key: "0", Label: "should never be returned"}); err != nil {
+		t.Fatal(err)
+	}
+	r := Resolver{Entities: es}
+
+	if got := r.Port(0); got != "" {
+		t.Errorf("Port(0) = %q, want empty", got)
+	}
+	if got := r.Port(-1); got != "" {
+		t.Errorf("Port(-1) = %q, want empty", got)
+	}
+}
+
+// TestResolverPortZeroValueIsUsable mirrors TestZeroValueResolverIsUsable
+// for Port -- a nil Entities store must miss cleanly, not panic.
+func TestResolverPortZeroValueIsUsable(t *testing.T) {
+	var r Resolver
+	if got := r.Port(8291); got != "" {
+		t.Errorf("Port() on zero value = %q, want empty", got)
+	}
+}
