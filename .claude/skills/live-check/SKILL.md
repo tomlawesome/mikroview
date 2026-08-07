@@ -58,8 +58,14 @@ done()
 `check(ok, message)` records a failure without aborting, so one run
 reports everything rather than stopping at the first problem.
 
-## What it cannot cover
+## What it cannot cover -- check before assuming
 
-No RouterOS device and no external identity provider are available here,
-so anything depending on those is verified against documented behaviour
-and must be labelled as such rather than implied to be observed.
+Be suspicious of "we cannot test that here". It was claimed about the
+browser (Playwright and Chromium were installed; the check only looked at
+`PATH`) and about RouterOS (it virtualises: `/dev/kvm` is present,
+`qemu-system-x86` installs from apt, and CHR images download). Both
+claims were wrong, and both times the real thing found defects.
+
+Look properly first. Where something genuinely cannot be exercised, say
+so plainly in the PR rather than letting "tested" imply more than was
+observed.
