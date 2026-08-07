@@ -33,6 +33,7 @@ import (
 	"github.com/tomlawesome/mikroview/internal/naming"
 	"github.com/tomlawesome/mikroview/internal/notify"
 	"github.com/tomlawesome/mikroview/internal/oidc"
+	"github.com/tomlawesome/mikroview/internal/persist"
 	"github.com/tomlawesome/mikroview/internal/reputation"
 	"github.com/tomlawesome/mikroview/internal/routeros"
 	"github.com/tomlawesome/mikroview/internal/rules"
@@ -287,8 +288,28 @@ func main() {
 		rulesLog.Warn(fmt.Sprintf("%v (continuing with in-memory-only rule-usage state)", err))
 	}
 
+	// Storage is resolved before any store opens: it decides whether
+	// this deployment persists to JSON files or Postgres, and performs
+	// the one-time JSON adoption when Postgres is newly configured.
+	// A configured-but-unreachable database is fatal -- see openStorage.
+	// Boot-time context: the signal-aware ctx below is created after
+	// the stores exist, and connecting to the database has to happen
+	// before any of them.
+	bootCtx := context.Background()
+	persistence, err := openStorage(bootCtx, cfg)
+	if err != nil {
+		logging.New("storage").Error(err.Error())
+		os.Exit(1)
+	}
+	defer persistence.Close()
+
 	authLog := logging.New("auth")
-	authStore, err := auth.Open(cfg.Auth.StorePath)
+	authBackend, err := persistence.backendFor(bootCtx, "auth", cfg.Auth.StorePath)
+	if err != nil {
+		authLog.Error(fmt.Sprintf("preparing the accounts store: %v -- refusing to start with authentication in an unknown state", err))
+		os.Exit(1)
+	}
+	authStore, err := auth.OpenWithBackend(authBackend)
 	// A non-nil error from auth.Open, when persistence is actually
 	// configured, ALWAYS means "the accounts file exists but couldn't be
 	// read/parsed" -- Open returns (store, nil) for both "no persistence
@@ -307,7 +328,7 @@ func main() {
 	// path) is already sufficient to take it directly -- move or delete
 	// the broken file and restart, no dedicated CLI mode needed for
 	// something `mv`/`rm` already does.
-	if authShouldFailClosed(err, cfg.Auth.StorePath) {
+	if authShouldFailClosed(err, authBackend) {
 		authLog.Error(fmt.Sprintf(
 			"accounts file at %q exists but could not be loaded: %v -- refusing to start with authentication in an unknown state. "+
 				"If this deployment previously had accounts configured, this is NOT a fresh install: restore the file from a backup, "+
@@ -1225,8 +1246,8 @@ func runEnableAuthSetup() int {
 // doesn't exist yet" (a real fresh install) return a nil error, so
 // requiring storePath != "" here is belt-and-braces rather than the
 // actual distinguishing signal, which is err itself.
-func authShouldFailClosed(err error, storePath string) bool {
-	return err != nil && storePath != ""
+func authShouldFailClosed(err error, backend persist.Backend) bool {
+	return err != nil && backend != nil
 }
 
 // runRetiredResetPassword explains where `-recover-admin-account` went.

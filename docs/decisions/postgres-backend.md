@@ -106,6 +106,36 @@ the migration is byte-identical, that a partially applied migration
 rolls back — are properties of the database, and only a database can
 demonstrate them.
 
+## 6a. No Postgres service in docker-compose.yml
+
+Issue #131's open questions assumed one ("Postgres as an optional
+additional service in the compose file, following this project's
+existing comprehensive, commented-out-if-optional convention"). That is
+now explicitly rejected.
+
+A compose file that brings up Postgres next to mikroview puts the
+database on the same host, and a same-host database delivers **none** of
+the separation this feature exists for. The connection credential sits
+in the same compose file, on the same disk, inside the same blast
+radius as the accounts file it was meant to protect. It is strictly
+worse than the JSON file it replaces: same exposure, more moving parts.
+
+The deeper problem is that shipping one would make the documentation
+lie. Every page here says "off-box, network-restricted, or this buys you
+nothing" — and then the copy-pasteable example would hand the operator
+the exact deployment that buys them nothing. People copy the example.
+The example has to be the thing we actually recommend.
+
+So the compose file gains no Postgres service, commented out or
+otherwise. What it gains is the `postgres.dsnFile` setting pointing at
+an external server, and a comment saying plainly why there is nothing
+here to uncomment.
+
+Checked when this was decided: no Postgres service, image or credential
+existed anywhere under `deploy/`, in the README, or in
+`docs/configuration.md`, so there was nothing to remove — only
+something not to add.
+
 ## 7. Security review of the new surface
 
 Required by `docs/decisions/injection-audit.md`, which named

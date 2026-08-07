@@ -201,6 +201,27 @@ See [docs/security-by-design.md](docs/security-by-design.md).
   at all against a lower-privileged local account or container exec that
   could run the binary. Recovery keys are the second factor -- see
   "Recovery keys" below.
+- **Persisted state can live in Postgres instead of JSON files (issue
+  #131), and the only security benefit is separation from this host.**
+  The connection is required to be encrypted -- `sslmode` below
+  `require` is refused at startup rather than silently upgraded, and
+  `verify-full` is what actually authenticates the server rather than
+  merely encrypting to it. The DSN is read from a file, never a config
+  field or a flag, for the same reason `-recover-admin-account` prompts
+  rather than taking an argument: a password in argv is visible to every
+  process on the host.
+
+  **A same-host database, including a container beside mikroview,
+  provides none of that benefit** -- its credential sits inside the
+  exact compromise it was meant to survive, making it strictly worse
+  than the files it replaced. `deploy/docker-compose.yml` therefore
+  ships no Postgres service, not even commented out, because the
+  copy-pasteable example has to be the thing that is actually
+  recommended.
+
+  A configured-but-unreachable database is a hard startup failure, not a
+  fallback to the local files: falling back would run the deployment on
+  stale accounts with no outward sign anything was wrong.
 - **Linking an account to SSO is a one-way, destructive conversion.**
   `POST /api/auth/oidc/link` attaches an OIDC identity to the *calling
   session's own* account and, in the same store operation, replaces its

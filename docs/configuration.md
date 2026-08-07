@@ -1714,6 +1714,93 @@ value:
 A plain local `go run .`/`go build .` (no `-ldflags`) shows `dev`
 instead of a commit SHA.
 
+## Postgres (optional)
+
+By default MikroView keeps its accounts, flags and settings in JSON
+files next to itself. You can move that state into Postgres instead.
+
+**There is exactly one reason to do this: getting your data off the
+machine MikroView runs on.** If someone compromises that host, the
+accounts file goes with it. A database on a *separate* machine, reachable
+only over a restricted network path, means they'd also have to reach and
+break into a second system.
+
+> **A Postgres on the same host — including a container next to
+> MikroView — gives you none of that.** The connection password sits
+> right there beside the data it protects, inside the same compromise.
+> It's worse than the JSON files: same exposure, more to go wrong. This
+> is why `deploy/docker-compose.yml` ships no Postgres service, not even
+> commented out.
+
+### Setting it up
+
+Put the connection string in its own file. Not in `config.yaml`, and
+there's no command-line flag for it — it contains a password, and
+passwords in config files end up in backups, while passwords in
+command-line arguments are visible to every process on the box and to
+`docker inspect`.
+
+```sh
+umask 077
+echo 'postgres://mikroview:PASSWORD@db.internal:5432/mikroview?sslmode=verify-full' \
+  > /etc/mikroview/postgres-dsn
+```
+
+Then point MikroView at it:
+
+```yaml
+postgres:
+  # Path to the file above. Empty (the default) means "use JSON files".
+  dsnFile: /etc/mikroview/postgres-dsn
+```
+
+or `MIKROVIEW_POSTGRES_DSN_FILE=/etc/mikroview/postgres-dsn`.
+
+The database user needs permission to create tables in its own database
+the first time it starts; MikroView creates what it needs and records
+what it has done, so restarts are fine.
+
+### The connection must be encrypted
+
+`sslmode` has to be `require`, `verify-ca` or `verify-full`. Anything
+weaker is **refused at startup** rather than quietly upgraded — if the
+setting doesn't do what you asked, you should hear about it.
+
+Use `verify-full` if you can. `require` encrypts the connection but
+doesn't check *who* answered, so it doesn't stop someone who can
+intercept traffic between MikroView and the database.
+
+### Your existing data moves automatically
+
+On the first start with `dsnFile` set, MikroView copies each existing
+JSON file into the database and says so:
+
+```
+storage │ migrated /var/lib/mikroview/users.json (362 bytes) into
+          postgres db.internal/mikroview store "auth" -- that file is no
+          longer read, and can be deleted once you are satisfied the move
+          worked
+```
+
+Three things worth knowing:
+
+- **The old files are left alone.** Nothing is deleted or renamed. To go
+  back, remove `dsnFile` and restart — you'll come back up on the last
+  file state, which will be out of date but is still there.
+- **It only ever copies into an empty store.** Once the database holds
+  data, the old file is ignored permanently. A stale file left on disk
+  can't roll live data back on a later restart.
+- **If the database is configured but unreachable, MikroView refuses to
+  start.** It does not silently fall back to the JSON files — that would
+  quietly run your deployment on stale local accounts, possibly with a
+  different admin, and nothing would look wrong.
+
+### What isn't stored there
+
+The live event stream stays in memory and is never persisted, on any
+backend. TLS certificates also stay on disk — MikroView needs them
+before it could reach a database at all.
+
 ## CLI flags (local development)
 
 `-version`, `-syslog-udp`, `-syslog-tcp`, `-http`, `-http-redirect`,
