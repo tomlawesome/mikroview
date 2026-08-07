@@ -23,6 +23,8 @@ import (
 	"path/filepath"
 	"sort"
 	"sync"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/tomlawesome/mikroview/internal/logging"
 )
@@ -64,6 +66,10 @@ type Entity struct {
 // both are required to form the identity an entity is stored/looked up
 // by; Label and Tags are the only genuinely optional fields.
 var ErrInvalidEntity = errors.New("entities: type and key are both required")
+
+// ErrInvalidEntityText is returned by Upsert for a key, label or tag
+// containing control or format characters, or one that is too long.
+var ErrInvalidEntityText = errors.New("entities: key, label and tags must not contain control characters, and must be 256 characters or fewer")
 
 func id(entityType, key string) string {
 	return entityType + ":" + key
@@ -175,6 +181,23 @@ func Open(path string) (*Store, error) {
 func (s *Store) Upsert(e Entity) (Entity, error) {
 	if e.Type == "" || e.Key == "" {
 		return Entity{}, ErrInvalidEntity
+	}
+	// Key can arrive from a discovered rule label, which originates in
+	// syslog and so is not mikroview's own text; Label is typed by an
+	// admin. Both end up in the audit trail and, via the naming
+	// resolver, in exported CSV columns, so both are held to the same
+	// no-control-characters rule as a username. Setting an entity is
+	// admin-only, which lowers the severity but not the reasoning.
+	if err := validateEntityText(e.Key); err != nil {
+		return Entity{}, err
+	}
+	if err := validateEntityText(e.Label); err != nil {
+		return Entity{}, err
+	}
+	for _, tag := range e.Tags {
+		if err := validateEntityText(tag); err != nil {
+			return Entity{}, err
+		}
 	}
 
 	s.mu.Lock()
@@ -368,4 +391,34 @@ func (s *Store) persistLocked() {
 		persistLog.Error(fmt.Sprintf("replacing %s failed: %v -- this change exists only in memory and will be lost on restart", s.path, err))
 		return
 	}
+}
+
+// maxEntityTextLength bounds a key, label or tag. Generous next to any
+// real rule label or hostname, tight enough that the audit trail and
+// the UI table stay renderable.
+const maxEntityTextLength = 256
+
+// validateEntityText rejects text that stops being text downstream.
+//
+// Control characters (ANSI escapes, newlines) and Unicode format
+// characters (the bidi overrides that let a string render in an order
+// other than the one it is stored in) are refused for the same reasons
+// they are refused in a username -- see auth.ValidateUsername, which
+// carries the full reasoning and the CVE references.
+//
+// An empty string is allowed: Label and Tags are optional, and Upsert
+// checks Key separately.
+func validateEntityText(s string) error {
+	if !utf8.ValidString(s) {
+		return ErrInvalidEntityText
+	}
+	if utf8.RuneCountInString(s) > maxEntityTextLength {
+		return ErrInvalidEntityText
+	}
+	for _, r := range s {
+		if unicode.IsControl(r) || unicode.Is(unicode.Cf, r) {
+			return ErrInvalidEntityText
+		}
+	}
+	return nil
 }

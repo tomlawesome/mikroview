@@ -133,7 +133,7 @@ type Store struct {
 
 // Log controls mikroview's own server log output -- see
 // internal/logging. Doesn't apply to the CLI recovery commands
-// (-list-users, -reset-password's prompts, etc.), which print directly
+// (-list-users, -recover-admin-account's prompts, etc.), which print directly
 // to stdout/stderr for scripting/piping, not through this leveled path.
 type Log struct {
 	// Level is one of debug/info/warn/error (case-insensitive); anything
@@ -245,6 +245,23 @@ type Auth struct {
 	// path just means token creation refuses (ErrTokenNotPersisted)
 	// rather than mikroview failing to start.
 	TokensStorePath string `yaml:"tokensStorePath"`
+	// RecoveryKeysPath holds the hashed recovery keys that gate the CLI
+	// commands changing authentication state (#134).
+	//
+	// Deliberately a different file from StorePath: if the digests lived
+	// in the accounts file, a corrupted accounts file would also destroy
+	// the only thing able to validate a recovery key -- exactly the
+	// situation those commands exist to recover from.
+	RecoveryKeysPath string `yaml:"recoveryKeysPath"`
+	// RecoveryPepperPath holds the server-side secret mixed into every
+	// recovery-key digest.
+	//
+	// Kept out of the backup set (#97) on purpose: someone holding a
+	// stolen backup then has the digests and nothing to verify them
+	// against. Generated once on first use and never rewritten.
+	// MIKROVIEW_RECOVERY_PEPPER_FILE overrides it, for operators who
+	// want it off the data volume entirely.
+	RecoveryPepperPath string `yaml:"recoveryPepperPath"`
 }
 
 // Entities configures internal/entities' persisted, admin-manageable
@@ -644,10 +661,12 @@ func defaults() Config {
 			VPNConfidenceMultiplier: 1.5,
 		},
 		Auth: Auth{
-			StorePath:       DefaultDataDir + "/users.json",
-			SessionTTL:      24 * time.Hour,
-			SecureCookie:    true,
-			TokensStorePath: DefaultDataDir + "/tokens.json",
+			StorePath:          DefaultDataDir + "/users.json",
+			SessionTTL:         24 * time.Hour,
+			SecureCookie:       true,
+			TokensStorePath:    DefaultDataDir + "/tokens.json",
+			RecoveryKeysPath:   DefaultDataDir + "/recovery-keys.json",
+			RecoveryPepperPath: DefaultDataDir + "/recovery-pepper.key",
 		},
 		Entities: Entities{
 			StorePath: DefaultDataDir + "/entities.json",
@@ -746,6 +765,9 @@ func applyEnv(cfg *Config) {
 	}
 	if v := os.Getenv("MIKROVIEW_LISTEN_HTTP_REDIRECT"); v != "" {
 		cfg.Listen.HTTPRedirect = v
+	}
+	if v := os.Getenv("MIKROVIEW_RECOVERY_PEPPER_FILE"); v != "" {
+		cfg.Auth.RecoveryPepperPath = v
 	}
 	if v := os.Getenv("MIKROVIEW_TRUSTED_PROXIES"); v != "" {
 		cfg.Listen.TrustedProxies = parseStringList(v)

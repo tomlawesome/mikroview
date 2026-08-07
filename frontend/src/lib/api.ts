@@ -17,6 +17,7 @@ import type {
   ReputationResult,
   RuleUsage,
   Stats,
+  UserSummary,
 } from './types'
 
 // Thrown instead of a plain Error by every fetch* function below --
@@ -226,10 +227,26 @@ export async function logout(): Promise<void> {
   await postJSON('/api/auth/logout')
 }
 
-export async function createUser(username: string, password: string, role: 'admin' | 'user'): Promise<string | null> {
-  const res = await postJSON('/api/auth/users', { username, password, role })
+// No role argument: mikroview has one admin, and the server refuses a
+// request for a second (see auth.ErrSingleAdmin). Moving the role is
+// CLI-only and recovery-key gated (`mikroview -transfer-admin`), so
+// there is nothing for this call to choose between.
+export async function createUser(username: string, password: string): Promise<string | null> {
+  const res = await postJSON('/api/auth/users', { username, password, role: 'user' })
   if (res.ok) return null
   return (await res.text()) || `createUser: ${res.status}`
+}
+
+export async function fetchUsers(): Promise<UserSummary[]> {
+  const res = await fetch('/api/auth/users')
+  if (!res.ok) throw new ApiError(`fetchUsers: ${res.status}`, res.status)
+  return (await res.json()) ?? []
+}
+
+export async function deleteUser(id: string): Promise<string | null> {
+  const res = await deleteJSON(`/api/auth/users/${encodeURIComponent(id)}`)
+  if (res.ok) return null
+  return (await res.text()) || `deleteUser: ${res.status}`
 }
 
 export async function fetchDetectorSettings(): Promise<DetectorSettings[]> {
@@ -306,5 +323,17 @@ export async function revokeToken(id: string): Promise<string | null> {
 export async function fetchAuditLog(): Promise<AuditResult> {
   const res = await fetch('/api/audit')
   if (!res.ok) throw new ApiError(`fetchAuditLog: ${res.status}`, res.status)
+  return res.json()
+}
+
+// startSSOLink begins converting the signed-in account to SSO-only.
+// POST, not a navigation, so the CSRF header applies -- linking
+// destroys the account's local password, and a GET-initiated flow could
+// be triggered cross-site (see internal/api/oidc.go's
+// handleOIDCLinkStart). Returns the provider URL for the caller to
+// navigate to, or an error message.
+export async function startSSOLink(): Promise<{ url: string } | string> {
+  const res = await postJSON('/api/auth/oidc/link')
+  if (!res.ok) return (await res.text()) || `startSSOLink: ${res.status}`
   return res.json()
 }
