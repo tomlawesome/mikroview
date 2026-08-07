@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 import { describe, expect, it, vi } from 'vitest'
-import { matchingIds, RuleMatcher, type MatchCandidate } from './ruleMatcher'
+import { matchingIds, mergeOutcome, RuleMatcher, type MatchCandidate } from './ruleMatcher'
 
 const candidates: MatchCandidate[] = [
   { id: 1, ruleLabel: 'drop-wan-in', raw: 'in:ether1 out:(none) proto TCP' },
@@ -107,4 +107,30 @@ describe('RuleMatcher', () => {
     await expect(m.run('good', candidates)).resolves.toEqual({ status: 'ok', ids: [7] })
     expect(built).toBe(2)
   })
+})
+
+describe('mergeOutcome', () => {
+  it('replaces the set on a full reclassification', () => {
+    const r = mergeOutcome({ status: 'ok', ids: [1, 2] }, new Set([9]), false)
+    expect([...(r.matches ?? [])]).toEqual([1, 2])
+    expect(r.status).toBe('idle')
+  })
+
+  it('unions into the set on an incremental one', () => {
+    const r = mergeOutcome({ status: 'ok', ids: [3] }, new Set([1, 2]), true)
+    expect([...(r.matches ?? [])].sort()).toEqual([1, 2, 3])
+  })
+
+  // The regression. An earlier version returned early here, leaving the
+  // previous set in place: newly-arrived events were then treated as
+  // non-matching and quietly hidden, with nothing saying the filter had
+  // stopped being accurate. A real browser caught it; this pins it.
+  it.each(['too-slow', 'invalid'] as const)(
+    'drops the filter and surfaces %s, even mid-stream',
+    (status) => {
+      const r = mergeOutcome({ status }, new Set([1, 2, 3]), true)
+      expect(r.matches).toBeNull()
+      expect(r.status).toBe(status)
+    },
+  )
 })
