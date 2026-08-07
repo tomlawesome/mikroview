@@ -14,6 +14,7 @@ import (
 	"os"
 	"os/signal"
 	"slices"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -201,14 +202,11 @@ func main() {
 	if len(os.Args) > 1 && os.Args[1] == "-healthcheck" {
 		os.Exit(runHealthcheck())
 	}
-	// -list-users/-recover-admin-account: the account-recovery path (see
+	// -recover-admin-account: the account-recovery path (see
 	// docs/configuration.md's "Authentication" section) -- container/
 	// host access is the trust anchor for these, deliberately outside
 	// the web UI/API entirely, so a locked-out admin isn't dependent on
 	// the very system they're locked out of.
-	if len(os.Args) > 1 && os.Args[1] == "-list-users" {
-		os.Exit(runListUsers())
-	}
 	if len(os.Args) > 1 && os.Args[1] == "-recover-admin-account" {
 		os.Exit(runRecoverAdminAccount(os.Args[2:]))
 	}
@@ -1079,11 +1077,15 @@ func runGenerateRecoveryKeys(args []string) int {
 // an IdP compromise buys the ability to log in, and nothing more.
 func runTransferAdmin(args []string) int {
 	logger := logging.New("transfer-admin")
-	if len(args) < 1 || strings.HasPrefix(args[0], "-") {
-		logger.Error("usage: mikroview -transfer-admin <username>")
-		return 2
+
+	// The username is optional. Someone locked out of the UI often can't
+	// look up the exact spelling of a colleague's account, and guessing
+	// at 3am is a bad place to be -- so with no argument this offers a
+	// list to pick from. Supplying one keeps the flow scriptable.
+	var target string
+	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
+		target = args[0]
 	}
-	target := args[0]
 
 	recovery, err := openRecoveryStoreForCLI()
 	if err != nil {
@@ -1101,23 +1103,12 @@ func runTransferAdmin(args []string) int {
 		logger.Error("this deployment has no admin account -- nothing to transfer")
 		return 1
 	}
-	next, ok := store.ByUsername(target)
-	if !ok {
-		logger.Error(fmt.Sprintf("no such account: %s", target))
-		return 1
-	}
-	fmt.Printf("Transfer admin from %q to %q.\n", current.Username, next.Username)
-	// Stated before the key is asked for, not after: an SSO-only admin
-	// cannot be recovered by -recover-admin-account, by design, so the
-	// operator needs this before committing to it.
-	if !next.LocalPassword() {
-		fmt.Println()
-		fmt.Printf("WARNING: %q signs in through your identity provider and has no local\n", next.Username)
-		fmt.Println("password. After this transfer, admin recovery goes through your identity")
-		fmt.Println("provider -- mikroview will not be able to recover that account itself.")
-		fmt.Println()
-	}
+	fmt.Printf("Admin is currently %q.\n", current.Username)
 
+	// The key is asked for BEFORE any account is named or listed, so
+	// nothing about who holds an account is disclosed to someone without
+	// one. That reordering is only affordable because Redeem below
+	// prepares a rotation without persisting it -- see its call.
 	fmt.Print("Recovery key: ")
 	var key string
 	if _, err := fmt.Scanln(&key); err != nil {
@@ -1126,14 +1117,40 @@ func runTransferAdmin(args []string) int {
 	}
 
 	// Redeem verifies the key and prepares a replacement set, but does
-	// not persist the rotation -- that waits for Commit below, so a lost
-	// printout can't leave the operator with no valid keys.
+	// not persist the rotation -- that waits for Commit at the end. So
+	// abandoning this command after seeing the list below costs nothing:
+	// the existing keys stay valid, and no key has been spent.
 	fresh, err := recovery.Redeem(key)
 	if err != nil {
 		// Deliberately one message for a wrong key and a corrupt store:
 		// the distinction is only useful to someone probing.
 		logger.Error(err.Error())
 		return 1
+	}
+
+	next, code := resolveTransferTarget(store, current, target)
+	if next == nil {
+		// Nothing was written, and no key was consumed -- Commit never
+		// ran. Said out loud so an operator who backed out isn't left
+		// wondering whether they just burned a key.
+		fmt.Println("\nNothing was changed, and your recovery keys are unchanged.")
+		return code
+	}
+	target = next.Username
+
+	// Stated before the transfer, not after: an SSO-only admin cannot be
+	// recovered by -recover-admin-account, by design, so the operator
+	// needs this while they can still back out.
+	if !next.LocalPassword() {
+		fmt.Println()
+		fmt.Printf("WARNING: %q signs in through your identity provider and has no local\n", next.Username)
+		fmt.Println("password. After this transfer, admin recovery goes through your identity")
+		fmt.Println("provider -- mikroview will not be able to recover that account itself.")
+		fmt.Println()
+		if !confirmYes(fmt.Sprintf("Transfer admin to %q anyway?", next.Username)) {
+			fmt.Println("Nothing was changed, and your recovery keys are unchanged.")
+			return 1
+		}
 	}
 
 	from, to, err := store.TransferAdmin(target, time.Now())
@@ -1197,7 +1214,7 @@ func runHealthcheck() int {
 	return 0
 }
 
-// openAuthStoreForCLI is shared by runListUsers/runRecoverAdminAccount: both
+// openAuthStoreForCLI is shared by the account-management CLI commands: all
 // need a real, persisted auth.Store and both refuse identically if one
 // isn't configured -- an ephemeral store would make either command
 // pointless (list nothing meaningful, or reset a password that vanishes
@@ -1240,30 +1257,6 @@ func refuseOnPostgres(cfg config.Config, cmd string) error {
 			"(postgres.dsnFile is set) -- refusing rather than reading a file nothing uses. "+
 			"Manage accounts from the web UI; back up the database with your database's own tooling",
 		cmd)
-}
-
-// runListUsers backs `-list-users` -- usernames and roles only, no
-// password hashes, to help an operator pick which account to reset.
-func runListUsers() int {
-	store, err := openAuthStoreForCLI("-list-users")
-	if err != nil {
-		logging.New("list-users").Error(err.Error())
-		return 1
-	}
-
-	users := store.List()
-	if len(users) == 0 {
-		fmt.Println("No accounts exist yet.")
-		return 0
-	}
-	for _, u := range users {
-		// Sanitised on the way out, not trusted from the store: an
-		// account written before ValidateUsername existed, or one
-		// provisioned from an identity provider's claim, can carry an
-		// ANSI escape that would rewrite this table as it prints.
-		fmt.Printf("%s\t%s\n", logging.Printable(u.Username), u.Role)
-	}
-	return 0
 }
 
 // authShouldFailClosed reports whether main()'s boot sequence should
@@ -1513,4 +1506,88 @@ func ingestOneRecovered(logger *slog.Logger, rm syslog.RawMessage, st *store.Sto
 	// what the store itself just counted (see internal/rules.Store.Touch's
 	// doc comment for why this lives here rather than as a separate pass).
 	ru.Touch(stored.RuleLabel, stored.ReceivedAt)
+}
+
+// resolveTransferTarget works out which account admin is moving to,
+// either from the username supplied on the command line or by offering
+// a numbered list.
+//
+// The list is what replaces the old `-list-users` command. That command
+// existed almost entirely to answer "what is my colleague's username
+// again?" while locked out, and answering it here means the disclosure
+// sits behind the recovery key that transfer already requires, instead
+// of behind nothing.
+//
+// Gating a standalone list on a key was considered and rejected: it
+// would teach the operator to type a recovery key for a routine read.
+// The key's value is that it is used rarely and deliberately; a habit of
+// typing it is how it reaches shell history.
+//
+// Returns (nil, exitCode) when there is nothing to transfer to or the
+// operator backs out. Callers must treat that as "change nothing".
+func resolveTransferTarget(store *auth.Store, current *auth.User, target string) (*auth.User, int) {
+	logger := logging.New("transfer-admin")
+
+	if target != "" {
+		next, ok := store.ByUsername(target)
+		if !ok {
+			logger.Error(fmt.Sprintf("no such account: %s", logging.Printable(target)))
+			return nil, 1
+		}
+		if next.ID == current.ID {
+			logger.Error("that account is already the admin")
+			return nil, 1
+		}
+		return next, 0
+	}
+
+	candidates := make([]auth.User, 0)
+	for _, u := range store.List() {
+		if u.ID != current.ID {
+			candidates = append(candidates, u)
+		}
+	}
+	if len(candidates) == 0 {
+		logger.Error("there is no other account to transfer admin to -- create one from the web UI first")
+		return nil, 1
+	}
+
+	fmt.Println("\nTransfer admin to:")
+	fmt.Println()
+	for i, u := range candidates {
+		note := ""
+		if !u.LocalPassword() {
+			// Flagged in the list, not only after choosing, so the
+			// consequence is visible while choosing rather than as a
+			// surprise afterwards.
+			note = "   (signs in via SSO -- mikroview cannot recover this account)"
+		}
+		fmt.Printf("  %2d) %s%s\n", i+1, logging.Printable(u.Username), note)
+	}
+	fmt.Println()
+	fmt.Printf("Choose 1-%d, or anything else to cancel: ", len(candidates))
+
+	var answer string
+	if _, err := fmt.Scanln(&answer); err != nil {
+		return nil, 1
+	}
+	choice, err := strconv.Atoi(strings.TrimSpace(answer))
+	if err != nil || choice < 1 || choice > len(candidates) {
+		return nil, 1
+	}
+	picked := candidates[choice-1]
+	return &picked, 0
+}
+
+// confirmYes asks a yes/no question, defaulting to no on anything that
+// isn't an explicit yes -- including a read error, so a closed stdin
+// can never be mistaken for consent.
+func confirmYes(question string) bool {
+	fmt.Printf("%s [y/N]: ", question)
+	var answer string
+	if _, err := fmt.Scanln(&answer); err != nil {
+		return false
+	}
+	a := strings.ToLower(strings.TrimSpace(answer))
+	return a == "y" || a == "yes"
 }
