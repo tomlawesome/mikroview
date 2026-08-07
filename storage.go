@@ -140,12 +140,19 @@ const postgresAdoptedMarker = "postgres-adopted"
 // markerPath puts the marker beside the JSON stores, because that is
 // where it has to be readable from: the check runs when Postgres is NOT
 // configured, so it cannot live in the database it is describing.
-func markerPath(cfg config.Config) string {
-	dir := config.DefaultDataDir
+// dataDir is where mikroview's own files live: the account store, the
+// Postgres adoption marker, and the recovery-key hand-over file. Derived
+// from the account store rather than configured separately, so those
+// files cannot drift onto different volumes with different protections.
+func dataDir(cfg config.Config) string {
 	if cfg.Auth.StorePath != "" {
-		dir = filepath.Dir(cfg.Auth.StorePath)
+		return filepath.Dir(cfg.Auth.StorePath)
 	}
-	return filepath.Join(dir, postgresAdoptedMarker)
+	return config.DefaultDataDir
+}
+
+func markerPath(cfg config.Config) string {
+	return filepath.Join(dataDir(cfg), postgresAdoptedMarker)
 }
 
 // markPostgresAdopted records the choice, idempotently.
