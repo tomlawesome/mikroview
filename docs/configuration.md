@@ -1214,13 +1214,21 @@ it up.
 
 **Backing out here costs nothing.** Your recovery key isn't spent until
 the transfer actually happens, so cancelling at the list — or at the
-SSO warning — leaves your existing keys working.
+SSO warning — leaves your existing keys working. That's deliberate: a
+key that got used up by a cancelled command, or by a mistyped one, would
+mean three false starts locks you out for good.
+
+It's safe to leave the key valid because typing it doesn't expose it.
+It isn't echoed as you type, isn't accepted as a command-line argument,
+and is never written to the log — so a key you presented and then didn't
+use hasn't been left lying anywhere.
 
 If you already know the username, pass it and skip the list:
 `mikroview -transfer-admin bob`.
 
-Once it's done you're shown a replacement set of keys. The previous
-admin becomes an ordinary user — their account isn't deleted.
+Once it's done you get a replacement set of keys, handed over the same
+way as `-generate-recovery-keys` below. The previous admin becomes an
+ordinary user — their account isn't deleted.
 
 If the person you're handing it to signs in through SSO, you're warned
 before the key is asked for: MikroView won't be able to recover that
@@ -1231,7 +1239,7 @@ for them.
 
 Recovery keys are the second thing — besides access to the machine
 itself — needed to recover or transfer the admin account. They're
-created once, shown once, and stored hashed:
+created once, handed over once, and stored hashed:
 
 ```sh
 mikroview -generate-recovery-keys
@@ -1242,10 +1250,30 @@ so treat them as one key with two spares — they're there in case a
 printout smudges or a paste goes wrong, not as three separate uses.
 Keep them somewhere safe, such as a password manager.
 
-MikroView refuses to print them if the output isn't going to a terminal
-(a pipe, a file, container logs), because that would write them
-somewhere more exposed than the file they protect. If you genuinely are
-scripting the setup, pass `--i-will-capture-this`.
+**Run this with `docker compose exec`, not `docker compose run`:**
+
+```sh
+docker compose exec mikroview /mikroview -generate-recovery-keys
+```
+
+The reason is that in a container, whatever the main process prints goes
+into the container log — kept on disk, and usually shipped off to a
+central log system. A recovery key sitting there is an admin takeover
+for anyone who can read your logs. `docker exec` runs inside the
+container that's already going, and its output isn't logged; it goes to
+your terminal and nowhere else.
+
+MikroView checks which one you used and refuses to print if it's the
+wrong one, so you can't get this wrong by accident. The same applies to
+`-recover-admin-account` and `-transfer-admin`, which also show you a
+fresh set when they finish.
+
+Not using containers? Then your terminal is just a terminal and the
+command works as-is.
+
+The keys are never written to a file. You are shown them once, and that
+is the only copy — get them into a password manager before you type
+`saved`.
 
 You can't regenerate them while a set exists — that would let anyone
 with access to the machine mint themselves a fresh key and walk straight
@@ -1267,10 +1295,11 @@ changes and no key is used up. If it's right, you're asked for a new
 password twice (it isn't shown as you type, and it's never passed as a
 command-line argument, so it stays out of your shell history).
 
-Once the password is set, you're shown a **new set of recovery keys**.
-The old ones stop working as soon as you confirm you've saved the new
-ones -- so save them before typing `saved`. If anything goes wrong at
-that point, your original keys stay valid.
+Once the password is set, you get a **new set of recovery keys**, shown
+the same way as above. The old
+ones stop working as soon as you confirm you've saved the new ones -- so
+save them before typing `saved`. If anything goes wrong at that point,
+your original keys stay valid.
 
 Changing the password signs out that account everywhere immediately,
 including on an already-running server. You don't need to restart
