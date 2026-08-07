@@ -681,21 +681,47 @@ func defaults() Config {
 // precedence). configPath and args are taken as parameters (rather than
 // read from os.Args/env directly) so tests can call this deterministically.
 func Load(configPath string, args []string) (Config, error) {
+	cfg, _, err := load(configPath, args)
+	return cfg, err
+}
+
+func load(configPath string, args []string) (Config, Result, error) {
 	cfg := defaults()
 
 	if configPath != "" {
 		if err := loadYAML(configPath, &cfg); err != nil {
-			return Config{}, fmt.Errorf("loading config file %s: %w", configPath, err)
+			return Config{}, Result{}, fmt.Errorf("loading config file %s: %w", configPath, err)
 		}
 	}
 
 	applyEnv(&cfg)
 
 	if err := applyFlags(&cfg, args); err != nil {
-		return Config{}, err
+		return Config{}, Result{}, err
 	}
 
-	return cfg, nil
+	// Validate last, after every source has been merged -- an env var or
+	// a flag can fix a bad yaml value, so checking earlier would reject
+	// configurations that are actually fine.
+	result := cfg.Validate()
+	if err := result.Err(); err != nil {
+		return Config{}, Result{}, err
+	}
+
+	return cfg, result, nil
+}
+
+// LoadWithProblems is Load plus the non-fatal problems found. Callers
+// that can surface warnings (the server, -validate-config) use this;
+// Load stays the simple form for callers that only need a usable config.
+//
+// The result has to come from the *same* Validate call that did the
+// clamping. Validating a second time would report nothing, because the
+// first pass already replaced the bad value with a good one -- the
+// operator would get a silently substituted default and no warning,
+// which is precisely the failure this feature exists to prevent.
+func LoadWithProblems(configPath string, args []string) (Config, Result, error) {
+	return load(configPath, args)
 }
 
 func loadYAML(path string, cfg *Config) error {
