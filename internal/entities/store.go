@@ -75,46 +75,18 @@ func id(entityType, key string) string {
 	return entityType + ":" + key
 }
 
-// storeFile is the on-disk shape -- an object wrapping the entity list
-// plus a Seeded marker, not a bare array, mirroring auth.Store's own
-// storeFile{Disabled, Users} (see internal/auth/store.go). The marker is
-// what makes Seed's "should this run" decision independent of whether
+// storeFile is the on-disk shape: an object wrapping the entity list
+// plus a Seeded marker, mirroring auth.Store's own storeFile. The marker
+// is what makes Seed's "should this run" decision independent of whether
 // the store happens to be empty *right now* -- without it, an admin
 // deleting every entity via the UI (this same package's own Delete,
 // exposed through the admin-only DELETE /api/entities endpoint) would
 // look, on the next restart, identical to "migration never ran,"
 // silently resurrecting the config.yaml aliases they just deliberately
-// removed. storeFile.UnmarshalJSON stays compatible with a bare
-// `[]*Entity` array -- this package's original on-disk shape, before
-// this fix -- for the same reason auth.Store's own legacy-array
-// fallback exists: nothing written by an earlier build should fail to
-// load. A file recovered via that legacy path decodes with Seeded false
-// (the pre-fix shape never recorded it), which is the correct, safe
-// interpretation -- it predates this marker entirely, so Seed must be
-// free to run once more against it.
+// removed.
 type storeFile struct {
 	Seeded   bool      `json:"seeded"`
 	Entities []*Entity `json:"entities"`
-}
-
-func (f *storeFile) UnmarshalJSON(data []byte) error {
-	type shape storeFile // avoids infinite recursion into this method
-	var s shape
-	if err := json.Unmarshal(data, &s); err == nil {
-		*f = storeFile(s)
-		return nil
-	}
-	// A top-level JSON array can't unmarshal into a struct -- that's
-	// exactly the legacy pre-fix shape, so this is where a genuinely
-	// malformed file also gets one more (correct) chance to report its
-	// real error, not this fallback's.
-	var legacy []*Entity
-	if err := json.Unmarshal(data, &legacy); err != nil {
-		return err
-	}
-	f.Entities = legacy
-	f.Seeded = false
-	return nil
 }
 
 // Store holds every known entity, keyed by (Type, Key). The zero value
