@@ -384,3 +384,31 @@ func TestVersionStringShape(t *testing.T) {
 		t.Errorf("the built-in default %q is not a valid version shape", version)
 	}
 }
+
+// The VERSION file is what the release lane stamps into the binary (see
+// docs/decisions/release-versioning.md and .github/workflows/docker.yml).
+// A malformed one produces an image tag and a binary version that don't
+// match anything, discovered at release time.
+func TestVersionFileIsReleasable(t *testing.T) {
+	raw, err := os.ReadFile("VERSION")
+	if err != nil {
+		t.Fatalf("reading VERSION: %v -- the release lane reads this file", err)
+	}
+	v := strings.TrimSpace(string(raw))
+
+	if v != string(raw) && strings.TrimRight(string(raw), "\n") != v {
+		t.Errorf("VERSION contains unexpected whitespace: %q", string(raw))
+	}
+	// Plain semver, no leading "v" -- the workflow adds it for the image
+	// and git tags, so having it here too would produce "vv0.1.0".
+	if !regexp.MustCompile(`^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$`).MatchString(v) {
+		t.Fatalf("VERSION = %q, want plain semver like 0.1.0 with no leading 'v'", v)
+	}
+
+	// And "v" + that must satisfy the same shape the binary reports, so
+	// the release tag and the running version are the same string.
+	tagged := "v" + v
+	if !regexp.MustCompile(`^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$`).MatchString(tagged) {
+		t.Errorf("v%s is not a valid version string for the binary to report", v)
+	}
+}
