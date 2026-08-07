@@ -153,11 +153,7 @@
           {/if}
         </button>
 
-        {#if (authState.state === 'authenticated' && authState.role === 'admin') || authState.state === 'auth-disabled'}
-          <!-- The backend's callerIsAdminOrOpen treats Count()==0 (true in
-               auth-disabled, since Disable only succeeds pre-account) as
-               admin-equivalent for this endpoint -- matching that here
-               rather than hiding a control that would actually work. -->
+        {#if authState.state === 'authenticated' && authState.role === 'admin'}
           <button
             class="option"
             class:active={appState.view === 'detectors'}

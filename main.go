@@ -212,20 +212,6 @@ func main() {
 	if len(os.Args) > 1 && os.Args[1] == "-recover-admin-account" {
 		os.Exit(runRecoverAdminAccount(os.Args[2:]))
 	}
-	// -reset-password was the previous name, and reset *any* account's
-	// password with host access alone. It is not kept as an alias: the
-	// replacement is narrower (admin only) and gated on a recovery key,
-	// so silently forwarding would misrepresent what now happens.
-	if len(os.Args) > 1 && os.Args[1] == "-reset-password" {
-		os.Exit(runRetiredResetPassword())
-	}
-	// -enable-auth-setup: the only way to re-arm the web setup form after
-	// a deployment has explicitly skipped auth (see auth.Store.Disable) --
-	// deliberately CLI-only, not exposed via any API endpoint, so a UI
-	// visitor can never unilaterally re-impose auth for everyone else.
-	if len(os.Args) > 1 && os.Args[1] == "-enable-auth-setup" {
-		os.Exit(runEnableAuthSetup())
-	}
 	// -validate-config: check a config before deploying it. Same rules
 	// the server enforces at startup (one config.Validate, two entry
 	// points) so this can never pass something startup would reject, or
@@ -361,10 +347,8 @@ func main() {
 	switch {
 	case authStore.Count() > 0:
 		authLog.Info(fmt.Sprintf("%d account(s) registered -- authentication is active", authStore.Count()))
-	case authStore.Disabled():
-		authLog.Warn("explicitly disabled for this deployment -- mikroview is fully open (run -enable-auth-setup to reverse this)")
 	default:
-		authLog.Info("no decision made yet -- mikroview is showing the first-run choice screen (see docs/configuration.md)")
+		authLog.Info("no account yet -- mikroview is showing the create-account screen (see docs/configuration.md)")
 	}
 
 	// entities (issue #107): the persisted, admin-manageable (type, key)
@@ -1253,26 +1237,6 @@ func runListUsers() int {
 	return 0
 }
 
-// runEnableAuthSetup backs `-enable-auth-setup` -- clears a prior
-// explicit "skip auth" decision (see auth.Store.Disable) so the web
-// setup form becomes reachable again on next load. It does not create
-// an account itself; the operator (or whoever loads the UI next) still
-// completes setup through the normal create-account form.
-func runEnableAuthSetup() int {
-	logger := logging.New("enable-auth-setup")
-	store, err := openAuthStoreForCLI("-enable-auth-setup")
-	if err != nil {
-		logger.Error(err.Error())
-		return 1
-	}
-	if err := store.EnableSetup(); err != nil {
-		logger.Error(err.Error())
-		return 1
-	}
-	fmt.Println("Auth setup re-enabled -- the create-account form will be shown again on next load.")
-	return 0
-}
-
 // authShouldFailClosed reports whether main()'s boot sequence should
 // refuse to start rather than continue with an unauthenticated,
 // zero-account in-memory auth.Store. err is auth.Open's own return
@@ -1285,20 +1249,6 @@ func runEnableAuthSetup() int {
 // actual distinguishing signal, which is err itself.
 func authShouldFailClosed(err error, backend persist.Backend) bool {
 	return err != nil && backend != nil
-}
-
-// runRetiredResetPassword explains where `-recover-admin-account` went.
-//
-// A removed recovery command is the worst thing to hit an operator who
-// is already locked out, so it exits with a pointer rather than an
-// unrecognised-flag error. Exit 2 (usage), not 1: nothing failed, the
-// command simply no longer exists.
-func runRetiredResetPassword() int {
-	logger := logging.New("reset-password")
-	logger.Error("-reset-password has been replaced by -recover-admin-account, which recovers " +
-		"the admin account only and requires a recovery key. Other accounts are managed by the " +
-		"admin from the web UI. See docs/configuration.md, \"Recovering the admin account\"")
-	return 2
 }
 
 // runRecoverAdminAccount backs `-recover-admin-account` -- the way back

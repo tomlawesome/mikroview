@@ -20,7 +20,7 @@ func TestConfigProblemsRefusesNonAdmins(t *testing.T) {
 		Code: "CFG-0010", Key: "store.retention",
 		Message: "-5m0s is not a usable retention window", Applied: "24h0m0s",
 	}}
-	ts := httptest.NewServer(s.Routes())
+	ts := httptest.NewServer(s.mux())
 	defer ts.Close()
 
 	// newTestServer's auth store is disabled, so callerIsAdminOrOpen is
@@ -58,7 +58,7 @@ func TestConfigProblemsNeverEchoesSecrets(t *testing.T) {
 	s.ConfigProblems = []ConfigProblem{
 		{Code: "CFG-9999", Key: "oidc.clientSecret", Message: "is too short", Remediation: "use a longer value"},
 	}
-	ts := httptest.NewServer(s.Routes())
+	ts := httptest.NewServer(s.mux())
 	defer ts.Close()
 
 	resp, err := http.Get(ts.URL + "/api/config/problems")
