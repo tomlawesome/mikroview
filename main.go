@@ -1207,10 +1207,39 @@ func openAuthStoreForCLI(cmd string) (*auth.Store, error) {
 	if err != nil {
 		return nil, fmt.Errorf("config: %w", err)
 	}
+	if err := refuseOnPostgres(cfg, cmd); err != nil {
+		return nil, err
+	}
 	if cfg.Auth.StorePath == "" {
 		return nil, fmt.Errorf("auth.storePath is not configured -- %s has nothing persisted to work with", cmd)
 	}
 	return auth.Open(cfg.Auth.StorePath)
+}
+
+// refuseOnPostgres stops the JSON-file account commands running against
+// a deployment whose accounts live in Postgres.
+//
+// This is not tidiness. These commands open the JSON file directly, so
+// on a Postgres deployment they were reading and writing a file nothing
+// reads -- measured: `-list-users` reported "No accounts exist yet" on a
+// deployment with a registered account, against a users.json that had
+// never been written. `-recover-admin-account` would have printed
+// "Password updated" and left the operator just as locked out, which is
+// the worst possible outcome for a recovery tool: it fails while
+// reporting success, at the exact moment someone is depending on it.
+//
+// Refusing is strictly better than that. Whether these should instead
+// learn to speak to Postgres is a separate decision -- see
+// docs/decisions/postgres-backend.md.
+func refuseOnPostgres(cfg config.Config, cmd string) error {
+	if cfg.Postgres.DSNFile == "" {
+		return nil
+	}
+	return fmt.Errorf(
+		"%s manages the JSON account files, and this deployment keeps its accounts in Postgres "+
+			"(postgres.dsnFile is set) -- refusing rather than reading a file nothing uses. "+
+			"Manage accounts from the web UI; back up the database with your database's own tooling",
+		cmd)
 }
 
 // runListUsers backs `-list-users` -- usernames and roles only, no
