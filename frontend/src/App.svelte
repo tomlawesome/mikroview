@@ -10,6 +10,7 @@
   import { filtersFromSearchParams } from './lib/types'
   import Toolbar from './components/Toolbar.svelte'
   import ConnectionBanner from './components/ConnectionBanner.svelte'
+  import ConfigProblemBanner from './components/ConfigProblemBanner.svelte'
   import FilterBar from './components/FilterBar.svelte'
   import LiveTable from './components/LiveTable.svelte'
   import Dashboard from './components/Dashboard.svelte'
@@ -136,6 +137,7 @@
 {:else}
   <Toolbar />
   <ConnectionBanner />
+  <ConfigProblemBanner />
   <main>
     {#if appState.view === 'live'}
       <FilterBar />

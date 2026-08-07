@@ -209,9 +209,16 @@ func main() {
 	if len(os.Args) > 1 && os.Args[1] == "-enable-auth-setup" {
 		os.Exit(runEnableAuthSetup())
 	}
+	// -validate-config: check a config before deploying it. Same rules
+	// the server enforces at startup (one config.Validate, two entry
+	// points) so this can never pass something startup would reject, or
+	// vice versa.
+	if len(os.Args) > 1 && os.Args[1] == "-validate-config" {
+		os.Exit(runValidateConfig(os.Args[2:]))
+	}
 
 	configLog := logging.New("config")
-	cfg, err := config.Load(os.Getenv("MIKROVIEW_CONFIG"), os.Args[1:])
+	cfg, configResult, err := config.LoadWithProblems(os.Getenv("MIKROVIEW_CONFIG"), os.Args[1:])
 	if err != nil {
 		configLog.Error(err.Error())
 		os.Exit(1)
@@ -665,6 +672,23 @@ func main() {
 		proxyLog.Info(fmt.Sprintf("trusting %s from %d proxy range(s) for login rate limiting", header, len(trustedProxies)))
 	}
 
+	// Logged here and surfaced in the admin UI (see api.Server.
+	// ConfigProblems). The log line alone is not enough: it is seen once,
+	// by whoever ran `docker compose up`, and never again -- which is not
+	// good enough for a value the operator believes is in effect.
+	var configProblems []api.ConfigProblem
+	for _, p := range configResult.Warnings {
+		msg := fmt.Sprintf("%s: %s", p.Key, p.Message)
+		if p.Applied != "" {
+			msg += fmt.Sprintf(" -- using %s instead", p.Applied)
+		}
+		configLog.Warn(msg)
+		configProblems = append(configProblems, api.ConfigProblem{
+			Code: p.Code, Key: p.Key, Message: p.Message,
+			Applied: p.Applied, Remediation: p.Remediation,
+		})
+	}
+
 	srv := &api.Server{
 		Store:            st,
 		Devices:          devices,
@@ -689,6 +713,7 @@ func main() {
 		OIDCPolicy:       oidcPolicy,
 		StartTime:        time.Now(),
 		Version:          version,
+		ConfigProblems:   configProblems,
 	}
 
 	rootMux := http.NewServeMux()
@@ -827,6 +852,68 @@ func runVersion() int {
 // HEALTHCHECK (see Dockerfile). It hits the app's own /api/healthz over
 // loopback and returns a process exit code, rather than opening any
 // listeners itself.
+// validateConfigExit* are the exit codes -validate-config reports.
+// Distinct rather than a plain 0/1 because CI needs to tell "your config
+// is imperfect" apart from "I couldn't read your config at all" -- the
+// second is a broken pipeline, not a broken config.
+const (
+	validateConfigExitOK       = 0
+	validateConfigExitProblems = 1
+	validateConfigExitUnusable = 2
+)
+
+// runValidateConfig backs `mikroview -validate-config [-strict]`.
+//
+// Exits non-zero for warnings as well as fatals, which makes the checker
+// deliberately stricter than the server: the server starts on a clamped
+// default because losing all monitoring over a bad retention value would
+// be worse, but a pipeline has no such excuse and should be told.
+// -strict exists for the opposite preference and is currently a no-op
+// flag reserved for it; see the issue.
+//
+// Deliberately offline. Nothing here dials the OIDC issuer, the SMTP
+// host, or anything else -- a checker that reaches out to production
+// from a build agent is a surprise, and an egress finding in its own
+// right. Network checks belong behind their own explicit flag.
+func runValidateConfig(args []string) int {
+	path := os.Getenv("MIKROVIEW_CONFIG")
+
+	cfg, result, err := config.LoadWithProblems(path, nil)
+	if err != nil {
+		// Either the file is unreadable/unparseable, or validation found
+		// something fatal. Both are reported the same way to the operator;
+		// only the exit code distinguishes them, and only when we can tell.
+		fmt.Fprintf(os.Stderr, "%v\n", err)
+		if strings.Contains(err.Error(), "invalid configuration") {
+			return validateConfigExitProblems
+		}
+		return validateConfigExitUnusable
+	}
+	_ = args
+	_ = cfg
+
+	if !result.HasProblems() {
+		if path == "" {
+			fmt.Println("No config file set (MIKROVIEW_CONFIG is empty) -- built-in defaults are valid.")
+		} else {
+			fmt.Printf("%s: no problems found.\n", path)
+		}
+		return validateConfigExitOK
+	}
+
+	for _, p := range result.Warnings {
+		fmt.Printf("warning  %s  %s: %s\n", p.Code, p.Key, p.Message)
+		if p.Applied != "" {
+			fmt.Printf("         using %s instead\n", p.Applied)
+		}
+		if p.Remediation != "" {
+			fmt.Printf("         %s\n", p.Remediation)
+		}
+	}
+	fmt.Printf("\n%d warning(s). mikroview would start, using the values shown above.\n", len(result.Warnings))
+	return validateConfigExitProblems
+}
+
 func runHealthcheck() int {
 	logger := logging.New("healthcheck")
 	cfg, err := config.Load(os.Getenv("MIKROVIEW_CONFIG"), nil)
