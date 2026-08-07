@@ -32,13 +32,13 @@ func fetchAudit(t *testing.T, client *http.Client, ts *httptest.Server) audit.Re
 	return res
 }
 
-// TestAuditRequiresAdminWhileAuthDisabled mirrors
-// TestEntitiesRequireAdminWhileAuthDisabled -- GET /api/audit uses the
-// same strict callerIsAdmin gate, so it stays forbidden even in the
-// fully-open "auth disabled" state.
-func TestAuditRequiresAdminWhileAuthDisabled(t *testing.T) {
-	s, _ := newTestServer(t) // Auth defaults to disabled
-	ts := httptest.NewServer(s.Routes())
+// TestAuditRequiresAdminWithoutASession mirrors
+// TestEntitiesRequireAdminWithoutASession -- GET /api/audit uses the
+// same strict callerIsAdmin gate, so it stays forbidden to an anonymous
+// caller even once the request has reached the handler.
+func TestAuditRequiresAdminWithoutASession(t *testing.T) {
+	s, _ := newTestServer(t)
+	ts := httptest.NewServer(s.mux())
 	defer ts.Close()
 
 	resp, err := http.Get(ts.URL + "/api/audit")
@@ -47,7 +47,7 @@ func TestAuditRequiresAdminWhileAuthDisabled(t *testing.T) {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusForbidden {
-		t.Errorf("expected GET /api/audit to require an admin even with auth disabled, got %d", resp.StatusCode)
+		t.Errorf("expected GET /api/audit to require an admin even without a session, got %d", resp.StatusCode)
 	}
 }
 

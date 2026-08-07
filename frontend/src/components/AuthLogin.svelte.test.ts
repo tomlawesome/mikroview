@@ -14,7 +14,6 @@ vi.mock('../lib/api', () => ({
   login: vi.fn(),
   logout: vi.fn(),
   register: vi.fn(),
-  skipAuthSetup: vi.fn(),
 }))
 
 import { fetchAuthSession, login } from '../lib/api'
@@ -40,7 +39,6 @@ describe('AuthLogin', () => {
   it('submits the entered credentials to authState.login', async () => {
     vi.mocked(login).mockResolvedValue(null)
     vi.mocked(fetchAuthSession).mockResolvedValue({
-      authDisabled: false,
       setupRequired: false,
       authenticated: true,
       username: 'tom',

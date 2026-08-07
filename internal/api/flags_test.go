@@ -18,7 +18,7 @@ func TestHandleFlagsList(t *testing.T) {
 	s, _ := newTestServer(t)
 	s.Flags.Add(flags.TypePortScan, "203.0.113.9", "20 distinct ports in 60s", time.Now())
 
-	ts := httptest.NewServer(s.Routes())
+	ts := httptest.NewServer(s.mux())
 	defer ts.Close()
 
 	resp, err := http.Get(ts.URL + "/api/flags")
@@ -59,7 +59,7 @@ func TestHandleFlagsClear(t *testing.T) {
 	s.Flags.Add(flags.TypeActivitySpike, "198.51.100.4", "500 events in 60s", time.Now())
 	id := s.Flags.List()[0].ID
 
-	ts := httptest.NewServer(s.Routes())
+	ts := httptest.NewServer(s.mux())
 	defer ts.Close()
 
 	resp, err := http.Post(ts.URL+"/api/flags/"+id+"/clear", "application/json", nil)
@@ -89,7 +89,7 @@ func TestHandleFlagsClear(t *testing.T) {
 
 func TestHandleFlagsClearUnknownID(t *testing.T) {
 	s, _ := newTestServer(t)
-	ts := httptest.NewServer(s.Routes())
+	ts := httptest.NewServer(s.mux())
 	defer ts.Close()
 
 	resp, err := http.Post(ts.URL+"/api/flags/does-not-exist/clear", "application/json", nil)
@@ -122,7 +122,7 @@ func TestHandleFlagsClearPermanent(t *testing.T) {
 	s.Flags.Add(flags.TypePortScan, "203.0.113.9", "20 distinct ports in 60s", time.Now())
 	id := s.Flags.List()[0].ID
 
-	ts := httptest.NewServer(s.Routes())
+	ts := httptest.NewServer(s.mux())
 	defer ts.Close()
 
 	resp, err := http.Post(ts.URL+"/api/flags/"+id+"/clear-permanent", "application/json", nil)
@@ -160,7 +160,7 @@ func TestHandleFlagsClearPermanent(t *testing.T) {
 
 func TestHandleFlagsClearPermanentUnknownID(t *testing.T) {
 	s, _ := newTestServer(t)
-	ts := httptest.NewServer(s.Routes())
+	ts := httptest.NewServer(s.mux())
 	defer ts.Close()
 
 	resp, err := http.Post(ts.URL+"/api/flags/does-not-exist/clear-permanent", "application/json", nil)
@@ -194,7 +194,7 @@ func TestHandleExclusionsListAndRemove(t *testing.T) {
 	s.Flags.Exclude(flags.TypePortScan, "203.0.113.9")
 	s.Flags.Exclude(flags.TypeCriticalPort, "198.51.100.4")
 
-	ts := httptest.NewServer(s.Routes())
+	ts := httptest.NewServer(s.mux())
 	defer ts.Close()
 
 	resp, err := http.Get(ts.URL + "/api/flags/exclusions")

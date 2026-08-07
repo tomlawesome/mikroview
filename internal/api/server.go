@@ -170,7 +170,6 @@ func (s *Server) routes() []route {
 
 		{http.MethodGet, "/api/auth/session", s.handleAuthSession},
 		{http.MethodPost, "/api/auth/register", s.handleAuthRegister},
-		{http.MethodPost, "/api/auth/skip", s.handleAuthSkip},
 		{http.MethodPost, "/api/auth/login", s.handleAuthLogin},
 		{http.MethodPost, "/api/auth/logout", s.handleAuthLogout},
 		{http.MethodPost, "/api/auth/users", s.handleAuthCreateUser},
@@ -199,9 +198,21 @@ func (s *Server) routes() []route {
 // (healthz, and the specific auth endpoints that are unauthenticated by
 // nature -- see auth.go's exemptPaths).
 func (s *Server) Routes() http.Handler {
+	return s.requireAuth(s.mux())
+}
+
+// mux is Routes without the authentication gate in front of it.
+//
+// It exists for the tests that exercise a handler's own behaviour rather
+// than who is allowed to reach it. Those used to get an ungated API by
+// standing the fixture up with authentication disabled, which is not a
+// state that exists any more. Reaching for the inner mux says what those
+// tests actually mean, and keeps the gate itself covered in one place --
+// auth_test.go and the authzMatrix guard, which both mount Routes.
+func (s *Server) mux() http.Handler {
 	mux := http.NewServeMux()
 	for _, r := range s.routes() {
 		mux.HandleFunc(r.method+" "+r.path, r.handler)
 	}
-	return s.requireAuth(mux)
+	return mux
 }

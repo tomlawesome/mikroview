@@ -50,3 +50,21 @@ assumed. See [docs/security-by-design.md](docs/security-by-design.md).
 Findings are reproduced before being acted on — including findings from
 automated research, which has in practice produced wrong version numbers
 and inflated severity scores.
+
+## Removals are wholesale
+
+When a feature, flag, endpoint, or code path is removed, it is removed
+completely. No aliases that print "this moved", no handlers that exist
+only to return a friendlier error, no fields read solely to warn about a
+state that no longer exists.
+
+The reasoning is that pre-1.0 there is no installed base to protect, and
+a shim is not free: it is code reachable from the outside that no longer
+has a job, which is the definition of avoidable attack surface. A
+retired command still parses argv, still opens config, still touches the
+account store. Keeping it trades a real, permanent cost against a
+one-time inconvenience for an operator with a stale runbook.
+
+Removals are communicated in `CHANGELOG.md`, which is what release notes
+are for. That is the correct channel for "this is gone and here is what
+to do instead" -- not a stub in `main.go`.
