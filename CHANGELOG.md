@@ -13,6 +13,20 @@ upgrading.
 
 ### Added
 
+- **`-backup` and `-restore`** (#97), producing a single gzipped JSON
+  document keyed by store name. Not tar: there are no filenames in the
+  format, so path traversal is impossible by construction rather than
+  defended against. It carries everything, including accounts and
+  recovery-key digests — a backup missing credentials cannot restore a
+  working system, and disaster recovery is the wrong moment to find that
+  out. Protection is on the output instead: mode 0600, `O_EXCL` at
+  creation, and a refusal to write into a world-readable directory
+  without `--force`.
+
+  JSON deployments only. On Postgres both commands refuse and point at
+  your database's own tooling, which is the expectation that came with
+  choosing Postgres.
+
 - **Recovery-key digests now follow the accounts into Postgres**, while
   the pepper stays a local file on the mikroview host. Previously the
   digests stayed in a local JSON file *next to the pepper* even on a

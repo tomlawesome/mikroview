@@ -222,6 +222,12 @@ func main() {
 	if len(os.Args) > 1 && os.Args[1] == "-generate-recovery-keys" {
 		os.Exit(runGenerateRecoveryKeys(os.Args[2:]))
 	}
+	if len(os.Args) > 1 && os.Args[1] == "-backup" {
+		os.Exit(runBackup(os.Args[2:]))
+	}
+	if len(os.Args) > 1 && os.Args[1] == "-restore" {
+		os.Exit(runRestore(os.Args[2:]))
+	}
 	if len(os.Args) > 1 && os.Args[1] == "-transfer-admin" {
 		os.Exit(runTransferAdmin(os.Args[2:]))
 	}
