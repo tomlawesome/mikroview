@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+
 // Package audit records who did what admin-privileged mutation in
 // mikroview itself, when, and to what -- an accountability log for the
 // humans operating mikroview, distinct from internal/flags (which is

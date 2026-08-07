@@ -1,4 +1,5 @@
 <script lang="ts">
+  // SPDX-License-Identifier: AGPL-3.0-only
   // One user-defined top-talkers widget: its own independent filter (not
   // the live view's current FilterBar state -- see appState.filteredBy)
   // grouped by whichever dimension the widget was saved with.

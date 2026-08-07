@@ -1,4 +1,5 @@
 <script lang="ts">
+  // SPDX-License-Identifier: AGPL-3.0-only
   // Shown while zero accounts exist (AuthSession.setupRequired) --
   // whoever completes this becomes the super-admin. See
   // docs/configuration.md's "Authentication" section for why this is a

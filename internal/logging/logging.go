@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+
 // Package logging is mikroview's server-side log formatting: leveled,
 // colorized (auto-disabled off a TTY or with NO_COLOR set), with a
 // stable component column so a scrolling terminal or `docker logs` stays

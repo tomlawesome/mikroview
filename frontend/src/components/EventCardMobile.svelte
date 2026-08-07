@@ -1,4 +1,5 @@
 <script lang="ts">
+  // SPDX-License-Identifier: AGPL-3.0-only
   // One event, mobile card layout (issue #85) -- the desktop LiveTable's
   // 12-column grid doesn't survive a phone-width squeeze without either
   // tiny unreadable text or horizontal scrolling per row, so below the
