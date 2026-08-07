@@ -146,13 +146,47 @@ a filesystem watcher — plus partial writes, ordering, quarantine and
 cleanup — is a second ingest path with its own failure modes, next to one
 that already works.
 
+### First, what the credential is actually worth
+
+This document spent most of its length comparing how well each transport
+protects its credential, which over-weights that axis considerably.
+
+**To reach either credential, an attacker must already hold the router.**
+At that point they have the source data — mikroview holds what the router
+told it. Reading mikroview gains them nothing they do not already have.
+What the credential buys is the ability to *write* router state into
+mikroview, and #186 says so in its own words: "the residual threat is a
+stolen ingest token letting an attacker POST false router state — a
+data-integrity attack, bounded, on infrastructure we control."
+
+That is push working as designed. The pull design that #110 dropped would
+have put a *RouterOS* password in mikroview, which is a high-value
+credential; the push credential is low-value by construction. It is the
+whole reason the design was chosen.
+
+Two things keep it bounded, and both are transport-independent:
+
+- **Per-device scoping** (step 1) stops one compromised router's
+  credential becoming a window into another. Worth keeping precisely
+  because mikroview aggregates across routers and holds syslog history,
+  flags and audit that no single router has.
+- **Additive-only application** (step 4) means the credential cannot be
+  used to *hide* anything, only to add noise.
+
+So credential exposure is the least decisive axis here, not the most.
+What actually deserves the attention is the parser: that endpoint takes
+attacker-shaped input either way, which is what step 2's strict schema
+and fuzz target are for.
+
 **Where that leaves it — honestly, and not where this document started.**
 
 SFTP with key auth buys three things: an uncapped payload, a credential
 that no `read` user on the router can extract, and a credential a MITM
 cannot harvest. The first is not currently needed at measured config
-sizes. **The second is a real advantage over the bearer token**, and this
-document initially argued the opposite.
+sizes. The second and third are real, and this document initially argued
+the opposite — but per the section above, they are advantages on the axis
+that matters least, since an attacker holding either credential already
+holds the router.
 
 It costs: no server authentication (a MITM still receives the payload and
 answers for mikroview, with no pinning available); a completeness
