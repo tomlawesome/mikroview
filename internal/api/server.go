@@ -174,6 +174,8 @@ func (s *Server) routes() []route {
 		{http.MethodPost, "/api/auth/login", s.handleAuthLogin},
 		{http.MethodPost, "/api/auth/logout", s.handleAuthLogout},
 		{http.MethodPost, "/api/auth/users", s.handleAuthCreateUser},
+		{http.MethodGet, "/api/auth/users", s.handleAuthListUsers},
+		{http.MethodDelete, "/api/auth/users/{id}", s.handleAuthDeleteUser},
 
 		// Admin-only token management (issue #101) -- gated the same way
 		// POST /api/auth/users is (see handleTokensCreate/
@@ -186,6 +188,7 @@ func (s *Server) routes() []route {
 		{http.MethodDelete, "/api/tokens/{id}", s.handleTokensRevoke},
 
 		{http.MethodGet, "/api/auth/oidc/login", s.handleOIDCLogin},
+		{http.MethodPost, "/api/auth/oidc/link", s.handleOIDCLinkStart},
 		{http.MethodGet, "/api/auth/oidc/callback", s.handleOIDCCallback},
 	}
 }

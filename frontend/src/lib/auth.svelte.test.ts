@@ -3,11 +3,10 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { AuthSession } from './types'
 
-// auth.svelte.ts talks to the backend exclusively through these six
+// auth.svelte.ts talks to the backend exclusively through these five
 // lib/api.ts functions -- mock the whole module so tests exercise only
 // AuthState's own state-transition logic, never a real fetch().
 vi.mock('./api', () => ({
-  createUser: vi.fn(),
   fetchAuthSession: vi.fn(),
   login: vi.fn(),
   logout: vi.fn(),
@@ -15,7 +14,7 @@ vi.mock('./api', () => ({
   skipAuthSetup: vi.fn(),
 }))
 
-import { createUser, fetchAuthSession, login, logout, register, skipAuthSetup } from './api'
+import { fetchAuthSession, login, logout, register, skipAuthSetup } from './api'
 import { authState } from './auth.svelte'
 
 function session(overrides: Partial<AuthSession> = {}): AuthSession {
@@ -37,7 +36,7 @@ beforeEach(() => {
   authState.state = 'loading'
   authState.username = ''
   authState.role = ''
-  authState.showAddUser = false
+  authState.showUsers = false
   authState.ssoAvailable = false
   authState.ssoError = null
   window.history.replaceState(null, '', '/')
@@ -176,25 +175,6 @@ describe('AuthState.logout', () => {
     expect(authState.username).toBe('')
     expect(authState.role).toBe('')
     expect(fetchAuthSession).not.toHaveBeenCalled()
-  })
-})
-
-describe('AuthState.createUser', () => {
-  it('delegates straight to the api call and returns its result', async () => {
-    vi.mocked(createUser).mockResolvedValue(null)
-
-    const result = await authState.createUser('bob', 'hunter2', 'user')
-
-    expect(result).toBeNull()
-    expect(createUser).toHaveBeenCalledWith('bob', 'hunter2', 'user')
-  })
-
-  it('surfaces an error from the api call', async () => {
-    vi.mocked(createUser).mockResolvedValue('username already taken')
-
-    const result = await authState.createUser('bob', 'hunter2', 'user')
-
-    expect(result).toBe('username already taken')
   })
 })
 

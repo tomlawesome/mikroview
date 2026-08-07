@@ -76,7 +76,7 @@ func TestPasswordTooShortRejectedOnRegisterCreateAndReset(t *testing.T) {
 	}
 }
 
-func TestCreateUserAllowsAdditionalAccountsAtAnyRole(t *testing.T) {
+func TestCreateUserAddsAdditionalAccounts(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "users.json")
 	s, _ := Open(path)
 	s.Register("admin", "password123", time.Now())
@@ -150,6 +150,36 @@ func TestSetPasswordChangesCredentials(t *testing.T) {
 	}
 }
 
+// An SSO-provisioned account starts with HasLocalPassword explicitly
+// false. If it is ever given a real password, that flag has to move with
+// it -- otherwise the account holds a working mikroview password while
+// still reporting itself SSO-only, and -recover-admin-account refuses to
+// recover an account it actually could.
+//
+// Nothing reaches this state today (recovery refuses SSO-only accounts
+// up front), so this guards the invariant ahead of account linking
+// rather than a live bug.
+func TestSetPasswordMarksTheAccountAsHavingALocalPassword(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "users.json")
+	s, _ := Open(path)
+
+	u, created, err := s.FindOrCreateOIDCUser("https://idp.example", "subject-1", "sso-user", time.Now())
+	if err != nil || !created {
+		t.Fatalf("FindOrCreateOIDCUser: created=%v err=%v", created, err)
+	}
+	if u.LocalPassword() {
+		t.Fatal("an SSO-provisioned account reports a local password before the test even starts")
+	}
+
+	if err := s.SetPassword(u.Username, "new-password", time.Now()); err != nil {
+		t.Fatalf("SetPassword: %v", err)
+	}
+	got, _ := s.ByUsername(u.Username)
+	if !got.LocalPassword() {
+		t.Error("an account that was just given a password reports no local password")
+	}
+}
+
 func TestSetPasswordUnknownUserReturnsNotFound(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "users.json")
 	s, _ := Open(path)
@@ -219,7 +249,7 @@ func TestGetReturnsCopyNotSharedPointer(t *testing.T) {
 }
 
 // TestSeparateProcessPasswordResetIsPickedUpByRunningStore reproduces
-// the cross-process scenario the CLI recovery tool (`-reset-password`)
+// the cross-process scenario the CLI recovery tool (`-recover-admin-account`)
 // depends on: two independent Store instances (standing in for two
 // separate process invocations) opened against the same file. A change
 // made through one must be visible through the other on its next read,
@@ -539,5 +569,65 @@ func TestConcurrentRegisterAndDisableAreMutuallyExclusive(t *testing.T) {
 		if s.Disabled() && s.Count() > 0 {
 			t.Fatalf("attempt %d: inconsistent end state -- Disabled()=true with %d account(s)", attempt, s.Count())
 		}
+	}
+}
+
+func TestDeleteUserRefusesTheAdmin(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "users.json")
+	s, _ := Open(path)
+	admin, _ := s.Register("alice", "password123", time.Now())
+
+	if _, err := s.DeleteUser(admin.ID); err != ErrCannotDeleteAdmin {
+		t.Fatalf("expected ErrCannotDeleteAdmin, got %v", err)
+	}
+	if s.Admin() == nil {
+		t.Error("the admin account is gone after a refused delete")
+	}
+}
+
+func TestDeleteUserRemovesTheAccountAndFreesItsIdentifiers(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "users.json")
+	s, _ := Open(path)
+	s.Register("alice", "password123", time.Now())
+	bob, err := s.CreateUser("bob", "password456", RoleUser, time.Now())
+	if err != nil {
+		t.Fatalf("CreateUser: %v", err)
+	}
+	if err := s.LinkOIDCIdentity(bob.ID, "https://idp.example", "sub-bob", time.Now()); err != nil {
+		t.Fatalf("LinkOIDCIdentity: %v", err)
+	}
+
+	deleted, err := s.DeleteUser(bob.ID)
+	if err != nil {
+		t.Fatalf("DeleteUser: %v", err)
+	}
+	if deleted.PasswordHash != "" {
+		t.Error("DeleteUser returned the account's password hash")
+	}
+	if _, ok := s.ByUsername("bob"); ok {
+		t.Error("the deleted account is still resolvable by username")
+	}
+
+	// The username and the SSO identity must both be reusable, or a
+	// deleted account silently blocks re-creating the person's access.
+	if _, err := s.CreateUser("bob", "password789", RoleUser, time.Now()); err != nil {
+		t.Errorf("expected the freed username to be reusable, got %v", err)
+	}
+	replacement, created, err := s.FindOrCreateOIDCUser("https://idp.example", "sub-bob", "bob2", time.Now())
+	if err != nil {
+		t.Fatalf("FindOrCreateOIDCUser: %v", err)
+	}
+	if !created || replacement.ID == bob.ID {
+		t.Error("the deleted account's SSO identity still maps to the old account")
+	}
+}
+
+func TestDeleteUserUnknownIDReturnsNotFound(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "users.json")
+	s, _ := Open(path)
+	s.Register("alice", "password123", time.Now())
+
+	if _, err := s.DeleteUser("no-such-id"); err != ErrUserNotFound {
+		t.Errorf("expected ErrUserNotFound, got %v", err)
 	}
 }

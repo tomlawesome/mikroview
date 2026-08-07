@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/tomlawesome/mikroview/internal/auth"
 	"github.com/tomlawesome/mikroview/internal/logging"
 	"github.com/tomlawesome/mikroview/internal/oidc"
 )
@@ -47,6 +48,94 @@ func (s *Server) handleOIDCLogin(w http.ResponseWriter, r *http.Request) {
 	s.setOIDCFlowCookie(w, encoded)
 
 	http.Redirect(w, r, s.OIDC.AuthCodeURL(fs.State, fs.Nonce, fs.CodeVerifier), http.StatusFound)
+}
+
+// handleOIDCLinkStart begins linking the signed-in account to an SSO
+// identity. It returns the provider URL as JSON for the frontend to
+// navigate to, rather than issuing a redirect itself.
+//
+// POST, not GET, and that is the security-relevant part. Linking is
+// destructive -- it removes the account's local password permanently
+// (see auth.Store.LinkOIDCIdentity). A GET that starts the flow could
+// be triggered cross-site: an attacker embeds it, the victim's browser
+// follows it, their identity provider silently re-authenticates them,
+// and the callback completes a link the victim never asked for,
+// destroying their password. POST puts the flow behind the CSRF header
+// check (see csrfHeaderName), which a cross-site request cannot set.
+//
+// The target account is taken from the session and sealed into the flow
+// state, never from the request body -- the browser does not get to say
+// which account a link applies to.
+func (s *Server) handleOIDCLinkStart(w http.ResponseWriter, r *http.Request) {
+	if s.OIDC == nil {
+		http.NotFound(w, r)
+		return
+	}
+	caller := userFromContext(r)
+	if caller == nil {
+		http.Error(w, "sign in first", http.StatusUnauthorized)
+		return
+	}
+	// Already SSO-only: there is no local password left to convert, and
+	// re-linking would only let an account move between identities,
+	// which is not what this endpoint is for.
+	if !caller.LocalPassword() {
+		http.Error(w, "this account already signs in through your identity provider", http.StatusConflict)
+		return
+	}
+
+	fs, err := oidc.NewFlowState(time.Now())
+	if err != nil {
+		http.Error(w, "failed to start SSO linking", http.StatusInternalServerError)
+		return
+	}
+	fs.LinkUserID = caller.ID
+
+	encoded, err := s.OIDCState.Encode(fs)
+	if err != nil {
+		http.Error(w, "failed to start SSO linking", http.StatusInternalServerError)
+		return
+	}
+	s.setOIDCFlowCookie(w, encoded)
+	writeJSON(w, http.StatusOK, map[string]string{
+		"url": s.OIDC.AuthCodeURL(fs.State, fs.Nonce, fs.CodeVerifier),
+	})
+}
+
+// completeOIDCLink finishes a flow that handleOIDCLinkStart began.
+//
+// The session is re-checked against the account sealed into the flow,
+// rather than trusted from either side alone. The sealed value can't be
+// forged, but it also can't notice that the browser signed out and
+// signed in as somebody else while the provider round-trip was in
+// flight -- without this check, that would attach the identity that
+// just authenticated to whichever account started the flow.
+func (s *Server) completeOIDCLink(w http.ResponseWriter, r *http.Request, fs oidc.FlowState, identity *oidc.Identity, now time.Time) {
+	caller, ok := s.sessionUser(r, now)
+	if !ok || caller.ID != fs.LinkUserID {
+		redirectWithSSOError(w, r, "link_session_changed")
+		return
+	}
+
+	if err := s.Auth.LinkOIDCIdentity(caller.ID, identity.Issuer, identity.Subject, now); err != nil {
+		if err == auth.ErrOIDCIdentityTaken {
+			redirectWithSSOError(w, r, "link_identity_taken")
+			return
+		}
+		oidcLog.Warn(fmt.Sprintf("linking SSO identity to account %s failed: %v", caller.ID, err))
+		redirectWithSSOError(w, r, "link_failed")
+		return
+	}
+	s.Audit.Record(caller.Username, "account.link_sso", caller.Username, "issuer="+identity.Issuer)
+
+	// LinkOIDCIdentity sets PasswordChangedAt, which invalidates every
+	// session issued before it -- including the one that just made this
+	// request. A fresh session is issued so the person stays signed in
+	// on this browser, while any other session they had is now dead,
+	// which is the intended effect of the credential change.
+	sess := s.Sessions.Create(caller.ID, now)
+	s.setSessionCookie(w, sess.ID)
+	http.Redirect(w, r, "/?ssoLinked=1", http.StatusFound)
 }
 
 // handleOIDCCallback completes a login: verifies the state/nonce/PKCE
@@ -132,6 +221,15 @@ func (s *Server) handleOIDCCallback(w http.ResponseWriter, r *http.Request) {
 		oidcLog.Warn(fmt.Sprintf("refused SSO login for subject %q at %s: %v",
 			identity.Subject, identity.Issuer, err))
 		redirectWithSSOError(w, r, "not_permitted")
+		return
+	}
+
+	// Branch after the policy check above, deliberately: an identity
+	// this deployment refuses must not be attachable to an existing
+	// account either, and linking is the more dangerous of the two
+	// outcomes -- it hands that identity a permanent way in.
+	if fs.IsLink() {
+		s.completeOIDCLink(w, r, fs, identity, now)
 		return
 	}
 

@@ -395,3 +395,126 @@ func TestSessionResponseReportsSSOAvailability(t *testing.T) {
 		t.Error("expected ssoAvailable=true when s.OIDC is configured")
 	}
 }
+
+// --- Account linking (issue #133 Part 4) -------------------------------
+
+// Linking must be POST. A GET that starts the flow is triggerable
+// cross-site: an attacker embeds it, the victim's identity provider
+// silently re-authenticates them, and the callback completes a link
+// they never asked for -- permanently destroying their local password.
+// POST puts it behind the CSRF header a cross-site request can't set.
+func TestOIDCLinkStartRequiresTheCSRFHeader(t *testing.T) {
+	fp := newFakeOIDCProvider(t)
+	s := newOIDCTestServer(t, fp)
+	ts := httptest.NewServer(s.Routes())
+	defer ts.Close()
+
+	client := &http.Client{Jar: mustCookieJar(t)}
+	postJSON(t, client, ts.URL+"/api/auth/register", credentialsRequest{Username: "alice", Password: "password123"}).Body.Close()
+
+	// Deliberately built by hand, without csrfHeaderName.
+	req, _ := http.NewRequest(http.MethodPost, ts.URL+"/api/auth/oidc/link", nil)
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusOK {
+		t.Error("a link flow started without the CSRF header")
+	}
+}
+
+func TestOIDCLinkStartRequiresASession(t *testing.T) {
+	fp := newFakeOIDCProvider(t)
+	s := newOIDCTestServer(t, fp)
+	ts := httptest.NewServer(s.Routes())
+	defer ts.Close()
+
+	// An account exists, so auth is active, but this client has no session.
+	setup := &http.Client{Jar: mustCookieJar(t)}
+	postJSON(t, setup, ts.URL+"/api/auth/register", credentialsRequest{Username: "alice", Password: "password123"}).Body.Close()
+
+	anon := &http.Client{Jar: mustCookieJar(t)}
+	resp := postJSON(t, anon, ts.URL+"/api/auth/oidc/link", map[string]any{})
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Errorf("status = %d, want 401 without a session", resp.StatusCode)
+	}
+}
+
+func TestOIDCLinkStartRefusesAnAlreadySSOOnlyAccount(t *testing.T) {
+	fp := newFakeOIDCProvider(t)
+	s := newOIDCTestServer(t, fp)
+	ts := httptest.NewServer(s.Routes())
+	defer ts.Close()
+
+	client := &http.Client{Jar: mustCookieJar(t)}
+	postJSON(t, client, ts.URL+"/api/auth/register", credentialsRequest{Username: "alice", Password: "password123"}).Body.Close()
+
+	alice, _ := s.Auth.ByUsername("alice")
+	if err := s.Auth.LinkOIDCIdentity(alice.ID, "https://idp.example", "subject-1", time.Now()); err != nil {
+		t.Fatalf("LinkOIDCIdentity: %v", err)
+	}
+	// The link above invalidated the session, so sign in via SSO-less
+	// means is no longer possible -- use a fresh session for the user.
+	sess := s.Sessions.Create(alice.ID, time.Now())
+	linked := &http.Client{Jar: mustCookieJar(t)}
+	u, _ := url.Parse(ts.URL)
+	linked.Jar.SetCookies(u, []*http.Cookie{{Name: sessionCookieName, Value: sess.ID}})
+
+	resp := postJSON(t, linked, ts.URL+"/api/auth/oidc/link", map[string]any{})
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusConflict {
+		t.Errorf("status = %d, want 409 for an account with no local password", resp.StatusCode)
+	}
+}
+
+// The account a link targets comes from the session and is sealed into
+// the flow state. A request body naming another account must have no
+// effect whatsoever.
+func TestOIDCLinkTargetsTheSessionAccountNotTheRequestBody(t *testing.T) {
+	fp := newFakeOIDCProvider(t)
+	s := newOIDCTestServer(t, fp)
+	ts := httptest.NewServer(s.Routes())
+	defer ts.Close()
+
+	admin := &http.Client{Jar: mustCookieJar(t)}
+	postJSON(t, admin, ts.URL+"/api/auth/register", credentialsRequest{Username: "alice", Password: "password123"}).Body.Close()
+	postJSON(t, admin, ts.URL+"/api/auth/users", createUserRequest{Username: "bob", Password: "password456", Role: "user"}).Body.Close()
+
+	bobClient := &http.Client{Jar: mustCookieJar(t)}
+	postJSON(t, bobClient, ts.URL+"/api/auth/login", credentialsRequest{Username: "bob", Password: "password456"}).Body.Close()
+
+	alice, _ := s.Auth.ByUsername("alice")
+	resp := postJSON(t, bobClient, ts.URL+"/api/auth/oidc/link", map[string]any{
+		"userId":   alice.ID,
+		"username": "alice",
+	})
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+
+	// Decode the flow cookie the server just set and confirm it targets
+	// bob, not the alice the body asked for.
+	var flow string
+	for _, c := range resp.Cookies() {
+		if c.Name == oidcFlowCookieName {
+			flow = c.Value
+		}
+	}
+	if flow == "" {
+		t.Fatal("no flow cookie was set")
+	}
+	fs, err := s.OIDCState.Decode(flow, oidcFlowCookieMaxAge, time.Now())
+	if err != nil {
+		t.Fatalf("decoding flow state: %v", err)
+	}
+	bob, _ := s.Auth.ByUsername("bob")
+	if fs.LinkUserID != bob.ID {
+		t.Errorf("flow targets %q, want bob (%q) -- the request body chose the account", fs.LinkUserID, bob.ID)
+	}
+	if !fs.IsLink() {
+		t.Error("flow is not marked as a link")
+	}
+}
