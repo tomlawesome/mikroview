@@ -78,13 +78,7 @@ type User struct {
 	// It matters because letting an admin set a *real* password on an
 	// SSO-only account would quietly reopen the local-attack surface
 	// that provisioning it via OIDC deliberately closed.
-	//
-	// A pointer so that "field absent" (an account written before this
-	// existed) is distinguishable from "explicitly false". Every
-	// deployed accounts.json predates it, and treating absent as false
-	// would mark every local admin SSO-only and lock them out of their
-	// own recovery. See migrateHasLocalPassword.
-	HasLocalPassword *bool `json:"hasLocalPassword,omitempty"`
+	HasLocalPassword bool `json:"hasLocalPassword"`
 	// RoleChangedAt records the last admin transfer touching this
 	// account, on both sides of it. For the audit trail and the UI only:
 	// authorization always reads Role, never this.
@@ -93,40 +87,7 @@ type User struct {
 
 // LocalPassword reports whether this account has a real, user-chosen
 // password that may be reset.
-//
-// Always use this rather than reading HasLocalPassword directly: it
-// resolves the pre-migration nil case, so a caller cannot accidentally
-// treat an old local account as SSO-only.
-func (u *User) LocalPassword() bool {
-	if u.HasLocalPassword != nil {
-		return *u.HasLocalPassword
-	}
-	return u.OIDCIssuer == ""
-}
-
-// noLocalPassword is the shared false referenced by accounts that have
-// no resettable password. Package-level because a *bool field needs an
-// addressable value and repeating a local `f := false` at each site
-// invites one of them being set the wrong way.
-var noLocalPassword = false
-
-// migrateHasLocalPassword fills in the field for accounts written before
-// it existed, inferring from whether the account carries a linked SSO
-// identity: no issuer means it was created by Register/CreateUser and
-// therefore has a real password.
-//
-// Safe today because LinkOIDCIdentity has no callers, so no account can
-// yet be in the "local password *and* linked identity" state that this
-// inference would get wrong. Once linking ships (#133 Part 4) it wipes
-// the local password as part of the same operation, which keeps the
-// inference correct for anything written after it.
-func migrateHasLocalPassword(u *User) {
-	if u.HasLocalPassword != nil {
-		return
-	}
-	v := u.OIDCIssuer == ""
-	u.HasLocalPassword = &v
-}
+func (u *User) LocalPassword() bool { return u.HasLocalPassword }
 
 // oidcKey is (issuer, subject) as a map key -- a struct rather than a
 // delimited string concatenation, so there's no theoretical risk of one
@@ -199,31 +160,9 @@ var (
 // one of those two, so there's exactly one place this needs to live.
 const minPasswordLength = 8
 
-// storeFile is the on-disk shape -- an object wrapping the user list,
-// rather than a bare array. storeFile.UnmarshalJSON below stays
-// compatible with the oldest shape (a bare `[]User` array) so an
-// existing deployment's accounts still load correctly.
+// storeFile is the on-disk shape: an object wrapping the user list.
 type storeFile struct {
 	Users []*User `json:"users"`
-}
-
-func (f *storeFile) UnmarshalJSON(data []byte) error {
-	type shape storeFile // avoids infinite recursion into this method
-	var s shape
-	if err := json.Unmarshal(data, &s); err == nil {
-		*f = storeFile(s)
-		return nil
-	}
-	// A top-level JSON array can't unmarshal into a struct -- that's
-	// exactly the oldest legacy shape, so this is where a
-	// genuinely malformed file also gets one more (correct) chance to
-	// report its real error, not this fallback's.
-	var legacy []*User
-	if err := json.Unmarshal(data, &legacy); err != nil {
-		return err
-	}
-	f.Users = legacy
-	return nil
 }
 
 // Store persists user accounts through a persist.Backend -- a JSON file
@@ -311,7 +250,6 @@ func (s *Store) applyLoaded(file storeFile, version int64) {
 		if u == nil {
 			continue
 		}
-		migrateHasLocalPassword(u)
 		s.byID[u.ID] = u
 		s.byName[strings.ToLower(u.Username)] = u.ID
 		if u.OIDCIssuer != "" || u.OIDCSubject != "" {
@@ -610,7 +548,6 @@ func (s *Store) createLocked(username, password string, role Role, now time.Time
 		return nil, ErrUsernameTaken
 	}
 
-	localPassword := true
 	u := &User{
 		ID:           newID(),
 		Username:     username,
@@ -618,7 +555,7 @@ func (s *Store) createLocked(username, password string, role Role, now time.Time
 		Role:         role,
 		CreatedAt:    now,
 		// A real password the user chose, so it may later be reset.
-		HasLocalPassword: &localPassword,
+		HasLocalPassword: true,
 	}
 	s.byID[u.ID] = u
 	s.byName[key] = u.ID
@@ -715,7 +652,7 @@ func (s *Store) FindOrCreateOIDCUser(issuer, subject, usernameHint string, now t
 		// there is no password here to reset. Recorded rather than
 		// inferred, because the hash itself is indistinguishable from a
 		// real one.
-		HasLocalPassword: &noLocalPassword,
+		HasLocalPassword: false,
 	}
 	s.byID[u.ID] = u
 	s.byName[strings.ToLower(u.Username)] = u.ID
@@ -826,7 +763,7 @@ func (s *Store) LinkOIDCIdentity(userID, issuer, subject string, now time.Time) 
 	u.OIDCIssuer = issuer
 	u.OIDCSubject = subject
 	u.PasswordHash = unmatchable
-	u.HasLocalPassword = &noLocalPassword
+	u.HasLocalPassword = false
 	// Invalidates every session issued before this point, including in
 	// another process -- the account's credentials just changed
 	// fundamentally, so anything holding a session from before that
@@ -933,8 +870,7 @@ func (s *Store) SetPassword(username, newPassword string, now time.Time) error {
 	// definition. Stated explicitly rather than left to be derived from
 	// OIDCIssuer, so a linked account (OIDC *and* a local password)
 	// isn't misread as SSO-only by the recovery tooling.
-	yes := true
-	u.HasLocalPassword = &yes
+	u.HasLocalPassword = true
 	s.persistLocked()
 	return nil
 }

@@ -15,7 +15,6 @@
 package flags
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -244,10 +243,8 @@ type Exclusion struct {
 }
 
 // persistedState is the on-disk JSON shape written by persistLocked and
-// read back by Open -- see both of their doc comments for why this is
-// an object (flags + exclusions) rather than the bare `[]*Flag` array
-// this package used before permanent exclusions existed, and how Open
-// stays able to read a pre-upgrade file in that older shape.
+// read back by Open: an object holding both the flags and the permanent
+// exclusions.
 type persistedState struct {
 	Flags    []Flag      `json:"flags"`
 	Excluded []Exclusion `json:"excluded,omitempty"`
@@ -323,15 +320,6 @@ func (s *Store) WithOnRaise(fn func(Flag)) *Store {
 // not critical state. Either way the returned Store is always safe to
 // use unconditionally; a non-nil error is only ever informational, for
 // the caller to log.
-//
-// Reads either of two on-disk shapes: the current `{"flags":[...],
-// "excluded":[...]}` object persistLocked now writes, or the bare
-// `[...]` array of flags this package wrote before permanent exclusions
-// existed -- so a file from before this feature shipped still loads
-// cleanly (with no exclusions, which is exactly correct for it) rather
-// than being treated as malformed. Distinguished by the first
-// non-whitespace byte, since persistLocked always writes one shape or
-// the other, never something ambiguous between them.
 func Open(path string) (*Store, error) {
 	if path == "" {
 		return OpenWithBackend(nil)
@@ -354,36 +342,20 @@ func OpenWithBackend(b persist.Backend) (*Store, error) {
 	}
 	s.version = version
 
-	if trimmed := bytes.TrimSpace(data); len(trimmed) > 0 && trimmed[0] == '[' {
-		var list []*Flag
-		if err := json.Unmarshal(data, &list); err != nil {
-			return s, err
-		}
-		for _, f := range list {
-			// A JSON array containing `null` (e.g. `[null]`, or a real
-			// entry followed by one) unmarshals successfully into a nil
-			// *Flag -- valid JSON, so the err check above never catches
-			// it. Skipping it here is what actually delivers this
-			// function's documented "a malformed file is treated as
-			// empty rather than failing" contract; relying on the
-			// unmarshal error alone doesn't cover every way a file can
-			// be malformed.
-			if f == nil {
-				continue
-			}
-			s.byID[f.ID] = f
-			if f.Cleared {
-				s.clearedCount++
-			}
-		}
-		return s, nil
-	}
-
 	var state persistedState
 	if err := json.Unmarshal(data, &state); err != nil {
 		return s, err
 	}
 	for _, f := range state.Flags {
+		// A JSON `null` in this array decodes to a zero-value Flag
+		// rather than a nil pointer (the field is []Flag, not []*Flag),
+		// so it cannot crash the way the entities loader can -- it just
+		// lands an ID-less entry in the map. Dropped here to keep
+		// Open's "a malformed file is treated as empty rather than
+		// failing" contract honest.
+		if f.ID == "" {
+			continue
+		}
 		f := f
 		s.byID[f.ID] = &f
 		if f.Cleared {
