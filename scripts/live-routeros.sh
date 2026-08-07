@@ -124,6 +124,17 @@ run() {
   python3 "$REPO/scripts/live-routeros-console.py" --port "$SERIAL_PORT" "$@"
 }
 
+# run-as is run under a different router account, which is how questions
+# about what a low-privilege user can see get answered by asking one
+# rather than by reading the policy table.
+run_as() {
+  local user="${1:?usage: live-routeros.sh run-as <user> <password> <command>...}"
+  local password="${2?usage: live-routeros.sh run-as <user> <password> <command>...}"
+  shift 2
+  python3 "$REPO/scripts/live-routeros-console.py" --port "$SERIAL_PORT" \
+    --login "$user" --password "$password" "$@"
+}
+
 # trust imports mikroview's generated CA, which is what makes
 # check-certificate=yes work from the router. The download itself runs
 # with check-certificate=no because there is nothing to verify against
@@ -158,8 +169,9 @@ down() {
 case "${1:-}" in
   up) up ;;
   run) shift; run "$@" ;;
+  run-as) shift; run_as "$@" ;;
   trust) shift; trust "$@" ;;
   host-addr) host_addr ;;
   down) down ;;
-  *) echo "usage: $0 {up|run <command>...|trust <url>|host-addr|down}" >&2; exit 2 ;;
+  *) echo "usage: $0 {up|run <command>...|run-as <user> <pass> <command>...|trust <url>|host-addr|down}" >&2; exit 2 ;;
 esac

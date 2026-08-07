@@ -23,7 +23,7 @@ import time
 # raw socket never sends, which stalls the login for tens of seconds and
 # looks exactly like a hung boot. 200w widens output so RouterOS stops
 # wrapping and truncating its own tables at 80 columns.
-LOGIN = 'admin+ct200w'
+LOGIN_FLAGS = '+ct200w'
 
 PROMPT = re.compile(r'\[[^\]@]+@[^\]]*\] ?> ?$')
 LOGIN_PROMPT = re.compile(r'Login: ?$')
@@ -47,10 +47,13 @@ PARTIAL_ANSI = re.compile(r'\x1b(\[[0-9;?]*|\][^\x07]*)?$')
 
 
 class Console:
-    def __init__(self, host='127.0.0.1', port=15901, timeout=120):
+    def __init__(self, host='127.0.0.1', port=15901, timeout=120,
+                 user='admin', password=''):
         self.s = socket.create_connection((host, port), timeout=15)
         self.s.settimeout(0.5)
         self.timeout = timeout
+        self.user = user
+        self.password = password
         self.raw = ''
         self.buf = ''
 
@@ -95,16 +98,21 @@ class Console:
         """Reach a command prompt from wherever the console currently is.
 
         The serial session survives a reconnect, so this lands at a login
-        banner on a cold VM and at a live prompt on a warm one.
+        banner on a cold VM and at a live prompt on a warm one. A warm
+        prompt belonging to a different user is logged out first, since
+        the caller asked for this one.
         """
         self.send()
         seen = self.read_until(re.compile(LOGIN_PROMPT.pattern + '|' + PROMPT.pattern), 180)
         if not LOGIN_PROMPT.search(seen):
-            self.drain()
-            return
-        self.send(LOGIN)
+            if f'[{self.user}@' in seen:
+                self.drain()
+                return
+            self.send('/quit')
+            self.read_until(LOGIN_PROMPT, 60)
+        self.send(self.user + LOGIN_FLAGS)
         self.read_until(PASSWORD_PROMPT, 60)
-        self.send('')  # CHR ships with a blank admin password
+        self.send(self.password)  # CHR ships with a blank admin password
         deadline = time.time() + 180
         first_boot = re.compile('|'.join(
             (LICENCE_PROMPT.pattern, PASSWORD_CHANGE.pattern, PROMPT.pattern)))
@@ -137,10 +145,12 @@ def main():
     ap.add_argument('--host', default='127.0.0.1')
     ap.add_argument('--port', type=int, default=15901)
     ap.add_argument('--timeout', type=int, default=120)
+    ap.add_argument('--login', default='admin')
+    ap.add_argument('--password', default='')
     ap.add_argument('commands', nargs='*')
     args = ap.parse_args()
 
-    console = Console(args.host, args.port, args.timeout)
+    console = Console(args.host, args.port, args.timeout, args.login, args.password)
     console.login()
     for command in args.commands:
         print(f'== {command}')
