@@ -18,7 +18,7 @@ COPY --from=frontend /src/frontend/dist ./web/dist
 # itself at boot (see main.go's version var and logVersionAndMigration).
 # Left at its default for a plain `docker build` with no --build-arg,
 # which falls back to main.go's own "dev" default.
-ARG VERSION=dev
+ARG VERSION=dev:local
 RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w -X main.version=${VERSION}" -o /out/mikroview .
 # Every optional persistence path (flags/detector-settings/auth/TLS --
 # see internal/config's DefaultDataDir) defaults under here, so it needs

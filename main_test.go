@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -21,6 +22,7 @@ import (
 	"github.com/tomlawesome/mikroview/internal/geoip"
 	"github.com/tomlawesome/mikroview/internal/hub"
 	"github.com/tomlawesome/mikroview/internal/naming"
+	"github.com/tomlawesome/mikroview/internal/persist"
 	"github.com/tomlawesome/mikroview/internal/rules"
 	"github.com/tomlawesome/mikroview/internal/store"
 	"github.com/tomlawesome/mikroview/internal/syslog"
@@ -293,21 +295,26 @@ func TestRunVersionPrintsTheBareVersionString(t *testing.T) {
 func TestAuthShouldFailClosed(t *testing.T) {
 	someErr := errors.New("boom")
 
+	// The second argument is now the backend rather than a path -- a
+	// nil backend is the "persistence not configured" case that used to
+	// be an empty string. Same predicate, same three cases.
+	configured := persist.NewFileBackend("/var/lib/mikroview/accounts.json")
+
 	cases := []struct {
-		name      string
-		err       error
-		storePath string
-		want      bool
+		name    string
+		err     error
+		backend persist.Backend
+		want    bool
 	}{
-		{"corrupt file with configured path fails closed", someErr, "/var/lib/mikroview/accounts.json", true},
-		{"nil error never fails closed regardless of path", nil, "/var/lib/mikroview/accounts.json", false},
-		{"nil error with unconfigured path never fails closed", nil, "", false},
-		{"error with unconfigured path never fails closed", someErr, "", false},
+		{"corrupt document with a configured backend fails closed", someErr, configured, true},
+		{"nil error never fails closed regardless of backend", nil, configured, false},
+		{"nil error with no backend never fails closed", nil, nil, false},
+		{"error with no backend never fails closed", someErr, nil, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := authShouldFailClosed(tc.err, tc.storePath); got != tc.want {
-				t.Errorf("authShouldFailClosed(%v, %q) = %v, want %v", tc.err, tc.storePath, got, tc.want)
+			if got := authShouldFailClosed(tc.err, tc.backend); got != tc.want {
+				t.Errorf("authShouldFailClosed(%v, %v) = %v, want %v", tc.err, tc.backend != nil, got, tc.want)
 			}
 		})
 	}
@@ -327,7 +334,7 @@ func TestAuthOpenErrorShapeDrivesFailClosed(t *testing.T) {
 	if err != nil {
 		t.Fatalf("auth.Open on a not-yet-created path returned an error, want nil (fresh install must still boot): %v", err)
 	}
-	if authShouldFailClosed(err, freshPath) {
+	if authShouldFailClosed(err, persist.NewFileBackend(freshPath)) {
 		t.Error("authShouldFailClosed reported true for a genuine fresh install")
 	}
 
@@ -339,7 +346,41 @@ func TestAuthOpenErrorShapeDrivesFailClosed(t *testing.T) {
 	if err == nil {
 		t.Fatal("auth.Open on a corrupt existing file returned nil error, want non-nil")
 	}
-	if !authShouldFailClosed(err, corruptPath) {
+	if !authShouldFailClosed(err, persist.NewFileBackend(corruptPath)) {
 		t.Error("authShouldFailClosed reported false for a corrupt existing accounts file")
+	}
+}
+
+// The version string carries its lane, not just a commit -- see the
+// `version` var's doc comment. This pins the three shapes so a build
+// script can't quietly start stamping a bare SHA again, which would
+// make "is this the published candidate or someone's laptop?"
+// unanswerable from the logs.
+func TestVersionStringShape(t *testing.T) {
+	valid := regexp.MustCompile(`^(dev:[0-9a-z]+|preview:[0-9a-f]{7,40}|v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?)$`)
+
+	for _, tc := range []struct {
+		v    string
+		want bool
+	}{
+		{"dev:local", true},
+		{"dev:a1b2c3d", true},
+		{"preview:a1b2c3d", true},
+		{"preview:0123456789abcdef0123456789abcdef01234567", true},
+		{"v1.2.3", true},
+		{"v1.2.3-rc.1", true},
+		{"dev", false},     // the old bare form
+		{"a1b2c3d", false}, // a bare SHA says nothing about the lane
+		{"", false},
+		{"preview", false},
+	} {
+		if got := valid.MatchString(tc.v); got != tc.want {
+			t.Errorf("%q: matched=%v, want %v", tc.v, got, tc.want)
+		}
+	}
+
+	// The compiled-in default must itself be one of the valid shapes.
+	if !valid.MatchString(version) {
+		t.Errorf("the built-in default %q is not a valid version shape", version)
 	}
 }
