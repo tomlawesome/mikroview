@@ -49,9 +49,26 @@ func eachAuthBackend(t *testing.T, run func(t *testing.T, open func() *Store)) {
 		// shared database.
 		name := "authtest_" + strings.ReplaceAll(strings.ToLower(t.Name()), "/", "_")
 		b := persist.NewPostgresBackend(pool, name)
-		if _, err := b.Save(t.Context(), []byte(`{"disabled":false,"users":[]}`), 0); err != nil &&
-			err != persist.ErrConflict {
-			t.Fatalf("seeding: %v", err)
+
+		// Reset to empty, unconditionally.
+		//
+		// This used to seed only when the store was absent, which made
+		// the whole set pass exactly once against a given database and
+		// fail on every run after: the second run inherited the first's
+		// accounts ("registration is closed"), and the corrupt-document
+		// test inherited the corruption it had deliberately written.
+		//
+		// It passed in CI regardless, because CI starts a fresh
+		// database each run -- which is precisely what made it a trap
+		// rather than a visible bug. A test that only passes the first
+		// time is worse than no test: it teaches people to ignore it.
+		empty := []byte(`{"disabled":false,"users":[]}`)
+		snap, err := b.Load(t.Context())
+		if err != nil {
+			t.Fatalf("reading the store before reset: %v", err)
+		}
+		if _, err := b.Save(t.Context(), empty, snap.Version); err != nil {
+			t.Fatalf("resetting the store: %v", err)
 		}
 		t.Cleanup(func() {
 			_ = b.Close()
