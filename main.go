@@ -982,22 +982,61 @@ func openRecoveryStoreForCLI() (*auth.RecoveryStore, error) {
 	return auth.OpenRecovery(cfg.Auth.RecoveryKeysPath, cfg.Auth.RecoveryPepperPath)
 }
 
-// printRecoveryKeys writes a freshly generated set to stdout, exactly
-// once, and refuses when stdout is not a terminal.
+// isContainerMainProcess reports whether this process is the container's
+// entrypoint, whose stdout the log driver captures.
 //
-// These commands run inside a container, so "printed once" can land
-// somewhere durable and broadly readable -- the Docker log driver, a
-// shipped log aggregator, the journal on a non-interactive run, or a
-// pipe into a file nobody thought about. Keys written to a non-TTY are
-// keys written to storage with weaker permissions than the file they
-// protect. --i-will-capture-this exists for genuine scripted
-// provisioning, but it has to be asked for.
-func printRecoveryKeys(keys []string, allowNonTTY bool) error {
-	if !term.IsTerminal(int(os.Stdout.Fd())) && !allowNonTTY {
-		return fmt.Errorf("refusing to print recovery keys because stdout is not a terminal -- " +
-			"they would be written wherever this output is going (container logs, a file, a pipe). " +
-			"Re-run interactively, or pass --i-will-capture-this if you are provisioning from a script")
+// PID 1 is the discriminator: `docker run` starts mikroview as PID 1 and
+// logs its output, while `docker exec` starts it as an ordinary child and
+// does not (measured against a real daemon, not assumed). On a host
+// install PID 1 is the system's init, so this is false and printing is
+// allowed, which is the behaviour we want there.
+//
+// It is a heuristic in one direction only: a container that wrapped
+// mikroview in an init shim like tini would make this false while stdout
+// is still logged. This project's image has no such shim, so the case
+// cannot arise for the image we ship.
+func isContainerMainProcess(pid int) bool { return pid == 1 }
+
+// refuseIfContainerMainProcess stops a key-printing command before it
+// does any work.
+//
+// Checked up front rather than at the point of printing: -transfer-admin
+// and -recover-admin-account both change state before they have keys to
+// show, and refusing halfway leaves the operator having done the
+// dangerous half of an operation they were told they could not do.
+func refuseIfContainerMainProcess(cmd string) error {
+	if !isContainerMainProcess(os.Getpid()) {
+		return nil
 	}
+	return containerMainProcessRefusal(cmd)
+}
+
+// containerMainProcessRefusal is split out so the wording can be tested
+// without forking a PID-1 process. The wording is the load-bearing part:
+// an operator told "no" and not told what to run instead reaches for
+// whatever works, which is the thing that was just refused.
+func containerMainProcessRefusal(cmd string) error {
+	return fmt.Errorf("refusing to run %s as the container's main process, because everything it "+
+		"prints -- including your recovery keys -- goes into the container log, which is kept on "+
+		"disk and is usually shipped off the host. Run it with 'docker compose exec', not "+
+		"'docker compose run': exec output is not captured by the log driver", cmd)
+}
+
+// printRecoveryKeys shows a freshly generated set, once.
+//
+// Straight to stdout, with no file in between. Writing them to a file
+// first was tried and was worse: the operator has to read the file to
+// use it, so the keys end up on a terminal regardless, and the file adds
+// an exposure the terminal does not have -- plaintext keys sitting on
+// the data volume, included in any backup taken during that window, and
+// left behind entirely if the process is killed before it can clean up.
+// It moved the problem and charged a disk copy for it.
+//
+// What actually matters is which stream this is. In a container, stdout
+// is the container log; under `docker exec` it is the operator's own
+// terminal and nothing else. refuseIfContainerMainProcess enforces that
+// distinction before any of this runs.
+func printRecoveryKeys(keys []string) {
 	fmt.Println()
 	fmt.Println("Recovery keys -- shown once, and never again:")
 	fmt.Println()
@@ -1008,7 +1047,6 @@ func printRecoveryKeys(keys []string, allowNonTTY bool) error {
 	fmt.Println("Store these somewhere safe, such as a password manager. Any one of")
 	fmt.Println("them works; using one replaces all three.")
 	fmt.Println()
-	return nil
 }
 
 // confirmSaved is the acknowledgement gate. Nothing rotates until the
@@ -1040,6 +1078,10 @@ func hasFlag(args []string, name string) bool {
 // meant to be stopped by. Rotation happens automatically after each use.
 func runGenerateRecoveryKeys(args []string) int {
 	logger := logging.New("recovery-keys")
+	if err := refuseIfContainerMainProcess("-generate-recovery-keys"); err != nil {
+		logger.Error(err.Error())
+		return 1
+	}
 	store, err := openRecoveryStoreForCLI()
 	if err != nil {
 		logger.Error(err.Error())
@@ -1051,10 +1093,7 @@ func runGenerateRecoveryKeys(args []string) int {
 		logger.Error(err.Error())
 		return 1
 	}
-	if err := printRecoveryKeys(keys, hasFlag(args, "--i-will-capture-this")); err != nil {
-		logger.Error(err.Error())
-		return 1
-	}
+	printRecoveryKeys(keys)
 	if !confirmSaved() {
 		logger.Error("not confirmed -- no keys were stored, nothing has changed")
 		return 1
@@ -1077,6 +1116,10 @@ func runGenerateRecoveryKeys(args []string) int {
 // an IdP compromise buys the ability to log in, and nothing more.
 func runTransferAdmin(args []string) int {
 	logger := logging.New("transfer-admin")
+	if err := refuseIfContainerMainProcess("-transfer-admin"); err != nil {
+		logger.Error(err.Error())
+		return 1
+	}
 
 	// The username is optional. Someone locked out of the UI often can't
 	// look up the exact spelling of a colleague's account, and guessing
@@ -1109,10 +1152,9 @@ func runTransferAdmin(args []string) int {
 	// nothing about who holds an account is disclosed to someone without
 	// one. That reordering is only affordable because Redeem below
 	// prepares a rotation without persisting it -- see its call.
-	fmt.Print("Recovery key: ")
-	var key string
-	if _, err := fmt.Scanln(&key); err != nil {
-		logger.Error("no recovery key supplied")
+	key, err := readRecoveryKey()
+	if err != nil {
+		logger.Error(err.Error())
 		return 1
 	}
 
@@ -1159,11 +1201,7 @@ func runTransferAdmin(args []string) int {
 		return 1
 	}
 
-	if err := printRecoveryKeys(fresh, hasFlag(args, "--i-will-capture-this")); err != nil {
-		logger.Warn(fmt.Sprintf("admin transferred from %s to %s, but the new keys could not be shown: %v -- "+
-			"your previous recovery keys remain valid", logging.Printable(from.Username), logging.Printable(to.Username), err))
-		return 1
-	}
+	printRecoveryKeys(fresh)
 	if !confirmSaved() {
 		// The transfer stands; only the rotation is abandoned, leaving
 		// the previous keys valid. Better than rotating into a set the
@@ -1295,6 +1333,10 @@ func authShouldFailClosed(err error, backend persist.Backend) bool {
 // recovery -- a stolen cookie must not survive it.
 func runRecoverAdminAccount(args []string) int {
 	logger := logging.New("recover-admin-account")
+	if err := refuseIfContainerMainProcess("-recover-admin-account"); err != nil {
+		logger.Error(err.Error())
+		return 1
+	}
 
 	recovery, err := openRecoveryStoreForCLI()
 	if err != nil {
@@ -1325,10 +1367,9 @@ func runRecoverAdminAccount(args []string) int {
 	}
 
 	fmt.Printf("Recover the admin account %q.\n", admin.Username)
-	fmt.Print("Recovery key: ")
-	var key string
-	if _, err := fmt.Scanln(&key); err != nil {
-		logger.Error("no recovery key supplied")
+	key, err := readRecoveryKey()
+	if err != nil {
+		logger.Error(err.Error())
 		return 1
 	}
 
@@ -1358,11 +1399,7 @@ func runRecoverAdminAccount(args []string) int {
 	// failure leaves the previous keys valid and says so -- rotating
 	// into a set the operator never captured is the one outcome worse
 	// than not rotating at all.
-	if err := printRecoveryKeys(fresh, hasFlag(args, "--i-will-capture-this")); err != nil {
-		logger.Warn(fmt.Sprintf("admin account recovered, but the new keys could not be shown: %v -- "+
-			"your previous recovery keys remain valid", err))
-		return 1
-	}
+	printRecoveryKeys(fresh)
 	if !confirmSaved() {
 		logger.Warn("admin account recovered, but the new keys were not confirmed -- " +
 			"your previous recovery keys remain valid")
@@ -1520,8 +1557,10 @@ func ingestOneRecovered(logger *slog.Logger, rm syslog.RawMessage, st *store.Sto
 //
 // Gating a standalone list on a key was considered and rejected: it
 // would teach the operator to type a recovery key for a routine read.
-// The key's value is that it is used rarely and deliberately; a habit of
-// typing it is how it reaches shell history.
+// The key is echo-suppressed (see readRecoveryKey), so this is not
+// about shell history -- it is that every use is a chance for the key
+// to reach a screen share, a support call, or a recorded session, and
+// a key used routinely stops being treated as precious.
 //
 // Returns (nil, exitCode) when there is nothing to transfer to or the
 // operator backs out. Callers must treat that as "change nothing".
@@ -1590,4 +1629,46 @@ func confirmYes(question string) bool {
 	}
 	a := strings.ToLower(strings.TrimSpace(answer))
 	return a == "y" || a == "yes"
+}
+
+// readRecoveryKey prompts for a recovery key without echoing it.
+//
+// Passwords have always been read this way; recovery keys were not, and
+// that was an inconsistency rather than a decision. A recovery key is at
+// least as sensitive as the password -- it is the second factor on admin
+// transfer and account recovery -- and echoing it put it in terminal
+// scrollback, and in anything capturing the session (tmux logging,
+// `script`, screen sharing, a support call). Measured before the fix:
+// the key appeared verbatim in a captured session.
+//
+// Note this was never a *shell* history exposure for interactive use --
+// the shell never sees it, because the prompt belongs to this process.
+// It reaches shell history only in the piped form
+// (`echo KEY | mikroview -transfer-admin`), which is the caller's
+// choice and their exposure to manage.
+//
+// A non-terminal stdin falls back to a plain read rather than refusing:
+// automation that pipes a key has already exposed it by whatever put it
+// in the pipe, so refusing here protects nothing and breaks a
+// legitimate workflow.
+func readRecoveryKey() (string, error) {
+	fmt.Print("Recovery key: ")
+
+	if !term.IsTerminal(int(os.Stdin.Fd())) {
+		var key string
+		if _, err := fmt.Scanln(&key); err != nil {
+			return "", fmt.Errorf("no recovery key supplied")
+		}
+		return key, nil
+	}
+
+	raw, err := term.ReadPassword(int(os.Stdin.Fd()))
+	fmt.Println()
+	if err != nil {
+		return "", fmt.Errorf("no recovery key supplied")
+	}
+	if len(raw) == 0 {
+		return "", fmt.Errorf("no recovery key supplied")
+	}
+	return string(raw), nil
 }
