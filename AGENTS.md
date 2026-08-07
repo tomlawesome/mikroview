@@ -98,3 +98,25 @@ So:
 
 `.github/ISSUE_TEMPLATE/work-item.md` puts the current plan at the top
 for new issues. Existing issues get fixed as they are picked up.
+
+### Record the decision when it is made, not later
+
+A decision the owner makes in conversation is written to the tracker in
+the same working session -- into the body of the relevant issue, or a
+new issue if none covers it. Not held in memory to be written up at the
+end, and not left in the conversation.
+
+Two things go wrong otherwise, both observed:
+
+- The decision is simply lost. Conversation context does not survive,
+  and "I will remember" is not a mechanism.
+- The issue keeps describing a design that has since been replaced. #162
+  is the example: its body still described a hand-over-file design that
+  had been implemented and then removed, so the issue actively
+  misinformed anyone reading it -- the exact failure this section was
+  written about for #97, repeated.
+
+This applies to decisions that close options as much as ones that open
+them. "We considered X and rejected it" belongs under "Superseded",
+because the next person to have that idea is usually a future version of
+whoever had it first.
