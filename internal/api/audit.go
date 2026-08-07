@@ -10,15 +10,19 @@ import (
 	"github.com/tomlawesome/mikroview/internal/audit"
 )
 
-// auditActor resolves the acting username for an audit entry. Every
-// handler that calls s.Audit.Record is already gated by either
-// callerIsAdmin or callerIsAdminOrOpen, so userFromContext is non-nil in
-// the overwhelmingly common case -- the one exception is
-// callerIsAdminOrOpen's deliberate zero-account bootstrap bypass (see
-// that function's doc comment in detector_settings.go), where a mutation
-// can legitimately happen before any account -- and so any username --
-// exists. "unauthenticated" makes that window visible in the log rather
-// than silently attributing the action to an empty string.
+// auditActor resolves the acting username for an audit entry.
+//
+// Every handler that records one is gated by callerIsAdmin, which
+// requires a non-nil caller, so "unauthenticated" is now unreachable
+// through the routed API. It used to be reachable: the detector-settings
+// and flags-exclusion endpoints had a zero-account bypass that let an
+// anonymous caller mutate them, and this made that window visible in the
+// log rather than attributing the action to an empty string. The bypass
+// is gone.
+//
+// The fallback stays as a default, not a live case -- a future handler
+// that records an entry without the gate should show up in the log as
+// something, and "unauthenticated" is a better something than "".
 func auditActor(r *http.Request) string {
 	if u := userFromContext(r); u != nil {
 		return u.Username
