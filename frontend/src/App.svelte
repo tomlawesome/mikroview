@@ -100,6 +100,15 @@
     }
   })
 
+  // Reading both fields is what makes this re-run when either changes;
+  // syncRuleMatches debounces, so a keystroke does not classify the
+  // buffer four times while "drop" is being typed.
+  $effect(() => {
+    void appState.filters.rule
+    void appState.filters.ruleRegex
+    appState.syncRuleMatches()
+  })
+
   $effect(() => {
     if (authState.state !== 'authenticated') return
 
