@@ -313,8 +313,22 @@
         </div>
       {/if}
 
+      <div class="divider"></div>
+      <!--
+        AGPL section 13 requires that anyone interacting with MikroView
+        over a network is offered the corresponding source. This link is
+        that offer, so it must stay reachable from the running app -- it
+        is a licence obligation, not decoration.
+      -->
+      <a
+        class="source-link"
+        href="https://github.com/tomlawesome/mikroview"
+        target="_blank"
+        rel="noopener noreferrer"
+      >
+        Source code (AGPL v3)
+      </a>
       {#if versionState.version}
-        <div class="divider"></div>
         <div class="version" title="Build version -- also available via GET /api/healthz or `mikroview -version`">
           {versionState.version}
         </div>
@@ -324,6 +338,19 @@
 </div>
 
 <style>
+  .source-link {
+    display: block;
+    padding: 0.4rem 0.75rem;
+    font-size: 0.75rem;
+    color: var(--fg-muted);
+    text-decoration: none;
+  }
+
+  .source-link:hover {
+    color: var(--fg);
+    text-decoration: underline;
+  }
+
   .nav-menu {
     position: relative;
   }
