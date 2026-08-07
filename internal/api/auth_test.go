@@ -568,7 +568,7 @@ func TestDeletingAUserRevokesTheirSessionAndTokens(t *testing.T) {
 	// rather than through the API, since only an admin may mint one --
 	// this stands in for a token issued while that account still held
 	// admin, before a transfer.
-	rawToken, _, err := s.Tokens.Create("viewers-token", viewer, time.Now())
+	rawToken, _, err := s.Tokens.Create("viewers-token", auth.TokenKindAPI, "", viewer, time.Now())
 	if err != nil {
 		t.Fatalf("Tokens.Create: %v", err)
 	}
@@ -618,7 +618,7 @@ func TestDeletingAUserRevokesTheirSessionAndTokens(t *testing.T) {
 		t.Error("the deleted account's session is still live in the session store")
 	}
 
-	if _, ok := s.Tokens.Authenticate(rawToken, time.Now()); ok {
+	if _, ok := s.Tokens.Authenticate(rawToken, auth.TokenKindAPI, time.Now()); ok {
 		t.Error("a deleted account's API token still authenticates")
 	}
 }
@@ -671,4 +671,95 @@ func sessionIDFromJar(t *testing.T, client *http.Client, rawURL string) string {
 	}
 	t.Fatal("no session cookie in the jar")
 	return ""
+}
+
+// TestIngestTokenCannotReachReadOnlyRoutes is the HTTP-level half of the
+// kind separation asserted in internal/auth. The store refusing a
+// wrong-kind Authenticate is necessary but not sufficient: what matters
+// operationally is that a real request carrying an ingest token in an
+// Authorization header does not come back with data.
+//
+// The direction matters. An ingest token lives in a script on a router
+// where, per #186's Step 0, any RouterOS user holding `read` can print
+// it. If that value reached readOnlyRoutes it would turn into a
+// read-everything credential for every event, flag, stat and device
+// mikroview holds -- a far larger prize than the router it came from.
+func TestIngestTokenCannotReachReadOnlyRoutes(t *testing.T) {
+	s := newAuthTestServer(t)
+	ts := httptest.NewServer(s.Routes())
+	defer ts.Close()
+
+	adminClient := &http.Client{Jar: mustCookieJar(t)}
+	postJSON(t, adminClient, ts.URL+"/api/auth/register", credentialsRequest{Username: "admin", Password: "password123"}).Body.Close()
+
+	admin, ok := s.Auth.ByUsername("admin")
+	if !ok {
+		t.Fatal("the admin account was not created")
+	}
+
+	ingestRaw, _, err := s.Tokens.Create("router-1", auth.TokenKindIngest, "router-1", admin, time.Now())
+	if err != nil {
+		t.Fatalf("Tokens.Create ingest: %v", err)
+	}
+	apiRaw, _, err := s.Tokens.Create("birdcage", auth.TokenKindAPI, "", admin, time.Now())
+	if err != nil {
+		t.Fatalf("Tokens.Create api: %v", err)
+	}
+
+	get := func(t *testing.T, path, token string) int {
+		t.Helper()
+		req, _ := http.NewRequest(http.MethodGet, ts.URL+path, nil)
+		req.Header.Set("Authorization", "Bearer "+token)
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		return resp.StatusCode
+	}
+
+	// Every route a read-only token can reach, not just one: a single
+	// spot check is how the endpoint nobody remembered ships reachable
+	// -- the same reasoning authzMatrix exists for.
+	for _, path := range []string{"/api/events", "/api/flags", "/api/stats", "/api/devices"} {
+		if got := get(t, path, ingestRaw); got != http.StatusUnauthorized {
+			t.Errorf("GET %s with an ingest token: got %d, want 401", path, got)
+		}
+		if got := get(t, path, apiRaw); got != http.StatusOK {
+			t.Errorf("GET %s with a read-only API token: got %d, want 200 -- the check above must be about kind, not a broken bearer path", path, got)
+		}
+	}
+}
+
+// TestCreateTokenRejectsAnUnscopedIngestToken checks the scope rule is
+// enforced at the HTTP boundary too, and that the caller is told which
+// field is wrong rather than being handed a generic 500.
+func TestCreateTokenRejectsAnUnscopedIngestToken(t *testing.T) {
+	s := newAuthTestServer(t)
+	ts := httptest.NewServer(s.Routes())
+	defer ts.Close()
+
+	adminClient := &http.Client{Jar: mustCookieJar(t)}
+	postJSON(t, adminClient, ts.URL+"/api/auth/register", credentialsRequest{Username: "admin", Password: "password123"}).Body.Close()
+
+	cases := []struct {
+		name string
+		body createTokenRequest
+		want int
+	}{
+		{"ingest with no device", createTokenRequest{Name: "t", Kind: "ingest"}, http.StatusBadRequest},
+		{"api with a device", createTokenRequest{Name: "t", Kind: "api", Device: "router-1"}, http.StatusBadRequest},
+		{"unknown kind", createTokenRequest{Name: "t", Kind: "admin"}, http.StatusBadRequest},
+		{"ingest with a device", createTokenRequest{Name: "t", Kind: "ingest", Device: "router-1"}, http.StatusCreated},
+		{"kind omitted defaults to the read-only one", createTokenRequest{Name: "t"}, http.StatusCreated},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			resp := postJSON(t, adminClient, ts.URL+"/api/tokens", tc.body)
+			defer resp.Body.Close()
+			if resp.StatusCode != tc.want {
+				t.Errorf("POST /api/tokens: got %d, want %d", resp.StatusCode, tc.want)
+			}
+		})
+	}
 }

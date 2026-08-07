@@ -41,6 +41,25 @@ cd frontend && node scripts/live-smoke.mjs
 scripts/live-env.sh down
 ```
 
+## Driving a real router
+
+`make live-routeros` boots MikroTik's own CHR image under QEMU, stands
+mikroview up on the host's LAN address with TLS on, and imports
+mikroview's generated CA into the router. Opt-in, not part of
+`make live-check`, because it boots a VM and only RouterOS-facing changes
+need it.
+
+```sh
+eval "$(MV_BIND=$(scripts/live-routeros.sh host-addr) scripts/live-env.sh up)"
+eval "$(scripts/live-routeros.sh up)"
+scripts/live-routeros.sh trust "$MV_URL"
+scripts/live-routeros.sh run '/system resource print'
+scripts/live-routeros.sh down && scripts/live-env.sh down
+```
+
+No root and no host packages: QEMU runs in a container, with TCG when
+`/dev/kvm` is not usable. CHR reaches a login prompt in about 15s.
+
 ## Adding a scenario for your change
 
 One short file per change, `frontend/scripts/live-<thing>.mjs`, importing
@@ -62,9 +81,16 @@ reports everything rather than stopping at the first problem.
 
 Be suspicious of "we cannot test that here". It was claimed about the
 browser (Playwright and Chromium were installed; the check only looked at
-`PATH`) and about RouterOS (it virtualises: `/dev/kvm` is present,
-`qemu-system-x86` installs from apt, and CHR images download). Both
-claims were wrong, and both times the real thing found defects.
+`PATH`) and about RouterOS (it virtualises, and `make live-routeros` now
+boots one). Both claims were wrong, and both times the real thing found
+defects.
+
+Be equally suspicious of the correction. The note that replaced the
+RouterOS claim said hardware virtualisation was available because
+`/dev/kvm` is present — but it is `root:kvm` mode 0660, and this account
+is not in that group, so it is present and unusable. Checking that a
+thing exists is not checking that you can use it. The fixture works
+anyway, on TCG, which is why the wrong reason went unnoticed for a while.
 
 Look properly first. Where something genuinely cannot be exercised, say
 so plainly in the PR rather than letting "tested" imply more than was
