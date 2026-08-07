@@ -122,9 +122,28 @@ services:
     # is refused at startup. Prefer verify-full -- require encrypts but
     # does not verify who you are talking to.
     #
+    # MOVING TO POSTGRES IS A ONE-WAY CHOICE. MAKE IT BEFORE YOU START,
+    # OR NOT AT ALL.
+    #
     # Existing JSON files are migrated automatically on the first boot
-    # with Postgres configured, and are left on disk so you can switch
-    # back by removing the setting.
+    # with Postgres configured. From that moment the deployment is a
+    # Postgres deployment: mikroview records the fact, and removing
+    # dsnFile later will NOT bring it back on the JSON files -- it
+    # refuses to start instead.
+    #
+    # That refusal is the point. The JSON files are frozen at the moment
+    # of migration, so silently falling back to them would serve stale
+    # accounts -- possibly a stale admin, possibly a password you already
+    # rotated -- with nothing to indicate anything was wrong.
+    #
+    # What changes once you are on Postgres:
+    #   - Back up the DATABASE. The JSON files stop being current the
+    #     moment you migrate, so backing them up protects nothing.
+    #   - The JSON-file account commands refuse to run, because they
+    #     would edit files nothing reads any more.
+    #
+    # If you are unsure, stay on the JSON files. Going the other way
+    # later is easy; coming back is not possible.
 
 volumes:
   mikroview-data:
