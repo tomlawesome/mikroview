@@ -14,6 +14,27 @@ listen:
   # your own reverse proxy handles the HTTP->HTTPS redirect instead).
   httpRedirect: ":8081"
 
+  # Reverse-proxy support. Leave both commented out unless a proxy
+  # fronts mikroview.
+  #
+  # Mikroview rate-limits failed logins per source address. Behind a
+  # proxy, every request carries the *proxy's* address, so without
+  # trustedProxies all users share one bucket and one attacker's failed
+  # attempts lock everybody out. Setting this makes mikroview read the
+  # real client address out of the forwarding header instead -- but only
+  # for connections that actually came from a listed proxy, since a
+  # header from anyone else is just text they chose.
+  #
+  # Accepts bare IPs, CIDRs, or "private" (loopback + RFC1918 + CGNAT +
+  # link-local + IPv6 ULA), which covers a proxy on your LAN or sharing
+  # a Docker network.
+  # trustedProxies: ["private"]
+  #
+  # Which header to read, honoured only for the peers above. The default
+  # suits nginx, Caddy, Traefik, HAProxy, Cloudflare and the cloud load
+  # balancers; change it for a proxy that sets something else.
+  # clientIpHeader: "X-Forwarded-For"
+
 store:
   retention: 24h
   maxEvents: 200000

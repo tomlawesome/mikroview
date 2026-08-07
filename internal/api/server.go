@@ -4,6 +4,7 @@ package api
 
 import (
 	"net/http"
+	"net/netip"
 	"time"
 
 	"github.com/tomlawesome/mikroview/internal/audit"
@@ -87,6 +88,14 @@ type Server struct {
 	LoginLimiter *auth.LoginLimiter
 	SecureCookie bool
 
+	// TrustedProxies/ClientIPHeader control how the login rate limiter
+	// attributes a request to a source address when mikroview sits behind
+	// a reverse proxy -- see clientip.go, and config.Listen's fields of
+	// the same names for why the empty default ignores forwarding headers
+	// rather than trusting them.
+	TrustedProxies []netip.Prefix
+	ClientIPHeader string
+
 	// Tokens holds read-only API bearer tokens (issue #101) -- always
 	// non-nil (internal/auth.OpenTokenStore("") returns a usable, empty,
 	// unpersisted store), same nil-never convention as Auth above.
@@ -99,6 +108,11 @@ type Server struct {
 	// convention Reputation already uses elsewhere on this struct.
 	OIDC      *oidc.Client
 	OIDCState *oidc.StateCodec
+	// OIDCPolicy restricts which accounts at the issuer may sign in. The
+	// zero value permits everyone the issuer vouches for, which is the
+	// correct answer for a self-hosted IdP and refused at startup for a
+	// multi-tenant one -- see internal/oidc.Policy and main.go.
+	OIDCPolicy oidc.Policy
 }
 
 // route is one registered endpoint. Routes are declared as data rather
