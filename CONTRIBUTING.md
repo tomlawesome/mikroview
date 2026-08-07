@@ -58,3 +58,29 @@ See [SECURITY.md](SECURITY.md). Dependabot watches Go modules, npm
 packages, the Dockerfile's base images, and GitHub Actions versions
 weekly, opening PRs against `dev`. CodeQL scans PRs into `preview`/`main`
 plus a weekly full scan.
+
+## Licensing your contribution
+
+MikroView is licensed under the [GNU AGPL v3.0](LICENSE), and a
+commercial licence is offered separately (see
+[COMMERCIAL-LICENSE.md](COMMERCIAL-LICENSE.md)).
+
+By submitting a pull request you confirm that:
+
+1. the work is yours to contribute, and
+2. you license it under the AGPL v3.0, **and** additionally grant Tom
+   Lawson a perpetual, worldwide, royalty-free right to license it under
+   other terms.
+
+Point 2 is what makes the commercial licence possible. Without it, a
+contribution could only ever ship under the AGPL, and MikroView could no
+longer be offered commercially as a whole. You keep the copyright in
+your own work and remain free to use it anywhere else you like.
+
+## Security by design
+
+New features are researched before they are designed — including an
+explicit CVE search and a comparison against known secure and insecure
+implementations. See
+[docs/security-by-design.md](docs/security-by-design.md) for what that
+requires and why.
