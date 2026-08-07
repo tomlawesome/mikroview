@@ -142,3 +142,31 @@ export class RuleMatcher {
     this.kill()
   }
 }
+
+/**
+ * mergeOutcome decides what a match result means for the current state.
+ *
+ * Extracted because getting it wrong is invisible: an earlier version
+ * swallowed a non-ok outcome during incremental classification, leaving
+ * the previous set in place. The newly-arrived events were then treated
+ * as non-matching and quietly hidden, with nothing to say the filter had
+ * stopped being accurate. Found only by driving a real browser -- the
+ * pattern was cheap against the events already buffered and catastrophic
+ * against ones that arrived afterwards, because the cost is a property of
+ * the subject, not only of the pattern.
+ *
+ * Any outcome that is not 'ok' drops the filter and surfaces why.
+ */
+export function mergeOutcome(
+  outcome: MatchOutcome,
+  previous: ReadonlySet<number> | null,
+  incremental: boolean,
+): { matches: ReadonlySet<number> | null; status: 'idle' | 'invalid' | 'too-slow' } {
+  if (outcome.status !== 'ok') {
+    return { matches: null, status: outcome.status }
+  }
+  if (!incremental) return { matches: new Set(outcome.ids), status: 'idle' }
+  const next = new Set(previous ?? [])
+  for (const id of outcome.ids) next.add(id)
+  return { matches: next, status: 'idle' }
+}
