@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -291,113 +292,6 @@ func TestSeparateProcessPasswordResetIsPickedUpByRunningStore(t *testing.T) {
 	}
 }
 
-func TestDisableOnlyWhenNoAccounts(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "users.json")
-	s, _ := Open(path)
-
-	if s.Disabled() {
-		t.Fatal("expected a fresh store to not be disabled")
-	}
-	if err := s.Disable(); err != nil {
-		t.Fatalf("expected Disable to succeed with zero accounts, got %v", err)
-	}
-	if !s.Disabled() {
-		t.Error("expected Disabled() to report true after Disable()")
-	}
-
-	// Once an account exists, Disable must refuse -- disabling auth out
-	// from under an existing account isn't this method's job.
-	s2, _ := Open(filepath.Join(t.TempDir(), "users2.json"))
-	s2.Register("admin", "password123", time.Now())
-	if err := s2.Disable(); err != ErrRegistrationClosed {
-		t.Errorf("expected Disable to refuse once an account exists, got %v", err)
-	}
-}
-
-func TestDisableRefusesWhenNotPersisted(t *testing.T) {
-	s, _ := Open("")
-	if err := s.Disable(); err != ErrNotPersisted {
-		t.Errorf("expected ErrNotPersisted for an unconfigured store, got %v", err)
-	}
-}
-
-func TestEnableSetupClearsDisabled(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "users.json")
-	s, _ := Open(path)
-	if err := s.Disable(); err != nil {
-		t.Fatal(err)
-	}
-	if !s.Disabled() {
-		t.Fatal("expected the store to be disabled before EnableSetup")
-	}
-
-	if err := s.EnableSetup(); err != nil {
-		t.Fatal(err)
-	}
-	if s.Disabled() {
-		t.Error("expected EnableSetup to clear the disabled flag")
-	}
-
-	// The setup form should be usable again -- Register must not be
-	// refused by anything left over from the prior Disable.
-	if _, err := s.Register("admin", "password123", time.Now()); err != nil {
-		t.Errorf("expected Register to succeed after EnableSetup, got %v", err)
-	}
-}
-
-// TestSeparateProcessEnableSetupIsPickedUpByRunningStore mirrors
-// TestSeparateProcessPasswordResetIsPickedUpByRunningStore, but for
-// -enable-auth-setup -- the CLI tool's whole point is taking effect on
-// an already-running server without a restart.
-func TestSeparateProcessEnableSetupIsPickedUpByRunningStore(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "users.json")
-
-	serverStore, err := Open(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := serverStore.Disable(); err != nil {
-		t.Fatal(err)
-	}
-	if !serverStore.Disabled() {
-		t.Fatal("expected the server's store to be disabled")
-	}
-
-	cliStore, err := Open(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	time.Sleep(10 * time.Millisecond) // see the password-reset test's identical reasoning
-	if err := cliStore.EnableSetup(); err != nil {
-		t.Fatal(err)
-	}
-
-	if serverStore.Disabled() {
-		t.Error("expected the running server's store to pick up the externally-cleared disabled flag")
-	}
-}
-
-func TestOpenReadsLegacyBareArrayFormat(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "users.json")
-	legacy := `[{"id":"u1","username":"admin","passwordHash":"$argon2id$fake","role":"admin","createdAt":"2026-01-01T00:00:00Z"}]`
-	if err := os.WriteFile(path, []byte(legacy), 0o600); err != nil {
-		t.Fatal(err)
-	}
-
-	s, err := Open(path)
-	if err != nil {
-		t.Fatalf("expected a legacy bare-array file to still load, got %v", err)
-	}
-	if s.Count() != 1 {
-		t.Fatalf("expected 1 user loaded from the legacy format, got %d", s.Count())
-	}
-	if s.Disabled() {
-		t.Error("expected a legacy file (no disabled key at all) to load as Disabled: false")
-	}
-	if u, ok := s.ByUsername("admin"); !ok || u.ID != "u1" {
-		t.Errorf("expected the legacy user to be readable by username, got %+v, %v", u, ok)
-	}
-}
 
 // A JSON array containing null is syntactically valid, so it unmarshals
 // without error into a slice with a nil *User element -- before the
@@ -451,7 +345,7 @@ func TestOpenReadsNewObjectFormat(t *testing.T) {
 	// Round-trip through the store's own writer -- the true contract is
 	// "whatever Store.persistLocked writes, Store.Open can read back."
 	s1, _ := Open(path)
-	if err := s1.Disable(); err != nil {
+	if _, err := s1.Register("admin", "password123", time.Now()); err != nil {
 		t.Fatal(err)
 	}
 
@@ -459,8 +353,42 @@ func TestOpenReadsNewObjectFormat(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !s2.Disabled() {
-		t.Error("expected the object-format file to round-trip Disabled: true")
+	if u, ok := s2.ByUsername("admin"); !ok || u.Role != RoleAdmin {
+		t.Errorf("expected the object-format file to round-trip the admin account, got %+v, %v", u, ok)
+	}
+}
+
+// A deployment that took the removed no-auth option has "disabled": true
+// in its accounts file and no accounts. The key is no longer read at
+// all, so it must load as an ordinary undecided store -- setup required,
+// which is the safe direction -- rather than failing to parse.
+func TestAStoreLeftByTheRemovedNoAuthModeRequiresSetup(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "users.json")
+	if err := os.WriteFile(path, []byte(`{"disabled":true,"users":[]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	s, err := Open(path)
+	if err != nil {
+		t.Fatalf("a store left by the no-auth mode must still load, got %v", err)
+	}
+	if s.Count() != 0 {
+		t.Fatalf("expected no accounts, got %d", s.Count())
+	}
+	// Registration has to be open, or the deployment is stranded: there
+	// is no account to sign in with and no way to make one.
+	if _, err := s.Register("admin", "password123", time.Now()); err != nil {
+		t.Fatalf("expected setup to be available on a previously-disabled store, got %v", err)
+	}
+
+	// And the marker must not survive the write -- nothing reads it, so
+	// leaving it on disk is just a misleading artefact.
+	body, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(body), "disabled") {
+		t.Errorf("the no-auth marker was written back out:\n%s", body)
 	}
 }
 
@@ -512,63 +440,6 @@ func TestConcurrentRegisterCreatesExactlyOneAdmin(t *testing.T) {
 	}
 	if got := s.Count(); got != 1 {
 		t.Errorf("store holds %d accounts after the race, want exactly 1", got)
-	}
-}
-
-// TestConcurrentRegisterAndDisableAreMutuallyExclusive is the
-// regression test for the worse half of the same root cause: Register
-// and Disable could both succeed, leaving an admin account in a store
-// that also reports Disabled() == true. internal/api's requireAuth
-// checks Disabled() first, so that state serves every request with no
-// authentication at all while an admin account quietly exists -- the
-// operator's own registration returns success, giving them no reason to
-// suspect the deployment is wide open. Measured at 79/200 attempts.
-//
-// Exactly one of the two must win, whichever it is: either auth is on
-// with one admin, or it's deliberately disabled with no accounts.
-//
-// 40 attempts rather than the 200 used to characterize the bug: each
-// one pays for a real Argon2id hash (~100ms, deliberately), so the
-// loop is kept to what still reliably catches a regression without
-// dominating the suite's runtime. At the pre-fix ~40% interleaving
-// rate, 40 attempts miss a reintroduced race with probability well
-// under one in a million.
-func TestConcurrentRegisterAndDisableAreMutuallyExclusive(t *testing.T) {
-	for attempt := 0; attempt < 40; attempt++ {
-		s, err := Open(filepath.Join(t.TempDir(), "users.json"))
-		if err != nil {
-			t.Fatal(err)
-		}
-
-		var regErr, disErr error
-		var wg sync.WaitGroup
-		start := make(chan struct{})
-		wg.Add(2)
-		go func() {
-			defer wg.Done()
-			<-start
-			_, regErr = s.Register("operator", "correct horse battery staple", time.Now())
-		}()
-		go func() {
-			defer wg.Done()
-			<-start
-			disErr = s.Disable()
-		}()
-		close(start)
-		wg.Wait()
-
-		if regErr == nil && disErr == nil {
-			t.Fatalf("attempt %d: Register and Disable both succeeded -- store now has %d account(s) with Disabled()=%v, "+
-				"which requireAuth serves as fully open despite an admin existing", attempt, s.Count(), s.Disabled())
-		}
-		if regErr != nil && disErr != nil {
-			t.Fatalf("attempt %d: neither Register nor Disable succeeded (register: %v, disable: %v) -- "+
-				"one of them must always win", attempt, regErr, disErr)
-		}
-		// Whichever won, the resulting state must be self-consistent.
-		if s.Disabled() && s.Count() > 0 {
-			t.Fatalf("attempt %d: inconsistent end state -- Disabled()=true with %d account(s)", attempt, s.Count())
-		}
 	}
 }
 

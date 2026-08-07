@@ -77,12 +77,10 @@
 
   $effect(() => {
     // Reading authState.state here is what makes this effect re-run the
-    // moment it flips to/from 'authenticated'/'auth-disabled' (login,
-    // logout, a 401 bouncing back to the login view, or skipping auth
-    // setup) -- same fine-grained reactivity the filter-sync effect
-    // below relies on. Both states render the same main app shell (see
-    // the template below), just like they both need live data.
-    if (authState.state !== 'authenticated' && authState.state !== 'auth-disabled') return
+    // moment it flips to or from 'authenticated' (login, logout, or a
+    // 401 bouncing back to the login view) -- same fine-grained
+    // reactivity the filter-sync effect below relies on.
+    if (authState.state !== 'authenticated') return
 
     appState.loadInitial().catch(handleApiError)
     liveSocket.connect()
@@ -103,7 +101,7 @@
   })
 
   $effect(() => {
-    if (authState.state !== 'authenticated' && authState.state !== 'auth-disabled') return
+    if (authState.state !== 'authenticated') return
 
     // Reading every field off appState.filters here is what makes this
     // effect re-run on any filter change (Svelte 5's fine-grained
