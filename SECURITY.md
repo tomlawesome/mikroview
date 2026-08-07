@@ -75,6 +75,35 @@ either way.
   - **A misconfigured or unreachable provider degrades to "SSO
     unavailable"** (logged once at startup) and never affects local
     login.
+  - **`oidc.issuerUrl` is itself the primary access control -- and
+    mikroview refuses to pretend it is one when it isn't.** Every ID
+    token is validated against the configured issuer's own keys and
+    against your client ID, so a self-hosted Authentik/Keycloak issuer
+    already restricts login to accounts in a directory you run; that is
+    the intended, complete configuration, and delegating any further
+    narrowing to the IdP's own ACLs is the point of SSO. Against a
+    *multi-tenant* issuer the same setting narrows nothing -- every
+    Google account validates against `accounts.google.com` -- so
+    combined with "first account becomes admin", an unrestricted
+    deployment would hand admin to whoever reached the login page
+    first. **Mikroview therefore refuses to enable SSO for a known
+    multi-tenant issuer unless an access restriction is configured**
+    (`oidc.allowedGroups`/`allowedEmails`/`allowedEmailDomains`/
+    `requiredClaims`), logging why and leaving SSO off rather than
+    warning and continuing.
+  - **Access restrictions fail closed and are re-checked every login.**
+    A missing, empty or unreadable claim is a refusal, never a pass --
+    a group allowlist that opens up when the provider forgets to
+    release the claim is not an allowlist. Domain restrictions match
+    whole domains rather than string suffixes (so `example.com` never
+    admits `attacker@notexample.com`) and require the provider's own
+    `email_verified`. The check runs *before* account provisioning, so
+    a refused identity is never created as a side effect of being
+    refused, and revoking someone at the IdP locks them out at their
+    next sign-in rather than whenever their session lapses. The refused
+    user is told they aren't permitted but never which condition
+    failed -- that detail goes to the operator's log, since it would
+    otherwise map out the allowlist.
   - Verified end-to-end against a real, freshly bootstrapped Authentik
     instance (not just unit tests): the full redirect → real login form
     → PKCE exchange → RS256 token verification → account provisioning →
@@ -86,6 +115,20 @@ either way.
   mikroview reachable by an untrusted network before this is resolved:
   whoever gets there first makes the choice, and if they create an
   account, they claim the admin role.
+- **"Whoever gets there first" means exactly one winner, enforced
+  atomically.** The first-run decision is resolved under a single lock:
+  concurrent attempts cannot all succeed, and registering an account
+  cannot interleave with skipping auth. Both preconditions are
+  re-checked with the write lock held rather than before taking it,
+  which matters because password hashing (Argon2id, ~100ms by design)
+  runs first and would otherwise leave a wide window. Without this, N
+  simultaneous registrations would each create an admin, and a
+  registration racing a skip could leave a deployment holding a real
+  admin account while still reporting auth as disabled -- i.e. serving
+  every request unauthenticated while the operator's own registration
+  returned success and gave them no reason to suspect otherwise.
+  Regression tests exercise both races directly
+  (`internal/auth/store_test.go`).
 - **Skipping is a permanent, deliberate decision, not a default you fall
   into.** Once skipped, mikroview stays fully open indefinitely -- there
   is no way to re-enable auth from the web UI or any API call. Reversing
@@ -94,6 +137,21 @@ either way.
   itself. This is intentional: it means nobody who can merely reach the
   running app -- as opposed to the host it runs on -- can unilaterally
   impose or remove authentication for everyone else.
+- **A corrupt or unreadable accounts file fails closed, not open.**
+  mikroview refuses to start (rather than silently falling back to an
+  empty, zero-account state) if the accounts file exists but can't be
+  loaded -- a fresh install (no file at all) is unaffected and boots
+  normally. Without this, a lost/corrupted accounts file would look
+  identical, on the next restart, to a genuine fresh install: the
+  first-run setup screen, reachable by whoever gets there first, on a
+  deployment that previously had real accounts. Recovering is a
+  container/host-access action, the same trust anchor as the other
+  recovery commands below: restore the file from a backup, or move/
+  delete it (the boot-failure log message names the exact path) and
+  restart to consciously re-arm the first-run setup screen -- no
+  dedicated CLI mode for this, since an operator who can already run
+  `mikroview -reset-password`/`-enable-auth-setup` can already `mv` or
+  `rm` a file on the same host.
 - **Sessions are opaque, server-side, and in-memory** (not JWTs) -- easy
   to revoke, no signing-key management, but lost on a server restart
   (re-login is required; this does not affect account survival, which is
@@ -123,6 +181,20 @@ either way.
   they're locked out of. A password reset immediately invalidates every
   existing session for that account, including on an already-running
   server.
+- **API tokens (`internal/auth.Token`, issue #101) are read-only and
+  scoped by construction, not by convention.** A valid
+  `Authorization: Bearer <token>` request is routed to a completely
+  separate, minimal internal router carrying only `GET /api/events`,
+  `/flags`, `/stats`, and `/devices` -- there is no handler for anything
+  else registered on it, so no code path exists from a bearer token to a
+  write, clear, or config endpoint, regardless of the method or path
+  requested. Tokens are admin-created/revoked only (`POST`/`GET`/`DELETE
+  /api/tokens`); the raw value is shown exactly once, at creation, and
+  only its SHA-256 hash is ever persisted (Argon2id is deliberately not
+  used here -- that cost exists to slow down guessing a low-entropy,
+  human-chosen password, and a token's value is already a 128-bit random
+  string). There is no expiry; a token is valid until explicitly
+  revoked, same as a session or account.
 
 ## TLS
 
@@ -173,23 +245,33 @@ either way.
   history view, not a log archive; if you need durable logs, forward
   RouterOS's syslog output to a second, dedicated logging destination as
   well.
-- **Two deliberate exceptions: behavioral flags, and accounts.** Raised
+- **Deliberate exceptions: behavioral flags, accounts, API tokens, the
+  stale-rule usage record, and the new-device MAC registry.** Raised
   flags (port scans, activity spikes, critical-port attempts, volume
-  spikes -- see [docs/configuration.md](docs/configuration.md)) and
-  accounts (plus the create/skip decision) are both persisted to small
-  JSON files under `/var/lib/mikroview` by default (`flags.storePath` /
-  `auth.storePath`), which the container creates and owns -- no
-  configuration needed for either to survive a process restart. The
-  flags file contains the IP addresses that triggered a flag and a short
-  human-readable description; the accounts file contains usernames and
-  Argon2id password hashes (never plaintext passwords). Treat both with
-  the same care as `config.yaml` (see "Recommended deployment hardening"
-  below). Neither survives *container recreation* (as opposed to a
-  simple restart) unless you mount a volume over `/var/lib/mikroview` --
-  for accounts specifically, that means the create/skip decision itself
-  reverts to undecided on recreation without a volume, which re-shows
-  the first-run choice screen rather than silently reopening or silently
-  re-gating the deployment.
+  spikes -- see [docs/configuration.md](docs/configuration.md)),
+  accounts (plus the create/skip decision), API tokens, the per-rule
+  first/last-seen usage record backing the stale-rule detector, and the
+  new-device detector's per-MAC first/last-seen history are each
+  persisted to small JSON files under `/var/lib/mikroview` by default
+  (`flags.storePath` / `auth.storePath` / `auth.tokensStorePath` /
+  `flags.ruleUsageStorePath` / `deviceMac.storePath`), which the
+  container creates and owns -- no configuration needed for any of them
+  to survive a process restart. The flags file contains the IP addresses
+  that triggered a flag and a short human-readable description; the
+  accounts file contains usernames and Argon2id password hashes (never
+  plaintext passwords); the tokens file contains token names and
+  SHA-256 hashes (never the raw bearer values); the rule-usage file
+  contains rule labels and timestamps only; the MAC registry file
+  contains LAN client MAC addresses and timestamps only. Treat all of
+  these with the same care as `config.yaml` (see "Recommended
+  deployment hardening" below). None survive *container recreation* (as
+  opposed to a simple restart) unless you mount a volume over
+  `/var/lib/mikroview` -- for accounts specifically, that means the
+  create/skip decision itself reverts to undecided on recreation
+  without a volume, which re-shows the first-run choice screen rather
+  than silently reopening or silently re-gating the deployment; for the
+  MAC registry, it means every MAC looks "new" again after a recreation
+  without a volume.
 - **No secrets reach the browser.** The optional AbuseIPDB API key
   (`reputation.abuseIPDBKey` / `MIKROVIEW_ABUSEIPDB_KEY`) is read
   server-side only and used solely to call AbuseIPDB's API from the
@@ -207,7 +289,7 @@ either way.
 
 | Listener | Auth | TLS | Notes |
 |---|---|---|---|
-| HTTP (`api.Server` + static UI) | Session cookie once an account exists; restricted to the choice-screen endpoints while undecided; fully open once skipped | On by default (self-generated or supplied) | See "TLS" above for the zero-config default and the one supported reason (`tls.enabled: false`) to disable it. `/api/healthz` always stays open. |
+| HTTP (`api.Server` + static UI) | Session cookie once an account exists (or an API bearer token, read-only, for four `GET` routes only — see "API tokens" above); restricted to the choice-screen endpoints while undecided; fully open once skipped | On by default (self-generated or supplied) | See "TLS" above for the zero-config default and the one supported reason (`tls.enabled: false`) to disable it. `/api/healthz` always stays open. |
 | Syslog UDP/TCP | None | None | Accepts and parses any line from any source as if it were a real RouterOS device -- unaffected by auth state. TLS doesn't apply here; RouterOS's syslog protocol has no TLS mode. |
 | WebSocket (`/api/ws`) | Session cookie + same-origin check, once an account exists; blocked entirely while undecided (not in the choice-screen exemption list); open, no origin check, once skipped | Follows the HTTP listener (`wss://` when TLS is on) | `CheckOrigin` is permissive whenever `Auth.Count() == 0` (undecided or skipped) — moot for "undecided", since `requireAuth` never lets the request reach this handler in that state. See `internal/api/ws.go`. |
 
@@ -247,6 +329,21 @@ damage a hostile or misbehaving LAN device can do:
   and a failed login takes the same amount of time whether the username
   exists or not (a constant-time comparison against a dummy hash either
   way), so response timing can't be used to enumerate valid usernames.
+- **Source-address attribution behind a reverse proxy is opt-in, and
+  ignoring forwarding headers is the default.** A forwarding header is
+  just text the client sent; honouring one unconditionally would let
+  anyone mint a fresh, empty rate-limit bucket per request by varying
+  it, which deletes the per-source limiter rather than weakening it. So
+  a header is read only when the connection came from an address the
+  operator listed in `listen.trustedProxies`, and the chain is then
+  walked right-to-left, skipping trusted hops, so a client's forged
+  left-hand entries are never what gets used. With no proxies declared,
+  only the transport-level peer address counts. The cost of leaving it
+  unset behind a proxy is a shared bucket, not a bypass: all users key
+  to the proxy's address, so one attacker's failures can lock the
+  deployment out of *password* login (the per-username limiter is
+  unaffected, as is SSO). See
+  [docs/configuration.md](docs/configuration.md#running-behind-a-reverse-proxy).
 
 ## Recommended deployment hardening
 
@@ -268,7 +365,16 @@ damage a hostile or misbehaving LAN device can do:
   besides router names/IPs, it may also hold your AbuseIPDB API key
   (`reputation.abuseIPDBKey`) if you've configured one; prefer the
   `MIKROVIEW_ABUSEIPDB_KEY` env var over the YAML field if the file
-  itself might be more widely readable than your environment.
+  itself might be more widely readable than your environment. The same
+  applies to any credentials configured under `notify` -- SMTP's
+  `notify.smtp.password`, Pushover's `notify.pushover.token`, and any
+  auth header set under `notify.webhook.headers` (e.g. a bearer token
+  for ntfy/Home Assistant/n8n) -- `notify.smtp.password` and
+  `notify.pushover.token`/`.user` have env var equivalents (see
+  [docs/configuration.md](docs/configuration.md)) for the same reason;
+  `notify.webhook.headers` is YAML-only, so if it holds a real secret,
+  that's one more reason to keep `config.yaml` itself off a shared
+  filesystem.
 - The same applies to `flags.storePath`'s default file under
   `/var/lib/mikroview` — it holds real IP addresses and short
   descriptions of what they triggered, so keep it off a shared

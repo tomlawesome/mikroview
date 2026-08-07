@@ -1,0 +1,247 @@
+package oidc
+
+import (
+	"errors"
+	"testing"
+)
+
+func identity(claims map[string]any) *Identity {
+	id := &Identity{Issuer: "https://idp.example.com", Subject: "abc123", Claims: claims}
+	if v, ok := claims["email"].(string); ok {
+		id.Email = v
+	}
+	if v, ok := claims["email_verified"].(bool); ok {
+		id.EmailVerified = v
+	}
+	return id
+}
+
+func TestZeroPolicyPermitsAnyoneTheIssuerVouchesFor(t *testing.T) {
+	// The self-hosted-IdP case: the issuer URL is already the allowlist,
+	// and delegating the rest to the IdP's own ACLs is the point of SSO.
+	// This must stay frictionless or the restriction machinery has made
+	// the common configuration worse.
+	var p Policy
+	if err := p.Permit(identity(map[string]any{"email": "someone@example.com"})); err != nil {
+		t.Fatalf("zero Policy refused a login: %v", err)
+	}
+	if p.Restricted() {
+		t.Error("zero Policy reports itself as restricted")
+	}
+}
+
+func TestPolicyGroups(t *testing.T) {
+	p := Policy{AllowedGroups: []string{"mikroview-admins", "netops"}}
+
+	if err := p.Permit(identity(map[string]any{"groups": []any{"staff", "netops"}})); err != nil {
+		t.Errorf("member of a permitted group was refused: %v", err)
+	}
+	if err := p.Permit(identity(map[string]any{"groups": []any{"staff"}})); err == nil {
+		t.Error("non-member was permitted")
+	}
+
+	// A provider that emits a single group as a bare string, not a list.
+	if err := p.Permit(identity(map[string]any{"groups": "netops"})); err != nil {
+		t.Errorf("single-string groups claim was refused: %v", err)
+	}
+}
+
+// TestPolicyGroupsFailClosedWhenTheClaimIsMissing is the whole point of
+// the feature. A provider that hasn't been configured to release the
+// groups claim is the single most likely misconfiguration here, and the
+// tempting implementation -- "no groups, no restriction to apply, allow"
+// -- turns the allowlist off silently and permanently.
+func TestPolicyGroupsFailClosedWhenTheClaimIsMissing(t *testing.T) {
+	p := Policy{AllowedGroups: []string{"mikroview-admins"}}
+
+	for name, claims := range map[string]map[string]any{
+		"claim absent":       {"email": "someone@example.com"},
+		"claim empty list":   {"groups": []any{}},
+		"claim empty string": {"groups": ""},
+		"claim wrong type":   {"groups": 42},
+		"claim null":         {"groups": nil},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if err := p.Permit(identity(claims)); err == nil {
+				t.Error("permitted a login with no readable groups claim")
+			}
+		})
+	}
+}
+
+// TestPolicyEmailDomainIsNotASuffixMatch pins the classic bug in this
+// shape of check. With strings.HasSuffix, registering one adjacent
+// domain name hands an attacker the entire allowlist.
+func TestPolicyEmailDomainIsNotASuffixMatch(t *testing.T) {
+	p := Policy{AllowedEmailDomains: []string{"example.com"}}
+
+	for _, addr := range []string{
+		"attacker@notexample.com",
+		"attacker@evil-example.com",
+		"attacker@example.com.evil.net",
+		"attacker@wwwexample.com",
+	} {
+		err := p.Permit(identity(map[string]any{"email": addr, "email_verified": true}))
+		if err == nil {
+			t.Errorf("%s was permitted against an example.com allowlist", addr)
+		}
+	}
+
+	if err := p.Permit(identity(map[string]any{"email": "real@example.com", "email_verified": true})); err != nil {
+		t.Errorf("a genuine example.com address was refused: %v", err)
+	}
+	// Subdomains are a different organisation unit as far as this is
+	// concerned; listing them explicitly is the operator's call.
+	if err := p.Permit(identity(map[string]any{"email": "real@mail.example.com", "email_verified": true})); err == nil {
+		t.Error("a subdomain was permitted without being listed")
+	}
+}
+
+// TestPolicyEmailRequiresVerification: at a provider that lets a user set
+// their own unverified address, an email allowlist without this check is
+// decorative -- anyone types an address inside it and walks in.
+func TestPolicyEmailRequiresVerification(t *testing.T) {
+	for _, p := range []Policy{
+		{AllowedEmailDomains: []string{"example.com"}},
+		{AllowedEmails: []string{"real@example.com"}},
+	} {
+		err := p.Permit(identity(map[string]any{"email": "real@example.com", "email_verified": false}))
+		if err == nil {
+			t.Errorf("%+v permitted an unverified address", p)
+		}
+		if err := p.Permit(identity(map[string]any{"email_verified": true})); err == nil {
+			t.Errorf("%+v permitted an identity with no email at all", p)
+		}
+	}
+}
+
+func TestPolicyEmailCaseInsensitive(t *testing.T) {
+	p := Policy{AllowedEmails: []string{"Real@Example.COM"}}
+	if err := p.Permit(identity(map[string]any{"email": "rEAL@example.com", "email_verified": true})); err != nil {
+		t.Errorf("case difference caused a refusal: %v", err)
+	}
+}
+
+// TestPolicyRequiredClaims covers the two configurations that make a
+// public IdP usable safely -- Google Workspace's hosted domain and a
+// single Entra tenant -- through the generic mechanism, with no
+// provider-specific code involved.
+func TestPolicyRequiredClaims(t *testing.T) {
+	google := Policy{RequiredClaims: map[string][]string{"hd": {"example.com"}}}
+	if err := google.Permit(identity(map[string]any{"hd": "example.com"})); err != nil {
+		t.Errorf("matching hd claim refused: %v", err)
+	}
+	if err := google.Permit(identity(map[string]any{"hd": "other.com"})); err == nil {
+		t.Error("wrong hd claim permitted")
+	}
+	// A personal @gmail.com account carries no hd claim at all -- this is
+	// exactly the account that must not get in.
+	if err := google.Permit(identity(map[string]any{"email": "stranger@gmail.com"})); err == nil {
+		t.Error("an account with no hd claim was permitted")
+	}
+
+	tenant := "00000000-0000-0000-0000-000000000000"
+	entra := Policy{RequiredClaims: map[string][]string{"tid": {tenant}}}
+	if err := entra.Permit(identity(map[string]any{"tid": tenant})); err != nil {
+		t.Errorf("matching tid claim refused: %v", err)
+	}
+	if err := entra.Permit(identity(map[string]any{"tid": "11111111-1111-1111-1111-111111111111"})); err == nil {
+		t.Error("a different tenant was permitted")
+	}
+}
+
+// Every configured condition must hold, not just one.
+func TestPolicyConditionsCombineWithAnd(t *testing.T) {
+	p := Policy{
+		AllowedGroups:  []string{"netops"},
+		RequiredClaims: map[string][]string{"hd": {"example.com"}},
+	}
+	if err := p.Permit(identity(map[string]any{"groups": []any{"netops"}, "hd": "example.com"})); err != nil {
+		t.Errorf("identity satisfying both conditions refused: %v", err)
+	}
+	if err := p.Permit(identity(map[string]any{"groups": []any{"netops"}, "hd": "other.com"})); err == nil {
+		t.Error("permitted despite failing the hd condition")
+	}
+	if err := p.Permit(identity(map[string]any{"groups": []any{"other"}, "hd": "example.com"})); err == nil {
+		t.Error("permitted despite failing the group condition")
+	}
+}
+
+func TestPolicyCustomGroupsClaim(t *testing.T) {
+	p := Policy{AllowedGroups: []string{"Admin"}, GroupsClaim: "roles"}
+	if err := p.Permit(identity(map[string]any{"roles": []any{"Admin"}})); err != nil {
+		t.Errorf("custom groups claim refused: %v", err)
+	}
+	if err := p.Permit(identity(map[string]any{"groups": []any{"Admin"}})); err == nil {
+		t.Error("read the default claim name despite GroupsClaim being set")
+	}
+}
+
+func TestPolicyRefusalIsTypedAndCarriesNoUserFacingDetail(t *testing.T) {
+	p := Policy{AllowedGroups: []string{"netops"}}
+	err := p.Permit(identity(map[string]any{"groups": []any{"other"}}))
+
+	var notPermitted *ErrNotPermitted
+	if !errors.As(err, &notPermitted) {
+		t.Fatalf("got %T, want *ErrNotPermitted", err)
+	}
+	if notPermitted.Reason == "" {
+		t.Error("refusal carries no reason for the operator's log")
+	}
+}
+
+func TestPolicyRefusesNilIdentity(t *testing.T) {
+	if err := (Policy{}).Permit(nil); err == nil {
+		t.Error("a nil identity was permitted")
+	}
+}
+
+func TestIsMultiTenantIssuer(t *testing.T) {
+	multiTenant := []string{
+		"https://accounts.google.com",
+		"https://accounts.google.com/",
+		"https://login.microsoftonline.com/common/v2.0",
+		"https://login.microsoftonline.com/organizations/v2.0",
+		"https://login.microsoftonline.com/consumers/v2.0",
+		"https://appleid.apple.com",
+	}
+	for _, issuer := range multiTenant {
+		if !IsMultiTenantIssuer(issuer) {
+			t.Errorf("%s not recognised as multi-tenant -- it would be allowed with no restriction", issuer)
+		}
+	}
+
+	singleTenant := []string{
+		// The same Entra host, but scoped to one organisation: this really
+		// does restrict logins, so it must not be refused.
+		"https://login.microsoftonline.com/00000000-0000-0000-0000-000000000000/v2.0",
+		"https://authentik.example.com/application/o/mikroview/",
+		"https://keycloak.example.com/realms/home",
+		"https://idp.internal",
+		"",
+		"://not a url",
+	}
+	for _, issuer := range singleTenant {
+		if IsMultiTenantIssuer(issuer) {
+			t.Errorf("%s wrongly refused as multi-tenant", issuer)
+		}
+	}
+}
+
+func TestPolicyRestricted(t *testing.T) {
+	restricted := []Policy{
+		{AllowedGroups: []string{"x"}},
+		{AllowedEmails: []string{"x@y.z"}},
+		{AllowedEmailDomains: []string{"y.z"}},
+		{RequiredClaims: map[string][]string{"hd": {"y.z"}}},
+	}
+	for _, p := range restricted {
+		if !p.Restricted() {
+			t.Errorf("%+v reports itself unrestricted", p)
+		}
+	}
+	// GroupsClaim alone narrows nothing -- it only says where to look.
+	if (Policy{GroupsClaim: "roles"}).Restricted() {
+		t.Error("GroupsClaim alone reported as a restriction")
+	}
+}

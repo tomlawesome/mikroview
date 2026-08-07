@@ -77,7 +77,9 @@
       <div class="row">
         <span class="k">Src port</span>
         <span class="v-group">
-          <button class="v link" onclick={() => filterAndClose('port', String(event.srcPort))}>{event.srcPort}</button>
+          <button class="v link" onclick={() => filterAndClose('port', String(event.srcPort))}>
+            {event.srcPortName || event.srcPort}
+          </button>
           {#if lookupPort(event.srcPort)}<PortInvestigateButton port={event.srcPort} />{/if}
         </span>
       </div>
@@ -97,7 +99,9 @@
       <div class="row">
         <span class="k">Dst port</span>
         <span class="v-group">
-          <button class="v link" onclick={() => filterAndClose('port', String(event.dstPort))}>{event.dstPort}</button>
+          <button class="v link" onclick={() => filterAndClose('port', String(event.dstPort))}>
+            {event.dstPortName || event.dstPort}
+          </button>
           {#if lookupPort(event.dstPort)}<PortInvestigateButton port={event.dstPort} />{/if}
         </span>
       </div>

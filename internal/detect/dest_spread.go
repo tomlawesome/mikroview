@@ -85,13 +85,28 @@ func (d *Detector) observeDestSpread(e store.Event, now time.Time) {
 		}
 	}
 
+	// vpnTagged is computed once and reused by both branches below --
+	// see vpn.go's vpnBoostConfidence for the mechanism and reasoning
+	// (issue #105): an anomaly whose triggering event arrived via a
+	// VPN-tagged interface (Config.VPNInterfaces) is scored more
+	// confidently than the identical anomaly from an ordinary LAN
+	// interface. e.InInterface empty, or matching no configured
+	// pattern (the default, empty VPNInterfaces), leaves both detectors'
+	// scoring completely unchanged.
+	vpnTagged := isVPNInterface(d.cfg.VPNInterfaces, e.InInterface)
+	vpnDetailSuffix := ""
+	if vpnTagged {
+		vpnDetailSuffix = fmt.Sprintf(" -- arrived via VPN interface %q, scored more confidently as an already-authenticated remote peer", e.InInterface)
+	}
+
 	if oaActive {
 		external := w.external.Count(now, d.cfg.OutboundAnomalyWindow, nil)
 		if external >= d.cfg.OutboundAnomalyThreshold {
 			hosts := w.external.Values(now, d.cfg.OutboundAnomalyWindow, nil)
+			confidence := d.vpnBoostConfidence(overshootConfidence(external, d.cfg.OutboundAnomalyThreshold), e.InInterface)
 			isNew := d.fs.AddWithDetail(flags.TypeOutboundAnomaly, e.SrcIP,
-				fmt.Sprintf("%d distinct external destinations in %s", external, d.cfg.OutboundAnomalyWindow),
-				overshootConfidence(external, d.cfg.OutboundAnomalyThreshold),
+				fmt.Sprintf("%d distinct external destinations in %s", external, d.cfg.OutboundAnomalyWindow)+vpnDetailSuffix,
+				confidence,
 				flags.Evidence{Hosts: sortedHostsCapped(hosts)}, "", now)
 			d.maybeCheckGroupReputation(flags.TypeOutboundAnomaly, e.SrcIP, hosts, isNew)
 		}
@@ -100,9 +115,10 @@ func (d *Detector) observeDestSpread(e store.Event, now time.Time) {
 		internal := w.internal.Count(now, d.cfg.InternalReconWindow, nil)
 		if internal >= d.cfg.InternalReconThreshold {
 			hosts := w.internal.Values(now, d.cfg.InternalReconWindow, nil)
+			confidence := d.vpnBoostConfidence(overshootConfidence(internal, d.cfg.InternalReconThreshold), e.InInterface)
 			d.fs.AddWithDetail(flags.TypeInternalRecon, e.SrcIP,
-				fmt.Sprintf("%d distinct internal destinations in %s", internal, d.cfg.InternalReconWindow),
-				overshootConfidence(internal, d.cfg.InternalReconThreshold),
+				fmt.Sprintf("%d distinct internal destinations in %s", internal, d.cfg.InternalReconWindow)+vpnDetailSuffix,
+				confidence,
 				flags.Evidence{Hosts: sortedHostsCapped(hosts)}, "", now)
 		}
 	}

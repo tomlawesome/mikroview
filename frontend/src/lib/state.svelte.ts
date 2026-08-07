@@ -23,10 +23,17 @@ export type ConnState = 'connecting' | 'open' | 'closed'
 // control-port tracking tab (see ControlPorts.svelte); 'flags' is the
 // behavioral-flags review tab (see Flags.svelte); 'detectors' is the
 // admin-only per-detector on/off + scope settings tab (see
-// Detectors.svelte). A real (if minimal) view switch -- only one is ever
-// mounted at a time -- rather than a modal layered over the live table,
-// which used to leave LiveTable running underneath.
-export type View = 'live' | 'metrics' | 'control-ports' | 'flags' | 'detectors'
+// Detectors.svelte); 'entities' is the admin-only persisted host/rule
+// label+tag management tab (see Entities.svelte, issue #107); 'fleet'
+// (issue #98) is the multi-router-fleet health table (see Fleet.svelte)
+// -- every known device, live/stale/never-seen status, last-seen, and
+// event counts in one place, richer than the toolbar's always-on
+// DeviceStatus dot-strip; 'audit' (issue #112) is the admin-only,
+// read-only log of admin-privileged mutations (see AuditLog.svelte). A
+// real (if minimal) view switch -- only one is ever mounted at a time --
+// rather than a modal layered over the live table, which used to leave
+// LiveTable running underneath.
+export type View = 'live' | 'metrics' | 'control-ports' | 'flags' | 'detectors' | 'entities' | 'fleet' | 'audit'
 
 // Central reactive state for the live view. The WebSocket tail pushes
 // every new event unfiltered into `events`; `filteredEvents` re-filters
