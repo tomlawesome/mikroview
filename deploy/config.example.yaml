@@ -200,12 +200,16 @@ store:
 # Local authentication. storePath already defaults to
 # /var/lib/mikroview/users.json (see deploy/docker-compose.yml for the
 # matching volume mount if you want it to survive container recreation,
-# not just restarts) -- only uncomment this block to move that path or
-# change sessionTTL. The first time mikroview loads, it presents a
-# one-time choice: create the admin account, or explicitly skip auth
-# for this deployment -- see SECURITY.md and docs/configuration.md's
-# "Authentication" section for that flow and how to reverse a skip
-# later (CLI-only, by design).
+# not just restarts).
+#
+# Uncomment this block to move that path, change sessionTTL, or set
+# secureCookie. secureCookie is the one people come looking for: leaving
+# it false while tls.enabled is true stops mikroview starting (CFG-0021),
+# because the session cookie would go out without the Secure flag.
+#
+# The first time mikroview loads it asks you to create the admin
+# account. That is the only option -- see SECURITY.md and
+# docs/configuration.md's "Authentication" section.
 # auth:
 #   storePath: /var/lib/mikroview/users.json
 #   secureCookie: true
