@@ -68,3 +68,33 @@ one-time inconvenience for an operator with a stale runbook.
 Removals are communicated in `CHANGELOG.md`, which is what release notes
 are for. That is the correct channel for "this is gone and here is what
 to do instead" -- not a stub in `main.go`.
+
+## Issues: the body is the plan, comments are the trail
+
+When a decision changes what an issue is for, **edit the issue body**.
+Adding a comment saying so is not enough, and is not a substitute.
+
+Comments read in the order they were written. That is fine for someone
+who was present at the time and wrong for everyone else: a fresh reader
+gets the superseded plan first and the correction last, if they reach it
+at all.
+
+This is not hypothetical. On #97 a `tar.gz` design had been dropped in
+favour of a gzipped JSON envelope, with the reasoning in a comment — and
+the tar design was later picked back up and re-analysed as though it
+were still the plan, because the body still said so. The wasted work was
+the small cost; proposing a superseded design back to the owner as a
+live option was the real one.
+
+So:
+
+- **A decision lands in the body**, under "Current plan". The comment
+  holding the reasoning stays where it is and gets linked.
+- **What was dropped goes under "Superseded"**, one line each, so the
+  next reader knows a path was already considered and closed rather than
+  overlooked.
+- **Read the whole comment thread before acting on an issue**, not just
+  the most recent comment. The decision is rarely the last thing said.
+
+`.github/ISSUE_TEMPLATE/work-item.md` puts the current plan at the top
+for new issues. Existing issues get fixed as they are picked up.
