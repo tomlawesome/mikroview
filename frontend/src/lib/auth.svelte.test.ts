@@ -11,15 +11,13 @@ vi.mock('./api', () => ({
   login: vi.fn(),
   logout: vi.fn(),
   register: vi.fn(),
-  skipAuthSetup: vi.fn(),
 }))
 
-import { fetchAuthSession, login, logout, register, skipAuthSetup } from './api'
+import { fetchAuthSession, login, logout, register } from './api'
 import { authState } from './auth.svelte'
 
 function session(overrides: Partial<AuthSession> = {}): AuthSession {
   return {
-    authDisabled: false,
     setupRequired: false,
     authenticated: false,
     ssoAvailable: false,
@@ -56,13 +54,6 @@ describe('AuthState.check', () => {
     expect(authState.ssoAvailable).toBe(true)
   })
 
-  it('prioritizes auth-disabled over setupRequired', async () => {
-    vi.mocked(fetchAuthSession).mockResolvedValue(session({ authDisabled: true, setupRequired: true }))
-
-    await authState.check()
-
-    expect(authState.state).toBe('auth-disabled')
-  })
 
   it('reports setup-required when no accounts exist yet', async () => {
     vi.mocked(fetchAuthSession).mockResolvedValue(session({ setupRequired: true }))
@@ -140,26 +131,6 @@ describe('AuthState.register', () => {
   })
 })
 
-describe('AuthState.skip', () => {
-  it('re-checks the session and returns null on success', async () => {
-    vi.mocked(skipAuthSetup).mockResolvedValue(null)
-    vi.mocked(fetchAuthSession).mockResolvedValue(session({ authDisabled: true }))
-
-    const result = await authState.skip()
-
-    expect(result).toBeNull()
-    expect(authState.state).toBe('auth-disabled')
-  })
-
-  it('returns the error without re-checking on failure', async () => {
-    vi.mocked(skipAuthSetup).mockResolvedValue('skip failed')
-
-    const result = await authState.skip()
-
-    expect(result).toBe('skip failed')
-    expect(fetchAuthSession).not.toHaveBeenCalled()
-  })
-})
 
 describe('AuthState.logout', () => {
   it('clears identity and returns to unauthenticated without re-checking', async () => {

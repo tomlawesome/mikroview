@@ -3,9 +3,9 @@
 MikroView was originally built for one specific deployment shape: a
 single instance, on a trusted home/office LAN, with no authentication,
 over plain HTTP. Two things have since changed that: local accounts
-(on first load, mikroview presents a one-time choice -- create the
-admin account, or explicitly skip auth for this deployment; see
-"Authentication" below), and TLS being on by default -- an app serving
+(on first load, mikroview asks for an admin account and will not serve
+anything until one exists; see "Authentication" below), and TLS being
+on by default -- an app serving
 real login credentials and session cookies has no business doing so over
 cleartext, LAN or not (see "TLS" below). This document makes all of
 that explicit, since none of it is the kind of thing that should be left
@@ -128,27 +128,27 @@ See [docs/security-by-design.md](docs/security-by-design.md).
   whoever gets there first makes the choice, and if they create an
   account, they claim the admin role.
 - **"Whoever gets there first" means exactly one winner, enforced
-  atomically.** The first-run decision is resolved under a single lock:
-  concurrent attempts cannot all succeed, and registering an account
-  cannot interleave with skipping auth. Both preconditions are
-  re-checked with the write lock held rather than before taking it,
-  which matters because password hashing (Argon2id, ~100ms by design)
-  runs first and would otherwise leave a wide window. Without this, N
-  simultaneous registrations would each create an admin, and a
-  registration racing a skip could leave a deployment holding a real
-  admin account while still reporting auth as disabled -- i.e. serving
-  every request unauthenticated while the operator's own registration
-  returned success and gave them no reason to suspect otherwise.
-  Regression tests exercise both races directly
-  (`internal/auth/store_test.go`).
-- **Skipping is a permanent, deliberate decision, not a default you fall
-  into.** Once skipped, mikroview stays fully open indefinitely -- there
-  is no way to re-enable auth from the web UI or any API call. Reversing
-  it requires `mikroview -enable-auth-setup` (container/host access),
-  which only re-arms the choice screen; it does not create an account by
-  itself. This is intentional: it means nobody who can merely reach the
-  running app -- as opposed to the host it runs on -- can unilaterally
-  impose or remove authentication for everyone else.
+  atomically.** First-run registration is resolved under a single lock:
+  concurrent attempts cannot all succeed. The precondition is re-checked
+  with the write lock held rather than before taking it, which matters
+  because password hashing (Argon2id, ~100ms by design) runs first and
+  would otherwise leave a wide window. Without this, N simultaneous
+  registrations would each create an admin. A regression test exercises
+  the race directly (`internal/auth/store_test.go`).
+- **There is no way to run mikroview without authentication.** An
+  earlier version offered "no authentication" as a first-run choice.
+  It was removed. An unauthenticated mikroview publishes which hosts are
+  being scanned, which rules fire, which ports are under pressure, and
+  which accounts exist -- a reconnaissance map of the network it is
+  meant to be watching -- and "it's only for a few minutes" does not
+  survive contact with a deployment nobody got round to changing.
+  Creating a local account is one screen, and it is the floor.
+
+  A deployment that took the old option upgrades into the ordinary
+  "no account yet" state: it fails closed, serves nothing but the
+  create-account screen, and says so at startup rather than leaving the
+  operator to work out why a system that has been open since they
+  installed it is suddenly asking for a login.
 - **A corrupt or unreadable accounts file fails closed, not open.**
   mikroview refuses to start (rather than silently falling back to an
   empty, zero-account state) if the accounts file exists but can't be
@@ -162,8 +162,8 @@ See [docs/security-by-design.md](docs/security-by-design.md).
   delete it (the boot-failure log message names the exact path) and
   restart to consciously re-arm the first-run setup screen -- no
   dedicated CLI mode for this, since an operator who can already run
-  `mikroview -recover-admin-account`/`-enable-auth-setup` can already `mv` or
-  `rm` a file on the same host.
+  `mikroview -recover-admin-account` can already `mv` or `rm` a file on
+  the same host.
 - **Sessions are opaque, server-side, and in-memory** (not JWTs) -- easy
   to revoke, no signing-key management, but lost on a server restart
   (re-login is required; this does not affect account survival, which is

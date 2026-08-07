@@ -27,9 +27,10 @@ import (
 // newTestServer's Auth defaults to the "disabled" state (see
 // auth.Store.Disable) -- zero users, but a deliberate, permanent
 // opt-out, not the tightened "undecided" bootstrap state (see
-// requireAuth). Matches every non-auth-specific test's assumption of a
-// fully open API; auth_test.go exercises the undecided/active states
-// explicitly where that's the point of the test.
+// requireAuth). Callers mount s.mux() rather than s.Routes(), which is
+// what "a fully open API" means now that authentication cannot be turned
+// off -- auth_test.go and the authzMatrix guard mount Routes and cover
+// the gate itself.
 func newTestServer(t *testing.T) (*Server, *store.Store) {
 	t.Helper()
 	st := store.New(1000, time.Hour)
@@ -37,9 +38,6 @@ func newTestServer(t *testing.T) (*Server, *store.Store) {
 	es, _ := entities.Open("")
 	authStore, err := auth.Open(filepath.Join(t.TempDir(), "users.json"))
 	if err != nil {
-		t.Fatal(err)
-	}
-	if err := authStore.Disable(); err != nil {
 		t.Fatal(err)
 	}
 	tokenStore, err := auth.OpenTokenStore(filepath.Join(t.TempDir(), "tokens.json"))
@@ -70,7 +68,7 @@ func newTestServer(t *testing.T) (*Server, *store.Store) {
 
 func TestHandleHealthz(t *testing.T) {
 	s, _ := newTestServer(t)
-	ts := httptest.NewServer(s.Routes())
+	ts := httptest.NewServer(s.mux())
 	defer ts.Close()
 
 	resp, err := http.Get(ts.URL + "/api/healthz")
@@ -96,7 +94,7 @@ func TestHandleHealthz(t *testing.T) {
 
 func TestHandleEventsFiltering(t *testing.T) {
 	s, st := newTestServer(t)
-	ts := httptest.NewServer(s.Routes())
+	ts := httptest.NewServer(s.mux())
 	defer ts.Close()
 
 	now := time.Now()
@@ -120,7 +118,7 @@ func TestHandleEventsFiltering(t *testing.T) {
 
 func TestHandleEventsScopeFiltering(t *testing.T) {
 	s, st := newTestServer(t)
-	ts := httptest.NewServer(s.Routes())
+	ts := httptest.NewServer(s.mux())
 	defer ts.Close()
 
 	now := time.Now()
@@ -159,7 +157,7 @@ func TestHandleEventsScopeFiltering(t *testing.T) {
 
 func TestHandleEventsUntilFiltering(t *testing.T) {
 	s, st := newTestServer(t)
-	ts := httptest.NewServer(s.Routes())
+	ts := httptest.NewServer(s.mux())
 	defer ts.Close()
 
 	now := time.Now()
@@ -186,7 +184,7 @@ func TestHandleEventsUntilFiltering(t *testing.T) {
 // return only events within that window, matching the source IP.
 func TestHandleEventsAroundWindow(t *testing.T) {
 	s, st := newTestServer(t)
-	ts := httptest.NewServer(s.Routes())
+	ts := httptest.NewServer(s.mux())
 	defer ts.Close()
 
 	now := time.Now()
@@ -215,7 +213,7 @@ func TestHandleEventsAroundWindow(t *testing.T) {
 
 func TestHandleDevices(t *testing.T) {
 	s, _ := newTestServer(t)
-	ts := httptest.NewServer(s.Routes())
+	ts := httptest.NewServer(s.mux())
 	defer ts.Close()
 
 	resp, err := http.Get(ts.URL + "/api/devices")
@@ -250,7 +248,7 @@ func TestHandleDevicesReportsStatus(t *testing.T) {
 	s.Devices.Resolve("198.51.100.1", time.Now().Add(-30*time.Minute))
 	s.Devices.Resolve("198.51.100.1", time.Now().Add(-30*time.Minute)) // same source, stays stale either way
 
-	ts := httptest.NewServer(s.Routes())
+	ts := httptest.NewServer(s.mux())
 	defer ts.Close()
 
 	resp, err := http.Get(ts.URL + "/api/devices")
@@ -356,7 +354,7 @@ func TestHandleRules(t *testing.T) {
 	s.Rules.Touch("r13", now)
 	s.Rules.Touch("r99", now.Add(-time.Hour))
 
-	ts := httptest.NewServer(s.Routes())
+	ts := httptest.NewServer(s.mux())
 	defer ts.Close()
 
 	resp, err := http.Get(ts.URL + "/api/rules")
@@ -389,7 +387,7 @@ func TestHandleRules(t *testing.T) {
 func TestHandleCriticalPorts(t *testing.T) {
 	s, _ := newTestServer(t)
 	s.CriticalPorts = []int{22, 3389, 8291}
-	ts := httptest.NewServer(s.Routes())
+	ts := httptest.NewServer(s.mux())
 	defer ts.Close()
 
 	resp, err := http.Get(ts.URL + "/api/critical-ports")
@@ -411,7 +409,7 @@ func TestHandleCriticalPorts(t *testing.T) {
 
 func TestHandleStats(t *testing.T) {
 	s, st := newTestServer(t)
-	ts := httptest.NewServer(s.Routes())
+	ts := httptest.NewServer(s.mux())
 	defer ts.Close()
 
 	st.Insert(store.Event{Time: time.Now(), Action: store.ActionAccept})

@@ -136,7 +136,7 @@ func newOIDCTestServer(t *testing.T, fp *fakeOIDCProvider) *Server {
 
 func TestOIDCLoginNotFoundWhenNotConfigured(t *testing.T) {
 	s, _ := newTestServer(t) // s.OIDC is nil
-	ts := httptest.NewServer(s.Routes())
+	ts := httptest.NewServer(s.mux())
 	defer ts.Close()
 
 	client := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
@@ -152,7 +152,7 @@ func TestOIDCLoginNotFoundWhenNotConfigured(t *testing.T) {
 
 func TestOIDCCallbackNotFoundWhenNotConfigured(t *testing.T) {
 	s, _ := newTestServer(t)
-	ts := httptest.NewServer(s.Routes())
+	ts := httptest.NewServer(s.mux())
 	defer ts.Close()
 
 	resp, err := http.Get(ts.URL + "/api/auth/oidc/callback")

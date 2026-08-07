@@ -121,7 +121,6 @@ export interface Stats {
 
 // Mirrors internal/api/auth.go's sessionResponse.
 export interface AuthSession {
-  authDisabled: boolean
   setupRequired: boolean
   authenticated: boolean
   username?: string
