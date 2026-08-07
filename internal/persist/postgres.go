@@ -9,13 +9,27 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/tomlawesome/mikroview/internal/logging"
 )
 
 //go:embed migrations/*.sql
 var migrationFS embed.FS
+
+// schemaLog is deliberately its own component rather than folded into
+// the caller's logging.
+//
+// A schema change is one of the few things that happens during a
+// container upgrade, without anyone asking for it, that can leave the
+// database in a state the previous image doesn't understand. When
+// something breaks after an upgrade, "what changed in the database, and
+// when" is the first question -- so it gets its own clearly labelled
+// lines rather than being inferred from a version number nobody printed.
+var schemaLog = logging.New("schema")
 
 // Every statement in this package is a compile-time constant with $n
 // bound parameters. Nothing is concatenated, formatted, or built from
@@ -153,12 +167,18 @@ func (p *Pool) Close() {
 
 func (p *Pool) Describe() string { return p.safeDesc }
 
-// Migrate applies any embedded migrations this database hasn't seen.
+// Migrate applies any embedded migrations this database hasn't seen, and
+// says so in the log.
 //
 // Each runs inside its own transaction together with the row recording
 // it, so a migration that fails part-way leaves no trace and no
 // half-applied schema. An advisory lock serializes the whole run, so two
 // instances starting at once don't both try.
+//
+// Every path logs. An up-to-date database says which version it is on;
+// an upgrade names each migration *before* it runs and again with its
+// duration afterwards, so a migration that hangs or crashes the process
+// is identifiable from the last line written rather than by elimination.
 func (p *Pool) Migrate(ctx context.Context) error {
 	conn, err := p.pool.Acquire(ctx)
 	if err != nil {
@@ -212,16 +232,38 @@ func (p *Pool) Migrate(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+
+	startVersion := highestVersion(applied)
+	pending := make([]migration, 0, len(migrations))
 	for _, m := range migrations {
-		if applied[m.version] {
-			continue
+		if !applied[m.version] {
+			pending = append(pending, m)
 		}
+	}
+
+	if len(pending) == 0 {
+		schemaLog.Info(fmt.Sprintf("database schema is up to date at version %d (%s)",
+			startVersion, p.Describe()))
+		return nil
+	}
+
+	// Announced before the first one runs, so an upgrade that stalls is
+	// visibly an upgrade rather than a mystery hang at boot.
+	schemaLog.Info(fmt.Sprintf("database schema is at version %d, %d migration(s) to apply -- updating %s",
+		startVersion, len(pending), p.Describe()))
+
+	for _, m := range pending {
+		schemaLog.Info(fmt.Sprintf("applying %s (version %d)", m.name, m.version))
+		began := time.Now()
+
 		tx, err := conn.Begin(ctx)
 		if err != nil {
 			return fmt.Errorf("persist: starting migration %d: %w", m.version, err)
 		}
 		if _, err := tx.Exec(ctx, m.sql); err != nil {
 			_ = tx.Rollback(ctx)
+			schemaLog.Error(fmt.Sprintf("migration %s (version %d) failed and was rolled back -- "+
+				"the schema is unchanged, still at version %d", m.name, m.version, startVersion))
 			return fmt.Errorf("persist: applying migration %d (%s): %w", m.version, m.name, err)
 		}
 		if _, err := tx.Exec(ctx, sqlRecordVersion, m.version); err != nil {
@@ -231,8 +273,25 @@ func (p *Pool) Migrate(ctx context.Context) error {
 		if err := tx.Commit(ctx); err != nil {
 			return fmt.Errorf("persist: committing migration %d: %w", m.version, err)
 		}
+
+		schemaLog.Info(fmt.Sprintf("applied %s in %s", m.name, time.Since(began).Round(time.Millisecond)))
 	}
+
+	endVersion := pending[len(pending)-1].version
+	schemaLog.Warn(fmt.Sprintf("database schema updated from version %d to version %d -- "+
+		"an older mikroview image may no longer read this database correctly",
+		startVersion, endVersion))
 	return nil
+}
+
+func highestVersion(applied map[int64]bool) int64 {
+	var highest int64
+	for v := range applied {
+		if v > highest {
+			highest = v
+		}
+	}
+	return highest
 }
 
 type migration struct {

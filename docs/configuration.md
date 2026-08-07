@@ -1795,6 +1795,41 @@ Three things worth knowing:
   quietly run your deployment on stale local accounts, possibly with a
   different admin, and nothing would look wrong.
 
+### Watching for schema changes on upgrade
+
+A new MikroView image can bring a database schema change with it. That
+happens automatically on start, and it is always announced:
+
+```
+schema │ database schema is up to date at version 3 (postgres db.internal/mikroview)
+```
+
+When an upgrade does change something, each step is named before it runs
+and again once it finishes, so a migration that stalls or crashes is
+identifiable from the last line written:
+
+```
+schema │ database schema is at version 3, 1 migration(s) to apply -- updating postgres db.internal/mikroview
+schema │ applying 0004_add_widget.sql (version 4)
+schema │ applied 0004_add_widget.sql in 11ms
+schema │ database schema updated from version 3 to version 4 -- an older mikroview image may
+         no longer read this database correctly
+```
+
+That last line is a warning for a reason: **rolling back to an older
+image after a schema change is not guaranteed to work.** Take a database
+backup before upgrading if that matters to you.
+
+If a migration fails, MikroView refuses to start and the database is
+left exactly as it was — each migration runs in its own transaction, so
+there is no half-applied state to clean up:
+
+```
+schema  │ migration 0004_add_widget.sql (version 4) failed and was rolled back --
+          the schema is unchanged, still at version 3
+storage │ postgres: applying schema: ... ERROR: syntax error at or near "..."
+```
+
 ### What isn't stored there
 
 The live event stream stays in memory and is never persisted, on any
