@@ -391,18 +391,33 @@ func (s *Server) handleAuthLogin(w http.ResponseWriter, r *http.Request) {
 	now := time.Now()
 	ipKey := "ip:" + s.clientIP(r)
 	userKey := "user:" + strings.ToLower(req.Username)
-	if !s.LoginLimiter.Allow(ipKey, now) || !s.LoginLimiter.Allow(userKey, now) {
+	// Reserve, not Allow: the attempt is claimed *before* the ~100ms
+	// Argon2id verification rather than recorded after it. With Allow, a
+	// simultaneous burst all passed the check before any failure landed,
+	// so a threshold of 5 admitted as many attempts as the attacker cared
+	// to send in parallel -- brute-force protection that a little
+	// concurrency walked straight past, and 64 MiB of working memory per
+	// admitted attempt.
+	if !s.LoginLimiter.Reserve(ipKey, now) {
+		http.Error(w, "too many attempts, try again later", http.StatusTooManyRequests)
+		return
+	}
+	if !s.LoginLimiter.Reserve(userKey, now) {
+		s.LoginLimiter.Release(ipKey, now)
 		http.Error(w, "too many attempts, try again later", http.StatusTooManyRequests)
 		return
 	}
 
 	user, err := s.Auth.Authenticate(req.Username, req.Password, now)
 	if err != nil {
-		s.LoginLimiter.RecordFailure(ipKey, now)
-		s.LoginLimiter.RecordFailure(userKey, now)
+		// Reservations stay claimed -- that is what counts the failure.
 		http.Error(w, "invalid username or password", http.StatusUnauthorized)
 		return
 	}
+	// Only a success releases, so ordinary repeated logins never
+	// accumulate toward the threshold.
+	s.LoginLimiter.Release(ipKey, now)
+	s.LoginLimiter.Release(userKey, now)
 
 	sess := s.Sessions.Create(user.ID, now)
 	s.setSessionCookie(w, sess.ID)
