@@ -292,7 +292,6 @@ func TestSeparateProcessPasswordResetIsPickedUpByRunningStore(t *testing.T) {
 	}
 }
 
-
 // A JSON array containing null is syntactically valid, so it unmarshals
 // without error into a slice with a nil *User element -- before the
 // fix, the next line (indexing u.ID) paniced, and since nothing in
