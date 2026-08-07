@@ -201,6 +201,25 @@ See [docs/security-by-design.md](docs/security-by-design.md).
   at all against a lower-privileged local account or container exec that
   could run the binary. Recovery keys are the second factor -- see
   "Recovery keys" below.
+- **Linking an account to SSO is a one-way, destructive conversion.**
+  `POST /api/auth/oidc/link` attaches an OIDC identity to the *calling
+  session's own* account and, in the same store operation, replaces its
+  password with a fresh unmatchable hash and clears
+  `HasLocalPassword`. There is deliberately no state where a local
+  password and a linked identity both work — that would keep the weaker
+  local-password surface alive on an account that has supposedly moved
+  past it. The invariant lives inside `auth.Store.LinkOIDCIdentity`, not
+  at the API layer, so a future caller cannot forget it.
+
+  It is **POST, not a GET redirect**, specifically because it is
+  destructive: a GET-initiated flow is triggerable cross-site, and with
+  an identity provider that silently re-authenticates, a victim's
+  password could be destroyed by a link they never requested. POST puts
+  it behind the CSRF header. The target account comes from the session
+  and is sealed into the flow state — never from the request — and the
+  session is re-checked against that sealed value at the callback, so a
+  sign-out-and-in mid-flow can't attach an identity to the wrong
+  account.
 - **Admin is a single, transferable role, and transfer is CLI-only**
   (`mikroview -transfer-admin <username>`, recovery-key gated). No
   authenticated session can grant or move admin. The reasoning is that

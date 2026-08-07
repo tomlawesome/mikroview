@@ -774,14 +774,7 @@ func (s *Store) FindOrCreateOIDCUser(issuer, subject, usernameHint string, now t
 		}
 	}
 
-	// A real, freshly generated, unmatchable Argon2id hash -- not "" --
-	// so a local-login attempt against this username takes the same
-	// time as a genuine wrong-password attempt. VerifyPassword's
-	// malformed-hash guard returns false before ever running Argon2id
-	// for an empty/malformed hash, which would otherwise let an
-	// attacker distinguish "this username is SSO-only" from the
-	// response time alone.
-	unmatchable, err := HashPassword(newID())
+	unmatchable, err := unmatchablePasswordHash()
 	if err != nil {
 		return nil, false, err
 	}
@@ -847,16 +840,56 @@ func (s *Store) uniqueUsernameLocked(hint, issuer, subject string) string {
 	return "oidc-" + newID() // practically unreachable
 }
 
-// LinkOIDCIdentity attaches (issuer, subject) to an existing user by
-// ID -- the low-level primitive a future "connect SSO to my account"
-// endpoint would use (an authenticated local user proving they also
-// control an OIDC identity), not itself exposed via any API in issue
-// #43. Idempotent for the same user; fails with ErrOIDCIdentityTaken if
-// that identity is already linked to a *different* user.
+// unmatchablePasswordHash produces a real, freshly generated Argon2id
+// hash of a random value -- the credential given to an account that has
+// no local password.
+//
+// Not "": a local-login attempt against such an account has to take the
+// same time as a genuine wrong-password attempt. VerifyPassword's
+// malformed-hash guard returns false *before* running Argon2id for an
+// empty or malformed hash, so storing "" would let an attacker tell
+// "this username is SSO-only" from response time alone -- and knowing
+// which accounts can't be attacked locally tells them which ones can.
+//
+// Shared by FindOrCreateOIDCUser (provisioned SSO-only from the start)
+// and LinkOIDCIdentity (converted to SSO-only), so the two can't drift.
+func unmatchablePasswordHash() (string, error) {
+	return HashPassword(newID())
+}
+
+// LinkOIDCIdentity attaches (issuer, subject) to an existing account,
+// converting it to SSO-only in the same operation.
+//
+// **Linking is destructive and one-way.** The account's local password
+// is replaced with a fresh unmatchable hash and HasLocalPassword is set
+// to false, exactly as if the account had been OIDC-provisioned from
+// the start. There is deliberately no state where a local password and
+// a linked identity both work: keeping the old password alive would
+// preserve the weaker local-password attack surface on an account
+// that has supposedly moved past it, which defeats the point of
+// linking.
+//
+// That conversion lives here, inside the store, rather than in the API
+// handler that calls it. A convention at the call site is one forgetful
+// future caller away from a dual-mode account existing; an invariant
+// here cannot be bypassed by adding a second caller.
+//
+// Idempotent for the same user. Fails with ErrOIDCIdentityTaken if that
+// identity is already linked to a *different* account -- which is what
+// stops someone attaching their own IdP identity to a colleague's
+// account, and, on the admin account, stops it being quietly taken over.
 func (s *Store) LinkOIDCIdentity(userID, issuer, subject string, now time.Time) error {
 	if !s.Persisted() {
 		return ErrNotPersisted
 	}
+	// Generated before the lock: HashPassword is ~100ms by design, and
+	// holding the write lock across it would serialize every reader --
+	// the same reasoning createLocked documents.
+	unmatchable, err := unmatchablePasswordHash()
+	if err != nil {
+		return err
+	}
+
 	s.reloadIfStale()
 
 	s.mu.Lock()
@@ -874,6 +907,13 @@ func (s *Store) LinkOIDCIdentity(userID, issuer, subject string, now time.Time) 
 
 	u.OIDCIssuer = issuer
 	u.OIDCSubject = subject
+	u.PasswordHash = unmatchable
+	u.HasLocalPassword = &noLocalPassword
+	// Invalidates every session issued before this point, including in
+	// another process -- the account's credentials just changed
+	// fundamentally, so anything holding a session from before that
+	// should have to come back through the IdP.
+	u.PasswordChangedAt = now
 	s.oidcIndex[key] = userID
 	s.persistLocked()
 	return nil

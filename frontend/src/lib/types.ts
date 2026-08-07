@@ -126,12 +126,13 @@ export interface AuthSession {
   authenticated: boolean
   username?: string
   role?: 'admin' | 'user'
+  // False once the account signs in only through the identity provider.
+  // Gates whether "Connect SSO" is offered -- there is nothing left to
+  // convert otherwise.
+  hasLocalPassword?: boolean
   ssoAvailable: boolean
 }
 
-// Mirrors internal/api/tokens.go's tokenResponse. value is present only
-// in the response to creating a token (see api.ts's createToken) --
-// never on a listed token, and never recoverable afterward.
 // Mirrors internal/api's userSummary. Deliberately not the server's
 // full auth.User -- that carries a password hash, and this type exists
 // so there is nothing on the client side to accidentally render.
@@ -145,6 +146,9 @@ export interface UserSummary {
   sso: boolean
 }
 
+// Mirrors internal/api/tokens.go's tokenResponse. value is present only
+// in the response to creating a token (see api.ts's createToken) --
+// never on a listed token, and never recoverable afterward.
 export interface ApiToken {
   id: string
   name: string

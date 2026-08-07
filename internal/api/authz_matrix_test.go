@@ -113,6 +113,8 @@ var authzMatrix = []routeExpectation{
 	{http.MethodGet, "/api/entities", accessAdmin, "admin-managed labels/tags"},
 	{http.MethodPost, "/api/entities", accessAdmin, "admin-managed labels/tags"},
 	{http.MethodDelete, "/api/entities", accessAdmin, "admin-managed labels/tags"},
+	{http.MethodPost, "/api/auth/oidc/link", accessUser,
+		"converts your OWN account to SSO-only; the target comes from the session, never the request, so a user can only ever affect themselves"},
 	{http.MethodPost, "/api/auth/users", accessAdmin, "account creation"},
 	{http.MethodGet, "/api/auth/users", accessAdmin,
 		"who holds an account, and which one is the admin -- that is the map of whose account is worth attacking"},

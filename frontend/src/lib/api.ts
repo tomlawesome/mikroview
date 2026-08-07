@@ -325,3 +325,15 @@ export async function fetchAuditLog(): Promise<AuditResult> {
   if (!res.ok) throw new ApiError(`fetchAuditLog: ${res.status}`, res.status)
   return res.json()
 }
+
+// startSSOLink begins converting the signed-in account to SSO-only.
+// POST, not a navigation, so the CSRF header applies -- linking
+// destroys the account's local password, and a GET-initiated flow could
+// be triggered cross-site (see internal/api/oidc.go's
+// handleOIDCLinkStart). Returns the provider URL for the caller to
+// navigate to, or an error message.
+export async function startSSOLink(): Promise<{ url: string } | string> {
+  const res = await postJSON('/api/auth/oidc/link')
+  if (!res.ok) return (await res.text()) || `startSSOLink: ${res.status}`
+  return res.json()
+}

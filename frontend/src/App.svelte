@@ -25,6 +25,7 @@
   import AuthSetup from './components/AuthSetup.svelte'
   import AuthLogin from './components/AuthLogin.svelte'
   import UsersOverlay from './components/UsersOverlay.svelte'
+  import SSOLinkOverlay from './components/SSOLinkOverlay.svelte'
   import TokensOverlay from './components/TokensOverlay.svelte'
 
   // Any polling call that fails with a 401 (an expired or reset-
@@ -57,6 +58,7 @@
   // strips and surfaces a failed OIDC callback's ?ssoError= (see
   // internal/api/oidc.go's redirectWithSSOError).
   authState.consumeSSOErrorFromURL()
+  authState.consumeSSOLinkedFromURL()
 
   $effect(() => {
     themeState.apply()
@@ -161,6 +163,7 @@
   <IpLookupPopover />
   <PortLookupPopover />
   <UsersOverlay />
+  <SSOLinkOverlay />
   <TokensOverlay />
 {/if}
 

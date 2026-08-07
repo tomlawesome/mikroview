@@ -304,6 +304,24 @@
             <div class="divider"></div>
           {/if}
 
+          {#if authState.ssoAvailable && authState.hasLocalPassword}
+            <!-- Deliberately outside the admin gate above: this converts
+                 your OWN account, and the server takes the target from
+                 the session, so it is every user's to use. Hidden once
+                 there is no local password left to convert -- the server
+                 refuses that with a 409 either way. -->
+            <button
+              class="option"
+              onclick={() => {
+                authState.showSSOLink = true
+                open = false
+              }}
+              title="Sign in through your identity provider instead of a MikroView password"
+            >
+              Connect SSO
+            </button>
+          {/if}
+
           <button
             class="option"
             onclick={() => {

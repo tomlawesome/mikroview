@@ -38,6 +38,17 @@ class AuthState {
   // AuthSetup.svelte). Independent of state above: SSO can be
   // available in every state except 'authenticated'.
   ssoAvailable = $state(false);
+  // Whether this account still has a local password. False for an
+  // account provisioned through SSO, or one converted by linking --
+  // gates whether "Connect SSO" is offered at all.
+  hasLocalPassword = $state(true);
+  // Drives SSOLinkOverlay -- the confirm-and-warn step before an
+  // irreversible conversion to SSO-only.
+  showSSOLink = $state(false);
+  // Set after a successful link (the callback redirects with
+  // ?ssoLinked=1), so the UI can confirm what just happened rather than
+  // leaving the person to notice their password stopped working.
+  ssoLinked = $state(false);
   // Set by consumeSSOErrorFromURL() below after a failed OIDC callback
   // redirect (see internal/api/oidc.go's redirectWithSSOError) --
   // deliberately a fixed message chosen from the opaque error code,
@@ -57,11 +68,40 @@ class AuthState {
     // access policy (see internal/oidc.Policy). Telling that user to
     // "try again" would be advice that can never work. Which condition
     // they failed still isn't disclosed -- that's in the server log.
-    this.ssoError =
-      params.get("ssoError") === "not_permitted"
-        ? "Your account signed in successfully but is not permitted to use this mikroview. Contact whoever administers it."
-        : "SSO sign-in failed -- try again, or sign in with your password below.";
+    // Each message is chosen here from a fixed set keyed on the opaque
+    // code -- never the code itself, and never anything the provider
+    // supplied. The linking codes are distinguished because "try again"
+    // is useless advice for both of them: one needs a different
+    // identity, the other needs the person to still be signed in as
+    // themselves.
+    const code = params.get("ssoError");
+    if (code === "not_permitted") {
+      this.ssoError =
+        "Your account signed in successfully but is not permitted to use this mikroview. Contact whoever administers it.";
+    } else if (code === "link_identity_taken") {
+      this.ssoError =
+        "That SSO identity is already connected to a different account, so it can't be connected to this one. Nothing was changed.";
+    } else if (code === "link_session_changed") {
+      this.ssoError =
+        "You were signed in as someone else by the time SSO came back, so nothing was connected. Sign in again and retry.";
+    } else if (code === "link_failed") {
+      this.ssoError = "Connecting SSO to your account failed. Nothing was changed.";
+    } else {
+      this.ssoError = "SSO sign-in failed -- try again, or sign in with your password below.";
+    }
     params.delete("ssoError");
+    const qs = params.toString();
+    history.replaceState(null, "", location.pathname + (qs ? `?${qs}` : ""));
+  }
+
+  // Same pattern for the success side: the callback redirects with
+  // ?ssoLinked=1 after a successful conversion, stripped here so a
+  // refresh doesn't re-announce it.
+  consumeSSOLinkedFromURL() {
+    const params = new URLSearchParams(location.search);
+    if (!params.has("ssoLinked")) return;
+    this.ssoLinked = true;
+    params.delete("ssoLinked");
     const qs = params.toString();
     history.replaceState(null, "", location.pathname + (qs ? `?${qs}` : ""));
   }
@@ -91,10 +131,15 @@ class AuthState {
       this.state = "authenticated";
       this.username = session.username ?? "";
       this.role = (session.role as "admin" | "user") ?? "";
+      // Absent on an older server: treated as "has one", which only
+      // ever offers a link that the server would then refuse -- the
+      // safe direction to be wrong in.
+      this.hasLocalPassword = session.hasLocalPassword ?? true;
     } else {
       this.state = "unauthenticated";
       this.username = "";
       this.role = "";
+      this.hasLocalPassword = true;
     }
   }
 

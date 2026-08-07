@@ -275,6 +275,11 @@ type sessionResponse struct {
 	Authenticated bool   `json:"authenticated"`
 	Username      string `json:"username,omitempty"`
 	Role          string `json:"role,omitempty"`
+	// HasLocalPassword is false once the account signs in only through
+	// the identity provider -- either provisioned that way, or converted
+	// by linking. The frontend uses it to decide whether "Connect SSO"
+	// is offered at all: there is nothing left to convert otherwise.
+	HasLocalPassword bool `json:"hasLocalPassword"`
 	// SSOAvailable tells the frontend whether to render the "Sign in
 	// with SSO" link at all -- true whenever s.OIDC is configured,
 	// regardless of the other fields above.
@@ -295,6 +300,7 @@ func (s *Server) handleAuthSession(w http.ResponseWriter, r *http.Request) {
 		resp.Authenticated = true
 		resp.Username = user.Username
 		resp.Role = string(user.Role)
+		resp.HasLocalPassword = user.LocalPassword()
 	}
 	writeJSON(w, http.StatusOK, resp)
 }

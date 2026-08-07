@@ -1171,6 +1171,29 @@ moving that role is a command-line step (see below) — so nobody who gets
 hold of an admin's browser session can take ownership of your
 deployment or lock you out of it.
 
+### Connecting your account to SSO
+
+If your deployment has SSO set up, you can switch your own account over
+to it: **Menu → Connect SSO**. You'll be sent to your identity provider
+to sign in, and when you come back the account uses SSO from then on.
+
+**This deletes your MikroView password, and can't be undone from
+MikroView.** After connecting:
+
+- You sign in through your identity provider only.
+- If you lose access to that provider, MikroView can't recover the
+  account for you — that includes the admin account, so read
+  "Recovering the admin account" above before connecting the admin.
+- You stay signed in on the browser you did it from. Anywhere else
+  you're signed in gets signed out.
+
+There's deliberately no halfway state where both your old password and
+SSO work. Keeping the password alive would leave the weaker way in
+open on an account that was supposed to have moved past it.
+
+If that SSO identity is already connected to someone else's account,
+the attempt is refused and nothing changes.
+
 ### Handing admin to someone else
 
 Only from the command line, and only with a recovery key:

@@ -188,6 +188,7 @@ func (s *Server) routes() []route {
 		{http.MethodDelete, "/api/tokens/{id}", s.handleTokensRevoke},
 
 		{http.MethodGet, "/api/auth/oidc/login", s.handleOIDCLogin},
+		{http.MethodPost, "/api/auth/oidc/link", s.handleOIDCLinkStart},
 		{http.MethodGet, "/api/auth/oidc/callback", s.handleOIDCCallback},
 	}
 }
