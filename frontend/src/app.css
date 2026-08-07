@@ -53,6 +53,7 @@
   --flag-device_silence: var(--unknown);
   --flag-new_device: #db2777;
   --flag-stale_rule: #0891b2;
+  --flag-unexpected_mail_sender: #2563eb;
   --flag-known_bad_ip: #b91c1c;
 
   /* Nudged toward the active colorway's --accent (see the [data-colorway]

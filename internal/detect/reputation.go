@@ -6,6 +6,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/tomlawesome/mikroview/internal/entities"
 	"github.com/tomlawesome/mikroview/internal/flags"
 	"github.com/tomlawesome/mikroview/internal/logging"
 	"github.com/tomlawesome/mikroview/internal/reputation"
@@ -67,6 +68,17 @@ const reputationGroupMinSignificantSamples = 3
 // unless a test explicitly injects a fake.
 func (d *Detector) WithReputation(client reputationLookup) *Detector {
 	d.reputation = client
+	return d
+}
+
+// WithEntities attaches the shared entity store (internal/entities,
+// issue #107) that observeMailSender consults for its
+// trusted-mail-sender allowlist (issue #108). Returns d for chaining,
+// same pattern as WithReputation. nil (the default, if never called) is
+// a valid, explicit "no allowlist configured" state -- observeMailSender
+// treats it as "nothing is tagged trusted," not as an error.
+func (d *Detector) WithEntities(es *entities.Store) *Detector {
+	d.entities = es
 	return d
 }
 

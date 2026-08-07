@@ -602,6 +602,23 @@ flags:
   high enough (or clear flags as they come up) if it's too noisy for
   your ruleset.
 
+- **Unexpected mail sender (issue #108)** — a LAN source originating an
+  outbound connection to an external destination on an SMTP port (25,
+  465, or 587) that isn't tagged `trusted-mail-sender` on its host entity
+  (see [Entities](#entities-ui-managed-hostrule-labels-and-tags-optional)
+  above). Deterministic, like new-device and stale-rule detection — no
+  threshold or window to tune, it fires the first time a given untagged
+  source does this at all. Distinct from **Outbound anomaly** above,
+  which only fires on distinct-*destination-count* spread over a window
+  — a single new SMTP connection to one destination wouldn't trip that.
+  If you self-host your own outbound mail server, tag its host entity
+  `trusted-mail-sender` once (**Menu → Entities**, admin-only, or `POST
+  /api/entities`) and mikroview never flags it for this again. Like
+  stale-rule, this doesn't currently support the live enable/scope
+  toggle described in [Per-detector
+  toggles](#per-detector-toggles-and-scope-restrictions-optional), and
+  doesn't attach a confidence score (see below).
+
 - **Off-hours activity** — a source active during a fixed clock window
   (`offHoursStartHour`-`offHoursEndHour`, wrapping past midnight, 23:00-
   06:00 by default) it has no established history of being active in.
@@ -718,9 +735,12 @@ you're looking at:
   already track a slow-moving EMA baseline internally (same technique
   activity-spike uses), just without a confidence score attached yet —
   a known gap, filed separately.
-- **Not scored (stale rule).** A deterministic "has this rule's
-  `lastSeen` crossed `staleRuleDays`" check with no baseline or
-  overshoot concept behind it at all — there's nothing to score.
+- **Not scored (stale rule, unexpected mail sender).** Both are
+  deterministic "has this happened at all" checks — stale rule's "has
+  this rule's `lastSeen` crossed `staleRuleDays`," unexpected mail
+  sender's "has this untagged source ever done this before" — with no
+  baseline or overshoot concept behind either one, so there's nothing to
+  score.
 
 `confidence` is `null` in `GET /api/flags` for a detector that doesn't
 score at all, never an implied 100%.
