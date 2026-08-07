@@ -760,7 +760,13 @@ func load(configPath string, args []string) (Config, Result, error) {
 	// configurations that are actually fine.
 	result := cfg.Validate()
 	if err := result.Err(); err != nil {
-		return Config{}, Result{}, err
+		// The result goes back even on failure. Returning Result{} here
+		// discarded every Problem the caller needed -- the code, the
+		// key, the remediation, the example snippet -- leaving the
+		// server and -validate-config with nothing but Err()'s single
+		// flattened line. The config is still not usable, so Config{}
+		// stays empty; the diagnosis is the part worth keeping.
+		return Config{}, result, err
 	}
 
 	return cfg, result, nil
