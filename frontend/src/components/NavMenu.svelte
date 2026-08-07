@@ -2,12 +2,17 @@
   import { appState, type View } from '../lib/state.svelte'
   import { flagsState } from '../lib/flags.svelte'
   import { detectorSettingsState } from '../lib/detectorSettings.svelte'
+  import { entitiesState } from '../lib/entities.svelte'
+  import { auditState } from '../lib/audit.svelte'
   import { authState } from '../lib/auth.svelte'
   import { themeState, type ThemePref } from '../lib/theme.svelte'
   import { COLORWAYS, colorwayState } from '../lib/colorway.svelte'
   import { retentionState, MAX_AGE_OPTIONS } from '../lib/retention.svelte'
   import { downloadEventsCsv } from '../lib/export'
   import { viewportState } from '../lib/viewport.svelte'
+  import { versionState } from '../lib/version.svelte'
+
+  versionState.ensureLoaded()
 
   let open = $state(false)
   let rootEl: HTMLDivElement | undefined = $state()
@@ -35,6 +40,26 @@
     } else {
       appState.view = 'detectors'
       detectorSettingsState.refresh()
+    }
+    open = false
+  }
+
+  function toggleEntities() {
+    if (appState.view === 'entities') {
+      appState.view = 'live'
+    } else {
+      appState.view = 'entities'
+      entitiesState.refresh()
+    }
+    open = false
+  }
+
+  function toggleAudit() {
+    if (appState.view === 'audit') {
+      appState.view = 'live'
+    } else {
+      appState.view = 'audit'
+      auditState.refresh()
     }
     open = false
   }
@@ -105,6 +130,15 @@
 
         <button
           class="option"
+          class:active={appState.view === 'fleet'}
+          onclick={() => toggleView('fleet')}
+          title="Every known RouterOS device: live/stale/never-seen status, last-seen, and event counts"
+        >
+          Fleet
+        </button>
+
+        <button
+          class="option"
           class:active={appState.view === 'flags'}
           onclick={() => toggleView('flags')}
           title="Behavioral flags: port scans, activity spikes, critical-port attempts, and volume spikes"
@@ -127,6 +161,36 @@
             title="Toggle behavioral detectors on/off and restrict their scope"
           >
             Detectors
+          </button>
+        {/if}
+
+        {#if authState.state === 'authenticated' && authState.role === 'admin'}
+          <!-- Stricter than Detectors' gate above -- entities management
+               mirrors internal/api's callerIsAdmin (the same check
+               POST /api/auth/users uses), not callerIsAdminOrOpen, so
+               there's deliberately no "also show while auth is
+               disabled" branch here (see internal/api/entities.go's own
+               doc comment for why). -->
+          <button
+            class="option"
+            class:active={appState.view === 'entities'}
+            onclick={toggleEntities}
+            title="Manage persisted host/rule labels and tags"
+          >
+            Entities
+          </button>
+
+          <!-- Same strict gate as Entities above -- GET /api/audit uses
+               callerIsAdmin, not callerIsAdminOrOpen (see
+               internal/api/audit.go), so this stays hidden while auth
+               is disabled too. -->
+          <button
+            class="option"
+            class:active={appState.view === 'audit'}
+            onclick={toggleAudit}
+            title="Review admin-privileged actions: user/token/entity/detector changes"
+          >
+            Audit log
           </button>
         {/if}
       </div>
@@ -223,6 +287,16 @@
             >
               Add user
             </button>
+            <button
+              class="option"
+              onclick={() => {
+                authState.showTokens = true
+                open = false
+              }}
+              title="Create/revoke read-only API bearer tokens for scripted access"
+            >
+              API tokens
+            </button>
             <div class="divider"></div>
           {/if}
 
@@ -236,6 +310,13 @@
           >
             Sign out ({authState.username})
           </button>
+        </div>
+      {/if}
+
+      {#if versionState.version}
+        <div class="divider"></div>
+        <div class="version" title="Build version -- also available via GET /api/healthz or `mikroview -version`">
+          {versionState.version}
         </div>
       {/if}
     </div>
@@ -411,6 +492,14 @@
     border-radius: 5px;
     padding: 5px 8px;
     font-size: 12px;
+  }
+
+  .version {
+    padding: 4px 9px 2px;
+    font-size: 11px;
+    font-family: var(--font-mono);
+    color: var(--fg-dim);
+    text-align: center;
   }
 
   /* 44px minimum touch target (issue #85) -- the trigger and every

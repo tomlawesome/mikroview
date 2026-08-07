@@ -55,6 +55,42 @@ type Identity struct {
 	Email             string
 	EmailVerified     bool
 	PreferredUsername string
+	// Claims is the id_token's full claim set, kept so Policy can check
+	// restrictions against claims this package has no reason to name --
+	// group membership, Google's hosted domain, an Entra tenant id, or
+	// whatever a given provider calls the equivalent. Populated only from
+	// a token that already passed signature and issuer verification.
+	Claims map[string]any
+}
+
+// claimValues reads one claim as a list of strings, tolerating the three
+// shapes providers actually emit: a list, a single string, or a list
+// containing non-strings. Anything it can't interpret yields no values,
+// which Policy treats as a refusal rather than a pass.
+func (i *Identity) claimValues(name string) []string {
+	raw, ok := i.Claims[name]
+	if !ok {
+		return nil
+	}
+	switch v := raw.(type) {
+	case string:
+		if v == "" {
+			return nil
+		}
+		return []string{v}
+	case []string:
+		return v
+	case []any:
+		var out []string
+		for _, item := range v {
+			if s, ok := item.(string); ok && s != "" {
+				out = append(out, s)
+			}
+		}
+		return out
+	default:
+		return nil
+	}
 }
 
 // Client is a configured connection to one OIDC provider -- discovery
@@ -185,7 +221,19 @@ func (c *Client) VerifyIDToken(ctx context.Context, tok *oauth2.Token) (*Identit
 		return nil, fmt.Errorf("oidc: decoding id_token claims: %w", err)
 	}
 
+	// Decoded a second time, untyped, so Policy can inspect claims whose
+	// names are configuration rather than something this package knows.
+	// A token that decodes into the struct above but not into a map would
+	// be malformed, so this failing is a hard error, not a soft one --
+	// otherwise a group restriction would silently see no claims and
+	// refuse every login.
+	allClaims := map[string]any{}
+	if err := idToken.Claims(&allClaims); err != nil {
+		return nil, fmt.Errorf("oidc: decoding id_token claim set: %w", err)
+	}
+
 	return &Identity{
+		Claims:            allClaims,
 		Issuer:            idToken.Issuer,
 		Subject:           idToken.Subject,
 		Nonce:             idToken.Nonce,

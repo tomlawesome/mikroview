@@ -18,6 +18,10 @@ listen:
   syslogTcp: ":1514"
   http: ":8080"
   httpRedirect: ":8081"
+  # Only set these if a reverse proxy fronts mikroview -- see
+  # "Running behind a reverse proxy" below.
+  # trustedProxies: ["private"]
+  # clientIpHeader: "X-Forwarded-For"  # this is the default
 
 store:
   retention: 24h
@@ -38,6 +42,52 @@ devices:
   sending logs from an IP *not* listed here still appear in the UI and
   `/api/devices`, labelled by their raw IP with `configured: false`, so
   you can identify and add them rather than silently losing their events.
+
+### Running behind a reverse proxy
+
+Mikroview rate-limits failed logins per source address as well as per
+username. Behind a reverse proxy, every request arrives carrying the
+*proxy's* address, so without configuration all your users share a
+single rate-limit bucket and one attacker's failed attempts lock
+everybody out.
+
+`listen.trustedProxies` fixes that by telling mikroview which peers it
+may believe a forwarding header from:
+
+```yaml
+listen:
+  trustedProxies: ["private"] # or ["10.0.0.0/8", "172.20.0.5", ...]
+  clientIpHeader: "X-Forwarded-For" # the default; set for proxies that use another
+```
+
+- **`trustedProxies`** — bare IPs, CIDRs, or the shorthand `"private"`
+  (loopback, RFC1918, CGNAT, link-local and IPv6 ULA — which is where a
+  proxy sharing your LAN or a Docker network lands). **Empty by
+  default, and empty means forwarding headers are ignored entirely.**
+  That default is not an oversight: a header is just text the client
+  sent, so honouring one unconditionally would let anyone mint a fresh,
+  empty rate-limit bucket for every request simply by varying it, which
+  doesn't weaken the limiter so much as delete it. List only proxies you
+  actually operate.
+- **`clientIpHeader`** — which header to read, honoured only for peers
+  matching `trustedProxies`. Defaults to `X-Forwarded-For`, which nginx,
+  Caddy, Traefik, HAProxy, Cloudflare and the cloud load balancers all
+  set without being asked. Point it at `X-Real-IP`, `CF-Connecting-IP`
+  or anything else for a proxy that doesn't; single-value headers work
+  unchanged.
+
+The forwarded chain is walked **right to left**, skipping entries that
+are themselves trusted proxies, and the first untrusted address wins.
+That direction matters: entries are appended hop by hop, so the
+rightmost was written by your own proxy while anything further left
+could have been forged by the client before the request ever arrived.
+If the chain is malformed, or every entry is a trusted proxy, mikroview
+falls back to the directly-observed peer address rather than to
+something the client chose.
+
+A misconfigured entry here fails startup rather than being skipped —
+silently ignoring it would leave you believing forwarded addresses were
+being honoured when they weren't.
 
 **File permissions**: the container runs as a fixed non-root user (uid
 65532, distroless `nonroot`) that is unrelated to any user on the Docker
@@ -127,9 +177,106 @@ IP briefly to conserve free-tier quota.
   `MIKROVIEW_ABUSEIPDB_KEY` env var. Adds abuse score, report count,
   country, and ISP to the result.
 
+  GreyNoise was evaluated as a second live source (issue #113 Part A)
+  and removed again: its Community API's free tier is 50 lookups/*week*,
+  shared with the GreyNoise Visualizer web UI, not a usable quota for a
+  live monitoring tool — no code from that integration remains.
+
+Every behavioral flag's confidence floor is also informed by whichever
+sources are configured (see "Behavioral flags" below) — an abuse score
+or a Tor-exit/hosting-provider classification against the flag's source
+IP raises (never lowers) that flag's confidence, the same way local
+blocklist matches do (see "Local IP/CIDR blocklist matching" below).
+
 Unconfigured, the feature still works with Shodan-only results; private/
 loopback/link-local addresses are rejected server-side regardless of
 configuration.
+
+## Local IP/CIDR blocklist matching (optional, on by default)
+
+Independent of the live reputation lookups above (which run on demand,
+against public IPs a human clicks "investigate" on), mikroview also
+maintains a small local cache of known-malicious CIDR ranges from a
+vetted menu of free threat-intel feeds, and checks every ingested
+event's source IP against it — raising a `known_bad_ip` flag directly on
+a match, regardless of any behavioral threshold. This isn't a
+"detector" in the `flags.detectors`/scope sense above (see
+"Per-detector toggles"): there's no threshold to tune and no scope
+narrower than "does this exact IP fall in a range on the list," so it
+has no matching entry there, the same precedent `new_device`/
+`stale_rule` already set.
+
+```yaml
+blocklist:
+  sources:
+    - spamhaus_drop
+    - spamhaus_edrop
+```
+
+- **`sources`** — which feeds from the vetted menu to enable. This is
+  deliberately *not* an arbitrary URL field: both the trust story (an
+  operator ticking "Spamhaus DROP" is trusting mikroview's own vetting
+  of that source, not whatever URL they happen to type) and the
+  performance ceiling (every enabled list is consulted on the hot
+  per-event ingest path — see below) depend on the menu staying small,
+  fixed, and enumerable. An unrecognized entry is logged and skipped at
+  startup, not fatal. Set to an empty list (`sources: []`) to disable
+  local blocklist matching entirely.
+
+  The menu today:
+  - **`spamhaus_drop`** / **`spamhaus_edrop`** (on by default) —
+    [Spamhaus's DROP and EDROP lists](https://www.spamhaus.org/drop/):
+    small (documented at roughly 1-2k CIDR ranges combined), free, no
+    registration, and deliberately conservative — Spamhaus only lists
+    netblocks they're confident are entirely malicious-controlled
+    (hijacked/stolen allocations, bulletproof hosting), which fits
+    "safe to flag on sight, no behavioral corroboration needed" far
+    better than a larger, noisier aggregated list would.
+  - **`emerging_threats_compromised`** (opt-in, not part of the
+    default) — [Emerging Threats' compromised-IPs
+    list](https://rules.emergingthreats.net/blockrules/compromised-ips.txt):
+    also free and requiring no registration, but a much larger,
+    faster-changing list of individual compromised hosts rather than
+    curated netblocks.
+
+**Refresh** is a fixed daily cycle, deliberately not configurable — an
+explicit decision to avoid over-polling Spamhaus/Emerging Threats' free
+infrastructure, not an oversight. The first fetch happens in the
+background at startup (never blocking it); if a refresh fails for a
+given feed (network issue, upstream outage), that feed keeps serving
+whatever it last successfully fetched rather than going blind, and logs
+a warning — see the `blocklist` component in server logs.
+
+**Performance.** Matching is a per-feed binary search over that feed's
+own sorted, non-overlapping address ranges — O(log n) per feed, never a
+linear scan, regardless of list size, since this runs on every single
+ingested event. Combined entries across every enabled feed are capped at
+100,000 (`internal/blocklist`'s `maxTotalEntries`) — measured, not
+estimated: today's real combined feed size (Spamhaus DROP+EDROP +
+Emerging Threats) is ~2.2k entries, and benchmarking this package's
+actual lookup and daily-rebuild paths shows neither is remotely close to
+a real ceiling until well past 100,000 (rebuild takes ~33ms and ~7.5MB
+at that size; per-event lookup cost barely changes even at 5 million
+entries). 100,000 is real headroom over current usage, not a number
+chosen to avoid a performance cliff that's actually much further out. A
+feed that would push the combined total over this cap has its excess
+entries truncated (a partially-loaded list still catches most of what
+it would have) rather than being rejected outright; a truncation is
+logged. Multiple feeds may be enabled simultaneously — each is matched
+independently, so enabling more than one only ever adds coverage, never
+conflicts.
+
+**Firing behavior.** A match raises `known_bad_ip` directly against the
+source IP, with a fixed high confidence (Spamhaus's own curation policy
+— only netblocks they're confident are entirely malicious-controlled —
+makes this about as strong a signal as this app has). It also raises the
+confidence floor (see `RaiseConfidenceFloor`) of any other currently
+active, source-IP-keyed flag for that same address (`port_scan`,
+`activity_spike`, `critical_port`, `outbound_anomaly`, `internal_recon`,
+`low_slow_scan`, `off_hours_activity`) — the same reinforcement role the
+live reputation lookups above already play for those flags, just
+resolved synchronously (a local lookup needs no network round-trip)
+instead of asynchronously.
 
 ## Port lookup
 
@@ -180,6 +327,103 @@ fix for rule names specifically, if you're able to -- `ruleNames` is for
 when you can't or don't want to edit RouterOS config directly, or want a
 different name in mikroview than the RouterOS comment.
 
+## Entities: UI-managed host/rule/port labels and tags (optional)
+
+`ruleNames`/`hostNames` above are YAML-only: a label survives a restart,
+but changing one means editing `config.yaml` and restarting the
+container. **Entities** are the same idea (a label attached to a rule
+label, host IP, or -- issue #109 -- a port number), plus open-ended
+tags, managed live from the UI (**Menu → Entities**, admin-only) with no
+restart needed -- the shared foundation two features build on (a
+mail-sender allowlist, and this IP/port/rule aliasing UI), so the record
+shape is deliberately generic (`type`, `key`, `label`, `tags`) rather
+than shaped around either one specifically. `type` is a free-form
+string, not a closed set -- `host`, `rule`, and `port` are just the
+values mikroview's own display sites (the live table, CSV export,
+`internal/naming.Resolver`) know to look up, not a validation allowlist.
+
+```yaml
+entities:
+  # Where entity records are persisted, as a small JSON file. Same
+  # optional-persistence contract as flags.storePath: left unset,
+  # entities still work, they just don't survive a restart. If you set
+  # this in the container, mount a volume for its parent directory --
+  # see deploy/docker-compose.yml.
+  storePath: "/var/lib/mikroview/entities.json"
+```
+
+**One-time migration**: the very first time mikroview boots against a
+given entities store, if `ruleNames`/`hostNames` are non-empty it
+imports each entry as an entity (`type: rule`/`type: host`, `key` = the
+map key, `label` = the map value) so an existing deployment's aliases
+become UI-editable instead of disappearing on upgrade. This is tracked
+with a marker persisted alongside the entities themselves, not by
+"is the store currently empty" -- so it really is one-time: deleting
+every entity later (one at a time, from the UI) does not cause them to
+reappear on the next restart. `ruleNames`/`hostNames` stay supported
+afterward as a YAML-only fallback for a rule/host with no matching
+entity. Ports have no `config.yaml`-level equivalent -- entities are the
+only way a port ever gets a friendly name.
+
+Entities are managed via `GET`/`POST`/`DELETE /api/entities`
+(admin-gated the same way `POST /api/auth/users` is -- see
+[API reference](#api-reference)), or the **Entities** panel in the menu.
+That panel is also where you'd go to name something *without* already
+knowing its raw IP/rule label/port number: a **Discovered** section
+lists hosts, rules, and ports seen in live traffic that don't have a
+label yet (mirroring the auto-discovered-device pattern the **Fleet**
+view already uses for RouterOS sources), each with a one-click "Name it"
+action. Discovered rules come from mikroview's own unbounded-time
+per-rule usage record (`GET /api/rules`); discovered hosts/ports are
+derived from the events currently loaded in your browser tab, so that
+list is only as complete as what's been seen there so far -- the entity
+itself, once named, is fully persisted regardless.
+
+## Audit log: admin action accountability (optional)
+
+Every admin-privileged mutation -- creating a user, changing a detector's
+enabled/scope settings, upserting or deleting an entity, creating or
+revoking an API token, or removing a permanent flag exclusion -- is
+recorded to a persisted, admin-only audit log (issue #112), so there's a
+record of *who* made each of those changes and *when*. This is
+deliberately narrower than a full request/access log: only mutations are
+recorded, never reads (viewing a page, listing users) -- matching what
+"audit log" conventionally means and what's actually useful for
+accountability.
+
+```yaml
+audit:
+  # Where audit log entries are persisted, as a small JSON file. Same
+  # optional-persistence contract as entities.storePath: left unset, the
+  # log still works, entries just don't survive a restart. If you set
+  # this in the container, mount a volume for its parent directory --
+  # see deploy/docker-compose.yml.
+  storePath: "/var/lib/mikroview/audit.json"
+```
+
+Two deliberate scoping decisions, both from issue #112's own explicit
+open question about which flag actions belong here:
+
+- **A plain flag clear** (`POST /api/flags/{id}/clear`) is **not**
+  logged -- that endpoint isn't admin-gated at all (any signed-in user
+  can clear a flag), and this is an audit log of *admin* actions.
+- **A permanent flag exclusion** (`POST /api/flags/{id}/clear-permanent`)
+  **is** logged, and is admin-only. It was previously open to any
+  signed-in user and unlogged; that was tightened because an exclusion
+  permanently suppresses detection for that (detector, target) until
+  someone notices and undoes it, which is not something a non-admin --
+  or a single compromised low-privilege credential -- should be able to
+  do silently. Removing an exclusion
+  (`DELETE /api/flags/exclusions/{id}`) is admin-gated and logged too.
+
+Reviewed from **Menu → Audit log** (admin-only, and -- unlike Detectors'
+gate -- **not** shown while auth is disabled, matching Entities' own
+stricter gate: there's no "admin" concept once auth itself has been
+opted out of). Backed by `GET /api/audit`, a windowed query over the
+persisted log (see [API reference](#api-reference)) -- the same
+`since`/`until`/`limit` convention `GET /api/events` already uses, minus
+that endpoint's event-specific filters.
+
 ## Behavioral flags (optional, on by default)
 
 mikroview watches the ingested event stream for a small set of patterns
@@ -196,8 +440,8 @@ threshold below has a sensible default and is only worth changing for an
 unusually quiet or unusually busy network.
 
 The port-scan, activity-spike, critical-port, distributed-brute-force,
-internal-recon, outbound-anomaly, and low-and-slow-port-scan detectors
-only count events whose
+internal-recon, outbound-anomaly, low-and-slow-port-scan, and
+off-hours-activity detectors only count events whose
 RouterOS-reported connection state is `new` (or absent, for setups that
 don't log connection state at all) -- if your ruleset logs both
 directions of an established connection on the same rule, a busy host's
@@ -238,6 +482,16 @@ flags:
   lowSlowScanMinObservation: 45m
   lowSlowScanDropRatio: 0.8
   lowSlowScanBaselineMultiplier: 3
+  offHoursStartHour: 23
+  offHoursEndHour: 6
+  offHoursMinSampleDays: 14
+  offHoursMinCount: 5
+  deviceStaleAfter: 15m
+  ruleUsageStorePath: "/var/lib/mikroview/rule-usage.json"
+  staleRuleDays: 30
+  staleRuleCheckInterval: 1h
+  vpnInterfaces: []
+  vpnConfidenceMultiplier: 1.5
 ```
 
 - **`storePath`** — where raised/cleared flags are persisted, as a small
@@ -355,6 +609,142 @@ flags:
   weakest-clearing signal bounds the overall score, consistent with
   requiring several independent signals rather than trusting the
   strongest one alone.
+- **Device silence (issue #98)** — a *configured* device (`devices` in
+  this file, `Configured: true` in `GET /api/devices`) whose `lastSeen`
+  hasn't advanced in `deviceStaleAfter`. Unlike every other detector
+  above, this isn't a per-event pattern — it's the *absence* of events —
+  so it's checked periodically (same ticker-based shape as global volume
+  spike) rather than as events arrive. Only devices that have sent at
+  least one event are eligible: a freshly configured device that hasn't
+  said anything yet is "never seen," a distinct state `GET /api/devices`
+  also reports, not "gone silent." Auto-discovered sources (seen on the
+  wire but not listed in `devices`) are never eligible either — there's
+  no expected cadence to fall silent from. Set `deviceStaleAfter: 0` to
+  disable this detector entirely; the default (15m) sits well above
+  RouterOS's normal bursty syslog gaps so an ordinarily quiet stretch
+  never false-positives. The flag's target is the device's configured
+  `id`, not an IP.
+
+- **Stale rule (issue #102)** — a firewall rule that hasn't fired in
+  `staleRuleDays`+ days, either dead weight or, worse, an unnecessary
+  hole — flagging it for review closes attack surface at essentially no
+  cost. Unlike every other detector above, this one doesn't watch the
+  live event stream: it reads a separate, long-lived per-rule
+  `firstSeen`/`lastSeen`/`count` record (persisted to
+  `ruleUsageStorePath`, same optional-persistence contract as
+  `flags.storePath`) that's updated on every ingested event alongside
+  `internal/store`'s own in-memory rule counters, then periodically
+  swept every `staleRuleCheckInterval` for anything past the threshold.
+  That separate record exists specifically because `internal/store`'s
+  counters are windowed to `store.retention` (24h by default) — nowhere
+  near long enough to notice "hasn't fired in a month." **Accepted
+  trade-off:** mikroview only sees a rule when it fires in syslog, with
+  no visibility into the router's actual configured rule set (it's
+  passive-syslog-only) — so a rule you've already removed will keep
+  surfacing as stale until you manually clear the flag. Harmless: the
+  implied suggestion ("consider removing this") is a no-op if it's
+  already gone, and the alternative failure mode — a genuinely
+  forgotten, still-open rule going unflagged — is worse. Unlike every
+  other detector, stale-rule doesn't currently support the live
+  enable/scope toggle described in [Per-detector
+  toggles](#per-detector-toggles-and-scope-restrictions-optional), and
+  doesn't attach a confidence score (see below) — set `staleRuleDays`
+  high enough (or clear flags as they come up) if it's too noisy for
+  your ruleset.
+
+- **Unexpected mail sender (issue #108)** — a LAN source originating an
+  outbound connection to an external destination on an SMTP port (25,
+  465, or 587) that isn't tagged `trusted-mail-sender` on its host entity
+  (see [Entities](#entities-ui-managed-hostrule-labels-and-tags-optional)
+  above). Deterministic, like new-device and stale-rule detection — no
+  threshold or window to tune, it fires the first time a given untagged
+  source does this at all. Distinct from **Outbound anomaly** above,
+  which only fires on distinct-*destination-count* spread over a window
+  — a single new SMTP connection to one destination wouldn't trip that.
+  If you self-host your own outbound mail server, tag its host entity
+  `trusted-mail-sender` once (**Menu → Entities**, admin-only, or `POST
+  /api/entities`) and mikroview never flags it for this again. Like
+  stale-rule, this doesn't currently support the live enable/scope
+  toggle described in [Per-detector
+  toggles](#per-detector-toggles-and-scope-restrictions-optional), and
+  doesn't attach a confidence score (see below).
+
+- **Off-hours activity** — a source active during a fixed clock window
+  (`offHoursStartHour`-`offHoursEndHour`, wrapping past midnight, 23:00-
+  06:00 by default) it has no established history of being active in.
+  Extends the same per-host EMA baseline technique activity-spike uses,
+  but tracked 24 times over — one independent baseline per hour of the
+  day — rather than once per host, so "usual for this host at 3am" and
+  "usual for this host at 3pm" are judged separately. Deliberately
+  *not* "any activity inside the configured window": that alone fires
+  on trivial noise (a phone syncing, a scheduled job, a clock-skewed
+  IoT device) with nothing to judge it against. Two independent floors
+  gate every flag, both required:
+  - **`offHoursMinSampleDays`** — that specific hour must have been
+    observed on at least this many distinct *prior days* before a flag
+    can fire for it at all, no matter how extreme the count. A single
+    busy night isn't a baseline; this is what makes firing on one
+    impossible rather than just unlikely.
+  - **`offHoursMinCount`** — an absolute floor on top of the z-score
+    check. A host never before seen at some hour has a near-zero
+    baseline for it, so even a handful of events there would look like
+    a huge deviation by z-score alone — this is the same role
+    `activitySpikeThreshold` plays alongside `hostActivityMultiplier`
+    for activity-spike.
+
+  Every hour's baseline is tracked continuously regardless of the
+  configured window — only whether a flag can *fire* is restricted to
+  hours inside it, so widening or narrowing the window later doesn't
+  discard history already being collected. "Off-hours" here is a fixed,
+  operator-set window rather than a per-host-learned quiet period — an
+  explicit design choice (the issue that scoped this feature left it
+  open): a learned window has its own bootstrapping problem (deciding
+  which hours are "quiet" needs the same history this detector is
+  already gated on) and is harder for a human reviewing a flag to
+  sanity-check than a plain clock range. Revisit if real-world use shows
+  a fixed window doesn't fit typical deployments well.
+
+**VPN interface confidence boost (issue #105, optional).** `vpnInterfaces`
+identifies which of RouterOS's `InInterface` values correspond to a
+configured VPN tunnel (e.g. a WireGuard interface such as `wireguard1`)
+-- each entry is matched with glob syntax (`*`, `?`, `[...]`), so an
+exact name (`wireguard1`) or a prefix pattern (`wireguard*`, for a
+router with several tunnel interfaces) both work through the same
+mechanism. RouterOS firewall log lines already see a WireGuard tunnel's
+*inner*, already-decrypted traffic -- the peer's tunnel IP as `SrcIP`,
+arriving on whatever interface name RouterOS assigns the WireGuard
+interface -- which is exactly what `InInterface` captures, no RouterOS
+API access required.
+
+When **activity-spike**, **outbound-anomaly**, or **internal-recon**
+raises a flag whose triggering event arrived via a matching interface,
+its confidence score is boosted by `vpnConfidenceMultiplier` (a flat
+multiplier on the already-computed score, clamped to 100 -- never a
+change to whether or when the detector fires, only how urgently an
+already-firing flag reads). The reasoning: a remote peer that already
+had to pass WireGuard's own key-based authentication to reach the
+network at all suddenly beaconing out, scanning the LAN, or generating
+unusual volume is a stronger signal than an ordinary LAN device doing
+the same. Left empty (the default), `vpnInterfaces` matches nothing, so
+every existing deployment's confidence scoring is completely unchanged
+until this is explicitly configured -- a safe, backward-compatible
+default. A `vpnConfidenceMultiplier` of `0` or less is treated as `1`
+(no boost) rather than zeroing or inverting a score, and the boost is
+never allowed to end up *lower* than the unboosted value either -- a
+misconfigured multiplier should never make a VPN-sourced anomaly read
+as less alarming than an identical LAN-sourced one.
+
+**Deliberately out of scope**, for now: tracking the WireGuard peer's
+*outer* UDP endpoint (their real internet source IP) or handshake state.
+Firewall logs never see that -- it only exists in
+`/interface/wireguard/peers` on the router itself, which mikroview has
+no access to today (passive syslog only, no RouterOS API client). That
+data is what would let mikroview tell "this peer roamed to a new IP"
+(normal for a mobile client) apart from "this peer's private key was
+stolen and is now being used from somewhere else" (a real compromise
+signal) -- arguably the more interesting half of "VPN peer anomaly,"
+but it's blocked on [issue #21](https://github.com/tomlawesome/mikroview/issues/21)
+deciding whether/how mikroview talks to the RouterOS API at all.
 
 **Confidence score.** Every detector except global-volume-spike and
 rule-hit-rate-spike attaches a `confidence` percentage (0-100) to each
@@ -362,18 +752,23 @@ flag it raises, shown in the UI as e.g. "73% confidence" — but not all
 of them mean the same thing by it, and it's worth knowing which kind
 you're looking at:
 
-- **Statistical (activity-spike only).** The only detector making a
+- **Statistical (activity-spike, off-hours activity).** These two make a
   real statistical judgment call rather than a deterministic threshold
-  crossing: it combines (1) how much history backs the host's baseline
-  and (2) how far the current reading deviates from it (a z-score). The
-  flag's own detail text spells out the actual baseline value, observed
+  crossing: each combines (1) how much history backs the relevant
+  baseline and (2) how far the current reading deviates from it (a
+  z-score). Off-hours activity applies this per hour-of-day rather than
+  once per host — "how much history" is that specific hour's distinct
+  prior days (`offHoursMinSampleDays`), not overall event count. Both
+  flags' own detail text spells out the actual baseline value, observed
   value, and sample count behind the score.
 - **Overshoot-based (port-scan, critical-port, distributed
   brute-force, outbound anomaly, internal reconnaissance, repeated
-  drops).** These six are plain threshold crossings with no history or
-  baseline behind them, so their confidence instead measures *how far
-  past the threshold* the observed count is: just crossed reads low,
-  three times the threshold or more reads 100%. This is a materially
+  drops, device silence).** These seven are plain threshold crossings
+  with no history or baseline behind them, so their confidence instead
+  measures *how far past the threshold* the observed count is: just
+  crossed reads low, three times the threshold or more reads 100%. For
+  device silence specifically, the "count" is how long the device has
+  gone quiet relative to `deviceStaleAfter`. This is a materially
   weaker claim than activity-spike's statistical score — it says
   nothing about whether the pattern is unusual for that specific
   source, only how large it is relative to the configured line. Treat a
@@ -390,6 +785,12 @@ you're looking at:
   already track a slow-moving EMA baseline internally (same technique
   activity-spike uses), just without a confidence score attached yet —
   a known gap, filed separately.
+- **Not scored (stale rule, unexpected mail sender).** Both are
+  deterministic "has this happened at all" checks — stale rule's "has
+  this rule's `lastSeen` crossed `staleRuleDays`," unexpected mail
+  sender's "has this untagged source ever done this before" — with no
+  baseline or overshoot concept behind either one, so there's nothing to
+  score.
 
 `confidence` is `null` in `GET /api/flags` for a detector that doesn't
 score at all, never an implied 100%.
@@ -397,7 +798,8 @@ score at all, never an implied 100%.
 **Reputation-informed floor (optional, requires an AbuseIPDB key).**
 When `reputation.abuseIPDBKey` is configured (see
 [IP reputation lookup](#ip-reputation-lookup-optional)), `critical_port`,
-`port_scan`, `activity_spike`, `repeated_drops`, and `low_slow_scan`
+`port_scan`, `activity_spike`, `repeated_drops`, `low_slow_scan`, and
+`off_hours_activity`
 additionally get an
 async, best-effort AbuseIPDB lookup against the flag's source IP the
 first time it's raised (not on every re-fire). If the IP has a known
@@ -427,7 +829,7 @@ point is what the target looked like when it fired, not what it looks
 like now. It's stored regardless of whether AbuseIPDB is configured
 (the keyless Shodan source alone is still worth capturing) -- only the
 confidence floor specifically needs an AbuseIPDB score. Only ever set
-for the five single-IP detectors above; the sampled-group detectors
+for the six single-IP detectors above; the sampled-group detectors
 have no single coherent snapshot to attach. Expandable in the UI
 alongside the target's country (from the same GeoIP lookup already
 applied to the underlying event) and, for `port_scan`,
@@ -455,6 +857,60 @@ clears it via the UI or `POST /api/flags/{id}/clear`. Clearing an
 already-active-again source re-raises it as a fresh entry rather than
 silently resurrecting the old one.
 
+Alongside the plain Clear action, "Clear, never flag again" (`POST
+/api/flags/{id}/clear-permanent`, **admin-only** once an account exists,
+and recorded in the audit log) clears the flag *and* permanently
+excludes that exact (detector, target) pair -- from then on it never
+raises again, silently, until the exclusion is removed. This is
+deliberately permanent rather than a timed snooze: a time-limited mute
+either re-fires once it expires (nothing was solved) or it doesn't
+(permanent exclusion was what was wanted all along), so there's no
+in-between "snooze" option. Because "permanent" shouldn't mean
+"unrecoverable by mistake," every current exclusion is listed (and can
+be removed, re-enabling that pair) from the Flags tab's "Manage
+exclusions" panel -- admin-only once an account exists, open to anyone
+while mikroview is still in its fully-open zero-account state, same as
+every other admin-gated endpoint (see [Authentication](#authentication)).
+
+## New-device detection (optional, on by default)
+
+Raises a `new_device` flag the first time mikroview ever sees a given
+LAN client MAC address (`store.Event.SrcMAC`). Unlike every detector
+above, this isn't a threshold-crossing or a statistical judgment -- it's
+a deterministic "have I ever seen this MAC before," so there's nothing
+to tune: it fires exactly once per genuinely-new MAC, the moment it's
+first observed, and never again for that same MAC.
+
+```yaml
+deviceMac:
+  storePath: "/var/lib/mikroview/mac-registry.json"
+```
+
+- **`storePath`** — where the registry of every MAC address mikroview
+  has ever seen (just a MAC plus first/last-seen timestamps) is
+  persisted, as a small JSON file. This needs its own store, separate
+  from `flags.storePath` above: it must survive a restart for "new" to
+  mean anything at all -- the 24h event-retention window alone is
+  nowhere near long enough. Left empty (not the default), detection
+  still runs, it just starts with an empty registry -- and so treats
+  every MAC as new again -- on every restart. Same optional-persistence
+  contract as `flags.storePath`; if you set this in the container, mount
+  a volume for its parent directory -- see `deploy/docker-compose.yml`.
+
+**Coverage.** `SrcMAC` is only present on RouterOS log lines from
+LAN-side/bridge-aware firewall rules -- by the time traffic reaches a
+WAN-side rule, its Layer 2 source-MAC information is already gone
+(that's how routing works, not a mikroview limitation). If your
+firewall ruleset only logs WAN-side traffic, this detector simply never
+fires; that's a data-availability gap, not a bug.
+
+**No confidence score.** "Is this MAC new" is a deterministic yes/no,
+but a brand-new device on your network is very often entirely benign (a
+phone joining the Wi-Fi) -- there's no meaningful numeric judgment call
+to attach on top of the deterministic fact. `confidence` is always
+`null` for `new_device` flags in `GET /api/flags`, same as the two "not
+yet scored" detectors above.
+
 ## Notifications (optional)
 
 Flags are only visible if someone has the mikroview UI open. `notify`
@@ -463,9 +919,9 @@ flag *episode* is raised (a first-ever raise, or a revival after a human
 clears an already-cleared flag -- never a plain re-fire of an
 already-active one, so a noisy detector doesn't re-alert on every
 event). Each channel below is independently enabled by its own
-identifying field being set (`smtp.host`, `pushover.token`) -- configure
-any combination of zero, one, or both; every enabled channel shares one
-`batchWindow`.
+identifying field being set (`smtp.host`, `pushover.token`,
+`webhook.url`) -- configure any combination of zero, one, two, or all
+three; every enabled channel shares one `batchWindow`.
 
 ```yaml
 notify:
@@ -494,20 +950,43 @@ notify:
     # no per-browser subscription management, just this pair.
     token: "your-application-token"
     user: "your-user-or-group-key"
+  webhook:
+    # Any HTTPS endpoint that accepts a JSON POST -- ntfy, Discord
+    # (via a webhook URL's own payload adapter or a receiving proxy),
+    # Slack (same), Home Assistant's webhook trigger, n8n, or a
+    # bespoke receiver of your own. No bespoke per-service integration
+    # here on purpose -- this is the "everything else" channel.
+    url: "https://ntfy.example.com/mikroview-alerts"
+    # headers: arbitrary extra headers sent with every POST -- most
+    # commonly auth, since ntfy/Home Assistant/n8n-style receivers each
+    # expect it in a different header rather than agreeing on one
+    # convention. Optional; omit entirely for a receiver that needs no
+    # auth (e.g. an unauthenticated local ntfy topic).
+    headers:
+      Authorization: "Bearer changeme"
+      # X-Custom-Header: "some-other-receiver-specific-value"
 ```
 
-Left with an empty `smtp.host`/`pushover.token` (the default), that
-channel is simply never dispatched to -- no relay or app is assumed.
-`smtp.password`/`pushover.token`/`pushover.user` can also be set via env
-vars instead of the config file (see the table below), same
-secret-via-env precedent as `MIKROVIEW_ABUSEIPDB_KEY`.
+Left with an empty `smtp.host`/`pushover.token`/`webhook.url` (the
+default), that channel is simply never dispatched to -- no relay, app,
+or endpoint is assumed. `smtp.password`/`pushover.token`/`pushover.user`/
+`webhook.url` can also be set via env vars instead of the config file
+(see the table below), same secret-via-env precedent as
+`MIKROVIEW_ABUSEIPDB_KEY`; `webhook.headers` is YAML-only (a map doesn't
+map cleanly onto one env var, same reasoning `flags.detectors` and the
+device/naming maps already give).
 
 One notification covers every flag raised within a `batchWindow`: title/
 subject `mikroview: N new flag(s)`, one line per flag (type, target,
 detail, confidence, first-seen) -- Pushover's message additionally caps
 at 10 lines with a "...and N more" trailer, since its message field is
-much smaller than an email body. Built around a shared
-`internal/notify.Notifier`/`Dispatcher` so both channels reuse the same
+much smaller than an email body. The webhook channel instead POSTs a
+JSON body shaped `{"title": "...", "count": N, "flags": [...]}`, where
+each entry in `flags` is the same flag record the UI itself renders
+(type, target, detail, count, first/last seen, confidence) -- a generic
+consumer gets the full structured batch to template off of, rather than
+a pre-rendered string. Built around a shared
+`internal/notify.Notifier`/`Dispatcher` so every channel reuses the same
 batching rather than each implementing their own; true device push (web
 push API, VAPID keys, service worker) is a separate, not-yet-built
 target scoped alongside PWA feasibility, since a lot of that plumbing
@@ -571,10 +1050,13 @@ consults the axes relevant to how it's keyed:
 | `repeated_drops` | source IP | destination port | -- |
 | `global_spike` | -- (network-wide, not keyed by anything per-source) | -- | -- |
 | `low_slow_scan` | which source IPs are tracked at all | which distinct ports *count* toward its own breadth total | -- |
+| `off_hours_activity` | which source IPs are tracked at all | -- | -- |
+| `device_silence` | -- (a per-configured-device sweep, not keyed by host/port/rule) | -- | -- |
 
-`global_spike` only ever consults `enabled` -- it's a single network-wide
-aggregate, not tied to any particular host, port, or rule, so scoping it
-wouldn't mean anything.
+`global_spike` and `device_silence` only ever consult `enabled` -- the
+former is a single network-wide aggregate, the latter a periodic sweep
+over the whole configured device list, neither tied to any particular
+host, port, or rule, so scoping either wouldn't mean anything.
 
 ## Authentication
 
@@ -589,6 +1071,7 @@ auth:
   storePath: "/var/lib/mikroview/users.json"
   secureCookie: true
   sessionTTL: 24h
+  tokensStorePath: "/var/lib/mikroview/tokens.json"
 ```
 
 - **`storePath`** — where accounts (and the skip/disabled decision) are
@@ -606,6 +1089,11 @@ auth:
   on each authenticated request, so this is "how long you can go without
   activity before needing to log in again," not a fixed session
   lifetime.
+- **`tokensStorePath`** — where [API tokens](#api-tokens-read-only) are
+  persisted, as a small JSON file (names + SHA-256 hashes, never the raw
+  bearer values). Defaults to `/var/lib/mikroview/tokens.json`. Unlike
+  `storePath`, this really is optional: a deployment that never creates
+  a token doesn't need it.
 
 **If you create an account**, every request except `GET /api/healthz`
 and the login/session endpoints requires a valid session, permanently,
@@ -648,6 +1136,63 @@ account, including on an already-running server -- you don't need to
 restart mikroview after running `-reset-password` for the new password
 to take effect.
 
+**A corrupt or unreadable accounts file refuses to boot, rather than
+silently reopening.** If `auth.storePath` points at a file that exists
+but can't be loaded, mikroview exits immediately with an error rather
+than falling back to an empty, zero-account state -- the same state a
+genuine fresh install starts from, which would otherwise mean a lost or
+corrupted accounts file silently presents the first-run setup screen to
+whoever loads mikroview next, indistinguishable from a real fresh
+install in both behavior and the logs. A missing file (no persistence
+configured, or a genuine first-ever boot) is unaffected and boots
+normally either way -- only a file that exists but won't parse triggers
+this. The startup error names the exact path; restore it from a backup
+if you have one, or move/delete it and restart to consciously re-arm
+the first-run setup screen -- container/host access is the trust
+anchor here, the same as the recovery commands above, so there's no
+separate CLI mode for what `mv`/`rm` already does.
+
+## API tokens (read-only)
+
+For a separate service to pull mikroview's data over the network with
+no browser involved -- e.g. a companion OpenCanary-dashboard project
+cross-referencing incidents against mikroview's event/flag history -- a
+session cookie doesn't work: there's no login flow to hold one. API
+tokens are a long-lived bearer credential for exactly that case,
+admin-created from the "API tokens" panel in the menu's Account section
+(or directly via the API below).
+
+**Scope is deliberately narrow: read-only, four endpoints, nothing
+else.** A valid token grants `Authorization: Bearer <token>` access to:
+
+- `GET /api/events`
+- `GET /api/flags`
+- `GET /api/stats`
+- `GET /api/devices`
+
+and *nothing* else -- no clearing a flag, no changing a detector, no
+managing users or other tokens, regardless of the method or path
+requested. This isn't a per-request permission check that a future
+handler could accidentally bypass: a bearer-authenticated request is
+routed to a completely separate, minimal internal router that simply
+has no other handler registered on it, so there is no code path from a
+valid token to anything else, structurally rather than by convention.
+
+A token's raw value is shown exactly once, at creation, and is not
+recoverable afterward -- only the SHA-256 hash of it is ever persisted
+(not Argon2id: that cost exists to slow down guessing a low-entropy,
+human-chosen password, and a token's value is already a 128-bit random
+string, well outside brute-forceable range). Losing the value means
+issuing a new token; there's no way to view an existing one again.
+
+There is no expiry -- like sessions and accounts, a token stays valid
+until explicitly revoked from the same panel (or `DELETE
+/api/tokens/{id}`).
+
+```sh
+curl -H "Authorization: Bearer <token>" https://mikroview.example.com/api/events
+```
+
 ## Single sign-on (OIDC/SSO)
 
 Optional, additive on top of [local authentication](#authentication) above
@@ -663,6 +1208,21 @@ oidc:
   clientSecret: "changeme"
   publicBaseUrl: "https://mikroview.example.com"
   scopes: ["openid", "profile", "email"] # this is the default if omitted
+
+  # Who at that issuer may sign in. All of these are optional and all
+  # default to empty, which permits anyone the issuer vouches for --
+  # the right answer for a self-hosted IdP (see "Who can sign in"
+  # below), and refused at startup for a multi-tenant one.
+  # Every field you set adds a condition, and all set conditions must
+  # hold.
+  #
+  # allowedGroups: ["mikroview-admins", "netops"]
+  # groupsClaim: "groups"          # default; Azure often needs "roles"
+  # allowedEmails: ["you@example.com"]
+  # allowedEmailDomains: ["example.com"]
+  # requiredClaims:                # the general form the above are sugar over
+  #   hd: ["example.com"]          # Google Workspace: one organisation
+  #   tid: ["<tenant-guid>"]       # Microsoft Entra: one tenant
 ```
 
 - **`issuerUrl`** — the provider's issuer URL (Authentik: your
@@ -688,6 +1248,80 @@ oidc:
   terminating a real domain (`https://mikroview.example.com`).
 - **`scopes`** — defaults to `openid`, `profile`, `email` if omitted.
   `openid` is always required regardless of what's listed.
+
+### Who can sign in
+
+Setting `issuerUrl` is itself the primary access control, and for a
+self-hosted provider it is usually the *only* one you need. Mikroview
+validates every ID token against that issuer's own signing keys and
+against your client ID, so if `issuerUrl` points at an Authentik,
+Keycloak or Zitadel you run, only accounts in that directory can sign
+in — and narrowing further is what your IdP's own application bindings
+and group policies are for. Leaving every field below empty is the
+correct, complete configuration for that deployment.
+
+That reasoning stops holding the moment the issuer is one you don't
+run. Every Google account on earth validates against
+`accounts.google.com`; the same is true of the shared Microsoft Entra
+endpoints (`/common`, `/organizations`, `/consumers`) and of Apple.
+Against those, `issuerUrl` narrows nothing, and since the first account
+to register becomes an admin, an unrestricted deployment hands admin to
+whoever reaches the login page first. **Mikroview refuses to enable SSO
+for a known multi-tenant issuer unless at least one restriction below
+is set** — it logs the reason and leaves SSO off; local login is
+unaffected.
+
+- **`allowedGroups`** — permit an account carrying at least one of
+  these in its groups claim. Your provider must actually be configured
+  to release that claim; if it isn't, **every login is refused**, not
+  permitted. That direction is deliberate — an allowlist that opens up
+  when a claim goes missing isn't one.
+- **`groupsClaim`** — which claim holds the groups. Defaults to
+  `groups` (Authentik, Keycloak, most Okta setups); Azure commonly uses
+  `roles`.
+- **`allowedEmails`** — exact addresses, compared case-insensitively.
+- **`allowedEmailDomains`** — permit any address at these domains.
+  Compared as whole domains, not string suffixes, so listing
+  `example.com` does not admit `attacker@notexample.com`. Subdomains
+  are not implied — list `mail.example.com` separately if you want it.
+- **`requiredClaims`** — the general mechanism the three fields above
+  are conveniences over: a map of claim name to permitted values, where
+  the account must carry at least one permitted value for every claim
+  named. Nothing about it is provider-specific, which is the point: a
+  provider that invents its own claim tomorrow needs no code change
+  here.
+
+Both email fields additionally require the provider to have marked the
+address `email_verified`. At a provider that lets users set their own
+unverified address, an email allowlist without that check is
+decorative.
+
+Restrictions are re-evaluated on **every** sign-in, before any account
+is created, so removing someone from a group at your IdP locks them out
+at their next login rather than whenever their session happens to
+expire, and a refused account never gets provisioned as a side effect
+of being refused. A refused user is told plainly that they aren't
+permitted, but never *which* condition they failed — that goes to the
+server log, since the specifics would map out your allowlist for an
+outsider.
+
+**Locking a public IdP to one organisation:**
+
+```yaml
+# Google Workspace -- only accounts at example.com, not personal Gmail
+oidc:
+  issuerUrl: "https://accounts.google.com"
+  requiredClaims:
+    hd: ["example.com"]
+
+# Microsoft Entra -- only your tenant.
+# Prefer the single-tenant issuer URL where you can; requiredClaims.tid
+# is the belt-and-braces version, and is required if you use /common.
+oidc:
+  issuerUrl: "https://login.microsoftonline.com/common/v2.0"
+  requiredClaims:
+    tid: ["00000000-0000-0000-0000-000000000000"]
+```
 
 **Identity**: an account is matched by the immutable `(issuer, subject)`
 pair from the verified ID token, never by email or username -- an
@@ -837,6 +1471,8 @@ Override individual scalar settings without a mounted file:
 | `MIKROVIEW_LISTEN_SYSLOG_TCP` | `listen.syslogTcp` |
 | `MIKROVIEW_LISTEN_HTTP` | `listen.http` |
 | `MIKROVIEW_LISTEN_HTTP_REDIRECT` | `listen.httpRedirect` |
+| `MIKROVIEW_TRUSTED_PROXIES` | `listen.trustedProxies` (comma-separated; see [Running behind a reverse proxy](#running-behind-a-reverse-proxy)) |
+| `MIKROVIEW_CLIENT_IP_HEADER` | `listen.clientIpHeader` |
 | `MIKROVIEW_STORE_RETENTION` | `store.retention` |
 | `MIKROVIEW_STORE_MAX_EVENTS` | `store.maxEvents` |
 | `MIKROVIEW_LOG_LEVEL` | `log.level` (see [Logging](#logging)) |
@@ -873,10 +1509,23 @@ Override individual scalar settings without a mounted file:
 | `MIKROVIEW_FLAGS_LOW_SLOW_SCAN_MIN_OBSERVATION` | `flags.lowSlowScanMinObservation` |
 | `MIKROVIEW_FLAGS_LOW_SLOW_SCAN_DROP_RATIO` | `flags.lowSlowScanDropRatio` |
 | `MIKROVIEW_FLAGS_LOW_SLOW_SCAN_BASELINE_MULTIPLIER` | `flags.lowSlowScanBaselineMultiplier` |
+| `MIKROVIEW_FLAGS_OFF_HOURS_START_HOUR` | `flags.offHoursStartHour` |
+| `MIKROVIEW_FLAGS_OFF_HOURS_END_HOUR` | `flags.offHoursEndHour` |
+| `MIKROVIEW_FLAGS_OFF_HOURS_MIN_SAMPLE_DAYS` | `flags.offHoursMinSampleDays` |
+| `MIKROVIEW_FLAGS_OFF_HOURS_MIN_COUNT` | `flags.offHoursMinCount` |
+| `MIKROVIEW_FLAGS_DEVICE_STALE_AFTER` | `flags.deviceStaleAfter` |
+| `MIKROVIEW_FLAGS_RULE_USAGE_STORE_PATH` | `flags.ruleUsageStorePath` |
+| `MIKROVIEW_FLAGS_STALE_RULE_DAYS` | `flags.staleRuleDays` |
+| `MIKROVIEW_FLAGS_STALE_RULE_CHECK_INTERVAL` | `flags.staleRuleCheckInterval` |
+| `MIKROVIEW_FLAGS_VPN_INTERFACES` | `flags.vpnInterfaces` (comma-separated, e.g. `wireguard1,wireguard2`) |
+| `MIKROVIEW_FLAGS_VPN_CONFIDENCE_MULTIPLIER` | `flags.vpnConfidenceMultiplier` |
 | `MIKROVIEW_FLAGS_DETECTOR_SETTINGS_STORE_PATH` | `flags.detectorSettingsStorePath` (see [Per-detector toggles](#per-detector-toggles-and-scope-restrictions-optional)) |
 | `MIKROVIEW_AUTH_STORE_PATH` | `auth.storePath` (see [Authentication](#authentication)) |
 | `MIKROVIEW_AUTH_SECURE_COOKIE` | `auth.secureCookie` |
 | `MIKROVIEW_AUTH_SESSION_TTL` | `auth.sessionTTL` |
+| `MIKROVIEW_ENTITIES_STORE_PATH` | `entities.storePath` (see [Entities](#entities-ui-managed-hostruleport-labels-and-tags-optional)) |
+| `MIKROVIEW_AUDIT_STORE_PATH` | `audit.storePath` (see [Audit log](#audit-log-admin-action-accountability-optional)) |
+| `MIKROVIEW_AUTH_TOKENS_STORE_PATH` | `auth.tokensStorePath` (see [API tokens](#api-tokens-read-only)) |
 | `MIKROVIEW_TLS_ENABLED` | `tls.enabled` (see [TLS](#tls)) |
 | `MIKROVIEW_TLS_CERT_FILE` | `tls.certFile` |
 | `MIKROVIEW_TLS_KEY_FILE` | `tls.keyFile` |
@@ -897,12 +1546,36 @@ Override individual scalar settings without a mounted file:
 | `MIKROVIEW_NOTIFY_SMTP_TO` | `notify.smtp.to` (comma-separated) |
 | `MIKROVIEW_NOTIFY_PUSHOVER_TOKEN` | `notify.pushover.token` |
 | `MIKROVIEW_NOTIFY_PUSHOVER_USER` | `notify.pushover.user` |
+| `MIKROVIEW_DEVICE_MAC_STORE_PATH` | `deviceMac.storePath` (see [New-device detection](#new-device-detection-optional-on-by-default)) |
+| `MIKROVIEW_NOTIFY_WEBHOOK_URL` | `notify.webhook.url` |
+| `MIKROVIEW_BLOCKLIST_SOURCES` | `blocklist.sources` (comma-separated, see [Local IP/CIDR blocklist matching](#local-ipcidr-blocklist-matching-optional-on-by-default)) -- note an empty env var value is treated as unset, same as every other list env var here, so *disabling* the feature (`sources: []`) needs the YAML file, not this variable |
+
+## Checking your version
+
+There is no semantic version -- mikroview doesn't cut releases or tag
+versions today, only images built from `preview`/`main` (see
+`.github/workflows/docker.yml`; pushing to `dev` deliberately publishes
+no image at all). The build identifier is the short git commit SHA it
+was built from, and it's checkable three ways, all showing the same
+value:
+
+- `docker exec <container> mikroview -version` -- prints the bare SHA
+  and nothing else, easy to capture in a script.
+- `GET /api/healthz`'s `version` field -- reachable with no auth and no
+  session regardless of deployment state, same as the rest of that
+  endpoint.
+- The account menu in the UI (bottom, below Sign out/appearance) --
+  small, muted text, always visible regardless of auth state.
+
+A plain local `go run .`/`go build .` (no `-ldflags`) shows `dev`
+instead of a commit SHA.
 
 ## CLI flags (local development)
 
-`-syslog-udp`, `-syslog-tcp`, `-http`, `-http-redirect`, `-retention`,
-`-max-events`, `-geoip-db` — see `go run . -h`. Devices, rule/host
-names, and auth config can only be set via YAML/env, not flags.
+`-version`, `-syslog-udp`, `-syslog-tcp`, `-http`, `-http-redirect`,
+`-retention`, `-max-events`, `-geoip-db` — see `go run . -h`. Devices,
+rule/host names, and auth config can only be set via YAML/env, not
+flags.
 
 `-healthcheck`, `-list-users`, `-reset-password <username>`,
 `-enable-auth-setup` are standalone modes -- each does its one job and
@@ -913,31 +1586,45 @@ exits, rather than starting the server. See
 
 | Endpoint | Description |
 |---|---|
-| `GET /api/healthz` | liveness/uptime check |
+| `GET /api/healthz` | liveness/uptime/version check |
 | `GET /ca.crt` | mikroview's self-generated CA certificate, unauthenticated -- only present when TLS is on and mikroview generated its own CA (never for a supplied cert or `tls.enabled: false`); see [TLS](#tls) |
 | `GET /api/events` | filtered, windowed historical query (see below) |
-| `GET /api/devices` | known devices (configured + auto-discovered) |
+| `GET /api/devices` | known devices (configured + auto-discovered), each with a `status` of `live`/`stale`/`never_seen` (issue #98, see [Behavioral flags](#behavioral-flags-optional-on-by-default)'s "Device silence" entry) -- feeds the Fleet view |
 | `GET /api/critical-ports` | the configured `flags.criticalPorts` list -- feeds the "Control ports" tracking tab (issue #34), open to any signed-in user, not admin-gated |
+| `GET /api/rules` | every rule label mikroview has ever seen fire, with first/last-seen time and count (`internal/rules.Store`) -- the "discovered but unnamed rules" source for the Entities panel (see [Entities](#entities-ui-managed-hostruleport-labels-and-tags-optional)), open to any signed-in user, not admin-gated |
 | `GET /api/stats` | totals, per-action counts, rolling events/sec |
 | `GET /api/ws` | live-tail WebSocket feed |
 | `GET /api/lookup/ip/{ip}` | on-demand reputation/threat-intel lookup for one public IP (see [IP reputation lookup](#ip-reputation-lookup-optional)) |
-| `GET /api/flags` | active + cleared behavioral flags (see [Behavioral flags](#behavioral-flags-optional-on-by-default)) |
+| `GET /api/flags` | active + cleared behavioral flags, plus the last hour of newly-raised-episode counts by type at 1-minute resolution (issue #100, feeds the dashboard's flags-over-time chart) (see [Behavioral flags](#behavioral-flags-optional-on-by-default)) |
 | `POST /api/flags/{id}/clear` | mark one flag as cleared |
+| `POST /api/flags/{id}/clear-permanent` | admin-only (open while zero accounts exist): clear one flag *and* permanently exclude its (detector, target) pair going forward. Audit-logged |
+| `GET /api/flags/exclusions` | admin-only (open while zero accounts exist): every currently-excluded (detector, target) pair |
+| `DELETE /api/flags/exclusions/{id}` | admin-only (open while zero accounts exist): remove one exclusion, letting that pair raise again |
 | `GET /api/detectors` | admin-only (open while zero accounts exist): every detector's live enabled+scope (see [Per-detector toggles](#per-detector-toggles-and-scope-restrictions-optional)) |
 | `PUT /api/detectors/{name}` | admin-only (open while zero accounts exist): replace one detector's enabled+scope wholesale |
+| `GET /api/entities` | admin-only (**not** open while zero accounts exist -- see [Entities](#entities-ui-managed-hostruleport-labels-and-tags-optional)): every persisted entity |
+| `POST /api/entities` | admin-only: create or replace (upsert) one entity, identified by `(type, key)` in the JSON body |
+| `DELETE /api/entities` | admin-only: remove the entity identified by `(type, key)` in the JSON body |
+| `GET /api/audit` | admin-only (**not** open while zero accounts exist, same as `/api/entities`): a windowed slice of the admin action audit log (see [Audit log](#audit-log-admin-action-accountability-optional)), newest activity last, accepting `since`/`until`/`limit` query params like `GET /api/events` |
 | `GET /api/auth/session` | current auth state (setup-required / authenticated / not) -- always 200, never gated |
 | `POST /api/auth/register` | create the first (admin) account -- only while zero accounts exist |
 | `POST /api/auth/skip` | explicitly disable auth for this deployment -- only while zero accounts exist; reversing later is CLI-only (`-enable-auth-setup`) |
 | `POST /api/auth/login` | sign in, sets the session cookie |
 | `POST /api/auth/logout` | sign out, clears the session cookie |
 | `POST /api/auth/users` | admin-only: create an additional account |
+| `POST /api/tokens` | admin-only: create a read-only API token (see [API tokens](#api-tokens-read-only)) -- returns the raw value once |
+| `GET /api/tokens` | admin-only: list tokens (name/created/last-used, never the value or hash) |
+| `DELETE /api/tokens/{id}` | admin-only: revoke a token |
 | `GET /api/auth/oidc/login` | start the SSO flow -- a top-level browser redirect to the configured provider, only present when [OIDC](#single-sign-on-oidcsso) is configured |
 | `GET /api/auth/oidc/callback` | the provider's redirect target completing the SSO flow -- see [Single sign-on](#single-sign-on-oidcsso) |
 
 Every route above `/api/auth/session`/`/register`/`/login`/`/logout` and
 `/api/healthz` requires a valid session once an account exists -- see
-[Authentication](#authentication).
-Every mutating (`POST`/`PUT`) request also requires an
+[Authentication](#authentication). `GET /api/events`, `/flags`, `/stats`,
+and `/devices` additionally accept a valid `Authorization: Bearer
+<token>` header instead of a session (see [API tokens](#api-tokens-read-only));
+no other route accepts one.
+Every mutating (`POST`/`PUT`/`DELETE`) request also requires an
 `X-Requested-With: mikroview` header once an account exists (a CSRF
 mitigation, see SECURITY.md).
 

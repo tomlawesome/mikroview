@@ -1,8 +1,10 @@
 package auth
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 )
@@ -427,5 +429,113 @@ func TestOpenReadsNewObjectFormat(t *testing.T) {
 	}
 	if !s2.Disabled() {
 		t.Error("expected the object-format file to round-trip Disabled: true")
+	}
+}
+
+// TestConcurrentRegisterCreatesExactlyOneAdmin is the regression test
+// for the first-run registration race. Before the fix, Register checked
+// Count()/Disabled() outside the lock and createLocked only re-checked
+// for a username collision under it -- so N concurrent registrations
+// with distinct usernames all succeeded, every one of them landing
+// RoleAdmin. Measured 8/8 succeeding, reproducibly.
+//
+// The window was wide, not theoretical: HashPassword (Argon2id, ~100ms
+// by design) runs before the lock is taken, so a real attacker racing
+// the operator through the unauthenticated first-run screen had a
+// comfortable margin, not a microsecond one.
+func TestConcurrentRegisterCreatesExactlyOneAdmin(t *testing.T) {
+	s, err := Open(filepath.Join(t.TempDir(), "users.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	names := []string{"alice", "bob", "carol", "dave", "eve", "frank", "grace", "heidi"}
+	results := make([]error, len(names))
+	var wg sync.WaitGroup
+	start := make(chan struct{})
+	for i, name := range names {
+		wg.Add(1)
+		go func(i int, name string) {
+			defer wg.Done()
+			<-start
+			_, results[i] = s.Register(name, "correct horse battery staple", time.Now())
+		}(i, name)
+	}
+	close(start)
+	wg.Wait()
+
+	succeeded := 0
+	for i, err := range results {
+		switch {
+		case err == nil:
+			succeeded++
+		case errors.Is(err, ErrRegistrationClosed):
+			// expected for every loser of the race
+		default:
+			t.Errorf("Register(%q) failed with an unexpected error: %v", names[i], err)
+		}
+	}
+	if succeeded != 1 {
+		t.Errorf("%d concurrent Register calls succeeded, want exactly 1", succeeded)
+	}
+	if got := s.Count(); got != 1 {
+		t.Errorf("store holds %d accounts after the race, want exactly 1", got)
+	}
+}
+
+// TestConcurrentRegisterAndDisableAreMutuallyExclusive is the
+// regression test for the worse half of the same root cause: Register
+// and Disable could both succeed, leaving an admin account in a store
+// that also reports Disabled() == true. internal/api's requireAuth
+// checks Disabled() first, so that state serves every request with no
+// authentication at all while an admin account quietly exists -- the
+// operator's own registration returns success, giving them no reason to
+// suspect the deployment is wide open. Measured at 79/200 attempts.
+//
+// Exactly one of the two must win, whichever it is: either auth is on
+// with one admin, or it's deliberately disabled with no accounts.
+//
+// 40 attempts rather than the 200 used to characterize the bug: each
+// one pays for a real Argon2id hash (~100ms, deliberately), so the
+// loop is kept to what still reliably catches a regression without
+// dominating the suite's runtime. At the pre-fix ~40% interleaving
+// rate, 40 attempts miss a reintroduced race with probability well
+// under one in a million.
+func TestConcurrentRegisterAndDisableAreMutuallyExclusive(t *testing.T) {
+	for attempt := 0; attempt < 40; attempt++ {
+		s, err := Open(filepath.Join(t.TempDir(), "users.json"))
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		var regErr, disErr error
+		var wg sync.WaitGroup
+		start := make(chan struct{})
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			<-start
+			_, regErr = s.Register("operator", "correct horse battery staple", time.Now())
+		}()
+		go func() {
+			defer wg.Done()
+			<-start
+			disErr = s.Disable()
+		}()
+		close(start)
+		wg.Wait()
+
+		if regErr == nil && disErr == nil {
+			t.Fatalf("attempt %d: Register and Disable both succeeded -- store now has %d account(s) with Disabled()=%v, "+
+				"which requireAuth serves as fully open despite an admin existing", attempt, s.Count(), s.Disabled())
+		}
+		if regErr != nil && disErr != nil {
+			t.Fatalf("attempt %d: neither Register nor Disable succeeded (register: %v, disable: %v) -- "+
+				"one of them must always win", attempt, regErr, disErr)
+		}
+		// Whichever won, the resulting state must be self-consistent.
+		if s.Disabled() && s.Count() > 0 {
+			t.Fatalf("attempt %d: inconsistent end state -- Disabled()=true with %d account(s)", attempt, s.Count())
+		}
 	}
 }

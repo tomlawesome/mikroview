@@ -17,10 +17,13 @@ import (
 	"time"
 
 	"github.com/tomlawesome/mikroview/internal/api"
+	"github.com/tomlawesome/mikroview/internal/audit"
 	"github.com/tomlawesome/mikroview/internal/auth"
+	"github.com/tomlawesome/mikroview/internal/blocklist"
 	"github.com/tomlawesome/mikroview/internal/config"
 	"github.com/tomlawesome/mikroview/internal/detect"
 	"github.com/tomlawesome/mikroview/internal/device"
+	"github.com/tomlawesome/mikroview/internal/entities"
 	"github.com/tomlawesome/mikroview/internal/flags"
 	"github.com/tomlawesome/mikroview/internal/geoip"
 	"github.com/tomlawesome/mikroview/internal/hub"
@@ -30,6 +33,7 @@ import (
 	"github.com/tomlawesome/mikroview/internal/oidc"
 	"github.com/tomlawesome/mikroview/internal/reputation"
 	"github.com/tomlawesome/mikroview/internal/routeros"
+	"github.com/tomlawesome/mikroview/internal/rules"
 	"github.com/tomlawesome/mikroview/internal/servertls"
 	"github.com/tomlawesome/mikroview/internal/store"
 	"github.com/tomlawesome/mikroview/internal/syslog"
@@ -43,6 +47,14 @@ import (
 // enough for the detector's own EMA baseline to track real trends, not
 // to feel "live" to a person.
 const globalSpikeCheckInterval = 10 * time.Second
+
+// deviceSilenceCheckInterval is how often DeviceSilenceDetector re-checks
+// every configured device's LastSeen against Config.DeviceStaleAfter.
+// Coarser than globalSpikeCheckInterval on purpose: DeviceStaleAfter's
+// own default (15m) means a device going quiet is detected within this
+// interval of crossing the threshold, which doesn't need EMA-baseline-
+// tracking-grade freshness to be useful to an operator.
+const deviceSilenceCheckInterval = 1 * time.Minute
 
 // loginLimiter{Threshold,Window}: brute-force protection on
 // POST /api/auth/login (see internal/auth.LoginLimiter) -- an internal
@@ -159,6 +171,16 @@ func httpsRedirectTarget(r *http.Request, allowedHosts []string) string {
 }
 
 func main() {
+	// -version: prints the build-time-stamped commit SHA (see the
+	// `version` var above) and exits -- no config load, no network,
+	// nothing else needed, so it's checked before every other mode
+	// below. The intended use is `docker exec <container> mikroview
+	// -version` against a running deployment, so the output is the bare
+	// string only (no "version:" prefix, no trailing punctuation) --
+	// easy to capture in a script without trimming anything first.
+	if len(os.Args) > 1 && os.Args[1] == "-version" {
+		os.Exit(runVersion())
+	}
 	// The runtime image is distroless (no shell, no curl/wget), so Docker's
 	// HEALTHCHECK -- and any orchestrator's readiness probe -- can't shell
 	// out to check the app; the binary has to check itself instead. Config
@@ -209,6 +231,9 @@ func main() {
 		geoLog.Warn(fmt.Sprintf("%v (country flags disabled)", err))
 	}
 	defer geo.Close()
+	// rep: always built (AbuseIPDBKey empty just means that one source
+	// inside it stays inert; Shodan InternetDB is free/keyless and
+	// always queried).
 	rep := reputation.New(cfg.Reputation.AbuseIPDBKey)
 
 	flagsLog := logging.New("flags")
@@ -217,10 +242,55 @@ func main() {
 		flagsLog.Warn(fmt.Sprintf("%v (continuing with in-memory-only flag state)", err))
 	}
 
+	// macRegistry backs the new-device/new-MAC detector (issue #103
+	// phase 1) -- see internal/device.MACRegistry's doc comment for why
+	// this needs its own persisted store distinct from devices above
+	// (that one tracks router source IPs, not LAN client MACs).
+	macLog := logging.New("device-mac")
+	macRegistry, err := device.OpenMACRegistry(cfg.DeviceMAC.StorePath)
+	if err != nil {
+		macLog.Warn(fmt.Sprintf("%v (continuing with in-memory-only MAC registry)", err))
+	}
+
+	// RuleUsage (issue #102): a long-lived, persisted per-rule
+	// FirstSeen/LastSeen/Count record backing the stale-rule detector --
+	// see internal/rules' doc comment for why this can't just reuse
+	// internal/store's totalByRule (in-memory, windowed to the store's
+	// short retention period).
+	rulesLog := logging.New("rules")
+	ru, err := rules.Open(cfg.Flags.RuleUsageStorePath)
+	if err != nil {
+		rulesLog.Warn(fmt.Sprintf("%v (continuing with in-memory-only rule-usage state)", err))
+	}
+
 	authLog := logging.New("auth")
 	authStore, err := auth.Open(cfg.Auth.StorePath)
-	if err != nil {
-		authLog.Warn(fmt.Sprintf("%v (continuing with in-memory-only, unpersisted account state)", err))
+	// A non-nil error from auth.Open, when persistence is actually
+	// configured, ALWAYS means "the accounts file exists but couldn't be
+	// read/parsed" -- Open returns (store, nil) for both "no persistence
+	// configured" and "file genuinely doesn't exist yet" (see its own
+	// doc comment), so this is never reached by a true fresh install.
+	// Falling through to the normal boot sequence here used to mean the
+	// in-memory store's Count() reads 0, which is *exactly* the state
+	// requireAuth treats as "no decision made yet" -- silently
+	// presenting a stranger with the first-run setup wizard on a
+	// previously-authenticated instance, indistinguishable in the logs
+	// from a genuine fresh install. That's a fail-OPEN on a security
+	// control, not an acceptable degrade-and-continue case like every
+	// other optional store above. Refuse to start instead: recovering
+	// requires an explicit, conscious operator action, and container/
+	// host access (the same trust anchor as every other CLI recovery
+	// path) is already sufficient to take it directly -- move or delete
+	// the broken file and restart, no dedicated CLI mode needed for
+	// something `mv`/`rm` already does.
+	if authShouldFailClosed(err, cfg.Auth.StorePath) {
+		authLog.Error(fmt.Sprintf(
+			"accounts file at %q exists but could not be loaded: %v -- refusing to start with authentication in an unknown state. "+
+				"If this deployment previously had accounts configured, this is NOT a fresh install: restore the file from a backup, "+
+				"or move/delete %q and restart to consciously re-arm the first-run setup screen (container/host access is required either way).",
+			cfg.Auth.StorePath, err, cfg.Auth.StorePath,
+		))
+		os.Exit(1)
 	}
 	switch {
 	case authStore.Count() > 0:
@@ -229,6 +299,45 @@ func main() {
 		authLog.Warn("explicitly disabled for this deployment -- mikroview is fully open (run -enable-auth-setup to reverse this)")
 	default:
 		authLog.Info("no decision made yet -- mikroview is showing the first-run choice screen (see docs/configuration.md)")
+	}
+
+	// entities (issue #107): the persisted, admin-manageable (type, key)
+	// -> label/tags store backing GET/POST/DELETE /api/entities -- the
+	// shared foundation a future mail-sender allowlist and UI-managed
+	// IP/port/rule aliasing both build on. Seed is the one-time upgrade
+	// path: an existing deployment's YAML-only cfg.RuleNames/HostNames
+	// become UI-editable Entity records the first time it boots against
+	// an empty store, and never re-import again afterward (even if a
+	// user later deletes every one of them) -- see Store.Seed's own doc
+	// comment.
+	entitiesLog := logging.New("entities")
+	entityStore, err := entities.Open(cfg.Entities.StorePath)
+	if err != nil {
+		entitiesLog.Warn(fmt.Sprintf("%v (continuing with in-memory-only entity state)", err))
+	}
+	if n := entityStore.Seed(cfg.RuleNames, cfg.HostNames); n > 0 {
+		entitiesLog.Info(fmt.Sprintf("imported %d entries from config.yaml's ruleNames/hostNames (now UI-editable)", n))
+	}
+
+	// Tokens (issue #101): read-only API bearer tokens for service-to-
+	// service access -- optional persistence, same degrade-not-crash
+	// contract as Flags/DetectorSettings above (a missing/unwritable path
+	// just means token creation refuses with ErrTokenNotPersisted, not
+	// that mikroview fails to start).
+	tokensLog := logging.New("tokens")
+	tokenStore, err := auth.OpenTokenStore(cfg.Auth.TokensStorePath)
+	if err != nil {
+		tokensLog.Warn(fmt.Sprintf("%v (continuing with in-memory-only, unpersisted token state)", err))
+	}
+
+	// Audit (issue #112): the persisted admin-action accountability log --
+	// same optional-persistence, degrade-not-crash contract as every other
+	// store above (a missing/unwritable path just means entries don't
+	// survive a restart, not that mikroview fails to start).
+	auditLog := logging.New("audit")
+	auditStore, err := audit.Open(cfg.Audit.StorePath)
+	if err != nil {
+		auditLog.Warn(fmt.Sprintf("%v (continuing with in-memory-only, unpersisted audit log)", err))
 	}
 	detectCfg := detect.Config{
 		PortScanThreshold:        cfg.Flags.PortScanThreshold,
@@ -268,6 +377,16 @@ func main() {
 		LowSlowScanMinObservation:     cfg.Flags.LowSlowScanMinObservation,
 		LowSlowScanDropRatio:          cfg.Flags.LowSlowScanDropRatio,
 		LowSlowScanBaselineMultiplier: cfg.Flags.LowSlowScanBaselineMultiplier,
+
+		OffHoursStartHour:     cfg.Flags.OffHoursStartHour,
+		OffHoursEndHour:       cfg.Flags.OffHoursEndHour,
+		OffHoursMinSampleDays: cfg.Flags.OffHoursMinSampleDays,
+		OffHoursMinCount:      cfg.Flags.OffHoursMinCount,
+
+		DeviceStaleAfter: cfg.Flags.DeviceStaleAfter,
+
+		VPNInterfaces:           cfg.Flags.VPNInterfaces,
+		VPNConfidenceMultiplier: cfg.Flags.VPNConfidenceMultiplier,
 	}
 	seed := detect.DefaultSettingsMap()
 	for name, ds := range cfg.Flags.Detectors {
@@ -289,13 +408,33 @@ func main() {
 	if err != nil {
 		detectorsLog.Warn(fmt.Sprintf("%v (continuing with in-memory-only detector toggle state)", err))
 	}
-	detector := detect.NewWithSettings(detectCfg, fs, detectorSettings).WithReputation(rep)
+	// bl (issue #113 Part B): always constructed, even with zero enabled
+	// sources (cfg.Blocklist.Sources == []) -- Match/Refresh are both
+	// harmless no-ops in that case (see internal/blocklist.Blocklist's
+	// doc comment), same "always non-nil, off means inert" convention
+	// Reputation/Auth/Entities already use elsewhere in this file. Only
+	// the refresh goroutines below are actually skipped when disabled
+	// (see bl.HasFeeds()), so a fully-disabled deployment starts zero
+	// extra goroutines for this feature.
+	blocklistLog := logging.New("blocklist")
+	bl := blocklist.New(cfg.Blocklist.Sources, blocklistLog)
+
+	// Both optional inputs are attached in one chain: entities backs the
+	// trusted-mail-sender allowlist (#108), knownBad backs the local
+	// blocklist match (#113 Part B). Each is independently a valid
+	// no-op when unconfigured.
+	detector := detect.NewWithSettings(detectCfg, fs, detectorSettings).
+		WithReputation(rep).
+		WithEntities(entityStore).
+		WithKnownBadIPs(bl)
 	globalSpike := detect.NewGlobalSpikeDetectorWithSettings(detectCfg, fs, detectorSettings)
+	deviceSilence := detect.NewDeviceSilenceDetectorWithSettings(detectCfg, fs, detectorSettings, devices)
+	staleRule := detect.NewStaleRuleDetector(ru, fs, time.Duration(cfg.Flags.StaleRuleDays)*24*time.Hour)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	// Notify (issues #30/#31): alerting on newly-raised flags outside the
+	// Notify (issues #30/#31/#96): alerting on newly-raised flags outside the
 	// UI, through whichever channels are configured -- each independently
 	// enabled by its own identifying field being set (same "empty means
 	// off" convention as Reputation.AbuseIPDBKey/GeoIP.DBPath), sharing
@@ -319,6 +458,12 @@ func main() {
 			User:  cfg.Notify.Pushover.User,
 		}))
 	}
+	if cfg.Notify.Webhook.URL != "" {
+		notifiers = append(notifiers, notify.NewWebhookNotifier(notify.WebhookConfig{
+			URL:     cfg.Notify.Webhook.URL,
+			Headers: cfg.Notify.Webhook.Headers,
+		}))
+	}
 	if len(notifiers) > 0 {
 		dispatcher := notify.NewDispatcher(cfg.Notify.BatchWindow, notifiers)
 		go dispatcher.Run(ctx)
@@ -340,9 +485,12 @@ func main() {
 		}
 	}()
 
-	names := naming.Resolver{Rules: cfg.RuleNames, Hosts: cfg.HostNames}
+	// Entities takes precedence over Rules/Hosts for any key it has a
+	// label for -- see naming.Resolver's doc comment and issue #107's
+	// migration/precedence design.
+	names := naming.Resolver{Rules: cfg.RuleNames, Hosts: cfg.HostNames, Entities: entityStore}
 
-	go ingest(ctx, raw, st, devices, h, geo, detector, names)
+	go ingest(ctx, raw, st, devices, macRegistry, fs, h, geo, detector, ru, names)
 	go detector.Run(ctx)
 
 	go func() {
@@ -362,6 +510,78 @@ func main() {
 		}
 	}()
 
+	go func() {
+		silenceLog := logging.New("device-silence")
+		ticker := time.NewTicker(deviceSilenceCheckInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				func() {
+					defer logging.Recover(silenceLog)
+					deviceSilence.Check(time.Now())
+				}()
+			}
+		}
+	}()
+
+	// Stale-rule sweep (issue #102): coarse by design (see
+	// StaleRuleCheckInterval's doc comment) -- staleness is judged in
+	// days, so there's no benefit to checking anywhere near as often as
+	// the global-spike ticker above.
+	go func() {
+		staleRuleLog := logging.New("stale-rule")
+		ticker := time.NewTicker(cfg.Flags.StaleRuleCheckInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				func() {
+					defer logging.Recover(staleRuleLog)
+					staleRule.Check(time.Now())
+				}()
+			}
+		}
+	}()
+
+	// Local blocklist refresh (issue #113 Part B): a fixed daily cycle
+	// (blocklist.RefreshInterval, not configurable -- see that const's
+	// doc comment), same ticker/select/recover shape as the stale-rule
+	// sweep just above. Skipped entirely if no source is enabled
+	// (bl.HasFeeds() false), so a deployment that's disabled this
+	// feature via `blocklist.sources: []` starts zero extra goroutines
+	// for it. The first Refresh runs immediately, in its own goroutine,
+	// rather than blocking startup on Spamhaus/ET's reachability --
+	// same "never block startup on an optional external integration"
+	// contract GeoIP/Auth/Rules above already have; until it completes,
+	// Blocklist.Match just reports no matches (see that method's own
+	// doc comment), not an error.
+	if bl.HasFeeds() {
+		go func() {
+			defer logging.Recover(blocklistLog)
+			bl.Refresh(ctx)
+		}()
+		go func() {
+			ticker := time.NewTicker(blocklist.RefreshInterval)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-ticker.C:
+					func() {
+						defer logging.Recover(blocklistLog)
+						bl.Refresh(ctx)
+					}()
+				}
+			}
+		}()
+	}
+
 	// SSO (issue #43): additive on top of local auth, never a
 	// replacement -- see internal/oidc and auth.Store.
 	// FindOrCreateOIDCUser. A misconfigured or unreachable provider must
@@ -373,6 +593,14 @@ func main() {
 	var oidcClient *oidc.Client
 	var oidcState *oidc.StateCodec
 	oidcLog := logging.New("oidc")
+	oidcPolicy := oidc.Policy{
+		AllowedGroups:       cfg.OIDC.AllowedGroups,
+		GroupsClaim:         cfg.OIDC.GroupsClaim,
+		AllowedEmails:       cfg.OIDC.AllowedEmails,
+		AllowedEmailDomains: cfg.OIDC.AllowedEmailDomains,
+		RequiredClaims:      cfg.OIDC.RequiredClaims,
+	}
+
 	switch {
 	case cfg.OIDC.IssuerURL == "":
 		// Not configured -- no log line, same as every other disabled-
@@ -381,6 +609,17 @@ func main() {
 		oidcLog.Error("oidc.issuerUrl is set but oidc.publicBaseUrl is not -- SSO login is unavailable until it's configured (see docs/configuration.md)")
 	case cfg.OIDC.ClientID == "" || cfg.OIDC.ClientSecret == "":
 		oidcLog.Error("oidc.issuerUrl is set but oidc.clientId/oidc.clientSecret are not -- SSO login is unavailable until both are configured")
+	case oidc.IsMultiTenantIssuer(cfg.OIDC.IssuerURL) && !oidcPolicy.Restricted():
+		// Refused rather than warned about. Against a multi-tenant issuer
+		// the issuer URL restricts nothing -- every account at that
+		// provider produces a valid token -- so this configuration means
+		// "whoever reaches the login page first becomes the admin". A
+		// warning would scroll past; leaving SSO off is the fail-closed
+		// outcome, and local login is unaffected.
+		oidcLog.Error(fmt.Sprintf(
+			"%s is a multi-tenant provider, so the issuer URL alone permits any account there to sign in and claim admin -- "+
+				"SSO login is unavailable until oidc.allowedGroups/allowedEmails/allowedEmailDomains/requiredClaims restricts it "+
+				"(see docs/configuration.md)", cfg.OIDC.IssuerURL))
 	default:
 		client, err := oidc.New(ctx, oidc.Config{
 			IssuerURL:    cfg.OIDC.IssuerURL,
@@ -399,8 +638,31 @@ func main() {
 			oidcLog.Error(fmt.Sprintf("%v (SSO login is unavailable)", err))
 		} else {
 			oidcClient, oidcState = client, state
-			oidcLog.Info(fmt.Sprintf("SSO login active against %s", cfg.OIDC.IssuerURL))
+			if oidcPolicy.Restricted() {
+				oidcLog.Info(fmt.Sprintf("SSO login active against %s, restricted to permitted accounts", cfg.OIDC.IssuerURL))
+			} else {
+				oidcLog.Info(fmt.Sprintf("SSO login active against %s for any account that issuer vouches for", cfg.OIDC.IssuerURL))
+			}
 		}
+	}
+
+	// A bad trusted-proxy entry is a security-relevant misconfiguration,
+	// not a typo to paper over: silently ignoring it would leave the
+	// operator believing forwarded addresses are being honoured when they
+	// aren't. Refusing to start is the same stance the TLS and OIDC
+	// blocks already take for their own required values.
+	proxyLog := logging.New("proxy")
+	trustedProxies, err := config.ParseTrustedProxies(cfg.Listen.TrustedProxies)
+	if err != nil {
+		proxyLog.Error(fmt.Sprintf("listen.trustedProxies: %v", err))
+		os.Exit(1)
+	}
+	if len(trustedProxies) > 0 {
+		header := cfg.Listen.ClientIPHeader
+		if header == "" {
+			header = "X-Forwarded-For"
+		}
+		proxyLog.Info(fmt.Sprintf("trusting %s from %d proxy range(s) for login rate limiting", header, len(trustedProxies)))
 	}
 
 	srv := &api.Server{
@@ -410,14 +672,23 @@ func main() {
 		Reputation:       rep,
 		Flags:            fs,
 		DetectorSettings: detectorSettings,
+		Entities:         entityStore,
+		Rules:            ru,
+		Audit:            auditStore,
 		CriticalPorts:    cfg.Flags.CriticalPorts,
+		DeviceStaleAfter: cfg.Flags.DeviceStaleAfter,
 		Auth:             authStore,
 		Sessions:         auth.NewSessionStore(cfg.Auth.SessionTTL),
 		LoginLimiter:     auth.NewLoginLimiter(loginLimiterThreshold, loginLimiterWindow),
 		SecureCookie:     cfg.Auth.SecureCookie,
+		TrustedProxies:   trustedProxies,
+		ClientIPHeader:   cfg.Listen.ClientIPHeader,
+		Tokens:           tokenStore,
 		OIDC:             oidcClient,
 		OIDCState:        oidcState,
+		OIDCPolicy:       oidcPolicy,
 		StartTime:        time.Now(),
+		Version:          version,
 	}
 
 	rootMux := http.NewServeMux()
@@ -543,6 +814,15 @@ func main() {
 	}
 }
 
+// runVersion backs the `-version` mode -- prints the build-time-stamped
+// commit SHA (the `version` var above, "dev" for a plain local build)
+// and nothing else, so `docker exec <container> mikroview -version`
+// output is directly usable in a script without trimming a prefix.
+func runVersion() int {
+	fmt.Println(version)
+	return 0
+}
+
 // runHealthcheck backs the `-healthcheck` mode used by the container's
 // HEALTHCHECK (see Dockerfile). It hits the app's own /api/healthz over
 // loopback and returns a process exit code, rather than opening any
@@ -636,6 +916,20 @@ func runEnableAuthSetup() int {
 	return 0
 }
 
+// authShouldFailClosed reports whether main()'s boot sequence should
+// refuse to start rather than continue with an unauthenticated,
+// zero-account in-memory auth.Store. err is auth.Open's own return
+// value; storePath is the configured auth.storePath. auth.Open only
+// ever returns a non-nil error when a persistence path IS configured
+// and the file at it exists but couldn't be read/parsed -- both "no
+// persistence configured" (storePath == "") and "file genuinely
+// doesn't exist yet" (a real fresh install) return a nil error, so
+// requiring storePath != "" here is belt-and-braces rather than the
+// actual distinguishing signal, which is err itself.
+func authShouldFailClosed(err error, storePath string) bool {
+	return err != nil && storePath != ""
+}
+
 // runResetPassword backs `-reset-password <username>` -- the account-
 // recovery path. Prompts for the new password twice (no echo) rather
 // than accepting it as a CLI argument or env var, so it never touches
@@ -712,14 +1006,14 @@ func readPasswordTwice() (string, error) {
 // WebSocket broadcast (see detect.Detector.Enqueue/Run, and the
 // dedicated detection-worker goroutine main() starts alongside this
 // one).
-func ingest(ctx context.Context, raw <-chan syslog.RawMessage, st *store.Store, devices *device.Registry, h *hub.Hub, geo *geoip.Lookup, detector *detect.Detector, names naming.Resolver) {
+func ingest(ctx context.Context, raw <-chan syslog.RawMessage, st *store.Store, devices *device.Registry, macRegistry *device.MACRegistry, fs *flags.Store, h *hub.Hub, geo *geoip.Lookup, detector *detect.Detector, ru *rules.Store, names naming.Resolver) {
 	ingestLog := logging.New("ingest")
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case rm := <-raw:
-			ingestOneRecovered(ingestLog, rm, st, devices, h, geo, detector, names)
+			ingestOneRecovered(ingestLog, rm, st, devices, macRegistry, fs, h, geo, detector, ru, names)
 		}
 	}
 }
@@ -730,7 +1024,7 @@ func ingest(ctx context.Context, raw <-chan syslog.RawMessage, st *store.Store, 
 // still end the entire ingest goroutine for good on the first bad
 // message (silently stopping all future event processing) rather than
 // just dropping that one message. See logging.Recover's doc comment.
-func ingestOneRecovered(logger *slog.Logger, rm syslog.RawMessage, st *store.Store, devices *device.Registry, h *hub.Hub, geo *geoip.Lookup, detector *detect.Detector, names naming.Resolver) {
+func ingestOneRecovered(logger *slog.Logger, rm syslog.RawMessage, st *store.Store, devices *device.Registry, macRegistry *device.MACRegistry, fs *flags.Store, h *hub.Hub, geo *geoip.Lookup, detector *detect.Detector, ru *rules.Store, names naming.Resolver) {
 	defer logging.Recover(logger)
 
 	env := syslog.ParseEnvelope(rm.Data, rm.RecvTime)
@@ -738,6 +1032,31 @@ func ingestOneRecovered(logger *slog.Logger, rm syslog.RawMessage, st *store.Sto
 	deviceID := devices.Resolve(rm.SourceIP, rm.RecvTime)
 	srcCountry, _ := geo.Country(parsed.SrcIP)
 	dstCountry, _ := geo.Country(parsed.DstIP)
+
+	// New-device/new-MAC detection (issue #103 phase 1): a deterministic,
+	// once-per-MAC check, so it's raised directly here rather than
+	// through detect.Detector's async worker like every other flag type
+	// -- there's no rolling-window state to maintain, just a "seen
+	// before" lookup against macRegistry's persisted history. Skips
+	// events with no SrcMAC (MACRegistry.Seen already no-ops for those,
+	// but checking here first avoids taking its lock at all on the
+	// common WAN-side-rule case where SrcMAC is never present). No
+	// confidence score attached (plain Add, not AddWithDetail/
+	// AddWithConfidence): "is this MAC new" is a deterministic yes/no,
+	// but that's a different question from "is this a threat" -- a truly
+	// new device is very often entirely benign (a phone joining the
+	// Wi-Fi), so fabricating a numeric confidence here would misleadingly
+	// imply a threat judgment this detector doesn't make. Same "not
+	// scored" contract as Flag.Confidence's nil case. The target is a
+	// MAC, not an IP, so -- same as TypeRuleSpike's rule-label target --
+	// there's no meaningful Country to attach either.
+	if parsed.SrcMAC != "" && macRegistry.Seen(parsed.SrcMAC, rm.RecvTime) {
+		detail := fmt.Sprintf("first traffic seen from MAC %s", parsed.SrcMAC)
+		if parsed.SrcIP != "" {
+			detail = fmt.Sprintf("first traffic seen from MAC %s (source IP %s)", parsed.SrcMAC, parsed.SrcIP)
+		}
+		fs.Add(flags.TypeNewDevice, parsed.SrcMAC, detail, rm.RecvTime)
+	}
 
 	e := store.Event{
 		Time:         env.Timestamp,
@@ -758,6 +1077,8 @@ func ingestOneRecovered(logger *slog.Logger, rm syslog.RawMessage, st *store.Sto
 		DstPort:      parsed.DstPort,
 		SrcHostName:  names.Host(parsed.SrcIP),
 		DstHostName:  names.Host(parsed.DstIP),
+		SrcPortName:  names.Port(parsed.SrcPort),
+		DstPortName:  names.Port(parsed.DstPort),
 		SrcCountry:   srcCountry,
 		DstCountry:   dstCountry,
 		NatIP:        parsed.NatIP,
@@ -771,4 +1092,10 @@ func ingestOneRecovered(logger *slog.Logger, rm syslog.RawMessage, st *store.Sto
 	stored := st.Insert(e)
 	h.Broadcast(stored)
 	detector.Enqueue(stored)
+	// Keeps internal/rules' long-lived per-rule usage record in sync with
+	// internal/store/ring.go's own totalByRule bump inside Insert above --
+	// same per-event trigger, so RuleUsage never drifts out of step with
+	// what the store itself just counted (see internal/rules.Store.Touch's
+	// doc comment for why this lives here rather than as a separate pass).
+	ru.Touch(stored.RuleLabel, stored.ReceivedAt)
 }

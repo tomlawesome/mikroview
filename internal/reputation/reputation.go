@@ -21,6 +21,12 @@ import (
 const (
 	requestTimeout = 5 * time.Second
 	cacheTTL       = 15 * time.Minute
+	// maxCacheEntries bounds the lookup cache. Entries expire after
+	// cacheTTL but nothing ever removed them, so the map only grew: an
+	// authenticated caller iterating /api/lookup/ip/{ip} over the IPv4
+	// space grows it without limit and drives an outbound request per
+	// miss. Well above any real browsing session.
+	maxCacheEntries = 10_000
 )
 
 // ErrNotPublic is returned for an unparseable or private/loopback/
@@ -65,12 +71,13 @@ const (
 )
 
 // RiskFloor returns a confidence floor derived from IsTor/UsageType, if
-// either signal applies (issue #58) -- a Tor exit node is treated as
-// the stronger signal, checked first. ok is false if neither applies,
-// meaning this result contributes no floor from these two fields (a
-// caller should not treat that as "confirmed clean," same absence-of-
-// evidence reasoning flags.Store.RaiseConfidenceFloor already documents
-// for AbuseScore).
+// either signal applies (issue #58) -- checked in descending floor
+// order so the strongest applicable signal wins outright rather than
+// being averaged with a weaker one. ok is false if neither applies,
+// meaning this result contributes no floor from either field (a caller
+// should not treat that as "confirmed clean," same absence-of-evidence
+// reasoning flags.Store.RaiseConfidenceFloor already documents for
+// AbuseScore).
 func (r Result) RiskFloor() (floor int, ok bool) {
 	if r.IsTor {
 		return TorExitNodeFloor, true
@@ -168,10 +175,29 @@ func (c *Client) Lookup(ctx context.Context, ipStr string) (Result, error) {
 	}
 
 	c.mu.Lock()
+	c.evictExpiredLocked()
 	c.cache[ipStr] = cacheEntry{result: result, expires: time.Now().Add(cacheTTL)}
 	c.mu.Unlock()
 
 	return result, nil
+}
+
+// evictExpiredLocked drops entries whose TTL has passed, and if that
+// alone doesn't get the map under maxCacheEntries, clears it entirely.
+// A full clear rather than an LRU eviction because this is a pure
+// best-effort cache: the only cost of a miss is one extra outbound
+// lookup, so the simplest bound that cannot itself become a hot-path
+// cost is the right one. Callers hold c.mu.
+func (c *Client) evictExpiredLocked() {
+	now := time.Now()
+	for ip, e := range c.cache {
+		if now.After(e.expires) {
+			delete(c.cache, ip)
+		}
+	}
+	if len(c.cache) >= maxCacheEntries {
+		c.cache = make(map[string]cacheEntry)
+	}
 }
 
 // fetchShodan queries Shodan's free, keyless InternetDB for open ports,

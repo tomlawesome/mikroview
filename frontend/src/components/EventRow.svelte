@@ -69,10 +69,12 @@
     <span class="cell port">
       <button
         class="cell-btn port-btn"
-        title="Filter to port: {event.srcPort}"
+        title={event.srcPortName
+          ? `${event.srcPortName} — filter to port: ${event.srcPort}`
+          : `Filter to port: ${event.srcPort}`}
         onclick={() => appState.setFilter('port', String(event.srcPort))}
       >
-        {event.srcPort}
+        {event.srcPortName || event.srcPort}
       </button>
       {#if lookupPort(event.srcPort)}
         <PortInvestigateButton port={event.srcPort} />
@@ -103,10 +105,12 @@
     <span class="cell port">
       <button
         class="cell-btn port-btn"
-        title="Filter to port: {event.dstPort}"
+        title={event.dstPortName
+          ? `${event.dstPortName} — filter to port: ${event.dstPort}`
+          : `Filter to port: ${event.dstPort}`}
         onclick={() => appState.setFilter('port', String(event.dstPort))}
       >
-        {event.dstPort}
+        {event.dstPortName || event.dstPort}
       </button>
       {#if lookupPort(event.dstPort)}
         <PortInvestigateButton port={event.dstPort} />
