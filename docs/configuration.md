@@ -18,6 +18,10 @@ listen:
   syslogTcp: ":1514"
   http: ":8080"
   httpRedirect: ":8081"
+  # Only set these if a reverse proxy fronts mikroview -- see
+  # "Running behind a reverse proxy" below.
+  # trustedProxies: ["private"]
+  # clientIpHeader: "X-Forwarded-For"  # this is the default
 
 store:
   retention: 24h
@@ -38,6 +42,52 @@ devices:
   sending logs from an IP *not* listed here still appear in the UI and
   `/api/devices`, labelled by their raw IP with `configured: false`, so
   you can identify and add them rather than silently losing their events.
+
+### Running behind a reverse proxy
+
+Mikroview rate-limits failed logins per source address as well as per
+username. Behind a reverse proxy, every request arrives carrying the
+*proxy's* address, so without configuration all your users share a
+single rate-limit bucket and one attacker's failed attempts lock
+everybody out.
+
+`listen.trustedProxies` fixes that by telling mikroview which peers it
+may believe a forwarding header from:
+
+```yaml
+listen:
+  trustedProxies: ["private"] # or ["10.0.0.0/8", "172.20.0.5", ...]
+  clientIpHeader: "X-Forwarded-For" # the default; set for proxies that use another
+```
+
+- **`trustedProxies`** — bare IPs, CIDRs, or the shorthand `"private"`
+  (loopback, RFC1918, CGNAT, link-local and IPv6 ULA — which is where a
+  proxy sharing your LAN or a Docker network lands). **Empty by
+  default, and empty means forwarding headers are ignored entirely.**
+  That default is not an oversight: a header is just text the client
+  sent, so honouring one unconditionally would let anyone mint a fresh,
+  empty rate-limit bucket for every request simply by varying it, which
+  doesn't weaken the limiter so much as delete it. List only proxies you
+  actually operate.
+- **`clientIpHeader`** — which header to read, honoured only for peers
+  matching `trustedProxies`. Defaults to `X-Forwarded-For`, which nginx,
+  Caddy, Traefik, HAProxy, Cloudflare and the cloud load balancers all
+  set without being asked. Point it at `X-Real-IP`, `CF-Connecting-IP`
+  or anything else for a proxy that doesn't; single-value headers work
+  unchanged.
+
+The forwarded chain is walked **right to left**, skipping entries that
+are themselves trusted proxies, and the first untrusted address wins.
+That direction matters: entries are appended hop by hop, so the
+rightmost was written by your own proxy while anything further left
+could have been forged by the client before the request ever arrived.
+If the chain is malformed, or every entry is a trusted proxy, mikroview
+falls back to the directly-observed peer address rather than to
+something the client chose.
+
+A misconfigured entry here fails startup rather than being skipped —
+silently ignoring it would leave you believing forwarded addresses were
+being honoured when they weren't.
 
 **File permissions**: the container runs as a fixed non-root user (uid
 65532, distroless `nonroot`) that is unrelated to any user on the Docker
@@ -1158,6 +1208,21 @@ oidc:
   clientSecret: "changeme"
   publicBaseUrl: "https://mikroview.example.com"
   scopes: ["openid", "profile", "email"] # this is the default if omitted
+
+  # Who at that issuer may sign in. All of these are optional and all
+  # default to empty, which permits anyone the issuer vouches for --
+  # the right answer for a self-hosted IdP (see "Who can sign in"
+  # below), and refused at startup for a multi-tenant one.
+  # Every field you set adds a condition, and all set conditions must
+  # hold.
+  #
+  # allowedGroups: ["mikroview-admins", "netops"]
+  # groupsClaim: "groups"          # default; Azure often needs "roles"
+  # allowedEmails: ["you@example.com"]
+  # allowedEmailDomains: ["example.com"]
+  # requiredClaims:                # the general form the above are sugar over
+  #   hd: ["example.com"]          # Google Workspace: one organisation
+  #   tid: ["<tenant-guid>"]       # Microsoft Entra: one tenant
 ```
 
 - **`issuerUrl`** — the provider's issuer URL (Authentik: your
@@ -1183,6 +1248,80 @@ oidc:
   terminating a real domain (`https://mikroview.example.com`).
 - **`scopes`** — defaults to `openid`, `profile`, `email` if omitted.
   `openid` is always required regardless of what's listed.
+
+### Who can sign in
+
+Setting `issuerUrl` is itself the primary access control, and for a
+self-hosted provider it is usually the *only* one you need. Mikroview
+validates every ID token against that issuer's own signing keys and
+against your client ID, so if `issuerUrl` points at an Authentik,
+Keycloak or Zitadel you run, only accounts in that directory can sign
+in — and narrowing further is what your IdP's own application bindings
+and group policies are for. Leaving every field below empty is the
+correct, complete configuration for that deployment.
+
+That reasoning stops holding the moment the issuer is one you don't
+run. Every Google account on earth validates against
+`accounts.google.com`; the same is true of the shared Microsoft Entra
+endpoints (`/common`, `/organizations`, `/consumers`) and of Apple.
+Against those, `issuerUrl` narrows nothing, and since the first account
+to register becomes an admin, an unrestricted deployment hands admin to
+whoever reaches the login page first. **Mikroview refuses to enable SSO
+for a known multi-tenant issuer unless at least one restriction below
+is set** — it logs the reason and leaves SSO off; local login is
+unaffected.
+
+- **`allowedGroups`** — permit an account carrying at least one of
+  these in its groups claim. Your provider must actually be configured
+  to release that claim; if it isn't, **every login is refused**, not
+  permitted. That direction is deliberate — an allowlist that opens up
+  when a claim goes missing isn't one.
+- **`groupsClaim`** — which claim holds the groups. Defaults to
+  `groups` (Authentik, Keycloak, most Okta setups); Azure commonly uses
+  `roles`.
+- **`allowedEmails`** — exact addresses, compared case-insensitively.
+- **`allowedEmailDomains`** — permit any address at these domains.
+  Compared as whole domains, not string suffixes, so listing
+  `example.com` does not admit `attacker@notexample.com`. Subdomains
+  are not implied — list `mail.example.com` separately if you want it.
+- **`requiredClaims`** — the general mechanism the three fields above
+  are conveniences over: a map of claim name to permitted values, where
+  the account must carry at least one permitted value for every claim
+  named. Nothing about it is provider-specific, which is the point: a
+  provider that invents its own claim tomorrow needs no code change
+  here.
+
+Both email fields additionally require the provider to have marked the
+address `email_verified`. At a provider that lets users set their own
+unverified address, an email allowlist without that check is
+decorative.
+
+Restrictions are re-evaluated on **every** sign-in, before any account
+is created, so removing someone from a group at your IdP locks them out
+at their next login rather than whenever their session happens to
+expire, and a refused account never gets provisioned as a side effect
+of being refused. A refused user is told plainly that they aren't
+permitted, but never *which* condition they failed — that goes to the
+server log, since the specifics would map out your allowlist for an
+outsider.
+
+**Locking a public IdP to one organisation:**
+
+```yaml
+# Google Workspace -- only accounts at example.com, not personal Gmail
+oidc:
+  issuerUrl: "https://accounts.google.com"
+  requiredClaims:
+    hd: ["example.com"]
+
+# Microsoft Entra -- only your tenant.
+# Prefer the single-tenant issuer URL where you can; requiredClaims.tid
+# is the belt-and-braces version, and is required if you use /common.
+oidc:
+  issuerUrl: "https://login.microsoftonline.com/common/v2.0"
+  requiredClaims:
+    tid: ["00000000-0000-0000-0000-000000000000"]
+```
 
 **Identity**: an account is matched by the immutable `(issuer, subject)`
 pair from the verified ID token, never by email or username -- an
@@ -1332,6 +1471,8 @@ Override individual scalar settings without a mounted file:
 | `MIKROVIEW_LISTEN_SYSLOG_TCP` | `listen.syslogTcp` |
 | `MIKROVIEW_LISTEN_HTTP` | `listen.http` |
 | `MIKROVIEW_LISTEN_HTTP_REDIRECT` | `listen.httpRedirect` |
+| `MIKROVIEW_TRUSTED_PROXIES` | `listen.trustedProxies` (comma-separated; see [Running behind a reverse proxy](#running-behind-a-reverse-proxy)) |
+| `MIKROVIEW_CLIENT_IP_HEADER` | `listen.clientIpHeader` |
 | `MIKROVIEW_STORE_RETENTION` | `store.retention` |
 | `MIKROVIEW_STORE_MAX_EVENTS` | `store.maxEvents` |
 | `MIKROVIEW_LOG_LEVEL` | `log.level` (see [Logging](#logging)) |

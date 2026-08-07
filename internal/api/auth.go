@@ -2,7 +2,6 @@ package api
 
 import (
 	"context"
-	"net"
 	"net/http"
 	"strings"
 	"time"
@@ -239,14 +238,6 @@ func userFromContext(r *http.Request) *auth.User {
 	return u
 }
 
-func clientIP(r *http.Request) string {
-	host, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err != nil {
-		return r.RemoteAddr
-	}
-	return host
-}
-
 func (s *Server) setSessionCookie(w http.ResponseWriter, sessionID string) {
 	http.SetCookie(w, &http.Cookie{
 		Name:     sessionCookieName,
@@ -398,7 +389,7 @@ func (s *Server) handleAuthLogin(w http.ResponseWriter, r *http.Request) {
 	}
 
 	now := time.Now()
-	ipKey := "ip:" + clientIP(r)
+	ipKey := "ip:" + s.clientIP(r)
 	userKey := "user:" + strings.ToLower(req.Username)
 	if !s.LoginLimiter.Allow(ipKey, now) || !s.LoginLimiter.Allow(userKey, now) {
 		http.Error(w, "too many attempts, try again later", http.StatusTooManyRequests)
