@@ -203,16 +203,8 @@ const minPasswordLength = 8
 // rather than a bare array. storeFile.UnmarshalJSON below stays
 // compatible with the oldest shape (a bare `[]User` array) so an
 // existing deployment's accounts still load correctly.
-//
-// Disabled is read but never written. It is the marker left by the
-// removed no-auth mode, kept only so a deployment that took that option
-// can be recognised and told what happened -- see Store.WasAuthDisabled.
-// Dropping the field instead would have made those deployments load as
-// an ordinary empty store, which is the right end state but arrives
-// with no explanation.
 type storeFile struct {
-	Disabled bool    `json:"disabled"`
-	Users    []*User `json:"users"`
+	Users []*User `json:"users"`
 }
 
 func (f *storeFile) UnmarshalJSON(data []byte) error {
@@ -231,7 +223,6 @@ func (f *storeFile) UnmarshalJSON(data []byte) error {
 		return err
 	}
 	f.Users = legacy
-	f.Disabled = false
 	return nil
 }
 
@@ -247,12 +238,6 @@ type Store struct {
 	byID      map[string]*User
 	byName    map[string]string  // lowercased username -> ID
 	oidcIndex map[oidcKey]string // (issuer, subject) -> ID, see ByOIDCIdentity
-	// wasDisabled records that this store was loaded from a file left by
-	// the removed no-auth mode. It changes no behaviour -- such a store
-	// has no accounts, so it is simply an undecided store and setup is
-	// required -- and exists only so startup can say why the deployment
-	// that used to serve everyone without a login now asks for one.
-	wasDisabled bool
 	// version is the backend's token for the document as of the last
 	// load, so a running server can pick up a change made by a separate
 	// process -- namely the CLI recovery tools (`-recover-admin-account`,
@@ -333,7 +318,6 @@ func (s *Store) applyLoaded(file storeFile, version int64) {
 			s.oidcIndex[oidcKey{issuer: u.OIDCIssuer, subject: u.OIDCSubject}] = u.ID
 		}
 	}
-	s.wasDisabled = file.Disabled
 	s.version = version
 }
 
@@ -391,20 +375,6 @@ func (s *Store) Count() int {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return len(s.byID)
-}
-
-// WasAuthDisabled reports whether this store was loaded from a file left
-// by the removed no-auth mode.
-//
-// Nothing branches on it. Such a deployment has no accounts, so it is an
-// ordinary undecided store and setup is required -- which is the safe
-// direction, and the point of removing the mode. It is reported at
-// startup so the operator learns that from mikroview rather than from a
-// login screen they have never seen before.
-func (s *Store) WasAuthDisabled() bool {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	return s.wasDisabled
 }
 
 // Register creates the very first account, always as RoleAdmin,
