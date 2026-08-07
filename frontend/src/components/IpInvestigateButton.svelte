@@ -1,4 +1,5 @@
 <script lang="ts">
+  // SPDX-License-Identifier: AGPL-3.0-only
   // Small per-IP trigger sitting next to the click-to-filter address cell
   // (see EventRow.svelte) -- only rendered for public IPs, since the
   // backend's own isPublic check (internal/reputation) would just reject

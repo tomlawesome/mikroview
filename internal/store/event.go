@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+
 package store
 
 import "time"
@@ -43,6 +45,14 @@ type Event struct {
 	SrcPort int    `json:"srcPort,omitempty"`
 	DstIP   string `json:"dstIp,omitempty"`
 	DstPort int    `json:"dstPort,omitempty"`
+
+	// SrcPortName/DstPortName are user-configured friendly names for
+	// SrcPort/DstPort (see internal/naming.Resolver.Port, issue #109) --
+	// empty whenever the port is 0 (no port) or has no matching entity.
+	// Same display-only relationship to SrcPort/DstPort that RuleName has
+	// to RuleLabel.
+	SrcPortName string `json:"srcPortName,omitempty"`
+	DstPortName string `json:"dstPortName,omitempty"`
 
 	// SrcHostName/DstHostName are user-configured friendly names for
 	// SrcIP/DstIP (see internal/naming, internal/config's HostNames) --

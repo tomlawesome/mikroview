@@ -37,7 +37,9 @@ docker compose up -d --build
 
 Then follow [docs/routeros-setup.md](docs/routeros-setup.md) to point
 your RouterOS device(s) at the container, and open
-`https://<docker-host>:8080`. mikroview serves TLS by default with a
+`https://<docker-host>` (port 443). A plain `http://<docker-host>`
+request on port 80 redirects there automatically. mikroview serves TLS
+by default with a
 self-generated certificate (see [docs/configuration.md](docs/configuration.md#tls)),
 so your browser will show an untrusted-certificate warning on first
 visit until you import that certificate -- expected for a self-hosted
@@ -63,9 +65,22 @@ services:
       # user that can't bind <1024 (see Dockerfile).
       - "514:1514/udp"
       - "514:1514/tcp"
-      # HTTPS by default -- see the Quickstart above and
-      # docs/configuration.md's "TLS" section.
-      - "8080:8080"
+      # HTTPS by default, on the conventional port -- see the Quickstart
+      # above and docs/configuration.md's "TLS" section.
+      - "443:8080"
+      # A plain-HTTP listener that only ever redirects to the HTTPS
+      # port above -- never serves real content.
+      - "80:8081"
+    # Container hardening -- defense in depth on top of the image
+    # already being distroless + non-root. mikroview binds only
+    # unprivileged ports inside the container (which is why the
+    # mappings above exist), so it needs no capabilities at all, and
+    # every path it writes to is a mount -- see "Persistent data".
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    read_only: true
     healthcheck:
       test: ["CMD", "/mikroview", "-healthcheck"]
       interval: 30s
@@ -78,9 +93,10 @@ services:
       # your own MaxMind GeoLite2 database; uncomment both this and the
       # env var below once you have one.
       # - ./GeoLite2-Country.mmdb:/etc/mikroview/GeoLite2-Country.mmdb:ro
-      # Persists flags/accounts/detector settings/the TLS cert across
-      # container recreation, not just restarts -- see "Persistent
-      # data" below for what this is and the bind-mount alternative.
+      # Persists flags/accounts/detector settings/the new-device MAC
+      # registry/the TLS cert across container recreation, not just
+      # restarts -- see "Persistent data" below for what this is and
+      # the bind-mount alternative.
       - mikroview-data:/var/lib/mikroview
       # Alternative to the named volume above: a bind mount, if you want
       # to browse/back up the files directly from the host. Comment out
@@ -96,6 +112,7 @@ services:
       # - MIKROVIEW_FLAGS_STORE_PATH=/var/lib/mikroview/flags.json
       # - MIKROVIEW_FLAGS_DETECTOR_SETTINGS_STORE_PATH=/var/lib/mikroview/detector-settings.json
       # - MIKROVIEW_AUTH_STORE_PATH=/var/lib/mikroview/users.json
+      # - MIKROVIEW_DEVICE_MAC_STORE_PATH=/var/lib/mikroview/mac-registry.json
       # TLS is on by default and needs no configuration to work -- these
       # are only for customizing it.
       # - MIKROVIEW_TLS_STORE_PATH=/var/lib/mikroview/tls
@@ -106,10 +123,16 @@ services:
       # only safe if this port is unreachable except from your own
       # isolated-network reverse proxy.
       # - MIKROVIEW_TLS_ENABLED=false
+      # Disables the plain-HTTP redirect-only listener above -- only
+      # needed if you've removed the "80:8081" port mapping too (e.g.
+      # your reverse proxy handles the HTTP->HTTPS redirect itself).
+      # - MIKROVIEW_LISTEN_HTTP_REDIRECT=
 
 volumes:
   mikroview-data:
 ```
+
+**Image tags**: `latest` is the only tag intended for general use -- it's whatever was most recently promoted from `preview` after passing CI and a container smoke test there. `preview-<7-char-sha>` tags exist for every build off the `preview` branch, if you ever want to pin to a specific one rather than track `latest`. There is deliberately no `dev` tag: pushing to the `dev` branch never triggers a build at all, so nothing publishes from it -- if you ever see one referenced anywhere (including in your own `docker images` history), treat it as stale rather than a live channel, since nothing keeps it current.
 
 Create `config.yaml` next to it first (see [`deploy/config.example.yaml`](deploy/config.example.yaml) for the full option reference), then `docker compose up -d`. This mirrors [`deploy/docker-compose.yml`](deploy/docker-compose.yml) exactly, just swapping the local `build:` for the prebuilt `image:`.
 
@@ -117,13 +140,13 @@ Create `config.yaml` next to it first (see [`deploy/config.example.yaml`](deploy
 
 By default, both compose files above mount a **named volume** over
 `/var/lib/mikroview` -- where flags, local accounts, detector on/off
-toggles, and the self-generated TLS certificate all persist. This is
-the default deliberately: once you've set up authentication or have
-flags worth keeping, losing them on every `docker compose down` or
-image update -- not just a plain restart -- would be a bad surprise,
-not an edge case. Docker populates a fresh named volume from the
-image's own `/var/lib/mikroview` on first use, ownership included, so
-there's no setup step needed.
+toggles, the new-device detector's MAC registry, and the self-generated
+TLS certificate all persist. This is the default deliberately: once
+you've set up authentication or have flags worth keeping, losing them
+on every `docker compose down` or image update -- not just a plain
+restart -- would be a bad surprise, not an edge case. Docker populates
+a fresh named volume from the image's own `/var/lib/mikroview` on first
+use, ownership included, so there's no setup step needed.
 
 The tradeoff is that you can't `cat`/`cp`/back up the files directly
 from the host the way you can with a bind mount -- you'd go through
@@ -161,7 +184,7 @@ If a bind mount is misconfigured (wrong ownership), mikroview logs
 rather than crashing — annoying (you lose flags/accounts/TLS cert on
 every restart) but not fatal.
 
-## How it works
+## Features
 
 - **Ingestion**: RouterOS forwards firewall log lines via
   `/system logging` over syslog (UDP or TCP). No polling, no RouterOS
@@ -194,37 +217,45 @@ every restart) but not fatal.
 - **Logging**: leveled (debug/info/warn/error) and colorized server
   output, auto-plain when piped or `NO_COLOR` is set. See
   [docs/configuration.md](docs/configuration.md)'s "Logging" section.
-- **Authentication**: a one-time choice on first load — create the admin
-  account, or explicitly skip auth for this deployment. Creating an
-  account makes it required for everything except the health check
+- **Authentication**: required, always. On first load mikroview asks you
+  to create the admin account, and serves nothing else until you do.
+  After that it is required for everything except the health check
   (Argon2id-hashed passwords, opaque server-side sessions,
-  self-registration for the first/super-admin account only); skipping
-  leaves mikroview fully open, and reversing that later is CLI-only by
-  design (`mikroview -enable-auth-setup`). See
+  self-registration for the first/super-admin account only). Local
+  accounts and single sign-on via an external OIDC identity provider
+  (e.g. Authentik, Keycloak, Entra ID) can both be enabled at once. See
   [docs/configuration.md](docs/configuration.md) and
   [SECURITY.md](SECURITY.md) for the threat model and setup.
-- **Deployment**: multi-stage Docker build, final image based on
-  distroless `nonroot`, embeds the built frontend into the Go binary via
-  `go:embed` — one process, one image.
 
-## Development
+## Security levels
 
-Requires Go 1.26+ and Node 22+.
+Auth isn't one setting — the choice you make trades off convenience
+against how much a compromise of the mikroview host itself can expose.
+From least to most isolated:
 
-```sh
-make dev-backend    # go run ., syslog on :1514, https on :8080 (TLS on by default -- see docs/configuration.md#tls)
-make dev-frontend   # vite dev server on :5173, proxies /api to :8080 over TLS
-make test           # go test ./... + svelte-check
-make build           # full build: frontend -> web/dist -> single Go binary
-make docker          # docker build -t mikroview .
-```
+1. **Local accounts (username/password).** The floor — mikroview will
+   not serve anything until one exists. Simplest to set up, but account data — usernames and
+   roles, including who's the admin — lives in a plaintext file on the
+   same host mikroview runs on. There's no separation between "the app
+   is compromised" and "the account data is readable": a leaked
+   backup, a misconfigured mount, or anything that exposes that one
+   file hands over who to target, and local login security then
+   depends entirely on password strength.
+2. **OIDC/SSO (recommended when available).** The real credential
+   lives with your external identity provider (Authentik, Keycloak,
+   Entra ID, ...), never on the mikroview host — compromising the host
+   doesn't expose anything usable against an SSO-provisioned account.
+   Local and SSO accounts can coexist.
+3. **(Planned) Off-box database backend.** Moving persisted state to a
+   separately-secured, network-restricted database closes the "read
+   one file, get everything" exposure that local accounts still have
+   today — tracked in
+   [issue #131](https://github.com/tomlawesome/mikroview/issues/131).
 
-Feed it fixture syslog lines without a real router, e.g.:
-
-```sh
-printf '<134>Jan 15 10:22:31 MikroTik A|lan-wan|forward: in:ether1 out:bridge1, connection-state:new, proto TCP (SYN), 192.168.1.50:51234->1.2.3.4:443, len 60' \
-  | nc -u -w1 127.0.0.1 1514
-```
+Pick the level that matches your network: local accounts are the floor,
+and SSO is worth preferring wherever you have an identity provider
+available. Full detail and the reasoning behind each is in
+[SECURITY.md](SECURITY.md#authentication).
 
 ## Docs
 
@@ -234,9 +265,16 @@ printf '<134>Jan 15 10:22:31 MikroTik A|lan-wan|forward: in:ether1 out:bridge1, 
   reference, env vars, API reference
 - [brand/BRANDING.md](brand/BRANDING.md) — logo files, color tokens,
   how to regenerate the PNG exports
+- [CONTRIBUTING.md](CONTRIBUTING.md) — branching model and local
+  development setup, for anyone submitting a pull request
 
-## Not (yet) included
+## License
 
-Deliberately deferred rather than half-built: SSO/OIDC (local accounts
-only for now), TLS syslog, multi-arch images, config hot-reload,
-server-side WebSocket filtering, JSON export.
+MikroView is free and open source under the
+[GNU AGPL v3.0](LICENSE). You can use, modify and self-host it at no
+cost, including inside a business.
+
+If you want to bundle MikroView into a commercial product, offer it as
+a hosted service, or ship changes without publishing them, a commercial
+licence is available — see
+[COMMERCIAL-LICENSE.md](COMMERCIAL-LICENSE.md).

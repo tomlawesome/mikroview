@@ -1,12 +1,15 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+
 package flags
 
 import (
+	"fmt"
+	"github.com/tomlawesome/mikroview/internal/reputation"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
-
-	"github.com/tomlawesome/mikroview/internal/reputation"
 )
 
 func TestOpenEmptyPathIsUsable(t *testing.T) {
@@ -28,6 +31,31 @@ func TestOpenMissingFileIsUsable(t *testing.T) {
 	}
 	if len(s.List()) != 0 {
 		t.Errorf("expected an empty store, got %d flags", len(s.List()))
+	}
+}
+
+// A JSON array containing null is syntactically valid, so it unmarshals
+// without error into a slice with a nil *Flag element -- before the
+// fix, the very next line (indexing f.ID) paniced on that nil pointer,
+// contradicting Open's own documented "malformed file never blocks
+// startup" contract.
+func TestOpenSkipsNilArrayElements(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "flags.json")
+	data := `{"flags":[null, {"id":"port_scan:1.2.3.4","type":"port_scan","target":"1.2.3.4"}, null]}`
+	if err := os.WriteFile(path, []byte(data), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	s, err := Open(path) // must not panic
+	if err != nil {
+		t.Fatalf("Open() returned an unexpected error: %v", err)
+	}
+	list := s.List()
+	if len(list) != 1 {
+		t.Fatalf("expected the one real entry to survive, got %d: %+v", len(list), list)
+	}
+	if list[0].Target != "1.2.3.4" {
+		t.Errorf("expected the real flag's data to be intact, got %+v", list[0])
 	}
 }
 
@@ -179,7 +207,63 @@ func TestListOrdersMostRecentlyActiveFirst(t *testing.T) {
 	}
 }
 
+// TestPersistLockedRateLimitsWrites proves the debounce actually skips
+// disk writes within the window (not just that it compiles) -- a
+// sustained re-fire burst (the scenario this exists for) must not hit
+// disk once per event.
+func TestPersistLockedRateLimitsWrites(t *testing.T) {
+	orig := persistMinInterval
+	persistMinInterval = 80 * time.Millisecond
+	defer func() { persistMinInterval = orig }()
+
+	path := filepath.Join(t.TempDir(), "flags.json")
+	s, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	now := time.Now()
+	s.Add(TypePortScan, "1.1.1.1", "first", now)
+	firstWrite, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("expected the first Add to write immediately (empty lastPersist), got: %v", err)
+	}
+
+	// Within the debounce window: must NOT reach disk yet.
+	s.Add(TypePortScan, "2.2.2.2", "second, still within the window", now)
+	stillFirst, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(stillFirst) != string(firstWrite) {
+		t.Errorf("expected the second Add (within %v of the first) to be rate-limited, but the file changed", persistMinInterval)
+	}
+
+	// Past the window: the next call must flush the latest state.
+	time.Sleep(persistMinInterval + 20*time.Millisecond)
+	s.Add(TypePortScan, "3.3.3.3", "third, after the window", now)
+	final, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(s.List()) != 3 {
+		t.Fatalf("in-memory state should always have all 3 regardless of persistence timing, got %d", len(s.List()))
+	}
+	if !strings.Contains(string(final), "3.3.3.3") {
+		t.Errorf("expected the post-window write to include all 3 flags, got:\n%s", final)
+	}
+}
+
 func TestPersistenceRoundTrip(t *testing.T) {
+	// Every Add/Clear below happens back-to-back with no real delay --
+	// persistMinInterval's rate limiting would otherwise skip all but
+	// the first write, and reopening immediately after would read stale
+	// data. Real callers spread naturally over wall-clock time; this
+	// test doesn't.
+	orig := persistMinInterval
+	persistMinInterval = 0
+	defer func() { persistMinInterval = orig }()
+
 	path := filepath.Join(t.TempDir(), "nested", "flags.json")
 
 	s1, err := Open(path)
@@ -269,6 +353,118 @@ func TestAddReportsNewEpisode(t *testing.T) {
 	s.Clear(id, now.Add(2*time.Second))
 	if isNew := s.Add(TypePortScan, "1.1.1.1", "revived", now.Add(3*time.Second)); !isNew {
 		t.Error("expected a revival from cleared to report a new episode")
+	}
+}
+
+// TestTimeSeriesCountsOnlyNewEpisodes is the granularity contract
+// FlagsChart depends on: a bucket counts an episode start (first-ever
+// raise, or a revival from Cleared), never a plain re-fire of an
+// already-active flag -- the same "isNew" distinction Add already
+// reports and onRaise already keys off of, kept consistent here rather
+// than introducing a second, different notion of flag "activity."
+func TestTimeSeriesCountsOnlyNewEpisodes(t *testing.T) {
+	s, _ := Open("")
+	// Pinned to :10s past the minute, not time.Now() directly -- the
+	// offsets below run up to +4s, and a bare time.Now() base
+	// occasionally lands within 4s of a minute boundary, pushing the
+	// revival into the next minute's bucket and flaking this test (hit
+	// in CI once already). A fixed offset from a truncated minute
+	// Pinned to the start of the current minute. TimeSeries buckets by
+	// minute and this test reads the final bucket, so a plain
+	// time.Now() made it flaky: started late enough in a minute, the
+	// +4s revival below landed in the *next* bucket and the count came
+	// back 1 instead of 2. Truncating guarantees every timestamp here
+	// shares one bucket regardless of when the suite runs.
+	now := time.Now().Truncate(time.Minute)
+
+	s.Add(TypePortScan, "1.1.1.1", "first", now)
+	series := s.TimeSeries()
+	last := series[len(series)-1]
+	if got := last.ByType[TypePortScan]; got != 1 {
+		t.Fatalf("expected 1 new episode counted after the first raise, got %d (bucket=%+v)", got, last)
+	}
+
+	// A plain re-fire of the still-active flag must not bump the bucket.
+	s.Add(TypePortScan, "1.1.1.1", "re-fire", now.Add(time.Second))
+	s.Add(TypePortScan, "1.1.1.1", "re-fire again", now.Add(2*time.Second))
+	series = s.TimeSeries()
+	last = series[len(series)-1]
+	if got := last.ByType[TypePortScan]; got != 1 {
+		t.Errorf("expected re-fires to leave the bucket at 1, got %d (bucket=%+v)", got, last)
+	}
+
+	// A revival from Cleared is a new episode and must bump it again.
+	id := flagID(TypePortScan, "1.1.1.1")
+	s.Clear(id, now.Add(3*time.Second))
+	s.Add(TypePortScan, "1.1.1.1", "revived", now.Add(4*time.Second))
+	series = s.TimeSeries()
+	last = series[len(series)-1]
+	if got := last.ByType[TypePortScan]; got != 2 {
+		t.Errorf("expected a revival to bump the bucket to 2, got %d (bucket=%+v)", got, last)
+	}
+}
+
+// TestTimeSeriesBucketsByType proves distinct Types land in separate
+// counters within the same minute, and that a Type with a zero count
+// for a given minute is omitted from that bucket's ByType map (same
+// "omit rather than list every known value" convention as
+// internal/store/ring.go's TimeBucket.ByAction).
+func TestTimeSeriesBucketsByType(t *testing.T) {
+	s, _ := Open("")
+	now := time.Now()
+
+	s.Add(TypePortScan, "1.1.1.1", "d1", now)
+	s.Add(TypeCriticalPort, "2.2.2.2", "d2", now)
+	s.Add(TypeCriticalPort, "3.3.3.3", "d3", now)
+
+	series := s.TimeSeries()
+	last := series[len(series)-1]
+	if last.ByType[TypePortScan] != 1 {
+		t.Errorf("expected 1 port_scan episode, got %+v", last.ByType)
+	}
+	if last.ByType[TypeCriticalPort] != 2 {
+		t.Errorf("expected 2 critical_port episodes, got %+v", last.ByType)
+	}
+	if _, ok := last.ByType[TypeGlobalSpike]; ok {
+		t.Errorf("expected a Type with zero episodes this minute to be omitted, got %+v", last.ByType)
+	}
+}
+
+// TestTimeSeriesReturnsFixedWidthWindow proves TimeSeries always returns
+// flagTimeSeriesMinutes entries, oldest first, even when nothing has
+// ever been raised -- same fixed-width-window contract as
+// internal/store/ring.go's Stats.TimeSeries, so FlagsChart can render a
+// consistent x-axis regardless of how much history actually exists yet.
+func TestTimeSeriesReturnsFixedWidthWindow(t *testing.T) {
+	s, _ := Open("")
+	series := s.TimeSeries()
+	if len(series) != flagTimeSeriesMinutes {
+		t.Fatalf("expected %d buckets, got %d", flagTimeSeriesMinutes, len(series))
+	}
+	for i, b := range series {
+		if len(b.ByType) != 0 {
+			t.Errorf("expected an empty store to report zero episodes in every bucket, bucket %d = %+v", i, b)
+		}
+	}
+	for i := 1; i < len(series); i++ {
+		if !series[i].Time.After(series[i-1].Time) {
+			t.Fatalf("expected strictly increasing bucket times, got %v then %v at index %d", series[i-1].Time, series[i].Time, i)
+		}
+	}
+}
+
+// TestTimeSeriesExcludedTargetNeverCounted proves a permanently-excluded
+// (Type, Target) pair -- which add() silently no-ops for, before isNew
+// is ever determined -- doesn't sneak into the bucket history either.
+func TestTimeSeriesExcludedTargetNeverCounted(t *testing.T) {
+	s, _ := Open("")
+	s.Exclude(TypePortScan, "1.1.1.1")
+	s.Add(TypePortScan, "1.1.1.1", "should be a no-op", time.Now())
+
+	series := s.TimeSeries()
+	last := series[len(series)-1]
+	if got := last.ByType[TypePortScan]; got != 0 {
+		t.Errorf("expected an excluded target's Add to never reach the bucket counter, got %d", got)
 	}
 }
 
@@ -513,5 +709,324 @@ func TestOnRaiseNotSetIsNoOp(t *testing.T) {
 	// No WithOnRaise call -- Add must not panic on a nil hook.
 	if isNew := s.Add(TypePortScan, "203.0.113.9", "detail", time.Now()); !isNew {
 		t.Error("expected the raise itself to still succeed with no hook configured")
+	}
+}
+
+// TestExcludedTargetNeverRaises is the core contract this feature
+// exists for: once excluded, (Type, Target) must never raise again --
+// not once, not after being raised-then-cleared elsewhere, and not
+// across many repeated calls (proving it's a durable exclusion, not a
+// one-shot suppression that resets after the first blocked call).
+func TestExcludedTargetNeverRaises(t *testing.T) {
+	s, _ := Open("")
+	now := time.Now()
+
+	s.Exclude(TypePortScan, "203.0.113.9")
+
+	if isNew := s.Add(TypePortScan, "203.0.113.9", "20 ports in 60s", now); isNew {
+		t.Error("expected Add on an excluded target to report no new episode")
+	}
+	if len(s.List()) != 0 {
+		t.Fatalf("expected an excluded target to raise nothing at all, got %+v", s.List())
+	}
+
+	// Repeated re-fires: still nothing, every time.
+	for i := 0; i < 5; i++ {
+		s.Add(TypePortScan, "203.0.113.9", "re-fire", now.Add(time.Duration(i)*time.Second))
+	}
+	if len(s.List()) != 0 {
+		t.Fatalf("expected repeated Add calls on an excluded target to keep raising nothing, got %+v", s.List())
+	}
+
+	// AddWithConfidence/AddWithDetail go through the same add() -- must
+	// be silenced too, not just the plain Add path.
+	s.AddWithConfidence(TypePortScan, "203.0.113.9", "detail", 90, now)
+	s.AddWithDetail(TypePortScan, "203.0.113.9", "detail", 90, Evidence{Ports: []int{22}}, "US", now)
+	if len(s.List()) != 0 {
+		t.Fatalf("expected AddWithConfidence/AddWithDetail to also be silenced, got %+v", s.List())
+	}
+
+	// A different (Type, Target) pair is unaffected.
+	s.Add(TypePortScan, "203.0.113.10", "unrelated target", now)
+	if len(s.List()) != 1 {
+		t.Errorf("expected the exclusion to be scoped to its exact (Type, Target), got %+v", s.List())
+	}
+	s.Add(TypeActivitySpike, "203.0.113.9", "same target, different type", now)
+	if len(s.List()) != 2 {
+		t.Errorf("expected the exclusion to be scoped to its exact Type too, got %+v", s.List())
+	}
+}
+
+// TestExcludeIsPermanentNotRaiseThenAutoClear guards specifically
+// against the rejected "raise then immediately auto-clear" alternative
+// design the issue calls out -- an excluded target must never even
+// briefly appear in the store, cleared or otherwise.
+func TestExcludeIsPermanentNotRaiseThenAutoClear(t *testing.T) {
+	s, _ := Open("")
+	s.Exclude(TypeCriticalPort, "198.51.100.4")
+	s.Add(TypeCriticalPort, "198.51.100.4", "6 attempts on port 22", time.Now())
+
+	if len(s.List()) != 0 {
+		t.Fatalf("expected an excluded target to never appear in the store at all (not raised-then-cleared), got %+v", s.List())
+	}
+}
+
+func TestClearAndExcludeClearsAndPreventsFutureRaises(t *testing.T) {
+	s, _ := Open("")
+	now := time.Now()
+
+	s.Add(TypePortScan, "203.0.113.9", "20 ports in 60s", now)
+	id := s.List()[0].ID
+
+	if ok := s.ClearAndExclude(id, now.Add(time.Minute)); !ok {
+		t.Fatal("expected ClearAndExclude on a known ID to succeed")
+	}
+
+	list := s.List()
+	if len(list) != 1 || !list[0].Cleared {
+		t.Fatalf("expected the flag to be marked cleared, got %+v", list)
+	}
+	if !s.Excluded(TypePortScan, "203.0.113.9") {
+		t.Error("expected ClearAndExclude to record the exclusion")
+	}
+
+	// The whole point: it must never raise again after this.
+	s.Add(TypePortScan, "203.0.113.9", "re-fire attempt", now.Add(2*time.Minute))
+	list = s.List()
+	if len(list) != 1 || !list[0].Cleared || list[0].Detail != "20 ports in 60s" {
+		t.Errorf("expected the excluded target to stay cleared and untouched by further Add calls, got %+v", list)
+	}
+}
+
+func TestClearAndExcludeUnknownIDReturnsFalse(t *testing.T) {
+	s, _ := Open("")
+	if s.ClearAndExclude("nonexistent", time.Now()) {
+		t.Error("expected ClearAndExclude on an unknown ID to return false")
+	}
+	if len(s.ListExclusions()) != 0 {
+		t.Error("expected no exclusion to be recorded for an unknown ID")
+	}
+}
+
+func TestExcludeIsIdempotent(t *testing.T) {
+	s, _ := Open("")
+	s.Exclude(TypePortScan, "203.0.113.9")
+	s.Exclude(TypePortScan, "203.0.113.9")
+
+	if len(s.ListExclusions()) != 1 {
+		t.Errorf("expected excluding the same pair twice to still yield one entry, got %+v", s.ListExclusions())
+	}
+}
+
+func TestRemoveExclusionReEnablesRaising(t *testing.T) {
+	s, _ := Open("")
+	now := time.Now()
+
+	s.Exclude(TypePortScan, "203.0.113.9")
+	s.Add(TypePortScan, "203.0.113.9", "should be suppressed", now)
+	if len(s.List()) != 0 {
+		t.Fatal("expected the flag to be suppressed while excluded")
+	}
+
+	if !s.RemoveExclusion(TypePortScan, "203.0.113.9") {
+		t.Fatal("expected RemoveExclusion on a known exclusion to return true")
+	}
+	if s.Excluded(TypePortScan, "203.0.113.9") {
+		t.Error("expected Excluded to report false after removal")
+	}
+
+	s.Add(TypePortScan, "203.0.113.9", "should raise again now", now.Add(time.Second))
+	list := s.List()
+	if len(list) != 1 || list[0].Detail != "should raise again now" {
+		t.Errorf("expected the target to raise normally again after RemoveExclusion, got %+v", list)
+	}
+}
+
+func TestRemoveExclusionUnknownReturnsFalse(t *testing.T) {
+	s, _ := Open("")
+	if s.RemoveExclusion(TypePortScan, "203.0.113.9") {
+		t.Error("expected RemoveExclusion on a never-excluded pair to return false")
+	}
+}
+
+func TestRemoveExclusionByID(t *testing.T) {
+	s, _ := Open("")
+	s.Exclude(TypePortScan, "203.0.113.9")
+	id := flagID(TypePortScan, "203.0.113.9")
+
+	if !s.RemoveExclusionByID(id) {
+		t.Fatal("expected RemoveExclusionByID on a known exclusion ID to return true")
+	}
+	if s.RemoveExclusionByID(id) {
+		t.Error("expected a second RemoveExclusionByID call to return false (already removed)")
+	}
+}
+
+func TestListExclusionsSortedByID(t *testing.T) {
+	s, _ := Open("")
+	s.Exclude(TypePortScan, "203.0.113.9")
+	s.Exclude(TypeActivitySpike, "198.51.100.4")
+
+	list := s.ListExclusions()
+	if len(list) != 2 {
+		t.Fatalf("expected 2 exclusions, got %d: %+v", len(list), list)
+	}
+	for i := 1; i < len(list); i++ {
+		if list[i-1].ID > list[i].ID {
+			t.Errorf("expected exclusions sorted by ID, got %+v", list)
+		}
+	}
+	for _, e := range list {
+		if e.Target == "203.0.113.9" && e.Type != TypePortScan {
+			t.Errorf("expected the (type, target) pair to round-trip intact, got %+v", e)
+		}
+	}
+}
+
+// TestExclusionPersistenceRoundTrip proves the exclusion survives a
+// process restart (Open() round-trip), same as TestPersistenceRoundTrip
+// already proves for flags themselves -- the whole point of a
+// "permanent" exclusion is that it stays permanent across restarts, not
+// just for the life of the current process.
+func TestExclusionPersistenceRoundTrip(t *testing.T) {
+	orig := persistMinInterval
+	persistMinInterval = 0
+	defer func() { persistMinInterval = orig }()
+
+	path := filepath.Join(t.TempDir(), "flags.json")
+
+	s1, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s1.Exclude(TypePortScan, "203.0.113.9")
+	s1.Exclude(TypeCriticalPort, "198.51.100.4")
+	// Also persist an ordinary active flag alongside the exclusions, to
+	// prove the two coexist correctly in the same file.
+	s1.Add(TypeActivitySpike, "10.0.0.5", "5x baseline", time.Now())
+
+	s2, err := Open(path)
+	if err != nil {
+		t.Fatalf("re-opening the persisted store failed: %v", err)
+	}
+
+	if !s2.Excluded(TypePortScan, "203.0.113.9") {
+		t.Error("expected the first exclusion to survive reopening")
+	}
+	if !s2.Excluded(TypeCriticalPort, "198.51.100.4") {
+		t.Error("expected the second exclusion to survive reopening")
+	}
+	if len(s2.ListExclusions()) != 2 {
+		t.Errorf("expected exactly 2 persisted exclusions, got %+v", s2.ListExclusions())
+	}
+	if len(s2.List()) != 1 {
+		t.Errorf("expected the ordinary flag to also survive reopening alongside the exclusions, got %+v", s2.List())
+	}
+
+	// And the reopened store must still actually enforce the exclusion,
+	// not just report it via Excluded().
+	s2.Add(TypePortScan, "203.0.113.9", "should stay suppressed after reload", time.Now())
+	for _, f := range s2.List() {
+		if f.Type == TypePortScan && f.Target == "203.0.113.9" {
+			t.Errorf("expected the reloaded exclusion to still suppress raises, got %+v", f)
+		}
+	}
+}
+
+// TestActiveFlagsCannotGrowUnbounded is the regression test for a
+// resource-exhaustion vector reachable from unauthenticated syslog.
+//
+// pruneLocked prefers to evict cleared flags, which is the right
+// instinct: an active flag is something a human still needs to see.
+// But "never evict an active flag" is only safe if the active set is
+// bounded, and flag targets come straight from log lines an attacker
+// controls -- so it was not. Proven before this fix: ~40k spoofed MAC
+// addresses produced ~40k live flags and drove ingest to a crawl.
+func TestActiveFlagsCannotGrowUnbounded(t *testing.T) {
+	prevCeiling := maxFlagsHardCeiling
+	prevSoft := maxFlags
+	maxFlagsHardCeiling = 200
+	maxFlags = 50
+	t.Cleanup(func() {
+		maxFlagsHardCeiling = prevCeiling
+		maxFlags = prevSoft
+	})
+
+	s, _ := Open("")
+	now := time.Now()
+	// Every flag stays ACTIVE -- nothing is ever cleared, which is the
+	// case the old prune could not handle at all.
+	for i := 0; i < 5000; i++ {
+		s.Add(TypeNewDevice, fmt.Sprintf("aa:bb:cc:dd:%02x:%02x", i>>8, i&0xff), "spoofed", now.Add(time.Duration(i)*time.Millisecond))
+	}
+
+	if got := len(s.List()); got > maxFlagsHardCeiling {
+		t.Errorf("store holds %d flags with none cleared, want <= %d", got, maxFlagsHardCeiling)
+	}
+}
+
+// TestPruneStillPrefersClearedFlags: the hard ceiling must not change
+// the normal behaviour -- below it, reviewed noise is shed first and
+// active alerts survive.
+func TestPruneStillPrefersClearedFlags(t *testing.T) {
+	prevSoft := maxFlags
+	maxFlags = 10
+	t.Cleanup(func() { maxFlags = prevSoft })
+
+	s, _ := Open("")
+	now := time.Now()
+
+	// One active flag raised first, so it is the oldest of all.
+	s.Add(TypePortScan, "203.0.113.1", "real alert", now)
+
+	for i := 0; i < 100; i++ {
+		target := fmt.Sprintf("198.51.100.%d", i)
+		s.Add(TypePortScan, target, "noise", now.Add(time.Duration(i+1)*time.Millisecond))
+		s.Clear(flagID(TypePortScan, target), now.Add(time.Duration(i+1)*time.Second))
+	}
+
+	var found bool
+	for _, f := range s.List() {
+		if f.Target == "203.0.113.1" && !f.Cleared {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("the active flag was evicted while cleared flags remained; cleared flags must be shed first")
+	}
+}
+
+// TestClearedCountSurvivesReload guards a bug introduced alongside the
+// clearedCount optimisation: pruneLocked skips its scan when
+// clearedCount is zero, so a store reloaded from disk with cleared
+// flags but a zero counter would silently never evict them again --
+// the exact leak the counter was added to make cheap to avoid.
+func TestClearedCountSurvivesReload(t *testing.T) {
+	// persistLocked throttles real writes to persistMinInterval, so
+	// without shrinking it nothing reaches disk and this would test an
+	// empty file rather than the reload path.
+	prevInterval := persistMinInterval
+	persistMinInterval = 0
+	t.Cleanup(func() { persistMinInterval = prevInterval })
+
+	path := filepath.Join(t.TempDir(), "flags.json")
+	s1, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	for i := 0; i < 5; i++ {
+		target := fmt.Sprintf("203.0.113.%d", i)
+		s1.Add(TypePortScan, target, "d", now)
+		s1.Clear(flagID(TypePortScan, target), now.Add(time.Second))
+	}
+	s1.Add(TypePortScan, "198.51.100.1", "still active", now)
+
+	s2, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := s2.clearedCount; got != 5 {
+		t.Errorf("clearedCount after reload = %d, want 5 -- a stale zero disables cleared-flag eviction entirely", got)
 	}
 }

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+
 // Package routeros decodes the body of a RouterOS firewall log message
 // (the part after the syslog envelope has already been stripped) into
 // structured fields.
@@ -46,8 +48,56 @@ type Parsed struct {
 // chains, protocols, and RouterOS versions (ICMP has no ports, some chains
 // omit src-mac, etc.), so this extracts whatever fields it recognizes and
 // leaves the rest zero-valued rather than rejecting the line.
-func Parse(msg string) Parsed {
-	p := Parsed{Raw: msg}
+// maxFieldLen caps every string field Parse extracts. The parser's
+// input is an unauthenticated syslog line -- anything able to reach the
+// syslog port chooses these bytes, up to the 64KB line limit the TCP
+// listener allows. Uncapped, a single crafted line puts a 40KB "MAC
+// address" into a flag's Target and Detail, into detector map keys, into
+// the persisted flags file, and into every notification sent about it.
+//
+// 256 is far above any real value: MACs are 17 characters, interface
+// names and rule labels are RouterOS identifiers, and IPs are at most 45
+// (IPv6 with an embedded IPv4). Anything longer is malformed by
+// definition, so truncating loses nothing genuine -- and Raw keeps the
+// untouched line regardless, so nothing is actually lost for
+// investigation.
+const maxFieldLen = 256
+
+// clampField truncates s to maxFieldLen bytes. Byte-oriented rather than
+// rune-oriented on purpose: the cap exists to bound memory, and a
+// truncated multi-byte sequence is harmless here (these fields are
+// compared and displayed, never decoded).
+func clampField(s string) string {
+	if len(s) > maxFieldLen {
+		return s[:maxFieldLen]
+	}
+	return s
+}
+
+// clampAll applies clampField to every extracted string field. Raw is
+// deliberately excluded -- it is already bounded by the listeners' own
+// read limits, and it is the verbatim evidence an operator needs.
+func (p *Parsed) clampAll() {
+	p.RuleLabel = clampField(p.RuleLabel)
+	p.Chain = clampField(p.Chain)
+	p.InInterface = clampField(p.InInterface)
+	p.OutInterface = clampField(p.OutInterface)
+	p.ConnState = clampField(p.ConnState)
+	p.Protocol = clampField(p.Protocol)
+	p.SrcMAC = clampField(p.SrcMAC)
+	p.SrcIP = clampField(p.SrcIP)
+	p.DstIP = clampField(p.DstIP)
+	p.NatIP = clampField(p.NatIP)
+	p.NatRaw = clampField(p.NatRaw)
+}
+
+// The named return matters: clampAll runs in a defer, and with an
+// unnamed return Go copies the result *before* defers execute, so the
+// truncation would silently never reach the caller. Verified -- an
+// unnamed return left a 40,000-byte RuleLabel intact.
+func Parse(msg string) (p Parsed) {
+	p = Parsed{Raw: msg}
+	defer p.clampAll()
 	msg = stripTopics(msg)
 
 	action, label, rest := stripPrefix(msg)
@@ -213,7 +263,7 @@ func splitHostPort(s string) (string, int) {
 		if end := strings.IndexByte(s, ']'); end >= 0 {
 			host := s[1:end]
 			if port, ok := strings.CutPrefix(s[end+1:], ":"); ok {
-				if n, err := strconv.Atoi(port); err == nil {
+				if n, ok := parsePort(port); ok {
 					return host, n
 				}
 			}
@@ -221,11 +271,28 @@ func splitHostPort(s string) (string, int) {
 		}
 	}
 	if idx := strings.LastIndexByte(s, ':'); idx >= 0 {
-		if n, err := strconv.Atoi(s[idx+1:]); err == nil {
+		if n, ok := parsePort(s[idx+1:]); ok {
 			return s[:idx], n
 		}
 	}
 	return s, 0
+}
+
+// parsePort accepts only a legal TCP/UDP port. strconv.Atoi alone
+// happily returns -1 or 99999, and this parser's input is entirely
+// attacker-controlled -- the syslog listeners are unauthenticated, so
+// anything that can reach port 514 chooses these bytes. An impossible
+// port doesn't stay cosmetic: it becomes a detector key (port-scan
+// distinct-port sets, critical-port comparisons) and a flag target, so
+// it pollutes detection state and the UI with values no real packet
+// could carry. Out-of-range reads as "no port parsed" (0), matching
+// what splitHostPort already returns for input it can't parse at all.
+func parsePort(s string) (int, bool) {
+	n, err := strconv.Atoi(s)
+	if err != nil || n < 0 || n > 65535 {
+		return 0, false
+	}
+	return n, true
 }
 
 // splitTopLevel splits s on sep, but never inside parentheses — needed

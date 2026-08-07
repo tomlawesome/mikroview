@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+
 // Package config loads mikroview's configuration with precedence
 // defaults < YAML file < environment variables < CLI flags.
 //
@@ -11,6 +13,7 @@ package config
 import (
 	"flag"
 	"fmt"
+	"net/netip"
 	"os"
 	"strconv"
 	"strings"
@@ -40,6 +43,87 @@ type Listen struct {
 	SyslogUDP string `yaml:"syslogUdp"`
 	SyslogTCP string `yaml:"syslogTcp"`
 	HTTP      string `yaml:"http"`
+	// HTTPRedirect: a second, plain-HTTP-only listener whose sole job is
+	// redirecting to the HTTPS listener above -- lets a browser/client
+	// that guesses port 80 get bounced to the real thing instead of a
+	// connection reset. Only started when tls.enabled is true (nothing
+	// to redirect to otherwise). Same optional-empty-string contract as
+	// the storage paths: set to "" to disable it entirely. The redirect
+	// target is built by stripping any port off the request's Host
+	// header and assuming HTTPS is reachable on the browser-default 443
+	// -- true for docker-compose.yml's own default mapping (host 443 ->
+	// this container's HTTPS port). If you've mapped HTTPS to a
+	// different external port, either disable this (set to "") and
+	// handle the redirect at your reverse proxy instead, or accept that
+	// the Location header will point at :443 regardless.
+	HTTPRedirect string `yaml:"httpRedirect"`
+	// TrustedProxies lists the addresses mikroview will believe a
+	// forwarding header from, as bare IPs, CIDRs, or the shorthand
+	// "private" (loopback, RFC1918, link-local and IPv6 ULA -- which is
+	// what a reverse proxy on a LAN or a docker network resolves to).
+	//
+	// Empty by default, and empty means forwarding headers are ignored
+	// entirely. That default is deliberate: a header is just
+	// client-supplied text, so honouring one unconditionally would let
+	// anyone mint a fresh login rate-limit bucket per request by varying
+	// it. Set this only for proxies you actually operate. See
+	// internal/api's clientIP for how the chain is then walked.
+	//
+	// Leaving it unset behind a reverse proxy is safe but blunt: every
+	// request then carries the proxy's own address, so all users share one
+	// rate-limit bucket and one attacker's failures lock everyone out.
+	TrustedProxies []string `yaml:"trustedProxies"`
+	// ClientIPHeader is which forwarding header to read, honoured only for
+	// peers matching TrustedProxies. Defaults to X-Forwarded-For, which
+	// nginx, Caddy, Traefik, HAProxy, Cloudflare and the cloud load
+	// balancers all set. Point it elsewhere (X-Real-IP, CF-Connecting-IP)
+	// for a proxy that doesn't -- single-value headers work unchanged,
+	// they're just a one-element chain.
+	ClientIPHeader string `yaml:"clientIpHeader"`
+}
+
+// privateProxyRanges backs the "private" shorthand in
+// Listen.TrustedProxies: loopback, RFC1918, CGNAT, link-local, and the
+// IPv6 equivalents. This is the range a reverse proxy sharing a LAN or a
+// container network with mikroview lands in.
+var privateProxyRanges = []string{
+	"127.0.0.0/8", "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16",
+	"100.64.0.0/10", "169.254.0.0/16",
+	"::1/128", "fc00::/7", "fe80::/10",
+}
+
+// ParseTrustedProxies turns Listen.TrustedProxies into prefixes for
+// internal/api. A bare address becomes a single-host prefix, so
+// "10.0.0.5" and "10.0.0.5/32" mean the same thing.
+func ParseTrustedProxies(entries []string) ([]netip.Prefix, error) {
+	var out []netip.Prefix
+	for _, raw := range entries {
+		entry := strings.TrimSpace(raw)
+		if entry == "" {
+			continue
+		}
+		if strings.EqualFold(entry, "private") {
+			for _, r := range privateProxyRanges {
+				p, err := netip.ParsePrefix(r)
+				if err != nil {
+					return nil, fmt.Errorf("trusted proxy range %q: %w", r, err)
+				}
+				out = append(out, p)
+			}
+			continue
+		}
+		if p, err := netip.ParsePrefix(entry); err == nil {
+			out = append(out, p.Masked())
+			continue
+		}
+		addr, err := netip.ParseAddr(entry)
+		if err != nil {
+			return nil, fmt.Errorf("trusted proxy %q is neither an IP address nor a CIDR", entry)
+		}
+		addr = addr.Unmap()
+		out = append(out, netip.PrefixFrom(addr, addr.BitLen()))
+	}
+	return out, nil
 }
 
 type Store struct {
@@ -49,7 +133,7 @@ type Store struct {
 
 // Log controls mikroview's own server log output -- see
 // internal/logging. Doesn't apply to the CLI recovery commands
-// (-list-users, -reset-password's prompts, etc.), which print directly
+// (-list-users, -recover-admin-account's prompts, etc.), which print directly
 // to stdout/stderr for scripting/piping, not through this leveled path.
 type Log struct {
 	// Level is one of debug/info/warn/error (case-insensitive); anything
@@ -102,11 +186,24 @@ type Pushover struct {
 	User  string `yaml:"user"`
 }
 
+// Webhook configures a generic JSON-POST notification channel on
+// newly-raised flags (issue #96) -- covers ntfy, Discord, Slack, Home
+// Assistant, n8n, and anything else without a bespoke integration of
+// its own. Headers is a plain map rather than a single bearer-token
+// field since those receivers each expect auth in a different header
+// (Authorization: Bearer ..., a custom X-... header, etc) -- set
+// whichever header(s) your receiver needs. See
+// internal/notify.WebhookConfig for the runtime shape this maps onto.
+type Webhook struct {
+	URL     string            `yaml:"url"`
+	Headers map[string]string `yaml:"headers"`
+}
+
 // Notify is entirely optional -- see internal/notify. Each channel
-// (SMTP, Pushover) is independently enabled by whether its own
-// identifying field is set (SMTP.Host, Pushover.Token) -- any
-// combination of zero, one, or both may be configured at once, and
-// every enabled channel shares the same BatchWindow/Dispatcher.
+// (SMTP, Pushover, Webhook) is independently enabled by whether its own
+// identifying field is set (SMTP.Host, Pushover.Token, Webhook.URL) --
+// any combination may be configured at once, and every enabled channel
+// shares the same BatchWindow/Dispatcher.
 type Notify struct {
 	// BatchWindow: how often pending flags are flushed to every
 	// configured channel -- a fixed interval, not a quiet-period
@@ -116,6 +213,7 @@ type Notify struct {
 	BatchWindow time.Duration `yaml:"batchWindow"`
 	SMTP        SMTP          `yaml:"smtp"`
 	Pushover    Pushover      `yaml:"pushover"`
+	Webhook     Webhook       `yaml:"webhook"`
 }
 
 // Auth configures internal/auth's local authentication. Unlike Flags'
@@ -139,6 +237,52 @@ type Auth struct {
 	// without activity before needing to log in again," not a fixed
 	// session lifetime.
 	SessionTTL time.Duration `yaml:"sessionTTL"`
+	// TokensStorePath: where read-only API bearer tokens (issue #101)
+	// persist across restarts, as a small JSON file (names + SHA-256
+	// hashes, never the raw bearer values). Unlike StorePath above, this
+	// one really is optional the way Flags.StorePath is -- an operator
+	// who never creates a token doesn't need it, and a missing/unwritable
+	// path just means token creation refuses (ErrTokenNotPersisted)
+	// rather than mikroview failing to start.
+	TokensStorePath string `yaml:"tokensStorePath"`
+	// RecoveryKeysPath holds the hashed recovery keys that gate the CLI
+	// commands changing authentication state (#134).
+	//
+	// Deliberately a different file from StorePath: if the digests lived
+	// in the accounts file, a corrupted accounts file would also destroy
+	// the only thing able to validate a recovery key -- exactly the
+	// situation those commands exist to recover from.
+	RecoveryKeysPath string `yaml:"recoveryKeysPath"`
+	// RecoveryPepperPath holds the server-side secret mixed into every
+	// recovery-key digest.
+	//
+	// Kept out of the backup set (#97) on purpose: someone holding a
+	// stolen backup then has the digests and nothing to verify them
+	// against. Generated once on first use and never rewritten.
+	// MIKROVIEW_RECOVERY_PEPPER_FILE overrides it, for operators who
+	// want it off the data volume entirely.
+	RecoveryPepperPath string `yaml:"recoveryPepperPath"`
+}
+
+// Entities configures internal/entities' persisted, admin-manageable
+// (type, key) -> label/tags store (issue #107) -- the shared foundation
+// a future mail-sender allowlist and UI-managed IP/port/rule aliasing
+// both build on. StorePath left empty is a fully supported, deliberate
+// choice, same optional-persistence contract as Flags.StorePath: the
+// store still works, entities just don't survive a restart.
+type Entities struct {
+	StorePath string `yaml:"storePath"`
+}
+
+// Audit configures internal/audit's persisted admin-action accountability
+// log (issue #112) -- who created a user, changed a detector setting,
+// upserted/deleted an entity, created or revoked an API token, or removed
+// a permanent flag exclusion. StorePath left empty is a fully supported,
+// deliberate choice, same optional-persistence contract as
+// Entities.StorePath: the log still works, entries just don't survive a
+// restart.
+type Audit struct {
+	StorePath string `yaml:"storePath"`
 }
 
 // TLS configures mikroview's own listener -- on by default: a browser
@@ -176,6 +320,70 @@ type TLS struct {
 	StorePath string `yaml:"storePath"`
 }
 
+// OIDC configures optional SSO login via an external OIDC provider
+// (issue #43, Authentik-targeted but any standard OIDC provider works)
+// on top of, never instead of, local password auth -- see
+// internal/oidc for the protocol implementation and
+// internal/auth.Store.FindOrCreateOIDCUser for identity storage/JIT
+// provisioning. Empty IssuerURL means OIDC is not configured, the same
+// "empty means opt-out, no separate enabled bool" contract
+// Reputation.AbuseIPDBKey/GeoIP.DBPath already use -- there's no
+// scenario where a fully-populated OIDC block should be silently
+// inert, unlike Notify's SMTP/Pushover (each independently optional
+// *within* one shared block), so a bare bool would be redundant here.
+type OIDC struct {
+	IssuerURL    string `yaml:"issuerUrl"`
+	ClientID     string `yaml:"clientId"`
+	ClientSecret string `yaml:"clientSecret"`
+	// PublicBaseURL is the externally-reachable origin used to build the
+	// redirect_uri registered at the provider (PublicBaseURL +
+	// "/api/auth/oidc/callback") -- required whenever IssuerURL is set.
+	// Deliberately never inferred from a request's Host/X-Forwarded-Host
+	// header: doing so is a known redirect_uri-confusion vulnerability
+	// class, since the exact-match registration at the provider is the
+	// actual defense, and only holds if mikroview never constructs it
+	// from client-influenced input. Covers both deployment modes this
+	// app already supports: mikroview's own self-signed TLS on a LAN
+	// IP/hostname (e.g. "https://192.168.1.10:8443"), or fronted by a
+	// reverse proxy terminating a real domain (e.g.
+	// "https://mikroview.example.com").
+	PublicBaseURL string `yaml:"publicBaseUrl"`
+	// Scopes defaults to {openid, profile, email} if empty -- see
+	// internal/oidc.New.
+	Scopes []string `yaml:"scopes"`
+
+	// AllowedGroups/GroupsClaim/AllowedEmails/AllowedEmailDomains/
+	// RequiredClaims restrict *which* accounts at the issuer may sign in.
+	// See internal/oidc.Policy for the full semantics; in short, leaving
+	// all of them empty permits anyone the issuer vouches for, and each
+	// one that is set adds a condition that must hold.
+	//
+	// For a self-hosted issuer (Authentik, Keycloak, Zitadel) empty is
+	// the right answer: the issuer URL already restricts login to
+	// accounts in a directory you run, and delegating that decision to
+	// the IdP's own ACLs is the point of SSO. Set these when you want to
+	// scope access more tightly than "everyone in my directory".
+	//
+	// For a multi-tenant issuer they are mandatory, and mikroview refuses
+	// to enable SSO without them -- see oidc.IsMultiTenantIssuer.
+	// Every Google account on earth validates against
+	// accounts.google.com, so with no restriction the first stranger to
+	// reach the login page becomes the admin.
+	//
+	// Google Workspace, one organisation:
+	//   requiredClaims: {hd: ["example.com"]}
+	// Microsoft Entra, one tenant:
+	//   requiredClaims: {tid: ["00000000-0000-0000-0000-000000000000"]}
+	// Authentik/Keycloak group:
+	//   allowedGroups: ["mikroview-admins"]
+	AllowedGroups []string `yaml:"allowedGroups"`
+	// GroupsClaim defaults to "groups". Azure commonly needs "roles".
+	GroupsClaim         string              `yaml:"groupsClaim"`
+	AllowedEmails       []string            `yaml:"allowedEmails"`
+	AllowedEmailDomains []string            `yaml:"allowedEmailDomains"`
+	RequiredClaims      map[string][]string `yaml:"requiredClaims"`
+}
+
 // DetectorScope is DetectorSettings' host/port/rule/classification
 // restriction, as plain yaml-tagged fields rather than importing
 // internal/detect -- same reasoning Flags already gives for duplicating
@@ -211,14 +419,14 @@ type DetectorSettings struct {
 // and flags still work, they just don't survive a restart, consistent
 // with the rest of mikroview (see SECURITY.md).
 type Flags struct {
-	StorePath              string        `yaml:"storePath"`
-	PortScanThreshold      int           `yaml:"portScanThreshold"`
-	PortScanWindow         time.Duration `yaml:"portScanWindow"`
-	ActivitySpikeThreshold int           `yaml:"activitySpikeThreshold"`
-	ActivitySpikeWindow    time.Duration `yaml:"activitySpikeWindow"`
-	CriticalPorts          []int         `yaml:"criticalPorts"`
-	CriticalPortThreshold  int           `yaml:"criticalPortThreshold"`
-	CriticalPortWindow     time.Duration `yaml:"criticalPortWindow"`
+	StorePath                string        `yaml:"storePath"`
+	PortScanThreshold        int           `yaml:"portScanThreshold"`
+	PortScanWindow           time.Duration `yaml:"portScanWindow"`
+	ActivitySpikeThreshold   int           `yaml:"activitySpikeThreshold"`
+	ActivitySpikeWindow      time.Duration `yaml:"activitySpikeWindow"`
+	CriticalPorts            []int         `yaml:"criticalPorts"`
+	CriticalPortThreshold    int           `yaml:"criticalPortThreshold"`
+	CriticalPortWindow       time.Duration `yaml:"criticalPortWindow"`
 	GlobalSpikeMultiplier    float64       `yaml:"globalSpikeMultiplier"`
 	GlobalSpikeMinEPS        float64       `yaml:"globalSpikeMinEPS"`
 	GlobalSpikeWarmupSamples int           `yaml:"globalSpikeWarmupSamples"`
@@ -253,6 +461,39 @@ type Flags struct {
 	LowSlowScanDropRatio          float64       `yaml:"lowSlowScanDropRatio"`
 	LowSlowScanBaselineMultiplier float64       `yaml:"lowSlowScanBaselineMultiplier"`
 
+	// OffHours* (issue #104): see internal/detect.Config's matching
+	// fields for what each one means -- duplicated here rather than
+	// imported, same as every other Flags field. OffHoursStartHour/
+	// EndHour (0-23, server-local time) is the fixed clock window this
+	// detector is willing to fire in; OffHoursMinSampleDays/MinCount are
+	// the false-positive guard's two independent floors.
+	OffHoursStartHour     int `yaml:"offHoursStartHour"`
+	OffHoursEndHour       int `yaml:"offHoursEndHour"`
+	OffHoursMinSampleDays int `yaml:"offHoursMinSampleDays"`
+	OffHoursMinCount      int `yaml:"offHoursMinCount"`
+
+	// DeviceStaleAfter (issue #98): see internal/detect.Config's matching
+	// field for what this means and why the default sits where it does.
+	// 0 disables the device-silence detector entirely.
+	DeviceStaleAfter time.Duration `yaml:"deviceStaleAfter"`
+
+	// StaleRule* (issue #102): flags a firewall rule that fired at some
+	// point but hasn't fired again in a long time -- either dead weight
+	// or an unnecessary hole, worth a human's attention either way. See
+	// internal/rules (the long-lived per-rule usage record this reads
+	// from) and internal/detect.StaleRuleDetector (the sweep itself).
+	//
+	// RuleUsageStorePath persists that usage record so "hasn't fired in
+	// 30 days" survives a restart -- same optional-persistence contract
+	// as StorePath above (empty disables persistence, not the feature).
+	// StaleRuleDays is how long a rule must go quiet before it's
+	// considered stale. StaleRuleCheckInterval is how often the sweep
+	// re-checks (see main.go's staleRuleCheckInterval-style ticker) --
+	// coarse by design, since staleness is judged in days, not seconds.
+	RuleUsageStorePath     string        `yaml:"ruleUsageStorePath"`
+	StaleRuleDays          int           `yaml:"staleRuleDays"`
+	StaleRuleCheckInterval time.Duration `yaml:"staleRuleCheckInterval"`
+
 	// DetectorSettingsStorePath persists live UI on/off+scope toggles
 	// (see internal/detect.SettingsStore) so they survive a restart --
 	// same optional-persistence contract as StorePath above. Detectors
@@ -262,6 +503,87 @@ type Flags struct {
 	// "port_scan", "rule_spike" -- see internal/detect.DetectorName).
 	DetectorSettingsStorePath string                      `yaml:"detectorSettingsStorePath"`
 	Detectors                 map[string]DetectorSettings `yaml:"detectors"`
+
+	// VPNInterfaces/VPNConfidenceMultiplier (issue #105): see
+	// internal/detect.Config's matching fields for what each one means
+	// and why the default (empty VPNInterfaces, so this whole feature is
+	// inert until configured) is what it is -- duplicated here rather
+	// than imported, same as every other Flags field. VPNInterfaces
+	// entries are glob patterns (path.Match syntax) matched against
+	// store.Event.InInterface, e.g. "wireguard1" (exact) or "wireguard*"
+	// (prefix) for whatever name RouterOS assigns your WireGuard
+	// interface.
+	VPNInterfaces           []string `yaml:"vpnInterfaces"`
+	VPNConfidenceMultiplier float64  `yaml:"vpnConfidenceMultiplier"`
+}
+
+// DeviceMAC configures internal/device's MACRegistry (issue #103 phase
+// 1) -- the new-MAC detector's persisted per-SrcMAC FirstSeen/LastSeen
+// history. Optional persistence, same contract as Flags.StorePath: left
+// empty, the detector still runs, it just starts with an empty registry
+// on every restart instead of remembering every MAC mikroview has ever
+// logged traffic from -- and "new" only means anything against history
+// well beyond the 24h event-retention window.
+type DeviceMAC struct {
+	StorePath string `yaml:"storePath"`
+}
+
+// Blocklist configures internal/blocklist's local IP/CIDR "known-bad"
+// matching against a small, vetted menu of free threat-intel feeds
+// (issue #113 Part B) -- see that package's own doc comment for the
+// full menu, why it's a fixed menu rather than an arbitrary URL field,
+// and how the refresh cadence/entry-count cap were decided.
+//
+// On by default with Spamhaus's DROP+EDROP lists -- the issue's own
+// recommended starting point: small, free, no registration, and
+// curated specifically to only include netblocks Spamhaus is confident
+// are entirely malicious-controlled, a safe "flag on sight" default
+// unlike a larger, noisier aggregated list would be. Set sources to an
+// empty list (`sources: []`) to disable local blocklist matching
+// entirely. Refresh cadence is intentionally not configurable here --
+// see internal/blocklist.RefreshInterval's doc comment.
+type Blocklist struct {
+	// Sources is a list of internal/blocklist.Source values (e.g.
+	// "spamhaus_drop", "spamhaus_edrop", "emerging_threats_compromised")
+	// -- an unrecognized entry is logged and skipped at startup, not a
+	// fatal error, same degrade-not-crash contract as every other
+	// optional integration in this codebase.
+	Sources []string `yaml:"sources"`
+}
+
+// Postgres optionally moves mikroview's persisted state off this host
+// and onto a database server (issue #131).
+//
+// The point is separation: compromising the mikroview host should not
+// hand over the accounts store, because the attacker also has to reach
+// and authenticate to a second, independently secured system.
+//
+// **That only holds if the database is genuinely off-box.** A Postgres
+// on this same host -- including one in a container beside mikroview --
+// exposes its credential to exactly the compromise it was meant to
+// survive, and is strictly worse than the JSON files it replaces: same
+// exposure, more moving parts. This is why deploy/docker-compose.yml
+// deliberately ships no Postgres service to uncomment.
+type Postgres struct {
+	// DSNFile is a file containing the connection string, and is the
+	// recommended way to supply it -- a Docker/Kubernetes secret, or a
+	// 0600 file on the host.
+	//
+	// A DSN carries a password, which is why there is no `dsn:` field
+	// here and no command-line flag: a password in config.yaml ends up
+	// in whatever backs that file up, and a password in argv is visible
+	// to every process on the box and to `docker inspect`. Same
+	// reasoning -recover-admin-account uses for prompting rather than
+	// taking an argument.
+	// Empty means "not configured": mikroview uses the JSON files,
+	// which stays the default, zero-infrastructure path.
+	//
+	// The DSN's sslmode must be require, verify-ca or verify-full.
+	// Anything weaker is refused at startup rather than silently
+	// upgraded -- see internal/persist.OpenPool. verify-full is the one
+	// that actually stops an attacker on the network path; require only
+	// encrypts.
+	DSNFile string `yaml:"dsnFile"`
 }
 
 type Config struct {
@@ -272,9 +594,15 @@ type Config struct {
 	Reputation Reputation `yaml:"reputation"`
 	Flags      Flags      `yaml:"flags"`
 	Auth       Auth       `yaml:"auth"`
+	Entities   Entities   `yaml:"entities"`
+	Audit      Audit      `yaml:"audit"`
 	Notify     Notify     `yaml:"notify"`
 	TLS        TLS        `yaml:"tls"`
+	OIDC       OIDC       `yaml:"oidc"`
+	Postgres   Postgres   `yaml:"postgres"`
 	Devices    []Device   `yaml:"devices"`
+	DeviceMAC  DeviceMAC  `yaml:"deviceMac"`
+	Blocklist  Blocklist  `yaml:"blocklist"`
 
 	// RuleNames/HostNames are optional friendly-display-name maps -- see
 	// internal/naming. Keyed by the raw value RouterOS reports (a rule
@@ -288,9 +616,10 @@ type Config struct {
 func defaults() Config {
 	return Config{
 		Listen: Listen{
-			SyslogUDP: ":1514",
-			SyslogTCP: ":1514",
-			HTTP:      ":8080",
+			SyslogUDP:    ":1514",
+			SyslogTCP:    ":1514",
+			HTTP:         ":8080",
+			HTTPRedirect: ":8081",
 		},
 		Store: Store{
 			Retention: 24 * time.Hour,
@@ -304,13 +633,13 @@ func defaults() Config {
 		// this package stays a dependency-free leaf that every feature
 		// package can build on, not the other way around.
 		Flags: Flags{
-			PortScanThreshold:      15,
-			PortScanWindow:         60 * time.Second,
-			ActivitySpikeThreshold: 200,
-			ActivitySpikeWindow:    60 * time.Second,
-			CriticalPorts:          []int{21, 22, 23, 445, 3389, 5900, 8291, 8728, 8729},
-			CriticalPortThreshold:  5,
-			CriticalPortWindow:     5 * time.Minute,
+			PortScanThreshold:        15,
+			PortScanWindow:           60 * time.Second,
+			ActivitySpikeThreshold:   200,
+			ActivitySpikeWindow:      60 * time.Second,
+			CriticalPorts:            []int{21, 22, 23, 445, 3389, 5900, 8291, 8728, 8729},
+			CriticalPortThreshold:    5,
+			CriticalPortWindow:       5 * time.Minute,
 			GlobalSpikeMultiplier:    4,
 			GlobalSpikeMinEPS:        5,
 			GlobalSpikeWarmupSamples: 20,
@@ -342,17 +671,59 @@ func defaults() Config {
 			LowSlowScanDropRatio:          0.8,
 			LowSlowScanBaselineMultiplier: 3,
 
+			// 23:00-06:00: a conservative, common-denominator quiet
+			// period for a home/small-office network -- see
+			// internal/detect/off_hours.go's doc comment for why a
+			// fixed window was chosen over a per-host-learned one.
+			OffHoursStartHour:     23,
+			OffHoursEndHour:       6,
+			OffHoursMinSampleDays: 14,
+			OffHoursMinCount:      5,
+
+			DeviceStaleAfter: 15 * time.Minute,
+
+			RuleUsageStorePath:     DefaultDataDir + "/rule-usage.json",
+			StaleRuleDays:          30,
+			StaleRuleCheckInterval: time.Hour,
+
 			StorePath:                 DefaultDataDir + "/flags.json",
 			DetectorSettingsStorePath: DefaultDataDir + "/detector-settings.json",
+
+			// VPNInterfaces is empty by default -- see its doc comment
+			// for why that's the deliberate, backward-compatible no-op
+			// starting point. VPNConfidenceMultiplier mirrors
+			// internal/detect.DefaultConfig()'s own default so setting
+			// only vpnInterfaces in config.yaml is enough to opt in.
+			VPNConfidenceMultiplier: 1.5,
 		},
 		Auth: Auth{
-			StorePath:    DefaultDataDir + "/users.json",
-			SessionTTL:   24 * time.Hour,
-			SecureCookie: true,
+			StorePath:          DefaultDataDir + "/users.json",
+			SessionTTL:         24 * time.Hour,
+			SecureCookie:       true,
+			TokensStorePath:    DefaultDataDir + "/tokens.json",
+			RecoveryKeysPath:   DefaultDataDir + "/recovery-keys.json",
+			RecoveryPepperPath: DefaultDataDir + "/recovery-pepper.key",
+		},
+		Entities: Entities{
+			StorePath: DefaultDataDir + "/entities.json",
+		},
+		Audit: Audit{
+			StorePath: DefaultDataDir + "/audit.json",
 		},
 		TLS: TLS{
 			Enabled:   true,
 			StorePath: DefaultDataDir + "/tls",
+		},
+		DeviceMAC: DeviceMAC{
+			StorePath: DefaultDataDir + "/mac-registry.json",
+		},
+		Blocklist: Blocklist{
+			// Mirrors internal/blocklist.DefaultSources -- kept as a
+			// literal here (rather than importing internal/blocklist)
+			// so this package stays a dependency-free leaf, same
+			// reasoning Flags already gives for duplicating
+			// internal/detect.Config's own defaults.
+			Sources: []string{"spamhaus_drop", "spamhaus_edrop"},
 		},
 		Notify: Notify{
 			BatchWindow: 60 * time.Second,
@@ -365,21 +736,47 @@ func defaults() Config {
 // precedence). configPath and args are taken as parameters (rather than
 // read from os.Args/env directly) so tests can call this deterministically.
 func Load(configPath string, args []string) (Config, error) {
+	cfg, _, err := load(configPath, args)
+	return cfg, err
+}
+
+func load(configPath string, args []string) (Config, Result, error) {
 	cfg := defaults()
 
 	if configPath != "" {
 		if err := loadYAML(configPath, &cfg); err != nil {
-			return Config{}, fmt.Errorf("loading config file %s: %w", configPath, err)
+			return Config{}, Result{}, fmt.Errorf("loading config file %s: %w", configPath, err)
 		}
 	}
 
 	applyEnv(&cfg)
 
 	if err := applyFlags(&cfg, args); err != nil {
-		return Config{}, err
+		return Config{}, Result{}, err
 	}
 
-	return cfg, nil
+	// Validate last, after every source has been merged -- an env var or
+	// a flag can fix a bad yaml value, so checking earlier would reject
+	// configurations that are actually fine.
+	result := cfg.Validate()
+	if err := result.Err(); err != nil {
+		return Config{}, Result{}, err
+	}
+
+	return cfg, result, nil
+}
+
+// LoadWithProblems is Load plus the non-fatal problems found. Callers
+// that can surface warnings (the server, -validate-config) use this;
+// Load stays the simple form for callers that only need a usable config.
+//
+// The result has to come from the *same* Validate call that did the
+// clamping. Validating a second time would report nothing, because the
+// first pass already replaced the bad value with a good one -- the
+// operator would get a silently substituted default and no warning,
+// which is precisely the failure this feature exists to prevent.
+func LoadWithProblems(configPath string, args []string) (Config, Result, error) {
+	return load(configPath, args)
 }
 
 func loadYAML(path string, cfg *Config) error {
@@ -401,6 +798,18 @@ func applyEnv(cfg *Config) {
 	}
 	if v := os.Getenv("MIKROVIEW_LISTEN_HTTP"); v != "" {
 		cfg.Listen.HTTP = v
+	}
+	if v := os.Getenv("MIKROVIEW_LISTEN_HTTP_REDIRECT"); v != "" {
+		cfg.Listen.HTTPRedirect = v
+	}
+	if v := os.Getenv("MIKROVIEW_RECOVERY_PEPPER_FILE"); v != "" {
+		cfg.Auth.RecoveryPepperPath = v
+	}
+	if v := os.Getenv("MIKROVIEW_TRUSTED_PROXIES"); v != "" {
+		cfg.Listen.TrustedProxies = parseStringList(v)
+	}
+	if v := os.Getenv("MIKROVIEW_CLIENT_IP_HEADER"); v != "" {
+		cfg.Listen.ClientIPHeader = v
 	}
 	if v := os.Getenv("MIKROVIEW_STORE_RETENTION"); v != "" {
 		if d, err := time.ParseDuration(v); err == nil {
@@ -574,8 +983,54 @@ func applyEnv(cfg *Config) {
 			cfg.Flags.LowSlowScanBaselineMultiplier = f
 		}
 	}
+	if v := os.Getenv("MIKROVIEW_FLAGS_OFF_HOURS_START_HOUR"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			cfg.Flags.OffHoursStartHour = n
+		}
+	}
+	if v := os.Getenv("MIKROVIEW_FLAGS_OFF_HOURS_END_HOUR"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			cfg.Flags.OffHoursEndHour = n
+		}
+	}
+	if v := os.Getenv("MIKROVIEW_FLAGS_OFF_HOURS_MIN_SAMPLE_DAYS"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			cfg.Flags.OffHoursMinSampleDays = n
+		}
+	}
+	if v := os.Getenv("MIKROVIEW_FLAGS_OFF_HOURS_MIN_COUNT"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			cfg.Flags.OffHoursMinCount = n
+		}
+	}
+	if v := os.Getenv("MIKROVIEW_FLAGS_DEVICE_STALE_AFTER"); v != "" {
+		if d, err := time.ParseDuration(v); err == nil {
+			cfg.Flags.DeviceStaleAfter = d
+		}
+	}
+	if v := os.Getenv("MIKROVIEW_FLAGS_RULE_USAGE_STORE_PATH"); v != "" {
+		cfg.Flags.RuleUsageStorePath = v
+	}
+	if v := os.Getenv("MIKROVIEW_FLAGS_STALE_RULE_DAYS"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			cfg.Flags.StaleRuleDays = n
+		}
+	}
+	if v := os.Getenv("MIKROVIEW_FLAGS_STALE_RULE_CHECK_INTERVAL"); v != "" {
+		if d, err := time.ParseDuration(v); err == nil {
+			cfg.Flags.StaleRuleCheckInterval = d
+		}
+	}
 	if v := os.Getenv("MIKROVIEW_FLAGS_DETECTOR_SETTINGS_STORE_PATH"); v != "" {
 		cfg.Flags.DetectorSettingsStorePath = v
+	}
+	if v := os.Getenv("MIKROVIEW_FLAGS_VPN_INTERFACES"); v != "" {
+		cfg.Flags.VPNInterfaces = parseStringList(v)
+	}
+	if v := os.Getenv("MIKROVIEW_FLAGS_VPN_CONFIDENCE_MULTIPLIER"); v != "" {
+		if f, err := strconv.ParseFloat(v, 64); err == nil {
+			cfg.Flags.VPNConfidenceMultiplier = f
+		}
 	}
 	if v := os.Getenv("MIKROVIEW_AUTH_STORE_PATH"); v != "" {
 		cfg.Auth.StorePath = v
@@ -589,6 +1044,15 @@ func applyEnv(cfg *Config) {
 		if d, err := time.ParseDuration(v); err == nil {
 			cfg.Auth.SessionTTL = d
 		}
+	}
+	if v := os.Getenv("MIKROVIEW_ENTITIES_STORE_PATH"); v != "" {
+		cfg.Entities.StorePath = v
+	}
+	if v := os.Getenv("MIKROVIEW_AUDIT_STORE_PATH"); v != "" {
+		cfg.Audit.StorePath = v
+	}
+	if v := os.Getenv("MIKROVIEW_AUTH_TOKENS_STORE_PATH"); v != "" {
+		cfg.Auth.TokensStorePath = v
 	}
 	if v := os.Getenv("MIKROVIEW_NOTIFY_BATCH_WINDOW"); v != "" {
 		if d, err := time.ParseDuration(v); err == nil {
@@ -628,10 +1092,20 @@ func applyEnv(cfg *Config) {
 	if v := os.Getenv("MIKROVIEW_NOTIFY_PUSHOVER_USER"); v != "" {
 		cfg.Notify.Pushover.User = v
 	}
+	if v := os.Getenv("MIKROVIEW_NOTIFY_WEBHOOK_URL"); v != "" {
+		cfg.Notify.Webhook.URL = v
+	}
+	// Headers is deliberately not env-configurable: it's a map, not a
+	// scalar, same "structured value doesn't map cleanly onto one env
+	// var" reasoning Flags.Detectors/Devices/RuleNames/HostNames already
+	// give for staying YAML-only.
 	if v := os.Getenv("MIKROVIEW_TLS_ENABLED"); v != "" {
 		if b, err := strconv.ParseBool(v); err == nil {
 			cfg.TLS.Enabled = b
 		}
+	}
+	if v := os.Getenv("MIKROVIEW_POSTGRES_DSN_FILE"); v != "" {
+		cfg.Postgres.DSNFile = v
 	}
 	if v := os.Getenv("MIKROVIEW_TLS_CERT_FILE"); v != "" {
 		cfg.TLS.CertFile = v
@@ -644,6 +1118,30 @@ func applyEnv(cfg *Config) {
 	}
 	if v := os.Getenv("MIKROVIEW_TLS_STORE_PATH"); v != "" {
 		cfg.TLS.StorePath = v
+	}
+	if v := os.Getenv("MIKROVIEW_OIDC_ISSUER_URL"); v != "" {
+		cfg.OIDC.IssuerURL = v
+	}
+	if v := os.Getenv("MIKROVIEW_OIDC_CLIENT_ID"); v != "" {
+		cfg.OIDC.ClientID = v
+	}
+	// Secret-via-env, same precedent as MIKROVIEW_NOTIFY_SMTP_PASSWORD/
+	// MIKROVIEW_ABUSEIPDB_KEY -- a credential doesn't have to sit in
+	// config.yaml just because the rest of the block does.
+	if v := os.Getenv("MIKROVIEW_OIDC_CLIENT_SECRET"); v != "" {
+		cfg.OIDC.ClientSecret = v
+	}
+	if v := os.Getenv("MIKROVIEW_OIDC_PUBLIC_BASE_URL"); v != "" {
+		cfg.OIDC.PublicBaseURL = v
+	}
+	if v := os.Getenv("MIKROVIEW_OIDC_SCOPES"); v != "" {
+		cfg.OIDC.Scopes = parseStringList(v)
+	}
+	if v := os.Getenv("MIKROVIEW_DEVICE_MAC_STORE_PATH"); v != "" {
+		cfg.DeviceMAC.StorePath = v
+	}
+	if v := os.Getenv("MIKROVIEW_BLOCKLIST_SOURCES"); v != "" {
+		cfg.Blocklist.Sources = parseStringList(v)
 	}
 }
 
@@ -685,6 +1183,7 @@ func applyFlags(cfg *Config, args []string) error {
 	syslogUDP := fs.String("syslog-udp", cfg.Listen.SyslogUDP, "syslog UDP listen address")
 	syslogTCP := fs.String("syslog-tcp", cfg.Listen.SyslogTCP, "syslog TCP listen address")
 	httpAddr := fs.String("http", cfg.Listen.HTTP, "HTTP listen address")
+	httpRedirectAddr := fs.String("http-redirect", cfg.Listen.HTTPRedirect, "HTTP listen address for the redirect-to-HTTPS-only listener (empty disables it)")
 	retention := fs.Duration("retention", cfg.Store.Retention, "event retention window")
 	maxEvents := fs.Int("max-events", cfg.Store.MaxEvents, "max events held in the ring buffer")
 	geoipDB := fs.String("geoip-db", cfg.GeoIP.DBPath, "path to a MaxMind GeoLite2/GeoIP2 Country or City .mmdb file (optional; omit to disable country flags)")
@@ -696,6 +1195,7 @@ func applyFlags(cfg *Config, args []string) error {
 	cfg.Listen.SyslogUDP = *syslogUDP
 	cfg.Listen.SyslogTCP = *syslogTCP
 	cfg.Listen.HTTP = *httpAddr
+	cfg.Listen.HTTPRedirect = *httpRedirectAddr
 	cfg.Store.Retention = *retention
 	cfg.Store.MaxEvents = *maxEvents
 	cfg.GeoIP.DBPath = *geoipDB

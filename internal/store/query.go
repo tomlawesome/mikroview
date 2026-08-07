@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+
 package store
 
 import (
@@ -11,6 +13,19 @@ const (
 	defaultLimit = 500
 	maxLimit     = 5000
 )
+
+// clampLimit maps a caller-supplied limit onto [1, maxLimit] -- see
+// internal/audit/query.go's identical helper for why this is written as
+// plain comparisons.
+func clampLimit(requested int) int {
+	if requested <= 0 {
+		return defaultLimit
+	}
+	if requested > maxLimit {
+		return maxLimit
+	}
+	return requested
+}
 
 // Scope restricts a query to only-internal or only-external addresses on
 // one side of a connection. ScopeAny (the zero value) applies no
@@ -90,13 +105,7 @@ func (s *Store) Query(q Query) Result {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	limit := q.Limit
-	switch {
-	case limit <= 0:
-		limit = defaultLimit
-	case limit > maxLimit:
-		limit = maxLimit
-	}
+	limit := clampLimit(q.Limit)
 
 	now := time.Now()
 	windowStart := now.Add(-s.window)
@@ -125,7 +134,14 @@ func (s *Store) Query(q Query) Result {
 		ruleRe, _ = regexp.Compile("(?i)" + q.Rule)
 	}
 
-	matched := make([]Event, 0, min(limit, s.count))
+	// Explicit comparisons, not min(): see internal/audit/query.go's
+	// clampLimit for why the allocation bound is spelled out rather than
+	// left for the reader (and the scanner) to infer.
+	capacity := s.count
+	if capacity > limit {
+		capacity = limit
+	}
+	matched := make([]Event, 0, capacity)
 	hasMore := false
 
 	idx := s.head - 1

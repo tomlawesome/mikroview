@@ -1,8 +1,13 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+
 package auth
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -50,7 +55,29 @@ func TestRegisterCreatesAdminAndClosesAfterFirstUser(t *testing.T) {
 	}
 }
 
-func TestCreateUserAllowsAdditionalAccountsAtAnyRole(t *testing.T) {
+func TestPasswordTooShortRejectedOnRegisterCreateAndReset(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "users.json")
+	s, _ := Open(path)
+
+	if _, err := s.Register("admin", "short1", time.Now()); err != ErrPasswordTooShort {
+		t.Errorf("Register: expected ErrPasswordTooShort for a %d-char password, got %v", len("short1"), err)
+	}
+	if s.Count() != 0 {
+		t.Fatalf("expected no account to have been created, got %d", s.Count())
+	}
+
+	if _, err := s.Register("admin", "password123", time.Now()); err != nil {
+		t.Fatalf("Register with a long-enough password should succeed, got %v", err)
+	}
+	if _, err := s.CreateUser("second", "tiny", RoleUser, time.Now()); err != ErrPasswordTooShort {
+		t.Errorf("CreateUser: expected ErrPasswordTooShort, got %v", err)
+	}
+	if err := s.SetPassword("admin", "abc", time.Now()); err != ErrPasswordTooShort {
+		t.Errorf("SetPassword: expected ErrPasswordTooShort, got %v", err)
+	}
+}
+
+func TestCreateUserAddsAdditionalAccounts(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "users.json")
 	s, _ := Open(path)
 	s.Register("admin", "password123", time.Now())
@@ -124,6 +151,36 @@ func TestSetPasswordChangesCredentials(t *testing.T) {
 	}
 }
 
+// An SSO-provisioned account starts with HasLocalPassword explicitly
+// false. If it is ever given a real password, that flag has to move with
+// it -- otherwise the account holds a working mikroview password while
+// still reporting itself SSO-only, and -recover-admin-account refuses to
+// recover an account it actually could.
+//
+// Nothing reaches this state today (recovery refuses SSO-only accounts
+// up front), so this guards the invariant ahead of account linking
+// rather than a live bug.
+func TestSetPasswordMarksTheAccountAsHavingALocalPassword(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "users.json")
+	s, _ := Open(path)
+
+	u, created, err := s.FindOrCreateOIDCUser("https://idp.example", "subject-1", "sso-user", time.Now())
+	if err != nil || !created {
+		t.Fatalf("FindOrCreateOIDCUser: created=%v err=%v", created, err)
+	}
+	if u.LocalPassword() {
+		t.Fatal("an SSO-provisioned account reports a local password before the test even starts")
+	}
+
+	if err := s.SetPassword(u.Username, "new-password", time.Now()); err != nil {
+		t.Fatalf("SetPassword: %v", err)
+	}
+	got, _ := s.ByUsername(u.Username)
+	if !got.LocalPassword() {
+		t.Error("an account that was just given a password reports no local password")
+	}
+}
+
 func TestSetPasswordUnknownUserReturnsNotFound(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "users.json")
 	s, _ := Open(path)
@@ -193,7 +250,7 @@ func TestGetReturnsCopyNotSharedPointer(t *testing.T) {
 }
 
 // TestSeparateProcessPasswordResetIsPickedUpByRunningStore reproduces
-// the cross-process scenario the CLI recovery tool (`-reset-password`)
+// the cross-process scenario the CLI recovery tool (`-recover-admin-account`)
 // depends on: two independent Store instances (standing in for two
 // separate process invocations) opened against the same file. A change
 // made through one must be visible through the other on its next read,
@@ -235,111 +292,50 @@ func TestSeparateProcessPasswordResetIsPickedUpByRunningStore(t *testing.T) {
 	}
 }
 
-func TestDisableOnlyWhenNoAccounts(t *testing.T) {
+// A JSON array containing null is syntactically valid, so it unmarshals
+// without error into a slice with a nil *User element -- before the
+// fix, the next line (indexing u.ID) paniced, and since nothing in
+// this codebase recovers a panic from every goroutine (see
+// internal/logging.Recover), that meant crashing the entire process on
+// mikroview startup, not a graceful degrade.
+func TestOpenSkipsNilArrayElements(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "users.json")
-	s, _ := Open(path)
-
-	if s.Disabled() {
-		t.Fatal("expected a fresh store to not be disabled")
-	}
-	if err := s.Disable(); err != nil {
-		t.Fatalf("expected Disable to succeed with zero accounts, got %v", err)
-	}
-	if !s.Disabled() {
-		t.Error("expected Disabled() to report true after Disable()")
-	}
-
-	// Once an account exists, Disable must refuse -- disabling auth out
-	// from under an existing account isn't this method's job.
-	s2, _ := Open(filepath.Join(t.TempDir(), "users2.json"))
-	s2.Register("admin", "password123", time.Now())
-	if err := s2.Disable(); err != ErrRegistrationClosed {
-		t.Errorf("expected Disable to refuse once an account exists, got %v", err)
-	}
-}
-
-func TestDisableRefusesWhenNotPersisted(t *testing.T) {
-	s, _ := Open("")
-	if err := s.Disable(); err != ErrNotPersisted {
-		t.Errorf("expected ErrNotPersisted for an unconfigured store, got %v", err)
-	}
-}
-
-func TestEnableSetupClearsDisabled(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "users.json")
-	s, _ := Open(path)
-	if err := s.Disable(); err != nil {
+	data := `{"disabled":false,"users":[null,{"id":"u1","username":"admin","passwordHash":"$argon2id$fake","role":"admin","createdAt":"2026-01-01T00:00:00Z"},null]}`
+	if err := os.WriteFile(path, []byte(data), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if !s.Disabled() {
-		t.Fatal("expected the store to be disabled before EnableSetup")
-	}
 
-	if err := s.EnableSetup(); err != nil {
-		t.Fatal(err)
-	}
-	if s.Disabled() {
-		t.Error("expected EnableSetup to clear the disabled flag")
-	}
-
-	// The setup form should be usable again -- Register must not be
-	// refused by anything left over from the prior Disable.
-	if _, err := s.Register("admin", "password123", time.Now()); err != nil {
-		t.Errorf("expected Register to succeed after EnableSetup, got %v", err)
-	}
-}
-
-// TestSeparateProcessEnableSetupIsPickedUpByRunningStore mirrors
-// TestSeparateProcessPasswordResetIsPickedUpByRunningStore, but for
-// -enable-auth-setup -- the CLI tool's whole point is taking effect on
-// an already-running server without a restart.
-func TestSeparateProcessEnableSetupIsPickedUpByRunningStore(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "users.json")
-
-	serverStore, err := Open(path)
+	s, err := Open(path) // must not panic
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("Open() returned an unexpected error: %v", err)
 	}
-	if err := serverStore.Disable(); err != nil {
-		t.Fatal(err)
+	if s.Count() != 1 {
+		t.Fatalf("expected the one real user to survive, got %d", s.Count())
 	}
-	if !serverStore.Disabled() {
-		t.Fatal("expected the server's store to be disabled")
-	}
-
-	cliStore, err := Open(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	time.Sleep(10 * time.Millisecond) // see the password-reset test's identical reasoning
-	if err := cliStore.EnableSetup(); err != nil {
-		t.Fatal(err)
-	}
-
-	if serverStore.Disabled() {
-		t.Error("expected the running server's store to pick up the externally-cleared disabled flag")
+	if u, ok := s.ByUsername("admin"); !ok || u.ID != "u1" {
+		t.Errorf("expected the real user's data to be intact, got %+v, %v", u, ok)
 	}
 }
 
-func TestOpenReadsLegacyBareArrayFormat(t *testing.T) {
+// Same bug, reached through the other code path that parses a
+// storeFile: reloadIfStale, which a live server calls on every read
+// once a separate process (a CLI recovery tool) has touched the file.
+func TestReloadIfStaleSkipsNilArrayElements(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "users.json")
-	legacy := `[{"id":"u1","username":"admin","passwordHash":"$argon2id$fake","role":"admin","createdAt":"2026-01-01T00:00:00Z"}]`
-	if err := os.WriteFile(path, []byte(legacy), 0o600); err != nil {
-		t.Fatal(err)
-	}
 
 	s, err := Open(path)
 	if err != nil {
-		t.Fatalf("expected a legacy bare-array file to still load, got %v", err)
+		t.Fatal(err)
 	}
-	if s.Count() != 1 {
-		t.Fatalf("expected 1 user loaded from the legacy format, got %d", s.Count())
+
+	data := `{"disabled":false,"users":[null,{"id":"u1","username":"admin","passwordHash":"$argon2id$fake","role":"admin","createdAt":"2026-01-01T00:00:00Z"}]}`
+	if err := os.WriteFile(path, []byte(data), 0o600); err != nil {
+		t.Fatal(err)
 	}
-	if s.Disabled() {
-		t.Error("expected a legacy file (no disabled key at all) to load as Disabled: false")
-	}
-	if u, ok := s.ByUsername("admin"); !ok || u.ID != "u1" {
-		t.Errorf("expected the legacy user to be readable by username, got %+v, %v", u, ok)
+	time.Sleep(10 * time.Millisecond) // see other mtime-staleness tests' identical reasoning
+
+	if u, ok := s.ByUsername("admin"); !ok || u.ID != "u1" { // triggers reloadIfStale; must not panic
+		t.Errorf("expected the externally-written user to be picked up, got %+v, %v", u, ok)
 	}
 }
 
@@ -348,7 +344,7 @@ func TestOpenReadsNewObjectFormat(t *testing.T) {
 	// Round-trip through the store's own writer -- the true contract is
 	// "whatever Store.persistLocked writes, Store.Open can read back."
 	s1, _ := Open(path)
-	if err := s1.Disable(); err != nil {
+	if _, err := s1.Register("admin", "password123", time.Now()); err != nil {
 		t.Fatal(err)
 	}
 
@@ -356,7 +352,152 @@ func TestOpenReadsNewObjectFormat(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !s2.Disabled() {
-		t.Error("expected the object-format file to round-trip Disabled: true")
+	if u, ok := s2.ByUsername("admin"); !ok || u.Role != RoleAdmin {
+		t.Errorf("expected the object-format file to round-trip the admin account, got %+v, %v", u, ok)
+	}
+}
+
+// A deployment that took the removed no-auth option has "disabled": true
+// in its accounts file and no accounts. The key is no longer read at
+// all, so it must load as an ordinary undecided store -- setup required,
+// which is the safe direction -- rather than failing to parse.
+func TestAStoreLeftByTheRemovedNoAuthModeRequiresSetup(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "users.json")
+	if err := os.WriteFile(path, []byte(`{"disabled":true,"users":[]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	s, err := Open(path)
+	if err != nil {
+		t.Fatalf("a store left by the no-auth mode must still load, got %v", err)
+	}
+	if s.Count() != 0 {
+		t.Fatalf("expected no accounts, got %d", s.Count())
+	}
+	// Registration has to be open, or the deployment is stranded: there
+	// is no account to sign in with and no way to make one.
+	if _, err := s.Register("admin", "password123", time.Now()); err != nil {
+		t.Fatalf("expected setup to be available on a previously-disabled store, got %v", err)
+	}
+
+	// And the marker must not survive the write -- nothing reads it, so
+	// leaving it on disk is just a misleading artefact.
+	body, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(body), "disabled") {
+		t.Errorf("the no-auth marker was written back out:\n%s", body)
+	}
+}
+
+// TestConcurrentRegisterCreatesExactlyOneAdmin is the regression test
+// for the first-run registration race. Before the fix, Register checked
+// Count()/Disabled() outside the lock and createLocked only re-checked
+// for a username collision under it -- so N concurrent registrations
+// with distinct usernames all succeeded, every one of them landing
+// RoleAdmin. Measured 8/8 succeeding, reproducibly.
+//
+// The window was wide, not theoretical: HashPassword (Argon2id, ~100ms
+// by design) runs before the lock is taken, so a real attacker racing
+// the operator through the unauthenticated first-run screen had a
+// comfortable margin, not a microsecond one.
+func TestConcurrentRegisterCreatesExactlyOneAdmin(t *testing.T) {
+	s, err := Open(filepath.Join(t.TempDir(), "users.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	names := []string{"alice", "bob", "carol", "dave", "eve", "frank", "grace", "heidi"}
+	results := make([]error, len(names))
+	var wg sync.WaitGroup
+	start := make(chan struct{})
+	for i, name := range names {
+		wg.Add(1)
+		go func(i int, name string) {
+			defer wg.Done()
+			<-start
+			_, results[i] = s.Register(name, "correct horse battery staple", time.Now())
+		}(i, name)
+	}
+	close(start)
+	wg.Wait()
+
+	succeeded := 0
+	for i, err := range results {
+		switch {
+		case err == nil:
+			succeeded++
+		case errors.Is(err, ErrRegistrationClosed):
+			// expected for every loser of the race
+		default:
+			t.Errorf("Register(%q) failed with an unexpected error: %v", names[i], err)
+		}
+	}
+	if succeeded != 1 {
+		t.Errorf("%d concurrent Register calls succeeded, want exactly 1", succeeded)
+	}
+	if got := s.Count(); got != 1 {
+		t.Errorf("store holds %d accounts after the race, want exactly 1", got)
+	}
+}
+
+func TestDeleteUserRefusesTheAdmin(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "users.json")
+	s, _ := Open(path)
+	admin, _ := s.Register("alice", "password123", time.Now())
+
+	if _, err := s.DeleteUser(admin.ID); err != ErrCannotDeleteAdmin {
+		t.Fatalf("expected ErrCannotDeleteAdmin, got %v", err)
+	}
+	if s.Admin() == nil {
+		t.Error("the admin account is gone after a refused delete")
+	}
+}
+
+func TestDeleteUserRemovesTheAccountAndFreesItsIdentifiers(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "users.json")
+	s, _ := Open(path)
+	s.Register("alice", "password123", time.Now())
+	bob, err := s.CreateUser("bob", "password456", RoleUser, time.Now())
+	if err != nil {
+		t.Fatalf("CreateUser: %v", err)
+	}
+	if err := s.LinkOIDCIdentity(bob.ID, "https://idp.example", "sub-bob", time.Now()); err != nil {
+		t.Fatalf("LinkOIDCIdentity: %v", err)
+	}
+
+	deleted, err := s.DeleteUser(bob.ID)
+	if err != nil {
+		t.Fatalf("DeleteUser: %v", err)
+	}
+	if deleted.PasswordHash != "" {
+		t.Error("DeleteUser returned the account's password hash")
+	}
+	if _, ok := s.ByUsername("bob"); ok {
+		t.Error("the deleted account is still resolvable by username")
+	}
+
+	// The username and the SSO identity must both be reusable, or a
+	// deleted account silently blocks re-creating the person's access.
+	if _, err := s.CreateUser("bob", "password789", RoleUser, time.Now()); err != nil {
+		t.Errorf("expected the freed username to be reusable, got %v", err)
+	}
+	replacement, created, err := s.FindOrCreateOIDCUser("https://idp.example", "sub-bob", "bob2", time.Now())
+	if err != nil {
+		t.Fatalf("FindOrCreateOIDCUser: %v", err)
+	}
+	if !created || replacement.ID == bob.ID {
+		t.Error("the deleted account's SSO identity still maps to the old account")
+	}
+}
+
+func TestDeleteUserUnknownIDReturnsNotFound(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "users.json")
+	s, _ := Open(path)
+	s.Register("alice", "password123", time.Now())
+
+	if _, err := s.DeleteUser("no-such-id"); err != ErrUserNotFound {
+		t.Errorf("expected ErrUserNotFound, got %v", err)
 	}
 }

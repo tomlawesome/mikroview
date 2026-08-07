@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+
 package api
 
 import (
@@ -6,8 +8,11 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+	"github.com/tomlawesome/mikroview/internal/logging"
 	"github.com/tomlawesome/mikroview/internal/store"
 )
+
+var wsLogger = logging.New("ws")
 
 const (
 	wsBatchInterval = 50 * time.Millisecond
@@ -89,6 +94,7 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 	closed := make(chan struct{})
 	go func() {
 		defer close(closed)
+		defer logging.Recover(wsLogger)
 		for {
 			if _, _, err := conn.ReadMessage(); err != nil {
 				return
