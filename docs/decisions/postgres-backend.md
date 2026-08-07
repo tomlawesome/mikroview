@@ -98,7 +98,9 @@ left on disk can't roll back live data on a later restart.
 
 Integration tests run against an actual server, skipped (not failed)
 when `MIKROVIEW_TEST_POSTGRES` is unset so `go test ./...` still works
-on a machine without one. CI runs them via a service container.
+on a machine without one. CI runs them against a Postgres started with
+TLS via docker -- not a `services:` block, which cannot provision the
+certificate the code requires.
 
 A mock would test that the code calls the functions it calls. The things
 worth testing here — that the CAS actually rejects a stale write, that
@@ -135,6 +137,51 @@ Checked when this was decided: no Postgres service, image or credential
 existed anywhere under `deploy/`, in the README, or in
 `docs/configuration.md`, so there was nothing to remove — only
 something not to add.
+
+## 6b. Migration integrity: what checksums are and aren't for
+
+Raised as a review question: if someone can edit the migration script
+and trigger it, they run arbitrary SQL. Should the scripts be
+checksummed, with the app verifying itself against GitHub?
+
+**The threat doesn't exist in this shape.** The migrations are
+`go:embed`-ed -- compiled into the binary, not read from disk. Verified
+by copying the binary into an otherwise empty directory, pointing it at
+a database, and confirming the schema applied with no `migrations/`
+anywhere. To change the SQL you must change the binary, and at that
+point you can change anything: a checksum stored in that binary is
+checked by code in that same binary, so the attacker edits both. **A
+program cannot verify its own integrity.**
+
+The supply-chain version -- someone edits the `.sql` in the repository
+and it gets built -- is real, but checksums add nothing there either.
+Anyone who can commit a migration change can commit a hash change on the
+same commit, and could more easily edit a `.go` file. That risk is
+answered by branch protection and review, not by a value stored beside
+the thing it describes.
+
+Self-verification against GitHub at runtime was rejected outright:
+tampered code skips the check, it makes an external service a startup
+dependency and a new trust anchor, and it leaks deployment activity to a
+third party.
+
+**What was done instead**, splitting the question into the two real
+problems underneath it:
+
+1. *Verifying what you are about to run* is a signing problem, and the
+   trust anchor has to sit outside the artefact. Release images are now
+   signed with keyless cosign and carry SLSA provenance plus an SBOM,
+   bound to the digest rather than a tag. See
+   `.github/workflows/docker.yml`.
+
+2. *Migrations changing when they shouldn't* is a correctness problem
+   worth a checksum -- for a completely different reason than the one
+   asked about. Editing an already-applied migration means deployed
+   databases never re-run it while fresh installs get the new text, and
+   the schemas silently diverge. `TestAppliedMigrationsAreImmutable`
+   pins each released migration's hash so that edit fails in review. Its
+   doc comment states plainly that it is not tamper protection, so
+   nobody later mistakes it for one.
 
 ## 7. Security review of the new surface
 
