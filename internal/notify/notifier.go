@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+
 // Package notify delivers newly-raised behavioral flags (see
 // internal/flags) somewhere outside the mikroview UI, batched rather
 // than one message per flag so a real incident (many flags firing in

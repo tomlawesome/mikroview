@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+
 // Package flags stores manually-clearable behavioral flags raised by
 // internal/detect (port scans, per-source activity spikes, repeated
 // critical-port attempts, global volume spikes).

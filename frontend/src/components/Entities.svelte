@@ -1,4 +1,5 @@
 <script lang="ts">
+  // SPDX-License-Identifier: AGPL-3.0-only
   // Admin-only entity management (see internal/entities.Entity, issue
   // #107) -- persisted (type, key) -> label/tags records covering hosts,
   // rules, and (issue #109) ports. Two halves:

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+
 // Package rules persists a long-lived, per-rule-label usage record --
 // when a firewall rule was first observed firing, when it last fired,
 // and how many times -- independent of internal/store's ring buffer.

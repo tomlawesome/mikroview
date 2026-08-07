@@ -1,4 +1,5 @@
 <script lang="ts">
+  // SPDX-License-Identifier: AGPL-3.0-only
   // Single instance mounted once at the app root (see App.svelte), driven
   // entirely by lib/ipLookup.svelte.ts's shared singleton -- fixed-
   // positioned from the trigger's own screen coordinates so it always

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+
 // Mirrors internal/store/event.go's JSON tags.
 export type Action = 'accept' | 'drop' | 'reject' | 'log' | 'unknown'
 

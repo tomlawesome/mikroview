@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+
 // Package auth implements mikroview's local username/password
 // authentication: user accounts (this file), Argon2id password hashing
 // (password.go), in-memory sessions (session.go), and login-attempt

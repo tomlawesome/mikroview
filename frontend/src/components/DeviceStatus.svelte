@@ -1,4 +1,5 @@
 <script lang="ts">
+  // SPDX-License-Identifier: AGPL-3.0-only
   // Always-visible glance-and-go strip -- see Fleet.svelte (issue #98)
   // for the richer dedicated view this deliberately doesn't try to
   // replace. `status` is server-computed by GET /api/devices (live/

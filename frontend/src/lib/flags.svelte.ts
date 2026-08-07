@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+
 import { clearFlag, clearFlagPermanent, fetchFlags } from './api'
 import type { Flag, FlagTimeBucket } from './types'
 

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+
 // Package hub fans newly inserted events out to connected WebSocket
 // clients for the live-tail view.
 package hub

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+
 // Package servertls provides mikroview's TLS certificate, either loaded
 // from an operator-supplied cert/key pair or, as the zero-config
 // default, a self-generated local certificate authority + leaf
