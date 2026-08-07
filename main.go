@@ -68,15 +68,24 @@ const (
 	loginLimiterWindow    = 5 * time.Minute
 )
 
-// version is stamped at build time via -ldflags "-X main.version=<git-
-// short-sha>" (see Dockerfile and .github/workflows/docker.yml) --
-// "dev" is the fallback for a plain `go build .`/`go run .` with no
-// ldflags, so local development never shows a blank or misleading
-// value. A registry digest isn't something the binary can know about
-// itself (it's computed from the pushed image after build), so the
-// commit it was built from is the practical, achievable stand-in for
-// "which build is this."
-var version = "dev"
+// version is stamped at build time via -ldflags "-X main.version=..."
+// (see Dockerfile and .github/workflows/docker.yml).
+//
+// It carries the lane as well as the commit, because "which build is
+// this" and "how much should I trust it" are the same question:
+//
+//	dev:<short-sha>      a local or dev-branch build; nothing published
+//	preview:<short-sha>  the published release candidate
+//	v1.2.3               a build from a release tag
+//
+// The commit, not a registry digest: an image digest is computed from
+// the pushed image *after* the build, so a binary cannot know its own.
+// The commit it was built from is the achievable stand-in, and is what
+// the signing provenance binds to anyway.
+//
+// "dev:local" is the fallback for a plain `go build .` with no ldflags,
+// so local development never shows a blank or misleading value.
+var version = "dev:local"
 
 // versionMarkerPath persists the last-seen version so a restart can
 // tell a routine restart (same version) apart from a real upgrade (the

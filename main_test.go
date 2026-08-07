@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -347,5 +348,39 @@ func TestAuthOpenErrorShapeDrivesFailClosed(t *testing.T) {
 	}
 	if !authShouldFailClosed(err, persist.NewFileBackend(corruptPath)) {
 		t.Error("authShouldFailClosed reported false for a corrupt existing accounts file")
+	}
+}
+
+// The version string carries its lane, not just a commit -- see the
+// `version` var's doc comment. This pins the three shapes so a build
+// script can't quietly start stamping a bare SHA again, which would
+// make "is this the published candidate or someone's laptop?"
+// unanswerable from the logs.
+func TestVersionStringShape(t *testing.T) {
+	valid := regexp.MustCompile(`^(dev:[0-9a-z]+|preview:[0-9a-f]{7,40}|v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?)$`)
+
+	for _, tc := range []struct {
+		v    string
+		want bool
+	}{
+		{"dev:local", true},
+		{"dev:a1b2c3d", true},
+		{"preview:a1b2c3d", true},
+		{"preview:0123456789abcdef0123456789abcdef01234567", true},
+		{"v1.2.3", true},
+		{"v1.2.3-rc.1", true},
+		{"dev", false},     // the old bare form
+		{"a1b2c3d", false}, // a bare SHA says nothing about the lane
+		{"", false},
+		{"preview", false},
+	} {
+		if got := valid.MatchString(tc.v); got != tc.want {
+			t.Errorf("%q: matched=%v, want %v", tc.v, got, tc.want)
+		}
+	}
+
+	// The compiled-in default must itself be one of the valid shapes.
+	if !valid.MatchString(version) {
+		t.Errorf("the built-in default %q is not a valid version shape", version)
 	}
 }
