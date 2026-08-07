@@ -9,6 +9,31 @@ listen:
   syslogUdp: ":1514"
   syslogTcp: ":1514"
   http: ":8080"
+  # Redirect-only -- bounces a plain HTTP request to the HTTPS listener
+  # above, never serves the app itself. Set to "" to disable (e.g. if
+  # your own reverse proxy handles the HTTP->HTTPS redirect instead).
+  httpRedirect: ":8081"
+
+  # Reverse-proxy support. Leave both commented out unless a proxy
+  # fronts mikroview.
+  #
+  # Mikroview rate-limits failed logins per source address. Behind a
+  # proxy, every request carries the *proxy's* address, so without
+  # trustedProxies all users share one bucket and one attacker's failed
+  # attempts lock everybody out. Setting this makes mikroview read the
+  # real client address out of the forwarding header instead -- but only
+  # for connections that actually came from a listed proxy, since a
+  # header from anyone else is just text they chose.
+  #
+  # Accepts bare IPs, CIDRs, or "private" (loopback + RFC1918 + CGNAT +
+  # link-local + IPv6 ULA), which covers a proxy on your LAN or sharing
+  # a Docker network.
+  # trustedProxies: ["private"]
+  #
+  # Which header to read, honoured only for the peers above. The default
+  # suits nginx, Caddy, Traefik, HAProxy, Cloudflare and the cloud load
+  # balancers; change it for a proxy that sets something else.
+  # clientIpHeader: "X-Forwarded-For"
 
 store:
   retention: 24h
@@ -28,8 +53,9 @@ store:
 
 # Optional: enables AbuseIPDB in the "investigate this IP" popover
 # (Shodan InternetDB is always used, no key needed). Free tier: 1000
-# lookups/day. See docs/configuration.md. Left unset, only Shodan results
-# are shown.
+# lookups/day. AbuseIPDB's abuse score also feeds the confidence floor
+# of behavioral flags raised against the same source IP -- see
+# docs/configuration.md's "IP reputation lookup" section.
 # reputation:
 #   abuseIPDBKey: your-abuseipdb-api-key
 
@@ -66,6 +92,30 @@ store:
 #   hostActivityMultiplier: 3
 #   hostActivityWarmupSamples: 20
 #
+#   # Optional (issue #105): interface-name patterns (glob syntax --
+#   # exact "wireguard1" or prefix-style "wireguard*") identifying which
+#   # of RouterOS's InInterface values correspond to a configured VPN
+#   # tunnel. When a port-scan/activity-spike/outbound-anomaly/internal-
+#   # recon anomaly's triggering event arrived via a matching interface,
+#   # its confidence score is boosted by vpnConfidenceMultiplier
+#   # (clamped to 100) -- an already-authenticated remote peer behaving
+#   # anomalously is a stronger signal than an ordinary LAN device doing
+#   # the same. Left empty (the default), this is a complete no-op --
+#   # every confidence score is unaffected. See docs/configuration.md's
+#   # "VPN interface confidence boost" section.
+#   vpnInterfaces: []
+#   # vpnInterfaces:
+#   #   - wireguard1
+#   vpnConfidenceMultiplier: 1.5
+#
+#   # How long a *configured* device's last-seen time may go without
+#   # updating before it's reported "stale" (GET /api/devices, feeds the
+#   # Fleet view) and raises a device_silence flag -- a router that's
+#   # crashed, rebooted, lost network, or had its syslog config wiped.
+#   # Needs to sit comfortably above normal syslog gaps; 0 disables this
+#   # detector entirely. See docs/configuration.md.
+#   deviceStaleAfter: 15m
+#
 #   # Per-detector on/off + scope restrictions -- every detector defaults
 #   # to enabled and unscoped; a live admin-only UI toggle can override
 #   # these at runtime without a restart (persisted separately to
@@ -87,6 +137,35 @@ store:
 #         rules: []
 #         rulesMode: ""
 
+# New-device detection: raises a flag the first time mikroview ever sees
+# a given LAN client MAC address -- deterministic, no threshold to tune.
+# storePath already defaults to /var/lib/mikroview/mac-registry.json
+# (see deploy/docker-compose.yml for the matching volume mount) -- only
+# uncomment this block to move that path. See docs/configuration.md's
+# "New-device detection" section, including the WAN-side-only-ruleset
+# coverage caveat.
+# deviceMac:
+#   storePath: /var/lib/mikroview/mac-registry.json
+
+# Local IP/CIDR blocklist matching (issue #113 Part B): raises a
+# known_bad_ip flag directly when a source IP falls inside a CIDR range
+# from one of the vetted feeds below -- independent of any behavioral
+# threshold, and also reinforces the confidence floor of any other
+# active flag for that same source IP. On by default with Spamhaus's
+# DROP+EDROP lists (small, free, no registration, curated to only
+# include netblocks Spamhaus is confident are entirely
+# malicious-controlled). This is a fixed, vetted menu, not an arbitrary
+# URL field -- see internal/blocklist's doc comment and
+# docs/configuration.md for the full menu, why, and how the refresh
+# cadence/entry-count cap were decided. Refresh is a fixed daily cycle,
+# not configurable. Set sources to an empty list to disable this
+# feature entirely.
+# blocklist:
+#   sources:
+#     - spamhaus_drop
+#     - spamhaus_edrop
+#     # - emerging_threats_compromised  # opt-in: larger, faster-changing, individual-IP list
+
 # Optional: friendly display names shown in place of a raw RouterOS rule
 # label (e.g. "r13") or a raw host IP, everywhere they appear in the UI
 # and CSV export. Filtering/grouping still uses the raw value -- these
@@ -95,6 +174,28 @@ store:
 #   r13: "Block known scanners"
 # hostNames:
 #   192.168.1.50: "Living room NAS"
+
+# Optional: the live, UI-managed counterpart to ruleNames/hostNames
+# above (Menu -> Entities, admin-only) -- a label/tags record per
+# (type, key), editable with no restart, taking precedence over
+# ruleNames/hostNames for any key it has a label for. storePath already
+# defaults to /var/lib/mikroview/entities.json; only uncomment this
+# block to move that path. The first time mikroview boots against an
+# empty entities store, it imports any existing ruleNames/hostNames as
+# entities automatically -- see docs/configuration.md's "Entities"
+# section.
+# entities:
+#   storePath: /var/lib/mikroview/entities.json
+
+# Optional: the persisted, admin-only accountability log of every admin-
+# privileged mutation (user create, entity upsert/delete, token create/
+# revoke, detector setting change, flag exclusion removal) -- who did it
+# and when (Menu -> Audit log, admin-only). storePath already defaults to
+# /var/lib/mikroview/audit.json; only uncomment this block to move that
+# path. See docs/configuration.md's "Audit log" section, including which
+# flag actions are deliberately NOT logged here.
+# audit:
+#   storePath: /var/lib/mikroview/audit.json
 
 # Local authentication. storePath already defaults to
 # /var/lib/mikroview/users.json (see deploy/docker-compose.yml for the
@@ -109,6 +210,7 @@ store:
 #   storePath: /var/lib/mikroview/users.json
 #   secureCookie: true
 #   sessionTTL: 24h
+#   tokensStorePath: /var/lib/mikroview/tokens.json
 
 # TLS is on by default and needs no configuration to work -- mikroview
 # generates its own local CA + certificate on first start, already

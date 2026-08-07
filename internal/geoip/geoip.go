@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+
 // Package geoip resolves public IPs to a country code using an optional,
 // locally-mounted MaxMind GeoLite2-Country database. There is no bundled
 // database and no network calls to MaxMind at runtime -- MaxMind's license

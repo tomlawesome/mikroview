@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+
 package detect
 
 import (
@@ -8,13 +10,19 @@ import (
 	"github.com/tomlawesome/mikroview/internal/store"
 )
 
-type destSample struct {
-	at    time.Time
-	dstIP string
-}
-
 type destWindow struct {
-	samples      []destSample
+	// external/internal replace a single []destSample slice with two
+	// rings (see window.go), each sized to its own direction's window
+	// (OutboundAnomalyWindow/InternalReconWindow). Unlike a
+	// SettingsStore scope, isPublic's public/private classification is
+	// static for a given IP -- it never changes after the fact -- so
+	// routing an event to the matching ring at insert time is a pure
+	// optimization over classifying at query time, not a departure from
+	// the filter-at-query-time rule (which is specifically about
+	// filters that can change live).
+	external *distinctRing[string]
+	internal *distinctRing[string]
+
 	lastActivity time.Time
 }
 
@@ -58,69 +66,64 @@ func (d *Detector) observeDestSpread(e store.Event, now time.Time) {
 	w, ok := d.destWindows[e.SrcIP]
 	if !ok {
 		if len(d.destWindows) >= maxTrackedSources {
-			d.evictOldestDestWindow()
+			evictOldestByActivity(d.destWindows)
 		}
-		w = &destWindow{}
+		w = &destWindow{
+			external: newDistinctRing[string](d.cfg.OutboundAnomalyWindow),
+			internal: newDistinctRing[string](d.cfg.InternalReconWindow),
+		}
 		d.destWindows[e.SrcIP] = w
 	}
 	w.lastActivity = now
-	w.samples = append(w.samples, destSample{at: now, dstIP: e.DstIP})
 
-	window := d.cfg.OutboundAnomalyWindow
-	if d.cfg.InternalReconWindow > window {
-		window = d.cfg.InternalReconWindow
-	}
-	cutoff := now.Add(-window)
-	i := 0
-	for i < len(w.samples) && w.samples[i].at.Before(cutoff) {
-		i++
-	}
-	if i > 0 {
-		w.samples = w.samples[i:]
-	}
-
-	outboundCutoff := now.Add(-d.cfg.OutboundAnomalyWindow)
-	reconCutoff := now.Add(-d.cfg.InternalReconWindow)
-	external := make(map[string]struct{})
-	internal := make(map[string]struct{})
-	for _, s := range w.samples {
-		if s.dstIP == "" {
-			continue
-		}
-		if isPublic(s.dstIP) {
-			if oaActive && !s.at.Before(outboundCutoff) {
-				external[s.dstIP] = struct{}{}
-			}
-		} else if irActive && !s.at.Before(reconCutoff) {
-			internal[s.dstIP] = struct{}{}
+	// Recorded unconditionally (regardless of oaActive/irActive, like
+	// the old shared w.samples slice) -- only the query below is gated
+	// per-detector.
+	if e.DstIP != "" {
+		if isPublic(e.DstIP) {
+			w.external.Add(now, e.DstIP)
+		} else {
+			w.internal.Add(now, e.DstIP)
 		}
 	}
 
-	if oaActive && len(external) >= d.cfg.OutboundAnomalyThreshold {
-		isNew := d.fs.AddWithDetail(flags.TypeOutboundAnomaly, e.SrcIP,
-			fmt.Sprintf("%d distinct external destinations in %s", len(external), d.cfg.OutboundAnomalyWindow),
-			overshootConfidence(len(external), d.cfg.OutboundAnomalyThreshold),
-			flags.Evidence{Hosts: sortedHostsCapped(external)}, "", now)
-		d.maybeCheckGroupReputation(flags.TypeOutboundAnomaly, e.SrcIP, external, isNew)
+	// vpnTagged is computed once and reused by both branches below --
+	// see vpn.go's vpnBoostConfidence for the mechanism and reasoning
+	// (issue #105): an anomaly whose triggering event arrived via a
+	// VPN-tagged interface (Config.VPNInterfaces) is scored more
+	// confidently than the identical anomaly from an ordinary LAN
+	// interface. e.InInterface empty, or matching no configured
+	// pattern (the default, empty VPNInterfaces), leaves both detectors'
+	// scoring completely unchanged.
+	vpnTagged := isVPNInterface(d.cfg.VPNInterfaces, e.InInterface)
+	vpnDetailSuffix := ""
+	if vpnTagged {
+		vpnDetailSuffix = fmt.Sprintf(" -- arrived via VPN interface %q, scored more confidently as an already-authenticated remote peer", e.InInterface)
 	}
-	if irActive && len(internal) >= d.cfg.InternalReconThreshold {
-		d.fs.AddWithDetail(flags.TypeInternalRecon, e.SrcIP,
-			fmt.Sprintf("%d distinct internal destinations in %s", len(internal), d.cfg.InternalReconWindow),
-			overshootConfidence(len(internal), d.cfg.InternalReconThreshold),
-			flags.Evidence{Hosts: sortedHostsCapped(internal)}, "", now)
+
+	if oaActive {
+		external := w.external.Count(now, d.cfg.OutboundAnomalyWindow, nil)
+		if external >= d.cfg.OutboundAnomalyThreshold {
+			hosts := w.external.Values(now, d.cfg.OutboundAnomalyWindow, nil)
+			confidence := d.vpnBoostConfidence(overshootConfidence(external, d.cfg.OutboundAnomalyThreshold), e.InInterface)
+			isNew := d.fs.AddWithDetail(flags.TypeOutboundAnomaly, e.SrcIP,
+				fmt.Sprintf("%d distinct external destinations in %s", external, d.cfg.OutboundAnomalyWindow)+vpnDetailSuffix,
+				confidence,
+				flags.Evidence{Hosts: sortedHostsCapped(hosts)}, "", now)
+			d.maybeCheckGroupReputation(flags.TypeOutboundAnomaly, e.SrcIP, hosts, isNew)
+		}
+	}
+	if irActive {
+		internal := w.internal.Count(now, d.cfg.InternalReconWindow, nil)
+		if internal >= d.cfg.InternalReconThreshold {
+			hosts := w.internal.Values(now, d.cfg.InternalReconWindow, nil)
+			confidence := d.vpnBoostConfidence(overshootConfidence(internal, d.cfg.InternalReconThreshold), e.InInterface)
+			d.fs.AddWithDetail(flags.TypeInternalRecon, e.SrcIP,
+				fmt.Sprintf("%d distinct internal destinations in %s", internal, d.cfg.InternalReconWindow)+vpnDetailSuffix,
+				confidence,
+				flags.Evidence{Hosts: sortedHostsCapped(hosts)}, "", now)
+		}
 	}
 }
 
-func (d *Detector) evictOldestDestWindow() {
-	var oldestKey string
-	var oldest time.Time
-	first := true
-	for k, w := range d.destWindows {
-		if first || w.lastActivity.Before(oldest) {
-			oldestKey, oldest, first = k, w.lastActivity, false
-		}
-	}
-	if oldestKey != "" {
-		delete(d.destWindows, oldestKey)
-	}
-}
+func (w *destWindow) lastActivityTime() time.Time { return w.lastActivity }

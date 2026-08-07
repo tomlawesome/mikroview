@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+
 package detect
 
 import (
@@ -196,10 +198,10 @@ func TestActivitySpikeNeverFiresBeforeMinimumSampleFloor(t *testing.T) {
 	ip := "198.51.100.9"
 	now := time.Now()
 
-	d.checkHostActivityBaseline(w, ip, "", 1, now) // primes: sampleCount=1
+	d.checkHostActivityBaseline(w, ip, "", "", 1, now) // primes: sampleCount=1
 
 	for i := 0; i < hostActivityMinSamples-1; i++ {
-		d.checkHostActivityBaseline(w, ip, "", 100, now.Add(time.Duration(i+1)*time.Second))
+		d.checkHostActivityBaseline(w, ip, "", "", 100, now.Add(time.Duration(i+1)*time.Second))
 		if len(fs.List()) != 0 {
 			t.Fatalf("expected no flag while sampleCount < hostActivityMinSamples (call %d), got %+v", i+2, fs.List())
 		}

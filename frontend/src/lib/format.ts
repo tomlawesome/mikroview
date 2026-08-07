@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+
 export function formatTime(iso: string): string {
   const d = new Date(iso)
   if (Number.isNaN(d.getTime())) return iso
@@ -50,4 +52,30 @@ export function formatHM(iso: string): string {
 export function formatEps(eps: number): string {
   if (eps < 1) return eps.toFixed(1)
   return Math.round(eps).toString()
+}
+
+// formatRelative renders how long ago `iso` was, as a short "Xs/Xm/Xh/Xd
+// ago" string -- used where "how long ago" reads faster at a glance than
+// an exact clock time (see formatHM/formatTime for that instead), e.g.
+// the Fleet view's last-seen column. `nowMs` is a parameter rather than
+// read from Date.now() internally so a caller driven by a reactive
+// ticking clock (e.g. appState.now) re-renders this on the same cadence
+// as everything else, instead of each call site free-running its own
+// timer. Returns the original string unchanged if it doesn't parse, and
+// never a negative duration (a lastSeen a few ms ahead of `nowMs` due to
+// clock skew between client and server reads as "just now", not
+// "-1s ago").
+export function formatRelative(iso: string, nowMs: number): string {
+  const t = new Date(iso).getTime()
+  if (Number.isNaN(t)) return iso
+  const deltaMs = Math.max(0, nowMs - t)
+  const s = Math.floor(deltaMs / 1000)
+  if (s < 5) return 'just now'
+  if (s < 60) return `${s}s ago`
+  const m = Math.floor(s / 60)
+  if (m < 60) return `${m}m ago`
+  const h = Math.floor(m / 60)
+  if (h < 24) return `${h}h ago`
+  const d = Math.floor(h / 24)
+  return `${d}d ago`
 }

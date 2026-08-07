@@ -1,4 +1,5 @@
 <script lang="ts">
+  // SPDX-License-Identifier: AGPL-3.0-only
   // Full-page dashboard tab: consolidates the charts that used to live in
   // toolbar popovers (event volume, top rules) plus new ones an admin
   // scanning traffic would want (action/protocol mix, top talkers,
@@ -9,6 +10,7 @@
   import type { Action } from '../lib/types'
   import { topNBy } from '../lib/topN'
   import EventsChart from './EventsChart.svelte'
+  import FlagsChart from './FlagsChart.svelte'
   import BarList from './BarList.svelte'
   import CustomTopTalkers from './CustomTopTalkers.svelte'
 
@@ -54,6 +56,9 @@
 <div class="dashboard scrollbar">
   <div class="panel wide">
     <EventsChart />
+  </div>
+  <div class="panel wide">
+    <FlagsChart />
   </div>
   <BarList title="Top rules" rows={topRuleRows} emptyMessage="No labeled rules seen yet" />
   <BarList title="Action breakdown" rows={actionRows} />

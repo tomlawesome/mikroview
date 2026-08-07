@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+
 // Package logging is mikroview's server-side log formatting: leveled,
 // colorized (auto-disabled off a TTY or with NO_COLOR set), with a
 // stable component column so a scrolling terminal or `docker logs` stays
@@ -6,7 +8,7 @@
 // posture (see go.mod).
 //
 // Not used for CLI recovery command output (-list-users,
-// -reset-password's password prompts, etc.) -- those print directly to
+// -recover-admin-account's password prompts, etc.) -- those print directly to
 // stdout/stderr for scripting/piping, not through this leveled path.
 package logging
 
@@ -16,8 +18,11 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"runtime/debug"
 	"strings"
 	"sync"
+	"unicode"
+	"unicode/utf8"
 
 	"golang.org/x/term"
 )
@@ -59,6 +64,41 @@ func colorEnabled() bool {
 // they always did with log.Printf.
 func New(component string) *slog.Logger {
 	return slog.New(sharedHandler).With(slog.String("component", component))
+}
+
+// Recover must be deferred directly -- `defer logging.Recover(logger)`
+// -- never wrapped in another closure (`defer func() {
+// logging.Recover(logger) }()` looks equivalent but is a real, common
+// Go footgun: recover() only stops a panic when called directly by the
+// function that was itself deferred. One layer of closure in between
+// means recover() is no longer being called "directly" by the deferred
+// call, so it returns nil and the panic keeps propagating exactly as
+// if this were never called at all -- silently, since nothing about it
+// looks wrong until it's actually exercised by a real panic. Logs and
+// swallows an in-flight panic instead of letting it propagate.
+//
+// Go gives no default containment for a panic in a goroutine: only
+// net/http's own per-request goroutine gets an automatic recover, and
+// that protection doesn't extend to any goroutine spawned from within a
+// handler, let alone mikroview's independently-started long-running
+// goroutines (ingestion, detection, notification dispatch, the syslog
+// listeners, ...). An unrecovered panic in any one of them takes down
+// the entire process -- every connected browser's WebSocket, both
+// syslog listeners, the whole in-memory event buffer -- not just the
+// subsystem it happened in. Call this at the smallest unit of work a
+// goroutine repeats (once per event/message/connection, not once for
+// the goroutine's entire lifetime) so a single bad input degrades that
+// one unit of work rather than silently ending the goroutine for good.
+func Recover(logger *slog.Logger) {
+	if r := recover(); r != nil {
+		// handler.Handle (below) only ever renders a record's plain
+		// Message plus its "component" attr -- every other structured
+		// attr (slog.Any/slog.String key-value pairs) is silently
+		// dropped. Baking the panic value and stack trace directly
+		// into the message is the only way they actually reach the
+		// log output this package produces.
+		logger.Error(fmt.Sprintf("recovered from panic: %v\n%s", r, debug.Stack()))
+	}
 }
 
 // SetLevel parses one of debug/info/warn/error (case-insensitive) and
@@ -191,4 +231,39 @@ func formatLine(ts string, level slog.Level, component, message string, color bo
 		ansiDim, ansiReset,
 		message,
 	)
+}
+
+// Printable renders s safe to write to an operator's terminal.
+//
+// Needed because the CLI commands print stored values -- account names
+// in -list-users, most obviously -- and a stored value can predate the
+// validation that now rejects control characters (see
+// auth.ValidateUsername), or arrive from an identity provider that was
+// never under this deployment's control.
+//
+// An ANSI escape sequence written to a terminal is not text, it is an
+// instruction: it can move the cursor, erase what was already printed,
+// recolour a line, or on some terminals stuff the input buffer. That is
+// enough to make `mikroview -list-users` show a different set of
+// accounts than the one it actually read -- which is the exact defect in
+// CVE-2025-55754 (Tomcat) and CVE-2025-48432 (Django).
+//
+// Control characters and Unicode format characters (the bidi overrides
+// that let text render in an order other than the one it is stored in)
+// are replaced with U+FFFD, so their presence is visible rather than
+// silently dropped.
+func Printable(s string) string {
+	if !strings.ContainsFunc(s, unsafeForTerminal) {
+		return s
+	}
+	return strings.Map(func(r rune) rune {
+		if unsafeForTerminal(r) {
+			return '�'
+		}
+		return r
+	}, s)
+}
+
+func unsafeForTerminal(r rune) bool {
+	return unicode.IsControl(r) || unicode.Is(unicode.Cf, r) || r == utf8.RuneError
 }

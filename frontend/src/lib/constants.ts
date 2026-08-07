@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+
 // How many events the client keeps in memory for live filtering. Deeper
 // history is fetched on demand via "load older" against the server's
 // much larger retained buffer, not held in the browser.

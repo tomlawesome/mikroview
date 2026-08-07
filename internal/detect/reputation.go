@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+
 package detect
 
 import (
@@ -6,7 +8,9 @@ import (
 	"sync"
 	"time"
 
+	"github.com/tomlawesome/mikroview/internal/entities"
 	"github.com/tomlawesome/mikroview/internal/flags"
+	"github.com/tomlawesome/mikroview/internal/logging"
 	"github.com/tomlawesome/mikroview/internal/reputation"
 )
 
@@ -69,6 +73,17 @@ func (d *Detector) WithReputation(client reputationLookup) *Detector {
 	return d
 }
 
+// WithEntities attaches the shared entity store (internal/entities,
+// issue #107) that observeMailSender consults for its
+// trusted-mail-sender allowlist (issue #108). Returns d for chaining,
+// same pattern as WithReputation. nil (the default, if never called) is
+// a valid, explicit "no allowlist configured" state -- observeMailSender
+// treats it as "nothing is tagged trusted," not as an error.
+func (d *Detector) WithEntities(es *entities.Store) *Detector {
+	d.entities = es
+	return d
+}
+
 // maybeCheckReputation kicks off a best-effort, async reputation lookup
 // for a newly-raised (not re-fired) flag against a public source IP.
 // target is the flags.Store key (may differ from ip -- see
@@ -92,6 +107,7 @@ func (d *Detector) maybeCheckReputation(t flags.Type, target, ip string, isNewEp
 	}
 	go func() {
 		defer func() { <-d.lookupSlots }()
+		defer logging.Recover(logger)
 		ctx, cancel := context.WithTimeout(context.Background(), reputationLookupTimeout)
 		defer cancel()
 		result, err := d.reputation.Lookup(ctx, ip)
@@ -184,6 +200,7 @@ func (d *Detector) maybeCheckGroupReputation(t flags.Type, target string, member
 		}
 		go func() {
 			defer func() { <-d.lookupSlots }()
+			defer logging.Recover(logger)
 			ctx, cancel := context.WithTimeout(context.Background(), reputationLookupTimeout)
 			defer cancel()
 			result, err := d.reputation.Lookup(ctx, ip)

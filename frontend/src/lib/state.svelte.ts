@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+
 import { fetchDevices, fetchEvents, fetchStats } from './api'
 import { MAX_CLIENT_EVENTS } from './constants'
 import { isPublicIp } from './format'
@@ -10,6 +12,7 @@ import {
   type FirewallEvent,
   type Stats,
 } from './types'
+import { mergeOutcome, RuleMatcher, type MatchCandidate } from './ruleMatcher'
 
 function stamp(events: FirewallEvent[]): ClientEvent[] {
   const receivedAt = Date.now()
@@ -20,11 +23,20 @@ export type ConnState = 'connecting' | 'open' | 'closed'
 
 // 'live' is the scrolling event table + filter bar; 'metrics' is the
 // dashboard (see Dashboard.svelte); 'control-ports' is the SSH/Telnet/
-// control-port tracking tab (see ControlPorts.svelte). A real (if
-// minimal) view switch -- only one is ever mounted at a time -- rather
-// than a modal layered over the live table, which used to leave
+// control-port tracking tab (see ControlPorts.svelte); 'flags' is the
+// behavioral-flags review tab (see Flags.svelte); 'detectors' is the
+// admin-only per-detector on/off + scope settings tab (see
+// Detectors.svelte); 'entities' is the admin-only persisted host/rule
+// label+tag management tab (see Entities.svelte, issue #107); 'fleet'
+// (issue #98) is the multi-router-fleet health table (see Fleet.svelte)
+// -- every known device, live/stale/never-seen status, last-seen, and
+// event counts in one place, richer than the toolbar's always-on
+// DeviceStatus dot-strip; 'audit' (issue #112) is the admin-only,
+// read-only log of admin-privileged mutations (see AuditLog.svelte). A
+// real (if minimal) view switch -- only one is ever mounted at a time --
+// rather than a modal layered over the live table, which used to leave
 // LiveTable running underneath.
-export type View = 'live' | 'metrics' | 'control-ports'
+export type View = 'live' | 'metrics' | 'control-ports' | 'flags' | 'detectors' | 'entities' | 'fleet' | 'audit'
 
 // Central reactive state for the live view. The WebSocket tail pushes
 // every new event unfiltered into `events`; `filteredEvents` re-filters
@@ -46,6 +58,21 @@ class AppState {
   stats = $state<Stats | null>(null)
   connState = $state<ConnState>('connecting')
   wsDropped = $state(0)
+  // ruleMatches holds the ids matching the current regex pattern, or
+  // null when there is nothing usable to filter by. Kept here rather than
+  // inside the Worker so eviction is handled where eviction already
+  // happens -- see the slice(-MAX_CLIENT_EVENTS) call sites, which prune
+  // this in the same breath -- and so a terminated Worker loses nothing.
+  ruleMatches = $state<ReadonlySet<number> | null>(null)
+  // ruleMatchStatus surfaces *why* the rule filter is inactive, so a
+  // pattern that was refused for being too slow reads as that rather than
+  // as "no results".
+  ruleMatchStatus = $state<'idle' | 'evaluating' | 'invalid' | 'too-slow'>('idle')
+
+  private matcher = new RuleMatcher()
+  private ruleDebounce: ReturnType<typeof setTimeout> | null = null
+  private matchedPattern = ''
+
   paused = $state(false)
   pendingCount = $state(0)
   autoscroll = $state(true)
@@ -57,19 +84,37 @@ class AppState {
 
   private pendingBuffer: ClientEvent[] = []
 
+  // WS batches land here (plain push, not a $state reassignment) and get
+  // flushed into `events` on a fixed cadence by the interval started in the
+  // constructor, rather than reassigning `events` once per batch frame --
+  // appendLive can run as often as every ~50ms under sustained load, and
+  // every reassignment of a $state array forces filteredEvents/
+  // ageFilteredEvents to recompute their full scan over up to
+  // MAX_CLIENT_EVENTS items. Batching the writes caps that recompute rate
+  // to FLUSH_INTERVAL_MS regardless of WS traffic.
+  private incomingBuffer: ClientEvent[] = []
+  private static readonly FLUSH_INTERVAL_MS = 175
+
+  constructor() {
+    setInterval(() => this.flushIncoming(), AppState.FLUSH_INTERVAL_MS)
+  }
+
   filteredEvents = $derived.by(() => this.filteredBy(this.filters))
 
-  // The age-cutoff half of filteredBy's pipeline, exposed on its own for
-  // a consumer that needs the display-duration-windowed buffer but can't
-  // express its own match criteria as a Filters object -- e.g.
-  // ControlPorts.svelte's "destination port is any one of several
-  // configured control ports" OR-match, which Filters.port (a single
-  // value) can't represent.
-  ageFilteredEvents(): ClientEvent[] {
+  // The age-cutoff half of filteredBy's pipeline, exposed as its own
+  // memoized derived (rather than a plain method) so ControlPorts.svelte
+  // and every configured CustomTopTalkerCard widget -- both of which need
+  // the display-duration-windowed buffer but can't express their own match
+  // criteria as a Filters object, e.g. ControlPorts.svelte's "destination
+  // port is any one of several configured control ports" OR-match, which
+  // Filters.port (a single value) can't represent -- read the same cached
+  // scan instead of each independently re-filtering up to MAX_CLIENT_EVENTS
+  // items on every tick.
+  ageFilteredEvents = $derived.by(() => {
     const cutoff =
       retentionState.maxAgeSeconds === null ? null : this.now - retentionState.maxAgeSeconds * 1000
     return cutoff === null ? this.events : this.events.filter((e) => e.receivedAt >= cutoff)
-  }
+  })
 
   // Applies the same age-cutoff-then-filter pipeline as filteredEvents,
   // but against an arbitrary Filters object rather than appState.filters --
@@ -77,7 +122,7 @@ class AppState {
   // its own independent criteria regardless of whatever filter is
   // currently active in the live view's FilterBar.
   filteredBy(filters: Filters): FirewallEvent[] {
-    return applyFilters(this.ageFilteredEvents(), filters)
+    return applyFilters(this.ageFilteredEvents, filters, this.ruleMatches)
   }
 
   // ruleRegex is excluded here: it's a modifier on `rule`, not a filter of
@@ -86,6 +131,70 @@ class AppState {
   hasActiveFilters = $derived.by(() =>
     Object.entries(this.filters).some(([k, v]) => k !== 'ruleRegex' && v !== ''),
   )
+
+  // syncRuleMatches is called whenever the rule filter changes.
+  //
+  // Debounced because the input is bound directly to filters.rule, so
+  // every keystroke is a new pattern -- without this, typing "drop" would
+  // classify the whole buffer four times.
+  syncRuleMatches() {
+    if (this.ruleDebounce) clearTimeout(this.ruleDebounce)
+    if (!this.filters.rule || !this.filters.ruleRegex) {
+      this.ruleMatches = null
+      this.ruleMatchStatus = 'idle'
+      this.matchedPattern = ''
+      return
+    }
+    this.ruleMatchStatus = 'evaluating'
+    this.ruleDebounce = setTimeout(() => void this.rematchAll(), RULE_MATCH_DEBOUNCE_MS)
+  }
+
+  /** Reclassifies the whole buffer against the current pattern. */
+  private async rematchAll() {
+    const pattern = this.filters.rule
+    const outcome = await this.matcher.run(pattern, this.events.map(toCandidate))
+    // The user kept typing while that was in flight.
+    if (pattern !== this.filters.rule || !this.filters.ruleRegex) return
+    this.matchedPattern = pattern
+    const merged = mergeOutcome(outcome, null, false)
+    this.ruleMatches = merged.matches
+    this.ruleMatchStatus = merged.status
+  }
+
+  /**
+   * Classifies just-arrived events, so a live view with a regex filter
+   * keeps up without reclassifying everything already in the buffer.
+   */
+  private async classifyNew(arrived: ClientEvent[]) {
+    if (!this.matchedPattern || this.matchedPattern !== this.filters.rule) return
+    if (!this.ruleMatches || arrived.length === 0) return
+    const pattern = this.matchedPattern
+    const outcome = await this.matcher.run(pattern, arrived.map(toCandidate))
+    if (pattern !== this.filters.rule) return
+    const merged = mergeOutcome(outcome, this.ruleMatches, true)
+    this.ruleMatches = merged.matches
+    this.ruleMatchStatus = merged.status
+  }
+
+  /**
+   * Drops ids for events the buffer has already evicted.
+   *
+   * Server-assigned ids are monotonic and eviction is always from the
+   * front, so everything below the oldest surviving id is gone. Called
+   * from the same places that slice the buffer, which is the whole reason
+   * the set lives here rather than inside the Worker.
+   */
+  private pruneRuleMatches() {
+    if (!this.ruleMatches || this.events.length === 0) return
+    const oldest = this.events[0].id
+    let dropped = false
+    const next = new Set<number>()
+    for (const id of this.ruleMatches) {
+      if (id >= oldest) next.add(id)
+      else dropped = true
+    }
+    if (dropped) this.ruleMatches = next
+  }
 
   // Skipped while paused so the age-based display-duration cutoff in
   // filteredEvents freezes at the moment of pausing instead of continuing
@@ -99,6 +208,7 @@ class AppState {
 
   setInitialEvents(events: FirewallEvent[]) {
     this.events = stamp(events).slice(-MAX_CLIENT_EVENTS)
+    this.syncRuleMatches()
   }
 
   appendLive(newEvents: FirewallEvent[]) {
@@ -111,13 +221,33 @@ class AppState {
       this.pendingCount = this.pendingBuffer.length
       return
     }
-    this.events = [...this.events, ...stamped].slice(-MAX_CLIENT_EVENTS)
+    // Buffered, not written straight to `events` -- see incomingBuffer's
+    // doc comment above. flushIncoming (on its own interval) is what
+    // actually lands these in `events`.
+    this.incomingBuffer.push(...stamped)
+  }
+
+  // Runs on FLUSH_INTERVAL_MS regardless of WS traffic -- a no-op tick
+  // when nothing arrived is cheap; skipping the reassignment entirely here
+  // (rather than reassigning an unchanged `events` to itself) avoids
+  // spuriously invalidating filteredEvents/ageFilteredEvents when the feed
+  // is idle.
+  private flushIncoming() {
+    if (this.incomingBuffer.length === 0) return
+    const arrived = this.incomingBuffer
+    this.events = [...this.events, ...arrived].slice(-MAX_CLIENT_EVENTS)
+    this.pruneRuleMatches()
+    void this.classifyNew(arrived)
+    this.incomingBuffer = []
   }
 
   togglePause() {
     this.paused = !this.paused
     if (!this.paused && this.pendingBuffer.length) {
-      this.events = [...this.events, ...this.pendingBuffer].slice(-MAX_CLIENT_EVENTS)
+      const resumed = this.pendingBuffer
+      this.events = [...this.events, ...resumed].slice(-MAX_CLIENT_EVENTS)
+      this.pruneRuleMatches()
+      void this.classifyNew(resumed)
       this.pendingBuffer = []
       this.pendingCount = 0
     }
@@ -127,6 +257,7 @@ class AppState {
     this.events = []
     this.pendingBuffer = []
     this.pendingCount = 0
+    this.incomingBuffer = []
   }
 
   resetFilters() {
@@ -170,7 +301,36 @@ class AppState {
   }
 }
 
-function applyFilters(events: FirewallEvent[], f: Filters): FirewallEvent[] {
+// MAX_RULE_PATTERN_LENGTH bounds compile cost. Generous -- a real rule
+// filter is a handful of characters -- but it stops a megabyte-long
+// pattern arriving in a URL.
+const MAX_RULE_PATTERN_LENGTH = 200
+
+// applyFilters runs no regex.
+//
+// When the rule filter is in regex mode it consults ruleMatches -- a set
+// of event ids computed off the main thread (see lib/ruleMatcher.ts and
+// issue #157). A null set means "not evaluated yet, or the pattern was
+// refused", and behaves exactly as an invalid pattern always has: the
+// rule filter is skipped rather than throwing or hiding everything.
+//
+// This is also less work than it replaces. The old path ran the pattern
+// against ruleLabel *and* raw for every event on every call -- up to
+// 10,000 regex executions across a 5,000-event buffer, repeated per
+// top-talker widget. This is a set lookup.
+/** RULE_MATCH_DEBOUNCE_MS: the filter input is bound per keystroke. */
+const RULE_MATCH_DEBOUNCE_MS = 250
+
+function toCandidate(e: FirewallEvent): MatchCandidate {
+  return { id: e.id, ruleLabel: e.ruleLabel, raw: e.raw }
+}
+
+export function applyFilters(
+  events: FirewallEvent[],
+  f: Filters,
+  ruleMatches: ReadonlySet<number> | null = null,
+): FirewallEvent[] {
+
   return events.filter((e) => {
     if (f.device && e.deviceId !== f.device) return false
     if (f.action && e.action !== f.action) return false
@@ -200,15 +360,12 @@ function applyFilters(events: FirewallEvent[], f: Filters): FirewallEvent[] {
     }
     if (f.rule) {
       if (f.ruleRegex) {
-        // An invalid pattern disables the filter (matches internal/store/
-        // query.go's behavior) rather than throwing or hiding everything
-        // -- the user is probably still mid-typing it.
-        try {
-          const re = new RegExp(f.rule, 'i')
-          if (!re.test(e.ruleLabel) && !re.test(e.raw)) return false
-        } catch {
-          // invalid regex: no-op, treat as unfiltered
-        }
+        // A null set means the pattern has not been evaluated yet, was
+        // invalid, or was refused for taking too long. All three disable
+        // the rule filter rather than throwing or hiding everything --
+        // the user is usually mid-typing, and matching internal/store/
+        // query.go's behaviour for an unusable pattern.
+        if (ruleMatches && !ruleMatches.has(e.id)) return false
       } else {
         const needle = f.rule.toLowerCase()
         if (!e.ruleLabel.toLowerCase().includes(needle) && !e.raw.toLowerCase().includes(needle)) return false

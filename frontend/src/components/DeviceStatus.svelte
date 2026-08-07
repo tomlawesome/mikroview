@@ -1,17 +1,14 @@
 <script lang="ts">
+  // SPDX-License-Identifier: AGPL-3.0-only
+  // Always-visible glance-and-go strip -- see Fleet.svelte (issue #98)
+  // for the richer dedicated view this deliberately doesn't try to
+  // replace. `status` is server-computed by GET /api/devices (live/
+  // stale/never_seen, see internal/api/rest.go's deviceStatus) against
+  // the operator-configured deviceStaleAfter threshold -- reused here
+  // rather than this component keeping its own separate, shorter,
+  // hardcoded staleness heuristic, which used to disagree with both the
+  // actual TypeDeviceSilence flag and Fleet.svelte's own status column.
   import { appState } from '../lib/state.svelte'
-
-  const STALE_MS = 2 * 60 * 1000
-
-  let now = $state(Date.now())
-  $effect(() => {
-    const id = setInterval(() => (now = Date.now()), 5000)
-    return () => clearInterval(id)
-  })
-
-  function isLive(lastSeen: string): boolean {
-    return now - new Date(lastSeen).getTime() < STALE_MS
-  }
 </script>
 
 <div class="devices">
@@ -19,7 +16,7 @@
     <span class="none">No RouterOS devices seen yet</span>
   {/if}
   {#each appState.devices as d (d.id)}
-    <span class="device" class:stale={!isLive(d.lastSeen)} title="{d.eventCount} events · {d.sourceIp}">
+    <span class="device" class:stale={d.status !== 'live'} title="{d.eventCount} events · {d.sourceIp}">
       <span class="dot"></span>
       {d.name}
       {#if !d.configured}<span class="unregistered">unregistered</span>{/if}

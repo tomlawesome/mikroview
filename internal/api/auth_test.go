@@ -1,12 +1,17 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+
 package api
 
 import (
 	"bytes"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/cookiejar"
 	"net/http/httptest"
+	"net/url"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -52,23 +57,6 @@ func postJSON(t *testing.T, client *http.Client, url string, body any) *http.Res
 	return resp
 }
 
-func TestUnprotectedOnceAuthDisabled(t *testing.T) {
-	// newTestServer's Auth already defaults to disabled -- see its own
-	// doc comment.
-	s, _ := newTestServer(t)
-	ts := httptest.NewServer(s.Routes())
-	defer ts.Close()
-
-	resp, err := http.Get(ts.URL + "/api/events")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		t.Errorf("expected the API to stay fully open once auth is disabled, got %d", resp.StatusCode)
-	}
-}
-
 // TestUndecidedStateRestrictsToBootstrapPaths covers the gap the old
 // blanket-open zero-account behavior left: before a real decision has
 // been made (neither an account created nor auth explicitly skipped),
@@ -89,6 +77,63 @@ func TestUndecidedStateRestrictsToBootstrapPaths(t *testing.T) {
 	}
 }
 
+// internal/auth's sentinel errors are written for a developer (e.g.
+// ErrNotPersisted's "refusing to create a user that would not survive
+// a restart"), not a stranger looking at a login screen -- this proves
+// that text never reaches the HTTP response body, regardless of which
+// auth error is triggered.
+func TestAuthErrorsNeverLeakInternalErrorText(t *testing.T) {
+	s, _ := newTestServer(t)
+	unpersisted, err := auth.Open("") // triggers ErrNotPersisted on Register
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.Auth = unpersisted
+	ts := httptest.NewServer(s.mux())
+	defer ts.Close()
+
+	resp := postJSON(t, &http.Client{}, ts.URL+"/api/auth/register", credentialsRequest{Username: "admin", Password: "password123"})
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(body), "auth:") {
+		t.Errorf("expected internal/auth's raw error text never to reach the client, got body: %q", body)
+	}
+	if resp.StatusCode != http.StatusServiceUnavailable {
+		t.Errorf("expected 503 for ErrNotPersisted, got %d", resp.StatusCode)
+	}
+}
+
+// A request body decoded with no size cap means memory allocation
+// proportional to body size, on an endpoint reachable with no
+// credentials at all (login) -- this proves an oversized body is
+// rejected rather than read in full.
+func TestOversizedJSONBodyIsRejected(t *testing.T) {
+	s, _ := newTestServer(t)
+	ts := httptest.NewServer(s.mux())
+	defer ts.Close()
+
+	oversized := strings.Repeat("a", maxJSONBodyBytes+1)
+	body := `{"username":"` + oversized + `","password":"x"}`
+	req, err := http.NewRequest(http.MethodPost, ts.URL+"/api/auth/login", strings.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set(csrfHeaderName, csrfHeaderValue)
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("expected an oversized body to be rejected with 400, got %d", resp.StatusCode)
+	}
+}
+
 func TestUndecidedStateAllowsBootstrapPaths(t *testing.T) {
 	s := newAuthTestServer(t)
 	ts := httptest.NewServer(s.Routes())
@@ -106,59 +151,55 @@ func TestUndecidedStateAllowsBootstrapPaths(t *testing.T) {
 	}
 }
 
-func TestAuthSkipDisablesAuthPermanently(t *testing.T) {
-	s := newAuthTestServer(t)
-	ts := httptest.NewServer(s.Routes())
-	defer ts.Close()
+// A bare cross-site <form method=POST> (or a JSON-CSRF fetch) can't set
+// a custom header, so a request missing csrfHeaderName during the
+// undecided (Count()==0) bootstrap window must be rejected for the
+// endpoint that makes an irreversible, deployment-wide choice --
+// otherwise a tricked victim's browser could plant an attacker-
+// controlled admin account with no direct network access required from
+// the attacker at all.
+func TestBootstrapMutatingEndpointsRequireCSRFHeader(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		path string
+		body any
+	}{
+		{"register", "/api/auth/register", credentialsRequest{Username: "admin", Password: "password123"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := newAuthTestServer(t)
+			ts := httptest.NewServer(s.Routes())
+			defer ts.Close()
 
-	resp := postJSON(t, &http.Client{}, ts.URL+"/api/auth/skip", map[string]any{})
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("expected skip to succeed, got %d", resp.StatusCode)
-	}
-
-	// Previously-blocked paths are now open, exactly like the disabled
-	// default.
-	events, err := http.Get(ts.URL + "/api/events")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer events.Body.Close()
-	if events.StatusCode != http.StatusOK {
-		t.Errorf("expected /api/events to be open after skipping auth, got %d", events.StatusCode)
-	}
-
-	// Registration must not be usable afterward -- re-enabling is
-	// CLI-only (see auth.Store.EnableSetup), not something a client can
-	// trigger by just calling register directly.
-	reg := postJSON(t, &http.Client{}, ts.URL+"/api/auth/register", credentialsRequest{Username: "admin", Password: "password123"})
-	defer reg.Body.Close()
-	if reg.StatusCode != http.StatusConflict {
-		t.Errorf("expected register to be refused once auth is disabled, got %d", reg.StatusCode)
-	}
-}
-
-func TestAuthSessionReportsAuthDisabled(t *testing.T) {
-	s, _ := newTestServer(t)
-	ts := httptest.NewServer(s.Routes())
-	defer ts.Close()
-
-	resp, err := http.Get(ts.URL + "/api/auth/session")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer resp.Body.Close()
-
-	var body sessionResponse
-	json.NewDecoder(resp.Body).Decode(&body)
-	if !body.AuthDisabled {
-		t.Errorf("expected authDisabled=true, got %+v", body)
+			b, err := json.Marshal(tc.body)
+			if err != nil {
+				t.Fatal(err)
+			}
+			req, err := http.NewRequest(http.MethodPost, ts.URL+tc.path, bytes.NewReader(b))
+			if err != nil {
+				t.Fatal(err)
+			}
+			req.Header.Set("Content-Type", "application/json")
+			// Deliberately no csrfHeaderName -- this is the request
+			// shape a cross-site form/fetch can actually produce.
+			resp, err := http.DefaultClient.Do(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer resp.Body.Close()
+			if resp.StatusCode != http.StatusForbidden {
+				t.Errorf("expected %s without the CSRF header to be rejected with 403 during the bootstrap window, got %d", tc.path, resp.StatusCode)
+			}
+			if s.Auth.Count() != 0 {
+				t.Error("the forged request must not have taken effect")
+			}
+		})
 	}
 }
 
 func TestAuthSessionReportsSetupRequired(t *testing.T) {
 	s, _ := newTestServer(t)
-	ts := httptest.NewServer(s.Routes())
+	ts := httptest.NewServer(s.mux())
 	defer ts.Close()
 
 	resp, err := http.Get(ts.URL + "/api/auth/session")
@@ -353,7 +394,7 @@ func TestNonAdminCannotCreateUsers(t *testing.T) {
 }
 
 func TestPasswordResetInvalidatesExistingSessions(t *testing.T) {
-	// Simulates the CLI recovery tool (`-reset-password`) resetting a
+	// Simulates the CLI recovery tool (`-recover-admin-account`) resetting a
 	// password from a *separate process* -- it has no handle on the
 	// running server's SessionStore, so this has to work purely off the
 	// persisted User.PasswordChangedAt field (see Server.sessionUser).
@@ -417,7 +458,7 @@ func TestMutatingRequestWithoutCSRFHeaderAllowedWhileAuthInactive(t *testing.T) 
 	// Zero users -- must behave exactly like before this feature existed,
 	// including for mutating requests (see requireAuth's doc comment).
 	s, _ := newTestServer(t)
-	ts := httptest.NewServer(s.Routes())
+	ts := httptest.NewServer(s.mux())
 	defer ts.Close()
 
 	req, err := http.NewRequest(http.MethodPost, ts.URL+"/api/flags/does-not-exist/clear", nil)
@@ -441,4 +482,193 @@ func mustCookieJar(t *testing.T) http.CookieJar {
 		t.Fatal(err)
 	}
 	return jar
+}
+
+func TestAdminCannotCreateASecondAdmin(t *testing.T) {
+	s := newAuthTestServer(t)
+	ts := httptest.NewServer(s.Routes())
+	defer ts.Close()
+
+	client := &http.Client{Jar: mustCookieJar(t)}
+	postJSON(t, client, ts.URL+"/api/auth/register", credentialsRequest{Username: "admin", Password: "password123"}).Body.Close()
+
+	resp := postJSON(t, client, ts.URL+"/api/auth/users", createUserRequest{Username: "second", Password: "password456", Role: "admin"})
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("expected 400 for an admin-role request, got %d", resp.StatusCode)
+	}
+	// The account must not exist at all. A silent downgrade to RoleUser
+	// would leave an account the caller never asked for, under a name
+	// they chose for an admin.
+	if _, ok := s.Auth.ByUsername("second"); ok {
+		t.Error("a refused admin-role request created the account anyway")
+	}
+}
+
+func TestUserListIsAdminOnly(t *testing.T) {
+	s := newAuthTestServer(t)
+	ts := httptest.NewServer(s.Routes())
+	defer ts.Close()
+
+	adminClient := &http.Client{Jar: mustCookieJar(t)}
+	postJSON(t, adminClient, ts.URL+"/api/auth/register", credentialsRequest{Username: "admin", Password: "password123"}).Body.Close()
+	postJSON(t, adminClient, ts.URL+"/api/auth/users", createUserRequest{Username: "viewer", Password: "password456", Role: "user"}).Body.Close()
+
+	viewerClient := &http.Client{Jar: mustCookieJar(t)}
+	postJSON(t, viewerClient, ts.URL+"/api/auth/login", credentialsRequest{Username: "viewer", Password: "password456"}).Body.Close()
+
+	// 403, not an empty list: who holds an account and which one is the
+	// admin is exactly what an attacker wants in order to pick a target.
+	resp, err := viewerClient.Get(ts.URL + "/api/auth/users")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("expected 403 for a non-admin, got %d", resp.StatusCode)
+	}
+
+	adminResp, err := adminClient.Get(ts.URL + "/api/auth/users")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer adminResp.Body.Close()
+	var users []userSummary
+	if err := json.NewDecoder(adminResp.Body).Decode(&users); err != nil {
+		t.Fatalf("decoding the user list: %v", err)
+	}
+	if len(users) != 2 {
+		t.Fatalf("expected 2 accounts, got %d", len(users))
+	}
+	// The response type has no password-hash field at all, but assert on
+	// the raw shape too so a future switch to serializing auth.User
+	// directly is caught here.
+	for _, u := range users {
+		if u.ID == "" || u.Username == "" {
+			t.Errorf("incomplete user summary: %+v", u)
+		}
+	}
+}
+
+func TestDeletingAUserRevokesTheirSessionAndTokens(t *testing.T) {
+	s := newAuthTestServer(t)
+	ts := httptest.NewServer(s.Routes())
+	defer ts.Close()
+
+	adminClient := &http.Client{Jar: mustCookieJar(t)}
+	postJSON(t, adminClient, ts.URL+"/api/auth/register", credentialsRequest{Username: "admin", Password: "password123"}).Body.Close()
+	postJSON(t, adminClient, ts.URL+"/api/auth/users", createUserRequest{Username: "viewer", Password: "password456", Role: "user"}).Body.Close()
+
+	viewer, ok := s.Auth.ByUsername("viewer")
+	if !ok {
+		t.Fatal("the account under test was not created")
+	}
+
+	// A token attributed to the account being deleted. Created directly
+	// rather than through the API, since only an admin may mint one --
+	// this stands in for a token issued while that account still held
+	// admin, before a transfer.
+	rawToken, _, err := s.Tokens.Create("viewers-token", viewer, time.Now())
+	if err != nil {
+		t.Fatalf("Tokens.Create: %v", err)
+	}
+
+	viewerClient := &http.Client{Jar: mustCookieJar(t)}
+	postJSON(t, viewerClient, ts.URL+"/api/auth/login", credentialsRequest{Username: "viewer", Password: "password456"}).Body.Close()
+	live, err := viewerClient.Get(ts.URL + "/api/events")
+	if err != nil {
+		t.Fatal(err)
+	}
+	live.Body.Close()
+	if live.StatusCode != http.StatusOK {
+		t.Fatalf("the session under test does not work before the delete: %d", live.StatusCode)
+	}
+	viewerSessionID := sessionIDFromJar(t, viewerClient, ts.URL)
+
+	req, _ := http.NewRequest(http.MethodDelete, ts.URL+"/api/auth/users/"+viewer.ID, nil)
+	req.Header.Set(csrfHeaderName, csrfHeaderValue)
+	resp, err := adminClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 from the delete, got %d", resp.StatusCode)
+	}
+
+	if _, ok := s.Auth.ByUsername("viewer"); ok {
+		t.Error("the account still exists after a successful delete")
+	}
+
+	after, err := viewerClient.Get(ts.URL + "/api/events")
+	if err != nil {
+		t.Fatal(err)
+	}
+	after.Body.Close()
+	if after.StatusCode != http.StatusUnauthorized {
+		t.Errorf("a deleted account's session still works: got %d, want 401", after.StatusCode)
+	}
+
+	// The 401 above would happen anyway -- sessionUser fails to resolve
+	// an account that no longer exists. So assert on the session record
+	// itself, which is what the explicit revocation is for: it must not
+	// be left sitting in the store, valid, waiting on that one lookup to
+	// keep failing.
+	if _, ok := s.Sessions.Validate(viewerSessionID, time.Now()); ok {
+		t.Error("the deleted account's session is still live in the session store")
+	}
+
+	if _, ok := s.Tokens.Authenticate(rawToken, time.Now()); ok {
+		t.Error("a deleted account's API token still authenticates")
+	}
+}
+
+func TestDeletingTheAdminIsRefused(t *testing.T) {
+	s := newAuthTestServer(t)
+	ts := httptest.NewServer(s.Routes())
+	defer ts.Close()
+
+	adminClient := &http.Client{Jar: mustCookieJar(t)}
+	postJSON(t, adminClient, ts.URL+"/api/auth/register", credentialsRequest{Username: "admin", Password: "password123"}).Body.Close()
+	admin, _ := s.Auth.ByUsername("admin")
+
+	req, _ := http.NewRequest(http.MethodDelete, ts.URL+"/api/auth/users/"+admin.ID, nil)
+	req.Header.Set(csrfHeaderName, csrfHeaderValue)
+	resp, err := adminClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusConflict {
+		t.Errorf("expected 409 when deleting the admin, got %d", resp.StatusCode)
+	}
+
+	// And the admin must still be able to act -- a refused delete that
+	// revoked the session anyway would be its own lockout.
+	check, err := adminClient.Get(ts.URL + "/api/auth/users")
+	if err != nil {
+		t.Fatal(err)
+	}
+	check.Body.Close()
+	if check.StatusCode != http.StatusOK {
+		t.Errorf("the admin lost access after a refused self-delete: %d", check.StatusCode)
+	}
+}
+
+// sessionIDFromJar pulls the session cookie's value out of a client's
+// jar, so a test can assert on the server-side session record directly
+// rather than only on what a request happens to return.
+func sessionIDFromJar(t *testing.T, client *http.Client, rawURL string) string {
+	t.Helper()
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range client.Jar.Cookies(u) {
+		if c.Name == sessionCookieName {
+			return c.Value
+		}
+	}
+	t.Fatal("no session cookie in the jar")
+	return ""
 }

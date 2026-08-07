@@ -8,10 +8,18 @@
     <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16.png" />
     <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
     <meta name="description" content="Real-time RouterOS firewall live view — see every connection accepted, dropped, or rejected, and by which rule." />
+    <meta name="theme-color" content="#2f6fe0" />
+    <!-- iOS Safari doesn't fully honor the web manifest (see
+         vite.config.ts's VitePWA config, issue #84) for "Add to Home
+         Screen" -- these are the explicit iOS-specific equivalents
+         (issue #85). apple-touch-icon is already linked above. -->
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="MikroView" />
     <title>MikroView</title>
-    <script type="module" crossorigin src="/assets/index-LfohAyt5.js"></script>
-    <link rel="stylesheet" crossorigin href="/assets/index-BOMndikl.css">
-  </head>
+    <script type="module" crossorigin src="/assets/index-_G0z2o06.js"></script>
+    <link rel="stylesheet" crossorigin href="/assets/index-BGRYHJlV.css">
+  <link rel="manifest" href="/manifest.webmanifest"><script id="vite-plugin-pwa:register-sw" src="/registerSW.js"></script></head>
   <body>
     <div id="app"></div>
   </body>
