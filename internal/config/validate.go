@@ -27,10 +27,12 @@ import (
 func (c *Config) Validate() Result {
 	var r Result
 	fatal := func(code, key, msg, fix string) {
-		r.Fatal = append(r.Fatal, Problem{Code: code, Severity: SeverityFatal, Key: key, Message: msg, Remediation: fix})
+		r.Fatal = append(r.Fatal, Problem{Code: code, Severity: SeverityFatal, Key: key, Message: msg,
+			Remediation: fix, Example: examplesByCode[code], Docs: docsAnchor(code)})
 	}
 	warn := func(code, key, msg, applied, fix string) {
-		r.Warnings = append(r.Warnings, Problem{Code: code, Severity: SeverityWarn, Key: key, Message: msg, Applied: applied, Remediation: fix})
+		r.Warnings = append(r.Warnings, Problem{Code: code, Severity: SeverityWarn, Key: key, Message: msg,
+			Applied: applied, Remediation: fix, Example: examplesByCode[code], Docs: docsAnchor(code)})
 	}
 
 	c.validateListen(fatal)
@@ -43,6 +45,74 @@ func (c *Config) Validate() Result {
 
 type problemFunc func(code, key, msg, fix string)
 type warnFunc func(code, key, msg, applied, fix string)
+
+// docsAnchor deep-links a code into the configuration reference. The
+// anchor is the lower-cased code, which is what GitHub generates for a
+// heading of the form "### CFG-0021: ...".
+func docsAnchor(code string) string {
+	return DocsURL + "#" + strings.ToLower(code)
+}
+
+// examplesByCode holds a ready-to-paste snippet per problem code.
+//
+// Kept here, in one block, rather than passed at each call site. Two
+// reasons: the call sites already carry four arguments and a fifth
+// multi-line string would bury them, and having every snippet in one
+// place is what makes it practical to keep them in step with the
+// matching section of docs/configuration.md.
+//
+// Each shows the *corrected* setting with its full nesting, because the
+// question an operator actually has is "where does this key go", and
+// prose like "set a positive duration" does not answer it.
+var examplesByCode = map[string]string{
+	"CFG-0001": `listen:
+  syslogUdp: ":1514"
+  syslogTcp: ":1514"
+  http: ":8080"`,
+
+	"CFG-0002": `listen:
+  http: ":8080"              # every interface, port 8080
+  # http: "192.168.1.10:8080"  # one interface only
+  httpRedirect: ""           # "" disables the redirect listener`,
+
+	"CFG-0003": `listen:
+  # each proxy as an IP or CIDR ...
+  trustedProxies: ["192.168.1.5", "10.0.0.0/8"]
+  # ... or the shorthand for a proxy on your LAN or docker network
+  # trustedProxies: ["private"]`,
+
+	"CFG-0010": `store:
+  retention: 24h`,
+
+	"CFG-0011": `store:
+  maxEvents: 200000`,
+
+	"CFG-0020": `auth:
+  sessionTTL: 24h`,
+
+	"CFG-0021": `# Serving TLS yourself -- the usual case:
+tls:
+  enabled: true
+auth:
+  secureCookie: true
+
+# Or, only if a reverse proxy terminates TLS and mikroview's own
+# listener is never reachable from the LAN:
+# tls:
+#   enabled: false
+# auth:
+#   secureCookie: false`,
+
+	"CFG-0030": `devices:
+  - sourceIp: "192.168.1.1"   # the address the router sends syslog from
+    name: "edge-router"`,
+
+	"CFG-0031": `devices:
+  - sourceIp: "192.168.1.1"
+    name: "edge-router"
+  - sourceIp: "192.168.2.1"   # must differ from every other sourceIp
+    name: "branch-router"`,
+}
 
 func (c *Config) validateListen(fatal problemFunc) {
 	// An unparseable listen address means the server cannot bind and
