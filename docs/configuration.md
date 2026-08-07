@@ -92,7 +92,19 @@ being honoured when they weren't.
 ### Checking your config before you deploy
 
 ```
-docker exec mikroview /mikroview -validate-config
+mikroview -validate-config
+```
+
+In Docker, use `docker run`, **not** `docker exec`. A configuration bad
+enough to stop mikroview starting also means there is no running
+container to exec into — `docker exec` answers "container is not
+running", which looks like a second, unrelated problem:
+
+```
+docker run --rm \
+  -e MIKROVIEW_CONFIG=/etc/mikroview/config.yaml \
+  -v /path/to/config.yaml:/etc/mikroview/config.yaml:ro \
+  ghcr.io/tomlawesome/mikroview:latest -validate-config
 ```
 
 It reports anything wrong and exits `0` if all is well, `1` if it found
@@ -127,6 +139,128 @@ and hostnames.
 host. If `config.yaml` isn't world-readable (or owned by a matching
 uid/gid), the container will fail to start with a permission error —
 `chmod 644 deploy/config.yaml` after editing it.
+
+### Problem codes
+
+Every problem mikroview reports carries a code. The message already
+includes the fix and a snippet; this is the same information in one
+place, for when you would rather read than re-run.
+
+#### CFG-0001
+
+A listen address is empty. Mikroview would have nothing to bind.
+
+```yaml
+listen:
+  syslogUdp: ":1514"
+  syslogTcp: ":1514"
+  http: ":8080"
+```
+
+#### CFG-0002
+
+A listen address is not `host:port`. Use `:port` for every interface, or
+`host:port` for one. `httpRedirect` is the exception — `""` disables it,
+which is a supported choice rather than a mistake.
+
+```yaml
+listen:
+  http: ":8080"                # every interface, port 8080
+  # http: "192.168.1.10:8080"  # one interface only
+  httpRedirect: ""             # "" disables the redirect listener
+```
+
+#### CFG-0003
+
+`trustedProxies` has an entry that is not an IP, a CIDR, or the shorthand
+`private`. Leaving it empty is fine and means forwarding headers are
+ignored entirely.
+
+```yaml
+listen:
+  trustedProxies: ["192.168.1.5", "10.0.0.0/8"]
+  # trustedProxies: ["private"]   # a proxy on your LAN or docker network
+```
+
+#### CFG-0010
+
+`store.retention` is zero or negative, which would keep nothing.
+Mikroview starts anyway on the default rather than leaving you with no
+monitoring, and says so.
+
+```yaml
+store:
+  retention: 24h
+```
+
+#### CFG-0011
+
+`store.maxEvents` is zero or negative, which would keep nothing. Same
+treatment as CFG-0010.
+
+```yaml
+store:
+  maxEvents: 200000
+```
+
+#### CFG-0020
+
+`auth.sessionTTL` is zero or negative, so sessions would never expire — a
+credential with no end.
+
+```yaml
+auth:
+  sessionTTL: 24h
+```
+
+#### CFG-0021
+
+`auth.secureCookie` is false while `tls.enabled` is true. Session cookies
+would go out without the `Secure` flag, so they could be sent over a
+plain connection this deployment has otherwise ruled out.
+
+```yaml
+# Serving TLS yourself -- the usual case:
+tls:
+  enabled: true
+auth:
+  secureCookie: true
+```
+
+Only set both to false if a reverse proxy terminates TLS **and**
+mikroview's own listener is never reachable from the LAN:
+
+```yaml
+tls:
+  enabled: false
+auth:
+  secureCookie: false
+```
+
+#### CFG-0030
+
+A `devices[].sourceIp` is not an IP address. It should be the address the
+router sends syslog from.
+
+```yaml
+devices:
+  - sourceIp: "192.168.1.1"
+    name: "edge-router"
+```
+
+#### CFG-0031
+
+Two devices share a `sourceIp`. One would silently shadow the other:
+events land under whichever entry wins and the other never appears, which
+looks like a quiet router rather than a config mistake.
+
+```yaml
+devices:
+  - sourceIp: "192.168.1.1"
+    name: "edge-router"
+  - sourceIp: "192.168.2.1"   # must differ from every other sourceIp
+    name: "branch-router"
+```
 
 ## Logging
 
@@ -1095,7 +1229,8 @@ host, port, or rule, so scoping either wouldn't mean anything.
 
 The first time mikroview loads with no accounts and no prior decision,
 it shows a one-time choice screen instead of the live view: **create
-the admin account**, or **continue without an account** ("skip"). See
+the admin account**. That is the only option -- running without
+authentication was removed, and creating an account is the floor. See
 [SECURITY.md](../SECURITY.md) for the full threat-model writeup; this
 section is the configuration reference.
 
@@ -1107,8 +1242,7 @@ auth:
   tokensStorePath: "/var/lib/mikroview/tokens.json"
 ```
 
-- **`storePath`** — where accounts (and the skip/disabled decision) are
-  persisted, as a small JSON file (usernames + Argon2id password hashes,
+- **`storePath`** — where accounts are persisted, as a small JSON file (usernames + Argon2id password hashes,
   never plaintext). Defaults to `/var/lib/mikroview/users.json`, which
   the Dockerfile creates and owns -- no configuration needed for the
   zero-config case. Mount a volume over `/var/lib/mikroview` if you want
@@ -1118,6 +1252,11 @@ auth:
   default, matching [TLS](#tls) being on by default -- there's no other
   kind of connection to have a session on. Only turn this off if you've
   also set `tls.enabled: false`, or sessions won't work at all.
+
+  Setting it to `false` while `tls.enabled` is `true` stops mikroview
+  starting, with [CFG-0021](#cfg-0021) — the cookie would be sendable
+  over a plain connection the deployment has otherwise ruled out. The
+  env var is `MIKROVIEW_AUTH_SECURE_COOKIE`.
 - **`sessionTTL`** — the idle timeout: a session's expiry slides forward
   on each authenticated request, so this is "how long you can go without
   activity before needing to log in again," not a fixed session
