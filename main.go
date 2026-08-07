@@ -419,7 +419,14 @@ func main() {
 	blocklistLog := logging.New("blocklist")
 	bl := blocklist.New(cfg.Blocklist.Sources, blocklistLog)
 
-	detector := detect.NewWithSettings(detectCfg, fs, detectorSettings).WithReputation(rep).WithKnownBadIPs(bl)
+	// Both optional inputs are attached in one chain: entities backs the
+	// trusted-mail-sender allowlist (#108), knownBad backs the local
+	// blocklist match (#113 Part B). Each is independently a valid
+	// no-op when unconfigured.
+	detector := detect.NewWithSettings(detectCfg, fs, detectorSettings).
+		WithReputation(rep).
+		WithEntities(entityStore).
+		WithKnownBadIPs(bl)
 	globalSpike := detect.NewGlobalSpikeDetectorWithSettings(detectCfg, fs, detectorSettings)
 	deviceSilence := detect.NewDeviceSilenceDetectorWithSettings(detectCfg, fs, detectorSettings, devices)
 	staleRule := detect.NewStaleRuleDetector(ru, fs, time.Duration(cfg.Flags.StaleRuleDays)*24*time.Hour)

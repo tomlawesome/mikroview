@@ -182,6 +182,13 @@ export type FlagType =
   // through -- same "no matching detector-settings entry" exception as
   // new_device above, not an oversight.
   | 'stale_rule'
+  // unexpected_mail_sender (issue #108): a LAN source, untagged
+  // "trusted-mail-sender" in the entities store, originating an
+  // outbound connection to an external destination on an SMTP port (25,
+  // 465, 587) -- see internal/flags.TypeUnexpectedMailSender. Always on
+  // and deterministic (no threshold/window to tune), so like
+  // new_device/stale_rule above it has no matching DetectorName entry.
+  | 'unexpected_mail_sender'
   // known_bad_ip (issue #113 Part B): a source IP matching a locally-
   // cached CIDR range from a vetted threat-intel feed (Spamhaus DROP/
   // EDROP by default -- see internal/blocklist's doc comment). Raised
