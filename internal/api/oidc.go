@@ -2,11 +2,15 @@ package api
 
 import (
 	"crypto/subtle"
+	"fmt"
 	"net/http"
 	"time"
 
+	"github.com/tomlawesome/mikroview/internal/logging"
 	"github.com/tomlawesome/mikroview/internal/oidc"
 )
+
+var oidcLog = logging.New("oidc-api")
 
 const oidcFlowCookieName = "mikroview_oidc_flow"
 
@@ -110,6 +114,22 @@ func (s *Server) handleOIDCCallback(w http.ResponseWriter, r *http.Request) {
 	}
 	if !oidc.VerifyNonce(identity.Nonce, fs.Nonce) {
 		redirectWithSSOError(w, r, "state_mismatch")
+		return
+	}
+
+	// Authentic is not the same as authorised. This runs before
+	// FindOrCreateOIDCUser on purpose: a refused identity must not be
+	// provisioned an account as a side effect of being refused, and it
+	// re-runs on every login, so revoking someone's group at the IdP
+	// locks them out at their next sign-in rather than only whenever
+	// their session happens to lapse.
+	if err := s.OIDCPolicy.Permit(identity); err != nil {
+		// The specific unmet condition goes to the operator's log, not to
+		// the browser -- telling an outsider "not a member of any
+		// permitted group" maps out the allowlist for them.
+		oidcLog.Warn(fmt.Sprintf("refused SSO login for subject %q at %s: %v",
+			identity.Subject, identity.Issuer, err))
+		redirectWithSSOError(w, r, "not_permitted")
 		return
 	}
 
