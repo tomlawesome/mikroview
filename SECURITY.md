@@ -75,22 +75,24 @@ either way.
   - **A misconfigured or unreachable provider degrades to "SSO
     unavailable"** (logged once at startup) and never affects local
     login.
-  - **`oidc.issuerUrl` is itself the primary access control -- and
-    mikroview refuses to pretend it is one when it isn't.** Every ID
-    token is validated against the configured issuer's own keys and
-    against your client ID, so a self-hosted Authentik/Keycloak issuer
-    already restricts login to accounts in a directory you run; that is
-    the intended, complete configuration, and delegating any further
-    narrowing to the IdP's own ACLs is the point of SSO. Against a
-    *multi-tenant* issuer the same setting narrows nothing -- every
-    Google account validates against `accounts.google.com` -- so
-    combined with "first account becomes admin", an unrestricted
-    deployment would hand admin to whoever reached the login page
-    first. **Mikroview therefore refuses to enable SSO for a known
-    multi-tenant issuer unless an access restriction is configured**
-    (`oidc.allowedGroups`/`allowedEmails`/`allowedEmailDomains`/
-    `requiredClaims`), logging why and leaving SSO off rather than
-    warning and continuing.
+  - **Only self-hosted identity providers are supported, and that is
+    enforced, not advised.** Mikroview's OIDC support rests on the
+    issuer URL *being* the access control: tokens are verified against
+    the configured issuer's own keys and your client ID, so a
+    self-hosted Authentik/Keycloak/Zitadel issuer already restricts
+    login to a directory you run. That property is false for a public
+    provider -- every Google account validates against
+    `accounts.google.com` -- and combined with "first account becomes
+    admin", such a deployment would hand admin to whoever reached the
+    login page first. **Multi-tenant issuers (Google, Apple, and
+    Microsoft's shared `/common`, `/organizations`, `/consumers`
+    endpoints) are refused at startup and cannot be enabled by
+    configuration.** SSO stays off, the reason is logged, and local
+    login is unaffected. Entra's *single-tenant* issuer URL is
+    correctly permitted, since it does scope logins to one
+    organisation. A safe configuration for a public provider exists and
+    was deliberately not shipped -- see
+    [docs/decisions/multi-tenant-oidc.md](docs/decisions/multi-tenant-oidc.md).
   - **Access restrictions fail closed and are re-checked every login.**
     A missing, empty or unreadable claim is a refusal, never a pass --
     a group allowlist that opens up when the provider forgets to
