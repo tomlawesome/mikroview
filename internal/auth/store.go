@@ -247,8 +247,8 @@ func (f *storeFile) UnmarshalJSON(data []byte) error {
 // unconfigured) but Register/CreateUser refuse to add a user in that
 // state -- see ErrNotPersisted.
 type Store struct {
-	mu      sync.RWMutex
-	backend persist.Backend
+	mu        sync.RWMutex
+	backend   persist.Backend
 	byID      map[string]*User
 	byName    map[string]string  // lowercased username -> ID
 	oidcIndex map[oidcKey]string // (issuer, subject) -> ID, see ByOIDCIdentity
@@ -1065,45 +1065,21 @@ func (s *Store) persistLocked() {
 		return
 	}
 
-	version, err := s.backend.Save(context.Background(), data, s.version)
-	if err == nil {
-		s.version = version
-		return
-	}
-
-	if !errors.Is(err, persist.ErrConflict) {
+	version, conflicted, err := persist.SaveWithRetry(context.Background(), s.backend, data, s.version)
+	if err != nil {
 		persistLog.Error(fmt.Sprintf("writing accounts to %s failed: %v -- "+
 			"this change exists only in memory and will be lost on restart",
 			s.backend.Describe(), err))
 		return
 	}
-
-	// Another process wrote while this one held its change in memory --
-	// typically a CLI recovery command running against a live server.
-	//
-	// The change in memory is applied on top and written again. That is
-	// last-writer-wins, and it is what this store has always done
-	// against a file; the difference is that it is no longer silent.
-	// Doing better would mean replaying the mutation against the
-	// reloaded document, which the store's whole-document API cannot
-	// express -- so the honest thing is to say so here and in the log
-	// rather than imply a guarantee that isn't there.
-	fresh, loadErr := s.backend.Load(context.Background())
-	if loadErr != nil {
-		persistLog.Error(fmt.Sprintf("accounts store changed underneath us and could not be re-read: %v -- "+
-			"this change exists only in memory and will be lost on restart", loadErr))
-		return
-	}
-	persistLog.Warn(fmt.Sprintf("accounts store was modified by another process while this change was pending "+
-		"(%s); applying this change on top -- any concurrent change to a *different* account may be lost",
-		s.backend.Describe()))
-
-	version, err = s.backend.Save(context.Background(), data, fresh.Version)
-	if err != nil {
-		persistLog.Error(fmt.Sprintf("writing accounts to %s failed after reload: %v -- "+
-			"this change exists only in memory and will be lost on restart",
-			s.backend.Describe(), err))
-		return
+	if conflicted {
+		// Another process wrote while this change was pending -- almost
+		// always a CLI recovery command against a live server. This
+		// change went on top; a concurrent change to a *different*
+		// account may have been lost. Said out loud rather than implied,
+		// because a whole-document store cannot merge them.
+		persistLog.Warn(fmt.Sprintf("accounts store was modified by another process while this change "+
+			"was pending (%s); this change was applied on top", s.backend.Describe()))
 	}
 	s.version = version
 }
