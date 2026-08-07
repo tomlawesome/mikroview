@@ -31,6 +31,15 @@ upgrading.
 
 ### Removed
 
+- **`callerIsAdminOrOpen`'s "no accounts yet" bypass**, which treated an
+  anonymous caller as an admin on the detector-settings, flags-exclusion
+  and config-problems endpoints. It dated from when mikroview could run
+  with authentication switched off. Unreachable since that mode was
+  removed — `requireAuth` refuses those paths before they route — but it
+  read as "anonymous callers are admins under some condition" and would
+  have gone live again the moment `requireAuth` was loosened. There is
+  now one admin check, `callerIsAdmin`, with no bypass.
+
 - **The option to run mikroview without authentication.** The first-run
   screen offered "No Authentication" alongside creating an admin
   account. An unauthenticated mikroview publishes which hosts are being
