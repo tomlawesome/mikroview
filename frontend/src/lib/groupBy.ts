@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+
 import type { FirewallEvent } from './types'
 
 // Dimensions a custom top-talkers widget can rank by (see

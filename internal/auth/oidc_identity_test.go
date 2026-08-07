@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+
 package auth
 
 import (
@@ -178,16 +180,6 @@ func TestFindOrCreateOIDCUserRefusesWhenNotPersisted(t *testing.T) {
 	s, _ := Open("")
 	if _, _, err := s.FindOrCreateOIDCUser("https://idp.example", "sub-1", "someone", time.Now()); err != ErrNotPersisted {
 		t.Errorf("expected ErrNotPersisted, got %v", err)
-	}
-}
-
-func TestFindOrCreateOIDCUserRefusesWhenAuthDisabled(t *testing.T) {
-	s := newTestOIDCStore(t)
-	if err := s.Disable(); err != nil {
-		t.Fatalf("Disable: %v", err)
-	}
-	if _, _, err := s.FindOrCreateOIDCUser("https://idp.example", "sub-1", "someone", time.Now()); err != ErrAuthDisabled {
-		t.Errorf("expected ErrAuthDisabled, got %v", err)
 	}
 }
 

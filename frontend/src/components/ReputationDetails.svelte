@@ -1,4 +1,5 @@
 <script lang="ts">
+  // SPDX-License-Identifier: AGPL-3.0-only
   // The reputation-info rows shared by IpLookupPopover (a live, on-demand
   // lookup) and Flags.svelte's expanded detail (a snapshot captured at
   // raise time) -- same ReputationResult shape either way, so the

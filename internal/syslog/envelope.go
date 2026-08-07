@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+
 // Package syslog parses the BSD/RFC3164-style syslog lines that RouterOS
 // emits, and listens for them over UDP/TCP.
 package syslog

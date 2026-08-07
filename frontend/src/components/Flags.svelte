@@ -1,4 +1,5 @@
 <script lang="ts">
+  // SPDX-License-Identifier: AGPL-3.0-only
   // Behavioral flags raised by internal/detect (see docs/configuration.md's
   // "Behavioral flags" section) -- an interrogation aid, not an IPS: every
   // action here is a human reviewing and clearing a flag, never mikroview
@@ -12,12 +13,8 @@
   import BarList from './BarList.svelte'
   import type { Flag, FlagType } from '../lib/types'
 
-  // Same admin-or-open gate NavMenu already uses for the Detectors view
-  // (mirrors the backend's callerIsAdminOrOpen: Count()==0 is
-  // admin-equivalent since there's no admin to gate against yet).
-  const isAdminOrOpen = $derived(
-    (authState.state === 'authenticated' && authState.role === 'admin') || authState.state === 'auth-disabled',
-  )
+  // Same gate NavMenu uses for the Detectors view.
+  const isAdminOrOpen = $derived(authState.state === 'authenticated' && authState.role === 'admin')
 
   let showExclusions = $state(false)
   let removingExclusion = $state<string | null>(null)

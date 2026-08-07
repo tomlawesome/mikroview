@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+
 package api
 
 import (
@@ -12,7 +14,7 @@ import (
 // The success path (real Shodan/AbuseIPDB responses) isn't covered here.
 func TestHandleIPLookupRejectsNonPublicIP(t *testing.T) {
 	s, _ := newTestServer(t)
-	ts := httptest.NewServer(s.Routes())
+	ts := httptest.NewServer(s.mux())
 	defer ts.Close()
 
 	for _, ip := range []string{"192.168.1.1", "10.0.0.5", "127.0.0.1", "not-an-ip"} {

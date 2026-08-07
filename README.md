@@ -217,9 +217,9 @@ every restart) but not fatal.
 - **Logging**: leveled (debug/info/warn/error) and colorized server
   output, auto-plain when piped or `NO_COLOR` is set. See
   [docs/configuration.md](docs/configuration.md)'s "Logging" section.
-- **Authentication**: a one-time choice on first load — create the admin
-  account, or explicitly skip auth for this deployment. Creating an
-  account makes it required for everything except the health check
+- **Authentication**: required, always. On first load mikroview asks you
+  to create the admin account, and serves nothing else until you do.
+  After that it is required for everything except the health check
   (Argon2id-hashed passwords, opaque server-side sessions,
   self-registration for the first/super-admin account only). Local
   accounts and single sign-on via an external OIDC identity provider
@@ -233,31 +233,27 @@ Auth isn't one setting — the choice you make trades off convenience
 against how much a compromise of the mikroview host itself can expose.
 From least to most isolated:
 
-1. **No auth (explicitly skipped).** No barrier at all; anyone who can
-   reach the app has full access. Only appropriate on a fully trusted
-   network.
-2. **Local accounts (username/password, default once auth is
-   enabled).** Simplest to set up, but account data — usernames and
+1. **Local accounts (username/password).** The floor — mikroview will
+   not serve anything until one exists. Simplest to set up, but account data — usernames and
    roles, including who's the admin — lives in a plaintext file on the
    same host mikroview runs on. There's no separation between "the app
    is compromised" and "the account data is readable": a leaked
    backup, a misconfigured mount, or anything that exposes that one
    file hands over who to target, and local login security then
    depends entirely on password strength.
-3. **OIDC/SSO (recommended when available).** The real credential
+2. **OIDC/SSO (recommended when available).** The real credential
    lives with your external identity provider (Authentik, Keycloak,
    Entra ID, ...), never on the mikroview host — compromising the host
    doesn't expose anything usable against an SSO-provisioned account.
    Local and SSO accounts can coexist.
-4. **(Planned) Off-box database backend.** Moving persisted state to a
+3. **(Planned) Off-box database backend.** Moving persisted state to a
    separately-secured, network-restricted database closes the "read
    one file, get everything" exposure that local accounts still have
    today — tracked in
    [issue #131](https://github.com/tomlawesome/mikroview/issues/131).
 
-Pick the level that matches your network: skip auth only on a network
-you already trust completely, use local accounts if you accept that
-tradeoff, and prefer SSO wherever you have an identity provider
+Pick the level that matches your network: local accounts are the floor,
+and SSO is worth preferring wherever you have an identity provider
 available. Full detail and the reasoning behind each is in
 [SECURITY.md](SECURITY.md#authentication).
 
@@ -274,7 +270,11 @@ available. Full detail and the reasoning behind each is in
 
 ## License
 
-MikroView is source-available, not open source: free to use and
-modify for personal/non-commercial purposes, no redistribution or
-commercial use without permission. See [LICENSE](LICENSE) for the
-full terms.
+MikroView is free and open source under the
+[GNU AGPL v3.0](LICENSE). You can use, modify and self-host it at no
+cost, including inside a business.
+
+If you want to bundle MikroView into a commercial product, offer it as
+a hosted service, or ship changes without publishing them, a commercial
+licence is available — see
+[COMMERCIAL-LICENSE.md](COMMERCIAL-LICENSE.md).

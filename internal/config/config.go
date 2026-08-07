@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+
 // Package config loads mikroview's configuration with precedence
 // defaults < YAML file < environment variables < CLI flags.
 //
@@ -131,7 +133,7 @@ type Store struct {
 
 // Log controls mikroview's own server log output -- see
 // internal/logging. Doesn't apply to the CLI recovery commands
-// (-list-users, -reset-password's prompts, etc.), which print directly
+// (-list-users, -recover-admin-account's prompts, etc.), which print directly
 // to stdout/stderr for scripting/piping, not through this leveled path.
 type Log struct {
 	// Level is one of debug/info/warn/error (case-insensitive); anything
@@ -243,6 +245,23 @@ type Auth struct {
 	// path just means token creation refuses (ErrTokenNotPersisted)
 	// rather than mikroview failing to start.
 	TokensStorePath string `yaml:"tokensStorePath"`
+	// RecoveryKeysPath holds the hashed recovery keys that gate the CLI
+	// commands changing authentication state (#134).
+	//
+	// Deliberately a different file from StorePath: if the digests lived
+	// in the accounts file, a corrupted accounts file would also destroy
+	// the only thing able to validate a recovery key -- exactly the
+	// situation those commands exist to recover from.
+	RecoveryKeysPath string `yaml:"recoveryKeysPath"`
+	// RecoveryPepperPath holds the server-side secret mixed into every
+	// recovery-key digest.
+	//
+	// Kept out of the backup set (#97) on purpose: someone holding a
+	// stolen backup then has the digests and nothing to verify them
+	// against. Generated once on first use and never rewritten.
+	// MIKROVIEW_RECOVERY_PEPPER_FILE overrides it, for operators who
+	// want it off the data volume entirely.
+	RecoveryPepperPath string `yaml:"recoveryPepperPath"`
 }
 
 // Entities configures internal/entities' persisted, admin-manageable
@@ -532,6 +551,41 @@ type Blocklist struct {
 	Sources []string `yaml:"sources"`
 }
 
+// Postgres optionally moves mikroview's persisted state off this host
+// and onto a database server (issue #131).
+//
+// The point is separation: compromising the mikroview host should not
+// hand over the accounts store, because the attacker also has to reach
+// and authenticate to a second, independently secured system.
+//
+// **That only holds if the database is genuinely off-box.** A Postgres
+// on this same host -- including one in a container beside mikroview --
+// exposes its credential to exactly the compromise it was meant to
+// survive, and is strictly worse than the JSON files it replaces: same
+// exposure, more moving parts. This is why deploy/docker-compose.yml
+// deliberately ships no Postgres service to uncomment.
+type Postgres struct {
+	// DSNFile is a file containing the connection string, and is the
+	// recommended way to supply it -- a Docker/Kubernetes secret, or a
+	// 0600 file on the host.
+	//
+	// A DSN carries a password, which is why there is no `dsn:` field
+	// here and no command-line flag: a password in config.yaml ends up
+	// in whatever backs that file up, and a password in argv is visible
+	// to every process on the box and to `docker inspect`. Same
+	// reasoning -recover-admin-account uses for prompting rather than
+	// taking an argument.
+	// Empty means "not configured": mikroview uses the JSON files,
+	// which stays the default, zero-infrastructure path.
+	//
+	// The DSN's sslmode must be require, verify-ca or verify-full.
+	// Anything weaker is refused at startup rather than silently
+	// upgraded -- see internal/persist.OpenPool. verify-full is the one
+	// that actually stops an attacker on the network path; require only
+	// encrypts.
+	DSNFile string `yaml:"dsnFile"`
+}
+
 type Config struct {
 	Listen     Listen     `yaml:"listen"`
 	Store      Store      `yaml:"store"`
@@ -545,6 +599,7 @@ type Config struct {
 	Notify     Notify     `yaml:"notify"`
 	TLS        TLS        `yaml:"tls"`
 	OIDC       OIDC       `yaml:"oidc"`
+	Postgres   Postgres   `yaml:"postgres"`
 	Devices    []Device   `yaml:"devices"`
 	DeviceMAC  DeviceMAC  `yaml:"deviceMac"`
 	Blocklist  Blocklist  `yaml:"blocklist"`
@@ -642,10 +697,12 @@ func defaults() Config {
 			VPNConfidenceMultiplier: 1.5,
 		},
 		Auth: Auth{
-			StorePath:       DefaultDataDir + "/users.json",
-			SessionTTL:      24 * time.Hour,
-			SecureCookie:    true,
-			TokensStorePath: DefaultDataDir + "/tokens.json",
+			StorePath:          DefaultDataDir + "/users.json",
+			SessionTTL:         24 * time.Hour,
+			SecureCookie:       true,
+			TokensStorePath:    DefaultDataDir + "/tokens.json",
+			RecoveryKeysPath:   DefaultDataDir + "/recovery-keys.json",
+			RecoveryPepperPath: DefaultDataDir + "/recovery-pepper.key",
 		},
 		Entities: Entities{
 			StorePath: DefaultDataDir + "/entities.json",
@@ -679,21 +736,47 @@ func defaults() Config {
 // precedence). configPath and args are taken as parameters (rather than
 // read from os.Args/env directly) so tests can call this deterministically.
 func Load(configPath string, args []string) (Config, error) {
+	cfg, _, err := load(configPath, args)
+	return cfg, err
+}
+
+func load(configPath string, args []string) (Config, Result, error) {
 	cfg := defaults()
 
 	if configPath != "" {
 		if err := loadYAML(configPath, &cfg); err != nil {
-			return Config{}, fmt.Errorf("loading config file %s: %w", configPath, err)
+			return Config{}, Result{}, fmt.Errorf("loading config file %s: %w", configPath, err)
 		}
 	}
 
 	applyEnv(&cfg)
 
 	if err := applyFlags(&cfg, args); err != nil {
-		return Config{}, err
+		return Config{}, Result{}, err
 	}
 
-	return cfg, nil
+	// Validate last, after every source has been merged -- an env var or
+	// a flag can fix a bad yaml value, so checking earlier would reject
+	// configurations that are actually fine.
+	result := cfg.Validate()
+	if err := result.Err(); err != nil {
+		return Config{}, Result{}, err
+	}
+
+	return cfg, result, nil
+}
+
+// LoadWithProblems is Load plus the non-fatal problems found. Callers
+// that can surface warnings (the server, -validate-config) use this;
+// Load stays the simple form for callers that only need a usable config.
+//
+// The result has to come from the *same* Validate call that did the
+// clamping. Validating a second time would report nothing, because the
+// first pass already replaced the bad value with a good one -- the
+// operator would get a silently substituted default and no warning,
+// which is precisely the failure this feature exists to prevent.
+func LoadWithProblems(configPath string, args []string) (Config, Result, error) {
+	return load(configPath, args)
 }
 
 func loadYAML(path string, cfg *Config) error {
@@ -718,6 +801,9 @@ func applyEnv(cfg *Config) {
 	}
 	if v := os.Getenv("MIKROVIEW_LISTEN_HTTP_REDIRECT"); v != "" {
 		cfg.Listen.HTTPRedirect = v
+	}
+	if v := os.Getenv("MIKROVIEW_RECOVERY_PEPPER_FILE"); v != "" {
+		cfg.Auth.RecoveryPepperPath = v
 	}
 	if v := os.Getenv("MIKROVIEW_TRUSTED_PROXIES"); v != "" {
 		cfg.Listen.TrustedProxies = parseStringList(v)
@@ -1017,6 +1103,9 @@ func applyEnv(cfg *Config) {
 		if b, err := strconv.ParseBool(v); err == nil {
 			cfg.TLS.Enabled = b
 		}
+	}
+	if v := os.Getenv("MIKROVIEW_POSTGRES_DSN_FILE"); v != "" {
+		cfg.Postgres.DSNFile = v
 	}
 	if v := os.Getenv("MIKROVIEW_TLS_CERT_FILE"); v != "" {
 		cfg.TLS.CertFile = v

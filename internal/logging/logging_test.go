@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+
 package logging
 
 import (
@@ -5,6 +7,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"unicode"
 )
 
 func TestFormatLineNoColorLayout(t *testing.T) {
@@ -176,5 +179,38 @@ func TestRecoverMustBeDeferredDirectly(t *testing.T) {
 	}
 	if !strings.Contains(buf.String(), "boom") {
 		t.Errorf("expected the panic value in the log line, got %q", buf.String())
+	}
+}
+
+func TestPrintableNeutralisesTerminalControlSequences(t *testing.T) {
+	cases := []struct {
+		name string
+		in   string
+	}{
+		{"erase line", "alice\x1b[2K\rroot"},
+		{"clear screen", "\x1b[2J"},
+		{"cursor move", "\x1b[10;10H"},
+		{"newline", "alice\nadmin"},
+		{"NUL", "alice\x00"},
+		{"RTL override", "alice‮eslaf"},
+		{"zero-width joiner", "ali‍ce"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := Printable(tc.in)
+			for _, r := range got {
+				if unicode.IsControl(r) || unicode.Is(unicode.Cf, r) {
+					t.Fatalf("Printable(%q) = %q, still contains %U", tc.in, got, r)
+				}
+			}
+		})
+	}
+}
+
+func TestPrintableLeavesOrdinaryTextAlone(t *testing.T) {
+	for _, s := range []string{"alice", "tom@example.com", "José", "日本語", "a-b_c.d"} {
+		if got := Printable(s); got != s {
+			t.Errorf("Printable(%q) = %q, want it unchanged", s, got)
+		}
 	}
 }

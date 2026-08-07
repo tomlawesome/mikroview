@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+
 package api
 
 import (
@@ -35,7 +37,7 @@ func putJSON(t *testing.T, client *http.Client, url string, body any) *http.Resp
 
 func TestHandleDetectorSettingsListDefaultsAllEnabled(t *testing.T) {
 	s, _ := newTestServer(t)
-	ts := httptest.NewServer(s.Routes())
+	ts := httptest.NewServer(asAdmin(s.mux()))
 	defer ts.Close()
 
 	resp, err := http.Get(ts.URL + "/api/detectors")
@@ -65,7 +67,7 @@ func TestHandleDetectorSettingsListDefaultsAllEnabled(t *testing.T) {
 
 func TestHandleDetectorSettingsUpdateThenListReflectsIt(t *testing.T) {
 	s, _ := newTestServer(t)
-	ts := httptest.NewServer(s.Routes())
+	ts := httptest.NewServer(asAdmin(s.mux()))
 	defer ts.Close()
 
 	req := updateDetectorSettingsRequest{
@@ -92,7 +94,7 @@ func TestHandleDetectorSettingsUpdateThenListReflectsIt(t *testing.T) {
 
 func TestHandleDetectorSettingsUpdateUnknownName(t *testing.T) {
 	s, _ := newTestServer(t)
-	ts := httptest.NewServer(s.Routes())
+	ts := httptest.NewServer(asAdmin(s.mux()))
 	defer ts.Close()
 
 	resp := putJSON(t, &http.Client{}, ts.URL+"/api/detectors/not_a_real_detector", updateDetectorSettingsRequest{Enabled: true})
@@ -104,7 +106,7 @@ func TestHandleDetectorSettingsUpdateUnknownName(t *testing.T) {
 
 func TestHandleDetectorSettingsUpdateInvalidMode(t *testing.T) {
 	s, _ := newTestServer(t)
-	ts := httptest.NewServer(s.Routes())
+	ts := httptest.NewServer(asAdmin(s.mux()))
 	defer ts.Close()
 
 	body := map[string]any{

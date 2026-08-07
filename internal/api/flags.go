@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+
 package api
 
 import (
@@ -51,7 +53,7 @@ func (s *Server) handleFlagsClear(w http.ResponseWriter, r *http.Request) {
 // (handleExclusionRemove) were already admin-gated; this brings the
 // action that creates one into line with them.
 func (s *Server) handleFlagsClearPermanent(w http.ResponseWriter, r *http.Request) {
-	if !s.callerIsAdminOrOpen(r) {
+	if !callerIsAdmin(r) {
 		http.Error(w, "admin role required", http.StatusForbidden)
 		return
 	}
@@ -64,10 +66,10 @@ func (s *Server) handleFlagsClearPermanent(w http.ResponseWriter, r *http.Reques
 }
 
 // handleExclusionsList serves every permanently-excluded (Type, Target)
-// pair -- admin-only (see callerIsAdminOrOpen), since this is the
+// pair -- admin-only (see callerIsAdmin), since this is the
 // "undo a mistake" surface for handleFlagsClearPermanent.
 func (s *Server) handleExclusionsList(w http.ResponseWriter, r *http.Request) {
-	if !s.callerIsAdminOrOpen(r) {
+	if !callerIsAdmin(r) {
 		http.Error(w, "admin role required", http.StatusForbidden)
 		return
 	}
@@ -81,7 +83,7 @@ func (s *Server) handleExclusionsList(w http.ResponseWriter, r *http.Request) {
 // only logged to the audit trail when an exclusion was actually found
 // and removed, since a no-op on an unknown ID isn't a meaningful action.
 func (s *Server) handleExclusionRemove(w http.ResponseWriter, r *http.Request) {
-	if !s.callerIsAdminOrOpen(r) {
+	if !callerIsAdmin(r) {
 		http.Error(w, "admin role required", http.StatusForbidden)
 		return
 	}

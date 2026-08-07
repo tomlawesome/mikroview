@@ -1,4 +1,5 @@
 <script lang="ts">
+  // SPDX-License-Identifier: AGPL-3.0-only
   import { appState, type View } from '../lib/state.svelte'
   import { flagsState } from '../lib/flags.svelte'
   import { detectorSettingsState } from '../lib/detectorSettings.svelte'
@@ -11,8 +12,11 @@
   import { downloadEventsCsv } from '../lib/export'
   import { viewportState } from '../lib/viewport.svelte'
   import { versionState } from '../lib/version.svelte'
+  import AboutOverlay from './AboutOverlay.svelte'
 
   versionState.ensureLoaded()
+
+  let showAbout = $state(false)
 
   let open = $state(false)
   let rootEl: HTMLDivElement | undefined = $state()
@@ -149,11 +153,7 @@
           {/if}
         </button>
 
-        {#if (authState.state === 'authenticated' && authState.role === 'admin') || authState.state === 'auth-disabled'}
-          <!-- The backend's callerIsAdminOrOpen treats Count()==0 (true in
-               auth-disabled, since Disable only succeeds pre-account) as
-               admin-equivalent for this endpoint -- matching that here
-               rather than hiding a control that would actually work. -->
+        {#if authState.state === 'authenticated' && authState.role === 'admin'}
           <button
             class="option"
             class:active={appState.view === 'detectors'}
@@ -280,12 +280,12 @@
             <button
               class="option"
               onclick={() => {
-                authState.showAddUser = true
+                authState.showUsers = true
                 open = false
               }}
-              title="Create an additional account"
+              title="Add or remove accounts"
             >
-              Add user
+              Users
             </button>
             <button
               class="option"
@@ -298,6 +298,24 @@
               API tokens
             </button>
             <div class="divider"></div>
+          {/if}
+
+          {#if authState.ssoAvailable && authState.hasLocalPassword}
+            <!-- Deliberately outside the admin gate above: this converts
+                 your OWN account, and the server takes the target from
+                 the session, so it is every user's to use. Hidden once
+                 there is no local password left to convert -- the server
+                 refuses that with a 409 either way. -->
+            <button
+              class="option"
+              onclick={() => {
+                authState.showSSOLink = true
+                open = false
+              }}
+              title="Sign in through your identity provider instead of a MikroView password"
+            >
+              Connect SSO
+            </button>
           {/if}
 
           <button
@@ -313,8 +331,25 @@
         </div>
       {/if}
 
+      <div class="divider"></div>
+      <!--
+        Licence obligation, not decoration. AGPL section 5(d) requires an
+        interactive interface to display the Appropriate Legal Notices,
+        and a prominent menu item satisfies that; section 13 requires the
+        source offer to network users. Both live in AboutOverlay. If the
+        menu is restructured this item moves -- it doesn't disappear.
+      -->
+      <button
+        class="option"
+        onclick={() => {
+          showAbout = true
+          open = false
+        }}
+        title="Version, copyright, licence and source code"
+      >
+        About &amp; licence
+      </button>
       {#if versionState.version}
-        <div class="divider"></div>
         <div class="version" title="Build version -- also available via GET /api/healthz or `mikroview -version`">
           {versionState.version}
         </div>
@@ -322,6 +357,8 @@
     </div>
   {/if}
 </div>
+
+<AboutOverlay bind:open={showAbout} />
 
 <style>
   .nav-menu {

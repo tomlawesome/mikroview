@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+
 // Package entities is the shared primitive behind two roadmap items
 // (issue #107): a persisted, admin-manageable record per (entity type,
 // key) with an optional friendly label and open-ended tags. A UI-managed
@@ -14,15 +16,17 @@
 package entities
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
-	"path/filepath"
 	"sort"
 	"sync"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/tomlawesome/mikroview/internal/logging"
+	"github.com/tomlawesome/mikroview/internal/persist"
 )
 
 var persistLog = logging.New("entities")
@@ -63,58 +67,37 @@ type Entity struct {
 // by; Label and Tags are the only genuinely optional fields.
 var ErrInvalidEntity = errors.New("entities: type and key are both required")
 
+// ErrInvalidEntityText is returned by Upsert for a key, label or tag
+// containing control or format characters, or one that is too long.
+var ErrInvalidEntityText = errors.New("entities: key, label and tags must not contain control characters, and must be 256 characters or fewer")
+
 func id(entityType, key string) string {
 	return entityType + ":" + key
 }
 
-// storeFile is the on-disk shape -- an object wrapping the entity list
-// plus a Seeded marker, not a bare array, mirroring auth.Store's own
-// storeFile{Disabled, Users} (see internal/auth/store.go). The marker is
-// what makes Seed's "should this run" decision independent of whether
+// storeFile is the on-disk shape: an object wrapping the entity list
+// plus a Seeded marker, mirroring auth.Store's own storeFile. The marker
+// is what makes Seed's "should this run" decision independent of whether
 // the store happens to be empty *right now* -- without it, an admin
 // deleting every entity via the UI (this same package's own Delete,
 // exposed through the admin-only DELETE /api/entities endpoint) would
 // look, on the next restart, identical to "migration never ran,"
 // silently resurrecting the config.yaml aliases they just deliberately
-// removed. storeFile.UnmarshalJSON stays compatible with a bare
-// `[]*Entity` array -- this package's original on-disk shape, before
-// this fix -- for the same reason auth.Store's own legacy-array
-// fallback exists: nothing written by an earlier build should fail to
-// load. A file recovered via that legacy path decodes with Seeded false
-// (the pre-fix shape never recorded it), which is the correct, safe
-// interpretation -- it predates this marker entirely, so Seed must be
-// free to run once more against it.
+// removed.
 type storeFile struct {
 	Seeded   bool      `json:"seeded"`
 	Entities []*Entity `json:"entities"`
 }
 
-func (f *storeFile) UnmarshalJSON(data []byte) error {
-	type shape storeFile // avoids infinite recursion into this method
-	var s shape
-	if err := json.Unmarshal(data, &s); err == nil {
-		*f = storeFile(s)
-		return nil
-	}
-	// A top-level JSON array can't unmarshal into a struct -- that's
-	// exactly the legacy pre-fix shape, so this is where a genuinely
-	// malformed file also gets one more (correct) chance to report its
-	// real error, not this fallback's.
-	var legacy []*Entity
-	if err := json.Unmarshal(data, &legacy); err != nil {
-		return err
-	}
-	f.Entities = legacy
-	f.Seeded = false
-	return nil
-}
-
 // Store holds every known entity, keyed by (Type, Key). The zero value
 // is not usable; construct with Open.
 type Store struct {
-	mu   sync.RWMutex
-	path string
-	byID map[string]*Entity
+	mu      sync.RWMutex
+	backend persist.Backend
+	// version is the backend's token for the document as of the last
+	// load or save -- see persist.SaveWithRetry.
+	version int64
+	byID    map[string]*Entity
 	// seeded records whether Seed has already run against this store,
 	// persisted so the decision survives a restart -- see storeFile's
 	// doc comment and Seed's for why this can't just be inferred from
@@ -131,22 +114,25 @@ type Store struct {
 // the returned Store is always safe to use unconditionally; a non-nil
 // error is only ever informational, for the caller to log.
 func Open(path string) (*Store, error) {
-	s := &Store{path: path, byID: make(map[string]*Entity)}
 	if path == "" {
+		return OpenWithBackend(nil)
+	}
+	return OpenWithBackend(persist.NewFileBackend(path))
+}
+
+// OpenWithBackend is Open against any persist.Backend -- a JSON file by
+// default, or Postgres when configured (issue #131).
+func OpenWithBackend(b persist.Backend) (*Store, error) {
+	s := &Store{backend: b, byID: make(map[string]*Entity)}
+
+	data, version, err := persist.LoadDocument(context.Background(), b)
+	if err != nil {
+		return s, err
+	}
+	if data == nil {
 		return s, nil
 	}
-
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		return s, err
-	}
-
-	data, err := os.ReadFile(path)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return s, nil
-		}
-		return s, err
-	}
+	s.version = version
 
 	var file storeFile
 	if err := json.Unmarshal(data, &file); err != nil {
@@ -173,6 +159,23 @@ func Open(path string) (*Store, error) {
 func (s *Store) Upsert(e Entity) (Entity, error) {
 	if e.Type == "" || e.Key == "" {
 		return Entity{}, ErrInvalidEntity
+	}
+	// Key can arrive from a discovered rule label, which originates in
+	// syslog and so is not mikroview's own text; Label is typed by an
+	// admin. Both end up in the audit trail and, via the naming
+	// resolver, in exported CSV columns, so both are held to the same
+	// no-control-characters rule as a username. Setting an entity is
+	// admin-only, which lowers the severity but not the reasoning.
+	if err := validateEntityText(e.Key); err != nil {
+		return Entity{}, err
+	}
+	if err := validateEntityText(e.Label); err != nil {
+		return Entity{}, err
+	}
+	for _, tag := range e.Tags {
+		if err := validateEntityText(tag); err != nil {
+			return Entity{}, err
+		}
 	}
 
 	s.mu.Lock()
@@ -340,7 +343,7 @@ func (s *Store) Seed(ruleNames, hostNames map[string]string) int {
 // either way, so a transient disk issue degrades to "won't survive a
 // restart right now" rather than breaking live use.
 func (s *Store) persistLocked() {
-	if s.path == "" {
+	if s.backend == nil {
 		return
 	}
 	list := s.listLocked()
@@ -350,20 +353,48 @@ func (s *Store) persistLocked() {
 	}
 	data, err := json.MarshalIndent(storeFile{Seeded: s.seeded, Entities: ptrs}, "", "  ")
 	if err != nil {
-		persistLog.Error(fmt.Sprintf("encoding %s for persistence failed: %v -- this change exists only in memory and will be lost on restart", s.path, err))
+		persistLog.Error(fmt.Sprintf("encoding entities for persistence failed: %v -- this change exists only in memory and will be lost on restart", err))
 		return
 	}
-	tmp := s.path + ".tmp"
-	if err := os.WriteFile(tmp, data, 0o600); err != nil {
-		persistLog.Error(fmt.Sprintf("writing %s failed: %v -- this change exists only in memory and will be lost on restart", tmp, err))
+	version, conflicted, err := persist.SaveWithRetry(context.Background(), s.backend, data, s.version)
+	if err != nil {
+		persistLog.Error(fmt.Sprintf("writing entities to %s failed: %v -- this change exists only in memory and will be lost on restart",
+			s.backend.Describe(), err))
 		return
 	}
-	// Same filesystem, so the rename itself is atomic -- but it can
-	// still fail (read-only remount, permissions change), and a
-	// silent failure here means the caller believes a write landed
-	// when it did not.
-	if err := os.Rename(tmp, s.path); err != nil {
-		persistLog.Error(fmt.Sprintf("replacing %s failed: %v -- this change exists only in memory and will be lost on restart", s.path, err))
-		return
+	if conflicted {
+		persistLog.Warn(fmt.Sprintf("entity store was modified by another process while this change was pending (%s); this change was applied on top",
+			s.backend.Describe()))
 	}
+	s.version = version
+}
+
+// maxEntityTextLength bounds a key, label or tag. Generous next to any
+// real rule label or hostname, tight enough that the audit trail and
+// the UI table stay renderable.
+const maxEntityTextLength = 256
+
+// validateEntityText rejects text that stops being text downstream.
+//
+// Control characters (ANSI escapes, newlines) and Unicode format
+// characters (the bidi overrides that let a string render in an order
+// other than the one it is stored in) are refused for the same reasons
+// they are refused in a username -- see auth.ValidateUsername, which
+// carries the full reasoning and the CVE references.
+//
+// An empty string is allowed: Label and Tags are optional, and Upsert
+// checks Key separately.
+func validateEntityText(s string) error {
+	if !utf8.ValidString(s) {
+		return ErrInvalidEntityText
+	}
+	if utf8.RuneCountInString(s) > maxEntityTextLength {
+		return ErrInvalidEntityText
+	}
+	for _, r := range s {
+		if unicode.IsControl(r) || unicode.Is(unicode.Cf, r) {
+			return ErrInvalidEntityText
+		}
+	}
+	return nil
 }

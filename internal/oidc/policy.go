@@ -1,6 +1,9 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+
 package oidc
 
 import (
+	"errors"
 	"fmt"
 	"net/url"
 	"strings"
@@ -17,13 +20,15 @@ const defaultGroupsClaim = "groups"
 // authentic, which the verifier has already settled by the time this
 // runs.
 //
-// It exists because "which issuer" is only an access control when the
-// issuer is one you run. Pointing IssuerURL at a self-hosted Authentik
-// or Keycloak already restricts login to accounts in that directory, and
-// for that deployment an empty Policy is the correct and complete
-// answer. Pointing it at a multi-tenant provider does not: every Google
-// account in the world validates against accounts.google.com, so the
-// issuer stops narrowing anything and something else has to.
+// The issuer URL is already the primary access control -- mikroview only
+// supports self-hosted issuers (see AllowIssuer), so configuring one
+// restricts login to accounts in a directory the operator runs, and an
+// empty Policy is the correct and complete answer for most deployments.
+//
+// This exists for scoping *within* that directory: an Authentik that
+// also serves other household members or other applications vouches for
+// accounts that have no business reading firewall logs. allowedGroups is
+// the common case.
 //
 // A zero Policy permits everyone the issuer vouches for. Each field that
 // is set adds a condition, and all set conditions must hold.
@@ -180,6 +185,33 @@ var multiTenantIssuers = map[string][]string{
 	"appleid.apple.com":         nil,
 	"login.live.com":            nil,
 	"login.microsoftonline.com": {"/common", "/organizations", "/consumers"},
+}
+
+// ErrMultiTenantIssuer is returned by AllowIssuer for a provider whose
+// user population is the general public. Callers should treat it the
+// same as any other "SSO unavailable" startup condition: log it and
+// leave SSO off, never downgrade it to a warning and continue.
+var ErrMultiTenantIssuer = errors.New("oidc: multi-tenant issuers are not supported")
+
+// AllowIssuer reports whether SSO may be enabled against issuer.
+//
+// Multi-tenant providers are refused unconditionally -- deliberately
+// *not* rescuable by configuring a Policy, even though a correctly
+// configured one would in fact restrict access safely. mikroview targets
+// self-hosters running their own IdP, where the issuer URL is already
+// the access control; supporting public providers means the safety of
+// every deployment rests on an operator getting an extra claim
+// restriction exactly right, and a misconfiguration there hands admin to
+// the first stranger who reaches the login page. The narrower promise is
+// the one worth keeping.
+//
+// See docs/decisions/multi-tenant-oidc.md for the full reasoning and the
+// exact change to reverse this, if that trade is ever revisited.
+func AllowIssuer(issuer string) error {
+	if IsMultiTenantIssuer(issuer) {
+		return fmt.Errorf("%w: %s", ErrMultiTenantIssuer, issuer)
+	}
+	return nil
 }
 
 // IsMultiTenantIssuer reports whether issuer is a known provider whose

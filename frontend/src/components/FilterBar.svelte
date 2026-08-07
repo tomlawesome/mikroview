@@ -1,4 +1,5 @@
 <script lang="ts">
+  // SPDX-License-Identifier: AGPL-3.0-only
   import { appState } from '../lib/state.svelte'
   import type { Action } from '../lib/types'
   import FilterPresetsMenu from './FilterPresetsMenu.svelte'
@@ -126,7 +127,12 @@
         class="regex-toggle"
         class:active={appState.filters.ruleRegex}
         onclick={() => (appState.filters.ruleRegex = !appState.filters.ruleRegex)}
-        title="Treat the rule search above as a regular expression (matches rule label or raw log line)"
+        title={appState.ruleMatchStatus === 'too-slow'
+          ? 'That pattern took too long to evaluate and was stopped, so the rule filter is inactive. Try a simpler one.'
+          : appState.ruleMatchStatus === 'invalid'
+            ? 'That is not a valid regular expression, so the rule filter is inactive.'
+            : 'Treat the rule search above as a regular expression (matches rule label or raw log line)'}
+        class:refused={appState.ruleMatchStatus === 'too-slow' || appState.ruleMatchStatus === 'invalid'}
         aria-pressed={appState.filters.ruleRegex}
       >
         .*
@@ -279,6 +285,14 @@
   .drawer input[inputmode='numeric'],
   .drawer select {
     width: 100%;
+  }
+
+  /* A pattern that was invalid, or refused for overrunning its time
+     budget (see lib/ruleMatcher.ts). The filter is inactive rather than
+     silently matching nothing, so say so. */
+  .regex-toggle.refused {
+    border-color: var(--danger, #c0392b);
+    color: var(--danger, #c0392b);
   }
 
   .rule-group {

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+
 package main
 
 import (
@@ -8,6 +10,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -19,6 +22,7 @@ import (
 	"github.com/tomlawesome/mikroview/internal/geoip"
 	"github.com/tomlawesome/mikroview/internal/hub"
 	"github.com/tomlawesome/mikroview/internal/naming"
+	"github.com/tomlawesome/mikroview/internal/persist"
 	"github.com/tomlawesome/mikroview/internal/rules"
 	"github.com/tomlawesome/mikroview/internal/store"
 	"github.com/tomlawesome/mikroview/internal/syslog"
@@ -291,21 +295,26 @@ func TestRunVersionPrintsTheBareVersionString(t *testing.T) {
 func TestAuthShouldFailClosed(t *testing.T) {
 	someErr := errors.New("boom")
 
+	// The second argument is now the backend rather than a path -- a
+	// nil backend is the "persistence not configured" case that used to
+	// be an empty string. Same predicate, same three cases.
+	configured := persist.NewFileBackend("/var/lib/mikroview/accounts.json")
+
 	cases := []struct {
-		name      string
-		err       error
-		storePath string
-		want      bool
+		name    string
+		err     error
+		backend persist.Backend
+		want    bool
 	}{
-		{"corrupt file with configured path fails closed", someErr, "/var/lib/mikroview/accounts.json", true},
-		{"nil error never fails closed regardless of path", nil, "/var/lib/mikroview/accounts.json", false},
-		{"nil error with unconfigured path never fails closed", nil, "", false},
-		{"error with unconfigured path never fails closed", someErr, "", false},
+		{"corrupt document with a configured backend fails closed", someErr, configured, true},
+		{"nil error never fails closed regardless of backend", nil, configured, false},
+		{"nil error with no backend never fails closed", nil, nil, false},
+		{"error with no backend never fails closed", someErr, nil, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := authShouldFailClosed(tc.err, tc.storePath); got != tc.want {
-				t.Errorf("authShouldFailClosed(%v, %q) = %v, want %v", tc.err, tc.storePath, got, tc.want)
+			if got := authShouldFailClosed(tc.err, tc.backend); got != tc.want {
+				t.Errorf("authShouldFailClosed(%v, %v) = %v, want %v", tc.err, tc.backend != nil, got, tc.want)
 			}
 		})
 	}
@@ -325,7 +334,7 @@ func TestAuthOpenErrorShapeDrivesFailClosed(t *testing.T) {
 	if err != nil {
 		t.Fatalf("auth.Open on a not-yet-created path returned an error, want nil (fresh install must still boot): %v", err)
 	}
-	if authShouldFailClosed(err, freshPath) {
+	if authShouldFailClosed(err, persist.NewFileBackend(freshPath)) {
 		t.Error("authShouldFailClosed reported true for a genuine fresh install")
 	}
 
@@ -337,7 +346,106 @@ func TestAuthOpenErrorShapeDrivesFailClosed(t *testing.T) {
 	if err == nil {
 		t.Fatal("auth.Open on a corrupt existing file returned nil error, want non-nil")
 	}
-	if !authShouldFailClosed(err, corruptPath) {
+	if !authShouldFailClosed(err, persist.NewFileBackend(corruptPath)) {
 		t.Error("authShouldFailClosed reported false for a corrupt existing accounts file")
+	}
+}
+
+// The version string carries its lane, not just a commit -- see the
+// `version` var's doc comment. This pins the three shapes so a build
+// script can't quietly start stamping a bare SHA again, which would
+// make "is this the published candidate or someone's laptop?"
+// unanswerable from the logs.
+func TestVersionStringShape(t *testing.T) {
+	valid := regexp.MustCompile(`^(dev:[0-9a-z]+|preview:[0-9a-f]{7,40}|v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?)$`)
+
+	for _, tc := range []struct {
+		v    string
+		want bool
+	}{
+		{"dev:local", true},
+		{"dev:a1b2c3d", true},
+		{"preview:a1b2c3d", true},
+		{"preview:0123456789abcdef0123456789abcdef01234567", true},
+		{"v1.2.3", true},
+		{"v1.2.3-rc.1", true},
+		{"dev", false},     // the old bare form
+		{"a1b2c3d", false}, // a bare SHA says nothing about the lane
+		{"", false},
+		{"preview", false},
+	} {
+		if got := valid.MatchString(tc.v); got != tc.want {
+			t.Errorf("%q: matched=%v, want %v", tc.v, got, tc.want)
+		}
+	}
+
+	// The compiled-in default must itself be one of the valid shapes.
+	if !valid.MatchString(version) {
+		t.Errorf("the built-in default %q is not a valid version shape", version)
+	}
+}
+
+// The VERSION file is what the release lane stamps into the binary (see
+// docs/decisions/release-versioning.md and .github/workflows/docker.yml).
+// A malformed one produces an image tag and a binary version that don't
+// match anything, discovered at release time.
+func TestVersionFileIsReleasable(t *testing.T) {
+	raw, err := os.ReadFile("VERSION")
+	if err != nil {
+		t.Fatalf("reading VERSION: %v -- the release lane reads this file", err)
+	}
+	v := strings.TrimSpace(string(raw))
+
+	if v != string(raw) && strings.TrimRight(string(raw), "\n") != v {
+		t.Errorf("VERSION contains unexpected whitespace: %q", string(raw))
+	}
+	// Plain semver, no leading "v" -- the workflow adds it for the image
+	// and git tags, so having it here too would produce "vv0.1.0".
+	if !regexp.MustCompile(`^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$`).MatchString(v) {
+		t.Fatalf("VERSION = %q, want plain semver like 0.1.0 with no leading 'v'", v)
+	}
+
+	// And "v" + that must satisfy the same shape the binary reports, so
+	// the release tag and the running version are the same string.
+	tagged := "v" + v
+	if !regexp.MustCompile(`^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$`).MatchString(tagged) {
+		t.Errorf("v%s is not a valid version string for the binary to report", v)
+	}
+}
+
+// -transfer-admin asks for the recovery key before naming or listing
+// any account, so who holds an account isn't disclosed to someone
+// without a key. That ordering is only safe because Redeem prepares a
+// rotation without persisting it -- backing out at the list must leave
+// the key usable. Verified end-to-end against the binary; this pins the
+// invariant the ordering depends on.
+func TestRedeemDoesNotConsumeAKeyUntilCommitted(t *testing.T) {
+	dir := t.TempDir()
+	rs, err := auth.OpenRecovery(filepath.Join(dir, "recovery.json"), filepath.Join(dir, "pepper"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	keys, err := rs.Generate()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := rs.Commit(); err != nil {
+		t.Fatal(err)
+	}
+
+	// Stand in for "operator ran transfer, saw the list, backed out":
+	// the key is redeemed but the rotation is never committed.
+	if _, err := rs.Redeem(keys[0]); err != nil {
+		t.Fatalf("first redeem: %v", err)
+	}
+
+	// A fresh store, as the next invocation of the command would open.
+	again, err := auth.OpenRecovery(filepath.Join(dir, "recovery.json"), filepath.Join(dir, "pepper"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := again.Redeem(keys[0]); err != nil {
+		t.Errorf("the key was consumed by an abandoned transfer: %v -- "+
+			"backing out at the account list must cost nothing", err)
 	}
 }

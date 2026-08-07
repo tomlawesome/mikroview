@@ -1,7 +1,8 @@
 <script lang="ts">
+  // SPDX-License-Identifier: AGPL-3.0-only
   // Admin-only: create/name/revoke read-only API bearer tokens (issue
   // #101) -- for a companion service (e.g. Birdcage) to pull event/flag
-  // data with no browser session. Mirrors AddUserOverlay's modal
+  // data with no browser session. Mirrors UsersOverlay's modal
   // pattern/markup.
   import { authState } from '../lib/auth.svelte'
   import { tokensState } from '../lib/tokens.svelte'

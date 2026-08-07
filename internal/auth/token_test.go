@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+
 package auth
 
 import (
@@ -21,7 +23,7 @@ func TestOpenTokenStoreEmptyPathIsUsableButNotPersisted(t *testing.T) {
 
 func TestTokenCreateRefusesWhenNotPersisted(t *testing.T) {
 	s, _ := OpenTokenStore("")
-	if _, _, err := s.Create("birdcage", time.Now()); err != ErrTokenNotPersisted {
+	if _, _, err := s.Create("birdcage", nil, time.Now()); err != ErrTokenNotPersisted {
 		t.Errorf("expected ErrTokenNotPersisted, got %v", err)
 	}
 }
@@ -33,7 +35,7 @@ func TestTokenCreateAndAuthenticate(t *testing.T) {
 	}
 	now := time.Now()
 
-	raw, tok, err := s.Create("birdcage", now)
+	raw, tok, err := s.Create("birdcage", nil, now)
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -68,7 +70,7 @@ func TestTokenRawValueNeverStored(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	raw, tok, err := s.Create("birdcage", time.Now())
+	raw, tok, err := s.Create("birdcage", nil, time.Now())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -100,7 +102,7 @@ func TestTokenRevoke(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	raw, tok, err := s.Create("birdcage", time.Now())
+	raw, tok, err := s.Create("birdcage", nil, time.Now())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -135,7 +137,7 @@ func TestTokenSurvivesReopen(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	raw, tok, err := s1.Create("birdcage", time.Now())
+	raw, tok, err := s1.Create("birdcage", nil, time.Now())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -158,11 +160,11 @@ func TestTokenListNeverIncludesRevokedTokens(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, keep, err := s.Create("keep-me", time.Now())
+	_, keep, err := s.Create("keep-me", nil, time.Now())
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, drop, err := s.Create("revoke-me", time.Now())
+	_, drop, err := s.Create("revoke-me", nil, time.Now())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -173,5 +175,77 @@ func TestTokenListNeverIncludesRevokedTokens(t *testing.T) {
 	list := s.List()
 	if len(list) != 1 || list[0].ID != keep.ID {
 		t.Errorf("expected only %q to remain listed, got %+v", keep.Name, list)
+	}
+}
+
+// A token outlives the account that made it unless something revokes
+// it: the holder still has the raw value, and Authenticate only ever
+// checks the token store. Reachable via admin transfer -- an admin
+// issues tokens, hands over the role, and is later deleted as an
+// ordinary user.
+func TestRevokeAllCreatedByRemovesOnlyThatAccountsTokens(t *testing.T) {
+	s, _ := OpenTokenStore(filepath.Join(t.TempDir(), "tokens.json"))
+	alice := &User{ID: "user-alice", Username: "alice"}
+	bob := &User{ID: "user-bob", Username: "bob"}
+
+	aliceRaw, _, err := s.Create("alice-integration", alice, time.Now())
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	bobRaw, _, err := s.Create("bob-integration", bob, time.Now())
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	if n := s.RevokeAllCreatedBy(alice.ID); n != 1 {
+		t.Errorf("revoked %d tokens, want 1", n)
+	}
+	if _, ok := s.Authenticate(aliceRaw, time.Now()); ok {
+		t.Error("alice's token still authenticates after her account was deleted")
+	}
+	if _, ok := s.Authenticate(bobRaw, time.Now()); !ok {
+		t.Error("bob's token stopped working when alice's account was deleted")
+	}
+}
+
+// Tokens written before creator attribution existed carry an empty
+// CreatedBy. Matching on that would mean deleting any single account
+// wiped every unattributed token in the deployment.
+func TestRevokeAllCreatedByIgnoresUnattributedTokens(t *testing.T) {
+	s, _ := OpenTokenStore(filepath.Join(t.TempDir(), "tokens.json"))
+	raw, _, err := s.Create("pre-upgrade", nil, time.Now())
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	if n := s.RevokeAllCreatedBy(""); n != 0 {
+		t.Errorf("an empty user ID revoked %d tokens, want 0", n)
+	}
+	if n := s.RevokeAllCreatedBy("user-someone"); n != 0 {
+		t.Errorf("deleting an unrelated account revoked %d unattributed tokens, want 0", n)
+	}
+	if _, ok := s.Authenticate(raw, time.Now()); !ok {
+		t.Error("an unattributed token was revoked by an unrelated account deletion")
+	}
+}
+
+func TestCreatedBySurvivesAReload(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "tokens.json")
+	s1, _ := OpenTokenStore(path)
+	alice := &User{ID: "user-alice", Username: "alice"}
+	if _, _, err := s1.Create("integration", alice, time.Now()); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	s2, err := OpenTokenStore(path)
+	if err != nil {
+		t.Fatalf("OpenTokenStore: %v", err)
+	}
+	list := s2.List()
+	if len(list) != 1 {
+		t.Fatalf("expected 1 token after reload, got %d", len(list))
+	}
+	if list[0].CreatedBy != alice.ID || list[0].CreatedByUsername != "alice" {
+		t.Errorf("creator attribution lost across a reload: %+v", list[0])
 	}
 }

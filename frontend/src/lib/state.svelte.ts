@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+
 import { fetchDevices, fetchEvents, fetchStats } from './api'
 import { MAX_CLIENT_EVENTS } from './constants'
 import { isPublicIp } from './format'
@@ -10,6 +12,7 @@ import {
   type FirewallEvent,
   type Stats,
 } from './types'
+import { mergeOutcome, RuleMatcher, type MatchCandidate } from './ruleMatcher'
 
 function stamp(events: FirewallEvent[]): ClientEvent[] {
   const receivedAt = Date.now()
@@ -55,6 +58,21 @@ class AppState {
   stats = $state<Stats | null>(null)
   connState = $state<ConnState>('connecting')
   wsDropped = $state(0)
+  // ruleMatches holds the ids matching the current regex pattern, or
+  // null when there is nothing usable to filter by. Kept here rather than
+  // inside the Worker so eviction is handled where eviction already
+  // happens -- see the slice(-MAX_CLIENT_EVENTS) call sites, which prune
+  // this in the same breath -- and so a terminated Worker loses nothing.
+  ruleMatches = $state<ReadonlySet<number> | null>(null)
+  // ruleMatchStatus surfaces *why* the rule filter is inactive, so a
+  // pattern that was refused for being too slow reads as that rather than
+  // as "no results".
+  ruleMatchStatus = $state<'idle' | 'evaluating' | 'invalid' | 'too-slow'>('idle')
+
+  private matcher = new RuleMatcher()
+  private ruleDebounce: ReturnType<typeof setTimeout> | null = null
+  private matchedPattern = ''
+
   paused = $state(false)
   pendingCount = $state(0)
   autoscroll = $state(true)
@@ -104,7 +122,7 @@ class AppState {
   // its own independent criteria regardless of whatever filter is
   // currently active in the live view's FilterBar.
   filteredBy(filters: Filters): FirewallEvent[] {
-    return applyFilters(this.ageFilteredEvents, filters)
+    return applyFilters(this.ageFilteredEvents, filters, this.ruleMatches)
   }
 
   // ruleRegex is excluded here: it's a modifier on `rule`, not a filter of
@@ -113,6 +131,70 @@ class AppState {
   hasActiveFilters = $derived.by(() =>
     Object.entries(this.filters).some(([k, v]) => k !== 'ruleRegex' && v !== ''),
   )
+
+  // syncRuleMatches is called whenever the rule filter changes.
+  //
+  // Debounced because the input is bound directly to filters.rule, so
+  // every keystroke is a new pattern -- without this, typing "drop" would
+  // classify the whole buffer four times.
+  syncRuleMatches() {
+    if (this.ruleDebounce) clearTimeout(this.ruleDebounce)
+    if (!this.filters.rule || !this.filters.ruleRegex) {
+      this.ruleMatches = null
+      this.ruleMatchStatus = 'idle'
+      this.matchedPattern = ''
+      return
+    }
+    this.ruleMatchStatus = 'evaluating'
+    this.ruleDebounce = setTimeout(() => void this.rematchAll(), RULE_MATCH_DEBOUNCE_MS)
+  }
+
+  /** Reclassifies the whole buffer against the current pattern. */
+  private async rematchAll() {
+    const pattern = this.filters.rule
+    const outcome = await this.matcher.run(pattern, this.events.map(toCandidate))
+    // The user kept typing while that was in flight.
+    if (pattern !== this.filters.rule || !this.filters.ruleRegex) return
+    this.matchedPattern = pattern
+    const merged = mergeOutcome(outcome, null, false)
+    this.ruleMatches = merged.matches
+    this.ruleMatchStatus = merged.status
+  }
+
+  /**
+   * Classifies just-arrived events, so a live view with a regex filter
+   * keeps up without reclassifying everything already in the buffer.
+   */
+  private async classifyNew(arrived: ClientEvent[]) {
+    if (!this.matchedPattern || this.matchedPattern !== this.filters.rule) return
+    if (!this.ruleMatches || arrived.length === 0) return
+    const pattern = this.matchedPattern
+    const outcome = await this.matcher.run(pattern, arrived.map(toCandidate))
+    if (pattern !== this.filters.rule) return
+    const merged = mergeOutcome(outcome, this.ruleMatches, true)
+    this.ruleMatches = merged.matches
+    this.ruleMatchStatus = merged.status
+  }
+
+  /**
+   * Drops ids for events the buffer has already evicted.
+   *
+   * Server-assigned ids are monotonic and eviction is always from the
+   * front, so everything below the oldest surviving id is gone. Called
+   * from the same places that slice the buffer, which is the whole reason
+   * the set lives here rather than inside the Worker.
+   */
+  private pruneRuleMatches() {
+    if (!this.ruleMatches || this.events.length === 0) return
+    const oldest = this.events[0].id
+    let dropped = false
+    const next = new Set<number>()
+    for (const id of this.ruleMatches) {
+      if (id >= oldest) next.add(id)
+      else dropped = true
+    }
+    if (dropped) this.ruleMatches = next
+  }
 
   // Skipped while paused so the age-based display-duration cutoff in
   // filteredEvents freezes at the moment of pausing instead of continuing
@@ -126,6 +208,7 @@ class AppState {
 
   setInitialEvents(events: FirewallEvent[]) {
     this.events = stamp(events).slice(-MAX_CLIENT_EVENTS)
+    this.syncRuleMatches()
   }
 
   appendLive(newEvents: FirewallEvent[]) {
@@ -151,14 +234,20 @@ class AppState {
   // is idle.
   private flushIncoming() {
     if (this.incomingBuffer.length === 0) return
-    this.events = [...this.events, ...this.incomingBuffer].slice(-MAX_CLIENT_EVENTS)
+    const arrived = this.incomingBuffer
+    this.events = [...this.events, ...arrived].slice(-MAX_CLIENT_EVENTS)
+    this.pruneRuleMatches()
+    void this.classifyNew(arrived)
     this.incomingBuffer = []
   }
 
   togglePause() {
     this.paused = !this.paused
     if (!this.paused && this.pendingBuffer.length) {
-      this.events = [...this.events, ...this.pendingBuffer].slice(-MAX_CLIENT_EVENTS)
+      const resumed = this.pendingBuffer
+      this.events = [...this.events, ...resumed].slice(-MAX_CLIENT_EVENTS)
+      this.pruneRuleMatches()
+      void this.classifyNew(resumed)
       this.pendingBuffer = []
       this.pendingCount = 0
     }
@@ -212,20 +301,35 @@ class AppState {
   }
 }
 
-export function applyFilters(events: FirewallEvent[], f: Filters): FirewallEvent[] {
-  // Compiled once per applyFilters call, not once per event -- this
-  // used to construct a new RegExp inside the per-event filter
-  // callback below, recompiling the same pattern for every one of up
-  // to 5000 events on every call (as often as every ~200ms under
-  // load, see this file's batching comment above).
-  let ruleRe: RegExp | null = null
-  if (f.rule && f.ruleRegex) {
-    try {
-      ruleRe = new RegExp(f.rule, 'i')
-    } catch {
-      // invalid regex: no-op, treat as unfiltered -- same as before
-    }
-  }
+// MAX_RULE_PATTERN_LENGTH bounds compile cost. Generous -- a real rule
+// filter is a handful of characters -- but it stops a megabyte-long
+// pattern arriving in a URL.
+const MAX_RULE_PATTERN_LENGTH = 200
+
+// applyFilters runs no regex.
+//
+// When the rule filter is in regex mode it consults ruleMatches -- a set
+// of event ids computed off the main thread (see lib/ruleMatcher.ts and
+// issue #157). A null set means "not evaluated yet, or the pattern was
+// refused", and behaves exactly as an invalid pattern always has: the
+// rule filter is skipped rather than throwing or hiding everything.
+//
+// This is also less work than it replaces. The old path ran the pattern
+// against ruleLabel *and* raw for every event on every call -- up to
+// 10,000 regex executions across a 5,000-event buffer, repeated per
+// top-talker widget. This is a set lookup.
+/** RULE_MATCH_DEBOUNCE_MS: the filter input is bound per keystroke. */
+const RULE_MATCH_DEBOUNCE_MS = 250
+
+function toCandidate(e: FirewallEvent): MatchCandidate {
+  return { id: e.id, ruleLabel: e.ruleLabel, raw: e.raw }
+}
+
+export function applyFilters(
+  events: FirewallEvent[],
+  f: Filters,
+  ruleMatches: ReadonlySet<number> | null = null,
+): FirewallEvent[] {
 
   return events.filter((e) => {
     if (f.device && e.deviceId !== f.device) return false
@@ -256,13 +360,12 @@ export function applyFilters(events: FirewallEvent[], f: Filters): FirewallEvent
     }
     if (f.rule) {
       if (f.ruleRegex) {
-        // An invalid pattern disables the filter (matches internal/store/
-        // query.go's behavior) rather than throwing or hiding everything
-        // -- the user is probably still mid-typing it. ruleRe is null in
-        // exactly that case (see above), so every event falls through
-        // unfiltered by rule, uniformly -- same behavior as each event
-        // independently hitting the same construction error used to be.
-        if (ruleRe && !ruleRe.test(e.ruleLabel) && !ruleRe.test(e.raw)) return false
+        // A null set means the pattern has not been evaluated yet, was
+        // invalid, or was refused for taking too long. All three disable
+        // the rule filter rather than throwing or hiding everything --
+        // the user is usually mid-typing, and matching internal/store/
+        // query.go's behaviour for an unusable pattern.
+        if (ruleMatches && !ruleMatches.has(e.id)) return false
       } else {
         const needle = f.rule.toLowerCase()
         if (!e.ruleLabel.toLowerCase().includes(needle) && !e.raw.toLowerCase().includes(needle)) return false
