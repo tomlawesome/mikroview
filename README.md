@@ -71,6 +71,16 @@ services:
       # A plain-HTTP listener that only ever redirects to the HTTPS
       # port above -- never serves real content.
       - "80:8081"
+    # Container hardening -- defense in depth on top of the image
+    # already being distroless + non-root. mikroview binds only
+    # unprivileged ports inside the container (which is why the
+    # mappings above exist), so it needs no capabilities at all, and
+    # every path it writes to is a mount -- see "Persistent data".
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    read_only: true
     healthcheck:
       test: ["CMD", "/mikroview", "-healthcheck"]
       interval: 30s
@@ -121,6 +131,8 @@ services:
 volumes:
   mikroview-data:
 ```
+
+**Image tags**: `latest` is the only tag intended for general use -- it's whatever was most recently promoted from `preview` after passing CI and a container smoke test there. `preview-<7-char-sha>` tags exist for every build off the `preview` branch, if you ever want to pin to a specific one rather than track `latest`. There is deliberately no `dev` tag: pushing to the `dev` branch never triggers a build at all, so nothing publishes from it -- if you ever see one referenced anywhere (including in your own `docker images` history), treat it as stale rather than a live channel, since nothing keeps it current.
 
 Create `config.yaml` next to it first (see [`deploy/config.example.yaml`](deploy/config.example.yaml) for the full option reference), then `docker compose up -d`. This mirrors [`deploy/docker-compose.yml`](deploy/docker-compose.yml) exactly, just swapping the local `build:` for the prebuilt `image:`.
 
@@ -214,6 +226,40 @@ every restart) but not fatal.
   (e.g. Authentik, Keycloak, Entra ID) can both be enabled at once. See
   [docs/configuration.md](docs/configuration.md) and
   [SECURITY.md](SECURITY.md) for the threat model and setup.
+
+## Security levels
+
+Auth isn't one setting — the choice you make trades off convenience
+against how much a compromise of the mikroview host itself can expose.
+From least to most isolated:
+
+1. **No auth (explicitly skipped).** No barrier at all; anyone who can
+   reach the app has full access. Only appropriate on a fully trusted
+   network.
+2. **Local accounts (username/password, default once auth is
+   enabled).** Simplest to set up, but account data — usernames and
+   roles, including who's the admin — lives in a plaintext file on the
+   same host mikroview runs on. There's no separation between "the app
+   is compromised" and "the account data is readable": a leaked
+   backup, a misconfigured mount, or anything that exposes that one
+   file hands over who to target, and local login security then
+   depends entirely on password strength.
+3. **OIDC/SSO (recommended when available).** The real credential
+   lives with your external identity provider (Authentik, Keycloak,
+   Entra ID, ...), never on the mikroview host — compromising the host
+   doesn't expose anything usable against an SSO-provisioned account.
+   Local and SSO accounts can coexist.
+4. **(Planned) Off-box database backend.** Moving persisted state to a
+   separately-secured, network-restricted database closes the "read
+   one file, get everything" exposure that local accounts still have
+   today — tracked in
+   [issue #131](https://github.com/tomlawesome/mikroview/issues/131).
+
+Pick the level that matches your network: skip auth only on a network
+you already trust completely, use local accounts if you accept that
+tradeoff, and prefer SSO wherever you have an identity provider
+available. Full detail and the reasoning behind each is in
+[SECURITY.md](SECURITY.md#authentication).
 
 ## Docs
 

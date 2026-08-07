@@ -15,14 +15,18 @@ package flags
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
+	"github.com/tomlawesome/mikroview/internal/reputation"
 	"os"
 	"path/filepath"
 	"sort"
 	"sync"
 	"time"
 
-	"github.com/tomlawesome/mikroview/internal/reputation"
+	"github.com/tomlawesome/mikroview/internal/logging"
 )
+
+var persistLog = logging.New("flags")
 
 type Type string
 
@@ -78,6 +82,30 @@ const (
 	// TypeGlobalSpike already sets with "global". See
 	// internal/detect/stale_rule.go.
 	TypeStaleRule Type = "stale_rule"
+	// TypeKnownBadIP (issue #113 Part B): a source IP matching a
+	// locally-cached CIDR range from a vetted, curated threat-intel feed
+	// (Spamhaus DROP/EDROP by default -- see internal/blocklist's doc
+	// comment for the full menu and why an arbitrary user-supplied URL
+	// isn't offered instead). Raised directly, independent of any
+	// behavioral threshold -- presence on a list Spamhaus is confident
+	// is entirely malicious-controlled is itself the signal, not a
+	// byproduct of volume or pattern. Target is the source IP, same
+	// convention as TypePortScan/TypeActivitySpike/TypeCriticalPort.
+	//
+	// Also feeds RaiseConfidenceFloor for every other currently-active
+	// source-IP-keyed flag on the same target (see
+	// internal/detect/known_bad_ip.go's knownBadReinforcedTypes) -- the
+	// same reinforcement role internal/detect's async AbuseIPDB-informed
+	// checks already play for those flags (see maybeCheckReputation),
+	// just synchronous, since a local lookup
+	// needs no network round-trip to resolve. Raised directly from
+	// internal/detect.Observe, not gated by DetectorName/Scope like
+	// every per-event behavioral detector above -- same "no matching
+	// detector-settings entry" exception new_device/stale_rule already
+	// established (see frontend/src/lib/types.ts's FlagType doc
+	// comment): there's no threshold to tune and no scope narrower than
+	// "this exact list membership check."
+	TypeKnownBadIP Type = "known_bad_ip"
 )
 
 // maxFlags bounds the store the same way every other buffer in mikroview
@@ -87,6 +115,12 @@ const (
 // expected to be hit in normal use. A var rather than a const so tests
 // can shrink it without creating 1000+ flags.
 var maxFlags = 1000
+
+// maxFlagsHardCeiling bounds the store even when every flag is still
+// active. maxFlags above is a soft target that only sheds *cleared*
+// flags; without a hard stop, unauthenticated input can grow the active
+// set without limit (see pruneLocked). A var so tests can shrink it.
+var maxFlagsHardCeiling = 5000
 
 // flagTimeSeriesMinutes is how much history Store.TimeSeries covers, at
 // 1-minute resolution -- same window/resolution as
@@ -213,6 +247,11 @@ type Store struct {
 	mu   sync.RWMutex
 	path string
 	byID map[string]*Flag
+	// clearedCount tracks how many entries in byID are Cleared, so
+	// pruneLocked can skip its scan entirely when there is nothing
+	// evictable. Under a flood the store sits full of *active* flags, so
+	// that scan otherwise ran on every Add and found nothing.
+	clearedCount int
 
 	// excluded holds every permanently-excluded (Type, Target) pair, same
 	// flagID key as byID -- see Store.Exclude's doc comment. Checked at
@@ -311,6 +350,9 @@ func Open(path string) (*Store, error) {
 				continue
 			}
 			s.byID[f.ID] = f
+			if f.Cleared {
+				s.clearedCount++
+			}
 		}
 		return s, nil
 	}
@@ -322,6 +364,9 @@ func Open(path string) (*Store, error) {
 	for _, f := range state.Flags {
 		f := f
 		s.byID[f.ID] = &f
+		if f.Cleared {
+			s.clearedCount++
+		}
 	}
 	for _, e := range state.Excluded {
 		s.excluded[e.ID] = e
@@ -410,6 +455,7 @@ func (s *Store) add(t Type, target, detail string, confidence *int, evidence Evi
 		isNew = true
 		f.FirstSeen = now
 		f.Cleared = false
+		s.clearedCount--
 		f.ClearedAt = time.Time{}
 		f.Count = 0
 		f.ReputationFloor = nil // a revived flag starts its confidence history fresh
@@ -602,6 +648,7 @@ func (s *Store) Clear(id string, now time.Time) bool {
 		return false
 	}
 	f.Cleared = true
+	s.clearedCount++
 	f.ClearedAt = now
 	s.persistLocked()
 	return true
@@ -626,6 +673,7 @@ func (s *Store) ClearAndExclude(id string, now time.Time) bool {
 	}
 	if !f.Cleared {
 		f.Cleared = true
+		s.clearedCount++
 		f.ClearedAt = now
 	}
 	if _, already := s.excluded[id]; !already {
@@ -735,16 +783,55 @@ func (s *Store) pruneLocked() {
 		return
 	}
 
-	cleared := make([]*Flag, 0, len(s.byID))
-	for _, f := range s.byID {
-		if f.Cleared {
-			cleared = append(cleared, f)
+	// Only pay for the cleared-flag scan if there are any. Once the
+	// store sits above maxFlags with everything active -- which is the
+	// steady state under a flood, since active flags are kept -- this
+	// scan-and-sort ran on *every* Add and never found anything to
+	// evict. Measured at 911ns/Add below maxFlags versus 416us at the
+	// ceiling: a 457x permanent tax, not an occasional one.
+	// clearedCount lets this skip the scan entirely in the steady state
+	// under a flood -- everything active, nothing to evict -- instead of
+	// walking every flag on every Add to rediscover that. That scan alone
+	// measured ~127us per Add at the ceiling.
+	if s.clearedCount > 0 {
+		cleared := make([]*Flag, 0, s.clearedCount)
+		for _, f := range s.byID {
+			if f.Cleared {
+				cleared = append(cleared, f)
+			}
+		}
+		sort.Slice(cleared, func(i, j int) bool { return cleared[i].ClearedAt.Before(cleared[j].ClearedAt) })
+		for i := 0; i < over && i < len(cleared); i++ {
+			delete(s.byID, cleared[i].ID)
+			s.clearedCount--
 		}
 	}
-	sort.Slice(cleared, func(i, j int) bool { return cleared[i].ClearedAt.Before(cleared[j].ClearedAt) })
 
-	for i := 0; i < over && i < len(cleared); i++ {
-		delete(s.byID, cleared[i].ID)
+	// Hard ceiling. Preferring to evict cleared flags is right -- an
+	// active flag is something a human still needs to see, so it should
+	// outlive reviewed noise. But "never evict an active flag" is only
+	// safe if the number of active flags is bounded, and it is not:
+	// flag targets come from unauthenticated syslog, so an attacker can
+	// mint distinct ones as fast as they can send packets.
+	//
+	// Sheds a batch rather than the exact overflow, for the same reason
+	// detect.evictOldestByActivity does: evicting one at a time means a
+	// full scan and sort per Add forever. A batch amortizes it across
+	// the next several thousand insertions.
+	if len(s.byID) <= maxFlagsHardCeiling {
+		return
+	}
+	target := maxFlagsHardCeiling - maxFlagsHardCeiling/8
+	all := make([]*Flag, 0, len(s.byID))
+	for _, f := range s.byID {
+		all = append(all, f)
+	}
+	sort.Slice(all, func(i, j int) bool { return all[i].FirstSeen.Before(all[j].FirstSeen) })
+	for i := 0; i < len(all) && len(s.byID) > target; i++ {
+		if all[i].Cleared {
+			s.clearedCount--
+		}
+		delete(s.byID, all[i].ID)
 	}
 }
 
@@ -794,11 +881,20 @@ func (s *Store) persistLocked() {
 
 	data, err := json.MarshalIndent(persistedState{Flags: s.listLocked(), Excluded: excluded}, "", "  ")
 	if err != nil {
+		persistLog.Error(fmt.Sprintf("encoding %s for persistence failed: %v -- this change exists only in memory and will be lost on restart", s.path, err))
 		return
 	}
 	tmp := s.path + ".tmp"
 	if err := os.WriteFile(tmp, data, 0o600); err != nil {
+		persistLog.Error(fmt.Sprintf("writing %s failed: %v -- this change exists only in memory and will be lost on restart", tmp, err))
 		return
 	}
-	os.Rename(tmp, s.path) // same filesystem, so this is atomic
+	// Same filesystem, so the rename itself is atomic -- but it can
+	// still fail (read-only remount, permissions change), and a
+	// silent failure here means the caller believes a write landed
+	// when it did not.
+	if err := os.Rename(tmp, s.path); err != nil {
+		persistLog.Error(fmt.Sprintf("replacing %s failed: %v -- this change exists only in memory and will be lost on restart", s.path, err))
+		return
+	}
 }

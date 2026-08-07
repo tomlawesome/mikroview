@@ -478,6 +478,7 @@ func TestDefaultStoragePathsUnderVarLibMikroview(t *testing.T) {
 		"Flags.RuleUsageStorePath":        cfg.Flags.RuleUsageStorePath,
 		"Auth.StorePath":                  cfg.Auth.StorePath,
 		"Entities.StorePath":              cfg.Entities.StorePath,
+		"Audit.StorePath":                 cfg.Audit.StorePath,
 		"Auth.TokensStorePath":            cfg.Auth.TokensStorePath,
 		"TLS.StorePath":                   cfg.TLS.StorePath,
 		"DeviceMAC.StorePath":             cfg.DeviceMAC.StorePath,
@@ -488,6 +489,7 @@ func TestDefaultStoragePathsUnderVarLibMikroview(t *testing.T) {
 		"Flags.RuleUsageStorePath":        "/var/lib/mikroview/rule-usage.json",
 		"Auth.StorePath":                  "/var/lib/mikroview/users.json",
 		"Entities.StorePath":              "/var/lib/mikroview/entities.json",
+		"Audit.StorePath":                 "/var/lib/mikroview/audit.json",
 		"Auth.TokensStorePath":            "/var/lib/mikroview/tokens.json",
 		"TLS.StorePath":                   "/var/lib/mikroview/tls",
 		"DeviceMAC.StorePath":             "/var/lib/mikroview/mac-registry.json",
@@ -537,6 +539,18 @@ func TestEntitiesEnvVarOverridesDefault(t *testing.T) {
 	}
 	if cfg.Entities.StorePath != "/data/entities.json" {
 		t.Errorf("Entities.StorePath = %v, want /data/entities.json", cfg.Entities.StorePath)
+	}
+}
+
+func TestAuditEnvVarOverridesDefault(t *testing.T) {
+	t.Setenv("MIKROVIEW_AUDIT_STORE_PATH", "/data/audit.json")
+
+	cfg, err := Load("", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Audit.StorePath != "/data/audit.json" {
+		t.Errorf("Audit.StorePath = %v, want /data/audit.json", cfg.Audit.StorePath)
 	}
 }
 
@@ -640,6 +654,60 @@ deviceMac:
 	}
 	if cfg.DeviceMAC.StorePath != "/data/mac-registry.json" {
 		t.Errorf("DeviceMAC.StorePath = %q, want the yaml value /data/mac-registry.json", cfg.DeviceMAC.StorePath)
+	}
+}
+
+func TestBlocklistDefaultsToSpamhausDropAndEdrop(t *testing.T) {
+	cfg, err := Load("", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"spamhaus_drop", "spamhaus_edrop"}
+	if len(cfg.Blocklist.Sources) != len(want) {
+		t.Fatalf("Blocklist.Sources = %v, want %v", cfg.Blocklist.Sources, want)
+	}
+	for i, s := range want {
+		if cfg.Blocklist.Sources[i] != s {
+			t.Errorf("Blocklist.Sources[%d] = %q, want %q", i, cfg.Blocklist.Sources[i], s)
+		}
+	}
+}
+
+func TestBlocklistSourcesEnvVarOverridesDefault(t *testing.T) {
+	t.Setenv("MIKROVIEW_BLOCKLIST_SOURCES", "spamhaus_drop,emerging_threats_compromised")
+
+	cfg, err := Load("", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"spamhaus_drop", "emerging_threats_compromised"}
+	if len(cfg.Blocklist.Sources) != len(want) {
+		t.Fatalf("Blocklist.Sources = %v, want %v", cfg.Blocklist.Sources, want)
+	}
+	for i, s := range want {
+		if cfg.Blocklist.Sources[i] != s {
+			t.Errorf("Blocklist.Sources[%d] = %q, want %q", i, cfg.Blocklist.Sources[i], s)
+		}
+	}
+}
+
+func TestBlocklistSourcesYAMLCanDisableEntirely(t *testing.T) {
+	dir := t.TempDir()
+	yamlPath := filepath.Join(dir, "config.yaml")
+	err := os.WriteFile(yamlPath, []byte(`
+blocklist:
+  sources: []
+`), 0o644)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := Load(yamlPath, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.Blocklist.Sources) != 0 {
+		t.Errorf("Blocklist.Sources = %v, want empty (disabled)", cfg.Blocklist.Sources)
 	}
 }
 

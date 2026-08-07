@@ -86,6 +86,20 @@ either way.
   mikroview reachable by an untrusted network before this is resolved:
   whoever gets there first makes the choice, and if they create an
   account, they claim the admin role.
+- **"Whoever gets there first" means exactly one winner, enforced
+  atomically.** The first-run decision is resolved under a single lock:
+  concurrent attempts cannot all succeed, and registering an account
+  cannot interleave with skipping auth. Both preconditions are
+  re-checked with the write lock held rather than before taking it,
+  which matters because password hashing (Argon2id, ~100ms by design)
+  runs first and would otherwise leave a wide window. Without this, N
+  simultaneous registrations would each create an admin, and a
+  registration racing a skip could leave a deployment holding a real
+  admin account while still reporting auth as disabled -- i.e. serving
+  every request unauthenticated while the operator's own registration
+  returned success and gave them no reason to suspect otherwise.
+  Regression tests exercise both races directly
+  (`internal/auth/store_test.go`).
 - **Skipping is a permanent, deliberate decision, not a default you fall
   into.** Once skipped, mikroview stays fully open indefinitely -- there
   is no way to re-enable auth from the web UI or any API call. Reversing
@@ -94,6 +108,21 @@ either way.
   itself. This is intentional: it means nobody who can merely reach the
   running app -- as opposed to the host it runs on -- can unilaterally
   impose or remove authentication for everyone else.
+- **A corrupt or unreadable accounts file fails closed, not open.**
+  mikroview refuses to start (rather than silently falling back to an
+  empty, zero-account state) if the accounts file exists but can't be
+  loaded -- a fresh install (no file at all) is unaffected and boots
+  normally. Without this, a lost/corrupted accounts file would look
+  identical, on the next restart, to a genuine fresh install: the
+  first-run setup screen, reachable by whoever gets there first, on a
+  deployment that previously had real accounts. Recovering is a
+  container/host-access action, the same trust anchor as the other
+  recovery commands below: restore the file from a backup, or move/
+  delete it (the boot-failure log message names the exact path) and
+  restart to consciously re-arm the first-run setup screen -- no
+  dedicated CLI mode for this, since an operator who can already run
+  `mikroview -reset-password`/`-enable-auth-setup` can already `mv` or
+  `rm` a file on the same host.
 - **Sessions are opaque, server-side, and in-memory** (not JWTs) -- easy
   to revoke, no signing-key management, but lost on a server restart
   (re-login is required; this does not affect account survival, which is
