@@ -69,6 +69,59 @@ type User struct {
 	// case both login paths reach the same account.
 	OIDCIssuer  string `json:"oidcIssuer,omitempty"`
 	OIDCSubject string `json:"oidcSubject,omitempty"`
+	// HasLocalPassword distinguishes a real, user-chosen password from
+	// the random unmatchable hash FindOrCreateOIDCUser issues to an
+	// SSO-provisioned account. The hashes themselves cannot be told
+	// apart -- both are valid Argon2id strings -- so this has to be
+	// recorded rather than inferred from the credential.
+	//
+	// It matters because letting an admin set a *real* password on an
+	// SSO-only account would quietly reopen the local-attack surface
+	// that provisioning it via OIDC deliberately closed.
+	//
+	// A pointer so that "field absent" (an account written before this
+	// existed) is distinguishable from "explicitly false". Every
+	// deployed accounts.json predates it, and treating absent as false
+	// would mark every local admin SSO-only and lock them out of their
+	// own recovery. See migrateHasLocalPassword.
+	HasLocalPassword *bool `json:"hasLocalPassword,omitempty"`
+}
+
+// LocalPassword reports whether this account has a real, user-chosen
+// password that may be reset.
+//
+// Always use this rather than reading HasLocalPassword directly: it
+// resolves the pre-migration nil case, so a caller cannot accidentally
+// treat an old local account as SSO-only.
+func (u *User) LocalPassword() bool {
+	if u.HasLocalPassword != nil {
+		return *u.HasLocalPassword
+	}
+	return u.OIDCIssuer == ""
+}
+
+// noLocalPassword is the shared false referenced by accounts that have
+// no resettable password. Package-level because a *bool field needs an
+// addressable value and repeating a local `f := false` at each site
+// invites one of them being set the wrong way.
+var noLocalPassword = false
+
+// migrateHasLocalPassword fills in the field for accounts written before
+// it existed, inferring from whether the account carries a linked SSO
+// identity: no issuer means it was created by Register/CreateUser and
+// therefore has a real password.
+//
+// Safe today because LinkOIDCIdentity has no callers, so no account can
+// yet be in the "local password *and* linked identity" state that this
+// inference would get wrong. Once linking ships (#133 Part 4) it wipes
+// the local password as part of the same operation, which keeps the
+// inference correct for anything written after it.
+func migrateHasLocalPassword(u *User) {
+	if u.HasLocalPassword != nil {
+		return
+	}
+	v := u.OIDCIssuer == ""
+	u.HasLocalPassword = &v
 }
 
 // oidcKey is (issuer, subject) as a map key -- a struct rather than a
@@ -233,6 +286,7 @@ func Open(path string) (*Store, error) {
 		if u == nil {
 			continue
 		}
+		migrateHasLocalPassword(u)
 		s.byID[u.ID] = u
 		s.byName[strings.ToLower(u.Username)] = u.ID
 		if u.OIDCIssuer != "" {
@@ -289,6 +343,7 @@ func (s *Store) reloadIfStale() {
 		if u == nil { // see Open's identical guard for why this is needed
 			continue
 		}
+		migrateHasLocalPassword(u) // second load path -- see Open's call
 		byID[u.ID] = u
 		byName[strings.ToLower(u.Username)] = u.ID
 		if u.OIDCIssuer != "" {
@@ -494,12 +549,15 @@ func (s *Store) createLocked(username, password string, role Role, now time.Time
 		return nil, ErrUsernameTaken
 	}
 
+	localPassword := true
 	u := &User{
 		ID:           newID(),
 		Username:     username,
 		PasswordHash: hash,
 		Role:         role,
 		CreatedAt:    now,
+		// A real password the user chose, so it may later be reset.
+		HasLocalPassword: &localPassword,
 	}
 	s.byID[u.ID] = u
 	s.byName[key] = u.ID
@@ -603,6 +661,11 @@ func (s *Store) FindOrCreateOIDCUser(issuer, subject, usernameHint string, now t
 		LastLogin:    now,
 		OIDCIssuer:   issuer,
 		OIDCSubject:  subject,
+		// Explicitly false: the hash above is random and unmatchable, so
+		// there is no password here to reset. Recorded rather than
+		// inferred, because the hash itself is indistinguishable from a
+		// real one.
+		HasLocalPassword: &noLocalPassword,
 	}
 	s.byID[u.ID] = u
 	s.byName[strings.ToLower(u.Username)] = u.ID
