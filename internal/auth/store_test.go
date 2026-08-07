@@ -292,24 +292,6 @@ func TestSeparateProcessPasswordResetIsPickedUpByRunningStore(t *testing.T) {
 	}
 }
 
-func TestOpenReadsLegacyBareArrayFormat(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "users.json")
-	legacy := `[{"id":"u1","username":"admin","passwordHash":"$argon2id$fake","role":"admin","createdAt":"2026-01-01T00:00:00Z"}]`
-	if err := os.WriteFile(path, []byte(legacy), 0o600); err != nil {
-		t.Fatal(err)
-	}
-
-	s, err := Open(path)
-	if err != nil {
-		t.Fatalf("expected a legacy bare-array file to still load, got %v", err)
-	}
-	if s.Count() != 1 {
-		t.Fatalf("expected 1 user loaded from the legacy format, got %d", s.Count())
-	}
-	if u, ok := s.ByUsername("admin"); !ok || u.ID != "u1" {
-		t.Errorf("expected the legacy user to be readable by username, got %+v, %v", u, ok)
-	}
-}
 
 // A JSON array containing null is syntactically valid, so it unmarshals
 // without error into a slice with a nil *User element -- before the

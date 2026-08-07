@@ -41,6 +41,19 @@ upgrading.
   where to go instead; that stub is now gone too. Use
   `mikroview -recover-admin-account`.
 
+- **Legacy on-disk format fallbacks.** `auth`, `entities` and `flags`
+  each accepted a bare JSON array as well as their current object shape,
+  for files written by builds that predate those shapes. `auth` also
+  carried `migrateHasLocalPassword`, which filled in a missing
+  `hasLocalPassword` by inferring it from whether the account had a
+  linked SSO identity — the field was a `*bool` purely so that "absent"
+  could be told from "false".
+
+  All four are gone, and `User.HasLocalPassword` is a plain `bool` now
+  that absence has no meaning. Files written by any current build are
+  unaffected; a file in one of the old shapes will fail to load and
+  mikroview will refuse to start, naming the path.
+
 ### Changed
 
 - `internal/api`'s `Routes` gained an inner `mux`, so tests that
