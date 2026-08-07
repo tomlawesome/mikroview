@@ -47,6 +47,16 @@ syslog protocol has no credential to check), so the "don't expose the
 syslog port beyond a trusted network" guidance above still applies
 either way.
 
+## How features get built
+
+New features are researched before they are designed, including an
+explicit CVE search and a comparison against known secure and insecure
+implementations of the same thing. Industry norms carry weight but are
+verified rather than assumed — several widely-repeated ones turned out
+to be stale or simply wrong when checked.
+
+See [docs/security-by-design.md](docs/security-by-design.md).
+
 ## Authentication
 
 - **Local accounts (username/password, Argon2id-hashed, `internal/auth`),
