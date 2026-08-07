@@ -231,6 +231,18 @@ See [docs/security-by-design.md](docs/security-by-design.md).
     --repo tomlawesome/mikroview
   ```
 
+  **Releases are rebuilt, and re-earn what rebuilding costs.** A
+  `v<x.y.z>` binary has to be built from the release, so `main` cannot
+  simply retag preview's digest for it. Retagging existed to guarantee
+  that the exact bytes smoke-tested are the bytes that ship, so the
+  release job runs the container smoke test **against the image it just
+  built, before `latest` moves to it**, and additionally asserts the
+  binary reports the version being released. The guarantee is preserved,
+  just re-earned on the release artefact instead of inherited. The
+  release is tagged last, so a failure anywhere above leaves no tag
+  claiming a release happened. See
+  [docs/decisions/release-versioning.md](docs/decisions/release-versioning.md).
+
   **Self-verification was considered and deliberately rejected** -- an
   app checking its own checksums, against GitHub or anything else, does
   not work. The check lives inside the thing being verified, so tampered
