@@ -12,7 +12,7 @@ import {
   type FirewallEvent,
   type Stats,
 } from './types'
-import { RuleMatcher, type MatchCandidate } from './ruleMatcher'
+import { mergeOutcome, RuleMatcher, type MatchCandidate } from './ruleMatcher'
 
 function stamp(events: FirewallEvent[]): ClientEvent[] {
   const receivedAt = Date.now()
@@ -156,13 +156,9 @@ class AppState {
     // The user kept typing while that was in flight.
     if (pattern !== this.filters.rule || !this.filters.ruleRegex) return
     this.matchedPattern = pattern
-    if (outcome.status !== 'ok') {
-      this.ruleMatches = null
-      this.ruleMatchStatus = outcome.status
-      return
-    }
-    this.ruleMatches = new Set(outcome.ids)
-    this.ruleMatchStatus = 'idle'
+    const merged = mergeOutcome(outcome, null, false)
+    this.ruleMatches = merged.matches
+    this.ruleMatchStatus = merged.status
   }
 
   /**
@@ -174,10 +170,10 @@ class AppState {
     if (!this.ruleMatches || arrived.length === 0) return
     const pattern = this.matchedPattern
     const outcome = await this.matcher.run(pattern, arrived.map(toCandidate))
-    if (pattern !== this.filters.rule || outcome.status !== 'ok') return
-    const next = new Set(this.ruleMatches)
-    for (const id of outcome.ids) next.add(id)
-    this.ruleMatches = next
+    if (pattern !== this.filters.rule) return
+    const merged = mergeOutcome(outcome, this.ruleMatches, true)
+    this.ruleMatches = merged.matches
+    this.ruleMatchStatus = merged.status
   }
 
   /**
