@@ -1,4 +1,5 @@
 <script lang="ts">
+  // SPDX-License-Identifier: AGPL-3.0-only
   // Admin-only: create an additional account. Self-registration only
   // ever creates the first (super-admin) account -- see
   // docs/configuration.md's "Authentication" section -- this is the

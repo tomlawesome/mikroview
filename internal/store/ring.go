@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+
 // Package store holds the in-memory, time-windowed event buffer. There is
 // no database: a fixed-capacity ring buffer is the hard memory ceiling,
 // and the retention window is enforced at query time rather than via a

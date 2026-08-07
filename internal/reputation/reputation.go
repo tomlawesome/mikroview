@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+
 // Package reputation provides on-demand IP reputation/threat-intel
 // lookups for public addresses, combining a free keyless source (Shodan
 // InternetDB) with an optional source that needs an API key (AbuseIPDB).

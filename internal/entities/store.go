@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+
 // Package entities is the shared primitive behind two roadmap items
 // (issue #107): a persisted, admin-manageable record per (entity type,
 // key) with an optional friendly label and open-ended tags. A UI-managed

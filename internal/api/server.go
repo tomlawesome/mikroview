@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+
 // Package api exposes the HTTP/WebSocket surface: historical event
 // queries, device/stat snapshots, and the live-tail WebSocket feed.
 package api

@@ -1,4 +1,5 @@
 <script lang="ts">
+  // SPDX-License-Identifier: AGPL-3.0-only
   import { appState, type View } from '../lib/state.svelte'
   import { flagsState } from '../lib/flags.svelte'
   import { detectorSettingsState } from '../lib/detectorSettings.svelte'
@@ -11,8 +12,11 @@
   import { downloadEventsCsv } from '../lib/export'
   import { viewportState } from '../lib/viewport.svelte'
   import { versionState } from '../lib/version.svelte'
+  import AboutOverlay from './AboutOverlay.svelte'
 
   versionState.ensureLoaded()
+
+  let showAbout = $state(false)
 
   let open = $state(false)
   let rootEl: HTMLDivElement | undefined = $state()
@@ -315,19 +319,22 @@
 
       <div class="divider"></div>
       <!--
-        AGPL section 13 requires that anyone interacting with MikroView
-        over a network is offered the corresponding source. This link is
-        that offer, so it must stay reachable from the running app -- it
-        is a licence obligation, not decoration.
+        Licence obligation, not decoration. AGPL section 5(d) requires an
+        interactive interface to display the Appropriate Legal Notices,
+        and a prominent menu item satisfies that; section 13 requires the
+        source offer to network users. Both live in AboutOverlay. If the
+        menu is restructured this item moves -- it doesn't disappear.
       -->
-      <a
-        class="source-link"
-        href="https://github.com/tomlawesome/mikroview"
-        target="_blank"
-        rel="noopener noreferrer"
+      <button
+        class="option"
+        onclick={() => {
+          showAbout = true
+          open = false
+        }}
+        title="Version, copyright, licence and source code"
       >
-        Source code (AGPL v3)
-      </a>
+        About &amp; licence
+      </button>
       {#if versionState.version}
         <div class="version" title="Build version -- also available via GET /api/healthz or `mikroview -version`">
           {versionState.version}
@@ -337,20 +344,9 @@
   {/if}
 </div>
 
+<AboutOverlay bind:open={showAbout} />
+
 <style>
-  .source-link {
-    display: block;
-    padding: 0.4rem 0.75rem;
-    font-size: 0.75rem;
-    color: var(--fg-muted);
-    text-decoration: none;
-  }
-
-  .source-link:hover {
-    color: var(--fg);
-    text-decoration: underline;
-  }
-
   .nav-menu {
     position: relative;
   }

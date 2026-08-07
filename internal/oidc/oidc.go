@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+
 // Package oidc is mikroview's OIDC/SSO relying-party layer: provider
 // discovery, the Authorization Code + PKCE flow, and ID token
 // verification. Protocol-only and provider-agnostic -- it knows nothing
