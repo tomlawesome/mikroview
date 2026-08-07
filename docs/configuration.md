@@ -172,7 +172,7 @@ only the real server-start path.
   names used throughout this doc and SECURITY.md for the pieces they
   refer to.
 - This does **not** apply to the CLI recovery commands' own output
-  (`-list-users`' table, `-reset-password`'s password prompts and
+  (`-list-users`' table, `-recover-admin-account`'s password prompts and
   success message, etc.) -- those print directly to stdout/stderr for
   scripting/piping, not through this leveled path.
 
@@ -1152,22 +1152,131 @@ next person to load mikroview, or you, still completes the create-
 account form). Requires container/host access, the same trust anchor as
 the recovery commands below.
 
-**Adding more accounts** afterward is admin-only, either via the "Add
-user" control in the toolbar or `POST /api/auth/users`.
+### Adding and removing people
 
-**Account recovery** is a CLI command, deliberately outside the web
-UI/API entirely -- container/host access is the trust anchor, so a
-locked-out admin isn't dependent on the system they're locked out of:
+Open **Menu → Users**. Only the admin sees it.
+
+![The Users panel, showing the admin account and one ordinary user](screenshots/users-panel.png)
+
+Type a username and password, press **Add**, and the account appears in
+the list. Everyone added here can see everything MikroView shows, but
+can't change settings, manage accounts, or create API tokens.
+
+**Delete** removes an account. That person is signed out straight away,
+on any device, and any API tokens they created stop working at the same
+moment.
+
+The admin account has no Delete button. There is exactly one admin, and
+moving that role is a command-line step (see below) — so nobody who gets
+hold of an admin's browser session can take ownership of your
+deployment or lock you out of it.
+
+### Connecting your account to SSO
+
+If your deployment has SSO set up, you can switch your own account over
+to it: **Menu → Connect SSO**. You'll be sent to your identity provider
+to sign in, and when you come back the account uses SSO from then on.
+
+**This deletes your MikroView password, and can't be undone from
+MikroView.** After connecting:
+
+- You sign in through your identity provider only.
+- If you lose access to that provider, MikroView can't recover the
+  account for you — that includes the admin account, so read
+  "Recovering the admin account" above before connecting the admin.
+- You stay signed in on the browser you did it from. Anywhere else
+  you're signed in gets signed out.
+
+There's deliberately no halfway state where both your old password and
+SSO work. Keeping the password alive would leave the weaker way in
+open on an account that was supposed to have moved past it.
+
+If that SSO identity is already connected to someone else's account,
+the attempt is refused and nothing changes.
+
+### Handing admin to someone else
+
+Only from the command line, and only with a recovery key:
 
 ```sh
-mikroview -list-users             # usernames + roles, no password hashes
-mikroview -reset-password admin   # prompts for a new password (no echo), twice to confirm
+mikroview -transfer-admin bob
 ```
 
-A password reset immediately invalidates every existing session for that
-account, including on an already-running server -- you don't need to
-restart mikroview after running `-reset-password` for the new password
-to take effect.
+It tells you who currently holds admin, asks for a recovery key, makes
+the swap, and then shows you a replacement set of keys. The previous
+admin becomes an ordinary user — their account isn't deleted.
+
+If the person you're handing it to signs in through SSO, you're warned
+before the key is asked for: MikroView won't be able to recover that
+account itself if they ever lose access, because it holds no password
+for them.
+
+### Recovery keys
+
+Recovery keys are the second thing — besides access to the machine
+itself — needed to recover or transfer the admin account. They're
+created once, shown once, and stored hashed:
+
+```sh
+mikroview -generate-recovery-keys
+```
+
+You get three. Any one of them works, and using one replaces all three,
+so treat them as one key with two spares — they're there in case a
+printout smudges or a paste goes wrong, not as three separate uses.
+Keep them somewhere safe, such as a password manager.
+
+MikroView refuses to print them if the output isn't going to a terminal
+(a pipe, a file, container logs), because that would write them
+somewhere more exposed than the file they protect. If you genuinely are
+scripting the setup, pass `--i-will-capture-this`.
+
+You can't regenerate them while a set exists — that would let anyone
+with access to the machine mint themselves a fresh key and walk straight
+through the gate. They rotate automatically after each use instead.
+
+### Recovering the admin account
+
+If you can't sign in as the admin, you get back in from the command
+line, not from the web interface -- so being locked out of mikroview
+doesn't stop you fixing it. You need two things: access to the machine
+(or container) mikroview runs on, and one of your recovery keys.
+
+```sh
+mikroview -list-users              # usernames + roles, no password hashes
+mikroview -recover-admin-account   # asks for a recovery key, then a new password
+```
+
+It asks for the recovery key first. If the key is wrong, nothing
+changes and no key is used up. If it's right, you're asked for a new
+password twice (it isn't shown as you type, and it's never passed as a
+command-line argument, so it stays out of your shell history).
+
+Once the password is set, you're shown a **new set of recovery keys**.
+The old ones stop working as soon as you confirm you've saved the new
+ones -- so save them before typing `saved`. If anything goes wrong at
+that point, your original keys stay valid.
+
+Changing the password signs out that account everywhere immediately,
+including on an already-running server. You don't need to restart
+mikroview.
+
+Two things this command deliberately won't do:
+
+- **It only recovers the admin account.** Other people's accounts are
+  managed by the admin from the web interface.
+- **It can't help if the admin signs in through SSO only.** There's no
+  password for mikroview to reset -- reset it at your identity
+  provider, or use `-transfer-admin` to move the admin role to an
+  account that does have a mikroview password.
+
+If you have no recovery keys yet (your deployment predates them), run
+`mikroview -generate-recovery-keys` once, on a terminal, and store what
+it prints.
+
+> `-reset-password` was the earlier version of this command. It's gone:
+> it could reset *any* account with machine access alone and no
+> recovery key.
 
 **A corrupt or unreadable accounts file refuses to boot, rather than
 silently reopening.** If `auth.storePath` points at a file that exists
@@ -1612,10 +1721,11 @@ instead of a commit SHA.
 rule/host names, and auth config can only be set via YAML/env, not
 flags.
 
-`-healthcheck`, `-list-users`, `-reset-password <username>`,
+`-healthcheck`, `-list-users`, `-recover-admin-account`,
+`-transfer-admin <username>`, `-generate-recovery-keys`,
 `-enable-auth-setup` are standalone modes -- each does its one job and
 exits, rather than starting the server. See
-[Authentication](#authentication) for the latter three.
+[Authentication](#authentication) for all but the first.
 
 ## API reference
 

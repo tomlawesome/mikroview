@@ -162,7 +162,7 @@ See [docs/security-by-design.md](docs/security-by-design.md).
   delete it (the boot-failure log message names the exact path) and
   restart to consciously re-arm the first-run setup screen -- no
   dedicated CLI mode for this, since an operator who can already run
-  `mikroview -reset-password`/`-enable-auth-setup` can already `mv` or
+  `mikroview -recover-admin-account`/`-enable-auth-setup` can already `mv` or
   `rm` a file on the same host.
 - **Sessions are opaque, server-side, and in-memory** (not JWTs) -- easy
   to revoke, no signing-key management, but lost on a server restart
@@ -184,15 +184,51 @@ See [docs/security-by-design.md](docs/security-by-design.md).
   checking is what actually stops a malicious page from opening a live
   connection using a signed-in visitor's session.
 - **Account recovery is a CLI command, deliberately outside the web
-  UI/API entirely**: `mikroview -reset-password <username>` (prompts for
-  a new password, no echo -- never a CLI argument or env var, so it
-  never touches shell history, process args, or `docker inspect`
+  UI/API entirely, and requires a recovery key on top of host access**:
+  `mikroview -recover-admin-account` (prompts for a recovery key, then
+  for a new password with no echo -- never a CLI argument or env var, so
+  it never touches shell history, process args, or `docker inspect`
   output), and `mikroview -list-users` to see existing accounts.
-  Container/host access (the ability to run these at all) is the trust
-  anchor, so a locked-out admin isn't dependent on the very system
-  they're locked out of. A password reset immediately invalidates every
-  existing session for that account, including on an already-running
-  server.
+  Keeping it off the web UI/API means a locked-out admin isn't dependent
+  on the very system they're locked out of. A password reset immediately
+  invalidates every existing session for that account, including on an
+  already-running server.
+
+  It scopes to **the admin account only** and **refuses an SSO-only
+  admin**. The command it replaced (`-reset-password <username>`) could
+  rewrite any account's password from host access alone, which made
+  every user account a route to a working login, and gave no protection
+  at all against a lower-privileged local account or container exec that
+  could run the binary. Recovery keys are the second factor -- see
+  "Recovery keys" below.
+- **Linking an account to SSO is a one-way, destructive conversion.**
+  `POST /api/auth/oidc/link` attaches an OIDC identity to the *calling
+  session's own* account and, in the same store operation, replaces its
+  password with a fresh unmatchable hash and clears
+  `HasLocalPassword`. There is deliberately no state where a local
+  password and a linked identity both work — that would keep the weaker
+  local-password surface alive on an account that has supposedly moved
+  past it. The invariant lives inside `auth.Store.LinkOIDCIdentity`, not
+  at the API layer, so a future caller cannot forget it.
+
+  It is **POST, not a GET redirect**, specifically because it is
+  destructive: a GET-initiated flow is triggerable cross-site, and with
+  an identity provider that silently re-authenticates, a victim's
+  password could be destroyed by a link they never requested. POST puts
+  it behind the CSRF header. The target account comes from the session
+  and is sealed into the flow state — never from the request — and the
+  session is re-checked against that sealed value at the callback, so a
+  sign-out-and-in mid-flow can't attach an identity to the wrong
+  account.
+- **Admin is a single, transferable role, and transfer is CLI-only**
+  (`mikroview -transfer-admin <username>`, recovery-key gated). No
+  authenticated session can grant or move admin. The reasoning is that
+  identity-provider credentials are usually distinct from host access:
+  if an admin's IdP account is compromised, the attacker can sign in,
+  but cannot make themselves the durable owner of the deployment or
+  demote the real admin out of it. A second admin tier was considered
+  and rejected -- for the amount of administration mikroview actually
+  has, it adds attack surface without adding capability.
 - **API tokens (`internal/auth.Token`, issue #101) are read-only and
   scoped by construction, not by convention.** A valid
   `Authorization: Bearer <token>` request is routed to a completely

@@ -214,6 +214,120 @@ class AppState {
   }
 }
 
+// MAX_RULE_PATTERN_LENGTH bounds compile cost. Generous -- a real rule
+// filter is a handful of characters -- but it stops a megabyte-long
+// pattern arriving in a URL.
+const MAX_RULE_PATTERN_LENGTH = 200
+
+// isSafeRulePattern screens a user-supplied rule regex before it is
+// compiled and run in the browser.
+//
+// The server side of this filter is safe already: Go's regexp is RE2,
+// which has no backtracking and is linear in the input. The browser is
+// not -- JavaScript's RegExp is a backtracking engine, and applyFilters
+// runs the pattern against up to 5,000 buffered events.
+//
+// This matters because filters are seeded from the URL at startup (see
+// App.svelte's filtersFromSearchParams), so the pattern is not
+// necessarily one the operator typed. A link like
+// `?rule=(a%2B)%2B%24&ruleRegex=true` sent to someone signed in hangs
+// their tab: a single test() of `(a+)+$` against a 30-character
+// non-matching string was measured not to finish in 60 seconds.
+//
+// The check is a small structural scan rather than a regex applied to
+// the pattern, because the dangerous shape is *nesting* and a character
+// class can't see past an inner `)` -- `((ab)+){2,}` slips straight
+// through the pattern-matching version of this.
+//
+// It rejects a quantified group whose body itself contains a quantifier
+// or an alternation: (a+)+, (a*)*, ((ab)+){2,}, (a|a)*, (a?){20}. That
+// nesting is what lets a backtracking engine explore exponentially many
+// ways to split the input, and it is the shape behind essentially every
+// practical ReDoS payload.
+//
+// What this is not: a proof that the accepted patterns are fast. That
+// needs a non-backtracking engine or a terminable Worker, both heavier
+// than this risk justifies -- a recoverable hang of the recipient's own
+// tab, no data disclosure, no effect on any other user. A rejected
+// pattern behaves exactly like an invalid one: the rule filter is
+// ignored rather than raising an error.
+export function isSafeRulePattern(pattern: string): boolean {
+  if (pattern.length > MAX_RULE_PATTERN_LENGTH) return false
+
+  type Frame = { quant: boolean; alt: boolean }
+  const stack: Frame[] = []
+  let top: Frame = { quant: false, alt: false }
+
+  // Matches a complete counted quantifier -- {2}, {2,}, {2,5}, {,5}.
+  // A lone '{' that isn't one of those is a literal brace.
+  const counted = /^\{\d*,\d*\}$|^\{\d+\}$/
+
+  for (let i = 0; i < pattern.length; i++) {
+    const c = pattern[i]
+
+    if (c === '\\') {
+      i++ // escaped: the next character is literal, never structural
+      continue
+    }
+    if (c === '[') {
+      // Inside a character class, ( ) | * + are all literal.
+      while (i < pattern.length && pattern[i] !== ']') {
+        if (pattern[i] === '\\') i++
+        i++
+      }
+      continue
+    }
+    if (c === '(') {
+      stack.push(top)
+      top = { quant: false, alt: false }
+      // (?: (?= (?! (?<= (?<! (?<name> -- here '?' marks the group type
+      // and is not a quantifier.
+      if (pattern[i + 1] === '?') {
+        i++
+        if (pattern[i + 1] === '<') i++
+        i++
+      }
+      continue
+    }
+    if (c === ')') {
+      const body = top
+      top = stack.pop() ?? { quant: false, alt: false }
+
+      let quantified = false
+      const next = pattern[i + 1]
+      if (next === '*' || next === '+' || next === '?') {
+        quantified = true
+      } else if (next === '{') {
+        const close = pattern.indexOf('}', i + 1)
+        if (close > i && counted.test(pattern.slice(i + 1, close + 1))) quantified = true
+      }
+
+      if (quantified && (body.quant || body.alt)) return false
+      // A quantified group is itself a quantifier as far as any
+      // enclosing group is concerned -- that's what catches ((ab)+){2,}.
+      if (quantified || body.quant) top.quant = true
+      continue
+    }
+    if (c === '*' || c === '+' || c === '?') {
+      top.quant = true
+      continue
+    }
+    if (c === '{') {
+      const close = pattern.indexOf('}', i)
+      if (close > i && counted.test(pattern.slice(i, close + 1))) {
+        top.quant = true
+        i = close
+      }
+      continue
+    }
+    if (c === '|') {
+      top.alt = true
+      continue
+    }
+  }
+  return true
+}
+
 export function applyFilters(events: FirewallEvent[], f: Filters): FirewallEvent[] {
   // Compiled once per applyFilters call, not once per event -- this
   // used to construct a new RegExp inside the per-event filter
@@ -221,7 +335,7 @@ export function applyFilters(events: FirewallEvent[], f: Filters): FirewallEvent
   // to 5000 events on every call (as often as every ~200ms under
   // load, see this file's batching comment above).
   let ruleRe: RegExp | null = null
-  if (f.rule && f.ruleRegex) {
+  if (f.rule && f.ruleRegex && isSafeRulePattern(f.rule)) {
     try {
       ruleRe = new RegExp(f.rule, 'i')
     } catch {

@@ -52,7 +52,7 @@ func (s *Server) handleTokensCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	raw, tok, err := s.Tokens.Create(req.Name, time.Now())
+	raw, tok, err := s.Tokens.Create(req.Name, userFromContext(r), time.Now())
 	if err != nil {
 		status := http.StatusInternalServerError
 		if err == auth.ErrTokenNotPersisted {

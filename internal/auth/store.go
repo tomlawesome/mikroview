@@ -53,7 +53,7 @@ type User struct {
 	LastLogin    time.Time `json:"lastLogin,omitzero"`
 	// PasswordChangedAt lets a session be invalidated by a password
 	// reset that happens in a *different process* -- the CLI recovery
-	// tool (`-reset-password`) has no access to the running server's
+	// tool (`-recover-admin-account`) has no access to the running server's
 	// in-memory SessionStore (see auth.SessionStore.RevokeAllForUser,
 	// which only helps a same-process caller, e.g. a future in-app
 	// change-password flow). Comparing a session's IssuedAt against this
@@ -69,6 +69,63 @@ type User struct {
 	// case both login paths reach the same account.
 	OIDCIssuer  string `json:"oidcIssuer,omitempty"`
 	OIDCSubject string `json:"oidcSubject,omitempty"`
+	// HasLocalPassword distinguishes a real, user-chosen password from
+	// the random unmatchable hash FindOrCreateOIDCUser issues to an
+	// SSO-provisioned account. The hashes themselves cannot be told
+	// apart -- both are valid Argon2id strings -- so this has to be
+	// recorded rather than inferred from the credential.
+	//
+	// It matters because letting an admin set a *real* password on an
+	// SSO-only account would quietly reopen the local-attack surface
+	// that provisioning it via OIDC deliberately closed.
+	//
+	// A pointer so that "field absent" (an account written before this
+	// existed) is distinguishable from "explicitly false". Every
+	// deployed accounts.json predates it, and treating absent as false
+	// would mark every local admin SSO-only and lock them out of their
+	// own recovery. See migrateHasLocalPassword.
+	HasLocalPassword *bool `json:"hasLocalPassword,omitempty"`
+	// RoleChangedAt records the last admin transfer touching this
+	// account, on both sides of it. For the audit trail and the UI only:
+	// authorization always reads Role, never this.
+	RoleChangedAt time.Time `json:"roleChangedAt,omitzero"`
+}
+
+// LocalPassword reports whether this account has a real, user-chosen
+// password that may be reset.
+//
+// Always use this rather than reading HasLocalPassword directly: it
+// resolves the pre-migration nil case, so a caller cannot accidentally
+// treat an old local account as SSO-only.
+func (u *User) LocalPassword() bool {
+	if u.HasLocalPassword != nil {
+		return *u.HasLocalPassword
+	}
+	return u.OIDCIssuer == ""
+}
+
+// noLocalPassword is the shared false referenced by accounts that have
+// no resettable password. Package-level because a *bool field needs an
+// addressable value and repeating a local `f := false` at each site
+// invites one of them being set the wrong way.
+var noLocalPassword = false
+
+// migrateHasLocalPassword fills in the field for accounts written before
+// it existed, inferring from whether the account carries a linked SSO
+// identity: no issuer means it was created by Register/CreateUser and
+// therefore has a real password.
+//
+// Safe today because LinkOIDCIdentity has no callers, so no account can
+// yet be in the "local password *and* linked identity" state that this
+// inference would get wrong. Once linking ships (#133 Part 4) it wipes
+// the local password as part of the same operation, which keeps the
+// inference correct for anything written after it.
+func migrateHasLocalPassword(u *User) {
+	if u.HasLocalPassword != nil {
+		return
+	}
+	v := u.OIDCIssuer == ""
+	u.HasLocalPassword = &v
 }
 
 // oidcKey is (issuer, subject) as a map key -- a struct rather than a
@@ -116,6 +173,20 @@ var (
 	// re-impose auth for everyone, exactly what EnableSetup's doc
 	// comment says this design prevents.
 	ErrAuthDisabled = errors.New("auth: this deployment has disabled authentication -- run -enable-auth-setup to allow creating an account again")
+	// ErrSingleAdmin is returned by CreateUser for a RoleAdmin request.
+	// mikroview holds exactly one admin; handover is TransferAdmin, not
+	// creating a second one.
+	ErrSingleAdmin = errors.New("auth: mikroview has a single admin account -- transfer the role instead of creating another admin")
+	// ErrCannotDeleteAdmin is returned by DeleteUser for the admin
+	// account. Transfer the role first if the intent is to remove the
+	// person currently holding it.
+	ErrCannotDeleteAdmin = errors.New("auth: the admin account cannot be deleted -- transfer the admin role first")
+	// ErrTransferToSelf is returned by TransferAdmin when the target is
+	// already the admin.
+	ErrTransferToSelf = errors.New("auth: that account is already the admin")
+	// ErrNoAdmin is returned by TransferAdmin when no account holds the
+	// role -- nothing to transfer.
+	ErrNoAdmin = errors.New("auth: this deployment has no admin account")
 	// ErrOIDCIdentityTaken is returned by LinkOIDCIdentity when the
 	// (issuer, subject) pair is already linked to a *different* user --
 	// an OIDC identity can back at most one local account.
@@ -134,7 +205,7 @@ var (
 
 // minPasswordLength is enforced at every path that sets a user-chosen
 // password (createLocked, SetPassword) -- self-registration, admin-
-// created accounts, and the CLI reset-password tool all funnel through
+// created accounts, and the CLI admin-recovery tool all funnel through
 // one of those two, so there's exactly one place this needs to live.
 const minPasswordLength = 8
 
@@ -187,7 +258,7 @@ type Store struct {
 	disabled bool
 	// mtime tracks the store file's modification time as of the last
 	// load, so a running server can pick up a change made by a separate
-	// process -- namely the CLI recovery tools (`-reset-password`,
+	// process -- namely the CLI recovery tools (`-recover-admin-account`,
 	// `-enable-auth-setup`), which each open their own independent
 	// Store and write to the same file. Without this, a password reset
 	// (or re-arming the setup flow) would silently have no effect on an
@@ -233,6 +304,7 @@ func Open(path string) (*Store, error) {
 		if u == nil {
 			continue
 		}
+		migrateHasLocalPassword(u)
 		s.byID[u.ID] = u
 		s.byName[strings.ToLower(u.Username)] = u.ID
 		if u.OIDCIssuer != "" {
@@ -289,6 +361,7 @@ func (s *Store) reloadIfStale() {
 		if u == nil { // see Open's identical guard for why this is needed
 			continue
 		}
+		migrateHasLocalPassword(u) // second load path -- see Open's call
 		byID[u.ID] = u
 		byName[strings.ToLower(u.Username)] = u.ID
 		if u.OIDCIssuer != "" {
@@ -359,7 +432,7 @@ func (s *Store) Disable() error {
 // browser could reach -- only internal/main.go's `-enable-auth-setup`
 // CLI mode calls this, so a UI visitor can never re-impose auth for
 // everyone else without host/container access (the same trust anchor
-// `-reset-password`/`-list-users` already rely on).
+// `-recover-admin-account`/`-list-users` already rely on).
 func (s *Store) EnableSetup() error {
 	if !s.Persisted() {
 		return ErrNotPersisted
@@ -456,7 +529,120 @@ func (s *Store) CreateUser(username, password string, role Role, now time.Time) 
 	if !s.Persisted() {
 		return nil, ErrNotPersisted
 	}
+	// mikroview holds exactly one admin at a time. Refused in the store
+	// rather than only at the API layer so the CLI and any future caller
+	// inherit the invariant instead of each remembering it.
+	if role == RoleAdmin {
+		return nil, ErrSingleAdmin
+	}
 	return s.createLocked(username, password, role, now, nil)
+}
+
+// DeleteUser removes an account by ID and returns it, so the caller can
+// clean up what belonged to it (sessions, API tokens).
+//
+// It refuses to delete the admin. mikroview holds exactly one admin, and
+// a deployment with none has no way to add accounts, manage tokens, or
+// reach any admin-gated screen -- recoverable only from the CLI, which
+// is a worse position than whatever prompted the deletion. Enforced here
+// rather than only at the API layer so every caller inherits it: with a
+// single admin, "don't delete the admin" and "don't delete yourself" are
+// the same rule, and this is the one place that stays true if that ever
+// changes.
+func (s *Store) DeleteUser(id string) (*User, error) {
+	if !s.Persisted() {
+		return nil, ErrNotPersisted
+	}
+	s.reloadIfStale()
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	u, ok := s.byID[id]
+	if !ok {
+		return nil, ErrUserNotFound
+	}
+	if u.Role == RoleAdmin {
+		return nil, ErrCannotDeleteAdmin
+	}
+
+	delete(s.byID, id)
+	delete(s.byName, strings.ToLower(u.Username))
+	if u.OIDCIssuer != "" {
+		delete(s.oidcIndex, oidcKey{issuer: u.OIDCIssuer, subject: u.OIDCSubject})
+	}
+	s.persistLocked()
+
+	cp := *u
+	cp.PasswordHash = ""
+	return &cp, nil
+}
+
+// TransferAdmin moves the admin role to toUsername, atomically.
+//
+// This is the only way to change who administers mikroview. There is
+// deliberately no separate promote or demote: either alone would leave
+// the deployment with two admins or none, and the rest of the system
+// assumes neither can happen.
+//
+// It is reachable only from the recovery-key-gated CLI, never from the
+// API. If an authenticated admin could transfer the role, then anyone
+// who reached that session -- a compromised IdP account, a stolen
+// cookie -- could grant themselves durable ownership and demote the real
+// admin out of their own deployment. Requiring host access plus a
+// recovery key means an identity-provider compromise buys the ability to
+// log in, and nothing more.
+//
+// The whole operation runs under one write lock with the invariant
+// re-checked inside it; doing it as two calls, or checking the current
+// admin beforehand, is the check-then-act race behind the Appsmith
+// duplicate-admin and open-webui zero-admin bugs.
+func (s *Store) TransferAdmin(toUsername string, now time.Time) (from, to *User, err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	var current *User
+	for _, u := range s.byID {
+		if u.Role == RoleAdmin {
+			current = u
+			break
+		}
+	}
+	if current == nil {
+		return nil, nil, ErrNoAdmin
+	}
+
+	targetID, ok := s.byName[strings.ToLower(toUsername)]
+	if !ok {
+		return nil, nil, ErrUserNotFound
+	}
+	target := s.byID[targetID]
+	if target.ID == current.ID {
+		return nil, nil, ErrTransferToSelf
+	}
+
+	current.Role = RoleUser
+	current.RoleChangedAt = now
+	target.Role = RoleAdmin
+	target.RoleChangedAt = now
+	s.persistLocked()
+
+	fromCopy, toCopy := *current, *target
+	return &fromCopy, &toCopy, nil
+}
+
+// Admin returns the single admin account, or nil if there isn't one yet.
+func (s *Store) Admin() *User {
+	s.reloadIfStale()
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	for _, u := range s.byID {
+		if u.Role == RoleAdmin {
+			cp := *u
+			return &cp
+		}
+	}
+	return nil
 }
 
 // createLocked inserts a new account. guard, when non-nil, is evaluated
@@ -472,6 +658,14 @@ func (s *Store) CreateUser(username, password string, role Role, now time.Time) 
 // is one wasted hash on the losing side of a race, which is the right
 // trade.
 func (s *Store) createLocked(username, password string, role Role, now time.Time, guard func(*Store) error) (*User, error) {
+	// Validated here rather than in Register/CreateUser separately: this
+	// is the single funnel every locally-created account passes through,
+	// so nothing can be added later that skips it. (OIDC provisioning
+	// does not come through here -- see sanitiseUsernameHint for why it
+	// falls back instead of refusing.)
+	if err := ValidateUsername(username); err != nil {
+		return nil, err
+	}
 	if len(password) < minPasswordLength {
 		return nil, ErrPasswordTooShort
 	}
@@ -494,12 +688,15 @@ func (s *Store) createLocked(username, password string, role Role, now time.Time
 		return nil, ErrUsernameTaken
 	}
 
+	localPassword := true
 	u := &User{
 		ID:           newID(),
 		Username:     username,
 		PasswordHash: hash,
 		Role:         role,
 		CreatedAt:    now,
+		// A real password the user chose, so it may later be reset.
+		HasLocalPassword: &localPassword,
 	}
 	s.byID[u.ID] = u
 	s.byName[key] = u.ID
@@ -577,14 +774,7 @@ func (s *Store) FindOrCreateOIDCUser(issuer, subject, usernameHint string, now t
 		}
 	}
 
-	// A real, freshly generated, unmatchable Argon2id hash -- not "" --
-	// so a local-login attempt against this username takes the same
-	// time as a genuine wrong-password attempt. VerifyPassword's
-	// malformed-hash guard returns false before ever running Argon2id
-	// for an empty/malformed hash, which would otherwise let an
-	// attacker distinguish "this username is SSO-only" from the
-	// response time alone.
-	unmatchable, err := HashPassword(newID())
+	unmatchable, err := unmatchablePasswordHash()
 	if err != nil {
 		return nil, false, err
 	}
@@ -603,6 +793,11 @@ func (s *Store) FindOrCreateOIDCUser(issuer, subject, usernameHint string, now t
 		LastLogin:    now,
 		OIDCIssuer:   issuer,
 		OIDCSubject:  subject,
+		// Explicitly false: the hash above is random and unmatchable, so
+		// there is no password here to reset. Recorded rather than
+		// inferred, because the hash itself is indistinguishable from a
+		// real one.
+		HasLocalPassword: &noLocalPassword,
 	}
 	s.byID[u.ID] = u
 	s.byName[strings.ToLower(u.Username)] = u.ID
@@ -618,7 +813,11 @@ func (s *Store) FindOrCreateOIDCUser(issuer, subject, usernameHint string, now t
 // (issuer, subject) -- see FindOrCreateOIDCUser's doc comment. Callers
 // must hold s.mu.
 func (s *Store) uniqueUsernameLocked(hint, issuer, subject string) string {
-	hint = strings.TrimSpace(hint)
+	// The hint is whatever the identity provider put in
+	// preferred_username or email -- text mikroview does not control.
+	// An unusable one is dropped, not rejected, so the person still gets
+	// a stable account under the generated name below.
+	hint = sanitiseUsernameHint(hint)
 	if hint != "" {
 		if _, taken := s.byName[strings.ToLower(hint)]; !taken {
 			return hint
@@ -641,16 +840,56 @@ func (s *Store) uniqueUsernameLocked(hint, issuer, subject string) string {
 	return "oidc-" + newID() // practically unreachable
 }
 
-// LinkOIDCIdentity attaches (issuer, subject) to an existing user by
-// ID -- the low-level primitive a future "connect SSO to my account"
-// endpoint would use (an authenticated local user proving they also
-// control an OIDC identity), not itself exposed via any API in issue
-// #43. Idempotent for the same user; fails with ErrOIDCIdentityTaken if
-// that identity is already linked to a *different* user.
+// unmatchablePasswordHash produces a real, freshly generated Argon2id
+// hash of a random value -- the credential given to an account that has
+// no local password.
+//
+// Not "": a local-login attempt against such an account has to take the
+// same time as a genuine wrong-password attempt. VerifyPassword's
+// malformed-hash guard returns false *before* running Argon2id for an
+// empty or malformed hash, so storing "" would let an attacker tell
+// "this username is SSO-only" from response time alone -- and knowing
+// which accounts can't be attacked locally tells them which ones can.
+//
+// Shared by FindOrCreateOIDCUser (provisioned SSO-only from the start)
+// and LinkOIDCIdentity (converted to SSO-only), so the two can't drift.
+func unmatchablePasswordHash() (string, error) {
+	return HashPassword(newID())
+}
+
+// LinkOIDCIdentity attaches (issuer, subject) to an existing account,
+// converting it to SSO-only in the same operation.
+//
+// **Linking is destructive and one-way.** The account's local password
+// is replaced with a fresh unmatchable hash and HasLocalPassword is set
+// to false, exactly as if the account had been OIDC-provisioned from
+// the start. There is deliberately no state where a local password and
+// a linked identity both work: keeping the old password alive would
+// preserve the weaker local-password attack surface on an account
+// that has supposedly moved past it, which defeats the point of
+// linking.
+//
+// That conversion lives here, inside the store, rather than in the API
+// handler that calls it. A convention at the call site is one forgetful
+// future caller away from a dual-mode account existing; an invariant
+// here cannot be bypassed by adding a second caller.
+//
+// Idempotent for the same user. Fails with ErrOIDCIdentityTaken if that
+// identity is already linked to a *different* account -- which is what
+// stops someone attaching their own IdP identity to a colleague's
+// account, and, on the admin account, stops it being quietly taken over.
 func (s *Store) LinkOIDCIdentity(userID, issuer, subject string, now time.Time) error {
 	if !s.Persisted() {
 		return ErrNotPersisted
 	}
+	// Generated before the lock: HashPassword is ~100ms by design, and
+	// holding the write lock across it would serialize every reader --
+	// the same reasoning createLocked documents.
+	unmatchable, err := unmatchablePasswordHash()
+	if err != nil {
+		return err
+	}
+
 	s.reloadIfStale()
 
 	s.mu.Lock()
@@ -668,6 +907,13 @@ func (s *Store) LinkOIDCIdentity(userID, issuer, subject string, now time.Time) 
 
 	u.OIDCIssuer = issuer
 	u.OIDCSubject = subject
+	u.PasswordHash = unmatchable
+	u.HasLocalPassword = &noLocalPassword
+	// Invalidates every session issued before this point, including in
+	// another process -- the account's credentials just changed
+	// fundamentally, so anything holding a session from before that
+	// should have to come back through the IdP.
+	u.PasswordChangedAt = now
 	s.oidcIndex[key] = userID
 	s.persistLocked()
 	return nil
@@ -742,7 +988,7 @@ func (s *Store) ByUsername(username string) (*User, bool) {
 }
 
 // SetPassword replaces username's password hash -- the CLI recovery
-// path (`mikroview -reset-password`), which needs no current password
+// path (`mikroview -recover-admin-account`), which needs no current password
 // since container/host access is the trust anchor for that tool. Also
 // records PasswordChangedAt, which is what actually invalidates any
 // session issued before this reset (see User.PasswordChangedAt) -- the
@@ -765,6 +1011,12 @@ func (s *Store) SetPassword(username, newPassword string, now time.Time) error {
 	}
 	u.PasswordHash = hash
 	u.PasswordChangedAt = now
+	// An account that has a password has a local password, by
+	// definition. Stated explicitly rather than left to be derived from
+	// OIDCIssuer, so a linked account (OIDC *and* a local password)
+	// isn't misread as SSO-only by the recovery tooling.
+	yes := true
+	u.HasLocalPassword = &yes
 	s.persistLocked()
 	return nil
 }
