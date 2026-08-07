@@ -11,6 +11,16 @@ upgrading.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Duplicate events in the client buffer** (#183). The initial
+  `GET /api/events` fetch and the WebSocket stream overlap, so an event
+  arriving in both was appended twice. `LiveTable`'s keyed `{#each}` then
+  had duplicate keys — Svelte logged `each_key_duplicate` and keyed-each
+  behaviour is undefined from there, so the row rendered twice and any
+  count taken off the buffer was inflated. All three insert paths (the
+  initial fetch, the live flush, and the pause-resume splice) now dedupe.
+
 ### Added
 
 - **API tokens now have a kind, and ingest tokens are scoped to one

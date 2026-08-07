@@ -31,6 +31,16 @@ const EXPENSIVE = 'a'.repeat(45) + 'b'   // does not finish in 20s, see (2)/(3)
 feedSyslog(200, CHEAP)
 const { page, consoleErrors } = await session({ waitForEvents: 100 })
 
+// #183: the initial fetch and the WebSocket stream overlap, so an event
+// arriving in both used to land in the buffer twice and give LiveTable's
+// keyed each duplicate keys. This scenario is where that was found --
+// asserted here rather than only in live-smoke because this one keeps a
+// filter active while the stream runs, which is when it showed up.
+check(
+  !consoleErrors.some((e) => e.includes('each_key_duplicate')),
+  `no duplicate keys in the event buffer (${consoleErrors.filter((e) => e.includes('each_key_duplicate')).length} seen)`,
+)
+
 // Regex mode on, with a pattern that is cheap against what is buffered.
 await page.click('button.regex-toggle')
 await page.fill('input.rule', '(a+)+$')
