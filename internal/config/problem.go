@@ -2,7 +2,10 @@
 
 package config
 
-import "fmt"
+import (
+	"fmt"
+	"strings"
+)
 
 // Severity separates problems that stop mikroview starting from ones it
 // starts despite.
@@ -60,10 +63,25 @@ type Problem struct {
 	Applied string `json:"applied,omitempty"`
 	// Remediation is what to do about it, in plain language.
 	Remediation string `json:"remediation,omitempty"`
+	// Example is a config snippet showing the corrected setting, ready
+	// to paste. Prose telling someone to "set a positive duration"
+	// still leaves them guessing at the YAML shape -- which key, what
+	// nesting, quoted or not -- and that guess is the part that goes
+	// wrong at 2am. Kept in one table (examplesByCode) rather than at
+	// each call site so the snippets and the docs stay in step.
+	Example string `json:"example,omitempty"`
+	// Docs is a deep link to this code's entry in the configuration
+	// reference.
+	Docs string `json:"docs,omitempty"`
 }
 
+// DocsURL is the configuration reference. Each problem code has an
+// anchor there, so a message can point at the exact entry rather than at
+// a two-thousand-line page.
+const DocsURL = "https://github.com/tomlawesome/mikroview/blob/main/docs/configuration.md"
+
 func (p Problem) String() string {
-	s := fmt.Sprintf("%s: %s: %s", p.Severity, p.Key, p.Message)
+	s := fmt.Sprintf("%s  %s  %s: %s", p.Severity, p.Code, p.Key, p.Message)
 	if p.Applied != "" {
 		s += " (using " + p.Applied + " instead)"
 	}
@@ -72,6 +90,52 @@ func (p Problem) String() string {
 	}
 	return s
 }
+
+// Report renders problems the way someone who has just been stopped by
+// one needs to read them: the code they can search for, the key that is
+// wrong, what is wrong with it, what was substituted if anything, and
+// -- on its own line -- what to do about it.
+//
+// Fatals and warnings share this deliberately. A fatal used to reach the
+// operator only through Err(), as a single line with the remediation
+// tacked on after a "--" at the end of a long sentence. The advice was
+// present and was the easiest part to miss, which is the wrong way round
+// for the one message that stops the server from starting. Warnings
+// already got this treatment from -validate-config; fatals got it
+// nowhere.
+func Report(problems []Problem) string {
+	var b strings.Builder
+	for _, p := range problems {
+		fmt.Fprintf(&b, "%s  %s  %s: %s\n", p.Severity, p.Code, p.Key, p.Message)
+		if p.Applied != "" {
+			fmt.Fprintf(&b, "         using %s instead\n", p.Applied)
+		}
+		if p.Remediation != "" {
+			fmt.Fprintf(&b, "         %s\n", p.Remediation)
+		}
+		if p.Example != "" {
+			b.WriteString("\n")
+			for _, line := range strings.Split(strings.TrimRight(p.Example, "\n"), "\n") {
+				fmt.Fprintf(&b, "           %s\n", line)
+			}
+			b.WriteString("\n")
+		}
+		if p.Docs != "" {
+			fmt.Fprintf(&b, "         %s\n", p.Docs)
+		}
+	}
+	return b.String()
+}
+
+// CheckHint points at the offline checker. Worth saying at the moment of
+// failure rather than only in the docs, because a fatal config means the
+// container exits -- so `docker exec` into it, the obvious next move,
+// answers "container is not running". The checker has to be reached with
+// `docker run` instead, and that is not guessable.
+const CheckHint = `check a configuration without starting the server:
+  mikroview -validate-config
+  docker run --rm -e MIKROVIEW_CONFIG=/etc/mikroview/config.yaml \
+    -v /path/to/config.yaml:/etc/mikroview/config.yaml:ro <image> -validate-config`
 
 // Result is the outcome of validating a configuration.
 type Result struct {
