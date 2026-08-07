@@ -155,7 +155,7 @@ own digest at build time. If the persisted version marker
 line reads `upgraded from <old> to <new>` instead -- confirming a
 `docker compose pull`/image update actually took effect, versus a
 routine restart on the same build. This boot sequence doesn't apply to
-the CLI recovery commands (`-healthcheck`, `-list-users`, etc.) --
+the CLI recovery commands (`-healthcheck`, `-transfer-admin`, etc.) --
 only the real server-start path.
 
 - **`level`** — one of `debug`/`info`/`warn`/`error` (case-insensitive).
@@ -172,7 +172,7 @@ only the real server-start path.
   names used throughout this doc and SECURITY.md for the pieces they
   refer to.
 - This does **not** apply to the CLI recovery commands' own output
-  (`-list-users`' table, `-recover-admin-account`'s password prompts and
+  (`-transfer-admin`'s account list, `-recover-admin-account`'s password prompts and
   success message, etc.) -- those print directly to stdout/stderr for
   scripting/piping, not through this leveled path.
 
@@ -1190,11 +1190,36 @@ the attempt is refused and nothing changes.
 Only from the command line, and only with a recovery key:
 
 ```sh
-mikroview -transfer-admin bob
+mikroview -transfer-admin
 ```
 
-It tells you who currently holds admin, asks for a recovery key, makes
-the swap, and then shows you a replacement set of keys. The previous
+It tells you who currently holds admin and asks for a recovery key.
+Then it lists the other accounts, numbered, and you pick one:
+
+```
+Admin is currently "alice".
+Recovery key: ····
+
+Transfer admin to:
+
+   1) bob
+   2) carol   (signs in via SSO -- mikroview cannot recover this account)
+
+Choose 1-2, or anything else to cancel:
+```
+
+You don't need to know the exact username in advance, which matters
+because the usual reason to run this is that you can't sign in to look
+it up.
+
+**Backing out here costs nothing.** Your recovery key isn't spent until
+the transfer actually happens, so cancelling at the list — or at the
+SSO warning — leaves your existing keys working.
+
+If you already know the username, pass it and skip the list:
+`mikroview -transfer-admin bob`.
+
+Once it's done you're shown a replacement set of keys. The previous
 admin becomes an ordinary user — their account isn't deleted.
 
 If the person you're handing it to signs in through SSO, you're warned
@@ -1234,7 +1259,6 @@ doesn't stop you fixing it. You need two things: access to the machine
 (or container) mikroview runs on, and one of your recovery keys.
 
 ```sh
-mikroview -list-users              # usernames + roles, no password hashes
 mikroview -recover-admin-account   # asks for a recovery key, then a new password
 ```
 

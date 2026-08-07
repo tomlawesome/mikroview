@@ -188,7 +188,12 @@ See [docs/security-by-design.md](docs/security-by-design.md).
   `mikroview -recover-admin-account` (prompts for a recovery key, then
   for a new password with no echo -- never a CLI argument or env var, so
   it never touches shell history, process args, or `docker inspect`
-  output), and `mikroview -list-users` to see existing accounts.
+  output). There is deliberately no standalone account-listing command: the
+  one thing it was needed for -- finding the username to transfer admin to
+  while locked out -- is now a numbered list inside `-transfer-admin`,
+  behind the recovery key that command already requires. Gating a
+  standalone list on a key was rejected as teaching the operator to type a
+  recovery key for a routine read.
   Keeping it off the web UI/API means a locked-out admin isn't dependent
   on the very system they're locked out of. A password reset immediately
   invalidates every existing session for that account, including on an

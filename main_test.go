@@ -412,3 +412,40 @@ func TestVersionFileIsReleasable(t *testing.T) {
 		t.Errorf("v%s is not a valid version string for the binary to report", v)
 	}
 }
+
+// -transfer-admin asks for the recovery key before naming or listing
+// any account, so who holds an account isn't disclosed to someone
+// without a key. That ordering is only safe because Redeem prepares a
+// rotation without persisting it -- backing out at the list must leave
+// the key usable. Verified end-to-end against the binary; this pins the
+// invariant the ordering depends on.
+func TestRedeemDoesNotConsumeAKeyUntilCommitted(t *testing.T) {
+	dir := t.TempDir()
+	rs, err := auth.OpenRecovery(filepath.Join(dir, "recovery.json"), filepath.Join(dir, "pepper"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	keys, err := rs.Generate()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := rs.Commit(); err != nil {
+		t.Fatal(err)
+	}
+
+	// Stand in for "operator ran transfer, saw the list, backed out":
+	// the key is redeemed but the rotation is never committed.
+	if _, err := rs.Redeem(keys[0]); err != nil {
+		t.Fatalf("first redeem: %v", err)
+	}
+
+	// A fresh store, as the next invocation of the command would open.
+	again, err := auth.OpenRecovery(filepath.Join(dir, "recovery.json"), filepath.Join(dir, "pepper"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := again.Redeem(keys[0]); err != nil {
+		t.Errorf("the key was consumed by an abandoned transfer: %v -- "+
+			"backing out at the account list must cost nothing", err)
+	}
+}
