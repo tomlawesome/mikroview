@@ -933,7 +933,6 @@ func TestExclusionPersistenceRoundTrip(t *testing.T) {
 	}
 }
 
-
 // TestActiveFlagsCannotGrowUnbounded is the regression test for a
 // resource-exhaustion vector reachable from unauthenticated syslog.
 //
