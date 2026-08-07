@@ -1,15 +1,19 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+
 package api
 
 import (
 	"context"
-	"encoding/json"
-	"net"
+	"fmt"
 	"net/http"
 	"strings"
 	"time"
 
 	"github.com/tomlawesome/mikroview/internal/auth"
+	"github.com/tomlawesome/mikroview/internal/logging"
 )
+
+var authLog = logging.New("auth-api")
 
 const sessionCookieName = "mikroview_session"
 
@@ -54,12 +58,21 @@ var exemptPaths = map[string]bool{
 	"/api/auth/register": true,
 	"/api/auth/login":    true,
 	"/api/auth/logout":   true,
+	// Both are GET (a top-level browser redirect/navigation the provider
+	// issues, not a fetch() the frontend controls) so isSafeMethod
+	// already exempts them from the CSRF-header check above -- being
+	// listed here is what exempts them from requiring an existing
+	// session, which is the actual point: a login has to work before a
+	// session exists. State/nonce/PKCE (see oidc.go) are the callback's
+	// real protection against a forged request, not the session check.
+	"/api/auth/oidc/login":    true,
+	"/api/auth/oidc/callback": true,
 }
 
 // bootstrapExemptPaths lists the (smaller) set of routes reachable
 // while no account exists yet *and* auth hasn't been explicitly
 // disabled -- only what's needed to show and complete the one-time
-// choice screen (create an account, or skip auth for this deployment).
+// account-creation screen.
 // Deliberately narrower than exemptPaths: everything else 401s during
 // this window, closing the gap where live data (events/flags/stats)
 // used to be readable by anyone who reached mikroview before a decision
@@ -68,7 +81,11 @@ var bootstrapExemptPaths = map[string]bool{
 	"/api/healthz":       true,
 	"/api/auth/session":  true,
 	"/api/auth/register": true,
-	"/api/auth/skip":     true,
+	// So the very first-ever login can happen via SSO -- symmetric with
+	// /api/auth/register already being bootstrap-exempt for the local-
+	// password path.
+	"/api/auth/oidc/login":    true,
+	"/api/auth/oidc/callback": true,
 }
 
 // sessionUser resolves r's session cookie to a user, if any -- shared by
@@ -98,34 +115,99 @@ func (s *Server) sessionUser(r *http.Request, now time.Time) (*auth.User, bool) 
 	return user, true
 }
 
-// requireAuth has three states, checked in order:
+// readOnlyRoutes is the only handler set a bearer API token (issue
+// #101) can ever reach -- deliberately its own separate *http.ServeMux
+// with just these four GET routes registered, rather than a per-request
+// allowlist check layered in front of the real mux. That's what makes
+// "a token can never reach a write/clear/config endpoint" structural:
+// there is no code path from a bearer-authenticated request to
+// handleFlagsClear, handleDetectorSettingsUpdate, handleAuthCreateUser,
+// etc. -- those handlers are simply never registered on this mux, so a
+// request for any of them (regardless of method) falls through to
+// ServeMux's own 404, the same as a route that never existed.
+func (s *Server) readOnlyRoutes() http.Handler {
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /api/events", s.handleEvents)
+	mux.HandleFunc("GET /api/flags", s.handleFlagsList)
+	mux.HandleFunc("GET /api/stats", s.handleStats)
+	mux.HandleFunc("GET /api/devices", s.handleDevices)
+	return mux
+}
+
+const bearerPrefix = "Bearer "
+
+// bearerToken extracts the raw token value from an Authorization: Bearer
+// <token> header, if present in that exact form -- any other
+// Authorization scheme (or none at all) is not this package's concern
+// and falls through to the normal session-cookie path.
+func bearerToken(r *http.Request) (string, bool) {
+	h := r.Header.Get("Authorization")
+	if !strings.HasPrefix(h, bearerPrefix) {
+		return "", false
+	}
+	return strings.TrimPrefix(h, bearerPrefix), true
+}
+
+// requireAuth has two states, checked in order, plus a third check
+// (bearer tokens) nested inside the second:
 //
-//  1. Disabled (s.Auth.Disabled()): a deliberate, permanent opt-out --
-//     everyone reached the same "skip auth" choice this deployment made
-//     on first boot. Fully open, indefinitely, same shape as (2) below
-//     but without the path restriction, since there's no pending
-//     decision left to protect.
-//  2. Undecided (Count()==0, not disabled): only bootstrapExemptPaths
-//     stay reachable -- just enough to show and complete the one-time
-//     choice screen. Everything else 401s, closing the window where
-//     live data (events/flags/stats) used to be readable by anyone who
-//     reached mikroview before a decision was made.
-//  3. Active (Count()>0): today's exact behavior -- CSRF header +
-//     exemptPaths + session cookie.
+//  1. Undecided (Count()==0): only bootstrapExemptPaths stay reachable
+//     -- just enough to show and complete account creation. Everything
+//     else 401s, closing the window where live data (events/flags/
+//     stats) used to be readable by anyone who reached mikroview before
+//     an account existed. Tokens can't meaningfully exist yet either
+//     (creating one requires an admin, and there is none), so this
+//     stays unchanged.
+//  2. Active (Count()>0): CSRF header + exemptPaths + (session cookie OR
+//     bearer token). A bearer token is checked first, before the CSRF/
+//     exempt-path logic below, since it identifies a non-browser,
+//     service-to-service caller -- CSRF is a browser-cookie-specific
+//     mitigation that doesn't apply to it. A valid token is dispatched
+//     to readOnlyRoutes, never to next (the full mux); an invalid or
+//     revoked one is rejected outright with 401, not silently treated
+//     as "no token" and passed through to the session-cookie check.
+//
+// There is deliberately no third state for "this deployment opted out of
+// authentication". That mode existed and was removed: an unauthenticated
+// mikroview shows which hosts are being scanned, which rules fire, and
+// which accounts matter, and no amount of "it's only for five minutes"
+// survives contact with a deployment nobody got round to changing.
+// Creating a local account takes one screen, and it is the floor now.
 func (s *Server) requireAuth(next http.Handler) http.Handler {
+	readOnly := s.readOnlyRoutes()
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if s.Auth.Disabled() {
-			next.ServeHTTP(w, r)
-			return
-		}
 		if s.Auth.Count() == 0 {
 			if !bootstrapExemptPaths[r.URL.Path] {
 				http.Error(w, "setup required", http.StatusServiceUnavailable)
 				return
 			}
+			// No session exists yet to carry a CSRF check the normal
+			// way, but /api/auth/register is the highest-consequence
+			// endpoint in the app -- it creates the permanent admin
+			// account -- and without this, a bare cross-site <form>
+			// POST (no
+			// SameSite cookie needed, since none exists yet) could
+			// make that irreversible choice on a victim's behalf.
+			// Every other bootstrap-exempt path is GET, so
+			// isSafeMethod already exempts it here without needing a
+			// path-specific check.
+			if !isSafeMethod(r.Method) && r.Header.Get(csrfHeaderName) != csrfHeaderValue {
+				http.Error(w, "missing required header", http.StatusForbidden)
+				return
+			}
 			next.ServeHTTP(w, r)
 			return
 		}
+
+		if raw, ok := bearerToken(r); ok {
+			if _, valid := s.Tokens.Authenticate(raw, time.Now()); valid {
+				readOnly.ServeHTTP(w, r)
+				return
+			}
+			http.Error(w, "invalid or revoked token", http.StatusUnauthorized)
+			return
+		}
+
 		if !isSafeMethod(r.Method) && r.Header.Get(csrfHeaderName) != csrfHeaderValue {
 			http.Error(w, "missing required header", http.StatusForbidden)
 			return
@@ -153,14 +235,6 @@ func userFromContext(r *http.Request) *auth.User {
 	return u
 }
 
-func clientIP(r *http.Request) string {
-	host, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err != nil {
-		return r.RemoteAddr
-	}
-	return host
-}
-
 func (s *Server) setSessionCookie(w http.ResponseWriter, sessionID string) {
 	http.SetCookie(w, &http.Cookie{
 		Name:     sessionCookieName,
@@ -186,15 +260,19 @@ func (s *Server) clearSessionCookie(w http.ResponseWriter) {
 }
 
 type sessionResponse struct {
-	// AuthDisabled: this deployment permanently opted out of auth (see
-	// auth.Store.Disable) -- checked first by the frontend, since it
-	// takes priority over SetupRequired (Count()==0 no longer implies
-	// "show the choice screen" once a choice has actually been made).
-	AuthDisabled  bool   `json:"authDisabled"`
 	SetupRequired bool   `json:"setupRequired"`
 	Authenticated bool   `json:"authenticated"`
 	Username      string `json:"username,omitempty"`
 	Role          string `json:"role,omitempty"`
+	// HasLocalPassword is false once the account signs in only through
+	// the identity provider -- either provisioned that way, or converted
+	// by linking. The frontend uses it to decide whether "Connect SSO"
+	// is offered at all: there is nothing left to convert otherwise.
+	HasLocalPassword bool `json:"hasLocalPassword"`
+	// SSOAvailable tells the frontend whether to render the "Sign in
+	// with SSO" link at all -- true whenever s.OIDC is configured,
+	// regardless of the other fields above.
+	SSOAvailable bool `json:"ssoAvailable"`
 }
 
 // handleAuthSession always returns 200 -- it reports state, it doesn't
@@ -203,15 +281,47 @@ type sessionResponse struct {
 // first-run choice screen, a login form, or the live app.
 func (s *Server) handleAuthSession(w http.ResponseWriter, r *http.Request) {
 	resp := sessionResponse{
-		AuthDisabled:  s.Auth.Disabled(),
 		SetupRequired: s.Auth.Count() == 0,
+		SSOAvailable:  s.OIDC != nil,
 	}
 	if user, ok := s.sessionUser(r, time.Now()); ok {
 		resp.Authenticated = true
 		resp.Username = user.Username
 		resp.Role = string(user.Role)
+		resp.HasLocalPassword = user.LocalPassword()
 	}
 	writeJSON(w, http.StatusOK, resp)
+}
+
+// authErrorMessages maps the internal/auth sentinel errors a client can
+// plausibly trigger to a message worth showing them -- internal/auth's
+// own error text is written for a developer reading Go source (e.g.
+// ErrNotPersisted's "refusing to create a user that would not survive
+// a restart"), not for a stranger looking at a login screen. Anything
+// not listed here (including a genuinely unexpected error, e.g. a
+// crypto/rand failure inside HashPassword) falls back to a generic
+// message via writeAuthError -- never echoed verbatim to the client,
+// only logged server-side.
+var authErrorMessages = map[error]string{
+	auth.ErrRegistrationClosed: "registration is closed -- an account already exists",
+	auth.ErrNotPersisted:       "this deployment has no persistent storage configured -- an administrator needs to set one up before an account can be created",
+	auth.ErrUsernameTaken:      "that username is already taken",
+	auth.ErrPasswordTooShort:   auth.ErrPasswordTooShort.Error(), // already phrased for an end user
+	auth.ErrUsernameInvalid:    "that username contains characters that aren't allowed -- no control characters, and no leading or trailing spaces",
+	auth.ErrUsernameLength:     auth.ErrUsernameLength.Error(), // already phrased for an end user
+}
+
+// writeAuthError translates err into a safe, user-facing message via
+// authErrorMessages (falling back to a generic one for anything not
+// listed, logging the real error server-side so it's still
+// diagnosable) and writes it with status.
+func writeAuthError(w http.ResponseWriter, err error, status int) {
+	msg, ok := authErrorMessages[err]
+	if !ok {
+		authLog.Warn(err.Error())
+		msg = "unable to complete the request"
+	}
+	http.Error(w, msg, status)
 }
 
 // handleAuthSkip permanently disables authentication for this
@@ -219,18 +329,6 @@ func (s *Server) handleAuthSession(w http.ResponseWriter, r *http.Request) {
 // Count()==0 (requireAuth's bootstrap-exempt window; Disable itself
 // also refuses otherwise, as a second guard). No session is created;
 // there's nothing to log into.
-func (s *Server) handleAuthSkip(w http.ResponseWriter, r *http.Request) {
-	if err := s.Auth.Disable(); err != nil {
-		status := http.StatusInternalServerError
-		if err == auth.ErrRegistrationClosed {
-			status = http.StatusConflict
-		}
-		http.Error(w, err.Error(), status)
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]any{"disabled": true})
-}
-
 type credentialsRequest struct {
 	Username string `json:"username"`
 	Password string `json:"password"`
@@ -240,7 +338,7 @@ type credentialsRequest struct {
 // account, always as admin -- see auth.Store.Register.
 func (s *Server) handleAuthRegister(w http.ResponseWriter, r *http.Request) {
 	var req credentialsRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := decodeJSONBody(w, r, &req); err != nil {
 		http.Error(w, "invalid request body", http.StatusBadRequest)
 		return
 	}
@@ -249,12 +347,14 @@ func (s *Server) handleAuthRegister(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		status := http.StatusInternalServerError
 		switch err {
-		case auth.ErrRegistrationClosed, auth.ErrAuthDisabled:
+		case auth.ErrRegistrationClosed:
 			status = http.StatusConflict
 		case auth.ErrNotPersisted:
 			status = http.StatusServiceUnavailable
+		case auth.ErrPasswordTooShort, auth.ErrUsernameInvalid, auth.ErrUsernameLength:
+			status = http.StatusBadRequest
 		}
-		http.Error(w, err.Error(), status)
+		writeAuthError(w, err, status)
 		return
 	}
 
@@ -269,26 +369,41 @@ func (s *Server) handleAuthRegister(w http.ResponseWriter, r *http.Request) {
 // username.
 func (s *Server) handleAuthLogin(w http.ResponseWriter, r *http.Request) {
 	var req credentialsRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := decodeJSONBody(w, r, &req); err != nil {
 		http.Error(w, "invalid request body", http.StatusBadRequest)
 		return
 	}
 
 	now := time.Now()
-	ipKey := "ip:" + clientIP(r)
+	ipKey := "ip:" + s.clientIP(r)
 	userKey := "user:" + strings.ToLower(req.Username)
-	if !s.LoginLimiter.Allow(ipKey, now) || !s.LoginLimiter.Allow(userKey, now) {
+	// Reserve, not Allow: the attempt is claimed *before* the ~100ms
+	// Argon2id verification rather than recorded after it. With Allow, a
+	// simultaneous burst all passed the check before any failure landed,
+	// so a threshold of 5 admitted as many attempts as the attacker cared
+	// to send in parallel -- brute-force protection that a little
+	// concurrency walked straight past, and 64 MiB of working memory per
+	// admitted attempt.
+	if !s.LoginLimiter.Reserve(ipKey, now) {
+		http.Error(w, "too many attempts, try again later", http.StatusTooManyRequests)
+		return
+	}
+	if !s.LoginLimiter.Reserve(userKey, now) {
+		s.LoginLimiter.Release(ipKey, now)
 		http.Error(w, "too many attempts, try again later", http.StatusTooManyRequests)
 		return
 	}
 
 	user, err := s.Auth.Authenticate(req.Username, req.Password, now)
 	if err != nil {
-		s.LoginLimiter.RecordFailure(ipKey, now)
-		s.LoginLimiter.RecordFailure(userKey, now)
+		// Reservations stay claimed -- that is what counts the failure.
 		http.Error(w, "invalid username or password", http.StatusUnauthorized)
 		return
 	}
+	// Only a success releases, so ordinary repeated logins never
+	// accumulate toward the threshold.
+	s.LoginLimiter.Release(ipKey, now)
+	s.LoginLimiter.Release(userKey, now)
 
 	sess := s.Sessions.Create(user.ID, now)
 	s.setSessionCookie(w, sess.ID)
@@ -309,40 +424,158 @@ type createUserRequest struct {
 	Role     string `json:"role"`
 }
 
+// callerIsAdmin reports whether r's authenticated caller is an admin --
+// the strict check every admin-only mutation of *account-equivalent*
+// state (user management, and internal/entities' admin-gated CRUD) uses.
+// The single admin check for every admin-gated endpoint.
+//
+// There is deliberately no "no accounts yet" bypass. One existed, on the
+// detector-settings and flags-exclusion endpoints, from when mikroview
+// could run with authentication switched off -- it treated an anonymous
+// caller as an admin while Count() was 0. That mode is gone, and
+// requireAuth now refuses those paths outright before they route, so the
+// bypass was unreachable. Unreachable is not the same as harmless: it
+// read as "anonymous callers are admins under some condition", and would
+// have become live again the moment requireAuth was loosened.
+//
+// While no account exists, caller is nil, so this returns false without
+// needing to know why Count() is 0.
+func callerIsAdmin(r *http.Request) bool {
+	caller := userFromContext(r)
+	return caller != nil && caller.Role == auth.RoleAdmin
+}
+
 // handleAuthCreateUser lets an existing admin add another account -- the
 // only way to create a user once self-registration has closed (see
 // auth.Store.Register's one-time-only behavior).
 func (s *Server) handleAuthCreateUser(w http.ResponseWriter, r *http.Request) {
-	// While no account exists (undecided or disabled), there's no admin
-	// to have called this as -- caller is nil either way (requireAuth's
-	// bootstrap-exempt window blocks this path entirely during
-	// "undecided," and "disabled" bypasses the session check that would
-	// otherwise set it), so this one check covers every zero-account
-	// case without needing to special-case why Count() is still 0.
-	caller := userFromContext(r)
-	if caller == nil || caller.Role != auth.RoleAdmin {
+	if !callerIsAdmin(r) {
 		http.Error(w, "admin role required", http.StatusForbidden)
 		return
 	}
 
 	var req createUserRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := decodeJSONBody(w, r, &req); err != nil {
 		http.Error(w, "invalid request body", http.StatusBadRequest)
 		return
 	}
-	role := auth.RoleUser
+	// A request for an admin is refused outright rather than quietly
+	// downgraded to a user: the caller asked for something this
+	// deployment does not have, and silently creating a lesser account
+	// under the name they chose is worse than telling them. auth.Store
+	// refuses it too -- this exists to give a usable status and message
+	// instead of a 500.
 	if req.Role == string(auth.RoleAdmin) {
-		role = auth.RoleAdmin
-	}
-
-	user, err := s.Auth.CreateUser(req.Username, req.Password, role, time.Now())
-	if err != nil {
-		status := http.StatusInternalServerError
-		if err == auth.ErrUsernameTaken {
-			status = http.StatusConflict
-		}
-		http.Error(w, err.Error(), status)
+		writeAuthError(w, auth.ErrSingleAdmin, http.StatusBadRequest)
 		return
 	}
+
+	user, err := s.Auth.CreateUser(req.Username, req.Password, auth.RoleUser, time.Now())
+	if err != nil {
+		status := http.StatusInternalServerError
+		switch err {
+		case auth.ErrUsernameTaken:
+			status = http.StatusConflict
+		case auth.ErrPasswordTooShort, auth.ErrSingleAdmin, auth.ErrUsernameInvalid, auth.ErrUsernameLength:
+			status = http.StatusBadRequest
+		}
+		writeAuthError(w, err, status)
+		return
+	}
+	s.Audit.Record(auditActor(r), "user.create", user.Username, "role="+string(user.Role))
 	writeJSON(w, http.StatusCreated, map[string]any{"username": user.Username, "role": user.Role})
+}
+
+// userSummary is what the account list exposes. Deliberately not
+// auth.User: that carries PasswordHash, and serializing it directly is
+// exactly the mistake this type exists to make impossible.
+type userSummary struct {
+	ID               string    `json:"id"`
+	Username         string    `json:"username"`
+	Role             string    `json:"role"`
+	CreatedAt        time.Time `json:"createdAt"`
+	LastLogin        time.Time `json:"lastLogin,omitzero"`
+	HasLocalPassword bool      `json:"hasLocalPassword"`
+	SSO              bool      `json:"sso"`
+}
+
+// handleAuthListUsers backs the admin-facing account list.
+//
+// Admin-only, and 403 for everyone else rather than an empty list. The
+// usernames and which one is the admin are themselves worth having --
+// they tell an attacker whose account is the high-value target -- so
+// this is not information a signed-in non-admin should be handed. An
+// empty-list response would also leave the route-authorization matrix
+// unable to tell a correct refusal from a handler that leaks.
+func (s *Server) handleAuthListUsers(w http.ResponseWriter, r *http.Request) {
+	if !callerIsAdmin(r) {
+		http.Error(w, "admin role required", http.StatusForbidden)
+		return
+	}
+	users := s.Auth.List()
+	out := make([]userSummary, 0, len(users))
+	for _, u := range users {
+		out = append(out, userSummary{
+			ID:               u.ID,
+			Username:         u.Username,
+			Role:             string(u.Role),
+			CreatedAt:        u.CreatedAt,
+			LastLogin:        u.LastLogin,
+			HasLocalPassword: u.LocalPassword(),
+			SSO:              u.OIDCIssuer != "",
+		})
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+// handleAuthDeleteUser removes an account and everything it can still be
+// used with.
+//
+// Deleting the account alone is not enough. A live session cookie
+// authenticates by session ID, and an API token by its own bearer value
+// -- neither re-checks that the account still exists on every request,
+// so both would outlive the deletion. Sessions and tokens go with it.
+//
+// The deletion happens first, and the revocations only once it has
+// committed. The reverse order would sign a user out and destroy their
+// tokens on the way to a deletion that can still be refused (the admin
+// account, a stale ID) -- destructive work done for a request that
+// never took effect. Neither revocation can fail, so nothing is left
+// half-done by finishing in this order.
+func (s *Server) handleAuthDeleteUser(w http.ResponseWriter, r *http.Request) {
+	if !callerIsAdmin(r) {
+		http.Error(w, "admin role required", http.StatusForbidden)
+		return
+	}
+	id := r.PathValue("id")
+	if id == "" {
+		http.Error(w, "user id is required", http.StatusBadRequest)
+		return
+	}
+
+	user, err := s.Auth.DeleteUser(id)
+	if err != nil {
+		status := http.StatusInternalServerError
+		switch err {
+		case auth.ErrUserNotFound:
+			status = http.StatusNotFound
+		case auth.ErrCannotDeleteAdmin:
+			status = http.StatusConflict
+		}
+		writeAuthError(w, err, status)
+		return
+	}
+
+	s.Sessions.RevokeAllForUser(user.ID)
+	revokedTokens := 0
+	if s.Tokens != nil {
+		revokedTokens = s.Tokens.RevokeAllCreatedBy(user.ID)
+	}
+
+	s.Audit.Record(auditActor(r), "user.delete", user.Username,
+		fmt.Sprintf("role=%s tokensRevoked=%d", user.Role, revokedTokens))
+	writeJSON(w, http.StatusOK, map[string]any{
+		"username":      user.Username,
+		"tokensRevoked": revokedTokens,
+	})
 }

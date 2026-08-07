@@ -1,26 +1,13 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+
 package api
 
 import (
-	"encoding/json"
+	"fmt"
 	"net/http"
 
-	"github.com/tomlawesome/mikroview/internal/auth"
 	"github.com/tomlawesome/mikroview/internal/detect"
 )
-
-// callerIsAdminOrOpen mirrors requireAuth's own "no-op while zero users
-// exist" contract (see auth.go) -- while auth is inactive (mikroview's
-// fully-open default), every other endpoint stays reachable, so
-// detector settings do too, and there's no admin to gate against yet
-// anyway. Once an account exists, only an admin session may read or
-// write them.
-func (s *Server) callerIsAdminOrOpen(r *http.Request) bool {
-	if s.Auth.Count() == 0 {
-		return true
-	}
-	caller := userFromContext(r)
-	return caller != nil && caller.Role == auth.RoleAdmin
-}
 
 type detectorEntry struct {
 	Name    detect.DetectorName `json:"name"`
@@ -29,11 +16,12 @@ type detectorEntry struct {
 }
 
 // handleDetectorSettingsList serves every detector's current live
-// on/off + scope settings, always all 9 (from detect.AllDetectorNames)
-// regardless of whether each has ever been customized -- see
-// docs/configuration.md's "Per-detector toggles" section.
+// on/off + scope settings, always all of them (from
+// detect.AllDetectorNames) regardless of whether each has ever been
+// customized -- see docs/configuration.md's "Per-detector toggles"
+// section.
 func (s *Server) handleDetectorSettingsList(w http.ResponseWriter, r *http.Request) {
-	if !s.callerIsAdminOrOpen(r) {
+	if !callerIsAdmin(r) {
 		http.Error(w, "admin role required", http.StatusForbidden)
 		return
 	}
@@ -55,7 +43,7 @@ type updateDetectorSettingsRequest struct {
 // wholesale and persists it (see detect.SettingsStore.Set) -- takes
 // effect on the very next ingested event, no restart needed.
 func (s *Server) handleDetectorSettingsUpdate(w http.ResponseWriter, r *http.Request) {
-	if !s.callerIsAdminOrOpen(r) {
+	if !callerIsAdmin(r) {
 		http.Error(w, "admin role required", http.StatusForbidden)
 		return
 	}
@@ -66,7 +54,7 @@ func (s *Server) handleDetectorSettingsUpdate(w http.ResponseWriter, r *http.Req
 	}
 
 	var req updateDetectorSettingsRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := decodeJSONBody(w, r, &req); err != nil {
 		http.Error(w, "invalid request body", http.StatusBadRequest)
 		return
 	}
@@ -76,5 +64,6 @@ func (s *Server) handleDetectorSettingsUpdate(w http.ResponseWriter, r *http.Req
 	}
 
 	s.DetectorSettings.Set(name, detect.Settings{Enabled: req.Enabled, Scope: req.Scope})
+	s.Audit.Record(auditActor(r), "detector.update", string(name), fmt.Sprintf("enabled=%t", req.Enabled))
 	writeJSON(w, http.StatusOK, detectorEntry{Name: name, Enabled: req.Enabled, Scope: req.Scope})
 }

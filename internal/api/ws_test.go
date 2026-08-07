@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+
 package api
 
 import (
@@ -12,7 +14,7 @@ import (
 
 func TestHandleWSBroadcastsInsertedEvents(t *testing.T) {
 	s, _ := newTestServer(t)
-	ts := httptest.NewServer(s.Routes())
+	ts := httptest.NewServer(s.mux())
 	defer ts.Close()
 
 	wsURL := "ws" + strings.TrimPrefix(ts.URL, "http") + "/api/ws"
@@ -41,7 +43,7 @@ func TestHandleWSBroadcastsInsertedEvents(t *testing.T) {
 
 func TestHandleWSBatchesMultipleEvents(t *testing.T) {
 	s, _ := newTestServer(t)
-	ts := httptest.NewServer(s.Routes())
+	ts := httptest.NewServer(s.mux())
 	defer ts.Close()
 
 	wsURL := "ws" + strings.TrimPrefix(ts.URL, "http") + "/api/ws"

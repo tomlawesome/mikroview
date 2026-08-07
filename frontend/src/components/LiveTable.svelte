@@ -1,9 +1,13 @@
 <script lang="ts">
+  // SPDX-License-Identifier: AGPL-3.0-only
   import { appState } from '../lib/state.svelte'
   import { MAX_RENDERED_ROWS } from '../lib/constants'
   import { COLUMNS, columnState } from '../lib/columns.svelte'
-  import type { ClientEvent } from '../lib/types'
+  import { viewportState } from '../lib/viewport.svelte'
+  import type { ClientEvent, FirewallEvent } from '../lib/types'
   import EventRow from './EventRow.svelte'
+  import EventCardMobile from './EventCardMobile.svelte'
+  import EventDetailSheet from './EventDetailSheet.svelte'
 
   // Both optional -- default to the live view's own state, so the
   // existing `<LiveTable />` call site (App.svelte's 'live' branch)
@@ -15,6 +19,14 @@
 
   let bodyEl: HTMLDivElement | undefined = $state()
   let gridEl: HTMLDivElement | undefined = $state()
+  // Which event's EventDetailSheet.svelte is open (issue #85's mobile
+  // card layout) -- null means none. Desktop never sets this. Typed as
+  // FirewallEvent, not ClientEvent, to match EventRow/EventCardMobile's
+  // own prop type -- applyFilters's declared return type is
+  // FirewallEvent[] even though the real objects flowing through it are
+  // ClientEvents (see state.svelte.ts), so `rendered` below is typed
+  // FirewallEvent[] too.
+  let selectedEvent: FirewallEvent | null = $state(null)
   let headerEls: (HTMLDivElement | undefined)[] = $state([])
   let dragIndex = $state<number | null>(null)
   let dragStartX = 0
@@ -102,48 +114,72 @@
 </script>
 
 <div class="table-wrap">
-  <div class="body scrollbar" bind:this={bodyEl}>
-    <div class="grid" bind:this={gridEl} style="grid-template-columns: {columnState.gridTemplate}">
-      {#each COLUMNS as col, i (col.key)}
-        <div
-          class="header-cell"
-          class:sticky-col={col.key === 'time'}
-          bind:this={headerEls[i]}
-          bind:clientHeight={headerHeight}
-        >
-          <span class="label-text">{col.label}</span>
-        </div>
+  {#if viewportState.isMobile}
+    <div class="body scrollbar">
+      {#each rendered as event (event.id)}
+        <EventCardMobile {event} deviceName={deviceName(event.deviceId)} onOpen={() => (selectedEvent = event)} />
       {/each}
+      {#if rendered.length === 0}
+        <div class="empty">
+          {emptyMessage ??
+            (appState.events.length === 0
+              ? 'Waiting for events…'
+              : 'No events match the current filters.')}
+        </div>
+      {/if}
+    </div>
+  {:else}
+    <div class="body scrollbar" bind:this={bodyEl}>
+      <div class="grid" bind:this={gridEl} style="grid-template-columns: {columnState.gridTemplate}">
+        {#each COLUMNS as col, i (col.key)}
+          <div
+            class="header-cell"
+            class:sticky-col={col.key === 'time'}
+            bind:this={headerEls[i]}
+            bind:clientHeight={headerHeight}
+          >
+            <span class="label-text">{col.label}</span>
+          </div>
+        {/each}
 
-      <div class="resize-overlay" style="height: {headerHeight}px">
-        {#each COLUMNS.slice(0, -1) as col, i (col.key)}
-          <span
-            class="resizer"
-            class:active={dragIndex === i}
-            style="left: {(handleOffsets[i] ?? 0) - 5}px"
-            onpointerdown={(e) => startResize(i, e)}
-            ondblclick={() => columnState.reset()}
-            role="separator"
-            aria-orientation="vertical"
-            aria-label="Resize {col.label} column"
-          ></span>
+        <div class="resize-overlay" style="height: {headerHeight}px">
+          {#each COLUMNS.slice(0, -1) as col, i (col.key)}
+            <span
+              class="resizer"
+              class:active={dragIndex === i}
+              style="left: {(handleOffsets[i] ?? 0) - 5}px"
+              onpointerdown={(e) => startResize(i, e)}
+              ondblclick={() => columnState.reset()}
+              role="separator"
+              aria-orientation="vertical"
+              aria-label="Resize {col.label} column"
+            ></span>
+          {/each}
+        </div>
+
+        {#each rendered as event (event.id)}
+          <EventRow {event} deviceName={deviceName(event.deviceId)} />
         {/each}
       </div>
-
-      {#each rendered as event (event.id)}
-        <EventRow {event} deviceName={deviceName(event.deviceId)} />
-      {/each}
+      {#if rendered.length === 0}
+        <div class="empty">
+          {emptyMessage ??
+            (appState.events.length === 0
+              ? 'Waiting for events…'
+              : 'No events match the current filters.')}
+        </div>
+      {/if}
     </div>
-    {#if rendered.length === 0}
-      <div class="empty">
-        {emptyMessage ??
-          (appState.events.length === 0
-            ? 'Waiting for events…'
-            : 'No events match the current filters.')}
-      </div>
-    {/if}
-  </div>
+  {/if}
 </div>
+
+{#if selectedEvent}
+  <EventDetailSheet
+    event={selectedEvent}
+    deviceName={deviceName(selectedEvent.deviceId)}
+    onClose={() => (selectedEvent = null)}
+  />
+{/if}
 
 <style>
   .table-wrap {

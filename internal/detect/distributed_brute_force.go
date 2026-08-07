@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+
 package detect
 
 import (
@@ -8,13 +10,13 @@ import (
 	"github.com/tomlawesome/mikroview/internal/store"
 )
 
-type portSample struct {
-	at time.Time
-	ip string
-}
-
+// portSources tracks one critical port's recent distinct source IPs --
+// a distinctRing rather than countRing (despite counting, the detector
+// below is inherently about *distinct* sources; a countRing would fire
+// on repeated attempts from a single source, defeating the point of
+// "distributed").
 type portSources struct {
-	samples []portSample
+	ips *distinctRing[string]
 }
 
 // observeDistributedBruteForce tracks, per critical port, the distinct
@@ -30,30 +32,18 @@ func (d *Detector) observeDistributedBruteForce(e store.Event, now time.Time) {
 	}
 	p, ok := d.criticalPortIPs[e.DstPort]
 	if !ok {
-		p = &portSources{}
+		p = &portSources{ips: newDistinctRing[string](d.cfg.DistributedBruteForceWindow)}
 		d.criticalPortIPs[e.DstPort] = p
 	}
-	p.samples = append(p.samples, portSample{at: now, ip: e.SrcIP})
+	p.ips.Add(now, e.SrcIP)
+	count := p.ips.Count(now, d.cfg.DistributedBruteForceWindow, nil)
 
-	cutoff := now.Add(-d.cfg.DistributedBruteForceWindow)
-	i := 0
-	for i < len(p.samples) && p.samples[i].at.Before(cutoff) {
-		i++
-	}
-	if i > 0 {
-		p.samples = p.samples[i:]
-	}
-
-	distinct := make(map[string]struct{})
-	for _, s := range p.samples {
-		distinct[s.ip] = struct{}{}
-	}
-
-	if len(distinct) >= d.cfg.DistributedBruteForceThreshold {
+	if count >= d.cfg.DistributedBruteForceThreshold {
 		target := fmt.Sprintf("port %d", e.DstPort)
+		distinct := p.ips.Values(now, d.cfg.DistributedBruteForceWindow, nil)
 		isNew := d.fs.AddWithDetail(flags.TypeDistributedBruteForce, target,
-			fmt.Sprintf("%d distinct source IPs in %s", len(distinct), d.cfg.DistributedBruteForceWindow),
-			overshootConfidence(len(distinct), d.cfg.DistributedBruteForceThreshold),
+			fmt.Sprintf("%d distinct source IPs in %s", count, d.cfg.DistributedBruteForceWindow),
+			overshootConfidence(count, d.cfg.DistributedBruteForceThreshold),
 			flags.Evidence{Hosts: sortedHostsCapped(distinct)}, "", now)
 		d.maybeCheckGroupReputation(flags.TypeDistributedBruteForce, target, distinct, isNew)
 	}

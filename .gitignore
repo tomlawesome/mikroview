@@ -8,4 +8,10 @@
 /deploy/config.yaml
 *.log
 .DS_Store
-.claude/
+# Local agent settings stay out; project skills are shared -- they are
+# how the next person (or session) finds the live-check fixture.
+.claude/*
+!.claude/skills/
+
+# live-check scratch directory (scripts/live-env.sh)
+/tmp-live/

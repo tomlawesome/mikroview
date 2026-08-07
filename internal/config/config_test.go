@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+
 package config
 
 import (
@@ -86,6 +88,40 @@ devices:
 	})
 }
 
+func TestListenHTTPRedirectDefaultsAndOverrides(t *testing.T) {
+	t.Run("defaults to :8081", func(t *testing.T) {
+		cfg, err := Load("", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if cfg.Listen.HTTPRedirect != ":8081" {
+			t.Errorf("Listen.HTTPRedirect = %q, want %q", cfg.Listen.HTTPRedirect, ":8081")
+		}
+	})
+
+	t.Run("env overrides default", func(t *testing.T) {
+		t.Setenv("MIKROVIEW_LISTEN_HTTP_REDIRECT", ":9081")
+		cfg, err := Load("", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if cfg.Listen.HTTPRedirect != ":9081" {
+			t.Errorf("Listen.HTTPRedirect = %q, want the env value :9081", cfg.Listen.HTTPRedirect)
+		}
+	})
+
+	t.Run("flag overrides env, empty string disables it", func(t *testing.T) {
+		t.Setenv("MIKROVIEW_LISTEN_HTTP_REDIRECT", ":9081")
+		cfg, err := Load("", []string{"-http-redirect", ""})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if cfg.Listen.HTTPRedirect != "" {
+			t.Errorf("Listen.HTTPRedirect = %q, want empty (disabled)", cfg.Listen.HTTPRedirect)
+		}
+	})
+}
+
 func TestFlagsEnvVarsOverrideDefaults(t *testing.T) {
 	t.Setenv("MIKROVIEW_FLAGS_STORE_PATH", "/data/flags.json")
 	t.Setenv("MIKROVIEW_FLAGS_PORT_SCAN_THRESHOLD", "30")
@@ -152,6 +188,45 @@ func TestHostActivityEnvVarsOverrideDefaults(t *testing.T) {
 	}
 }
 
+func TestVPNInterfacesDefaultsToEmptyAndMultiplierDefaultsTo1Point5(t *testing.T) {
+	// The backward-compatible no-op starting point (issue #105): an
+	// unconfigured deployment must never boost any confidence score,
+	// which VPNInterfaces being empty by default guarantees regardless
+	// of what VPNConfidenceMultiplier defaults to.
+	cfg, err := Load("", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.Flags.VPNInterfaces) != 0 {
+		t.Errorf("VPNInterfaces default = %v, want empty", cfg.Flags.VPNInterfaces)
+	}
+	if cfg.Flags.VPNConfidenceMultiplier != 1.5 {
+		t.Errorf("VPNConfidenceMultiplier default = %v, want 1.5", cfg.Flags.VPNConfidenceMultiplier)
+	}
+}
+
+func TestVPNInterfacesEnvVarsOverrideDefaults(t *testing.T) {
+	t.Setenv("MIKROVIEW_FLAGS_VPN_INTERFACES", "wireguard1, wireguard2")
+	t.Setenv("MIKROVIEW_FLAGS_VPN_CONFIDENCE_MULTIPLIER", "2.5")
+
+	cfg, err := Load("", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"wireguard1", "wireguard2"}
+	if len(cfg.Flags.VPNInterfaces) != len(want) {
+		t.Fatalf("VPNInterfaces = %v, want %v", cfg.Flags.VPNInterfaces, want)
+	}
+	for i, v := range want {
+		if cfg.Flags.VPNInterfaces[i] != v {
+			t.Errorf("VPNInterfaces[%d] = %q, want %q", i, cfg.Flags.VPNInterfaces[i], v)
+		}
+	}
+	if cfg.Flags.VPNConfidenceMultiplier != 2.5 {
+		t.Errorf("VPNConfidenceMultiplier = %v, want 2.5", cfg.Flags.VPNConfidenceMultiplier)
+	}
+}
+
 func TestRuleSpikeWarmupSamplesEnvVarOverridesDefault(t *testing.T) {
 	t.Setenv("MIKROVIEW_FLAGS_RULE_SPIKE_WARMUP_SAMPLES", "35")
 
@@ -193,6 +268,66 @@ func TestLowSlowScanEnvVarsOverrideDefaults(t *testing.T) {
 	}
 	if cfg.Flags.LowSlowScanBaselineMultiplier != 4.5 {
 		t.Errorf("LowSlowScanBaselineMultiplier = %v, want 4.5", cfg.Flags.LowSlowScanBaselineMultiplier)
+	}
+}
+
+func TestOffHoursEnvVarsOverrideDefaults(t *testing.T) {
+	t.Setenv("MIKROVIEW_FLAGS_OFF_HOURS_START_HOUR", "22")
+	t.Setenv("MIKROVIEW_FLAGS_OFF_HOURS_END_HOUR", "5")
+	t.Setenv("MIKROVIEW_FLAGS_OFF_HOURS_MIN_SAMPLE_DAYS", "21")
+	t.Setenv("MIKROVIEW_FLAGS_OFF_HOURS_MIN_COUNT", "8")
+
+	cfg, err := Load("", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Flags.OffHoursStartHour != 22 {
+		t.Errorf("OffHoursStartHour = %v, want 22", cfg.Flags.OffHoursStartHour)
+	}
+	if cfg.Flags.OffHoursEndHour != 5 {
+		t.Errorf("OffHoursEndHour = %v, want 5", cfg.Flags.OffHoursEndHour)
+	}
+	if cfg.Flags.OffHoursMinSampleDays != 21 {
+		t.Errorf("OffHoursMinSampleDays = %v, want 21", cfg.Flags.OffHoursMinSampleDays)
+	}
+	if cfg.Flags.OffHoursMinCount != 8 {
+		t.Errorf("OffHoursMinCount = %v, want 8", cfg.Flags.OffHoursMinCount)
+	}
+}
+
+func TestStaleRuleDefaults(t *testing.T) {
+	cfg, err := Load("", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Flags.StaleRuleDays != 30 {
+		t.Errorf("StaleRuleDays = %v, want 30", cfg.Flags.StaleRuleDays)
+	}
+	if cfg.Flags.StaleRuleCheckInterval != time.Hour {
+		t.Errorf("StaleRuleCheckInterval = %v, want 1h", cfg.Flags.StaleRuleCheckInterval)
+	}
+	if cfg.Flags.RuleUsageStorePath != "/var/lib/mikroview/rule-usage.json" {
+		t.Errorf("RuleUsageStorePath = %q, want /var/lib/mikroview/rule-usage.json", cfg.Flags.RuleUsageStorePath)
+	}
+}
+
+func TestStaleRuleEnvVarsOverrideDefaults(t *testing.T) {
+	t.Setenv("MIKROVIEW_FLAGS_RULE_USAGE_STORE_PATH", "/data/rule-usage.json")
+	t.Setenv("MIKROVIEW_FLAGS_STALE_RULE_DAYS", "45")
+	t.Setenv("MIKROVIEW_FLAGS_STALE_RULE_CHECK_INTERVAL", "30m")
+
+	cfg, err := Load("", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Flags.RuleUsageStorePath != "/data/rule-usage.json" {
+		t.Errorf("RuleUsageStorePath = %q, want /data/rule-usage.json", cfg.Flags.RuleUsageStorePath)
+	}
+	if cfg.Flags.StaleRuleDays != 45 {
+		t.Errorf("StaleRuleDays = %v, want 45", cfg.Flags.StaleRuleDays)
+	}
+	if cfg.Flags.StaleRuleCheckInterval != 30*time.Minute {
+		t.Errorf("StaleRuleCheckInterval = %v, want 30m", cfg.Flags.StaleRuleCheckInterval)
 	}
 }
 
@@ -253,6 +388,38 @@ func TestNotifyPushoverEnvVarsOverrideDefaults(t *testing.T) {
 	}
 }
 
+func TestNotifyWebhookURLEnvVarOverridesDefault(t *testing.T) {
+	t.Setenv("MIKROVIEW_NOTIFY_WEBHOOK_URL", "https://ntfy.example.com/mikroview-alerts")
+
+	cfg, err := Load("", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Notify.Webhook.URL != "https://ntfy.example.com/mikroview-alerts" {
+		t.Errorf("Webhook.URL = %v, want https://ntfy.example.com/mikroview-alerts", cfg.Notify.Webhook.URL)
+	}
+}
+
+func TestNotifyWebhookHeadersLoadFromYAML(t *testing.T) {
+	dir := t.TempDir()
+	path := dir + "/config.yaml"
+	yaml := "notify:\n  webhook:\n    url: \"https://example.com/hook\"\n    headers:\n      Authorization: \"Bearer tok123\"\n"
+	if err := os.WriteFile(path, []byte(yaml), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := Load(path, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Notify.Webhook.URL != "https://example.com/hook" {
+		t.Errorf("Webhook.URL = %v, want https://example.com/hook", cfg.Notify.Webhook.URL)
+	}
+	if cfg.Notify.Webhook.Headers["Authorization"] != "Bearer tok123" {
+		t.Errorf("Webhook.Headers[Authorization] = %v, want Bearer tok123", cfg.Notify.Webhook.Headers["Authorization"])
+	}
+}
+
 func TestTLSDefaultsToEnabledWithSecureCookie(t *testing.T) {
 	cfg, err := Load("", nil)
 	if err != nil {
@@ -263,6 +430,17 @@ func TestTLSDefaultsToEnabledWithSecureCookie(t *testing.T) {
 	}
 	if !cfg.Auth.SecureCookie {
 		t.Error("expected Auth.SecureCookie to default to true, matching TLS being on by default")
+	}
+}
+
+func TestAuthTokensStorePathEnvOverrides(t *testing.T) {
+	t.Setenv("MIKROVIEW_AUTH_TOKENS_STORE_PATH", "/custom/tokens.json")
+	cfg, err := Load("", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Auth.TokensStorePath != "/custom/tokens.json" {
+		t.Errorf("Auth.TokensStorePath = %q, want the env override %q", cfg.Auth.TokensStorePath, "/custom/tokens.json")
 	}
 }
 
@@ -299,14 +477,24 @@ func TestDefaultStoragePathsUnderVarLibMikroview(t *testing.T) {
 	cases := map[string]string{
 		"Flags.StorePath":                 cfg.Flags.StorePath,
 		"Flags.DetectorSettingsStorePath": cfg.Flags.DetectorSettingsStorePath,
+		"Flags.RuleUsageStorePath":        cfg.Flags.RuleUsageStorePath,
 		"Auth.StorePath":                  cfg.Auth.StorePath,
+		"Entities.StorePath":              cfg.Entities.StorePath,
+		"Audit.StorePath":                 cfg.Audit.StorePath,
+		"Auth.TokensStorePath":            cfg.Auth.TokensStorePath,
 		"TLS.StorePath":                   cfg.TLS.StorePath,
+		"DeviceMAC.StorePath":             cfg.DeviceMAC.StorePath,
 	}
 	want := map[string]string{
 		"Flags.StorePath":                 "/var/lib/mikroview/flags.json",
 		"Flags.DetectorSettingsStorePath": "/var/lib/mikroview/detector-settings.json",
+		"Flags.RuleUsageStorePath":        "/var/lib/mikroview/rule-usage.json",
 		"Auth.StorePath":                  "/var/lib/mikroview/users.json",
+		"Entities.StorePath":              "/var/lib/mikroview/entities.json",
+		"Audit.StorePath":                 "/var/lib/mikroview/audit.json",
+		"Auth.TokensStorePath":            "/var/lib/mikroview/tokens.json",
 		"TLS.StorePath":                   "/var/lib/mikroview/tls",
+		"DeviceMAC.StorePath":             "/var/lib/mikroview/mac-registry.json",
 	}
 	for field, got := range cases {
 		if got != want[field] {
@@ -341,6 +529,187 @@ func TestTLSEnvVarsOverrideDefaults(t *testing.T) {
 	}
 	if cfg.TLS.StorePath != "/var/lib/mikroview/tls" {
 		t.Errorf("TLS.StorePath = %v, want /var/lib/mikroview/tls", cfg.TLS.StorePath)
+	}
+}
+
+func TestEntitiesEnvVarOverridesDefault(t *testing.T) {
+	t.Setenv("MIKROVIEW_ENTITIES_STORE_PATH", "/data/entities.json")
+
+	cfg, err := Load("", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Entities.StorePath != "/data/entities.json" {
+		t.Errorf("Entities.StorePath = %v, want /data/entities.json", cfg.Entities.StorePath)
+	}
+}
+
+func TestAuditEnvVarOverridesDefault(t *testing.T) {
+	t.Setenv("MIKROVIEW_AUDIT_STORE_PATH", "/data/audit.json")
+
+	cfg, err := Load("", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Audit.StorePath != "/data/audit.json" {
+		t.Errorf("Audit.StorePath = %v, want /data/audit.json", cfg.Audit.StorePath)
+	}
+}
+
+func TestOIDCDefaultsToDisabled(t *testing.T) {
+	cfg, err := Load("", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.OIDC.IssuerURL != "" {
+		t.Errorf("OIDC.IssuerURL = %q, want empty (OIDC not configured by default)", cfg.OIDC.IssuerURL)
+	}
+}
+
+func TestOIDCEnvVarsOverrideDefaults(t *testing.T) {
+	t.Setenv("MIKROVIEW_OIDC_ISSUER_URL", "https://idp.example")
+	t.Setenv("MIKROVIEW_OIDC_CLIENT_ID", "mikroview")
+	t.Setenv("MIKROVIEW_OIDC_CLIENT_SECRET", "s3cret")
+	t.Setenv("MIKROVIEW_OIDC_PUBLIC_BASE_URL", "https://mikroview.example.com")
+	t.Setenv("MIKROVIEW_OIDC_SCOPES", "openid, profile, email, groups")
+
+	cfg, err := Load("", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.OIDC.IssuerURL != "https://idp.example" {
+		t.Errorf("OIDC.IssuerURL = %q, want https://idp.example", cfg.OIDC.IssuerURL)
+	}
+	if cfg.OIDC.ClientID != "mikroview" {
+		t.Errorf("OIDC.ClientID = %q, want mikroview", cfg.OIDC.ClientID)
+	}
+	if cfg.OIDC.ClientSecret != "s3cret" {
+		t.Errorf("OIDC.ClientSecret = %q, want s3cret", cfg.OIDC.ClientSecret)
+	}
+	if cfg.OIDC.PublicBaseURL != "https://mikroview.example.com" {
+		t.Errorf("OIDC.PublicBaseURL = %q, want https://mikroview.example.com", cfg.OIDC.PublicBaseURL)
+	}
+	wantScopes := []string{"openid", "profile", "email", "groups"}
+	if len(cfg.OIDC.Scopes) != len(wantScopes) {
+		t.Fatalf("OIDC.Scopes = %v, want %v", cfg.OIDC.Scopes, wantScopes)
+	}
+	for i, s := range wantScopes {
+		if cfg.OIDC.Scopes[i] != s {
+			t.Errorf("OIDC.Scopes[%d] = %q, want %q", i, cfg.OIDC.Scopes[i], s)
+		}
+	}
+}
+
+func TestOIDCYAMLOverridesDefaultsAndFlagsIsNotRequired(t *testing.T) {
+	dir := t.TempDir()
+	yamlPath := filepath.Join(dir, "config.yaml")
+	err := os.WriteFile(yamlPath, []byte(`
+oidc:
+  issuerUrl: "https://idp.example"
+  clientId: "mikroview"
+  publicBaseUrl: "https://mikroview.example.com"
+`), 0o644)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := Load(yamlPath, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.OIDC.IssuerURL != "https://idp.example" || cfg.OIDC.ClientID != "mikroview" || cfg.OIDC.PublicBaseURL != "https://mikroview.example.com" {
+		t.Errorf("OIDC from yaml = %+v, missing an expected field", cfg.OIDC)
+	}
+	// clientSecret wasn't set in the yaml above and no env var is set in
+	// this test -- confirms nothing else silently fills it in.
+	if cfg.OIDC.ClientSecret != "" {
+		t.Errorf("OIDC.ClientSecret = %q, want empty", cfg.OIDC.ClientSecret)
+	}
+}
+
+func TestDeviceMACStorePathEnvVarOverridesDefault(t *testing.T) {
+	t.Setenv("MIKROVIEW_DEVICE_MAC_STORE_PATH", "/data/mac-registry.json")
+
+	cfg, err := Load("", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.DeviceMAC.StorePath != "/data/mac-registry.json" {
+		t.Errorf("DeviceMAC.StorePath = %q, want the env value /data/mac-registry.json", cfg.DeviceMAC.StorePath)
+	}
+}
+
+func TestDeviceMACStorePathYAMLOverridesDefault(t *testing.T) {
+	dir := t.TempDir()
+	yamlPath := filepath.Join(dir, "config.yaml")
+	err := os.WriteFile(yamlPath, []byte(`
+deviceMac:
+  storePath: "/data/mac-registry.json"
+`), 0o644)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := Load(yamlPath, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.DeviceMAC.StorePath != "/data/mac-registry.json" {
+		t.Errorf("DeviceMAC.StorePath = %q, want the yaml value /data/mac-registry.json", cfg.DeviceMAC.StorePath)
+	}
+}
+
+func TestBlocklistDefaultsToSpamhausDropAndEdrop(t *testing.T) {
+	cfg, err := Load("", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"spamhaus_drop", "spamhaus_edrop"}
+	if len(cfg.Blocklist.Sources) != len(want) {
+		t.Fatalf("Blocklist.Sources = %v, want %v", cfg.Blocklist.Sources, want)
+	}
+	for i, s := range want {
+		if cfg.Blocklist.Sources[i] != s {
+			t.Errorf("Blocklist.Sources[%d] = %q, want %q", i, cfg.Blocklist.Sources[i], s)
+		}
+	}
+}
+
+func TestBlocklistSourcesEnvVarOverridesDefault(t *testing.T) {
+	t.Setenv("MIKROVIEW_BLOCKLIST_SOURCES", "spamhaus_drop,emerging_threats_compromised")
+
+	cfg, err := Load("", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"spamhaus_drop", "emerging_threats_compromised"}
+	if len(cfg.Blocklist.Sources) != len(want) {
+		t.Fatalf("Blocklist.Sources = %v, want %v", cfg.Blocklist.Sources, want)
+	}
+	for i, s := range want {
+		if cfg.Blocklist.Sources[i] != s {
+			t.Errorf("Blocklist.Sources[%d] = %q, want %q", i, cfg.Blocklist.Sources[i], s)
+		}
+	}
+}
+
+func TestBlocklistSourcesYAMLCanDisableEntirely(t *testing.T) {
+	dir := t.TempDir()
+	yamlPath := filepath.Join(dir, "config.yaml")
+	err := os.WriteFile(yamlPath, []byte(`
+blocklist:
+  sources: []
+`), 0o644)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := Load(yamlPath, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.Blocklist.Sources) != 0 {
+		t.Errorf("Blocklist.Sources = %v, want empty (disabled)", cfg.Blocklist.Sources)
 	}
 }
 

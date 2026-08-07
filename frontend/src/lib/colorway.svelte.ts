@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+
 export type Colorway = 'signal' | 'pulse' | 'nebula' | 'frequency' | 'mono'
 
 export const COLORWAYS: { id: Colorway; label: string; swatch: string }[] = [

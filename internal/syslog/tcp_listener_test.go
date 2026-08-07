@@ -1,8 +1,12 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+
 package syslog
 
 import (
 	"context"
+	"io"
 	"net"
+	"runtime"
 	"testing"
 	"time"
 )
@@ -160,5 +164,122 @@ func TestServeTCPClosesIdleConnection(t *testing.T) {
 	_, readErr := conn.Read(buf)
 	if readErr == nil {
 		t.Fatal("expected the idle connection to be closed by the server, got a successful read")
+	}
+}
+
+// TestServeTCPDoesNotLeakGoroutinesOnOrdinaryDisconnect proves
+// handleTCPConn's watcher goroutine actually exits when a connection
+// ends normally, not only on process/ctx shutdown -- before the fix,
+// every idle-timeout disconnect (exercised here) leaked one goroutine
+// forever, since the watcher only ever selected on ctx.Done().
+func TestServeTCPDoesNotLeakGoroutinesOnOrdinaryDisconnect(t *testing.T) {
+	origTimeoutNS := tcpIdleTimeoutNS.Swap(int64(20 * time.Millisecond))
+	defer tcpIdleTimeoutNS.Store(origTimeoutNS)
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr := ln.Addr().String()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	out := make(chan RawMessage, 4)
+	go ServeTCP(ctx, ln, out)
+
+	baseline := goroutineCountSettled(t)
+
+	const n = 20
+	for i := 0; i < n; i++ {
+		conn, err := net.Dial("tcp", addr)
+		if err != nil {
+			t.Fatal(err)
+		}
+		// Idle until the server closes its side (20ms timeout above),
+		// then close this end too -- an ordinary, non-adversarial
+		// disconnect, the routine case this bug affected.
+		conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+		conn.Read(make([]byte, 1))
+		conn.Close()
+	}
+
+	after := goroutineCountSettled(t)
+	if after > baseline+2 { // small slack for scheduler/GC noise, not per-connection growth
+		t.Errorf("goroutine count grew from %d to %d after %d ordinary disconnects -- suggests a per-connection leak", baseline, after, n)
+	}
+}
+
+// goroutineCountSettled polls runtime.NumGoroutine() until it stops
+// shrinking (or a timeout), since a just-finished goroutine's stack
+// isn't necessarily reclaimed the instant it returns.
+func goroutineCountSettled(t *testing.T) int {
+	t.Helper()
+	last := runtime.NumGoroutine()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		time.Sleep(20 * time.Millisecond)
+		runtime.GC()
+		cur := runtime.NumGoroutine()
+		if cur >= last {
+			return cur
+		}
+		last = cur
+	}
+	return last
+}
+
+// TestPerSourceConnectionCap is the regression test for single-source
+// slot exhaustion. The global cap alone is exhaustible by one host: the
+// idle timeout resets on every line, so an attacker trickling traffic
+// holds every slot indefinitely and locks out all real routers -- the
+// tool goes blind while still looking healthy.
+func TestPerSourceConnectionCap(t *testing.T) {
+	prev := maxTCPConnectionsPerSource.Load()
+	maxTCPConnectionsPerSource.Store(3)
+	t.Cleanup(func() { maxTCPConnectionsPerSource.Store(prev) })
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	out := make(chan RawMessage, 128)
+	go ServeTCP(ctx, ln, out)
+
+	addr := ln.Addr().String()
+	var held []net.Conn
+	t.Cleanup(func() {
+		for _, c := range held {
+			c.Close()
+		}
+	})
+
+	// Open more than the per-source cap from one address. Each holds the
+	// connection open without completing a line, exactly as the
+	// exhaustion attack would.
+	for i := 0; i < perSourceLimit()+4; i++ {
+		c, err := net.Dial("tcp", addr)
+		if err != nil {
+			continue
+		}
+		held = append(held, c)
+	}
+
+	// The listener closes connections past the cap. Confirm at least one
+	// was refused by finding a connection that reads EOF promptly.
+	refused := 0
+	for _, c := range held {
+		c.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
+		buf := make([]byte, 1)
+		if _, err := c.Read(buf); err == io.EOF {
+			refused++
+		}
+	}
+	if refused == 0 {
+		t.Errorf("opened %d connections from one source with a cap of %d, but none were refused",
+			len(held), perSourceLimit())
 	}
 }

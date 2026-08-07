@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+
 const STORAGE_KEY = 'mikroview-max-age-seconds'
 
 // How long an event stays visible in the live table after it's received,

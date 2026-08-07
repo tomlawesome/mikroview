@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+
 import { emptyFilters, type Filters } from './types'
 import type { GroupByField } from './groupBy'
 

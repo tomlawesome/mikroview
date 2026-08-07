@@ -1,23 +1,19 @@
 <script lang="ts">
+  // SPDX-License-Identifier: AGPL-3.0-only
   import { appState } from '../lib/state.svelte'
-  import { flagsState } from '../lib/flags.svelte'
-  import { detectorSettingsState } from '../lib/detectorSettings.svelte'
-  import { authState } from '../lib/auth.svelte'
   import { formatEps } from '../lib/format'
-  import { themeState } from '../lib/theme.svelte'
   import { retentionState, MAX_AGE_OPTIONS } from '../lib/retention.svelte'
   import { downloadEventsCsv } from '../lib/export'
+  import { viewportState } from '../lib/viewport.svelte'
   import ConnectionIndicator from './ConnectionIndicator.svelte'
   import DeviceStatus from './DeviceStatus.svelte'
   import LogoLockup from './LogoLockup.svelte'
-  import ThemeMenu from './ThemeMenu.svelte'
+  import NavMenu from './NavMenu.svelte'
 
   function onMaxAgeChange(e: Event) {
     const raw = (e.target as HTMLSelectElement).value
     retentionState.set(raw === 'null' ? null : Number(raw))
   }
-
-  const modeLabels = { system: 'Auto', light: 'Light', dark: 'Dark' }
 </script>
 
 <header class="toolbar">
@@ -36,16 +32,18 @@
         </span>
       {/if}
 
-      <select
-        value={retentionState.maxAgeSeconds === null ? 'null' : String(retentionState.maxAgeSeconds)}
-        onchange={onMaxAgeChange}
-        title="How long events stay visible in the live view"
-        aria-label="Display duration"
-      >
-        {#each MAX_AGE_OPTIONS as opt (opt.value)}
-          <option value={opt.value === null ? 'null' : String(opt.value)}>{opt.label}</option>
-        {/each}
-      </select>
+      {#if !viewportState.isMobile}
+        <select
+          value={retentionState.maxAgeSeconds === null ? 'null' : String(retentionState.maxAgeSeconds)}
+          onchange={onMaxAgeChange}
+          title="How long events stay visible in the live view"
+          aria-label="Display duration"
+        >
+          {#each MAX_AGE_OPTIONS as opt (opt.value)}
+            <option value={opt.value === null ? 'null' : String(opt.value)}>{opt.label}</option>
+          {/each}
+        </select>
+      {/if}
 
       <button
         class:active={appState.autoscroll}
@@ -67,76 +65,18 @@
         Clear
       </button>
 
-      <button
-        onclick={() => downloadEventsCsv(appState.filteredEvents)}
-        disabled={appState.filteredEvents.length === 0}
-        title="Export the currently shown/filtered events to a CSV file"
-      >
-        Export
-      </button>
-    {/if}
-
-    <button
-      class:active={appState.view === 'metrics'}
-      onclick={() => (appState.view = appState.view === 'metrics' ? 'live' : 'metrics')}
-      title="Event charts and traffic breakdowns"
-    >
-      Metrics
-    </button>
-
-    <button
-      class:active={appState.view === 'control-ports'}
-      onclick={() => (appState.view = appState.view === 'control-ports' ? 'live' : 'control-ports')}
-      title="SSH/Telnet/control-port attempts, accepted and denied"
-    >
-      Control ports
-    </button>
-
-    <button
-      class:active={flagsState.open}
-      onclick={() => (flagsState.open = !flagsState.open)}
-      title="Behavioral flags: port scans, activity spikes, critical-port attempts, and volume spikes"
-    >
-      Flags
-      {#if flagsState.activeCount > 0}
-        <span class="flags-badge">{flagsState.activeCount}</span>
+      {#if !viewportState.isMobile}
+        <button
+          onclick={() => downloadEventsCsv(appState.filteredEvents)}
+          disabled={appState.filteredEvents.length === 0}
+          title="Export the currently shown/filtered events to a CSV file"
+        >
+          Export
+        </button>
       {/if}
-    </button>
-
-    <ThemeMenu />
-
-    <button
-      onclick={() => themeState.cycle()}
-      title="Cycle light/dark mode: system → light → dark"
-    >
-      {modeLabels[themeState.pref]}
-    </button>
-
-    {#if authState.state === 'authenticated' && authState.role === 'admin'}
-      <button onclick={() => (authState.showAddUser = true)} title="Create an additional account">
-        Add user
-      </button>
     {/if}
-    {#if (authState.state === 'authenticated' && authState.role === 'admin') || authState.state === 'auth-disabled'}
-      <!-- The backend's callerIsAdminOrOpen treats Count()==0 (true in
-           auth-disabled, since Disable only succeeds pre-account) as
-           admin-equivalent for this endpoint -- matching that here
-           rather than hiding a control that would actually work. -->
-      <button
-        onclick={() => {
-          detectorSettingsState.open = true
-          detectorSettingsState.refresh()
-        }}
-        title="Toggle behavioral detectors on/off and restrict their scope"
-      >
-        Detectors
-      </button>
-    {/if}
-    {#if authState.state === 'authenticated'}
-      <button onclick={() => authState.logout()} title="Sign out {authState.username}">
-        Sign out ({authState.username})
-      </button>
-    {/if}
+
+    <NavMenu />
   </div>
 </header>
 
@@ -212,24 +152,21 @@
     cursor: default;
   }
 
-  .flags-badge {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    min-width: 16px;
-    height: 16px;
-    padding: 0 4px;
-    margin-left: 6px;
-    border-radius: 8px;
-    background: var(--reject);
-    color: #fff;
-    font-size: 11px;
-    font-weight: 700;
-    line-height: 1;
-  }
-
   button:disabled:hover {
     color: var(--fg-muted);
     border-color: var(--border);
+  }
+
+  /* 44px minimum touch target (issue #85) for the toolbar's own
+     always-inline live-view controls -- desktop's 7px vertical padding
+     above is comfortable with a mouse but too cramped to tap
+     reliably. Scoped to this component's own buttons/select only
+     (Svelte's default style scoping), not a global rule that could
+     collide with smaller fixed-size icon buttons elsewhere. */
+  @media (max-width: 700px) {
+    button,
+    select {
+      min-height: 44px;
+    }
   }
 </style>

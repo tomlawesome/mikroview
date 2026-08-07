@@ -1,6 +1,9 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -9,33 +12,41 @@ import (
 	"testing"
 	"time"
 
+	"github.com/tomlawesome/mikroview/internal/audit"
 	"github.com/tomlawesome/mikroview/internal/auth"
 	"github.com/tomlawesome/mikroview/internal/config"
 	"github.com/tomlawesome/mikroview/internal/detect"
 	"github.com/tomlawesome/mikroview/internal/device"
+	"github.com/tomlawesome/mikroview/internal/entities"
 	"github.com/tomlawesome/mikroview/internal/flags"
 	"github.com/tomlawesome/mikroview/internal/hub"
 	"github.com/tomlawesome/mikroview/internal/reputation"
+	"github.com/tomlawesome/mikroview/internal/rules"
 	"github.com/tomlawesome/mikroview/internal/store"
 )
 
 // newTestServer's Auth defaults to the "disabled" state (see
 // auth.Store.Disable) -- zero users, but a deliberate, permanent
 // opt-out, not the tightened "undecided" bootstrap state (see
-// requireAuth). Matches every non-auth-specific test's assumption of a
-// fully open API; auth_test.go exercises the undecided/active states
-// explicitly where that's the point of the test.
+// requireAuth). Callers mount s.mux() rather than s.Routes(), which is
+// what "a fully open API" means now that authentication cannot be turned
+// off -- auth_test.go and the authzMatrix guard mount Routes and cover
+// the gate itself.
 func newTestServer(t *testing.T) (*Server, *store.Store) {
 	t.Helper()
 	st := store.New(1000, time.Hour)
 	fs, _ := flags.Open("")
+	es, _ := entities.Open("")
 	authStore, err := auth.Open(filepath.Join(t.TempDir(), "users.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := authStore.Disable(); err != nil {
+	tokenStore, err := auth.OpenTokenStore(filepath.Join(t.TempDir(), "tokens.json"))
+	if err != nil {
 		t.Fatal(err)
 	}
+	ru, _ := rules.Open("")
+	as, _ := audit.Open("")
 	s := &Server{
 		Store:            st,
 		Devices:          device.NewRegistry([]config.Device{{ID: "core", Name: "Core", SourceIP: "192.168.1.1"}}),
@@ -43,17 +54,22 @@ func newTestServer(t *testing.T) (*Server, *store.Store) {
 		Reputation:       reputation.New(""),
 		Flags:            fs,
 		DetectorSettings: detect.AllEnabledSettingsStore(),
+		Entities:         es,
+		Rules:            ru,
+		Audit:            as,
 		Auth:             authStore,
 		Sessions:         auth.NewSessionStore(time.Hour),
 		LoginLimiter:     auth.NewLoginLimiter(10, time.Minute),
+		Tokens:           tokenStore,
 		StartTime:        time.Now(),
+		Version:          "test-version",
 	}
 	return s, st
 }
 
 func TestHandleHealthz(t *testing.T) {
 	s, _ := newTestServer(t)
-	ts := httptest.NewServer(s.Routes())
+	ts := httptest.NewServer(s.mux())
 	defer ts.Close()
 
 	resp, err := http.Get(ts.URL + "/api/healthz")
@@ -72,11 +88,14 @@ func TestHandleHealthz(t *testing.T) {
 	if body["status"] != "ok" {
 		t.Errorf("status field = %v, want ok", body["status"])
 	}
+	if body["version"] != "test-version" {
+		t.Errorf("version field = %v, want test-version", body["version"])
+	}
 }
 
 func TestHandleEventsFiltering(t *testing.T) {
 	s, st := newTestServer(t)
-	ts := httptest.NewServer(s.Routes())
+	ts := httptest.NewServer(s.mux())
 	defer ts.Close()
 
 	now := time.Now()
@@ -100,7 +119,7 @@ func TestHandleEventsFiltering(t *testing.T) {
 
 func TestHandleEventsScopeFiltering(t *testing.T) {
 	s, st := newTestServer(t)
-	ts := httptest.NewServer(s.Routes())
+	ts := httptest.NewServer(s.mux())
 	defer ts.Close()
 
 	now := time.Now()
@@ -139,7 +158,7 @@ func TestHandleEventsScopeFiltering(t *testing.T) {
 
 func TestHandleEventsUntilFiltering(t *testing.T) {
 	s, st := newTestServer(t)
-	ts := httptest.NewServer(s.Routes())
+	ts := httptest.NewServer(s.mux())
 	defer ts.Close()
 
 	now := time.Now()
@@ -166,7 +185,7 @@ func TestHandleEventsUntilFiltering(t *testing.T) {
 // return only events within that window, matching the source IP.
 func TestHandleEventsAroundWindow(t *testing.T) {
 	s, st := newTestServer(t)
-	ts := httptest.NewServer(s.Routes())
+	ts := httptest.NewServer(s.mux())
 	defer ts.Close()
 
 	now := time.Now()
@@ -195,7 +214,7 @@ func TestHandleEventsAroundWindow(t *testing.T) {
 
 func TestHandleDevices(t *testing.T) {
 	s, _ := newTestServer(t)
-	ts := httptest.NewServer(s.Routes())
+	ts := httptest.NewServer(s.mux())
 	defer ts.Close()
 
 	resp, err := http.Get(ts.URL + "/api/devices")
@@ -215,10 +234,161 @@ func TestHandleDevices(t *testing.T) {
 	}
 }
 
+// TestHandleDevicesReportsStatus covers the issue #98 fleet-health status
+// field end to end through the real HTTP handler: a device that's never
+// sent anything is "never_seen", one that's sent something recently is
+// "live", and one whose last event is older than DeviceStaleAfter is
+// "stale".
+func TestHandleDevicesReportsStatus(t *testing.T) {
+	s, _ := newTestServer(t)
+	s.DeviceStaleAfter = 10 * time.Minute
+
+	// newTestServer's "core" device is configured but has never had
+	// Resolve called for it -- exactly the "never_seen" case.
+	s.Devices.Resolve("203.0.113.9", time.Now()) // an auto-discovered, currently-live device
+	s.Devices.Resolve("198.51.100.1", time.Now().Add(-30*time.Minute))
+	s.Devices.Resolve("198.51.100.1", time.Now().Add(-30*time.Minute)) // same source, stays stale either way
+
+	ts := httptest.NewServer(s.mux())
+	defer ts.Close()
+
+	resp, err := http.Get(ts.URL + "/api/devices")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	var body struct {
+		Devices []struct {
+			ID     string `json:"id"`
+			Status string `json:"status"`
+		} `json:"devices"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+
+	byID := map[string]string{}
+	for _, d := range body.Devices {
+		byID[d.ID] = d.Status
+	}
+	if byID["core"] != "never_seen" {
+		t.Errorf("expected core's status = never_seen (configured, zero events), got %q", byID["core"])
+	}
+	if byID["203.0.113.9"] != "live" {
+		t.Errorf("expected 203.0.113.9's status = live (just resolved), got %q", byID["203.0.113.9"])
+	}
+	if byID["198.51.100.1"] != "stale" {
+		t.Errorf("expected 198.51.100.1's status = stale (last seen 30m ago, threshold 10m), got %q", byID["198.51.100.1"])
+	}
+}
+
+// TestDeviceStatus is a direct, table-driven unit test of deviceStatus's
+// three-way classification -- the HTTP-level test above already covers
+// it end to end, this pins the exact boundary/zero-threshold behavior
+// deviceStatus's own doc comment promises.
+func TestDeviceStatus(t *testing.T) {
+	now := time.Now()
+
+	tests := []struct {
+		name       string
+		info       device.Info
+		staleAfter time.Duration
+		want       string
+	}{
+		{
+			name:       "never seen regardless of threshold",
+			info:       device.Info{LastSeen: time.Time{}},
+			staleAfter: 10 * time.Minute,
+			want:       "never_seen",
+		},
+		{
+			name:       "well within threshold",
+			info:       device.Info{LastSeen: now.Add(-time.Minute)},
+			staleAfter: 10 * time.Minute,
+			want:       "live",
+		},
+		{
+			name:       "exactly at threshold counts as stale",
+			info:       device.Info{LastSeen: now.Add(-10 * time.Minute)},
+			staleAfter: 10 * time.Minute,
+			want:       "stale",
+		},
+		{
+			name:       "one second under threshold is still live",
+			info:       device.Info{LastSeen: now.Add(-10*time.Minute + time.Second)},
+			staleAfter: 10 * time.Minute,
+			want:       "live",
+		},
+		{
+			name:       "well past threshold",
+			info:       device.Info{LastSeen: now.Add(-time.Hour)},
+			staleAfter: 10 * time.Minute,
+			want:       "stale",
+		},
+		{
+			name:       "zero threshold disables staleness entirely",
+			info:       device.Info{LastSeen: now.Add(-30 * 24 * time.Hour)},
+			staleAfter: 0,
+			want:       "live",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := deviceStatus(tt.info, tt.staleAfter, now)
+			if got != tt.want {
+				t.Errorf("deviceStatus() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+// TestHandleRules covers issue #109's "discovered but unnamed rules"
+// source: GET /api/rules must serve every rule label internal/rules.Store
+// has ever seen fire (via Touch), not just what's currently loaded --
+// mirroring TestHandleDevices' shape for the analogous device endpoint.
+func TestHandleRules(t *testing.T) {
+	s, _ := newTestServer(t)
+	now := time.Now()
+	s.Rules.Touch("r13", now)
+	s.Rules.Touch("r13", now)
+	s.Rules.Touch("r99", now.Add(-time.Hour))
+
+	ts := httptest.NewServer(s.mux())
+	defer ts.Close()
+
+	resp, err := http.Get(ts.URL + "/api/rules")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	var body struct {
+		Rules []rules.Usage `json:"rules"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	if len(body.Rules) != 2 {
+		t.Fatalf("expected 2 rules, got %d: %+v", len(body.Rules), body.Rules)
+	}
+	byRule := map[string]rules.Usage{}
+	for _, u := range body.Rules {
+		byRule[u.Rule] = u
+	}
+	if byRule["r13"].Count != 2 {
+		t.Errorf("expected r13's count = 2, got %d", byRule["r13"].Count)
+	}
+	if byRule["r99"].Count != 1 {
+		t.Errorf("expected r99's count = 1, got %d", byRule["r99"].Count)
+	}
+}
+
 func TestHandleCriticalPorts(t *testing.T) {
 	s, _ := newTestServer(t)
 	s.CriticalPorts = []int{22, 3389, 8291}
-	ts := httptest.NewServer(s.Routes())
+	ts := httptest.NewServer(s.mux())
 	defer ts.Close()
 
 	resp, err := http.Get(ts.URL + "/api/critical-ports")
@@ -240,7 +410,7 @@ func TestHandleCriticalPorts(t *testing.T) {
 
 func TestHandleStats(t *testing.T) {
 	s, st := newTestServer(t)
-	ts := httptest.NewServer(s.Routes())
+	ts := httptest.NewServer(s.mux())
 	defer ts.Close()
 
 	st.Insert(store.Event{Time: time.Now(), Action: store.ActionAccept})
@@ -258,4 +428,21 @@ func TestHandleStats(t *testing.T) {
 	if body["total"].(float64) != 1 {
 		t.Errorf("total = %v, want 1", body["total"])
 	}
+}
+
+// asAdmin wraps the ungated mux with a stand-in admin identity -- what a
+// handler sees once requireAuth has already done its job.
+//
+// The admin-gated handler tests used to pass because callerIsAdminOrOpen
+// treated an anonymous caller as an admin while zero accounts existed.
+// That bypass is gone (#164), so the identity has to come from somewhere.
+// Injecting it keeps these tests about the handler; the gate itself is
+// covered by auth_test.go and the authzMatrix guard, which both mount
+// Routes and log in for real. Repeating a full login here would test the
+// middleware nine more times and the handler once.
+func asAdmin(h http.Handler) http.Handler {
+	admin := &auth.User{ID: "test-admin", Username: "admin", Role: auth.RoleAdmin}
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		h.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), userContextKey, admin)))
+	})
 }

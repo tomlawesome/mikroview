@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+
 package logging
 
 import (
@@ -5,6 +7,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"unicode"
 )
 
 func TestFormatLineNoColorLayout(t *testing.T) {
@@ -151,5 +154,63 @@ func TestHandleIsSafeForConcurrentUse(t *testing.T) {
 
 	if got := strings.Count(buf.String(), "\n"); got != 20 {
 		t.Errorf("expected 20 complete lines with no interleaving corruption, got %d newlines", got)
+	}
+}
+
+// TestRecoverMustBeDeferredDirectly guards the exact footgun Recover's
+// own doc comment warns about: recover() only stops a panic when
+// called directly by the function that was itself deferred. Wrapping
+// the call in another closure (`defer func() { Recover(logger) }()`)
+// looks equivalent but silently doesn't work -- this test would crash
+// with an unrecovered panic if Recover (or its calling convention) ever
+// regressed to that pattern.
+func TestRecoverMustBeDeferredDirectly(t *testing.T) {
+	var buf strings.Builder
+	h := &handler{w: &buf, level: slog.LevelInfo, color: false, mu: &sync.Mutex{}}
+	logger := slog.New(h).With(slog.String("component", "recover-test"))
+
+	func() {
+		defer Recover(logger)
+		panic("boom")
+	}()
+
+	if !strings.Contains(buf.String(), "recovered from panic") {
+		t.Errorf("expected a logged recovery, got %q", buf.String())
+	}
+	if !strings.Contains(buf.String(), "boom") {
+		t.Errorf("expected the panic value in the log line, got %q", buf.String())
+	}
+}
+
+func TestPrintableNeutralisesTerminalControlSequences(t *testing.T) {
+	cases := []struct {
+		name string
+		in   string
+	}{
+		{"erase line", "alice\x1b[2K\rroot"},
+		{"clear screen", "\x1b[2J"},
+		{"cursor move", "\x1b[10;10H"},
+		{"newline", "alice\nadmin"},
+		{"NUL", "alice\x00"},
+		{"RTL override", "alice‮eslaf"},
+		{"zero-width joiner", "ali‍ce"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := Printable(tc.in)
+			for _, r := range got {
+				if unicode.IsControl(r) || unicode.Is(unicode.Cf, r) {
+					t.Fatalf("Printable(%q) = %q, still contains %U", tc.in, got, r)
+				}
+			}
+		})
+	}
+}
+
+func TestPrintableLeavesOrdinaryTextAlone(t *testing.T) {
+	for _, s := range []string{"alice", "tom@example.com", "José", "日本語", "a-b_c.d"} {
+		if got := Printable(s); got != s {
+			t.Errorf("Printable(%q) = %q, want it unchanged", s, got)
+		}
 	}
 }
