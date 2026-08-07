@@ -61,7 +61,7 @@ type Server struct {
 	// CriticalPorts is the configured control-port list (issue #34's
 	// tracking tab) -- exposed read-only via GET /api/critical-ports,
 	// deliberately not behind handleDetectorSettingsList's admin gate
-	// (see that handler's callerIsAdminOrOpen) since a non-admin user
+	// (see that handler's callerIsAdmin) since a non-admin user
 	// account still needs it to render the tab.
 	CriticalPorts []int
 	// DeviceStaleAfter (issue #98) is how long a device's LastSeen may go

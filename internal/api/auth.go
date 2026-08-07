@@ -427,15 +427,19 @@ type createUserRequest struct {
 // callerIsAdmin reports whether r's authenticated caller is an admin --
 // the strict check every admin-only mutation of *account-equivalent*
 // state (user management, and internal/entities' admin-gated CRUD) uses.
-// While no account exists (undecided or disabled), there's no admin to
-// have called this as -- caller is nil either way (requireAuth's
-// bootstrap-exempt window blocks this path entirely during "undecided,"
-// and "disabled" bypasses the session check that would otherwise set
-// it), so this one check covers every zero-account case without needing
-// to special-case why Count() is still 0. Unlike
-// callerIsAdminOrOpen (detector_settings.go), there is deliberately no
-// "no users yet" bypass here: creating a user, or editing an entity
-// record, has no meaning before an admin exists.
+// The single admin check for every admin-gated endpoint.
+//
+// There is deliberately no "no accounts yet" bypass. One existed, on the
+// detector-settings and flags-exclusion endpoints, from when mikroview
+// could run with authentication switched off -- it treated an anonymous
+// caller as an admin while Count() was 0. That mode is gone, and
+// requireAuth now refuses those paths outright before they route, so the
+// bypass was unreachable. Unreachable is not the same as harmless: it
+// read as "anonymous callers are admins under some condition", and would
+// have become live again the moment requireAuth was loosened.
+//
+// While no account exists, caller is nil, so this returns false without
+// needing to know why Count() is 0.
 func callerIsAdmin(r *http.Request) bool {
 	caller := userFromContext(r)
 	return caller != nil && caller.Role == auth.RoleAdmin
