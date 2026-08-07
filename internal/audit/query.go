@@ -10,6 +10,20 @@ const (
 	maxLimit     = 2000
 )
 
+// clampLimit maps a caller-supplied limit onto [1, maxLimit]. Every
+// return is either a constant or a value already proven to sit inside
+// the range, so the result's bound is evident without having to trace
+// the caller.
+func clampLimit(requested int) int {
+	if requested <= 0 {
+		return defaultLimit
+	}
+	if requested > maxLimit {
+		return maxLimit
+	}
+	return requested
+}
+
 // Query selects a windowed slice of the audit log -- the same
 // Since/Until/Limit windowed-query shape GET /api/events' store.Query
 // already establishes (see internal/store/query.go), minus the event-
@@ -42,15 +56,21 @@ func (s *Store) Query(q Query) Result {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	limit := q.Limit
-	switch {
-	case limit <= 0:
-		limit = defaultLimit
-	case limit > maxLimit:
-		limit = maxLimit
-	}
+	limit := clampLimit(q.Limit)
 
-	matched := make([]Entry, 0, min(limit, len(s.entries)))
+	// Written as explicit comparisons rather than min(limit,
+	// len(s.entries)): the allocation is bounded either way, but static
+	// analysis can only follow the bound if every step is a plain
+	// comparison against a constant. CodeQL's uncontrolled-allocation-size
+	// rule flagged the previous form (it doesn't track the clamp through
+	// the switch/builtin), and "provably bounded to a reader and a
+	// scanner" is worth more here than the shorter expression -- this
+	// capacity comes from a query string on an HTTP endpoint.
+	capacity := len(s.entries)
+	if capacity > limit {
+		capacity = limit
+	}
+	matched := make([]Entry, 0, capacity)
 	hasMore := false
 	for i := len(s.entries) - 1; i >= 0; i-- {
 		e := s.entries[i]
