@@ -1143,6 +1143,36 @@ open for a year. Creating an account is one form.
 > Upgrading from a version that let you run without a login? See
 > [CHANGELOG.md](../CHANGELOG.md) for what to do.
 
+### Backing up and restoring
+
+```sh
+mikroview -backup /secure/place/mikroview-backup.json.gz
+mikroview -restore /secure/place/mikroview-backup.json.gz
+```
+
+One gzipped file holding every store: accounts, API tokens, recovery-key
+digests, flags, entities, detector settings, the audit log.
+
+**It contains your credentials.** That is deliberate — a backup that
+leaves them out cannot restore a working system, and you would find that
+out during a disaster. So treat the file exactly as you would the data
+directory. MikroView writes it `0600`, refuses to overwrite an existing
+file, and refuses to write into a world-readable directory unless you
+pass `--force`.
+
+**Restoring never half-happens.** The file is fully parsed and checked
+before anything on disk is touched, and each store is written to a temp
+file and renamed into place. A corrupt or truncated backup leaves your
+existing state exactly as it was — which matters most for the accounts
+file, where the alternative to "unchanged" is "locked out".
+
+`-restore` refuses to overwrite stores that already exist unless you pass
+`--force`.
+
+> **Using Postgres?** These commands refuse, on purpose. Back up the
+> database with `pg_dump` or your provider's snapshots — see
+> [CHANGELOG.md](../CHANGELOG.md) and the migration section above.
+
 ### Adding and removing people
 
 Open **Menu → Users**. Only the admin sees it.
