@@ -6,7 +6,10 @@ import type { FirewallEvent } from './types'
 // the live table's columns -- this includes every field worth having in
 // an export (NAT detail, raw line) regardless of which columns happen to
 // be visible/sized on screen.
-const COLUMNS: (keyof FirewallEvent)[] = [
+// Exported so the neutralising test can assert over every column,
+// including ones added after that test was written -- see
+// export.test.ts. A new column is exactly how this defect comes back.
+export const COLUMNS: (keyof FirewallEvent)[] = [
   'time',
   'deviceId',
   'sourceIp',

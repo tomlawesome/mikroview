@@ -2,7 +2,7 @@
 
 import { describe, expect, it } from 'vitest'
 import type { FirewallEvent } from './types'
-import { eventsToCsv } from './export'
+import { COLUMNS, eventsToCsv } from './export'
 
 function event(overrides: Partial<FirewallEvent> = {}): FirewallEvent {
   return {
@@ -54,5 +54,33 @@ describe('CSV export formula injection', () => {
   it('neutralises a payload that also needs CSV quoting', () => {
     const csv = eventsToCsv([event({ raw: '=HYPERLINK("http://evil.example","click"),x' })])
     expect(csv).toContain('"\'=HYPERLINK')
+  })
+})
+
+// The tests above cover the columns that exist today. This one covers
+// the ones that don't yet: it drives every entry in COLUMNS, so adding
+// a column without routing it through csvEscape fails here rather than
+// in someone's spreadsheet. A new column is exactly how this defect
+// comes back.
+describe('every exported column is neutralised', () => {
+  // Deliberately free of quotes and commas, so csvEscape's quoting
+  // branch doesn't fire and the assertions can look at the cell text
+  // directly. The quoting-plus-neutralising interaction is covered
+  // separately above.
+  const PAYLOAD = '=IMPORTXML(A1)'
+
+  it.each(COLUMNS)('column %s', (column) => {
+    const csv = eventsToCsv([event({ [column]: PAYLOAD } as Partial<FirewallEvent>)])
+    const body = csv.split('\n').slice(1).join('\n')
+
+    expect(body).toContain(`'${PAYLOAD}`) // exported, behind the neutralising prefix
+    expect(body).not.toContain(`,${PAYLOAD}`) // never a bare cell mid-row
+    expect(body.startsWith(PAYLOAD)).toBe(false) // nor the first cell
+  })
+
+  it('covers a non-trivial number of columns', () => {
+    // Guards against COLUMNS being emptied or renamed out from under
+    // the it.each above, which would make it vacuously pass.
+    expect(COLUMNS.length).toBeGreaterThan(20)
   })
 })
