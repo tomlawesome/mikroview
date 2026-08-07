@@ -53,7 +53,7 @@ type User struct {
 	LastLogin    time.Time `json:"lastLogin,omitzero"`
 	// PasswordChangedAt lets a session be invalidated by a password
 	// reset that happens in a *different process* -- the CLI recovery
-	// tool (`-reset-password`) has no access to the running server's
+	// tool (`-recover-admin-account`) has no access to the running server's
 	// in-memory SessionStore (see auth.SessionStore.RevokeAllForUser,
 	// which only helps a same-process caller, e.g. a future in-app
 	// change-password flow). Comparing a session's IssuedAt against this
@@ -201,7 +201,7 @@ var (
 
 // minPasswordLength is enforced at every path that sets a user-chosen
 // password (createLocked, SetPassword) -- self-registration, admin-
-// created accounts, and the CLI reset-password tool all funnel through
+// created accounts, and the CLI admin-recovery tool all funnel through
 // one of those two, so there's exactly one place this needs to live.
 const minPasswordLength = 8
 
@@ -254,7 +254,7 @@ type Store struct {
 	disabled bool
 	// mtime tracks the store file's modification time as of the last
 	// load, so a running server can pick up a change made by a separate
-	// process -- namely the CLI recovery tools (`-reset-password`,
+	// process -- namely the CLI recovery tools (`-recover-admin-account`,
 	// `-enable-auth-setup`), which each open their own independent
 	// Store and write to the same file. Without this, a password reset
 	// (or re-arming the setup flow) would silently have no effect on an
@@ -428,7 +428,7 @@ func (s *Store) Disable() error {
 // browser could reach -- only internal/main.go's `-enable-auth-setup`
 // CLI mode calls this, so a UI visitor can never re-impose auth for
 // everyone else without host/container access (the same trust anchor
-// `-reset-password`/`-list-users` already rely on).
+// `-recover-admin-account`/`-list-users` already rely on).
 func (s *Store) EnableSetup() error {
 	if !s.Persisted() {
 		return ErrNotPersisted
@@ -892,7 +892,7 @@ func (s *Store) ByUsername(username string) (*User, bool) {
 }
 
 // SetPassword replaces username's password hash -- the CLI recovery
-// path (`mikroview -reset-password`), which needs no current password
+// path (`mikroview -recover-admin-account`), which needs no current password
 // since container/host access is the trust anchor for that tool. Also
 // records PasswordChangedAt, which is what actually invalidates any
 // session issued before this reset (see User.PasswordChangedAt) -- the
@@ -915,6 +915,12 @@ func (s *Store) SetPassword(username, newPassword string, now time.Time) error {
 	}
 	u.PasswordHash = hash
 	u.PasswordChangedAt = now
+	// An account that has a password has a local password, by
+	// definition. Stated explicitly rather than left to be derived from
+	// OIDCIssuer, so a linked account (OIDC *and* a local password)
+	// isn't misread as SSO-only by the recovery tooling.
+	yes := true
+	u.HasLocalPassword = &yes
 	s.persistLocked()
 	return nil
 }

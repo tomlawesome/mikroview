@@ -133,7 +133,7 @@ type Store struct {
 
 // Log controls mikroview's own server log output -- see
 // internal/logging. Doesn't apply to the CLI recovery commands
-// (-list-users, -reset-password's prompts, etc.), which print directly
+// (-list-users, -recover-admin-account's prompts, etc.), which print directly
 // to stdout/stderr for scripting/piping, not through this leveled path.
 type Log struct {
 	// Level is one of debug/info/warn/error (case-insensitive); anything

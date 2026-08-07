@@ -8,7 +8,7 @@
 // posture (see go.mod).
 //
 // Not used for CLI recovery command output (-list-users,
-// -reset-password's password prompts, etc.) -- those print directly to
+// -recover-admin-account's password prompts, etc.) -- those print directly to
 // stdout/stderr for scripting/piping, not through this leveled path.
 package logging
 

@@ -191,7 +191,7 @@ func main() {
 	if len(os.Args) > 1 && os.Args[1] == "-healthcheck" {
 		os.Exit(runHealthcheck())
 	}
-	// -list-users/-reset-password: the account-recovery path (see
+	// -list-users/-recover-admin-account: the account-recovery path (see
 	// docs/configuration.md's "Authentication" section) -- container/
 	// host access is the trust anchor for these, deliberately outside
 	// the web UI/API entirely, so a locked-out admin isn't dependent on
@@ -199,8 +199,15 @@ func main() {
 	if len(os.Args) > 1 && os.Args[1] == "-list-users" {
 		os.Exit(runListUsers())
 	}
+	if len(os.Args) > 1 && os.Args[1] == "-recover-admin-account" {
+		os.Exit(runRecoverAdminAccount(os.Args[2:]))
+	}
+	// -reset-password was the previous name, and reset *any* account's
+	// password with host access alone. It is not kept as an alias: the
+	// replacement is narrower (admin only) and gated on a recovery key,
+	// so silently forwarding would misrepresent what now happens.
 	if len(os.Args) > 1 && os.Args[1] == "-reset-password" {
-		os.Exit(runResetPassword(os.Args[2:]))
+		os.Exit(runRetiredResetPassword())
 	}
 	// -enable-auth-setup: the only way to re-arm the web setup form after
 	// a deployment has explicitly skipped auth (see auth.Store.Disable) --
@@ -1148,7 +1155,7 @@ func runHealthcheck() int {
 	return 0
 }
 
-// openAuthStoreForCLI is shared by runListUsers/runResetPassword: both
+// openAuthStoreForCLI is shared by runListUsers/runRecoverAdminAccount: both
 // need a real, persisted auth.Store and both refuse identically if one
 // isn't configured -- an ephemeral store would make either command
 // pointless (list nothing meaningful, or reset a password that vanishes
@@ -1218,42 +1225,121 @@ func authShouldFailClosed(err error, storePath string) bool {
 	return err != nil && storePath != ""
 }
 
-// runResetPassword backs `-reset-password <username>` -- the account-
-// recovery path. Prompts for the new password twice (no echo) rather
-// than accepting it as a CLI argument or env var, so it never touches
-// shell history, process args, or `docker inspect` output; container/
-// host access (the ability to exec this at all) is the trust anchor.
-// Revokes every existing session for that user, so a stolen session
-// cookie doesn't survive a deliberate credential reset.
-func runResetPassword(args []string) int {
+// runRetiredResetPassword explains where `-recover-admin-account` went.
+//
+// A removed recovery command is the worst thing to hit an operator who
+// is already locked out, so it exits with a pointer rather than an
+// unrecognised-flag error. Exit 2 (usage), not 1: nothing failed, the
+// command simply no longer exists.
+func runRetiredResetPassword() int {
 	logger := logging.New("reset-password")
-	if len(args) < 1 {
-		fmt.Fprintln(os.Stderr, "usage: mikroview -reset-password <username>")
-		return 1
-	}
-	username := args[0]
+	logger.Error("-reset-password has been replaced by -recover-admin-account, which recovers " +
+		"the admin account only and requires a recovery key. Other accounts are managed by the " +
+		"admin from the web UI. See docs/configuration.md, \"Recovering the admin account\"")
+	return 2
+}
 
-	store, err := openAuthStoreForCLI("-reset-password")
+// runRecoverAdminAccount backs `-recover-admin-account` -- the way back
+// in when the admin cannot sign in.
+//
+// Two deliberate narrowings from the `-recover-admin-account` it replaces.
+//
+// It recovers the admin account only. The old command could rewrite any
+// account's password from host access alone, which made every user
+// account a route to a working login; other accounts are the admin's to
+// manage from the UI, where the action is authenticated and logged.
+//
+// It requires a recovery key. Host access alone is no longer sufficient,
+// so a lower-privileged local account or a container exec that can run
+// the binary but cannot read the key file gets nowhere -- and neither
+// does someone holding a stolen backup, since the pepper is not in it.
+//
+// The new password is prompted for twice, without echo, rather than
+// taken as an argument or env var, so it never reaches shell history,
+// process args, or `docker inspect`. SetPassword records
+// PasswordChangedAt, which invalidates every session issued before the
+// recovery -- a stolen cookie must not survive it.
+func runRecoverAdminAccount(args []string) int {
+	logger := logging.New("recover-admin-account")
+
+	recovery, err := openRecoveryStoreForCLI()
 	if err != nil {
 		logger.Error(err.Error())
 		return 1
 	}
-	if _, ok := store.ByUsername(username); !ok {
-		logger.Error(fmt.Sprintf("no such user %q -- run -list-users to see existing accounts", username))
+	store, err := openAuthStoreForCLI("-recover-admin-account")
+	if err != nil {
+		logger.Error(err.Error())
+		return 1
+	}
+
+	admin := store.Admin()
+	if admin == nil {
+		logger.Error("this deployment has no admin account -- nothing to recover")
+		return 1
+	}
+	// Checked before anything is prompted for. mikroview does not hold
+	// the credential for an SSO-only admin, so there is nothing here to
+	// reset; sending the operator to their identity provider immediately
+	// beats letting them type a recovery key and a new password first
+	// and only then learning it was never going to work.
+	if !admin.LocalPassword() {
+		logger.Error(fmt.Sprintf("%q signs in through your identity provider and has no local password "+
+			"-- mikroview cannot recover it. Reset it at your identity provider, or use "+
+			"-transfer-admin to move admin to an account that does have one", admin.Username))
+		return 1
+	}
+
+	fmt.Printf("Recover the admin account %q.\n", admin.Username)
+	fmt.Print("Recovery key: ")
+	var key string
+	if _, err := fmt.Scanln(&key); err != nil {
+		logger.Error("no recovery key supplied")
+		return 1
+	}
+
+	// Redeem verifies the key and prepares a replacement set without
+	// persisting the rotation -- Commit below does that, once the
+	// operator confirms they captured the new keys.
+	fresh, err := recovery.Redeem(key)
+	if err != nil {
+		// One message for a wrong key and for a corrupt store: the
+		// difference is only useful to someone probing.
+		logger.Error(err.Error())
 		return 1
 	}
 
 	password, err := readPasswordTwice()
 	if err != nil {
-		logger.Error(err.Error())
+		logger.Error(fmt.Sprintf("%v -- no key was consumed, nothing has changed", err))
 		return 1
 	}
+	if err := store.SetPassword(admin.Username, password, time.Now()); err != nil {
+		logger.Error(fmt.Sprintf("%v -- no key was consumed, nothing has changed", err))
+		return 1
+	}
+	fmt.Printf("Password for %q updated. Existing sessions for that account are now invalid.\n", admin.Username)
 
-	if err := store.SetPassword(username, password, time.Now()); err != nil {
-		logger.Error(err.Error())
+	// Past this point the recovery itself has succeeded. Every remaining
+	// failure leaves the previous keys valid and says so -- rotating
+	// into a set the operator never captured is the one outcome worse
+	// than not rotating at all.
+	if err := printRecoveryKeys(fresh, hasFlag(args, "--i-will-capture-this")); err != nil {
+		logger.Warn(fmt.Sprintf("admin account recovered, but the new keys could not be shown: %v -- "+
+			"your previous recovery keys remain valid", err))
 		return 1
 	}
-	fmt.Printf("Password for %q updated.\n", username)
+	if !confirmSaved() {
+		logger.Warn("admin account recovered, but the new keys were not confirmed -- " +
+			"your previous recovery keys remain valid")
+		return 1
+	}
+	if err := recovery.Commit(); err != nil {
+		logger.Warn(fmt.Sprintf("admin account recovered, but storing the new keys failed: %v -- "+
+			"your previous recovery keys remain valid", err))
+		return 1
+	}
+	logger.Info("admin account recovered, recovery keys rotated")
 	return 0
 }
 

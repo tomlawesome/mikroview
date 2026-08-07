@@ -461,7 +461,7 @@ func TestNonAdminCannotCreateUsers(t *testing.T) {
 }
 
 func TestPasswordResetInvalidatesExistingSessions(t *testing.T) {
-	// Simulates the CLI recovery tool (`-reset-password`) resetting a
+	// Simulates the CLI recovery tool (`-recover-admin-account`) resetting a
 	// password from a *separate process* -- it has no handle on the
 	// running server's SessionStore, so this has to work purely off the
 	// persisted User.PasswordChangedAt field (see Server.sessionUser).

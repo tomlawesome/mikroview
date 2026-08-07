@@ -150,6 +150,36 @@ func TestSetPasswordChangesCredentials(t *testing.T) {
 	}
 }
 
+// An SSO-provisioned account starts with HasLocalPassword explicitly
+// false. If it is ever given a real password, that flag has to move with
+// it -- otherwise the account holds a working mikroview password while
+// still reporting itself SSO-only, and -recover-admin-account refuses to
+// recover an account it actually could.
+//
+// Nothing reaches this state today (recovery refuses SSO-only accounts
+// up front), so this guards the invariant ahead of account linking
+// rather than a live bug.
+func TestSetPasswordMarksTheAccountAsHavingALocalPassword(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "users.json")
+	s, _ := Open(path)
+
+	u, created, err := s.FindOrCreateOIDCUser("https://idp.example", "subject-1", "sso-user", time.Now())
+	if err != nil || !created {
+		t.Fatalf("FindOrCreateOIDCUser: created=%v err=%v", created, err)
+	}
+	if u.LocalPassword() {
+		t.Fatal("an SSO-provisioned account reports a local password before the test even starts")
+	}
+
+	if err := s.SetPassword(u.Username, "new-password", time.Now()); err != nil {
+		t.Fatalf("SetPassword: %v", err)
+	}
+	got, _ := s.ByUsername(u.Username)
+	if !got.LocalPassword() {
+		t.Error("an account that was just given a password reports no local password")
+	}
+}
+
 func TestSetPasswordUnknownUserReturnsNotFound(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "users.json")
 	s, _ := Open(path)
@@ -219,7 +249,7 @@ func TestGetReturnsCopyNotSharedPointer(t *testing.T) {
 }
 
 // TestSeparateProcessPasswordResetIsPickedUpByRunningStore reproduces
-// the cross-process scenario the CLI recovery tool (`-reset-password`)
+// the cross-process scenario the CLI recovery tool (`-recover-admin-account`)
 // depends on: two independent Store instances (standing in for two
 // separate process invocations) opened against the same file. A change
 // made through one must be visible through the other on its next read,
