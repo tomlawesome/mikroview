@@ -35,6 +35,19 @@ export function check(ok, message) {
   if (!ok) failed = true
 }
 
+/**
+ * knownIssue records an observation that is currently failing, without
+ * failing the run.
+ *
+ * For a defect this scenario found that is filed but not yet fixed. The
+ * alternative -- deleting the assertion until someone gets to it -- is
+ * how the knowledge gets lost, which is the thing this whole fixture
+ * exists to prevent. Always cite the issue.
+ */
+export function knownIssue(ok, message, issue) {
+  console.log(`  ${ok ? 'ok  ' : 'KNOWN'} ${message}${ok ? ' (fixed -- promote to check() and close ' + issue + ')' : ' -- ' + issue}`)
+}
+
 /** feedSyslog pushes synthetic events into the running instance. */
 export function feedSyslog(n, label = 'live-test-rule') {
   execFileSync(path.join(REPO, 'scripts/live-env.sh'), ['syslog', String(n), label], {
