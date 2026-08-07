@@ -6,23 +6,8 @@ import (
 	"fmt"
 	"net/http"
 
-	"github.com/tomlawesome/mikroview/internal/auth"
 	"github.com/tomlawesome/mikroview/internal/detect"
 )
-
-// callerIsAdminOrOpen mirrors requireAuth's own "no-op while zero users
-// exist" contract (see auth.go) -- while auth is inactive (mikroview's
-// fully-open default), every other endpoint stays reachable, so
-// detector settings do too, and there's no admin to gate against yet
-// anyway. Once an account exists, only an admin session may read or
-// write them.
-func (s *Server) callerIsAdminOrOpen(r *http.Request) bool {
-	if s.Auth.Count() == 0 {
-		return true
-	}
-	caller := userFromContext(r)
-	return caller != nil && caller.Role == auth.RoleAdmin
-}
 
 type detectorEntry struct {
 	Name    detect.DetectorName `json:"name"`
@@ -36,7 +21,7 @@ type detectorEntry struct {
 // customized -- see docs/configuration.md's "Per-detector toggles"
 // section.
 func (s *Server) handleDetectorSettingsList(w http.ResponseWriter, r *http.Request) {
-	if !s.callerIsAdminOrOpen(r) {
+	if !callerIsAdmin(r) {
 		http.Error(w, "admin role required", http.StatusForbidden)
 		return
 	}
@@ -58,7 +43,7 @@ type updateDetectorSettingsRequest struct {
 // wholesale and persists it (see detect.SettingsStore.Set) -- takes
 // effect on the very next ingested event, no restart needed.
 func (s *Server) handleDetectorSettingsUpdate(w http.ResponseWriter, r *http.Request) {
-	if !s.callerIsAdminOrOpen(r) {
+	if !callerIsAdmin(r) {
 		http.Error(w, "admin role required", http.StatusForbidden)
 		return
 	}

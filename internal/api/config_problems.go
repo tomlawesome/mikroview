@@ -40,12 +40,12 @@ type ConfigProblem struct {
 // the same recon value already judged worth protecting when -list-users
 // was scoped and when the clear-permanent gate was fixed.
 //
-// callerIsAdminOrOpen, not a bare admin check: on a fresh install with
+// callerIsAdmin: on a fresh install with
 // no users yet there is no admin to be, and the operator standing in
 // front of it is exactly who needs to know their store path isn't
 // writable.
 func (s *Server) handleConfigProblems(w http.ResponseWriter, r *http.Request) {
-	if !s.callerIsAdminOrOpen(r) {
+	if !callerIsAdmin(r) {
 		// 403, not 200-with-an-empty-list. The empty-list form was tried
 		// first on the reasoning that "problems exist" is itself
 		// information -- but it makes the route-authorization matrix
