@@ -325,6 +325,11 @@ type Detector struct {
 	// source flagged, the same "nil is a valid no-op" contract
 	// reputation above uses).
 	entities *entities.Store
+	// knownBad backs the synchronous local-blocklist check in
+	// known_bad_ip.go -- see WithKnownBadIPs. nil (the default) is a
+	// valid, explicit "not configured" no-op, same convention as
+	// reputation above.
+	knownBad knownBadIPLookup
 
 	perSource       map[string]*sourceWindow
 	criticalHits    map[string]*criticalWindow
@@ -492,6 +497,12 @@ func (d *Detector) Observe(e store.Event) {
 			d.observeRepeatedDrops(e, now)
 		}
 	}
+
+	// Local blocklist match (issue #113 Part B) -- deliberately last:
+	// see observeKnownBadIP's own doc comment for why its
+	// RaiseConfidenceFloor reinforcement pass needs every other
+	// detector above to have already run for this same event.
+	d.observeKnownBadIP(e, now)
 }
 
 func (d *Detector) observeScanAndSpike(e store.Event, now time.Time) {
@@ -616,17 +627,65 @@ func (w *criticalWindow) lastActivityTime() time.Time { return w.lastActivity }
 // -- shared by every per-key detector state map once it hits
 // maxTrackedSources, replacing what used to be six structurally
 // identical hand-copied functions (one per map's value type).
+// evictionBatchFraction: how much of a full map to shed per overflow,
+// as a divisor (8 = one eighth). Evicting a single entry meant a full
+// O(n) scan for *every* new key once the map was full -- and the keys
+// are attacker-chosen source IPs, so a flood of distinct sources put
+// the detector permanently in that state.
+//
+// Measured before this change: 5.78 us/event with recurring sources vs
+// 504.96 us/event under all-distinct spoofed sources -- an 87x
+// slowdown that capped the single detector worker near 2000 events/s.
+// Past that, Enqueue drops silently, so a spoofed-source flood made
+// mikroview stop detecting a real concurrent attack. That is the tool
+// failing at its one job, quietly, which is the worst available
+// outcome.
+//
+// Shedding a batch amortizes the scan across many insertions: the next
+// n/8 new sources are free. One eighth keeps the map comfortably full
+// (so genuine sources aren't evicted early) while making the amortized
+// cost O(1)-ish per event.
+const evictionBatchFraction = 8
+
+// evictOldestByActivity sheds the least-recently-active entries once a
+// per-source map is full. It removes a batch rather than a single entry
+// -- see evictionBatchFraction for why that matters under a flood of
+// attacker-chosen keys.
 func evictOldestByActivity[V activeWindow](m map[string]V) {
-	var oldestKey string
-	var oldest time.Time
-	first := true
+	batch := len(m) / evictionBatchFraction
+	if batch < 1 {
+		batch = 1
+	}
+
+	// Single pass collecting the batch smallest lastActivity values,
+	// keeping at most `batch` candidates -- avoids sorting the whole
+	// map, which would reintroduce the cost this is removing.
+	type candidate struct {
+		key  string
+		when time.Time
+	}
+	worst := make([]candidate, 0, batch+1)
 	for k, w := range m {
-		if first || w.lastActivityTime().Before(oldest) {
-			oldestKey, oldest, first = k, w.lastActivityTime(), false
+		t := w.lastActivityTime()
+		if len(worst) < batch {
+			worst = append(worst, candidate{k, t})
+			// Keep the newest at the end so it is the first to be
+			// displaced once the batch is full.
+			for i := len(worst) - 1; i > 0 && worst[i].when.After(worst[i-1].when); i-- {
+				worst[i], worst[i-1] = worst[i-1], worst[i]
+			}
+			continue
+		}
+		if t.Before(worst[len(worst)-1].when) {
+			worst[len(worst)-1] = candidate{k, t}
+			for i := len(worst) - 1; i > 0 && worst[i].when.After(worst[i-1].when); i-- {
+				worst[i], worst[i-1] = worst[i-1], worst[i]
+			}
 		}
 	}
-	if oldestKey != "" {
-		delete(m, oldestKey)
+
+	for _, c := range worst {
+		delete(m, c.key)
 	}
 }
 

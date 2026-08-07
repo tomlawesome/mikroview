@@ -92,6 +92,18 @@ export interface TimeBucket {
   byAction: Partial<Record<Action, number>>
 }
 
+// Mirrors internal/api/rest.go's handleHealthz response. version is the
+// build-time-stamped short commit SHA ("dev" for a plain local build) --
+// the same value `mikroview -version` prints, and the only place a
+// running deployment's build is checkable without host/container
+// access.
+export interface Healthz {
+  status: string
+  time: string
+  uptime: string
+  version: string
+}
+
 // Mirrors internal/api/rest.go's handleStats response.
 export interface Stats {
   total: number
@@ -177,6 +189,14 @@ export type FlagType =
   // and deterministic (no threshold/window to tune), so like
   // new_device/stale_rule above it has no matching DetectorName entry.
   | 'unexpected_mail_sender'
+  // known_bad_ip (issue #113 Part B): a source IP matching a locally-
+  // cached CIDR range from a vetted threat-intel feed (Spamhaus DROP/
+  // EDROP by default -- see internal/blocklist's doc comment). Raised
+  // directly from internal/detect.Observe on a deterministic list-
+  // membership check, not gated by DetectorName/Scope -- same "no
+  // matching detector-settings entry" exception as new_device/stale_rule
+  // above.
+  | 'known_bad_ip'
 
 // Mirrors internal/detect.DetectorName's 12 string values. No longer a
 // FlagType alias (see new_device/stale_rule above) -- kept as its own
@@ -232,6 +252,28 @@ export interface Entity {
   key: string
   label?: string
   tags?: string[]
+}
+
+// Mirrors internal/audit.Entry's JSON tags (issue #112) -- one recorded
+// admin-privileged mutation (user created, entity upserted/deleted, API
+// token created/revoked, detector setting changed, flag exclusion
+// removed). action is deliberately a plain string, not a closed union,
+// same "extensible, not gatekept client-side" reasoning EntityType above
+// already follows for the backend's own internal/audit.Entry.Action.
+export interface AuditEntry {
+  id: number
+  timestamp: string
+  actor: string
+  action: string
+  target: string
+  detail?: string
+}
+
+// Mirrors internal/audit.Result's JSON tags -- the response to
+// GET /api/audit, same HasMore-signals-truncation shape as EventsResult.
+export interface AuditResult {
+  entries: AuditEntry[]
+  hasMore: boolean
 }
 
 // Mirrors internal/rules.Usage's JSON tags (issue #103) -- one rule
