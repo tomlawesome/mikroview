@@ -50,6 +50,7 @@ func (s *Server) handleEntitiesUpsert(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+	s.Audit.Record(auditActor(r), "entity.upsert", e.Type+":"+e.Key, "label="+e.Label)
 	writeJSON(w, http.StatusOK, e)
 }
 
@@ -74,5 +75,6 @@ func (s *Server) handleEntitiesDelete(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "not found", http.StatusNotFound)
 		return
 	}
+	s.Audit.Record(auditActor(r), "entity.delete", req.Type+":"+req.Key, "")
 	writeJSON(w, http.StatusOK, map[string]any{"deleted": true})
 }

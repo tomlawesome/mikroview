@@ -61,6 +61,7 @@ func (s *Server) handleTokensCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	s.Audit.Record(auditActor(r), "token.create", tok.Name, "id="+tok.ID)
 	writeJSON(w, http.StatusCreated, tokenResponse{
 		ID:        tok.ID,
 		Name:      tok.Name,
@@ -105,5 +106,6 @@ func (s *Server) handleTokensRevoke(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "no such token", http.StatusNotFound)
 		return
 	}
+	s.Audit.Record(auditActor(r), "token.revoke", id, "")
 	writeJSON(w, http.StatusOK, map[string]any{"revoked": true})
 }
