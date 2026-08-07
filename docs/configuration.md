@@ -1140,12 +1140,8 @@ and which accounts exist. That is a map of your network, and "it's only
 for five minutes while I try it out" is exactly how a deployment ends up
 open for a year. Creating an account is one form.
 
-> **Upgrading from a version that had authentication disabled?**
-> Your deployment now starts in the create-account state and serves
-> nothing until you complete it. Nothing is lost -- there were no
-> accounts to lose -- and mikroview says so in its startup log so the
-> login screen isn't a surprise. `mikroview -enable-auth-setup` is gone
-> too; there is no longer anything to re-enable.
+> Upgrading from a version that let you run without a login? See
+> [CHANGELOG.md](../CHANGELOG.md) for what to do.
 
 ### Adding and removing people
 
@@ -1268,10 +1264,6 @@ Two things this command deliberately won't do:
 If you have no recovery keys yet (your deployment predates them), run
 `mikroview -generate-recovery-keys` once, on a terminal, and store what
 it prints.
-
-> `-reset-password` was the earlier version of this command. It's gone:
-> it could reset *any* account with machine access alone and no
-> recovery key.
 
 **A corrupt or unreadable accounts file refuses to boot, rather than
 silently reopening.** If `auth.storePath` points at a file that exists
