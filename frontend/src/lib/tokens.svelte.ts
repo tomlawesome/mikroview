@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+
 import { createToken, fetchTokens, revokeToken } from './api'
 import type { ApiToken } from './types'
 

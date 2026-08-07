@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+
 // A curated (not exhaustive) reference of commonly-seen port numbers, for
 // the port "investigate" button -- see components/PortInvestigateButton.svelte
 // and PortLookupPopover.svelte. Unlike the IP investigate button, this is

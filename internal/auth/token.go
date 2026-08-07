@@ -1,17 +1,20 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+
 package auth
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
-	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/tomlawesome/mikroview/internal/persist"
 )
 
 // Token is a long-lived bearer credential for service-to-service access
@@ -38,6 +41,24 @@ type Token struct {
 	HashedValue string    `json:"hashedValue"`
 	CreatedAt   time.Time `json:"createdAt"`
 	LastUsedAt  time.Time `json:"lastUsedAt,omitzero"`
+	// CreatedBy is the account ID that issued this token, so deleting
+	// that account can revoke it (see RevokeAllCreatedBy).
+	//
+	// Reachable via admin transfer: an admin creates tokens, hands admin
+	// to someone else, and is later deleted as an ordinary user. Without
+	// this, they keep working read-only API access after their account
+	// is gone -- they still hold the raw value, which is all a token
+	// needs.
+	//
+	// Empty on tokens written before this field existed. Those cannot be
+	// attributed to anyone and so are never auto-revoked; they have to
+	// be reviewed by hand in the token list.
+	CreatedBy string `json:"createdBy,omitempty"`
+	// CreatedByUsername is a display snapshot, taken at creation. Kept
+	// alongside the ID because the point at which it is most useful --
+	// after that account has been deleted -- is exactly when the ID can
+	// no longer be resolved to a name. Never used for authorization.
+	CreatedByUsername string `json:"createdByUsername,omitempty"`
 }
 
 var (
@@ -58,9 +79,12 @@ var (
 // there's no zero-tokens state that needs special handling the way
 // Store.Count()==0 does.
 type TokenStore struct {
-	mu   sync.RWMutex
-	path string
-	byID map[string]*Token
+	mu      sync.RWMutex
+	backend persist.Backend
+	// version is the backend's token for the document as of the last
+	// load or save -- see persist.SaveWithRetry.
+	version int64
+	byID    map[string]*Token
 	// byHash maps a token's SHA-256 hash straight to its ID, so
 	// Authenticate is an O(1) map lookup rather than scanning every
 	// token -- possible only because, unlike Argon2id password hashes,
@@ -75,22 +99,25 @@ type TokenStore struct {
 // has, so a deployment with no tokens configured never fails to start
 // over this.
 func OpenTokenStore(path string) (*TokenStore, error) {
-	s := &TokenStore{path: path, byID: make(map[string]*Token), byHash: make(map[string]string)}
 	if path == "" {
+		return OpenTokenStoreWithBackend(nil)
+	}
+	return OpenTokenStoreWithBackend(persist.NewFileBackend(path))
+}
+
+// OpenTokenStoreWithBackend is OpenTokenStore against any persist.Backend
+// -- a JSON file by default, or Postgres when configured (issue #131).
+func OpenTokenStoreWithBackend(b persist.Backend) (*TokenStore, error) {
+	s := &TokenStore{backend: b, byID: make(map[string]*Token), byHash: make(map[string]string)}
+
+	data, version, err := persist.LoadDocument(context.Background(), b)
+	if err != nil {
+		return s, err
+	}
+	if data == nil {
 		return s, nil
 	}
-
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		return s, err
-	}
-
-	data, err := os.ReadFile(path)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return s, nil
-		}
-		return s, err
-	}
+	s.version = version
 
 	var list []*Token
 	if err := json.Unmarshal(data, &list); err != nil {
@@ -108,7 +135,7 @@ func OpenTokenStore(path string) (*TokenStore, error) {
 
 // Persisted reports whether this store can actually survive a restart.
 func (s *TokenStore) Persisted() bool {
-	return s.path != ""
+	return s.backend != nil
 }
 
 // hashTokenValue is the one place a raw token value is ever hashed --
@@ -124,7 +151,9 @@ func hashTokenValue(raw string) string {
 // hash. The returned raw string is the only time the actual bearer
 // value ever exists outside the caller's memory -- it is not
 // recoverable afterward, only re-issuable as a brand new token.
-func (s *TokenStore) Create(name string, now time.Time) (raw string, tok *Token, err error) {
+// creator identifies the account issuing the token, so it can be
+// revoked if that account is later deleted.
+func (s *TokenStore) Create(name string, creator *User, now time.Time) (raw string, tok *Token, err error) {
 	if !s.Persisted() {
 		return "", nil, ErrTokenNotPersisted
 	}
@@ -142,6 +171,10 @@ func (s *TokenStore) Create(name string, now time.Time) (raw string, tok *Token,
 		Name:        strings.TrimSpace(name),
 		HashedValue: hash,
 		CreatedAt:   now,
+	}
+	if creator != nil {
+		t.CreatedBy = creator.ID
+		t.CreatedByUsername = creator.Username
 	}
 	s.byID[t.ID] = t
 	s.byHash[hash] = t.ID
@@ -193,6 +226,36 @@ func (s *TokenStore) Revoke(id string) error {
 	return nil
 }
 
+// RevokeAllCreatedBy deletes every token issued by userID, returning how
+// many went. Called when that account is deleted: the person still holds
+// the raw values, so the account going away has to take its tokens with
+// it.
+//
+// An empty userID matches nothing, deliberately -- pre-attribution
+// tokens carry an empty CreatedBy, and treating that as a match would
+// let deleting any one account wipe every unattributed token in the
+// deployment.
+func (s *TokenStore) RevokeAllCreatedBy(userID string) int {
+	if userID == "" {
+		return 0
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	revoked := 0
+	for id, t := range s.byID {
+		if t.CreatedBy != userID {
+			continue
+		}
+		delete(s.byID, id)
+		delete(s.byHash, t.HashedValue)
+		revoked++
+	}
+	if revoked > 0 {
+		s.persistLocked()
+	}
+	return revoked
+}
+
 // List returns every token's metadata, oldest first -- HashedValue is
 // always zeroed out (never the raw value either, since this store never
 // retains it past Create's return) so a list response can never leak
@@ -211,7 +274,7 @@ func (s *TokenStore) List() []Token {
 }
 
 func (s *TokenStore) persistLocked() {
-	if s.path == "" {
+	if s.backend == nil {
 		return
 	}
 	list := make([]*Token, 0, len(s.byID))
@@ -222,20 +285,16 @@ func (s *TokenStore) persistLocked() {
 
 	data, err := json.MarshalIndent(list, "", "  ")
 	if err != nil {
-		persistLog.Error(fmt.Sprintf("encoding %s for persistence failed: %v -- this change exists only in memory and will be lost on restart", s.path, err))
+		persistLog.Error(fmt.Sprintf("encoding API tokens for persistence failed: %v -- this change exists only in memory and will be lost on restart", err))
 		return
 	}
-	tmp := s.path + ".tmp"
-	if err := os.WriteFile(tmp, data, 0o600); err != nil {
-		persistLog.Error(fmt.Sprintf("writing %s failed: %v -- this change exists only in memory and will be lost on restart", tmp, err))
+	version, conflicted, err := persist.SaveWithRetry(context.Background(), s.backend, data, s.version)
+	if err != nil {
+		persistLog.Error(fmt.Sprintf("writing API tokens to %s failed: %v -- this change exists only in memory and will be lost on restart", s.backend.Describe(), err))
 		return
 	}
-	// Same filesystem, so the rename itself is atomic -- but it can
-	// still fail (read-only remount, permissions change), and a
-	// silent failure here means the caller believes a write landed
-	// when it did not.
-	if err := os.Rename(tmp, s.path); err != nil {
-		persistLog.Error(fmt.Sprintf("replacing %s failed: %v -- this change exists only in memory and will be lost on restart", s.path, err))
-		return
+	if conflicted {
+		persistLog.Warn(fmt.Sprintf("API tokens was modified by another process while this change was pending (%s); this change was applied on top", s.backend.Describe()))
 	}
+	s.version = version
 }

@@ -1,24 +1,23 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { AuthSession } from './types'
 
-// auth.svelte.ts talks to the backend exclusively through these six
+// auth.svelte.ts talks to the backend exclusively through these five
 // lib/api.ts functions -- mock the whole module so tests exercise only
 // AuthState's own state-transition logic, never a real fetch().
 vi.mock('./api', () => ({
-  createUser: vi.fn(),
   fetchAuthSession: vi.fn(),
   login: vi.fn(),
   logout: vi.fn(),
   register: vi.fn(),
-  skipAuthSetup: vi.fn(),
 }))
 
-import { createUser, fetchAuthSession, login, logout, register, skipAuthSetup } from './api'
+import { fetchAuthSession, login, logout, register } from './api'
 import { authState } from './auth.svelte'
 
 function session(overrides: Partial<AuthSession> = {}): AuthSession {
   return {
-    authDisabled: false,
     setupRequired: false,
     authenticated: false,
     ssoAvailable: false,
@@ -35,7 +34,7 @@ beforeEach(() => {
   authState.state = 'loading'
   authState.username = ''
   authState.role = ''
-  authState.showAddUser = false
+  authState.showUsers = false
   authState.ssoAvailable = false
   authState.ssoError = null
   window.history.replaceState(null, '', '/')
@@ -55,13 +54,6 @@ describe('AuthState.check', () => {
     expect(authState.ssoAvailable).toBe(true)
   })
 
-  it('prioritizes auth-disabled over setupRequired', async () => {
-    vi.mocked(fetchAuthSession).mockResolvedValue(session({ authDisabled: true, setupRequired: true }))
-
-    await authState.check()
-
-    expect(authState.state).toBe('auth-disabled')
-  })
 
   it('reports setup-required when no accounts exist yet', async () => {
     vi.mocked(fetchAuthSession).mockResolvedValue(session({ setupRequired: true }))
@@ -139,26 +131,6 @@ describe('AuthState.register', () => {
   })
 })
 
-describe('AuthState.skip', () => {
-  it('re-checks the session and returns null on success', async () => {
-    vi.mocked(skipAuthSetup).mockResolvedValue(null)
-    vi.mocked(fetchAuthSession).mockResolvedValue(session({ authDisabled: true }))
-
-    const result = await authState.skip()
-
-    expect(result).toBeNull()
-    expect(authState.state).toBe('auth-disabled')
-  })
-
-  it('returns the error without re-checking on failure', async () => {
-    vi.mocked(skipAuthSetup).mockResolvedValue('skip failed')
-
-    const result = await authState.skip()
-
-    expect(result).toBe('skip failed')
-    expect(fetchAuthSession).not.toHaveBeenCalled()
-  })
-})
 
 describe('AuthState.logout', () => {
   it('clears identity and returns to unauthenticated without re-checking', async () => {
@@ -174,25 +146,6 @@ describe('AuthState.logout', () => {
     expect(authState.username).toBe('')
     expect(authState.role).toBe('')
     expect(fetchAuthSession).not.toHaveBeenCalled()
-  })
-})
-
-describe('AuthState.createUser', () => {
-  it('delegates straight to the api call and returns its result', async () => {
-    vi.mocked(createUser).mockResolvedValue(null)
-
-    const result = await authState.createUser('bob', 'hunter2', 'user')
-
-    expect(result).toBeNull()
-    expect(createUser).toHaveBeenCalledWith('bob', 'hunter2', 'user')
-  })
-
-  it('surfaces an error from the api call', async () => {
-    vi.mocked(createUser).mockResolvedValue('username already taken')
-
-    const result = await authState.createUser('bob', 'hunter2', 'user')
-
-    expect(result).toBe('username already taken')
   })
 })
 

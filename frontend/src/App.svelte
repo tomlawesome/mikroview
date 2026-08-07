@@ -1,4 +1,5 @@
 <script lang="ts">
+  // SPDX-License-Identifier: AGPL-3.0-only
   import { appState } from './lib/state.svelte'
   import { liveSocket } from './lib/ws'
   import { themeState } from './lib/theme.svelte'
@@ -9,6 +10,7 @@
   import { filtersFromSearchParams } from './lib/types'
   import Toolbar from './components/Toolbar.svelte'
   import ConnectionBanner from './components/ConnectionBanner.svelte'
+  import ConfigProblemBanner from './components/ConfigProblemBanner.svelte'
   import FilterBar from './components/FilterBar.svelte'
   import LiveTable from './components/LiveTable.svelte'
   import Dashboard from './components/Dashboard.svelte'
@@ -22,7 +24,8 @@
   import PortLookupPopover from './components/PortLookupPopover.svelte'
   import AuthSetup from './components/AuthSetup.svelte'
   import AuthLogin from './components/AuthLogin.svelte'
-  import AddUserOverlay from './components/AddUserOverlay.svelte'
+  import UsersOverlay from './components/UsersOverlay.svelte'
+  import SSOLinkOverlay from './components/SSOLinkOverlay.svelte'
   import TokensOverlay from './components/TokensOverlay.svelte'
 
   // Any polling call that fails with a 401 (an expired or reset-
@@ -55,6 +58,7 @@
   // strips and surfaces a failed OIDC callback's ?ssoError= (see
   // internal/api/oidc.go's redirectWithSSOError).
   authState.consumeSSOErrorFromURL()
+  authState.consumeSSOLinkedFromURL()
 
   $effect(() => {
     themeState.apply()
@@ -73,12 +77,10 @@
 
   $effect(() => {
     // Reading authState.state here is what makes this effect re-run the
-    // moment it flips to/from 'authenticated'/'auth-disabled' (login,
-    // logout, a 401 bouncing back to the login view, or skipping auth
-    // setup) -- same fine-grained reactivity the filter-sync effect
-    // below relies on. Both states render the same main app shell (see
-    // the template below), just like they both need live data.
-    if (authState.state !== 'authenticated' && authState.state !== 'auth-disabled') return
+    // moment it flips to or from 'authenticated' (login, logout, or a
+    // 401 bouncing back to the login view) -- same fine-grained
+    // reactivity the filter-sync effect below relies on.
+    if (authState.state !== 'authenticated') return
 
     appState.loadInitial().catch(handleApiError)
     liveSocket.connect()
@@ -98,8 +100,17 @@
     }
   })
 
+  // Reading both fields is what makes this re-run when either changes;
+  // syncRuleMatches debounces, so a keystroke does not classify the
+  // buffer four times while "drop" is being typed.
   $effect(() => {
-    if (authState.state !== 'authenticated' && authState.state !== 'auth-disabled') return
+    void appState.filters.rule
+    void appState.filters.ruleRegex
+    appState.syncRuleMatches()
+  })
+
+  $effect(() => {
+    if (authState.state !== 'authenticated') return
 
     // Reading every field off appState.filters here is what makes this
     // effect re-run on any filter change (Svelte 5's fine-grained
@@ -135,6 +146,7 @@
 {:else}
   <Toolbar />
   <ConnectionBanner />
+  <ConfigProblemBanner />
   <main>
     {#if appState.view === 'live'}
       <FilterBar />
@@ -157,7 +169,8 @@
   </main>
   <IpLookupPopover />
   <PortLookupPopover />
-  <AddUserOverlay />
+  <UsersOverlay />
+  <SSOLinkOverlay />
   <TokensOverlay />
 {/if}
 

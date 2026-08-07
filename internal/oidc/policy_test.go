@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+
 package oidc
 
 import (
@@ -243,5 +245,50 @@ func TestPolicyRestricted(t *testing.T) {
 	// GroupsClaim alone narrows nothing -- it only says where to look.
 	if (Policy{GroupsClaim: "roles"}).Restricted() {
 		t.Error("GroupsClaim alone reported as a restriction")
+	}
+}
+
+// TestAllowIssuerRefusesMultiTenantUnconditionally pins the decision in
+// docs/decisions/multi-tenant-oidc.md. The earlier design let a
+// correctly-configured Policy rescue a public issuer, and that rescue
+// was removed deliberately -- so a *restricted* policy must not bring it
+// back. This is the test that fails if someone reintroduces the clause
+// without also revisiting the decision note.
+func TestAllowIssuerRefusesMultiTenantUnconditionally(t *testing.T) {
+	for _, issuer := range []string{
+		"https://accounts.google.com",
+		"https://login.microsoftonline.com/common/v2.0",
+		"https://appleid.apple.com",
+	} {
+		if err := AllowIssuer(issuer); err == nil {
+			t.Errorf("AllowIssuer(%q) permitted a multi-tenant provider", issuer)
+		} else if !errors.Is(err, ErrMultiTenantIssuer) {
+			t.Errorf("AllowIssuer(%q) = %v, want ErrMultiTenantIssuer", issuer, err)
+		}
+	}
+}
+
+func TestAllowIssuerPermitsSelfHostedProviders(t *testing.T) {
+	for _, issuer := range []string{
+		"https://authentik.example.com/application/o/mikroview/",
+		"https://keycloak.example.com/realms/home",
+		"https://login.microsoftonline.com/00000000-0000-0000-0000-000000000000/v2.0",
+		"https://idp.internal",
+	} {
+		if err := AllowIssuer(issuer); err != nil {
+			t.Errorf("AllowIssuer(%q) refused a self-hosted issuer: %v", issuer, err)
+		}
+	}
+}
+
+// Policy keeps its full value for scoping within a directory you run --
+// that is why it survived the removal.
+func TestPolicyStillScopesWithinASelfHostedDirectory(t *testing.T) {
+	p := Policy{AllowedGroups: []string{"mikroview"}}
+	if err := p.Permit(identity(map[string]any{"groups": []any{"mikroview"}})); err != nil {
+		t.Errorf("permitted group refused: %v", err)
+	}
+	if err := p.Permit(identity(map[string]any{"groups": []any{"housemates"}})); err == nil {
+		t.Error("an account outside the permitted group was allowed in")
 	}
 }

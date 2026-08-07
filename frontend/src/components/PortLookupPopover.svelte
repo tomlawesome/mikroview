@@ -1,4 +1,5 @@
 <script lang="ts">
+  // SPDX-License-Identifier: AGPL-3.0-only
   // Single instance mounted once at the app root (see App.svelte) -- same
   // fixed-position-from-trigger-coordinates approach as IpLookupPopover.svelte,
   // driven by lib/portLookup.svelte.ts's shared singleton.

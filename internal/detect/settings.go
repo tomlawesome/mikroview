@@ -1,13 +1,15 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+
 package detect
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net"
-	"os"
-	"path/filepath"
 	"sync"
 
+	"github.com/tomlawesome/mikroview/internal/persist"
 	"github.com/tomlawesome/mikroview/internal/store"
 )
 
@@ -265,9 +267,12 @@ func DefaultSettingsMap() map[DetectorName]Settings {
 // persistence) -- see internal/flags/store.go. The zero value is not
 // usable; construct with OpenSettingsStore.
 type SettingsStore struct {
-	mu     sync.RWMutex
-	path   string
-	byName map[DetectorName]Settings
+	mu      sync.RWMutex
+	backend persist.Backend
+	// version is the backend's token for the document as of the last
+	// load or save -- see persist.SaveWithRetry.
+	version int64
+	byName  map[DetectorName]Settings
 }
 
 // OpenSettingsStore loads path if it exists (a missing file is the
@@ -287,25 +292,30 @@ type SettingsStore struct {
 // simply never toggled) is filled from seed -- so every one of
 // AllDetectorNames always has an entry.
 func OpenSettingsStore(path string, seed map[DetectorName]Settings) (*SettingsStore, error) {
-	s := &SettingsStore{path: path, byName: make(map[DetectorName]Settings, len(seed))}
+	var b persist.Backend
+	if path != "" {
+		b = persist.NewFileBackend(path)
+	}
+	return OpenSettingsStoreWithBackend(b, seed)
+}
+
+// OpenSettingsStoreWithBackend is OpenSettingsStore against any
+// persist.Backend -- a JSON file by default, or Postgres when
+// configured (issue #131).
+func OpenSettingsStoreWithBackend(b persist.Backend, seed map[DetectorName]Settings) (*SettingsStore, error) {
+	s := &SettingsStore{backend: b, byName: make(map[DetectorName]Settings, len(seed))}
 	for name, st := range seed {
 		s.byName[name] = st
 	}
-	if path == "" {
+
+	data, version, err := persist.LoadDocument(context.Background(), b)
+	if err != nil {
+		return s, err
+	}
+	if data == nil {
 		return s, nil
 	}
-
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		return s, err
-	}
-
-	data, err := os.ReadFile(path)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return s, nil
-		}
-		return s, err
-	}
+	s.version = version
 
 	var onDisk map[DetectorName]Settings
 	if err := json.Unmarshal(data, &onDisk); err != nil {
@@ -363,25 +373,21 @@ func (s *SettingsStore) List() map[DetectorName]Settings {
 // stays correct either way, so a transient disk issue degrades to
 // "won't survive a restart right now" rather than breaking live use.
 func (s *SettingsStore) persistLocked() {
-	if s.path == "" {
+	if s.backend == nil {
 		return
 	}
 	data, err := json.MarshalIndent(s.byName, "", "  ")
 	if err != nil {
-		logger.Error(fmt.Sprintf("encoding %s for persistence failed: %v -- this change exists only in memory and will be lost on restart", s.path, err))
+		logger.Error(fmt.Sprintf("encoding detector settings for persistence failed: %v -- this change exists only in memory and will be lost on restart", err))
 		return
 	}
-	tmp := s.path + ".tmp"
-	if err := os.WriteFile(tmp, data, 0o600); err != nil {
-		logger.Error(fmt.Sprintf("writing %s failed: %v -- this change exists only in memory and will be lost on restart", tmp, err))
+	version, conflicted, err := persist.SaveWithRetry(context.Background(), s.backend, data, s.version)
+	if err != nil {
+		logger.Error(fmt.Sprintf("writing detector settings to %s failed: %v -- this change exists only in memory and will be lost on restart", s.backend.Describe(), err))
 		return
 	}
-	// Same filesystem, so the rename itself is atomic -- but it can
-	// still fail (read-only remount, permissions change), and a
-	// silent failure here means the caller believes a write landed
-	// when it did not.
-	if err := os.Rename(tmp, s.path); err != nil {
-		logger.Error(fmt.Sprintf("replacing %s failed: %v -- this change exists only in memory and will be lost on restart", s.path, err))
-		return
+	if conflicted {
+		logger.Warn(fmt.Sprintf("the detector settings store was modified by another process while this change was pending (%s); this change was applied on top", s.backend.Describe()))
 	}
+	s.version = version
 }

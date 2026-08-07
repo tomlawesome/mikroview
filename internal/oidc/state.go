@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+
 package oidc
 
 import (
@@ -27,7 +29,25 @@ type FlowState struct {
 	Nonce        string
 	CodeVerifier string
 	IssuedAt     time.Time
+	// LinkUserID, when set, marks this flow as a *link* rather than a
+	// login: the identity that comes back is to be attached to this
+	// existing account (see auth.Store.LinkOIDCIdentity), not resolved
+	// or provisioned as its own.
+	//
+	// Carried inside the sealed state rather than as a separate cookie
+	// or a query parameter because the whole point is that the browser
+	// can't choose it. The state is AES-GCM sealed, so a caller can
+	// neither read which account a flow targets nor forge one that
+	// targets somebody else's.
+	//
+	// Empty for an ordinary login, which is what every flow created
+	// before this field existed decodes as.
+	LinkUserID string `json:",omitempty"`
 }
+
+// IsLink reports whether this flow was started to link an identity to
+// an existing account rather than to sign in.
+func (fs FlowState) IsLink() bool { return fs.LinkUserID != "" }
 
 // NewFlowState generates a fresh State/Nonce (crypto/rand-backed) and
 // PKCE CodeVerifier (oauth2.GenerateVerifier) for one login attempt.

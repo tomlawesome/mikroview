@@ -1,4 +1,5 @@
 <script lang="ts">
+  // SPDX-License-Identifier: AGPL-3.0-only
   // Full-page dashboard tab: consolidates the charts that used to live in
   // toolbar popovers (event volume, top rules) plus new ones an admin
   // scanning traffic would want (action/protocol mix, top talkers,

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+
 package api
 
 import (
@@ -76,8 +78,9 @@ var authzMatrix = []routeExpectation{
 		"the provider redirects the browser here; protected by state/nonce/PKCE, not by a session"},
 	{http.MethodPost, "/api/auth/register", accessPublic,
 		"first-run only -- auth.Store.Register refuses once any account exists"},
-	{http.MethodPost, "/api/auth/skip", accessPublic,
-		"first-run only -- auth.Store.Disable refuses once any account exists"},
+
+	{http.MethodGet, "/api/config/problems", accessAdmin,
+		"config key names, filesystem paths, the OIDC issuer URL and SMTP hosts are an infrastructure map; a non-admin gets an empty list rather than a 403, since whether problems exist is itself information"},
 
 	// -- Any authenticated user ----------------------------------------
 	{http.MethodGet, "/api/events", accessUser,
@@ -108,7 +111,13 @@ var authzMatrix = []routeExpectation{
 	{http.MethodGet, "/api/entities", accessAdmin, "admin-managed labels/tags"},
 	{http.MethodPost, "/api/entities", accessAdmin, "admin-managed labels/tags"},
 	{http.MethodDelete, "/api/entities", accessAdmin, "admin-managed labels/tags"},
+	{http.MethodPost, "/api/auth/oidc/link", accessUser,
+		"converts your OWN account to SSO-only; the target comes from the session, never the request, so a user can only ever affect themselves"},
 	{http.MethodPost, "/api/auth/users", accessAdmin, "account creation"},
+	{http.MethodGet, "/api/auth/users", accessAdmin,
+		"who holds an account, and which one is the admin -- that is the map of whose account is worth attacking"},
+	{http.MethodDelete, "/api/auth/users/{id}", accessAdmin,
+		"removes an account and revokes its sessions and API tokens"},
 	{http.MethodPost, "/api/tokens", accessAdmin, "mints a bearer credential"},
 	{http.MethodGet, "/api/tokens", accessAdmin, "lists issued bearer credentials"},
 	{http.MethodDelete, "/api/tokens/{id}", accessAdmin, "revokes a bearer credential"},
@@ -174,11 +183,11 @@ func TestAuthorizationMatrixIsEnforced(t *testing.T) {
 
 	for _, r := range authzMatrix {
 		t.Run(r.method+" "+r.path, func(t *testing.T) {
-			// Skip the two first-run endpoints: an account now exists,
-			// so they legitimately refuse everyone. Their "public"
+			// Skip the first-run endpoint: an account now exists, so it
+			// legitimately refuses everyone. Its "public"
 			// classification is about reachability before setup, which
-			// their own dedicated tests cover.
-			if r.path == "/api/auth/register" || r.path == "/api/auth/skip" {
+			// its own dedicated tests cover.
+			if r.path == "/api/auth/register" {
 				t.Skip("first-run only; refuses all callers once an account exists (covered separately)")
 			}
 

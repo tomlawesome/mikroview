@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+
 // Mirrors internal/store/event.go's JSON tags.
 export type Action = 'accept' | 'drop' | 'reject' | 'log' | 'unknown'
 
@@ -119,12 +121,28 @@ export interface Stats {
 
 // Mirrors internal/api/auth.go's sessionResponse.
 export interface AuthSession {
-  authDisabled: boolean
   setupRequired: boolean
   authenticated: boolean
   username?: string
   role?: 'admin' | 'user'
+  // False once the account signs in only through the identity provider.
+  // Gates whether "Connect SSO" is offered -- there is nothing left to
+  // convert otherwise.
+  hasLocalPassword?: boolean
   ssoAvailable: boolean
+}
+
+// Mirrors internal/api's userSummary. Deliberately not the server's
+// full auth.User -- that carries a password hash, and this type exists
+// so there is nothing on the client side to accidentally render.
+export interface UserSummary {
+  id: string
+  username: string
+  role: 'admin' | 'user'
+  createdAt: string
+  lastLogin?: string
+  hasLocalPassword: boolean
+  sso: boolean
 }
 
 // Mirrors internal/api/tokens.go's tokenResponse. value is present only

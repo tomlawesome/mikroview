@@ -1,6 +1,9 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+
 import { describe, expect, it } from 'vitest'
 import { applyFilters } from './state.svelte'
-import { emptyFilters, type FirewallEvent } from './types'
+import { matchingIds } from './ruleMatcher'
+import { emptyFilters, type FirewallEvent, type Filters } from './types'
 
 // Covers applyFilters's rule/ruleRegex branch specifically -- a
 // performance audit found the regex used to be constructed inside the
@@ -30,20 +33,22 @@ describe('applyFilters rule/ruleRegex', () => {
     expect(got.map((e) => e.ruleLabel)).toEqual(['wan-block-scan'])
   })
 
-  it('matches ruleLabel or raw via a real regex pattern', () => {
+  // Regex semantics moved out of applyFilters with #157 -- it no longer
+  // compiles or runs a pattern. These two assertions live on matchingIds
+  // now (see ruleMatcher.test.ts), which is where the matching happens;
+  // what applyFilters owes is honouring the set it is handed, below.
+  it('honours a match set that spans both label and raw matches', () => {
     const events = [
-      evt({ ruleLabel: 'wan-block-scan' }),
-      evt({ ruleLabel: 'other', raw: 'contains-block-in-raw-only' }),
-      evt({ ruleLabel: 'lan-internal', raw: 'nothing relevant' }),
+      evt({ id: 1, ruleLabel: 'wan-block-scan' }),
+      evt({ id: 2, ruleLabel: 'other', raw: 'contains-block-in-raw-only' }),
+      evt({ id: 3, ruleLabel: 'lan-internal', raw: 'nothing relevant' }),
     ]
-    const got = applyFilters(events, { ...emptyFilters(), rule: '^wan-.*|block-in-raw', ruleRegex: true })
+    const got = applyFilters(
+      events,
+      { ...emptyFilters(), rule: '^wan-.*|block-in-raw', ruleRegex: true },
+      new Set(matchingIds('^wan-.*|block-in-raw', events.map((e) => ({ id: e.id, ruleLabel: e.ruleLabel, raw: e.raw })))),
+    )
     expect(got.map((e) => e.ruleLabel)).toEqual(['wan-block-scan', 'other'])
-  })
-
-  it('is case-insensitive in regex mode', () => {
-    const events = [evt({ ruleLabel: 'WAN-Block-Scan' })]
-    const got = applyFilters(events, { ...emptyFilters(), rule: 'wan-block', ruleRegex: true })
-    expect(got).toHaveLength(1)
   })
 
   it('treats an invalid pattern as unfiltered rather than throwing or hiding everything', () => {
@@ -55,10 +60,7 @@ describe('applyFilters rule/ruleRegex', () => {
     expect(got).toHaveLength(3)
   })
 
-  it('applies the same regex consistently across every event, not just the first', () => {
-    // A regression where the regex were somehow rebuilt per-event with
-    // inconsistent state would show up as an event-order-dependent
-    // result -- this checks a larger, mixed set all at once.
+  it('keeps only the events in the precomputed match set', () => {
     const events = [
       evt({ id: 1, ruleLabel: 'match-1' }),
       evt({ id: 2, ruleLabel: 'skip' }),
@@ -66,7 +68,32 @@ describe('applyFilters rule/ruleRegex', () => {
       evt({ id: 4, ruleLabel: 'skip' }),
       evt({ id: 5, ruleLabel: 'match-3' }),
     ]
-    const got = applyFilters(events, { ...emptyFilters(), rule: '^match-', ruleRegex: true })
+    const got = applyFilters(
+      events,
+      { ...emptyFilters(), rule: '^match-', ruleRegex: true },
+      new Set([1, 3, 5]),
+    )
     expect(got.map((e) => e.id)).toEqual([1, 3, 5])
   })
+
+  // A null set covers three cases that must all behave identically and
+  // harmlessly: not evaluated yet, invalid pattern, and a pattern refused
+  // for overrunning. Hiding everything would look like "no matches",
+  // which is a lie the operator would act on.
+  it('leaves events unfiltered when there is no usable match set', () => {
+    const events = [evt({ id: 1, ruleLabel: 'a' }), evt({ id: 2, ruleLabel: 'b' })]
+    const got = applyFilters(events, { ...emptyFilters(), rule: '(', ruleRegex: true }, null)
+    expect(got).toHaveLength(2)
+  })
+
+  // applyFilters must not compile or execute a regex itself -- that is
+  // the entire point of #157. A pattern that would hang a backtracking
+  // engine has to pass straight through.
+  it('does not execute the pattern, so a catastrophic one costs nothing', () => {
+    const events = [evt({ id: 1, ruleLabel: 'a'.repeat(40) })]
+    const start = performance.now()
+    applyFilters(events, { ...emptyFilters(), rule: '(a+)+$', ruleRegex: true }, null)
+    expect(performance.now() - start).toBeLessThan(50)
+  })
 })
+

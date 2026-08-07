@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+
 // Package api exposes the HTTP/WebSocket surface: historical event
 // queries, device/stat snapshots, and the live-tail WebSocket feed.
 package api
@@ -59,7 +61,7 @@ type Server struct {
 	// CriticalPorts is the configured control-port list (issue #34's
 	// tracking tab) -- exposed read-only via GET /api/critical-ports,
 	// deliberately not behind handleDetectorSettingsList's admin gate
-	// (see that handler's callerIsAdminOrOpen) since a non-admin user
+	// (see that handler's callerIsAdmin) since a non-admin user
 	// account still needs it to render the tab.
 	CriticalPorts []int
 	// DeviceStaleAfter (issue #98) is how long a device's LastSeen may go
@@ -78,6 +80,13 @@ type Server struct {
 	// session regardless of deployment state, so "which build am I
 	// running" is checkable without any special access.
 	Version string
+	// ConfigProblems are non-fatal configuration problems found at
+	// startup, where a safe default was substituted for a bad value.
+	// Surfaced to admins in the UI because a startup log line is seen
+	// once, by whoever ran `docker compose up`, and never again -- which
+	// is not good enough for a setting the operator believes is in
+	// effect. See config_problems.go.
+	ConfigProblems []ConfigProblem
 
 	// Auth/Sessions/LoginLimiter/SecureCookie: see auth.go. Auth is
 	// always non-nil (internal/auth.Open("") returns a usable, empty,
@@ -157,13 +166,15 @@ func (s *Server) routes() []route {
 		{http.MethodDelete, "/api/entities", s.handleEntitiesDelete},
 
 		{http.MethodGet, "/api/audit", s.handleAuditList},
+		{http.MethodGet, "/api/config/problems", s.handleConfigProblems},
 
 		{http.MethodGet, "/api/auth/session", s.handleAuthSession},
 		{http.MethodPost, "/api/auth/register", s.handleAuthRegister},
-		{http.MethodPost, "/api/auth/skip", s.handleAuthSkip},
 		{http.MethodPost, "/api/auth/login", s.handleAuthLogin},
 		{http.MethodPost, "/api/auth/logout", s.handleAuthLogout},
 		{http.MethodPost, "/api/auth/users", s.handleAuthCreateUser},
+		{http.MethodGet, "/api/auth/users", s.handleAuthListUsers},
+		{http.MethodDelete, "/api/auth/users/{id}", s.handleAuthDeleteUser},
 
 		// Admin-only token management (issue #101) -- gated the same way
 		// POST /api/auth/users is (see handleTokensCreate/
@@ -176,6 +187,7 @@ func (s *Server) routes() []route {
 		{http.MethodDelete, "/api/tokens/{id}", s.handleTokensRevoke},
 
 		{http.MethodGet, "/api/auth/oidc/login", s.handleOIDCLogin},
+		{http.MethodPost, "/api/auth/oidc/link", s.handleOIDCLinkStart},
 		{http.MethodGet, "/api/auth/oidc/callback", s.handleOIDCCallback},
 	}
 }
@@ -186,9 +198,21 @@ func (s *Server) routes() []route {
 // (healthz, and the specific auth endpoints that are unauthenticated by
 // nature -- see auth.go's exemptPaths).
 func (s *Server) Routes() http.Handler {
+	return s.requireAuth(s.mux())
+}
+
+// mux is Routes without the authentication gate in front of it.
+//
+// It exists for the tests that exercise a handler's own behaviour rather
+// than who is allowed to reach it. Those used to get an ungated API by
+// standing the fixture up with authentication disabled, which is not a
+// state that exists any more. Reaching for the inner mux says what those
+// tests actually mean, and keeps the gate itself covered in one place --
+// auth_test.go and the authzMatrix guard, which both mount Routes.
+func (s *Server) mux() http.Handler {
 	mux := http.NewServeMux()
 	for _, r := range s.routes() {
 		mux.HandleFunc(r.method+" "+r.path, r.handler)
 	}
-	return s.requireAuth(mux)
+	return mux
 }
