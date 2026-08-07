@@ -11,6 +11,26 @@ upgrading.
 
 ## [Unreleased]
 
+### Changed
+
+- **Rule-regex filtering runs in a Web Worker** (#157), with a hard
+  timeout that terminates the Worker if a pattern overruns. The main
+  thread no longer executes a user-supplied regular expression at all, so
+  no pattern can hang the tab — including shapes nobody has anticipated,
+  which a structural screen can never cover. It replaces
+  `isSafeRulePattern`, which rejected the known catastrophic-backtracking
+  shapes but, as its own comment said, could not prove an accepted
+  pattern was fast.
+
+  It is also less work: the old path ran the pattern against the rule
+  label *and* the raw line for every event on every recomputation — up to
+  10,000 regex executions across a 5,000-event buffer, repeated per
+  top-talker widget. Filtering is now a set lookup.
+
+  A pattern that is invalid, or refused for overrunning, leaves the rule
+  filter inactive and says so on the regex toggle rather than looking
+  like "no matches".
+
 ### Added
 
 - **`-backup` and `-restore`** (#97), producing a single gzipped JSON
