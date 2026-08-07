@@ -15,14 +15,14 @@
 package audit
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
-	"os"
-	"path/filepath"
 	"sync"
 	"time"
 
 	"github.com/tomlawesome/mikroview/internal/logging"
+	"github.com/tomlawesome/mikroview/internal/persist"
 )
 
 var persistLog = logging.New("audit")
@@ -77,7 +77,10 @@ type storeFile struct {
 // The zero value is not usable; construct with Open.
 type Store struct {
 	mu      sync.RWMutex
-	path    string
+	backend persist.Backend
+	// version is the backend's token for the document as of the last
+	// load or save -- see persist.SaveWithRetry.
+	version int64
 	entries []Entry
 	nextID  uint64
 }
@@ -92,22 +95,25 @@ type Store struct {
 // to use unconditionally; a non-nil error is only ever informational,
 // for the caller to log.
 func Open(path string) (*Store, error) {
-	s := &Store{path: path, nextID: 1}
 	if path == "" {
+		return OpenWithBackend(nil)
+	}
+	return OpenWithBackend(persist.NewFileBackend(path))
+}
+
+// OpenWithBackend is Open against any persist.Backend
+// -- a JSON file by default, or Postgres when configured (issue #131).
+func OpenWithBackend(b persist.Backend) (*Store, error) {
+	s := &Store{backend: b, nextID: 1}
+
+	data, version, err := persist.LoadDocument(context.Background(), b)
+	if err != nil {
+		return s, err
+	}
+	if data == nil {
 		return s, nil
 	}
-
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		return s, err
-	}
-
-	data, err := os.ReadFile(path)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return s, nil
-		}
-		return s, err
-	}
+	s.version = version
 
 	var file storeFile
 	if err := json.Unmarshal(data, &file); err != nil {
@@ -171,25 +177,21 @@ func (s *Store) pruneLocked() {
 // survive a restart right now" rather than breaking the mutation that
 // triggered this call.
 func (s *Store) persistLocked() {
-	if s.path == "" {
+	if s.backend == nil {
 		return
 	}
 	data, err := json.MarshalIndent(storeFile{NextID: s.nextID, Entries: s.entries}, "", "  ")
 	if err != nil {
-		persistLog.Error(fmt.Sprintf("encoding %s for persistence failed: %v -- this change exists only in memory and will be lost on restart", s.path, err))
+		persistLog.Error(fmt.Sprintf("encoding the audit log for persistence failed: %v -- this change exists only in memory and will be lost on restart", err))
 		return
 	}
-	tmp := s.path + ".tmp"
-	if err := os.WriteFile(tmp, data, 0o600); err != nil {
-		persistLog.Error(fmt.Sprintf("writing %s failed: %v -- this change exists only in memory and will be lost on restart", tmp, err))
+	version, conflicted, err := persist.SaveWithRetry(context.Background(), s.backend, data, s.version)
+	if err != nil {
+		persistLog.Error(fmt.Sprintf("writing the audit log to %s failed: %v -- this change exists only in memory and will be lost on restart", s.backend.Describe(), err))
 		return
 	}
-	// Same filesystem, so the rename itself is atomic -- but it can
-	// still fail (read-only remount, permissions change), and a
-	// silent failure here means the caller believes a write landed
-	// when it did not.
-	if err := os.Rename(tmp, s.path); err != nil {
-		persistLog.Error(fmt.Sprintf("replacing %s failed: %v -- this change exists only in memory and will be lost on restart", s.path, err))
-		return
+	if conflicted {
+		persistLog.Warn(fmt.Sprintf("the audit log was modified by another process while this change was pending (%s); this change was applied on top", s.backend.Describe()))
 	}
+	s.version = version
 }

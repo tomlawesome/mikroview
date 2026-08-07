@@ -262,36 +262,6 @@ func main() {
 	rep := reputation.New(cfg.Reputation.AbuseIPDBKey)
 
 	flagsLog := logging.New("flags")
-	fs, err := flags.Open(cfg.Flags.StorePath)
-	if err != nil {
-		flagsLog.Warn(fmt.Sprintf("%v (continuing with in-memory-only flag state)", err))
-	}
-
-	// macRegistry backs the new-device/new-MAC detector (issue #103
-	// phase 1) -- see internal/device.MACRegistry's doc comment for why
-	// this needs its own persisted store distinct from devices above
-	// (that one tracks router source IPs, not LAN client MACs).
-	macLog := logging.New("device-mac")
-	macRegistry, err := device.OpenMACRegistry(cfg.DeviceMAC.StorePath)
-	if err != nil {
-		macLog.Warn(fmt.Sprintf("%v (continuing with in-memory-only MAC registry)", err))
-	}
-
-	// RuleUsage (issue #102): a long-lived, persisted per-rule
-	// FirstSeen/LastSeen/Count record backing the stale-rule detector --
-	// see internal/rules' doc comment for why this can't just reuse
-	// internal/store's totalByRule (in-memory, windowed to the store's
-	// short retention period).
-	rulesLog := logging.New("rules")
-	ru, err := rules.Open(cfg.Flags.RuleUsageStorePath)
-	if err != nil {
-		rulesLog.Warn(fmt.Sprintf("%v (continuing with in-memory-only rule-usage state)", err))
-	}
-
-	// Storage is resolved before any store opens: it decides whether
-	// this deployment persists to JSON files or Postgres, and performs
-	// the one-time JSON adoption when Postgres is newly configured.
-	// A configured-but-unreachable database is fatal -- see openStorage.
 	// Boot-time context: the signal-aware ctx below is created after
 	// the stores exist, and connecting to the database has to happen
 	// before any of them.
@@ -303,6 +273,48 @@ func main() {
 	}
 	defer persistence.Close()
 
+	flagsBackend, err := persistence.backendFor(bootCtx, "flags", cfg.Flags.StorePath)
+	if err != nil {
+		flagsLog.Warn(err.Error())
+	}
+	fs, err := flags.OpenWithBackend(flagsBackend)
+	if err != nil {
+		flagsLog.Warn(fmt.Sprintf("%v (continuing with in-memory-only flag state)", err))
+	}
+
+	// macRegistry backs the new-device/new-MAC detector (issue #103
+	// phase 1) -- see internal/device.MACRegistry's doc comment for why
+	// this needs its own persisted store distinct from devices above
+	// (that one tracks router source IPs, not LAN client MACs).
+	macLog := logging.New("device-mac")
+	macBackend, err := persistence.backendFor(bootCtx, "mac_registry", cfg.DeviceMAC.StorePath)
+	if err != nil {
+		macLog.Warn(err.Error())
+	}
+	macRegistry, err := device.OpenMACRegistryWithBackend(macBackend)
+	if err != nil {
+		macLog.Warn(fmt.Sprintf("%v (continuing with in-memory-only MAC registry)", err))
+	}
+
+	// RuleUsage (issue #102): a long-lived, persisted per-rule
+	// FirstSeen/LastSeen/Count record backing the stale-rule detector --
+	// see internal/rules' doc comment for why this can't just reuse
+	// internal/store's totalByRule (in-memory, windowed to the store's
+	// short retention period).
+	rulesLog := logging.New("rules")
+	rulesBackend, err := persistence.backendFor(bootCtx, "rule_usage", cfg.Flags.RuleUsageStorePath)
+	if err != nil {
+		rulesLog.Warn(err.Error())
+	}
+	ru, err := rules.OpenWithBackend(rulesBackend)
+	if err != nil {
+		rulesLog.Warn(fmt.Sprintf("%v (continuing with in-memory-only rule-usage state)", err))
+	}
+
+	// Storage is resolved before any store opens: it decides whether
+	// this deployment persists to JSON files or Postgres, and performs
+	// the one-time JSON adoption when Postgres is newly configured.
+	// A configured-but-unreachable database is fatal -- see openStorage.
 	authLog := logging.New("auth")
 	authBackend, err := persistence.backendFor(bootCtx, "auth", cfg.Auth.StorePath)
 	if err != nil {
@@ -356,7 +368,11 @@ func main() {
 	// user later deletes every one of them) -- see Store.Seed's own doc
 	// comment.
 	entitiesLog := logging.New("entities")
-	entityStore, err := entities.Open(cfg.Entities.StorePath)
+	entityBackend, err := persistence.backendFor(bootCtx, "entities", cfg.Entities.StorePath)
+	if err != nil {
+		entitiesLog.Warn(err.Error())
+	}
+	entityStore, err := entities.OpenWithBackend(entityBackend)
 	if err != nil {
 		entitiesLog.Warn(fmt.Sprintf("%v (continuing with in-memory-only entity state)", err))
 	}
@@ -370,7 +386,11 @@ func main() {
 	// just means token creation refuses with ErrTokenNotPersisted, not
 	// that mikroview fails to start).
 	tokensLog := logging.New("tokens")
-	tokenStore, err := auth.OpenTokenStore(cfg.Auth.TokensStorePath)
+	tokensBackend, err := persistence.backendFor(bootCtx, "tokens", cfg.Auth.TokensStorePath)
+	if err != nil {
+		tokensLog.Warn(err.Error())
+	}
+	tokenStore, err := auth.OpenTokenStoreWithBackend(tokensBackend)
 	if err != nil {
 		tokensLog.Warn(fmt.Sprintf("%v (continuing with in-memory-only, unpersisted token state)", err))
 	}
@@ -380,7 +400,11 @@ func main() {
 	// store above (a missing/unwritable path just means entries don't
 	// survive a restart, not that mikroview fails to start).
 	auditLog := logging.New("audit")
-	auditStore, err := audit.Open(cfg.Audit.StorePath)
+	auditBackend, err := persistence.backendFor(bootCtx, "audit", cfg.Audit.StorePath)
+	if err != nil {
+		auditLog.Warn(err.Error())
+	}
+	auditStore, err := audit.OpenWithBackend(auditBackend)
 	if err != nil {
 		auditLog.Warn(fmt.Sprintf("%v (continuing with in-memory-only, unpersisted audit log)", err))
 	}
@@ -449,7 +473,11 @@ func main() {
 		}
 	}
 	detectorsLog := logging.New("detectors")
-	detectorSettings, err := detect.OpenSettingsStore(cfg.Flags.DetectorSettingsStorePath, seed)
+	detectorBackend, err := persistence.backendFor(bootCtx, "detector_settings", cfg.Flags.DetectorSettingsStorePath)
+	if err != nil {
+		detectorsLog.Warn(err.Error())
+	}
+	detectorSettings, err := detect.OpenSettingsStoreWithBackend(detectorBackend, seed)
 	if err != nil {
 		detectorsLog.Warn(fmt.Sprintf("%v (continuing with in-memory-only detector toggle state)", err))
 	}
