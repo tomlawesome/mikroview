@@ -26,7 +26,11 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/tomlawesome/mikroview/internal/logging"
 )
+
+var persistLog = logging.New("auth")
 
 type Role string
 
@@ -332,6 +336,11 @@ func (s *Store) Disable() error {
 	if !s.Persisted() {
 		return ErrNotPersisted
 	}
+	// Same cross-process reload Register does, for the same reason --
+	// the len(s.byID) test below is the correctness boundary (it runs
+	// under the write lock), this just makes sure an account created by
+	// another process is visible before we get there.
+	s.reloadIfStale()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if len(s.byID) > 0 {
@@ -365,31 +374,102 @@ func (s *Store) EnableSetup() error {
 // parameter because there's no meaningful choice: the first person to
 // register is the super-admin by definition (see the local-auth design).
 // Fails with ErrRegistrationClosed once any account exists.
+//
+// The "is registration still open" test is passed down as a guard and
+// evaluated inside createLocked's critical section rather than checked
+// here, because checking it here would be a TOCTOU: Count()/Disabled()
+// each take and release the lock on their own, so two concurrent
+// Register calls could both observe an empty store and both go on to
+// insert. That window is not theoretical or narrow -- HashPassword
+// below runs before the lock is taken and deliberately costs ~100ms
+// (Argon2id), holding it open for the entire hash. Left unguarded, N
+// concurrent registrations during the first-run window all succeed and
+// every one of them gets RoleAdmin.
 func (s *Store) Register(username, password string, now time.Time) (*User, error) {
 	if !s.Persisted() {
 		return nil, ErrNotPersisted
 	}
-	if s.Disabled() {
-		return nil, ErrAuthDisabled
+	// Reload first so a decision made by another process (the CLI
+	// recovery tool) is visible before we take the lock -- the guard
+	// below re-reads the same fields under it, so this is an
+	// optimization for the cross-process case, not the correctness
+	// boundary.
+	s.reloadIfStale()
+
+	// Cheap rejection BEFORE hashing. HashPassword is Argon2id at 64
+	// MiB, and /api/auth/register is unauthenticated and rate-limit-free
+	// in every auth state -- so without this, a ~60-byte POST that is
+	// going to be refused anyway still costs 64 MiB and ~66ms, and a
+	// handful of concurrent ones OOM-kill the container. Measured at
+	// ~1 GiB peak heap for 16 concurrent requests, all of which
+	// correctly returned "registration closed".
+	//
+	// This is a fast path, NOT the correctness boundary: it reads the
+	// guard's fields without holding the write lock, so it can race.
+	// registrationOpenGuard re-checks under the lock inside
+	// createLocked, and that remains what actually guarantees exactly
+	// one account can be self-registered.
+	if err := func() error {
+		s.mu.RLock()
+		defer s.mu.RUnlock()
+		return registrationOpenGuard(s)
+	}(); err != nil {
+		return nil, err
 	}
-	if s.Count() > 0 {
-		return nil, ErrRegistrationClosed
+
+	return s.createLocked(username, password, RoleAdmin, now, registrationOpenGuard)
+}
+
+// registrationOpenGuard is Register's under-the-lock precondition: no
+// account may exist yet, and the deployment must not have already
+// opted out of auth entirely. Both are re-read from the live store
+// with the write lock held (see createLocked), which is what makes
+// "exactly one account can ever be self-registered" actually hold
+// under concurrency.
+//
+// Checking disabled here (not just in Register) also closes a second,
+// worse race: Disable() and Register() could previously both succeed,
+// leaving a store with a real admin account AND disabled == true.
+// internal/api's requireAuth checks Disabled() first, so that state
+// means the deployment serves everyone with no login at all while an
+// admin account quietly exists -- the operator sees their own
+// registration succeed and has no reason to suspect auth is off.
+func registrationOpenGuard(s *Store) error {
+	if s.disabled {
+		return ErrAuthDisabled
 	}
-	return s.createLocked(username, password, RoleAdmin, now)
+	if len(s.byID) > 0 {
+		return ErrRegistrationClosed
+	}
+	return nil
 }
 
 // CreateUser adds an additional account with the given role -- for use
 // by an already-authenticated admin (internal/api enforces the caller's
 // role; Store itself has no notion of "who is calling"), or by the CLI
-// recovery tooling.
+// recovery tooling. No guard: unlike Register, this is deliberately
+// callable at any time, and its "who may call this" question is
+// answered a layer up.
 func (s *Store) CreateUser(username, password string, role Role, now time.Time) (*User, error) {
 	if !s.Persisted() {
 		return nil, ErrNotPersisted
 	}
-	return s.createLocked(username, password, role, now)
+	return s.createLocked(username, password, role, now, nil)
 }
 
-func (s *Store) createLocked(username, password string, role Role, now time.Time) (*User, error) {
+// createLocked inserts a new account. guard, when non-nil, is evaluated
+// with the write lock already held and aborts the insert if it returns
+// an error -- that's the hook callers use to make a precondition
+// ("registration is still open") atomic with the insert itself rather
+// than checking it beforehand and racing.
+//
+// HashPassword deliberately runs before the lock is acquired: Argon2id
+// is ~100ms by design, and holding the store's write lock for that long
+// would serialize every reader behind each in-flight registration --
+// an easy self-inflicted DoS. The cost of hashing before the guard runs
+// is one wasted hash on the losing side of a race, which is the right
+// trade.
+func (s *Store) createLocked(username, password string, role Role, now time.Time, guard func(*Store) error) (*User, error) {
 	if len(password) < minPasswordLength {
 		return nil, ErrPasswordTooShort
 	}
@@ -400,6 +480,12 @@ func (s *Store) createLocked(username, password string, role Role, now time.Time
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
+	if guard != nil {
+		if err := guard(s); err != nil {
+			return nil, err
+		}
+	}
 
 	key := strings.ToLower(username)
 	if _, exists := s.byName[key]; exists {
@@ -710,13 +796,22 @@ func (s *Store) persistLocked() {
 
 	data, err := json.MarshalIndent(storeFile{Disabled: s.disabled, Users: list}, "", "  ")
 	if err != nil {
+		persistLog.Error(fmt.Sprintf("encoding %s for persistence failed: %v -- this change exists only in memory and will be lost on restart", s.path, err))
 		return
 	}
 	tmp := s.path + ".tmp"
 	if err := os.WriteFile(tmp, data, 0o600); err != nil {
+		persistLog.Error(fmt.Sprintf("writing %s failed: %v -- this change exists only in memory and will be lost on restart", tmp, err))
 		return
 	}
-	os.Rename(tmp, s.path) // same filesystem, so this is atomic
+	// Same filesystem, so the rename itself is atomic -- but it can
+	// still fail (read-only remount, permissions change), and a
+	// silent failure here means the caller believes a write landed
+	// when it did not.
+	if err := os.Rename(tmp, s.path); err != nil {
+		persistLog.Error(fmt.Sprintf("replacing %s failed: %v -- this change exists only in memory and will be lost on restart", s.path, err))
+		return
+	}
 
 	// Keep mtime in sync with this store's own write, so reloadIfStale
 	// doesn't immediately re-read the file it just wrote on the next

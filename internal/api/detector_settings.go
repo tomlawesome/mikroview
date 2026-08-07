@@ -1,6 +1,7 @@
 package api
 
 import (
+	"fmt"
 	"net/http"
 
 	"github.com/tomlawesome/mikroview/internal/auth"
@@ -76,5 +77,6 @@ func (s *Server) handleDetectorSettingsUpdate(w http.ResponseWriter, r *http.Req
 	}
 
 	s.DetectorSettings.Set(name, detect.Settings{Enabled: req.Enabled, Scope: req.Scope})
+	s.Audit.Record(auditActor(r), "detector.update", string(name), fmt.Sprintf("enabled=%t", req.Enabled))
 	writeJSON(w, http.StatusOK, detectorEntry{Name: name, Enabled: req.Enabled, Scope: req.Scope})
 }

@@ -81,6 +81,7 @@
     new_device: 'New device',
     stale_rule: 'Stale firewall rule',
     unexpected_mail_sender: 'Unexpected mail sender',
+    known_bad_ip: 'Known-bad IP (blocklist match)',
   }
 
   // Sorted by firstSeen (not the fetch response's lastSeen-desc order --
@@ -180,6 +181,7 @@
       case 'low_slow_scan':
       case 'off_hours_activity':
       case 'unexpected_mail_sender':
+      case 'known_bad_ip':
         appState.setFilter('ip', f.target)
         break
       case 'distributed_brute_force':
@@ -294,13 +296,21 @@
       {/if}
       <div class="actions">
         <button class="clear" onclick={() => clear(f.id)}>Clear</button>
-        <button
-          class="clear clear-permanent"
-          onclick={() => clearPermanent(f.id)}
-          title="Clear this flag and permanently stop {TYPE_LABELS[f.type]} from ever raising again for {f.target} -- reversible from Manage exclusions below (admin only)."
-        >
-          Clear, never flag again
-        </button>
+        {#if isAdminOrOpen}
+          <!-- Admin-only, matching the backend's own gate on
+               POST /api/flags/{id}/clear-permanent: a permanent
+               exclusion suppresses detection until someone undoes it,
+               unlike the plain Clear beside it. Hidden rather than
+               disabled for non-admins, since a disabled control here
+               would just advertise an action they can't take. -->
+          <button
+            class="clear clear-permanent"
+            onclick={() => clearPermanent(f.id)}
+            title="Clear this flag and permanently stop {TYPE_LABELS[f.type]} from ever raising again for {f.target} -- reversible from Manage exclusions below."
+          >
+            Clear, never flag again
+          </button>
+        {/if}
       </div>
     </li>
   {/snippet}

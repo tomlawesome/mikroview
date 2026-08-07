@@ -127,9 +127,106 @@ IP briefly to conserve free-tier quota.
   `MIKROVIEW_ABUSEIPDB_KEY` env var. Adds abuse score, report count,
   country, and ISP to the result.
 
+  GreyNoise was evaluated as a second live source (issue #113 Part A)
+  and removed again: its Community API's free tier is 50 lookups/*week*,
+  shared with the GreyNoise Visualizer web UI, not a usable quota for a
+  live monitoring tool — no code from that integration remains.
+
+Every behavioral flag's confidence floor is also informed by whichever
+sources are configured (see "Behavioral flags" below) — an abuse score
+or a Tor-exit/hosting-provider classification against the flag's source
+IP raises (never lowers) that flag's confidence, the same way local
+blocklist matches do (see "Local IP/CIDR blocklist matching" below).
+
 Unconfigured, the feature still works with Shodan-only results; private/
 loopback/link-local addresses are rejected server-side regardless of
 configuration.
+
+## Local IP/CIDR blocklist matching (optional, on by default)
+
+Independent of the live reputation lookups above (which run on demand,
+against public IPs a human clicks "investigate" on), mikroview also
+maintains a small local cache of known-malicious CIDR ranges from a
+vetted menu of free threat-intel feeds, and checks every ingested
+event's source IP against it — raising a `known_bad_ip` flag directly on
+a match, regardless of any behavioral threshold. This isn't a
+"detector" in the `flags.detectors`/scope sense above (see
+"Per-detector toggles"): there's no threshold to tune and no scope
+narrower than "does this exact IP fall in a range on the list," so it
+has no matching entry there, the same precedent `new_device`/
+`stale_rule` already set.
+
+```yaml
+blocklist:
+  sources:
+    - spamhaus_drop
+    - spamhaus_edrop
+```
+
+- **`sources`** — which feeds from the vetted menu to enable. This is
+  deliberately *not* an arbitrary URL field: both the trust story (an
+  operator ticking "Spamhaus DROP" is trusting mikroview's own vetting
+  of that source, not whatever URL they happen to type) and the
+  performance ceiling (every enabled list is consulted on the hot
+  per-event ingest path — see below) depend on the menu staying small,
+  fixed, and enumerable. An unrecognized entry is logged and skipped at
+  startup, not fatal. Set to an empty list (`sources: []`) to disable
+  local blocklist matching entirely.
+
+  The menu today:
+  - **`spamhaus_drop`** / **`spamhaus_edrop`** (on by default) —
+    [Spamhaus's DROP and EDROP lists](https://www.spamhaus.org/drop/):
+    small (documented at roughly 1-2k CIDR ranges combined), free, no
+    registration, and deliberately conservative — Spamhaus only lists
+    netblocks they're confident are entirely malicious-controlled
+    (hijacked/stolen allocations, bulletproof hosting), which fits
+    "safe to flag on sight, no behavioral corroboration needed" far
+    better than a larger, noisier aggregated list would.
+  - **`emerging_threats_compromised`** (opt-in, not part of the
+    default) — [Emerging Threats' compromised-IPs
+    list](https://rules.emergingthreats.net/blockrules/compromised-ips.txt):
+    also free and requiring no registration, but a much larger,
+    faster-changing list of individual compromised hosts rather than
+    curated netblocks.
+
+**Refresh** is a fixed daily cycle, deliberately not configurable — an
+explicit decision to avoid over-polling Spamhaus/Emerging Threats' free
+infrastructure, not an oversight. The first fetch happens in the
+background at startup (never blocking it); if a refresh fails for a
+given feed (network issue, upstream outage), that feed keeps serving
+whatever it last successfully fetched rather than going blind, and logs
+a warning — see the `blocklist` component in server logs.
+
+**Performance.** Matching is a per-feed binary search over that feed's
+own sorted, non-overlapping address ranges — O(log n) per feed, never a
+linear scan, regardless of list size, since this runs on every single
+ingested event. Combined entries across every enabled feed are capped at
+100,000 (`internal/blocklist`'s `maxTotalEntries`) — measured, not
+estimated: today's real combined feed size (Spamhaus DROP+EDROP +
+Emerging Threats) is ~2.2k entries, and benchmarking this package's
+actual lookup and daily-rebuild paths shows neither is remotely close to
+a real ceiling until well past 100,000 (rebuild takes ~33ms and ~7.5MB
+at that size; per-event lookup cost barely changes even at 5 million
+entries). 100,000 is real headroom over current usage, not a number
+chosen to avoid a performance cliff that's actually much further out. A
+feed that would push the combined total over this cap has its excess
+entries truncated (a partially-loaded list still catches most of what
+it would have) rather than being rejected outright; a truncation is
+logged. Multiple feeds may be enabled simultaneously — each is matched
+independently, so enabling more than one only ever adds coverage, never
+conflicts.
+
+**Firing behavior.** A match raises `known_bad_ip` directly against the
+source IP, with a fixed high confidence (Spamhaus's own curation policy
+— only netblocks they're confident are entirely malicious-controlled —
+makes this about as strong a signal as this app has). It also raises the
+confidence floor (see `RaiseConfidenceFloor`) of any other currently
+active, source-IP-keyed flag for that same address (`port_scan`,
+`activity_spike`, `critical_port`, `outbound_anomaly`, `internal_recon`,
+`low_slow_scan`, `off_hours_activity`) — the same reinforcement role the
+live reputation lookups above already play for those flags, just
+resolved synchronously (a local lookup needs no network round-trip)
+instead of asynchronously.
 
 ## Port lookup
 
@@ -231,6 +328,51 @@ per-rule usage record (`GET /api/rules`); discovered hosts/ports are
 derived from the events currently loaded in your browser tab, so that
 list is only as complete as what's been seen there so far -- the entity
 itself, once named, is fully persisted regardless.
+
+## Audit log: admin action accountability (optional)
+
+Every admin-privileged mutation -- creating a user, changing a detector's
+enabled/scope settings, upserting or deleting an entity, creating or
+revoking an API token, or removing a permanent flag exclusion -- is
+recorded to a persisted, admin-only audit log (issue #112), so there's a
+record of *who* made each of those changes and *when*. This is
+deliberately narrower than a full request/access log: only mutations are
+recorded, never reads (viewing a page, listing users) -- matching what
+"audit log" conventionally means and what's actually useful for
+accountability.
+
+```yaml
+audit:
+  # Where audit log entries are persisted, as a small JSON file. Same
+  # optional-persistence contract as entities.storePath: left unset, the
+  # log still works, entries just don't survive a restart. If you set
+  # this in the container, mount a volume for its parent directory --
+  # see deploy/docker-compose.yml.
+  storePath: "/var/lib/mikroview/audit.json"
+```
+
+Two deliberate scoping decisions, both from issue #112's own explicit
+open question about which flag actions belong here:
+
+- **A plain flag clear** (`POST /api/flags/{id}/clear`) is **not**
+  logged -- that endpoint isn't admin-gated at all (any signed-in user
+  can clear a flag), and this is an audit log of *admin* actions.
+- **A permanent flag exclusion** (`POST /api/flags/{id}/clear-permanent`)
+  **is** logged, and is admin-only. It was previously open to any
+  signed-in user and unlogged; that was tightened because an exclusion
+  permanently suppresses detection for that (detector, target) until
+  someone notices and undoes it, which is not something a non-admin --
+  or a single compromised low-privilege credential -- should be able to
+  do silently. Removing an exclusion
+  (`DELETE /api/flags/exclusions/{id}`) is admin-gated and logged too.
+
+Reviewed from **Menu → Audit log** (admin-only, and -- unlike Detectors'
+gate -- **not** shown while auth is disabled, matching Entities' own
+stricter gate: there's no "admin" concept once auth itself has been
+opted out of). Backed by `GET /api/audit`, a windowed query over the
+persisted log (see [API reference](#api-reference)) -- the same
+`since`/`until`/`limit` convention `GET /api/events` already uses, minus
+that endpoint's event-specific filters.
 
 ## Behavioral flags (optional, on by default)
 
@@ -622,7 +764,8 @@ already-active-again source re-raises it as a fresh entry rather than
 silently resurrecting the old one.
 
 Alongside the plain Clear action, "Clear, never flag again" (`POST
-/api/flags/{id}/clear-permanent`) clears the flag *and* permanently
+/api/flags/{id}/clear-permanent`, **admin-only** once an account exists,
+and recorded in the audit log) clears the flag *and* permanently
 excludes that exact (detector, target) pair -- from then on it never
 raises again, silently, until the exclusion is removed. This is
 deliberately permanent rather than a timed snooze: a time-limited mute
@@ -898,6 +1041,22 @@ A password reset immediately invalidates every existing session for that
 account, including on an already-running server -- you don't need to
 restart mikroview after running `-reset-password` for the new password
 to take effect.
+
+**A corrupt or unreadable accounts file refuses to boot, rather than
+silently reopening.** If `auth.storePath` points at a file that exists
+but can't be loaded, mikroview exits immediately with an error rather
+than falling back to an empty, zero-account state -- the same state a
+genuine fresh install starts from, which would otherwise mean a lost or
+corrupted accounts file silently presents the first-run setup screen to
+whoever loads mikroview next, indistinguishable from a real fresh
+install in both behavior and the logs. A missing file (no persistence
+configured, or a genuine first-ever boot) is unaffected and boots
+normally either way -- only a file that exists but won't parse triggers
+this. The startup error names the exact path; restore it from a backup
+if you have one, or move/delete it and restart to consciously re-arm
+the first-run setup screen -- container/host access is the trust
+anchor here, the same as the recovery commands above, so there's no
+separate CLI mode for what `mv`/`rm` already does.
 
 ## API tokens (read-only)
 
@@ -1178,6 +1337,7 @@ Override individual scalar settings without a mounted file:
 | `MIKROVIEW_AUTH_SECURE_COOKIE` | `auth.secureCookie` |
 | `MIKROVIEW_AUTH_SESSION_TTL` | `auth.sessionTTL` |
 | `MIKROVIEW_ENTITIES_STORE_PATH` | `entities.storePath` (see [Entities](#entities-ui-managed-hostruleport-labels-and-tags-optional)) |
+| `MIKROVIEW_AUDIT_STORE_PATH` | `audit.storePath` (see [Audit log](#audit-log-admin-action-accountability-optional)) |
 | `MIKROVIEW_AUTH_TOKENS_STORE_PATH` | `auth.tokensStorePath` (see [API tokens](#api-tokens-read-only)) |
 | `MIKROVIEW_TLS_ENABLED` | `tls.enabled` (see [TLS](#tls)) |
 | `MIKROVIEW_TLS_CERT_FILE` | `tls.certFile` |
@@ -1201,12 +1361,34 @@ Override individual scalar settings without a mounted file:
 | `MIKROVIEW_NOTIFY_PUSHOVER_USER` | `notify.pushover.user` |
 | `MIKROVIEW_DEVICE_MAC_STORE_PATH` | `deviceMac.storePath` (see [New-device detection](#new-device-detection-optional-on-by-default)) |
 | `MIKROVIEW_NOTIFY_WEBHOOK_URL` | `notify.webhook.url` |
+| `MIKROVIEW_BLOCKLIST_SOURCES` | `blocklist.sources` (comma-separated, see [Local IP/CIDR blocklist matching](#local-ipcidr-blocklist-matching-optional-on-by-default)) -- note an empty env var value is treated as unset, same as every other list env var here, so *disabling* the feature (`sources: []`) needs the YAML file, not this variable |
+
+## Checking your version
+
+There is no semantic version -- mikroview doesn't cut releases or tag
+versions today, only images built from `preview`/`main` (see
+`.github/workflows/docker.yml`; pushing to `dev` deliberately publishes
+no image at all). The build identifier is the short git commit SHA it
+was built from, and it's checkable three ways, all showing the same
+value:
+
+- `docker exec <container> mikroview -version` -- prints the bare SHA
+  and nothing else, easy to capture in a script.
+- `GET /api/healthz`'s `version` field -- reachable with no auth and no
+  session regardless of deployment state, same as the rest of that
+  endpoint.
+- The account menu in the UI (bottom, below Sign out/appearance) --
+  small, muted text, always visible regardless of auth state.
+
+A plain local `go run .`/`go build .` (no `-ldflags`) shows `dev`
+instead of a commit SHA.
 
 ## CLI flags (local development)
 
-`-syslog-udp`, `-syslog-tcp`, `-http`, `-http-redirect`, `-retention`,
-`-max-events`, `-geoip-db` — see `go run . -h`. Devices, rule/host
-names, and auth config can only be set via YAML/env, not flags.
+`-version`, `-syslog-udp`, `-syslog-tcp`, `-http`, `-http-redirect`,
+`-retention`, `-max-events`, `-geoip-db` — see `go run . -h`. Devices,
+rule/host names, and auth config can only be set via YAML/env, not
+flags.
 
 `-healthcheck`, `-list-users`, `-reset-password <username>`,
 `-enable-auth-setup` are standalone modes -- each does its one job and
@@ -1217,7 +1399,7 @@ exits, rather than starting the server. See
 
 | Endpoint | Description |
 |---|---|
-| `GET /api/healthz` | liveness/uptime check |
+| `GET /api/healthz` | liveness/uptime/version check |
 | `GET /ca.crt` | mikroview's self-generated CA certificate, unauthenticated -- only present when TLS is on and mikroview generated its own CA (never for a supplied cert or `tls.enabled: false`); see [TLS](#tls) |
 | `GET /api/events` | filtered, windowed historical query (see below) |
 | `GET /api/devices` | known devices (configured + auto-discovered), each with a `status` of `live`/`stale`/`never_seen` (issue #98, see [Behavioral flags](#behavioral-flags-optional-on-by-default)'s "Device silence" entry) -- feeds the Fleet view |
@@ -1228,7 +1410,7 @@ exits, rather than starting the server. See
 | `GET /api/lookup/ip/{ip}` | on-demand reputation/threat-intel lookup for one public IP (see [IP reputation lookup](#ip-reputation-lookup-optional)) |
 | `GET /api/flags` | active + cleared behavioral flags, plus the last hour of newly-raised-episode counts by type at 1-minute resolution (issue #100, feeds the dashboard's flags-over-time chart) (see [Behavioral flags](#behavioral-flags-optional-on-by-default)) |
 | `POST /api/flags/{id}/clear` | mark one flag as cleared |
-| `POST /api/flags/{id}/clear-permanent` | clear one flag *and* permanently exclude its (detector, target) pair going forward |
+| `POST /api/flags/{id}/clear-permanent` | admin-only (open while zero accounts exist): clear one flag *and* permanently exclude its (detector, target) pair going forward. Audit-logged |
 | `GET /api/flags/exclusions` | admin-only (open while zero accounts exist): every currently-excluded (detector, target) pair |
 | `DELETE /api/flags/exclusions/{id}` | admin-only (open while zero accounts exist): remove one exclusion, letting that pair raise again |
 | `GET /api/detectors` | admin-only (open while zero accounts exist): every detector's live enabled+scope (see [Per-detector toggles](#per-detector-toggles-and-scope-restrictions-optional)) |
@@ -1236,6 +1418,7 @@ exits, rather than starting the server. See
 | `GET /api/entities` | admin-only (**not** open while zero accounts exist -- see [Entities](#entities-ui-managed-hostruleport-labels-and-tags-optional)): every persisted entity |
 | `POST /api/entities` | admin-only: create or replace (upsert) one entity, identified by `(type, key)` in the JSON body |
 | `DELETE /api/entities` | admin-only: remove the entity identified by `(type, key)` in the JSON body |
+| `GET /api/audit` | admin-only (**not** open while zero accounts exist, same as `/api/entities`): a windowed slice of the admin action audit log (see [Audit log](#audit-log-admin-action-accountability-optional)), newest activity last, accepting `since`/`until`/`limit` query params like `GET /api/events` |
 | `GET /api/auth/session` | current auth state (setup-required / authenticated / not) -- always 200, never gated |
 | `POST /api/auth/register` | create the first (admin) account -- only while zero accounts exist |
 | `POST /api/auth/skip` | explicitly disable auth for this deployment -- only while zero accounts exist; reversing later is CLI-only (`-enable-auth-setup`) |

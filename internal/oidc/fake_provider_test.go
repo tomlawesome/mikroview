@@ -58,12 +58,12 @@ func (fp *fakeProvider) serveDiscovery(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]any{
 		"issuer":                                fp.server.URL,
 		"authorization_endpoint":                fp.server.URL + "/authorize",
-		"token_endpoint":                         fp.server.URL + "/token",
-		"jwks_uri":                               fp.server.URL + "/jwks",
-		"userinfo_endpoint":                      fp.server.URL + "/userinfo",
-		"id_token_signing_alg_values_supported":  []string{"RS256", "ES256"},
-		"response_types_supported":               []string{"code"},
-		"subject_types_supported":                []string{"public"},
+		"token_endpoint":                        fp.server.URL + "/token",
+		"jwks_uri":                              fp.server.URL + "/jwks",
+		"userinfo_endpoint":                     fp.server.URL + "/userinfo",
+		"id_token_signing_alg_values_supported": []string{"RS256", "ES256"},
+		"response_types_supported":              []string{"code"},
+		"subject_types_supported":               []string{"public"},
 	})
 }
 
