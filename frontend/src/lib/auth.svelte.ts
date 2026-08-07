@@ -5,21 +5,17 @@ import {
   login,
   logout,
   register,
-  skipAuthSetup,
 } from "./api";
 import type { AuthSession } from "./types";
 
 // 'loading' only lasts for the initial check() call on app boot; after
-// that it's always one of the other four. App.svelte renders a
+// that it's always one of the other three. App.svelte renders a
 // different top-level view for each (see appState.view for the same
 // independent-view pattern used by Metrics) rather than layering
-// anything as a modal. 'auth-disabled' means this deployment explicitly
-// skipped auth (see internal/auth.Store.Disable) -- a stable, permanent
-// state, not "still pending" like 'setup-required'.
+// anything as a modal.
 export type AuthViewState =
   | "loading"
   | "setup-required"
-  | "auth-disabled"
   | "unauthenticated"
   | "authenticated";
 
@@ -120,12 +116,7 @@ class AuthState {
 
   private apply(session: AuthSession) {
     this.ssoAvailable = session.ssoAvailable;
-    // authDisabled takes priority: once a deployment has explicitly
-    // skipped auth, Count()==0 no longer implies "show the choice
-    // screen" -- a choice has already been made.
-    if (session.authDisabled) {
-      this.state = "auth-disabled";
-    } else if (session.setupRequired) {
+    if (session.setupRequired) {
       this.state = "setup-required";
     } else if (session.authenticated) {
       this.state = "authenticated";
@@ -153,14 +144,6 @@ class AuthState {
     return null;
   }
 
-  // skip permanently disables auth for this deployment -- see
-  // api.ts's skipAuthSetup for why this can't be undone from the UI.
-  async skip(): Promise<string | null> {
-    const err = await skipAuthSetup();
-    if (err) return err;
-    await this.check();
-    return null;
-  }
 
   async login(username: string, password: string): Promise<string | null> {
     const err = await login(username, password);

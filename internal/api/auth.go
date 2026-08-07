@@ -72,7 +72,7 @@ var exemptPaths = map[string]bool{
 // bootstrapExemptPaths lists the (smaller) set of routes reachable
 // while no account exists yet *and* auth hasn't been explicitly
 // disabled -- only what's needed to show and complete the one-time
-// choice screen (create an account, or skip auth for this deployment).
+// account-creation screen.
 // Deliberately narrower than exemptPaths: everything else 401s during
 // this window, closing the gap where live data (events/flags/stats)
 // used to be readable by anyone who reached mikroview before a decision
@@ -81,7 +81,6 @@ var bootstrapExemptPaths = map[string]bool{
 	"/api/healthz":       true,
 	"/api/auth/session":  true,
 	"/api/auth/register": true,
-	"/api/auth/skip":     true,
 	// So the very first-ever login can happen via SSO -- symmetric with
 	// /api/auth/register already being bootstrap-exempt for the local-
 	// password path.
@@ -149,24 +148,17 @@ func bearerToken(r *http.Request) (string, bool) {
 	return strings.TrimPrefix(h, bearerPrefix), true
 }
 
-// requireAuth has three states, checked in order, plus a fourth check
-// (bearer tokens) nested inside the third:
+// requireAuth has two states, checked in order, plus a third check
+// (bearer tokens) nested inside the second:
 //
-//  1. Disabled (s.Auth.Disabled()): a deliberate, permanent opt-out --
-//     everyone reached the same "skip auth" choice this deployment made
-//     on first boot. Fully open, indefinitely, same shape as (2) below
-//     but without the path restriction, since there's no pending
-//     decision left to protect. A bearer token header is ignored here
-//     (not even validated) -- an invalid/revoked token must never turn
-//     an otherwise fully-open deployment into a 401.
-//  2. Undecided (Count()==0, not disabled): only bootstrapExemptPaths
-//     stay reachable -- just enough to show and complete the one-time
-//     choice screen. Everything else 401s, closing the window where
-//     live data (events/flags/stats) used to be readable by anyone who
-//     reached mikroview before a decision was made. Tokens can't
-//     meaningfully exist yet either (creating one requires an admin,
-//     and there is none), so this stays unchanged.
-//  3. Active (Count()>0): CSRF header + exemptPaths + (session cookie OR
+//  1. Undecided (Count()==0): only bootstrapExemptPaths stay reachable
+//     -- just enough to show and complete account creation. Everything
+//     else 401s, closing the window where live data (events/flags/
+//     stats) used to be readable by anyone who reached mikroview before
+//     an account existed. Tokens can't meaningfully exist yet either
+//     (creating one requires an admin, and there is none), so this
+//     stays unchanged.
+//  2. Active (Count()>0): CSRF header + exemptPaths + (session cookie OR
 //     bearer token). A bearer token is checked first, before the CSRF/
 //     exempt-path logic below, since it identifies a non-browser,
 //     service-to-service caller -- CSRF is a browser-cookie-specific
@@ -174,24 +166,26 @@ func bearerToken(r *http.Request) (string, bool) {
 //     to readOnlyRoutes, never to next (the full mux); an invalid or
 //     revoked one is rejected outright with 401, not silently treated
 //     as "no token" and passed through to the session-cookie check.
+//
+// There is deliberately no third state for "this deployment opted out of
+// authentication". That mode existed and was removed: an unauthenticated
+// mikroview shows which hosts are being scanned, which rules fire, and
+// which accounts matter, and no amount of "it's only for five minutes"
+// survives contact with a deployment nobody got round to changing.
+// Creating a local account takes one screen, and it is the floor now.
 func (s *Server) requireAuth(next http.Handler) http.Handler {
 	readOnly := s.readOnlyRoutes()
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if s.Auth.Disabled() {
-			next.ServeHTTP(w, r)
-			return
-		}
 		if s.Auth.Count() == 0 {
 			if !bootstrapExemptPaths[r.URL.Path] {
 				http.Error(w, "setup required", http.StatusServiceUnavailable)
 				return
 			}
 			// No session exists yet to carry a CSRF check the normal
-			// way, but /api/auth/register and /api/auth/skip are the
-			// two highest-consequence endpoints in the app -- one
-			// creates the permanent admin account, the other
-			// permanently disables auth for the deployment -- and
-			// without this, a bare cross-site <form> POST (no
+			// way, but /api/auth/register is the highest-consequence
+			// endpoint in the app -- it creates the permanent admin
+			// account -- and without this, a bare cross-site <form>
+			// POST (no
 			// SameSite cookie needed, since none exists yet) could
 			// make that irreversible choice on a victim's behalf.
 			// Every other bootstrap-exempt path is GET, so
@@ -266,11 +260,6 @@ func (s *Server) clearSessionCookie(w http.ResponseWriter) {
 }
 
 type sessionResponse struct {
-	// AuthDisabled: this deployment permanently opted out of auth (see
-	// auth.Store.Disable) -- checked first by the frontend, since it
-	// takes priority over SetupRequired (Count()==0 no longer implies
-	// "show the choice screen" once a choice has actually been made).
-	AuthDisabled  bool   `json:"authDisabled"`
 	SetupRequired bool   `json:"setupRequired"`
 	Authenticated bool   `json:"authenticated"`
 	Username      string `json:"username,omitempty"`
@@ -292,7 +281,6 @@ type sessionResponse struct {
 // first-run choice screen, a login form, or the live app.
 func (s *Server) handleAuthSession(w http.ResponseWriter, r *http.Request) {
 	resp := sessionResponse{
-		AuthDisabled:  s.Auth.Disabled(),
 		SetupRequired: s.Auth.Count() == 0,
 		SSOAvailable:  s.OIDC != nil,
 	}
@@ -316,7 +304,6 @@ func (s *Server) handleAuthSession(w http.ResponseWriter, r *http.Request) {
 // only logged server-side.
 var authErrorMessages = map[error]string{
 	auth.ErrRegistrationClosed: "registration is closed -- an account already exists",
-	auth.ErrAuthDisabled:       "authentication has been disabled for this deployment",
 	auth.ErrNotPersisted:       "this deployment has no persistent storage configured -- an administrator needs to set one up before an account can be created",
 	auth.ErrUsernameTaken:      "that username is already taken",
 	auth.ErrPasswordTooShort:   auth.ErrPasswordTooShort.Error(), // already phrased for an end user
@@ -342,18 +329,6 @@ func writeAuthError(w http.ResponseWriter, err error, status int) {
 // Count()==0 (requireAuth's bootstrap-exempt window; Disable itself
 // also refuses otherwise, as a second guard). No session is created;
 // there's nothing to log into.
-func (s *Server) handleAuthSkip(w http.ResponseWriter, r *http.Request) {
-	if err := s.Auth.Disable(); err != nil {
-		status := http.StatusInternalServerError
-		if err == auth.ErrRegistrationClosed {
-			status = http.StatusConflict
-		}
-		writeAuthError(w, err, status)
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]any{"disabled": true})
-}
-
 type credentialsRequest struct {
 	Username string `json:"username"`
 	Password string `json:"password"`
@@ -372,7 +347,7 @@ func (s *Server) handleAuthRegister(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		status := http.StatusInternalServerError
 		switch err {
-		case auth.ErrRegistrationClosed, auth.ErrAuthDisabled:
+		case auth.ErrRegistrationClosed:
 			status = http.StatusConflict
 		case auth.ErrNotPersisted:
 			status = http.StatusServiceUnavailable

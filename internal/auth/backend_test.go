@@ -150,32 +150,6 @@ func TestBackendPicksUpAnotherProcessesWrite(t *testing.T) {
 	})
 }
 
-// Disable/EnableSetup cross the same process boundary -- that is exactly
-// what `-enable-auth-setup` does to a live server.
-func TestBackendDisabledStateCrossesProcesses(t *testing.T) {
-	eachAuthBackend(t, func(t *testing.T, open func() *Store) {
-		server := open()
-		if server.Disabled() {
-			t.Fatal("a fresh store reports disabled")
-		}
-
-		cli := open()
-		if err := cli.Disable(); err != nil {
-			t.Fatalf("Disable: %v", err)
-		}
-		if !server.Disabled() {
-			t.Error("the running store did not see auth being disabled")
-		}
-
-		if err := cli.EnableSetup(); err != nil {
-			t.Fatalf("EnableSetup: %v", err)
-		}
-		if server.Disabled() {
-			t.Error("the running store did not see setup being re-enabled")
-		}
-	})
-}
-
 // An unreadable document must not read as an absent one -- that turns a
 // corrupted accounts store into a fresh install, silently reopening
 // registration. main.go refuses to start on this error.
