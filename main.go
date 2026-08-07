@@ -216,6 +216,14 @@ func main() {
 	if len(os.Args) > 1 && os.Args[1] == "-validate-config" {
 		os.Exit(runValidateConfig(os.Args[2:]))
 	}
+	// Recovery-key tooling: the second factor beyond host access on the
+	// commands that change authentication state (issue #134).
+	if len(os.Args) > 1 && os.Args[1] == "-generate-recovery-keys" {
+		os.Exit(runGenerateRecoveryKeys(os.Args[2:]))
+	}
+	if len(os.Args) > 1 && os.Args[1] == "-transfer-admin" {
+		os.Exit(runTransferAdmin(os.Args[2:]))
+	}
 
 	configLog := logging.New("config")
 	cfg, configResult, err := config.LoadWithProblems(os.Getenv("MIKROVIEW_CONFIG"), os.Args[1:])
@@ -912,6 +920,199 @@ func runValidateConfig(args []string) int {
 	}
 	fmt.Printf("\n%d warning(s). mikroview would start, using the values shown above.\n", len(result.Warnings))
 	return validateConfigExitProblems
+}
+
+// openRecoveryStoreForCLI opens the recovery-key store the gated CLI
+// commands verify against.
+func openRecoveryStoreForCLI() (*auth.RecoveryStore, error) {
+	cfg, err := config.Load(os.Getenv("MIKROVIEW_CONFIG"), nil)
+	if err != nil {
+		return nil, fmt.Errorf("config: %w", err)
+	}
+	if cfg.Auth.RecoveryKeysPath == "" {
+		return nil, fmt.Errorf("auth.recoveryKeysPath is not configured")
+	}
+	return auth.OpenRecovery(cfg.Auth.RecoveryKeysPath, cfg.Auth.RecoveryPepperPath)
+}
+
+// printRecoveryKeys writes a freshly generated set to stdout, exactly
+// once, and refuses when stdout is not a terminal.
+//
+// These commands run inside a container, so "printed once" can land
+// somewhere durable and broadly readable -- the Docker log driver, a
+// shipped log aggregator, the journal on a non-interactive run, or a
+// pipe into a file nobody thought about. Keys written to a non-TTY are
+// keys written to storage with weaker permissions than the file they
+// protect. --i-will-capture-this exists for genuine scripted
+// provisioning, but it has to be asked for.
+func printRecoveryKeys(keys []string, allowNonTTY bool) error {
+	if !term.IsTerminal(int(os.Stdout.Fd())) && !allowNonTTY {
+		return fmt.Errorf("refusing to print recovery keys because stdout is not a terminal -- " +
+			"they would be written wherever this output is going (container logs, a file, a pipe). " +
+			"Re-run interactively, or pass --i-will-capture-this if you are provisioning from a script")
+	}
+	fmt.Println()
+	fmt.Println("Recovery keys -- shown once, and never again:")
+	fmt.Println()
+	for _, k := range keys {
+		fmt.Printf("    %s\n", k)
+	}
+	fmt.Println()
+	fmt.Println("Store these somewhere safe, such as a password manager. Any one of")
+	fmt.Println("them works; using one replaces all three.")
+	fmt.Println()
+	return nil
+}
+
+// confirmSaved is the acknowledgement gate. Nothing rotates until the
+// operator says they have the new keys -- otherwise a successful
+// recovery whose output was lost leaves zero valid keys behind.
+func confirmSaved() bool {
+	fmt.Print("Type 'saved' once you have stored them: ")
+	var answer string
+	if _, err := fmt.Scanln(&answer); err != nil {
+		return false
+	}
+	return strings.EqualFold(strings.TrimSpace(answer), "saved")
+}
+
+func hasFlag(args []string, name string) bool {
+	for _, a := range args {
+		if a == name {
+			return true
+		}
+	}
+	return false
+}
+
+// runGenerateRecoveryKeys backs `-generate-recovery-keys`.
+//
+// A one-time backfill for deployments predating recovery keys, not a
+// regeneration tool. It refuses once keys exist: otherwise anyone with
+// host access mints a fresh set and satisfies the very gate they were
+// meant to be stopped by. Rotation happens automatically after each use.
+func runGenerateRecoveryKeys(args []string) int {
+	logger := logging.New("recovery-keys")
+	store, err := openRecoveryStoreForCLI()
+	if err != nil {
+		logger.Error(err.Error())
+		return 1
+	}
+
+	keys, err := store.Generate()
+	if err != nil {
+		logger.Error(err.Error())
+		return 1
+	}
+	if err := printRecoveryKeys(keys, hasFlag(args, "--i-will-capture-this")); err != nil {
+		logger.Error(err.Error())
+		return 1
+	}
+	if !confirmSaved() {
+		logger.Error("not confirmed -- no keys were stored, nothing has changed")
+		return 1
+	}
+	if err := store.Commit(); err != nil {
+		logger.Error(fmt.Sprintf("storing recovery keys: %v", err))
+		return 1
+	}
+	logger.Info("recovery keys stored")
+	return 0
+}
+
+// runTransferAdmin backs `-transfer-admin <username>`.
+//
+// CLI-only and recovery-key gated on purpose. If an authenticated admin
+// could transfer the role from the web UI, anyone reaching that session
+// -- a compromised identity-provider account, a stolen cookie -- could
+// grant themselves durable ownership and demote the real admin out of
+// their own deployment. Requiring host access plus a recovery key means
+// an IdP compromise buys the ability to log in, and nothing more.
+func runTransferAdmin(args []string) int {
+	logger := logging.New("transfer-admin")
+	if len(args) < 1 || strings.HasPrefix(args[0], "-") {
+		logger.Error("usage: mikroview -transfer-admin <username>")
+		return 2
+	}
+	target := args[0]
+
+	recovery, err := openRecoveryStoreForCLI()
+	if err != nil {
+		logger.Error(err.Error())
+		return 1
+	}
+	store, err := openAuthStoreForCLI("-transfer-admin")
+	if err != nil {
+		logger.Error(err.Error())
+		return 1
+	}
+
+	current := store.Admin()
+	if current == nil {
+		logger.Error("this deployment has no admin account -- nothing to transfer")
+		return 1
+	}
+	next, ok := store.ByUsername(target)
+	if !ok {
+		logger.Error(fmt.Sprintf("no such account: %s", target))
+		return 1
+	}
+	fmt.Printf("Transfer admin from %q to %q.\n", current.Username, next.Username)
+	// Stated before the key is asked for, not after: an SSO-only admin
+	// cannot be recovered by -recover-admin-account, by design, so the
+	// operator needs this before committing to it.
+	if !next.LocalPassword() {
+		fmt.Println()
+		fmt.Printf("WARNING: %q signs in through your identity provider and has no local\n", next.Username)
+		fmt.Println("password. After this transfer, admin recovery goes through your identity")
+		fmt.Println("provider -- mikroview will not be able to recover that account itself.")
+		fmt.Println()
+	}
+
+	fmt.Print("Recovery key: ")
+	var key string
+	if _, err := fmt.Scanln(&key); err != nil {
+		logger.Error("no recovery key supplied")
+		return 1
+	}
+
+	// Redeem verifies the key and prepares a replacement set, but does
+	// not persist the rotation -- that waits for Commit below, so a lost
+	// printout can't leave the operator with no valid keys.
+	fresh, err := recovery.Redeem(key)
+	if err != nil {
+		// Deliberately one message for a wrong key and a corrupt store:
+		// the distinction is only useful to someone probing.
+		logger.Error(err.Error())
+		return 1
+	}
+
+	from, to, err := store.TransferAdmin(target, time.Now())
+	if err != nil {
+		logger.Error(fmt.Sprintf("transfer failed, no keys were consumed: %v", err))
+		return 1
+	}
+
+	if err := printRecoveryKeys(fresh, hasFlag(args, "--i-will-capture-this")); err != nil {
+		logger.Warn(fmt.Sprintf("admin transferred from %s to %s, but the new keys could not be shown: %v -- "+
+			"your previous recovery keys remain valid", from.Username, to.Username, err))
+		return 1
+	}
+	if !confirmSaved() {
+		// The transfer stands; only the rotation is abandoned, leaving
+		// the previous keys valid. Better than rotating into a set the
+		// operator never captured.
+		logger.Warn(fmt.Sprintf("admin transferred from %s to %s, but the new keys were not confirmed -- "+
+			"your previous recovery keys remain valid", from.Username, to.Username))
+		return 1
+	}
+	if err := recovery.Commit(); err != nil {
+		logger.Warn(fmt.Sprintf("admin transferred from %s to %s, but storing the new keys failed: %v -- "+
+			"your previous recovery keys remain valid", from.Username, to.Username, err))
+		return 1
+	}
+	logger.Info(fmt.Sprintf("admin transferred from %s to %s", from.Username, to.Username))
+	return 0
 }
 
 func runHealthcheck() int {

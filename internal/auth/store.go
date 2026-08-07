@@ -85,6 +85,10 @@ type User struct {
 	// would mark every local admin SSO-only and lock them out of their
 	// own recovery. See migrateHasLocalPassword.
 	HasLocalPassword *bool `json:"hasLocalPassword,omitempty"`
+	// RoleChangedAt records the last admin transfer touching this
+	// account, on both sides of it. For the audit trail and the UI only:
+	// authorization always reads Role, never this.
+	RoleChangedAt time.Time `json:"roleChangedAt,omitzero"`
 }
 
 // LocalPassword reports whether this account has a real, user-chosen
@@ -169,6 +173,16 @@ var (
 	// re-impose auth for everyone, exactly what EnableSetup's doc
 	// comment says this design prevents.
 	ErrAuthDisabled = errors.New("auth: this deployment has disabled authentication -- run -enable-auth-setup to allow creating an account again")
+	// ErrSingleAdmin is returned by CreateUser for a RoleAdmin request.
+	// mikroview holds exactly one admin; handover is TransferAdmin, not
+	// creating a second one.
+	ErrSingleAdmin = errors.New("auth: mikroview has a single admin account -- transfer the role instead of creating another admin")
+	// ErrTransferToSelf is returned by TransferAdmin when the target is
+	// already the admin.
+	ErrTransferToSelf = errors.New("auth: that account is already the admin")
+	// ErrNoAdmin is returned by TransferAdmin when no account holds the
+	// role -- nothing to transfer.
+	ErrNoAdmin = errors.New("auth: this deployment has no admin account")
 	// ErrOIDCIdentityTaken is returned by LinkOIDCIdentity when the
 	// (issuer, subject) pair is already linked to a *different* user --
 	// an OIDC identity can back at most one local account.
@@ -511,7 +525,80 @@ func (s *Store) CreateUser(username, password string, role Role, now time.Time) 
 	if !s.Persisted() {
 		return nil, ErrNotPersisted
 	}
+	// mikroview holds exactly one admin at a time. Refused in the store
+	// rather than only at the API layer so the CLI and any future caller
+	// inherit the invariant instead of each remembering it.
+	if role == RoleAdmin {
+		return nil, ErrSingleAdmin
+	}
 	return s.createLocked(username, password, role, now, nil)
+}
+
+// TransferAdmin moves the admin role to toUsername, atomically.
+//
+// This is the only way to change who administers mikroview. There is
+// deliberately no separate promote or demote: either alone would leave
+// the deployment with two admins or none, and the rest of the system
+// assumes neither can happen.
+//
+// It is reachable only from the recovery-key-gated CLI, never from the
+// API. If an authenticated admin could transfer the role, then anyone
+// who reached that session -- a compromised IdP account, a stolen
+// cookie -- could grant themselves durable ownership and demote the real
+// admin out of their own deployment. Requiring host access plus a
+// recovery key means an identity-provider compromise buys the ability to
+// log in, and nothing more.
+//
+// The whole operation runs under one write lock with the invariant
+// re-checked inside it; doing it as two calls, or checking the current
+// admin beforehand, is the check-then-act race behind the Appsmith
+// duplicate-admin and open-webui zero-admin bugs.
+func (s *Store) TransferAdmin(toUsername string, now time.Time) (from, to *User, err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	var current *User
+	for _, u := range s.byID {
+		if u.Role == RoleAdmin {
+			current = u
+			break
+		}
+	}
+	if current == nil {
+		return nil, nil, ErrNoAdmin
+	}
+
+	targetID, ok := s.byName[strings.ToLower(toUsername)]
+	if !ok {
+		return nil, nil, ErrUserNotFound
+	}
+	target := s.byID[targetID]
+	if target.ID == current.ID {
+		return nil, nil, ErrTransferToSelf
+	}
+
+	current.Role = RoleUser
+	current.RoleChangedAt = now
+	target.Role = RoleAdmin
+	target.RoleChangedAt = now
+	s.persistLocked()
+
+	fromCopy, toCopy := *current, *target
+	return &fromCopy, &toCopy, nil
+}
+
+// Admin returns the single admin account, or nil if there isn't one yet.
+func (s *Store) Admin() *User {
+	s.reloadIfStale()
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	for _, u := range s.byID {
+		if u.Role == RoleAdmin {
+			cp := *u
+			return &cp
+		}
+	}
+	return nil
 }
 
 // createLocked inserts a new account. guard, when non-nil, is evaluated
