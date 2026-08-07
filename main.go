@@ -219,12 +219,13 @@ func main() {
 	if len(os.Args) > 1 && os.Args[1] == "-reset-password" {
 		os.Exit(runRetiredResetPassword())
 	}
-	// -enable-auth-setup: the only way to re-arm the web setup form after
-	// a deployment has explicitly skipped auth (see auth.Store.Disable) --
-	// deliberately CLI-only, not exposed via any API endpoint, so a UI
-	// visitor can never unilaterally re-impose auth for everyone else.
+	// -enable-auth-setup re-armed the setup form after a deployment had
+	// skipped auth. There is no skipping any more, so there is nothing to
+	// re-arm -- but a deployment that ran it before will still have it in
+	// a runbook, and "flag provided but not defined" is a poor way to
+	// find that out.
 	if len(os.Args) > 1 && os.Args[1] == "-enable-auth-setup" {
-		os.Exit(runEnableAuthSetup())
+		os.Exit(runRetiredEnableAuthSetup())
 	}
 	// -validate-config: check a config before deploying it. Same rules
 	// the server enforces at startup (one config.Validate, two entry
@@ -361,10 +362,15 @@ func main() {
 	switch {
 	case authStore.Count() > 0:
 		authLog.Info(fmt.Sprintf("%d account(s) registered -- authentication is active", authStore.Count()))
-	case authStore.Disabled():
-		authLog.Warn("explicitly disabled for this deployment -- mikroview is fully open (run -enable-auth-setup to reverse this)")
+	case authStore.WasAuthDisabled():
+		// Fails closed, which is the point of the removal -- but the
+		// operator opens a login screen they have never seen before, on
+		// a deployment that has been open since they set it up. Say why.
+		authLog.Warn("this deployment previously had authentication disabled. That option has been " +
+			"removed, so mikroview is now asking for an admin account before it will serve anything. " +
+			"Open the web interface to create one")
 	default:
-		authLog.Info("no decision made yet -- mikroview is showing the first-run choice screen (see docs/configuration.md)")
+		authLog.Info("no account yet -- mikroview is showing the create-account screen (see docs/configuration.md)")
 	}
 
 	// entities (issue #107): the persisted, admin-manageable (type, key)
@@ -1253,24 +1259,13 @@ func runListUsers() int {
 	return 0
 }
 
-// runEnableAuthSetup backs `-enable-auth-setup` -- clears a prior
-// explicit "skip auth" decision (see auth.Store.Disable) so the web
-// setup form becomes reachable again on next load. It does not create
-// an account itself; the operator (or whoever loads the UI next) still
-// completes setup through the normal create-account form.
-func runEnableAuthSetup() int {
+func runRetiredEnableAuthSetup() int {
 	logger := logging.New("enable-auth-setup")
-	store, err := openAuthStoreForCLI("-enable-auth-setup")
-	if err != nil {
-		logger.Error(err.Error())
-		return 1
-	}
-	if err := store.EnableSetup(); err != nil {
-		logger.Error(err.Error())
-		return 1
-	}
-	fmt.Println("Auth setup re-enabled -- the create-account form will be shown again on next load.")
-	return 0
+	logger.Error("-enable-auth-setup has been removed along with the option to run mikroview " +
+		"without authentication. There is nothing to re-enable: mikroview asks for an admin " +
+		"account on first load and will not start serving without one. See docs/configuration.md, " +
+		"\"Creating the admin account\"")
+	return 2
 }
 
 // authShouldFailClosed reports whether main()'s boot sequence should

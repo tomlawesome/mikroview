@@ -1128,29 +1128,24 @@ auth:
   `storePath`, this really is optional: a deployment that never creates
   a token doesn't need it.
 
-**If you create an account**, every request except `GET /api/healthz`
+**Once you create the account**, every request except `GET /api/healthz`
 and the login/session endpoints requires a valid session, permanently,
 from then on. Whoever completes the form becomes the admin.
 
-**If you skip**, mikroview stays fully open indefinitely -- the same
-behavior an older mikroview had by accident, but now a deliberate,
-persisted choice rather than "nobody got around to setting up auth
-yet." Before deciding, weigh who can reach the deployment: skipping is
-reasonable on a network you already trust as much as the router itself,
-not on anything broader.
+**Until then, mikroview serves nothing else.** There is no "run it
+without a login" option. An earlier version had one, and it was removed:
+an open mikroview shows anyone who can reach it which of your hosts are
+being scanned, which rules are firing, which ports are under pressure,
+and which accounts exist. That is a map of your network, and "it's only
+for five minutes while I try it out" is exactly how a deployment ends up
+open for a year. Creating an account is one form.
 
-**Reversing a skip** is CLI-only, by design: nothing in the web UI or
-API can re-enable auth once skipped, so a visitor to an open deployment
-can never unilaterally impose a login requirement on everyone else.
-
-```sh
-mikroview -enable-auth-setup
-```
-
-re-arms the choice screen (it does not create an account itself -- the
-next person to load mikroview, or you, still completes the create-
-account form). Requires container/host access, the same trust anchor as
-the recovery commands below.
+> **Upgrading from a version that had authentication disabled?**
+> Your deployment now starts in the create-account state and serves
+> nothing until you complete it. Nothing is lost -- there were no
+> accounts to lose -- and mikroview says so in its startup log so the
+> login screen isn't a surprise. `mikroview -enable-auth-setup` is gone
+> too; there is no longer anything to re-enable.
 
 ### Adding and removing people
 
@@ -1843,9 +1838,8 @@ before it could reach a database at all.
 rule/host names, and auth config can only be set via YAML/env, not
 flags.
 
-`-healthcheck`, `-list-users`, `-recover-admin-account`,
-`-transfer-admin <username>`, `-generate-recovery-keys`,
-`-enable-auth-setup` are standalone modes -- each does its one job and
+`-healthcheck`, `-recover-admin-account`, `-transfer-admin <username>`,
+`-generate-recovery-keys`, `-show-recovery-keys` are standalone modes -- each does its one job and
 exits, rather than starting the server. See
 [Authentication](#authentication) for all but the first.
 
@@ -1864,18 +1858,17 @@ exits, rather than starting the server. See
 | `GET /api/lookup/ip/{ip}` | on-demand reputation/threat-intel lookup for one public IP (see [IP reputation lookup](#ip-reputation-lookup-optional)) |
 | `GET /api/flags` | active + cleared behavioral flags, plus the last hour of newly-raised-episode counts by type at 1-minute resolution (issue #100, feeds the dashboard's flags-over-time chart) (see [Behavioral flags](#behavioral-flags-optional-on-by-default)) |
 | `POST /api/flags/{id}/clear` | mark one flag as cleared |
-| `POST /api/flags/{id}/clear-permanent` | admin-only (open while zero accounts exist): clear one flag *and* permanently exclude its (detector, target) pair going forward. Audit-logged |
-| `GET /api/flags/exclusions` | admin-only (open while zero accounts exist): every currently-excluded (detector, target) pair |
-| `DELETE /api/flags/exclusions/{id}` | admin-only (open while zero accounts exist): remove one exclusion, letting that pair raise again |
-| `GET /api/detectors` | admin-only (open while zero accounts exist): every detector's live enabled+scope (see [Per-detector toggles](#per-detector-toggles-and-scope-restrictions-optional)) |
-| `PUT /api/detectors/{name}` | admin-only (open while zero accounts exist): replace one detector's enabled+scope wholesale |
-| `GET /api/entities` | admin-only (**not** open while zero accounts exist -- see [Entities](#entities-ui-managed-hostruleport-labels-and-tags-optional)): every persisted entity |
+| `POST /api/flags/{id}/clear-permanent` | admin-only: clear one flag *and* permanently exclude its (detector, target) pair going forward. Audit-logged |
+| `GET /api/flags/exclusions` | admin-only: every currently-excluded (detector, target) pair |
+| `DELETE /api/flags/exclusions/{id}` | admin-only: remove one exclusion, letting that pair raise again |
+| `GET /api/detectors` | admin-only: every detector's live enabled+scope (see [Per-detector toggles](#per-detector-toggles-and-scope-restrictions-optional)) |
+| `PUT /api/detectors/{name}` | admin-only: replace one detector's enabled+scope wholesale |
+| `GET /api/entities` | admin-only (see [Entities](#entities-ui-managed-hostruleport-labels-and-tags-optional)): every persisted entity |
 | `POST /api/entities` | admin-only: create or replace (upsert) one entity, identified by `(type, key)` in the JSON body |
 | `DELETE /api/entities` | admin-only: remove the entity identified by `(type, key)` in the JSON body |
-| `GET /api/audit` | admin-only (**not** open while zero accounts exist, same as `/api/entities`): a windowed slice of the admin action audit log (see [Audit log](#audit-log-admin-action-accountability-optional)), newest activity last, accepting `since`/`until`/`limit` query params like `GET /api/events` |
+| `GET /api/audit` | admin-only: a windowed slice of the admin action audit log (see [Audit log](#audit-log-admin-action-accountability-optional)), newest activity last, accepting `since`/`until`/`limit` query params like `GET /api/events` |
 | `GET /api/auth/session` | current auth state (setup-required / authenticated / not) -- always 200, never gated |
 | `POST /api/auth/register` | create the first (admin) account -- only while zero accounts exist |
-| `POST /api/auth/skip` | explicitly disable auth for this deployment -- only while zero accounts exist; reversing later is CLI-only (`-enable-auth-setup`) |
 | `POST /api/auth/login` | sign in, sets the session cookie |
 | `POST /api/auth/logout` | sign out, clears the session cookie |
 | `POST /api/auth/users` | admin-only: create an additional account |
