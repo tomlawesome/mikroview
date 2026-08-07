@@ -28,12 +28,53 @@ func NewLoginLimiter(threshold int, window time.Duration) *LoginLimiter {
 }
 
 // Allow reports whether key is still under the failed-attempt
-// threshold. Does not itself record an attempt -- call RecordFailure
-// after a failed login; a successful login should never call either.
+// threshold. Does not itself record an attempt.
+//
+// Prefer Reserve for anything guarding an expensive operation: Allow is
+// a read, so check-then-act around a slow call lets a simultaneous burst
+// pass the check together and consume far more than threshold attempts.
 func (l *LoginLimiter) Allow(key string, now time.Time) bool {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	return len(l.pruneLocked(key, now)) < l.threshold
+}
+
+// Reserve atomically checks the threshold and claims one attempt against
+// it, returning false if key is already at the limit.
+//
+// This exists because Allow-then-hash-then-RecordFailure is a
+// check-then-act race with a ~100ms Argon2id computation sitting in the
+// gap. Sixteen simultaneous login attempts all called Allow before any
+// of them reached RecordFailure, so all sixteen were admitted against a
+// threshold of five -- both a brute-force bypass and, at 64 MiB of
+// working memory each, a memory-exhaustion path.
+//
+// Callers hold the reservation for the duration of the slow operation
+// and call Release only on success, so a failure simply leaves the
+// attempt counted.
+func (l *LoginLimiter) Reserve(key string, now time.Time) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if len(l.pruneLocked(key, now)) >= l.threshold {
+		return false
+	}
+	if _, exists := l.attempts[key]; !exists && len(l.attempts) >= maxLoginLimiterKeys {
+		l.evictOldestLocked()
+	}
+	l.attempts[key] = append(l.attempts[key], now)
+	return true
+}
+
+// Release returns one reservation taken by Reserve -- called after a
+// *successful* attempt, so that legitimate logins don't accumulate
+// toward the threshold. Entries are interchangeable timestamps, so
+// dropping the most recent is equivalent to dropping "ours".
+func (l *LoginLimiter) Release(key string, now time.Time) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if entries := l.pruneLocked(key, now); len(entries) > 0 {
+		l.attempts[key] = entries[:len(entries)-1]
+	}
 }
 
 // RecordFailure records one failed attempt for key.
