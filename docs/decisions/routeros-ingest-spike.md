@@ -51,22 +51,39 @@ property of `http-data`, not of the router.
 So the question is not whether the router *can*. It is what the SFTP path
 costs, and two measured properties decide it.
 
-**It is password-only.** There is no key-auth parameter, and this is not
-a naming quibble: `keyfile=`, `private-key=`, `identity=` and `key=` are
-each rejected with `expected end of command`. `/tool fetch` authenticates
-to SFTP with `user=` and `password=` and nothing else, so **the router
-cannot present a key even if mikroview's server demanded one** — a server
-configured for key-only auth is a server this router cannot reach.
+**It supports key authentication — this document said otherwise, and was
+wrong.** `/tool fetch` has no `keyfile=` parameter (`keyfile=`,
+`private-key=`, `identity=` and `key=` are all rejected), and that was
+read as "the router cannot present a key". It does not need a parameter:
+it uses the private key in the router's own store. Against a server with
+`PasswordAuthentication no`:
 
-*On its own this is not an argument.* A bearer token is also a long-lived
-reusable secret stored on the router, and finding 5 below shows any
-`read` user can read either one straight out of the script source. "The
-router holds a secret" is true of both designs and does not separate
-them. #186's objection was to mikroview holding *RouterOS* credentials,
-which neither design does.
+```
+/user/ssh-keys/private import user=admin private-key-file=mvkey
+/tool fetch url="sftp://…/drop/keyauth.json" user=mvingest src-path=big.json upload=yes
 
-**It does not verify the server's host key.** This is the difference that
-survives. The SFTP server's host key was replaced entirely — a different
+sshd: Accepted publickey for mvingest … RSA SHA256:kS5gs62Ylhcd…
+-rw-r--r-- 1 mvingest mvingest 300011 keyauth.json
+```
+
+No password is stored on the router at all. **A MITM on the path cannot
+harvest a reusable credential from an SSH public-key exchange**, which is
+a materially better position than the password case.
+
+Operational detail worth documenting: RouterOS wants **PEM** format.
+An OpenSSH-format private key (ssh-keygen's default since 7.8) is
+rejected with `unable to load key file (wrong format or bad passphrase)`.
+`ssh-keygen -m PEM` imports cleanly.
+
+*The stored-secret framing separates nothing either way.* A bearer token
+is also a long-lived reusable secret on the router, and finding 5 below
+shows any `read` user can print either one out of the script source.
+#186's objection was to mikroview holding *RouterOS* credentials, which
+neither design does.
+
+**It does not verify the server's host key.** This is what still
+separates them, though with key auth it costs less than it would with a
+password. The SFTP server's host key was replaced entirely — a different
 key, a different fingerprint — and the router uploaded to it anyway,
 silently, with no warning and no failure:
 
@@ -76,17 +93,17 @@ silently, with no warning and no failure:
 -rw-r--r-- 1 mvingest mvingest 300011 /drop/after-keychange.json
 ```
 
-Anyone who can get into the network path impersonates mikroview, collects
-the password on first contact, and thereafter has authenticated write
-access. **There is no mitigation available** — no host-key pinning, no
-key auth, nothing to turn on.
+Anyone in the network path can therefore impersonate mikroview and
+receive whatever the router uploads. With key auth they cannot walk away
+with a credential, but they do get the payload, and they can return
+whatever they like. There is no host-key pinning to turn on.
 
-Contrast the HTTPS path, where there *is* one: after importing
-mikroview's CA, `check-certificate=yes` genuinely authenticates the
-server, so a MITM cannot impersonate mikroview and the token is not
-harvestable from the path. That is precisely why #186 refuses to document
-`check-certificate=no` — and SFTP has no `check-certificate=yes`
-equivalent to offer.
+The HTTPS path has a real answer to exactly this: after importing
+mikroview's CA, `check-certificate=yes` authenticates the server, so a
+MITM cannot impersonate mikroview at all. That is why #186 refuses to
+document `check-certificate=no`. SFTP has no `check-certificate=yes`
+equivalent — the difference is now about payload interception rather than
+credential theft, but the asymmetry is real.
 
 **A failed upload leaves a truncated file behind.** Observed, not
 theorised: one run reported `failure: connection timeout` and left
@@ -114,6 +131,50 @@ large one** — order-independent, a dropped one degrades rather than
 corrupts, and the endpoint stays stateless. Chunking one document across
 POSTs is the last resort: it needs reassembly state and makes step 4's
 additive-only invariant much harder to reason about.
+
+## 2d. The other transports RouterOS scripting offers
+
+This spike anchored on `/tool fetch` because #186 named it, and spent its
+effort on that one primitive's limits rather than asking what else can
+push. The survey it should have started with:
+
+**Remote syslog (`/system logging action target=remote`).** The most
+interesting option, because **mikroview already listens on it** — no new
+endpoint, no new credential, no new listener. `:log info "…"` from a
+script reaches a remote collector, confirmed against a UDP sink.
+
+Two findings decide how usable it is. RouterOS **fragments long messages
+automatically**, at about 1,024 characters of payload — a 65KiB `:log`
+arrived as ~64 datagrams of 1,037 bytes. And **the continuations carry no
+sequence marker**: every fragment looks like `script,info <text>`, so
+nothing distinguishes fragment 40 from a new message. Over UDP, with no
+ordering guarantee either, reassembly is guesswork.
+
+That is survivable — a script can emit its own chunks under the fragment
+threshold with its own `id/seq` framing, which puts reassembly under our
+control rather than RouterOS's. The harder problem is that **syslog is
+unauthenticated**, and RouterOS scripting exposes no HMAC primitive to
+sign chunks with. Config data arriving over syslog would be exactly as
+trustworthy as anything else that can reach that port, which is a step
+down from a scoped, revocable, hashed token — the thing #186 chose push
+to gain.
+
+**`/tool e-mail`** exists with `tls` and, notably, a
+`certificate-verification` setting — so unlike SFTP it can authenticate
+the server. It sends attachments, which sidesteps the `http-data` cap.
+Not characterised further here.
+
+**`/system ssh-exec`** exists and uses the same `/user/ssh-keys/private`
+store that made key-authenticated SFTP work.
+
+**MQTT is not available.** CHR 7.23.3 ships the `routeros` package only;
+`/iot` and its MQTT publisher are not present, so anything built on it
+would require operators to install an extra package.
+
+**Reproducer gap, stated plainly:** the key-authenticated SFTP result and
+this survey were run by hand and are not yet in
+`scripts/live-routeros-step0.sh`. Everything in sections 1, 3, 4, 5 and 6
+is. Closing that gap is outstanding work, not a completed claim.
 
 ## 3. `:serialize to=json` is native from 7.13, and absent before it
 
