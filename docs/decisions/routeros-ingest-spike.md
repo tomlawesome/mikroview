@@ -70,6 +70,30 @@ No password is stored on the router at all. **A MITM on the path cannot
 harvest a reusable credential from an SSH public-key exchange**, which is
 a materially better position than the password case.
 
+**And unlike a bearer token, a `read` user cannot get at the key.** This
+is the finding that most changes the balance, because finding 5 below
+shows a token in a script is readable by anyone with `read`:
+
+- The key **file is consumed on import**. `/file print` shows nothing
+  afterwards — there is no copy left on disk to fetch.
+- There is **no export command**. A `read` user querying
+  `/user/ssh-keys/private print detail` sees
+  `user=admin key-type=rsa bits=2048` and no key material.
+- The key is **bound to a RouterOS user**. `mv-read` running the same
+  `/system ssh-exec` that admin runs gets `failure: authentication
+  failure`, and the server logs a failed pre-auth. Admin, identical
+  command, gets `Accepted publickey`.
+
+The script that performs the upload is still readable by any `read`
+user — but it now contains a username and a path rather than a secret.
+**The credential moves out of the script entirely**, which is not
+something the bearer-token design can offer.
+
+Worth noting alongside this: the built-in `read` group carries the
+`sensitive` policy by default, so a `read` user on a stock router can
+already see WireGuard private keys and IPsec PSKs. That is an argument
+for keeping secrets out of script bodies, not a reason to relax about it.
+
 Operational detail worth documenting: RouterOS wants **PEM** format.
 An OpenSSH-format private key (ssh-keygen's default since 7.8) is
 rejected with `unable to load key file (wrong format or bad passphrase)`.
@@ -122,15 +146,32 @@ a filesystem watcher — plus partial writes, ordering, quarantine and
 cleanup — is a second ingest path with its own failure modes, next to one
 that already works.
 
-**Where that leaves it.** SFTP buys an uncapped payload and costs server
-authentication plus the existing authz/audit/rate-limit path. On measured
-config sizes the cap is not binding (see below), so the trade is not
-currently worth taking. If a payload genuinely needs to exceed 64KiB, the
-cheaper move is **several small self-contained documents rather than one
-large one** — order-independent, a dropped one degrades rather than
-corrupts, and the endpoint stays stateless. Chunking one document across
-POSTs is the last resort: it needs reassembly state and makes step 4's
-additive-only invariant much harder to reason about.
+**Where that leaves it — honestly, and not where this document started.**
+
+SFTP with key auth buys three things: an uncapped payload, a credential
+that no `read` user on the router can extract, and a credential a MITM
+cannot harvest. The first is not currently needed at measured config
+sizes. **The second is a real advantage over the bearer token**, and this
+document initially argued the opposite.
+
+It costs: no server authentication (a MITM still receives the payload and
+answers for mikroview, with no pinning available); a completeness
+protocol, because failed uploads leave truncated files; an SSH/SFTP
+listener mikroview does not currently have; and rebuilding the per-token
+rate limit, `authzMatrix` row and audit entry — which step 3 requires —
+around a filesystem watcher rather than getting them from an HTTP handler.
+
+HTTPS + bearer token costs a script-readable secret and a 64KiB ceiling,
+and buys real server authentication plus the existing authz/audit/rate-
+limit machinery on a listener that already exists.
+
+**This is a genuine trade, not a settled question, and it is the owner's
+call.** If it goes to HTTPS and the cap ever binds, the cheaper move
+before revisiting transports is **several small self-contained documents
+rather than one large one** — order-independent, a dropped one degrades
+rather than corrupts, and the endpoint stays stateless. Chunking one
+document across POSTs is the last resort: it needs reassembly state and
+makes step 4's additive-only invariant much harder to reason about.
 
 ## 2d. The other transports RouterOS scripting offers
 
