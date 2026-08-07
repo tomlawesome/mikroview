@@ -183,16 +183,6 @@ func TestFindOrCreateOIDCUserRefusesWhenNotPersisted(t *testing.T) {
 	}
 }
 
-func TestFindOrCreateOIDCUserRefusesWhenAuthDisabled(t *testing.T) {
-	s := newTestOIDCStore(t)
-	if err := s.Disable(); err != nil {
-		t.Fatalf("Disable: %v", err)
-	}
-	if _, _, err := s.FindOrCreateOIDCUser("https://idp.example", "sub-1", "someone", time.Now()); err != ErrAuthDisabled {
-		t.Errorf("expected ErrAuthDisabled, got %v", err)
-	}
-}
-
 // TestOIDCOnlyUserPasswordHashIsUnmatchableNotEmpty guards against a
 // real timing side-channel found during design review: an empty
 // PasswordHash would make VerifyPassword's malformed-hash guard return

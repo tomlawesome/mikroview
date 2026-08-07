@@ -49,15 +49,15 @@ func registerAdmin(t *testing.T, ts *httptest.Server) *http.Client {
 	return client
 }
 
-// TestEntitiesRequireAdminWhileAuthDisabled proves entities management
+// TestEntitiesRequireAdminWithoutASession proves entities management
 // follows callerIsAdmin's strict rule, not callerIsAdminOrOpen's --
 // unlike detector settings, GET/POST/DELETE /api/entities stay forbidden
-// even in the fully-open "auth disabled" state, since there's no admin
-// concept once auth itself has been opted out of (same as
+// to a caller with no session even when the request reaches the handler,
+// since an anonymous caller is never an admin (same as
 // POST /api/auth/users, which this package's admin check is shared with).
-func TestEntitiesRequireAdminWhileAuthDisabled(t *testing.T) {
-	s, _ := newTestServer(t) // Auth defaults to disabled -- see its own doc comment
-	ts := httptest.NewServer(s.Routes())
+func TestEntitiesRequireAdminWithoutASession(t *testing.T) {
+	s, _ := newTestServer(t)
+	ts := httptest.NewServer(s.mux())
 	defer ts.Close()
 
 	resp, err := http.Get(ts.URL + "/api/entities")
@@ -66,7 +66,7 @@ func TestEntitiesRequireAdminWhileAuthDisabled(t *testing.T) {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusForbidden {
-		t.Errorf("expected GET /api/entities to require an admin even with auth disabled, got %d", resp.StatusCode)
+		t.Errorf("expected GET /api/entities to require an admin without a session, got %d", resp.StatusCode)
 	}
 }
 

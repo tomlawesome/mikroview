@@ -163,16 +163,6 @@ var (
 	// is a legitimate, expected outcome worth distinguishing (unlike
 	// Authenticate, this isn't a login attempt an attacker controls).
 	ErrUserNotFound = errors.New("auth: no such user")
-	// ErrAuthDisabled is returned by Register once this deployment has
-	// explicitly opted out of authentication (see Disable) -- refusing
-	// registration here, not just at the API-routing layer, is what
-	// makes EnableSetup's CLI-only re-arming actually load-bearing:
-	// without this check, a client could bypass the UI entirely and
-	// POST straight to /api/auth/register (still reachable while
-	// disabled -- see internal/api's requireAuth) to unilaterally
-	// re-impose auth for everyone, exactly what EnableSetup's doc
-	// comment says this design prevents.
-	ErrAuthDisabled = errors.New("auth: this deployment has disabled authentication -- run -enable-auth-setup to allow creating an account again")
 	// ErrSingleAdmin is returned by CreateUser for a RoleAdmin request.
 	// mikroview holds exactly one admin; handover is TransferAdmin, not
 	// creating a second one.
@@ -209,15 +199,12 @@ var (
 // one of those two, so there's exactly one place this needs to live.
 const minPasswordLength = 8
 
-// storeFile is the on-disk shape -- an object wrapping the user list
-// plus the Disabled marker (see Store.Disable), rather than a bare
-// array. storeFile.UnmarshalJSON below stays compatible with a
-// pre-Disabled-state file (a bare `[]User` array, written by every
-// mikroview version before this one) so an existing deployment's
-// accounts still load correctly, treated as Disabled: false.
+// storeFile is the on-disk shape -- an object wrapping the user list,
+// rather than a bare array. storeFile.UnmarshalJSON below stays
+// compatible with the oldest shape (a bare `[]User` array) so an
+// existing deployment's accounts still load correctly.
 type storeFile struct {
-	Disabled bool    `json:"disabled"`
-	Users    []*User `json:"users"`
+	Users []*User `json:"users"`
 }
 
 func (f *storeFile) UnmarshalJSON(data []byte) error {
@@ -228,7 +215,7 @@ func (f *storeFile) UnmarshalJSON(data []byte) error {
 		return nil
 	}
 	// A top-level JSON array can't unmarshal into a struct -- that's
-	// exactly the pre-Disabled-state legacy shape, so this is where a
+	// exactly the oldest legacy shape, so this is where a
 	// genuinely malformed file also gets one more (correct) chance to
 	// report its real error, not this fallback's.
 	var legacy []*User
@@ -236,7 +223,6 @@ func (f *storeFile) UnmarshalJSON(data []byte) error {
 		return err
 	}
 	f.Users = legacy
-	f.Disabled = false
 	return nil
 }
 
@@ -252,12 +238,6 @@ type Store struct {
 	byID      map[string]*User
 	byName    map[string]string  // lowercased username -> ID
 	oidcIndex map[oidcKey]string // (issuer, subject) -> ID, see ByOIDCIdentity
-	// disabled records a deliberate, permanent opt-out of authentication
-	// for this deployment -- see Disabled/Disable/EnableSetup. Distinct
-	// from len(byID)==0, which just means "no account yet, decision
-	// still pending" (see internal/api's requireAuth for how the two
-	// states are gated differently).
-	disabled bool
 	// version is the backend's token for the document as of the last
 	// load, so a running server can pick up a change made by a separate
 	// process -- namely the CLI recovery tools (`-recover-admin-account`,
@@ -338,7 +318,6 @@ func (s *Store) applyLoaded(file storeFile, version int64) {
 			s.oidcIndex[oidcKey{issuer: u.OIDCIssuer, subject: u.OIDCSubject}] = u.ID
 		}
 	}
-	s.disabled = file.Disabled
 	s.version = version
 }
 
@@ -398,62 +377,6 @@ func (s *Store) Count() int {
 	return len(s.byID)
 }
 
-// Disabled reports whether this deployment has explicitly opted out of
-// authentication (see Disable) -- distinct from Count()==0, which just
-// means "no account yet, decision still pending." Reloads first (see
-// reloadIfStale) so a live server picks up a change made by the CLI
-// recovery tool (`-enable-auth-setup`) without needing a restart, same
-// as Authenticate/Get/List already do for password resets.
-func (s *Store) Disabled() bool {
-	s.reloadIfStale()
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	return s.disabled
-}
-
-// Disable permanently opts this deployment out of authentication --
-// only callable while Count()==0: disabling auth out from under
-// existing accounts isn't this method's job, and is never exposed
-// anywhere (internal/api's handleAuthSkip is the only caller, itself
-// only reachable during the pre-decision bootstrap window). Persists
-// immediately.
-func (s *Store) Disable() error {
-	if !s.Persisted() {
-		return ErrNotPersisted
-	}
-	// Same cross-process reload Register does, for the same reason --
-	// the len(s.byID) test below is the correctness boundary (it runs
-	// under the write lock), this just makes sure an account created by
-	// another process is visible before we get there.
-	s.reloadIfStale()
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if len(s.byID) > 0 {
-		return ErrRegistrationClosed
-	}
-	s.disabled = true
-	s.persistLocked()
-	return nil
-}
-
-// EnableSetup clears a prior Disable, re-arming the web setup form so
-// /api/auth/register (and the choice screen in front of it) becomes
-// reachable again. Deliberately not exposed via any API endpoint a
-// browser could reach -- only internal/main.go's `-enable-auth-setup`
-// CLI mode calls this, so a UI visitor can never re-impose auth for
-// everyone else without host/container access (the same trust anchor
-// `-recover-admin-account`/`-list-users` already rely on).
-func (s *Store) EnableSetup() error {
-	if !s.Persisted() {
-		return ErrNotPersisted
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.disabled = false
-	s.persistLocked()
-	return nil
-}
-
 // Register creates the very first account, always as RoleAdmin,
 // regardless of what a future caller might pass -- there is no role
 // parameter because there's no meaningful choice: the first person to
@@ -511,18 +434,7 @@ func (s *Store) Register(username, password string, now time.Time) (*User, error
 // with the write lock held (see createLocked), which is what makes
 // "exactly one account can ever be self-registered" actually hold
 // under concurrency.
-//
-// Checking disabled here (not just in Register) also closes a second,
-// worse race: Disable() and Register() could previously both succeed,
-// leaving a store with a real admin account AND disabled == true.
-// internal/api's requireAuth checks Disabled() first, so that state
-// means the deployment serves everyone with no login at all while an
-// admin account quietly exists -- the operator sees their own
-// registration succeed and has no reason to suspect auth is off.
 func registrationOpenGuard(s *Store) error {
-	if s.disabled {
-		return ErrAuthDisabled
-	}
 	if len(s.byID) > 0 {
 		return ErrRegistrationClosed
 	}
@@ -765,10 +677,6 @@ func (s *Store) FindOrCreateOIDCUser(issuer, subject, usernameHint string, now t
 	if !s.Persisted() {
 		return nil, false, ErrNotPersisted
 	}
-	if s.Disabled() {
-		return nil, false, ErrAuthDisabled
-	}
-
 	s.reloadIfStale()
 
 	s.mu.Lock()
@@ -1058,7 +966,7 @@ func (s *Store) persistLocked() {
 	}
 	sort.Slice(list, func(i, j int) bool { return list[i].Username < list[j].Username })
 
-	data, err := json.MarshalIndent(storeFile{Disabled: s.disabled, Users: list}, "", "  ")
+	data, err := json.MarshalIndent(storeFile{Users: list}, "", "  ")
 	if err != nil {
 		persistLog.Error(fmt.Sprintf("encoding accounts for persistence failed: %v -- "+
 			"this change exists only in memory and will be lost on restart", err))

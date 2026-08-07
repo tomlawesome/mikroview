@@ -57,23 +57,6 @@ func postJSON(t *testing.T, client *http.Client, url string, body any) *http.Res
 	return resp
 }
 
-func TestUnprotectedOnceAuthDisabled(t *testing.T) {
-	// newTestServer's Auth already defaults to disabled -- see its own
-	// doc comment.
-	s, _ := newTestServer(t)
-	ts := httptest.NewServer(s.Routes())
-	defer ts.Close()
-
-	resp, err := http.Get(ts.URL + "/api/events")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		t.Errorf("expected the API to stay fully open once auth is disabled, got %d", resp.StatusCode)
-	}
-}
-
 // TestUndecidedStateRestrictsToBootstrapPaths covers the gap the old
 // blanket-open zero-account behavior left: before a real decision has
 // been made (neither an account created nor auth explicitly skipped),
@@ -106,7 +89,7 @@ func TestAuthErrorsNeverLeakInternalErrorText(t *testing.T) {
 		t.Fatal(err)
 	}
 	s.Auth = unpersisted
-	ts := httptest.NewServer(s.Routes())
+	ts := httptest.NewServer(s.mux())
 	defer ts.Close()
 
 	resp := postJSON(t, &http.Client{}, ts.URL+"/api/auth/register", credentialsRequest{Username: "admin", Password: "password123"})
@@ -129,7 +112,7 @@ func TestAuthErrorsNeverLeakInternalErrorText(t *testing.T) {
 // rejected rather than read in full.
 func TestOversizedJSONBodyIsRejected(t *testing.T) {
 	s, _ := newTestServer(t)
-	ts := httptest.NewServer(s.Routes())
+	ts := httptest.NewServer(s.mux())
 	defer ts.Close()
 
 	oversized := strings.Repeat("a", maxJSONBodyBytes+1)
@@ -168,52 +151,19 @@ func TestUndecidedStateAllowsBootstrapPaths(t *testing.T) {
 	}
 }
 
-func TestAuthSkipDisablesAuthPermanently(t *testing.T) {
-	s := newAuthTestServer(t)
-	ts := httptest.NewServer(s.Routes())
-	defer ts.Close()
-
-	resp := postJSON(t, &http.Client{}, ts.URL+"/api/auth/skip", map[string]any{})
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("expected skip to succeed, got %d", resp.StatusCode)
-	}
-
-	// Previously-blocked paths are now open, exactly like the disabled
-	// default.
-	events, err := http.Get(ts.URL + "/api/events")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer events.Body.Close()
-	if events.StatusCode != http.StatusOK {
-		t.Errorf("expected /api/events to be open after skipping auth, got %d", events.StatusCode)
-	}
-
-	// Registration must not be usable afterward -- re-enabling is
-	// CLI-only (see auth.Store.EnableSetup), not something a client can
-	// trigger by just calling register directly.
-	reg := postJSON(t, &http.Client{}, ts.URL+"/api/auth/register", credentialsRequest{Username: "admin", Password: "password123"})
-	defer reg.Body.Close()
-	if reg.StatusCode != http.StatusConflict {
-		t.Errorf("expected register to be refused once auth is disabled, got %d", reg.StatusCode)
-	}
-}
-
 // A bare cross-site <form method=POST> (or a JSON-CSRF fetch) can't set
 // a custom header, so a request missing csrfHeaderName during the
-// undecided (Count()==0) bootstrap window must be rejected for the two
-// endpoints that make an irreversible, deployment-wide choice --
-// otherwise a tricked victim's browser could disable auth or plant an
-// attacker-controlled admin account with no direct network access
-// required from the attacker at all.
+// undecided (Count()==0) bootstrap window must be rejected for the
+// endpoint that makes an irreversible, deployment-wide choice --
+// otherwise a tricked victim's browser could plant an attacker-
+// controlled admin account with no direct network access required from
+// the attacker at all.
 func TestBootstrapMutatingEndpointsRequireCSRFHeader(t *testing.T) {
 	for _, tc := range []struct {
 		name string
 		path string
 		body any
 	}{
-		{"skip", "/api/auth/skip", map[string]any{}},
 		{"register", "/api/auth/register", credentialsRequest{Username: "admin", Password: "password123"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -240,34 +190,16 @@ func TestBootstrapMutatingEndpointsRequireCSRFHeader(t *testing.T) {
 			if resp.StatusCode != http.StatusForbidden {
 				t.Errorf("expected %s without the CSRF header to be rejected with 403 during the bootstrap window, got %d", tc.path, resp.StatusCode)
 			}
-			if s.Auth.Count() != 0 || s.Auth.Disabled() {
+			if s.Auth.Count() != 0 {
 				t.Error("the forged request must not have taken effect")
 			}
 		})
 	}
 }
 
-func TestAuthSessionReportsAuthDisabled(t *testing.T) {
-	s, _ := newTestServer(t)
-	ts := httptest.NewServer(s.Routes())
-	defer ts.Close()
-
-	resp, err := http.Get(ts.URL + "/api/auth/session")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer resp.Body.Close()
-
-	var body sessionResponse
-	json.NewDecoder(resp.Body).Decode(&body)
-	if !body.AuthDisabled {
-		t.Errorf("expected authDisabled=true, got %+v", body)
-	}
-}
-
 func TestAuthSessionReportsSetupRequired(t *testing.T) {
 	s, _ := newTestServer(t)
-	ts := httptest.NewServer(s.Routes())
+	ts := httptest.NewServer(s.mux())
 	defer ts.Close()
 
 	resp, err := http.Get(ts.URL + "/api/auth/session")
@@ -526,7 +458,7 @@ func TestMutatingRequestWithoutCSRFHeaderAllowedWhileAuthInactive(t *testing.T) 
 	// Zero users -- must behave exactly like before this feature existed,
 	// including for mutating requests (see requireAuth's doc comment).
 	s, _ := newTestServer(t)
-	ts := httptest.NewServer(s.Routes())
+	ts := httptest.NewServer(s.mux())
 	defer ts.Close()
 
 	req, err := http.NewRequest(http.MethodPost, ts.URL+"/api/flags/does-not-exist/clear", nil)
