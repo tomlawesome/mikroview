@@ -19,6 +19,12 @@ jobs:
     permissions:
       contents: read
       packages: write
+      # Keyless (Fulcio/Rekor) signing exchanges this workflow's OIDC
+      # identity for a short-lived certificate -- there is no long-lived
+      # private key to store or leak. What gets recorded is "this
+      # workflow, on this repo, at this commit, produced this digest".
+      id-token: write
+      attestations: write
     steps:
       - uses: actions/checkout@v7
 
@@ -54,16 +60,38 @@ jobs:
             type=raw,value=preview
             type=raw,value=preview-${{ steps.sha.outputs.short }}
 
-      - uses: docker/build-push-action@v7
+      - id: build
+        uses: docker/build-push-action@v7
         with:
           context: .
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |
-            VERSION=${{ steps.sha.outputs.short }}
+            VERSION=preview:${{ steps.sha.outputs.short }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+          # Records how the image was built (source, workflow, inputs)
+          # in a form a verifier can check without trusting the image.
+          provenance: mode=max
+          sbom: true
+
+      # Everything below signs and attests the *digest*, never a tag. A
+      # tag is a mutable pointer -- signing one would let it be moved to
+      # different content afterwards and still verify.
+      - uses: sigstore/cosign-installer@v4
+
+      - name: Sign the image
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: cosign sign --yes "ghcr.io/${{ github.repository }}@${DIGEST}"
+
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@v3
+        with:
+          subject-name: ghcr.io/${{ github.repository }}
+          subject-digest: ${{ steps.build.outputs.digest }}
+          push-to-registry: true
 
   promote-to-main:
     name: Promote the tested preview image to latest

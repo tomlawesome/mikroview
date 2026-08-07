@@ -33,6 +33,7 @@ import (
 	"github.com/tomlawesome/mikroview/internal/naming"
 	"github.com/tomlawesome/mikroview/internal/notify"
 	"github.com/tomlawesome/mikroview/internal/oidc"
+	"github.com/tomlawesome/mikroview/internal/persist"
 	"github.com/tomlawesome/mikroview/internal/reputation"
 	"github.com/tomlawesome/mikroview/internal/routeros"
 	"github.com/tomlawesome/mikroview/internal/rules"
@@ -67,15 +68,24 @@ const (
 	loginLimiterWindow    = 5 * time.Minute
 )
 
-// version is stamped at build time via -ldflags "-X main.version=<git-
-// short-sha>" (see Dockerfile and .github/workflows/docker.yml) --
-// "dev" is the fallback for a plain `go build .`/`go run .` with no
-// ldflags, so local development never shows a blank or misleading
-// value. A registry digest isn't something the binary can know about
-// itself (it's computed from the pushed image after build), so the
-// commit it was built from is the practical, achievable stand-in for
-// "which build is this."
-var version = "dev"
+// version is stamped at build time via -ldflags "-X main.version=..."
+// (see Dockerfile and .github/workflows/docker.yml).
+//
+// It carries the lane as well as the commit, because "which build is
+// this" and "how much should I trust it" are the same question:
+//
+//	dev:<short-sha>      a local or dev-branch build; nothing published
+//	preview:<short-sha>  the published release candidate
+//	v1.2.3               a build from a release tag
+//
+// The commit, not a registry digest: an image digest is computed from
+// the pushed image *after* the build, so a binary cannot know its own.
+// The commit it was built from is the achievable stand-in, and is what
+// the signing provenance binds to anyway.
+//
+// "dev:local" is the fallback for a plain `go build .` with no ldflags,
+// so local development never shows a blank or misleading value.
+var version = "dev:local"
 
 // versionMarkerPath persists the last-seen version so a restart can
 // tell a routine restart (same version) apart from a real upgrade (the
@@ -261,7 +271,22 @@ func main() {
 	rep := reputation.New(cfg.Reputation.AbuseIPDBKey)
 
 	flagsLog := logging.New("flags")
-	fs, err := flags.Open(cfg.Flags.StorePath)
+	// Boot-time context: the signal-aware ctx below is created after
+	// the stores exist, and connecting to the database has to happen
+	// before any of them.
+	bootCtx := context.Background()
+	persistence, err := openStorage(bootCtx, cfg)
+	if err != nil {
+		logging.New("storage").Error(err.Error())
+		os.Exit(1)
+	}
+	defer persistence.Close()
+
+	flagsBackend, err := persistence.backendFor(bootCtx, "flags", cfg.Flags.StorePath)
+	if err != nil {
+		flagsLog.Warn(err.Error())
+	}
+	fs, err := flags.OpenWithBackend(flagsBackend)
 	if err != nil {
 		flagsLog.Warn(fmt.Sprintf("%v (continuing with in-memory-only flag state)", err))
 	}
@@ -271,7 +296,11 @@ func main() {
 	// this needs its own persisted store distinct from devices above
 	// (that one tracks router source IPs, not LAN client MACs).
 	macLog := logging.New("device-mac")
-	macRegistry, err := device.OpenMACRegistry(cfg.DeviceMAC.StorePath)
+	macBackend, err := persistence.backendFor(bootCtx, "mac_registry", cfg.DeviceMAC.StorePath)
+	if err != nil {
+		macLog.Warn(err.Error())
+	}
+	macRegistry, err := device.OpenMACRegistryWithBackend(macBackend)
 	if err != nil {
 		macLog.Warn(fmt.Sprintf("%v (continuing with in-memory-only MAC registry)", err))
 	}
@@ -282,13 +311,26 @@ func main() {
 	// internal/store's totalByRule (in-memory, windowed to the store's
 	// short retention period).
 	rulesLog := logging.New("rules")
-	ru, err := rules.Open(cfg.Flags.RuleUsageStorePath)
+	rulesBackend, err := persistence.backendFor(bootCtx, "rule_usage", cfg.Flags.RuleUsageStorePath)
+	if err != nil {
+		rulesLog.Warn(err.Error())
+	}
+	ru, err := rules.OpenWithBackend(rulesBackend)
 	if err != nil {
 		rulesLog.Warn(fmt.Sprintf("%v (continuing with in-memory-only rule-usage state)", err))
 	}
 
+	// Storage is resolved before any store opens: it decides whether
+	// this deployment persists to JSON files or Postgres, and performs
+	// the one-time JSON adoption when Postgres is newly configured.
+	// A configured-but-unreachable database is fatal -- see openStorage.
 	authLog := logging.New("auth")
-	authStore, err := auth.Open(cfg.Auth.StorePath)
+	authBackend, err := persistence.backendFor(bootCtx, "auth", cfg.Auth.StorePath)
+	if err != nil {
+		authLog.Error(fmt.Sprintf("preparing the accounts store: %v -- refusing to start with authentication in an unknown state", err))
+		os.Exit(1)
+	}
+	authStore, err := auth.OpenWithBackend(authBackend)
 	// A non-nil error from auth.Open, when persistence is actually
 	// configured, ALWAYS means "the accounts file exists but couldn't be
 	// read/parsed" -- Open returns (store, nil) for both "no persistence
@@ -307,7 +349,7 @@ func main() {
 	// path) is already sufficient to take it directly -- move or delete
 	// the broken file and restart, no dedicated CLI mode needed for
 	// something `mv`/`rm` already does.
-	if authShouldFailClosed(err, cfg.Auth.StorePath) {
+	if authShouldFailClosed(err, authBackend) {
 		authLog.Error(fmt.Sprintf(
 			"accounts file at %q exists but could not be loaded: %v -- refusing to start with authentication in an unknown state. "+
 				"If this deployment previously had accounts configured, this is NOT a fresh install: restore the file from a backup, "+
@@ -335,7 +377,11 @@ func main() {
 	// user later deletes every one of them) -- see Store.Seed's own doc
 	// comment.
 	entitiesLog := logging.New("entities")
-	entityStore, err := entities.Open(cfg.Entities.StorePath)
+	entityBackend, err := persistence.backendFor(bootCtx, "entities", cfg.Entities.StorePath)
+	if err != nil {
+		entitiesLog.Warn(err.Error())
+	}
+	entityStore, err := entities.OpenWithBackend(entityBackend)
 	if err != nil {
 		entitiesLog.Warn(fmt.Sprintf("%v (continuing with in-memory-only entity state)", err))
 	}
@@ -349,7 +395,11 @@ func main() {
 	// just means token creation refuses with ErrTokenNotPersisted, not
 	// that mikroview fails to start).
 	tokensLog := logging.New("tokens")
-	tokenStore, err := auth.OpenTokenStore(cfg.Auth.TokensStorePath)
+	tokensBackend, err := persistence.backendFor(bootCtx, "tokens", cfg.Auth.TokensStorePath)
+	if err != nil {
+		tokensLog.Warn(err.Error())
+	}
+	tokenStore, err := auth.OpenTokenStoreWithBackend(tokensBackend)
 	if err != nil {
 		tokensLog.Warn(fmt.Sprintf("%v (continuing with in-memory-only, unpersisted token state)", err))
 	}
@@ -359,7 +409,11 @@ func main() {
 	// store above (a missing/unwritable path just means entries don't
 	// survive a restart, not that mikroview fails to start).
 	auditLog := logging.New("audit")
-	auditStore, err := audit.Open(cfg.Audit.StorePath)
+	auditBackend, err := persistence.backendFor(bootCtx, "audit", cfg.Audit.StorePath)
+	if err != nil {
+		auditLog.Warn(err.Error())
+	}
+	auditStore, err := audit.OpenWithBackend(auditBackend)
 	if err != nil {
 		auditLog.Warn(fmt.Sprintf("%v (continuing with in-memory-only, unpersisted audit log)", err))
 	}
@@ -428,7 +482,11 @@ func main() {
 		}
 	}
 	detectorsLog := logging.New("detectors")
-	detectorSettings, err := detect.OpenSettingsStore(cfg.Flags.DetectorSettingsStorePath, seed)
+	detectorBackend, err := persistence.backendFor(bootCtx, "detector_settings", cfg.Flags.DetectorSettingsStorePath)
+	if err != nil {
+		detectorsLog.Warn(err.Error())
+	}
+	detectorSettings, err := detect.OpenSettingsStoreWithBackend(detectorBackend, seed)
 	if err != nil {
 		detectorsLog.Warn(fmt.Sprintf("%v (continuing with in-memory-only detector toggle state)", err))
 	}
@@ -1225,8 +1283,8 @@ func runEnableAuthSetup() int {
 // doesn't exist yet" (a real fresh install) return a nil error, so
 // requiring storePath != "" here is belt-and-braces rather than the
 // actual distinguishing signal, which is err itself.
-func authShouldFailClosed(err error, storePath string) bool {
-	return err != nil && storePath != ""
+func authShouldFailClosed(err error, backend persist.Backend) bool {
+	return err != nil && backend != nil
 }
 
 // runRetiredResetPassword explains where `-recover-admin-account` went.

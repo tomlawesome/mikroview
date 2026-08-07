@@ -201,6 +201,65 @@ See [docs/security-by-design.md](docs/security-by-design.md).
   at all against a lower-privileged local account or container exec that
   could run the binary. Recovery keys are the second factor -- see
   "Recovery keys" below.
+- **Nothing mikroview runs is loaded from disk at runtime.** There is no
+  `os/exec`, no `plugin.Open`, no shared-library loading, and no
+  interpreter anywhere in the module. The database schema migrations are
+  compiled into the binary with `go:embed` -- verified by running the
+  binary from a directory containing no `migrations/` at all and
+  confirming the schema still applied. **There is therefore no migration
+  script on a deployed system to tamper with**, and the runtime image is
+  distroless, so even a written-in script would have nothing to execute
+  it.
+
+  Every file mikroview *does* read at runtime is data, not code:
+  `config.yaml`, the JSON stores, TLS material, the Postgres DSN. Editing
+  those requires host access, which is already the declared trust anchor
+  for the CLI recovery commands -- an attacker holding it does not need
+  to smuggle in code.
+
+- **Integrity is verified before the artefact runs, not by the artefact
+  itself.** Published images are signed with keyless Sigstore/cosign and
+  carry SLSA build provenance and an SBOM, all bound to the image
+  *digest* rather than a tag (a tag is a mutable pointer; signing one
+  would let it later point at different content and still verify):
+
+  ```sh
+  cosign verify ghcr.io/tomlawesome/mikroview@sha256:... \
+    --certificate-identity-regexp '^https://github.com/tomlawesome/mikroview/' \
+    --certificate-oidc-issuer https://token.actions.githubusercontent.com
+  gh attestation verify oci://ghcr.io/tomlawesome/mikroview@sha256:... \
+    --repo tomlawesome/mikroview
+  ```
+
+  **Self-verification was considered and deliberately rejected** -- an
+  app checking its own checksums, against GitHub or anything else, does
+  not work. The check lives inside the thing being verified, so tampered
+  code simply skips it; it makes a network service a startup dependency
+  and a new trust anchor for every deployment; and it tells a third party
+  when and where mikroview is running. Signing moves the trust anchor
+  outside the artefact, which is the only place it can usefully be.
+
+- **Persisted state can live in Postgres instead of JSON files (issue
+  #131), and the only security benefit is separation from this host.**
+  The connection is required to be encrypted -- `sslmode` below
+  `require` is refused at startup rather than silently upgraded, and
+  `verify-full` is what actually authenticates the server rather than
+  merely encrypting to it. The DSN is read from a file, never a config
+  field or a flag, for the same reason `-recover-admin-account` prompts
+  rather than taking an argument: a password in argv is visible to every
+  process on the host.
+
+  **A same-host database, including a container beside mikroview,
+  provides none of that benefit** -- its credential sits inside the
+  exact compromise it was meant to survive, making it strictly worse
+  than the files it replaced. `deploy/docker-compose.yml` therefore
+  ships no Postgres service, not even commented out, because the
+  copy-pasteable example has to be the thing that is actually
+  recommended.
+
+  A configured-but-unreachable database is a hard startup failure, not a
+  fallback to the local files: falling back would run the deployment on
+  stale accounts with no outward sign anything was wrong.
 - **Linking an account to SSO is a one-way, destructive conversion.**
   `POST /api/auth/oidc/link` attaches an OIDC identity to the *calling
   session's own* account and, in the same store operation, replaces its
