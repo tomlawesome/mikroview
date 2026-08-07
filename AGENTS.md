@@ -135,3 +135,26 @@ plan, and a closed issue is a better artefact than an overwritten one.
 The successor states the current position and points at the old issue for
 the argument. The old issue gets a closing comment naming its successor,
 so the trail runs both ways.
+
+## Run it before you ship it
+
+Every change that touches the server, the UI or the CLI gets a live check
+before its PR opens: `make live-check` stands up the real binary with the
+real UI and drives it in a real browser.
+
+This is not a substitute for the test suite, and the suite is not a
+substitute for this. Nearly every defect worth finding in this project was
+found by running it, and none of them were visible from the code or from
+`go test`: recovery keys reaching the container log through a terminal
+check that a Docker pty satisfies; CLI commands writing files nothing read
+on a Postgres deployment, reporting success while the operator stayed
+locked out; a filter that became unevaluable only once matching events
+arrived.
+
+Add a scenario for the change -- `frontend/scripts/live-<thing>.mjs` --
+rather than running the baseline and calling it done. See
+`.claude/skills/live-check/SKILL.md`.
+
+Where something genuinely cannot be exercised here (no RouterOS device, no
+external identity provider), say so plainly in the PR rather than letting
+"tested" imply more than was observed.
