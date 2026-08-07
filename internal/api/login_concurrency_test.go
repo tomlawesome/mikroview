@@ -42,7 +42,7 @@ func TestConcurrentLoginsCannotBypassTheRateLimiter(t *testing.T) {
 		t.Fatalf("Register: %v", err)
 	}
 	s.Auth = authStore
-	ts := httptest.NewServer(s.Routes())
+	ts := httptest.NewServer(s.mux())
 	defer ts.Close()
 
 	const attempts = 16
