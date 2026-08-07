@@ -1229,7 +1229,8 @@ host, port, or rule, so scoping either wouldn't mean anything.
 
 The first time mikroview loads with no accounts and no prior decision,
 it shows a one-time choice screen instead of the live view: **create
-the admin account**, or **continue without an account** ("skip"). See
+the admin account**. That is the only option -- running without
+authentication was removed, and creating an account is the floor. See
 [SECURITY.md](../SECURITY.md) for the full threat-model writeup; this
 section is the configuration reference.
 
@@ -1241,8 +1242,7 @@ auth:
   tokensStorePath: "/var/lib/mikroview/tokens.json"
 ```
 
-- **`storePath`** — where accounts (and the skip/disabled decision) are
-  persisted, as a small JSON file (usernames + Argon2id password hashes,
+- **`storePath`** — where accounts are persisted, as a small JSON file (usernames + Argon2id password hashes,
   never plaintext). Defaults to `/var/lib/mikroview/users.json`, which
   the Dockerfile creates and owns -- no configuration needed for the
   zero-config case. Mount a volume over `/var/lib/mikroview` if you want
@@ -1252,6 +1252,11 @@ auth:
   default, matching [TLS](#tls) being on by default -- there's no other
   kind of connection to have a session on. Only turn this off if you've
   also set `tls.enabled: false`, or sessions won't work at all.
+
+  Setting it to `false` while `tls.enabled` is `true` stops mikroview
+  starting, with [CFG-0021](#cfg-0021) — the cookie would be sendable
+  over a plain connection the deployment has otherwise ruled out. The
+  env var is `MIKROVIEW_AUTH_SECURE_COOKIE`.
 - **`sessionTTL`** — the idle timeout: a session's expiry slides forward
   on each authenticated request, so this is "how long you can go without
   activity before needing to log in again," not a fixed session
