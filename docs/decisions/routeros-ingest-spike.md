@@ -146,7 +146,54 @@ a filesystem watcher — plus partial writes, ordering, quarantine and
 cleanup — is a second ingest path with its own failure modes, next to one
 that already works.
 
-### First, what the credential is actually worth
+### The payload is the asset, and that is the deciding axis
+
+The comparison below spent most of its length on credentials. But the
+payload is reconnaissance-grade config data in its own right — step 5 of
+#186 says so — so what happens to it *in transit* matters more than what
+happens to the credential.
+
+All three transports encrypt. They differ in **which end gets
+authenticated**, and that is measured, not assumed:
+
+| Transport | Encrypted | Server authenticated | Client authenticated |
+|---|---|---|---|
+| HTTPS + bearer token | TLS | **Yes** — `check-certificate=yes` once the CA is imported | Yes — bearer token |
+| SFTP + SSH key | SSH | **No** — no host-key verification, nothing to enable | Yes — SSH public key |
+| Syslog over TLS | TLS | **Yes** — `check-certificate=yes`, and it genuinely refuses an untrusted CA | **No** — no client-certificate option exists |
+
+**Syslog can do TLS, which this document did not know when it called that
+route unauthenticated.** `remote-protocol=tls` is accepted and brings a
+`check-certificate` setting with it. With verification on and the CA
+untrusted, the router refuses:
+
+```
+sink: [SSL: TLSV1_ALERT_UNKNOWN_CA] tlsv1 alert unknown ca
+```
+
+After importing the CA and reconnecting, the message arrives over TLS:
+
+```
+{"event": "tls-established", "peer": "192.168.11.30"}
+{"event": "msg", "len": 37, "data": "script,info mv-tls-RETRY-after-import"}
+```
+
+But the action's full property list is `check-certificate, remote,
+remote-log-format, remote-port, remote-protocol, src-address, target,
+vrf` — **no client certificate**. So mikroview could verify nothing about
+who sent the data, and anything able to reach the port could inject. It
+would also need a TLS syslog listener (RFC 5425), which it does not have.
+
+**This is what settles SFTP.** Its weakness was framed above as "a MITM
+gets the payload but cannot steal a credential", and then the credential
+discussion buried it. With the payload as the asset, that *is* the
+finding: SFTP is the only one of the three where an active attacker on
+the path can transparently receive reconnaissance-grade config, and
+there is no setting to prevent it.
+
+**HTTPS is the only option that authenticates both ends.**
+
+### And what the credential is worth
 
 This document spent most of its length comparing how well each transport
 protects its credential, which over-weights that axis considerably.
@@ -199,8 +246,14 @@ HTTPS + bearer token costs a script-readable secret and a 64KiB ceiling,
 and buys real server authentication plus the existing authz/audit/rate-
 limit machinery on a listener that already exists.
 
-**This is a genuine trade, not a settled question, and it is the owner's
-call.** If it goes to HTTPS and the cap ever binds, the cheaper move
+**With the payload weighed as the asset, HTTPS wins on the axis that
+matters** — it is the only transport that authenticates both ends, so it
+is the only one where an active attacker on the path cannot read the
+config data. SFTP's advantages are real but sit on the credential axis,
+which an attacker reaches only by already holding the router.
+
+The remaining case for another transport is payload size, and at measured
+config sizes the 64KiB cap does not bind. If it ever does, the cheaper move
 before revisiting transports is **several small self-contained documents
 rather than one large one** — order-independent, a dropped one degrades
 rather than corrupts, and the endpoint stays stateless. Chunking one
