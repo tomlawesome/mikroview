@@ -75,6 +75,35 @@ either way.
   - **A misconfigured or unreachable provider degrades to "SSO
     unavailable"** (logged once at startup) and never affects local
     login.
+  - **`oidc.issuerUrl` is itself the primary access control -- and
+    mikroview refuses to pretend it is one when it isn't.** Every ID
+    token is validated against the configured issuer's own keys and
+    against your client ID, so a self-hosted Authentik/Keycloak issuer
+    already restricts login to accounts in a directory you run; that is
+    the intended, complete configuration, and delegating any further
+    narrowing to the IdP's own ACLs is the point of SSO. Against a
+    *multi-tenant* issuer the same setting narrows nothing -- every
+    Google account validates against `accounts.google.com` -- so
+    combined with "first account becomes admin", an unrestricted
+    deployment would hand admin to whoever reached the login page
+    first. **Mikroview therefore refuses to enable SSO for a known
+    multi-tenant issuer unless an access restriction is configured**
+    (`oidc.allowedGroups`/`allowedEmails`/`allowedEmailDomains`/
+    `requiredClaims`), logging why and leaving SSO off rather than
+    warning and continuing.
+  - **Access restrictions fail closed and are re-checked every login.**
+    A missing, empty or unreadable claim is a refusal, never a pass --
+    a group allowlist that opens up when the provider forgets to
+    release the claim is not an allowlist. Domain restrictions match
+    whole domains rather than string suffixes (so `example.com` never
+    admits `attacker@notexample.com`) and require the provider's own
+    `email_verified`. The check runs *before* account provisioning, so
+    a refused identity is never created as a side effect of being
+    refused, and revoking someone at the IdP locks them out at their
+    next sign-in rather than whenever their session lapses. The refused
+    user is told they aren't permitted but never which condition
+    failed -- that detail goes to the operator's log, since it would
+    otherwise map out the allowlist.
   - Verified end-to-end against a real, freshly bootstrapped Authentik
     instance (not just unit tests): the full redirect → real login form
     → PKCE exchange → RS256 token verification → account provisioning →
@@ -300,6 +329,21 @@ damage a hostile or misbehaving LAN device can do:
   and a failed login takes the same amount of time whether the username
   exists or not (a constant-time comparison against a dummy hash either
   way), so response timing can't be used to enumerate valid usernames.
+- **Source-address attribution behind a reverse proxy is opt-in, and
+  ignoring forwarding headers is the default.** A forwarding header is
+  just text the client sent; honouring one unconditionally would let
+  anyone mint a fresh, empty rate-limit bucket per request by varying
+  it, which deletes the per-source limiter rather than weakening it. So
+  a header is read only when the connection came from an address the
+  operator listed in `listen.trustedProxies`, and the chain is then
+  walked right-to-left, skipping trusted hops, so a client's forged
+  left-hand entries are never what gets used. With no proxies declared,
+  only the transport-level peer address counts. The cost of leaving it
+  unset behind a proxy is a shared bucket, not a bypass: all users key
+  to the proxy's address, so one attacker's failures can lock the
+  deployment out of *password* login (the per-username limiter is
+  unaffected, as is SSO). See
+  [docs/configuration.md](docs/configuration.md#running-behind-a-reverse-proxy).
 
 ## Recommended deployment hardening
 

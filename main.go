@@ -593,6 +593,14 @@ func main() {
 	var oidcClient *oidc.Client
 	var oidcState *oidc.StateCodec
 	oidcLog := logging.New("oidc")
+	oidcPolicy := oidc.Policy{
+		AllowedGroups:       cfg.OIDC.AllowedGroups,
+		GroupsClaim:         cfg.OIDC.GroupsClaim,
+		AllowedEmails:       cfg.OIDC.AllowedEmails,
+		AllowedEmailDomains: cfg.OIDC.AllowedEmailDomains,
+		RequiredClaims:      cfg.OIDC.RequiredClaims,
+	}
+
 	switch {
 	case cfg.OIDC.IssuerURL == "":
 		// Not configured -- no log line, same as every other disabled-
@@ -601,6 +609,17 @@ func main() {
 		oidcLog.Error("oidc.issuerUrl is set but oidc.publicBaseUrl is not -- SSO login is unavailable until it's configured (see docs/configuration.md)")
 	case cfg.OIDC.ClientID == "" || cfg.OIDC.ClientSecret == "":
 		oidcLog.Error("oidc.issuerUrl is set but oidc.clientId/oidc.clientSecret are not -- SSO login is unavailable until both are configured")
+	case oidc.IsMultiTenantIssuer(cfg.OIDC.IssuerURL) && !oidcPolicy.Restricted():
+		// Refused rather than warned about. Against a multi-tenant issuer
+		// the issuer URL restricts nothing -- every account at that
+		// provider produces a valid token -- so this configuration means
+		// "whoever reaches the login page first becomes the admin". A
+		// warning would scroll past; leaving SSO off is the fail-closed
+		// outcome, and local login is unaffected.
+		oidcLog.Error(fmt.Sprintf(
+			"%s is a multi-tenant provider, so the issuer URL alone permits any account there to sign in and claim admin -- "+
+				"SSO login is unavailable until oidc.allowedGroups/allowedEmails/allowedEmailDomains/requiredClaims restricts it "+
+				"(see docs/configuration.md)", cfg.OIDC.IssuerURL))
 	default:
 		client, err := oidc.New(ctx, oidc.Config{
 			IssuerURL:    cfg.OIDC.IssuerURL,
@@ -619,8 +638,31 @@ func main() {
 			oidcLog.Error(fmt.Sprintf("%v (SSO login is unavailable)", err))
 		} else {
 			oidcClient, oidcState = client, state
-			oidcLog.Info(fmt.Sprintf("SSO login active against %s", cfg.OIDC.IssuerURL))
+			if oidcPolicy.Restricted() {
+				oidcLog.Info(fmt.Sprintf("SSO login active against %s, restricted to permitted accounts", cfg.OIDC.IssuerURL))
+			} else {
+				oidcLog.Info(fmt.Sprintf("SSO login active against %s for any account that issuer vouches for", cfg.OIDC.IssuerURL))
+			}
 		}
+	}
+
+	// A bad trusted-proxy entry is a security-relevant misconfiguration,
+	// not a typo to paper over: silently ignoring it would leave the
+	// operator believing forwarded addresses are being honoured when they
+	// aren't. Refusing to start is the same stance the TLS and OIDC
+	// blocks already take for their own required values.
+	proxyLog := logging.New("proxy")
+	trustedProxies, err := config.ParseTrustedProxies(cfg.Listen.TrustedProxies)
+	if err != nil {
+		proxyLog.Error(fmt.Sprintf("listen.trustedProxies: %v", err))
+		os.Exit(1)
+	}
+	if len(trustedProxies) > 0 {
+		header := cfg.Listen.ClientIPHeader
+		if header == "" {
+			header = "X-Forwarded-For"
+		}
+		proxyLog.Info(fmt.Sprintf("trusting %s from %d proxy range(s) for login rate limiting", header, len(trustedProxies)))
 	}
 
 	srv := &api.Server{
@@ -639,9 +681,12 @@ func main() {
 		Sessions:         auth.NewSessionStore(cfg.Auth.SessionTTL),
 		LoginLimiter:     auth.NewLoginLimiter(loginLimiterThreshold, loginLimiterWindow),
 		SecureCookie:     cfg.Auth.SecureCookie,
+		TrustedProxies:   trustedProxies,
+		ClientIPHeader:   cfg.Listen.ClientIPHeader,
 		Tokens:           tokenStore,
 		OIDC:             oidcClient,
 		OIDCState:        oidcState,
+		OIDCPolicy:       oidcPolicy,
 		StartTime:        time.Now(),
 		Version:          version,
 	}
