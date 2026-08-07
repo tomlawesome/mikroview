@@ -78,8 +78,6 @@ var authzMatrix = []routeExpectation{
 		"the provider redirects the browser here; protected by state/nonce/PKCE, not by a session"},
 	{http.MethodPost, "/api/auth/register", accessPublic,
 		"first-run only -- auth.Store.Register refuses once any account exists"},
-	{http.MethodPost, "/api/auth/skip", accessPublic,
-		"first-run only -- auth.Store.Disable refuses once any account exists"},
 
 	{http.MethodGet, "/api/config/problems", accessAdmin,
 		"config key names, filesystem paths, the OIDC issuer URL and SMTP hosts are an infrastructure map; a non-admin gets an empty list rather than a 403, since whether problems exist is itself information"},
@@ -185,11 +183,11 @@ func TestAuthorizationMatrixIsEnforced(t *testing.T) {
 
 	for _, r := range authzMatrix {
 		t.Run(r.method+" "+r.path, func(t *testing.T) {
-			// Skip the two first-run endpoints: an account now exists,
-			// so they legitimately refuse everyone. Their "public"
+			// Skip the first-run endpoint: an account now exists, so it
+			// legitimately refuses everyone. Its "public"
 			// classification is about reachability before setup, which
-			// their own dedicated tests cover.
-			if r.path == "/api/auth/register" || r.path == "/api/auth/skip" {
+			// its own dedicated tests cover.
+			if r.path == "/api/auth/register" {
 				t.Skip("first-run only; refuses all callers once an account exists (covered separately)")
 			}
 

@@ -212,16 +212,6 @@ export async function login(username: string, password: string): Promise<string 
   return (await res.text()) || `login: ${res.status}`
 }
 
-// skipAuthSetup permanently disables authentication for this deployment
-// (see internal/auth.Store.Disable). Only reachable during the one-time
-// first-run choice -- reversing it afterward is CLI-only by design
-// (mikroview -enable-auth-setup), not something this function or any
-// other API call can do.
-export async function skipAuthSetup(): Promise<string | null> {
-  const res = await postJSON('/api/auth/skip')
-  if (res.ok) return null
-  return (await res.text()) || `skipAuthSetup: ${res.status}`
-}
 
 export async function logout(): Promise<void> {
   await postJSON('/api/auth/logout')

@@ -78,13 +78,7 @@ type User struct {
 	// It matters because letting an admin set a *real* password on an
 	// SSO-only account would quietly reopen the local-attack surface
 	// that provisioning it via OIDC deliberately closed.
-	//
-	// A pointer so that "field absent" (an account written before this
-	// existed) is distinguishable from "explicitly false". Every
-	// deployed accounts.json predates it, and treating absent as false
-	// would mark every local admin SSO-only and lock them out of their
-	// own recovery. See migrateHasLocalPassword.
-	HasLocalPassword *bool `json:"hasLocalPassword,omitempty"`
+	HasLocalPassword bool `json:"hasLocalPassword"`
 	// RoleChangedAt records the last admin transfer touching this
 	// account, on both sides of it. For the audit trail and the UI only:
 	// authorization always reads Role, never this.
@@ -93,40 +87,7 @@ type User struct {
 
 // LocalPassword reports whether this account has a real, user-chosen
 // password that may be reset.
-//
-// Always use this rather than reading HasLocalPassword directly: it
-// resolves the pre-migration nil case, so a caller cannot accidentally
-// treat an old local account as SSO-only.
-func (u *User) LocalPassword() bool {
-	if u.HasLocalPassword != nil {
-		return *u.HasLocalPassword
-	}
-	return u.OIDCIssuer == ""
-}
-
-// noLocalPassword is the shared false referenced by accounts that have
-// no resettable password. Package-level because a *bool field needs an
-// addressable value and repeating a local `f := false` at each site
-// invites one of them being set the wrong way.
-var noLocalPassword = false
-
-// migrateHasLocalPassword fills in the field for accounts written before
-// it existed, inferring from whether the account carries a linked SSO
-// identity: no issuer means it was created by Register/CreateUser and
-// therefore has a real password.
-//
-// Safe today because LinkOIDCIdentity has no callers, so no account can
-// yet be in the "local password *and* linked identity" state that this
-// inference would get wrong. Once linking ships (#133 Part 4) it wipes
-// the local password as part of the same operation, which keeps the
-// inference correct for anything written after it.
-func migrateHasLocalPassword(u *User) {
-	if u.HasLocalPassword != nil {
-		return
-	}
-	v := u.OIDCIssuer == ""
-	u.HasLocalPassword = &v
-}
+func (u *User) LocalPassword() bool { return u.HasLocalPassword }
 
 // oidcKey is (issuer, subject) as a map key -- a struct rather than a
 // delimited string concatenation, so there's no theoretical risk of one
@@ -163,16 +124,6 @@ var (
 	// is a legitimate, expected outcome worth distinguishing (unlike
 	// Authenticate, this isn't a login attempt an attacker controls).
 	ErrUserNotFound = errors.New("auth: no such user")
-	// ErrAuthDisabled is returned by Register once this deployment has
-	// explicitly opted out of authentication (see Disable) -- refusing
-	// registration here, not just at the API-routing layer, is what
-	// makes EnableSetup's CLI-only re-arming actually load-bearing:
-	// without this check, a client could bypass the UI entirely and
-	// POST straight to /api/auth/register (still reachable while
-	// disabled -- see internal/api's requireAuth) to unilaterally
-	// re-impose auth for everyone, exactly what EnableSetup's doc
-	// comment says this design prevents.
-	ErrAuthDisabled = errors.New("auth: this deployment has disabled authentication -- run -enable-auth-setup to allow creating an account again")
 	// ErrSingleAdmin is returned by CreateUser for a RoleAdmin request.
 	// mikroview holds exactly one admin; handover is TransferAdmin, not
 	// creating a second one.
@@ -209,35 +160,9 @@ var (
 // one of those two, so there's exactly one place this needs to live.
 const minPasswordLength = 8
 
-// storeFile is the on-disk shape -- an object wrapping the user list
-// plus the Disabled marker (see Store.Disable), rather than a bare
-// array. storeFile.UnmarshalJSON below stays compatible with a
-// pre-Disabled-state file (a bare `[]User` array, written by every
-// mikroview version before this one) so an existing deployment's
-// accounts still load correctly, treated as Disabled: false.
+// storeFile is the on-disk shape: an object wrapping the user list.
 type storeFile struct {
-	Disabled bool    `json:"disabled"`
-	Users    []*User `json:"users"`
-}
-
-func (f *storeFile) UnmarshalJSON(data []byte) error {
-	type shape storeFile // avoids infinite recursion into this method
-	var s shape
-	if err := json.Unmarshal(data, &s); err == nil {
-		*f = storeFile(s)
-		return nil
-	}
-	// A top-level JSON array can't unmarshal into a struct -- that's
-	// exactly the pre-Disabled-state legacy shape, so this is where a
-	// genuinely malformed file also gets one more (correct) chance to
-	// report its real error, not this fallback's.
-	var legacy []*User
-	if err := json.Unmarshal(data, &legacy); err != nil {
-		return err
-	}
-	f.Users = legacy
-	f.Disabled = false
-	return nil
+	Users []*User `json:"users"`
 }
 
 // Store persists user accounts through a persist.Backend -- a JSON file
@@ -252,12 +177,6 @@ type Store struct {
 	byID      map[string]*User
 	byName    map[string]string  // lowercased username -> ID
 	oidcIndex map[oidcKey]string // (issuer, subject) -> ID, see ByOIDCIdentity
-	// disabled records a deliberate, permanent opt-out of authentication
-	// for this deployment -- see Disabled/Disable/EnableSetup. Distinct
-	// from len(byID)==0, which just means "no account yet, decision
-	// still pending" (see internal/api's requireAuth for how the two
-	// states are gated differently).
-	disabled bool
 	// version is the backend's token for the document as of the last
 	// load, so a running server can pick up a change made by a separate
 	// process -- namely the CLI recovery tools (`-recover-admin-account`,
@@ -331,14 +250,12 @@ func (s *Store) applyLoaded(file storeFile, version int64) {
 		if u == nil {
 			continue
 		}
-		migrateHasLocalPassword(u)
 		s.byID[u.ID] = u
 		s.byName[strings.ToLower(u.Username)] = u.ID
 		if u.OIDCIssuer != "" || u.OIDCSubject != "" {
 			s.oidcIndex[oidcKey{issuer: u.OIDCIssuer, subject: u.OIDCSubject}] = u.ID
 		}
 	}
-	s.disabled = file.Disabled
 	s.version = version
 }
 
@@ -398,62 +315,6 @@ func (s *Store) Count() int {
 	return len(s.byID)
 }
 
-// Disabled reports whether this deployment has explicitly opted out of
-// authentication (see Disable) -- distinct from Count()==0, which just
-// means "no account yet, decision still pending." Reloads first (see
-// reloadIfStale) so a live server picks up a change made by the CLI
-// recovery tool (`-enable-auth-setup`) without needing a restart, same
-// as Authenticate/Get/List already do for password resets.
-func (s *Store) Disabled() bool {
-	s.reloadIfStale()
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	return s.disabled
-}
-
-// Disable permanently opts this deployment out of authentication --
-// only callable while Count()==0: disabling auth out from under
-// existing accounts isn't this method's job, and is never exposed
-// anywhere (internal/api's handleAuthSkip is the only caller, itself
-// only reachable during the pre-decision bootstrap window). Persists
-// immediately.
-func (s *Store) Disable() error {
-	if !s.Persisted() {
-		return ErrNotPersisted
-	}
-	// Same cross-process reload Register does, for the same reason --
-	// the len(s.byID) test below is the correctness boundary (it runs
-	// under the write lock), this just makes sure an account created by
-	// another process is visible before we get there.
-	s.reloadIfStale()
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if len(s.byID) > 0 {
-		return ErrRegistrationClosed
-	}
-	s.disabled = true
-	s.persistLocked()
-	return nil
-}
-
-// EnableSetup clears a prior Disable, re-arming the web setup form so
-// /api/auth/register (and the choice screen in front of it) becomes
-// reachable again. Deliberately not exposed via any API endpoint a
-// browser could reach -- only internal/main.go's `-enable-auth-setup`
-// CLI mode calls this, so a UI visitor can never re-impose auth for
-// everyone else without host/container access (the same trust anchor
-// `-recover-admin-account`/`-list-users` already rely on).
-func (s *Store) EnableSetup() error {
-	if !s.Persisted() {
-		return ErrNotPersisted
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.disabled = false
-	s.persistLocked()
-	return nil
-}
-
 // Register creates the very first account, always as RoleAdmin,
 // regardless of what a future caller might pass -- there is no role
 // parameter because there's no meaningful choice: the first person to
@@ -511,18 +372,7 @@ func (s *Store) Register(username, password string, now time.Time) (*User, error
 // with the write lock held (see createLocked), which is what makes
 // "exactly one account can ever be self-registered" actually hold
 // under concurrency.
-//
-// Checking disabled here (not just in Register) also closes a second,
-// worse race: Disable() and Register() could previously both succeed,
-// leaving a store with a real admin account AND disabled == true.
-// internal/api's requireAuth checks Disabled() first, so that state
-// means the deployment serves everyone with no login at all while an
-// admin account quietly exists -- the operator sees their own
-// registration succeed and has no reason to suspect auth is off.
 func registrationOpenGuard(s *Store) error {
-	if s.disabled {
-		return ErrAuthDisabled
-	}
 	if len(s.byID) > 0 {
 		return ErrRegistrationClosed
 	}
@@ -698,7 +548,6 @@ func (s *Store) createLocked(username, password string, role Role, now time.Time
 		return nil, ErrUsernameTaken
 	}
 
-	localPassword := true
 	u := &User{
 		ID:           newID(),
 		Username:     username,
@@ -706,7 +555,7 @@ func (s *Store) createLocked(username, password string, role Role, now time.Time
 		Role:         role,
 		CreatedAt:    now,
 		// A real password the user chose, so it may later be reset.
-		HasLocalPassword: &localPassword,
+		HasLocalPassword: true,
 	}
 	s.byID[u.ID] = u
 	s.byName[key] = u.ID
@@ -765,10 +614,6 @@ func (s *Store) FindOrCreateOIDCUser(issuer, subject, usernameHint string, now t
 	if !s.Persisted() {
 		return nil, false, ErrNotPersisted
 	}
-	if s.Disabled() {
-		return nil, false, ErrAuthDisabled
-	}
-
 	s.reloadIfStale()
 
 	s.mu.Lock()
@@ -807,7 +652,7 @@ func (s *Store) FindOrCreateOIDCUser(issuer, subject, usernameHint string, now t
 		// there is no password here to reset. Recorded rather than
 		// inferred, because the hash itself is indistinguishable from a
 		// real one.
-		HasLocalPassword: &noLocalPassword,
+		HasLocalPassword: false,
 	}
 	s.byID[u.ID] = u
 	s.byName[strings.ToLower(u.Username)] = u.ID
@@ -918,7 +763,7 @@ func (s *Store) LinkOIDCIdentity(userID, issuer, subject string, now time.Time) 
 	u.OIDCIssuer = issuer
 	u.OIDCSubject = subject
 	u.PasswordHash = unmatchable
-	u.HasLocalPassword = &noLocalPassword
+	u.HasLocalPassword = false
 	// Invalidates every session issued before this point, including in
 	// another process -- the account's credentials just changed
 	// fundamentally, so anything holding a session from before that
@@ -1025,8 +870,7 @@ func (s *Store) SetPassword(username, newPassword string, now time.Time) error {
 	// definition. Stated explicitly rather than left to be derived from
 	// OIDCIssuer, so a linked account (OIDC *and* a local password)
 	// isn't misread as SSO-only by the recovery tooling.
-	yes := true
-	u.HasLocalPassword = &yes
+	u.HasLocalPassword = true
 	s.persistLocked()
 	return nil
 }
@@ -1058,7 +902,7 @@ func (s *Store) persistLocked() {
 	}
 	sort.Slice(list, func(i, j int) bool { return list[i].Username < list[j].Username })
 
-	data, err := json.MarshalIndent(storeFile{Disabled: s.disabled, Users: list}, "", "  ")
+	data, err := json.MarshalIndent(storeFile{Users: list}, "", "  ")
 	if err != nil {
 		persistLog.Error(fmt.Sprintf("encoding accounts for persistence failed: %v -- "+
 			"this change exists only in memory and will be lost on restart", err))
