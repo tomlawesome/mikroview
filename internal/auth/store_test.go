@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -305,9 +306,6 @@ func TestOpenReadsLegacyBareArrayFormat(t *testing.T) {
 	if s.Count() != 1 {
 		t.Fatalf("expected 1 user loaded from the legacy format, got %d", s.Count())
 	}
-	if s.WasAuthDisabled() {
-		t.Error("expected a legacy file with no disabled key to load as not-previously-disabled")
-	}
 	if u, ok := s.ByUsername("admin"); !ok || u.ID != "u1" {
 		t.Errorf("expected the legacy user to be readable by username, got %+v, %v", u, ok)
 	}
@@ -379,11 +377,10 @@ func TestOpenReadsNewObjectFormat(t *testing.T) {
 }
 
 // A deployment that took the removed no-auth option has "disabled": true
-// in its accounts file and no accounts. It must come back as an ordinary
-// undecided store -- setup required, which is the safe direction -- and
-// must be recognisable, so startup can say why a deployment that has
-// been open since it was installed is suddenly asking for a login.
-func TestAStoreLeftByTheRemovedNoAuthModeRequiresSetupAndSaysSo(t *testing.T) {
+// in its accounts file and no accounts. The key is no longer read at
+// all, so it must load as an ordinary undecided store -- setup required,
+// which is the safe direction -- rather than failing to parse.
+func TestAStoreLeftByTheRemovedNoAuthModeRequiresSetup(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "users.json")
 	if err := os.WriteFile(path, []byte(`{"disabled":true,"users":[]}`), 0o600); err != nil {
 		t.Fatal(err)
@@ -396,24 +393,20 @@ func TestAStoreLeftByTheRemovedNoAuthModeRequiresSetupAndSaysSo(t *testing.T) {
 	if s.Count() != 0 {
 		t.Fatalf("expected no accounts, got %d", s.Count())
 	}
-	if !s.WasAuthDisabled() {
-		t.Error("the previously-disabled state was not recognised, so the operator gets a login screen with no explanation")
-	}
-
 	// Registration has to be open, or the deployment is stranded: there
 	// is no account to sign in with and no way to make one.
 	if _, err := s.Register("admin", "password123", time.Now()); err != nil {
 		t.Fatalf("expected setup to be available on a previously-disabled store, got %v", err)
 	}
 
-	// And the marker must not survive the write, or every later start
-	// repeats a warning about a state that no longer applies.
-	s2, err := Open(path)
+	// And the marker must not survive the write -- nothing reads it, so
+	// leaving it on disk is just a misleading artefact.
+	body, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if s2.WasAuthDisabled() {
-		t.Error("the no-auth marker was written back out; it should be gone once the store is rewritten")
+	if strings.Contains(string(body), "disabled") {
+		t.Errorf("the no-auth marker was written back out:\n%s", body)
 	}
 }
 

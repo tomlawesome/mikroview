@@ -212,21 +212,6 @@ func main() {
 	if len(os.Args) > 1 && os.Args[1] == "-recover-admin-account" {
 		os.Exit(runRecoverAdminAccount(os.Args[2:]))
 	}
-	// -reset-password was the previous name, and reset *any* account's
-	// password with host access alone. It is not kept as an alias: the
-	// replacement is narrower (admin only) and gated on a recovery key,
-	// so silently forwarding would misrepresent what now happens.
-	if len(os.Args) > 1 && os.Args[1] == "-reset-password" {
-		os.Exit(runRetiredResetPassword())
-	}
-	// -enable-auth-setup re-armed the setup form after a deployment had
-	// skipped auth. There is no skipping any more, so there is nothing to
-	// re-arm -- but a deployment that ran it before will still have it in
-	// a runbook, and "flag provided but not defined" is a poor way to
-	// find that out.
-	if len(os.Args) > 1 && os.Args[1] == "-enable-auth-setup" {
-		os.Exit(runRetiredEnableAuthSetup())
-	}
 	// -validate-config: check a config before deploying it. Same rules
 	// the server enforces at startup (one config.Validate, two entry
 	// points) so this can never pass something startup would reject, or
@@ -362,13 +347,6 @@ func main() {
 	switch {
 	case authStore.Count() > 0:
 		authLog.Info(fmt.Sprintf("%d account(s) registered -- authentication is active", authStore.Count()))
-	case authStore.WasAuthDisabled():
-		// Fails closed, which is the point of the removal -- but the
-		// operator opens a login screen they have never seen before, on
-		// a deployment that has been open since they set it up. Say why.
-		authLog.Warn("this deployment previously had authentication disabled. That option has been " +
-			"removed, so mikroview is now asking for an admin account before it will serve anything. " +
-			"Open the web interface to create one")
 	default:
 		authLog.Info("no account yet -- mikroview is showing the create-account screen (see docs/configuration.md)")
 	}
@@ -1259,15 +1237,6 @@ func runListUsers() int {
 	return 0
 }
 
-func runRetiredEnableAuthSetup() int {
-	logger := logging.New("enable-auth-setup")
-	logger.Error("-enable-auth-setup has been removed along with the option to run mikroview " +
-		"without authentication. There is nothing to re-enable: mikroview asks for an admin " +
-		"account on first load and will not start serving without one. See docs/configuration.md, " +
-		"\"Creating the admin account\"")
-	return 2
-}
-
 // authShouldFailClosed reports whether main()'s boot sequence should
 // refuse to start rather than continue with an unauthenticated,
 // zero-account in-memory auth.Store. err is auth.Open's own return
@@ -1280,20 +1249,6 @@ func runRetiredEnableAuthSetup() int {
 // actual distinguishing signal, which is err itself.
 func authShouldFailClosed(err error, backend persist.Backend) bool {
 	return err != nil && backend != nil
-}
-
-// runRetiredResetPassword explains where `-recover-admin-account` went.
-//
-// A removed recovery command is the worst thing to hit an operator who
-// is already locked out, so it exits with a pointer rather than an
-// unrecognised-flag error. Exit 2 (usage), not 1: nothing failed, the
-// command simply no longer exists.
-func runRetiredResetPassword() int {
-	logger := logging.New("reset-password")
-	logger.Error("-reset-password has been replaced by -recover-admin-account, which recovers " +
-		"the admin account only and requires a recovery key. Other accounts are managed by the " +
-		"admin from the web UI. See docs/configuration.md, \"Recovering the admin account\"")
-	return 2
 }
 
 // runRecoverAdminAccount backs `-recover-admin-account` -- the way back
