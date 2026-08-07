@@ -89,6 +89,39 @@ A misconfigured entry here fails startup rather than being skipped —
 silently ignoring it would leave you believing forwarded addresses were
 being honoured when they weren't.
 
+### Checking your config before you deploy
+
+```
+docker exec mikroview /mikroview -validate-config
+```
+
+It reports anything wrong and exits `0` if all is well, `1` if it found
+problems, and `2` if it couldn't read the config file at all — so you can
+use it in a deployment script or CI.
+
+It never touches the network. Nothing is dialled, nothing is written, and
+no directories are created, so it's safe to run anywhere.
+
+### What happens when a setting is wrong
+
+Mikroview treats two kinds of mistake differently.
+
+**Some settings stop it starting.** These are ones where carrying on
+would be unsafe or would mean mikroview isn't doing its job — an
+unreadable listen address, a session that never expires, or session
+cookies without the `Secure` flag while TLS is on. The error names the
+setting so you know what to fix.
+
+**Everything else starts anyway, using a sensible default.** A negative
+retention or a zero event limit would mean nothing is kept at all, so
+mikroview substitutes the default rather than refusing — losing all your
+monitoring over a typo would be worse. But it won't do that quietly: the
+substitution appears in the log **and** as a banner across the top of the
+web interface, naming the setting and the value actually in use.
+
+That banner is only shown to admins, since the messages name file paths
+and hostnames.
+
 **File permissions**: the container runs as a fixed non-root user (uid
 65532, distroless `nonroot`) that is unrelated to any user on the Docker
 host. If `config.yaml` isn't world-readable (or owned by a matching

@@ -81,6 +81,9 @@ var authzMatrix = []routeExpectation{
 	{http.MethodPost, "/api/auth/skip", accessPublic,
 		"first-run only -- auth.Store.Disable refuses once any account exists"},
 
+	{http.MethodGet, "/api/config/problems", accessAdmin,
+		"config key names, filesystem paths, the OIDC issuer URL and SMTP hosts are an infrastructure map; a non-admin gets an empty list rather than a 403, since whether problems exist is itself information"},
+
 	// -- Any authenticated user ----------------------------------------
 	{http.MethodGet, "/api/events", accessUser,
 		"core read: the live firewall event feed"},
