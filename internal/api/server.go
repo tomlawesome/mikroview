@@ -80,6 +80,13 @@ type Server struct {
 	// session regardless of deployment state, so "which build am I
 	// running" is checkable without any special access.
 	Version string
+	// ConfigProblems are non-fatal configuration problems found at
+	// startup, where a safe default was substituted for a bad value.
+	// Surfaced to admins in the UI because a startup log line is seen
+	// once, by whoever ran `docker compose up`, and never again -- which
+	// is not good enough for a setting the operator believes is in
+	// effect. See config_problems.go.
+	ConfigProblems []ConfigProblem
 
 	// Auth/Sessions/LoginLimiter/SecureCookie: see auth.go. Auth is
 	// always non-nil (internal/auth.Open("") returns a usable, empty,
@@ -159,6 +166,7 @@ func (s *Server) routes() []route {
 		{http.MethodDelete, "/api/entities", s.handleEntitiesDelete},
 
 		{http.MethodGet, "/api/audit", s.handleAuditList},
+		{http.MethodGet, "/api/config/problems", s.handleConfigProblems},
 
 		{http.MethodGet, "/api/auth/session", s.handleAuthSession},
 		{http.MethodPost, "/api/auth/register", s.handleAuthRegister},
