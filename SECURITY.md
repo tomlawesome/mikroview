@@ -198,6 +198,24 @@ See [docs/security-by-design.md](docs/security-by-design.md).
   on the very system they're locked out of. A password reset immediately
   invalidates every existing session for that account, including on an
   already-running server.
+- **Recovery-key digests and the pepper are kept apart, and follow
+  different storage.** A recovery key is never stored -- what is stored
+  is an HMAC-SHA-256 digest of it, computed under a 256-bit server-side
+  secret (the pepper). The pepper is not there to make guessing harder;
+  the keys are 160 random bits, which is not brute-forceable either way.
+  It is there so the digests are inert on their own: whoever holds only
+  the digests cannot test a candidate key against them.
+
+  That only pays off if the two halves can actually be stolen
+  separately. On the JSON backend they are separate files on one host,
+  which protects against a partial leak (one file in a backup, a stray
+  copy, a wrong bind-mount) and nothing more. When Postgres is
+  configured the digests follow the accounts into the database while the
+  pepper stays a local file on the mikroview host -- so a database dump
+  yields digests nothing can test, and compromising the mikroview host
+  yields a pepper with no digests to apply it to. Neither prize is
+  useful alone.
+
 - **Recovery keys are never printed by the container's main process**,
   because in a container that stream is the container log: `docker run
   -t` allocates a pty, so a terminal check passes while the log driver

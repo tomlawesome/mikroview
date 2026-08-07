@@ -23,7 +23,7 @@ func newRecovery(t *testing.T) (*RecoveryStore, string, string) {
 }
 
 func TestGenerateAndRedeem(t *testing.T) {
-	s, _, _ := newRecovery(t)
+	s, keyPath, pepperPath := newRecovery(t)
 
 	keys, err := s.Generate()
 	if err != nil {
@@ -38,7 +38,7 @@ func TestGenerateAndRedeem(t *testing.T) {
 
 	// Any of the set works.
 	for i, k := range keys {
-		s2, _ := OpenRecovery(s.path, s.pepperPath)
+		s2, _ := OpenRecovery(keyPath, pepperPath)
 		if _, err := s2.Redeem(k); err != nil {
 			t.Errorf("key %d did not verify: %v", i, err)
 		}
@@ -165,7 +165,7 @@ func TestCorruptKeyFileFailsClosed(t *testing.T) {
 // Transcription forgiveness must not weaken the key: case and separators
 // aren't part of the secret, but the characters are.
 func TestKeyNormalisation(t *testing.T) {
-	s, _, _ := newRecovery(t)
+	s, keyPath, pepperPath := newRecovery(t)
 	keys, _ := s.Generate()
 	if err := s.Commit(); err != nil {
 		t.Fatal(err)
@@ -177,7 +177,7 @@ func TestKeyNormalisation(t *testing.T) {
 		k[:8] + "-" + k[8:],
 		" " + k + " ",
 	} {
-		s2, _ := OpenRecovery(s.path, s.pepperPath)
+		s2, _ := OpenRecovery(keyPath, pepperPath)
 		if _, err := s2.Redeem(variant); err != nil {
 			t.Errorf("variant %q was rejected: %v", variant, err)
 		}
@@ -190,7 +190,7 @@ func TestKeyNormalisation(t *testing.T) {
 	} else {
 		wrong[0] = 'A'
 	}
-	s3, _ := OpenRecovery(s.path, s.pepperPath)
+	s3, _ := OpenRecovery(keyPath, pepperPath)
 	if _, err := s3.Redeem(string(wrong)); !errors.Is(err, ErrInvalidRecoveryKey) {
 		t.Error("a key differing by one character was accepted")
 	}
