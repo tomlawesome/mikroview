@@ -11,6 +11,7 @@ package config
 import (
 	"flag"
 	"fmt"
+	"net/netip"
 	"os"
 	"strconv"
 	"strings"
@@ -54,6 +55,73 @@ type Listen struct {
 	// handle the redirect at your reverse proxy instead, or accept that
 	// the Location header will point at :443 regardless.
 	HTTPRedirect string `yaml:"httpRedirect"`
+	// TrustedProxies lists the addresses mikroview will believe a
+	// forwarding header from, as bare IPs, CIDRs, or the shorthand
+	// "private" (loopback, RFC1918, link-local and IPv6 ULA -- which is
+	// what a reverse proxy on a LAN or a docker network resolves to).
+	//
+	// Empty by default, and empty means forwarding headers are ignored
+	// entirely. That default is deliberate: a header is just
+	// client-supplied text, so honouring one unconditionally would let
+	// anyone mint a fresh login rate-limit bucket per request by varying
+	// it. Set this only for proxies you actually operate. See
+	// internal/api's clientIP for how the chain is then walked.
+	//
+	// Leaving it unset behind a reverse proxy is safe but blunt: every
+	// request then carries the proxy's own address, so all users share one
+	// rate-limit bucket and one attacker's failures lock everyone out.
+	TrustedProxies []string `yaml:"trustedProxies"`
+	// ClientIPHeader is which forwarding header to read, honoured only for
+	// peers matching TrustedProxies. Defaults to X-Forwarded-For, which
+	// nginx, Caddy, Traefik, HAProxy, Cloudflare and the cloud load
+	// balancers all set. Point it elsewhere (X-Real-IP, CF-Connecting-IP)
+	// for a proxy that doesn't -- single-value headers work unchanged,
+	// they're just a one-element chain.
+	ClientIPHeader string `yaml:"clientIpHeader"`
+}
+
+// privateProxyRanges backs the "private" shorthand in
+// Listen.TrustedProxies: loopback, RFC1918, CGNAT, link-local, and the
+// IPv6 equivalents. This is the range a reverse proxy sharing a LAN or a
+// container network with mikroview lands in.
+var privateProxyRanges = []string{
+	"127.0.0.0/8", "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16",
+	"100.64.0.0/10", "169.254.0.0/16",
+	"::1/128", "fc00::/7", "fe80::/10",
+}
+
+// ParseTrustedProxies turns Listen.TrustedProxies into prefixes for
+// internal/api. A bare address becomes a single-host prefix, so
+// "10.0.0.5" and "10.0.0.5/32" mean the same thing.
+func ParseTrustedProxies(entries []string) ([]netip.Prefix, error) {
+	var out []netip.Prefix
+	for _, raw := range entries {
+		entry := strings.TrimSpace(raw)
+		if entry == "" {
+			continue
+		}
+		if strings.EqualFold(entry, "private") {
+			for _, r := range privateProxyRanges {
+				p, err := netip.ParsePrefix(r)
+				if err != nil {
+					return nil, fmt.Errorf("trusted proxy range %q: %w", r, err)
+				}
+				out = append(out, p)
+			}
+			continue
+		}
+		if p, err := netip.ParsePrefix(entry); err == nil {
+			out = append(out, p.Masked())
+			continue
+		}
+		addr, err := netip.ParseAddr(entry)
+		if err != nil {
+			return nil, fmt.Errorf("trusted proxy %q is neither an IP address nor a CIDR", entry)
+		}
+		addr = addr.Unmap()
+		out = append(out, netip.PrefixFrom(addr, addr.BitLen()))
+	}
+	return out, nil
 }
 
 type Store struct {
@@ -264,6 +332,37 @@ type OIDC struct {
 	// Scopes defaults to {openid, profile, email} if empty -- see
 	// internal/oidc.New.
 	Scopes []string `yaml:"scopes"`
+
+	// AllowedGroups/GroupsClaim/AllowedEmails/AllowedEmailDomains/
+	// RequiredClaims restrict *which* accounts at the issuer may sign in.
+	// See internal/oidc.Policy for the full semantics; in short, leaving
+	// all of them empty permits anyone the issuer vouches for, and each
+	// one that is set adds a condition that must hold.
+	//
+	// For a self-hosted issuer (Authentik, Keycloak, Zitadel) empty is
+	// the right answer: the issuer URL already restricts login to
+	// accounts in a directory you run, and delegating that decision to
+	// the IdP's own ACLs is the point of SSO. Set these when you want to
+	// scope access more tightly than "everyone in my directory".
+	//
+	// For a multi-tenant issuer they are mandatory, and mikroview refuses
+	// to enable SSO without them -- see oidc.IsMultiTenantIssuer.
+	// Every Google account on earth validates against
+	// accounts.google.com, so with no restriction the first stranger to
+	// reach the login page becomes the admin.
+	//
+	// Google Workspace, one organisation:
+	//   requiredClaims: {hd: ["example.com"]}
+	// Microsoft Entra, one tenant:
+	//   requiredClaims: {tid: ["00000000-0000-0000-0000-000000000000"]}
+	// Authentik/Keycloak group:
+	//   allowedGroups: ["mikroview-admins"]
+	AllowedGroups []string `yaml:"allowedGroups"`
+	// GroupsClaim defaults to "groups". Azure commonly needs "roles".
+	GroupsClaim         string              `yaml:"groupsClaim"`
+	AllowedEmails       []string            `yaml:"allowedEmails"`
+	AllowedEmailDomains []string            `yaml:"allowedEmailDomains"`
+	RequiredClaims      map[string][]string `yaml:"requiredClaims"`
 }
 
 // DetectorScope is DetectorSettings' host/port/rule/classification
@@ -619,6 +718,12 @@ func applyEnv(cfg *Config) {
 	}
 	if v := os.Getenv("MIKROVIEW_LISTEN_HTTP_REDIRECT"); v != "" {
 		cfg.Listen.HTTPRedirect = v
+	}
+	if v := os.Getenv("MIKROVIEW_TRUSTED_PROXIES"); v != "" {
+		cfg.Listen.TrustedProxies = parseStringList(v)
+	}
+	if v := os.Getenv("MIKROVIEW_CLIENT_IP_HEADER"); v != "" {
+		cfg.Listen.ClientIPHeader = v
 	}
 	if v := os.Getenv("MIKROVIEW_STORE_RETENTION"); v != "" {
 		if d, err := time.ParseDuration(v); err == nil {
