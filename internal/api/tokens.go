@@ -14,16 +14,27 @@ import (
 // and internal/entities' admin-only CRUD.
 type createTokenRequest struct {
 	Name string `json:"name"`
+	// Kind is optional, and omitting it means a read-only API token.
+	// The default is the less privileged of the two: an ingest token
+	// has to be asked for by name, so a caller can never end up with
+	// one by leaving a field out.
+	Kind string `json:"kind"`
+	// Device is required for kind "ingest" and rejected otherwise --
+	// see auth.Token.Device for why an unscoped ingest token is not an
+	// option.
+	Device string `json:"device"`
 }
 
 // tokenResponse mirrors auth.Token but never carries HashedValue --
 // used for both the list endpoint and (with Value additionally set) the
 // one-time creation response.
 type tokenResponse struct {
-	ID         string    `json:"id"`
-	Name       string    `json:"name"`
-	CreatedAt  time.Time `json:"createdAt"`
-	LastUsedAt time.Time `json:"lastUsedAt,omitzero"`
+	ID         string         `json:"id"`
+	Name       string         `json:"name"`
+	Kind       auth.TokenKind `json:"kind"`
+	Device     string         `json:"device,omitempty"`
+	CreatedAt  time.Time      `json:"createdAt"`
+	LastUsedAt time.Time      `json:"lastUsedAt,omitzero"`
 	// Value is the raw bearer token -- set only by handleTokensCreate's
 	// response, never by handleTokensList. This is the one and only time
 	// it is ever transmitted; it cannot be recovered afterward, only
@@ -52,21 +63,44 @@ func (s *Server) handleTokensCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	raw, tok, err := s.Tokens.Create(req.Name, userFromContext(r), time.Now())
+	kind := auth.TokenKind(req.Kind)
+	if req.Kind == "" {
+		kind = auth.TokenKindAPI
+	}
+
+	raw, tok, err := s.Tokens.Create(req.Name, kind, req.Device, userFromContext(r), time.Now())
 	if err != nil {
 		status := http.StatusInternalServerError
-		if err == auth.ErrTokenNotPersisted {
+		switch err {
+		case auth.ErrTokenNotPersisted:
 			status = http.StatusServiceUnavailable
+		case auth.ErrTokenKindInvalid, auth.ErrTokenDeviceRequired, auth.ErrTokenDeviceNotAllowed:
+			// The caller's request is wrong, not the deployment's state,
+			// and the message is safe to hand back: it names a field, not
+			// anything about existing tokens.
+			authLog.Warn(err.Error())
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
 		}
 		authLog.Warn(err.Error())
 		http.Error(w, "unable to create token", status)
 		return
 	}
 
-	s.Audit.Record(auditActor(r), "token.create", tok.Name, "id="+tok.ID)
+	// The audit entry records kind and device because "an ingest token
+	// was issued for router X" is a materially different event from "a
+	// read-everything token was issued", and an audit log that renders
+	// them identically cannot answer the question afterwards.
+	detail := "id=" + tok.ID + " kind=" + string(tok.Kind)
+	if tok.Device != "" {
+		detail += " device=" + tok.Device
+	}
+	s.Audit.Record(auditActor(r), "token.create", tok.Name, detail)
 	writeJSON(w, http.StatusCreated, tokenResponse{
 		ID:        tok.ID,
 		Name:      tok.Name,
+		Kind:      tok.Kind,
+		Device:    tok.Device,
 		CreatedAt: tok.CreatedAt,
 		Value:     raw,
 	})
@@ -86,6 +120,8 @@ func (s *Server) handleTokensList(w http.ResponseWriter, r *http.Request) {
 		out = append(out, tokenResponse{
 			ID:         t.ID,
 			Name:       t.Name,
+			Kind:       t.Kind,
+			Device:     t.Device,
 			CreatedAt:  t.CreatedAt,
 			LastUsedAt: t.LastUsedAt,
 		})
