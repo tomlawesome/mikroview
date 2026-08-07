@@ -1102,7 +1102,7 @@ func runTransferAdmin(args []string) int {
 
 	if err := printRecoveryKeys(fresh, hasFlag(args, "--i-will-capture-this")); err != nil {
 		logger.Warn(fmt.Sprintf("admin transferred from %s to %s, but the new keys could not be shown: %v -- "+
-			"your previous recovery keys remain valid", from.Username, to.Username, err))
+			"your previous recovery keys remain valid", logging.Printable(from.Username), logging.Printable(to.Username), err))
 		return 1
 	}
 	if !confirmSaved() {
@@ -1110,15 +1110,15 @@ func runTransferAdmin(args []string) int {
 		// the previous keys valid. Better than rotating into a set the
 		// operator never captured.
 		logger.Warn(fmt.Sprintf("admin transferred from %s to %s, but the new keys were not confirmed -- "+
-			"your previous recovery keys remain valid", from.Username, to.Username))
+			"your previous recovery keys remain valid", logging.Printable(from.Username), logging.Printable(to.Username)))
 		return 1
 	}
 	if err := recovery.Commit(); err != nil {
 		logger.Warn(fmt.Sprintf("admin transferred from %s to %s, but storing the new keys failed: %v -- "+
-			"your previous recovery keys remain valid", from.Username, to.Username, err))
+			"your previous recovery keys remain valid", logging.Printable(from.Username), logging.Printable(to.Username), err))
 		return 1
 	}
-	logger.Info(fmt.Sprintf("admin transferred from %s to %s", from.Username, to.Username))
+	logger.Info(fmt.Sprintf("admin transferred from %s to %s", logging.Printable(from.Username), logging.Printable(to.Username)))
 	return 0
 }
 
@@ -1186,7 +1186,11 @@ func runListUsers() int {
 		return 0
 	}
 	for _, u := range users {
-		fmt.Printf("%s\t%s\n", u.Username, u.Role)
+		// Sanitised on the way out, not trusted from the store: an
+		// account written before ValidateUsername existed, or one
+		// provisioned from an identity provider's claim, can carry an
+		// ANSI escape that would rewrite this table as it prints.
+		fmt.Printf("%s\t%s\n", logging.Printable(u.Username), u.Role)
 	}
 	return 0
 }
@@ -1286,7 +1290,7 @@ func runRecoverAdminAccount(args []string) int {
 	if !admin.LocalPassword() {
 		logger.Error(fmt.Sprintf("%q signs in through your identity provider and has no local password "+
 			"-- mikroview cannot recover it. Reset it at your identity provider, or use "+
-			"-transfer-admin to move admin to an account that does have one", admin.Username))
+			"-transfer-admin to move admin to an account that does have one", logging.Printable(admin.Username)))
 		return 1
 	}
 

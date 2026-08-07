@@ -35,8 +35,36 @@ const COLUMNS: (keyof FirewallEvent)[] = [
   'raw',
 ]
 
+// Characters that make a spreadsheet treat a cell as a formula rather
+// than as text. Tab and CR are included because Excel strips leading
+// whitespace before deciding, so "\t=1+1" is still a formula.
+const FORMULA_LEADERS = ['=', '+', '-', '@', '\t', '\r']
+
+// neutraliseFormula defuses CSV/DDE formula injection (CWE-1236).
+//
+// Almost every field here originates outside mikroview -- `raw` is the
+// syslog line verbatim, `ruleLabel` comes from the router's own
+// configuration, and the hostname columns come from naming/DNS. Anyone
+// who can influence one of those can put `=cmd|'/C calc'!A0` or
+// `=IMPORTXML(...)` in a cell, and the spreadsheet the operator opens
+// the export in will execute it -- running a command, or quietly
+// exfiltrating the surrounding rows to a URL of their choosing.
+//
+// CSV quoting does NOT prevent this. The spreadsheet unquotes first and
+// decides afterwards, so `"=1+1"` is still a formula. The neutralising
+// step has to be a prefix that survives unquoting: a leading apostrophe,
+// which Excel, LibreOffice and Sheets all read as "the rest of this cell
+// is literal text" and don't display.
+//
+// This is the same defect as CVE-2025-62417 (Bagisto), CVE-2025-55745
+// (UnoPim) and CVE-2026-39424 (MaxKB), all export features that quoted
+// correctly and neutralised nothing.
+function neutraliseFormula(s: string): string {
+  return s.length > 0 && FORMULA_LEADERS.includes(s[0]) ? `'${s}` : s
+}
+
 function csvEscape(value: unknown): string {
-  const s = value === undefined || value === null ? '' : String(value)
+  const s = neutraliseFormula(value === undefined || value === null ? '' : String(value))
   return /["\n,]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s
 }
 

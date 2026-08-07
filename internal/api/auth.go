@@ -314,6 +314,8 @@ var authErrorMessages = map[error]string{
 	auth.ErrNotPersisted:       "this deployment has no persistent storage configured -- an administrator needs to set one up before an account can be created",
 	auth.ErrUsernameTaken:      "that username is already taken",
 	auth.ErrPasswordTooShort:   auth.ErrPasswordTooShort.Error(), // already phrased for an end user
+	auth.ErrUsernameInvalid:    "that username contains characters that aren't allowed -- no control characters, and no leading or trailing spaces",
+	auth.ErrUsernameLength:     auth.ErrUsernameLength.Error(), // already phrased for an end user
 }
 
 // writeAuthError translates err into a safe, user-facing message via
@@ -368,7 +370,7 @@ func (s *Server) handleAuthRegister(w http.ResponseWriter, r *http.Request) {
 			status = http.StatusConflict
 		case auth.ErrNotPersisted:
 			status = http.StatusServiceUnavailable
-		case auth.ErrPasswordTooShort:
+		case auth.ErrPasswordTooShort, auth.ErrUsernameInvalid, auth.ErrUsernameLength:
 			status = http.StatusBadRequest
 		}
 		writeAuthError(w, err, status)
@@ -489,7 +491,7 @@ func (s *Server) handleAuthCreateUser(w http.ResponseWriter, r *http.Request) {
 		switch err {
 		case auth.ErrUsernameTaken:
 			status = http.StatusConflict
-		case auth.ErrPasswordTooShort, auth.ErrSingleAdmin:
+		case auth.ErrPasswordTooShort, auth.ErrSingleAdmin, auth.ErrUsernameInvalid, auth.ErrUsernameLength:
 			status = http.StatusBadRequest
 		}
 		writeAuthError(w, err, status)

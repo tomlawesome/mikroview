@@ -658,6 +658,14 @@ func (s *Store) Admin() *User {
 // is one wasted hash on the losing side of a race, which is the right
 // trade.
 func (s *Store) createLocked(username, password string, role Role, now time.Time, guard func(*Store) error) (*User, error) {
+	// Validated here rather than in Register/CreateUser separately: this
+	// is the single funnel every locally-created account passes through,
+	// so nothing can be added later that skips it. (OIDC provisioning
+	// does not come through here -- see sanitiseUsernameHint for why it
+	// falls back instead of refusing.)
+	if err := ValidateUsername(username); err != nil {
+		return nil, err
+	}
 	if len(password) < minPasswordLength {
 		return nil, ErrPasswordTooShort
 	}
@@ -812,7 +820,11 @@ func (s *Store) FindOrCreateOIDCUser(issuer, subject, usernameHint string, now t
 // (issuer, subject) -- see FindOrCreateOIDCUser's doc comment. Callers
 // must hold s.mu.
 func (s *Store) uniqueUsernameLocked(hint, issuer, subject string) string {
-	hint = strings.TrimSpace(hint)
+	// The hint is whatever the identity provider put in
+	// preferred_username or email -- text mikroview does not control.
+	// An unusable one is dropped, not rejected, so the person still gets
+	// a stable account under the generated name below.
+	hint = sanitiseUsernameHint(hint)
 	if hint != "" {
 		if _, taken := s.byName[strings.ToLower(hint)]; !taken {
 			return hint

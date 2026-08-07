@@ -21,6 +21,8 @@ import (
 	"runtime/debug"
 	"strings"
 	"sync"
+	"unicode"
+	"unicode/utf8"
 
 	"golang.org/x/term"
 )
@@ -229,4 +231,39 @@ func formatLine(ts string, level slog.Level, component, message string, color bo
 		ansiDim, ansiReset,
 		message,
 	)
+}
+
+// Printable renders s safe to write to an operator's terminal.
+//
+// Needed because the CLI commands print stored values -- account names
+// in -list-users, most obviously -- and a stored value can predate the
+// validation that now rejects control characters (see
+// auth.ValidateUsername), or arrive from an identity provider that was
+// never under this deployment's control.
+//
+// An ANSI escape sequence written to a terminal is not text, it is an
+// instruction: it can move the cursor, erase what was already printed,
+// recolour a line, or on some terminals stuff the input buffer. That is
+// enough to make `mikroview -list-users` show a different set of
+// accounts than the one it actually read -- which is the exact defect in
+// CVE-2025-55754 (Tomcat) and CVE-2025-48432 (Django).
+//
+// Control characters and Unicode format characters (the bidi overrides
+// that let text render in an order other than the one it is stored in)
+// are replaced with U+FFFD, so their presence is visible rather than
+// silently dropped.
+func Printable(s string) string {
+	if !strings.ContainsFunc(s, unsafeForTerminal) {
+		return s
+	}
+	return strings.Map(func(r rune) rune {
+		if unsafeForTerminal(r) {
+			return '�'
+		}
+		return r
+	}, s)
+}
+
+func unsafeForTerminal(r rune) bool {
+	return unicode.IsControl(r) || unicode.Is(unicode.Cf, r) || r == utf8.RuneError
 }
