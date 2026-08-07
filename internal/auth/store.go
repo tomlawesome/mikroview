@@ -17,19 +17,19 @@
 package auth
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
-	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/tomlawesome/mikroview/internal/logging"
+	"github.com/tomlawesome/mikroview/internal/persist"
 )
 
 var persistLog = logging.New("auth")
@@ -240,13 +240,15 @@ func (f *storeFile) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
-// Store persists user accounts to a JSON file. Unlike internal/flags'
-// Store, persistence is not optional: an empty path leaves Store usable
-// (so mikroview still boots fine with auth unconfigured) but Register/
-// CreateUser refuse to add a user in that state -- see ErrNotPersisted.
+// Store persists user accounts through a persist.Backend -- a JSON file
+// by default, or Postgres when configured (issue #131). Unlike
+// internal/flags' Store, persistence is not optional: a nil backend
+// leaves Store usable (so mikroview still boots fine with auth
+// unconfigured) but Register/CreateUser refuse to add a user in that
+// state -- see ErrNotPersisted.
 type Store struct {
 	mu        sync.RWMutex
-	path      string
+	backend   persist.Backend
 	byID      map[string]*User
 	byName    map[string]string  // lowercased username -> ID
 	oidcIndex map[oidcKey]string // (issuer, subject) -> ID, see ByOIDCIdentity
@@ -256,128 +258,136 @@ type Store struct {
 	// still pending" (see internal/api's requireAuth for how the two
 	// states are gated differently).
 	disabled bool
-	// mtime tracks the store file's modification time as of the last
+	// version is the backend's token for the document as of the last
 	// load, so a running server can pick up a change made by a separate
 	// process -- namely the CLI recovery tools (`-recover-admin-account`,
 	// `-enable-auth-setup`), which each open their own independent
-	// Store and write to the same file. Without this, a password reset
+	// Store against the same backend. Without this, a password reset
 	// (or re-arming the setup flow) would silently have no effect on an
 	// already-running server until it restarts, defeating the point of
 	// a recovery tool that shouldn't require one.
-	mtime time.Time
+	//
+	// It is also what makes a write conditional: see persistLocked.
+	version int64
 }
 
+// Open returns a Store persisting to a JSON file at path. An empty path
+// gives a usable but unpersisted store -- see Store's doc comment.
 func Open(path string) (*Store, error) {
-	s := &Store{path: path, byID: make(map[string]*User), byName: make(map[string]string), oidcIndex: make(map[oidcKey]string)}
 	if path == "" {
+		return OpenWithBackend(nil)
+	}
+	return OpenWithBackend(persist.NewFileBackend(path))
+}
+
+// OpenWithBackend is Open against any persist.Backend -- the entry point
+// main.go uses when Postgres is configured (issue #131). A nil backend
+// is the unpersisted case.
+//
+// A backend that exists but cannot be read, or holds a document that
+// cannot be parsed, is a hard error. That distinction is load-bearing:
+// treating an unreadable accounts store as an absent one turns a
+// corrupted file into a fresh install, silently reopening registration
+// to whoever loads the page next. main.go refuses to start on it.
+func OpenWithBackend(b persist.Backend) (*Store, error) {
+	s := &Store{
+		backend:   b,
+		byID:      make(map[string]*User),
+		byName:    make(map[string]string),
+		oidcIndex: make(map[oidcKey]string),
+	}
+	if b == nil {
 		return s, nil
 	}
 
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		return s, err
-	}
-
-	info, err := os.Stat(path)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return s, nil
-		}
-		return s, err
-	}
-
-	data, err := os.ReadFile(path)
+	snap, err := b.Load(context.Background())
 	if err != nil {
 		return s, err
+	}
+	if !snap.Exists {
+		return s, nil // never written: a real first run
 	}
 
 	var file storeFile
-	if err := json.Unmarshal(data, &file); err != nil {
+	if err := json.Unmarshal(snap.Payload, &file); err != nil {
 		return s, err
 	}
+	s.applyLoaded(file, snap.Version)
+	return s, nil
+}
+
+// applyLoaded replaces the in-memory index from a decoded document.
+// Shared by OpenWithBackend and reloadIfStale so the two can't diverge
+// on what loading means -- the migration below in particular must run on
+// both paths.
+func (s *Store) applyLoaded(file storeFile, version int64) {
+	s.byID = make(map[string]*User, len(file.Users))
+	s.byName = make(map[string]string, len(file.Users))
+	s.oidcIndex = make(map[oidcKey]string, len(file.Users))
 	for _, u := range file.Users {
 		// A JSON array containing `null` unmarshals successfully into a
-		// nil *User -- valid JSON, so the err check above doesn't catch
-		// it. Skipping it here is what actually delivers this store's
-		// "a corrupted file shouldn't block startup" intent (see
-		// SECURITY.md); relying on the unmarshal error alone doesn't
-		// cover every way a file can be malformed.
+		// nil *User -- valid JSON, so the error check above doesn't
+		// catch it.
 		if u == nil {
 			continue
 		}
 		migrateHasLocalPassword(u)
 		s.byID[u.ID] = u
 		s.byName[strings.ToLower(u.Username)] = u.ID
-		if u.OIDCIssuer != "" {
+		if u.OIDCIssuer != "" || u.OIDCSubject != "" {
 			s.oidcIndex[oidcKey{issuer: u.OIDCIssuer, subject: u.OIDCSubject}] = u.ID
 		}
 	}
 	s.disabled = file.Disabled
-	s.mtime = info.ModTime()
-	return s, nil
+	s.version = version
 }
 
-// reloadIfStale re-reads the store file if its modification time has
-// moved on since the last load -- see Store.mtime's doc comment. Called
-// at the top of every read path (Authenticate, Get, ByUsername, List);
-// write paths (Register/CreateUser/SetPassword) don't need it since they
-// persist their own change immediately after.
+// reloadIfStale re-reads the document if the backend has moved on since
+// this Store last loaded it.
+//
+// This is what lets a running server pick up a change made by a separate
+// process -- the CLI recovery commands each open their own Store against
+// the same backend. Without it, a password reset would silently have no
+// effect on a live server until restart, defeating the point of a
+// recovery tool that shouldn't require one.
+//
+// Every failure here is deliberately silent and non-fatal: it keeps
+// serving whatever is already in memory. A transient backend problem
+// must not take authentication down on a server that is running fine.
 func (s *Store) reloadIfStale() {
-	if s.path == "" {
+	if s.backend == nil {
 		return
 	}
-	info, err := os.Stat(s.path)
-	if err != nil {
-		return // missing/unreadable -- keep serving whatever's already in memory
+	snap, err := s.backend.Load(context.Background())
+	if err != nil || !snap.Exists {
+		return
 	}
 
 	s.mu.RLock()
-	stale := info.ModTime().After(s.mtime)
+	stale := snap.Version != s.version
 	s.mu.RUnlock()
 	if !stale {
 		return
 	}
 
-	data, err := os.ReadFile(s.path)
-	if err != nil {
-		return
-	}
 	var file storeFile
-	if err := json.Unmarshal(data, &file); err != nil {
+	if err := json.Unmarshal(snap.Payload, &file); err != nil {
 		return
 	}
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	// Re-check under the write lock -- another goroutine may have
-	// already reloaded (or this store's own persistLocked may have run)
-	// while this call was reading the file without holding the lock.
-	if !info.ModTime().After(s.mtime) {
+	// Re-checked under the write lock: another goroutine may have
+	// reloaded (or this store's own persistLocked may have run) while
+	// this call was reading without holding it.
+	if snap.Version == s.version {
 		return
 	}
-	byID := make(map[string]*User, len(file.Users))
-	byName := make(map[string]string, len(file.Users))
-	oidcIndex := make(map[oidcKey]string, len(file.Users))
-	for _, u := range file.Users {
-		if u == nil { // see Open's identical guard for why this is needed
-			continue
-		}
-		migrateHasLocalPassword(u) // second load path -- see Open's call
-		byID[u.ID] = u
-		byName[strings.ToLower(u.Username)] = u.ID
-		if u.OIDCIssuer != "" {
-			oidcIndex[oidcKey{issuer: u.OIDCIssuer, subject: u.OIDCSubject}] = u.ID
-		}
-	}
-	s.byID = byID
-	s.byName = byName
-	s.oidcIndex = oidcIndex
-	s.disabled = file.Disabled
-	s.mtime = info.ModTime()
+	s.applyLoaded(file, snap.Version)
 }
 
-// Persisted reports whether this Store can actually survive a restart.
 func (s *Store) Persisted() bool {
-	return s.path != ""
+	return s.backend != nil
 }
 
 // Count returns the number of user accounts. 0 is what gates both
@@ -1039,7 +1049,7 @@ func (s *Store) List() []User {
 }
 
 func (s *Store) persistLocked() {
-	if s.path == "" {
+	if s.backend == nil {
 		return
 	}
 	list := make([]*User, 0, len(s.byID))
@@ -1050,27 +1060,26 @@ func (s *Store) persistLocked() {
 
 	data, err := json.MarshalIndent(storeFile{Disabled: s.disabled, Users: list}, "", "  ")
 	if err != nil {
-		persistLog.Error(fmt.Sprintf("encoding %s for persistence failed: %v -- this change exists only in memory and will be lost on restart", s.path, err))
-		return
-	}
-	tmp := s.path + ".tmp"
-	if err := os.WriteFile(tmp, data, 0o600); err != nil {
-		persistLog.Error(fmt.Sprintf("writing %s failed: %v -- this change exists only in memory and will be lost on restart", tmp, err))
-		return
-	}
-	// Same filesystem, so the rename itself is atomic -- but it can
-	// still fail (read-only remount, permissions change), and a
-	// silent failure here means the caller believes a write landed
-	// when it did not.
-	if err := os.Rename(tmp, s.path); err != nil {
-		persistLog.Error(fmt.Sprintf("replacing %s failed: %v -- this change exists only in memory and will be lost on restart", s.path, err))
+		persistLog.Error(fmt.Sprintf("encoding accounts for persistence failed: %v -- "+
+			"this change exists only in memory and will be lost on restart", err))
 		return
 	}
 
-	// Keep mtime in sync with this store's own write, so reloadIfStale
-	// doesn't immediately re-read the file it just wrote on the next
-	// call -- harmless if it did (idempotent), but wasted work.
-	if info, err := os.Stat(s.path); err == nil {
-		s.mtime = info.ModTime()
+	version, conflicted, err := persist.SaveWithRetry(context.Background(), s.backend, data, s.version)
+	if err != nil {
+		persistLog.Error(fmt.Sprintf("writing accounts to %s failed: %v -- "+
+			"this change exists only in memory and will be lost on restart",
+			s.backend.Describe(), err))
+		return
 	}
+	if conflicted {
+		// Another process wrote while this change was pending -- almost
+		// always a CLI recovery command against a live server. This
+		// change went on top; a concurrent change to a *different*
+		// account may have been lost. Said out loud rather than implied,
+		// because a whole-document store cannot merge them.
+		persistLog.Warn(fmt.Sprintf("accounts store was modified by another process while this change "+
+			"was pending (%s); this change was applied on top", s.backend.Describe()))
+	}
+	s.version = version
 }

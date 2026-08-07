@@ -16,17 +16,17 @@
 package entities
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
-	"path/filepath"
 	"sort"
 	"sync"
 	"unicode"
 	"unicode/utf8"
 
 	"github.com/tomlawesome/mikroview/internal/logging"
+	"github.com/tomlawesome/mikroview/internal/persist"
 )
 
 var persistLog = logging.New("entities")
@@ -120,9 +120,12 @@ func (f *storeFile) UnmarshalJSON(data []byte) error {
 // Store holds every known entity, keyed by (Type, Key). The zero value
 // is not usable; construct with Open.
 type Store struct {
-	mu   sync.RWMutex
-	path string
-	byID map[string]*Entity
+	mu      sync.RWMutex
+	backend persist.Backend
+	// version is the backend's token for the document as of the last
+	// load or save -- see persist.SaveWithRetry.
+	version int64
+	byID    map[string]*Entity
 	// seeded records whether Seed has already run against this store,
 	// persisted so the decision survives a restart -- see storeFile's
 	// doc comment and Seed's for why this can't just be inferred from
@@ -139,22 +142,25 @@ type Store struct {
 // the returned Store is always safe to use unconditionally; a non-nil
 // error is only ever informational, for the caller to log.
 func Open(path string) (*Store, error) {
-	s := &Store{path: path, byID: make(map[string]*Entity)}
 	if path == "" {
+		return OpenWithBackend(nil)
+	}
+	return OpenWithBackend(persist.NewFileBackend(path))
+}
+
+// OpenWithBackend is Open against any persist.Backend -- a JSON file by
+// default, or Postgres when configured (issue #131).
+func OpenWithBackend(b persist.Backend) (*Store, error) {
+	s := &Store{backend: b, byID: make(map[string]*Entity)}
+
+	data, version, err := persist.LoadDocument(context.Background(), b)
+	if err != nil {
+		return s, err
+	}
+	if data == nil {
 		return s, nil
 	}
-
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		return s, err
-	}
-
-	data, err := os.ReadFile(path)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return s, nil
-		}
-		return s, err
-	}
+	s.version = version
 
 	var file storeFile
 	if err := json.Unmarshal(data, &file); err != nil {
@@ -365,7 +371,7 @@ func (s *Store) Seed(ruleNames, hostNames map[string]string) int {
 // either way, so a transient disk issue degrades to "won't survive a
 // restart right now" rather than breaking live use.
 func (s *Store) persistLocked() {
-	if s.path == "" {
+	if s.backend == nil {
 		return
 	}
 	list := s.listLocked()
@@ -375,22 +381,20 @@ func (s *Store) persistLocked() {
 	}
 	data, err := json.MarshalIndent(storeFile{Seeded: s.seeded, Entities: ptrs}, "", "  ")
 	if err != nil {
-		persistLog.Error(fmt.Sprintf("encoding %s for persistence failed: %v -- this change exists only in memory and will be lost on restart", s.path, err))
+		persistLog.Error(fmt.Sprintf("encoding entities for persistence failed: %v -- this change exists only in memory and will be lost on restart", err))
 		return
 	}
-	tmp := s.path + ".tmp"
-	if err := os.WriteFile(tmp, data, 0o600); err != nil {
-		persistLog.Error(fmt.Sprintf("writing %s failed: %v -- this change exists only in memory and will be lost on restart", tmp, err))
+	version, conflicted, err := persist.SaveWithRetry(context.Background(), s.backend, data, s.version)
+	if err != nil {
+		persistLog.Error(fmt.Sprintf("writing entities to %s failed: %v -- this change exists only in memory and will be lost on restart",
+			s.backend.Describe(), err))
 		return
 	}
-	// Same filesystem, so the rename itself is atomic -- but it can
-	// still fail (read-only remount, permissions change), and a
-	// silent failure here means the caller believes a write landed
-	// when it did not.
-	if err := os.Rename(tmp, s.path); err != nil {
-		persistLog.Error(fmt.Sprintf("replacing %s failed: %v -- this change exists only in memory and will be lost on restart", s.path, err))
-		return
+	if conflicted {
+		persistLog.Warn(fmt.Sprintf("entity store was modified by another process while this change was pending (%s); this change was applied on top",
+			s.backend.Describe()))
 	}
+	s.version = version
 }
 
 // maxEntityTextLength bounds a key, label or tag. Generous next to any

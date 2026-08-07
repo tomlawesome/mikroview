@@ -3,16 +3,16 @@
 package device
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
-	"os"
-	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/tomlawesome/mikroview/internal/logging"
+	"github.com/tomlawesome/mikroview/internal/persist"
 )
 
 var persistLog = logging.New("device-mac")
@@ -45,9 +45,12 @@ var maxMACRegistryEntries = 50_000
 // rest of mikroview uses (see SECURITY.md's "Data handling" section).
 // The zero value is not usable; construct with OpenMACRegistry.
 type MACRegistry struct {
-	mu    sync.RWMutex
-	path  string
-	byMAC map[string]*MACEntry
+	mu      sync.RWMutex
+	backend persist.Backend
+	// version is the backend's token for the document as of the last
+	// load or save -- see persist.SaveWithRetry.
+	version int64
+	byMAC   map[string]*MACEntry
 
 	// lastPersist backs persistLocked's rate limiting -- see
 	// macRegistryPersistMinInterval.
@@ -74,22 +77,25 @@ var macRegistryPersistMinInterval = time.Second
 // way the returned *MACRegistry is always safe to use unconditionally;
 // a non-nil error is only ever informational, for the caller to log.
 func OpenMACRegistry(path string) (*MACRegistry, error) {
-	r := &MACRegistry{path: path, byMAC: make(map[string]*MACEntry)}
 	if path == "" {
+		return OpenMACRegistryWithBackend(nil)
+	}
+	return OpenMACRegistryWithBackend(persist.NewFileBackend(path))
+}
+
+// OpenMACRegistryWithBackend is OpenMACRegistry against any persist.Backend
+// -- a JSON file by default, or Postgres when configured (issue #131).
+func OpenMACRegistryWithBackend(b persist.Backend) (*MACRegistry, error) {
+	r := &MACRegistry{backend: b, byMAC: make(map[string]*MACEntry)}
+
+	data, version, err := persist.LoadDocument(context.Background(), b)
+	if err != nil {
+		return r, err
+	}
+	if data == nil {
 		return r, nil
 	}
-
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		return r, err
-	}
-
-	data, err := os.ReadFile(path)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return r, nil
-		}
-		return r, err
-	}
+	r.version = version
 
 	var list []*MACEntry
 	if err := json.Unmarshal(data, &list); err != nil {
@@ -198,7 +204,7 @@ func (r *MACRegistry) pruneLocked() {
 // degrades to "won't survive a restart right now" rather than breaking
 // live detection.
 func (r *MACRegistry) persistLocked() {
-	if r.path == "" {
+	if r.backend == nil {
 		return
 	}
 	if now := time.Now(); now.Sub(r.lastPersist) < macRegistryPersistMinInterval {
@@ -208,20 +214,16 @@ func (r *MACRegistry) persistLocked() {
 	}
 	data, err := json.MarshalIndent(r.listLocked(), "", "  ")
 	if err != nil {
-		persistLog.Error(fmt.Sprintf("encoding %s for persistence failed: %v -- this change exists only in memory and will be lost on restart", r.path, err))
+		persistLog.Error(fmt.Sprintf("encoding MAC registry for persistence failed: %v -- this change exists only in memory and will be lost on restart", err))
 		return
 	}
-	tmp := r.path + ".tmp"
-	if err := os.WriteFile(tmp, data, 0o600); err != nil {
-		persistLog.Error(fmt.Sprintf("writing %s failed: %v -- this change exists only in memory and will be lost on restart", tmp, err))
+	version, conflicted, err := persist.SaveWithRetry(context.Background(), r.backend, data, r.version)
+	if err != nil {
+		persistLog.Error(fmt.Sprintf("writing MAC registry to %s failed: %v -- this change exists only in memory and will be lost on restart", r.backend.Describe(), err))
 		return
 	}
-	// Same filesystem, so the rename itself is atomic -- but it can
-	// still fail (read-only remount, permissions change), and a
-	// silent failure here means the caller believes a write landed
-	// when it did not.
-	if err := os.Rename(tmp, r.path); err != nil {
-		persistLog.Error(fmt.Sprintf("replacing %s failed: %v -- this change exists only in memory and will be lost on restart", r.path, err))
-		return
+	if conflicted {
+		persistLog.Warn(fmt.Sprintf("the MAC registry store was modified by another process while this change was pending (%s); this change was applied on top", r.backend.Describe()))
 	}
+	r.version = version
 }

@@ -33,16 +33,27 @@ type forbiddenSink struct {
 
 var forbiddenGoSinks = []forbiddenSink{
 	{`"os/exec"`, "a shell is a command-injection sink; nothing here should be shelling out"},
-	{`"database/sql"`, "the first SQL sink. Parameterise everything and re-run the injection audit before this lands (see issue #131)"},
+	{`"database/sql"`, "a SQL sink. Parameterise everything and re-run the injection audit before this lands"},
+	{`jackc/pgx`, "a SQL sink. Only internal/persist talks to the database; anything else reaching for a driver is building queries somewhere it shouldn't"},
 	{`"text/template"`, "text/template does not escape for any context; use html/template if a template is ever needed for HTML"},
 	{`unsafe.Pointer`, "bypasses the type system, including the bounds checks that make the parser safe on hostile input"},
 	{`exec.Command`, "a shell is a command-injection sink"},
 }
 
 // allowed lists paths exempt from a specific sink, with the reason.
-// Empty today -- kept so the exemption has an obvious home and shows up
-// in review when it gains its first entry.
-var allowed = map[string][]string{}
+//
+// An exemption is a decision, not an escape hatch: each one says why the
+// sink is safe *there*, so the next person can check whether that
+// reasoning still holds rather than assuming someone thought about it.
+var allowed = map[string][]string{
+	// internal/persist is the only package that talks to Postgres, by
+	// design (#131). Every statement in it is a compile-time constant
+	// with $n bound parameters -- nothing is concatenated, formatted, or
+	// built from caller input. Re-audited when it landed; see
+	// docs/decisions/postgres-backend.md §7 and
+	// docs/decisions/injection-audit.md.
+	"internal/persist/postgres.go": {`jackc/pgx`},
+}
 
 func TestNoForbiddenGoInjectionSinks(t *testing.T) {
 	root, err := os.Getwd()

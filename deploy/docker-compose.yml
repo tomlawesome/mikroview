@@ -93,5 +93,38 @@ services:
       # your reverse proxy handles the HTTP->HTTPS redirect itself).
       # - MIKROVIEW_LISTEN_HTTP_REDIRECT=
 
+    # No Postgres service here, deliberately -- not even commented out.
+    #
+    # mikroview can keep its accounts, flags and settings in Postgres
+    # instead of JSON files (docs/configuration.md, "Postgres"). The only
+    # reason to do that is to get your data OFF this host, so that
+    # compromising the machine running mikroview doesn't hand over the
+    # accounts store too.
+    #
+    # A Postgres container sitting next to mikroview in this file would
+    # defeat that entirely: same host, same disk, and the connection
+    # password right here in the same compose file the attacker already
+    # has. That is strictly worse than the JSON files -- identical
+    # exposure, more moving parts -- so shipping one as a convenient
+    # default would make the documentation a lie.
+    #
+    # To use Postgres, point mikroview at a server on a DIFFERENT machine
+    # over a restricted network path:
+    #
+    #   1. Put the connection string in a file (never in this compose
+    #      file, and never in config.yaml -- it carries a password):
+    #        postgres://mikroview:PASSWORD@db.internal:5432/mikroview?sslmode=verify-full
+    #   2. Mount it read-only and point config.yaml's postgres.dsnFile at
+    #      it, or set MIKROVIEW_POSTGRES_DSN_FILE:
+    #        - ./postgres-dsn:/run/secrets/mikroview-postgres-dsn:ro
+    #
+    # sslmode must be require, verify-ca or verify-full; anything weaker
+    # is refused at startup. Prefer verify-full -- require encrypts but
+    # does not verify who you are talking to.
+    #
+    # Existing JSON files are migrated automatically on the first boot
+    # with Postgres configured, and are left on disk so you can switch
+    # back by removing the setting.
+
 volumes:
   mikroview-data:
