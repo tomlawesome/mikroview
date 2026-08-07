@@ -187,6 +187,17 @@ type Entities struct {
 	StorePath string `yaml:"storePath"`
 }
 
+// Audit configures internal/audit's persisted admin-action accountability
+// log (issue #112) -- who created a user, changed a detector setting,
+// upserted/deleted an entity, created or revoked an API token, or removed
+// a permanent flag exclusion. StorePath left empty is a fully supported,
+// deliberate choice, same optional-persistence contract as
+// Entities.StorePath: the log still works, entries just don't survive a
+// restart.
+type Audit struct {
+	StorePath string `yaml:"storePath"`
+}
+
 // TLS configures mikroview's own listener -- on by default: a browser
 // secure-context requirement was only ever a symptom of the real
 // problem, which is that an app serving real login credentials and
@@ -399,6 +410,29 @@ type DeviceMAC struct {
 	StorePath string `yaml:"storePath"`
 }
 
+// Blocklist configures internal/blocklist's local IP/CIDR "known-bad"
+// matching against a small, vetted menu of free threat-intel feeds
+// (issue #113 Part B) -- see that package's own doc comment for the
+// full menu, why it's a fixed menu rather than an arbitrary URL field,
+// and how the refresh cadence/entry-count cap were decided.
+//
+// On by default with Spamhaus's DROP+EDROP lists -- the issue's own
+// recommended starting point: small, free, no registration, and
+// curated specifically to only include netblocks Spamhaus is confident
+// are entirely malicious-controlled, a safe "flag on sight" default
+// unlike a larger, noisier aggregated list would be. Set sources to an
+// empty list (`sources: []`) to disable local blocklist matching
+// entirely. Refresh cadence is intentionally not configurable here --
+// see internal/blocklist.RefreshInterval's doc comment.
+type Blocklist struct {
+	// Sources is a list of internal/blocklist.Source values (e.g.
+	// "spamhaus_drop", "spamhaus_edrop", "emerging_threats_compromised")
+	// -- an unrecognized entry is logged and skipped at startup, not a
+	// fatal error, same degrade-not-crash contract as every other
+	// optional integration in this codebase.
+	Sources []string `yaml:"sources"`
+}
+
 type Config struct {
 	Listen     Listen     `yaml:"listen"`
 	Store      Store      `yaml:"store"`
@@ -408,11 +442,13 @@ type Config struct {
 	Flags      Flags      `yaml:"flags"`
 	Auth       Auth       `yaml:"auth"`
 	Entities   Entities   `yaml:"entities"`
+	Audit      Audit      `yaml:"audit"`
 	Notify     Notify     `yaml:"notify"`
 	TLS        TLS        `yaml:"tls"`
 	OIDC       OIDC       `yaml:"oidc"`
 	Devices    []Device   `yaml:"devices"`
 	DeviceMAC  DeviceMAC  `yaml:"deviceMac"`
+	Blocklist  Blocklist  `yaml:"blocklist"`
 
 	// RuleNames/HostNames are optional friendly-display-name maps -- see
 	// internal/naming. Keyed by the raw value RouterOS reports (a rule
@@ -515,12 +551,23 @@ func defaults() Config {
 		Entities: Entities{
 			StorePath: DefaultDataDir + "/entities.json",
 		},
+		Audit: Audit{
+			StorePath: DefaultDataDir + "/audit.json",
+		},
 		TLS: TLS{
 			Enabled:   true,
 			StorePath: DefaultDataDir + "/tls",
 		},
 		DeviceMAC: DeviceMAC{
 			StorePath: DefaultDataDir + "/mac-registry.json",
+		},
+		Blocklist: Blocklist{
+			// Mirrors internal/blocklist.DefaultSources -- kept as a
+			// literal here (rather than importing internal/blocklist)
+			// so this package stays a dependency-free leaf, same
+			// reasoning Flags already gives for duplicating
+			// internal/detect.Config's own defaults.
+			Sources: []string{"spamhaus_drop", "spamhaus_edrop"},
 		},
 		Notify: Notify{
 			BatchWindow: 60 * time.Second,
@@ -810,6 +857,9 @@ func applyEnv(cfg *Config) {
 	if v := os.Getenv("MIKROVIEW_ENTITIES_STORE_PATH"); v != "" {
 		cfg.Entities.StorePath = v
 	}
+	if v := os.Getenv("MIKROVIEW_AUDIT_STORE_PATH"); v != "" {
+		cfg.Audit.StorePath = v
+	}
 	if v := os.Getenv("MIKROVIEW_AUTH_TOKENS_STORE_PATH"); v != "" {
 		cfg.Auth.TokensStorePath = v
 	}
@@ -895,6 +945,9 @@ func applyEnv(cfg *Config) {
 	}
 	if v := os.Getenv("MIKROVIEW_DEVICE_MAC_STORE_PATH"); v != "" {
 		cfg.DeviceMAC.StorePath = v
+	}
+	if v := os.Getenv("MIKROVIEW_BLOCKLIST_SOURCES"); v != "" {
+		cfg.Blocklist.Sources = parseStringList(v)
 	}
 }
 
