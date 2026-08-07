@@ -3,6 +3,7 @@
 package auth
 
 import (
+	"context"
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
@@ -15,6 +16,8 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+
+	"github.com/tomlawesome/mikroview/internal/persist"
 )
 
 // Recovery keys are the second factor on the CLI commands that change
@@ -96,8 +99,17 @@ type recoveryRecord struct {
 // also destroy the only thing able to validate a recovery key -- exactly
 // the situation the gated commands exist to recover from.
 type RecoveryStore struct {
-	mu         sync.Mutex
-	path       string
+	mu sync.Mutex
+	// backend is where the digests live: a JSON file, or Postgres when
+	// configured (issue #172). The pepper deliberately does NOT follow
+	// them -- see pepperPath.
+	backend persist.Backend
+	version int64
+	// pepperPath is always a local file on the mikroview host, even when
+	// the digests are in Postgres. That separation is the entire point:
+	// a database dump yields digests that cannot be tested against
+	// anything, and this host yields a pepper with no digests to apply
+	// it to. Putting both in one place would make the pepper decorative.
 	pepperPath string
 	pepper     []byte
 	keys       []recoveryRecord
@@ -117,12 +129,23 @@ type RecoveryStore struct {
 // so someone holding a stolen backup has the digests but nothing to
 // verify them against. It is written with O_EXCL and never rewritten.
 func OpenRecovery(path, pepperPath string) (*RecoveryStore, error) {
-	s := &RecoveryStore{path: path, pepperPath: pepperPath}
 	if path == "" {
-		return s, nil
+		return &RecoveryStore{pepperPath: pepperPath}, nil
 	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return nil, err
+	}
+	return OpenRecoveryWithBackend(persist.NewFileBackend(path), pepperPath)
+}
+
+// OpenRecoveryWithBackend is OpenRecovery against any persist.Backend --
+// a JSON file by default, Postgres when configured.
+//
+// pepperPath stays a local filesystem path in both cases, on purpose.
+func OpenRecoveryWithBackend(b persist.Backend, pepperPath string) (*RecoveryStore, error) {
+	s := &RecoveryStore{backend: b, pepperPath: pepperPath}
+	if b == nil {
+		return s, nil
 	}
 
 	pepper, err := loadOrCreatePepper(pepperPath)
@@ -131,12 +154,13 @@ func OpenRecovery(path, pepperPath string) (*RecoveryStore, error) {
 	}
 	s.pepper = pepper
 
-	data, err := os.ReadFile(path)
-	if os.IsNotExist(err) {
-		return s, nil
-	}
+	data, version, err := persist.LoadDocument(context.Background(), b)
 	if err != nil {
 		return nil, err
+	}
+	s.version = version
+	if data == nil {
+		return s, nil
 	}
 	var f recoveryFile
 	if err := json.Unmarshal(data, &f); err != nil {
@@ -228,7 +252,7 @@ func (s *RecoveryStore) Exists() bool {
 func (s *RecoveryStore) Generate() ([]string, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.path == "" {
+	if s.backend == nil {
 		return nil, ErrNotPersisted
 	}
 	if len(s.keys) > 0 {
@@ -303,16 +327,17 @@ func (s *RecoveryStore) Redeem(key string) ([]string, error) {
 }
 
 func (s *RecoveryStore) persistLocked() error {
-	if s.path == "" {
+	if s.backend == nil {
 		return ErrNotPersisted
 	}
 	data, err := json.MarshalIndent(recoveryFile{Keys: s.keys}, "", "  ")
 	if err != nil {
 		return err
 	}
-	tmp := s.path + ".tmp"
-	if err := os.WriteFile(tmp, data, 0o600); err != nil {
+	version, _, err := persist.SaveWithRetry(context.Background(), s.backend, data, s.version)
+	if err != nil {
 		return err
 	}
-	return os.Rename(tmp, s.path)
+	s.version = version
+	return nil
 }
