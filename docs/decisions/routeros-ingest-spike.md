@@ -26,10 +26,50 @@ that silently stops reporting, which is the worst of the available
 failure modes.
 
 **What the budget buys:** 60 firewall filter rules serialise to 7,828
-bytes — roughly 130 bytes each on a bare CHR, so order 500 rules fits,
-and rules carrying more fields fit proportionally fewer. Comfortable for
-config shape; not comfortable for anything list-like, where an address
-list or a large DHCP lease table can pass it without much trouble.
+bytes, and 200 rules to 26,370 — about 132 bytes each on a bare CHR, so
+the cap lands near 500 rules. **500 is not a large deployment**, and
+rules carrying comments and more match conditions fit proportionally
+fewer. Treat the cap as something a real site will hit, not a
+theoretical ceiling.
+
+### Pagination handles it, and it is not chunking
+
+The worry with "split it up" is having to reassemble a byte stream:
+ordering, partial pieces, state on the receiving side. That is chunking,
+and it is genuinely awkward. Pagination of whole records is a different
+thing, and the router does it natively — `:pick` slices the array that
+`print as-value` returns, and each slice serialises independently:
+
+```
+:local all [/ip/firewall/filter print as-value]
+:local chunk [:pick $all ($p * $size) $upper]
+:local body [:serialize to=json value={kind="firewall-rules"; page=($p + 1); of=$pages; rules=$chunk}]
+```
+
+Run against 200 rules at 50 per page:
+
+```
+page 1/4  6568 bytes  valid_json=True  rules=50  rule-1..rule-50
+page 2/4  6603 bytes  valid_json=True  rules=50  rule-51..rule-100
+page 3/4  6701 bytes  valid_json=True  rules=50  rule-101..rule-150
+page 4/4  6701 bytes  valid_json=True  rules=50  rule-151..rule-200
+```
+
+Every page is **a complete, valid JSON document containing whole rules**,
+self-describing as `page N of M`, at a tenth of the cap. There is nothing
+to rebuild: mikroview applies whole records as they arrive, so no
+ordering guarantee is needed and no partial-record state exists.
+
+**Additive-only makes a missing page safe.** Because step 4 forbids
+pushed data from clearing a flag or reducing suspicion, the absence of
+page 3 can never be read as "those rules were deleted" — it means less
+enrichment, which is the degradation #186 already asks for under "fails
+closed". That invariant, written for a different reason, is what makes
+pagination cheap.
+
+**Consequence for step 2:** page size is a schema decision, and it should
+be a record count chosen to keep a page well under the cap even for wide
+records — not a byte-slicing routine.
 
 ## 2. A file does route around it — over SFTP, at a price
 
