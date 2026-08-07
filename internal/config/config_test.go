@@ -186,6 +186,45 @@ func TestHostActivityEnvVarsOverrideDefaults(t *testing.T) {
 	}
 }
 
+func TestVPNInterfacesDefaultsToEmptyAndMultiplierDefaultsTo1Point5(t *testing.T) {
+	// The backward-compatible no-op starting point (issue #105): an
+	// unconfigured deployment must never boost any confidence score,
+	// which VPNInterfaces being empty by default guarantees regardless
+	// of what VPNConfidenceMultiplier defaults to.
+	cfg, err := Load("", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.Flags.VPNInterfaces) != 0 {
+		t.Errorf("VPNInterfaces default = %v, want empty", cfg.Flags.VPNInterfaces)
+	}
+	if cfg.Flags.VPNConfidenceMultiplier != 1.5 {
+		t.Errorf("VPNConfidenceMultiplier default = %v, want 1.5", cfg.Flags.VPNConfidenceMultiplier)
+	}
+}
+
+func TestVPNInterfacesEnvVarsOverrideDefaults(t *testing.T) {
+	t.Setenv("MIKROVIEW_FLAGS_VPN_INTERFACES", "wireguard1, wireguard2")
+	t.Setenv("MIKROVIEW_FLAGS_VPN_CONFIDENCE_MULTIPLIER", "2.5")
+
+	cfg, err := Load("", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"wireguard1", "wireguard2"}
+	if len(cfg.Flags.VPNInterfaces) != len(want) {
+		t.Fatalf("VPNInterfaces = %v, want %v", cfg.Flags.VPNInterfaces, want)
+	}
+	for i, v := range want {
+		if cfg.Flags.VPNInterfaces[i] != v {
+			t.Errorf("VPNInterfaces[%d] = %q, want %q", i, cfg.Flags.VPNInterfaces[i], v)
+		}
+	}
+	if cfg.Flags.VPNConfidenceMultiplier != 2.5 {
+		t.Errorf("VPNConfidenceMultiplier = %v, want 2.5", cfg.Flags.VPNConfidenceMultiplier)
+	}
+}
+
 func TestRuleSpikeWarmupSamplesEnvVarOverridesDefault(t *testing.T) {
 	t.Setenv("MIKROVIEW_FLAGS_RULE_SPIKE_WARMUP_SAMPLES", "35")
 

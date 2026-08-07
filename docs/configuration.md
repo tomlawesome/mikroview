@@ -440,6 +440,8 @@ flags:
   ruleUsageStorePath: "/var/lib/mikroview/rule-usage.json"
   staleRuleDays: 30
   staleRuleCheckInterval: 1h
+  vpnInterfaces: []
+  vpnConfidenceMultiplier: 1.5
 ```
 
 - **`storePath`** — where raised/cleared flags are persisted, as a small
@@ -634,6 +636,48 @@ flags:
   already gated on) and is harder for a human reviewing a flag to
   sanity-check than a plain clock range. Revisit if real-world use shows
   a fixed window doesn't fit typical deployments well.
+
+**VPN interface confidence boost (issue #105, optional).** `vpnInterfaces`
+identifies which of RouterOS's `InInterface` values correspond to a
+configured VPN tunnel (e.g. a WireGuard interface such as `wireguard1`)
+-- each entry is matched with glob syntax (`*`, `?`, `[...]`), so an
+exact name (`wireguard1`) or a prefix pattern (`wireguard*`, for a
+router with several tunnel interfaces) both work through the same
+mechanism. RouterOS firewall log lines already see a WireGuard tunnel's
+*inner*, already-decrypted traffic -- the peer's tunnel IP as `SrcIP`,
+arriving on whatever interface name RouterOS assigns the WireGuard
+interface -- which is exactly what `InInterface` captures, no RouterOS
+API access required.
+
+When **activity-spike**, **outbound-anomaly**, or **internal-recon**
+raises a flag whose triggering event arrived via a matching interface,
+its confidence score is boosted by `vpnConfidenceMultiplier` (a flat
+multiplier on the already-computed score, clamped to 100 -- never a
+change to whether or when the detector fires, only how urgently an
+already-firing flag reads). The reasoning: a remote peer that already
+had to pass WireGuard's own key-based authentication to reach the
+network at all suddenly beaconing out, scanning the LAN, or generating
+unusual volume is a stronger signal than an ordinary LAN device doing
+the same. Left empty (the default), `vpnInterfaces` matches nothing, so
+every existing deployment's confidence scoring is completely unchanged
+until this is explicitly configured -- a safe, backward-compatible
+default. A `vpnConfidenceMultiplier` of `0` or less is treated as `1`
+(no boost) rather than zeroing or inverting a score, and the boost is
+never allowed to end up *lower* than the unboosted value either -- a
+misconfigured multiplier should never make a VPN-sourced anomaly read
+as less alarming than an identical LAN-sourced one.
+
+**Deliberately out of scope**, for now: tracking the WireGuard peer's
+*outer* UDP endpoint (their real internet source IP) or handshake state.
+Firewall logs never see that -- it only exists in
+`/interface/wireguard/peers` on the router itself, which mikroview has
+no access to today (passive syslog only, no RouterOS API client). That
+data is what would let mikroview tell "this peer roamed to a new IP"
+(normal for a mobile client) apart from "this peer's private key was
+stolen and is now being used from somewhere else" (a real compromise
+signal) -- arguably the more interesting half of "VPN peer anomaly,"
+but it's blocked on [issue #21](https://github.com/tomlawesome/mikroview/issues/21)
+deciding whether/how mikroview talks to the RouterOS API at all.
 
 **Confidence score.** Every detector except global-volume-spike and
 rule-hit-rate-spike attaches a `confidence` percentage (0-100) to each
@@ -1312,6 +1356,8 @@ Override individual scalar settings without a mounted file:
 | `MIKROVIEW_FLAGS_RULE_USAGE_STORE_PATH` | `flags.ruleUsageStorePath` |
 | `MIKROVIEW_FLAGS_STALE_RULE_DAYS` | `flags.staleRuleDays` |
 | `MIKROVIEW_FLAGS_STALE_RULE_CHECK_INTERVAL` | `flags.staleRuleCheckInterval` |
+| `MIKROVIEW_FLAGS_VPN_INTERFACES` | `flags.vpnInterfaces` (comma-separated, e.g. `wireguard1,wireguard2`) |
+| `MIKROVIEW_FLAGS_VPN_CONFIDENCE_MULTIPLIER` | `flags.vpnConfidenceMultiplier` |
 | `MIKROVIEW_FLAGS_DETECTOR_SETTINGS_STORE_PATH` | `flags.detectorSettingsStorePath` (see [Per-detector toggles](#per-detector-toggles-and-scope-restrictions-optional)) |
 | `MIKROVIEW_AUTH_STORE_PATH` | `auth.storePath` (see [Authentication](#authentication)) |
 | `MIKROVIEW_AUTH_SECURE_COOKIE` | `auth.secureCookie` |

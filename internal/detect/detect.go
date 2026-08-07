@@ -171,6 +171,55 @@ type Config struct {
 	// positives. Zero disables the detector entirely -- see
 	// DeviceSilenceDetector.Check.
 	DeviceStaleAfter time.Duration
+
+	// VPNInterfaces (issue #105): interface-name patterns -- each
+	// matched against store.Event.InInterface with glob syntax (see
+	// isVPNInterface in vpn.go, e.g. "wireguard1" for an exact match or
+	// "wireguard*" for a prefix match) -- identifying which interfaces
+	// correspond to a configured VPN tunnel. RouterOS firewall log lines
+	// see a WireGuard tunnel's *inner*, already-decrypted traffic (the
+	// peer's tunnel IP as SrcIP, arriving on whatever interface name
+	// RouterOS assigns the WireGuard interface), which is exactly what
+	// InInterface already captures -- enough to say "this traffic came
+	// from an already-authenticated remote peer" without needing
+	// anything RouterOS's own API would provide.
+	//
+	// Consulted by checkHostActivityBaseline (host_baseline.go, feeding
+	// TypeActivitySpike) and observeDestSpread (dest_spread.go, feeding
+	// TypeOutboundAnomaly/TypeInternalRecon): an anomaly whose triggering
+	// event arrived via a VPN-tagged interface is scored more
+	// confidently than the identical anomaly arriving via an ordinary
+	// LAN interface, since a remote peer that already had to pass
+	// WireGuard's own key-based auth to reach the network at all
+	// behaving anomalously is a stronger signal than an ordinary LAN
+	// device doing the same. See VPNConfidenceMultiplier for exactly how
+	// that boost is applied.
+	//
+	// Empty (the default) matches no interface, so every existing
+	// deployment's confidence scoring is completely unchanged until this
+	// is explicitly configured -- a safe, backward-compatible default.
+	//
+	// Deliberately out of scope, both here and everywhere else in
+	// mikroview: tracking the WireGuard peer's *outer* UDP endpoint or
+	// handshake state (/interface/wireguard/peers). Firewall logs never
+	// see that data -- only the router's own API would -- so mikroview
+	// can't yet tell "peer roamed to a new IP" (normal for a mobile
+	// peer) from "peer's private key was stolen and is now being used
+	// from elsewhere" (a real compromise signal). That's blocked on
+	// mikroview issue #21 deciding whether/how mikroview talks to the
+	// RouterOS API at all.
+	VPNInterfaces []string
+	// VPNConfidenceMultiplier scales a flag's already-computed
+	// confidence score (from emaConfidence or overshootConfidence) when
+	// the triggering event's InInterface matches VPNInterfaces -- see
+	// vpn.go's vpnBoostConfidence for the full mechanism and the design
+	// reasoning for why a post-hoc multiplier (rather than a lowered
+	// firing threshold/z-score bar) was chosen. Applied identically at
+	// both VPNInterfaces call sites. <= 0 is treated as 1 (no boost),
+	// never as "suppress or invert" -- a misconfigured value should
+	// never make a VPN-sourced anomaly read as less alarming than an
+	// identical LAN one.
+	VPNConfidenceMultiplier float64
 }
 
 // DefaultConfig returns sensible defaults for a home/small-office
@@ -229,6 +278,16 @@ func DefaultConfig() Config {
 		OffHoursMinCount:      5,
 
 		DeviceStaleAfter: 15 * time.Minute,
+
+		// VPNInterfaces is empty by default -- see its doc comment for
+		// why that's the deliberate, backward-compatible no-op starting
+		// point. VPNConfidenceMultiplier still gets a sensible default
+		// so simply setting VPNInterfaces is enough to opt in without
+		// also having to pick a multiplier: 1.5x is a modest boost, not
+		// an instant jump to full confidence -- consistent with every
+		// other confidence signal in this package being additive
+		// evidence, not an override.
+		VPNConfidenceMultiplier: 1.5,
 	}
 }
 
@@ -540,7 +599,7 @@ func (d *Detector) observeScanAndSpike(e store.Event, now time.Time) {
 	// behavior, not a gap.
 	if asActive {
 		spikeCount := w.spikes.Count(now, d.cfg.ActivitySpikeWindow)
-		d.checkHostActivityBaseline(w, e.SrcIP, e.SrcCountry, spikeCount, now)
+		d.checkHostActivityBaseline(w, e.SrcIP, e.SrcCountry, e.InInterface, spikeCount, now)
 	}
 	if psActive {
 		// port 0 and scope are both query-time filters (not applied at
