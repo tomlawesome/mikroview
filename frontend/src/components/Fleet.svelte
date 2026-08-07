@@ -1,4 +1,5 @@
 <script lang="ts">
+  // SPDX-License-Identifier: AGPL-3.0-only
   // Multi-router-fleet health view (issue #98): every known device (both
   // configured, from config.yaml's `devices` list, and auto-discovered --
   // seen on the wire but not yet added there) in one table, with the

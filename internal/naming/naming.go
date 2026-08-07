@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+
 // Package naming resolves friendly display names for firewall rule
 // labels, host IPs, and (issue #109) ports from two layers: internal/
 // config's static RuleNames/HostNames maps (config-driven only, no

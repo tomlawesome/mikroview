@@ -1,4 +1,5 @@
 <script lang="ts">
+  // SPDX-License-Identifier: AGPL-3.0-only
   import type { Action } from '../lib/types'
 
   let { action }: { action: Action } = $props()

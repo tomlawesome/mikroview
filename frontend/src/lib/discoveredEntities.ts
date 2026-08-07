@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+
 import type { ClientEvent, Entity, RuleUsage } from './types'
 
 // "Discovered but unnamed" derivation for the Entities admin panel

@@ -1,4 +1,5 @@
 <script lang="ts">
+  // SPDX-License-Identifier: AGPL-3.0-only
   // Admin-only audit log (issue #112): a read-only, most-recent-first
   // table of every admin-privileged mutation mikroview has recorded --
   // who created a user, changed a detector setting, upserted/deleted an

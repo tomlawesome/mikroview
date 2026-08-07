@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+
 // Reactive viewport-width breakpoint (issue #85): a single shared
 // matchMedia listener, rather than every component that needs to know
 // "are we at phone width" wiring its own resize handler. 700px matches

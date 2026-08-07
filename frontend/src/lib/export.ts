@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+
 import type { FirewallEvent } from './types'
 
 // Column order for the exported file. Deliberately not the same list as

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+
 import { deleteEntity, fetchEntities, upsertEntity } from './api'
 import type { Entity } from './types'
 

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+
 import { appState } from './state.svelte'
 import type { FirewallEvent } from './types'
 
