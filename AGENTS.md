@@ -120,3 +120,18 @@ This applies to decisions that close options as much as ones that open
 them. "We considered X and rejected it" belongs under "Superseded",
 because the next person to have that idea is usually a future version of
 whoever had it first.
+
+### A stale issue is closed and superseded, not rewritten
+
+Editing the body is right while an issue is still about the thing it was
+opened about -- a plan changing within its own scope.
+
+When the issue as a whole has gone stale -- most of it shipped, or its
+premise no longer holds -- close it and open a successor that links back.
+Rewriting it in place destroys the record of what was originally planned
+and why, which is the part worth keeping: the reasoning outlives the
+plan, and a closed issue is a better artefact than an overwritten one.
+
+The successor states the current position and points at the old issue for
+the argument. The old issue gets a closing comment naming its successor,
+so the trail runs both ways.
