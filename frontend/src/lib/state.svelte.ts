@@ -206,8 +206,44 @@ class AppState {
     this.now = Date.now()
   }
 
+  /**
+   * Appends events the buffer has not already got, returning the ones
+   * that were genuinely new.
+   *
+   * Needed because the initial `GET /api/events` fetch and the WebSocket
+   * stream overlap: an event that arrives in both lands twice, and
+   * `LiveTable`'s `{#each rendered as event (event.id)}` then has
+   * duplicate keys. Svelte logs `each_key_duplicate` and keyed-each
+   * behaviour is undefined from there -- the row renders twice and any
+   * count taken off the buffer is inflated.
+   *
+   * Server ids are unique (verified against the API), so this is purely
+   * about the two client-side entry points meeting in the middle. The
+   * incoming batch is deduped against itself as well as against the
+   * buffer, since a single flush can carry the same event twice for the
+   * same reason.
+   */
+  private appendUnseen(incoming: ClientEvent[]): ClientEvent[] {
+    if (incoming.length === 0) return []
+    const seen = new Set(this.events.map((e) => e.id))
+    const fresh = incoming.filter((e) => {
+      if (seen.has(e.id)) return false
+      seen.add(e.id)
+      return true
+    })
+    if (fresh.length === 0) return []
+    this.events = [...this.events, ...fresh].slice(-MAX_CLIENT_EVENTS)
+    return fresh
+  }
+
   setInitialEvents(events: FirewallEvent[]) {
-    this.events = stamp(events).slice(-MAX_CLIENT_EVENTS)
+    // Deduped even though this replaces the buffer outright: it is the
+    // one place a fresh id set is established, and letting a duplicate
+    // in here would seed every later comparison with it.
+    const seen = new Set<FirewallEvent['id']>()
+    this.events = stamp(events)
+      .filter((e) => (seen.has(e.id) ? false : (seen.add(e.id), true)))
+      .slice(-MAX_CLIENT_EVENTS)
     this.syncRuleMatches()
   }
 
@@ -234,22 +270,27 @@ class AppState {
   // is idle.
   private flushIncoming() {
     if (this.incomingBuffer.length === 0) return
-    const arrived = this.incomingBuffer
-    this.events = [...this.events, ...arrived].slice(-MAX_CLIENT_EVENTS)
-    this.pruneRuleMatches()
-    void this.classifyNew(arrived)
+    const arrived = this.appendUnseen(this.incomingBuffer)
     this.incomingBuffer = []
+    if (arrived.length === 0) return
+    this.pruneRuleMatches()
+    // Only the genuinely new ones: reclassifying a duplicate costs a
+    // Worker round-trip to reach the answer already held for it.
+    void this.classifyNew(arrived)
   }
 
   togglePause() {
     this.paused = !this.paused
     if (!this.paused && this.pendingBuffer.length) {
-      const resumed = this.pendingBuffer
-      this.events = [...this.events, ...resumed].slice(-MAX_CLIENT_EVENTS)
-      this.pruneRuleMatches()
-      void this.classifyNew(resumed)
+      // The third insert path, and the easiest to forget: a pause that
+      // spans a reconnect can hold events the refreshed buffer already
+      // has.
+      const resumed = this.appendUnseen(this.pendingBuffer)
       this.pendingBuffer = []
       this.pendingCount = 0
+      if (resumed.length === 0) return
+      this.pruneRuleMatches()
+      void this.classifyNew(resumed)
     }
   }
 

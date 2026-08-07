@@ -3,10 +3,23 @@
 package auth
 
 import (
+	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
+
+// newTestTokenStore is a persisted store in a temp dir -- the only shape
+// Create accepts, since an unpersisted one refuses to issue tokens.
+func newTestTokenStore(t *testing.T) *TokenStore {
+	t.Helper()
+	s, err := OpenTokenStore(filepath.Join(t.TempDir(), "tokens.json"))
+	if err != nil {
+		t.Fatalf("OpenTokenStore: %v", err)
+	}
+	return s
+}
 
 func TestOpenTokenStoreEmptyPathIsUsableButNotPersisted(t *testing.T) {
 	s, err := OpenTokenStore("")
@@ -23,7 +36,7 @@ func TestOpenTokenStoreEmptyPathIsUsableButNotPersisted(t *testing.T) {
 
 func TestTokenCreateRefusesWhenNotPersisted(t *testing.T) {
 	s, _ := OpenTokenStore("")
-	if _, _, err := s.Create("birdcage", nil, time.Now()); err != ErrTokenNotPersisted {
+	if _, _, err := s.Create("birdcage", TokenKindAPI, "", nil, time.Now()); err != ErrTokenNotPersisted {
 		t.Errorf("expected ErrTokenNotPersisted, got %v", err)
 	}
 }
@@ -35,7 +48,7 @@ func TestTokenCreateAndAuthenticate(t *testing.T) {
 	}
 	now := time.Now()
 
-	raw, tok, err := s.Create("birdcage", nil, now)
+	raw, tok, err := s.Create("birdcage", TokenKindAPI, "", nil, now)
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -49,7 +62,7 @@ func TestTokenCreateAndAuthenticate(t *testing.T) {
 		t.Error("expected a distinct, non-empty raw value")
 	}
 
-	got, ok := s.Authenticate(raw, now.Add(time.Minute))
+	got, ok := s.Authenticate(raw, TokenKindAPI, now.Add(time.Minute))
 	if !ok {
 		t.Fatal("expected the freshly created token's raw value to authenticate")
 	}
@@ -70,7 +83,7 @@ func TestTokenRawValueNeverStored(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	raw, tok, err := s.Create("birdcage", nil, time.Now())
+	raw, tok, err := s.Create("birdcage", TokenKindAPI, "", nil, time.Now())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -89,10 +102,10 @@ func TestTokenAuthenticateRejectsUnknownValue(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := s.Authenticate("not-a-real-token", time.Now()); ok {
+	if _, ok := s.Authenticate("not-a-real-token", TokenKindAPI, time.Now()); ok {
 		t.Error("expected an unknown token value to fail authentication")
 	}
-	if _, ok := s.Authenticate("", time.Now()); ok {
+	if _, ok := s.Authenticate("", TokenKindAPI, time.Now()); ok {
 		t.Error("expected an empty token value to fail authentication")
 	}
 }
@@ -102,7 +115,7 @@ func TestTokenRevoke(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	raw, tok, err := s.Create("birdcage", nil, time.Now())
+	raw, tok, err := s.Create("birdcage", TokenKindAPI, "", nil, time.Now())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -110,7 +123,7 @@ func TestTokenRevoke(t *testing.T) {
 	if err := s.Revoke(tok.ID); err != nil {
 		t.Fatalf("Revoke: %v", err)
 	}
-	if _, ok := s.Authenticate(raw, time.Now()); ok {
+	if _, ok := s.Authenticate(raw, TokenKindAPI, time.Now()); ok {
 		t.Error("expected a revoked token to fail authentication")
 	}
 	if len(s.List()) != 0 {
@@ -137,7 +150,7 @@ func TestTokenSurvivesReopen(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	raw, tok, err := s1.Create("birdcage", nil, time.Now())
+	raw, tok, err := s1.Create("birdcage", TokenKindAPI, "", nil, time.Now())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -146,7 +159,7 @@ func TestTokenSurvivesReopen(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	got, ok := s2.Authenticate(raw, time.Now())
+	got, ok := s2.Authenticate(raw, TokenKindAPI, time.Now())
 	if !ok {
 		t.Fatal("expected the token to still authenticate after reopening the store")
 	}
@@ -160,11 +173,11 @@ func TestTokenListNeverIncludesRevokedTokens(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, keep, err := s.Create("keep-me", nil, time.Now())
+	_, keep, err := s.Create("keep-me", TokenKindAPI, "", nil, time.Now())
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, drop, err := s.Create("revoke-me", nil, time.Now())
+	_, drop, err := s.Create("revoke-me", TokenKindAPI, "", nil, time.Now())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -188,11 +201,11 @@ func TestRevokeAllCreatedByRemovesOnlyThatAccountsTokens(t *testing.T) {
 	alice := &User{ID: "user-alice", Username: "alice"}
 	bob := &User{ID: "user-bob", Username: "bob"}
 
-	aliceRaw, _, err := s.Create("alice-integration", alice, time.Now())
+	aliceRaw, _, err := s.Create("alice-integration", TokenKindAPI, "", alice, time.Now())
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
-	bobRaw, _, err := s.Create("bob-integration", bob, time.Now())
+	bobRaw, _, err := s.Create("bob-integration", TokenKindAPI, "", bob, time.Now())
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -200,10 +213,10 @@ func TestRevokeAllCreatedByRemovesOnlyThatAccountsTokens(t *testing.T) {
 	if n := s.RevokeAllCreatedBy(alice.ID); n != 1 {
 		t.Errorf("revoked %d tokens, want 1", n)
 	}
-	if _, ok := s.Authenticate(aliceRaw, time.Now()); ok {
+	if _, ok := s.Authenticate(aliceRaw, TokenKindAPI, time.Now()); ok {
 		t.Error("alice's token still authenticates after her account was deleted")
 	}
-	if _, ok := s.Authenticate(bobRaw, time.Now()); !ok {
+	if _, ok := s.Authenticate(bobRaw, TokenKindAPI, time.Now()); !ok {
 		t.Error("bob's token stopped working when alice's account was deleted")
 	}
 }
@@ -213,7 +226,7 @@ func TestRevokeAllCreatedByRemovesOnlyThatAccountsTokens(t *testing.T) {
 // wiped every unattributed token in the deployment.
 func TestRevokeAllCreatedByIgnoresUnattributedTokens(t *testing.T) {
 	s, _ := OpenTokenStore(filepath.Join(t.TempDir(), "tokens.json"))
-	raw, _, err := s.Create("pre-upgrade", nil, time.Now())
+	raw, _, err := s.Create("pre-upgrade", TokenKindAPI, "", nil, time.Now())
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -224,7 +237,7 @@ func TestRevokeAllCreatedByIgnoresUnattributedTokens(t *testing.T) {
 	if n := s.RevokeAllCreatedBy("user-someone"); n != 0 {
 		t.Errorf("deleting an unrelated account revoked %d unattributed tokens, want 0", n)
 	}
-	if _, ok := s.Authenticate(raw, time.Now()); !ok {
+	if _, ok := s.Authenticate(raw, TokenKindAPI, time.Now()); !ok {
 		t.Error("an unattributed token was revoked by an unrelated account deletion")
 	}
 }
@@ -233,7 +246,7 @@ func TestCreatedBySurvivesAReload(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "tokens.json")
 	s1, _ := OpenTokenStore(path)
 	alice := &User{ID: "user-alice", Username: "alice"}
-	if _, _, err := s1.Create("integration", alice, time.Now()); err != nil {
+	if _, _, err := s1.Create("integration", TokenKindAPI, "", alice, time.Now()); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
 
@@ -247,5 +260,139 @@ func TestCreatedBySurvivesAReload(t *testing.T) {
 	}
 	if list[0].CreatedBy != alice.ID || list[0].CreatedByUsername != "alice" {
 		t.Errorf("creator attribution lost across a reload: %+v", list[0])
+	}
+}
+
+// TestTokenKindsAreNotInterchangeable is the point of the whole kind
+// field: neither credential may be presented where the other is
+// expected. Both directions are asserted, because only checking the one
+// that seems dangerous is how the other direction ships broken.
+func TestTokenKindsAreNotInterchangeable(t *testing.T) {
+	s := newTestTokenStore(t)
+	now := time.Now()
+
+	apiRaw, _, err := s.Create("birdcage", TokenKindAPI, "", nil, now)
+	if err != nil {
+		t.Fatalf("Create api: %v", err)
+	}
+	ingestRaw, _, err := s.Create("router-1", TokenKindIngest, "router-1", nil, now)
+	if err != nil {
+		t.Fatalf("Create ingest: %v", err)
+	}
+
+	if _, ok := s.Authenticate(ingestRaw, TokenKindAPI, now); ok {
+		t.Error("an ingest token authenticated as a read-only API token -- it would reach every event, flag and device mikroview holds")
+	}
+	if _, ok := s.Authenticate(apiRaw, TokenKindIngest, now); ok {
+		t.Error("a read-only API token authenticated as an ingest token -- it could write router state it was never scoped to")
+	}
+
+	// Each still works at its own door, so the test above is proving
+	// kind separation rather than that authentication is simply broken.
+	if _, ok := s.Authenticate(apiRaw, TokenKindAPI, now); !ok {
+		t.Error("the api token no longer authenticates as an api token")
+	}
+	if _, ok := s.Authenticate(ingestRaw, TokenKindIngest, now); !ok {
+		t.Error("the ingest token no longer authenticates as an ingest token")
+	}
+}
+
+// TestAuthenticateWrongKindDoesNotRecordUse guards a subtle one: a token
+// presented at the wrong door must not look, in the token list, like it
+// was legitimately used. Otherwise LastUsedAt reports activity for a
+// credential that was in fact refused, which is exactly backwards for
+// anyone reviewing the list after a suspected leak.
+func TestAuthenticateWrongKindDoesNotRecordUse(t *testing.T) {
+	s := newTestTokenStore(t)
+	created := time.Now()
+
+	ingestRaw, tok, err := s.Create("router-1", TokenKindIngest, "router-1", nil, created)
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if _, ok := s.Authenticate(ingestRaw, TokenKindAPI, created.Add(time.Hour)); ok {
+		t.Fatal("wrong-kind authentication succeeded")
+	}
+
+	for _, got := range s.List() {
+		if got.ID != tok.ID {
+			continue
+		}
+		if !got.LastUsedAt.IsZero() {
+			t.Errorf("LastUsedAt = %v after a refused authentication, want zero", got.LastUsedAt)
+		}
+	}
+}
+
+// TestIngestTokenRequiresADevice covers both halves of the scope rule.
+// An unscoped ingest token is the thing the scope exists to prevent, and
+// a device on a read-only token is a scope nothing enforces -- accepting
+// either quietly would leave an operator believing in a boundary that
+// isn't there.
+func TestIngestTokenRequiresADevice(t *testing.T) {
+	s := newTestTokenStore(t)
+	now := time.Now()
+
+	if _, _, err := s.Create("unscoped", TokenKindIngest, "", nil, now); err != ErrTokenDeviceRequired {
+		t.Errorf("Create ingest with no device: err = %v, want ErrTokenDeviceRequired", err)
+	}
+	if _, _, err := s.Create("scoped-api", TokenKindAPI, "router-1", nil, now); err != ErrTokenDeviceNotAllowed {
+		t.Errorf("Create api with a device: err = %v, want ErrTokenDeviceNotAllowed", err)
+	}
+	if _, _, err := s.Create("nonsense", TokenKind("admin"), "", nil, now); err != ErrTokenKindInvalid {
+		t.Errorf("Create with an unknown kind: err = %v, want ErrTokenKindInvalid", err)
+	}
+
+	// Whitespace is trimmed rather than accepted as a device name, so
+	// " " cannot smuggle past the required-device check.
+	if _, _, err := s.Create("blank-ish", TokenKindIngest, "   ", nil, now); err != ErrTokenDeviceRequired {
+		t.Errorf("Create ingest with a whitespace device: err = %v, want ErrTokenDeviceRequired", err)
+	}
+}
+
+// TestUnknownKindOnDiskCannotAuthenticateButStaysRevocable covers a
+// token written by some other build, or hand-edited. It must not
+// authenticate -- guessing that an unrecognised kind meant the
+// read-everything one is the wrong direction to guess in -- but it must
+// still be visible and revocable, or an operator has a credential they
+// can see the effects of and cannot remove.
+func TestUnknownKindOnDiskCannotAuthenticateButStaysRevocable(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "tokens.json")
+	s1, err := OpenTokenStore(path)
+	if err != nil {
+		t.Fatalf("OpenTokenStore: %v", err)
+	}
+	raw, tok, err := s1.Create("from-the-future", TokenKindAPI, "", nil, time.Now())
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	rewritten := strings.Replace(string(data), `"kind": "api"`, `"kind": "quantum"`, 1)
+	if rewritten == string(data) {
+		t.Fatal("test setup: no kind field found to rewrite")
+	}
+	if err := os.WriteFile(path, []byte(rewritten), 0o600); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	s2, err := OpenTokenStore(path)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	if _, ok := s2.Authenticate(raw, TokenKindAPI, time.Now()); ok {
+		t.Error("a token with an unrecognised kind authenticated as an api token")
+	}
+	if _, ok := s2.Authenticate(raw, TokenKindIngest, time.Now()); ok {
+		t.Error("a token with an unrecognised kind authenticated as an ingest token")
+	}
+	if len(s2.List()) != 1 {
+		t.Errorf("List() returned %d tokens, want 1 -- an operator cannot revoke what they cannot see", len(s2.List()))
+	}
+	if err := s2.Revoke(tok.ID); err != nil {
+		t.Errorf("Revoke: %v, want nil -- an unusable token must still be removable", err)
 	}
 }
