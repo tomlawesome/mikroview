@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/tomlawesome/mikroview/internal/config"
@@ -41,6 +42,9 @@ func openStorage(ctx context.Context, cfg config.Config) (*storage, error) {
 	s := &storage{log: log}
 
 	if cfg.Postgres.DSNFile == "" {
+		if err := refuseIfPostgresAdopted(cfg); err != nil {
+			return nil, err
+		}
 		log.Info("persisting to JSON files under the configured store paths")
 		return s, nil
 	}
@@ -62,6 +66,14 @@ func openStorage(ctx context.Context, cfg config.Config) (*storage, error) {
 	}
 
 	s.pool = pool
+	// Recorded on every Postgres boot, not only the migrating one: a
+	// deployment that started on Postgres has no JSON files, so removing
+	// the DSN later would silently present a first-run setup screen and
+	// hand admin to whoever loaded it. Same fail-open, different route.
+	if err := markPostgresAdopted(cfg); err != nil {
+		pool.Close()
+		return nil, err
+	}
 	log.Info(fmt.Sprintf("persisting to %s", pool.Describe()))
 	log.Warn("this only separates your data from this host if Postgres is on a DIFFERENT machine, " +
 		"reachable over a restricted network path -- a database on this same host exposes its credential " +
@@ -118,4 +130,74 @@ func (s *storage) Close() {
 	if s != nil && s.pool != nil {
 		s.pool.Close()
 	}
+}
+
+// postgresAdoptedMarker records that this deployment has run on
+// Postgres. Moving to Postgres is a one-way, deliberate choice; this is
+// what makes that real rather than advisory.
+const postgresAdoptedMarker = "postgres-adopted"
+
+// markerPath puts the marker beside the JSON stores, because that is
+// where it has to be readable from: the check runs when Postgres is NOT
+// configured, so it cannot live in the database it is describing.
+func markerPath(cfg config.Config) string {
+	dir := config.DefaultDataDir
+	if cfg.Auth.StorePath != "" {
+		dir = filepath.Dir(cfg.Auth.StorePath)
+	}
+	return filepath.Join(dir, postgresAdoptedMarker)
+}
+
+// markPostgresAdopted records the choice, idempotently.
+//
+// A failure to write is fatal rather than a warning. The marker is the
+// only thing standing between "someone removed the DSN" and "mikroview
+// silently came up on stale or empty local state" -- a guard that
+// quietly failed to arm is worse than no guard, because the operator
+// believes it is there.
+func markPostgresAdopted(cfg config.Config) error {
+	path := markerPath(cfg)
+	if _, err := os.Stat(path); err == nil {
+		return nil
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return fmt.Errorf("postgres: recording the storage choice at %s: %w", path, err)
+	}
+	body := "This deployment stores its state in Postgres.\n\n" +
+		"Moving to Postgres is one-way. mikroview will refuse to start on the JSON\n" +
+		"files while this file exists, because coming back up on months-old local\n" +
+		"accounts -- with a different admin, or none -- is worse than not starting.\n\n" +
+		"Back up the database, not these files. See docs/configuration.md, \"Postgres\".\n"
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		return fmt.Errorf("postgres: recording the storage choice at %s: %w", path, err)
+	}
+	return nil
+}
+
+// refuseIfPostgresAdopted stops a deployment that has used Postgres from
+// starting on the JSON files.
+//
+// The realistic trigger is not someone deciding to switch back. It is a
+// mounted secret that failed to appear, a typo in an env var, or a
+// compose file edited in a hurry -- and the failure it prevents is the
+// worst kind: mikroview starts, looks healthy, and serves stale
+// accounts, or an empty store that presents the first-run setup screen
+// to whoever reaches it first.
+//
+// Consistent with a configured-but-unreachable database being fatal.
+// Same failure, reached by a different route, so it gets the same
+// answer.
+func refuseIfPostgresAdopted(cfg config.Config) error {
+	path := markerPath(cfg)
+	if _, err := os.Stat(path); err != nil {
+		return nil // never adopted; JSON is this deployment's real backend
+	}
+	return fmt.Errorf(
+		"this deployment stores its state in Postgres, but no postgres.dsnFile is configured -- "+
+			"refusing to start on the JSON files, which are stale or absent. "+
+			"Moving to Postgres is one-way and this is not a supported way back. "+
+			"Restore the database connection (check the DSN file is mounted and readable). "+
+			"If you genuinely intend to abandon the database and its data, remove %s and restart, "+
+			"understanding that accounts, flags and settings all come from whatever is left on local disk",
+		path)
 }

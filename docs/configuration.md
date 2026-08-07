@@ -1771,9 +1771,28 @@ storage │ migrated /var/lib/mikroview/users.json (362 bytes) into
 
 Three things worth knowing:
 
-- **The old files are left alone.** Nothing is deleted or renamed. To go
-  back, remove `dsnFile` and restart — you'll come back up on the last
-  file state, which will be out of date but is still there.
+- **This is a one-way door.** Once MikroView has started with Postgres
+  configured, it records that, and removing `dsnFile` later will *not*
+  bring you back on the JSON files — it refuses to start, and tells you
+  why and where the marker is.
+
+  That refusal is deliberate. Your JSON files stopped being current the
+  moment you migrated, so quietly falling back to them would serve stale
+  accounts — possibly a stale admin, possibly a password you had already
+  changed — and nothing would look wrong. Decide before you migrate: use
+  Postgres, or don't. Staying on the JSON files is always the reversible
+  choice.
+
+- **The old files are left alone.** Nothing is deleted or renamed — they
+  simply stop being read. Delete them once you're satisfied the move
+  worked.
+
+- **Back up the database from then on.** The JSON files are frozen at
+  the moment of migration, so backing those up protects nothing. This is
+  the expectation that comes with choosing Postgres.
+
+- **The JSON-file account commands stop working.** They would be editing
+  files nothing reads. They refuse, and say so.
 - **It only ever copies into an empty store.** Once the database holds
   data, the old file is ignored permanently. A stale file left on disk
   can't roll live data back on a later restart.
@@ -1830,8 +1849,8 @@ before it could reach a database at all.
 rule/host names, and auth config can only be set via YAML/env, not
 flags.
 
-`-healthcheck`, `-recover-admin-account`, `-transfer-admin <username>`,
-`-generate-recovery-keys`, `-show-recovery-keys` are standalone modes -- each does its one job and
+`-healthcheck`, `-recover-admin-account`, `-transfer-admin <username>`
+and `-generate-recovery-keys` are standalone modes -- each does its one job and
 exits, rather than starting the server. See
 [Authentication](#authentication) for all but the first.
 
