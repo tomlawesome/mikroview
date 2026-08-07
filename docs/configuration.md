@@ -1849,8 +1849,8 @@ before it could reach a database at all.
 rule/host names, and auth config can only be set via YAML/env, not
 flags.
 
-`-healthcheck`, `-recover-admin-account`, `-transfer-admin <username>`,
-`-generate-recovery-keys`, `-show-recovery-keys` are standalone modes -- each does its one job and
+`-healthcheck`, `-recover-admin-account`, `-transfer-admin <username>`
+and `-generate-recovery-keys` are standalone modes -- each does its one job and
 exits, rather than starting the server. See
 [Authentication](#authentication) for all but the first.
 
