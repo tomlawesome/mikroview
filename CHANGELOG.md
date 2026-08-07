@@ -11,6 +11,24 @@ upgrading.
 
 ## [Unreleased]
 
+### Added
+
+- **Recovery-key digests now follow the accounts into Postgres**, while
+  the pepper stays a local file on the mikroview host. Previously the
+  digests stayed in a local JSON file *next to the pepper* even on a
+  Postgres deployment — the single-host arrangement, on the one
+  deployment that chose Postgres specifically to avoid it.
+
+### Fixed
+
+- **`-transfer-admin` and `-recover-admin-account` work on Postgres
+  deployments.** They previously refused outright, which left a Postgres
+  deployment with no way to transfer or recover admin at all: neither
+  operation can go through the web UI (a compromised session must not be
+  able to grant itself admin) nor through an identity provider (an IdP
+  account is a login, not an authorisation to escalate). The CLI is the
+  only route, so it has to work in every deployment shape.
+
 ### Removed
 
 - **The option to run mikroview without authentication.** The first-run

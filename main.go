@@ -971,15 +971,36 @@ func runValidateConfig(args []string) int {
 
 // openRecoveryStoreForCLI opens the recovery-key store the gated CLI
 // commands verify against.
-func openRecoveryStoreForCLI() (*auth.RecoveryStore, error) {
+// openRecoveryStoreForCLI resolves the same backend the server would, so
+// the digests follow the accounts into Postgres (issue #172).
+//
+// The pepper stays a local file in both cases. That is the whole design:
+// a database dump yields digests nothing can test, and this host yields a
+// pepper with no digests to apply it to.
+func openRecoveryStoreForCLI() (*auth.RecoveryStore, func(), error) {
 	cfg, err := config.Load(os.Getenv("MIKROVIEW_CONFIG"), nil)
 	if err != nil {
-		return nil, fmt.Errorf("config: %w", err)
+		return nil, nil, fmt.Errorf("config: %w", err)
 	}
-	if cfg.Auth.RecoveryKeysPath == "" {
-		return nil, fmt.Errorf("auth.recoveryKeysPath is not configured")
+	if cfg.Auth.RecoveryKeysPath == "" && cfg.Postgres.DSNFile == "" {
+		return nil, nil, fmt.Errorf("auth.recoveryKeysPath is not configured")
 	}
-	return auth.OpenRecovery(cfg.Auth.RecoveryKeysPath, cfg.Auth.RecoveryPepperPath)
+
+	st, err := openStorage(context.Background(), cfg)
+	if err != nil {
+		return nil, nil, err
+	}
+	backend, err := st.backendFor(context.Background(), "recovery_keys", cfg.Auth.RecoveryKeysPath)
+	if err != nil {
+		st.Close()
+		return nil, nil, err
+	}
+	store, err := auth.OpenRecoveryWithBackend(backend, cfg.Auth.RecoveryPepperPath)
+	if err != nil {
+		st.Close()
+		return nil, nil, err
+	}
+	return store, st.Close, nil
 }
 
 // isContainerMainProcess reports whether this process is the container's
@@ -1082,11 +1103,12 @@ func runGenerateRecoveryKeys(args []string) int {
 		logger.Error(err.Error())
 		return 1
 	}
-	store, err := openRecoveryStoreForCLI()
+	store, closeStorage, err := openRecoveryStoreForCLI()
 	if err != nil {
 		logger.Error(err.Error())
 		return 1
 	}
+	defer closeStorage()
 
 	keys, err := store.Generate()
 	if err != nil {
@@ -1130,16 +1152,18 @@ func runTransferAdmin(args []string) int {
 		target = args[0]
 	}
 
-	recovery, err := openRecoveryStoreForCLI()
+	recovery, closeStorage, err := openRecoveryStoreForCLI()
 	if err != nil {
 		logger.Error(err.Error())
 		return 1
 	}
-	store, err := openAuthStoreForCLI("-transfer-admin")
+	defer closeStorage()
+	store, closeAuth, err := openAuthStoreForCLI("-transfer-admin")
 	if err != nil {
 		logger.Error(err.Error())
 		return 1
 	}
+	defer closeAuth()
 
 	current := store.Admin()
 	if current == nil {
@@ -1252,49 +1276,43 @@ func runHealthcheck() int {
 	return 0
 }
 
-// openAuthStoreForCLI is shared by the account-management CLI commands: all
-// need a real, persisted auth.Store and both refuse identically if one
-// isn't configured -- an ephemeral store would make either command
-// pointless (list nothing meaningful, or reset a password that vanishes
-// on the next restart).
-func openAuthStoreForCLI(cmd string) (*auth.Store, error) {
+// openAuthStoreForCLI is shared by the account-management CLI commands.
+// They need a real, persisted auth.Store -- an ephemeral one would let
+// -recover-admin-account report success over a password that vanishes on
+// the next restart.
+//
+// It resolves the same backend the server would, so these work against
+// Postgres as well as the JSON files. They used to refuse outright on a
+// Postgres deployment, which left it with no way to transfer or recover
+// admin at all: those two operations cannot go through the web UI (a
+// compromised session must not be able to grant itself admin) and cannot
+// go through an identity provider (an IdP account is a login, not an
+// authorisation to escalate). CLI is the only route, so it has to work
+// in every deployment shape.
+func openAuthStoreForCLI(cmd string) (*auth.Store, func(), error) {
 	cfg, err := config.Load(os.Getenv("MIKROVIEW_CONFIG"), nil)
 	if err != nil {
-		return nil, fmt.Errorf("config: %w", err)
+		return nil, nil, fmt.Errorf("config: %w", err)
 	}
-	if err := refuseOnPostgres(cfg, cmd); err != nil {
-		return nil, err
+	if cfg.Auth.StorePath == "" && cfg.Postgres.DSNFile == "" {
+		return nil, nil, fmt.Errorf("auth.storePath is not configured -- %s has nothing persisted to work with", cmd)
 	}
-	if cfg.Auth.StorePath == "" {
-		return nil, fmt.Errorf("auth.storePath is not configured -- %s has nothing persisted to work with", cmd)
-	}
-	return auth.Open(cfg.Auth.StorePath)
-}
 
-// refuseOnPostgres stops the JSON-file account commands running against
-// a deployment whose accounts live in Postgres.
-//
-// This is not tidiness. These commands open the JSON file directly, so
-// on a Postgres deployment they were reading and writing a file nothing
-// reads -- measured: `-list-users` reported "No accounts exist yet" on a
-// deployment with a registered account, against a users.json that had
-// never been written. `-recover-admin-account` would have printed
-// "Password updated" and left the operator just as locked out, which is
-// the worst possible outcome for a recovery tool: it fails while
-// reporting success, at the exact moment someone is depending on it.
-//
-// Refusing is strictly better than that. Whether these should instead
-// learn to speak to Postgres is a separate decision -- see
-// docs/decisions/postgres-backend.md.
-func refuseOnPostgres(cfg config.Config, cmd string) error {
-	if cfg.Postgres.DSNFile == "" {
-		return nil
+	st, err := openStorage(context.Background(), cfg)
+	if err != nil {
+		return nil, nil, err
 	}
-	return fmt.Errorf(
-		"%s manages the JSON account files, and this deployment keeps its accounts in Postgres "+
-			"(postgres.dsnFile is set) -- refusing rather than reading a file nothing uses. "+
-			"Manage accounts from the web UI; back up the database with your database's own tooling",
-		cmd)
+	backend, err := st.backendFor(context.Background(), "auth", cfg.Auth.StorePath)
+	if err != nil {
+		st.Close()
+		return nil, nil, err
+	}
+	store, err := auth.OpenWithBackend(backend)
+	if err != nil {
+		st.Close()
+		return nil, nil, err
+	}
+	return store, st.Close, nil
 }
 
 // authShouldFailClosed reports whether main()'s boot sequence should
@@ -1338,16 +1356,18 @@ func runRecoverAdminAccount(args []string) int {
 		return 1
 	}
 
-	recovery, err := openRecoveryStoreForCLI()
+	recovery, closeStorage, err := openRecoveryStoreForCLI()
 	if err != nil {
 		logger.Error(err.Error())
 		return 1
 	}
-	store, err := openAuthStoreForCLI("-recover-admin-account")
+	defer closeStorage()
+	store, closeAuth, err := openAuthStoreForCLI("-recover-admin-account")
 	if err != nil {
 		logger.Error(err.Error())
 		return 1
 	}
+	defer closeAuth()
 
 	admin := store.Admin()
 	if admin == nil {
