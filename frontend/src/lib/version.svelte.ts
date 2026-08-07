@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+
 import { fetchHealthz } from './api'
 
 // The running server's build version (main.version's short commit SHA,

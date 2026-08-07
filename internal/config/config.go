@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+
 // Package config loads mikroview's configuration with precedence
 // defaults < YAML file < environment variables < CLI flags.
 //

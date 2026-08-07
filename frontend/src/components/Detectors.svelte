@@ -1,4 +1,5 @@
 <script lang="ts">
+  // SPDX-License-Identifier: AGPL-3.0-only
   // Admin-only: per-detector on/off + scope restrictions (see
   // internal/detect.Scope's doc comment and docs/configuration.md's
   // "Per-detector toggles" section for exactly what each field does per

@@ -1,4 +1,5 @@
 <script lang="ts">
+  // SPDX-License-Identifier: AGPL-3.0-only
   // Full-detail bottom sheet for one event, opened by tapping a card in
   // EventCardMobile.svelte -- chosen over expanding the card in place
   // (see issue #85's locked design decision) since it scales better if

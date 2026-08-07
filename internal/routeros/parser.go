@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+
 // Package routeros decodes the body of a RouterOS firewall log message
 // (the part after the syslog envelope has already been stripped) into
 // structured fields.

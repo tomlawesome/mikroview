@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+
 import { fetchDevices, fetchEvents, fetchStats } from './api'
 import { MAX_CLIENT_EVENTS } from './constants'
 import { isPublicIp } from './format'

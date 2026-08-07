@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+
 // Package web embeds the built frontend into the mikroview binary so it
 // ships as a single self-contained executable/image.
 //

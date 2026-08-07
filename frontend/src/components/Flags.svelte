@@ -1,4 +1,5 @@
 <script lang="ts">
+  // SPDX-License-Identifier: AGPL-3.0-only
   // Behavioral flags raised by internal/detect (see docs/configuration.md's
   // "Behavioral flags" section) -- an interrogation aid, not an IPS: every
   // action here is a human reviewing and clearing a flag, never mikroview
