@@ -26,6 +26,14 @@ export interface FirewallEvent {
   // ruleName, but for srcIp/dstIp.
   srcHostName?: string
   dstHostName?: string
+  // srcPortName/dstPortName (issue #109): same friendly-name
+  // relationship, but for srcPort/dstPort -- undefined whenever the port
+  // is 0/absent or has no matching entity. Unlike ruleName/hostName,
+  // there is no config.yaml fallback source for these (see
+  // internal/naming.Resolver.Port's doc comment): an entity is the only
+  // way a port ever gets a name.
+  srcPortName?: string
+  dstPortName?: string
   natIp?: string
   natPort?: number
   natRaw?: string
@@ -46,7 +54,8 @@ export interface ClientEvent extends FirewallEvent {
   receivedAt: number
 }
 
-// Mirrors internal/device/registry.go's Info.
+// Mirrors internal/device/registry.go's Info, plus internal/api/rest.go's
+// handleDevices-computed `status` (see that file's deviceView/deviceStatus).
 export interface Device {
   id: string
   name: string
@@ -55,6 +64,12 @@ export interface Device {
   firstSeen: string
   lastSeen: string
   eventCount: number
+  // status (issue #98): "live" (an event within the configured staleness
+  // threshold), "stale" (LastSeen is older than that threshold), or
+  // "never_seen" (configured, but zero events ever received). Computed
+  // server-side, read-time, on every GET /api/devices -- always fresh,
+  // never a value this client itself has to derive or keep in sync.
+  status: 'live' | 'stale' | 'never_seen'
 }
 
 // Mirrors internal/store/query.go's Result.
@@ -75,6 +90,18 @@ export interface RuleCount {
 export interface TimeBucket {
   time: string
   byAction: Partial<Record<Action, number>>
+}
+
+// Mirrors internal/api/rest.go's handleHealthz response. version is the
+// build-time-stamped short commit SHA ("dev" for a plain local build) --
+// the same value `mikroview -version` prints, and the only place a
+// running deployment's build is checkable without host/container
+// access.
+export interface Healthz {
+  status: string
+  time: string
+  uptime: string
+  version: string
 }
 
 // Mirrors internal/api/rest.go's handleStats response.
@@ -98,6 +125,17 @@ export interface AuthSession {
   username?: string
   role?: 'admin' | 'user'
   ssoAvailable: boolean
+}
+
+// Mirrors internal/api/tokens.go's tokenResponse. value is present only
+// in the response to creating a token (see api.ts's createToken) --
+// never on a listed token, and never recoverable afterward.
+export interface ApiToken {
+  id: string
+  name: string
+  createdAt: string
+  lastUsedAt?: string
+  value?: string
 }
 
 // Mirrors internal/reputation/reputation.go's Result.
@@ -129,11 +167,53 @@ export type FlagType =
   | 'rule_spike'
   | 'repeated_drops'
   | 'low_slow_scan'
+  | 'off_hours_activity'
+  | 'device_silence'
+  // new_device (issue #103 phase 1): raised directly from the ingest
+  // path (main.go), not through internal/detect like every other flag
+  // type above -- see internal/flags.TypeNewDevice. This is exactly the
+  // divergence DetectorName's doc comment below used to warn about: it
+  // has no corresponding detector-settings entry (no on/off toggle, no
+  // scope), so it must NOT be added to DetectorName.
+  | 'new_device'
+  // stale_rule (issue #102): raised by a standalone periodic sweep (see
+  // internal/detect.StaleRuleDetector), not the generic per-event
+  // detector-enable/scope pipeline every DetectorName-backed type goes
+  // through -- same "no matching detector-settings entry" exception as
+  // new_device above, not an oversight.
+  | 'stale_rule'
+  // unexpected_mail_sender (issue #108): a LAN source, untagged
+  // "trusted-mail-sender" in the entities store, originating an
+  // outbound connection to an external destination on an SMTP port (25,
+  // 465, 587) -- see internal/flags.TypeUnexpectedMailSender. Always on
+  // and deterministic (no threshold/window to tune), so like
+  // new_device/stale_rule above it has no matching DetectorName entry.
+  | 'unexpected_mail_sender'
+  // known_bad_ip (issue #113 Part B): a source IP matching a locally-
+  // cached CIDR range from a vetted threat-intel feed (Spamhaus DROP/
+  // EDROP by default -- see internal/blocklist's doc comment). Raised
+  // directly from internal/detect.Observe on a deterministic list-
+  // membership check, not gated by DetectorName/Scope -- same "no
+  // matching detector-settings entry" exception as new_device/stale_rule
+  // above.
+  | 'known_bad_ip'
 
-// Mirrors internal/detect.DetectorName -- same 9 string values as
-// FlagType, kept as a distinct alias since they're the same thing only
-// by coincidence today (see that type's doc comment).
-export type DetectorName = FlagType
+// Mirrors internal/detect.DetectorName's 12 string values. No longer a
+// FlagType alias (see new_device/stale_rule above) -- kept as its own
+// literal union now that FlagType has entries with no matching detector.
+export type DetectorName =
+  | 'port_scan'
+  | 'activity_spike'
+  | 'critical_port'
+  | 'global_spike'
+  | 'distributed_brute_force'
+  | 'outbound_anomaly'
+  | 'internal_recon'
+  | 'rule_spike'
+  | 'repeated_drops'
+  | 'low_slow_scan'
+  | 'off_hours_activity'
+  | 'device_silence'
 
 // Mirrors internal/detect.ListMode.
 export type ListMode = '' | 'allow' | 'deny'
@@ -159,6 +239,55 @@ export interface DetectorSettings {
   scope: DetectorScope
 }
 
+// Mirrors internal/entities.Entity's JSON tags (issue #107). type is
+// deliberately a plain string, not a closed union, mirroring the
+// backend's own "extensible, not a fixed enum" choice (internal/
+// entities.Store never validates Type); 'host'/'rule'/'port' below are
+// just the values this UI knows how to label/discover today, not a
+// validation allowlist -- an arbitrary string still round-trips fine.
+export type EntityType = 'host' | 'rule' | 'port' | (string & {})
+
+export interface Entity {
+  type: EntityType
+  key: string
+  label?: string
+  tags?: string[]
+}
+
+// Mirrors internal/audit.Entry's JSON tags (issue #112) -- one recorded
+// admin-privileged mutation (user created, entity upserted/deleted, API
+// token created/revoked, detector setting changed, flag exclusion
+// removed). action is deliberately a plain string, not a closed union,
+// same "extensible, not gatekept client-side" reasoning EntityType above
+// already follows for the backend's own internal/audit.Entry.Action.
+export interface AuditEntry {
+  id: number
+  timestamp: string
+  actor: string
+  action: string
+  target: string
+  detail?: string
+}
+
+// Mirrors internal/audit.Result's JSON tags -- the response to
+// GET /api/audit, same HasMore-signals-truncation shape as EventsResult.
+export interface AuditResult {
+  entries: AuditEntry[]
+  hasMore: boolean
+}
+
+// Mirrors internal/rules.Usage's JSON tags (issue #103) -- one rule
+// label's lifetime firing record, served by GET /api/rules. Used by the
+// Entities panel (issue #109) as the "discovered but unnamed rules"
+// source: every rule label mikroview has ever seen fire, independent of
+// whether it currently has an entity/label.
+export interface RuleUsage {
+  rule: string
+  firstSeen: string
+  lastSeen: string
+  count: number
+}
+
 // Mirrors internal/flags.NATInfo's JSON tags.
 export interface NATInfo {
   ip?: string
@@ -174,6 +303,16 @@ export interface Evidence {
   ports?: number[]
   hosts?: string[]
   nat?: NATInfo
+}
+
+// Mirrors internal/flags.Exclusion's JSON tags -- one permanently-
+// excluded (Type, Target) pair (see flags.svelte.ts's clearPermanent and
+// exclusions.svelte.ts). id is the same flagID(Type, Target) key a
+// Flag's own id already uses.
+export interface Exclusion {
+  id: string
+  type: FlagType
+  target: string
 }
 
 export interface Flag {
@@ -202,6 +341,15 @@ export interface Flag {
   // Structured supporting evidence -- see Evidence's own doc comment.
   // Absent/empty for detectors with nothing beyond `detail` to show.
   evidence?: Evidence
+}
+
+// Mirrors internal/flags.FlagTimeBucket's JSON tags -- same shape
+// convention as TimeBucket above, but counting newly-raised flag
+// episodes by Type instead of raw events by Action. byType omits types
+// with a zero count for a given minute.
+export interface FlagTimeBucket {
+  time: string
+  byType: Partial<Record<FlagType, number>>
 }
 
 // Mirrors internal/store's Scope.

@@ -2,18 +2,24 @@ package api
 
 import (
 	"encoding/json"
+	"fmt"
+	"github.com/tomlawesome/mikroview/internal/device"
+	"github.com/tomlawesome/mikroview/internal/store"
 	"net/http"
 	"strconv"
 	"time"
 
-	"github.com/tomlawesome/mikroview/internal/store"
+	"github.com/tomlawesome/mikroview/internal/logging"
 )
+
+var apiLog = logging.New("api")
 
 func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
-		"status": "ok",
-		"time":   time.Now().UTC(),
-		"uptime": time.Since(s.StartTime).String(),
+		"status":  "ok",
+		"time":    time.Now().UTC(),
+		"uptime":  time.Since(s.StartTime).String(),
+		"version": s.Version,
 	})
 }
 
@@ -26,8 +32,65 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, res)
 }
 
+// deviceView adds a read-time-computed status to device.Info for the
+// fleet-health view (issue #98) -- Info itself stays raw data with no
+// notion of "stale," the same separation store.Event/detect keep between
+// stored fact and derived judgment. Info is embedded rather than copied
+// field-by-field so its JSON tags are reused as-is and this struct only
+// ever needs to know about the one field it adds.
+type deviceView struct {
+	device.Info
+	// Status is "live" (an event within DeviceStaleAfter), "stale" (an
+	// event, but not within DeviceStaleAfter -- or DeviceStaleAfter isn't
+	// configured at all and one just hasn't arrived in a while, see
+	// deviceStatus), or "never_seen" (Configured: true in config.yaml,
+	// but zero events ever received). Distinct from -- and a superset
+	// of -- TypeDeviceSilence: that flag only ever fires for a
+	// Configured device that *was* active and went quiet, so a
+	// never-contacted device is never flagged even though it's also not
+	// "live" here.
+	Status string `json:"status"`
+}
+
 func (s *Server) handleDevices(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]any{"devices": s.Devices.List()})
+	now := time.Now()
+	infos := s.Devices.List()
+	views := make([]deviceView, 0, len(infos))
+	for _, info := range infos {
+		views = append(views, deviceView{Info: info, Status: deviceStatus(info, s.DeviceStaleAfter, now)})
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"devices": views})
+}
+
+// handleRules serves every rule label mikroview has ever seen fire
+// (internal/rules.Store, issue #103's persisted, unbounded-time usage
+// record), each with its first/last-seen time and count -- issue #109's
+// "discovered but unnamed" source for the Entities admin panel, the same
+// role GET /api/devices already plays for auto-discovered hosts. Not
+// admin-gated, same as GET /api/devices: this is read-only usage data,
+// not the entity records themselves (POST/DELETE /api/entities stay
+// admin-only).
+func (s *Server) handleRules(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]any{"rules": s.Rules.List()})
+}
+
+// deviceStatus computes info's fleet-health status as of now -- see
+// deviceView.Status for what each value means. A device with no events
+// yet is "never_seen" regardless of DeviceStaleAfter (there's no elapsed
+// time to measure against a threshold); everything else is "stale" once
+// DeviceStaleAfter has passed since LastSeen, "live" otherwise. An
+// unconfigured DeviceStaleAfter (0, "not configured") means nothing ever
+// reports "stale" here -- consistent with DeviceSilenceDetector.Check's
+// own "0 disables the detector" contract, so the API and the actual
+// alert never disagree about whether staleness detection is even on.
+func deviceStatus(info device.Info, staleAfter time.Duration, now time.Time) string {
+	if info.LastSeen.IsZero() {
+		return "never_seen"
+	}
+	if staleAfter > 0 && now.Sub(info.LastSeen) >= staleAfter {
+		return "stale"
+	}
+	return "live"
 }
 
 // handleCriticalPorts serves the configured control-port list (issue #34)
@@ -126,7 +189,15 @@ func parseScope(v string) store.Scope {
 func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	json.NewEncoder(w).Encode(v)
+	// The status line and headers are already on the wire by this point,
+	// so a failure here cannot be turned into a 500 -- the client will
+	// see a truncated body regardless. Log it rather than discard it:
+	// silently serving a half-written response is the kind of fault that
+	// otherwise only ever surfaces as an unreproducible frontend parse
+	// error.
+	if err := json.NewEncoder(w).Encode(v); err != nil {
+		apiLog.Warn(fmt.Sprintf("writing JSON response failed after %d was already sent: %v", status, err))
+	}
 }
 
 // maxJSONBodyBytes bounds every JSON request body this API accepts --

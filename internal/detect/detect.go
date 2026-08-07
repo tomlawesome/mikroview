@@ -15,6 +15,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/tomlawesome/mikroview/internal/entities"
 	"github.com/tomlawesome/mikroview/internal/flags"
 	"github.com/tomlawesome/mikroview/internal/logging"
 	"github.com/tomlawesome/mikroview/internal/store"
@@ -134,6 +135,92 @@ type Config struct {
 	// per-host-baseline technique as activity-spike/#38 -- see
 	// host_baseline.go), not just the absolute thresholds above.
 	LowSlowScanBaselineMultiplier float64
+
+	// OffHoursStartHour/EndHour (issue #104): the clock window (0-23,
+	// server-local time, start inclusive/end exclusive) this detector is
+	// willing to fire in at all -- wraps past midnight when Start > End
+	// (e.g. 23, 6 means 23:00-06:00). A fixed, operator-set window rather
+	// than a per-host-learned "quiet period": see off_hours.go's package
+	// doc comment for why. Every hour's baseline is still tracked
+	// continuously regardless of this window (see sourceWindow.hourly),
+	// so narrowing or widening it later doesn't lose history that was
+	// already being collected.
+	OffHoursStartHour int
+	OffHoursEndHour   int
+	// OffHoursMinSampleDays: the hard floor on off_hours.go's per-hour
+	// baseline -- that specific hour must have been observed on at least
+	// this many distinct prior days before a flag can fire for it at
+	// all, no matter how extreme the count. One busy night isn't a
+	// baseline; this is what makes that structurally impossible rather
+	// than just unlikely. Also doubles as emaConfidence's warmupSamples
+	// for this detector: once a hour bucket clears this floor it's
+	// already trusted, so confidence beyond that point is driven purely
+	// by the z-score.
+	OffHoursMinSampleDays int
+	// OffHoursMinCount: an absolute floor on top of the z-score/baseline
+	// check -- a host that's never been seen at some hour has a
+	// near-zero baseline, so even a handful of events there would read
+	// as a huge deviation by z-score alone. Mirrors
+	// ActivitySpikeThreshold's role alongside HostActivityMultiplier in
+	// checkHostActivityBaseline.
+	OffHoursMinCount int
+	// DeviceStaleAfter (issue #98): how long a configured device's
+	// LastSeen may go without updating before DeviceSilenceDetector
+	// raises TypeDeviceSilence for it. Needs to sit comfortably above
+	// normal syslog gaps (RouterOS doesn't emit a steady heartbeat, just
+	// events as they happen) so an ordinarily quiet stretch never false-
+	// positives. Zero disables the detector entirely -- see
+	// DeviceSilenceDetector.Check.
+	DeviceStaleAfter time.Duration
+
+	// VPNInterfaces (issue #105): interface-name patterns -- each
+	// matched against store.Event.InInterface with glob syntax (see
+	// isVPNInterface in vpn.go, e.g. "wireguard1" for an exact match or
+	// "wireguard*" for a prefix match) -- identifying which interfaces
+	// correspond to a configured VPN tunnel. RouterOS firewall log lines
+	// see a WireGuard tunnel's *inner*, already-decrypted traffic (the
+	// peer's tunnel IP as SrcIP, arriving on whatever interface name
+	// RouterOS assigns the WireGuard interface), which is exactly what
+	// InInterface already captures -- enough to say "this traffic came
+	// from an already-authenticated remote peer" without needing
+	// anything RouterOS's own API would provide.
+	//
+	// Consulted by checkHostActivityBaseline (host_baseline.go, feeding
+	// TypeActivitySpike) and observeDestSpread (dest_spread.go, feeding
+	// TypeOutboundAnomaly/TypeInternalRecon): an anomaly whose triggering
+	// event arrived via a VPN-tagged interface is scored more
+	// confidently than the identical anomaly arriving via an ordinary
+	// LAN interface, since a remote peer that already had to pass
+	// WireGuard's own key-based auth to reach the network at all
+	// behaving anomalously is a stronger signal than an ordinary LAN
+	// device doing the same. See VPNConfidenceMultiplier for exactly how
+	// that boost is applied.
+	//
+	// Empty (the default) matches no interface, so every existing
+	// deployment's confidence scoring is completely unchanged until this
+	// is explicitly configured -- a safe, backward-compatible default.
+	//
+	// Deliberately out of scope, both here and everywhere else in
+	// mikroview: tracking the WireGuard peer's *outer* UDP endpoint or
+	// handshake state (/interface/wireguard/peers). Firewall logs never
+	// see that data -- only the router's own API would -- so mikroview
+	// can't yet tell "peer roamed to a new IP" (normal for a mobile
+	// peer) from "peer's private key was stolen and is now being used
+	// from elsewhere" (a real compromise signal). That's blocked on
+	// mikroview issue #21 deciding whether/how mikroview talks to the
+	// RouterOS API at all.
+	VPNInterfaces []string
+	// VPNConfidenceMultiplier scales a flag's already-computed
+	// confidence score (from emaConfidence or overshootConfidence) when
+	// the triggering event's InInterface matches VPNInterfaces -- see
+	// vpn.go's vpnBoostConfidence for the full mechanism and the design
+	// reasoning for why a post-hoc multiplier (rather than a lowered
+	// firing threshold/z-score bar) was chosen. Applied identically at
+	// both VPNInterfaces call sites. <= 0 is treated as 1 (no boost),
+	// never as "suppress or invert" -- a misconfigured value should
+	// never make a VPN-sourced anomaly read as less alarming than an
+	// identical LAN one.
+	VPNConfidenceMultiplier float64
 }
 
 // DefaultConfig returns sensible defaults for a home/small-office
@@ -181,6 +268,27 @@ func DefaultConfig() Config {
 		LowSlowScanMinObservation:     45 * time.Minute,
 		LowSlowScanDropRatio:          0.8,
 		LowSlowScanBaselineMultiplier: 3,
+
+		// 23:00-06:00: a conservative, common-denominator quiet period
+		// for a home/small-office network -- see off_hours.go's doc
+		// comment for why a fixed window was chosen over a per-host-
+		// learned one.
+		OffHoursStartHour:     23,
+		OffHoursEndHour:       6,
+		OffHoursMinSampleDays: 14,
+		OffHoursMinCount:      5,
+
+		DeviceStaleAfter: 15 * time.Minute,
+
+		// VPNInterfaces is empty by default -- see its doc comment for
+		// why that's the deliberate, backward-compatible no-op starting
+		// point. VPNConfidenceMultiplier still gets a sensible default
+		// so simply setting VPNInterfaces is enough to opt in without
+		// also having to pick a multiplier: 1.5x is a modest boost, not
+		// an instant jump to full confidence -- consistent with every
+		// other confidence signal in this package being additive
+		// evidence, not an override.
+		VPNConfidenceMultiplier: 1.5,
 	}
 }
 
@@ -219,6 +327,33 @@ type sourceWindow struct {
 	variance    float64
 	primed      bool
 	sampleCount int
+
+	// hourly is off_hours.go's per-hour-of-day counterpart to
+	// baseline/variance above: 24 independent EMA baselines, one per
+	// clock hour, each tracking how many events this source typically
+	// produces during that specific hour. Unlike baseline/variance
+	// (which judge every observation against one rolling-window rate),
+	// each entry here only advances once per calendar day -- see
+	// hourlyDay/hourlyCount below and checkOffHoursActivity's own doc
+	// comment for why daily granularity is what "distinct prior days of
+	// history" (sampleDays) actually requires.
+	hourly [24]struct {
+		baseline   float64
+		variance   float64
+		sampleDays int
+	}
+	// hourlyDay is the calendar day (server-local "2006-01-02") each
+	// hour bucket is currently accumulating hourlyCount for -- "" if
+	// that hour has never been observed. checkOffHoursActivity folds the
+	// previous day's hourlyCount into hourly[h]'s EMA (and advances
+	// sampleDays) the moment a later day is first seen at that hour,
+	// then starts today's count fresh.
+	hourlyDay [24]string
+	// hourlyCount is today's (hourlyDay[h]'s) running event count for
+	// hour h, not yet folded into hourly[h]'s baseline -- this is the
+	// "current count" checkOffHoursActivity compares against that
+	// baseline, live, as events arrive.
+	hourlyCount [24]int
 }
 
 // Detector tracks per-source rolling-window state for the port-scan,
@@ -241,6 +376,19 @@ type Detector struct {
 	// real network calls by default).
 	reputation  reputationLookup
 	lookupSlots chan struct{}
+
+	// entities backs observeMailSender's trusted-mail-sender allowlist
+	// check (issue #108) -- see WithEntities. nil unless WithEntities is
+	// called explicitly (never by New/NewWithSettings themselves, so
+	// tests that don't care about the allowlist just see every untagged
+	// source flagged, the same "nil is a valid no-op" contract
+	// reputation above uses).
+	entities *entities.Store
+	// knownBad backs the synchronous local-blocklist check in
+	// known_bad_ip.go -- see WithKnownBadIPs. nil (the default) is a
+	// valid, explicit "not configured" no-op, same convention as
+	// reputation above.
+	knownBad knownBadIPLookup
 
 	perSource       map[string]*sourceWindow
 	criticalHits    map[string]*criticalWindow
@@ -360,6 +508,7 @@ func (d *Detector) Observe(e store.Event) {
 
 	d.observeScanAndSpike(e, now)
 	d.observeLowSlowScan(e, now)
+	d.observeOffHours(e, now)
 
 	srcPublic := isPublic(e.SrcIP)
 	if e.DstPort != 0 && isCriticalPort(d.cfg.CriticalPorts, e.DstPort) && srcPublic {
@@ -380,6 +529,15 @@ func (d *Detector) Observe(e store.Event) {
 		// observeDestSpread itself (outbound-anomaly and internal-recon
 		// are independently toggleable but share window state).
 		d.observeDestSpread(e, now)
+
+		// internal-source -> external-destination on an SMTP port (issue
+		// #108) -- always on, unlike the DetectorName-backed checks
+		// above/below, since this is deterministic (see
+		// observeMailSender's doc comment) rather than a scoped,
+		// tunable threshold.
+		if isPublic(e.DstIP) && isMailPort(e.DstPort) {
+			d.observeMailSender(e, now)
+		}
 	}
 
 	if e.RuleLabel != "" {
@@ -398,6 +556,12 @@ func (d *Detector) Observe(e store.Event) {
 			d.observeRepeatedDrops(e, now)
 		}
 	}
+
+	// Local blocklist match (issue #113 Part B) -- deliberately last:
+	// see observeKnownBadIP's own doc comment for why its
+	// RaiseConfidenceFloor reinforcement pass needs every other
+	// detector above to have already run for this same event.
+	d.observeKnownBadIP(e, now)
 }
 
 func (d *Detector) observeScanAndSpike(e store.Event, now time.Time) {
@@ -452,7 +616,7 @@ func (d *Detector) observeScanAndSpike(e store.Event, now time.Time) {
 	// behavior, not a gap.
 	if asActive {
 		spikeCount := w.spikes.Count(now, d.cfg.ActivitySpikeWindow)
-		d.checkHostActivityBaseline(w, e.SrcIP, e.SrcCountry, spikeCount, now)
+		d.checkHostActivityBaseline(w, e.SrcIP, e.SrcCountry, e.InInterface, spikeCount, now)
 	}
 	if psActive {
 		// port 0 and scope are both query-time filters (not applied at
@@ -522,17 +686,65 @@ func (w *criticalWindow) lastActivityTime() time.Time { return w.lastActivity }
 // -- shared by every per-key detector state map once it hits
 // maxTrackedSources, replacing what used to be six structurally
 // identical hand-copied functions (one per map's value type).
+// evictionBatchFraction: how much of a full map to shed per overflow,
+// as a divisor (8 = one eighth). Evicting a single entry meant a full
+// O(n) scan for *every* new key once the map was full -- and the keys
+// are attacker-chosen source IPs, so a flood of distinct sources put
+// the detector permanently in that state.
+//
+// Measured before this change: 5.78 us/event with recurring sources vs
+// 504.96 us/event under all-distinct spoofed sources -- an 87x
+// slowdown that capped the single detector worker near 2000 events/s.
+// Past that, Enqueue drops silently, so a spoofed-source flood made
+// mikroview stop detecting a real concurrent attack. That is the tool
+// failing at its one job, quietly, which is the worst available
+// outcome.
+//
+// Shedding a batch amortizes the scan across many insertions: the next
+// n/8 new sources are free. One eighth keeps the map comfortably full
+// (so genuine sources aren't evicted early) while making the amortized
+// cost O(1)-ish per event.
+const evictionBatchFraction = 8
+
+// evictOldestByActivity sheds the least-recently-active entries once a
+// per-source map is full. It removes a batch rather than a single entry
+// -- see evictionBatchFraction for why that matters under a flood of
+// attacker-chosen keys.
 func evictOldestByActivity[V activeWindow](m map[string]V) {
-	var oldestKey string
-	var oldest time.Time
-	first := true
+	batch := len(m) / evictionBatchFraction
+	if batch < 1 {
+		batch = 1
+	}
+
+	// Single pass collecting the batch smallest lastActivity values,
+	// keeping at most `batch` candidates -- avoids sorting the whole
+	// map, which would reintroduce the cost this is removing.
+	type candidate struct {
+		key  string
+		when time.Time
+	}
+	worst := make([]candidate, 0, batch+1)
 	for k, w := range m {
-		if first || w.lastActivityTime().Before(oldest) {
-			oldestKey, oldest, first = k, w.lastActivityTime(), false
+		t := w.lastActivityTime()
+		if len(worst) < batch {
+			worst = append(worst, candidate{k, t})
+			// Keep the newest at the end so it is the first to be
+			// displaced once the batch is full.
+			for i := len(worst) - 1; i > 0 && worst[i].when.After(worst[i-1].when); i-- {
+				worst[i], worst[i-1] = worst[i-1], worst[i]
+			}
+			continue
+		}
+		if t.Before(worst[len(worst)-1].when) {
+			worst[len(worst)-1] = candidate{k, t}
+			for i := len(worst) - 1; i > 0 && worst[i].when.After(worst[i-1].when); i-- {
+				worst[i], worst[i-1] = worst[i-1], worst[i]
+			}
 		}
 	}
-	if oldestKey != "" {
-		delete(m, oldestKey)
+
+	for _, c := range worst {
+		delete(m, c.key)
 	}
 }
 

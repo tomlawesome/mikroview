@@ -20,6 +20,29 @@ services:
       # "" below) if you'd rather handle the redirect at your own
       # reverse proxy.
       - "80:8081"
+    # Container hardening. The image is already distroless + non-root
+    # (see Dockerfile), so these are defense-in-depth rather than the
+    # primary control -- but they're free, and they cap what a
+    # hypothetical RCE in the parser or HTTP layer could reach.
+    security_opt:
+      # Blocks setuid/setgid binaries from raising privileges. Nothing
+      # here needs to, and the distroless image ships no such binary
+      # anyway -- this makes that structural instead of incidental.
+      - no-new-privileges:true
+    cap_drop:
+      # mikroview binds only unprivileged ports (1514/8080/8081 -- see
+      # the mappings above, which is exactly why they aren't 514/443/80
+      # inside the container), so it needs no Linux capabilities at all.
+      - ALL
+    # The root filesystem is read-only; every path mikroview actually
+    # writes to is a mount. /var/lib/mikroview is the named volume
+    # below, and the distroless image has no shell or package manager
+    # that would need to write anywhere else. Note it does NOT need a
+    # /tmp tmpfs: every persisted store writes its temp file alongside
+    # the real one inside /var/lib/mikroview (see the atomic
+    # write-temp-then-rename in internal/auth, internal/flags,
+    # internal/entities, internal/audit), never into /tmp.
+    read_only: true
     healthcheck:
       test: ["CMD", "/mikroview", "-healthcheck"]
       interval: 30s
@@ -32,10 +55,10 @@ services:
       # your own MaxMind GeoLite2 database; uncomment both this and the
       # env var below once you have one.
       # - ./GeoLite2-Country.mmdb:/etc/mikroview/GeoLite2-Country.mmdb:ro
-      # Persists flags/accounts/detector settings/the TLS cert across
-      # container recreation, not just restarts -- see README.md's
-      # "Persistent data" section for what this is and the bind-mount
-      # alternative below.
+      # Persists flags/accounts/detector settings/the new-device MAC
+      # registry/the TLS cert across container recreation, not just
+      # restarts -- see README.md's "Persistent data" section for what
+      # this is and the bind-mount alternative below.
       - mikroview-data:/var/lib/mikroview
       # Alternative to the named volume above: a bind mount, if you want
       # to browse/back up the files directly from the host. Comment out
@@ -51,6 +74,10 @@ services:
       # - MIKROVIEW_FLAGS_STORE_PATH=/var/lib/mikroview/flags.json
       # - MIKROVIEW_FLAGS_DETECTOR_SETTINGS_STORE_PATH=/var/lib/mikroview/detector-settings.json
       # - MIKROVIEW_AUTH_STORE_PATH=/var/lib/mikroview/users.json
+      # - MIKROVIEW_ENTITIES_STORE_PATH=/var/lib/mikroview/entities.json
+      # - MIKROVIEW_DEVICE_MAC_STORE_PATH=/var/lib/mikroview/mac-registry.json
+      # - MIKROVIEW_AUTH_TOKENS_STORE_PATH=/var/lib/mikroview/tokens.json
+      # - MIKROVIEW_AUDIT_STORE_PATH=/var/lib/mikroview/audit.json
       # TLS is on by default and needs no configuration to work -- these
       # are only for customizing it.
       # - MIKROVIEW_TLS_STORE_PATH=/var/lib/mikroview/tls
