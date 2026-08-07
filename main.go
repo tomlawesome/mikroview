@@ -235,7 +235,17 @@ func main() {
 	configLog := logging.New("config")
 	cfg, configResult, err := config.LoadWithProblems(os.Getenv("MIKROVIEW_CONFIG"), os.Args[1:])
 	if err != nil {
-		configLog.Error(err.Error())
+		// The structured report rather than err.Error(): this is the
+		// message that stops the server, so the line telling the
+		// operator what to change should not be the tail of a long
+		// sentence. Falls back to the error's own text when the failure
+		// was reading or parsing the file, which produces no Problems to
+		// render.
+		if len(configResult.Fatal) > 0 {
+			configLog.Error("invalid configuration:\n" + config.Report(configResult.Fatal) + config.CheckHint)
+		} else {
+			configLog.Error(err.Error() + "\n" + config.CheckHint)
+		}
 		os.Exit(1)
 	}
 	// Every component logger created before this point (configLog above)
@@ -942,8 +952,15 @@ func runValidateConfig(args []string) int {
 	cfg, result, err := config.LoadWithProblems(path, nil)
 	if err != nil {
 		// Either the file is unreadable/unparseable, or validation found
-		// something fatal. Both are reported the same way to the operator;
-		// only the exit code distinguishes them, and only when we can tell.
+		// something fatal. Only the exit code distinguishes them, and
+		// only when we can tell -- but a fatal gets the same block
+		// treatment warnings do below, rather than one dense line with
+		// the fix on the end.
+		if len(result.Fatal) > 0 {
+			fmt.Fprint(os.Stderr, config.Report(result.Fatal))
+			fmt.Fprintf(os.Stderr, "\n%d problem(s). mikroview would refuse to start.\n", len(result.Fatal))
+			return validateConfigExitProblems
+		}
 		fmt.Fprintf(os.Stderr, "%v\n", err)
 		if strings.Contains(err.Error(), "invalid configuration") {
 			return validateConfigExitProblems
