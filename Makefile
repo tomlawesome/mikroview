@@ -54,3 +54,23 @@ live-check:
 	  exit $$status
 
 .PHONY: live-check
+
+# live-routeros: boot a real RouterOS CHR and point it at a real
+# mikroview. Opt-in rather than part of live-check, because it boots a VM
+# and only changes that touch RouterOS ingest need it -- see #186.
+#
+# The router is real MikroTik firmware, so it answers questions no test
+# double can: it is what established that /tool fetch refuses a POST body
+# over ~64KiB and that :serialize to=json does not exist before 7.13.
+live-routeros:
+	@eval "$$(MV_BIND=$$(scripts/live-routeros.sh host-addr) scripts/live-env.sh up)"; \
+	  test -n "$$MV_URL" || { echo "live-env.sh up produced no MV_URL" >&2; exit 1; }; \
+	  eval "$$(scripts/live-routeros.sh up)"; \
+	  status=0; \
+	  scripts/live-routeros.sh trust "$$MV_URL" || status=1; \
+	  scripts/live-routeros.sh run '/system resource print' || status=1; \
+	  scripts/live-routeros.sh down; \
+	  scripts/live-env.sh down; \
+	  exit $$status
+
+.PHONY: live-routeros

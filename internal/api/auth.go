@@ -162,10 +162,12 @@ func bearerToken(r *http.Request) (string, bool) {
 //     bearer token). A bearer token is checked first, before the CSRF/
 //     exempt-path logic below, since it identifies a non-browser,
 //     service-to-service caller -- CSRF is a browser-cookie-specific
-//     mitigation that doesn't apply to it. A valid token is dispatched
-//     to readOnlyRoutes, never to next (the full mux); an invalid or
-//     revoked one is rejected outright with 401, not silently treated
-//     as "no token" and passed through to the session-cookie check.
+//     mitigation that doesn't apply to it. A valid *read-only API* token
+//     is dispatched to readOnlyRoutes, never to next (the full mux); an
+//     invalid or revoked one is rejected outright with 401, not silently
+//     treated as "no token" and passed through to the session-cookie
+//     check. An ingest token (#186) is a valid token but not this kind,
+//     and is rejected here identically to a revoked one.
 //
 // There is deliberately no third state for "this deployment opted out of
 // authentication". That mode existed and was removed: an unauthenticated
@@ -200,7 +202,15 @@ func (s *Server) requireAuth(next http.Handler) http.Handler {
 		}
 
 		if raw, ok := bearerToken(r); ok {
-			if _, valid := s.Tokens.Authenticate(raw, time.Now()); valid {
+			// auth.TokenKindAPI, named explicitly: an ingest token
+			// (#186) is a bearer credential too, and it lives in a
+			// script on a router where any `read` user can read it. If
+			// this branch accepted any valid token it would quietly
+			// promote that credential into read access to every event,
+			// flag and device mikroview holds. Naming the kind makes an
+			// ingest token fall through to the 401 below, exactly like a
+			// revoked one.
+			if _, valid := s.Tokens.Authenticate(raw, auth.TokenKindAPI, time.Now()); valid {
 				readOnly.ServeHTTP(w, r)
 				return
 			}
