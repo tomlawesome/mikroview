@@ -3,6 +3,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -427,4 +428,21 @@ func TestHandleStats(t *testing.T) {
 	if body["total"].(float64) != 1 {
 		t.Errorf("total = %v, want 1", body["total"])
 	}
+}
+
+// asAdmin wraps the ungated mux with a stand-in admin identity -- what a
+// handler sees once requireAuth has already done its job.
+//
+// The admin-gated handler tests used to pass because callerIsAdminOrOpen
+// treated an anonymous caller as an admin while zero accounts existed.
+// That bypass is gone (#164), so the identity has to come from somewhere.
+// Injecting it keeps these tests about the handler; the gate itself is
+// covered by auth_test.go and the authzMatrix guard, which both mount
+// Routes and log in for real. Repeating a full login here would test the
+// middleware nine more times and the handler once.
+func asAdmin(h http.Handler) http.Handler {
+	admin := &auth.User{ID: "test-admin", Username: "admin", Role: auth.RoleAdmin}
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		h.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), userContextKey, admin)))
+	})
 }
