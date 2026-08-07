@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+
 import { lookupPort, type PortInfo } from './commonPorts'
 
 interface Anchor {

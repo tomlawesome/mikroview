@@ -1,4 +1,5 @@
 <script lang="ts">
+  // SPDX-License-Identifier: AGPL-3.0-only
   // Small per-port trigger sitting next to the click-to-filter port cell
   // (see EventRow.svelte) -- only rendered for ports with a known entry in
   // lib/commonPorts.ts, mirroring IpInvestigateButton.svelte's

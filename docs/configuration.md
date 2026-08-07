@@ -89,6 +89,39 @@ A misconfigured entry here fails startup rather than being skipped —
 silently ignoring it would leave you believing forwarded addresses were
 being honoured when they weren't.
 
+### Checking your config before you deploy
+
+```
+docker exec mikroview /mikroview -validate-config
+```
+
+It reports anything wrong and exits `0` if all is well, `1` if it found
+problems, and `2` if it couldn't read the config file at all — so you can
+use it in a deployment script or CI.
+
+It never touches the network. Nothing is dialled, nothing is written, and
+no directories are created, so it's safe to run anywhere.
+
+### What happens when a setting is wrong
+
+Mikroview treats two kinds of mistake differently.
+
+**Some settings stop it starting.** These are ones where carrying on
+would be unsafe or would mean mikroview isn't doing its job — an
+unreadable listen address, a session that never expires, or session
+cookies without the `Secure` flag while TLS is on. The error names the
+setting so you know what to fix.
+
+**Everything else starts anyway, using a sensible default.** A negative
+retention or a zero event limit would mean nothing is kept at all, so
+mikroview substitutes the default rather than refusing — losing all your
+monitoring over a typo would be worse. But it won't do that quietly: the
+substitution appears in the log **and** as a banner across the top of the
+web interface, naming the setting and the value actually in use.
+
+That banner is only shown to admins, since the messages name file paths
+and hostnames.
+
 **File permissions**: the container runs as a fixed non-root user (uid
 65532, distroless `nonroot`) that is unrelated to any user on the Docker
 host. If `config.yaml` isn't world-readable (or owned by a matching
@@ -122,7 +155,7 @@ own digest at build time. If the persisted version marker
 line reads `upgraded from <old> to <new>` instead -- confirming a
 `docker compose pull`/image update actually took effect, versus a
 routine restart on the same build. This boot sequence doesn't apply to
-the CLI recovery commands (`-healthcheck`, `-list-users`, etc.) --
+the CLI recovery commands (`-healthcheck`, `-transfer-admin`, etc.) --
 only the real server-start path.
 
 - **`level`** — one of `debug`/`info`/`warn`/`error` (case-insensitive).
@@ -139,7 +172,7 @@ only the real server-start path.
   names used throughout this doc and SECURITY.md for the pieces they
   refer to.
 - This does **not** apply to the CLI recovery commands' own output
-  (`-list-users`' table, `-reset-password`'s password prompts and
+  (`-transfer-admin`'s account list, `-recover-admin-account`'s password prompts and
   success message, etc.) -- those print directly to stdout/stderr for
   scripting/piping, not through this leveled path.
 
@@ -1095,46 +1128,225 @@ auth:
   `storePath`, this really is optional: a deployment that never creates
   a token doesn't need it.
 
-**If you create an account**, every request except `GET /api/healthz`
+**Once you create the account**, every request except `GET /api/healthz`
 and the login/session endpoints requires a valid session, permanently,
 from then on. Whoever completes the form becomes the admin.
 
-**If you skip**, mikroview stays fully open indefinitely -- the same
-behavior an older mikroview had by accident, but now a deliberate,
-persisted choice rather than "nobody got around to setting up auth
-yet." Before deciding, weigh who can reach the deployment: skipping is
-reasonable on a network you already trust as much as the router itself,
-not on anything broader.
+**Until then, mikroview serves nothing else.** There is no "run it
+without a login" option. An earlier version had one, and it was removed:
+an open mikroview shows anyone who can reach it which of your hosts are
+being scanned, which rules are firing, which ports are under pressure,
+and which accounts exist. That is a map of your network, and "it's only
+for five minutes while I try it out" is exactly how a deployment ends up
+open for a year. Creating an account is one form.
 
-**Reversing a skip** is CLI-only, by design: nothing in the web UI or
-API can re-enable auth once skipped, so a visitor to an open deployment
-can never unilaterally impose a login requirement on everyone else.
+> Upgrading from a version that let you run without a login? See
+> [CHANGELOG.md](../CHANGELOG.md) for what to do.
 
-```sh
-mikroview -enable-auth-setup
-```
-
-re-arms the choice screen (it does not create an account itself -- the
-next person to load mikroview, or you, still completes the create-
-account form). Requires container/host access, the same trust anchor as
-the recovery commands below.
-
-**Adding more accounts** afterward is admin-only, either via the "Add
-user" control in the toolbar or `POST /api/auth/users`.
-
-**Account recovery** is a CLI command, deliberately outside the web
-UI/API entirely -- container/host access is the trust anchor, so a
-locked-out admin isn't dependent on the system they're locked out of:
+### Backing up and restoring
 
 ```sh
-mikroview -list-users             # usernames + roles, no password hashes
-mikroview -reset-password admin   # prompts for a new password (no echo), twice to confirm
+mikroview -backup /secure/place/mikroview-backup.json.gz
+mikroview -restore /secure/place/mikroview-backup.json.gz
 ```
 
-A password reset immediately invalidates every existing session for that
-account, including on an already-running server -- you don't need to
-restart mikroview after running `-reset-password` for the new password
-to take effect.
+One gzipped file holding every store: accounts, API tokens, recovery-key
+digests, flags, entities, detector settings, the audit log.
+
+**It contains your credentials.** That is deliberate — a backup that
+leaves them out cannot restore a working system, and you would find that
+out during a disaster. So treat the file exactly as you would the data
+directory. MikroView writes it `0600`, refuses to overwrite an existing
+file, and refuses to write into a world-readable directory unless you
+pass `--force`.
+
+**Restoring never half-happens.** The file is fully parsed and checked
+before anything on disk is touched, and each store is written to a temp
+file and renamed into place. A corrupt or truncated backup leaves your
+existing state exactly as it was — which matters most for the accounts
+file, where the alternative to "unchanged" is "locked out".
+
+`-restore` refuses to overwrite stores that already exist unless you pass
+`--force`.
+
+> **Using Postgres?** These commands refuse, on purpose. Back up the
+> database with `pg_dump` or your provider's snapshots — see
+> [CHANGELOG.md](../CHANGELOG.md) and the migration section above.
+
+### Adding and removing people
+
+Open **Menu → Users**. Only the admin sees it.
+
+![The Users panel, showing the admin account and one ordinary user](screenshots/users-panel.png)
+
+Type a username and password, press **Add**, and the account appears in
+the list. Everyone added here can see everything MikroView shows, but
+can't change settings, manage accounts, or create API tokens.
+
+**Delete** removes an account. That person is signed out straight away,
+on any device, and any API tokens they created stop working at the same
+moment.
+
+The admin account has no Delete button. There is exactly one admin, and
+moving that role is a command-line step (see below) — so nobody who gets
+hold of an admin's browser session can take ownership of your
+deployment or lock you out of it.
+
+### Connecting your account to SSO
+
+If your deployment has SSO set up, you can switch your own account over
+to it: **Menu → Connect SSO**. You'll be sent to your identity provider
+to sign in, and when you come back the account uses SSO from then on.
+
+**This deletes your MikroView password, and can't be undone from
+MikroView.** After connecting:
+
+- You sign in through your identity provider only.
+- If you lose access to that provider, MikroView can't recover the
+  account for you — that includes the admin account, so read
+  "Recovering the admin account" above before connecting the admin.
+- You stay signed in on the browser you did it from. Anywhere else
+  you're signed in gets signed out.
+
+There's deliberately no halfway state where both your old password and
+SSO work. Keeping the password alive would leave the weaker way in
+open on an account that was supposed to have moved past it.
+
+If that SSO identity is already connected to someone else's account,
+the attempt is refused and nothing changes.
+
+### Handing admin to someone else
+
+Only from the command line, and only with a recovery key:
+
+```sh
+mikroview -transfer-admin
+```
+
+It tells you who currently holds admin and asks for a recovery key.
+Then it lists the other accounts, numbered, and you pick one:
+
+```
+Admin is currently "alice".
+Recovery key: ····
+
+Transfer admin to:
+
+   1) bob
+   2) carol   (signs in via SSO -- mikroview cannot recover this account)
+
+Choose 1-2, or anything else to cancel:
+```
+
+You don't need to know the exact username in advance, which matters
+because the usual reason to run this is that you can't sign in to look
+it up.
+
+**Backing out here costs nothing.** Your recovery key isn't spent until
+the transfer actually happens, so cancelling at the list — or at the
+SSO warning — leaves your existing keys working. That's deliberate: a
+key that got used up by a cancelled command, or by a mistyped one, would
+mean three false starts locks you out for good.
+
+It's safe to leave the key valid because typing it doesn't expose it.
+It isn't echoed as you type, isn't accepted as a command-line argument,
+and is never written to the log — so a key you presented and then didn't
+use hasn't been left lying anywhere.
+
+If you already know the username, pass it and skip the list:
+`mikroview -transfer-admin bob`.
+
+Once it's done you get a replacement set of keys, handed over the same
+way as `-generate-recovery-keys` below. The previous admin becomes an
+ordinary user — their account isn't deleted.
+
+If the person you're handing it to signs in through SSO, you're warned
+before the key is asked for: MikroView won't be able to recover that
+account itself if they ever lose access, because it holds no password
+for them.
+
+### Recovery keys
+
+Recovery keys are the second thing — besides access to the machine
+itself — needed to recover or transfer the admin account. They're
+created once, handed over once, and stored hashed:
+
+```sh
+mikroview -generate-recovery-keys
+```
+
+You get three. Any one of them works, and using one replaces all three,
+so treat them as one key with two spares — they're there in case a
+printout smudges or a paste goes wrong, not as three separate uses.
+Keep them somewhere safe, such as a password manager.
+
+**Run this with `docker compose exec`, not `docker compose run`:**
+
+```sh
+docker compose exec mikroview /mikroview -generate-recovery-keys
+```
+
+The reason is that in a container, whatever the main process prints goes
+into the container log — kept on disk, and usually shipped off to a
+central log system. A recovery key sitting there is an admin takeover
+for anyone who can read your logs. `docker exec` runs inside the
+container that's already going, and its output isn't logged; it goes to
+your terminal and nowhere else.
+
+MikroView checks which one you used and refuses to print if it's the
+wrong one, so you can't get this wrong by accident. The same applies to
+`-recover-admin-account` and `-transfer-admin`, which also show you a
+fresh set when they finish.
+
+Not using containers? Then your terminal is just a terminal and the
+command works as-is.
+
+The keys are never written to a file. You are shown them once, and that
+is the only copy — get them into a password manager before you type
+`saved`.
+
+You can't regenerate them while a set exists — that would let anyone
+with access to the machine mint themselves a fresh key and walk straight
+through the gate. They rotate automatically after each use instead.
+
+### Recovering the admin account
+
+If you can't sign in as the admin, you get back in from the command
+line, not from the web interface -- so being locked out of mikroview
+doesn't stop you fixing it. You need two things: access to the machine
+(or container) mikroview runs on, and one of your recovery keys.
+
+```sh
+mikroview -recover-admin-account   # asks for a recovery key, then a new password
+```
+
+It asks for the recovery key first. If the key is wrong, nothing
+changes and no key is used up. If it's right, you're asked for a new
+password twice (it isn't shown as you type, and it's never passed as a
+command-line argument, so it stays out of your shell history).
+
+Once the password is set, you get a **new set of recovery keys**, shown
+the same way as above. The old
+ones stop working as soon as you confirm you've saved the new ones -- so
+save them before typing `saved`. If anything goes wrong at that point,
+your original keys stay valid.
+
+Changing the password signs out that account everywhere immediately,
+including on an already-running server. You don't need to restart
+mikroview.
+
+Two things this command deliberately won't do:
+
+- **It only recovers the admin account.** Other people's accounts are
+  managed by the admin from the web interface.
+- **It can't help if the admin signs in through SSO only.** There's no
+  password for mikroview to reset -- reset it at your identity
+  provider, or use `-transfer-admin` to move the admin role to an
+  account that does have a mikroview password.
+
+If you have no recovery keys yet (your deployment predates them), run
+`mikroview -generate-recovery-keys` once, on a terminal, and store what
+it prints.
 
 **A corrupt or unreadable accounts file refuses to boot, rather than
 silently reopening.** If `auth.storePath` points at a file that exists
@@ -1197,9 +1409,10 @@ curl -H "Authorization: Bearer <token>" https://mikroview.example.com/api/events
 
 Optional, additive on top of [local authentication](#authentication) above
 -- local login keeps working unmodified whether or not this is
-configured. Tested against [Authentik](https://goauthentik.io/), but
-works with any standard OIDC provider (generic discovery, no
-Authentik-specific behavior).
+configured. Tested against [Authentik](https://goauthentik.io/), and
+works with any standard **self-hosted** OIDC provider (generic
+discovery, no Authentik-specific behavior). Multi-tenant public
+providers are not supported -- see [Supported providers](#supported-providers).
 
 ```yaml
 oidc:
@@ -1209,20 +1422,17 @@ oidc:
   publicBaseUrl: "https://mikroview.example.com"
   scopes: ["openid", "profile", "email"] # this is the default if omitted
 
-  # Who at that issuer may sign in. All of these are optional and all
-  # default to empty, which permits anyone the issuer vouches for --
-  # the right answer for a self-hosted IdP (see "Who can sign in"
-  # below), and refused at startup for a multi-tenant one.
-  # Every field you set adds a condition, and all set conditions must
-  # hold.
+  # Which accounts in your directory may sign in. All optional, all
+  # default to empty (anyone the issuer vouches for). Every field you
+  # set adds a condition, and all set conditions must hold. See
+  # "Restricting which accounts in your directory can sign in" below.
   #
   # allowedGroups: ["mikroview-admins", "netops"]
   # groupsClaim: "groups"          # default; Azure often needs "roles"
   # allowedEmails: ["you@example.com"]
   # allowedEmailDomains: ["example.com"]
   # requiredClaims:                # the general form the above are sugar over
-  #   hd: ["example.com"]          # Google Workspace: one organisation
-  #   tid: ["<tenant-guid>"]       # Microsoft Entra: one tenant
+  #   some_claim: ["expected-value"]
 ```
 
 - **`issuerUrl`** — the provider's issuer URL (Authentik: your
@@ -1249,31 +1459,48 @@ oidc:
 - **`scopes`** — defaults to `openid`, `profile`, `email` if omitted.
   `openid` is always required regardless of what's listed.
 
-### Who can sign in
+### Supported providers
 
-Setting `issuerUrl` is itself the primary access control, and for a
-self-hosted provider it is usually the *only* one you need. Mikroview
-validates every ID token against that issuer's own signing keys and
-against your client ID, so if `issuerUrl` points at an Authentik,
-Keycloak or Zitadel you run, only accounts in that directory can sign
-in — and narrowing further is what your IdP's own application bindings
-and group policies are for. Leaving every field below empty is the
-correct, complete configuration for that deployment.
+**Mikroview supports self-hosted identity providers only** — Authentik,
+Keycloak, Zitadel, or a Microsoft Entra **single-tenant** issuer URL
+(`https://login.microsoftonline.com/<tenant-guid>/v2.0`).
 
-That reasoning stops holding the moment the issuer is one you don't
-run. Every Google account on earth validates against
-`accounts.google.com`; the same is true of the shared Microsoft Entra
-endpoints (`/common`, `/organizations`, `/consumers`) and of Apple.
-Against those, `issuerUrl` narrows nothing, and since the first account
-to register becomes an admin, an unrestricted deployment hands admin to
-whoever reaches the login page first. **Mikroview refuses to enable SSO
-for a known multi-tenant issuer unless at least one restriction below
-is set** — it logs the reason and leaves SSO off; local login is
-unaffected.
+Multi-tenant providers are **refused at startup**: Google
+(`accounts.google.com`), Apple, and Microsoft's shared `/common`,
+`/organizations` and `/consumers` endpoints. SSO stays disabled and the
+reason is logged; local login is unaffected.
 
-- **`allowedGroups`** — permit an account carrying at least one of
-  these in its groups claim. Your provider must actually be configured
-  to release that claim; if it isn't, **every login is refused**, not
+The reason is that mikroview's OIDC support rests on the issuer URL
+*being* the access control. Every ID token is verified against that
+issuer's own signing keys and your client ID, so pointing `issuerUrl` at
+a directory you run means only accounts in that directory can sign in.
+That isn't true of a public provider — every Google account on earth
+produces a valid token against `accounts.google.com` — and because the
+first account to register becomes an admin, such a deployment would hand
+admin to whoever reached the login page first.
+
+A safe configuration for a public provider is possible (pin a claim
+identifying the organisation), and mikroview deliberately does not offer
+it: it would make every deployment's safety depend on an operator
+getting an extra restriction exactly right, where the failure is silent
+and indistinguishable from working correctly. See
+[docs/decisions/multi-tenant-oidc.md](decisions/multi-tenant-oidc.md)
+for the full reasoning and the exact change to reverse it.
+
+### Restricting which accounts in your directory can sign in
+
+Configuring `issuerUrl` already restricts login to your directory. These
+optional fields narrow it further, which is worth doing if your IdP also
+serves other people or other applications — an Authentik account created
+for a housemate to reach Jellyfin has no business reading firewall logs.
+
+All of them default to empty, which permits anyone the issuer vouches
+for. Each one you set adds a condition, and **all** set conditions must
+hold.
+
+- **`allowedGroups`** — permit an account carrying at least one of these
+  in its groups claim. Your provider must actually be configured to
+  release that claim; if it isn't, **every login is refused**, not
   permitted. That direction is deliberate — an allowlist that opens up
   when a claim goes missing isn't one.
 - **`groupsClaim`** — which claim holds the groups. Defaults to
@@ -1282,45 +1509,32 @@ unaffected.
 - **`allowedEmails`** — exact addresses, compared case-insensitively.
 - **`allowedEmailDomains`** — permit any address at these domains.
   Compared as whole domains, not string suffixes, so listing
-  `example.com` does not admit `attacker@notexample.com`. Subdomains
-  are not implied — list `mail.example.com` separately if you want it.
-- **`requiredClaims`** — the general mechanism the three fields above
-  are conveniences over: a map of claim name to permitted values, where
-  the account must carry at least one permitted value for every claim
-  named. Nothing about it is provider-specific, which is the point: a
-  provider that invents its own claim tomorrow needs no code change
-  here.
+  `example.com` does not admit `attacker@notexample.com`. Subdomains are
+  not implied — list `mail.example.com` separately if you want it.
+- **`requiredClaims`** — the general mechanism the three fields above are
+  conveniences over: a map of claim name to permitted values, where the
+  account must carry at least one permitted value for every claim named.
 
 Both email fields additionally require the provider to have marked the
 address `email_verified`. At a provider that lets users set their own
-unverified address, an email allowlist without that check is
-decorative.
+unverified address, an email allowlist without that check is decorative.
 
-Restrictions are re-evaluated on **every** sign-in, before any account
-is created, so removing someone from a group at your IdP locks them out
-at their next login rather than whenever their session happens to
-expire, and a refused account never gets provisioned as a side effect
-of being refused. A refused user is told plainly that they aren't
-permitted, but never *which* condition they failed — that goes to the
-server log, since the specifics would map out your allowlist for an
-outsider.
-
-**Locking a public IdP to one organisation:**
+Restrictions are re-evaluated on **every** sign-in, before any account is
+created, so removing someone from a group at your IdP locks them out at
+their next login rather than whenever their session happens to expire,
+and a refused account never gets provisioned as a side effect of being
+refused. A refused user is told plainly that they aren't permitted, but
+never *which* condition they failed — that goes to the server log, since
+the specifics would map out your allowlist for an outsider.
 
 ```yaml
-# Google Workspace -- only accounts at example.com, not personal Gmail
+# Scope mikroview to one Authentik group
 oidc:
-  issuerUrl: "https://accounts.google.com"
-  requiredClaims:
-    hd: ["example.com"]
-
-# Microsoft Entra -- only your tenant.
-# Prefer the single-tenant issuer URL where you can; requiredClaims.tid
-# is the belt-and-braces version, and is required if you use /common.
-oidc:
-  issuerUrl: "https://login.microsoftonline.com/common/v2.0"
-  requiredClaims:
-    tid: ["00000000-0000-0000-0000-000000000000"]
+  issuerUrl: "https://authentik.example.com/application/o/mikroview/"
+  clientId: "mikroview"
+  clientSecret: "changeme"
+  publicBaseUrl: "https://mikroview.example.com"
+  allowedGroups: ["mikroview-admins"]
 ```
 
 **Identity**: an account is matched by the immutable `(issuer, subject)`
@@ -1570,6 +1784,147 @@ value:
 A plain local `go run .`/`go build .` (no `-ldflags`) shows `dev`
 instead of a commit SHA.
 
+## Postgres (optional)
+
+By default MikroView keeps its accounts, flags and settings in JSON
+files next to itself. You can move that state into Postgres instead.
+
+**There is exactly one reason to do this: getting your data off the
+machine MikroView runs on.** If someone compromises that host, the
+accounts file goes with it. A database on a *separate* machine, reachable
+only over a restricted network path, means they'd also have to reach and
+break into a second system.
+
+> **A Postgres on the same host — including a container next to
+> MikroView — gives you none of that.** The connection password sits
+> right there beside the data it protects, inside the same compromise.
+> It's worse than the JSON files: same exposure, more to go wrong. This
+> is why `deploy/docker-compose.yml` ships no Postgres service, not even
+> commented out.
+
+### Setting it up
+
+Put the connection string in its own file. Not in `config.yaml`, and
+there's no command-line flag for it — it contains a password, and
+passwords in config files end up in backups, while passwords in
+command-line arguments are visible to every process on the box and to
+`docker inspect`.
+
+```sh
+umask 077
+echo 'postgres://mikroview:PASSWORD@db.internal:5432/mikroview?sslmode=verify-full' \
+  > /etc/mikroview/postgres-dsn
+```
+
+Then point MikroView at it:
+
+```yaml
+postgres:
+  # Path to the file above. Empty (the default) means "use JSON files".
+  dsnFile: /etc/mikroview/postgres-dsn
+```
+
+or `MIKROVIEW_POSTGRES_DSN_FILE=/etc/mikroview/postgres-dsn`.
+
+The database user needs permission to create tables in its own database
+the first time it starts; MikroView creates what it needs and records
+what it has done, so restarts are fine.
+
+### The connection must be encrypted
+
+`sslmode` has to be `require`, `verify-ca` or `verify-full`. Anything
+weaker is **refused at startup** rather than quietly upgraded — if the
+setting doesn't do what you asked, you should hear about it.
+
+Use `verify-full` if you can. `require` encrypts the connection but
+doesn't check *who* answered, so it doesn't stop someone who can
+intercept traffic between MikroView and the database.
+
+### Your existing data moves automatically
+
+On the first start with `dsnFile` set, MikroView copies each existing
+JSON file into the database and says so:
+
+```
+storage │ migrated /var/lib/mikroview/users.json (362 bytes) into
+          postgres db.internal/mikroview store "auth" -- that file is no
+          longer read, and can be deleted once you are satisfied the move
+          worked
+```
+
+Three things worth knowing:
+
+- **This is a one-way door.** Once MikroView has started with Postgres
+  configured, it records that, and removing `dsnFile` later will *not*
+  bring you back on the JSON files — it refuses to start, and tells you
+  why and where the marker is.
+
+  That refusal is deliberate. Your JSON files stopped being current the
+  moment you migrated, so quietly falling back to them would serve stale
+  accounts — possibly a stale admin, possibly a password you had already
+  changed — and nothing would look wrong. Decide before you migrate: use
+  Postgres, or don't. Staying on the JSON files is always the reversible
+  choice.
+
+- **The old files are left alone.** Nothing is deleted or renamed — they
+  simply stop being read. Delete them once you're satisfied the move
+  worked.
+
+- **Back up the database from then on.** The JSON files are frozen at
+  the moment of migration, so backing those up protects nothing. This is
+  the expectation that comes with choosing Postgres.
+
+- **The JSON-file account commands stop working.** They would be editing
+  files nothing reads. They refuse, and say so.
+- **It only ever copies into an empty store.** Once the database holds
+  data, the old file is ignored permanently. A stale file left on disk
+  can't roll live data back on a later restart.
+- **If the database is configured but unreachable, MikroView refuses to
+  start.** It does not silently fall back to the JSON files — that would
+  quietly run your deployment on stale local accounts, possibly with a
+  different admin, and nothing would look wrong.
+
+### Watching for schema changes on upgrade
+
+A new MikroView image can bring a database schema change with it. That
+happens automatically on start, and it is always announced:
+
+```
+schema │ database schema is up to date at version 3 (postgres db.internal/mikroview)
+```
+
+When an upgrade does change something, each step is named before it runs
+and again once it finishes, so a migration that stalls or crashes is
+identifiable from the last line written:
+
+```
+schema │ database schema is at version 3, 1 migration(s) to apply -- updating postgres db.internal/mikroview
+schema │ applying 0004_add_widget.sql (version 4)
+schema │ applied 0004_add_widget.sql in 11ms
+schema │ database schema updated from version 3 to version 4 -- an older mikroview image may
+         no longer read this database correctly
+```
+
+That last line is a warning for a reason: **rolling back to an older
+image after a schema change is not guaranteed to work.** Take a database
+backup before upgrading if that matters to you.
+
+If a migration fails, MikroView refuses to start and the database is
+left exactly as it was — each migration runs in its own transaction, so
+there is no half-applied state to clean up:
+
+```
+schema  │ migration 0004_add_widget.sql (version 4) failed and was rolled back --
+          the schema is unchanged, still at version 3
+storage │ postgres: applying schema: ... ERROR: syntax error at or near "..."
+```
+
+### What isn't stored there
+
+The live event stream stays in memory and is never persisted, on any
+backend. TLS certificates also stay on disk — MikroView needs them
+before it could reach a database at all.
+
 ## CLI flags (local development)
 
 `-version`, `-syslog-udp`, `-syslog-tcp`, `-http`, `-http-redirect`,
@@ -1577,10 +1932,10 @@ instead of a commit SHA.
 rule/host names, and auth config can only be set via YAML/env, not
 flags.
 
-`-healthcheck`, `-list-users`, `-reset-password <username>`,
-`-enable-auth-setup` are standalone modes -- each does its one job and
+`-healthcheck`, `-recover-admin-account`, `-transfer-admin <username>`
+and `-generate-recovery-keys` are standalone modes -- each does its one job and
 exits, rather than starting the server. See
-[Authentication](#authentication) for the latter three.
+[Authentication](#authentication) for all but the first.
 
 ## API reference
 
@@ -1597,18 +1952,17 @@ exits, rather than starting the server. See
 | `GET /api/lookup/ip/{ip}` | on-demand reputation/threat-intel lookup for one public IP (see [IP reputation lookup](#ip-reputation-lookup-optional)) |
 | `GET /api/flags` | active + cleared behavioral flags, plus the last hour of newly-raised-episode counts by type at 1-minute resolution (issue #100, feeds the dashboard's flags-over-time chart) (see [Behavioral flags](#behavioral-flags-optional-on-by-default)) |
 | `POST /api/flags/{id}/clear` | mark one flag as cleared |
-| `POST /api/flags/{id}/clear-permanent` | admin-only (open while zero accounts exist): clear one flag *and* permanently exclude its (detector, target) pair going forward. Audit-logged |
-| `GET /api/flags/exclusions` | admin-only (open while zero accounts exist): every currently-excluded (detector, target) pair |
-| `DELETE /api/flags/exclusions/{id}` | admin-only (open while zero accounts exist): remove one exclusion, letting that pair raise again |
-| `GET /api/detectors` | admin-only (open while zero accounts exist): every detector's live enabled+scope (see [Per-detector toggles](#per-detector-toggles-and-scope-restrictions-optional)) |
-| `PUT /api/detectors/{name}` | admin-only (open while zero accounts exist): replace one detector's enabled+scope wholesale |
-| `GET /api/entities` | admin-only (**not** open while zero accounts exist -- see [Entities](#entities-ui-managed-hostruleport-labels-and-tags-optional)): every persisted entity |
+| `POST /api/flags/{id}/clear-permanent` | admin-only: clear one flag *and* permanently exclude its (detector, target) pair going forward. Audit-logged |
+| `GET /api/flags/exclusions` | admin-only: every currently-excluded (detector, target) pair |
+| `DELETE /api/flags/exclusions/{id}` | admin-only: remove one exclusion, letting that pair raise again |
+| `GET /api/detectors` | admin-only: every detector's live enabled+scope (see [Per-detector toggles](#per-detector-toggles-and-scope-restrictions-optional)) |
+| `PUT /api/detectors/{name}` | admin-only: replace one detector's enabled+scope wholesale |
+| `GET /api/entities` | admin-only (see [Entities](#entities-ui-managed-hostruleport-labels-and-tags-optional)): every persisted entity |
 | `POST /api/entities` | admin-only: create or replace (upsert) one entity, identified by `(type, key)` in the JSON body |
 | `DELETE /api/entities` | admin-only: remove the entity identified by `(type, key)` in the JSON body |
-| `GET /api/audit` | admin-only (**not** open while zero accounts exist, same as `/api/entities`): a windowed slice of the admin action audit log (see [Audit log](#audit-log-admin-action-accountability-optional)), newest activity last, accepting `since`/`until`/`limit` query params like `GET /api/events` |
+| `GET /api/audit` | admin-only: a windowed slice of the admin action audit log (see [Audit log](#audit-log-admin-action-accountability-optional)), newest activity last, accepting `since`/`until`/`limit` query params like `GET /api/events` |
 | `GET /api/auth/session` | current auth state (setup-required / authenticated / not) -- always 200, never gated |
 | `POST /api/auth/register` | create the first (admin) account -- only while zero accounts exist |
-| `POST /api/auth/skip` | explicitly disable auth for this deployment -- only while zero accounts exist; reversing later is CLI-only (`-enable-auth-setup`) |
 | `POST /api/auth/login` | sign in, sets the session cookie |
 | `POST /api/auth/logout` | sign out, clears the session cookie |
 | `POST /api/auth/users` | admin-only: create an additional account |

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+
 package main
 
 import (
@@ -12,6 +14,7 @@ import (
 	"os"
 	"os/signal"
 	"slices"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -31,6 +34,7 @@ import (
 	"github.com/tomlawesome/mikroview/internal/naming"
 	"github.com/tomlawesome/mikroview/internal/notify"
 	"github.com/tomlawesome/mikroview/internal/oidc"
+	"github.com/tomlawesome/mikroview/internal/persist"
 	"github.com/tomlawesome/mikroview/internal/reputation"
 	"github.com/tomlawesome/mikroview/internal/routeros"
 	"github.com/tomlawesome/mikroview/internal/rules"
@@ -65,15 +69,24 @@ const (
 	loginLimiterWindow    = 5 * time.Minute
 )
 
-// version is stamped at build time via -ldflags "-X main.version=<git-
-// short-sha>" (see Dockerfile and .github/workflows/docker.yml) --
-// "dev" is the fallback for a plain `go build .`/`go run .` with no
-// ldflags, so local development never shows a blank or misleading
-// value. A registry digest isn't something the binary can know about
-// itself (it's computed from the pushed image after build), so the
-// commit it was built from is the practical, achievable stand-in for
-// "which build is this."
-var version = "dev"
+// version is stamped at build time via -ldflags "-X main.version=..."
+// (see Dockerfile and .github/workflows/docker.yml).
+//
+// It carries the lane as well as the commit, because "which build is
+// this" and "how much should I trust it" are the same question:
+//
+//	dev:<short-sha>      a local or dev-branch build; nothing published
+//	preview:<short-sha>  the published release candidate
+//	v1.2.3               a build from a release tag
+//
+// The commit, not a registry digest: an image digest is computed from
+// the pushed image *after* the build, so a binary cannot know its own.
+// The commit it was built from is the achievable stand-in, and is what
+// the signing provenance binds to anyway.
+//
+// "dev:local" is the fallback for a plain `go build .` with no ldflags,
+// so local development never shows a blank or misleading value.
+var version = "dev:local"
 
 // versionMarkerPath persists the last-seen version so a restart can
 // tell a routine restart (same version) apart from a real upgrade (the
@@ -189,27 +202,38 @@ func main() {
 	if len(os.Args) > 1 && os.Args[1] == "-healthcheck" {
 		os.Exit(runHealthcheck())
 	}
-	// -list-users/-reset-password: the account-recovery path (see
+	// -recover-admin-account: the account-recovery path (see
 	// docs/configuration.md's "Authentication" section) -- container/
 	// host access is the trust anchor for these, deliberately outside
 	// the web UI/API entirely, so a locked-out admin isn't dependent on
 	// the very system they're locked out of.
-	if len(os.Args) > 1 && os.Args[1] == "-list-users" {
-		os.Exit(runListUsers())
+	if len(os.Args) > 1 && os.Args[1] == "-recover-admin-account" {
+		os.Exit(runRecoverAdminAccount(os.Args[2:]))
 	}
-	if len(os.Args) > 1 && os.Args[1] == "-reset-password" {
-		os.Exit(runResetPassword(os.Args[2:]))
+	// -validate-config: check a config before deploying it. Same rules
+	// the server enforces at startup (one config.Validate, two entry
+	// points) so this can never pass something startup would reject, or
+	// vice versa.
+	if len(os.Args) > 1 && os.Args[1] == "-validate-config" {
+		os.Exit(runValidateConfig(os.Args[2:]))
 	}
-	// -enable-auth-setup: the only way to re-arm the web setup form after
-	// a deployment has explicitly skipped auth (see auth.Store.Disable) --
-	// deliberately CLI-only, not exposed via any API endpoint, so a UI
-	// visitor can never unilaterally re-impose auth for everyone else.
-	if len(os.Args) > 1 && os.Args[1] == "-enable-auth-setup" {
-		os.Exit(runEnableAuthSetup())
+	// Recovery-key tooling: the second factor beyond host access on the
+	// commands that change authentication state (issue #134).
+	if len(os.Args) > 1 && os.Args[1] == "-generate-recovery-keys" {
+		os.Exit(runGenerateRecoveryKeys(os.Args[2:]))
+	}
+	if len(os.Args) > 1 && os.Args[1] == "-backup" {
+		os.Exit(runBackup(os.Args[2:]))
+	}
+	if len(os.Args) > 1 && os.Args[1] == "-restore" {
+		os.Exit(runRestore(os.Args[2:]))
+	}
+	if len(os.Args) > 1 && os.Args[1] == "-transfer-admin" {
+		os.Exit(runTransferAdmin(os.Args[2:]))
 	}
 
 	configLog := logging.New("config")
-	cfg, err := config.Load(os.Getenv("MIKROVIEW_CONFIG"), os.Args[1:])
+	cfg, configResult, err := config.LoadWithProblems(os.Getenv("MIKROVIEW_CONFIG"), os.Args[1:])
 	if err != nil {
 		configLog.Error(err.Error())
 		os.Exit(1)
@@ -237,7 +261,22 @@ func main() {
 	rep := reputation.New(cfg.Reputation.AbuseIPDBKey)
 
 	flagsLog := logging.New("flags")
-	fs, err := flags.Open(cfg.Flags.StorePath)
+	// Boot-time context: the signal-aware ctx below is created after
+	// the stores exist, and connecting to the database has to happen
+	// before any of them.
+	bootCtx := context.Background()
+	persistence, err := openStorage(bootCtx, cfg)
+	if err != nil {
+		logging.New("storage").Error(err.Error())
+		os.Exit(1)
+	}
+	defer persistence.Close()
+
+	flagsBackend, err := persistence.backendFor(bootCtx, "flags", cfg.Flags.StorePath)
+	if err != nil {
+		flagsLog.Warn(err.Error())
+	}
+	fs, err := flags.OpenWithBackend(flagsBackend)
 	if err != nil {
 		flagsLog.Warn(fmt.Sprintf("%v (continuing with in-memory-only flag state)", err))
 	}
@@ -247,7 +286,11 @@ func main() {
 	// this needs its own persisted store distinct from devices above
 	// (that one tracks router source IPs, not LAN client MACs).
 	macLog := logging.New("device-mac")
-	macRegistry, err := device.OpenMACRegistry(cfg.DeviceMAC.StorePath)
+	macBackend, err := persistence.backendFor(bootCtx, "mac_registry", cfg.DeviceMAC.StorePath)
+	if err != nil {
+		macLog.Warn(err.Error())
+	}
+	macRegistry, err := device.OpenMACRegistryWithBackend(macBackend)
 	if err != nil {
 		macLog.Warn(fmt.Sprintf("%v (continuing with in-memory-only MAC registry)", err))
 	}
@@ -258,13 +301,26 @@ func main() {
 	// internal/store's totalByRule (in-memory, windowed to the store's
 	// short retention period).
 	rulesLog := logging.New("rules")
-	ru, err := rules.Open(cfg.Flags.RuleUsageStorePath)
+	rulesBackend, err := persistence.backendFor(bootCtx, "rule_usage", cfg.Flags.RuleUsageStorePath)
+	if err != nil {
+		rulesLog.Warn(err.Error())
+	}
+	ru, err := rules.OpenWithBackend(rulesBackend)
 	if err != nil {
 		rulesLog.Warn(fmt.Sprintf("%v (continuing with in-memory-only rule-usage state)", err))
 	}
 
+	// Storage is resolved before any store opens: it decides whether
+	// this deployment persists to JSON files or Postgres, and performs
+	// the one-time JSON adoption when Postgres is newly configured.
+	// A configured-but-unreachable database is fatal -- see openStorage.
 	authLog := logging.New("auth")
-	authStore, err := auth.Open(cfg.Auth.StorePath)
+	authBackend, err := persistence.backendFor(bootCtx, "auth", cfg.Auth.StorePath)
+	if err != nil {
+		authLog.Error(fmt.Sprintf("preparing the accounts store: %v -- refusing to start with authentication in an unknown state", err))
+		os.Exit(1)
+	}
+	authStore, err := auth.OpenWithBackend(authBackend)
 	// A non-nil error from auth.Open, when persistence is actually
 	// configured, ALWAYS means "the accounts file exists but couldn't be
 	// read/parsed" -- Open returns (store, nil) for both "no persistence
@@ -283,7 +339,7 @@ func main() {
 	// path) is already sufficient to take it directly -- move or delete
 	// the broken file and restart, no dedicated CLI mode needed for
 	// something `mv`/`rm` already does.
-	if authShouldFailClosed(err, cfg.Auth.StorePath) {
+	if authShouldFailClosed(err, authBackend) {
 		authLog.Error(fmt.Sprintf(
 			"accounts file at %q exists but could not be loaded: %v -- refusing to start with authentication in an unknown state. "+
 				"If this deployment previously had accounts configured, this is NOT a fresh install: restore the file from a backup, "+
@@ -295,10 +351,8 @@ func main() {
 	switch {
 	case authStore.Count() > 0:
 		authLog.Info(fmt.Sprintf("%d account(s) registered -- authentication is active", authStore.Count()))
-	case authStore.Disabled():
-		authLog.Warn("explicitly disabled for this deployment -- mikroview is fully open (run -enable-auth-setup to reverse this)")
 	default:
-		authLog.Info("no decision made yet -- mikroview is showing the first-run choice screen (see docs/configuration.md)")
+		authLog.Info("no account yet -- mikroview is showing the create-account screen (see docs/configuration.md)")
 	}
 
 	// entities (issue #107): the persisted, admin-manageable (type, key)
@@ -311,7 +365,11 @@ func main() {
 	// user later deletes every one of them) -- see Store.Seed's own doc
 	// comment.
 	entitiesLog := logging.New("entities")
-	entityStore, err := entities.Open(cfg.Entities.StorePath)
+	entityBackend, err := persistence.backendFor(bootCtx, "entities", cfg.Entities.StorePath)
+	if err != nil {
+		entitiesLog.Warn(err.Error())
+	}
+	entityStore, err := entities.OpenWithBackend(entityBackend)
 	if err != nil {
 		entitiesLog.Warn(fmt.Sprintf("%v (continuing with in-memory-only entity state)", err))
 	}
@@ -325,7 +383,11 @@ func main() {
 	// just means token creation refuses with ErrTokenNotPersisted, not
 	// that mikroview fails to start).
 	tokensLog := logging.New("tokens")
-	tokenStore, err := auth.OpenTokenStore(cfg.Auth.TokensStorePath)
+	tokensBackend, err := persistence.backendFor(bootCtx, "tokens", cfg.Auth.TokensStorePath)
+	if err != nil {
+		tokensLog.Warn(err.Error())
+	}
+	tokenStore, err := auth.OpenTokenStoreWithBackend(tokensBackend)
 	if err != nil {
 		tokensLog.Warn(fmt.Sprintf("%v (continuing with in-memory-only, unpersisted token state)", err))
 	}
@@ -335,7 +397,11 @@ func main() {
 	// store above (a missing/unwritable path just means entries don't
 	// survive a restart, not that mikroview fails to start).
 	auditLog := logging.New("audit")
-	auditStore, err := audit.Open(cfg.Audit.StorePath)
+	auditBackend, err := persistence.backendFor(bootCtx, "audit", cfg.Audit.StorePath)
+	if err != nil {
+		auditLog.Warn(err.Error())
+	}
+	auditStore, err := audit.OpenWithBackend(auditBackend)
 	if err != nil {
 		auditLog.Warn(fmt.Sprintf("%v (continuing with in-memory-only, unpersisted audit log)", err))
 	}
@@ -404,7 +470,11 @@ func main() {
 		}
 	}
 	detectorsLog := logging.New("detectors")
-	detectorSettings, err := detect.OpenSettingsStore(cfg.Flags.DetectorSettingsStorePath, seed)
+	detectorBackend, err := persistence.backendFor(bootCtx, "detector_settings", cfg.Flags.DetectorSettingsStorePath)
+	if err != nil {
+		detectorsLog.Warn(err.Error())
+	}
+	detectorSettings, err := detect.OpenSettingsStoreWithBackend(detectorBackend, seed)
 	if err != nil {
 		detectorsLog.Warn(fmt.Sprintf("%v (continuing with in-memory-only detector toggle state)", err))
 	}
@@ -609,17 +679,15 @@ func main() {
 		oidcLog.Error("oidc.issuerUrl is set but oidc.publicBaseUrl is not -- SSO login is unavailable until it's configured (see docs/configuration.md)")
 	case cfg.OIDC.ClientID == "" || cfg.OIDC.ClientSecret == "":
 		oidcLog.Error("oidc.issuerUrl is set but oidc.clientId/oidc.clientSecret are not -- SSO login is unavailable until both are configured")
-	case oidc.IsMultiTenantIssuer(cfg.OIDC.IssuerURL) && !oidcPolicy.Restricted():
-		// Refused rather than warned about. Against a multi-tenant issuer
-		// the issuer URL restricts nothing -- every account at that
-		// provider produces a valid token -- so this configuration means
-		// "whoever reaches the login page first becomes the admin". A
-		// warning would scroll past; leaving SSO off is the fail-closed
-		// outcome, and local login is unaffected.
+	case oidc.AllowIssuer(cfg.OIDC.IssuerURL) != nil:
+		// Refused outright, not warned about, and deliberately not
+		// rescuable by configuration -- see oidc.AllowIssuer. Leaving SSO
+		// off is the fail-closed outcome; local login is unaffected.
 		oidcLog.Error(fmt.Sprintf(
-			"%s is a multi-tenant provider, so the issuer URL alone permits any account there to sign in and claim admin -- "+
-				"SSO login is unavailable until oidc.allowedGroups/allowedEmails/allowedEmailDomains/requiredClaims restricts it "+
-				"(see docs/configuration.md)", cfg.OIDC.IssuerURL))
+			"%s is a multi-tenant provider and is not supported -- mikroview only supports self-hosted identity providers "+
+				"(Authentik, Keycloak, Zitadel, or an Entra single-tenant issuer URL), where the issuer itself restricts who can "+
+				"sign in. SSO login is unavailable; local login is unaffected. See docs/configuration.md",
+			cfg.OIDC.IssuerURL))
 	default:
 		client, err := oidc.New(ctx, oidc.Config{
 			IssuerURL:    cfg.OIDC.IssuerURL,
@@ -665,6 +733,23 @@ func main() {
 		proxyLog.Info(fmt.Sprintf("trusting %s from %d proxy range(s) for login rate limiting", header, len(trustedProxies)))
 	}
 
+	// Logged here and surfaced in the admin UI (see api.Server.
+	// ConfigProblems). The log line alone is not enough: it is seen once,
+	// by whoever ran `docker compose up`, and never again -- which is not
+	// good enough for a value the operator believes is in effect.
+	var configProblems []api.ConfigProblem
+	for _, p := range configResult.Warnings {
+		msg := fmt.Sprintf("%s: %s", p.Key, p.Message)
+		if p.Applied != "" {
+			msg += fmt.Sprintf(" -- using %s instead", p.Applied)
+		}
+		configLog.Warn(msg)
+		configProblems = append(configProblems, api.ConfigProblem{
+			Code: p.Code, Key: p.Key, Message: p.Message,
+			Applied: p.Applied, Remediation: p.Remediation,
+		})
+	}
+
 	srv := &api.Server{
 		Store:            st,
 		Devices:          devices,
@@ -689,6 +774,7 @@ func main() {
 		OIDCPolicy:       oidcPolicy,
 		StartTime:        time.Now(),
 		Version:          version,
+		ConfigProblems:   configProblems,
 	}
 
 	rootMux := http.NewServeMux()
@@ -827,6 +913,342 @@ func runVersion() int {
 // HEALTHCHECK (see Dockerfile). It hits the app's own /api/healthz over
 // loopback and returns a process exit code, rather than opening any
 // listeners itself.
+// validateConfigExit* are the exit codes -validate-config reports.
+// Distinct rather than a plain 0/1 because CI needs to tell "your config
+// is imperfect" apart from "I couldn't read your config at all" -- the
+// second is a broken pipeline, not a broken config.
+const (
+	validateConfigExitOK       = 0
+	validateConfigExitProblems = 1
+	validateConfigExitUnusable = 2
+)
+
+// runValidateConfig backs `mikroview -validate-config [-strict]`.
+//
+// Exits non-zero for warnings as well as fatals, which makes the checker
+// deliberately stricter than the server: the server starts on a clamped
+// default because losing all monitoring over a bad retention value would
+// be worse, but a pipeline has no such excuse and should be told.
+// -strict exists for the opposite preference and is currently a no-op
+// flag reserved for it; see the issue.
+//
+// Deliberately offline. Nothing here dials the OIDC issuer, the SMTP
+// host, or anything else -- a checker that reaches out to production
+// from a build agent is a surprise, and an egress finding in its own
+// right. Network checks belong behind their own explicit flag.
+func runValidateConfig(args []string) int {
+	path := os.Getenv("MIKROVIEW_CONFIG")
+
+	cfg, result, err := config.LoadWithProblems(path, nil)
+	if err != nil {
+		// Either the file is unreadable/unparseable, or validation found
+		// something fatal. Both are reported the same way to the operator;
+		// only the exit code distinguishes them, and only when we can tell.
+		fmt.Fprintf(os.Stderr, "%v\n", err)
+		if strings.Contains(err.Error(), "invalid configuration") {
+			return validateConfigExitProblems
+		}
+		return validateConfigExitUnusable
+	}
+	_ = args
+	_ = cfg
+
+	if !result.HasProblems() {
+		if path == "" {
+			fmt.Println("No config file set (MIKROVIEW_CONFIG is empty) -- built-in defaults are valid.")
+		} else {
+			fmt.Printf("%s: no problems found.\n", path)
+		}
+		return validateConfigExitOK
+	}
+
+	for _, p := range result.Warnings {
+		fmt.Printf("warning  %s  %s: %s\n", p.Code, p.Key, p.Message)
+		if p.Applied != "" {
+			fmt.Printf("         using %s instead\n", p.Applied)
+		}
+		if p.Remediation != "" {
+			fmt.Printf("         %s\n", p.Remediation)
+		}
+	}
+	fmt.Printf("\n%d warning(s). mikroview would start, using the values shown above.\n", len(result.Warnings))
+	return validateConfigExitProblems
+}
+
+// openRecoveryStoreForCLI opens the recovery-key store the gated CLI
+// commands verify against.
+// openRecoveryStoreForCLI resolves the same backend the server would, so
+// the digests follow the accounts into Postgres (issue #172).
+//
+// The pepper stays a local file in both cases. That is the whole design:
+// a database dump yields digests nothing can test, and this host yields a
+// pepper with no digests to apply it to.
+func openRecoveryStoreForCLI() (*auth.RecoveryStore, func(), error) {
+	cfg, err := config.Load(os.Getenv("MIKROVIEW_CONFIG"), nil)
+	if err != nil {
+		return nil, nil, fmt.Errorf("config: %w", err)
+	}
+	if cfg.Auth.RecoveryKeysPath == "" && cfg.Postgres.DSNFile == "" {
+		return nil, nil, fmt.Errorf("auth.recoveryKeysPath is not configured")
+	}
+
+	st, err := openStorage(context.Background(), cfg)
+	if err != nil {
+		return nil, nil, err
+	}
+	backend, err := st.backendFor(context.Background(), "recovery_keys", cfg.Auth.RecoveryKeysPath)
+	if err != nil {
+		st.Close()
+		return nil, nil, err
+	}
+	store, err := auth.OpenRecoveryWithBackend(backend, cfg.Auth.RecoveryPepperPath)
+	if err != nil {
+		st.Close()
+		return nil, nil, err
+	}
+	return store, st.Close, nil
+}
+
+// isContainerMainProcess reports whether this process is the container's
+// entrypoint, whose stdout the log driver captures.
+//
+// PID 1 is the discriminator: `docker run` starts mikroview as PID 1 and
+// logs its output, while `docker exec` starts it as an ordinary child and
+// does not (measured against a real daemon, not assumed). On a host
+// install PID 1 is the system's init, so this is false and printing is
+// allowed, which is the behaviour we want there.
+//
+// It is a heuristic in one direction only: a container that wrapped
+// mikroview in an init shim like tini would make this false while stdout
+// is still logged. This project's image has no such shim, so the case
+// cannot arise for the image we ship.
+func isContainerMainProcess(pid int) bool { return pid == 1 }
+
+// refuseIfContainerMainProcess stops a key-printing command before it
+// does any work.
+//
+// Checked up front rather than at the point of printing: -transfer-admin
+// and -recover-admin-account both change state before they have keys to
+// show, and refusing halfway leaves the operator having done the
+// dangerous half of an operation they were told they could not do.
+func refuseIfContainerMainProcess(cmd string) error {
+	if !isContainerMainProcess(os.Getpid()) {
+		return nil
+	}
+	return containerMainProcessRefusal(cmd)
+}
+
+// containerMainProcessRefusal is split out so the wording can be tested
+// without forking a PID-1 process. The wording is the load-bearing part:
+// an operator told "no" and not told what to run instead reaches for
+// whatever works, which is the thing that was just refused.
+func containerMainProcessRefusal(cmd string) error {
+	return fmt.Errorf("refusing to run %s as the container's main process, because everything it "+
+		"prints -- including your recovery keys -- goes into the container log, which is kept on "+
+		"disk and is usually shipped off the host. Run it with 'docker compose exec', not "+
+		"'docker compose run': exec output is not captured by the log driver", cmd)
+}
+
+// printRecoveryKeys shows a freshly generated set, once.
+//
+// Straight to stdout, with no file in between. Writing them to a file
+// first was tried and was worse: the operator has to read the file to
+// use it, so the keys end up on a terminal regardless, and the file adds
+// an exposure the terminal does not have -- plaintext keys sitting on
+// the data volume, included in any backup taken during that window, and
+// left behind entirely if the process is killed before it can clean up.
+// It moved the problem and charged a disk copy for it.
+//
+// What actually matters is which stream this is. In a container, stdout
+// is the container log; under `docker exec` it is the operator's own
+// terminal and nothing else. refuseIfContainerMainProcess enforces that
+// distinction before any of this runs.
+func printRecoveryKeys(keys []string) {
+	fmt.Println()
+	fmt.Println("Recovery keys -- shown once, and never again:")
+	fmt.Println()
+	for _, k := range keys {
+		fmt.Printf("    %s\n", k)
+	}
+	fmt.Println()
+	fmt.Println("Store these somewhere safe, such as a password manager. Any one of")
+	fmt.Println("them works; using one replaces all three.")
+	fmt.Println()
+}
+
+// confirmSaved is the acknowledgement gate. Nothing rotates until the
+// operator says they have the new keys -- otherwise a successful
+// recovery whose output was lost leaves zero valid keys behind.
+func confirmSaved() bool {
+	fmt.Print("Type 'saved' once you have stored them: ")
+	var answer string
+	if _, err := fmt.Scanln(&answer); err != nil {
+		return false
+	}
+	return strings.EqualFold(strings.TrimSpace(answer), "saved")
+}
+
+func hasFlag(args []string, name string) bool {
+	for _, a := range args {
+		if a == name {
+			return true
+		}
+	}
+	return false
+}
+
+// runGenerateRecoveryKeys backs `-generate-recovery-keys`.
+//
+// A one-time backfill for deployments predating recovery keys, not a
+// regeneration tool. It refuses once keys exist: otherwise anyone with
+// host access mints a fresh set and satisfies the very gate they were
+// meant to be stopped by. Rotation happens automatically after each use.
+func runGenerateRecoveryKeys(args []string) int {
+	logger := logging.New("recovery-keys")
+	if err := refuseIfContainerMainProcess("-generate-recovery-keys"); err != nil {
+		logger.Error(err.Error())
+		return 1
+	}
+	store, closeStorage, err := openRecoveryStoreForCLI()
+	if err != nil {
+		logger.Error(err.Error())
+		return 1
+	}
+	defer closeStorage()
+
+	keys, err := store.Generate()
+	if err != nil {
+		logger.Error(err.Error())
+		return 1
+	}
+	printRecoveryKeys(keys)
+	if !confirmSaved() {
+		logger.Error("not confirmed -- no keys were stored, nothing has changed")
+		return 1
+	}
+	if err := store.Commit(); err != nil {
+		logger.Error(fmt.Sprintf("storing recovery keys: %v", err))
+		return 1
+	}
+	logger.Info("recovery keys stored")
+	return 0
+}
+
+// runTransferAdmin backs `-transfer-admin <username>`.
+//
+// CLI-only and recovery-key gated on purpose. If an authenticated admin
+// could transfer the role from the web UI, anyone reaching that session
+// -- a compromised identity-provider account, a stolen cookie -- could
+// grant themselves durable ownership and demote the real admin out of
+// their own deployment. Requiring host access plus a recovery key means
+// an IdP compromise buys the ability to log in, and nothing more.
+func runTransferAdmin(args []string) int {
+	logger := logging.New("transfer-admin")
+	if err := refuseIfContainerMainProcess("-transfer-admin"); err != nil {
+		logger.Error(err.Error())
+		return 1
+	}
+
+	// The username is optional. Someone locked out of the UI often can't
+	// look up the exact spelling of a colleague's account, and guessing
+	// at 3am is a bad place to be -- so with no argument this offers a
+	// list to pick from. Supplying one keeps the flow scriptable.
+	var target string
+	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
+		target = args[0]
+	}
+
+	recovery, closeStorage, err := openRecoveryStoreForCLI()
+	if err != nil {
+		logger.Error(err.Error())
+		return 1
+	}
+	defer closeStorage()
+	store, closeAuth, err := openAuthStoreForCLI("-transfer-admin")
+	if err != nil {
+		logger.Error(err.Error())
+		return 1
+	}
+	defer closeAuth()
+
+	current := store.Admin()
+	if current == nil {
+		logger.Error("this deployment has no admin account -- nothing to transfer")
+		return 1
+	}
+	fmt.Printf("Admin is currently %q.\n", current.Username)
+
+	// The key is asked for BEFORE any account is named or listed, so
+	// nothing about who holds an account is disclosed to someone without
+	// one. That reordering is only affordable because Redeem below
+	// prepares a rotation without persisting it -- see its call.
+	key, err := readRecoveryKey()
+	if err != nil {
+		logger.Error(err.Error())
+		return 1
+	}
+
+	// Redeem verifies the key and prepares a replacement set, but does
+	// not persist the rotation -- that waits for Commit at the end. So
+	// abandoning this command after seeing the list below costs nothing:
+	// the existing keys stay valid, and no key has been spent.
+	fresh, err := recovery.Redeem(key)
+	if err != nil {
+		// Deliberately one message for a wrong key and a corrupt store:
+		// the distinction is only useful to someone probing.
+		logger.Error(err.Error())
+		return 1
+	}
+
+	next, code := resolveTransferTarget(store, current, target)
+	if next == nil {
+		// Nothing was written, and no key was consumed -- Commit never
+		// ran. Said out loud so an operator who backed out isn't left
+		// wondering whether they just burned a key.
+		fmt.Println("\nNothing was changed, and your recovery keys are unchanged.")
+		return code
+	}
+	target = next.Username
+
+	// Stated before the transfer, not after: an SSO-only admin cannot be
+	// recovered by -recover-admin-account, by design, so the operator
+	// needs this while they can still back out.
+	if !next.LocalPassword() {
+		fmt.Println()
+		fmt.Printf("WARNING: %q signs in through your identity provider and has no local\n", next.Username)
+		fmt.Println("password. After this transfer, admin recovery goes through your identity")
+		fmt.Println("provider -- mikroview will not be able to recover that account itself.")
+		fmt.Println()
+		if !confirmYes(fmt.Sprintf("Transfer admin to %q anyway?", next.Username)) {
+			fmt.Println("Nothing was changed, and your recovery keys are unchanged.")
+			return 1
+		}
+	}
+
+	from, to, err := store.TransferAdmin(target, time.Now())
+	if err != nil {
+		logger.Error(fmt.Sprintf("transfer failed, no keys were consumed: %v", err))
+		return 1
+	}
+
+	printRecoveryKeys(fresh)
+	if !confirmSaved() {
+		// The transfer stands; only the rotation is abandoned, leaving
+		// the previous keys valid. Better than rotating into a set the
+		// operator never captured.
+		logger.Warn(fmt.Sprintf("admin transferred from %s to %s, but the new keys were not confirmed -- "+
+			"your previous recovery keys remain valid", logging.Printable(from.Username), logging.Printable(to.Username)))
+		return 1
+	}
+	if err := recovery.Commit(); err != nil {
+		logger.Warn(fmt.Sprintf("admin transferred from %s to %s, but storing the new keys failed: %v -- "+
+			"your previous recovery keys remain valid", logging.Printable(from.Username), logging.Printable(to.Username), err))
+		return 1
+	}
+	logger.Info(fmt.Sprintf("admin transferred from %s to %s", logging.Printable(from.Username), logging.Printable(to.Username)))
+	return 0
+}
+
 func runHealthcheck() int {
 	logger := logging.New("healthcheck")
 	cfg, err := config.Load(os.Getenv("MIKROVIEW_CONFIG"), nil)
@@ -860,60 +1282,43 @@ func runHealthcheck() int {
 	return 0
 }
 
-// openAuthStoreForCLI is shared by runListUsers/runResetPassword: both
-// need a real, persisted auth.Store and both refuse identically if one
-// isn't configured -- an ephemeral store would make either command
-// pointless (list nothing meaningful, or reset a password that vanishes
-// on the next restart).
-func openAuthStoreForCLI(cmd string) (*auth.Store, error) {
+// openAuthStoreForCLI is shared by the account-management CLI commands.
+// They need a real, persisted auth.Store -- an ephemeral one would let
+// -recover-admin-account report success over a password that vanishes on
+// the next restart.
+//
+// It resolves the same backend the server would, so these work against
+// Postgres as well as the JSON files. They used to refuse outright on a
+// Postgres deployment, which left it with no way to transfer or recover
+// admin at all: those two operations cannot go through the web UI (a
+// compromised session must not be able to grant itself admin) and cannot
+// go through an identity provider (an IdP account is a login, not an
+// authorisation to escalate). CLI is the only route, so it has to work
+// in every deployment shape.
+func openAuthStoreForCLI(cmd string) (*auth.Store, func(), error) {
 	cfg, err := config.Load(os.Getenv("MIKROVIEW_CONFIG"), nil)
 	if err != nil {
-		return nil, fmt.Errorf("config: %w", err)
+		return nil, nil, fmt.Errorf("config: %w", err)
 	}
-	if cfg.Auth.StorePath == "" {
-		return nil, fmt.Errorf("auth.storePath is not configured -- %s has nothing persisted to work with", cmd)
+	if cfg.Auth.StorePath == "" && cfg.Postgres.DSNFile == "" {
+		return nil, nil, fmt.Errorf("auth.storePath is not configured -- %s has nothing persisted to work with", cmd)
 	}
-	return auth.Open(cfg.Auth.StorePath)
-}
 
-// runListUsers backs `-list-users` -- usernames and roles only, no
-// password hashes, to help an operator pick which account to reset.
-func runListUsers() int {
-	store, err := openAuthStoreForCLI("-list-users")
+	st, err := openStorage(context.Background(), cfg)
 	if err != nil {
-		logging.New("list-users").Error(err.Error())
-		return 1
+		return nil, nil, err
 	}
-
-	users := store.List()
-	if len(users) == 0 {
-		fmt.Println("No accounts exist yet.")
-		return 0
-	}
-	for _, u := range users {
-		fmt.Printf("%s\t%s\n", u.Username, u.Role)
-	}
-	return 0
-}
-
-// runEnableAuthSetup backs `-enable-auth-setup` -- clears a prior
-// explicit "skip auth" decision (see auth.Store.Disable) so the web
-// setup form becomes reachable again on next load. It does not create
-// an account itself; the operator (or whoever loads the UI next) still
-// completes setup through the normal create-account form.
-func runEnableAuthSetup() int {
-	logger := logging.New("enable-auth-setup")
-	store, err := openAuthStoreForCLI("-enable-auth-setup")
+	backend, err := st.backendFor(context.Background(), "auth", cfg.Auth.StorePath)
 	if err != nil {
-		logger.Error(err.Error())
-		return 1
+		st.Close()
+		return nil, nil, err
 	}
-	if err := store.EnableSetup(); err != nil {
-		logger.Error(err.Error())
-		return 1
+	store, err := auth.OpenWithBackend(backend)
+	if err != nil {
+		st.Close()
+		return nil, nil, err
 	}
-	fmt.Println("Auth setup re-enabled -- the create-account form will be shown again on next load.")
-	return 0
+	return store, st.Close, nil
 }
 
 // authShouldFailClosed reports whether main()'s boot sequence should
@@ -926,46 +1331,112 @@ func runEnableAuthSetup() int {
 // doesn't exist yet" (a real fresh install) return a nil error, so
 // requiring storePath != "" here is belt-and-braces rather than the
 // actual distinguishing signal, which is err itself.
-func authShouldFailClosed(err error, storePath string) bool {
-	return err != nil && storePath != ""
+func authShouldFailClosed(err error, backend persist.Backend) bool {
+	return err != nil && backend != nil
 }
 
-// runResetPassword backs `-reset-password <username>` -- the account-
-// recovery path. Prompts for the new password twice (no echo) rather
-// than accepting it as a CLI argument or env var, so it never touches
-// shell history, process args, or `docker inspect` output; container/
-// host access (the ability to exec this at all) is the trust anchor.
-// Revokes every existing session for that user, so a stolen session
-// cookie doesn't survive a deliberate credential reset.
-func runResetPassword(args []string) int {
-	logger := logging.New("reset-password")
-	if len(args) < 1 {
-		fmt.Fprintln(os.Stderr, "usage: mikroview -reset-password <username>")
+// runRecoverAdminAccount backs `-recover-admin-account` -- the way back
+// in when the admin cannot sign in.
+//
+// Two deliberate narrowings from the `-recover-admin-account` it replaces.
+//
+// It recovers the admin account only. The old command could rewrite any
+// account's password from host access alone, which made every user
+// account a route to a working login; other accounts are the admin's to
+// manage from the UI, where the action is authenticated and logged.
+//
+// It requires a recovery key. Host access alone is no longer sufficient,
+// so a lower-privileged local account or a container exec that can run
+// the binary but cannot read the key file gets nowhere -- and neither
+// does someone holding a stolen backup, since the pepper is not in it.
+//
+// The new password is prompted for twice, without echo, rather than
+// taken as an argument or env var, so it never reaches shell history,
+// process args, or `docker inspect`. SetPassword records
+// PasswordChangedAt, which invalidates every session issued before the
+// recovery -- a stolen cookie must not survive it.
+func runRecoverAdminAccount(args []string) int {
+	logger := logging.New("recover-admin-account")
+	if err := refuseIfContainerMainProcess("-recover-admin-account"); err != nil {
+		logger.Error(err.Error())
 		return 1
 	}
-	username := args[0]
 
-	store, err := openAuthStoreForCLI("-reset-password")
+	recovery, closeStorage, err := openRecoveryStoreForCLI()
 	if err != nil {
 		logger.Error(err.Error())
 		return 1
 	}
-	if _, ok := store.ByUsername(username); !ok {
-		logger.Error(fmt.Sprintf("no such user %q -- run -list-users to see existing accounts", username))
+	defer closeStorage()
+	store, closeAuth, err := openAuthStoreForCLI("-recover-admin-account")
+	if err != nil {
+		logger.Error(err.Error())
+		return 1
+	}
+	defer closeAuth()
+
+	admin := store.Admin()
+	if admin == nil {
+		logger.Error("this deployment has no admin account -- nothing to recover")
+		return 1
+	}
+	// Checked before anything is prompted for. mikroview does not hold
+	// the credential for an SSO-only admin, so there is nothing here to
+	// reset; sending the operator to their identity provider immediately
+	// beats letting them type a recovery key and a new password first
+	// and only then learning it was never going to work.
+	if !admin.LocalPassword() {
+		logger.Error(fmt.Sprintf("%q signs in through your identity provider and has no local password "+
+			"-- mikroview cannot recover it. Reset it at your identity provider, or use "+
+			"-transfer-admin to move admin to an account that does have one", logging.Printable(admin.Username)))
+		return 1
+	}
+
+	fmt.Printf("Recover the admin account %q.\n", admin.Username)
+	key, err := readRecoveryKey()
+	if err != nil {
+		logger.Error(err.Error())
+		return 1
+	}
+
+	// Redeem verifies the key and prepares a replacement set without
+	// persisting the rotation -- Commit below does that, once the
+	// operator confirms they captured the new keys.
+	fresh, err := recovery.Redeem(key)
+	if err != nil {
+		// One message for a wrong key and for a corrupt store: the
+		// difference is only useful to someone probing.
+		logger.Error(err.Error())
 		return 1
 	}
 
 	password, err := readPasswordTwice()
 	if err != nil {
-		logger.Error(err.Error())
+		logger.Error(fmt.Sprintf("%v -- no key was consumed, nothing has changed", err))
 		return 1
 	}
+	if err := store.SetPassword(admin.Username, password, time.Now()); err != nil {
+		logger.Error(fmt.Sprintf("%v -- no key was consumed, nothing has changed", err))
+		return 1
+	}
+	fmt.Printf("Password for %q updated. Existing sessions for that account are now invalid.\n", admin.Username)
 
-	if err := store.SetPassword(username, password, time.Now()); err != nil {
-		logger.Error(err.Error())
+	// Past this point the recovery itself has succeeded. Every remaining
+	// failure leaves the previous keys valid and says so -- rotating
+	// into a set the operator never captured is the one outcome worse
+	// than not rotating at all.
+	printRecoveryKeys(fresh)
+	if !confirmSaved() {
+		logger.Warn("admin account recovered, but the new keys were not confirmed -- " +
+			"your previous recovery keys remain valid")
 		return 1
 	}
-	fmt.Printf("Password for %q updated.\n", username)
+	if err := recovery.Commit(); err != nil {
+		logger.Warn(fmt.Sprintf("admin account recovered, but storing the new keys failed: %v -- "+
+			"your previous recovery keys remain valid", err))
+		return 1
+	}
+	logger.Info("admin account recovered, recovery keys rotated")
 	return 0
 }
 
@@ -1098,4 +1569,132 @@ func ingestOneRecovered(logger *slog.Logger, rm syslog.RawMessage, st *store.Sto
 	// what the store itself just counted (see internal/rules.Store.Touch's
 	// doc comment for why this lives here rather than as a separate pass).
 	ru.Touch(stored.RuleLabel, stored.ReceivedAt)
+}
+
+// resolveTransferTarget works out which account admin is moving to,
+// either from the username supplied on the command line or by offering
+// a numbered list.
+//
+// The list is what replaces the old `-list-users` command. That command
+// existed almost entirely to answer "what is my colleague's username
+// again?" while locked out, and answering it here means the disclosure
+// sits behind the recovery key that transfer already requires, instead
+// of behind nothing.
+//
+// Gating a standalone list on a key was considered and rejected: it
+// would teach the operator to type a recovery key for a routine read.
+// The key is echo-suppressed (see readRecoveryKey), so this is not
+// about shell history -- it is that every use is a chance for the key
+// to reach a screen share, a support call, or a recorded session, and
+// a key used routinely stops being treated as precious.
+//
+// Returns (nil, exitCode) when there is nothing to transfer to or the
+// operator backs out. Callers must treat that as "change nothing".
+func resolveTransferTarget(store *auth.Store, current *auth.User, target string) (*auth.User, int) {
+	logger := logging.New("transfer-admin")
+
+	if target != "" {
+		next, ok := store.ByUsername(target)
+		if !ok {
+			logger.Error(fmt.Sprintf("no such account: %s", logging.Printable(target)))
+			return nil, 1
+		}
+		if next.ID == current.ID {
+			logger.Error("that account is already the admin")
+			return nil, 1
+		}
+		return next, 0
+	}
+
+	candidates := make([]auth.User, 0)
+	for _, u := range store.List() {
+		if u.ID != current.ID {
+			candidates = append(candidates, u)
+		}
+	}
+	if len(candidates) == 0 {
+		logger.Error("there is no other account to transfer admin to -- create one from the web UI first")
+		return nil, 1
+	}
+
+	fmt.Println("\nTransfer admin to:")
+	fmt.Println()
+	for i, u := range candidates {
+		note := ""
+		if !u.LocalPassword() {
+			// Flagged in the list, not only after choosing, so the
+			// consequence is visible while choosing rather than as a
+			// surprise afterwards.
+			note = "   (signs in via SSO -- mikroview cannot recover this account)"
+		}
+		fmt.Printf("  %2d) %s%s\n", i+1, logging.Printable(u.Username), note)
+	}
+	fmt.Println()
+	fmt.Printf("Choose 1-%d, or anything else to cancel: ", len(candidates))
+
+	var answer string
+	if _, err := fmt.Scanln(&answer); err != nil {
+		return nil, 1
+	}
+	choice, err := strconv.Atoi(strings.TrimSpace(answer))
+	if err != nil || choice < 1 || choice > len(candidates) {
+		return nil, 1
+	}
+	picked := candidates[choice-1]
+	return &picked, 0
+}
+
+// confirmYes asks a yes/no question, defaulting to no on anything that
+// isn't an explicit yes -- including a read error, so a closed stdin
+// can never be mistaken for consent.
+func confirmYes(question string) bool {
+	fmt.Printf("%s [y/N]: ", question)
+	var answer string
+	if _, err := fmt.Scanln(&answer); err != nil {
+		return false
+	}
+	a := strings.ToLower(strings.TrimSpace(answer))
+	return a == "y" || a == "yes"
+}
+
+// readRecoveryKey prompts for a recovery key without echoing it.
+//
+// Passwords have always been read this way; recovery keys were not, and
+// that was an inconsistency rather than a decision. A recovery key is at
+// least as sensitive as the password -- it is the second factor on admin
+// transfer and account recovery -- and echoing it put it in terminal
+// scrollback, and in anything capturing the session (tmux logging,
+// `script`, screen sharing, a support call). Measured before the fix:
+// the key appeared verbatim in a captured session.
+//
+// Note this was never a *shell* history exposure for interactive use --
+// the shell never sees it, because the prompt belongs to this process.
+// It reaches shell history only in the piped form
+// (`echo KEY | mikroview -transfer-admin`), which is the caller's
+// choice and their exposure to manage.
+//
+// A non-terminal stdin falls back to a plain read rather than refusing:
+// automation that pipes a key has already exposed it by whatever put it
+// in the pipe, so refusing here protects nothing and breaks a
+// legitimate workflow.
+func readRecoveryKey() (string, error) {
+	fmt.Print("Recovery key: ")
+
+	if !term.IsTerminal(int(os.Stdin.Fd())) {
+		var key string
+		if _, err := fmt.Scanln(&key); err != nil {
+			return "", fmt.Errorf("no recovery key supplied")
+		}
+		return key, nil
+	}
+
+	raw, err := term.ReadPassword(int(os.Stdin.Fd()))
+	fmt.Println()
+	if err != nil {
+		return "", fmt.Errorf("no recovery key supplied")
+	}
+	if len(raw) == 0 {
+		return "", fmt.Errorf("no recovery key supplied")
+	}
+	return string(raw), nil
 }

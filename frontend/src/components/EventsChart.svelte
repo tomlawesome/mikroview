@@ -1,4 +1,5 @@
 <script lang="ts">
+  // SPDX-License-Identifier: AGPL-3.0-only
   // Multi-line time-series chart of event volume by action, over the last
   // hour at 1-minute resolution (see internal/store/ring.go's
   // Stats.TimeSeries). Built by hand in SVG rather than pulling in a

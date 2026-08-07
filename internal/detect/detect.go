@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+
 // Package detect watches the ingested event stream for a small set of
 // behavioral patterns worth a human's attention -- a source scanning many
 // ports, a source generating an unusual volume of traffic, repeated

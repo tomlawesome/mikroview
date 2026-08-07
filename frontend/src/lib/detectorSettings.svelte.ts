@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+
 import { fetchDetectorSettings, updateDetectorSettings } from './api'
 import type { DetectorScope, DetectorSettings } from './types'
 

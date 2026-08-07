@@ -1,4 +1,5 @@
 <script lang="ts">
+  // SPDX-License-Identifier: AGPL-3.0-only
   let { size = 28 }: { size?: number } = $props()
 </script>
 

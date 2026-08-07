@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+
 // Shared by every ranked-count panel on the dashboard: the fixed ones in
 // Dashboard.svelte and the user-defined widgets in lib/topTalkers.svelte.ts.
 export function topNBy<T>(items: T[], keyOf: (item: T) => string | undefined, n: number) {

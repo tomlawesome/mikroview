@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+
 // Package blocklist implements local IP/CIDR "known-bad" matching
 // against a small, vetted menu of free, curated threat-intel feeds
 // (issue #113 Part B) -- deliberately *not* an arbitrary user-supplied

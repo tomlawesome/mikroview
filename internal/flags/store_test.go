@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+
 package flags
 
 import (
@@ -39,7 +41,7 @@ func TestOpenMissingFileIsUsable(t *testing.T) {
 // startup" contract.
 func TestOpenSkipsNilArrayElements(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "flags.json")
-	data := `[null, {"id":"port_scan:1.2.3.4","type":"port_scan","target":"1.2.3.4"}, null]`
+	data := `{"flags":[null, {"id":"port_scan:1.2.3.4","type":"port_scan","target":"1.2.3.4"}, null]}`
 	if err := os.WriteFile(path, []byte(data), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -928,31 +930,6 @@ func TestExclusionPersistenceRoundTrip(t *testing.T) {
 		if f.Type == TypePortScan && f.Target == "203.0.113.9" {
 			t.Errorf("expected the reloaded exclusion to still suppress raises, got %+v", f)
 		}
-	}
-}
-
-// TestOpenReadsLegacyBareArrayFormat proves a flags.json file written
-// before this feature existed (a bare `[...]` array of flags, no
-// exclusions wrapper) still loads correctly -- an existing deployment
-// upgrading mikroview must not lose its flag history or start treating
-// that file as malformed just because the on-disk shape changed.
-func TestOpenReadsLegacyBareArrayFormat(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "flags.json")
-	data := `[{"id":"port_scan:1.2.3.4","type":"port_scan","target":"1.2.3.4","detail":"legacy entry"}]`
-	if err := os.WriteFile(path, []byte(data), 0o600); err != nil {
-		t.Fatal(err)
-	}
-
-	s, err := Open(path)
-	if err != nil {
-		t.Fatalf("Open() on a legacy bare-array file returned an unexpected error: %v", err)
-	}
-	list := s.List()
-	if len(list) != 1 || list[0].Detail != "legacy entry" {
-		t.Fatalf("expected the legacy flag to load intact, got %+v", list)
-	}
-	if len(s.ListExclusions()) != 0 {
-		t.Errorf("expected a legacy file to start with no exclusions, got %+v", s.ListExclusions())
 	}
 }
 

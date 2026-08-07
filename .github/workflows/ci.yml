@@ -1,9 +1,11 @@
 name: CI
 
 # Three-lane model: dev (light, fast feedback) -> preview (heavier gate,
-# publishes the release candidate image) -> main (promotion only, always
-# gets a full audit regardless of what changed -- see the `security` and
-# `container` jobs' `if:` conditions below).
+# publishes the release candidate image) -> main (promotion only). The
+# container smoke test is the one thing dev skips, on time grounds; see
+# the `container` job's `if:` below. Everything else runs everywhere,
+# including the security job -- see its comment for why it stopped being
+# conditional.
 on:
   push:
     branches: [main, preview, dev]
@@ -19,33 +21,6 @@ permissions:
   contents: read
 
 jobs:
-  # Detects whether this change touches anything auth-related, so the
-  # security job can run on every dev/preview change that's actually
-  # relevant without adding overhead to every other change -- except a
-  # PR targeting main, which always gets the full audit regardless (see
-  # each downstream job's `if:`).
-  changes:
-    name: Detect changed areas
-    runs-on: ubuntu-latest
-    outputs:
-      auth: ${{ steps.filter.outputs.auth }}
-    steps:
-      - uses: actions/checkout@v7
-      - uses: dorny/paths-filter@v4
-        id: filter
-        with:
-          filters: |
-            auth:
-              - 'internal/auth/**'
-              - 'internal/api/auth.go'
-              - 'internal/api/auth_test.go'
-              - 'internal/api/ws.go'
-              - 'frontend/src/lib/auth.svelte.ts'
-              - 'frontend/src/components/Auth*.svelte'
-              - 'frontend/src/components/AddUserOverlay.svelte'
-              - 'go.mod'
-              - 'go.sum'
-
   test:
     name: Go + frontend tests
     runs-on: ubuntu-latest
@@ -60,6 +35,19 @@ jobs:
       - run: go vet ./...
       - run: go test ./...
 
+      # None of the three above care about formatting, so unformatted
+      # code has reached dev green. gofmt -l prints nothing when there is
+      # nothing to fix, so the list is the whole check.
+      - name: gofmt
+        run: |
+          unformatted=$(gofmt -l $(git ls-files '*.go'))
+          if [ -n "$unformatted" ]; then
+            echo "Not gofmt-clean:"
+            echo "$unformatted"
+            gofmt -d $(git ls-files '*.go')
+            exit 1
+          fi
+
       - uses: actions/setup-node@v7
         with:
           node-version: '22'
@@ -68,13 +56,24 @@ jobs:
           npm ci
           npx svelte-check --tsconfig ./tsconfig.app.json
 
-  # Targeted: only runs when auth-related paths changed (see `changes`
-  # above) -- except a PR into main, which gets it unconditionally as
-  # part of the full pre-release audit, regardless of what changed.
+  # Runs on every change, deliberately.
+  #
+  # This used to be gated on a paths-filter listing the auth-related
+  # directories, so it only ran when one of them changed. That filter was
+  # wrong in three separate ways at once: it named internal/auth and
+  # internal/api/auth.go but not main.go -- where -transfer-admin,
+  # -recover-admin-account and the recovery-key handling live, the
+  # commands that hand over the admin role -- nor internal/oidc, the
+  # entire SSO implementation, nor internal/api/server.go, which carries
+  # the route table. A PR that changed who can become admin skipped this
+  # job and reported green.
+  #
+  # The filter has to be kept in sync with where auth code lives, and
+  # nothing fails when it drifts -- the job just quietly stops running,
+  # which is the worst possible failure mode for a security gate. Two
+  # and a half minutes on every PR is the cheaper side of that trade.
   security:
     name: Security (auth-focused)
-    needs: changes
-    if: needs.changes.outputs.auth == 'true' || github.base_ref == 'main'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -154,3 +153,62 @@ jobs:
       - name: Clean up container
         if: always()
         run: docker rm --force mikroview-test || true
+
+  postgres:
+    name: Postgres integration (#131)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version: '1.26.5'
+
+      # Not a `services:` container. internal/persist refuses any
+      # connection that could fall back to plaintext (see its
+      # requireTLS), so the server has to present a certificate -- and a
+      # services block can't generate one or fix its permissions before
+      # postgres starts. Building a one-line image is the shortest path
+      # to a server that actually speaks TLS.
+      - name: Start Postgres with TLS
+        run: |
+          mkdir -p /tmp/pgtls
+          openssl req -new -x509 -days 1 -nodes -subj "/CN=localhost" \
+            -keyout /tmp/pgtls/server.key -out /tmp/pgtls/server.crt
+          cat > /tmp/pgtls/Dockerfile <<'EOF'
+          FROM postgres:18-alpine
+          COPY server.crt /certs/server.crt
+          COPY server.key /certs/server.key
+          RUN chown postgres:postgres /certs/server.crt /certs/server.key \
+           && chmod 600 /certs/server.key && chmod 644 /certs/server.crt
+          EOF
+          docker build -t mv-pg-tls /tmp/pgtls
+          docker run -d --name mv-pg \
+            -e POSTGRES_PASSWORD=ci -e POSTGRES_DB=mikroview -p 5432:5432 \
+            mv-pg-tls -c ssl=on \
+            -c ssl_cert_file=/certs/server.crt -c ssl_key_file=/certs/server.key
+
+      - name: Wait for Postgres
+        run: |
+          for attempt in $(seq 1 40); do
+            if docker exec mv-pg pg_isready -U postgres -d mikroview >/dev/null 2>&1; then
+              exit 0
+            fi
+            sleep 1
+          done
+          docker logs mv-pg
+          exit 1
+
+      # sslmode=require, not verify-full: the certificate is generated
+      # above and self-signed, so there is no chain to verify. The
+      # documentation recommends verify-full for real deployments; this
+      # job is checking the storage logic, not certificate validation.
+      - name: Integration tests
+        env:
+          MIKROVIEW_TEST_POSTGRES: postgres://postgres:ci@127.0.0.1:5432/mikroview?sslmode=require
+        run: go test -race -count=1 ./internal/persist/...
+
+      - name: Clean up
+        if: always()
+        run: docker rm --force mv-pg || true

@@ -1,4 +1,5 @@
 <script lang="ts">
+  // SPDX-License-Identifier: AGPL-3.0-only
   // SSH/Telnet/control-port tracking tab (issue #34): generalizes to
   // whichever ports internal/detect.Config.CriticalPorts is actually
   // configured with (see lib/criticalPorts.svelte.ts), not hardcoded to

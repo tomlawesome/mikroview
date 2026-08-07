@@ -1,4 +1,5 @@
 <script lang="ts">
+  // SPDX-License-Identifier: AGPL-3.0-only
   // Generic horizontal bar-list panel, shared by every ranked-count chart
   // on the dashboard (top rules, action/protocol breakdown, top talkers,
   // per-device volume). Extracted from what was TopRulesMenu's row markup

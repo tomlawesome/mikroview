@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+
 // Package rules persists a long-lived, per-rule-label usage record --
 // when a firewall rule was first observed firing, when it last fired,
 // and how many times -- independent of internal/store's ring buffer.
@@ -14,15 +16,15 @@
 package rules
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
-	"os"
-	"path/filepath"
 	"sort"
 	"sync"
 	"time"
 
 	"github.com/tomlawesome/mikroview/internal/logging"
+	"github.com/tomlawesome/mikroview/internal/persist"
 )
 
 var persistLog = logging.New("rules")
@@ -39,9 +41,12 @@ type Usage struct {
 // label, safe for concurrent use. The zero value is not usable;
 // construct with Open.
 type Store struct {
-	mu     sync.RWMutex
-	path   string
-	byRule map[string]*Usage
+	mu      sync.RWMutex
+	backend persist.Backend
+	// version is the backend's token for the document as of the last
+	// load or save -- see persist.SaveWithRetry.
+	version int64
+	byRule  map[string]*Usage
 
 	// lastPersist backs persistLocked's rate limiting -- see
 	// persistMinInterval.
@@ -59,22 +64,25 @@ type Store struct {
 // ever informational, for the caller to log. Mirrors flags.Open's
 // contract exactly.
 func Open(path string) (*Store, error) {
-	s := &Store{path: path, byRule: make(map[string]*Usage)}
 	if path == "" {
+		return OpenWithBackend(nil)
+	}
+	return OpenWithBackend(persist.NewFileBackend(path))
+}
+
+// OpenWithBackend is Open against any persist.Backend
+// -- a JSON file by default, or Postgres when configured (issue #131).
+func OpenWithBackend(b persist.Backend) (*Store, error) {
+	s := &Store{backend: b, byRule: make(map[string]*Usage)}
+
+	data, version, err := persist.LoadDocument(context.Background(), b)
+	if err != nil {
+		return s, err
+	}
+	if data == nil {
 		return s, nil
 	}
-
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		return s, err
-	}
-
-	data, err := os.ReadFile(path)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return s, nil
-		}
-		return s, err
-	}
+	s.version = version
 
 	var list []*Usage
 	if err := json.Unmarshal(data, &list); err != nil {
@@ -214,7 +222,7 @@ func (s *Store) pruneLocked() {
 // degrades to "won't survive a restart right now" rather than breaking
 // live use. Mirrors flags.Store.persistLocked exactly.
 func (s *Store) persistLocked() {
-	if s.path == "" {
+	if s.backend == nil {
 		return
 	}
 	if now := time.Now(); now.Sub(s.lastPersist) < persistMinInterval {
@@ -225,20 +233,16 @@ func (s *Store) persistLocked() {
 
 	data, err := json.MarshalIndent(s.listLocked(), "", "  ")
 	if err != nil {
-		persistLog.Error(fmt.Sprintf("encoding %s for persistence failed: %v -- this change exists only in memory and will be lost on restart", s.path, err))
+		persistLog.Error(fmt.Sprintf("encoding rule usage for persistence failed: %v -- this change exists only in memory and will be lost on restart", err))
 		return
 	}
-	tmp := s.path + ".tmp"
-	if err := os.WriteFile(tmp, data, 0o600); err != nil {
-		persistLog.Error(fmt.Sprintf("writing %s failed: %v -- this change exists only in memory and will be lost on restart", tmp, err))
+	version, conflicted, err := persist.SaveWithRetry(context.Background(), s.backend, data, s.version)
+	if err != nil {
+		persistLog.Error(fmt.Sprintf("writing rule usage to %s failed: %v -- this change exists only in memory and will be lost on restart", s.backend.Describe(), err))
 		return
 	}
-	// Same filesystem, so the rename itself is atomic -- but it can
-	// still fail (read-only remount, permissions change), and a
-	// silent failure here means the caller believes a write landed
-	// when it did not.
-	if err := os.Rename(tmp, s.path); err != nil {
-		persistLog.Error(fmt.Sprintf("replacing %s failed: %v -- this change exists only in memory and will be lost on restart", s.path, err))
-		return
+	if conflicted {
+		persistLog.Warn(fmt.Sprintf("the rule usage store was modified by another process while this change was pending (%s); this change was applied on top", s.backend.Describe()))
 	}
+	s.version = version
 }

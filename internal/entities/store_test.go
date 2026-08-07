@@ -1,8 +1,11 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+
 package entities
 
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -38,7 +41,7 @@ func TestOpenMissingFileIsUsable(t *testing.T) {
 // against).
 func TestOpenSkipsNilArrayElements(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "entities.json")
-	data := `[null, {"type":"host","key":"1.2.3.4","label":"router"}, null]`
+	data := `{"entities":[null, {"type":"host","key":"1.2.3.4","label":"router"}, null]}`
 	if err := os.WriteFile(path, []byte(data), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -438,5 +441,42 @@ func TestHasTagFalseWhenEntityHasNoTags(t *testing.T) {
 	}
 	if s.HasTag(TypeHost, "192.168.1.50", "trusted-mail-sender") {
 		t.Error("expected HasTag to report false for an entity with no tags")
+	}
+}
+
+func TestUpsertRejectsControlAndFormatCharacters(t *testing.T) {
+	s, _ := Open(filepath.Join(t.TempDir(), "entities.json"))
+
+	cases := []struct {
+		name string
+		e    Entity
+	}{
+		{"ANSI in label", Entity{Type: TypeHost, Key: "192.0.2.1", Label: "web\x1b[2K\rrouter"}},
+		{"newline in label", Entity{Type: TypeHost, Key: "192.0.2.1", Label: "web\nadmin"}},
+		{"ANSI in key", Entity{Type: TypeRule, Key: "fw\x1b[2K", Label: "x"}},
+		{"RTL override in label", Entity{Type: TypeHost, Key: "192.0.2.1", Label: "web‮retuor"}},
+		{"control character in a tag", Entity{Type: TypeHost, Key: "192.0.2.1", Tags: []string{"ok", "bad\x1b"}}},
+		{"over-long label", Entity{Type: TypeHost, Key: "192.0.2.1", Label: strings.Repeat("a", 257)}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, err := s.Upsert(tc.e); err == nil {
+				t.Errorf("Upsert accepted %+v", tc.e)
+			}
+		})
+	}
+}
+
+func TestUpsertAcceptsRealisticLabels(t *testing.T) {
+	s, _ := Open(filepath.Join(t.TempDir(), "entities.json"))
+	for _, e := range []Entity{
+		{Type: TypeHost, Key: "192.0.2.1", Label: "Office NAS"},
+		{Type: TypeRule, Key: "drop-wan-in", Label: "WAN inbound drop", Tags: []string{"wan", "noisy"}},
+		{Type: TypePort, Key: "8291", Label: "Winbox"},
+		{Type: TypeHost, Key: "2001:db8::1", Label: "Café router"},
+	} {
+		if _, err := s.Upsert(e); err != nil {
+			t.Errorf("Upsert rejected a legitimate entity %+v: %v", e, err)
+		}
 	}
 }

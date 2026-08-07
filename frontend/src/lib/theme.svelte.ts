@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+
 export type ThemePref = 'system' | 'light' | 'dark'
 
 const STORAGE_KEY = 'mikroview-theme'

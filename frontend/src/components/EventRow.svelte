@@ -1,4 +1,5 @@
 <script lang="ts">
+  // SPDX-License-Identifier: AGPL-3.0-only
   import type { FirewallEvent } from '../lib/types'
   import { countryFlag, formatAddr, formatTime, isPublicIp } from '../lib/format'
   import { appState } from '../lib/state.svelte'
