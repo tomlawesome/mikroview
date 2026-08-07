@@ -79,7 +79,7 @@ jobs:
       # Everything below signs and attests the *digest*, never a tag. A
       # tag is a mutable pointer -- signing one would let it be moved to
       # different content afterwards and still verify.
-      - uses: sigstore/cosign-installer@v4
+      - uses: sigstore/cosign-installer@v4.1.2
 
       - name: Sign the image
         env:
@@ -191,7 +191,7 @@ jobs:
           src="ghcr.io/${{ github.repository }}:${{ needs.detect-release.outputs.version }}"
           docker buildx imagetools create --tag "ghcr.io/${{ github.repository }}:latest" "$src"
 
-      - uses: sigstore/cosign-installer@v4
+      - uses: sigstore/cosign-installer@v4.1.2
       - name: Sign the release
         env:
           DIGEST: ${{ steps.build.outputs.digest }}
