@@ -609,17 +609,15 @@ func main() {
 		oidcLog.Error("oidc.issuerUrl is set but oidc.publicBaseUrl is not -- SSO login is unavailable until it's configured (see docs/configuration.md)")
 	case cfg.OIDC.ClientID == "" || cfg.OIDC.ClientSecret == "":
 		oidcLog.Error("oidc.issuerUrl is set but oidc.clientId/oidc.clientSecret are not -- SSO login is unavailable until both are configured")
-	case oidc.IsMultiTenantIssuer(cfg.OIDC.IssuerURL) && !oidcPolicy.Restricted():
-		// Refused rather than warned about. Against a multi-tenant issuer
-		// the issuer URL restricts nothing -- every account at that
-		// provider produces a valid token -- so this configuration means
-		// "whoever reaches the login page first becomes the admin". A
-		// warning would scroll past; leaving SSO off is the fail-closed
-		// outcome, and local login is unaffected.
+	case oidc.AllowIssuer(cfg.OIDC.IssuerURL) != nil:
+		// Refused outright, not warned about, and deliberately not
+		// rescuable by configuration -- see oidc.AllowIssuer. Leaving SSO
+		// off is the fail-closed outcome; local login is unaffected.
 		oidcLog.Error(fmt.Sprintf(
-			"%s is a multi-tenant provider, so the issuer URL alone permits any account there to sign in and claim admin -- "+
-				"SSO login is unavailable until oidc.allowedGroups/allowedEmails/allowedEmailDomains/requiredClaims restricts it "+
-				"(see docs/configuration.md)", cfg.OIDC.IssuerURL))
+			"%s is a multi-tenant provider and is not supported -- mikroview only supports self-hosted identity providers "+
+				"(Authentik, Keycloak, Zitadel, or an Entra single-tenant issuer URL), where the issuer itself restricts who can "+
+				"sign in. SSO login is unavailable; local login is unaffected. See docs/configuration.md",
+			cfg.OIDC.IssuerURL))
 	default:
 		client, err := oidc.New(ctx, oidc.Config{
 			IssuerURL:    cfg.OIDC.IssuerURL,

@@ -1197,9 +1197,10 @@ curl -H "Authorization: Bearer <token>" https://mikroview.example.com/api/events
 
 Optional, additive on top of [local authentication](#authentication) above
 -- local login keeps working unmodified whether or not this is
-configured. Tested against [Authentik](https://goauthentik.io/), but
-works with any standard OIDC provider (generic discovery, no
-Authentik-specific behavior).
+configured. Tested against [Authentik](https://goauthentik.io/), and
+works with any standard **self-hosted** OIDC provider (generic
+discovery, no Authentik-specific behavior). Multi-tenant public
+providers are not supported -- see [Supported providers](#supported-providers).
 
 ```yaml
 oidc:
@@ -1209,20 +1210,17 @@ oidc:
   publicBaseUrl: "https://mikroview.example.com"
   scopes: ["openid", "profile", "email"] # this is the default if omitted
 
-  # Who at that issuer may sign in. All of these are optional and all
-  # default to empty, which permits anyone the issuer vouches for --
-  # the right answer for a self-hosted IdP (see "Who can sign in"
-  # below), and refused at startup for a multi-tenant one.
-  # Every field you set adds a condition, and all set conditions must
-  # hold.
+  # Which accounts in your directory may sign in. All optional, all
+  # default to empty (anyone the issuer vouches for). Every field you
+  # set adds a condition, and all set conditions must hold. See
+  # "Restricting which accounts in your directory can sign in" below.
   #
   # allowedGroups: ["mikroview-admins", "netops"]
   # groupsClaim: "groups"          # default; Azure often needs "roles"
   # allowedEmails: ["you@example.com"]
   # allowedEmailDomains: ["example.com"]
   # requiredClaims:                # the general form the above are sugar over
-  #   hd: ["example.com"]          # Google Workspace: one organisation
-  #   tid: ["<tenant-guid>"]       # Microsoft Entra: one tenant
+  #   some_claim: ["expected-value"]
 ```
 
 - **`issuerUrl`** — the provider's issuer URL (Authentik: your
@@ -1249,31 +1247,48 @@ oidc:
 - **`scopes`** — defaults to `openid`, `profile`, `email` if omitted.
   `openid` is always required regardless of what's listed.
 
-### Who can sign in
+### Supported providers
 
-Setting `issuerUrl` is itself the primary access control, and for a
-self-hosted provider it is usually the *only* one you need. Mikroview
-validates every ID token against that issuer's own signing keys and
-against your client ID, so if `issuerUrl` points at an Authentik,
-Keycloak or Zitadel you run, only accounts in that directory can sign
-in — and narrowing further is what your IdP's own application bindings
-and group policies are for. Leaving every field below empty is the
-correct, complete configuration for that deployment.
+**Mikroview supports self-hosted identity providers only** — Authentik,
+Keycloak, Zitadel, or a Microsoft Entra **single-tenant** issuer URL
+(`https://login.microsoftonline.com/<tenant-guid>/v2.0`).
 
-That reasoning stops holding the moment the issuer is one you don't
-run. Every Google account on earth validates against
-`accounts.google.com`; the same is true of the shared Microsoft Entra
-endpoints (`/common`, `/organizations`, `/consumers`) and of Apple.
-Against those, `issuerUrl` narrows nothing, and since the first account
-to register becomes an admin, an unrestricted deployment hands admin to
-whoever reaches the login page first. **Mikroview refuses to enable SSO
-for a known multi-tenant issuer unless at least one restriction below
-is set** — it logs the reason and leaves SSO off; local login is
-unaffected.
+Multi-tenant providers are **refused at startup**: Google
+(`accounts.google.com`), Apple, and Microsoft's shared `/common`,
+`/organizations` and `/consumers` endpoints. SSO stays disabled and the
+reason is logged; local login is unaffected.
 
-- **`allowedGroups`** — permit an account carrying at least one of
-  these in its groups claim. Your provider must actually be configured
-  to release that claim; if it isn't, **every login is refused**, not
+The reason is that mikroview's OIDC support rests on the issuer URL
+*being* the access control. Every ID token is verified against that
+issuer's own signing keys and your client ID, so pointing `issuerUrl` at
+a directory you run means only accounts in that directory can sign in.
+That isn't true of a public provider — every Google account on earth
+produces a valid token against `accounts.google.com` — and because the
+first account to register becomes an admin, such a deployment would hand
+admin to whoever reached the login page first.
+
+A safe configuration for a public provider is possible (pin a claim
+identifying the organisation), and mikroview deliberately does not offer
+it: it would make every deployment's safety depend on an operator
+getting an extra restriction exactly right, where the failure is silent
+and indistinguishable from working correctly. See
+[docs/decisions/multi-tenant-oidc.md](decisions/multi-tenant-oidc.md)
+for the full reasoning and the exact change to reverse it.
+
+### Restricting which accounts in your directory can sign in
+
+Configuring `issuerUrl` already restricts login to your directory. These
+optional fields narrow it further, which is worth doing if your IdP also
+serves other people or other applications — an Authentik account created
+for a housemate to reach Jellyfin has no business reading firewall logs.
+
+All of them default to empty, which permits anyone the issuer vouches
+for. Each one you set adds a condition, and **all** set conditions must
+hold.
+
+- **`allowedGroups`** — permit an account carrying at least one of these
+  in its groups claim. Your provider must actually be configured to
+  release that claim; if it isn't, **every login is refused**, not
   permitted. That direction is deliberate — an allowlist that opens up
   when a claim goes missing isn't one.
 - **`groupsClaim`** — which claim holds the groups. Defaults to
@@ -1282,45 +1297,32 @@ unaffected.
 - **`allowedEmails`** — exact addresses, compared case-insensitively.
 - **`allowedEmailDomains`** — permit any address at these domains.
   Compared as whole domains, not string suffixes, so listing
-  `example.com` does not admit `attacker@notexample.com`. Subdomains
-  are not implied — list `mail.example.com` separately if you want it.
-- **`requiredClaims`** — the general mechanism the three fields above
-  are conveniences over: a map of claim name to permitted values, where
-  the account must carry at least one permitted value for every claim
-  named. Nothing about it is provider-specific, which is the point: a
-  provider that invents its own claim tomorrow needs no code change
-  here.
+  `example.com` does not admit `attacker@notexample.com`. Subdomains are
+  not implied — list `mail.example.com` separately if you want it.
+- **`requiredClaims`** — the general mechanism the three fields above are
+  conveniences over: a map of claim name to permitted values, where the
+  account must carry at least one permitted value for every claim named.
 
 Both email fields additionally require the provider to have marked the
 address `email_verified`. At a provider that lets users set their own
-unverified address, an email allowlist without that check is
-decorative.
+unverified address, an email allowlist without that check is decorative.
 
-Restrictions are re-evaluated on **every** sign-in, before any account
-is created, so removing someone from a group at your IdP locks them out
-at their next login rather than whenever their session happens to
-expire, and a refused account never gets provisioned as a side effect
-of being refused. A refused user is told plainly that they aren't
-permitted, but never *which* condition they failed — that goes to the
-server log, since the specifics would map out your allowlist for an
-outsider.
-
-**Locking a public IdP to one organisation:**
+Restrictions are re-evaluated on **every** sign-in, before any account is
+created, so removing someone from a group at your IdP locks them out at
+their next login rather than whenever their session happens to expire,
+and a refused account never gets provisioned as a side effect of being
+refused. A refused user is told plainly that they aren't permitted, but
+never *which* condition they failed — that goes to the server log, since
+the specifics would map out your allowlist for an outsider.
 
 ```yaml
-# Google Workspace -- only accounts at example.com, not personal Gmail
+# Scope mikroview to one Authentik group
 oidc:
-  issuerUrl: "https://accounts.google.com"
-  requiredClaims:
-    hd: ["example.com"]
-
-# Microsoft Entra -- only your tenant.
-# Prefer the single-tenant issuer URL where you can; requiredClaims.tid
-# is the belt-and-braces version, and is required if you use /common.
-oidc:
-  issuerUrl: "https://login.microsoftonline.com/common/v2.0"
-  requiredClaims:
-    tid: ["00000000-0000-0000-0000-000000000000"]
+  issuerUrl: "https://authentik.example.com/application/o/mikroview/"
+  clientId: "mikroview"
+  clientSecret: "changeme"
+  publicBaseUrl: "https://mikroview.example.com"
+  allowedGroups: ["mikroview-admins"]
 ```
 
 **Identity**: an account is matched by the immutable `(issuer, subject)`
