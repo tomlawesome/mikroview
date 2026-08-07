@@ -186,9 +186,9 @@ See [docs/security-by-design.md](docs/security-by-design.md).
 - **Account recovery is a CLI command, deliberately outside the web
   UI/API entirely, and requires a recovery key on top of host access**:
   `mikroview -recover-admin-account` (prompts for a recovery key, then
-  for a new password with no echo -- never a CLI argument or env var, so
-  it never touches shell history, process args, or `docker inspect`
-  output). There is deliberately no standalone account-listing command: the
+  for a new password, both with echo suppressed -- never a CLI argument
+  or env var, so neither touches shell history, process args, or
+  `docker inspect` output). There is deliberately no standalone account-listing command: the
   one thing it was needed for -- finding the username to transfer admin to
   while locked out -- is now a numbered list inside `-transfer-admin`,
   behind the recovery key that command already requires. Gating a
@@ -198,6 +198,29 @@ See [docs/security-by-design.md](docs/security-by-design.md).
   on the very system they're locked out of. A password reset immediately
   invalidates every existing session for that account, including on an
   already-running server.
+- **Recovery keys are never printed by the container's main process**,
+  because in a container that stream is the container log: `docker run
+  -t` allocates a pty, so a terminal check passes while the log driver
+  still writes every byte to disk, and logs are the artefact most likely
+  to be shipped off the host and retained for months. Measured, not
+  assumed -- keys printed that way were recovered from
+  `/var/lib/docker/containers/<id>/<id>-json.log` and used to take over
+  the admin account.
+
+  `-generate-recovery-keys`, `-recover-admin-account` and
+  `-transfer-admin` refuse to run as PID 1 and name `docker compose exec`
+  instead, whose output the log driver does not capture. The check runs
+  before any of them does work, so a refusal never leaves a half-finished
+  transfer. On a host install PID 1 is the system's init, so printing is
+  allowed there, which is correct.
+
+  The keys are not written to a file at any point. Handing them over via
+  a file on the data volume was implemented and then removed: the
+  operator has to read the file to use it, so the keys reach a terminal
+  regardless, while the file adds plaintext keys on the data volume --
+  captured by any backup taken during that window, and left behind
+  entirely if the process dies before deleting it. It moved the exposure
+  and charged a disk copy for it.
 
   It scopes to **the admin account only** and **refuses an SSO-only
   admin**. The command it replaced (`-reset-password <username>`) could
