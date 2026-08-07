@@ -274,7 +274,11 @@ available. Full detail and the reasoning behind each is in
 
 ## License
 
-MikroView is source-available, not open source: free to use and
-modify for personal/non-commercial purposes, no redistribution or
-commercial use without permission. See [LICENSE](LICENSE) for the
-full terms.
+MikroView is free and open source under the
+[GNU AGPL v3.0](LICENSE). You can use, modify and self-host it at no
+cost, including inside a business.
+
+If you want to bundle MikroView into a commercial product, offer it as
+a hosted service, or ship changes without publishing them, a commercial
+licence is available — see
+[COMMERCIAL-LICENSE.md](COMMERCIAL-LICENSE.md).
