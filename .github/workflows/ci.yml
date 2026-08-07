@@ -42,7 +42,8 @@ jobs:
               - 'internal/api/ws.go'
               - 'frontend/src/lib/auth.svelte.ts'
               - 'frontend/src/components/Auth*.svelte'
-              - 'frontend/src/components/AddUserOverlay.svelte'
+              - 'frontend/src/components/UsersOverlay.svelte'
+              - 'frontend/src/components/SSOLinkOverlay.svelte'
               - 'go.mod'
               - 'go.sum'
 
@@ -154,3 +155,62 @@ jobs:
       - name: Clean up container
         if: always()
         run: docker rm --force mikroview-test || true
+
+  postgres:
+    name: Postgres integration (#131)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version: '1.26.5'
+
+      # Not a `services:` container. internal/persist refuses any
+      # connection that could fall back to plaintext (see its
+      # requireTLS), so the server has to present a certificate -- and a
+      # services block can't generate one or fix its permissions before
+      # postgres starts. Building a one-line image is the shortest path
+      # to a server that actually speaks TLS.
+      - name: Start Postgres with TLS
+        run: |
+          mkdir -p /tmp/pgtls
+          openssl req -new -x509 -days 1 -nodes -subj "/CN=localhost" \
+            -keyout /tmp/pgtls/server.key -out /tmp/pgtls/server.crt
+          cat > /tmp/pgtls/Dockerfile <<'EOF'
+          FROM postgres:18-alpine
+          COPY server.crt /certs/server.crt
+          COPY server.key /certs/server.key
+          RUN chown postgres:postgres /certs/server.crt /certs/server.key \
+           && chmod 600 /certs/server.key && chmod 644 /certs/server.crt
+          EOF
+          docker build -t mv-pg-tls /tmp/pgtls
+          docker run -d --name mv-pg \
+            -e POSTGRES_PASSWORD=ci -e POSTGRES_DB=mikroview -p 5432:5432 \
+            mv-pg-tls -c ssl=on \
+            -c ssl_cert_file=/certs/server.crt -c ssl_key_file=/certs/server.key
+
+      - name: Wait for Postgres
+        run: |
+          for attempt in $(seq 1 40); do
+            if docker exec mv-pg pg_isready -U postgres -d mikroview >/dev/null 2>&1; then
+              exit 0
+            fi
+            sleep 1
+          done
+          docker logs mv-pg
+          exit 1
+
+      # sslmode=require, not verify-full: the certificate is generated
+      # above and self-signed, so there is no chain to verify. The
+      # documentation recommends verify-full for real deployments; this
+      # job is checking the storage logic, not certificate validation.
+      - name: Integration tests
+        env:
+          MIKROVIEW_TEST_POSTGRES: postgres://postgres:ci@127.0.0.1:5432/mikroview?sslmode=require
+        run: go test -race -count=1 ./internal/persist/...
+
+      - name: Clean up
+        if: always()
+        run: docker rm --force mv-pg || true
