@@ -80,6 +80,7 @@
     device_silence: 'Device gone quiet',
     new_device: 'New device',
     stale_rule: 'Stale firewall rule',
+    unexpected_mail_sender: 'Unexpected mail sender',
     known_bad_ip: 'Known-bad IP (blocklist match)',
   }
 
@@ -179,6 +180,7 @@
       case 'internal_recon':
       case 'low_slow_scan':
       case 'off_hours_activity':
+      case 'unexpected_mail_sender':
       case 'known_bad_ip':
         appState.setFilter('ip', f.target)
         break
