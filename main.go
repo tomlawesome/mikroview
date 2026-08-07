@@ -384,6 +384,9 @@ func main() {
 		OffHoursMinCount:      cfg.Flags.OffHoursMinCount,
 
 		DeviceStaleAfter: cfg.Flags.DeviceStaleAfter,
+
+		VPNInterfaces:           cfg.Flags.VPNInterfaces,
+		VPNConfidenceMultiplier: cfg.Flags.VPNConfidenceMultiplier,
 	}
 	seed := detect.DefaultSettingsMap()
 	for name, ds := range cfg.Flags.Detectors {
