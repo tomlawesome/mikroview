@@ -1,4 +1,5 @@
 <script lang="ts">
+  // SPDX-License-Identifier: AGPL-3.0-only
   // Shared shell for the two pre-app states (setup/login) -- both are a
   // centered card with a username/password form, differing only in
   // title, submit label, and what happens on submit. Not a modal: this

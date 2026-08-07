@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+
 // Package device resolves syslog source IPs to RouterOS device identity.
 package device
 
