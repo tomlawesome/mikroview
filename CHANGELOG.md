@@ -11,6 +11,34 @@ upgrading.
 
 ## [Unreleased]
 
+### Added
+
+- **API tokens now have a kind, and ingest tokens are scoped to one
+  device** (#186). Alongside the existing read-only API token (#101)
+  there is now an ingest token, which the RouterOS push integration will
+  use. The two are not interchangeable in either direction: an ingest
+  token is refused everywhere a read-only token is accepted, and vice
+  versa, because `Authenticate` requires its caller to state the kind it
+  expects rather than returning a token for the caller to inspect.
+
+  This matters because an ingest token lives in a script on a router,
+  where any RouterOS user holding the `read` policy can print it. Without
+  the separation, that value would become a read-everything credential
+  for every event, flag, stat and device mikroview holds.
+
+  An ingest token must name the device it is issued for, and only an
+  ingest token may. One token per router means a compromised router
+  cannot report state for any other.
+
+  `POST /api/tokens` takes optional `kind` (`api` or `ingest`) and
+  `device`. Omitting `kind` still issues a read-only API token, so
+  existing callers are unchanged and the less privileged option stays the
+  default.
+
+  A token whose kind this build does not recognise cannot authenticate at
+  all, but stays listed and revocable — guessing that an unknown kind
+  meant the read-everything one is the wrong direction to guess in.
+
 ### Changed
 
 - **Rule-regex filtering runs in a Web Worker** (#157), with a hard
