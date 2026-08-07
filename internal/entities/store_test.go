@@ -41,7 +41,7 @@ func TestOpenMissingFileIsUsable(t *testing.T) {
 // against).
 func TestOpenSkipsNilArrayElements(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "entities.json")
-	data := `[null, {"type":"host","key":"1.2.3.4","label":"router"}, null]`
+	data := `{"entities":[null, {"type":"host","key":"1.2.3.4","label":"router"}, null]}`
 	if err := os.WriteFile(path, []byte(data), 0o600); err != nil {
 		t.Fatal(err)
 	}
