@@ -24,6 +24,8 @@ REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 MV_URL="${MV_URL:?run scripts/live-env.sh up first, with MV_BIND set to the host address}"
 SINK_PORT="${MVCHR_SINK_PORT:-19899}"
 SINK_LOG="${MVCHR_SINK_LOG:-/tmp/mikroview-chr/sink.log}"
+SFTP_PORT="${MVCHR_SFTP_PORT:-19822}"
+SFTP_CONTAINER="${MVCHR_SFTP_CONTAINER:-mv-sftp-probe}"
 HOST_ADDR="$("$REPO/scripts/live-routeros.sh" host-addr)"
 SINK_URL="http://$HOST_ADDR:$SINK_PORT"
 
@@ -104,7 +106,22 @@ for line in open(sys.argv[1]):
 PY
 }
 
-trap sink_stop EXIT
+# The SFTP server exists purely to let the router demonstrate what its
+# sftp client does and does not check. mikroview ships no such thing.
+sftp_start() {
+  docker rm -f "$SFTP_CONTAINER" >/dev/null 2>&1 || true
+  docker build --network=host -q \
+    -f "$REPO/scripts/live-routeros-sftp.dockerfile" -t mv-sftp-probe:local "$REPO/scripts" >/dev/null
+  docker run -d --name "$SFTP_CONTAINER" -p "$HOST_ADDR:$SFTP_PORT:22" mv-sftp-probe:local >/dev/null
+  sleep 4
+}
+
+sftp_stop() {
+  docker rm -f "$SFTP_CONTAINER" >/dev/null 2>&1 || true
+}
+
+cleanup() { sink_stop; sftp_stop; }
+trap cleanup EXIT
 sink_start
 
 echo "# RouterOS Step 0 transcript"
@@ -131,11 +148,29 @@ done
 
 section "2b. Whether a file on the router routes around the size limit"
 # The obvious escape from a 64KiB body is to write the payload to a file
-# and upload that instead. The router holds the file happily -- it is the
-# sending that is not on offer.
+# and upload that instead. Over HTTP that is simply not on offer.
 ros "/tool fetch url=\"$SINK_URL/big.json\" dst-path=big.json" | tail -4
 ros '/file print where name~"big"'
 ros "/tool fetch url=\"$SINK_URL/q2b\" upload=yes src-path=big.json http-method=post as-value" | tail -3
+# Over SFTP it is, and it works -- so the question is not whether the
+# router can, but what it costs. Two properties decide that, and both are
+# measured here rather than assumed.
+sftp_start
+ros "/tool fetch url=\"sftp://$HOST_ADDR:$SFTP_PORT/drop/from-router.json\" user=mvingest password=ingest-pass-123 src-path=big.json upload=yes as-value" | tail -3
+echo "uploaded, server side:"
+docker exec "$SFTP_CONTAINER" ls -l /drop/from-router.json
+docker exec "$SFTP_CONTAINER" md5sum /drop/from-router.json
+echo "--- is there a key-auth parameter? (an sftp password is a reusable secret)"
+ros '/tool fetch address=1.2.3.4 mode=sftp keyfile=x src-path=y upload=yes' | tail -2
+echo "--- does it verify the server's host key? changing it should break the transfer"
+docker exec "$SFTP_CONTAINER" sh -c 'rm -f /etc/ssh/ssh_host_* && ssh-keygen -A -q'
+docker restart "$SFTP_CONTAINER" >/dev/null
+sleep 4
+docker exec "$SFTP_CONTAINER" ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub
+ros "/tool fetch url=\"sftp://$HOST_ADDR:$SFTP_PORT/drop/after-keychange.json\" user=mvingest password=ingest-pass-123 src-path=big.json upload=yes as-value" | tail -3
+echo "landed despite the server identity changing?"
+docker exec "$SFTP_CONTAINER" ls -l /drop/after-keychange.json 2>&1 || echo "  no -- the router refused"
+sftp_stop
 # And the limit is not an artifact of typing into a console: the same
 # refusal comes back from a script, which is the path a scheduler uses.
 ros '/system script remove [find name=mv-oversize]' >/dev/null 2>&1 || true

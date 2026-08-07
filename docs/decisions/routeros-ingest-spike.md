@@ -31,38 +31,89 @@ and rules carrying more fields fit proportionally fewer. Comfortable for
 config shape; not comfortable for anything list-like, where an address
 list or a large DHCP lease table can pass it without much trouble.
 
-## 2. A file on the router does not route around it
+## 2. A file does route around it — over SFTP, at a price
 
-The obvious escape is to write the payload to a file and upload that.
-The router holds the file happily — a 293KiB file downloaded and stored
-without complaint, on a disk with ~69MiB free. But:
+Over HTTP there is no file path at all:
 
 ```
 /tool fetch url="http://.../q2b" upload=yes src-path=big.json http-method=post
 failure: only [s]ftp modes support upload
 ```
 
-`/tool fetch` cannot upload over HTTP or HTTPS at all. `upload=yes` is
-FTP and SFTP only, and `http-data` is the sole body source, so the
-ceiling stands.
+`upload=yes` is FTP and SFTP only, and `http-data` is the sole body
+source over HTTP.
 
-**Why we are not taking the FTP route.** It would mean mikroview running
-an inbound FTP or SFTP listener with credentials the router stores —
-reintroducing exactly the long-lived stored secret that #186 chose push
-to avoid, and adding a file-transfer daemon to the attack surface, to
-raise a limit that the config shape does not currently hit.
+**Over SFTP it works, and it works well.** A 293KiB file and then a 5MB
+file both uploaded byte-exact (md5 verified against the original), so
+there is no meaningful size ceiling on that path. The 64KiB limit is a
+property of `http-data`, not of the router.
 
-**The two ways past it, if we ever need them,** in preference order:
+So the question is not whether the router *can*. It is what the SFTP path
+costs, and two measured properties decide it.
 
-1. **Several small documents, not one large one** — interfaces,
-   addresses, firewall rules, leases, each self-contained and each under
-   the cap. Order does not matter, a dropped one degrades rather than
-   corrupts, and the endpoint stays stateless.
-2. **Chunking one document across POSTs** — needs reassembly state,
-   ordering and partial-payload handling on the mikroview side, which is
-   a materially larger attack surface and makes the additive-only
-   invariant in step 4 much harder to reason about. Avoid unless (1) is
-   genuinely insufficient.
+**It is password-only.** There is no key-auth parameter, and this is not
+a naming quibble: `keyfile=`, `private-key=`, `identity=` and `key=` are
+each rejected with `expected end of command`. `/tool fetch` authenticates
+to SFTP with `user=` and `password=` and nothing else, so **the router
+cannot present a key even if mikroview's server demanded one** — a server
+configured for key-only auth is a server this router cannot reach.
+
+*On its own this is not an argument.* A bearer token is also a long-lived
+reusable secret stored on the router, and finding 5 below shows any
+`read` user can read either one straight out of the script source. "The
+router holds a secret" is true of both designs and does not separate
+them. #186's objection was to mikroview holding *RouterOS* credentials,
+which neither design does.
+
+**It does not verify the server's host key.** This is the difference that
+survives. The SFTP server's host key was replaced entirely — a different
+key, a different fingerprint — and the router uploaded to it anyway,
+silently, with no warning and no failure:
+
+```
+256 SHA256:yt7fhRNUgSpVMoWL6uq1AQg1R/hjA9NWw8scdtx6FVo (before)
+256 SHA256:D1sta/wr+XyoZMIa0NlbtFHhGDtdh7xWHAekTdyb6YY (after)
+-rw-r--r-- 1 mvingest mvingest 300011 /drop/after-keychange.json
+```
+
+Anyone who can get into the network path impersonates mikroview, collects
+the password on first contact, and thereafter has authenticated write
+access. **There is no mitigation available** — no host-key pinning, no
+key auth, nothing to turn on.
+
+Contrast the HTTPS path, where there *is* one: after importing
+mikroview's CA, `check-certificate=yes` genuinely authenticates the
+server, so a MITM cannot impersonate mikroview and the token is not
+harvestable from the path. That is precisely why #186 refuses to document
+`check-certificate=no` — and SFTP has no `check-certificate=yes`
+equivalent to offer.
+
+**A failed upload leaves a truncated file behind.** Observed, not
+theorised: one run reported `failure: connection timeout` and left
+exactly 65,536 bytes of a 300,011-byte file on the server, with a
+different md5 to the original. Nothing on the server side distinguishes
+that from a complete small payload. A file-drop ingest therefore needs
+its own completeness protocol — upload-then-rename, a sidecar checksum,
+or similar — where an HTTP request arrives with a `Content-Length` and
+either completes or does not.
+
+**And a file drop bypasses machinery that already exists.** Step 3 wants
+a per-token rate limit, an `authzMatrix` row, and an audit entry per
+ingest. Those are properties of a request arriving at an HTTP handler. A
+file landing in a directory has none of them, and rebuilding them around
+a filesystem watcher — plus partial writes, ordering, quarantine and
+cleanup — is a second ingest path with its own failure modes, next to one
+that already works.
+
+**Where that leaves it.** SFTP buys an uncapped payload and costs server
+authentication plus the existing authz/audit/rate-limit path. On measured
+config sizes the cap is not binding (see below), so the trade is not
+currently worth taking. If a payload genuinely needs to exceed 64KiB, the
+cheaper move is **several small self-contained documents rather than one
+large one** — order-independent, a dropped one degrades rather than
+corrupts, and the endpoint stays stateless. Chunking one document across
+POSTs is the last resort: it needs reassembly state and makes step 4's
+additive-only invariant much harder to reason about.
 
 ## 3. `:serialize to=json` is native from 7.13, and absent before it
 
@@ -191,11 +242,28 @@ failure: maximum message size exceeded
 /file print where name~"big"
 Columns: NAME, TYPE, SIZE, LAST-MODIFIED
 # NAME      TYPE        SIZE      LAST-MODIFIED      
-0 big.json  .json file  293.0KiB  2026-08-07 20:24:28
+0 big.json  .json file  293.0KiB  2026-08-07 20:38:33
 [admin@CHR] >
 /tool fetch url="http://192.168.11.30:19899/q2b" upload=yes src-path=big.json http-method=post as-value
 failure: only [s]ftp modes support upload
 [admin@CHR] >
+/tool fetch url="sftp://192.168.11.30:19822/drop/from-router.json" user=mvingest password=ingest-pass-123 src-path=big.json upload=yes as-value
+failure: connection timeout
+[admin@CHR] >
+uploaded, server side:
+-rw-r--r--    1 mvingest mvingest     65536 Aug  7 20:38 /drop/from-router.json
+42dc39b2946382b07b902460653ffa83  /drop/from-router.json
+--- is there a key-auth parameter? (an sftp password is a reusable secret)
+expected end of command (line 1 column 46)
+[admin@CHR] >
+--- does it verify the server's host key? changing it should break the transfer
+ssh-keygen: generating new host keys: RSA ECDSA ED25519 
+256 SHA256:OcY018LRr3NXiEN9fm1nNGMpJYsPan1mMDIUQvf35KY root@8e8114672855 (ED25519)
+== /tool fetch url="sftp://192.168.11.30:19822/drop/after-keychange.json" user=mvingest password=ingest-pass-123 src-path=big.json upload=yes as-value
+/tool fetch url="sftp://192.168.11.30:19822/drop/after-keychange.json" user=mvingest password=ingest-pass-123 src-path=big.json upload=yes as-value
+[admin@CHR] >
+landed despite the server identity changing?
+-rw-r--r--    1 mvingest mvingest    300011 Aug  7 20:39 /drop/after-keychange.json
 65440
 failure: maximum message size exceeded
 [admin@CHR] >
@@ -214,7 +282,7 @@ failure: maximum message size exceeded
 == /system scheduler print detail where name=mv-ingest
 /system scheduler print detail where name=mv-ingest
 Flags: X - DISABLED 
- 0   name="mv-ingest" start-date=2026-08-07 start-time=20:25:03 interval=30s on-event=/system script run mv-ingest owner="admin" policy=read,test run-count=2 next-run=2026-08-07 20:26:33 
+ 0   name="mv-ingest" start-date=2026-08-07 start-time=20:39:38 interval=30s on-event=/system script run mv-ingest owner="admin" policy=read,test run-count=2 next-run=2026-08-07 20:41:08 
 [admin@CHR] >
 received at /q3:
   User-Agent: RouterOS 7.23.3
@@ -275,9 +343,9 @@ failure: SSL: ssl: no trusted CA certificate found (6)
 /certificate print detail
 Flags: K - PRIVATE-KEY; L - CRL; C - SMART-CARD-KEY; A - AUTHORITY; I - ISSUED, R - REVOKED; E - EXPIRED; T - TRUSTED; a - ACME-MANAGED; D - DYNAMIC 
  0       T   name="mikroview-ca.crt_0" trust-store=all digest-algorithm=sha256 trusted=yes common-name="mikroview local CA" organization="mikroview" subject-alt-name="" 
-             issuer=O=mikroview,CN=mikroview local CA key-type=ec key-size=prime256v1 key-usage=digital-signature,key-cert-sign,crl-sign days-valid=3650 invalid-before=2026-08-07 19:23:34 
-             invalid-after=2036-08-04 20:23:34 serial-number="5fe3dd77c26782e3581f235e483e3865" akid="" skid=5F47F5A6CCA03C0D8AD71AAC1F6DEB7A417D4B1D 
-             fingerprint="1c238dc1b03c3e481618985df941385d1f233f9c81a27f0a6365885dee324720" expires-after=521w2d23h56m49s 
+             issuer=O=mikroview,CN=mikroview local CA key-type=ec key-size=prime256v1 key-usage=digital-signature,key-cert-sign,crl-sign days-valid=3650 invalid-before=2026-08-07 19:37:39 
+             invalid-after=2036-08-04 20:37:39 serial-number="3584f1ed917127e1488180f0248e1045" akid="" skid=4B3865816845B1D032754FB7545F44A3855E6B07 
+             fingerprint="a0a7875756fd459330e0ba81642e10587442c71b71f827df0646133fcb9efd98" expires-after=521w2d23h56m20s 
 [admin@CHR] >
 :put ([/tool fetch url="https://192.168.11.30:19801/api/healthz" check-certificate=yes output=user as-value]->"status")
 finished
