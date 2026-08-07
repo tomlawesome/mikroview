@@ -284,12 +284,12 @@
             <button
               class="option"
               onclick={() => {
-                authState.showAddUser = true
+                authState.showUsers = true
                 open = false
               }}
-              title="Create an additional account"
+              title="Add or remove accounts"
             >
-              Add user
+              Users
             </button>
             <button
               class="option"

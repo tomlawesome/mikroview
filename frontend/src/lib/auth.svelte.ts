@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 import {
-  createUser,
   fetchAuthSession,
   login,
   logout,
@@ -28,10 +27,10 @@ class AuthState {
   state = $state<AuthViewState>("loading");
   username = $state("");
   role = $state<"admin" | "user" | "">("");
-  // Drives AddUserOverlay -- a modal toggled from Toolbar, mounted at the
+  // Drives UsersOverlay -- a modal toggled from NavMenu, mounted at the
   // App root.
-  showAddUser = $state(false);
-  // Drives TokensOverlay (issue #101) -- same pattern as showAddUser
+  showUsers = $state(false);
+  // Drives TokensOverlay (issue #101) -- same pattern as showUsers
   // above, toggled from NavMenu's admin-only Account section.
   showTokens = $state(false);
   // Whether the backend has OIDC/SSO configured at all -- gates
@@ -130,14 +129,6 @@ class AuthState {
     this.state = "unauthenticated";
     this.username = "";
     this.role = "";
-  }
-
-  async createUser(
-    username: string,
-    password: string,
-    role: "admin" | "user",
-  ): Promise<string | null> {
-    return createUser(username, password, role);
   }
 
   // Called by any fetch wrapper that gets a 401 mid-session (an expired

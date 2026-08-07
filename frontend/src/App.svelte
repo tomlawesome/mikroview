@@ -24,7 +24,7 @@
   import PortLookupPopover from './components/PortLookupPopover.svelte'
   import AuthSetup from './components/AuthSetup.svelte'
   import AuthLogin from './components/AuthLogin.svelte'
-  import AddUserOverlay from './components/AddUserOverlay.svelte'
+  import UsersOverlay from './components/UsersOverlay.svelte'
   import TokensOverlay from './components/TokensOverlay.svelte'
 
   // Any polling call that fails with a 401 (an expired or reset-
@@ -160,7 +160,7 @@
   </main>
   <IpLookupPopover />
   <PortLookupPopover />
-  <AddUserOverlay />
+  <UsersOverlay />
   <TokensOverlay />
 {/if}
 

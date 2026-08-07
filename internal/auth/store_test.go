@@ -76,7 +76,7 @@ func TestPasswordTooShortRejectedOnRegisterCreateAndReset(t *testing.T) {
 	}
 }
 
-func TestCreateUserAllowsAdditionalAccountsAtAnyRole(t *testing.T) {
+func TestCreateUserAddsAdditionalAccounts(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "users.json")
 	s, _ := Open(path)
 	s.Register("admin", "password123", time.Now())
@@ -569,5 +569,65 @@ func TestConcurrentRegisterAndDisableAreMutuallyExclusive(t *testing.T) {
 		if s.Disabled() && s.Count() > 0 {
 			t.Fatalf("attempt %d: inconsistent end state -- Disabled()=true with %d account(s)", attempt, s.Count())
 		}
+	}
+}
+
+func TestDeleteUserRefusesTheAdmin(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "users.json")
+	s, _ := Open(path)
+	admin, _ := s.Register("alice", "password123", time.Now())
+
+	if _, err := s.DeleteUser(admin.ID); err != ErrCannotDeleteAdmin {
+		t.Fatalf("expected ErrCannotDeleteAdmin, got %v", err)
+	}
+	if s.Admin() == nil {
+		t.Error("the admin account is gone after a refused delete")
+	}
+}
+
+func TestDeleteUserRemovesTheAccountAndFreesItsIdentifiers(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "users.json")
+	s, _ := Open(path)
+	s.Register("alice", "password123", time.Now())
+	bob, err := s.CreateUser("bob", "password456", RoleUser, time.Now())
+	if err != nil {
+		t.Fatalf("CreateUser: %v", err)
+	}
+	if err := s.LinkOIDCIdentity(bob.ID, "https://idp.example", "sub-bob", time.Now()); err != nil {
+		t.Fatalf("LinkOIDCIdentity: %v", err)
+	}
+
+	deleted, err := s.DeleteUser(bob.ID)
+	if err != nil {
+		t.Fatalf("DeleteUser: %v", err)
+	}
+	if deleted.PasswordHash != "" {
+		t.Error("DeleteUser returned the account's password hash")
+	}
+	if _, ok := s.ByUsername("bob"); ok {
+		t.Error("the deleted account is still resolvable by username")
+	}
+
+	// The username and the SSO identity must both be reusable, or a
+	// deleted account silently blocks re-creating the person's access.
+	if _, err := s.CreateUser("bob", "password789", RoleUser, time.Now()); err != nil {
+		t.Errorf("expected the freed username to be reusable, got %v", err)
+	}
+	replacement, created, err := s.FindOrCreateOIDCUser("https://idp.example", "sub-bob", "bob2", time.Now())
+	if err != nil {
+		t.Fatalf("FindOrCreateOIDCUser: %v", err)
+	}
+	if !created || replacement.ID == bob.ID {
+		t.Error("the deleted account's SSO identity still maps to the old account")
+	}
+}
+
+func TestDeleteUserUnknownIDReturnsNotFound(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "users.json")
+	s, _ := Open(path)
+	s.Register("alice", "password123", time.Now())
+
+	if _, err := s.DeleteUser("no-such-id"); err != ErrUserNotFound {
+		t.Errorf("expected ErrUserNotFound, got %v", err)
 	}
 }

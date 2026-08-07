@@ -4,6 +4,7 @@ package api
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"strings"
 	"time"
@@ -471,18 +472,24 @@ func (s *Server) handleAuthCreateUser(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid request body", http.StatusBadRequest)
 		return
 	}
-	role := auth.RoleUser
+	// A request for an admin is refused outright rather than quietly
+	// downgraded to a user: the caller asked for something this
+	// deployment does not have, and silently creating a lesser account
+	// under the name they chose is worse than telling them. auth.Store
+	// refuses it too -- this exists to give a usable status and message
+	// instead of a 500.
 	if req.Role == string(auth.RoleAdmin) {
-		role = auth.RoleAdmin
+		writeAuthError(w, auth.ErrSingleAdmin, http.StatusBadRequest)
+		return
 	}
 
-	user, err := s.Auth.CreateUser(req.Username, req.Password, role, time.Now())
+	user, err := s.Auth.CreateUser(req.Username, req.Password, auth.RoleUser, time.Now())
 	if err != nil {
 		status := http.StatusInternalServerError
 		switch err {
 		case auth.ErrUsernameTaken:
 			status = http.StatusConflict
-		case auth.ErrPasswordTooShort:
+		case auth.ErrPasswordTooShort, auth.ErrSingleAdmin:
 			status = http.StatusBadRequest
 		}
 		writeAuthError(w, err, status)
@@ -490,4 +497,98 @@ func (s *Server) handleAuthCreateUser(w http.ResponseWriter, r *http.Request) {
 	}
 	s.Audit.Record(auditActor(r), "user.create", user.Username, "role="+string(user.Role))
 	writeJSON(w, http.StatusCreated, map[string]any{"username": user.Username, "role": user.Role})
+}
+
+// userSummary is what the account list exposes. Deliberately not
+// auth.User: that carries PasswordHash, and serializing it directly is
+// exactly the mistake this type exists to make impossible.
+type userSummary struct {
+	ID               string    `json:"id"`
+	Username         string    `json:"username"`
+	Role             string    `json:"role"`
+	CreatedAt        time.Time `json:"createdAt"`
+	LastLogin        time.Time `json:"lastLogin,omitzero"`
+	HasLocalPassword bool      `json:"hasLocalPassword"`
+	SSO              bool      `json:"sso"`
+}
+
+// handleAuthListUsers backs the admin-facing account list.
+//
+// Admin-only, and 403 for everyone else rather than an empty list. The
+// usernames and which one is the admin are themselves worth having --
+// they tell an attacker whose account is the high-value target -- so
+// this is not information a signed-in non-admin should be handed. An
+// empty-list response would also leave the route-authorization matrix
+// unable to tell a correct refusal from a handler that leaks.
+func (s *Server) handleAuthListUsers(w http.ResponseWriter, r *http.Request) {
+	if !callerIsAdmin(r) {
+		http.Error(w, "admin role required", http.StatusForbidden)
+		return
+	}
+	users := s.Auth.List()
+	out := make([]userSummary, 0, len(users))
+	for _, u := range users {
+		out = append(out, userSummary{
+			ID:               u.ID,
+			Username:         u.Username,
+			Role:             string(u.Role),
+			CreatedAt:        u.CreatedAt,
+			LastLogin:        u.LastLogin,
+			HasLocalPassword: u.LocalPassword(),
+			SSO:              u.OIDCIssuer != "",
+		})
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+// handleAuthDeleteUser removes an account and everything it can still be
+// used with.
+//
+// Deleting the account alone is not enough. A live session cookie
+// authenticates by session ID, and an API token by its own bearer value
+// -- neither re-checks that the account still exists on every request,
+// so both would outlive the deletion. Sessions and tokens go with it.
+//
+// The deletion happens first, and the revocations only once it has
+// committed. The reverse order would sign a user out and destroy their
+// tokens on the way to a deletion that can still be refused (the admin
+// account, a stale ID) -- destructive work done for a request that
+// never took effect. Neither revocation can fail, so nothing is left
+// half-done by finishing in this order.
+func (s *Server) handleAuthDeleteUser(w http.ResponseWriter, r *http.Request) {
+	if !callerIsAdmin(r) {
+		http.Error(w, "admin role required", http.StatusForbidden)
+		return
+	}
+	id := r.PathValue("id")
+	if id == "" {
+		http.Error(w, "user id is required", http.StatusBadRequest)
+		return
+	}
+
+	user, err := s.Auth.DeleteUser(id)
+	if err != nil {
+		status := http.StatusInternalServerError
+		switch err {
+		case auth.ErrUserNotFound:
+			status = http.StatusNotFound
+		case auth.ErrCannotDeleteAdmin:
+			status = http.StatusConflict
+		}
+		writeAuthError(w, err, status)
+		return
+	}
+
+	s.Sessions.RevokeAllForUser(user.ID)
+	revokedTokens := 0
+	if s.Tokens != nil {
+		revokedTokens = s.Tokens.RevokeAllCreatedBy(user.ID)
+	}
+
+	s.Audit.Record(auditActor(r), "user.delete", user.Username,
+		fmt.Sprintf("role=%s tokensRevoked=%d", user.Role, revokedTokens))
+	writeJSON(w, http.StatusOK, map[string]any{
+		"username":      user.Username,
+		"tokensRevoked": revokedTokens,
+	})
 }

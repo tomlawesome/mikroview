@@ -1152,8 +1152,65 @@ next person to load mikroview, or you, still completes the create-
 account form). Requires container/host access, the same trust anchor as
 the recovery commands below.
 
-**Adding more accounts** afterward is admin-only, either via the "Add
-user" control in the toolbar or `POST /api/auth/users`.
+### Adding and removing people
+
+Open **Menu → Users**. Only the admin sees it.
+
+![The Users panel, showing the admin account and one ordinary user](screenshots/users-panel.png)
+
+Type a username and password, press **Add**, and the account appears in
+the list. Everyone added here can see everything MikroView shows, but
+can't change settings, manage accounts, or create API tokens.
+
+**Delete** removes an account. That person is signed out straight away,
+on any device, and any API tokens they created stop working at the same
+moment.
+
+The admin account has no Delete button. There is exactly one admin, and
+moving that role is a command-line step (see below) — so nobody who gets
+hold of an admin's browser session can take ownership of your
+deployment or lock you out of it.
+
+### Handing admin to someone else
+
+Only from the command line, and only with a recovery key:
+
+```sh
+mikroview -transfer-admin bob
+```
+
+It tells you who currently holds admin, asks for a recovery key, makes
+the swap, and then shows you a replacement set of keys. The previous
+admin becomes an ordinary user — their account isn't deleted.
+
+If the person you're handing it to signs in through SSO, you're warned
+before the key is asked for: MikroView won't be able to recover that
+account itself if they ever lose access, because it holds no password
+for them.
+
+### Recovery keys
+
+Recovery keys are the second thing — besides access to the machine
+itself — needed to recover or transfer the admin account. They're
+created once, shown once, and stored hashed:
+
+```sh
+mikroview -generate-recovery-keys
+```
+
+You get three. Any one of them works, and using one replaces all three,
+so treat them as one key with two spares — they're there in case a
+printout smudges or a paste goes wrong, not as three separate uses.
+Keep them somewhere safe, such as a password manager.
+
+MikroView refuses to print them if the output isn't going to a terminal
+(a pipe, a file, container logs), because that would write them
+somewhere more exposed than the file they protect. If you genuinely are
+scripting the setup, pass `--i-will-capture-this`.
+
+You can't regenerate them while a set exists — that would let anyone
+with access to the machine mint themselves a fresh key and walk straight
+through the gate. They rotate automatically after each use instead.
 
 ### Recovering the admin account
 

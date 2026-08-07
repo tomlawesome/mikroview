@@ -177,6 +177,10 @@ var (
 	// mikroview holds exactly one admin; handover is TransferAdmin, not
 	// creating a second one.
 	ErrSingleAdmin = errors.New("auth: mikroview has a single admin account -- transfer the role instead of creating another admin")
+	// ErrCannotDeleteAdmin is returned by DeleteUser for the admin
+	// account. Transfer the role first if the intent is to remove the
+	// person currently holding it.
+	ErrCannotDeleteAdmin = errors.New("auth: the admin account cannot be deleted -- transfer the admin role first")
 	// ErrTransferToSelf is returned by TransferAdmin when the target is
 	// already the admin.
 	ErrTransferToSelf = errors.New("auth: that account is already the admin")
@@ -532,6 +536,46 @@ func (s *Store) CreateUser(username, password string, role Role, now time.Time) 
 		return nil, ErrSingleAdmin
 	}
 	return s.createLocked(username, password, role, now, nil)
+}
+
+// DeleteUser removes an account by ID and returns it, so the caller can
+// clean up what belonged to it (sessions, API tokens).
+//
+// It refuses to delete the admin. mikroview holds exactly one admin, and
+// a deployment with none has no way to add accounts, manage tokens, or
+// reach any admin-gated screen -- recoverable only from the CLI, which
+// is a worse position than whatever prompted the deletion. Enforced here
+// rather than only at the API layer so every caller inherits it: with a
+// single admin, "don't delete the admin" and "don't delete yourself" are
+// the same rule, and this is the one place that stays true if that ever
+// changes.
+func (s *Store) DeleteUser(id string) (*User, error) {
+	if !s.Persisted() {
+		return nil, ErrNotPersisted
+	}
+	s.reloadIfStale()
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	u, ok := s.byID[id]
+	if !ok {
+		return nil, ErrUserNotFound
+	}
+	if u.Role == RoleAdmin {
+		return nil, ErrCannotDeleteAdmin
+	}
+
+	delete(s.byID, id)
+	delete(s.byName, strings.ToLower(u.Username))
+	if u.OIDCIssuer != "" {
+		delete(s.oidcIndex, oidcKey{issuer: u.OIDCIssuer, subject: u.OIDCSubject})
+	}
+	s.persistLocked()
+
+	cp := *u
+	cp.PasswordHash = ""
+	return &cp, nil
 }
 
 // TransferAdmin moves the admin role to toUsername, atomically.

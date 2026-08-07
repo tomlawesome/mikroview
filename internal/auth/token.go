@@ -40,6 +40,24 @@ type Token struct {
 	HashedValue string    `json:"hashedValue"`
 	CreatedAt   time.Time `json:"createdAt"`
 	LastUsedAt  time.Time `json:"lastUsedAt,omitzero"`
+	// CreatedBy is the account ID that issued this token, so deleting
+	// that account can revoke it (see RevokeAllCreatedBy).
+	//
+	// Reachable via admin transfer: an admin creates tokens, hands admin
+	// to someone else, and is later deleted as an ordinary user. Without
+	// this, they keep working read-only API access after their account
+	// is gone -- they still hold the raw value, which is all a token
+	// needs.
+	//
+	// Empty on tokens written before this field existed. Those cannot be
+	// attributed to anyone and so are never auto-revoked; they have to
+	// be reviewed by hand in the token list.
+	CreatedBy string `json:"createdBy,omitempty"`
+	// CreatedByUsername is a display snapshot, taken at creation. Kept
+	// alongside the ID because the point at which it is most useful --
+	// after that account has been deleted -- is exactly when the ID can
+	// no longer be resolved to a name. Never used for authorization.
+	CreatedByUsername string `json:"createdByUsername,omitempty"`
 }
 
 var (
@@ -126,7 +144,9 @@ func hashTokenValue(raw string) string {
 // hash. The returned raw string is the only time the actual bearer
 // value ever exists outside the caller's memory -- it is not
 // recoverable afterward, only re-issuable as a brand new token.
-func (s *TokenStore) Create(name string, now time.Time) (raw string, tok *Token, err error) {
+// creator identifies the account issuing the token, so it can be
+// revoked if that account is later deleted.
+func (s *TokenStore) Create(name string, creator *User, now time.Time) (raw string, tok *Token, err error) {
 	if !s.Persisted() {
 		return "", nil, ErrTokenNotPersisted
 	}
@@ -144,6 +164,10 @@ func (s *TokenStore) Create(name string, now time.Time) (raw string, tok *Token,
 		Name:        strings.TrimSpace(name),
 		HashedValue: hash,
 		CreatedAt:   now,
+	}
+	if creator != nil {
+		t.CreatedBy = creator.ID
+		t.CreatedByUsername = creator.Username
 	}
 	s.byID[t.ID] = t
 	s.byHash[hash] = t.ID
@@ -193,6 +217,36 @@ func (s *TokenStore) Revoke(id string) error {
 	delete(s.byHash, t.HashedValue)
 	s.persistLocked()
 	return nil
+}
+
+// RevokeAllCreatedBy deletes every token issued by userID, returning how
+// many went. Called when that account is deleted: the person still holds
+// the raw values, so the account going away has to take its tokens with
+// it.
+//
+// An empty userID matches nothing, deliberately -- pre-attribution
+// tokens carry an empty CreatedBy, and treating that as a match would
+// let deleting any one account wipe every unattributed token in the
+// deployment.
+func (s *TokenStore) RevokeAllCreatedBy(userID string) int {
+	if userID == "" {
+		return 0
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	revoked := 0
+	for id, t := range s.byID {
+		if t.CreatedBy != userID {
+			continue
+		}
+		delete(s.byID, id)
+		delete(s.byHash, t.HashedValue)
+		revoked++
+	}
+	if revoked > 0 {
+		s.persistLocked()
+	}
+	return revoked
 }
 
 // List returns every token's metadata, oldest first -- HashedValue is

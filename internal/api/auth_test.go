@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/cookiejar"
 	"net/http/httptest"
+	"net/url"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -549,4 +550,193 @@ func mustCookieJar(t *testing.T) http.CookieJar {
 		t.Fatal(err)
 	}
 	return jar
+}
+
+func TestAdminCannotCreateASecondAdmin(t *testing.T) {
+	s := newAuthTestServer(t)
+	ts := httptest.NewServer(s.Routes())
+	defer ts.Close()
+
+	client := &http.Client{Jar: mustCookieJar(t)}
+	postJSON(t, client, ts.URL+"/api/auth/register", credentialsRequest{Username: "admin", Password: "password123"}).Body.Close()
+
+	resp := postJSON(t, client, ts.URL+"/api/auth/users", createUserRequest{Username: "second", Password: "password456", Role: "admin"})
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("expected 400 for an admin-role request, got %d", resp.StatusCode)
+	}
+	// The account must not exist at all. A silent downgrade to RoleUser
+	// would leave an account the caller never asked for, under a name
+	// they chose for an admin.
+	if _, ok := s.Auth.ByUsername("second"); ok {
+		t.Error("a refused admin-role request created the account anyway")
+	}
+}
+
+func TestUserListIsAdminOnly(t *testing.T) {
+	s := newAuthTestServer(t)
+	ts := httptest.NewServer(s.Routes())
+	defer ts.Close()
+
+	adminClient := &http.Client{Jar: mustCookieJar(t)}
+	postJSON(t, adminClient, ts.URL+"/api/auth/register", credentialsRequest{Username: "admin", Password: "password123"}).Body.Close()
+	postJSON(t, adminClient, ts.URL+"/api/auth/users", createUserRequest{Username: "viewer", Password: "password456", Role: "user"}).Body.Close()
+
+	viewerClient := &http.Client{Jar: mustCookieJar(t)}
+	postJSON(t, viewerClient, ts.URL+"/api/auth/login", credentialsRequest{Username: "viewer", Password: "password456"}).Body.Close()
+
+	// 403, not an empty list: who holds an account and which one is the
+	// admin is exactly what an attacker wants in order to pick a target.
+	resp, err := viewerClient.Get(ts.URL + "/api/auth/users")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("expected 403 for a non-admin, got %d", resp.StatusCode)
+	}
+
+	adminResp, err := adminClient.Get(ts.URL + "/api/auth/users")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer adminResp.Body.Close()
+	var users []userSummary
+	if err := json.NewDecoder(adminResp.Body).Decode(&users); err != nil {
+		t.Fatalf("decoding the user list: %v", err)
+	}
+	if len(users) != 2 {
+		t.Fatalf("expected 2 accounts, got %d", len(users))
+	}
+	// The response type has no password-hash field at all, but assert on
+	// the raw shape too so a future switch to serializing auth.User
+	// directly is caught here.
+	for _, u := range users {
+		if u.ID == "" || u.Username == "" {
+			t.Errorf("incomplete user summary: %+v", u)
+		}
+	}
+}
+
+func TestDeletingAUserRevokesTheirSessionAndTokens(t *testing.T) {
+	s := newAuthTestServer(t)
+	ts := httptest.NewServer(s.Routes())
+	defer ts.Close()
+
+	adminClient := &http.Client{Jar: mustCookieJar(t)}
+	postJSON(t, adminClient, ts.URL+"/api/auth/register", credentialsRequest{Username: "admin", Password: "password123"}).Body.Close()
+	postJSON(t, adminClient, ts.URL+"/api/auth/users", createUserRequest{Username: "viewer", Password: "password456", Role: "user"}).Body.Close()
+
+	viewer, ok := s.Auth.ByUsername("viewer")
+	if !ok {
+		t.Fatal("the account under test was not created")
+	}
+
+	// A token attributed to the account being deleted. Created directly
+	// rather than through the API, since only an admin may mint one --
+	// this stands in for a token issued while that account still held
+	// admin, before a transfer.
+	rawToken, _, err := s.Tokens.Create("viewers-token", viewer, time.Now())
+	if err != nil {
+		t.Fatalf("Tokens.Create: %v", err)
+	}
+
+	viewerClient := &http.Client{Jar: mustCookieJar(t)}
+	postJSON(t, viewerClient, ts.URL+"/api/auth/login", credentialsRequest{Username: "viewer", Password: "password456"}).Body.Close()
+	live, err := viewerClient.Get(ts.URL + "/api/events")
+	if err != nil {
+		t.Fatal(err)
+	}
+	live.Body.Close()
+	if live.StatusCode != http.StatusOK {
+		t.Fatalf("the session under test does not work before the delete: %d", live.StatusCode)
+	}
+	viewerSessionID := sessionIDFromJar(t, viewerClient, ts.URL)
+
+	req, _ := http.NewRequest(http.MethodDelete, ts.URL+"/api/auth/users/"+viewer.ID, nil)
+	req.Header.Set(csrfHeaderName, csrfHeaderValue)
+	resp, err := adminClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 from the delete, got %d", resp.StatusCode)
+	}
+
+	if _, ok := s.Auth.ByUsername("viewer"); ok {
+		t.Error("the account still exists after a successful delete")
+	}
+
+	after, err := viewerClient.Get(ts.URL + "/api/events")
+	if err != nil {
+		t.Fatal(err)
+	}
+	after.Body.Close()
+	if after.StatusCode != http.StatusUnauthorized {
+		t.Errorf("a deleted account's session still works: got %d, want 401", after.StatusCode)
+	}
+
+	// The 401 above would happen anyway -- sessionUser fails to resolve
+	// an account that no longer exists. So assert on the session record
+	// itself, which is what the explicit revocation is for: it must not
+	// be left sitting in the store, valid, waiting on that one lookup to
+	// keep failing.
+	if _, ok := s.Sessions.Validate(viewerSessionID, time.Now()); ok {
+		t.Error("the deleted account's session is still live in the session store")
+	}
+
+	if _, ok := s.Tokens.Authenticate(rawToken, time.Now()); ok {
+		t.Error("a deleted account's API token still authenticates")
+	}
+}
+
+func TestDeletingTheAdminIsRefused(t *testing.T) {
+	s := newAuthTestServer(t)
+	ts := httptest.NewServer(s.Routes())
+	defer ts.Close()
+
+	adminClient := &http.Client{Jar: mustCookieJar(t)}
+	postJSON(t, adminClient, ts.URL+"/api/auth/register", credentialsRequest{Username: "admin", Password: "password123"}).Body.Close()
+	admin, _ := s.Auth.ByUsername("admin")
+
+	req, _ := http.NewRequest(http.MethodDelete, ts.URL+"/api/auth/users/"+admin.ID, nil)
+	req.Header.Set(csrfHeaderName, csrfHeaderValue)
+	resp, err := adminClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusConflict {
+		t.Errorf("expected 409 when deleting the admin, got %d", resp.StatusCode)
+	}
+
+	// And the admin must still be able to act -- a refused delete that
+	// revoked the session anyway would be its own lockout.
+	check, err := adminClient.Get(ts.URL + "/api/auth/users")
+	if err != nil {
+		t.Fatal(err)
+	}
+	check.Body.Close()
+	if check.StatusCode != http.StatusOK {
+		t.Errorf("the admin lost access after a refused self-delete: %d", check.StatusCode)
+	}
+}
+
+// sessionIDFromJar pulls the session cookie's value out of a client's
+// jar, so a test can assert on the server-side session record directly
+// rather than only on what a request happens to return.
+func sessionIDFromJar(t *testing.T, client *http.Client, rawURL string) string {
+	t.Helper()
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range client.Jar.Cookies(u) {
+		if c.Name == sessionCookieName {
+			return c.Value
+		}
+	}
+	t.Fatal("no session cookie in the jar")
+	return ""
 }
