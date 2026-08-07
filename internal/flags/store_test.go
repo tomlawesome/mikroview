@@ -1,13 +1,13 @@
 package flags
 
 import (
+	"fmt"
+	"github.com/tomlawesome/mikroview/internal/reputation"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
-
-	"github.com/tomlawesome/mikroview/internal/reputation"
 )
 
 func TestOpenEmptyPathIsUsable(t *testing.T) {
@@ -367,8 +367,13 @@ func TestTimeSeriesCountsOnlyNewEpisodes(t *testing.T) {
 	// occasionally lands within 4s of a minute boundary, pushing the
 	// revival into the next minute's bucket and flaking this test (hit
 	// in CI once already). A fixed offset from a truncated minute
-	// guarantees every timestamp below stays in the same bucket.
-	now := time.Now().Truncate(time.Minute).Add(10 * time.Second)
+	// Pinned to the start of the current minute. TimeSeries buckets by
+	// minute and this test reads the final bucket, so a plain
+	// time.Now() made it flaky: started late enough in a minute, the
+	// +4s revival below landed in the *next* bucket and the count came
+	// back 1 instead of 2. Truncating guarantees every timestamp here
+	// shares one bucket regardless of when the suite runs.
+	now := time.Now().Truncate(time.Minute)
 
 	s.Add(TypePortScan, "1.1.1.1", "first", now)
 	series := s.TimeSeries()
@@ -948,5 +953,103 @@ func TestOpenReadsLegacyBareArrayFormat(t *testing.T) {
 	}
 	if len(s.ListExclusions()) != 0 {
 		t.Errorf("expected a legacy file to start with no exclusions, got %+v", s.ListExclusions())
+	}
+}
+
+// TestActiveFlagsCannotGrowUnbounded is the regression test for a
+// resource-exhaustion vector reachable from unauthenticated syslog.
+//
+// pruneLocked prefers to evict cleared flags, which is the right
+// instinct: an active flag is something a human still needs to see.
+// But "never evict an active flag" is only safe if the active set is
+// bounded, and flag targets come straight from log lines an attacker
+// controls -- so it was not. Proven before this fix: ~40k spoofed MAC
+// addresses produced ~40k live flags and drove ingest to a crawl.
+func TestActiveFlagsCannotGrowUnbounded(t *testing.T) {
+	prevCeiling := maxFlagsHardCeiling
+	prevSoft := maxFlags
+	maxFlagsHardCeiling = 200
+	maxFlags = 50
+	t.Cleanup(func() {
+		maxFlagsHardCeiling = prevCeiling
+		maxFlags = prevSoft
+	})
+
+	s, _ := Open("")
+	now := time.Now()
+	// Every flag stays ACTIVE -- nothing is ever cleared, which is the
+	// case the old prune could not handle at all.
+	for i := 0; i < 5000; i++ {
+		s.Add(TypeNewDevice, fmt.Sprintf("aa:bb:cc:dd:%02x:%02x", i>>8, i&0xff), "spoofed", now.Add(time.Duration(i)*time.Millisecond))
+	}
+
+	if got := len(s.List()); got > maxFlagsHardCeiling {
+		t.Errorf("store holds %d flags with none cleared, want <= %d", got, maxFlagsHardCeiling)
+	}
+}
+
+// TestPruneStillPrefersClearedFlags: the hard ceiling must not change
+// the normal behaviour -- below it, reviewed noise is shed first and
+// active alerts survive.
+func TestPruneStillPrefersClearedFlags(t *testing.T) {
+	prevSoft := maxFlags
+	maxFlags = 10
+	t.Cleanup(func() { maxFlags = prevSoft })
+
+	s, _ := Open("")
+	now := time.Now()
+
+	// One active flag raised first, so it is the oldest of all.
+	s.Add(TypePortScan, "203.0.113.1", "real alert", now)
+
+	for i := 0; i < 100; i++ {
+		target := fmt.Sprintf("198.51.100.%d", i)
+		s.Add(TypePortScan, target, "noise", now.Add(time.Duration(i+1)*time.Millisecond))
+		s.Clear(flagID(TypePortScan, target), now.Add(time.Duration(i+1)*time.Second))
+	}
+
+	var found bool
+	for _, f := range s.List() {
+		if f.Target == "203.0.113.1" && !f.Cleared {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("the active flag was evicted while cleared flags remained; cleared flags must be shed first")
+	}
+}
+
+// TestClearedCountSurvivesReload guards a bug introduced alongside the
+// clearedCount optimisation: pruneLocked skips its scan when
+// clearedCount is zero, so a store reloaded from disk with cleared
+// flags but a zero counter would silently never evict them again --
+// the exact leak the counter was added to make cheap to avoid.
+func TestClearedCountSurvivesReload(t *testing.T) {
+	// persistLocked throttles real writes to persistMinInterval, so
+	// without shrinking it nothing reaches disk and this would test an
+	// empty file rather than the reload path.
+	prevInterval := persistMinInterval
+	persistMinInterval = 0
+	t.Cleanup(func() { persistMinInterval = prevInterval })
+
+	path := filepath.Join(t.TempDir(), "flags.json")
+	s1, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	for i := 0; i < 5; i++ {
+		target := fmt.Sprintf("203.0.113.%d", i)
+		s1.Add(TypePortScan, target, "d", now)
+		s1.Clear(flagID(TypePortScan, target), now.Add(time.Second))
+	}
+	s1.Add(TypePortScan, "198.51.100.1", "still active", now)
+
+	s2, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := s2.clearedCount; got != 5 {
+		t.Errorf("clearedCount after reload = %d, want 5 -- a stale zero disables cleared-flag eviction entirely", got)
 	}
 }

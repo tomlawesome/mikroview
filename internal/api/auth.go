@@ -480,5 +480,6 @@ func (s *Server) handleAuthCreateUser(w http.ResponseWriter, r *http.Request) {
 		writeAuthError(w, err, status)
 		return
 	}
+	s.Audit.Record(auditActor(r), "user.create", user.Username, "role="+string(user.Role))
 	writeJSON(w, http.StatusCreated, map[string]any{"username": user.Username, "role": user.Role})
 }

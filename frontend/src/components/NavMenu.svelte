@@ -3,12 +3,16 @@
   import { flagsState } from '../lib/flags.svelte'
   import { detectorSettingsState } from '../lib/detectorSettings.svelte'
   import { entitiesState } from '../lib/entities.svelte'
+  import { auditState } from '../lib/audit.svelte'
   import { authState } from '../lib/auth.svelte'
   import { themeState, type ThemePref } from '../lib/theme.svelte'
   import { COLORWAYS, colorwayState } from '../lib/colorway.svelte'
   import { retentionState, MAX_AGE_OPTIONS } from '../lib/retention.svelte'
   import { downloadEventsCsv } from '../lib/export'
   import { viewportState } from '../lib/viewport.svelte'
+  import { versionState } from '../lib/version.svelte'
+
+  versionState.ensureLoaded()
 
   let open = $state(false)
   let rootEl: HTMLDivElement | undefined = $state()
@@ -46,6 +50,16 @@
     } else {
       appState.view = 'entities'
       entitiesState.refresh()
+    }
+    open = false
+  }
+
+  function toggleAudit() {
+    if (appState.view === 'audit') {
+      appState.view = 'live'
+    } else {
+      appState.view = 'audit'
+      auditState.refresh()
     }
     open = false
   }
@@ -165,6 +179,19 @@
           >
             Entities
           </button>
+
+          <!-- Same strict gate as Entities above -- GET /api/audit uses
+               callerIsAdmin, not callerIsAdminOrOpen (see
+               internal/api/audit.go), so this stays hidden while auth
+               is disabled too. -->
+          <button
+            class="option"
+            class:active={appState.view === 'audit'}
+            onclick={toggleAudit}
+            title="Review admin-privileged actions: user/token/entity/detector changes"
+          >
+            Audit log
+          </button>
         {/if}
       </div>
 
@@ -283,6 +310,13 @@
           >
             Sign out ({authState.username})
           </button>
+        </div>
+      {/if}
+
+      {#if versionState.version}
+        <div class="divider"></div>
+        <div class="version" title="Build version -- also available via GET /api/healthz or `mikroview -version`">
+          {versionState.version}
         </div>
       {/if}
     </div>
@@ -458,6 +492,14 @@
     border-radius: 5px;
     padding: 5px 8px;
     font-size: 12px;
+  }
+
+  .version {
+    padding: 4px 9px 2px;
+    font-size: 11px;
+    font-family: var(--font-mono);
+    color: var(--fg-dim);
+    text-align: center;
   }
 
   /* 44px minimum touch target (issue #85) -- the trigger and every

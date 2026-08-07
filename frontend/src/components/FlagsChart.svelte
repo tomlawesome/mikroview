@@ -40,6 +40,7 @@
     'new_device',
     'stale_rule',
     'unexpected_mail_sender',
+    'known_bad_ip',
   ]
 
   // Same labels Flags.svelte uses -- duplicated rather than shared,
@@ -61,6 +62,7 @@
     new_device: 'New device',
     stale_rule: 'Stale firewall rule',
     unexpected_mail_sender: 'Unexpected mail sender',
+    known_bad_ip: 'Known-bad IP (blocklist match)',
   }
 
   const W = 460
