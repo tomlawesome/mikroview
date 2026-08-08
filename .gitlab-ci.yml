@@ -63,8 +63,21 @@ test:go:
   stage: test
   image: golang:1.26
   <<: *dev_or_mr
+  # GitLab's docker executor runs this container as root by default; GitHub's
+  # ci.yml runs the same test directly on the runner VM as an unprivileged
+  # user. That mismatch makes permission-enforcement tests (e.g.
+  # TestUnwritableStorePathSurfacesPersistErrButStillLoads, which chmods a
+  # directory unwritable and expects the code under test to see a real
+  # permission error) fail here specifically, since root bypasses Unix
+  # permission bits (CAP_DAC_OVERRIDE) — not because the code is wrong.
+  # Dropping to a non-root user for the actual `go test` run matches both
+  # GitHub's environment and mikroview's own production posture (its
+  # Dockerfile runs USER nonroot:nonroot). See
+  # docs/decisions/gitlab-ci-root-in-container-test-failure.md.
   script:
-    - go test ./... -race -coverprofile=coverage.out
+    - useradd -m -u 10001 ci-test
+    - chown -R ci-test:ci-test "$CI_PROJECT_DIR"
+    - su ci-test -c "cd '$CI_PROJECT_DIR' && HOME=/home/ci-test go test ./... -race -coverprofile=coverage.out"
   artifacts:
     paths:
       - coverage.out
