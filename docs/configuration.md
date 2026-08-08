@@ -1658,9 +1658,9 @@ push interval of naming/table enrichment and nothing else. Pushed data
 never raises, lowers, clears or suppresses a detection: that boundary
 is a build-failing test, not a convention.
 
-The router-side setup walkthrough (what to run on RouterOS, and what
-each command grants) lands with the rest of the push-ingest feature;
-this section will grow a worked example once that's in place.
+See [routeros-setup.md](routeros-setup.md#4-push-router-state-for-names-and-rule-lookups-optional)
+for the router-side walkthrough -- minting the token, importing
+mikroview's certificate, and the script itself, explained line by line.
 
 ## Single sign-on (OIDC/SSO)
 
