@@ -13,6 +13,29 @@ upgrading.
 
 ### Added
 
+- **Tor and VPN network-class matches now reinforce an already-raised
+  flag's confidence** (#114), direction-aware: only a classified source
+  reaching *into* your network counts, never your own outbound traffic
+  through a VPN or Apple Private Relay. Datacenter and privacy-relay
+  matches stay display-only, as measured in #114's research: the broad
+  datacenter/cloud lists alone cover more than one in ten routable IPv4
+  addresses, so scoring on them would fire constantly on ordinary
+  traffic (Google Public DNS, Akamai edge, every Apple Private Relay
+  user). A match never raises a flag by itself, only reinforces one a
+  behavioral detector already raised — the same floor-only contract
+  every other reputation signal in mikroview follows. Whitelisting a
+  trusted VPN/VPS uses the existing flag-exclusion tools; no new
+  suppression mechanism was added.
+
+- **New `netClass` source: `apple_private_relay`**, Apple's official
+  Private Relay egress range list, on by default alongside `x4b_vpn`.
+  Not a cosmetic addition -- X4BNet's VPN feed pulls the same Apple
+  ranges in via their own build pipeline, so without an authoritative
+  source of the same ranges taking priority, an iPhone or Mac's ordinary
+  Private Relay traffic would classify as a "known VPN exit," which
+  #114's research called out as the single false positive that mattered
+  most for a home-network product.
+
 - **`POST /api/ingest/routeros`** (#186 step 3), the RouterOS push-ingest
   endpoint. Reachable only with an ingest token (#186 step 1) -- there is
   no session-based path to it at all, structurally the same "separate,
@@ -106,6 +129,19 @@ upgrading.
   desktop as it already was on mobile.
 
 ### Fixed
+
+- **Network-class attribution silently favored the wrong source on an
+  exact-prefix collision between two feeds** (found while implementing
+  #114's remaining scope). `buildTable`'s own doc comment claimed
+  iterating sources in priority order made the higher-priority source
+  win a tie; `bart.Table.Insert` is actually last-write-wins on an exact
+  prefix, so the *lower*-priority source (whichever was iterated last)
+  silently overwrote the higher-priority one instead. Caught by a new
+  test reproducing the concrete case this mattered for: with
+  `apple_private_relay` and `x4b_vpn` both covering the same prefixes,
+  attribution was resolving to "VPN" instead of the intended,
+  higher-priority "Private Relay". Fixed by checking for an existing
+  exact-prefix entry before inserting.
 
 - **Syslog over TCP ingested nothing from a RouterOS router** (#202).
   RouterOS sends each message as a bare payload with no trailing newline

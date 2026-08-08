@@ -569,18 +569,21 @@ type Blocklist struct {
 
 // NetClass configures internal/netclass's local IP attribution: labelling
 // an address as a Tor exit, a commercial VPN, cloud/datacenter space, or
-// a privacy relay (issue #114). Display-first -- it adds context to a
-// manual IP lookup, it does not raise flags. See that package's doc
-// comment for the menu and why it is a fixed menu rather than an
-// arbitrary URL field.
+// a privacy relay (issue #114). It adds context to a manual IP lookup,
+// and never raises a flag on its own for any category -- but a Tor or
+// VPN match on an inbound source (see internal/detect/netclass.go) does
+// reinforce an already-raised flag's confidence, direction-aware and
+// weighted per category. See internal/netclass's doc comment for the
+// menu and why it is a fixed menu rather than an arbitrary URL field.
 //
-// On by default with the two high-precision lists (Tor exit nodes and
-// the X4BNet VPN list) -- deliberately not the broad datacenter/cloud
-// feeds, which cover >10% of routable IPv4 and would attach a label to
-// ordinary traffic. An operator who wants full cloud attribution opts
-// the rest in: sources like "x4b_datacenter", "aws", "gcp". Set sources
-// to an empty list to disable attribution entirely. Refresh cadence is
-// not configurable, same reasoning as Blocklist.
+// On by default with the high-precision lists (Tor exit nodes, Apple
+// Private Relay, and the X4BNet VPN list) -- deliberately not the broad
+// datacenter/cloud feeds, which cover >10% of routable IPv4 and would
+// attach a label to ordinary traffic. An operator who wants full cloud
+// attribution opts the rest in: sources like "x4b_datacenter", "aws",
+// "gcp". Set sources to an empty list to disable attribution (and the
+// confidence reinforcement) entirely. Refresh cadence is not
+// configurable, same reasoning as Blocklist.
 type NetClass struct {
 	// Sources is a list of internal/netclass.Source values -- an
 	// unrecognized entry is logged and skipped, degrade-not-crash like

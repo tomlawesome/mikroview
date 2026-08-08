@@ -57,6 +57,29 @@ func TestLongestPrefixWins(t *testing.T) {
 	}
 }
 
+// TestApplePrivateRelayWinsOverX4BVPNOnExactCollision is the reproducer
+// for the reason SourceApplePrivateRelay is listed before SourceX4BVPN
+// in feedRegistry (see that entry's own comment): X4BNet's VPN feed
+// pulls Apple's ranges in verbatim, so the exact same prefix can arrive
+// from both sources. On that exact-prefix tie, priority order decides --
+// this proves it resolves to the authoritative CategoryPrivacyRelay, not
+// CategoryVPN, which is the whole point: an iPhone's ordinary Private
+// Relay traffic must never read as "known VPN exit".
+func TestApplePrivateRelayWinsOverX4BVPNOnExactCollision(t *testing.T) {
+	c := build(t, map[Source][]classifiedPrefix{
+		SourceApplePrivateRelay: {cp(t, "172.224.226.0/27", "London")},
+		SourceX4BVPN:            {cp(t, "172.224.226.0/27", "")},
+	}, SourceApplePrivateRelay, SourceX4BVPN)
+
+	got := c.Lookup("172.224.226.5")
+	if !got.Matched || got.Category != CategoryPrivacyRelay {
+		t.Fatalf("Lookup = %+v, want CategoryPrivacyRelay (Apple's own feed must win the exact-prefix tie over X4B's copy)", got)
+	}
+	if got.Source != SourceApplePrivateRelay {
+		t.Errorf("Source = %q, want %q", got.Source, SourceApplePrivateRelay)
+	}
+}
+
 // TestMissIsNotClean guards the "absence of evidence" contract: a lookup
 // that finds nothing returns an unmatched Class, never something a caller
 // could read as a positive "clean".
