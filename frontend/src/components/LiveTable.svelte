@@ -63,7 +63,30 @@
     return map
   })
 
-  const rendered = $derived((events ?? appState.filteredEvents).slice(-MAX_RENDERED_ROWS))
+  const liveRendered = $derived((events ?? appState.filteredEvents).slice(-MAX_RENDERED_ROWS))
+
+  // Autoscroll off (issue #232) means "don't move the view", not just
+  // "don't force-jump to the bottom" -- liveRendered is a sliding window
+  // over MAX_RENDERED_ROWS, so once the total exceeds that cap, rows keep
+  // falling off the top as new ones arrive at the bottom regardless of
+  // autoscroll, which reads as the page scrolling itself out from under
+  // you. Freezing a snapshot the moment autoscroll turns off, and only
+  // releasing it once autoscroll turns back on, keeps the visible rows
+  // (and therefore scroll position) exactly where you left them --
+  // distinct from Pause, which also halts the age-based display-duration
+  // cutoff and detection-adjacent bookkeeping; this only stops what's on
+  // screen from moving.
+  let frozenRendered: typeof liveRendered | null = $state(null)
+
+  $effect(() => {
+    if (appState.autoscroll) {
+      frozenRendered = null
+    } else if (frozenRendered === null) {
+      frozenRendered = liveRendered
+    }
+  })
+
+  const rendered = $derived(appState.autoscroll ? liveRendered : (frozenRendered ?? liveRendered))
 
   function deviceName(id: string): string {
     return deviceNames.get(id) ?? id
