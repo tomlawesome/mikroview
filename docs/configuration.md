@@ -1612,6 +1612,26 @@ until explicitly revoked from the same panel (or `DELETE
 curl -H "Authorization: Bearer <token>" https://mikroview.example.com/api/events
 ```
 
+### Ingest tokens (RouterOS push)
+
+`POST /api/tokens` also accepts `"kind": "ingest"` alongside `"device":
+"<name>"` -- a second, entirely separate credential for the RouterOS
+push-ingest integration (issue #186), scoped to exactly one router. It
+grants the opposite access to a read-only API token above: nothing can
+be read with it, and it can only be used at `POST
+/api/ingest/routeros`, which an API token in turn cannot reach -- the
+same structural, separate-router guarantee, just pointed the other way.
+One token per router is deliberate: any RouterOS user holding the
+`read` policy can print a script's source, ingest token included, so a
+leaked one must only ever be able to speak for the single router it was
+issued for.
+
+The router-side setup walkthrough (what to run on RouterOS, and what
+each command grants) lands with the rest of the push-ingest feature;
+this section will grow a worked example once that's in place. Until
+then, an issued ingest token authenticates and is rate-limited and
+audited, but nothing in mikroview yet acts on what it pushes.
+
 ## Single sign-on (OIDC/SSO)
 
 Optional, additive on top of [local authentication](#authentication) above

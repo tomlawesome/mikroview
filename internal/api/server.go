@@ -112,10 +112,19 @@ type Server struct {
 	TrustedProxies []netip.Prefix
 	ClientIPHeader string
 
-	// Tokens holds read-only API bearer tokens (issue #101) -- always
-	// non-nil (internal/auth.OpenTokenStore("") returns a usable, empty,
-	// unpersisted store), same nil-never convention as Auth above.
+	// Tokens holds read-only API and ingest bearer tokens (issues #101,
+	// #186) -- always non-nil (internal/auth.OpenTokenStore("") returns a
+	// usable, empty, unpersisted store), same nil-never convention as
+	// Auth above.
 	Tokens *auth.TokenStore
+	// IngestLimiter bounds how often one ingest token may call POST
+	// /api/ingest/routeros (issue #186 step 3). Reuses auth.LoginLimiter
+	// rather than a second rate-limiting primitive -- see handleIngest
+	// RouterOS's doc comment for the threshold/window reasoning. Keyed by
+	// token ID, never the raw token value, the same never-store-the-
+	// secret convention LoginLimiter itself follows by keying on
+	// username/IP rather than a password.
+	IngestLimiter *auth.LoginLimiter
 
 	// OIDC/OIDCState: see oidc.go. Both nil unless cfg.OIDC.IssuerURL was
 	// set and provider discovery succeeded at startup -- every OIDC

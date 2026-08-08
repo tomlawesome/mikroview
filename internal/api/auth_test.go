@@ -684,6 +684,15 @@ func sessionIDFromJar(t *testing.T, client *http.Client, rawURL string) string {
 // it. If that value reached readOnlyRoutes it would turn into a
 // read-everything credential for every event, flag, stat and device
 // mikroview holds -- a far larger prize than the router it came from.
+//
+// Expects 404, not 401: an ingest token authenticates successfully (it
+// is a valid token, just not this kind of route) and dispatches to
+// ingestRoutes -- its own mux with only POST /api/ingest/routeros
+// registered, see requireAuth's bearer-token branch. These paths simply
+// aren't on that mux, the same reason a valid read-only API token
+// hitting a write route like POST /api/tokens also 404s rather than
+// 401s (readOnlyRoutes doesn't register it either) -- a structural "no
+// route", not an authentication failure.
 func TestIngestTokenCannotReachReadOnlyRoutes(t *testing.T) {
 	s := newAuthTestServer(t)
 	ts := httptest.NewServer(s.Routes())
@@ -722,8 +731,8 @@ func TestIngestTokenCannotReachReadOnlyRoutes(t *testing.T) {
 	// spot check is how the endpoint nobody remembered ships reachable
 	// -- the same reasoning authzMatrix exists for.
 	for _, path := range []string{"/api/events", "/api/flags", "/api/stats", "/api/devices"} {
-		if got := get(t, path, ingestRaw); got != http.StatusUnauthorized {
-			t.Errorf("GET %s with an ingest token: got %d, want 401", path, got)
+		if got := get(t, path, ingestRaw); got != http.StatusNotFound {
+			t.Errorf("GET %s with an ingest token: got %d, want 404 -- ingestRoutes doesn't register this path", path, got)
 		}
 		if got := get(t, path, apiRaw); got != http.StatusOK {
 			t.Errorf("GET %s with a read-only API token: got %d, want 200 -- the check above must be about kind, not a broken bearer path", path, got)

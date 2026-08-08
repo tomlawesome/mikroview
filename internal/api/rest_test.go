@@ -61,6 +61,7 @@ func newTestServer(t *testing.T) (*Server, *store.Store) {
 		Sessions:         auth.NewSessionStore(time.Hour),
 		LoginLimiter:     auth.NewLoginLimiter(10, time.Minute),
 		Tokens:           tokenStore,
+		IngestLimiter:    auth.NewLoginLimiter(ingestLimiterThreshold, ingestLimiterWindow),
 		StartTime:        time.Now(),
 		Version:          "test-version",
 	}
