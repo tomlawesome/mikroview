@@ -13,6 +13,27 @@ upgrading.
 
 ### Added
 
+- **Syslog over TLS** (#188), `listen.syslogTls` (default `:6514`, RFC
+  5425's port), accepting RouterOS's `remote-protocol=tls`. It presents
+  the same certificate the HTTPS listener already uses -- the router
+  already imports mikroview's generated CA to verify HTTPS ingest, so
+  this is that same trust step, not a second one -- and is only started
+  while `tls.enabled` is true, since there's no certificate to present
+  otherwise. Implementation-wise it's a `tls.Listener` wrapped around the
+  same `ServeTCP` the plaintext TCP listener already uses, so the
+  connection cap, per-source cap, idle timeout, and RouterOS's
+  no-newline framing (#202) all apply unchanged.
+
+  This buys confidentiality for log traffic on the wire and mikroview
+  authenticating itself to the router. It does **not** authenticate the
+  sender: RouterOS's logging action has no client-certificate option
+  (verified against a real router -- see
+  `docs/decisions/routeros-ingest-spike.md`), so anything able to reach
+  the port can still connect and inject log lines, exactly as with the
+  plaintext `syslogUdp`/`syslogTcp` listeners, which stay on alongside
+  this one (their removal is #189, deliberately deferred until this
+  ships and is proven against a real router).
+
 - **A live abuse-check button on flag cards** (#213). Raw events aren't
   persisted, so an old or cleared flag often has nothing left in the
   live view to click into — this reuses the existing
