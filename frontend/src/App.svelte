@@ -23,6 +23,7 @@
   import Exclusions from './components/Exclusions.svelte'
   import IpLookupPopover from './components/IpLookupPopover.svelte'
   import PortLookupPopover from './components/PortLookupPopover.svelte'
+  import RouterLookupPopover from './components/RouterLookupPopover.svelte'
   import AuthSetup from './components/AuthSetup.svelte'
   import AuthLogin from './components/AuthLogin.svelte'
   import UsersOverlay from './components/UsersOverlay.svelte'
@@ -172,6 +173,7 @@
   </main>
   <IpLookupPopover />
   <PortLookupPopover />
+  <RouterLookupPopover />
   <UsersOverlay />
   <SSOLinkOverlay />
   <TokensOverlay />
