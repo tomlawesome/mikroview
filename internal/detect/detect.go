@@ -391,6 +391,11 @@ type Detector struct {
 	// valid, explicit "not configured" no-op, same convention as
 	// reputation above.
 	knownBad knownBadIPLookup
+	// netclass backs the synchronous, direction-aware confidence
+	// reinforcement in netclass.go (issue #114) -- see WithNetClass. nil
+	// (the default) is a valid, explicit "not configured" no-op, same
+	// convention as knownBad above.
+	netclass netClassLookup
 
 	perSource       map[string]*sourceWindow
 	criticalHits    map[string]*criticalWindow
@@ -564,6 +569,13 @@ func (d *Detector) Observe(e store.Event) {
 	// RaiseConfidenceFloor reinforcement pass needs every other
 	// detector above to have already run for this same event.
 	d.observeKnownBadIP(e, now)
+
+	// Network-class reinforcement (issue #114) -- deliberately after
+	// observeKnownBadIP, for the identical reason: both are
+	// RaiseConfidenceFloor-only reinforcement passes that need every
+	// flag-raising detector above (including known-bad-IP) to have
+	// already run for this same event.
+	d.observeNetClass(e, now)
 }
 
 func (d *Detector) observeScanAndSpike(e store.Event, now time.Time) {

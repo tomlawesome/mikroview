@@ -462,33 +462,51 @@ datacenter space, or a privacy relay (Apple iCloud Private Relay,
 Cloudflare WARP). It shows up as a **Network** row in the lookup popover,
 alongside the reputation data.
 
-This is **display-only**. Unlike the blocklist above, a network-class
-match never raises a flag and never changes a confidence score. The
-reason is measured, not cautious: the broad datacenter/cloud lists cover
-more than one in ten routable IPv4 addresses — Google Public DNS, Akamai
-edge, and every Apple Private Relay user included — so treating a
-datacenter match as suspicion would fire constantly on ordinary traffic.
-Attribution is genuinely useful context; scoring on it is not.
+**Attribution itself is display-only** for every category, always. A
+network-class match by itself never raises a flag. The reason is
+measured, not cautious: the broad datacenter/cloud lists cover more than
+one in ten routable IPv4 addresses — Google Public DNS, Akamai edge, and
+every Apple Private Relay user included — so treating a datacenter match
+as suspicion would fire constantly on ordinary traffic.
+
+**Two categories additionally reinforce an already-raised flag's
+confidence: Tor and commercial VPN** — the two high-precision categories,
+covering well under 1% of IPv4 combined. This only happens when a source
+address in one of those categories is reaching *into* your network (a
+LAN destination); a device on your own network reaching *out* to a VPN
+or Tor address (Private Relay, WARP, ordinary browsing through a VPN you
+run yourself) never contributes anything, in either direction of the
+check. A match on its own, with no behavioral detection already
+triggered, never creates a flag — the same "absence of evidence is not
+evidence, but a mild match by itself is not evidence of anything either"
+floor-only contract every other reputation signal in mikroview follows.
+Datacenter and privacy-relay matches never affect a score, only the
+display. To suppress attribution/reinforcement for a specific address
+you trust (your own VPN, a VPS you run), use the existing flag exclusion
+or entity-tagging tools — there's no separate allow-list for this.
 
 ```yaml
 netClass:
   sources:
     - tor
+    - apple_private_relay
     - x4b_vpn
 ```
 
-The default is deliberately the **two high-precision lists**, not the
-broad ones, so the feature is quiet the day you enable it.
+The default is deliberately the **high-precision lists**, not the broad
+ones, so the feature is quiet the day you enable it.
 
 | Source | What it covers | Notes |
 |---|---|---|
 | `tor` | Tor exit nodes | The Tor Project's own list — tiny, first-party, highest precision |
+| `apple_private_relay` | Apple iCloud Private Relay egress ranges | Official `egress-ip-ranges.csv`, fetched from Apple directly. On by default alongside `x4b_vpn` — not a separate opt-in — because `x4b_vpn`'s own upstream data includes these same ranges, so disabling this one would leave ordinary iPhone/iPad/Mac traffic misclassified as a VPN exit |
 | `x4b_vpn` | Commercial VPN exits | [X4BNet](https://github.com/X4BNet/lists_vpn) (MIT); ~0.08% of IPv4, precise |
 | `x4b_datacenter` | Cloud / hosting / datacenter | Broad — ~10% of IPv4. Useful as a label, noisy as a signal. Opt-in |
 | `aws` | AWS ranges, with region | Official `ip-ranges.json`. Opt-in |
 | `gcp` | Google Cloud ranges | Official `cloud.json`. Opt-in |
 
-Set `sources` to an empty list to turn attribution off entirely.
+Set `sources` to an empty list to turn attribution (and the Tor/VPN
+confidence reinforcement) off entirely.
 
 **No range data ships in mikroview.** Every list is fetched at runtime,
 from the operator's own device, on a fixed daily cycle with a small
