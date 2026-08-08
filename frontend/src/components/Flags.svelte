@@ -15,6 +15,68 @@
   // Same gate NavMenu uses for the Detectors view.
   const isAdminOrOpen = $derived(authState.state === 'authenticated' && authState.role === 'admin')
 
+  // Which flag's split-Clear dropdown is open, if any -- one shared id
+  // rather than per-card state, since at most one can be open at a time
+  // and this list can be long. Closed on an outside click, Escape, or
+  // picking the menu item (issue #198).
+  let openClearMenuFor: string | null = $state(null)
+
+  function toggleClearMenu(id: string) {
+    openClearMenuFor = openClearMenuFor === id ? null : id
+  }
+
+  function onDocClickCloseClearMenu(e: MouseEvent) {
+    if (!(e.target as HTMLElement).closest('.split-clear')) openClearMenuFor = null
+  }
+
+  function onKeydownCloseClearMenu(e: KeyboardEvent) {
+    if (e.key === 'Escape') openClearMenuFor = null
+  }
+
+  $effect(() => {
+    if (!openClearMenuFor) return
+    document.addEventListener('click', onDocClickCloseClearMenu)
+    document.addEventListener('keydown', onKeydownCloseClearMenu)
+    return () => {
+      document.removeEventListener('click', onDocClickCloseClearMenu)
+      document.removeEventListener('keydown', onKeydownCloseClearMenu)
+    }
+  })
+
+  // "Clear all" (issue #198): first click arms it (red, "Confirm"); the
+  // second click on that same now-red button is the confirmation -- no
+  // modal, because the second click *is* the deliberate second action.
+  // Disarms itself after CLEAR_ALL_ARM_MS or when the pointer/focus
+  // leaves, so an armed-but-abandoned state can't be triggered later by
+  // an unrelated click landing back on the button.
+  const CLEAR_ALL_ARM_MS = 4000
+  let clearAllArmed = $state(false)
+  let clearAllArmTimer: ReturnType<typeof setTimeout> | null = null
+  let clearAllBusy = $state(false)
+
+  function disarmClearAll() {
+    clearAllArmed = false
+    if (clearAllArmTimer) {
+      clearTimeout(clearAllArmTimer)
+      clearAllArmTimer = null
+    }
+  }
+
+  async function onClearAllClick() {
+    if (!clearAllArmed) {
+      clearAllArmed = true
+      clearAllArmTimer = setTimeout(disarmClearAll, CLEAR_ALL_ARM_MS)
+      return
+    }
+    disarmClearAll()
+    clearAllBusy = true
+    try {
+      await flagsState.clearAll()
+    } finally {
+      clearAllBusy = false
+    }
+  }
+
   let expandedId: string | null = $state(null)
 
   function toggleExpanded(id: string) {
@@ -278,28 +340,74 @@
         </div>
       {/if}
       <div class="actions">
-        <button class="clear" onclick={() => clear(f.id)}>Clear</button>
         {#if isAdminOrOpen}
-          <!-- Admin-only, matching the backend's own gate on
-               POST /api/flags/{id}/clear-permanent: a permanent
-               exclusion suppresses detection until someone undoes it,
-               unlike the plain Clear beside it. Hidden rather than
-               disabled for non-admins, since a disabled control here
-               would just advertise an action they can't take. -->
-          <button
-            class="clear clear-permanent"
-            onclick={() => clearPermanent(f.id)}
-            title="Clear this flag and permanently stop {TYPE_LABELS[f.type]} from ever raising again for {f.target} -- reversible from the Exclusions page (see the menu)."
-          >
-            Clear, never flag again
-          </button>
+          <!-- Split button: the main segment is exactly today's Clear.
+               The arrow segment is admin-only, matching the backend's
+               own gate on POST /api/flags/{id}/clear-permanent -- a
+               permanent exclusion suppresses detection until someone
+               undoes it, unlike the plain Clear beside it. A non-admin
+               gets a plain Clear button with no arrow at all (below),
+               rather than a disabled one that would just advertise an
+               action they can't take (issue #198). -->
+          <div class="split-clear" class:menu-open={openClearMenuFor === f.id}>
+            <button class="clear split-main" onclick={() => clear(f.id)}>Clear</button>
+            <button
+              class="clear split-arrow"
+              aria-haspopup="true"
+              aria-expanded={openClearMenuFor === f.id}
+              aria-label="More clear options for this flag"
+              onclick={() => toggleClearMenu(f.id)}
+            >
+              ▾
+            </button>
+            {#if openClearMenuFor === f.id}
+              <div class="split-menu" role="menu">
+                <button
+                  class="split-menu-item"
+                  role="menuitem"
+                  title="Clear this flag and permanently stop {TYPE_LABELS[f.type]} from ever raising again for {f.target} -- reversible from the Exclusions page (see the menu)."
+                  onclick={() => {
+                    openClearMenuFor = null
+                    clearPermanent(f.id)
+                  }}
+                >
+                  Permanently clear
+                </button>
+              </div>
+            {/if}
+          </div>
+        {:else}
+          <button class="clear" onclick={() => clear(f.id)}>Clear</button>
         {/if}
       </div>
     </li>
   {/snippet}
 
   <section aria-labelledby="active-heading">
-    <h2 id="active-heading">Active ({active.length})</h2>
+    <div class="active-header">
+      <h2 id="active-heading">Active ({active.length})</h2>
+      {#if active.length > 0}
+        <!-- Click-again confirm, not a modal: the second click on this
+             same now-red button is the confirmation, which is what
+             makes a single accidental click harmless while still
+             asserting real intent for the second one (issue #198).
+             Regular clears only -- see flagsState.clearAll's doc
+             comment for why there is no permanent variant. -->
+        <button
+          class="clear-all"
+          class:armed={clearAllArmed}
+          disabled={clearAllBusy}
+          onclick={onClearAllClick}
+          onblur={disarmClearAll}
+          onpointerleave={disarmClearAll}
+          title={clearAllArmed
+            ? 'Click again to clear every active flag'
+            : 'Clear every active flag -- regular clears only, click again to confirm'}
+        >
+          {clearAllArmed ? 'Confirm' : 'Clear all'}
+        </button>
+      {/if}
+    </div>
     {#if active.length === 0}
       <p class="empty">Nothing flagged right now.</p>
     {:else}
@@ -650,19 +758,110 @@
     cursor: default;
   }
 
-  /* Distinct (not identical to Clear) so a permanent action reads as
-     more deliberate than the plain, fully-reversible Clear next to it --
-     a warning tint rather than a scarier confirmation dialog, since
-     it's still undoable from the Exclusions page (admin only). */
-  .clear-permanent {
-    border-color: var(--drop);
-    color: var(--drop);
+  /* Split button: .split-main is today's plain Clear, unchanged in
+     behaviour and appearance. .split-arrow opens the dropdown holding
+     the one permanent action -- kept visually distinct (the drop tint)
+     so its warning colour, not just its position, marks it as the more
+     deliberate one. */
+  .split-clear {
+    position: relative;
+    display: flex;
   }
 
-  .clear-permanent:hover {
+  .split-main {
+    flex: 1;
+    border-top-right-radius: 0;
+    border-bottom-right-radius: 0;
+    border-right: none;
+  }
+
+  .split-arrow {
+    flex: none;
+    width: 26px;
+    padding: 5px 0;
+    font-size: 10px;
+    border-top-left-radius: 0;
+    border-bottom-left-radius: 0;
+    color: var(--drop);
+    border-color: var(--drop);
+  }
+
+  .split-arrow:hover,
+  .split-clear.menu-open .split-arrow {
+    background: var(--drop-bg);
+  }
+
+  .split-menu {
+    position: absolute;
+    top: calc(100% + 4px);
+    right: 0;
+    min-width: 160px;
+    background: var(--bg-elevated);
+    border: 1px solid var(--border);
+    border-radius: 7px;
+    padding: 4px;
+    box-shadow: 0 12px 32px -8px rgba(0, 0, 0, 0.4);
+    z-index: 5;
+  }
+
+  .split-menu-item {
+    display: block;
+    width: 100%;
+    text-align: left;
+    background: transparent;
+    border: none;
+    color: var(--drop);
+    padding: 7px 9px;
+    border-radius: 5px;
+    font-size: 12px;
+    white-space: nowrap;
+    cursor: pointer;
+  }
+
+  .split-menu-item:hover {
+    background: var(--drop-bg);
+  }
+
+  .active-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    margin-bottom: 10px;
+  }
+
+  .active-header h2 {
+    margin: 0;
+  }
+
+  .clear-all {
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--fg-muted);
+    border-radius: 5px;
+    padding: 6px 12px;
+    font-size: 12px;
+    white-space: nowrap;
+  }
+
+  .clear-all:hover {
+    color: var(--fg);
+    border-color: var(--fg-muted);
+  }
+
+  /* Armed state: the button itself turns into the confirmation -- no
+     modal, because this red/"Confirm" state IS the second, deliberate
+     step (issue #198). */
+  .clear-all.armed {
     background: var(--drop-bg);
     color: var(--drop);
     border-color: var(--drop);
+    font-weight: 600;
+  }
+
+  .clear-all:disabled {
+    opacity: 0.6;
+    cursor: default;
   }
 
   .exclusions-pointer {

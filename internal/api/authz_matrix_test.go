@@ -94,6 +94,8 @@ var authzMatrix = []routeExpectation{
 	{http.MethodGet, "/api/lookup/ip/{ip}", accessUser,
 		"on-demand reputation lookup, proxied so no API key reaches the browser"},
 	{http.MethodGet, "/api/flags", accessUser, "core read"},
+	{http.MethodPost, "/api/flags/clear-all", accessUser,
+		"same reversibility as the per-flag clear below, at bulk -- regular clears only, never creates an exclusion"},
 	{http.MethodPost, "/api/flags/{id}/clear", accessUser,
 		"reversible: a cleared flag raises again on the next matching event, so any user may dismiss noise"},
 

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-import { clearFlag, clearFlagPermanent, fetchFlags } from './api'
+import { clearAllFlags, clearFlag, clearFlagPermanent, fetchFlags } from './api'
 import type { Flag, FlagTimeBucket } from './types'
 
 const IPV4_RE = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/
@@ -104,6 +104,39 @@ class FlagsState {
     } catch (err) {
       flag.cleared = wasCleared
       flag.clearedAt = previousClearedAt
+      throw err
+    }
+  }
+
+  // "Clear all" (issue #198) -- same optimistic-update reasoning as
+  // clear() above, applied to every currently-active flag at once. The
+  // server reports how many it actually cleared, which can differ from
+  // the count marked here if a flag raised between the click and the
+  // response landing; that's an acceptable margin App.svelte's existing
+  // 5s poll reconciles, same as clear()'s own gap.
+  //
+  // Snapshotting every touched flag's prior state (not just a single
+  // one) is what makes the revert-on-failure path correct here: a
+  // partial optimistic update left in place after a failed request would
+  // show flags as cleared that the server never actually cleared.
+  async clearAll() {
+    const touched = this.list.filter((f) => !f.cleared)
+    if (touched.length === 0) return
+
+    const snapshot = touched.map((f) => ({ flag: f, clearedAt: f.clearedAt }))
+    const now = new Date().toISOString()
+    for (const f of touched) {
+      f.cleared = true
+      f.clearedAt = now
+    }
+
+    try {
+      await clearAllFlags()
+    } catch (err) {
+      for (const { flag, clearedAt } of snapshot) {
+        flag.cleared = false
+        flag.clearedAt = clearedAt
+      }
       throw err
     }
   }

@@ -37,13 +37,13 @@ async function openMenuView(label) {
 await openMenuView('Flags')
 await page.waitForSelector('.card .type', { timeout: 15000 })
 
-check(
-  await page.isVisible('button:has-text("Clear, never flag again")'),
-  'the port scan raised a real flag with the permanent-clear action visible',
-)
+// Split button + dropdown as of #198 -- the arrow segment opens
+// "Permanently clear", replacing the old second inline button.
+check(await page.isVisible('.split-arrow'), 'the port scan raised a real flag with the permanent-clear action visible')
 
 // Permanently clear it -- this is what creates the exclusion under test.
-await page.click('button:has-text("Clear, never flag again")')
+await page.click('.split-arrow')
+await page.click('.split-menu-item:has-text("Permanently clear")')
 await page.waitForTimeout(500)
 
 check(
