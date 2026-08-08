@@ -5,7 +5,6 @@
   // action here is a human reviewing and clearing a flag, never mikroview
   // acting on traffic itself.
   import { flagsState, extractSourceIp } from '../lib/flags.svelte'
-  import { exclusionsState } from '../lib/exclusions.svelte'
   import { appState } from '../lib/state.svelte'
   import { authState } from '../lib/auth.svelte'
   import { formatHM, countryFlag } from '../lib/format'
@@ -15,23 +14,6 @@
 
   // Same gate NavMenu uses for the Detectors view.
   const isAdminOrOpen = $derived(authState.state === 'authenticated' && authState.role === 'admin')
-
-  let showExclusions = $state(false)
-  let removingExclusion = $state<string | null>(null)
-
-  function toggleExclusions() {
-    showExclusions = !showExclusions
-    if (showExclusions) exclusionsState.refresh()
-  }
-
-  async function removeExclusion(id: string) {
-    removingExclusion = id
-    try {
-      await exclusionsState.remove(id)
-    } finally {
-      removingExclusion = null
-    }
-  }
 
   let expandedId: string | null = $state(null)
 
@@ -62,6 +44,10 @@
     )
   }
 
+  // Same labels FlagsChart.svelte/Exclusions.svelte use -- duplicated
+  // rather than shared, matching how ACTION_LABELS is already
+  // independently duplicated in both EventsChart.svelte and
+  // Dashboard.svelte in this codebase.
   const TYPE_LABELS: Record<FlagType, string> = {
     port_scan: 'Port scan',
     activity_spike: 'Activity spike',
@@ -303,7 +289,7 @@
           <button
             class="clear clear-permanent"
             onclick={() => clearPermanent(f.id)}
-            title="Clear this flag and permanently stop {TYPE_LABELS[f.type]} from ever raising again for {f.target} -- reversible from Manage exclusions below."
+            title="Clear this flag and permanently stop {TYPE_LABELS[f.type]} from ever raising again for {f.target} -- reversible from the Exclusions page (see the menu)."
           >
             Clear, never flag again
           </button>
@@ -382,41 +368,16 @@
   </section>
 
   {#if isAdminOrOpen}
-    <section aria-labelledby="exclusions-heading">
-      <div class="exclusions-header">
-        <h2 id="exclusions-heading">Permanent exclusions</h2>
-        <button class="exclusions-toggle" onclick={toggleExclusions}>
-          {showExclusions ? 'Hide' : 'Manage exclusions'}
-        </button>
-      </div>
-      {#if showExclusions}
-        <p class="exclusions-intro">
-          Every (detector, target) pair permanently silenced via "Clear, never flag again" -- removing one here lets
-          it raise normally again, undoing a mistaken exclusion.
-        </p>
-        {#if exclusionsState.list.length === 0}
-          <p class="empty">No permanent exclusions.</p>
-        {:else}
-          <ul class="list">
-            {#each exclusionsState.list as e (e.id)}
-              <li class="card exclusion-card">
-                <div class="card-main">
-                  <span class="type">{TYPE_LABELS[e.type]}</span>
-                  <span class="target">{e.target === 'global' ? 'network-wide' : e.target}</span>
-                </div>
-                <button
-                  class="clear"
-                  disabled={removingExclusion === e.id}
-                  onclick={() => removeExclusion(e.id)}
-                >
-                  {removingExclusion === e.id ? 'Removing…' : 'Remove exclusion'}
-                </button>
-              </li>
-            {/each}
-          </ul>
-        {/if}
-      {/if}
-    </section>
+    <!-- Moved to its own page (issue #207): reaching and reviewing
+         exclusions underneath a potentially large active-flags list was
+         a pain. Left as a pointer here rather than removed outright, so
+         the path stays discoverable from where the permanent-clear
+         action itself lives. -->
+    <p class="exclusions-pointer">
+      Permanently-excluded (detector, target) pairs are reviewed on the
+      <button class="link" onclick={() => (appState.view = 'exclusions')}>Exclusions</button>
+      page (also in the menu).
+    </p>
   {/if}
 </div>
 
@@ -466,15 +427,6 @@
   .cleared-card {
     opacity: 0.7;
     padding-right: 12px;
-  }
-
-  .exclusion-card {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 12px;
-    padding-right: 12px;
-    flex-wrap: wrap;
   }
 
   /* No single Clear action at the campaign level (clearing happens per
@@ -701,7 +653,7 @@
   /* Distinct (not identical to Clear) so a permanent action reads as
      more deliberate than the plain, fully-reversible Clear next to it --
      a warning tint rather than a scarier confirmation dialog, since
-     it's still undoable from Manage exclusions below (admin only). */
+     it's still undoable from the Exclusions page (admin only). */
   .clear-permanent {
     border-color: var(--drop);
     color: var(--drop);
@@ -713,36 +665,19 @@
     border-color: var(--drop);
   }
 
-  .exclusions-header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 10px;
-    margin-bottom: 10px;
-  }
-
-  .exclusions-header h2 {
+  .exclusions-pointer {
     margin: 0;
-  }
-
-  .exclusions-toggle {
-    background: transparent;
-    border: 1px solid var(--border);
-    color: var(--fg-muted);
-    border-radius: 5px;
-    padding: 5px 10px;
-    font-size: 12px;
-  }
-
-  .exclusions-toggle:hover {
-    color: var(--fg);
-    border-color: var(--fg-muted);
-  }
-
-  .exclusions-intro {
-    margin: 0 0 10px;
     font-size: 12px;
     color: var(--fg-muted);
-    max-width: 70ch;
+  }
+
+  .link {
+    background: none;
+    border: none;
+    padding: 0;
+    font: inherit;
+    color: var(--accent);
+    text-decoration: underline;
+    cursor: pointer;
   }
 </style>
