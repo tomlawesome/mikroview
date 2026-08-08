@@ -21,6 +21,7 @@ import (
 	"github.com/tomlawesome/mikroview/internal/flags"
 	"github.com/tomlawesome/mikroview/internal/hub"
 	"github.com/tomlawesome/mikroview/internal/reputation"
+	"github.com/tomlawesome/mikroview/internal/routerstate"
 	"github.com/tomlawesome/mikroview/internal/rules"
 	"github.com/tomlawesome/mikroview/internal/store"
 )
@@ -62,6 +63,7 @@ func newTestServer(t *testing.T) (*Server, *store.Store) {
 		LoginLimiter:     auth.NewLoginLimiter(10, time.Minute),
 		Tokens:           tokenStore,
 		IngestLimiter:    auth.NewLoginLimiter(ingestLimiterThreshold, ingestLimiterWindow),
+		RouterState:      routerstate.New(),
 		StartTime:        time.Now(),
 		Version:          "test-version",
 	}
