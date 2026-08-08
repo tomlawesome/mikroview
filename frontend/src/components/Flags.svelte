@@ -7,11 +7,12 @@
   import { flagsState, extractSourceIp } from '../lib/flags.svelte'
   import { appState } from '../lib/state.svelte'
   import { authState } from '../lib/auth.svelte'
-  import { formatHM, countryFlag } from '../lib/format'
+  import { formatHM, countryFlag, isPublicIp } from '../lib/format'
   import { flagLayoutState, type FlagColumns } from '../lib/flagLayout.svelte'
   import { viewportState } from '../lib/viewport.svelte'
   import ReputationDetails from './ReputationDetails.svelte'
   import BarList from './BarList.svelte'
+  import IpInvestigateButton from './IpInvestigateButton.svelte'
   import type { Flag, FlagType } from '../lib/types'
 
   // Same gate NavMenu uses for the Detectors view.
@@ -231,6 +232,24 @@
     return f.type !== 'global_spike' && f.type !== 'new_device'
   }
 
+  // The IP for a live abuse-check button on this card (issue #213), or
+  // null if there is none worth checking. extractSourceIp already
+  // screens out every target shape that isn't a bare IP (a rule label,
+  // "port N", "global", a MAC) -- see its own doc comment -- so most
+  // exclusions fall out of that for free rather than needing a second
+  // type-by-type list to keep in step with filterToTarget's.
+  //
+  // device_silence is the one type that needs an explicit exclusion on
+  // top of the shape check: an auto-discovered device's ID defaults to
+  // its source IP (internal/device.Registry.Resolve), so its target can
+  // be IP-shaped too -- but it identifies the device that went quiet,
+  // not a source worth threat-checking, and #213 excludes it by name.
+  function investigateIp(f: Flag): string | null {
+    if (f.type === 'device_silence') return null
+    const ip = extractSourceIp(f.target)
+    return ip && isPublicIp(ip) ? ip : null
+  }
+
   function filterToTarget(f: Flag) {
     switch (f.type) {
       case 'port_scan':
@@ -293,6 +312,7 @@
   <BarList title="Active flags by type" rows={typeBreakdown} emptyMessage="Nothing flagged right now." />
 
   {#snippet flagCard(f: Flag, compactCard: boolean = false)}
+    {@const investigate = investigateIp(f)}
     <li class="card" class:compact={compactCard}>
       <div class="card-main">
         <span class="type">{TYPE_LABELS[f.type]}</span>
@@ -310,6 +330,18 @@
           </button>
         {:else}
           <span class="target target-global">network-wide</span>
+        {/if}
+        {#if investigate}
+          <!-- A fresh check, not the frozen raise-time snapshot below
+               (issue #213): raw events aren't persisted, so an old or
+               cleared flag often has nothing left in the live view to
+               click into -- this is what makes "what does it look like
+               now" reachable without leaving the page. Reuses the exact
+               component/lookup path EventRow/EventDetailSheet already
+               use; the snapshot in Details stays as-is and answers a
+               different question ("what did it look like when it
+               fired"). -->
+          <IpInvestigateButton ip={investigate} />
         {/if}
         {#if f.country}
           <span class="country" title={f.country}>{countryFlag(f.country)}</span>
