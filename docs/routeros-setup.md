@@ -7,24 +7,58 @@ config for host names and rule lookups (step 4). Either way, the
 router always initiates; MikroView never connects to it. This is a
 one-time configuration on each router you want to monitor.
 
-## 1. Point RouterOS at the container
+## 1. Point RouterOS at the container over TLS
 
-Replace `203.0.113.10` with the IP of the Docker host running MikroView.
-The container listens on the conventional syslog port 514 externally (see
-`deploy/docker-compose.yml`), even though it runs on 1514 internally.
+MikroView's only syslog listener speaks `remote-protocol=tls` (RFC
+5425's syslog-over-TLS port, `6514`, mapped straight through by
+`deploy/docker-compose.yml`) — confidentiality for firewall log traffic
+on the wire, and MikroView authenticating itself to the router.
+Replace `203.0.113.10` with the IP of the Docker host running
+MikroView, and `mikroview-host` with its hostname or IP.
+
+**Requires RouterOS 7.18 or later.** `remote-protocol=tls` is rejected
+on older releases (verified against booted CHR images: 6.49.18 and
+7.1–7.17 all reject it; 7.18 and later accept it) — this is MikroView's
+only syslog listener, so it's the effective minimum for this whole
+guide, not just this step.
+
+The router is the one *initiating* the connection here, so — unlike a
+browser, where you visit MikroView and get a one-time warning — the
+router needs to be told explicitly to trust MikroView's certificate,
+or every syslog push will fail closed. Skipping this step is not a
+shortcut: without it, `check-certificate=yes` below refuses with
 
 ```
-/system logging action add name=mikroview target=remote remote=203.0.113.10 remote-port=514 remote-protocol=udp
+failure: SSL: ssl: no trusted CA certificate found (6)
 ```
 
-UDP is the default and matches how OPNsense-style live views typically
-work — occasional loss under extreme burst is an acceptable trade for
-near-zero overhead. If you'd rather have guaranteed delivery over a lossy
-link, use TCP instead:
+which is the honest, safe failure — a router that will send your
+firewall logs to *anything* claiming to be MikroView is not a router
+you want. Import the certificate once:
 
 ```
-/system logging action add name=mikroview target=remote remote=203.0.113.10 remote-port=514 remote-protocol=tcp
+/tool fetch url="https://<mikroview-host>/ca.crt" check-certificate=no dst-path=mikroview-ca.crt
+/certificate import file-name=mikroview-ca.crt passphrase=""
 ```
+
+`check-certificate=no` here is the one and only place it belongs in
+this whole setup: there is nothing to verify against yet, since this
+fetch is *getting* the thing to verify against. Every fetch and logging
+action after this uses `check-certificate=yes`. If your MikroView
+deployment uses your own certificate rather than the self-generated one
+(see [configuration.md](configuration.md#tls)), skip this step — your
+CA is presumably already trusted some other way.
+
+Then point the router's logging at MikroView:
+
+```
+/system logging action add name=mikroview target=remote remote=203.0.113.10 remote-port=6514 remote-protocol=tls check-certificate=yes
+```
+
+This does **not** authenticate the router to MikroView — RouterOS's
+logging action has no client-certificate option, so anything able to
+reach the port can still connect and inject log lines. The trust here
+is one-directional: the router verifying MikroView, not the reverse.
 
 ## 2. Forward firewall log events to it
 
@@ -145,39 +179,17 @@ into the script below, distinct from the read-only API tokens covered
 in [configuration.md](configuration.md#api-tokens-read-only), and
 scoped to exactly one router.
 
-**Requires RouterOS 7.13 or later.** `:serialize to=json`, which the
-script below uses to build its payload, does not exist before 7.13
-(`bad command name serialize`) — everything else in this guide works
-on older releases.
+**Requires RouterOS 7.13 or later** for `:serialize to=json`, which the
+script below uses to build its payload, and does not exist before 7.13
+(`bad command name serialize`) — moot in practice, since step 1's
+`remote-protocol=tls` already requires 7.18 or later for the whole
+guide.
 
-### 4a. Import MikroView's certificate
+### 4a. Certificate trust
 
-The router is the one *initiating* the connection here, so — unlike a
-browser, where you visit MikroView and get a one-time warning — the
-router needs to be told explicitly to trust MikroView's certificate,
-or every push will fail closed. Skipping this step is not a shortcut:
-without it, `check-certificate=yes` below refuses with
-
-```
-failure: SSL: ssl: no trusted CA certificate found (6)
-```
-
-which is the honest, safe failure — a router that will POST your
-config to *anything* claiming to be MikroView is not a router you
-want. Import the certificate once:
-
-```
-/tool fetch url="https://<mikroview-host>/ca.crt" check-certificate=no dst-path=mikroview-ca.crt
-/certificate import file-name=mikroview-ca.crt passphrase=""
-```
-
-`check-certificate=no` here is the one and only place it belongs in
-this whole setup: there is nothing to verify against yet, since this
-fetch is *getting* the thing to verify against. Every fetch after this
-uses `check-certificate=yes`. If your MikroView deployment uses your
-own certificate rather than the self-generated one (see
-[configuration.md](configuration.md#tls)), skip this step — your CA is
-presumably already trusted some other way.
+Already done in step 1, if you set up syslog first — this push uses the
+same imported CA, not a second trust step. If you're somehow doing this
+before step 1, go do that CA import now, then come back here.
 
 ### 4b. Mint an ingest token
 

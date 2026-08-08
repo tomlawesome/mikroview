@@ -18,8 +18,7 @@ import (
 // router. It does NOT authenticate the sender: RouterOS's logging action
 // has no client-certificate option (verified against a real router --
 // see docs/decisions/routeros-ingest-spike.md), so anything able to
-// reach the port can still connect and inject log lines, exactly as
-// with plaintext today.
+// reach the port can still connect and inject log lines.
 //
 // The whole implementation is wrapping a tls.Listener around a plain
 // one and handing it to ServeTCP: a tls.Listener satisfies net.Listener,

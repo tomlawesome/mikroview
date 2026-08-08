@@ -11,6 +11,31 @@ upgrading.
 
 ## [Unreleased]
 
+### Removed
+
+- **The plaintext syslog listeners** (#189): `listen.syslogUdp`,
+  `listen.syslogTcp`, `internal/syslog/udp_listener.go`, and the
+  plaintext `ListenTCP` entry point in `tcp_listener.go`, along with
+  their config keys, env vars (`MIKROVIEW_LISTEN_SYSLOG_UDP`,
+  `MIKROVIEW_LISTEN_SYSLOG_TCP`) and CLI flags (`-syslog-udp`,
+  `-syslog-tcp`). Wholesale, per `AGENTS.md` -- no alias, no listener
+  kept alive only to log a warning. Syslog over TLS (#188) is now
+  mikroview's only syslog listener, and was shown to work repeatably
+  against a real router first: sustained real traffic over an hour-plus,
+  survives a mikroview container restart, and survives a full router
+  reboot, all without manual intervention.
+
+  RouterOS's `remote-protocol=tls` requires 7.18 or later, which is now
+  the effective minimum RouterOS version for mikroview's whole setup
+  guide, not just this listener.
+
+  The syslog TLS listener is also no longer gated behind `tls.enabled`:
+  it now loads/generates its own certificate independently, so a
+  deployment that disables mikroview's own HTTP TLS (its own reverse
+  proxy terminates TLS for real clients) doesn't lose syslog ingest as
+  a side effect -- RouterOS connects to the syslog port directly, never
+  through that proxy, so it needs a certificate to trust either way.
+
 ### Added
 
 - **Tor and VPN network-class matches now reinforce an already-raised
