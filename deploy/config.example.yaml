@@ -8,6 +8,12 @@
 listen:
   syslogUdp: ":1514"
   syslogTcp: ":1514"
+  # RouterOS remote-protocol=tls (RFC 5425's syslog-over-TLS port).
+  # Confidentiality for log traffic on the wire, using the same
+  # certificate the HTTPS listener below presents. Only started while
+  # tls.enabled is true (there's no certificate to present otherwise);
+  # set to "" to disable it even then.
+  syslogTls: ":6514"
   http: ":8080"
   # Redirect-only -- bounces a plain HTTP request to the HTTPS listener
   # above, never serves the app itself. Set to "" to disable (e.g. if

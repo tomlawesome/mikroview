@@ -122,6 +122,40 @@ func TestListenHTTPRedirectDefaultsAndOverrides(t *testing.T) {
 	})
 }
 
+func TestListenSyslogTLSDefaultsAndOverrides(t *testing.T) {
+	t.Run("defaults to :6514", func(t *testing.T) {
+		cfg, err := Load("", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if cfg.Listen.SyslogTLS != ":6514" {
+			t.Errorf("Listen.SyslogTLS = %q, want %q", cfg.Listen.SyslogTLS, ":6514")
+		}
+	})
+
+	t.Run("env overrides default", func(t *testing.T) {
+		t.Setenv("MIKROVIEW_LISTEN_SYSLOG_TLS", ":16514")
+		cfg, err := Load("", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if cfg.Listen.SyslogTLS != ":16514" {
+			t.Errorf("Listen.SyslogTLS = %q, want the env value :16514", cfg.Listen.SyslogTLS)
+		}
+	})
+
+	t.Run("flag overrides env, empty string disables it", func(t *testing.T) {
+		t.Setenv("MIKROVIEW_LISTEN_SYSLOG_TLS", ":16514")
+		cfg, err := Load("", []string{"-syslog-tls", ""})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if cfg.Listen.SyslogTLS != "" {
+			t.Errorf("Listen.SyslogTLS = %q, want empty (disabled)", cfg.Listen.SyslogTLS)
+		}
+	})
+}
+
 func TestFlagsEnvVarsOverrideDefaults(t *testing.T) {
 	t.Setenv("MIKROVIEW_FLAGS_STORE_PATH", "/data/flags.json")
 	t.Setenv("MIKROVIEW_FLAGS_PORT_SCAN_THRESHOLD", "30")

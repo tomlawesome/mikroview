@@ -929,6 +929,20 @@ func main() {
 				}
 			}()
 		}
+		if cfg.Listen.SyslogTLS != "" {
+			// RouterOS's remote-protocol=tls (issue #188), presenting the
+			// same cert the HTTPS listener above just loaded -- the router
+			// already imports mikroview's generated CA to verify HTTPS
+			// ingest, so this is that same trust step, not a second one.
+			// Only reachable when TLS is on: there is no certificate to
+			// present otherwise.
+			go func() {
+				if err := syslog.ListenTLS(ctx, cfg.Listen.SyslogTLS, cert, raw); err != nil && ctx.Err() == nil {
+					logging.New("syslog-tls").Error(err.Error())
+					os.Exit(1)
+				}
+			}()
+		}
 	} else {
 		tlsLog.Warn(fmt.Sprintf("disabled (tls.enabled=false) -- mikroview is serving plain HTTP on %s. Safe ONLY if this listener is unreachable except from your own reverse proxy over an isolated network -- never expose this port to a LAN or the internet in this mode.", cfg.Listen.HTTP))
 	}
@@ -940,7 +954,11 @@ func main() {
 		httpServer.Shutdown(shutdownCtx)
 	}()
 
-	logging.New("mikroview").Info(fmt.Sprintf("%s on %s, syslog udp/tcp on %s/%s", scheme, cfg.Listen.HTTP, cfg.Listen.SyslogUDP, cfg.Listen.SyslogTCP))
+	syslogSummary := fmt.Sprintf("syslog udp/tcp on %s/%s", cfg.Listen.SyslogUDP, cfg.Listen.SyslogTCP)
+	if cfg.TLS.Enabled && cfg.Listen.SyslogTLS != "" {
+		syslogSummary += fmt.Sprintf(", tls on %s", cfg.Listen.SyslogTLS)
+	}
+	logging.New("mikroview").Info(fmt.Sprintf("%s on %s, %s", scheme, cfg.Listen.HTTP, syslogSummary))
 	var serveErr error
 	if cfg.TLS.Enabled {
 		serveErr = httpServer.ListenAndServeTLS("", "")

@@ -16,6 +16,7 @@ Copy `deploy/config.example.yaml` to `deploy/config.yaml` and edit it —
 listen:
   syslogUdp: ":1514"
   syslogTcp: ":1514"
+  syslogTls: ":6514"    # RouterOS remote-protocol=tls; only started when tls.enabled is true
   http: ":8080"
   httpRedirect: ":8081"
   # Only set these if a reverse proxy fronts mikroview -- see
@@ -1818,6 +1819,31 @@ host on a mismatch) rather than echoed unconditionally -- only
 relevant if something other than a real browser navigation reaches
 this listener directly.
 
+A third listener, `listen.syslogTls` (default `:6514`, RFC 5425's
+syslog-over-TLS port), accepts RouterOS's `remote-protocol=tls` logging
+action -- confidentiality for log traffic on the wire, and mikroview
+authenticating itself to the router with the same certificate the main
+HTTPS listener presents (the router already imports mikroview's
+generated CA to verify HTTPS ingest, so this is that same trust step,
+not a second one). Like `httpRedirect`, it's only started while
+`tls.enabled` is true (there's no certificate to present otherwise) and
+only started at all if non-empty -- set it to `""` to disable it.
+
+This listener does **not** authenticate the sender: RouterOS's logging
+action has no client-certificate option (only `check-certificate`,
+verifying the router trusts mikroview, not the reverse), so anything
+able to reach the port can still connect and inject log lines, exactly
+as with the plaintext `syslogUdp`/`syslogTcp` listeners, which stay on
+alongside this one. Point RouterOS at it with:
+
+```
+/system logging action set 0 target=remote remote=<mikroview-host> remote-port=6514 remote-protocol=tls
+```
+
+and import mikroview's CA (`GET /ca.crt`) under
+`/certificate import` first, or the router will refuse the connection
+with `SSL: ssl: no trusted CA certificate found`.
+
 ```yaml
 tls:
   enabled: true
@@ -1889,6 +1915,7 @@ Override individual scalar settings without a mounted file:
 | `MIKROVIEW_CONFIG` | path to the YAML config file to load |
 | `MIKROVIEW_LISTEN_SYSLOG_UDP` | `listen.syslogUdp` |
 | `MIKROVIEW_LISTEN_SYSLOG_TCP` | `listen.syslogTcp` |
+| `MIKROVIEW_LISTEN_SYSLOG_TLS` | `listen.syslogTls` (see [TLS](#tls)) |
 | `MIKROVIEW_LISTEN_HTTP` | `listen.http` |
 | `MIKROVIEW_LISTEN_HTTP_REDIRECT` | `listen.httpRedirect` |
 | `MIKROVIEW_TRUSTED_PROXIES` | `listen.trustedProxies` (comma-separated; see [Running behind a reverse proxy](#running-behind-a-reverse-proxy)) |
@@ -2133,8 +2160,9 @@ before it could reach a database at all.
 
 ## CLI flags (local development)
 
-`-version`, `-syslog-udp`, `-syslog-tcp`, `-http`, `-http-redirect`,
-`-retention`, `-max-events`, `-geoip-db` — see `go run . -h`. Devices,
+`-version`, `-syslog-udp`, `-syslog-tcp`, `-syslog-tls`, `-http`,
+`-http-redirect`, `-retention`, `-max-events`, `-geoip-db` — see
+`go run . -h`. Devices,
 rule/host names, and auth config can only be set via YAML/env, not
 flags.
 
