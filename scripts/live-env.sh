@@ -28,6 +28,7 @@ MV_DIR="${MV_DIR:-/tmp/mikroview-live}"
 MV_BIND="${MV_BIND:-127.0.0.1}"
 HTTP_PORT="${MV_HTTP_PORT:-19801}"
 SYSLOG_PORT="${MV_SYSLOG_PORT:-16801}"
+SYSLOG_TLS_PORT="${MV_SYSLOG_TLS_PORT:-16803}"
 MV_USER="live-admin"
 MV_PASS="live-password-123"
 
@@ -36,6 +37,9 @@ if [ "$MV_BIND" = "127.0.0.1" ]; then
   TLS_BLOCK='tls: {enabled: false}'
   SECURE_COOKIE=false
   CURL_TLS=()
+  # No cert exists with TLS off, so there's nothing for a TLS syslog
+  # listener to present -- same reasoning as httpRedirect never starting.
+  SYSLOG_TLS_ADDR=""
 else
   MV_SCHEME=https
   TLS_BLOCK="tls: {enabled: true, hosts: [\"$MV_BIND\", \"127.0.0.1\"], storePath: $MV_DIR/data/tls}"
@@ -44,6 +48,9 @@ else
   # live-routeros.sh's `trust` step is for on the router side. Here the
   # harness is talking to a certificate it just watched get created.
   CURL_TLS=(-k)
+  # On $MV_BIND, not loopback: the router fixture (#188) needs to reach
+  # this listener the same way it reaches the HTTPS one above.
+  SYSLOG_TLS_ADDR="$MV_BIND:$SYSLOG_TLS_PORT"
 fi
 
 build() {
@@ -65,7 +72,7 @@ up() {
   rm -rf "$MV_DIR"; mkdir -p "$MV_DIR/data"
   build
   cat > "$MV_DIR/cfg.yaml" <<EOF
-listen: {syslogUdp: "127.0.0.1:$SYSLOG_PORT", syslogTcp: "127.0.0.1:$((SYSLOG_PORT+1))", http: "$MV_BIND:$HTTP_PORT", httpRedirect: ""}
+listen: {syslogUdp: "127.0.0.1:$SYSLOG_PORT", syslogTcp: "127.0.0.1:$((SYSLOG_PORT+1))", syslogTls: "$SYSLOG_TLS_ADDR", http: "$MV_BIND:$HTTP_PORT", httpRedirect: ""}
 $TLS_BLOCK
 auth:
   storePath: $MV_DIR/data/users.json
@@ -94,6 +101,7 @@ EOF
   echo "export MV_PASS=$MV_PASS"
   echo "export MV_DIR=$MV_DIR"
   echo "export MV_SYSLOG_PORT=$SYSLOG_PORT"
+  echo "export MV_SYSLOG_TLS_PORT=$SYSLOG_TLS_PORT"
 }
 
 # syslog N [label] -- N synthetic RouterOS firewall lines over UDP.
