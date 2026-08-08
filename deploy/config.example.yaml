@@ -6,13 +6,13 @@
 # show up here.
 
 listen:
-  syslogUdp: ":1514"
-  syslogTcp: ":1514"
-  # RouterOS remote-protocol=tls (RFC 5425's syslog-over-TLS port).
-  # Confidentiality for log traffic on the wire, using the same
-  # certificate the HTTPS listener below presents. Only started while
-  # tls.enabled is true (there's no certificate to present otherwise);
-  # set to "" to disable it even then.
+  # RouterOS remote-protocol=tls (RFC 5425's syslog-over-TLS port) --
+  # mikroview's only syslog listener. Confidentiality for log traffic on
+  # the wire, using the same certificate the HTTPS listener below
+  # presents when TLS is on, or a self-generated one otherwise -- a
+  # certificate is loaded for this even if tls.enabled is false, since
+  # the router connects here directly. Set to "" to disable syslog
+  # ingest entirely.
   syslogTls: ":6514"
   http: ":8080"
   # Redirect-only -- bounces a plain HTTP request to the HTTPS listener

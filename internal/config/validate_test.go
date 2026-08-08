@@ -56,7 +56,7 @@ func TestFatalRules(t *testing.T) {
 		mut  func(*Config)
 	}{
 		{"empty listen address", "CFG-0001", "listen.http", func(c *Config) { c.Listen.HTTP = "" }},
-		{"unparseable listen address", "CFG-0002", "listen.syslogUdp", func(c *Config) { c.Listen.SyslogUDP = "not-an-address" }},
+		{"unparseable listen address", "CFG-0002", "listen.http", func(c *Config) { c.Listen.HTTP = "not-an-address" }},
 		{"unparseable redirect address", "CFG-0002", "listen.httpRedirect", func(c *Config) { c.Listen.HTTPRedirect = "nope" }},
 		{"bad trusted proxy", "CFG-0003", "listen.trustedProxies", func(c *Config) { c.Listen.TrustedProxies = []string{"example.com"} }},
 		{"session never expires", "CFG-0020", "auth.sessionTTL", func(c *Config) { c.Auth.SessionTTL = 0 }},

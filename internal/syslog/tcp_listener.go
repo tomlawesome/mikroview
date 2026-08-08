@@ -16,6 +16,15 @@ import (
 
 var tcpLog = logging.New("syslog-tcp")
 
+// RawMessage is one received syslog line, before envelope parsing,
+// together with the metadata (source IP, receive time) that only the
+// listener can supply.
+type RawMessage struct {
+	SourceIP string
+	Data     []byte
+	RecvTime time.Time
+}
+
 // maxTCPConnections bounds concurrent RouterOS remote-protocol=tcp
 // connections. Unlike UDP (a stateless per-datagram receive loop) or the
 // WebSocket hub (which already sets deadlines, see internal/api/ws.go),
@@ -82,15 +91,6 @@ func init() {
 
 func tcpIdleTimeout() time.Duration {
 	return time.Duration(tcpIdleTimeoutNS.Load())
-}
-
-// ListenTCP binds addr and serves it until ctx is done.
-func ListenTCP(ctx context.Context, addr string, out chan<- RawMessage) error {
-	ln, err := net.Listen("tcp", addr)
-	if err != nil {
-		return err
-	}
-	return ServeTCP(ctx, ln, out)
 }
 
 // ServeTCP accepts connections on an already-bound ln. Unlike UDP, a TCP
