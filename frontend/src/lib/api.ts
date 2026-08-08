@@ -168,6 +168,18 @@ export async function clearFlag(id: string): Promise<void> {
   if (!res.ok) throw new ApiError(`clearFlag: ${res.status}`, res.status)
 }
 
+// clearAllFlags is clearFlag applied to every currently-active flag in
+// one request (issue #198's "Clear all") -- regular clears only, same as
+// clearFlag; there is no bulk permanent variant (see
+// internal/flags.Store.ClearAll's doc comment for why). Returns how many
+// were actually cleared, so the caller can refresh() rather than guess.
+export async function clearAllFlags(): Promise<number> {
+  const res = await postJSON('/api/flags/clear-all')
+  if (!res.ok) throw new ApiError(`clearAllFlags: ${res.status}`, res.status)
+  const body = await res.json()
+  return body.cleared ?? 0
+}
+
 // clearFlagPermanent is clearFlag plus a permanent exclusion of that
 // flag's (Type, Target) in the same step -- "Clear and never flag this
 // again" (see internal/flags.Store.ClearAndExclude).

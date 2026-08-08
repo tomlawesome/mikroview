@@ -1072,9 +1072,19 @@ clears it via the UI or `POST /api/flags/{id}/clear`. Clearing an
 already-active-again source re-raises it as a fresh entry rather than
 silently resurrecting the old one.
 
-Alongside the plain Clear action, "Clear, never flag again" (`POST
-/api/flags/{id}/clear-permanent`, **admin-only** once an account exists,
-and recorded in the audit log) clears the flag *and* permanently
+A **Clear all** button above the active list (issue #198) clears every
+active flag in one request (`POST /api/flags/clear-all`) -- a click-again
+red "Confirm" is the safeguard against an accidental single click, not a
+modal. It performs regular clears only and never creates a permanent
+exclusion; there is no bulk variant of the action below.
+
+Each flag's Clear button is a split control: the main segment is the
+plain Clear above, and its arrow segment opens "Permanently clear"
+(`POST /api/flags/{id}/clear-permanent`, **admin-only** once an account
+exists, and recorded in the audit log) -- for a non-admin the arrow
+segment is hidden entirely, leaving a plain Clear button rather than a
+disabled one that would just advertise an action they can't take.
+"Permanently clear" clears the flag *and* permanently
 excludes that exact (detector, target) pair -- from then on it never
 raises again, silently, until the exclusion is removed. This is
 deliberately permanent rather than a timed snooze: a time-limited mute
@@ -2140,6 +2150,7 @@ exits, rather than starting the server. See
 | `GET /api/lookup/ip/{ip}` | on-demand reputation/threat-intel lookup for one public IP (see [IP reputation lookup](#ip-reputation-lookup-optional)) |
 | `GET /api/flags` | active + cleared behavioral flags, plus the last hour of newly-raised-episode counts by type at 1-minute resolution (issue #100, feeds the dashboard's flags-over-time chart) (see [Behavioral flags](#behavioral-flags-optional-on-by-default)) |
 | `POST /api/flags/{id}/clear` | mark one flag as cleared |
+| `POST /api/flags/clear-all` | clear every currently-active flag in one request -- regular clears only, never creates an exclusion. Audit-logged once per call |
 | `POST /api/flags/{id}/clear-permanent` | admin-only: clear one flag *and* permanently exclude its (detector, target) pair going forward. Audit-logged |
 | `GET /api/flags/exclusions` | admin-only: every currently-excluded (detector, target) pair |
 | `DELETE /api/flags/exclusions/{id}` | admin-only: remove one exclusion, letting that pair raise again |

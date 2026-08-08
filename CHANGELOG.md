@@ -13,6 +13,18 @@ upgrading.
 
 ### Changed
 
+- **"Clear all" and a split Clear button on the Flags page** (#198). A
+  new Clear all button above the active list clears every active flag in
+  one request — click-again red "Confirm" is the safeguard against an
+  accidental single click, not a modal — via a new
+  `POST /api/flags/clear-all` endpoint, one audit entry per call rather
+  than one per flag. Regular clears only; it can never create a
+  permanent exclusion. Each flag's own Clear button is now a split
+  control: the main segment is unchanged, and its arrow segment (admin
+  only) opens "Permanently clear" (renamed from "Clear, never flag
+  again"), keyboard-accessible (focus, Enter to open, Tab to the item,
+  Escape to close).
+
 - **Permanent exclusions moved to their own page** (#207), reachable
   from the menu alongside Detectors/Entities/Audit log. Reaching and
   reviewing exclusions underneath a potentially large active-flags list

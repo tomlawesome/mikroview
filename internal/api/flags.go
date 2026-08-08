@@ -3,6 +3,7 @@
 package api
 
 import (
+	"fmt"
 	"net/http"
 	"time"
 )
@@ -29,6 +30,28 @@ func (s *Server) handleFlagsClear(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	cleared := s.Flags.Clear(id, time.Now())
 	writeJSON(w, http.StatusOK, map[string]any{"cleared": cleared})
+}
+
+// handleFlagsClearAll clears every currently-active flag in one request
+// (issue #198's "Clear all", with the frontend's click-again confirm as
+// the safeguard against an accidental single click). Same access level
+// as the per-flag handleFlagsClear -- authzMatrix's own comment already
+// explains why that one is open to any authenticated user rather than
+// admin-only: a plain clear is reversible, unlike the permanent variant
+// below.
+//
+// One audit entry for the whole call, not one per flag: "cleared N
+// flags" is the meaningful record here, and N individual entries would
+// bury the one action that actually happened under noise for anyone
+// reading the log afterward. No exclusions are created -- see
+// flags.Store.ClearAll's own doc comment for why a bulk permanent
+// variant does not exist and is not planned.
+func (s *Server) handleFlagsClearAll(w http.ResponseWriter, r *http.Request) {
+	n := s.Flags.ClearAll(time.Now())
+	if n > 0 {
+		s.Audit.Record(auditActor(r), "flag.clear_all", "", fmt.Sprintf("cleared %d flags", n))
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"cleared": n})
 }
 
 // handleFlagsClearPermanent is handleFlagsClear plus a permanent
