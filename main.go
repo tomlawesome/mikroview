@@ -71,6 +71,16 @@ const (
 	loginLimiterWindow    = 5 * time.Minute
 )
 
+// ingestLimiter{Threshold,Window}: rate-limits POST /api/ingest/routeros
+// per ingest token (issue #186 step 3) -- see internal/api/ingest.go's
+// handleIngestRouterOS doc comment for the reasoning behind these
+// specific numbers. Same internal-hardening-constant tier as
+// loginLimiterThreshold/Window above.
+const (
+	ingestLimiterThreshold = 120
+	ingestLimiterWindow    = 15 * time.Minute
+)
+
 // version is stamped at build time via -ldflags "-X main.version=..."
 // (see Dockerfile and .github/workflows/docker.yml).
 //
@@ -822,6 +832,7 @@ func main() {
 		TrustedProxies:   trustedProxies,
 		ClientIPHeader:   cfg.Listen.ClientIPHeader,
 		Tokens:           tokenStore,
+		IngestLimiter:    auth.NewLoginLimiter(ingestLimiterThreshold, ingestLimiterWindow),
 		OIDC:             oidcClient,
 		OIDCState:        oidcState,
 		OIDCPolicy:       oidcPolicy,

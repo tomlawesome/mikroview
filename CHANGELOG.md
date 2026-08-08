@@ -13,6 +13,23 @@ upgrading.
 
 ### Added
 
+- **`POST /api/ingest/routeros`** (#186 step 3), the RouterOS push-ingest
+  endpoint. Reachable only with an ingest token (#186 step 1) -- there is
+  no session-based path to it at all, structurally the same "separate,
+  minimal mux" guarantee the existing read-only API tokens have, just
+  pointed the other way: an ingest token can reach nothing else, and
+  nothing else can reach this. Payloads are strictly validated
+  (`internal/ingest`, #186 step 2) and rejected whole on any problem,
+  rate-limited per token (120 requests/15 minutes, sized around one
+  multi-page, multi-kind push rather than a single request), and every
+  accepted push is audited by device, recording only its shape (kind,
+  page, record count) -- never the pushed content itself.
+
+  **This step is deliberately inert.** A push is validated, rate-limited
+  and audited, but nothing in mikroview yet acts on the data --
+  applying it (aliasing hosts/rules, the rule lookup table, additive-only
+  security-signal enrichment) is #186 step 4, a separate change.
+
 - **Syslog over TLS** (#188), `listen.syslogTls` (default `:6514`, RFC
   5425's port), accepting RouterOS's `remote-protocol=tls`. It presents
   the same certificate the HTTPS listener already uses -- the router
