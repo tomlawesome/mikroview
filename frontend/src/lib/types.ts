@@ -171,6 +171,21 @@ export interface ReputationResult {
   // absent when that source isn't configured or has nothing to report.
   usageType?: string
   isTor?: boolean
+  // netClass (issue #114): mikroview's own local attribution of the IP to
+  // a Tor exit / VPN / datacenter / privacy relay, from the network-class
+  // feeds. Present only on a live lookup (not on a flag's captured
+  // reputation snapshot), and only when the IP matched a listed range.
+  // Display context, never a score.
+  netClass?: NetClass
+}
+
+export interface NetClass {
+  category: string
+  source: string
+  label: string
+  detail?: string
+  // Pre-rendered "Label (Detail)", so the UI does not reassemble it.
+  display: string
 }
 
 // Mirrors internal/flags.Flag's JSON tags.
