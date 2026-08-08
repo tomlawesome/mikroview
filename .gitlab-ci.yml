@@ -1,0 +1,211 @@
+# GitLab CI for the `dev` lane. `preview`/`main` and everything they run
+# (docker.yml, codeql.yml, branch-policy.yml on GitHub) are untouched and
+# stay exactly as they are — see gitlab-ci-plan/07-mikroview-github-side-changes.md
+# for what changes there and why.
+#
+# Runner: rootless-Docker executor, single group runner, untagged jobs only.
+# Tool versions pinned below were verified current as of this session (Aug 2026)
+# in gitlab-ci-plan/01-tool-research.md — re-check before bumping blindly.
+
+stages:
+  - lint
+  - test
+  - security
+  - sync
+
+variables:
+  GOFLAGS: "-mod=readonly"
+
+.dev_or_mr: &dev_or_mr
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH == "dev"
+
+# ---------------------------------------------------------------------------
+# LINT — mirrors what ci.yml already does on GitHub (build+vet+gofmt, svelte-check),
+# not introducing golangci-lint since mikroview doesn't use it today.
+# ---------------------------------------------------------------------------
+
+lint:go:
+  stage: lint
+  image: golang:1.26
+  <<: *dev_or_mr
+  script:
+    - go build ./...
+    - go vet ./...
+    - |
+      unformatted=$(gofmt -l $(git ls-files '*.go'))
+      if [ -n "$unformatted" ]; then
+        echo "Not gofmt-clean:"
+        echo "$unformatted"
+        gofmt -d $(git ls-files '*.go')
+        exit 1
+      fi
+
+lint:frontend:
+  stage: lint
+  image: node:22-alpine
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+      exists: ["frontend/package.json"]
+    - if: $CI_COMMIT_BRANCH == "dev"
+      exists: ["frontend/package.json"]
+  script:
+    - cd frontend
+    - npm ci
+    - npx svelte-check --tsconfig ./tsconfig.app.json
+
+# ---------------------------------------------------------------------------
+# TEST
+# ---------------------------------------------------------------------------
+
+test:go:
+  stage: test
+  image: golang:1.26
+  <<: *dev_or_mr
+  # GitLab's docker executor runs this container as root by default; GitHub's
+  # ci.yml runs the same test directly on the runner VM as an unprivileged
+  # user. That mismatch makes permission-enforcement tests (e.g.
+  # TestUnwritableStorePathSurfacesPersistErrButStillLoads, which chmods a
+  # directory unwritable and expects the code under test to see a real
+  # permission error) fail here specifically, since root bypasses Unix
+  # permission bits (CAP_DAC_OVERRIDE) — not because the code is wrong.
+  # Dropping to a non-root user for the actual `go test` run matches both
+  # GitHub's environment and mikroview's own production posture (its
+  # Dockerfile runs USER nonroot:nonroot). See
+  # docs/decisions/gitlab-ci-root-in-container-test-failure.md.
+  script:
+    - useradd -m -u 10001 ci-test
+    - chown -R ci-test:ci-test "$CI_PROJECT_DIR"
+    - su ci-test -c "cd '$CI_PROJECT_DIR' && HOME=/home/ci-test go test ./... -race -coverprofile=coverage.out"
+  artifacts:
+    paths:
+      - coverage.out
+
+# ---------------------------------------------------------------------------
+# SECURITY — parallel jobs, diff-scoped Semgrep on MRs, full scan on dev.
+# ---------------------------------------------------------------------------
+
+security:semgrep:
+  stage: security
+  image: semgrep/semgrep:1.170.1
+  <<: *dev_or_mr
+  script:
+    - |
+      if [ -n "$CI_MERGE_REQUEST_DIFF_BASE_SHA" ]; then
+        semgrep scan --config p/security-audit --config p/owasp-top-ten \
+          --baseline-commit "$CI_MERGE_REQUEST_DIFF_BASE_SHA" \
+          --sarif --output semgrep.sarif --error
+      else
+        semgrep scan --config p/security-audit --config p/owasp-top-ten \
+          --sarif --output semgrep.sarif --error
+      fi
+  artifacts:
+    when: always
+    paths:
+      - semgrep.sarif
+
+security:gosec:
+  stage: security
+  image: securego/gosec:2.28.0
+  <<: *dev_or_mr
+  script:
+    - gosec -fmt=sarif -out=gosec.sarif -severity=high -confidence=high ./...
+  artifacts:
+    when: always
+    paths:
+      - gosec.sarif
+
+security:govulncheck:
+  stage: security
+  image: golang:1.26
+  <<: *dev_or_mr
+  script:
+    - go install golang.org/x/vuln/cmd/govulncheck@v1.4.0
+    - govulncheck -format=json ./... > govulncheck.json
+
+  artifacts:
+    when: always
+    paths:
+      - govulncheck.json
+
+security:gitleaks:
+  stage: security
+  image:
+    name: ghcr.io/gitleaks/gitleaks:v8.30.1
+    entrypoint: [""]
+  <<: *dev_or_mr
+  script:
+    - gitleaks detect --source . --report-format sarif --report-path gitleaks.sarif --exit-code 1
+  artifacts:
+    when: always
+    paths:
+      - gitleaks.sarif
+
+security:trivy-fs:
+  stage: security
+  image:
+    name: aquasec/trivy:0.73.0
+    entrypoint: [""]
+  <<: *dev_or_mr
+  variables:
+    TRIVY_CACHE_DIR: "$CI_PROJECT_DIR/.trivy-cache"
+  cache:
+    key: trivy-db
+    paths:
+      - .trivy-cache
+  script:
+    - trivy fs --exit-code 0 --severity CRITICAL,HIGH,MEDIUM,LOW --scanners vuln,license --format sarif --output trivy-fs.sarif .
+  artifacts:
+    when: always
+    paths:
+      - trivy-fs.sarif
+  allow_failure: true
+
+# ---------------------------------------------------------------------------
+# SYNC — only on an actual push to dev (not MR pipelines). Mirrors dev to
+# GitHub so the existing GitHub dev->preview->main flow keeps working
+# unchanged, then closes whatever GitHub issues the merge commit references
+# (replaces close-issues-on-dev.yml, which never fires now that merges into
+# dev are GitLab MRs, not GitHub PRs).
+#
+# Needs a GITHUB_MIRROR_TOKEN CI/CD variable (masked+protected): a
+# fine-grained GitHub PAT scoped to just this repo, contents:write +
+# issues:write. Not yet created — see gitlab-ci-plan project-settings task.
+# ---------------------------------------------------------------------------
+
+sync:mirror-to-github:
+  stage: sync
+  image: alpine/git:2.47.3
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "dev" && $CI_PIPELINE_SOURCE == "push"'
+  script:
+    - git remote add github "https://x-access-token:${GITHUB_MIRROR_TOKEN}@github.com/tomlawesome/mikroview.git" 2>/dev/null || git remote set-url github "https://x-access-token:${GITHUB_MIRROR_TOKEN}@github.com/tomlawesome/mikroview.git"
+    - git push github HEAD:dev
+
+sync:close-github-issues:
+  stage: sync
+  image: alpine:3.20
+  needs:
+    - sync:mirror-to-github
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "dev" && $CI_PIPELINE_SOURCE == "push"'
+  allow_failure: true
+  script:
+    - apk add --no-cache curl git
+    - |
+      msg="$(git log -1 --pretty=%B)"
+      echo "$msg" | grep -oiE '(close[sd]?|fix(e[sd])?|resolve[sd]?)[[:space:]]*:?[[:space:]]+#[0-9]+' \
+        | grep -oE '[0-9]+' | sort -u | while read -r num; do
+          echo "Closing GitHub issue #$num"
+          curl -sf -X PATCH \
+            -H "Authorization: token ${GITHUB_MIRROR_TOKEN}" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/tomlawesome/mikroview/issues/$num" \
+            -d '{"state":"closed","state_reason":"completed"}' || echo "warn: could not close #$num"
+          curl -sf -X POST \
+            -H "Authorization: token ${GITHUB_MIRROR_TOKEN}" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/tomlawesome/mikroview/issues/$num/comments" \
+            -d "{\"body\":\"Closed by a merge to \`dev\` (via GitLab). Merged is not released — promotion to \`preview\` and then \`main\` is a separate, deliberate step.\"}" || true
+        done
