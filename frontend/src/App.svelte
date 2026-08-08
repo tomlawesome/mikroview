@@ -20,6 +20,7 @@
   import Entities from './components/Entities.svelte'
   import Fleet from './components/Fleet.svelte'
   import AuditLog from './components/AuditLog.svelte'
+  import Exclusions from './components/Exclusions.svelte'
   import IpLookupPopover from './components/IpLookupPopover.svelte'
   import PortLookupPopover from './components/PortLookupPopover.svelte'
   import AuthSetup from './components/AuthSetup.svelte'
@@ -163,6 +164,8 @@
       <Fleet />
     {:else if appState.view === 'audit'}
       <AuditLog />
+    {:else if appState.view === 'exclusions'}
+      <Exclusions />
     {:else}
       <Dashboard />
     {/if}
