@@ -29,7 +29,7 @@ import (
 
 // componentWidth is the padded width of the component column, sized to
 // the longest of mikroview's own runtime components (e.g.
-// "healthcheck", "syslog-udp") without truncating -- a rare longer
+// "healthcheck", "syslog-tcp") without truncating -- a rare longer
 // component (the CLI recovery commands: "enable-auth-setup") just
 // doesn't align as neatly, rather than ever cutting a name short.
 const componentWidth = 11

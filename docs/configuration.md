@@ -14,9 +14,7 @@ Copy `deploy/config.example.yaml` to `deploy/config.yaml` and edit it —
 
 ```yaml
 listen:
-  syslogUdp: ":1514"
-  syslogTcp: ":1514"
-  syslogTls: ":6514"    # RouterOS remote-protocol=tls; only started when tls.enabled is true
+  syslogTls: ":6514"    # RouterOS remote-protocol=tls -- mikroview's only syslog listener
   http: ":8080"
   httpRedirect: ":8081"
   # Only set these if a reverse proxy fronts mikroview -- see
@@ -153,8 +151,6 @@ A listen address is empty. Mikroview would have nothing to bind.
 
 ```yaml
 listen:
-  syslogUdp: ":1514"
-  syslogTcp: ":1514"
   http: ":8080"
 ```
 
@@ -271,7 +267,7 @@ above) is leveled and colorized, one line per entry:
 ```
 18:43:44 INFO  auth        │ no decision made yet -- showing the first-run choice screen
 18:43:45 WARN  flags       │ permission denied opening flags.json -- continuing in-memory-only
-18:43:46 ERROR syslog-udp  │ listen udp :1514: bind: address already in use
+18:43:46 ERROR syslog-tls  │ listen tcp :6514: bind: address already in use
 ```
 
 ```yaml
@@ -302,7 +298,7 @@ only the real server-start path.
   auto-disables when stdout isn't a terminal -- piping to a file,
   `docker logs | grep`, or a log collector all see plain text, not raw
   ANSI escapes.
-- The component column (`auth`, `tls`, `flags`, `syslog-udp`, `http`,
+- The component column (`auth`, `tls`, `flags`, `syslog-tls`, `http`,
   ...) identifies which part of mikroview logged the line -- the same
   names used throughout this doc and SECURITY.md for the pieces they
   refer to.
@@ -1871,20 +1867,22 @@ this listener directly.
 
 A third listener, `listen.syslogTls` (default `:6514`, RFC 5425's
 syslog-over-TLS port), accepts RouterOS's `remote-protocol=tls` logging
-action -- confidentiality for log traffic on the wire, and mikroview
-authenticating itself to the router with the same certificate the main
-HTTPS listener presents (the router already imports mikroview's
+action -- mikroview's only syslog listener. Confidentiality for log
+traffic on the wire, and mikroview authenticating itself to the router
+with a certificate: the same one the main HTTPS listener presents when
+`tls.enabled` is true (the router already imports mikroview's
 generated CA to verify HTTPS ingest, so this is that same trust step,
-not a second one). Like `httpRedirect`, it's only started while
-`tls.enabled` is true (there's no certificate to present otherwise) and
-only started at all if non-empty -- set it to `""` to disable it.
+not a second one), or a self-generated one on its own if `tls.enabled`
+is false -- unlike `httpRedirect`, this listener is started whenever it's
+non-empty regardless of `tls.enabled`, since the router connects to it
+directly and needs a certificate to trust either way. Set it to `""`
+to disable syslog ingest entirely.
 
 This listener does **not** authenticate the sender: RouterOS's logging
 action has no client-certificate option (only `check-certificate`,
 verifying the router trusts mikroview, not the reverse), so anything
-able to reach the port can still connect and inject log lines, exactly
-as with the plaintext `syslogUdp`/`syslogTcp` listeners, which stay on
-alongside this one. Point RouterOS at it with:
+able to reach the port can still connect and inject log lines. Point
+RouterOS at it with:
 
 ```
 /system logging action set 0 target=remote remote=<mikroview-host> remote-port=6514 remote-protocol=tls
@@ -1922,7 +1920,10 @@ tls:
   that internal hop. Never set this `false` if mikroview's port is
   reachable from a LAN or the internet in any other way -- doing so
   serves the app, credentials included, in cleartext. Logged clearly at
-  startup whenever it's off, so it's never a silent state.
+  startup whenever it's off, so it's never a silent state. Syslog
+  ingest is unaffected either way: `listen.syslogTls` loads its own
+  certificate independently of this setting, since RouterOS connects to
+  it directly rather than through your reverse proxy.
 - **`certFile`/`keyFile`** — your own certificate. Skips local-CA
   generation entirely when both are set.
 - **`hosts`** — SANs for a self-generated certificate. Left empty, the
@@ -1963,8 +1964,6 @@ Override individual scalar settings without a mounted file:
 | Variable | Overrides |
 |---|---|
 | `MIKROVIEW_CONFIG` | path to the YAML config file to load |
-| `MIKROVIEW_LISTEN_SYSLOG_UDP` | `listen.syslogUdp` |
-| `MIKROVIEW_LISTEN_SYSLOG_TCP` | `listen.syslogTcp` |
 | `MIKROVIEW_LISTEN_SYSLOG_TLS` | `listen.syslogTls` (see [TLS](#tls)) |
 | `MIKROVIEW_LISTEN_HTTP` | `listen.http` |
 | `MIKROVIEW_LISTEN_HTTP_REDIRECT` | `listen.httpRedirect` |
@@ -2210,7 +2209,7 @@ before it could reach a database at all.
 
 ## CLI flags (local development)
 
-`-version`, `-syslog-udp`, `-syslog-tcp`, `-syslog-tls`, `-http`,
+`-version`, `-syslog-tls`, `-http`,
 `-http-redirect`, `-retention`, `-max-events`, `-geoip-db` — see
 `go run . -h`. Devices,
 rule/host names, and auth config can only be set via YAML/env, not

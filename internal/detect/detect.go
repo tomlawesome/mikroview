@@ -462,8 +462,8 @@ func (d *Detector) Enqueue(e store.Event) {
 // recordDroppedEvent tracks an Enqueue drop and logs a rate-limited
 // summary -- logging every single drop would itself add load during
 // exactly the sustained-overload condition this is meant to surface
-// (same reasoning internal/syslog/udp_listener.go's ServeUDP uses to
-// justify never logging a drop at all), but staying silent forever --
+// (same reasoning internal/syslog/tcp_listener.go's handleTCPConn uses
+// to justify never logging a drop at all), but staying silent forever --
 // this function's predecessor -- left a real failure mode invisible:
 // detection can silently fall behind with zero operator-facing signal,
 // unlike a backed-up ingest goroutine, which at least shows up as
