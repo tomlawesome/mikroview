@@ -13,6 +13,19 @@ upgrading.
 
 ### Fixed
 
+- **Syslog over TCP ingested nothing from a RouterOS router** (#202).
+  RouterOS sends each message as a bare payload with no trailing newline
+  and no octet count. The listener read with a `bufio.Scanner` on the
+  default line split, so it waited for a delimiter that never arrived:
+  the connection was accepted, held, and silently discarded. Measured
+  against a real router, `remote-protocol=tcp` delivered **0** events
+  where UDP delivered 3 of the same messages — and nothing was logged, so
+  it read as "no traffic".
+
+  Framing is now one read per message, or several if that read contains
+  newlines, so a conventional syslog sender that does terminate its lines
+  keeps working unchanged.
+
 - **Duplicate events in the client buffer** (#183). The initial
   `GET /api/events` fetch and the WebSocket stream overlap, so an event
   arriving in both was appended twice. `LiveTable`'s keyed `{#each}` then
