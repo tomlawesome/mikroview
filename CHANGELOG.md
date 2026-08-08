@@ -13,6 +13,15 @@ upgrading.
 
 ### Changed
 
+- **Selectable 1/2/3-column layout for the Flags page** (#199),
+  persisted per browser. 2 and 3 columns switch to a compact card
+  variant — a truncated one-line detail, the split Clear button flowing
+  full-width below the content instead of floating in a fixed-width
+  corner — rather than forking the card markup per density. Below the
+  shared 700px mobile breakpoint the grid collapses to 1 column and
+  cards revert to their full, non-compact detail regardless of the
+  stored setting, which itself is left untouched by the floor.
+
 - **"Clear all" and a split Clear button on the Flags page** (#198). A
   new Clear all button above the active list clears every active flag in
   one request — click-again red "Confirm" is the safeguard against an
