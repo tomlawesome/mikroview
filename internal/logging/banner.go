@@ -8,29 +8,32 @@ import (
 	"strings"
 )
 
-// bannerWhite/bannerBrightYellow/bannerMagenta round out the banner's own
-// palette on top of ansiDim/ansiRed/ansiYellow already shared with the
-// leveled-log colors in logging.go -- kept local to this file since
-// nothing outside the banner uses them.
+// bannerWhite/bannerBrightYellow/bannerGreen round out the banner's own
+// palette on top of ansiDim/ansiRed already shared with the leveled-log
+// colors in logging.go -- kept local to this file since nothing outside
+// the banner uses them.
 //
 // bannerTop/bannerShadow are the wordmark's two-tone bevel -- a solid
 // block face and a darker box-drawing edge is what reads as extruded
-// rather than flat (see this file's own doc comment above). These two
-// are 256-colour escapes, not the standard 16 every other constant here
-// uses: neither "hot pink" nor "mustard yellow" has a standard-16
-// equivalent that actually looks like the name (bright magenta reads as
-// purple, plain yellow already means something else two lines below).
-// This is a one-off decorative banner, not a data-bearing log line where
-// palette consistency matters for scanability, and 256-colour support is
-// no longer a meaningful compatibility risk for anything that renders
-// ANSI colour at all -- so precision here won out over matching the
+// rather than flat (see this file's own doc comment above). These two,
+// plus bannerDeepPurple, are 256-colour escapes, not the standard 16
+// most other constants here use: neither "pink" nor "mustard yellow" nor
+// "deep purple" has a standard-16 equivalent that actually looks like
+// the name (both standard and bright magenta read as one shade of
+// pink-purple, not clearly either; plain yellow already means something
+// else two lines below, and bright yellow is even further off). This is
+// a one-off decorative banner, not a data-bearing log line where palette
+// consistency matters for scanability, and 256-colour support is no
+// longer a meaningful compatibility risk for anything that renders ANSI
+// colour at all -- so precision here won out over matching the
 // 16-colour convention.
 const (
 	bannerWhite        = "\x1b[37m"
 	bannerBrightYellow = "\x1b[93m"
-	bannerMagenta      = "\x1b[35m"
-	bannerTop          = "\x1b[38;5;205m" // hot pink
+	bannerGreen        = "\x1b[32m"
+	bannerTop          = "\x1b[38;5;205m" // pink
 	bannerShadow       = "\x1b[38;5;178m" // mustard yellow
+	bannerDeepPurple   = "\x1b[38;5;54m"  // deep purple (#5f0087)
 )
 
 // The boot banner, split into backdrop and wordmark so the two can be
@@ -59,13 +62,22 @@ const (
 //
 // Each line has its own glyphColors map (built in PrintBanner) rather
 // than one colour for the whole backdrop -- a handful of the ✦/○/◯
-// glyphs pick up a colour of their own (bright yellow, red, magenta, the
-// same mustard the wordmark's shadow uses) so the sky reads as a varied
+// glyphs pick up a colour of their own so the sky reads as a varied
 // twinkle rather than a flat wash, while every `·` -- by far the most
 // common glyph -- stays dim. Which specific glyph gets which colour was
 // chosen by hand per occurrence (four ○/◯ across the whole backdrop,
 // too few to bother with a systematic rule), not derived from the glyph
 // itself.
+//
+// The four ○/◯ ("planet") colours are deliberately red, cyan, green and
+// deep purple -- not pink or mustard yellow, both already the
+// wordmark's own two dominant colours (bannerTop/bannerShadow). A
+// planet sharing one of those would echo the wordmark instead of
+// contrasting with it, which defeats the point of colouring the
+// backdrop separately at all. ✦ stays bright yellow throughout
+// regardless -- it reads as a distinct sparkle rather than a block of
+// colour, so it doesn't compete with the wordmark's mustard shadow the
+// way a plain-yellow planet would.
 var (
 	bannerSkyAbove = []string{
 		`      ·            ✦             ·                  ·           ✦      ·`,
@@ -96,11 +108,11 @@ var (
 var (
 	bannerSkyAboveColors = []map[rune]string{
 		{'✦': bannerBrightYellow},
-		{'✦': bannerBrightYellow, '○': ansiRed, '◯': ansiYellow},
+		{'✦': bannerBrightYellow, '○': ansiRed, '◯': ansiCyan},
 	}
 	bannerSkyBelowColors = []map[rune]string{
-		{'◯': bannerShadow, '✦': bannerBrightYellow},
-		{'✦': bannerBrightYellow, '○': bannerMagenta},
+		{'◯': bannerGreen, '✦': bannerBrightYellow},
+		{'✦': bannerBrightYellow, '○': bannerDeepPurple},
 	}
 )
 
