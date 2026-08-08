@@ -5,6 +5,7 @@ package api
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -277,5 +278,97 @@ func TestIngestRouteRejectsOversizedBody(t *testing.T) {
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusBadRequest && resp.StatusCode != http.StatusRequestEntityTooLarge {
 		t.Errorf("status = %d, want 400 or 413 for a body over the 64KiB cap", resp.StatusCode)
+	}
+}
+
+// TestIngestPushIsReadableFromTheTableEndpoints is the step-4 round
+// trip: a page pushed with the ingest token comes back, ordered and
+// attributed, from GET /api/routeros/{device}/rules under an ordinary
+// session -- and only for the device the token was scoped to.
+func TestIngestPushIsReadableFromTheTableEndpoints(t *testing.T) {
+	ts, _, raw := ingestTestServer(t, "router-7")
+
+	push := `{"kind":"filter-rule","page":1,"pages":1,"records":[` +
+		`{"ordinal":1,"comment":"drop scanners","chain":"input","action":"drop","srcAddressList":"scanners","logPrefix":"DROP"},` +
+		`{"ordinal":0,"comment":"allow lan","chain":"forward","action":"accept","srcAddressList":"lan","logPrefix":""}]}`
+	resp := postIngest(t, ts, raw, push)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("push: status = %d, want 200", resp.StatusCode)
+	}
+
+	adminClient := loggedInClient(t, ts.URL, "admin", "password123")
+	get := func(t *testing.T, path string) routerTableResponse {
+		t.Helper()
+		res, err := adminClient.Get(ts.URL + path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer res.Body.Close()
+		if res.StatusCode != http.StatusOK {
+			t.Fatalf("GET %s: status = %d, want 200", path, res.StatusCode)
+		}
+		var out routerTableResponse
+		if err := json.NewDecoder(res.Body).Decode(&out); err != nil {
+			t.Fatal(err)
+		}
+		return out
+	}
+
+	got := get(t, "/api/routeros/router-7/rules")
+	if !got.Available || got.UpdatedAt == nil {
+		t.Fatalf("rules table = %+v, want available with an updatedAt", got)
+	}
+	rules, ok := got.Rules.([]any)
+	if !ok || len(rules) != 2 {
+		t.Fatalf("rules = %#v, want 2 entries", got.Rules)
+	}
+	first, _ := rules[0].(map[string]any)
+	if first["comment"] != "allow lan" {
+		t.Errorf("first rule = %+v, want the ordinal-0 rule first (RouterOS display order)", first)
+	}
+
+	// A device nothing pushed for reports unavailable -- not an error,
+	// and not an empty table pretending to be a real one.
+	other := get(t, "/api/routeros/other-router/rules")
+	if other.Available || other.UpdatedAt != nil {
+		t.Errorf("an unpushed device's table = %+v, want available=false with no updatedAt", other)
+	}
+
+	nat := get(t, "/api/routeros/router-7/nat")
+	if nat.Available {
+		t.Errorf("NAT table = %+v, want available=false when only filter rules were pushed", nat)
+	}
+}
+
+// TestIngestOversizedStateIsRefused drives internal/routerstate's
+// per-kind record cap through the real endpoint: the page that would
+// cross it comes back 400, and the state already held stays intact.
+func TestIngestOversizedStateIsRefused(t *testing.T) {
+	ts, _, raw := ingestTestServer(t, "router-7")
+
+	page := func(n, pages int) string {
+		var b strings.Builder
+		fmt.Fprintf(&b, `{"kind":"arp","page":%d,"pages":%d,"records":[`, n, pages)
+		for i := 0; i < 1000; i++ {
+			if i > 0 {
+				b.WriteByte(',')
+			}
+			fmt.Fprintf(&b, `{"address":"10.%d.%d.%d","mac":"aa:bb:cc:dd:ee:ff"}`, n, i/250, i%250)
+		}
+		b.WriteString(`]}`)
+		return b.String()
+	}
+	for n := 1; n <= 5; n++ {
+		resp := postIngest(t, ts, raw, page(n, 6))
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("page %d: status = %d, want 200", n, resp.StatusCode)
+		}
+	}
+	resp := postIngest(t, ts, raw, page(6, 6))
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("the cap-crossing page: status = %d, want 400", resp.StatusCode)
 	}
 }
