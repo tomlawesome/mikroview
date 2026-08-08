@@ -332,10 +332,18 @@ error.
 ## IP reputation lookup (optional)
 
 Clicking the "investigate" affordance next to a public source/destination
-IP in the live view queries a threat-intel source and shows the result in
-a popover (open ports, hostnames, known CVEs, abuse score). This proxies
-through the backend so no key ever reaches the browser, and caches each
-IP briefly to conserve free-tier quota.
+IP queries a threat-intel source and shows the result in a popover (open
+ports, hostnames, known CVEs, abuse score). This proxies through the
+backend so no key ever reaches the browser, and caches each IP briefly
+to conserve free-tier quota.
+
+It shows up next to a public IP in the live view, and (issue #213) on a
+flag card next to any flag whose target is a real IP — a fresh check,
+independent of the reputation snapshot frozen at the moment the flag
+first raised (see [Behavioral flags](#behavioral-flags-optional-on-by-default)).
+Raw events aren't persisted, so an old or cleared flag often has nothing
+left in the live view to click into; this is the way to check what an IP
+looks like now without leaving the Flags page.
 
 - **Shodan InternetDB** — free, keyless, always used, no configuration
   needed.
