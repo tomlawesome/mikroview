@@ -93,6 +93,10 @@ var authzMatrix = []routeExpectation{
 		"live tail; additionally same-origin checked (see checkOrigin)"},
 	{http.MethodGet, "/api/lookup/ip/{ip}", accessUser,
 		"on-demand reputation lookup, proxied so no API key reaches the browser"},
+	{http.MethodGet, "/api/routeros/{device}/rules", accessUser,
+		"the pushed firewall rule table (#186 step 4) -- same tier as the event stream it annotates: rule comments/chains are already visible in events, and the lookup button is a user-facing affordance"},
+	{http.MethodGet, "/api/routeros/{device}/nat", accessUser,
+		"the pushed NAT table, same reasoning as the rules row above"},
 	{http.MethodGet, "/api/flags", accessUser, "core read"},
 	{http.MethodPost, "/api/flags/clear-all", accessUser,
 		"same reversibility as the per-flag clear below, at bulk -- regular clears only, never creates an exclusion"},
@@ -244,7 +248,7 @@ func doRouteRequest(t *testing.T, c *http.Client, base string, r routeExpectatio
 	t.Helper()
 
 	path := r.path
-	for _, wildcard := range []string{"{id}", "{ip}", "{name}"} {
+	for _, wildcard := range []string{"{id}", "{ip}", "{name}", "{device}"} {
 		path = strings.Replace(path, wildcard, "matrix-probe-nonexistent", 1)
 	}
 

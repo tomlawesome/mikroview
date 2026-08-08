@@ -19,6 +19,7 @@ import (
 	"github.com/tomlawesome/mikroview/internal/netclass"
 	"github.com/tomlawesome/mikroview/internal/oidc"
 	"github.com/tomlawesome/mikroview/internal/reputation"
+	"github.com/tomlawesome/mikroview/internal/routerstate"
 	"github.com/tomlawesome/mikroview/internal/rules"
 	"github.com/tomlawesome/mikroview/internal/store"
 )
@@ -125,6 +126,12 @@ type Server struct {
 	// secret convention LoginLimiter itself follows by keying on
 	// username/IP rather than a password.
 	IngestLimiter *auth.LoginLimiter
+	// RouterState holds each device's most recent pushed state (issue
+	// #186 step 4) -- written by handleIngestRouterOS, read by the
+	// /api/routeros/{device}/... table endpoints. Always non-nil
+	// (routerstate.New() needs no configuration); in-memory only, by
+	// that package's design.
+	RouterState *routerstate.Store
 
 	// OIDC/OIDCState: see oidc.go. Both nil unless cfg.OIDC.IssuerURL was
 	// set and provider discovery succeeded at startup -- every OIDC
@@ -164,6 +171,12 @@ func (s *Server) routes() []route {
 		{http.MethodGet, "/api/events", s.handleEvents},
 		{http.MethodGet, "/api/devices", s.handleDevices},
 		{http.MethodGet, "/api/rules", s.handleRules},
+		// The pushed rule/NAT tables (issue #186 step 4) -- session-gated
+		// reads over RouterState, entirely separate from the push
+		// endpoint itself, which lives on ingestRoutes' own mux and is
+		// deliberately absent from this table.
+		{http.MethodGet, "/api/routeros/{device}/rules", s.handleRouterOSRules},
+		{http.MethodGet, "/api/routeros/{device}/nat", s.handleRouterOSNAT},
 		{http.MethodGet, "/api/critical-ports", s.handleCriticalPorts},
 		{http.MethodGet, "/api/stats", s.handleStats},
 		{http.MethodGet, "/api/ws", s.handleWS},

@@ -39,6 +39,7 @@ import (
 	"github.com/tomlawesome/mikroview/internal/persist"
 	"github.com/tomlawesome/mikroview/internal/reputation"
 	"github.com/tomlawesome/mikroview/internal/routeros"
+	"github.com/tomlawesome/mikroview/internal/routerstate"
 	"github.com/tomlawesome/mikroview/internal/rules"
 	"github.com/tomlawesome/mikroview/internal/servertls"
 	"github.com/tomlawesome/mikroview/internal/store"
@@ -595,7 +596,13 @@ func main() {
 	// Entities takes precedence over Rules/Hosts for any key it has a
 	// label for -- see naming.Resolver's doc comment and issue #107's
 	// migration/precedence design.
-	names := naming.Resolver{Rules: cfg.RuleNames, Hosts: cfg.HostNames, Entities: entityStore}
+	// routerState (issue #186 step 4): each device's most recent pushed
+	// state, in-memory only by that package's design. Wired into the
+	// naming resolver first (RouterOS always wins on host names -- the
+	// owner's 4c decision) and into the API server for the ingest
+	// endpoint to write and the table endpoints to read.
+	routerState := routerstate.New()
+	names := naming.Resolver{Rules: cfg.RuleNames, Hosts: cfg.HostNames, Entities: entityStore, RouterHosts: routerState}
 
 	go ingest(ctx, raw, st, devices, macRegistry, fs, h, geo, detector, ru, names)
 	go detector.Run(ctx)
@@ -840,6 +847,7 @@ func main() {
 		ClientIPHeader:   cfg.Listen.ClientIPHeader,
 		Tokens:           tokenStore,
 		IngestLimiter:    auth.NewLoginLimiter(ingestLimiterThreshold, ingestLimiterWindow),
+		RouterState:      routerState,
 		OIDC:             oidcClient,
 		OIDCState:        oidcState,
 		OIDCPolicy:       oidcPolicy,

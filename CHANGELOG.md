@@ -48,10 +48,36 @@ upgrading.
   accepted push is audited by device, recording only its shape (kind,
   page, record count) -- never the pushed content itself.
 
-  **This step is deliberately inert.** A push is validated, rate-limited
-  and audited, but nothing in mikroview yet acts on the data --
-  applying it (aliasing hosts/rules, the rule lookup table, additive-only
-  security-signal enrichment) is #186 step 4, a separate change.
+- **Pushed router state is applied** (#186 step 4): host names and the
+  rule/NAT tables. A validated push lands in a new in-memory-only store
+  (`internal/routerstate`), keyed by the ingest token's own device --
+  never by anything the payload claims about itself.
+
+  **Host names**: a DNS static entry, DHCP lease hostname, or WireGuard
+  peer comment pushed by the router now names that address everywhere
+  mikroview displays one. RouterOS always wins -- a router-pushed name
+  out-ranks a UI-set entity label and the config map for the same
+  address, so names in mikroview always match RouterOS with no drift and
+  no reconciling. The mikroview-side label isn't destroyed, just
+  shadowed: manage router-known hosts in RouterOS, and hand-made labels
+  for anything the router doesn't name simply persist (and resurface if
+  the router stops naming a host).
+
+  **Rule and NAT tables**: `GET /api/routeros/{device}/rules` and
+  `.../nat` serve the pushed tables in RouterOS's own display order,
+  reading only mikroview's local store -- nothing ever contacts the
+  router. Event-to-rule resolution goes through the operator's
+  `log-prefix` only (the ordinal never appears in a log line), and a
+  shared prefix honestly returns every matching rule rather than
+  guessing at one.
+
+  **Structurally incapable of affecting detection**: the store is
+  in-memory only (a restart costs one push interval of enrichment,
+  nothing more -- and there is nothing to redact from a backup because
+  it is never in one), and a build-failing test forbids any import edge
+  between it and the flags/detect machinery, in both directions. Pushed
+  data can name things and fill tables; it cannot raise, lower, clear
+  or suppress a suspicion signal.
 
 - **Syslog over TLS** (#188), `listen.syslogTls` (default `:6514`, RFC
   5425's port), accepting RouterOS's `remote-protocol=tls`. It presents

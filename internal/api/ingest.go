@@ -46,15 +46,13 @@ type ingestAckResponse struct {
 // never holds RouterOS credentials, and a router pushing its own state is
 // the only way data arrives here.
 //
-// This handler validates and accounts for a push; it does not yet act on
-// one. Applying pushed data -- aliasing hosts/rules, populating the rule
-// lookup table, raising (never lowering) a security signal -- is #186
-// step 4, a deliberately separate change: this step's job is the
-// endpoint's own mechanics (auth, rate limit, audit, strict decoding),
-// independently shippable and testable per the issue's own step
-// ordering. Until step 4 lands, a valid push is accepted, accounted for,
-// and otherwise has no effect -- inert by design, not a partial
-// implementation of step 4.
+// A validated push lands in RouterState (issue #186 step 4), keyed by
+// the token's own Device -- never by anything the payload claims about
+// itself, so a router cannot report state for any device but the one
+// its credential is scoped to. What that data then feeds -- host names
+// via naming.Resolver, the rule/NAT table endpoints -- is display and
+// attribution only; internal/routerstate's isolation test guarantees
+// pushed data cannot reach a suspicion signal in either direction.
 func (s *Server) handleIngestRouterOS(w http.ResponseWriter, r *http.Request) {
 	tok := ingestTokenFromContext(r)
 	if tok == nil {
@@ -89,11 +87,20 @@ func (s *Server) handleIngestRouterOS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// #186 step 5: never persist a raw payload wholesale. Nothing here
-	// logs the decoded records themselves either -- only their shape --
-	// for the same reason: this is reconnaissance-grade router config,
-	// and the audit log is readable by every admin, not scoped to the
-	// one that issued this token.
+	if err := s.RouterState.Apply(tok.Device, payload, now); err != nil {
+		// A cap refusal (too many records/devices) -- the caller's own
+		// push is what's oversized, and the message names only numbers
+		// and the kind, nothing about other devices' state.
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	// #186 step 5: never persist a raw payload wholesale. RouterState
+	// above is in-memory only by design, and nothing here logs the
+	// decoded records themselves either -- only their shape -- for the
+	// same reason: this is reconnaissance-grade router config, and the
+	// audit log is readable by every admin, not scoped to the one that
+	// issued this token.
 	s.Audit.Record("device:"+tok.Device, "ingest.routeros", tok.Device,
 		fmt.Sprintf("kind=%s page=%d/%d records=%d", payload.Kind, payload.Page, payload.Pages, payload.RecordCount()))
 
@@ -103,4 +110,51 @@ func (s *Server) handleIngestRouterOS(w http.ResponseWriter, r *http.Request) {
 		Pages:   payload.Pages,
 		Records: payload.RecordCount(),
 	})
+}
+
+// routerTableResponse is the shape both table endpoints return.
+// Available distinguishes "this device has never pushed this table"
+// from "it pushed an empty one" -- the UI renders the former as "no
+// data pushed yet" rather than an empty table pretending to be real,
+// the same absence-is-not-evidence framing internal/routerstate's own
+// accessors use.
+type routerTableResponse struct {
+	Available bool       `json:"available"`
+	UpdatedAt *time.Time `json:"updatedAt,omitempty"`
+	Rules     any        `json:"rules"`
+}
+
+// handleRouterOSRules serves device's pushed firewall filter table in
+// RouterOS's own display order (issue #186 step 4c: "here is the table,
+// go look at rule 7 in RouterOS"). Reads only mikroview's own
+// RouterState store -- nothing contacts the router on request, which is
+// the entire point of the push model (#110's rejected pull design would
+// have needed a live RouterOS credential right here).
+func (s *Server) handleRouterOSRules(w http.ResponseWriter, r *http.Request) {
+	device := r.PathValue("device")
+	rules, updatedAt, ok := s.RouterState.FilterRules(device)
+	resp := routerTableResponse{Available: ok, Rules: rules}
+	if ok {
+		resp.UpdatedAt = &updatedAt
+	}
+	if rules == nil {
+		resp.Rules = []ingest.FilterRule{}
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
+// handleRouterOSNAT is handleRouterOSRules for the NAT table -- the
+// display-table-only shape #186 step 4c settled on for NAT, since a log
+// line carries a translation result, never which rule performed it.
+func (s *Server) handleRouterOSNAT(w http.ResponseWriter, r *http.Request) {
+	device := r.PathValue("device")
+	rules, updatedAt, ok := s.RouterState.NATRules(device)
+	resp := routerTableResponse{Available: ok, Rules: rules}
+	if ok {
+		resp.UpdatedAt = &updatedAt
+	}
+	if rules == nil {
+		resp.Rules = []ingest.NATRule{}
+	}
+	writeJSON(w, http.StatusOK, resp)
 }
