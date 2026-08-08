@@ -160,6 +160,7 @@ func (s *Server) routes() []route {
 		{http.MethodGet, "/api/ws", s.handleWS},
 		{http.MethodGet, "/api/lookup/ip/{ip}", s.handleIPLookup},
 		{http.MethodGet, "/api/flags", s.handleFlagsList},
+		{http.MethodPost, "/api/flags/clear-all", s.handleFlagsClearAll},
 		{http.MethodPost, "/api/flags/{id}/clear", s.handleFlagsClear},
 		{http.MethodPost, "/api/flags/{id}/clear-permanent", s.handleFlagsClearPermanent},
 		{http.MethodGet, "/api/flags/exclusions", s.handleExclusionsList},
