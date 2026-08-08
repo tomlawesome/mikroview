@@ -11,6 +11,21 @@ upgrading.
 
 ## [Unreleased]
 
+### Added
+
+- **A live abuse-check button on flag cards** (#213). Raw events aren't
+  persisted, so an old or cleared flag often has nothing left in the
+  live view to click into — this reuses the existing
+  `IpInvestigateButton`/`IpLookupPopover` path wholesale (no new
+  backend, already cached and rate-limited) to answer "what does this
+  IP look like now" without leaving the page. Additive only: the
+  frozen reputation snapshot captured at raise time is unchanged, and
+  still answers "what did it look like when it fired". Shown for every
+  flag type with a real IP-shaped target; `device_silence` is
+  explicitly excluded even though an auto-discovered device's ID can
+  itself be IP-shaped, since that flag identifies the device that went
+  quiet, not a source worth threat-checking.
+
 ### Changed
 
 - **Selectable 1/2/3-column layout for the Flags page** (#199),
