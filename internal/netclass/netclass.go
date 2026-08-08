@@ -263,6 +263,18 @@ func (c *Classifier) markFetched(src Source, into *map[Source]time.Time) {
 // in source-priority order so that on an exact-prefix collision the
 // higher-priority source wins. bart's Lookup already resolves overlaps by
 // specificity; this only decides ties.
+//
+// table.Get is checked before every Insert specifically because
+// bart.Table.Insert is last-write-wins on an exact prefix ("if the
+// prefix already exists, its value is updated" -- its own doc comment),
+// not first-write-wins. Iterating in priority order alone does not give
+// higher-priority-wins: it gives whichever source happens to be iterated
+// last for that exact prefix, whatever order collides to be. Caught by
+// TestApplePrivateRelayWinsOverX4BVPNOnExactCollision, which failed
+// against the naive unconditional-Insert version of this function --
+// SourceX4BVPN (lower priority, iterated second) was silently
+// overwriting SourceApplePrivateRelay's entry despite this function's
+// own doc comment already claiming the opposite.
 func buildTable(order []Source, bySrc map[Source][]classifiedPrefix) (*bart.Table[uint32], []classEntry) {
 	table := &bart.Table[uint32]{}
 	var entries []classEntry
@@ -280,6 +292,9 @@ func buildTable(order []Source, bySrc map[Source][]classifiedPrefix) (*bart.Tabl
 
 	for _, src := range order {
 		for _, cp := range bySrc[src] {
+			if _, exists := table.Get(cp.prefix); exists {
+				continue
+			}
 			id := idFor(classEntry{source: src, detail: sanitiseDetail(cp.detail)})
 			table.Insert(cp.prefix, id)
 		}

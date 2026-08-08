@@ -512,21 +512,28 @@ func main() {
 	bl := blocklist.New(cfg.Blocklist.Sources, blocklistLog)
 
 	// netclass (issue #114): local IP attribution for the manual lookup
-	// popover -- Tor exit / VPN / datacenter / privacy relay. Display-only
-	// and deliberately never wired into the detector chain above; it is
-	// attached to the API server alone. Nil-safe when no sources are
-	// enabled, same as bl.
+	// popover -- Tor exit / VPN / datacenter / privacy relay. The
+	// netclass package itself stays display-only by design (see its own
+	// doc comment) and is attached to the API server for that. It is
+	// also attached to the detector chain below, but narrowly: only
+	// observeNetClass (internal/detect/netclass.go) ever reads it, and
+	// only to reinforce confidence on an already-active flag for the two
+	// high-precision categories (Tor, VPN), direction-gated to inbound
+	// traffic only -- never to raise a flag on its own. Nil-safe when no
+	// sources are enabled, same as bl.
 	netclassLog := logging.New("netclass")
 	nc := netclass.New(cfg.NetClass.Sources, netclassLog)
 
-	// Both optional inputs are attached in one chain: entities backs the
-	// trusted-mail-sender allowlist (#108), knownBad backs the local
-	// blocklist match (#113 Part B). Each is independently a valid
-	// no-op when unconfigured.
+	// All four optional inputs are attached in one chain: entities backs
+	// the trusted-mail-sender allowlist (#108), knownBad backs the local
+	// blocklist match (#113 Part B), netclass backs the direction-aware
+	// VPN/Tor confidence reinforcement (#114). Each is independently a
+	// valid no-op when unconfigured.
 	detector := detect.NewWithSettings(detectCfg, fs, detectorSettings).
 		WithReputation(rep).
 		WithEntities(entityStore).
-		WithKnownBadIPs(bl)
+		WithKnownBadIPs(bl).
+		WithNetClass(nc)
 	globalSpike := detect.NewGlobalSpikeDetectorWithSettings(detectCfg, fs, detectorSettings)
 	deviceSilence := detect.NewDeviceSilenceDetectorWithSettings(detectCfg, fs, detectorSettings, devices)
 	staleRule := detect.NewStaleRuleDetector(ru, fs, time.Duration(cfg.Flags.StaleRuleDays)*24*time.Hour)
