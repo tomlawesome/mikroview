@@ -8,12 +8,27 @@
   import { appState } from '../lib/state.svelte'
   import { authState } from '../lib/auth.svelte'
   import { formatHM, countryFlag } from '../lib/format'
+  import { flagLayoutState, type FlagColumns } from '../lib/flagLayout.svelte'
+  import { viewportState } from '../lib/viewport.svelte'
   import ReputationDetails from './ReputationDetails.svelte'
   import BarList from './BarList.svelte'
   import type { Flag, FlagType } from '../lib/types'
 
   // Same gate NavMenu uses for the Detectors view.
   const isAdminOrOpen = $derived(authState.state === 'authenticated' && authState.role === 'admin')
+
+  // The stored preference collapses to 1 below the shared mobile
+  // breakpoint regardless of what's selected (issue #199's responsive
+  // floor) -- computed here in JS rather than as a CSS media query, so
+  // it reuses viewportState's one 700px breakpoint (the same value
+  // NavMenu/Toolbar/ThemeMenu already switch on) instead of a second
+  // hardcoded copy of it, and so the *card* content also reverts to its
+  // full, non-compact detail at exactly the width the grid itself
+  // renders as one column. A CSS-only floor would narrow the grid but
+  // leave the compact card styling active, which is the "unusably
+  // narrow card" the floor exists to prevent, just moved one level down.
+  const effectiveColumns = $derived<FlagColumns>(viewportState.isMobile ? 1 : flagLayoutState.columns)
+  const compact = $derived(effectiveColumns > 1)
 
   // Which flag's split-Clear dropdown is open, if any -- one shared id
   // rather than per-card state, since at most one can be open at a time
@@ -277,8 +292,8 @@
 <div class="flags scrollbar">
   <BarList title="Active flags by type" rows={typeBreakdown} emptyMessage="Nothing flagged right now." />
 
-  {#snippet flagCard(f: Flag)}
-    <li class="card">
+  {#snippet flagCard(f: Flag, compactCard: boolean = false)}
+    <li class="card" class:compact={compactCard}>
       <div class="card-main">
         <span class="type">{TYPE_LABELS[f.type]}</span>
         {#if f.confidence != null}
@@ -300,9 +315,16 @@
           <span class="country" title={f.country}>{countryFlag(f.country)}</span>
         {/if}
       </div>
-      <p class="detail">{f.detail}</p>
+      <!-- Compact (2/3 columns, issue #199): the detail line truncates to
+           one line rather than wrapping and pushing the card taller than
+           its neighbours in the same grid row -- the type/target above
+           and the expand affordance below stay fully visible either way,
+           so nothing identifying is lost, only the free-text summary. -->
+      <p class="detail" title={compactCard ? f.detail : undefined}>{f.detail}</p>
       <div class="meta">
-        <span>first seen {formatHM(f.firstSeen)}</span>
+        {#if !compactCard}
+          <span>first seen {formatHM(f.firstSeen)}</span>
+        {/if}
         <span>last seen {formatHM(f.lastSeen)}</span>
         <span>fired {f.count}×</span>
         {#if hasExpandableDetail(f)}
@@ -386,35 +408,56 @@
   <section aria-labelledby="active-heading">
     <div class="active-header">
       <h2 id="active-heading">Active ({active.length})</h2>
-      {#if active.length > 0}
-        <!-- Click-again confirm, not a modal: the second click on this
-             same now-red button is the confirmation, which is what
-             makes a single accidental click harmless while still
-             asserting real intent for the second one (issue #198).
-             Regular clears only -- see flagsState.clearAll's doc
-             comment for why there is no permanent variant. -->
-        <button
-          class="clear-all"
-          class:armed={clearAllArmed}
-          disabled={clearAllBusy}
-          onclick={onClearAllClick}
-          onblur={disarmClearAll}
-          onpointerleave={disarmClearAll}
-          title={clearAllArmed
-            ? 'Click again to clear every active flag'
-            : 'Clear every active flag -- regular clears only, click again to confirm'}
-        >
-          {clearAllArmed ? 'Confirm' : 'Clear all'}
-        </button>
-      {/if}
+      <div class="header-controls">
+        <!-- 1/2/3-column density (issue #199), persisted per browser.
+             Below the shared mobile breakpoint this stays selectable but
+             stops changing the render -- see effectiveColumns' own
+             comment for why the floor lives there rather than only in a
+             media query. -->
+        <div class="layout-select" role="radiogroup" aria-label="Card layout columns">
+          {#each [1, 2, 3] as const as n (n)}
+            <button
+              class="layout-option"
+              class:active={flagLayoutState.columns === n}
+              role="radio"
+              aria-checked={flagLayoutState.columns === n}
+              onclick={() => flagLayoutState.set(n)}
+              title="{n} column{n > 1 ? 's' : ''}"
+            >
+              {n}
+            </button>
+          {/each}
+        </div>
+        {#if active.length > 0}
+          <!-- Click-again confirm, not a modal: the second click on this
+               same now-red button is the confirmation, which is what
+               makes a single accidental click harmless while still
+               asserting real intent for the second one (issue #198).
+               Regular clears only -- see flagsState.clearAll's doc
+               comment for why there is no permanent variant. -->
+          <button
+            class="clear-all"
+            class:armed={clearAllArmed}
+            disabled={clearAllBusy}
+            onclick={onClearAllClick}
+            onblur={disarmClearAll}
+            onpointerleave={disarmClearAll}
+            title={clearAllArmed
+              ? 'Click again to clear every active flag'
+              : 'Clear every active flag -- regular clears only, click again to confirm'}
+          >
+            {clearAllArmed ? 'Confirm' : 'Clear all'}
+          </button>
+        {/if}
+      </div>
     </div>
     {#if active.length === 0}
       <p class="empty">Nothing flagged right now.</p>
     {:else}
-      <ul class="list">
+      <ul class="list card-grid" style="--flag-columns: {effectiveColumns}">
         {#each activeItems as item (item.kind === 'group' ? `group:${item.sourceIp}` : item.flag.id)}
           {#if item.kind === 'single'}
-            {@render flagCard(item.flag)}
+            {@render flagCard(item.flag, compact)}
           {:else}
             <li class="card campaign-card">
               <div class="campaign-header">
@@ -442,7 +485,7 @@
               {#if expandedGroup === item.sourceIp}
                 <ul class="list campaign-members">
                   {#each item.flags as f (f.id)}
-                    {@render flagCard(f)}
+                    {@render flagCard(f, compact)}
                   {/each}
                 </ul>
               {/if}
@@ -458,9 +501,12 @@
     {#if cleared.length === 0}
       <p class="empty">No cleared flags yet.</p>
     {:else}
-      <ul class="list">
+      <!-- Same column setting as the active list above (issue #199's
+           "secondary" note) -- no independent control here, one
+           preference for the whole page reads simpler than two. -->
+      <ul class="list card-grid" style="--flag-columns: {effectiveColumns}">
         {#each cleared as f (f.id)}
-          <li class="card cleared-card">
+          <li class="card cleared-card" class:compact>
             <div class="card-main">
               <span class="type">{TYPE_LABELS[f.type]}</span>
               <span class="target">{f.target === 'global' ? 'network-wide' : f.target}</span>
@@ -524,12 +570,34 @@
     gap: 8px;
   }
 
+  /* 1/2/3-column density (issue #199). Only the two top-level lists
+     (active, cleared) get this -- .campaign-members (a campaign's
+     expanded member list, nested one level inside a single grid cell)
+     stays the plain flex column above regardless of the page's column
+     setting, since it's already-indented content, not another row of
+     the same grid. minmax(0, 1fr), not 1fr alone, so a long unbroken
+     target/detail string can't force a column wider than its share and
+     blow out the grid -- a bare 1fr lets content overflow its track. */
+  .card-grid {
+    display: grid;
+    grid-template-columns: repeat(var(--flag-columns, 1), minmax(0, 1fr));
+  }
+
   .card {
     position: relative;
     background: var(--bg-elevated);
     border: 1px solid var(--border);
     border-radius: 8px;
     padding: 10px 150px 10px 12px;
+  }
+
+  /* Compact (2/3 columns, issue #199). The 150px right-reserve above
+     exists only to make room for .actions floating in the corner --
+     narrower cards don't have that much spare width to give up, so
+     .actions moves into normal flow at the bottom instead (see below)
+     and the reserve is dropped along with it. */
+  .card.compact {
+    padding: 8px 10px;
   }
 
   .cleared-card {
@@ -738,6 +806,24 @@
     width: 138px;
   }
 
+  /* Flows below the card content instead of floating in the corner --
+     a fixed-width floating box is what the 150px reserve above was
+     for, and a compact card doesn't have that to spare. Full-width
+     here also means the split button (see .split-clear) always has
+     room regardless of how narrow the column gets, rather than needing
+     its own per-density size math. */
+  .card.compact .actions {
+    position: static;
+    width: auto;
+    flex-direction: row;
+    margin-top: 8px;
+  }
+
+  .card.compact .actions .split-clear,
+  .card.compact .actions > .clear {
+    flex: 1;
+  }
+
   .clear {
     background: transparent;
     border: 1px solid var(--border);
@@ -828,10 +914,50 @@
     justify-content: space-between;
     gap: 10px;
     margin-bottom: 10px;
+    flex-wrap: wrap;
   }
 
   .active-header h2 {
     margin: 0;
+  }
+
+  .header-controls {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+
+  .layout-select {
+    display: flex;
+    border: 1px solid var(--border);
+    border-radius: 5px;
+    overflow: hidden;
+  }
+
+  .layout-option {
+    background: transparent;
+    border: none;
+    border-left: 1px solid var(--border);
+    color: var(--fg-muted);
+    padding: 5px 11px;
+    font-size: 12px;
+    font-variant-numeric: tabular-nums;
+    cursor: pointer;
+  }
+
+  .layout-option:first-child {
+    border-left: none;
+  }
+
+  .layout-option:hover {
+    color: var(--fg);
+    background: var(--bg-hover);
+  }
+
+  .layout-option.active {
+    color: var(--accent);
+    background: var(--accent-bg);
+    font-weight: 600;
   }
 
   .clear-all {
