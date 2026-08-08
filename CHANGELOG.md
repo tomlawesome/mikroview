@@ -11,6 +11,17 @@ upgrading.
 
 ## [Unreleased]
 
+### Changed
+
+- **Appearance is a standalone toolbar control again, and Export moved
+  into the menu** (#137). #73's inline-vs-menu split filed theme and
+  colorway switching under "everything else" and buried it two clicks
+  deep, while Export — an occasional, deliberate action — held an inline
+  toolbar slot. The two are now where that split should have put them:
+  Appearance one click away on every view at both breakpoints (a bottom
+  sheet at phone widths, same as the menu), and Export in the menu on
+  desktop as it already was on mobile.
+
 ### Fixed
 
 - **Syslog over TCP ingested nothing from a RouterOS router** (#202).
