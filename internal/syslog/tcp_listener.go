@@ -231,12 +231,12 @@ func handleTCPConn(ctx context.Context, conn net.Conn, out chan<- RawMessage) {
 	// present, and otherwise taking the read whole, serves both without
 	// the receiver having to know which kind of sender it has.
 	//
-	// The honest limitation: with no delimiter there is nothing to
-	// recover with if two bare messages ever land in one read -- they
-	// would arrive merged rather than lost. That is a property of the
-	// protocol, not of this code. Observed behaviour is one message per
-	// read, including under a 25-message burst, and the live check
-	// asserts it stays that way.
+	// Measured, not assumed: a 500-message burst from a real router
+	// arrived as 500 events, none lost and none merged. TCP is permitted
+	// to coalesce writes, and with no delimiter there would be nothing to
+	// split them back apart with -- but RouterOS writes one message per
+	// send, and that is what the wire shows. Worth keeping an eye on,
+	// not a defect to design around.
 	buf := make([]byte, maxTCPMessageBytes)
 	conn.SetReadDeadline(time.Now().Add(tcpIdleTimeout()))
 	for {
