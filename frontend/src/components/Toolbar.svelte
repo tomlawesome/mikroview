@@ -3,12 +3,12 @@
   import { appState } from '../lib/state.svelte'
   import { formatEps } from '../lib/format'
   import { retentionState, MAX_AGE_OPTIONS } from '../lib/retention.svelte'
-  import { downloadEventsCsv } from '../lib/export'
   import { viewportState } from '../lib/viewport.svelte'
   import ConnectionIndicator from './ConnectionIndicator.svelte'
   import DeviceStatus from './DeviceStatus.svelte'
   import LogoLockup from './LogoLockup.svelte'
   import NavMenu from './NavMenu.svelte'
+  import ThemeMenu from './ThemeMenu.svelte'
 
   function onMaxAgeChange(e: Event) {
     const raw = (e.target as HTMLSelectElement).value
@@ -64,18 +64,16 @@
       <button onclick={() => appState.clearBuffer()} title="Clear the local event buffer">
         Clear
       </button>
-
-      {#if !viewportState.isMobile}
-        <button
-          onclick={() => downloadEventsCsv(appState.filteredEvents)}
-          disabled={appState.filteredEvents.length === 0}
-          title="Export the currently shown/filtered events to a CSV file"
-        >
-          Export
-        </button>
-      {/if}
     {/if}
 
+    <!-- Appearance stays standalone and always visible (issue #137):
+         #73's inline-vs-menu split filed it under "everything else",
+         but theme switching is reached for constantly and wants to be
+         one click away. Export went the other way -- an occasional,
+         deliberate action that was holding an inline slot -- and now
+         lives in NavMenu on both breakpoints, where mobile already had
+         it. -->
+    <ThemeMenu />
     <NavMenu />
   </div>
 </header>
