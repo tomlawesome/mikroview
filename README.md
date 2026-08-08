@@ -60,16 +60,11 @@ services:
     image: ghcr.io/tomlawesome/mikroview:latest
     restart: unless-stopped
     ports:
-      # Host 514 -> the conventional syslog port RouterOS targets; the
-      # container listens on 1514 internally since it runs as a non-root
-      # user that can't bind <1024 (see Dockerfile).
-      - "514:1514/udp"
-      - "514:1514/tcp"
       # RouterOS remote-protocol=tls (RFC 5425's syslog-over-TLS port,
-      # already unprivileged so no remap is needed like 514 above).
-      # Started automatically whenever TLS is on, which is the default --
-      # comment this out (and set MIKROVIEW_LISTEN_SYSLOG_TLS= below) if
-      # you don't use it.
+      # already unprivileged so no remap is needed). Mikroview's only
+      # syslog listener -- comment this out (and set
+      # MIKROVIEW_LISTEN_SYSLOG_TLS= below) only if you want no syslog
+      # ingest at all.
       - "6514:6514/tcp"
       # HTTPS by default, on the conventional port -- see the Quickstart
       # above and docs/configuration.md's "TLS" section.
@@ -133,9 +128,10 @@ services:
       # needed if you've removed the "80:8081" port mapping too (e.g.
       # your reverse proxy handles the HTTP->HTTPS redirect itself).
       # - MIKROVIEW_LISTEN_HTTP_REDIRECT=
-      # Disables the RouterOS remote-protocol=tls syslog listener above --
-      # only needed if you've removed the "6514:6514/tcp" port mapping
-      # too (e.g. you only use plain syslog on 514).
+      # Disables syslog ingest entirely -- mikroview's only syslog
+      # listener is RouterOS remote-protocol=tls, so only set this if
+      # you don't want firewall events at all. Remove the "6514:6514/tcp"
+      # port mapping above too if you do.
       # - MIKROVIEW_LISTEN_SYSLOG_TLS=
 
 volumes:
@@ -197,8 +193,9 @@ every restart) but not fatal.
 ## Features
 
 - **Ingestion**: RouterOS forwards firewall log lines via
-  `/system logging` over syslog (UDP or TCP). No polling, no RouterOS
-  API access, no credentials — push-based and cheap for the router.
+  `/system logging` over syslog-over-TLS (`remote-protocol=tls`). No
+  polling, no RouterOS API access, no credentials — push-based and
+  cheap for the router.
 - **Parsing**: a RouterOS-specific parser decodes chain, action, rule
   label, interfaces, protocol, addresses/ports, and length from each
   log line. See [docs/routeros-setup.md](docs/routeros-setup.md) for the

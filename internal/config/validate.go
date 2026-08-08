@@ -66,8 +66,6 @@ func docsAnchor(code string) string {
 // prose like "set a positive duration" does not answer it.
 var examplesByCode = map[string]string{
 	"CFG-0001": `listen:
-  syslogUdp: ":1514"
-  syslogTcp: ":1514"
   http: ":8080"`,
 
 	"CFG-0002": `listen:
@@ -119,9 +117,7 @@ func (c *Config) validateListen(fatal problemFunc) {
 	// would fail moments later anyway -- catching it here turns a
 	// confusing runtime bind error into a named config key.
 	for key, addr := range map[string]string{
-		"listen.syslogUdp": c.Listen.SyslogUDP,
-		"listen.syslogTcp": c.Listen.SyslogTCP,
-		"listen.http":      c.Listen.HTTP,
+		"listen.http": c.Listen.HTTP,
 	} {
 		if addr == "" {
 			fatal("CFG-0001", key, "is empty", "set an address such as \":8080\" or \"192.168.1.10:8080\"")
