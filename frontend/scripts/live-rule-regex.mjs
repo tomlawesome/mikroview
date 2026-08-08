@@ -63,16 +63,26 @@ check(
   `the tooltip explains why rather than only colouring: "${title.slice(0, 50)}..."`,
 )
 
-// Two behaviours this scenario surfaced are not asserted here, because
-// they do not work yet and a committed assertion that fails is not a
-// test -- it is broken state recorded in the wrong place. They are on
-// the tracker instead:
-//
-//   #183 -- duplicate event ids in the client buffer produce duplicate
-//           Svelte keys, so a console-error assertion cannot pass here.
-//   #184 -- the refused indicator does not clear when the pattern is
-//           cleared.
-//
-// Add the assertions when the fixes land.
+// #184: clearing the pattern must clear the refused state. The filter is
+// inactive either way, so this is about the indicator telling the truth
+// -- a toggle still reading "refused" against an empty input is exactly
+// the misleading state the indicator exists to avoid.
+await page.fill('input.rule', '')
+await page.waitForTimeout(800)
+const clsAfterClear = await page.getAttribute('button.regex-toggle', 'class')
+check(
+  !clsAfterClear.includes('refused'),
+  'clearing the pattern clears the refused state',
+)
+
+// And the recovery path all the way through: a fresh, cheap pattern after
+// a refusal must evaluate normally rather than inheriting the dead state.
+await page.fill('input.rule', 'live-test')
+await page.waitForTimeout(1200)
+const clsAfterRetype = await page.getAttribute('button.regex-toggle', 'class')
+check(
+  !clsAfterRetype.includes('refused'),
+  'a fresh pattern after a refusal evaluates normally',
+)
 
 done()
