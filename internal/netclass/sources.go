@@ -5,6 +5,7 @@ package netclass
 import (
 	"encoding/json"
 	"net/netip"
+	"strings"
 )
 
 // Category is the kind of network a range belongs to. It is deliberately
@@ -40,11 +41,12 @@ const (
 type Source string
 
 const (
-	SourceTor    Source = "tor"
-	SourceX4BVPN Source = "x4b_vpn"
-	SourceX4BDC  Source = "x4b_datacenter"
-	SourceAWS    Source = "aws"
-	SourceGCP    Source = "gcp"
+	SourceTor               Source = "tor"
+	SourceApplePrivateRelay Source = "apple_private_relay"
+	SourceX4BVPN            Source = "x4b_vpn"
+	SourceX4BDC             Source = "x4b_datacenter"
+	SourceAWS               Source = "aws"
+	SourceGCP               Source = "gcp"
 )
 
 // feedDef is one menu entry. Category is the classification every prefix
@@ -85,6 +87,25 @@ var feedRegistry = []feedDef{
 		Parse:    parseTorList,
 	},
 	{
+		// Positioned before SourceX4BVPN deliberately: X4BNet's own build
+		// pipeline pulls Apple's list into their VPN feed verbatim (#114's
+		// research comment names their fetch-apple-privacy-relay.yml
+		// workflow), so the same prefixes exist in both. buildTable
+		// resolves an exact-prefix tie by priority order, so listing the
+		// authoritative source first is what makes a Private Relay egress
+		// address classify as CategoryPrivacyRelay rather than shadowing
+		// into CategoryVPN -- the single false positive #114's research
+		// called out as mattering most ("every iPhone/iPad/Mac with
+		// iCloud+ ... telling an operator 'this is a known VPN exit'
+		// about their family's normal Safari browsing destroys trust in
+		// the signal on day one").
+		Source:   SourceApplePrivateRelay,
+		Category: CategoryPrivacyRelay,
+		Label:    "Apple Private Relay",
+		URL:      "https://mask-api.icloud.com/egress-ip-ranges.csv",
+		Parse:    parseApplePrivateRelay,
+	},
+	{
 		Source:   SourceX4BVPN,
 		Category: CategoryVPN,
 		Label:    "X4BNet VPN",
@@ -123,11 +144,19 @@ var registryBySource = func() map[Source]feedDef {
 }()
 
 // DefaultSources is a conservative starting point (#114 finding 2/3): the
-// two high-precision lists, not the broad datacenter feeds. An operator
-// who wants full cloud attribution opts the rest in. Tightening the
-// default is what keeps the feature from firing on ordinary traffic the
-// day it is switched on.
-var DefaultSources = []string{string(SourceTor), string(SourceX4BVPN)}
+// high-precision lists, not the broad datacenter feeds. An operator who
+// wants full cloud attribution opts the rest in. Tightening the default
+// is what keeps the feature from firing on ordinary traffic the day it
+// is switched on.
+//
+// SourceApplePrivateRelay is a default alongside SourceX4BVPN, not an
+// opt-in extra: SourceX4BVPN's own upstream data includes Apple's ranges
+// (see that feed's own comment above), so leaving the corrective source
+// disabled by default would leave the exact false positive #114's
+// research called out as mattering most -- "this is a known VPN exit"
+// on an iPhone's ordinary Safari browsing -- live in the default
+// configuration.
+var DefaultSources = []string{string(SourceTor), string(SourceApplePrivateRelay), string(SourceX4BVPN)}
 
 // KnownSources returns the full menu in registry order, for config
 // validation messages and docs.
@@ -217,6 +246,39 @@ func parseGCP(body []byte) []classifiedPrefix {
 			continue
 		}
 		out = append(out, classifiedPrefix{prefix: p.Masked(), detail: e.Scope})
+	}
+	return out
+}
+
+// parseApplePrivateRelay reads Apple's official egress-ip-ranges.csv:
+// one prefix per line, `prefix,country,subdivision,city,` -- five
+// comma-separated fields with a permanently-empty trailing one,
+// verified against the live feed (287,715 lines, every one exactly
+// four commas, no blank lines, no embedded commas in a field) rather
+// than assumed. City is kept as detail so a match reads "Apple Private
+// Relay (Boston)" rather than just the provider name; malformed lines
+// are skipped individually; one bad line is not a reason to discard the
+// whole feed, the same tolerance every other parser here has.
+func parseApplePrivateRelay(body []byte) []classifiedPrefix {
+	var out []classifiedPrefix
+	for _, raw := range strings.Split(string(body), "\n") {
+		line := strings.TrimSpace(raw)
+		if line == "" {
+			continue
+		}
+		fields := strings.SplitN(line, ",", 4)
+		if len(fields) < 4 {
+			continue
+		}
+		p, err := netip.ParsePrefix(fields[0])
+		if err != nil || !acceptablePrefix(p) {
+			continue
+		}
+		city := fields[3]
+		if i := strings.IndexByte(city, ','); i >= 0 {
+			city = city[:i]
+		}
+		out = append(out, classifiedPrefix{prefix: p.Masked(), detail: city})
 	}
 	return out
 }
