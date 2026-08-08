@@ -445,6 +445,54 @@ live reputation lookups above already play for those flags, just
 resolved synchronously (a local lookup needs no network round-trip)
 instead of asynchronously.
 
+## Network attribution (optional, on by default)
+
+When you click "investigate" on an IP, mikroview also labels it with the
+kind of network it belongs to — a Tor exit, a commercial VPN, cloud or
+datacenter space, or a privacy relay (Apple iCloud Private Relay,
+Cloudflare WARP). It shows up as a **Network** row in the lookup popover,
+alongside the reputation data.
+
+This is **display-only**. Unlike the blocklist above, a network-class
+match never raises a flag and never changes a confidence score. The
+reason is measured, not cautious: the broad datacenter/cloud lists cover
+more than one in ten routable IPv4 addresses — Google Public DNS, Akamai
+edge, and every Apple Private Relay user included — so treating a
+datacenter match as suspicion would fire constantly on ordinary traffic.
+Attribution is genuinely useful context; scoring on it is not.
+
+```yaml
+netClass:
+  sources:
+    - tor
+    - x4b_vpn
+```
+
+The default is deliberately the **two high-precision lists**, not the
+broad ones, so the feature is quiet the day you enable it.
+
+| Source | What it covers | Notes |
+|---|---|---|
+| `tor` | Tor exit nodes | The Tor Project's own list — tiny, first-party, highest precision |
+| `x4b_vpn` | Commercial VPN exits | [X4BNet](https://github.com/X4BNet/lists_vpn) (MIT); ~0.08% of IPv4, precise |
+| `x4b_datacenter` | Cloud / hosting / datacenter | Broad — ~10% of IPv4. Useful as a label, noisy as a signal. Opt-in |
+| `aws` | AWS ranges, with region | Official `ip-ranges.json`. Opt-in |
+| `gcp` | Google Cloud ranges | Official `cloud.json`. Opt-in |
+
+Set `sources` to an empty list to turn attribution off entirely.
+
+**No range data ships in mikroview.** Every list is fetched at runtime,
+from the operator's own device, on a fixed daily cycle with a small
+random offset per install (so thousands of self-hosted instances don't
+refresh in lockstep). A release therefore can never ship stale security
+data. Until the first fetch completes, the popover simply shows no
+Network row. Azure is deliberately not on the menu: it publishes no
+stable range URL (the file is date-stamped and deleted within a fortnight),
+and its space is already covered by `x4b_datacenter`.
+
+Refresh cadence is not configurable, for the same over-polling reason as
+the blocklist.
+
 ## Port lookup
 
 Clicking the "i" affordance next to a source/destination port shows what

@@ -166,6 +166,23 @@ store:
 #     - spamhaus_edrop
 #     # - emerging_threats_compromised  # opt-in: larger, faster-changing, individual-IP list
 
+# Optional (on by default): local IP attribution for the manual IP-lookup
+# popover -- labels an address as a Tor exit, commercial VPN,
+# cloud/datacenter, or privacy relay. Display-only context; it never
+# raises a flag. A fixed, vetted menu fetched at runtime (no range data
+# ships in the image), refreshed daily. Default is the two high-precision
+# lists only: the broad datacenter/cloud feeds cover >10% of routable
+# IPv4, so they attach a label to ordinary traffic and are opt-in. Set
+# sources to an empty list to disable attribution entirely. See
+# docs/configuration.md for the full menu and the per-source trade-offs.
+# netClass:
+#   sources:
+#     - tor        # Tor Project's own exit list -- tiny, first-party
+#     - x4b_vpn    # X4BNet commercial-VPN list (MIT) -- high precision
+#     # - x4b_datacenter  # opt-in: broad, ~10% of IPv4, noisy as a signal
+#     # - aws             # opt-in: official AWS ranges, with region detail
+#     # - gcp             # opt-in: official Google Cloud ranges
+
 # Optional: friendly display names shown in place of a raw RouterOS rule
 # label (e.g. "r13") or a raw host IP, everywhere they appear in the UI
 # and CSV export. Filtering/grouping still uses the raw value -- these
