@@ -15,10 +15,21 @@
       !!result.countryCode ||
       !!result.usageType ||
       !!result.isTor ||
+      !!result.netClass ||
       !!result.ports?.length ||
       !!result.hostnames?.length ||
       !!result.vulns?.length,
   )
+
+  // A human category label for the network-class row. The category comes
+  // from a fixed enum server-side, so this map is exhaustive; an
+  // unrecognised value falls back to the raw string rather than blanking.
+  const categoryLabels: Record<string, string> = {
+    tor: 'Tor exit',
+    vpn: 'VPN',
+    datacenter: 'Datacenter',
+    'privacy-relay': 'Privacy relay',
+  }
 </script>
 
 {#if !hasIntel}
@@ -53,6 +64,19 @@
       <div class="row">
         <span class="label">Usage type</span>
         <span class="value">{result.usageType}</span>
+      </div>
+    {/if}
+    {#if result.netClass}
+      <div class="row">
+        <span class="label">Network</span>
+        <span class="value netclass" class:anon={result.netClass.category === 'tor' || result.netClass.category === 'vpn'}>
+          {categoryLabels[result.netClass.category] ?? result.netClass.category}
+          {#if result.netClass.detail}
+            <span class="netclass-detail">· {result.netClass.label} {result.netClass.detail}</span>
+          {:else}
+            <span class="netclass-detail">· {result.netClass.label}</span>
+          {/if}
+        </span>
       </div>
     {/if}
     {#if result.isTor}
@@ -117,5 +141,18 @@
   .value.high {
     color: var(--reject);
     font-weight: 600;
+  }
+
+  /* Anonymity categories (Tor, VPN) get a subtle emphasis -- they are
+     the ones an operator actually wants to notice -- while datacenter
+     and privacy-relay stay neutral, since they are ordinary context. */
+  .value.netclass.anon {
+    color: var(--accent);
+    font-weight: 600;
+  }
+
+  .netclass-detail {
+    color: var(--fg-muted);
+    font-weight: 400;
   }
 </style>

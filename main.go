@@ -9,6 +9,7 @@ import (
 	"crypto/tls"
 	"fmt"
 	"log/slog"
+	"math/rand/v2"
 	"net"
 	"net/http"
 	"os"
@@ -32,6 +33,7 @@ import (
 	"github.com/tomlawesome/mikroview/internal/hub"
 	"github.com/tomlawesome/mikroview/internal/logging"
 	"github.com/tomlawesome/mikroview/internal/naming"
+	"github.com/tomlawesome/mikroview/internal/netclass"
 	"github.com/tomlawesome/mikroview/internal/notify"
 	"github.com/tomlawesome/mikroview/internal/oidc"
 	"github.com/tomlawesome/mikroview/internal/persist"
@@ -499,6 +501,14 @@ func main() {
 	blocklistLog := logging.New("blocklist")
 	bl := blocklist.New(cfg.Blocklist.Sources, blocklistLog)
 
+	// netclass (issue #114): local IP attribution for the manual lookup
+	// popover -- Tor exit / VPN / datacenter / privacy relay. Display-only
+	// and deliberately never wired into the detector chain above; it is
+	// attached to the API server alone. Nil-safe when no sources are
+	// enabled, same as bl.
+	netclassLog := logging.New("netclass")
+	nc := netclass.New(cfg.NetClass.Sources, netclassLog)
+
 	// Both optional inputs are attached in one chain: entities backs the
 	// trusted-mail-sender allowlist (#108), knownBad backs the local
 	// blocklist match (#113 Part B). Each is independently a valid
@@ -662,6 +672,38 @@ func main() {
 		}()
 	}
 
+	// netclass refresh (issue #114): same shape as the blocklist sweep
+	// above, with one addition -- a per-install random jitter before the
+	// first fetch. Thousands of self-hosted instances all refreshing at
+	// 00:00 UTC would be a thundering herd against raw.githubusercontent.
+	// com and would get collectively rate-limited; a random offset up to
+	// an hour spreads them out. The daily ticker then keeps that offset.
+	if nc.HasSources() {
+		go func() {
+			defer logging.Recover(netclassLog)
+			jitter := time.Duration(rand.Int64N(int64(time.Hour)))
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(jitter):
+			}
+			nc.Refresh(ctx)
+			ticker := time.NewTicker(netclass.RefreshInterval)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-ticker.C:
+					func() {
+						defer logging.Recover(netclassLog)
+						nc.Refresh(ctx)
+					}()
+				}
+			}
+		}()
+	}
+
 	// SSO (issue #43): additive on top of local auth, never a
 	// replacement -- see internal/oidc and auth.Store.
 	// FindOrCreateOIDCUser. A misconfigured or unreachable provider must
@@ -765,6 +807,7 @@ func main() {
 		Devices:          devices,
 		Hub:              h,
 		Reputation:       rep,
+		NetClass:         nc,
 		Flags:            fs,
 		DetectorSettings: detectorSettings,
 		Entities:         entityStore,

@@ -16,6 +16,7 @@ import (
 	"github.com/tomlawesome/mikroview/internal/entities"
 	"github.com/tomlawesome/mikroview/internal/flags"
 	"github.com/tomlawesome/mikroview/internal/hub"
+	"github.com/tomlawesome/mikroview/internal/netclass"
 	"github.com/tomlawesome/mikroview/internal/oidc"
 	"github.com/tomlawesome/mikroview/internal/reputation"
 	"github.com/tomlawesome/mikroview/internal/rules"
@@ -23,10 +24,16 @@ import (
 )
 
 type Server struct {
-	Store            *store.Store
-	Devices          *device.Registry
-	Hub              *hub.Hub
-	Reputation       *reputation.Client
+	Store      *store.Store
+	Devices    *device.Registry
+	Hub        *hub.Hub
+	Reputation *reputation.Client
+	// NetClass attributes an IP to a Tor exit / VPN / datacenter /
+	// privacy relay for the manual lookup popover (issue #114). Nil means
+	// no sources were enabled, and every use is nil-guarded -- the same
+	// nil-means-disabled convention as Reputation. Deliberately display-
+	// only: it is read in handleIPLookup and nowhere near flag scoring.
+	NetClass         *netclass.Classifier
 	Flags            *flags.Store
 	DetectorSettings *detect.SettingsStore
 	// Entities is the persisted, admin-manageable (type, key) -> label/
