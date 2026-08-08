@@ -40,6 +40,57 @@ cases root-caused as benign. Report it; don't quietly handle it.
 
 Outside pull requests are not accepted at all — see `CONTRIBUTING.md`.
 
+## Where code review happens: GitHub and GitLab, split by branch
+
+Issues, planning, and decisions stay on GitHub, per the rest of this file.
+Code review does not, for one lane: `dev` (and the feature branches that
+merge into it) now lives primarily on a private, self-hosted GitLab
+instance — merges into `dev` happen as GitLab merge requests, not GitHub
+pull requests. `preview` and `main`, and everything that already runs on
+them (`ci.yml`, `docker.yml`, `codeql.yml`, `branch-policy.yml`), are
+untouched and still live entirely on GitHub.
+
+Why: GitHub's free tier doesn't include GHAS-equivalent SAST/dependency/
+container scanning for private repos, and GitLab CE doesn't either — but
+self-hosting GitLab means that same category of free/open-source tooling
+(Semgrep, gosec, govulncheck, gitleaks, Trivy) can run on every merge into
+`dev`, gated by `.gitlab-ci.yml` at the repo root, without paying for
+either platform's higher tier. GitHub's own strengths (CodeQL, cosign
+image signing + attestation, release tagging, `branch-policy.yml`'s
+hop-order enforcement) had no reason to move, so they didn't.
+
+Mechanically:
+- A GitLab CI job mirrors `dev` to GitHub after each merge there, so the
+  existing `dev` → `preview` GitHub PR flow keeps working unchanged —
+  GitHub just sees `dev` updated by a push instead of a human PR merge.
+- `close-issues-on-dev.yml` stopped firing (its trigger was a GitHub PR
+  merging into `dev`, which no longer happens) and was replaced by an
+  equivalent job in `.gitlab-ci.yml` that closes the same GitHub issues
+  via the GitHub API on merge.
+- `dependabot.yml`'s `dev`-targeting entries were retired in favor of
+  Renovate running on GitLab against `dev`, so two bots aren't both
+  opening PRs against a branch that's now GitLab-canonical.
+- In-flight branches from before this change finished their existing
+  GitHub PR flow normally — this was a soft cutover, not a rewrite of
+  history.
+
+If a check ever needs to move between the two (something currently gated
+on GitHub would fit better as a fast `dev`-lane gate, or vice versa), the
+boundary to reason from is: **GitHub keeps anything about the release
+lane or an already-working platform feature (signing, CodeQL, hop-order
+enforcement); GitLab handles fast, free security/quality scanning on the
+inner dev loop.** Deliberately not documented here: which host anything
+actually runs on, network topology, or credentials — that's operational
+detail with no reason to live in a file an agent (or anyone else) might
+read.
+
+See
+[docs/decisions/gitlab-ci-root-in-container-test-failure.md](docs/decisions/gitlab-ci-root-in-container-test-failure.md)
+for a concrete example of a GitHub/GitLab environment difference that
+broke a test for a reason that had nothing to do with the code — worth
+checking for similar defaults mismatches before assuming a GitLab-only
+failure is a real regression.
+
 ## Security by design
 
 New features are researched before they are designed, including an
