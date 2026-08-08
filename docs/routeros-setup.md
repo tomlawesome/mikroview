@@ -1,9 +1,11 @@
 # RouterOS setup
 
 MikroView never talks to RouterOS's API and needs no credentials on the
-router. Instead, RouterOS pushes firewall log lines to MikroView over
-syslog. This is a one-time configuration on each router you want to
-monitor.
+router. Instead, RouterOS pushes to MikroView: firewall log lines over
+syslog (steps 1–3, required), and optionally a copy of its own
+config for host names and rule lookups (step 4). Either way, the
+router always initiates; MikroView never connects to it. This is a
+one-time configuration on each router you want to monitor.
 
 ## 1. Point RouterOS at the container
 
@@ -116,7 +118,186 @@ fixed layout) — if a translated address ever looks wrong for your
 RouterOS version, the untouched raw line is still available in the row's
 tooltip for comparison.
 
-## 4. Verify
+## 4. Push router state for names and rule lookups (optional)
+
+Everything above — syslog, rule tagging — is the complete setup.
+**Walking away here is a perfectly good outcome**: MikroView already
+shows every event, action, and (once you've tagged rules per step 3)
+which rule matched. Nothing below changes that.
+
+What this section adds: RouterOS *pushes* a copy of its own config —
+address lists, firewall/NAT rules, DNS static entries, DHCP leases,
+WireGuard peers — to MikroView every 15–30 minutes. Two things follow
+from that:
+
+- **Host names.** An address MikroView already logs shows up as a name
+  (`camera.lan`, not `203.0.113.2`) wherever the router has named it —
+  a DNS static entry, a DHCP lease, or a WireGuard peer comment.
+- **Rule and NAT lookup buttons.** Click the "i" beside a rule or NAT
+  cell on an event row to see the full rule — its comment, chain,
+  action — not just the short `log-prefix` slug from step 3.
+
+This never gives MikroView a RouterOS password, and MikroView never
+connects to your router — the router connects to MikroView, on its own
+schedule, the same direction syslog already flows. It authenticates
+with an *ingest token*: a credential minted in MikroView and pasted
+into the script below, distinct from the read-only API tokens covered
+in [configuration.md](configuration.md#api-tokens-read-only), and
+scoped to exactly one router.
+
+**Requires RouterOS 7.13 or later.** `:serialize to=json`, which the
+script below uses to build its payload, does not exist before 7.13
+(`bad command name serialize`) — everything else in this guide works
+on older releases.
+
+### 4a. Import MikroView's certificate
+
+The router is the one *initiating* the connection here, so — unlike a
+browser, where you visit MikroView and get a one-time warning — the
+router needs to be told explicitly to trust MikroView's certificate,
+or every push will fail closed. Skipping this step is not a shortcut:
+without it, `check-certificate=yes` below refuses with
+
+```
+failure: SSL: ssl: no trusted CA certificate found (6)
+```
+
+which is the honest, safe failure — a router that will POST your
+config to *anything* claiming to be MikroView is not a router you
+want. Import the certificate once:
+
+```
+/tool fetch url="https://<mikroview-host>/ca.crt" check-certificate=no dst-path=mikroview-ca.crt
+/certificate import file-name=mikroview-ca.crt passphrase=""
+```
+
+`check-certificate=no` here is the one and only place it belongs in
+this whole setup: there is nothing to verify against yet, since this
+fetch is *getting* the thing to verify against. Every fetch after this
+uses `check-certificate=yes`. If your MikroView deployment uses your
+own certificate rather than the self-generated one (see
+[configuration.md](configuration.md#tls)), skip this step — your CA is
+presumably already trusted some other way.
+
+### 4b. Mint an ingest token
+
+In MikroView, sign in as an admin, open **Account → API tokens**, and
+create a token with kind **Ingest**, naming the device — this is what
+scopes it. Or via the API:
+
+```
+curl -k -b <your session cookie> -X POST https://<mikroview-host>/api/tokens \
+  -H 'Content-Type: application/json' -H 'X-Requested-With: mikroview' \
+  -d '{"name":"office-router","kind":"ingest","device":"office-router"}'
+```
+
+The response's `value` field is the token — shown exactly once, the
+same one-time-display every MikroView token uses. **One token per
+router, never shared.** This isn't caution for its own sake: any
+RouterOS user holding the built-in `read` policy can print a script's
+source in full, token included (`/system script get <name> source`),
+so the credential is only ever as private as the router's own user
+list. Scoping it to one device means a compromised or careless router
+can misreport its own state, never another router's.
+
+### 4c. The push script
+
+This example pushes your firewall filter table — the one the rule
+lookup button reads. Each field below is renamed from RouterOS's own
+property name to MikroView's schema on the way out (`log-prefix`
+becomes `logPrefix`, `src-address-list` becomes `srcAddressList`) —
+that renaming is what the `:local rec {...}` line is doing, one field
+at a time, and it's the one place a typo silently breaks the feature
+without RouterOS complaining, so copy it carefully. Verified against a
+real RouterOS 7.23.3 router before writing this down:
+
+```
+:local recs [:toarray ""]
+:foreach i,v in=[/ip/firewall/filter print as-value] do={
+  :local rec {"ordinal"=$i; "comment"=($v->"comment"); "chain"=($v->"chain"); "action"=($v->"action"); "srcAddressList"=($v->"src-address-list"); "logPrefix"=($v->"log-prefix")}
+  :set recs ($recs, {$rec})
+}
+:local payload [:serialize to=json value={"kind"="filter-rule"; "page"=1; "pages"=1; "records"=$recs}]
+/tool fetch url="https://<mikroview-host>/api/ingest/routeros" http-method=post http-data=$payload http-header-field=("Content-Type: application/json,Authorization: Bearer <your ingest token>") check-certificate=yes output=none
+```
+
+Line by line:
+
+- `:local recs [:toarray ""]` starts an empty list. `{}` on its own is
+  *not* an empty array in RouterOS script — it's read as an empty code
+  block — so this is the working idiom, not a stylistic choice.
+- `:foreach i,v in=[...] do={...}` walks every filter rule; `i` is its
+  position (which becomes `ordinal` — the number you'd see in
+  `/ip firewall filter print`), `v` is the rule's own data.
+- `:local rec {"ordinal"=$i; ...}` builds one renamed record. `($v->"comment")`
+  reads a field off `v` by RouterOS's own property name.
+- `:set recs ($recs, {$rec})` appends `rec` to the list. **The `{$rec}`
+  wrapping is required** — `:set recs ($recs, $rec)` without it looks
+  identical but silently *merges* each record's keys into one giant
+  map instead of building a list of separate records, and MikroView's
+  strict decoder refuses the result outright (an unexpected shape,
+  not a helpful error naming which field).
+- `:local payload [:serialize to=json ...]` turns the whole thing into
+  the JSON body — `kind` names which table this is, `page`/`pages` are
+  `1`/`1` here since one filter table comfortably fits one push (see
+  pagination below for a large rule set).
+- `/tool fetch ... output=none` sends it. `output=none` because a
+  scheduled script has no console to print to; drop it if you're
+  testing this by hand and want to see the result.
+
+**Other tables follow the identical pattern**, swapping the source
+command and the field names for MikroView's schema names:
+
+| `kind` | Source command | Fields |
+|---|---|---|
+| `address-list` | `/ip/firewall/address-list print as-value` | `list`, `address`, `comment`, `dynamic` |
+| `filter-rule` | `/ip/firewall/filter print as-value` | `ordinal` (loop index), `comment`, `chain`, `action`, `srcAddressList` ← `src-address-list`, `logPrefix` ← `log-prefix` |
+| `nat-rule` | `/ip/firewall/nat print as-value` | `ordinal` (loop index), `comment`, `chain`, `action` |
+| `dns-static` | `/ip/dns/static print as-value` | `name`, `address` |
+| `dhcp-lease` | `/ip/dhcp-server/lease print as-value` | `hostname`, `mac` ← `mac-address`, `address` |
+| `arp` | `/ip/arp print as-value` | `address`, `mac` ← `mac-address` |
+| `wireguard-interface` | `/interface/wireguard print as-value` | `name`, `comment`, `publicKey` ← `public-key`, `listenPort` ← `listen-port` |
+| `wireguard-peer` | `/interface/wireguard/peers print as-value` | `publicKey` ← `public-key`, `allowedAddress` ← `allowed-address`, `endpointAddress` ← `endpoint-address`, `comment` |
+
+For host names, `dns-static` and `dhcp-lease` are the two worth adding
+first — they're what turns a raw IP into `nas.lan` everywhere MikroView
+shows one. **A name pushed by the router always wins** over a label
+you've set inside MikroView for the same address — manage names for
+anything the router already knows about *in RouterOS*, not in
+MikroView's UI; anything the router doesn't cover stays exactly as
+you set it there.
+
+No `read,write` or `sensitive` policy is needed for any of this —
+`read,test` (below) is enough, and WireGuard *private* keys never
+appear in a `read`-policy script's view at all, only public ones.
+
+### 4d. Pagination, for a large rule set
+
+`/tool fetch` refuses a POST body over roughly 64KiB — measured
+against a real router, not documented by MikroTik. A single filter
+table stays well under that for most deployments (a few hundred rules
+serialize to tens of kilobytes), so the one-page script above is
+enough until it isn't. If `[:len $recs]` output starts running into
+the low hundreds, split it with `:toarray` slicing and increment
+`page`/`pages` accordingly — each page is a complete, independent
+JSON document; MikroView never reassembles pages, so partial delivery
+degrades to "less enrichment," never a corrupted table.
+
+### 4e. Schedule it
+
+```
+/system script add name=mv-push policy=read,test source="<the script from 4c, with your host and token filled in>"
+/system scheduler add name=mv-push interval=20m policy=read,test on-event="/system script run mv-push"
+```
+
+`policy=read,test` only — no `write`, no `sensitive`. The scheduler
+entry stores no credential of its own; the only secret involved is the
+bearer token embedded in the script's own source, held to the same
+`read`-policy-can-read-it caveat as step 4b describes. 15–30 minutes
+is plenty: this data changes when you edit your firewall, not every
+few seconds.
+
+## 5. Verify
 
 On the router, confirm entries are being generated and sent:
 
@@ -137,3 +318,13 @@ self-generated certificate; see the main README's Quickstart.)
 A router that's sending traffic but isn't yet in `config.yaml` still
 shows up here, labelled by its source IP with `"configured": false` —
 that's how you find the IP to add. See [configuration.md](configuration.md).
+
+If you set up step 4, run the script once by hand (`/system script run
+mv-push`) rather than waiting for the scheduler, then check the rule
+lookup button on an event row whose rule you tagged — it should show
+that rule's comment and RouterOS ordinal instead of "no data pushed
+yet". `/system script run mv-push` with no output means it worked;
+`/tool fetch` failing prints a `failure:` line to the console the same
+way step 4a's own certificate check does, including the same
+untrusted-CA text if step 4a was skipped or the `<mikroview-host>`
+placeholder wasn't replaced consistently between the two.
