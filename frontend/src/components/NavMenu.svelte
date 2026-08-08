@@ -5,6 +5,7 @@
   import { detectorSettingsState } from '../lib/detectorSettings.svelte'
   import { entitiesState } from '../lib/entities.svelte'
   import { auditState } from '../lib/audit.svelte'
+  import { exclusionsState } from '../lib/exclusions.svelte'
   import { authState } from '../lib/auth.svelte'
   import { retentionState, MAX_AGE_OPTIONS } from '../lib/retention.svelte'
   import { downloadEventsCsv } from '../lib/export'
@@ -62,6 +63,16 @@
     } else {
       appState.view = 'audit'
       auditState.refresh()
+    }
+    open = false
+  }
+
+  function toggleExclusions() {
+    if (appState.view === 'exclusions') {
+      appState.view = 'live'
+    } else {
+      appState.view = 'exclusions'
+      exclusionsState.refresh()
     }
     open = false
   }
@@ -186,6 +197,18 @@
             title="Review admin-privileged actions: user/token/entity/detector changes"
           >
             Audit log
+          </button>
+
+          <!-- Same strict gate again -- GET /api/flags/exclusions is
+               callerIsAdmin (issue #207, moved out of the bottom of the
+               Flags page). -->
+          <button
+            class="option"
+            class:active={appState.view === 'exclusions'}
+            onclick={toggleExclusions}
+            title="Review and remove permanently-excluded (detector, target) pairs"
+          >
+            Exclusions
           </button>
         {/if}
       </div>

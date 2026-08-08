@@ -1082,10 +1082,11 @@ either re-fires once it expires (nothing was solved) or it doesn't
 (permanent exclusion was what was wanted all along), so there's no
 in-between "snooze" option. Because "permanent" shouldn't mean
 "unrecoverable by mistake," every current exclusion is listed (and can
-be removed, re-enabling that pair) from the Flags tab's "Manage
-exclusions" panel -- admin-only once an account exists, open to anyone
-while mikroview is still in its fully-open zero-account state, same as
-every other admin-gated endpoint (see [Authentication](#authentication)).
+be removed, re-enabling that pair) on its own **Exclusions** page,
+reachable from the menu -- admin-only, same as every other admin-gated
+endpoint (see [Authentication](#authentication)). It was split out of
+the bottom of the Flags page (issue #207) because reviewing exclusions
+underneath a list of hundreds of active flags was a pain.
 
 ## New-device detection (optional, on by default)
 
