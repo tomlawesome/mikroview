@@ -13,6 +13,15 @@ upgrading.
 
 ### Changed
 
+- **Permanent exclusions moved to their own page** (#207), reachable
+  from the menu alongside Detectors/Entities/Audit log. Reaching and
+  reviewing exclusions underneath a potentially large active-flags list
+  was a pain; the new Exclusions page adds a count and a filter by
+  detector type and target. A pointer stays where the section used to be
+  on the Flags page. No backend changes -- it's a client-side filter
+  over the existing `GET /api/flags/exclusions` /
+  `DELETE /api/flags/exclusions/{id}` endpoints.
+
 - **Appearance is a standalone toolbar control again, and Export moved
   into the menu** (#137). #73's inline-vs-menu split filed theme and
   colorway switching under "everything else" and buried it two clicks
