@@ -41,7 +41,10 @@ USER nonroot:nonroot
 # redirect-only listener that bounces plain HTTP to HTTPS -- see
 # Listen.HTTPRedirect's doc comment in internal/config/config.go --
 # docker-compose.yml maps the conventional host ports 443/80 to these.
-EXPOSE 1514/udp 1514/tcp 8080/tcp 8081/tcp
+# 6514/tcp is RouterOS remote-protocol=tls (RFC 5425's syslog-over-TLS
+# port, already >1024 so no remap is needed); only started while
+# tls.enabled is true.
+EXPOSE 1514/udp 1514/tcp 6514/tcp 8080/tcp 8081/tcp
 # No shell/curl/wget in this image, so the binary checks itself -- see
 # runHealthcheck in main.go.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \

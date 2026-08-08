@@ -42,6 +42,22 @@ type Device struct {
 type Listen struct {
 	SyslogUDP string `yaml:"syslogUdp"`
 	SyslogTCP string `yaml:"syslogTcp"`
+	// SyslogTLS (issue #188) accepts RouterOS's remote-protocol=tls
+	// syslog, using the same certificate the HTTPS listener presents --
+	// the router already imports mikroview's generated CA to verify
+	// HTTPS ingest, so this is that same trust step, not a second one.
+	// Only started when tls.enabled is true, same conditional as
+	// HTTPRedirect above (there is no certificate to present otherwise).
+	// Set to "" to disable it entirely, same optional-empty-string
+	// contract as HTTPRedirect. Defaults to ":6514", RFC 5425's port.
+	//
+	// This buys confidentiality and mikroview authenticating itself to
+	// the router -- it does not authenticate the sender. RouterOS's
+	// logging action has no client-certificate option, so anything able
+	// to reach the port can still connect and inject log lines, exactly
+	// as with the plaintext listeners above, which stay on alongside
+	// this one (their removal is #189, deliberately deferred).
+	SyslogTLS string `yaml:"syslogTls"`
 	HTTP      string `yaml:"http"`
 	// HTTPRedirect: a second, plain-HTTP-only listener whose sole job is
 	// redirecting to the HTTPS listener above -- lets a browser/client
@@ -640,6 +656,7 @@ func defaults() Config {
 		Listen: Listen{
 			SyslogUDP:    ":1514",
 			SyslogTCP:    ":1514",
+			SyslogTLS:    ":6514",
 			HTTP:         ":8080",
 			HTTPRedirect: ":8081",
 		},
@@ -829,6 +846,9 @@ func applyEnv(cfg *Config) {
 	}
 	if v := os.Getenv("MIKROVIEW_LISTEN_SYSLOG_TCP"); v != "" {
 		cfg.Listen.SyslogTCP = v
+	}
+	if v := os.Getenv("MIKROVIEW_LISTEN_SYSLOG_TLS"); v != "" {
+		cfg.Listen.SyslogTLS = v
 	}
 	if v := os.Getenv("MIKROVIEW_LISTEN_HTTP"); v != "" {
 		cfg.Listen.HTTP = v
@@ -1216,6 +1236,7 @@ func applyFlags(cfg *Config, args []string) error {
 	fs := flag.NewFlagSet("mikroview", flag.ContinueOnError)
 	syslogUDP := fs.String("syslog-udp", cfg.Listen.SyslogUDP, "syslog UDP listen address")
 	syslogTCP := fs.String("syslog-tcp", cfg.Listen.SyslogTCP, "syslog TCP listen address")
+	syslogTLS := fs.String("syslog-tls", cfg.Listen.SyslogTLS, "syslog TLS listen address, RouterOS remote-protocol=tls (only started when tls.enabled is true; empty disables it)")
 	httpAddr := fs.String("http", cfg.Listen.HTTP, "HTTP listen address")
 	httpRedirectAddr := fs.String("http-redirect", cfg.Listen.HTTPRedirect, "HTTP listen address for the redirect-to-HTTPS-only listener (empty disables it)")
 	retention := fs.Duration("retention", cfg.Store.Retention, "event retention window")
@@ -1228,6 +1249,7 @@ func applyFlags(cfg *Config, args []string) error {
 
 	cfg.Listen.SyslogUDP = *syslogUDP
 	cfg.Listen.SyslogTCP = *syslogTCP
+	cfg.Listen.SyslogTLS = *syslogTLS
 	cfg.Listen.HTTP = *httpAddr
 	cfg.Listen.HTTPRedirect = *httpRedirectAddr
 	cfg.Store.Retention = *retention
