@@ -11,6 +11,19 @@ import (
 	"time"
 )
 
+// serveTCPForTest binds an ephemeral port and serves it, returning the
+// address and a stop func -- the same setup the tests above do inline.
+func serveTCPForTest(t *testing.T, out chan RawMessage) (string, func()) {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	go ServeTCP(ctx, ln, out)
+	return ln.Addr().String(), cancel
+}
+
 func TestServeTCPFramesOnNewlines(t *testing.T) {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -281,5 +294,72 @@ func TestPerSourceConnectionCap(t *testing.T) {
 	if refused == 0 {
 		t.Errorf("opened %d connections from one source with a cap of %d, but none were refused",
 			len(held), perSourceLimit())
+	}
+}
+
+// TestTCPUnterminatedMessageIsIngested is the case every other test in
+// this file misses, and the one that matters: RouterOS sends each
+// message as a bare payload with no trailing newline and no octet
+// count.
+//
+// The listener previously read with a bufio.Scanner on the default
+// ScanLines split, so Scan() blocked on a delimiter that never arrived
+// and the connection was accepted, held, and silently discarded --
+// zero events from a real router (#202). The tests passed throughout,
+// because they all fed newline-delimited input, which is what a
+// well-behaved sender does and not what RouterOS does.
+func TestTCPUnterminatedMessageIsIngested(t *testing.T) {
+	out := make(chan RawMessage, 8)
+	addr, stop := serveTCPForTest(t, out)
+	defer stop()
+
+	conn, err := net.Dial("tcp", addr)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer conn.Close()
+
+	// Exactly what a router puts on the wire: no \n, no length prefix.
+	if _, err := conn.Write([]byte("firewall,info bare-message-no-newline")); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	select {
+	case msg := <-out:
+		if got := string(msg.Data); got != "firewall,info bare-message-no-newline" {
+			t.Errorf("Data = %q, want the message verbatim", got)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("an un-terminated message was never ingested -- this is #202, and it means a real RouterOS router feeds nothing over TCP")
+	}
+}
+
+// TestTCPNewlineDelimitedStillWorks guards the other half. A
+// conventional syslog sender does terminate its lines and may pack
+// several into one write; fixing RouterOS's shape must not regress it.
+func TestTCPNewlineDelimitedStillWorks(t *testing.T) {
+	out := make(chan RawMessage, 8)
+	addr, stop := serveTCPForTest(t, out)
+	defer stop()
+
+	conn, err := net.Dial("tcp", addr)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer conn.Close()
+
+	if _, err := conn.Write([]byte("first\nsecond\r\nthird\n")); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	for _, want := range []string{"first", "second", "third"} {
+		select {
+		case msg := <-out:
+			if got := string(msg.Data); got != want {
+				t.Errorf("Data = %q, want %q", got, want)
+			}
+		case <-time.After(3 * time.Second):
+			t.Fatalf("never received %q", want)
+		}
 	}
 }
