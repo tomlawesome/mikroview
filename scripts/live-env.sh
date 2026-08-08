@@ -111,6 +111,24 @@ print(f"sent {n} events labelled {label}", file=sys.stderr)
 PY
 }
 
+# portscan N -- N distinct destination ports from one source IP, inside
+# the default port-scan window, so a real port_scan flag gets raised
+# rather than synthesized -- for scenarios (live-exclusions.mjs) that
+# need an actual flag to clear/exclude, not just events in the table.
+portscan() {
+  python3 - "$SYSLOG_PORT" "${1:-20}" <<'PY'
+import socket, sys
+port, n = int(sys.argv[1]), int(sys.argv[2])
+s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+for i in range(n):
+    s.sendto((f"firewall,info D|scan-src| forward: in:ether1 out:bridge1, "
+              f"connection-state:new, proto TCP (SYN), "
+              f"198.51.100.77:{40000+i}->192.168.1.10:{1000+i}, len 60").encode(),
+             ("127.0.0.1", port))
+print(f"sent a {n}-port scan from 198.51.100.77", file=sys.stderr)
+PY
+}
+
 down() {
   if [ -f "$MV_DIR/pid" ]; then kill "$(cat "$MV_DIR/pid")" 2>/dev/null || true; fi
   # Belt and braces: a run killed mid-way leaves no pid file but may leave
@@ -123,6 +141,7 @@ down() {
 case "${1:-}" in
   up) up ;;
   syslog) shift; syslog "$@" ;;
+  portscan) shift; portscan "$@" ;;
   down) down ;;
-  *) echo "usage: $0 {up|syslog N [label]|down}" >&2; exit 2 ;;
+  *) echo "usage: $0 {up|syslog N [label]|portscan N|down}" >&2; exit 2 ;;
 esac
