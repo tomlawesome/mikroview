@@ -71,6 +71,16 @@ upgrading.
   shared prefix honestly returns every matching rule rather than
   guessing at one.
 
+  In the UI, event rows grow a lookup button beside the rule and NAT
+  cells -- the same shape as the IP/port investigate buttons. The rule
+  popover shows every pushed rule carrying that row's log-prefix, with
+  its RouterOS ordinal ("go look at rule 7 in RouterOS"), comment,
+  chain, action and src-address-list; the NAT popover shows the whole
+  numbered NAT table, since a log line carries the translation result,
+  never which rule performed it. Three states are kept honestly
+  distinct: no table pushed by this device yet, a table with no rule
+  carrying this prefix, and the matches themselves.
+
   **Structurally incapable of affecting detection**: the store is
   in-memory only (a restart costs one push interval of enrichment,
   nothing more -- and there is nothing to redact from a backup because
