@@ -551,6 +551,27 @@ type Blocklist struct {
 	Sources []string `yaml:"sources"`
 }
 
+// NetClass configures internal/netclass's local IP attribution: labelling
+// an address as a Tor exit, a commercial VPN, cloud/datacenter space, or
+// a privacy relay (issue #114). Display-first -- it adds context to a
+// manual IP lookup, it does not raise flags. See that package's doc
+// comment for the menu and why it is a fixed menu rather than an
+// arbitrary URL field.
+//
+// On by default with the two high-precision lists (Tor exit nodes and
+// the X4BNet VPN list) -- deliberately not the broad datacenter/cloud
+// feeds, which cover >10% of routable IPv4 and would attach a label to
+// ordinary traffic. An operator who wants full cloud attribution opts
+// the rest in: sources like "x4b_datacenter", "aws", "gcp". Set sources
+// to an empty list to disable attribution entirely. Refresh cadence is
+// not configurable, same reasoning as Blocklist.
+type NetClass struct {
+	// Sources is a list of internal/netclass.Source values -- an
+	// unrecognized entry is logged and skipped, degrade-not-crash like
+	// every other optional integration here.
+	Sources []string `yaml:"sources"`
+}
+
 // Postgres optionally moves mikroview's persisted state off this host
 // and onto a database server (issue #131).
 //
@@ -603,6 +624,7 @@ type Config struct {
 	Devices    []Device   `yaml:"devices"`
 	DeviceMAC  DeviceMAC  `yaml:"deviceMac"`
 	Blocklist  Blocklist  `yaml:"blocklist"`
+	NetClass   NetClass   `yaml:"netClass"`
 
 	// RuleNames/HostNames are optional friendly-display-name maps -- see
 	// internal/naming. Keyed by the raw value RouterOS reports (a rule
@@ -724,6 +746,12 @@ func defaults() Config {
 			// reasoning Flags already gives for duplicating
 			// internal/detect.Config's own defaults.
 			Sources: []string{"spamhaus_drop", "spamhaus_edrop"},
+		},
+		NetClass: NetClass{
+			// Mirrors internal/netclass.DefaultSources -- literal here
+			// to keep this package a dependency-free leaf, same as
+			// Blocklist above.
+			Sources: []string{"tor", "x4b_vpn"},
 		},
 		Notify: Notify{
 			BatchWindow: 60 * time.Second,
