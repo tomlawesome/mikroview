@@ -84,6 +84,33 @@ type Payload struct {
 	WireguardPeers      []WireguardPeer
 }
 
+// RecordCount returns how many records are in whichever slice matches
+// Kind -- a small convenience for a caller that wants to log or report
+// "how much arrived" (e.g. an audit entry) without a type switch over
+// every kind of its own.
+func (p Payload) RecordCount() int {
+	switch p.Kind {
+	case KindAddressList:
+		return len(p.AddressList)
+	case KindFilterRule:
+		return len(p.FilterRules)
+	case KindNATRule:
+		return len(p.NATRules)
+	case KindDNSStatic:
+		return len(p.DNSStatic)
+	case KindDHCPLease:
+		return len(p.DHCPLeases)
+	case KindARP:
+		return len(p.ARP)
+	case KindWireguardInterface:
+		return len(p.WireguardInterfaces)
+	case KindWireguardPeer:
+		return len(p.WireguardPeers)
+	default:
+		return 0
+	}
+}
+
 // DecodePayload strictly decodes and validates a RouterOS ingest payload
 // from r. Strict in the sense AGENTS.md asks of anything parsing
 // attacker-shaped input: unknown fields are refused rather than silently
