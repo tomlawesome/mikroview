@@ -147,6 +147,44 @@ export async function lookupIp(ip: string): Promise<ReputationResult> {
   return res.json()
 }
 
+// The pushed firewall rule / NAT tables (issue #186 step 4) -- read from
+// mikroview's own local store, never the router. `available: false`
+// means that device has never pushed this table, which the UI shows as
+// "no data pushed yet" rather than an empty table pretending to be real.
+export interface RouterFilterRule {
+  ordinal: number
+  comment: string
+  chain: string
+  action: string
+  srcAddressList: string
+  logPrefix: string
+}
+
+export interface RouterNatRule {
+  ordinal: number
+  comment: string
+  chain: string
+  action: string
+}
+
+export interface RouterTable<T> {
+  available: boolean
+  updatedAt?: string
+  rules: T[]
+}
+
+export async function fetchRouterRules(device: string): Promise<RouterTable<RouterFilterRule>> {
+  const res = await fetch(`/api/routeros/${encodeURIComponent(device)}/rules`)
+  if (!res.ok) throw new ApiError(`fetchRouterRules: ${res.status}`, res.status)
+  return res.json()
+}
+
+export async function fetchRouterNat(device: string): Promise<RouterTable<RouterNatRule>> {
+  const res = await fetch(`/api/routeros/${encodeURIComponent(device)}/nat`)
+  if (!res.ok) throw new ApiError(`fetchRouterNat: ${res.status}`, res.status)
+  return res.json()
+}
+
 // Mirrors internal/api/flags.go's handleFlagsList response: the flag
 // list plus the last hour of newly-raised-episode counts by type (see
 // FlagTimeBucket) for FlagsChart -- one endpoint, same convention
