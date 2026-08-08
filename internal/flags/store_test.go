@@ -1030,3 +1030,75 @@ func TestClearedCountSurvivesReload(t *testing.T) {
 		t.Errorf("clearedCount after reload = %d, want 5 -- a stale zero disables cleared-flag eviction entirely", got)
 	}
 }
+
+// TestClearAllClearsEveryActiveFlag covers issue #198's "Clear all":
+// every active flag is cleared in one call, cleared ones are left
+// exactly as they were, and the count returned is the number actually
+// cleared.
+func TestClearAllClearsEveryActiveFlag(t *testing.T) {
+	s, _ := Open("")
+	now := time.Now()
+
+	s.Add(TypePortScan, "203.0.113.1", "d1", now)
+	s.Add(TypeActivitySpike, "203.0.113.2", "d2", now)
+	s.Add(TypeCriticalPort, "203.0.113.3", "d3", now)
+	// Already cleared before ClearAll runs -- must stay untouched, not
+	// double-counted, and not have its ClearedAt overwritten.
+	s.Add(TypeOutboundAnomaly, "203.0.113.4", "d4", now)
+	preClearedID := flagID(TypeOutboundAnomaly, "203.0.113.4")
+	s.Clear(preClearedID, now.Add(time.Second))
+	preClearedAt := now.Add(time.Second)
+
+	later := now.Add(time.Minute)
+	n := s.ClearAll(later)
+	if n != 3 {
+		t.Errorf("ClearAll returned %d, want 3 (the already-cleared flag must not be recounted)", n)
+	}
+
+	for _, f := range s.List() {
+		if !f.Cleared {
+			t.Errorf("flag %+v is still active after ClearAll", f)
+		}
+	}
+
+	// The pre-cleared flag's own ClearedAt must be untouched by this
+	// call -- ClearAll only ever clears what was still active.
+	for _, f := range s.List() {
+		if f.ID == preClearedID && !f.ClearedAt.Equal(preClearedAt) {
+			t.Errorf("ClearAll overwrote an already-cleared flag's ClearedAt: got %v, want %v", f.ClearedAt, preClearedAt)
+		}
+	}
+}
+
+// TestClearAllCreatesNoExclusions is the invariant #198 states
+// explicitly: Clear all performs regular clears only. A flag cleared by
+// it must still raise again on the next matching event, exactly like a
+// single Clear -- and unlike ClearAndExclude.
+func TestClearAllCreatesNoExclusions(t *testing.T) {
+	s, _ := Open("")
+	now := time.Now()
+
+	s.Add(TypePortScan, "203.0.113.9", "d", now)
+	s.ClearAll(now.Add(time.Minute))
+
+	if len(s.ListExclusions()) != 0 {
+		t.Fatalf("ClearAll created exclusions: %+v, want none", s.ListExclusions())
+	}
+
+	// The whole point of "no exclusion": it must be able to raise again.
+	s.Add(TypePortScan, "203.0.113.9", "re-fire", now.Add(2*time.Minute))
+	list := s.List()
+	if len(list) != 1 || list[0].Cleared || list[0].Detail != "re-fire" {
+		t.Errorf("expected the target to raise again after Clear all, got %+v", list)
+	}
+}
+
+// TestClearAllOnEmptyStoreIsANoOp guards the persistLocked-skip path: no
+// active flags means nothing to write, and the call should not error or
+// panic on a store with nothing in it.
+func TestClearAllOnEmptyStoreIsANoOp(t *testing.T) {
+	s, _ := Open("")
+	if n := s.ClearAll(time.Now()); n != 0 {
+		t.Errorf("ClearAll on an empty store returned %d, want 0", n)
+	}
+}
