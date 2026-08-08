@@ -22,5 +22,5 @@ A commercial licence removes those obligations.
 
 Email **tom@tomlawson.io**.
 
-MikroView is solely owned by Tom Lawson, so a commercial licence can be
+MikroView is solely owned by Tom Bridgwater-Lawson, so a commercial licence can be
 granted directly with no third-party sign-off required.
