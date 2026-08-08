@@ -111,21 +111,23 @@ print(f"sent {n} events labelled {label}", file=sys.stderr)
 PY
 }
 
-# portscan N -- N distinct destination ports from one source IP, inside
-# the default port-scan window, so a real port_scan flag gets raised
-# rather than synthesized -- for scenarios (live-exclusions.mjs) that
-# need an actual flag to clear/exclude, not just events in the table.
+# portscan N [source-ip] -- N distinct destination ports from one source
+# IP, inside the default port-scan window, so a real port_scan flag gets
+# raised rather than synthesized -- for scenarios (live-exclusions.mjs,
+# live-flags-clearing.mjs) that need an actual flag to clear/exclude, not
+# just events in the table. source-ip defaults to 198.51.100.77;
+# pass a different one to raise a second, independent flag.
 portscan() {
-  python3 - "$SYSLOG_PORT" "${1:-20}" <<'PY'
+  python3 - "$SYSLOG_PORT" "${1:-20}" "${2:-198.51.100.77}" <<'PY'
 import socket, sys
-port, n = int(sys.argv[1]), int(sys.argv[2])
+port, n, src = int(sys.argv[1]), int(sys.argv[2]), sys.argv[3]
 s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 for i in range(n):
     s.sendto((f"firewall,info D|scan-src| forward: in:ether1 out:bridge1, "
               f"connection-state:new, proto TCP (SYN), "
-              f"198.51.100.77:{40000+i}->192.168.1.10:{1000+i}, len 60").encode(),
+              f"{src}:{40000+i}->192.168.1.10:{1000+i}, len 60").encode(),
              ("127.0.0.1", port))
-print(f"sent a {n}-port scan from 198.51.100.77", file=sys.stderr)
+print(f"sent a {n}-port scan from {src}", file=sys.stderr)
 PY
 }
 
