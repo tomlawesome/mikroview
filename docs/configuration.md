@@ -1644,11 +1644,23 @@ One token per router is deliberate: any RouterOS user holding the
 leaked one must only ever be able to speak for the single router it was
 issued for.
 
+What a push feeds, today: host names (a DNS static entry, DHCP lease
+hostname, or WireGuard peer comment pushed by the router names that
+address everywhere mikroview shows one -- and **RouterOS always wins**
+over a label set in mikroview for the same address, so manage
+router-known hosts in RouterOS; labels for anything the router doesn't
+name are untouched), and the pushed firewall rule and NAT tables,
+served read-only at `GET /api/routeros/{device}/rules` and `.../nat` in
+RouterOS's own display order. Pushed state is held in memory only --
+never written to disk, never in a backup -- and re-arrives with the
+router's next scheduled push, so a mikroview restart costs at most one
+push interval of naming/table enrichment and nothing else. Pushed data
+never raises, lowers, clears or suppresses a detection: that boundary
+is a build-failing test, not a convention.
+
 The router-side setup walkthrough (what to run on RouterOS, and what
 each command grants) lands with the rest of the push-ingest feature;
-this section will grow a worked example once that's in place. Until
-then, an issued ingest token authenticates and is rate-limited and
-audited, but nothing in mikroview yet acts on what it pushes.
+this section will grow a worked example once that's in place.
 
 ## Single sign-on (OIDC/SSO)
 
