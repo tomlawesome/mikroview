@@ -22,6 +22,7 @@ import (
 	"github.com/tomlawesome/mikroview/internal/routerstate"
 	"github.com/tomlawesome/mikroview/internal/rules"
 	"github.com/tomlawesome/mikroview/internal/store"
+	"github.com/tomlawesome/mikroview/internal/watchlist"
 )
 
 type Server struct {
@@ -44,6 +45,14 @@ type Server struct {
 	// Open("") returns a usable, empty, unpersisted store), same
 	// always-usable convention as Flags/DetectorSettings above.
 	Entities *entities.Store
+	// Watchlist is the persisted, admin-manageable entry set backing
+	// GET/POST/PUT/DELETE /api/watchlist/entries (issue #243) -- what
+	// Control Ports grows into. Always non-nil (internal/watchlist.
+	// Open("") returns a usable, empty, unpersisted store), same
+	// always-usable convention as Entities above. Matches (what an
+	// entry has actually recorded, via internal/matchlog) are not
+	// exposed here yet -- their own query surface is a later slice.
+	Watchlist *watchlist.Store
 	// Rules is the persisted, long-lived per-rule-label usage record
 	// (issue #103's internal/rules.Store) -- exposed read-only via GET
 	// /api/rules (issue #109) as the "discovered but unnamed rules"
@@ -194,6 +203,11 @@ func (s *Server) routes() []route {
 		{http.MethodGet, "/api/entities", s.handleEntitiesList},
 		{http.MethodPost, "/api/entities", s.handleEntitiesUpsert},
 		{http.MethodDelete, "/api/entities", s.handleEntitiesDelete},
+
+		{http.MethodGet, "/api/watchlist/entries", s.handleWatchlistEntriesList},
+		{http.MethodPost, "/api/watchlist/entries", s.handleWatchlistEntriesCreate},
+		{http.MethodPut, "/api/watchlist/entries/{id}", s.handleWatchlistEntriesUpdate},
+		{http.MethodDelete, "/api/watchlist/entries/{id}", s.handleWatchlistEntriesDelete},
 
 		{http.MethodGet, "/api/audit", s.handleAuditList},
 		{http.MethodGet, "/api/config/problems", s.handleConfigProblems},
