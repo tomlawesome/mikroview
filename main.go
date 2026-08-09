@@ -44,6 +44,7 @@ import (
 	"github.com/tomlawesome/mikroview/internal/rules"
 	"github.com/tomlawesome/mikroview/internal/servertls"
 	"github.com/tomlawesome/mikroview/internal/store"
+	"github.com/tomlawesome/mikroview/internal/suggest"
 	"github.com/tomlawesome/mikroview/internal/syslog"
 	"github.com/tomlawesome/mikroview/internal/watchlist"
 	"github.com/tomlawesome/mikroview/web"
@@ -64,6 +65,15 @@ const globalSpikeCheckInterval = 10 * time.Second
 // interval of crossing the threshold, which doesn't need EMA-baseline-
 // tracking-grade freshness to be useful to an operator.
 const deviceSilenceCheckInterval = 1 * time.Minute
+
+// suggestSyncInterval is how often internal/suggest re-scans routerState
+// for new/changed candidates (#243 slice 5). Coarser than either check
+// above on purpose: routerState itself only changes when RouterOS's own
+// push script runs, which docs/routeros-setup.md's own example scheduler
+// entry sets to every 20 minutes -- syncing more often than that finds
+// nothing new, so this just needs to be well inside that window rather
+// than tracking it exactly.
+const suggestSyncInterval = 5 * time.Minute
 
 // loginLimiter{Threshold,Window}: brute-force protection on
 // POST /api/auth/login (see internal/auth.LoginLimiter) -- an internal
@@ -448,6 +458,22 @@ func main() {
 		watchlistLog.Warn(fmt.Sprintf("%v (continuing with in-memory-only, unpersisted watchlist)", err))
 	}
 
+	// The suggestion candidate pool (#243 slice 5): watchlist entries
+	// suggested from data RouterOS has already pushed. Same
+	// optional-persistence contract as the watchlist itself -- losing
+	// this on restart just means every candidate regenerates at Off,
+	// which loses an operator's Hide/accept-in-progress state but never
+	// anything RunPeriodicSync (started below, once routerState exists)
+	// can't rebuild.
+	suggestBackend, err := persistence.backendFor(bootCtx, "suggestions", cfg.Watchlist.SuggestionsStorePath)
+	if err != nil {
+		watchlistLog.Warn(err.Error())
+	}
+	suggestStore, err := suggest.OpenWithBackend(suggestBackend)
+	if err != nil {
+		watchlistLog.Warn(fmt.Sprintf("%v (continuing with in-memory-only, unpersisted suggestions)", err))
+	}
+
 	// The watchlist's match log has no in-memory-only mode (durability
 	// is the entire point of it, see internal/matchlog's package doc
 	// comment), so a failure here is handled differently from every
@@ -637,6 +663,7 @@ func main() {
 	go ingest(ctx, raw, st, devices, macRegistry, fs, h, geo, detector, ru, names, watchlistEval)
 	go detector.Run(ctx)
 	go watchlistEval.Run(ctx)
+	go suggestStore.RunPeriodicSync(ctx, routerState, suggestSyncInterval)
 
 	go func() {
 		spikeLog := logging.New("global-spike")
@@ -869,6 +896,7 @@ func main() {
 		Rules:            ru,
 		Audit:            auditStore,
 		Watchlist:        watchlistStore,
+		Suggest:          suggestStore,
 		MatchLog:         matchLog,
 		DeviceStaleAfter: cfg.Flags.DeviceStaleAfter,
 		Auth:             authStore,
