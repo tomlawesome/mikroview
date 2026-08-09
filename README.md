@@ -214,6 +214,18 @@ every restart) but not fatal.
   flag for a human to review and clear, never an automatic action. See
   [docs/configuration.md](docs/configuration.md) for the detectors and
   their thresholds.
+- **Watchlist**: operator-defined entries, persisted and queryable, in
+  two modes — **record** ("watch attempts against these ports") and
+  **invert** ("this device should only ever reach these destinations",
+  reviewed via an observe-then-promote workflow before anything is
+  treated as a violation). Tuning entries against your own network's
+  traffic is expected and ongoing, not a one-time setup step: mikroview
+  presents what it saw and lets you decide what's expected, it never
+  decides that for you. And like everything else here, it only ever
+  sees what the router is actually configured to log — an entry with no
+  matches can mean "nothing happened" or "nothing logs this," and
+  telling those apart is on the operator, not the tool. See
+  [docs/configuration.md](docs/configuration.md)'s "Watchlist" section.
 - **Live updates**: a WebSocket pushes new events to the browser in
   real time; historical/filtered queries go through a REST endpoint
   against the retained buffer. See

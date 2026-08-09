@@ -89,7 +89,6 @@ var authzMatrix = []routeExpectation{
 	{http.MethodGet, "/api/watchlist/matches", accessUser,
 		"a read over already-collected evidence, same tier as events/flags/stats/devices above -- also reachable via a read-only API token (readOnlyRoutes), since birdcage-style external correlation by source is the reason internal/matchlog exists"},
 	{http.MethodGet, "/api/rules", accessUser, "core read"},
-	{http.MethodGet, "/api/critical-ports", accessUser, "core read"},
 	{http.MethodGet, "/api/stats", accessUser, "core read"},
 	{http.MethodGet, "/api/ws", accessUser,
 		"live tail; additionally same-origin checked (see checkOrigin)"},

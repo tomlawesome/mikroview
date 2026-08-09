@@ -143,15 +143,6 @@
 
         <button
           class="option"
-          class:active={appState.view === 'control-ports'}
-          onclick={() => toggleView('control-ports')}
-          title="SSH/Telnet/control-port attempts, accepted and denied"
-        >
-          Control ports
-        </button>
-
-        <button
-          class="option"
           class:active={appState.view === 'fleet'}
           onclick={() => toggleView('fleet')}
           title="Every known RouterOS device: live/stale/never-seen status, last-seen, and event counts"
@@ -221,6 +212,22 @@
             title="Review and remove permanently-excluded (detector, target) pairs"
           >
             Exclusions
+          </button>
+
+          <!-- Same strict gate again -- entry management under
+               /api/watchlist/entries is callerIsAdmin (issue #243,
+               successor to the old, unauthenticated-by-default Control
+               Ports tab). The match query itself is a looser gate
+               (accessUser, reachable via a read-only bearer token too)
+               but this menu item is about managing entries, not just
+               viewing matches. -->
+          <button
+            class="option"
+            class:active={appState.view === 'watchlist'}
+            onclick={() => toggleView('watchlist')}
+            title="Watch ports or watch a device's own destinations, observe before enforcing"
+          >
+            Watchlist
           </button>
         {/if}
       </div>

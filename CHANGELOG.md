@@ -53,23 +53,43 @@ upgrading.
   toolbar directly). See `docs/configuration.md`'s "How events are
   stored" and CFG-0011/CFG-0012 for the full reasoning.
 
+- **The Control Ports tab and `GET /api/critical-ports`** (#243),
+  replaced wholesale by the watchlist (see Added below). The
+  `flags.criticalPorts` config key is unchanged and still feeds the
+  unrelated `critical_port` behavioral detector -- only the HTTP
+  endpoint that re-exposed that same list for the now-deleted tab, and
+  the tab itself, are gone. No alias, no dual UI, per `AGENTS.md`.
+
 ### Added
 
-- **The watchlist match log's storage and matching infrastructure**
-  (#243, slice 2 of 6) -- **not yet a usable feature**: there is still no
-  config key, API or UI to create a watchlist entry, so this ships
-  provably inert (an empty entry set matches nothing). What lands: a
-  persisted entry store (`internal/watchlist`), non-inverted matching
-  ("record attempts against these ports," generalising Control Ports'
-  client-side-only logic to run server-side against every ingested
-  event), and an async evaluation worker mirroring
-  `internal/detect.Detector`'s own queue/drop/recover pattern -- a slow
-  or backed-up match evaluation must never delay store insertion or
-  WebSocket broadcast on the single ingest goroutine, the same failure
-  mode issue #221 already demonstrated on the equivalent detection path.
+- **The watchlist**, replacing the old Control Ports tab (#243): a
+  persisted, admin-managed entry set (`internal/watchlist`) with two
+  matching modes -- **record**, "watch attempts against these ports,"
+  generalising Control Ports' client-side-only logic to run server-side
+  against every ingested event; and **invert**, "this device should only
+  ever reach these destinations," which starts a new entry in an
+  observe state (nothing fires, candidate destinations are recorded for
+  review), lets the operator promote what's expected, and only then
+  starts treating anything else as a real match. Matches are persisted
+  (`internal/matchlog`, append-only, fsync per write) so they survive
+  both the in-memory event ring wrapping and a mikroview restart --
+  unlike Control Ports, which only ever saw whatever was still in the
+  browser's own capped, volatile event buffer. Matching runs on an async
+  evaluation worker mirroring `internal/detect.Detector`'s own
+  queue/drop/recover pattern, so a slow or backed-up match evaluation
+  never delays store insertion or WebSocket broadcast on the single
+  ingest goroutine -- the same failure mode issue #221 already
+  demonstrated on the equivalent detection path.
+
+  Managed end to end: an HTTP API (entry CRUD, promote, observe toggle,
+  and a windowed match query reachable via a read-only API token) and an
+  admin-only **Menu → Watchlist** page for creating entries, reviewing
+  an inverted entry's observed candidates, promoting them, and viewing
+  an entry's recent matches inline.
+
   New config: `watchlist.storePath`, `watchlist.matchLogPath`,
   `watchlist.matchLogCapacity` (CFG-0040/CFG-0041), see
-  `docs/configuration.md`'s "Watchlist match log" section.
+  `docs/configuration.md`'s "Watchlist" section.
 
 - **Tor and VPN network-class matches now reinforce an already-raised
   flag's confidence** (#114), direction-aware: only a classified source
