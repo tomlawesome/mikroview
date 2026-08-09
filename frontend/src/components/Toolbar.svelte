@@ -48,7 +48,9 @@
       <button
         class:active={appState.autoscroll}
         onclick={() => (appState.autoscroll = !appState.autoscroll)}
-        title="Auto-scroll to newest events"
+        title={appState.autoscroll
+          ? 'Auto-scroll to newest events'
+          : 'Hold the current view -- new events keep arriving but the table stays put'}
       >
         Autoscroll
       </button>
