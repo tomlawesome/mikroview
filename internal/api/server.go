@@ -16,6 +16,7 @@ import (
 	"github.com/tomlawesome/mikroview/internal/entities"
 	"github.com/tomlawesome/mikroview/internal/flags"
 	"github.com/tomlawesome/mikroview/internal/hub"
+	"github.com/tomlawesome/mikroview/internal/matchlog"
 	"github.com/tomlawesome/mikroview/internal/netclass"
 	"github.com/tomlawesome/mikroview/internal/oidc"
 	"github.com/tomlawesome/mikroview/internal/reputation"
@@ -50,9 +51,18 @@ type Server struct {
 	// Control Ports grows into. Always non-nil (internal/watchlist.
 	// Open("") returns a usable, empty, unpersisted store), same
 	// always-usable convention as Entities above. Matches (what an
-	// entry has actually recorded, via internal/matchlog) are not
-	// exposed here yet -- their own query surface is a later slice.
+	// entry has actually recorded, via internal/matchlog) are exposed
+	// separately, via MatchLog below.
 	Watchlist *watchlist.Store
+	// MatchLog answers GET /api/watchlist/matches, the query surface
+	// #243 section 3 exists for -- birdcage-style correlation by source
+	// IP over a time range. Unlike every store field above, this can be
+	// nil: internal/matchlog has no in-memory-only fallback (durability
+	// is the entire reason it exists), so a boot-time failure to open it
+	// leaves this nil rather than degrading to an unpersisted store that
+	// would silently lose every match. Every handler that reads it must
+	// nil-check first.
+	MatchLog matchlog.Store
 	// Rules is the persisted, long-lived per-rule-label usage record
 	// (issue #103's internal/rules.Store) -- exposed read-only via GET
 	// /api/rules (issue #109) as the "discovered but unnamed rules"
@@ -208,6 +218,9 @@ func (s *Server) routes() []route {
 		{http.MethodPost, "/api/watchlist/entries", s.handleWatchlistEntriesCreate},
 		{http.MethodPut, "/api/watchlist/entries/{id}", s.handleWatchlistEntriesUpdate},
 		{http.MethodDelete, "/api/watchlist/entries/{id}", s.handleWatchlistEntriesDelete},
+		{http.MethodPost, "/api/watchlist/entries/{id}/promote", s.handleWatchlistEntriesPromote},
+		{http.MethodPost, "/api/watchlist/entries/{id}/observing", s.handleWatchlistEntriesSetObserving},
+		{http.MethodGet, "/api/watchlist/matches", s.handleWatchlistMatchesQuery},
 
 		{http.MethodGet, "/api/audit", s.handleAuditList},
 		{http.MethodGet, "/api/config/problems", s.handleConfigProblems},
