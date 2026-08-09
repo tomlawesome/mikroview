@@ -36,6 +36,23 @@ upgrading.
   a side effect -- RouterOS connects to the syslog port directly, never
   through that proxy, so it needs a certificate to trust either way.
 
+- **`store.maxEvents`** (#244), replaced by `store.maxMemory`: a memory
+  budget (`"120MiB"`, `"500MB"`) rather than a raw event count, along
+  with its env var (`MIKROVIEW_STORE_MAX_EVENTS` → `MIKROVIEW_STORE_MAX_MEMORY`)
+  and CLI flag (`-max-events` → `-max-memory`). Wholesale, per
+  `AGENTS.md` -- no alias, no dual reading of the old key. An event count
+  meant something different by four or more orders of magnitude between
+  deployments (MikroTik firewall rules do not log by default, so the
+  rate mikroview actually sees is set entirely by which rules an operator
+  turned logging on for) -- measured on one real instance, the old
+  200,000 default held under three minutes against a configured 24h
+  retention, invisible anywhere until someone went looking. A memory
+  budget is the thing an operator can actually reason about across that
+  spread: it's what they set on a container, and mikroview derives the
+  rest and reports it back (`GET /api/stats`, and now the live view's
+  toolbar directly). See `docs/configuration.md`'s "How events are
+  stored" and CFG-0011/CFG-0012 for the full reasoning.
+
 ### Added
 
 - **Tor and VPN network-class matches now reinforce an already-raised

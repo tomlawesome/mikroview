@@ -24,7 +24,7 @@ listen:
 
 store:
   retention: 24h
-  maxEvents: 200000
+  maxMemory: 120MiB
 
 devices:
   - id: core-router
@@ -33,14 +33,61 @@ devices:
 ```
 
 - `store.retention` — how far back `/api/events` and the UI will show,
-  as a Go duration string (`24h`, `12h30m`, ...).
-- `store.maxEvents` — the hard cap on events held in memory at once (a
-  fixed-size ring buffer); this bounds memory use regardless of traffic
-  volume. Once full, the oldest events are overwritten first.
+  as a Go duration string (`24h`, `12h30m`, ...). A ceiling on what a
+  query returns, not a promise that history exists — see
+  [How events are stored](#how-events-are-stored) for why.
+- `store.maxMemory` — the memory budget for mikroview's event buffer, a
+  Go duration-string-style size such as `120MiB` or `500MB` rather than
+  an event count. Same section as above explains why a count would not
+  mean anything portable between deployments.
 - `devices` — maps a syslog source IP to a friendly name. Routers
   sending logs from an IP *not* listed here still appear in the UI and
   `/api/devices`, labelled by their raw IP with `configured: false`, so
   you can identify and add them rather than silently losing their events.
+
+### How events are stored
+
+There is no database. Every event mikroview has seen lives in one
+fixed-size block of memory (`internal/store/ring.go`) that holds the most
+recent events and overwrites the oldest once it fills — `store.maxMemory`
+is how big that block is, and `store.retention` is a ceiling applied when
+a query runs, not a guarantee that events that old still exist. If the
+buffer has already overwritten what a query asks for, you get whatever
+is left, not an error — `windowStart` in the response says what the
+actual lower bound turned out to be, so you can tell the difference
+between "nothing happened" and "it isn't there any more."
+
+**How long the buffer actually covers is set by your own traffic, and it
+varies enormously.** MikroTik firewall rules do not log by default — `log`
+is `no` unless you explicitly turn it on for a rule — so the rate
+mikroview sees is entirely a product of which rules you have logging
+enabled for, not of your link speed or how busy your network is. A router
+logging only dropped traffic and one logging every accepted connection
+can differ by four or more orders of magnitude. There is no default that
+serves both, and no table of "typical" rates in this document would mean
+anything without knowing which of those you have.
+
+So: measure your own. `GET /api/stats` reports `capacity`, `count` and
+`eventsPerSecond` for your own running instance — once `count` reaches
+`capacity` the buffer is overwriting, and `capacity / eventsPerSecond` is
+roughly how many seconds of history remain. The live view's toolbar shows
+this directly (`n% of buffer used`, or `holding last Xm Ys` once full),
+so you do not need to query the API by hand to find out.
+
+**A typical retained event costs about 616 bytes**, so the default
+`maxMemory: 120MiB` holds roughly 200,000 events. That figure is a budget
+for the buffer itself, not what mikroview's process occupies on the host
+— expect *resident* memory (what `docker stats` or `top` reports) to run
+about 1.5x higher once the Go runtime and process overhead are counted,
+so provisioning for the 120MiB default really means having roughly 175MiB
+of RAM to spare. The whole budget is reserved **immediately at startup**
+(`store.New` allocates it all up front), not filled up gradually — a
+value too large for the machine fails right away rather than degrading
+over hours, which is why mikroview warns above 1GiB (see
+[CFG-0012](#cfg-0012)) without silently shrinking it back down: a large
+budget on a machine that genuinely has the memory is a legitimate choice,
+and the warning only makes sure you're making it with the real cost in
+front of you.
 
 ### Running behind a reverse proxy
 
@@ -192,12 +239,30 @@ store:
 
 #### CFG-0011
 
-`store.maxEvents` is zero or negative, which would keep nothing. Same
-treatment as CFG-0010.
+`store.maxMemory` is zero, negative, or too small to be a usable memory
+budget, which would keep nothing. Same treatment as CFG-0010.
 
 ```yaml
 store:
-  maxEvents: 200000
+  maxMemory: 120MiB
+```
+
+#### CFG-0012
+
+`store.maxMemory` is set above 1GiB. Unlike CFG-0010/CFG-0011, this is
+only a warning that leaves your configured value alone — a large budget
+on a machine that genuinely has the memory to spare is a legitimate
+choice, not a mistake to correct. It exists because the whole budget is
+reserved immediately at startup (see
+[How events are stored](#how-events-are-stored)), so a value that turns
+out to be too large fails right away rather than degrading gradually, and
+the warning states the real memory cost — including the ~1.5x resident
+overhead on top of the ring itself — so you have it in front of you
+before that happens.
+
+```yaml
+store:
+  maxMemory: 120MiB  # lower this, or confirm the machine has the larger amount to spare
 ```
 
 #### CFG-0020
@@ -1970,7 +2035,7 @@ Override individual scalar settings without a mounted file:
 | `MIKROVIEW_TRUSTED_PROXIES` | `listen.trustedProxies` (comma-separated; see [Running behind a reverse proxy](#running-behind-a-reverse-proxy)) |
 | `MIKROVIEW_CLIENT_IP_HEADER` | `listen.clientIpHeader` |
 | `MIKROVIEW_STORE_RETENTION` | `store.retention` |
-| `MIKROVIEW_STORE_MAX_EVENTS` | `store.maxEvents` |
+| `MIKROVIEW_STORE_MAX_MEMORY` | `store.maxMemory` |
 | `MIKROVIEW_LOG_LEVEL` | `log.level` (see [Logging](#logging)) |
 | `MIKROVIEW_GEOIP_DB_PATH` | `geoip.dbPath` (see [GeoIP country flags](#geoip-country-flags-optional)) |
 | `MIKROVIEW_ABUSEIPDB_KEY` | `reputation.abuseIPDBKey` (see [IP reputation lookup](#ip-reputation-lookup-optional)) |
@@ -2210,7 +2275,7 @@ before it could reach a database at all.
 ## CLI flags (local development)
 
 `-version`, `-syslog-tls`, `-http`,
-`-http-redirect`, `-retention`, `-max-events`, `-geoip-db` — see
+`-http-redirect`, `-retention`, `-max-memory`, `-geoip-db` — see
 `go run . -h`. Devices,
 rule/host names, and auth config can only be set via YAML/env, not
 flags.
@@ -2299,7 +2364,7 @@ truncated by retention.
 
 The initial page load and any "load older" request go through
 `GET /api/events`, filtered **server-side** against the full retained
-buffer (up to `store.maxEvents` / `store.retention`) — this keeps the
+buffer (up to `store.maxMemory` / `store.retention`) — this keeps the
 browser from ever having to download more than it needs.
 
 The WebSocket at `/api/ws`, by contrast, pushes **every** new event to

@@ -43,7 +43,11 @@ listen:
 
 store:
   retention: 24h
-  maxEvents: 200000
+  # A memory budget, not an event count -- see docs/configuration.md's
+  # "config.yaml" section for what this actually buys at your own
+  # traffic rate, which varies enormously depending on which of your
+  # router's rules have logging turned on.
+  maxMemory: 120MiB
 
 # Leveled, colorized server log output (see docs/configuration.md's
 # "Logging" section) -- level defaults to info already, uncomment only
