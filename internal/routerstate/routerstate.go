@@ -320,6 +320,76 @@ func (s *Store) RulesForLogPrefix(device, prefix string) []ingest.FilterRule {
 	return out
 }
 
+// DHCPLeases returns device's pushed DHCP lease table, sorted by address
+// for a stable, deterministic order (leases have no ordinal the way
+// filter/NAT rules do). ok is false when nothing has been pushed for
+// that device+kind yet -- same "no data yet" vs "empty table" distinction
+// FilterRules makes.
+func (s *Store) DHCPLeases(device string) (leases []ingest.DHCPLease, updatedAt time.Time, ok bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	ks, found := s.kindLocked(device, ingest.KindDHCPLease)
+	if !found {
+		return nil, time.Time{}, false
+	}
+	for _, p := range ks.pages {
+		leases = append(leases, p.DHCPLeases...)
+	}
+	sort.SliceStable(leases, func(i, j int) bool { return leases[i].Address < leases[j].Address })
+	return leases, ks.updatedAt, true
+}
+
+// ARPEntries returns device's pushed ARP table, sorted by address. The
+// fallback identity source for devices with no DHCP lease -- see
+// ingest.ARPEntry's own doc comment.
+func (s *Store) ARPEntries(device string) (entries []ingest.ARPEntry, updatedAt time.Time, ok bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	ks, found := s.kindLocked(device, ingest.KindARP)
+	if !found {
+		return nil, time.Time{}, false
+	}
+	for _, p := range ks.pages {
+		entries = append(entries, p.ARP...)
+	}
+	sort.SliceStable(entries, func(i, j int) bool { return entries[i].Address < entries[j].Address })
+	return entries, ks.updatedAt, true
+}
+
+// AddressLists returns device's pushed /ip/firewall/address-list table,
+// sorted by (list, address).
+func (s *Store) AddressLists(device string) (entries []ingest.AddressListEntry, updatedAt time.Time, ok bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	ks, found := s.kindLocked(device, ingest.KindAddressList)
+	if !found {
+		return nil, time.Time{}, false
+	}
+	for _, p := range ks.pages {
+		entries = append(entries, p.AddressList...)
+	}
+	sort.SliceStable(entries, func(i, j int) bool {
+		if entries[i].List != entries[j].List {
+			return entries[i].List < entries[j].List
+		}
+		return entries[i].Address < entries[j].Address
+	})
+	return entries, ks.updatedAt, true
+}
+
+// Devices returns every device with at least one pushed page, sorted by
+// name -- the enumeration FilterRules/DHCPLeases/etc need a caller to
+// already have a device name, this is how a caller (e.g. the suggestions
+// generator, issue #243 slice 5) discovers what devices exist at all.
+func (s *Store) Devices() []string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return sortedDeviceNamesLocked(s.devices)
+}
+
 func (s *Store) kindLocked(device string, kind ingest.Kind) (*kindState, bool) {
 	ds, ok := s.devices[device]
 	if !ok {
