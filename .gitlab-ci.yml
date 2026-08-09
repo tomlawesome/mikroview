@@ -1,3 +1,23 @@
+# ============================================================
+# UNDER CONSTRUCTION - NOT YET LIVE - DO NOT USE
+#
+# This pipeline is real and runs green through the `security`
+# stage, but the cutover it belongs to has not been activated.
+# `dev` has not moved off GitHub. Do not push feature branches
+# to the `gitlab` remote, do not open merge requests there, and
+# do not treat a result from this pipeline as a gate on
+# anything -- work through GitHub pull requests as normal.
+#
+# Blocker on activation: the `sync` stage below has never run
+# successfully. It needs a GITHUB_MIRROR_TOKEN CI/CD variable
+# that does not exist yet, so cutting over now would silently
+# stop GitHub issues closing on merge to `dev`.
+#
+# Status and remaining work:
+# gitlab-ci-plan/07-implementation-status-and-handover.md
+# Current instruction: AGENTS.md, "Where code review happens".
+# ============================================================
+#
 # GitLab CI for the `dev` lane. `preview`/`main` and everything they run
 # (docker.yml, codeql.yml, branch-policy.yml on GitHub) are untouched and
 # stay exactly as they are — see gitlab-ci-plan/07-mikroview-github-side-changes.md
