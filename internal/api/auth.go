@@ -140,6 +140,7 @@ func (s *Server) readOnlyRoutes() http.Handler {
 	mux.HandleFunc("GET /api/flags", s.handleFlagsList)
 	mux.HandleFunc("GET /api/stats", s.handleStats)
 	mux.HandleFunc("GET /api/devices", s.handleDevices)
+	mux.HandleFunc("GET /api/watchlist/matches", s.handleWatchlistMatchesQuery)
 	return mux
 }
 

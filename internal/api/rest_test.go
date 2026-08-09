@@ -20,6 +20,7 @@ import (
 	"github.com/tomlawesome/mikroview/internal/entities"
 	"github.com/tomlawesome/mikroview/internal/flags"
 	"github.com/tomlawesome/mikroview/internal/hub"
+	"github.com/tomlawesome/mikroview/internal/matchlog"
 	"github.com/tomlawesome/mikroview/internal/reputation"
 	"github.com/tomlawesome/mikroview/internal/routerstate"
 	"github.com/tomlawesome/mikroview/internal/rules"
@@ -50,6 +51,13 @@ func newTestServer(t *testing.T) (*Server, *store.Store) {
 	ru, _ := rules.Open("")
 	as, _ := audit.Open("")
 	ws, _ := watchlist.Open("")
+	// matchlog.Open has no in-memory-only mode (see internal/matchlog's
+	// own doc comment), unlike every other store here -- a temp file is
+	// the closest equivalent for a test fixture.
+	ml, err := matchlog.Open(filepath.Join(t.TempDir(), "matchlog.jsonl"), 1000)
+	if err != nil {
+		t.Fatal(err)
+	}
 	s := &Server{
 		Store:            st,
 		Devices:          device.NewRegistry([]config.Device{{ID: "core", Name: "Core", SourceIP: "192.168.1.1"}}),
@@ -61,6 +69,7 @@ func newTestServer(t *testing.T) (*Server, *store.Store) {
 		Rules:            ru,
 		Audit:            as,
 		Watchlist:        ws,
+		MatchLog:         ml,
 		Auth:             authStore,
 		Sessions:         auth.NewSessionStore(time.Hour),
 		LoginLimiter:     auth.NewLoginLimiter(10, time.Minute),
