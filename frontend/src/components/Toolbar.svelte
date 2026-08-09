@@ -1,7 +1,7 @@
 <script lang="ts">
   // SPDX-License-Identifier: AGPL-3.0-only
   import { appState } from '../lib/state.svelte'
-  import { formatEps } from '../lib/format'
+  import { formatEps, formatBufferDepth } from '../lib/format'
   import { retentionState, MAX_AGE_OPTIONS } from '../lib/retention.svelte'
   import { viewportState } from '../lib/viewport.svelte'
   import ConnectionIndicator from './ConnectionIndicator.svelte'
@@ -18,7 +18,14 @@
 
 <header class="toolbar">
   <div class="brand">
-    <LogoLockup size={21} />
+    <button
+      class="logo-button"
+      onclick={() => (appState.view = 'live')}
+      title="Back to live view"
+      aria-label="Back to live view"
+    >
+      <LogoLockup size={21} />
+    </button>
     <ConnectionIndicator />
   </div>
 
@@ -29,6 +36,12 @@
       {#if appState.stats}
         <span class="eps" title="Events per second (10s rolling average)">
           {formatEps(appState.stats.eventsPerSecond)}/s
+        </span>
+        <span
+          class="buffer-depth"
+          title="The server's event buffer holds up to {appState.stats.capacity.toLocaleString()} events. Once full, each new event overwrites the oldest -- this is how far back it actually reaches at the current rate, not the configured retention window."
+        >
+          {formatBufferDepth(appState.stats.capacity, appState.stats.count, appState.stats.eventsPerSecond)}
         </span>
       {/if}
 
@@ -97,6 +110,25 @@
     gap: 14px;
   }
 
+  .logo-button {
+    display: inline-flex;
+    background: none;
+    border: none;
+    padding: 0;
+    margin: 0;
+    cursor: pointer;
+    border-radius: 5px;
+  }
+
+  .logo-button:hover {
+    opacity: 0.85;
+  }
+
+  .logo-button:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+  }
+
   .controls {
     display: flex;
     align-items: center;
@@ -108,6 +140,11 @@
   .eps {
     font-family: var(--font-mono);
     font-size: 13px;
+    color: var(--fg-muted);
+  }
+
+  .buffer-depth {
+    font-size: 12px;
     color: var(--fg-muted);
     padding-right: 10px;
     border-right: 1px solid var(--border);
