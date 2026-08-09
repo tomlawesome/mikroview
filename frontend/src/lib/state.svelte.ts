@@ -89,6 +89,23 @@ class AppState {
   pendingCount = $state(0)
   autoscroll = $state(true)
 
+  // The raw event pool captured the moment Autoscroll is switched off
+  // (issue #232). Null means "not frozen"; cleared when Autoscroll goes
+  // back on.
+  //
+  // Lives here rather than inside LiveTable because switching to another
+  // view unmounts that component. Component-local state resets to null on
+  // unmount, so returning to the live view would re-capture against the
+  // now-current buffer and jump the view forward by everything that
+  // arrived while you were away -- the exact symptom #232 reports, just
+  // triggered by navigation instead of by new events.
+  //
+  // Deliberately the raw pool, not the rendered slice: LiveTable
+  // re-applies the *current* filters to it, so narrowing and widening the
+  // filter still work while frozen, but only ever within what was already
+  // captured. An event that arrives after the freeze can never appear.
+  frozenPool = $state<ClientEvent[] | null>(null)
+
   // Updated periodically by App.svelte (see tick()) so the age-based cutoff
   // in filteredEvents actually re-evaluates over time, not just when the
   // buffer itself changes.
