@@ -5,7 +5,10 @@ package api
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"net/http"
+	"strconv"
+	"time"
 
 	"github.com/tomlawesome/mikroview/internal/matchlog"
 	"github.com/tomlawesome/mikroview/internal/watchlist"
@@ -179,4 +182,148 @@ func (s *Server) handleWatchlistEntriesDelete(w http.ResponseWriter, r *http.Req
 	s.Watchlist.Delete(id)
 	s.Audit.Record(auditActor(r), "watchlist.delete", id, "")
 	writeJSON(w, http.StatusOK, map[string]any{"deleted": true})
+}
+
+// watchlistErrorStatus translates watchlist.Store's sentinel errors into
+// the HTTP status the mutation handlers below share -- ErrEntryNotFound
+// is a 404 (the id is simply wrong), anything else (ErrNotInverted) is a
+// 400 (the id is real but the request doesn't apply to it).
+func watchlistErrorStatus(err error) int {
+	if errors.Is(err, watchlist.ErrEntryNotFound) {
+		return http.StatusNotFound
+	}
+	return http.StatusBadRequest
+}
+
+// promoteRequest is the wire shape for POST .../promote.
+type promoteRequest struct {
+	Destinations []watchlist.PermittedDest `json:"destinations"`
+}
+
+// handleWatchlistEntriesPromote moves the given destination/port pairs
+// from an inverted entry's Observed candidate list into its Permitted
+// allow-list -- see watchlist.Store.Promote. Admin-gated, same tier as
+// entry CRUD: this changes what future traffic is treated as expected
+// for a device, the same weight as creating the entry in the first
+// place.
+func (s *Server) handleWatchlistEntriesPromote(w http.ResponseWriter, r *http.Request) {
+	if !callerIsAdmin(r) {
+		http.Error(w, "admin role required", http.StatusForbidden)
+		return
+	}
+
+	id := r.PathValue("id")
+	var req promoteRequest
+	if err := decodeJSONBody(w, r, &req); err != nil {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	if err := s.Watchlist.Promote(id, req.Destinations); err != nil {
+		http.Error(w, err.Error(), watchlistErrorStatus(err))
+		return
+	}
+	e, _ := s.Watchlist.Get(id)
+	s.Audit.Record(auditActor(r), "watchlist.promote", id, strconv.Itoa(len(req.Destinations))+" destination(s)")
+	writeJSON(w, http.StatusOK, e)
+}
+
+// setObservingRequest is the wire shape for POST .../observing.
+type setObservingRequest struct {
+	Observing bool `json:"observing"`
+}
+
+// handleWatchlistEntriesSetObserving flips whether an inverted entry is
+// in observe mode -- see watchlist.Store.SetObserving. The raw
+// mechanism only: this package (like internal/watchlist itself) makes
+// no judgement about when an operator should call it, #243 open
+// question 3.
+func (s *Server) handleWatchlistEntriesSetObserving(w http.ResponseWriter, r *http.Request) {
+	if !callerIsAdmin(r) {
+		http.Error(w, "admin role required", http.StatusForbidden)
+		return
+	}
+
+	id := r.PathValue("id")
+	var req setObservingRequest
+	if err := decodeJSONBody(w, r, &req); err != nil {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	if err := s.Watchlist.SetObserving(id, req.Observing); err != nil {
+		http.Error(w, err.Error(), watchlistErrorStatus(err))
+		return
+	}
+	e, _ := s.Watchlist.Get(id)
+	action := "watchlist.observing.stop"
+	if req.Observing {
+		action = "watchlist.observing.start"
+	}
+	s.Audit.Record(auditActor(r), action, id, "")
+	writeJSON(w, http.StatusOK, e)
+}
+
+// handleWatchlistMatchesQuery answers a windowed query over the
+// persisted match log for one source device -- the correlation surface
+// #243 section 3 exists for ("lookup by source IP over a time range is
+// the birdcage correlation case"). Reachable via a read-only API token
+// as well as a session (see readOnlyRoutes in auth.go), the same tier as
+// GET /api/events/flags/stats/devices: this is a read over evidence
+// already collected, not a mutation, and external correlation is the
+// point.
+//
+// Query parameters: mac and/or ip (matchlog.Identity's own MAC-preferred
+// rule applies -- at least one is required, matchlog.ErrEmptyIdentity
+// otherwise), since/until (RFC 3339, both optional -- an empty until
+// means no upper bound), limit (optional, matchlog clamps it).
+func (s *Server) handleWatchlistMatchesQuery(w http.ResponseWriter, r *http.Request) {
+	if s.MatchLog == nil {
+		http.Error(w, "the match log is not available", http.StatusServiceUnavailable)
+		return
+	}
+
+	q := matchlog.Query{
+		Source: matchlog.Identity{MAC: r.URL.Query().Get("mac"), IP: r.URL.Query().Get("ip")},
+	}
+	if v := r.URL.Query().Get("since"); v != "" {
+		t, err := time.Parse(time.RFC3339, v)
+		if err != nil {
+			http.Error(w, "since must be RFC 3339", http.StatusBadRequest)
+			return
+		}
+		q.Since = t
+	}
+	if v := r.URL.Query().Get("until"); v != "" {
+		t, err := time.Parse(time.RFC3339, v)
+		if err != nil {
+			http.Error(w, "until must be RFC 3339", http.StatusBadRequest)
+			return
+		}
+		q.Until = t
+	}
+	if v := r.URL.Query().Get("limit"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil {
+			http.Error(w, "limit must be an integer", http.StatusBadRequest)
+			return
+		}
+		q.Limit = n
+	}
+
+	results := []matchlog.Record{}
+	err := s.MatchLog.Query(q, func(rec matchlog.Record) bool {
+		results = append(results, rec)
+		return true
+	})
+	if err != nil {
+		if errors.Is(err, matchlog.ErrEmptyIdentity) {
+			http.Error(w, "mac or ip query parameter is required", http.StatusBadRequest)
+			return
+		}
+		apiLog.Warn("watchlist match query failed: " + err.Error())
+		http.Error(w, "query failed", http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"matches": results})
 }
