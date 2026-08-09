@@ -7,8 +7,10 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/tomlawesome/mikroview/internal/matchlog"
+	"github.com/tomlawesome/mikroview/internal/store"
 	"github.com/tomlawesome/mikroview/internal/watchlist"
 )
 
@@ -286,5 +288,215 @@ func TestHandleWatchlistEntriesUpdateDoesNotClearObservedWhenStayingInverted(t *
 	}
 	if got.Name != "cam renamed" {
 		t.Errorf("expected the name change to apply, got %q", got.Name)
+	}
+}
+
+// --- Promote / SetObserving ------------------------------------------
+
+func mustCreateInvertedEntry(t *testing.T, ts *httptest.Server) watchlist.Entry {
+	t.Helper()
+	resp := postJSON(t, &http.Client{}, ts.URL+"/api/watchlist/entries", watchlistEntryRequest{
+		Name: "cam", Invert: true, Source: matchlog.Identity{MAC: "aa:bb:cc:dd:ee:ff"},
+	})
+	defer resp.Body.Close()
+	var e watchlist.Entry
+	json.NewDecoder(resp.Body).Decode(&e)
+	return e
+}
+
+func TestHandleWatchlistEntriesPromote(t *testing.T) {
+	s, _ := newTestServer(t)
+	ts := httptest.NewServer(asAdmin(s.mux()))
+	defer ts.Close()
+
+	entry := mustCreateInvertedEntry(t, ts)
+	s.Watchlist.RecordObservation(entry.ID, "10.0.0.5", 8883, entry.CreatedAt)
+
+	resp := postJSON(t, &http.Client{}, ts.URL+"/api/watchlist/entries/"+entry.ID+"/promote",
+		promoteRequest{Destinations: []watchlist.PermittedDest{{DestIP: "10.0.0.5", Port: 8883}}})
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+
+	got, _ := s.Watchlist.Get(entry.ID)
+	if len(got.Permitted) != 1 || got.Permitted[0].DestIP != "10.0.0.5" {
+		t.Errorf("Permitted = %+v, want the promoted pair", got.Permitted)
+	}
+	if len(got.Observed) != 0 {
+		t.Errorf("Observed = %+v, want the promoted pair removed from the review list", got.Observed)
+	}
+}
+
+func TestHandleWatchlistEntriesPromoteUnknownID(t *testing.T) {
+	s, _ := newTestServer(t)
+	ts := httptest.NewServer(asAdmin(s.mux()))
+	defer ts.Close()
+
+	resp := postJSON(t, &http.Client{}, ts.URL+"/api/watchlist/entries/never-existed/promote", promoteRequest{})
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Errorf("expected 404, got %d", resp.StatusCode)
+	}
+}
+
+func TestHandleWatchlistEntriesPromoteNonInverted(t *testing.T) {
+	s, _ := newTestServer(t)
+	ts := httptest.NewServer(asAdmin(s.mux()))
+	defer ts.Close()
+
+	created := postJSON(t, &http.Client{}, ts.URL+"/api/watchlist/entries", watchlistEntryRequest{Name: "e", Ports: []int{22}})
+	var entry watchlist.Entry
+	json.NewDecoder(created.Body).Decode(&entry)
+	created.Body.Close()
+
+	resp := postJSON(t, &http.Client{}, ts.URL+"/api/watchlist/entries/"+entry.ID+"/promote", promoteRequest{})
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("expected 400 for promoting on a non-inverted entry, got %d", resp.StatusCode)
+	}
+}
+
+func TestHandleWatchlistEntriesSetObserving(t *testing.T) {
+	s, _ := newTestServer(t)
+	ts := httptest.NewServer(asAdmin(s.mux()))
+	defer ts.Close()
+
+	entry := mustCreateInvertedEntry(t, ts) // starts Observing: true
+
+	resp := postJSON(t, &http.Client{}, ts.URL+"/api/watchlist/entries/"+entry.ID+"/observing", setObservingRequest{Observing: false})
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+
+	got, _ := s.Watchlist.Get(entry.ID)
+	if got.Observing {
+		t.Error("expected Observing=false after the request")
+	}
+}
+
+func TestHandleWatchlistEntriesSetObservingUnknownID(t *testing.T) {
+	s, _ := newTestServer(t)
+	ts := httptest.NewServer(asAdmin(s.mux()))
+	defer ts.Close()
+
+	resp := postJSON(t, &http.Client{}, ts.URL+"/api/watchlist/entries/never-existed/observing", setObservingRequest{Observing: true})
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Errorf("expected 404, got %d", resp.StatusCode)
+	}
+}
+
+// --- Match query -------------------------------------------------------
+
+func TestHandleWatchlistMatchesQueryRequiresIdentity(t *testing.T) {
+	s, _ := newTestServer(t)
+	ts := httptest.NewServer(asAdmin(s.mux()))
+	defer ts.Close()
+
+	resp, err := http.Get(ts.URL + "/api/watchlist/matches")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("expected 400 with no mac/ip query parameter, got %d", resp.StatusCode)
+	}
+}
+
+func TestHandleWatchlistMatchesQueryReturnsRecordedMatches(t *testing.T) {
+	s, _ := newTestServer(t)
+	ts := httptest.NewServer(asAdmin(s.mux()))
+	defer ts.Close()
+
+	if err := s.MatchLog.Append("e1",
+		matchlog.Tuple{Source: matchlog.Identity{MAC: "aa:bb:cc:dd:ee:ff"}, DestIP: "10.0.0.5", Port: 8883},
+		store.Event{Raw: "test"}, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+
+	resp, err := http.Get(ts.URL + "/api/watchlist/matches?mac=aa:bb:cc:dd:ee:ff")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+
+	var body struct {
+		Matches []matchlog.Record `json:"matches"`
+	}
+	json.NewDecoder(resp.Body).Decode(&body)
+	if len(body.Matches) != 1 || body.Matches[0].EntryID != "e1" {
+		t.Fatalf("unexpected matches: %+v", body.Matches)
+	}
+}
+
+func TestHandleWatchlistMatchesQueryUnavailableWhenMatchLogNil(t *testing.T) {
+	s, _ := newTestServer(t)
+	s.MatchLog = nil
+	ts := httptest.NewServer(asAdmin(s.mux()))
+	defer ts.Close()
+
+	resp, err := http.Get(ts.URL + "/api/watchlist/matches?mac=aa:bb:cc:dd:ee:ff")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusServiceUnavailable {
+		t.Errorf("expected 503 when the match log is unavailable, got %d", resp.StatusCode)
+	}
+}
+
+func TestHandleWatchlistMatchesQueryInvalidTimeParam(t *testing.T) {
+	s, _ := newTestServer(t)
+	ts := httptest.NewServer(asAdmin(s.mux()))
+	defer ts.Close()
+
+	resp, err := http.Get(ts.URL + "/api/watchlist/matches?mac=aa:bb:cc:dd:ee:ff&since=not-a-time")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("expected 400 for an unparseable since, got %d", resp.StatusCode)
+	}
+}
+
+// --- Bearer token boundary (mirrors tokens_test.go's own shape) --------
+
+// A read-only bearer token must reach the match query -- the whole
+// reason it lives on the read-only tier at all (birdcage-style
+// correlation).
+func TestBearerTokenCanQueryWatchlistMatches(t *testing.T) {
+	s := newAuthTestServer(t)
+	ts := httptest.NewServer(s.Routes())
+	defer ts.Close()
+	admin := setUpAdmin(t, ts)
+	raw := createToken(t, ts, admin, "birdcage")
+
+	resp := bearerGet(t, ts.URL+"/api/watchlist/matches?mac=aa:bb:cc:dd:ee:ff", raw)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("expected a valid bearer token to reach the match query, got %d", resp.StatusCode)
+	}
+}
+
+// A read-only bearer token must never reach entry CRUD -- creating,
+// promoting or observing-toggling a watchlist entry is a mutation, the
+// same boundary TestBearerTokenCannotReachWriteEndpoint pins for flags.
+func TestBearerTokenCannotReachWatchlistEntries(t *testing.T) {
+	s := newAuthTestServer(t)
+	ts := httptest.NewServer(s.Routes())
+	defer ts.Close()
+	admin := setUpAdmin(t, ts)
+	raw := createToken(t, ts, admin, "birdcage")
+
+	resp := bearerGet(t, ts.URL+"/api/watchlist/entries", raw)
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusOK {
+		t.Error("expected a read-only bearer token to be unable to reach entry CRUD, got 200")
 	}
 }
