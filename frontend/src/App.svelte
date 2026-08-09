@@ -14,7 +14,7 @@
   import FilterBar from './components/FilterBar.svelte'
   import LiveTable from './components/LiveTable.svelte'
   import Dashboard from './components/Dashboard.svelte'
-  import ControlPorts from './components/ControlPorts.svelte'
+  import Watchlist from './components/Watchlist.svelte'
   import Flags from './components/Flags.svelte'
   import Detectors from './components/Detectors.svelte'
   import Entities from './components/Entities.svelte'
@@ -153,8 +153,8 @@
     {#if appState.view === 'live'}
       <FilterBar />
       <LiveTable />
-    {:else if appState.view === 'control-ports'}
-      <ControlPorts />
+    {:else if appState.view === 'watchlist'}
+      <Watchlist />
     {:else if appState.view === 'flags'}
       <Flags />
     {:else if appState.view === 'detectors'}

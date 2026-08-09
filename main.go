@@ -870,7 +870,6 @@ func main() {
 		Audit:            auditStore,
 		Watchlist:        watchlistStore,
 		MatchLog:         matchLog,
-		CriticalPorts:    cfg.Flags.CriticalPorts,
 		DeviceStaleAfter: cfg.Flags.DeviceStaleAfter,
 		Auth:             authStore,
 		Sessions:         auth.NewSessionStore(cfg.Auth.SessionTTL),

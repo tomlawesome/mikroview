@@ -385,6 +385,84 @@ export interface FlagTimeBucket {
   byType: Partial<Record<FlagType, number>>
 }
 
+// Mirrors internal/matchlog.Identity's JSON tags (#243) -- a device's
+// resolved identity, MAC-preferred with an IP fallback. At least one
+// field is populated wherever this appears as evidence (a matched
+// event's own identity); either or both may be empty when it appears as
+// an entry's *scope* instead (unscoped means "any source").
+export interface WatchlistIdentity {
+  mac?: string
+  ip?: string
+}
+
+// Mirrors internal/watchlist.PermittedDest's JSON tags.
+export interface WatchlistPermittedDest {
+  destIp: string
+  port: number
+}
+
+// Mirrors internal/watchlist.ObservedDest's JSON tags -- one candidate
+// destination/port pair seen while an inverted entry was Observing, not
+// yet promoted or dismissed.
+export interface WatchlistObservedDest {
+  destIp: string
+  port: number
+  firstSeen: string
+  lastSeen: string
+  count: number
+}
+
+// Mirrors internal/watchlist.Entry's JSON tags (#243) -- see that type's
+// own doc comment for the full non-inverted/inverted matching rules.
+// ports/invert/includeStructuralNoise/observing/permitted/observed all
+// carry `omitempty` server-side, so any of them may be entirely absent
+// from a response rather than present with a zero value (empty
+// array/false) -- code reading these must treat absence and "present
+// but empty/false" identically, never assume a key exists.
+export interface WatchlistEntry {
+  id: string
+  name?: string
+  source?: WatchlistIdentity
+  destIp?: string
+  ports?: number[]
+  invert?: boolean
+  // Only meaningful when invert is true. omitempty server-side, so a
+  // false value is absent entirely, not present-and-false -- treat
+  // absence and false identically (see the doc comment above).
+  observing?: boolean
+  includeStructuralNoise?: boolean
+  permitted?: WatchlistPermittedDest[]
+  observed?: WatchlistObservedDest[]
+  createdAt: string
+}
+
+// Mirrors internal/matchlog.Tuple's JSON tags -- what a match was
+// actually recorded under: the matching event's own resolved identity
+// (never the entry's, possibly-unscoped, Source), the destination it
+// reached, and the port.
+export interface WatchlistMatchTuple {
+  source: WatchlistIdentity
+  destIp: string
+  port: number
+}
+
+// Mirrors internal/matchlog.Record's JSON tags -- one watchlist match,
+// evidence-first. event is the full matched FirewallEvent, exactly what
+// the live view would have shown, not a summary. count > 1 means every
+// occurrence after the first collapsed into this same record rather than
+// being stored individually (see internal/matchlog's own doc comment on
+// why -- the rate cap that stops a noisy entry from recreating the
+// haystack this feature exists to avoid).
+export interface WatchlistMatch {
+  id: string
+  entryId: string
+  tuple: WatchlistMatchTuple
+  event: FirewallEvent
+  firstSeen: string
+  lastSeen: string
+  count: number
+}
+
 // Mirrors internal/store's Scope.
 export type Scope = '' | 'internal' | 'external'
 
