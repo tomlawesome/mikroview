@@ -83,7 +83,10 @@ var examplesByCode = map[string]string{
   retention: 24h`,
 
 	"CFG-0011": `store:
-  maxEvents: 200000`,
+  maxMemory: 120MiB`,
+
+	"CFG-0012": `store:
+  maxMemory: 120MiB  # lower this, or confirm the machine has the larger amount to spare`,
 
 	"CFG-0020": `auth:
   sessionTTL: 24h`,
@@ -146,8 +149,20 @@ func (c *Config) validateListen(fatal problemFunc) {
 	}
 }
 
+// highMaxMemoryWarnThreshold is where store.maxMemory stops being a
+// routine tuning choice and starts being worth a second look: the ring
+// is reserved in full at startup (store.New's make([]Event, capacity)),
+// so a value this large fails immediately on a machine that cannot
+// spare it rather than degrading gradually. Not clamped -- a
+// deliberately large budget on a machine that genuinely has the memory
+// is a legitimate choice the operator gets to make, per the discussion
+// on #244; this only makes sure they are making it with the actual cost
+// in front of them, since the failure mode otherwise is silent right up
+// until the process fails to start.
+const highMaxMemoryWarnThreshold ByteSize = 1 << 30 // 1GiB
+
 func (c *Config) validateStore(fatal problemFunc, warn warnFunc) {
-	// Retention and maxEvents both being positive is what makes
+	// Retention and maxMemory both being positive is what makes
 	// mikroview retain anything at all. Zero or negative isn't a tuning
 	// choice, it's an empty dashboard the operator will read as "no
 	// traffic" -- the exact silent failure this whole feature exists to
@@ -161,13 +176,22 @@ func (c *Config) validateStore(fatal problemFunc, warn warnFunc) {
 			c.Store.Retention.String(),
 			"set a positive duration such as 24h")
 	}
-	if c.Store.MaxEvents <= 0 {
-		was := c.Store.MaxEvents
-		c.Store.MaxEvents = defaultMaxEvents
-		warn("CFG-0011", "store.maxEvents",
-			fmt.Sprintf("%d is not a usable event limit -- nothing would be kept", was),
-			fmt.Sprintf("%d", c.Store.MaxEvents),
-			"set a positive number of events to hold in memory")
+	if c.Store.MaxMemory <= 0 {
+		was := c.Store.MaxMemory
+		c.Store.MaxMemory = defaultMaxMemory
+		warn("CFG-0011", "store.maxMemory",
+			fmt.Sprintf("%s is not a usable memory budget -- nothing would be kept", was),
+			c.Store.MaxMemory.String(),
+			"set a positive amount such as 120MiB")
+	} else if c.Store.MaxMemory > highMaxMemoryWarnThreshold {
+		// No Applied -- nothing is substituted, this only surfaces the
+		// cost. See highMaxMemoryWarnThreshold's doc comment for why a
+		// warning rather than a clamp.
+		resident := ByteSize(float64(c.Store.MaxMemory) * 1.47) // measured ring-to-resident overhead, see #244
+		warn("CFG-0012", "store.maxMemory",
+			fmt.Sprintf("%s reserves up to %d events at startup (~%s resident once the Go runtime and process overhead are counted, not just the ring itself) -- confirm this machine has it to spare",
+				c.Store.MaxMemory, c.Store.Capacity(), resident),
+			"", "lower store.maxMemory if this wasn't a deliberate choice")
 	}
 	_ = fatal
 }
@@ -217,11 +241,11 @@ func (c *Config) validateDevices(fatal problemFunc) {
 	}
 }
 
-// defaultRetention/defaultMaxEvents are read from Default() rather than
+// defaultRetention/defaultMaxMemory are read from Default() rather than
 // restated, so a clamp can never substitute something different from
 // what a fresh install would have used. Restating them would be exactly
 // the kind of quiet drift this whole feature exists to catch.
 var (
 	defaultRetention = defaults().Store.Retention
-	defaultMaxEvents = defaults().Store.MaxEvents
+	defaultMaxMemory = defaults().Store.MaxMemory
 )

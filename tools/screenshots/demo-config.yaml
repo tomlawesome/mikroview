@@ -3,7 +3,7 @@ listen:
   http: ":8080"
 store:
   retention: 24h
-  maxEvents: 200000
+  maxMemory: 120MiB
 devices:
   - id: core
     name: "Core Router"

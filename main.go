@@ -269,7 +269,11 @@ func main() {
 	logging.PrintBanner()
 	logVersionAndMigration(logging.New("mikroview"))
 
-	st := store.New(cfg.Store.MaxEvents, cfg.Store.Retention)
+	storeCapacity := cfg.Store.Capacity()
+	logging.New("store").Info(fmt.Sprintf(
+		"event buffer: %s reserved for up to %d events (store.maxMemory) -- once traffic arrives, GET /api/stats reports how full it is and how far back it actually reaches",
+		cfg.Store.MaxMemory, storeCapacity))
+	st := store.New(storeCapacity, cfg.Store.Retention)
 	devices := device.NewRegistry(cfg.Devices)
 	h := hub.New()
 	geoLog := logging.New("geoip")
