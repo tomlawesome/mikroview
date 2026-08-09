@@ -2,28 +2,30 @@
 
 // Package watchlist is the operator-owned entry set #243 grows Control
 // Ports into: a persisted, admin-manageable list of (source,
-// destination, port set) tuples to record attempts against, replacing
-// the single flat criticalPorts port list every operator previously
-// shared regardless of what they actually wanted watched.
+// destination, port set) tuples, replacing the single flat
+// criticalPorts port list every operator previously shared regardless
+// of what they actually wanted watched. Two matching modes:
 //
-// This slice ships non-inverted matching only -- "record attempts
-// against these ports," a direct generalisation of what
-// ControlPorts.svelte already does client-side, now evaluated
-// server-side against every ingested event and persisted via
-// internal/matchlog instead of only ever existing in a 5,000-event
-// client buffer. The invert toggle ("this device should only ever reach
-// X") and the observe/promote workflow are #243's slice 3, not this one
-// -- Entry deliberately has no Invert field yet, so a partially-working
-// invert state can't exist to confuse an operator; adding it lands
-// alongside its own matching logic, not ahead of it.
+//   - Non-inverted: "record attempts against these ports" -- a direct
+//     generalisation of what ControlPorts.svelte already does
+//     client-side, now evaluated server-side against every ingested
+//     event and persisted via internal/matchlog instead of only ever
+//     existing in a 5,000-event client buffer.
+//   - Inverted: "this device should only ever reach X" -- egress-policy
+//     monitoring. A new inverted entry starts in an observe state,
+//     recording every distinct destination the device touches without
+//     firing anything; the operator promotes what should be permitted,
+//     and everything else becomes a fireable violation from then on.
+//     Structural noise (broadcast/multicast/link-local) is exempt by
+//     default. See invert.go.
 //
-// There is also, as yet, no way for an operator to create an Entry: this
-// slice proves the persistence and matching machinery end to end via
-// Store's Go API and tests, but the HTTP API and UI that would let an
-// operator actually add one are #243's slice 4. Until then this package
-// is fully wired into the live ingest path (see main.go) and fully
-// inert in practice, the same as internal/matchlog was after slice 1 --
-// an empty Store matches nothing, so there is nothing to observe.
+// There is still, as yet, no way for an operator to create an Entry: this
+// and the previous slice prove the persistence and matching machinery
+// end to end via Store's Go API and tests, but the HTTP API and UI that
+// would let an operator actually add one are #243's slice 4. Until then
+// this package is fully wired into the live ingest path (see main.go)
+// and fully inert in practice -- an empty Store matches nothing, so
+// there is nothing to observe.
 package watchlist
 
 import (
@@ -45,36 +47,99 @@ import (
 
 var persistLog = logging.New("watchlist")
 
-// Entry is one watchlist entry. Source and DestIP are both optional --
-// zero-value means unscoped ("any source"/"any destination"), which is
-// what makes this a strict superset of today's Control Ports capability
-// (port-only scoping) rather than a stricter replacement for it: an
-// operator who wants exactly today's behaviour for a given port set
-// leaves both unset.
+// Entry is one watchlist entry. Source and DestIP are both optional for
+// a non-inverted entry -- zero-value means unscoped ("any source"/"any
+// destination"), which is what makes non-inverted matching a strict
+// superset of today's Control Ports capability (port-only scoping)
+// rather than a stricter replacement for it. An inverted entry is about
+// one specific device's expected behaviour, so Source is required for
+// it (see ErrInvertedRequiresSource) and Ports is unused.
 type Entry struct {
 	ID   string `json:"id"`
 	Name string `json:"name,omitempty"`
-	// Source is optional identity scoping (#243 section 1's
-	// MAC-preferred, IP-fallback rule -- see matchlog.Identity). Empty
-	// matches any source.
+	// Source is optional identity scoping for a non-inverted entry
+	// (#243 section 1's MAC-preferred, IP-fallback rule -- see
+	// matchlog.Identity), empty meaning "any source". Required,
+	// non-empty, for an inverted entry -- see Invert.
 	Source matchlog.Identity `json:"source,omitempty"`
-	// DestIP is optional destination scoping. Empty matches any
-	// destination.
+	// DestIP is optional destination scoping for a non-inverted entry.
+	// Empty matches any destination. Unused when Invert is true -- an
+	// inverted entry's destinations are its Permitted set instead.
 	DestIP string `json:"destIp,omitempty"`
-	// Ports is the set of destination ports this entry watches.
-	// Required -- an entry with no ports would never match anything,
-	// which is indistinguishable from a mistake, so Upsert refuses it
-	// (see ErrNoPorts).
-	Ports     []int     `json:"ports"`
+	// Ports is the set of destination ports a non-inverted entry
+	// watches. Required for a non-inverted entry -- an entry with no
+	// ports would never match anything, which is indistinguishable from
+	// a mistake, so Upsert refuses it (see ErrNoPorts). Unused when
+	// Invert is true: an inverted entry watches every port its device
+	// touches, since the question is "did it reach somewhere
+	// unexpected," not "did it use a particular port."
+	Ports []int `json:"ports,omitempty"`
+
+	// Invert switches this entry from "record attempts against these
+	// ports" to "this device should only ever reach the destinations in
+	// Permitted" -- see invert.go for the matching rule, and this
+	// package's doc comment for the design.
+	Invert bool `json:"invert,omitempty"`
+	// Observing is only meaningful when Invert is true. While true,
+	// nothing this entry sees fires as a violation -- distinct
+	// destinations are recorded into Observed instead (see
+	// Store.RecordObservation), for the operator to review and promote.
+	// A new inverted entry starts Observing; Store.SetObserving is the
+	// mechanism to leave that state, on whatever cadence an operator (or
+	// slice 4's UI) decides -- this package makes no judgement about
+	// when that should happen (#243 open question 3).
+	Observing bool `json:"observing,omitempty"`
+	// IncludeStructuralNoise opts an inverted entry INTO evaluating
+	// non-unicast destinations (broadcast/multicast/link-local), which
+	// are exempt by default -- see invert.go's isStructurallyExempt.
+	// Unused for a non-inverted entry.
+	IncludeStructuralNoise bool `json:"includeStructuralNoise,omitempty"`
+	// Permitted is an inverted entry's promoted allow-list: a
+	// destination/port pair in here never fires, no matter how it got
+	// there (explicitly permitted by the operator, or promoted out of
+	// Observed). Unused for a non-inverted entry.
+	Permitted []PermittedDest `json:"permitted,omitempty"`
+	// Observed is an inverted entry's candidate list while Observing --
+	// every distinct destination/port the device has touched that isn't
+	// already Permitted, with first/last-seen and a count (the same
+	// evidence shape matchlog.Record uses, so "how often" is visible
+	// before deciding). Capped at maxObservedPerEntry; see
+	// Store.RecordObservation for what happens once full. Unused for a
+	// non-inverted entry.
+	Observed []ObservedDest `json:"observed,omitempty"`
+
 	CreatedAt time.Time `json:"createdAt"`
+}
+
+// PermittedDest is one destination/port pair an inverted entry's device
+// is allowed to reach.
+type PermittedDest struct {
+	DestIP string `json:"destIp"`
+	Port   int    `json:"port"`
+}
+
+// ObservedDest is one destination/port pair seen while an inverted entry
+// was Observing, not yet promoted or dismissed.
+type ObservedDest struct {
+	DestIP    string    `json:"destIp"`
+	Port      int       `json:"port"`
+	FirstSeen time.Time `json:"firstSeen"`
+	LastSeen  time.Time `json:"lastSeen"`
+	Count     uint64    `json:"count"`
 }
 
 // ErrInvalidEntry is returned by Upsert for an entry with no ID.
 var ErrInvalidEntry = errors.New("watchlist: an entry must have an id")
 
-// ErrNoPorts is returned by Upsert for an entry with an empty Ports --
-// see Entry.Ports.
-var ErrNoPorts = errors.New("watchlist: an entry must watch at least one port")
+// ErrNoPorts is returned by Upsert for a non-inverted entry with an
+// empty Ports -- see Entry.Ports.
+var ErrNoPorts = errors.New("watchlist: a non-inverted entry must watch at least one port")
+
+// ErrInvertedRequiresSource is returned by Upsert for an inverted entry
+// with no Source -- see Entry.Invert. An inverted entry with no device
+// to scope it would mean "nothing in particular should reach anything in
+// particular," which isn't a coherent policy to enforce.
+var ErrInvertedRequiresSource = errors.New("watchlist: an inverted entry must scope a source device")
 
 // ErrInvalidText is returned by Upsert for a Name, DestIP or Source
 // field containing control or format characters, or one that is too
@@ -188,14 +253,20 @@ func (s *Store) Get(id string) (Entry, bool) {
 
 // Upsert creates or replaces the entry at e.ID, setting CreatedAt only
 // on first creation -- an update must not reset how long an entry has
-// existed. Rejects an entry with no ID, no ports, or invalid text before
-// it ever reaches disk, the same "refuse malformed data at the write
-// boundary" contract internal/entities.Upsert follows.
+// existed. Rejects an entry with no ID, invalid text, or a scoping
+// requirement its mode doesn't satisfy (non-inverted: at least one port;
+// inverted: a source device) before it ever reaches disk, the same
+// "refuse malformed data at the write boundary" contract
+// internal/entities.Upsert follows.
 func (s *Store) Upsert(e Entry) error {
 	if e.ID == "" {
 		return ErrInvalidEntry
 	}
-	if len(e.Ports) == 0 {
+	if e.Invert {
+		if e.Source.Empty() {
+			return ErrInvertedRequiresSource
+		}
+	} else if len(e.Ports) == 0 {
 		return ErrNoPorts
 	}
 	for _, text := range []string{e.Name, e.DestIP, e.Source.MAC, e.Source.IP} {
@@ -281,39 +352,69 @@ func eventIdentity(e store.Event) matchlog.Identity {
 	return matchlog.Identity{MAC: e.SrcMAC, IP: e.SrcIP}
 }
 
-// Match reports whether e matches entry (non-inverted: "record attempts
-// against these ports"), and if so the matchlog.Tuple to record it
-// under. Ports must contain e.DstPort; ConnState must be trackable (see
-// isTrackableConnState); Source, if the entry scopes it, must match the
-// event's own resolved identity; DestIP, if the entry scopes it, must
-// equal e.DstIP.
+// Outcome is what evaluating one event against one entry decided.
+type Outcome int
+
+const (
+	// NoMatch: this entry has nothing to say about this event -- wrong
+	// port, wrong source, a permitted inverted destination, or any of
+	// the other reasons covered below. The Evaluator takes no action.
+	NoMatch Outcome = iota
+	// Violation: record this to internal/matchlog -- a non-inverted
+	// entry's watched port was reached, or an inverted entry's device
+	// reached somewhere neither permitted nor still being observed.
+	Violation
+	// Observed: an inverted entry, still Observing, saw its device reach
+	// a destination that is neither permitted nor dismissed yet. The
+	// Evaluator records this as a candidate (Store.RecordObservation)
+	// rather than a violation -- nothing fires while observing.
+	Observed
+)
+
+// Match decides what entry has to say about e, and the matchlog.Tuple to
+// record it under if the outcome is Violation or Observed. Dispatches on
+// entry.Invert -- see matchNonInverted (this file) and matchInverted
+// (invert.go) for the two rules.
 //
 // The returned Tuple always carries the event's own real, specific
-// identity -- never the entry's (possibly empty/unscoped) Source -- so
-// an unscoped entry watching many devices still produces one matchlog
-// record per device, not one shared record every device's traffic
-// collapses into.
-func Match(entry Entry, e store.Event) (matchlog.Tuple, bool) {
+// identity -- never the entry's (possibly empty/unscoped for a
+// non-inverted entry) Source -- so an unscoped entry watching many
+// devices still produces one matchlog record per device, not one shared
+// record every device's traffic collapses into.
+func Match(entry Entry, e store.Event) (matchlog.Tuple, Outcome) {
+	if entry.Invert {
+		return matchInverted(entry, e)
+	}
+	return matchNonInverted(entry, e)
+}
+
+// matchNonInverted implements "record attempts against these ports":
+// Ports must contain e.DstPort; ConnState must be trackable (see
+// isTrackableConnState); Source, if the entry scopes it, must match the
+// event's own resolved identity; DestIP, if the entry scopes it, must
+// equal e.DstIP. Only ever returns NoMatch or Violation -- there is no
+// observe state for a non-inverted entry.
+func matchNonInverted(entry Entry, e store.Event) (matchlog.Tuple, Outcome) {
 	if e.DstPort == 0 || !containsPort(entry.Ports, e.DstPort) {
-		return matchlog.Tuple{}, false
+		return matchlog.Tuple{}, NoMatch
 	}
 	if !isTrackableConnState(e) {
-		return matchlog.Tuple{}, false
+		return matchlog.Tuple{}, NoMatch
 	}
 	id := eventIdentity(e)
 	if id.Empty() {
 		// Nothing to record a match under -- see matchlog.ErrEmptyIdentity.
 		// A chain with neither src-mac nor a usable source IP cannot be
 		// attributed to a device at all.
-		return matchlog.Tuple{}, false
+		return matchlog.Tuple{}, NoMatch
 	}
 	if !entry.Source.Empty() && !entry.Source.MatchesSource(id) {
-		return matchlog.Tuple{}, false
+		return matchlog.Tuple{}, NoMatch
 	}
 	if entry.DestIP != "" && entry.DestIP != e.DstIP {
-		return matchlog.Tuple{}, false
+		return matchlog.Tuple{}, NoMatch
 	}
-	return matchlog.Tuple{Source: id, DestIP: e.DstIP, Port: e.DstPort}, true
+	return matchlog.Tuple{Source: id, DestIP: e.DstIP, Port: e.DstPort}, Violation
 }
 
 func containsPort(ports []int, port int) bool {
