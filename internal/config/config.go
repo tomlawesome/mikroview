@@ -337,6 +337,34 @@ type Audit struct {
 	StorePath string `yaml:"storePath"`
 }
 
+// Watchlist configures internal/watchlist's entry store and its
+// internal/matchlog match log (#243) -- the persisted replacement for
+// Control Ports' single flat criticalPorts port list. StorePath (the
+// entries themselves) follows the same optional-persistence contract as
+// every other small store here: left empty, entries still work, just
+// don't survive a restart.
+//
+// MatchLogPath does not share that contract -- it has no in-memory-only
+// mode, unlike every other store in this file. Durability is the entire
+// reason this store exists (#243 section 3's "a match must survive a
+// restart" requirement); an in-memory match log would be a second
+// volatile event ring with extra steps, not a lesser version of this
+// feature. So MatchLogPath must be non-empty (see CFG-0041) and
+// MatchLogCapacity must be positive (CFG-0040) -- both a good default
+// out of the box, not settings an operator has to supply.
+type Watchlist struct {
+	StorePath string `yaml:"storePath"`
+	// MatchLogPath is where internal/matchlog's append-only JSON-lines
+	// file lives.
+	MatchLogPath string `yaml:"matchLogPath"`
+	// MatchLogCapacity is the match log's hard ceiling on distinct
+	// records -- #243 section 3 puts the file backend's realistic range
+	// at ~100k-500k matches; see internal/matchlog.ErrCapacityReached
+	// for what happens once it's reached (refused, not silently
+	// overwritten).
+	MatchLogCapacity int `yaml:"matchLogCapacity"`
+}
+
 // TLS configures mikroview's own listener -- on by default: a browser
 // secure-context requirement was only ever a symptom of the real
 // problem, which is that an app serving real login credentials and
@@ -672,6 +700,7 @@ type Config struct {
 	Auth       Auth       `yaml:"auth"`
 	Entities   Entities   `yaml:"entities"`
 	Audit      Audit      `yaml:"audit"`
+	Watchlist  Watchlist  `yaml:"watchlist"`
 	Notify     Notify     `yaml:"notify"`
 	TLS        TLS        `yaml:"tls"`
 	OIDC       OIDC       `yaml:"oidc"`
@@ -789,6 +818,11 @@ func defaults() Config {
 		},
 		Audit: Audit{
 			StorePath: DefaultDataDir + "/audit.json",
+		},
+		Watchlist: Watchlist{
+			StorePath:        DefaultDataDir + "/watchlist.json",
+			MatchLogPath:     DefaultDataDir + "/matchlog.jsonl",
+			MatchLogCapacity: 200_000,
 		},
 		TLS: TLS{
 			Enabled:   true,
@@ -1139,6 +1173,17 @@ func applyEnv(cfg *Config) {
 	}
 	if v := os.Getenv("MIKROVIEW_AUDIT_STORE_PATH"); v != "" {
 		cfg.Audit.StorePath = v
+	}
+	if v := os.Getenv("MIKROVIEW_WATCHLIST_STORE_PATH"); v != "" {
+		cfg.Watchlist.StorePath = v
+	}
+	if v := os.Getenv("MIKROVIEW_WATCHLIST_MATCH_LOG_PATH"); v != "" {
+		cfg.Watchlist.MatchLogPath = v
+	}
+	if v := os.Getenv("MIKROVIEW_WATCHLIST_MATCH_LOG_CAPACITY"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			cfg.Watchlist.MatchLogCapacity = n
+		}
 	}
 	if v := os.Getenv("MIKROVIEW_AUTH_TOKENS_STORE_PATH"); v != "" {
 		cfg.Auth.TokensStorePath = v

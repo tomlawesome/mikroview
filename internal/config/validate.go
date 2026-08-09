@@ -37,6 +37,7 @@ func (c *Config) Validate() Result {
 
 	c.validateListen(fatal)
 	c.validateStore(fatal, warn)
+	c.validateWatchlist(warn)
 	c.validateAuth(fatal)
 	c.validateDevices(fatal)
 
@@ -87,6 +88,12 @@ var examplesByCode = map[string]string{
 
 	"CFG-0012": `store:
   maxMemory: 120MiB  # lower this, or confirm the machine has the larger amount to spare`,
+
+	"CFG-0040": `watchlist:
+  matchLogPath: /var/lib/mikroview/matchlog.jsonl`,
+
+	"CFG-0041": `watchlist:
+  matchLogCapacity: 200000`,
 
 	"CFG-0020": `auth:
   sessionTTL: 24h`,
@@ -196,6 +203,29 @@ func (c *Config) validateStore(fatal problemFunc, warn warnFunc) {
 	_ = fatal
 }
 
+func (c *Config) validateWatchlist(warn warnFunc) {
+	// Unlike every other store's StorePath in this file,
+	// watchlist.matchLogPath has no in-memory-only mode -- durability is
+	// the entire reason internal/matchlog exists (#243 section 3's "a
+	// match must survive a restart" requirement), so an empty path is
+	// treated the same as an unusable value, not an opt-out.
+	if c.Watchlist.MatchLogPath == "" {
+		c.Watchlist.MatchLogPath = defaultMatchLogPath
+		warn("CFG-0040", "watchlist.matchLogPath",
+			"is empty, which internal/matchlog has no in-memory-only mode for -- matches would have nowhere to be recorded",
+			c.Watchlist.MatchLogPath,
+			"set a path, or leave this unset to use the default")
+	}
+	if c.Watchlist.MatchLogCapacity <= 0 {
+		was := c.Watchlist.MatchLogCapacity
+		c.Watchlist.MatchLogCapacity = defaultMatchLogCapacity
+		warn("CFG-0041", "watchlist.matchLogCapacity",
+			fmt.Sprintf("%d is not a usable match log capacity -- nothing would be kept", was),
+			fmt.Sprintf("%d", c.Watchlist.MatchLogCapacity),
+			"set a positive number of matches to hold, e.g. 200000")
+	}
+}
+
 func (c *Config) validateAuth(fatal problemFunc) {
 	// A session that never idles out is a credential that never expires.
 	if c.Auth.SessionTTL <= 0 {
@@ -246,6 +276,8 @@ func (c *Config) validateDevices(fatal problemFunc) {
 // what a fresh install would have used. Restating them would be exactly
 // the kind of quiet drift this whole feature exists to catch.
 var (
-	defaultRetention = defaults().Store.Retention
-	defaultMaxMemory = defaults().Store.MaxMemory
+	defaultRetention        = defaults().Store.Retention
+	defaultMaxMemory        = defaults().Store.MaxMemory
+	defaultMatchLogPath     = defaults().Watchlist.MatchLogPath
+	defaultMatchLogCapacity = defaults().Watchlist.MatchLogCapacity
 )

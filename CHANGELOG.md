@@ -55,6 +55,22 @@ upgrading.
 
 ### Added
 
+- **The watchlist match log's storage and matching infrastructure**
+  (#243, slice 2 of 6) -- **not yet a usable feature**: there is still no
+  config key, API or UI to create a watchlist entry, so this ships
+  provably inert (an empty entry set matches nothing). What lands: a
+  persisted entry store (`internal/watchlist`), non-inverted matching
+  ("record attempts against these ports," generalising Control Ports'
+  client-side-only logic to run server-side against every ingested
+  event), and an async evaluation worker mirroring
+  `internal/detect.Detector`'s own queue/drop/recover pattern -- a slow
+  or backed-up match evaluation must never delay store insertion or
+  WebSocket broadcast on the single ingest goroutine, the same failure
+  mode issue #221 already demonstrated on the equivalent detection path.
+  New config: `watchlist.storePath`, `watchlist.matchLogPath`,
+  `watchlist.matchLogCapacity` (CFG-0040/CFG-0041), see
+  `docs/configuration.md`'s "Watchlist match log" section.
+
 - **Tor and VPN network-class matches now reinforce an already-raised
   flag's confidence** (#114), direction-aware: only a classified source
   reaching *into* your network counts, never your own outbound traffic
