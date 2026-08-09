@@ -17,6 +17,8 @@ import type {
   ReputationResult,
   RuleUsage,
   Stats,
+  Suggestion,
+  SuggestionStatus,
   UserSummary,
   WatchlistEntry,
   WatchlistIdentity,
@@ -422,6 +424,58 @@ export async function fetchWatchlistMatches(params: {
   if (!res.ok) throw new ApiError(`fetchWatchlistMatches: ${res.status}`, res.status)
   const body = await res.json()
   return body.matches ?? []
+}
+
+// Admin-only review surface over internal/suggest's candidate pool
+// (#243 slice 5) -- watchlist entries suggested from data RouterOS has
+// already pushed. Every candidate id routinely contains a raw NUL byte
+// (see Suggestion's own doc comment in types.ts), so every path below
+// goes through encodeURIComponent, the same convention
+// deleteWatchlistEntry etc. already use for their own ids.
+
+export async function fetchSuggestions(status?: SuggestionStatus): Promise<Suggestion[]> {
+  const q = status ? `?status=${encodeURIComponent(status)}` : ''
+  const res = await fetch(`/api/suggestions${q}`)
+  if (!res.ok) throw new ApiError(`fetchSuggestions: ${res.status}`, res.status)
+  const body = await res.json()
+  return body.candidates ?? []
+}
+
+// acceptSuggestion turns an Off candidate into a real watchlist entry --
+// see internal/api's handleSuggestionsAccept for exactly what entry
+// shape results per candidate kind. Returns both the updated candidate
+// and the entry it became.
+export async function acceptSuggestion(
+  id: string,
+): Promise<{ candidate: Suggestion; entry: WatchlistEntry } | string> {
+  const res = await postJSON(`/api/suggestions/${encodeURIComponent(id)}/accept`)
+  if (res.ok) return await res.json()
+  return (await res.text()) || `acceptSuggestion: ${res.status}`
+}
+
+export async function hideSuggestion(id: string): Promise<Suggestion | string> {
+  const res = await postJSON(`/api/suggestions/${encodeURIComponent(id)}/hide`)
+  if (res.ok) return await res.json()
+  return (await res.text()) || `hideSuggestion: ${res.status}`
+}
+
+export async function unhideSuggestion(id: string): Promise<Suggestion | string> {
+  const res = await postJSON(`/api/suggestions/${encodeURIComponent(id)}/unhide`)
+  if (res.ok) return await res.json()
+  return (await res.text()) || `unhideSuggestion: ${res.status}`
+}
+
+// resetSuggestions is #243 slice 5's "nuke" action: permanently deletes
+// every watchlist entry and starts over from a fresh look at the router.
+// confirm must be sent true (see internal/api's handleSuggestionsReset)
+// -- there is no accidental-call path here, by design.
+export async function resetSuggestions(): Promise<Suggestion[] | string> {
+  const res = await postJSON('/api/suggestions/reset', { confirm: true })
+  if (res.ok) {
+    const body = await res.json()
+    return body.candidates ?? []
+  }
+  return (await res.text()) || `resetSuggestions: ${res.status}`
 }
 
 // Admin-only read-only API token management (issue #101) -- see

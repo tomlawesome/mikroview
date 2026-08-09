@@ -810,6 +810,12 @@ watchlist:
   # full. 100k-500k is the realistic range for the file backend; 200,000
   # is the default (CFG-0041 warns below zero).
   matchLogCapacity: 200000
+
+  # Where suggested watchlist entries (below) are persisted. Same
+  # optional-persistence contract as storePath above: left unset,
+  # suggestions still work, they just regenerate from scratch on
+  # restart rather than remembering what you already accepted or hid.
+  suggestionsStorePath: "/var/lib/mikroview/suggestions.json"
 ```
 
 The match log is a third store, distinct from the in-memory event ring
@@ -834,6 +840,56 @@ produce a match -- not because the entry is wrong, but because there's
 nothing here for mikroview to observe. Tuning entries, like tuning
 detector thresholds below, is an expected, ongoing part of running this
 against a real network, not a one-time setup step.
+
+### Suggested watchlist entries (issue #243)
+
+Building a watchlist from a blank page means already knowing what to
+watch. mikroview instead suggests entries from data your router has
+already pushed (see [RouterOS setup](routeros-setup.md)) -- named
+devices from your DHCP leases, and ports an existing firewall rule
+already drops or rejects -- so you have something to react to rather
+than something to invent.
+
+Managed from **Menu → Suggestions** (admin-only, same gate as the
+watchlist itself). Every suggestion is one of three states, never a
+plain accept/reject:
+
+- **Undecided** -- generated, not yet acted on. Every new suggestion
+  starts here, and this is the default view.
+- **Accepted** -- you accepted it; a real watchlist entry now exists
+  for it, editable from the Watchlist page like any other entry.
+- **Hidden** -- you declined it. Reversible, but only by deliberately
+  switching to the Hidden view and undoing it -- a hidden suggestion
+  never reappears on its own, no matter how much time passes.
+
+New router data is checked for automatically in the background every
+few minutes; there is no manual refresh button, since a periodic check
+already does everything one would. Checking finds new suggestions and
+refreshes existing ones' display details -- it never changes a
+suggestion's state: an already-accepted or hidden suggestion stays
+exactly where you left it. If an accepted suggestion's original reason
+disappears (the firewall rule it came from was changed or removed, or
+the device's lease expired), it's flagged **stale** with an
+unmissable highlight rather than being silently un-accepted -- the
+watchlist entry itself keeps working either way, this is only a
+prompt to go take a look.
+
+Accepting a device suggestion creates an inverted watchlist entry that
+starts observing with nothing pre-approved, the same safe default as
+creating one by hand -- see the section above. A device suggestion
+watches every port a device touches, not one in particular.
+
+**Reset everything** wipes the entire watchlist -- not just suggestion
+state, every entry you've hand-tuned too -- and immediately regenerates
+a fresh set of undecided suggestions from your router's current data.
+It cannot be undone, and requires confirming that explicitly; reach for
+it only if you genuinely want a clean slate.
+
+Suggestions are only as complete as what RouterOS pushes: a rule with
+no destination port set (most default-deny "drop everything" rules) is
+too broad to suggest a specific port from, and a device with no DHCP
+lease name never gets a device suggestion since there'd be nothing
+meaningful to call it.
 
 ## Behavioral flags (optional, on by default)
 
@@ -2197,6 +2253,7 @@ Override individual scalar settings without a mounted file:
 | `MIKROVIEW_WATCHLIST_STORE_PATH` | `watchlist.storePath` (see [Watchlist](#watchlist-optional)) |
 | `MIKROVIEW_WATCHLIST_MATCH_LOG_PATH` | `watchlist.matchLogPath` |
 | `MIKROVIEW_WATCHLIST_MATCH_LOG_CAPACITY` | `watchlist.matchLogCapacity` |
+| `MIKROVIEW_WATCHLIST_SUGGESTIONS_STORE_PATH` | `watchlist.suggestionsStorePath` (see [Suggested watchlist entries](#suggested-watchlist-entries-issue-243)) |
 | `MIKROVIEW_AUTH_TOKENS_STORE_PATH` | `auth.tokensStorePath` (see [API tokens](#api-tokens-read-only)) |
 | `MIKROVIEW_TLS_ENABLED` | `tls.enabled` (see [TLS](#tls)) |
 | `MIKROVIEW_TLS_CERT_FILE` | `tls.certFile` |
@@ -2427,6 +2484,11 @@ exits, rather than starting the server. See
 | `POST /api/watchlist/entries/{id}/promote` | admin-only: move one or more observed destinations into that entry's Permitted set |
 | `POST /api/watchlist/entries/{id}/observing` | admin-only: turn an inverted entry's observe mode on or off |
 | `GET /api/watchlist/matches` | a windowed query over the persisted match log, by `mac`/`ip`/`since`/`until`/`limit` -- open to any signed-in user and reachable via a read-only API token, same tier as `/api/events`/`/api/flags`/`/api/stats`/`/api/devices` |
+| `GET /api/suggestions` | admin-only: every suggested watchlist entry (see [Suggested watchlist entries](#suggested-watchlist-entries-issue-243)), optionally filtered with `?status=off\|on\|hide` |
+| `POST /api/suggestions/{id}/accept` | admin-only: accept an undecided suggestion, creating a real watchlist entry |
+| `POST /api/suggestions/{id}/hide` | admin-only: decline an undecided suggestion |
+| `POST /api/suggestions/{id}/unhide` | admin-only: return a hidden suggestion to undecided |
+| `POST /api/suggestions/reset` | admin-only, destructive: wipes the entire watchlist and regenerates suggestions from scratch -- requires `{"confirm": true}` in the request body |
 | `GET /api/auth/session` | current auth state (setup-required / authenticated / not) -- always 200, never gated |
 | `POST /api/auth/register` | create the first (admin) account -- only while zero accounts exist |
 | `POST /api/auth/login` | sign in, sets the session cookie |

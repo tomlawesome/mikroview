@@ -226,6 +226,11 @@ every restart) but not fatal.
   matches can mean "nothing happened" or "nothing logs this," and
   telling those apart is on the operator, not the tool. See
   [docs/configuration.md](docs/configuration.md)'s "Watchlist" section.
+  Entries can also be **suggested** from data your router has already
+  pushed (named DHCP leases, ports an existing rule already blocks), so
+  there's something to react to rather than a blank page — reviewed
+  Off/Accepted/Hidden, never applied automatically. See that section's
+  "Suggested watchlist entries" subsection.
 - **Live updates**: a WebSocket pushes new events to the browser in
   real time; historical/filtered queries go through a REST endpoint
   against the retained buffer. See

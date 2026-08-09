@@ -520,6 +520,7 @@ func TestDefaultStoragePathsUnderVarLibMikroview(t *testing.T) {
 		"DeviceMAC.StorePath":             cfg.DeviceMAC.StorePath,
 		"Watchlist.StorePath":             cfg.Watchlist.StorePath,
 		"Watchlist.MatchLogPath":          cfg.Watchlist.MatchLogPath,
+		"Watchlist.SuggestionsStorePath":  cfg.Watchlist.SuggestionsStorePath,
 	}
 	want := map[string]string{
 		"Flags.StorePath":                 "/var/lib/mikroview/flags.json",
@@ -533,6 +534,7 @@ func TestDefaultStoragePathsUnderVarLibMikroview(t *testing.T) {
 		"DeviceMAC.StorePath":             "/var/lib/mikroview/mac-registry.json",
 		"Watchlist.StorePath":             "/var/lib/mikroview/watchlist.json",
 		"Watchlist.MatchLogPath":          "/var/lib/mikroview/matchlog.jsonl",
+		"Watchlist.SuggestionsStorePath":  "/var/lib/mikroview/suggestions.json",
 	}
 	for field, got := range cases {
 		if got != want[field] {
@@ -598,6 +600,7 @@ func TestWatchlistEnvVarsOverrideDefaults(t *testing.T) {
 	t.Setenv("MIKROVIEW_WATCHLIST_STORE_PATH", "/data/watchlist.json")
 	t.Setenv("MIKROVIEW_WATCHLIST_MATCH_LOG_PATH", "/data/matchlog.jsonl")
 	t.Setenv("MIKROVIEW_WATCHLIST_MATCH_LOG_CAPACITY", "50000")
+	t.Setenv("MIKROVIEW_WATCHLIST_SUGGESTIONS_STORE_PATH", "/data/suggestions.json")
 
 	cfg, err := Load("", nil)
 	if err != nil {
@@ -611,6 +614,9 @@ func TestWatchlistEnvVarsOverrideDefaults(t *testing.T) {
 	}
 	if cfg.Watchlist.MatchLogCapacity != 50000 {
 		t.Errorf("Watchlist.MatchLogCapacity = %v, want 50000", cfg.Watchlist.MatchLogCapacity)
+	}
+	if cfg.Watchlist.SuggestionsStorePath != "/data/suggestions.json" {
+		t.Errorf("Watchlist.SuggestionsStorePath = %v, want /data/suggestions.json", cfg.Watchlist.SuggestionsStorePath)
 	}
 }
 

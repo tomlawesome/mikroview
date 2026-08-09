@@ -169,6 +169,14 @@ func (s *Server) handleWatchlistEntriesUpdate(w http.ResponseWriter, r *http.Req
 // internal/entities' operator-chosen keys (see entities.go's own doc
 // comment on why that one is body-based instead): a watchlist entry's ID
 // is server-generated hex, never operator input.
+//
+// If this entry originated from a suggestion (#243 slice 5), deleting it
+// here -- through the normal entry-management page, not the suggestions
+// table -- sends that candidate straight to Hide rather than back to
+// Off: deleting something you explicitly created signals "I don't want
+// this," not "reconsider me later" (settled in #243's slice 5 design
+// conversation). A no-op when no candidate tracks this entry, which is
+// the common case for an entry created directly.
 func (s *Server) handleWatchlistEntriesDelete(w http.ResponseWriter, r *http.Request) {
 	if !callerIsAdmin(r) {
 		http.Error(w, "admin role required", http.StatusForbidden)
@@ -181,6 +189,7 @@ func (s *Server) handleWatchlistEntriesDelete(w http.ResponseWriter, r *http.Req
 		return
 	}
 	s.Watchlist.Delete(id)
+	s.Suggest.MarkHiddenByEntry(id)
 	s.Audit.Record(auditActor(r), "watchlist.delete", id, "")
 	writeJSON(w, http.StatusOK, map[string]any{"deleted": true})
 }

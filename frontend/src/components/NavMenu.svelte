@@ -229,6 +229,18 @@
           >
             Watchlist
           </button>
+
+          <!-- Same strict gate again -- GET /api/suggestions is
+               callerIsAdmin (#243 slice 5): watchlist entries suggested
+               from data RouterOS has already pushed. -->
+          <button
+            class="option"
+            class:active={appState.view === 'suggestions'}
+            onclick={() => toggleView('suggestions')}
+            title="Review watchlist entries suggested from data your router has already pushed"
+          >
+            Suggestions
+          </button>
         {/if}
       </div>
 

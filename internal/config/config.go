@@ -363,6 +363,14 @@ type Watchlist struct {
 	// for what happens once it's reached (refused, not silently
 	// overwritten).
 	MatchLogCapacity int `yaml:"matchLogCapacity"`
+	// SuggestionsStorePath is where internal/suggest's candidate pool
+	// (#243 slice 5 -- watchlist entries suggested from data RouterOS has
+	// already pushed) persists. Same optional-persistence contract as
+	// StorePath above: left empty, suggestions still work, they just
+	// regenerate from scratch (at Off, nothing lost that matters -- see
+	// internal/suggest's package doc comment) on every restart instead of
+	// remembering what was already accepted or hidden.
+	SuggestionsStorePath string `yaml:"suggestionsStorePath"`
 }
 
 // TLS configures mikroview's own listener -- on by default: a browser
@@ -820,9 +828,10 @@ func defaults() Config {
 			StorePath: DefaultDataDir + "/audit.json",
 		},
 		Watchlist: Watchlist{
-			StorePath:        DefaultDataDir + "/watchlist.json",
-			MatchLogPath:     DefaultDataDir + "/matchlog.jsonl",
-			MatchLogCapacity: 200_000,
+			StorePath:            DefaultDataDir + "/watchlist.json",
+			MatchLogPath:         DefaultDataDir + "/matchlog.jsonl",
+			MatchLogCapacity:     200_000,
+			SuggestionsStorePath: DefaultDataDir + "/suggestions.json",
 		},
 		TLS: TLS{
 			Enabled:   true,
@@ -1184,6 +1193,9 @@ func applyEnv(cfg *Config) {
 		if n, err := strconv.Atoi(v); err == nil {
 			cfg.Watchlist.MatchLogCapacity = n
 		}
+	}
+	if v := os.Getenv("MIKROVIEW_WATCHLIST_SUGGESTIONS_STORE_PATH"); v != "" {
+		cfg.Watchlist.SuggestionsStorePath = v
 	}
 	if v := os.Getenv("MIKROVIEW_AUTH_TOKENS_STORE_PATH"); v != "" {
 		cfg.Auth.TokensStorePath = v

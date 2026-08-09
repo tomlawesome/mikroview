@@ -91,6 +91,27 @@ upgrading.
   `watchlist.matchLogCapacity` (CFG-0040/CFG-0041), see
   `docs/configuration.md`'s "Watchlist" section.
 
+- **Watchlist entries suggested from pushed router data** (#243 slice
+  5): named DHCP leases and ports an existing firewall rule already
+  drops or rejects are generated into `internal/suggest`'s candidate
+  pool automatically in the background, so there's something to react
+  to rather than a blank page. Every candidate is one of three states,
+  never a plain accept/reject -- **undecided** (the default),
+  **accepted** (a real watchlist entry now exists for it), or
+  **hidden** (declined, reversible only by deliberately undoing it from
+  the Hidden view; it never reappears on its own). Accepting a device
+  suggestion always starts observing with nothing pre-approved, the
+  watchlist's own safe default. An accepted suggestion whose original
+  reason later disappears (the rule changed, the lease expired) is
+  flagged **stale** with a hard-to-miss highlight rather than silently
+  reverted. A confirm-gated **"reset everything"** wipes the whole
+  watchlist and regenerates suggestions from scratch.
+
+  New admin-only **Menu → Suggestions** page and
+  `GET/POST /api/suggestions/...` API. New config:
+  `watchlist.suggestionsStorePath`, see `docs/configuration.md`'s
+  "Suggested watchlist entries" section.
+
 - **Tor and VPN network-class matches now reinforce an already-raised
   flag's confidence** (#114), direction-aware: only a classified source
   reaching *into* your network counts, never your own outbound traffic

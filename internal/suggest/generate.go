@@ -138,6 +138,13 @@ func portCandidateName(ports []int) string {
 // Ordinal reorders whenever any rule is added/removed/reordered, which
 // would silently duplicate every port candidate on the next unrelated
 // firewall edit) -- see suggest.go's Candidate.ID doc comment.
+//
+// The \x00 join byte means a real ID routinely contains a raw NUL --
+// internal/api's /api/suggestions/{id}/... routes take this ID as a URL
+// path segment, which works (verified in internal/api's own tests) but
+// only when the caller percent-encodes it first (encodeURIComponent in
+// JS turns \0 into %00); an un-escaped NUL is rejected before the
+// request is even sent.
 func deviceCandidateID(routerDevice, mac string) string {
 	return strings.Join([]string{"device", routerDevice, mac}, "\x00")
 }
