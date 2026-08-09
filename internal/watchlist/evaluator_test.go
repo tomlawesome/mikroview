@@ -70,6 +70,46 @@ func TestEvaluatorRecordsAMatchEndToEnd(t *testing.T) {
 	t.Fatal("no match was recorded within the deadline")
 }
 
+// The Observed path end to end: an inverted entry still observing must
+// record a candidate via Store.RecordObservation, not a matchlog record
+// -- confirms the Evaluator actually wires Match's Observed outcome to
+// the entry store, not just that Match decides Observed in isolation
+// (already covered in match_test.go) or that RecordObservation itself
+// works in isolation (invert_test.go).
+func TestEvaluatorRecordsAnObservationEndToEnd(t *testing.T) {
+	entries := mustOpenStore(t)
+	if err := entries.Upsert(Entry{
+		ID: "e1", Invert: true, Observing: true,
+		Source: matchlog.Identity{MAC: baseEvent().SrcMAC},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	ml := mustOpenMatchLog(t, 10)
+	ev := NewEvaluator(entries, ml)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go ev.Run(ctx)
+
+	ev.Enqueue(baseEvent())
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		e, _ := entries.Get("e1")
+		if len(e.Observed) == 1 {
+			if e.Observed[0].DestIP != baseEvent().DstIP || e.Observed[0].Port != baseEvent().DstPort {
+				t.Fatalf("wrong observation recorded: %+v", e.Observed[0])
+			}
+			if got := ml.Stats().Count; got != 0 {
+				t.Errorf("matchlog Stats().Count = %d, want 0 -- observing must not write a matchlog record", got)
+			}
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatal("no observation was recorded within the deadline")
+}
+
 // A non-matching event must not produce a record -- confirms Run
 // actually calls Match rather than recording everything it sees.
 func TestEvaluatorDoesNotRecordANonMatch(t *testing.T) {
