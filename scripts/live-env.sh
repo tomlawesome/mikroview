@@ -124,6 +124,7 @@ auth:
 flags: {storePath: $MV_DIR/data/flags.json}
 entities: {storePath: $MV_DIR/data/entities.json}
 audit: {storePath: $MV_DIR/data/audit.json}
+watchlist: {storePath: $MV_DIR/data/watchlist.json, matchLogPath: $MV_DIR/data/matchlog.jsonl}
 EOF
   MIKROVIEW_CONFIG="$MV_DIR/cfg.yaml" "$MV_DIR/mikroview" > "$MV_DIR/server.log" 2>&1 &
   echo $! > "$MV_DIR/pid"

@@ -32,6 +32,7 @@ import (
 	"github.com/tomlawesome/mikroview/internal/geoip"
 	"github.com/tomlawesome/mikroview/internal/hub"
 	"github.com/tomlawesome/mikroview/internal/logging"
+	"github.com/tomlawesome/mikroview/internal/matchlog"
 	"github.com/tomlawesome/mikroview/internal/naming"
 	"github.com/tomlawesome/mikroview/internal/netclass"
 	"github.com/tomlawesome/mikroview/internal/notify"
@@ -44,6 +45,7 @@ import (
 	"github.com/tomlawesome/mikroview/internal/servertls"
 	"github.com/tomlawesome/mikroview/internal/store"
 	"github.com/tomlawesome/mikroview/internal/syslog"
+	"github.com/tomlawesome/mikroview/internal/watchlist"
 	"github.com/tomlawesome/mikroview/web"
 	"golang.org/x/term"
 )
@@ -432,6 +434,43 @@ func main() {
 	if err != nil {
 		auditLog.Warn(fmt.Sprintf("%v (continuing with in-memory-only, unpersisted audit log)", err))
 	}
+
+	// The watchlist entry set (#243): same optional-persistence contract
+	// every small store here follows -- a backend error degrades to
+	// in-memory-only, it never stops startup.
+	watchlistLog := logging.New("watchlist")
+	watchlistBackend, err := persistence.backendFor(bootCtx, "watchlist", cfg.Watchlist.StorePath)
+	if err != nil {
+		watchlistLog.Warn(err.Error())
+	}
+	watchlistStore, err := watchlist.OpenWithBackend(watchlistBackend)
+	if err != nil {
+		watchlistLog.Warn(fmt.Sprintf("%v (continuing with in-memory-only, unpersisted watchlist)", err))
+	}
+
+	// The watchlist's match log has no in-memory-only mode (durability
+	// is the entire point of it, see internal/matchlog's package doc
+	// comment), so a failure here is handled differently from every
+	// store above: not fatal (the rest of mikroview -- the event ring,
+	// live view, flags, detectors -- is completely unaffected by this),
+	// but not silently degraded either. matchLog stays nil and every
+	// event skips watchlist evaluation entirely for this run, which
+	// ingestOneRecovered's nil check makes an explicit, visible no-op
+	// rather than a mysteriously empty watchlist page.
+	var matchLog matchlog.Store
+	if ml, err := matchlog.Open(cfg.Watchlist.MatchLogPath, cfg.Watchlist.MatchLogCapacity); err != nil {
+		watchlistLog.Error(fmt.Sprintf("opening the match log at %s failed: %v -- watchlist entries will not record any matches until this is fixed and mikroview is restarted", cfg.Watchlist.MatchLogPath, err))
+	} else {
+		matchLog = ml
+		defer ml.Close()
+	}
+	// Evaluates the watchlist asynchronously off the ingest goroutine --
+	// see Evaluator's doc comment for why, and detector.Run just below
+	// for the identical existing pattern this mirrors. A nil matchLog
+	// (opened above) makes every Enqueue call a documented no-op rather
+	// than queuing work that could never complete.
+	watchlistEval := watchlist.NewEvaluator(watchlistStore, matchLog)
+
 	detectCfg := detect.Config{
 		PortScanThreshold:        cfg.Flags.PortScanThreshold,
 		PortScanWindow:           cfg.Flags.PortScanWindow,
@@ -595,8 +634,9 @@ func main() {
 	routerState := routerstate.New()
 	names := naming.Resolver{Rules: cfg.RuleNames, Hosts: cfg.HostNames, Entities: entityStore, RouterHosts: routerState}
 
-	go ingest(ctx, raw, st, devices, macRegistry, fs, h, geo, detector, ru, names)
+	go ingest(ctx, raw, st, devices, macRegistry, fs, h, geo, detector, ru, names, watchlistEval)
 	go detector.Run(ctx)
+	go watchlistEval.Run(ctx)
 
 	go func() {
 		spikeLog := logging.New("global-spike")
@@ -1581,14 +1621,14 @@ func readPasswordTwice() (string, error) {
 // WebSocket broadcast (see detect.Detector.Enqueue/Run, and the
 // dedicated detection-worker goroutine main() starts alongside this
 // one).
-func ingest(ctx context.Context, raw <-chan syslog.RawMessage, st *store.Store, devices *device.Registry, macRegistry *device.MACRegistry, fs *flags.Store, h *hub.Hub, geo *geoip.Lookup, detector *detect.Detector, ru *rules.Store, names naming.Resolver) {
+func ingest(ctx context.Context, raw <-chan syslog.RawMessage, st *store.Store, devices *device.Registry, macRegistry *device.MACRegistry, fs *flags.Store, h *hub.Hub, geo *geoip.Lookup, detector *detect.Detector, ru *rules.Store, names naming.Resolver, watchlistEval *watchlist.Evaluator) {
 	ingestLog := logging.New("ingest")
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case rm := <-raw:
-			ingestOneRecovered(ingestLog, rm, st, devices, macRegistry, fs, h, geo, detector, ru, names)
+			ingestOneRecovered(ingestLog, rm, st, devices, macRegistry, fs, h, geo, detector, ru, names, watchlistEval)
 		}
 	}
 }
@@ -1599,7 +1639,7 @@ func ingest(ctx context.Context, raw <-chan syslog.RawMessage, st *store.Store, 
 // still end the entire ingest goroutine for good on the first bad
 // message (silently stopping all future event processing) rather than
 // just dropping that one message. See logging.Recover's doc comment.
-func ingestOneRecovered(logger *slog.Logger, rm syslog.RawMessage, st *store.Store, devices *device.Registry, macRegistry *device.MACRegistry, fs *flags.Store, h *hub.Hub, geo *geoip.Lookup, detector *detect.Detector, ru *rules.Store, names naming.Resolver) {
+func ingestOneRecovered(logger *slog.Logger, rm syslog.RawMessage, st *store.Store, devices *device.Registry, macRegistry *device.MACRegistry, fs *flags.Store, h *hub.Hub, geo *geoip.Lookup, detector *detect.Detector, ru *rules.Store, names naming.Resolver, watchlistEval *watchlist.Evaluator) {
 	defer logging.Recover(logger)
 
 	env := syslog.ParseEnvelope(rm.Data, rm.RecvTime)
@@ -1667,6 +1707,7 @@ func ingestOneRecovered(logger *slog.Logger, rm syslog.RawMessage, st *store.Sto
 	stored := st.Insert(e)
 	h.Broadcast(stored)
 	detector.Enqueue(stored)
+	watchlistEval.Enqueue(stored)
 	// Keeps internal/rules' long-lived per-rule usage record in sync with
 	// internal/store/ring.go's own totalByRule bump inside Insert above --
 	// same per-event trigger, so RuleUsage never drifts out of step with
