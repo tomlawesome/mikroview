@@ -42,6 +42,40 @@ Outside pull requests are not accepted at all — see `CONTRIBUTING.md`.
 
 ## Where code review happens: GitHub and GitLab, split by branch
 
+> **UNDER CONSTRUCTION — NOT YET LIVE. DO NOT USE.**
+>
+> Everything below describes the **target state of a cutover that has not
+> been activated**, written in the present tense before it happened. The
+> GitLab lane is real and valid — the project exists, `dev` is pushed
+> there, and its pipeline runs green through the `security` stage — but
+> `dev` has **not** moved, and the lane is not a gate on anything yet.
+>
+> **Until it goes live, work through GitHub as normal**: push feature
+> branches to `origin`, open GitHub pull requests, merge into `dev`
+> there. Do not push to the `gitlab` remote, open merge requests there,
+> or wait on a GitLab pipeline.
+>
+> **Do not "fix" the GitHub side to match this section.** The retirements
+> it describes are cutover steps that have not been taken, and the things
+> it says were replaced are still live and should stay live:
+> `.github/workflows/close-issues-on-dev.yml` still fires on a PR merging
+> into `dev`, and `.github/dependabot.yml` still carries its
+> `target-branch: dev` entries. Removing either now would break working
+> automation in exchange for a lane that cannot yet replace it.
+>
+> Known blocker on activation: the `sync` stage
+> (`mirror-to-github`, `close-github-issues`) has never successfully run
+> — it needs a `GITHUB_MIRROR_TOKEN` CI/CD variable that does not exist
+> yet. Until that works, cutting over would silently stop GitHub issues
+> closing on merge.
+>
+> Current build status, and what is still open, lives in
+> `gitlab-ci-plan/07-implementation-status-and-handover.md`, which
+> supersedes the earlier planning docs in that folder. Note it describes
+> **two** GitLab projects for different purposes — `ai/mikroview` (the
+> eventual cutover target) and `ai/mikroview-mirror` (parallel checks
+> only, no integration) — which are not interchangeable.
+
 Issues, planning, and decisions stay on GitHub, per the rest of this file.
 Code review does not, for one lane: `dev` (and the feature branches that
 merge into it) now lives primarily on a private, self-hosted GitLab
@@ -66,10 +100,15 @@ Mechanically:
 - `close-issues-on-dev.yml` stopped firing (its trigger was a GitHub PR
   merging into `dev`, which no longer happens) and was replaced by an
   equivalent job in `.gitlab-ci.yml` that closes the same GitHub issues
-  via the GitHub API on merge.
+  via the GitHub API on merge. **(Not done — a cutover step, not a
+  completed one. The workflow is still in `.github/workflows/` and still
+  firing; the GitLab job that would replace it has never run
+  successfully.)**
 - `dependabot.yml`'s `dev`-targeting entries were retired in favor of
   Renovate running on GitLab against `dev`, so two bots aren't both
   opening PRs against a branch that's now GitLab-canonical.
+  **(Not done — a cutover step. All four `target-branch: dev` entries are
+  still present and active, and `dev` is not GitLab-canonical yet.)**
 - In-flight branches from before this change finished their existing
   GitHub PR flow normally — this was a soft cutover, not a rewrite of
   history.
