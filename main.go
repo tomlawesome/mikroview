@@ -868,6 +868,7 @@ func main() {
 		Entities:         entityStore,
 		Rules:            ru,
 		Audit:            auditStore,
+		Watchlist:        watchlistStore,
 		CriticalPorts:    cfg.Flags.CriticalPorts,
 		DeviceStaleAfter: cfg.Flags.DeviceStaleAfter,
 		Auth:             authStore,
