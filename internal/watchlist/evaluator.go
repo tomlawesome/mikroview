@@ -13,8 +13,6 @@ import (
 	"github.com/tomlawesome/mikroview/internal/store"
 )
 
-var evalLog = logging.New("watchlist")
-
 // evalQueueSize mirrors internal/detect.observeQueueSize's own sizing
 // reasoning exactly -- a generous burst absorber, not a guarantee against
 // sustained overload (nothing bounded can be one). Kept the same size as
@@ -89,7 +87,7 @@ func (ev *Evaluator) recordDropped() {
 		return
 	}
 	if ev.lastDropLogNanos.CompareAndSwap(last, now) {
-		evalLog.Warn(fmt.Sprintf("watchlist evaluation queue full -- %d event(s) dropped from evaluation so far (still stored/broadcast/detected normally)", total))
+		persistLog.Warn(fmt.Sprintf("watchlist evaluation queue full -- %d event(s) dropped from evaluation so far (still stored/broadcast/detected normally)", total))
 	}
 }
 
@@ -114,20 +112,24 @@ func (ev *Evaluator) Run(ctx context.Context) {
 // reasoning ingestOneRecovered's own doc comment (main.go) gives for its
 // identical shape.
 func (ev *Evaluator) evaluateRecovered(e store.Event) {
-	defer logging.Recover(evalLog)
+	defer logging.Recover(persistLog)
 	for _, entry := range ev.entries.List() {
-		tuple, ok := Match(entry, e)
-		if !ok {
-			continue
-		}
-		if err := ev.matchLog.Append(entry.ID, tuple, e, e.ReceivedAt); err != nil {
-			// ErrCapacityReached is the expected, already-documented
-			// steady state once a deployment's match log fills (#243
-			// section 3: refused, not silently overwritten) -- surfaced
-			// here rather than swallowed, since from this point on
-			// every further genuinely-new match for this entry is
-			// silently lost until the operator acts.
-			evalLog.Warn(fmt.Sprintf("recording a match for entry %q failed: %v", entry.ID, err))
+		tuple, outcome := Match(entry, e)
+		switch outcome {
+		case Violation:
+			if err := ev.matchLog.Append(entry.ID, tuple, e, e.ReceivedAt); err != nil {
+				// ErrCapacityReached is the expected, already-documented
+				// steady state once a deployment's match log fills (#243
+				// section 3: refused, not silently overwritten) -- surfaced
+				// here rather than swallowed, since from this point on
+				// every further genuinely-new match for this entry is
+				// silently lost until the operator acts.
+				persistLog.Warn(fmt.Sprintf("recording a match for entry %q failed: %v", entry.ID, err))
+			}
+		case Observed:
+			// An inverted entry still observing -- record the candidate
+			// destination, fire nothing (#243 section 5).
+			ev.entries.RecordObservation(entry.ID, tuple.DestIP, tuple.Port, e.ReceivedAt)
 		}
 	}
 }

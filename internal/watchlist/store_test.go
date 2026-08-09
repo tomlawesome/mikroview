@@ -62,6 +62,24 @@ func TestUpsertRejectsNoPorts(t *testing.T) {
 	}
 }
 
+func TestUpsertRejectsInvertedWithNoSource(t *testing.T) {
+	s := mustOpenStore(t)
+	err := s.Upsert(Entry{ID: "e1", Invert: true})
+	if !errors.Is(err, ErrInvertedRequiresSource) {
+		t.Errorf("Upsert(inverted, no source) = %v, want ErrInvertedRequiresSource", err)
+	}
+}
+
+// An inverted entry needs no Ports -- confirming the branch in Upsert
+// actually skips ErrNoPorts rather than merely not hitting it by luck.
+func TestUpsertAllowsInvertedWithNoPorts(t *testing.T) {
+	s := mustOpenStore(t)
+	err := s.Upsert(Entry{ID: "e1", Invert: true, Source: matchlog.Identity{MAC: "aa:bb:cc:dd:ee:ff"}})
+	if err != nil {
+		t.Errorf("Upsert(inverted, no ports) = %v, want nil", err)
+	}
+}
+
 func TestUpsertRejectsInvalidText(t *testing.T) {
 	s := mustOpenStore(t)
 	cases := []Entry{
