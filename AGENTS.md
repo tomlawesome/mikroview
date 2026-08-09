@@ -40,6 +40,40 @@ cases root-caused as benign. Report it; don't quietly handle it.
 
 Outside pull requests are not accepted at all — see `CONTRIBUTING.md`.
 
+## What mikroview is for, and what belongs somewhere else
+
+Mikroview is a **firewall-log interrogation helper**: it ingests the log
+stream a MikroTik router exports, and helps someone view, filter and make
+sense of it. It is not a security suite and does not grow into one.
+
+When a security-adjacent feature is proposed, the test is where its signal
+comes from:
+
+- **Derived from mikroview's own event stream** — belongs inside
+  mikroview. The behavioural flags subsystem and its detectors qualify:
+  every judgement they make is computed from traffic mikroview already
+  sees.
+- **Produced by a separate tool, and merely correlated alongside
+  mikroview's data** — belongs in a companion project. Default
+  recommendation for anything in this category is a separate repo, not an
+  integration here.
+
+The worked example is OpenCanary. Centralising honeypot alerts went
+through several rounds and settled on **no OpenCanary-specific logic in
+mikroview at all**: a rare honeypot hit flushed into the live view is lost
+in a stream of real firewall lines, and a multi-instance honeypot
+dashboard is a different product — it became `birdcage`. Mikroview's only
+part is deliberately generic: a bounded before/after lookback query by IP
+and timestamp (#29) that *any* external trigger can call to pull
+surrounding traffic context. Not honeypot-aware, not coupled to birdcage.
+
+This is not tidiness. `README.md` is a public advert for the app rather
+than a personal readme, and an app that does one job well is a different
+proposition from one accreting adjacent integrations. Absorbing a
+neighbouring tool also inherits its failure modes, its dependencies and
+its data licensing — see the next two sections for why the last of those
+is not free.
+
 ## Where code review happens: GitHub and GitLab, split by branch
 
 Issues, planning, and decisions stay on GitHub, per the rest of this file.
@@ -101,6 +135,51 @@ assumed. See [docs/security-by-design.md](docs/security-by-design.md).
 Findings are reproduced before being acted on — including findings from
 automated research, which has in practice produced wrong version numbers
 and inflated severity scores.
+
+## Never vendor list or lookup data
+
+IP range lists, blocklists, threat feeds, GeoIP databases and anything
+else of that shape are **fetched at runtime, on the operator's own
+device**. None of it is committed to this repo or baked into the
+container image.
+
+This is a licensing constraint before it is a design preference.
+Mikroview ships under the *MikroView Personal & Non-Commercial License* —
+custom, not OSS — which turns share-alike data into a real conflict
+rather than a formality. CC BY-SA sources (IP2Location LITE, IPinfo's
+free tier, older GeoLite2) cannot be redistributed under it, and the
+cloud providers grant no redistribution licence on their published
+IP-range documents at all. Fetching at runtime is uncontroversial;
+shipping a copy is not.
+
+It also means a stale release cannot ship stale security data — a failure
+nobody would notice, because everything would appear to work.
+
+So: before adopting any feed or dependency, check its licence and record
+what you found in the issue. Permissive (MIT/BSD/Apache/ISC) is fine;
+copyleft and share-alike are not. Attribution terms still bind data that
+is fetched rather than shipped — Spamhaus DROP requires credit, and its
+date and copyright text must travel with the data.
+
+## Pin to the latest version
+
+The Go toolchain, npm packages, Docker base images and GitHub Actions are
+pinned to the latest available. When you touch a file that pins a version
+— `go.mod`'s `go` directive, a `FROM` line, a `package.json` dependency,
+`uses: action@vX` — check whether it is current and bump it in the same
+pass rather than waiting to be asked.
+
+Staying back needs a specific, defensible technical reason. "It would
+enlarge the diff" and "it isn't broken" are not reasons.
+
+The cost of the alternative is not hypothetical: mikroview's `go`
+directive sat at 1.23.4 long enough for Go 1.23 to leave its support
+window entirely, leaving 22–29 unpatched standard-library CVEs in the
+build. Nothing chose that; it simply happened because nothing bumped it.
+
+Verify a bump the way you would verify any other change — build, tests,
+container smoke test — before committing to it. A bump is a change, not a
+formality.
 
 ## Removals are wholesale
 
