@@ -17,7 +17,7 @@ listen:
   http: ":9000"
 store:
   retention: 12h
-  maxEvents: 5000
+  maxMemory: 5000000
 devices:
   - id: core
     name: "Core Router"
@@ -32,7 +32,7 @@ devices:
 		if err != nil {
 			t.Fatal(err)
 		}
-		if cfg.Listen.HTTP != ":8080" || cfg.Store.MaxEvents != 200_000 {
+		if cfg.Listen.HTTP != ":8080" || cfg.Store.MaxMemory != 120*1024*1024 {
 			t.Errorf("unexpected defaults: %+v", cfg)
 		}
 	})
@@ -42,7 +42,7 @@ devices:
 		if err != nil {
 			t.Fatal(err)
 		}
-		if cfg.Listen.HTTP != ":9000" || cfg.Store.Retention != 12*time.Hour || cfg.Store.MaxEvents != 5000 {
+		if cfg.Listen.HTTP != ":9000" || cfg.Store.Retention != 12*time.Hour || cfg.Store.MaxMemory != 5_000_000 {
 			t.Errorf("yaml did not override: %+v", cfg)
 		}
 		if len(cfg.Devices) != 1 || cfg.Devices[0].SourceIP != "192.168.1.1" {
@@ -782,13 +782,13 @@ func TestLoadMalformedYAML(t *testing.T) {
 }
 
 // applyEnv (config.go:107-133) intentionally swallows a malformed
-// MIKROVIEW_STORE_RETENTION/MIKROVIEW_STORE_MAX_EVENTS value rather than
+// MIKROVIEW_STORE_RETENTION/MIKROVIEW_STORE_MAX_MEMORY value rather than
 // failing Load -- an operator's typo in one env var shouldn't stop the
 // whole process from starting. This locks in that documented behavior:
 // the malformed value is ignored and the prior (default/YAML) value wins.
 func TestLoadInvalidEnvValuesFallBackSilently(t *testing.T) {
 	t.Setenv("MIKROVIEW_STORE_RETENTION", "not-a-duration")
-	t.Setenv("MIKROVIEW_STORE_MAX_EVENTS", "not-a-number")
+	t.Setenv("MIKROVIEW_STORE_MAX_MEMORY", "not-a-size")
 
 	cfg, err := Load("", nil)
 	if err != nil {
@@ -798,8 +798,8 @@ func TestLoadInvalidEnvValuesFallBackSilently(t *testing.T) {
 	if cfg.Store.Retention != want.Store.Retention {
 		t.Errorf("Store.Retention = %v, want the default %v (invalid env value should be ignored)", cfg.Store.Retention, want.Store.Retention)
 	}
-	if cfg.Store.MaxEvents != want.Store.MaxEvents {
-		t.Errorf("Store.MaxEvents = %v, want the default %v (invalid env value should be ignored)", cfg.Store.MaxEvents, want.Store.MaxEvents)
+	if cfg.Store.MaxMemory != want.Store.MaxMemory {
+		t.Errorf("Store.MaxMemory = %v, want the default %v (invalid env value should be ignored)", cfg.Store.MaxMemory, want.Store.MaxMemory)
 	}
 }
 
