@@ -44,10 +44,15 @@ type Listen struct {
 	// syslog, using the same certificate the HTTPS listener presents --
 	// the router already imports mikroview's generated CA to verify
 	// HTTPS ingest, so this is that same trust step, not a second one.
-	// Only started when tls.enabled is true, same conditional as
-	// HTTPRedirect above (there is no certificate to present otherwise).
-	// Set to "" to disable it entirely, same optional-empty-string
-	// contract as HTTPRedirect. Defaults to ":6514", RFC 5425's port.
+	// Started whenever this is non-empty -- NOT gated on tls.enabled,
+	// unlike HTTPRedirect. A certificate is loaded when either the HTTPS
+	// listener or this one needs it, so a deployment that turns off
+	// mikroview's own HTTP TLS because a reverse proxy terminates TLS
+	// would otherwise lose syslog ingest entirely once #189 removed the
+	// plaintext listeners: the router connects here directly, never
+	// through that proxy. Set to "" to disable it entirely, same
+	// optional-empty-string contract as HTTPRedirect. Defaults to
+	// ":6514", RFC 5425's port.
 	//
 	// This buys confidentiality and mikroview authenticating itself to
 	// the router -- it does not authenticate the sender. RouterOS's

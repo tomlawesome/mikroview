@@ -122,6 +122,18 @@
 
         <button
           class="option"
+          class:active={appState.view === 'live'}
+          onclick={() => {
+            appState.view = 'live'
+            open = false
+          }}
+          title="Back to the live view"
+        >
+          Live view
+        </button>
+
+        <button
+          class="option"
           class:active={appState.view === 'metrics'}
           onclick={() => toggleView('metrics')}
           title="Event charts and traffic breakdowns"
