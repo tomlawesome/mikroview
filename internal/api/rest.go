@@ -95,7 +95,6 @@ func deviceStatus(info device.Info, staleAfter time.Duration, now time.Time) str
 	return "live"
 }
 
-
 func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 	stats := s.Store.Stats()
 	writeJSON(w, http.StatusOK, map[string]any{
