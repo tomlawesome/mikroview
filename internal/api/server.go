@@ -85,12 +85,6 @@ type Server struct {
 	// unpersisted store), same always-usable convention as Entities/
 	// Flags/DetectorSettings above.
 	Audit *audit.Store
-	// CriticalPorts is the configured control-port list (issue #34's
-	// tracking tab) -- exposed read-only via GET /api/critical-ports,
-	// deliberately not behind handleDetectorSettingsList's admin gate
-	// (see that handler's callerIsAdmin) since a non-admin user
-	// account still needs it to render the tab.
-	CriticalPorts []int
 	// DeviceStaleAfter (issue #98) is how long a device's LastSeen may go
 	// without updating before GET /api/devices reports it as "stale" --
 	// same threshold detect.DeviceSilenceDetector uses to raise an actual
@@ -196,7 +190,6 @@ func (s *Server) routes() []route {
 		// deliberately absent from this table.
 		{http.MethodGet, "/api/routeros/{device}/rules", s.handleRouterOSRules},
 		{http.MethodGet, "/api/routeros/{device}/nat", s.handleRouterOSNAT},
-		{http.MethodGet, "/api/critical-ports", s.handleCriticalPorts},
 		{http.MethodGet, "/api/stats", s.handleStats},
 		{http.MethodGet, "/api/ws", s.handleWS},
 		{http.MethodGet, "/api/lookup/ip/{ip}", s.handleIPLookup},

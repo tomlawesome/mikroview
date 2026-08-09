@@ -34,9 +34,10 @@ func newWatchlistEntryID() string {
 // Observing, Permitted and Observed are not settable here: Observing
 // follows a fixed rule (see handleWatchlistEntriesCreate/Update below),
 // and Permitted/Observed are the observe/promote workflow's own state,
-// changed only through their own dedicated endpoints (#243 slice 4's
-// next piece), never by overwriting the whole entry -- a plain PUT here
-// must not be able to silently wipe an entry's accumulated observations.
+// changed only through their own dedicated endpoints
+// (handleWatchlistEntriesPromote, handleWatchlistEntriesSetObserving
+// below), never by overwriting the whole entry -- a plain PUT here must
+// not be able to silently wipe an entry's accumulated observations.
 type watchlistEntryRequest struct {
 	Name                   string            `json:"name"`
 	Source                 matchlog.Identity `json:"source"`

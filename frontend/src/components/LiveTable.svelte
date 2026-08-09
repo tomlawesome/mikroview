@@ -11,18 +11,22 @@
 
   // Both optional -- default to the live view's own state, so the
   // existing `<LiveTable />` call site (App.svelte's 'live' branch)
-  // needs no change. A caller with its own independent event set (e.g.
-  // ControlPorts.svelte, filtered by control-port destination rather
-  // than the global FilterBar) still gets the same columns, resize
-  // handles, and EventRow click-to-filter behavior for free.
+  // needs no change. A caller with its own independent event set,
+  // filtered by some criteria the global FilterBar can't express, still
+  // gets the same columns, resize handles, and EventRow click-to-filter
+  // behavior for free. No current production caller does this (the old
+  // Control Ports tab did, before #243 replaced it with Watchlist.svelte,
+  // which shows watched destinations rather than a filtered event table)
+  // -- kept for a future caller with the same shape, and exercised
+  // directly by this component's own tests below.
   //
   // honorAutoscroll defaults true (the live view's own toolbar toggle
   // applies here) -- a caller with its own event set and no Autoscroll
-  // control of its own (ControlPorts.svelte) passes false, since the
-  // global toggle freezing an unrelated table it doesn't render a
-  // control for would be surprising, not helpful. Kept separate from
-  // "was an `events` prop passed" so tests can supply a fixture `events`
-  // array while still exercising the live view's freeze behavior.
+  // control of its own would pass false, since the global toggle
+  // freezing an unrelated table it doesn't render a control for would be
+  // surprising, not helpful. Kept separate from "was an `events` prop
+  // passed" so tests can supply a fixture `events` array while still
+  // exercising the live view's freeze behavior.
   let {
     events,
     emptyMessage,
@@ -76,9 +80,8 @@
   })
 
   // A caller-supplied `events` array is used as-is, never re-filtered by
-  // the global FilterBar -- ControlPorts.svelte already applies its own,
-  // independent match criteria (see its own comment on why appState.
-  // filters can't express an OR-of-ports match) before this ever sees it.
+  // the global FilterBar -- such a caller applies its own, independent
+  // match criteria before this ever sees it.
   const liveFiltered = $derived(
     events !== undefined ? events : applyFilters(appState.ageFilteredEvents, appState.filters, appState.ruleMatches),
   )
@@ -103,18 +106,17 @@
   // bookkeeping; this only stops what's on screen from moving.
   //
   // Scoped by honorAutoscroll to the live view's own table -- a
-  // caller-supplied `events` array (ControlPorts.svelte) has no
-  // Autoscroll control of its own and passes honorAutoscroll={false}, so
-  // the global toggle never freezes it. When it IS in scope and `events`
-  // was still explicitly supplied (only test fixtures do this), there is
-  // no separate global filter to re-apply -- the frozen pool is used as
-  // given.
+  // caller-supplied `events` array with no Autoscroll control of its own
+  // passes honorAutoscroll={false}, so the global toggle never freezes
+  // it. When it IS in scope and `events` was still explicitly supplied
+  // (only test fixtures do this), there is no separate global filter to
+  // re-apply -- the frozen pool is used as given.
   //
   // The pool itself lives on appState, not here: this component unmounts
   // when you switch views, and a local snapshot would be lost and
   // re-taken on return. See appState.frozenPool. An out-of-scope instance
-  // returns early rather than clearing it -- otherwise merely mounting
-  // ControlPorts would release the live view's freeze.
+  // returns early rather than clearing it -- otherwise merely mounting an
+  // unrelated view would release the live view's freeze.
   $effect(() => {
     if (!honorAutoscroll) return
     if (appState.autoscroll) {

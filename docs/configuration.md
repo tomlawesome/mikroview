@@ -749,29 +749,52 @@ persisted log (see [API reference](#api-reference)) -- the same
 `since`/`until`/`limit` convention `GET /api/events` already uses, minus
 that endpoint's event-specific filters.
 
-## Watchlist match log (in progress -- infrastructure only, not yet usable)
+## Watchlist (optional)
 
-Growing Control Ports into a user-tuned watchlist (issue #243): instead
-of one flat list of "interesting" ports shared by everyone, an operator
-will be able to define entries scoped by source device, destination and
-port set, with matches persisted so they survive both the in-memory event
-ring wrapping and a mikroview restart -- unlike Control Ports today,
-which only ever sees whatever is still in the browser's own capped,
-volatile event buffer.
+Issue #243 grew the old Control Ports tab into a user-tuned watchlist:
+instead of one flat list of "interesting" ports shared by everyone, an
+operator defines entries scoped by source device, destination and port
+set. Matches are persisted so they survive both the in-memory event ring
+wrapping and a mikroview restart -- unlike Control Ports before it, which
+only ever saw whatever was still in the browser's own capped, volatile
+event buffer.
 
-**This section documents infrastructure, not a usable feature yet.**
-There is currently no way to create a watchlist entry -- no config key,
-no API, no UI. With nothing configured, this is provably inert: an empty
-entry set matches nothing, ever. What exists so far is the persisted
-match log itself and the machinery that will evaluate entries against it
-once entries can be created (a later step in #243).
+Two kinds of entry, chosen per entry, not globally:
+
+- **Record** (non-inverted) -- "watch attempts against these ports,"
+  optionally scoped to a source device and/or destination. This is the
+  direct generalisation of what Control Ports did: a device or the
+  whole network reaching for SSH, RDP, or whatever ports you name, with
+  every match recorded rather than only ever visible in the live view
+  while it's on screen.
+- **Invert** -- "this device should only ever reach these destinations,"
+  the other direction: instead of naming ports to watch for, you name a
+  device and let mikroview tell you what it actually does. A new
+  inverted entry starts **observing**: nothing fires while observing --
+  every distinct destination the device touches gets recorded as a
+  candidate for review, not treated as a violation. You look at what it
+  actually reached, **promote** the destinations that are expected
+  (a known NTP server, a vendor's telemetry endpoint), then turn
+  observing off. From that point, anything the device reaches that
+  wasn't promoted is a real match: either it's genuinely unexpected, or
+  you missed promoting something and should add it. Broadcast,
+  multicast and link-local traffic is exempt from this by default
+  (`includeStructuralNoise` opts back in) since it's rarely what anyone
+  means by "did this device misbehave."
+
+Managed from **Menu → Watchlist** (admin-only, matching Entities/Audit's
+gate -- entry management uses `callerIsAdmin`, not
+`callerIsAdminOrOpen`, so it stays hidden while auth is disabled). Add,
+edit and remove entries there; for an inverted entry, the same page
+shows what's been promoted, what's waiting for review, and a toggle to
+resume or stop observing. An entry with a scoped source can also show
+its own recent matches inline, pulled from the match log below.
 
 ```yaml
 watchlist:
   # Where watchlist entries themselves are persisted, as a small JSON
   # file. Same optional-persistence contract as entities.storePath: left
-  # unset, entries still work, they just don't survive a restart. Not
-  # yet reachable through any config key, API or UI -- see above.
+  # unset, entries still work, they just don't survive a restart.
   storePath: "/var/lib/mikroview/watchlist.json"
 
   # Where matches are recorded, append-only. Unlike storePath above,
@@ -796,7 +819,21 @@ capped evidence): a match is a discrete fact that matters individually,
 so it's kept at full fidelity -- the whole matched event, not a summary.
 A repeated identical match collapses into a count with first-seen/
 last-seen timestamps rather than being stored again, so a noisy entry
-cannot consume the capacity a genuinely novel match needs.
+cannot consume the capacity a genuinely novel match needs. Queried via
+`GET /api/watchlist/matches` (see [API reference](#api-reference)) --
+open to any signed-in user and reachable via a read-only API token, the
+same tier as `/api/events`/`/api/flags`/`/api/stats`/`/api/devices`,
+since correlating a device against its recorded matches from an external
+tool is exactly what that log is for.
+
+Watchlist coverage is bounded by the same thing every detector in this
+app is bounded by: mikroview only ever sees what RouterOS actually
+logs. An entry watching a port the router's own rules don't log traffic
+for, or a device whose traffic never crosses a logged rule, will never
+produce a match -- not because the entry is wrong, but because there's
+nothing here for mikroview to observe. Tuning entries, like tuning
+detector thresholds below, is an expected, ongoing part of running this
+against a real network, not a one-time setup step.
 
 ## Behavioral flags (optional, on by default)
 
@@ -2157,7 +2194,7 @@ Override individual scalar settings without a mounted file:
 | `MIKROVIEW_AUTH_SESSION_TTL` | `auth.sessionTTL` |
 | `MIKROVIEW_ENTITIES_STORE_PATH` | `entities.storePath` (see [Entities](#entities-ui-managed-hostruleport-labels-and-tags-optional)) |
 | `MIKROVIEW_AUDIT_STORE_PATH` | `audit.storePath` (see [Audit log](#audit-log-admin-action-accountability-optional)) |
-| `MIKROVIEW_WATCHLIST_STORE_PATH` | `watchlist.storePath` (see [Watchlist match log](#watchlist-match-log-in-progress----infrastructure-only-not-yet-usable)) |
+| `MIKROVIEW_WATCHLIST_STORE_PATH` | `watchlist.storePath` (see [Watchlist](#watchlist-optional)) |
 | `MIKROVIEW_WATCHLIST_MATCH_LOG_PATH` | `watchlist.matchLogPath` |
 | `MIKROVIEW_WATCHLIST_MATCH_LOG_CAPACITY` | `watchlist.matchLogCapacity` |
 | `MIKROVIEW_AUTH_TOKENS_STORE_PATH` | `auth.tokensStorePath` (see [API tokens](#api-tokens-read-only)) |
@@ -2367,7 +2404,6 @@ exits, rather than starting the server. See
 | `GET /ca.crt` | mikroview's self-generated CA certificate, unauthenticated -- only present when TLS is on and mikroview generated its own CA (never for a supplied cert or `tls.enabled: false`); see [TLS](#tls) |
 | `GET /api/events` | filtered, windowed historical query (see below) |
 | `GET /api/devices` | known devices (configured + auto-discovered), each with a `status` of `live`/`stale`/`never_seen` (issue #98, see [Behavioral flags](#behavioral-flags-optional-on-by-default)'s "Device silence" entry) -- feeds the Fleet view |
-| `GET /api/critical-ports` | the configured `flags.criticalPorts` list -- feeds the "Control ports" tracking tab (issue #34), open to any signed-in user, not admin-gated |
 | `GET /api/rules` | every rule label mikroview has ever seen fire, with first/last-seen time and count (`internal/rules.Store`) -- the "discovered but unnamed rules" source for the Entities panel (see [Entities](#entities-ui-managed-hostruleport-labels-and-tags-optional)), open to any signed-in user, not admin-gated |
 | `GET /api/stats` | totals, per-action counts, rolling events/sec |
 | `GET /api/ws` | live-tail WebSocket feed |
@@ -2384,6 +2420,13 @@ exits, rather than starting the server. See
 | `POST /api/entities` | admin-only: create or replace (upsert) one entity, identified by `(type, key)` in the JSON body |
 | `DELETE /api/entities` | admin-only: remove the entity identified by `(type, key)` in the JSON body |
 | `GET /api/audit` | admin-only: a windowed slice of the admin action audit log (see [Audit log](#audit-log-admin-action-accountability-optional)), newest activity last, accepting `since`/`until`/`limit` query params like `GET /api/events` |
+| `GET /api/watchlist/entries` | admin-only: every watchlist entry (see [Watchlist](#watchlist-optional)) |
+| `POST /api/watchlist/entries` | admin-only: create one entry |
+| `PUT /api/watchlist/entries/{id}` | admin-only: replace one entry's name/source/destination/ports/invert/includeStructuralNoise -- never its Permitted/Observed state, which only the two endpoints below can change |
+| `DELETE /api/watchlist/entries/{id}` | admin-only: remove one entry |
+| `POST /api/watchlist/entries/{id}/promote` | admin-only: move one or more observed destinations into that entry's Permitted set |
+| `POST /api/watchlist/entries/{id}/observing` | admin-only: turn an inverted entry's observe mode on or off |
+| `GET /api/watchlist/matches` | a windowed query over the persisted match log, by `mac`/`ip`/`since`/`until`/`limit` -- open to any signed-in user and reachable via a read-only API token, same tier as `/api/events`/`/api/flags`/`/api/stats`/`/api/devices` |
 | `GET /api/auth/session` | current auth state (setup-required / authenticated / not) -- always 200, never gated |
 | `POST /api/auth/register` | create the first (admin) account -- only while zero accounts exist |
 | `POST /api/auth/login` | sign in, sets the session cookie |

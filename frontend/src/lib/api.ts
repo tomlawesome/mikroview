@@ -18,6 +18,10 @@ import type {
   RuleUsage,
   Stats,
   UserSummary,
+  WatchlistEntry,
+  WatchlistIdentity,
+  WatchlistMatch,
+  WatchlistPermittedDest,
 } from './types'
 
 // Thrown instead of a plain Error by every fetch* function below --
@@ -120,13 +124,6 @@ export async function fetchRules(): Promise<RuleUsage[]> {
   if (!res.ok) throw new ApiError(`fetchRules: ${res.status}`, res.status)
   const body = await res.json()
   return body.rules ?? []
-}
-
-export async function fetchCriticalPorts(): Promise<number[]> {
-  const res = await fetch('/api/critical-ports')
-  if (!res.ok) throw new ApiError(`fetchCriticalPorts: ${res.status}`, res.status)
-  const body = await res.json()
-  return body.ports ?? []
 }
 
 export async function fetchHealthz(): Promise<Healthz> {
@@ -330,6 +327,101 @@ export async function deleteEntity(type: string, key: string): Promise<string | 
   const res = await deleteJSON('/api/entities', { type, key })
   if (res.ok) return null
   return (await res.text()) || `deleteEntity: ${res.status}`
+}
+
+// Admin-only CRUD over internal/watchlist's persisted entry set (#243) --
+// what Control Ports grew into. Unlike Entities' single Upsert primitive,
+// creating and updating are two separate endpoints server-side (an
+// entry's id is server-generated, not an operator-chosen key), so this
+// mirrors that split rather than forcing one shared function.
+
+// watchlistEntryRequest is the wire shape internal/api's
+// watchlistEntryRequest accepts -- deliberately narrower than
+// WatchlistEntry itself: observing/permitted/observed are never settable
+// here, only through their own dedicated endpoints below.
+export interface WatchlistEntryRequest {
+  name?: string
+  source?: WatchlistIdentity
+  destIp?: string
+  ports?: number[]
+  invert?: boolean
+  includeStructuralNoise?: boolean
+}
+
+export async function fetchWatchlistEntries(): Promise<WatchlistEntry[]> {
+  const res = await fetch('/api/watchlist/entries')
+  if (!res.ok) throw new ApiError(`fetchWatchlistEntries: ${res.status}`, res.status)
+  const body = await res.json()
+  return body.entries ?? []
+}
+
+export async function createWatchlistEntry(req: WatchlistEntryRequest): Promise<WatchlistEntry | string> {
+  const res = await postJSON('/api/watchlist/entries', req)
+  if (res.ok) return await res.json()
+  return (await res.text()) || `createWatchlistEntry: ${res.status}`
+}
+
+export async function updateWatchlistEntry(id: string, req: WatchlistEntryRequest): Promise<WatchlistEntry | string> {
+  const res = await putJSON(`/api/watchlist/entries/${encodeURIComponent(id)}`, req)
+  if (res.ok) return await res.json()
+  return (await res.text()) || `updateWatchlistEntry: ${res.status}`
+}
+
+export async function deleteWatchlistEntry(id: string): Promise<string | null> {
+  const res = await deleteJSON(`/api/watchlist/entries/${encodeURIComponent(id)}`)
+  if (res.ok) return null
+  return (await res.text()) || `deleteWatchlistEntry: ${res.status}`
+}
+
+// promoteWatchlistDestinations moves the given destination/port pairs
+// from an inverted entry's Observed candidate list into its Permitted
+// allow-list (internal/watchlist.Store.Promote) -- a pair not previously
+// observed is still accepted, the same "deliberate choice, not an
+// error" contract the backend documents.
+export async function promoteWatchlistDestinations(
+  id: string,
+  destinations: WatchlistPermittedDest[],
+): Promise<WatchlistEntry | string> {
+  const res = await postJSON(`/api/watchlist/entries/${encodeURIComponent(id)}/promote`, { destinations })
+  if (res.ok) return await res.json()
+  return (await res.text()) || `promoteWatchlistDestinations: ${res.status}`
+}
+
+// setWatchlistObserving flips whether an inverted entry is in observe
+// mode (internal/watchlist.Store.SetObserving) -- the raw mechanism
+// only; see that method's own doc comment for why this package makes no
+// judgement about when to call it.
+export async function setWatchlistObserving(id: string, observing: boolean): Promise<WatchlistEntry | string> {
+  const res = await postJSON(`/api/watchlist/entries/${encodeURIComponent(id)}/observing`, { observing })
+  if (res.ok) return await res.json()
+  return (await res.text()) || `setWatchlistObserving: ${res.status}`
+}
+
+// fetchWatchlistMatches answers a windowed query over the persisted
+// match log for one source device (internal/matchlog's own query
+// contract) -- mac and/or ip identify the source; at least one is
+// required (mirroring matchlog.Identity's MAC-preferred rule), since/
+// until/limit are all optional. Session-gated like every other read
+// here (accessUser, not admin-only -- see internal/api's authzMatrix),
+// since this is also the read-only-API-token-reachable correlation
+// surface #243 exists for.
+export async function fetchWatchlistMatches(params: {
+  mac?: string
+  ip?: string
+  since?: string
+  until?: string
+  limit?: number
+}): Promise<WatchlistMatch[]> {
+  const q = new URLSearchParams()
+  if (params.mac) q.set('mac', params.mac)
+  if (params.ip) q.set('ip', params.ip)
+  if (params.since) q.set('since', params.since)
+  if (params.until) q.set('until', params.until)
+  if (params.limit) q.set('limit', String(params.limit))
+  const res = await fetch(`/api/watchlist/matches?${q.toString()}`)
+  if (!res.ok) throw new ApiError(`fetchWatchlistMatches: ${res.status}`, res.status)
+  const body = await res.json()
+  return body.matches ?? []
 }
 
 // Admin-only read-only API token management (issue #101) -- see
