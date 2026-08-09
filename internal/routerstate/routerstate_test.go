@@ -62,6 +62,66 @@ func TestNoDataIsDistinctFromEmpty(t *testing.T) {
 	if _, _, ok := s.NATRules("router-1"); ok {
 		t.Error("NATRules reported ok for a device that never pushed")
 	}
+	if _, _, ok := s.DHCPLeases("router-1"); ok {
+		t.Error("DHCPLeases reported ok for a device that never pushed")
+	}
+	if _, _, ok := s.ARPEntries("router-1"); ok {
+		t.Error("ARPEntries reported ok for a device that never pushed")
+	}
+	if _, _, ok := s.AddressLists("router-1"); ok {
+		t.Error("AddressLists reported ok for a device that never pushed")
+	}
+}
+
+// TestDHCPLeasesARPAddressListsSortedAndAccessible is issue #243 slice
+// 5's reproducer: these three kinds were already accepted and stored by
+// Apply (routerstate stores every kind generically), but had no exported
+// getter at all before slice 5 needed one -- this pins the getters
+// themselves, sorted output included, the same contract FilterRules
+// already has.
+func TestDHCPLeasesARPAddressListsSortedAndAccessible(t *testing.T) {
+	s := New()
+	apply(t, s, "router-1", `{"kind":"dhcp-lease","page":1,"pages":1,"records":[{"hostname":"zeta","mac":"aa:bb:cc:dd:ee:02","address":"192.168.1.2"},{"hostname":"alpha","mac":"aa:bb:cc:dd:ee:01","address":"192.168.1.1"}]}`)
+	apply(t, s, "router-1", `{"kind":"arp","page":1,"pages":1,"records":[{"address":"192.168.1.9","mac":"aa:bb:cc:dd:ee:09"},{"address":"192.168.1.5","mac":"aa:bb:cc:dd:ee:05"}]}`)
+	apply(t, s, "router-1", `{"kind":"address-list","page":1,"pages":1,"records":[{"list":"blocked","address":"198.51.100.9","comment":"","dynamic":false},{"list":"blocked","address":"198.51.100.1","comment":"","dynamic":false}]}`)
+
+	leases, updatedAt, ok := s.DHCPLeases("router-1")
+	if !ok || updatedAt.IsZero() {
+		t.Fatal("DHCPLeases reported no data after an applied page")
+	}
+	if len(leases) != 2 || leases[0].Address != "192.168.1.1" || leases[1].Address != "192.168.1.2" {
+		t.Errorf("DHCPLeases = %+v, want sorted by address", leases)
+	}
+
+	arp, _, ok := s.ARPEntries("router-1")
+	if !ok {
+		t.Fatal("ARPEntries reported no data after an applied page")
+	}
+	if len(arp) != 2 || arp[0].Address != "192.168.1.5" || arp[1].Address != "192.168.1.9" {
+		t.Errorf("ARPEntries = %+v, want sorted by address", arp)
+	}
+
+	lists, _, ok := s.AddressLists("router-1")
+	if !ok {
+		t.Fatal("AddressLists reported no data after an applied page")
+	}
+	if len(lists) != 2 || lists[0].Address != "198.51.100.1" || lists[1].Address != "198.51.100.9" {
+		t.Errorf("AddressLists = %+v, want sorted by (list, address)", lists)
+	}
+}
+
+func TestDevicesListsEveryPushingDeviceSorted(t *testing.T) {
+	s := New()
+	if devs := s.Devices(); len(devs) != 0 {
+		t.Fatalf("Devices() = %v before any push, want empty", devs)
+	}
+	apply(t, s, "router-b", `{"kind":"arp","page":1,"pages":1,"records":[{"address":"10.0.0.1","mac":"aa:bb:cc:dd:ee:01"}]}`)
+	apply(t, s, "router-a", `{"kind":"arp","page":1,"pages":1,"records":[{"address":"10.0.0.2","mac":"aa:bb:cc:dd:ee:02"}]}`)
+
+	devs := s.Devices()
+	if len(devs) != 2 || devs[0] != "router-a" || devs[1] != "router-b" {
+		t.Errorf("Devices() = %v, want [router-a router-b]", devs)
+	}
 }
 
 func TestPageReplacementWithinACycle(t *testing.T) {

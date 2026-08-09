@@ -226,12 +226,20 @@ real RouterOS 7.23.3 router before writing this down:
 ```
 :local recs [:toarray ""]
 :foreach i,v in=[/ip/firewall/filter print as-value] do={
-  :local rec {"ordinal"=$i; "comment"=($v->"comment"); "chain"=($v->"chain"); "action"=($v->"action"); "srcAddressList"=($v->"src-address-list"); "logPrefix"=($v->"log-prefix")}
+  :local rec {"ordinal"=$i; "comment"=($v->"comment"); "chain"=($v->"chain"); "action"=($v->"action"); "srcAddressList"=($v->"src-address-list"); "logPrefix"=($v->"log-prefix"); "dstPort"=($v->"dst-port"); "protocol"=($v->"protocol")}
   :set recs ($recs, {$rec})
 }
 :local payload [:serialize to=json value={"kind"="filter-rule"; "page"=1; "pages"=1; "records"=$recs}]
 /tool fetch url="https://<mikroview-host>/api/ingest/routeros" http-method=post http-data=$payload http-header-field=("Content-Type: application/json,Authorization: Bearer <your ingest token>") check-certificate=yes output=none
 ```
+
+`dstPort`/`protocol` were added for issue #243's suggested-watchlist-entries
+feature: without them mikroview has no way to know which ports a rule
+that's already blocking traffic actually covers. RouterOS's own
+`dst-port` is unset (empty) on most "drop everything on this chain"
+rules and a list or range ("22,23", "1000-2000") on ones that scope by
+port — both push through as a plain string, unparsed, since MikroView
+only needs to display and match it, never compute on it.
 
 Line by line:
 
@@ -263,7 +271,7 @@ command and the field names for MikroView's schema names:
 | `kind` | Source command | Fields |
 |---|---|---|
 | `address-list` | `/ip/firewall/address-list print as-value` | `list`, `address`, `comment`, `dynamic` |
-| `filter-rule` | `/ip/firewall/filter print as-value` | `ordinal` (loop index), `comment`, `chain`, `action`, `srcAddressList` ← `src-address-list`, `logPrefix` ← `log-prefix` |
+| `filter-rule` | `/ip/firewall/filter print as-value` | `ordinal` (loop index), `comment`, `chain`, `action`, `srcAddressList` ← `src-address-list`, `logPrefix` ← `log-prefix`, `dstPort` ← `dst-port`, `protocol` |
 | `nat-rule` | `/ip/firewall/nat print as-value` | `ordinal` (loop index), `comment`, `chain`, `action` |
 | `dns-static` | `/ip/dns/static print as-value` | `name`, `address` |
 | `dhcp-lease` | `/ip/dhcp-server/lease print as-value` | `hostname`, `mac` ← `mac-address`, `address` |
