@@ -426,6 +426,10 @@ export interface WatchlistEntry {
   destIp?: string
   ports?: number[]
   invert?: boolean
+  // Only meaningful when invert is true. omitempty server-side, so a
+  // false value is absent entirely, not present-and-false -- treat
+  // absence and false identically (see the doc comment above).
+  observing?: boolean
   includeStructuralNoise?: boolean
   permitted?: WatchlistPermittedDest[]
   observed?: WatchlistObservedDest[]
