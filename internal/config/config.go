@@ -145,7 +145,42 @@ func ParseTrustedProxies(entries []string) ([]netip.Prefix, error) {
 
 type Store struct {
 	Retention time.Duration `yaml:"retention"`
-	MaxEvents int           `yaml:"maxEvents"`
+	// MaxMemory bounds the in-memory event ring by its memory cost
+	// rather than by an event count -- see #244. An event count means
+	// something different by up to four orders of magnitude between
+	// deployments (it depends entirely on which RouterOS rules the
+	// operator set log=yes on), so no single default event count could
+	// be documented as meaning anything in particular; a memory budget
+	// is the thing an operator actually controls (it is what they set on
+	// a container) and mikroview can derive the rest.
+	MaxMemory ByteSize `yaml:"maxMemory"`
+}
+
+// assumedBytesPerEvent is what a typical retained event costs: the fixed
+// struct (456 bytes, internal/store.Event) plus one heap allocation for
+// its raw syslog line, rounded to the allocator's size class. Measured in
+// internal/store/memory_test.go's TestRetainedBytesPerEvent against a
+// representative RouterOS forward-chain line -- re-run that test rather
+// than trusting this constant if store.Event's fields change.
+//
+// This is an assumption, not a guarantee: internal/routeros.Parse clamps
+// every extracted field to 256 bytes but deliberately leaves Raw
+// verbatim, so an unusually long line costs more than this constant
+// assumes and a deployment fed adversarial or pathological lines could
+// see real memory use run higher than store.maxMemory implies.
+const assumedBytesPerEvent = 616
+
+// Capacity derives the event ring's element count from the configured
+// memory budget. Always at least 1 -- store.New already treats a
+// non-positive capacity as 1, so a budget too small to hold even one
+// event's assumed cost should fail the same way rather than silently
+// holding zero.
+func (s Store) Capacity() int {
+	n := int64(s.MaxMemory) / assumedBytesPerEvent
+	if n < 1 {
+		n = 1
+	}
+	return int(n)
 }
 
 // Log controls mikroview's own server log output -- see
@@ -664,7 +699,11 @@ func defaults() Config {
 		},
 		Store: Store{
 			Retention: 24 * time.Hour,
-			MaxEvents: 200_000,
+			// 120MiB / 616 bytes/event (assumedBytesPerEvent) derives to
+			// ~204,268 events -- close to the old flat 200,000 default,
+			// so a fresh install's memory footprint does not jump on
+			// upgrade even though the unit did.
+			MaxMemory: 120 * 1024 * 1024,
 		},
 		Log: Log{
 			Level: "info",
@@ -866,9 +905,9 @@ func applyEnv(cfg *Config) {
 			cfg.Store.Retention = d
 		}
 	}
-	if v := os.Getenv("MIKROVIEW_STORE_MAX_EVENTS"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil {
-			cfg.Store.MaxEvents = n
+	if v := os.Getenv("MIKROVIEW_STORE_MAX_MEMORY"); v != "" {
+		if b, err := ParseByteSize(v); err == nil {
+			cfg.Store.MaxMemory = b
 		}
 	}
 	if v := os.Getenv("MIKROVIEW_LOG_LEVEL"); v != "" {
@@ -1234,7 +1273,8 @@ func applyFlags(cfg *Config, args []string) error {
 	httpAddr := fs.String("http", cfg.Listen.HTTP, "HTTP listen address")
 	httpRedirectAddr := fs.String("http-redirect", cfg.Listen.HTTPRedirect, "HTTP listen address for the redirect-to-HTTPS-only listener (empty disables it)")
 	retention := fs.Duration("retention", cfg.Store.Retention, "event retention window")
-	maxEvents := fs.Int("max-events", cfg.Store.MaxEvents, "max events held in the ring buffer")
+	maxMemory := cfg.Store.MaxMemory
+	fs.Var(&maxMemory, "max-memory", "memory budget for the event ring buffer, e.g. 120MiB (see docs/configuration.md)")
 	geoipDB := fs.String("geoip-db", cfg.GeoIP.DBPath, "path to a MaxMind GeoLite2/GeoIP2 Country or City .mmdb file (optional; omit to disable country flags)")
 
 	if err := fs.Parse(args); err != nil {
@@ -1245,7 +1285,7 @@ func applyFlags(cfg *Config, args []string) error {
 	cfg.Listen.HTTP = *httpAddr
 	cfg.Listen.HTTPRedirect = *httpRedirectAddr
 	cfg.Store.Retention = *retention
-	cfg.Store.MaxEvents = *maxEvents
+	cfg.Store.MaxMemory = maxMemory
 	cfg.GeoIP.DBPath = *geoipDB
 	return nil
 }
