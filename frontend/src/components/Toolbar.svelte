@@ -18,7 +18,14 @@
 
 <header class="toolbar">
   <div class="brand">
-    <LogoLockup size={21} />
+    <button
+      class="logo-button"
+      onclick={() => (appState.view = 'live')}
+      title="Back to live view"
+      aria-label="Back to live view"
+    >
+      <LogoLockup size={21} />
+    </button>
     <ConnectionIndicator />
   </div>
 
@@ -48,7 +55,9 @@
       <button
         class:active={appState.autoscroll}
         onclick={() => (appState.autoscroll = !appState.autoscroll)}
-        title="Auto-scroll to newest events"
+        title={appState.autoscroll
+          ? 'Auto-scroll to newest events'
+          : 'Hold the current view -- new events keep arriving but the table stays put'}
       >
         Autoscroll
       </button>
@@ -93,6 +102,25 @@
     display: flex;
     align-items: center;
     gap: 14px;
+  }
+
+  .logo-button {
+    display: inline-flex;
+    background: none;
+    border: none;
+    padding: 0;
+    margin: 0;
+    cursor: pointer;
+    border-radius: 5px;
+  }
+
+  .logo-button:hover {
+    opacity: 0.85;
+  }
+
+  .logo-button:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
   }
 
   .controls {
