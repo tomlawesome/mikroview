@@ -23,6 +23,7 @@ import (
 	"github.com/tomlawesome/mikroview/internal/routerstate"
 	"github.com/tomlawesome/mikroview/internal/rules"
 	"github.com/tomlawesome/mikroview/internal/store"
+	"github.com/tomlawesome/mikroview/internal/suggest"
 	"github.com/tomlawesome/mikroview/internal/watchlist"
 )
 
@@ -63,6 +64,16 @@ type Server struct {
 	// would silently lose every match. Every handler that reads it must
 	// nil-check first.
 	MatchLog matchlog.Store
+	// Suggest is the persisted pool of watchlist entries suggested from
+	// data RouterOS has already pushed (#243 slice 5) -- backing GET/POST
+	// /api/suggestions/... (see suggest.go). Always non-nil
+	// (internal/suggest.Open("") returns a usable, empty, unpersisted
+	// store), same always-usable convention as Watchlist/Entities above.
+	// Kept synced with RouterState in the background by
+	// suggest.Store.RunPeriodicSync (see main.go), never by a handler in
+	// this package -- see internal/suggest's own doc comment for why
+	// there is deliberately no manual "refresh" endpoint.
+	Suggest *suggest.Store
 	// Rules is the persisted, long-lived per-rule-label usage record
 	// (issue #103's internal/rules.Store) -- exposed read-only via GET
 	// /api/rules (issue #109) as the "discovered but unnamed rules"
@@ -214,6 +225,14 @@ func (s *Server) routes() []route {
 		{http.MethodPost, "/api/watchlist/entries/{id}/promote", s.handleWatchlistEntriesPromote},
 		{http.MethodPost, "/api/watchlist/entries/{id}/observing", s.handleWatchlistEntriesSetObserving},
 		{http.MethodGet, "/api/watchlist/matches", s.handleWatchlistMatchesQuery},
+
+		// Suggested watchlist entries (#243 slice 5), generated in the
+		// background from pushed router data -- see suggest.go.
+		{http.MethodGet, "/api/suggestions", s.handleSuggestionsList},
+		{http.MethodPost, "/api/suggestions/reset", s.handleSuggestionsReset},
+		{http.MethodPost, "/api/suggestions/{id}/accept", s.handleSuggestionsAccept},
+		{http.MethodPost, "/api/suggestions/{id}/hide", s.handleSuggestionsHide},
+		{http.MethodPost, "/api/suggestions/{id}/unhide", s.handleSuggestionsUnhide},
 
 		{http.MethodGet, "/api/audit", s.handleAuditList},
 		{http.MethodGet, "/api/config/problems", s.handleConfigProblems},

@@ -25,6 +25,7 @@ import (
 	"github.com/tomlawesome/mikroview/internal/routerstate"
 	"github.com/tomlawesome/mikroview/internal/rules"
 	"github.com/tomlawesome/mikroview/internal/store"
+	"github.com/tomlawesome/mikroview/internal/suggest"
 	"github.com/tomlawesome/mikroview/internal/watchlist"
 )
 
@@ -51,6 +52,7 @@ func newTestServer(t *testing.T) (*Server, *store.Store) {
 	ru, _ := rules.Open("")
 	as, _ := audit.Open("")
 	ws, _ := watchlist.Open("")
+	ss, _ := suggest.Open("")
 	// matchlog.Open has no in-memory-only mode (see internal/matchlog's
 	// own doc comment), unlike every other store here -- a temp file is
 	// the closest equivalent for a test fixture.
@@ -69,6 +71,7 @@ func newTestServer(t *testing.T) (*Server, *store.Store) {
 		Rules:            ru,
 		Audit:            as,
 		Watchlist:        ws,
+		Suggest:          ss,
 		MatchLog:         ml,
 		Auth:             authStore,
 		Sessions:         auth.NewSessionStore(time.Hour),
