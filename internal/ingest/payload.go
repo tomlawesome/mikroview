@@ -16,6 +16,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"strconv"
 )
 
 // Kind identifies which RouterOS data source a payload's records came
@@ -53,13 +54,26 @@ type AddressListEntry struct {
 // reordered and never appears in a log line (see issue #186 step 4c).
 // LogPrefix is what actually resolves a log line back to a rule, and
 // only when the operator has set one.
+//
+// DstPort and Protocol were added for issue #243 slice 5 (suggesting
+// watchlist entries from a rule's already-blocked ports). DstPort is
+// RouterOSPortSpec, not a plain string -- verified against a real
+// RouterOS 7.23.3 router: a rule with a single numeric port
+// (dst-port=3389) serialises that as a JSON *number* (3389.000000, the
+// same float-landmine RouterOSInt exists for), while a rule with a list
+// or range (dst-port=22,23 or 1000-2000) serialises as a JSON *string*.
+// A plain Go string field rejects the numeric shape outright, which
+// would mean this schema refuses real payloads from real routers for
+// every rule that scopes exactly one port -- the common case.
 type FilterRule struct {
-	Ordinal        RouterOSInt `json:"ordinal"`
-	Comment        string      `json:"comment"`
-	Chain          string      `json:"chain"`
-	Action         string      `json:"action"`
-	SrcAddressList string      `json:"srcAddressList"`
-	LogPrefix      string      `json:"logPrefix"`
+	Ordinal        RouterOSInt      `json:"ordinal"`
+	Comment        string           `json:"comment"`
+	Chain          string           `json:"chain"`
+	Action         string           `json:"action"`
+	SrcAddressList string           `json:"srcAddressList"`
+	LogPrefix      string           `json:"logPrefix"`
+	DstPort        RouterOSPortSpec `json:"dstPort"`
+	Protocol       string           `json:"protocol"`
 }
 
 // NATRule mirrors one /ip/firewall/nat rule. Display-table shape only
@@ -138,5 +152,34 @@ func (n *RouterOSInt) UnmarshalJSON(data []byte) error {
 		return fmt.Errorf("ingest: number %v out of range", f)
 	}
 	*n = RouterOSInt(f)
+	return nil
+}
+
+// RouterOSPortSpec decodes a field that is a JSON *string* when RouterOS
+// holds a list or range ("22,23", "1000-2000") and a JSON *number* when
+// it holds exactly one port (:serialize to=json's usual float shape,
+// e.g. 3389.000000) -- confirmed against a real RouterOS 7.23.3 router
+// (issue #243 slice 5), the same kind of shape-depends-on-content
+// landmine RouterOSInt exists for. Always decodes to a plain string
+// value so a caller never needs to know which JSON shape it arrived as.
+type RouterOSPortSpec string
+
+func (p *RouterOSPortSpec) UnmarshalJSON(data []byte) error {
+	var s string
+	if err := json.Unmarshal(data, &s); err == nil {
+		*p = RouterOSPortSpec(s)
+		return nil
+	}
+	var f float64
+	if err := json.Unmarshal(data, &f); err != nil {
+		return fmt.Errorf("ingest: expected a port string or number: %w", err)
+	}
+	if f != math.Trunc(f) {
+		return fmt.Errorf("ingest: expected a whole port number, got %v", f)
+	}
+	if f < 0 || f > 65535 {
+		return fmt.Errorf("ingest: port %v out of range", f)
+	}
+	*p = RouterOSPortSpec(strconv.FormatFloat(f, 'f', 0, 64))
 	return nil
 }

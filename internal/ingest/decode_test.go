@@ -63,6 +63,62 @@ func TestDecodePayloadRoundTripsFields(t *testing.T) {
 	}
 }
 
+// TestFilterRuleRoundTripsDstPortAndProtocol is issue #243 slice 5's
+// reproducer: a filter rule's dst-port and protocol are what make a
+// "suggest watching this already-blocked port" candidate possible at
+// all (the fields didn't exist before -- see FilterRule's doc comment).
+// dst-port is free-form (RouterOS allows a list or a range, not just a
+// single port), so this also checks that shape survives untouched.
+func TestFilterRuleRoundTripsDstPortAndProtocol(t *testing.T) {
+	p := decodeOK(t, `{"kind":"filter-rule","page":1,"pages":1,"records":[{"ordinal":0,"comment":"drop rdp","chain":"input","action":"drop","srcAddressList":"","logPrefix":"D|rdp|","dstPort":"3389","protocol":"tcp"}]}`)
+	if len(p.FilterRules) != 1 {
+		t.Fatalf("len(FilterRules) = %d, want 1", len(p.FilterRules))
+	}
+	got := p.FilterRules[0]
+	if string(got.DstPort) != "3389" || got.Protocol != "tcp" {
+		t.Errorf("DstPort/Protocol = %q/%q, want 3389/tcp", got.DstPort, got.Protocol)
+	}
+}
+
+func TestFilterRuleDstPortAcceptsRouterOSListAndRangeShapes(t *testing.T) {
+	for _, dstPort := range []string{"22,23,3389", "1000-2000", ""} {
+		p := decodeOK(t, `{"kind":"filter-rule","page":1,"pages":1,"records":[{"ordinal":0,"comment":"","chain":"input","action":"drop","srcAddressList":"","logPrefix":"","dstPort":"`+dstPort+`","protocol":"tcp"}]}`)
+		if string(p.FilterRules[0].DstPort) != dstPort {
+			t.Errorf("DstPort = %q, want %q", p.FilterRules[0].DstPort, dstPort)
+		}
+	}
+}
+
+// TestFilterRuleDstPortAcceptsRouterOSNumericShape is the real bug this
+// caught when actually tested against a real router (issue #243 slice
+// 5): a rule scoping exactly one port serialises dst-port as a JSON
+// *number* (3389.000000, not "3389") -- a plain string field, or one
+// that only accepted the string shape, refuses this outright, which
+// would mean every single-port rule -- the common case -- gets silently
+// dropped from the pushed payload... except it isn't silent, it fails
+// the whole page (see TestDecodePayloadRejectsWholePageOnOneBadRecord's
+// same all-or-nothing contract), which is exactly how this was caught:
+// a real push against a real single-port rule came back 400.
+func TestFilterRuleDstPortAcceptsRouterOSNumericShape(t *testing.T) {
+	p := decodeOK(t, `{"kind":"filter-rule","page":1,"pages":1,"records":[{"ordinal":0,"comment":null,"chain":"input","action":"drop","srcAddressList":null,"logPrefix":"D|rdp|","dstPort":3389.000000,"protocol":"tcp"}]}`)
+	if string(p.FilterRules[0].DstPort) != "3389" {
+		t.Errorf("DstPort = %q, want %q (from the numeric JSON shape)", p.FilterRules[0].DstPort, "3389")
+	}
+	// The null comment/srcAddressList in the fixture above are the other
+	// real shape RouterOS emits for an empty field -- confirmed harmless:
+	// encoding/json's documented behaviour is that a JSON null unmarshals
+	// into a non-pointer string as a no-op, leaving the zero value, not
+	// an error. This case exists so that stays true on purpose, not by
+	// accident.
+	if p.FilterRules[0].Comment != "" || p.FilterRules[0].SrcAddressList != "" {
+		t.Errorf("Comment/SrcAddressList = %q/%q, want both empty", p.FilterRules[0].Comment, p.FilterRules[0].SrcAddressList)
+	}
+}
+
+func TestFilterRuleDstPortRejectsFractionalNumericShape(t *testing.T) {
+	decodeErr(t, `{"kind":"filter-rule","page":1,"pages":1,"records":[{"ordinal":0,"comment":"","chain":"","action":"","srcAddressList":"","logPrefix":"","dstPort":80.5,"protocol":"tcp"}]}`)
+}
+
 // TestRouterOSFloatIntLanding is the reproducer for the exact landmine
 // #186 step 2 names: RouterOS's :serialize to=json emits integers as
 // floats (443.000000, not 443). A plain Go int field rejects that shape
