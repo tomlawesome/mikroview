@@ -54,6 +54,49 @@ export function formatEps(eps: number): string {
   return Math.round(eps).toString()
 }
 
+// formatDurationShort renders a duration in seconds as a compact
+// "primary unit + secondary unit" string -- "2m 52s", "5h 33m", "3d 4h".
+// Two significant units is enough precision for an at-a-glance estimate,
+// and dropping to one once the duration reaches days avoids a "3d 4h 12m
+// 08s" string nobody needs.
+export function formatDurationShort(totalSeconds: number): string {
+  const s = Math.max(0, Math.round(totalSeconds))
+  if (s < 60) return `${s}s`
+  const m = Math.floor(s / 60)
+  if (m < 60) return `${m}m ${s % 60}s`
+  const h = Math.floor(m / 60)
+  if (h < 24) return `${h}h ${m % 60}m`
+  const d = Math.floor(h / 24)
+  return `${d}d ${h % 24}h`
+}
+
+// formatBufferDepth summarizes how full the server's in-memory event ring
+// (store.maxEvents) is and, once full, roughly how far back it reaches at
+// the current rate -- the two facts an operator needs to tell "the ring
+// is comfortably covering my retention window" from "it wrapped
+// minutes ago and I'd have no way to know" (issue #244).
+//
+// The ring (internal/store/ring.go) is fixed-capacity: once count reaches
+// capacity, every new event overwrites the oldest. So "how far back" is
+// only a meaningful question once it's full -- before that, count *is*
+// the entire history held since boot (or since Clear), not a fraction of
+// a longer one.
+//
+// eventsPerSecond is a 10s rolling average (see Store.Stats), so below
+// roughly one event per ten seconds the estimate is dominated by that
+// window's own noise rather than the real rate -- reporting "buffer
+// full" without a duration in that case is honest where a wildly
+// swinging number would not be.
+export function formatBufferDepth(capacity: number, count: number, eventsPerSecond: number): string {
+  if (capacity <= 0) return ''
+  if (count < capacity) {
+    const pct = Math.round((count / capacity) * 100)
+    return `${pct}% of buffer used`
+  }
+  if (eventsPerSecond < 0.1) return 'buffer full'
+  return `holding last ${formatDurationShort(capacity / eventsPerSecond)}`
+}
+
 // formatRelative renders how long ago `iso` was, as a short "Xs/Xm/Xh/Xd
 // ago" string -- used where "how long ago" reads faster at a glance than
 // an exact clock time (see formatHM/formatTime for that instead), e.g.
