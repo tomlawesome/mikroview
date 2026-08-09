@@ -463,6 +463,45 @@ export interface WatchlistMatch {
   count: number
 }
 
+// Mirrors internal/suggest.Kind (#243 slice 5) -- what a candidate
+// becomes if accepted. addressList is defined server-side but never
+// actually generated yet (see that Kind's own Go doc comment), so it
+// should never appear here in practice.
+export type SuggestionKind = 'device' | 'port' | 'addressList'
+
+// Mirrors internal/suggest.Status -- see internal/suggest's package doc
+// comment for what each value means and how it's reached. 'off' is the
+// default for every newly generated candidate and the default review
+// view.
+export type SuggestionStatus = 'off' | 'on' | 'hide'
+
+// Mirrors internal/suggest.Candidate's JSON tags. id routinely contains
+// a raw NUL byte (the generator's internal join separator) -- always
+// build API paths with encodeURIComponent(id), never string-concatenate
+// it directly, or the request never reaches the server at all.
+export interface Suggestion {
+  id: string
+  kind: SuggestionKind
+  status: SuggestionStatus
+  // Set once an accepted (status: 'on') candidate's generating
+  // justification stops appearing in a later background sync -- the
+  // rule or device it was suggested from changed or was removed. Never
+  // auto-cleared except by that justification holding again; needs a
+  // clear, hard-to-miss visual treatment, not a subtle one (#243 slice
+  // 5 design: "a bright, hard-to-miss highlight").
+  stale?: boolean
+  name: string
+  justification: string
+  routerDevice: string
+  source?: WatchlistIdentity
+  ports?: number[]
+  addressList?: string
+  // Set once status is 'on': the real watchlist entry this became.
+  entryId?: string
+  firstSeen: string
+  updatedAt: string
+}
+
 // Mirrors internal/store's Scope.
 export type Scope = '' | 'internal' | 'external'
 

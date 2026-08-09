@@ -15,6 +15,7 @@
   import LiveTable from './components/LiveTable.svelte'
   import Dashboard from './components/Dashboard.svelte'
   import Watchlist from './components/Watchlist.svelte'
+  import Suggestions from './components/Suggestions.svelte'
   import Flags from './components/Flags.svelte'
   import Detectors from './components/Detectors.svelte'
   import Entities from './components/Entities.svelte'
@@ -155,6 +156,8 @@
       <LiveTable />
     {:else if appState.view === 'watchlist'}
       <Watchlist />
+    {:else if appState.view === 'suggestions'}
+      <Suggestions />
     {:else if appState.view === 'flags'}
       <Flags />
     {:else if appState.view === 'detectors'}
