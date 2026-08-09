@@ -324,6 +324,28 @@ devices:
     name: "branch-router"
 ```
 
+#### CFG-0040
+
+`watchlist.matchLogPath` is empty. Unlike every other `storePath` in this
+file, the match log has no in-memory-only mode -- durability is the
+entire reason it exists -- so an empty value is treated the same as an
+unusable one rather than as a deliberate opt-out.
+
+```yaml
+watchlist:
+  matchLogPath: /var/lib/mikroview/matchlog.jsonl
+```
+
+#### CFG-0041
+
+`watchlist.matchLogCapacity` is zero or negative, which would keep
+nothing. Same treatment as CFG-0011.
+
+```yaml
+watchlist:
+  matchLogCapacity: 200000
+```
+
 ## Logging
 
 Mikroview's own server output (not event data -- see `store.retention`
@@ -726,6 +748,55 @@ opted out of). Backed by `GET /api/audit`, a windowed query over the
 persisted log (see [API reference](#api-reference)) -- the same
 `since`/`until`/`limit` convention `GET /api/events` already uses, minus
 that endpoint's event-specific filters.
+
+## Watchlist match log (in progress -- infrastructure only, not yet usable)
+
+Growing Control Ports into a user-tuned watchlist (issue #243): instead
+of one flat list of "interesting" ports shared by everyone, an operator
+will be able to define entries scoped by source device, destination and
+port set, with matches persisted so they survive both the in-memory event
+ring wrapping and a mikroview restart -- unlike Control Ports today,
+which only ever sees whatever is still in the browser's own capped,
+volatile event buffer.
+
+**This section documents infrastructure, not a usable feature yet.**
+There is currently no way to create a watchlist entry -- no config key,
+no API, no UI. With nothing configured, this is provably inert: an empty
+entry set matches nothing, ever. What exists so far is the persisted
+match log itself and the machinery that will evaluate entries against it
+once entries can be created (a later step in #243).
+
+```yaml
+watchlist:
+  # Where watchlist entries themselves are persisted, as a small JSON
+  # file. Same optional-persistence contract as entities.storePath: left
+  # unset, entries still work, they just don't survive a restart. Not
+  # yet reachable through any config key, API or UI -- see above.
+  storePath: "/var/lib/mikroview/watchlist.json"
+
+  # Where matches are recorded, append-only. Unlike storePath above,
+  # this has NO in-memory-only mode: durability is the entire reason
+  # this store exists (a match must survive a restart), so an empty
+  # value is treated as unusable rather than as an opt-out (CFG-0040).
+  matchLogPath: "/var/lib/mikroview/matchlog.jsonl"
+
+  # The match log's hard ceiling on distinct records -- once reached, a
+  # genuinely new match is refused rather than silently overwriting the
+  # oldest, unlike the in-memory event ring. A repeat of an
+  # already-recorded match still collapses into it at no cost even once
+  # full. 100k-500k is the realistic range for the file backend; 200,000
+  # is the default (CFG-0041 warns below zero).
+  matchLogCapacity: 200000
+```
+
+The match log is a third store, distinct from the in-memory event ring
+(all events, volatile, capacity-bound by `store.maxMemory`) and the
+behavioral-flags store below (aggregate judgements with deliberately
+capped evidence): a match is a discrete fact that matters individually,
+so it's kept at full fidelity -- the whole matched event, not a summary.
+A repeated identical match collapses into a count with first-seen/
+last-seen timestamps rather than being stored again, so a noisy entry
+cannot consume the capacity a genuinely novel match needs.
 
 ## Behavioral flags (optional, on by default)
 
@@ -2086,6 +2157,9 @@ Override individual scalar settings without a mounted file:
 | `MIKROVIEW_AUTH_SESSION_TTL` | `auth.sessionTTL` |
 | `MIKROVIEW_ENTITIES_STORE_PATH` | `entities.storePath` (see [Entities](#entities-ui-managed-hostruleport-labels-and-tags-optional)) |
 | `MIKROVIEW_AUDIT_STORE_PATH` | `audit.storePath` (see [Audit log](#audit-log-admin-action-accountability-optional)) |
+| `MIKROVIEW_WATCHLIST_STORE_PATH` | `watchlist.storePath` (see [Watchlist match log](#watchlist-match-log-in-progress----infrastructure-only-not-yet-usable)) |
+| `MIKROVIEW_WATCHLIST_MATCH_LOG_PATH` | `watchlist.matchLogPath` |
+| `MIKROVIEW_WATCHLIST_MATCH_LOG_CAPACITY` | `watchlist.matchLogCapacity` |
 | `MIKROVIEW_AUTH_TOKENS_STORE_PATH` | `auth.tokensStorePath` (see [API tokens](#api-tokens-read-only)) |
 | `MIKROVIEW_TLS_ENABLED` | `tls.enabled` (see [TLS](#tls)) |
 | `MIKROVIEW_TLS_CERT_FILE` | `tls.certFile` |

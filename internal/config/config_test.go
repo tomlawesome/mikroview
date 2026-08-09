@@ -518,6 +518,8 @@ func TestDefaultStoragePathsUnderVarLibMikroview(t *testing.T) {
 		"Auth.TokensStorePath":            cfg.Auth.TokensStorePath,
 		"TLS.StorePath":                   cfg.TLS.StorePath,
 		"DeviceMAC.StorePath":             cfg.DeviceMAC.StorePath,
+		"Watchlist.StorePath":             cfg.Watchlist.StorePath,
+		"Watchlist.MatchLogPath":          cfg.Watchlist.MatchLogPath,
 	}
 	want := map[string]string{
 		"Flags.StorePath":                 "/var/lib/mikroview/flags.json",
@@ -529,6 +531,8 @@ func TestDefaultStoragePathsUnderVarLibMikroview(t *testing.T) {
 		"Auth.TokensStorePath":            "/var/lib/mikroview/tokens.json",
 		"TLS.StorePath":                   "/var/lib/mikroview/tls",
 		"DeviceMAC.StorePath":             "/var/lib/mikroview/mac-registry.json",
+		"Watchlist.StorePath":             "/var/lib/mikroview/watchlist.json",
+		"Watchlist.MatchLogPath":          "/var/lib/mikroview/matchlog.jsonl",
 	}
 	for field, got := range cases {
 		if got != want[field] {
@@ -587,6 +591,26 @@ func TestAuditEnvVarOverridesDefault(t *testing.T) {
 	}
 	if cfg.Audit.StorePath != "/data/audit.json" {
 		t.Errorf("Audit.StorePath = %v, want /data/audit.json", cfg.Audit.StorePath)
+	}
+}
+
+func TestWatchlistEnvVarsOverrideDefaults(t *testing.T) {
+	t.Setenv("MIKROVIEW_WATCHLIST_STORE_PATH", "/data/watchlist.json")
+	t.Setenv("MIKROVIEW_WATCHLIST_MATCH_LOG_PATH", "/data/matchlog.jsonl")
+	t.Setenv("MIKROVIEW_WATCHLIST_MATCH_LOG_CAPACITY", "50000")
+
+	cfg, err := Load("", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Watchlist.StorePath != "/data/watchlist.json" {
+		t.Errorf("Watchlist.StorePath = %v, want /data/watchlist.json", cfg.Watchlist.StorePath)
+	}
+	if cfg.Watchlist.MatchLogPath != "/data/matchlog.jsonl" {
+		t.Errorf("Watchlist.MatchLogPath = %v, want /data/matchlog.jsonl", cfg.Watchlist.MatchLogPath)
+	}
+	if cfg.Watchlist.MatchLogCapacity != 50000 {
+		t.Errorf("Watchlist.MatchLogCapacity = %v, want 50000", cfg.Watchlist.MatchLogCapacity)
 	}
 }
 

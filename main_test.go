@@ -67,7 +67,7 @@ func TestIngestRaisesNewDeviceFlagOnceForFirstSighting(t *testing.T) {
 	logger := slog.Default()
 
 	rm := syslog.RawMessage{SourceIP: "192.168.1.1", Data: []byte(firewallLineWithMAC), RecvTime: time.Now()}
-	ingestOneRecovered(logger, rm, st, devices, macRegistry, fs, h, geo, detector, ru, naming.Resolver{})
+	ingestOneRecovered(logger, rm, st, devices, macRegistry, fs, h, geo, detector, ru, naming.Resolver{}, nil)
 
 	list := fs.List()
 	var found *flags.Flag
@@ -99,7 +99,7 @@ func TestIngestDoesNotReRaiseNewDeviceFlagOnSubsequentEvents(t *testing.T) {
 
 	for i := 0; i < 3; i++ {
 		rm := syslog.RawMessage{SourceIP: "192.168.1.1", Data: []byte(firewallLineWithMAC), RecvTime: now.Add(time.Duration(i) * time.Minute)}
-		ingestOneRecovered(logger, rm, st, devices, macRegistry, fs, h, geo, detector, ru, naming.Resolver{})
+		ingestOneRecovered(logger, rm, st, devices, macRegistry, fs, h, geo, detector, ru, naming.Resolver{}, nil)
 	}
 
 	var newDeviceFlags []flags.Flag
@@ -125,7 +125,7 @@ func TestIngestSkipsNewDeviceFlagForEmptySrcMAC(t *testing.T) {
 
 	const lineWithoutMAC = "A|wan-in|forward: in:ether1 out:bridge1, connection-state:new, proto TCP (SYN), 203.0.113.5:51234->192.168.1.10:443, len 60"
 	rm := syslog.RawMessage{SourceIP: "192.168.1.1", Data: []byte(lineWithoutMAC), RecvTime: time.Now()}
-	ingestOneRecovered(logger, rm, st, devices, macRegistry, fs, h, geo, detector, ru, naming.Resolver{})
+	ingestOneRecovered(logger, rm, st, devices, macRegistry, fs, h, geo, detector, ru, naming.Resolver{}, nil)
 
 	for _, f := range fs.List() {
 		if f.Type == flags.TypeNewDevice {

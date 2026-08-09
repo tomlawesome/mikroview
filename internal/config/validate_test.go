@@ -123,6 +123,14 @@ func TestWarningsClampRatherThanRefuse(t *testing.T) {
 		{"zero maxMemory", "CFG-0011",
 			func(c *Config) { c.Store.MaxMemory = 0 },
 			func(c *Config) bool { return c.Store.MaxMemory == defaults().Store.MaxMemory }},
+		{"empty matchLogPath", "CFG-0040",
+			func(c *Config) { c.Watchlist.MatchLogPath = "" },
+			func(c *Config) bool { return c.Watchlist.MatchLogPath == defaults().Watchlist.MatchLogPath }},
+		{"zero matchLogCapacity", "CFG-0041",
+			func(c *Config) { c.Watchlist.MatchLogCapacity = 0 },
+			func(c *Config) bool {
+				return c.Watchlist.MatchLogCapacity == defaults().Watchlist.MatchLogCapacity
+			}},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			c := validCfg()
