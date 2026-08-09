@@ -247,7 +247,13 @@ func (r FilterRule) validate() error {
 	if err := validateFieldText("srcAddressList", r.SrcAddressList); err != nil {
 		return err
 	}
-	return validateFieldText("logPrefix", r.LogPrefix)
+	if err := validateFieldText("logPrefix", r.LogPrefix); err != nil {
+		return err
+	}
+	if err := validateFieldText("dstPort", string(r.DstPort)); err != nil {
+		return err
+	}
+	return validateFieldText("protocol", r.Protocol)
 }
 
 func (r NATRule) validate() error {
