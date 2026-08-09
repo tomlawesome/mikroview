@@ -49,15 +49,18 @@ store:
   # router's rules have logging turned on.
   maxMemory: 120MiB
 
-# Watchlist match log (issue #243) -- infrastructure only right now, not
-# yet a usable feature: there is no config key, API or UI to create an
-# entry yet, so this is provably inert. Uncomment only to move where the
-# match log persists or to change its capacity; the defaults are already
-# sensible. See docs/configuration.md's "Watchlist match log" section.
+# Watchlist (issue #243) -- an admin-managed set of entries watching
+# specific ports/sources, or a device's egress ("this should only ever
+# reach X"), plus suggested entries generated from what RouterOS has
+# already pushed (DHCP leases, ARP, blocked ports). Uncomment only to
+# move where any of this persists or to change the match log's capacity;
+# the defaults are already sensible. See docs/configuration.md's
+# "Watchlist" section.
 # watchlist:
 #   storePath: /var/lib/mikroview/watchlist.json
 #   matchLogPath: /var/lib/mikroview/matchlog.jsonl
 #   matchLogCapacity: 200000
+#   suggestionsStorePath: /var/lib/mikroview/suggestions.json
 
 # Leveled, colorized server log output (see docs/configuration.md's
 # "Logging" section) -- level defaults to info already, uncomment only

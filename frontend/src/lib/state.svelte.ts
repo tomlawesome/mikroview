@@ -37,13 +37,19 @@ export type ConnState = 'connecting' | 'open' | 'closed'
 // 'exclusions' (issue #207) is the admin-only page listing every
 // permanently-excluded (detector, target) pair, split out of the bottom
 // of Flags.svelte since reviewing exclusions underneath a list of
-// hundreds of active flags was a pain. A real (if minimal) view switch --
-// only one is ever mounted at a time -- rather than a modal layered over
-// the live table, which used to leave LiveTable running underneath.
+// hundreds of active flags was a pain. 'suggestions' (#243 slice 5) is
+// the admin-only review page for watchlist entries suggested from data
+// RouterOS has already pushed (see Suggestions.svelte) -- kept separate
+// from Watchlist.svelte itself since accepting/hiding a suggestion is a
+// different workflow from managing an entry directly. A real (if
+// minimal) view switch -- only one is ever mounted at a time -- rather
+// than a modal layered over the live table, which used to leave
+// LiveTable running underneath.
 export type View =
   | 'live'
   | 'metrics'
   | 'watchlist'
+  | 'suggestions'
   | 'flags'
   | 'detectors'
   | 'entities'

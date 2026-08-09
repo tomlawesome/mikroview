@@ -306,6 +306,20 @@ func (s *Store) Delete(id string) {
 	s.persistLocked()
 }
 
+// Reset wipes every entry -- the watchlist half of #243 slice 5's "nuke"
+// action: a deliberate, confirm-gated, fully destructive reset back to a
+// fresh look at the router. The suggestion candidate tracking
+// (internal/suggest) is a separate store; the caller (internal/api) is
+// responsible for wiping both together, since nuking one without the
+// other would leave every candidate pointing at an EntryID that no
+// longer exists.
+func (s *Store) Reset() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.entries = make(map[string]*Entry)
+	s.persistLocked()
+}
+
 func (s *Store) persistLocked() {
 	if s.backend == nil {
 		return
