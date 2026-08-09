@@ -1,16 +1,16 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-// Package watchlist is the operator-owned entry set #243 grows Control
+// Package watchlist is the operator-owned entry set #243 grew Control
 // Ports into: a persisted, admin-manageable list of (source,
 // destination, port set) tuples, replacing the single flat
 // criticalPorts port list every operator previously shared regardless
 // of what they actually wanted watched. Two matching modes:
 //
 //   - Non-inverted: "record attempts against these ports" -- a direct
-//     generalisation of what ControlPorts.svelte already does
-//     client-side, now evaluated server-side against every ingested
-//     event and persisted via internal/matchlog instead of only ever
-//     existing in a 5,000-event client buffer.
+//     generalisation of what the old Control Ports tab did client-side,
+//     now evaluated server-side against every ingested event and
+//     persisted via internal/matchlog instead of only ever existing in
+//     a 5,000-event client buffer.
 //   - Inverted: "this device should only ever reach X" -- egress-policy
 //     monitoring. A new inverted entry starts in an observe state,
 //     recording every distinct destination the device touches without
@@ -19,13 +19,13 @@
 //     Structural noise (broadcast/multicast/link-local) is exempt by
 //     default. See invert.go.
 //
-// There is still, as yet, no way for an operator to create an Entry: this
-// and the previous slice prove the persistence and matching machinery
-// end to end via Store's Go API and tests, but the HTTP API and UI that
-// would let an operator actually add one are #243's slice 4. Until then
-// this package is fully wired into the live ingest path (see main.go)
-// and fully inert in practice -- an empty Store matches nothing, so
-// there is nothing to observe.
+// An operator manages entries through the HTTP API (internal/api/
+// watchlist.go: entry CRUD, promote, observing toggle, and the match
+// query) and the admin-only Watchlist page in the UI
+// (frontend/src/components/Watchlist.svelte) -- #243's slice 4. This
+// package itself remains fully wired into the live ingest path (see
+// main.go) and, with no entries configured, provably inert -- an empty
+// Store matches nothing.
 package watchlist
 
 import (
@@ -333,8 +333,7 @@ func (s *Store) persistLocked() {
 }
 
 // isTrackableConnState mirrors internal/detect's own private copy of the
-// same check (detect.go's isTrackableConnState) and
-// ControlPorts.svelte's client-side equivalent: without it, a busy
+// same check (detect.go's isTrackableConnState): without it, a busy
 // accepted service's own return traffic would swamp a watchlist entry
 // the same way it would the fast port-scan detector. Not shared as a
 // single exported helper across packages -- same "each package keeps its

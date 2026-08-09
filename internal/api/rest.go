@@ -95,12 +95,6 @@ func deviceStatus(info device.Info, staleAfter time.Duration, now time.Time) str
 	return "live"
 }
 
-// handleCriticalPorts serves the configured control-port list (issue #34)
-// -- read-only, no admin gate, since the tracking tab it feeds needs to
-// work for any signed-in user, not just admins.
-func (s *Server) handleCriticalPorts(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]any{"ports": s.CriticalPorts})
-}
 
 func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 	stats := s.Store.Stats()

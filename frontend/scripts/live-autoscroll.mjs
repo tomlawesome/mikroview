@@ -1,22 +1,14 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 //
 // Issue #232: Autoscroll off must hold the visible window -- not just
-// skip the jump-to-bottom -- along with the ControlPorts scoping this
-// branch adds (a global Autoscroll toggle must not freeze a table that
-// has no Autoscroll control of its own). Neither is unit-testable end to
-// end: jsdom has no layout/scrolling, and the cross-view leak only
-// exists once both LiveTable instances are mounted against the same
-// running app.
+// skip the jump-to-bottom -- including across navigating away to another
+// view and back (the freeze lives on appState.frozenPool, not on
+// LiveTable itself, which unmounts on every view switch -- see
+// state.svelte.ts). Not unit-testable end to end: jsdom has no
+// layout/scrolling, and the cross-view case only exists once a real
+// second view is actually mounted against the same running app.
 
-import { session, feedSyslog, feedRaw, check, done } from './live-browser.mjs'
-
-/** feedControlPort sends one attempt against dst port 22 (SSH, on by default). */
-function feedControlPort(label) {
-  feedRaw(
-    `firewall,info D|${label}| forward: in:ether1 out:bridge1, connection-state:new, ` +
-      `proto TCP (SYN), 203.0.113.77:51000->192.168.1.10:22, len 60`,
-  )
-}
+import { session, feedSyslog, check, done } from './live-browser.mjs'
 
 // Two labelled batches, comfortably past MAX_RENDERED_ROWS (800) between
 // them, so the freeze is exercised where the reported symptom actually
@@ -61,37 +53,21 @@ check(
 )
 check((await page.locator('.row').count()) === frozenCount, `row count is unchanged while frozen (still ${frozenCount})`)
 
-// The Control Ports tab has no Autoscroll control of its own -- toggling
-// the live view's must not freeze it (issue #232's fix leaking into
-// ControlPorts.svelte, since both mount LiveTable against the same
-// global appState.autoscroll).
-feedControlPort('ctrl-before-nav')
-await page.waitForTimeout(500)
-
+// Navigating away to another view and back must not disturb the freeze
+// -- LiveTable unmounts on every view switch, so this only proves
+// anything if appState.frozenPool genuinely outlives the component.
 await page.click('.nav-menu .trigger')
-await page.click('.nav-menu button:has-text("Control ports")')
-await page.waitForSelector('.row[title*="ctrl-before-nav"]', { timeout: 5000 })
+await page.click('.nav-menu button:has-text("Metrics")')
+await page.waitForTimeout(300)
 
-feedControlPort('ctrl-after-nav')
-await page.waitForFunction(
-  () => document.querySelector('.row[title*="ctrl-after-nav"]') !== null,
-  { timeout: 5000 },
-).then(
-  () => check(true, 'Control Ports keeps updating while the live view is frozen'),
-  () => check(false, 'Control Ports keeps updating while the live view is frozen'),
-)
-
-// Back on the live view, the freeze must still be holding -- visiting
-// another tab must not have disturbed it.
-// There is no "Live view" menu entry on this branch -- that arrives with
-// #237. The way back here is re-clicking the view you are already on,
-// which toggleView() maps to 'live'.
+// Re-clicking the view you are already on is what toggleView() maps
+// back to 'live'.
 await page.click('.nav-menu .trigger')
-await page.click('.nav-menu button:has-text("Control ports")')
+await page.click('.nav-menu button:has-text("Metrics")')
 await page.waitForTimeout(300)
 check(
   (await page.locator('.row[title*="after-freeze"]').count()) === 0,
-  'the live view is still frozen after visiting Control Ports',
+  'the live view is still frozen after visiting another view',
 )
 
 // A filter change while frozen must narrow the visible rows -- within

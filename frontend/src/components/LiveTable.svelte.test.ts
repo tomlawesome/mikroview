@@ -182,7 +182,7 @@ describe('LiveTable autoscroll-off freezing (issue #232)', () => {
     expect(container.querySelector('[title="arrived-after-freeze"]')).toBeNull()
   })
 
-  it('does not freeze a caller-supplied table (honorAutoscroll=false), e.g. ControlPorts', async () => {
+  it('does not freeze a caller-supplied table (honorAutoscroll=false)', async () => {
     const e1 = makeEvent('event-one')
     const { container, rerender } = render(LiveTable, {
       props: { events: [e1], honorAutoscroll: false },
