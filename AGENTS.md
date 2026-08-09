@@ -74,6 +74,43 @@ neighbouring tool also inherits its failure modes, its dependencies and
 its data licensing — see the next two sections for why the last of those
 is not free.
 
+## Check git state before starting work, and at any point you might be wrong about it
+
+Before writing code, and again any time you branch, merge, or resume work
+after something else may have changed the repo (a background merge, a
+teammate's push, a long gap in the conversation) -- check, don't assume:
+
+```sh
+git status --short
+git branch --show-current
+git log --oneline -3
+```
+
+If you are about to branch off another ref (`git checkout -b X origin/dev`,
+a rebase, a reset), fetch first and confirm what that ref actually points
+at (`git fetch origin && git log --oneline -3 origin/dev`) rather than
+trusting a remote-tracking ref that might be stale from earlier in the
+session.
+
+**This is not hypothetical.** In this same repo, a branch was cut with
+`git checkout -b <name> origin/dev` shortly after several PRs had just
+been merged into `dev` via the GitHub API -- which does not update a
+local clone's `origin/dev` remote-tracking ref, only `git fetch` does.
+The local ref was hours stale, so the new branch was built on the
+*pre-merge* `dev`, not the real one. Nothing was lost -- `dev` on GitHub
+was fine -- but every file the recent PRs had touched appeared "reverted"
+in the new branch's working tree, and opening a PR from it would have
+shown all of that work being undone. Caught by checking `git log
+--oneline` against a freshly-fetched `origin/dev` before pushing, not by
+assuming the checkout had done the right thing.
+
+The general lesson: a checkout, merge, or reset succeeding without an
+error is not the same as it having used the state you intended. Verify
+against a freshly-fetched remote ref, not a cached local one, whenever
+the answer actually matters -- which is any time you are about to base
+new work on a branch, or open a PR whose diff you have not re-checked
+against the target.
+
 ## Where code review happens: GitHub and GitLab, split by branch
 
 > **UNDER CONSTRUCTION — NOT YET LIVE. DO NOT USE.**
