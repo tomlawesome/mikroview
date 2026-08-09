@@ -191,6 +191,22 @@ upgrading.
 
 ### Fixed
 
+- **Autoscroll off now holds the live view still** (#232), rather than
+  only skipping the jump-to-bottom. The rendered window is a sliding
+  slice of the most recent 800 events, so once the buffer passed that
+  cap rows kept falling off the top as new ones arrived regardless of
+  the toggle -- the page scrolled itself out from under you, which is
+  what the toggle was supposed to prevent. Switching Autoscroll off now
+  freezes the event pool, and filters still narrow and widen within what
+  was frozen, so an event arriving after the freeze can never appear no
+  matter what you do to the filter. Distinct from Pause, which also
+  halts the age-based display cutoff and detection bookkeeping; this
+  only stops what is on screen from moving.
+
+  The freeze survives navigating to another view and back, and the
+  Control Ports table -- which has no Autoscroll control of its own --
+  is no longer frozen by the live view's toggle.
+
 - **Network-class attribution silently favored the wrong source on an
   exact-prefix collision between two feeds** (found while implementing
   #114's remaining scope). `buildTable`'s own doc comment claimed

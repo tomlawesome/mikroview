@@ -43,6 +43,22 @@ export function feedSyslog(n, label = 'live-test-rule') {
   })
 }
 
+/**
+ * feedRaw delivers one exact syslog line, for a scenario needing a
+ * specific event shape rather than feedSyslog's bulk pattern.
+ *
+ * Go through this rather than opening a socket in the scenario: syslog
+ * TLS is the only listener since #189 removed the plaintext ones, so a
+ * hand-rolled UDP send delivers nothing at all -- silently, since there
+ * is no longer anything bound to refuse it.
+ */
+export function feedRaw(line) {
+  execFileSync(path.join(REPO, 'scripts/live-env.sh'), ['raw', line], {
+    stdio: 'ignore',
+    cwd: REPO,
+  })
+}
+
 /** session launches a browser and signs in, returning a live page. */
 export async function session({ waitForEvents = 0 } = {}) {
   browser = await chromium.launch()

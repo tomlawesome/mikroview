@@ -66,7 +66,11 @@
     <BarList title="Top sources" rows={sourceRows} emptyMessage="No control-port attempts observed yet" />
   </div>
 
-  <LiveTable events={controlPortEvents} emptyMessage="No control-port attempts observed yet." />
+  <LiveTable
+    events={controlPortEvents}
+    emptyMessage="No control-port attempts observed yet."
+    honorAutoscroll={false}
+  />
 </div>
 
 <style>
