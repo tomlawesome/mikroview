@@ -1,6 +1,6 @@
 <script lang="ts">
   // SPDX-License-Identifier: AGPL-3.0-only
-  import { appState } from '../lib/state.svelte'
+  import { appState, applyFilters } from '../lib/state.svelte'
   import { MAX_RENDERED_ROWS } from '../lib/constants'
   import { COLUMNS, columnState } from '../lib/columns.svelte'
   import { viewportState } from '../lib/viewport.svelte'
@@ -15,7 +15,19 @@
   // ControlPorts.svelte, filtered by control-port destination rather
   // than the global FilterBar) still gets the same columns, resize
   // handles, and EventRow click-to-filter behavior for free.
-  let { events, emptyMessage }: { events?: ClientEvent[]; emptyMessage?: string } = $props()
+  //
+  // honorAutoscroll defaults true (the live view's own toolbar toggle
+  // applies here) -- a caller with its own event set and no Autoscroll
+  // control of its own (ControlPorts.svelte) passes false, since the
+  // global toggle freezing an unrelated table it doesn't render a
+  // control for would be surprising, not helpful. Kept separate from
+  // "was an `events` prop passed" so tests can supply a fixture `events`
+  // array while still exercising the live view's freeze behavior.
+  let {
+    events,
+    emptyMessage,
+    honorAutoscroll = true,
+  }: { events?: ClientEvent[]; emptyMessage?: string; honorAutoscroll?: boolean } = $props()
 
   let bodyEl: HTMLDivElement | undefined = $state()
   let gridEl: HTMLDivElement | undefined = $state()
@@ -63,30 +75,67 @@
     return map
   })
 
-  const liveRendered = $derived((events ?? appState.filteredEvents).slice(-MAX_RENDERED_ROWS))
+  // A caller-supplied `events` array is used as-is, never re-filtered by
+  // the global FilterBar -- ControlPorts.svelte already applies its own,
+  // independent match criteria (see its own comment on why appState.
+  // filters can't express an OR-of-ports match) before this ever sees it.
+  const liveFiltered = $derived(
+    events !== undefined ? events : applyFilters(appState.ageFilteredEvents, appState.filters, appState.ruleMatches),
+  )
+  const liveRendered = $derived(liveFiltered.slice(-MAX_RENDERED_ROWS))
 
   // Autoscroll off (issue #232) means "don't move the view", not just
   // "don't force-jump to the bottom" -- liveRendered is a sliding window
   // over MAX_RENDERED_ROWS, so once the total exceeds that cap, rows keep
   // falling off the top as new ones arrive at the bottom regardless of
   // autoscroll, which reads as the page scrolling itself out from under
-  // you. Freezing a snapshot the moment autoscroll turns off, and only
-  // releasing it once autoscroll turns back on, keeps the visible rows
-  // (and therefore scroll position) exactly where you left them --
-  // distinct from Pause, which also halts the age-based display-duration
-  // cutoff and detection-adjacent bookkeeping; this only stops what's on
-  // screen from moving.
-  let frozenRendered: typeof liveRendered | null = $state(null)
-
+  // you.
+  //
+  // frozenPool captures the RAW pool (pre-filter, post-age-cutoff) once,
+  // the moment autoscroll turns off -- not the already-filtered/sliced
+  // liveRendered. rendered then re-applies the *current* filters to that
+  // frozen pool on every filter change, so narrowing/widening the filter
+  // while frozen still works, but purely within what was already frozen:
+  // an event that arrives after the freeze began can never appear, no
+  // matter what the filter does afterward. Releases (frozenPool = null)
+  // once autoscroll turns back on. Distinct from Pause, which also halts
+  // the age-based display-duration cutoff and detection-adjacent
+  // bookkeeping; this only stops what's on screen from moving.
+  //
+  // Scoped by honorAutoscroll to the live view's own table -- a
+  // caller-supplied `events` array (ControlPorts.svelte) has no
+  // Autoscroll control of its own and passes honorAutoscroll={false}, so
+  // the global toggle never freezes it. When it IS in scope and `events`
+  // was still explicitly supplied (only test fixtures do this), there is
+  // no separate global filter to re-apply -- the frozen pool is used as
+  // given.
+  //
+  // The pool itself lives on appState, not here: this component unmounts
+  // when you switch views, and a local snapshot would be lost and
+  // re-taken on return. See appState.frozenPool. An out-of-scope instance
+  // returns early rather than clearing it -- otherwise merely mounting
+  // ControlPorts would release the live view's freeze.
   $effect(() => {
+    if (!honorAutoscroll) return
     if (appState.autoscroll) {
-      frozenRendered = null
-    } else if (frozenRendered === null) {
-      frozenRendered = liveRendered
+      appState.frozenPool = null
+    } else if (appState.frozenPool === null) {
+      appState.frozenPool = events ?? appState.ageFilteredEvents
     }
   })
 
-  const rendered = $derived(appState.autoscroll ? liveRendered : (frozenRendered ?? liveRendered))
+  const frozenRendered = $derived(
+    appState.frozenPool === null
+      ? null
+      : (events !== undefined
+          ? appState.frozenPool
+          : applyFilters(appState.frozenPool, appState.filters, appState.ruleMatches)
+        ).slice(-MAX_RENDERED_ROWS),
+  )
+
+  const rendered = $derived(
+    honorAutoscroll && !appState.autoscroll ? (frozenRendered ?? liveRendered) : liveRendered,
+  )
 
   function deviceName(id: string): string {
     return deviceNames.get(id) ?? id
