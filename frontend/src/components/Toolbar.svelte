@@ -1,7 +1,7 @@
 <script lang="ts">
   // SPDX-License-Identifier: AGPL-3.0-only
   import { appState } from '../lib/state.svelte'
-  import { formatEps } from '../lib/format'
+  import { formatEps, formatBufferDepth } from '../lib/format'
   import { retentionState, MAX_AGE_OPTIONS } from '../lib/retention.svelte'
   import { viewportState } from '../lib/viewport.svelte'
   import ConnectionIndicator from './ConnectionIndicator.svelte'
@@ -29,6 +29,12 @@
       {#if appState.stats}
         <span class="eps" title="Events per second (10s rolling average)">
           {formatEps(appState.stats.eventsPerSecond)}/s
+        </span>
+        <span
+          class="buffer-depth"
+          title="The server's event buffer holds up to {appState.stats.capacity.toLocaleString()} events. Once full, each new event overwrites the oldest -- this is how far back it actually reaches at the current rate, not the configured retention window."
+        >
+          {formatBufferDepth(appState.stats.capacity, appState.stats.count, appState.stats.eventsPerSecond)}
         </span>
       {/if}
 
@@ -108,6 +114,11 @@
   .eps {
     font-family: var(--font-mono);
     font-size: 13px;
+    color: var(--fg-muted);
+  }
+
+  .buffer-depth {
+    font-size: 12px;
     color: var(--fg-muted);
     padding-right: 10px;
     border-right: 1px solid var(--border);
