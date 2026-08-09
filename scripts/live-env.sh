@@ -37,9 +37,13 @@ if [ "$MV_BIND" = "127.0.0.1" ]; then
   TLS_BLOCK='tls: {enabled: false}'
   SECURE_COOKIE=false
   CURL_TLS=()
-  # No cert exists with TLS off, so there's nothing for a TLS syslog
-  # listener to present -- same reasoning as httpRedirect never starting.
-  SYSLOG_TLS_ADDR=""
+  # Syslog TLS runs even with tls.enabled=false, unlike httpRedirect:
+  # mikroview loads a certificate when *either* the HTTPS listener or
+  # syslogTls needs one, and starts this listener on syslogTls being
+  # non-empty alone. It has to run here -- since #189 removed the
+  # plaintext listeners this is mikroview's only syslog ingest, and
+  # leaving it empty gave every browser scenario zero events.
+  SYSLOG_TLS_ADDR="127.0.0.1:$SYSLOG_TLS_PORT"
 else
   MV_SCHEME=https
   TLS_BLOCK="tls: {enabled: true, hosts: [\"$MV_BIND\", \"127.0.0.1\"], storePath: $MV_DIR/data/tls}"
@@ -52,6 +56,43 @@ else
   # this listener the same way it reaches the HTTPS one above.
   SYSLOG_TLS_ADDR="$MV_BIND:$SYSLOG_TLS_PORT"
 fi
+
+# The host half of SYSLOG_TLS_ADDR, for the feeders below to dial.
+SYSLOG_TLS_HOST="${SYSLOG_TLS_ADDR%:*}"
+
+# send_tls -- read complete syslog lines on stdin and deliver them over
+# the TLS listener, mikroview's only syslog ingest since #189. Lines are
+# newline-delimited: the listener splits a read on newlines when they are
+# present and takes it whole when they are not, so this shape and
+# RouterOS's unterminated one both land as one event per message.
+send_tls() {
+  python3 -c '
+import socket, ssl, sys, time
+host, port = sys.argv[1], int(sys.argv[2])
+lines = [l for l in sys.stdin.buffer.read().split(b"\n") if l]
+# The certificate is self-signed and was generated seconds ago by the
+# server under test. There is no chain to verify against, and verifying
+# one is not what these scenarios exercise -- live-routeros.sh trust is
+# where the real trust step is covered.
+ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+ctx.check_hostname = False
+ctx.verify_mode = ssl.CERT_NONE
+with socket.create_connection((host, port), timeout=10) as sock:
+    sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+    with ctx.wrap_socket(sock, server_hostname=host) as tls:
+        # One message per write, paced. The listener hands each parsed
+        # line to a buffered channel with a non-blocking send and drops
+        # on a full channel, so a single bulk write outruns the consumer
+        # and silently loses events -- measured at 575 of 900 before this
+        # pacing, 900 of 900 after. One write per message is also what a
+        # real RouterOS router does, so this matches the shape the
+        # listener was measured against.
+        for i, line in enumerate(lines):
+            tls.sendall(line + b"\n")
+            if i % 25 == 24:
+                time.sleep(0.01)
+' "$SYSLOG_TLS_HOST" "$SYSLOG_TLS_PORT"
+}
 
 build() {
   ( cd frontend && npm run build >/dev/null 2>&1 )
@@ -72,7 +113,7 @@ up() {
   rm -rf "$MV_DIR"; mkdir -p "$MV_DIR/data"
   build
   cat > "$MV_DIR/cfg.yaml" <<EOF
-listen: {syslogUdp: "127.0.0.1:$SYSLOG_PORT", syslogTcp: "127.0.0.1:$((SYSLOG_PORT+1))", syslogTls: "$SYSLOG_TLS_ADDR", http: "$MV_BIND:$HTTP_PORT", httpRedirect: ""}
+listen: {syslogTls: "$SYSLOG_TLS_ADDR", http: "$MV_BIND:$HTTP_PORT", httpRedirect: ""}
 $TLS_BLOCK
 auth:
   storePath: $MV_DIR/data/users.json
@@ -100,23 +141,31 @@ EOF
   echo "export MV_USER=$MV_USER"
   echo "export MV_PASS=$MV_PASS"
   echo "export MV_DIR=$MV_DIR"
-  echo "export MV_SYSLOG_PORT=$SYSLOG_PORT"
+  # No MV_SYSLOG_PORT: there is no plaintext listener to point it at any
+  # more, and exporting a dead port invites scenarios to hand-roll a UDP
+  # feed that silently delivers nothing (which is exactly what happened).
   echo "export MV_SYSLOG_TLS_PORT=$SYSLOG_TLS_PORT"
 }
 
-# syslog N [label] -- N synthetic RouterOS firewall lines over UDP.
+# syslog N [label] -- N synthetic RouterOS firewall lines over syslog TLS.
 syslog() {
-  python3 - "$SYSLOG_PORT" "${1:-100}" "${2:-live-test-rule}" <<'PY'
-import socket, sys
-port, n, label = int(sys.argv[1]), int(sys.argv[2]), sys.argv[3]
-s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+  python3 - "${1:-100}" "${2:-live-test-rule}" <<'PY' | send_tls
+import sys
+n, label = int(sys.argv[1]), sys.argv[2]
 for i in range(n):
-    s.sendto((f"firewall,info D|{label}| forward: in:ether1 out:bridge1, "
-              f"connection-state:new, proto TCP (SYN), "
-              f"203.0.113.{i%250}:{5000+i%1000}->192.168.1.10:443, len 60").encode(),
-             ("127.0.0.1", port))
-print(f"sent {n} events labelled {label}", file=sys.stderr)
+    print(f"firewall,info D|{label}| forward: in:ether1 out:bridge1, "
+          f"connection-state:new, proto TCP (SYN), "
+          f"203.0.113.{i%250}:{5000+i%1000}->192.168.1.10:443, len 60")
 PY
+  echo "sent ${1:-100} events labelled ${2:-live-test-rule}" >&2
+}
+
+# raw LINE -- deliver one exact syslog line, for scenarios needing a
+# specific shape (a control-port hit, say) rather than the bulk
+# generators. Scenarios must use this rather than opening their own
+# socket: there is no plaintext listener left for them to talk to.
+raw() {
+  printf '%s\n' "$1" | send_tls
 }
 
 # portscan N [source-ip] -- N distinct destination ports from one source
@@ -126,17 +175,15 @@ PY
 # just events in the table. source-ip defaults to 198.51.100.77;
 # pass a different one to raise a second, independent flag.
 portscan() {
-  python3 - "$SYSLOG_PORT" "${1:-20}" "${2:-198.51.100.77}" <<'PY'
-import socket, sys
-port, n, src = int(sys.argv[1]), int(sys.argv[2]), sys.argv[3]
-s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+  python3 - "${1:-20}" "${2:-198.51.100.77}" <<'PY' | send_tls
+import sys
+n, src = int(sys.argv[1]), sys.argv[2]
 for i in range(n):
-    s.sendto((f"firewall,info D|scan-src| forward: in:ether1 out:bridge1, "
-              f"connection-state:new, proto TCP (SYN), "
-              f"{src}:{40000+i}->192.168.1.10:{1000+i}, len 60").encode(),
-             ("127.0.0.1", port))
-print(f"sent a {n}-port scan from {src}", file=sys.stderr)
+    print(f"firewall,info D|scan-src| forward: in:ether1 out:bridge1, "
+          f"connection-state:new, proto TCP (SYN), "
+          f"{src}:{40000+i}->192.168.1.10:{1000+i}, len 60")
 PY
+  echo "sent a ${1:-20}-port scan from ${2:-198.51.100.77}" >&2
 }
 
 down() {
@@ -151,7 +198,8 @@ down() {
 case "${1:-}" in
   up) up ;;
   syslog) shift; syslog "$@" ;;
+  raw) shift; raw "$@" ;;
   portscan) shift; portscan "$@" ;;
   down) down ;;
-  *) echo "usage: $0 {up|syslog N [label]|portscan N|down}" >&2; exit 2 ;;
+  *) echo "usage: $0 {up|syslog N [label]|raw LINE|portscan N [src-ip]|down}" >&2; exit 2 ;;
 esac
