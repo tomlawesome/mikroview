@@ -23,8 +23,8 @@ func TestFormatLineErrorLevelNoDoubleSpace(t *testing.T) {
 	// ERROR is one character wider than INFO/WARN, so it should get one
 	// space before the component, not two -- otherwise the │ column
 	// drifts out of alignment on error lines specifically.
-	got := formatLine("18:43:46", slog.LevelError, "syslog-udp", "bind: address already in use", false)
-	want := "18:43:46 ERROR syslog-udp  │ bind: address already in use\n"
+	got := formatLine("18:43:46", slog.LevelError, "syslog-tcp", "bind: address already in use", false)
+	want := "18:43:46 ERROR syslog-tcp  │ bind: address already in use\n"
 	if got != want {
 		t.Errorf("formatLine =\n%q\nwant\n%q", got, want)
 	}

@@ -85,17 +85,26 @@ jobs:
       - name: Race-detector tests (auth + API)
         run: go test -race ./internal/auth/... ./internal/api/...
 
-      # Short bounded fuzz of the two parsers that handle unauthenticated
-      # network input -- anything able to reach the syslog port controls
-      # these bytes entirely. 30s each is not a deep campaign; it's a
-      # regression gate that catches a newly-introduced crash on the
-      # committed corpus plus a little fresh exploration, without turning
-      # every PR into a fuzzing job. Seed corpora and any crashers found
-      # are committed under testdata/, so a reproducer stays permanent.
-      - name: Fuzz the unauthenticated parsers
+      # Short bounded fuzz of the parsers that handle attacker-shaped
+      # input: the first two are wholly unauthenticated -- anything able
+      # to reach the syslog port controls these bytes entirely. The third
+      # (issue #186 step 2) sits behind an ingest token, but that token
+      # only proves which device is speaking, not that its bytes are
+      # well-formed -- a compromised router, a buggy router-side script,
+      # or a leaked token (any read-capable RouterOS user can read one
+      # out of a script, see docs/decisions/routeros-ingest-spike.md)
+      # all reach it with content nothing has validated yet, the same
+      # footing the other two are on. 30s each is not a deep campaign;
+      # it's a regression gate that catches a newly-introduced crash on
+      # the committed corpus plus a little fresh exploration, without
+      # turning every PR into a fuzzing job. Seed corpora and any
+      # crashers found are committed under testdata/, so a reproducer
+      # stays permanent.
+      - name: Fuzz the attacker-shaped-input parsers
         run: |
           go test ./internal/routeros/ -run FuzzParse -fuzz FuzzParse -fuzztime=30s
           go test ./internal/syslog/ -run FuzzParseEnvelope -fuzz FuzzParseEnvelope -fuzztime=30s
+          go test ./internal/ingest/ -run FuzzDecodePayload -fuzz FuzzDecodePayload -fuzztime=30s
 
       - name: govulncheck
         run: |
@@ -207,7 +216,11 @@ jobs:
       - name: Integration tests
         env:
           MIKROVIEW_TEST_POSTGRES: postgres://postgres:ci@127.0.0.1:5432/mikroview?sslmode=require
-        run: go test -race -count=1 ./internal/persist/...
+        # internal/matchlog alongside internal/persist (#243 slice 6):
+        # its Postgres backend is a second, independent SQL sink with its
+        # own dedicated table -- see docs/decisions/postgres-backend.md
+        # §1a -- and needs the same real-database coverage.
+        run: go test -race -count=1 ./internal/persist/... ./internal/matchlog/...
 
       - name: Clean up
         if: always()

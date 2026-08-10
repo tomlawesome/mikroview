@@ -80,3 +80,102 @@ func TestBannerIsValidUTF8(t *testing.T) {
 func TestPrintBannerDoesNotPanic(t *testing.T) {
 	PrintBanner()
 }
+
+// TestColorWordmarkLineClassifiesCorrectly proves the three character
+// classes land on the colours they should: '█' gets top, every
+// box-drawing edge character gets shadow, and spaces are left bare
+// (no escape wrapping at all, not even a no-op one).
+func TestColorWordmarkLineClassifiesCorrectly(t *testing.T) {
+	got := colorWordmarkLine("█ ╗", "<TOP>", "<SHADOW>")
+	want := "<TOP>█" + ansiReset + " " + "<SHADOW>╗" + ansiReset
+	if got != want {
+		t.Errorf("colorWordmarkLine(%q) = %q, want %q", "█ ╗", got, want)
+	}
+}
+
+// TestColorWordmarkLineBatchesConsecutiveRuns proves same-class runs are
+// wrapped once, not once per rune -- a naive per-character
+// implementation would still be *correct* here, just far noisier, and
+// this is what actually distinguishes the two.
+func TestColorWordmarkLineBatchesConsecutiveRuns(t *testing.T) {
+	got := colorWordmarkLine("███", "<TOP>", "<SHADOW>")
+	want := "<TOP>███" + ansiReset
+	if got != want {
+		t.Errorf("colorWordmarkLine(%q) = %q, want one batched span %q", "███", got, want)
+	}
+}
+
+// TestColorWordmarkLineOnRealWordmarkClassifiesEveryRune checks every
+// rune actually appearing in bannerWordmark lands in the class its own
+// character warrants: '█' wrapped in top, every box-drawing edge
+// character wrapped in shadow, space left bare. Not every row contains
+// both classes -- the wordmark's bottom row is a pure box-drawing
+// baseline stroke with no '█' at all -- so this checks classification
+// per rune actually present, not "every row has one of each".
+func TestColorWordmarkLineOnRealWordmarkClassifiesEveryRune(t *testing.T) {
+	for _, line := range bannerWordmark {
+		out := colorWordmarkLine(line, "<T>", "<S>")
+		for _, r := range line {
+			switch r {
+			case ' ':
+				continue
+			case '█':
+				if !strings.Contains(out, "<T>"+string(r)) {
+					t.Errorf("line %q: '█' not wrapped in the top colour in %q", line, out)
+				}
+			default:
+				if !strings.Contains(out, "<S>") {
+					t.Errorf("line %q: edge rune %q not wrapped in the shadow colour in %q", line, r, out)
+				}
+			}
+		}
+	}
+}
+
+// TestColorGlyphsAppliesMappedColorsAndFallback checks a mapped glyph
+// gets its own colour and everything else -- including a glyph present
+// in the string but absent from the map -- gets fallback.
+func TestColorGlyphsAppliesMappedColorsAndFallback(t *testing.T) {
+	got := colorGlyphs("a✦b", map[rune]string{'✦': "<STAR>"}, "<FALLBACK>")
+	want := "<FALLBACK>a" + ansiReset + "<STAR>✦" + ansiReset + "<FALLBACK>b" + ansiReset
+	if got != want {
+		t.Errorf("colorGlyphs = %q, want %q", got, want)
+	}
+}
+
+// TestColorGlyphsBatchesConsecutiveFallbackRuns is colorGlyphs' half of
+// the batching claim -- the sky lines are mostly space, and a naive
+// per-rune implementation would wrap every single space in its own
+// escape pair.
+func TestColorGlyphsBatchesConsecutiveFallbackRuns(t *testing.T) {
+	got := colorGlyphs("   ", map[rune]string{'✦': "<STAR>"}, "<DIM>")
+	want := "<DIM>   " + ansiReset
+	if got != want {
+		t.Errorf("colorGlyphs(%q) = %q, want one batched fallback span %q", "   ", got, want)
+	}
+}
+
+// TestSkyColorMapsCoverEveryStarGlyphInTheRealArt guards against a
+// bannerSkyAbove/Below edit silently leaving a new ✦/○/◯ occurrence out
+// of its line's colour map -- it would still render (via fallback), just
+// not with the intended accent colour, which is exactly the kind of
+// mismatch that's invisible in a code review of the art alone.
+func TestSkyColorMapsCoverEveryStarGlyphInTheRealArt(t *testing.T) {
+	check := func(lines []string, colors []map[rune]string, name string) {
+		if len(lines) != len(colors) {
+			t.Fatalf("%s: %d lines but %d colour maps", name, len(lines), len(colors))
+		}
+		for i, line := range lines {
+			for _, r := range line {
+				if r == '·' || r == ' ' {
+					continue
+				}
+				if _, ok := colors[i][r]; !ok {
+					t.Errorf("%s[%d]: glyph %q has no colour mapping", name, i, r)
+				}
+			}
+		}
+	}
+	check(bannerSkyAbove, bannerSkyAboveColors, "bannerSkyAbove")
+	check(bannerSkyBelow, bannerSkyBelowColors, "bannerSkyBelow")
+}

@@ -159,6 +159,16 @@ func redact(err error, dsn string) error {
 	return errors.New(msg)
 }
 
+// Raw returns the underlying connection pool, for a backend whose data
+// doesn't fit store_blob's document shape (see docs/decisions/
+// postgres-backend.md §1a) -- currently internal/matchlog's Postgres
+// backend, which needs a genuinely indexed, queryable table of its own.
+// Such a backend still shares this Pool -- one connection pool per
+// process, one DSN, one TLS/migration story -- it just runs its own SQL
+// against its own table instead of going through PostgresBackend's blob
+// contract.
+func (p *Pool) Raw() *pgxpool.Pool { return p.pool }
+
 func (p *Pool) Close() {
 	if p != nil && p.pool != nil {
 		p.pool.Close()

@@ -17,7 +17,13 @@ import type {
   ReputationResult,
   RuleUsage,
   Stats,
+  Suggestion,
+  SuggestionStatus,
   UserSummary,
+  WatchlistEntry,
+  WatchlistIdentity,
+  WatchlistMatch,
+  WatchlistPermittedDest,
 } from './types'
 
 // Thrown instead of a plain Error by every fetch* function below --
@@ -122,13 +128,6 @@ export async function fetchRules(): Promise<RuleUsage[]> {
   return body.rules ?? []
 }
 
-export async function fetchCriticalPorts(): Promise<number[]> {
-  const res = await fetch('/api/critical-ports')
-  if (!res.ok) throw new ApiError(`fetchCriticalPorts: ${res.status}`, res.status)
-  const body = await res.json()
-  return body.ports ?? []
-}
-
 export async function fetchHealthz(): Promise<Healthz> {
   const res = await fetch('/api/healthz')
   if (!res.ok) throw new ApiError(`fetchHealthz: ${res.status}`, res.status)
@@ -144,6 +143,44 @@ export async function fetchStats(): Promise<Stats> {
 export async function lookupIp(ip: string): Promise<ReputationResult> {
   const res = await fetch(`/api/lookup/ip/${encodeURIComponent(ip)}`)
   if (!res.ok) throw new ApiError(`lookupIp: ${res.status}`, res.status)
+  return res.json()
+}
+
+// The pushed firewall rule / NAT tables (issue #186 step 4) -- read from
+// mikroview's own local store, never the router. `available: false`
+// means that device has never pushed this table, which the UI shows as
+// "no data pushed yet" rather than an empty table pretending to be real.
+export interface RouterFilterRule {
+  ordinal: number
+  comment: string
+  chain: string
+  action: string
+  srcAddressList: string
+  logPrefix: string
+}
+
+export interface RouterNatRule {
+  ordinal: number
+  comment: string
+  chain: string
+  action: string
+}
+
+export interface RouterTable<T> {
+  available: boolean
+  updatedAt?: string
+  rules: T[]
+}
+
+export async function fetchRouterRules(device: string): Promise<RouterTable<RouterFilterRule>> {
+  const res = await fetch(`/api/routeros/${encodeURIComponent(device)}/rules`)
+  if (!res.ok) throw new ApiError(`fetchRouterRules: ${res.status}`, res.status)
+  return res.json()
+}
+
+export async function fetchRouterNat(device: string): Promise<RouterTable<RouterNatRule>> {
+  const res = await fetch(`/api/routeros/${encodeURIComponent(device)}/nat`)
+  if (!res.ok) throw new ApiError(`fetchRouterNat: ${res.status}`, res.status)
   return res.json()
 }
 
@@ -166,6 +203,18 @@ export async function fetchFlags(): Promise<FlagsResponse> {
 export async function clearFlag(id: string): Promise<void> {
   const res = await postJSON(`/api/flags/${encodeURIComponent(id)}/clear`)
   if (!res.ok) throw new ApiError(`clearFlag: ${res.status}`, res.status)
+}
+
+// clearAllFlags is clearFlag applied to every currently-active flag in
+// one request (issue #198's "Clear all") -- regular clears only, same as
+// clearFlag; there is no bulk permanent variant (see
+// internal/flags.Store.ClearAll's doc comment for why). Returns how many
+// were actually cleared, so the caller can refresh() rather than guess.
+export async function clearAllFlags(): Promise<number> {
+  const res = await postJSON('/api/flags/clear-all')
+  if (!res.ok) throw new ApiError(`clearAllFlags: ${res.status}`, res.status)
+  const body = await res.json()
+  return body.cleared ?? 0
 }
 
 // clearFlagPermanent is clearFlag plus a permanent exclusion of that
@@ -280,6 +329,153 @@ export async function deleteEntity(type: string, key: string): Promise<string | 
   const res = await deleteJSON('/api/entities', { type, key })
   if (res.ok) return null
   return (await res.text()) || `deleteEntity: ${res.status}`
+}
+
+// Admin-only CRUD over internal/watchlist's persisted entry set (#243) --
+// what Control Ports grew into. Unlike Entities' single Upsert primitive,
+// creating and updating are two separate endpoints server-side (an
+// entry's id is server-generated, not an operator-chosen key), so this
+// mirrors that split rather than forcing one shared function.
+
+// watchlistEntryRequest is the wire shape internal/api's
+// watchlistEntryRequest accepts -- deliberately narrower than
+// WatchlistEntry itself: observing/permitted/observed are never settable
+// here, only through their own dedicated endpoints below.
+export interface WatchlistEntryRequest {
+  name?: string
+  source?: WatchlistIdentity
+  destIp?: string
+  ports?: number[]
+  invert?: boolean
+  includeStructuralNoise?: boolean
+}
+
+export async function fetchWatchlistEntries(): Promise<WatchlistEntry[]> {
+  const res = await fetch('/api/watchlist/entries')
+  if (!res.ok) throw new ApiError(`fetchWatchlistEntries: ${res.status}`, res.status)
+  const body = await res.json()
+  return body.entries ?? []
+}
+
+export async function createWatchlistEntry(req: WatchlistEntryRequest): Promise<WatchlistEntry | string> {
+  const res = await postJSON('/api/watchlist/entries', req)
+  if (res.ok) return await res.json()
+  return (await res.text()) || `createWatchlistEntry: ${res.status}`
+}
+
+export async function updateWatchlistEntry(id: string, req: WatchlistEntryRequest): Promise<WatchlistEntry | string> {
+  const res = await putJSON(`/api/watchlist/entries/${encodeURIComponent(id)}`, req)
+  if (res.ok) return await res.json()
+  return (await res.text()) || `updateWatchlistEntry: ${res.status}`
+}
+
+export async function deleteWatchlistEntry(id: string): Promise<string | null> {
+  const res = await deleteJSON(`/api/watchlist/entries/${encodeURIComponent(id)}`)
+  if (res.ok) return null
+  return (await res.text()) || `deleteWatchlistEntry: ${res.status}`
+}
+
+// promoteWatchlistDestinations moves the given destination/port pairs
+// from an inverted entry's Observed candidate list into its Permitted
+// allow-list (internal/watchlist.Store.Promote) -- a pair not previously
+// observed is still accepted, the same "deliberate choice, not an
+// error" contract the backend documents.
+export async function promoteWatchlistDestinations(
+  id: string,
+  destinations: WatchlistPermittedDest[],
+): Promise<WatchlistEntry | string> {
+  const res = await postJSON(`/api/watchlist/entries/${encodeURIComponent(id)}/promote`, { destinations })
+  if (res.ok) return await res.json()
+  return (await res.text()) || `promoteWatchlistDestinations: ${res.status}`
+}
+
+// setWatchlistObserving flips whether an inverted entry is in observe
+// mode (internal/watchlist.Store.SetObserving) -- the raw mechanism
+// only; see that method's own doc comment for why this package makes no
+// judgement about when to call it.
+export async function setWatchlistObserving(id: string, observing: boolean): Promise<WatchlistEntry | string> {
+  const res = await postJSON(`/api/watchlist/entries/${encodeURIComponent(id)}/observing`, { observing })
+  if (res.ok) return await res.json()
+  return (await res.text()) || `setWatchlistObserving: ${res.status}`
+}
+
+// fetchWatchlistMatches answers a windowed query over the persisted
+// match log for one source device (internal/matchlog's own query
+// contract) -- mac and/or ip identify the source; at least one is
+// required (mirroring matchlog.Identity's MAC-preferred rule), since/
+// until/limit are all optional. Session-gated like every other read
+// here (accessUser, not admin-only -- see internal/api's authzMatrix),
+// since this is also the read-only-API-token-reachable correlation
+// surface #243 exists for.
+export async function fetchWatchlistMatches(params: {
+  mac?: string
+  ip?: string
+  since?: string
+  until?: string
+  limit?: number
+}): Promise<WatchlistMatch[]> {
+  const q = new URLSearchParams()
+  if (params.mac) q.set('mac', params.mac)
+  if (params.ip) q.set('ip', params.ip)
+  if (params.since) q.set('since', params.since)
+  if (params.until) q.set('until', params.until)
+  if (params.limit) q.set('limit', String(params.limit))
+  const res = await fetch(`/api/watchlist/matches?${q.toString()}`)
+  if (!res.ok) throw new ApiError(`fetchWatchlistMatches: ${res.status}`, res.status)
+  const body = await res.json()
+  return body.matches ?? []
+}
+
+// Admin-only review surface over internal/suggest's candidate pool
+// (#243 slice 5) -- watchlist entries suggested from data RouterOS has
+// already pushed. Every candidate id routinely contains a raw NUL byte
+// (see Suggestion's own doc comment in types.ts), so every path below
+// goes through encodeURIComponent, the same convention
+// deleteWatchlistEntry etc. already use for their own ids.
+
+export async function fetchSuggestions(status?: SuggestionStatus): Promise<Suggestion[]> {
+  const q = status ? `?status=${encodeURIComponent(status)}` : ''
+  const res = await fetch(`/api/suggestions${q}`)
+  if (!res.ok) throw new ApiError(`fetchSuggestions: ${res.status}`, res.status)
+  const body = await res.json()
+  return body.candidates ?? []
+}
+
+// acceptSuggestion turns an Off candidate into a real watchlist entry --
+// see internal/api's handleSuggestionsAccept for exactly what entry
+// shape results per candidate kind. Returns both the updated candidate
+// and the entry it became.
+export async function acceptSuggestion(
+  id: string,
+): Promise<{ candidate: Suggestion; entry: WatchlistEntry } | string> {
+  const res = await postJSON(`/api/suggestions/${encodeURIComponent(id)}/accept`)
+  if (res.ok) return await res.json()
+  return (await res.text()) || `acceptSuggestion: ${res.status}`
+}
+
+export async function hideSuggestion(id: string): Promise<Suggestion | string> {
+  const res = await postJSON(`/api/suggestions/${encodeURIComponent(id)}/hide`)
+  if (res.ok) return await res.json()
+  return (await res.text()) || `hideSuggestion: ${res.status}`
+}
+
+export async function unhideSuggestion(id: string): Promise<Suggestion | string> {
+  const res = await postJSON(`/api/suggestions/${encodeURIComponent(id)}/unhide`)
+  if (res.ok) return await res.json()
+  return (await res.text()) || `unhideSuggestion: ${res.status}`
+}
+
+// resetSuggestions is #243 slice 5's "nuke" action: permanently deletes
+// every watchlist entry and starts over from a fresh look at the router.
+// confirm must be sent true (see internal/api's handleSuggestionsReset)
+// -- there is no accidental-call path here, by design.
+export async function resetSuggestions(): Promise<Suggestion[] | string> {
+  const res = await postJSON('/api/suggestions/reset', { confirm: true })
+  if (res.ok) {
+    const body = await res.json()
+    return body.candidates ?? []
+  }
+  return (await res.text()) || `resetSuggestions: ${res.status}`
 }
 
 // Admin-only read-only API token management (issue #101) -- see

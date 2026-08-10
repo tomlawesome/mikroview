@@ -31,6 +31,16 @@ const EXPENSIVE = 'a'.repeat(45) + 'b'   // does not finish in 20s, see (2)/(3)
 feedSyslog(200, CHEAP)
 const { page, consoleErrors } = await session({ waitForEvents: 100 })
 
+// #183: the initial fetch and the WebSocket stream overlap, so an event
+// arriving in both used to land in the buffer twice and give LiveTable's
+// keyed each duplicate keys. This scenario is where that was found --
+// asserted here rather than only in live-smoke because this one keeps a
+// filter active while the stream runs, which is when it showed up.
+check(
+  !consoleErrors.some((e) => e.includes('each_key_duplicate')),
+  `no duplicate keys in the event buffer (${consoleErrors.filter((e) => e.includes('each_key_duplicate')).length} seen)`,
+)
+
 // Regex mode on, with a pattern that is cheap against what is buffered.
 await page.click('button.regex-toggle')
 await page.fill('input.rule', '(a+)+$')
@@ -53,16 +63,26 @@ check(
   `the tooltip explains why rather than only colouring: "${title.slice(0, 50)}..."`,
 )
 
-// Two behaviours this scenario surfaced are not asserted here, because
-// they do not work yet and a committed assertion that fails is not a
-// test -- it is broken state recorded in the wrong place. They are on
-// the tracker instead:
-//
-//   #183 -- duplicate event ids in the client buffer produce duplicate
-//           Svelte keys, so a console-error assertion cannot pass here.
-//   #184 -- the refused indicator does not clear when the pattern is
-//           cleared.
-//
-// Add the assertions when the fixes land.
+// #184: clearing the pattern must clear the refused state. The filter is
+// inactive either way, so this is about the indicator telling the truth
+// -- a toggle still reading "refused" against an empty input is exactly
+// the misleading state the indicator exists to avoid.
+await page.fill('input.rule', '')
+await page.waitForTimeout(800)
+const clsAfterClear = await page.getAttribute('button.regex-toggle', 'class')
+check(
+  !clsAfterClear.includes('refused'),
+  'clearing the pattern clears the refused state',
+)
+
+// And the recovery path all the way through: a fresh, cheap pattern after
+// a refusal must evaluate normally rather than inheriting the dead state.
+await page.fill('input.rule', 'live-test')
+await page.waitForTimeout(1200)
+const clsAfterRetype = await page.getAttribute('button.regex-toggle', 'class')
+check(
+  !clsAfterRetype.includes('refused'),
+  'a fresh pattern after a refusal evaluates normally',
+)
 
 done()

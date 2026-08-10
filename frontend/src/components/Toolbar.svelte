@@ -1,14 +1,14 @@
 <script lang="ts">
   // SPDX-License-Identifier: AGPL-3.0-only
   import { appState } from '../lib/state.svelte'
-  import { formatEps } from '../lib/format'
+  import { formatEps, formatBufferDepth } from '../lib/format'
   import { retentionState, MAX_AGE_OPTIONS } from '../lib/retention.svelte'
-  import { downloadEventsCsv } from '../lib/export'
   import { viewportState } from '../lib/viewport.svelte'
   import ConnectionIndicator from './ConnectionIndicator.svelte'
   import DeviceStatus from './DeviceStatus.svelte'
   import LogoLockup from './LogoLockup.svelte'
   import NavMenu from './NavMenu.svelte'
+  import ThemeMenu from './ThemeMenu.svelte'
 
   function onMaxAgeChange(e: Event) {
     const raw = (e.target as HTMLSelectElement).value
@@ -18,7 +18,14 @@
 
 <header class="toolbar">
   <div class="brand">
-    <LogoLockup size={21} />
+    <button
+      class="logo-button"
+      onclick={() => (appState.view = 'live')}
+      title="Back to live view"
+      aria-label="Back to live view"
+    >
+      <LogoLockup size={21} />
+    </button>
     <ConnectionIndicator />
   </div>
 
@@ -29,6 +36,12 @@
       {#if appState.stats}
         <span class="eps" title="Events per second (10s rolling average)">
           {formatEps(appState.stats.eventsPerSecond)}/s
+        </span>
+        <span
+          class="buffer-depth"
+          title="The server's event buffer holds up to {appState.stats.capacity.toLocaleString()} events. Once full, each new event overwrites the oldest -- this is how far back it actually reaches at the current rate, not the configured retention window."
+        >
+          {formatBufferDepth(appState.stats.capacity, appState.stats.count, appState.stats.eventsPerSecond)}
         </span>
       {/if}
 
@@ -48,7 +61,9 @@
       <button
         class:active={appState.autoscroll}
         onclick={() => (appState.autoscroll = !appState.autoscroll)}
-        title="Auto-scroll to newest events"
+        title={appState.autoscroll
+          ? 'Auto-scroll to newest events'
+          : 'Hold the current view -- new events keep arriving but the table stays put'}
       >
         Autoscroll
       </button>
@@ -64,18 +79,16 @@
       <button onclick={() => appState.clearBuffer()} title="Clear the local event buffer">
         Clear
       </button>
-
-      {#if !viewportState.isMobile}
-        <button
-          onclick={() => downloadEventsCsv(appState.filteredEvents)}
-          disabled={appState.filteredEvents.length === 0}
-          title="Export the currently shown/filtered events to a CSV file"
-        >
-          Export
-        </button>
-      {/if}
     {/if}
 
+    <!-- Appearance stays standalone and always visible (issue #137):
+         #73's inline-vs-menu split filed it under "everything else",
+         but theme switching is reached for constantly and wants to be
+         one click away. Export went the other way -- an occasional,
+         deliberate action that was holding an inline slot -- and now
+         lives in NavMenu on both breakpoints, where mobile already had
+         it. -->
+    <ThemeMenu />
     <NavMenu />
   </div>
 </header>
@@ -97,6 +110,25 @@
     gap: 14px;
   }
 
+  .logo-button {
+    display: inline-flex;
+    background: none;
+    border: none;
+    padding: 0;
+    margin: 0;
+    cursor: pointer;
+    border-radius: 5px;
+  }
+
+  .logo-button:hover {
+    opacity: 0.85;
+  }
+
+  .logo-button:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+  }
+
   .controls {
     display: flex;
     align-items: center;
@@ -108,6 +140,11 @@
   .eps {
     font-family: var(--font-mono);
     font-size: 13px;
+    color: var(--fg-muted);
+  }
+
+  .buffer-depth {
+    font-size: 12px;
     color: var(--fg-muted);
     padding-right: 10px;
     border-right: 1px solid var(--border);

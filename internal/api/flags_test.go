@@ -392,3 +392,145 @@ func TestHandleFlagsClearPermanentIsAuditLogged(t *testing.T) {
 		t.Errorf("expected a flag.clear_permanent audit entry for %s, got: %+v", flagID, s.Audit.Query(audit.Query{}).Entries)
 	}
 }
+
+// TestHandleFlagsClearAll covers issue #198's bulk clear: every active
+// flag ends up cleared in one request, an already-cleared flag is left
+// alone and not recounted, and the response reports how many were
+// actually cleared.
+func TestHandleFlagsClearAll(t *testing.T) {
+	s, _ := newTestServer(t)
+	s.Flags.Add(flags.TypePortScan, "203.0.113.1", "d1", time.Now())
+	s.Flags.Add(flags.TypeActivitySpike, "203.0.113.2", "d2", time.Now())
+	preClearedID := s.Flags.List()[0].ID
+	s.Flags.Clear(preClearedID, time.Now())
+
+	ts := httptest.NewServer(asAdmin(s.mux()))
+	defer ts.Close()
+
+	resp, err := http.Post(ts.URL+"/api/flags/clear-all", "application/json", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+
+	var body struct {
+		Cleared int `json:"cleared"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	if body.Cleared != 1 {
+		t.Errorf("cleared = %d, want 1 (the pre-cleared flag must not be recounted)", body.Cleared)
+	}
+
+	for _, f := range s.Flags.List() {
+		if !f.Cleared {
+			t.Errorf("flag %+v still active after clear-all", f)
+		}
+	}
+}
+
+// TestHandleFlagsClearAllAvailableToAnyUser mirrors
+// TestHandleFlagsClearIsAvailableToAnyUser -- same access level as the
+// per-flag clear, since clear-all is just that action applied in bulk
+// and carries the same reversibility.
+func TestHandleFlagsClearAllAvailableToAnyUser(t *testing.T) {
+	s := newAuthTestServer(t)
+	s.Flags.Add(flags.TypePortScan, "203.0.113.9", "port scan", time.Now())
+	ts := httptest.NewServer(s.Routes())
+	defer ts.Close()
+
+	adminClient := &http.Client{Jar: mustCookieJar(t)}
+	postJSON(t, adminClient, ts.URL+"/api/auth/register", credentialsRequest{Username: "admin", Password: "password123"}).Body.Close()
+	postJSON(t, adminClient, ts.URL+"/api/auth/users", createUserRequest{Username: "viewer", Password: "password456", Role: "user"}).Body.Close()
+
+	viewerClient := &http.Client{Jar: mustCookieJar(t)}
+	postJSON(t, viewerClient, ts.URL+"/api/auth/login", credentialsRequest{Username: "viewer", Password: "password456"}).Body.Close()
+
+	req, _ := http.NewRequest(http.MethodPost, ts.URL+"/api/flags/clear-all", nil)
+	req.Header.Set(csrfHeaderName, csrfHeaderValue)
+	resp, err := viewerClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("expected a non-admin clear-all to succeed, got %d", resp.StatusCode)
+	}
+}
+
+// TestHandleFlagsClearAllCreatesNoExclusions is the HTTP-level half of
+// the invariant #198 states explicitly: clear-all must never create a
+// permanent exclusion.
+func TestHandleFlagsClearAllCreatesNoExclusions(t *testing.T) {
+	s, _ := newTestServer(t)
+	s.Flags.Add(flags.TypePortScan, "203.0.113.9", "port scan", time.Now())
+
+	ts := httptest.NewServer(asAdmin(s.mux()))
+	defer ts.Close()
+
+	resp, err := http.Post(ts.URL+"/api/flags/clear-all", "application/json", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+
+	if n := len(s.Flags.ListExclusions()); n != 0 {
+		t.Errorf("clear-all created %d exclusions, want 0", n)
+	}
+}
+
+// TestHandleFlagsClearAllIsAuditLoggedOnce pins "one audit entry for the
+// whole call, not one per flag" -- handleFlagsClearAll's own doc
+// comment states this is deliberate.
+func TestHandleFlagsClearAllIsAuditLoggedOnce(t *testing.T) {
+	s := newAuthTestServer(t)
+	s.Flags.Add(flags.TypePortScan, "203.0.113.1", "d1", time.Now())
+	s.Flags.Add(flags.TypeActivitySpike, "203.0.113.2", "d2", time.Now())
+	s.Flags.Add(flags.TypeCriticalPort, "203.0.113.3", "d3", time.Now())
+	ts := httptest.NewServer(s.Routes())
+	defer ts.Close()
+
+	adminClient := &http.Client{Jar: mustCookieJar(t)}
+	postJSON(t, adminClient, ts.URL+"/api/auth/register", credentialsRequest{Username: "admin", Password: "password123"}).Body.Close()
+
+	resp := postJSON(t, adminClient, ts.URL+"/api/flags/clear-all", nil)
+	resp.Body.Close()
+
+	var matches []audit.Entry
+	for _, e := range s.Audit.Query(audit.Query{}).Entries {
+		if e.Action == "flag.clear_all" {
+			matches = append(matches, e)
+		}
+	}
+	if len(matches) != 1 {
+		t.Fatalf("expected exactly 1 flag.clear_all audit entry for 3 cleared flags, got %d: %+v", len(matches), matches)
+	}
+	if matches[0].Detail != "cleared 3 flags" {
+		t.Errorf("audit entry detail = %q, want %q", matches[0].Detail, "cleared 3 flags")
+	}
+}
+
+// TestHandleFlagsClearAllOnEmptyStoreSkipsAudit: clearing nothing is not
+// a meaningful action, matching handleExclusionRemove's own "only log a
+// meaningful action" reasoning elsewhere in this file.
+func TestHandleFlagsClearAllOnEmptyStoreSkipsAudit(t *testing.T) {
+	s := newAuthTestServer(t)
+	ts := httptest.NewServer(s.Routes())
+	defer ts.Close()
+
+	adminClient := &http.Client{Jar: mustCookieJar(t)}
+	postJSON(t, adminClient, ts.URL+"/api/auth/register", credentialsRequest{Username: "admin", Password: "password123"}).Body.Close()
+
+	resp := postJSON(t, adminClient, ts.URL+"/api/flags/clear-all", nil)
+	resp.Body.Close()
+
+	for _, e := range s.Audit.Query(audit.Query{}).Entries {
+		if e.Action == "flag.clear_all" {
+			t.Errorf("unexpected flag.clear_all audit entry on an empty store: %+v", e)
+		}
+	}
+}
