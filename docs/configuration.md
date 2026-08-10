@@ -339,11 +339,24 @@ watchlist:
 #### CFG-0041
 
 `watchlist.matchLogCapacity` is zero or negative, which would keep
-nothing. Same treatment as CFG-0011.
+nothing. Same treatment as CFG-0011. File backend only -- see
+[Watchlist](#watchlist-optional).
 
 ```yaml
 watchlist:
   matchLogCapacity: 200000
+```
+
+#### CFG-0042
+
+`watchlist.matchLogRetention` is zero or negative. Postgres backend
+only -- see [Watchlist](#watchlist-optional) -- validated regardless of
+which backend is active so a config that later adopts Postgres doesn't
+discover a bad value for the first time at that point.
+
+```yaml
+watchlist:
+  matchLogRetention: 168h  # 7 days
 ```
 
 ## Logging
@@ -808,8 +821,15 @@ watchlist:
   # oldest, unlike the in-memory event ring. A repeat of an
   # already-recorded match still collapses into it at no cost even once
   # full. 100k-500k is the realistic range for the file backend; 200,000
-  # is the default (CFG-0041 warns below zero).
+  # is the default (CFG-0041 warns below zero). File backend only.
   matchLogCapacity: 200000
+
+  # How long a match is kept, on the Postgres backend only, once its
+  # last activity ages past it -- Postgres has no record-count ceiling
+  # (matchLogCapacity above doesn't apply there), so this is what bounds
+  # it instead. Purged hourly, not instantly on expiry. 7 days is the
+  # default (CFG-0042 warns below zero).
+  matchLogRetention: 168h
 
   # Where suggested watchlist entries (below) are persisted. Same
   # optional-persistence contract as storePath above: left unset,
@@ -831,6 +851,17 @@ open to any signed-in user and reachable via a read-only API token, the
 same tier as `/api/events`/`/api/flags`/`/api/stats`/`/api/devices`,
 since correlating a device against its recorded matches from an external
 tool is exactly what that log is for.
+
+**On Postgres** (see [Postgres](#postgres-optional) below), the match
+log is a dedicated, indexed table rather than a row in the shared
+document table everything else there uses -- it's the one store whose
+data doesn't fit that shape, needing a real range query rather than a
+whole-document load (see `docs/decisions/postgres-backend.md` §1a for
+why that's a deliberate, scoped exception, not a reopened decision).
+There's no record-count ceiling on Postgres -- `matchLogCapacity` is a
+file-backend-only concept -- so it's bounded by age instead:
+`matchLogRetention` (7 days by default), enforced by a background purge
+that runs hourly.
 
 Watchlist coverage is bounded by the same thing every detector in this
 app is bounded by: mikroview only ever sees what RouterOS actually
@@ -2253,6 +2284,7 @@ Override individual scalar settings without a mounted file:
 | `MIKROVIEW_WATCHLIST_STORE_PATH` | `watchlist.storePath` (see [Watchlist](#watchlist-optional)) |
 | `MIKROVIEW_WATCHLIST_MATCH_LOG_PATH` | `watchlist.matchLogPath` |
 | `MIKROVIEW_WATCHLIST_MATCH_LOG_CAPACITY` | `watchlist.matchLogCapacity` |
+| `MIKROVIEW_WATCHLIST_MATCH_LOG_RETENTION` | `watchlist.matchLogRetention` |
 | `MIKROVIEW_WATCHLIST_SUGGESTIONS_STORE_PATH` | `watchlist.suggestionsStorePath` (see [Suggested watchlist entries](#suggested-watchlist-entries-issue-243)) |
 | `MIKROVIEW_AUTH_TOKENS_STORE_PATH` | `auth.tokensStorePath` (see [API tokens](#api-tokens-read-only)) |
 | `MIKROVIEW_TLS_ENABLED` | `tls.enabled` (see [TLS](#tls)) |
@@ -2398,6 +2430,13 @@ Three things worth knowing:
   start.** It does not silently fall back to the JSON files — that would
   quietly run your deployment on stale local accounts, possibly with a
   different admin, and nothing would look wrong.
+- **One exception: the watchlist match log is not migrated.** Every
+  other store's JSON document round-trips byte-identically into
+  Postgres; the match log's append-only line format doesn't fit that
+  path, and it starts empty on Postgres instead — said in the startup
+  log, not left to be discovered as missing history. The old
+  `matchlog.jsonl` is untouched and still readable if you revert
+  `postgres.dsnFile`. See [Watchlist](#watchlist-optional).
 
 ### Watching for schema changes on upgrade
 

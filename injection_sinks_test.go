@@ -46,13 +46,21 @@ var forbiddenGoSinks = []forbiddenSink{
 // sink is safe *there*, so the next person can check whether that
 // reasoning still holds rather than assuming someone thought about it.
 var allowed = map[string][]string{
-	// internal/persist is the only package that talks to Postgres, by
-	// design (#131). Every statement in it is a compile-time constant
-	// with $n bound parameters -- nothing is concatenated, formatted, or
-	// built from caller input. Re-audited when it landed; see
-	// docs/decisions/postgres-backend.md §7 and
+	// internal/persist talks to Postgres for every store that fits its
+	// blob-table shape (#131). Every statement in it is a compile-time
+	// constant with $n bound parameters -- nothing is concatenated,
+	// formatted, or built from caller input. Re-audited when it landed;
+	// see docs/decisions/postgres-backend.md §7 and
 	// docs/decisions/injection-audit.md.
 	"internal/persist/postgres.go": {`jackc/pgx`},
+	// internal/matchlog is the one deliberate exception (#243 slice 6):
+	// its data doesn't fit the blob-table shape (see postgres-backend.md
+	// §1a), so it gets its own table and its own direct pgx sink rather
+	// than going through internal/persist. Held to the same standard --
+	// every statement a compile-time constant with $n placeholders -- and
+	// re-audited on the same terms; see injection-audit.md's residual
+	// risk section.
+	"internal/matchlog/postgres.go": {`jackc/pgx`},
 }
 
 func TestNoForbiddenGoInjectionSinks(t *testing.T) {

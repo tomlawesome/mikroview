@@ -131,6 +131,11 @@ func TestWarningsClampRatherThanRefuse(t *testing.T) {
 			func(c *Config) bool {
 				return c.Watchlist.MatchLogCapacity == defaults().Watchlist.MatchLogCapacity
 			}},
+		{"zero matchLogRetention", "CFG-0042",
+			func(c *Config) { c.Watchlist.MatchLogRetention = 0 },
+			func(c *Config) bool {
+				return c.Watchlist.MatchLogRetention == defaults().Watchlist.MatchLogRetention
+			}},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			c := validCfg()
