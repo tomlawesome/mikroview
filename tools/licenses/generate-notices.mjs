@@ -10,8 +10,7 @@
 // their licences (MIT, BSD-3, ISC, Apache-2.0) requires the copyright
 // notice and licence text to accompany a *binary* distribution, not just
 // a source one. Apache-2.0 s4(d) goes further and requires any NOTICE
-// file the dependency ships to be passed along as well; two of ours have
-// one.
+// file the dependency ships to be passed along as well; some of ours do.
 //
 // Generated rather than hand-maintained, and checked in CI (see
 // .github/workflows/ci.yml), because a hand-written notices file is
@@ -25,7 +24,9 @@
 //   --check    exit non-zero if the committed file is out of date
 
 import { execFileSync } from 'node:child_process'
-import { readFileSync, writeFileSync, readdirSync, existsSync } from 'node:fs'
+import { readFileSync, writeFileSync, readdirSync, existsSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { createRequire } from 'node:module'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -33,16 +34,6 @@ const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '.
 const OUT = path.join(REPO, 'THIRD-PARTY-NOTICES.md')
 
 const LICENCE_FILE = /^(LICEN[CS]E|COPYING|NOTICE)(\.(md|txt))?$/i
-
-/**
- * Go module cache paths lower-case uppercase letters and prefix them
- * with "!" (so github.com/BurntSushi becomes github.com/!burnt!sushi).
- * None of today's dependencies need it, which is exactly why it would be
- * missed the day one does.
- */
-function escapeModulePath(p) {
-  return p.replace(/[A-Z]/g, (c) => '!' + c.toLowerCase())
-}
 
 function goModules() {
   // -deps against the main package, not `go list -m all`: the latter
@@ -64,19 +55,73 @@ function goModules() {
   return [...seen.values()].sort((a, b) => a.name.localeCompare(b.name))
 }
 
+/**
+ * Frontend packages are derived from the build output, not from
+ * package.json.
+ *
+ * Reading package.json gets this wrong in both directions at once, which
+ * is not a theoretical concern -- it was the first attempt at this file.
+ * Listing every devDependency attributes Vite, Playwright, TypeScript and
+ * Vitest, none of which put a byte in the artefact, so the notices claim
+ * things that are not in it. And it *misses* workbox-core/-precaching/
+ * -routing/-strategies, which ship as ~15KB of service worker but are
+ * transitive dependencies of vite-plugin-pwa and therefore appear in no
+ * package.json here at all. Over-inclusion looked like the safe error and
+ * was actually wrong in the direction that matters.
+ *
+ * So: build with sourcemaps into a throwaway directory and read which
+ * node_modules packages actually contributed source. That is a statement
+ * about the shipped bytes rather than a guess about them, and it
+ * self-corrects when the build config changes.
+ */
 function npmPackages() {
-  // Everything in devDependencies, deliberately over-inclusive. Some of
-  // these (vite, playwright) contribute nothing to the shipped bundle,
-  // but Svelte's runtime and vite-plugin-pwa's service-worker glue
-  // demonstrably do, and the boundary between "bundled" and "build-time
-  // only" moves whenever the build config changes. Over-attributing
-  // costs a few paragraphs; under-attributing is the infringement.
-  const pkg = JSON.parse(readFileSync(path.join(REPO, 'frontend', 'package.json'), 'utf8'))
-  const names = Object.keys({ ...(pkg.dependencies ?? {}), ...(pkg.devDependencies ?? {}) }).sort()
+  const outDir = path.join(tmpdir(), 'mikroview-licence-build')
+  rmSync(outDir, { recursive: true, force: true })
+  execFileSync('npx', ['vite', 'build', '--sourcemap', '--outDir', outDir, '--emptyOutDir'], {
+    cwd: path.join(REPO, 'frontend'),
+    encoding: 'utf8',
+    stdio: 'pipe',
+  })
+
+  // Every .map in the output, not just assets/ -- the service worker and
+  // its workbox chunk are emitted at the output root, and an
+  // assets/-only scan silently misses them.
+  const names = new Set()
+  const walk = (dir) => {
+    for (const e of readdirSync(dir, { withFileTypes: true })) {
+      const p = path.join(dir, e.name)
+      if (e.isDirectory()) walk(p)
+      else if (e.name.endsWith('.map')) {
+        const map = JSON.parse(readFileSync(p, 'utf8'))
+        for (const src of map.sources ?? []) {
+          const i = src.lastIndexOf('node_modules/')
+          if (i < 0) continue
+          const rest = src.slice(i + 'node_modules/'.length).split('/')
+          names.add(rest[0].startsWith('@') ? `${rest[0]}/${rest[1]}` : rest[0])
+        }
+      }
+    }
+  }
+  walk(outDir)
+  rmSync(outDir, { recursive: true, force: true })
+
   const out = []
-  for (const name of names) {
-    const dir = path.join(REPO, 'frontend', 'node_modules', ...name.split('/'))
-    if (!existsSync(dir)) continue
+  for (const name of [...names].sort()) {
+    // require.resolve rather than a fixed node_modules path: a package
+    // may be hoisted to the top level or nested under whichever
+    // dependency pulled it in, and which one is an npm implementation
+    // detail that changes between installs.
+    let dir
+    try {
+      dir = path.dirname(
+        createRequire(path.join(REPO, 'frontend', 'package.json')).resolve(`${name}/package.json`),
+      )
+    } catch {
+      throw new Error(
+        `${name} contributes code to the shipped bundle but could not be resolved. ` +
+          `Its licence cannot be attributed, and shipping it without attribution is an infringement.`,
+      )
+    }
     const meta = JSON.parse(readFileSync(path.join(dir, 'package.json'), 'utf8'))
     out.push({ name, version: meta.version, dir, declared: meta.license ?? meta.licenses })
   }
@@ -130,6 +175,11 @@ function render() {
     }
   }
   lines.push('## Frontend packages')
+  lines.push('')
+  lines.push('Derived from the build output: these are the packages whose source the')
+  lines.push('bundler actually emitted into the shipped JavaScript and service worker.')
+  lines.push('Build-time-only tooling (Vite, TypeScript, Playwright, Vitest) is')
+  lines.push('deliberately absent -- none of it reaches the artefact.')
   lines.push('')
   for (const p of npm) {
     lines.push(`### ${p.name} ${p.version}${p.declared ? ` — ${p.declared}` : ''}`)
