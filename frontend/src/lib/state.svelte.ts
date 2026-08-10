@@ -22,8 +22,9 @@ function stamp(events: FirewallEvent[]): ClientEvent[] {
 export type ConnState = 'connecting' | 'open' | 'closed'
 
 // 'live' is the scrolling event table + filter bar; 'metrics' is the
-// dashboard (see Dashboard.svelte); 'control-ports' is the SSH/Telnet/
-// control-port tracking tab (see ControlPorts.svelte); 'flags' is the
+// dashboard (see Dashboard.svelte); 'watchlist' (issue #243) is the
+// admin-only watched-ports/watched-devices management tab (see
+// Watchlist.svelte, successor to the old Control Ports tab); 'flags' is the
 // behavioral-flags review tab (see Flags.svelte); 'detectors' is the
 // admin-only per-detector on/off + scope settings tab (see
 // Detectors.svelte); 'entities' is the admin-only persisted host/rule
@@ -32,11 +33,29 @@ export type ConnState = 'connecting' | 'open' | 'closed'
 // -- every known device, live/stale/never-seen status, last-seen, and
 // event counts in one place, richer than the toolbar's always-on
 // DeviceStatus dot-strip; 'audit' (issue #112) is the admin-only,
-// read-only log of admin-privileged mutations (see AuditLog.svelte). A
-// real (if minimal) view switch -- only one is ever mounted at a time --
-// rather than a modal layered over the live table, which used to leave
+// read-only log of admin-privileged mutations (see AuditLog.svelte);
+// 'exclusions' (issue #207) is the admin-only page listing every
+// permanently-excluded (detector, target) pair, split out of the bottom
+// of Flags.svelte since reviewing exclusions underneath a list of
+// hundreds of active flags was a pain. 'suggestions' (#243 slice 5) is
+// the admin-only review page for watchlist entries suggested from data
+// RouterOS has already pushed (see Suggestions.svelte) -- kept separate
+// from Watchlist.svelte itself since accepting/hiding a suggestion is a
+// different workflow from managing an entry directly. A real (if
+// minimal) view switch -- only one is ever mounted at a time -- rather
+// than a modal layered over the live table, which used to leave
 // LiveTable running underneath.
-export type View = 'live' | 'metrics' | 'control-ports' | 'flags' | 'detectors' | 'entities' | 'fleet' | 'audit'
+export type View =
+  | 'live'
+  | 'metrics'
+  | 'watchlist'
+  | 'suggestions'
+  | 'flags'
+  | 'detectors'
+  | 'entities'
+  | 'fleet'
+  | 'audit'
+  | 'exclusions'
 
 // Central reactive state for the live view. The WebSocket tail pushes
 // every new event unfiltered into `events`; `filteredEvents` re-filters
@@ -77,6 +96,23 @@ class AppState {
   pendingCount = $state(0)
   autoscroll = $state(true)
 
+  // The raw event pool captured the moment Autoscroll is switched off
+  // (issue #232). Null means "not frozen"; cleared when Autoscroll goes
+  // back on.
+  //
+  // Lives here rather than inside LiveTable because switching to another
+  // view unmounts that component. Component-local state resets to null on
+  // unmount, so returning to the live view would re-capture against the
+  // now-current buffer and jump the view forward by everything that
+  // arrived while you were away -- the exact symptom #232 reports, just
+  // triggered by navigation instead of by new events.
+  //
+  // Deliberately the raw pool, not the rendered slice: LiveTable
+  // re-applies the *current* filters to it, so narrowing and widening the
+  // filter still work while frozen, but only ever within what was already
+  // captured. An event that arrives after the freeze can never appear.
+  frozenPool = $state<ClientEvent[] | null>(null)
+
   // Updated periodically by App.svelte (see tick()) so the age-based cutoff
   // in filteredEvents actually re-evaluates over time, not just when the
   // buffer itself changes.
@@ -102,14 +138,13 @@ class AppState {
   filteredEvents = $derived.by(() => this.filteredBy(this.filters))
 
   // The age-cutoff half of filteredBy's pipeline, exposed as its own
-  // memoized derived (rather than a plain method) so ControlPorts.svelte
-  // and every configured CustomTopTalkerCard widget -- both of which need
-  // the display-duration-windowed buffer but can't express their own match
-  // criteria as a Filters object, e.g. ControlPorts.svelte's "destination
-  // port is any one of several configured control ports" OR-match, which
-  // Filters.port (a single value) can't represent -- read the same cached
-  // scan instead of each independently re-filtering up to MAX_CLIENT_EVENTS
-  // items on every tick.
+  // memoized derived (rather than a plain method) so every configured
+  // CustomTopTalkerCard widget -- which needs the display-duration-windowed
+  // buffer but can't express its own match criteria as a Filters object --
+  // reads the same cached scan instead of each independently re-filtering
+  // up to MAX_CLIENT_EVENTS items on every tick. Watchlist.svelte does NOT
+  // use this: its matches come from the server's own persisted match log
+  // (internal/matchlog), not the client's volatile recent-events buffer.
   ageFilteredEvents = $derived.by(() => {
     const cutoff =
       retentionState.maxAgeSeconds === null ? null : this.now - retentionState.maxAgeSeconds * 1000
@@ -206,8 +241,44 @@ class AppState {
     this.now = Date.now()
   }
 
+  /**
+   * Appends events the buffer has not already got, returning the ones
+   * that were genuinely new.
+   *
+   * Needed because the initial `GET /api/events` fetch and the WebSocket
+   * stream overlap: an event that arrives in both lands twice, and
+   * `LiveTable`'s `{#each rendered as event (event.id)}` then has
+   * duplicate keys. Svelte logs `each_key_duplicate` and keyed-each
+   * behaviour is undefined from there -- the row renders twice and any
+   * count taken off the buffer is inflated.
+   *
+   * Server ids are unique (verified against the API), so this is purely
+   * about the two client-side entry points meeting in the middle. The
+   * incoming batch is deduped against itself as well as against the
+   * buffer, since a single flush can carry the same event twice for the
+   * same reason.
+   */
+  private appendUnseen(incoming: ClientEvent[]): ClientEvent[] {
+    if (incoming.length === 0) return []
+    const seen = new Set(this.events.map((e) => e.id))
+    const fresh = incoming.filter((e) => {
+      if (seen.has(e.id)) return false
+      seen.add(e.id)
+      return true
+    })
+    if (fresh.length === 0) return []
+    this.events = [...this.events, ...fresh].slice(-MAX_CLIENT_EVENTS)
+    return fresh
+  }
+
   setInitialEvents(events: FirewallEvent[]) {
-    this.events = stamp(events).slice(-MAX_CLIENT_EVENTS)
+    // Deduped even though this replaces the buffer outright: it is the
+    // one place a fresh id set is established, and letting a duplicate
+    // in here would seed every later comparison with it.
+    const seen = new Set<FirewallEvent['id']>()
+    this.events = stamp(events)
+      .filter((e) => (seen.has(e.id) ? false : (seen.add(e.id), true)))
+      .slice(-MAX_CLIENT_EVENTS)
     this.syncRuleMatches()
   }
 
@@ -234,22 +305,27 @@ class AppState {
   // is idle.
   private flushIncoming() {
     if (this.incomingBuffer.length === 0) return
-    const arrived = this.incomingBuffer
-    this.events = [...this.events, ...arrived].slice(-MAX_CLIENT_EVENTS)
-    this.pruneRuleMatches()
-    void this.classifyNew(arrived)
+    const arrived = this.appendUnseen(this.incomingBuffer)
     this.incomingBuffer = []
+    if (arrived.length === 0) return
+    this.pruneRuleMatches()
+    // Only the genuinely new ones: reclassifying a duplicate costs a
+    // Worker round-trip to reach the answer already held for it.
+    void this.classifyNew(arrived)
   }
 
   togglePause() {
     this.paused = !this.paused
     if (!this.paused && this.pendingBuffer.length) {
-      const resumed = this.pendingBuffer
-      this.events = [...this.events, ...resumed].slice(-MAX_CLIENT_EVENTS)
-      this.pruneRuleMatches()
-      void this.classifyNew(resumed)
+      // The third insert path, and the easiest to forget: a pause that
+      // spans a reconnect can hold events the refreshed buffer already
+      // has.
+      const resumed = this.appendUnseen(this.pendingBuffer)
       this.pendingBuffer = []
       this.pendingCount = 0
+      if (resumed.length === 0) return
+      this.pruneRuleMatches()
+      void this.classifyNew(resumed)
     }
   }
 

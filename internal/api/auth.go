@@ -44,7 +44,16 @@ func isSafeMethod(method string) bool {
 
 type contextKey int
 
-const userContextKey contextKey = iota
+const (
+	userContextKey contextKey = iota
+	// ingestTokenContextKey carries the authenticated *auth.Token (kind
+	// ingest) through to handleIngestRouterOS -- see requireAuth's
+	// bearer-token branch and ingestTokenFromContext below. Device
+	// identity for a push comes from this token, never from the request
+	// body, so a payload cannot claim to be from a router other than the
+	// one its own credential is scoped to.
+	ingestTokenContextKey
+)
 
 // exemptPaths lists routes reachable without a session once auth is
 // active -- either because they must work before one exists (register,
@@ -131,6 +140,22 @@ func (s *Server) readOnlyRoutes() http.Handler {
 	mux.HandleFunc("GET /api/flags", s.handleFlagsList)
 	mux.HandleFunc("GET /api/stats", s.handleStats)
 	mux.HandleFunc("GET /api/devices", s.handleDevices)
+	mux.HandleFunc("GET /api/watchlist/matches", s.handleWatchlistMatchesQuery)
+	return mux
+}
+
+// ingestRoutes is the only handler set an ingest bearer token (issue
+// #186) can ever reach -- its own separate *http.ServeMux, the same
+// structural reasoning readOnlyRoutes documents above: there is no code
+// path from an ingest-authenticated request to anything else registered
+// on the real mux, including readOnlyRoutes' own four GETs. That
+// separation is exactly what stops an ingest token -- readable by any
+// `read`-capable user on the router it came from, per #186 step 5 --
+// from becoming a read-everything credential the way a stolen one
+// reaching readOnlyRoutes would.
+func (s *Server) ingestRoutes() http.Handler {
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST /api/ingest/routeros", s.handleIngestRouterOS)
 	return mux
 }
 
@@ -162,10 +187,15 @@ func bearerToken(r *http.Request) (string, bool) {
 //     bearer token). A bearer token is checked first, before the CSRF/
 //     exempt-path logic below, since it identifies a non-browser,
 //     service-to-service caller -- CSRF is a browser-cookie-specific
-//     mitigation that doesn't apply to it. A valid token is dispatched
-//     to readOnlyRoutes, never to next (the full mux); an invalid or
-//     revoked one is rejected outright with 401, not silently treated
-//     as "no token" and passed through to the session-cookie check.
+//     mitigation that doesn't apply to it. A valid *read-only API* token
+//     is dispatched to readOnlyRoutes, never to next (the full mux); a
+//     valid *ingest* token (#186) is dispatched to ingestRoutes instead,
+//     equally never to next -- the two kinds reach two disjoint muxes,
+//     neither of which is the real one, so a token of either kind is
+//     structurally incapable of reaching a session-gated route. An
+//     invalid or revoked token is rejected outright with 401, not
+//     silently treated as "no token" and passed through to the
+//     session-cookie check.
 //
 // There is deliberately no third state for "this deployment opted out of
 // authentication". That mode existed and was removed: an unauthenticated
@@ -175,6 +205,7 @@ func bearerToken(r *http.Request) (string, bool) {
 // Creating a local account takes one screen, and it is the floor now.
 func (s *Server) requireAuth(next http.Handler) http.Handler {
 	readOnly := s.readOnlyRoutes()
+	ingest := s.ingestRoutes()
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if s.Auth.Count() == 0 {
 			if !bootstrapExemptPaths[r.URL.Path] {
@@ -200,8 +231,25 @@ func (s *Server) requireAuth(next http.Handler) http.Handler {
 		}
 
 		if raw, ok := bearerToken(r); ok {
-			if _, valid := s.Tokens.Authenticate(raw, time.Now()); valid {
+			// auth.TokenKindAPI, named explicitly: an ingest token
+			// (#186) is a bearer credential too, and it lives in a
+			// script on a router where any `read` user can read it. If
+			// this branch accepted any valid token it would quietly
+			// promote that credential into read access to every event,
+			// flag and device mikroview holds. Naming the kind makes an
+			// ingest token fall through to the 401 below, exactly like a
+			// revoked one.
+			if _, valid := s.Tokens.Authenticate(raw, auth.TokenKindAPI, time.Now()); valid {
 				readOnly.ServeHTTP(w, r)
+				return
+			}
+			// Tried second, not first: TokenKindAPI is the far more
+			// common credential (every read-only integration uses one),
+			// and Authenticate's own lookup cost doesn't depend on which
+			// kind is tried first, so this ordering costs nothing and
+			// keeps the more-common path textually first.
+			if tok, valid := s.Tokens.Authenticate(raw, auth.TokenKindIngest, time.Now()); valid {
+				ingest.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), ingestTokenContextKey, tok)))
 				return
 			}
 			http.Error(w, "invalid or revoked token", http.StatusUnauthorized)
@@ -233,6 +281,15 @@ func (s *Server) requireAuth(next http.Handler) http.Handler {
 func userFromContext(r *http.Request) *auth.User {
 	u, _ := r.Context().Value(userContextKey).(*auth.User)
 	return u
+}
+
+// ingestTokenFromContext returns the authenticated ingest token for this
+// request -- only ever non-nil inside handleIngestRouterOS, which is the
+// sole handler ingestRoutes registers and therefore the only one
+// requireAuth's ingest-token branch ever dispatches to.
+func ingestTokenFromContext(r *http.Request) *auth.Token {
+	t, _ := r.Context().Value(ingestTokenContextKey).(*auth.Token)
+	return t
 }
 
 func (s *Server) setSessionCookie(w http.ResponseWriter, sessionID string) {

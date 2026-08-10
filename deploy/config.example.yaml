@@ -6,8 +6,14 @@
 # show up here.
 
 listen:
-  syslogUdp: ":1514"
-  syslogTcp: ":1514"
+  # RouterOS remote-protocol=tls (RFC 5425's syslog-over-TLS port) --
+  # mikroview's only syslog listener. Confidentiality for log traffic on
+  # the wire, using the same certificate the HTTPS listener below
+  # presents when TLS is on, or a self-generated one otherwise -- a
+  # certificate is loaded for this even if tls.enabled is false, since
+  # the router connects here directly. Set to "" to disable syslog
+  # ingest entirely.
+  syslogTls: ":6514"
   http: ":8080"
   # Redirect-only -- bounces a plain HTTP request to the HTTPS listener
   # above, never serves the app itself. Set to "" to disable (e.g. if
@@ -37,7 +43,25 @@ listen:
 
 store:
   retention: 24h
-  maxEvents: 200000
+  # A memory budget, not an event count -- see docs/configuration.md's
+  # "config.yaml" section for what this actually buys at your own
+  # traffic rate, which varies enormously depending on which of your
+  # router's rules have logging turned on.
+  maxMemory: 120MiB
+
+# Watchlist (issue #243) -- an admin-managed set of entries watching
+# specific ports/sources, or a device's egress ("this should only ever
+# reach X"), plus suggested entries generated from what RouterOS has
+# already pushed (DHCP leases, ARP, blocked ports). Uncomment only to
+# move where any of this persists or to change the match log's capacity;
+# the defaults are already sensible. See docs/configuration.md's
+# "Watchlist" section.
+# watchlist:
+#   storePath: /var/lib/mikroview/watchlist.json
+#   matchLogPath: /var/lib/mikroview/matchlog.jsonl
+#   matchLogCapacity: 200000    # file backend only -- no ceiling on Postgres
+#   matchLogRetention: 168h     # 7 days -- Postgres backend only
+#   suggestionsStorePath: /var/lib/mikroview/suggestions.json
 
 # Leveled, colorized server log output (see docs/configuration.md's
 # "Logging" section) -- level defaults to info already, uncomment only
@@ -166,6 +190,29 @@ store:
 #     - spamhaus_edrop
 #     # - emerging_threats_compromised  # opt-in: larger, faster-changing, individual-IP list
 
+# Optional (on by default): local IP attribution for the manual IP-lookup
+# popover -- labels an address as a Tor exit, commercial VPN,
+# cloud/datacenter, or privacy relay. Never raises a flag by itself for
+# any category; a Tor or VPN match on an *inbound* source additionally
+# reinforces an already-raised flag's confidence (direction-aware --
+# your own outbound traffic through a VPN or Private Relay never
+# contributes). Datacenter/privacy-relay stay display-only always. A
+# fixed, vetted menu fetched at runtime (no range data ships in the
+# image), refreshed daily. Default is the high-precision lists only: the
+# broad datacenter/cloud feeds cover >10% of routable IPv4, so they
+# attach a label to ordinary traffic and are opt-in. Set sources to an
+# empty list to disable attribution (and the reinforcement) entirely.
+# See docs/configuration.md for the full menu and the per-source
+# trade-offs.
+# netClass:
+#   sources:
+#     - tor                  # Tor Project's own exit list -- tiny, first-party
+#     - apple_private_relay  # Apple's own egress list -- keeps Private Relay traffic out of the VPN category below
+#     - x4b_vpn              # X4BNet commercial-VPN list (MIT) -- high precision
+#     # - x4b_datacenter  # opt-in: broad, ~10% of IPv4, noisy as a signal
+#     # - aws             # opt-in: official AWS ranges, with region detail
+#     # - gcp             # opt-in: official Google Cloud ranges
+
 # Optional: friendly display names shown in place of a raw RouterOS rule
 # label (e.g. "r13") or a raw host IP, everywhere they appear in the UI
 # and CSV export. Filtering/grouping still uses the raw value -- these
@@ -200,12 +247,16 @@ store:
 # Local authentication. storePath already defaults to
 # /var/lib/mikroview/users.json (see deploy/docker-compose.yml for the
 # matching volume mount if you want it to survive container recreation,
-# not just restarts) -- only uncomment this block to move that path or
-# change sessionTTL. The first time mikroview loads, it presents a
-# one-time choice: create the admin account, or explicitly skip auth
-# for this deployment -- see SECURITY.md and docs/configuration.md's
-# "Authentication" section for that flow and how to reverse a skip
-# later (CLI-only, by design).
+# not just restarts).
+#
+# Uncomment this block to move that path, change sessionTTL, or set
+# secureCookie. secureCookie is the one people come looking for: leaving
+# it false while tls.enabled is true stops mikroview starting (CFG-0021),
+# because the session cookie would go out without the Secure flag.
+#
+# The first time mikroview loads it asks you to create the admin
+# account. That is the only option -- see SECURITY.md and
+# docs/configuration.md's "Authentication" section.
 # auth:
 #   storePath: /var/lib/mikroview/users.json
 #   secureCookie: true

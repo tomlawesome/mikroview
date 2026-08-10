@@ -33,6 +33,29 @@ type Resolver struct {
 	// wired up," falling straight back to Rules/Hosts, exactly today's
 	// pre-issue-#107 behavior.
 	Entities *entities.Store
+	// RouterHosts, if set, is consulted before everything else for host
+	// names -- issue #186 step 4c's owner decision, verbatim: "RouterOS
+	// always wins... names in mikroview always match RouterOS. No drift,
+	// no reconciling, no second source of truth." A name pushed by the
+	// router (a DNS static entry, a DHCP lease, a WireGuard peer
+	// comment) shadows an entity or config alias for the same address
+	// while the router keeps pushing it; anything RouterOS does not
+	// cover falls straight through to Entities/Hosts untouched, so
+	// hand-made labels for hosts outside the router's knowledge simply
+	// persist. Shadowing rather than overwriting is deliberate: the
+	// mikroview-side label is never destroyed, it is out-ranked -- and
+	// if the router stops naming that host, it resurfaces, which is
+	// exactly the "manage router-known hosts in RouterOS" contract the
+	// decision describes.
+	RouterHosts RouterHostLookup
+}
+
+// RouterHostLookup is the one method of internal/routerstate.Store this
+// package needs -- an interface rather than the concrete type so naming
+// (imported by main's per-event hot path) doesn't pull in the whole
+// ingest schema, and so tests can fake it without pushing real payloads.
+type RouterHostLookup interface {
+	HostName(ip string) string
 }
 
 // Rule returns the friendly name for a raw rule label -- an
@@ -48,9 +71,15 @@ func (r Resolver) Rule(label string) string {
 	return r.Rules[label]
 }
 
-// Host returns the friendly name for a host IP -- same precedence as
-// Rule, against internal/entities records of type "host".
+// Host returns the friendly name for a host IP: the router-pushed name
+// first (see RouterHosts -- RouterOS always wins), then an
+// internal/entities record of type "host", then the config map.
 func (r Resolver) Host(ip string) string {
+	if r.RouterHosts != nil {
+		if v := r.RouterHosts.HostName(ip); v != "" {
+			return v
+		}
+	}
 	if r.Entities != nil {
 		if v := r.Entities.Label(entities.TypeHost, ip); v != "" {
 			return v

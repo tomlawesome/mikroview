@@ -455,7 +455,7 @@ See [docs/security-by-design.md](docs/security-by-design.md).
 | Listener | Auth | TLS | Notes |
 |---|---|---|---|
 | HTTP (`api.Server` + static UI) | Session cookie once an account exists (or an API bearer token, read-only, for four `GET` routes only — see "API tokens" above); restricted to the choice-screen endpoints while undecided; fully open once skipped | On by default (self-generated or supplied) | See "TLS" above for the zero-config default and the one supported reason (`tls.enabled: false`) to disable it. `/api/healthz` always stays open. |
-| Syslog UDP/TCP | None | None | Accepts and parses any line from any source as if it were a real RouterOS device -- unaffected by auth state. TLS doesn't apply here; RouterOS's syslog protocol has no TLS mode. |
+| Syslog TLS | None | Always (mikroview's only syslog listener) | Accepts and parses any line from any source as if it were a real RouterOS device -- unaffected by auth state. TLS buys confidentiality on the wire and mikroview authenticating itself to the router, but not the reverse: RouterOS's logging action has no client-certificate option, so anything able to reach the port can still connect and inject log lines. |
 | WebSocket (`/api/ws`) | Session cookie + same-origin check, once an account exists; blocked entirely while undecided (not in the choice-screen exemption list); open, no origin check, once skipped | Follows the HTTP listener (`wss://` when TLS is on) | `CheckOrigin` is permissive whenever `Auth.Count() == 0` (undecided or skipped) — moot for "undecided", since `requireAuth` never lets the request reach this handler in that state. See `internal/api/ws.go`. |
 
 ## Hardening already in place
@@ -463,13 +463,11 @@ See [docs/security-by-design.md](docs/security-by-design.md).
 These don't change the no-auth threat model above, but they do bound the
 damage a hostile or misbehaving LAN device can do:
 
-- The syslog UDP listener never blocks on a slow downstream consumer —
-  a full buffer drops the incoming datagram rather than letting it back
-  up into the kernel receive buffer (`internal/syslog/udp_listener.go`).
-- The syslog TCP listener caps concurrent connections and closes any
+- The syslog TLS listener caps concurrent connections and closes any
   connection that's gone idle too long, so it can't be used to exhaust
   goroutines/file descriptors by opening connections and never closing
-  them (`internal/syslog/tcp_listener.go`).
+  them (`internal/syslog/tcp_listener.go`'s `ServeTCP`, which
+  `internal/syslog/tls_listener.go` wraps in TLS).
 - The WebSocket hub never blocks a slow browser tab from receiving
   events — a full per-client queue evicts its oldest event rather than
   applying backpressure to ingestion, and the drop count is surfaced to

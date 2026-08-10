@@ -60,11 +60,12 @@ services:
     image: ghcr.io/tomlawesome/mikroview:latest
     restart: unless-stopped
     ports:
-      # Host 514 -> the conventional syslog port RouterOS targets; the
-      # container listens on 1514 internally since it runs as a non-root
-      # user that can't bind <1024 (see Dockerfile).
-      - "514:1514/udp"
-      - "514:1514/tcp"
+      # RouterOS remote-protocol=tls (RFC 5425's syslog-over-TLS port,
+      # already unprivileged so no remap is needed). Mikroview's only
+      # syslog listener -- comment this out (and set
+      # MIKROVIEW_LISTEN_SYSLOG_TLS= below) only if you want no syslog
+      # ingest at all.
+      - "6514:6514/tcp"
       # HTTPS by default, on the conventional port -- see the Quickstart
       # above and docs/configuration.md's "TLS" section.
       - "443:8080"
@@ -127,6 +128,11 @@ services:
       # needed if you've removed the "80:8081" port mapping too (e.g.
       # your reverse proxy handles the HTTP->HTTPS redirect itself).
       # - MIKROVIEW_LISTEN_HTTP_REDIRECT=
+      # Disables syslog ingest entirely -- mikroview's only syslog
+      # listener is RouterOS remote-protocol=tls, so only set this if
+      # you don't want firewall events at all. Remove the "6514:6514/tcp"
+      # port mapping above too if you do.
+      # - MIKROVIEW_LISTEN_SYSLOG_TLS=
 
 volumes:
   mikroview-data:
@@ -187,8 +193,9 @@ every restart) but not fatal.
 ## Features
 
 - **Ingestion**: RouterOS forwards firewall log lines via
-  `/system logging` over syslog (UDP or TCP). No polling, no RouterOS
-  API access, no credentials — push-based and cheap for the router.
+  `/system logging` over syslog-over-TLS (`remote-protocol=tls`). No
+  polling, no RouterOS API access, no credentials — push-based and
+  cheap for the router.
 - **Parsing**: a RouterOS-specific parser decodes chain, action, rule
   label, interfaces, protocol, addresses/ports, and length from each
   log line. See [docs/routeros-setup.md](docs/routeros-setup.md) for the
@@ -207,6 +214,23 @@ every restart) but not fatal.
   flag for a human to review and clear, never an automatic action. See
   [docs/configuration.md](docs/configuration.md) for the detectors and
   their thresholds.
+- **Watchlist**: operator-defined entries, persisted and queryable, in
+  two modes — **record** ("watch attempts against these ports") and
+  **invert** ("this device should only ever reach these destinations",
+  reviewed via an observe-then-promote workflow before anything is
+  treated as a violation). Tuning entries against your own network's
+  traffic is expected and ongoing, not a one-time setup step: mikroview
+  presents what it saw and lets you decide what's expected, it never
+  decides that for you. And like everything else here, it only ever
+  sees what the router is actually configured to log — an entry with no
+  matches can mean "nothing happened" or "nothing logs this," and
+  telling those apart is on the operator, not the tool. See
+  [docs/configuration.md](docs/configuration.md)'s "Watchlist" section.
+  Entries can also be **suggested** from data your router has already
+  pushed (named DHCP leases, ports an existing rule already blocks), so
+  there's something to react to rather than a blank page — reviewed
+  Off/Accepted/Hidden, never applied automatically. See that section's
+  "Suggested watchlist entries" subsection.
 - **Live updates**: a WebSocket pushes new events to the browser in
   real time; historical/filtered queries go through a REST endpoint
   against the retained buffer. See

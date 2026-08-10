@@ -42,6 +42,33 @@ the only real argument for `jsonb`.
 state, and every write rewrites a whole document. Both are acceptable at
 these data sizes; neither is on the path of the motivation above.
 
+## 1a. The match log gets its own table -- this does not reopen §1
+
+Added 2026-08-10, once #243's match log (issue #243, `internal/matchlog`)
+raised a genuine range-query need this decision hadn't accounted for.
+
+§1's reasoning was scoped to the stores that existed when it was
+written: auth, tokens, flags, entities, audit, watchlist entries -- all
+small, bounded, already fully loaded into memory, none of them issuing a
+query. The match log was never a candidate for that set. It doesn't hold
+its data in memory at all (flat memory regardless of retention is the
+point), and querying it by source and time range is the entire reason it
+exists. It was already exempt from the *file* backend's equivalent
+pattern for the same reason -- `internal/matchlog` doesn't implement
+`persist.Backend`; it's its own package with its own append-only format,
+because a whole-document rewrite per match doesn't fit an append-heavy
+log. A dedicated Postgres table continues that same exemption onto the
+second backend. It is not a rewrite of anything §1 actually covers --
+`store_blob` and everything on it (auth included) stays exactly as
+decided.
+
+So: mix shapes. `store_blob` for the six bounded stores above (and
+anything future that looks like them), a purpose-built, indexed table
+for anything that structurally isn't one of those -- decided per store,
+not as a blanket rule either way. Migrated through the same embedded-SQL
+runner §3 already commits to, reviewed under the same injection-sink
+process §7 already commits to. Nothing about those decisions changes.
+
 ## 2. Concurrency: compare-and-swap, which is better than today
 
 `version` is not decoration. The current file backend has a real
