@@ -89,6 +89,8 @@ var authzMatrix = []routeExpectation{
 	{http.MethodGet, "/api/watchlist/matches", accessUser,
 		"a read over already-collected evidence, same tier as events/flags/stats/devices above -- also reachable via a read-only API token (readOnlyRoutes), since birdcage-style external correlation by source is the reason internal/matchlog exists"},
 	{http.MethodGet, "/api/rules", accessUser, "core read"},
+	{http.MethodGet, "/api/third-party-notices", accessUser,
+		"licence compliance: the copyright/licence texts of everything statically linked into this binary, which MIT/BSD/ISC/Apache-2.0 all require to accompany a binary distribution. Session-gated rather than public only because it is also a precise dependency-and-version inventory -- it withholds nothing, since the same file is in the public repo and the image"},
 	{http.MethodGet, "/api/stats", accessUser, "core read"},
 	{http.MethodGet, "/api/ws", accessUser,
 		"live tail; additionally same-origin checked (see checkOrigin)"},

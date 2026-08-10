@@ -632,7 +632,7 @@ type DeviceMAC struct {
 // full menu, why it's a fixed menu rather than an arbitrary URL field,
 // and how the refresh cadence/entry-count cap were decided.
 //
-// On by default with Spamhaus's DROP+EDROP lists -- the issue's own
+// On by default with Spamhaus's DROP list -- the issue's own
 // recommended starting point: small, free, no registration, and
 // curated specifically to only include netblocks Spamhaus is confident
 // are entirely malicious-controlled, a safe "flag on sight" default
@@ -642,7 +642,7 @@ type DeviceMAC struct {
 // see internal/blocklist.RefreshInterval's doc comment.
 type Blocklist struct {
 	// Sources is a list of internal/blocklist.Source values (e.g.
-	// "spamhaus_drop", "spamhaus_edrop", "emerging_threats_compromised")
+	// "spamhaus_drop", "emerging_threats_compromised")
 	// -- an unrecognized entry is logged and skipped at startup, not a
 	// fatal error, same degrade-not-crash contract as every other
 	// optional integration in this codebase.
@@ -857,7 +857,10 @@ func defaults() Config {
 			// so this package stays a dependency-free leaf, same
 			// reasoning Flags already gives for duplicating
 			// internal/detect.Config's own defaults.
-			Sources: []string{"spamhaus_drop", "spamhaus_edrop"},
+			// EDROP is deliberately absent: Spamhaus merged it into
+			// DROP on 2024-04-10 and the endpoint now serves no ranges
+			// at all.
+			Sources: []string{"spamhaus_drop"},
 		},
 		NetClass: NetClass{
 			// Mirrors internal/netclass.DefaultSources -- literal here

@@ -220,20 +220,27 @@ device**. None of it is committed to this repo or baked into the
 container image.
 
 This is a licensing constraint before it is a design preference.
-Mikroview ships under the *MikroView Personal & Non-Commercial License* —
-custom, not OSS — which turns share-alike data into a real conflict
-rather than a formality. CC BY-SA sources (IP2Location LITE, IPinfo's
-free tier, older GeoLite2) cannot be redistributed under it, and the
-cloud providers grant no redistribution licence on their published
-IP-range documents at all. Fetching at runtime is uncontroversial;
-shipping a copy is not.
+Mikroview ships under the **GNU AGPL-3.0** (see [LICENSE](LICENSE)), with
+a commercial licence offered alongside it for anyone who needs to escape
+the AGPL's obligations (see
+[COMMERCIAL-LICENSE.md](COMMERCIAL-LICENSE.md)). That second option is
+what turns share-alike data into a real conflict rather than a formality:
+CC BY-SA sources (IP2Location LITE, IPinfo's free tier, older GeoLite2)
+cannot be sublicensed on commercial terms, so vendoring one would quietly
+make the commercial licence undeliverable for every copy that contained
+it. Separately, the cloud providers grant no redistribution licence on
+their published IP-range documents at all. Fetching at runtime is
+uncontroversial; shipping a copy is not.
 
 It also means a stale release cannot ship stale security data — a failure
 nobody would notice, because everything would appear to work.
 
 So: before adopting any feed or dependency, check its licence and record
 what you found in the issue. Permissive (MIT/BSD/Apache/ISC) is fine;
-copyleft and share-alike are not. Attribution terms still bind data that
+copyleft and share-alike are not — **not** because they conflict with the
+AGPL (GPL-family code is compatible with it), but because of the
+commercial licence above: a copyleft dependency you do not own cannot be
+sublicensed on those terms. Attribution terms still bind data that
 is fetched rather than shipped — Spamhaus DROP requires credit, and its
 date and copyright text must travel with the data.
 
