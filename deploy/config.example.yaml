@@ -59,7 +59,8 @@ store:
 # watchlist:
 #   storePath: /var/lib/mikroview/watchlist.json
 #   matchLogPath: /var/lib/mikroview/matchlog.jsonl
-#   matchLogCapacity: 200000
+#   matchLogCapacity: 200000    # file backend only -- no ceiling on Postgres
+#   matchLogRetention: 168h     # 7 days -- Postgres backend only
 #   suggestionsStorePath: /var/lib/mikroview/suggestions.json
 
 # Leveled, colorized server log output (see docs/configuration.md's

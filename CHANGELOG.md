@@ -123,6 +123,21 @@ upgrading.
   omitting or erroring on it, which MikroView already handles the same
   way it handles an unset `dst-port`.
 
+- **The watchlist match log now has a Postgres backend** (#243 slice
+  6): a dedicated, indexed `match_log` table rather than a row in the
+  shared document table every other Postgres-backed store uses -- see
+  `docs/decisions/postgres-backend.md` §1a for why that doesn't reopen
+  the "one blob table" decision. No record-count ceiling on Postgres,
+  unlike the file backend; bounded by age instead
+  (`watchlist.matchLogRetention`, 7 days by default), enforced by an
+  hourly background purge. One asymmetry from every other store: an
+  existing `matchlog.jsonl` is **not** migrated when Postgres is
+  configured (its append-only format doesn't fit the byte-identical
+  migration path the rest of the backend uses) -- it starts empty on
+  Postgres, and the startup log says so plainly rather than leaving
+  missing history to be discovered. New config:
+  `watchlist.matchLogRetention`.
+
 - **Tor and VPN network-class matches now reinforce an already-raised
   flag's confidence** (#114), direction-aware: only a classified source
   reaching *into* your network counts, never your own outbound traffic

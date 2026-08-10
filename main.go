@@ -75,6 +75,15 @@ const deviceSilenceCheckInterval = 1 * time.Minute
 // than tracking it exactly.
 const suggestSyncInterval = 5 * time.Minute
 
+// matchLogPurgeInterval is how often internal/matchlog.PostgresStore
+// deletes matches older than watchlist.matchLogRetention (#243 slice
+// 6). Coarser than suggestSyncInterval on purpose: retention is
+// measured in days by default, so purging every few minutes buys
+// nothing an hourly pass wouldn't -- this only needs to keep the table
+// from growing meaningfully past its retention window between runs,
+// not to enforce that window to the minute.
+const matchLogPurgeInterval = 1 * time.Hour
+
 // loginLimiter{Threshold,Window}: brute-force protection on
 // POST /api/auth/login (see internal/auth.LoginLimiter) -- an internal
 // hardening constant, not exposed via config, same tier as ws.go's
@@ -483,8 +492,38 @@ func main() {
 	// event skips watchlist evaluation entirely for this run, which
 	// ingestOneRecovered's nil check makes an explicit, visible no-op
 	// rather than a mysteriously empty watchlist page.
+	//
+	// On Postgres, this is a dedicated table (internal/matchlog.
+	// PostgresStore), not a row in store_blob -- see
+	// docs/decisions/postgres-backend.md §1a -- bounded by
+	// MatchLogRetention (age) rather than MatchLogCapacity (count), and
+	// already migrated by persistence.pool.Migrate above alongside every
+	// other store's schema. The file backend is unaffected either way.
 	var matchLog matchlog.Store
-	if ml, err := matchlog.Open(cfg.Watchlist.MatchLogPath, cfg.Watchlist.MatchLogCapacity); err != nil {
+	// Nil unless the Postgres backend is in use -- RunPeriodicPurge is
+	// started later, alongside every other periodic background task,
+	// once the shutdown-aware ctx exists (see below).
+	var matchLogPostgres *matchlog.PostgresStore
+	if persistence.pool != nil {
+		matchLogPostgres = matchlog.OpenPostgres(persistence.pool, cfg.Watchlist.MatchLogRetention)
+		matchLog = matchLogPostgres
+		// Unlike every other store, there is no adoption path from the
+		// file backend's JSONL format into the Postgres table -- every
+		// other store's JSON blob round-trips byte-identically (see
+		// persistence.backendFor/persist.AdoptFile), but the match log's
+		// append-only line format doesn't fit that migration, and a
+		// backfill migrator was judged not worth building for what is,
+		// by design, bounded evidence rather than durable account state.
+		// Said plainly rather than left to be discovered as "why is my
+		// match history gone": the old file is untouched and still
+		// readable by reverting Postgres, it just isn't carried forward.
+		if fi, err := os.Stat(cfg.Watchlist.MatchLogPath); err == nil && fi.Size() > 0 {
+			watchlistLog.Warn(fmt.Sprintf("an existing match log at %s (%d bytes) will NOT be migrated into Postgres -- "+
+				"unlike every other store, the match log has no file-to-Postgres adoption path. It starts empty on Postgres; "+
+				"the old file is untouched and still readable if you revert postgres.dsnFile",
+				cfg.Watchlist.MatchLogPath, fi.Size()))
+		}
+	} else if ml, err := matchlog.Open(cfg.Watchlist.MatchLogPath, cfg.Watchlist.MatchLogCapacity); err != nil {
 		watchlistLog.Error(fmt.Sprintf("opening the match log at %s failed: %v -- watchlist entries will not record any matches until this is fixed and mikroview is restarted", cfg.Watchlist.MatchLogPath, err))
 	} else {
 		matchLog = ml
@@ -664,6 +703,9 @@ func main() {
 	go detector.Run(ctx)
 	go watchlistEval.Run(ctx)
 	go suggestStore.RunPeriodicSync(ctx, routerState, suggestSyncInterval)
+	if matchLogPostgres != nil {
+		go matchLogPostgres.RunPeriodicPurge(ctx, matchLogPurgeInterval)
+	}
 
 	go func() {
 		spikeLog := logging.New("global-spike")
