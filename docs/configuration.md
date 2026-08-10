@@ -14,8 +14,7 @@ Copy `deploy/config.example.yaml` to `deploy/config.yaml` and edit it —
 
 ```yaml
 listen:
-  syslogUdp: ":1514"
-  syslogTcp: ":1514"
+  syslogTls: ":6514"    # RouterOS remote-protocol=tls -- mikroview's only syslog listener
   http: ":8080"
   httpRedirect: ":8081"
   # Only set these if a reverse proxy fronts mikroview -- see
@@ -25,7 +24,7 @@ listen:
 
 store:
   retention: 24h
-  maxEvents: 200000
+  maxMemory: 120MiB
 
 devices:
   - id: core-router
@@ -34,14 +33,61 @@ devices:
 ```
 
 - `store.retention` — how far back `/api/events` and the UI will show,
-  as a Go duration string (`24h`, `12h30m`, ...).
-- `store.maxEvents` — the hard cap on events held in memory at once (a
-  fixed-size ring buffer); this bounds memory use regardless of traffic
-  volume. Once full, the oldest events are overwritten first.
+  as a Go duration string (`24h`, `12h30m`, ...). A ceiling on what a
+  query returns, not a promise that history exists — see
+  [How events are stored](#how-events-are-stored) for why.
+- `store.maxMemory` — the memory budget for mikroview's event buffer, a
+  Go duration-string-style size such as `120MiB` or `500MB` rather than
+  an event count. Same section as above explains why a count would not
+  mean anything portable between deployments.
 - `devices` — maps a syslog source IP to a friendly name. Routers
   sending logs from an IP *not* listed here still appear in the UI and
   `/api/devices`, labelled by their raw IP with `configured: false`, so
   you can identify and add them rather than silently losing their events.
+
+### How events are stored
+
+There is no database. Every event mikroview has seen lives in one
+fixed-size block of memory (`internal/store/ring.go`) that holds the most
+recent events and overwrites the oldest once it fills — `store.maxMemory`
+is how big that block is, and `store.retention` is a ceiling applied when
+a query runs, not a guarantee that events that old still exist. If the
+buffer has already overwritten what a query asks for, you get whatever
+is left, not an error — `windowStart` in the response says what the
+actual lower bound turned out to be, so you can tell the difference
+between "nothing happened" and "it isn't there any more."
+
+**How long the buffer actually covers is set by your own traffic, and it
+varies enormously.** MikroTik firewall rules do not log by default — `log`
+is `no` unless you explicitly turn it on for a rule — so the rate
+mikroview sees is entirely a product of which rules you have logging
+enabled for, not of your link speed or how busy your network is. A router
+logging only dropped traffic and one logging every accepted connection
+can differ by four or more orders of magnitude. There is no default that
+serves both, and no table of "typical" rates in this document would mean
+anything without knowing which of those you have.
+
+So: measure your own. `GET /api/stats` reports `capacity`, `count` and
+`eventsPerSecond` for your own running instance — once `count` reaches
+`capacity` the buffer is overwriting, and `capacity / eventsPerSecond` is
+roughly how many seconds of history remain. The live view's toolbar shows
+this directly (`n% of buffer used`, or `holding last Xm Ys` once full),
+so you do not need to query the API by hand to find out.
+
+**A typical retained event costs about 616 bytes**, so the default
+`maxMemory: 120MiB` holds roughly 200,000 events. That figure is a budget
+for the buffer itself, not what mikroview's process occupies on the host
+— expect *resident* memory (what `docker stats` or `top` reports) to run
+about 1.5x higher once the Go runtime and process overhead are counted,
+so provisioning for the 120MiB default really means having roughly 175MiB
+of RAM to spare. The whole budget is reserved **immediately at startup**
+(`store.New` allocates it all up front), not filled up gradually — a
+value too large for the machine fails right away rather than degrading
+over hours, which is why mikroview warns above 1GiB (see
+[CFG-0012](#cfg-0012)) without silently shrinking it back down: a large
+budget on a machine that genuinely has the memory is a legitimate choice,
+and the warning only makes sure you're making it with the real cost in
+front of you.
 
 ### Running behind a reverse proxy
 
@@ -152,8 +198,6 @@ A listen address is empty. Mikroview would have nothing to bind.
 
 ```yaml
 listen:
-  syslogUdp: ":1514"
-  syslogTcp: ":1514"
   http: ":8080"
 ```
 
@@ -195,12 +239,30 @@ store:
 
 #### CFG-0011
 
-`store.maxEvents` is zero or negative, which would keep nothing. Same
-treatment as CFG-0010.
+`store.maxMemory` is zero, negative, or too small to be a usable memory
+budget, which would keep nothing. Same treatment as CFG-0010.
 
 ```yaml
 store:
-  maxEvents: 200000
+  maxMemory: 120MiB
+```
+
+#### CFG-0012
+
+`store.maxMemory` is set above 1GiB. Unlike CFG-0010/CFG-0011, this is
+only a warning that leaves your configured value alone — a large budget
+on a machine that genuinely has the memory to spare is a legitimate
+choice, not a mistake to correct. It exists because the whole budget is
+reserved immediately at startup (see
+[How events are stored](#how-events-are-stored)), so a value that turns
+out to be too large fails right away rather than degrading gradually, and
+the warning states the real memory cost — including the ~1.5x resident
+overhead on top of the ring itself — so you have it in front of you
+before that happens.
+
+```yaml
+store:
+  maxMemory: 120MiB  # lower this, or confirm the machine has the larger amount to spare
 ```
 
 #### CFG-0020
@@ -262,6 +324,41 @@ devices:
     name: "branch-router"
 ```
 
+#### CFG-0040
+
+`watchlist.matchLogPath` is empty. Unlike every other `storePath` in this
+file, the match log has no in-memory-only mode -- durability is the
+entire reason it exists -- so an empty value is treated the same as an
+unusable one rather than as a deliberate opt-out.
+
+```yaml
+watchlist:
+  matchLogPath: /var/lib/mikroview/matchlog.jsonl
+```
+
+#### CFG-0041
+
+`watchlist.matchLogCapacity` is zero or negative, which would keep
+nothing. Same treatment as CFG-0011. File backend only -- see
+[Watchlist](#watchlist-optional).
+
+```yaml
+watchlist:
+  matchLogCapacity: 200000
+```
+
+#### CFG-0042
+
+`watchlist.matchLogRetention` is zero or negative. Postgres backend
+only -- see [Watchlist](#watchlist-optional) -- validated regardless of
+which backend is active so a config that later adopts Postgres doesn't
+discover a bad value for the first time at that point.
+
+```yaml
+watchlist:
+  matchLogRetention: 168h  # 7 days
+```
+
 ## Logging
 
 Mikroview's own server output (not event data -- see `store.retention`
@@ -270,7 +367,7 @@ above) is leveled and colorized, one line per entry:
 ```
 18:43:44 INFO  auth        │ no decision made yet -- showing the first-run choice screen
 18:43:45 WARN  flags       │ permission denied opening flags.json -- continuing in-memory-only
-18:43:46 ERROR syslog-udp  │ listen udp :1514: bind: address already in use
+18:43:46 ERROR syslog-tls  │ listen tcp :6514: bind: address already in use
 ```
 
 ```yaml
@@ -301,7 +398,7 @@ only the real server-start path.
   auto-disables when stdout isn't a terminal -- piping to a file,
   `docker logs | grep`, or a log collector all see plain text, not raw
   ANSI escapes.
-- The component column (`auth`, `tls`, `flags`, `syslog-udp`, `http`,
+- The component column (`auth`, `tls`, `flags`, `syslog-tls`, `http`,
   ...) identifies which part of mikroview logged the line -- the same
   names used throughout this doc and SECURITY.md for the pieces they
   refer to.
@@ -332,10 +429,18 @@ error.
 ## IP reputation lookup (optional)
 
 Clicking the "investigate" affordance next to a public source/destination
-IP in the live view queries a threat-intel source and shows the result in
-a popover (open ports, hostnames, known CVEs, abuse score). This proxies
-through the backend so no key ever reaches the browser, and caches each
-IP briefly to conserve free-tier quota.
+IP queries a threat-intel source and shows the result in a popover (open
+ports, hostnames, known CVEs, abuse score). This proxies through the
+backend so no key ever reaches the browser, and caches each IP briefly
+to conserve free-tier quota.
+
+It shows up next to a public IP in the live view, and (issue #213) on a
+flag card next to any flag whose target is a real IP — a fresh check,
+independent of the reputation snapshot frozen at the moment the flag
+first raised (see [Behavioral flags](#behavioral-flags-optional-on-by-default)).
+Raw events aren't persisted, so an old or cleared flag often has nothing
+left in the live view to click into; this is the way to check what an IP
+looks like now without leaving the Flags page.
 
 - **Shodan InternetDB** — free, keyless, always used, no configuration
   needed.
@@ -444,6 +549,72 @@ active, source-IP-keyed flag for that same address (`port_scan`,
 live reputation lookups above already play for those flags, just
 resolved synchronously (a local lookup needs no network round-trip)
 instead of asynchronously.
+
+## Network attribution (optional, on by default)
+
+When you click "investigate" on an IP, mikroview also labels it with the
+kind of network it belongs to — a Tor exit, a commercial VPN, cloud or
+datacenter space, or a privacy relay (Apple iCloud Private Relay,
+Cloudflare WARP). It shows up as a **Network** row in the lookup popover,
+alongside the reputation data.
+
+**Attribution itself is display-only** for every category, always. A
+network-class match by itself never raises a flag. The reason is
+measured, not cautious: the broad datacenter/cloud lists cover more than
+one in ten routable IPv4 addresses — Google Public DNS, Akamai edge, and
+every Apple Private Relay user included — so treating a datacenter match
+as suspicion would fire constantly on ordinary traffic.
+
+**Two categories additionally reinforce an already-raised flag's
+confidence: Tor and commercial VPN** — the two high-precision categories,
+covering well under 1% of IPv4 combined. This only happens when a source
+address in one of those categories is reaching *into* your network (a
+LAN destination); a device on your own network reaching *out* to a VPN
+or Tor address (Private Relay, WARP, ordinary browsing through a VPN you
+run yourself) never contributes anything, in either direction of the
+check. A match on its own, with no behavioral detection already
+triggered, never creates a flag — the same "absence of evidence is not
+evidence, but a mild match by itself is not evidence of anything either"
+floor-only contract every other reputation signal in mikroview follows.
+Datacenter and privacy-relay matches never affect a score, only the
+display. To suppress attribution/reinforcement for a specific address
+you trust (your own VPN, a VPS you run), use the existing flag exclusion
+or entity-tagging tools — there's no separate allow-list for this.
+
+```yaml
+netClass:
+  sources:
+    - tor
+    - apple_private_relay
+    - x4b_vpn
+```
+
+The default is deliberately the **high-precision lists**, not the broad
+ones, so the feature is quiet the day you enable it.
+
+| Source | What it covers | Notes |
+|---|---|---|
+| `tor` | Tor exit nodes | The Tor Project's own list — tiny, first-party, highest precision |
+| `apple_private_relay` | Apple iCloud Private Relay egress ranges | Official `egress-ip-ranges.csv`, fetched from Apple directly. On by default alongside `x4b_vpn` — not a separate opt-in — because `x4b_vpn`'s own upstream data includes these same ranges, so disabling this one would leave ordinary iPhone/iPad/Mac traffic misclassified as a VPN exit |
+| `x4b_vpn` | Commercial VPN exits | [X4BNet](https://github.com/X4BNet/lists_vpn) (MIT); ~0.08% of IPv4, precise |
+| `x4b_datacenter` | Cloud / hosting / datacenter | Broad — ~10% of IPv4. Useful as a label, noisy as a signal. Opt-in |
+| `aws` | AWS ranges, with region | Official `ip-ranges.json`. Opt-in |
+| `gcp` | Google Cloud ranges | Official `cloud.json`. Opt-in |
+
+Set `sources` to an empty list to turn attribution (and the Tor/VPN
+confidence reinforcement) off entirely.
+
+**No range data ships in mikroview.** Every list is fetched at runtime,
+from the operator's own device, on a fixed daily cycle with a small
+random offset per install (so thousands of self-hosted instances don't
+refresh in lockstep). A release therefore can never ship stale security
+data. Until the first fetch completes, the popover simply shows no
+Network row. Azure is deliberately not on the menu: it publishes no
+stable range URL (the file is date-stamped and deleted within a fortnight),
+and its space is already covered by `x4b_datacenter`.
+
+Refresh cadence is not configurable, for the same over-polling reason as
+the blocklist.
 
 ## Port lookup
 
@@ -590,6 +761,166 @@ opted out of). Backed by `GET /api/audit`, a windowed query over the
 persisted log (see [API reference](#api-reference)) -- the same
 `since`/`until`/`limit` convention `GET /api/events` already uses, minus
 that endpoint's event-specific filters.
+
+## Watchlist (optional)
+
+Issue #243 grew the old Control Ports tab into a user-tuned watchlist:
+instead of one flat list of "interesting" ports shared by everyone, an
+operator defines entries scoped by source device, destination and port
+set. Matches are persisted so they survive both the in-memory event ring
+wrapping and a mikroview restart -- unlike Control Ports before it, which
+only ever saw whatever was still in the browser's own capped, volatile
+event buffer.
+
+Two kinds of entry, chosen per entry, not globally:
+
+- **Record** (non-inverted) -- "watch attempts against these ports,"
+  optionally scoped to a source device and/or destination. This is the
+  direct generalisation of what Control Ports did: a device or the
+  whole network reaching for SSH, RDP, or whatever ports you name, with
+  every match recorded rather than only ever visible in the live view
+  while it's on screen.
+- **Invert** -- "this device should only ever reach these destinations,"
+  the other direction: instead of naming ports to watch for, you name a
+  device and let mikroview tell you what it actually does. A new
+  inverted entry starts **observing**: nothing fires while observing --
+  every distinct destination the device touches gets recorded as a
+  candidate for review, not treated as a violation. You look at what it
+  actually reached, **promote** the destinations that are expected
+  (a known NTP server, a vendor's telemetry endpoint), then turn
+  observing off. From that point, anything the device reaches that
+  wasn't promoted is a real match: either it's genuinely unexpected, or
+  you missed promoting something and should add it. Broadcast,
+  multicast and link-local traffic is exempt from this by default
+  (`includeStructuralNoise` opts back in) since it's rarely what anyone
+  means by "did this device misbehave."
+
+Managed from **Menu → Watchlist** (admin-only, matching Entities/Audit's
+gate -- entry management uses `callerIsAdmin`, not
+`callerIsAdminOrOpen`, so it stays hidden while auth is disabled). Add,
+edit and remove entries there; for an inverted entry, the same page
+shows what's been promoted, what's waiting for review, and a toggle to
+resume or stop observing. An entry with a scoped source can also show
+its own recent matches inline, pulled from the match log below.
+
+```yaml
+watchlist:
+  # Where watchlist entries themselves are persisted, as a small JSON
+  # file. Same optional-persistence contract as entities.storePath: left
+  # unset, entries still work, they just don't survive a restart.
+  storePath: "/var/lib/mikroview/watchlist.json"
+
+  # Where matches are recorded, append-only. Unlike storePath above,
+  # this has NO in-memory-only mode: durability is the entire reason
+  # this store exists (a match must survive a restart), so an empty
+  # value is treated as unusable rather than as an opt-out (CFG-0040).
+  matchLogPath: "/var/lib/mikroview/matchlog.jsonl"
+
+  # The match log's hard ceiling on distinct records -- once reached, a
+  # genuinely new match is refused rather than silently overwriting the
+  # oldest, unlike the in-memory event ring. A repeat of an
+  # already-recorded match still collapses into it at no cost even once
+  # full. 100k-500k is the realistic range for the file backend; 200,000
+  # is the default (CFG-0041 warns below zero). File backend only.
+  matchLogCapacity: 200000
+
+  # How long a match is kept, on the Postgres backend only, once its
+  # last activity ages past it -- Postgres has no record-count ceiling
+  # (matchLogCapacity above doesn't apply there), so this is what bounds
+  # it instead. Purged hourly, not instantly on expiry. 7 days is the
+  # default (CFG-0042 warns below zero).
+  matchLogRetention: 168h
+
+  # Where suggested watchlist entries (below) are persisted. Same
+  # optional-persistence contract as storePath above: left unset,
+  # suggestions still work, they just regenerate from scratch on
+  # restart rather than remembering what you already accepted or hid.
+  suggestionsStorePath: "/var/lib/mikroview/suggestions.json"
+```
+
+The match log is a third store, distinct from the in-memory event ring
+(all events, volatile, capacity-bound by `store.maxMemory`) and the
+behavioral-flags store below (aggregate judgements with deliberately
+capped evidence): a match is a discrete fact that matters individually,
+so it's kept at full fidelity -- the whole matched event, not a summary.
+A repeated identical match collapses into a count with first-seen/
+last-seen timestamps rather than being stored again, so a noisy entry
+cannot consume the capacity a genuinely novel match needs. Queried via
+`GET /api/watchlist/matches` (see [API reference](#api-reference)) --
+open to any signed-in user and reachable via a read-only API token, the
+same tier as `/api/events`/`/api/flags`/`/api/stats`/`/api/devices`,
+since correlating a device against its recorded matches from an external
+tool is exactly what that log is for.
+
+**On Postgres** (see [Postgres](#postgres-optional) below), the match
+log is a dedicated, indexed table rather than a row in the shared
+document table everything else there uses -- it's the one store whose
+data doesn't fit that shape, needing a real range query rather than a
+whole-document load (see `docs/decisions/postgres-backend.md` §1a for
+why that's a deliberate, scoped exception, not a reopened decision).
+There's no record-count ceiling on Postgres -- `matchLogCapacity` is a
+file-backend-only concept -- so it's bounded by age instead:
+`matchLogRetention` (7 days by default), enforced by a background purge
+that runs hourly.
+
+Watchlist coverage is bounded by the same thing every detector in this
+app is bounded by: mikroview only ever sees what RouterOS actually
+logs. An entry watching a port the router's own rules don't log traffic
+for, or a device whose traffic never crosses a logged rule, will never
+produce a match -- not because the entry is wrong, but because there's
+nothing here for mikroview to observe. Tuning entries, like tuning
+detector thresholds below, is an expected, ongoing part of running this
+against a real network, not a one-time setup step.
+
+### Suggested watchlist entries (issue #243)
+
+Building a watchlist from a blank page means already knowing what to
+watch. mikroview instead suggests entries from data your router has
+already pushed (see [RouterOS setup](routeros-setup.md)) -- named
+devices from your DHCP leases, and ports an existing firewall rule
+already drops or rejects -- so you have something to react to rather
+than something to invent.
+
+Managed from **Menu → Suggestions** (admin-only, same gate as the
+watchlist itself). Every suggestion is one of three states, never a
+plain accept/reject:
+
+- **Undecided** -- generated, not yet acted on. Every new suggestion
+  starts here, and this is the default view.
+- **Accepted** -- you accepted it; a real watchlist entry now exists
+  for it, editable from the Watchlist page like any other entry.
+- **Hidden** -- you declined it. Reversible, but only by deliberately
+  switching to the Hidden view and undoing it -- a hidden suggestion
+  never reappears on its own, no matter how much time passes.
+
+New router data is checked for automatically in the background every
+few minutes; there is no manual refresh button, since a periodic check
+already does everything one would. Checking finds new suggestions and
+refreshes existing ones' display details -- it never changes a
+suggestion's state: an already-accepted or hidden suggestion stays
+exactly where you left it. If an accepted suggestion's original reason
+disappears (the firewall rule it came from was changed or removed, or
+the device's lease expired), it's flagged **stale** with an
+unmissable highlight rather than being silently un-accepted -- the
+watchlist entry itself keeps working either way, this is only a
+prompt to go take a look.
+
+Accepting a device suggestion creates an inverted watchlist entry that
+starts observing with nothing pre-approved, the same safe default as
+creating one by hand -- see the section above. A device suggestion
+watches every port a device touches, not one in particular.
+
+**Reset everything** wipes the entire watchlist -- not just suggestion
+state, every entry you've hand-tuned too -- and immediately regenerates
+a fresh set of undecided suggestions from your router's current data.
+It cannot be undone, and requires confirming that explicitly; reach for
+it only if you genuinely want a clean slate.
+
+Suggestions are only as complete as what RouterOS pushes: a rule with
+no destination port set (most default-deny "drop everything" rules) is
+too broad to suggest a specific port from, and a device with no DHCP
+lease name never gets a device suggestion since there'd be nothing
+meaningful to call it.
 
 ## Behavioral flags (optional, on by default)
 
@@ -1024,9 +1355,19 @@ clears it via the UI or `POST /api/flags/{id}/clear`. Clearing an
 already-active-again source re-raises it as a fresh entry rather than
 silently resurrecting the old one.
 
-Alongside the plain Clear action, "Clear, never flag again" (`POST
-/api/flags/{id}/clear-permanent`, **admin-only** once an account exists,
-and recorded in the audit log) clears the flag *and* permanently
+A **Clear all** button above the active list (issue #198) clears every
+active flag in one request (`POST /api/flags/clear-all`) -- a click-again
+red "Confirm" is the safeguard against an accidental single click, not a
+modal. It performs regular clears only and never creates a permanent
+exclusion; there is no bulk variant of the action below.
+
+Each flag's Clear button is a split control: the main segment is the
+plain Clear above, and its arrow segment opens "Permanently clear"
+(`POST /api/flags/{id}/clear-permanent`, **admin-only** once an account
+exists, and recorded in the audit log) -- for a non-admin the arrow
+segment is hidden entirely, leaving a plain Clear button rather than a
+disabled one that would just advertise an action they can't take.
+"Permanently clear" clears the flag *and* permanently
 excludes that exact (detector, target) pair -- from then on it never
 raises again, silently, until the exclusion is removed. This is
 deliberately permanent rather than a timed snooze: a time-limited mute
@@ -1034,10 +1375,11 @@ either re-fires once it expires (nothing was solved) or it doesn't
 (permanent exclusion was what was wanted all along), so there's no
 in-between "snooze" option. Because "permanent" shouldn't mean
 "unrecoverable by mistake," every current exclusion is listed (and can
-be removed, re-enabling that pair) from the Flags tab's "Manage
-exclusions" panel -- admin-only once an account exists, open to anyone
-while mikroview is still in its fully-open zero-account state, same as
-every other admin-gated endpoint (see [Authentication](#authentication)).
+be removed, re-enabling that pair) on its own **Exclusions** page,
+reachable from the menu -- admin-only, same as every other admin-gated
+endpoint (see [Authentication](#authentication)). It was split out of
+the bottom of the Flags page (issue #207) because reviewing exclusions
+underneath a list of hundreds of active flags was a pain.
 
 ## New-device detection (optional, on by default)
 
@@ -1544,6 +1886,38 @@ until explicitly revoked from the same panel (or `DELETE
 curl -H "Authorization: Bearer <token>" https://mikroview.example.com/api/events
 ```
 
+### Ingest tokens (RouterOS push)
+
+`POST /api/tokens` also accepts `"kind": "ingest"` alongside `"device":
+"<name>"` -- a second, entirely separate credential for the RouterOS
+push-ingest integration (issue #186), scoped to exactly one router. It
+grants the opposite access to a read-only API token above: nothing can
+be read with it, and it can only be used at `POST
+/api/ingest/routeros`, which an API token in turn cannot reach -- the
+same structural, separate-router guarantee, just pointed the other way.
+One token per router is deliberate: any RouterOS user holding the
+`read` policy can print a script's source, ingest token included, so a
+leaked one must only ever be able to speak for the single router it was
+issued for.
+
+What a push feeds, today: host names (a DNS static entry, DHCP lease
+hostname, or WireGuard peer comment pushed by the router names that
+address everywhere mikroview shows one -- and **RouterOS always wins**
+over a label set in mikroview for the same address, so manage
+router-known hosts in RouterOS; labels for anything the router doesn't
+name are untouched), and the pushed firewall rule and NAT tables,
+served read-only at `GET /api/routeros/{device}/rules` and `.../nat` in
+RouterOS's own display order. Pushed state is held in memory only --
+never written to disk, never in a backup -- and re-arrives with the
+router's next scheduled push, so a mikroview restart costs at most one
+push interval of naming/table enrichment and nothing else. Pushed data
+never raises, lowers, clears or suppresses a detection: that boundary
+is a build-failing test, not a convention.
+
+See [routeros-setup.md](routeros-setup.md#4-push-router-state-for-names-and-rule-lookups-optional)
+for the router-side walkthrough -- minting the token, importing
+mikroview's certificate, and the script itself, explained line by line.
+
 ## Single sign-on (OIDC/SSO)
 
 Optional, additive on top of [local authentication](#authentication) above
@@ -1751,6 +2125,33 @@ host on a mismatch) rather than echoed unconditionally -- only
 relevant if something other than a real browser navigation reaches
 this listener directly.
 
+A third listener, `listen.syslogTls` (default `:6514`, RFC 5425's
+syslog-over-TLS port), accepts RouterOS's `remote-protocol=tls` logging
+action -- mikroview's only syslog listener. Confidentiality for log
+traffic on the wire, and mikroview authenticating itself to the router
+with a certificate: the same one the main HTTPS listener presents when
+`tls.enabled` is true (the router already imports mikroview's
+generated CA to verify HTTPS ingest, so this is that same trust step,
+not a second one), or a self-generated one on its own if `tls.enabled`
+is false -- unlike `httpRedirect`, this listener is started whenever it's
+non-empty regardless of `tls.enabled`, since the router connects to it
+directly and needs a certificate to trust either way. Set it to `""`
+to disable syslog ingest entirely.
+
+This listener does **not** authenticate the sender: RouterOS's logging
+action has no client-certificate option (only `check-certificate`,
+verifying the router trusts mikroview, not the reverse), so anything
+able to reach the port can still connect and inject log lines. Point
+RouterOS at it with:
+
+```
+/system logging action set 0 target=remote remote=<mikroview-host> remote-port=6514 remote-protocol=tls
+```
+
+and import mikroview's CA (`GET /ca.crt`) under
+`/certificate import` first, or the router will refuse the connection
+with `SSL: ssl: no trusted CA certificate found`.
+
 ```yaml
 tls:
   enabled: true
@@ -1779,7 +2180,10 @@ tls:
   that internal hop. Never set this `false` if mikroview's port is
   reachable from a LAN or the internet in any other way -- doing so
   serves the app, credentials included, in cleartext. Logged clearly at
-  startup whenever it's off, so it's never a silent state.
+  startup whenever it's off, so it's never a silent state. Syslog
+  ingest is unaffected either way: `listen.syslogTls` loads its own
+  certificate independently of this setting, since RouterOS connects to
+  it directly rather than through your reverse proxy.
 - **`certFile`/`keyFile`** — your own certificate. Skips local-CA
   generation entirely when both are set.
 - **`hosts`** — SANs for a self-generated certificate. Left empty, the
@@ -1820,14 +2224,13 @@ Override individual scalar settings without a mounted file:
 | Variable | Overrides |
 |---|---|
 | `MIKROVIEW_CONFIG` | path to the YAML config file to load |
-| `MIKROVIEW_LISTEN_SYSLOG_UDP` | `listen.syslogUdp` |
-| `MIKROVIEW_LISTEN_SYSLOG_TCP` | `listen.syslogTcp` |
+| `MIKROVIEW_LISTEN_SYSLOG_TLS` | `listen.syslogTls` (see [TLS](#tls)) |
 | `MIKROVIEW_LISTEN_HTTP` | `listen.http` |
 | `MIKROVIEW_LISTEN_HTTP_REDIRECT` | `listen.httpRedirect` |
 | `MIKROVIEW_TRUSTED_PROXIES` | `listen.trustedProxies` (comma-separated; see [Running behind a reverse proxy](#running-behind-a-reverse-proxy)) |
 | `MIKROVIEW_CLIENT_IP_HEADER` | `listen.clientIpHeader` |
 | `MIKROVIEW_STORE_RETENTION` | `store.retention` |
-| `MIKROVIEW_STORE_MAX_EVENTS` | `store.maxEvents` |
+| `MIKROVIEW_STORE_MAX_MEMORY` | `store.maxMemory` |
 | `MIKROVIEW_LOG_LEVEL` | `log.level` (see [Logging](#logging)) |
 | `MIKROVIEW_GEOIP_DB_PATH` | `geoip.dbPath` (see [GeoIP country flags](#geoip-country-flags-optional)) |
 | `MIKROVIEW_ABUSEIPDB_KEY` | `reputation.abuseIPDBKey` (see [IP reputation lookup](#ip-reputation-lookup-optional)) |
@@ -1878,6 +2281,11 @@ Override individual scalar settings without a mounted file:
 | `MIKROVIEW_AUTH_SESSION_TTL` | `auth.sessionTTL` |
 | `MIKROVIEW_ENTITIES_STORE_PATH` | `entities.storePath` (see [Entities](#entities-ui-managed-hostruleport-labels-and-tags-optional)) |
 | `MIKROVIEW_AUDIT_STORE_PATH` | `audit.storePath` (see [Audit log](#audit-log-admin-action-accountability-optional)) |
+| `MIKROVIEW_WATCHLIST_STORE_PATH` | `watchlist.storePath` (see [Watchlist](#watchlist-optional)) |
+| `MIKROVIEW_WATCHLIST_MATCH_LOG_PATH` | `watchlist.matchLogPath` |
+| `MIKROVIEW_WATCHLIST_MATCH_LOG_CAPACITY` | `watchlist.matchLogCapacity` |
+| `MIKROVIEW_WATCHLIST_MATCH_LOG_RETENTION` | `watchlist.matchLogRetention` |
+| `MIKROVIEW_WATCHLIST_SUGGESTIONS_STORE_PATH` | `watchlist.suggestionsStorePath` (see [Suggested watchlist entries](#suggested-watchlist-entries-issue-243)) |
 | `MIKROVIEW_AUTH_TOKENS_STORE_PATH` | `auth.tokensStorePath` (see [API tokens](#api-tokens-read-only)) |
 | `MIKROVIEW_TLS_ENABLED` | `tls.enabled` (see [TLS](#tls)) |
 | `MIKROVIEW_TLS_CERT_FILE` | `tls.certFile` |
@@ -2022,6 +2430,13 @@ Three things worth knowing:
   start.** It does not silently fall back to the JSON files — that would
   quietly run your deployment on stale local accounts, possibly with a
   different admin, and nothing would look wrong.
+- **One exception: the watchlist match log is not migrated.** Every
+  other store's JSON document round-trips byte-identically into
+  Postgres; the match log's append-only line format doesn't fit that
+  path, and it starts empty on Postgres instead — said in the startup
+  log, not left to be discovered as missing history. The old
+  `matchlog.jsonl` is untouched and still readable if you revert
+  `postgres.dsnFile`. See [Watchlist](#watchlist-optional).
 
 ### Watching for schema changes on upgrade
 
@@ -2066,8 +2481,9 @@ before it could reach a database at all.
 
 ## CLI flags (local development)
 
-`-version`, `-syslog-udp`, `-syslog-tcp`, `-http`, `-http-redirect`,
-`-retention`, `-max-events`, `-geoip-db` — see `go run . -h`. Devices,
+`-version`, `-syslog-tls`, `-http`,
+`-http-redirect`, `-retention`, `-max-memory`, `-geoip-db` — see
+`go run . -h`. Devices,
 rule/host names, and auth config can only be set via YAML/env, not
 flags.
 
@@ -2084,13 +2500,13 @@ exits, rather than starting the server. See
 | `GET /ca.crt` | mikroview's self-generated CA certificate, unauthenticated -- only present when TLS is on and mikroview generated its own CA (never for a supplied cert or `tls.enabled: false`); see [TLS](#tls) |
 | `GET /api/events` | filtered, windowed historical query (see below) |
 | `GET /api/devices` | known devices (configured + auto-discovered), each with a `status` of `live`/`stale`/`never_seen` (issue #98, see [Behavioral flags](#behavioral-flags-optional-on-by-default)'s "Device silence" entry) -- feeds the Fleet view |
-| `GET /api/critical-ports` | the configured `flags.criticalPorts` list -- feeds the "Control ports" tracking tab (issue #34), open to any signed-in user, not admin-gated |
 | `GET /api/rules` | every rule label mikroview has ever seen fire, with first/last-seen time and count (`internal/rules.Store`) -- the "discovered but unnamed rules" source for the Entities panel (see [Entities](#entities-ui-managed-hostruleport-labels-and-tags-optional)), open to any signed-in user, not admin-gated |
 | `GET /api/stats` | totals, per-action counts, rolling events/sec |
 | `GET /api/ws` | live-tail WebSocket feed |
 | `GET /api/lookup/ip/{ip}` | on-demand reputation/threat-intel lookup for one public IP (see [IP reputation lookup](#ip-reputation-lookup-optional)) |
 | `GET /api/flags` | active + cleared behavioral flags, plus the last hour of newly-raised-episode counts by type at 1-minute resolution (issue #100, feeds the dashboard's flags-over-time chart) (see [Behavioral flags](#behavioral-flags-optional-on-by-default)) |
 | `POST /api/flags/{id}/clear` | mark one flag as cleared |
+| `POST /api/flags/clear-all` | clear every currently-active flag in one request -- regular clears only, never creates an exclusion. Audit-logged once per call |
 | `POST /api/flags/{id}/clear-permanent` | admin-only: clear one flag *and* permanently exclude its (detector, target) pair going forward. Audit-logged |
 | `GET /api/flags/exclusions` | admin-only: every currently-excluded (detector, target) pair |
 | `DELETE /api/flags/exclusions/{id}` | admin-only: remove one exclusion, letting that pair raise again |
@@ -2100,6 +2516,18 @@ exits, rather than starting the server. See
 | `POST /api/entities` | admin-only: create or replace (upsert) one entity, identified by `(type, key)` in the JSON body |
 | `DELETE /api/entities` | admin-only: remove the entity identified by `(type, key)` in the JSON body |
 | `GET /api/audit` | admin-only: a windowed slice of the admin action audit log (see [Audit log](#audit-log-admin-action-accountability-optional)), newest activity last, accepting `since`/`until`/`limit` query params like `GET /api/events` |
+| `GET /api/watchlist/entries` | admin-only: every watchlist entry (see [Watchlist](#watchlist-optional)) |
+| `POST /api/watchlist/entries` | admin-only: create one entry |
+| `PUT /api/watchlist/entries/{id}` | admin-only: replace one entry's name/source/destination/ports/invert/includeStructuralNoise -- never its Permitted/Observed state, which only the two endpoints below can change |
+| `DELETE /api/watchlist/entries/{id}` | admin-only: remove one entry |
+| `POST /api/watchlist/entries/{id}/promote` | admin-only: move one or more observed destinations into that entry's Permitted set |
+| `POST /api/watchlist/entries/{id}/observing` | admin-only: turn an inverted entry's observe mode on or off |
+| `GET /api/watchlist/matches` | a windowed query over the persisted match log, by `mac`/`ip`/`since`/`until`/`limit` -- open to any signed-in user and reachable via a read-only API token, same tier as `/api/events`/`/api/flags`/`/api/stats`/`/api/devices` |
+| `GET /api/suggestions` | admin-only: every suggested watchlist entry (see [Suggested watchlist entries](#suggested-watchlist-entries-issue-243)), optionally filtered with `?status=off\|on\|hide` |
+| `POST /api/suggestions/{id}/accept` | admin-only: accept an undecided suggestion, creating a real watchlist entry |
+| `POST /api/suggestions/{id}/hide` | admin-only: decline an undecided suggestion |
+| `POST /api/suggestions/{id}/unhide` | admin-only: return a hidden suggestion to undecided |
+| `POST /api/suggestions/reset` | admin-only, destructive: wipes the entire watchlist and regenerates suggestions from scratch -- requires `{"confirm": true}` in the request body |
 | `GET /api/auth/session` | current auth state (setup-required / authenticated / not) -- always 200, never gated |
 | `POST /api/auth/register` | create the first (admin) account -- only while zero accounts exist |
 | `POST /api/auth/login` | sign in, sets the session cookie |
@@ -2154,7 +2582,7 @@ truncated by retention.
 
 The initial page load and any "load older" request go through
 `GET /api/events`, filtered **server-side** against the full retained
-buffer (up to `store.maxEvents` / `store.retention`) — this keeps the
+buffer (up to `store.maxMemory` / `store.retention`) — this keeps the
 browser from ever having to download more than it needs.
 
 The WebSocket at `/api/ws`, by contrast, pushes **every** new event to

@@ -344,6 +344,35 @@ this survey were run by hand and are not yet in
 `scripts/live-routeros-step0.sh`. Everything in sections 1, 3, 4, 5 and 6
 is. Closing that gap is outstanding work, not a completed claim.
 
+**Update, 2026-08-08: the production TLS syslog listener from #188 was
+verified end-to-end against a real router**, not just the manual probe
+above that established the transport was *possible*. With
+`internal/syslog.ListenTLS` running (via `MIKROVIEW_LISTEN_SYSLOG_TLS`,
+started because `tls.enabled` is true), a booted CHR 7.23.3 was pointed
+at it:
+
+```
+/system logging action set remote remote=192.168.11.30 remote-port=16803 remote-protocol=tls check-certificate=yes
+/system logging add topics=info action=remote
+:log info "mv-tls-live-check-1786178557"
+```
+
+after importing mikroview's CA the same way the HTTPS path above does
+(`/tool fetch .../ca.crt check-certificate=no`, then
+`/certificate import`). Both the rule-creation system log line and the
+marker message arrived intact through `GET /api/events`:
+
+```json
+{"raw": "system,info log rule added by console:admin+ct200w@ttyS0 (*5 = /system logging add action=remote topics=info)"}
+{"raw": "script,info mv-tls-live-check-1786178557"}
+```
+
+`sourceIp` for both is the fixture's own host address, not the router's
+-- an artifact of QEMU's user-mode networking (SLIRP) NATing the guest's
+outbound connections through the host, the same quirk the HTTPS checks
+above are subject to, not something specific to syslog. This is a
+fixture-networking property, not a finding about RouterOS.
+
 ## 3. `:serialize to=json` is native from 7.13, and absent before it
 
 7.12 answers `bad command name serialize`; 7.13 does not. **RouterOS 7.13

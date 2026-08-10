@@ -5,31 +5,91 @@
   // action here is a human reviewing and clearing a flag, never mikroview
   // acting on traffic itself.
   import { flagsState, extractSourceIp } from '../lib/flags.svelte'
-  import { exclusionsState } from '../lib/exclusions.svelte'
   import { appState } from '../lib/state.svelte'
   import { authState } from '../lib/auth.svelte'
-  import { formatHM, countryFlag } from '../lib/format'
+  import { formatHM, countryFlag, isPublicIp } from '../lib/format'
+  import { flagLayoutState, type FlagColumns } from '../lib/flagLayout.svelte'
+  import { viewportState } from '../lib/viewport.svelte'
   import ReputationDetails from './ReputationDetails.svelte'
   import BarList from './BarList.svelte'
+  import IpInvestigateButton from './IpInvestigateButton.svelte'
   import type { Flag, FlagType } from '../lib/types'
 
   // Same gate NavMenu uses for the Detectors view.
   const isAdminOrOpen = $derived(authState.state === 'authenticated' && authState.role === 'admin')
 
-  let showExclusions = $state(false)
-  let removingExclusion = $state<string | null>(null)
+  // The stored preference collapses to 1 below the shared mobile
+  // breakpoint regardless of what's selected (issue #199's responsive
+  // floor) -- computed here in JS rather than as a CSS media query, so
+  // it reuses viewportState's one 700px breakpoint (the same value
+  // NavMenu/Toolbar/ThemeMenu already switch on) instead of a second
+  // hardcoded copy of it, and so the *card* content also reverts to its
+  // full, non-compact detail at exactly the width the grid itself
+  // renders as one column. A CSS-only floor would narrow the grid but
+  // leave the compact card styling active, which is the "unusably
+  // narrow card" the floor exists to prevent, just moved one level down.
+  const effectiveColumns = $derived<FlagColumns>(viewportState.isMobile ? 1 : flagLayoutState.columns)
+  const compact = $derived(effectiveColumns > 1)
 
-  function toggleExclusions() {
-    showExclusions = !showExclusions
-    if (showExclusions) exclusionsState.refresh()
+  // Which flag's split-Clear dropdown is open, if any -- one shared id
+  // rather than per-card state, since at most one can be open at a time
+  // and this list can be long. Closed on an outside click, Escape, or
+  // picking the menu item (issue #198).
+  let openClearMenuFor: string | null = $state(null)
+
+  function toggleClearMenu(id: string) {
+    openClearMenuFor = openClearMenuFor === id ? null : id
   }
 
-  async function removeExclusion(id: string) {
-    removingExclusion = id
+  function onDocClickCloseClearMenu(e: MouseEvent) {
+    if (!(e.target as HTMLElement).closest('.split-clear')) openClearMenuFor = null
+  }
+
+  function onKeydownCloseClearMenu(e: KeyboardEvent) {
+    if (e.key === 'Escape') openClearMenuFor = null
+  }
+
+  $effect(() => {
+    if (!openClearMenuFor) return
+    document.addEventListener('click', onDocClickCloseClearMenu)
+    document.addEventListener('keydown', onKeydownCloseClearMenu)
+    return () => {
+      document.removeEventListener('click', onDocClickCloseClearMenu)
+      document.removeEventListener('keydown', onKeydownCloseClearMenu)
+    }
+  })
+
+  // "Clear all" (issue #198): first click arms it (red, "Confirm"); the
+  // second click on that same now-red button is the confirmation -- no
+  // modal, because the second click *is* the deliberate second action.
+  // Disarms itself after CLEAR_ALL_ARM_MS or when the pointer/focus
+  // leaves, so an armed-but-abandoned state can't be triggered later by
+  // an unrelated click landing back on the button.
+  const CLEAR_ALL_ARM_MS = 4000
+  let clearAllArmed = $state(false)
+  let clearAllArmTimer: ReturnType<typeof setTimeout> | null = null
+  let clearAllBusy = $state(false)
+
+  function disarmClearAll() {
+    clearAllArmed = false
+    if (clearAllArmTimer) {
+      clearTimeout(clearAllArmTimer)
+      clearAllArmTimer = null
+    }
+  }
+
+  async function onClearAllClick() {
+    if (!clearAllArmed) {
+      clearAllArmed = true
+      clearAllArmTimer = setTimeout(disarmClearAll, CLEAR_ALL_ARM_MS)
+      return
+    }
+    disarmClearAll()
+    clearAllBusy = true
     try {
-      await exclusionsState.remove(id)
+      await flagsState.clearAll()
     } finally {
-      removingExclusion = null
+      clearAllBusy = false
     }
   }
 
@@ -62,6 +122,10 @@
     )
   }
 
+  // Same labels FlagsChart.svelte/Exclusions.svelte use -- duplicated
+  // rather than shared, matching how ACTION_LABELS is already
+  // independently duplicated in both EventsChart.svelte and
+  // Dashboard.svelte in this codebase.
   const TYPE_LABELS: Record<FlagType, string> = {
     port_scan: 'Port scan',
     activity_spike: 'Activity spike',
@@ -168,6 +232,24 @@
     return f.type !== 'global_spike' && f.type !== 'new_device'
   }
 
+  // The IP for a live abuse-check button on this card (issue #213), or
+  // null if there is none worth checking. extractSourceIp already
+  // screens out every target shape that isn't a bare IP (a rule label,
+  // "port N", "global", a MAC) -- see its own doc comment -- so most
+  // exclusions fall out of that for free rather than needing a second
+  // type-by-type list to keep in step with filterToTarget's.
+  //
+  // device_silence is the one type that needs an explicit exclusion on
+  // top of the shape check: an auto-discovered device's ID defaults to
+  // its source IP (internal/device.Registry.Resolve), so its target can
+  // be IP-shaped too -- but it identifies the device that went quiet,
+  // not a source worth threat-checking, and #213 excludes it by name.
+  function investigateIp(f: Flag): string | null {
+    if (f.type === 'device_silence') return null
+    const ip = extractSourceIp(f.target)
+    return ip && isPublicIp(ip) ? ip : null
+  }
+
   function filterToTarget(f: Flag) {
     switch (f.type) {
       case 'port_scan':
@@ -229,8 +311,9 @@
 <div class="flags scrollbar">
   <BarList title="Active flags by type" rows={typeBreakdown} emptyMessage="Nothing flagged right now." />
 
-  {#snippet flagCard(f: Flag)}
-    <li class="card">
+  {#snippet flagCard(f: Flag, compactCard: boolean = false)}
+    {@const investigate = investigateIp(f)}
+    <li class="card" class:compact={compactCard}>
       <div class="card-main">
         <span class="type">{TYPE_LABELS[f.type]}</span>
         {#if f.confidence != null}
@@ -248,13 +331,32 @@
         {:else}
           <span class="target target-global">network-wide</span>
         {/if}
+        {#if investigate}
+          <!-- A fresh check, not the frozen raise-time snapshot below
+               (issue #213): raw events aren't persisted, so an old or
+               cleared flag often has nothing left in the live view to
+               click into -- this is what makes "what does it look like
+               now" reachable without leaving the page. Reuses the exact
+               component/lookup path EventRow/EventDetailSheet already
+               use; the snapshot in Details stays as-is and answers a
+               different question ("what did it look like when it
+               fired"). -->
+          <IpInvestigateButton ip={investigate} />
+        {/if}
         {#if f.country}
           <span class="country" title={f.country}>{countryFlag(f.country)}</span>
         {/if}
       </div>
-      <p class="detail">{f.detail}</p>
+      <!-- Compact (2/3 columns, issue #199): the detail line truncates to
+           one line rather than wrapping and pushing the card taller than
+           its neighbours in the same grid row -- the type/target above
+           and the expand affordance below stay fully visible either way,
+           so nothing identifying is lost, only the free-text summary. -->
+      <p class="detail" title={compactCard ? f.detail : undefined}>{f.detail}</p>
       <div class="meta">
-        <span>first seen {formatHM(f.firstSeen)}</span>
+        {#if !compactCard}
+          <span>first seen {formatHM(f.firstSeen)}</span>
+        {/if}
         <span>last seen {formatHM(f.lastSeen)}</span>
         <span>fired {f.count}×</span>
         {#if hasExpandableDetail(f)}
@@ -292,35 +394,102 @@
         </div>
       {/if}
       <div class="actions">
-        <button class="clear" onclick={() => clear(f.id)}>Clear</button>
         {#if isAdminOrOpen}
-          <!-- Admin-only, matching the backend's own gate on
-               POST /api/flags/{id}/clear-permanent: a permanent
-               exclusion suppresses detection until someone undoes it,
-               unlike the plain Clear beside it. Hidden rather than
-               disabled for non-admins, since a disabled control here
-               would just advertise an action they can't take. -->
-          <button
-            class="clear clear-permanent"
-            onclick={() => clearPermanent(f.id)}
-            title="Clear this flag and permanently stop {TYPE_LABELS[f.type]} from ever raising again for {f.target} -- reversible from Manage exclusions below."
-          >
-            Clear, never flag again
-          </button>
+          <!-- Split button: the main segment is exactly today's Clear.
+               The arrow segment is admin-only, matching the backend's
+               own gate on POST /api/flags/{id}/clear-permanent -- a
+               permanent exclusion suppresses detection until someone
+               undoes it, unlike the plain Clear beside it. A non-admin
+               gets a plain Clear button with no arrow at all (below),
+               rather than a disabled one that would just advertise an
+               action they can't take (issue #198). -->
+          <div class="split-clear" class:menu-open={openClearMenuFor === f.id}>
+            <button class="clear split-main" onclick={() => clear(f.id)}>Clear</button>
+            <button
+              class="clear split-arrow"
+              aria-haspopup="true"
+              aria-expanded={openClearMenuFor === f.id}
+              aria-label="More clear options for this flag"
+              onclick={() => toggleClearMenu(f.id)}
+            >
+              ▾
+            </button>
+            {#if openClearMenuFor === f.id}
+              <div class="split-menu" role="menu">
+                <button
+                  class="split-menu-item"
+                  role="menuitem"
+                  title="Clear this flag and permanently stop {TYPE_LABELS[f.type]} from ever raising again for {f.target} -- reversible from the Exclusions page (see the menu)."
+                  onclick={() => {
+                    openClearMenuFor = null
+                    clearPermanent(f.id)
+                  }}
+                >
+                  Permanently clear
+                </button>
+              </div>
+            {/if}
+          </div>
+        {:else}
+          <button class="clear" onclick={() => clear(f.id)}>Clear</button>
         {/if}
       </div>
     </li>
   {/snippet}
 
   <section aria-labelledby="active-heading">
-    <h2 id="active-heading">Active ({active.length})</h2>
+    <div class="active-header">
+      <h2 id="active-heading">Active ({active.length})</h2>
+      <div class="header-controls">
+        <!-- 1/2/3-column density (issue #199), persisted per browser.
+             Below the shared mobile breakpoint this stays selectable but
+             stops changing the render -- see effectiveColumns' own
+             comment for why the floor lives there rather than only in a
+             media query. -->
+        <div class="layout-select" role="radiogroup" aria-label="Card layout columns">
+          {#each [1, 2, 3] as const as n (n)}
+            <button
+              class="layout-option"
+              class:active={flagLayoutState.columns === n}
+              role="radio"
+              aria-checked={flagLayoutState.columns === n}
+              onclick={() => flagLayoutState.set(n)}
+              title="{n} column{n > 1 ? 's' : ''}"
+            >
+              {n}
+            </button>
+          {/each}
+        </div>
+        {#if active.length > 0}
+          <!-- Click-again confirm, not a modal: the second click on this
+               same now-red button is the confirmation, which is what
+               makes a single accidental click harmless while still
+               asserting real intent for the second one (issue #198).
+               Regular clears only -- see flagsState.clearAll's doc
+               comment for why there is no permanent variant. -->
+          <button
+            class="clear-all"
+            class:armed={clearAllArmed}
+            disabled={clearAllBusy}
+            onclick={onClearAllClick}
+            onblur={disarmClearAll}
+            onpointerleave={disarmClearAll}
+            title={clearAllArmed
+              ? 'Click again to clear every active flag'
+              : 'Clear every active flag -- regular clears only, click again to confirm'}
+          >
+            {clearAllArmed ? 'Confirm' : 'Clear all'}
+          </button>
+        {/if}
+      </div>
+    </div>
     {#if active.length === 0}
       <p class="empty">Nothing flagged right now.</p>
     {:else}
-      <ul class="list">
+      <ul class="list card-grid" style="--flag-columns: {effectiveColumns}">
         {#each activeItems as item (item.kind === 'group' ? `group:${item.sourceIp}` : item.flag.id)}
           {#if item.kind === 'single'}
-            {@render flagCard(item.flag)}
+            {@render flagCard(item.flag, compact)}
           {:else}
             <li class="card campaign-card">
               <div class="campaign-header">
@@ -348,7 +517,7 @@
               {#if expandedGroup === item.sourceIp}
                 <ul class="list campaign-members">
                   {#each item.flags as f (f.id)}
-                    {@render flagCard(f)}
+                    {@render flagCard(f, compact)}
                   {/each}
                 </ul>
               {/if}
@@ -364,9 +533,12 @@
     {#if cleared.length === 0}
       <p class="empty">No cleared flags yet.</p>
     {:else}
-      <ul class="list">
+      <!-- Same column setting as the active list above (issue #199's
+           "secondary" note) -- no independent control here, one
+           preference for the whole page reads simpler than two. -->
+      <ul class="list card-grid" style="--flag-columns: {effectiveColumns}">
         {#each cleared as f (f.id)}
-          <li class="card cleared-card">
+          <li class="card cleared-card" class:compact>
             <div class="card-main">
               <span class="type">{TYPE_LABELS[f.type]}</span>
               <span class="target">{f.target === 'global' ? 'network-wide' : f.target}</span>
@@ -382,41 +554,16 @@
   </section>
 
   {#if isAdminOrOpen}
-    <section aria-labelledby="exclusions-heading">
-      <div class="exclusions-header">
-        <h2 id="exclusions-heading">Permanent exclusions</h2>
-        <button class="exclusions-toggle" onclick={toggleExclusions}>
-          {showExclusions ? 'Hide' : 'Manage exclusions'}
-        </button>
-      </div>
-      {#if showExclusions}
-        <p class="exclusions-intro">
-          Every (detector, target) pair permanently silenced via "Clear, never flag again" -- removing one here lets
-          it raise normally again, undoing a mistaken exclusion.
-        </p>
-        {#if exclusionsState.list.length === 0}
-          <p class="empty">No permanent exclusions.</p>
-        {:else}
-          <ul class="list">
-            {#each exclusionsState.list as e (e.id)}
-              <li class="card exclusion-card">
-                <div class="card-main">
-                  <span class="type">{TYPE_LABELS[e.type]}</span>
-                  <span class="target">{e.target === 'global' ? 'network-wide' : e.target}</span>
-                </div>
-                <button
-                  class="clear"
-                  disabled={removingExclusion === e.id}
-                  onclick={() => removeExclusion(e.id)}
-                >
-                  {removingExclusion === e.id ? 'Removing…' : 'Remove exclusion'}
-                </button>
-              </li>
-            {/each}
-          </ul>
-        {/if}
-      {/if}
-    </section>
+    <!-- Moved to its own page (issue #207): reaching and reviewing
+         exclusions underneath a potentially large active-flags list was
+         a pain. Left as a pointer here rather than removed outright, so
+         the path stays discoverable from where the permanent-clear
+         action itself lives. -->
+    <p class="exclusions-pointer">
+      Permanently-excluded (detector, target) pairs are reviewed on the
+      <button class="link" onclick={() => (appState.view = 'exclusions')}>Exclusions</button>
+      page (also in the menu).
+    </p>
   {/if}
 </div>
 
@@ -455,6 +602,19 @@
     gap: 8px;
   }
 
+  /* 1/2/3-column density (issue #199). Only the two top-level lists
+     (active, cleared) get this -- .campaign-members (a campaign's
+     expanded member list, nested one level inside a single grid cell)
+     stays the plain flex column above regardless of the page's column
+     setting, since it's already-indented content, not another row of
+     the same grid. minmax(0, 1fr), not 1fr alone, so a long unbroken
+     target/detail string can't force a column wider than its share and
+     blow out the grid -- a bare 1fr lets content overflow its track. */
+  .card-grid {
+    display: grid;
+    grid-template-columns: repeat(var(--flag-columns, 1), minmax(0, 1fr));
+  }
+
   .card {
     position: relative;
     background: var(--bg-elevated);
@@ -463,18 +623,18 @@
     padding: 10px 150px 10px 12px;
   }
 
+  /* Compact (2/3 columns, issue #199). The 150px right-reserve above
+     exists only to make room for .actions floating in the corner --
+     narrower cards don't have that much spare width to give up, so
+     .actions moves into normal flow at the bottom instead (see below)
+     and the reserve is dropped along with it. */
+  .card.compact {
+    padding: 8px 10px;
+  }
+
   .cleared-card {
     opacity: 0.7;
     padding-right: 12px;
-  }
-
-  .exclusion-card {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 12px;
-    padding-right: 12px;
-    flex-wrap: wrap;
   }
 
   /* No single Clear action at the campaign level (clearing happens per
@@ -678,6 +838,24 @@
     width: 138px;
   }
 
+  /* Flows below the card content instead of floating in the corner --
+     a fixed-width floating box is what the 150px reserve above was
+     for, and a compact card doesn't have that to spare. Full-width
+     here also means the split button (see .split-clear) always has
+     room regardless of how narrow the column gets, rather than needing
+     its own per-density size math. */
+  .card.compact .actions {
+    position: static;
+    width: auto;
+    flex-direction: row;
+    margin-top: 8px;
+  }
+
+  .card.compact .actions .split-clear,
+  .card.compact .actions > .clear {
+    flex: 1;
+  }
+
   .clear {
     background: transparent;
     border: 1px solid var(--border);
@@ -698,51 +876,165 @@
     cursor: default;
   }
 
-  /* Distinct (not identical to Clear) so a permanent action reads as
-     more deliberate than the plain, fully-reversible Clear next to it --
-     a warning tint rather than a scarier confirmation dialog, since
-     it's still undoable from Manage exclusions below (admin only). */
-  .clear-permanent {
-    border-color: var(--drop);
-    color: var(--drop);
+  /* Split button: .split-main is today's plain Clear, unchanged in
+     behaviour and appearance. .split-arrow opens the dropdown holding
+     the one permanent action -- kept visually distinct (the drop tint)
+     so its warning colour, not just its position, marks it as the more
+     deliberate one. */
+  .split-clear {
+    position: relative;
+    display: flex;
   }
 
-  .clear-permanent:hover {
+  .split-main {
+    flex: 1;
+    border-top-right-radius: 0;
+    border-bottom-right-radius: 0;
+    border-right: none;
+  }
+
+  .split-arrow {
+    flex: none;
+    width: 26px;
+    padding: 5px 0;
+    font-size: 10px;
+    border-top-left-radius: 0;
+    border-bottom-left-radius: 0;
+    color: var(--drop);
+    border-color: var(--drop);
+  }
+
+  .split-arrow:hover,
+  .split-clear.menu-open .split-arrow {
     background: var(--drop-bg);
-    color: var(--drop);
-    border-color: var(--drop);
   }
 
-  .exclusions-header {
+  .split-menu {
+    position: absolute;
+    top: calc(100% + 4px);
+    right: 0;
+    min-width: 160px;
+    background: var(--bg-elevated);
+    border: 1px solid var(--border);
+    border-radius: 7px;
+    padding: 4px;
+    box-shadow: 0 12px 32px -8px rgba(0, 0, 0, 0.4);
+    z-index: 5;
+  }
+
+  .split-menu-item {
+    display: block;
+    width: 100%;
+    text-align: left;
+    background: transparent;
+    border: none;
+    color: var(--drop);
+    padding: 7px 9px;
+    border-radius: 5px;
+    font-size: 12px;
+    white-space: nowrap;
+    cursor: pointer;
+  }
+
+  .split-menu-item:hover {
+    background: var(--drop-bg);
+  }
+
+  .active-header {
     display: flex;
     align-items: center;
     justify-content: space-between;
     gap: 10px;
     margin-bottom: 10px;
+    flex-wrap: wrap;
   }
 
-  .exclusions-header h2 {
+  .active-header h2 {
     margin: 0;
   }
 
-  .exclusions-toggle {
+  .header-controls {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+
+  .layout-select {
+    display: flex;
+    border: 1px solid var(--border);
+    border-radius: 5px;
+    overflow: hidden;
+  }
+
+  .layout-option {
+    background: transparent;
+    border: none;
+    border-left: 1px solid var(--border);
+    color: var(--fg-muted);
+    padding: 5px 11px;
+    font-size: 12px;
+    font-variant-numeric: tabular-nums;
+    cursor: pointer;
+  }
+
+  .layout-option:first-child {
+    border-left: none;
+  }
+
+  .layout-option:hover {
+    color: var(--fg);
+    background: var(--bg-hover);
+  }
+
+  .layout-option.active {
+    color: var(--accent);
+    background: var(--accent-bg);
+    font-weight: 600;
+  }
+
+  .clear-all {
     background: transparent;
     border: 1px solid var(--border);
     color: var(--fg-muted);
     border-radius: 5px;
-    padding: 5px 10px;
+    padding: 6px 12px;
     font-size: 12px;
+    white-space: nowrap;
   }
 
-  .exclusions-toggle:hover {
+  .clear-all:hover {
     color: var(--fg);
     border-color: var(--fg-muted);
   }
 
-  .exclusions-intro {
-    margin: 0 0 10px;
+  /* Armed state: the button itself turns into the confirmation -- no
+     modal, because this red/"Confirm" state IS the second, deliberate
+     step (issue #198). */
+  .clear-all.armed {
+    background: var(--drop-bg);
+    color: var(--drop);
+    border-color: var(--drop);
+    font-weight: 600;
+  }
+
+  .clear-all:disabled {
+    opacity: 0.6;
+    cursor: default;
+  }
+
+  .exclusions-pointer {
+    margin: 0;
     font-size: 12px;
     color: var(--fg-muted);
-    max-width: 70ch;
+  }
+
+  .link {
+    background: none;
+    border: none;
+    padding: 0;
+    font: inherit;
+    color: var(--accent);
+    text-decoration: underline;
+    cursor: pointer;
   }
 </style>

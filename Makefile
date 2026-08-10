@@ -18,7 +18,7 @@ test:
 	cd frontend && npx svelte-check --tsconfig ./tsconfig.app.json
 
 dev-backend:
-	go run . -syslog-udp :1514 -syslog-tcp :1514 -http :8080
+	go run . -http :8080
 
 dev-frontend:
 	cd frontend && npm run dev

@@ -3,6 +3,10 @@
 /frontend/node_modules/
 /frontend/dist/
 /tools/screenshots/node_modules/
+# There is no npm project at the repo root, but a vite/vitest run whose
+# base resolves here anyway drops a node_modules/.vite cache. Ignored so
+# that stray never reaches a commit.
+/node_modules/
 /tools/screenshots/mobile-check-out/
 /mikroview
 /deploy/config.yaml

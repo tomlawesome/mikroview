@@ -86,14 +86,21 @@ var authzMatrix = []routeExpectation{
 	{http.MethodGet, "/api/events", accessUser,
 		"core read: the live firewall event feed"},
 	{http.MethodGet, "/api/devices", accessUser, "core read"},
+	{http.MethodGet, "/api/watchlist/matches", accessUser,
+		"a read over already-collected evidence, same tier as events/flags/stats/devices above -- also reachable via a read-only API token (readOnlyRoutes), since birdcage-style external correlation by source is the reason internal/matchlog exists"},
 	{http.MethodGet, "/api/rules", accessUser, "core read"},
-	{http.MethodGet, "/api/critical-ports", accessUser, "core read"},
 	{http.MethodGet, "/api/stats", accessUser, "core read"},
 	{http.MethodGet, "/api/ws", accessUser,
 		"live tail; additionally same-origin checked (see checkOrigin)"},
 	{http.MethodGet, "/api/lookup/ip/{ip}", accessUser,
 		"on-demand reputation lookup, proxied so no API key reaches the browser"},
+	{http.MethodGet, "/api/routeros/{device}/rules", accessUser,
+		"the pushed firewall rule table (#186 step 4) -- same tier as the event stream it annotates: rule comments/chains are already visible in events, and the lookup button is a user-facing affordance"},
+	{http.MethodGet, "/api/routeros/{device}/nat", accessUser,
+		"the pushed NAT table, same reasoning as the rules row above"},
 	{http.MethodGet, "/api/flags", accessUser, "core read"},
+	{http.MethodPost, "/api/flags/clear-all", accessUser,
+		"same reversibility as the per-flag clear below, at bulk -- regular clears only, never creates an exclusion"},
 	{http.MethodPost, "/api/flags/{id}/clear", accessUser,
 		"reversible: a cleared flag raises again on the next matching event, so any user may dismiss noise"},
 
@@ -111,6 +118,30 @@ var authzMatrix = []routeExpectation{
 	{http.MethodGet, "/api/entities", accessAdmin, "admin-managed labels/tags"},
 	{http.MethodPost, "/api/entities", accessAdmin, "admin-managed labels/tags"},
 	{http.MethodDelete, "/api/entities", accessAdmin, "admin-managed labels/tags"},
+
+	{http.MethodGet, "/api/watchlist/entries", accessAdmin,
+		"admin-managed watchlist scope (#243), same tier as entities above"},
+	{http.MethodPost, "/api/watchlist/entries", accessAdmin,
+		"creates an entry -- a non-admin should not be able to add new server-side traffic surveillance"},
+	{http.MethodPut, "/api/watchlist/entries/{id}", accessAdmin,
+		"same reasoning as create"},
+	{http.MethodDelete, "/api/watchlist/entries/{id}", accessAdmin,
+		"same reasoning as create"},
+	{http.MethodPost, "/api/watchlist/entries/{id}/promote", accessAdmin,
+		"changes what future traffic counts as expected for a device -- same weight as creating the entry"},
+	{http.MethodPost, "/api/watchlist/entries/{id}/observing", accessAdmin,
+		"same reasoning as promote"},
+
+	{http.MethodGet, "/api/suggestions", accessAdmin,
+		"a suggestion's Justification names a specific rule/device -- same tier as the watchlist entries it can become"},
+	{http.MethodPost, "/api/suggestions/{id}/accept", accessAdmin,
+		"creates a real watchlist entry -- same reasoning as POST /api/watchlist/entries"},
+	{http.MethodPost, "/api/suggestions/{id}/hide", accessAdmin,
+		"same tier as accept: declining a suggestion is the same class of decision"},
+	{http.MethodPost, "/api/suggestions/{id}/unhide", accessAdmin,
+		"same reasoning as hide"},
+	{http.MethodPost, "/api/suggestions/reset", accessAdmin,
+		"destructively wipes the entire watchlist -- the most dangerous single endpoint in this feature, strictly admin"},
 	{http.MethodPost, "/api/auth/oidc/link", accessUser,
 		"converts your OWN account to SSO-only; the target comes from the session, never the request, so a user can only ever affect themselves"},
 	{http.MethodPost, "/api/auth/users", accessAdmin, "account creation"},
@@ -242,7 +273,7 @@ func doRouteRequest(t *testing.T, c *http.Client, base string, r routeExpectatio
 	t.Helper()
 
 	path := r.path
-	for _, wildcard := range []string{"{id}", "{ip}", "{name}"} {
+	for _, wildcard := range []string{"{id}", "{ip}", "{name}", "{device}"} {
 		path = strings.Replace(path, wildcard, "matrix-probe-nonexistent", 1)
 	}
 

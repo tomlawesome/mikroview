@@ -84,7 +84,7 @@ to keep it AGPL and publish your source (see [LICENSE](LICENSE)).
 
 If an exception is ever made and a pull request is accepted, then by
 submitting it you confirm the work is yours to contribute, and you
-license it under the AGPL v3.0 **and** additionally grant Tom Lawson the
+license it under the AGPL v3.0 **and** additionally grant Tom Bridgwater-Lawson the
 right to license it under other terms. That second part is what keeps
 the commercial licence possible (see
 [COMMERCIAL-LICENSE.md](COMMERCIAL-LICENSE.md)). You keep the copyright
