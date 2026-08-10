@@ -98,7 +98,7 @@ const (
 	TypeUnexpectedMailSender Type = "unexpected_mail_sender"
 	// TypeKnownBadIP (issue #113 Part B): a source IP matching a
 	// locally-cached CIDR range from a vetted, curated threat-intel feed
-	// (Spamhaus DROP/EDROP by default -- see internal/blocklist's doc
+	// (Spamhaus DROP by default -- see internal/blocklist's doc
 	// comment for the full menu and why an arbitrary user-supplied URL
 	// isn't offered instead). Raised directly, independent of any
 	// behavioral threshold -- presence on a list Spamhaus is confident

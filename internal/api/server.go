@@ -112,6 +112,15 @@ type Server struct {
 	// session regardless of deployment state, so "which build am I
 	// running" is checkable without any special access.
 	Version string
+	// ThirdPartyNotices is THIRD-PARTY-NOTICES.md, embedded in the
+	// binary at build time (see notices.go) and served verbatim by
+	// handleThirdPartyNotices. Every dependency compiled into this
+	// binary ships under a licence (MIT, BSD-3-Clause, ISC,
+	// Apache-2.0) requiring its copyright notice and licence text to
+	// accompany a binary distribution -- serving it here is how a user
+	// of a running instance receives them without having to go and find
+	// the source separately.
+	ThirdPartyNotices string
 	// ConfigProblems are non-fatal configuration problems found at
 	// startup, where a safe default was substituted for a bad value.
 	// Surfaced to admins in the UI because a startup log line is seen
@@ -233,6 +242,8 @@ func (s *Server) routes() []route {
 		{http.MethodPost, "/api/suggestions/{id}/accept", s.handleSuggestionsAccept},
 		{http.MethodPost, "/api/suggestions/{id}/hide", s.handleSuggestionsHide},
 		{http.MethodPost, "/api/suggestions/{id}/unhide", s.handleSuggestionsUnhide},
+
+		{http.MethodGet, "/api/third-party-notices", s.handleThirdPartyNotices},
 
 		{http.MethodGet, "/api/audit", s.handleAuditList},
 		{http.MethodGet, "/api/config/problems", s.handleConfigProblems},
