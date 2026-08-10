@@ -361,8 +361,18 @@ type Watchlist struct {
 	// records -- #243 section 3 puts the file backend's realistic range
 	// at ~100k-500k matches; see internal/matchlog.ErrCapacityReached
 	// for what happens once it's reached (refused, not silently
-	// overwritten).
+	// overwritten). File backend only -- the Postgres backend ignores
+	// this and uses MatchLogRetention instead.
 	MatchLogCapacity int `yaml:"matchLogCapacity"`
+	// MatchLogRetention is how long a match is kept, on the Postgres
+	// backend only, once its last activity ages past it -- #243 section
+	// 3's "pragmatically unlimited" record count there, bounded by age
+	// rather than by count the way the file backend is. Enforced by
+	// internal/matchlog.PostgresStore.RunPeriodicPurge, not at write
+	// time. Ignored on the file backend, which has no ageing policy of
+	// its own -- it stops accepting new records at MatchLogCapacity
+	// instead.
+	MatchLogRetention time.Duration `yaml:"matchLogRetention"`
 	// SuggestionsStorePath is where internal/suggest's candidate pool
 	// (#243 slice 5 -- watchlist entries suggested from data RouterOS has
 	// already pushed) persists. Same optional-persistence contract as
@@ -831,6 +841,7 @@ func defaults() Config {
 			StorePath:            DefaultDataDir + "/watchlist.json",
 			MatchLogPath:         DefaultDataDir + "/matchlog.jsonl",
 			MatchLogCapacity:     200_000,
+			MatchLogRetention:    7 * 24 * time.Hour,
 			SuggestionsStorePath: DefaultDataDir + "/suggestions.json",
 		},
 		TLS: TLS{
@@ -1196,6 +1207,11 @@ func applyEnv(cfg *Config) {
 	}
 	if v := os.Getenv("MIKROVIEW_WATCHLIST_SUGGESTIONS_STORE_PATH"); v != "" {
 		cfg.Watchlist.SuggestionsStorePath = v
+	}
+	if v := os.Getenv("MIKROVIEW_WATCHLIST_MATCH_LOG_RETENTION"); v != "" {
+		if d, err := time.ParseDuration(v); err == nil {
+			cfg.Watchlist.MatchLogRetention = d
+		}
 	}
 	if v := os.Getenv("MIKROVIEW_AUTH_TOKENS_STORE_PATH"); v != "" {
 		cfg.Auth.TokensStorePath = v

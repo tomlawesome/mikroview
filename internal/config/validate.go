@@ -95,6 +95,9 @@ var examplesByCode = map[string]string{
 	"CFG-0041": `watchlist:
   matchLogCapacity: 200000`,
 
+	"CFG-0042": `watchlist:
+  matchLogRetention: 168h  # 7 days`,
+
 	"CFG-0020": `auth:
   sessionTTL: 24h`,
 
@@ -224,6 +227,20 @@ func (c *Config) validateWatchlist(warn warnFunc) {
 			fmt.Sprintf("%d", c.Watchlist.MatchLogCapacity),
 			"set a positive number of matches to hold, e.g. 200000")
 	}
+	// MatchLogRetention only takes effect on the Postgres backend (#243
+	// section 3: "pragmatically unlimited" record count there, bounded by
+	// age instead) -- validated unconditionally anyway, the same way
+	// MatchLogCapacity above is validated even though only the file
+	// backend enforces it, so a config that later adopts Postgres doesn't
+	// discover a bad value for the first time at that point.
+	if c.Watchlist.MatchLogRetention <= 0 {
+		was := c.Watchlist.MatchLogRetention
+		c.Watchlist.MatchLogRetention = defaultMatchLogRetention
+		warn("CFG-0042", "watchlist.matchLogRetention",
+			fmt.Sprintf("%s is not a usable retention window -- on Postgres, nothing would be kept", was),
+			c.Watchlist.MatchLogRetention.String(),
+			"set a positive duration such as 168h (7 days)")
+	}
 }
 
 func (c *Config) validateAuth(fatal problemFunc) {
@@ -276,8 +293,9 @@ func (c *Config) validateDevices(fatal problemFunc) {
 // what a fresh install would have used. Restating them would be exactly
 // the kind of quiet drift this whole feature exists to catch.
 var (
-	defaultRetention        = defaults().Store.Retention
-	defaultMaxMemory        = defaults().Store.MaxMemory
-	defaultMatchLogPath     = defaults().Watchlist.MatchLogPath
-	defaultMatchLogCapacity = defaults().Watchlist.MatchLogCapacity
+	defaultRetention         = defaults().Store.Retention
+	defaultMaxMemory         = defaults().Store.MaxMemory
+	defaultMatchLogPath      = defaults().Watchlist.MatchLogPath
+	defaultMatchLogCapacity  = defaults().Watchlist.MatchLogCapacity
+	defaultMatchLogRetention = defaults().Watchlist.MatchLogRetention
 )
