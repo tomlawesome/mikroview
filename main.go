@@ -718,7 +718,7 @@ func main() {
 			case <-ticker.C:
 				func() {
 					defer logging.Recover(spikeLog)
-					globalSpike.Check(st.Stats().EventsPerSecond, time.Now())
+					globalSpike.Check(st.EventsPerSecond(), time.Now())
 				}()
 			}
 		}
