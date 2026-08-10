@@ -17,7 +17,7 @@ listen:
   http: ":9000"
 store:
   retention: 12h
-  maxEvents: 5000
+  maxMemory: 5000000
 devices:
   - id: core
     name: "Core Router"
@@ -32,7 +32,7 @@ devices:
 		if err != nil {
 			t.Fatal(err)
 		}
-		if cfg.Listen.HTTP != ":8080" || cfg.Store.MaxEvents != 200_000 {
+		if cfg.Listen.HTTP != ":8080" || cfg.Store.MaxMemory != 120*1024*1024 {
 			t.Errorf("unexpected defaults: %+v", cfg)
 		}
 	})
@@ -42,7 +42,7 @@ devices:
 		if err != nil {
 			t.Fatal(err)
 		}
-		if cfg.Listen.HTTP != ":9000" || cfg.Store.Retention != 12*time.Hour || cfg.Store.MaxEvents != 5000 {
+		if cfg.Listen.HTTP != ":9000" || cfg.Store.Retention != 12*time.Hour || cfg.Store.MaxMemory != 5_000_000 {
 			t.Errorf("yaml did not override: %+v", cfg)
 		}
 		if len(cfg.Devices) != 1 || cfg.Devices[0].SourceIP != "192.168.1.1" {
@@ -118,6 +118,40 @@ func TestListenHTTPRedirectDefaultsAndOverrides(t *testing.T) {
 		}
 		if cfg.Listen.HTTPRedirect != "" {
 			t.Errorf("Listen.HTTPRedirect = %q, want empty (disabled)", cfg.Listen.HTTPRedirect)
+		}
+	})
+}
+
+func TestListenSyslogTLSDefaultsAndOverrides(t *testing.T) {
+	t.Run("defaults to :6514", func(t *testing.T) {
+		cfg, err := Load("", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if cfg.Listen.SyslogTLS != ":6514" {
+			t.Errorf("Listen.SyslogTLS = %q, want %q", cfg.Listen.SyslogTLS, ":6514")
+		}
+	})
+
+	t.Run("env overrides default", func(t *testing.T) {
+		t.Setenv("MIKROVIEW_LISTEN_SYSLOG_TLS", ":16514")
+		cfg, err := Load("", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if cfg.Listen.SyslogTLS != ":16514" {
+			t.Errorf("Listen.SyslogTLS = %q, want the env value :16514", cfg.Listen.SyslogTLS)
+		}
+	})
+
+	t.Run("flag overrides env, empty string disables it", func(t *testing.T) {
+		t.Setenv("MIKROVIEW_LISTEN_SYSLOG_TLS", ":16514")
+		cfg, err := Load("", []string{"-syslog-tls", ""})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if cfg.Listen.SyslogTLS != "" {
+			t.Errorf("Listen.SyslogTLS = %q, want empty (disabled)", cfg.Listen.SyslogTLS)
 		}
 	})
 }
@@ -484,6 +518,9 @@ func TestDefaultStoragePathsUnderVarLibMikroview(t *testing.T) {
 		"Auth.TokensStorePath":            cfg.Auth.TokensStorePath,
 		"TLS.StorePath":                   cfg.TLS.StorePath,
 		"DeviceMAC.StorePath":             cfg.DeviceMAC.StorePath,
+		"Watchlist.StorePath":             cfg.Watchlist.StorePath,
+		"Watchlist.MatchLogPath":          cfg.Watchlist.MatchLogPath,
+		"Watchlist.SuggestionsStorePath":  cfg.Watchlist.SuggestionsStorePath,
 	}
 	want := map[string]string{
 		"Flags.StorePath":                 "/var/lib/mikroview/flags.json",
@@ -495,6 +532,9 @@ func TestDefaultStoragePathsUnderVarLibMikroview(t *testing.T) {
 		"Auth.TokensStorePath":            "/var/lib/mikroview/tokens.json",
 		"TLS.StorePath":                   "/var/lib/mikroview/tls",
 		"DeviceMAC.StorePath":             "/var/lib/mikroview/mac-registry.json",
+		"Watchlist.StorePath":             "/var/lib/mikroview/watchlist.json",
+		"Watchlist.MatchLogPath":          "/var/lib/mikroview/matchlog.jsonl",
+		"Watchlist.SuggestionsStorePath":  "/var/lib/mikroview/suggestions.json",
 	}
 	for field, got := range cases {
 		if got != want[field] {
@@ -553,6 +593,34 @@ func TestAuditEnvVarOverridesDefault(t *testing.T) {
 	}
 	if cfg.Audit.StorePath != "/data/audit.json" {
 		t.Errorf("Audit.StorePath = %v, want /data/audit.json", cfg.Audit.StorePath)
+	}
+}
+
+func TestWatchlistEnvVarsOverrideDefaults(t *testing.T) {
+	t.Setenv("MIKROVIEW_WATCHLIST_STORE_PATH", "/data/watchlist.json")
+	t.Setenv("MIKROVIEW_WATCHLIST_MATCH_LOG_PATH", "/data/matchlog.jsonl")
+	t.Setenv("MIKROVIEW_WATCHLIST_MATCH_LOG_CAPACITY", "50000")
+	t.Setenv("MIKROVIEW_WATCHLIST_SUGGESTIONS_STORE_PATH", "/data/suggestions.json")
+	t.Setenv("MIKROVIEW_WATCHLIST_MATCH_LOG_RETENTION", "48h")
+
+	cfg, err := Load("", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Watchlist.StorePath != "/data/watchlist.json" {
+		t.Errorf("Watchlist.StorePath = %v, want /data/watchlist.json", cfg.Watchlist.StorePath)
+	}
+	if cfg.Watchlist.MatchLogPath != "/data/matchlog.jsonl" {
+		t.Errorf("Watchlist.MatchLogPath = %v, want /data/matchlog.jsonl", cfg.Watchlist.MatchLogPath)
+	}
+	if cfg.Watchlist.MatchLogCapacity != 50000 {
+		t.Errorf("Watchlist.MatchLogCapacity = %v, want 50000", cfg.Watchlist.MatchLogCapacity)
+	}
+	if cfg.Watchlist.SuggestionsStorePath != "/data/suggestions.json" {
+		t.Errorf("Watchlist.SuggestionsStorePath = %v, want /data/suggestions.json", cfg.Watchlist.SuggestionsStorePath)
+	}
+	if cfg.Watchlist.MatchLogRetention != 48*time.Hour {
+		t.Errorf("Watchlist.MatchLogRetention = %v, want 48h", cfg.Watchlist.MatchLogRetention)
 	}
 }
 
@@ -748,13 +816,13 @@ func TestLoadMalformedYAML(t *testing.T) {
 }
 
 // applyEnv (config.go:107-133) intentionally swallows a malformed
-// MIKROVIEW_STORE_RETENTION/MIKROVIEW_STORE_MAX_EVENTS value rather than
+// MIKROVIEW_STORE_RETENTION/MIKROVIEW_STORE_MAX_MEMORY value rather than
 // failing Load -- an operator's typo in one env var shouldn't stop the
 // whole process from starting. This locks in that documented behavior:
 // the malformed value is ignored and the prior (default/YAML) value wins.
 func TestLoadInvalidEnvValuesFallBackSilently(t *testing.T) {
 	t.Setenv("MIKROVIEW_STORE_RETENTION", "not-a-duration")
-	t.Setenv("MIKROVIEW_STORE_MAX_EVENTS", "not-a-number")
+	t.Setenv("MIKROVIEW_STORE_MAX_MEMORY", "not-a-size")
 
 	cfg, err := Load("", nil)
 	if err != nil {
@@ -764,8 +832,8 @@ func TestLoadInvalidEnvValuesFallBackSilently(t *testing.T) {
 	if cfg.Store.Retention != want.Store.Retention {
 		t.Errorf("Store.Retention = %v, want the default %v (invalid env value should be ignored)", cfg.Store.Retention, want.Store.Retention)
 	}
-	if cfg.Store.MaxEvents != want.Store.MaxEvents {
-		t.Errorf("Store.MaxEvents = %v, want the default %v (invalid env value should be ignored)", cfg.Store.MaxEvents, want.Store.MaxEvents)
+	if cfg.Store.MaxMemory != want.Store.MaxMemory {
+		t.Errorf("Store.MaxMemory = %v, want the default %v (invalid env value should be ignored)", cfg.Store.MaxMemory, want.Store.MaxMemory)
 	}
 }
 

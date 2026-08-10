@@ -9,6 +9,7 @@ import (
 	"crypto/tls"
 	"fmt"
 	"log/slog"
+	"math/rand/v2"
 	"net"
 	"net/http"
 	"os"
@@ -31,16 +32,21 @@ import (
 	"github.com/tomlawesome/mikroview/internal/geoip"
 	"github.com/tomlawesome/mikroview/internal/hub"
 	"github.com/tomlawesome/mikroview/internal/logging"
+	"github.com/tomlawesome/mikroview/internal/matchlog"
 	"github.com/tomlawesome/mikroview/internal/naming"
+	"github.com/tomlawesome/mikroview/internal/netclass"
 	"github.com/tomlawesome/mikroview/internal/notify"
 	"github.com/tomlawesome/mikroview/internal/oidc"
 	"github.com/tomlawesome/mikroview/internal/persist"
 	"github.com/tomlawesome/mikroview/internal/reputation"
 	"github.com/tomlawesome/mikroview/internal/routeros"
+	"github.com/tomlawesome/mikroview/internal/routerstate"
 	"github.com/tomlawesome/mikroview/internal/rules"
 	"github.com/tomlawesome/mikroview/internal/servertls"
 	"github.com/tomlawesome/mikroview/internal/store"
+	"github.com/tomlawesome/mikroview/internal/suggest"
 	"github.com/tomlawesome/mikroview/internal/syslog"
+	"github.com/tomlawesome/mikroview/internal/watchlist"
 	"github.com/tomlawesome/mikroview/web"
 	"golang.org/x/term"
 )
@@ -60,6 +66,24 @@ const globalSpikeCheckInterval = 10 * time.Second
 // tracking-grade freshness to be useful to an operator.
 const deviceSilenceCheckInterval = 1 * time.Minute
 
+// suggestSyncInterval is how often internal/suggest re-scans routerState
+// for new/changed candidates (#243 slice 5). Coarser than either check
+// above on purpose: routerState itself only changes when RouterOS's own
+// push script runs, which docs/routeros-setup.md's own example scheduler
+// entry sets to every 20 minutes -- syncing more often than that finds
+// nothing new, so this just needs to be well inside that window rather
+// than tracking it exactly.
+const suggestSyncInterval = 5 * time.Minute
+
+// matchLogPurgeInterval is how often internal/matchlog.PostgresStore
+// deletes matches older than watchlist.matchLogRetention (#243 slice
+// 6). Coarser than suggestSyncInterval on purpose: retention is
+// measured in days by default, so purging every few minutes buys
+// nothing an hourly pass wouldn't -- this only needs to keep the table
+// from growing meaningfully past its retention window between runs,
+// not to enforce that window to the minute.
+const matchLogPurgeInterval = 1 * time.Hour
+
 // loginLimiter{Threshold,Window}: brute-force protection on
 // POST /api/auth/login (see internal/auth.LoginLimiter) -- an internal
 // hardening constant, not exposed via config, same tier as ws.go's
@@ -67,6 +91,16 @@ const deviceSilenceCheckInterval = 1 * time.Minute
 const (
 	loginLimiterThreshold = 5
 	loginLimiterWindow    = 5 * time.Minute
+)
+
+// ingestLimiter{Threshold,Window}: rate-limits POST /api/ingest/routeros
+// per ingest token (issue #186 step 3) -- see internal/api/ingest.go's
+// handleIngestRouterOS doc comment for the reasoning behind these
+// specific numbers. Same internal-hardening-constant tier as
+// loginLimiterThreshold/Window above.
+const (
+	ingestLimiterThreshold = 120
+	ingestLimiterWindow    = 15 * time.Minute
 )
 
 // version is stamped at build time via -ldflags "-X main.version=..."
@@ -235,7 +269,17 @@ func main() {
 	configLog := logging.New("config")
 	cfg, configResult, err := config.LoadWithProblems(os.Getenv("MIKROVIEW_CONFIG"), os.Args[1:])
 	if err != nil {
-		configLog.Error(err.Error())
+		// The structured report rather than err.Error(): this is the
+		// message that stops the server, so the line telling the
+		// operator what to change should not be the tail of a long
+		// sentence. Falls back to the error's own text when the failure
+		// was reading or parsing the file, which produces no Problems to
+		// render.
+		if len(configResult.Fatal) > 0 {
+			configLog.Error("invalid configuration:\n" + config.Report(configResult.Fatal) + config.CheckHint)
+		} else {
+			configLog.Error(err.Error() + "\n" + config.CheckHint)
+		}
 		os.Exit(1)
 	}
 	// Every component logger created before this point (configLog above)
@@ -246,7 +290,11 @@ func main() {
 	logging.PrintBanner()
 	logVersionAndMigration(logging.New("mikroview"))
 
-	st := store.New(cfg.Store.MaxEvents, cfg.Store.Retention)
+	storeCapacity := cfg.Store.Capacity()
+	logging.New("store").Info(fmt.Sprintf(
+		"event buffer: %s reserved for up to %d events (store.maxMemory) -- once traffic arrives, GET /api/stats reports how full it is and how far back it actually reaches",
+		cfg.Store.MaxMemory, storeCapacity))
+	st := store.New(storeCapacity, cfg.Store.Retention)
 	devices := device.NewRegistry(cfg.Devices)
 	h := hub.New()
 	geoLog := logging.New("geoip")
@@ -405,6 +453,89 @@ func main() {
 	if err != nil {
 		auditLog.Warn(fmt.Sprintf("%v (continuing with in-memory-only, unpersisted audit log)", err))
 	}
+
+	// The watchlist entry set (#243): same optional-persistence contract
+	// every small store here follows -- a backend error degrades to
+	// in-memory-only, it never stops startup.
+	watchlistLog := logging.New("watchlist")
+	watchlistBackend, err := persistence.backendFor(bootCtx, "watchlist", cfg.Watchlist.StorePath)
+	if err != nil {
+		watchlistLog.Warn(err.Error())
+	}
+	watchlistStore, err := watchlist.OpenWithBackend(watchlistBackend)
+	if err != nil {
+		watchlistLog.Warn(fmt.Sprintf("%v (continuing with in-memory-only, unpersisted watchlist)", err))
+	}
+
+	// The suggestion candidate pool (#243 slice 5): watchlist entries
+	// suggested from data RouterOS has already pushed. Same
+	// optional-persistence contract as the watchlist itself -- losing
+	// this on restart just means every candidate regenerates at Off,
+	// which loses an operator's Hide/accept-in-progress state but never
+	// anything RunPeriodicSync (started below, once routerState exists)
+	// can't rebuild.
+	suggestBackend, err := persistence.backendFor(bootCtx, "suggestions", cfg.Watchlist.SuggestionsStorePath)
+	if err != nil {
+		watchlistLog.Warn(err.Error())
+	}
+	suggestStore, err := suggest.OpenWithBackend(suggestBackend)
+	if err != nil {
+		watchlistLog.Warn(fmt.Sprintf("%v (continuing with in-memory-only, unpersisted suggestions)", err))
+	}
+
+	// The watchlist's match log has no in-memory-only mode (durability
+	// is the entire point of it, see internal/matchlog's package doc
+	// comment), so a failure here is handled differently from every
+	// store above: not fatal (the rest of mikroview -- the event ring,
+	// live view, flags, detectors -- is completely unaffected by this),
+	// but not silently degraded either. matchLog stays nil and every
+	// event skips watchlist evaluation entirely for this run, which
+	// ingestOneRecovered's nil check makes an explicit, visible no-op
+	// rather than a mysteriously empty watchlist page.
+	//
+	// On Postgres, this is a dedicated table (internal/matchlog.
+	// PostgresStore), not a row in store_blob -- see
+	// docs/decisions/postgres-backend.md §1a -- bounded by
+	// MatchLogRetention (age) rather than MatchLogCapacity (count), and
+	// already migrated by persistence.pool.Migrate above alongside every
+	// other store's schema. The file backend is unaffected either way.
+	var matchLog matchlog.Store
+	// Nil unless the Postgres backend is in use -- RunPeriodicPurge is
+	// started later, alongside every other periodic background task,
+	// once the shutdown-aware ctx exists (see below).
+	var matchLogPostgres *matchlog.PostgresStore
+	if persistence.pool != nil {
+		matchLogPostgres = matchlog.OpenPostgres(persistence.pool, cfg.Watchlist.MatchLogRetention)
+		matchLog = matchLogPostgres
+		// Unlike every other store, there is no adoption path from the
+		// file backend's JSONL format into the Postgres table -- every
+		// other store's JSON blob round-trips byte-identically (see
+		// persistence.backendFor/persist.AdoptFile), but the match log's
+		// append-only line format doesn't fit that migration, and a
+		// backfill migrator was judged not worth building for what is,
+		// by design, bounded evidence rather than durable account state.
+		// Said plainly rather than left to be discovered as "why is my
+		// match history gone": the old file is untouched and still
+		// readable by reverting Postgres, it just isn't carried forward.
+		if fi, err := os.Stat(cfg.Watchlist.MatchLogPath); err == nil && fi.Size() > 0 {
+			watchlistLog.Warn(fmt.Sprintf("an existing match log at %s (%d bytes) will NOT be migrated into Postgres -- "+
+				"unlike every other store, the match log has no file-to-Postgres adoption path. It starts empty on Postgres; "+
+				"the old file is untouched and still readable if you revert postgres.dsnFile",
+				cfg.Watchlist.MatchLogPath, fi.Size()))
+		}
+	} else if ml, err := matchlog.Open(cfg.Watchlist.MatchLogPath, cfg.Watchlist.MatchLogCapacity); err != nil {
+		watchlistLog.Error(fmt.Sprintf("opening the match log at %s failed: %v -- watchlist entries will not record any matches until this is fixed and mikroview is restarted", cfg.Watchlist.MatchLogPath, err))
+	} else {
+		matchLog = ml
+		defer ml.Close()
+	}
+	// Evaluates the watchlist asynchronously off the ingest goroutine --
+	// see Evaluator's doc comment for why, and detector.Run just below
+	// for the identical existing pattern this mirrors. A nil matchLog
+	// (opened above) makes every Enqueue call a documented no-op rather
+	// than queuing work that could never complete.
+	watchlistEval := watchlist.NewEvaluator(watchlistStore, matchLog)
+
 	detectCfg := detect.Config{
 		PortScanThreshold:        cfg.Flags.PortScanThreshold,
 		PortScanWindow:           cfg.Flags.PortScanWindow,
@@ -489,14 +620,29 @@ func main() {
 	blocklistLog := logging.New("blocklist")
 	bl := blocklist.New(cfg.Blocklist.Sources, blocklistLog)
 
-	// Both optional inputs are attached in one chain: entities backs the
-	// trusted-mail-sender allowlist (#108), knownBad backs the local
-	// blocklist match (#113 Part B). Each is independently a valid
-	// no-op when unconfigured.
+	// netclass (issue #114): local IP attribution for the manual lookup
+	// popover -- Tor exit / VPN / datacenter / privacy relay. The
+	// netclass package itself stays display-only by design (see its own
+	// doc comment) and is attached to the API server for that. It is
+	// also attached to the detector chain below, but narrowly: only
+	// observeNetClass (internal/detect/netclass.go) ever reads it, and
+	// only to reinforce confidence on an already-active flag for the two
+	// high-precision categories (Tor, VPN), direction-gated to inbound
+	// traffic only -- never to raise a flag on its own. Nil-safe when no
+	// sources are enabled, same as bl.
+	netclassLog := logging.New("netclass")
+	nc := netclass.New(cfg.NetClass.Sources, netclassLog)
+
+	// All four optional inputs are attached in one chain: entities backs
+	// the trusted-mail-sender allowlist (#108), knownBad backs the local
+	// blocklist match (#113 Part B), netclass backs the direction-aware
+	// VPN/Tor confidence reinforcement (#114). Each is independently a
+	// valid no-op when unconfigured.
 	detector := detect.NewWithSettings(detectCfg, fs, detectorSettings).
 		WithReputation(rep).
 		WithEntities(entityStore).
-		WithKnownBadIPs(bl)
+		WithKnownBadIPs(bl).
+		WithNetClass(nc)
 	globalSpike := detect.NewGlobalSpikeDetectorWithSettings(detectCfg, fs, detectorSettings)
 	deviceSilence := detect.NewDeviceSilenceDetectorWithSettings(detectCfg, fs, detectorSettings, devices)
 	staleRule := detect.NewStaleRuleDetector(ru, fs, time.Duration(cfg.Flags.StaleRuleDays)*24*time.Hour)
@@ -542,26 +688,24 @@ func main() {
 
 	raw := make(chan syslog.RawMessage, 4096)
 
-	go func() {
-		if err := syslog.ListenUDP(ctx, cfg.Listen.SyslogUDP, raw); err != nil && ctx.Err() == nil {
-			logging.New("syslog-udp").Error(err.Error())
-			os.Exit(1)
-		}
-	}()
-	go func() {
-		if err := syslog.ListenTCP(ctx, cfg.Listen.SyslogTCP, raw); err != nil && ctx.Err() == nil {
-			logging.New("syslog-tcp").Error(err.Error())
-			os.Exit(1)
-		}
-	}()
-
 	// Entities takes precedence over Rules/Hosts for any key it has a
 	// label for -- see naming.Resolver's doc comment and issue #107's
 	// migration/precedence design.
-	names := naming.Resolver{Rules: cfg.RuleNames, Hosts: cfg.HostNames, Entities: entityStore}
+	// routerState (issue #186 step 4): each device's most recent pushed
+	// state, in-memory only by that package's design. Wired into the
+	// naming resolver first (RouterOS always wins on host names -- the
+	// owner's 4c decision) and into the API server for the ingest
+	// endpoint to write and the table endpoints to read.
+	routerState := routerstate.New()
+	names := naming.Resolver{Rules: cfg.RuleNames, Hosts: cfg.HostNames, Entities: entityStore, RouterHosts: routerState}
 
-	go ingest(ctx, raw, st, devices, macRegistry, fs, h, geo, detector, ru, names)
+	go ingest(ctx, raw, st, devices, macRegistry, fs, h, geo, detector, ru, names, watchlistEval)
 	go detector.Run(ctx)
+	go watchlistEval.Run(ctx)
+	go suggestStore.RunPeriodicSync(ctx, routerState, suggestSyncInterval)
+	if matchLogPostgres != nil {
+		go matchLogPostgres.RunPeriodicPurge(ctx, matchLogPurgeInterval)
+	}
 
 	go func() {
 		spikeLog := logging.New("global-spike")
@@ -646,6 +790,38 @@ func main() {
 					func() {
 						defer logging.Recover(blocklistLog)
 						bl.Refresh(ctx)
+					}()
+				}
+			}
+		}()
+	}
+
+	// netclass refresh (issue #114): same shape as the blocklist sweep
+	// above, with one addition -- a per-install random jitter before the
+	// first fetch. Thousands of self-hosted instances all refreshing at
+	// 00:00 UTC would be a thundering herd against raw.githubusercontent.
+	// com and would get collectively rate-limited; a random offset up to
+	// an hour spreads them out. The daily ticker then keeps that offset.
+	if nc.HasSources() {
+		go func() {
+			defer logging.Recover(netclassLog)
+			jitter := time.Duration(rand.Int64N(int64(time.Hour)))
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(jitter):
+			}
+			nc.Refresh(ctx)
+			ticker := time.NewTicker(netclass.RefreshInterval)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-ticker.C:
+					func() {
+						defer logging.Recover(netclassLog)
+						nc.Refresh(ctx)
 					}()
 				}
 			}
@@ -755,12 +931,15 @@ func main() {
 		Devices:          devices,
 		Hub:              h,
 		Reputation:       rep,
+		NetClass:         nc,
 		Flags:            fs,
 		DetectorSettings: detectorSettings,
 		Entities:         entityStore,
 		Rules:            ru,
 		Audit:            auditStore,
-		CriticalPorts:    cfg.Flags.CriticalPorts,
+		Watchlist:        watchlistStore,
+		Suggest:          suggestStore,
+		MatchLog:         matchLog,
 		DeviceStaleAfter: cfg.Flags.DeviceStaleAfter,
 		Auth:             authStore,
 		Sessions:         auth.NewSessionStore(cfg.Auth.SessionTTL),
@@ -769,6 +948,8 @@ func main() {
 		TrustedProxies:   trustedProxies,
 		ClientIPHeader:   cfg.Listen.ClientIPHeader,
 		Tokens:           tokenStore,
+		IngestLimiter:    auth.NewLoginLimiter(ingestLimiterThreshold, ingestLimiterWindow),
+		RouterState:      routerState,
 		OIDC:             oidcClient,
 		OIDCState:        oidcState,
 		OIDCPolicy:       oidcPolicy,
@@ -821,11 +1002,19 @@ func main() {
 	// registered directly on rootMux, not routed through api.Server,
 	// since it's not an API concern -- and only when mikroview generated
 	// its own CA, never for an operator-supplied cert.
+	//
+	// The certificate is loaded whenever *either* the HTTPS listener or
+	// syslog TLS (issue #188) needs one, not only when cfg.TLS.Enabled --
+	// a deployment that disables mikroview's own HTTP TLS because its
+	// own reverse proxy terminates TLS for real clients would otherwise
+	// lose syslog ingest entirely once #189 removed the plaintext
+	// fallback: RouterOS connects to the syslog port directly, never
+	// through that proxy, so it needs a certificate to trust either way.
 	tlsLog := logging.New("tls")
 	scheme := "http"
-	if cfg.TLS.Enabled {
-		scheme = "https"
-		cert, caCertPEM, persistErr, err := servertls.Load(servertls.Config{
+	var cert tls.Certificate
+	if cfg.TLS.Enabled || cfg.Listen.SyslogTLS != "" {
+		c, caCertPEM, persistErr, err := servertls.Load(servertls.Config{
 			CertFile:  cfg.TLS.CertFile,
 			KeyFile:   cfg.TLS.KeyFile,
 			Hosts:     cfg.TLS.Hosts,
@@ -835,17 +1024,21 @@ func main() {
 			tlsLog.Error(err.Error())
 			os.Exit(1)
 		}
+		cert = c
 		if persistErr != nil {
 			tlsLog.Warn(fmt.Sprintf("%v (continuing with an unpersisted certificate -- every restart will generate a fresh, untrusted-again CA)", persistErr))
 		}
 		if caCertPEM != nil {
 			fingerprint := sha256.Sum256(cert.Certificate[0])
-			tlsLog.Info(fmt.Sprintf("generated a local CA (leaf fingerprint %x) -- served at /ca.crt for your browser or reverse proxy to trust", fingerprint))
+			tlsLog.Info(fmt.Sprintf("generated a local CA (leaf fingerprint %x) -- served at /ca.crt for your browser, reverse proxy, or router to trust", fingerprint))
 			rootMux.HandleFunc("GET /ca.crt", func(w http.ResponseWriter, r *http.Request) {
 				w.Header().Set("Content-Type", "application/x-pem-file")
 				w.Write(caCertPEM)
 			})
 		}
+	}
+	if cfg.TLS.Enabled {
+		scheme = "https"
 		httpServer.TLSConfig = &tls.Config{Certificates: []tls.Certificate{cert}}
 		if cfg.Listen.HTTPRedirect != "" {
 			redirectLog := logging.New("http-redirect")
@@ -879,6 +1072,17 @@ func main() {
 	} else {
 		tlsLog.Warn(fmt.Sprintf("disabled (tls.enabled=false) -- mikroview is serving plain HTTP on %s. Safe ONLY if this listener is unreachable except from your own reverse proxy over an isolated network -- never expose this port to a LAN or the internet in this mode.", cfg.Listen.HTTP))
 	}
+	if cfg.Listen.SyslogTLS != "" {
+		// RouterOS's remote-protocol=tls (issue #188), presenting the
+		// same certificate loaded above -- started independently of
+		// cfg.TLS.Enabled, see that block's comment for why.
+		go func() {
+			if err := syslog.ListenTLS(ctx, cfg.Listen.SyslogTLS, cert, raw); err != nil && ctx.Err() == nil {
+				logging.New("syslog-tls").Error(err.Error())
+				os.Exit(1)
+			}
+		}()
+	}
 
 	go func() {
 		<-ctx.Done()
@@ -887,7 +1091,11 @@ func main() {
 		httpServer.Shutdown(shutdownCtx)
 	}()
 
-	logging.New("mikroview").Info(fmt.Sprintf("%s on %s, syslog udp/tcp on %s/%s", scheme, cfg.Listen.HTTP, cfg.Listen.SyslogUDP, cfg.Listen.SyslogTCP))
+	syslogSummary := "syslog disabled (listen.syslogTls is empty)"
+	if cfg.Listen.SyslogTLS != "" {
+		syslogSummary = fmt.Sprintf("syslog tls on %s", cfg.Listen.SyslogTLS)
+	}
+	logging.New("mikroview").Info(fmt.Sprintf("%s on %s, %s", scheme, cfg.Listen.HTTP, syslogSummary))
 	var serveErr error
 	if cfg.TLS.Enabled {
 		serveErr = httpServer.ListenAndServeTLS("", "")
@@ -942,8 +1150,15 @@ func runValidateConfig(args []string) int {
 	cfg, result, err := config.LoadWithProblems(path, nil)
 	if err != nil {
 		// Either the file is unreadable/unparseable, or validation found
-		// something fatal. Both are reported the same way to the operator;
-		// only the exit code distinguishes them, and only when we can tell.
+		// something fatal. Only the exit code distinguishes them, and
+		// only when we can tell -- but a fatal gets the same block
+		// treatment warnings do below, rather than one dense line with
+		// the fix on the end.
+		if len(result.Fatal) > 0 {
+			fmt.Fprint(os.Stderr, config.Report(result.Fatal))
+			fmt.Fprintf(os.Stderr, "\n%d problem(s). mikroview would refuse to start.\n", len(result.Fatal))
+			return validateConfigExitProblems
+		}
 		fmt.Fprintf(os.Stderr, "%v\n", err)
 		if strings.Contains(err.Error(), "invalid configuration") {
 			return validateConfigExitProblems
@@ -1477,14 +1692,14 @@ func readPasswordTwice() (string, error) {
 // WebSocket broadcast (see detect.Detector.Enqueue/Run, and the
 // dedicated detection-worker goroutine main() starts alongside this
 // one).
-func ingest(ctx context.Context, raw <-chan syslog.RawMessage, st *store.Store, devices *device.Registry, macRegistry *device.MACRegistry, fs *flags.Store, h *hub.Hub, geo *geoip.Lookup, detector *detect.Detector, ru *rules.Store, names naming.Resolver) {
+func ingest(ctx context.Context, raw <-chan syslog.RawMessage, st *store.Store, devices *device.Registry, macRegistry *device.MACRegistry, fs *flags.Store, h *hub.Hub, geo *geoip.Lookup, detector *detect.Detector, ru *rules.Store, names naming.Resolver, watchlistEval *watchlist.Evaluator) {
 	ingestLog := logging.New("ingest")
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case rm := <-raw:
-			ingestOneRecovered(ingestLog, rm, st, devices, macRegistry, fs, h, geo, detector, ru, names)
+			ingestOneRecovered(ingestLog, rm, st, devices, macRegistry, fs, h, geo, detector, ru, names, watchlistEval)
 		}
 	}
 }
@@ -1495,7 +1710,7 @@ func ingest(ctx context.Context, raw <-chan syslog.RawMessage, st *store.Store, 
 // still end the entire ingest goroutine for good on the first bad
 // message (silently stopping all future event processing) rather than
 // just dropping that one message. See logging.Recover's doc comment.
-func ingestOneRecovered(logger *slog.Logger, rm syslog.RawMessage, st *store.Store, devices *device.Registry, macRegistry *device.MACRegistry, fs *flags.Store, h *hub.Hub, geo *geoip.Lookup, detector *detect.Detector, ru *rules.Store, names naming.Resolver) {
+func ingestOneRecovered(logger *slog.Logger, rm syslog.RawMessage, st *store.Store, devices *device.Registry, macRegistry *device.MACRegistry, fs *flags.Store, h *hub.Hub, geo *geoip.Lookup, detector *detect.Detector, ru *rules.Store, names naming.Resolver, watchlistEval *watchlist.Evaluator) {
 	defer logging.Recover(logger)
 
 	env := syslog.ParseEnvelope(rm.Data, rm.RecvTime)
@@ -1563,6 +1778,7 @@ func ingestOneRecovered(logger *slog.Logger, rm syslog.RawMessage, st *store.Sto
 	stored := st.Insert(e)
 	h.Broadcast(stored)
 	detector.Enqueue(stored)
+	watchlistEval.Enqueue(stored)
 	// Keeps internal/rules' long-lived per-rule usage record in sync with
 	// internal/store/ring.go's own totalByRule bump inside Insert above --
 	// same per-event trigger, so RuleUsage never drifts out of step with

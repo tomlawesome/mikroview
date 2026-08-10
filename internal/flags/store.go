@@ -677,6 +677,38 @@ func (s *Store) ClearAndExclude(id string, now time.Time) bool {
 	return true
 }
 
+// ClearAll clears every currently-active (not yet Cleared) flag in one
+// pass, returning how many it cleared. Regular clears only -- it must
+// never create a permanent exclusion (see ClearAndExclude for that
+// action); "Clear all" on the frontend (issue #198) has no permanent
+// variant and none is planned, since a single click-again confirm is
+// not the amount of intent a bulk permanent suppression should require.
+//
+// One lock for the whole pass rather than one Clear call per flag: a
+// concurrent Add landing mid-sweep either sees the old state and gets
+// cleared too, or the new state and is skipped -- both are acceptable,
+// but N separate lock/unlock cycles would let a caller observe a
+// partially-cleared set mid-call, which a bulk action should not expose.
+func (s *Store) ClearAll(now time.Time) int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	cleared := 0
+	for _, f := range s.byID {
+		if f.Cleared {
+			continue
+		}
+		f.Cleared = true
+		f.ClearedAt = now
+		s.clearedCount++
+		cleared++
+	}
+	if cleared > 0 {
+		s.persistLocked()
+	}
+	return cleared
+}
+
 // Exclude permanently marks (t, target) as excluded -- from this call
 // on, add() (and so every Add/AddWithConfidence/AddWithDetail call) is a
 // silent no-op for that exact pair, forever, until a matching

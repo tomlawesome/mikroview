@@ -5,9 +5,8 @@
   import { detectorSettingsState } from '../lib/detectorSettings.svelte'
   import { entitiesState } from '../lib/entities.svelte'
   import { auditState } from '../lib/audit.svelte'
+  import { exclusionsState } from '../lib/exclusions.svelte'
   import { authState } from '../lib/auth.svelte'
-  import { themeState, type ThemePref } from '../lib/theme.svelte'
-  import { COLORWAYS, colorwayState } from '../lib/colorway.svelte'
   import { retentionState, MAX_AGE_OPTIONS } from '../lib/retention.svelte'
   import { downloadEventsCsv } from '../lib/export'
   import { viewportState } from '../lib/viewport.svelte'
@@ -68,8 +67,15 @@
     open = false
   }
 
-  const modeLabels: Record<ThemePref, string> = { system: 'Auto', light: 'Light', dark: 'Dark' }
-  const modeOptions: ThemePref[] = ['system', 'light', 'dark']
+  function toggleExclusions() {
+    if (appState.view === 'exclusions') {
+      appState.view = 'live'
+    } else {
+      appState.view = 'exclusions'
+      exclusionsState.refresh()
+    }
+    open = false
+  }
 
   function onMaxAgeChange(e: Event) {
     const raw = (e.target as HTMLSelectElement).value
@@ -83,7 +89,7 @@
     onclick={() => (open = !open)}
     aria-haspopup="true"
     aria-expanded={open}
-    title="Views, appearance, and account"
+    title="Views, export, and account"
   >
     <span class="hamburger" aria-hidden="true">
       <span></span><span></span><span></span>
@@ -116,20 +122,23 @@
 
         <button
           class="option"
+          class:active={appState.view === 'live'}
+          onclick={() => {
+            appState.view = 'live'
+            open = false
+          }}
+          title="Back to the live view"
+        >
+          Live view
+        </button>
+
+        <button
+          class="option"
           class:active={appState.view === 'metrics'}
           onclick={() => toggleView('metrics')}
           title="Event charts and traffic breakdowns"
         >
           Metrics
-        </button>
-
-        <button
-          class="option"
-          class:active={appState.view === 'control-ports'}
-          onclick={() => toggleView('control-ports')}
-          title="SSH/Telnet/control-port attempts, accepted and denied"
-        >
-          Control ports
         </button>
 
         <button
@@ -192,33 +201,79 @@
           >
             Audit log
           </button>
+
+          <!-- Same strict gate again -- GET /api/flags/exclusions is
+               callerIsAdmin (issue #207, moved out of the bottom of the
+               Flags page). -->
+          <button
+            class="option"
+            class:active={appState.view === 'exclusions'}
+            onclick={toggleExclusions}
+            title="Review and remove permanently-excluded (detector, target) pairs"
+          >
+            Exclusions
+          </button>
+
+          <!-- Same strict gate again -- entry management under
+               /api/watchlist/entries is callerIsAdmin (issue #243,
+               successor to the old, unauthenticated-by-default Control
+               Ports tab). The match query itself is a looser gate
+               (accessUser, reachable via a read-only bearer token too)
+               but this menu item is about managing entries, not just
+               viewing matches. -->
+          <button
+            class="option"
+            class:active={appState.view === 'watchlist'}
+            onclick={() => toggleView('watchlist')}
+            title="Watch ports or watch a device's own destinations, observe before enforcing"
+          >
+            Watchlist
+          </button>
+
+          <!-- Same strict gate again -- GET /api/suggestions is
+               callerIsAdmin (#243 slice 5): watchlist entries suggested
+               from data RouterOS has already pushed. -->
+          <button
+            class="option"
+            class:active={appState.view === 'suggestions'}
+            onclick={() => toggleView('suggestions')}
+            title="Review watchlist entries suggested from data your router has already pushed"
+          >
+            Suggestions
+          </button>
         {/if}
       </div>
 
-      {#if viewportState.isMobile && appState.view === 'live'}
-        <!-- Toolbar.svelte hides the display-duration select and Export
-             button below the mobile breakpoint (issue #85) to keep the
-             always-inline live-view controls (pause/autoscroll/clear)
-             from overflowing a phone-width header -- folded in here
-             instead, since they're touched far less often. -->
+      {#if appState.view === 'live'}
+        <!-- Live-view actions that are occasional and deliberate rather
+             than touched constantly (issue #137's split, correcting
+             #73's): Export lives here on both breakpoints now, where
+             mobile already had it (issue #85). The display-duration
+             select stays menu-only at phone widths -- desktop keeps it
+             inline in the toolbar. -->
         <div class="divider"></div>
 
         <div class="section">
           <div class="section-label">Live view</div>
 
-          <label class="option select-option">
-            Display duration
-            <select
-              value={retentionState.maxAgeSeconds === null ? 'null' : String(retentionState.maxAgeSeconds)}
-              onchange={onMaxAgeChange}
-              aria-label="Display duration"
-            >
-              {#each MAX_AGE_OPTIONS as opt (opt.value)}
-                <option value={opt.value === null ? 'null' : String(opt.value)}>{opt.label}</option>
-              {/each}
-            </select>
-          </label>
+          {#if viewportState.isMobile}
+            <label class="option select-option">
+              Display duration
+              <select
+                value={retentionState.maxAgeSeconds === null ? 'null' : String(retentionState.maxAgeSeconds)}
+                onchange={onMaxAgeChange}
+                aria-label="Display duration"
+              >
+                {#each MAX_AGE_OPTIONS as opt (opt.value)}
+                  <option value={opt.value === null ? 'null' : String(opt.value)}>{opt.label}</option>
+                {/each}
+              </select>
+            </label>
+          {/if}
 
+          <!-- Deliberately one entry, not one per format: #94 defers
+               additional export formats, and when they land this becomes
+               a submenu (pick a format) rather than a flat item each. -->
           <button
             class="option"
             onclick={() => {
@@ -226,49 +281,12 @@
               open = false
             }}
             disabled={appState.filteredEvents.length === 0}
+            title="Export the currently shown/filtered events to a CSV file"
           >
             Export to CSV
           </button>
         </div>
       {/if}
-
-      <div class="divider"></div>
-
-      <div class="section">
-        <div class="section-label">Appearance</div>
-
-        {#each COLORWAYS as c (c.id)}
-          <button
-            class="option"
-            class:active={c.id === colorwayState.pref}
-            role="menuitemradio"
-            aria-checked={c.id === colorwayState.pref}
-            onclick={() => {
-              colorwayState.set(c.id)
-              open = false
-            }}
-          >
-            <span class="swatch" style="background: {c.swatch}"></span>
-            {c.label}
-          </button>
-        {/each}
-
-        {#each modeOptions as m (m)}
-          <button
-            class="option"
-            class:active={m === themeState.pref}
-            role="menuitemradio"
-            aria-checked={m === themeState.pref}
-            onclick={() => {
-              themeState.pref = m
-              themeState.apply()
-              open = false
-            }}
-          >
-            {modeLabels[m]}
-          </button>
-        {/each}
-      </div>
 
       {#if authState.state === 'authenticated'}
         <div class="divider"></div>
@@ -486,13 +504,6 @@
   .option.active {
     color: var(--fg);
     font-weight: 600;
-  }
-
-  .swatch {
-    width: 9px;
-    height: 9px;
-    border-radius: 50%;
-    flex: none;
   }
 
   .flags-badge {

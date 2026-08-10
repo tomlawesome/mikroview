@@ -16,17 +16,28 @@ import (
 	"github.com/tomlawesome/mikroview/internal/entities"
 	"github.com/tomlawesome/mikroview/internal/flags"
 	"github.com/tomlawesome/mikroview/internal/hub"
+	"github.com/tomlawesome/mikroview/internal/matchlog"
+	"github.com/tomlawesome/mikroview/internal/netclass"
 	"github.com/tomlawesome/mikroview/internal/oidc"
 	"github.com/tomlawesome/mikroview/internal/reputation"
+	"github.com/tomlawesome/mikroview/internal/routerstate"
 	"github.com/tomlawesome/mikroview/internal/rules"
 	"github.com/tomlawesome/mikroview/internal/store"
+	"github.com/tomlawesome/mikroview/internal/suggest"
+	"github.com/tomlawesome/mikroview/internal/watchlist"
 )
 
 type Server struct {
-	Store            *store.Store
-	Devices          *device.Registry
-	Hub              *hub.Hub
-	Reputation       *reputation.Client
+	Store      *store.Store
+	Devices    *device.Registry
+	Hub        *hub.Hub
+	Reputation *reputation.Client
+	// NetClass attributes an IP to a Tor exit / VPN / datacenter /
+	// privacy relay for the manual lookup popover (issue #114). Nil means
+	// no sources were enabled, and every use is nil-guarded -- the same
+	// nil-means-disabled convention as Reputation. Deliberately display-
+	// only: it is read in handleIPLookup and nowhere near flag scoring.
+	NetClass         *netclass.Classifier
 	Flags            *flags.Store
 	DetectorSettings *detect.SettingsStore
 	// Entities is the persisted, admin-manageable (type, key) -> label/
@@ -36,6 +47,33 @@ type Server struct {
 	// Open("") returns a usable, empty, unpersisted store), same
 	// always-usable convention as Flags/DetectorSettings above.
 	Entities *entities.Store
+	// Watchlist is the persisted, admin-manageable entry set backing
+	// GET/POST/PUT/DELETE /api/watchlist/entries (issue #243) -- what
+	// Control Ports grows into. Always non-nil (internal/watchlist.
+	// Open("") returns a usable, empty, unpersisted store), same
+	// always-usable convention as Entities above. Matches (what an
+	// entry has actually recorded, via internal/matchlog) are exposed
+	// separately, via MatchLog below.
+	Watchlist *watchlist.Store
+	// MatchLog answers GET /api/watchlist/matches, the query surface
+	// #243 section 3 exists for -- birdcage-style correlation by source
+	// IP over a time range. Unlike every store field above, this can be
+	// nil: internal/matchlog has no in-memory-only fallback (durability
+	// is the entire reason it exists), so a boot-time failure to open it
+	// leaves this nil rather than degrading to an unpersisted store that
+	// would silently lose every match. Every handler that reads it must
+	// nil-check first.
+	MatchLog matchlog.Store
+	// Suggest is the persisted pool of watchlist entries suggested from
+	// data RouterOS has already pushed (#243 slice 5) -- backing GET/POST
+	// /api/suggestions/... (see suggest.go). Always non-nil
+	// (internal/suggest.Open("") returns a usable, empty, unpersisted
+	// store), same always-usable convention as Watchlist/Entities above.
+	// Kept synced with RouterState in the background by
+	// suggest.Store.RunPeriodicSync (see main.go), never by a handler in
+	// this package -- see internal/suggest's own doc comment for why
+	// there is deliberately no manual "refresh" endpoint.
+	Suggest *suggest.Store
 	// Rules is the persisted, long-lived per-rule-label usage record
 	// (issue #103's internal/rules.Store) -- exposed read-only via GET
 	// /api/rules (issue #109) as the "discovered but unnamed rules"
@@ -58,12 +96,6 @@ type Server struct {
 	// unpersisted store), same always-usable convention as Entities/
 	// Flags/DetectorSettings above.
 	Audit *audit.Store
-	// CriticalPorts is the configured control-port list (issue #34's
-	// tracking tab) -- exposed read-only via GET /api/critical-ports,
-	// deliberately not behind handleDetectorSettingsList's admin gate
-	// (see that handler's callerIsAdmin) since a non-admin user
-	// account still needs it to render the tab.
-	CriticalPorts []int
 	// DeviceStaleAfter (issue #98) is how long a device's LastSeen may go
 	// without updating before GET /api/devices reports it as "stale" --
 	// same threshold detect.DeviceSilenceDetector uses to raise an actual
@@ -105,10 +137,25 @@ type Server struct {
 	TrustedProxies []netip.Prefix
 	ClientIPHeader string
 
-	// Tokens holds read-only API bearer tokens (issue #101) -- always
-	// non-nil (internal/auth.OpenTokenStore("") returns a usable, empty,
-	// unpersisted store), same nil-never convention as Auth above.
+	// Tokens holds read-only API and ingest bearer tokens (issues #101,
+	// #186) -- always non-nil (internal/auth.OpenTokenStore("") returns a
+	// usable, empty, unpersisted store), same nil-never convention as
+	// Auth above.
 	Tokens *auth.TokenStore
+	// IngestLimiter bounds how often one ingest token may call POST
+	// /api/ingest/routeros (issue #186 step 3). Reuses auth.LoginLimiter
+	// rather than a second rate-limiting primitive -- see handleIngest
+	// RouterOS's doc comment for the threshold/window reasoning. Keyed by
+	// token ID, never the raw token value, the same never-store-the-
+	// secret convention LoginLimiter itself follows by keying on
+	// username/IP rather than a password.
+	IngestLimiter *auth.LoginLimiter
+	// RouterState holds each device's most recent pushed state (issue
+	// #186 step 4) -- written by handleIngestRouterOS, read by the
+	// /api/routeros/{device}/... table endpoints. Always non-nil
+	// (routerstate.New() needs no configuration); in-memory only, by
+	// that package's design.
+	RouterState *routerstate.Store
 
 	// OIDC/OIDCState: see oidc.go. Both nil unless cfg.OIDC.IssuerURL was
 	// set and provider discovery succeeded at startup -- every OIDC
@@ -148,11 +195,17 @@ func (s *Server) routes() []route {
 		{http.MethodGet, "/api/events", s.handleEvents},
 		{http.MethodGet, "/api/devices", s.handleDevices},
 		{http.MethodGet, "/api/rules", s.handleRules},
-		{http.MethodGet, "/api/critical-ports", s.handleCriticalPorts},
+		// The pushed rule/NAT tables (issue #186 step 4) -- session-gated
+		// reads over RouterState, entirely separate from the push
+		// endpoint itself, which lives on ingestRoutes' own mux and is
+		// deliberately absent from this table.
+		{http.MethodGet, "/api/routeros/{device}/rules", s.handleRouterOSRules},
+		{http.MethodGet, "/api/routeros/{device}/nat", s.handleRouterOSNAT},
 		{http.MethodGet, "/api/stats", s.handleStats},
 		{http.MethodGet, "/api/ws", s.handleWS},
 		{http.MethodGet, "/api/lookup/ip/{ip}", s.handleIPLookup},
 		{http.MethodGet, "/api/flags", s.handleFlagsList},
+		{http.MethodPost, "/api/flags/clear-all", s.handleFlagsClearAll},
 		{http.MethodPost, "/api/flags/{id}/clear", s.handleFlagsClear},
 		{http.MethodPost, "/api/flags/{id}/clear-permanent", s.handleFlagsClearPermanent},
 		{http.MethodGet, "/api/flags/exclusions", s.handleExclusionsList},
@@ -164,6 +217,22 @@ func (s *Server) routes() []route {
 		{http.MethodGet, "/api/entities", s.handleEntitiesList},
 		{http.MethodPost, "/api/entities", s.handleEntitiesUpsert},
 		{http.MethodDelete, "/api/entities", s.handleEntitiesDelete},
+
+		{http.MethodGet, "/api/watchlist/entries", s.handleWatchlistEntriesList},
+		{http.MethodPost, "/api/watchlist/entries", s.handleWatchlistEntriesCreate},
+		{http.MethodPut, "/api/watchlist/entries/{id}", s.handleWatchlistEntriesUpdate},
+		{http.MethodDelete, "/api/watchlist/entries/{id}", s.handleWatchlistEntriesDelete},
+		{http.MethodPost, "/api/watchlist/entries/{id}/promote", s.handleWatchlistEntriesPromote},
+		{http.MethodPost, "/api/watchlist/entries/{id}/observing", s.handleWatchlistEntriesSetObserving},
+		{http.MethodGet, "/api/watchlist/matches", s.handleWatchlistMatchesQuery},
+
+		// Suggested watchlist entries (#243 slice 5), generated in the
+		// background from pushed router data -- see suggest.go.
+		{http.MethodGet, "/api/suggestions", s.handleSuggestionsList},
+		{http.MethodPost, "/api/suggestions/reset", s.handleSuggestionsReset},
+		{http.MethodPost, "/api/suggestions/{id}/accept", s.handleSuggestionsAccept},
+		{http.MethodPost, "/api/suggestions/{id}/hide", s.handleSuggestionsHide},
+		{http.MethodPost, "/api/suggestions/{id}/unhide", s.handleSuggestionsUnhide},
 
 		{http.MethodGet, "/api/audit", s.handleAuditList},
 		{http.MethodGet, "/api/config/problems", s.handleConfigProblems},
