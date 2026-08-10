@@ -14,6 +14,25 @@ const (
 	maxLimit     = 5000
 )
 
+// maxScannedPerQuery bounds how many ring entries a single Query call
+// examines before giving up and returning what it has, even if neither
+// Limit nor the time window stopped it first. Query holds s.mu.RLock()
+// for the whole scan, which blocks Insert (the sole ingest writer) for
+// the same duration -- a selective filter (e.g. an operator
+// investigating an IP that turns out to be rare or absent) can force
+// scanning the entire in-window buffer while matching almost nothing,
+// measured at ~60ms at the default 120MiB/~204,700-event capacity, and
+// growing linearly with store.maxMemory from there. 50,000 keeps that
+// worst case to roughly a quarter of the default-capacity figure
+// regardless of how large an operator's maxMemory is configured, while
+// staying far above what a broad/unfiltered query ever needs to scan to
+// fill its own Limit (measured to exit within a few hundred events
+// regardless of capacity). HasMore reports true exactly as it already
+// does when Limit truncates the scan -- callers already treat that as
+// "there may be more, don't read a short result as complete." A var
+// rather than a const so tests can shrink it.
+var maxScannedPerQuery = 50_000
+
 // clampLimit maps a caller-supplied limit onto [1, maxLimit] -- see
 // internal/audit/query.go's identical helper for why this is written as
 // plain comparisons.
@@ -83,7 +102,9 @@ type Result struct {
 // still costs scanning every in-window event once (unavoidable), but it
 // never touches events outside the window at all, which is the same
 // asymptotic win a binary-searched window bound would give without the
-// extra bookkeeping.
+// extra bookkeeping. maxScannedPerQuery caps that "scan every in-window
+// event" cost regardless of how sparse the filter or how large the
+// window -- see its own doc comment for why.
 //
 // The window boundary is checked against Event.ReceivedAt, not Event.Time:
 // ReceivedAt is the server's own receipt clock and is guaranteed monotonic
@@ -149,6 +170,10 @@ func (s *Store) Query(q Query) Result {
 		idx = s.capacity - 1
 	}
 	for i := 0; i < s.count; i++ {
+		if i >= maxScannedPerQuery {
+			hasMore = true
+			break
+		}
 		e := s.buf[idx]
 		idx--
 		if idx < 0 {
