@@ -333,7 +333,9 @@ func Open(path string) (*Store, error) {
 func OpenWithBackend(b persist.Backend) (*Store, error) {
 	s := &Store{backend: b, byID: make(map[string]*Flag), excluded: make(map[string]Exclusion)}
 
-	data, version, err := persist.LoadDocument(context.Background(), b)
+	ctx, cancel := context.WithTimeout(context.Background(), persistTimeout)
+	defer cancel()
+	data, version, err := persist.LoadDocument(ctx, b)
 	if err != nil {
 		return s, err
 	}
@@ -882,6 +884,20 @@ func (s *Store) pruneLocked() {
 // maxTCPConnections elsewhere in this codebase.
 var persistMinInterval = time.Second
 
+// persistTimeout bounds every Load/Save against backend. Add/
+// AddWithDetail run synchronously on the single ingest goroutine (see
+// main.go's ingestOneRecovered), so an unresponsive backend -- a
+// Postgres connection stuck behind a network blackhole or a long lock
+// wait, not a clean disconnect -- would otherwise block that goroutine
+// forever under context.Background(), freezing the whole ingest
+// pipeline until the syslog listener's buffered channel fills and
+// starts silently dropping packets (internal/syslog/tcp_listener.go).
+// 5s is generous for a write this small: long enough that ordinary
+// latency never trips it, short enough that a genuinely stuck backend
+// degrades to a logged failure (see persistLocked) rather than an
+// indefinite hang.
+const persistTimeout = 5 * time.Second
+
 // persistLocked writes the current state -- flags and exclusions alike,
 // see persistedState -- to disk if persistence is configured and enough
 // time has passed since the last write -- see persistMinInterval. Write
@@ -910,7 +926,9 @@ func (s *Store) persistLocked() {
 		persistLog.Error(fmt.Sprintf("encoding flags for persistence failed: %v -- this change exists only in memory and will be lost on restart", err))
 		return
 	}
-	version, conflicted, err := persist.SaveWithRetry(context.Background(), s.backend, data, s.version)
+	ctx, cancel := context.WithTimeout(context.Background(), persistTimeout)
+	defer cancel()
+	version, conflicted, err := persist.SaveWithRetry(ctx, s.backend, data, s.version)
 	if err != nil {
 		persistLog.Error(fmt.Sprintf("writing flags to %s failed: %v -- this change exists only in memory and will be lost on restart",
 			s.backend.Describe(), err))
