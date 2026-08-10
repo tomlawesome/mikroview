@@ -208,6 +208,35 @@ func TestActivitySpikeNeverFiresBeforeMinimumSampleFloor(t *testing.T) {
 	}
 }
 
+func TestActivitySpikeStillFiresWhenWarmupSamplesBelowFloor(t *testing.T) {
+	// A plausible operator tuning attempt -- "trust it faster" -- used
+	// to cap sampleCount at HostActivityWarmupSamples even when that
+	// value sat below hostActivityMinSamples, so the firing gate
+	// (sampleCount >= hostActivityMinSamples) could never pass again:
+	// lowering the warmup to detect *sooner* silently disabled detection
+	// entirely, permanently, for every host. Proves the counter still
+	// climbs to the hard floor regardless of a lower warmup setting.
+	cfg := DefaultConfig()
+	cfg.ActivitySpikeThreshold = 1
+	cfg.HostActivityMultiplier = 2
+	cfg.HostActivityWarmupSamples = 2 // below hostActivityMinSamples (5)
+	d, fs := newTestDetector(t, cfg)
+
+	w := &sourceWindow{}
+	ip := "198.51.100.10"
+	now := time.Now()
+
+	d.checkHostActivityBaseline(w, ip, "", "", 1, now) // primes: sampleCount=1
+
+	for i := 0; i < hostActivityMinSamples; i++ {
+		d.checkHostActivityBaseline(w, ip, "", "", 100, now.Add(time.Duration(i+1)*time.Second))
+	}
+
+	if len(fs.List()) != 1 {
+		t.Fatalf("expected activity_spike to fire once sampleCount reaches hostActivityMinSamples despite a lower HostActivityWarmupSamples, got %+v", fs.List())
+	}
+}
+
 func TestReFiringUpdatesExistingFlagInPlace(t *testing.T) {
 	cfg := DefaultConfig()
 	cfg.PortScanThreshold = 3
