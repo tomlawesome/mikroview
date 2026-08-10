@@ -113,7 +113,7 @@ func (ev *Evaluator) Run(ctx context.Context) {
 // identical shape.
 func (ev *Evaluator) evaluateRecovered(e store.Event) {
 	defer logging.Recover(persistLog)
-	for _, entry := range ev.entries.List() {
+	for _, entry := range ev.entries.entriesSnapshot() {
 		tuple, outcome := Match(entry, e)
 		switch outcome {
 		case Violation:
