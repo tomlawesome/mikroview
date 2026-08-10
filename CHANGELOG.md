@@ -163,6 +163,21 @@ upgrading.
   omitting or erroring on it, which MikroView already handles the same
   way it handles an unset `dst-port`.
 
+- **An optional Postgres backend for every persisted store** (#131),
+  including accounts: separation between the mikroview host and its
+  persisted state, so that compromising the host no longer means
+  reading a plaintext file to get every account's data. One shared blob
+  table (`store_blob`) holds the same JSON document the file backend
+  writes today, per store, with an optimistic-concurrency version
+  column -- see `docs/decisions/postgres-backend.md` for the six
+  decisions this left open and why. Existing JSON files are migrated
+  byte-identically into Postgres on first boot with it configured, and
+  left on disk afterward rather than deleted, so reverting is "remove
+  `postgres.dsnFile` and restart" rather than an irreversible choice.
+  New config: `postgres.dsnFile` -- deliberately no inline `postgres.dsn`
+  or CLI flag, since a DSN carries a password. See
+  `docs/configuration.md`'s "Postgres (optional)" section.
+
 - **The watchlist match log now has a Postgres backend** (#243 slice
   6): a dedicated, indexed `match_log` table rather than a row in the
   shared document table every other Postgres-backed store uses -- see
