@@ -22,5 +22,5 @@ A commercial licence removes those obligations.
 
 Email **noreply@example.com**.
 
-MikroView is solely owned by tomlawesome, so a commercial licence can be
+MikroView is solely owned by Alex Bridgwater-Meredith, so a commercial licence can be
 granted directly with no third-party sign-off required.

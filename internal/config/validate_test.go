@@ -56,7 +56,7 @@ func TestFatalRules(t *testing.T) {
 		mut  func(*Config)
 	}{
 		{"empty listen address", "CFG-0001", "listen.http", func(c *Config) { c.Listen.HTTP = "" }},
-		{"unparseable listen address", "CFG-0002", "listen.syslogUdp", func(c *Config) { c.Listen.SyslogUDP = "not-an-address" }},
+		{"unparseable listen address", "CFG-0002", "listen.http", func(c *Config) { c.Listen.HTTP = "not-an-address" }},
 		{"unparseable redirect address", "CFG-0002", "listen.httpRedirect", func(c *Config) { c.Listen.HTTPRedirect = "nope" }},
 		{"bad trusted proxy", "CFG-0003", "listen.trustedProxies", func(c *Config) { c.Listen.TrustedProxies = []string{"example.com"} }},
 		{"session never expires", "CFG-0020", "auth.sessionTTL", func(c *Config) { c.Auth.SessionTTL = 0 }},
@@ -120,9 +120,22 @@ func TestWarningsClampRatherThanRefuse(t *testing.T) {
 		{"zero retention", "CFG-0010",
 			func(c *Config) { c.Store.Retention = 0 },
 			func(c *Config) bool { return c.Store.Retention > 0 }},
-		{"zero maxEvents", "CFG-0011",
-			func(c *Config) { c.Store.MaxEvents = 0 },
-			func(c *Config) bool { return c.Store.MaxEvents == defaults().Store.MaxEvents }},
+		{"zero maxMemory", "CFG-0011",
+			func(c *Config) { c.Store.MaxMemory = 0 },
+			func(c *Config) bool { return c.Store.MaxMemory == defaults().Store.MaxMemory }},
+		{"empty matchLogPath", "CFG-0040",
+			func(c *Config) { c.Watchlist.MatchLogPath = "" },
+			func(c *Config) bool { return c.Watchlist.MatchLogPath == defaults().Watchlist.MatchLogPath }},
+		{"zero matchLogCapacity", "CFG-0041",
+			func(c *Config) { c.Watchlist.MatchLogCapacity = 0 },
+			func(c *Config) bool {
+				return c.Watchlist.MatchLogCapacity == defaults().Watchlist.MatchLogCapacity
+			}},
+		{"zero matchLogRetention", "CFG-0042",
+			func(c *Config) { c.Watchlist.MatchLogRetention = 0 },
+			func(c *Config) bool {
+				return c.Watchlist.MatchLogRetention == defaults().Watchlist.MatchLogRetention
+			}},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			c := validCfg()
@@ -143,6 +156,49 @@ func TestWarningsClampRatherThanRefuse(t *testing.T) {
 				t.Error("the safe default was not actually applied to the config")
 			}
 		})
+	}
+}
+
+// TestHighMaxMemoryWarnsWithoutClamping pins the other tier CFG-0012
+// introduces: unlike CFG-0010/CFG-0011 above, a deliberately large
+// store.maxMemory is a legitimate operator choice on a machine that has
+// the memory to spare, so it must warn -- surfacing the real cost -- and
+// then leave the configured value completely alone, not silently
+// substitute something smaller.
+func TestHighMaxMemoryWarnsWithoutClamping(t *testing.T) {
+	c := validCfg()
+	const big ByteSize = 2 << 30 // 2GiB, above highMaxMemoryWarnThreshold
+	c.Store.MaxMemory = big
+
+	r := c.Validate()
+
+	if len(r.Fatal) != 0 {
+		t.Errorf("a large maxMemory must not be fatal: %v", codes(r.Fatal))
+	}
+	p := has(r.Warnings, "CFG-0012")
+	if p == nil {
+		t.Fatalf("expected warning CFG-0012, got %v", codes(r.Warnings))
+	}
+	if p.Applied != "" {
+		t.Errorf("CFG-0012 must not report a substitution, got Applied=%q", p.Applied)
+	}
+	if c.Store.MaxMemory != big {
+		t.Errorf("the configured value was clamped to %s, want it left at %s", c.Store.MaxMemory, big)
+	}
+}
+
+// A merely generous store.maxMemory (comfortably under the threshold)
+// must not trip CFG-0012 -- otherwise every operator who reads the
+// warning's own advice ("confirm this machine has it to spare") on a
+// smaller box and dials it up a bit lands right back in a warning.
+func TestModeratelyLargeMaxMemoryDoesNotWarn(t *testing.T) {
+	c := validCfg()
+	c.Store.MaxMemory = 500 * 1024 * 1024 // 500MiB, below the 1GiB threshold
+
+	r := c.Validate()
+
+	if p := has(r.Warnings, "CFG-0012"); p != nil {
+		t.Errorf("500MiB should not trip the high-maxMemory warning")
 	}
 }
 

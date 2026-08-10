@@ -3,7 +3,7 @@
 package syslog
 
 import (
-	"bufio"
+	"bytes"
 	"context"
 	"fmt"
 	"net"
@@ -15,6 +15,15 @@ import (
 )
 
 var tcpLog = logging.New("syslog-tcp")
+
+// RawMessage is one received syslog line, before envelope parsing,
+// together with the metadata (source IP, receive time) that only the
+// listener can supply.
+type RawMessage struct {
+	SourceIP string
+	Data     []byte
+	RecvTime time.Time
+}
 
 // maxTCPConnections bounds concurrent RouterOS remote-protocol=tcp
 // connections. Unlike UDP (a stateless per-datagram receive loop) or the
@@ -45,6 +54,12 @@ var maxTCPConnections = 256
 // finished with the value". Caught by the race detector when this was
 // first written as a plain var.
 var maxTCPConnectionsPerSource atomic.Int64
+
+// maxTCPMessageBytes bounds a single read, and so a single message. The
+// Scanner this replaced capped its token at 64KiB for the same reason:
+// an unbounded read is an unbounded allocation driven by whatever is on
+// the other end of the socket.
+const maxTCPMessageBytes = 64 * 1024
 
 func init() {
 	maxTCPConnectionsPerSource.Store(8)
@@ -78,21 +93,12 @@ func tcpIdleTimeout() time.Duration {
 	return time.Duration(tcpIdleTimeoutNS.Load())
 }
 
-// ListenTCP binds addr and serves it until ctx is done.
-func ListenTCP(ctx context.Context, addr string, out chan<- RawMessage) error {
-	ln, err := net.Listen("tcp", addr)
-	if err != nil {
-		return err
-	}
-	return ServeTCP(ctx, ln, out)
-}
-
-// ServeTCP accepts connections on an already-bound ln, framing each one's
-// messages on newlines — unlike UDP, a TCP byte stream has no inherent
-// per-message boundary, so RouterOS's remote-protocol=tcp output must be
-// newline-delimited to be split back into individual log lines. Split from
-// ListenTCP so tests can bind an ephemeral port and learn its address
-// before dialing it.
+// ServeTCP accepts connections on an already-bound ln. Unlike UDP, a TCP
+// byte stream has no inherent per-message boundary, so each connection is
+// framed by handleTCPConn: one read is one message, or several if that
+// read contains newlines. RouterOS sends neither newlines nor lengths --
+// see #202 and handleTCPConn's comment. Split from ListenTCP so tests can
+// bind an ephemeral port and learn its address before dialing it.
 func ServeTCP(ctx context.Context, ln net.Listener, out chan<- RawMessage) error {
 	defer ln.Close()
 
@@ -207,21 +213,52 @@ func handleTCPConn(ctx context.Context, conn net.Conn, out chan<- RawMessage) {
 
 	host, _, _ := net.SplitHostPort(conn.RemoteAddr().String())
 
-	scanner := bufio.NewScanner(conn)
-	scanner.Buffer(make([]byte, 0, 16*1024), 64*1024)
+	// One read is one message, unless the read contains newlines, in
+	// which case it is several.
+	//
+	// This used to be a bufio.Scanner on the default ScanLines split,
+	// which meant it ingested nothing at all from a RouterOS router
+	// (#202): RouterOS sends each message as a bare payload with no
+	// trailing newline and no octet count, so Scan() sat waiting for a
+	// delimiter that never arrived. Measured against a real CHR, TCP
+	// delivered 0 events where UDP delivered 3 of the same messages, and
+	// nothing was logged -- the connection was accepted, held, and
+	// silently discarded.
+	//
+	// Handling both shapes is deliberate. A conventional syslog sender
+	// does terminate its lines and may pack several into one read;
+	// RouterOS terminates nothing. Splitting on newlines when they are
+	// present, and otherwise taking the read whole, serves both without
+	// the receiver having to know which kind of sender it has.
+	//
+	// Measured, not assumed: a 500-message burst from a real router
+	// arrived as 500 events, none lost and none merged. TCP is permitted
+	// to coalesce writes, and with no delimiter there would be nothing to
+	// split them back apart with -- but RouterOS writes one message per
+	// send, and that is what the wire shows. Worth keeping an eye on,
+	// not a defect to design around.
+	buf := make([]byte, maxTCPMessageBytes)
 	conn.SetReadDeadline(time.Now().Add(tcpIdleTimeout()))
-	for scanner.Scan() {
-		conn.SetReadDeadline(time.Now().Add(tcpIdleTimeout()))
-		line := scanner.Bytes()
-		if len(line) == 0 {
-			continue
-		}
-		data := make([]byte, len(line))
-		copy(data, line)
+	for {
+		n, err := conn.Read(buf)
+		if n > 0 {
+			conn.SetReadDeadline(time.Now().Add(tcpIdleTimeout()))
+			for _, line := range bytes.Split(buf[:n], []byte{'\n'}) {
+				line = bytes.TrimRight(line, "\r")
+				if len(line) == 0 {
+					continue
+				}
+				data := make([]byte, len(line))
+				copy(data, line)
 
-		select {
-		case out <- RawMessage{SourceIP: host, Data: data, RecvTime: time.Now()}:
-		default:
+				select {
+				case out <- RawMessage{SourceIP: host, Data: data, RecvTime: time.Now()}:
+				default:
+				}
+			}
+		}
+		if err != nil {
+			return
 		}
 	}
 }

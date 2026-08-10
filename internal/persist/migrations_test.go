@@ -33,6 +33,7 @@ import (
 // migration instead.
 var appliedMigrations = map[string]string{
 	"0001_store_blob.sql": "a2dda218a690e4bd0d5d41be7cc9f8c9562d860dc183019304027b0119fd91e5",
+	"0002_match_log.sql":  "20d244a9e6a977d30b5065bd713b1b0cc72fba34edd4bc3346ccbb18283e8cd4",
 }
 
 func TestAppliedMigrationsAreImmutable(t *testing.T) {
