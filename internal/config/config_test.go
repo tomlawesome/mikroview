@@ -727,12 +727,12 @@ deviceMac:
 	}
 }
 
-func TestBlocklistDefaultsToSpamhausDropAndEdrop(t *testing.T) {
+func TestBlocklistDefaultsToSpamhausDrop(t *testing.T) {
 	cfg, err := Load("", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"spamhaus_drop", "spamhaus_edrop"}
+	want := []string{"spamhaus_drop"}
 	if len(cfg.Blocklist.Sources) != len(want) {
 		t.Fatalf("Blocklist.Sources = %v, want %v", cfg.Blocklist.Sources, want)
 	}

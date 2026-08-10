@@ -51,10 +51,25 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: frontend/package-lock.json
       - run: |
           cd frontend
           npm ci
           npx svelte-check --tsconfig ./tsconfig.app.json
+
+      # Licence compliance, not tidiness. Every Go module linked into the
+      # binary and every frontend package bundled into the embedded
+      # assets ships under a licence (MIT, BSD-3-Clause, ISC,
+      # Apache-2.0) requiring its copyright notice and licence text to
+      # accompany a *binary* distribution; Apache-2.0 s4(d) additionally
+      # requires passing along any NOTICE file. THIRD-PARTY-NOTICES.md is
+      # how we do that, and a generated file that nothing verifies is
+      # wrong the first time a dependency changes and silently stays
+      # wrong. Same reasoning as injection_sinks_test.go and
+      # internal/api's authzMatrix.
+      - name: Third-party notices are up to date
+        run: node tools/licenses/generate-notices.mjs --check
 
   # Runs on every change, deliberately.
   #

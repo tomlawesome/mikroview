@@ -176,7 +176,7 @@ store:
 # from one of the vetted feeds below -- independent of any behavioral
 # threshold, and also reinforces the confidence floor of any other
 # active flag for that same source IP. On by default with Spamhaus's
-# DROP+EDROP lists (small, free, no registration, curated to only
+# DROP list (small, free, no registration, curated to only
 # include netblocks Spamhaus is confident are entirely
 # malicious-controlled). This is a fixed, vetted menu, not an arbitrary
 # URL field -- see internal/blocklist's doc comment and
@@ -187,7 +187,6 @@ store:
 # blocklist:
 #   sources:
 #     - spamhaus_drop
-#     - spamhaus_edrop
 #     # - emerging_threats_compromised  # opt-in: larger, faster-changing, individual-IP list
 
 # Optional (on by default): local IP attribution for the manual IP-lookup
