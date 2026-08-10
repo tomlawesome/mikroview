@@ -66,6 +66,19 @@ type MACRegistry struct {
 // it.
 var macRegistryPersistMinInterval = time.Second
 
+// persistTimeout bounds every Load/Save against backend. Seen runs
+// synchronously on the single ingest goroutine (see main.go's
+// ingestOneRecovered), so an unresponsive backend -- a Postgres
+// connection stuck behind a network blackhole or a long lock wait, not
+// a clean disconnect -- would otherwise block that goroutine forever
+// under context.Background(), freezing the whole ingest pipeline until
+// the syslog listener's buffered channel fills and starts silently
+// dropping packets (internal/syslog/tcp_listener.go). 5s is generous
+// for a write this small: long enough that ordinary latency never trips
+// it, short enough that a genuinely stuck backend degrades to a logged
+// failure (see persistLocked) rather than an indefinite hang.
+const persistTimeout = 5 * time.Second
+
 // OpenMACRegistry loads path if it exists (a missing file is the
 // expected first-run case, not an error) and returns a MACRegistry that
 // persists to it from then on. An empty path is the expected
@@ -88,7 +101,9 @@ func OpenMACRegistry(path string) (*MACRegistry, error) {
 func OpenMACRegistryWithBackend(b persist.Backend) (*MACRegistry, error) {
 	r := &MACRegistry{backend: b, byMAC: make(map[string]*MACEntry)}
 
-	data, version, err := persist.LoadDocument(context.Background(), b)
+	ctx, cancel := context.WithTimeout(context.Background(), persistTimeout)
+	defer cancel()
+	data, version, err := persist.LoadDocument(ctx, b)
 	if err != nil {
 		return r, err
 	}
@@ -217,7 +232,9 @@ func (r *MACRegistry) persistLocked() {
 		persistLog.Error(fmt.Sprintf("encoding MAC registry for persistence failed: %v -- this change exists only in memory and will be lost on restart", err))
 		return
 	}
-	version, conflicted, err := persist.SaveWithRetry(context.Background(), r.backend, data, r.version)
+	ctx, cancel := context.WithTimeout(context.Background(), persistTimeout)
+	defer cancel()
+	version, conflicted, err := persist.SaveWithRetry(ctx, r.backend, data, r.version)
 	if err != nil {
 		persistLog.Error(fmt.Sprintf("writing MAC registry to %s failed: %v -- this change exists only in memory and will be lost on restart", r.backend.Describe(), err))
 		return
