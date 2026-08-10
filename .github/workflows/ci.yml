@@ -129,6 +129,8 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: frontend/package-lock.json
       - name: npm audit
         run: |
           cd frontend
@@ -147,8 +149,19 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      - uses: docker/setup-buildx-action@v4
+
       - name: Build image
-        run: docker build --tag mikroview:test .
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          load: true
+          tags: mikroview:test
+          # Read-only: docker.yml's publish-preview/release jobs already
+          # populate this cache (cache-to: type=gha,mode=max) building
+          # the same Dockerfile from the same commit -- this job has no
+          # reason to also pay to write it.
+          cache-from: type=gha
 
       - name: Run hardened container
         run: >-
@@ -180,6 +193,12 @@ jobs:
 
   postgres:
     name: Postgres integration (#131)
+    # Same reasoning as the container job's own if: above -- dev stays
+    # fast/light on purpose. This job builds a fresh postgres:18-alpine-
+    # derived image (433MB) on every run it's not skipped for; gating it
+    # here cuts that cost on every dev push/PR the same way it already
+    # does for the container job.
+    if: github.base_ref != 'dev' && github.ref_name != 'dev'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
