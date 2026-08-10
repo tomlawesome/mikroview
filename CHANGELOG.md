@@ -112,6 +112,17 @@ upgrading.
   `watchlist.suggestionsStorePath`, see `docs/configuration.md`'s
   "Suggested watchlist entries" section.
 
+  `docs/routeros-setup.md` gained the two push-script blocks
+  (`dhcp-lease`, `arp`) this feature's device suggestions actually
+  depend on -- previously only documented as a reference table row,
+  never given as code to paste in, so following the setup guide as
+  written produced zero device suggestions no matter how the feature
+  itself was configured. Verified against a real RouterOS 7.23.3
+  router, including one real surprise: a lease with no client-reported
+  hostname yet serializes `host-name` as JSON `null` rather than
+  omitting or erroring on it, which MikroView already handles the same
+  way it handles an unset `dst-port`.
+
 - **The watchlist match log now has a Postgres backend** (#243 slice
   6): a dedicated, indexed `match_log` table rather than a row in the
   shared document table every other Postgres-backed store uses -- see
