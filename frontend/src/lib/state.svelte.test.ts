@@ -97,3 +97,25 @@ describe('applyFilters rule/ruleRegex', () => {
   })
 })
 
+describe('applyFilters port', () => {
+  it('matches an event by source or destination port', () => {
+    const events = [
+      evt({ id: 1, srcPort: 443 }),
+      evt({ id: 2, dstPort: 443 }),
+      evt({ id: 3, srcPort: 80, dstPort: 8080 }),
+    ]
+    const got = applyFilters(events, { ...emptyFilters(), port: '443' })
+    expect(got.map((e) => e.id)).toEqual([1, 2])
+  })
+
+  // Number("abc") is NaN, and every `!==` comparison against NaN is
+  // true -- an unguarded filter would hide every event, including ones
+  // with no port at all, reading as "no traffic" while the operator is
+  // still mid-typing a port number.
+  it('treats a non-numeric value as unfiltered rather than hiding everything', () => {
+    const events = [evt({ id: 1, srcPort: 443 }), evt({ id: 2, dstPort: 22 })]
+    const got = applyFilters(events, { ...emptyFilters(), port: 'abc' })
+    expect(got).toHaveLength(2)
+  })
+})
+
