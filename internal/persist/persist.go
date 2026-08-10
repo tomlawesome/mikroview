@@ -16,6 +16,12 @@
 // which is in-memory-only by design, and the TLS material
 // (internal/servertls), which mikroview needs before it could reach a
 // database at all.
+//
+// One exception to the blob-per-store shape: internal/matchlog's
+// Postgres backend, which needs a genuine indexed table rather than a
+// document -- see docs/decisions/postgres-backend.md §1a. It shares
+// this package's Pool (Pool.Raw) and migration runner, but not the
+// Backend interface below.
 package persist
 
 import (

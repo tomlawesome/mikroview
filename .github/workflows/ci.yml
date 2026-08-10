@@ -216,7 +216,11 @@ jobs:
       - name: Integration tests
         env:
           MIKROVIEW_TEST_POSTGRES: postgres://postgres:ci@127.0.0.1:5432/mikroview?sslmode=require
-        run: go test -race -count=1 ./internal/persist/...
+        # internal/matchlog alongside internal/persist (#243 slice 6):
+        # its Postgres backend is a second, independent SQL sink with its
+        # own dedicated table -- see docs/decisions/postgres-backend.md
+        # §1a -- and needs the same real-database coverage.
+        run: go test -race -count=1 ./internal/persist/... ./internal/matchlog/...
 
       - name: Clean up
         if: always()
