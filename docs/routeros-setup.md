@@ -161,8 +161,8 @@ which rule matched. Nothing below changes that.
 
 What this section adds: RouterOS *pushes* a copy of its own config —
 address lists, firewall/NAT rules, DNS static entries, DHCP leases,
-WireGuard peers — to MikroView every 15–30 minutes. Two things follow
-from that:
+ARP, WireGuard peers — to MikroView every 15–30 minutes. Three things
+follow from that:
 
 - **Host names.** An address MikroView already logs shows up as a name
   (`camera.lan`, not `203.0.113.2`) wherever the router has named it —
@@ -170,6 +170,14 @@ from that:
 - **Rule and NAT lookup buttons.** Click the "i" beside a rule or NAT
   cell on an event row to see the full rule — its comment, chain,
   action — not just the short `log-prefix` slug from step 3.
+- **Suggested watchlist entries.** Named devices and ports an existing
+  rule already blocks show up as review-and-accept suggestions (Menu →
+  Suggestions) instead of the watchlist starting as a blank page — see
+  4c-ii below and
+  [configuration.md](configuration.md#suggested-watchlist-entries-issue-243).
+  This is the one item on this list that needs more than the filter-rule
+  push in 4c: without 4c-ii's DHCP-lease/ARP blocks too, there is
+  nothing to suggest a device from.
 
 This never gives MikroView a RouterOS password, and MikroView never
 connects to your router — the router connects to MikroView, on its own
@@ -265,8 +273,59 @@ Line by line:
   scheduled script has no console to print to; drop it if you're
   testing this by hand and want to see the result.
 
-**Other tables follow the identical pattern**, swapping the source
-command and the field names for MikroView's schema names:
+### 4c-ii. DHCP leases and ARP -- what issue #243's suggestions feature needs
+
+MikroView's watchlist can *suggest* entries from named devices it
+already knows about (Menu → Suggestions -- see
+[configuration.md](configuration.md#suggested-watchlist-entries-issue-243)),
+but only once it's actually been sent DHCP leases and ARP entries.
+Without this section pushed, that feature has nothing to suggest from --
+it isn't a separate opt-in, it's this data or nothing.
+
+Same pattern as filter rules, two more independent blocks (each is its
+own push, since a payload carries exactly one `kind`). Verified against
+a real RouterOS 7.23.3 router, including the one genuinely surprising
+part: a lease nobody's DHCP client has actually requested yet -- a
+static lease you typed in by hand, say -- has no `host-name` at all, not
+an empty one. `($v->"host-name")` on that lease still evaluates fine and
+serializes as JSON `null`, which MikroView already treats as "no
+hostname" (the same way it already treats an unset `dst-port`) -- so
+this reaches MikroView correctly either way, named or not.
+
+```
+:local leaseRecs [:toarray ""]
+:foreach i,v in=[/ip/dhcp-server/lease print as-value] do={
+  :local rec {"hostname"=($v->"host-name"); "mac"=($v->"mac-address"); "address"=($v->"address")}
+  :set leaseRecs ($leaseRecs, {$rec})
+}
+:local leasePayload [:serialize to=json value={"kind"="dhcp-lease"; "page"=1; "pages"=1; "records"=$leaseRecs}]
+/tool fetch url="https://<mikroview-host>/api/ingest/routeros" http-method=post http-data=$leasePayload http-header-field=("Content-Type: application/json,Authorization: Bearer <your ingest token>") check-certificate=yes output=none
+
+:local arpRecs [:toarray ""]
+:foreach i,v in=[/ip/arp print as-value] do={
+  :local rec {"address"=($v->"address"); "mac"=($v->"mac-address")}
+  :set arpRecs ($arpRecs, {$rec})
+}
+:local arpPayload [:serialize to=json value={"kind"="arp"; "page"=1; "pages"=1; "records"=$arpRecs}]
+/tool fetch url="https://<mikroview-host>/api/ingest/routeros" http-method=post http-data=$arpPayload http-header-field=("Content-Type: application/json,Authorization: Bearer <your ingest token>") check-certificate=yes output=none
+```
+
+Each block uses its own variable names (`leaseRecs`/`leasePayload`,
+`arpRecs`/`arpPayload`) rather than reusing `recs`/`payload` from 4c --
+all three blocks end up in the same scheduled script (4e), in the same
+top-level scope, and RouterOS script doesn't scope a `:local` to just
+its own `:foreach`.
+
+ARP has no name of its own, but pushing it still earns its keep: a
+device's DHCP lease can go stale between the router's own renewal
+cycles, while ARP reflects what's actually answering right now.
+`internal/routerstate` prefers ARP's address over a same-MAC lease's
+when both are pushed, for exactly that reason.
+
+**Other tables** follow the identical pattern, swapping the source
+command and the field names for MikroView's schema names -- worth
+adding if you want the rule/NAT lookup buttons or host-name resolution
+to cover more than filter rules and DHCP/ARP:
 
 | `kind` | Source command | Fields |
 |---|---|---|
@@ -274,16 +333,16 @@ command and the field names for MikroView's schema names:
 | `filter-rule` | `/ip/firewall/filter print as-value` | `ordinal` (loop index), `comment`, `chain`, `action`, `srcAddressList` ← `src-address-list`, `logPrefix` ← `log-prefix`, `dstPort` ← `dst-port`, `protocol` |
 | `nat-rule` | `/ip/firewall/nat print as-value` | `ordinal` (loop index), `comment`, `chain`, `action` |
 | `dns-static` | `/ip/dns/static print as-value` | `name`, `address` |
-| `dhcp-lease` | `/ip/dhcp-server/lease print as-value` | `hostname`, `mac` ← `mac-address`, `address` |
+| `dhcp-lease` | `/ip/dhcp-server/lease print as-value` | `hostname` ← `host-name`, `mac` ← `mac-address`, `address` |
 | `arp` | `/ip/arp print as-value` | `address`, `mac` ← `mac-address` |
 | `wireguard-interface` | `/interface/wireguard print as-value` | `name`, `comment`, `publicKey` ← `public-key`, `listenPort` ← `listen-port` |
 | `wireguard-peer` | `/interface/wireguard/peers print as-value` | `publicKey` ← `public-key`, `allowedAddress` ← `allowed-address`, `endpointAddress` ← `endpoint-address`, `comment` |
 
-For host names, `dns-static` and `dhcp-lease` are the two worth adding
-first — they're what turns a raw IP into `nas.lan` everywhere MikroView
-shows one. **A name pushed by the router always wins** over a label
-you've set inside MikroView for the same address — manage names for
-anything the router already knows about *in RouterOS*, not in
+For host names, `dns-static` and `dhcp-lease` (above) are the two worth
+adding first — they're what turns a raw IP into `nas.lan` everywhere
+MikroView shows one. **A name pushed by the router always wins** over a
+label you've set inside MikroView for the same address — manage names
+for anything the router already knows about *in RouterOS*, not in
 MikroView's UI; anything the router doesn't cover stays exactly as
 you set it there.
 
@@ -295,18 +354,25 @@ appear in a `read`-policy script's view at all, only public ones.
 
 `/tool fetch` refuses a POST body over roughly 64KiB — measured
 against a real router, not documented by MikroTik. A single filter
-table stays well under that for most deployments (a few hundred rules
-serialize to tens of kilobytes), so the one-page script above is
-enough until it isn't. If `[:len $recs]` output starts running into
-the low hundreds, split it with `:toarray` slicing and increment
-`page`/`pages` accordingly — each page is a complete, independent
-JSON document; MikroView never reassembles pages, so partial delivery
-degrades to "less enrichment," never a corrupted table.
+table (or lease table, or ARP table) stays well under that for most
+deployments (a few hundred rules serialize to tens of kilobytes), so
+the one-page script above is enough until it isn't. If `[:len $recs]`
+(or `$leaseRecs`/`$arpRecs`) output starts running into the low
+hundreds, split it with `:toarray` slicing and increment `page`/`pages`
+accordingly — each page is a complete, independent JSON document;
+MikroView never reassembles pages, so partial delivery degrades to
+"less enrichment," never a corrupted table.
 
 ### 4e. Schedule it
 
+One script, all the blocks from 4c and 4c-ii concatenated in order —
+`:local` names don't collide between them (see 4c-ii's own note on
+why), and each block's `/tool fetch` is an independent push, so one
+failing (say, a momentary network blip) doesn't stop the others in the
+same run.
+
 ```
-/system script add name=mv-push policy=read,test source="<the script from 4c, with your host and token filled in>"
+/system script add name=mv-push policy=read,test source="<the filter-rule block from 4c, then the dhcp-lease and arp blocks from 4c-ii, each with your host and token filled in>"
 /system scheduler add name=mv-push interval=20m policy=read,test on-event="/system script run mv-push"
 ```
 
@@ -348,3 +414,12 @@ yet". `/system script run mv-push` with no output means it worked;
 way step 4a's own certificate check does, including the same
 untrusted-CA text if step 4a was skipped or the `<mikroview-host>`
 placeholder wasn't replaced consistently between the two.
+
+If you also set up 4c-ii, check **Menu → Suggestions**: a named device
+or an already-blocked port should show up under the Undecided filter
+within a few minutes of the push landing (suggestions regenerate in the
+background periodically, not instantly on push -- see
+[configuration.md](configuration.md#suggested-watchlist-entries-issue-243)).
+Nothing showing up there usually means no lease on your network has a
+reported hostname yet, or no rule has both `action=drop`/`reject` and a
+specific `dst-port` -- both real, common states, not a broken push.
