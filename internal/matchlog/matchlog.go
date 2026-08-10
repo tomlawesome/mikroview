@@ -7,12 +7,12 @@
 // is a fact that matters individually, so it is kept at full fidelity
 // and survives a restart, which neither of those two stores does.
 //
-// This slice ships the file backend only. A Postgres backend is
-// deferred to its own later slice: it needs a genuine indexed table,
-// which conflicts with docs/decisions/postgres-backend.md's "one blob
-// table, not six relational ones" -- see issue #243 for the reasoning
-// and why resolving that belongs on its own footing rather than bundled
-// into this feature.
+// Two backends: FileStore (file.go), capacity-bounded, refusing new
+// records once full; and PostgresStore (postgres.go), a dedicated
+// indexed table rather than a row in the shared blob table, bounded by
+// age (retention) rather than count instead -- see
+// docs/decisions/postgres-backend.md §1a for why a genuinely indexed
+// table here doesn't reopen that decision.
 package matchlog
 
 import (
@@ -147,8 +147,8 @@ func clampLimit(n int) int {
 // and here is where you are against it" visibility #243 asks for --
 // the same reasoning issue #244 gave for surfacing store.maxEvents'
 // count/capacity rather than leaving an operator to find out by hitting
-// it. Capacity is 0 for a backend with no ceiling (Postgres, once it
-// exists).
+// it. Capacity is 0 for a backend with no ceiling (PostgresStore --
+// bounded by age instead, see its own doc comment).
 type Stats struct {
 	Count    int  `json:"count"`
 	Capacity int  `json:"capacity"`
@@ -175,8 +175,8 @@ var ErrCapacityReached = errors.New("matchlog: store is at capacity")
 // know this device."
 var ErrEmptyIdentity = errors.New("matchlog: identity has neither MAC nor IP")
 
-// Store persists watchlist matches. The file backend (file.go) is the
-// only implementation in this slice.
+// Store persists watchlist matches. See FileStore and PostgresStore for
+// the two implementations.
 type Store interface {
 	// Append records a match for (entryID, tuple) at t, evidence being
 	// event. Collapses into an existing open record for the same
