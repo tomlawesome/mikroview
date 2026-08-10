@@ -601,6 +601,7 @@ func TestWatchlistEnvVarsOverrideDefaults(t *testing.T) {
 	t.Setenv("MIKROVIEW_WATCHLIST_MATCH_LOG_PATH", "/data/matchlog.jsonl")
 	t.Setenv("MIKROVIEW_WATCHLIST_MATCH_LOG_CAPACITY", "50000")
 	t.Setenv("MIKROVIEW_WATCHLIST_SUGGESTIONS_STORE_PATH", "/data/suggestions.json")
+	t.Setenv("MIKROVIEW_WATCHLIST_MATCH_LOG_RETENTION", "48h")
 
 	cfg, err := Load("", nil)
 	if err != nil {
@@ -617,6 +618,9 @@ func TestWatchlistEnvVarsOverrideDefaults(t *testing.T) {
 	}
 	if cfg.Watchlist.SuggestionsStorePath != "/data/suggestions.json" {
 		t.Errorf("Watchlist.SuggestionsStorePath = %v, want /data/suggestions.json", cfg.Watchlist.SuggestionsStorePath)
+	}
+	if cfg.Watchlist.MatchLogRetention != 48*time.Hour {
+		t.Errorf("Watchlist.MatchLogRetention = %v, want 48h", cfg.Watchlist.MatchLogRetention)
 	}
 }
 
