@@ -125,4 +125,13 @@ no-control-characters rule, capped at 256 runes.
   displaying it safely.
 - Postgres (#131) introduces a query planner, the first real SQL sink.
   Parameterised queries throughout, and this document updated, before
-  that ships.
+  that ships. **Done**: `internal/persist`'s Postgres backend, every
+  statement a compile-time constant with `$n` placeholders -- see
+  `docs/decisions/postgres-backend.md` §7.
+- `internal/matchlog`'s Postgres backend (#243 slice 6, 2026-08-10) adds
+  a second, independent SQL sink -- a dedicated table rather than a row
+  in `internal/persist`'s blob table (see `postgres-backend.md` §1a).
+  Re-audited on the same terms as the first: every statement a
+  compile-time constant with `$n` placeholders, nothing concatenated or
+  built from caller input. `injection_sinks_test.go`'s `allowed` map
+  carries the scoped exemption for both packages.

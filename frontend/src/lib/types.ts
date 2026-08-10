@@ -171,6 +171,21 @@ export interface ReputationResult {
   // absent when that source isn't configured or has nothing to report.
   usageType?: string
   isTor?: boolean
+  // netClass (issue #114): mikroview's own local attribution of the IP to
+  // a Tor exit / VPN / datacenter / privacy relay, from the network-class
+  // feeds. Present only on a live lookup (not on a flag's captured
+  // reputation snapshot), and only when the IP matched a listed range.
+  // Display context, never a score.
+  netClass?: NetClass
+}
+
+export interface NetClass {
+  category: string
+  source: string
+  label: string
+  detail?: string
+  // Pre-rendered "Label (Detail)", so the UI does not reassemble it.
+  display: string
 }
 
 // Mirrors internal/flags.Flag's JSON tags.
@@ -368,6 +383,123 @@ export interface Flag {
 export interface FlagTimeBucket {
   time: string
   byType: Partial<Record<FlagType, number>>
+}
+
+// Mirrors internal/matchlog.Identity's JSON tags (#243) -- a device's
+// resolved identity, MAC-preferred with an IP fallback. At least one
+// field is populated wherever this appears as evidence (a matched
+// event's own identity); either or both may be empty when it appears as
+// an entry's *scope* instead (unscoped means "any source").
+export interface WatchlistIdentity {
+  mac?: string
+  ip?: string
+}
+
+// Mirrors internal/watchlist.PermittedDest's JSON tags.
+export interface WatchlistPermittedDest {
+  destIp: string
+  port: number
+}
+
+// Mirrors internal/watchlist.ObservedDest's JSON tags -- one candidate
+// destination/port pair seen while an inverted entry was Observing, not
+// yet promoted or dismissed.
+export interface WatchlistObservedDest {
+  destIp: string
+  port: number
+  firstSeen: string
+  lastSeen: string
+  count: number
+}
+
+// Mirrors internal/watchlist.Entry's JSON tags (#243) -- see that type's
+// own doc comment for the full non-inverted/inverted matching rules.
+// ports/invert/includeStructuralNoise/observing/permitted/observed all
+// carry `omitempty` server-side, so any of them may be entirely absent
+// from a response rather than present with a zero value (empty
+// array/false) -- code reading these must treat absence and "present
+// but empty/false" identically, never assume a key exists.
+export interface WatchlistEntry {
+  id: string
+  name?: string
+  source?: WatchlistIdentity
+  destIp?: string
+  ports?: number[]
+  invert?: boolean
+  // Only meaningful when invert is true. omitempty server-side, so a
+  // false value is absent entirely, not present-and-false -- treat
+  // absence and false identically (see the doc comment above).
+  observing?: boolean
+  includeStructuralNoise?: boolean
+  permitted?: WatchlistPermittedDest[]
+  observed?: WatchlistObservedDest[]
+  createdAt: string
+}
+
+// Mirrors internal/matchlog.Tuple's JSON tags -- what a match was
+// actually recorded under: the matching event's own resolved identity
+// (never the entry's, possibly-unscoped, Source), the destination it
+// reached, and the port.
+export interface WatchlistMatchTuple {
+  source: WatchlistIdentity
+  destIp: string
+  port: number
+}
+
+// Mirrors internal/matchlog.Record's JSON tags -- one watchlist match,
+// evidence-first. event is the full matched FirewallEvent, exactly what
+// the live view would have shown, not a summary. count > 1 means every
+// occurrence after the first collapsed into this same record rather than
+// being stored individually (see internal/matchlog's own doc comment on
+// why -- the rate cap that stops a noisy entry from recreating the
+// haystack this feature exists to avoid).
+export interface WatchlistMatch {
+  id: string
+  entryId: string
+  tuple: WatchlistMatchTuple
+  event: FirewallEvent
+  firstSeen: string
+  lastSeen: string
+  count: number
+}
+
+// Mirrors internal/suggest.Kind (#243 slice 5) -- what a candidate
+// becomes if accepted. addressList is defined server-side but never
+// actually generated yet (see that Kind's own Go doc comment), so it
+// should never appear here in practice.
+export type SuggestionKind = 'device' | 'port' | 'addressList'
+
+// Mirrors internal/suggest.Status -- see internal/suggest's package doc
+// comment for what each value means and how it's reached. 'off' is the
+// default for every newly generated candidate and the default review
+// view.
+export type SuggestionStatus = 'off' | 'on' | 'hide'
+
+// Mirrors internal/suggest.Candidate's JSON tags. id routinely contains
+// a raw NUL byte (the generator's internal join separator) -- always
+// build API paths with encodeURIComponent(id), never string-concatenate
+// it directly, or the request never reaches the server at all.
+export interface Suggestion {
+  id: string
+  kind: SuggestionKind
+  status: SuggestionStatus
+  // Set once an accepted (status: 'on') candidate's generating
+  // justification stops appearing in a later background sync -- the
+  // rule or device it was suggested from changed or was removed. Never
+  // auto-cleared except by that justification holding again; needs a
+  // clear, hard-to-miss visual treatment, not a subtle one (#243 slice
+  // 5 design: "a bright, hard-to-miss highlight").
+  stale?: boolean
+  name: string
+  justification: string
+  routerDevice: string
+  source?: WatchlistIdentity
+  ports?: number[]
+  addressList?: string
+  // Set once status is 'on': the real watchlist entry this became.
+  entryId?: string
+  firstSeen: string
+  updatedAt: string
 }
 
 // Mirrors internal/store's Scope.

@@ -43,11 +43,17 @@ async function getWithToken(path, token) {
   return res.status
 }
 
+// 404, not 401: an ingest token authenticates successfully (it's a
+// valid token, just not this kind of route) and dispatches to its own
+// disjoint mux (see internal/api/auth.go's ingestRoutes), which simply
+// doesn't register these paths -- the same "valid token, wrong mux"
+// shape a read-only token gets hitting a write route. Was 401 before
+// #186 step 3 gave ingest tokens a mux of their own to dispatch to.
 const readOnlyPaths = ['/api/events', '/api/flags', '/api/stats', '/api/devices']
 for (const path of readOnlyPaths) {
   check(
-    (await getWithToken(path, ingest.body.value)) === 401,
-    `an ingest token is refused at ${path}`,
+    (await getWithToken(path, ingest.body.value)) === 404,
+    `an ingest token is refused at ${path} (404, wrong mux)`,
   )
   // Asserted alongside, so a wholesale-broken bearer path cannot pass
   // this scenario by refusing everything.
@@ -56,6 +62,14 @@ for (const path of readOnlyPaths) {
     `a read-only API token still works at ${path}`,
   )
 }
+
+// The reverse direction: a read-only API token must not reach the
+// ingest endpoint either -- same disjoint-mux guarantee, pointed the
+// other way. 404 again, not 401, for the identical reason.
+check(
+  (await getWithToken('/api/ingest/routeros', api.body.value)) === 404,
+  'a read-only API token is refused at /api/ingest/routeros (404, wrong mux)',
+)
 
 // Revocation is what an operator reaches for when a router is
 // compromised, so it has to work on the new kind too.

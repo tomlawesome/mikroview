@@ -14,14 +14,17 @@
   import FilterBar from './components/FilterBar.svelte'
   import LiveTable from './components/LiveTable.svelte'
   import Dashboard from './components/Dashboard.svelte'
-  import ControlPorts from './components/ControlPorts.svelte'
+  import Watchlist from './components/Watchlist.svelte'
+  import Suggestions from './components/Suggestions.svelte'
   import Flags from './components/Flags.svelte'
   import Detectors from './components/Detectors.svelte'
   import Entities from './components/Entities.svelte'
   import Fleet from './components/Fleet.svelte'
   import AuditLog from './components/AuditLog.svelte'
+  import Exclusions from './components/Exclusions.svelte'
   import IpLookupPopover from './components/IpLookupPopover.svelte'
   import PortLookupPopover from './components/PortLookupPopover.svelte'
+  import RouterLookupPopover from './components/RouterLookupPopover.svelte'
   import AuthSetup from './components/AuthSetup.svelte'
   import AuthLogin from './components/AuthLogin.svelte'
   import UsersOverlay from './components/UsersOverlay.svelte'
@@ -151,8 +154,10 @@
     {#if appState.view === 'live'}
       <FilterBar />
       <LiveTable />
-    {:else if appState.view === 'control-ports'}
-      <ControlPorts />
+    {:else if appState.view === 'watchlist'}
+      <Watchlist />
+    {:else if appState.view === 'suggestions'}
+      <Suggestions />
     {:else if appState.view === 'flags'}
       <Flags />
     {:else if appState.view === 'detectors'}
@@ -163,12 +168,15 @@
       <Fleet />
     {:else if appState.view === 'audit'}
       <AuditLog />
+    {:else if appState.view === 'exclusions'}
+      <Exclusions />
     {:else}
       <Dashboard />
     {/if}
   </main>
   <IpLookupPopover />
   <PortLookupPopover />
+  <RouterLookupPopover />
   <UsersOverlay />
   <SSOLinkOverlay />
   <TokensOverlay />

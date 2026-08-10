@@ -6,6 +6,7 @@
   import ActionBadge from './ActionBadge.svelte'
   import IpInvestigateButton from './IpInvestigateButton.svelte'
   import PortInvestigateButton from './PortInvestigateButton.svelte'
+  import RouterRuleButton from './RouterRuleButton.svelte'
   import { lookupPort } from '../lib/commonPorts'
 
   let { event, deviceName }: { event: FirewallEvent; deviceName: string } = $props()
@@ -122,7 +123,12 @@
   {/if}
 
   <span class="cell addr nat" class:has-value={!!event.natIp} title={event.natRaw}>
-    {event.natIp ? `→ ${formatAddr(event.natIp, event.natPort)}` : '—'}
+    {#if event.natIp}
+      <span class="nat-value">→ {formatAddr(event.natIp, event.natPort)}</span>
+      <RouterRuleButton mode="nat" device={event.deviceId} />
+    {:else}
+      —
+    {/if}
   </span>
 
   {#if event.protocol}
@@ -140,13 +146,16 @@
   <span class="cell iface">{ifaces}</span>
 
   {#if event.ruleLabel}
-    <button
-      class="cell rule cell-btn"
-      onclick={() => (appState.filters = { ...appState.filters, rule: event.ruleLabel, ruleRegex: false })}
-      title={event.ruleName ? `${event.ruleName} — filter to rule: ${event.ruleLabel}` : `Filter to rule: ${event.ruleLabel}`}
-    >
-      {event.ruleName || event.ruleLabel}
-    </button>
+    <span class="cell rule">
+      <button
+        class="cell-btn rule-btn"
+        onclick={() => (appState.filters = { ...appState.filters, rule: event.ruleLabel, ruleRegex: false })}
+        title={event.ruleName ? `${event.ruleName} — filter to rule: ${event.ruleLabel}` : `Filter to rule: ${event.ruleLabel}`}
+      >
+        {event.ruleName || event.ruleLabel}
+      </button>
+      <RouterRuleButton mode="rule" device={event.deviceId} ruleLabel={event.ruleLabel} />
+    </span>
   {:else}
     <span class="cell rule">—</span>
   {/if}
@@ -285,6 +294,31 @@
   .rule {
     font-family: var(--font-mono);
     color: var(--fg-muted);
+  }
+
+  /* The rule cell holds the click-to-filter button plus the pushed-table
+     lookup trigger side by side -- same layout the addr cells use. */
+  .cell.rule {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+  }
+
+  .rule-btn {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  /* Same shape for the NAT cell: value plus the NAT-table trigger. */
+  .nat-value {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   .iface {

@@ -264,12 +264,21 @@ func TestMigrateIsIdempotentAndConcurrencySafe(t *testing.T) {
 		}
 	}
 
+	// One row per embedded migration, not a hardcoded 1 -- the point
+	// under test is that four concurrent Migrate calls against an
+	// already-migrated database don't re-insert anything, which holds
+	// regardless of how many migrations exist by the time this runs.
+	migrations, err := loadMigrations()
+	if err != nil {
+		t.Fatalf("loadMigrations: %v", err)
+	}
+
 	var count int
 	if err := p.pool.QueryRow(ctx, "SELECT count(*) FROM schema_version").Scan(&count); err != nil {
 		t.Fatalf("counting schema_version: %v", err)
 	}
-	if count != 1 {
-		t.Errorf("schema_version has %d rows after repeated migration, want 1", count)
+	if count != len(migrations) {
+		t.Errorf("schema_version has %d rows after repeated migration, want %d (one per migration)", count, len(migrations))
 	}
 }
 

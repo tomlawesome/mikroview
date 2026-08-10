@@ -159,3 +159,34 @@ func TestResolverPortZeroValueIsUsable(t *testing.T) {
 		t.Errorf("Port() on zero value = %q, want empty", got)
 	}
 }
+
+// fakeRouterHosts backs the RouterHosts precedence tests without a real
+// routerstate.Store -- the interface exists for exactly this.
+type fakeRouterHosts map[string]string
+
+func (f fakeRouterHosts) HostName(ip string) string { return f[ip] }
+
+// TestRouterHostsWinOverEverything is issue #186 step 4c's owner
+// decision as a test: a router-pushed name out-ranks both an
+// admin-managed entity label and the config map for the same address --
+// and an address the router does not name falls through to them
+// untouched.
+func TestRouterHostsWinOverEverything(t *testing.T) {
+	es, _ := entities.Open("")
+	if _, err := es.Upsert(entities.Entity{Type: entities.TypeHost, Key: "192.168.1.50", Label: "UI label"}); err != nil {
+		t.Fatal(err)
+	}
+
+	r := Resolver{
+		Hosts:       map[string]string{"192.168.1.50": "config label", "192.168.1.60": "config-only host"},
+		Entities:    es,
+		RouterHosts: fakeRouterHosts{"192.168.1.50": "router-name"},
+	}
+
+	if got := r.Host("192.168.1.50"); got != "router-name" {
+		t.Errorf("Host() = %q, want the router-pushed name to win over entity and config labels", got)
+	}
+	if got := r.Host("192.168.1.60"); got != "config-only host" {
+		t.Errorf("Host() = %q -- an address the router does not name must fall through untouched", got)
+	}
+}

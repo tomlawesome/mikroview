@@ -20,9 +20,13 @@ import (
 	"github.com/tomlawesome/mikroview/internal/entities"
 	"github.com/tomlawesome/mikroview/internal/flags"
 	"github.com/tomlawesome/mikroview/internal/hub"
+	"github.com/tomlawesome/mikroview/internal/matchlog"
 	"github.com/tomlawesome/mikroview/internal/reputation"
+	"github.com/tomlawesome/mikroview/internal/routerstate"
 	"github.com/tomlawesome/mikroview/internal/rules"
 	"github.com/tomlawesome/mikroview/internal/store"
+	"github.com/tomlawesome/mikroview/internal/suggest"
+	"github.com/tomlawesome/mikroview/internal/watchlist"
 )
 
 // newTestServer's Auth defaults to the "disabled" state (see
@@ -47,6 +51,15 @@ func newTestServer(t *testing.T) (*Server, *store.Store) {
 	}
 	ru, _ := rules.Open("")
 	as, _ := audit.Open("")
+	ws, _ := watchlist.Open("")
+	ss, _ := suggest.Open("")
+	// matchlog.Open has no in-memory-only mode (see internal/matchlog's
+	// own doc comment), unlike every other store here -- a temp file is
+	// the closest equivalent for a test fixture.
+	ml, err := matchlog.Open(filepath.Join(t.TempDir(), "matchlog.jsonl"), 1000)
+	if err != nil {
+		t.Fatal(err)
+	}
 	s := &Server{
 		Store:            st,
 		Devices:          device.NewRegistry([]config.Device{{ID: "core", Name: "Core", SourceIP: "192.168.1.1"}}),
@@ -57,10 +70,15 @@ func newTestServer(t *testing.T) (*Server, *store.Store) {
 		Entities:         es,
 		Rules:            ru,
 		Audit:            as,
+		Watchlist:        ws,
+		Suggest:          ss,
+		MatchLog:         ml,
 		Auth:             authStore,
 		Sessions:         auth.NewSessionStore(time.Hour),
 		LoginLimiter:     auth.NewLoginLimiter(10, time.Minute),
 		Tokens:           tokenStore,
+		IngestLimiter:    auth.NewLoginLimiter(ingestLimiterThreshold, ingestLimiterWindow),
+		RouterState:      routerstate.New(),
 		StartTime:        time.Now(),
 		Version:          "test-version",
 	}
@@ -382,29 +400,6 @@ func TestHandleRules(t *testing.T) {
 	}
 	if byRule["r99"].Count != 1 {
 		t.Errorf("expected r99's count = 1, got %d", byRule["r99"].Count)
-	}
-}
-
-func TestHandleCriticalPorts(t *testing.T) {
-	s, _ := newTestServer(t)
-	s.CriticalPorts = []int{22, 3389, 8291}
-	ts := httptest.NewServer(s.mux())
-	defer ts.Close()
-
-	resp, err := http.Get(ts.URL + "/api/critical-ports")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer resp.Body.Close()
-
-	var body struct {
-		Ports []int `json:"ports"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
-		t.Fatal(err)
-	}
-	if len(body.Ports) != 3 || body.Ports[0] != 22 {
-		t.Errorf("unexpected ports: %+v", body.Ports)
 	}
 }
 

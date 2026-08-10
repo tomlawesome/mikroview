@@ -40,8 +40,25 @@ type Device struct {
 }
 
 type Listen struct {
-	SyslogUDP string `yaml:"syslogUdp"`
-	SyslogTCP string `yaml:"syslogTcp"`
+	// SyslogTLS (issue #188) accepts RouterOS's remote-protocol=tls
+	// syslog, using the same certificate the HTTPS listener presents --
+	// the router already imports mikroview's generated CA to verify
+	// HTTPS ingest, so this is that same trust step, not a second one.
+	// Started whenever this is non-empty -- NOT gated on tls.enabled,
+	// unlike HTTPRedirect. A certificate is loaded when either the HTTPS
+	// listener or this one needs it, so a deployment that turns off
+	// mikroview's own HTTP TLS because a reverse proxy terminates TLS
+	// would otherwise lose syslog ingest entirely once #189 removed the
+	// plaintext listeners: the router connects here directly, never
+	// through that proxy. Set to "" to disable it entirely, same
+	// optional-empty-string contract as HTTPRedirect. Defaults to
+	// ":6514", RFC 5425's port.
+	//
+	// This buys confidentiality and mikroview authenticating itself to
+	// the router -- it does not authenticate the sender. RouterOS's
+	// logging action has no client-certificate option, so anything able
+	// to reach the port can still connect and inject log lines.
+	SyslogTLS string `yaml:"syslogTls"`
 	HTTP      string `yaml:"http"`
 	// HTTPRedirect: a second, plain-HTTP-only listener whose sole job is
 	// redirecting to the HTTPS listener above -- lets a browser/client
@@ -128,7 +145,42 @@ func ParseTrustedProxies(entries []string) ([]netip.Prefix, error) {
 
 type Store struct {
 	Retention time.Duration `yaml:"retention"`
-	MaxEvents int           `yaml:"maxEvents"`
+	// MaxMemory bounds the in-memory event ring by its memory cost
+	// rather than by an event count -- see #244. An event count means
+	// something different by up to four orders of magnitude between
+	// deployments (it depends entirely on which RouterOS rules the
+	// operator set log=yes on), so no single default event count could
+	// be documented as meaning anything in particular; a memory budget
+	// is the thing an operator actually controls (it is what they set on
+	// a container) and mikroview can derive the rest.
+	MaxMemory ByteSize `yaml:"maxMemory"`
+}
+
+// assumedBytesPerEvent is what a typical retained event costs: the fixed
+// struct (456 bytes, internal/store.Event) plus one heap allocation for
+// its raw syslog line, rounded to the allocator's size class. Measured in
+// internal/store/memory_test.go's TestRetainedBytesPerEvent against a
+// representative RouterOS forward-chain line -- re-run that test rather
+// than trusting this constant if store.Event's fields change.
+//
+// This is an assumption, not a guarantee: internal/routeros.Parse clamps
+// every extracted field to 256 bytes but deliberately leaves Raw
+// verbatim, so an unusually long line costs more than this constant
+// assumes and a deployment fed adversarial or pathological lines could
+// see real memory use run higher than store.maxMemory implies.
+const assumedBytesPerEvent = 616
+
+// Capacity derives the event ring's element count from the configured
+// memory budget. Always at least 1 -- store.New already treats a
+// non-positive capacity as 1, so a budget too small to hold even one
+// event's assumed cost should fail the same way rather than silently
+// holding zero.
+func (s Store) Capacity() int {
+	n := int64(s.MaxMemory) / assumedBytesPerEvent
+	if n < 1 {
+		n = 1
+	}
+	return int(n)
 }
 
 // Log controls mikroview's own server log output -- see
@@ -283,6 +335,52 @@ type Entities struct {
 // restart.
 type Audit struct {
 	StorePath string `yaml:"storePath"`
+}
+
+// Watchlist configures internal/watchlist's entry store and its
+// internal/matchlog match log (#243) -- the persisted replacement for
+// Control Ports' single flat criticalPorts port list. StorePath (the
+// entries themselves) follows the same optional-persistence contract as
+// every other small store here: left empty, entries still work, just
+// don't survive a restart.
+//
+// MatchLogPath does not share that contract -- it has no in-memory-only
+// mode, unlike every other store in this file. Durability is the entire
+// reason this store exists (#243 section 3's "a match must survive a
+// restart" requirement); an in-memory match log would be a second
+// volatile event ring with extra steps, not a lesser version of this
+// feature. So MatchLogPath must be non-empty (see CFG-0041) and
+// MatchLogCapacity must be positive (CFG-0040) -- both a good default
+// out of the box, not settings an operator has to supply.
+type Watchlist struct {
+	StorePath string `yaml:"storePath"`
+	// MatchLogPath is where internal/matchlog's append-only JSON-lines
+	// file lives.
+	MatchLogPath string `yaml:"matchLogPath"`
+	// MatchLogCapacity is the match log's hard ceiling on distinct
+	// records -- #243 section 3 puts the file backend's realistic range
+	// at ~100k-500k matches; see internal/matchlog.ErrCapacityReached
+	// for what happens once it's reached (refused, not silently
+	// overwritten). File backend only -- the Postgres backend ignores
+	// this and uses MatchLogRetention instead.
+	MatchLogCapacity int `yaml:"matchLogCapacity"`
+	// MatchLogRetention is how long a match is kept, on the Postgres
+	// backend only, once its last activity ages past it -- #243 section
+	// 3's "pragmatically unlimited" record count there, bounded by age
+	// rather than by count the way the file backend is. Enforced by
+	// internal/matchlog.PostgresStore.RunPeriodicPurge, not at write
+	// time. Ignored on the file backend, which has no ageing policy of
+	// its own -- it stops accepting new records at MatchLogCapacity
+	// instead.
+	MatchLogRetention time.Duration `yaml:"matchLogRetention"`
+	// SuggestionsStorePath is where internal/suggest's candidate pool
+	// (#243 slice 5 -- watchlist entries suggested from data RouterOS has
+	// already pushed) persists. Same optional-persistence contract as
+	// StorePath above: left empty, suggestions still work, they just
+	// regenerate from scratch (at Off, nothing lost that matters -- see
+	// internal/suggest's package doc comment) on every restart instead of
+	// remembering what was already accepted or hidden.
+	SuggestionsStorePath string `yaml:"suggestionsStorePath"`
 }
 
 // TLS configures mikroview's own listener -- on by default: a browser
@@ -551,6 +649,30 @@ type Blocklist struct {
 	Sources []string `yaml:"sources"`
 }
 
+// NetClass configures internal/netclass's local IP attribution: labelling
+// an address as a Tor exit, a commercial VPN, cloud/datacenter space, or
+// a privacy relay (issue #114). It adds context to a manual IP lookup,
+// and never raises a flag on its own for any category -- but a Tor or
+// VPN match on an inbound source (see internal/detect/netclass.go) does
+// reinforce an already-raised flag's confidence, direction-aware and
+// weighted per category. See internal/netclass's doc comment for the
+// menu and why it is a fixed menu rather than an arbitrary URL field.
+//
+// On by default with the high-precision lists (Tor exit nodes, Apple
+// Private Relay, and the X4BNet VPN list) -- deliberately not the broad
+// datacenter/cloud feeds, which cover >10% of routable IPv4 and would
+// attach a label to ordinary traffic. An operator who wants full cloud
+// attribution opts the rest in: sources like "x4b_datacenter", "aws",
+// "gcp". Set sources to an empty list to disable attribution (and the
+// confidence reinforcement) entirely. Refresh cadence is not
+// configurable, same reasoning as Blocklist.
+type NetClass struct {
+	// Sources is a list of internal/netclass.Source values -- an
+	// unrecognized entry is logged and skipped, degrade-not-crash like
+	// every other optional integration here.
+	Sources []string `yaml:"sources"`
+}
+
 // Postgres optionally moves mikroview's persisted state off this host
 // and onto a database server (issue #131).
 //
@@ -596,6 +718,7 @@ type Config struct {
 	Auth       Auth       `yaml:"auth"`
 	Entities   Entities   `yaml:"entities"`
 	Audit      Audit      `yaml:"audit"`
+	Watchlist  Watchlist  `yaml:"watchlist"`
 	Notify     Notify     `yaml:"notify"`
 	TLS        TLS        `yaml:"tls"`
 	OIDC       OIDC       `yaml:"oidc"`
@@ -603,6 +726,7 @@ type Config struct {
 	Devices    []Device   `yaml:"devices"`
 	DeviceMAC  DeviceMAC  `yaml:"deviceMac"`
 	Blocklist  Blocklist  `yaml:"blocklist"`
+	NetClass   NetClass   `yaml:"netClass"`
 
 	// RuleNames/HostNames are optional friendly-display-name maps -- see
 	// internal/naming. Keyed by the raw value RouterOS reports (a rule
@@ -616,14 +740,17 @@ type Config struct {
 func defaults() Config {
 	return Config{
 		Listen: Listen{
-			SyslogUDP:    ":1514",
-			SyslogTCP:    ":1514",
+			SyslogTLS:    ":6514",
 			HTTP:         ":8080",
 			HTTPRedirect: ":8081",
 		},
 		Store: Store{
 			Retention: 24 * time.Hour,
-			MaxEvents: 200_000,
+			// 120MiB / 616 bytes/event (assumedBytesPerEvent) derives to
+			// ~204,268 events -- close to the old flat 200,000 default,
+			// so a fresh install's memory footprint does not jump on
+			// upgrade even though the unit did.
+			MaxMemory: 120 * 1024 * 1024,
 		},
 		Log: Log{
 			Level: "info",
@@ -710,6 +837,13 @@ func defaults() Config {
 		Audit: Audit{
 			StorePath: DefaultDataDir + "/audit.json",
 		},
+		Watchlist: Watchlist{
+			StorePath:            DefaultDataDir + "/watchlist.json",
+			MatchLogPath:         DefaultDataDir + "/matchlog.jsonl",
+			MatchLogCapacity:     200_000,
+			MatchLogRetention:    7 * 24 * time.Hour,
+			SuggestionsStorePath: DefaultDataDir + "/suggestions.json",
+		},
 		TLS: TLS{
 			Enabled:   true,
 			StorePath: DefaultDataDir + "/tls",
@@ -724,6 +858,12 @@ func defaults() Config {
 			// reasoning Flags already gives for duplicating
 			// internal/detect.Config's own defaults.
 			Sources: []string{"spamhaus_drop", "spamhaus_edrop"},
+		},
+		NetClass: NetClass{
+			// Mirrors internal/netclass.DefaultSources -- literal here
+			// to keep this package a dependency-free leaf, same as
+			// Blocklist above.
+			Sources: []string{"tor", "x4b_vpn"},
 		},
 		Notify: Notify{
 			BatchWindow: 60 * time.Second,
@@ -796,11 +936,8 @@ func loadYAML(path string, cfg *Config) error {
 }
 
 func applyEnv(cfg *Config) {
-	if v := os.Getenv("MIKROVIEW_LISTEN_SYSLOG_UDP"); v != "" {
-		cfg.Listen.SyslogUDP = v
-	}
-	if v := os.Getenv("MIKROVIEW_LISTEN_SYSLOG_TCP"); v != "" {
-		cfg.Listen.SyslogTCP = v
+	if v := os.Getenv("MIKROVIEW_LISTEN_SYSLOG_TLS"); v != "" {
+		cfg.Listen.SyslogTLS = v
 	}
 	if v := os.Getenv("MIKROVIEW_LISTEN_HTTP"); v != "" {
 		cfg.Listen.HTTP = v
@@ -822,9 +959,9 @@ func applyEnv(cfg *Config) {
 			cfg.Store.Retention = d
 		}
 	}
-	if v := os.Getenv("MIKROVIEW_STORE_MAX_EVENTS"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil {
-			cfg.Store.MaxEvents = n
+	if v := os.Getenv("MIKROVIEW_STORE_MAX_MEMORY"); v != "" {
+		if b, err := ParseByteSize(v); err == nil {
+			cfg.Store.MaxMemory = b
 		}
 	}
 	if v := os.Getenv("MIKROVIEW_LOG_LEVEL"); v != "" {
@@ -1057,6 +1194,25 @@ func applyEnv(cfg *Config) {
 	if v := os.Getenv("MIKROVIEW_AUDIT_STORE_PATH"); v != "" {
 		cfg.Audit.StorePath = v
 	}
+	if v := os.Getenv("MIKROVIEW_WATCHLIST_STORE_PATH"); v != "" {
+		cfg.Watchlist.StorePath = v
+	}
+	if v := os.Getenv("MIKROVIEW_WATCHLIST_MATCH_LOG_PATH"); v != "" {
+		cfg.Watchlist.MatchLogPath = v
+	}
+	if v := os.Getenv("MIKROVIEW_WATCHLIST_MATCH_LOG_CAPACITY"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			cfg.Watchlist.MatchLogCapacity = n
+		}
+	}
+	if v := os.Getenv("MIKROVIEW_WATCHLIST_SUGGESTIONS_STORE_PATH"); v != "" {
+		cfg.Watchlist.SuggestionsStorePath = v
+	}
+	if v := os.Getenv("MIKROVIEW_WATCHLIST_MATCH_LOG_RETENTION"); v != "" {
+		if d, err := time.ParseDuration(v); err == nil {
+			cfg.Watchlist.MatchLogRetention = d
+		}
+	}
 	if v := os.Getenv("MIKROVIEW_AUTH_TOKENS_STORE_PATH"); v != "" {
 		cfg.Auth.TokensStorePath = v
 	}
@@ -1186,24 +1342,23 @@ func parseIntList(v string) ([]int, bool) {
 
 func applyFlags(cfg *Config, args []string) error {
 	fs := flag.NewFlagSet("mikroview", flag.ContinueOnError)
-	syslogUDP := fs.String("syslog-udp", cfg.Listen.SyslogUDP, "syslog UDP listen address")
-	syslogTCP := fs.String("syslog-tcp", cfg.Listen.SyslogTCP, "syslog TCP listen address")
+	syslogTLS := fs.String("syslog-tls", cfg.Listen.SyslogTLS, "syslog TLS listen address, RouterOS remote-protocol=tls (only started when tls.enabled is true; empty disables it)")
 	httpAddr := fs.String("http", cfg.Listen.HTTP, "HTTP listen address")
 	httpRedirectAddr := fs.String("http-redirect", cfg.Listen.HTTPRedirect, "HTTP listen address for the redirect-to-HTTPS-only listener (empty disables it)")
 	retention := fs.Duration("retention", cfg.Store.Retention, "event retention window")
-	maxEvents := fs.Int("max-events", cfg.Store.MaxEvents, "max events held in the ring buffer")
+	maxMemory := cfg.Store.MaxMemory
+	fs.Var(&maxMemory, "max-memory", "memory budget for the event ring buffer, e.g. 120MiB (see docs/configuration.md)")
 	geoipDB := fs.String("geoip-db", cfg.GeoIP.DBPath, "path to a MaxMind GeoLite2/GeoIP2 Country or City .mmdb file (optional; omit to disable country flags)")
 
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 
-	cfg.Listen.SyslogUDP = *syslogUDP
-	cfg.Listen.SyslogTCP = *syslogTCP
+	cfg.Listen.SyslogTLS = *syslogTLS
 	cfg.Listen.HTTP = *httpAddr
 	cfg.Listen.HTTPRedirect = *httpRedirectAddr
 	cfg.Store.Retention = *retention
-	cfg.Store.MaxEvents = *maxEvents
+	cfg.Store.MaxMemory = maxMemory
 	cfg.GeoIP.DBPath = *geoipDB
 	return nil
 }
