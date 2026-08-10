@@ -50,7 +50,7 @@
         {/if}
 
         <!-- (a) copyright notice -->
-        <p>Copyright © 2026 Tom Lawson</p>
+        <p>Copyright © 2026 Tom Bridgwater-Lawson</p>
 
         <!-- (c) licensees may convey under this License, and (d) how to view it -->
         <p>
