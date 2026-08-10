@@ -482,7 +482,6 @@ has no matching entry there, the same precedent `new_device`/
 blocklist:
   sources:
     - spamhaus_drop
-    - spamhaus_edrop
 ```
 
 - **`sources`** — which feeds from the vetted menu to enable. This is
@@ -496,8 +495,8 @@ blocklist:
   local blocklist matching entirely.
 
   The menu today:
-  - **`spamhaus_drop`** / **`spamhaus_edrop`** (on by default) —
-    [Spamhaus's DROP and EDROP lists](https://www.spamhaus.org/drop/):
+  - **`spamhaus_drop`** (on by default) —
+    [Spamhaus's DROP list](https://www.spamhaus.org/drop/):
     small (documented at roughly 1-2k CIDR ranges combined), free, no
     registration, and deliberately conservative — Spamhaus only lists
     netblocks they're confident are entirely malicious-controlled
@@ -524,7 +523,7 @@ own sorted, non-overlapping address ranges — O(log n) per feed, never a
 linear scan, regardless of list size, since this runs on every single
 ingested event. Combined entries across every enabled feed are capped at
 100,000 (`internal/blocklist`'s `maxTotalEntries`) — measured, not
-estimated: today's real combined feed size (Spamhaus DROP+EDROP +
+estimated: today's real combined feed size (Spamhaus DROP +
 Emerging Threats) is ~2.2k entries, and benchmarking this package's
 actual lookup and daily-rebuild paths shows neither is remotely close to
 a real ceiling until well past 100,000 (rebuild takes ~33ms and ~7.5MB
