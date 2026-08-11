@@ -346,6 +346,21 @@ for anything the router already knows about *in RouterOS*, not in
 MikroView's UI; anything the router doesn't cover stays exactly as
 you set it there.
 
+**A pushed name only applies to that router's own traffic.** If you
+monitor more than one router, a name `office-router` pushes is used on
+events MikroView received from `office-router`, and nowhere else. That
+is the same one-router blast radius the ingest token itself has (step
+4b): a compromised or careless router can misname the hosts it sees,
+never the hosts another router sees. Two sites both using
+`192.168.1.0/24` therefore don't contaminate each other's names either.
+
+For this to line up, the `device` you name on the token must be the
+same identifier the device has in MikroView — the `id` of its entry
+under `devices:` in `config.yaml`. That is already true of the rule
+and NAT table lookups, so if those work for a router, host names will
+too. If you push under a name MikroView doesn't otherwise know, that
+router's traffic simply shows unnamed hosts.
+
 No `read,write` or `sensitive` policy is needed for any of this —
 `read,test` (below) is enough, and WireGuard *private* keys never
 appear in a `read`-policy script's view at all, only public ones.

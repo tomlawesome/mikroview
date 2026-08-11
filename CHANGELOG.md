@@ -346,6 +346,33 @@ upgrading.
 
 ### Fixed
 
+- **One router can no longer name hosts on another router's traffic**
+  (#285, #283, #284). Names pushed from RouterOS -- DNS static entries,
+  DHCP lease hostnames, WireGuard peer comments -- were applied
+  deployment-wide rather than to the router that pushed them. The
+  holder of one router's ingest token could therefore label any address
+  in the world, including one under active attack seen through a
+  completely different router, and a single WireGuard peer allowing
+  `0.0.0.0/0` became the catch-all name for every otherwise-unlabelled
+  address. That contradicted the one-router blast radius the ingest
+  token exists to provide and states in its own documentation. Without
+  any attacker involved, two independently-administered routers both
+  using `192.168.1.0/24` cross-contaminated each other's displayed
+  names.
+
+  Every other router-pushed table -- filter rules, NAT rules, DHCP
+  leases, ARP -- was already scoped per device, and had a test saying
+  so. Host names were the one exception, and the existing test only ever
+  used a single router, so nothing exercised the gap. Found
+  independently by two reviewers and reproduced by a third.
+
+  If you monitor one router, nothing changes. If you monitor several,
+  the `device` named on each ingest token must match that device's `id`
+  in `config.yaml` -- which is already required for the rule and NAT
+  table lookups to work, so in practice it already does. Labels you set
+  inside MikroView are unaffected: they are yours, not a router's, and
+  stay deployment-wide.
+
 - **A flood of made-up MAC addresses or rule names can no longer grind
   ingestion to a halt** (#285). Three in-memory indexes are keyed on
   something whoever is sending syslog gets to choose -- the source MAC,
