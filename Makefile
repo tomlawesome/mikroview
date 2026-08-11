@@ -74,3 +74,61 @@ live-routeros:
 	  exit $$status
 
 .PHONY: live-routeros
+
+# live-container: every live-check scenario, against the image as it
+# ships rather than a locally built binary (#273 slice 1).
+#
+# live-check builds and runs `go build` output on loopback over plain
+# HTTP. That leaves three things it structurally cannot exercise, each of
+# which has its own failure mode:
+#
+#   - the distroless image, which has no shell, so anything shelling out
+#     works locally and fails there;
+#   - the hardening (read-only root, ALL capabilities dropped, pids and
+#     memory limits), so a path writing outside its volume works locally
+#     and fails there;
+#   - TLS as served, which is why every scenario failed at page.goto the
+#     first time they were pointed here.
+#
+# Same scenarios, different environment: MV_ENV_SCRIPT is the only thing
+# that changes. A scenario needing to know which environment it is in
+# would drift between them, and being the *same* scenarios is the point.
+live-container:
+	@MV_ENV_SCRIPT=scripts/live-container.sh; export MV_ENV_SCRIPT; \
+	  eval "$$(scripts/live-container.sh up)" || exit 1; \
+	  test -n "$$MV_URL" || { echo "live-container.sh up produced no MV_URL" >&2; exit 1; }; \
+	  status=0; \
+	  for scenario in frontend/scripts/live-*.mjs; do \
+	    case "$$scenario" in *live-browser.mjs) continue;; esac; \
+	    echo "== $$scenario"; \
+	    ( cd frontend && node "../$$scenario" ) || status=1; \
+	  done; \
+	  if [ $$status -ne 0 ]; then echo "== container log"; scripts/live-container.sh logs | tail -40; fi; \
+	  scripts/live-container.sh down; \
+	  exit $$status
+
+.PHONY: live-container
+
+# live-container-postgres: the same pass with Postgres behind it.
+#
+# Separate target rather than a flag on the one above because it is a
+# genuinely different deployment, not a variation: #262 made the storage
+# backend a fork in behaviour, and every persisted store -- accounts,
+# tokens, flags, entities, the match log -- takes a different code path.
+# Running the scenarios against only one of them proves half the product.
+live-container-postgres:
+	@MV_ENV_SCRIPT=scripts/live-container.sh MV_BACKEND=postgres; \
+	  export MV_ENV_SCRIPT MV_BACKEND; \
+	  eval "$$(scripts/live-container.sh up)" || exit 1; \
+	  test -n "$$MV_URL" || { echo "live-container.sh up produced no MV_URL" >&2; exit 1; }; \
+	  status=0; \
+	  for scenario in frontend/scripts/live-*.mjs; do \
+	    case "$$scenario" in *live-browser.mjs) continue;; esac; \
+	    echo "== $$scenario"; \
+	    ( cd frontend && node "../$$scenario" ) || status=1; \
+	  done; \
+	  if [ $$status -ne 0 ]; then echo "== container log"; scripts/live-container.sh logs | tail -40; fi; \
+	  scripts/live-container.sh down; \
+	  exit $$status
+
+.PHONY: live-container-postgres

@@ -120,7 +120,13 @@ services:
     #   1. Put the connection string in a file (never in this compose
     #      file, and never in config.yaml -- it carries a password):
     #        postgres://mikroview:PASSWORD@db.internal:5432/mikroview?sslmode=verify-full
-    #   2. Mount it read-only and point config.yaml's postgres.dsnFile at
+    #   2. Make it readable by the container's user -- mikroview runs as
+    #      uid 65532, which is not you, so a plain `chmod 600` leaves it
+    #      unreadable inside the container and mikroview refuses to
+    #      start with "permission denied". Keep the tight mode and give
+    #      it to that user:
+    #        chown 65532:65532 postgres-dsn && chmod 600 postgres-dsn
+    #   3. Mount it read-only and point config.yaml's postgres.dsnFile at
     #      it, or set MIKROVIEW_POSTGRES_DSN_FILE:
     #        - ./postgres-dsn:/run/secrets/mikroview-postgres-dsn:ro
     #
