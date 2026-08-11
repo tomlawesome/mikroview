@@ -146,33 +146,50 @@ func Parse(msg string) (p Parsed) {
 
 	for _, seg := range splitTopLevel(rest, ", ") {
 		seg = strings.TrimSpace(seg)
-		switch {
-		case strings.HasPrefix(seg, "in:"):
-			parseInOut(seg, &p)
-		case strings.HasPrefix(seg, "out:"):
-			p.OutInterface = strings.TrimSpace(strings.TrimPrefix(seg, "out:"))
-		case strings.HasPrefix(seg, "connection-state:"):
+		if strings.HasPrefix(seg, "connection-state:") {
 			parseConnState(seg, &p)
-		case strings.HasPrefix(seg, "src-mac "):
-			p.SrcMAC = strings.TrimSpace(strings.TrimPrefix(seg, "src-mac "))
-		case strings.HasPrefix(seg, "proto "):
-			parseProto(seg, &p)
-		case strings.HasPrefix(seg, "len "):
-			if n, err := strconv.Atoi(strings.TrimSpace(strings.TrimPrefix(seg, "len "))); err == nil {
-				p.Length = n
-			}
-		case strings.HasPrefix(seg, "NAT "):
-			// Must be checked before the generic "->" case below: a NAT
-			// annotation also contains "->" internally, and would
-			// otherwise be misparsed as (and overwrite) the main address
-			// pair.
-			parseNAT(seg, &p)
-		case strings.Contains(seg, "->"):
-			parseAddrPair(seg, &p)
+			continue
 		}
+		applyField(seg, &p)
 	}
 
 	return p
+}
+
+// applyField applies one comma-separated segment of the message body.
+//
+// Every field except connection-state, which the caller handles: a real
+// RouterOS glues other fields onto the connection-state segment without
+// a separating comma, so parseConnState splits those off and calls back
+// here for them. Leaving connection-state out of this switch is what
+// keeps that one level deep instead of recursive -- these lines are
+// attacker-authored (anything that can reach the syslog port writes
+// them), and a crafted line repeating "connection-state:" a few thousand
+// times inside the 64KB limit would otherwise recurse once per
+// repetition.
+func applyField(seg string, p *Parsed) {
+	switch {
+	case strings.HasPrefix(seg, "in:"):
+		parseInOut(seg, p)
+	case strings.HasPrefix(seg, "out:"):
+		p.OutInterface = strings.TrimSpace(strings.TrimPrefix(seg, "out:"))
+	case strings.HasPrefix(seg, "src-mac "):
+		p.SrcMAC = strings.TrimSpace(strings.TrimPrefix(seg, "src-mac "))
+	case strings.HasPrefix(seg, "proto "):
+		parseProto(seg, p)
+	case strings.HasPrefix(seg, "len "):
+		if n, err := strconv.Atoi(strings.TrimSpace(strings.TrimPrefix(seg, "len "))); err == nil {
+			p.Length = n
+		}
+	case strings.HasPrefix(seg, "NAT "):
+		// Must be checked before the generic "->" case below: a NAT
+		// annotation also contains "->" internally, and would
+		// otherwise be misparsed as (and overwrite) the main address
+		// pair.
+		parseNAT(seg, p)
+	case strings.Contains(seg, "->"):
+		parseAddrPair(seg, p)
+	}
 }
 
 // stripTopics removes a leading RouterOS topic tag (e.g. "firewall,info ")
@@ -217,14 +234,38 @@ func parseInOut(seg string, p *Parsed) {
 	p.InInterface = strings.TrimSpace(v)
 }
 
+// parseConnState reads the connection-state segment, which RouterOS
+// does not reliably terminate with a comma before the next field.
+//
+// Both of these come off a real RouterOS 7.23.3 (#273), and only the
+// first has the comma:
+//
+//	connection-state:new, proto TCP (SYN), 172.17.0.1:55134->10.0.2.15:15902, len 44
+//	connection-state:new,dnat src-mac 52:55:0A:00:02:02, proto TCP (SYN), ...
+//	connection-state:new proto ICMP (type 8, code 0), 192.168.88.1->192.168.88.100, len 56
+//
+// The state itself never contains a space -- "new", "related",
+// "new,dnat" -- so the first space ends it and whatever follows is
+// another field that happens to have been glued on. Handing that
+// remainder back to applyField covers src-mac and proto alike, and
+// anything else RouterOS glues on later, rather than needing a special
+// case per field.
+//
+// This was a special case for src-mac only, so a real ICMP line put
+// "new proto ICMP (type 8, code 0)" in ConnState and left Protocol
+// empty. That is worse than a display problem: ConnState is what
+// isTrackableConnState gates on in both internal/watchlist and
+// internal/detect, and neither "" nor "new" matches that string, so
+// every ICMP event was silently invisible to the watchlist -- including
+// to the inverted entries whose whole purpose is noticing a device
+// reaching somewhere it should not.
 func parseConnState(seg string, p *Parsed) {
 	v := strings.TrimPrefix(seg, "connection-state:")
-	if state, mac, found := strings.Cut(v, " src-mac "); found {
-		p.ConnState = strings.TrimSpace(state)
-		p.SrcMAC = strings.TrimSpace(mac)
-		return
+	state, rest, glued := strings.Cut(v, " ")
+	p.ConnState = strings.TrimSpace(state)
+	if glued {
+		applyField(strings.TrimSpace(rest), p)
 	}
-	p.ConnState = strings.TrimSpace(v)
 }
 
 func parseProto(seg string, p *Parsed) {

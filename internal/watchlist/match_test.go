@@ -354,3 +354,39 @@ func TestMatchInvertedIsDeterministic(t *testing.T) {
 		t.Errorf("Match produced different outcomes for the same input: %v then %v", first, second)
 	}
 }
+
+// A watchlist entry whose MAC an operator typed the conventional way --
+// lowercase, as the entry form's free-text field takes it -- must match
+// the same device as a real router reports it. RouterOS 7.23.3 emits
+// src-mac uppercase (captured from a booted CHR, #273), so a byte-exact
+// comparison meant such an entry silently never fired: no error, no
+// empty state, just an entry that looked configured and did nothing.
+// Both entry kinds route their source check through
+// matchlog.Identity.MatchesSource, so both are covered here.
+func TestMatchIgnoresMACCase(t *testing.T) {
+	const (
+		fromRouter = "52:55:0A:00:02:02" // as a real RouterOS emits it
+		asTyped    = "52:55:0a:00:02:02" // as an operator writes it
+	)
+
+	e := baseEvent()
+	e.SrcMAC = fromRouter
+	e.DstPort = 15902
+
+	nonInverted := Entry{ID: "e1", Ports: []int{15902}, Source: matchlog.Identity{MAC: asTyped}}
+	if _, outcome := Match(nonInverted, e); outcome != Violation {
+		t.Errorf("non-inverted entry typed as %s did not match traffic reported as %s: %v", asTyped, fromRouter, outcome)
+	}
+
+	inverted := Entry{ID: "e2", Invert: true, Source: matchlog.Identity{MAC: asTyped}, Observing: true}
+	if _, outcome := Match(inverted, e); outcome != Observed {
+		t.Errorf("inverted entry typed as %s did not observe traffic reported as %s: %v", asTyped, fromRouter, outcome)
+	}
+
+	// A genuinely different device is still a non-match.
+	other := e
+	other.SrcMAC = "52:55:0A:00:02:03"
+	if _, outcome := Match(nonInverted, other); outcome != NoMatch {
+		t.Errorf("matched a different MAC: %v", outcome)
+	}
+}

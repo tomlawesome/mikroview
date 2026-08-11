@@ -171,6 +171,102 @@ func TestParse(t *testing.T) {
 	}
 }
 
+// TestParseRealRouterLines uses log lines captured verbatim from a real
+// RouterOS 7.23.3 CHR (#273, scripts/live-routeros.sh), rather than
+// lines written to exercise the parser.
+//
+// The distinction earns its own test. Every other case in this file was
+// written alongside the code that reads it, so the two agree with each
+// other by construction and cannot disagree with RouterOS. The ICMP case
+// above assumes a comma after connection-state, because that is what TCP
+// lines have -- and a real router does not put one there for ICMP. It
+// left Protocol empty and ConnState holding "new proto ICMP (type 8,
+// code 0)", which no isTrackableConnState check matches, so ICMP was
+// silently invisible to the watchlist and its inverted entries.
+//
+// Add to this table only by pasting what a router actually printed.
+func TestParseRealRouterLines(t *testing.T) {
+	tests := []struct {
+		name string
+		msg  string
+		want Parsed
+	}{
+		{
+			// The comma RouterOS omits before proto on an ICMP line.
+			name: "output chain, icmp, no comma after connection-state",
+			msg:  "firewall,info A|live-out| output: in:(unknown 0) out:ether1, connection-state:new proto ICMP (type 8, code 0), 10.0.2.15->203.0.113.9, len 56",
+			want: Parsed{
+				Action: store.ActionAccept, RuleLabel: "live-out", Chain: "output",
+				InInterface: "(unknown 0)", OutInterface: "ether1",
+				ConnState: "new",
+				Protocol:  "ICMP", Flags: "type 8, code 0",
+				SrcIP: "10.0.2.15", DstIP: "203.0.113.9",
+				Length: 56,
+			},
+		},
+		{
+			name: "output chain, icmp unreachable, related state",
+			msg:  "firewall,info A|live-out| output: in:(unknown 0) out:lo, connection-state:related proto ICMP (type 3, code 1), 192.168.88.1->192.168.88.1, len 84",
+			want: Parsed{
+				Action: store.ActionAccept, RuleLabel: "live-out", Chain: "output",
+				InInterface: "(unknown 0)", OutInterface: "lo",
+				ConnState: "related",
+				Protocol:  "ICMP", Flags: "type 3, code 1",
+				SrcIP: "192.168.88.1", DstIP: "192.168.88.1",
+				Length: 84,
+			},
+		},
+		{
+			// src-mac glued on the same way, which already worked -- kept
+			// so the generalised handling cannot regress it. Note the
+			// upper-case MAC: that is how RouterOS writes one, and
+			// comparing it byte for byte against a lower-case one is what
+			// matchlog.Identity.identityKey now avoids.
+			name: "forward chain, dst-nat, real upper-case src-mac",
+			msg:  "firewall,info A|lan-wan| forward: in:ether1 out:ether1, connection-state:new,dnat src-mac 52:55:0A:00:02:02, proto TCP (SYN), 172.17.0.1:33202->203.0.113.9:9999, NAT 172.17.0.1:33202->(10.0.2.15:15903->203.0.113.9:9999), len 44",
+			want: Parsed{
+				Action: store.ActionAccept, RuleLabel: "lan-wan", Chain: "forward",
+				InInterface: "ether1", OutInterface: "ether1",
+				ConnState: "new,dnat", SrcMAC: "52:55:0A:00:02:02",
+				Protocol: "TCP", Flags: "SYN",
+				SrcIP: "172.17.0.1", SrcPort: 33202,
+				DstIP: "203.0.113.9", DstPort: 9999,
+				NatIP: "10.0.2.15", NatPort: 15903,
+				NatRaw: "172.17.0.1:33202->(10.0.2.15:15903->203.0.113.9:9999)",
+				Length: 44,
+			},
+		},
+		{
+			// The input chain carries src-mac on this firmware, which
+			// parser.go's own comment says only forward reliably does.
+			// Nothing depends on input lacking it, but the claim should
+			// not outlive the evidence for it.
+			name: "input chain also carries src-mac",
+			msg:  "firewall,info A|live-in| input: in:ether1 out:(unknown 0), connection-state:new src-mac 52:55:0A:00:02:02, proto TCP (SYN), 172.17.0.1:55134->10.0.2.15:15902, len 44",
+			want: Parsed{
+				Action: store.ActionAccept, RuleLabel: "live-in", Chain: "input",
+				InInterface: "ether1", OutInterface: "(unknown 0)",
+				ConnState: "new", SrcMAC: "52:55:0A:00:02:02",
+				Protocol: "TCP", Flags: "SYN",
+				SrcIP: "172.17.0.1", SrcPort: 55134,
+				DstIP: "10.0.2.15", DstPort: 15902,
+				Length: 44,
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := Parse(tt.msg)
+			got.Raw = ""
+			tt.want.Raw = ""
+			if got != tt.want {
+				t.Errorf("Parse() =\n  %+v\nwant\n  %+v", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestSplitTopLevel(t *testing.T) {
 	got := splitTopLevel("proto ICMP (type 8, code 0), 1.1.1.1->2.2.2.2, len 84", ", ")
 	want := []string{"proto ICMP (type 8, code 0)", "1.1.1.1->2.2.2.2", "len 84"}
