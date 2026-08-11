@@ -57,7 +57,7 @@ func TestEvaluatorRecordsAMatchEndToEnd(t *testing.T) {
 	for time.Now().Before(deadline) {
 		if ml.Stats().Count == 1 {
 			var got []matchlog.Record
-			_ = ml.Query(matchlog.Query{Source: matchlog.Identity{MAC: baseEvent().SrcMAC}}, func(r matchlog.Record) bool {
+			_ = ml.Query(context.Background(), matchlog.Query{Source: matchlog.Identity{MAC: baseEvent().SrcMAC}}, func(r matchlog.Record) bool {
 				got = append(got, r)
 				return true
 			})
@@ -178,7 +178,7 @@ type panicOnAppendMatchLog struct{}
 func (panicOnAppendMatchLog) Append(string, matchlog.Tuple, store.Event, time.Time) error {
 	panic("simulated panic from Append")
 }
-func (panicOnAppendMatchLog) Query(matchlog.Query, func(matchlog.Record) bool) error {
+func (panicOnAppendMatchLog) Query(context.Context, matchlog.Query, func(matchlog.Record) bool) error {
 	return nil
 }
 func (panicOnAppendMatchLog) Stats() matchlog.Stats { return matchlog.Stats{} }

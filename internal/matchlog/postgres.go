@@ -153,7 +153,7 @@ func isUniqueViolation(err error) bool {
 // whole log in memory or in a scan -- the range query and the sort/limit
 // are all pushed down to the index Query's own doc comment on Store
 // describes, which is the entire reason this table exists.
-func (s *PostgresStore) Query(q Query, yield func(Record) bool) error {
+func (s *PostgresStore) Query(ctx context.Context, q Query, yield func(Record) bool) error {
 	if q.Source.Empty() {
 		return ErrEmptyIdentity
 	}
@@ -164,7 +164,6 @@ func (s *PostgresStore) Query(q Query, yield func(Record) bool) error {
 		until = &u
 	}
 
-	ctx := context.Background()
 	rows, err := s.pool.Query(ctx, sqlSelectMatches, q.Source.identityKey(), q.Since, until, limit)
 	if err != nil {
 		return fmt.Errorf("matchlog: querying: %w", err)
