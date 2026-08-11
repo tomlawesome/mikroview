@@ -7,6 +7,7 @@ package api
 import (
 	"net/http"
 	"net/netip"
+	"sync"
 	"time"
 
 	"github.com/tomlawesome/mikroview/internal/audit"
@@ -178,6 +179,16 @@ type Server struct {
 	// correct answer for a self-hosted IdP and refused at startup for a
 	// multi-tenant one -- see internal/oidc.Policy and main.go.
 	OIDCPolicy oidc.Policy
+
+	// ingestAudit remembers, per (device, kind), when that combination
+	// last produced an audit row and whether it succeeded, so a routine
+	// push does not write one. See noteIngest for why -- unqualified
+	// per-push auditing let one ingest token roll the whole admin audit
+	// trail in about a day. Unexported and lazily built: it is internal
+	// bookkeeping, not configuration, so a zero-valued Server (which
+	// every test constructs) needs no extra setup.
+	ingestAuditMu sync.Mutex
+	ingestAudit   map[ingestAuditKey]ingestAuditState
 }
 
 // route is one registered endpoint. Routes are declared as data rather

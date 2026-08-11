@@ -13,6 +13,7 @@ import (
 	"github.com/tomlawesome/mikroview/internal/device"
 	"github.com/tomlawesome/mikroview/internal/logging"
 	"github.com/tomlawesome/mikroview/internal/store"
+	"github.com/tomlawesome/mikroview/internal/syslog"
 )
 
 var apiLog = logging.New("api")
@@ -108,6 +109,12 @@ func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 		"count":            stats.Count,
 		"windowSeconds":    int(stats.Window.Seconds()),
 		"connectedClients": s.Hub.ClientCount(),
+		// Syslog listener saturation. Included here rather than behind
+		// its own endpoint because the condition it reports -- mikroview
+		// turning away a router the operator declared -- was previously
+		// visible only as a repeated line in the container log, which
+		// means visible to nobody. See internal/syslog.ListenerStats.
+		"syslog": syslog.Stats(),
 	})
 }
 

@@ -344,6 +344,58 @@ upgrading.
   sheet at phone widths, same as the menu), and Export in the menu on
   desktop as it already was on mobile.
 
+### Changed
+
+- **The stored copy of a raw log line is now capped at 2KiB** (#285).
+  MikroView keeps each firewall log line exactly as the router sent it,
+  so you can check what it shows against what arrived. Nothing bounded
+  that, though, beyond the 64KiB a syslog message may be -- while the
+  documented memory budget (~120MiB for 200,000 events) assumed an
+  ordinary line. Both could not be true: filled with 64KiB lines, the
+  same buffer holds **12.5GB**, and nothing has to log in to send them.
+  Real RouterOS lines run 150-400 characters, so 2KiB is about five
+  times the longest genuine one and truncation only ever hits input a
+  real router does not produce. A row whose line was cut says so on
+  hover and in a CSV export, rather than presenting a shortened line as
+  though it were verbatim. The per-event cost figure rises from 616 to
+  624 bytes, which is the one field this needed.
+
+- **Routine router pushes are no longer written to the audit log**
+  (#285). Every push recorded a row, a push script runs every 15-30
+  minutes, and the log keeps the most recent 10,000 entries -- so one
+  ingest token produced 11,520 rows a day and pushed out the entire
+  record of admin actions (accounts created, tokens issued, the admin
+  role transferred) in about 21 hours. A successful scheduled push is
+  not an accountability event; what it erased was. MikroView now records
+  the first push of a kind from a device, a push starting to fail or
+  recovering, and a periodic heartbeat -- and applies the same rule to
+  refusals, since those are cheaper for an attacker to produce than
+  valid pushes.
+
+- **Syslog connection slots are now reserved for the routers you
+  declare** (#285). The listener holds 256 connections with 8 per source
+  address, so 32 addresses filled it -- easy for one host with a routed
+  IPv6 range -- and a real router connecting afterwards was accepted and
+  immediately dropped, its log lines never arriving. A total monitoring
+  blackout whose only trace was a repeated line in the container log.
+  A quarter of the pool is now held for routers listed under `devices:`
+  in `config.yaml`, the same protection configured devices already get
+  elsewhere, and the live view shows a warning when one of yours has
+  been turned away. Declaring no devices reserves nothing, since holding
+  capacity back for nobody would only shrink the pool.
+
+- **The HTTP-to-HTTPS redirect no longer trusts the address it was
+  asked for** (#283, #284). To build the redirect MikroView reused the
+  address the request claimed to be for, without checking it, whenever
+  `tls.hosts` was unset -- which is the shipped default. Someone able to
+  send a hand-crafted request could get MikroView to reply "go to
+  https://somewhere-else". The code had a check for exactly this, with a
+  comment saying so, against a list that was empty out of the box.
+  MikroView now works out its own valid addresses (its hostname and the
+  addresses it is listening on) when you have not listed any, so the
+  protection works with nothing configured and reaching MikroView by
+  bare IP keeps working.
+
 ### Fixed
 
 - **Terminal escape sequences from a syslog line no longer reach saved
