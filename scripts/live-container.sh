@@ -45,10 +45,18 @@ PG_IMAGE="mv-e2e-pg-tls"
 HTTP_PORT="${MV_HTTP_PORT:-18443}"
 SYSLOG_TLS_PORT="${MV_SYSLOG_TLS_PORT:-16514}"
 
-# Published on loopback only. The container is the thing under test, not
-# something to expose -- and binding the published ports to 127.0.0.1
-# keeps that true even on a machine with a LAN address.
-BIND="127.0.0.1"
+# Published on loopback by default. The container is the thing under
+# test, not something to expose -- and binding the published ports to
+# 127.0.0.1 keeps that true even on a machine with a LAN address.
+#
+# MV_BIND moves them onto a real address, which the RouterOS fixture
+# needs and nothing else does: the CHR reaches this host through QEMU's
+# user-mode networking, which forwards to the *QEMU container's* stack,
+# and that container has no route to this host's loopback. The host's
+# LAN address is the one address that means this host from the VM, from
+# the QEMU container, and from here. Same reasoning and same variable
+# name as live-env.sh, so the two harnesses are driven identically.
+BIND="${MV_BIND:-127.0.0.1}"
 
 CURL_TLS="-k"
 
@@ -133,7 +141,7 @@ listen:
   syslogTls: "0.0.0.0:6514"
 tls:
   enabled: true
-  hosts: ["127.0.0.1", "localhost"]
+  hosts: ["$BIND", "127.0.0.1", "localhost"]
   storePath: /var/lib/mikroview/tls
 auth:
   storePath: /var/lib/mikroview/users.json

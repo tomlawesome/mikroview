@@ -45,11 +45,7 @@ clean:
 live-check:
 	@eval "$$(scripts/live-env.sh up)"; \
 	  status=0; \
-	  for scenario in frontend/scripts/live-*.mjs; do \
-	    case "$$scenario" in *live-browser.mjs) continue;; esac; \
-	    echo "== $$scenario"; \
-	    ( cd frontend && node "../$$scenario" ) || status=1; \
-	  done; \
+	  scripts/run-scenarios.sh || status=1; \
 	  scripts/live-env.sh down; \
 	  exit $$status
 
@@ -98,11 +94,7 @@ live-container:
 	  eval "$$(scripts/live-container.sh up)" || exit 1; \
 	  test -n "$$MV_URL" || { echo "live-container.sh up produced no MV_URL" >&2; exit 1; }; \
 	  status=0; \
-	  for scenario in frontend/scripts/live-*.mjs; do \
-	    case "$$scenario" in *live-browser.mjs) continue;; esac; \
-	    echo "== $$scenario"; \
-	    ( cd frontend && node "../$$scenario" ) || status=1; \
-	  done; \
+	  scripts/run-scenarios.sh || status=1; \
 	  if [ $$status -ne 0 ]; then echo "== container log"; scripts/live-container.sh logs | tail -40; fi; \
 	  scripts/live-container.sh down; \
 	  exit $$status
@@ -122,13 +114,47 @@ live-container-postgres:
 	  eval "$$(scripts/live-container.sh up)" || exit 1; \
 	  test -n "$$MV_URL" || { echo "live-container.sh up produced no MV_URL" >&2; exit 1; }; \
 	  status=0; \
-	  for scenario in frontend/scripts/live-*.mjs; do \
-	    case "$$scenario" in *live-browser.mjs) continue;; esac; \
-	    echo "== $$scenario"; \
-	    ( cd frontend && node "../$$scenario" ) || status=1; \
-	  done; \
+	  scripts/run-scenarios.sh || status=1; \
 	  if [ $$status -ne 0 ]; then echo "== container log"; scripts/live-container.sh logs | tail -40; fi; \
 	  scripts/live-container.sh down; \
 	  exit $$status
 
 .PHONY: live-container-postgres
+
+# live-routeros-container: the shipped container and a real RouterOS CHR,
+# together (#273 slice 2).
+#
+# live-container proves mikroview works as it ships; live-routeros proves
+# a real router can reach it. Neither proves the thing #243's "Done when"
+# actually asks for -- that its features work on data a real router
+# produced -- because every scenario either half runs feeds synthetic
+# syslog. Only frontend/scripts/live-routeros-real.mjs runs here, and it
+# is excluded from the plain targets (scripts/run-scenarios.sh) since it
+# needs the VM.
+#
+# MV_BIND is why the container half differs from live-container: the
+# router reaches this host through QEMU's user-mode networking, which
+# forwards to the QEMU container's stack rather than to this host's
+# loopback, so the published ports and the generated certificate both
+# have to be on the host's LAN address.
+#
+# Slow by the standards of the other targets: a CHR boots under TCG here
+# (no usable /dev/kvm), and setup completes a real DHCP handshake.
+live-routeros-container:
+	@MV_ENV_SCRIPT=scripts/live-container.sh; export MV_ENV_SCRIPT; \
+	  MV_BIND=$$(scripts/live-routeros.sh host-addr); export MV_BIND; \
+	  eval "$$(scripts/live-container.sh up)" || exit 1; \
+	  test -n "$$MV_URL" || { echo "live-container.sh up produced no MV_URL" >&2; exit 1; }; \
+	  eval "$$(scripts/live-routeros.sh up)" || exit 1; \
+	  status=0; \
+	  scripts/live-routeros.sh setup "$$MV_URL" "$$MV_BIND" "$$MV_SYSLOG_TLS_PORT" || status=1; \
+	  if [ $$status -eq 0 ]; then \
+	    echo "== frontend/scripts/live-routeros-real.mjs"; \
+	    ( cd frontend && node ../frontend/scripts/live-routeros-real.mjs ) || status=1; \
+	  fi; \
+	  if [ $$status -ne 0 ]; then echo "== container log"; scripts/live-container.sh logs | tail -40; fi; \
+	  scripts/live-routeros.sh down; \
+	  scripts/live-container.sh down; \
+	  exit $$status
+
+.PHONY: live-routeros-container
