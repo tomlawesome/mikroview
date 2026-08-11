@@ -3,6 +3,7 @@
 package device
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -248,14 +249,57 @@ func TestMACRegistryPruneEvictsOldestOverCap(t *testing.T) {
 	r.Seen("33:33:33:33:33:33", now.Add(2*time.Minute))
 	r.Seen("44:44:44:44:44:44", now.Add(3*time.Minute)) // pushes over the cap
 
+	// At most the cap, deliberately not exactly it -- see
+	// TestMACRegistryShedsABatchSoTheNextNewMACIsFree.
 	list := r.List()
-	if len(list) != maxMACRegistryEntries {
-		t.Fatalf("expected pruning to hold the registry at %d, got %d: %+v", maxMACRegistryEntries, len(list), list)
+	if len(list) > maxMACRegistryEntries {
+		t.Fatalf("expected pruning to hold the registry at or under %d, got %d: %+v", maxMACRegistryEntries, len(list), list)
 	}
 	for _, e := range list {
 		if e.MAC == "11:11:11:11:11:11" {
 			t.Error("expected the oldest-by-LastSeen entry to be evicted")
 		}
+	}
+	if len(list) == 0 || list[0].MAC != "44:44:44:44:44:44" {
+		t.Errorf("expected the most-recently-seen MAC to survive, got %+v", list)
+	}
+}
+
+// Evicting back to exactly the cap leaves the registry full, so the next
+// new MAC overflows too and pays the whole scan again -- for every event
+// thereafter. Seen runs on the single ingest goroutine keyed on a src-mac
+// that comes straight off unauthenticated syslog, so that is a permanent
+// state an attacker can hold the registry in: measured at 1,529 ns per
+// Seen under the cap against 16-21 ms at it.
+//
+// The property that stops it is that a shed leaves headroom. Asserting
+// on the headroom rather than on timings keeps this a contract test
+// rather than a benchmark that fails on a busy machine.
+func TestMACRegistryShedsABatchSoTheNextNewMACIsFree(t *testing.T) {
+	orig := maxMACRegistryEntries
+	maxMACRegistryEntries = 800
+	defer func() { maxMACRegistryEntries = orig }()
+
+	r, _ := OpenMACRegistry("")
+	now := time.Now()
+	for i := 0; i <= maxMACRegistryEntries; i++ { // one past the cap, forcing a shed
+		r.Seen(fmt.Sprintf("02:00:00:%02x:%02x:%02x", i>>16&0xff, i>>8&0xff, i&0xff), now.Add(time.Duration(i)*time.Second))
+	}
+
+	after := len(r.List())
+	if after >= maxMACRegistryEntries {
+		t.Fatalf("the shed left the registry at %d against a cap of %d -- no headroom, so the next new MAC sheds again",
+			after, maxMACRegistryEntries)
+	}
+
+	// Every insertion up to the headroom must now be free of a shed.
+	headroom := maxMACRegistryEntries - after
+	for i := 0; i < headroom; i++ {
+		r.Seen(fmt.Sprintf("06:00:00:%02x:%02x:%02x", i>>16&0xff, i>>8&0xff, i&0xff), now.Add(time.Hour))
+	}
+	if got := len(r.List()); got != maxMACRegistryEntries {
+		t.Errorf("filling the %d-entry headroom gave %d entries, want %d -- a shed ran that should not have",
+			headroom, got, maxMACRegistryEntries)
 	}
 }
 
