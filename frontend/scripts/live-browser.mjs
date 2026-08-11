@@ -13,6 +13,7 @@
 
 import { chromium } from 'playwright'
 import { execFileSync } from 'child_process'
+import { setGlobalDispatcher, Agent } from 'undici'
 import { fileURLToPath } from 'url'
 import path from 'path'
 
@@ -35,9 +36,40 @@ export function check(ok, message) {
   if (!ok) failed = true
 }
 
+/**
+ * ENV_SCRIPT is the harness driving the instance under test.
+ *
+ * live-env.sh (a locally built binary) is the default and stays the
+ * everyday path. MV_ENV_SCRIPT points the same scenarios at
+ * live-container.sh instead, which runs the image as it ships, under the
+ * hardening it ships with, optionally against Postgres (#273 slice 1).
+ *
+ * Selecting the environment here rather than in each scenario is the
+ * whole point: a scenario that has to know which environment it is in
+ * would drift between the two, and the value of running them against the
+ * container is that they are *the same scenarios*.
+ */
+const ENV_SCRIPT = path.join(REPO, process.env.MV_ENV_SCRIPT || 'scripts/live-env.sh')
+
+// Node's own fetch has to accept the self-signed certificate too.
+//
+// Scenarios reach the API two ways: through Playwright's page.request
+// (which inherits the browser context's ignoreHTTPSErrors) and through
+// bare fetch (which does not, and failed with
+// UNABLE_TO_VERIFY_LEAF_SIGNATURE against the container). Setting the
+// dispatcher once here covers every scenario rather than making five of
+// them each remember; doing it per scenario is how one gets missed.
+//
+// Deliberately not NODE_TLS_REJECT_UNAUTHORIZED=0, which would disable
+// verification for the whole process including anything else it talks
+// to. This is scoped to fetch, in a harness, against a certificate the
+// server under test generated for itself moments earlier. Under
+// live-env.sh (plain HTTP on loopback) it changes nothing.
+setGlobalDispatcher(new Agent({ connect: { rejectUnauthorized: false } }))
+
 /** feedSyslog pushes synthetic events into the running instance. */
 export function feedSyslog(n, label = 'live-test-rule') {
-  execFileSync(path.join(REPO, 'scripts/live-env.sh'), ['syslog', String(n), label], {
+  execFileSync(ENV_SCRIPT, ['syslog', String(n), label], {
     stdio: 'ignore',
     cwd: REPO,
   })
@@ -53,20 +85,84 @@ export function feedSyslog(n, label = 'live-test-rule') {
  * is no longer anything bound to refuse it.
  */
 export function feedRaw(line) {
-  execFileSync(path.join(REPO, 'scripts/live-env.sh'), ['raw', line], {
+  execFileSync(ENV_SCRIPT, ['raw', line], {
     stdio: 'ignore',
     cwd: REPO,
   })
 }
 
+/**
+ * feedPortScan delivers n distinct destination ports from one source
+ * inside the port-scan window, so a real port_scan flag is *raised* by
+ * the detector rather than synthesized by the test.
+ *
+ * Lives here rather than being copied per scenario: six scenarios had
+ * their own identical version, each with the harness path hardcoded, so
+ * pointing them at a different environment meant editing six files and
+ * missing one was silent.
+ */
+export function feedPortScan(n, sourceIp) {
+  const args = ['portscan', String(n)]
+  if (sourceIp) args.push(sourceIp)
+  execFileSync(ENV_SCRIPT, args, { stdio: 'ignore', cwd: REPO })
+}
+
+/**
+ * isUntrustedCertServiceWorkerError filters out the one console error a
+ * browser always produces against a self-signed certificate it has not
+ * been told to trust.
+ *
+ * ignoreHTTPSErrors suppresses the interstitial for navigation and
+ * fetches, but service-worker registration is deliberately stricter:
+ * Chromium refuses to register one over a certificate outside its trust
+ * store regardless, so mikroview's PWA registration fails with
+ * `SecurityError: Failed to register a ServiceWorker ... An SSL
+ * certificate error occurred when fetching the script.`
+ *
+ * That is browser policy, not a mikroview defect, and it is narrowly
+ * matched here (both the SSL and service-worker halves must be present)
+ * so a genuine service-worker error is still reported.
+ *
+ * It has an operator-facing consequence, which is documented in
+ * docs/configuration.md rather than only filtered away here: with
+ * mikroview's generated certificate, the install-as-an-app and offline
+ * behaviour do not work until the CA it serves at /ca.crt is trusted by
+ * the browser. Everything else works with the usual click-through.
+ */
+// Two messages, not one: the SecurityError from the registration call,
+// and a bare resource-load error for the script fetch that does not
+// mention the service worker at all. Both are matched, and both are
+// specific to a *script* fetch failing certificate validation, so an
+// ordinary failed request still surfaces.
+function isUntrustedCertServiceWorkerError(text) {
+  if (!/SSL certificate error/i.test(text)) return false
+  return /ServiceWorker/i.test(text) || /fetching the script/i.test(text)
+}
+
 /** session launches a browser and signs in, returning a live page. */
 export async function session({ waitForEvents = 0 } = {}) {
   browser = await chromium.launch()
-  const page = await browser.newPage()
+  // ignoreHTTPSErrors, because the certificate under test is one
+  // mikroview generated for itself seconds ago -- self-signed, with no
+  // chain to verify against.
+  //
+  // Needed only since the container environment arrived: live-env.sh
+  // serves plain HTTP on loopback, so this never came up, and all
+  // fifteen scenarios failed at page.goto with ERR_CERT_AUTHORITY_INVALID
+  // the first time they were pointed at the image, which serves HTTPS as
+  // it ships. Accepting the certificate is right here and is not a hole:
+  // whether a *router* should trust it is a different question, and one
+  // live-routeros.sh's `trust` step covers properly against real
+  // RouterOS rather than by waving it through.
+  const page = await browser.newPage({ ignoreHTTPSErrors: true })
   const consoleErrors = []
-  page.on('pageerror', (e) => consoleErrors.push(String(e)))
+  const record = (text) => {
+    if (isUntrustedCertServiceWorkerError(text)) return
+    consoleErrors.push(text)
+  }
+  page.on('pageerror', (e) => record(String(e)))
   page.on('console', (m) => {
-    if (m.type() === 'error') consoleErrors.push(m.text())
+    if (m.type() === 'error') record(m.text())
   })
 
   await page.goto(URL_BASE, { waitUntil: 'networkidle' })

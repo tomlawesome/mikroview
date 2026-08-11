@@ -6,25 +6,16 @@
 // trip via reload, and the responsive floor exercised by actually
 // resizing the viewport rather than asserting the media query exists.
 
-import { execFileSync } from 'child_process'
 import { fileURLToPath } from 'url'
-import path from 'path'
-import { session, check, done } from './live-browser.mjs'
+import { session, check, done, feedPortScan } from './live-browser.mjs'
 
-const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..')
 
-function portscan(n, sourceIp) {
-  execFileSync(path.join(REPO, 'scripts/live-env.sh'), ['portscan', String(n), sourceIp], {
-    stdio: 'ignore',
-    cwd: REPO,
-  })
-}
 
 // Two independent flags -- enough to see a real grid (1 column would
 // show them stacked regardless, so the layout has to actually reflow to
 // tell 1 from 2/3 apart).
-portscan(20, '198.51.100.90')
-portscan(20, '198.51.100.91')
+feedPortScan(20, '198.51.100.90')
+feedPortScan(20, '198.51.100.91')
 
 const { page } = await session()
 
