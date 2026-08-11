@@ -7,6 +7,8 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"net/netip"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -69,6 +71,113 @@ func perSourceLimit() int {
 	return int(maxTCPConnectionsPerSource.Load())
 }
 
+// reservedFraction is how much of maxTCPConnections is held back for
+// routers the operator declared under `devices:` in config.yaml, as a
+// divisor: 4 means a quarter.
+//
+// The per-source cap alone bounds one address, not thirty-two. With a
+// global 256 and 8 per source, 32 addresses fill the listener --
+// trivial for a single host with a routed IPv6 /64 -- and the idle
+// timeout resets on every read, so holding them costs almost nothing. A
+// real router dialling in afterwards is accepted and immediately closed,
+// its lines never reaching the pipeline: a total monitoring blackout
+// whose only trace was a repeated container-log WARN.
+//
+// Reserving capacity for declared devices is the same answer
+// device.Registry already gives to the same class of problem, in its own
+// words: configured devices "are never counted against this cap or
+// evicted by it ... losing one to a flood of forged packets would be the
+// attack succeeding by another route."
+//
+// A quarter (64 of 256) is far more than the handful of connections a
+// declared fleet needs, while leaving 192 for discovery -- which is
+// still the normal path, since a device does not have to be declared to
+// be monitored. Owner decision on #285 finding 8.
+const reservedFraction = 4
+
+// configuredSources holds the normalised source addresses of declared
+// devices. Set once at startup by SetConfiguredSources, before any
+// listener starts; an atomic pointer rather than a plain map so a
+// later call cannot race the accept loop reading it.
+var configuredSources atomic.Pointer[map[string]bool]
+
+// SetConfiguredSources declares which source addresses belong to
+// routers listed under `devices:` in config.yaml. Those addresses may
+// use the reserved portion of the connection pool; everything else is
+// held to the unreserved remainder. Call once at startup.
+//
+// An empty or unset list means no reservation at all, which is the
+// correct behaviour for a deployment that declares no devices: every
+// source is equally unknown, so holding capacity back for nobody would
+// only shrink the pool.
+func SetConfiguredSources(addrs []string) {
+	m := make(map[string]bool, len(addrs))
+	for _, a := range addrs {
+		if h := normaliseHost(a); h != "" {
+			m[h] = true
+		}
+	}
+	configuredSources.Store(&m)
+}
+
+func isConfiguredSource(host string) bool {
+	m := configuredSources.Load()
+	return m != nil && (*m)[host]
+}
+
+// reservedSlots is how many of maxTCPConnections only declared devices
+// may occupy. Zero when nothing is declared -- see SetConfiguredSources.
+func reservedSlots() int {
+	m := configuredSources.Load()
+	if m == nil || len(*m) == 0 {
+		return 0
+	}
+	if r := maxTCPConnections / reservedFraction; r > 0 {
+		return r
+	}
+	return 1
+}
+
+// Listener saturation counters, for the UI. A blackout that only ever
+// reached a container log is a blackout nobody sees -- which is the
+// worst property this failure had.
+var (
+	tcpInUse              atomic.Int64
+	tcpRejected           atomic.Uint64
+	tcpRejectedConfigured atomic.Uint64
+)
+
+// ListenerStats is a snapshot of syslog listener saturation.
+type ListenerStats struct {
+	InUse                 int    `json:"inUse"`
+	Capacity              int    `json:"capacity"`
+	ReservedForConfigured int    `json:"reservedForConfigured"`
+	Rejected              uint64 `json:"rejected"`
+	// RejectedConfigured counts refusals of a *declared* router. Any
+	// value above zero means mikroview turned away a device the operator
+	// told it to watch, which is the condition worth surfacing rather
+	// than saturation on its own.
+	RejectedConfigured uint64 `json:"rejectedConfigured"`
+}
+
+// Stats reports current listener saturation. Safe to call at any time.
+func Stats() ListenerStats {
+	return ListenerStats{
+		InUse:                 int(tcpInUse.Load()),
+		Capacity:              maxTCPConnections,
+		ReservedForConfigured: reservedSlots(),
+		Rejected:              tcpRejected.Load(),
+		RejectedConfigured:    tcpRejectedConfigured.Load(),
+	}
+}
+
+func noteRejected(host string) {
+	tcpRejected.Add(1)
+	if isConfiguredSource(host) {
+		tcpRejectedConfigured.Add(1)
+	}
+}
+
 // tcpIdleTimeoutNS closes a connection that has gone this long without a
 // complete line, so a connection that never sends anything (or stalls
 // mid-stream) doesn't hold its slot in maxTCPConnections forever. It's an
@@ -116,6 +225,10 @@ func ServeTCP(ctx context.Context, ln net.Listener, out chan<- RawMessage) error
 	// increments, each connection's goroutine decrements on exit.
 	var perSourceMu sync.Mutex
 	perSource := make(map[string]int)
+	// undeclaredInUse counts live connections from sources NOT listed
+	// under devices: in config.yaml -- what the reservation bounds.
+	// Guarded by perSourceMu alongside the map it moves with.
+	undeclaredInUse := 0
 
 	var tempDelay time.Duration
 	for {
@@ -139,38 +252,63 @@ func ServeTCP(ctx context.Context, ln net.Listener, out chan<- RawMessage) error
 		tempDelay = 0
 
 		host := remoteHost(conn)
+		configured := isConfiguredSource(host)
+
+		// An undeclared source may only take slots outside the portion
+		// reserved for declared devices; a declared one may take any
+		// free slot. Without this a flood of undeclared sources fills
+		// the pool and the operator's own routers are locked out -- see
+		// reservedFraction.
+		unreservedCap := maxTCPConnections - reservedSlots()
 		perSourceMu.Lock()
 		atCap := perSource[host] >= perSourceLimit()
-		if !atCap {
+		outOfUnreserved := !configured && undeclaredInUse >= unreservedCap
+		if !atCap && !outOfUnreserved {
 			perSource[host]++
+			if !configured {
+				undeclaredInUse++
+			}
 		}
 		perSourceMu.Unlock()
 		if atCap {
+			noteRejected(host)
 			tcpLog.Warn(fmt.Sprintf("per-source connection limit (%d) reached for %s, rejecting", perSourceLimit(), host))
 			conn.Close()
 			continue
 		}
+		if outOfUnreserved {
+			noteRejected(host)
+			tcpLog.Warn(fmt.Sprintf(
+				"undeclared sources are using all %d unreserved connection slots (%d of %d held for routers listed under devices: in config.yaml); rejecting %s",
+				unreservedCap, reservedSlots(), maxTCPConnections, host))
+			conn.Close()
+			continue
+		}
 
-		select {
-		case slots <- struct{}{}:
-			go func() {
-				defer func() { <-slots }()
-				defer func() {
-					perSourceMu.Lock()
-					if perSource[host]--; perSource[host] <= 0 {
-						delete(perSource, host)
-					}
-					perSourceMu.Unlock()
-				}()
-				defer logging.Recover(tcpLog)
-				handleTCPConn(ctx, conn, out)
-			}()
-		default:
+		release := func() {
 			perSourceMu.Lock()
 			if perSource[host]--; perSource[host] <= 0 {
 				delete(perSource, host)
 			}
+			if !configured {
+				undeclaredInUse--
+			}
 			perSourceMu.Unlock()
+		}
+
+		select {
+		case slots <- struct{}{}:
+			tcpInUse.Add(1)
+			go func() {
+				defer func() { <-slots }()
+				defer tcpInUse.Add(-1)
+				defer release()
+				defer logging.Recover(tcpLog)
+				handleTCPConn(ctx, conn, out)
+			}()
+		default:
+			noteRejected(host)
+			release()
 			// At capacity: reject immediately rather than queuing, so the
 			// accept loop itself never blocks waiting for a slot to free up.
 			tcpLog.Warn(fmt.Sprintf("connection limit (%d) reached, rejecting %s", maxTCPConnections, conn.RemoteAddr()))
@@ -186,9 +324,21 @@ func ServeTCP(ctx context.Context, ln net.Listener, out chan<- RawMessage) error
 func remoteHost(conn net.Conn) string {
 	addr := conn.RemoteAddr().String()
 	if host, _, err := net.SplitHostPort(addr); err == nil {
-		return host
+		return normaliseHost(host)
 	}
-	return addr
+	return normaliseHost(addr)
+}
+
+// normaliseHost puts an address into the one form the configured-source
+// set is keyed on, so "::ffff:192.0.2.1" from a dual-stack listener and
+// "192.0.2.1" from config.yaml are the same device -- the same
+// normalisation device.Registry already applies to its own source keys.
+func normaliseHost(host string) string {
+	host = strings.TrimSpace(host)
+	if addr, err := netip.ParseAddr(host); err == nil {
+		return addr.Unmap().String()
+	}
+	return host
 }
 
 func handleTCPConn(ctx context.Context, conn net.Conn, out chan<- RawMessage) {

@@ -43,6 +43,17 @@
         >
           {formatBufferDepth(appState.stats.capacity, appState.stats.count, appState.stats.eventsPerSecond)}
         </span>
+        {#if appState.stats.syslog && appState.stats.syslog.rejectedConfigured > 0}
+          <!-- Only shown when one of YOUR routers was turned away. The
+               listener being busy is not itself a problem; a device you
+               told MikroView to watch not getting through is. -->
+          <span
+            class="syslog-blocked"
+            title="MikroView has turned away {appState.stats.syslog.rejectedConfigured} connection attempt(s) from a router listed in your config, because its syslog connection slots were full ({appState.stats.syslog.inUse} of {appState.stats.syslog.capacity} in use). Those log lines never arrived. This usually means something is opening a lot of connections to the syslog port."
+          >
+            ⚠ syslog full
+          </span>
+        {/if}
       {/if}
 
       {#if !viewportState.isMobile}
@@ -148,6 +159,17 @@
     color: var(--fg-muted);
     padding-right: 10px;
     border-right: 1px solid var(--border);
+  }
+
+  /* Deliberately not muted: this is the one item here that means
+     something is wrong right now, rather than reporting a rate. */
+  .syslog-blocked {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--danger, #c0392b);
+    padding-right: 10px;
+    border-right: 1px solid var(--border);
+    cursor: help;
   }
 
   button,
