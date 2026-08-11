@@ -346,6 +346,49 @@ upgrading.
 
 ### Fixed
 
+- **A flood of made-up MAC addresses or rule names can no longer grind
+  ingestion to a halt** (#285). Three in-memory indexes are keyed on
+  something whoever is sending syslog gets to choose -- the source MAC,
+  the firewall rule label, and the rule leaderboard behind the stats
+  panel. Each was capped, but the cap was enforced by trimming back to
+  exactly the limit, which leaves the index full, so the next new value
+  overflowed as well and re-ran the whole scan -- for every event
+  thereafter. Measured on the old code: 1,529 ns per event became 16-21
+  ms once the MAC registry was full, taking ingestion down to roughly 47
+  events a second, and the registry is saved to disk so it came back
+  poisoned after a restart. mikroview now sheds a batch and leaves
+  headroom, so the cost is spread over the next several thousand events
+  instead of being paid on each one. The same treatment mikroview
+  already applied to its detectors, now shared rather than re-derived.
+
+  The rule leaderboard had no cap at all: 500,000 made-up rule names cost
+  161 MB of memory, permanently displaced the real rules from the "top
+  rules" list, and sorting that list held the lock ingestion needs --
+  measured at 306 ms per stats request with ingestion blocked for 301 ms
+  of it. It is now bounded like the others, keeps the rules that actually
+  fire, and the sort no longer holds anything ingestion needs.
+
+- **The login rate limiter now enforces its own memory cap** (#285). The
+  4,096-key ceiling was applied when recording a failed login but
+  silently skipped on the path an unauthenticated request reaches first,
+  because the pruning step created the entry it was about to check for.
+  200,000 requests from varying source addresses left 200,006 tracked
+  keys and 22.7 MiB retained. The limiter also now forgets a key
+  entirely once its attempts age out, instead of keeping an empty entry
+  per source address forever.
+
+- **A flood of flags no longer pushes out the alert that matters**
+  (#285). At its hard ceiling the flag store shed the *earliest-raised*
+  flag first -- which is the first flag of a real incident, the single
+  most valuable thing it holds. Since flag targets come from
+  unauthenticated syslog, 5,001 junk "new device" flags (about 600 KB,
+  7 ms) were enough to erase a genuine alert permanently. Reviewed
+  (cleared) flags are still shed first; among the rest mikroview now
+  keeps the ones a detector has re-fired for, since a real incident
+  re-fires and junk fires once. A bounded store under an unbounded flood
+  still has to drop something, so dropping an unreviewed flag is now
+  logged with a running total rather than happening silently.
+
 - **Two concurrent writers can no longer corrupt a store document**
   (#285). Every writer shared one temporary filename (`<store>.tmp`),
   written with a truncating open rather than an exclusive one, so two

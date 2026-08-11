@@ -23,6 +23,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/tomlawesome/mikroview/internal/evict"
 	"github.com/tomlawesome/mikroview/internal/logging"
 	"github.com/tomlawesome/mikroview/internal/persist"
 )
@@ -267,6 +268,11 @@ type Store struct {
 	// evictable. Under a flood the store sits full of *active* flags, so
 	// that scan otherwise ran on every Add and found nothing.
 	clearedCount int
+	// shedActive counts active, never-reviewed flags dropped at the hard
+	// ceiling over this process's lifetime. Losing one is a real loss of
+	// evidence, so it is worth being able to say how many rather than
+	// only that it happened -- see pruneLocked.
+	shedActive uint64
 
 	// excluded holds every permanently-excluded (Type, Target) pair, same
 	// flagID key as byID -- see Store.Exclude's doc comment. Checked at
@@ -843,23 +849,67 @@ func (s *Store) pruneLocked() {
 	// mint distinct ones as fast as they can send packets.
 	//
 	// Sheds a batch rather than the exact overflow, for the same reason
-	// detect.evictOldestByActivity does: evicting one at a time means a
-	// full scan and sort per Add forever. A batch amortizes it across
-	// the next several thousand insertions.
+	// internal/evict documents: evicting one at a time means a full scan
+	// and sort per Add forever. A batch amortizes it across the next
+	// several thousand insertions.
 	if len(s.byID) <= maxFlagsHardCeiling {
 		return
 	}
-	target := maxFlagsHardCeiling - maxFlagsHardCeiling/8
+	target := evict.Target(maxFlagsHardCeiling)
 	all := make([]*Flag, 0, len(s.byID))
 	for _, f := range s.byID {
 		all = append(all, f)
 	}
-	sort.Slice(all, func(i, j int) bool { return all[i].FirstSeen.Before(all[j].FirstSeen) })
+	// Order matters more than it looks. This used to shed by FirstSeen
+	// ascending -- earliest-raised first -- which is precisely backwards:
+	// the first flag of a real incident is the most valuable thing in the
+	// store, and an attacker only has to mint maxFlagsHardCeiling junk
+	// targets to push it out. Reproduced on the old code: one genuine
+	// active flag, then 5,001 `new_device` flags (any unseen src-mac, no
+	// threshold to cross) sent as ~600 KB of syslog in about 7 ms, and
+	// the genuine flag was gone from both byID and List() permanently.
+	//
+	// Cleared flags go first (a human has reviewed them). Among active
+	// ones, Count -- how many times this detector has re-fired for this
+	// target -- is the best available "this is noise" signal: minted
+	// flags fire once each, a real incident re-fires. LastSeen breaks
+	// ties, which is also what SECURITY.md already advertises for the
+	// detector-side caps.
+	//
+	// This does not make the store immune, and cannot: a bounded store
+	// under an unbounded flood must drop something. What it does is stop
+	// the eviction order from actively selecting for the evidence worth
+	// keeping, and make the loss visible rather than silent. See #285.
+	sort.Slice(all, func(i, j int) bool {
+		a, b := all[i], all[j]
+		if a.Cleared != b.Cleared {
+			return a.Cleared
+		}
+		if a.Count != b.Count {
+			return a.Count < b.Count
+		}
+		return a.LastSeen.Before(b.LastSeen)
+	})
+	shedActive := 0
 	for i := 0; i < len(all) && len(s.byID) > target; i++ {
 		if all[i].Cleared {
 			s.clearedCount--
+		} else {
+			shedActive++
 		}
 		delete(s.byID, all[i].ID)
+	}
+	if shedActive > 0 {
+		// An active flag is something nobody has looked at yet, so
+		// dropping one is worth saying out loud. Rate-limited by the
+		// batch shed itself: this can only fire once per batch, not once
+		// per evicted flag.
+		s.shedActive += uint64(shedActive)
+		persistLog.Warn(fmt.Sprintf(
+			"flag store hit its hard ceiling of %d and dropped %d active (unreviewed) flags, %d in total so far -- "+
+				"this happens when far more distinct flag targets arrive than a real network produces, "+
+				"which is itself worth investigating",
+			maxFlagsHardCeiling, shedActive, s.shedActive))
 	}
 }
 
