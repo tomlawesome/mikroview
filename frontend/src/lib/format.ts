@@ -122,3 +122,16 @@ export function formatRelative(iso: string, nowMs: number): string {
   const d = Math.floor(h / 24)
   return `${d}d ago`
 }
+
+// rawTooltip is the verbatim router log line as shown on hover, plus a
+// note when the server cut it.
+//
+// The line is the one thing in a row that is meant to be exactly what
+// the router sent, so a shortened one that says nothing would be a
+// quiet lie. Truncation only happens above the server's cap
+// (store.MaxRawBytes, 2 KiB), which is roughly five times the longest
+// genuine RouterOS line -- so in practice this note appears only for
+// deliberately oversized input. See #285.
+export function rawTooltip(raw: string, truncated?: boolean): string {
+  return truncated ? `${raw}\n\n[truncated — the line sent was longer than MikroView stores]` : raw
+}

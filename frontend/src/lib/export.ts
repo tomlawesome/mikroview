@@ -36,6 +36,7 @@ export const COLUMNS: (keyof FirewallEvent)[] = [
   'length',
   'flags',
   'raw',
+  'rawTruncated',
 ]
 
 // Characters that make a spreadsheet treat a cell as a formula rather
