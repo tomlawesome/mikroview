@@ -74,8 +74,12 @@ roughly how many seconds of history remain. The live view's toolbar shows
 this directly (`n% of buffer used`, or `holding last Xm Ys` once full),
 so you do not need to query the API by hand to find out.
 
-**A typical retained event costs about 616 bytes**, so the default
-`maxMemory: 120MiB` holds roughly 200,000 events. That figure is a budget
+**A typical retained event costs about 624 bytes**, so the default
+`maxMemory: 120MiB` holds roughly 200,000 events. The stored copy of
+the raw log line is capped at 2KiB, which is about five times the
+longest line a real RouterOS device produces — so the figure above is a
+ceiling rather than a typical case that a pathological line can exceed.
+A row whose line was cut says so on hover, and in a CSV export. That figure is a budget
 for the buffer itself, not what mikroview's process occupies on the host
 — expect *resident* memory (what `docker stats` or `top` reports) to run
 about 1.5x higher once the Go runtime and process overhead are counted,

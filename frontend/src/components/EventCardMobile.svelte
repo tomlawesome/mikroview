@@ -10,7 +10,7 @@
   // else pushed into EventDetailSheet.svelte on tap rather than shown
   // inline or expanded in place.
   import type { FirewallEvent } from '../lib/types'
-  import { formatTime, countryFlag } from '../lib/format'
+  import { formatTime, countryFlag, rawTooltip } from '../lib/format'
 
   let { event, deviceName, onOpen }: { event: FirewallEvent; deviceName: string; onOpen: () => void } =
     $props()
@@ -19,7 +19,7 @@
   const ifaces = $derived([event.inInterface, event.outInterface].filter(Boolean).join(' → ') || '—')
 </script>
 
-<button class="card row-{event.action}" onclick={onOpen} title={event.raw}>
+<button class="card row-{event.action}" onclick={onOpen} title={rawTooltip(event.raw, event.rawTruncated)}>
   <div class="line1">
     <span class="time">{formatTime(event.time)}</span>
     <span class="badge badge-{event.action}">{event.action.toUpperCase()}</span>
