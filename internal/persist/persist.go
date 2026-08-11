@@ -83,3 +83,21 @@ type Backend interface {
 	// or "postgres store 'auth'". Never includes a DSN or password.
 	Describe() string
 }
+
+// VersionReader is an optional Backend capability: reporting the stored
+// version without transferring the document.
+//
+// It exists for callers that poll for staleness far more often than the
+// document actually changes -- internal/auth does this on every
+// authenticated request, so a live server would otherwise pull the whole
+// accounts document over the wire per request just to compare an
+// integer. Callers must treat its absence as normal and fall back to
+// Load: FileBackend deliberately does not implement it, because its
+// version *is* a hash of the file's bytes, so there is nothing cheaper
+// than reading them.
+//
+// exists is false when nothing has been stored yet, matching
+// Snapshot.Exists.
+type VersionReader interface {
+	Version(ctx context.Context) (version int64, exists bool, err error)
+}
