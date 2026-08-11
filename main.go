@@ -1040,7 +1040,24 @@ func main() {
 	}
 	if cfg.TLS.Enabled {
 		scheme = "https"
-		httpServer.TLSConfig = &tls.Config{Certificates: []tls.Certificate{cert}}
+		// MinVersion pinned rather than left to the Go release that
+		// built this binary, matching internal/syslog's TLS listener and
+		// its reasoning: the implicit server default has shifted across
+		// Go versions before, and what this listener will accept should
+		// not depend on which toolchain produced it. This is the
+		// listener carrying login credentials and session cookies, so if
+		// either listener deserves the pin it is this one.
+		//
+		// Not a live vulnerability: probed on this repo's Go 1.26.5, the
+		// unpinned config refused TLS 1.0 and 1.1 identically to the
+		// pinned one. Two of #272's phase 2 reviewers raised the
+		// asymmetry independently and one tested it rather than assuming
+		// -- recorded so the pin reads as consistency, not as a fix for
+		// something that was exploitable. See #282, #284.
+		httpServer.TLSConfig = &tls.Config{
+			Certificates: []tls.Certificate{cert},
+			MinVersion:   tls.VersionTLS12,
+		}
 		if cfg.Listen.HTTPRedirect != "" {
 			redirectLog := logging.New("http-redirect")
 			redirectServer := &http.Server{
