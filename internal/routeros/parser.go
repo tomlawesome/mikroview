@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/tomlawesome/mikroview/internal/logging"
 	"github.com/tomlawesome/mikroview/internal/store"
 )
 
@@ -74,21 +75,50 @@ func clampField(s string) string {
 	return s
 }
 
-// clampAll applies clampField to every extracted string field. Raw is
+// safeField is clampField plus logging.Printable: bounded in length, and
+// free of control characters, ANSI escapes and Unicode format characters.
+//
+// The length cap alone was not enough. These fields are attacker-authored
+// -- anything able to reach the syslog port controls them entirely -- and
+// they do not stay inside mikroview's own UI, where Svelte's escaping
+// would be the whole answer. They become a flag's Target and Detail, and
+// from there they are written into flags.json, into the watchlist match
+// log, into an SMTP body and into a Pushover message. A terminal
+// rendering `cat flags.json` executes an ANSI escape sequence; that is
+// the CVE class this codebase already cites elsewhere, and
+// logging.Printable already exists for it -- it was simply applied only
+// to usernames, at seven call sites, and never on the event path.
+//
+// Doing it here rather than at each sink is deliberate: a sink is easy to
+// add and easy to forget, and internal/watchlist/invert.go had already
+// reasoned itself into writing an unvalidated address on the grounds
+// that it was "already derived from a real event" -- which is the wrong
+// test, since the event itself is attacker-authored. One choke point on
+// the way in makes that reasoning correct rather than merely common.
+//
+// None of these fields can legitimately contain a control character:
+// they are IPs, MAC addresses, RouterOS identifiers and protocol names.
+// See #285.
+func safeField(s string) string {
+	return logging.Printable(clampField(s))
+}
+
+// clampAll applies safeField to every extracted string field. Raw is
 // deliberately excluded -- it is already bounded by the listeners' own
-// read limits, and it is the verbatim evidence an operator needs.
+// read limits, and it is the verbatim evidence an operator needs, which
+// is worth exactly nothing if this rewrites it before they see it.
 func (p *Parsed) clampAll() {
-	p.RuleLabel = clampField(p.RuleLabel)
-	p.Chain = clampField(p.Chain)
-	p.InInterface = clampField(p.InInterface)
-	p.OutInterface = clampField(p.OutInterface)
-	p.ConnState = clampField(p.ConnState)
-	p.Protocol = clampField(p.Protocol)
-	p.SrcMAC = clampField(p.SrcMAC)
-	p.SrcIP = clampField(p.SrcIP)
-	p.DstIP = clampField(p.DstIP)
-	p.NatIP = clampField(p.NatIP)
-	p.NatRaw = clampField(p.NatRaw)
+	p.RuleLabel = safeField(p.RuleLabel)
+	p.Chain = safeField(p.Chain)
+	p.InInterface = safeField(p.InInterface)
+	p.OutInterface = safeField(p.OutInterface)
+	p.ConnState = safeField(p.ConnState)
+	p.Protocol = safeField(p.Protocol)
+	p.SrcMAC = safeField(p.SrcMAC)
+	p.SrcIP = safeField(p.SrcIP)
+	p.DstIP = safeField(p.DstIP)
+	p.NatIP = safeField(p.NatIP)
+	p.NatRaw = safeField(p.NatRaw)
 }
 
 // The named return matters: clampAll runs in a defer, and with an

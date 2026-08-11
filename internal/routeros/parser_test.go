@@ -3,6 +3,7 @@
 package routeros
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/tomlawesome/mikroview/internal/store"
@@ -180,5 +181,42 @@ func TestSplitTopLevel(t *testing.T) {
 		if got[i] != want[i] {
 			t.Errorf("segment %d = %q, want %q", i, got[i], want[i])
 		}
+	}
+}
+
+// Every extracted field is attacker-authored -- whoever can reach the
+// syslog port chooses these bytes -- and they do not stay inside
+// mikroview's own UI, where Svelte's escaping would be the whole answer.
+// They become a flag's Target and Detail, and from there they reach
+// flags.json, the watchlist match log, an SMTP body and a Pushover
+// message. A terminal rendering `cat flags.json` executes an ANSI escape
+// sequence.
+//
+// The length cap was already here; this asserts the other half. See #285.
+func TestParseStripsTerminalEscapesFromExtractedFields(t *testing.T) {
+	const esc = "\x1b[2J\x1b[1;31m"
+	p := Parse("D|" + esc + "rule| forward: in:" + esc + "ether1 out:ether2, " +
+		"src-mac aa:bb:cc:" + esc + "dd:ee:ff, proto TCP, " +
+		"192.0.2.1:1234->198.51.100.1:80, len 60")
+
+	fields := map[string]string{
+		"RuleLabel":   p.RuleLabel,
+		"InInterface": p.InInterface,
+		"SrcMAC":      p.SrcMAC,
+	}
+	for name, got := range fields {
+		if strings.ContainsRune(got, 0x1b) {
+			t.Errorf("%s = %q -- an escape sequence reached a field that is persisted and sent in notifications", name, got)
+		}
+		if got == "" {
+			t.Errorf("%s is empty -- sanitising must replace the unsafe runes, not discard the value", name)
+		}
+	}
+
+	// Raw is deliberately untouched: it is the verbatim evidence an
+	// operator compares a row against, and rewriting it would defeat the
+	// reason it is kept.
+	if !strings.ContainsRune(p.Raw, 0x1b) {
+		t.Error("Raw was sanitised -- it must stay byte-for-byte what the router sent")
 	}
 }
