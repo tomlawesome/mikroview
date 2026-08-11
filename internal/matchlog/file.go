@@ -196,22 +196,135 @@ func (s *FileStore) writeLineLocked(l fileLine) error {
 // doc comment) -- that match simply is not in this query's results and
 // will be on the next one, which is an acceptable eventual-consistency
 // window for a monitoring feature, not a transactional one.
+// It runs in two passes, and that shape is the point.
+//
+// A single pass has to keep a whole Record -- Tuple and the entire
+// store.Event, Raw line included -- for every record matching q.Source,
+// because Limit cannot be applied until the ordering is known, and the
+// ordering is by LastSeen, which is not final until the last line has
+// been read (a kindUpdate line arbitrarily far down the file moves it).
+// So Limit: 1 still materialised everything: measured at 237 MiB of heap
+// and 1.86s to return one record, against a 164 MiB log holding 20,000
+// records for one MAC. GET /api/watchlist/matches reaches this on the
+// lowest-privilege credential mikroview issues -- a read-only API token
+// -- with no rate limiter in front of it, so the cost is repeatable at
+// will.
+//
+// The first pass therefore keeps only what ordering needs: an ID and
+// three timestamps per matching record, tens of bytes rather than
+// kilobytes. Once the window filter and Limit have chosen which records
+// to return, the second pass reads the full payloads for those IDs
+// alone. It costs a second read of a file the first pass had to read
+// whole anyway, and bounds what is *retained* by Limit rather than by
+// how much history the log holds. See #285.
 func (s *FileStore) Query(q Query, yield func(Record) bool) error {
 	if q.Source.Empty() {
 		return ErrEmptyIdentity
 	}
 	limit := clampLimit(q.Limit)
 
+	// Pass one: ordering metadata only.
+	type meta struct {
+		id        string
+		firstSeen time.Time
+		lastSeen  time.Time
+		count     uint64
+	}
+	acc := make(map[string]*meta)
+	err := s.scanLines(func(l *fileLine) {
+		switch l.Kind {
+		case kindRecord:
+			if !q.Source.MatchesSource(l.Tuple.Source) {
+				return
+			}
+			// FirstSeen is fixed when the record is created, so a record
+			// entirely at or after the window can be discarded here
+			// rather than carried to the end. LastSeen cannot be
+			// filtered on yet -- a later update moves it forward, which
+			// is exactly how a long-running match stays visible.
+			if !q.Until.IsZero() && !l.FirstSeen.Before(q.Until) {
+				return
+			}
+			acc[l.ID] = &meta{id: l.ID, firstSeen: l.FirstSeen, lastSeen: l.LastSeen, count: 1}
+		case kindUpdate:
+			if m, ok := acc[l.ID]; ok {
+				m.lastSeen = l.LastSeen
+				m.count++
+			}
+		}
+	})
+	if err != nil {
+		return err
+	}
+
+	selected := make([]*meta, 0, len(acc))
+	for _, m := range acc {
+		if m.lastSeen.Before(q.Since) {
+			continue // entirely before the window
+		}
+		selected = append(selected, m)
+	}
+	sort.Slice(selected, func(i, j int) bool { return selected[i].lastSeen.After(selected[j].lastSeen) })
+	if len(selected) > limit {
+		selected = selected[:limit]
+	}
+	if len(selected) == 0 {
+		return nil
+	}
+
+	// Pass two: the payloads for the chosen records, and nothing else.
+	wanted := make(map[string]*meta, len(selected))
+	for _, m := range selected {
+		wanted[m.id] = m
+	}
+	byID := make(map[string]Record, len(selected))
+	err = s.scanLines(func(l *fileLine) {
+		if l.Kind != kindRecord {
+			return
+		}
+		m, ok := wanted[l.ID]
+		if !ok {
+			return
+		}
+		byID[l.ID] = Record{
+			ID: l.ID, EntryID: l.EntryID, Tuple: l.Tuple, Event: l.Event,
+			FirstSeen: l.FirstSeen, LastSeen: m.lastSeen, Count: m.count,
+		}
+	})
+	if err != nil {
+		return err
+	}
+
+	for _, m := range selected {
+		// A record present in pass one but not pass two means the file
+		// was truncated or rewritten underneath us. Skipping is
+		// consistent with how a torn line is already handled.
+		r, ok := byID[m.id]
+		if !ok {
+			continue
+		}
+		if !yield(r) {
+			break
+		}
+	}
+	return nil
+}
+
+// scanLines opens its own read handle and calls fn for each parsable
+// line. Unparsable lines are skipped, matching replay's handling of a
+// torn write.
+//
+// Its own handle rather than s.mu across file I/O, so a slow query does
+// not block Append -- correctness does not depend on serialising with
+// writers, only on reading an append-only file, whose already-written
+// bytes never change.
+func (s *FileStore) scanLines(fn func(*fileLine)) error {
 	f, err := os.Open(s.path)
 	if err != nil {
 		return fmt.Errorf("matchlog: querying %s: %w", s.path, err)
 	}
 	defer f.Close()
 
-	// Bounded by the number of distinct records matching q.Source, not
-	// by the log's total size -- a single device's history, typically
-	// small even when the whole log is large with many other sources.
-	acc := make(map[string]*Record)
 	sc := bufio.NewScanner(f)
 	sc.Buffer(make([]byte, 64*1024), maxLineBytes)
 	for sc.Scan() {
@@ -219,44 +332,10 @@ func (s *FileStore) Query(q Query, yield func(Record) bool) error {
 		if err := json.Unmarshal(sc.Bytes(), &l); err != nil {
 			continue
 		}
-		switch l.Kind {
-		case kindRecord:
-			if !q.Source.MatchesSource(l.Tuple.Source) {
-				continue
-			}
-			acc[l.ID] = &Record{
-				ID: l.ID, EntryID: l.EntryID, Tuple: l.Tuple, Event: l.Event,
-				FirstSeen: l.FirstSeen, LastSeen: l.LastSeen, Count: 1,
-			}
-		case kindUpdate:
-			if r, ok := acc[l.ID]; ok {
-				r.LastSeen = l.LastSeen
-				r.Count++
-			}
-		}
+		fn(&l)
 	}
 	if err := sc.Err(); err != nil {
 		return fmt.Errorf("matchlog: reading %s: %w", s.path, err)
-	}
-
-	var results []Record
-	for _, r := range acc {
-		if r.LastSeen.Before(q.Since) {
-			continue // entirely before the window
-		}
-		if !q.Until.IsZero() && !r.FirstSeen.Before(q.Until) {
-			continue // entirely at or after the window
-		}
-		results = append(results, *r)
-	}
-	sort.Slice(results, func(i, j int) bool { return results[i].LastSeen.After(results[j].LastSeen) })
-	if len(results) > limit {
-		results = results[:limit]
-	}
-	for _, r := range results {
-		if !yield(r) {
-			break
-		}
 	}
 	return nil
 }

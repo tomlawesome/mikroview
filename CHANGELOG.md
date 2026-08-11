@@ -346,6 +346,49 @@ upgrading.
 
 ### Fixed
 
+- **Terminal escape sequences from a syslog line no longer reach saved
+  flags or notifications** (#285). Every field MikroView reads out of a
+  firewall log line is chosen by whoever sent it, and those fields become
+  a flag's target and detail -- which are then written to `flags.json`
+  and the watchlist match log, and sent in email and Pushover messages.
+  They were length-capped but never checked for control characters, so a
+  crafted line could put an ANSI escape sequence somewhere a terminal
+  would execute it, for example on `cat flags.json`. MikroView already
+  had the function for this and was applying it only to usernames. It is
+  now applied once, where fields are read, rather than at each place they
+  end up -- a destination is easy to add and easy to forget. The raw log
+  line itself is deliberately left byte-for-byte as the router sent it,
+  since comparing against it is the reason it is kept.
+
+- **A CSV export can no longer smuggle a formula into a new row**
+  (#285). A cell containing a bare carriage return was written unquoted,
+  and a spreadsheet reading classic-Mac line endings treats that as the
+  end of a record -- so text after it started a new row, and the first
+  cell of a new row never went through the formula-neutralising step.
+  The payload has to avoid quotes and commas to reach this (anything
+  containing them was quoted already), which the classic
+  command-execution form does. Carriage returns are now quoted like every
+  other separator.
+
+- **A webhook notification will no longer follow a redirect to another
+  host** (#285). MikroView supports putting a credential in a custom
+  header, because that is what ntfy, Home Assistant and n8n each expect.
+  Go strips the standard `Authorization` and `Cookie` headers when a
+  redirect crosses hosts but not custom ones -- so the header most likely
+  to hold your secret was the one being forwarded. Redirects within the
+  same receiver are still followed; anything else fails the send with a
+  message saying why. MikroView also now warns at startup if the webhook
+  URL is plain `http://`, since flag contents and that header cross the
+  network in the clear.
+
+- **Asking the match log for one record no longer builds all of them**
+  (#285). `GET /api/watchlist/matches` loaded every record for the
+  requested device into memory before applying the limit -- 237 MB and
+  1.9 seconds to return a single record from a large log -- and it is
+  reachable with a read-only API token and no rate limit. It now reads
+  only what it needs to order the results, then fetches the full
+  contents of just the records being returned.
+
 - **One router can no longer name hosts on another router's traffic**
   (#285, #283, #284). Names pushed from RouterOS -- DNS static entries,
   DHCP lease hostnames, WireGuard peer comments -- were applied
