@@ -381,11 +381,17 @@ func writeAuthError(w http.ResponseWriter, err error, status int) {
 	http.Error(w, msg, status)
 }
 
-// handleAuthSkip permanently disables authentication for this
-// deployment (see auth.Store.Disable) -- only reachable while
-// Count()==0 (requireAuth's bootstrap-exempt window; Disable itself
-// also refuses otherwise, as a second guard). No session is created;
-// there's nothing to log into.
+// credentialsRequest is the body of both login and first-run
+// registration: the username and password, and nothing else.
+//
+// It briefly carried the doc comment of a deleted handleAuthSkip
+// function, left behind when that handler was removed. Go attaches a
+// preceding comment block to whatever declaration follows it, so `go
+// doc` presented the struct that carries every password this
+// application ever receives as "permanently disables authentication for
+// this deployment", referring to an auth.Store.Disable that no longer
+// exists. No runtime effect; the cost was to anyone auditing the auth
+// surface, in the one file where being misled is most expensive.
 type credentialsRequest struct {
 	Username string `json:"username"`
 	Password string `json:"password"`
