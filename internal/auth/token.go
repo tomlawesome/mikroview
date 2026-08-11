@@ -309,11 +309,37 @@ func (s *TokenStore) Authenticate(raw string, want TokenKind, now time.Time) (*T
 	if t.Kind != want {
 		return nil, false
 	}
-	t.LastUsedAt = now
-	s.persistLocked()
+	// LastUsedAt is a "roughly when was this last used" field for the
+	// tokens UI, not an audit record -- the audit log is where actions
+	// are accounted for. Writing the whole token document on every
+	// successful authentication made it behave like one anyway:
+	// measured at 0.40 ms per authentication with 50 tokens, under the
+	// write lock, on a path a read-only API token hits on every poll.
+	// Every one of those writes also went through the file backend's
+	// write-temp-then-rename, so it compounded with the shared-temp-name
+	// corruption fixed in #287.
+	//
+	// Persisting only once the recorded value is more than
+	// lastUsedGranularity stale keeps the display honest to the minute
+	// while collapsing a poll loop's writes to one an hour. The
+	// in-memory value is always exact; only the durable copy is
+	// coarsened. See #285.
+	if now.Sub(t.LastUsedAt) >= lastUsedGranularity {
+		t.LastUsedAt = now
+		s.persistLocked()
+	} else {
+		t.LastUsedAt = now
+	}
 	cp := *t
 	return &cp, true
 }
+
+// lastUsedGranularity is how stale a token's persisted LastUsedAt may
+// become before a write is worth it. An hour is far finer than the
+// question this field answers ("is this token still in use, or can I
+// revoke it?") and coarse enough that a polling client writes once
+// rather than continuously.
+const lastUsedGranularity = time.Hour
 
 // Revoke permanently deletes a token by ID -- there is no "disable and
 // keep around" state, matching how a revoked session is deleted

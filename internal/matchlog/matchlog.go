@@ -16,6 +16,7 @@
 package matchlog
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
@@ -190,7 +191,13 @@ type Store interface {
 	// linear in log size to answer, per #243 section 3's own accepted
 	// cost model -- but never holds more in memory than the matching
 	// result set, not the whole log.
-	Query(q Query, yield func(Record) bool) error
+	// ctx cancels the query. It matters most on the Postgres backend,
+	// where the work happens server-side and a client that has gone
+	// away would otherwise leave it running to completion; the file
+	// backend checks it between records. GET /api/watchlist/matches is
+	// reachable with a read-only API token and has no rate limiter, so
+	// "the caller left" needs to actually stop the work.
+	Query(ctx context.Context, q Query, yield func(Record) bool) error
 
 	Stats() Stats
 	Close() error
