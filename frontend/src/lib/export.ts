@@ -66,9 +66,27 @@ function neutraliseFormula(s: string): string {
   return s.length > 0 && FORMULA_LEADERS.includes(s[0]) ? `'${s}` : s
 }
 
+// The \r in this character class is load-bearing and was missing.
+//
+// A bare carriage return survives all the way into a cell: the syslog
+// listener strips \n, but internal/routeros's parser deliberately does
+// not clamp or sanitise Raw (it is kept verbatim so an operator can
+// compare a row against what the router actually sent), and \r is not a
+// character anything else rejects on that path. Unquoted, a spreadsheet
+// reading classic-Mac line endings treats it as a record terminator --
+// so the text after it becomes the start of a *new row*, and the start
+// of a new row never passes through neutraliseFormula, which only ever
+// inspects s[0] of the value it was given. A crafted Raw line therefore
+// smuggles `=IMPORTXML(...)` into a cell that was never neutralised.
+//
+// Quoting closes it: inside quotes a \r is data, not a terminator, and
+// the smuggled text stays in the cell it belongs to. Note the
+// /api/ingest push path is unaffected -- internal/ingest's decoder
+// rejects control characters outright -- so this is specific to the
+// syslog path, which is the unauthenticated one.
 function csvEscape(value: unknown): string {
   const s = neutraliseFormula(value === undefined || value === null ? '' : String(value))
-  return /["\n,]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s
+  return /["\n\r,]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s
 }
 
 export function eventsToCsv(events: FirewallEvent[]): string {
