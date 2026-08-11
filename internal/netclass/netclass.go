@@ -222,6 +222,29 @@ func (c *Classifier) Refresh(ctx context.Context) {
 		parsed := def.Parse(body)
 		cov := coverageOf(parsed)
 
+		// A 200 that yields nothing is not a legitimate empty feed --
+		// these sources exist because they are never empty. It is a
+		// truncated response, a provider outage answering with a blank
+		// body, or an interception, and accepting it does two things:
+		// the source silently stops classifying anything, and its
+		// recorded coverage drops to zero, which disarms the 2x
+		// poisoning guard below for the *next* refresh (2x of zero is
+		// zero, so anything passes). Two refreshes and the guard is
+		// gone.
+		//
+		// The doc comment above already promises "fail to last-known-
+		// good, never to empty"; that only covered fetch and parse
+		// errors, and a clean 200 is neither. Same treatment
+		// Blocklist.Refresh already gives a feed that fetches cleanly
+		// and yields nothing. See #285.
+		if len(parsed) == 0 && len(prior[src]) > 0 {
+			c.log.Warn(fmt.Sprintf("%s: refreshed feed fetched cleanly but parsed to zero prefixes (had %d) -- keeping the last good data",
+				def.Label, len(prior[src])))
+			current[src] = prior[src]
+			newCoverage[src] = priorCoverage[src]
+			continue
+		}
+
 		// Coverage-delta guard: a feed that suddenly claims far more
 		// address space than last time is more likely poisoned than
 		// legitimately grown. Reject the new copy and keep the old one.

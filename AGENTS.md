@@ -255,6 +255,23 @@ pass rather than waiting to be asked.
 Staying back needs a specific, defensible technical reason. "It would
 enlarge the diff" and "it isn't broken" are not reasons.
 
+Nor is "the newer version dropped something we use", on its own. That is
+a reason to adapt to the newer version, not to sit on the older one —
+unless the older line is itself still supported with security fixes.
+Being unable to move is a blocked upgrade, and a blocked upgrade needs
+three things written down: what blocks it, what the version behind costs,
+and the concrete trigger for taking it. Without a trigger it is not a
+decision, it is a version that stopped being looked at.
+
+Where a bump is blocked, record it on the tracker rather than only in a
+pin. The current example is `typescript`, held at `~6.0.2` because
+`svelte-check` supports TypeScript 7 only behind an experimental flag,
+under which it silently type-checks 46 files instead of 249 — see #286
+for the measurement and the trigger. Note what that case turns on: the
+upgrade was rejected because taking it would have made a *check* quieter
+while still reporting success, which is the same failure this file warns
+about for CI gates.
+
 The cost of the alternative is not hypothetical: mikroview's `go`
 directive sat at 1.23.4 long enough for Go 1.23 to leave its support
 window entirely, leaving 22–29 unpatched standard-library CVEs in the

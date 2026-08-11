@@ -4,6 +4,7 @@ package matchlog
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -217,7 +218,7 @@ func (s *FileStore) writeLineLocked(l fileLine) error {
 // alone. It costs a second read of a file the first pass had to read
 // whole anyway, and bounds what is *retained* by Limit rather than by
 // how much history the log holds. See #285.
-func (s *FileStore) Query(q Query, yield func(Record) bool) error {
+func (s *FileStore) Query(ctx context.Context, q Query, yield func(Record) bool) error {
 	if q.Source.Empty() {
 		return ErrEmptyIdentity
 	}
@@ -296,6 +297,9 @@ func (s *FileStore) Query(q Query, yield func(Record) bool) error {
 	}
 
 	for _, m := range selected {
+		if err := ctx.Err(); err != nil {
+			return err // the caller went away
+		}
 		// A record present in pass one but not pass two means the file
 		// was truncated or rewritten underneath us. Skipping is
 		// consistent with how a torn line is already handled.

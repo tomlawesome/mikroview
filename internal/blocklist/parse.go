@@ -73,7 +73,7 @@ func parseSpamhaus(body []byte) ([]netip.Prefix, string, error) {
 		if field == "" {
 			continue
 		}
-		if p, err := netip.ParsePrefix(field); err == nil {
+		if p, err := netip.ParsePrefix(field); err == nil && plausiblePrefix(p) {
 			out = append(out, p)
 		}
 		// A bare IP with no /bits (shouldn't occur in DROP, which always
@@ -107,4 +107,29 @@ func parseEmergingThreatsCompromised(body []byte) ([]netip.Prefix, string, error
 		out = append(out, netip.PrefixFrom(addr, addr.BitLen()))
 	}
 	return out, leadingNotice(body, "#"), scanner.Err()
+}
+
+// minPrefixBits is the widest prefix a threat-intel feed may contribute.
+//
+// The feeds are parsed with no bound on prefix width, so a single
+// poisoned or truncated line saying "0.0.0.0/0" would mark every address
+// mikroview ever sees as known-bad -- every source IP raising a
+// known_bad_ip flag, which is both useless and drowns the real ones. A
+// /8 is already 16.7 million addresses and far wider than anything
+// Spamhaus DROP publishes (its widest entries are /16-ish); anything
+// broader is a malformed or hostile line, not a range.
+//
+// Skipped rather than rejecting the whole feed, matching how this parser
+// already treats a bare IP with no /bits: one bad line loses one line.
+// See #285.
+const minPrefixBits = 8
+
+func plausiblePrefix(p netip.Prefix) bool {
+	if p.Addr().Is4() {
+		return p.Bits() >= minPrefixBits
+	}
+	// The IPv6 equivalent scaled to its own address size: /8 of a
+	// 32-bit space is 1/256th of it, and /32 of a 128-bit space is the
+	// smallest allocation a regional registry hands out.
+	return p.Bits() >= 32
 }

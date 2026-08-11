@@ -12,6 +12,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net"
 	"net/http"
 	"net/url"
@@ -19,6 +20,20 @@ import (
 	"sync"
 	"time"
 )
+
+// maxResponseBytes bounds what an upstream reputation API may return.
+//
+// This package was the one outbound HTTP client in the tree without a
+// bound -- internal/netclass, internal/blocklist and internal/backup all
+// have one. It matters more here than the omission suggests: the text
+// these responses carry (hostnames, tags, CVE identifiers) flows into
+// persisted flags and from there into notifications, so an upstream that
+// is compromised, hijacked by DNS, or simply misbehaving could stream
+// unbounded JSON into a decoder with nothing to stop it.
+//
+// 1 MiB is orders of magnitude above a real InternetDB or AbuseIPDB
+// answer for one address. See #285.
+const maxResponseBytes = 1 << 20
 
 const (
 	requestTimeout = 5 * time.Second
@@ -225,7 +240,7 @@ func fetchShodan(ctx context.Context, client *http.Client, ip string) Result {
 		Vulns     []string `json:"vulns"`
 		Tags      []string `json:"tags"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+	if err := json.NewDecoder(io.LimitReader(resp.Body, maxResponseBytes)).Decode(&body); err != nil {
 		return Result{}
 	}
 	return Result{Ports: body.Ports, Hostnames: body.Hostnames, Vulns: body.Vulns, Tags: body.Tags}
@@ -262,7 +277,7 @@ func fetchAbuseIPDB(ctx context.Context, client *http.Client, key, ip string) Re
 			IsTor                bool   `json:"isTor"`
 		} `json:"data"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+	if err := json.NewDecoder(io.LimitReader(resp.Body, maxResponseBytes)).Decode(&body); err != nil {
 		return Result{}
 	}
 

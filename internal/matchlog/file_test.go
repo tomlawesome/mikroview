@@ -3,6 +3,7 @@
 package matchlog
 
 import (
+	"context"
 	"errors"
 	"os"
 	"path/filepath"
@@ -31,7 +32,7 @@ func mustOpen(t *testing.T, capacity int) *FileStore {
 func collect(t *testing.T, s *FileStore, q Query) []Record {
 	t.Helper()
 	var out []Record
-	if err := s.Query(q, func(r Record) bool {
+	if err := s.Query(context.Background(), q, func(r Record) bool {
 		out = append(out, r)
 		return true
 	}); err != nil {
@@ -162,7 +163,7 @@ func TestAppendRefusesEmptyIdentity(t *testing.T) {
 
 func TestQueryRefusesEmptyIdentity(t *testing.T) {
 	s := mustOpen(t, 10)
-	err := s.Query(Query{}, func(Record) bool { return true })
+	err := s.Query(context.Background(), Query{}, func(Record) bool { return true })
 	if !errors.Is(err, ErrEmptyIdentity) {
 		t.Errorf("Query with no MAC/IP = %v, want ErrEmptyIdentity", err)
 	}
@@ -359,7 +360,7 @@ func TestQueryYieldFalseStopsDelivery(t *testing.T) {
 	}
 
 	n := 0
-	if err := s.Query(Query{Source: src}, func(Record) bool {
+	if err := s.Query(context.Background(), Query{Source: src}, func(Record) bool {
 		n++
 		return n < 2 // stop after the second delivery
 	}); err != nil {
@@ -463,7 +464,7 @@ func TestConcurrentAppendAndQuery(t *testing.T) {
 			case <-stop:
 				return
 			default:
-				_ = s.Query(Query{Source: src}, func(Record) bool { return true })
+				_ = s.Query(context.Background(), Query{Source: src}, func(Record) bool { return true })
 				_ = s.Stats()
 			}
 		}
