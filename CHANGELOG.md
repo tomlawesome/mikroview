@@ -346,6 +346,38 @@ upgrading.
 
 ### Fixed
 
+- **Two concurrent writers can no longer corrupt a store document**
+  (#285). Every writer shared one temporary filename (`<store>.tmp`),
+  written with a truncating open rather than an exclusive one, so two
+  overlapping saves landed in the same file and the rename published a
+  byte mixture of both payloads. Measured on the old code: 12 of 300
+  concurrent write pairs left the document as invalid JSON *after both
+  writers had finished* -- settled corruption, not a transient. For the
+  accounts store that meant a total lockout, since mikroview
+  deliberately refuses to start on an unreadable accounts document
+  rather than treat it as a fresh install. Two writers at once is the
+  documented recovery workflow (`docker compose exec ...
+  -recover-admin-account` against a running server), not a contrived
+  case. Each writer now gets its own exclusively-created temporary file,
+  and the write is flushed to disk before the rename and the directory
+  after it, so "atomically replaced" now also holds across a power loss.
+
+- **A stalled database no longer takes authentication down with it**
+  (#282). Every authenticated request, every login and every
+  registration attempt re-read the accounts document with no deadline.
+  If Postgres stopped answering while its connection stayed open -- a
+  network blackhole, a long lock wait, an overloaded server -- each
+  request permanently consumed a goroutine and a pooled connection, and
+  the HTTP write timeout did not release them. Once the pool was
+  exhausted every further request blocked too, including the login an
+  operator needed in order to diagnose it, and nothing recovered until
+  the database came back. The staleness check is now bounded by a
+  five-second deadline, and concurrent callers share a single check
+  instead of each opening their own, so an outage costs one connection
+  rather than one per request and the server keeps serving from memory
+  throughout. On Postgres the check now also asks only for the version
+  rather than pulling the whole accounts document back on every request.
+
 - **Autoscroll off now holds the live view still** (#232), rather than
   only skipping the jump-to-bottom. The rendered window is a sliding
   slice of the most recent 800 events, so once the buffer passed that
