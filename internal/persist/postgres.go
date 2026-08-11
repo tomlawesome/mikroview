@@ -40,6 +40,11 @@ var schemaLog = logging.New("schema")
 const (
 	sqlLoadBlob = `SELECT payload, version FROM store_blob WHERE name = $1`
 
+	// Deliberately not `SELECT payload, version` -- see
+	// PostgresBackend.Version. The whole point is not to move the
+	// document over the wire just to find out whether it changed.
+	sqlLoadBlobVersion = `SELECT version FROM store_blob WHERE name = $1`
+
 	sqlInsertBlob = `INSERT INTO store_blob (name, payload, version, updated_at)
 	                 VALUES ($1, $2, 1, now())
 	                 ON CONFLICT (name) DO NOTHING`
@@ -377,6 +382,26 @@ func (b *PostgresBackend) Load(ctx context.Context) (Snapshot, error) {
 		return Snapshot{}, fmt.Errorf("persist: loading %q: %w", b.name, err)
 	}
 	return Snapshot{Payload: []byte(payload), Version: version, Exists: true}, nil
+}
+
+// Version implements VersionReader: it answers "has this document
+// changed?" without transferring the document.
+//
+// This matters because internal/auth checks staleness on every
+// authenticated request, and the accounts payload grows with the number
+// of accounts. Loading it whole to compare one integer meant every
+// request moved the entire accounts document -- password hashes
+// included -- across the network, per request.
+func (b *PostgresBackend) Version(ctx context.Context) (int64, bool, error) {
+	var version int64
+	err := b.pool.pool.QueryRow(ctx, sqlLoadBlobVersion, b.name).Scan(&version)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return 0, false, nil
+	}
+	if err != nil {
+		return 0, false, fmt.Errorf("persist: reading version of %q: %w", b.name, err)
+	}
+	return version, true, nil
 }
 
 func (b *PostgresBackend) Save(ctx context.Context, payload []byte, expect int64) (int64, error) {

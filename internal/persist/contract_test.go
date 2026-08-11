@@ -5,6 +5,8 @@ package persist
 import (
 	"context"
 	"path/filepath"
+	"strings"
+	"sync"
 	"testing"
 )
 
@@ -157,6 +159,65 @@ func TestContractDescribeNeverLeaksACredential(t *testing.T) {
 		// config-problem surface, so it must never carry one.
 		if contains(d, "devpass") {
 			t.Errorf("Describe leaked a credential: %q", d)
+		}
+	})
+}
+
+// Concurrent writers may lose the compare-and-swap -- that is the
+// contract, and ErrConflict says so. What they must never do is leave
+// the *stored document* holding bytes that were never a whole payload.
+//
+// The file backend used to do exactly that: every writer shared one
+// `path + ".tmp"` filename, written with os.WriteFile's O_TRUNC, so two
+// overlapping saves interleaved inside the same temp file and the rename
+// published the mixture. On the accounts store that is a fail-closed
+// lockout, since internal/auth refuses to boot on a document it cannot
+// parse. Two writers is the documented recovery workflow (a CLI command
+// run against a live server), not a contrived case.
+//
+// The assertion is deliberately about *settled* state after both writers
+// finish, not about what a reader sees mid-write -- a torn read during a
+// write would be a different (and much weaker) claim.
+func TestContractConcurrentWritersNeverPublishAMixedDocument(t *testing.T) {
+	eachBackend(t, func(t *testing.T, b Backend) {
+		// Different lengths so an interleaving leaves a recognisable
+		// tail rather than a same-size overwrite that looks intact.
+		big := []byte(`{"v":"` + strings.Repeat("A", 150_000) + `"}`)
+		small := []byte(`{"v":"B"}`)
+
+		if _, err := b.Save(context.Background(), small, 0); err != nil {
+			t.Fatalf("seeding: %v", err)
+		}
+
+		for round := 0; round < 200; round++ {
+			var wg sync.WaitGroup
+			start := make(chan struct{})
+			for _, payload := range [][]byte{big, small} {
+				wg.Add(1)
+				go func(payload []byte) {
+					defer wg.Done()
+					<-start
+					snap, err := b.Load(context.Background())
+					if err != nil {
+						return
+					}
+					// ErrConflict is a correct outcome here and is
+					// deliberately not asserted on.
+					_, _ = b.Save(context.Background(), payload, snap.Version)
+				}(payload)
+			}
+			close(start)
+			wg.Wait()
+
+			snap, err := b.Load(context.Background())
+			if err != nil {
+				t.Fatalf("round %d: settled Load: %v", round, err)
+			}
+			got := string(snap.Payload)
+			if got != string(big) && got != string(small) {
+				t.Fatalf("round %d: stored document is neither payload -- %d bytes, prefix %.80q",
+					round, len(got), got)
+			}
 		}
 	})
 }
