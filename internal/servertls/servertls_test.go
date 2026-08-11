@@ -257,3 +257,49 @@ func writeThrowawayCert(t *testing.T, dir string) (certPath, keyPath string) {
 	}
 	return certPath, keyPath
 }
+
+// os.WriteFile's mode argument applies only when it creates the file, so
+// the 0600 intent held on a fresh install and silently did not wherever
+// the file already existed with wider permissions -- a restore from a
+// backup taken under a different umask, a bind-mounted host directory, a
+// volume copied between machines. These are the CA and leaf private
+// keys. See #285.
+func TestPersistedKeysAreTightenedOnRewrite(t *testing.T) {
+	dir := t.TempDir()
+	cfg := Config{Hosts: []string{"localhost"}, StorePath: dir}
+
+	if _, _, err, _ := Load(cfg); err != nil {
+		t.Fatalf("first Load: %v", err)
+	}
+
+	// Widen everything, the way a restore or a bind mount would.
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) == 0 {
+		t.Fatal("nothing was persisted, so this test would prove nothing")
+	}
+	for _, e := range entries {
+		if err := os.Chmod(filepath.Join(dir, e.Name()), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// Force a rewrite by asking for a different SAN set.
+	cfg.Hosts = []string{"localhost", "mikroview.local"}
+	if _, _, err, _ := Load(cfg); err != nil {
+		t.Fatalf("second Load: %v", err)
+	}
+
+	for _, e := range entries {
+		path := filepath.Join(dir, e.Name())
+		info, err := os.Stat(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := info.Mode().Perm(); got != 0o600 {
+			t.Errorf("%s has mode %o after rewrite, want 600 -- a pre-existing world-readable key stays readable", e.Name(), got)
+		}
+	}
+}

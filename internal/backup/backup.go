@@ -36,6 +36,20 @@ const FormatVersion = 1
 // flag history, which is bounded and small -- and far below what a
 // decompression bomb wants. A few hundred bytes of gzip can expand to
 // gigabytes; the cap is what stops that becoming the process's memory.
+//
+// It bounds the outcome, not the peak. #285's review reported that the
+// cap "applies after io.ReadAll", which is not what the code does --
+// the io.LimitReader in Read wraps the gzip stream *before* ReadAll, so
+// no more than MaxDecompressed+1 bytes are ever read. What the reviewer
+// measured is real but differently caused: a bomb sized just under the
+// cap legitimately reaches it, and io.ReadAll grows its buffer by
+// doubling, so transient allocation runs to a multiple of the final
+// size. Deliberately left as it is. This runs only in the CLI backup
+// commands -- a short-lived process whose worst case is being OOM-killed
+// before it writes anything -- and shrinking the ceiling to make the
+// transient smaller would start refusing legitimate backups on the only
+// axis that is hard to predict. The claim being corrected here rather
+// than acted on is the point: the mechanism was already right.
 const MaxDecompressed = 256 << 20
 
 // Envelope is the document. Stores are held as raw JSON so backup never
