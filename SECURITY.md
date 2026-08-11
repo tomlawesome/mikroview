@@ -13,32 +13,34 @@ implicit for anyone deciding whether/how to deploy this.
 
 ## Threat model
 
-**Before a decision is made** (the brief window between first load and
-completing the choice screen), mikroview restricts every endpoint except
-the handful needed to render and complete that screen -- there is no
-window where live event data is readable before someone has actually
-decided how this deployment should behave.
+**Before an admin account exists** (the brief window between first load
+and someone completing the registration screen), mikroview restricts
+every endpoint except the handful needed to render and complete that
+screen -- there is no window where live event data is readable before
+someone has claimed the deployment.
 
-**If auth is skipped**, mikroview has no authentication and assumes
-network-level trust instead, exactly like older versions of mikroview
-did unconditionally. Anyone who can reach its HTTP port can view all
-retained firewall events (including source/destination IPs, ports, and
-the "investigate this IP" reputation lookup) and, indirectly, everyone's
-router configuration as reflected in `config.yaml`'s device list. Anyone
-who can reach its syslog port can inject fabricated events — the syslog
-listeners accept any well-formed line from any source and never
-authenticate the sender as a real RouterOS device.
+There is no way to run mikroview without authentication. An earlier
+version offered "continue without an account" as a first-run choice; it
+was removed, and the code path with it -- see "Authentication" below for
+the full model and the reasoning. What follows describes the risks that
+remain once an account exists, not an optional unauthenticated mode.
 
-This is fine on a LAN you already trust every device on. **It is not
-safe to expose mikroview's HTTP or syslog ports to the internet, to an
-untrusted network, or to a network segment shared with devices you don't
-control** -- and this matters more than it used to: mikroview now
-accumulates real network-activity insight (behavioral flags, per-host
-baselines, friendly host/rule names) that an unauthenticated visitor
-could use to scout a network without needing to prove anything, which is
-the reason authentication exists at all. Creating an account rather than
-skipping is strongly recommended for any deployment reachable by more
-than you.
+**The syslog port is unauthenticated, by design and unavoidably.**
+Anyone who can reach it can inject fabricated events: the listeners
+accept any well-formed line from any source and never authenticate the
+sender as a real RouterOS device, because RouterOS's logging action has
+no client-certificate option to authenticate with. TLS on that port
+gets you confidentiality on the wire and the router verifying
+mikroview, not the reverse.
+
+**It is not safe to expose mikroview's HTTP or syslog ports to the
+internet, to an untrusted network, or to a network segment shared with
+devices you don't control** -- and this matters more than it used to:
+mikroview accumulates real network-activity insight (behavioral flags,
+per-host baselines, friendly host/rule names) which is precisely a
+reconnaissance map of the network it is watching, and the syslog port
+lets an attacker write into that picture as well as read the
+consequences of it.
 
 **Once an account exists**, every request except `/api/healthz` requires
 a valid session -- see "Authentication" below for the full model. The
@@ -121,12 +123,12 @@ See [docs/security-by-design.md](docs/security-by-design.md).
     → PKCE exchange → RS256 token verification → account provisioning →
     session flow, including a repeat login correctly reusing the same
     account.
-- **The first-run choice is made via the web UI**, not a CLI command --
-  whoever loads mikroview first sees a one-time screen offering "create
-  the admin account" or "continue without an account." Don't leave
-  mikroview reachable by an untrusted network before this is resolved:
-  whoever gets there first makes the choice, and if they create an
-  account, they claim the admin role.
+- **First-run registration happens in the web UI**, not via a CLI
+  command -- whoever loads mikroview first sees a one-time screen asking
+  them to create the admin account. There is no second option on that
+  screen; see the "no way to run without authentication" point below.
+  Don't leave mikroview reachable by an untrusted network before it is
+  completed: whoever gets there first claims the admin role.
 - **"Whoever gets there first" means exactly one winner, enforced
   atomically.** First-run registration is resolved under a single lock:
   concurrent attempts cannot all succeed. The precondition is re-checked
