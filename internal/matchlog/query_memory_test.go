@@ -3,6 +3,7 @@
 package matchlog
 
 import (
+	"context"
 	"fmt"
 	"runtime"
 	"strings"
@@ -50,7 +51,7 @@ func TestQueryRetainedMemoryScalesWithLimitNotHistory(t *testing.T) {
 		runtime.ReadMemStats(&before)
 
 		var held []Record
-		if err := s.Query(Query{Source: src, Limit: limit}, func(r Record) bool {
+		if err := s.Query(context.Background(), Query{Source: src, Limit: limit}, func(r Record) bool {
 			held = append(held, r)
 			return true
 		}); err != nil {

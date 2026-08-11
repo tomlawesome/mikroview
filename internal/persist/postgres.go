@@ -7,6 +7,7 @@ import (
 	"embed"
 	"errors"
 	"fmt"
+	"net/url"
 	"sort"
 	"strings"
 	"time"
@@ -105,6 +106,20 @@ func OpenPool(ctx context.Context, dsn string) (*Pool, error) {
 	if err := requireTLS(cfg); err != nil {
 		return nil, err
 	}
+	// search_path pinned rather than inherited.
+	//
+	// Every statement in this package names its tables unqualified, so
+	// which schema they resolve to is whatever search_path happens to
+	// be -- the role's default, or the database's, neither of which
+	// mikroview sets. A role with CREATE on any schema earlier in that
+	// path can shadow store_blob or match_log with a table of its own,
+	// and mikroview would read and write the shadow while reporting
+	// success. Pinning it here means the answer does not depend on how
+	// the role was provisioned. See #285.
+	if cfg.ConnConfig.RuntimeParams == nil {
+		cfg.ConnConfig.RuntimeParams = map[string]string{}
+	}
+	cfg.ConnConfig.RuntimeParams["search_path"] = "public"
 
 	pool, err := pgxpool.NewWithConfig(ctx, cfg)
 	if err != nil {
@@ -156,12 +171,41 @@ func requireTLS(cfg *pgxpool.Config) error {
 // redact strips the DSN out of an error, in case the driver embedded it.
 // A password reaching a log file is a credential leak into whatever
 // collects those logs.
+// redact strips the DSN, and separately the password inside it, from an
+// error before it is logged.
+//
+// Replacing the exact DSN substring was the whole of it, which only
+// works when pgx echoes the DSN verbatim. pgx also produces errors
+// quoting a *normalised* or partial form -- a rewritten connection
+// string, or just the failing component -- and against those an
+// exact-substring match finds nothing and the password goes to the log
+// intact. Removing the password itself as well closes that, since it is
+// the part that actually matters. See #285.
 func redact(err error, dsn string) error {
 	msg := err.Error()
 	if dsn != "" && strings.Contains(msg, dsn) {
 		msg = strings.ReplaceAll(msg, dsn, "<dsn>")
 	}
+	if pw := dsnPassword(dsn); pw != "" {
+		msg = strings.ReplaceAll(msg, pw, "<redacted>")
+	}
 	return errors.New(msg)
+}
+
+// dsnPassword extracts the password from a URL-form DSN, or "" if there
+// is none to protect. Deliberately tolerant: an unparseable DSN yields
+// no password rather than an error, since redact must never itself be a
+// failure path on the way to reporting a different failure.
+func dsnPassword(dsn string) string {
+	u, err := url.Parse(strings.TrimSpace(dsn))
+	if err != nil || u.User == nil {
+		return ""
+	}
+	pw, ok := u.User.Password()
+	if !ok {
+		return ""
+	}
+	return pw
 }
 
 // Raw returns the underlying connection pool, for a backend whose data
