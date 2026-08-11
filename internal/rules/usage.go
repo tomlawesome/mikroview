@@ -23,6 +23,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/tomlawesome/mikroview/internal/evict"
 	"github.com/tomlawesome/mikroview/internal/logging"
 	"github.com/tomlawesome/mikroview/internal/persist"
 )
@@ -213,21 +214,22 @@ var maxRuleEntries = 20_000
 // device.MACRegistry.pruneLocked: under a flood of junk labels the real
 // rules are the ones still being touched, so they are exactly the ones
 // this keeps.
+//
+// Sheds a batch rather than the exact overflow, for the reason
+// internal/evict documents: evicting back to exactly the cap leaves the
+// map full, so every subsequent new label pays a full sort. Touch runs
+// synchronously on the ingest goroutine for essentially every event
+// carrying a rule label, and the label is a RouterOS log-prefix an
+// attacker can vary per line. Measured on the old code: 724 ns per
+// Touch on an empty store against 7,455 ns at the cap, reached with
+// 20,000 unique-label lines. See #285.
 func (s *Store) pruneLocked() {
-	over := len(s.byRule) - maxRuleEntries
-	if over <= 0 {
+	if len(s.byRule) <= maxRuleEntries {
 		return
 	}
-
-	all := make([]*Usage, 0, len(s.byRule))
-	for _, u := range s.byRule {
-		all = append(all, u)
-	}
-	sort.Slice(all, func(i, j int) bool { return all[i].LastSeen.Before(all[j].LastSeen) })
-
-	for i := 0; i < over && i < len(all); i++ {
-		delete(s.byRule, all[i].Rule)
-	}
+	evict.DownTo(s.byRule, evict.Target(maxRuleEntries), func(u *Usage) time.Time {
+		return u.LastSeen
+	})
 }
 
 // persistLocked writes the current state to disk if persistence is

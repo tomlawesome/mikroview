@@ -5,6 +5,8 @@ package auth
 import (
 	"sync"
 	"time"
+
+	"github.com/tomlawesome/mikroview/internal/evict"
 )
 
 // maxLoginLimiterKeys bounds LoginLimiter's tracked-key map the same way
@@ -75,6 +77,10 @@ func (l *LoginLimiter) Release(key string, now time.Time) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	if entries := l.pruneLocked(key, now); len(entries) > 0 {
+		if len(entries) == 1 {
+			delete(l.attempts, key) // same reasoning as pruneLocked: no empty entries
+			return
+		}
 		l.attempts[key] = entries[:len(entries)-1]
 	}
 }
@@ -89,32 +95,58 @@ func (l *LoginLimiter) RecordFailure(key string, now time.Time) {
 	l.attempts[key] = append(l.pruneLocked(key, now), now)
 }
 
+// pruneLocked drops key's attempts that have aged out of the window and
+// returns what remains.
+//
+// It must not leave an entry behind for a key with nothing left, and
+// must not create one for a key it has never seen. Doing so used to make
+// maxLoginLimiterKeys unenforceable on the Reserve path: Reserve calls
+// this first, the old body assigned `l.attempts[key] = kept`
+// unconditionally, so by the time the cap check asked `if _, exists`,
+// the entry always existed and the eviction branch was dead code.
+// RecordFailure asks *before* pruning, which is why the cap worked there
+// and not here.
+//
+// Measured on the old code: 200,000 requests from varying source
+// addresses left 200,006 tracked keys against a documented cap of 4,096,
+// retaining 22.69 MiB -- unauthenticated, and cheap to sustain because
+// this path never reaches the Argon2id cost. A single IPv4 source
+// short-circuits harmlessly; a routed IPv6 /64 or a small botnet does
+// not. See #285.
 func (l *LoginLimiter) pruneLocked(key string, now time.Time) []time.Time {
+	entries, ok := l.attempts[key]
+	if !ok {
+		return nil
+	}
 	cutoff := now.Add(-l.window)
-	kept := l.attempts[key][:0]
-	for _, t := range l.attempts[key] {
+	kept := entries[:0]
+	for _, t := range entries {
 		if !t.Before(cutoff) {
 			kept = append(kept, t)
 		}
+	}
+	if len(kept) == 0 {
+		// An empty entry is not free: it is one map entry per source
+		// address, held after every attempt from it has aged out.
+		delete(l.attempts, key)
+		return nil
 	}
 	l.attempts[key] = kept
 	return kept
 }
 
+// evictOldestLocked sheds the least-recently-active keys once the
+// limiter is at maxLoginLimiterKeys.
+//
+// A batch rather than one, for internal/evict's reason: the keys are
+// source addresses an attacker varies per request, so evicting exactly
+// one leaves the map full and makes every subsequent request pay the
+// whole scan.
 func (l *LoginLimiter) evictOldestLocked() {
-	var oldestKey string
-	var oldest time.Time
-	first := true
-	for k, times := range l.attempts {
+	evict.DownTo(l.attempts, evict.Target(maxLoginLimiterKeys), func(times []time.Time) time.Time {
 		if len(times) == 0 {
-			continue
+			return time.Time{} // shed first; pruneLocked should have removed it already
 		}
-		last := times[len(times)-1]
-		if first || last.Before(oldest) {
-			oldestKey, oldest, first = k, last, false
-		}
-	}
-	if oldestKey != "" {
-		delete(l.attempts, oldestKey)
-	}
+		return times[len(times)-1]
+	})
 }

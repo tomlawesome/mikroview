@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/tomlawesome/mikroview/internal/evict"
 	"github.com/tomlawesome/mikroview/internal/logging"
 	"github.com/tomlawesome/mikroview/internal/persist"
 )
@@ -194,21 +195,28 @@ func (r *MACRegistry) listLocked() []MACEntry {
 // human hasn't looked at yet), every entry here is equally disposable:
 // there's no human-attention state attached to a MAC registry entry, so
 // the simplest bound is "keep the most recently active MACs."
+//
+// It sheds a batch rather than the exact overflow. Evicting back to
+// exactly the cap leaves the registry full, so the *next* new MAC
+// overflows too and pays the whole scan again -- and Seen runs on the
+// single ingest goroutine, on a key (src-mac) that comes straight off
+// unauthenticated syslog. Measured on the old code: 1,529 ns per Seen
+// under the cap against 16-21 ms at it, from one TLS connection sending
+// 50,000 lines with a rotating src-mac, which took about 75 ms to set
+// up. Ingest fell to roughly 47 events/s. Persistence is on by default,
+// so the poisoned registry came back after a restart and stayed until
+// an operator deleted the file.
+//
+// Same defect and same remedy as internal/detect's, which was found and
+// fixed first; internal/evict now holds the one implementation. See
+// #285.
 func (r *MACRegistry) pruneLocked() {
-	over := len(r.byMAC) - maxMACRegistryEntries
-	if over <= 0 {
+	if len(r.byMAC) <= maxMACRegistryEntries {
 		return
 	}
-
-	all := make([]*MACEntry, 0, len(r.byMAC))
-	for _, e := range r.byMAC {
-		all = append(all, e)
-	}
-	sort.Slice(all, func(i, j int) bool { return all[i].LastSeen.Before(all[j].LastSeen) })
-
-	for i := 0; i < over && i < len(all); i++ {
-		delete(r.byMAC, all[i].MAC)
-	}
+	evict.DownTo(r.byMAC, evict.Target(maxMACRegistryEntries), func(e *MACEntry) time.Time {
+		return e.LastSeen
+	})
 }
 
 // persistLocked writes the current state to disk if persistence is
