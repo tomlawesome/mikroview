@@ -188,7 +188,28 @@ type Store struct {
 	//
 	// It is also what makes a write conditional: see persistLocked.
 	version int64
+
+	// reloadInFlight is non-nil while one caller is checking the backend
+	// for staleness, and is closed when that check finishes. It is
+	// deliberately not guarded by mu: a caller waiting on it must not
+	// hold a lock the reload itself needs to take. See reloadIfStale.
+	reloadMu       sync.Mutex
+	reloadInFlight chan struct{}
 }
+
+// reloadTimeout bounds one staleness check against the backend.
+//
+// Five seconds matches the persistTimeout the ingest-path stores use
+// (internal/rules, internal/flags, internal/device, internal/matchlog):
+// long enough that an ordinary slow query is not mistaken for an outage,
+// short enough that a stalled backend does not hold a request goroutine
+// and a pool connection indefinitely. Exceeding it is not fatal -- the
+// store keeps serving what it already has in memory.
+//
+// A var, not a const, only so the stall tests can shorten it -- same
+// reason internal/store's maxScannedPerQuery is one. Nothing outside
+// tests assigns to it.
+var reloadTimeout = 5 * time.Second
 
 // Open returns a Store persisting to a JSON file at path. An empty path
 // gives a usable but unpersisted store -- see Store's doc comment.
@@ -271,11 +292,76 @@ func (s *Store) applyLoaded(file storeFile, version int64) {
 // Every failure here is deliberately silent and non-fatal: it keeps
 // serving whatever is already in memory. A transient backend problem
 // must not take authentication down on a server that is running fine.
+//
+// Three things bound what a sick backend can cost, because this runs on
+// every authenticated request (requireAuth -> sessionUser -> Get) and on
+// every login and registration attempt, including unauthenticated ones:
+//
+//   - The read has a deadline. It used to pass context.Background(), and
+//     a Postgres server that stops answering while its TCP connection
+//     stays ESTABLISHED (a blackhole, a long lock wait, an overloaded
+//     server) blocks pgx forever. http.Server.WriteTimeout does not
+//     rescue this -- it tears down the client connection and leaves the
+//     handler goroutine blocked, measured at +125 retained goroutines
+//     for 25 concurrent requests. Every request therefore leaked a
+//     goroutine and held a pool connection until the database returned,
+//     including the login request an operator needs to diagnose it.
+//
+//   - Only one check is ever in flight. Concurrent callers join the
+//     running one instead of opening their own, so a stall costs one
+//     pooled connection rather than one per request -- the pool cannot
+//     be exhausted by request volume.
+//
+//   - The staleness question is asked with Version when the backend can
+//     answer it cheaply, so a healthy Postgres deployment no longer
+//     ships the whole accounts document per request. Backends without
+//     that capability (the file backend, whose version is a hash of its
+//     own bytes) fall back to Load exactly as before.
+//
+// What deliberately did *not* change: staleness is still checked on
+// every call rather than on a timer. A time-based cache would be a
+// smaller change and would break the guarantee this exists for -- that
+// a CLI recovery command's password reset takes effect on the running
+// server immediately, not up to a cache interval later.
 func (s *Store) reloadIfStale() {
 	if s.backend == nil {
 		return
 	}
-	snap, err := s.backend.Load(context.Background())
+
+	// Join a check already in flight rather than starting a second one.
+	s.reloadMu.Lock()
+	if inFlight := s.reloadInFlight; inFlight != nil {
+		s.reloadMu.Unlock()
+		<-inFlight
+		return
+	}
+	done := make(chan struct{})
+	s.reloadInFlight = done
+	s.reloadMu.Unlock()
+	defer func() {
+		s.reloadMu.Lock()
+		s.reloadInFlight = nil
+		s.reloadMu.Unlock()
+		close(done)
+	}()
+
+	ctx, cancel := context.WithTimeout(context.Background(), reloadTimeout)
+	defer cancel()
+
+	if vr, ok := s.backend.(persist.VersionReader); ok {
+		version, exists, err := vr.Version(ctx)
+		if err != nil || !exists {
+			return
+		}
+		s.mu.RLock()
+		stale := version != s.version
+		s.mu.RUnlock()
+		if !stale {
+			return
+		}
+	}
+
+	snap, err := s.backend.Load(ctx)
 	if err != nil || !snap.Exists {
 		return
 	}
