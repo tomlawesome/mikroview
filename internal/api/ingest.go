@@ -53,6 +53,70 @@ type ingestAckResponse struct {
 // via naming.Resolver, the rule/NAT table endpoints -- is display and
 // attribution only; internal/routerstate's isolation test guarantees
 // pushed data cannot reach a suspicion signal in either direction.
+// ingestAuditInterval is how long a device may keep pushing the same
+// kind with the same outcome before it is worth another audit row. A
+// heartbeat, not a record of each push.
+const ingestAuditInterval = 24 * time.Hour
+
+// ingestAuditKey is one device's pushes of one kind. Both halves are
+// bounded: device comes from an admin-issued token, and kind is checked
+// against a fixed set by ingest.DecodePayload before it reaches here (an
+// empty kind stands for a payload that never decoded).
+type ingestAuditKey struct {
+	device string
+	kind   string
+}
+
+type ingestAuditState struct {
+	lastAt time.Time
+	lastOK bool
+}
+
+// noteIngest reports whether this push is worth an audit row.
+//
+// Every push used to write one. A scheduled RouterOS push runs every
+// 15-30 minutes, and the audit log is pruned FIFO at 10,000 entries, so
+// at the shipped rate limit (120 per 15 minutes) one ingest token
+// produced 11,520 rows a day and rolled the *entire* admin trail --
+// token.create, user.create, admin transfers -- in about 21 hours. Write
+// cost at the cap was measured at 52.2 ms per record under the store's
+// write lock, blocking GET /api/audit, for roughly 25.7 GiB of rewrites
+// a day. #186 already documents that any RouterOS user holding the
+// built-in read policy can print an ingest token out of a script.
+//
+// A successful, scheduled push is not an accountability event; what it
+// erases is. So a row is written only when something changed:
+//
+//   - the first push of a kind from a device, which is genuinely new
+//     information about the deployment;
+//   - the outcome flipping, so a device that starts being refused (or
+//     recovers) is on the record;
+//   - ingestAuditInterval elapsing, so a long-running device still
+//     leaves a periodic trace rather than falling silent in the log.
+//
+// Refusals go through the same gate deliberately. Auditing every refusal
+// would just move the flood one branch over: a decode error is entirely
+// caller-controlled and far cheaper to produce than a valid push.
+//
+// Rows are therefore bounded by devices x kinds x (1 + 1/day), and both
+// factors are outside an attacker's control. Owner decision recorded on
+// #285.
+func (s *Server) noteIngest(device, kind string, ok bool, now time.Time) bool {
+	s.ingestAuditMu.Lock()
+	defer s.ingestAuditMu.Unlock()
+	if s.ingestAudit == nil {
+		s.ingestAudit = make(map[ingestAuditKey]ingestAuditState)
+	}
+
+	key := ingestAuditKey{device: device, kind: kind}
+	prev, seen := s.ingestAudit[key]
+	notable := !seen || prev.lastOK != ok || now.Sub(prev.lastAt) >= ingestAuditInterval
+	if notable {
+		s.ingestAudit[key] = ingestAuditState{lastAt: now, lastOK: ok}
+	}
+	return notable
+}
+
 func (s *Server) handleIngestRouterOS(w http.ResponseWriter, r *http.Request) {
 	tok := ingestTokenFromContext(r)
 	if tok == nil {
@@ -83,6 +147,10 @@ func (s *Server) handleIngestRouterOS(w http.ResponseWriter, r *http.Request) {
 		// number), never anything about mikroview's existing state --
 		// the same reasoning handleTokensCreate's validation-error branch
 		// already relies on.
+		if s.noteIngest(tok.Device, "", false, now) {
+			s.Audit.Record("device:"+tok.Device, "ingest.routeros.refused", tok.Device,
+				fmt.Sprintf("payload rejected: %v", err))
+		}
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
@@ -91,6 +159,10 @@ func (s *Server) handleIngestRouterOS(w http.ResponseWriter, r *http.Request) {
 		// A cap refusal (too many records/devices) -- the caller's own
 		// push is what's oversized, and the message names only numbers
 		// and the kind, nothing about other devices' state.
+		if s.noteIngest(tok.Device, string(payload.Kind), false, now) {
+			s.Audit.Record("device:"+tok.Device, "ingest.routeros.refused", tok.Device,
+				fmt.Sprintf("kind=%s: %v", payload.Kind, err))
+		}
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
@@ -101,8 +173,10 @@ func (s *Server) handleIngestRouterOS(w http.ResponseWriter, r *http.Request) {
 	// same reason: this is reconnaissance-grade router config, and the
 	// audit log is readable by every admin, not scoped to the one that
 	// issued this token.
-	s.Audit.Record("device:"+tok.Device, "ingest.routeros", tok.Device,
-		fmt.Sprintf("kind=%s page=%d/%d records=%d", payload.Kind, payload.Page, payload.Pages, payload.RecordCount()))
+	if s.noteIngest(tok.Device, string(payload.Kind), true, now) {
+		s.Audit.Record("device:"+tok.Device, "ingest.routeros", tok.Device,
+			fmt.Sprintf("kind=%s page=%d/%d records=%d", payload.Kind, payload.Page, payload.Pages, payload.RecordCount()))
+	}
 
 	writeJSON(w, http.StatusOK, ingestAckResponse{
 		Kind:    payload.Kind,
