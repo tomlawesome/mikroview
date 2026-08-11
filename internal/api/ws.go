@@ -83,14 +83,23 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "cross-origin WebSocket connections are not allowed", http.StatusForbidden)
 		return
 	}
+	// Registered before the upgrade, so a refusal is a plain HTTP 503
+	// the browser can read, rather than a WebSocket that opens and then
+	// closes for no stated reason. Each subscriber costs several MiB the
+	// moment it registers (see hub.clientQueueSize), so this is a real
+	// limit rather than a formality.
+	events, dropped, unregister, err := s.Hub.Register()
+	if err != nil {
+		http.Error(w, "too many live connections are already open; close another tab and retry", http.StatusServiceUnavailable)
+		return
+	}
+	defer unregister()
+
 	conn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
 		return
 	}
 	defer conn.Close()
-
-	events, dropped, unregister := s.Hub.Register()
-	defer unregister()
 
 	conn.SetReadDeadline(time.Now().Add(wsPongTimeout))
 	conn.SetPongHandler(func(string) error {
