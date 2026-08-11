@@ -158,6 +158,15 @@ type ListenerStats struct {
 	// told it to watch, which is the condition worth surfacing rather
 	// than saturation on its own.
 	RejectedConfigured uint64 `json:"rejectedConfigured"`
+	// Dropped counts syslog messages discarded because the ingest
+	// channel was full -- real router records that were received and
+	// then thrown away. Previously this happened with no counter and no
+	// log line at all.
+	Dropped uint64 `json:"dropped"`
+	// Oversized counts continuation reads discarded from a message
+	// larger than the 64 KiB per-message limit. Above zero means
+	// something is sending log lines no RouterOS device produces.
+	Oversized uint64 `json:"oversized"`
 }
 
 // Stats reports current listener saturation. Safe to call at any time.
@@ -168,6 +177,8 @@ func Stats() ListenerStats {
 		ReservedForConfigured: reservedSlots(),
 		Rejected:              tcpRejected.Load(),
 		RejectedConfigured:    tcpRejectedConfigured.Load(),
+		Dropped:               tcpDropped.Load(),
+		Oversized:             tcpOversized.Load(),
 	}
 }
 
@@ -387,12 +398,38 @@ func handleTCPConn(ctx context.Context, conn net.Conn, out chan<- RawMessage) {
 	// split them back apart with -- but RouterOS writes one message per
 	// send, and that is what the wire shows. Worth keeping an eye on,
 	// not a defect to design around.
+	// One further case the above does not cover: a message *larger* than
+	// the buffer. A 100 KiB write arrives as two or three full reads,
+	// and treating each as its own message manufactured two or three
+	// events out of one. Not merely wrong in count -- each fragment was
+	// then parsed as though it were a whole log line, so the second and
+	// third produced garbage fields attributed to a real device.
+	//
+	// A read that completely fills the buffer with no newline in it is
+	// the signature: no real RouterOS line is 64 KiB. The first such
+	// chunk is delivered (truncated, which is honest -- it is the
+	// beginning of what was sent) and the continuation is discarded and
+	// counted until a short read ends it. See #285 finding 18.
 	buf := make([]byte, maxTCPMessageBytes)
+	oversized := false
 	conn.SetReadDeadline(time.Now().Add(tcpIdleTimeout()))
 	for {
 		n, err := conn.Read(buf)
 		if n > 0 {
 			conn.SetReadDeadline(time.Now().Add(tcpIdleTimeout()))
+			full := n == len(buf) && !bytes.Contains(buf[:n], []byte{'\n'})
+			if oversized {
+				// Still inside the message whose start was already
+				// delivered. Drop the continuation rather than parse it.
+				tcpOversized.Add(1)
+				oversized = full
+				if err != nil {
+					return
+				}
+				continue
+			}
+			oversized = full
+
 			for _, line := range bytes.Split(buf[:n], []byte{'\n'}) {
 				line = bytes.TrimRight(line, "\r")
 				if len(line) == 0 {
@@ -404,6 +441,20 @@ func handleTCPConn(ctx context.Context, conn net.Conn, out chan<- RawMessage) {
 				select {
 				case out <- RawMessage{SourceIP: host, Data: data, RecvTime: time.Now()}:
 				default:
+					// The ingest channel is full, which means the single
+					// ingest goroutine is not keeping up -- a stalled
+					// persistence backend, a detector flood, anything
+					// downstream. Dropping is right (blocking here would
+					// stall the whole listener), but dropping *silently*
+					// was not: real router records vanished with no log
+					// line and no counter anywhere, so an operator saw
+					// the live view go quiet with nothing to explain it.
+					//
+					// internal/detect.Enqueue and internal/watchlist's
+					// evaluator already pair this exact select/default
+					// with a counter and a rate-limited warning; this is
+					// the one handoff that did not. See #285 finding 9.
+					noteIngestDrop()
 				}
 			}
 		}
@@ -411,4 +462,33 @@ func handleTCPConn(ctx context.Context, conn net.Conn, out chan<- RawMessage) {
 			return
 		}
 	}
+}
+
+// ingestDropLogInterval bounds how often a full ingest channel actually
+// logs. Sustained overload is exactly the condition this reports, so
+// logging every drop would add load at the worst moment -- the same
+// reasoning internal/detect's observeQueueDropLogInterval already
+// applies to its own queue.
+const ingestDropLogInterval = 30 * time.Second
+
+var (
+	tcpDropped      atomic.Uint64
+	tcpOversized    atomic.Uint64
+	lastDropLogUnix atomic.Int64
+)
+
+func noteIngestDrop() {
+	total := tcpDropped.Add(1)
+
+	now := time.Now().Unix()
+	last := lastDropLogUnix.Load()
+	if now-last < int64(ingestDropLogInterval/time.Second) {
+		return
+	}
+	if !lastDropLogUnix.CompareAndSwap(last, now) {
+		return // another goroutine is logging this window
+	}
+	tcpLog.Warn(fmt.Sprintf(
+		"ingest queue full -- %d syslog messages discarded since start; events are arriving faster than they can be processed, or something downstream is stalled",
+		total))
 }
