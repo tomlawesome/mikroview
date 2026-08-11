@@ -2209,6 +2209,18 @@ actually generated), specifically so a browser or reverse proxy can
 fetch it to establish trust; its fingerprint is also logged at startup
 if you'd rather verify it out-of-band than trust-on-first-use blindly.
 
+**One thing the click-through does not cover.** Clicking past the
+warning gets you a fully working MikroView, with one exception:
+installing it as an app, and its offline behaviour, both need a service
+worker, and browsers refuse to register one over a certificate outside
+their trust store — click-through or not. So until you import the CA
+above, "Install app" either does not appear or does nothing, and the
+browser console shows `Failed to register a ServiceWorker ... An SSL
+certificate error occurred`. Nothing else is affected, and importing the
+CA (or supplying your own certificate via `tls.certFile`/`tls.keyFile`)
+resolves it. Found by the containerised end-to-end harness (#273), which
+runs against TLS as shipped rather than plain HTTP on loopback.
+
 **Reverse proxy in front, with your own single ingress**: point your
 RP's *upstream/backend* target at `https://mikroview:PORT` instead of
 `http://mikroview:PORT` -- same host, same port, no new port opened
@@ -2375,6 +2387,27 @@ postgres:
 ```
 
 or `MIKROVIEW_POSTGRES_DSN_FILE=/etc/mikroview/postgres-dsn`.
+
+**The file has to be readable by the container's user.** MikroView runs
+as uid `65532` (distroless `nonroot`), which is not the user that created
+the file on your host — so a `0600` file, which is the natural mode for
+something holding a password, is unreadable inside the container and
+MikroView refuses to start:
+
+```
+ERROR storage │ postgres: reading DSN file /etc/mikroview/postgres-dsn: permission denied
+```
+
+Keep the tight mode and hand it to that user:
+
+```sh
+chown 65532:65532 postgres-dsn
+chmod 600 postgres-dsn
+```
+
+(Found by the containerised end-to-end harness in #273 — following these
+instructions exactly, with the obvious `chmod 600`, produced a MikroView
+that would not start.)
 
 The database user needs permission to create tables in its own database
 the first time it starts; MikroView creates what it needs and records
