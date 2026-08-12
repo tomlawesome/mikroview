@@ -358,8 +358,8 @@ type Audit struct {
 // reason this store exists (#243 section 3's "a match must survive a
 // restart" requirement); an in-memory match log would be a second
 // volatile event ring with extra steps, not a lesser version of this
-// feature. So MatchLogPath must be non-empty (see CFG-0041) and
-// MatchLogCapacity must be positive (CFG-0040) -- both a good default
+// feature. So MatchLogPath must be non-empty (see CFG-0040) and
+// MatchLogCapacity must be positive (CFG-0041) -- both a good default
 // out of the box, not settings an operator has to supply.
 type Watchlist struct {
 	StorePath string `yaml:"storePath"`
@@ -874,8 +874,15 @@ func defaults() Config {
 		NetClass: NetClass{
 			// Mirrors internal/netclass.DefaultSources -- literal here
 			// to keep this package a dependency-free leaf, same as
-			// Blocklist above.
-			Sources: []string{"tor", "x4b_vpn"},
+			// Blocklist above. TestNetClassDefaultMatchesNetclassPackage
+			// pins the two together, because they drifted: this list was
+			// missing apple_private_relay, and since main.go wires
+			// netclass.New with *this* value, netclass.DefaultSources was
+			// dead code and a fresh install shipped without it. That is
+			// not a cosmetic difference -- x4b_vpn's upstream data covers
+			// the same ranges, so leaving Apple's own list out is what
+			// makes ordinary iPhone/iPad/Mac traffic read as a VPN exit.
+			Sources: []string{"tor", "apple_private_relay", "x4b_vpn"},
 		},
 		Notify: Notify{
 			BatchWindow: 60 * time.Second,

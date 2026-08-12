@@ -150,12 +150,21 @@
   // than cached indefinitely -- a match log is append-only and can
   // change between views, and the volumes here (an entry's own recent
   // matches) are small enough that refetching on open is cheap.
+  // The reason is kept rather than collapsed to "Could not load
+  // matches." The backend distinguishes these -- a 503 says the match
+  // log is not available, which is a configuration answer, not a
+  // network blip -- and this page's own house style is that an error
+  // names what to fix.
+  let matchErrorByEntry = $state<Record<string, string>>({})
+
   async function loadMatches(e: WatchlistEntry) {
     if (!e.source?.mac && !e.source?.ip) return
     matchesByEntry[e.id] = 'loading'
     try {
       matchesByEntry[e.id] = await watchlistState.matchesFor(e.source.mac, e.source.ip)
-    } catch {
+      delete matchErrorByEntry[e.id]
+    } catch (err) {
+      matchErrorByEntry[e.id] = err instanceof Error ? err.message : String(err)
       matchesByEntry[e.id] = 'error'
     }
   }
@@ -174,7 +183,7 @@
 
 <div class="page scrollbar">
   <p class="intro">
-    Watch attempts against specific ports (<strong>record</strong>, generalising what Control Ports did), or flip an
+    Watch attempts against specific ports (<strong>record</strong>), or flip an
     entry around to watch what one device does (<strong>invert</strong>): "this device should only ever reach X" --
     everything else it touches gets recorded. A new inverted entry starts <strong>observing</strong>: nothing fires
     until you review what it actually saw and promote the destinations that are expected. Matches are recorded to
@@ -337,7 +346,8 @@
                     {:else if matchesByEntry[e.id] === 'loading'}
                       <p class="empty small">Loading…</p>
                     {:else if matchesByEntry[e.id] === 'error'}
-                      <p class="error">Could not load matches.</p>
+                      <p class="error">Could not load matches: {matchErrorByEntry[e.id] ?? 'unknown error'}</p>
+                      <button class="load-matches" onclick={() => loadMatches(e)}>Try again</button>
                     {:else if (matchesByEntry[e.id] as WatchlistMatch[]).length === 0}
                       <p class="empty small">No matches recorded yet for this entry's device.</p>
                     {:else}

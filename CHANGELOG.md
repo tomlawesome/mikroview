@@ -420,6 +420,17 @@ upgrading.
   character and leave invalid text. Trimming now stops at a character
   boundary.
 
+- **A rule filter that stops being usable mid-stream now says so**
+  (#267). If a regex filter became unevaluable once matching events
+  started arriving, the live view kept showing the last match set it had
+  worked out — stale and wrong, with nothing to say the filter was no
+  longer being applied. Reading a filtered view as complete when it is
+  not is the exact misreading this product exists to prevent.
+
+- **Clicking the logo returns you to the live view** (#267), as does a
+  Live view entry in the menu. Previously the only way back was to click
+  whichever view button you had used to leave it.
+
 - **Failed actions now say so instead of looking like nothing happened**
   (#267). Removing a watchlist entry, turning observe mode on or off,
   promoting a destination, removing a named entity, clearing a flag,
@@ -831,8 +842,10 @@ upgrading.
 
 ### Changed
 
-- `internal/api`'s `Routes` gained an inner `mux`, so tests that
-  exercise a handler rather than the authentication gate can mount the
-  API directly. They previously got an ungated API by standing the
-  fixture up with authentication disabled, which is no longer a state
-  that exists.
+<!-- Nothing operator-visible changed in this release beyond the
+     Added/Fixed entries above. An earlier entry here described an
+     internal test-fixture refactor (internal/api's Routes gaining an
+     inner mux); it was removed because every other entry in this file
+     is written from what an operator would notice, and a reader
+     scanning for what changed for *them* has to skip past anything
+     that isn't (#268 finding 17). -->
