@@ -21,6 +21,7 @@ import type {
   SuggestionStatus,
   UserSummary,
   WatchlistEntry,
+  WatchlistCoverage,
   WatchlistIdentity,
   WatchlistMatch,
   WatchlistPermittedDest,
@@ -357,11 +358,18 @@ export interface WatchlistEntryRequest {
   includeStructuralNoise?: boolean
 }
 
-export async function fetchWatchlistEntries(): Promise<WatchlistEntry[]> {
+// Returns the entries and, alongside them, what can be said about
+// whether anything is able to feed each one (#274). Keyed by entry id
+// rather than folded into the entry: coverage is derived from what
+// routers have pushed right now, not a property of the entry itself.
+export async function fetchWatchlistEntries(): Promise<{
+  entries: WatchlistEntry[]
+  coverage: Record<string, WatchlistCoverage>
+}> {
   const res = await fetch('/api/watchlist/entries')
   if (!res.ok) throw new ApiError(`fetchWatchlistEntries: ${res.status}`, res.status)
   const body = await res.json()
-  return body.entries ?? []
+  return { entries: body.entries ?? [], coverage: body.coverage ?? {} }
 }
 
 export async function createWatchlistEntry(req: WatchlistEntryRequest): Promise<WatchlistEntry | string> {
