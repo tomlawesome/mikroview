@@ -398,6 +398,47 @@ upgrading.
 
 ### Fixed
 
+- **ICMP events are read correctly, and are no longer invisible to the
+  watchlist** (#273). RouterOS puts a comma after the connection state on
+  a TCP log line but not on an ICMP one, and MikroView split the line on
+  commas. So for every ping and every unreachable message, the protocol
+  came out blank and the connection state came out as the text
+  `new proto ICMP (type 8, code 0)`.
+
+  The visible half was a blank Protocol column. The half that mattered:
+  MikroView only considers an event for the watchlist when its connection
+  state is new (or absent), and that text is neither -- so **no ICMP
+  traffic ever reached the watchlist**, including the "this device should
+  only ever talk to X" entries whose entire job is noticing a device
+  reaching something it should not. Reading the connection state now
+  stops at the state itself and hands anything RouterOS appended to it
+  back to the normal field handling, so this holds for whatever else a
+  future release appends there too.
+
+  Two knock-on effects worth knowing about, both of them the intended
+  behaviour rather than new behaviour. Logged ICMP now counts toward a
+  host's activity baseline, so a host that pings a lot looks busier than
+  it used to -- it always should have. Port-scan and critical-port
+  detection are unchanged: both ignore events with no destination port,
+  which every ICMP event is.
+
+- **A watchlist entry whose MAC address you typed in lowercase now
+  matches** (#273). RouterOS writes MAC addresses in upper case
+  (`52:55:0A:00:02:02`), both in its firewall log lines and in the ARP
+  and DHCP tables it pushes. MikroView compared them exactly, so an
+  entry you set up by typing the address the ordinary way --
+  `52:55:0a:00:02:02` -- never matched anything that device did, and
+  looking its matches up by that address returned nothing even when
+  there were some. Neither failure said anything: the entry looked
+  configured and quietly did nothing. Matching now ignores case, the
+  same way MikroView's device registry already did. Stored records keep
+  the router's own spelling, since they are evidence.
+
+  Found by running MikroView against a real RouterOS router rather than
+  against generated log lines -- every example in this project writes
+  MACs in lower case, so nothing that fed itself its own test data could
+  have shown this.
+
 - **Terminal escape sequences from a syslog line no longer reach saved
   flags or notifications** (#285). Every field MikroView reads out of a
   firewall log line is chosen by whoever sent it, and those fields become
