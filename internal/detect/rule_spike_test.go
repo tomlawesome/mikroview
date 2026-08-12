@@ -162,3 +162,54 @@ func TestRuleSpikeRespectsRulesDenylist(t *testing.T) {
 		t.Fatalf("expected the denylisted rule to never flag, got %+v", fs.List())
 	}
 }
+
+// #267 finding 17 proposed giving this detector the "mark the baseline
+// stale on disable" reset GlobalSpikeDetector.Check and
+// checkHostActivityBaseline have, for consistency. Measured, that makes
+// it worse, and this pins the behaviour that is actually correct here.
+//
+// GlobalSpike is handed an accurate current EPS, so re-priming gives it
+// a correct baseline straight away. This detector derives its rate from
+// a time-windowed hits ring that only fills while it is enabled -- so
+// re-priming on the first event after re-enabling primes against a
+// nearly empty ring, and the ordinary refill back to normal traffic then
+// reads as a spike. With the reset added, this exact scenario raises a
+// rule_spike flag ("0.7 hits/s vs a baseline of 0.2"); without it,
+// nothing. low_slow_scan derives its rate the same way, so the same
+// applies there.
+func TestRuleSpikeSurvivesADisableEnableCycleWithoutFalsePositives(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.PortScanThreshold = 100000
+	cfg.ActivitySpikeThreshold = 100000
+	cfg.RuleSpikeMultiplier = 3
+	cfg.RuleSpikeMinRate = 0.01
+
+	d, fs := newTestDetectorWithSettings(t, cfg, DefaultSettingsMap())
+	now := time.Now()
+
+	// Steady traffic, long enough to build a real baseline.
+	for i := 0; i < 600; i++ {
+		d.Observe(ruleEvt("wan-in", now.Add(time.Duration(i)*100*time.Millisecond)))
+	}
+	// Clear whatever the initial ramp-up raised, so what is counted
+	// below is only what the disable/enable cycle caused.
+	fs.ClearAll(now.Add(80 * time.Second))
+
+	off := now.Add(90 * time.Second)
+	d.settings.Set(DetectorRuleSpike, Settings{Enabled: false})
+	d.Observe(ruleEvt("wan-in", off))
+
+	// Re-enable, then resume exactly the same steady traffic. Nothing
+	// about the network changed, so nothing should be flagged.
+	on := off.Add(120 * time.Second)
+	d.settings.Set(DetectorRuleSpike, Settings{Enabled: true})
+	for i := 0; i < 600; i++ {
+		d.Observe(ruleEvt("wan-in", on.Add(time.Duration(i)*100*time.Millisecond)))
+	}
+
+	for _, f := range fs.List() {
+		if !f.Cleared {
+			t.Errorf("resuming identical traffic after a disable/enable cycle raised a flag: %s %s -- %s", f.Type, f.Target, f.Detail)
+		}
+	}
+}
