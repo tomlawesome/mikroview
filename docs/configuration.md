@@ -2264,7 +2264,8 @@ tls:
   certificate independently of this setting, since RouterOS connects to
   it directly rather than through your reverse proxy.
 - **`certFile`/`keyFile`** — your own certificate. Skips local-CA
-  generation entirely when both are set.
+  generation entirely when both are set. See "Renewing your own
+  certificate" below if something renews it for you.
 - **`hosts`** — SANs for a self-generated certificate. Left empty, the
   generated cert only covers `localhost`/`127.0.0.1` -- connections from
   any other name/IP are still fully encrypted, just not strictly
@@ -2273,6 +2274,39 @@ tls:
   restarts. Left unset, TLS still works, it just regenerates (and needs
   re-trusting) every restart -- the same optional-persistence contract
   `flags.storePath` has.
+
+### Renewing your own certificate
+
+Send MikroView `SIGHUP` after the new files are in place and it picks
+them up — on the HTTPS listener **and** the syslog listener — without a
+restart:
+
+```sh
+docker kill --signal=HUP mikroview
+```
+
+Certbot and cert-manager both have a hook for exactly this, so nothing
+needs scheduling separately:
+
+```sh
+certbot renew --deploy-hook 'docker kill --signal=HUP mikroview'
+```
+
+Without it MikroView keeps serving the certificate it loaded at startup.
+Renewal is automatic and a restart is not, so the failure turns up
+silently, weeks later, as an expired certificate — and a router
+configured with `check-certificate=yes` stops sending its logs at that
+point, which is the outage you would least want to discover late.
+
+MikroView does not watch the files and renew on its own, deliberately:
+it cannot tell a finished renewal from one still being written, and half
+a certificate is worse than an old one. The signal is you (or your
+renewal tool) saying the new files are complete.
+
+**A failed reload changes nothing.** If the files are unreadable or
+half-written, MikroView logs an error and carries on with the
+certificate it already has, rather than dropping to none — you sent the
+signal expecting an improvement, and an outage is not one.
 
 **Zero-config default**: with no `certFile`/`keyFile`, mikroview
 generates its own local certificate authority and a leaf certificate on
