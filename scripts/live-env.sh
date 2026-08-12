@@ -44,6 +44,14 @@ if [ "$MV_BIND" = "127.0.0.1" ]; then
   # plaintext listeners this is mikroview's only syslog ingest, and
   # leaving it empty gave every browser scenario zero events.
   SYSLOG_TLS_ADDR="127.0.0.1:$SYSLOG_TLS_PORT"
+  # A declared device, loopback mode only. Every feeder connects from
+  # 127.0.0.1, so this stays the single device -- now with a stable id
+  # -- which is what the token dialog's device pick-list (#326) and
+  # every devices[0]-reading scenario get to rely on. NOT set in
+  # $MV_BIND mode: the CHR's traffic arrives from a different address
+  # there, and a second device would make devices[0] nondeterministic
+  # (internal/device.Registry.List is map-ordered).
+  DEVICES_BLOCK='devices: [{id: live-router, name: Live Router, sourceIp: 127.0.0.1}]'
 else
   MV_SCHEME=https
   TLS_BLOCK="tls: {enabled: true, hosts: [\"$MV_BIND\", \"127.0.0.1\"], storePath: $MV_DIR/data/tls}"
@@ -55,6 +63,7 @@ else
   # On $MV_BIND, not loopback: the router fixture (#188) needs to reach
   # this listener the same way it reaches the HTTPS one above.
   SYSLOG_TLS_ADDR="$MV_BIND:$SYSLOG_TLS_PORT"
+  DEVICES_BLOCK=''
 fi
 
 # The host half of SYSLOG_TLS_ADDR, for the feeders below to dial.
@@ -125,6 +134,7 @@ flags: {storePath: $MV_DIR/data/flags.json}
 entities: {storePath: $MV_DIR/data/entities.json}
 audit: {storePath: $MV_DIR/data/audit.json}
 watchlist: {storePath: $MV_DIR/data/watchlist.json, matchLogPath: $MV_DIR/data/matchlog.jsonl}
+$DEVICES_BLOCK
 EOF
   MIKROVIEW_CONFIG="$MV_DIR/cfg.yaml" "$MV_DIR/mikroview" > "$MV_DIR/server.log" 2>&1 &
   echo $! > "$MV_DIR/pid"

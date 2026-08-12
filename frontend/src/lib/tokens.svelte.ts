@@ -3,7 +3,8 @@
 import { createToken, fetchTokens, revokeToken } from './api'
 import type { ApiToken } from './types'
 
-// Admin-only management of read-only API bearer tokens (issue #101) --
+// Admin-only management of API bearer tokens -- read-only (issue #101)
+// and RouterOS ingest (#186/#326) --
 // its own small state module, matching flags.svelte.ts's pattern rather
 // than folding this into authState.
 class TokensState {
@@ -19,8 +20,8 @@ class TokensState {
     this.list = await fetchTokens()
   }
 
-  async create(name: string): Promise<string | null> {
-    const result = await createToken(name)
+  async create(name: string, kind: 'api' | 'ingest', device?: string): Promise<string | null> {
+    const result = await createToken(name, kind, device)
     if (typeof result === 'string') return result
     this.justCreated = result
     await this.refresh()
