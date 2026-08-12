@@ -47,13 +47,26 @@ func (s *Server) handleEntitiesUpsert(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Upsert conflates create and replace, so which status is right
+	// depends on which it was -- and every sibling "this created a new
+	// thing" handler here (handleWatchlistEntriesCreate,
+	// handleTokensCreate, handleAuthRegister, handleAuthCreateUser,
+	// handleSuggestionsAccept) answers 201. Always answering 200 was
+	// defensible but unexplained, and left a caller unable to tell a
+	// create from an overwrite (#267 finding 19).
+	existed := s.Entities.Exists(req.Type, req.Key)
+
 	e, err := s.Entities.Upsert(entities.Entity{Type: req.Type, Key: req.Key, Label: req.Label, Tags: req.Tags})
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 	s.Audit.Record(auditActor(r), "entity.upsert", e.Type+":"+e.Key, "label="+e.Label)
-	writeJSON(w, http.StatusOK, e)
+	status := http.StatusCreated
+	if existed {
+		status = http.StatusOK
+	}
+	writeJSON(w, status, e)
 }
 
 // handleEntitiesDelete removes the entity identified by (type, key),
