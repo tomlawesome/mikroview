@@ -27,6 +27,11 @@ type storage struct {
 	// zero-infrastructure path.
 	pool *persist.Pool
 	log  *slog.Logger
+	cfg  config.Config
+	// adoptedBefore records whether this deployment had already run on
+	// Postgres when this process started. Only a first move is allowed
+	// to adopt the JSON files; see backendFor.
+	adoptedBefore bool
 }
 
 // openStorage connects to Postgres if configured, and applies the schema.
@@ -66,6 +71,15 @@ func openStorage(ctx context.Context, cfg config.Config) (*storage, error) {
 	}
 
 	s.pool = pool
+	s.cfg = cfg
+	// Whether this deployment had already run on Postgres *before* this
+	// boot. It is what stops the one-time JSON adoption running a second
+	// time -- see backendFor, and #294 item 1 for the failure that
+	// allowed.
+	//
+	// Read before marking, obviously, since marking makes it true.
+	s.adoptedBefore = postgresAlreadyAdopted(cfg)
+
 	// Recorded on every Postgres boot, not only the migrating one: a
 	// deployment that started on Postgres has no JSON files, so removing
 	// the DSN later would silently present a first-run setup screen and
@@ -114,6 +128,30 @@ func (s *storage) backendFor(ctx context.Context, name, filePath string) (persis
 	}
 
 	b := persist.NewPostgresBackend(s.pool, name)
+
+	// Adoption is a one-time migration, and only the boot that first
+	// moves this deployment onto Postgres is allowed to perform it.
+	//
+	// Without this it ran on every boot, guarded only by "this store has
+	// no document yet" -- so restoring the database to a snapshot from
+	// before a store was populated, with the original JSON still on the
+	// data volume, copied it straight back in. Deleted accounts and
+	// their password hashes returned, with an Info log line as the only
+	// signal (#294 item 1).
+	//
+	// The marker lives beside the JSON files rather than in the
+	// database, and that placement is what makes it work here. #294
+	// suggested recording the adoption *in* the database so a rollback
+	// would take the marker with it -- but that is the wrong way round:
+	// a rollback deep enough to lose the data is deep enough to lose a
+	// marker stored alongside it, and mikroview would re-adopt exactly
+	// as before. The guard has to survive the rollback it is guarding
+	// against, so it has to sit on the other side of it.
+	if s.adoptedBefore {
+		s.reportUnadoptedFile(ctx, b, filePath)
+		return b, nil
+	}
+
 	res, err := persist.AdoptFile(ctx, filePath, b)
 	if err != nil {
 		return nil, err
@@ -124,6 +162,52 @@ func (s *storage) backendFor(ctx context.Context, name, filePath string) (persis
 			res.FilePath, res.Bytes, b.Describe()))
 	}
 	return b, nil
+}
+
+// reportUnadoptedFile says something about a JSON file that will never
+// be adopted, and how loudly depends on whether that is expected.
+//
+// Ordinarily it is: the file is what this deployment migrated from, kept
+// because turning Postgres off again would need it, and saying so once
+// per boot tells an operator it is safe to delete.
+//
+// The loud case is the one worth having this function for. The marker is
+// written when Postgres opens, before any store is adopted, so a process
+// that dies part-way through its first migration comes back with the
+// marker set and the remaining stores unadopted. Those stores are then
+// empty in Postgres while their file still holds the data, and nothing
+// would ever move it -- which without this would be silent, and would
+// look exactly like a store that was always empty.
+//
+// Not fixed by adopting anyway: this cannot distinguish that case from a
+// rolled-back database, which is the whole point of the guard. Telling
+// the operator precisely what happened and what to do is the honest
+// answer where guessing is not.
+func (s *storage) reportUnadoptedFile(ctx context.Context, b persist.Backend, filePath string) {
+	if filePath == "" {
+		return
+	}
+	info, err := os.Stat(filePath)
+	if err != nil || info.Size() == 0 {
+		return
+	}
+
+	snap, err := b.Load(ctx)
+	if err != nil || snap.Exists {
+		// Either the store has data (the ordinary case -- this file is
+		// the history it was migrated from) or the database could not be
+		// read, which the caller reports on its own terms.
+		s.log.Info(fmt.Sprintf("%s is left over from before this deployment moved to Postgres and is not read -- "+
+			"delete it when you are ready; it will never be adopted again", filePath))
+		return
+	}
+
+	s.log.Warn(fmt.Sprintf("%s holds data but %s is empty, and this deployment has already adopted Postgres so it will "+
+		"not be migrated. This usually means a first migration was interrupted part-way. mikroview will not adopt it "+
+		"automatically, because it cannot tell that apart from a database restored to an older snapshot -- adopting "+
+		"the wrong one of those brings deleted accounts back. To migrate it deliberately: stop mikroview, remove %s, "+
+		"start once to adopt, and the marker is rewritten",
+		filePath, b.Describe(), markerPath(s.cfg)))
 }
 
 func (s *storage) Close() {
@@ -153,6 +237,16 @@ func dataDir(cfg config.Config) string {
 
 func markerPath(cfg config.Config) string {
 	return filepath.Join(dataDir(cfg), postgresAdoptedMarker)
+}
+
+// postgresAlreadyAdopted reports whether this deployment has run on
+// Postgres before now. Distinct from markPostgresAdopted's own
+// idempotence check because the answer is needed *before* marking, and
+// the two questions are different: "has this happened before" versus
+// "make sure it is recorded".
+func postgresAlreadyAdopted(cfg config.Config) bool {
+	_, err := os.Stat(markerPath(cfg))
+	return err == nil
 }
 
 // markPostgresAdopted records the choice, idempotently.
