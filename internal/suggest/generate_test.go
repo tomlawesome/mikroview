@@ -132,3 +132,73 @@ func TestGenerateCombinesEveryDevice(t *testing.T) {
 		t.Fatalf("Generate = %+v, want one device candidate from router-a and one port candidate from router-b", got)
 	}
 }
+
+// Address-list candidates (#274 item 2): one per list a firewall rule
+// already scopes by, not one per list the router happens to have and not
+// one per address in it.
+func TestGenerateAddressListCandidates(t *testing.T) {
+	rs := routerstate.New()
+	const device = "router-a"
+
+	applyPayload(t, rs, device, `{"kind":"filter-rule","page":1,"pages":1,"records":[`+
+		`{"ordinal":0,"chain":"input","action":"accept","srcAddressList":"mgmt","log":true},`+
+		// The same list again -- one candidate, not two.
+		`{"ordinal":1,"chain":"forward","action":"accept","srcAddressList":"mgmt","log":true},`+
+		// A list no push ever supplied the contents of: an accepted
+		// entry would match nothing with no way to say why.
+		`{"ordinal":2,"chain":"input","action":"drop","srcAddressList":"ghosts","log":true},`+
+		// No list at all.
+		`{"ordinal":3,"chain":"input","action":"drop","log":true}`+
+		`]}`)
+	applyPayload(t, rs, device, `{"kind":"address-list","page":1,"pages":1,"records":[`+
+		`{"list":"mgmt","address":"192.168.1.50"},`+
+		`{"list":"mgmt","address":"192.168.1.51"},`+
+		// A list the rules never reference -- routing or bookkeeping,
+		// not a statement that these hosts matter.
+		`{"list":"bogons","address":"10.0.0.0"}`+
+		`]}`)
+
+	var got []Candidate
+	for _, c := range Generate(rs) {
+		if c.Kind == KindAddressList {
+			got = append(got, c)
+		}
+	}
+
+	if len(got) != 1 {
+		t.Fatalf("got %d address-list candidates, want 1 (mgmt only): %+v", len(got), got)
+	}
+	c := got[0]
+	if c.AddressList != "mgmt" {
+		t.Errorf("AddressList = %q, want mgmt", c.AddressList)
+	}
+	if c.RouterDevice != device {
+		t.Errorf("RouterDevice = %q, want %q -- a list belongs to a router", c.RouterDevice, device)
+	}
+	if len(c.Ports) != 0 {
+		t.Errorf("Ports = %v, want none -- a list rule says which hosts matter, not which ports", c.Ports)
+	}
+	// The justification is what an operator reads to decide, so it has
+	// to say why this was suggested and how big the list is.
+	for _, want := range []string{"mgmt", "address list"} {
+		if !strings.Contains(c.Justification, want) {
+			t.Errorf("justification does not mention %q: %s", want, c.Justification)
+		}
+	}
+}
+
+// Rules naming lists whose contents were never pushed produce nothing:
+// an entry scoped to a list mikroview cannot resolve would match nothing
+// with no way to explain it.
+func TestGenerateAddressListCandidatesNeedsTheListContents(t *testing.T) {
+	rs := routerstate.New()
+	applyPayload(t, rs, "router-a", `{"kind":"filter-rule","page":1,"pages":1,"records":[`+
+		`{"ordinal":0,"chain":"input","action":"accept","srcAddressList":"mgmt","log":true}`+
+		`]}`)
+
+	for _, c := range Generate(rs) {
+		if c.Kind == KindAddressList {
+			t.Errorf("suggested a list whose contents were never pushed: %+v", c)
+		}
+	}
+}

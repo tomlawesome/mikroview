@@ -26,6 +26,7 @@ func Generate(rs *routerstate.Store) []Candidate {
 	for _, device := range rs.Devices() {
 		out = append(out, generateDeviceCandidates(rs, device)...)
 		out = append(out, generatePortCandidates(rs, device)...)
+		out = append(out, generateAddressListCandidates(rs, device)...)
 	}
 	return out
 }
@@ -124,6 +125,73 @@ func generatePortCandidates(rs *routerstate.Store, device string) []Candidate {
 	return out
 }
 
+// generateAddressListCandidates suggests watching traffic from the
+// addresses in a list a firewall rule already scopes by (#274 item 2).
+//
+// Only lists a rule actually references. A router's address lists
+// include plenty that exist for routing, NAT or bookkeeping, and
+// suggesting a watch over every one of them would be noise -- the signal
+// is "the operator already treats this group as meaningful enough to
+// write a rule about it".
+//
+// One candidate per list, not per address: the entry it becomes is
+// scoped to the list itself and resolves membership live, which is the
+// capability this needed and the reason it could not be built before.
+// Suggesting one entry per current member would go stale the moment the
+// router edited the list, which for a list with dynamic entries is
+// almost immediately.
+//
+// Ports are deliberately not suggested. A port rule says which ports
+// matter; a list rule says which *hosts* matter, and inventing a port
+// set here would be mikroview guessing at the operator's intent rather
+// than reporting what their own configuration says. The accept path
+// fills in the default watched ports, which they then edit.
+func generateAddressListCandidates(rs *routerstate.Store, device string) []Candidate {
+	rules, _, ok := rs.FilterRules(device)
+	if !ok {
+		return nil
+	}
+	lists, _, listsOK := rs.AddressLists(device)
+	if !listsOK {
+		// The rules name lists whose contents were never pushed, so an
+		// accepted entry would match nothing and there would be no way
+		// to say why. Same "stay quiet rather than mislead" rule the
+		// coverage check follows.
+		return nil
+	}
+
+	known := make(map[string]int)
+	for _, e := range lists {
+		known[e.List]++
+	}
+
+	seen := make(map[string]bool)
+	var out []Candidate
+	for _, r := range rules {
+		list := r.SrcAddressList
+		if list == "" || seen[list] {
+			continue
+		}
+		members, exists := known[list]
+		if !exists {
+			continue // referenced but never pushed
+		}
+		seen[list] = true
+
+		justification := fmt.Sprintf("%s rule on chain %q scopes by address list %q (%d address(es) currently in it)",
+			r.Action, r.Chain, list, members)
+		out = append(out, Candidate{
+			ID:            addressListCandidateID(device, list),
+			Kind:          KindAddressList,
+			Name:          fmt.Sprintf("Traffic from %q", list),
+			Justification: justification,
+			RouterDevice:  device,
+			AddressList:   list,
+		})
+	}
+	return out
+}
+
 func portCandidateName(ports []int) string {
 	strs := make([]string, len(ports))
 	for i, p := range ports {
@@ -160,6 +228,10 @@ func deviceCandidateID(routerDevice, mac string) string {
 // the operator the same thing twice. What is lost is only which of the
 // duplicate rules gets cited as the reason, and the entry it produces is
 // the same either way.
+func addressListCandidateID(routerDevice, list string) string {
+	return strings.Join([]string{"addressList", routerDevice, list}, "\x00")
+}
+
 func portCandidateID(routerDevice, chain, action, protocol, dstPort, srcAddressList string) string {
 	return strings.Join([]string{"port", routerDevice, chain, action, protocol, dstPort, srcAddressList}, "\x00")
 }
