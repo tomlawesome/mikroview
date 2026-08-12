@@ -97,3 +97,53 @@ func TestPostgresMarkerFallsBackToTheDefaultDataDir(t *testing.T) {
 		t.Errorf("markerPath = %q, want %q", got, want)
 	}
 }
+
+// The one-time JSON adoption must run exactly once (#294 item 1).
+//
+// The failure it prevents: restore the database to a snapshot from
+// before a store was populated, with the original JSON still sitting on
+// the data volume, and mikroview copied it straight back in -- deleted
+// accounts and their password hashes returned, with an Info log line as
+// the only signal.
+//
+// Tested through backendFor's own gate rather than against a live
+// Postgres, because the decision being pinned is "may this boot adopt at
+// all", which is made before any backend is touched.
+func TestAdoptionIsRefusedOnceThisDeploymentHasAdopted(t *testing.T) {
+	dir := t.TempDir()
+	cfg := cfgWithData(dir)
+
+	if postgresAlreadyAdopted(cfg) {
+		t.Fatal("a fresh data directory reports a previous adoption")
+	}
+
+	// The boot that moves this deployment onto Postgres.
+	if err := markPostgresAdopted(cfg); err != nil {
+		t.Fatalf("markPostgresAdopted: %v", err)
+	}
+
+	// Every boot after it, including one where the database has been
+	// rolled back to before the store existed.
+	if !postgresAlreadyAdopted(cfg) {
+		t.Error("a deployment that has run on Postgres does not report it, so adoption would run again")
+	}
+}
+
+// The marker has to sit beside the JSON files, not in the database.
+//
+// #294 suggested recording the adoption in the database so a rollback
+// would take the marker with it. That is the wrong way round, and this
+// pins why: a rollback deep enough to lose the data is deep enough to
+// lose a marker stored alongside it, and mikroview would re-adopt
+// exactly as before. A guard has to survive the thing it guards against.
+func TestAdoptionMarkerLivesBesideTheFilesItGuards(t *testing.T) {
+	dir := t.TempDir()
+	cfg := cfgWithData(dir)
+	if err := markPostgresAdopted(cfg); err != nil {
+		t.Fatalf("markPostgresAdopted: %v", err)
+	}
+
+	if got, want := filepath.Dir(markerPath(cfg)), filepath.Dir(cfg.Auth.StorePath); got != want {
+		t.Errorf("marker is in %q, want it beside the stores in %q -- anywhere the database can roll back is useless here", got, want)
+	}
+}
