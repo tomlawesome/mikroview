@@ -78,6 +78,19 @@ upgrading.
 
 ### Added
 
+- **The Watchlist can watch a whole address list from your router**
+  (#274). If a firewall rule already scopes by an address list, MikroView
+  suggests watching traffic from the addresses in it — and the entry
+  follows the list as the router changes it, rather than freezing
+  today's members. That matters because RouterOS edits these lists
+  itself; an entry built from a snapshot would be wrong the first time
+  it did.
+
+  Only lists a rule actually references are suggested. A router has
+  plenty of lists for routing and bookkeeping, and suggesting all of them
+  would be noise — a rule referencing one is the operator saying that
+  group matters.
+
 - **A renewed certificate can be picked up without a restart** (#294).
   Send MikroView `SIGHUP` — `docker kill --signal=HUP mikroview` — and it
   reloads `tls.certFile`/`tls.keyFile` on both the HTTPS listener and the
@@ -458,6 +471,32 @@ upgrading.
   bare IP keeps working.
 
 ### Fixed
+
+- **MikroView checks the database ran the schema changes it thinks it
+  did** (#294). It recorded which schema versions had been applied but
+  never what they contained, so anyone able to write to that one table
+  could claim a version and MikroView would report "up to date" and run
+  against a schema it had never seen. Each schema change now records a
+  fingerprint as it is applied, checked on every start. A mismatch stops
+  startup rather than guessing at the shape of your data.
+
+  Existing databases are unaffected: rows written before this have
+  nothing to compare and are simply not checked, rather than treated as
+  suspicious.
+
+- **Restoring an older database backup can no longer bring deleted
+  accounts back** (#294). MikroView copied your JSON files into Postgres
+  on the first move, but it re-checked on *every* start — so restoring
+  the database to a snapshot from before a store was filled, with the
+  original files still on the data volume, copied them straight back in.
+  A deleted account and its password came back, with a single line in the
+  log as the only sign. The one-time move now happens once and never
+  again.
+
+  If a first migration is ever interrupted part-way, MikroView says so
+  loudly and tells you how to finish it deliberately. It will not guess:
+  an interrupted migration and a restored-from-backup database look
+  identical from the inside, and guessing wrong is what caused this.
 
 - **A single sign-on issuer written without `https://` is now checked
   properly** (#267). MikroView refuses multi-tenant providers, and that
