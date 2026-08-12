@@ -106,20 +106,7 @@ func OpenPool(ctx context.Context, dsn string) (*Pool, error) {
 	if err := requireTLS(cfg); err != nil {
 		return nil, err
 	}
-	// search_path pinned rather than inherited.
-	//
-	// Every statement in this package names its tables unqualified, so
-	// which schema they resolve to is whatever search_path happens to
-	// be -- the role's default, or the database's, neither of which
-	// mikroview sets. A role with CREATE on any schema earlier in that
-	// path can shadow store_blob or match_log with a table of its own,
-	// and mikroview would read and write the shadow while reporting
-	// success. Pinning it here means the answer does not depend on how
-	// the role was provisioned. See #285.
-	if cfg.ConnConfig.RuntimeParams == nil {
-		cfg.ConnConfig.RuntimeParams = map[string]string{}
-	}
-	cfg.ConnConfig.RuntimeParams["search_path"] = "public"
+	pinSearchPath(cfg)
 
 	pool, err := pgxpool.NewWithConfig(ctx, cfg)
 	if err != nil {
@@ -134,6 +121,41 @@ func OpenPool(ctx context.Context, dsn string) (*Pool, error) {
 		pool:     pool,
 		safeDesc: fmt.Sprintf("postgres %s/%s", cfg.ConnConfig.Host, cfg.ConnConfig.Database),
 	}, nil
+}
+
+// pinSearchPath fixes which schema this package's unqualified table
+// names resolve to, rather than letting the connection inherit it.
+//
+// Every statement here names its tables unqualified, so the schema is
+// whatever search_path happens to be -- the role's default, or the
+// database's, neither of which mikroview sets. A role with CREATE on any
+// schema earlier in that path can shadow store_blob or match_log with a
+// table of its own, and mikroview would read and write the shadow while
+// reporting success. Pinning means the answer does not depend on how the
+// role was provisioned. See #285.
+//
+// Pinned to what the DSN asked for, defaulting to public -- not forced
+// to public. Forcing it was the first version of this and it silently
+// ignored `?search_path=...`, so an operator keeping mikroview's tables
+// in a schema of their own got public regardless, with nothing to say
+// so. It also quietly disabled the per-schema isolation the Postgres
+// tests rely on: every test shared public, so internal/matchlog's
+// assertions about whole-table counts began seeing other tests' rows.
+//
+// That took 41 commits to surface, because the job running those tests
+// is skipped on dev to keep it fast (.github/workflows/ci.yml) and only
+// runs from preview onwards. Hence TestPinSearchPath, which needs no
+// database and so runs everywhere.
+//
+// The security property is unchanged either way: search_path is what
+// mikroview sets, never what the role or database defaults to.
+func pinSearchPath(cfg *pgxpool.Config) {
+	if cfg.ConnConfig.RuntimeParams == nil {
+		cfg.ConnConfig.RuntimeParams = map[string]string{}
+	}
+	if cfg.ConnConfig.RuntimeParams["search_path"] == "" {
+		cfg.ConnConfig.RuntimeParams["search_path"] = "public"
+	}
 }
 
 // requireTLS refuses any configuration that could end up sending the
