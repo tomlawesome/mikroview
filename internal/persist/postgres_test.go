@@ -330,14 +330,14 @@ func TestLoadMigrationsOrdersNumericallyAndRejectsDuplicates(t *testing.T) {
 }
 
 // TestPinSearchPath guards the schema pinning without needing a
-// database: pgxpool.ParseConfig only parses, so this runs on every
-// `go test ./...` rather than only in the Postgres job.
+// database: pgxpool.ParseConfig only parses, so this holds on a machine
+// with no Postgres to hand as well as in the Postgres job.
 //
-// That distinction is the point. The forced-to-public version of
-// pinSearchPath broke every Postgres test's per-schema isolation and
-// silently ignored an operator's own `?search_path=`, and neither showed
-// up for 41 commits, because the only tests that could see it are
-// skipped on dev.
+// The forced-to-public version of pinSearchPath broke every Postgres
+// test's per-schema isolation and silently ignored an operator's own
+// `?search_path=`. It went 41 commits unnoticed because the job running
+// those tests was skipped on dev; that gate is gone now, so this is a
+// second line rather than the only one.
 func TestPinSearchPath(t *testing.T) {
 	tests := []struct {
 		name string
