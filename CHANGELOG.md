@@ -78,6 +78,19 @@ upgrading.
 
 ### Added
 
+- **The Watchlist can watch a whole address list from your router**
+  (#274). If a firewall rule already scopes by an address list, MikroView
+  suggests watching traffic from the addresses in it — and the entry
+  follows the list as the router changes it, rather than freezing
+  today's members. That matters because RouterOS edits these lists
+  itself; an entry built from a snapshot would be wrong the first time
+  it did.
+
+  Only lists a rule actually references are suggested. A router has
+  plenty of lists for routing and bookkeeping, and suggesting all of them
+  would be noise — a rule referencing one is the operator saying that
+  group matters.
+
 - **A renewed certificate can be picked up without a restart** (#294).
   Send MikroView `SIGHUP` — `docker kill --signal=HUP mikroview` — and it
   reloads `tls.certFile`/`tls.keyFile` on both the HTTPS listener and the
