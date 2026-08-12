@@ -1153,3 +1153,41 @@ func TestClearAllOnEmptyStoreIsANoOp(t *testing.T) {
 		t.Errorf("ClearAll on an empty store returned %d, want 0", n)
 	}
 }
+
+// Exclude on a pair that already has an active flag must clear it.
+//
+// add() skips excluded pairs before touching s.byID, so without this the
+// existing entry stayed in List() as Cleared:false forever, frozen, with
+// every later update silently no-op'd. Not reachable through the API --
+// ClearAndExclude clears first -- which is what made it a landmine for
+// the next caller rather than a live bug.
+func TestExcludeClearsAnAlreadyActiveFlag(t *testing.T) {
+	s, err := Open("")
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	now := time.Now()
+
+	s.Add(TypePortScan, "203.0.113.5", "20 ports", now)
+	if active := activeTargets(s.List()); len(active) != 1 {
+		t.Fatalf("setup: expected one active flag, got %d", len(active))
+	}
+
+	s.Exclude(TypePortScan, "203.0.113.5")
+
+	for _, f := range s.List() {
+		if f.Type == TypePortScan && f.Target == "203.0.113.5" && !f.Cleared {
+			t.Fatal("the pre-existing flag is still active after Exclude, and no later update can reach it")
+		}
+	}
+}
+
+func activeTargets(flags []Flag) []string {
+	var out []string
+	for _, f := range flags {
+		if !f.Cleared {
+			out = append(out, f.Target)
+		}
+	}
+	return out
+}

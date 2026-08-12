@@ -549,6 +549,21 @@ func (d *Detector) Observe(e store.Event) {
 	}
 
 	if e.RuleLabel != "" {
+		// Deliberately no "mark the baseline stale" reset here, unlike
+		// GlobalSpikeDetector.Check and checkHostActivityBaseline. #267
+		// finding 17 proposed adding one for consistency; measured, it
+		// makes this detector worse -- see
+		// TestRuleSpikeSurvivesADisableEnableCycleWithoutFalsePositives.
+		//
+		// The difference is where the rate comes from. GlobalSpike is
+		// handed an accurate current EPS, so re-priming gives it a
+		// correct baseline immediately. This detector derives its rate
+		// from a time-windowed hits ring that only fills while it is
+		// enabled, so re-priming on the first event after re-enabling
+		// primes against a nearly empty ring -- and the ordinary refill
+		// back to normal traffic then reads as a spike. low_slow_scan
+		// derives its rate the same way and is left alone for the same
+		// reason.
 		if rs := d.settings.Get(DetectorRuleSpike); rs.Enabled && scopeMatchesRule(rs.Scope, e.RuleLabel) {
 			d.observeRuleRate(e, now)
 		}
