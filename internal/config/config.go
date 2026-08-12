@@ -298,6 +298,22 @@ type Auth struct {
 	// without activity before needing to log in again," not a fixed
 	// session lifetime.
 	SessionTTL time.Duration `yaml:"sessionTTL"`
+	// SessionMaxLifetime is the ceiling SessionTTL does not have: the
+	// longest a session can live from the moment it was issued, however
+	// often it is used.
+	//
+	// The two answer different questions, which is why both exist.
+	// SessionTTL asks "has this been abandoned"; a session used once a
+	// day satisfies it forever, so without this a browser left signed in
+	// on a shared machine -- or a cookie taken months ago -- stays valid
+	// indefinitely (#294 item 3).
+	//
+	// Seven days by default: long enough that an operator checking their
+	// firewall most days is not re-authenticating constantly, short
+	// enough that a forgotten session is not a permanent one. Set to 0
+	// to remove the ceiling and keep the old behaviour, which is a
+	// deliberate choice rather than an oversight if you make it.
+	SessionMaxLifetime time.Duration `yaml:"sessionMaxLifetime"`
 	// TokensStorePath: where read-only API bearer tokens (issue #101)
 	// persist across restarts, as a small JSON file (names + SHA-256
 	// hashes, never the raw bearer values). Unlike StorePath above, this
@@ -835,6 +851,7 @@ func defaults() Config {
 		Auth: Auth{
 			StorePath:          DefaultDataDir + "/users.json",
 			SessionTTL:         24 * time.Hour,
+			SessionMaxLifetime: 7 * 24 * time.Hour,
 			SecureCookie:       true,
 			TokensStorePath:    DefaultDataDir + "/tokens.json",
 			RecoveryKeysPath:   DefaultDataDir + "/recovery-keys.json",
@@ -1205,6 +1222,11 @@ func applyEnv(cfg *Config) {
 	if v := os.Getenv("MIKROVIEW_AUTH_SESSION_TTL"); v != "" {
 		if d, err := time.ParseDuration(v); err == nil {
 			cfg.Auth.SessionTTL = d
+		}
+	}
+	if v := os.Getenv("MIKROVIEW_AUTH_SESSION_MAX_LIFETIME"); v != "" {
+		if d, err := time.ParseDuration(v); err == nil {
+			cfg.Auth.SessionMaxLifetime = d
 		}
 	}
 	if v := os.Getenv("MIKROVIEW_ENTITIES_STORE_PATH"); v != "" {

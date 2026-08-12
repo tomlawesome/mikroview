@@ -30,10 +30,38 @@ type SessionStore struct {
 	mu       sync.Mutex
 	sessions map[string]Session
 	ttl      time.Duration
+	// maxLifetime caps how long a session can live from IssuedAt,
+	// regardless of how often it is used.
+	//
+	// Without it the sliding renewal below has no ceiling at all: a
+	// session used even once per ttl never expires, so a browser left
+	// signed in on a shared machine, or a cookie taken months ago, stays
+	// valid indefinitely (#294 item 3). ttl answers "has this been
+	// abandoned"; this answers "how old is too old", and the two are
+	// different questions.
+	//
+	// Zero disables the ceiling, which is what the CLI tooling and most
+	// tests want -- they construct a store to exercise one behaviour and
+	// have no interest in wall-clock ageing.
+	maxLifetime time.Duration
 }
 
+// NewSessionStore builds a store with sliding expiry ttl and no absolute
+// ceiling. Prefer NewSessionStoreWithMaxLifetime for anything
+// long-running; this exists for tests and tooling that only care about
+// the sliding behaviour.
 func NewSessionStore(ttl time.Duration) *SessionStore {
-	return &SessionStore{sessions: make(map[string]Session), ttl: ttl}
+	return NewSessionStoreWithMaxLifetime(ttl, 0)
+}
+
+// NewSessionStoreWithMaxLifetime builds a store that also refuses a
+// session older than maxLifetime, however recently it was used. A zero
+// or negative maxLifetime means no ceiling.
+func NewSessionStoreWithMaxLifetime(ttl, maxLifetime time.Duration) *SessionStore {
+	if maxLifetime < 0 {
+		maxLifetime = 0
+	}
+	return &SessionStore{sessions: make(map[string]Session), ttl: ttl, maxLifetime: maxLifetime}
 }
 
 // Create starts a new session for userID.
@@ -50,6 +78,13 @@ func (s *SessionStore) Create(userID string, now time.Time) Session {
 // rather than forcing a re-login mid-session at a fixed wall-clock
 // time). An expired session is evicted on the read that finds it,
 // rather than needing a separate sweep.
+//
+// The renewal is bounded by maxLifetime: a session is refused once it is
+// older than that from IssuedAt, however recently it was used, and the
+// renewed expiry never reaches past that point either. Without the
+// second half the ceiling would be checked but not enforced -- a session
+// could sit with an ExpiresAt beyond its own deadline and be accepted by
+// any code reading ExpiresAt rather than calling this.
 func (s *SessionStore) Validate(id string, now time.Time) (Session, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -61,9 +96,33 @@ func (s *SessionStore) Validate(id string, now time.Time) (Session, bool) {
 		delete(s.sessions, id)
 		return Session{}, false
 	}
-	sess.ExpiresAt = now.Add(s.ttl)
+	if deadline, capped := s.deadline(sess); capped {
+		if now.After(deadline) {
+			delete(s.sessions, id)
+			return Session{}, false
+		}
+		sess.ExpiresAt = earliest(now.Add(s.ttl), deadline)
+	} else {
+		sess.ExpiresAt = now.Add(s.ttl)
+	}
 	s.sessions[id] = sess
 	return sess, true
+}
+
+// deadline is the absolute moment sess stops being usable, and whether
+// there is one at all.
+func (s *SessionStore) deadline(sess Session) (time.Time, bool) {
+	if s.maxLifetime <= 0 {
+		return time.Time{}, false
+	}
+	return sess.IssuedAt.Add(s.maxLifetime), true
+}
+
+func earliest(a, b time.Time) time.Time {
+	if a.Before(b) {
+		return a
+	}
+	return b
 }
 
 // Revoke ends one session (logout).

@@ -772,3 +772,120 @@ func TestCreateTokenRejectsAnUnscopedIngestToken(t *testing.T) {
 		})
 	}
 }
+
+// Changing your own password (#294 item 4). Before this there was no
+// route at all: it meant -recover-admin-account, which needs host
+// access, so an operator who suspected their credential was known could
+// do nothing from the interface.
+func TestChangePasswordRotatesTheSessionAndEndsOthers(t *testing.T) {
+	s := newAuthTestServer(t)
+	ts := httptest.NewServer(s.Routes())
+	defer ts.Close()
+
+	client := registerAdmin(t, ts)
+	user, _ := s.Auth.ByUsername("admin")
+
+	// A second signed-in browser, which must not survive the change --
+	// "sign out everywhere" is the point, not a side effect.
+	other := loggedInClient(t, ts.URL, "admin", "password123")
+	if resp, err := other.Get(ts.URL + "/api/watchlist/entries"); err != nil || resp.StatusCode != http.StatusOK {
+		t.Fatalf("setup: the second session is not usable (%v)", err)
+	}
+
+	resp := postJSON(t, client, ts.URL+"/api/auth/password", changePasswordRequest{
+		CurrentPassword: "password123",
+		NewPassword:     "a-brand-new-password",
+	})
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("change password returned %d, want 200", resp.StatusCode)
+	}
+
+	// The old password no longer works, the new one does.
+	if _, err := s.Auth.Authenticate("admin", "password123", time.Now()); err == nil {
+		t.Error("the old password still authenticates")
+	}
+	if _, err := s.Auth.Authenticate("admin", "a-brand-new-password", time.Now()); err != nil {
+		t.Errorf("the new password does not authenticate: %v", err)
+	}
+
+	// This browser stays signed in: being signed out by your own
+	// password change is the behaviour that stops people doing it.
+	if got, err := client.Get(ts.URL + "/api/watchlist/entries"); err != nil || got.StatusCode != http.StatusOK {
+		t.Errorf("the browser that changed the password was signed out (%v)", err)
+	}
+
+	// The other one is gone, immediately -- not merely doomed on its
+	// next PasswordChangedAt check.
+	if got, err := other.Get(ts.URL + "/api/watchlist/entries"); err == nil && got.StatusCode == http.StatusOK {
+		t.Error("a session opened before the password change is still usable")
+	}
+	if _, ok := s.Auth.Get(user.ID); !ok {
+		t.Error("the account itself went missing")
+	}
+}
+
+func TestChangePasswordRefusesAWrongCurrentPassword(t *testing.T) {
+	s := newAuthTestServer(t)
+	ts := httptest.NewServer(s.Routes())
+	defer ts.Close()
+	client := registerAdmin(t, ts)
+
+	resp := postJSON(t, client, ts.URL+"/api/auth/password", changePasswordRequest{
+		CurrentPassword: "not-the-password",
+		NewPassword:     "a-brand-new-password",
+	})
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Errorf("status = %d, want 401", resp.StatusCode)
+	}
+	// And the password is untouched.
+	if _, err := s.Auth.Authenticate("admin", "password123", time.Now()); err != nil {
+		t.Error("a failed change altered the password anyway")
+	}
+}
+
+func TestChangePasswordRefusesAShortOrUnchangedPassword(t *testing.T) {
+	s := newAuthTestServer(t)
+	ts := httptest.NewServer(s.Routes())
+	defer ts.Close()
+	client := registerAdmin(t, ts)
+
+	short := postJSON(t, client, ts.URL+"/api/auth/password", changePasswordRequest{
+		CurrentPassword: "password123",
+		NewPassword:     "short",
+	})
+	short.Body.Close()
+	if short.StatusCode != http.StatusBadRequest {
+		t.Errorf("a too-short password returned %d, want 400", short.StatusCode)
+	}
+
+	same := postJSON(t, client, ts.URL+"/api/auth/password", changePasswordRequest{
+		CurrentPassword: "password123",
+		NewPassword:     "password123",
+	})
+	same.Body.Close()
+	if same.StatusCode != http.StatusBadRequest {
+		t.Errorf("reusing the current password returned %d, want 400", same.StatusCode)
+	}
+}
+
+// Without a session this is just an oracle for guessing a password that
+// happens to need a cookie -- and a stolen cookie is exactly what an
+// attacker reaching this would have.
+func TestChangePasswordRequiresASession(t *testing.T) {
+	s := newAuthTestServer(t)
+	ts := httptest.NewServer(s.Routes())
+	defer ts.Close()
+	registerAdmin(t, ts)
+
+	anon := &http.Client{Jar: mustCookieJar(t)}
+	resp := postJSON(t, anon, ts.URL+"/api/auth/password", changePasswordRequest{
+		CurrentPassword: "password123",
+		NewPassword:     "a-brand-new-password",
+	})
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Errorf("status = %d, want 401", resp.StatusCode)
+	}
+}

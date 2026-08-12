@@ -40,6 +40,10 @@ class AuthState {
   hasLocalPassword = $state(true);
   // Drives SSOLinkOverlay -- the confirm-and-warn step before an
   // irreversible conversion to SSO-only.
+  // Whether the change-password dialog is open (#294 item 4), kept
+  // beside showSSOLink because the two are the same kind of thing: an
+  // account action reached from the menu.
+  showChangePassword = $state(false);
   showSSOLink = $state(false);
   // Set after a successful link (the callback redirects with
   // ?ssoLinked=1), so the UI can confirm what just happened rather than
