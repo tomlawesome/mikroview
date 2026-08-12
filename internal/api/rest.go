@@ -5,13 +5,15 @@ package api
 import (
 	"encoding/json"
 	"fmt"
-	"github.com/tomlawesome/mikroview/internal/device"
-	"github.com/tomlawesome/mikroview/internal/store"
+	"io"
 	"net/http"
 	"strconv"
 	"time"
 
+	"github.com/tomlawesome/mikroview/internal/device"
 	"github.com/tomlawesome/mikroview/internal/logging"
+	"github.com/tomlawesome/mikroview/internal/store"
+	"github.com/tomlawesome/mikroview/internal/syslog"
 )
 
 var apiLog = logging.New("api")
@@ -107,6 +109,12 @@ func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 		"count":            stats.Count,
 		"windowSeconds":    int(stats.Window.Seconds()),
 		"connectedClients": s.Hub.ClientCount(),
+		// Syslog listener saturation. Included here rather than behind
+		// its own endpoint because the condition it reports -- mikroview
+		// turning away a router the operator declared -- was previously
+		// visible only as a repeated line in the container log, which
+		// means visible to nobody. See internal/syslog.ListenerStats.
+		"syslog": syslog.Stats(),
 	})
 }
 
@@ -213,4 +221,35 @@ const maxJSONBodyBytes = 64 * 1024
 func decodeJSONBody(w http.ResponseWriter, r *http.Request, v any) error {
 	r.Body = http.MaxBytesReader(w, r.Body, maxJSONBodyBytes)
 	return json.NewDecoder(r.Body).Decode(v)
+}
+
+// handleThirdPartyNotices serves THIRD-PARTY-NOTICES.md verbatim, as
+// plain text.
+//
+// This is a licence-compliance surface, not a feature. The binary
+// statically links seventeen Go modules and embeds a frontend bundle
+// containing third-party runtime code; MIT, BSD-3-Clause, ISC and
+// Apache-2.0 each require their copyright notice and licence text to
+// accompany a binary distribution, and Apache-2.0 s4(d) requires any
+// NOTICE file to be passed along too. The runtime image is distroless --
+// the binary is the entire artefact -- so "accompany" can only mean
+// "inside the binary, reachable from the running app", which is what
+// this route and the About dialog's link to it provide.
+//
+// Session-gated (accessUser) rather than public: the notices also live
+// in the public repository and in the image, so gating them withholds
+// nothing from anyone entitled to them, while not handing an
+// unauthenticated caller a precise dependency-and-version inventory to
+// match against CVEs.
+func (s *Server) handleThirdPartyNotices(w http.ResponseWriter, r *http.Request) {
+	if s.ThirdPartyNotices == "" {
+		// Only reachable in a test fixture or a hand-built binary; a
+		// real build always embeds it (notices.go), and CI fails if the
+		// file is stale.
+		http.Error(w, "third-party notices were not embedded in this build", http.StatusNotFound)
+		return
+	}
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.Header().Set("Cache-Control", "public, max-age=3600")
+	io.WriteString(w, s.ThirdPartyNotices)
 }

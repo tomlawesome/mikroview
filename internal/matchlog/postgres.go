@@ -25,6 +25,22 @@ var pgLog = logging.New("matchlog")
 // parameters -- see docs/decisions/postgres-backend.md §7 and the
 // scoped injection-sink exemption this package carries for the same
 // reasoning internal/persist's own Postgres backend does.
+// persistTimeout bounds the write/count calls below (Append,
+// purgeOnceRecovered, Stats) -- not Query, which serves an
+// admin-initiated HTTP request rather than running on a producer
+// goroutine. Append runs on the watchlist evaluator's own goroutine
+// (internal/watchlist/evaluator.go), not the ingest goroutine itself,
+// so an unresponsive Postgres connection here has a smaller blast
+// radius than the same failure in internal/rules, internal/flags or
+// internal/device -- the evaluator has its own bounded queue and drop
+// log -- but it would still block that goroutine indefinitely under
+// context.Background(), and Stats/purgeOnceRecovered have no such
+// isolation at all. Same 5s reasoning as persist.SaveWithRetry's
+// ingest-path callers: generous for a write this small, short enough
+// that a genuinely stuck backend degrades to a logged failure instead
+// of an indefinite hang.
+const persistTimeout = 5 * time.Second
+
 const (
 	sqlCollapseUpdate = `UPDATE match_log SET last_seen = $2, count = count + 1 WHERE tuple_key = $1`
 
@@ -91,7 +107,8 @@ func (s *PostgresStore) Append(entryID string, tuple Tuple, event store.Event, t
 		return ErrEmptyIdentity
 	}
 	key := hashTupleKey(tuple.key(entryID))
-	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(context.Background(), persistTimeout)
+	defer cancel()
 
 	// Collapse first: a repeat of an already-open tuple is the common
 	// case once a watchlist entry has been live for a while, and this
@@ -136,7 +153,7 @@ func isUniqueViolation(err error) bool {
 // whole log in memory or in a scan -- the range query and the sort/limit
 // are all pushed down to the index Query's own doc comment on Store
 // describes, which is the entire reason this table exists.
-func (s *PostgresStore) Query(q Query, yield func(Record) bool) error {
+func (s *PostgresStore) Query(ctx context.Context, q Query, yield func(Record) bool) error {
 	if q.Source.Empty() {
 		return ErrEmptyIdentity
 	}
@@ -147,7 +164,6 @@ func (s *PostgresStore) Query(q Query, yield func(Record) bool) error {
 		until = &u
 	}
 
-	ctx := context.Background()
 	rows, err := s.pool.Query(ctx, sqlSelectMatches, q.Source.identityKey(), q.Since, until, limit)
 	if err != nil {
 		return fmt.Errorf("matchlog: querying: %w", err)
@@ -175,8 +191,10 @@ func (s *PostgresStore) Query(q Query, yield func(Record) bool) error {
 // false -- this backend has no ceiling, see this type's own doc
 // comment.
 func (s *PostgresStore) Stats() Stats {
+	ctx, cancel := context.WithTimeout(context.Background(), persistTimeout)
+	defer cancel()
 	var count int
-	if err := s.pool.QueryRow(context.Background(), sqlCount).Scan(&count); err != nil {
+	if err := s.pool.QueryRow(ctx, sqlCount).Scan(&count); err != nil {
 		pgLog.Warn(fmt.Sprintf("counting matches failed: %v", err))
 		return Stats{}
 	}
@@ -216,7 +234,9 @@ func (s *PostgresStore) RunPeriodicPurge(ctx context.Context, interval time.Dura
 func (s *PostgresStore) purgeOnceRecovered() {
 	defer logging.Recover(pgLog)
 	cutoff := time.Now().Add(-s.retention)
-	tag, err := s.pool.Exec(context.Background(), sqlPurgeOlderThan, cutoff)
+	ctx, cancel := context.WithTimeout(context.Background(), persistTimeout)
+	defer cancel()
+	tag, err := s.pool.Exec(ctx, sqlPurgeOlderThan, cutoff)
 	if err != nil {
 		pgLog.Warn(fmt.Sprintf("purging matches older than %s failed: %v", s.retention, err))
 		return

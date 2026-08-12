@@ -38,9 +38,15 @@ const (
 // Each hash allocates argon2Memory (64 MiB) for its duration, so without
 // a bound the memory ceiling is set by however many requests arrive
 // simultaneously. POST /api/auth/login is unauthenticated, so that is
-// attacker-chosen: 16 concurrent attempts reserve ~1 GiB, which OOMs a
-// container running under the 128 MiB limit deploy/docker-compose.yml
-// documents. The per-IP/per-username rate limiter does not prevent this
+// attacker-chosen: 16 concurrent attempts reserve ~1 GiB, which OOMs any
+// memory-limited container -- the CI smoke test runs mikroview under
+// `--memory 128m` (.github/workflows/ci.yml), and that is the figure
+// this bound was sized against. Note deploy/docker-compose.yml sets no
+// memory limit of its own; this comment used to cite one there, which
+// pointed a reader checking whether the ceiling is bounded in
+// deployment at a file that does not bound it (#284). The real
+// mitigation is this semaphore, not any compose setting.
+// The per-IP/per-username rate limiter does not prevent this
 // on its own -- it is checked before hashing and recorded after, so a
 // simultaneous burst passes the check together.
 //

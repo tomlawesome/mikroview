@@ -12,6 +12,7 @@ import (
 	"math/rand/v2"
 	"net"
 	"net/http"
+	"net/netip"
 	"os"
 	"os/signal"
 	"slices"
@@ -207,6 +208,9 @@ func securityHeaders(next http.Handler, hsts bool) http.Handler {
 // truth available here to validate against, so this falls back to the
 // prior echo-Host behavior.
 func httpsRedirectTarget(r *http.Request, allowedHosts []string) string {
+	if len(allowedHosts) == 0 {
+		allowedHosts = localRedirectHosts()
+	}
 	host := r.Host
 	if h, _, err := net.SplitHostPort(host); err == nil {
 		host = h
@@ -215,6 +219,68 @@ func httpsRedirectTarget(r *http.Request, allowedHosts []string) string {
 		host = allowedHosts[0]
 	}
 	return "https://" + host + r.URL.RequestURI()
+}
+
+// localRedirectHosts is the fallback known-good set when cfg.TLS.Hosts
+// is unset: this machine's own hostname and the addresses it holds.
+//
+// It exists because "unset" is the shipped default -- defaults() sets
+// TLS.Enabled and Listen.HTTPRedirect but never TLS.Hosts, and
+// deploy/docker-compose.yml maps host port 80 to the redirect listener.
+// So the allowlist above was empty out of the box and the function fell
+// back to echoing r.Host into a 308 Location: an unauthenticated
+// Host-header reflection (CWE-601) in the default configuration, in a
+// function whose own doc comment says it closes "a known vulnerability
+// class".
+//
+// Exploitability is genuinely weak, and #272's two reviewers who found
+// it disagreed about how weak -- a browser cannot be made to send a Host
+// differing from the URL it is navigating to, so this needs someone able
+// to put raw HTTP at the listener, which is mostly self-directed. That
+// is why the fix is to make the guard work by default rather than to
+// make TLS.Hosts mandatory: nobody has to configure anything, and
+// reaching mikroview by bare IP keeps working. Owner decision on #283
+// finding 2.
+//
+// Loopback is included last rather than first so a machine with a real
+// address prefers it -- allowedHosts[0] is what an unrecognised Host is
+// rewritten to, and redirecting a LAN client to https://127.0.0.1 would
+// be useless. If nothing can be enumerated at all, this returns empty
+// and the caller keeps the previous echo behaviour, which is strictly
+// better than redirecting everyone to an address that does not work.
+func localRedirectHosts() []string {
+	var hosts []string
+	seen := make(map[string]bool)
+	add := func(h string) {
+		if h != "" && !seen[h] {
+			seen[h] = true
+			hosts = append(hosts, h)
+		}
+	}
+
+	if name, err := os.Hostname(); err == nil {
+		add(name)
+	}
+	if addrs, err := net.InterfaceAddrs(); err == nil {
+		for _, a := range addrs {
+			ipNet, ok := a.(*net.IPNet)
+			if !ok {
+				continue
+			}
+			addr, ok := netip.AddrFromSlice(ipNet.IP)
+			if !ok {
+				continue
+			}
+			addr = addr.Unmap()
+			if addr.IsLoopback() || addr.IsLinkLocalUnicast() || addr.IsUnspecified() {
+				continue
+			}
+			add(addr.String())
+		}
+	}
+	add("localhost")
+	add("127.0.0.1")
+	return hosts
 }
 
 func main() {
@@ -296,6 +362,18 @@ func main() {
 		cfg.Store.MaxMemory, storeCapacity))
 	st := store.New(storeCapacity, cfg.Store.Retention)
 	devices := device.NewRegistry(cfg.Devices)
+	// Tell the syslog listener which sources are the operator's declared
+	// routers, so a flood of undeclared ones cannot take every
+	// connection slot and lock them out -- see syslog.reservedFraction.
+	// Set here, before any listener starts, which is the contract
+	// SetConfiguredSources documents.
+	configuredSources := make([]string, 0, len(cfg.Devices))
+	for _, d := range cfg.Devices {
+		if d.SourceIP != "" {
+			configuredSources = append(configuredSources, d.SourceIP)
+		}
+	}
+	syslog.SetConfiguredSources(configuredSources)
 	h := hub.New()
 	geoLog := logging.New("geoip")
 	geo, err := geoip.Open(cfg.GeoIP.DBPath)
@@ -718,7 +796,7 @@ func main() {
 			case <-ticker.C:
 				func() {
 					defer logging.Recover(spikeLog)
-					globalSpike.Check(st.Stats().EventsPerSecond, time.Now())
+					globalSpike.Check(st.EventsPerSecond(), time.Now())
 				}()
 			}
 		}
@@ -927,35 +1005,36 @@ func main() {
 	}
 
 	srv := &api.Server{
-		Store:            st,
-		Devices:          devices,
-		Hub:              h,
-		Reputation:       rep,
-		NetClass:         nc,
-		Flags:            fs,
-		DetectorSettings: detectorSettings,
-		Entities:         entityStore,
-		Rules:            ru,
-		Audit:            auditStore,
-		Watchlist:        watchlistStore,
-		Suggest:          suggestStore,
-		MatchLog:         matchLog,
-		DeviceStaleAfter: cfg.Flags.DeviceStaleAfter,
-		Auth:             authStore,
-		Sessions:         auth.NewSessionStore(cfg.Auth.SessionTTL),
-		LoginLimiter:     auth.NewLoginLimiter(loginLimiterThreshold, loginLimiterWindow),
-		SecureCookie:     cfg.Auth.SecureCookie,
-		TrustedProxies:   trustedProxies,
-		ClientIPHeader:   cfg.Listen.ClientIPHeader,
-		Tokens:           tokenStore,
-		IngestLimiter:    auth.NewLoginLimiter(ingestLimiterThreshold, ingestLimiterWindow),
-		RouterState:      routerState,
-		OIDC:             oidcClient,
-		OIDCState:        oidcState,
-		OIDCPolicy:       oidcPolicy,
-		StartTime:        time.Now(),
-		Version:          version,
-		ConfigProblems:   configProblems,
+		Store:             st,
+		Devices:           devices,
+		Hub:               h,
+		Reputation:        rep,
+		NetClass:          nc,
+		Flags:             fs,
+		DetectorSettings:  detectorSettings,
+		Entities:          entityStore,
+		Rules:             ru,
+		Audit:             auditStore,
+		Watchlist:         watchlistStore,
+		Suggest:           suggestStore,
+		MatchLog:          matchLog,
+		DeviceStaleAfter:  cfg.Flags.DeviceStaleAfter,
+		Auth:              authStore,
+		Sessions:          auth.NewSessionStore(cfg.Auth.SessionTTL),
+		LoginLimiter:      auth.NewLoginLimiter(loginLimiterThreshold, loginLimiterWindow),
+		SecureCookie:      cfg.Auth.SecureCookie,
+		TrustedProxies:    trustedProxies,
+		ClientIPHeader:    cfg.Listen.ClientIPHeader,
+		Tokens:            tokenStore,
+		IngestLimiter:     auth.NewLoginLimiter(ingestLimiterThreshold, ingestLimiterWindow),
+		RouterState:       routerState,
+		OIDC:              oidcClient,
+		OIDCState:         oidcState,
+		OIDCPolicy:        oidcPolicy,
+		StartTime:         time.Now(),
+		Version:           version,
+		ThirdPartyNotices: thirdPartyNotices,
+		ConfigProblems:    configProblems,
 	}
 
 	rootMux := http.NewServeMux()
@@ -1039,7 +1118,24 @@ func main() {
 	}
 	if cfg.TLS.Enabled {
 		scheme = "https"
-		httpServer.TLSConfig = &tls.Config{Certificates: []tls.Certificate{cert}}
+		// MinVersion pinned rather than left to the Go release that
+		// built this binary, matching internal/syslog's TLS listener and
+		// its reasoning: the implicit server default has shifted across
+		// Go versions before, and what this listener will accept should
+		// not depend on which toolchain produced it. This is the
+		// listener carrying login credentials and session cookies, so if
+		// either listener deserves the pin it is this one.
+		//
+		// Not a live vulnerability: probed on this repo's Go 1.26.5, the
+		// unpinned config refused TLS 1.0 and 1.1 identically to the
+		// pinned one. Two of #272's phase 2 reviewers raised the
+		// asymmetry independently and one tested it rather than assuming
+		// -- recorded so the pin reads as consistency, not as a fix for
+		// something that was exploitable. See #282, #284.
+		httpServer.TLSConfig = &tls.Config{
+			Certificates: []tls.Certificate{cert},
+			MinVersion:   tls.VersionTLS12,
+		}
 		if cfg.Listen.HTTPRedirect != "" {
 			redirectLog := logging.New("http-redirect")
 			redirectServer := &http.Server{
@@ -1761,8 +1857,8 @@ func ingestOneRecovered(logger *slog.Logger, rm syslog.RawMessage, st *store.Sto
 		SrcPort:      parsed.SrcPort,
 		DstIP:        parsed.DstIP,
 		DstPort:      parsed.DstPort,
-		SrcHostName:  names.Host(parsed.SrcIP),
-		DstHostName:  names.Host(parsed.DstIP),
+		SrcHostName:  names.Host(deviceID, parsed.SrcIP),
+		DstHostName:  names.Host(deviceID, parsed.DstIP),
 		SrcPortName:  names.Port(parsed.SrcPort),
 		DstPortName:  names.Port(parsed.DstPort),
 		SrcCountry:   srcCountry,
@@ -1772,8 +1868,11 @@ func ingestOneRecovered(logger *slog.Logger, rm syslog.RawMessage, st *store.Sto
 		NatRaw:       parsed.NatRaw,
 		Length:       parsed.Length,
 		Flags:        parsed.Flags,
-		Raw:          parsed.Raw,
 	}
+	// Applied here rather than in the parser: internal/routeros deals in
+	// one line at a time and has no view of the ring's memory budget,
+	// which is what this bounds. See store.MaxRawBytes.
+	e.Raw, e.RawTruncated = store.ClampRaw(parsed.Raw)
 
 	stored := st.Insert(e)
 	h.Broadcast(stored)

@@ -35,7 +35,7 @@ import (
 // If this fails after a deliberate field change, update the constant and
 // the figures in the operator docs together -- the number is quoted there,
 // and a silent drift makes those docs wrong rather than stale.
-const eventStructSize = 456
+const eventStructSize = 464
 
 func TestEventStructSize(t *testing.T) {
 	if got := unsafe.Sizeof(store.Event{}); got != eventStructSize {

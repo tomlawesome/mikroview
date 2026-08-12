@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/tomlawesome/mikroview/internal/evict"
 	"github.com/tomlawesome/mikroview/internal/logging"
 	"github.com/tomlawesome/mikroview/internal/persist"
 )
@@ -66,6 +67,19 @@ type MACRegistry struct {
 // it.
 var macRegistryPersistMinInterval = time.Second
 
+// persistTimeout bounds every Load/Save against backend. Seen runs
+// synchronously on the single ingest goroutine (see main.go's
+// ingestOneRecovered), so an unresponsive backend -- a Postgres
+// connection stuck behind a network blackhole or a long lock wait, not
+// a clean disconnect -- would otherwise block that goroutine forever
+// under context.Background(), freezing the whole ingest pipeline until
+// the syslog listener's buffered channel fills and starts silently
+// dropping packets (internal/syslog/tcp_listener.go). 5s is generous
+// for a write this small: long enough that ordinary latency never trips
+// it, short enough that a genuinely stuck backend degrades to a logged
+// failure (see persistLocked) rather than an indefinite hang.
+const persistTimeout = 5 * time.Second
+
 // OpenMACRegistry loads path if it exists (a missing file is the
 // expected first-run case, not an error) and returns a MACRegistry that
 // persists to it from then on. An empty path is the expected
@@ -88,7 +102,9 @@ func OpenMACRegistry(path string) (*MACRegistry, error) {
 func OpenMACRegistryWithBackend(b persist.Backend) (*MACRegistry, error) {
 	r := &MACRegistry{backend: b, byMAC: make(map[string]*MACEntry)}
 
-	data, version, err := persist.LoadDocument(context.Background(), b)
+	ctx, cancel := context.WithTimeout(context.Background(), persistTimeout)
+	defer cancel()
+	data, version, err := persist.LoadDocument(ctx, b)
 	if err != nil {
 		return r, err
 	}
@@ -179,21 +195,28 @@ func (r *MACRegistry) listLocked() []MACEntry {
 // human hasn't looked at yet), every entry here is equally disposable:
 // there's no human-attention state attached to a MAC registry entry, so
 // the simplest bound is "keep the most recently active MACs."
+//
+// It sheds a batch rather than the exact overflow. Evicting back to
+// exactly the cap leaves the registry full, so the *next* new MAC
+// overflows too and pays the whole scan again -- and Seen runs on the
+// single ingest goroutine, on a key (src-mac) that comes straight off
+// unauthenticated syslog. Measured on the old code: 1,529 ns per Seen
+// under the cap against 16-21 ms at it, from one TLS connection sending
+// 50,000 lines with a rotating src-mac, which took about 75 ms to set
+// up. Ingest fell to roughly 47 events/s. Persistence is on by default,
+// so the poisoned registry came back after a restart and stayed until
+// an operator deleted the file.
+//
+// Same defect and same remedy as internal/detect's, which was found and
+// fixed first; internal/evict now holds the one implementation. See
+// #285.
 func (r *MACRegistry) pruneLocked() {
-	over := len(r.byMAC) - maxMACRegistryEntries
-	if over <= 0 {
+	if len(r.byMAC) <= maxMACRegistryEntries {
 		return
 	}
-
-	all := make([]*MACEntry, 0, len(r.byMAC))
-	for _, e := range r.byMAC {
-		all = append(all, e)
-	}
-	sort.Slice(all, func(i, j int) bool { return all[i].LastSeen.Before(all[j].LastSeen) })
-
-	for i := 0; i < over && i < len(all); i++ {
-		delete(r.byMAC, all[i].MAC)
-	}
+	evict.DownTo(r.byMAC, evict.Target(maxMACRegistryEntries), func(e *MACEntry) time.Time {
+		return e.LastSeen
+	})
 }
 
 // persistLocked writes the current state to disk if persistence is
@@ -217,7 +240,9 @@ func (r *MACRegistry) persistLocked() {
 		persistLog.Error(fmt.Sprintf("encoding MAC registry for persistence failed: %v -- this change exists only in memory and will be lost on restart", err))
 		return
 	}
-	version, conflicted, err := persist.SaveWithRetry(context.Background(), r.backend, data, r.version)
+	ctx, cancel := context.WithTimeout(context.Background(), persistTimeout)
+	defer cancel()
+	version, conflicted, err := persist.SaveWithRetry(ctx, r.backend, data, r.version)
 	if err != nil {
 		persistLog.Error(fmt.Sprintf("writing MAC registry to %s failed: %v -- this change exists only in memory and will be lost on restart", r.backend.Describe(), err))
 		return

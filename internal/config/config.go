@@ -157,18 +157,27 @@ type Store struct {
 }
 
 // assumedBytesPerEvent is what a typical retained event costs: the fixed
-// struct (456 bytes, internal/store.Event) plus one heap allocation for
+// struct (464 bytes, internal/store.Event) plus one heap allocation for
 // its raw syslog line, rounded to the allocator's size class. Measured in
 // internal/store/memory_test.go's TestRetainedBytesPerEvent against a
 // representative RouterOS forward-chain line -- re-run that test rather
 // than trusting this constant if store.Event's fields change.
 //
-// This is an assumption, not a guarantee: internal/routeros.Parse clamps
-// every extracted field to 256 bytes but deliberately leaves Raw
-// verbatim, so an unusually long line costs more than this constant
-// assumes and a deployment fed adversarial or pathological lines could
-// see real memory use run higher than store.maxMemory implies.
-const assumedBytesPerEvent = 616
+// This is a typical cost, and now also a bounded one. internal/routeros.
+// Parse clamps every extracted field to 256 bytes and deliberately
+// leaves Raw verbatim, so a long line still costs more than this
+// constant assumes -- but Raw is itself capped at store.MaxRawBytes
+// (2 KiB), which puts a ceiling on how much more.
+//
+// Before that cap existed the gap was not a rounding error: the syslog
+// listener accepts a 64 KiB message, so a deployment fed adversarial
+// lines retained ~66 KB per event against the ~616 assumed here, and the
+// default 120 MiB budget could hold 12.55 GiB -- a 107x overrun from
+// unauthenticated input, with validate.go's own 1.47x resident-memory
+// warning compounding it rather than catching it. The worst case is now
+// roughly 2 KiB + the struct, about 3.5x this constant rather than 107x.
+// See #285 finding 5.
+const assumedBytesPerEvent = 624
 
 // Capacity derives the event ring's element count from the configured
 // memory budget. Always at least 1 -- store.New already treats a
@@ -632,7 +641,7 @@ type DeviceMAC struct {
 // full menu, why it's a fixed menu rather than an arbitrary URL field,
 // and how the refresh cadence/entry-count cap were decided.
 //
-// On by default with Spamhaus's DROP+EDROP lists -- the issue's own
+// On by default with Spamhaus's DROP list -- the issue's own
 // recommended starting point: small, free, no registration, and
 // curated specifically to only include netblocks Spamhaus is confident
 // are entirely malicious-controlled, a safe "flag on sight" default
@@ -642,7 +651,7 @@ type DeviceMAC struct {
 // see internal/blocklist.RefreshInterval's doc comment.
 type Blocklist struct {
 	// Sources is a list of internal/blocklist.Source values (e.g.
-	// "spamhaus_drop", "spamhaus_edrop", "emerging_threats_compromised")
+	// "spamhaus_drop", "emerging_threats_compromised")
 	// -- an unrecognized entry is logged and skipped at startup, not a
 	// fatal error, same degrade-not-crash contract as every other
 	// optional integration in this codebase.
@@ -746,8 +755,8 @@ func defaults() Config {
 		},
 		Store: Store{
 			Retention: 24 * time.Hour,
-			// 120MiB / 616 bytes/event (assumedBytesPerEvent) derives to
-			// ~204,268 events -- close to the old flat 200,000 default,
+			// 120MiB / 624 bytes/event (assumedBytesPerEvent) derives to
+			// ~201,649 events -- close to the old flat 200,000 default,
 			// so a fresh install's memory footprint does not jump on
 			// upgrade even though the unit did.
 			MaxMemory: 120 * 1024 * 1024,
@@ -857,7 +866,10 @@ func defaults() Config {
 			// so this package stays a dependency-free leaf, same
 			// reasoning Flags already gives for duplicating
 			// internal/detect.Config's own defaults.
-			Sources: []string{"spamhaus_drop", "spamhaus_edrop"},
+			// EDROP is deliberately absent: Spamhaus merged it into
+			// DROP on 2024-04-10 and the endpoint now serves no ranges
+			// at all.
+			Sources: []string{"spamhaus_drop"},
 		},
 		NetClass: NetClass{
 			// Mirrors internal/netclass.DefaultSources -- literal here

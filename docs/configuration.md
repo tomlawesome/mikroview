@@ -74,8 +74,12 @@ roughly how many seconds of history remain. The live view's toolbar shows
 this directly (`n% of buffer used`, or `holding last Xm Ys` once full),
 so you do not need to query the API by hand to find out.
 
-**A typical retained event costs about 616 bytes**, so the default
-`maxMemory: 120MiB` holds roughly 200,000 events. That figure is a budget
+**A typical retained event costs about 624 bytes**, so the default
+`maxMemory: 120MiB` holds roughly 200,000 events. The stored copy of
+the raw log line is capped at 2KiB, which is about five times the
+longest line a real RouterOS device produces — so the figure above is a
+ceiling rather than a typical case that a pathological line can exceed.
+A row whose line was cut says so on hover, and in a CSV export. That figure is a budget
 for the buffer itself, not what mikroview's process occupies on the host
 — expect *resident* memory (what `docker stats` or `top` reports) to run
 about 1.5x higher once the Go runtime and process overhead are counted,
@@ -482,7 +486,6 @@ has no matching entry there, the same precedent `new_device`/
 blocklist:
   sources:
     - spamhaus_drop
-    - spamhaus_edrop
 ```
 
 - **`sources`** — which feeds from the vetted menu to enable. This is
@@ -496,8 +499,8 @@ blocklist:
   local blocklist matching entirely.
 
   The menu today:
-  - **`spamhaus_drop`** / **`spamhaus_edrop`** (on by default) —
-    [Spamhaus's DROP and EDROP lists](https://www.spamhaus.org/drop/):
+  - **`spamhaus_drop`** (on by default) —
+    [Spamhaus's DROP list](https://www.spamhaus.org/drop/):
     small (documented at roughly 1-2k CIDR ranges combined), free, no
     registration, and deliberately conservative — Spamhaus only lists
     netblocks they're confident are entirely malicious-controlled
@@ -524,7 +527,7 @@ own sorted, non-overlapping address ranges — O(log n) per feed, never a
 linear scan, regardless of list size, since this runs on every single
 ingested event. Combined entries across every enabled feed are capped at
 100,000 (`internal/blocklist`'s `maxTotalEntries`) — measured, not
-estimated: today's real combined feed size (Spamhaus DROP+EDROP +
+estimated: today's real combined feed size (Spamhaus DROP +
 Emerging Threats) is ~2.2k entries, and benchmarking this package's
 actual lookup and daily-rebuild paths shows neither is remotely close to
 a real ceiling until well past 100,000 (rebuild takes ~33ms and ~7.5MB
@@ -2206,6 +2209,18 @@ actually generated), specifically so a browser or reverse proxy can
 fetch it to establish trust; its fingerprint is also logged at startup
 if you'd rather verify it out-of-band than trust-on-first-use blindly.
 
+**One thing the click-through does not cover.** Clicking past the
+warning gets you a fully working MikroView, with one exception:
+installing it as an app, and its offline behaviour, both need a service
+worker, and browsers refuse to register one over a certificate outside
+their trust store — click-through or not. So until you import the CA
+above, "Install app" either does not appear or does nothing, and the
+browser console shows `Failed to register a ServiceWorker ... An SSL
+certificate error occurred`. Nothing else is affected, and importing the
+CA (or supplying your own certificate via `tls.certFile`/`tls.keyFile`)
+resolves it. Found by the containerised end-to-end harness (#273), which
+runs against TLS as shipped rather than plain HTTP on loopback.
+
 **Reverse proxy in front, with your own single ingress**: point your
 RP's *upstream/backend* target at `https://mikroview:PORT` instead of
 `http://mikroview:PORT` -- same host, same port, no new port opened
@@ -2373,6 +2388,27 @@ postgres:
 
 or `MIKROVIEW_POSTGRES_DSN_FILE=/etc/mikroview/postgres-dsn`.
 
+**The file has to be readable by the container's user.** MikroView runs
+as uid `65532` (distroless `nonroot`), which is not the user that created
+the file on your host — so a `0600` file, which is the natural mode for
+something holding a password, is unreadable inside the container and
+MikroView refuses to start:
+
+```
+ERROR storage │ postgres: reading DSN file /etc/mikroview/postgres-dsn: permission denied
+```
+
+Keep the tight mode and hand it to that user:
+
+```sh
+chown 65532:65532 postgres-dsn
+chmod 600 postgres-dsn
+```
+
+(Found by the containerised end-to-end harness in #273 — following these
+instructions exactly, with the obvious `chmod 600`, produced a MikroView
+that would not start.)
+
 The database user needs permission to create tables in its own database
 the first time it starts; MikroView creates what it needs and records
 what it has done, so restarts are fine.
@@ -2386,6 +2422,22 @@ setting doesn't do what you asked, you should hear about it.
 Use `verify-full` if you can. `require` encrypts the connection but
 doesn't check *who* answered, so it doesn't stop someone who can
 intercept traffic between MikroView and the database.
+
+### Which schema the tables go in
+
+`public`, unless you say otherwise. To keep MikroView's tables in a
+schema of their own, create it and name it in the connection string:
+
+```
+postgres://mikroview:PASSWORD@db.internal:5432/mikroview?sslmode=verify-full&search_path=mikroview
+```
+
+MikroView always sets this on its connections rather than inheriting
+whatever the role or the database defaults to. That is deliberate:
+MikroView names its tables without a schema prefix, so if the default
+search path were used, anyone able to create a table in a schema listed
+ahead of yours could put their own `store_blob` or `match_log` there,
+and MikroView would read and write theirs while reporting success.
 
 ### Your existing data moves automatically
 

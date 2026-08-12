@@ -55,7 +55,10 @@ type Resolver struct {
 // (imported by main's per-event hot path) doesn't pull in the whole
 // ingest schema, and so tests can fake it without pushing real payloads.
 type RouterHostLookup interface {
-	HostName(ip string) string
+	// HostName takes the device the traffic was observed on, not just
+	// the address, so one router's pushed names can never be applied to
+	// another router's traffic -- see routerstate.Store.HostName.
+	HostName(device, ip string) string
 }
 
 // Rule returns the friendly name for a raw rule label -- an
@@ -74,9 +77,17 @@ func (r Resolver) Rule(label string) string {
 // Host returns the friendly name for a host IP: the router-pushed name
 // first (see RouterHosts -- RouterOS always wins), then an
 // internal/entities record of type "host", then the config map.
-func (r Resolver) Host(ip string) string {
+//
+// device is which router the traffic was observed on, and only the
+// router-pushed lookup uses it: a name pushed by one router must not be
+// applied to another router's traffic (see RouterHostLookup). Entity
+// labels and config aliases are mikroview's own, set by an admin rather
+// than by a router, so they stay deployment-wide as before. An empty
+// device therefore still resolves those two, and only skips the
+// router-pushed layer.
+func (r Resolver) Host(device, ip string) string {
 	if r.RouterHosts != nil {
-		if v := r.RouterHosts.HostName(ip); v != "" {
+		if v := r.RouterHosts.HostName(device, ip); v != "" {
 			return v
 		}
 	}

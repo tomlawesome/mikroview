@@ -322,7 +322,7 @@ func (s *Server) handleWatchlistMatchesQuery(w http.ResponseWriter, r *http.Requ
 	}
 
 	results := []matchlog.Record{}
-	err := s.MatchLog.Query(q, func(rec matchlog.Record) bool {
+	err := s.MatchLog.Query(r.Context(), q, func(rec matchlog.Record) bool {
 		results = append(results, rec)
 		return true
 	})

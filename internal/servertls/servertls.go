@@ -318,11 +318,11 @@ func saveStored(storePath string, ca *caPair, cert tls.Certificate, sortedHosts 
 		return fmt.Errorf("marshaling CA key: %w", err)
 	}
 	caKeyPEM := pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: caKeyDER})
-	if err := os.WriteFile(caCertPath, ca.certPEM, filePermission); err != nil {
-		return fmt.Errorf("writing %s: %w", caCertPath, err)
+	if err := writeSecret(caCertPath, ca.certPEM); err != nil {
+		return err
 	}
-	if err := os.WriteFile(caKeyPath, caKeyPEM, filePermission); err != nil {
-		return fmt.Errorf("writing %s: %w", caKeyPath, err)
+	if err := writeSecret(caKeyPath, caKeyPEM); err != nil {
+		return err
 	}
 
 	leafKeyDER, err := x509.MarshalECPrivateKey(cert.PrivateKey.(*ecdsa.PrivateKey))
@@ -331,19 +331,40 @@ func saveStored(storePath string, ca *caPair, cert tls.Certificate, sortedHosts 
 	}
 	leafCertPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: cert.Certificate[0]})
 	leafKeyPEM := pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: leafKeyDER})
-	if err := os.WriteFile(leafCertPath, leafCertPEM, filePermission); err != nil {
-		return fmt.Errorf("writing %s: %w", leafCertPath, err)
+	if err := writeSecret(leafCertPath, leafCertPEM); err != nil {
+		return err
 	}
-	if err := os.WriteFile(leafKeyPath, leafKeyPEM, filePermission); err != nil {
-		return fmt.Errorf("writing %s: %w", leafKeyPath, err)
+	if err := writeSecret(leafKeyPath, leafKeyPEM); err != nil {
+		return err
 	}
 
 	metaData, err := json.Marshal(leafMeta{Hosts: sortedHosts})
 	if err != nil {
 		return fmt.Errorf("marshaling leaf metadata: %w", err)
 	}
-	if err := os.WriteFile(metaPath, metaData, filePermission); err != nil {
-		return fmt.Errorf("writing %s: %w", metaPath, err)
+	if err := writeSecret(metaPath, metaData); err != nil {
+		return err
+	}
+	return nil
+}
+
+// writeSecret writes b to path at filePermission, and enforces that mode
+// on a file that already exists.
+//
+// os.WriteFile's mode argument only applies when it *creates* the file:
+// on a rewrite the existing permissions are kept. So the 0600 intent
+// held on a fresh install and silently did not on any path where the
+// file already existed with wider permissions -- a restore from a
+// backup taken with a different umask, a bind-mounted host directory, a
+// volume copied between machines. These are the CA and leaf private
+// keys; a world-readable one would stay world-readable across every
+// subsequent restart, with nothing saying so. See #285.
+func writeSecret(path string, b []byte) error {
+	if err := os.WriteFile(path, b, filePermission); err != nil {
+		return fmt.Errorf("writing %s: %w", path, err)
+	}
+	if err := os.Chmod(path, filePermission); err != nil {
+		return fmt.Errorf("setting permissions on %s: %w", path, err)
 	}
 	return nil
 }

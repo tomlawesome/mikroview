@@ -44,6 +44,11 @@ export interface FirewallEvent {
   length?: number
   flags?: string
   raw: string
+  // rawTruncated marks `raw` as having been cut to the server's cap
+  // (store.MaxRawBytes). Set only for lines far longer than any real
+  // RouterOS line, so the row can say so rather than presenting a
+  // shortened line as though it were what the router sent.
+  rawTruncated?: boolean
 }
 
 // A FirewallEvent as held in the client-side buffer, stamped with the
@@ -117,6 +122,27 @@ export interface Stats {
   count: number
   windowSeconds: number
   connectedClients: number
+  // Syslog listener saturation -- mirrors internal/syslog.ListenerStats.
+  // Optional so an older server (or a test fixture) that does not send
+  // it simply shows nothing rather than rendering NaN.
+  syslog?: SyslogListenerStats
+}
+
+// Mirrors internal/syslog.ListenerStats. The connection pool is finite,
+// and filling it means a router MikroView is meant to be watching gets
+// turned away with its log lines never arriving -- a silent blackout,
+// which used to be visible only as a repeated line in the container log.
+export interface SyslogListenerStats {
+  inUse: number
+  capacity: number
+  // How many slots only routers listed under `devices:` in config.yaml
+  // may use. 0 when no devices are declared, since holding capacity back
+  // for nobody would only shrink the pool.
+  reservedForConfigured: number
+  rejected: number
+  // Above zero means a *declared* router was turned away, which is the
+  // condition worth showing rather than saturation on its own.
+  rejectedConfigured: number
 }
 
 // Mirrors internal/api/auth.go's sessionResponse.
