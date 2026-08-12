@@ -212,8 +212,22 @@ func TestListOrdersMostRecentlyActiveFirst(t *testing.T) {
 // sustained re-fire burst (the scenario this exists for) must not hit
 // disk once per event.
 func TestPersistLockedRateLimitsWrites(t *testing.T) {
+	// A long window plus a rewound lastPersist, rather than a short
+	// window plus a sleep.
+	//
+	// This test used to set the window to 80ms and assume the work
+	// between the two Adds -- a marshal, a file write and a ReadFile --
+	// finished inside it. On a loaded CI runner it does not, the second
+	// Add writes legitimately, and the test fails claiming the debounce
+	// is broken when it is working exactly as designed. That is what
+	// blocked a preview image publish.
+	//
+	// Ten seconds is long enough that no scheduling jitter crosses it,
+	// and the "past the window" half below rewinds lastPersist instead
+	// of waiting -- so this now asserts the behaviour rather than the
+	// speed of the machine, and runs in microseconds instead of 100ms.
 	orig := persistMinInterval
-	persistMinInterval = 80 * time.Millisecond
+	persistMinInterval = 10 * time.Second
 	defer func() { persistMinInterval = orig }()
 
 	path := filepath.Join(t.TempDir(), "flags.json")
@@ -240,7 +254,10 @@ func TestPersistLockedRateLimitsWrites(t *testing.T) {
 	}
 
 	// Past the window: the next call must flush the latest state.
-	time.Sleep(persistMinInterval + 20*time.Millisecond)
+	// Rewound rather than waited out -- same code path, no wall clock.
+	s.mu.Lock()
+	s.lastPersist = s.lastPersist.Add(-2 * persistMinInterval)
+	s.mu.Unlock()
 	s.Add(TypePortScan, "3.3.3.3", "third, after the window", now)
 	final, err := os.ReadFile(path)
 	if err != nil {
