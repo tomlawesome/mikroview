@@ -281,6 +281,28 @@ Verify a bump the way you would verify any other change — build, tests,
 container smoke test — before committing to it. A bump is a change, not a
 formality.
 
+### Base images stay on tags, not digests
+
+A `FROM` line names a tag (`golang:1.26.5-alpine`,
+`gcr.io/distroless/static-debian12:nonroot`), never a `@sha256:` digest.
+That is a decision, not an omission — a digest is more reproducible and
+immune to a tag being repointed under you, which is a real supply-chain
+property to give up.
+
+What it costs is the reason: a digest freezes the base image, so the
+distroless base stops receiving the security patches that are published
+*by moving the tag*. Nothing here bumps digests automatically, so pinning
+them means a build that quietly gets more vulnerable the longer nobody
+touches it — the same "it simply happened because nothing bumped it"
+failure described above, applied to the one layer with no version number
+to notice.
+
+**Trigger for revisiting:** adopting a bot that opens digest bumps
+(Renovate, or Dependabot's Docker ecosystem). With something bumping
+them, digests cost nothing and should be taken. Until then the tag is
+the safer of two imperfect options, and the images in question are
+official ones from Google and Docker.
+
 ## Removals are wholesale
 
 When a feature, flag, endpoint, or code path is removed, it is removed
