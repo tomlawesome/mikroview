@@ -398,6 +398,16 @@ upgrading.
 
 ### Fixed
 
+- **`search_path` in a Postgres connection string is honoured again**
+  (#273). Pinning the schema so nobody could shadow MikroView's tables
+  (#285) was implemented by forcing it to `public`, which also overrode
+  an explicit `?search_path=...`. An operator keeping MikroView's tables
+  in a schema of their own got `public` regardless, with nothing to say
+  so. It is now pinned to what the connection string asks for, falling
+  back to `public` — the protection is unchanged, since the schema is
+  still what MikroView sets rather than what the role happens to default
+  to. Documented under "Which schema the tables go in".
+
 - **ICMP events are read correctly, and are no longer invisible to the
   watchlist** (#273). RouterOS puts a comma after the connection state on
   a TCP log line but not on an ICMP one, and MikroView split the line on
