@@ -83,6 +83,13 @@ jobs:
       - name: Third-party notices are up to date
         run: node tools/licenses/generate-notices.mjs --check
 
+      # Same reasoning as the notices check above, one class down: this
+      # project's documentation is detailed enough that readers trust
+      # it, so a link that goes nowhere costs more here than it would
+      # elsewhere -- and nothing complains when a heading gets reworded.
+      - name: Documentation links resolve
+        run: node tools/docs/check-anchors.mjs
+
   # Runs on every change, deliberately.
   #
   # This used to be gated on a paths-filter listing the auth-related

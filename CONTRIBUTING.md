@@ -5,19 +5,28 @@
 Requires Go 1.26+ and Node 22+.
 
 ```sh
-make dev-backend    # go run ., syslog on :1514, https on :8080 (TLS on by default -- see docs/configuration.md#tls)
+make dev-backend    # go run ., syslog TLS on :6514, https on :8080 (TLS on by default -- see docs/configuration.md#tls)
 make dev-frontend   # vite dev server on :5173, proxies /api to :8080 over TLS
 make test           # go test ./... + svelte-check
 make build           # full build: frontend -> web/dist -> single Go binary
 make docker          # docker build -t mikroview .
 ```
 
-Feed it fixture syslog lines without a real router, e.g.:
+Feed it fixture syslog lines without a real router. Since #189 there is
+no plaintext listener -- the only one is RouterOS's own
+`remote-protocol=tls` on 6514 -- so this has to speak TLS, which `nc`
+cannot. The harness already has a sender that does:
 
 ```sh
-printf '<134>Jan 15 10:22:31 MikroTik A|lan-wan|forward: in:ether1 out:bridge1, connection-state:new, proto TCP (SYN), 192.168.1.50:51234->1.2.3.4:443, len 60' \
-  | nc -u -w1 127.0.0.1 1514
+eval "$(scripts/live-env.sh up)"     # exports MV_URL, MV_USER, MV_PASS
+scripts/live-env.sh syslog 200       # 200 synthetic firewall events
+scripts/live-env.sh raw '<134>Jan 15 10:22:31 MikroTik A|lan-wan|forward: in:ether1 out:bridge1, connection-state:new, proto TCP (SYN), 192.168.1.50:51234->1.2.3.4:443, len 60'
+scripts/live-env.sh down
 ```
+
+For the real thing rather than fixtures, `make live-routeros-container`
+boots a genuine RouterOS CHR and points it at the shipped container --
+see `.claude/skills/live-check/SKILL.md`.
 
 ## Branching
 

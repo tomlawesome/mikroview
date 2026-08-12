@@ -319,8 +319,10 @@ its own `:foreach`.
 ARP has no name of its own, but pushing it still earns its keep: a
 device's DHCP lease can go stale between the router's own renewal
 cycles, while ARP reflects what's actually answering right now.
-`internal/routerstate` prefers ARP's address over a same-MAC lease's
-when both are pushed, for exactly that reason.
+MikroView prefers ARP's address over a same-MAC lease's when both are
+pushed, for exactly that reason (the choice is made in
+`internal/suggest`'s candidate generation; `internal/routerstate` just
+holds what each router pushed).
 
 **Other tables** follow the identical pattern, swapping the source
 command and the field names for MikroView's schema names -- worth

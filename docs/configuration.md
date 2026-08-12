@@ -82,9 +82,12 @@ ceiling rather than a typical case that a pathological line can exceed.
 A row whose line was cut says so on hover, and in a CSV export. That figure is a budget
 for the buffer itself, not what mikroview's process occupies on the host
 — expect *resident* memory (what `docker stats` or `top` reports) to run
-about 1.5x higher once the Go runtime and process overhead are counted,
+about 1.47x higher once the Go runtime and process overhead are counted,
 so provisioning for the 120MiB default really means having roughly 175MiB
-of RAM to spare. The whole budget is reserved **immediately at startup**
+of RAM to spare. That figure is not a round number for a reason: it is
+the measured ring-to-resident overhead (see #244), and it is the same
+1.47 the CFG-0012 warning uses, so what you read here and what MikroView
+prints at startup agree. The whole budget is reserved **immediately at startup**
 (`store.New` allocates it all up front), not filled up gradually — a
 value too large for the machine fails right away rather than degrading
 over hours, which is why mikroview warns above 1GiB (see
@@ -260,7 +263,7 @@ choice, not a mistake to correct. It exists because the whole budget is
 reserved immediately at startup (see
 [How events are stored](#how-events-are-stored)), so a value that turns
 out to be too large fails right away rather than degrading gradually, and
-the warning states the real memory cost — including the ~1.5x resident
+the warning states the real memory cost — including the 1.47x resident
 overhead on top of the ring itself — so you have it in front of you
 before that happens.
 
@@ -757,10 +760,8 @@ open question about which flag actions belong here:
   do silently. Removing an exclusion
   (`DELETE /api/flags/exclusions/{id}`) is admin-gated and logged too.
 
-Reviewed from **Menu → Audit log** (admin-only, and -- unlike Detectors'
-gate -- **not** shown while auth is disabled, matching Entities' own
-stricter gate: there's no "admin" concept once auth itself has been
-opted out of). Backed by `GET /api/audit`, a windowed query over the
+Reviewed from **Menu → Audit log** (admin-only, matching Entities' own
+gate). Backed by `GET /api/audit`, a windowed query over the
 persisted log (see [API reference](#api-reference)) -- the same
 `since`/`until`/`limit` convention `GET /api/events` already uses, minus
 that endpoint's event-specific filters.
@@ -799,8 +800,7 @@ Two kinds of entry, chosen per entry, not globally:
   means by "did this device misbehave."
 
 Managed from **Menu → Watchlist** (admin-only, matching Entities/Audit's
-gate -- entry management uses `callerIsAdmin`, not
-`callerIsAdminOrOpen`, so it stays hidden while auth is disabled). Add,
+gate). Add,
 edit and remove entries there; for an inverted entry, the same page
 shows what's been promoted, what's waiting for review, and a toggle to
 resume or stop observing. An entry with a scoped source can also show
@@ -1156,7 +1156,7 @@ flags:
 - **Unexpected mail sender (issue #108)** — a LAN source originating an
   outbound connection to an external destination on an SMTP port (25,
   465, or 587) that isn't tagged `trusted-mail-sender` on its host entity
-  (see [Entities](#entities-ui-managed-hostrule-labels-and-tags-optional)
+  (see [Entities](#entities-ui-managed-hostruleport-labels-and-tags-optional)
   above). Deterministic, like new-device and stale-rule detection — no
   threshold or window to tune, it fires the first time a given untagged
   source does this at all. Distinct from **Outbound anomaly** above,
@@ -1858,13 +1858,14 @@ tokens are a long-lived bearer credential for exactly that case,
 admin-created from the "API tokens" panel in the menu's Account section
 (or directly via the API below).
 
-**Scope is deliberately narrow: read-only, four endpoints, nothing
+**Scope is deliberately narrow: read-only, five endpoints, nothing
 else.** A valid token grants `Authorization: Bearer <token>` access to:
 
 - `GET /api/events`
 - `GET /api/flags`
 - `GET /api/stats`
 - `GET /api/devices`
+- `GET /api/watchlist/matches`
 
 and *nothing* else -- no clearing a flag, no changing a detector, no
 managing users or other tokens, regardless of the method or path
@@ -2328,12 +2329,18 @@ Override individual scalar settings without a mounted file:
 
 ## Checking your version
 
-There is no semantic version -- mikroview doesn't cut releases or tag
-versions today, only images built from `preview`/`main` (see
-`.github/workflows/docker.yml`; pushing to `dev` deliberately publishes
-no image at all). The build identifier is the short git commit SHA it
-was built from, and it's checkable three ways, all showing the same
-value:
+What you see depends on which image you are running, because there are
+two kinds (see `.github/workflows/docker.yml`; pushing to `dev`
+deliberately publishes no image at all):
+
+- **A release build** -- `latest`, or an explicit `v0.1.0`-style tag --
+  reports that semantic version, e.g. `v0.1.0`. The version comes from
+  the `VERSION` file in the repository, and merging to `main` with a
+  value that has no tag yet is what cuts the release.
+- **A preview build** -- `preview`, or `preview-<sha>` -- reports the
+  short git commit SHA it was built from.
+
+Either way it is checkable three ways, all showing the same value:
 
 - `docker exec <container> mikroview -version` -- prints the bare SHA
   and nothing else, easy to capture in a script.
@@ -2584,12 +2591,16 @@ exits, rather than starting the server. See
 | `POST /api/auth/register` | create the first (admin) account -- only while zero accounts exist |
 | `POST /api/auth/login` | sign in, sets the session cookie |
 | `POST /api/auth/logout` | sign out, clears the session cookie |
+| `GET /api/auth/users` | admin-only: list accounts |
 | `POST /api/auth/users` | admin-only: create an additional account |
+| `DELETE /api/auth/users/{id}` | admin-only: remove an account |
 | `POST /api/tokens` | admin-only: create a read-only API token (see [API tokens](#api-tokens-read-only)) -- returns the raw value once |
 | `GET /api/tokens` | admin-only: list tokens (name/created/last-used, never the value or hash) |
 | `DELETE /api/tokens/{id}` | admin-only: revoke a token |
 | `GET /api/auth/oidc/login` | start the SSO flow -- a top-level browser redirect to the configured provider, only present when [OIDC](#single-sign-on-oidcsso) is configured |
 | `GET /api/auth/oidc/callback` | the provider's redirect target completing the SSO flow -- see [Single sign-on](#single-sign-on-oidcsso) |
+| `POST /api/auth/oidc/link` | connect the signed-in account to an SSO identity, so the same person can sign in either way -- see [Connecting your account to SSO](#single-sign-on-oidcsso) |
+| `GET /api/config/problems` | admin-only: the same configuration warnings `-validate-config` reports, as the UI shows them -- see [Problem codes](#problem-codes) |
 
 Every route above `/api/auth/session`/`/register`/`/login`/`/logout` and
 `/api/healthz` requires a valid session once an account exists -- see
