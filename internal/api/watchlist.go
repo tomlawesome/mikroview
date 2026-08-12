@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/tomlawesome/mikroview/internal/ingest"
 	"github.com/tomlawesome/mikroview/internal/matchlog"
 	"github.com/tomlawesome/mikroview/internal/watchlist"
 )
@@ -70,7 +71,50 @@ func (s *Server) handleWatchlistEntriesList(w http.ResponseWriter, r *http.Reque
 		http.Error(w, "admin role required", http.StatusForbidden)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"entries": s.Watchlist.List()})
+
+	entries := s.Watchlist.List()
+	writeJSON(w, http.StatusOK, map[string]any{
+		"entries": entries,
+		// Per-entry, keyed by entry ID rather than added to Entry
+		// itself: coverage is derived from what routers have pushed at
+		// this moment, not a property of the entry, and putting it on
+		// the stored struct would mean persisting an answer that goes
+		// stale the moment a rule changes. See watchlist.Coverage.
+		"coverage": s.watchlistCoverage(entries),
+	})
+}
+
+// watchlistCoverage answers, per entry, whether anything can actually
+// feed it (#274 item 1) -- the difference between "no matches because
+// nothing happened" and "no matches because nothing is watching".
+//
+// Reads the pushed filter tables once and reuses them across every
+// entry, rather than per entry: the tables are small but the lock is
+// shared with the ingest path, and this runs on every load of the
+// Watchlist page.
+func (s *Server) watchlistCoverage(entries []watchlist.Entry) map[string]watchlist.CoverageState {
+	out := make(map[string]watchlist.CoverageState, len(entries))
+	if s.RouterState == nil {
+		// Nothing pushed anything, so nothing can be said. Same answer
+		// watchlist.Coverage gives an empty map, spelled out here so a
+		// nil store does not have to be a special case there.
+		for _, e := range entries {
+			out[e.ID] = watchlist.CoverageUnknown
+		}
+		return out
+	}
+
+	rulesByDevice := make(map[string][]ingest.FilterRule)
+	for _, device := range s.RouterState.Devices() {
+		if rules, _, ok := s.RouterState.FilterRules(device); ok {
+			rulesByDevice[device] = rules
+		}
+	}
+
+	for _, e := range entries {
+		out[e.ID] = watchlist.Coverage(e, rulesByDevice)
+	}
+	return out
 }
 
 // handleWatchlistEntriesCreate creates a new entry with a server-generated

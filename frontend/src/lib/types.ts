@@ -586,3 +586,13 @@ export function filtersFromSearchParams(params: URLSearchParams): Filters {
     ruleRegex: params.get('ruleRegex') === 'true',
   }
 }
+
+// Mirrors internal/watchlist.CoverageState (#274 item 1): whether
+// anything a router has pushed could actually feed a watchlist entry.
+//
+// 'unknown' is the default and by far the most common -- the router push
+// is optional, so most deployments have nothing to answer from. The UI
+// says nothing at all in that state; only the two definite negatives are
+// worth an operator's attention, and a false one of those is worse than
+// silence.
+export type WatchlistCoverage = 'unknown' | 'covered' | 'no-logging' | 'out-of-scope'
