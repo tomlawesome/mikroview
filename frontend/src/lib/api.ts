@@ -262,8 +262,15 @@ export async function login(username: string, password: string): Promise<string 
 }
 
 
-export async function logout(): Promise<void> {
-  await postJSON('/api/auth/logout')
+// Returns error text on failure, like every other mutating wrapper
+// here. It used to return void and ignore the status entirely -- the one
+// exception among roughly 25 -- so a failed logout was indistinguishable
+// from a successful one, and authState.logout() went on to clear the
+// session locally while the server still had it.
+export async function logout(): Promise<string | null> {
+  const res = await postJSON('/api/auth/logout')
+  if (res.ok) return null
+  return (await res.text()) || `logout: ${res.status}`
 }
 
 // No role argument: mikroview has one admin, and the server refuses a

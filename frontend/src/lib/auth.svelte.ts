@@ -152,11 +152,17 @@ class AuthState {
     return null;
   }
 
-  async logout() {
-    await logout();
+  // The local session is cleared either way, deliberately: a user who
+  // pressed Sign out must not be left looking signed in because the
+  // request failed. The error is returned so the caller can say the
+  // server-side session may still be live, which is the part that
+  // actually matters to them.
+  async logout(): Promise<string | null> {
+    const err = await logout();
     this.state = "unauthenticated";
     this.username = "";
     this.role = "";
+    return err;
   }
 
   // Called by any fetch wrapper that gets a 401 mid-session (an expired

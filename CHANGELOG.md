@@ -398,6 +398,37 @@ upgrading.
 
 ### Fixed
 
+- **Failed actions now say so instead of looking like nothing happened**
+  (#267). Removing a watchlist entry, turning observe mode on or off,
+  promoting a destination, removing a named entity, clearing a flag,
+  clearing all flags, permanently clearing one, and removing an
+  exclusion all reported nothing when they failed. The row reappeared or
+  simply stayed, which reads as the button not having worked rather than
+  as an error — and in several cases it was an unhandled promise
+  rejection that only the browser console would ever have shown you.
+  Each of these now shows the reason, the same way the forms next to
+  them already did.
+
+- **Signing out no longer looks successful when it failed** (#267).
+  `logout` was the one action that ignored the server's response
+  entirely. You are still signed out locally either way — being left
+  looking signed in would be worse — but if the server did not confirm
+  it, MikroView now says so, since the session may still be live.
+
+- **The live view no longer briefly claims to be disconnected after a
+  fast sign-out and back in** (#267). Closing a WebSocket reports the
+  closure asynchronously, so the old connection's "closed" arrived after
+  the new one was already up, overwriting the indicator and scheduling a
+  reconnect that was then abandoned. Handlers now ignore a connection
+  that has been superseded.
+
+- **A regex rule filter no longer switches itself off under load**
+  (#267). Two overlapping match requests shared one background worker's
+  reply handler, so the earlier one could never be answered and gave up
+  reporting "too slow" — which drops the filter and shows every event,
+  precisely when a busy feed makes filtering matter most. Replies are
+  now matched to their own request.
+
 - **`search_path` in a Postgres connection string is honoured again**
   (#273). Pinning the schema so nobody could shadow MikroView's tables
   (#285) was implemented by forcing it to `public`, which also overrode
