@@ -126,7 +126,7 @@ func (s *Server) sessionUser(r *http.Request, now time.Time) (*auth.User, bool) 
 
 // readOnlyRoutes is the only handler set a bearer API token (issue
 // #101) can ever reach -- deliberately its own separate *http.ServeMux
-// with just these four GET routes registered, rather than a per-request
+// with just these five GET routes registered, rather than a per-request
 // allowlist check layered in front of the real mux. That's what makes
 // "a token can never reach a write/clear/config endpoint" structural:
 // there is no code path from a bearer-authenticated request to
