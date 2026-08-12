@@ -95,6 +95,16 @@
       <div class="footnote">
         Numbered as RouterOS numbers them — “go look at rule {st.rules[0].ordinal} in RouterOS”.
       </div>
+    {:else if st.natRules.length === 0}
+      <!-- The rule mode has had an empty state since it was written;
+           this one did not (#267, Uncertain), so a router that pushed a
+           NAT table with no rules in it -- entirely ordinary, plenty of
+           routers do no NAT -- got an empty box and a footnote
+           explaining how to read rules that are not there. -->
+      <div class="status">
+        “{st.device}” has pushed its NAT table and it is empty — no NAT rules are configured on
+        that router.
+      </div>
     {:else}
       <div class="entries nat">
         {#each st.natRules as r (r.ordinal)}
