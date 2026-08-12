@@ -518,3 +518,191 @@ func TestOIDCLinkTargetsTheSessionAccountNotTheRequestBody(t *testing.T) {
 		t.Error("flow is not marked as a link")
 	}
 }
+
+// doOIDCLinkFlow drives an authenticated account through the *link*
+// half of the callback -- POST /api/auth/oidc/link to start it, then the
+// provider redirect, then the callback -- and returns the callback's
+// response without following its redirect.
+//
+// The existing TestOIDCLinkTargetsTheSessionAccountNotTheRequestBody
+// stops after the start call, which is why completeOIDCLink itself was
+// at 0% (#267 finding 4): its re-check of the session against
+// fs.LinkUserID, the ErrOIDCIdentityTaken branch, the audit record and
+// the post-link session rotation were all unexercised, and a regression
+// in any of them would have shipped quietly.
+func doOIDCLinkFlow(t *testing.T, ts *httptest.Server, client *http.Client) *http.Response {
+	t.Helper()
+	// The start call sets the flow cookie itself and hands back the
+	// authorization URL. Calling /api/auth/oidc/login afterwards would
+	// replace that cookie with a plain login flow carrying no
+	// LinkUserID, and the callback would then do an ordinary login --
+	// which is exactly what the first version of this helper did, and
+	// why it never reached completeOIDCLink at all.
+	start := postJSON(t, client, ts.URL+"/api/auth/oidc/link", map[string]any{})
+	if start.StatusCode != http.StatusOK {
+		start.Body.Close()
+		t.Fatalf("starting the link flow returned %d, want 200", start.StatusCode)
+	}
+	var body struct {
+		URL string `json:"url"`
+	}
+	if err := json.NewDecoder(start.Body).Decode(&body); err != nil {
+		t.Fatalf("decoding the link start response: %v", err)
+	}
+	start.Body.Close()
+
+	authURL, err := url.Parse(body.URL)
+	if err != nil {
+		t.Fatalf("parsing the authorization URL: %v", err)
+	}
+	idTokenNonce = authURL.Query().Get("nonce") // see fakeOIDCProvider.signIDToken
+
+	prev := client.CheckRedirect
+	client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	defer func() { client.CheckRedirect = prev }()
+
+	resp, err := client.Get(ts.URL + "/api/auth/oidc/callback?code=test-code&state=" + authURL.Query().Get("state"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return resp
+}
+
+func TestOIDCLinkCompletesAndRotatesTheSession(t *testing.T) {
+	fp := newFakeOIDCProvider(t)
+	s := newOIDCTestServer(t, fp)
+	ts := httptest.NewServer(s.Routes())
+	defer ts.Close()
+
+	client := &http.Client{Jar: mustCookieJar(t)}
+	postJSON(t, client, ts.URL+"/api/auth/register", credentialsRequest{Username: "alice", Password: "password123"}).Body.Close()
+	alice, _ := s.Auth.ByUsername("alice")
+
+	var before string
+	for _, c := range client.Jar.Cookies(mustParseURL(t, ts.URL)) {
+		if c.Name == sessionCookieName {
+			before = c.Value
+		}
+	}
+	if before == "" {
+		t.Fatal("no session cookie after register -- this test is not set up as it thinks")
+	}
+
+	resp := doOIDCLinkFlow(t, ts, client)
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusFound || resp.Header.Get("Location") != "/?ssoLinked=1" {
+		t.Fatalf("link callback = %d %q, want 302 to /?ssoLinked=1", resp.StatusCode, resp.Header.Get("Location"))
+	}
+
+	// The identity is attached to the account that was signed in.
+	linked, ok := s.Auth.ByOIDCIdentity(fp.server.URL, "test-subject-1")
+	if !ok || linked.ID != alice.ID {
+		t.Fatalf("identity linked to %+v, want alice (%s)", linked, alice.ID)
+	}
+
+	// LinkOIDCIdentity moves PasswordChangedAt, which kills every
+	// session issued before it -- so a new one has to be issued here or
+	// the person is signed out by their own link action.
+	var after string
+	for _, c := range resp.Cookies() {
+		if c.Name == sessionCookieName {
+			after = c.Value
+		}
+	}
+	if after == "" {
+		t.Fatal("no fresh session cookie after linking -- the caller would be signed out by linking their own account")
+	}
+	if after == before {
+		t.Error("the session was not rotated after linking, so a session issued before the credential change is still live")
+	}
+}
+
+func TestOIDCLinkRefusesWhenTheSessionChangedMidFlow(t *testing.T) {
+	fp := newFakeOIDCProvider(t)
+	s := newOIDCTestServer(t, fp)
+	ts := httptest.NewServer(s.Routes())
+	defer ts.Close()
+
+	client := &http.Client{Jar: mustCookieJar(t)}
+	postJSON(t, client, ts.URL+"/api/auth/register", credentialsRequest{Username: "alice", Password: "password123"}).Body.Close()
+	postJSON(t, client, ts.URL+"/api/auth/users", createUserRequest{Username: "bob", Password: "password456", Role: "user"}).Body.Close()
+
+	// Start the link as alice, then become bob on the same browser
+	// before the callback lands -- the "signed out and back in as
+	// somebody else mid-flow" case completeOIDCLink's own comment names.
+	start := postJSON(t, client, ts.URL+"/api/auth/oidc/link", map[string]any{})
+	var body struct {
+		URL string `json:"url"`
+	}
+	if err := json.NewDecoder(start.Body).Decode(&body); err != nil {
+		t.Fatalf("decoding the link start response: %v", err)
+	}
+	start.Body.Close()
+	authURL, err := url.Parse(body.URL)
+	if err != nil {
+		t.Fatalf("parsing the authorization URL: %v", err)
+	}
+	idTokenNonce = authURL.Query().Get("nonce")
+
+	client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	postJSON(t, client, ts.URL+"/api/auth/logout", map[string]any{}).Body.Close()
+	postJSON(t, client, ts.URL+"/api/auth/login", credentialsRequest{Username: "bob", Password: "password456"}).Body.Close()
+
+	resp, err := client.Get(ts.URL + "/api/auth/oidc/callback?code=test-code&state=" + authURL.Query().Get("state"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	if got := resp.Header.Get("Location"); got != "/?ssoError=link_session_changed" {
+		t.Errorf("Location = %q, want /?ssoError=link_session_changed", got)
+	}
+	// Neither account got the identity.
+	if _, ok := s.Auth.ByOIDCIdentity(fp.server.URL, "test-subject-1"); ok {
+		t.Error("the identity was linked anyway, to whichever account happened to be signed in at the end")
+	}
+}
+
+func TestOIDCLinkRefusesAnIdentityAlreadyLinkedElsewhere(t *testing.T) {
+	fp := newFakeOIDCProvider(t)
+	s := newOIDCTestServer(t, fp)
+	ts := httptest.NewServer(s.Routes())
+	defer ts.Close()
+
+	admin := &http.Client{Jar: mustCookieJar(t)}
+	postJSON(t, admin, ts.URL+"/api/auth/register", credentialsRequest{Username: "alice", Password: "password123"}).Body.Close()
+	postJSON(t, admin, ts.URL+"/api/auth/users", createUserRequest{Username: "bob", Password: "password456", Role: "user"}).Body.Close()
+
+	// alice links the identity first.
+	linkResp := doOIDCLinkFlow(t, ts, admin)
+	linkResp.Body.Close()
+	if _, ok := s.Auth.ByOIDCIdentity(fp.server.URL, "test-subject-1"); !ok {
+		t.Fatal("setup: alice's link did not take, so the conflict below proves nothing")
+	}
+
+	// bob tries to link the same provider identity.
+	bob := &http.Client{Jar: mustCookieJar(t)}
+	postJSON(t, bob, ts.URL+"/api/auth/login", credentialsRequest{Username: "bob", Password: "password456"}).Body.Close()
+	resp := doOIDCLinkFlow(t, ts, bob)
+	defer resp.Body.Close()
+
+	if got := resp.Header.Get("Location"); got != "/?ssoError=link_identity_taken" {
+		t.Errorf("Location = %q, want /?ssoError=link_identity_taken", got)
+	}
+	// It still belongs to alice.
+	alice, _ := s.Auth.ByUsername("alice")
+	owner, _ := s.Auth.ByOIDCIdentity(fp.server.URL, "test-subject-1")
+	if owner.ID != alice.ID {
+		t.Errorf("identity now owned by %s, want alice (%s) -- a second account took over an existing link", owner.ID, alice.ID)
+	}
+}
+
+func mustParseURL(t *testing.T, raw string) *url.URL {
+	t.Helper()
+	u, err := url.Parse(raw)
+	if err != nil {
+		t.Fatalf("parsing %q: %v", raw, err)
+	}
+	return u
+}
