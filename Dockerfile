@@ -29,9 +29,11 @@ RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w -X main.version=
 RUN mkdir -p /var/lib/mikroview
 
 # --- runtime ------------------------------------------------------------
-# distroless nonroot: uid 65532 can't bind ports <1024, hence the app's
-# internal syslog port is 1514, not 514 -- docker-compose.yml maps the
-# conventional host port 514 to it.
+# distroless nonroot: uid 65532 can't bind ports <1024, which is why the
+# app's own HTTP ports are 8080/8081 and docker-compose.yml maps the
+# conventional 443/80 to them. Syslog needs no such remap: mikroview's
+# only syslog listener is RouterOS remote-protocol=tls on 6514, which is
+# already unprivileged.
 FROM gcr.io/distroless/static-debian12:nonroot
 COPY --from=backend /out/mikroview /mikroview
 COPY --from=backend --chown=65532:65532 /var/lib/mikroview /var/lib/mikroview
@@ -44,7 +46,7 @@ USER nonroot:nonroot
 # 6514/tcp is RouterOS remote-protocol=tls (RFC 5425's syslog-over-TLS
 # port, already >1024 so no remap is needed); only started while
 # tls.enabled is true.
-EXPOSE 1514/udp 1514/tcp 6514/tcp 8080/tcp 8081/tcp
+EXPOSE 6514/tcp 8080/tcp 8081/tcp
 # No shell/curl/wget in this image, so the binary checks itself -- see
 # runHealthcheck in main.go.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
