@@ -37,7 +37,15 @@ RUN mkdir -p /var/lib/mikroview
 FROM gcr.io/distroless/static-debian12:nonroot
 COPY --from=backend /out/mikroview /mikroview
 COPY --from=backend --chown=65532:65532 /var/lib/mikroview /var/lib/mikroview
-USER nonroot:nonroot
+# Numeric, not the "nonroot" name. Same user either way -- distroless
+# resolves nonroot to 65532 -- but the number is verifiable without
+# reading the image's own /etc/passwd, which is what an orchestrator
+# checking runAsNonRoot, or an operator reading `docker inspect`, has to
+# do. It also matches the --chown just above and the uid
+# docs/configuration.md tells operators to chown their DSN file to, so
+# there is one number in play rather than a name and a number that a
+# reader has to know are the same thing. See #285's supply-chain notes.
+USER 65532:65532
 # 8080/tcp serves HTTPS by default (TLS is on unless tls.enabled: false
 # -- see docs/configuration.md's "TLS" section). 8081/tcp is a
 # redirect-only listener that bounces plain HTTP to HTTPS -- see
