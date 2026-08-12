@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/tomlawesome/mikroview/internal/flags"
 )
@@ -104,7 +105,29 @@ func (n *PushoverNotifier) message(batch []flags.Flag) string {
 
 	msg := b.String()
 	if len(msg) > pushoverMaxMessageLen {
-		msg = msg[:pushoverMaxMessageLen]
+		msg = truncateRunes(msg, pushoverMaxMessageLen)
 	}
 	return msg
+}
+
+// truncateRunes cuts s to at most n bytes without splitting a rune.
+//
+// A plain s[:n] can land mid-sequence and produce invalid UTF-8, which
+// is reachable here: the message is built from a flag's Target and
+// Detail, both of which come from a syslog line whoever sent it wrote,
+// and a hostname or rule label with non-ASCII text can put a multi-byte
+// rune across the boundary of a long batch. What Pushover does with
+// invalid UTF-8 has not been established, so this avoids sending it
+// rather than relying on the answer.
+func truncateRunes(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	// Walk back to a boundary. utf8.RuneStart is the cheap way to ask
+	// "is this byte the first of a sequence"; at most three steps, since
+	// a UTF-8 sequence is at most four bytes.
+	for n > 0 && !utf8.RuneStart(s[n]) {
+		n--
+	}
+	return s[:n]
 }
