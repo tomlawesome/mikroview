@@ -398,6 +398,28 @@ upgrading.
 
 ### Fixed
 
+- **Two named entities can no longer overwrite each other** (#267).
+  Entities were stored under `type + ":" + key`, and both parts can
+  contain colons — an IPv6 address is a perfectly ordinary host key — so
+  `("host", "2001:db8::1")` and `("host:2001", "db8::1")` landed on the
+  same key and one silently replaced the other. They are now kept apart.
+  The entity type also gets the same check for control characters that
+  the key, label and tags already had.
+
+- **MikroView regenerates its certificate if the authority behind it is
+  lost** (#267). If `ca.crt` or `ca.key` became unreadable while the
+  certificate files survived, MikroView created a fresh authority and
+  carried on serving the old certificate — a pair that validates against
+  nothing, so every browser and router that had trusted the original
+  failed with a certificate error and no other clue. It now checks that
+  the stored certificate was signed by the authority in use, and issues
+  a new one if not.
+
+- **A Pushover message is no longer cut mid-character** (#267). Long
+  batches were trimmed by byte count, which can split a multi-byte
+  character and leave invalid text. Trimming now stops at a character
+  boundary.
+
 - **Failed actions now say so instead of looking like nothing happened**
   (#267). Removing a watchlist entry, turning observe mode on or off,
   promoting a destination, removing a named entity, clearing a flag,
