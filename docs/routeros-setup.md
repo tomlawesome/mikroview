@@ -201,9 +201,11 @@ before step 1, go do that CA import now, then come back here.
 
 ### 4b. Mint an ingest token
 
-In MikroView, sign in as an admin, open **Account → API tokens**, and
-create a token with kind **Ingest**, naming the device — this is what
-scopes it. Or via the API:
+In MikroView, sign in as an admin, open the menu → **API tokens**, set
+the kind dropdown to **Ingest**, and pick the device the token speaks
+for — this is what scopes it, and the list only offers routers already
+declared under `devices:` in `config.yaml`, so declare yours first
+(see [configuration.md](configuration.md)). Or via the API:
 
 ```
 curl -k -b <your session cookie> -X POST https://<mikroview-host>/api/tokens \

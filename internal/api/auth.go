@@ -128,7 +128,10 @@ func (s *Server) sessionUser(r *http.Request, now time.Time) (*auth.User, bool) 
 // readOnlyRoutes is the only handler set a bearer API token (issue
 // #101) can ever reach -- deliberately its own separate *http.ServeMux
 // with just these five GET routes registered, rather than a per-request
-// allowlist check layered in front of the real mux. That's what makes
+// allowlist check layered in front of the real mux. When this list
+// changes, update the route list in TokensOverlay.svelte's hint text
+// too -- it went stale once already (#326: four routes listed, five
+// served). That's what makes
 // "a token can never reach a write/clear/config endpoint" structural:
 // there is no code path from a bearer-authenticated request to
 // handleFlagsClear, handleDetectorSettingsUpdate, handleAuthCreateUser,
