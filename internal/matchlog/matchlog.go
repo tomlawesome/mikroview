@@ -21,6 +21,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/tomlawesome/mikroview/internal/store"
@@ -51,9 +52,34 @@ func (id Identity) Empty() bool { return id.MAC == "" && id.IP == "" }
 // callers check Empty() first (Append/Query both refuse an empty one via
 // ErrEmptyIdentity), so this never has to decide what an empty identity
 // should match.
+//
+// The MAC is lowercased before comparison because the two sources a MAC
+// reaches mikroview from disagree on case, and comparing them byte for
+// byte silently loses matches. A real RouterOS 7.23.3 emits it
+// uppercase, in both the syslog line and the pushed ARP table:
+//
+//	firewall,info A|live-in| input: ... src-mac 52:55:0A:00:02:02, ...
+//	{"address":"10.0.2.2","mac-address":"52:55:0A:00:02:02", ...}
+//
+// while the conventional written form -- what an operator types into the
+// watchlist entry's own free-text MAC field, and what every example in
+// this repository and its docs uses -- is lowercase. Byte-exact, an
+// entry typed as 52:55:0a:00:02:02 never fires against that router's
+// traffic, and a match query typed the same way returns nothing even
+// when matches exist. Both failures are silent: no error, no empty-state
+// hint, just an entry that looks configured and does nothing.
+//
+// Reproduced end to end against a booted CHR (#273): the same entry
+// created twice, once each case, only the uppercase one recorded a
+// match. internal/device's MAC registry already lowercases its key for
+// exactly this reason (normalizeMAC there) -- this is that same rule
+// reaching the other store that keys on a MAC, not a new idea.
+//
+// The key is normalised, never the stored Identity: a Record keeps the
+// router's own casing, since it is verbatim evidence.
 func (id Identity) identityKey() string {
 	if id.MAC != "" {
-		return "mac:" + id.MAC
+		return "mac:" + strings.ToLower(id.MAC)
 	}
 	return "ip:" + id.IP
 }

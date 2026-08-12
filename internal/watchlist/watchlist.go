@@ -373,8 +373,13 @@ func isTrackableConnState(e store.Event) bool {
 
 // eventIdentity resolves an event's source identity the same
 // MAC-preferred, IP-fallback way matchlog.Identity.MatchesSource
-// compares against: SrcMAC when the parser found one (only the forward
-// chain reliably carries it), SrcIP otherwise.
+// compares against: SrcMAC when the parser found one, SrcIP otherwise.
+//
+// Which chains carry src-mac is a property of the firmware, not
+// something to rely on: on a real RouterOS 7.23.3 both forward and input
+// carry it (#273), while output -- traffic the router originates, so
+// there is no incoming frame to read a source MAC from -- does not. The
+// IP fallback is what makes that not matter here.
 func eventIdentity(e store.Event) matchlog.Identity {
 	return matchlog.Identity{MAC: e.SrcMAC, IP: e.SrcIP}
 }
