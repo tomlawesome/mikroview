@@ -71,8 +71,23 @@ var ErrInvalidEntity = errors.New("entities: type and key are both required")
 // containing control or format characters, or one that is too long.
 var ErrInvalidEntityText = errors.New("entities: key, label and tags must not contain control characters, and must be 256 characters or fewer")
 
+// id is the storage key for an entity.
+//
+// Joined on NUL rather than a colon. Type is free text by design (see
+// this package's doc comment) and Key legitimately contains colons --
+// IPv6 addresses are used as TypeHost keys in this package's own tests
+// -- so a colon delimiter is ambiguous: ("host", "2001:db8::1") and
+// ("host:2001", "db8::1") produced the same key, and Upsert writes that
+// key directly, so one entity silently replaced the other. That
+// contradicts this package's own stated rule of at most one entity per
+// (Type, Key) pair.
+//
+// NUL cannot appear in either component: validateEntityText rejects
+// control characters, and Upsert now applies it to Type as well as to
+// Key. internal/suggest solves the identical problem the identical way
+// (deviceCandidateID/portCandidateID), for the identical reason.
 func id(entityType, key string) string {
-	return entityType + ":" + key
+	return entityType + "\x00" + key
 }
 
 // storeFile is the on-disk shape: an object wrapping the entity list
@@ -166,6 +181,14 @@ func (s *Store) Upsert(e Entity) (Entity, error) {
 	// resolver, in exported CSV columns, so both are held to the same
 	// no-control-characters rule as a username. Setting an entity is
 	// admin-only, which lowers the severity but not the reasoning.
+	// Type gets the same check as the rest. It was the one field of the
+	// four that skipped it, despite being free text off the HTTP body
+	// (internal/api/entities.go) and flowing into the same audit-trail
+	// sink -- and id() above now depends on it being control-character
+	// free to stay unambiguous.
+	if err := validateEntityText(e.Type); err != nil {
+		return Entity{}, err
+	}
 	if err := validateEntityText(e.Key); err != nil {
 		return Entity{}, err
 	}
