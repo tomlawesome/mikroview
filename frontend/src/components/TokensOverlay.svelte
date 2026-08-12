@@ -1,13 +1,24 @@
 <script lang="ts">
   // SPDX-License-Identifier: AGPL-3.0-only
-  // Admin-only: create/name/revoke read-only API bearer tokens (issue
-  // #101) -- for a companion service (e.g. Birdcage) to pull event/flag
-  // data with no browser session. Mirrors UsersOverlay's modal
-  // pattern/markup.
+  // Admin-only: create/name/revoke API bearer tokens. Read-only ones
+  // (issue #101) let a companion service (e.g. Birdcage) pull
+  // event/flag data with no browser session; ingest ones (#186/#326)
+  // let one router push its state, scoped to that device. Mirrors
+  // UsersOverlay's modal pattern/markup.
   import { authState } from '../lib/auth.svelte'
   import { tokensState } from '../lib/tokens.svelte'
+  import { fetchDevices } from '../lib/api'
+  import type { Device } from '../lib/types'
 
   let name = $state('')
+  // "api" (read-only) is the default for the same reason it is the
+  // server's: the more privileged kind has to be asked for by name.
+  let kind = $state<'api' | 'ingest'>('api')
+  // The config.yaml device id an ingest token speaks for -- a
+  // pick-list of configured devices, because a typo here silently
+  // un-stitches every push from its events (#326).
+  let device = $state('')
+  let configuredDevices = $state<Device[]>([])
   let error = $state<string | null>(null)
   let submitting = $state(false)
   let copied = $state(false)
@@ -16,12 +27,23 @@
     if (authState.showTokens) {
       error = null
       tokensState.refresh()
+      fetchDevices()
+        .then((all) => {
+          configuredDevices = all.filter((d) => d.configured)
+        })
+        .catch(() => {
+          // The dialog still works without the pick-list; ingest
+          // creation just has nothing to offer until devices load.
+          configuredDevices = []
+        })
     }
   })
 
   function close() {
     authState.showTokens = false
     name = ''
+    kind = 'api'
+    device = ''
     error = null
     copied = false
     tokensState.clearJustCreated()
@@ -39,8 +61,12 @@
     e.preventDefault()
     error = null
     copied = false
+    if (kind === 'ingest' && !device) {
+      error = 'An ingest token needs a device -- add the router under devices: in config.yaml first.'
+      return
+    }
     submitting = true
-    const result = await tokensState.create(name)
+    const result = await tokensState.create(name, kind, kind === 'ingest' ? device : undefined)
     submitting = false
     if (result) {
       error = result
@@ -86,9 +112,11 @@
 
       <div class="body">
         <p class="hint">
-          Read-only bearer tokens for scripted/service access to <code>/api/events</code>,
-          <code>/api/flags</code>, <code>/api/stats</code>, and <code>/api/devices</code> -- nothing else. The
-          value is shown once, at creation.
+          <strong>Read-only</strong> tokens give scripted/service access to <code>/api/events</code>,
+          <code>/api/flags</code>, <code>/api/stats</code>, <code>/api/devices</code>, and
+          <code>/api/watchlist/matches</code> -- nothing else. <strong>Ingest</strong> tokens let one
+          router push its state to <code>/api/ingest/routeros</code> -- nothing else -- and are scoped
+          to that device. The value is shown once, at creation.
         </p>
 
         {#if tokensState.justCreated}
@@ -110,8 +138,29 @@
         {/if}
 
         <form class="create-form" onsubmit={handleCreate}>
-          <input type="text" placeholder="Token name (e.g. birdcage)" bind:value={name} required />
-          <button type="submit" class="save" disabled={submitting}>{submitting ? 'Creating…' : 'Create'}</button>
+          <div class="create-row">
+            <input type="text" placeholder="Token name (e.g. birdcage)" bind:value={name} required />
+            <select class="kind-select" bind:value={kind} aria-label="Token kind">
+              <option value="api">Read-only</option>
+              <option value="ingest">Ingest</option>
+            </select>
+            <button type="submit" class="save" disabled={submitting}>{submitting ? 'Creating…' : 'Create'}</button>
+          </div>
+          {#if kind === 'ingest'}
+            {#if configuredDevices.length > 0}
+              <select class="device-select" bind:value={device} required aria-label="Device the token speaks for">
+                <option value="" disabled>Device this token speaks for…</option>
+                {#each configuredDevices as d (d.id)}
+                  <option value={d.id}>{d.name ? `${d.name} (${d.id})` : d.id}</option>
+                {/each}
+              </select>
+            {:else}
+              <p class="device-note">
+                No configured devices to scope this token to -- add the router under
+                <code>devices:</code> in <code>config.yaml</code> first (see docs/routeros-setup.md).
+              </p>
+            {/if}
+          {/if}
         </form>
 
         {#if error}
@@ -125,7 +174,12 @@
           {#each tokensState.list as tok (tok.id)}
             <div class="row">
               <div class="row-main">
-                <span class="row-name">{tok.name}</span>
+                <span class="row-name">
+                  {tok.name}
+                  <span class="kind-badge" class:ingest={tok.kind === 'ingest'}>
+                    {tok.kind === 'ingest' ? `ingest: ${tok.device}` : 'read-only'}
+                  </span>
+                </span>
                 <span class="row-meta">
                   created {formatDateTime(tok.createdAt)} · last used {formatDateTime(tok.lastUsedAt)}
                 </span>
@@ -273,7 +327,63 @@
 
   .create-form {
     display: flex;
+    flex-direction: column;
     gap: 8px;
+  }
+
+  .create-row {
+    display: flex;
+    gap: 8px;
+  }
+
+  .kind-select,
+  .device-select {
+    background: var(--bg-elevated);
+    border: 1px solid var(--border);
+    color: var(--fg);
+    border-radius: 5px;
+    padding: 8px 10px;
+    font-size: 13px;
+  }
+
+  .kind-select {
+    flex: none;
+  }
+
+  .device-select {
+    width: 100%;
+  }
+
+  .device-note {
+    margin: 0;
+    font-size: 12px;
+    color: var(--fg-muted);
+    line-height: 1.5;
+  }
+
+  .device-note code {
+    font-size: 11px;
+    background: var(--bg-elevated);
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    padding: 1px 4px;
+  }
+
+  .kind-badge {
+    display: inline-block;
+    margin-left: 6px;
+    padding: 1px 6px;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    font-size: 10px;
+    font-weight: 400;
+    color: var(--fg-muted);
+    vertical-align: middle;
+  }
+
+  .kind-badge.ingest {
+    border-color: var(--accent);
+    color: var(--accent);
   }
 
   .create-form input {
