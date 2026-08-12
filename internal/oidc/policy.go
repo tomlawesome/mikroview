@@ -222,9 +222,22 @@ func AllowIssuer(issuer string) error {
 // does scope logins to one organisation) and the shared endpoints, which
 // don't.
 func IsMultiTenantIssuer(issuer string) bool {
-	u, err := url.Parse(strings.TrimSpace(issuer))
+	issuer = strings.TrimSpace(issuer)
+	u, err := url.Parse(issuer)
 	if err != nil {
 		return false
+	}
+	// A scheme-less string parses with an empty Hostname and the whole
+	// value in Path, so "login.microsoftonline.com/common/v2.0" matched
+	// nothing and passed a check meant to refuse it (#267, Uncertain).
+	// Provider discovery would fail on it later regardless, but a
+	// security check that answers "no" because it could not read its
+	// input is the wrong shape -- it should read the input.
+	if u.Hostname() == "" {
+		u, err = url.Parse("https://" + issuer)
+		if err != nil {
+			return false
+		}
 	}
 	prefixes, known := multiTenantIssuers[strings.ToLower(u.Hostname())]
 	if !known {
