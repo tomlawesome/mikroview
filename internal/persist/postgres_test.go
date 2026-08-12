@@ -10,6 +10,8 @@ import (
 	"strings"
 	"sync"
 	"testing"
+
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 // These run against a real Postgres, not a mock. The properties worth
@@ -324,5 +326,60 @@ func TestLoadMigrationsOrdersNumericallyAndRejectsDuplicates(t *testing.T) {
 		if ms[i].version <= ms[i-1].version {
 			t.Errorf("migrations out of order: %s before %s", ms[i-1].name, ms[i].name)
 		}
+	}
+}
+
+// TestPinSearchPath guards the schema pinning without needing a
+// database: pgxpool.ParseConfig only parses, so this runs on every
+// `go test ./...` rather than only in the Postgres job.
+//
+// That distinction is the point. The forced-to-public version of
+// pinSearchPath broke every Postgres test's per-schema isolation and
+// silently ignored an operator's own `?search_path=`, and neither showed
+// up for 41 commits, because the only tests that could see it are
+// skipped on dev.
+func TestPinSearchPath(t *testing.T) {
+	tests := []struct {
+		name string
+		dsn  string
+		want string
+	}{
+		{
+			// Nothing asked for: pinned to public rather than left to
+			// the role's or database's default, which is the shadowing
+			// #285 was about.
+			name: "no search_path in the DSN defaults to public",
+			dsn:  "postgres://u:p@h:5432/db?sslmode=require",
+			want: "public",
+		},
+		{
+			name: "an explicit search_path is honoured",
+			dsn:  "postgres://u:p@h:5432/db?sslmode=require&search_path=mikroview",
+			want: "mikroview",
+		},
+		{
+			// What the test helpers depend on for isolation.
+			name: "a per-test schema is honoured",
+			dsn:  "postgres://u:p@h:5432/db?sslmode=require&search_path=test_matchlog_x",
+			want: "test_matchlog_x",
+		},
+		{
+			name: "an empty search_path falls back to public rather than to nothing",
+			dsn:  "postgres://u:p@h:5432/db?sslmode=require&search_path=",
+			want: "public",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg, err := pgxpool.ParseConfig(tt.dsn)
+			if err != nil {
+				t.Fatalf("ParseConfig: %v", err)
+			}
+			pinSearchPath(cfg)
+			if got := cfg.ConnConfig.RuntimeParams["search_path"]; got != tt.want {
+				t.Errorf("search_path = %q, want %q", got, tt.want)
+			}
+		})
 	}
 }
