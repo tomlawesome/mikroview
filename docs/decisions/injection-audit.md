@@ -1,7 +1,8 @@
 # Injection audit: every field, every sink
 
-Date: 2026-08-07. Scope: all untrusted input reaching mikroview, and
-what each one is eventually interpreted as.
+Date: 2026-08-07. Re-audited 2026-08-12 (#272 phase 2); see
+"Re-audit, 2026-08-12" at the end. Scope: all untrusted input reaching
+mikroview, and what each one is eventually interpreted as.
 
 Method: map inputs to *sinks* rather than auditing fields in isolation.
 A field is only dangerous where something interprets it — a shell, a
@@ -135,3 +136,101 @@ no-control-characters rule, capped at 256 runes.
   compile-time constant with `$n` placeholders, nothing concatenated or
   built from caller input. `injection_sinks_test.go`'s `allowed` map
   carries the scoped exemption for both packages.
+
+## Re-audit, 2026-08-12 (#272 phase 2)
+
+This document commits to being updated whenever a new sink appears or
+the input surface changes. #272's phase-2 security audit -- four
+independent reviews (#282, #283, #284, #285), findings verified
+adversarially before being acted on -- is that trigger. What follows is
+what changed, on the same terms as the original.
+
+### The biggest change: fields are sanitised where they are read, not
+### where they are used
+
+The original audit fixed each sink. That was the right first move and
+the wrong long-term shape, and #285 finding 9 is why: `internal/logging`
+already had `Printable`, and it was applied at seven call sites, all of
+them usernames. Nothing applied it to the event path -- so every field
+`internal/routeros.Parse` pulls out of a syslog line reached a flag's
+`Target` and `Detail` unfiltered, and from there `flags.json`, the
+watchlist match log, an SMTP body and a Pushover message. A terminal
+rendering `cat flags.json` executes an ANSI escape sequence, which is the
+CVE class this document already cites.
+
+Fixed at the read point instead: `safeField` (clamp to 256 bytes, then
+`logging.Printable`) is applied to every field `Parse` extracts, once,
+in `clampAll`. A sink is easy to add and easy to forget; there is now
+one place to be right.
+
+`Raw` is deliberately exempt and stays so. It is the verbatim evidence
+an operator compares against, worth nothing if rewritten before they see
+it -- and it is bounded instead (2 KiB, `store.ClampRaw`, with
+`RawTruncated` so the UI and the CSV say when it was cut).
+
+The reasoning that made this necessary is worth recording: the previous
+shape let `internal/watchlist/invert.go` argue itself into writing an
+unvalidated address because it was "already derived from a real event".
+That is the wrong test -- the event is attacker-authored. One choke
+point on the way in makes that reasoning correct rather than merely
+common.
+
+### The CSV neutraliser had a hole, and the test passed for the wrong
+### reason
+
+Finding: a cell containing a bare carriage return was written unquoted,
+and a spreadsheet reading classic-Mac line endings treats that as the end
+of a record -- so text after it began a new row, and the first cell of a
+new row never went through the formula-neutralising step. Fixed.
+
+Recorded because of how it was nearly missed: the first regression test
+used `=IMPORTXML(...)`, whose quotes and commas caused the old code to
+quote the cell incidentally. The test passed against the unfixed code.
+The payload was changed to the DDE form (`=cmd|' /C calc'!A0`), which
+needs neither, and then it failed as it should. A test that reproduces a
+*payload* rather than the *mechanism* proves nothing.
+
+### New and changed sinks since 2026-08-07
+
+- **The watchlist match log** (`internal/matchlog`, #243) persists an
+  entire `store.Event`, including `Raw`. Covered by the read-point
+  sanitising above, and bounded by `ClampRaw`; its Postgres backend is
+  already covered by the SQL note in Residual risk.
+- **Webhook notifications** (`internal/notify`) send flag contents to an
+  operator-chosen HTTP endpoint. Not an injection sink in the sense used
+  here -- the receiver parses JSON produced by `encoding/json` -- but the
+  fields reaching it are attacker-authored, which is the read-point fix
+  again rather than a new control plane.
+- **`internal/entities`' `Type`** reached `Upsert` as free text off the
+  HTTP body and was the one field of four skipping the
+  control-character check every sibling had, despite flowing into the
+  same audit-trail sink (#267 finding 5). Now validated. It also formed
+  half of a `type + ":" + key` storage key, which was ambiguous whenever
+  either half contained a colon -- an IPv6 host key does. Joined on NUL
+  now, matching `internal/suggest`.
+- **No new shell, template, or command sink.** Re-confirmed by grep
+  across `os/exec`, `text/template`, `html/template`: still none, as the
+  original audit found.
+
+### What did not change
+
+The SQL position holds. `injection_sinks_test.go` still enforces that
+every statement in `internal/persist` and `internal/matchlog` is a
+compile-time constant with `$n` placeholders, and the `allowed` map still
+carries exactly those two scoped exemptions. One correction landed
+against a *different* property of the SQL layer -- `search_path` was
+pinned to the literal `public` rather than to what the DSN asked for
+(#298) -- which affected which schema was used, not how statements are
+built.
+
+The ReDoS screen is unchanged and still heuristic.
+
+### Method note
+
+Phase 2's findings were verified adversarially before being acted on,
+and that changed outcomes: #271's headline concurrent-write finding was
+withdrawn on re-measurement (the harness counted ordinary
+last-writer-wins as data loss), while a different half of the same area
+-- a shared temp filename -- turned out to be real and was fixed. The
+retraction was written up rather than the finding quietly disappearing,
+which is the only reason the real defect was still findable.
