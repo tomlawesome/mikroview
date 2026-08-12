@@ -206,6 +206,14 @@ func TestIsMultiTenantIssuer(t *testing.T) {
 		"https://login.microsoftonline.com/organizations/v2.0",
 		"https://login.microsoftonline.com/consumers/v2.0",
 		"https://appleid.apple.com",
+		// Scheme-less. url.Parse puts the whole value in Path and leaves
+		// Hostname empty, so these matched nothing and passed a check
+		// meant to refuse them (#267, Uncertain). Discovery would have
+		// failed on them later anyway -- but a security check answering
+		// "no" because it could not read its input is the wrong shape.
+		"accounts.google.com",
+		"login.microsoftonline.com/common/v2.0",
+		"  appleid.apple.com  ",
 	}
 	for _, issuer := range multiTenant {
 		if !IsMultiTenantIssuer(issuer) {
@@ -220,6 +228,10 @@ func TestIsMultiTenantIssuer(t *testing.T) {
 		"https://authentik.example.com/application/o/mikroview/",
 		"https://keycloak.example.com/realms/home",
 		"https://idp.internal",
+		// Scheme-less single-tenant must stay allowed -- the fallback
+		// parse must not turn everything into a match.
+		"login.microsoftonline.com/00000000-0000-0000-0000-000000000000/v2.0",
+		"authentik.example.com/application/o/mikroview/",
 		"",
 		"://not a url",
 	}
@@ -259,6 +271,14 @@ func TestAllowIssuerRefusesMultiTenantUnconditionally(t *testing.T) {
 		"https://accounts.google.com",
 		"https://login.microsoftonline.com/common/v2.0",
 		"https://appleid.apple.com",
+		// Scheme-less. url.Parse puts the whole value in Path and leaves
+		// Hostname empty, so these matched nothing and passed a check
+		// meant to refuse them (#267, Uncertain). Discovery would have
+		// failed on them later anyway -- but a security check answering
+		// "no" because it could not read its input is the wrong shape.
+		"accounts.google.com",
+		"login.microsoftonline.com/common/v2.0",
+		"  appleid.apple.com  ",
 	} {
 		if err := AllowIssuer(issuer); err == nil {
 			t.Errorf("AllowIssuer(%q) permitted a multi-tenant provider", issuer)
