@@ -156,8 +156,14 @@ func TestSeenNormalizesMACCase(t *testing.T) {
 // path, called on every event carrying a SrcMAC) must not hit disk once
 // per call.
 func TestMACRegistryPersistLockedRateLimitsWrites(t *testing.T) {
+	// A long window plus a rewound lastPersist, rather than a short
+	// window plus a sleep -- see the twin of this test in
+	// internal/flags for why. Short version: the work between the two
+	// Seen calls is a marshal, a write and a ReadFile, which on a loaded
+	// CI runner takes longer than 80ms, so the second write is
+	// legitimate and the test fails claiming the debounce is broken.
 	orig := macRegistryPersistMinInterval
-	macRegistryPersistMinInterval = 80 * time.Millisecond
+	macRegistryPersistMinInterval = 10 * time.Second
 	defer func() { macRegistryPersistMinInterval = orig }()
 
 	path := filepath.Join(t.TempDir(), "mac-registry.json")
@@ -184,7 +190,10 @@ func TestMACRegistryPersistLockedRateLimitsWrites(t *testing.T) {
 	}
 
 	// Past the window: the next call must flush the latest state.
-	time.Sleep(macRegistryPersistMinInterval + 20*time.Millisecond)
+	// Rewound rather than waited out -- same code path, no wall clock.
+	r.mu.Lock()
+	r.lastPersist = r.lastPersist.Add(-2 * macRegistryPersistMinInterval)
+	r.mu.Unlock()
 	r.Seen("33:33:33:33:33:33", now)
 	final, err := os.ReadFile(path)
 	if err != nil {
