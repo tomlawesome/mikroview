@@ -78,6 +78,20 @@ upgrading.
 
 ### Added
 
+- **Routers can push whether a firewall rule actually logs, and which
+  addresses it matches** (#274). The filter-rule push gained three
+  fields: `log`, `dstAddress` and `srcAddress`. This is groundwork —
+  nothing in the interface uses them yet — for telling you that a
+  watchlist entry can never match because no rule on that router logs
+  traffic in its scope, which is the difference between "nothing
+  happened" and "nothing here is even watching".
+
+  **Update MikroView before you update the push script on your routers.**
+  MikroView refuses a push containing a field it does not recognise
+  rather than ignoring it, so a router sending the newer script to an
+  older MikroView gets a `400` and stops pushing. The other order is
+  safe. See [docs/routeros-setup.md](docs/routeros-setup.md).
+
 - **`THIRD-PARTY-NOTICES.md`, embedded in the binary and served at
   `GET /api/third-party-notices`** -- the copyright notices and licence
   texts of every Go module statically linked into mikroview and every
