@@ -459,6 +459,20 @@ upgrading.
 
 ### Fixed
 
+- **Restoring an older database backup can no longer bring deleted
+  accounts back** (#294). MikroView copied your JSON files into Postgres
+  on the first move, but it re-checked on *every* start — so restoring
+  the database to a snapshot from before a store was filled, with the
+  original files still on the data volume, copied them straight back in.
+  A deleted account and its password came back, with a single line in the
+  log as the only sign. The one-time move now happens once and never
+  again.
+
+  If a first migration is ever interrupted part-way, MikroView says so
+  loudly and tells you how to finish it deliberately. It will not guess:
+  an interrupted migration and a restored-from-backup database look
+  identical from the inside, and guessing wrong is what caused this.
+
 - **A single sign-on issuer written without `https://` is now checked
   properly** (#267). MikroView refuses multi-tenant providers, and that
   check read the hostname — which is empty for a scheme-less string, so
