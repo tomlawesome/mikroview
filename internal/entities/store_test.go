@@ -3,6 +3,7 @@
 package entities
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -478,5 +479,52 @@ func TestUpsertAcceptsRealisticLabels(t *testing.T) {
 		if _, err := s.Upsert(e); err != nil {
 			t.Errorf("Upsert rejected a legitimate entity %+v: %v", e, err)
 		}
+	}
+}
+
+// TestCompositeIDDoesNotCollide pins the storage key against the
+// ambiguity a colon delimiter had: Type is free text by design and Key
+// legitimately contains colons (an IPv6 host key, as this package's own
+// tests use), so ("host", "2001:db8::1") and ("host:2001", "db8::1")
+// produced the same key and one entity silently replaced the other --
+// against this package's own rule of at most one entity per (Type, Key).
+func TestCompositeIDDoesNotCollide(t *testing.T) {
+	s, err := Open("")
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+
+	if _, err := s.Upsert(Entity{Type: "host", Key: "2001:db8::1", Label: "the host"}); err != nil {
+		t.Fatalf("Upsert: %v", err)
+	}
+	if _, err := s.Upsert(Entity{Type: "host:2001", Key: "db8::1", Label: "the other one"}); err != nil {
+		t.Fatalf("Upsert: %v", err)
+	}
+
+	if n := len(s.List()); n != 2 {
+		t.Fatalf("List() has %d entities, want 2 -- the two (Type, Key) pairs collided", n)
+	}
+
+	if got := s.Label("host", "2001:db8::1"); got != "the host" {
+		t.Errorf(`Label("host", "2001:db8::1") = %q, want "the host" -- overwritten by the colliding pair`, got)
+	}
+	if got := s.Label("host:2001", "db8::1"); got != "the other one" {
+		t.Errorf(`Label("host:2001", "db8::1") = %q, want "the other one"`, got)
+	}
+}
+
+// Type reaches Upsert as free text off the HTTP body and ends up in the
+// audit trail, so it gets the same control-character check Key, Label
+// and Tags already had -- and id() now depends on it.
+func TestUpsertRejectsControlCharactersInType(t *testing.T) {
+	s, err := Open("")
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	if _, err := s.Upsert(Entity{Type: "host\x00rogue", Key: "10.0.0.1"}); !errors.Is(err, ErrInvalidEntityText) {
+		t.Errorf("Upsert with a NUL in Type returned %v, want ErrInvalidEntityText", err)
+	}
+	if _, err := s.Upsert(Entity{Type: "host\x1b[31m", Key: "10.0.0.2"}); !errors.Is(err, ErrInvalidEntityText) {
+		t.Errorf("Upsert with an escape sequence in Type returned %v, want ErrInvalidEntityText", err)
 	}
 }

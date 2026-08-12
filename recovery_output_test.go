@@ -156,3 +156,48 @@ func TestNoKeyMaterialIsWrittenToDisk(t *testing.T) {
 		}
 	}
 }
+
+// -transfer-admin must not name the admin before the recovery key has
+// been proven.
+//
+// Its own comment says so ("the key is asked for BEFORE any account is
+// named or listed, so nothing about who holds an account is disclosed to
+// someone without one") and the code did the opposite: the username was
+// printed above that comment, so anyone able to run the binary learned
+// who the admin is by starting the command and pressing Ctrl-C.
+//
+// Source-level, like TestEveryKeyPrintingCommandChecksBeforeDoingWork
+// above, because the property is an ordering within one function and
+// driving these commands needs a terminal.
+//
+// -recover-admin-account is deliberately not held to this: the SSO-only
+// check it performs first already has to name the account to explain
+// why it cannot help. That difference is stated at the call site.
+func TestTransferAdminDoesNotNameTheAdminBeforeTheKey(t *testing.T) {
+	src, err := os.ReadFile("main.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := string(src)
+
+	start := strings.Index(body, "func runTransferAdmin(")
+	if start < 0 {
+		t.Fatal("runTransferAdmin not found")
+	}
+	fn := body[start:]
+	if end := strings.Index(fn, "\nfunc "); end > 0 {
+		fn = fn[:end]
+	}
+
+	key := strings.Index(fn, "readRecoveryKey()")
+	if key < 0 {
+		t.Fatal("runTransferAdmin never reads a recovery key")
+	}
+	named := strings.Index(fn, "current.Username")
+	if named < 0 {
+		t.Fatal("runTransferAdmin never names the current admin -- if that was removed on purpose, this test should go with it")
+	}
+	if named < key {
+		t.Error("runTransferAdmin names the current admin before asking for the recovery key, so anyone able to run the binary learns who the admin is by starting the command and abandoning it")
+	}
+}

@@ -143,9 +143,10 @@ func OpenPool(ctx context.Context, dsn string) (*Pool, error) {
 // assertions about whole-table counts began seeing other tests' rows.
 //
 // That took 41 commits to surface, because the job running those tests
-// is skipped on dev to keep it fast (.github/workflows/ci.yml) and only
-// runs from preview onwards. Hence TestPinSearchPath, which needs no
-// database and so runs everywhere.
+// used to be skipped on dev. It no longer is -- that gate is gone from
+// .github/workflows/ci.yml, which is the real fix. TestPinSearchPath
+// stays as the cheap guard: it needs no database, so it holds even where
+// a Postgres is not available at all.
 //
 // The security property is unchanged either way: search_path is what
 // mikroview sets, never what the role or database defaults to.

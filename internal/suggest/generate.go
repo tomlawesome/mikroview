@@ -149,6 +149,17 @@ func deviceCandidateID(routerDevice, mac string) string {
 	return strings.Join([]string{"device", routerDevice, mac}, "\x00")
 }
 
+// portCandidateID deliberately does not include which rule produced the
+// candidate, so two filter rules agreeing on all six of these fields
+// collapse into one suggestion -- and which rule the Justification names
+// then depends on iteration order.
+//
+// Left as it is (#267, Uncertain). The candidate is a proposed watchlist
+// entry, and two rules with identical chain, action, protocol, port and
+// source list propose the identical entry: separating them would offer
+// the operator the same thing twice. What is lost is only which of the
+// duplicate rules gets cited as the reason, and the entry it produces is
+// the same either way.
 func portCandidateID(routerDevice, chain, action, protocol, dstPort, srcAddressList string) string {
 	return strings.Join([]string{"port", routerDevice, chain, action, protocol, dstPort, srcAddressList}, "\x00")
 }

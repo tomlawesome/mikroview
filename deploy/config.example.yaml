@@ -116,6 +116,33 @@ store:
 #   hostActivityMultiplier: 3
 #   hostActivityWarmupSamples: 20
 #
+#   # low_slow_scan: the scan that stays under portScanThreshold by
+#   # spreading itself over hours instead of seconds. Two thresholds and
+#   # a drop ratio rather than one count -- see docs/configuration.md for
+#   # why "distinct ports per hour" alone was rejected as too noisy
+#   # against container orchestration, health checks and browsers.
+#   lowSlowScanWindow: 3h
+#   lowSlowScanPortThreshold: 8
+#   lowSlowScanHostThreshold: 5
+#   lowSlowScanMinObservation: 45m
+#   lowSlowScanDropRatio: 0.8
+#   lowSlowScanBaselineMultiplier: 3
+#
+#   # off_hours: traffic from a host that is normally quiet at this time
+#   # of day. The window is fixed rather than learned per host -- 23:00
+#   # to 06:00 is a conservative default for a home or small office.
+#   offHoursStartHour: 23
+#   offHoursEndHour: 6
+#   offHoursMinSampleDays: 14
+#   offHoursMinCount: 5
+#
+#   # stale_rule: a firewall rule that has not matched anything in this
+#   # many days, so you can retire rules that no longer do anything. The
+#   # store is what makes that survive a restart.
+#   ruleUsageStorePath: /var/lib/mikroview/rule-usage.json
+#   staleRuleDays: 30
+#   staleRuleCheckInterval: 1h
+#
 #   # Optional (issue #105): interface-name patterns (glob syntax --
 #   # exact "wireguard1" or prefix-style "wireguard*") identifying which
 #   # of RouterOS's InInterface values correspond to a configured VPN
@@ -260,7 +287,20 @@ store:
 #   storePath: /var/lib/mikroview/users.json
 #   secureCookie: true
 #   sessionTTL: 24h
+#   # The ceiling sessionTTL does not have: the longest a session can
+#   # live from when you signed in, however often you use it. Without
+#   # one, a session used even once a day never expires, so a browser
+#   # left signed in on a shared machine stays valid forever. Set to 0
+#   # to remove the ceiling.
+#   sessionMaxLifetime: 168h  # 7 days
 #   tokensStorePath: /var/lib/mikroview/tokens.json
+#   # Where the one-time recovery keys and the pepper that hashes them
+#   # live. Both default under the data volume, which is fine -- move
+#   # recoveryPepperPath only if you want the pepper off that volume
+#   # entirely, so a stolen backup of the volume does not carry the one
+#   # value the recovery-key hashes are useless without.
+#   recoveryKeysPath: /var/lib/mikroview/recovery.json
+#   recoveryPepperPath: /var/lib/mikroview/recovery-pepper
 
 # TLS is on by default and needs no configuration to work -- mikroview
 # generates its own local CA + certificate on first start, already
@@ -282,6 +322,11 @@ store:
 # reasoning behind batchWindow being a fixed interval, not a debounce.
 # notify:
 #   batchWindow: 60s
+#   # Any HTTP endpoint -- the batch is POSTed as JSON. headers is for
+#   # whatever the receiver needs to authenticate the call.
+#   webhook:
+#     url: ""
+#     headers: {}
 #   smtp:
 #     host: ""
 #     port: 587
@@ -293,6 +338,38 @@ store:
 #   pushover:
 #     token: ""
 #     user: ""
+
+# Optional: sign in with your own identity provider instead of (or
+# alongside) mikroview's local account. See docs/configuration.md's
+# "Single sign-on (OIDC)" section -- publicBaseUrl is the one field
+# people get wrong, and it must match the redirect URI registered with
+# the provider exactly.
+# oidc:
+#   issuerUrl: "https://id.example.com"
+#   clientId: ""
+#   clientSecret: ""
+#   publicBaseUrl: "https://mikroview.example.com"
+#   scopes: ["openid", "profile", "email"]
+#   # Everything below is an access policy. With none of it set, anyone
+#   # your provider will authenticate can sign in -- which is only what
+#   # you want on a provider that exists solely for this.
+#   allowedGroups: []
+#   groupsClaim: "groups"        # Azure commonly needs "roles"
+#   allowedEmails: []
+#   allowedEmailDomains: []
+#   requiredClaims: {}
+
+# Optional: keep accounts, flags, tokens and the rest in Postgres rather
+# than in JSON files on this host. The only reason to do this is to get
+# the data OFF this machine -- read docs/configuration.md's "Postgres"
+# section first, because MOVING TO POSTGRES IS A ONE-WAY CHOICE.
+#
+# There is no `dsn` field, deliberately: a connection string carries a
+# password, so it is read from a file you control the permissions of.
+# The file must be readable by uid 65532 (the container's user):
+#   chown 65532:65532 postgres-dsn && chmod 600 postgres-dsn
+# postgres:
+#   dsnFile: /run/secrets/mikroview-postgres-dsn
 
 # Devices are matched by the syslog source IP mikroview sees them from.
 # Sources not listed here still appear in the UI, auto-discovered and

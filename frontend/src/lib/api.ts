@@ -21,6 +21,7 @@ import type {
   SuggestionStatus,
   UserSummary,
   WatchlistEntry,
+  WatchlistCoverage,
   WatchlistIdentity,
   WatchlistMatch,
   WatchlistPermittedDest,
@@ -262,8 +263,26 @@ export async function login(username: string, password: string): Promise<string 
 }
 
 
-export async function logout(): Promise<void> {
-  await postJSON('/api/auth/logout')
+// Change the signed-in account's own password (#294 item 4). Returns
+// error text on failure, like every other mutating wrapper here.
+//
+// The server takes no username: it acts on the session's own account,
+// deliberately, so a body cannot point this at somebody else.
+export async function changePassword(currentPassword: string, newPassword: string): Promise<string | null> {
+  const res = await postJSON('/api/auth/password', { currentPassword, newPassword })
+  if (res.ok) return null
+  return (await res.text()) || `changePassword: ${res.status}`
+}
+
+// Returns error text on failure, like every other mutating wrapper
+// here. It used to return void and ignore the status entirely -- the one
+// exception among roughly 25 -- so a failed logout was indistinguishable
+// from a successful one, and authState.logout() went on to clear the
+// session locally while the server still had it.
+export async function logout(): Promise<string | null> {
+  const res = await postJSON('/api/auth/logout')
+  if (res.ok) return null
+  return (await res.text()) || `logout: ${res.status}`
 }
 
 // No role argument: mikroview has one admin, and the server refuses a
@@ -350,11 +369,18 @@ export interface WatchlistEntryRequest {
   includeStructuralNoise?: boolean
 }
 
-export async function fetchWatchlistEntries(): Promise<WatchlistEntry[]> {
+// Returns the entries and, alongside them, what can be said about
+// whether anything is able to feed each one (#274). Keyed by entry id
+// rather than folded into the entry: coverage is derived from what
+// routers have pushed right now, not a property of the entry itself.
+export async function fetchWatchlistEntries(): Promise<{
+  entries: WatchlistEntry[]
+  coverage: Record<string, WatchlistCoverage>
+}> {
   const res = await fetch('/api/watchlist/entries')
   if (!res.ok) throw new ApiError(`fetchWatchlistEntries: ${res.status}`, res.status)
   const body = await res.json()
-  return body.entries ?? []
+  return { entries: body.entries ?? [], coverage: body.coverage ?? {} }
 }
 
 export async function createWatchlistEntry(req: WatchlistEntryRequest): Promise<WatchlistEntry | string> {

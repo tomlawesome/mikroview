@@ -91,6 +91,14 @@ class FlagsState {
   // revert, since otherwise the flag would sit incorrectly "cleared"
   // until that poll ran.
   async clear(id: string) {
+    return this.optimisticallyClear(id, clearFlag)
+  }
+
+  // The shared body of clear() and clearPermanent(), which differed only
+  // in which call they awaited. Kept as one so a change to the revert
+  // logic cannot land in one and not the other -- the two had already
+  // been maintained in parallel by hand (#267 finding 25).
+  private async optimisticallyClear(id: string, call: (id: string) => Promise<unknown>) {
     const flag = this.list.find((f) => f.id === id)
     if (!flag || flag.cleared) return
 
@@ -100,7 +108,7 @@ class FlagsState {
     flag.clearedAt = new Date().toISOString()
 
     try {
-      await clearFlag(id)
+      await call(id)
     } catch (err) {
       flag.cleared = wasCleared
       flag.clearedAt = previousClearedAt
@@ -148,21 +156,7 @@ class FlagsState {
   // itself; a caller that also renders an exclusions list (see
   // exclusions.svelte.ts) is expected to refresh() that separately.
   async clearPermanent(id: string) {
-    const flag = this.list.find((f) => f.id === id)
-    if (!flag || flag.cleared) return
-
-    const wasCleared = flag.cleared
-    const previousClearedAt = flag.clearedAt
-    flag.cleared = true
-    flag.clearedAt = new Date().toISOString()
-
-    try {
-      await clearFlagPermanent(id)
-    } catch (err) {
-      flag.cleared = wasCleared
-      flag.clearedAt = previousClearedAt
-      throw err
-    }
+    return this.optimisticallyClear(id, clearFlagPermanent)
   }
 }
 

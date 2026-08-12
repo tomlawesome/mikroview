@@ -108,7 +108,10 @@
       return
     deletingId = e.id
     try {
-      await watchlistState.remove(e.id)
+      // The return value is the error text, not a throw -- see
+      // lib/api.ts. Dropping it left a failed delete looking identical
+      // to a successful one: the row stayed, and nothing said why.
+      error = await watchlistState.remove(e.id)
     } finally {
       deletingId = null
     }
@@ -128,7 +131,7 @@
   async function toggleObserving(e: WatchlistEntry) {
     togglingObserve = e.id
     try {
-      await watchlistState.setObserving(e.id, !e.observing)
+      error = await watchlistState.setObserving(e.id, !e.observing)
     } finally {
       togglingObserve = null
     }
@@ -137,7 +140,7 @@
   async function promoteOne(e: WatchlistEntry, d: WatchlistPermittedDest) {
     promoting = e.id + d.destIp + d.port
     try {
-      await watchlistState.promote(e.id, [d])
+      error = await watchlistState.promote(e.id, [d])
     } finally {
       promoting = null
     }
@@ -147,13 +150,45 @@
   // than cached indefinitely -- a match log is append-only and can
   // change between views, and the volumes here (an entry's own recent
   // matches) are small enough that refetching on open is cheap.
+  // The reason is kept rather than collapsed to "Could not load
+  // matches." The backend distinguishes these -- a 503 says the match
+  // log is not available, which is a configuration answer, not a
+  // network blip -- and this page's own house style is that an error
+  // names what to fix.
+  let matchErrorByEntry = $state<Record<string, string>>({})
+
   async function loadMatches(e: WatchlistEntry) {
     if (!e.source?.mac && !e.source?.ip) return
     matchesByEntry[e.id] = 'loading'
     try {
       matchesByEntry[e.id] = await watchlistState.matchesFor(e.source.mac, e.source.ip)
-    } catch {
+      delete matchErrorByEntry[e.id]
+    } catch (err) {
+      matchErrorByEntry[e.id] = err instanceof Error ? err.message : String(err)
       matchesByEntry[e.id] = 'error'
+    }
+  }
+
+  // Why an entry might never match, when that can be said for certain
+  // (#274). Returns null far more often than not, deliberately: the
+  // router push is optional, so most deployments have nothing to answer
+  // from, and a wrong warning here is worse than no warning -- it sends
+  // an operator to fix a rule set that is fine.
+  function coverageWarning(id: string): string | null {
+    switch (watchlistState.coverage[id]) {
+      case 'no-logging':
+        return (
+          'Nothing can match this: no firewall rule on any router you have connected has logging turned on, ' +
+          'so no traffic is being reported at all. Set log=yes on the rules you want to see (see the RouterOS setup guide).'
+        )
+      case 'out-of-scope':
+        return (
+          'Nothing can match this: your routers do log, but no logging rule covers what this entry watches, ' +
+          'so no traffic in its scope is ever reported. Widen a rule, or narrow this entry to something a rule covers.'
+        )
+      default:
+        // 'covered', 'unknown', or no answer at all. Silence.
+        return null
     }
   }
 
@@ -171,7 +206,7 @@
 
 <div class="page scrollbar">
   <p class="intro">
-    Watch attempts against specific ports (<strong>record</strong>, generalising what Control Ports did), or flip an
+    Watch attempts against specific ports (<strong>record</strong>), or flip an
     entry around to watch what one device does (<strong>invert</strong>): "this device should only ever reach X" --
     everything else it touches gets recorded. A new inverted entry starts <strong>observing</strong>: nothing fires
     until you review what it actually saw and promote the destinations that are expected. Matches are recorded to
@@ -262,6 +297,10 @@
                 <span class="detail">ports {(e.ports ?? []).join(', ')}{e.destIp ? ` → ${e.destIp}` : ''}</span>
               {/if}
             </button>
+            {#if coverageWarning(e.id)}
+              <p class="coverage-warning" role="status">{coverageWarning(e.id)}</p>
+            {/if}
+
             <span class="row-actions">
               <button class="edit" onclick={() => startEdit(e)}>Edit</button>
               <button class="delete" disabled={deletingId === e.id} onclick={() => remove(e)}>
@@ -334,7 +373,8 @@
                     {:else if matchesByEntry[e.id] === 'loading'}
                       <p class="empty small">Loading…</p>
                     {:else if matchesByEntry[e.id] === 'error'}
-                      <p class="error">Could not load matches.</p>
+                      <p class="error">Could not load matches: {matchErrorByEntry[e.id] ?? 'unknown error'}</p>
+                      <button class="load-matches" onclick={() => loadMatches(e)}>Try again</button>
                     {:else if (matchesByEntry[e.id] as WatchlistMatch[]).length === 0}
                       <p class="empty small">No matches recorded yet for this entry's device.</p>
                     {:else}
@@ -441,6 +481,20 @@
     margin: 0;
     color: var(--reject);
     font-size: 12px;
+  }
+
+  /* Deliberately not the same red as .error: an entry that cannot match
+     is a configuration mismatch to look at, not a failed action. */
+  .coverage-warning {
+    grid-column: 1 / -1;
+    margin: 6px 0 0;
+    padding: 6px 8px;
+    border-radius: 6px;
+    background: var(--panel);
+    border-left: 3px solid var(--log);
+    color: var(--text-muted);
+    font-size: 12px;
+    line-height: 1.45;
   }
 
   .form-actions {
