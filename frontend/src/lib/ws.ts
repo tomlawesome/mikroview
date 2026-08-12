@@ -20,6 +20,19 @@ export class LiveSocket {
   private socket: WebSocket | null = null
   private backoff = MIN_BACKOFF_MS
   private stopped = true
+  // Which connection attempt each handler belongs to.
+  //
+  // WebSocket.close() fires onclose asynchronously, and App.svelte
+  // calls disconnect() then connect() synchronously on an auth-state
+  // change. A fast logout->login (a password manager filling the form,
+  // say) therefore has the new socket already open by the time the old
+  // one's onclose arrives -- and that handler unconditionally reported
+  // 'closed' over a live connection and scheduled a reconnect the new
+  // socket then abandoned. Every other place in this codebase with the
+  // same staleness problem already carries a counter like this
+  // (ipLookup, routerLookup, ruleMatcher's seq/id); ws.ts was the
+  // exception.
+  private generation = 0
 
   connect() {
     this.stopped = false
@@ -36,10 +49,17 @@ export class LiveSocket {
     const url = `${proto}://${location.host}/api/ws`
     appState.connState = 'connecting'
 
+    const gen = ++this.generation
     const ws = new WebSocket(url)
     this.socket = ws
+    // True only while this attempt is still the current one. Checked in
+    // every handler below rather than only in onclose: a superseded
+    // socket's onmessage would otherwise keep appending events and
+    // resetting the drop counter after it had been replaced.
+    const current = () => gen === this.generation
 
     ws.onopen = () => {
+      if (!current()) return
       this.backoff = MIN_BACKOFF_MS
       appState.connState = 'open'
       // A new connection is a new server-side client registration, whose
@@ -48,6 +68,7 @@ export class LiveSocket {
     }
 
     ws.onmessage = (ev) => {
+      if (!current()) return
       let msg: WSEnvelope
       try {
         msg = JSON.parse(ev.data)
@@ -64,6 +85,7 @@ export class LiveSocket {
     }
 
     ws.onclose = () => {
+      if (!current()) return
       appState.connState = 'closed'
       if (this.stopped) return
       const delay = this.backoff + Math.random() * this.backoff * 0.2
