@@ -169,6 +169,29 @@
     }
   }
 
+  // Why an entry might never match, when that can be said for certain
+  // (#274). Returns null far more often than not, deliberately: the
+  // router push is optional, so most deployments have nothing to answer
+  // from, and a wrong warning here is worse than no warning -- it sends
+  // an operator to fix a rule set that is fine.
+  function coverageWarning(id: string): string | null {
+    switch (watchlistState.coverage[id]) {
+      case 'no-logging':
+        return (
+          'Nothing can match this: no firewall rule on any router you have connected has logging turned on, ' +
+          'so no traffic is being reported at all. Set log=yes on the rules you want to see (see the RouterOS setup guide).'
+        )
+      case 'out-of-scope':
+        return (
+          'Nothing can match this: your routers do log, but no logging rule covers what this entry watches, ' +
+          'so no traffic in its scope is ever reported. Widen a rule, or narrow this entry to something a rule covers.'
+        )
+      default:
+        // 'covered', 'unknown', or no answer at all. Silence.
+        return null
+    }
+  }
+
   function formatTime(iso: string): string {
     const d = new Date(iso)
     return Number.isNaN(d.getTime()) ? iso : d.toLocaleString()
@@ -274,6 +297,10 @@
                 <span class="detail">ports {(e.ports ?? []).join(', ')}{e.destIp ? ` → ${e.destIp}` : ''}</span>
               {/if}
             </button>
+            {#if coverageWarning(e.id)}
+              <p class="coverage-warning" role="status">{coverageWarning(e.id)}</p>
+            {/if}
+
             <span class="row-actions">
               <button class="edit" onclick={() => startEdit(e)}>Edit</button>
               <button class="delete" disabled={deletingId === e.id} onclick={() => remove(e)}>
@@ -454,6 +481,20 @@
     margin: 0;
     color: var(--reject);
     font-size: 12px;
+  }
+
+  /* Deliberately not the same red as .error: an entry that cannot match
+     is a configuration mismatch to look at, not a failed action. */
+  .coverage-warning {
+    grid-column: 1 / -1;
+    margin: 6px 0 0;
+    padding: 6px 8px;
+    border-radius: 6px;
+    background: var(--panel);
+    border-left: 3px solid var(--log);
+    color: var(--text-muted);
+    font-size: 12px;
+    line-height: 1.45;
   }
 
   .form-actions {

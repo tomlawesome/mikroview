@@ -78,13 +78,25 @@ upgrading.
 
 ### Added
 
+- **The Watchlist tells you when an entry can never match** (#274). An
+  entry showing no matches used to be ambiguous between "nothing
+  happened" and "nothing here is even watching" — the second being a
+  configuration mistake you had no way to see. Where MikroView can be
+  certain, the entry now says so and what to do about it: either no
+  firewall rule on any connected router has logging switched on, or your
+  rules do log but none of them covers what that entry watches.
+
+  **It stays quiet unless it is certain**, which is most of the time.
+  This needs the optional router push (step 4 of the RouterOS setup) to
+  say anything at all, and any rule it cannot read — one scoping by an
+  address-list name, say — makes it stop claiming rather than guess. A
+  wrong "this can never fire" hides a working entry, and a wrong "this
+  looks fine" is worse than silence.
+
 - **Routers can push whether a firewall rule actually logs, and which
   addresses it matches** (#274). The filter-rule push gained three
-  fields: `log`, `dstAddress` and `srcAddress`. This is groundwork —
-  nothing in the interface uses them yet — for telling you that a
-  watchlist entry can never match because no rule on that router logs
-  traffic in its scope, which is the difference between "nothing
-  happened" and "nothing here is even watching".
+  fields: `log`, `dstAddress` and `srcAddress` — what the check above
+  reads.
 
   **Update MikroView before you update the push script on your routers.**
   MikroView refuses a push containing a field it does not recognise
