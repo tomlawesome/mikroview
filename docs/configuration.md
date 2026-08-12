@@ -2423,6 +2423,22 @@ Use `verify-full` if you can. `require` encrypts the connection but
 doesn't check *who* answered, so it doesn't stop someone who can
 intercept traffic between MikroView and the database.
 
+### Which schema the tables go in
+
+`public`, unless you say otherwise. To keep MikroView's tables in a
+schema of their own, create it and name it in the connection string:
+
+```
+postgres://mikroview:PASSWORD@db.internal:5432/mikroview?sslmode=verify-full&search_path=mikroview
+```
+
+MikroView always sets this on its connections rather than inheriting
+whatever the role or the database defaults to. That is deliberate:
+MikroView names its tables without a schema prefix, so if the default
+search path were used, anyone able to create a table in a schema listed
+ahead of yours could put their own `store_blob` or `match_log` there,
+and MikroView would read and write theirs while reporting success.
+
 ### Your existing data moves automatically
 
 On the first start with `dsnFile` set, MikroView copies each existing
