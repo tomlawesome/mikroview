@@ -552,13 +552,14 @@ func main() {
 	// which loses an operator's Hide/accept-in-progress state but never
 	// anything RunPeriodicSync (started below, once routerState exists)
 	// can't rebuild.
+	suggestLog := logging.New("suggest")
 	suggestBackend, err := persistence.backendFor(bootCtx, "suggestions", cfg.Watchlist.SuggestionsStorePath)
 	if err != nil {
-		watchlistLog.Warn(err.Error())
+		suggestLog.Warn(err.Error())
 	}
 	suggestStore, err := suggest.OpenWithBackend(suggestBackend)
 	if err != nil {
-		watchlistLog.Warn(fmt.Sprintf("%v (continuing with in-memory-only, unpersisted suggestions)", err))
+		suggestLog.Warn(fmt.Sprintf("%v (continuing with in-memory-only, unpersisted suggestions)", err))
 	}
 
 	// The watchlist's match log has no in-memory-only mode (durability
@@ -596,13 +597,13 @@ func main() {
 		// match history gone": the old file is untouched and still
 		// readable by reverting Postgres, it just isn't carried forward.
 		if fi, err := os.Stat(cfg.Watchlist.MatchLogPath); err == nil && fi.Size() > 0 {
-			watchlistLog.Warn(fmt.Sprintf("an existing match log at %s (%d bytes) will NOT be migrated into Postgres -- "+
+			logging.New("matchlog").Warn(fmt.Sprintf("an existing match log at %s (%d bytes) will NOT be migrated into Postgres -- "+
 				"unlike every other store, the match log has no file-to-Postgres adoption path. It starts empty on Postgres; "+
 				"the old file is untouched and still readable if you revert postgres.dsnFile",
 				cfg.Watchlist.MatchLogPath, fi.Size()))
 		}
 	} else if ml, err := matchlog.Open(cfg.Watchlist.MatchLogPath, cfg.Watchlist.MatchLogCapacity); err != nil {
-		watchlistLog.Error(fmt.Sprintf("opening the match log at %s failed: %v -- watchlist entries will not record any matches until this is fixed and mikroview is restarted", cfg.Watchlist.MatchLogPath, err))
+		logging.New("matchlog").Error(fmt.Sprintf("opening the match log at %s failed: %v -- watchlist entries will not record any matches until this is fixed and mikroview is restarted", cfg.Watchlist.MatchLogPath, err))
 	} else {
 		matchLog = ml
 		defer ml.Close()

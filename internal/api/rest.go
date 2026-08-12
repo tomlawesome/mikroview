@@ -3,11 +3,14 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"strconv"
+	"syscall"
 	"time"
 
 	"github.com/tomlawesome/mikroview/internal/device"
@@ -250,8 +253,19 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 	// silently serving a half-written response is the kind of fault that
 	// otherwise only ever surfaces as an unreproducible frontend parse
 	// error.
+	//
+	// Except when the *client* is what failed: a closed tab or a phone
+	// locking mid-poll surfaces here as a broken pipe / connection
+	// reset, and with the UI polling every few seconds that's routine
+	// behaviour, not a fault (#322 item 2). Those go to DEBUG -- still
+	// there when chasing something -- while real encode failures (a
+	// value that can't marshal is a bug) stay WARN.
 	if err := json.NewEncoder(w).Encode(v); err != nil {
-		apiLog.Warn(fmt.Sprintf("writing JSON response failed after %d was already sent: %v", status, err))
+		if errors.Is(err, syscall.EPIPE) || errors.Is(err, syscall.ECONNRESET) || errors.Is(err, context.Canceled) {
+			apiLog.Debug(fmt.Sprintf("client went away mid-response (status %d): %v", status, err))
+		} else {
+			apiLog.Warn(fmt.Sprintf("writing JSON response failed after %d was already sent: %v", status, err))
+		}
 	}
 }
 
