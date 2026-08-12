@@ -12,6 +12,7 @@
   import { viewportState } from '../lib/viewport.svelte'
   import { versionState } from '../lib/version.svelte'
   import AboutOverlay from './AboutOverlay.svelte'
+  import ChangePasswordOverlay from './ChangePasswordOverlay.svelte'
 
   versionState.ensureLoaded()
 
@@ -327,6 +328,24 @@
             <div class="divider"></div>
           {/if}
 
+          {#if authState.hasLocalPassword}
+            <!-- Every user's, like Connect SSO below: the server takes
+                 the account from the session, never from the request.
+                 Hidden for an SSO-only account, which has no local
+                 password to change -- the server answers 409 either
+                 way. -->
+            <button
+              class="option"
+              onclick={() => {
+                authState.showChangePassword = true
+                open = false
+              }}
+              title="Change your MikroView password, and sign out everywhere else"
+            >
+              Change password
+            </button>
+          {/if}
+
           {#if authState.ssoAvailable && authState.hasLocalPassword}
             <!-- Deliberately outside the admin gate above: this converts
                  your OWN account, and the server takes the target from
@@ -393,6 +412,7 @@
 </div>
 
 <AboutOverlay bind:open={showAbout} />
+<ChangePasswordOverlay />
 
 <style>
   .logout-error {

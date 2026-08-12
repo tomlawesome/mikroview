@@ -72,6 +72,11 @@ var authzMatrix = []routeExpectation{
 		"the login endpoint itself"},
 	{http.MethodPost, "/api/auth/logout", accessPublic,
 		"calling it without a session is a harmless no-op, not worth a 401"},
+	{http.MethodPost, "/api/auth/password", accessUser,
+		"changes the caller's own password, so any signed-in user may reach it -- not admin-gated, because a " +
+			"non-admin unable to change their own credential is the gap this closes (#294 item 4). It acts only on " +
+			"the session's own account: there is no username in the body to point elsewhere, deliberately, the same " +
+			"way /api/auth/oidc/link takes its target from the session rather than the request"},
 	{http.MethodGet, "/api/auth/oidc/login", accessPublic,
 		"starts the SSO redirect; a login must work before a session exists"},
 	{http.MethodGet, "/api/auth/oidc/callback", accessPublic,
