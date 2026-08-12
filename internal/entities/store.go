@@ -269,6 +269,18 @@ func (s *Store) Count() int {
 // call on internal/naming's per-event hot path (see naming.Resolver),
 // where an admin-managed entity label takes precedence over
 // config.yaml's static ruleNames/hostNames maps.
+// Exists reports whether an entity is stored at (entityType, key).
+//
+// Added so the HTTP layer can answer 201-vs-200 on an upsert without
+// reading the whole entity back just to test presence. Same
+// direct-lookup shape as Label and HasTag below.
+func (s *Store) Exists(entityType, key string) bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	_, ok := s.byID[id(entityType, key)]
+	return ok
+}
+
 func (s *Store) Label(entityType, key string) string {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
