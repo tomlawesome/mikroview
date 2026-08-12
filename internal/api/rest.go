@@ -32,7 +32,11 @@ func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {
 // WebSocket tail (handleWS) intentionally applies no server-side filtering;
 // see ws.go.
 func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
-	res := s.Store.Query(parseQuery(r))
+	q, ok := parseQuery(w, r)
+	if !ok {
+		return
+	}
+	res := s.Store.Query(q)
 	writeJSON(w, http.StatusOK, res)
 }
 
@@ -118,7 +122,34 @@ func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func parseQuery(r *http.Request) store.Query {
+// badQueryParam is the one shape a malformed windowed-query parameter
+// takes across every endpoint that accepts one.
+//
+// Malformed means *present and unparseable*, not absent. Absent is a
+// clear "no filter"; present-and-unparseable is a caller who believes
+// they filtered. Returning 200 with unfiltered results in that case is
+// a silent lie, and in a tool whose whole job is showing an operator
+// what happened in a window, being shown everything while believing you
+// are looking at a window is the misreading that matters. It is the same
+// class as #267's own Tier 1 finding about a non-numeric port filter
+// blanking the live table, which was treated as High.
+//
+// This used to be "ignore rather than fail" here and on GET /api/audit,
+// while GET /api/watchlist/matches -- taking the identical parameter
+// names -- returned 400. The convention was circular ("the same
+// treatment every other malformed param here gets") and the two
+// behaviours could not both be right (#267 finding 8). They now all
+// refuse.
+//
+// parseScope keeps its fallback, and is not an exception to this: scope
+// is an enum where unset genuinely means ScopeAny, so there is no
+// "unparseable" state to report.
+func badQueryParam(w http.ResponseWriter, name, want string) {
+	http.Error(w, name+" must be "+want, http.StatusBadRequest)
+}
+
+// parseQuery returns ok=false once it has written the error response.
+func parseQuery(w http.ResponseWriter, r *http.Request) (store.Query, bool) {
 	qs := r.URL.Query()
 	q := store.Query{
 		Device:    qs.Get("device"),
@@ -133,47 +164,68 @@ func parseQuery(r *http.Request) store.Query {
 		RuleRegex: qs.Get("ruleRegex") == "true",
 	}
 	if v := qs.Get("port"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil {
-			q.Port = n
+		n, err := strconv.Atoi(v)
+		if err != nil {
+			badQueryParam(w, "port", "an integer")
+			return store.Query{}, false
 		}
+		q.Port = n
 	}
 	if v := qs.Get("since"); v != "" {
-		if t, err := time.Parse(time.RFC3339, v); err == nil {
-			q.Since = t
+		t, err := time.Parse(time.RFC3339, v)
+		if err != nil {
+			badQueryParam(w, "since", "RFC 3339")
+			return store.Query{}, false
 		}
+		q.Since = t
 	}
 	if v := qs.Get("until"); v != "" {
-		if t, err := time.Parse(time.RFC3339, v); err == nil {
-			q.Until = t
+		t, err := time.Parse(time.RFC3339, v)
+		if err != nil {
+			badQueryParam(w, "until", "RFC 3339")
+			return store.Query{}, false
 		}
+		q.Until = t
 	}
 	// around+window (issue #29) is sugar for a bounded before/after
 	// lookback centered on a timestamp -- overrides since/until if both
 	// forms are present, since specifying a center point and specifying
 	// explicit bounds are two ways of asking for the same thing.
 	if v := qs.Get("around"); v != "" {
-		if t, err := time.Parse(time.RFC3339, v); err == nil {
-			window := 5 * time.Minute
-			if wv := qs.Get("window"); wv != "" {
-				if d, err := time.ParseDuration(wv); err == nil {
-					window = d
-				}
-			}
-			q.Since = t.Add(-window)
-			q.Until = t.Add(window)
+		t, err := time.Parse(time.RFC3339, v)
+		if err != nil {
+			badQueryParam(w, "around", "RFC 3339")
+			return store.Query{}, false
 		}
+		window := 5 * time.Minute
+		if wv := qs.Get("window"); wv != "" {
+			d, err := time.ParseDuration(wv)
+			if err != nil {
+				badQueryParam(w, "window", "a duration such as 5m")
+				return store.Query{}, false
+			}
+			window = d
+		}
+		q.Since = t.Add(-window)
+		q.Until = t.Add(window)
 	}
 	if v := qs.Get("sinceId"); v != "" {
-		if n, err := strconv.ParseUint(v, 10, 64); err == nil {
-			q.SinceID = n
+		n, err := strconv.ParseUint(v, 10, 64)
+		if err != nil {
+			badQueryParam(w, "sinceId", "a positive integer")
+			return store.Query{}, false
 		}
+		q.SinceID = n
 	}
 	if v := qs.Get("limit"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil {
-			q.Limit = n
+		n, err := strconv.Atoi(v)
+		if err != nil {
+			badQueryParam(w, "limit", "an integer")
+			return store.Query{}, false
 		}
+		q.Limit = n
 	}
-	return q
+	return q, true
 }
 
 // parseScope accepts only the two recognized scope values -- anything
