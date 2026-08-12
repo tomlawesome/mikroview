@@ -36,7 +36,7 @@ type ConfigProblem struct {
 //
 // The disclosure matters because of what these messages contain: config
 // key names, filesystem paths, the OIDC issuer URL, SMTP hosts, and a
-// database endpoint once #131 lands. That is an infrastructure map, and
+// database endpoint when Postgres is configured (issue #131). That is an infrastructure map, and
 // the same recon value already judged worth protecting when -list-users
 // was scoped and when the clear-permanent gate was fixed.
 //
