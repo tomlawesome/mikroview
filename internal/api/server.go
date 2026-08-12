@@ -262,6 +262,7 @@ func (s *Server) routes() []route {
 		{http.MethodGet, "/api/auth/session", s.handleAuthSession},
 		{http.MethodPost, "/api/auth/register", s.handleAuthRegister},
 		{http.MethodPost, "/api/auth/login", s.handleAuthLogin},
+		{http.MethodPost, "/api/auth/password", s.handleAuthChangePassword},
 		{http.MethodPost, "/api/auth/logout", s.handleAuthLogout},
 		{http.MethodPost, "/api/auth/users", s.handleAuthCreateUser},
 		{http.MethodGet, "/api/auth/users", s.handleAuthListUsers},

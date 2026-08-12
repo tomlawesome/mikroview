@@ -1020,7 +1020,7 @@ func main() {
 		MatchLog:          matchLog,
 		DeviceStaleAfter:  cfg.Flags.DeviceStaleAfter,
 		Auth:              authStore,
-		Sessions:          auth.NewSessionStore(cfg.Auth.SessionTTL),
+		Sessions:          auth.NewSessionStoreWithMaxLifetime(cfg.Auth.SessionTTL, cfg.Auth.SessionMaxLifetime),
 		LoginLimiter:      auth.NewLoginLimiter(loginLimiterThreshold, loginLimiterWindow),
 		SecureCookie:      cfg.Auth.SecureCookie,
 		TrustedProxies:    trustedProxies,
