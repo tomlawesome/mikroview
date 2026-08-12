@@ -33,7 +33,7 @@ func serveTLSForTest(t *testing.T, out chan RawMessage) (string, func()) {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	go ServeTLS(ctx, ln, testCert(t), out)
+	go ServeTLS(ctx, ln, FixedCertificate(testCert(t)), out)
 	return ln.Addr().String(), cancel
 }
 
@@ -133,7 +133,7 @@ func TestServeTLSStopsOnContextCancel(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
-	go func() { done <- ServeTLS(ctx, ln, testCert(t), out) }()
+	go func() { done <- ServeTLS(ctx, ln, FixedCertificate(testCert(t)), out) }()
 
 	cancel()
 
@@ -161,7 +161,7 @@ func TestListenTLSBindsByAddress(t *testing.T) {
 	defer cancel()
 
 	errCh := make(chan error, 1)
-	go func() { errCh <- ListenTLS(ctx, "127.0.0.1:0", testCert(t), out) }()
+	go func() { errCh <- ListenTLS(ctx, "127.0.0.1:0", FixedCertificate(testCert(t)), out) }()
 
 	select {
 	case err := <-errCh:
