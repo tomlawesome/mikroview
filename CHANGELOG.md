@@ -459,6 +459,18 @@ upgrading.
 
 ### Fixed
 
+- **MikroView checks the database ran the schema changes it thinks it
+  did** (#294). It recorded which schema versions had been applied but
+  never what they contained, so anyone able to write to that one table
+  could claim a version and MikroView would report "up to date" and run
+  against a schema it had never seen. Each schema change now records a
+  fingerprint as it is applied, checked on every start. A mismatch stops
+  startup rather than guessing at the shape of your data.
+
+  Existing databases are unaffected: rows written before this have
+  nothing to compare and are simply not checked, rather than treated as
+  suspicious.
+
 - **Restoring an older database backup can no longer bring deleted
   accounts back** (#294). MikroView copied your JSON files into Postgres
   on the first move, but it re-checked on *every* start — so restoring
