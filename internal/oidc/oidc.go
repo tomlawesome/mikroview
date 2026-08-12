@@ -80,8 +80,10 @@ func (i *Identity) claimValues(name string) []string {
 			return nil
 		}
 		return []string{v}
-	case []string:
-		return v
+	// No case []string: claims always arrive through encoding/json into
+	// map[string]any, which yields []any for a JSON array and never
+	// []string, so that branch was unreachable (#267 finding 20).
+	// Confirmed against the vendored go-oidc source.
 	case []any:
 		var out []string
 		for _, item := range v {

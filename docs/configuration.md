@@ -366,6 +366,81 @@ watchlist:
   matchLogRetention: 168h  # 7 days
 ```
 
+#### CFG-0050
+
+`notify.webhook.url` is a plain `http://` URL and
+`notify.webhook.headers` is set, so whatever credential those headers
+carry -- and every flag's contents with it -- crosses the network in
+cleartext. See [Notifications](#notifications-optional).
+
+Mikroview sends anyway: the receiver may well be on a network you
+control end to end, and refusing would be MikroView deciding that for
+you.
+
+```yaml
+notify:
+  webhook:
+    url: "https://ntfy.example.com/mikroview"
+```
+
+#### CFG-0051
+
+`notify.webhook.url` is a plain `http://` URL. No credential is at risk
+(no headers are set), but every flag's contents -- source addresses,
+rule labels, detector detail -- still cross the network in cleartext.
+Same "sends anyway" reasoning as CFG-0050 above.
+
+```yaml
+notify:
+  webhook:
+    url: "https://ntfy.example.com/mikroview"
+```
+
+#### CFG-0060
+
+`oidc.issuerUrl` is set but `oidc.publicBaseUrl` is not, so MikroView
+cannot build the redirect URI the provider has to send users back to.
+See [Single sign-on](#single-sign-on-oidcsso).
+
+SSO login is unavailable; local login is unaffected. That is deliberate
+-- an optional integration being half-configured should not take a
+working deployment down -- but `-validate-config` still exits non-zero,
+so a pipeline is told.
+
+```yaml
+oidc:
+  issuerUrl: "https://id.example.com"
+  publicBaseUrl: "https://mikroview.example.com"
+```
+
+#### CFG-0061
+
+`oidc.issuerUrl` is set but `oidc.clientId` and/or `oidc.clientSecret`
+are empty. Same outcome as CFG-0060: SSO off, local login unaffected.
+
+Remove `oidc.issuerUrl` if you meant to turn SSO off -- that is the
+deliberate way to say so, and it silences this.
+
+```yaml
+oidc:
+  clientId: "mikroview"
+  clientSecret: "<from your provider>"
+```
+
+#### CFG-0062
+
+`oidc.issuerUrl` names a multi-tenant provider. MikroView only supports
+self-hosted identity providers (Authentik, Keycloak, Zitadel) or a
+single-tenant Entra issuer URL -- ones where the issuer itself restricts
+who can sign in. See [Single sign-on](#single-sign-on-oidcsso) for the
+full reasoning; it is a refusal, not a warning you can configure away.
+
+```yaml
+oidc:
+  # a self-hosted provider, not a multi-tenant one
+  issuerUrl: "https://id.example.com"
+```
+
 ## Logging
 
 Mikroview's own server output (not event data -- see `store.retention`
@@ -2313,6 +2388,11 @@ Override individual scalar settings without a mounted file:
 | `MIKROVIEW_OIDC_CLIENT_SECRET` | `oidc.clientSecret` |
 | `MIKROVIEW_OIDC_PUBLIC_BASE_URL` | `oidc.publicBaseUrl` |
 | `MIKROVIEW_OIDC_SCOPES` | `oidc.scopes` (comma-separated) |
+| `MIKROVIEW_OIDC_ALLOWED_GROUPS` | `oidc.allowedGroups` (comma-separated) |
+| `MIKROVIEW_OIDC_GROUPS_CLAIM` | `oidc.groupsClaim` |
+| `MIKROVIEW_OIDC_ALLOWED_EMAILS` | `oidc.allowedEmails` (comma-separated) |
+| `MIKROVIEW_OIDC_ALLOWED_EMAIL_DOMAINS` | `oidc.allowedEmailDomains` (comma-separated) |
+| `MIKROVIEW_RECOVERY_PEPPER_FILE` | `auth.recoveryPepperPath` -- for keeping the pepper off the data volume entirely, so a stolen copy of that volume does not carry the one value the recovery-key hashes are useless without |
 | `MIKROVIEW_NOTIFY_BATCH_WINDOW` | `notify.batchWindow` (see [Notifications](#notifications-optional)) |
 | `MIKROVIEW_NOTIFY_SMTP_HOST` | `notify.smtp.host` |
 | `MIKROVIEW_NOTIFY_SMTP_PORT` | `notify.smtp.port` |

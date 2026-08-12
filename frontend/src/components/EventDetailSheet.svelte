@@ -1,5 +1,6 @@
 <script lang="ts">
   // SPDX-License-Identifier: AGPL-3.0-only
+  import ActionBadge from './ActionBadge.svelte'
   // Full-detail bottom sheet for one event, opened by tapping a card in
   // EventCardMobile.svelte -- chosen over expanding the card in place
   // (see issue #85's locked design decision) since it scales better if
@@ -41,7 +42,7 @@
   <div class="handle"></div>
 
   <div class="header">
-    <span class="badge badge-{event.action}">{event.action.toUpperCase()}</span>
+    <ActionBadge action={event.action} />
     <span class="time">{formatTime(event.time)}</span>
     <button class="close" onclick={onClose} aria-label="Close">✕</button>
   </div>
@@ -175,36 +176,6 @@
     display: flex;
     align-items: center;
     gap: 10px;
-  }
-
-  .badge {
-    font-family: var(--font-mono);
-    font-size: 12px;
-    font-weight: 700;
-    letter-spacing: 0.03em;
-    padding: 3px 8px;
-    border-radius: 4px;
-  }
-
-  .badge-accept {
-    color: var(--accept);
-    background: var(--accept-bg);
-  }
-  .badge-drop {
-    color: var(--drop);
-    background: var(--drop-bg);
-  }
-  .badge-reject {
-    color: var(--reject);
-    background: var(--reject-bg);
-  }
-  .badge-log {
-    color: var(--log);
-    background: var(--log-bg);
-  }
-  .badge-unknown {
-    color: var(--unknown);
-    background: var(--unknown-bg);
   }
 
   .time {

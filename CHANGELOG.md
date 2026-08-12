@@ -398,6 +398,18 @@ upgrading.
 
 ### Fixed
 
+- **Creating a named entity now answers `201`, not `200`** (#267),
+  matching every other create endpoint. `POST /api/entities` both
+  creates and replaces, and always answering `200` left a caller unable
+  to tell which had happened. A replace still answers `200`.
+
+- **Four single sign-on access-policy settings can now be set from the
+  environment** (#267): `MIKROVIEW_OIDC_ALLOWED_GROUPS`,
+  `MIKROVIEW_OIDC_GROUPS_CLAIM`, `MIKROVIEW_OIDC_ALLOWED_EMAILS` and
+  `MIKROVIEW_OIDC_ALLOWED_EMAIL_DOMAINS`. A deployment keeping its OIDC
+  block in the environment could previously say who its provider was but
+  not who was allowed in.
+
 - **Two named entities can no longer overwrite each other** (#267).
   Entities were stored under `type + ":" + key`, and both parts can
   contain colons — an IPv6 address is a perfectly ordinary host key — so
@@ -419,6 +431,29 @@ upgrading.
   batches were trimmed by byte count, which can split a multi-byte
   character and leave invalid text. Trimming now stops at a character
   boundary.
+
+- **A mistyped filter in an API request is now refused instead of
+  silently ignored** (#267). `GET /api/events` and `GET /api/audit`
+  accepted a malformed `since`, `until`, `limit`, `port`, `around`,
+  `window` or `sinceId` and returned `200` with the filter simply not
+  applied — so a caller with a typo got *everything* while believing
+  they had asked for a window. In a tool whose job is showing you what
+  happened in a window, that is the misreading that matters. Both now
+  answer `400` and name the parameter, which is what
+  `GET /api/watchlist/matches` already did; the three took the same
+  parameters and disagreed about this. An absent parameter still means
+  "no filter", unchanged.
+
+- **`-validate-config` now checks your single sign-on settings** (#267).
+  It performed no OIDC validation at all, so a block missing
+  `publicBaseUrl`, or `clientId`/`clientSecret`, or pointed at a
+  multi-tenant provider MikroView refuses, passed cleanly — and the
+  first sign anything was wrong was the SSO button not being there. New
+  CFG-0060, CFG-0061 and CFG-0062. They are warnings, not errors:
+  MikroView still starts and local login still works, because taking a
+  deployment down over a half-configured optional integration would be
+  worse. `-validate-config` exits non-zero on warnings, so a pipeline is
+  still told.
 
 - **A rule filter that stops being usable mid-stream now says so**
   (#267). If a regex filter became unevaluable once matching events
