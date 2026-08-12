@@ -775,6 +775,12 @@ func main() {
 	// owner's 4c decision) and into the API server for the ingest
 	// endpoint to write and the table endpoints to read.
 	routerState := routerstate.New()
+	// What makes an entry scoped to a router's address list resolvable
+	// at match time (#274 item 2). Wired here rather than at
+	// construction because routerState does not exist yet up there --
+	// and safe to do late because the evaluator does not start
+	// consuming until Run below.
+	watchlistEval.WithAddressLists(routerState)
 	names := naming.Resolver{Rules: cfg.RuleNames, Hosts: cfg.HostNames, Entities: entityStore, RouterHosts: routerState}
 
 	go ingest(ctx, raw, st, devices, macRegistry, fs, h, geo, detector, ru, names, watchlistEval)
@@ -1017,6 +1023,7 @@ func main() {
 		Audit:             auditStore,
 		Watchlist:         watchlistStore,
 		Suggest:           suggestStore,
+		DefaultWatchPorts: cfg.Flags.CriticalPorts,
 		MatchLog:          matchLog,
 		DeviceStaleAfter:  cfg.Flags.DeviceStaleAfter,
 		Auth:              authStore,

@@ -47,6 +47,10 @@ type Evaluator struct {
 	entries  *Store
 	matchLog matchlog.Store
 	queue    chan store.Event
+	// members resolves address-list membership for entries scoped to a
+	// list (#274 item 2). Nil when router state is unavailable, which
+	// makes such entries match nothing rather than guess.
+	members AddressListMembership
 
 	dropped          atomic.Uint64
 	lastDropLogNanos atomic.Int64
@@ -56,6 +60,17 @@ type Evaluator struct {
 // Enqueue.
 func NewEvaluator(entries *Store, matchLog matchlog.Store) *Evaluator {
 	return &Evaluator{entries: entries, matchLog: matchLog, queue: make(chan store.Event, evalQueueSize)}
+}
+
+// WithAddressLists gives the evaluator a way to resolve address-list
+// membership, and returns it for chaining at construction.
+//
+// Separate from NewEvaluator so every existing caller and test keeps
+// working unchanged, and so an entry scoped to a list is inert rather
+// than wrong wherever router state is not wired up.
+func (ev *Evaluator) WithAddressLists(members AddressListMembership) *Evaluator {
+	ev.members = members
+	return ev
 }
 
 // Enqueue hands e off to the evaluation-worker goroutine (see Run)
@@ -114,7 +129,7 @@ func (ev *Evaluator) Run(ctx context.Context) {
 func (ev *Evaluator) evaluateRecovered(e store.Event) {
 	defer logging.Recover(persistLog)
 	for _, entry := range ev.entries.entriesSnapshot() {
-		tuple, outcome := Match(entry, e)
+		tuple, outcome := MatchWithLists(entry, e, ev.members)
 		switch outcome {
 		case Violation:
 			if err := ev.matchLog.Append(entry.ID, tuple, e, e.ReceivedAt); err != nil {

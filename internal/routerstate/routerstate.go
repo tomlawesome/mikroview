@@ -391,6 +391,37 @@ func (s *Store) ARPEntries(device string) (entries []ingest.ARPEntry, updatedAt 
 
 // AddressLists returns device's pushed /ip/firewall/address-list table,
 // sorted by (list, address).
+// InAddressList reports whether ip is currently in device's address
+// list, from whatever that router last pushed (#274 item 2).
+//
+// "Currently" is the whole point: RouterOS edits these lists itself --
+// its own rules add dynamic entries -- so a watchlist entry scoped to a
+// list has to be resolved at match time. Answering from a copy taken
+// when the entry was created would be stale the first time the list
+// changed, silently.
+//
+// Compared as text, not as parsed addresses. A list entry can be a bare
+// address, a CIDR or a range, and reading a range as a set of addresses
+// here would quietly turn a display table into a matching engine. What
+// this answers is "is this exact address listed", which is what the
+// pushed table actually says; anything cleverer belongs behind a
+// deliberate decision rather than arriving as a side effect.
+func (s *Store) InAddressList(device, list, ip string) bool {
+	if device == "" || list == "" || ip == "" {
+		return false
+	}
+	entries, _, ok := s.AddressLists(device)
+	if !ok {
+		return false
+	}
+	for _, e := range entries {
+		if e.List == list && e.Address == ip {
+			return true
+		}
+	}
+	return false
+}
+
 func (s *Store) AddressLists(device string) (entries []ingest.AddressListEntry, updatedAt time.Time, ok bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
