@@ -78,6 +78,24 @@ upgrading.
 
 ### Added
 
+- **You can change your own password from the interface** (#294). There
+  was no way to do it at all before: it meant `-recover-admin-account`
+  on the host, so anyone who suspected their password was known could do
+  nothing about it themselves. **Menu → Change password.**
+
+  Changing it also signs out everywhere else, immediately — that is the
+  point rather than a side effect, since the other half of "someone has
+  my credential" is "someone has my session". You stay signed in where
+  you made the change. An account that signs in through your identity
+  provider has no local password to change and does not see the option.
+
+- **Sessions now have a maximum age** (#294): seven days from signing
+  in, however often you use MikroView in between. `auth.sessionTTL` is
+  an *idle* timeout, so a session used once a day never expired — a
+  browser left signed in on a shared machine stayed valid indefinitely.
+  Configurable as `auth.sessionMaxLifetime`; set it to `0` to go back to
+  no ceiling.
+
 - **The Watchlist tells you when an entry can never match** (#274). An
   entry showing no matches used to be ambiguous between "nothing
   happened" and "nothing here is even watching" — the second being a

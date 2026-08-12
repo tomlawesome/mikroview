@@ -2388,6 +2388,7 @@ Override individual scalar settings without a mounted file:
 | `MIKROVIEW_OIDC_CLIENT_SECRET` | `oidc.clientSecret` |
 | `MIKROVIEW_OIDC_PUBLIC_BASE_URL` | `oidc.publicBaseUrl` |
 | `MIKROVIEW_OIDC_SCOPES` | `oidc.scopes` (comma-separated) |
+| `MIKROVIEW_AUTH_SESSION_MAX_LIFETIME` | `auth.sessionMaxLifetime` |
 | `MIKROVIEW_OIDC_ALLOWED_GROUPS` | `oidc.allowedGroups` (comma-separated) |
 | `MIKROVIEW_OIDC_GROUPS_CLAIM` | `oidc.groupsClaim` |
 | `MIKROVIEW_OIDC_ALLOWED_EMAILS` | `oidc.allowedEmails` (comma-separated) |
