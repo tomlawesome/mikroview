@@ -100,7 +100,7 @@ func mustOpenPostgres(t *testing.T, retention time.Duration) *PostgresStore {
 func collectPG(t *testing.T, s *PostgresStore, q Query) []Record {
 	t.Helper()
 	var out []Record
-	if err := s.Query(q, func(r Record) bool {
+	if err := s.Query(context.Background(), q, func(r Record) bool {
 		out = append(out, r)
 		return true
 	}); err != nil {
@@ -214,7 +214,7 @@ func TestPostgresAppendRefusesEmptyIdentity(t *testing.T) {
 
 func TestPostgresQueryRefusesEmptyIdentity(t *testing.T) {
 	s := mustOpenPostgres(t, 7*24*time.Hour)
-	err := s.Query(Query{}, func(Record) bool { return true })
+	err := s.Query(context.Background(), Query{}, func(Record) bool { return true })
 	if err != ErrEmptyIdentity {
 		t.Errorf("Query with no MAC/IP = %v, want ErrEmptyIdentity", err)
 	}
@@ -340,7 +340,7 @@ func TestPostgresQueryYieldFalseStopsDelivery(t *testing.T) {
 	}
 
 	n := 0
-	if err := s.Query(Query{Source: src}, func(Record) bool {
+	if err := s.Query(context.Background(), Query{Source: src}, func(Record) bool {
 		n++
 		return n < 2
 	}); err != nil {

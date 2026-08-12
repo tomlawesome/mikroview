@@ -25,20 +25,11 @@
 // This scenario needs no router boot at all, so it runs here in
 // make live-routeros rather than requiring one just to be included.
 
-import { execFileSync } from 'child_process'
 import { fileURLToPath } from 'url'
-import path from 'path'
-import { session, check, done } from './live-browser.mjs'
+import { session, check, done, feedPortScan } from './live-browser.mjs'
 
-const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..')
 const URL_BASE = process.env.MV_URL
 
-function portscan(n, sourceIp) {
-  execFileSync(path.join(REPO, 'scripts/live-env.sh'), ['portscan', String(n), sourceIp], {
-    stdio: 'ignore',
-    cwd: REPO,
-  })
-}
 
 const { page } = await session()
 
@@ -152,7 +143,7 @@ check((await push('not-a-real-token', validArp)) === 401, 'an invalid token is r
 // traffic must be completely unaffected by any amount of router-state
 // pushing, including pushes that name the exact same source address.
 
-portscan(20, '198.51.100.9')
+feedPortScan(20, '198.51.100.9')
 
 // Poll rather than wait on a DOM selector -- this scenario reads
 // /api/flags directly throughout and never navigates to the Flags
@@ -164,6 +155,28 @@ for (let i = 0; i < 30 && !scanFlag; i++) {
   if (!scanFlag) await new Promise((r) => setTimeout(r, 500))
 }
 check(!!scanFlag, 'the port scan raised a real flag for 198.51.100.9')
+
+// Let the flag settle before snapshotting it.
+//
+// The scan's own events are still arriving when it first appears, and
+// each re-fire raises confidence -- so comparing a snapshot taken at
+// first sight against one taken after the pushes measures ingest still
+// progressing, not what the pushes did. Wait for two consecutive reads
+// to agree, then snapshot: the assertion below is about pushed data
+// being inert, and it should fail only for that reason.
+//
+// It passed under live-env.sh and failed against the container, which
+// is the same race with more latency either side of it.
+for (let i = 0; i < 40; i++) {
+  await new Promise((r) => setTimeout(r, 250))
+  const flags = await getTable('/api/flags')
+  const now = flags.body.flags?.find((f) => f.target === '198.51.100.9')
+  if (now && now.confidence === scanFlag.confidence && now.count === scanFlag.count) {
+    scanFlag = now
+    break
+  }
+  if (now) scanFlag = now
+}
 
 for (let i = 0; i < 5; i++) {
   await push(tokA.body.value, {

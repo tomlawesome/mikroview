@@ -17,7 +17,7 @@ func TestResolverReturnsConfiguredNames(t *testing.T) {
 	if got := r.Rule("r13"); got != "Block known scanners" {
 		t.Errorf("Rule(\"r13\") = %q, want \"Block known scanners\"", got)
 	}
-	if got := r.Host("192.168.1.50"); got != "Living room NAS" {
+	if got := r.Host("router-1", "192.168.1.50"); got != "Living room NAS" {
 		t.Errorf("Host(\"192.168.1.50\") = %q, want \"Living room NAS\"", got)
 	}
 }
@@ -31,7 +31,7 @@ func TestResolverMissReturnsEmptyString(t *testing.T) {
 	if got := r.Rule("r99"); got != "" {
 		t.Errorf("Rule(\"r99\") = %q, want empty", got)
 	}
-	if got := r.Host("10.0.0.1"); got != "" {
+	if got := r.Host("router-1", "10.0.0.1"); got != "" {
 		t.Errorf("Host(\"10.0.0.1\") = %q, want empty", got)
 	}
 }
@@ -41,7 +41,7 @@ func TestZeroValueResolverIsUsable(t *testing.T) {
 	if got := r.Rule("r13"); got != "" {
 		t.Errorf("Rule() on zero value = %q, want empty", got)
 	}
-	if got := r.Host("192.168.1.50"); got != "" {
+	if got := r.Host("router-1", "192.168.1.50"); got != "" {
 		t.Errorf("Host() on zero value = %q, want empty", got)
 	}
 }
@@ -68,7 +68,7 @@ func TestEntityLabelTakesPrecedenceOverConfigMap(t *testing.T) {
 	if got := r.Rule("r13"); got != "UI label wins" {
 		t.Errorf("Rule(\"r13\") = %q, want the entity's label to take precedence", got)
 	}
-	if got := r.Host("192.168.1.50"); got != "UI host label wins" {
+	if got := r.Host("router-1", "192.168.1.50"); got != "UI host label wins" {
 		t.Errorf("Host(\"192.168.1.50\") = %q, want the entity's label to take precedence", got)
 	}
 }
@@ -108,7 +108,7 @@ func TestEntityWithNoLabelFallsThroughToConfigMap(t *testing.T) {
 		Entities: es,
 	}
 
-	if got := r.Host("192.168.1.50"); got != "config name still shows" {
+	if got := r.Host("router-1", "192.168.1.50"); got != "config name still shows" {
 		t.Errorf("Host(\"192.168.1.50\") = %q, want the config.yaml fallback since the entity has no label", got)
 	}
 }
@@ -164,7 +164,38 @@ func TestResolverPortZeroValueIsUsable(t *testing.T) {
 // routerstate.Store -- the interface exists for exactly this.
 type fakeRouterHosts map[string]string
 
-func (f fakeRouterHosts) HostName(ip string) string { return f[ip] }
+// Ignores device, so the precedence tests below stay about precedence.
+// Scoping itself is covered by scopedRouterHosts and
+// TestRouterHostsAreScopedToTheDeviceThatPushedThem.
+func (f fakeRouterHosts) HostName(device, ip string) string { return f[ip] }
+
+// scopedRouterHosts is keyed the way the real store is: a name belongs
+// to the device that pushed it.
+type scopedRouterHosts map[string]map[string]string
+
+func (f scopedRouterHosts) HostName(device, ip string) string { return f[device][ip] }
+
+// The Resolver must not launder one router's pushed name onto another
+// router's traffic. This is the naming-layer half of the fix; see
+// routerstate.Store.HostName for the whole finding (#285, #283, #284).
+func TestRouterHostsAreScopedToTheDeviceThatPushedThem(t *testing.T) {
+	r := Resolver{
+		RouterHosts: scopedRouterHosts{
+			"router-evil": {"192.168.1.50": "trusted-nas"},
+		},
+		Hosts: map[string]string{"192.168.1.50": "config label"},
+	}
+
+	if got := r.Host("router-evil", "192.168.1.50"); got != "trusted-nas" {
+		t.Errorf("Host() = %q -- a device must still see the name it pushed itself", got)
+	}
+	if got := r.Host("router-victim", "192.168.1.50"); got != "config label" {
+		t.Errorf("Host() = %q -- router-evil's pushed name reached router-victim's traffic; it must fall through to mikroview's own labels", got)
+	}
+	if got := r.Host("", "192.168.1.50"); got != "config label" {
+		t.Errorf("Host() = %q -- with no device known, no router-pushed name may be applied", got)
+	}
+}
 
 // TestRouterHostsWinOverEverything is issue #186 step 4c's owner
 // decision as a test: a router-pushed name out-ranks both an
@@ -183,10 +214,10 @@ func TestRouterHostsWinOverEverything(t *testing.T) {
 		RouterHosts: fakeRouterHosts{"192.168.1.50": "router-name"},
 	}
 
-	if got := r.Host("192.168.1.50"); got != "router-name" {
+	if got := r.Host("router-1", "192.168.1.50"); got != "router-name" {
 		t.Errorf("Host() = %q, want the router-pushed name to win over entity and config labels", got)
 	}
-	if got := r.Host("192.168.1.60"); got != "config-only host" {
+	if got := r.Host("router-1", "192.168.1.60"); got != "config-only host" {
 		t.Errorf("Host() = %q -- an address the router does not name must fall through untouched", got)
 	}
 }

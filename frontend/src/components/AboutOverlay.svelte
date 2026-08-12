@@ -50,7 +50,7 @@
         {/if}
 
         <!-- (a) copyright notice -->
-        <p>Copyright © 2026 Tom Lawson</p>
+        <p>Copyright © 2026 Tom Bridgwater-Lawson</p>
 
         <!-- (c) licensees may convey under this License, and (d) how to view it -->
         <p>
@@ -82,6 +82,23 @@
           way the AGPL doesn't permit — see
           <a href="{SOURCE_URL}/blob/main/COMMERCIAL-LICENSE.md" target="_blank" rel="noopener noreferrer">
             COMMERCIAL-LICENSE.md
+          </a>.
+        </p>
+
+        <!--
+          Third-party attribution, distinct from the AGPL notices above:
+          those are MikroView's licence to you, this is the copyright and
+          licence text of the software MikroView itself distributes.
+          MIT/BSD/ISC/Apache-2.0 all require those to accompany a binary
+          distribution, and the runtime image is distroless — this binary
+          is the whole artefact — so the notices are embedded in it and
+          served from here rather than left in a file nobody receives.
+        -->
+        <p class="third-party">
+          MikroView includes third-party open-source software. Their copyright
+          notices and licences are at
+          <a href="/api/third-party-notices" target="_blank" rel="noopener noreferrer">
+            third-party notices
           </a>.
         </p>
       </div>
@@ -159,6 +176,10 @@
     color: var(--fg-muted);
     border-top: 1px solid var(--border);
     padding-top: 0.75rem;
+  }
+
+  .third-party {
+    color: var(--fg-muted);
   }
 
   .body a {

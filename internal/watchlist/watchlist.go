@@ -229,6 +229,21 @@ func OpenWithBackend(b persist.Backend) (*Store, error) {
 // sort the result themselves rather than this store guessing which
 // order a caller wants.
 func (s *Store) List() []Entry {
+	out := s.entriesSnapshot()
+	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
+	return out
+}
+
+// entriesSnapshot is List without the sort, for evaluateRecovered's
+// per-event Match loop -- Match doesn't care about order, so the
+// sort.Slice call List() does purely for API/UI stability was dead
+// weight on that path, measured at up to 4.3ms/event at 5,000 entries.
+// Still copies every entry rather than returning s.entries directly:
+// the caller (evaluateRecovered) iterates the result after this
+// returns, without holding s.mu, because it calls RecordObservation
+// mid-loop, which takes its own Lock -- holding RLock across that call
+// would deadlock.
+func (s *Store) entriesSnapshot() []Entry {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -236,7 +251,6 @@ func (s *Store) List() []Entry {
 	for _, e := range s.entries {
 		out = append(out, *e)
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
 	return out
 }
 
@@ -359,8 +373,13 @@ func isTrackableConnState(e store.Event) bool {
 
 // eventIdentity resolves an event's source identity the same
 // MAC-preferred, IP-fallback way matchlog.Identity.MatchesSource
-// compares against: SrcMAC when the parser found one (only the forward
-// chain reliably carries it), SrcIP otherwise.
+// compares against: SrcMAC when the parser found one, SrcIP otherwise.
+//
+// Which chains carry src-mac is a property of the firmware, not
+// something to rely on: on a real RouterOS 7.23.3 both forward and input
+// carry it (#273), while output -- traffic the router originates, so
+// there is no incoming frame to read a source MAC from -- does not. The
+// IP fallback is what makes that not matter here.
 func eventIdentity(e store.Event) matchlog.Identity {
 	return matchlog.Identity{MAC: e.SrcMAC, IP: e.SrcIP}
 }

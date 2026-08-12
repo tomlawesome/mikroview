@@ -4,6 +4,7 @@ package watchlist
 
 import (
 	"context"
+	"fmt"
 	"path/filepath"
 	"testing"
 	"time"
@@ -56,7 +57,7 @@ func TestEvaluatorRecordsAMatchEndToEnd(t *testing.T) {
 	for time.Now().Before(deadline) {
 		if ml.Stats().Count == 1 {
 			var got []matchlog.Record
-			_ = ml.Query(matchlog.Query{Source: matchlog.Identity{MAC: baseEvent().SrcMAC}}, func(r matchlog.Record) bool {
+			_ = ml.Query(context.Background(), matchlog.Query{Source: matchlog.Identity{MAC: baseEvent().SrcMAC}}, func(r matchlog.Record) bool {
 				got = append(got, r)
 				return true
 			})
@@ -177,7 +178,7 @@ type panicOnAppendMatchLog struct{}
 func (panicOnAppendMatchLog) Append(string, matchlog.Tuple, store.Event, time.Time) error {
 	panic("simulated panic from Append")
 }
-func (panicOnAppendMatchLog) Query(matchlog.Query, func(matchlog.Record) bool) error {
+func (panicOnAppendMatchLog) Query(context.Context, matchlog.Query, func(matchlog.Record) bool) error {
 	return nil
 }
 func (panicOnAppendMatchLog) Stats() matchlog.Stats { return matchlog.Stats{} }
@@ -216,5 +217,41 @@ func TestEvaluatorSurvivesAPanicDuringEvaluation(t *testing.T) {
 	}
 	if got := len(ev.queue); got == evalQueueSize {
 		t.Error("the queue filled up, suggesting Run stopped draining it after the panic")
+	}
+}
+
+// BenchmarkEvaluateRecovered pins evaluateRecovered's per-event cost
+// against entry count, direct rather than through Enqueue/Run so the
+// number reflects the evaluation itself rather than channel scheduling.
+// Entries deliberately never match the benchmarked event (port 2222 vs
+// the event's port 22) -- this measures the common "no entry matched"
+// case entriesSnapshot's own doc comment cites, not matchLog.Append's
+// fsync cost.
+func BenchmarkEvaluateRecovered(b *testing.B) {
+	for _, n := range []int{10, 100, 500, 1000, 2000, 5000} {
+		b.Run(fmt.Sprintf("entries=%d", n), func(b *testing.B) {
+			entries, err := Open(filepath.Join(b.TempDir(), "watchlist.json"))
+			if err != nil {
+				b.Fatalf("Open: %v", err)
+			}
+			for i := 0; i < n; i++ {
+				if err := entries.Upsert(Entry{ID: fmt.Sprintf("e%d", i), Ports: []int{2222}}); err != nil {
+					b.Fatalf("Upsert: %v", err)
+				}
+			}
+			ml, err := matchlog.Open(filepath.Join(b.TempDir(), "matchlog.jsonl"), 10)
+			if err != nil {
+				b.Fatalf("matchlog.Open: %v", err)
+			}
+			b.Cleanup(func() { ml.Close() })
+
+			ev := NewEvaluator(entries, ml)
+			e := baseEvent()
+
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				ev.evaluateRecovered(e)
+			}
+		})
 	}
 }

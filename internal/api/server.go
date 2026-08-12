@@ -7,6 +7,7 @@ package api
 import (
 	"net/http"
 	"net/netip"
+	"sync"
 	"time"
 
 	"github.com/tomlawesome/mikroview/internal/audit"
@@ -112,6 +113,15 @@ type Server struct {
 	// session regardless of deployment state, so "which build am I
 	// running" is checkable without any special access.
 	Version string
+	// ThirdPartyNotices is THIRD-PARTY-NOTICES.md, embedded in the
+	// binary at build time (see notices.go) and served verbatim by
+	// handleThirdPartyNotices. Every dependency compiled into this
+	// binary ships under a licence (MIT, BSD-3-Clause, ISC,
+	// Apache-2.0) requiring its copyright notice and licence text to
+	// accompany a binary distribution -- serving it here is how a user
+	// of a running instance receives them without having to go and find
+	// the source separately.
+	ThirdPartyNotices string
 	// ConfigProblems are non-fatal configuration problems found at
 	// startup, where a safe default was substituted for a bad value.
 	// Surfaced to admins in the UI because a startup log line is seen
@@ -169,6 +179,16 @@ type Server struct {
 	// correct answer for a self-hosted IdP and refused at startup for a
 	// multi-tenant one -- see internal/oidc.Policy and main.go.
 	OIDCPolicy oidc.Policy
+
+	// ingestAudit remembers, per (device, kind), when that combination
+	// last produced an audit row and whether it succeeded, so a routine
+	// push does not write one. See noteIngest for why -- unqualified
+	// per-push auditing let one ingest token roll the whole admin audit
+	// trail in about a day. Unexported and lazily built: it is internal
+	// bookkeeping, not configuration, so a zero-valued Server (which
+	// every test constructs) needs no extra setup.
+	ingestAuditMu sync.Mutex
+	ingestAudit   map[ingestAuditKey]ingestAuditState
 }
 
 // route is one registered endpoint. Routes are declared as data rather
@@ -233,6 +253,8 @@ func (s *Server) routes() []route {
 		{http.MethodPost, "/api/suggestions/{id}/accept", s.handleSuggestionsAccept},
 		{http.MethodPost, "/api/suggestions/{id}/hide", s.handleSuggestionsHide},
 		{http.MethodPost, "/api/suggestions/{id}/unhide", s.handleSuggestionsUnhide},
+
+		{http.MethodGet, "/api/third-party-notices", s.handleThirdPartyNotices},
 
 		{http.MethodGet, "/api/audit", s.handleAuditList},
 		{http.MethodGet, "/api/config/problems", s.handleConfigProblems},
