@@ -41,30 +41,45 @@ func (s *Server) handleAuditList(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "admin role required", http.StatusForbidden)
 		return
 	}
-	res := s.Audit.Query(parseAuditQuery(r))
+	q, ok := parseAuditQuery(w, r)
+	if !ok {
+		return
+	}
+	res := s.Audit.Query(q)
 	writeJSON(w, http.StatusOK, res)
 }
 
 // parseAuditQuery mirrors parseQuery's (rest.go) since/until/limit
 // parsing -- the subset of store.Query's windowed-query convention that
 // still applies here (audit.Query has no per-event filters to parse).
-func parseAuditQuery(r *http.Request) audit.Query {
+// That includes refusing a malformed value rather than ignoring it; see
+// badQueryParam for why.
+func parseAuditQuery(w http.ResponseWriter, r *http.Request) (audit.Query, bool) {
 	qs := r.URL.Query()
 	var q audit.Query
 	if v := qs.Get("since"); v != "" {
-		if t, err := time.Parse(time.RFC3339, v); err == nil {
-			q.Since = t
+		t, err := time.Parse(time.RFC3339, v)
+		if err != nil {
+			badQueryParam(w, "since", "RFC 3339")
+			return audit.Query{}, false
 		}
+		q.Since = t
 	}
 	if v := qs.Get("until"); v != "" {
-		if t, err := time.Parse(time.RFC3339, v); err == nil {
-			q.Until = t
+		t, err := time.Parse(time.RFC3339, v)
+		if err != nil {
+			badQueryParam(w, "until", "RFC 3339")
+			return audit.Query{}, false
 		}
+		q.Until = t
 	}
 	if v := qs.Get("limit"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil {
-			q.Limit = n
+		n, err := strconv.Atoi(v)
+		if err != nil {
+			badQueryParam(w, "limit", "an integer")
+			return audit.Query{}, false
 		}
+		q.Limit = n
 	}
-	return q
+	return q, true
 }

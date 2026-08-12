@@ -7,6 +7,8 @@ import (
 	"net"
 	"net/netip"
 	"strings"
+
+	"github.com/tomlawesome/mikroview/internal/oidc"
 )
 
 // Validate checks a loaded configuration and reports everything wrong
@@ -41,6 +43,7 @@ func (c *Config) Validate() Result {
 	c.validateAuth(fatal)
 	c.validateDevices(fatal)
 	c.validateNotify(warn)
+	c.validateOIDC(warn)
 
 	return r
 }
@@ -134,6 +137,15 @@ auth:
 	"CFG-0051": `notify:
   webhook:
     url: "https://ntfy.example.com/mikroview"`,
+	"CFG-0060": `oidc:
+  issuerUrl: "https://id.example.com"
+  publicBaseUrl: "https://mikroview.example.com"`,
+	"CFG-0061": `oidc:
+  clientId: "mikroview"
+  clientSecret: "<from your provider>"`,
+	"CFG-0062": `oidc:
+  # a self-hosted provider, not a multi-tenant one
+  issuerUrl: "https://id.example.com"`,
 }
 
 func (c *Config) validateListen(fatal problemFunc) {
@@ -297,6 +309,58 @@ func (c *Config) validateNotify(warn warnFunc) {
 		"is a plain http:// URL, so every flag's contents -- source addresses, rule labels and detector detail -- cross the network in cleartext",
 		"sending anyway",
 		"use an https:// URL, or accept this deliberately if the receiver is on a network you control end to end")
+}
+
+// validateOIDC mirrors, at config-check time, the four conditions
+// main.go checks at startup before wiring SSO.
+//
+// -validate-config is documented as deliberately stricter than the
+// server, and it performed no OIDC validation at all (#267 finding 14):
+// a block missing publicBaseUrl, or clientId/clientSecret, or pointed at
+// a provider mikroview refuses outright, passed cleanly. The server then
+// logs an error and leaves SSO off -- so the operator's first sign that
+// their config is wrong is that the SSO button is not there.
+//
+// Warnings, not fatals, and that is the point of the split. The server
+// deliberately fails soft here -- a half-configured SSO block leaves SSO
+// off and local login working, because taking a running deployment down
+// over an optional integration would be the worse outcome. Making these
+// fatal would do exactly that. -validate-config exits non-zero on
+// warnings too (see runValidateConfig), so a pipeline still fails, which
+// is where "stricter than the server" actually lives.
+//
+// Applied says what the operator gets rather than naming a substituted
+// value: nothing is filled in on their behalf, and pretending otherwise
+// would be worse than saying so.
+//
+// The multi-tenant issuer check calls oidc.AllowIssuer rather than
+// keeping its own copy of the list. This package is otherwise a
+// dependency-free leaf, and the one exception is deliberate: the
+// alternative is a second copy of a security allowlist that would drift
+// from the first, which is worse than the import.
+func (c *Config) validateOIDC(warn warnFunc) {
+	if c.OIDC.IssuerURL == "" {
+		// Not configured, which is the default and entirely fine.
+		return
+	}
+	if c.OIDC.PublicBaseURL == "" {
+		warn("CFG-0060", "oidc.publicBaseUrl",
+			"is empty while oidc.issuerUrl is set, so mikroview cannot build the redirect URI",
+			"SSO login disabled; local login unaffected",
+			"set oidc.publicBaseUrl to the URL your users reach mikroview on, exactly as registered with the provider")
+	}
+	if c.OIDC.ClientID == "" || c.OIDC.ClientSecret == "" {
+		warn("CFG-0061", "oidc.clientId",
+			"oidc.clientId and/or oidc.clientSecret are empty while oidc.issuerUrl is set",
+			"SSO login disabled; local login unaffected",
+			"set both from the client your provider issued, or remove oidc.issuerUrl to turn SSO off deliberately")
+	}
+	if err := oidc.AllowIssuer(c.OIDC.IssuerURL); err != nil {
+		warn("CFG-0062", "oidc.issuerUrl",
+			"names a multi-tenant provider, which mikroview does not support",
+			"SSO login disabled; local login unaffected",
+			"use a self-hosted provider (Authentik, Keycloak, Zitadel) or a single-tenant Entra issuer URL, where the issuer itself restricts who can sign in")
+	}
 }
 
 func (c *Config) validateDevices(fatal problemFunc) {

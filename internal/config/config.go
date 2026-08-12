@@ -1318,6 +1318,23 @@ func applyEnv(cfg *Config) {
 	if v := os.Getenv("MIKROVIEW_OIDC_SCOPES"); v != "" {
 		cfg.OIDC.Scopes = parseStringList(v)
 	}
+	// The access policy. Same list-via-env shape as Scopes above and as
+	// TLS.Hosts/Blocklist.Sources -- these four had no override at all,
+	// which meant a deployment keeping its whole OIDC block in the
+	// environment could set who its provider is but not who is allowed
+	// in (#267 finding 21).
+	if v := os.Getenv("MIKROVIEW_OIDC_ALLOWED_GROUPS"); v != "" {
+		cfg.OIDC.AllowedGroups = parseStringList(v)
+	}
+	if v := os.Getenv("MIKROVIEW_OIDC_GROUPS_CLAIM"); v != "" {
+		cfg.OIDC.GroupsClaim = v
+	}
+	if v := os.Getenv("MIKROVIEW_OIDC_ALLOWED_EMAILS"); v != "" {
+		cfg.OIDC.AllowedEmails = parseStringList(v)
+	}
+	if v := os.Getenv("MIKROVIEW_OIDC_ALLOWED_EMAIL_DOMAINS"); v != "" {
+		cfg.OIDC.AllowedEmailDomains = parseStringList(v)
+	}
 	if v := os.Getenv("MIKROVIEW_DEVICE_MAC_STORE_PATH"); v != "" {
 		cfg.DeviceMAC.StorePath = v
 	}
