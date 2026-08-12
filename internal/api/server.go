@@ -75,6 +75,14 @@ type Server struct {
 	// this package -- see internal/suggest's own doc comment for why
 	// there is deliberately no manual "refresh" endpoint.
 	Suggest *suggest.Store
+	// DefaultWatchPorts is what an accepted address-list suggestion
+	// watches, since such a candidate deliberately carries no ports of
+	// its own (#274 item 2): a rule scoping by address list says which
+	// hosts matter, not which ports. The operator's own
+	// flags.criticalPorts is the honest default -- the same set the
+	// critical_port detector already treats as worth noticing -- and
+	// the entry is editable the moment it exists.
+	DefaultWatchPorts []int
 	// Rules is the persisted, long-lived per-rule-label usage record
 	// (issue #103's internal/rules.Store) -- exposed read-only via GET
 	// /api/rules (issue #109) as the "discovered but unnamed rules"

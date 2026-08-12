@@ -61,7 +61,9 @@ GUEST_ADDR="10.0.2.15"
 # which is ample for configuration and scripting. Confirmed on 7.23.3:
 # `/system license get level` returns "free" on a booted image with no
 # licence key applied.
-BASE_URL="https://download.mikrotik.com/routeros"
+# Overridable so the download-failure path above can actually be
+# exercised. It could not be, which is part of why that path was wrong.
+BASE_URL="${MVCHR_BASE_URL:-https://download.mikrotik.com/routeros}"
 
 log() { printf '%s\n' "$*" >&2; }
 
@@ -86,8 +88,30 @@ chr_image() {
   local img="$CHR_DIR/chr-$CHR_VERSION.img"
   if [ ! -f "$img" ]; then
     log "downloading CHR $CHR_VERSION"
-    curl -fsS -o "$zip" "$BASE_URL/$CHR_VERSION/chr-$CHR_VERSION.img.zip"
-    unzip -oq "$zip" -d "$CHR_DIR"
+    # Each step checked, and a failed download deleted rather than left
+    # in the cache.
+    #
+    # Without this the failure does not surface here at all: a reset
+    # connection leaves a truncated zip, unzip fails, no .img appears,
+    # the qemu container starts with no disk, and the first thing that
+    # actually stops is the console driver -- reporting "connection
+    # refused" on the serial port. Observed exactly that, and the real
+    # cause (MikroTik's CDN resetting) was four errors up the log with
+    # nothing tying them together.
+    if ! curl -fsS --retry 3 --retry-delay 2 -o "$zip" "$BASE_URL/$CHR_VERSION/chr-$CHR_VERSION.img.zip"; then
+      rm -f "$zip"
+      log "downloading CHR $CHR_VERSION from $BASE_URL failed -- this fixture needs to reach download.mikrotik.com"
+      return 1
+    fi
+    if ! unzip -oq "$zip" -d "$CHR_DIR"; then
+      rm -f "$zip"
+      log "the downloaded CHR archive is not a readable zip -- removed, so the next run fetches it again"
+      return 1
+    fi
+    if [ ! -f "$img" ]; then
+      log "the CHR archive unpacked without producing $img"
+      return 1
+    fi
   fi
   printf '%s\n' "$img"
 }
@@ -109,7 +133,12 @@ up() {
   down >/dev/null 2>&1 || true
   qemu_image
   local base scratch mode accel_args=()
-  base="$(chr_image)"
+  # Checked explicitly. `set -e` does not reliably abort on a failing
+  # command substitution in an assignment, which is how the truncated
+  # download above got all the way to a serial-port error.
+  if ! base="$(chr_image)"; then
+    return 1
+  fi
   scratch="$CHR_DIR/run-$CHR_VERSION.img"
   # Every run starts from the pristine image. A fixture that inherits the
   # previous run's config is a fixture that passes because of something
