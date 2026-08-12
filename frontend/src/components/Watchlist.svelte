@@ -108,7 +108,10 @@
       return
     deletingId = e.id
     try {
-      await watchlistState.remove(e.id)
+      // The return value is the error text, not a throw -- see
+      // lib/api.ts. Dropping it left a failed delete looking identical
+      // to a successful one: the row stayed, and nothing said why.
+      error = await watchlistState.remove(e.id)
     } finally {
       deletingId = null
     }
@@ -128,7 +131,7 @@
   async function toggleObserving(e: WatchlistEntry) {
     togglingObserve = e.id
     try {
-      await watchlistState.setObserving(e.id, !e.observing)
+      error = await watchlistState.setObserving(e.id, !e.observing)
     } finally {
       togglingObserve = null
     }
@@ -137,7 +140,7 @@
   async function promoteOne(e: WatchlistEntry, d: WatchlistPermittedDest) {
     promoting = e.id + d.destIp + d.port
     try {
-      await watchlistState.promote(e.id, [d])
+      error = await watchlistState.promote(e.id, [d])
     } finally {
       promoting = null
     }
