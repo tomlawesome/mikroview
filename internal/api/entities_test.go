@@ -105,8 +105,14 @@ func TestAdminCanListCreateAndDeleteEntities(t *testing.T) {
 		t.Fatal(err)
 	}
 	createResp.Body.Close()
-	if createResp.StatusCode != http.StatusOK {
-		t.Fatalf("expected 200 creating an entity, got %d", createResp.StatusCode)
+	// 201, matching every sibling create endpoint here
+	// (handleWatchlistEntriesCreate, handleTokensCreate,
+	// handleAuthRegister, handleAuthCreateUser,
+	// handleSuggestionsAccept). Upsert conflates create and replace, so
+	// this is how a caller tells which one happened -- see #267 finding
+	// 19, and the replace case asserted below.
+	if createResp.StatusCode != http.StatusCreated {
+		t.Fatalf("expected 201 creating an entity, got %d", createResp.StatusCode)
 	}
 	if created.Type != entities.TypeHost || created.Key != "192.168.1.50" || created.Label != "mail relay" {
 		t.Errorf("unexpected created entity: %+v", created)
@@ -150,8 +156,19 @@ func TestPostEntitiesUpsertsInPlace(t *testing.T) {
 	defer ts.Close()
 	client := registerAdmin(t, ts)
 
-	postJSON(t, client, ts.URL+"/api/entities", entityRequest{Type: entities.TypeRule, Key: "r13", Label: "first"}).Body.Close()
-	postJSON(t, client, ts.URL+"/api/entities", entityRequest{Type: entities.TypeRule, Key: "r13", Label: "second"}).Body.Close()
+	first := postJSON(t, client, ts.URL+"/api/entities", entityRequest{Type: entities.TypeRule, Key: "r13", Label: "first"})
+	if first.StatusCode != http.StatusCreated {
+		t.Errorf("first POST (a create) returned %d, want 201", first.StatusCode)
+	}
+	first.Body.Close()
+
+	// The same pair again is a replace, not a create -- 200, which is
+	// how a caller distinguishes the two (#267 finding 19).
+	second := postJSON(t, client, ts.URL+"/api/entities", entityRequest{Type: entities.TypeRule, Key: "r13", Label: "second"})
+	if second.StatusCode != http.StatusOK {
+		t.Errorf("second POST (a replace) returned %d, want 200", second.StatusCode)
+	}
+	second.Body.Close()
 
 	resp, err := client.Get(ts.URL + "/api/entities")
 	if err != nil {

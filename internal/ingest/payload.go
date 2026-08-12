@@ -65,6 +65,33 @@ type AddressListEntry struct {
 // A plain Go string field rejects the numeric shape outright, which
 // would mean this schema refuses real payloads from real routers for
 // every rule that scopes exactly one port -- the common case.
+//
+// Log, DstAddress and SrcAddress were added for #274 item 1 (telling an
+// operator when a watchlist entry can never match, because no rule logs
+// traffic in its scope). All three verified against a real RouterOS
+// 7.23.3 before being added, since the DstPort case above is the
+// standing warning against assuming a shape:
+//
+//   - Log is the field that actually decides whether a rule can feed
+//     mikroview anything, and it was the missing one. #274 framed the
+//     blocker as the absent destination address, and that is real, but a
+//     rule with log=no produces nothing regardless of its addresses.
+//     LogPrefix's presence was the only available proxy and it is a bad
+//     one in both directions -- a logging rule with no prefix produces
+//     events (as action "unknown"), and there is no prefix without
+//     logging only by convention.
+//
+//     Absent means false. A non-logging rule omits the key entirely
+//     rather than serialising "log":false, which is why this is a plain
+//     bool: encoding/json leaves it zero, which is the right answer.
+//
+//   - DstAddress/SrcAddress are always JSON *strings*, unlike DstPort,
+//     in every shape RouterOS accepts: a bare address ("203.0.113.9"),
+//     a CIDR ("10.0.0.0/8"), a range ("10.0.0.1-10.0.0.5") and a negated
+//     form ("!10.0.0.0/8"). A bare IPv4 contains dots, so it cannot
+//     serialise as a number the way a single port does. Absent when
+//     unset, which means "any address" -- not "no addresses", and the
+//     difference decides whether a rule covers an entry.
 type FilterRule struct {
 	Ordinal        RouterOSInt      `json:"ordinal"`
 	Comment        string           `json:"comment"`
@@ -74,6 +101,9 @@ type FilterRule struct {
 	LogPrefix      string           `json:"logPrefix"`
 	DstPort        RouterOSPortSpec `json:"dstPort"`
 	Protocol       string           `json:"protocol"`
+	Log            bool             `json:"log"`
+	DstAddress     string           `json:"dstAddress"`
+	SrcAddress     string           `json:"srcAddress"`
 }
 
 // NATRule mirrors one /ip/firewall/nat rule. Display-table shape only

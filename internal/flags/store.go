@@ -736,6 +736,19 @@ func (s *Store) Exclude(t Type, target string) {
 		return
 	}
 	s.excluded[id] = Exclusion{ID: id, Type: t, Target: target}
+	// Clear any entry that is already active for this pair.
+	//
+	// add() skips excluded pairs before it touches s.byID, so an
+	// existing active flag would otherwise sit in List() as
+	// Cleared:false forever, frozen -- every later update silently
+	// no-op'd, and no path to clear it but RemoveExclusion. Not reachable
+	// through the API today, since ClearAndExclude clears first, but that
+	// makes this a landmine for the next caller of Exclude rather than a
+	// non-issue: the method's own contract says the pair goes silent from
+	// this call on, and an entry stuck visible is the opposite.
+	if f, ok := s.byID[id]; ok && !f.Cleared {
+		f.Cleared = true
+	}
 	s.persistLocked()
 }
 

@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/tomlawesome/mikroview/internal/flags"
 )
@@ -104,5 +105,27 @@ func TestPushoverNotifierErrorsOnNonOKStatus(t *testing.T) {
 
 	if err := n.Send([]flags.Flag{{Detail: "x"}}); err == nil {
 		t.Error("expected an error for a non-200 response")
+	}
+}
+
+// The message is built from a flag's Target and Detail, which come from
+// a syslog line whoever sent it wrote -- so a multi-byte rune can land
+// across the byte cap. A plain slice there emits invalid UTF-8.
+func TestPushoverMessageTruncatesOnARuneBoundary(t *testing.T) {
+	// Long enough to be cut, and built so the cut lands mid-sequence for
+	// at least one of the four offsets tested.
+	for pad := 0; pad < 4; pad++ {
+		fs := []flags.Flag{{
+			Type:   flags.TypePortScan,
+			Target: strings.Repeat("a", pad) + strings.Repeat("é", pushoverMaxMessageLen),
+			Detail: "detail",
+		}}
+		msg := (&PushoverNotifier{}).message(fs)
+		if len(msg) > pushoverMaxMessageLen {
+			t.Errorf("pad=%d: message is %d bytes, over the %d cap", pad, len(msg), pushoverMaxMessageLen)
+		}
+		if !utf8.ValidString(msg) {
+			t.Errorf("pad=%d: truncation produced invalid UTF-8", pad)
+		}
 	}
 }

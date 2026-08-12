@@ -4,6 +4,7 @@ package api
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -126,7 +127,7 @@ func (s *Server) sessionUser(r *http.Request, now time.Time) (*auth.User, bool) 
 
 // readOnlyRoutes is the only handler set a bearer API token (issue
 // #101) can ever reach -- deliberately its own separate *http.ServeMux
-// with just these four GET routes registered, rather than a per-request
+// with just these five GET routes registered, rather than a per-request
 // allowlist check layered in front of the real mux. That's what makes
 // "a token can never reach a write/clear/config endpoint" structural:
 // there is no code path from a bearer-authenticated request to
@@ -471,6 +472,90 @@ func (s *Server) handleAuthLogin(w http.ResponseWriter, r *http.Request) {
 	sess := s.Sessions.Create(user.ID, now)
 	s.setSessionCookie(w, sess.ID)
 	writeJSON(w, http.StatusOK, map[string]any{"username": user.Username, "role": user.Role})
+}
+
+type changePasswordRequest struct {
+	CurrentPassword string `json:"currentPassword"`
+	NewPassword     string `json:"newPassword"`
+}
+
+// handleAuthChangePassword lets a signed-in user change their own
+// password (#294 item 4).
+//
+// There was no route for this at all: changing a password meant
+// -recover-admin-account, which needs host access. So an operator who
+// suspected their credential was known had no way to act on it from the
+// interface, and no way to end other sessions either -- the two halves
+// of the same problem, since the session ceiling (#294 item 3) bounds
+// how long a stolen session lives but does nothing about one right now.
+//
+// Changing the password is therefore also "sign out everywhere":
+// SetPassword records PasswordChangedAt, which invalidates every session
+// issued before it -- including this browser's, so a fresh one is issued
+// here. Same pattern completeOIDCLink already uses for the same reason.
+func (s *Server) handleAuthChangePassword(w http.ResponseWriter, r *http.Request) {
+	now := time.Now()
+	user, ok := s.sessionUser(r, now)
+	if !ok {
+		http.Error(w, "sign in first", http.StatusUnauthorized)
+		return
+	}
+
+	var req changePasswordRequest
+	if err := decodeJSONBody(w, r, &req); err != nil {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	// An SSO-only account has no local password to change, and inventing
+	// one here would quietly create a second way into an account whose
+	// owner believes it is federated.
+	if !user.LocalPassword() {
+		http.Error(w, "this account signs in through your identity provider and has no local password to change", http.StatusConflict)
+		return
+	}
+
+	// Rate-limited on the same limiter as login, keyed by user. The
+	// current password is a credential and this is a guess at it, so an
+	// endpoint that verifies one without counting the attempt is a
+	// brute-force oracle that happens to need a session -- and a session
+	// is exactly what an attacker who has stolen a cookie already has.
+	userKey := "user:" + strings.ToLower(user.Username)
+	if !s.LoginLimiter.Reserve(userKey, now) {
+		http.Error(w, "too many attempts, try again later", http.StatusTooManyRequests)
+		return
+	}
+	if _, err := s.Auth.Authenticate(user.Username, req.CurrentPassword, now); err != nil {
+		// Reservation stays claimed: that is what counts the failure.
+		http.Error(w, "current password is incorrect", http.StatusUnauthorized)
+		return
+	}
+	s.LoginLimiter.Release(userKey, now)
+
+	if req.NewPassword == req.CurrentPassword {
+		http.Error(w, "the new password is the same as the current one", http.StatusBadRequest)
+		return
+	}
+	if err := s.Auth.SetPassword(user.Username, req.NewPassword, now); err != nil {
+		if errors.Is(err, auth.ErrPasswordTooShort) {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		http.Error(w, "could not change the password", http.StatusInternalServerError)
+		return
+	}
+
+	// Every session issued before now is dead by PasswordChangedAt, but
+	// that is only enforced on the next request each one makes. Dropping
+	// them here means they are gone immediately, which is what an
+	// operator acting on a suspected theft is actually asking for.
+	s.Sessions.RevokeAllForUser(user.ID)
+
+	s.Audit.Record(user.Username, "account.password_changed", user.Username, "sessions ended: all")
+
+	sess := s.Sessions.Create(user.ID, now)
+	s.setSessionCookie(w, sess.ID)
+	writeJSON(w, http.StatusOK, map[string]any{"changed": true, "otherSessionsEnded": true})
 }
 
 func (s *Server) handleAuthLogout(w http.ResponseWriter, r *http.Request) {

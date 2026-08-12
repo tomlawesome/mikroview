@@ -1020,7 +1020,7 @@ func main() {
 		MatchLog:          matchLog,
 		DeviceStaleAfter:  cfg.Flags.DeviceStaleAfter,
 		Auth:              authStore,
-		Sessions:          auth.NewSessionStore(cfg.Auth.SessionTTL),
+		Sessions:          auth.NewSessionStoreWithMaxLifetime(cfg.Auth.SessionTTL, cfg.Auth.SessionMaxLifetime),
 		LoginLimiter:      auth.NewLoginLimiter(loginLimiterThreshold, loginLimiterWindow),
 		SecureCookie:      cfg.Auth.SecureCookie,
 		TrustedProxies:    trustedProxies,
@@ -1092,18 +1092,24 @@ func main() {
 	tlsLog := logging.New("tls")
 	scheme := "http"
 	var cert tls.Certificate
+	var certReloader *servertls.Reloader
 	if cfg.TLS.Enabled || cfg.Listen.SyslogTLS != "" {
-		c, caCertPEM, persistErr, err := servertls.Load(servertls.Config{
+		tlsCfg := servertls.Config{
 			CertFile:  cfg.TLS.CertFile,
 			KeyFile:   cfg.TLS.KeyFile,
 			Hosts:     cfg.TLS.Hosts,
 			StorePath: cfg.TLS.StorePath,
-		})
+		}
+		c, caCertPEM, persistErr, err := servertls.Load(tlsCfg)
 		if err != nil {
 			tlsLog.Error(err.Error())
 			os.Exit(1)
 		}
 		cert = c
+		// Both listeners read through this, so a renewal reaches the
+		// syslog port as well as HTTPS -- see servertls.Reloader.
+		certReloader = servertls.NewReloader(tlsCfg, cert)
+		go watchForCertificateReload(ctx, certReloader, tlsLog, cfg.TLS.CertFile != "")
 		if persistErr != nil {
 			tlsLog.Warn(fmt.Sprintf("%v (continuing with an unpersisted certificate -- every restart will generate a fresh, untrusted-again CA)", persistErr))
 		}
@@ -1133,8 +1139,11 @@ func main() {
 		// -- recorded so the pin reads as consistency, not as a fix for
 		// something that was exploitable. See #282, #284.
 		httpServer.TLSConfig = &tls.Config{
-			Certificates: []tls.Certificate{cert},
-			MinVersion:   tls.VersionTLS12,
+			// GetCertificate rather than a fixed Certificates list, so
+			// SIGHUP swaps what this serves without a restart (#294
+			// item 5).
+			GetCertificate: certReloader.GetCertificate,
+			MinVersion:     tls.VersionTLS12,
 		}
 		if cfg.Listen.HTTPRedirect != "" {
 			redirectLog := logging.New("http-redirect")
@@ -1173,7 +1182,7 @@ func main() {
 		// same certificate loaded above -- started independently of
 		// cfg.TLS.Enabled, see that block's comment for why.
 		go func() {
-			if err := syslog.ListenTLS(ctx, cfg.Listen.SyslogTLS, cert, raw); err != nil && ctx.Err() == nil {
+			if err := syslog.ListenTLS(ctx, cfg.Listen.SyslogTLS, certReloader, raw); err != nil && ctx.Err() == nil {
 				logging.New("syslog-tls").Error(err.Error())
 				os.Exit(1)
 			}
@@ -1487,12 +1496,18 @@ func runTransferAdmin(args []string) int {
 		logger.Error("this deployment has no admin account -- nothing to transfer")
 		return 1
 	}
-	fmt.Printf("Admin is currently %q.\n", current.Username)
-
 	// The key is asked for BEFORE any account is named or listed, so
 	// nothing about who holds an account is disclosed to someone without
 	// one. That reordering is only affordable because Redeem below
 	// prepares a rotation without persisting it -- see its call.
+	//
+	// This comment described the intent and the code did the opposite:
+	// the current admin's username was printed here, above this line,
+	// before the key was ever asked for. So anyone able to run the
+	// binary learned who the admin is by starting the command and
+	// pressing Ctrl-C. Flagged as an Uncertain lead on #267 and passed
+	// to the security track as out of that audit's scope, where it was
+	// not picked up -- it fell between the two.
 	key, err := readRecoveryKey()
 	if err != nil {
 		logger.Error(err.Error())
@@ -1510,6 +1525,11 @@ func runTransferAdmin(args []string) int {
 		logger.Error(err.Error())
 		return 1
 	}
+
+	// Now that the key has been proven, naming the account is fine --
+	// and still useful, since the operator is about to choose what to
+	// transfer it to.
+	fmt.Printf("Admin is currently %q.\n", current.Username)
 
 	next, code := resolveTransferTarget(store, current, target)
 	if next == nil {
@@ -1703,6 +1723,12 @@ func runRecoverAdminAccount(args []string) int {
 		return 1
 	}
 
+	// Named before the key is asked for, unlike -transfer-admin, and
+	// deliberately so rather than by oversight: the SSO-only check just
+	// above already has to name the account to explain why this command
+	// cannot help, so withholding it here would buy nothing. The
+	// operator also needs to know which account they are about to reset
+	// before typing a key and a new password for it.
 	fmt.Printf("Recover the admin account %q.\n", admin.Username)
 	key, err := readRecoveryKey()
 	if err != nil {
@@ -2012,4 +2038,47 @@ func readRecoveryKey() (string, error) {
 		return "", fmt.Errorf("no recovery key supplied")
 	}
 	return string(raw), nil
+}
+
+// watchForCertificateReload swaps in a renewed certificate on SIGHUP,
+// for both the HTTPS and syslog listeners at once (#294 item 5).
+//
+// SIGHUP rather than watching the files: mikroview cannot tell a
+// finished renewal from a half-written one, and serving half a
+// certificate is worse than serving an old one. The signal is the
+// operator (or certbot's --deploy-hook, or a cert-manager reloader)
+// saying the new files are complete. That is also the convention every
+// other long-running server uses for this, so it needs no explaining.
+//
+// operatorSupplied only affects the log line. The reload works either
+// way, but for mikroview's own generated certificate there is normally
+// nothing new on disk to pick up, so saying so avoids an operator
+// concluding the signal did nothing when it did exactly what it should.
+func watchForCertificateReload(ctx context.Context, reloader *servertls.Reloader, log *slog.Logger, operatorSupplied bool) {
+	hup := make(chan os.Signal, 1)
+	signal.Notify(hup, syscall.SIGHUP)
+	defer signal.Stop(hup)
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-hup:
+			cert, err := reloader.Reload()
+			if err != nil {
+				// Deliberately not fatal, and the previous certificate
+				// stays in service: an operator who sent this expecting
+				// an improvement must not get an outage out of it, and
+				// would have little reason to connect the two.
+				log.Error(fmt.Sprintf("reloading the certificate failed, continuing with the one already loaded: %v", err))
+				continue
+			}
+			fingerprint := sha256.Sum256(cert.Certificate[0])
+			if operatorSupplied {
+				log.Info(fmt.Sprintf("certificate reloaded (leaf fingerprint %x) -- new connections to both the https and syslog listeners use it from now on", fingerprint))
+			} else {
+				log.Info(fmt.Sprintf("certificate reloaded (leaf fingerprint %x) -- this deployment uses mikroview's own generated certificate, so this only re-reads what is already on disk", fingerprint))
+			}
+		}
+	}
 }
