@@ -1487,12 +1487,18 @@ func runTransferAdmin(args []string) int {
 		logger.Error("this deployment has no admin account -- nothing to transfer")
 		return 1
 	}
-	fmt.Printf("Admin is currently %q.\n", current.Username)
-
 	// The key is asked for BEFORE any account is named or listed, so
 	// nothing about who holds an account is disclosed to someone without
 	// one. That reordering is only affordable because Redeem below
 	// prepares a rotation without persisting it -- see its call.
+	//
+	// This comment described the intent and the code did the opposite:
+	// the current admin's username was printed here, above this line,
+	// before the key was ever asked for. So anyone able to run the
+	// binary learned who the admin is by starting the command and
+	// pressing Ctrl-C. Flagged as an Uncertain lead on #267 and passed
+	// to the security track as out of that audit's scope, where it was
+	// not picked up -- it fell between the two.
 	key, err := readRecoveryKey()
 	if err != nil {
 		logger.Error(err.Error())
@@ -1510,6 +1516,11 @@ func runTransferAdmin(args []string) int {
 		logger.Error(err.Error())
 		return 1
 	}
+
+	// Now that the key has been proven, naming the account is fine --
+	// and still useful, since the operator is about to choose what to
+	// transfer it to.
+	fmt.Printf("Admin is currently %q.\n", current.Username)
 
 	next, code := resolveTransferTarget(store, current, target)
 	if next == nil {
@@ -1703,6 +1714,12 @@ func runRecoverAdminAccount(args []string) int {
 		return 1
 	}
 
+	// Named before the key is asked for, unlike -transfer-admin, and
+	// deliberately so rather than by oversight: the SSO-only check just
+	// above already has to name the account to explain why this command
+	// cannot help, so withholding it here would buy nothing. The
+	// operator also needs to know which account they are about to reset
+	// before typing a key and a new password for it.
 	fmt.Printf("Recover the admin account %q.\n", admin.Username)
 	key, err := readRecoveryKey()
 	if err != nil {

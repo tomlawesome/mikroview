@@ -398,6 +398,21 @@ upgrading.
 
 ### Fixed
 
+- **A single sign-on issuer written without `https://` is now checked
+  properly** (#267). MikroView refuses multi-tenant providers, and that
+  check read the hostname — which is empty for a scheme-less string, so
+  `login.microsoftonline.com/common/v2.0` passed a check meant to refuse
+  it. Setup would have failed later at provider discovery, but a check
+  that answers "fine" because it could not read its input is the wrong
+  shape.
+
+- **A router with no NAT rules no longer shows an empty box** (#267).
+  The rule lookup said so when a pushed table contained no matching
+  rule; the NAT lookup had no equivalent message, so a router that has
+  pushed its NAT table and simply has no NAT configured showed nothing
+  at all, with a footnote explaining how to read rules that were not
+  there.
+
 - **Creating a named entity now answers `201`, not `200`** (#267),
   matching every other create endpoint. `POST /api/entities` both
   creates and replaces, and always answering `200` left a caller unable
@@ -431,6 +446,16 @@ upgrading.
   batches were trimmed by byte count, which can split a multi-byte
   character and leave invalid text. Trimming now stops at a character
   boundary.
+
+- **`-transfer-admin` no longer names the admin before you prove a
+  recovery key** (#267). It printed "Admin is currently ..." as its first
+  action, so anyone able to run the binary learned who the admin is by
+  starting the command and pressing Ctrl-C — despite the code's own
+  comment two lines below stating the key is asked for first precisely
+  so that cannot happen. It now asks first and names the account once the
+  key is verified. `-recover-admin-account` still names it up front,
+  deliberately: it has to say which account it cannot help with when
+  that account signs in through your identity provider.
 
 - **A mistyped filter in an API request is now refused instead of
   silently ignored** (#267). `GET /api/events` and `GET /api/audit`
