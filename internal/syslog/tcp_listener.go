@@ -189,6 +189,20 @@ func noteRejected(host string) {
 	}
 }
 
+// One gate per rejection reason, same interval as the ingest-queue drop
+// log. This port is unauthenticated by design and RouterOS itself
+// retries every few seconds, so an un-gated per-attempt WARN hands
+// whoever is being rejected -- a locked-out router, or exactly the
+// undeclared-source flood reservedFraction defends against -- the
+// ability to write log lines at connection-attempt rate (#322).
+// Per-reason rather than shared, so a flood of undeclared sources
+// can't suppress the line about a *declared* router being turned away.
+var (
+	perSourceRejectGate  = logging.NewLimiter(ingestDropLogInterval)
+	unreservedRejectGate = logging.NewLimiter(ingestDropLogInterval)
+	globalRejectGate     = logging.NewLimiter(ingestDropLogInterval)
+)
+
 // tcpIdleTimeoutNS closes a connection that has gone this long without a
 // complete line, so a connection that never sends anything (or stalls
 // mid-stream) doesn't hold its slot in maxTCPConnections forever. It's an
@@ -283,15 +297,19 @@ func ServeTCP(ctx context.Context, ln net.Listener, out chan<- RawMessage) error
 		perSourceMu.Unlock()
 		if atCap {
 			noteRejected(host)
-			tcpLog.Warn(fmt.Sprintf("per-source connection limit (%d) reached for %s, rejecting", perSourceLimit(), host))
+			if total, ok := perSourceRejectGate.Allow(); ok {
+				tcpLog.Warn(fmt.Sprintf("per-source connection limit (%d) reached -- rejecting %s (%d such rejections since start)", perSourceLimit(), host, total))
+			}
 			conn.Close()
 			continue
 		}
 		if outOfUnreserved {
 			noteRejected(host)
-			tcpLog.Warn(fmt.Sprintf(
-				"undeclared sources are using all %d unreserved connection slots (%d of %d held for routers listed under devices: in config.yaml); rejecting %s",
-				unreservedCap, reservedSlots(), maxTCPConnections, host))
+			if total, ok := unreservedRejectGate.Allow(); ok {
+				tcpLog.Warn(fmt.Sprintf(
+					"undeclared sources are using all %d unreserved connection slots (%d of %d held for routers listed under devices: in config.yaml) -- rejecting %s (%d such rejections since start)",
+					unreservedCap, reservedSlots(), maxTCPConnections, host, total))
+			}
 			conn.Close()
 			continue
 		}
@@ -322,7 +340,9 @@ func ServeTCP(ctx context.Context, ln net.Listener, out chan<- RawMessage) error
 			release()
 			// At capacity: reject immediately rather than queuing, so the
 			// accept loop itself never blocks waiting for a slot to free up.
-			tcpLog.Warn(fmt.Sprintf("connection limit (%d) reached, rejecting %s", maxTCPConnections, conn.RemoteAddr()))
+			if total, ok := globalRejectGate.Allow(); ok {
+				tcpLog.Warn(fmt.Sprintf("connection limit (%d) reached -- rejecting %s (%d such rejections since start)", maxTCPConnections, conn.RemoteAddr(), total))
+			}
 			conn.Close()
 		}
 	}
@@ -472,23 +492,16 @@ func handleTCPConn(ctx context.Context, conn net.Conn, out chan<- RawMessage) {
 const ingestDropLogInterval = 30 * time.Second
 
 var (
-	tcpDropped      atomic.Uint64
-	tcpOversized    atomic.Uint64
-	lastDropLogUnix atomic.Int64
+	tcpDropped   atomic.Uint64
+	tcpOversized atomic.Uint64
+	dropLogGate  = logging.NewLimiter(ingestDropLogInterval)
 )
 
 func noteIngestDrop() {
 	total := tcpDropped.Add(1)
-
-	now := time.Now().Unix()
-	last := lastDropLogUnix.Load()
-	if now-last < int64(ingestDropLogInterval/time.Second) {
-		return
+	if _, ok := dropLogGate.Allow(); ok {
+		tcpLog.Warn(fmt.Sprintf(
+			"ingest queue full -- %d syslog messages discarded since start; events are arriving faster than they can be processed, or something downstream is stalled",
+			total))
 	}
-	if !lastDropLogUnix.CompareAndSwap(last, now) {
-		return // another goroutine is logging this window
-	}
-	tcpLog.Warn(fmt.Sprintf(
-		"ingest queue full -- %d syslog messages discarded since start; events are arriving faster than they can be processed, or something downstream is stalled",
-		total))
 }
