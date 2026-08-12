@@ -52,6 +52,17 @@ export function groupByKey(field: GroupByField, e: FirewallEvent): string | unde
     case 'chain':
       return e.chain || undefined
     case 'interface':
+      // In-interface wins when both are set, which is every forward-chain
+      // event -- so a forward event never appears under its out-interface
+      // here, while the interface *filter* matches either side.
+      //
+      // Not an inconsistency to fix (#267, Uncertain): a breakdown gives
+      // each event exactly one bucket, and the alternative is counting
+      // the same event twice so the totals stop summing to the event
+      // count. Filtering answers a different question -- "show me
+      // anything touching this interface" -- where matching either side
+      // is right. Same preference as grouping by srcIp rather than by
+      // "either address".
       return e.inInterface || e.outInterface || undefined
   }
 }
