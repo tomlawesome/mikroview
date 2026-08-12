@@ -60,10 +60,34 @@ scripts/live-routeros.sh down && scripts/live-env.sh down
 No root and no host packages: QEMU runs in a container, with TCG when
 `/dev/kvm` is not usable. CHR reaches a login prompt in about 15s.
 
+`make live-routeros-container` goes further: the shipped container *and*
+a real CHR, with the router configured by
+`docs/routeros-setup.md`'s own steps and made to log real firewall
+traffic in every chain. That is what runs
+`frontend/scripts/live-routeros-real.mjs`, the only scenario whose input
+mikroview did not write itself.
+
+Use it whenever a change touches what mikroview reads out of a log line
+or a pushed table. Synthetic feeds and the parser agree with each other
+by construction, so they cannot disagree with RouterOS -- which is how a
+real router emitting `src-mac` in upper case went unnoticed until this
+target existed, silently breaking every watchlist entry whose MAC had
+been typed the conventional way.
+
+```sh
+make live-routeros-container
+scripts/live-routeros.sh setup "$MV_URL" "$MV_BIND" "$MV_SYSLOG_TLS_PORT"
+scripts/live-routeros.sh traffic 5     # real events, input/forward/output
+scripts/live-routeros.sh push "$MV_URL" "$TOKEN"   # real ARP/lease/rule tables
+```
+
 ## Adding a scenario for your change
 
 One short file per change, `frontend/scripts/live-<thing>.mjs`, importing
-the helpers. `make live-check` picks it up automatically.
+the helpers. `scripts/run-scenarios.sh` picks it up automatically, and
+every `live-*` target runs that. Add it to that script's exclusion list
+only if it needs something the plain targets do not stand up (a booted
+router, say).
 
 ```js
 import { session, feedSyslog, check, responsive, done } from './live-browser.mjs'

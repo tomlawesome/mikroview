@@ -3,6 +3,7 @@
 package auth
 
 import (
+	"fmt"
 	"testing"
 	"time"
 )
@@ -79,5 +80,71 @@ func TestLoginLimiterEvictsOldestKeyOverCap(t *testing.T) {
 	}
 	if _, stillTracked := l.attempts["alice"]; stillTracked {
 		t.Error("expected alice (the oldest) to have been evicted")
+	}
+}
+
+// The cap was enforced on RecordFailure and silently not enforced on
+// Reserve, which is the path an unauthenticated request reaches first.
+// Reserve calls pruneLocked before the cap check, and pruneLocked used to
+// assign `l.attempts[key] = kept` unconditionally -- creating the entry
+// as a side effect of pruning it -- so the check's `!exists` branch could
+// never be true and the eviction was dead code.
+//
+// That made it a remote memory-exhaustion path with no Argon2id cost to
+// slow it down: 200,000 requests from varying source addresses left
+// 200,006 tracked keys against a documented cap of 4,096, retaining
+// 22.69 MiB. See #285.
+func TestLoginLimiterCapIsEnforcedOnTheReservePath(t *testing.T) {
+	orig := maxLoginLimiterKeys
+	maxLoginLimiterKeys = 64
+	defer func() { maxLoginLimiterKeys = orig }()
+
+	l := NewLoginLimiter(5, time.Hour)
+	now := time.Now()
+
+	// Each distinct key stands in for a distinct source address. Reserve
+	// only -- never RecordFailure, which is the path that already worked.
+	const distinctSources = 20_000
+	for i := 0; i < distinctSources; i++ {
+		l.Reserve(fmt.Sprintf("2001:db8::%x", i), now)
+	}
+
+	if len(l.attempts) > maxLoginLimiterKeys {
+		t.Fatalf("Reserve tracked %d keys against a cap of %d -- the cap is not enforced on this path",
+			len(l.attempts), maxLoginLimiterKeys)
+	}
+}
+
+// pruneLocked must not leave an entry behind once a key's attempts have
+// all aged out. An empty entry is one map entry per source address held
+// forever, and it is also what made the cap check above dead code.
+func TestLoginLimiterForgetsKeysWhoseAttemptsAgedOut(t *testing.T) {
+	l := NewLoginLimiter(5, time.Minute)
+	now := time.Now()
+
+	l.RecordFailure("198.51.100.7", now)
+	if len(l.attempts) != 1 {
+		t.Fatalf("expected the failure to be tracked, got %d keys", len(l.attempts))
+	}
+
+	// Any call that prunes, once the window has passed.
+	l.Allow("198.51.100.7", now.Add(2*time.Minute))
+	if len(l.attempts) != 0 {
+		t.Errorf("expected the key to be forgotten once its attempts aged out, still tracking %d", len(l.attempts))
+	}
+}
+
+// A successful login releases its reservation; the last one out must not
+// leave an empty entry behind either.
+func TestLoginLimiterReleaseOfTheLastAttemptForgetsTheKey(t *testing.T) {
+	l := NewLoginLimiter(5, time.Hour)
+	now := time.Now()
+
+	if !l.Reserve("alice", now) {
+		t.Fatal("expected the first Reserve to succeed")
+	}
+	l.Release("alice", now)
+	if len(l.attempts) != 0 {
+		t.Errorf("expected releasing the only attempt to forget the key, still tracking %d", len(l.attempts))
 	}
 }

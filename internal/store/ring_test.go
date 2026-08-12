@@ -3,6 +3,7 @@
 package store
 
 import (
+	"fmt"
 	"testing"
 	"time"
 )
@@ -308,6 +309,22 @@ func TestStats(t *testing.T) {
 	}
 }
 
+// EventsPerSecond exists as a cheaper alternative to Stats().EventsPerSecond
+// for a caller (main.go's global-spike ticker) that reads only that one
+// field -- it must report exactly the same number Stats() would, not an
+// approximation.
+func TestEventsPerSecondMatchesStats(t *testing.T) {
+	s := New(100, time.Hour)
+	now := time.Now()
+	s.Insert(mkEvent(now, "core", ActionAccept))
+	s.Insert(mkEvent(now, "core", ActionAccept))
+	s.Insert(mkEvent(now, "core", ActionDrop))
+
+	if got, want := s.EventsPerSecond(), s.Stats().EventsPerSecond; got != want {
+		t.Errorf("EventsPerSecond() = %f, want %f (Stats().EventsPerSecond)", got, want)
+	}
+}
+
 func TestStatsTopRules(t *testing.T) {
 	s := New(100, time.Hour)
 	now := time.Now()
@@ -375,4 +392,30 @@ func ids(events []Event) []uint64 {
 		out[i] = e.ID
 	}
 	return out
+}
+
+// BenchmarkEventsPerSecondVsStats pins EventsPerSecond()'s savings over
+// Stats().EventsPerSecond for main.go's global-spike ticker, which
+// polls this every 10s and reads nothing else from the result.
+func BenchmarkEventsPerSecondVsStats(b *testing.B) {
+	s := New(50_000, time.Hour)
+	now := time.Now()
+	for i := 0; i < 20_000; i++ {
+		e := mkEvent(now, "core", ActionAccept)
+		e.RuleLabel = fmt.Sprintf("rule-%d", i%20)
+		s.Insert(e)
+	}
+
+	b.Run("Stats", func(b *testing.B) {
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			_ = s.Stats().EventsPerSecond
+		}
+	})
+	b.Run("EventsPerSecond", func(b *testing.B) {
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			_ = s.EventsPerSecond()
+		}
+	})
 }

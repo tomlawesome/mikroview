@@ -72,7 +72,19 @@ func (d *Detector) checkHostActivityBaseline(w *sourceWindow, srcIP, srcCountry,
 	// compares against the baseline as it stood *before* this reading,
 	// not after.
 	w.baseline, w.variance = emaUpdate(rate, w.baseline, w.variance)
-	if w.sampleCount < d.cfg.HostActivityWarmupSamples {
+
+	// The counter must be able to reach hostActivityMinSamples even when
+	// an operator sets HostActivityWarmupSamples below it. That field is
+	// documented (see its own comment in internal/detect.Config) as
+	// controlling confidence scoring, not firing eligibility -- capping
+	// the counter itself at it would instead permanently disable this
+	// detector for every host the moment it's set below the floor,
+	// which is the opposite of what a lower value is asking for.
+	warmupCap := d.cfg.HostActivityWarmupSamples
+	if warmupCap < hostActivityMinSamples {
+		warmupCap = hostActivityMinSamples
+	}
+	if w.sampleCount < warmupCap {
 		w.sampleCount++
 	}
 }

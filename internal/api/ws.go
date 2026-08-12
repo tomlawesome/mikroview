@@ -32,19 +32,29 @@ var upgrader = websocket.Upgrader{
 	CheckOrigin:     func(r *http.Request) bool { return true },
 }
 
-// checkOrigin allows any origin while auth is inactive (zero users --
-// mikroview's default, fully-open, trusted-LAN deployment, where origin
-// checking would add friction without adding real protection). Once
-// auth is active, a session cookie is a real credential, and cookies
-// are attached to cross-site requests regardless of CORS/fetch-origin
-// rules -- SameSite=Lax alone isn't a guaranteed defense for a WebSocket
+// checkOrigin requires a cross-site WebSocket upgrade to come from this
+// origin. A session cookie is a real credential, and cookies are
+// attached to cross-site requests regardless of CORS/fetch-origin rules
+// -- SameSite=Lax alone isn't a guaranteed defence for a WebSocket
 // upgrade specifically, so this check is required, not redundant with
 // requireAuth's cookie check: same-origin is what actually stops a
-// malicious page from opening a WS connection using a victim's cookie.
+// malicious page opening a WS connection with a victim's cookie and
+// streaming every firewall event out of it.
+//
+// This used to open with `if s.Auth.Count() == 0 { return true }`,
+// justified as "mikroview's default, fully-open, trusted-LAN
+// deployment" -- a deployment shape that no longer exists. It was also
+// unreachable: /api/ws is not in bootstrapExemptPaths, so requireAuth
+// returns 503 before handleWS runs while Count()==0.
+//
+// Unreachable is not the same as harmless, and this codebase has
+// already made that argument about itself once: callerIsAdmin's doc
+// comment records deleting a callerIsAdminOrOpen bypass that was
+// likewise unreachable, because it "read as 'anonymous callers are
+// admins under some condition', and would have become live again the
+// moment requireAuth was loosened." Identical reasoning, so it goes the
+// same way. See #282.
 func (s *Server) checkOrigin(r *http.Request) bool {
-	if s.Auth.Count() == 0 {
-		return true
-	}
 	origin := r.Header.Get("Origin")
 	if origin == "" {
 		// No Origin header at all is normal for a same-origin
@@ -73,14 +83,23 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "cross-origin WebSocket connections are not allowed", http.StatusForbidden)
 		return
 	}
+	// Registered before the upgrade, so a refusal is a plain HTTP 503
+	// the browser can read, rather than a WebSocket that opens and then
+	// closes for no stated reason. Each subscriber costs several MiB the
+	// moment it registers (see hub.clientQueueSize), so this is a real
+	// limit rather than a formality.
+	events, dropped, unregister, err := s.Hub.Register()
+	if err != nil {
+		http.Error(w, "too many live connections are already open; close another tab and retry", http.StatusServiceUnavailable)
+		return
+	}
+	defer unregister()
+
 	conn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
 		return
 	}
 	defer conn.Close()
-
-	events, dropped, unregister := s.Hub.Register()
-	defer unregister()
 
 	conn.SetReadDeadline(time.Now().Add(wsPongTimeout))
 	conn.SetPongHandler(func(string) error {

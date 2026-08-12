@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -215,18 +216,63 @@ func TestHTTPSRedirectTargetRejectsUnlistedHost(t *testing.T) {
 	}
 }
 
-// TestHTTPSRedirectTargetEmptyAllowlistFallsBackToPriorBehavior covers
-// the case TLS.Hosts is left unconfigured (auto-detected SANs instead
-// -- see internal/servertls) -- with no explicit ground truth to
-// validate against, this keeps the original echo-Host behavior rather
-// than guessing.
-func TestHTTPSRedirectTargetEmptyAllowlistFallsBackToPriorBehavior(t *testing.T) {
-	r := httptest.NewRequest(http.MethodGet, "http://mikroview.local/", nil)
-	r.Host = "mikroview.local"
+// An unset TLS.Hosts is the *shipped default* -- defaults() sets
+// TLS.Enabled and Listen.HTTPRedirect but never TLS.Hosts, and
+// deploy/docker-compose.yml maps host port 80 straight at this listener.
+// So the allowlist was empty out of the box and this function fell back
+// to echoing r.Host into a 308 Location: an unauthenticated Host-header
+// reflection in the default configuration, in a function whose own doc
+// comment claims it closes "a known vulnerability class".
+//
+// The guard now derives its own known-good set from the machine rather
+// than giving up, so it works with nothing configured. See
+// localRedirectHosts, and #283 finding 2.
+func TestHTTPSRedirectTargetWithNoAllowlistRefusesAnArbitraryHost(t *testing.T) {
+	r := httptest.NewRequest(http.MethodGet, "http://mikroview.local/some/path?x=1", nil)
+	r.Host = "attacker.example"
+
 	got := httpsRedirectTarget(r, nil)
-	want := "https://mikroview.local/"
-	if got != want {
-		t.Errorf("httpsRedirectTarget with an empty allowlist = %q, want %q", got, want)
+	if strings.Contains(got, "attacker.example") {
+		t.Errorf("httpsRedirectTarget with no configured allowlist = %q -- an arbitrary Host still reaches the Location header", got)
+	}
+	// The path and query still have to survive, or the redirect is
+	// useless for its actual purpose.
+	if !strings.HasSuffix(got, "/some/path?x=1") {
+		t.Errorf("httpsRedirectTarget = %q, want the original path and query preserved", got)
+	}
+}
+
+// The derived set has to contain something usable, or every redirect
+// would point somewhere that does not answer.
+func TestLocalRedirectHostsPrefersARealAddressOverLoopback(t *testing.T) {
+	hosts := localRedirectHosts()
+	if len(hosts) == 0 {
+		t.Fatal("localRedirectHosts returned nothing -- httpsRedirectTarget would fall back to echoing Host")
+	}
+	if hosts[0] == "127.0.0.1" || hosts[0] == "localhost" {
+		// Only legitimate on a machine with no non-loopback address at
+		// all, which a CI container does have.
+		t.Errorf("first host is %q -- an unrecognised Host is rewritten to hosts[0], and redirecting a LAN client to loopback is useless", hosts[0])
+	}
+	if !slices.Contains(hosts, "127.0.0.1") {
+		t.Error("loopback missing -- a request that legitimately arrives as 127.0.0.1 would be rewritten away from it")
+	}
+}
+
+// A Host mikroview genuinely answers to must still be honoured, or
+// reaching it by its own name or address would bounce somewhere else.
+func TestHTTPSRedirectTargetKeepsAHostTheMachineActuallyHas(t *testing.T) {
+	hosts := localRedirectHosts()
+	if len(hosts) == 0 {
+		t.Skip("no local hosts enumerable in this environment")
+	}
+	for _, h := range hosts {
+		r := httptest.NewRequest(http.MethodGet, "http://example/", nil)
+		r.Host = h
+		want := "https://" + h + "/"
+		if got := httpsRedirectTarget(r, nil); got != want {
+			t.Errorf("httpsRedirectTarget for own host %q = %q, want %q", h, got, want)
+		}
 	}
 }
 

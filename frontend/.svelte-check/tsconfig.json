@@ -1,0 +1,73 @@
+{
+  "extends": "../tsconfig.app.json",
+  "compilerOptions": {
+    "rootDirs": [
+      "..",
+      "svelte"
+    ],
+    "allowArbitraryExtensions": true,
+    "noEmit": true,
+    "incremental": false,
+    "tsBuildInfoFile": "tsbuildinfo.json"
+  },
+  "files": [
+    "../node_modules/svelte-check/dist/src/svelte-shims-v4.d.ts",
+    "../node_modules/svelte-check/dist/src/svelte-jsx-v4.d.ts"
+  ],
+  "include": [
+    "../src/**/*.ts",
+    "../src/**/*.js",
+    "../src/**/*.svelte",
+    "svelte/src/**/*.ts",
+    "svelte/src/**/*.js",
+    "svelte/src/**/*.d.svelte.ts"
+  ],
+  "exclude": [
+    "../src/App.svelte",
+    "../src/components/AboutOverlay.svelte",
+    "../src/components/ActionBadge.svelte",
+    "../src/components/AddTopTalkerWidget.svelte",
+    "../src/components/AuditLog.svelte",
+    "../src/components/AuthLogin.svelte",
+    "../src/components/AuthScreen.svelte",
+    "../src/components/AuthSetup.svelte",
+    "../src/components/BarList.svelte",
+    "../src/components/ConfigProblemBanner.svelte",
+    "../src/components/ConnectionBanner.svelte",
+    "../src/components/ConnectionIndicator.svelte",
+    "../src/components/CustomTopTalkerCard.svelte",
+    "../src/components/CustomTopTalkers.svelte",
+    "../src/components/Dashboard.svelte",
+    "../src/components/Detectors.svelte",
+    "../src/components/DeviceStatus.svelte",
+    "../src/components/Entities.svelte",
+    "../src/components/EventCardMobile.svelte",
+    "../src/components/EventDetailSheet.svelte",
+    "../src/components/EventRow.svelte",
+    "../src/components/EventsChart.svelte",
+    "../src/components/Exclusions.svelte",
+    "../src/components/FilterBar.svelte",
+    "../src/components/FilterPresetsMenu.svelte",
+    "../src/components/Flags.svelte",
+    "../src/components/FlagsChart.svelte",
+    "../src/components/Fleet.svelte",
+    "../src/components/IpInvestigateButton.svelte",
+    "../src/components/IpLookupPopover.svelte",
+    "../src/components/LiveTable.svelte",
+    "../src/components/LogoLockup.svelte",
+    "../src/components/LogoMark.svelte",
+    "../src/components/NavMenu.svelte",
+    "../src/components/PortInvestigateButton.svelte",
+    "../src/components/PortLookupPopover.svelte",
+    "../src/components/ReputationDetails.svelte",
+    "../src/components/RouterLookupPopover.svelte",
+    "../src/components/RouterRuleButton.svelte",
+    "../src/components/SSOLinkOverlay.svelte",
+    "../src/components/Suggestions.svelte",
+    "../src/components/ThemeMenu.svelte",
+    "../src/components/TokensOverlay.svelte",
+    "../src/components/Toolbar.svelte",
+    "../src/components/UsersOverlay.svelte",
+    "../src/components/Watchlist.svelte"
+  ]
+}

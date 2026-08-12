@@ -220,20 +220,27 @@ device**. None of it is committed to this repo or baked into the
 container image.
 
 This is a licensing constraint before it is a design preference.
-Mikroview ships under the *MikroView Personal & Non-Commercial License* —
-custom, not OSS — which turns share-alike data into a real conflict
-rather than a formality. CC BY-SA sources (IP2Location LITE, IPinfo's
-free tier, older GeoLite2) cannot be redistributed under it, and the
-cloud providers grant no redistribution licence on their published
-IP-range documents at all. Fetching at runtime is uncontroversial;
-shipping a copy is not.
+Mikroview ships under the **GNU AGPL-3.0** (see [LICENSE](LICENSE)), with
+a commercial licence offered alongside it for anyone who needs to escape
+the AGPL's obligations (see
+[COMMERCIAL-LICENSE.md](COMMERCIAL-LICENSE.md)). That second option is
+what turns share-alike data into a real conflict rather than a formality:
+CC BY-SA sources (IP2Location LITE, IPinfo's free tier, older GeoLite2)
+cannot be sublicensed on commercial terms, so vendoring one would quietly
+make the commercial licence undeliverable for every copy that contained
+it. Separately, the cloud providers grant no redistribution licence on
+their published IP-range documents at all. Fetching at runtime is
+uncontroversial; shipping a copy is not.
 
 It also means a stale release cannot ship stale security data — a failure
 nobody would notice, because everything would appear to work.
 
 So: before adopting any feed or dependency, check its licence and record
 what you found in the issue. Permissive (MIT/BSD/Apache/ISC) is fine;
-copyleft and share-alike are not. Attribution terms still bind data that
+copyleft and share-alike are not — **not** because they conflict with the
+AGPL (GPL-family code is compatible with it), but because of the
+commercial licence above: a copyleft dependency you do not own cannot be
+sublicensed on those terms. Attribution terms still bind data that
 is fetched rather than shipped — Spamhaus DROP requires credit, and its
 date and copyright text must travel with the data.
 
@@ -247,6 +254,23 @@ pass rather than waiting to be asked.
 
 Staying back needs a specific, defensible technical reason. "It would
 enlarge the diff" and "it isn't broken" are not reasons.
+
+Nor is "the newer version dropped something we use", on its own. That is
+a reason to adapt to the newer version, not to sit on the older one —
+unless the older line is itself still supported with security fixes.
+Being unable to move is a blocked upgrade, and a blocked upgrade needs
+three things written down: what blocks it, what the version behind costs,
+and the concrete trigger for taking it. Without a trigger it is not a
+decision, it is a version that stopped being looked at.
+
+Where a bump is blocked, record it on the tracker rather than only in a
+pin. The current example is `typescript`, held at `~6.0.2` because
+`svelte-check` supports TypeScript 7 only behind an experimental flag,
+under which it silently type-checks 46 files instead of 249 — see #286
+for the measurement and the trigger. Note what that case turns on: the
+upgrade was rejected because taking it would have made a *check* quieter
+while still reporting success, which is the same failure this file warns
+about for CI gates.
 
 The cost of the alternative is not hypothetical: mikroview's `go`
 directive sat at 1.23.4 long enough for Go 1.23 to leave its support

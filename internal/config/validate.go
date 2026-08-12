@@ -40,6 +40,7 @@ func (c *Config) Validate() Result {
 	c.validateWatchlist(warn)
 	c.validateAuth(fatal)
 	c.validateDevices(fatal)
+	c.validateNotify(warn)
 
 	return r
 }
@@ -123,6 +124,16 @@ auth:
     name: "edge-router"
   - sourceIp: "192.168.2.1"   # must differ from every other sourceIp
     name: "branch-router"`,
+
+	"CFG-0050": `notify:
+  webhook:
+    url: "https://ntfy.example.com/mikroview"   # https, so the header below is not sent in the clear
+    headers:
+      Authorization: "Bearer <token>"`,
+
+	"CFG-0051": `notify:
+  webhook:
+    url: "https://ntfy.example.com/mikroview"`,
 }
 
 func (c *Config) validateListen(fatal problemFunc) {
@@ -258,6 +269,34 @@ func (c *Config) validateAuth(fatal problemFunc) {
 			"is false while tls.enabled is true, so session cookies would be issued without the Secure flag",
 			"set auth.secureCookie: true, or set tls.enabled: false if you really terminate TLS elsewhere")
 	}
+}
+
+// validateNotify warns about a webhook that would ship this
+// deployment's flag data, and whatever credential is configured to reach
+// the receiver, in cleartext.
+//
+// A warning rather than a fatal: notify.webhook.url legitimately points
+// at something on the operator's own LAN (a self-hosted ntfy, Home
+// Assistant), where plain HTTP is a considered choice rather than a
+// mistake. What it must not be is an unnoticed one -- notify.webhook.
+// headers exists precisely to carry a credential, and config.go's own
+// documentation steers operators towards putting one there. See #285.
+func (c *Config) validateNotify(warn warnFunc) {
+	url := strings.TrimSpace(c.Notify.Webhook.URL)
+	if url == "" || !strings.HasPrefix(strings.ToLower(url), "http://") {
+		return
+	}
+	if len(c.Notify.Webhook.Headers) > 0 {
+		warn("CFG-0050", "notify.webhook.url",
+			"is a plain http:// URL while notify.webhook.headers is set, so the credential in those headers and every flag's contents cross the network in cleartext",
+			"sending anyway",
+			"use an https:// URL, or accept this deliberately if the receiver is on a network you control end to end")
+		return
+	}
+	warn("CFG-0051", "notify.webhook.url",
+		"is a plain http:// URL, so every flag's contents -- source addresses, rule labels and detector detail -- cross the network in cleartext",
+		"sending anyway",
+		"use an https:// URL, or accept this deliberately if the receiver is on a network you control end to end")
 }
 
 func (c *Config) validateDevices(fatal problemFunc) {

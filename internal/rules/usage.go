@@ -23,6 +23,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/tomlawesome/mikroview/internal/evict"
 	"github.com/tomlawesome/mikroview/internal/logging"
 	"github.com/tomlawesome/mikroview/internal/persist"
 )
@@ -75,7 +76,9 @@ func Open(path string) (*Store, error) {
 func OpenWithBackend(b persist.Backend) (*Store, error) {
 	s := &Store{backend: b, byRule: make(map[string]*Usage)}
 
-	data, version, err := persist.LoadDocument(context.Background(), b)
+	ctx, cancel := context.WithTimeout(context.Background(), persistTimeout)
+	defer cancel()
+	data, version, err := persist.LoadDocument(ctx, b)
 	if err != nil {
 		return s, err
 	}
@@ -179,6 +182,19 @@ func (s *Store) Stale(maxAge time.Duration, now time.Time) []Usage {
 // immediately can shrink it, same convention as flags.persistMinInterval.
 var persistMinInterval = time.Second
 
+// persistTimeout bounds every Load/Save against backend. Touch runs
+// synchronously on the single ingest goroutine (see main.go's
+// ingestOneRecovered), so an unresponsive backend -- a Postgres
+// connection stuck behind a network blackhole or a long lock wait, not
+// a clean disconnect -- would otherwise block that goroutine forever
+// under context.Background(), freezing the whole ingest pipeline until
+// the syslog listener's buffered channel fills and starts silently
+// dropping packets (internal/syslog/tcp_listener.go). 5s is generous
+// for a write this small: long enough that ordinary latency never trips
+// it, short enough that a genuinely stuck backend degrades to a logged
+// failure (see persistLocked) rather than an indefinite hang.
+const persistTimeout = 5 * time.Second
+
 // maxRuleEntries bounds byRule, which is keyed on the rule label parsed
 // straight out of a syslog line -- an entirely unauthenticated input.
 // Anything able to reach the syslog port chooses these keys, so without
@@ -198,21 +214,22 @@ var maxRuleEntries = 20_000
 // device.MACRegistry.pruneLocked: under a flood of junk labels the real
 // rules are the ones still being touched, so they are exactly the ones
 // this keeps.
+//
+// Sheds a batch rather than the exact overflow, for the reason
+// internal/evict documents: evicting back to exactly the cap leaves the
+// map full, so every subsequent new label pays a full sort. Touch runs
+// synchronously on the ingest goroutine for essentially every event
+// carrying a rule label, and the label is a RouterOS log-prefix an
+// attacker can vary per line. Measured on the old code: 724 ns per
+// Touch on an empty store against 7,455 ns at the cap, reached with
+// 20,000 unique-label lines. See #285.
 func (s *Store) pruneLocked() {
-	over := len(s.byRule) - maxRuleEntries
-	if over <= 0 {
+	if len(s.byRule) <= maxRuleEntries {
 		return
 	}
-
-	all := make([]*Usage, 0, len(s.byRule))
-	for _, u := range s.byRule {
-		all = append(all, u)
-	}
-	sort.Slice(all, func(i, j int) bool { return all[i].LastSeen.Before(all[j].LastSeen) })
-
-	for i := 0; i < over && i < len(all); i++ {
-		delete(s.byRule, all[i].Rule)
-	}
+	evict.DownTo(s.byRule, evict.Target(maxRuleEntries), func(u *Usage) time.Time {
+		return u.LastSeen
+	})
 }
 
 // persistLocked writes the current state to disk if persistence is
@@ -236,7 +253,9 @@ func (s *Store) persistLocked() {
 		persistLog.Error(fmt.Sprintf("encoding rule usage for persistence failed: %v -- this change exists only in memory and will be lost on restart", err))
 		return
 	}
-	version, conflicted, err := persist.SaveWithRetry(context.Background(), s.backend, data, s.version)
+	ctx, cancel := context.WithTimeout(context.Background(), persistTimeout)
+	defer cancel()
+	version, conflicted, err := persist.SaveWithRetry(ctx, s.backend, data, s.version)
 	if err != nil {
 		persistLog.Error(fmt.Sprintf("writing rule usage to %s failed: %v -- this change exists only in memory and will be lost on restart", s.backend.Describe(), err))
 		return

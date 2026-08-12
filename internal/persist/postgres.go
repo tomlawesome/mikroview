@@ -7,6 +7,7 @@ import (
 	"embed"
 	"errors"
 	"fmt"
+	"net/url"
 	"sort"
 	"strings"
 	"time"
@@ -39,6 +40,11 @@ var schemaLog = logging.New("schema")
 // silently eroded.
 const (
 	sqlLoadBlob = `SELECT payload, version FROM store_blob WHERE name = $1`
+
+	// Deliberately not `SELECT payload, version` -- see
+	// PostgresBackend.Version. The whole point is not to move the
+	// document over the wire just to find out whether it changed.
+	sqlLoadBlobVersion = `SELECT version FROM store_blob WHERE name = $1`
 
 	sqlInsertBlob = `INSERT INTO store_blob (name, payload, version, updated_at)
 	                 VALUES ($1, $2, 1, now())
@@ -100,6 +106,7 @@ func OpenPool(ctx context.Context, dsn string) (*Pool, error) {
 	if err := requireTLS(cfg); err != nil {
 		return nil, err
 	}
+	pinSearchPath(cfg)
 
 	pool, err := pgxpool.NewWithConfig(ctx, cfg)
 	if err != nil {
@@ -114,6 +121,41 @@ func OpenPool(ctx context.Context, dsn string) (*Pool, error) {
 		pool:     pool,
 		safeDesc: fmt.Sprintf("postgres %s/%s", cfg.ConnConfig.Host, cfg.ConnConfig.Database),
 	}, nil
+}
+
+// pinSearchPath fixes which schema this package's unqualified table
+// names resolve to, rather than letting the connection inherit it.
+//
+// Every statement here names its tables unqualified, so the schema is
+// whatever search_path happens to be -- the role's default, or the
+// database's, neither of which mikroview sets. A role with CREATE on any
+// schema earlier in that path can shadow store_blob or match_log with a
+// table of its own, and mikroview would read and write the shadow while
+// reporting success. Pinning means the answer does not depend on how the
+// role was provisioned. See #285.
+//
+// Pinned to what the DSN asked for, defaulting to public -- not forced
+// to public. Forcing it was the first version of this and it silently
+// ignored `?search_path=...`, so an operator keeping mikroview's tables
+// in a schema of their own got public regardless, with nothing to say
+// so. It also quietly disabled the per-schema isolation the Postgres
+// tests rely on: every test shared public, so internal/matchlog's
+// assertions about whole-table counts began seeing other tests' rows.
+//
+// That took 41 commits to surface, because the job running those tests
+// is skipped on dev to keep it fast (.github/workflows/ci.yml) and only
+// runs from preview onwards. Hence TestPinSearchPath, which needs no
+// database and so runs everywhere.
+//
+// The security property is unchanged either way: search_path is what
+// mikroview sets, never what the role or database defaults to.
+func pinSearchPath(cfg *pgxpool.Config) {
+	if cfg.ConnConfig.RuntimeParams == nil {
+		cfg.ConnConfig.RuntimeParams = map[string]string{}
+	}
+	if cfg.ConnConfig.RuntimeParams["search_path"] == "" {
+		cfg.ConnConfig.RuntimeParams["search_path"] = "public"
+	}
 }
 
 // requireTLS refuses any configuration that could end up sending the
@@ -151,12 +193,41 @@ func requireTLS(cfg *pgxpool.Config) error {
 // redact strips the DSN out of an error, in case the driver embedded it.
 // A password reaching a log file is a credential leak into whatever
 // collects those logs.
+// redact strips the DSN, and separately the password inside it, from an
+// error before it is logged.
+//
+// Replacing the exact DSN substring was the whole of it, which only
+// works when pgx echoes the DSN verbatim. pgx also produces errors
+// quoting a *normalised* or partial form -- a rewritten connection
+// string, or just the failing component -- and against those an
+// exact-substring match finds nothing and the password goes to the log
+// intact. Removing the password itself as well closes that, since it is
+// the part that actually matters. See #285.
 func redact(err error, dsn string) error {
 	msg := err.Error()
 	if dsn != "" && strings.Contains(msg, dsn) {
 		msg = strings.ReplaceAll(msg, dsn, "<dsn>")
 	}
+	if pw := dsnPassword(dsn); pw != "" {
+		msg = strings.ReplaceAll(msg, pw, "<redacted>")
+	}
 	return errors.New(msg)
+}
+
+// dsnPassword extracts the password from a URL-form DSN, or "" if there
+// is none to protect. Deliberately tolerant: an unparseable DSN yields
+// no password rather than an error, since redact must never itself be a
+// failure path on the way to reporting a different failure.
+func dsnPassword(dsn string) string {
+	u, err := url.Parse(strings.TrimSpace(dsn))
+	if err != nil || u.User == nil {
+		return ""
+	}
+	pw, ok := u.User.Password()
+	if !ok {
+		return ""
+	}
+	return pw
 }
 
 // Raw returns the underlying connection pool, for a backend whose data
@@ -377,6 +448,26 @@ func (b *PostgresBackend) Load(ctx context.Context) (Snapshot, error) {
 		return Snapshot{}, fmt.Errorf("persist: loading %q: %w", b.name, err)
 	}
 	return Snapshot{Payload: []byte(payload), Version: version, Exists: true}, nil
+}
+
+// Version implements VersionReader: it answers "has this document
+// changed?" without transferring the document.
+//
+// This matters because internal/auth checks staleness on every
+// authenticated request, and the accounts payload grows with the number
+// of accounts. Loading it whole to compare one integer meant every
+// request moved the entire accounts document -- password hashes
+// included -- across the network, per request.
+func (b *PostgresBackend) Version(ctx context.Context) (int64, bool, error) {
+	var version int64
+	err := b.pool.pool.QueryRow(ctx, sqlLoadBlobVersion, b.name).Scan(&version)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return 0, false, nil
+	}
+	if err != nil {
+		return 0, false, fmt.Errorf("persist: reading version of %q: %w", b.name, err)
+	}
+	return version, true, nil
 }
 
 func (b *PostgresBackend) Save(ctx context.Context, payload []byte, expect int64) (int64, error) {

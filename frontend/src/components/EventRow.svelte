@@ -1,7 +1,7 @@
 <script lang="ts">
   // SPDX-License-Identifier: AGPL-3.0-only
   import type { FirewallEvent } from '../lib/types'
-  import { countryFlag, formatAddr, formatTime, isPublicIp } from '../lib/format'
+  import { countryFlag, formatAddr, formatTime, isPublicIp, rawTooltip } from '../lib/format'
   import { appState } from '../lib/state.svelte'
   import ActionBadge from './ActionBadge.svelte'
   import IpInvestigateButton from './IpInvestigateButton.svelte'
@@ -19,7 +19,7 @@
   const dstFlag = $derived(countryFlag(event.dstCountry))
 </script>
 
-<div class="row row-{event.action}" title={event.raw}>
+<div class="row row-{event.action}" title={rawTooltip(event.raw, event.rawTruncated)}>
   <span class="cell time">{formatTime(event.time)}</span>
 
   <button
