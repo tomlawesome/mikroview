@@ -4,7 +4,9 @@ package persist
 
 import (
 	"context"
+	"crypto/sha256"
 	"embed"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"net/url"
@@ -59,9 +61,17 @@ const (
 	                            applied_at  timestamptz NOT NULL DEFAULT now()
 	                        )`
 
-	sqlAppliedVersions = `SELECT version FROM schema_version ORDER BY version`
+	// sha256 of the migration's SQL, recorded as it is applied so a
+	// later boot can check the database ran what this binary contains
+	// (#294 item 2). Added separately from the table above because the
+	// table predates it; ADD COLUMN IF NOT EXISTS is the whole
+	// migration, and it deliberately does not go through the migration
+	// machinery it is part of.
+	sqlEnsureSchemaChecksum = `ALTER TABLE schema_version ADD COLUMN IF NOT EXISTS checksum text`
 
-	sqlRecordVersion = `INSERT INTO schema_version (version) VALUES ($1)`
+	sqlAppliedVersions = `SELECT version, coalesce(checksum, '') FROM schema_version ORDER BY version`
+
+	sqlRecordVersion = `INSERT INTO schema_version (version, checksum) VALUES ($1, $2)`
 
 	// Serializes concurrent migration runs across processes. The constant
 	// is arbitrary but must never change: it is the shared name two
@@ -291,19 +301,23 @@ func (p *Pool) Migrate(ctx context.Context) error {
 	if _, err := conn.Exec(ctx, sqlEnsureSchemaTable); err != nil {
 		return fmt.Errorf("persist: creating schema_version: %w", err)
 	}
+	if _, err := conn.Exec(ctx, sqlEnsureSchemaChecksum); err != nil {
+		return fmt.Errorf("persist: adding schema_version.checksum: %w", err)
+	}
 
-	applied := map[int64]bool{}
+	applied := map[int64]string{}
 	rows, err := conn.Query(ctx, sqlAppliedVersions)
 	if err != nil {
 		return fmt.Errorf("persist: reading schema_version: %w", err)
 	}
 	for rows.Next() {
 		var v int64
-		if err := rows.Scan(&v); err != nil {
+		var sum string
+		if err := rows.Scan(&v, &sum); err != nil {
 			rows.Close()
 			return fmt.Errorf("persist: reading schema_version: %w", err)
 		}
-		applied[v] = true
+		applied[v] = sum
 	}
 	rows.Close()
 	if err := rows.Err(); err != nil {
@@ -315,10 +329,14 @@ func (p *Pool) Migrate(ctx context.Context) error {
 		return err
 	}
 
+	if err := verifyApplied(applied, migrations, p.Describe()); err != nil {
+		return err
+	}
+
 	startVersion := highestVersion(applied)
 	pending := make([]migration, 0, len(migrations))
 	for _, m := range migrations {
-		if !applied[m.version] {
+		if _, done := applied[m.version]; !done {
 			pending = append(pending, m)
 		}
 	}
@@ -348,7 +366,10 @@ func (p *Pool) Migrate(ctx context.Context) error {
 				"the schema is unchanged, still at version %d", m.name, m.version, startVersion))
 			return fmt.Errorf("persist: applying migration %d (%s): %w", m.version, m.name, err)
 		}
-		if _, err := tx.Exec(ctx, sqlRecordVersion, m.version); err != nil {
+		// The checksum goes in inside the same transaction as the
+		// migration itself, so a version can never be recorded without
+		// the hash that makes it verifiable.
+		if _, err := tx.Exec(ctx, sqlRecordVersion, m.version, m.checksum()); err != nil {
 			_ = tx.Rollback(ctx)
 			return fmt.Errorf("persist: recording migration %d: %w", m.version, err)
 		}
@@ -366,7 +387,59 @@ func (p *Pool) Migrate(ctx context.Context) error {
 	return nil
 }
 
-func highestVersion(applied map[int64]bool) int64 {
+// verifyApplied checks that what the database recorded as applied is
+// what this binary contains (#294 item 2).
+//
+// Migrations are compiled in and applied under a lock in per-migration
+// transactions, which is sound -- but nothing checked that the database
+// actually *ran* them. A role with write access to schema_version could
+// insert a row claiming a version, and mikroview would log "up to date"
+// and run against a schema it has never seen. Recording each migration's
+// hash as it is applied, and comparing on the next boot, closes that.
+//
+// Refuses to start rather than warning: continuing means running against
+// a schema whose shape is unknown, and every query after that point is a
+// guess. Reaching this needs write access to mikroview's own database,
+// so it is not a common failure -- but the honest response to "the
+// schema is not what I think it is" is to stop.
+//
+// An empty recorded checksum is accepted, not refused. Rows written
+// before the column existed have nothing to compare, and treating a
+// pre-existing deployment as tampered with would be a false alarm on
+// every upgrade. They are simply unverifiable, which is the truth.
+func verifyApplied(applied map[int64]string, migrations []migration, describe string) error {
+	known := make(map[int64]migration, len(migrations))
+	for _, m := range migrations {
+		known[m.version] = m
+	}
+
+	for version, recorded := range applied {
+		m, ok := known[version]
+		if !ok {
+			// The database has run a migration this binary does not
+			// contain -- an older image started against a database a
+			// newer one upgraded. Already covered by the operator
+			// guidance in docs/configuration.md; not this check's job,
+			// and refusing here would duplicate it badly.
+			continue
+		}
+		if recorded == "" {
+			continue // applied before checksums were recorded
+		}
+		if recorded != m.checksum() {
+			return fmt.Errorf(
+				"persist: %s reports migration %d (%s) as applied, but its recorded checksum does not match the one "+
+					"in this build -- the database schema is not what this version of mikroview expects. That means "+
+					"either the migration file changed after release (it must never change once applied), or "+
+					"schema_version was written to directly. Refusing to start rather than run queries against a "+
+					"schema of unknown shape",
+				describe, version, m.name)
+		}
+	}
+	return nil
+}
+
+func highestVersion(applied map[int64]string) int64 {
 	var highest int64
 	for v := range applied {
 		if v > highest {
@@ -380,6 +453,15 @@ type migration struct {
 	version int64
 	name    string
 	sql     string
+}
+
+// checksum identifies the migration's contents, recorded when it is
+// applied so a later boot can tell whether the database ran this exact
+// SQL. Over the SQL alone, not the filename: renaming a migration is
+// cosmetic, changing what it does is not.
+func (m migration) checksum() string {
+	sum := sha256.Sum256([]byte(m.sql))
+	return hex.EncodeToString(sum[:])
 }
 
 // loadMigrations reads the embedded .sql files, ordered by the numeric
