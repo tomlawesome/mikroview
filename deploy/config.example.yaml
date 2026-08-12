@@ -287,6 +287,12 @@ store:
 #   storePath: /var/lib/mikroview/users.json
 #   secureCookie: true
 #   sessionTTL: 24h
+#   # The ceiling sessionTTL does not have: the longest a session can
+#   # live from when you signed in, however often you use it. Without
+#   # one, a session used even once a day never expires, so a browser
+#   # left signed in on a shared machine stays valid forever. Set to 0
+#   # to remove the ceiling.
+#   sessionMaxLifetime: 168h  # 7 days
 #   tokensStorePath: /var/lib/mikroview/tokens.json
 #   # Where the one-time recovery keys and the pepper that hashes them
 #   # live. Both default under the data volume, which is fine -- move

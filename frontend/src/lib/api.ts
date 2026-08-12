@@ -263,6 +263,17 @@ export async function login(username: string, password: string): Promise<string 
 }
 
 
+// Change the signed-in account's own password (#294 item 4). Returns
+// error text on failure, like every other mutating wrapper here.
+//
+// The server takes no username: it acts on the session's own account,
+// deliberately, so a body cannot point this at somebody else.
+export async function changePassword(currentPassword: string, newPassword: string): Promise<string | null> {
+  const res = await postJSON('/api/auth/password', { currentPassword, newPassword })
+  if (res.ok) return null
+  return (await res.text()) || `changePassword: ${res.status}`
+}
+
 // Returns error text on failure, like every other mutating wrapper
 // here. It used to return void and ignore the status entirely -- the one
 // exception among roughly 25 -- so a failed logout was indistinguishable
