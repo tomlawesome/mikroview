@@ -10,7 +10,7 @@ import {
   updateWatchlistEntry,
   type WatchlistEntryRequest,
 } from './api'
-import type { WatchlistEntry, WatchlistMatch, WatchlistPermittedDest } from './types'
+import type { WatchlistCoverage, WatchlistEntry, WatchlistMatch, WatchlistPermittedDest } from './types'
 
 // Live, admin-managed watchlist entries (#243) -- mirrors
 // entities.svelte.ts's shape: a thin reactive wrapper over the API
@@ -19,9 +19,15 @@ import type { WatchlistEntry, WatchlistMatch, WatchlistPermittedDest } from './t
 // always exactly what the server has.
 class WatchlistState {
   entries = $state<WatchlistEntry[]>([])
+  // What can be said about whether anything is able to feed each entry
+  // (#274), keyed by entry id. Refreshed with the entries, since it is
+  // derived from what routers have pushed rather than stored.
+  coverage = $state<Record<string, WatchlistCoverage>>({})
 
   async refresh() {
-    this.entries = await fetchWatchlistEntries()
+    const { entries, coverage } = await fetchWatchlistEntries()
+    this.entries = entries
+    this.coverage = coverage
   }
 
   async create(req: WatchlistEntryRequest): Promise<string | null> {
