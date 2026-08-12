@@ -78,6 +78,67 @@ upgrading.
 
 ### Added
 
+- **A renewed certificate can be picked up without a restart** (#294).
+  Send MikroView `SIGHUP` — `docker kill --signal=HUP mikroview` — and it
+  reloads `tls.certFile`/`tls.keyFile` on both the HTTPS listener and the
+  syslog listener. Certbot and cert-manager both have a deploy hook for
+  exactly this.
+
+  Previously MikroView read the certificate once at startup and never
+  looked again, so anyone renewing automatically served an expired
+  certificate until they happened to restart — and a router set to
+  `check-certificate=yes` stops sending its logs at that point, which is
+  the outage you would least want to find out about late.
+
+  It does not watch the files and reload on its own, deliberately: it
+  cannot tell a finished renewal from one still being written, and half a
+  certificate is worse than an old one. A reload that fails leaves the
+  working certificate in place rather than dropping to none.
+
+- **You can change your own password from the interface** (#294). There
+  was no way to do it at all before: it meant `-recover-admin-account`
+  on the host, so anyone who suspected their password was known could do
+  nothing about it themselves. **Menu → Change password.**
+
+  Changing it also signs out everywhere else, immediately — that is the
+  point rather than a side effect, since the other half of "someone has
+  my credential" is "someone has my session". You stay signed in where
+  you made the change. An account that signs in through your identity
+  provider has no local password to change and does not see the option.
+
+- **Sessions now have a maximum age** (#294): seven days from signing
+  in, however often you use MikroView in between. `auth.sessionTTL` is
+  an *idle* timeout, so a session used once a day never expired — a
+  browser left signed in on a shared machine stayed valid indefinitely.
+  Configurable as `auth.sessionMaxLifetime`; set it to `0` to go back to
+  no ceiling.
+
+- **The Watchlist tells you when an entry can never match** (#274). An
+  entry showing no matches used to be ambiguous between "nothing
+  happened" and "nothing here is even watching" — the second being a
+  configuration mistake you had no way to see. Where MikroView can be
+  certain, the entry now says so and what to do about it: either no
+  firewall rule on any connected router has logging switched on, or your
+  rules do log but none of them covers what that entry watches.
+
+  **It stays quiet unless it is certain**, which is most of the time.
+  This needs the optional router push (step 4 of the RouterOS setup) to
+  say anything at all, and any rule it cannot read — one scoping by an
+  address-list name, say — makes it stop claiming rather than guess. A
+  wrong "this can never fire" hides a working entry, and a wrong "this
+  looks fine" is worse than silence.
+
+- **Routers can push whether a firewall rule actually logs, and which
+  addresses it matches** (#274). The filter-rule push gained three
+  fields: `log`, `dstAddress` and `srcAddress` — what the check above
+  reads.
+
+  **Update MikroView before you update the push script on your routers.**
+  MikroView refuses a push containing a field it does not recognise
+  rather than ignoring it, so a router sending the newer script to an
+  older MikroView gets a `400` and stops pushing. The other order is
+  safe. See [docs/routeros-setup.md](docs/routeros-setup.md).
+
 - **`THIRD-PARTY-NOTICES.md`, embedded in the binary and served at
   `GET /api/third-party-notices`** -- the copyright notices and licence
   texts of every Go module statically linked into mikroview and every
@@ -397,6 +458,130 @@ upgrading.
   bare IP keeps working.
 
 ### Fixed
+
+- **A single sign-on issuer written without `https://` is now checked
+  properly** (#267). MikroView refuses multi-tenant providers, and that
+  check read the hostname — which is empty for a scheme-less string, so
+  `login.microsoftonline.com/common/v2.0` passed a check meant to refuse
+  it. Setup would have failed later at provider discovery, but a check
+  that answers "fine" because it could not read its input is the wrong
+  shape.
+
+- **A router with no NAT rules no longer shows an empty box** (#267).
+  The rule lookup said so when a pushed table contained no matching
+  rule; the NAT lookup had no equivalent message, so a router that has
+  pushed its NAT table and simply has no NAT configured showed nothing
+  at all, with a footnote explaining how to read rules that were not
+  there.
+
+- **Creating a named entity now answers `201`, not `200`** (#267),
+  matching every other create endpoint. `POST /api/entities` both
+  creates and replaces, and always answering `200` left a caller unable
+  to tell which had happened. A replace still answers `200`.
+
+- **Four single sign-on access-policy settings can now be set from the
+  environment** (#267): `MIKROVIEW_OIDC_ALLOWED_GROUPS`,
+  `MIKROVIEW_OIDC_GROUPS_CLAIM`, `MIKROVIEW_OIDC_ALLOWED_EMAILS` and
+  `MIKROVIEW_OIDC_ALLOWED_EMAIL_DOMAINS`. A deployment keeping its OIDC
+  block in the environment could previously say who its provider was but
+  not who was allowed in.
+
+- **Two named entities can no longer overwrite each other** (#267).
+  Entities were stored under `type + ":" + key`, and both parts can
+  contain colons — an IPv6 address is a perfectly ordinary host key — so
+  `("host", "2001:db8::1")` and `("host:2001", "db8::1")` landed on the
+  same key and one silently replaced the other. They are now kept apart.
+  The entity type also gets the same check for control characters that
+  the key, label and tags already had.
+
+- **MikroView regenerates its certificate if the authority behind it is
+  lost** (#267). If `ca.crt` or `ca.key` became unreadable while the
+  certificate files survived, MikroView created a fresh authority and
+  carried on serving the old certificate — a pair that validates against
+  nothing, so every browser and router that had trusted the original
+  failed with a certificate error and no other clue. It now checks that
+  the stored certificate was signed by the authority in use, and issues
+  a new one if not.
+
+- **A Pushover message is no longer cut mid-character** (#267). Long
+  batches were trimmed by byte count, which can split a multi-byte
+  character and leave invalid text. Trimming now stops at a character
+  boundary.
+
+- **`-transfer-admin` no longer names the admin before you prove a
+  recovery key** (#267). It printed "Admin is currently ..." as its first
+  action, so anyone able to run the binary learned who the admin is by
+  starting the command and pressing Ctrl-C — despite the code's own
+  comment two lines below stating the key is asked for first precisely
+  so that cannot happen. It now asks first and names the account once the
+  key is verified. `-recover-admin-account` still names it up front,
+  deliberately: it has to say which account it cannot help with when
+  that account signs in through your identity provider.
+
+- **A mistyped filter in an API request is now refused instead of
+  silently ignored** (#267). `GET /api/events` and `GET /api/audit`
+  accepted a malformed `since`, `until`, `limit`, `port`, `around`,
+  `window` or `sinceId` and returned `200` with the filter simply not
+  applied — so a caller with a typo got *everything* while believing
+  they had asked for a window. In a tool whose job is showing you what
+  happened in a window, that is the misreading that matters. Both now
+  answer `400` and name the parameter, which is what
+  `GET /api/watchlist/matches` already did; the three took the same
+  parameters and disagreed about this. An absent parameter still means
+  "no filter", unchanged.
+
+- **`-validate-config` now checks your single sign-on settings** (#267).
+  It performed no OIDC validation at all, so a block missing
+  `publicBaseUrl`, or `clientId`/`clientSecret`, or pointed at a
+  multi-tenant provider MikroView refuses, passed cleanly — and the
+  first sign anything was wrong was the SSO button not being there. New
+  CFG-0060, CFG-0061 and CFG-0062. They are warnings, not errors:
+  MikroView still starts and local login still works, because taking a
+  deployment down over a half-configured optional integration would be
+  worse. `-validate-config` exits non-zero on warnings, so a pipeline is
+  still told.
+
+- **A rule filter that stops being usable mid-stream now says so**
+  (#267). If a regex filter became unevaluable once matching events
+  started arriving, the live view kept showing the last match set it had
+  worked out — stale and wrong, with nothing to say the filter was no
+  longer being applied. Reading a filtered view as complete when it is
+  not is the exact misreading this product exists to prevent.
+
+- **Clicking the logo returns you to the live view** (#267), as does a
+  Live view entry in the menu. Previously the only way back was to click
+  whichever view button you had used to leave it.
+
+- **Failed actions now say so instead of looking like nothing happened**
+  (#267). Removing a watchlist entry, turning observe mode on or off,
+  promoting a destination, removing a named entity, clearing a flag,
+  clearing all flags, permanently clearing one, and removing an
+  exclusion all reported nothing when they failed. The row reappeared or
+  simply stayed, which reads as the button not having worked rather than
+  as an error — and in several cases it was an unhandled promise
+  rejection that only the browser console would ever have shown you.
+  Each of these now shows the reason, the same way the forms next to
+  them already did.
+
+- **Signing out no longer looks successful when it failed** (#267).
+  `logout` was the one action that ignored the server's response
+  entirely. You are still signed out locally either way — being left
+  looking signed in would be worse — but if the server did not confirm
+  it, MikroView now says so, since the session may still be live.
+
+- **The live view no longer briefly claims to be disconnected after a
+  fast sign-out and back in** (#267). Closing a WebSocket reports the
+  closure asynchronously, so the old connection's "closed" arrived after
+  the new one was already up, overwriting the indicator and scheduling a
+  reconnect that was then abandoned. Handlers now ignore a connection
+  that has been superseded.
+
+- **A regex rule filter no longer switches itself off under load**
+  (#267). Two overlapping match requests shared one background worker's
+  reply handler, so the earlier one could never be answered and gave up
+  reporting "too slow" — which drops the filter and shows every event,
+  precisely when a busy feed makes filtering matter most. Replies are
+  now matched to their own request.
 
 - **`search_path` in a Postgres connection string is honoured again**
   (#273). Pinning the schema so nobody could shadow MikroView's tables
@@ -778,8 +963,10 @@ upgrading.
 
 ### Changed
 
-- `internal/api`'s `Routes` gained an inner `mux`, so tests that
-  exercise a handler rather than the authentication gate can mount the
-  API directly. They previously got an ungated API by standing the
-  fixture up with authentication disabled, which is no longer a state
-  that exists.
+<!-- Nothing operator-visible changed in this release beyond the
+     Added/Fixed entries above. An earlier entry here described an
+     internal test-fixture refactor (internal/api's Routes gaining an
+     inner mux); it was removed because every other entry in this file
+     is written from what an operator would notice, and a reader
+     scanning for what changed for *them* has to skip past anything
+     that isn't (#268 finding 17). -->

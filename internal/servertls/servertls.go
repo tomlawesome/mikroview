@@ -106,7 +106,7 @@ func Load(cfg Config) (cert tls.Certificate, caCertPEM []byte, persistErr error,
 	}
 
 	if cfg.StorePath != "" {
-		if cert, ok := loadStoredLeaf(cfg.StorePath, sortedHosts); ok {
+		if cert, ok := loadStoredLeaf(cfg.StorePath, sortedHosts, ca); ok {
 			return cert, ca.certPEM, nil, nil
 		}
 	}
@@ -268,12 +268,21 @@ func loadStoredCA(storePath string) *caPair {
 }
 
 // loadStoredLeaf returns the previously-generated leaf certificate, if
-// one exists, was issued for exactly this sorted host list, and isn't
-// within its renewal window -- any mismatch (never generated, host list
-// changed, close to expiry, corrupt) is reported via ok=false so the
+// one exists, was issued for exactly this sorted host list, isn't within
+// its renewal window, and still chains to ca -- any mismatch (never
+// generated, host list changed, close to expiry, corrupt, issued by a
+// CA that is no longer the one in use) is reported via ok=false so the
 // caller regenerates (reusing the already-loaded CA, so no re-trust is
 // needed just because the leaf's SAN list changed).
-func loadStoredLeaf(storePath string, sortedHosts []string) (tls.Certificate, bool) {
+//
+// The chain check is the part that is easy to leave out. If ca.crt or
+// ca.key becomes unreadable or corrupt while the three leaf files stay
+// intact, the caller above mints a fresh CA and would otherwise keep
+// serving the old leaf -- a pair that validates against nothing, so
+// every client that had trusted the original CA fails, and the only
+// clue is a certificate error. Regenerating instead costs one leaf and
+// leaves the already-trusted CA arrangement intact where it can be.
+func loadStoredLeaf(storePath string, sortedHosts []string, ca *caPair) (tls.Certificate, bool) {
 	_, _, leafCertPath, leafKeyPath, metaPath := storePaths(storePath)
 
 	metaData, err := os.ReadFile(metaPath)
@@ -294,6 +303,21 @@ func loadStoredLeaf(storePath string, sortedHosts []string) (tls.Certificate, bo
 	}
 	leaf, err := x509.ParseCertificate(cert.Certificate[0])
 	if err != nil || time.Until(leaf.NotAfter) < renewalWindow {
+		return tls.Certificate{}, false
+	}
+	// Verified against this CA specifically, not against the host's
+	// trust store: a local CA is in neither, and the question here is
+	// only "did the CA we are about to serve alongside sign this leaf".
+	pool := x509.NewCertPool()
+	pool.AddCert(ca.cert)
+	if _, err := leaf.Verify(x509.VerifyOptions{
+		Roots: pool,
+		// The leaf is checked for expiry above; this call is about the
+		// signature chain, and passing the same clock twice would make
+		// a renewal-window miss look like a chain failure.
+		CurrentTime: leaf.NotBefore,
+		KeyUsages:   []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+	}); err != nil {
 		return tls.Certificate{}, false
 	}
 	return cert, true

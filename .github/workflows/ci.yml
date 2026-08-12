@@ -1,11 +1,23 @@
 name: CI
 
-# Three-lane model: dev (light, fast feedback) -> preview (heavier gate,
-# publishes the release candidate image) -> main (promotion only). The
-# container smoke test is the one thing dev skips, on time grounds; see
-# the `container` job's `if:` below. Everything else runs everywhere,
-# including the security job -- see its comment for why it stopped being
-# conditional.
+# Three-lane model: dev (fast feedback) -> preview (publishes the release
+# candidate image) -> main (promotion only).
+#
+# Every job runs in every lane. It did not used to: the container smoke
+# test and the Postgres integration job were skipped on dev to keep it
+# light, on the reasoning that preview would catch anything they would.
+# Preview did catch something -- 41 commits after it landed (#273). A
+# one-line mistake in internal/persist forced every connection onto the
+# `public` schema, which silently overrode an operator's own
+# `?search_path=` and, incidentally, broke the isolation those very tests
+# rely on. Nine of them had been failing for six weeks with nothing
+# running them.
+#
+# The trade was cheap feedback for late feedback, and late is what makes
+# a defect expensive: by then it is buried under forty other changes and
+# the promotion PR is the thing that fails. Both jobs finish in under a
+# minute. That is not worth six weeks of blindness, so neither is gated
+# any more.
 on:
   push:
     branches: [main, preview, dev]
@@ -70,6 +82,13 @@ jobs:
       # internal/api's authzMatrix.
       - name: Third-party notices are up to date
         run: node tools/licenses/generate-notices.mjs --check
+
+      # Same reasoning as the notices check above, one class down: this
+      # project's documentation is detailed enough that readers trust
+      # it, so a link that goes nowhere costs more here than it would
+      # elsewhere -- and nothing complains when a heading gets reworded.
+      - name: Documentation links resolve
+        run: node tools/docs/check-anchors.mjs
 
   # Runs on every change, deliberately.
   #
@@ -137,13 +156,18 @@ jobs:
           npm ci
           npm audit --audit-level=high
 
-  # Not run on dev (see the on.push/pull_request branch lists above
-  # already excluding it isn't possible per-job, so this gates itself):
-  # dev stays fast/light on purpose. Preview and main both get the real
-  # container smoke test.
+  # Runs in every lane, dev included -- see the file header for why the
+  # `if:` that used to skip it here is gone.
+  #
+  # The cache below is the reason this stays quick. docker.yml's
+  # publish-preview and release jobs populate it (cache-to: type=gha,
+  # mode=max) building the same Dockerfile, and neither runs on dev, so a
+  # dev push whose Dockerfile inputs have not changed since the last
+  # promotion reuses those layers. When they have changed, it pays a full
+  # build -- which is the case where a container smoke test is worth
+  # most, so that is the right way round.
   container:
     name: Container smoke test
-    if: github.base_ref != 'dev' && github.ref_name != 'dev'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -191,14 +215,15 @@ jobs:
         if: always()
         run: docker rm --force mikroview-test || true
 
+  # Runs in every lane, dev included. This is the job whose absence from
+  # dev let a storage defect sit for 41 commits -- see the file header.
+  #
+  # It builds a postgres:18-alpine-derived image on every run, which was
+  # the argument for gating it. Measured, that argument does not hold up:
+  # the whole job takes about 35 seconds, because the base image is one
+  # pull and the derived layer is a copy and a chmod.
   postgres:
     name: Postgres integration (#131)
-    # Same reasoning as the container job's own if: above -- dev stays
-    # fast/light on purpose. This job builds a fresh postgres:18-alpine-
-    # derived image (433MB) on every run it's not skipped for; gating it
-    # here cuts that cost on every dev push/PR the same way it already
-    # does for the container job.
-    if: github.base_ref != 'dev' && github.ref_name != 'dev'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:

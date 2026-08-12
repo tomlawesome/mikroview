@@ -12,6 +12,7 @@
   import { viewportState } from '../lib/viewport.svelte'
   import { versionState } from '../lib/version.svelte'
   import AboutOverlay from './AboutOverlay.svelte'
+  import ChangePasswordOverlay from './ChangePasswordOverlay.svelte'
 
   versionState.ensureLoaded()
 
@@ -19,6 +20,9 @@
 
   let open = $state(false)
   let rootEl: HTMLDivElement | undefined = $state()
+  // Shown after signing out, since the menu itself is gone by then --
+  // see the Sign out button below for why a failure still signs out.
+  let logoutError = $state<string | null>(null)
 
   function onDocClick(e: MouseEvent) {
     if (rootEl && !rootEl.contains(e.target as Node)) open = false
@@ -84,6 +88,12 @@
 </script>
 
 <div class="nav-menu" bind:this={rootEl}>
+  {#if logoutError}
+    <p class="logout-error" role="alert">
+      Signed out here, but the server did not confirm it: {logoutError}
+    </p>
+  {/if}
+
   <button
     class="trigger"
     onclick={() => (open = !open)}
@@ -318,6 +328,24 @@
             <div class="divider"></div>
           {/if}
 
+          {#if authState.hasLocalPassword}
+            <!-- Every user's, like Connect SSO below: the server takes
+                 the account from the session, never from the request.
+                 Hidden for an SSO-only account, which has no local
+                 password to change -- the server answers 409 either
+                 way. -->
+            <button
+              class="option"
+              onclick={() => {
+                authState.showChangePassword = true
+                open = false
+              }}
+              title="Change your MikroView password, and sign out everywhere else"
+            >
+              Change password
+            </button>
+          {/if}
+
           {#if authState.ssoAvailable && authState.hasLocalPassword}
             <!-- Deliberately outside the admin gate above: this converts
                  your OWN account, and the server takes the target from
@@ -339,7 +367,14 @@
           <button
             class="option"
             onclick={() => {
-              authState.logout()
+              // Caught rather than fire-and-forget: authState.logout()
+              // signs out locally either way, so the only thing worth
+              // saying is that the server may still hold the session.
+              // Unhandled, this was a bare rejection and the user was
+              // told nothing at all.
+              void authState.logout().then((err) => {
+                if (err) logoutError = err
+              })
               open = false
             }}
             title="Sign out {authState.username}"
@@ -377,8 +412,24 @@
 </div>
 
 <AboutOverlay bind:open={showAbout} />
+<ChangePasswordOverlay />
 
 <style>
+  .logout-error {
+    position: absolute;
+    top: 100%;
+    right: 0;
+    z-index: 40;
+    margin: 4px 0 0;
+    max-width: 280px;
+    padding: 6px 8px;
+    border-radius: 6px;
+    background: var(--panel);
+    border: 1px solid var(--reject);
+    color: var(--reject);
+    font-size: 12px;
+  }
+
   .nav-menu {
     position: relative;
   }

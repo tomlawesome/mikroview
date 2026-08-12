@@ -377,11 +377,6 @@ class AppState {
   }
 }
 
-// MAX_RULE_PATTERN_LENGTH bounds compile cost. Generous -- a real rule
-// filter is a handful of characters -- but it stops a megabyte-long
-// pattern arriving in a URL.
-const MAX_RULE_PATTERN_LENGTH = 200
-
 // applyFilters runs no regex.
 //
 // When the rule filter is in regex mode it consults ruleMatches -- a set

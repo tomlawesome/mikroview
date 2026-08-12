@@ -90,6 +90,49 @@ describe('RuleMatcher', () => {
     void first
   })
 
+  // The regression this exists for: run() used to assign
+  // worker.onmessage per call on the shared worker, so a second
+  // overlapping call replaced the first one's handler and the first
+  // could only ever settle via its own timeout -- reporting 'too-slow',
+  // which applyFilters treats as "drop the regex filter and show
+  // everything". state.svelte.ts's flushIncoming fires every 175ms
+  // without awaiting, so any round trip longer than that overlapped.
+  it('resolves both of two overlapping runs, in whatever order they reply', async () => {
+    const replies = new Map<number, (data: any) => void>()
+    const w = fakeWorker((msg, reply) => replies.set(msg.id, reply))
+    const m = new RuleMatcher(() => w)
+
+    const first = m.run('a', candidates)
+    const second = m.run('b', candidates)
+
+    // Second answers first, which is the interleaving that broke it.
+    replies.get(2)!({ id: 2, ids: [2] })
+    replies.get(1)!({ id: 1, ids: [1] })
+
+    await expect(first).resolves.toEqual({ status: 'ok', ids: [1] })
+    await expect(second).resolves.toEqual({ status: 'ok', ids: [2] })
+  })
+
+  // Killing the worker used to leave everything else waiting on it
+  // pending until each caller's own timeout fired, one after another.
+  it('settles every in-flight run when the worker is killed', async () => {
+    vi.useFakeTimers()
+    const w = fakeWorker(() => {})
+    const m = new RuleMatcher(() => w)
+
+    const first = m.run('a', candidates, 50)
+    const second = m.run('b', candidates, 10_000)
+
+    // Only the first one's timeout fires; it kills the worker, which
+    // must settle the second rather than leave it hanging for 10s.
+    await vi.advanceTimersByTimeAsync(60)
+
+    await expect(first).resolves.toEqual({ status: 'too-slow' })
+    await expect(second).resolves.toEqual({ status: 'too-slow' })
+    expect(w.terminated).toBe(true)
+    vi.useRealTimers()
+  })
+
   it('builds a fresh worker after one was killed', async () => {
     vi.useFakeTimers()
     let built = 0
