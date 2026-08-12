@@ -267,3 +267,70 @@ func TestDecodePayloadNeverPanics(t *testing.T) {
 		}()
 	}
 }
+
+// TestDecodeRealFilterRulePush decodes a payload captured verbatim from a
+// real RouterOS 7.23.3, produced by the exact script in
+// docs/routeros-setup.md section 4c -- not by a hand-written body that
+// happens to have the right field names.
+//
+// The distinction earned itself here. Every shape below came off the
+// router, and two are not what a reasonable person would write by hand:
+//
+//   - A rule with log=no serialises "log": null -- not false, not
+//     absent -- because the script reads a property RouterOS does not
+//     set. encoding/json unmarshals null into a bool as a no-op, so Log
+//     lands false, which is the right answer but by Go's semantics
+//     rather than by anyone's design. Worth pinning for that reason.
+//   - dst-address arrives in four shapes: bare address, CIDR, range and
+//     negated. All plain strings, unlike dst-port, which serialises a
+//     single port as a JSON number (see FilterRule's doc comment for why
+//     that one needed its own type).
+//
+// Captured 2026-08-12 under scripts/live-routeros.sh: six rules covering
+// every address shape plus one non-logging rule.
+func TestDecodeRealFilterRulePush(t *testing.T) {
+	const body = `{"kind":"filter-rule","page":1,"pages":1,"records":[
+	  {"action":"drop","chain":"forward","comment":null,"dstAddress":"203.0.113.9","dstPort":null,"log":true,"logPrefix":"D|one-ip|","ordinal":0,"protocol":null,"srcAddress":null,"srcAddressList":null},
+	  {"action":"drop","chain":"forward","comment":null,"dstAddress":"10.0.0.0/8","dstPort":null,"log":true,"logPrefix":"D|cidr|","ordinal":1,"protocol":null,"srcAddress":"192.168.88.0/24","srcAddressList":null},
+	  {"action":"drop","chain":"forward","comment":null,"dstAddress":"10.0.0.1-10.0.0.5","dstPort":null,"log":true,"logPrefix":"D|range|","ordinal":2,"protocol":null,"srcAddress":null,"srcAddressList":null},
+	  {"action":"drop","chain":"forward","comment":null,"dstAddress":"!10.0.0.0/8","dstPort":null,"log":true,"logPrefix":"D|negated|","ordinal":3,"protocol":null,"srcAddress":null,"srcAddressList":null},
+	  {"action":"accept","chain":"input","comment":null,"dstAddress":null,"dstPort":null,"log":true,"logPrefix":"A|noaddr|","ordinal":4,"protocol":null,"srcAddress":null,"srcAddressList":null},
+	  {"action":"drop","chain":"forward","comment":"silent rule","dstAddress":"198.51.100.0/24","dstPort":null,"log":null,"logPrefix":null,"ordinal":5,"protocol":null,"srcAddress":null,"srcAddressList":null}
+	]}`
+
+	p := decodeOK(t, body)
+	if len(p.FilterRules) != 6 {
+		t.Fatalf("decoded %d rules, want 6", len(p.FilterRules))
+	}
+
+	want := []struct {
+		log        bool
+		dstAddress string
+		srcAddress string
+	}{
+		{true, "203.0.113.9", ""},
+		{true, "10.0.0.0/8", "192.168.88.0/24"},
+		{true, "10.0.0.1-10.0.0.5", ""},
+		{true, "!10.0.0.0/8", ""},
+		{true, "", ""},
+		{false, "198.51.100.0/24", ""}, // "log": null -> false
+	}
+	for i, w := range want {
+		got := p.FilterRules[i]
+		if got.Log != w.log {
+			t.Errorf("rule %d: Log = %v, want %v", i, got.Log, w.log)
+		}
+		if got.DstAddress != w.dstAddress {
+			t.Errorf("rule %d: DstAddress = %q, want %q", i, got.DstAddress, w.dstAddress)
+		}
+		if got.SrcAddress != w.srcAddress {
+			t.Errorf("rule %d: SrcAddress = %q, want %q", i, got.SrcAddress, w.srcAddress)
+		}
+	}
+
+	// The field the whole coverage answer rests on: a rule that does not
+	// log feeds mikroview nothing, whatever else it matches.
+	if p.FilterRules[5].Log {
+		t.Error("a rule with log=no decoded as logging -- every coverage answer built on this would be wrong")
+	}
+}
