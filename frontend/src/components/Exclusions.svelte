@@ -16,6 +16,13 @@
     exclusionsState.refresh()
   })
 
+  // exclusionsState.remove optimistically drops the row, then restores
+  // it and rethrows on failure (lib/exclusions.svelte.ts). With no catch
+  // that was an unhandled rejection, and all the operator saw was the
+  // exclusion reappearing -- indistinguishable from the button not
+  // having worked.
+  let error = $state<string | null>(null)
+
   // Same labels Flags.svelte/FlagsChart.svelte use -- duplicated rather
   // than shared, matching how ACTION_LABELS is already independently
   // duplicated in both EventsChart.svelte and Dashboard.svelte in this
@@ -45,8 +52,11 @@
 
   async function remove(id: string) {
     removingId = id
+    error = null
     try {
       await exclusionsState.remove(id)
+    } catch (err) {
+      error = err instanceof Error ? `Could not remove this exclusion: ${err.message}` : 'Could not remove this exclusion'
     } finally {
       removingId = null
     }
@@ -73,6 +83,10 @@
 </script>
 
 <div class="page scrollbar">
+  {#if error}
+    <p class="mutation-error" role="alert">{error}</p>
+  {/if}
+
   <p class="intro">
     Every (detector, target) pair permanently silenced via "Permanently clear" on the Flags page -- removing one here
     lets it raise normally again, undoing a mistaken exclusion.
@@ -133,6 +147,14 @@
     display: flex;
     flex-direction: column;
     gap: 14px;
+  }
+
+  /* Matches Flags/Watchlist/Entities, so a failed mutation reads the
+     same way wherever it happens. */
+  .mutation-error {
+    margin: 0;
+    color: var(--reject);
+    font-size: 12px;
   }
 
   .intro {

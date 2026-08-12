@@ -19,6 +19,9 @@
 
   let open = $state(false)
   let rootEl: HTMLDivElement | undefined = $state()
+  // Shown after signing out, since the menu itself is gone by then --
+  // see the Sign out button below for why a failure still signs out.
+  let logoutError = $state<string | null>(null)
 
   function onDocClick(e: MouseEvent) {
     if (rootEl && !rootEl.contains(e.target as Node)) open = false
@@ -84,6 +87,12 @@
 </script>
 
 <div class="nav-menu" bind:this={rootEl}>
+  {#if logoutError}
+    <p class="logout-error" role="alert">
+      Signed out here, but the server did not confirm it: {logoutError}
+    </p>
+  {/if}
+
   <button
     class="trigger"
     onclick={() => (open = !open)}
@@ -339,7 +348,14 @@
           <button
             class="option"
             onclick={() => {
-              authState.logout()
+              // Caught rather than fire-and-forget: authState.logout()
+              // signs out locally either way, so the only thing worth
+              // saying is that the server may still hold the session.
+              // Unhandled, this was a bare rejection and the user was
+              // told nothing at all.
+              void authState.logout().then((err) => {
+                if (err) logoutError = err
+              })
               open = false
             }}
             title="Sign out {authState.username}"
@@ -379,6 +395,21 @@
 <AboutOverlay bind:open={showAbout} />
 
 <style>
+  .logout-error {
+    position: absolute;
+    top: 100%;
+    right: 0;
+    z-index: 40;
+    margin: 4px 0 0;
+    max-width: 280px;
+    padding: 6px 8px;
+    border-radius: 6px;
+    background: var(--panel);
+    border: 1px solid var(--reject);
+    color: var(--reject);
+    font-size: 12px;
+  }
+
   .nav-menu {
     position: relative;
   }
