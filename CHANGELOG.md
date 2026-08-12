@@ -78,6 +78,23 @@ upgrading.
 
 ### Added
 
+- **A renewed certificate can be picked up without a restart** (#294).
+  Send MikroView `SIGHUP` — `docker kill --signal=HUP mikroview` — and it
+  reloads `tls.certFile`/`tls.keyFile` on both the HTTPS listener and the
+  syslog listener. Certbot and cert-manager both have a deploy hook for
+  exactly this.
+
+  Previously MikroView read the certificate once at startup and never
+  looked again, so anyone renewing automatically served an expired
+  certificate until they happened to restart — and a router set to
+  `check-certificate=yes` stops sending its logs at that point, which is
+  the outage you would least want to find out about late.
+
+  It does not watch the files and reload on its own, deliberately: it
+  cannot tell a finished renewal from one still being written, and half a
+  certificate is worse than an old one. A reload that fails leaves the
+  working certificate in place rather than dropping to none.
+
 - **You can change your own password from the interface** (#294). There
   was no way to do it at all before: it meant `-recover-admin-account`
   on the host, so anyone who suspected their password was known could do
