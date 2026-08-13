@@ -33,9 +33,22 @@
       tokensState.refresh()
       fetchDevices()
         .then((all) => {
+          // An id-less or duplicated device would crash the keyed
+          // {#each} below -- Svelte throws each_key_duplicate in
+          // production too, and with no boundary the whole ingest
+          // section renders nothing at all: no select, not even the
+          // empty-state text, so the operator sees a form they cannot
+          // complete and no reason why. Config validation (CFG-0032/
+          // 0033) is what stops that arising, but this list comes off
+          // the wire, so it is filtered here as well rather than
+          // trusting the server to have been validated.
+          const byID = new Map<string, Device>()
+          for (const d of all) {
+            if (d.id && !byID.has(d.id)) byID.set(d.id, d)
+          }
           // Configured first, then discovered, each by id: a stable
           // order regardless of the registry's own map ordering.
-          knownDevices = [...all].sort(
+          knownDevices = [...byID.values()].sort(
             (a, b) => Number(b.configured) - Number(a.configured) || a.id.localeCompare(b.id),
           )
         })
