@@ -56,6 +56,25 @@ const (
 // Entries are not scoped to a device, so this asks whether *any* device
 // could feed the entry. One router logging the right traffic is enough,
 // even if five others do not.
+//
+// That is deliberate, and it has a cost worth stating rather than
+// leaving to be discovered (#333, owner decision 2026-08-13: keep the
+// behaviour, write the trade-off down).
+//
+// The cost: internal/auth.Token's own doc comment says an ingest token
+// sits on a router where any RouterOS user holding `read` can print it.
+// Whoever holds one can push a fabricated logging rule, and because this
+// function ignores which device a rule came from, that flips an entry
+// from CoverageNoLogging -- "nothing anywhere is watching this" -- to
+// CoverageOK, suppressing the exact warning this file exists to raise.
+//
+// It is kept anyway because the alternative is worse-fitting: Entry has
+// no device field, so "any device could feed this" is the honest answer
+// to the question actually being asked, and scoping entries per router
+// buys nothing for the common single-router deployment. The mitigation
+// is the token's own scope and revocation, not this function guessing.
+// If entries ever gain a device, this is the first thing that should
+// consult it.
 func Coverage(entry Entry, rulesByDevice map[string][]ingest.FilterRule) CoverageState {
 	if len(rulesByDevice) == 0 {
 		return CoverageUnknown

@@ -17,6 +17,7 @@ import type {
   ReputationResult,
   RuleUsage,
   Stats,
+  SetupStatus,
   Suggestion,
   SuggestionStatus,
   UserSummary,
@@ -555,5 +556,13 @@ export async function fetchAuditLog(): Promise<AuditResult> {
 export async function startSSOLink(): Promise<{ url: string } | string> {
   const res = await postJSON('/api/auth/oidc/link')
   if (!res.ok) return (await res.text()) || `startSSOLink: ${res.status}`
+  return res.json()
+}
+
+// The guided setup wizard's view of what has landed (#320). Admin-only
+// server-side; the menu entry is gated the same way.
+export async function fetchSetupStatus(): Promise<SetupStatus> {
+  const res = await fetch('/api/setup/status')
+  if (!res.ok) throw new ApiError(`fetchSetupStatus: ${res.status}`, res.status)
   return res.json()
 }
