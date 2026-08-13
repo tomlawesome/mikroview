@@ -27,6 +27,14 @@
 // wants router data to contribute a signal, it goes through an explicit,
 // narrow caller that argues its case (the shape internal/detect's
 // netclass.go established), not through this package growing a path.
+//
+// One stated exception, so the sentence above is not read wider than it
+// holds: watchlist *coverage* reads pushed filter rules
+// (internal/watchlist.Coverage). Coverage is not a suspicion signal --
+// it raises nothing and scores nothing -- but it is the answer to "could
+// anything have fed this entry at all", and pushed rules decide it. See
+// that function's own comment, and #333, for what that means for a
+// leaked ingest token.
 package routerstate
 
 import (
@@ -450,6 +458,28 @@ func (s *Store) Devices() []string {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return sortedDeviceNamesLocked(s.devices)
+}
+
+// PushedKinds reports, for one device, every table it has pushed and
+// when that table last arrived. The setup wizard (#320) uses it to say
+// which blocks of the push script are working -- "filter rules yes,
+// DHCP leases no" is actionable in a way that "pushes are happening" is
+// not.
+func (s *Store) PushedKinds(device string) map[ingest.Kind]time.Time {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	ds, ok := s.devices[device]
+	if !ok {
+		return nil
+	}
+	out := make(map[ingest.Kind]time.Time, len(ds.kinds))
+	for kind, ks := range ds.kinds {
+		if len(ks.pages) == 0 {
+			continue
+		}
+		out[kind] = ks.updatedAt
+	}
+	return out
 }
 
 func (s *Store) kindLocked(device string, kind ingest.Kind) (*kindState, bool) {
