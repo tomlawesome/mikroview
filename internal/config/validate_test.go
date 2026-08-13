@@ -67,6 +67,16 @@ func TestFatalRules(t *testing.T) {
 		{"duplicate device sourceIp", "CFG-0031", "devices[1].sourceIp", func(c *Config) {
 			c.Devices = []Device{{ID: "a", Name: "A", SourceIP: "192.168.1.1"}, {ID: "b", Name: "B", SourceIP: "192.168.1.1"}}
 		}},
+
+		{"duplicate device id", "CFG-0032", "devices[1].id", func(c *Config) {
+			c.Devices = []Device{
+				{ID: "shared", Name: "a", SourceIP: "192.168.1.1"},
+				{ID: "shared", Name: "b", SourceIP: "192.168.2.1"},
+			}
+		}},
+		{"device id is another router's address", "CFG-0033", "devices[0].id", func(c *Config) {
+			c.Devices = []Device{{ID: "10.0.0.9", Name: "a", SourceIP: "192.168.1.1"}}
+		}},
 	}
 
 	for _, tt := range tests {
@@ -243,5 +253,28 @@ func TestExampleConfigValidatesClean(t *testing.T) {
 	r := c.Validate()
 	if len(r.Fatal) > 0 {
 		t.Errorf("deploy/config.example.yaml has fatal problems: %v", codes(r.Fatal))
+	}
+}
+
+// An id-less device takes its sourceIp as its identity, so two of them
+// do not collapse into one shared "" identity -- and declaring a router
+// that was already being discovered keeps the id its events, pushed
+// state and ingest tokens already use.
+func TestDeviceIDDefaultsToSourceIP(t *testing.T) {
+	c := &Config{Devices: []Device{
+		{Name: "edge", SourceIP: "192.168.1.1"},
+		{Name: "branch", SourceIP: "::ffff:192.168.2.1"},
+		{ID: "explicit", Name: "third", SourceIP: "192.168.3.1"},
+	}}
+	c.normaliseDevices()
+
+	want := []string{"192.168.1.1", "192.168.2.1", "explicit"}
+	for i, w := range want {
+		if c.Devices[i].ID != w {
+			t.Errorf("Devices[%d].ID = %q, want %q", i, c.Devices[i].ID, w)
+		}
+	}
+	if p := has(c.Validate().Fatal, "CFG-0032"); p != nil {
+		t.Errorf("id-less devices with distinct sourceIps collided: %+v", p)
 	}
 }

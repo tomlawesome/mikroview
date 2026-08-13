@@ -315,6 +315,9 @@ router sends syslog from.
 devices:
   - sourceIp: "192.168.1.1"
     name: "edge-router"
+    # id is optional -- it defaults to sourceIp. Set it to a stable name
+    # if you want one, but see CFG-0032: it is the device's identity for
+    # pushed router state and ingest tokens, not just a label.
 ```
 
 #### CFG-0031
@@ -329,6 +332,41 @@ devices:
     name: "edge-router"
   - sourceIp: "192.168.2.1"   # must differ from every other sourceIp
     name: "branch-router"
+```
+
+#### CFG-0032
+
+Two devices share an `id`. A device's `id` is its identity everywhere:
+the `deviceId` on its events, the key its pushed router state is stored
+under, and the scope of an ingest token. Two routers under one id is two
+routers wearing one identity -- either can then supply host names for
+the other's traffic.
+
+An entry with no `id` takes its `sourceIp` as its id, so a collision is
+always an explicit one.
+
+```yaml
+devices:
+  - sourceIp: "192.168.1.1"
+    id: "edge-router"
+    name: "Edge"
+  - sourceIp: "192.168.2.1"
+    id: "branch-router"   # must differ from every other id
+    name: "Branch"
+```
+
+#### CFG-0033
+
+A device's `id` is an IP address that is not its own `sourceIp`. A
+router discovered from that address takes it as its own id, so the two
+would merge into one identity -- the same collision as CFG-0032 by a
+longer route.
+
+```yaml
+devices:
+  - sourceIp: "192.168.1.1"
+    id: "edge-router"     # a name, or this device's own sourceIp
+    name: "Edge"
 ```
 
 #### CFG-0040
@@ -2186,9 +2224,19 @@ application itself is never served over plain HTTP. See
 [SECURITY.md](../SECURITY.md#tls) for the full reasoning; this section
 is the configuration reference.
 
+**Typing the address into a browser works.** A browser given
+`mikroview-host:8080` tries `http://` first, which arrives as plaintext
+on the HTTPS listener. Mikroview answers that with a redirect to
+`https://` on the same host and port, rather than the bare error a TLS
+server would normally return -- so one published port is all a
+deployment needs (issue #325). The redirect target is validated against
+`tls.hosts` the same way the port-80 listener below is, so an arbitrary
+`Host` header is never echoed back.
+
 A second listener, `listen.httpRedirect` (default `:8081`, mapped to
-host port 80 by `deploy/docker-compose.yml`), exists only to redirect a
-plain HTTP request to HTTPS -- it never serves the application itself.
+host port 80 by `deploy/docker-compose.yml`), covers the other case: a
+bare hostname with no port, which a browser sends to port 80 where
+nothing above can see it. It never serves the application itself.
 It's only started while `tls.enabled` is true (nothing to redirect to
 otherwise), and only started at all if non-empty -- set it to `""` to
 disable it, e.g. if your own reverse proxy already handles the
