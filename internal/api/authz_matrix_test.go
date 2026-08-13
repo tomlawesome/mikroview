@@ -165,6 +165,8 @@ var authzMatrix = []routeExpectation{
 	{http.MethodPost, "/api/tokens", accessAdmin, "mints a bearer credential"},
 	{http.MethodGet, "/api/tokens", accessAdmin, "lists issued bearer credentials"},
 	{http.MethodDelete, "/api/tokens/{id}", accessAdmin, "revokes a bearer credential"},
+	{http.MethodGet, "/api/setup/status", accessAdmin,
+		"enumerates every device, every source address that has connected or fetched the CA, and which tables each router pushes -- the same map of the deployment GET /api/auth/users is admin-gated for, and the wizard that reads it is an admin task anyway"},
 	{http.MethodGet, "/api/audit", accessAdmin,
 		"the admin action trail; also the record an attacker would want to read to see whether they were noticed"},
 }
