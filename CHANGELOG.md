@@ -78,6 +78,32 @@ upgrading.
 
 ### Added
 
+- **A guided setup wizard for connecting a router** (#320). Menu →
+  **Connect a router**, admin only. Every command comes out with your own
+  values already in it — the address you are reaching MikroView on, the
+  syslog port this instance actually listens on, and an ingest token the
+  page creates for you — so there is nothing to fill in and no
+  placeholder to leave behind by accident. Each step then tells you
+  whether it worked, because every step ends with your router arriving at
+  MikroView: the certificate download, the syslog connection, the first
+  events, each pushed table. MikroView still never connects to your
+  router. The first step checks that MikroView's certificate covers the
+  address you are using, which is worth its own mention: getting that
+  wrong otherwise shows up three steps later as a router-side error about
+  name verification, when the fix is on MikroView's side.
+  `docs/routeros-setup.md` remains the reference for what the wizard
+  emits and why.
+
+- **Ingest tokens can be created in the interface** (#326). The API
+  tokens dialog previously made read-only tokens only, while the setup
+  guide told you to create an ingest one there — so the documented path
+  did not exist and only the `curl` alternative worked. Worse, a
+  read-only token pasted into a router push script fails with a bare
+  `404` and nothing anywhere says "wrong kind of token". The dialog now
+  has a kind chooser and, for ingest, a list of the routers MikroView
+  knows about; the token list shows each token's kind and router, so one
+  can no longer masquerade under a misleading name.
+
 - **The Watchlist can watch a whole address list from your router**
   (#274). If a firewall rule already scopes by an address list, MikroView
   suggests watching traffic from the addresses in it — and the entry
@@ -471,6 +497,48 @@ upgrading.
   bare IP keeps working.
 
 ### Fixed
+
+- **Typing `host:8080` into a browser now works** (#325). MikroView
+  usually gets one published port on a host where 80 and 443 belong to
+  something else, and a browser given an address with a port tries plain
+  HTTP first. That arrived at the encrypted port and produced a bare
+  error page. It is now answered with a redirect to the same address over
+  HTTPS. Nothing is ever served unencrypted.
+
+- **TLS connection failures are explained instead of quoted** (#321). A
+  phone or router that refuses MikroView's certificate produced a line
+  like `remote error: tls: unknown certificate`, repeated every few
+  seconds by the client's own retries — accurate, unreadable, and enough
+  of it to bury anything else. The line now says who rejected whom and
+  what to do about it, keeps the original error at the end, and repeats
+  at most once a minute per cause with a count.
+
+- **A quiet flood could fill the log** (#322). Rejected syslog
+  connections were logged one line per attempt on a port that takes no
+  credentials, so anyone able to reach it could write to the log at
+  connection speed; a client disconnecting mid-response was logged as a
+  warning, which a phone locking its screen does routinely; and once the
+  watchlist match log filled, every subsequent match logged the same
+  failure again. All are now rate-limited with a running count.
+
+- **An address-attribution feed could freeze permanently** (#324). The
+  check that rejects a suddenly-oversized feed compared address counts
+  that could overflow: a feed carrying wide IPv6 ranges — Apple Private
+  Relay does — reported a nonsensical total, and every later refresh then
+  looked like a huge jump and was rejected as possibly poisoned. The feed
+  silently kept its first copy for good while the log reported success.
+  Counts now saturate instead of overflowing, and are printed in a form a
+  person can read.
+
+- **A router declared without an `id` shared an identity with every
+  other one** (#332). A device's `id` decides which router pushed state
+  belongs to and what an ingest token is allowed to speak for, but it was
+  never validated, and the documented examples omitted it — so following
+  the documentation produced devices that were indistinguishable
+  internally, and two of them broke the token dialog outright. An unset
+  `id` now defaults to the router's own address, duplicates and
+  misleading values are refused at startup (CFG-0032, CFG-0033), and the
+  documentation says what the field is for.
 
 - **MikroView checks the database ran the schema changes it thinks it
   did** (#294). It recorded which schema versions had been applied but
