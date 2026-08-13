@@ -315,6 +315,9 @@ router sends syslog from.
 devices:
   - sourceIp: "192.168.1.1"
     name: "edge-router"
+    # id is optional -- it defaults to sourceIp. Set it to a stable name
+    # if you want one, but see CFG-0032: it is the device's identity for
+    # pushed router state and ingest tokens, not just a label.
 ```
 
 #### CFG-0031
@@ -329,6 +332,41 @@ devices:
     name: "edge-router"
   - sourceIp: "192.168.2.1"   # must differ from every other sourceIp
     name: "branch-router"
+```
+
+#### CFG-0032
+
+Two devices share an `id`. A device's `id` is its identity everywhere:
+the `deviceId` on its events, the key its pushed router state is stored
+under, and the scope of an ingest token. Two routers under one id is two
+routers wearing one identity -- either can then supply host names for
+the other's traffic.
+
+An entry with no `id` takes its `sourceIp` as its id, so a collision is
+always an explicit one.
+
+```yaml
+devices:
+  - sourceIp: "192.168.1.1"
+    id: "edge-router"
+    name: "Edge"
+  - sourceIp: "192.168.2.1"
+    id: "branch-router"   # must differ from every other id
+    name: "Branch"
+```
+
+#### CFG-0033
+
+A device's `id` is an IP address that is not its own `sourceIp`. A
+router discovered from that address takes it as its own id, so the two
+would merge into one identity -- the same collision as CFG-0032 by a
+longer route.
+
+```yaml
+devices:
+  - sourceIp: "192.168.1.1"
+    id: "edge-router"     # a name, or this device's own sourceIp
+    name: "Edge"
 ```
 
 #### CFG-0040

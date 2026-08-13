@@ -34,6 +34,18 @@ import (
 const DefaultDataDir = "/var/lib/mikroview"
 
 type Device struct {
+	// ID is the device's identity everywhere downstream: the deviceId on
+	// its events, the key its pushed router state is stored under, and
+	// the scope of an ingest token (internal/auth.Token.Device). Optional
+	// in the file -- normaliseDevices fills it from SourceIP when unset,
+	// which is what a *discovered* router already gets
+	// (internal/device.Registry.Resolve), so declaring a router that has
+	// been sending syslog keeps its existing identity rather than
+	// silently orphaning the state and tokens already keyed to it.
+	//
+	// Left empty it used to stay empty: every configured device without
+	// an id shared the identity "", including for token scoping. See
+	// validateDevices for the collision rules.
 	ID       string `yaml:"id"`
 	Name     string `yaml:"name"`
 	SourceIP string `yaml:"sourceIp"`
@@ -762,6 +774,24 @@ type Config struct {
 	HostNames map[string]string `yaml:"hostNames"`
 }
 
+// normaliseDevices fills in each device's effective id. An entry with no
+// id is identified by its own source address -- the same identity the
+// device would have had if it had simply been discovered from its
+// syslog, so declaring a router is additive rather than a rename.
+func (c *Config) normaliseDevices() {
+	for i := range c.Devices {
+		if strings.TrimSpace(c.Devices[i].ID) != "" {
+			continue
+		}
+		ip := strings.TrimSpace(c.Devices[i].SourceIP)
+		if addr, err := netip.ParseAddr(ip); err == nil {
+			c.Devices[i].ID = addr.Unmap().String()
+			continue
+		}
+		c.Devices[i].ID = ip
+	}
+}
+
 func defaults() Config {
 	return Config{
 		Listen: Listen{
@@ -930,6 +960,11 @@ func load(configPath string, args []string) (Config, Result, error) {
 	if err := applyFlags(&cfg, args); err != nil {
 		return Config{}, Result{}, err
 	}
+
+	// Devices get their identity filled in before validation, so
+	// validation and every downstream consumer agree on what a device's
+	// id actually is.
+	cfg.normaliseDevices()
 
 	// Validate last, after every source has been merged -- an env var or
 	// a flag can fix a bad yaml value, so checking earlier would reject
