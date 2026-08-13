@@ -169,3 +169,37 @@ func TestCoverageOf(t *testing.T) {
 		t.Errorf("coverageOf = %d, want %d", got, 256+65536)
 	}
 }
+
+// Four prefixes wider than /64 sum to 1<<64 and wrapped the total to
+// near zero before #324 -- which decided whether the poisoning guard
+// believed a feed, not just what the log said.
+func TestCoverageOfSaturatesRatherThanWrapping(t *testing.T) {
+	wide := []classifiedPrefix{
+		cp(t, "2600:1900::/32", ""),
+		cp(t, "2a00:1450::/32", ""),
+		cp(t, "2606:4700::/32", ""),
+		cp(t, "2620:11a::/32", ""),
+		cp(t, "2803:f800::/32", ""),
+	}
+	if got := coverageOf(wide); got != maxCoverage {
+		t.Errorf("coverageOf(5 wide v6 prefixes) = %d, want the saturated %d", got, maxCoverage)
+	}
+	// Doubling is what the guard does; it must stay in range.
+	if maxCoverage*2 < maxCoverage {
+		t.Error("maxCoverage*2 overflows -- the guard's own comparison would wrap")
+	}
+}
+
+func TestDescribeCoverageIsReadable(t *testing.T) {
+	cases := map[uint64]string{
+		0:           "0 addresses",
+		256:         "256 addresses",
+		3136082:     "3,136,082 addresses",
+		maxCoverage: "more address space than is worth counting (a prefix wider than /64)",
+	}
+	for v, want := range cases {
+		if got := describeCoverage(v); got != want {
+			t.Errorf("describeCoverage(%d) = %q, want %q", v, got, want)
+		}
+	}
+}
