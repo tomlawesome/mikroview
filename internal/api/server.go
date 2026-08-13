@@ -23,6 +23,7 @@ import (
 	"github.com/tomlawesome/mikroview/internal/reputation"
 	"github.com/tomlawesome/mikroview/internal/routerstate"
 	"github.com/tomlawesome/mikroview/internal/rules"
+	"github.com/tomlawesome/mikroview/internal/setup"
 	"github.com/tomlawesome/mikroview/internal/store"
 	"github.com/tomlawesome/mikroview/internal/suggest"
 	"github.com/tomlawesome/mikroview/internal/watchlist"
@@ -175,6 +176,15 @@ type Server struct {
 	// that package's design.
 	RouterState *routerstate.Store
 
+	// Setup holds what has been observed of each router's setup, for the
+	// guided wizard (#320). Nil in tests that do not exercise it, which
+	// handleSetupStatus tolerates.
+	Setup *setup.Store
+	// SetupInstance is the running configuration the wizard writes
+	// commands from -- the address a router should be pointed at, and
+	// whether the certificate covers it.
+	SetupInstance SetupInstance
+
 	// OIDC/OIDCState: see oidc.go. Both nil unless cfg.OIDC.IssuerURL was
 	// set and provider discovery succeeded at startup -- every OIDC
 	// handler checks for nil and 404s, so a misconfigured or absent OIDC
@@ -265,6 +275,10 @@ func (s *Server) routes() []route {
 		{http.MethodGet, "/api/third-party-notices", s.handleThirdPartyNotices},
 
 		{http.MethodGet, "/api/audit", s.handleAuditList},
+
+		// The guided setup wizard's view of what has actually landed
+		// (#320) -- admin-only, see handleSetupStatus.
+		{http.MethodGet, "/api/setup/status", s.handleSetupStatus},
 		{http.MethodGet, "/api/config/problems", s.handleConfigProblems},
 
 		{http.MethodGet, "/api/auth/session", s.handleAuthSession},

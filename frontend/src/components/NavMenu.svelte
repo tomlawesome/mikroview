@@ -251,6 +251,18 @@
           >
             Suggestions
           </button>
+
+          <!-- Admin-only, matching GET /api/setup/status's own gate: it
+               enumerates every device and every address that has
+               connected (#320). -->
+          <button
+            class="option"
+            class:active={appState.view === 'setup'}
+            onclick={() => toggleView('setup')}
+            title="Step-by-step help connecting a MikroTik router, with commands filled in for you"
+          >
+            Connect a router
+          </button>
         {/if}
       </div>
 
