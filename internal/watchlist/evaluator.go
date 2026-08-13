@@ -4,6 +4,7 @@ package watchlist
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync/atomic"
 	"time"
@@ -52,9 +53,23 @@ type Evaluator struct {
 	// makes such entries match nothing rather than guess.
 	members AddressListMembership
 
-	dropped          atomic.Uint64
-	lastDropLogNanos atomic.Int64
+	dropped atomic.Uint64
 }
+
+// The log gates, package-level for the same reason internal/detect's
+// dropLogGate is: they only bound log noise, and there is one Evaluator
+// per process outside tests.
+var (
+	evalDropLogGate = logging.NewLimiter(evalQueueDropLogInterval)
+	// matchLogFullGate/matchFailGate throttle the per-match failure
+	// line (#322 item 3): once the match log hits capacity, *every*
+	// subsequent match fails -- its own doc comment says so -- which
+	// at event rate for a busy watchlisted host is a WARN flood, not
+	// information. Two gates, not one, so a capacity-reached steady
+	// state can't drown out a genuinely unexpected failure.
+	matchLogFullGate = logging.NewLimiter(evalQueueDropLogInterval)
+	matchFailGate    = logging.NewLimiter(evalQueueDropLogInterval)
+)
 
 // NewEvaluator constructs an Evaluator. matchLog may be nil -- see
 // Enqueue.
@@ -96,12 +111,7 @@ func (ev *Evaluator) Enqueue(e store.Event) {
 
 func (ev *Evaluator) recordDropped() {
 	total := ev.dropped.Add(1)
-	now := time.Now().UnixNano()
-	last := ev.lastDropLogNanos.Load()
-	if now-last < int64(evalQueueDropLogInterval) {
-		return
-	}
-	if ev.lastDropLogNanos.CompareAndSwap(last, now) {
+	if _, ok := evalDropLogGate.Allow(); ok {
 		persistLog.Warn(fmt.Sprintf("watchlist evaluation queue full -- %d event(s) dropped from evaluation so far (still stored/broadcast/detected normally)", total))
 	}
 }
@@ -138,8 +148,16 @@ func (ev *Evaluator) evaluateRecovered(e store.Event) {
 				// section 3: refused, not silently overwritten) -- surfaced
 				// here rather than swallowed, since from this point on
 				// every further genuinely-new match for this entry is
-				// silently lost until the operator acts.
-				persistLog.Warn(fmt.Sprintf("recording a match for entry %q failed: %v", entry.ID, err))
+				// silently lost until the operator acts. Which also means
+				// it repeats at event rate, so it's gated (#322 item 3),
+				// with the running count carrying what the gate suppressed.
+				if errors.Is(err, matchlog.ErrCapacityReached) {
+					if total, ok := matchLogFullGate.Allow(); ok {
+						persistLog.Warn(fmt.Sprintf("the match log is full -- new matches are no longer being recorded (%d lost so far, latest for entry %q); raise watchlist.matchLogCapacity or clear old matches", total, entry.ID))
+					}
+				} else if total, ok := matchFailGate.Allow(); ok {
+					persistLog.Warn(fmt.Sprintf("recording a match for entry %q failed: %v (%d match-recording failures so far)", entry.ID, err, total))
+				}
 			}
 		case Observed:
 			// An inverted entry still observing -- record the candidate

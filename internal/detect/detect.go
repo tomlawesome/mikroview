@@ -410,10 +410,9 @@ type Detector struct {
 	// comment for the sizing rationale.
 	observeQueue chan store.Event
 
-	// droppedEvents/lastDropLogNanos back Enqueue's rate-limited
-	// overload logging -- see observeQueueDropLogInterval.
-	droppedEvents    atomic.Uint64
-	lastDropLogNanos atomic.Int64
+	// droppedEvents backs Enqueue's rate-limited overload logging --
+	// the gate itself is dropLogGate (see recordDroppedEvent).
+	droppedEvents atomic.Uint64
 }
 
 // New constructs a Detector with every detector enabled and unscoped --
@@ -471,15 +470,15 @@ func (d *Detector) Enqueue(e store.Event) {
 // dropped-syslog-packet symptoms elsewhere.
 func (d *Detector) recordDroppedEvent() {
 	total := d.droppedEvents.Add(1)
-	now := time.Now().UnixNano()
-	last := d.lastDropLogNanos.Load()
-	if now-last < int64(observeQueueDropLogInterval) {
-		return
-	}
-	if d.lastDropLogNanos.CompareAndSwap(last, now) {
+	if _, ok := dropLogGate.Allow(); ok {
 		logger.Warn(fmt.Sprintf("detection queue full -- %d event(s) dropped from detection so far (still stored/broadcast normally)", total))
 	}
 }
+
+// dropLogGate implements observeQueueDropLogInterval -- package-level
+// rather than per-Detector because it only gates log noise, and there
+// is one Detector per process outside tests.
+var dropLogGate = logging.NewLimiter(observeQueueDropLogInterval)
 
 // Run drains observeQueue, calling Observe for each event in order,
 // until ctx is done. Meant to run in its own goroutine, separate from

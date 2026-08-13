@@ -128,7 +128,10 @@ func (s *Server) sessionUser(r *http.Request, now time.Time) (*auth.User, bool) 
 // readOnlyRoutes is the only handler set a bearer API token (issue
 // #101) can ever reach -- deliberately its own separate *http.ServeMux
 // with just these five GET routes registered, rather than a per-request
-// allowlist check layered in front of the real mux. That's what makes
+// allowlist check layered in front of the real mux. When this list
+// changes, update the route list in TokensOverlay.svelte's hint text
+// too -- it went stale once already (#326: four routes listed, five
+// served). That's what makes
 // "a token can never reach a write/clear/config endpoint" structural:
 // there is no code path from a bearer-authenticated request to
 // handleFlagsClear, handleDetectorSettingsUpdate, handleAuthCreateUser,
@@ -373,10 +376,12 @@ var authErrorMessages = map[error]string{
 // authErrorMessages (falling back to a generic one for anything not
 // listed, logging the real error server-side so it's still
 // diagnosable) and writes it with status.
-func writeAuthError(w http.ResponseWriter, err error, status int) {
+func writeAuthError(w http.ResponseWriter, r *http.Request, err error, status int) {
 	msg, ok := authErrorMessages[err]
 	if !ok {
-		authLog.Warn(err.Error())
+		// The route is ours (server-controlled), so naming it is safe
+		// and turns a bare error into one that says where to look.
+		authLog.Warn(fmt.Sprintf("%s %s: %v", r.Method, r.URL.Path, err))
 		msg = "unable to complete the request"
 	}
 	http.Error(w, msg, status)
@@ -418,7 +423,7 @@ func (s *Server) handleAuthRegister(w http.ResponseWriter, r *http.Request) {
 		case auth.ErrPasswordTooShort, auth.ErrUsernameInvalid, auth.ErrUsernameLength:
 			status = http.StatusBadRequest
 		}
-		writeAuthError(w, err, status)
+		writeAuthError(w, r, err, status)
 		return
 	}
 
@@ -614,7 +619,7 @@ func (s *Server) handleAuthCreateUser(w http.ResponseWriter, r *http.Request) {
 	// refuses it too -- this exists to give a usable status and message
 	// instead of a 500.
 	if req.Role == string(auth.RoleAdmin) {
-		writeAuthError(w, auth.ErrSingleAdmin, http.StatusBadRequest)
+		writeAuthError(w, r, auth.ErrSingleAdmin, http.StatusBadRequest)
 		return
 	}
 
@@ -627,7 +632,7 @@ func (s *Server) handleAuthCreateUser(w http.ResponseWriter, r *http.Request) {
 		case auth.ErrPasswordTooShort, auth.ErrSingleAdmin, auth.ErrUsernameInvalid, auth.ErrUsernameLength:
 			status = http.StatusBadRequest
 		}
-		writeAuthError(w, err, status)
+		writeAuthError(w, r, err, status)
 		return
 	}
 	s.Audit.Record(auditActor(r), "user.create", user.Username, "role="+string(user.Role))
@@ -710,7 +715,7 @@ func (s *Server) handleAuthDeleteUser(w http.ResponseWriter, r *http.Request) {
 		case auth.ErrCannotDeleteAdmin:
 			status = http.StatusConflict
 		}
-		writeAuthError(w, err, status)
+		writeAuthError(w, r, err, status)
 		return
 	}
 

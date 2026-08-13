@@ -4,6 +4,7 @@ package notify
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/tomlawesome/mikroview/internal/flags"
@@ -45,9 +46,16 @@ func (d *Dispatcher) Enqueue(f flags.Flag) {
 	select {
 	case d.pending <- f:
 	default:
-		logger.Warn("dropped a flag notification -- dispatcher queue full")
+		if total, ok := dropGate.Allow(); ok {
+			logger.Warn(fmt.Sprintf("notification queue full -- %d notification(s) dropped so far", total))
+		}
 	}
 }
+
+// dropGate throttles the queue-full line (#322 item 4): a full queue
+// stays full for whole flushing windows at a time, so logging every
+// dropped flag repeats the same fact at flag-arrival rate.
+var dropGate = logging.NewLimiter(30 * time.Second)
 
 // Run drains pending on d.window's ticker, calling every Notifier's
 // Send once per non-empty batch, until ctx is cancelled -- one last
