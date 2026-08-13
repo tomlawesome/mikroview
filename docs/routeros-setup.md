@@ -206,9 +206,18 @@ the kind dropdown to **Ingest**, and pick the device the token speaks
 for — this is what scopes it. The list offers every router MikroView
 knows about: those declared under `devices:` in `config.yaml`, and any
 that has simply sent syslog (marked *not in config.yaml*, identified by
-its source IP). Either works; declaring the router gives it a name of
-your choosing instead of an address — see
-[configuration.md](configuration.md). Or via the API:
+its source IP).
+
+Both work, with one thing to know if you pick an undeclared router: the
+token's scope is the device id as it was at that moment. Declaring that
+router later under `devices:` **with an explicit `id`** renames it, and
+the token then scopes to an identity nothing uses any more — pushes keep
+returning `200` while the enrichment silently stops. Declaring it with
+no `id` is safe: the id defaults to its `sourceIp`, which is exactly
+what it already had. Otherwise, reissue the token after declaring it.
+See [configuration.md](configuration.md).
+
+Or via the API:
 
 ```
 curl -k -b <your session cookie> -X POST https://<mikroview-host>/api/tokens \

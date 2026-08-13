@@ -37,9 +37,20 @@ type Registry struct {
 
 // maxDiscoveredDevices bounds how many *auto-discovered* sources the
 // registry retains. Resolve creates an entry for any previously-unseen
-// syslog source IP, and over UDP that address is trivially spoofable --
-// an attacker needs no connection, no handshake and no credentials to
-// mint an unbounded number of distinct keys and exhaust memory.
+// syslog source IP, so without a cap the map grows with whatever
+// reaches the listener.
+//
+// This comment used to justify the cap by UDP source spoofing. That is
+// no longer the shape of it: #189 removed every plaintext listener, and
+// syslog.ListenTLS is the only one left, so minting an entry now costs
+// a completed TCP+TLS handshake from the address in question -- an
+// attacker cannot forge arbitrary sources, only their own. What has not
+// changed is that it takes *no credentials*: the listener sets no
+// ClientAuth (RouterOS's logging action has no client-certificate
+// option), so anyone who can reach the port can still add their own
+// address as a device. The cap is still needed; the reason is narrower
+// than it was, and worth stating accurately because this is the comment
+// the next person reasons from.
 //
 // Configured devices are never counted against this cap or evicted by
 // it: those are routers the operator declared in config.yaml, and
