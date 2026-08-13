@@ -24,15 +24,26 @@ await page.waitForSelector('.modal[aria-label="API tokens"]')
 await page.fill('.create-form input[type="text"]', 'ui-ingest')
 await page.selectOption('.kind-select', 'ingest')
 
-// The device pick-list only offers configured devices -- live-env.sh
-// declares live-router in loopback mode, so it must be here. A typo'd
-// free-text device was the failure mode this list exists to prevent.
+// The pick-list must offer every device mikroview knows about --
+// configured (live-env.sh declares one) or discovered from its own
+// syslog (which is all the container harness has). Whichever this
+// instance has, the list has to match /api/devices exactly: free text
+// was the typo trap this list exists to remove.
+const known = await page.request
+  .get(`${URL_BASE}/api/devices`)
+  .then(async (r) => ((await r.json()).devices ?? []).map((d) => d.id).sort())
+check(known.length > 0, `the instance knows at least one device (${known})`)
+
 await page.waitForSelector('.device-select')
 const options = await page.$$eval('.device-select option:not([disabled])', (els) =>
-  els.map((e) => e.value),
+  els.map((e) => e.value).sort(),
 )
-check(options.includes('live-router'), `the pick-list offers the configured device (${options})`)
-await page.selectOption('.device-select', 'live-router')
+check(
+  JSON.stringify(options) === JSON.stringify(known),
+  `the pick-list offers exactly the known devices (list=${options} api=${known})`,
+)
+const DEVICE = known[0]
+await page.selectOption('.device-select', DEVICE)
 
 await page.click('.create-form .save')
 await page.waitForSelector('.created-value')
@@ -40,7 +51,7 @@ const token = (await page.textContent('.created-value'))?.trim() ?? ''
 check(token.length > 0, 'the one-time value banner shows the new token')
 
 check(
-  await page.isVisible('.row:has-text("ui-ingest") .kind-badge:has-text("ingest: live-router")'),
+  await page.isVisible(`.row:has-text("ui-ingest") .kind-badge:has-text("ingest: ${DEVICE}")`),
   'the list row says what the token is and which device it speaks for',
 )
 
