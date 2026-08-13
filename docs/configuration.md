@@ -2224,9 +2224,19 @@ application itself is never served over plain HTTP. See
 [SECURITY.md](../SECURITY.md#tls) for the full reasoning; this section
 is the configuration reference.
 
+**Typing the address into a browser works.** A browser given
+`mikroview-host:8080` tries `http://` first, which arrives as plaintext
+on the HTTPS listener. Mikroview answers that with a redirect to
+`https://` on the same host and port, rather than the bare error a TLS
+server would normally return -- so one published port is all a
+deployment needs (issue #325). The redirect target is validated against
+`tls.hosts` the same way the port-80 listener below is, so an arbitrary
+`Host` header is never echoed back.
+
 A second listener, `listen.httpRedirect` (default `:8081`, mapped to
-host port 80 by `deploy/docker-compose.yml`), exists only to redirect a
-plain HTTP request to HTTPS -- it never serves the application itself.
+host port 80 by `deploy/docker-compose.yml`), covers the other case: a
+bare hostname with no port, which a browser sends to port 80 where
+nothing above can see it. It never serves the application itself.
 It's only started while `tls.enabled` is true (nothing to redirect to
 otherwise), and only started at all if non-empty -- set it to `""` to
 disable it, e.g. if your own reverse proxy already handles the
