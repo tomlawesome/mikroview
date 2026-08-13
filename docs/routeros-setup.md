@@ -203,9 +203,12 @@ before step 1, go do that CA import now, then come back here.
 
 In MikroView, sign in as an admin, open the menu → **API tokens**, set
 the kind dropdown to **Ingest**, and pick the device the token speaks
-for — this is what scopes it, and the list only offers routers already
-declared under `devices:` in `config.yaml`, so declare yours first
-(see [configuration.md](configuration.md)). Or via the API:
+for — this is what scopes it. The list offers every router MikroView
+knows about: those declared under `devices:` in `config.yaml`, and any
+that has simply sent syslog (marked *not in config.yaml*, identified by
+its source IP). Either works; declaring the router gives it a name of
+your choosing instead of an address — see
+[configuration.md](configuration.md). Or via the API:
 
 ```
 curl -k -b <your session cookie> -X POST https://<mikroview-host>/api/tokens \
