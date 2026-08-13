@@ -74,7 +74,7 @@ func (s *Server) handleTokensCreate(w http.ResponseWriter, r *http.Request) {
 		switch err {
 		case auth.ErrTokenNotPersisted:
 			status = http.StatusServiceUnavailable
-		case auth.ErrTokenKindInvalid, auth.ErrTokenDeviceRequired, auth.ErrTokenDeviceNotAllowed:
+		case auth.ErrTokenKindInvalid, auth.ErrTokenDeviceRequired, auth.ErrTokenDeviceNotAllowed, auth.ErrTokenDeviceInvalid:
 			// The caller's request is wrong, not the deployment's state,
 			// and the message is safe to hand back: it names a field, not
 			// anything about existing tokens.

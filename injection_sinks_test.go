@@ -123,3 +123,54 @@ func exempt(rel, substring string) bool {
 	}
 	return false
 }
+
+// TestNoHTMLInjectionSinksInTheFrontend guards the property the Go
+// sweep above deliberately skips: the frontend directory. The
+// no-{@html} claim is load-bearing -- it is why device ids, rule
+// labels, host names and every other value that arrives from a router
+// or a config file can be rendered as text without escaping logic of
+// our own -- and until now nothing failed if someone added one.
+//
+// Svelte auto-escapes {expression}; {@html} opts out entirely, and
+// innerHTML/insertAdjacentHTML/outerHTML do the same from plain TS.
+func TestNoHTMLInjectionSinksInTheFrontend(t *testing.T) {
+	root, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	src := filepath.Join(root, "frontend", "src")
+	forbidden := []string{"{@html", "innerHTML", "outerHTML", "insertAdjacentHTML"}
+
+	err = filepath.WalkDir(src, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			if d.Name() == "node_modules" {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		switch {
+		case strings.HasSuffix(path, ".svelte"), strings.HasSuffix(path, ".ts"):
+		default:
+			return nil
+		}
+		data, readErr := os.ReadFile(path)
+		if readErr != nil {
+			return readErr
+		}
+		rel, _ := filepath.Rel(root, path)
+		for _, bad := range forbidden {
+			if strings.Contains(string(data), bad) {
+				t.Errorf("%s contains %q -- it bypasses Svelte's escaping. "+
+					"Render untrusted values as text; if this is genuinely necessary, "+
+					"it needs an entry in docs/decisions/injection-audit.md first.", rel, bad)
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
