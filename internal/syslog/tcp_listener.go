@@ -120,6 +120,28 @@ func SetConfiguredSources(addrs []string) {
 	configuredSources.Store(&m)
 }
 
+// OnConnection is called once per accepted syslog connection, with the
+// source host. Nil unless set. It exists for the setup wizard (#320),
+// which has to distinguish "the router cannot reach me at all" from
+// "it is connected but no rule is logging yet" -- and only the
+// connection itself separates those. A package-level hook rather than a
+// ServeTCP parameter, matching SetConfiguredSources above: this is
+// process-wide observation, not per-listener configuration.
+//
+// Called on the accept path, so it must not block.
+var OnConnection atomic.Pointer[func(host string)]
+
+// SetOnConnection installs the hook. Call once at startup.
+func SetOnConnection(fn func(host string)) {
+	OnConnection.Store(&fn)
+}
+
+func noteConnection(host string) {
+	if fn := OnConnection.Load(); fn != nil && *fn != nil {
+		(*fn)(host)
+	}
+}
+
 func isConfiguredSource(host string) bool {
 	m := configuredSources.Load()
 	return m != nil && (*m)[host]
@@ -327,6 +349,7 @@ func ServeTCP(ctx context.Context, ln net.Listener, out chan<- RawMessage) error
 
 		select {
 		case slots <- struct{}{}:
+			noteConnection(host)
 			tcpInUse.Add(1)
 			go func() {
 				defer func() { <-slots }()
