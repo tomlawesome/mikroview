@@ -514,8 +514,16 @@ export async function fetchTokens(): Promise<ApiToken[]> {
   return body.tokens ?? []
 }
 
-export async function createToken(name: string): Promise<ApiToken | string> {
-  const res = await postJSON('/api/tokens', { name })
+export async function createToken(
+  name: string,
+  kind: 'api' | 'ingest',
+  device?: string,
+): Promise<ApiToken | string> {
+  // Omitting kind means read-only server-side; sending it explicitly
+  // keeps what the operator chose in the dialog and what goes on the
+  // wire identical. device is required for ingest and rejected
+  // otherwise -- the server enforces it, the dialog mirrors it.
+  const res = await postJSON('/api/tokens', device ? { name, kind, device } : { name, kind })
   if (res.ok) return res.json()
   return (await res.text()) || `createToken: ${res.status}`
 }
