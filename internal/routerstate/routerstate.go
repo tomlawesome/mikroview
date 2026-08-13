@@ -27,6 +27,14 @@
 // wants router data to contribute a signal, it goes through an explicit,
 // narrow caller that argues its case (the shape internal/detect's
 // netclass.go established), not through this package growing a path.
+//
+// One stated exception, so the sentence above is not read wider than it
+// holds: watchlist *coverage* reads pushed filter rules
+// (internal/watchlist.Coverage). Coverage is not a suspicion signal --
+// it raises nothing and scores nothing -- but it is the answer to "could
+// anything have fed this entry at all", and pushed rules decide it. See
+// that function's own comment, and #333, for what that means for a
+// leaked ingest token.
 package routerstate
 
 import (
