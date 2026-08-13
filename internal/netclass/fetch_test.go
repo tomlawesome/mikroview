@@ -135,3 +135,48 @@ func TestRefreshRejectsPoisonedDelta(t *testing.T) {
 		t.Error("rejecting the poisoned delta also dropped the last-good data")
 	}
 }
+
+// TestRefreshAcceptsAGrowingIPv6HeavyFeed is the #324 reproduction.
+//
+// Apple Private Relay is the real case: two IPv6 prefixes wider than
+// /64 plus ~106k IPv4 addresses, which coverageOf saturates to
+// 2*(1<<62)+106581 = 9223372036854882389 -- the exact figure seen in a
+// real instance's log. On the next refresh the guard evaluates
+// cov > prev*2, and prev*2 overflows uint64 to 213162, so every
+// subsequent refresh looks like a >2x explosion and is rejected as
+// poisoned. The feed then never updates again.
+//
+// The assertion has to be that a *legitimate update* is adopted: an
+// unchanged feed serves identical data whether it was accepted or
+// rejected-and-kept, so it cannot tell the two apart.
+func TestRefreshAcceptsAGrowingIPv6HeavyFeed(t *testing.T) {
+	// Real global-unicast prefixes, not 2001:db8::/32 -- that is the
+	// documentation range and reservedV6 rejects it at parse, which
+	// would make this test pass for the wrong reason.
+	payload := "2600:1900::/32\n2a00:1450::/32\n1.2.3.0/24\n"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(payload))
+	}))
+	defer srv.Close()
+
+	c := New([]string{string(SourceTor)}, testLog())
+	c.client = &fetchClient{http: srv.Client()}
+	c.sources[SourceTor] = feedDef{Source: SourceTor, Category: CategoryTor, Label: "Tor", URL: srv.URL, Parse: parseTorList}
+
+	c.Refresh(context.Background())
+	if !c.Lookup("2600:1900::1").Matched {
+		t.Fatal("first refresh did not load the IPv6 half of the feed")
+	}
+
+	// One more /24: a routine, entirely legitimate update, nowhere near
+	// doubling anything.
+	payload = "2600:1900::/32\n2a00:1450::/32\n1.2.3.0/24\n5.6.7.0/24\n"
+	c.Refresh(context.Background())
+
+	if !c.Lookup("5.6.7.1").Matched {
+		t.Error("a routine addition to an IPv6-heavy feed was rejected as poisoned -- the guard read a wrapped number")
+	}
+	if !c.Lookup("2600:1900::1").Matched {
+		t.Error("the IPv6 half was dropped")
+	}
+}

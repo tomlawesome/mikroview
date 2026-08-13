@@ -128,6 +128,19 @@ auth:
   - sourceIp: "192.168.2.1"   # must differ from every other sourceIp
     name: "branch-router"`,
 
+	"CFG-0032": `devices:
+  - sourceIp: "192.168.1.1"
+    id: "edge-router"       # the device's identity: events, pushed
+    name: "Edge"            # router state, and ingest-token scope
+  - sourceIp: "192.168.2.1"
+    id: "branch-router"     # must differ from every other id
+    name: "Branch"`,
+
+	"CFG-0033": `devices:
+  - sourceIp: "192.168.1.1"
+    id: "edge-router"       # a name, or this device's own sourceIp --
+    name: "Edge"            # another router's address would merge the two`,
+
 	"CFG-0050": `notify:
   webhook:
     url: "https://ntfy.example.com/mikroview"   # https, so the header below is not sent in the clear
@@ -365,6 +378,7 @@ func (c *Config) validateOIDC(warn warnFunc) {
 
 func (c *Config) validateDevices(fatal problemFunc) {
 	seen := make(map[string]int, len(c.Devices))
+	seenID := make(map[string]int, len(c.Devices))
 	for i, d := range c.Devices {
 		key := fmt.Sprintf("devices[%d].sourceIp", i)
 		ip := strings.TrimSpace(d.SourceIP)
@@ -388,6 +402,36 @@ func (c *Config) validateDevices(fatal problemFunc) {
 			continue
 		}
 		seen[canonical] = i
+
+		// id is the device's identity everywhere downstream -- it keys
+		// pushed router state and scopes an ingest token (see
+		// internal/auth.Token.Device), so two devices sharing one is two
+		// routers wearing one identity: either can then supply host
+		// names for the other's traffic, defeating the per-device
+		// scoping issue #285 added. Left unset it defaults to sourceIp
+		// (see Config.normaliseDevices), so a collision here is always
+		// an explicit one.
+		id := strings.TrimSpace(d.ID)
+		if id == "" {
+			id = canonical
+		}
+		if prev, dup := seenID[id]; dup {
+			fatal("CFG-0032", fmt.Sprintf("devices[%d].id", i),
+				fmt.Sprintf("%q is already used by devices[%d]", id, prev),
+				"give each device a distinct id -- it is what pushed router state and ingest tokens are keyed by")
+			continue
+		}
+		seenID[id] = i
+
+		// An id that is some *other* device's address is the same
+		// collision by a longer route: a router discovered from that
+		// address takes it as its own id (internal/device.Registry.
+		// Resolve), and the two merge.
+		if idAddr, err := netip.ParseAddr(id); err == nil && idAddr.Unmap().String() != canonical {
+			fatal("CFG-0033", fmt.Sprintf("devices[%d].id", i),
+				fmt.Sprintf("%q is an IP address that is not this device's sourceIp (%s)", id, canonical),
+				"use a name (e.g. \"edge-router\"), or this device's own sourceIp -- an address belonging to another router would merge the two")
+		}
 	}
 }
 
