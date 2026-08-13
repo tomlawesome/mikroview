@@ -602,3 +602,36 @@ export function filtersFromSearchParams(params: URLSearchParams): Filters {
 // worth an operator's attention, and a false one of those is worse than
 // silence.
 export type WatchlistCoverage = 'unknown' | 'covered' | 'no-logging' | 'out-of-scope'
+
+// Mirrors internal/api's setupStatus (#320). Everything here is an
+// observation mikroview made on its own side -- it never connects to a
+// router, so "did that step work" is answered by what arrived, not by
+// asking the router.
+export interface SetupStatus {
+  instance: {
+    tlsEnabled: boolean
+    // tls.hosts as configured. Empty means the generated certificate
+    // covers localhost/127.0.0.1 only, which is the most common reason
+    // a router's first fetch fails.
+    hosts: string[]
+    syslogPort: string
+    syslogEnabled: boolean
+  }
+  sources: {
+    source: string
+    caFetchedAt?: string
+    syslogFirstSeenAt?: string
+    syslogLastSeenAt?: string
+  }[]
+  devices: {
+    device: string
+    configured: boolean
+    sourceIp: string
+    events: number
+    // Events whose action was decoded from a log-prefix. Zero with
+    // events above zero means the rules log without the convention.
+    decodedActions: number
+    pushedKinds?: Record<string, string>
+  }[]
+  pushKinds: string[]
+}
