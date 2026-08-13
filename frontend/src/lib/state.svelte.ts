@@ -50,6 +50,7 @@ export type View =
   | 'metrics'
   | 'watchlist'
   | 'suggestions'
+  | 'setup'
   | 'flags'
   | 'detectors'
   | 'entities'
