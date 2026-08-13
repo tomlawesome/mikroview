@@ -1115,7 +1115,9 @@ func main() {
 		// formatted/leveled output as everything mikroview logs itself,
 		// rather than the stdlib default logger's unformatted stderr
 		// lines being the one exception.
-		ErrorLog: slog.NewLogLogger(logging.New("http").Handler(), slog.LevelWarn),
+		// Translated and de-duplicated rather than passed straight
+		// through -- see logging.HTTPErrorLog (#321/#322).
+		ErrorLog: logging.HTTPErrorLog(logging.New("http")),
 	}
 
 	// TLS (on by default -- see internal/config.TLS's doc comment for
