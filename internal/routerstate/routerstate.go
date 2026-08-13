@@ -460,6 +460,28 @@ func (s *Store) Devices() []string {
 	return sortedDeviceNamesLocked(s.devices)
 }
 
+// PushedKinds reports, for one device, every table it has pushed and
+// when that table last arrived. The setup wizard (#320) uses it to say
+// which blocks of the push script are working -- "filter rules yes,
+// DHCP leases no" is actionable in a way that "pushes are happening" is
+// not.
+func (s *Store) PushedKinds(device string) map[ingest.Kind]time.Time {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	ds, ok := s.devices[device]
+	if !ok {
+		return nil
+	}
+	out := make(map[ingest.Kind]time.Time, len(ds.kinds))
+	for kind, ks := range ds.kinds {
+		if len(ks.pages) == 0 {
+			continue
+		}
+		out[kind] = ks.updatedAt
+	}
+	return out
+}
+
 func (s *Store) kindLocked(device string, kind ingest.Kind) (*kindState, bool) {
 	ds, ok := s.devices[device]
 	if !ok {

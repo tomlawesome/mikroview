@@ -16,6 +16,7 @@
   import Dashboard from './components/Dashboard.svelte'
   import Watchlist from './components/Watchlist.svelte'
   import Suggestions from './components/Suggestions.svelte'
+  import Setup from './components/Setup.svelte'
   import Flags from './components/Flags.svelte'
   import Detectors from './components/Detectors.svelte'
   import Entities from './components/Entities.svelte'
@@ -158,6 +159,8 @@
       <Watchlist />
     {:else if appState.view === 'suggestions'}
       <Suggestions />
+    {:else if appState.view === 'setup'}
+      <Setup />
     {:else if appState.view === 'flags'}
       <Flags />
     {:else if appState.view === 'detectors'}
