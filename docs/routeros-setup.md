@@ -1,5 +1,15 @@
 # RouterOS setup
 
+> **There is a guided version of this page inside MikroView.** Sign in as
+> an admin and open the menu → **Connect a router**. It generates every
+> command below with your own address, port and a token it mints for you
+> — nothing to fill in — and tells you as each step lands, because each
+> one ends with your router arriving at MikroView.
+>
+> This page remains the reference: what the wizard emits, and why. Use it
+> if you prefer working from documentation, if you are scripting a fleet,
+> or when you want the reasoning behind a step.
+
 MikroView never talks to RouterOS's API and needs no credentials on the
 router. Instead, RouterOS pushes to MikroView: firewall log lines over
 syslog (steps 1–3, required), and optionally a copy of its own

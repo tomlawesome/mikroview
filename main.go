@@ -44,6 +44,7 @@ import (
 	"github.com/tomlawesome/mikroview/internal/routerstate"
 	"github.com/tomlawesome/mikroview/internal/rules"
 	"github.com/tomlawesome/mikroview/internal/servertls"
+	"github.com/tomlawesome/mikroview/internal/setup"
 	"github.com/tomlawesome/mikroview/internal/store"
 	"github.com/tomlawesome/mikroview/internal/suggest"
 	"github.com/tomlawesome/mikroview/internal/syslog"
@@ -810,6 +811,13 @@ func main() {
 	// owner's 4c decision) and into the API server for the ingest
 	// endpoint to write and the table endpoints to read.
 	routerState := routerstate.New()
+
+	// What the guided setup wizard (#320) has actually observed of each
+	// router's setup. Hooked into the syslog accept path here rather
+	// than inside internal/syslog, which has no business knowing what a
+	// wizard is.
+	setupStore := setup.New()
+	syslog.SetOnConnection(func(host string) { setupStore.NoteSyslogConnection(host, time.Now()) })
 	// What makes an entry scoped to a router's address list resolvable
 	// at match time (#274 item 2). Wired here rather than at
 	// construction because routerState does not exist yet up there --
@@ -818,7 +826,7 @@ func main() {
 	watchlistEval.WithAddressLists(routerState)
 	names := naming.Resolver{Rules: cfg.RuleNames, Hosts: cfg.HostNames, Entities: entityStore, RouterHosts: routerState}
 
-	go ingest(ctx, raw, st, devices, macRegistry, fs, h, geo, detector, ru, names, watchlistEval)
+	go ingest(ctx, raw, st, devices, macRegistry, fs, h, geo, detector, ru, names, watchlistEval, setupStore)
 	go detector.Run(ctx)
 	go watchlistEval.Run(ctx)
 	go suggestStore.RunPeriodicSync(ctx, routerState, suggestSyncInterval)
@@ -1048,6 +1056,7 @@ func main() {
 	srv := &api.Server{
 		Store:             st,
 		Devices:           devices,
+		Setup:             setupStore,
 		Hub:               h,
 		Reputation:        rep,
 		NetClass:          nc,
@@ -1070,6 +1079,11 @@ func main() {
 		Tokens:            tokenStore,
 		IngestLimiter:     auth.NewLoginLimiter(ingestLimiterThreshold, ingestLimiterWindow),
 		RouterState:       routerState,
+		SetupInstance: api.SetupInstance{
+			TLSEnabled: cfg.TLS.Enabled,
+			Hosts:      cfg.TLS.Hosts,
+			SyslogPort: cfg.Listen.SyslogTLS,
+		},
 		OIDC:              oidcClient,
 		OIDCState:         oidcState,
 		OIDCPolicy:        oidcPolicy,
@@ -1161,6 +1175,10 @@ func main() {
 			fingerprint := sha256.Sum256(cert.Certificate[0])
 			tlsLog.Info(fmt.Sprintf("generated a local CA (leaf fingerprint %x) -- served at /ca.crt for your browser, reverse proxy, or router to trust", fingerprint))
 			rootMux.HandleFunc("GET /ca.crt", func(w http.ResponseWriter, r *http.Request) {
+				// Recorded so the wizard can confirm the router reached
+				// mikroview and took the CA -- the first step whose
+				// success is otherwise invisible from this side (#320).
+				setupStore.NoteCAFetch(srv.ClientIP(r), time.Now())
 				w.Header().Set("Content-Type", "application/x-pem-file")
 				w.Write(caCertPEM)
 			})
@@ -1871,14 +1889,14 @@ func readPasswordTwice() (string, error) {
 // WebSocket broadcast (see detect.Detector.Enqueue/Run, and the
 // dedicated detection-worker goroutine main() starts alongside this
 // one).
-func ingest(ctx context.Context, raw <-chan syslog.RawMessage, st *store.Store, devices *device.Registry, macRegistry *device.MACRegistry, fs *flags.Store, h *hub.Hub, geo *geoip.Lookup, detector *detect.Detector, ru *rules.Store, names naming.Resolver, watchlistEval *watchlist.Evaluator) {
+func ingest(ctx context.Context, raw <-chan syslog.RawMessage, st *store.Store, devices *device.Registry, macRegistry *device.MACRegistry, fs *flags.Store, h *hub.Hub, geo *geoip.Lookup, detector *detect.Detector, ru *rules.Store, names naming.Resolver, watchlistEval *watchlist.Evaluator, setupStore *setup.Store) {
 	ingestLog := logging.New("ingest")
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case rm := <-raw:
-			ingestOneRecovered(ingestLog, rm, st, devices, macRegistry, fs, h, geo, detector, ru, names, watchlistEval)
+			ingestOneRecovered(ingestLog, rm, st, devices, macRegistry, fs, h, geo, detector, ru, names, watchlistEval, setupStore)
 		}
 	}
 }
@@ -1889,12 +1907,18 @@ func ingest(ctx context.Context, raw <-chan syslog.RawMessage, st *store.Store, 
 // still end the entire ingest goroutine for good on the first bad
 // message (silently stopping all future event processing) rather than
 // just dropping that one message. See logging.Recover's doc comment.
-func ingestOneRecovered(logger *slog.Logger, rm syslog.RawMessage, st *store.Store, devices *device.Registry, macRegistry *device.MACRegistry, fs *flags.Store, h *hub.Hub, geo *geoip.Lookup, detector *detect.Detector, ru *rules.Store, names naming.Resolver, watchlistEval *watchlist.Evaluator) {
+func ingestOneRecovered(logger *slog.Logger, rm syslog.RawMessage, st *store.Store, devices *device.Registry, macRegistry *device.MACRegistry, fs *flags.Store, h *hub.Hub, geo *geoip.Lookup, detector *detect.Detector, ru *rules.Store, names naming.Resolver, watchlistEval *watchlist.Evaluator, setupStore *setup.Store) {
 	defer logging.Recover(logger)
 
 	env := syslog.ParseEnvelope(rm.Data, rm.RecvTime)
 	parsed := routeros.Parse(env.Message)
 	deviceID := devices.Resolve(rm.SourceIP, rm.RecvTime)
+	// Whether the rule's log-prefix decoded (#320 step 3): a router
+	// logging without the <A|D|R|L>|slug| convention sends events that
+	// look healthy on every other measure and carry no action at all.
+	if setupStore != nil {
+		setupStore.NoteEvent(deviceID, parsed.Action != store.ActionUnknown, rm.RecvTime)
+	}
 	srcCountry, _ := geo.Country(parsed.SrcIP)
 	dstCountry, _ := geo.Country(parsed.DstIP)
 
