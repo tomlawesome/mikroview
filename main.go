@@ -47,6 +47,7 @@ import (
 	"github.com/tomlawesome/mikroview/internal/store"
 	"github.com/tomlawesome/mikroview/internal/suggest"
 	"github.com/tomlawesome/mikroview/internal/syslog"
+	"github.com/tomlawesome/mikroview/internal/tlssniff"
 	"github.com/tomlawesome/mikroview/internal/watchlist"
 	"github.com/tomlawesome/mikroview/web"
 	"golang.org/x/term"
@@ -219,6 +220,39 @@ func httpsRedirectTarget(r *http.Request, allowedHosts []string) string {
 		host = allowedHosts[0]
 	}
 	return "https://" + host + r.URL.RequestURI()
+}
+
+// samePortRedirectHost is the host policy for the plaintext-on-the-TLS-
+// port redirect (#325). Same allowlist reasoning as
+// httpsRedirectTarget above -- never echo an arbitrary Host header back
+// in a Location -- with one difference: the port is kept. That listener
+// bounces to the browser default 443 because it lives on port 80; this
+// one is the HTTPS listener, so https is reachable on exactly the
+// address and port the client already dialled.
+func samePortRedirectHost(requested string, allowedHosts []string, localAddr string) string {
+	host, port, err := net.SplitHostPort(requested)
+	if err != nil {
+		host, port = requested, ""
+	}
+	if port == "" {
+		if _, p, err := net.SplitHostPort(localAddr); err == nil {
+			port = p
+		}
+	}
+	allowed := allowedHosts
+	if len(allowed) == 0 {
+		allowed = localRedirectHosts()
+	}
+	if len(allowed) > 0 && !slices.Contains(allowed, host) {
+		host = allowed[0]
+	}
+	if host == "" {
+		return ""
+	}
+	if port == "" {
+		return host
+	}
+	return net.JoinHostPort(host, port)
 }
 
 // localRedirectHosts is the fallback known-good set when cfg.TLS.Hosts
@@ -1211,7 +1245,20 @@ func main() {
 	logging.New("mikroview").Info(fmt.Sprintf("%s on %s, %s", scheme, cfg.Listen.HTTP, syslogSummary))
 	var serveErr error
 	if cfg.TLS.Enabled {
-		serveErr = httpServer.ListenAndServeTLS("", "")
+		// One published port has to answer both a TLS client and a
+		// browser given "host:8080", which tries http:// first -- see
+		// internal/tlssniff (#325).
+		ln, lnErr := net.Listen("tcp", httpServer.Addr)
+		if lnErr != nil {
+			logging.New("http").Error(lnErr.Error())
+			os.Exit(1)
+		}
+		sniffLog := logging.New("http")
+		serveErr = httpServer.ServeTLS(
+			tlssniff.Listener(ln, sniffLog, func(requested string) string {
+				return samePortRedirectHost(requested, cfg.TLS.Hosts, ln.Addr().String())
+			}),
+			"", "")
 	} else {
 		serveErr = httpServer.ListenAndServe()
 	}
