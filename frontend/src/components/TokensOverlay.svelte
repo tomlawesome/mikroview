@@ -14,11 +14,15 @@
   // "api" (read-only) is the default for the same reason it is the
   // server's: the more privileged kind has to be asked for by name.
   let kind = $state<'api' | 'ingest'>('api')
-  // The config.yaml device id an ingest token speaks for -- a
-  // pick-list of configured devices, because a typo here silently
-  // un-stitches every push from its events (#326).
+  // The device id an ingest token speaks for -- a pick-list, because a
+  // typo here silently un-stitches every push from its events (#326).
+  // Every known device is offered, not just configured ones: a router
+  // discovered from its own syslog already has a usable id (its source
+  // IP -- see internal/device.Registry.Resolve), and that is exactly
+  // the router an operator is most likely to be setting up, since
+  // GET /api/devices is documented as how you find one to declare.
   let device = $state('')
-  let configuredDevices = $state<Device[]>([])
+  let knownDevices = $state<Device[]>([])
   let error = $state<string | null>(null)
   let submitting = $state(false)
   let copied = $state(false)
@@ -29,12 +33,16 @@
       tokensState.refresh()
       fetchDevices()
         .then((all) => {
-          configuredDevices = all.filter((d) => d.configured)
+          // Configured first, then discovered, each by id: a stable
+          // order regardless of the registry's own map ordering.
+          knownDevices = [...all].sort(
+            (a, b) => Number(b.configured) - Number(a.configured) || a.id.localeCompare(b.id),
+          )
         })
         .catch(() => {
           // The dialog still works without the pick-list; ingest
           // creation just has nothing to offer until devices load.
-          configuredDevices = []
+          knownDevices = []
         })
     }
   })
@@ -62,7 +70,7 @@
     error = null
     copied = false
     if (kind === 'ingest' && !device) {
-      error = 'An ingest token needs a device -- add the router under devices: in config.yaml first.'
+      error = 'An ingest token needs a device -- pick the router it speaks for.'
       return
     }
     submitting = true
@@ -147,17 +155,21 @@
             <button type="submit" class="save" disabled={submitting}>{submitting ? 'Creating…' : 'Create'}</button>
           </div>
           {#if kind === 'ingest'}
-            {#if configuredDevices.length > 0}
+            {#if knownDevices.length > 0}
               <select class="device-select" bind:value={device} required aria-label="Device the token speaks for">
                 <option value="" disabled>Device this token speaks for…</option>
-                {#each configuredDevices as d (d.id)}
-                  <option value={d.id}>{d.name ? `${d.name} (${d.id})` : d.id}</option>
+                {#each knownDevices as d (d.id)}
+                  <option value={d.id}>
+                    {d.name && d.name !== d.id ? `${d.name} (${d.id})` : d.id}{d.configured
+                      ? ''
+                      : ' -- not in config.yaml'}
+                  </option>
                 {/each}
               </select>
             {:else}
               <p class="device-note">
-                No configured devices to scope this token to -- add the router under
-                <code>devices:</code> in <code>config.yaml</code> first (see docs/routeros-setup.md).
+                No devices known yet. A router shows up here once it sends syslog, or as soon as it is
+                declared under <code>devices:</code> in <code>config.yaml</code>.
               </p>
             {/if}
           {/if}
