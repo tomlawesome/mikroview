@@ -1,6 +1,7 @@
 <script lang="ts">
   // SPDX-License-Identifier: AGPL-3.0-only
   import { appState } from '../lib/state.svelte'
+  import { conciseState } from '../lib/concise.svelte'
   import { formatEps, formatBufferDepth } from '../lib/format'
   import { retentionState, MAX_AGE_OPTIONS } from '../lib/retention.svelte'
   import { viewportState } from '../lib/viewport.svelte'
@@ -85,6 +86,21 @@
         title={appState.paused ? 'Resume live updates' : 'Pause live updates'}
       >
         {appState.paused ? `Resume${appState.pendingCount ? ` (${appState.pendingCount})` : ''}` : 'Pause'}
+      </button>
+
+      <!-- Concise mode (#341): collapse repeats of the same connection
+           into one row with a count, so a host retrying the same thing
+           four hundred times costs one line. An option on the live view,
+           not a different view -- every event is still there, and the
+           row opens to show them. -->
+      <button
+        class:active={conciseState.enabled}
+        onclick={() => conciseState.toggle()}
+        title={conciseState.enabled
+          ? 'Show every event on its own row'
+          : 'Collapse repeats of the same connection into one row with a count'}
+      >
+        Concise
       </button>
 
       <button onclick={() => appState.clearBuffer()} title="Clear the local event buffer">
