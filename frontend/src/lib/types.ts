@@ -177,6 +177,12 @@ export interface UserSummary {
 export interface ApiToken {
   id: string
   name: string
+  // Mirrors internal/auth.TokenKind: "api" is a read-only token,
+  // "ingest" a RouterOS push token scoped to one device (#186/#326).
+  kind: 'api' | 'ingest'
+  // Set only on ingest tokens -- the config.yaml device id the token
+  // speaks for.
+  device?: string
   createdAt: string
   lastUsedAt?: string
   value?: string

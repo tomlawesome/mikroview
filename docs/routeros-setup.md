@@ -201,9 +201,11 @@ before step 1, go do that CA import now, then come back here.
 
 ### 4b. Mint an ingest token
 
-In MikroView, sign in as an admin, open **Account → API tokens**, and
-create a token with kind **Ingest**, naming the device — this is what
-scopes it. Or via the API:
+In MikroView, sign in as an admin, open the menu → **API tokens**, set
+the kind dropdown to **Ingest**, and pick the device the token speaks
+for — this is what scopes it, and the list only offers routers already
+declared under `devices:` in `config.yaml`, so declare yours first
+(see [configuration.md](configuration.md)). Or via the API:
 
 ```
 curl -k -b <your session cookie> -X POST https://<mikroview-host>/api/tokens \
@@ -414,6 +416,35 @@ bearer token embedded in the script's own source, held to the same
 `read`-policy-can-read-it caveat as step 4b describes. 15–30 minutes
 is plenty: this data changes when you edit your firewall, not every
 few seconds.
+
+### If you're doing this in WinBox instead
+
+The two commands above map to **System → Scripts → +** and **System →
+Scheduler → +**. The script dialog has options the CLI commands never
+mention, and its defaults are not the CLI's:
+
+- **Policy** — WinBox pre-ticks *every* policy for a new script.
+  Untick everything except **read** and **test**: `read` is what lets
+  the script print the tables it pushes, `test` is what `/tool fetch`
+  needs, and nothing in this script changes config (`write`), manages
+  users (`policy`, `password`), or reads secrets (`sensitive`). The
+  scheduler entry needs the same two ticked — RouterOS refuses to run
+  a script whose policies the scheduler doesn't also hold, so a
+  `read,test` script under a default scheduler runs, but not the
+  other way round.
+- **Don't Require Permissions** — leave unchecked. Checking it lets
+  any user able to run scripts run this one with the *script's*
+  permissions instead of their own. This setup has no use for that.
+- **Owner** — filled in automatically with the account that saves the
+  script; nothing to set.
+- **Last Time Started / Run Count** — read-only status, empty until
+  the first run. After **Run Script** (or the scheduler firing), Run
+  Count incrementing tells you the script ran — it does *not* tell
+  you the pushes landed, which is what step 5 checks.
+
+And paste the source with `<mikroview-host>` and the token already
+filled in — the dialog saves placeholders without complaint, and the
+failure only surfaces later as `failure:` lines in `/log print`.
 
 ## 5. Verify
 
