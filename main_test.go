@@ -302,6 +302,40 @@ func TestSecurityHeadersSetOnEveryResponse(t *testing.T) {
 	}
 }
 
+// TestStaticCacheHeaders pins the two rules the upgrade path depends on
+// (#347): content-hashed assets may be kept indefinitely, and everything
+// with a stable filename must be revalidated.
+//
+// sw.js is the case worth stating out loud. Without an explicit header a
+// browser may reuse a cached service worker for up to 24 hours, never
+// notice the new one, and go on serving a precached app shell from the
+// previous release -- an upgraded server showing a days-old UI, with
+// every server-side signal correctly reporting the new version.
+func TestStaticCacheHeaders(t *testing.T) {
+	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) })
+
+	for _, tc := range []struct {
+		path string
+		want string
+		why  string
+	}{
+		{"/assets/index-BShEGKey.js", "public, max-age=31536000, immutable", "content-hashed: the name changes when the bytes do"},
+		{"/assets/index-CE5qYX4Y.css", "public, max-age=31536000, immutable", "content-hashed"},
+		{"/sw.js", "no-cache", "stable name, and the file that decides whether an upgrade is noticed at all"},
+		{"/registerSW.js", "no-cache", "stable name"},
+		{"/", "no-cache", "index.html under a stable name"},
+		{"/index.html", "no-cache", "stable name"},
+		{"/manifest.webmanifest", "no-cache", "stable name"},
+		{"/pwa-192x192.png", "no-cache", "stable name -- icons are not hashed"},
+	} {
+		rr := httptest.NewRecorder()
+		staticCacheHeaders(inner).ServeHTTP(rr, httptest.NewRequest(http.MethodGet, tc.path, nil))
+		if got := rr.Header().Get("Cache-Control"); got != tc.want {
+			t.Errorf("Cache-Control for %s = %q, want %q (%s)", tc.path, got, tc.want, tc.why)
+		}
+	}
+}
+
 // TestRunVersionPrintsTheBareVersionString proves runVersion's whole
 // contract: the printed line is exactly the version string, nothing
 // else -- `docker exec <container> mikroview -version` output has to be
