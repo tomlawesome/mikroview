@@ -283,7 +283,7 @@ formality.
 
 ### Base images stay on tags, not digests
 
-A `FROM` line names a tag (`golang:1.26.5-alpine`,
+A `FROM` line names a tag (`golang:1.26.6-alpine`,
 `gcr.io/distroless/static-debian12:nonroot`), never a `@sha256:` digest.
 That is a decision, not an omission — a digest is more reproducible and
 immune to a tag being repointed under you, which is a real supply-chain
