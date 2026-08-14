@@ -35,8 +35,11 @@ docker:
 clean:
 	rm -f $(BINARY)
 	rm -rf frontend/dist
-	git checkout -- web/dist/index.html 2>/dev/null || true
-	find web/dist -mindepth 1 ! -name index.html -delete 2>/dev/null || true
+	# Empty web/dist back to the one tracked file. Nothing to restore
+	# from git any more -- .gitkeep is empty and is the only thing in
+	# here that is not build output (#353).
+	find web/dist -mindepth 1 ! -name .gitkeep -delete 2>/dev/null || true
+	touch web/dist/.gitkeep
 
 # live-check: stand the real thing up and drive it in a real browser.
 #
