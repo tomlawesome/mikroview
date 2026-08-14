@@ -78,6 +78,20 @@ upgrading.
 
 ### Added
 
+- **A Group option in the live view** (#341). A toolbar button, off by
+  default, that collapses repeats of the same connection into one row
+  carrying a count -- so a host retrying the same thing four hundred
+  times costs one line instead of four hundred. Two connections count as
+  the same when their source, destination, port, protocol and outcome
+  all match, which is strict enough that nothing is merged that an
+  operator would want to read separately. Nothing is discarded: the
+  counts account for every event the ungrouped view would have shown,
+  and clicking a grouped row opens it to reveal its events (the most
+  recent 20, with the remainder stated rather than silently dropped).
+  Rows belonging to an active flag carry a marker in both modes. The
+  view keeps behaving exactly as it always has until the button is
+  pressed, and the choice is remembered per browser.
+
 - **A guided setup wizard for connecting a router** (#320). Menu →
   **Connect a router**, admin only. Every command comes out with your own
   values already in it — the address you are reaching MikroView on, the
