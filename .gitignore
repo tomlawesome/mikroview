@@ -1,5 +1,5 @@
 /web/dist/*
-!/web/dist/index.html
+!/web/dist/.gitkeep
 /frontend/node_modules/
 /frontend/dist/
 /tools/screenshots/node_modules/

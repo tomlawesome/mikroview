@@ -105,7 +105,10 @@ with socket.create_connection((host, port), timeout=10) as sock:
 
 build() {
   ( cd frontend && npm run build >/dev/null 2>&1 )
-  rm -rf web/dist && mkdir -p web/dist && cp -r frontend/dist/. web/dist/
+  # touch .gitkeep for the same reason the Makefile's frontend target
+  # does: rm -rf takes the only tracked file in here with it, and a live
+  # check should not leave the tree dirty (#353).
+  rm -rf web/dist && mkdir -p web/dist && cp -r frontend/dist/. web/dist/ && touch web/dist/.gitkeep
   # -buildvcs=false: this binary is a throwaway built into a temp dir,
   # run by the scenarios and deleted, so nothing ever reads its VCS
   # stamp. Stamping it also fails outright in a linked git worktree --
