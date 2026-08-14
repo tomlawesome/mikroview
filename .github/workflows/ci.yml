@@ -42,7 +42,7 @@ jobs:
 
       - uses: actions/setup-go@v7
         with:
-          go-version: '1.26.5'
+          go-version: '1.26.6'
       - run: go build ./...
       - run: go vet ./...
       - run: go test ./...
@@ -115,7 +115,7 @@ jobs:
 
       - uses: actions/setup-go@v7
         with:
-          go-version: '1.26.5'
+          go-version: '1.26.6'
       - name: Race-detector tests (auth + API)
         run: go test -race ./internal/auth/... ./internal/api/...
 
@@ -231,7 +231,7 @@ jobs:
 
       - uses: actions/setup-go@v7
         with:
-          go-version: '1.26.5'
+          go-version: '1.26.6'
 
       # Not a `services:` container. internal/persist refuses any
       # connection that could fall back to plaintext (see its
