@@ -189,6 +189,48 @@ func securityHeaders(next http.Handler, hsts bool) http.Handler {
 	})
 }
 
+// staticCacheHeaders wraps the embedded frontend's file server, telling
+// browsers how long each kind of file may be reused (#347).
+//
+// Two shapes, because the build produces two:
+//
+//   - /assets/* is content-hashed by Vite -- index-BShEGKey.js changes
+//     its *name* whenever its contents change, so a copy can never go
+//     stale and is safe to keep for as long as the browser likes.
+//   - Everything else (index.html, sw.js, registerSW.js, the manifest,
+//     the icons) keeps a fixed name across builds, so it gets no-cache:
+//     store it, but check with the server before using it again.
+//
+// sw.js is the one that makes this load-bearing rather than tidy.
+// mikroview is a PWA whose service worker precaches the whole app shell,
+// so after an upgrade the first load is served the OLD shell from that
+// precache. registerType: 'autoUpdate' is meant to make that transient
+// -- the browser refetches sw.js, sees it changed, activates the new
+// worker and reloads. But with no Cache-Control at all, a browser may
+// reuse its cached sw.js for up to 24 hours before revalidating, and
+// then the update is never noticed: an upgraded server keeps serving a
+// days-old UI while /api/healthz correctly reports the new version.
+// That is not hypothetical -- it cost an operator an hour of chasing an
+// image tag that was never wrong.
+//
+// Files come from an embed.FS, whose entries have a zero modification
+// time, so http.FileServer sends no Last-Modified and there are no
+// conditional requests to answer with a 304. no-cache therefore means
+// re-sending the body each time; at ~1.5KB for index.html and a few KB
+// for sw.js that is not worth optimising. If it ever is, the answer is
+// an ETag over the embedded bytes -- not a longer max-age, which is the
+// thing that caused this.
+func staticCacheHeaders(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/assets/") {
+			w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+		} else {
+			w.Header().Set("Cache-Control", "no-cache")
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
 // httpsRedirectTarget builds the Location for redirecting a plain-HTTP
 // request to HTTPS -- strips any port off the request's Host header and
 // assumes HTTPS is reachable on the browser-default 443 (see
@@ -1098,7 +1140,24 @@ func main() {
 	if frontend, err := web.DistFS(); err != nil {
 		logging.New("frontend").Warn(fmt.Sprintf("%v (serving API only)", err))
 	} else {
-		rootMux.Handle("/", http.FileServer(http.FS(frontend)))
+		// A binary can compile with an empty dist/ -- that is what the
+		// committed .gitkeep is for -- and http.FileServer would then
+		// answer / with a directory listing of that one placeholder,
+		// which reads as a broken install rather than a build step that
+		// was skipped. Say which it is, in the log and in the response
+		// (#353). The API is mounted above and keeps working either way.
+		//
+		// Either way it goes out through staticCacheHeaders (#347), so
+		// the "no frontend" page is itself revalidated rather than kept
+		// by a browser after a proper build is deployed.
+		var ui http.Handler = http.FileServer(http.FS(frontend))
+		if !web.HasUI() {
+			logging.New("frontend").Warn("no frontend was built into this binary (run `make build`) -- serving API only")
+			ui = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				http.Error(w, "no frontend was built into this binary -- the API is available under /api/", http.StatusServiceUnavailable)
+			})
+		}
+		rootMux.Handle("/", staticCacheHeaders(ui))
 	}
 
 	httpServer := &http.Server{

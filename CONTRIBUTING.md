@@ -12,6 +12,19 @@ make build           # full build: frontend -> web/dist -> single Go binary
 make docker          # docker build -t mikroview .
 ```
 
+Working in a linked git worktree (`git worktree add`), add
+`-buildvcs=false` to any `go` command you type directly:
+
+```sh
+go build -buildvcs=false ./...
+```
+
+The Makefile and the scripts already set it. Go's VCS stamping looks for
+a `.git` *directory*, a worktree's `.git` is a file, so the lookup walks
+past the checkout onto whichever repository is above it -- which either
+fails the build or stamps someone else's commit into your binary (#357,
+golang/go#58218, fixed in Go 1.27).
+
 Feed it fixture syslog lines without a real router. Since #189 there is
 no plaintext listener -- the only one is RouterOS's own
 `remote-protocol=tls` on 6514 -- so this has to speak TLS, which `nc`
