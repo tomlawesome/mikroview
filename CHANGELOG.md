@@ -498,6 +498,19 @@ upgrading.
 
 ### Fixed
 
+- **Upgrading no longer leaves the browser showing the previous
+  version's interface** (#347). MikroView is installable as a web app,
+  which means a service worker keeps a copy of the interface so it opens
+  instantly. The server never told browsers how long to keep that copy,
+  and a browser left to guess can hold on to the file that detects new
+  versions for up to 24 hours — so an operator who pulled a new image,
+  restarted, and reloaded could be served the old interface for the rest
+  of the day, with no way to tell from inside the app that anything was
+  stale. Reported after it cost an hour of hunting for a container
+  problem that did not exist: the server was correct and said so, and the
+  browser was quietly ignoring it. Files whose names change with their
+  contents are still cached indefinitely, so this costs nothing on load.
+
 - **Typing `host:8080` into a browser now works** (#325). MikroView
   usually gets one published port on a host where 80 and 443 belong to
   something else, and a browser given an address with a port tries plain
