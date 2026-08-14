@@ -182,6 +182,57 @@ export async function session({ waitForEvents = 0 } = {}) {
 }
 
 /**
+ * waitForFlag waits for a flag against `target` to exist on the server,
+ * and returns what it found. Call it after feeding a scan and before
+ * asserting on the Flags UI (#354).
+ *
+ * It exists to split one ambiguous failure into two clear ones. A
+ * scenario that feeds a scan and then waits on a card has two ways to
+ * fail -- the flag was never raised, or it was raised and the UI did not
+ * show it -- and a Playwright locator timeout cannot tell them apart. It
+ * reports only that something never became visible, which is the least
+ * useful half of the answer.
+ *
+ * It is also the race itself. The Flags list refreshes on mount and then
+ * every STATS_REFRESH_MS (5s, App.svelte), so a 15s wait gets about
+ * three attempts; ingest running a few seconds behind on a shared
+ * instance that earlier scenarios have pushed hundreds of events through
+ * is enough to miss all of them. Waiting for the server first means the
+ * UI assertion starts from a state where the flag definitely exists.
+ *
+ * Polled through the signed-in page rather than a separate HTTP client,
+ * so it uses the session cookie already established and the same
+ * listener the browser is talking to.
+ */
+export async function waitForFlag(page, target, { timeoutMs = 20000 } = {}) {
+  const deadline = Date.now() + timeoutMs
+  let seen = []
+  while (Date.now() < deadline) {
+    seen = await page.evaluate(async () => {
+      const res = await fetch('/api/flags', { cache: 'no-store' })
+      if (!res.ok) return []
+      const body = await res.json()
+      const list = Array.isArray(body) ? body : (body.flags ?? [])
+      return list.map((f) => ({ type: f.type, target: f.target, cleared: !!f.cleared }))
+    })
+    if (seen.some((f) => f.target === target && !f.cleared)) {
+      return { ok: true, seen, message: `a flag for ${target} reached the server` }
+    }
+    await page.waitForTimeout(500)
+  }
+  // The whole flag list only on failure -- that is when it is evidence.
+  // Printing it on the way past would bury every other line in the run.
+  const summary = seen.length
+    ? seen.map((f) => `${f.type}:${f.target}${f.cleared ? ' (cleared)' : ''}`).join(', ')
+    : 'none at all'
+  return {
+    ok: false,
+    seen,
+    message: `no flag for ${target} reached the server within ${timeoutMs}ms -- server has: ${summary}`,
+  }
+}
+
+/**
  * responsive asserts the main thread still answers -- a hung tab cannot
  * run an evaluate at all, so a timeout here is the failure.
  */
