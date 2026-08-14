@@ -1098,7 +1098,20 @@ func main() {
 	if frontend, err := web.DistFS(); err != nil {
 		logging.New("frontend").Warn(fmt.Sprintf("%v (serving API only)", err))
 	} else {
-		rootMux.Handle("/", http.FileServer(http.FS(frontend)))
+		// A binary can compile with an empty dist/ -- that is what the
+		// committed .gitkeep is for -- and http.FileServer would then
+		// answer / with a directory listing of that one placeholder,
+		// which reads as a broken install rather than a build step that
+		// was skipped. Say which it is, in the log and in the response
+		// (#353). The API is mounted above and keeps working either way.
+		if !web.HasUI() {
+			logging.New("frontend").Warn("no frontend was built into this binary (run `make build`) -- serving API only")
+			rootMux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+				http.Error(w, "no frontend was built into this binary -- the API is available under /api/", http.StatusServiceUnavailable)
+			})
+		} else {
+			rootMux.Handle("/", http.FileServer(http.FS(frontend)))
+		}
 	}
 
 	httpServer := &http.Server{

@@ -9,6 +9,12 @@ frontend:
 	rm -rf web/dist
 	mkdir -p web/dist
 	cp -r frontend/dist/. web/dist/
+	# Restore the one tracked file in here. rm -rf above is deliberate --
+	# it stops a renamed bundle from leaving its predecessor behind -- but
+	# it also takes .gitkeep, which is what keeps go:embed compiling on a
+	# clone with no build (#353). Without this line every build leaves a
+	# deleted tracked file in `git status`.
+	touch web/dist/.gitkeep
 
 backend:
 	go build -trimpath -o $(BINARY) .
