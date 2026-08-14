@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 //
-// Concise mode in the live view (#341): the toggle, the count replacing
+// Grouping in the live view (#341): the toggle, the count replacing
 // the time, the flag marker, and the drawer.
 //
 // Unit tests cover the grouping itself. What they cannot show is the
@@ -28,22 +28,22 @@ check(normalRows > 0, `the live view renders rows (${normalRows})`)
 check(await page.isVisible('.grid .cell.time'), 'rows show a time')
 
 // --- Turning it on collapses repeats ------------------------------------
-await page.click('button:has-text("Concise")')
+await page.click('button:text-is("Group")')
 await page.waitForTimeout(500)
 
-const conciseRows = await rowCount()
+const groupedRows = await rowCount()
 check(
-  conciseRows > 0 && conciseRows <= normalRows,
-  `concise mode shows no more rows than normal (${conciseRows} <= ${normalRows})`,
+  groupedRows > 0 && groupedRows <= normalRows,
+  `grouping shows no more rows than normal (${groupedRows} <= ${normalRows})`,
 )
 
 // The layout assertion that unit tests cannot make: a collapsed row must
 // still produce the same number of grid cells as a normal one, or the
 // columns no longer line up with their headers.
-const conciseCells = await cellsInFirstRow()
+const groupedCells = await cellsInFirstRow()
 check(
-  normalCells > 0 && conciseCells === normalCells,
-  `a concise row has the same cell count as a normal one (${conciseCells} vs ${normalCells})`,
+  normalCells > 0 && groupedCells === normalCells,
+  `a grouped row has the same cell count as a normal one (${groupedCells} vs ${normalCells})`,
 )
 
 // --- The count replaces the time on a collapsed row ---------------------
@@ -58,7 +58,7 @@ if (counts.length > 0) {
 
   // Nothing may be lost: the counts plus the singletons must account for
   // every row normal mode would have shown.
-  const singletons = conciseRows - counts.length
+  const singletons = groupedRows - counts.length
   const accounted = counts.reduce((a, b) => a + b, 0) + singletons
   check(
     accounted === normalRows,
@@ -69,15 +69,15 @@ if (counts.length > 0) {
   await page.click('.grid .count-cell')
   await page.waitForTimeout(300)
   const afterOpen = await rowCount()
-  check(afterOpen > conciseRows, `opening a group reveals its events (${conciseRows} -> ${afterOpen})`)
+  check(afterOpen > groupedRows, `opening a group reveals its events (${groupedRows} -> ${afterOpen})`)
   check(await page.isVisible('.grid .row.member'), 'the revealed events are marked as members')
 
-  const revealed = afterOpen - conciseRows
+  const revealed = afterOpen - groupedRows
   check(revealed <= 20, `the drawer renders at most 20 events (${revealed})`)
 
   await page.click('.grid .count-cell')
   await page.waitForTimeout(300)
-  check((await rowCount()) === conciseRows, 'closing the group hides them again')
+  check((await rowCount()) === groupedRows, 'closing the group hides them again')
 } else {
   // Honest rather than silently passing: with no repeats in the feed
   // there is nothing to collapse, and that is a real state.
@@ -85,7 +85,7 @@ if (counts.length > 0) {
 }
 
 // --- Off again ----------------------------------------------------------
-await page.click('button:has-text("Concise")')
+await page.click('button:text-is("Group")')
 await page.waitForTimeout(500)
 check((await rowCount()) === normalRows, 'turning it off restores every row')
 
