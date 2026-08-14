@@ -54,7 +54,9 @@ EOF
 
 ( cd frontend && npm run build >/dev/null 2>&1 )
 rm -rf web/dist && mkdir -p web/dist && cp -r frontend/dist/. web/dist/
-go build -o "$DIR/mikroview" .
+# -buildvcs=false: throwaway binary, nothing reads its VCS stamp, and
+# stamping fails outright in a linked git worktree (#357).
+go build -buildvcs=false -o "$DIR/mikroview" .
 
 MIKROVIEW_CONFIG="$DIR/cfg.yaml" "$DIR/mikroview" > "$DIR/server.log" 2>&1 &
 PID=$!
