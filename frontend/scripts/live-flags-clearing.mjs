@@ -19,7 +19,7 @@
 // actually promise.
 
 import { fileURLToPath } from 'url'
-import { session, check, done, feedPortScan } from './live-browser.mjs'
+import { session, check, done, feedPortScan, waitForFlag } from './live-browser.mjs'
 
 const ACTIVE = 'section[aria-labelledby="active-heading"] .card'
 
@@ -40,6 +40,13 @@ const { page } = await session()
 async function openMenuView(label) {
   await page.click('.nav-menu .trigger')
   await page.click(`.nav-menu button:has-text("${label}")`)
+}
+
+// Server-side first (#354): a locator timeout here cannot say whether
+// the flag was never raised or merely had not been rendered yet.
+for (const ip of ['198.51.100.77', '198.51.100.78']) {
+  const raised = await waitForFlag(page, ip)
+  check(raised.ok, raised.message)
 }
 
 await openMenuView('Flags')
@@ -115,9 +122,19 @@ check(await page.isVisible('text=Permanently-excluded'), 'the exclusions pointer
 
 // --- Clear all: click-again confirm ---
 
-feedPortScan(15, '198.51.100.79')
-feedPortScan(15, '198.51.100.80')
-feedPortScan(15, '198.51.100.81')
+// 20, not 15: the port_scan detector's threshold IS 15 distinct ports,
+// so feeding exactly that left no margin -- a single event lost anywhere
+// on the path means no flag, and the scenario fails for a reason that
+// has nothing to do with Clear all (#354).
+feedPortScan(20, '198.51.100.79')
+feedPortScan(20, '198.51.100.80')
+feedPortScan(20, '198.51.100.81')
+
+for (const ip of ['198.51.100.79', '198.51.100.80', '198.51.100.81']) {
+  const raised = await waitForFlag(page, ip)
+  check(raised.ok, raised.message)
+}
+
 await page.reload({ waitUntil: 'networkidle' })
 await openMenuView('Flags')
 await page.waitForSelector('.card .type', { timeout: 15000 })
