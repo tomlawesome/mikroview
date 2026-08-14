@@ -9,7 +9,14 @@ stub commands are left behind (see `AGENTS.md`, "Removals are
 wholesale"). This file is where they are communicated, so read it before
 upgrading.
 
+`0.1.0` was tagged on 2026-08-07 without its notes being cut, so
+everything sat under Unreleased until `0.2.0`. Its section below is the
+file exactly as it stood at the `v0.1.0` tag, split back out rather than
+rewritten.
+
 ## [Unreleased]
+
+## [0.2.0] - 2026-08-14
 
 ### Removed
 
@@ -990,6 +997,8 @@ upgrading.
   A token whose kind this build does not recognise cannot authenticate at
   all, but stays listed and revocable — guessing that an unknown kind
   meant the read-everything one is the wrong direction to guess in.
+
+## [0.1.0] - 2026-08-07
 
 ### Changed
 
