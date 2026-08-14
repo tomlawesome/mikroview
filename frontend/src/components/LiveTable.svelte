@@ -3,7 +3,7 @@
   import { appState, applyFilters } from '../lib/state.svelte'
   import { MAX_RENDERED_ROWS } from '../lib/constants'
   import { COLUMNS, columnState } from '../lib/columns.svelte'
-  import { conciseState } from '../lib/concise.svelte'
+  import { groupModeState } from '../lib/groupMode.svelte'
   import { flaggedSources, groupEvents, drawerEvents, hiddenInDrawer } from '../lib/grouping'
   import { flagsState } from '../lib/flags.svelte'
   import { viewportState } from '../lib/viewport.svelte'
@@ -142,12 +142,12 @@
     honorAutoscroll && !appState.autoscroll ? (frozenRendered ?? liveRendered) : liveRendered,
   )
 
-  // Concise mode (#341): collapse repeats of the same connection. Built
+  // Grouping (#341): collapse repeats of the same connection. Built
   // from `rendered` rather than from the whole buffer, so grouping is a
   // lens over exactly what the view would have shown -- the counts
   // account for every row the ungrouped view has, and no more. Grouping
   // a wider set would quietly change what a filter means.
-  const groups = $derived(conciseState.enabled ? groupEvents(rendered) : [])
+  const groups = $derived(groupModeState.enabled ? groupEvents(rendered) : [])
 
   // Sources carrying an active flag, for the row marker. Recomputed from
   // the flag list rather than per row, so this is one pass rather than
@@ -256,7 +256,7 @@
           {/each}
         </div>
 
-        {#if conciseState.enabled}
+        {#if groupModeState.enabled}
           {#each groups as group (group.key)}
             <EventRow
               event={group.head}
