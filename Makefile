@@ -2,6 +2,19 @@
 
 BINARY := mikroview
 
+# -buildvcs=false for every go invocation below, and for the scripts make
+# spawns. Go's VCS stamping cannot see a linked git worktree: it looks for
+# a .git *directory* (cmd/go/internal/vcs/vcs.go, isVCSRoot), a worktree's
+# .git is a file, so the walk goes past the checkout and lands on whatever
+# repository sits above it. That either fails the build outright or -- the
+# quiet one -- stamps a foreign repository's commit into the binary (#357,
+# golang/go#58218).
+#
+# Nothing here reads the stamp: the version in /api/healthz is
+# main.version, injected by the Dockerfile with -ldflags -X. Drop this line
+# when go.mod requires Go 1.27, which fixes the underlying bug.
+export GOFLAGS := -buildvcs=false $(GOFLAGS)
+
 build: frontend backend
 
 frontend:

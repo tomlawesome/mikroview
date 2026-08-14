@@ -42,7 +42,11 @@ function goModules() {
   // the binary. We attribute what we actually ship.
   const out = execFileSync(
     'go',
-    ['list', '-deps', '-f', '{{if .Module}}{{.Module.Path}}\t{{.Module.Version}}\t{{.Module.Dir}}{{end}}', '.'],
+    // -buildvcs=false: `go list` stamps like `go build` does, and stamping
+    // cannot see a linked git worktree -- it fails there, or attributes a
+    // foreign repository's commit (#357, golang/go#58218). Nothing reads
+    // the stamp, and a licence inventory least of all.
+    ['list', '-buildvcs=false', '-deps', '-f', '{{if .Module}}{{.Module.Path}}\t{{.Module.Version}}\t{{.Module.Dir}}{{end}}', '.'],
     { cwd: REPO, encoding: 'utf8', maxBuffer: 32 * 1024 * 1024 },
   )
   const seen = new Map()
