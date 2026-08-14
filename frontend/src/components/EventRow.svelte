@@ -12,7 +12,7 @@
   let {
     event,
     deviceName,
-    // Concise mode (#341). count > 1 means this row stands for several
+    // Grouping (#341). count > 1 means this row stands for several
     // identical connections and the time cell shows the count instead --
     // the time is the same second on every row at any real rate, so it
     // is the least useful thing in the most prominent column.
@@ -215,7 +215,7 @@
     display: contents;
   }
 
-  /* Concise mode's collapsed row: the count takes the time column, big
+  /* A grouped collapsed row: the count takes the time column, big
      enough to scan down the left edge. A singleton keeps its timestamp
      instead -- a large "1" on every unrepeated row would be noise in a
      bigger font. */
