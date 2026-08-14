@@ -78,6 +78,20 @@ upgrading.
 
 ### Added
 
+- **A Group option in the live view** (#341). A toolbar button, off by
+  default, that collapses repeats of the same connection into one row
+  carrying a count -- so a host retrying the same thing four hundred
+  times costs one line instead of four hundred. Two connections count as
+  the same when their source, destination, port, protocol and outcome
+  all match, which is strict enough that nothing is merged that an
+  operator would want to read separately. Nothing is discarded: the
+  counts account for every event the ungrouped view would have shown,
+  and clicking a grouped row opens it to reveal its events (the most
+  recent 20, with the remainder stated rather than silently dropped).
+  Rows belonging to an active flag carry a marker in both modes. The
+  view keeps behaving exactly as it always has until the button is
+  pressed, and the choice is remembered per browser.
+
 - **A guided setup wizard for connecting a router** (#320). Menu →
   **Connect a router**, admin only. Every command comes out with your own
   values already in it — the address you are reaching MikroView on, the
@@ -497,6 +511,19 @@ upgrading.
   bare IP keeps working.
 
 ### Fixed
+
+- **Upgrading no longer leaves the browser showing the previous
+  version's interface** (#347). MikroView is installable as a web app,
+  which means a service worker keeps a copy of the interface so it opens
+  instantly. The server never told browsers how long to keep that copy,
+  and a browser left to guess can hold on to the file that detects new
+  versions for up to 24 hours — so an operator who pulled a new image,
+  restarted, and reloaded could be served the old interface for the rest
+  of the day, with no way to tell from inside the app that anything was
+  stale. Reported after it cost an hour of hunting for a container
+  problem that did not exist: the server was correct and said so, and the
+  browser was quietly ignoring it. Files whose names change with their
+  contents are still cached indefinitely, so this costs nothing on load.
 
 - **Typing `host:8080` into a browser now works** (#325). MikroView
   usually gets one published port on a host where 80 and 443 belong to

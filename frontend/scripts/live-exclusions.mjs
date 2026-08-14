@@ -10,7 +10,7 @@
 // new place", so that's what this checks.
 
 import { fileURLToPath } from 'url'
-import { session, check, done, feedPortScan } from './live-browser.mjs'
+import { session, check, done, feedPortScan, waitForFlag } from './live-browser.mjs'
 
 
 
@@ -24,6 +24,12 @@ async function openMenuView(label) {
   await page.click('.nav-menu .trigger')
   await page.click(`.nav-menu button:has-text("${label}")`)
 }
+
+// Confirm server-side before looking at the UI (#354). Without this the
+// scenario intermittently died on a bare locator timeout that could not
+// say whether the flag was missing or merely not rendered yet.
+const raised = await waitForFlag(page, '198.51.100.77')
+check(raised.ok, raised.message)
 
 await openMenuView('Flags')
 await page.waitForSelector('.card .type', { timeout: 15000 })

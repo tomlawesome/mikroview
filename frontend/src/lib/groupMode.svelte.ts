@@ -1,8 +1,13 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-// Whether the live view collapses repeats of the same connection into
-// one row (#341). Its own small module, matching how theme/colorway/
+// Whether the live view groups repeats of the same connection into one
+// row (#341). Its own small module, matching how theme/colorway/
 // retention/presets each get one rather than growing appState.
+//
+// Named groupMode rather than group to stay distinct from grouping.ts,
+// which holds the grouping itself: that file decides what counts as the
+// same connection, this one only records whether the operator has it
+// switched on.
 //
 // Persisted per browser, like the column widths and the retention
 // window: which way an operator prefers to read their own traffic is a
@@ -12,7 +17,7 @@
 // Off by default. The live view's job is one row per event; this is an
 // option on top of it, not a new mode it starts in.
 
-const STORAGE_KEY = 'mikroview:concise'
+const STORAGE_KEY = 'mikroview:group'
 
 function loadInitial(): boolean {
   try {
@@ -24,7 +29,7 @@ function loadInitial(): boolean {
   }
 }
 
-class ConciseState {
+class GroupModeState {
   enabled = $state(loadInitial())
 
   toggle() {
@@ -42,4 +47,4 @@ class ConciseState {
   }
 }
 
-export const conciseState = new ConciseState()
+export const groupModeState = new GroupModeState()
