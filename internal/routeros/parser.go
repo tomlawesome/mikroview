@@ -99,8 +99,20 @@ func clampField(s string) string {
 // None of these fields can legitimately contain a control character:
 // they are IPs, MAC addresses, RouterOS identifiers and protocol names.
 // See #285.
+//
+// Order matters here and is easy to get backwards: logging.Printable runs
+// first, clampField second. Printable replaces each invalid rune with the
+// 3-byte U+FFFD, so it can grow a string -- a run of stray continuation
+// bytes (attacker-chosen, not valid UTF-8 by construction) is decoded one
+// invalid byte at a time and each becomes a 3-byte replacement, up to 3x
+// longer than the input. Clamping before sanitising bounds the input to
+// maxFieldLen but not the output, which can then land back above it --
+// found by FuzzParse once the fuzz target started asserting the clamp
+// itself (#369) rather than only panics and port ranges. Clamping last
+// makes the maxFieldLen guarantee hold regardless of what Printable does
+// to the byte count.
 func safeField(s string) string {
-	return logging.Printable(clampField(s))
+	return clampField(logging.Printable(s))
 }
 
 // clampAll applies safeField to every extracted string field. Raw is
@@ -119,6 +131,7 @@ func (p *Parsed) clampAll() {
 	p.DstIP = safeField(p.DstIP)
 	p.NatIP = safeField(p.NatIP)
 	p.NatRaw = safeField(p.NatRaw)
+	p.Flags = safeField(p.Flags)
 }
 
 // The named return matters: clampAll runs in a defer, and with an
