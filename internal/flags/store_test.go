@@ -59,22 +59,39 @@ func TestOpenSkipsNilArrayElements(t *testing.T) {
 	}
 }
 
-func TestOpenMalformedFileStartsEmpty(t *testing.T) {
+// TestOpenMalformedFileFailsClosed pins issue #378's policy: a document
+// that exists but cannot be parsed is refused outright, not treated as
+// empty. Before the fix, Open returned a usable store with its backend
+// still attached, and the caller (main.go) logged a warning and kept
+// running -- so the very next persist call overwrote the malformed file
+// with near-empty in-memory state, destroying whatever was recoverable
+// in it. Open must now return (nil, err), so there is no store left
+// holding that backend to write over the file.
+func TestOpenMalformedFileFailsClosed(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "flags.json")
-	if err := os.WriteFile(path, []byte("not valid json"), 0o600); err != nil {
+	original := []byte("not valid json")
+	if err := os.WriteFile(path, original, 0o600); err != nil {
 		t.Fatal(err)
 	}
 	s, err := Open(path)
 	if err == nil {
-		t.Error("expected a non-nil informational error for a malformed file")
+		t.Fatal("expected a non-nil error for a malformed file, want fail-closed")
 	}
-	if len(s.List()) != 0 {
-		t.Errorf("expected a malformed file to start empty, got %d flags", len(s.List()))
+	if s != nil {
+		t.Error("expected a nil store on a load failure -- a non-nil store here would still carry a live backend")
 	}
-	// still usable despite the error
-	s.Add(TypePortScan, "1.2.3.4", "test", time.Now())
-	if len(s.List()) != 1 {
-		t.Error("store returned from Open() with a malformed file should still be usable")
+	// The whole point: nothing about a failed Open may touch the file
+	// that failed to load. Before the fix this held anyway on the very
+	// next line (Open never writes), but the actual bug was the store
+	// *returned* by Open still holding a live backend, so its first
+	// Add/persist call overwrote this file with near-empty state -- a
+	// step this test can no longer even reach, since s is nil.
+	after, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(after) != string(original) {
+		t.Errorf("the file changed across a failed Open: before %q, after %q", original, after)
 	}
 }
 
