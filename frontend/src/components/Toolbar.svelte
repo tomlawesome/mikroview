@@ -7,6 +7,7 @@
   import { viewportState } from '../lib/viewport.svelte'
   import ConnectionIndicator from './ConnectionIndicator.svelte'
   import DeviceStatus from './DeviceStatus.svelte'
+  import UptimeBadge from './UptimeBadge.svelte'
   import LogoLockup from './LogoLockup.svelte'
   import NavMenu from './NavMenu.svelte'
   import ThemeMenu from './ThemeMenu.svelte'
@@ -28,6 +29,7 @@
       <LogoLockup size={21} />
     </button>
     <ConnectionIndicator />
+    <UptimeBadge />
   </div>
 
   <DeviceStatus />
