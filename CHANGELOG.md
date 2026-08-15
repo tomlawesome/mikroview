@@ -57,6 +57,20 @@ rewritten.
   navigations), which is why this only surfaced when an operator tried
   to read `/api/stats` directly. Reported 2026-08-15.
 
+- **Logging out, changing your password, or deleting an account now also
+  ends that account's open live-tail connections**, not just its ordinary
+  requests. A `/api/ws` connection was only ever authenticated once, at
+  the moment it opened, and was never checked again for the rest of its
+  life -- so a session cookie that had just been signed out, rotated by a
+  password change, or deleted along with its account kept receiving live
+  firewall events over that socket regardless, contradicting the "signed
+  out immediately" promise the interface already made for both of the
+  first two. The connection now re-validates its session every 30
+  seconds (the same interval it already used to ping the browser) and
+  closes cleanly the moment that check fails, bounding exposure to at
+  most one interval instead of leaving it open indefinitely. Reported by
+  the post-release review of v0.2.0 (#375).
+
 ## [0.2.0] - 2026-08-14
 
 ### Removed
