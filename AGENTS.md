@@ -74,6 +74,34 @@ neighbouring tool also inherits its failure modes, its dependencies and
 its data licensing — see the next two sections for why the last of those
 is not free.
 
+## mikroview observes; it never scans or connects
+
+Owner decision, ratified 2026-08-15, and a design invariant, not a
+current limitation: **mikroview never probes, scans, or initiates a
+connection to any host on the operator's network — the router
+included.** It ingests what is pushed to it (syslog, router-state
+pushes) and fetches only its own external reference feeds (blocklists,
+network-class data, and their kin). The wizard's long-standing promise
+— "MikroView still never connects to your router" — is the special case
+of this general rule.
+
+Two reasons, either sufficient alone. An observer that starts probing
+changes character: it appears in other tools' logs as a scanner, and
+its trust model shifts from "a place logs go" to "a thing with reach
+into the network", which is a different product with a different
+security posture. And the honesty ethos depends on it: mikroview's
+evidence is what *arrived*, not what was elicited — a claim built on
+traffic the product itself provoked is a different kind of claim, and
+the interface has no way to mark the difference.
+
+The permitted shape for anything identification- or diagnosis-flavoured
+(#410 is the worked example): assemble the evidence already flowing,
+state conclusions with their confidence, and where an active step would
+genuinely help, **print the command for the operator to run** — never
+run it. A feature that needs mikroview itself to touch the network is
+either redesigned around pushed or passive data, or it belongs in a
+different tool.
+
 ## Check git state before starting work, and at any point you might be wrong about it
 
 Before writing code, and again any time you branch, merge, or resume work

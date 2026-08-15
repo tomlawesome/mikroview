@@ -38,7 +38,6 @@ import (
 	"github.com/tomlawesome/mikroview/internal/netclass"
 	"github.com/tomlawesome/mikroview/internal/notify"
 	"github.com/tomlawesome/mikroview/internal/oidc"
-	"github.com/tomlawesome/mikroview/internal/persist"
 	"github.com/tomlawesome/mikroview/internal/reputation"
 	"github.com/tomlawesome/mikroview/internal/routeros"
 	"github.com/tomlawesome/mikroview/internal/routerstate"
@@ -480,9 +479,7 @@ func main() {
 		flagsLog.Warn(err.Error())
 	}
 	fs, err := flags.OpenWithBackend(flagsBackend)
-	if err != nil {
-		flagsLog.Warn(fmt.Sprintf("%v (continuing with in-memory-only flag state)", err))
-	}
+	mustOpenStore(flagsLog, err)
 
 	// macRegistry backs the new-device/new-MAC detector (issue #103
 	// phase 1) -- see internal/device.MACRegistry's doc comment for why
@@ -494,9 +491,7 @@ func main() {
 		macLog.Warn(err.Error())
 	}
 	macRegistry, err := device.OpenMACRegistryWithBackend(macBackend)
-	if err != nil {
-		macLog.Warn(fmt.Sprintf("%v (continuing with in-memory-only MAC registry)", err))
-	}
+	mustOpenStore(macLog, err)
 
 	// RuleUsage (issue #102): a long-lived, persisted per-rule
 	// FirstSeen/LastSeen/Count record backing the stale-rule detector --
@@ -509,9 +504,7 @@ func main() {
 		rulesLog.Warn(err.Error())
 	}
 	ru, err := rules.OpenWithBackend(rulesBackend)
-	if err != nil {
-		rulesLog.Warn(fmt.Sprintf("%v (continuing with in-memory-only rule-usage state)", err))
-	}
+	mustOpenStore(rulesLog, err)
 
 	// Storage is resolved before any store opens: it decides whether
 	// this deployment persists to JSON files or Postgres, and performs
@@ -524,33 +517,22 @@ func main() {
 		os.Exit(1)
 	}
 	authStore, err := auth.OpenWithBackend(authBackend)
-	// A non-nil error from auth.Open, when persistence is actually
-	// configured, ALWAYS means "the accounts file exists but couldn't be
-	// read/parsed" -- Open returns (store, nil) for both "no persistence
-	// configured" and "file genuinely doesn't exist yet" (see its own
-	// doc comment), so this is never reached by a true fresh install.
-	// Falling through to the normal boot sequence here used to mean the
-	// in-memory store's Count() reads 0, which is *exactly* the state
-	// requireAuth treats as "no decision made yet" -- silently
-	// presenting a stranger with the first-run setup wizard on a
-	// previously-authenticated instance, indistinguishable in the logs
-	// from a genuine fresh install. That's a fail-OPEN on a security
-	// control, not an acceptable degrade-and-continue case like every
-	// other optional store above. Refuse to start instead: recovering
-	// requires an explicit, conscious operator action, and container/
-	// host access (the same trust anchor as every other CLI recovery
-	// path) is already sufficient to take it directly -- move or delete
-	// the broken file and restart, no dedicated CLI mode needed for
-	// something `mv`/`rm` already does.
-	if authShouldFailClosed(err, authBackend) {
-		authLog.Error(fmt.Sprintf(
-			"accounts file at %q exists but could not be loaded: %v -- refusing to start with authentication in an unknown state. "+
-				"If this deployment previously had accounts configured, this is NOT a fresh install: restore the file from a backup, "+
-				"or move/delete %q and restart to consciously re-arm the first-run setup screen (container/host access is required either way).",
-			cfg.Auth.StorePath, err, cfg.Auth.StorePath,
-		))
-		os.Exit(1)
-	}
+	// A non-nil error here, when persistence is actually configured,
+	// ALWAYS means "the accounts file exists but couldn't be
+	// read/parsed" -- OpenWithBackend returns (store, nil) for both "no
+	// persistence configured" and "file genuinely doesn't exist yet"
+	// (see its own doc comment), so this is never reached by a true
+	// fresh install. This used to be the one store in this boot
+	// sequence that failed closed at all: falling through with
+	// Count()==0 is exactly the state requireAuth treats as "no
+	// decision made yet," silently presenting a stranger with the
+	// first-run setup wizard on a previously-authenticated instance. It
+	// no longer needs to be a special case -- mustOpenStore now applies
+	// the same refusal to every persisted store below, for the same
+	// underlying reason (see #378): an unreadable-but-present document
+	// must never be treated as a blank one to build a live-backed store
+	// around.
+	mustOpenStore(authLog, err)
 	switch {
 	case authStore.Count() > 0:
 		authLog.Info(fmt.Sprintf("%d account(s) registered -- authentication is active", authStore.Count()))
@@ -573,71 +555,63 @@ func main() {
 		entitiesLog.Warn(err.Error())
 	}
 	entityStore, err := entities.OpenWithBackend(entityBackend)
-	if err != nil {
-		entitiesLog.Warn(fmt.Sprintf("%v (continuing with in-memory-only entity state)", err))
-	}
+	mustOpenStore(entitiesLog, err)
 	if n := entityStore.Seed(cfg.RuleNames, cfg.HostNames); n > 0 {
 		entitiesLog.Info(fmt.Sprintf("imported %d entries from config.yaml's ruleNames/hostNames (now UI-editable)", n))
 	}
 
 	// Tokens (issue #101): read-only API bearer tokens for service-to-
-	// service access -- optional persistence, same degrade-not-crash
-	// contract as Flags/DetectorSettings above (a missing/unwritable path
-	// just means token creation refuses with ErrTokenNotPersisted, not
-	// that mikroview fails to start).
+	// service access. Persistence itself is optional -- a missing/
+	// unconfigured path just means token creation refuses with
+	// ErrTokenNotPersisted, not that mikroview fails to start -- but a
+	// document that exists and can't be loaded is not that case; see
+	// mustOpenStore.
 	tokensLog := logging.New("tokens")
 	tokensBackend, err := persistence.backendFor(bootCtx, "tokens", cfg.Auth.TokensStorePath)
 	if err != nil {
 		tokensLog.Warn(err.Error())
 	}
 	tokenStore, err := auth.OpenTokenStoreWithBackend(tokensBackend)
-	if err != nil {
-		tokensLog.Warn(fmt.Sprintf("%v (continuing with in-memory-only, unpersisted token state)", err))
-	}
+	mustOpenStore(tokensLog, err)
 
-	// Audit (issue #112): the persisted admin-action accountability log --
-	// same optional-persistence, degrade-not-crash contract as every other
-	// store above (a missing/unwritable path just means entries don't
-	// survive a restart, not that mikroview fails to start).
+	// Audit (issue #112): the persisted admin-action accountability log.
+	// Persistence itself is optional -- a missing/unconfigured path just
+	// means entries don't survive a restart -- but a document that
+	// exists and can't be loaded is not that case; see mustOpenStore.
 	auditLog := logging.New("audit")
 	auditBackend, err := persistence.backendFor(bootCtx, "audit", cfg.Audit.StorePath)
 	if err != nil {
 		auditLog.Warn(err.Error())
 	}
 	auditStore, err := audit.OpenWithBackend(auditBackend)
-	if err != nil {
-		auditLog.Warn(fmt.Sprintf("%v (continuing with in-memory-only, unpersisted audit log)", err))
-	}
+	mustOpenStore(auditLog, err)
 
-	// The watchlist entry set (#243): same optional-persistence contract
-	// every small store here follows -- a backend error degrades to
-	// in-memory-only, it never stops startup.
+	// The watchlist entry set (#243). Persistence itself is optional; a
+	// document that exists and can't be loaded is not that case -- see
+	// mustOpenStore.
 	watchlistLog := logging.New("watchlist")
 	watchlistBackend, err := persistence.backendFor(bootCtx, "watchlist", cfg.Watchlist.StorePath)
 	if err != nil {
 		watchlistLog.Warn(err.Error())
 	}
 	watchlistStore, err := watchlist.OpenWithBackend(watchlistBackend)
-	if err != nil {
-		watchlistLog.Warn(fmt.Sprintf("%v (continuing with in-memory-only, unpersisted watchlist)", err))
-	}
+	mustOpenStore(watchlistLog, err)
 
 	// The suggestion candidate pool (#243 slice 5): watchlist entries
-	// suggested from data RouterOS has already pushed. Same
-	// optional-persistence contract as the watchlist itself -- losing
-	// this on restart just means every candidate regenerates at Off,
-	// which loses an operator's Hide/accept-in-progress state but never
-	// anything RunPeriodicSync (started below, once routerState exists)
-	// can't rebuild.
+	// suggested from data RouterOS has already pushed. Persistence
+	// itself is optional -- losing this on restart just means every
+	// candidate regenerates at Off, which loses an operator's
+	// Hide/accept-in-progress state but never anything RunPeriodicSync
+	// (started below, once routerState exists) can't rebuild -- but a
+	// document that exists and can't be loaded is not that case; see
+	// mustOpenStore.
 	suggestLog := logging.New("suggest")
 	suggestBackend, err := persistence.backendFor(bootCtx, "suggestions", cfg.Watchlist.SuggestionsStorePath)
 	if err != nil {
 		suggestLog.Warn(err.Error())
 	}
 	suggestStore, err := suggest.OpenWithBackend(suggestBackend)
-	if err != nil {
-		suggestLog.Warn(fmt.Sprintf("%v (continuing with in-memory-only, unpersisted suggestions)", err))
-	}
+	mustOpenStore(suggestLog, err)
 
 	// The watchlist's match log has no in-memory-only mode (durability
 	// is the entire point of it, see internal/matchlog's package doc
@@ -762,9 +736,7 @@ func main() {
 		detectorsLog.Warn(err.Error())
 	}
 	detectorSettings, err := detect.OpenSettingsStoreWithBackend(detectorBackend, seed)
-	if err != nil {
-		detectorsLog.Warn(fmt.Sprintf("%v (continuing with in-memory-only detector toggle state)", err))
-	}
+	mustOpenStore(detectorsLog, err)
 	// bl (issue #113 Part B): always constructed, even with zero enabled
 	// sources (cfg.Blocklist.Sources == []) -- Match/Refresh are both
 	// harmless no-ops in that case (see internal/blocklist.Blocklist's
@@ -1786,18 +1758,33 @@ func openAuthStoreForCLI(cmd string) (*auth.Store, func(), error) {
 	return store, st.Close, nil
 }
 
-// authShouldFailClosed reports whether main()'s boot sequence should
-// refuse to start rather than continue with an unauthenticated,
-// zero-account in-memory auth.Store. err is auth.Open's own return
-// value; storePath is the configured auth.storePath. auth.Open only
-// ever returns a non-nil error when a persistence path IS configured
-// and the file at it exists but couldn't be read/parsed -- both "no
-// persistence configured" (storePath == "") and "file genuinely
-// doesn't exist yet" (a real fresh install) return a nil error, so
-// requiring storePath != "" here is belt-and-braces rather than the
-// actual distinguishing signal, which is err itself.
-func authShouldFailClosed(err error, backend persist.Backend) bool {
-	return err != nil && backend != nil
+// mustOpenStore is main()'s boot-sequence policy for every persisted
+// store's OpenWithBackend/OpenSettingsStoreWithBackend call (issue
+// #378): err is nil for both "persistence not configured" and "no
+// document written yet" (a real fresh install), and non-nil exactly
+// when a document exists but could not be loaded or parsed -- see
+// internal/persist.Open, which every one of those constructors now
+// funnels through.
+//
+// That second case is refused outright rather than logged and
+// continued. The store returned on that path used to keep its live
+// backend attached (see #378): the process ran with near-empty
+// in-memory state and a warning claiming "in-memory-only," and the next
+// persist call silently overwrote the operator's actual on-disk
+// document with that near-empty state. Every OpenWithBackend now
+// returns (nil, err) instead, so there is no half-built store left to
+// fall through with -- refusing to start is the only option left, and
+// the error's own message (built by persist.StartupError) already names
+// the store, its location, the cause, and the remedy: restore from a
+// backup, or deliberately move the document aside to start fresh.
+// log is the exact logger the call site already built for this store,
+// so the message keeps that store's own component tag.
+func mustOpenStore(log *slog.Logger, err error) {
+	if err == nil {
+		return
+	}
+	log.Error(err.Error())
+	os.Exit(1)
 }
 
 // runRecoverAdminAccount backs `-recover-admin-account` -- the way back
