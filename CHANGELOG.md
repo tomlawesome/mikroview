@@ -16,6 +16,16 @@ rewritten.
 
 ## [Unreleased]
 
+### Added
+
+- **An uptime readout in the toolbar**, next to the connection
+  indicator: how long the server has been running, counting live,
+  visible on every view rather than tucked into a menu. The number
+  comes from the server once and counts on locally, re-syncing every
+  minute so a restarted server cannot keep showing its predecessor's
+  uptime for long. `/api/healthz` grows an `uptimeSeconds` field
+  alongside the existing human-readable `uptime` string.
+
 ## [0.2.0] - 2026-08-14
 
 ### Removed
