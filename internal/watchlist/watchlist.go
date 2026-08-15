@@ -211,7 +211,10 @@ type Store struct {
 // Open loads path if it exists (a missing file is the expected first-run
 // case) and returns a Store that persists to it from then on. An empty
 // path keeps everything in-memory only, the same optional-persistence
-// contract every other small store in this codebase follows.
+// contract every other small store in this codebase follows. A document
+// that exists but cannot be read or parsed is a hard error (issue #378):
+// the caller gets (nil, err) rather than a store whose live backend
+// would overwrite that document on the first write. See persist.Open.
 func Open(path string) (*Store, error) {
 	if path == "" {
 		return OpenWithBackend(nil)
@@ -224,21 +227,28 @@ func Open(path string) (*Store, error) {
 func OpenWithBackend(b persist.Backend) (*Store, error) {
 	s := &Store{backend: b, entries: make(map[string]*Entry)}
 
-	data, version, err := persist.LoadDocument(context.Background(), b)
+	version, existed, err := persist.Open(context.Background(), b, "the watchlist", func(data []byte) error {
+		var file storeFile
+		if err := json.Unmarshal(data, &file); err != nil {
+			return err
+		}
+		for _, e := range file.Entries {
+			// A JSON array containing `null` is syntactically valid and
+			// unmarshals into a nil *Entry -- skipped here so a
+			// malformed entry can't crash startup by indexing through a
+			// nil pointer (same guard every sibling store applies).
+			if e == nil {
+				continue
+			}
+			s.entries[e.ID] = e
+		}
+		return nil
+	})
 	if err != nil {
-		return s, err
+		return nil, err
 	}
-	if data == nil {
-		return s, nil
-	}
-	s.version = version
-
-	var file storeFile
-	if err := json.Unmarshal(data, &file); err != nil {
-		return s, err
-	}
-	for _, e := range file.Entries {
-		s.entries[e.ID] = e
+	if existed {
+		s.version = version
 	}
 	return s, nil
 }

@@ -279,11 +279,10 @@ type SettingsStore struct {
 // expected first-run case, not an error) and returns a Store that
 // persists to it from then on. An empty path is the expected
 // "persistence not configured" case: a fully usable, in-memory-only
-// Store is returned. A malformed file is treated as empty rather than
-// failing -- a corrupted settings file should never block mikroview
-// from starting. Either way the returned Store is always safe to use
-// unconditionally; a non-nil error is only ever informational, for the
-// caller to log.
+// Store is returned. A document that exists but cannot be read or
+// parsed is a hard error (issue #378): the caller gets (nil, err)
+// rather than a store whose live backend would overwrite that document
+// on the first write. See persist.Open.
 //
 // seed supplies each detector's config.yaml-derived starting point. On
 // a clean deployment (no file yet) seed is used verbatim. Any detector
@@ -308,21 +307,21 @@ func OpenSettingsStoreWithBackend(b persist.Backend, seed map[DetectorName]Setti
 		s.byName[name] = st
 	}
 
-	data, version, err := persist.LoadDocument(context.Background(), b)
+	version, existed, err := persist.Open(context.Background(), b, "the detector settings store", func(data []byte) error {
+		var onDisk map[DetectorName]Settings
+		if err := json.Unmarshal(data, &onDisk); err != nil {
+			return err
+		}
+		for name, st := range onDisk {
+			s.byName[name] = st
+		}
+		return nil
+	})
 	if err != nil {
-		return s, err
+		return nil, err
 	}
-	if data == nil {
-		return s, nil
-	}
-	s.version = version
-
-	var onDisk map[DetectorName]Settings
-	if err := json.Unmarshal(data, &onDisk); err != nil {
-		return s, err
-	}
-	for name, st := range onDisk {
-		s.byName[name] = st
+	if existed {
+		s.version = version
 	}
 	return s, nil
 }

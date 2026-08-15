@@ -48,7 +48,12 @@ func TestOpenSettingsStorePersistsAndReloads(t *testing.T) {
 	}
 }
 
-func TestOpenSettingsStoreMalformedFileTreatedAsSeed(t *testing.T) {
+// TestOpenSettingsStoreMalformedFileFailsClosed pins issue #378's
+// policy: a document that exists but cannot be parsed is refused
+// outright, not silently replaced by the seed. See
+// flags.TestOpenMalformedFileFailsClosed for the full reasoning -- same
+// fix, same shape, applied through the same shared persist.Open helper.
+func TestOpenSettingsStoreMalformedFileFailsClosed(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "detector-settings.json")
 	if err := os.WriteFile(path, []byte("not json"), 0o600); err != nil {
 		t.Fatal(err)
@@ -56,10 +61,10 @@ func TestOpenSettingsStoreMalformedFileTreatedAsSeed(t *testing.T) {
 
 	s, err := OpenSettingsStore(path, DefaultSettingsMap())
 	if err == nil {
-		t.Error("expected a non-nil informational error for a malformed file")
+		t.Fatal("expected a non-nil error for a malformed file, want fail-closed")
 	}
-	if !s.Get(DetectorPortScan).Enabled {
-		t.Error("expected a malformed file to fall back to the seed, not block startup")
+	if s != nil {
+		t.Error("expected a nil store on a load failure -- a non-nil store here would still carry a live backend")
 	}
 }
 

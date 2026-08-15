@@ -56,21 +56,34 @@ func TestOpenMACRegistrySkipsNilArrayElements(t *testing.T) {
 	}
 }
 
-func TestOpenMACRegistryMalformedFileStartsEmpty(t *testing.T) {
+// TestOpenMACRegistryMalformedFileFailsClosed pins issue #378's policy:
+// a document that exists but cannot be parsed is refused outright, not
+// treated as empty. See flags.TestOpenMalformedFileFailsClosed for the
+// full reasoning -- same fix, same shape, applied through the same
+// shared persist.Open helper.
+func TestOpenMACRegistryMalformedFileFailsClosed(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "mac-registry.json")
-	if err := os.WriteFile(path, []byte("not valid json"), 0o600); err != nil {
+	original := []byte("not valid json")
+	if err := os.WriteFile(path, original, 0o600); err != nil {
 		t.Fatal(err)
 	}
 	r, err := OpenMACRegistry(path)
 	if err == nil {
-		t.Error("expected a non-nil informational error for a malformed file")
+		t.Fatal("expected a non-nil error for a malformed file, want fail-closed")
 	}
-	if len(r.List()) != 0 {
-		t.Errorf("expected a malformed file to start empty, got %d entries", len(r.List()))
+	if r != nil {
+		t.Error("expected a nil registry on a load failure -- a non-nil registry here would still carry a live backend")
 	}
-	// still usable despite the error
-	if !r.Seen("aa:bb:cc:dd:ee:ff", time.Now()) {
-		t.Error("registry returned from OpenMACRegistry() with a malformed file should still be usable")
+	// See flags.TestOpenMalformedFileFailsClosed's identical assertion
+	// for why this is the actual regression check: the file must be
+	// exactly as it was, and there is no longer a store left that could
+	// have written over it even if this assertion were skipped.
+	after, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(after) != string(original) {
+		t.Errorf("the file changed across a failed OpenMACRegistry: before %q, after %q", original, after)
 	}
 }
 
