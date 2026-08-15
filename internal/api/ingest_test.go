@@ -372,3 +372,69 @@ func TestIngestOversizedStateIsRefused(t *testing.T) {
 		t.Errorf("the cap-crossing page: status = %d, want 400", resp.StatusCode)
 	}
 }
+
+// Every ingest push used to write an audit row. A RouterOS push script
+// runs every 15-30 minutes, the audit log is pruned FIFO at 10,000
+// entries, and the shipped rate limit allows 120 per 15 minutes -- so
+// one ingest token produced 11,520 rows a day and rolled the *entire*
+// admin trail (token.create, user.create, admin transfers) in about 21
+// hours. #186 already documents that any RouterOS user holding the
+// built-in read policy can print an ingest token out of a script.
+//
+// A successful, scheduled push is not an accountability event; what it
+// erases is. Owner decision on #285 finding 15.
+func TestRoutineIngestPushesDoNotWriteAuditRows(t *testing.T) {
+	s := &Server{}
+	now := time.Now()
+
+	if !s.noteIngest("router-a", "dns-static", true, now) {
+		t.Fatal("the first push of a kind must be recorded -- it is genuinely new information")
+	}
+	for i := 1; i <= 500; i++ {
+		if s.noteIngest("router-a", "dns-static", true, now.Add(time.Duration(i)*time.Minute)) {
+			t.Fatalf("push %d wrote an audit row; a routine repeat must not", i)
+		}
+	}
+}
+
+// The gate must not swallow the things worth knowing: a new kind, an
+// outcome changing, or enough time passing that the trail would
+// otherwise fall silent.
+func TestNotableIngestEventsStillWriteAuditRows(t *testing.T) {
+	s := &Server{}
+	now := time.Now()
+
+	s.noteIngest("router-a", "dns-static", true, now)
+	if !s.noteIngest("router-a", "dhcp-lease", true, now) {
+		t.Error("a kind this device has not pushed before must be recorded")
+	}
+	if !s.noteIngest("router-b", "dns-static", true, now) {
+		t.Error("a device that has not pushed before must be recorded")
+	}
+	if !s.noteIngest("router-a", "dns-static", false, now.Add(time.Minute)) {
+		t.Error("a push starting to fail must be recorded")
+	}
+	if !s.noteIngest("router-a", "dns-static", true, now.Add(2*time.Minute)) {
+		t.Error("a device recovering must be recorded")
+	}
+	if !s.noteIngest("router-a", "dns-static", true, now.Add(2*time.Minute+ingestAuditInterval)) {
+		t.Error("a long-running device must still leave a periodic trace")
+	}
+}
+
+// Refusals go through the same gate deliberately: auditing every one
+// would move the flood a branch over, since a decode error is entirely
+// caller-controlled and cheaper to produce than a valid push.
+func TestRepeatedIngestRefusalsDoNotFloodTheAuditLog(t *testing.T) {
+	s := &Server{}
+	now := time.Now()
+
+	if !s.noteIngest("router-a", "", false, now) {
+		t.Fatal("the first refusal must be recorded")
+	}
+	for i := 1; i <= 500; i++ {
+		if s.noteIngest("router-a", "", false, now.Add(time.Duration(i)*time.Second)) {
+			t.Fatalf("refusal %d wrote an audit row; a repeat of the same refusal must not", i)
+		}
+	}
+}

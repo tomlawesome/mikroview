@@ -270,10 +270,12 @@ From least to most isolated:
    Entra ID, ...), never on the mikroview host — compromising the host
    doesn't expose anything usable against an SSO-provisioned account.
    Local and SSO accounts can coexist.
-3. **(Planned) Off-box database backend.** Moving persisted state to a
-   separately-secured, network-restricted database closes the "read
-   one file, get everything" exposure that local accounts still have
-   today — tracked in
+3. **Off-box database backend (Postgres, optional).** Moving persisted
+   state to a separately-secured, network-restricted database closes
+   the "read one file, get everything" exposure that local accounts
+   still have today. See
+   [docs/configuration.md](docs/configuration.md#postgres-optional) for
+   setup — added in
    [issue #131](https://github.com/tomlawesome/mikroview/issues/131).
 
 Pick the level that matches your network: local accounts are the floor,

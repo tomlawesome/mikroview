@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -67,7 +68,7 @@ func TestIngestRaisesNewDeviceFlagOnceForFirstSighting(t *testing.T) {
 	logger := slog.Default()
 
 	rm := syslog.RawMessage{SourceIP: "192.168.1.1", Data: []byte(firewallLineWithMAC), RecvTime: time.Now()}
-	ingestOneRecovered(logger, rm, st, devices, macRegistry, fs, h, geo, detector, ru, naming.Resolver{}, nil)
+	ingestOneRecovered(logger, rm, st, devices, macRegistry, fs, h, geo, detector, ru, naming.Resolver{}, nil, nil)
 
 	list := fs.List()
 	var found *flags.Flag
@@ -99,7 +100,7 @@ func TestIngestDoesNotReRaiseNewDeviceFlagOnSubsequentEvents(t *testing.T) {
 
 	for i := 0; i < 3; i++ {
 		rm := syslog.RawMessage{SourceIP: "192.168.1.1", Data: []byte(firewallLineWithMAC), RecvTime: now.Add(time.Duration(i) * time.Minute)}
-		ingestOneRecovered(logger, rm, st, devices, macRegistry, fs, h, geo, detector, ru, naming.Resolver{}, nil)
+		ingestOneRecovered(logger, rm, st, devices, macRegistry, fs, h, geo, detector, ru, naming.Resolver{}, nil, nil)
 	}
 
 	var newDeviceFlags []flags.Flag
@@ -125,7 +126,7 @@ func TestIngestSkipsNewDeviceFlagForEmptySrcMAC(t *testing.T) {
 
 	const lineWithoutMAC = "A|wan-in|forward: in:ether1 out:bridge1, connection-state:new, proto TCP (SYN), 203.0.113.5:51234->192.168.1.10:443, len 60"
 	rm := syslog.RawMessage{SourceIP: "192.168.1.1", Data: []byte(lineWithoutMAC), RecvTime: time.Now()}
-	ingestOneRecovered(logger, rm, st, devices, macRegistry, fs, h, geo, detector, ru, naming.Resolver{}, nil)
+	ingestOneRecovered(logger, rm, st, devices, macRegistry, fs, h, geo, detector, ru, naming.Resolver{}, nil, nil)
 
 	for _, f := range fs.List() {
 		if f.Type == flags.TypeNewDevice {
@@ -215,18 +216,63 @@ func TestHTTPSRedirectTargetRejectsUnlistedHost(t *testing.T) {
 	}
 }
 
-// TestHTTPSRedirectTargetEmptyAllowlistFallsBackToPriorBehavior covers
-// the case TLS.Hosts is left unconfigured (auto-detected SANs instead
-// -- see internal/servertls) -- with no explicit ground truth to
-// validate against, this keeps the original echo-Host behavior rather
-// than guessing.
-func TestHTTPSRedirectTargetEmptyAllowlistFallsBackToPriorBehavior(t *testing.T) {
-	r := httptest.NewRequest(http.MethodGet, "http://mikroview.local/", nil)
-	r.Host = "mikroview.local"
+// An unset TLS.Hosts is the *shipped default* -- defaults() sets
+// TLS.Enabled and Listen.HTTPRedirect but never TLS.Hosts, and
+// deploy/docker-compose.yml maps host port 80 straight at this listener.
+// So the allowlist was empty out of the box and this function fell back
+// to echoing r.Host into a 308 Location: an unauthenticated Host-header
+// reflection in the default configuration, in a function whose own doc
+// comment claims it closes "a known vulnerability class".
+//
+// The guard now derives its own known-good set from the machine rather
+// than giving up, so it works with nothing configured. See
+// localRedirectHosts, and #283 finding 2.
+func TestHTTPSRedirectTargetWithNoAllowlistRefusesAnArbitraryHost(t *testing.T) {
+	r := httptest.NewRequest(http.MethodGet, "http://mikroview.local/some/path?x=1", nil)
+	r.Host = "attacker.example"
+
 	got := httpsRedirectTarget(r, nil)
-	want := "https://mikroview.local/"
-	if got != want {
-		t.Errorf("httpsRedirectTarget with an empty allowlist = %q, want %q", got, want)
+	if strings.Contains(got, "attacker.example") {
+		t.Errorf("httpsRedirectTarget with no configured allowlist = %q -- an arbitrary Host still reaches the Location header", got)
+	}
+	// The path and query still have to survive, or the redirect is
+	// useless for its actual purpose.
+	if !strings.HasSuffix(got, "/some/path?x=1") {
+		t.Errorf("httpsRedirectTarget = %q, want the original path and query preserved", got)
+	}
+}
+
+// The derived set has to contain something usable, or every redirect
+// would point somewhere that does not answer.
+func TestLocalRedirectHostsPrefersARealAddressOverLoopback(t *testing.T) {
+	hosts := localRedirectHosts()
+	if len(hosts) == 0 {
+		t.Fatal("localRedirectHosts returned nothing -- httpsRedirectTarget would fall back to echoing Host")
+	}
+	if hosts[0] == "127.0.0.1" || hosts[0] == "localhost" {
+		// Only legitimate on a machine with no non-loopback address at
+		// all, which a CI container does have.
+		t.Errorf("first host is %q -- an unrecognised Host is rewritten to hosts[0], and redirecting a LAN client to loopback is useless", hosts[0])
+	}
+	if !slices.Contains(hosts, "127.0.0.1") {
+		t.Error("loopback missing -- a request that legitimately arrives as 127.0.0.1 would be rewritten away from it")
+	}
+}
+
+// A Host mikroview genuinely answers to must still be honoured, or
+// reaching it by its own name or address would bounce somewhere else.
+func TestHTTPSRedirectTargetKeepsAHostTheMachineActuallyHas(t *testing.T) {
+	hosts := localRedirectHosts()
+	if len(hosts) == 0 {
+		t.Skip("no local hosts enumerable in this environment")
+	}
+	for _, h := range hosts {
+		r := httptest.NewRequest(http.MethodGet, "http://example/", nil)
+		r.Host = h
+		want := "https://" + h + "/"
+		if got := httpsRedirectTarget(r, nil); got != want {
+			t.Errorf("httpsRedirectTarget for own host %q = %q, want %q", h, got, want)
+		}
 	}
 }
 
@@ -253,6 +299,40 @@ func TestSecurityHeadersSetOnEveryResponse(t *testing.T) {
 	securityHeaders(inner, true).ServeHTTP(rr2, httptest.NewRequest(http.MethodGet, "/", nil))
 	if rr2.Header().Get("Strict-Transport-Security") == "" {
 		t.Error("expected an HSTS header when hsts=true")
+	}
+}
+
+// TestStaticCacheHeaders pins the two rules the upgrade path depends on
+// (#347): content-hashed assets may be kept indefinitely, and everything
+// with a stable filename must be revalidated.
+//
+// sw.js is the case worth stating out loud. Without an explicit header a
+// browser may reuse a cached service worker for up to 24 hours, never
+// notice the new one, and go on serving a precached app shell from the
+// previous release -- an upgraded server showing a days-old UI, with
+// every server-side signal correctly reporting the new version.
+func TestStaticCacheHeaders(t *testing.T) {
+	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) })
+
+	for _, tc := range []struct {
+		path string
+		want string
+		why  string
+	}{
+		{"/assets/index-BShEGKey.js", "public, max-age=31536000, immutable", "content-hashed: the name changes when the bytes do"},
+		{"/assets/index-CE5qYX4Y.css", "public, max-age=31536000, immutable", "content-hashed"},
+		{"/sw.js", "no-cache", "stable name, and the file that decides whether an upgrade is noticed at all"},
+		{"/registerSW.js", "no-cache", "stable name"},
+		{"/", "no-cache", "index.html under a stable name"},
+		{"/index.html", "no-cache", "stable name"},
+		{"/manifest.webmanifest", "no-cache", "stable name"},
+		{"/pwa-192x192.png", "no-cache", "stable name -- icons are not hashed"},
+	} {
+		rr := httptest.NewRecorder()
+		staticCacheHeaders(inner).ServeHTTP(rr, httptest.NewRequest(http.MethodGet, tc.path, nil))
+		if got := rr.Header().Get("Cache-Control"); got != tc.want {
+			t.Errorf("Cache-Control for %s = %q, want %q (%s)", tc.path, got, tc.want, tc.why)
+		}
 	}
 }
 

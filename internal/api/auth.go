@@ -4,6 +4,7 @@ package api
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -126,8 +127,11 @@ func (s *Server) sessionUser(r *http.Request, now time.Time) (*auth.User, bool) 
 
 // readOnlyRoutes is the only handler set a bearer API token (issue
 // #101) can ever reach -- deliberately its own separate *http.ServeMux
-// with just these four GET routes registered, rather than a per-request
-// allowlist check layered in front of the real mux. That's what makes
+// with just these five GET routes registered, rather than a per-request
+// allowlist check layered in front of the real mux. When this list
+// changes, update the route list in TokensOverlay.svelte's hint text
+// too -- it went stale once already (#326: four routes listed, five
+// served). That's what makes
 // "a token can never reach a write/clear/config endpoint" structural:
 // there is no code path from a bearer-authenticated request to
 // handleFlagsClear, handleDetectorSettingsUpdate, handleAuthCreateUser,
@@ -372,20 +376,28 @@ var authErrorMessages = map[error]string{
 // authErrorMessages (falling back to a generic one for anything not
 // listed, logging the real error server-side so it's still
 // diagnosable) and writes it with status.
-func writeAuthError(w http.ResponseWriter, err error, status int) {
+func writeAuthError(w http.ResponseWriter, r *http.Request, err error, status int) {
 	msg, ok := authErrorMessages[err]
 	if !ok {
-		authLog.Warn(err.Error())
+		// The route is ours (server-controlled), so naming it is safe
+		// and turns a bare error into one that says where to look.
+		authLog.Warn(fmt.Sprintf("%s %s: %v", r.Method, r.URL.Path, err))
 		msg = "unable to complete the request"
 	}
 	http.Error(w, msg, status)
 }
 
-// handleAuthSkip permanently disables authentication for this
-// deployment (see auth.Store.Disable) -- only reachable while
-// Count()==0 (requireAuth's bootstrap-exempt window; Disable itself
-// also refuses otherwise, as a second guard). No session is created;
-// there's nothing to log into.
+// credentialsRequest is the body of both login and first-run
+// registration: the username and password, and nothing else.
+//
+// It briefly carried the doc comment of a deleted handleAuthSkip
+// function, left behind when that handler was removed. Go attaches a
+// preceding comment block to whatever declaration follows it, so `go
+// doc` presented the struct that carries every password this
+// application ever receives as "permanently disables authentication for
+// this deployment", referring to an auth.Store.Disable that no longer
+// exists. No runtime effect; the cost was to anyone auditing the auth
+// surface, in the one file where being misled is most expensive.
 type credentialsRequest struct {
 	Username string `json:"username"`
 	Password string `json:"password"`
@@ -411,7 +423,7 @@ func (s *Server) handleAuthRegister(w http.ResponseWriter, r *http.Request) {
 		case auth.ErrPasswordTooShort, auth.ErrUsernameInvalid, auth.ErrUsernameLength:
 			status = http.StatusBadRequest
 		}
-		writeAuthError(w, err, status)
+		writeAuthError(w, r, err, status)
 		return
 	}
 
@@ -465,6 +477,90 @@ func (s *Server) handleAuthLogin(w http.ResponseWriter, r *http.Request) {
 	sess := s.Sessions.Create(user.ID, now)
 	s.setSessionCookie(w, sess.ID)
 	writeJSON(w, http.StatusOK, map[string]any{"username": user.Username, "role": user.Role})
+}
+
+type changePasswordRequest struct {
+	CurrentPassword string `json:"currentPassword"`
+	NewPassword     string `json:"newPassword"`
+}
+
+// handleAuthChangePassword lets a signed-in user change their own
+// password (#294 item 4).
+//
+// There was no route for this at all: changing a password meant
+// -recover-admin-account, which needs host access. So an operator who
+// suspected their credential was known had no way to act on it from the
+// interface, and no way to end other sessions either -- the two halves
+// of the same problem, since the session ceiling (#294 item 3) bounds
+// how long a stolen session lives but does nothing about one right now.
+//
+// Changing the password is therefore also "sign out everywhere":
+// SetPassword records PasswordChangedAt, which invalidates every session
+// issued before it -- including this browser's, so a fresh one is issued
+// here. Same pattern completeOIDCLink already uses for the same reason.
+func (s *Server) handleAuthChangePassword(w http.ResponseWriter, r *http.Request) {
+	now := time.Now()
+	user, ok := s.sessionUser(r, now)
+	if !ok {
+		http.Error(w, "sign in first", http.StatusUnauthorized)
+		return
+	}
+
+	var req changePasswordRequest
+	if err := decodeJSONBody(w, r, &req); err != nil {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	// An SSO-only account has no local password to change, and inventing
+	// one here would quietly create a second way into an account whose
+	// owner believes it is federated.
+	if !user.LocalPassword() {
+		http.Error(w, "this account signs in through your identity provider and has no local password to change", http.StatusConflict)
+		return
+	}
+
+	// Rate-limited on the same limiter as login, keyed by user. The
+	// current password is a credential and this is a guess at it, so an
+	// endpoint that verifies one without counting the attempt is a
+	// brute-force oracle that happens to need a session -- and a session
+	// is exactly what an attacker who has stolen a cookie already has.
+	userKey := "user:" + strings.ToLower(user.Username)
+	if !s.LoginLimiter.Reserve(userKey, now) {
+		http.Error(w, "too many attempts, try again later", http.StatusTooManyRequests)
+		return
+	}
+	if _, err := s.Auth.Authenticate(user.Username, req.CurrentPassword, now); err != nil {
+		// Reservation stays claimed: that is what counts the failure.
+		http.Error(w, "current password is incorrect", http.StatusUnauthorized)
+		return
+	}
+	s.LoginLimiter.Release(userKey, now)
+
+	if req.NewPassword == req.CurrentPassword {
+		http.Error(w, "the new password is the same as the current one", http.StatusBadRequest)
+		return
+	}
+	if err := s.Auth.SetPassword(user.Username, req.NewPassword, now); err != nil {
+		if errors.Is(err, auth.ErrPasswordTooShort) {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		http.Error(w, "could not change the password", http.StatusInternalServerError)
+		return
+	}
+
+	// Every session issued before now is dead by PasswordChangedAt, but
+	// that is only enforced on the next request each one makes. Dropping
+	// them here means they are gone immediately, which is what an
+	// operator acting on a suspected theft is actually asking for.
+	s.Sessions.RevokeAllForUser(user.ID)
+
+	s.Audit.Record(user.Username, "account.password_changed", user.Username, "sessions ended: all")
+
+	sess := s.Sessions.Create(user.ID, now)
+	s.setSessionCookie(w, sess.ID)
+	writeJSON(w, http.StatusOK, map[string]any{"changed": true, "otherSessionsEnded": true})
 }
 
 func (s *Server) handleAuthLogout(w http.ResponseWriter, r *http.Request) {
@@ -523,7 +619,7 @@ func (s *Server) handleAuthCreateUser(w http.ResponseWriter, r *http.Request) {
 	// refuses it too -- this exists to give a usable status and message
 	// instead of a 500.
 	if req.Role == string(auth.RoleAdmin) {
-		writeAuthError(w, auth.ErrSingleAdmin, http.StatusBadRequest)
+		writeAuthError(w, r, auth.ErrSingleAdmin, http.StatusBadRequest)
 		return
 	}
 
@@ -536,7 +632,7 @@ func (s *Server) handleAuthCreateUser(w http.ResponseWriter, r *http.Request) {
 		case auth.ErrPasswordTooShort, auth.ErrSingleAdmin, auth.ErrUsernameInvalid, auth.ErrUsernameLength:
 			status = http.StatusBadRequest
 		}
-		writeAuthError(w, err, status)
+		writeAuthError(w, r, err, status)
 		return
 	}
 	s.Audit.Record(auditActor(r), "user.create", user.Username, "role="+string(user.Role))
@@ -619,7 +715,7 @@ func (s *Server) handleAuthDeleteUser(w http.ResponseWriter, r *http.Request) {
 		case auth.ErrCannotDeleteAdmin:
 			status = http.StatusConflict
 		}
-		writeAuthError(w, err, status)
+		writeAuthError(w, r, err, status)
 		return
 	}
 

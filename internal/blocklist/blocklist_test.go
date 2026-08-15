@@ -25,7 +25,7 @@ func TestParseSpamhausSkipsCommentsAndBlankLines(t *testing.T) {
 not-a-cidr ; should be skipped
 203.0.113.0/24
 `)
-	prefixes, err := parseSpamhaus(body)
+	prefixes, _, err := parseSpamhaus(body)
 	if err != nil {
 		t.Fatalf("parseSpamhaus: %v", err)
 	}
@@ -49,7 +49,7 @@ func TestParseEmergingThreatsCompromised(t *testing.T) {
 not-an-ip
 203.0.113.9
 `)
-	prefixes, err := parseEmergingThreatsCompromised(body)
+	prefixes, _, err := parseEmergingThreatsCompromised(body)
 	if err != nil {
 		t.Fatalf("parseEmergingThreatsCompromised: %v", err)
 	}
@@ -269,7 +269,7 @@ func TestRefreshTruncatesAtCombinedEntryCap(t *testing.T) {
 }
 
 func TestKnownSourcesMatchesRegistryOrder(t *testing.T) {
-	want := []Source{SourceSpamhausDROP, SourceSpamhausEDROP, SourceEmergingThreatsCompromised}
+	want := []Source{SourceSpamhausDROP, SourceEmergingThreatsCompromised}
 	got := KnownSources()
 	if len(got) != len(want) {
 		t.Fatalf("KnownSources() = %v, want %v", got, want)
@@ -356,5 +356,67 @@ func TestSearchRangesIsFastAtCap(t *testing.T) {
 	}
 	if elapsed > 2*time.Second {
 		t.Errorf("%d lookups against a %d-entry table took %s, expected well under 2s for an O(log n) search", iterations, len(ranges), elapsed)
+	}
+}
+
+// Spamhaus's DROP terms require that "credit must be given to Spamhaus
+// Project, and the date and © text should remain with the file and
+// data". That text lives in the feed's leading ";" comment block, which
+// the parser used to discard outright -- so this pins that it survives
+// parsing, because losing it is a licence-compliance failure and not
+// merely a cosmetic one.
+func TestSpamhausAttributionNoticeSurvivesParsing(t *testing.T) {
+	body := []byte("; Spamhaus DROP List 2026/08/10 - (c) 2026 The Spamhaus Project SLU\n" +
+		"; https://www.spamhaus.org/drop/drop.txt\n" +
+		"; Last-Modified: Mon, 10 Aug 2026 12:30:17 GMT\n" +
+		"\n" +
+		"1.10.16.0/20 ; SBL256894\n")
+
+	prefixes, notice, err := parseSpamhaus(body)
+	if err != nil {
+		t.Fatalf("parseSpamhaus: %v", err)
+	}
+	if len(prefixes) != 1 {
+		t.Fatalf("got %d prefixes, want 1", len(prefixes))
+	}
+	if !strings.Contains(notice, "(c) 2026 The Spamhaus Project SLU") {
+		t.Errorf("copyright line missing from the retained notice:\n%s", notice)
+	}
+	if !strings.Contains(notice, "2026/08/10") {
+		t.Errorf("list date missing from the retained notice:\n%s", notice)
+	}
+}
+
+// A feed whose body is nothing but comments parses "successfully" with
+// zero entries. That is exactly what the retired Spamhaus EDROP endpoint
+// returns, and treating it as a healthy refresh is what let it sit
+// enabled-by-default for two years contributing nothing.
+func TestFeedOfOnlyCommentsYieldsNoPrefixes(t *testing.T) {
+	body := []byte("; This list has been merged into https://www.spamhaus.org/drop/drop.txt\n; EOF\n")
+	prefixes, notice, err := parseSpamhaus(body)
+	if err != nil {
+		t.Fatalf("parseSpamhaus: %v", err)
+	}
+	if len(prefixes) != 0 {
+		t.Fatalf("got %d prefixes, want 0", len(prefixes))
+	}
+	if notice == "" {
+		t.Error("expected the comment block to still be retained as a notice")
+	}
+}
+
+// EDROP must not come back as a selectable source: Spamhaus merged it
+// into DROP, so offering it would advertise protection that fetches
+// nothing.
+func TestRetiredEdropIsNotOnTheMenu(t *testing.T) {
+	for _, s := range KnownSources() {
+		if strings.Contains(string(s), "edrop") {
+			t.Errorf("KnownSources() still offers %q -- EDROP was merged into DROP on 2024-04-10 and serves no ranges", s)
+		}
+	}
+	for _, s := range DefaultSources {
+		if strings.Contains(s, "edrop") {
+			t.Errorf("DefaultSources still enables %q by default", s)
+		}
 	}
 }

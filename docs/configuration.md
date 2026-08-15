@@ -74,13 +74,20 @@ roughly how many seconds of history remain. The live view's toolbar shows
 this directly (`n% of buffer used`, or `holding last Xm Ys` once full),
 so you do not need to query the API by hand to find out.
 
-**A typical retained event costs about 616 bytes**, so the default
-`maxMemory: 120MiB` holds roughly 200,000 events. That figure is a budget
+**A typical retained event costs about 624 bytes**, so the default
+`maxMemory: 120MiB` holds roughly 200,000 events. The stored copy of
+the raw log line is capped at 2KiB, which is about five times the
+longest line a real RouterOS device produces — so the figure above is a
+ceiling rather than a typical case that a pathological line can exceed.
+A row whose line was cut says so on hover, and in a CSV export. That figure is a budget
 for the buffer itself, not what mikroview's process occupies on the host
 — expect *resident* memory (what `docker stats` or `top` reports) to run
-about 1.5x higher once the Go runtime and process overhead are counted,
+about 1.47x higher once the Go runtime and process overhead are counted,
 so provisioning for the 120MiB default really means having roughly 175MiB
-of RAM to spare. The whole budget is reserved **immediately at startup**
+of RAM to spare. That figure is not a round number for a reason: it is
+the measured ring-to-resident overhead (see #244), and it is the same
+1.47 the CFG-0012 warning uses, so what you read here and what MikroView
+prints at startup agree. The whole budget is reserved **immediately at startup**
 (`store.New` allocates it all up front), not filled up gradually — a
 value too large for the machine fails right away rather than degrading
 over hours, which is why mikroview warns above 1GiB (see
@@ -256,7 +263,7 @@ choice, not a mistake to correct. It exists because the whole budget is
 reserved immediately at startup (see
 [How events are stored](#how-events-are-stored)), so a value that turns
 out to be too large fails right away rather than degrading gradually, and
-the warning states the real memory cost — including the ~1.5x resident
+the warning states the real memory cost — including the 1.47x resident
 overhead on top of the ring itself — so you have it in front of you
 before that happens.
 
@@ -308,6 +315,9 @@ router sends syslog from.
 devices:
   - sourceIp: "192.168.1.1"
     name: "edge-router"
+    # id is optional -- it defaults to sourceIp. Set it to a stable name
+    # if you want one, but see CFG-0032: it is the device's identity for
+    # pushed router state and ingest tokens, not just a label.
 ```
 
 #### CFG-0031
@@ -322,6 +332,41 @@ devices:
     name: "edge-router"
   - sourceIp: "192.168.2.1"   # must differ from every other sourceIp
     name: "branch-router"
+```
+
+#### CFG-0032
+
+Two devices share an `id`. A device's `id` is its identity everywhere:
+the `deviceId` on its events, the key its pushed router state is stored
+under, and the scope of an ingest token. Two routers under one id is two
+routers wearing one identity -- either can then supply host names for
+the other's traffic.
+
+An entry with no `id` takes its `sourceIp` as its id, so a collision is
+always an explicit one.
+
+```yaml
+devices:
+  - sourceIp: "192.168.1.1"
+    id: "edge-router"
+    name: "Edge"
+  - sourceIp: "192.168.2.1"
+    id: "branch-router"   # must differ from every other id
+    name: "Branch"
+```
+
+#### CFG-0033
+
+A device's `id` is an IP address that is not its own `sourceIp`. A
+router discovered from that address takes it as its own id, so the two
+would merge into one identity -- the same collision as CFG-0032 by a
+longer route.
+
+```yaml
+devices:
+  - sourceIp: "192.168.1.1"
+    id: "edge-router"     # a name, or this device's own sourceIp
+    name: "Edge"
 ```
 
 #### CFG-0040
@@ -357,6 +402,81 @@ discover a bad value for the first time at that point.
 ```yaml
 watchlist:
   matchLogRetention: 168h  # 7 days
+```
+
+#### CFG-0050
+
+`notify.webhook.url` is a plain `http://` URL and
+`notify.webhook.headers` is set, so whatever credential those headers
+carry -- and every flag's contents with it -- crosses the network in
+cleartext. See [Notifications](#notifications-optional).
+
+Mikroview sends anyway: the receiver may well be on a network you
+control end to end, and refusing would be MikroView deciding that for
+you.
+
+```yaml
+notify:
+  webhook:
+    url: "https://ntfy.example.com/mikroview"
+```
+
+#### CFG-0051
+
+`notify.webhook.url` is a plain `http://` URL. No credential is at risk
+(no headers are set), but every flag's contents -- source addresses,
+rule labels, detector detail -- still cross the network in cleartext.
+Same "sends anyway" reasoning as CFG-0050 above.
+
+```yaml
+notify:
+  webhook:
+    url: "https://ntfy.example.com/mikroview"
+```
+
+#### CFG-0060
+
+`oidc.issuerUrl` is set but `oidc.publicBaseUrl` is not, so MikroView
+cannot build the redirect URI the provider has to send users back to.
+See [Single sign-on](#single-sign-on-oidcsso).
+
+SSO login is unavailable; local login is unaffected. That is deliberate
+-- an optional integration being half-configured should not take a
+working deployment down -- but `-validate-config` still exits non-zero,
+so a pipeline is told.
+
+```yaml
+oidc:
+  issuerUrl: "https://id.example.com"
+  publicBaseUrl: "https://mikroview.example.com"
+```
+
+#### CFG-0061
+
+`oidc.issuerUrl` is set but `oidc.clientId` and/or `oidc.clientSecret`
+are empty. Same outcome as CFG-0060: SSO off, local login unaffected.
+
+Remove `oidc.issuerUrl` if you meant to turn SSO off -- that is the
+deliberate way to say so, and it silences this.
+
+```yaml
+oidc:
+  clientId: "mikroview"
+  clientSecret: "<from your provider>"
+```
+
+#### CFG-0062
+
+`oidc.issuerUrl` names a multi-tenant provider. MikroView only supports
+self-hosted identity providers (Authentik, Keycloak, Zitadel) or a
+single-tenant Entra issuer URL -- ones where the issuer itself restricts
+who can sign in. See [Single sign-on](#single-sign-on-oidcsso) for the
+full reasoning; it is a refusal, not a warning you can configure away.
+
+```yaml
+oidc:
+  # a self-hosted provider, not a multi-tenant one
+  issuerUrl: "https://id.example.com"
 ```
 
 ## Logging
@@ -482,7 +602,6 @@ has no matching entry there, the same precedent `new_device`/
 blocklist:
   sources:
     - spamhaus_drop
-    - spamhaus_edrop
 ```
 
 - **`sources`** — which feeds from the vetted menu to enable. This is
@@ -496,8 +615,8 @@ blocklist:
   local blocklist matching entirely.
 
   The menu today:
-  - **`spamhaus_drop`** / **`spamhaus_edrop`** (on by default) —
-    [Spamhaus's DROP and EDROP lists](https://www.spamhaus.org/drop/):
+  - **`spamhaus_drop`** (on by default) —
+    [Spamhaus's DROP list](https://www.spamhaus.org/drop/):
     small (documented at roughly 1-2k CIDR ranges combined), free, no
     registration, and deliberately conservative — Spamhaus only lists
     netblocks they're confident are entirely malicious-controlled
@@ -524,7 +643,7 @@ own sorted, non-overlapping address ranges — O(log n) per feed, never a
 linear scan, regardless of list size, since this runs on every single
 ingested event. Combined entries across every enabled feed are capped at
 100,000 (`internal/blocklist`'s `maxTotalEntries`) — measured, not
-estimated: today's real combined feed size (Spamhaus DROP+EDROP +
+estimated: today's real combined feed size (Spamhaus DROP +
 Emerging Threats) is ~2.2k entries, and benchmarking this package's
 actual lookup and daily-rebuild paths shows neither is remotely close to
 a real ceiling until well past 100,000 (rebuild takes ~33ms and ~7.5MB
@@ -754,10 +873,8 @@ open question about which flag actions belong here:
   do silently. Removing an exclusion
   (`DELETE /api/flags/exclusions/{id}`) is admin-gated and logged too.
 
-Reviewed from **Menu → Audit log** (admin-only, and -- unlike Detectors'
-gate -- **not** shown while auth is disabled, matching Entities' own
-stricter gate: there's no "admin" concept once auth itself has been
-opted out of). Backed by `GET /api/audit`, a windowed query over the
+Reviewed from **Menu → Audit log** (admin-only, matching Entities' own
+gate). Backed by `GET /api/audit`, a windowed query over the
 persisted log (see [API reference](#api-reference)) -- the same
 `since`/`until`/`limit` convention `GET /api/events` already uses, minus
 that endpoint's event-specific filters.
@@ -796,8 +913,7 @@ Two kinds of entry, chosen per entry, not globally:
   means by "did this device misbehave."
 
 Managed from **Menu → Watchlist** (admin-only, matching Entities/Audit's
-gate -- entry management uses `callerIsAdmin`, not
-`callerIsAdminOrOpen`, so it stays hidden while auth is disabled). Add,
+gate). Add,
 edit and remove entries there; for an inverted entry, the same page
 shows what's been promoted, what's waiting for review, and a toggle to
 resume or stop observing. An entry with a scoped source can also show
@@ -1153,7 +1269,7 @@ flags:
 - **Unexpected mail sender (issue #108)** — a LAN source originating an
   outbound connection to an external destination on an SMTP port (25,
   465, or 587) that isn't tagged `trusted-mail-sender` on its host entity
-  (see [Entities](#entities-ui-managed-hostrule-labels-and-tags-optional)
+  (see [Entities](#entities-ui-managed-hostruleport-labels-and-tags-optional)
   above). Deterministic, like new-device and stale-rule detection — no
   threshold or window to tune, it fires the first time a given untagged
   source does this at all. Distinct from **Outbound anomaly** above,
@@ -1855,13 +1971,14 @@ tokens are a long-lived bearer credential for exactly that case,
 admin-created from the "API tokens" panel in the menu's Account section
 (or directly via the API below).
 
-**Scope is deliberately narrow: read-only, four endpoints, nothing
+**Scope is deliberately narrow: read-only, five endpoints, nothing
 else.** A valid token grants `Authorization: Bearer <token>` access to:
 
 - `GET /api/events`
 - `GET /api/flags`
 - `GET /api/stats`
 - `GET /api/devices`
+- `GET /api/watchlist/matches`
 
 and *nothing* else -- no clearing a flag, no changing a detector, no
 managing users or other tokens, regardless of the method or path
@@ -2107,9 +2224,19 @@ application itself is never served over plain HTTP. See
 [SECURITY.md](../SECURITY.md#tls) for the full reasoning; this section
 is the configuration reference.
 
+**Typing the address into a browser works.** A browser given
+`mikroview-host:8080` tries `http://` first, which arrives as plaintext
+on the HTTPS listener. Mikroview answers that with a redirect to
+`https://` on the same host and port, rather than the bare error a TLS
+server would normally return -- so one published port is all a
+deployment needs (issue #325). The redirect target is validated against
+`tls.hosts` the same way the port-80 listener below is, so an arbitrary
+`Host` header is never echoed back.
+
 A second listener, `listen.httpRedirect` (default `:8081`, mapped to
-host port 80 by `deploy/docker-compose.yml`), exists only to redirect a
-plain HTTP request to HTTPS -- it never serves the application itself.
+host port 80 by `deploy/docker-compose.yml`), covers the other case: a
+bare hostname with no port, which a browser sends to port 80 where
+nothing above can see it. It never serves the application itself.
 It's only started while `tls.enabled` is true (nothing to redirect to
 otherwise), and only started at all if non-empty -- set it to `""` to
 disable it, e.g. if your own reverse proxy already handles the
@@ -2185,7 +2312,8 @@ tls:
   certificate independently of this setting, since RouterOS connects to
   it directly rather than through your reverse proxy.
 - **`certFile`/`keyFile`** — your own certificate. Skips local-CA
-  generation entirely when both are set.
+  generation entirely when both are set. See "Renewing your own
+  certificate" below if something renews it for you.
 - **`hosts`** — SANs for a self-generated certificate. Left empty, the
   generated cert only covers `localhost`/`127.0.0.1` -- connections from
   any other name/IP are still fully encrypted, just not strictly
@@ -2194,6 +2322,39 @@ tls:
   restarts. Left unset, TLS still works, it just regenerates (and needs
   re-trusting) every restart -- the same optional-persistence contract
   `flags.storePath` has.
+
+### Renewing your own certificate
+
+Send MikroView `SIGHUP` after the new files are in place and it picks
+them up — on the HTTPS listener **and** the syslog listener — without a
+restart:
+
+```sh
+docker kill --signal=HUP mikroview
+```
+
+Certbot and cert-manager both have a hook for exactly this, so nothing
+needs scheduling separately:
+
+```sh
+certbot renew --deploy-hook 'docker kill --signal=HUP mikroview'
+```
+
+Without it MikroView keeps serving the certificate it loaded at startup.
+Renewal is automatic and a restart is not, so the failure turns up
+silently, weeks later, as an expired certificate — and a router
+configured with `check-certificate=yes` stops sending its logs at that
+point, which is the outage you would least want to discover late.
+
+MikroView does not watch the files and renew on its own, deliberately:
+it cannot tell a finished renewal from one still being written, and half
+a certificate is worse than an old one. The signal is you (or your
+renewal tool) saying the new files are complete.
+
+**A failed reload changes nothing.** If the files are unreadable or
+half-written, MikroView logs an error and carries on with the
+certificate it already has, rather than dropping to none — you sent the
+signal expecting an improvement, and an outage is not one.
 
 **Zero-config default**: with no `certFile`/`keyFile`, mikroview
 generates its own local certificate authority and a leaf certificate on
@@ -2205,6 +2366,18 @@ CA is served at `GET /ca.crt`, unauthenticated (only when one was
 actually generated), specifically so a browser or reverse proxy can
 fetch it to establish trust; its fingerprint is also logged at startup
 if you'd rather verify it out-of-band than trust-on-first-use blindly.
+
+**One thing the click-through does not cover.** Clicking past the
+warning gets you a fully working MikroView, with one exception:
+installing it as an app, and its offline behaviour, both need a service
+worker, and browsers refuse to register one over a certificate outside
+their trust store — click-through or not. So until you import the CA
+above, "Install app" either does not appear or does nothing, and the
+browser console shows `Failed to register a ServiceWorker ... An SSL
+certificate error occurred`. Nothing else is affected, and importing the
+CA (or supplying your own certificate via `tls.certFile`/`tls.keyFile`)
+resolves it. Found by the containerised end-to-end harness (#273), which
+runs against TLS as shipped rather than plain HTTP on loopback.
 
 **Reverse proxy in front, with your own single ingress**: point your
 RP's *upstream/backend* target at `https://mikroview:PORT` instead of
@@ -2297,6 +2470,12 @@ Override individual scalar settings without a mounted file:
 | `MIKROVIEW_OIDC_CLIENT_SECRET` | `oidc.clientSecret` |
 | `MIKROVIEW_OIDC_PUBLIC_BASE_URL` | `oidc.publicBaseUrl` |
 | `MIKROVIEW_OIDC_SCOPES` | `oidc.scopes` (comma-separated) |
+| `MIKROVIEW_AUTH_SESSION_MAX_LIFETIME` | `auth.sessionMaxLifetime` |
+| `MIKROVIEW_OIDC_ALLOWED_GROUPS` | `oidc.allowedGroups` (comma-separated) |
+| `MIKROVIEW_OIDC_GROUPS_CLAIM` | `oidc.groupsClaim` |
+| `MIKROVIEW_OIDC_ALLOWED_EMAILS` | `oidc.allowedEmails` (comma-separated) |
+| `MIKROVIEW_OIDC_ALLOWED_EMAIL_DOMAINS` | `oidc.allowedEmailDomains` (comma-separated) |
+| `MIKROVIEW_RECOVERY_PEPPER_FILE` | `auth.recoveryPepperPath` -- for keeping the pepper off the data volume entirely, so a stolen copy of that volume does not carry the one value the recovery-key hashes are useless without |
 | `MIKROVIEW_NOTIFY_BATCH_WINDOW` | `notify.batchWindow` (see [Notifications](#notifications-optional)) |
 | `MIKROVIEW_NOTIFY_SMTP_HOST` | `notify.smtp.host` |
 | `MIKROVIEW_NOTIFY_SMTP_PORT` | `notify.smtp.port` |
@@ -2313,12 +2492,18 @@ Override individual scalar settings without a mounted file:
 
 ## Checking your version
 
-There is no semantic version -- mikroview doesn't cut releases or tag
-versions today, only images built from `preview`/`main` (see
-`.github/workflows/docker.yml`; pushing to `dev` deliberately publishes
-no image at all). The build identifier is the short git commit SHA it
-was built from, and it's checkable three ways, all showing the same
-value:
+What you see depends on which image you are running, because there are
+two kinds (see `.github/workflows/docker.yml`; pushing to `dev`
+deliberately publishes no image at all):
+
+- **A release build** -- `latest`, or an explicit `v0.1.0`-style tag --
+  reports that semantic version, e.g. `v0.1.0`. The version comes from
+  the `VERSION` file in the repository, and merging to `main` with a
+  value that has no tag yet is what cuts the release.
+- **A preview build** -- `preview`, or `preview-<sha>` -- reports the
+  short git commit SHA it was built from.
+
+Either way it is checkable three ways, all showing the same value:
 
 - `docker exec <container> mikroview -version` -- prints the bare SHA
   and nothing else, easy to capture in a script.
@@ -2373,6 +2558,27 @@ postgres:
 
 or `MIKROVIEW_POSTGRES_DSN_FILE=/etc/mikroview/postgres-dsn`.
 
+**The file has to be readable by the container's user.** MikroView runs
+as uid `65532` (distroless `nonroot`), which is not the user that created
+the file on your host — so a `0600` file, which is the natural mode for
+something holding a password, is unreadable inside the container and
+MikroView refuses to start:
+
+```
+ERROR storage │ postgres: reading DSN file /etc/mikroview/postgres-dsn: permission denied
+```
+
+Keep the tight mode and hand it to that user:
+
+```sh
+chown 65532:65532 postgres-dsn
+chmod 600 postgres-dsn
+```
+
+(Found by the containerised end-to-end harness in #273 — following these
+instructions exactly, with the obvious `chmod 600`, produced a MikroView
+that would not start.)
+
 The database user needs permission to create tables in its own database
 the first time it starts; MikroView creates what it needs and records
 what it has done, so restarts are fine.
@@ -2386,6 +2592,22 @@ setting doesn't do what you asked, you should hear about it.
 Use `verify-full` if you can. `require` encrypts the connection but
 doesn't check *who* answered, so it doesn't stop someone who can
 intercept traffic between MikroView and the database.
+
+### Which schema the tables go in
+
+`public`, unless you say otherwise. To keep MikroView's tables in a
+schema of their own, create it and name it in the connection string:
+
+```
+postgres://mikroview:PASSWORD@db.internal:5432/mikroview?sslmode=verify-full&search_path=mikroview
+```
+
+MikroView always sets this on its connections rather than inheriting
+whatever the role or the database defaults to. That is deliberate:
+MikroView names its tables without a schema prefix, so if the default
+search path were used, anyone able to create a table in a schema listed
+ahead of yours could put their own `store_blob` or `match_log` there,
+and MikroView would read and write theirs while reporting success.
 
 ### Your existing data moves automatically
 
@@ -2532,12 +2754,16 @@ exits, rather than starting the server. See
 | `POST /api/auth/register` | create the first (admin) account -- only while zero accounts exist |
 | `POST /api/auth/login` | sign in, sets the session cookie |
 | `POST /api/auth/logout` | sign out, clears the session cookie |
+| `GET /api/auth/users` | admin-only: list accounts |
 | `POST /api/auth/users` | admin-only: create an additional account |
+| `DELETE /api/auth/users/{id}` | admin-only: remove an account |
 | `POST /api/tokens` | admin-only: create a read-only API token (see [API tokens](#api-tokens-read-only)) -- returns the raw value once |
 | `GET /api/tokens` | admin-only: list tokens (name/created/last-used, never the value or hash) |
 | `DELETE /api/tokens/{id}` | admin-only: revoke a token |
 | `GET /api/auth/oidc/login` | start the SSO flow -- a top-level browser redirect to the configured provider, only present when [OIDC](#single-sign-on-oidcsso) is configured |
 | `GET /api/auth/oidc/callback` | the provider's redirect target completing the SSO flow -- see [Single sign-on](#single-sign-on-oidcsso) |
+| `POST /api/auth/oidc/link` | connect the signed-in account to an SSO identity, so the same person can sign in either way -- see [Connecting your account to SSO](#single-sign-on-oidcsso) |
+| `GET /api/config/problems` | admin-only: the same configuration warnings `-validate-config` reports, as the UI shows them -- see [Problem codes](#problem-codes) |
 
 Every route above `/api/auth/session`/`/register`/`/login`/`/logout` and
 `/api/healthz` requires a valid session once an account exists -- see

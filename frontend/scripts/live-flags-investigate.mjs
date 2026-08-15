@@ -10,22 +10,13 @@
 // content, which depends on live third-party data this scenario doesn't
 // control and shouldn't assert on.
 
-import { execFileSync } from 'child_process'
 import { fileURLToPath } from 'url'
-import path from 'path'
-import { session, check, done } from './live-browser.mjs'
+import { session, check, done, feedPortScan } from './live-browser.mjs'
 
-const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..')
 
-function portscan(n, sourceIp) {
-  execFileSync(path.join(REPO, 'scripts/live-env.sh'), ['portscan', String(n), sourceIp], {
-    stdio: 'ignore',
-    cwd: REPO,
-  })
-}
 
 const TARGET_IP = '198.51.100.95'
-portscan(20, TARGET_IP)
+feedPortScan(20, TARGET_IP)
 
 const { page } = await session()
 

@@ -10,6 +10,8 @@ import (
 	"strings"
 	"sync"
 	"testing"
+
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 // These run against a real Postgres, not a mock. The properties worth
@@ -324,5 +326,123 @@ func TestLoadMigrationsOrdersNumericallyAndRejectsDuplicates(t *testing.T) {
 		if ms[i].version <= ms[i-1].version {
 			t.Errorf("migrations out of order: %s before %s", ms[i-1].name, ms[i].name)
 		}
+	}
+}
+
+// TestPinSearchPath guards the schema pinning without needing a
+// database: pgxpool.ParseConfig only parses, so this holds on a machine
+// with no Postgres to hand as well as in the Postgres job.
+//
+// The forced-to-public version of pinSearchPath broke every Postgres
+// test's per-schema isolation and silently ignored an operator's own
+// `?search_path=`. It went 41 commits unnoticed because the job running
+// those tests was skipped on dev; that gate is gone now, so this is a
+// second line rather than the only one.
+func TestPinSearchPath(t *testing.T) {
+	tests := []struct {
+		name string
+		dsn  string
+		want string
+	}{
+		{
+			// Nothing asked for: pinned to public rather than left to
+			// the role's or database's default, which is the shadowing
+			// #285 was about.
+			name: "no search_path in the DSN defaults to public",
+			dsn:  "postgres://u:p@h:5432/db?sslmode=require",
+			want: "public",
+		},
+		{
+			name: "an explicit search_path is honoured",
+			dsn:  "postgres://u:p@h:5432/db?sslmode=require&search_path=mikroview",
+			want: "mikroview",
+		},
+		{
+			// What the test helpers depend on for isolation.
+			name: "a per-test schema is honoured",
+			dsn:  "postgres://u:p@h:5432/db?sslmode=require&search_path=test_matchlog_x",
+			want: "test_matchlog_x",
+		},
+		{
+			name: "an empty search_path falls back to public rather than to nothing",
+			dsn:  "postgres://u:p@h:5432/db?sslmode=require&search_path=",
+			want: "public",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg, err := pgxpool.ParseConfig(tt.dsn)
+			if err != nil {
+				t.Fatalf("ParseConfig: %v", err)
+			}
+			pinSearchPath(cfg)
+			if got := cfg.ConnConfig.RuntimeParams["search_path"]; got != tt.want {
+				t.Errorf("search_path = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+// A migration's checksum identifies its SQL, so a database can be asked
+// whether it ran what this binary contains (#294 item 2).
+func TestMigrationChecksumTracksTheSQLNotTheName(t *testing.T) {
+	a := migration{version: 1, name: "0001_first.sql", sql: "CREATE TABLE x (id int);"}
+	renamed := migration{version: 1, name: "0001_renamed.sql", sql: a.sql}
+	altered := migration{version: 1, name: a.name, sql: "CREATE TABLE x (id bigint);"}
+
+	if a.checksum() != renamed.checksum() {
+		t.Error("renaming a migration changed its checksum -- a rename is cosmetic and would look like tampering")
+	}
+	if a.checksum() == altered.checksum() {
+		t.Error("changing a migration's SQL did not change its checksum, so the whole check is inert")
+	}
+	if a.checksum() == "" {
+		t.Error("empty checksum")
+	}
+}
+
+// verifyApplied is what stands between "schema_version says version 3"
+// and "the database actually ran version 3". A role with write access to
+// that table could claim a version, and mikroview would log "up to date"
+// and query a schema it has never seen.
+func TestVerifyAppliedRefusesAMismatchedChecksum(t *testing.T) {
+	m := migration{version: 1, name: "0001_first.sql", sql: "CREATE TABLE x (id int);"}
+	migrations := []migration{m}
+
+	if err := verifyApplied(map[int64]string{1: m.checksum()}, migrations, "test"); err != nil {
+		t.Errorf("a matching checksum was refused: %v", err)
+	}
+
+	err := verifyApplied(map[int64]string{1: "deadbeef"}, migrations, "test")
+	if err == nil {
+		t.Fatal("a mismatched checksum was accepted -- the database could be running any schema at all")
+	}
+	// The operator has to be able to act on this without reading source.
+	for _, want := range []string{"0001_first.sql", "schema_version", "Refusing to start"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the refusal does not mention %q:\n%s", want, err)
+		}
+	}
+}
+
+// Rows written before the column existed have nothing to compare.
+// Refusing them would be a false alarm on every existing deployment's
+// first upgrade, which is worse than leaving them unverifiable.
+func TestVerifyAppliedAcceptsRowsWithNoRecordedChecksum(t *testing.T) {
+	m := migration{version: 1, name: "0001_first.sql", sql: "CREATE TABLE x (id int);"}
+	if err := verifyApplied(map[int64]string{1: ""}, []migration{m}, "test"); err != nil {
+		t.Errorf("a pre-checksum row was refused: %v", err)
+	}
+}
+
+// A database that has run a migration this binary does not contain is an
+// older image against a newer database. Real, documented elsewhere, and
+// deliberately not this check's job -- refusing here would duplicate
+// that guidance badly.
+func TestVerifyAppliedIgnoresVersionsThisBuildDoesNotHave(t *testing.T) {
+	m := migration{version: 1, name: "0001_first.sql", sql: "CREATE TABLE x (id int);"}
+	if err := verifyApplied(map[int64]string{1: m.checksum(), 99: "whatever"}, []migration{m}, "test"); err != nil {
+		t.Errorf("an unknown future version was refused by the checksum check: %v", err)
 	}
 }

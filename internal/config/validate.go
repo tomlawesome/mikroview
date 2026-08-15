@@ -7,6 +7,8 @@ import (
 	"net"
 	"net/netip"
 	"strings"
+
+	"github.com/tomlawesome/mikroview/internal/oidc"
 )
 
 // Validate checks a loaded configuration and reports everything wrong
@@ -40,6 +42,8 @@ func (c *Config) Validate() Result {
 	c.validateWatchlist(warn)
 	c.validateAuth(fatal)
 	c.validateDevices(fatal)
+	c.validateNotify(warn)
+	c.validateOIDC(warn)
 
 	return r
 }
@@ -123,6 +127,38 @@ auth:
     name: "edge-router"
   - sourceIp: "192.168.2.1"   # must differ from every other sourceIp
     name: "branch-router"`,
+
+	"CFG-0032": `devices:
+  - sourceIp: "192.168.1.1"
+    id: "edge-router"       # the device's identity: events, pushed
+    name: "Edge"            # router state, and ingest-token scope
+  - sourceIp: "192.168.2.1"
+    id: "branch-router"     # must differ from every other id
+    name: "Branch"`,
+
+	"CFG-0033": `devices:
+  - sourceIp: "192.168.1.1"
+    id: "edge-router"       # a name, or this device's own sourceIp --
+    name: "Edge"            # another router's address would merge the two`,
+
+	"CFG-0050": `notify:
+  webhook:
+    url: "https://ntfy.example.com/mikroview"   # https, so the header below is not sent in the clear
+    headers:
+      Authorization: "Bearer <token>"`,
+
+	"CFG-0051": `notify:
+  webhook:
+    url: "https://ntfy.example.com/mikroview"`,
+	"CFG-0060": `oidc:
+  issuerUrl: "https://id.example.com"
+  publicBaseUrl: "https://mikroview.example.com"`,
+	"CFG-0061": `oidc:
+  clientId: "mikroview"
+  clientSecret: "<from your provider>"`,
+	"CFG-0062": `oidc:
+  # a self-hosted provider, not a multi-tenant one
+  issuerUrl: "https://id.example.com"`,
 }
 
 func (c *Config) validateListen(fatal problemFunc) {
@@ -260,8 +296,89 @@ func (c *Config) validateAuth(fatal problemFunc) {
 	}
 }
 
+// validateNotify warns about a webhook that would ship this
+// deployment's flag data, and whatever credential is configured to reach
+// the receiver, in cleartext.
+//
+// A warning rather than a fatal: notify.webhook.url legitimately points
+// at something on the operator's own LAN (a self-hosted ntfy, Home
+// Assistant), where plain HTTP is a considered choice rather than a
+// mistake. What it must not be is an unnoticed one -- notify.webhook.
+// headers exists precisely to carry a credential, and config.go's own
+// documentation steers operators towards putting one there. See #285.
+func (c *Config) validateNotify(warn warnFunc) {
+	url := strings.TrimSpace(c.Notify.Webhook.URL)
+	if url == "" || !strings.HasPrefix(strings.ToLower(url), "http://") {
+		return
+	}
+	if len(c.Notify.Webhook.Headers) > 0 {
+		warn("CFG-0050", "notify.webhook.url",
+			"is a plain http:// URL while notify.webhook.headers is set, so the credential in those headers and every flag's contents cross the network in cleartext",
+			"sending anyway",
+			"use an https:// URL, or accept this deliberately if the receiver is on a network you control end to end")
+		return
+	}
+	warn("CFG-0051", "notify.webhook.url",
+		"is a plain http:// URL, so every flag's contents -- source addresses, rule labels and detector detail -- cross the network in cleartext",
+		"sending anyway",
+		"use an https:// URL, or accept this deliberately if the receiver is on a network you control end to end")
+}
+
+// validateOIDC mirrors, at config-check time, the four conditions
+// main.go checks at startup before wiring SSO.
+//
+// -validate-config is documented as deliberately stricter than the
+// server, and it performed no OIDC validation at all (#267 finding 14):
+// a block missing publicBaseUrl, or clientId/clientSecret, or pointed at
+// a provider mikroview refuses outright, passed cleanly. The server then
+// logs an error and leaves SSO off -- so the operator's first sign that
+// their config is wrong is that the SSO button is not there.
+//
+// Warnings, not fatals, and that is the point of the split. The server
+// deliberately fails soft here -- a half-configured SSO block leaves SSO
+// off and local login working, because taking a running deployment down
+// over an optional integration would be the worse outcome. Making these
+// fatal would do exactly that. -validate-config exits non-zero on
+// warnings too (see runValidateConfig), so a pipeline still fails, which
+// is where "stricter than the server" actually lives.
+//
+// Applied says what the operator gets rather than naming a substituted
+// value: nothing is filled in on their behalf, and pretending otherwise
+// would be worse than saying so.
+//
+// The multi-tenant issuer check calls oidc.AllowIssuer rather than
+// keeping its own copy of the list. This package is otherwise a
+// dependency-free leaf, and the one exception is deliberate: the
+// alternative is a second copy of a security allowlist that would drift
+// from the first, which is worse than the import.
+func (c *Config) validateOIDC(warn warnFunc) {
+	if c.OIDC.IssuerURL == "" {
+		// Not configured, which is the default and entirely fine.
+		return
+	}
+	if c.OIDC.PublicBaseURL == "" {
+		warn("CFG-0060", "oidc.publicBaseUrl",
+			"is empty while oidc.issuerUrl is set, so mikroview cannot build the redirect URI",
+			"SSO login disabled; local login unaffected",
+			"set oidc.publicBaseUrl to the URL your users reach mikroview on, exactly as registered with the provider")
+	}
+	if c.OIDC.ClientID == "" || c.OIDC.ClientSecret == "" {
+		warn("CFG-0061", "oidc.clientId",
+			"oidc.clientId and/or oidc.clientSecret are empty while oidc.issuerUrl is set",
+			"SSO login disabled; local login unaffected",
+			"set both from the client your provider issued, or remove oidc.issuerUrl to turn SSO off deliberately")
+	}
+	if err := oidc.AllowIssuer(c.OIDC.IssuerURL); err != nil {
+		warn("CFG-0062", "oidc.issuerUrl",
+			"names a multi-tenant provider, which mikroview does not support",
+			"SSO login disabled; local login unaffected",
+			"use a self-hosted provider (Authentik, Keycloak, Zitadel) or a single-tenant Entra issuer URL, where the issuer itself restricts who can sign in")
+	}
+}
+
 func (c *Config) validateDevices(fatal problemFunc) {
 	seen := make(map[string]int, len(c.Devices))
+	seenID := make(map[string]int, len(c.Devices))
 	for i, d := range c.Devices {
 		key := fmt.Sprintf("devices[%d].sourceIp", i)
 		ip := strings.TrimSpace(d.SourceIP)
@@ -285,6 +402,36 @@ func (c *Config) validateDevices(fatal problemFunc) {
 			continue
 		}
 		seen[canonical] = i
+
+		// id is the device's identity everywhere downstream -- it keys
+		// pushed router state and scopes an ingest token (see
+		// internal/auth.Token.Device), so two devices sharing one is two
+		// routers wearing one identity: either can then supply host
+		// names for the other's traffic, defeating the per-device
+		// scoping issue #285 added. Left unset it defaults to sourceIp
+		// (see Config.normaliseDevices), so a collision here is always
+		// an explicit one.
+		id := strings.TrimSpace(d.ID)
+		if id == "" {
+			id = canonical
+		}
+		if prev, dup := seenID[id]; dup {
+			fatal("CFG-0032", fmt.Sprintf("devices[%d].id", i),
+				fmt.Sprintf("%q is already used by devices[%d]", id, prev),
+				"give each device a distinct id -- it is what pushed router state and ingest tokens are keyed by")
+			continue
+		}
+		seenID[id] = i
+
+		// An id that is some *other* device's address is the same
+		// collision by a longer route: a router discovered from that
+		// address takes it as its own id (internal/device.Registry.
+		// Resolve), and the two merge.
+		if idAddr, err := netip.ParseAddr(id); err == nil && idAddr.Unmap().String() != canonical {
+			fatal("CFG-0033", fmt.Sprintf("devices[%d].id", i),
+				fmt.Sprintf("%q is an IP address that is not this device's sourceIp (%s)", id, canonical),
+				"use a name (e.g. \"edge-router\"), or this device's own sourceIp -- an address belonging to another router would merge the two")
+		}
 	}
 }
 

@@ -354,3 +354,161 @@ func TestMatchInvertedIsDeterministic(t *testing.T) {
 		t.Errorf("Match produced different outcomes for the same input: %v then %v", first, second)
 	}
 }
+
+// A watchlist entry whose MAC an operator typed the conventional way --
+// lowercase, as the entry form's free-text field takes it -- must match
+// the same device as a real router reports it. RouterOS 7.23.3 emits
+// src-mac uppercase (captured from a booted CHR, #273), so a byte-exact
+// comparison meant such an entry silently never fired: no error, no
+// empty state, just an entry that looked configured and did nothing.
+// Both entry kinds route their source check through
+// matchlog.Identity.MatchesSource, so both are covered here.
+func TestMatchIgnoresMACCase(t *testing.T) {
+	const (
+		fromRouter = "52:55:0A:00:02:02" // as a real RouterOS emits it
+		asTyped    = "52:55:0a:00:02:02" // as an operator writes it
+	)
+
+	e := baseEvent()
+	e.SrcMAC = fromRouter
+	e.DstPort = 15902
+
+	nonInverted := Entry{ID: "e1", Ports: []int{15902}, Source: matchlog.Identity{MAC: asTyped}}
+	if _, outcome := Match(nonInverted, e); outcome != Violation {
+		t.Errorf("non-inverted entry typed as %s did not match traffic reported as %s: %v", asTyped, fromRouter, outcome)
+	}
+
+	inverted := Entry{ID: "e2", Invert: true, Source: matchlog.Identity{MAC: asTyped}, Observing: true}
+	if _, outcome := Match(inverted, e); outcome != Observed {
+		t.Errorf("inverted entry typed as %s did not observe traffic reported as %s: %v", asTyped, fromRouter, outcome)
+	}
+
+	// A genuinely different device is still a non-match.
+	other := e
+	other.SrcMAC = "52:55:0A:00:02:03"
+	if _, outcome := Match(nonInverted, other); outcome != NoMatch {
+		t.Errorf("matched a different MAC: %v", outcome)
+	}
+}
+
+// fakeLists stands in for router state, so matching can be tested
+// without one. Keys are device + "\x00" + list.
+type fakeLists map[string][]string
+
+func (f fakeLists) InAddressList(device, list, ip string) bool {
+	for _, member := range f[device+"\x00"+list] {
+		if member == ip {
+			return true
+		}
+	}
+	return false
+}
+
+// An entry scoped to a router's address list resolves membership at
+// match time, not from anything stored on the entry (#274 item 2). That
+// is the whole reason this could not be built before: RouterOS edits
+// these lists itself, so a copy taken when the entry was created would
+// be stale the first time the list changed.
+func TestMatchAgainstAnAddressList(t *testing.T) {
+	entry := Entry{
+		ID:         "e1",
+		Ports:      []int{22},
+		SourceList: AddressListRef{Device: "router-a", List: "mgmt"},
+	}
+	lists := fakeLists{"router-a\x00mgmt": {"192.168.1.50"}}
+
+	e := baseEvent()
+	e.SrcIP = "192.168.1.50"
+	e.DstPort = 22
+	if _, outcome := MatchWithLists(entry, e, lists); outcome != Violation {
+		t.Errorf("an address in the list did not match: %v", outcome)
+	}
+
+	// The same traffic from an address that is not in the list.
+	other := e
+	other.SrcIP = "192.168.1.99"
+	if _, outcome := MatchWithLists(entry, other, lists); outcome != NoMatch {
+		t.Errorf("an address outside the list matched: %v", outcome)
+	}
+
+	// Membership is live: removing it takes effect immediately, with no
+	// change to the entry at all.
+	if _, outcome := MatchWithLists(entry, e, fakeLists{}); outcome != NoMatch {
+		t.Error("an address removed from the list still matched -- membership is not being resolved live")
+	}
+
+	// The list is a router's, so the same name on another router is a
+	// different list.
+	elsewhere := fakeLists{"router-b\x00mgmt": {"192.168.1.50"}}
+	if _, outcome := MatchWithLists(entry, e, elsewhere); outcome != NoMatch {
+		t.Error("a list of the same name on a different router matched -- lists belong to routers")
+	}
+}
+
+// Without a way to answer "is this address in that list", an entry
+// scoped to one must match nothing. Recording a match against a scope
+// that could not be evaluated would be worse than recording none.
+func TestAddressListEntryMatchesNothingWithNoResolver(t *testing.T) {
+	entry := Entry{
+		ID:         "e1",
+		Ports:      []int{22},
+		SourceList: AddressListRef{Device: "router-a", List: "mgmt"},
+	}
+	e := baseEvent()
+	e.SrcIP = "192.168.1.50"
+	e.DstPort = 22
+
+	if _, outcome := MatchWithLists(entry, e, nil); outcome != NoMatch {
+		t.Errorf("matched with no way to resolve the list: %v", outcome)
+	}
+	// Match's own signature keeps the old behaviour for every existing
+	// caller: no resolver, so no match.
+	if _, outcome := Match(entry, e); outcome != NoMatch {
+		t.Errorf("Match matched a list-scoped entry: %v", outcome)
+	}
+}
+
+// An address list holds addresses, so an event identified only by MAC is
+// not a member of one -- and guessing otherwise would attribute traffic
+// to a list it was never in.
+func TestAddressListEntryIgnoresAnEventWithNoSourceIP(t *testing.T) {
+	entry := Entry{
+		ID:         "e1",
+		Ports:      []int{22},
+		SourceList: AddressListRef{Device: "router-a", List: "mgmt"},
+	}
+	lists := fakeLists{"router-a\x00mgmt": {"192.168.1.50"}}
+
+	e := baseEvent()
+	e.SrcIP = ""
+	e.SrcMAC = "aa:bb:cc:dd:ee:ff"
+	e.DstPort = 22
+	if _, outcome := MatchWithLists(entry, e, lists); outcome != NoMatch {
+		t.Errorf("an event with no source address matched a list scope: %v", outcome)
+	}
+}
+
+// The recorded match carries the event's own concrete address, not the
+// list it matched through -- otherwise every device in a list would
+// share one match history and the log would stop being evidence.
+func TestAddressListMatchRecordsTheEventsOwnIdentity(t *testing.T) {
+	entry := Entry{
+		ID:         "e1",
+		Ports:      []int{22},
+		SourceList: AddressListRef{Device: "router-a", List: "mgmt"},
+	}
+	lists := fakeLists{"router-a\x00mgmt": {"192.168.1.50", "192.168.1.51"}}
+
+	e := baseEvent()
+	e.SrcIP = "192.168.1.51"
+	e.SrcMAC = ""
+	e.DstPort = 22
+
+	tuple, outcome := MatchWithLists(entry, e, lists)
+	if outcome != Violation {
+		t.Fatalf("expected a match, got %v", outcome)
+	}
+	if tuple.Source.IP != "192.168.1.51" {
+		t.Errorf("tuple identity = %+v, want the event's own address", tuple.Source)
+	}
+}

@@ -27,6 +27,14 @@
 // wants router data to contribute a signal, it goes through an explicit,
 // narrow caller that argues its case (the shape internal/detect's
 // netclass.go established), not through this package growing a path.
+//
+// One stated exception, so the sentence above is not read wider than it
+// holds: watchlist *coverage* reads pushed filter rules
+// (internal/watchlist.Coverage). Coverage is not a suspicion signal --
+// it raises nothing and scores nothing -- but it is the answer to "could
+// anything have fed this entry at all", and pushed rules decide it. See
+// that function's own comment, and #333, for what that means for a
+// leaked ingest token.
 package routerstate
 
 import (
@@ -215,34 +223,65 @@ func (ds *deviceState) rebuildIdentityLocked() {
 	ds.hostsCIDR = cidrs
 }
 
-// HostName returns the router-authored name for ip, or "" -- exact
+// HostName returns the name device pushed for ip, or "" -- exact
 // DNS-static/DHCP entries first, then WireGuard peer ranges by most
 // specific containment ("traffic from 10.10.0.0/24 reads 'branch
-// office'", #186 step 4b). Devices are consulted in sorted-name order so
-// the answer is deterministic when two routers name the same address.
+// office'", #186 step 4b).
+//
+// device scopes the answer, and that scoping is the point. This used to
+// iterate every device that had ever pushed and return the first match,
+// which broke the guarantee internal/auth/token.go states in its own
+// words -- that an ingest token is scoped to one router precisely
+// because "one compromised router could report state for every other
+// device in the deployment" -- and that internal/api/ingest.go repeats:
+// "a router cannot report state for any device but the one its
+// credential is scoped to." For host names, it could.
+//
+// The holder of one router's token (which token.go notes any RouterOS
+// user with `read` can print out of a script) could push a dns-static
+// record naming any address in the world, and that name became the
+// displayed host name for that address on traffic seen through every
+// other monitored router. A single WireGuard peer with AllowedAddress
+// 0.0.0.0/0 became the catch-all name for every otherwise-unlabelled
+// address in the deployment. The mildest version needs no attacker at
+// all: two independently-administered routers both using 192.168.1.0/24
+// cross-contaminate each other's displayed names.
+//
+// Every other read in this file was already scoped through
+// kindLocked(device, kind), and TestDevicesAreIsolated already asserted
+// it for the rule tables. HostName was the one accessor that never got
+// the same treatment, and TestHostNamePrecedence only ever exercised a
+// single device, so nothing exercised the gap. Found independently by
+// two of #272's phase 2 reviewers and reproduced by a third; see #285,
+// #283, #284.
+//
+// An empty device returns "" rather than searching every device: a
+// caller that does not know which router an event came from must not be
+// handed a name on the strength of some other router's claim.
 //
 // Called on the per-event ingest hot path via naming.Resolver, so it is
-// one read lock, one map hit per device, and a linear scan of a small
-// CIDR list only when the map misses.
-func (s *Store) HostName(ip string) string {
-	if ip == "" {
+// one read lock, one map hit, and a linear scan of a small CIDR list
+// only when the map misses.
+func (s *Store) HostName(device, ip string) string {
+	if device == "" || ip == "" {
 		return ""
 	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	for _, name := range sortedDeviceNamesLocked(s.devices) {
-		ds := s.devices[name]
-		if v, ok := ds.hostsExact[ip]; ok {
-			return v
-		}
-		if len(ds.hostsCIDR) > 0 {
-			if addr, err := netip.ParseAddr(ip); err == nil {
-				addr = addr.Unmap()
-				for _, c := range ds.hostsCIDR {
-					if c.prefix.Contains(addr) {
-						return c.name
-					}
+	ds, ok := s.devices[device]
+	if !ok {
+		return ""
+	}
+	if v, ok := ds.hostsExact[ip]; ok {
+		return v
+	}
+	if len(ds.hostsCIDR) > 0 {
+		if addr, err := netip.ParseAddr(ip); err == nil {
+			addr = addr.Unmap()
+			for _, c := range ds.hostsCIDR {
+				if c.prefix.Contains(addr) {
+					return c.name
 				}
 			}
 		}
@@ -360,6 +399,37 @@ func (s *Store) ARPEntries(device string) (entries []ingest.ARPEntry, updatedAt 
 
 // AddressLists returns device's pushed /ip/firewall/address-list table,
 // sorted by (list, address).
+// InAddressList reports whether ip is currently in device's address
+// list, from whatever that router last pushed (#274 item 2).
+//
+// "Currently" is the whole point: RouterOS edits these lists itself --
+// its own rules add dynamic entries -- so a watchlist entry scoped to a
+// list has to be resolved at match time. Answering from a copy taken
+// when the entry was created would be stale the first time the list
+// changed, silently.
+//
+// Compared as text, not as parsed addresses. A list entry can be a bare
+// address, a CIDR or a range, and reading a range as a set of addresses
+// here would quietly turn a display table into a matching engine. What
+// this answers is "is this exact address listed", which is what the
+// pushed table actually says; anything cleverer belongs behind a
+// deliberate decision rather than arriving as a side effect.
+func (s *Store) InAddressList(device, list, ip string) bool {
+	if device == "" || list == "" || ip == "" {
+		return false
+	}
+	entries, _, ok := s.AddressLists(device)
+	if !ok {
+		return false
+	}
+	for _, e := range entries {
+		if e.List == list && e.Address == ip {
+			return true
+		}
+	}
+	return false
+}
+
 func (s *Store) AddressLists(device string) (entries []ingest.AddressListEntry, updatedAt time.Time, ok bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -388,6 +458,28 @@ func (s *Store) Devices() []string {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return sortedDeviceNamesLocked(s.devices)
+}
+
+// PushedKinds reports, for one device, every table it has pushed and
+// when that table last arrived. The setup wizard (#320) uses it to say
+// which blocks of the push script are working -- "filter rules yes,
+// DHCP leases no" is actionable in a way that "pushes are happening" is
+// not.
+func (s *Store) PushedKinds(device string) map[ingest.Kind]time.Time {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	ds, ok := s.devices[device]
+	if !ok {
+		return nil
+	}
+	out := make(map[ingest.Kind]time.Time, len(ds.kinds))
+	for kind, ks := range ds.kinds {
+		if len(ks.pages) == 0 {
+			continue
+		}
+		out[kind] = ks.updatedAt
+	}
+	return out
 }
 
 func (s *Store) kindLocked(device string, kind ingest.Kind) (*kindState, bool) {

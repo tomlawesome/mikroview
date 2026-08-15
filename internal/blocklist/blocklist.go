@@ -14,7 +14,7 @@
 // to stay small and enumerable -- see maxTotalEntries below).
 //
 // The menu today:
-//   - Spamhaus DROP + EDROP (default-enabled): small (~1-2k combined
+//   - Spamhaus DROP (default-enabled): small (~1-2k
 //     CIDR ranges per the issue's own research), free, no registration,
 //     and deliberately conservative -- Spamhaus only lists netblocks
 //     they're confident are entirely malicious-controlled (hijacked/
@@ -45,6 +45,7 @@ import (
 	"net/http"
 	"net/netip"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 )
@@ -56,37 +57,38 @@ type Source string
 
 const (
 	SourceSpamhausDROP               Source = "spamhaus_drop"
-	SourceSpamhausEDROP              Source = "spamhaus_edrop"
 	SourceEmergingThreatsCompromised Source = "emerging_threats_compromised"
 )
 
 // feedDef is one menu entry's fetch/parse definition -- see feedRegistry.
+//
+// Parse returns the feed's own attribution notice (its leading comment
+// block) alongside the prefixes, because Spamhaus's DROP terms require
+// the copyright and list date to stay with the data -- see
+// internal/blocklist/parse.go's leadingNotice.
 type feedDef struct {
 	Source Source
 	Label  string
 	URL    string
-	Parse  func([]byte) ([]netip.Prefix, error)
+	Parse  func([]byte) ([]netip.Prefix, string, error)
 }
 
 // feedRegistry is the entire vetted menu, in priority order -- see
 // Blocklist.orderedEnabledSources' doc comment for what that order
 // controls (which feed gets first claim on maxTotalEntries' shared
-// budget during a Refresh). Spamhaus's two feeds are listed first
-// because they're the recommended, default-enabled, curated-and-small
-// choice; Emerging Threats' larger list is listed last so it never
-// starves either Spamhaus feed of its combined-cap budget just because
-// of enabled-map iteration order.
+// budget during a Refresh). Spamhaus DROP is listed first because it is
+// the recommended, default-enabled, curated-and-small choice; Emerging
+// Threats' larger list is listed last so it never starves DROP of its
+// share of the combined cap just because of enabled-map iteration order.
+//
+// EDROP is deliberately absent: Spamhaus merged it into DROP on
+// 2024-04-10, and the endpoint now serves only a "this list has been
+// merged" comment with no ranges at all. See CHANGELOG's Removed entry.
 var feedRegistry = []feedDef{
 	{
 		Source: SourceSpamhausDROP,
 		Label:  "Spamhaus DROP",
 		URL:    "https://www.spamhaus.org/drop/drop.txt",
-		Parse:  parseSpamhaus,
-	},
-	{
-		Source: SourceSpamhausEDROP,
-		Label:  "Spamhaus EDROP",
-		URL:    "https://www.spamhaus.org/drop/edrop.txt",
 		Parse:  parseSpamhaus,
 	},
 	{
@@ -112,7 +114,7 @@ var registryBySource = func() map[Source]feedDef {
 // free, no registration, conservative. Used by internal/config's
 // defaults(); exported so that default stays defined in exactly one
 // place rather than duplicated as a string literal in two packages.
-var DefaultSources = []string{string(SourceSpamhausDROP), string(SourceSpamhausEDROP)}
+var DefaultSources = []string{string(SourceSpamhausDROP)}
 
 // KnownSources returns every Source on the menu, in registry order --
 // for config validation error messages and docs/tests, not consulted on
@@ -142,7 +144,7 @@ const (
 	// "exact entry-count performance ceiling" question, resolved here
 	// with real measurements rather than estimates:
 	//
-	// A live fetch confirms current real sizes: Spamhaus DROP+EDROP
+	// A live fetch confirms current real sizes: Spamhaus DROP
 	// combined is ~1.7k CIDR ranges, Emerging Threats compromised-IPs is
 	// ~0.6k individual addresses -- ~2.2k combined today, nowhere near
 	// even the old 10,000 cap. Separately, benchmarking searchRanges and
@@ -185,7 +187,7 @@ type rangeEntry struct {
 	lo, hi netip.Addr
 	// cidr is the original CIDR text, kept only when this range came
 	// from exactly one input prefix (the overwhelmingly common case --
-	// Spamhaus's own curation policy keeps DROP/EDROP's entries
+	// Spamhaus's own curation policy keeps DROP's entries
 	// disjoint). Empty when this range absorbed more than one input
 	// prefix during merging, in which case label() below falls back to
 	// a plain lo-hi address-range string.
@@ -213,6 +215,11 @@ type feedState struct {
 	rawCount  int          // entry count before merging, for logging/observability
 	fetchedAt time.Time    // zero until the first successful fetch
 	lastErr   error
+	// notice is the feed's own leading comment block -- its copyright
+	// and list date. Held alongside the ranges it describes, rather than
+	// discarded at parse time, because Spamhaus's DROP terms require
+	// that text to stay with the data. See parse.go's leadingNotice.
+	notice string
 }
 
 // MatchResult describes one local-blocklist hit -- returned by
@@ -238,7 +245,7 @@ type Blocklist struct {
 }
 
 // New builds a Blocklist for sourceNames (config.yaml's blocklist.sources
-// list, e.g. ["spamhaus_drop", "spamhaus_edrop"]) -- an unrecognized name
+// list, e.g. ["spamhaus_drop", "emerging_threats_compromised"]) -- an unrecognized name
 // is logged and skipped, same "malformed input degrades, doesn't crash
 // mikroview" contract as every other optional integration in this
 // codebase. No fetch happens here -- feeds start out empty (Match always
@@ -348,7 +355,7 @@ func (b *Blocklist) Refresh(ctx context.Context) {
 		// mutate and are guarded below) needs no lock.
 		fs := b.feeds[src]
 
-		prefixes, err := fetchAndParse(ctx, b.client, fs.def)
+		prefixes, notice, err := fetchAndParse(ctx, b.client, fs.def)
 		if err != nil {
 			b.mu.Lock()
 			fs.lastErr = err
@@ -375,6 +382,7 @@ func (b *Blocklist) Refresh(ctx context.Context) {
 		fs.rawCount = len(prefixes)
 		fs.fetchedAt = time.Now()
 		fs.lastErr = nil
+		fs.notice = notice
 		b.mu.Unlock()
 
 		msg := fmt.Sprintf("%s: refreshed, %d entries (%d merged ranges)", fs.def.Label, len(prefixes), len(ranges))
@@ -382,27 +390,46 @@ func (b *Blocklist) Refresh(ctx context.Context) {
 			msg += fmt.Sprintf(" -- truncated to stay within the %d-entry combined cap across all enabled lists", maxTotalEntries)
 		}
 		b.log.Info(msg)
+		// The feed's own copyright/date line, logged on every refresh
+		// rather than only retained in memory: Spamhaus requires credit
+		// and that this text stay with the data, and a log line is the
+		// one place an operator can actually see it today (feed state
+		// has no API or UI surface yet).
+		if notice != "" {
+			b.log.Info(fmt.Sprintf("%s: %s", fs.def.Label, strings.ReplaceAll(notice, "\n", " | ")))
+		}
+		// A feed that fetches cleanly but yields nothing is reported,
+		// not passed over in silence: it looks identical to a healthy
+		// refresh in every other log line, and the operator would go on
+		// believing the list is protecting them. This is exactly how the
+		// retired EDROP endpoint behaved for two years before it was
+		// removed from the registry.
+		if len(prefixes) == 0 {
+			b.log.Warn(fmt.Sprintf("%s: fetched successfully but contains no usable entries -- "+
+				"this feed is contributing nothing; check whether it has moved or been retired", fs.def.Label))
+		}
 	}
 }
 
 // fetchAndParse downloads def.URL (bounded by fetchTimeout/
-// maxFetchBytes) and hands the body to def.Parse.
-func fetchAndParse(ctx context.Context, client *http.Client, def feedDef) ([]netip.Prefix, error) {
+// maxFetchBytes) and hands the body to def.Parse, returning the parsed
+// prefixes and the feed's own attribution notice (see feedDef.Parse).
+func fetchAndParse(ctx context.Context, client *http.Client, def feedDef) ([]netip.Prefix, string, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, def.URL, nil)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	resp, err := client.Do(req)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("unexpected status %d", resp.StatusCode)
+		return nil, "", fmt.Errorf("unexpected status %d", resp.StatusCode)
 	}
 	body, err := io.ReadAll(io.LimitReader(resp.Body, maxFetchBytes))
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	return def.Parse(body)
 }

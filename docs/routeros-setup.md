@@ -1,5 +1,15 @@
 # RouterOS setup
 
+> **There is a guided version of this page inside MikroView.** Sign in as
+> an admin and open the menu → **Connect a router**. It generates every
+> command below with your own address, port and a token it mints for you
+> — nothing to fill in — and tells you as each step lands, because each
+> one ends with your router arriving at MikroView.
+>
+> This page remains the reference: what the wizard emits, and why. Use it
+> if you prefer working from documentation, if you are scripting a fleet,
+> or when you want the reasoning behind a step.
+
 MikroView never talks to RouterOS's API and needs no credentials on the
 router. Instead, RouterOS pushes to MikroView: firewall log lines over
 syslog (steps 1–3, required), and optionally a copy of its own
@@ -201,9 +211,23 @@ before step 1, go do that CA import now, then come back here.
 
 ### 4b. Mint an ingest token
 
-In MikroView, sign in as an admin, open **Account → API tokens**, and
-create a token with kind **Ingest**, naming the device — this is what
-scopes it. Or via the API:
+In MikroView, sign in as an admin, open the menu → **API tokens**, set
+the kind dropdown to **Ingest**, and pick the device the token speaks
+for — this is what scopes it. The list offers every router MikroView
+knows about: those declared under `devices:` in `config.yaml`, and any
+that has simply sent syslog (marked *not in config.yaml*, identified by
+its source IP).
+
+Both work, with one thing to know if you pick an undeclared router: the
+token's scope is the device id as it was at that moment. Declaring that
+router later under `devices:` **with an explicit `id`** renames it, and
+the token then scopes to an identity nothing uses any more — pushes keep
+returning `200` while the enrichment silently stops. Declaring it with
+no `id` is safe: the id defaults to its `sourceIp`, which is exactly
+what it already had. Otherwise, reissue the token after declaring it.
+See [configuration.md](configuration.md).
+
+Or via the API:
 
 ```
 curl -k -b <your session cookie> -X POST https://<mikroview-host>/api/tokens \
@@ -234,12 +258,27 @@ real RouterOS 7.23.3 router before writing this down:
 ```
 :local recs [:toarray ""]
 :foreach i,v in=[/ip/firewall/filter print as-value] do={
-  :local rec {"ordinal"=$i; "comment"=($v->"comment"); "chain"=($v->"chain"); "action"=($v->"action"); "srcAddressList"=($v->"src-address-list"); "logPrefix"=($v->"log-prefix"); "dstPort"=($v->"dst-port"); "protocol"=($v->"protocol")}
+  :local rec {"ordinal"=$i; "comment"=($v->"comment"); "chain"=($v->"chain"); "action"=($v->"action"); "srcAddressList"=($v->"src-address-list"); "logPrefix"=($v->"log-prefix"); "dstPort"=($v->"dst-port"); "protocol"=($v->"protocol"); "log"=($v->"log"); "dstAddress"=($v->"dst-address"); "srcAddress"=($v->"src-address")}
   :set recs ($recs, {$rec})
 }
 :local payload [:serialize to=json value={"kind"="filter-rule"; "page"=1; "pages"=1; "records"=$recs}]
 /tool fetch url="https://<mikroview-host>/api/ingest/routeros" http-method=post http-data=$payload http-header-field=("Content-Type: application/json,Authorization: Bearer <your ingest token>") check-certificate=yes output=none
 ```
+
+**Update MikroView before you update this script.** MikroView refuses a
+push containing a field it does not recognise, rather than ignoring the
+extra — that strictness is deliberate (it is how a typo in a field name
+becomes an error instead of a silently missing column), but it means a
+router sending the newer script to an older MikroView gets a `400` and
+stops pushing. The other order is safe: an older script against a newer
+MikroView just leaves the new fields unset.
+
+`log`, `dstAddress` and `srcAddress` were added for issue #274: they are
+what lets MikroView tell you that a watchlist entry can never match
+because no rule on this router logs traffic in its scope. `log` is the
+important one — a rule with `log=no` sends nothing at all, whatever else
+it matches, and without this field MikroView had to guess from whether a
+`log-prefix` happened to be set, which is wrong in both directions.
 
 `dstPort`/`protocol` were added for issue #243's suggested-watchlist-entries
 feature: without them mikroview has no way to know which ports a rule
@@ -319,8 +358,10 @@ its own `:foreach`.
 ARP has no name of its own, but pushing it still earns its keep: a
 device's DHCP lease can go stale between the router's own renewal
 cycles, while ARP reflects what's actually answering right now.
-`internal/routerstate` prefers ARP's address over a same-MAC lease's
-when both are pushed, for exactly that reason.
+MikroView prefers ARP's address over a same-MAC lease's when both are
+pushed, for exactly that reason (the choice is made in
+`internal/suggest`'s candidate generation; `internal/routerstate` just
+holds what each router pushed).
 
 **Other tables** follow the identical pattern, swapping the source
 command and the field names for MikroView's schema names -- worth
@@ -330,7 +371,7 @@ to cover more than filter rules and DHCP/ARP:
 | `kind` | Source command | Fields |
 |---|---|---|
 | `address-list` | `/ip/firewall/address-list print as-value` | `list`, `address`, `comment`, `dynamic` |
-| `filter-rule` | `/ip/firewall/filter print as-value` | `ordinal` (loop index), `comment`, `chain`, `action`, `srcAddressList` ← `src-address-list`, `logPrefix` ← `log-prefix`, `dstPort` ← `dst-port`, `protocol` |
+| `filter-rule` | `/ip/firewall/filter print as-value` | `ordinal` (loop index), `comment`, `chain`, `action`, `srcAddressList` ← `src-address-list`, `logPrefix` ← `log-prefix`, `dstPort` ← `dst-port`, `protocol`, `log`, `dstAddress` ← `dst-address`, `srcAddress` ← `src-address` |
 | `nat-rule` | `/ip/firewall/nat print as-value` | `ordinal` (loop index), `comment`, `chain`, `action` |
 | `dns-static` | `/ip/dns/static print as-value` | `name`, `address` |
 | `dhcp-lease` | `/ip/dhcp-server/lease print as-value` | `hostname` ← `host-name`, `mac` ← `mac-address`, `address` |
@@ -345,6 +386,21 @@ label you've set inside MikroView for the same address — manage names
 for anything the router already knows about *in RouterOS*, not in
 MikroView's UI; anything the router doesn't cover stays exactly as
 you set it there.
+
+**A pushed name only applies to that router's own traffic.** If you
+monitor more than one router, a name `office-router` pushes is used on
+events MikroView received from `office-router`, and nowhere else. That
+is the same one-router blast radius the ingest token itself has (step
+4b): a compromised or careless router can misname the hosts it sees,
+never the hosts another router sees. Two sites both using
+`192.168.1.0/24` therefore don't contaminate each other's names either.
+
+For this to line up, the `device` you name on the token must be the
+same identifier the device has in MikroView — the `id` of its entry
+under `devices:` in `config.yaml`. That is already true of the rule
+and NAT table lookups, so if those work for a router, host names will
+too. If you push under a name MikroView doesn't otherwise know, that
+router's traffic simply shows unnamed hosts.
 
 No `read,write` or `sensitive` policy is needed for any of this —
 `read,test` (below) is enough, and WireGuard *private* keys never
@@ -382,6 +438,35 @@ bearer token embedded in the script's own source, held to the same
 `read`-policy-can-read-it caveat as step 4b describes. 15–30 minutes
 is plenty: this data changes when you edit your firewall, not every
 few seconds.
+
+### If you're doing this in WinBox instead
+
+The two commands above map to **System → Scripts → +** and **System →
+Scheduler → +**. The script dialog has options the CLI commands never
+mention, and its defaults are not the CLI's:
+
+- **Policy** — WinBox pre-ticks *every* policy for a new script.
+  Untick everything except **read** and **test**: `read` is what lets
+  the script print the tables it pushes, `test` is what `/tool fetch`
+  needs, and nothing in this script changes config (`write`), manages
+  users (`policy`, `password`), or reads secrets (`sensitive`). The
+  scheduler entry needs the same two ticked — RouterOS refuses to run
+  a script whose policies the scheduler doesn't also hold, so a
+  `read,test` script under a default scheduler runs, but not the
+  other way round.
+- **Don't Require Permissions** — leave unchecked. Checking it lets
+  any user able to run scripts run this one with the *script's*
+  permissions instead of their own. This setup has no use for that.
+- **Owner** — filled in automatically with the account that saves the
+  script; nothing to set.
+- **Last Time Started / Run Count** — read-only status, empty until
+  the first run. After **Run Script** (or the scheduler firing), Run
+  Count incrementing tells you the script ran — it does *not* tell
+  you the pushes landed, which is what step 5 checks.
+
+And paste the source with `<mikroview-host>` and the token already
+filled in — the dialog saves placeholders without complaint, and the
+failure only surfaces later as `failure:` lines in `/log print`.
 
 ## 5. Verify
 

@@ -75,6 +75,25 @@ type Entry struct {
 	// unexpected," not "did it use a particular port."
 	Ports []int `json:"ports,omitempty"`
 
+	// SourceList scopes a non-inverted entry to whatever addresses are
+	// in a router's own address list *at the moment an event arrives*,
+	// rather than to one fixed address (#274 item 2).
+	//
+	// This is the piece that could not be built before. Source above is
+	// a stored identity, decided when the entry is created; an address
+	// list is edited on the router, often by the router itself
+	// (RouterOS adds dynamic entries from its own rules), so an entry
+	// scoped to one is only meaningful if membership is resolved live.
+	// Expanding the list into fixed entries at creation time was the
+	// alternative and is exactly wrong: it would be stale the first time
+	// the list changed, silently.
+	//
+	// Empty means unused, and Source applies instead. The two are not
+	// combined: an entry is scoped by an identity or by a list, and
+	// silently intersecting them would make "no matches" ambiguous in a
+	// way this package works hard to avoid.
+	SourceList AddressListRef `json:"sourceList,omitzero"`
+
 	// Invert switches this entry from "record attempts against these
 	// ports" to "this device should only ever reach the destinations in
 	// Permitted" -- see invert.go for the matching rule, and this
@@ -229,6 +248,21 @@ func OpenWithBackend(b persist.Backend) (*Store, error) {
 // sort the result themselves rather than this store guessing which
 // order a caller wants.
 func (s *Store) List() []Entry {
+	out := s.entriesSnapshot()
+	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
+	return out
+}
+
+// entriesSnapshot is List without the sort, for evaluateRecovered's
+// per-event Match loop -- Match doesn't care about order, so the
+// sort.Slice call List() does purely for API/UI stability was dead
+// weight on that path, measured at up to 4.3ms/event at 5,000 entries.
+// Still copies every entry rather than returning s.entries directly:
+// the caller (evaluateRecovered) iterates the result after this
+// returns, without holding s.mu, because it calls RecordObservation
+// mid-loop, which takes its own Lock -- holding RLock across that call
+// would deadlock.
+func (s *Store) entriesSnapshot() []Entry {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -236,7 +270,6 @@ func (s *Store) List() []Entry {
 	for _, e := range s.entries {
 		out = append(out, *e)
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
 	return out
 }
 
@@ -359,10 +392,39 @@ func isTrackableConnState(e store.Event) bool {
 
 // eventIdentity resolves an event's source identity the same
 // MAC-preferred, IP-fallback way matchlog.Identity.MatchesSource
-// compares against: SrcMAC when the parser found one (only the forward
-// chain reliably carries it), SrcIP otherwise.
+// compares against: SrcMAC when the parser found one, SrcIP otherwise.
+//
+// Which chains carry src-mac is a property of the firmware, not
+// something to rely on: on a real RouterOS 7.23.3 both forward and input
+// carry it (#273), while output -- traffic the router originates, so
+// there is no incoming frame to read a source MAC from -- does not. The
+// IP fallback is what makes that not matter here.
 func eventIdentity(e store.Event) matchlog.Identity {
 	return matchlog.Identity{MAC: e.SrcMAC, IP: e.SrcIP}
+}
+
+// AddressListRef names one router's address list.
+//
+// Device as well as List because an address list belongs to a router:
+// two routers can both have a "mgmt" list meaning entirely different
+// things, and a watchlist entry that silently matched either would be
+// answering a question nobody asked.
+type AddressListRef struct {
+	Device string `json:"device,omitempty"`
+	List   string `json:"list,omitempty"`
+}
+
+func (r AddressListRef) Empty() bool { return r.Device == "" || r.List == "" }
+
+// AddressListMembership answers whether an address is in a router's
+// address list right now.
+//
+// A local interface rather than an import of internal/routerstate, the
+// same dependency-direction reasoning internal/syslog uses for its
+// certificate source and internal/oidc for its config. It also keeps
+// matching testable without standing up a router-state store.
+type AddressListMembership interface {
+	InAddressList(device, list, ip string) bool
 }
 
 // Outcome is what evaluating one event against one entry decided.
@@ -395,10 +457,19 @@ const (
 // devices still produces one matchlog record per device, not one shared
 // record every device's traffic collapses into.
 func Match(entry Entry, e store.Event) (matchlog.Tuple, Outcome) {
+	return MatchWithLists(entry, e, nil)
+}
+
+// MatchWithLists is Match with a way to resolve address-list membership
+// (#274 item 2). members may be nil, in which case an entry scoped to a
+// list matches nothing -- which is the safe direction: without a way to
+// answer "is this address in that list", the honest answer is not to
+// record a match against an entry whose scope cannot be evaluated.
+func MatchWithLists(entry Entry, e store.Event, members AddressListMembership) (matchlog.Tuple, Outcome) {
 	if entry.Invert {
 		return matchInverted(entry, e)
 	}
-	return matchNonInverted(entry, e)
+	return matchNonInverted(entry, e, members)
 }
 
 // matchNonInverted implements "record attempts against these ports":
@@ -407,7 +478,7 @@ func Match(entry Entry, e store.Event) (matchlog.Tuple, Outcome) {
 // event's own resolved identity; DestIP, if the entry scopes it, must
 // equal e.DstIP. Only ever returns NoMatch or Violation -- there is no
 // observe state for a non-inverted entry.
-func matchNonInverted(entry Entry, e store.Event) (matchlog.Tuple, Outcome) {
+func matchNonInverted(entry Entry, e store.Event, members AddressListMembership) (matchlog.Tuple, Outcome) {
 	if e.DstPort == 0 || !containsPort(entry.Ports, e.DstPort) {
 		return matchlog.Tuple{}, NoMatch
 	}
@@ -421,7 +492,19 @@ func matchNonInverted(entry Entry, e store.Event) (matchlog.Tuple, Outcome) {
 		// attributed to a device at all.
 		return matchlog.Tuple{}, NoMatch
 	}
-	if !entry.Source.Empty() && !entry.Source.MatchesSource(id) {
+	if !entry.SourceList.Empty() {
+		// Scoped to a list: membership is resolved now, against what the
+		// router has pushed, rather than against anything stored on the
+		// entry. e.SrcIP rather than the resolved identity, because an
+		// address list holds addresses -- a MAC-identified event is not
+		// a member of anything.
+		if members == nil || e.SrcIP == "" {
+			return matchlog.Tuple{}, NoMatch
+		}
+		if !members.InAddressList(entry.SourceList.Device, entry.SourceList.List, e.SrcIP) {
+			return matchlog.Tuple{}, NoMatch
+		}
+	} else if !entry.Source.Empty() && !entry.Source.MatchesSource(id) {
 		return matchlog.Tuple{}, NoMatch
 	}
 	if entry.DestIP != "" && entry.DestIP != e.DstIP {

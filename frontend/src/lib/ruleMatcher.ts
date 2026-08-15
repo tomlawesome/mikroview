@@ -79,19 +79,58 @@ export class RuleMatcher {
   private worker: WorkerLike | null = null
   private seq = 0
   private readonly factory: WorkerFactory
+  // In-flight requests, keyed by the id sent to the worker.
+  //
+  // The handlers used to be assigned per run() on the shared worker, so
+  // two overlapping calls meant the second one's assignment replaced the
+  // first's -- and the first could then only ever settle via its own
+  // timeout, reporting 'too-slow'. Per applyFilters' contract that
+  // silently drops the active regex filter and shows every event
+  // unfiltered while the UI claims the pattern was too slow, which bites
+  // exactly when a filter matters most: state.svelte.ts's flushIncoming
+  // fires every 175ms without awaiting, so any round trip longer than
+  // that overlaps. One handler dispatching by id has no such window.
+  private readonly pending = new Map<number, (outcome: MatchOutcome) => void>()
 
   constructor(factory: WorkerFactory = defaultFactory) {
     this.factory = factory
   }
 
   private ensure(): WorkerLike {
-    if (!this.worker) this.worker = this.factory()
+    if (!this.worker) {
+      const worker = this.factory()
+      worker.onmessage = (e: { data: unknown }) => {
+        const data = e.data as { id: number; ids?: number[]; invalid?: boolean }
+        const settle = this.pending.get(data.id)
+        // A late reply from a request that already timed out, or from a
+        // worker replaced since. Nothing to resolve.
+        if (!settle) return
+        if (data.invalid) {
+          settle({ status: 'invalid' })
+          return
+        }
+        settle({ status: 'ok', ids: data.ids ?? [] })
+      }
+      worker.onerror = () => {
+        // The worker itself failed, which tells us nothing about which
+        // request caused it -- so every in-flight one is unanswerable.
+        this.kill('invalid')
+      }
+      this.worker = worker
+    }
     return this.worker
   }
 
-  private kill() {
+  // kill terminates the worker and settles everything still waiting on
+  // it. Without that last part a killed worker left its callers pending
+  // until their own timeouts, which is the stall this exists to end.
+  private kill(status: 'too-slow' | 'invalid' = 'too-slow') {
     this.worker?.terminate()
     this.worker = null
+    const waiting = [...this.pending.values()]
+    this.pending.clear()
+    const outcome: MatchOutcome = status === 'invalid' ? { status: 'invalid' } : { status: 'too-slow' }
+    for (const settle of waiting) settle(outcome)
   }
 
   run(
@@ -108,32 +147,18 @@ export class RuleMatcher {
         if (settled) return
         settled = true
         clearTimeout(timer)
+        this.pending.delete(id)
         resolve(outcome)
       }
 
       const timer = setTimeout(() => {
         // Still spinning on the pattern, and it will never answer.
         // Killing it is the guarantee.
-        this.kill()
         finish({ status: 'too-slow' })
+        this.kill()
       }, timeoutMs)
 
-      worker.onmessage = (e) => {
-        const data = e.data as { id: number; ids?: number[]; invalid?: boolean }
-        // A late reply from a superseded request must not resolve this
-        // one. The user types, so patterns supersede each other often.
-        if (data.id !== id) return
-        if (data.invalid) {
-          finish({ status: 'invalid' })
-          return
-        }
-        finish({ status: 'ok', ids: data.ids ?? [] })
-      }
-      worker.onerror = () => {
-        this.kill()
-        finish({ status: 'invalid' })
-      }
-
+      this.pending.set(id, finish)
       worker.postMessage({ id, pattern, candidates })
     })
   }

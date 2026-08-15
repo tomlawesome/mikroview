@@ -29,12 +29,14 @@ import (
 	"github.com/tomlawesome/mikroview/internal/watchlist"
 )
 
-// newTestServer's Auth defaults to the "disabled" state (see
-// auth.Store.Disable) -- zero users, but a deliberate, permanent
-// opt-out, not the tightened "undecided" bootstrap state (see
-// requireAuth). Callers mount s.mux() rather than s.Routes(), which is
-// what "a fully open API" means now that authentication cannot be turned
-// off -- auth_test.go and the authzMatrix guard mount Routes and cover
+// newTestServer's Auth has zero users. That is the "undecided"
+// bootstrap state, which requireAuth answers 503 to -- there is no
+// opt-out state any more, and the auth.Store.Disable this comment used
+// to name has not existed for some time (#282).
+//
+// So these tests mount s.mux() rather than s.Routes(): the handlers
+// under test are reached directly, with the gate deliberately out of the
+// picture. auth_test.go and the authzMatrix guard mount Routes and cover
 // the gate itself.
 func newTestServer(t *testing.T) (*Server, *store.Store) {
 	t.Helper()
