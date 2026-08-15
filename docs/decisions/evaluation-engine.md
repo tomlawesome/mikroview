@@ -158,9 +158,10 @@ be the expensive way round.
   expectation definitions. Nothing an operator authored is dropped, and
   `-backup`/`-restore` cover the definitions store from day one (#372's
   lesson).
-- API: existing `/api/detectors` and `/api/watchlist` routes keep
-  working against the new store for one release, marked deprecated in
-  the docs, so nothing external breaks on upgrade day.
+- API: `/api/detectors` and `/api/watchlist` are replaced wholesale in
+  v0.3.0 -- no compatibility routes. Owner decision, 2026-08-15: the
+  sole deployment is the owner's own, and pre-1.0 removals are
+  wholesale per AGENTS.md. The CHANGELOG communicates it, as always.
 
 ## What this fixes by construction
 
@@ -198,19 +199,24 @@ names the engine contract that retires it.
   contract -- is what keeps "two kinds" from decaying back into "two
   subsystems".
 
-## Open questions for ratification
+## The open questions, decided (owner, 2026-08-15)
 
-1. **The user-facing noun.** "Rule" collides fatally with RouterOS
-   firewall rules, which mikroview displays constantly. This document
-   uses **definition**; "monitor" and "watcher" are the alternatives.
-   Owner's call, purely naming.
-2. **Replay's data source.** The in-memory event store's retention
-   window is the natural replay corpus (cheap, already there) but limits
-   receipts to that window. Accepting that limit for v1 is the
-   recommendation; replay against longer history would drag in storage
-   questions v0.3.0 does not need.
-3. **Whether `/api/detectors`/`/api/watchlist` compatibility routes are
-   worth one release of life**, or whether v0.3.0's breaking-release
-   licence (removals are wholesale, pre-1.0) should apply to the API
-   too. Recommendation above is one release; the epic's phase 2 may
-   moot it if the new UI ships in the same release anyway.
+1. **The user-facing noun is "definition".** "Rule" collides fatally
+   with RouterOS firewall rules, which mikroview displays constantly.
+2. **Replay's corpus is the in-memory event window for v1** -- and every
+   receipt states the window it covers ("would have fired 6 times in
+   the last 36h"), so a short corpus can never overclaim.
+
+   Recorded with the decision, because it shaped it: the owner's
+   reservation that this fails under high bandwidth, and that
+   *"statistically meaningful validation improves the longer we keep"*.
+   Both are correct -- a receipt computed over one quiet day is a weaker
+   basis for loosening a threshold than one computed over a fortnight
+   that saw a weekend, a scan, and a backup window. So longer on-disk
+   event retention is **an anticipated future decision, not a rejected
+   one**: nothing in v1's design may assume the replay corpus is only
+   ever the memory window, and when receipts prove too thin in
+   practice, retention gets its own ADR with real sizing numbers from
+   the running instance rather than estimates.
+3. **No API compatibility routes.** See Migration above -- wholesale,
+   per AGENTS.md, sole-deployment reality acknowledged.
