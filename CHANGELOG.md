@@ -28,6 +28,41 @@ rewritten.
 
 ### Fixed
 
+- **`-backup` silently dropped the entire watchlist -- entries, the
+  suggested-entries pool, and the match log -- and `-restore` gave no
+  sign anything was missing** (#372). `backedUpStores` (`backup_cli.go`)
+  is a hand-maintained list pairing each store with where it lives on a
+  JSON deployment, and it had drifted three fields behind
+  `config.Config`: `watchlist.storePath`, `watchlist.matchLogPath` and
+  `watchlist.suggestionsStorePath` were never added to it, even though
+  this file's own doc comment and this document's backup section both
+  claimed the envelope carried "everything." An operator following the
+  documented disaster-recovery path -- `-backup` before an upgrade,
+  `-restore` if it goes wrong -- got a file that looked complete, a
+  restore that reported success, and a watchlist that had quietly gone
+  back to empty. All three are now carried. Fixing this also surfaced a
+  second, latent bug on the way in: the match log is a newline-delimited
+  JSON file, not a single JSON document like every other store here, and
+  embedding it directly the way the other stores are embedded made
+  `-backup` fail outright the moment a second match was ever recorded --
+  caught before it shipped, by a round-trip test that populates two
+  match-log records rather than the one that would have passed either
+  way. It is now base64-wrapped going in and unwrapped coming back out,
+  which needed no format change and stays fully compatible with backups
+  taken by earlier builds. Two exclusions are now written down explicitly
+  rather than being an accident of the list never mentioning them: the
+  TLS certificate/key directory (`tls.storePath`) and the GeoIP database
+  (`geoip.dbPath`), alongside the pre-existing recovery-pepper exclusion
+  (#97) -- see `docs/configuration.md`'s "Backing up and restoring"
+  section for what each one is and why. A new test
+  (`TestBackupCoversAllConfigPathFields`) now fails the build if a future
+  `*Path` config field is added without an explicit backup decision, so
+  this can't drift the same way twice. **Every backup taken before this
+  fix is missing the watchlist** -- if you have watchlist entries,
+  suggestions, or match-log history you care about, re-run `-backup` now
+  that you've upgraded; nothing about restoring an old backup was
+  destructive, it just wouldn't have brought the watchlist back.
+
 - **A store whose on-disk document exists but can't be read now refuses
   to start mikroview, instead of quietly running on near-empty state and
   then overwriting the real file** (#378). Every persisted store --

@@ -220,6 +220,11 @@ type Log struct {
 // database bundled or fetched, since MaxMind requires a free account to
 // obtain one.
 type GeoIP struct {
+	// DBPath is kept out of the backup set (#372) on purpose: it names an
+	// external MaxMind database file the operator downloads themselves,
+	// not a store mikroview writes -- there is nothing here for a
+	// restore to reproduce that a fresh download would not already give
+	// back. See backup_cli.go's excludedFromBackup.
 	DBPath string `yaml:"dbPath"`
 }
 
@@ -452,6 +457,15 @@ type TLS struct {
 	// reverse proxy) is a one-time cost rather than a per-restart one.
 	// Optional, same contract as flags.storePath: left unset, TLS still
 	// works, it just regenerates (and needs re-trusting) every restart.
+	//
+	// Kept out of the backup set (#372) on purpose: this is a directory
+	// of generated CA + certificate key material, not a single JSON
+	// document like every other *Path field backedUpStores carries, and
+	// restoring it blind onto a new host is more likely to be wrong than
+	// right -- different hostname/IP SANs, a CA nothing there has
+	// trusted yet. Regenerating it is one restart away, so there is
+	// nothing here a restore is actually saving. See
+	// backup_cli.go's excludedFromBackup.
 	StorePath string `yaml:"storePath"`
 }
 

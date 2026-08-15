@@ -1748,7 +1748,24 @@ mikroview -restore /secure/place/mikroview-backup.json.gz
 ```
 
 One gzipped file holding every store: accounts, API tokens, recovery-key
-digests, flags, entities, detector settings, the audit log.
+digests, flags, rule usage, detector settings, entities, the MAC
+registry, the audit log, the watchlist, watchlist suggestions, and the
+watchlist match log.
+
+Three things are deliberately left out, and always have been:
+
+- **The TLS certificate and key material** (`tls.storePath`) — a
+  directory of generated key material, not a single document like every
+  store above, and restoring it onto a different host is more likely to
+  be wrong than right (different hostname/IP SANs, a CA nothing there
+  has trusted yet). It regenerates on its own the next time mikroview
+  starts without it.
+- **The recovery pepper** (`auth.recoveryPepperPath`) — the secret mixed
+  into every recovery-key digest. Keeping it out means a stolen backup
+  carries the digests and nothing able to verify them against.
+- **The GeoIP database** (`geoip.dbPath`) — a file you downloaded from
+  MaxMind yourself, not something mikroview wrote. A fresh download
+  replaces it exactly.
 
 **It contains your credentials.** That is deliberate — a backup that
 leaves them out cannot restore a working system, and you would find that
