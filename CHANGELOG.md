@@ -71,6 +71,20 @@ rewritten.
   most one interval instead of leaving it open indefinitely. Reported by
   the post-release review of v0.2.0 (#375).
 
+- **A firewall log line's TCP-flags/ICMP-type field is now length-capped
+  and stripped of control characters, like every other field mikroview
+  extracts -- closing a gap that reopened #285's largest memory finding**
+  (#369). That field comes from the parenthetical after `proto` in a
+  RouterOS log line -- `proto TCP (SYN)`, `proto ICMP (type 8, code 0)`
+  -- and it was the one extracted field the original clamp missed. A
+  crafted line could put over 65KB into it alone, retained in every event
+  slot, returned in the API's JSON, and quoted in any flag notification
+  it triggers: the same **12.5GB resident at the documented 120MiB
+  budget** overrun #285 fixed for the raw log line, reopened through a
+  field the earlier fix's field-by-field list never named. Real values
+  (`SYN`, `SYN,ACK`, `type 8, code 0`) are a few bytes long, so nothing
+  genuine is affected.
+
 ## [0.2.0] - 2026-08-14
 
 ### Removed
