@@ -31,22 +31,25 @@ func TestOpenMissingFileIsUsable(t *testing.T) {
 	}
 }
 
-func TestOpenMalformedFileStartsEmpty(t *testing.T) {
+// TestOpenMalformedFileFailsClosed pins issue #378's policy: a document
+// that exists but cannot be parsed is refused outright, not treated as
+// empty. See flags.TestOpenMalformedFileFailsClosed for the full
+// reasoning -- same fix, same shape, applied through the same shared
+// persist.Open helper. This package doubles as the fix's own regression
+// test target -- see TestPersistFailureIsNotSilent in
+// persist_failure_test.go for the sibling "a write must not corrupt the
+// file" contract.
+func TestOpenMalformedFileFailsClosed(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "audit.json")
 	if err := os.WriteFile(path, []byte("not valid json"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	s, err := Open(path)
 	if err == nil {
-		t.Error("expected a non-nil informational error for a malformed file")
+		t.Fatal("expected a non-nil error for a malformed file, want fail-closed")
 	}
-	if res := s.Query(Query{}); len(res.Entries) != 0 {
-		t.Errorf("expected a malformed file to start empty, got %d entries", len(res.Entries))
-	}
-	// still usable despite the error
-	s.Record("admin", "user.create", "alice", "")
-	if res := s.Query(Query{}); len(res.Entries) != 1 {
-		t.Error("store returned from Open() with a malformed file should still be usable")
+	if s != nil {
+		t.Error("expected a nil store on a load failure -- a non-nil store here would still carry a live backend")
 	}
 }
 

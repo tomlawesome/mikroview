@@ -60,24 +60,22 @@ func TestOpenSkipsNilArrayElements(t *testing.T) {
 	}
 }
 
-func TestOpenMalformedFileStartsEmpty(t *testing.T) {
+// TestOpenMalformedFileFailsClosed pins issue #378's policy: a document
+// that exists but cannot be parsed is refused outright, not treated as
+// empty. See flags.TestOpenMalformedFileFailsClosed for the full
+// reasoning -- same fix, same shape, applied through the same shared
+// persist.Open helper.
+func TestOpenMalformedFileFailsClosed(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "entities.json")
 	if err := os.WriteFile(path, []byte("not valid json"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	s, err := Open(path)
 	if err == nil {
-		t.Error("expected a non-nil informational error for a malformed file")
+		t.Fatal("expected a non-nil error for a malformed file, want fail-closed")
 	}
-	if len(s.List()) != 0 {
-		t.Errorf("expected a malformed file to start empty, got %d entities", len(s.List()))
-	}
-	// still usable despite the error
-	if _, err := s.Upsert(Entity{Type: TypeHost, Key: "1.2.3.4"}); err != nil {
-		t.Fatalf("store returned from Open() with a malformed file should still be usable: %v", err)
-	}
-	if len(s.List()) != 1 {
-		t.Error("store returned from Open() with a malformed file should still be usable")
+	if s != nil {
+		t.Error("expected a nil store on a load failure -- a non-nil store here would still carry a live backend")
 	}
 }
 

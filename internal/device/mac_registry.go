@@ -86,10 +86,10 @@ const persistTimeout = 5 * time.Second
 // "persistence not configured" case: a fully usable, in-memory-only
 // registry is returned -- every MAC will look "new" again on every
 // restart, same trade-off flags.Open's empty-path case documents. A
-// malformed file is treated as empty rather than failing, so a
-// corrupted registry file never blocks mikroview from starting. Either
-// way the returned *MACRegistry is always safe to use unconditionally;
-// a non-nil error is only ever informational, for the caller to log.
+// document that exists but cannot be read or parsed is a hard error
+// (issue #378): the caller gets (nil, err) rather than a registry whose
+// live backend would overwrite that document on the first write. See
+// persist.Open.
 func OpenMACRegistry(path string) (*MACRegistry, error) {
 	if path == "" {
 		return OpenMACRegistryWithBackend(nil)
@@ -104,27 +104,27 @@ func OpenMACRegistryWithBackend(b persist.Backend) (*MACRegistry, error) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), persistTimeout)
 	defer cancel()
-	data, version, err := persist.LoadDocument(ctx, b)
-	if err != nil {
-		return r, err
-	}
-	if data == nil {
-		return r, nil
-	}
-	r.version = version
-
-	var list []*MACEntry
-	if err := json.Unmarshal(data, &list); err != nil {
-		return r, err
-	}
-	for _, e := range list {
-		// A JSON array containing `null` unmarshals successfully into a
-		// nil *MACEntry -- valid JSON, so the err check above never
-		// catches it. Same defensive skip flags.Open uses.
-		if e == nil || e.MAC == "" {
-			continue
+	version, existed, err := persist.Open(ctx, b, "the MAC registry", func(data []byte) error {
+		var list []*MACEntry
+		if err := json.Unmarshal(data, &list); err != nil {
+			return err
 		}
-		r.byMAC[normalizeMAC(e.MAC)] = e
+		for _, e := range list {
+			// A JSON array containing `null` unmarshals successfully
+			// into a nil *MACEntry -- valid JSON, so the err check above
+			// never catches it. Same defensive skip flags.Open uses.
+			if e == nil || e.MAC == "" {
+				continue
+			}
+			r.byMAC[normalizeMAC(e.MAC)] = e
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	if existed {
+		r.version = version
 	}
 	return r, nil
 }
