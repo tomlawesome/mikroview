@@ -26,6 +26,17 @@ rewritten.
   uptime for long. `/api/healthz` grows an `uptimeSeconds` field
   alongside the existing human-readable `uptime` string.
 
+### Fixed
+
+- **Typing an `/api/...` address into the browser now returns the API's
+  JSON instead of loading the interface.** The app's service worker
+  answers page navigations from its cached shell so the UI opens
+  instantly, and it was doing that for *every* typed address --
+  including API endpoints and `/ca.crt`, which belong to the server.
+  The UI itself was never affected (its own requests are not
+  navigations), which is why this only surfaced when an operator tried
+  to read `/api/stats` directly. Reported 2026-08-15.
+
 ## [0.2.0] - 2026-08-14
 
 ### Removed
