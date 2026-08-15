@@ -10,7 +10,7 @@ until it is ratified.
 mikroview evaluates the event stream twice, through two subsystems that
 are the same machine built twice by hand:
 
-- `internal/detect` -- seventeen detectors watching for the unexpected,
+- `internal/detect` -- twelve detectors watching for the unexpected,
   raising flags (`internal/flags`).
 - `internal/watchlist` -- operator-authored expectations about what
   *should* happen, recording observations, promotions and violations
@@ -142,7 +142,7 @@ emitted N times; here are the emissions". Replay is the receipts
 mechanism #385 phase 3's auto-tune is specified against ("at X this
 would have fired 6 times, not 41 -- here are the 35 dropped"), and it
 must be part of the engine's v1 contract even though the auto-tune UI
-comes later: retrofitting replay under seventeen ported detectors would
+comes later: retrofitting replay under twelve ported detectors would
 be the expensive way round.
 
 ## Migration

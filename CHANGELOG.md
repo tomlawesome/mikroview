@@ -28,6 +28,61 @@ rewritten.
 
 ### Fixed
 
+- **`-backup` silently dropped the entire watchlist -- entries, the
+  suggested-entries pool, and the match log -- and `-restore` gave no
+  sign anything was missing** (#372). `backedUpStores` (`backup_cli.go`)
+  is a hand-maintained list pairing each store with where it lives on a
+  JSON deployment, and it had drifted three fields behind
+  `config.Config`: `watchlist.storePath`, `watchlist.matchLogPath` and
+  `watchlist.suggestionsStorePath` were never added to it, even though
+  this file's own doc comment and this document's backup section both
+  claimed the envelope carried "everything." An operator following the
+  documented disaster-recovery path -- `-backup` before an upgrade,
+  `-restore` if it goes wrong -- got a file that looked complete, a
+  restore that reported success, and a watchlist that had quietly gone
+  back to empty. All three are now carried. Fixing this also surfaced a
+  second, latent bug on the way in: the match log is a newline-delimited
+  JSON file, not a single JSON document like every other store here, and
+  embedding it directly the way the other stores are embedded made
+  `-backup` fail outright the moment a second match was ever recorded --
+  caught before it shipped, by a round-trip test that populates two
+  match-log records rather than the one that would have passed either
+  way. It is now base64-wrapped going in and unwrapped coming back out,
+  which needed no format change and stays fully compatible with backups
+  taken by earlier builds. Two exclusions are now written down explicitly
+  rather than being an accident of the list never mentioning them: the
+  TLS certificate/key directory (`tls.storePath`) and the GeoIP database
+  (`geoip.dbPath`), alongside the pre-existing recovery-pepper exclusion
+  (#97) -- see `docs/configuration.md`'s "Backing up and restoring"
+  section for what each one is and why. A new test
+  (`TestBackupCoversAllConfigPathFields`) now fails the build if a future
+  `*Path` config field is added without an explicit backup decision, so
+  this can't drift the same way twice. **Every backup taken before this
+  fix is missing the watchlist** -- if you have watchlist entries,
+  suggestions, or match-log history you care about, re-run `-backup` now
+  that you've upgraded; nothing about restoring an old backup was
+  destructive, it just wouldn't have brought the watchlist back.
+
+- **A store whose on-disk document exists but can't be read now refuses
+  to start mikroview, instead of quietly running on near-empty state and
+  then overwriting the real file** (#378). Every persisted store --
+  accounts, flags, the MAC registry, rule usage, entities, API tokens,
+  the audit log, the watchlist, watchlist suggestions, and detector
+  settings -- followed the same pattern: a document that failed to load
+  or parse still handed back a store with its backend attached, and
+  mikroview logged "continuing with in-memory-only X" and kept running.
+  That log line was false. The backend was still live, so the very next
+  time that store persisted -- often within seconds of boot -- it wrote
+  its near-empty in-memory state straight over the operator's actual
+  data. A missing document is unaffected and still boots as a normal
+  first run; only a document that exists and can't be loaded now stops
+  the process, with an error naming the store, where its document lives,
+  the underlying cause, and the remedy: restore from a backup, or
+  deliberately move the document aside to start fresh. `mikroview
+  -restore` is unaffected by this -- it writes store files directly and
+  runs before any store is opened, so it remains the way back in when a
+  document has been corrupted.
+
 - **Typing an `/api/...` address into the browser now returns the API's
   JSON instead of loading the interface.** The app's service worker
   answers page navigations from its cached shell so the UI opens
@@ -36,6 +91,59 @@ rewritten.
   The UI itself was never affected (its own requests are not
   navigations), which is why this only surfaced when an operator tried
   to read `/api/stats` directly. Reported 2026-08-15.
+
+- **Logging out, changing your password, or deleting an account now also
+  ends that account's open live-tail connections**, not just its ordinary
+  requests. A `/api/ws` connection was only ever authenticated once, at
+  the moment it opened, and was never checked again for the rest of its
+  life -- so a session cookie that had just been signed out, rotated by a
+  password change, or deleted along with its account kept receiving live
+  firewall events over that socket regardless, contradicting the "signed
+  out immediately" promise the interface already made for both of the
+  first two. The connection now re-validates its session every 30
+  seconds (the same interval it already used to ping the browser) and
+  closes cleanly the moment that check fails, bounding exposure to at
+  most one interval instead of leaving it open indefinitely. Reported by
+  the post-release review of v0.2.0 (#375).
+
+- **Auto-discovered router registration no longer collapses log ingest
+  once device discovery fills its cap** (#370). `device.Registry`'s
+  `pruneLocked` walked and re-sorted the *entire* device map on every
+  single `Resolve` call, with no guard at all, and then evicted back to
+  exactly the 4096-entry discovery cap -- so once that cap filled, the
+  very next newly-seen source IP overflowed it again and paid the full
+  walk once more, and so did every one after that. `Resolve` runs
+  synchronously on the single ingest goroutine for every ingested event,
+  so this sat squarely on the fast path: measured at roughly 108us/call
+  at the cap against 0.4us/call empty, enough sustained cost to back up
+  the raw ingest channel and start silently dropping real router log
+  records -- the tool failing at its one job, quietly, under exactly the
+  conditions (an unauthenticated flood of source addresses, or simply a
+  busy fleet) it exists to withstand. This is the same
+  evict-to-exactly-the-cap defect commit 3d27200 fixed for
+  `MACRegistry.pruneLocked` and `rules.Store.pruneLocked` (#285); the
+  device registry was missed there because its map interleaves
+  non-evictable configured devices with evictable discovered ones,
+  which the earlier fix's shared `internal/evict` helper can't prune
+  directly. `pruneLocked` now checks the registry's size against the cap
+  in O(1) before doing anything else, and, once past it, evicts a batch
+  below the cap rather than exactly to it, so a shed leaves headroom and
+  the next new source is free. Configured devices are still never
+  evicted.
+
+- **A firewall log line's TCP-flags/ICMP-type field is now length-capped
+  and stripped of control characters, like every other field mikroview
+  extracts -- closing a gap that reopened #285's largest memory finding**
+  (#369). That field comes from the parenthetical after `proto` in a
+  RouterOS log line -- `proto TCP (SYN)`, `proto ICMP (type 8, code 0)`
+  -- and it was the one extracted field the original clamp missed. A
+  crafted line could put over 65KB into it alone, retained in every event
+  slot, returned in the API's JSON, and quoted in any flag notification
+  it triggers: the same **12.5GB resident at the documented 120MiB
+  budget** overrun #285 fixed for the raw log line, reopened through a
+  field the earlier fix's field-by-field list never named. Real values
+  (`SYN`, `SYN,ACK`, `type 8, code 0`) are a few bytes long, so nothing
+  genuine is affected.
 
 ## [0.2.0] - 2026-08-14
 
