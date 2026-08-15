@@ -5,11 +5,11 @@ package device
 
 import (
 	"net"
-	"sort"
 	"sync"
 	"time"
 
 	"github.com/tomlawesome/mikroview/internal/config"
+	"github.com/tomlawesome/mikroview/internal/evict"
 )
 
 // Info describes a RouterOS device mikroview has received log data from.
@@ -33,6 +33,17 @@ type Info struct {
 type Registry struct {
 	mu   sync.RWMutex
 	byIP map[string]*Info
+
+	// configuredEntries is how many of byIP's entries came from
+	// config.yaml -- set once in NewRegistry and stable for the
+	// Registry's whole lifetime, since Resolve only ever creates a *new*
+	// entry for a key not already present and never replaces an existing
+	// one. pruneLocked's O(1) guard needs this: byIP mixes non-evictable
+	// configured entries with evictable discovered ones in a single map,
+	// so a guard comparing len(byIP) against maxDiscoveredDevices alone
+	// would start pruning before the registry actually held
+	// maxDiscoveredDevices *discovered* entries. See #370.
+	configuredEntries int
 }
 
 // maxDiscoveredDevices bounds how many *auto-discovered* sources the
@@ -73,6 +84,9 @@ func NewRegistry(configured []config.Device) *Registry {
 			Configured: true,
 		}
 	}
+	// Counted once, here, rather than derived from byIP on every prune --
+	// see configuredEntries' doc comment.
+	r.configuredEntries = len(r.byIP)
 	return r
 }
 
@@ -105,21 +119,56 @@ func (r *Registry) Resolve(sourceIP string, now time.Time) (deviceID string) {
 // they exceed maxDiscoveredDevices. Oldest-LastSeen-first, mirroring
 // MACRegistry.pruneLocked -- under a flood of spoofed sources the
 // genuine routers are the ones still sending, so they are exactly the
-// ones this keeps. Configured devices are skipped entirely.
+// ones this keeps. Configured devices are never evicted and never
+// counted against the cap.
+//
+// #370: this used to walk and re-sort the entire byIP map on every
+// single call, with no guard at all, and then evicted back to exactly
+// the cap -- so the very next newly-discovered source overflowed again
+// and paid the full walk once more. Resolve runs synchronously on the
+// single ingest goroutine for every ingested event, so once the
+// 4096-entry discovery cap filled, every subsequent event paid that
+// walk: measured at roughly 108us/call at the cap against 0.4us/call
+// empty, enough to back up the raw ingest channel and start silently
+// dropping real router log records. Same defect and same remedy as
+// MACRegistry.pruneLocked and rules.Store.pruneLocked (see #285 and
+// 3d27200): an O(1) guard first, then a batched shed via internal/evict
+// so a prune leaves headroom instead of putting the registry right back
+// at the cap.
+//
+// The guard compares against maxDiscoveredDevices *plus*
+// configuredEntries, not maxDiscoveredDevices alone, because byIP
+// interleaves non-evictable configured entries with evictable
+// discovered ones in one map -- see configuredEntries' doc comment.
+// That interleaving also means byIP can't be handed to evict.DownTo
+// directly, so once the guard trips, the discovered subset is
+// materialized into its own map first; that extra scan only happens
+// behind the same guard, so it is amortised the same way the shed
+// itself is.
 func (r *Registry) pruneLocked() {
-	discovered := make([]*Info, 0, len(r.byIP))
-	for _, info := range r.byIP {
-		if !info.Configured {
-			discovered = append(discovered, info)
-		}
-	}
-	over := len(discovered) - maxDiscoveredDevices
-	if over <= 0 {
+	if len(r.byIP) <= maxDiscoveredDevices+r.configuredEntries {
 		return
 	}
-	sort.Slice(discovered, func(i, j int) bool { return discovered[i].LastSeen.Before(discovered[j].LastSeen) })
-	for i := 0; i < over && i < len(discovered); i++ {
-		delete(r.byIP, discovered[i].SourceIP)
+
+	discovered := make(map[string]*Info, len(r.byIP)-r.configuredEntries)
+	for k, info := range r.byIP {
+		if !info.Configured {
+			discovered[k] = info
+		}
+	}
+	keys := make([]string, 0, len(discovered))
+	for k := range discovered {
+		keys = append(keys, k)
+	}
+
+	evict.DownTo(discovered, evict.Target(maxDiscoveredDevices), func(info *Info) time.Time {
+		return info.LastSeen
+	})
+
+	for _, k := range keys {
+		if _, kept := discovered[k]; !kept {
+			delete(r.byIP, k)
+		}
 	}
 }
 
