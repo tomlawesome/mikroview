@@ -16,6 +16,27 @@ rewritten.
 
 ## [Unreleased]
 
+### Added
+
+- **An uptime readout in the toolbar**, next to the connection
+  indicator: how long the server has been running, counting live,
+  visible on every view rather than tucked into a menu. The number
+  comes from the server once and counts on locally, re-syncing every
+  minute so a restarted server cannot keep showing its predecessor's
+  uptime for long. `/api/healthz` grows an `uptimeSeconds` field
+  alongside the existing human-readable `uptime` string.
+
+### Fixed
+
+- **Typing an `/api/...` address into the browser now returns the API's
+  JSON instead of loading the interface.** The app's service worker
+  answers page navigations from its cached shell so the UI opens
+  instantly, and it was doing that for *every* typed address --
+  including API endpoints and `/ca.crt`, which belong to the server.
+  The UI itself was never affected (its own requests are not
+  navigations), which is why this only surfaced when an operator tried
+  to read `/api/stats` directly. Reported 2026-08-15.
+
 ## [0.2.0] - 2026-08-14
 
 ### Removed
