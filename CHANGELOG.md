@@ -71,6 +71,31 @@ rewritten.
   most one interval instead of leaving it open indefinitely. Reported by
   the post-release review of v0.2.0 (#375).
 
+- **Auto-discovered router registration no longer collapses log ingest
+  once device discovery fills its cap** (#370). `device.Registry`'s
+  `pruneLocked` walked and re-sorted the *entire* device map on every
+  single `Resolve` call, with no guard at all, and then evicted back to
+  exactly the 4096-entry discovery cap -- so once that cap filled, the
+  very next newly-seen source IP overflowed it again and paid the full
+  walk once more, and so did every one after that. `Resolve` runs
+  synchronously on the single ingest goroutine for every ingested event,
+  so this sat squarely on the fast path: measured at roughly 108us/call
+  at the cap against 0.4us/call empty, enough sustained cost to back up
+  the raw ingest channel and start silently dropping real router log
+  records -- the tool failing at its one job, quietly, under exactly the
+  conditions (an unauthenticated flood of source addresses, or simply a
+  busy fleet) it exists to withstand. This is the same
+  evict-to-exactly-the-cap defect commit 3d27200 fixed for
+  `MACRegistry.pruneLocked` and `rules.Store.pruneLocked` (#285); the
+  device registry was missed there because its map interleaves
+  non-evictable configured devices with evictable discovered ones,
+  which the earlier fix's shared `internal/evict` helper can't prune
+  directly. `pruneLocked` now checks the registry's size against the cap
+  in O(1) before doing anything else, and, once past it, evicts a batch
+  below the cap rather than exactly to it, so a shed leaves headroom and
+  the next new source is free. Configured devices are still never
+  evicted.
+
 - **A firewall log line's TCP-flags/ICMP-type field is now length-capped
   and stripped of control characters, like every other field mikroview
   extracts -- closing a gap that reopened #285's largest memory finding**

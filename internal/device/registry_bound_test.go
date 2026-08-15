@@ -64,3 +64,46 @@ func TestConfiguredDevicesSurviveASpoofFlood(t *testing.T) {
 		t.Error("the configured router was evicted by a flood of spoofed sources; configured devices must never be evicted")
 	}
 }
+
+// TestDiscoveredDevicesShedLeavesHeadroomForTheNextSource: pruneLocked
+// used to evict back to exactly maxDiscoveredDevices, which left the
+// registry full -- so the very next newly-discovered source overflowed
+// again and paid the whole walk-and-sort once more, and so did every
+// one after that. Resolve runs synchronously on the single ingest
+// goroutine, keyed on the source IP off an unauthenticated TLS syslog
+// connection, so that is a state a flood can hold the registry in
+// indefinitely.
+//
+// The property that stops it is that a shed leaves headroom. Asserting
+// on the headroom rather than on timings keeps this a contract test
+// rather than a benchmark that fails on a busy machine. Mirrors
+// mac_registry_test.go's TestMACRegistryShedsABatchSoTheNextNewMACIsFree.
+// Fails against the pre-#370 code (which lands at exactly the cap, no
+// headroom) and passes with the batched evict.DownTo shed. See #370.
+func TestDiscoveredDevicesShedLeavesHeadroomForTheNextSource(t *testing.T) {
+	prev := maxDiscoveredDevices
+	maxDiscoveredDevices = 800
+	t.Cleanup(func() { maxDiscoveredDevices = prev })
+
+	r := NewRegistry(nil)
+	now := time.Now()
+	for i := 0; i <= maxDiscoveredDevices; i++ { // one past the cap, forcing a shed
+		r.Resolve(fmt.Sprintf("10.%d.%d.%d", byte(i>>16), byte(i>>8), byte(i)), now.Add(time.Duration(i)*time.Second))
+	}
+
+	after := len(r.List())
+	if after >= maxDiscoveredDevices {
+		t.Fatalf("the shed left the registry at %d against a cap of %d -- no headroom, so the next new source sheds again",
+			after, maxDiscoveredDevices)
+	}
+
+	// Every insertion up to the headroom must now be free of a shed.
+	headroom := maxDiscoveredDevices - after
+	for i := 0; i < headroom; i++ {
+		r.Resolve(fmt.Sprintf("172.16.%d.%d", byte(i>>8), byte(i)), now.Add(time.Hour))
+	}
+	if got := len(r.List()); got != maxDiscoveredDevices {
+		t.Errorf("filling the %d-entry headroom gave %d entries, want %d -- a shed ran that should not have",
+			headroom, got, maxDiscoveredDevices)
+	}
+}
