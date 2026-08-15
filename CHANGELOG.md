@@ -28,6 +28,26 @@ rewritten.
 
 ### Fixed
 
+- **A store whose on-disk document exists but can't be read now refuses
+  to start mikroview, instead of quietly running on near-empty state and
+  then overwriting the real file** (#378). Every persisted store --
+  accounts, flags, the MAC registry, rule usage, entities, API tokens,
+  the audit log, the watchlist, watchlist suggestions, and detector
+  settings -- followed the same pattern: a document that failed to load
+  or parse still handed back a store with its backend attached, and
+  mikroview logged "continuing with in-memory-only X" and kept running.
+  That log line was false. The backend was still live, so the very next
+  time that store persisted -- often within seconds of boot -- it wrote
+  its near-empty in-memory state straight over the operator's actual
+  data. A missing document is unaffected and still boots as a normal
+  first run; only a document that exists and can't be loaded now stops
+  the process, with an error naming the store, where its document lives,
+  the underlying cause, and the remedy: restore from a backup, or
+  deliberately move the document aside to start fresh. `mikroview
+  -restore` is unaffected by this -- it writes store files directly and
+  runs before any store is opened, so it remains the way back in when a
+  document has been corrupted.
+
 - **Typing an `/api/...` address into the browser now returns the API's
   JSON instead of loading the interface.** The app's service worker
   answers page navigations from its cached shell so the UI opens

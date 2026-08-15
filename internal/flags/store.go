@@ -320,12 +320,10 @@ func (s *Store) WithOnRaise(fn func(Flag)) *Store {
 // Open loads path if it exists (a missing file is the expected first-run
 // case, not an error) and returns a Store that persists to it from then
 // on. An empty path is the expected "persistence not configured" case:
-// a fully usable, in-memory-only Store is returned. A malformed file is
-// treated as empty rather than failing -- a corrupted flags file should
-// never block mikroview from starting, since flags are a helper signal,
-// not critical state. Either way the returned Store is always safe to
-// use unconditionally; a non-nil error is only ever informational, for
-// the caller to log.
+// a fully usable, in-memory-only Store is returned. A document that
+// exists but cannot be read or parsed is a hard error (issue #378): the
+// caller gets (nil, err) rather than a store whose live backend would
+// overwrite that document on the first write. See persist.Open.
 func Open(path string) (*Store, error) {
 	if path == "" {
 		return OpenWithBackend(nil)
@@ -341,37 +339,36 @@ func OpenWithBackend(b persist.Backend) (*Store, error) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), persistTimeout)
 	defer cancel()
-	data, version, err := persist.LoadDocument(ctx, b)
+	version, existed, err := persist.Open(ctx, b, "the flags store", func(data []byte) error {
+		var state persistedState
+		if err := json.Unmarshal(data, &state); err != nil {
+			return err
+		}
+		for _, f := range state.Flags {
+			// A JSON `null` in this array decodes to a zero-value Flag
+			// rather than a nil pointer (the field is []Flag, not
+			// []*Flag), so it cannot crash the way the entities loader
+			// can -- it just lands an ID-less entry in the map. Dropped
+			// here rather than kept as a bogus entry.
+			if f.ID == "" {
+				continue
+			}
+			f := f
+			s.byID[f.ID] = &f
+			if f.Cleared {
+				s.clearedCount++
+			}
+		}
+		for _, e := range state.Excluded {
+			s.excluded[e.ID] = e
+		}
+		return nil
+	})
 	if err != nil {
-		return s, err
+		return nil, err
 	}
-	if data == nil {
-		return s, nil
-	}
-	s.version = version
-
-	var state persistedState
-	if err := json.Unmarshal(data, &state); err != nil {
-		return s, err
-	}
-	for _, f := range state.Flags {
-		// A JSON `null` in this array decodes to a zero-value Flag
-		// rather than a nil pointer (the field is []Flag, not []*Flag),
-		// so it cannot crash the way the entities loader can -- it just
-		// lands an ID-less entry in the map. Dropped here to keep
-		// Open's "a malformed file is treated as empty rather than
-		// failing" contract honest.
-		if f.ID == "" {
-			continue
-		}
-		f := f
-		s.byID[f.ID] = &f
-		if f.Cleared {
-			s.clearedCount++
-		}
-	}
-	for _, e := range state.Excluded {
-		s.excluded[e.ID] = e
+	if existed {
+		s.version = version
 	}
 	return s, nil
 }
