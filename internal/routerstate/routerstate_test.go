@@ -199,9 +199,72 @@ func TestHostNamePrecedence(t *testing.T) {
 		"":             "",
 	}
 	for ip, want := range cases {
-		if got := s.HostName(ip); got != want {
+		if got := s.HostName("router-1", ip); got != want {
 			t.Errorf("HostName(%q) = %q, want %q", ip, got, want)
 		}
+	}
+}
+
+// Every other read in routerstate.go goes through kindLocked(device,
+// kind) and TestDevicesAreIsolated already asserted that for the rule
+// tables. HostName was the one accessor that never got the same
+// treatment: it iterated every device that had ever pushed and returned
+// the first match, so one router's ingest token could name any address
+// in the world and have that name displayed on traffic seen through
+// every other router.
+//
+// That contradicts what internal/auth/token.go says an ingest token is
+// for -- "one compromised router could report state for every other
+// device in the deployment" is exactly what scoping it prevents -- and
+// what internal/api/ingest.go claims outright: "a router cannot report
+// state for any device but the one its credential is scoped to."
+//
+// TestHostNamePrecedence above only ever used one device, which is why
+// nothing caught this. Found independently by two of #272's phase 2
+// reviewers and reproduced by a third. See #285, #283, #284.
+func TestHostNamesAreScopedToTheDeviceThatPushedThem(t *testing.T) {
+	s := New()
+
+	// router-evil names an address it has no relationship with, and
+	// claims a catch-all WireGuard range over the entire IPv4 space --
+	// the two shapes the reviewers reproduced.
+	apply(t, s, "router-evil", `{"kind":"dns-static","page":1,"pages":1,"records":[`+
+		`{"name":"trusted-nas","address":"192.168.1.50"},`+
+		`{"name":"trusted-internal-server","address":"203.0.113.99"}]}`)
+	apply(t, s, "router-evil", `{"kind":"wireguard-peer","page":1,"pages":1,"records":[`+
+		`{"publicKey":"abc","allowedAddress":"0.0.0.0/0","endpointAddress":"","comment":"Verified Trusted Network"}]}`)
+
+	// router-victim has pushed a table of its own, so it exists as a
+	// device -- this is not "the device is unknown", it is "the device
+	// never said anything about these addresses".
+	apply(t, s, "router-victim", `{"kind":"dhcp-lease","page":1,"pages":1,"records":[`+
+		`{"hostname":"printer","mac":"aa:bb:cc:dd:ee:03","address":"192.168.1.60"}]}`)
+
+	for _, ip := range []string{"192.168.1.50", "203.0.113.99", "8.8.8.8", "1.2.3.4", "198.51.100.7"} {
+		if got := s.HostName("router-victim", ip); got != "" {
+			t.Errorf("HostName(router-victim, %q) = %q -- router-evil's pushed name reached another device's traffic", ip, got)
+		}
+	}
+
+	// The scoping must not break the feature for the device that
+	// legitimately pushed the data.
+	if got := s.HostName("router-evil", "192.168.1.50"); got != "trusted-nas" {
+		t.Errorf("HostName(router-evil, 192.168.1.50) = %q, want trusted-nas", got)
+	}
+	if got := s.HostName("router-evil", "8.8.8.8"); got != "Verified Trusted Network" {
+		t.Errorf("HostName(router-evil, 8.8.8.8) = %q -- a device's own catch-all peer still applies to its own traffic", got)
+	}
+	if got := s.HostName("router-victim", "192.168.1.60"); got != "printer" {
+		t.Errorf("HostName(router-victim, 192.168.1.60) = %q, want printer", got)
+	}
+
+	// A device that has never pushed anything, and the no-device case,
+	// must not be answered from some other router's claims.
+	if got := s.HostName("router-unknown", "192.168.1.50"); got != "" {
+		t.Errorf("HostName(router-unknown, ...) = %q, want empty", got)
+	}
+	if got := s.HostName("", "192.168.1.50"); got != "" {
+		t.Errorf("HostName(\"\", ...) = %q, want empty", got)
 	}
 }
 

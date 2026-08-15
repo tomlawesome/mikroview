@@ -44,6 +44,14 @@ if [ "$MV_BIND" = "127.0.0.1" ]; then
   # plaintext listeners this is mikroview's only syslog ingest, and
   # leaving it empty gave every browser scenario zero events.
   SYSLOG_TLS_ADDR="127.0.0.1:$SYSLOG_TLS_PORT"
+  # A declared device, loopback mode only. Every feeder connects from
+  # 127.0.0.1, so this stays the single device -- now with a stable id
+  # -- which is what the token dialog's device pick-list (#326) and
+  # every devices[0]-reading scenario get to rely on. NOT set in
+  # $MV_BIND mode: the CHR's traffic arrives from a different address
+  # there, and a second device would make devices[0] nondeterministic
+  # (internal/device.Registry.List is map-ordered).
+  DEVICES_BLOCK='devices: [{id: live-router, name: Live Router, sourceIp: 127.0.0.1}]'
 else
   MV_SCHEME=https
   TLS_BLOCK="tls: {enabled: true, hosts: [\"$MV_BIND\", \"127.0.0.1\"], storePath: $MV_DIR/data/tls}"
@@ -55,6 +63,7 @@ else
   # On $MV_BIND, not loopback: the router fixture (#188) needs to reach
   # this listener the same way it reaches the HTTPS one above.
   SYSLOG_TLS_ADDR="$MV_BIND:$SYSLOG_TLS_PORT"
+  DEVICES_BLOCK=''
 fi
 
 # The host half of SYSLOG_TLS_ADDR, for the feeders below to dial.
@@ -96,8 +105,16 @@ with socket.create_connection((host, port), timeout=10) as sock:
 
 build() {
   ( cd frontend && npm run build >/dev/null 2>&1 )
-  rm -rf web/dist && mkdir -p web/dist && cp -r frontend/dist/. web/dist/
-  go build -o "$MV_DIR/mikroview" .
+  # touch .gitkeep for the same reason the Makefile's frontend target
+  # does: rm -rf takes the only tracked file in here with it, and a live
+  # check should not leave the tree dirty (#353).
+  rm -rf web/dist && mkdir -p web/dist && cp -r frontend/dist/. web/dist/ && touch web/dist/.gitkeep
+  # -buildvcs=false: this binary is a throwaway built into a temp dir,
+  # run by the scenarios and deleted, so nothing ever reads its VCS
+  # stamp. Stamping it also fails outright in a linked git worktree --
+  # "error obtaining VCS status: exit status 128" -- which took the whole
+  # live check down for anyone not working in a plain clone (#348).
+  go build -buildvcs=false -o "$MV_DIR/mikroview" .
 }
 
 up() {
@@ -125,6 +142,7 @@ flags: {storePath: $MV_DIR/data/flags.json}
 entities: {storePath: $MV_DIR/data/entities.json}
 audit: {storePath: $MV_DIR/data/audit.json}
 watchlist: {storePath: $MV_DIR/data/watchlist.json, matchLogPath: $MV_DIR/data/matchlog.jsonl}
+$DEVICES_BLOCK
 EOF
   MIKROVIEW_CONFIG="$MV_DIR/cfg.yaml" "$MV_DIR/mikroview" > "$MV_DIR/server.log" 2>&1 &
   echo $! > "$MV_DIR/pid"

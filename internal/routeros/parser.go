@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/tomlawesome/mikroview/internal/logging"
 	"github.com/tomlawesome/mikroview/internal/store"
 )
 
@@ -74,21 +75,50 @@ func clampField(s string) string {
 	return s
 }
 
-// clampAll applies clampField to every extracted string field. Raw is
+// safeField is clampField plus logging.Printable: bounded in length, and
+// free of control characters, ANSI escapes and Unicode format characters.
+//
+// The length cap alone was not enough. These fields are attacker-authored
+// -- anything able to reach the syslog port controls them entirely -- and
+// they do not stay inside mikroview's own UI, where Svelte's escaping
+// would be the whole answer. They become a flag's Target and Detail, and
+// from there they are written into flags.json, into the watchlist match
+// log, into an SMTP body and into a Pushover message. A terminal
+// rendering `cat flags.json` executes an ANSI escape sequence; that is
+// the CVE class this codebase already cites elsewhere, and
+// logging.Printable already exists for it -- it was simply applied only
+// to usernames, at seven call sites, and never on the event path.
+//
+// Doing it here rather than at each sink is deliberate: a sink is easy to
+// add and easy to forget, and internal/watchlist/invert.go had already
+// reasoned itself into writing an unvalidated address on the grounds
+// that it was "already derived from a real event" -- which is the wrong
+// test, since the event itself is attacker-authored. One choke point on
+// the way in makes that reasoning correct rather than merely common.
+//
+// None of these fields can legitimately contain a control character:
+// they are IPs, MAC addresses, RouterOS identifiers and protocol names.
+// See #285.
+func safeField(s string) string {
+	return logging.Printable(clampField(s))
+}
+
+// clampAll applies safeField to every extracted string field. Raw is
 // deliberately excluded -- it is already bounded by the listeners' own
-// read limits, and it is the verbatim evidence an operator needs.
+// read limits, and it is the verbatim evidence an operator needs, which
+// is worth exactly nothing if this rewrites it before they see it.
 func (p *Parsed) clampAll() {
-	p.RuleLabel = clampField(p.RuleLabel)
-	p.Chain = clampField(p.Chain)
-	p.InInterface = clampField(p.InInterface)
-	p.OutInterface = clampField(p.OutInterface)
-	p.ConnState = clampField(p.ConnState)
-	p.Protocol = clampField(p.Protocol)
-	p.SrcMAC = clampField(p.SrcMAC)
-	p.SrcIP = clampField(p.SrcIP)
-	p.DstIP = clampField(p.DstIP)
-	p.NatIP = clampField(p.NatIP)
-	p.NatRaw = clampField(p.NatRaw)
+	p.RuleLabel = safeField(p.RuleLabel)
+	p.Chain = safeField(p.Chain)
+	p.InInterface = safeField(p.InInterface)
+	p.OutInterface = safeField(p.OutInterface)
+	p.ConnState = safeField(p.ConnState)
+	p.Protocol = safeField(p.Protocol)
+	p.SrcMAC = safeField(p.SrcMAC)
+	p.SrcIP = safeField(p.SrcIP)
+	p.DstIP = safeField(p.DstIP)
+	p.NatIP = safeField(p.NatIP)
+	p.NatRaw = safeField(p.NatRaw)
 }
 
 // The named return matters: clampAll runs in a defer, and with an
@@ -116,33 +146,50 @@ func Parse(msg string) (p Parsed) {
 
 	for _, seg := range splitTopLevel(rest, ", ") {
 		seg = strings.TrimSpace(seg)
-		switch {
-		case strings.HasPrefix(seg, "in:"):
-			parseInOut(seg, &p)
-		case strings.HasPrefix(seg, "out:"):
-			p.OutInterface = strings.TrimSpace(strings.TrimPrefix(seg, "out:"))
-		case strings.HasPrefix(seg, "connection-state:"):
+		if strings.HasPrefix(seg, "connection-state:") {
 			parseConnState(seg, &p)
-		case strings.HasPrefix(seg, "src-mac "):
-			p.SrcMAC = strings.TrimSpace(strings.TrimPrefix(seg, "src-mac "))
-		case strings.HasPrefix(seg, "proto "):
-			parseProto(seg, &p)
-		case strings.HasPrefix(seg, "len "):
-			if n, err := strconv.Atoi(strings.TrimSpace(strings.TrimPrefix(seg, "len "))); err == nil {
-				p.Length = n
-			}
-		case strings.HasPrefix(seg, "NAT "):
-			// Must be checked before the generic "->" case below: a NAT
-			// annotation also contains "->" internally, and would
-			// otherwise be misparsed as (and overwrite) the main address
-			// pair.
-			parseNAT(seg, &p)
-		case strings.Contains(seg, "->"):
-			parseAddrPair(seg, &p)
+			continue
 		}
+		applyField(seg, &p)
 	}
 
 	return p
+}
+
+// applyField applies one comma-separated segment of the message body.
+//
+// Every field except connection-state, which the caller handles: a real
+// RouterOS glues other fields onto the connection-state segment without
+// a separating comma, so parseConnState splits those off and calls back
+// here for them. Leaving connection-state out of this switch is what
+// keeps that one level deep instead of recursive -- these lines are
+// attacker-authored (anything that can reach the syslog port writes
+// them), and a crafted line repeating "connection-state:" a few thousand
+// times inside the 64KB limit would otherwise recurse once per
+// repetition.
+func applyField(seg string, p *Parsed) {
+	switch {
+	case strings.HasPrefix(seg, "in:"):
+		parseInOut(seg, p)
+	case strings.HasPrefix(seg, "out:"):
+		p.OutInterface = strings.TrimSpace(strings.TrimPrefix(seg, "out:"))
+	case strings.HasPrefix(seg, "src-mac "):
+		p.SrcMAC = strings.TrimSpace(strings.TrimPrefix(seg, "src-mac "))
+	case strings.HasPrefix(seg, "proto "):
+		parseProto(seg, p)
+	case strings.HasPrefix(seg, "len "):
+		if n, err := strconv.Atoi(strings.TrimSpace(strings.TrimPrefix(seg, "len "))); err == nil {
+			p.Length = n
+		}
+	case strings.HasPrefix(seg, "NAT "):
+		// Must be checked before the generic "->" case below: a NAT
+		// annotation also contains "->" internally, and would
+		// otherwise be misparsed as (and overwrite) the main address
+		// pair.
+		parseNAT(seg, p)
+	case strings.Contains(seg, "->"):
+		parseAddrPair(seg, p)
+	}
 }
 
 // stripTopics removes a leading RouterOS topic tag (e.g. "firewall,info ")
@@ -187,14 +234,38 @@ func parseInOut(seg string, p *Parsed) {
 	p.InInterface = strings.TrimSpace(v)
 }
 
+// parseConnState reads the connection-state segment, which RouterOS
+// does not reliably terminate with a comma before the next field.
+//
+// Both of these come off a real RouterOS 7.23.3 (#273), and only the
+// first has the comma:
+//
+//	connection-state:new, proto TCP (SYN), 172.17.0.1:55134->10.0.2.15:15902, len 44
+//	connection-state:new,dnat src-mac 52:55:0A:00:02:02, proto TCP (SYN), ...
+//	connection-state:new proto ICMP (type 8, code 0), 192.168.88.1->192.168.88.100, len 56
+//
+// The state itself never contains a space -- "new", "related",
+// "new,dnat" -- so the first space ends it and whatever follows is
+// another field that happens to have been glued on. Handing that
+// remainder back to applyField covers src-mac and proto alike, and
+// anything else RouterOS glues on later, rather than needing a special
+// case per field.
+//
+// This was a special case for src-mac only, so a real ICMP line put
+// "new proto ICMP (type 8, code 0)" in ConnState and left Protocol
+// empty. That is worse than a display problem: ConnState is what
+// isTrackableConnState gates on in both internal/watchlist and
+// internal/detect, and neither "" nor "new" matches that string, so
+// every ICMP event was silently invisible to the watchlist -- including
+// to the inverted entries whose whole purpose is noticing a device
+// reaching somewhere it should not.
 func parseConnState(seg string, p *Parsed) {
 	v := strings.TrimPrefix(seg, "connection-state:")
-	if state, mac, found := strings.Cut(v, " src-mac "); found {
-		p.ConnState = strings.TrimSpace(state)
-		p.SrcMAC = strings.TrimSpace(mac)
-		return
+	state, rest, glued := strings.Cut(v, " ")
+	p.ConnState = strings.TrimSpace(state)
+	if glued {
+		applyField(strings.TrimSpace(rest), p)
 	}
-	p.ConnState = strings.TrimSpace(v)
 }
 
 func parseProto(seg string, p *Parsed) {

@@ -106,7 +106,7 @@ func Load(cfg Config) (cert tls.Certificate, caCertPEM []byte, persistErr error,
 	}
 
 	if cfg.StorePath != "" {
-		if cert, ok := loadStoredLeaf(cfg.StorePath, sortedHosts); ok {
+		if cert, ok := loadStoredLeaf(cfg.StorePath, sortedHosts, ca); ok {
 			return cert, ca.certPEM, nil, nil
 		}
 	}
@@ -268,12 +268,21 @@ func loadStoredCA(storePath string) *caPair {
 }
 
 // loadStoredLeaf returns the previously-generated leaf certificate, if
-// one exists, was issued for exactly this sorted host list, and isn't
-// within its renewal window -- any mismatch (never generated, host list
-// changed, close to expiry, corrupt) is reported via ok=false so the
+// one exists, was issued for exactly this sorted host list, isn't within
+// its renewal window, and still chains to ca -- any mismatch (never
+// generated, host list changed, close to expiry, corrupt, issued by a
+// CA that is no longer the one in use) is reported via ok=false so the
 // caller regenerates (reusing the already-loaded CA, so no re-trust is
 // needed just because the leaf's SAN list changed).
-func loadStoredLeaf(storePath string, sortedHosts []string) (tls.Certificate, bool) {
+//
+// The chain check is the part that is easy to leave out. If ca.crt or
+// ca.key becomes unreadable or corrupt while the three leaf files stay
+// intact, the caller above mints a fresh CA and would otherwise keep
+// serving the old leaf -- a pair that validates against nothing, so
+// every client that had trusted the original CA fails, and the only
+// clue is a certificate error. Regenerating instead costs one leaf and
+// leaves the already-trusted CA arrangement intact where it can be.
+func loadStoredLeaf(storePath string, sortedHosts []string, ca *caPair) (tls.Certificate, bool) {
 	_, _, leafCertPath, leafKeyPath, metaPath := storePaths(storePath)
 
 	metaData, err := os.ReadFile(metaPath)
@@ -294,6 +303,21 @@ func loadStoredLeaf(storePath string, sortedHosts []string) (tls.Certificate, bo
 	}
 	leaf, err := x509.ParseCertificate(cert.Certificate[0])
 	if err != nil || time.Until(leaf.NotAfter) < renewalWindow {
+		return tls.Certificate{}, false
+	}
+	// Verified against this CA specifically, not against the host's
+	// trust store: a local CA is in neither, and the question here is
+	// only "did the CA we are about to serve alongside sign this leaf".
+	pool := x509.NewCertPool()
+	pool.AddCert(ca.cert)
+	if _, err := leaf.Verify(x509.VerifyOptions{
+		Roots: pool,
+		// The leaf is checked for expiry above; this call is about the
+		// signature chain, and passing the same clock twice would make
+		// a renewal-window miss look like a chain failure.
+		CurrentTime: leaf.NotBefore,
+		KeyUsages:   []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+	}); err != nil {
 		return tls.Certificate{}, false
 	}
 	return cert, true
@@ -318,11 +342,11 @@ func saveStored(storePath string, ca *caPair, cert tls.Certificate, sortedHosts 
 		return fmt.Errorf("marshaling CA key: %w", err)
 	}
 	caKeyPEM := pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: caKeyDER})
-	if err := os.WriteFile(caCertPath, ca.certPEM, filePermission); err != nil {
-		return fmt.Errorf("writing %s: %w", caCertPath, err)
+	if err := writeSecret(caCertPath, ca.certPEM); err != nil {
+		return err
 	}
-	if err := os.WriteFile(caKeyPath, caKeyPEM, filePermission); err != nil {
-		return fmt.Errorf("writing %s: %w", caKeyPath, err)
+	if err := writeSecret(caKeyPath, caKeyPEM); err != nil {
+		return err
 	}
 
 	leafKeyDER, err := x509.MarshalECPrivateKey(cert.PrivateKey.(*ecdsa.PrivateKey))
@@ -331,19 +355,40 @@ func saveStored(storePath string, ca *caPair, cert tls.Certificate, sortedHosts 
 	}
 	leafCertPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: cert.Certificate[0]})
 	leafKeyPEM := pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: leafKeyDER})
-	if err := os.WriteFile(leafCertPath, leafCertPEM, filePermission); err != nil {
-		return fmt.Errorf("writing %s: %w", leafCertPath, err)
+	if err := writeSecret(leafCertPath, leafCertPEM); err != nil {
+		return err
 	}
-	if err := os.WriteFile(leafKeyPath, leafKeyPEM, filePermission); err != nil {
-		return fmt.Errorf("writing %s: %w", leafKeyPath, err)
+	if err := writeSecret(leafKeyPath, leafKeyPEM); err != nil {
+		return err
 	}
 
 	metaData, err := json.Marshal(leafMeta{Hosts: sortedHosts})
 	if err != nil {
 		return fmt.Errorf("marshaling leaf metadata: %w", err)
 	}
-	if err := os.WriteFile(metaPath, metaData, filePermission); err != nil {
-		return fmt.Errorf("writing %s: %w", metaPath, err)
+	if err := writeSecret(metaPath, metaData); err != nil {
+		return err
+	}
+	return nil
+}
+
+// writeSecret writes b to path at filePermission, and enforces that mode
+// on a file that already exists.
+//
+// os.WriteFile's mode argument only applies when it *creates* the file:
+// on a rewrite the existing permissions are kept. So the 0600 intent
+// held on a fresh install and silently did not on any path where the
+// file already existed with wider permissions -- a restore from a
+// backup taken with a different umask, a bind-mounted host directory, a
+// volume copied between machines. These are the CA and leaf private
+// keys; a world-readable one would stay world-readable across every
+// subsequent restart, with nothing saying so. See #285.
+func writeSecret(path string, b []byte) error {
+	if err := os.WriteFile(path, b, filePermission); err != nil {
+		return fmt.Errorf("writing %s: %w", path, err)
+	}
+	if err := os.Chmod(path, filePermission); err != nil {
+		return fmt.Errorf("setting permissions on %s: %w", path, err)
 	}
 	return nil
 }

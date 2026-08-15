@@ -18,20 +18,11 @@
 // by asserting an exact card count that real detector timing can't
 // actually promise.
 
-import { execFileSync } from 'child_process'
 import { fileURLToPath } from 'url'
-import path from 'path'
-import { session, check, done } from './live-browser.mjs'
+import { session, check, done, feedPortScan, waitForFlag } from './live-browser.mjs'
 
-const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..')
 const ACTIVE = 'section[aria-labelledby="active-heading"] .card'
 
-function portscan(n, sourceIp) {
-  execFileSync(path.join(REPO, 'scripts/live-env.sh'), ['portscan', String(n), sourceIp], {
-    stdio: 'ignore',
-    cwd: REPO,
-  })
-}
 
 function cardFor(page, text) {
   return page.locator(ACTIVE, { hasText: text })
@@ -41,14 +32,21 @@ async function activeCount(page) {
   return page.locator(ACTIVE).count()
 }
 
-portscan(20, '198.51.100.77')
-portscan(20, '198.51.100.78')
+feedPortScan(20, '198.51.100.77')
+feedPortScan(20, '198.51.100.78')
 
 const { page } = await session()
 
 async function openMenuView(label) {
   await page.click('.nav-menu .trigger')
   await page.click(`.nav-menu button:has-text("${label}")`)
+}
+
+// Server-side first (#354): a locator timeout here cannot say whether
+// the flag was never raised or merely had not been rendered yet.
+for (const ip of ['198.51.100.77', '198.51.100.78']) {
+  const raised = await waitForFlag(page, ip)
+  check(raised.ok, raised.message)
 }
 
 await openMenuView('Flags')
@@ -124,14 +122,33 @@ check(await page.isVisible('text=Permanently-excluded'), 'the exclusions pointer
 
 // --- Clear all: click-again confirm ---
 
-portscan(15, '198.51.100.79')
-portscan(15, '198.51.100.80')
-portscan(15, '198.51.100.81')
+// 20, not 15: the port_scan detector's threshold IS 15 distinct ports,
+// so feeding exactly that left no margin -- a single event lost anywhere
+// on the path means no flag, and the scenario fails for a reason that
+// has nothing to do with Clear all (#354).
+feedPortScan(20, '198.51.100.79')
+feedPortScan(20, '198.51.100.80')
+feedPortScan(20, '198.51.100.81')
+
+for (const ip of ['198.51.100.79', '198.51.100.80', '198.51.100.81']) {
+  const raised = await waitForFlag(page, ip)
+  check(raised.ok, raised.message)
+}
+
 await page.reload({ waitUntil: 'networkidle' })
 await openMenuView('Flags')
 await page.waitForSelector('.card .type', { timeout: 15000 })
 
+// Wait for each flag rather than for "a card exists". Three scans were
+// just fed and the detector raises them independently, so waiting on the
+// first card to appear and then asserting all three are present is a
+// race -- it caught the third one missing on a local run. Waiting for
+// each makes the assertion about Clear all, which is what this section
+// is for.
 for (const ip of ['198.51.100.79', '198.51.100.80', '198.51.100.81']) {
+  await cardFor(page, ip)
+    .waitFor({ timeout: 20000 })
+    .catch(() => {})
   check(await cardFor(page, ip).isVisible(), `flag for ${ip} is active before Clear all`)
 }
 

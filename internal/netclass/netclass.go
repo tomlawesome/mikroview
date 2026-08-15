@@ -26,6 +26,8 @@ import (
 	"log/slog"
 	"net/netip"
 	"sort"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -222,15 +224,44 @@ func (c *Classifier) Refresh(ctx context.Context) {
 		parsed := def.Parse(body)
 		cov := coverageOf(parsed)
 
+		// A 200 that yields nothing is not a legitimate empty feed --
+		// these sources exist because they are never empty. It is a
+		// truncated response, a provider outage answering with a blank
+		// body, or an interception, and accepting it does two things:
+		// the source silently stops classifying anything, and its
+		// recorded coverage drops to zero, which disarms the 2x
+		// poisoning guard below for the *next* refresh (2x of zero is
+		// zero, so anything passes). Two refreshes and the guard is
+		// gone.
+		//
+		// The doc comment above already promises "fail to last-known-
+		// good, never to empty"; that only covered fetch and parse
+		// errors, and a clean 200 is neither. Same treatment
+		// Blocklist.Refresh already gives a feed that fetches cleanly
+		// and yields nothing. See #285.
+		if len(parsed) == 0 && len(prior[src]) > 0 {
+			c.log.Warn(fmt.Sprintf("%s: refreshed feed fetched cleanly but parsed to zero prefixes (had %d) -- keeping the last good data",
+				def.Label, len(prior[src])))
+			current[src] = prior[src]
+			newCoverage[src] = priorCoverage[src]
+			continue
+		}
+
 		// Coverage-delta guard: a feed that suddenly claims far more
 		// address space than last time is more likely poisoned than
 		// legitimately grown. Reject the new copy and keep the old one.
 		// The threshold is relative to the previous fetch, not absolute,
 		// because absolute bands (as X4B's own build uses) leave room to
 		// add tens of millions of addresses without tripping.
+		// Both operands are capped at maxCoverage (1<<62), so prev*2
+		// cannot overflow -- it did before #324, wrapping a saturated
+		// prior to a tiny number and rejecting every subsequent refresh
+		// of an IPv6-heavy feed forever. Saturated vs saturated
+		// compares equal and is therefore accepted, which is the honest
+		// answer: both are "unbounded", not "grew".
 		if prev := priorCoverage[src]; prev > 0 && cov > prev*2 {
-			c.log.Warn(fmt.Sprintf("%s: refreshed feed covers %d addresses vs %d before (>2x) -- rejecting as a possible poisoned list, keeping the last good data",
-				def.Label, cov, prev))
+			c.log.Warn(fmt.Sprintf("%s: refreshed feed covers %s vs %s before (more than double) -- rejecting as a possible poisoned list, keeping the last good data",
+				def.Label, describeCoverage(cov), describeCoverage(prev)))
 			current[src] = prior[src]
 			newCoverage[src] = prev
 			continue
@@ -239,7 +270,7 @@ func (c *Classifier) Refresh(ctx context.Context) {
 		current[src] = parsed
 		newCoverage[src] = cov
 		c.markFetched(src, &newFetchedAt)
-		c.log.Info(fmt.Sprintf("%s: refreshed, %d prefixes (%d addresses)", def.Label, len(parsed), cov))
+		c.log.Info(fmt.Sprintf("%s: refreshed, %d prefixes (%s)", def.Label, len(parsed), describeCoverage(cov)))
 	}
 
 	table, entries := buildTable(c.order, current)
@@ -302,20 +333,68 @@ func buildTable(order []Source, bySrc map[Source][]classifiedPrefix) (*bart.Tabl
 	return table, entries
 }
 
-// coverageOf sums the address counts of a prefix set, capping each prefix
-// at a large value so a wide v6 prefix cannot overflow the running total.
+// maxCoverage is "more address space than any number means to a
+// person". Both a single prefix's count and the running total saturate
+// here, and the poisoning guard compares saturated totals as equal --
+// so it is deliberately far enough below MaxUint64 that doubling it
+// (which the guard does) cannot overflow.
+const maxCoverage = uint64(1) << 62
+
+// coverageOf sums the address counts of a prefix set, saturating at
+// maxCoverage.
+//
+// Capping each prefix individually is not enough: four prefixes wider
+// than /64 sum to 1<<64 and wrap the total to a small number (#324).
+// Apple Private Relay carries two today, so this is one upstream change
+// away rather than hypothetical -- and the number this returns is what
+// the poisoning guard in Refresh reads, so a wrapped total does not
+// merely misreport, it decides whether a feed is believed.
 func coverageOf(ps []classifiedPrefix) uint64 {
 	var total uint64
 	for _, cp := range ps {
 		bits := cp.prefix.Addr().BitLen() // 32 or 128
 		hostBits := bits - cp.prefix.Bits()
-		if hostBits >= 64 {
-			total += 1 << 62 // saturate rather than overflow on huge v6
-			continue
+		n := maxCoverage
+		if hostBits < 62 {
+			n = uint64(1) << hostBits
 		}
-		total += uint64(1) << hostBits
+		if total >= maxCoverage-n {
+			return maxCoverage
+		}
+		total += n
 	}
 	return total
+}
+
+// describeCoverage renders a coverage figure for a person rather than
+// for arithmetic. "9223372036854882389 addresses" is not a fact anyone
+// can act on -- it reads as a bug even when it is not, which is how
+// #324 was found.
+func describeCoverage(v uint64) string {
+	if v >= maxCoverage {
+		return "more address space than is worth counting (a prefix wider than /64)"
+	}
+	return withThousands(v) + " addresses"
+}
+
+// withThousands groups digits so a large count can be read at a glance.
+func withThousands(v uint64) string {
+	s := strconv.FormatUint(v, 10)
+	if len(s) <= 3 {
+		return s
+	}
+	var b strings.Builder
+	lead := len(s) % 3
+	if lead > 0 {
+		b.WriteString(s[:lead])
+	}
+	for i := lead; i < len(s); i += 3 {
+		if b.Len() > 0 {
+			b.WriteByte(',')
+		}
+		b.WriteString(s[i : i+3])
+	}
+	return b.String()
 }
 
 // sanitiseDetail validates a third-party detail string (an AWS region, a

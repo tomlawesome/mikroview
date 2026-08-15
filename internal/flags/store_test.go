@@ -212,8 +212,22 @@ func TestListOrdersMostRecentlyActiveFirst(t *testing.T) {
 // sustained re-fire burst (the scenario this exists for) must not hit
 // disk once per event.
 func TestPersistLockedRateLimitsWrites(t *testing.T) {
+	// A long window plus a rewound lastPersist, rather than a short
+	// window plus a sleep.
+	//
+	// This test used to set the window to 80ms and assume the work
+	// between the two Adds -- a marshal, a file write and a ReadFile --
+	// finished inside it. On a loaded CI runner it does not, the second
+	// Add writes legitimately, and the test fails claiming the debounce
+	// is broken when it is working exactly as designed. That is what
+	// blocked a preview image publish.
+	//
+	// Ten seconds is long enough that no scheduling jitter crosses it,
+	// and the "past the window" half below rewinds lastPersist instead
+	// of waiting -- so this now asserts the behaviour rather than the
+	// speed of the machine, and runs in microseconds instead of 100ms.
 	orig := persistMinInterval
-	persistMinInterval = 80 * time.Millisecond
+	persistMinInterval = 10 * time.Second
 	defer func() { persistMinInterval = orig }()
 
 	path := filepath.Join(t.TempDir(), "flags.json")
@@ -240,7 +254,10 @@ func TestPersistLockedRateLimitsWrites(t *testing.T) {
 	}
 
 	// Past the window: the next call must flush the latest state.
-	time.Sleep(persistMinInterval + 20*time.Millisecond)
+	// Rewound rather than waited out -- same code path, no wall clock.
+	s.mu.Lock()
+	s.lastPersist = s.lastPersist.Add(-2 * persistMinInterval)
+	s.mu.Unlock()
 	s.Add(TypePortScan, "3.3.3.3", "third, after the window", now)
 	final, err := os.ReadFile(path)
 	if err != nil {
@@ -996,6 +1013,57 @@ func TestPruneStillPrefersClearedFlags(t *testing.T) {
 	}
 }
 
+// The hard ceiling used to shed by FirstSeen ascending -- earliest
+// raised first -- which selects for exactly the wrong thing: the first
+// flag of a real incident is the most valuable item in the store, and
+// flag targets come from unauthenticated syslog, so an attacker only has
+// to mint maxFlagsHardCeiling junk targets to push it out. Reproduced on
+// the old code with one genuine flag and 5,001 `new_device` flags (any
+// unseen src-mac, no threshold to cross), about 600 KB of syslog: the
+// genuine flag was gone from byID and List() permanently. See #285.
+//
+// The store cannot be made immune -- a bounded store under an unbounded
+// flood must drop something -- but the eviction order must not prefer
+// the evidence worth keeping. Count, how many times a detector re-fired
+// for a target, is the available signal: a real incident re-fires, minted
+// flags fire once each.
+func TestHardCeilingShedsOneShotNoiseBeforeARefiringAlert(t *testing.T) {
+	prevCeiling := maxFlagsHardCeiling
+	prevSoft := maxFlags
+	maxFlagsHardCeiling = 200
+	maxFlags = 50
+	t.Cleanup(func() {
+		maxFlagsHardCeiling = prevCeiling
+		maxFlags = prevSoft
+	})
+
+	s, _ := Open("")
+	now := time.Now()
+
+	// A genuine, repeatedly-firing alert, raised FIRST -- so under the
+	// old FirstSeen ordering it was the very first thing evicted.
+	const genuine = "203.0.113.9"
+	for i := 0; i < 20; i++ {
+		s.Add(TypePortScan, genuine, "23 distinct ports in 60s", now.Add(time.Duration(i)*time.Second))
+	}
+
+	// Then the flood: distinct targets, one flag each, all active.
+	for i := 0; i < 5000; i++ {
+		s.Add(TypeNewDevice, fmt.Sprintf("aa:bb:cc:dd:%02x:%02x", i>>8, i&0xff), "unseen mac",
+			now.Add(time.Duration(i)*time.Millisecond))
+	}
+
+	if got := len(s.List()); got > maxFlagsHardCeiling {
+		t.Errorf("store holds %d flags, want <= %d", got, maxFlagsHardCeiling)
+	}
+	for _, f := range s.List() {
+		if f.Target == genuine {
+			return
+		}
+	}
+	t.Error("the repeatedly-firing genuine alert was evicted by a flood of one-shot flags")
+}
+
 // TestClearedCountSurvivesReload guards a bug introduced alongside the
 // clearedCount optimisation: pruneLocked skips its scan when
 // clearedCount is zero, so a store reloaded from disk with cleared
@@ -1101,4 +1169,42 @@ func TestClearAllOnEmptyStoreIsANoOp(t *testing.T) {
 	if n := s.ClearAll(time.Now()); n != 0 {
 		t.Errorf("ClearAll on an empty store returned %d, want 0", n)
 	}
+}
+
+// Exclude on a pair that already has an active flag must clear it.
+//
+// add() skips excluded pairs before touching s.byID, so without this the
+// existing entry stayed in List() as Cleared:false forever, frozen, with
+// every later update silently no-op'd. Not reachable through the API --
+// ClearAndExclude clears first -- which is what made it a landmine for
+// the next caller rather than a live bug.
+func TestExcludeClearsAnAlreadyActiveFlag(t *testing.T) {
+	s, err := Open("")
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	now := time.Now()
+
+	s.Add(TypePortScan, "203.0.113.5", "20 ports", now)
+	if active := activeTargets(s.List()); len(active) != 1 {
+		t.Fatalf("setup: expected one active flag, got %d", len(active))
+	}
+
+	s.Exclude(TypePortScan, "203.0.113.5")
+
+	for _, f := range s.List() {
+		if f.Type == TypePortScan && f.Target == "203.0.113.5" && !f.Cleared {
+			t.Fatal("the pre-existing flag is still active after Exclude, and no later update can reach it")
+		}
+	}
+}
+
+func activeTargets(flags []Flag) []string {
+	var out []string
+	for _, f := range flags {
+		if !f.Cleared {
+			out = append(out, f.Target)
+		}
+	}
+	return out
 }

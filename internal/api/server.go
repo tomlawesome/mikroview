@@ -7,6 +7,7 @@ package api
 import (
 	"net/http"
 	"net/netip"
+	"sync"
 	"time"
 
 	"github.com/tomlawesome/mikroview/internal/audit"
@@ -22,6 +23,7 @@ import (
 	"github.com/tomlawesome/mikroview/internal/reputation"
 	"github.com/tomlawesome/mikroview/internal/routerstate"
 	"github.com/tomlawesome/mikroview/internal/rules"
+	"github.com/tomlawesome/mikroview/internal/setup"
 	"github.com/tomlawesome/mikroview/internal/store"
 	"github.com/tomlawesome/mikroview/internal/suggest"
 	"github.com/tomlawesome/mikroview/internal/watchlist"
@@ -74,6 +76,14 @@ type Server struct {
 	// this package -- see internal/suggest's own doc comment for why
 	// there is deliberately no manual "refresh" endpoint.
 	Suggest *suggest.Store
+	// DefaultWatchPorts is what an accepted address-list suggestion
+	// watches, since such a candidate deliberately carries no ports of
+	// its own (#274 item 2): a rule scoping by address list says which
+	// hosts matter, not which ports. The operator's own
+	// flags.criticalPorts is the honest default -- the same set the
+	// critical_port detector already treats as worth noticing -- and
+	// the entry is editable the moment it exists.
+	DefaultWatchPorts []int
 	// Rules is the persisted, long-lived per-rule-label usage record
 	// (issue #103's internal/rules.Store) -- exposed read-only via GET
 	// /api/rules (issue #109) as the "discovered but unnamed rules"
@@ -112,6 +122,15 @@ type Server struct {
 	// session regardless of deployment state, so "which build am I
 	// running" is checkable without any special access.
 	Version string
+	// ThirdPartyNotices is THIRD-PARTY-NOTICES.md, embedded in the
+	// binary at build time (see notices.go) and served verbatim by
+	// handleThirdPartyNotices. Every dependency compiled into this
+	// binary ships under a licence (MIT, BSD-3-Clause, ISC,
+	// Apache-2.0) requiring its copyright notice and licence text to
+	// accompany a binary distribution -- serving it here is how a user
+	// of a running instance receives them without having to go and find
+	// the source separately.
+	ThirdPartyNotices string
 	// ConfigProblems are non-fatal configuration problems found at
 	// startup, where a safe default was substituted for a bad value.
 	// Surfaced to admins in the UI because a startup log line is seen
@@ -157,6 +176,15 @@ type Server struct {
 	// that package's design.
 	RouterState *routerstate.Store
 
+	// Setup holds what has been observed of each router's setup, for the
+	// guided wizard (#320). Nil in tests that do not exercise it, which
+	// handleSetupStatus tolerates.
+	Setup *setup.Store
+	// SetupInstance is the running configuration the wizard writes
+	// commands from -- the address a router should be pointed at, and
+	// whether the certificate covers it.
+	SetupInstance SetupInstance
+
 	// OIDC/OIDCState: see oidc.go. Both nil unless cfg.OIDC.IssuerURL was
 	// set and provider discovery succeeded at startup -- every OIDC
 	// handler checks for nil and 404s, so a misconfigured or absent OIDC
@@ -169,6 +197,16 @@ type Server struct {
 	// correct answer for a self-hosted IdP and refused at startup for a
 	// multi-tenant one -- see internal/oidc.Policy and main.go.
 	OIDCPolicy oidc.Policy
+
+	// ingestAudit remembers, per (device, kind), when that combination
+	// last produced an audit row and whether it succeeded, so a routine
+	// push does not write one. See noteIngest for why -- unqualified
+	// per-push auditing let one ingest token roll the whole admin audit
+	// trail in about a day. Unexported and lazily built: it is internal
+	// bookkeeping, not configuration, so a zero-valued Server (which
+	// every test constructs) needs no extra setup.
+	ingestAuditMu sync.Mutex
+	ingestAudit   map[ingestAuditKey]ingestAuditState
 }
 
 // route is one registered endpoint. Routes are declared as data rather
@@ -234,12 +272,19 @@ func (s *Server) routes() []route {
 		{http.MethodPost, "/api/suggestions/{id}/hide", s.handleSuggestionsHide},
 		{http.MethodPost, "/api/suggestions/{id}/unhide", s.handleSuggestionsUnhide},
 
+		{http.MethodGet, "/api/third-party-notices", s.handleThirdPartyNotices},
+
 		{http.MethodGet, "/api/audit", s.handleAuditList},
+
+		// The guided setup wizard's view of what has actually landed
+		// (#320) -- admin-only, see handleSetupStatus.
+		{http.MethodGet, "/api/setup/status", s.handleSetupStatus},
 		{http.MethodGet, "/api/config/problems", s.handleConfigProblems},
 
 		{http.MethodGet, "/api/auth/session", s.handleAuthSession},
 		{http.MethodPost, "/api/auth/register", s.handleAuthRegister},
 		{http.MethodPost, "/api/auth/login", s.handleAuthLogin},
+		{http.MethodPost, "/api/auth/password", s.handleAuthChangePassword},
 		{http.MethodPost, "/api/auth/logout", s.handleAuthLogout},
 		{http.MethodPost, "/api/auth/users", s.handleAuthCreateUser},
 		{http.MethodGet, "/api/auth/users", s.handleAuthListUsers},

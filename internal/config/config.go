@@ -34,6 +34,18 @@ import (
 const DefaultDataDir = "/var/lib/mikroview"
 
 type Device struct {
+	// ID is the device's identity everywhere downstream: the deviceId on
+	// its events, the key its pushed router state is stored under, and
+	// the scope of an ingest token (internal/auth.Token.Device). Optional
+	// in the file -- normaliseDevices fills it from SourceIP when unset,
+	// which is what a *discovered* router already gets
+	// (internal/device.Registry.Resolve), so declaring a router that has
+	// been sending syslog keeps its existing identity rather than
+	// silently orphaning the state and tokens already keyed to it.
+	//
+	// Left empty it used to stay empty: every configured device without
+	// an id shared the identity "", including for token scoping. See
+	// validateDevices for the collision rules.
 	ID       string `yaml:"id"`
 	Name     string `yaml:"name"`
 	SourceIP string `yaml:"sourceIp"`
@@ -157,18 +169,27 @@ type Store struct {
 }
 
 // assumedBytesPerEvent is what a typical retained event costs: the fixed
-// struct (456 bytes, internal/store.Event) plus one heap allocation for
+// struct (464 bytes, internal/store.Event) plus one heap allocation for
 // its raw syslog line, rounded to the allocator's size class. Measured in
 // internal/store/memory_test.go's TestRetainedBytesPerEvent against a
 // representative RouterOS forward-chain line -- re-run that test rather
 // than trusting this constant if store.Event's fields change.
 //
-// This is an assumption, not a guarantee: internal/routeros.Parse clamps
-// every extracted field to 256 bytes but deliberately leaves Raw
-// verbatim, so an unusually long line costs more than this constant
-// assumes and a deployment fed adversarial or pathological lines could
-// see real memory use run higher than store.maxMemory implies.
-const assumedBytesPerEvent = 616
+// This is a typical cost, and now also a bounded one. internal/routeros.
+// Parse clamps every extracted field to 256 bytes and deliberately
+// leaves Raw verbatim, so a long line still costs more than this
+// constant assumes -- but Raw is itself capped at store.MaxRawBytes
+// (2 KiB), which puts a ceiling on how much more.
+//
+// Before that cap existed the gap was not a rounding error: the syslog
+// listener accepts a 64 KiB message, so a deployment fed adversarial
+// lines retained ~66 KB per event against the ~616 assumed here, and the
+// default 120 MiB budget could hold 12.55 GiB -- a 107x overrun from
+// unauthenticated input, with validate.go's own 1.47x resident-memory
+// warning compounding it rather than catching it. The worst case is now
+// roughly 2 KiB + the struct, about 3.5x this constant rather than 107x.
+// See #285 finding 5.
+const assumedBytesPerEvent = 624
 
 // Capacity derives the event ring's element count from the configured
 // memory budget. Always at least 1 -- store.New already treats a
@@ -289,6 +310,22 @@ type Auth struct {
 	// without activity before needing to log in again," not a fixed
 	// session lifetime.
 	SessionTTL time.Duration `yaml:"sessionTTL"`
+	// SessionMaxLifetime is the ceiling SessionTTL does not have: the
+	// longest a session can live from the moment it was issued, however
+	// often it is used.
+	//
+	// The two answer different questions, which is why both exist.
+	// SessionTTL asks "has this been abandoned"; a session used once a
+	// day satisfies it forever, so without this a browser left signed in
+	// on a shared machine -- or a cookie taken months ago -- stays valid
+	// indefinitely (#294 item 3).
+	//
+	// Seven days by default: long enough that an operator checking their
+	// firewall most days is not re-authenticating constantly, short
+	// enough that a forgotten session is not a permanent one. Set to 0
+	// to remove the ceiling and keep the old behaviour, which is a
+	// deliberate choice rather than an oversight if you make it.
+	SessionMaxLifetime time.Duration `yaml:"sessionMaxLifetime"`
 	// TokensStorePath: where read-only API bearer tokens (issue #101)
 	// persist across restarts, as a small JSON file (names + SHA-256
 	// hashes, never the raw bearer values). Unlike StorePath above, this
@@ -349,8 +386,8 @@ type Audit struct {
 // reason this store exists (#243 section 3's "a match must survive a
 // restart" requirement); an in-memory match log would be a second
 // volatile event ring with extra steps, not a lesser version of this
-// feature. So MatchLogPath must be non-empty (see CFG-0041) and
-// MatchLogCapacity must be positive (CFG-0040) -- both a good default
+// feature. So MatchLogPath must be non-empty (see CFG-0040) and
+// MatchLogCapacity must be positive (CFG-0041) -- both a good default
 // out of the box, not settings an operator has to supply.
 type Watchlist struct {
 	StorePath string `yaml:"storePath"`
@@ -632,7 +669,7 @@ type DeviceMAC struct {
 // full menu, why it's a fixed menu rather than an arbitrary URL field,
 // and how the refresh cadence/entry-count cap were decided.
 //
-// On by default with Spamhaus's DROP+EDROP lists -- the issue's own
+// On by default with Spamhaus's DROP list -- the issue's own
 // recommended starting point: small, free, no registration, and
 // curated specifically to only include netblocks Spamhaus is confident
 // are entirely malicious-controlled, a safe "flag on sight" default
@@ -642,7 +679,7 @@ type DeviceMAC struct {
 // see internal/blocklist.RefreshInterval's doc comment.
 type Blocklist struct {
 	// Sources is a list of internal/blocklist.Source values (e.g.
-	// "spamhaus_drop", "spamhaus_edrop", "emerging_threats_compromised")
+	// "spamhaus_drop", "emerging_threats_compromised")
 	// -- an unrecognized entry is logged and skipped at startup, not a
 	// fatal error, same degrade-not-crash contract as every other
 	// optional integration in this codebase.
@@ -737,6 +774,24 @@ type Config struct {
 	HostNames map[string]string `yaml:"hostNames"`
 }
 
+// normaliseDevices fills in each device's effective id. An entry with no
+// id is identified by its own source address -- the same identity the
+// device would have had if it had simply been discovered from its
+// syslog, so declaring a router is additive rather than a rename.
+func (c *Config) normaliseDevices() {
+	for i := range c.Devices {
+		if strings.TrimSpace(c.Devices[i].ID) != "" {
+			continue
+		}
+		ip := strings.TrimSpace(c.Devices[i].SourceIP)
+		if addr, err := netip.ParseAddr(ip); err == nil {
+			c.Devices[i].ID = addr.Unmap().String()
+			continue
+		}
+		c.Devices[i].ID = ip
+	}
+}
+
 func defaults() Config {
 	return Config{
 		Listen: Listen{
@@ -746,8 +801,8 @@ func defaults() Config {
 		},
 		Store: Store{
 			Retention: 24 * time.Hour,
-			// 120MiB / 616 bytes/event (assumedBytesPerEvent) derives to
-			// ~204,268 events -- close to the old flat 200,000 default,
+			// 120MiB / 624 bytes/event (assumedBytesPerEvent) derives to
+			// ~201,649 events -- close to the old flat 200,000 default,
 			// so a fresh install's memory footprint does not jump on
 			// upgrade even though the unit did.
 			MaxMemory: 120 * 1024 * 1024,
@@ -826,6 +881,7 @@ func defaults() Config {
 		Auth: Auth{
 			StorePath:          DefaultDataDir + "/users.json",
 			SessionTTL:         24 * time.Hour,
+			SessionMaxLifetime: 7 * 24 * time.Hour,
 			SecureCookie:       true,
 			TokensStorePath:    DefaultDataDir + "/tokens.json",
 			RecoveryKeysPath:   DefaultDataDir + "/recovery-keys.json",
@@ -857,13 +913,23 @@ func defaults() Config {
 			// so this package stays a dependency-free leaf, same
 			// reasoning Flags already gives for duplicating
 			// internal/detect.Config's own defaults.
-			Sources: []string{"spamhaus_drop", "spamhaus_edrop"},
+			// EDROP is deliberately absent: Spamhaus merged it into
+			// DROP on 2024-04-10 and the endpoint now serves no ranges
+			// at all.
+			Sources: []string{"spamhaus_drop"},
 		},
 		NetClass: NetClass{
 			// Mirrors internal/netclass.DefaultSources -- literal here
 			// to keep this package a dependency-free leaf, same as
-			// Blocklist above.
-			Sources: []string{"tor", "x4b_vpn"},
+			// Blocklist above. TestNetClassDefaultMatchesNetclassPackage
+			// pins the two together, because they drifted: this list was
+			// missing apple_private_relay, and since main.go wires
+			// netclass.New with *this* value, netclass.DefaultSources was
+			// dead code and a fresh install shipped without it. That is
+			// not a cosmetic difference -- x4b_vpn's upstream data covers
+			// the same ranges, so leaving Apple's own list out is what
+			// makes ordinary iPhone/iPad/Mac traffic read as a VPN exit.
+			Sources: []string{"tor", "apple_private_relay", "x4b_vpn"},
 		},
 		Notify: Notify{
 			BatchWindow: 60 * time.Second,
@@ -894,6 +960,11 @@ func load(configPath string, args []string) (Config, Result, error) {
 	if err := applyFlags(&cfg, args); err != nil {
 		return Config{}, Result{}, err
 	}
+
+	// Devices get their identity filled in before validation, so
+	// validation and every downstream consumer agree on what a device's
+	// id actually is.
+	cfg.normaliseDevices()
 
 	// Validate last, after every source has been merged -- an env var or
 	// a flag can fix a bad yaml value, so checking earlier would reject
@@ -1188,6 +1259,11 @@ func applyEnv(cfg *Config) {
 			cfg.Auth.SessionTTL = d
 		}
 	}
+	if v := os.Getenv("MIKROVIEW_AUTH_SESSION_MAX_LIFETIME"); v != "" {
+		if d, err := time.ParseDuration(v); err == nil {
+			cfg.Auth.SessionMaxLifetime = d
+		}
+	}
 	if v := os.Getenv("MIKROVIEW_ENTITIES_STORE_PATH"); v != "" {
 		cfg.Entities.StorePath = v
 	}
@@ -1298,6 +1374,23 @@ func applyEnv(cfg *Config) {
 	}
 	if v := os.Getenv("MIKROVIEW_OIDC_SCOPES"); v != "" {
 		cfg.OIDC.Scopes = parseStringList(v)
+	}
+	// The access policy. Same list-via-env shape as Scopes above and as
+	// TLS.Hosts/Blocklist.Sources -- these four had no override at all,
+	// which meant a deployment keeping its whole OIDC block in the
+	// environment could set who its provider is but not who is allowed
+	// in (#267 finding 21).
+	if v := os.Getenv("MIKROVIEW_OIDC_ALLOWED_GROUPS"); v != "" {
+		cfg.OIDC.AllowedGroups = parseStringList(v)
+	}
+	if v := os.Getenv("MIKROVIEW_OIDC_GROUPS_CLAIM"); v != "" {
+		cfg.OIDC.GroupsClaim = v
+	}
+	if v := os.Getenv("MIKROVIEW_OIDC_ALLOWED_EMAILS"); v != "" {
+		cfg.OIDC.AllowedEmails = parseStringList(v)
+	}
+	if v := os.Getenv("MIKROVIEW_OIDC_ALLOWED_EMAIL_DOMAINS"); v != "" {
+		cfg.OIDC.AllowedEmailDomains = parseStringList(v)
 	}
 	if v := os.Getenv("MIKROVIEW_DEVICE_MAC_STORE_PATH"); v != "" {
 		cfg.DeviceMAC.StorePath = v

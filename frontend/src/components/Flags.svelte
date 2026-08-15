@@ -18,6 +18,19 @@
   // Same gate NavMenu uses for the Detectors view.
   const isAdminOrOpen = $derived(authState.state === 'authenticated' && authState.role === 'admin')
 
+  // lib/flags.svelte.ts's clear/clearAll/clearPermanent optimistically
+  // update, then roll back and *rethrow* on failure. None of the call
+  // sites below caught that, so a transient 500 or an expired session
+  // became an unhandled rejection: the flag reappeared with no
+  // explanation, which reads as the button not having worked rather
+  // than as an error. Reported the same way Watchlist and Entities
+  // report theirs.
+  let error = $state<string | null>(null)
+
+  function reportFailure(action: string, err: unknown) {
+    error = err instanceof Error ? `${action}: ${err.message}` : `${action} failed`
+  }
+
   // The stored preference collapses to 1 below the shared mobile
   // breakpoint regardless of what's selected (issue #199's responsive
   // floor) -- computed here in JS rather than as a CSS media query, so
@@ -86,8 +99,11 @@
     }
     disarmClearAll()
     clearAllBusy = true
+    error = null
     try {
       await flagsState.clearAll()
+    } catch (err) {
+      reportFailure('Could not clear all flags', err)
     } finally {
       clearAllBusy = false
     }
@@ -284,7 +300,12 @@
   }
 
   async function clear(id: string) {
-    await flagsState.clear(id)
+    error = null
+    try {
+      await flagsState.clear(id)
+    } catch (err) {
+      reportFailure('Could not clear this flag', err)
+    }
   }
 
   // "Clear and never flag this again" -- permanently excludes this
@@ -294,7 +315,12 @@
   // made by mistake is the admin-only "Manage exclusions" panel below,
   // not a confirmation dialog here.
   async function clearPermanent(id: string) {
-    await flagsState.clearPermanent(id)
+    error = null
+    try {
+      await flagsState.clearPermanent(id)
+    } catch (err) {
+      reportFailure('Could not permanently clear this flag', err)
+    }
   }
 
   // Graded rather than a single color for every value -- a 12% confidence
@@ -309,6 +335,10 @@
 </script>
 
 <div class="flags scrollbar">
+  {#if error}
+    <p class="mutation-error" role="alert">{error}</p>
+  {/if}
+
   <BarList title="Active flags by type" rows={typeBreakdown} emptyMessage="Nothing flagged right now." />
 
   {#snippet flagCard(f: Flag, compactCard: boolean = false)}
@@ -576,6 +606,14 @@
     display: flex;
     flex-direction: column;
     gap: 20px;
+  }
+
+  /* Same treatment Watchlist and Entities give their own mutation
+     errors, so a failed clear reads the same way everywhere. */
+  .mutation-error {
+    margin: 0;
+    color: var(--reject);
+    font-size: 12px;
   }
 
   h2 {

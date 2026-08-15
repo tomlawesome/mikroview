@@ -24,7 +24,7 @@ type knownBadIPLookup interface {
 // and the floor applied to any other currently-active source-IP-keyed
 // flag for the same target (see knownBadReinforcedTypes below) --
 // deliberately high: unlike AbuseIPDB's crowd-sourced abuse score,
-// Spamhaus DROP/EDROP is hand-curated specifically to only include
+// Spamhaus DROP is hand-curated specifically to only include
 // netblocks Spamhaus is confident are entirely malicious-controlled
 // (see internal/blocklist's doc comment) -- a match is about as strong
 // a signal as this codebase has, stronger than

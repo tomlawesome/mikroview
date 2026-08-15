@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/tomlawesome/mikroview/internal/entities"
+	"github.com/tomlawesome/mikroview/internal/evict"
 	"github.com/tomlawesome/mikroview/internal/flags"
 	"github.com/tomlawesome/mikroview/internal/logging"
 	"github.com/tomlawesome/mikroview/internal/store"
@@ -409,10 +410,9 @@ type Detector struct {
 	// comment for the sizing rationale.
 	observeQueue chan store.Event
 
-	// droppedEvents/lastDropLogNanos back Enqueue's rate-limited
-	// overload logging -- see observeQueueDropLogInterval.
-	droppedEvents    atomic.Uint64
-	lastDropLogNanos atomic.Int64
+	// droppedEvents backs Enqueue's rate-limited overload logging --
+	// the gate itself is dropLogGate (see recordDroppedEvent).
+	droppedEvents atomic.Uint64
 }
 
 // New constructs a Detector with every detector enabled and unscoped --
@@ -470,15 +470,15 @@ func (d *Detector) Enqueue(e store.Event) {
 // dropped-syslog-packet symptoms elsewhere.
 func (d *Detector) recordDroppedEvent() {
 	total := d.droppedEvents.Add(1)
-	now := time.Now().UnixNano()
-	last := d.lastDropLogNanos.Load()
-	if now-last < int64(observeQueueDropLogInterval) {
-		return
-	}
-	if d.lastDropLogNanos.CompareAndSwap(last, now) {
+	if _, ok := dropLogGate.Allow(); ok {
 		logger.Warn(fmt.Sprintf("detection queue full -- %d event(s) dropped from detection so far (still stored/broadcast normally)", total))
 	}
 }
+
+// dropLogGate implements observeQueueDropLogInterval -- package-level
+// rather than per-Detector because it only gates log noise, and there
+// is one Detector per process outside tests.
+var dropLogGate = logging.NewLimiter(observeQueueDropLogInterval)
 
 // Run drains observeQueue, calling Observe for each event in order,
 // until ctx is done. Meant to run in its own goroutine, separate from
@@ -548,6 +548,21 @@ func (d *Detector) Observe(e store.Event) {
 	}
 
 	if e.RuleLabel != "" {
+		// Deliberately no "mark the baseline stale" reset here, unlike
+		// GlobalSpikeDetector.Check and checkHostActivityBaseline. #267
+		// finding 17 proposed adding one for consistency; measured, it
+		// makes this detector worse -- see
+		// TestRuleSpikeSurvivesADisableEnableCycleWithoutFalsePositives.
+		//
+		// The difference is where the rate comes from. GlobalSpike is
+		// handed an accurate current EPS, so re-priming gives it a
+		// correct baseline immediately. This detector derives its rate
+		// from a time-windowed hits ring that only fills while it is
+		// enabled, so re-priming on the first event after re-enabling
+		// primes against a nearly empty ring -- and the ordinary refill
+		// back to normal traffic then reads as a spike. low_slow_scan
+		// derives its rate the same way and is left alone for the same
+		// reason.
 		if rs := d.settings.Get(DetectorRuleSpike); rs.Enabled && scopeMatchesRule(rs.Scope, e.RuleLabel) {
 			d.observeRuleRate(e, now)
 		}
@@ -696,70 +711,21 @@ type activeWindow interface {
 func (w *sourceWindow) lastActivityTime() time.Time   { return w.lastActivity }
 func (w *criticalWindow) lastActivityTime() time.Time { return w.lastActivity }
 
-// evictOldestByActivity removes the least-recently-active entry from m
-// -- shared by every per-key detector state map once it hits
-// maxTrackedSources, replacing what used to be six structurally
-// identical hand-copied functions (one per map's value type).
-// evictionBatchFraction: how much of a full map to shed per overflow,
-// as a divisor (8 = one eighth). Evicting a single entry meant a full
-// O(n) scan for *every* new key once the map was full -- and the keys
-// are attacker-chosen source IPs, so a flood of distinct sources put
-// the detector permanently in that state.
-//
-// Measured before this change: 5.78 us/event with recurring sources vs
-// 504.96 us/event under all-distinct spoofed sources -- an 87x
-// slowdown that capped the single detector worker near 2000 events/s.
-// Past that, Enqueue drops silently, so a spoofed-source flood made
-// mikroview stop detecting a real concurrent attack. That is the tool
-// failing at its one job, quietly, which is the worst available
-// outcome.
-//
-// Shedding a batch amortizes the scan across many insertions: the next
-// n/8 new sources are free. One eighth keeps the map comfortably full
-// (so genuine sources aren't evicted early) while making the amortized
-// cost O(1)-ish per event.
-const evictionBatchFraction = 8
-
 // evictOldestByActivity sheds the least-recently-active entries once a
-// per-source map is full. It removes a batch rather than a single entry
-// -- see evictionBatchFraction for why that matters under a flood of
-// attacker-chosen keys.
+// per-source map is full, shared by every per-key detector state map
+// once it hits maxTrackedSources.
+//
+// The batch-shed reasoning that used to live here now lives in
+// internal/evict, alongside the measurements that motivated it -- #285
+// found the same evict-back-to-exactly-the-cap pattern still live in
+// internal/device and internal/rules, so the remedy is one
+// implementation those packages share rather than a third and fourth
+// hand-copy. This function stays because it is what adapts the
+// activeWindow interface to that helper.
 func evictOldestByActivity[V activeWindow](m map[string]V) {
-	batch := len(m) / evictionBatchFraction
-	if batch < 1 {
-		batch = 1
-	}
-
-	// Single pass collecting the batch smallest lastActivity values,
-	// keeping at most `batch` candidates -- avoids sorting the whole
-	// map, which would reintroduce the cost this is removing.
-	type candidate struct {
-		key  string
-		when time.Time
-	}
-	worst := make([]candidate, 0, batch+1)
-	for k, w := range m {
-		t := w.lastActivityTime()
-		if len(worst) < batch {
-			worst = append(worst, candidate{k, t})
-			// Keep the newest at the end so it is the first to be
-			// displaced once the batch is full.
-			for i := len(worst) - 1; i > 0 && worst[i].when.After(worst[i-1].when); i-- {
-				worst[i], worst[i-1] = worst[i-1], worst[i]
-			}
-			continue
-		}
-		if t.Before(worst[len(worst)-1].when) {
-			worst[len(worst)-1] = candidate{k, t}
-			for i := len(worst) - 1; i > 0 && worst[i].when.After(worst[i-1].when); i-- {
-				worst[i], worst[i-1] = worst[i-1], worst[i]
-			}
-		}
-	}
-
-	for _, c := range worst {
-		delete(m, c.key)
-	}
+	evict.DownTo(m, len(m)-evict.Batch(len(m)), func(w V) time.Time {
+		return w.lastActivityTime()
+	})
 }
 
 func isCriticalPort(ports []int, p int) bool {

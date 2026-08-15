@@ -1,6 +1,7 @@
 <script lang="ts">
   // SPDX-License-Identifier: AGPL-3.0-only
   import { appState } from '../lib/state.svelte'
+  import { groupModeState } from '../lib/groupMode.svelte'
   import { formatEps, formatBufferDepth } from '../lib/format'
   import { retentionState, MAX_AGE_OPTIONS } from '../lib/retention.svelte'
   import { viewportState } from '../lib/viewport.svelte'
@@ -43,6 +44,17 @@
         >
           {formatBufferDepth(appState.stats.capacity, appState.stats.count, appState.stats.eventsPerSecond)}
         </span>
+        {#if appState.stats.syslog && appState.stats.syslog.rejectedConfigured > 0}
+          <!-- Only shown when one of YOUR routers was turned away. The
+               listener being busy is not itself a problem; a device you
+               told MikroView to watch not getting through is. -->
+          <span
+            class="syslog-blocked"
+            title="MikroView has turned away {appState.stats.syslog.rejectedConfigured} connection attempt(s) from a router listed in your config, because its syslog connection slots were full ({appState.stats.syslog.inUse} of {appState.stats.syslog.capacity} in use). Those log lines never arrived. This usually means something is opening a lot of connections to the syslog port."
+          >
+            ⚠ syslog full
+          </span>
+        {/if}
       {/if}
 
       {#if !viewportState.isMobile}
@@ -74,6 +86,21 @@
         title={appState.paused ? 'Resume live updates' : 'Pause live updates'}
       >
         {appState.paused ? `Resume${appState.pendingCount ? ` (${appState.pendingCount})` : ''}` : 'Pause'}
+      </button>
+
+      <!-- Grouping (#341): collapse repeats of the same connection into
+           one row with a count, so a host retrying the same thing four
+           hundred times costs one line. An option on the live view, not
+           a different view -- every event is still there, and the row
+           opens to show them. -->
+      <button
+        class:active={groupModeState.enabled}
+        onclick={() => groupModeState.toggle()}
+        title={groupModeState.enabled
+          ? 'Show every event on its own row'
+          : 'Collapse repeats of the same connection into one row with a count'}
+      >
+        Group
       </button>
 
       <button onclick={() => appState.clearBuffer()} title="Clear the local event buffer">
@@ -148,6 +175,17 @@
     color: var(--fg-muted);
     padding-right: 10px;
     border-right: 1px solid var(--border);
+  }
+
+  /* Deliberately not muted: this is the one item here that means
+     something is wrong right now, rather than reporting a rate. */
+  .syslog-blocked {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--danger, #c0392b);
+    padding-right: 10px;
+    border-right: 1px solid var(--border);
+    cursor: help;
   }
 
   button,

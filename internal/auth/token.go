@@ -13,6 +13,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/tomlawesome/mikroview/internal/persist"
 )
@@ -133,6 +135,13 @@ var (
 	// token carries a device. Accepting and ignoring it would leave the
 	// caller believing in a scope that nothing enforces.
 	ErrTokenDeviceNotAllowed = errors.New("auth: only an ingest token may name a device")
+	// ErrTokenDeviceInvalid is returned by Create for a device id that
+	// cannot be one: too long, or carrying control/formatting
+	// characters. The id is a display value (it appears in the token
+	// list, the audit trail and log lines) as well as a scope key, and
+	// an unbounded or control-bearing one is a typo that becomes a
+	// permanently, invisibly dead token at best.
+	ErrTokenDeviceInvalid = errors.New("auth: device id must be at most 64 characters of printable text")
 )
 
 // TokenStore persists API tokens to a JSON file -- the same JSON-file +
@@ -223,6 +232,31 @@ func hashTokenValue(raw string) string {
 	return hex.EncodeToString(sum[:])
 }
 
+// maxDeviceIDLen bounds a token's device scope. Nothing legitimate comes
+// close: a configured id is operator-chosen and a discovered one is an
+// IP literal (at most 45 characters for IPv6 with a zone).
+const maxDeviceIDLen = 64
+
+// validDeviceID rejects a device scope that could not have come from a
+// real device. Control and Unicode formatting characters are refused for
+// the same reason logging.Printable exists -- this string reaches an
+// operator's terminal and browser -- and the length cap keeps a 60KB
+// "device" out of the token store.
+func validDeviceID(device string) bool {
+	if device == "" {
+		return true // the required/not-allowed rules above already ruled on this
+	}
+	if len(device) > maxDeviceIDLen {
+		return false
+	}
+	for _, r := range device {
+		if unicode.IsControl(r) || unicode.Is(unicode.Cf, r) || r == utf8.RuneError {
+			return false
+		}
+	}
+	return utf8.ValidString(device)
+}
+
 // Create generates a new token named name, of kind kind, and persists
 // its metadata + hash. The returned raw string is the only time the
 // actual bearer value ever exists outside the caller's memory -- it is
@@ -245,6 +279,9 @@ func (s *TokenStore) Create(name string, kind TokenKind, device string, creator 
 	}
 	if kind != TokenKindIngest && device != "" {
 		return "", nil, ErrTokenDeviceNotAllowed
+	}
+	if !validDeviceID(device) {
+		return "", nil, ErrTokenDeviceInvalid
 	}
 
 	// newID's generator -- same 128-bit crypto/rand source Session
@@ -309,11 +346,37 @@ func (s *TokenStore) Authenticate(raw string, want TokenKind, now time.Time) (*T
 	if t.Kind != want {
 		return nil, false
 	}
-	t.LastUsedAt = now
-	s.persistLocked()
+	// LastUsedAt is a "roughly when was this last used" field for the
+	// tokens UI, not an audit record -- the audit log is where actions
+	// are accounted for. Writing the whole token document on every
+	// successful authentication made it behave like one anyway:
+	// measured at 0.40 ms per authentication with 50 tokens, under the
+	// write lock, on a path a read-only API token hits on every poll.
+	// Every one of those writes also went through the file backend's
+	// write-temp-then-rename, so it compounded with the shared-temp-name
+	// corruption fixed in #287.
+	//
+	// Persisting only once the recorded value is more than
+	// lastUsedGranularity stale keeps the display honest to the minute
+	// while collapsing a poll loop's writes to one an hour. The
+	// in-memory value is always exact; only the durable copy is
+	// coarsened. See #285.
+	if now.Sub(t.LastUsedAt) >= lastUsedGranularity {
+		t.LastUsedAt = now
+		s.persistLocked()
+	} else {
+		t.LastUsedAt = now
+	}
 	cp := *t
 	return &cp, true
 }
+
+// lastUsedGranularity is how stale a token's persisted LastUsedAt may
+// become before a write is worth it. An hour is far finer than the
+// question this field answers ("is this token still in use, or can I
+// revoke it?") and coarse enough that a polling client writes once
+// rather than continuously.
+const lastUsedGranularity = time.Hour
 
 // Revoke permanently deletes a token by ID -- there is no "disable and
 // keep around" state, matching how a revoked session is deleted

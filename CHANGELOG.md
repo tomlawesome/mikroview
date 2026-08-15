@@ -9,9 +9,32 @@ stub commands are left behind (see `AGENTS.md`, "Removals are
 wholesale"). This file is where they are communicated, so read it before
 upgrading.
 
+`0.1.0` was tagged on 2026-08-07 without its notes being cut, so
+everything sat under Unreleased until `0.2.0`. Its section below is the
+file exactly as it stood at the `v0.1.0` tag, split back out rather than
+rewritten.
+
 ## [Unreleased]
 
+## [0.2.0] - 2026-08-14
+
 ### Removed
+
+- **`spamhaus_edrop` as a blocklist source** -- Spamhaus merged EDROP into
+  DROP on 2024-04-10, and the endpoint now returns only a "this list has
+  been merged" comment with no ranges at all. mikroview had it
+  **enabled by default** and fetched it daily, parsed zero entries, and
+  logged that as a successful refresh -- so an operator saw a source
+  switched on and apparently working while it contributed nothing.
+  Coverage is unaffected (DROP absorbed EDROP's data years ago); what
+  changes is that the product no longer advertises protection it was not
+  providing. Removed wholesale per `AGENTS.md` -- a config still naming
+  `spamhaus_edrop` gets the usual unknown-source error rather than a
+  silent alias.
+
+  `Blocklist.Refresh` now also warns when *any* feed fetches cleanly but
+  yields no usable entries, so the next retired feed is noticed in days
+  rather than years.
 
 - **The plaintext syslog listeners** (#189): `listen.syslogUdp`,
   `listen.syslogTcp`, `internal/syslog/udp_listener.go`, and the
@@ -61,6 +84,144 @@ upgrading.
   the tab itself, are gone. No alias, no dual UI, per `AGENTS.md`.
 
 ### Added
+
+- **A Group option in the live view** (#341). A toolbar button, off by
+  default, that collapses repeats of the same connection into one row
+  carrying a count -- so a host retrying the same thing four hundred
+  times costs one line instead of four hundred. Two connections count as
+  the same when their source, destination, port, protocol and outcome
+  all match, which is strict enough that nothing is merged that an
+  operator would want to read separately. Nothing is discarded: the
+  counts account for every event the ungrouped view would have shown,
+  and clicking a grouped row opens it to reveal its events (the most
+  recent 20, with the remainder stated rather than silently dropped).
+  Rows belonging to an active flag carry a marker in both modes. The
+  view keeps behaving exactly as it always has until the button is
+  pressed, and the choice is remembered per browser.
+
+- **A guided setup wizard for connecting a router** (#320). Menu →
+  **Connect a router**, admin only. Every command comes out with your own
+  values already in it — the address you are reaching MikroView on, the
+  syslog port this instance actually listens on, and an ingest token the
+  page creates for you — so there is nothing to fill in and no
+  placeholder to leave behind by accident. Each step then tells you
+  whether it worked, because every step ends with your router arriving at
+  MikroView: the certificate download, the syslog connection, the first
+  events, each pushed table. MikroView still never connects to your
+  router. The first step checks that MikroView's certificate covers the
+  address you are using, which is worth its own mention: getting that
+  wrong otherwise shows up three steps later as a router-side error about
+  name verification, when the fix is on MikroView's side.
+  `docs/routeros-setup.md` remains the reference for what the wizard
+  emits and why.
+
+- **Ingest tokens can be created in the interface** (#326). The API
+  tokens dialog previously made read-only tokens only, while the setup
+  guide told you to create an ingest one there — so the documented path
+  did not exist and only the `curl` alternative worked. Worse, a
+  read-only token pasted into a router push script fails with a bare
+  `404` and nothing anywhere says "wrong kind of token". The dialog now
+  has a kind chooser and, for ingest, a list of the routers MikroView
+  knows about; the token list shows each token's kind and router, so one
+  can no longer masquerade under a misleading name.
+
+- **The Watchlist can watch a whole address list from your router**
+  (#274). If a firewall rule already scopes by an address list, MikroView
+  suggests watching traffic from the addresses in it — and the entry
+  follows the list as the router changes it, rather than freezing
+  today's members. That matters because RouterOS edits these lists
+  itself; an entry built from a snapshot would be wrong the first time
+  it did.
+
+  Only lists a rule actually references are suggested. A router has
+  plenty of lists for routing and bookkeeping, and suggesting all of them
+  would be noise — a rule referencing one is the operator saying that
+  group matters.
+
+- **A renewed certificate can be picked up without a restart** (#294).
+  Send MikroView `SIGHUP` — `docker kill --signal=HUP mikroview` — and it
+  reloads `tls.certFile`/`tls.keyFile` on both the HTTPS listener and the
+  syslog listener. Certbot and cert-manager both have a deploy hook for
+  exactly this.
+
+  Previously MikroView read the certificate once at startup and never
+  looked again, so anyone renewing automatically served an expired
+  certificate until they happened to restart — and a router set to
+  `check-certificate=yes` stops sending its logs at that point, which is
+  the outage you would least want to find out about late.
+
+  It does not watch the files and reload on its own, deliberately: it
+  cannot tell a finished renewal from one still being written, and half a
+  certificate is worse than an old one. A reload that fails leaves the
+  working certificate in place rather than dropping to none.
+
+- **You can change your own password from the interface** (#294). There
+  was no way to do it at all before: it meant `-recover-admin-account`
+  on the host, so anyone who suspected their password was known could do
+  nothing about it themselves. **Menu → Change password.**
+
+  Changing it also signs out everywhere else, immediately — that is the
+  point rather than a side effect, since the other half of "someone has
+  my credential" is "someone has my session". You stay signed in where
+  you made the change. An account that signs in through your identity
+  provider has no local password to change and does not see the option.
+
+- **Sessions now have a maximum age** (#294): seven days from signing
+  in, however often you use MikroView in between. `auth.sessionTTL` is
+  an *idle* timeout, so a session used once a day never expired — a
+  browser left signed in on a shared machine stayed valid indefinitely.
+  Configurable as `auth.sessionMaxLifetime`; set it to `0` to go back to
+  no ceiling.
+
+- **The Watchlist tells you when an entry can never match** (#274). An
+  entry showing no matches used to be ambiguous between "nothing
+  happened" and "nothing here is even watching" — the second being a
+  configuration mistake you had no way to see. Where MikroView can be
+  certain, the entry now says so and what to do about it: either no
+  firewall rule on any connected router has logging switched on, or your
+  rules do log but none of them covers what that entry watches.
+
+  **It stays quiet unless it is certain**, which is most of the time.
+  This needs the optional router push (step 4 of the RouterOS setup) to
+  say anything at all, and any rule it cannot read — one scoping by an
+  address-list name, say — makes it stop claiming rather than guess. A
+  wrong "this can never fire" hides a working entry, and a wrong "this
+  looks fine" is worse than silence.
+
+- **Routers can push whether a firewall rule actually logs, and which
+  addresses it matches** (#274). The filter-rule push gained three
+  fields: `log`, `dstAddress` and `srcAddress` — what the check above
+  reads.
+
+  **Update MikroView before you update the push script on your routers.**
+  MikroView refuses a push containing a field it does not recognise
+  rather than ignoring it, so a router sending the newer script to an
+  older MikroView gets a `400` and stops pushing. The other order is
+  safe. See [docs/routeros-setup.md](docs/routeros-setup.md).
+
+- **`THIRD-PARTY-NOTICES.md`, embedded in the binary and served at
+  `GET /api/third-party-notices`** -- the copyright notices and licence
+  texts of every Go module statically linked into mikroview and every
+  frontend package bundled into its embedded assets. MIT, BSD-3-Clause,
+  ISC and Apache-2.0 each require those notices to accompany a *binary*
+  distribution, and Apache-2.0 s4(d) requires any `NOTICE` file to be
+  passed along; mikroview previously shipped none of it. Because the
+  runtime image is distroless -- the binary is the entire artefact -- the
+  notices are compiled into it and linked from the About dialog, so a
+  user of a running instance actually receives them.
+
+  Generated by `tools/licenses/generate-notices.mjs` and verified in CI,
+  rather than hand-maintained: a notices file nothing checks is wrong the
+  first time a dependency changes and silently stays wrong. Same
+  "record the obligation as something that fails" approach as
+  `injection_sinks_test.go` and `internal/api`'s `authzMatrix`.
+
+- **Spamhaus attribution is retained rather than discarded at parse
+  time.** Spamhaus's DROP terms require that credit be given and that the
+  list's date and (c) text "remain with the file and data". That text
+  lives in the feed's leading `;` comment block, which the parser threw
+  away; it is now kept alongside the ranges it describes and logged on
+  every refresh.
 
 - **The watchlist**, replacing the old Control Ports tab (#243): a
   persisted, admin-managed entry set (`internal/watchlist`) with two
@@ -122,6 +283,21 @@ upgrading.
   hostname yet serializes `host-name` as JSON `null` rather than
   omitting or erroring on it, which MikroView already handles the same
   way it handles an unset `dst-port`.
+
+- **An optional Postgres backend for every persisted store** (#131),
+  including accounts: separation between the mikroview host and its
+  persisted state, so that compromising the host no longer means
+  reading a plaintext file to get every account's data. One shared blob
+  table (`store_blob`) holds the same JSON document the file backend
+  writes today, per store, with an optimistic-concurrency version
+  column -- see `docs/decisions/postgres-backend.md` for the six
+  decisions this left open and why. Existing JSON files are migrated
+  byte-identically into Postgres on first boot with it configured, and
+  left on disk afterward rather than deleted, so reverting is "remove
+  `postgres.dsnFile` and restart" rather than an irreversible choice.
+  New config: `postgres.dsnFile` -- deliberately no inline `postgres.dsn`
+  or CLI flag, since a DSN carries a password. See
+  `docs/configuration.md`'s "Postgres (optional)" section.
 
 - **The watchlist match log now has a Postgres backend** (#243 slice
   6): a dedicated, indexed `match_log` table rather than a row in the
@@ -289,7 +465,460 @@ upgrading.
   sheet at phone widths, same as the menu), and Export in the menu on
   desktop as it already was on mobile.
 
+### Changed
+
+- **The stored copy of a raw log line is now capped at 2KiB** (#285).
+  MikroView keeps each firewall log line exactly as the router sent it,
+  so you can check what it shows against what arrived. Nothing bounded
+  that, though, beyond the 64KiB a syslog message may be -- while the
+  documented memory budget (~120MiB for 200,000 events) assumed an
+  ordinary line. Both could not be true: filled with 64KiB lines, the
+  same buffer holds **12.5GB**, and nothing has to log in to send them.
+  Real RouterOS lines run 150-400 characters, so 2KiB is about five
+  times the longest genuine one and truncation only ever hits input a
+  real router does not produce. A row whose line was cut says so on
+  hover and in a CSV export, rather than presenting a shortened line as
+  though it were verbatim. The per-event cost figure rises from 616 to
+  624 bytes, which is the one field this needed.
+
+- **Routine router pushes are no longer written to the audit log**
+  (#285). Every push recorded a row, a push script runs every 15-30
+  minutes, and the log keeps the most recent 10,000 entries -- so one
+  ingest token produced 11,520 rows a day and pushed out the entire
+  record of admin actions (accounts created, tokens issued, the admin
+  role transferred) in about 21 hours. A successful scheduled push is
+  not an accountability event; what it erased was. MikroView now records
+  the first push of a kind from a device, a push starting to fail or
+  recovering, and a periodic heartbeat -- and applies the same rule to
+  refusals, since those are cheaper for an attacker to produce than
+  valid pushes.
+
+- **Syslog connection slots are now reserved for the routers you
+  declare** (#285). The listener holds 256 connections with 8 per source
+  address, so 32 addresses filled it -- easy for one host with a routed
+  IPv6 range -- and a real router connecting afterwards was accepted and
+  immediately dropped, its log lines never arriving. A total monitoring
+  blackout whose only trace was a repeated line in the container log.
+  A quarter of the pool is now held for routers listed under `devices:`
+  in `config.yaml`, the same protection configured devices already get
+  elsewhere, and the live view shows a warning when one of yours has
+  been turned away. Declaring no devices reserves nothing, since holding
+  capacity back for nobody would only shrink the pool.
+
+- **The HTTP-to-HTTPS redirect no longer trusts the address it was
+  asked for** (#283, #284). To build the redirect MikroView reused the
+  address the request claimed to be for, without checking it, whenever
+  `tls.hosts` was unset -- which is the shipped default. Someone able to
+  send a hand-crafted request could get MikroView to reply "go to
+  https://somewhere-else". The code had a check for exactly this, with a
+  comment saying so, against a list that was empty out of the box.
+  MikroView now works out its own valid addresses (its hostname and the
+  addresses it is listening on) when you have not listed any, so the
+  protection works with nothing configured and reaching MikroView by
+  bare IP keeps working.
+
 ### Fixed
+
+- **Upgrading no longer leaves the browser showing the previous
+  version's interface** (#347). MikroView is installable as a web app,
+  which means a service worker keeps a copy of the interface so it opens
+  instantly. The server never told browsers how long to keep that copy,
+  and a browser left to guess can hold on to the file that detects new
+  versions for up to 24 hours — so an operator who pulled a new image,
+  restarted, and reloaded could be served the old interface for the rest
+  of the day, with no way to tell from inside the app that anything was
+  stale. Reported after it cost an hour of hunting for a container
+  problem that did not exist: the server was correct and said so, and the
+  browser was quietly ignoring it. Files whose names change with their
+  contents are still cached indefinitely, so this costs nothing on load.
+
+- **Typing `host:8080` into a browser now works** (#325). MikroView
+  usually gets one published port on a host where 80 and 443 belong to
+  something else, and a browser given an address with a port tries plain
+  HTTP first. That arrived at the encrypted port and produced a bare
+  error page. It is now answered with a redirect to the same address over
+  HTTPS. Nothing is ever served unencrypted.
+
+- **TLS connection failures are explained instead of quoted** (#321). A
+  phone or router that refuses MikroView's certificate produced a line
+  like `remote error: tls: unknown certificate`, repeated every few
+  seconds by the client's own retries — accurate, unreadable, and enough
+  of it to bury anything else. The line now says who rejected whom and
+  what to do about it, keeps the original error at the end, and repeats
+  at most once a minute per cause with a count.
+
+- **A quiet flood could fill the log** (#322). Rejected syslog
+  connections were logged one line per attempt on a port that takes no
+  credentials, so anyone able to reach it could write to the log at
+  connection speed; a client disconnecting mid-response was logged as a
+  warning, which a phone locking its screen does routinely; and once the
+  watchlist match log filled, every subsequent match logged the same
+  failure again. All are now rate-limited with a running count.
+
+- **An address-attribution feed could freeze permanently** (#324). The
+  check that rejects a suddenly-oversized feed compared address counts
+  that could overflow: a feed carrying wide IPv6 ranges — Apple Private
+  Relay does — reported a nonsensical total, and every later refresh then
+  looked like a huge jump and was rejected as possibly poisoned. The feed
+  silently kept its first copy for good while the log reported success.
+  Counts now saturate instead of overflowing, and are printed in a form a
+  person can read.
+
+- **A router declared without an `id` shared an identity with every
+  other one** (#332). A device's `id` decides which router pushed state
+  belongs to and what an ingest token is allowed to speak for, but it was
+  never validated, and the documented examples omitted it — so following
+  the documentation produced devices that were indistinguishable
+  internally, and two of them broke the token dialog outright. An unset
+  `id` now defaults to the router's own address, duplicates and
+  misleading values are refused at startup (CFG-0032, CFG-0033), and the
+  documentation says what the field is for.
+
+- **MikroView checks the database ran the schema changes it thinks it
+  did** (#294). It recorded which schema versions had been applied but
+  never what they contained, so anyone able to write to that one table
+  could claim a version and MikroView would report "up to date" and run
+  against a schema it had never seen. Each schema change now records a
+  fingerprint as it is applied, checked on every start. A mismatch stops
+  startup rather than guessing at the shape of your data.
+
+  Existing databases are unaffected: rows written before this have
+  nothing to compare and are simply not checked, rather than treated as
+  suspicious.
+
+- **Restoring an older database backup can no longer bring deleted
+  accounts back** (#294). MikroView copied your JSON files into Postgres
+  on the first move, but it re-checked on *every* start — so restoring
+  the database to a snapshot from before a store was filled, with the
+  original files still on the data volume, copied them straight back in.
+  A deleted account and its password came back, with a single line in the
+  log as the only sign. The one-time move now happens once and never
+  again.
+
+  If a first migration is ever interrupted part-way, MikroView says so
+  loudly and tells you how to finish it deliberately. It will not guess:
+  an interrupted migration and a restored-from-backup database look
+  identical from the inside, and guessing wrong is what caused this.
+
+- **A single sign-on issuer written without `https://` is now checked
+  properly** (#267). MikroView refuses multi-tenant providers, and that
+  check read the hostname — which is empty for a scheme-less string, so
+  `login.microsoftonline.com/common/v2.0` passed a check meant to refuse
+  it. Setup would have failed later at provider discovery, but a check
+  that answers "fine" because it could not read its input is the wrong
+  shape.
+
+- **A router with no NAT rules no longer shows an empty box** (#267).
+  The rule lookup said so when a pushed table contained no matching
+  rule; the NAT lookup had no equivalent message, so a router that has
+  pushed its NAT table and simply has no NAT configured showed nothing
+  at all, with a footnote explaining how to read rules that were not
+  there.
+
+- **Creating a named entity now answers `201`, not `200`** (#267),
+  matching every other create endpoint. `POST /api/entities` both
+  creates and replaces, and always answering `200` left a caller unable
+  to tell which had happened. A replace still answers `200`.
+
+- **Four single sign-on access-policy settings can now be set from the
+  environment** (#267): `MIKROVIEW_OIDC_ALLOWED_GROUPS`,
+  `MIKROVIEW_OIDC_GROUPS_CLAIM`, `MIKROVIEW_OIDC_ALLOWED_EMAILS` and
+  `MIKROVIEW_OIDC_ALLOWED_EMAIL_DOMAINS`. A deployment keeping its OIDC
+  block in the environment could previously say who its provider was but
+  not who was allowed in.
+
+- **Two named entities can no longer overwrite each other** (#267).
+  Entities were stored under `type + ":" + key`, and both parts can
+  contain colons — an IPv6 address is a perfectly ordinary host key — so
+  `("host", "2001:db8::1")` and `("host:2001", "db8::1")` landed on the
+  same key and one silently replaced the other. They are now kept apart.
+  The entity type also gets the same check for control characters that
+  the key, label and tags already had.
+
+- **MikroView regenerates its certificate if the authority behind it is
+  lost** (#267). If `ca.crt` or `ca.key` became unreadable while the
+  certificate files survived, MikroView created a fresh authority and
+  carried on serving the old certificate — a pair that validates against
+  nothing, so every browser and router that had trusted the original
+  failed with a certificate error and no other clue. It now checks that
+  the stored certificate was signed by the authority in use, and issues
+  a new one if not.
+
+- **A Pushover message is no longer cut mid-character** (#267). Long
+  batches were trimmed by byte count, which can split a multi-byte
+  character and leave invalid text. Trimming now stops at a character
+  boundary.
+
+- **`-transfer-admin` no longer names the admin before you prove a
+  recovery key** (#267). It printed "Admin is currently ..." as its first
+  action, so anyone able to run the binary learned who the admin is by
+  starting the command and pressing Ctrl-C — despite the code's own
+  comment two lines below stating the key is asked for first precisely
+  so that cannot happen. It now asks first and names the account once the
+  key is verified. `-recover-admin-account` still names it up front,
+  deliberately: it has to say which account it cannot help with when
+  that account signs in through your identity provider.
+
+- **A mistyped filter in an API request is now refused instead of
+  silently ignored** (#267). `GET /api/events` and `GET /api/audit`
+  accepted a malformed `since`, `until`, `limit`, `port`, `around`,
+  `window` or `sinceId` and returned `200` with the filter simply not
+  applied — so a caller with a typo got *everything* while believing
+  they had asked for a window. In a tool whose job is showing you what
+  happened in a window, that is the misreading that matters. Both now
+  answer `400` and name the parameter, which is what
+  `GET /api/watchlist/matches` already did; the three took the same
+  parameters and disagreed about this. An absent parameter still means
+  "no filter", unchanged.
+
+- **`-validate-config` now checks your single sign-on settings** (#267).
+  It performed no OIDC validation at all, so a block missing
+  `publicBaseUrl`, or `clientId`/`clientSecret`, or pointed at a
+  multi-tenant provider MikroView refuses, passed cleanly — and the
+  first sign anything was wrong was the SSO button not being there. New
+  CFG-0060, CFG-0061 and CFG-0062. They are warnings, not errors:
+  MikroView still starts and local login still works, because taking a
+  deployment down over a half-configured optional integration would be
+  worse. `-validate-config` exits non-zero on warnings, so a pipeline is
+  still told.
+
+- **A rule filter that stops being usable mid-stream now says so**
+  (#267). If a regex filter became unevaluable once matching events
+  started arriving, the live view kept showing the last match set it had
+  worked out — stale and wrong, with nothing to say the filter was no
+  longer being applied. Reading a filtered view as complete when it is
+  not is the exact misreading this product exists to prevent.
+
+- **Clicking the logo returns you to the live view** (#267), as does a
+  Live view entry in the menu. Previously the only way back was to click
+  whichever view button you had used to leave it.
+
+- **Failed actions now say so instead of looking like nothing happened**
+  (#267). Removing a watchlist entry, turning observe mode on or off,
+  promoting a destination, removing a named entity, clearing a flag,
+  clearing all flags, permanently clearing one, and removing an
+  exclusion all reported nothing when they failed. The row reappeared or
+  simply stayed, which reads as the button not having worked rather than
+  as an error — and in several cases it was an unhandled promise
+  rejection that only the browser console would ever have shown you.
+  Each of these now shows the reason, the same way the forms next to
+  them already did.
+
+- **Signing out no longer looks successful when it failed** (#267).
+  `logout` was the one action that ignored the server's response
+  entirely. You are still signed out locally either way — being left
+  looking signed in would be worse — but if the server did not confirm
+  it, MikroView now says so, since the session may still be live.
+
+- **The live view no longer briefly claims to be disconnected after a
+  fast sign-out and back in** (#267). Closing a WebSocket reports the
+  closure asynchronously, so the old connection's "closed" arrived after
+  the new one was already up, overwriting the indicator and scheduling a
+  reconnect that was then abandoned. Handlers now ignore a connection
+  that has been superseded.
+
+- **A regex rule filter no longer switches itself off under load**
+  (#267). Two overlapping match requests shared one background worker's
+  reply handler, so the earlier one could never be answered and gave up
+  reporting "too slow" — which drops the filter and shows every event,
+  precisely when a busy feed makes filtering matter most. Replies are
+  now matched to their own request.
+
+- **`search_path` in a Postgres connection string is honoured again**
+  (#273). Pinning the schema so nobody could shadow MikroView's tables
+  (#285) was implemented by forcing it to `public`, which also overrode
+  an explicit `?search_path=...`. An operator keeping MikroView's tables
+  in a schema of their own got `public` regardless, with nothing to say
+  so. It is now pinned to what the connection string asks for, falling
+  back to `public` — the protection is unchanged, since the schema is
+  still what MikroView sets rather than what the role happens to default
+  to. Documented under "Which schema the tables go in".
+
+- **ICMP events are read correctly, and are no longer invisible to the
+  watchlist** (#273). RouterOS puts a comma after the connection state on
+  a TCP log line but not on an ICMP one, and MikroView split the line on
+  commas. So for every ping and every unreachable message, the protocol
+  came out blank and the connection state came out as the text
+  `new proto ICMP (type 8, code 0)`.
+
+  The visible half was a blank Protocol column. The half that mattered:
+  MikroView only considers an event for the watchlist when its connection
+  state is new (or absent), and that text is neither -- so **no ICMP
+  traffic ever reached the watchlist**, including the "this device should
+  only ever talk to X" entries whose entire job is noticing a device
+  reaching something it should not. Reading the connection state now
+  stops at the state itself and hands anything RouterOS appended to it
+  back to the normal field handling, so this holds for whatever else a
+  future release appends there too.
+
+  Two knock-on effects worth knowing about, both of them the intended
+  behaviour rather than new behaviour. Logged ICMP now counts toward a
+  host's activity baseline, so a host that pings a lot looks busier than
+  it used to -- it always should have. Port-scan and critical-port
+  detection are unchanged: both ignore events with no destination port,
+  which every ICMP event is.
+
+- **A watchlist entry whose MAC address you typed in lowercase now
+  matches** (#273). RouterOS writes MAC addresses in upper case
+  (`52:55:0A:00:02:02`), both in its firewall log lines and in the ARP
+  and DHCP tables it pushes. MikroView compared them exactly, so an
+  entry you set up by typing the address the ordinary way --
+  `52:55:0a:00:02:02` -- never matched anything that device did, and
+  looking its matches up by that address returned nothing even when
+  there were some. Neither failure said anything: the entry looked
+  configured and quietly did nothing. Matching now ignores case, the
+  same way MikroView's device registry already did. Stored records keep
+  the router's own spelling, since they are evidence.
+
+  Found by running MikroView against a real RouterOS router rather than
+  against generated log lines -- every example in this project writes
+  MACs in lower case, so nothing that fed itself its own test data could
+  have shown this.
+
+- **Terminal escape sequences from a syslog line no longer reach saved
+  flags or notifications** (#285). Every field MikroView reads out of a
+  firewall log line is chosen by whoever sent it, and those fields become
+  a flag's target and detail -- which are then written to `flags.json`
+  and the watchlist match log, and sent in email and Pushover messages.
+  They were length-capped but never checked for control characters, so a
+  crafted line could put an ANSI escape sequence somewhere a terminal
+  would execute it, for example on `cat flags.json`. MikroView already
+  had the function for this and was applying it only to usernames. It is
+  now applied once, where fields are read, rather than at each place they
+  end up -- a destination is easy to add and easy to forget. The raw log
+  line itself is deliberately left byte-for-byte as the router sent it,
+  since comparing against it is the reason it is kept.
+
+- **A CSV export can no longer smuggle a formula into a new row**
+  (#285). A cell containing a bare carriage return was written unquoted,
+  and a spreadsheet reading classic-Mac line endings treats that as the
+  end of a record -- so text after it started a new row, and the first
+  cell of a new row never went through the formula-neutralising step.
+  The payload has to avoid quotes and commas to reach this (anything
+  containing them was quoted already), which the classic
+  command-execution form does. Carriage returns are now quoted like every
+  other separator.
+
+- **A webhook notification will no longer follow a redirect to another
+  host** (#285). MikroView supports putting a credential in a custom
+  header, because that is what ntfy, Home Assistant and n8n each expect.
+  Go strips the standard `Authorization` and `Cookie` headers when a
+  redirect crosses hosts but not custom ones -- so the header most likely
+  to hold your secret was the one being forwarded. Redirects within the
+  same receiver are still followed; anything else fails the send with a
+  message saying why. MikroView also now warns at startup if the webhook
+  URL is plain `http://`, since flag contents and that header cross the
+  network in the clear.
+
+- **Asking the match log for one record no longer builds all of them**
+  (#285). `GET /api/watchlist/matches` loaded every record for the
+  requested device into memory before applying the limit -- 237 MB and
+  1.9 seconds to return a single record from a large log -- and it is
+  reachable with a read-only API token and no rate limit. It now reads
+  only what it needs to order the results, then fetches the full
+  contents of just the records being returned.
+
+- **One router can no longer name hosts on another router's traffic**
+  (#285, #283, #284). Names pushed from RouterOS -- DNS static entries,
+  DHCP lease hostnames, WireGuard peer comments -- were applied
+  deployment-wide rather than to the router that pushed them. The
+  holder of one router's ingest token could therefore label any address
+  in the world, including one under active attack seen through a
+  completely different router, and a single WireGuard peer allowing
+  `0.0.0.0/0` became the catch-all name for every otherwise-unlabelled
+  address. That contradicted the one-router blast radius the ingest
+  token exists to provide and states in its own documentation. Without
+  any attacker involved, two independently-administered routers both
+  using `192.168.1.0/24` cross-contaminated each other's displayed
+  names.
+
+  Every other router-pushed table -- filter rules, NAT rules, DHCP
+  leases, ARP -- was already scoped per device, and had a test saying
+  so. Host names were the one exception, and the existing test only ever
+  used a single router, so nothing exercised the gap. Found
+  independently by two reviewers and reproduced by a third.
+
+  If you monitor one router, nothing changes. If you monitor several,
+  the `device` named on each ingest token must match that device's `id`
+  in `config.yaml` -- which is already required for the rule and NAT
+  table lookups to work, so in practice it already does. Labels you set
+  inside MikroView are unaffected: they are yours, not a router's, and
+  stay deployment-wide.
+
+- **A flood of made-up MAC addresses or rule names can no longer grind
+  ingestion to a halt** (#285). Three in-memory indexes are keyed on
+  something whoever is sending syslog gets to choose -- the source MAC,
+  the firewall rule label, and the rule leaderboard behind the stats
+  panel. Each was capped, but the cap was enforced by trimming back to
+  exactly the limit, which leaves the index full, so the next new value
+  overflowed as well and re-ran the whole scan -- for every event
+  thereafter. Measured on the old code: 1,529 ns per event became 16-21
+  ms once the MAC registry was full, taking ingestion down to roughly 47
+  events a second, and the registry is saved to disk so it came back
+  poisoned after a restart. mikroview now sheds a batch and leaves
+  headroom, so the cost is spread over the next several thousand events
+  instead of being paid on each one. The same treatment mikroview
+  already applied to its detectors, now shared rather than re-derived.
+
+  The rule leaderboard had no cap at all: 500,000 made-up rule names cost
+  161 MB of memory, permanently displaced the real rules from the "top
+  rules" list, and sorting that list held the lock ingestion needs --
+  measured at 306 ms per stats request with ingestion blocked for 301 ms
+  of it. It is now bounded like the others, keeps the rules that actually
+  fire, and the sort no longer holds anything ingestion needs.
+
+- **The login rate limiter now enforces its own memory cap** (#285). The
+  4,096-key ceiling was applied when recording a failed login but
+  silently skipped on the path an unauthenticated request reaches first,
+  because the pruning step created the entry it was about to check for.
+  200,000 requests from varying source addresses left 200,006 tracked
+  keys and 22.7 MiB retained. The limiter also now forgets a key
+  entirely once its attempts age out, instead of keeping an empty entry
+  per source address forever.
+
+- **A flood of flags no longer pushes out the alert that matters**
+  (#285). At its hard ceiling the flag store shed the *earliest-raised*
+  flag first -- which is the first flag of a real incident, the single
+  most valuable thing it holds. Since flag targets come from
+  unauthenticated syslog, 5,001 junk "new device" flags (about 600 KB,
+  7 ms) were enough to erase a genuine alert permanently. Reviewed
+  (cleared) flags are still shed first; among the rest mikroview now
+  keeps the ones a detector has re-fired for, since a real incident
+  re-fires and junk fires once. A bounded store under an unbounded flood
+  still has to drop something, so dropping an unreviewed flag is now
+  logged with a running total rather than happening silently.
+
+- **Two concurrent writers can no longer corrupt a store document**
+  (#285). Every writer shared one temporary filename (`<store>.tmp`),
+  written with a truncating open rather than an exclusive one, so two
+  overlapping saves landed in the same file and the rename published a
+  byte mixture of both payloads. Measured on the old code: 12 of 300
+  concurrent write pairs left the document as invalid JSON *after both
+  writers had finished* -- settled corruption, not a transient. For the
+  accounts store that meant a total lockout, since mikroview
+  deliberately refuses to start on an unreadable accounts document
+  rather than treat it as a fresh install. Two writers at once is the
+  documented recovery workflow (`docker compose exec ...
+  -recover-admin-account` against a running server), not a contrived
+  case. Each writer now gets its own exclusively-created temporary file,
+  and the write is flushed to disk before the rename and the directory
+  after it, so "atomically replaced" now also holds across a power loss.
+
+- **A stalled database no longer takes authentication down with it**
+  (#282). Every authenticated request, every login and every
+  registration attempt re-read the accounts document with no deadline.
+  If Postgres stopped answering while its connection stayed open -- a
+  network blackhole, a long lock wait, an overloaded server -- each
+  request permanently consumed a goroutine and a pooled connection, and
+  the HTTP write timeout did not release them. Once the pool was
+  exhausted every further request blocked too, including the login an
+  operator needed in order to diagnose it, and nothing recovered until
+  the database came back. The staleness check is now bounded by a
+  five-second deadline, and concurrent callers share a single check
+  instead of each opening their own, so an outage costs one connection
+  rather than one per request and the server keeps serving from memory
+  throughout. On Postgres the check now also asks only for the version
+  rather than pulling the whole accounts document back on every request.
 
 - **Autoscroll off now holds the live view still** (#232), rather than
   only skipping the jump-to-bottom. The rendered window is a sliding
@@ -368,6 +997,8 @@ upgrading.
   A token whose kind this build does not recognise cannot authenticate at
   all, but stays listed and revocable — guessing that an unknown kind
   meant the read-everything one is the wrong direction to guess in.
+
+## [0.1.0] - 2026-08-07
 
 ### Changed
 
@@ -475,8 +1106,10 @@ upgrading.
 
 ### Changed
 
-- `internal/api`'s `Routes` gained an inner `mux`, so tests that
-  exercise a handler rather than the authentication gate can mount the
-  API directly. They previously got an ungated API by standing the
-  fixture up with authentication disabled, which is no longer a state
-  that exists.
+<!-- Nothing operator-visible changed in this release beyond the
+     Added/Fixed entries above. An earlier entry here described an
+     internal test-fixture refactor (internal/api's Routes gaining an
+     inner mux); it was removed because every other entry in this file
+     is written from what an operator would notice, and a reader
+     scanning for what changed for *them* has to skip past anything
+     that isn't (#268 finding 17). -->

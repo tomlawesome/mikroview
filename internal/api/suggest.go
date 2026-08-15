@@ -93,6 +93,23 @@ func (s *Server) handleSuggestionsAccept(w http.ResponseWriter, r *http.Request)
 		e.Observing = true
 	case suggest.KindPort:
 		e.Ports = candidate.Ports
+	case suggest.KindAddressList:
+		// Scoped to the list itself, resolved live at match time (#274
+		// item 2) -- not expanded into the addresses currently in it,
+		// which would be stale the moment the router edited the list.
+		e.SourceList = watchlist.AddressListRef{Device: candidate.RouterDevice, List: candidate.AddressList}
+		// A non-inverted entry needs ports, and the candidate carries
+		// none deliberately: a list rule says which *hosts* matter, not
+		// which ports. The operator's own configured critical ports are
+		// the honest starting point -- the same set the critical_port
+		// detector already watches -- and the entry is editable from
+		// the moment it exists.
+		e.Ports = s.DefaultWatchPorts
+		if len(e.Ports) == 0 {
+			http.Error(w, "no default ports are configured to watch, so this suggestion cannot be turned into an entry -- "+
+				"set flags.criticalPorts, or create the entry by hand with the ports you want", http.StatusBadRequest)
+			return
+		}
 	default:
 		http.Error(w, "this suggestion cannot be accepted yet", http.StatusBadRequest)
 		return

@@ -1,7 +1,7 @@
 <script lang="ts">
   // SPDX-License-Identifier: AGPL-3.0-only
   import type { FirewallEvent } from '../lib/types'
-  import { countryFlag, formatAddr, formatTime, isPublicIp } from '../lib/format'
+  import { countryFlag, formatAddr, formatTime, isPublicIp, rawTooltip } from '../lib/format'
   import { appState } from '../lib/state.svelte'
   import ActionBadge from './ActionBadge.svelte'
   import IpInvestigateButton from './IpInvestigateButton.svelte'
@@ -9,7 +9,33 @@
   import RouterRuleButton from './RouterRuleButton.svelte'
   import { lookupPort } from '../lib/commonPorts'
 
-  let { event, deviceName }: { event: FirewallEvent; deviceName: string } = $props()
+  let {
+    event,
+    deviceName,
+    // Grouping (#341). count > 1 means this row stands for several
+    // identical connections and the time cell shows the count instead --
+    // the time is the same second on every row at any real rate, so it
+    // is the least useful thing in the most prominent column.
+    count = 1,
+    // flagged means "this row's source has an active flag against it",
+    // not "this event caused that flag": a flag records what it was
+    // raised about, not which events evidenced it (#341).
+    flagged = false,
+    expandable = false,
+    expanded = false,
+    onToggle,
+    // member rows are the individual events shown under an opened group.
+    member = false,
+  }: {
+    event: FirewallEvent
+    deviceName: string
+    count?: number
+    flagged?: boolean
+    expandable?: boolean
+    expanded?: boolean
+    onToggle?: () => void
+    member?: boolean
+  } = $props()
 
   const ifaces = $derived(
     [event.inInterface, event.outInterface].filter(Boolean).join(' → ') || '—',
@@ -19,8 +45,31 @@
   const dstFlag = $derived(countryFlag(event.dstCountry))
 </script>
 
-<div class="row row-{event.action}" title={event.raw}>
-  <span class="cell time">{formatTime(event.time)}</span>
+<div
+  class="row row-{event.action}"
+  class:member
+  class:expandable
+  title={rawTooltip(event.raw, event.rawTruncated)}
+>
+  {#if expandable}
+    <button
+      class="cell time cell-btn count-cell"
+      onclick={() => onToggle?.()}
+      aria-expanded={expanded}
+      title={expanded ? 'Hide these events' : `Show the ${count} events in this group`}
+    >
+      <span class="count">{count}</span>
+      {#if flagged}<span class="flag-mark" title="This source has an active flag against it">⚑</span
+        >{/if}
+      <span class="chev" class:open={expanded}>›</span>
+    </button>
+  {:else}
+    <span class="cell time">
+      {formatTime(event.time)}
+      {#if flagged}<span class="flag-mark" title="This source has an active flag against it">⚑</span
+        >{/if}
+    </span>
+  {/if}
 
   <button
     class="cell device cell-btn"
@@ -164,6 +213,50 @@
 <style>
   .row {
     display: contents;
+  }
+
+  /* A grouped collapsed row: the count takes the time column, big
+     enough to scan down the left edge. A singleton keeps its timestamp
+     instead -- a large "1" on every unrepeated row would be noise in a
+     bigger font. */
+  .count-cell {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    text-align: left;
+  }
+
+  .count {
+    font-size: 15px;
+    font-weight: 700;
+    color: var(--fg);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .chev {
+    color: var(--fg-muted);
+    transition: transform 0.12s ease;
+    display: inline-block;
+  }
+
+  .chev.open {
+    transform: rotate(90deg);
+  }
+
+  .flag-mark {
+    color: var(--reject);
+    font-size: 12px;
+  }
+
+  /* An individual event inside an opened group. Indented and dimmed so
+     the group's own row still reads as the thing on the page. */
+  .row.member > :global(.cell:first-child) {
+    padding-left: 22px;
+    border-left: 2px solid var(--accent);
+  }
+
+  .row.member :global(.cell) {
+    opacity: 0.75;
   }
 
   .cell {

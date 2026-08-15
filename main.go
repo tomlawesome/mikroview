@@ -12,6 +12,7 @@ import (
 	"math/rand/v2"
 	"net"
 	"net/http"
+	"net/netip"
 	"os"
 	"os/signal"
 	"slices"
@@ -43,9 +44,11 @@ import (
 	"github.com/tomlawesome/mikroview/internal/routerstate"
 	"github.com/tomlawesome/mikroview/internal/rules"
 	"github.com/tomlawesome/mikroview/internal/servertls"
+	"github.com/tomlawesome/mikroview/internal/setup"
 	"github.com/tomlawesome/mikroview/internal/store"
 	"github.com/tomlawesome/mikroview/internal/suggest"
 	"github.com/tomlawesome/mikroview/internal/syslog"
+	"github.com/tomlawesome/mikroview/internal/tlssniff"
 	"github.com/tomlawesome/mikroview/internal/watchlist"
 	"github.com/tomlawesome/mikroview/web"
 	"golang.org/x/term"
@@ -186,6 +189,48 @@ func securityHeaders(next http.Handler, hsts bool) http.Handler {
 	})
 }
 
+// staticCacheHeaders wraps the embedded frontend's file server, telling
+// browsers how long each kind of file may be reused (#347).
+//
+// Two shapes, because the build produces two:
+//
+//   - /assets/* is content-hashed by Vite -- index-BShEGKey.js changes
+//     its *name* whenever its contents change, so a copy can never go
+//     stale and is safe to keep for as long as the browser likes.
+//   - Everything else (index.html, sw.js, registerSW.js, the manifest,
+//     the icons) keeps a fixed name across builds, so it gets no-cache:
+//     store it, but check with the server before using it again.
+//
+// sw.js is the one that makes this load-bearing rather than tidy.
+// mikroview is a PWA whose service worker precaches the whole app shell,
+// so after an upgrade the first load is served the OLD shell from that
+// precache. registerType: 'autoUpdate' is meant to make that transient
+// -- the browser refetches sw.js, sees it changed, activates the new
+// worker and reloads. But with no Cache-Control at all, a browser may
+// reuse its cached sw.js for up to 24 hours before revalidating, and
+// then the update is never noticed: an upgraded server keeps serving a
+// days-old UI while /api/healthz correctly reports the new version.
+// That is not hypothetical -- it cost an operator an hour of chasing an
+// image tag that was never wrong.
+//
+// Files come from an embed.FS, whose entries have a zero modification
+// time, so http.FileServer sends no Last-Modified and there are no
+// conditional requests to answer with a 304. no-cache therefore means
+// re-sending the body each time; at ~1.5KB for index.html and a few KB
+// for sw.js that is not worth optimising. If it ever is, the answer is
+// an ETag over the embedded bytes -- not a longer max-age, which is the
+// thing that caused this.
+func staticCacheHeaders(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/assets/") {
+			w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+		} else {
+			w.Header().Set("Cache-Control", "no-cache")
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
 // httpsRedirectTarget builds the Location for redirecting a plain-HTTP
 // request to HTTPS -- strips any port off the request's Host header and
 // assumes HTTPS is reachable on the browser-default 443 (see
@@ -207,6 +252,9 @@ func securityHeaders(next http.Handler, hsts bool) http.Handler {
 // truth available here to validate against, so this falls back to the
 // prior echo-Host behavior.
 func httpsRedirectTarget(r *http.Request, allowedHosts []string) string {
+	if len(allowedHosts) == 0 {
+		allowedHosts = localRedirectHosts()
+	}
 	host := r.Host
 	if h, _, err := net.SplitHostPort(host); err == nil {
 		host = h
@@ -215,6 +263,101 @@ func httpsRedirectTarget(r *http.Request, allowedHosts []string) string {
 		host = allowedHosts[0]
 	}
 	return "https://" + host + r.URL.RequestURI()
+}
+
+// samePortRedirectHost is the host policy for the plaintext-on-the-TLS-
+// port redirect (#325). Same allowlist reasoning as
+// httpsRedirectTarget above -- never echo an arbitrary Host header back
+// in a Location -- with one difference: the port is kept. That listener
+// bounces to the browser default 443 because it lives on port 80; this
+// one is the HTTPS listener, so https is reachable on exactly the
+// address and port the client already dialled.
+func samePortRedirectHost(requested string, allowedHosts []string, localAddr string) string {
+	host, port, err := net.SplitHostPort(requested)
+	if err != nil {
+		host, port = requested, ""
+	}
+	if port == "" {
+		if _, p, err := net.SplitHostPort(localAddr); err == nil {
+			port = p
+		}
+	}
+	allowed := allowedHosts
+	if len(allowed) == 0 {
+		allowed = localRedirectHosts()
+	}
+	if len(allowed) > 0 && !slices.Contains(allowed, host) {
+		host = allowed[0]
+	}
+	if host == "" {
+		return ""
+	}
+	if port == "" {
+		return host
+	}
+	return net.JoinHostPort(host, port)
+}
+
+// localRedirectHosts is the fallback known-good set when cfg.TLS.Hosts
+// is unset: this machine's own hostname and the addresses it holds.
+//
+// It exists because "unset" is the shipped default -- defaults() sets
+// TLS.Enabled and Listen.HTTPRedirect but never TLS.Hosts, and
+// deploy/docker-compose.yml maps host port 80 to the redirect listener.
+// So the allowlist above was empty out of the box and the function fell
+// back to echoing r.Host into a 308 Location: an unauthenticated
+// Host-header reflection (CWE-601) in the default configuration, in a
+// function whose own doc comment says it closes "a known vulnerability
+// class".
+//
+// Exploitability is genuinely weak, and #272's two reviewers who found
+// it disagreed about how weak -- a browser cannot be made to send a Host
+// differing from the URL it is navigating to, so this needs someone able
+// to put raw HTTP at the listener, which is mostly self-directed. That
+// is why the fix is to make the guard work by default rather than to
+// make TLS.Hosts mandatory: nobody has to configure anything, and
+// reaching mikroview by bare IP keeps working. Owner decision on #283
+// finding 2.
+//
+// Loopback is included last rather than first so a machine with a real
+// address prefers it -- allowedHosts[0] is what an unrecognised Host is
+// rewritten to, and redirecting a LAN client to https://127.0.0.1 would
+// be useless. If nothing can be enumerated at all, this returns empty
+// and the caller keeps the previous echo behaviour, which is strictly
+// better than redirecting everyone to an address that does not work.
+func localRedirectHosts() []string {
+	var hosts []string
+	seen := make(map[string]bool)
+	add := func(h string) {
+		if h != "" && !seen[h] {
+			seen[h] = true
+			hosts = append(hosts, h)
+		}
+	}
+
+	if name, err := os.Hostname(); err == nil {
+		add(name)
+	}
+	if addrs, err := net.InterfaceAddrs(); err == nil {
+		for _, a := range addrs {
+			ipNet, ok := a.(*net.IPNet)
+			if !ok {
+				continue
+			}
+			addr, ok := netip.AddrFromSlice(ipNet.IP)
+			if !ok {
+				continue
+			}
+			addr = addr.Unmap()
+			if addr.IsLoopback() || addr.IsLinkLocalUnicast() || addr.IsUnspecified() {
+				continue
+			}
+			add(addr.String())
+		}
+	}
+	add("localhost")
+	add("127.0.0.1")
+	return hosts
 }
 
 func main() {
@@ -296,6 +439,18 @@ func main() {
 		cfg.Store.MaxMemory, storeCapacity))
 	st := store.New(storeCapacity, cfg.Store.Retention)
 	devices := device.NewRegistry(cfg.Devices)
+	// Tell the syslog listener which sources are the operator's declared
+	// routers, so a flood of undeclared ones cannot take every
+	// connection slot and lock them out -- see syslog.reservedFraction.
+	// Set here, before any listener starts, which is the contract
+	// SetConfiguredSources documents.
+	configuredSources := make([]string, 0, len(cfg.Devices))
+	for _, d := range cfg.Devices {
+		if d.SourceIP != "" {
+			configuredSources = append(configuredSources, d.SourceIP)
+		}
+	}
+	syslog.SetConfiguredSources(configuredSources)
 	h := hub.New()
 	geoLog := logging.New("geoip")
 	geo, err := geoip.Open(cfg.GeoIP.DBPath)
@@ -474,13 +629,14 @@ func main() {
 	// which loses an operator's Hide/accept-in-progress state but never
 	// anything RunPeriodicSync (started below, once routerState exists)
 	// can't rebuild.
+	suggestLog := logging.New("suggest")
 	suggestBackend, err := persistence.backendFor(bootCtx, "suggestions", cfg.Watchlist.SuggestionsStorePath)
 	if err != nil {
-		watchlistLog.Warn(err.Error())
+		suggestLog.Warn(err.Error())
 	}
 	suggestStore, err := suggest.OpenWithBackend(suggestBackend)
 	if err != nil {
-		watchlistLog.Warn(fmt.Sprintf("%v (continuing with in-memory-only, unpersisted suggestions)", err))
+		suggestLog.Warn(fmt.Sprintf("%v (continuing with in-memory-only, unpersisted suggestions)", err))
 	}
 
 	// The watchlist's match log has no in-memory-only mode (durability
@@ -518,13 +674,13 @@ func main() {
 		// match history gone": the old file is untouched and still
 		// readable by reverting Postgres, it just isn't carried forward.
 		if fi, err := os.Stat(cfg.Watchlist.MatchLogPath); err == nil && fi.Size() > 0 {
-			watchlistLog.Warn(fmt.Sprintf("an existing match log at %s (%d bytes) will NOT be migrated into Postgres -- "+
+			logging.New("matchlog").Warn(fmt.Sprintf("an existing match log at %s (%d bytes) will NOT be migrated into Postgres -- "+
 				"unlike every other store, the match log has no file-to-Postgres adoption path. It starts empty on Postgres; "+
 				"the old file is untouched and still readable if you revert postgres.dsnFile",
 				cfg.Watchlist.MatchLogPath, fi.Size()))
 		}
 	} else if ml, err := matchlog.Open(cfg.Watchlist.MatchLogPath, cfg.Watchlist.MatchLogCapacity); err != nil {
-		watchlistLog.Error(fmt.Sprintf("opening the match log at %s failed: %v -- watchlist entries will not record any matches until this is fixed and mikroview is restarted", cfg.Watchlist.MatchLogPath, err))
+		logging.New("matchlog").Error(fmt.Sprintf("opening the match log at %s failed: %v -- watchlist entries will not record any matches until this is fixed and mikroview is restarted", cfg.Watchlist.MatchLogPath, err))
 	} else {
 		matchLog = ml
 		defer ml.Close()
@@ -697,9 +853,22 @@ func main() {
 	// owner's 4c decision) and into the API server for the ingest
 	// endpoint to write and the table endpoints to read.
 	routerState := routerstate.New()
+
+	// What the guided setup wizard (#320) has actually observed of each
+	// router's setup. Hooked into the syslog accept path here rather
+	// than inside internal/syslog, which has no business knowing what a
+	// wizard is.
+	setupStore := setup.New()
+	syslog.SetOnConnection(func(host string) { setupStore.NoteSyslogConnection(host, time.Now()) })
+	// What makes an entry scoped to a router's address list resolvable
+	// at match time (#274 item 2). Wired here rather than at
+	// construction because routerState does not exist yet up there --
+	// and safe to do late because the evaluator does not start
+	// consuming until Run below.
+	watchlistEval.WithAddressLists(routerState)
 	names := naming.Resolver{Rules: cfg.RuleNames, Hosts: cfg.HostNames, Entities: entityStore, RouterHosts: routerState}
 
-	go ingest(ctx, raw, st, devices, macRegistry, fs, h, geo, detector, ru, names, watchlistEval)
+	go ingest(ctx, raw, st, devices, macRegistry, fs, h, geo, detector, ru, names, watchlistEval, setupStore)
 	go detector.Run(ctx)
 	go watchlistEval.Run(ctx)
 	go suggestStore.RunPeriodicSync(ctx, routerState, suggestSyncInterval)
@@ -718,7 +887,7 @@ func main() {
 			case <-ticker.C:
 				func() {
 					defer logging.Recover(spikeLog)
-					globalSpike.Check(st.Stats().EventsPerSecond, time.Now())
+					globalSpike.Check(st.EventsPerSecond(), time.Now())
 				}()
 			}
 		}
@@ -927,35 +1096,43 @@ func main() {
 	}
 
 	srv := &api.Server{
-		Store:            st,
-		Devices:          devices,
-		Hub:              h,
-		Reputation:       rep,
-		NetClass:         nc,
-		Flags:            fs,
-		DetectorSettings: detectorSettings,
-		Entities:         entityStore,
-		Rules:            ru,
-		Audit:            auditStore,
-		Watchlist:        watchlistStore,
-		Suggest:          suggestStore,
-		MatchLog:         matchLog,
-		DeviceStaleAfter: cfg.Flags.DeviceStaleAfter,
-		Auth:             authStore,
-		Sessions:         auth.NewSessionStore(cfg.Auth.SessionTTL),
-		LoginLimiter:     auth.NewLoginLimiter(loginLimiterThreshold, loginLimiterWindow),
-		SecureCookie:     cfg.Auth.SecureCookie,
-		TrustedProxies:   trustedProxies,
-		ClientIPHeader:   cfg.Listen.ClientIPHeader,
-		Tokens:           tokenStore,
-		IngestLimiter:    auth.NewLoginLimiter(ingestLimiterThreshold, ingestLimiterWindow),
-		RouterState:      routerState,
-		OIDC:             oidcClient,
-		OIDCState:        oidcState,
-		OIDCPolicy:       oidcPolicy,
-		StartTime:        time.Now(),
-		Version:          version,
-		ConfigProblems:   configProblems,
+		Store:             st,
+		Devices:           devices,
+		Setup:             setupStore,
+		Hub:               h,
+		Reputation:        rep,
+		NetClass:          nc,
+		Flags:             fs,
+		DetectorSettings:  detectorSettings,
+		Entities:          entityStore,
+		Rules:             ru,
+		Audit:             auditStore,
+		Watchlist:         watchlistStore,
+		Suggest:           suggestStore,
+		DefaultWatchPorts: cfg.Flags.CriticalPorts,
+		MatchLog:          matchLog,
+		DeviceStaleAfter:  cfg.Flags.DeviceStaleAfter,
+		Auth:              authStore,
+		Sessions:          auth.NewSessionStoreWithMaxLifetime(cfg.Auth.SessionTTL, cfg.Auth.SessionMaxLifetime),
+		LoginLimiter:      auth.NewLoginLimiter(loginLimiterThreshold, loginLimiterWindow),
+		SecureCookie:      cfg.Auth.SecureCookie,
+		TrustedProxies:    trustedProxies,
+		ClientIPHeader:    cfg.Listen.ClientIPHeader,
+		Tokens:            tokenStore,
+		IngestLimiter:     auth.NewLoginLimiter(ingestLimiterThreshold, ingestLimiterWindow),
+		RouterState:       routerState,
+		SetupInstance: api.SetupInstance{
+			TLSEnabled: cfg.TLS.Enabled,
+			Hosts:      cfg.TLS.Hosts,
+			SyslogPort: cfg.Listen.SyslogTLS,
+		},
+		OIDC:              oidcClient,
+		OIDCState:         oidcState,
+		OIDCPolicy:        oidcPolicy,
+		StartTime:         time.Now(),
+		Version:           version,
+		ThirdPartyNotices: thirdPartyNotices,
+		ConfigProblems:    configProblems,
 	}
 
 	rootMux := http.NewServeMux()
@@ -963,7 +1140,24 @@ func main() {
 	if frontend, err := web.DistFS(); err != nil {
 		logging.New("frontend").Warn(fmt.Sprintf("%v (serving API only)", err))
 	} else {
-		rootMux.Handle("/", http.FileServer(http.FS(frontend)))
+		// A binary can compile with an empty dist/ -- that is what the
+		// committed .gitkeep is for -- and http.FileServer would then
+		// answer / with a directory listing of that one placeholder,
+		// which reads as a broken install rather than a build step that
+		// was skipped. Say which it is, in the log and in the response
+		// (#353). The API is mounted above and keeps working either way.
+		//
+		// Either way it goes out through staticCacheHeaders (#347), so
+		// the "no frontend" page is itself revalidated rather than kept
+		// by a browser after a proper build is deployed.
+		var ui http.Handler = http.FileServer(http.FS(frontend))
+		if !web.HasUI() {
+			logging.New("frontend").Warn("no frontend was built into this binary (run `make build`) -- serving API only")
+			ui = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				http.Error(w, "no frontend was built into this binary -- the API is available under /api/", http.StatusServiceUnavailable)
+			})
+		}
+		rootMux.Handle("/", staticCacheHeaders(ui))
 	}
 
 	httpServer := &http.Server{
@@ -994,7 +1188,9 @@ func main() {
 		// formatted/leveled output as everything mikroview logs itself,
 		// rather than the stdlib default logger's unformatted stderr
 		// lines being the one exception.
-		ErrorLog: slog.NewLogLogger(logging.New("http").Handler(), slog.LevelWarn),
+		// Translated and de-duplicated rather than passed straight
+		// through -- see logging.HTTPErrorLog (#321/#322).
+		ErrorLog: logging.HTTPErrorLog(logging.New("http")),
 	}
 
 	// TLS (on by default -- see internal/config.TLS's doc comment for
@@ -1013,18 +1209,24 @@ func main() {
 	tlsLog := logging.New("tls")
 	scheme := "http"
 	var cert tls.Certificate
+	var certReloader *servertls.Reloader
 	if cfg.TLS.Enabled || cfg.Listen.SyslogTLS != "" {
-		c, caCertPEM, persistErr, err := servertls.Load(servertls.Config{
+		tlsCfg := servertls.Config{
 			CertFile:  cfg.TLS.CertFile,
 			KeyFile:   cfg.TLS.KeyFile,
 			Hosts:     cfg.TLS.Hosts,
 			StorePath: cfg.TLS.StorePath,
-		})
+		}
+		c, caCertPEM, persistErr, err := servertls.Load(tlsCfg)
 		if err != nil {
 			tlsLog.Error(err.Error())
 			os.Exit(1)
 		}
 		cert = c
+		// Both listeners read through this, so a renewal reaches the
+		// syslog port as well as HTTPS -- see servertls.Reloader.
+		certReloader = servertls.NewReloader(tlsCfg, cert)
+		go watchForCertificateReload(ctx, certReloader, tlsLog, cfg.TLS.CertFile != "")
 		if persistErr != nil {
 			tlsLog.Warn(fmt.Sprintf("%v (continuing with an unpersisted certificate -- every restart will generate a fresh, untrusted-again CA)", persistErr))
 		}
@@ -1032,6 +1234,10 @@ func main() {
 			fingerprint := sha256.Sum256(cert.Certificate[0])
 			tlsLog.Info(fmt.Sprintf("generated a local CA (leaf fingerprint %x) -- served at /ca.crt for your browser, reverse proxy, or router to trust", fingerprint))
 			rootMux.HandleFunc("GET /ca.crt", func(w http.ResponseWriter, r *http.Request) {
+				// Recorded so the wizard can confirm the router reached
+				// mikroview and took the CA -- the first step whose
+				// success is otherwise invisible from this side (#320).
+				setupStore.NoteCAFetch(srv.ClientIP(r), time.Now())
 				w.Header().Set("Content-Type", "application/x-pem-file")
 				w.Write(caCertPEM)
 			})
@@ -1039,7 +1245,27 @@ func main() {
 	}
 	if cfg.TLS.Enabled {
 		scheme = "https"
-		httpServer.TLSConfig = &tls.Config{Certificates: []tls.Certificate{cert}}
+		// MinVersion pinned rather than left to the Go release that
+		// built this binary, matching internal/syslog's TLS listener and
+		// its reasoning: the implicit server default has shifted across
+		// Go versions before, and what this listener will accept should
+		// not depend on which toolchain produced it. This is the
+		// listener carrying login credentials and session cookies, so if
+		// either listener deserves the pin it is this one.
+		//
+		// Not a live vulnerability: probed on this repo's Go 1.26.5, the
+		// unpinned config refused TLS 1.0 and 1.1 identically to the
+		// pinned one. Two of #272's phase 2 reviewers raised the
+		// asymmetry independently and one tested it rather than assuming
+		// -- recorded so the pin reads as consistency, not as a fix for
+		// something that was exploitable. See #282, #284.
+		httpServer.TLSConfig = &tls.Config{
+			// GetCertificate rather than a fixed Certificates list, so
+			// SIGHUP swaps what this serves without a restart (#294
+			// item 5).
+			GetCertificate: certReloader.GetCertificate,
+			MinVersion:     tls.VersionTLS12,
+		}
 		if cfg.Listen.HTTPRedirect != "" {
 			redirectLog := logging.New("http-redirect")
 			redirectServer := &http.Server{
@@ -1077,7 +1303,7 @@ func main() {
 		// same certificate loaded above -- started independently of
 		// cfg.TLS.Enabled, see that block's comment for why.
 		go func() {
-			if err := syslog.ListenTLS(ctx, cfg.Listen.SyslogTLS, cert, raw); err != nil && ctx.Err() == nil {
+			if err := syslog.ListenTLS(ctx, cfg.Listen.SyslogTLS, certReloader, raw); err != nil && ctx.Err() == nil {
 				logging.New("syslog-tls").Error(err.Error())
 				os.Exit(1)
 			}
@@ -1098,7 +1324,20 @@ func main() {
 	logging.New("mikroview").Info(fmt.Sprintf("%s on %s, %s", scheme, cfg.Listen.HTTP, syslogSummary))
 	var serveErr error
 	if cfg.TLS.Enabled {
-		serveErr = httpServer.ListenAndServeTLS("", "")
+		// One published port has to answer both a TLS client and a
+		// browser given "host:8080", which tries http:// first -- see
+		// internal/tlssniff (#325).
+		ln, lnErr := net.Listen("tcp", httpServer.Addr)
+		if lnErr != nil {
+			logging.New("http").Error(lnErr.Error())
+			os.Exit(1)
+		}
+		sniffLog := logging.New("http")
+		serveErr = httpServer.ServeTLS(
+			tlssniff.Listener(ln, sniffLog, func(requested string) string {
+				return samePortRedirectHost(requested, cfg.TLS.Hosts, ln.Addr().String())
+			}),
+			"", "")
 	} else {
 		serveErr = httpServer.ListenAndServe()
 	}
@@ -1391,12 +1630,18 @@ func runTransferAdmin(args []string) int {
 		logger.Error("this deployment has no admin account -- nothing to transfer")
 		return 1
 	}
-	fmt.Printf("Admin is currently %q.\n", current.Username)
-
 	// The key is asked for BEFORE any account is named or listed, so
 	// nothing about who holds an account is disclosed to someone without
 	// one. That reordering is only affordable because Redeem below
 	// prepares a rotation without persisting it -- see its call.
+	//
+	// This comment described the intent and the code did the opposite:
+	// the current admin's username was printed here, above this line,
+	// before the key was ever asked for. So anyone able to run the
+	// binary learned who the admin is by starting the command and
+	// pressing Ctrl-C. Flagged as an Uncertain lead on #267 and passed
+	// to the security track as out of that audit's scope, where it was
+	// not picked up -- it fell between the two.
 	key, err := readRecoveryKey()
 	if err != nil {
 		logger.Error(err.Error())
@@ -1414,6 +1659,11 @@ func runTransferAdmin(args []string) int {
 		logger.Error(err.Error())
 		return 1
 	}
+
+	// Now that the key has been proven, naming the account is fine --
+	// and still useful, since the operator is about to choose what to
+	// transfer it to.
+	fmt.Printf("Admin is currently %q.\n", current.Username)
 
 	next, code := resolveTransferTarget(store, current, target)
 	if next == nil {
@@ -1607,6 +1857,12 @@ func runRecoverAdminAccount(args []string) int {
 		return 1
 	}
 
+	// Named before the key is asked for, unlike -transfer-admin, and
+	// deliberately so rather than by oversight: the SSO-only check just
+	// above already has to name the account to explain why this command
+	// cannot help, so withholding it here would buy nothing. The
+	// operator also needs to know which account they are about to reset
+	// before typing a key and a new password for it.
 	fmt.Printf("Recover the admin account %q.\n", admin.Username)
 	key, err := readRecoveryKey()
 	if err != nil {
@@ -1692,14 +1948,14 @@ func readPasswordTwice() (string, error) {
 // WebSocket broadcast (see detect.Detector.Enqueue/Run, and the
 // dedicated detection-worker goroutine main() starts alongside this
 // one).
-func ingest(ctx context.Context, raw <-chan syslog.RawMessage, st *store.Store, devices *device.Registry, macRegistry *device.MACRegistry, fs *flags.Store, h *hub.Hub, geo *geoip.Lookup, detector *detect.Detector, ru *rules.Store, names naming.Resolver, watchlistEval *watchlist.Evaluator) {
+func ingest(ctx context.Context, raw <-chan syslog.RawMessage, st *store.Store, devices *device.Registry, macRegistry *device.MACRegistry, fs *flags.Store, h *hub.Hub, geo *geoip.Lookup, detector *detect.Detector, ru *rules.Store, names naming.Resolver, watchlistEval *watchlist.Evaluator, setupStore *setup.Store) {
 	ingestLog := logging.New("ingest")
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case rm := <-raw:
-			ingestOneRecovered(ingestLog, rm, st, devices, macRegistry, fs, h, geo, detector, ru, names, watchlistEval)
+			ingestOneRecovered(ingestLog, rm, st, devices, macRegistry, fs, h, geo, detector, ru, names, watchlistEval, setupStore)
 		}
 	}
 }
@@ -1710,12 +1966,18 @@ func ingest(ctx context.Context, raw <-chan syslog.RawMessage, st *store.Store, 
 // still end the entire ingest goroutine for good on the first bad
 // message (silently stopping all future event processing) rather than
 // just dropping that one message. See logging.Recover's doc comment.
-func ingestOneRecovered(logger *slog.Logger, rm syslog.RawMessage, st *store.Store, devices *device.Registry, macRegistry *device.MACRegistry, fs *flags.Store, h *hub.Hub, geo *geoip.Lookup, detector *detect.Detector, ru *rules.Store, names naming.Resolver, watchlistEval *watchlist.Evaluator) {
+func ingestOneRecovered(logger *slog.Logger, rm syslog.RawMessage, st *store.Store, devices *device.Registry, macRegistry *device.MACRegistry, fs *flags.Store, h *hub.Hub, geo *geoip.Lookup, detector *detect.Detector, ru *rules.Store, names naming.Resolver, watchlistEval *watchlist.Evaluator, setupStore *setup.Store) {
 	defer logging.Recover(logger)
 
 	env := syslog.ParseEnvelope(rm.Data, rm.RecvTime)
 	parsed := routeros.Parse(env.Message)
 	deviceID := devices.Resolve(rm.SourceIP, rm.RecvTime)
+	// Whether the rule's log-prefix decoded (#320 step 3): a router
+	// logging without the <A|D|R|L>|slug| convention sends events that
+	// look healthy on every other measure and carry no action at all.
+	if setupStore != nil {
+		setupStore.NoteEvent(deviceID, parsed.Action != store.ActionUnknown, rm.RecvTime)
+	}
 	srcCountry, _ := geo.Country(parsed.SrcIP)
 	dstCountry, _ := geo.Country(parsed.DstIP)
 
@@ -1761,8 +2023,8 @@ func ingestOneRecovered(logger *slog.Logger, rm syslog.RawMessage, st *store.Sto
 		SrcPort:      parsed.SrcPort,
 		DstIP:        parsed.DstIP,
 		DstPort:      parsed.DstPort,
-		SrcHostName:  names.Host(parsed.SrcIP),
-		DstHostName:  names.Host(parsed.DstIP),
+		SrcHostName:  names.Host(deviceID, parsed.SrcIP),
+		DstHostName:  names.Host(deviceID, parsed.DstIP),
 		SrcPortName:  names.Port(parsed.SrcPort),
 		DstPortName:  names.Port(parsed.DstPort),
 		SrcCountry:   srcCountry,
@@ -1772,8 +2034,11 @@ func ingestOneRecovered(logger *slog.Logger, rm syslog.RawMessage, st *store.Sto
 		NatRaw:       parsed.NatRaw,
 		Length:       parsed.Length,
 		Flags:        parsed.Flags,
-		Raw:          parsed.Raw,
 	}
+	// Applied here rather than in the parser: internal/routeros deals in
+	// one line at a time and has no view of the ring's memory budget,
+	// which is what this bounds. See store.MaxRawBytes.
+	e.Raw, e.RawTruncated = store.ClampRaw(parsed.Raw)
 
 	stored := st.Insert(e)
 	h.Broadcast(stored)
@@ -1913,4 +2178,47 @@ func readRecoveryKey() (string, error) {
 		return "", fmt.Errorf("no recovery key supplied")
 	}
 	return string(raw), nil
+}
+
+// watchForCertificateReload swaps in a renewed certificate on SIGHUP,
+// for both the HTTPS and syslog listeners at once (#294 item 5).
+//
+// SIGHUP rather than watching the files: mikroview cannot tell a
+// finished renewal from a half-written one, and serving half a
+// certificate is worse than serving an old one. The signal is the
+// operator (or certbot's --deploy-hook, or a cert-manager reloader)
+// saying the new files are complete. That is also the convention every
+// other long-running server uses for this, so it needs no explaining.
+//
+// operatorSupplied only affects the log line. The reload works either
+// way, but for mikroview's own generated certificate there is normally
+// nothing new on disk to pick up, so saying so avoids an operator
+// concluding the signal did nothing when it did exactly what it should.
+func watchForCertificateReload(ctx context.Context, reloader *servertls.Reloader, log *slog.Logger, operatorSupplied bool) {
+	hup := make(chan os.Signal, 1)
+	signal.Notify(hup, syscall.SIGHUP)
+	defer signal.Stop(hup)
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-hup:
+			cert, err := reloader.Reload()
+			if err != nil {
+				// Deliberately not fatal, and the previous certificate
+				// stays in service: an operator who sent this expecting
+				// an improvement must not get an outage out of it, and
+				// would have little reason to connect the two.
+				log.Error(fmt.Sprintf("reloading the certificate failed, continuing with the one already loaded: %v", err))
+				continue
+			}
+			fingerprint := sha256.Sum256(cert.Certificate[0])
+			if operatorSupplied {
+				log.Info(fmt.Sprintf("certificate reloaded (leaf fingerprint %x) -- new connections to both the https and syslog listeners use it from now on", fingerprint))
+			} else {
+				log.Info(fmt.Sprintf("certificate reloaded (leaf fingerprint %x) -- this deployment uses mikroview's own generated certificate, so this only re-reads what is already on disk", fingerprint))
+			}
+		}
+	}
 }

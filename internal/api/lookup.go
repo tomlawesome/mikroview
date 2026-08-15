@@ -37,6 +37,16 @@ type netClassView struct {
 func (s *Server) handleIPLookup(w http.ResponseWriter, r *http.Request) {
 	ip := r.PathValue("ip")
 
+	// Nil-checked like NetClass below. main.go always builds a client
+	// today, so this is not reachable -- but the field's own contract
+	// says nil means the integration is off, and NetClass two blocks
+	// down enforces exactly that while this did not (#267, Uncertain).
+	// An invariant asserted only in a comment is one nobody has to keep.
+	if s.Reputation == nil {
+		http.Error(w, "reputation lookup is not configured", http.StatusServiceUnavailable)
+		return
+	}
+
 	result, err := s.Reputation.Lookup(r.Context(), ip)
 	if errors.Is(err, reputation.ErrNotPublic) {
 		http.Error(w, "not a public IP address", http.StatusBadRequest)

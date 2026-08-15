@@ -28,6 +28,40 @@ func TestRuleUsageIsBounded(t *testing.T) {
 	}
 }
 
+// The cap was enforced by evicting back to exactly it, which leaves the
+// store full -- so the *next* new label overflows too and pays for
+// another full sort, and so does every one after that. Touch runs
+// synchronously on the ingest goroutine for essentially every event
+// carrying a rule label, and the label comes off unauthenticated syslog,
+// so that is a state an attacker can hold the store in indefinitely:
+// measured at 724 ns per Touch on an empty store against 7,455 ns at the
+// cap. Shedding a batch amortises the sort. See #285.
+func TestRuleUsageShedLeavesHeadroom(t *testing.T) {
+	prev := maxRuleEntries
+	maxRuleEntries = 800
+	t.Cleanup(func() { maxRuleEntries = prev })
+
+	s, _ := Open("")
+	now := time.Now()
+	for i := 0; i <= maxRuleEntries; i++ { // one past the cap, forcing a shed
+		s.Touch(fmt.Sprintf("junk-%d", i), now.Add(time.Duration(i)*time.Millisecond))
+	}
+
+	after := len(s.List())
+	if after >= maxRuleEntries {
+		t.Fatalf("the shed left the store at %d against a cap of %d -- no headroom, so the next new label sheds again",
+			after, maxRuleEntries)
+	}
+
+	// Filling the headroom must not trigger another shed.
+	for i := 0; i < maxRuleEntries-after; i++ {
+		s.Touch(fmt.Sprintf("fresh-%d", i), now.Add(time.Hour))
+	}
+	if got := len(s.List()); got != maxRuleEntries {
+		t.Errorf("filling the headroom gave %d entries, want %d -- a shed ran that should not have", got, maxRuleEntries)
+	}
+}
+
 // TestRuleUsageEvictionKeepsActiveRules: under a flood the genuine
 // rules are the ones still firing, so oldest-LastSeen-first eviction
 // must keep them and shed the junk.
