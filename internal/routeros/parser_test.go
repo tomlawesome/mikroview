@@ -292,13 +292,14 @@ func TestSplitTopLevel(t *testing.T) {
 func TestParseStripsTerminalEscapesFromExtractedFields(t *testing.T) {
 	const esc = "\x1b[2J\x1b[1;31m"
 	p := Parse("D|" + esc + "rule| forward: in:" + esc + "ether1 out:ether2, " +
-		"src-mac aa:bb:cc:" + esc + "dd:ee:ff, proto TCP, " +
+		"src-mac aa:bb:cc:" + esc + "dd:ee:ff, proto TCP (" + esc + "SYN), " +
 		"192.0.2.1:1234->198.51.100.1:80, len 60")
 
 	fields := map[string]string{
 		"RuleLabel":   p.RuleLabel,
 		"InInterface": p.InInterface,
 		"SrcMAC":      p.SrcMAC,
+		"Flags":       p.Flags,
 	}
 	for name, got := range fields {
 		if strings.ContainsRune(got, 0x1b) {
