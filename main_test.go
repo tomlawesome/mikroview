@@ -3,7 +3,6 @@
 package main
 
 import (
-	"errors"
 	"io"
 	"log/slog"
 	"net/http"
@@ -23,7 +22,6 @@ import (
 	"github.com/tomlawesome/mikroview/internal/geoip"
 	"github.com/tomlawesome/mikroview/internal/hub"
 	"github.com/tomlawesome/mikroview/internal/naming"
-	"github.com/tomlawesome/mikroview/internal/persist"
 	"github.com/tomlawesome/mikroview/internal/rules"
 	"github.com/tomlawesome/mikroview/internal/store"
 	"github.com/tomlawesome/mikroview/internal/syslog"
@@ -372,62 +370,63 @@ func TestRunVersionPrintsTheBareVersionString(t *testing.T) {
 // that must refuse to start. Both "no persistence configured" (storePath
 // == "", err always nil per auth.Open) and "file genuinely doesn't exist"
 // (a real fresh install, err == nil) must keep booting normally.
-func TestAuthShouldFailClosed(t *testing.T) {
-	someErr := errors.New("boom")
-
-	// The second argument is now the backend rather than a path -- a
-	// nil backend is the "persistence not configured" case that used to
-	// be an empty string. Same predicate, same three cases.
-	configured := persist.NewFileBackend("/var/lib/mikroview/accounts.json")
-
-	cases := []struct {
-		name    string
-		err     error
-		backend persist.Backend
-		want    bool
-	}{
-		{"corrupt document with a configured backend fails closed", someErr, configured, true},
-		{"nil error never fails closed regardless of backend", nil, configured, false},
-		{"nil error with no backend never fails closed", nil, nil, false},
-		{"error with no backend never fails closed", someErr, nil, false},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			if got := authShouldFailClosed(tc.err, tc.backend); got != tc.want {
-				t.Errorf("authShouldFailClosed(%v, %v) = %v, want %v", tc.err, tc.backend != nil, got, tc.want)
-			}
-		})
+// TestMustOpenStoreIsANoOpOnSuccess proves mustOpenStore's non-fatal
+// path never touches the logger or the process -- since its fatal path
+// calls os.Exit and so can't run in-process inside `go test`, this and
+// TestAuthOpenErrorShapeDrivesFailClosed below are what actually cover
+// it: this pins "nil error survives," that one pins "the real error
+// shape mustOpenStore is fed is what issue #378 needs asserted."
+func TestMustOpenStoreIsANoOpOnSuccess(t *testing.T) {
+	var buf strings.Builder
+	log := slog.New(slog.NewTextHandler(&buf, nil))
+	mustOpenStore(log, nil)
+	if buf.Len() != 0 {
+		t.Errorf("mustOpenStore(nil) logged something, want silence: %q", buf.String())
 	}
 }
 
-// TestAuthOpenErrorShapeDrivesFailClosed proves the real-world trigger for
-// authShouldFailClosed against the actual auth.Store.Open implementation
-// (not just the predicate in isolation): a file that exists but fails to
-// parse produces a non-nil error, while a path with no file at all (fresh
-// install) does not -- the exact distinction main()'s boot sequence relies
-// on to tell "was configured, now broken" apart from "never configured".
+// TestAuthOpenErrorShapeDrivesFailClosed proves the real-world trigger
+// mustOpenStore's boot-sequence call sites depend on, against the actual
+// auth.Store.OpenWithBackend implementation (not just persist.Open in
+// isolation): a file that exists but fails to parse produces a non-nil
+// error and a nil store, while a path with no file at all (fresh
+// install) produces neither -- the exact distinction main()'s boot
+// sequence relies on to tell "was configured, now broken" apart from
+// "never configured". The corrupt case also asserts the error names the
+// file and states a remedy (issue #378's Done-when: the message content
+// is what an operator reads, not just its non-nilness).
 func TestAuthOpenErrorShapeDrivesFailClosed(t *testing.T) {
 	dir := t.TempDir()
 
 	freshPath := filepath.Join(dir, "fresh", "accounts.json")
-	_, err := auth.Open(freshPath)
+	freshStore, err := auth.Open(freshPath)
 	if err != nil {
 		t.Fatalf("auth.Open on a not-yet-created path returned an error, want nil (fresh install must still boot): %v", err)
 	}
-	if authShouldFailClosed(err, persist.NewFileBackend(freshPath)) {
-		t.Error("authShouldFailClosed reported true for a genuine fresh install")
+	if freshStore == nil {
+		t.Error("auth.Open on a fresh install returned a nil store, want a usable empty one")
 	}
 
 	corruptPath := filepath.Join(dir, "accounts.json")
 	if err := os.WriteFile(corruptPath, []byte("{not valid json"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	_, err = auth.Open(corruptPath)
+	corruptStore, err := auth.Open(corruptPath)
 	if err == nil {
 		t.Fatal("auth.Open on a corrupt existing file returned nil error, want non-nil")
 	}
-	if !authShouldFailClosed(err, persist.NewFileBackend(corruptPath)) {
-		t.Error("authShouldFailClosed reported false for a corrupt existing accounts file")
+	if corruptStore != nil {
+		t.Error("auth.Open on a corrupt file returned a non-nil store -- it would still carry a live backend (issue #378)")
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, corruptPath) {
+		t.Errorf("error %q does not name the file path %q", msg, corruptPath)
+	}
+	if !strings.Contains(msg, "restore") && !strings.Contains(msg, "backup") {
+		t.Errorf("error %q does not state a remedy (restore from backup / move aside)", msg)
+	}
+	if !strings.Contains(msg, "accounts") {
+		t.Errorf("error %q does not name which store this is", msg)
 	}
 }
 

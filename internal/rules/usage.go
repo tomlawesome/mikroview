@@ -58,12 +58,10 @@ type Store struct {
 // first-run case, not an error) and returns a Store that persists to it
 // from then on. An empty path is the expected "persistence not
 // configured" case: a fully usable, in-memory-only Store is returned. A
-// malformed file is treated as empty rather than failing -- a corrupted
-// rule-usage file should never block mikroview from starting, since
-// this is a helper signal, not critical state. Either way the returned
-// Store is always safe to use unconditionally; a non-nil error is only
-// ever informational, for the caller to log. Mirrors flags.Open's
-// contract exactly.
+// document that exists but cannot be read or parsed is a hard error
+// (issue #378): the caller gets (nil, err) rather than a store whose
+// live backend would overwrite that document on the first write. See
+// persist.Open.
 func Open(path string) (*Store, error) {
 	if path == "" {
 		return OpenWithBackend(nil)
@@ -78,28 +76,26 @@ func OpenWithBackend(b persist.Backend) (*Store, error) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), persistTimeout)
 	defer cancel()
-	data, version, err := persist.LoadDocument(ctx, b)
-	if err != nil {
-		return s, err
-	}
-	if data == nil {
-		return s, nil
-	}
-	s.version = version
-
-	var list []*Usage
-	if err := json.Unmarshal(data, &list); err != nil {
-		return s, err
-	}
-	for _, u := range list {
-		// Same "a JSON array containing null unmarshals into a nil
-		// pointer" edge case flags.Open's doc comment calls out --
-		// skipping it here is what actually delivers the "malformed
-		// file treated as empty" contract for that specific case.
-		if u == nil || u.Rule == "" {
-			continue
+	version, existed, err := persist.Open(ctx, b, "the rule-usage store", func(data []byte) error {
+		var list []*Usage
+		if err := json.Unmarshal(data, &list); err != nil {
+			return err
 		}
-		s.byRule[u.Rule] = u
+		for _, u := range list {
+			// Same "a JSON array containing null unmarshals into a nil
+			// pointer" edge case flags.Open's doc comment calls out.
+			if u == nil || u.Rule == "" {
+				continue
+			}
+			s.byRule[u.Rule] = u
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	if existed {
+		s.version = version
 	}
 	return s, nil
 }
