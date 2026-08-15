@@ -9,28 +9,31 @@
 // "router" names that address in the event rows, since RouterOS-pushed
 // names win at ingest time.
 
-import { execFileSync } from 'child_process'
-import { fileURLToPath } from 'url'
-import path from 'path'
-import { session, check, done } from './live-browser.mjs'
+import { session, check, done, feedSyslog as syslog } from './live-browser.mjs'
 
-const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..')
 const URL_BASE = process.env.MV_URL
-
-function syslog(n, label) {
-  execFileSync(path.join(REPO, 'scripts/live-env.sh'), ['syslog', String(n), label], {
-    stdio: 'ignore',
-    cwd: REPO,
-  })
-}
 
 const { page } = await session()
 
-// Events from live-env's syslog helper arrive from 127.0.0.1 with no
-// devices configured, so their deviceId is the raw source IP -- the
-// ingest token must be scoped to exactly that for the tables to attach
-// to the same device the rows carry.
-const DEVICE = '127.0.0.1'
+// The ingest token must be scoped to exactly the device the event rows
+// carry, or the pushed tables attach to a different device and every
+// lookup below reports "nothing pushed".
+//
+// Discovered, not assumed. This was hardcoded to 127.0.0.1, which is
+// what the syslog feeder's source address happens to be under
+// live-env.sh -- and is not what it is inside a container, where lines
+// arrive from the Docker gateway. Both #186's table lookups and the
+// per-device host-name scoping added in #289 key on this, so a scenario
+// that guesses it wrong fails in a way that looks like a product defect.
+// Asking the running instance which device it saw is correct everywhere.
+syslog(2, 'device-probe')
+let DEVICE
+for (let i = 0; i < 40 && !DEVICE; i++) {
+  await new Promise((r) => setTimeout(r, 250))
+  const res = await page.request.get(`${URL_BASE}/api/devices`)
+  if (res.ok()) DEVICE = (await res.json()).devices?.[0]?.id
+}
+check(!!DEVICE, `the instance reports the device events arrive from (${DEVICE})`)
 
 const tokenRes = await page.request.post(`${URL_BASE}/api/tokens`, {
   headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'mikroview' },

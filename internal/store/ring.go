@@ -7,14 +7,36 @@
 package store
 
 import (
+	"cmp"
+	"slices"
 	"sort"
 	"sync"
 	"time"
+
+	"github.com/tomlawesome/mikroview/internal/evict"
 )
 
 // topRulesLimit caps how many entries Stats.TopRules returns -- a
 // leaderboard, not a full dump of every rule label ever seen.
 const topRulesLimit = 10
+
+// maxRuleLabels bounds totalByRule, whose keys are RouterOS log-prefixes
+// arriving on unauthenticated syslog and therefore chosen by whoever is
+// sending.
+//
+// It had no cap at all. internal/rules.Store already capped the
+// identical string at 20,000 with a comment about exactly this flood,
+// and totalByRule -- bumped from the same main.go line, one statement
+// away -- was missed. Measured on the uncapped code: 500,000 distinct
+// labels cost +161.2 MB of heap and took 2.2s and 57 MB of syslog to
+// produce, and TopRules stayed poisoned for the process's lifetime
+// because nothing in this package ever evicted.
+//
+// Matched to internal/rules deliberately: the same event populates both,
+// so a value that is generous for one is generous for the other, and a
+// mismatch would mean one silently holding labels the other had shed.
+// A var rather than a const so tests can shrink it. See #285.
+var maxRuleLabels = 20_000
 
 // timeSeriesMinutes is how much history Stats.TimeSeries covers, at
 // 1-minute resolution.
@@ -111,6 +133,9 @@ func (s *Store) Insert(e Event) Event {
 	s.total++
 	s.totalByAction[e.Action]++
 	if e.RuleLabel != "" {
+		if _, known := s.totalByRule[e.RuleLabel]; !known && len(s.totalByRule) >= maxRuleLabels {
+			s.shedRuleLabelsLocked()
+		}
 		s.totalByRule[e.RuleLabel]++
 	}
 
@@ -131,6 +156,40 @@ func (s *Store) Insert(e Event) Event {
 	s.minuteBuckets[midx][actionSlot(e.Action)]++
 
 	return e
+}
+
+// shedRuleLabelsLocked drops the lowest-count rule labels once
+// totalByRule is full, down to a batch below the cap so the next several
+// thousand new labels do not each pay for another shed -- the same
+// amortisation internal/evict documents.
+//
+// Lowest count first, rather than least-recently-seen: totalByRule holds
+// no timestamps, and count is the better signal anyway. A genuine rule
+// is one an operator configured on the router, so it fires repeatedly; a
+// flood of minted labels is a long tail of ones. The trade-off is that a
+// genuinely new rule seen for the first time during a flood can be shed
+// before it accumulates -- acceptable for what is a stats leaderboard,
+// and it is not detection state.
+func (s *Store) shedRuleLabelsLocked() {
+	type labelCount struct {
+		label string
+		count uint64
+	}
+	all := make([]labelCount, 0, len(s.totalByRule))
+	for label, count := range s.totalByRule {
+		all = append(all, labelCount{label: label, count: count})
+	}
+	slices.SortFunc(all, func(a, b labelCount) int {
+		if a.count != b.count {
+			return cmp.Compare(a.count, b.count)
+		}
+		return cmp.Compare(a.label, b.label) // deterministic, so a shed is reproducible in tests
+	})
+
+	remove := len(all) - evict.Target(maxRuleLabels)
+	for i := 0; i < remove; i++ {
+		delete(s.totalByRule, all[i].label)
+	}
 }
 
 // RuleCount is one entry in Stats.TopRules.
@@ -161,9 +220,19 @@ type Stats struct {
 
 // Stats returns current totals and a rolling events/sec rate averaged over
 // the last 10 seconds.
+//
+// Everything that reads shared state happens under the read lock;
+// sorting the rule leaderboard deliberately does not. Sorting under
+// RLock blocks Insert's Lock() for the whole sort, and Insert is the
+// ingest goroutine -- so an expensive Stats() stalls ingestion of real
+// router traffic. That was measured at 306 ms per Stats() call with a
+// 301 ms concurrent Insert block; the label cap (maxRuleLabels) bounds
+// the size, and doing the sort on the caller's own copy after unlocking
+// means ingest never waits on it at all. /api/stats is polled every 5s
+// per open browser tab and is reachable with a read-only token, so this
+// is a cheap call to make often.
 func (s *Store) Stats() Stats {
 	s.mu.RLock()
-	defer s.mu.RUnlock()
 
 	byAction := make(map[Action]uint64, len(s.totalByAction))
 	for k, v := range s.totalByAction {
@@ -174,30 +243,8 @@ func (s *Store) Stats() Stats {
 	for rule, count := range s.totalByRule {
 		topRules = append(topRules, RuleCount{Rule: rule, Count: count})
 	}
-	sort.Slice(topRules, func(i, j int) bool {
-		if topRules[i].Count != topRules[j].Count {
-			return topRules[i].Count > topRules[j].Count
-		}
-		return topRules[i].Rule < topRules[j].Rule // stable tie-break, not insertion order
-	})
-	if len(topRules) > topRulesLimit {
-		topRules = topRules[:topRulesLimit]
-	}
 
 	now := time.Now().Unix()
-	var sum uint64
-	const window = 10
-	for i := int64(0); i < window; i++ {
-		sec := now - i
-		idx := sec % 60
-		if idx < 0 {
-			idx += 60
-		}
-		if s.secBucketTime[idx] == sec {
-			sum += s.secBuckets[idx]
-		}
-	}
-
 	nowMinute := now / 60
 	timeSeries := make([]TimeBucket, timeSeriesMinutes)
 	for i := 0; i < timeSeriesMinutes; i++ {
@@ -217,14 +264,58 @@ func (s *Store) Stats() Stats {
 		timeSeries[i] = TimeBucket{Time: time.Unix(minute*60, 0).UTC(), ByAction: byAction}
 	}
 
-	return Stats{
+	out := Stats{
 		Total:           s.total,
 		ByAction:        byAction,
-		TopRules:        topRules,
 		TimeSeries:      timeSeries,
-		EventsPerSecond: float64(sum) / window,
+		EventsPerSecond: s.eventsPerSecondLocked(),
 		Capacity:        s.capacity,
 		Count:           s.count,
 		Window:          s.window,
 	}
+	s.mu.RUnlock()
+
+	// topRules is this call's own copy by now, so sorting it touches no
+	// shared state and holds nothing Insert needs. See the doc comment.
+	sort.Slice(topRules, func(i, j int) bool {
+		if topRules[i].Count != topRules[j].Count {
+			return topRules[i].Count > topRules[j].Count
+		}
+		return topRules[i].Rule < topRules[j].Rule // stable tie-break, not insertion order
+	})
+	if len(topRules) > topRulesLimit {
+		topRules = topRules[:topRulesLimit]
+	}
+	out.TopRules = topRules
+	return out
+}
+
+// EventsPerSecond reports the same rolling-10-second rate as
+// Stats().EventsPerSecond, without building the byAction map, sorting
+// TopRules, or constructing TimeSeries's 60 per-minute buckets -- wasted
+// work for a caller that only ever reads this one field. Measured at
+// ~124ns/0 allocs against Stats()'s ~17-19us/68 allocs for the same
+// number, on the global-spike ticker (main.go), which runs every 10s and
+// reads nothing else from the result.
+func (s *Store) EventsPerSecond() float64 {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.eventsPerSecondLocked()
+}
+
+func (s *Store) eventsPerSecondLocked() float64 {
+	now := time.Now().Unix()
+	var sum uint64
+	const window = 10
+	for i := int64(0); i < window; i++ {
+		sec := now - i
+		idx := sec % 60
+		if idx < 0 {
+			idx += 60
+		}
+		if s.secBucketTime[idx] == sec {
+			sum += s.secBuckets[idx]
+		}
+	}
+	return float64(sum) / window
 }

@@ -219,6 +219,61 @@ func TestCorruptStoreFallsBackToRegeneration(t *testing.T) {
 	_ = leafOf(t, cert)
 }
 
+// The combination TestCorruptStoreFallsBackToRegeneration does not
+// reach: a corrupt CA with the leaf files intact. Load mints a fresh CA
+// in that case, and used to keep serving the stored leaf alongside it --
+// a pair that validates against nothing, so every client that trusted
+// the original CA fails with a certificate error and no other clue.
+func TestCorruptCAWithIntactLeafRegeneratesTheLeafToo(t *testing.T) {
+	dir := t.TempDir()
+
+	// A real store first, so leaf.crt/leaf.key/leaf-meta.json are the
+	// genuine article rather than something hand-written.
+	first, firstCA, _, err := Load(Config{StorePath: dir, Hosts: []string{"127.0.0.1"}})
+	if err != nil {
+		t.Fatalf("first Load: %v", err)
+	}
+	firstLeaf := leafOf(t, first)
+
+	// Only the CA is destroyed. The leaf files stay exactly as written.
+	if err := os.WriteFile(filepath.Join(dir, "ca.crt"), []byte("not a cert"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	second, secondCA, _, err := Load(Config{StorePath: dir, Hosts: []string{"127.0.0.1"}})
+	if err != nil {
+		t.Fatalf("second Load: %v", err)
+	}
+	if string(firstCA) == string(secondCA) {
+		t.Fatal("setup is wrong: the CA was not regenerated, so this proves nothing")
+	}
+
+	secondLeaf := leafOf(t, second)
+	if secondLeaf.SerialNumber.Cmp(firstLeaf.SerialNumber) == 0 {
+		t.Error("the stored leaf was reused under a new CA -- it chains to a CA that no longer exists")
+	}
+
+	// The served pair has to actually verify, which is the property the
+	// serial comparison above is only a proxy for.
+	block, _ := pem.Decode(secondCA)
+	if block == nil {
+		t.Fatal("regenerated CA PEM did not decode")
+	}
+	caCert, err := x509.ParseCertificate(block.Bytes)
+	if err != nil {
+		t.Fatalf("parsing regenerated CA: %v", err)
+	}
+	pool := x509.NewCertPool()
+	pool.AddCert(caCert)
+	if _, err := secondLeaf.Verify(x509.VerifyOptions{
+		Roots:       pool,
+		CurrentTime: secondLeaf.NotBefore,
+		KeyUsages:   []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+	}); err != nil {
+		t.Errorf("the leaf served after CA regeneration does not chain to the CA served with it: %v", err)
+	}
+}
+
 // writeThrowawayCert writes a minimal self-signed cert/key pair to dir,
 // standing in for an "operator-supplied" cert.
 func writeThrowawayCert(t *testing.T, dir string) (certPath, keyPath string) {
@@ -256,4 +311,50 @@ func writeThrowawayCert(t *testing.T, dir string) (certPath, keyPath string) {
 		t.Fatal(err)
 	}
 	return certPath, keyPath
+}
+
+// os.WriteFile's mode argument applies only when it creates the file, so
+// the 0600 intent held on a fresh install and silently did not wherever
+// the file already existed with wider permissions -- a restore from a
+// backup taken under a different umask, a bind-mounted host directory, a
+// volume copied between machines. These are the CA and leaf private
+// keys. See #285.
+func TestPersistedKeysAreTightenedOnRewrite(t *testing.T) {
+	dir := t.TempDir()
+	cfg := Config{Hosts: []string{"localhost"}, StorePath: dir}
+
+	if _, _, err, _ := Load(cfg); err != nil {
+		t.Fatalf("first Load: %v", err)
+	}
+
+	// Widen everything, the way a restore or a bind mount would.
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) == 0 {
+		t.Fatal("nothing was persisted, so this test would prove nothing")
+	}
+	for _, e := range entries {
+		if err := os.Chmod(filepath.Join(dir, e.Name()), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// Force a rewrite by asking for a different SAN set.
+	cfg.Hosts = []string{"localhost", "mikroview.local"}
+	if _, _, err, _ := Load(cfg); err != nil {
+		t.Fatalf("second Load: %v", err)
+	}
+
+	for _, e := range entries {
+		path := filepath.Join(dir, e.Name())
+		info, err := os.Stat(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := info.Mode().Perm(); got != 0o600 {
+			t.Errorf("%s has mode %o after rewrite, want 600 -- a pre-existing world-readable key stays readable", e.Name(), got)
+		}
+	}
 }

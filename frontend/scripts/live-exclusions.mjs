@@ -9,23 +9,14 @@
 // no truth beyond "the thing that used to be there still works, in the
 // new place", so that's what this checks.
 
-import { execFileSync } from 'child_process'
 import { fileURLToPath } from 'url'
-import path from 'path'
-import { session, check, done } from './live-browser.mjs'
+import { session, check, done, feedPortScan, waitForFlag } from './live-browser.mjs'
 
-const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..')
 
-function portscan(n) {
-  execFileSync(path.join(REPO, 'scripts/live-env.sh'), ['portscan', String(n)], {
-    stdio: 'ignore',
-    cwd: REPO,
-  })
-}
 
 // A real port_scan flag: one source IP, 20 distinct destination ports
 // inside the default 60s/15-port threshold.
-portscan(20)
+feedPortScan(20)
 
 const { page } = await session()
 
@@ -34,17 +25,32 @@ async function openMenuView(label) {
   await page.click(`.nav-menu button:has-text("${label}")`)
 }
 
+// Confirm server-side before looking at the UI (#354). Without this the
+// scenario intermittently died on a bare locator timeout that could not
+// say whether the flag was missing or merely not rendered yet.
+const raised = await waitForFlag(page, '198.51.100.77')
+check(raised.ok, raised.message)
+
 await openMenuView('Flags')
 await page.waitForSelector('.card .type', { timeout: 15000 })
 
-// Split button + dropdown as of #198 -- the arrow segment opens
-// "Permanently clear", replacing the old second inline button.
-check(await page.isVisible('.split-arrow'), 'the port scan raised a real flag with the permanent-clear action visible')
+// Scoped to the port-scan card, not to whichever card happens to be
+// first. A 20-port scan also trips the rule-spike detector, so there are
+// two flags on this page and the order between them is not something
+// this scenario should depend on -- it clicked the first `.split-arrow`
+// and permanently cleared whichever flag that was, which is why every
+// assertion below then failed against the container.
+const scanCard = page.locator('.card', { hasText: '198.51.100.77' }).first()
+await scanCard.waitFor({ timeout: 15000 })
+check(await scanCard.locator('.split-arrow').isVisible(), 'the port scan raised a real flag with the permanent-clear action visible')
 
 // Permanently clear it -- this is what creates the exclusion under test.
-await page.click('.split-arrow')
+await scanCard.locator('.split-arrow').click()
 await page.click('.split-menu-item:has-text("Permanently clear")')
-await page.waitForTimeout(500)
+// Wait for the effect rather than a fixed pause: the write goes through
+// the persistence backend, and Postgres is slower than a local file, so
+// a 500ms sleep was enough for one and not the other.
+await page.waitForSelector('text=Permanently-excluded', { timeout: 15000 })
 
 check(
   await page.isVisible('text=Permanently-excluded'),

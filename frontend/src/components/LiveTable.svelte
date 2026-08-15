@@ -3,6 +3,9 @@
   import { appState, applyFilters } from '../lib/state.svelte'
   import { MAX_RENDERED_ROWS } from '../lib/constants'
   import { COLUMNS, columnState } from '../lib/columns.svelte'
+  import { groupModeState } from '../lib/groupMode.svelte'
+  import { flaggedSources, groupEvents, drawerEvents, hiddenInDrawer } from '../lib/grouping'
+  import { flagsState } from '../lib/flags.svelte'
   import { viewportState } from '../lib/viewport.svelte'
   import type { ClientEvent, FirewallEvent } from '../lib/types'
   import EventRow from './EventRow.svelte'
@@ -139,6 +142,28 @@
     honorAutoscroll && !appState.autoscroll ? (frozenRendered ?? liveRendered) : liveRendered,
   )
 
+  // Grouping (#341): collapse repeats of the same connection. Built
+  // from `rendered` rather than from the whole buffer, so grouping is a
+  // lens over exactly what the view would have shown -- the counts
+  // account for every row the ungrouped view has, and no more. Grouping
+  // a wider set would quietly change what a filter means.
+  const groups = $derived(groupModeState.enabled ? groupEvents(rendered) : [])
+
+  // Sources carrying an active flag, for the row marker. Recomputed from
+  // the flag list rather than per row, so this is one pass rather than
+  // one lookup per rendered row.
+  const flagged = $derived(flaggedSources(flagsState.list))
+
+  // Which groups are open. Keyed by the group key rather than by index,
+  // so an open drawer stays with its group as new events arrive.
+  let openGroups = $state(new Set<string>())
+
+  function toggleGroup(key: string) {
+    const next = new Set(openGroups)
+    if (!next.delete(key)) next.add(key)
+    openGroups = next
+  }
+
   function deviceName(id: string): string {
     return deviceNames.get(id) ?? id
   }
@@ -231,9 +256,49 @@
           {/each}
         </div>
 
-        {#each rendered as event (event.id)}
-          <EventRow {event} deviceName={deviceName(event.deviceId)} />
-        {/each}
+        {#if groupModeState.enabled}
+          {#each groups as group (group.key)}
+            <EventRow
+              event={group.head}
+              deviceName={deviceName(group.head.deviceId)}
+              count={group.count}
+              flagged={flagged.has(group.head.srcIp ?? '')}
+              expandable={group.count > 1}
+              expanded={openGroups.has(group.key)}
+              onToggle={() => toggleGroup(group.key)}
+            />
+            {#if openGroups.has(group.key)}
+              {#each drawerEvents(group) as member (member.id)}
+                <EventRow
+                  event={member}
+                  deviceName={deviceName(member.deviceId)}
+                  flagged={flagged.has(member.srcIp ?? '')}
+                  member
+                />
+              {/each}
+              {#if hiddenInDrawer(group) > 0}
+                <div class="drawer-note">
+                  Showing the most recent {drawerEvents(group).length} of {group.count}; the other
+                  {hiddenInDrawer(group)} are older than this list.
+                </div>
+              {/if}
+              {#if group.rules.length > 1}
+                <div class="drawer-note">
+                  Matched more than one rule ({group.rules.join(', ')}) — usually a rule-ordering
+                  surprise.
+                </div>
+              {/if}
+            {/if}
+          {/each}
+        {:else}
+          {#each rendered as event (event.id)}
+            <EventRow
+              {event}
+              deviceName={deviceName(event.deviceId)}
+              flagged={flagged.has(event.srcIp ?? '')}
+            />
+          {/each}
+        {/if}
       </div>
       {#if rendered.length === 0}
         <div class="empty">
@@ -256,6 +321,16 @@
 {/if}
 
 <style>
+  /* Spans every column: it is about the group, not about a field. */
+  .drawer-note {
+    grid-column: 1 / -1;
+    padding: 4px 10px 6px 22px;
+    font-size: 11px;
+    color: var(--fg-muted);
+    border-left: 2px solid var(--accent);
+    border-bottom: 1px solid var(--border);
+  }
+
   .table-wrap {
     flex: 1;
     display: flex;

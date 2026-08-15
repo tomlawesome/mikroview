@@ -99,7 +99,10 @@
 
   async function remove(t: Entity) {
     deletingKey = t.type + ':' + t.key
-    await entitiesState.remove(t.type, t.key)
+    // Same contract as submit() above: the error comes back as text, so
+    // ignoring it made a failed delete indistinguishable from one that
+    // worked.
+    error = await entitiesState.remove(t.type, t.key)
     deletingKey = null
     if (editingKey?.type === t.type && editingKey?.key === t.key) resetDraft()
   }

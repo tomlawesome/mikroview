@@ -44,6 +44,11 @@ export interface FirewallEvent {
   length?: number
   flags?: string
   raw: string
+  // rawTruncated marks `raw` as having been cut to the server's cap
+  // (store.MaxRawBytes). Set only for lines far longer than any real
+  // RouterOS line, so the row can say so rather than presenting a
+  // shortened line as though it were what the router sent.
+  rawTruncated?: boolean
 }
 
 // A FirewallEvent as held in the client-side buffer, stamped with the
@@ -117,6 +122,27 @@ export interface Stats {
   count: number
   windowSeconds: number
   connectedClients: number
+  // Syslog listener saturation -- mirrors internal/syslog.ListenerStats.
+  // Optional so an older server (or a test fixture) that does not send
+  // it simply shows nothing rather than rendering NaN.
+  syslog?: SyslogListenerStats
+}
+
+// Mirrors internal/syslog.ListenerStats. The connection pool is finite,
+// and filling it means a router MikroView is meant to be watching gets
+// turned away with its log lines never arriving -- a silent blackout,
+// which used to be visible only as a repeated line in the container log.
+export interface SyslogListenerStats {
+  inUse: number
+  capacity: number
+  // How many slots only routers listed under `devices:` in config.yaml
+  // may use. 0 when no devices are declared, since holding capacity back
+  // for nobody would only shrink the pool.
+  reservedForConfigured: number
+  rejected: number
+  // Above zero means a *declared* router was turned away, which is the
+  // condition worth showing rather than saturation on its own.
+  rejectedConfigured: number
 }
 
 // Mirrors internal/api/auth.go's sessionResponse.
@@ -151,6 +177,12 @@ export interface UserSummary {
 export interface ApiToken {
   id: string
   name: string
+  // Mirrors internal/auth.TokenKind: "api" is a read-only token,
+  // "ingest" a RouterOS push token scoped to one device (#186/#326).
+  kind: 'api' | 'ingest'
+  // Set only on ingest tokens -- the config.yaml device id the token
+  // speaks for.
+  device?: string
   createdAt: string
   lastUsedAt?: string
   value?: string
@@ -559,4 +591,47 @@ export function filtersFromSearchParams(params: URLSearchParams): Filters {
     rule: params.get('rule') ?? '',
     ruleRegex: params.get('ruleRegex') === 'true',
   }
+}
+
+// Mirrors internal/watchlist.CoverageState (#274 item 1): whether
+// anything a router has pushed could actually feed a watchlist entry.
+//
+// 'unknown' is the default and by far the most common -- the router push
+// is optional, so most deployments have nothing to answer from. The UI
+// says nothing at all in that state; only the two definite negatives are
+// worth an operator's attention, and a false one of those is worse than
+// silence.
+export type WatchlistCoverage = 'unknown' | 'covered' | 'no-logging' | 'out-of-scope'
+
+// Mirrors internal/api's setupStatus (#320). Everything here is an
+// observation mikroview made on its own side -- it never connects to a
+// router, so "did that step work" is answered by what arrived, not by
+// asking the router.
+export interface SetupStatus {
+  instance: {
+    tlsEnabled: boolean
+    // tls.hosts as configured. Empty means the generated certificate
+    // covers localhost/127.0.0.1 only, which is the most common reason
+    // a router's first fetch fails.
+    hosts: string[]
+    syslogPort: string
+    syslogEnabled: boolean
+  }
+  sources: {
+    source: string
+    caFetchedAt?: string
+    syslogFirstSeenAt?: string
+    syslogLastSeenAt?: string
+  }[]
+  devices: {
+    device: string
+    configured: boolean
+    sourceIp: string
+    events: number
+    // Events whose action was decoded from a log-prefix. Zero with
+    // events above zero means the rules log without the convention.
+    decodedActions: number
+    pushedKinds?: Record<string, string>
+  }[]
+  pushKinds: string[]
 }

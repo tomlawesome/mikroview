@@ -87,3 +87,85 @@ func TestSessionRevokeAllForUser(t *testing.T) {
 		t.Error("expected user-2's session to be unaffected")
 	}
 }
+
+// The ceiling SessionTTL does not have (#294 item 3). Without it a
+// session used even once per ttl never expires, so a browser left signed
+// in on a shared machine stays valid indefinitely.
+func TestSessionMaxLifetimeCapsASlidingSession(t *testing.T) {
+	const ttl = time.Hour
+	const maxLifetime = 6 * time.Hour
+	s := NewSessionStoreWithMaxLifetime(ttl, maxLifetime)
+
+	start := time.Now()
+	sess := s.Create("u1", start)
+
+	// Used regularly, well inside the idle timeout every time. Under the
+	// old behaviour this loop could run forever.
+	for at := start.Add(30 * time.Minute); at.Before(start.Add(maxLifetime)); at = at.Add(30 * time.Minute) {
+		if _, ok := s.Validate(sess.ID, at); !ok {
+			t.Fatalf("session rejected at %v, still inside its %v ceiling", at.Sub(start), maxLifetime)
+		}
+	}
+
+	// One step past the ceiling, still active.
+	if _, ok := s.Validate(sess.ID, start.Add(maxLifetime).Add(time.Second)); ok {
+		t.Error("a session older than the ceiling was accepted because it was still being used")
+	}
+}
+
+// The renewed expiry must not reach past the ceiling either. Checking
+// the deadline while writing an ExpiresAt beyond it would leave the
+// stored session looking valid to anything reading that field.
+func TestSessionRenewalNeverExceedsTheCeiling(t *testing.T) {
+	const ttl = 4 * time.Hour
+	const maxLifetime = 5 * time.Hour
+	s := NewSessionStoreWithMaxLifetime(ttl, maxLifetime)
+
+	start := time.Now()
+	sess := s.Create("u1", start)
+
+	// Renewing at +4h would normally push expiry to +8h, past the +5h
+	// ceiling.
+	renewed, ok := s.Validate(sess.ID, start.Add(4*time.Hour))
+	if !ok {
+		t.Fatal("session rejected inside its ceiling")
+	}
+	deadline := start.Add(maxLifetime)
+	if renewed.ExpiresAt.After(deadline) {
+		t.Errorf("renewed expiry %v is past the ceiling %v", renewed.ExpiresAt.Sub(start), maxLifetime)
+	}
+}
+
+// Zero means no ceiling, which is what the CLI tooling and most tests
+// want -- and what an operator gets if they deliberately set it to 0.
+func TestSessionMaxLifetimeZeroMeansNoCeiling(t *testing.T) {
+	s := NewSessionStoreWithMaxLifetime(time.Hour, 0)
+	start := time.Now()
+	sess := s.Create("u1", start)
+
+	at := start
+	for i := 0; i < 100; i++ {
+		at = at.Add(30 * time.Minute)
+		if _, ok := s.Validate(sess.ID, at); !ok {
+			t.Fatalf("session rejected at %v with no ceiling configured", at.Sub(start))
+		}
+	}
+}
+
+// NewSessionStore keeps its old meaning for every existing caller: the
+// idle timeout, and no ceiling.
+func TestNewSessionStoreHasNoCeiling(t *testing.T) {
+	s := NewSessionStore(time.Hour)
+	start := time.Now()
+	sess := s.Create("u1", start)
+
+	// Far past any ceiling this package would default to, kept alive
+	// purely by use.
+	at := start
+	for i := 0; i < 200; i++ {
+		at = at.Add(30 * time.Minute)
+		if _, ok := s.Validate(sess.ID, at); !ok {
+			t.Fatalf("NewSessionStore rejected a session at %v -- it must impose no ceiling", at.Sub(start))
+		}
+	}
+}

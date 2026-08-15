@@ -1,5 +1,6 @@
 <script lang="ts">
   // SPDX-License-Identifier: AGPL-3.0-only
+  import ActionBadge from './ActionBadge.svelte'
   // One event, mobile card layout (issue #85) -- the desktop LiveTable's
   // 12-column grid doesn't survive a phone-width squeeze without either
   // tiny unreadable text or horizontal scrolling per row, so below the
@@ -10,7 +11,7 @@
   // else pushed into EventDetailSheet.svelte on tap rather than shown
   // inline or expanded in place.
   import type { FirewallEvent } from '../lib/types'
-  import { formatTime, countryFlag } from '../lib/format'
+  import { formatTime, countryFlag, rawTooltip } from '../lib/format'
 
   let { event, deviceName, onOpen }: { event: FirewallEvent; deviceName: string; onOpen: () => void } =
     $props()
@@ -19,10 +20,10 @@
   const ifaces = $derived([event.inInterface, event.outInterface].filter(Boolean).join(' → ') || '—')
 </script>
 
-<button class="card row-{event.action}" onclick={onOpen} title={event.raw}>
+<button class="card row-{event.action}" onclick={onOpen} title={rawTooltip(event.raw, event.rawTruncated)}>
   <div class="line1">
     <span class="time">{formatTime(event.time)}</span>
-    <span class="badge badge-{event.action}">{event.action.toUpperCase()}</span>
+    <ActionBadge action={event.action} />
     {#if event.natIp}
       <span class="badge badge-nat">NAT</span>
     {/if}
@@ -91,6 +92,8 @@
     color: var(--fg-dim);
   }
 
+  /* Only the NAT badge below uses this now -- the action badge is
+     ActionBadge.svelte, which carries its own. */
   .badge {
     font-family: var(--font-mono);
     font-size: 11px;
@@ -99,27 +102,6 @@
     padding: 2px 7px;
     border-radius: 4px;
     line-height: 1.4;
-  }
-
-  .badge-accept {
-    color: var(--accept);
-    background: var(--accept-bg);
-  }
-  .badge-drop {
-    color: var(--drop);
-    background: var(--drop-bg);
-  }
-  .badge-reject {
-    color: var(--reject);
-    background: var(--reject-bg);
-  }
-  .badge-log {
-    color: var(--log);
-    background: var(--log-bg);
-  }
-  .badge-unknown {
-    color: var(--unknown);
-    background: var(--unknown-bg);
   }
 
   /* Same blue as the desktop NAT text/active-chrome tokens -- see

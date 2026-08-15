@@ -48,7 +48,17 @@ func emaZScore(rate, baseline, variance float64) float64 {
 // low return value here just means "crossed the line, but not
 // statistically unusual for this baseline's own volatility."
 func emaConfidence(z float64, sampleCount, warmupSamples int) int {
-	historyConfidence := math.Min(1, float64(sampleCount)/float64(warmupSamples))
+	// warmupSamples comes from operator configuration and was divided by
+	// unguarded. Zero gives 0/0 = NaN, and NaN survives both Min and
+	// Round to land in Flag.Confidence as an arbitrary integer -- a
+	// number an analyst reads as a judgement about how sure the detector
+	// is. Treating a non-positive warmup as "no warmup required" is the
+	// honest reading of the setting: nothing to wait for means full
+	// history confidence immediately. See #285.
+	historyConfidence := 1.0
+	if warmupSamples > 0 {
+		historyConfidence = math.Min(1, float64(sampleCount)/float64(warmupSamples))
+	}
 	deviationConfidence := math.Min(1, math.Max(0, (z-emaMinZ)/(emaFullConfidenceZ-emaMinZ)))
 	return int(math.Round(historyConfidence * deviationConfidence * 100))
 }

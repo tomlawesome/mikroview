@@ -16,8 +16,8 @@ services:
       - "443:8080"
       # A plain-HTTP listener that only ever redirects to the HTTPS
       # port above -- never serves real content. Same non-root ->
-      # unprivileged-container-port reasoning as syslog's 514 -> 1514
-      # above. Remove this mapping (and set MIKROVIEW_LISTEN_HTTP_REDIRECT=
+      # unprivileged-container-port reasoning as 443 -> 8080 above.
+      # Remove this mapping (and set MIKROVIEW_LISTEN_HTTP_REDIRECT=
       # "" below) if you'd rather handle the redirect at your own
       # reverse proxy.
       - "80:8081"
@@ -31,8 +31,8 @@ services:
       # anyway -- this makes that structural instead of incidental.
       - no-new-privileges:true
     cap_drop:
-      # mikroview binds only unprivileged ports (1514/8080/8081 -- see
-      # the mappings above, which is exactly why they aren't 514/443/80
+      # mikroview binds only unprivileged ports (6514/8080/8081 -- see
+      # the mappings above, which is exactly why they aren't 443/80
       # inside the container), so it needs no Linux capabilities at all.
       - ALL
     # The root filesystem is read-only; every path mikroview actually
@@ -120,7 +120,13 @@ services:
     #   1. Put the connection string in a file (never in this compose
     #      file, and never in config.yaml -- it carries a password):
     #        postgres://mikroview:PASSWORD@db.internal:5432/mikroview?sslmode=verify-full
-    #   2. Mount it read-only and point config.yaml's postgres.dsnFile at
+    #   2. Make it readable by the container's user -- mikroview runs as
+    #      uid 65532, which is not you, so a plain `chmod 600` leaves it
+    #      unreadable inside the container and mikroview refuses to
+    #      start with "permission denied". Keep the tight mode and give
+    #      it to that user:
+    #        chown 65532:65532 postgres-dsn && chmod 600 postgres-dsn
+    #   3. Mount it read-only and point config.yaml's postgres.dsnFile at
     #      it, or set MIKROVIEW_POSTGRES_DSN_FILE:
     #        - ./postgres-dsn:/run/secrets/mikroview-postgres-dsn:ro
     #

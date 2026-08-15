@@ -37,6 +37,11 @@ const defaultClientIPHeader = "X-Forwarded-For"
 // operator-declared TrustedProxies. With none configured (the default),
 // this is exactly the old behaviour: the direct peer address, headers
 // ignored.
+// ClientIP is clientIP for callers outside this package -- main.go's
+// /ca.crt handler, which is registered on the root mux rather than the
+// API mux but still needs the same trusted-proxy-aware answer (#320).
+func (s *Server) ClientIP(r *http.Request) string { return s.clientIP(r) }
+
 func (s *Server) clientIP(r *http.Request) string {
 	peer := peerHost(r)
 	if len(s.TrustedProxies) == 0 {

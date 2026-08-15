@@ -50,6 +50,7 @@ export type View =
   | 'metrics'
   | 'watchlist'
   | 'suggestions'
+  | 'setup'
   | 'flags'
   | 'detectors'
   | 'entities'
@@ -377,11 +378,6 @@ class AppState {
   }
 }
 
-// MAX_RULE_PATTERN_LENGTH bounds compile cost. Generous -- a real rule
-// filter is a handful of characters -- but it stops a megabyte-long
-// pattern arriving in a URL.
-const MAX_RULE_PATTERN_LENGTH = 200
-
 // applyFilters runs no regex.
 //
 // When the rule filter is in regex mode it consults ruleMatches -- a set
@@ -416,7 +412,13 @@ export function applyFilters(
     if (f.ip && e.srcIp !== f.ip && e.dstIp !== f.ip) return false
     if (f.port) {
       const p = Number(f.port)
-      if (e.srcPort !== p && e.dstPort !== p) return false
+      // A non-numeric value (still mid-typing, or just unusable) is
+      // NaN, and every `!==` comparison against NaN is true -- without
+      // this guard every event would fail the filter and the live
+      // table would read as "no traffic" until the field is cleared.
+      // Skip the filter instead, matching the rule/ruleRegex convention
+      // below for an unusable pattern.
+      if (!Number.isNaN(p) && e.srcPort !== p && e.dstPort !== p) return false
     }
     // An address that can't be classified (missing, or -- see isPublicIp's
     // own IPv4-only caveat -- IPv6) satisfies neither "internal" nor

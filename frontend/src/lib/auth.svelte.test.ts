@@ -137,7 +137,7 @@ describe('AuthState.logout', () => {
     authState.state = 'authenticated'
     authState.username = 'alex'
     authState.role = 'admin'
-    vi.mocked(logout).mockResolvedValue(undefined)
+    vi.mocked(logout).mockResolvedValue(null)
 
     await authState.logout()
 
