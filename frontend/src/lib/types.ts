@@ -108,6 +108,7 @@ export interface Healthz {
   status: string
   time: string
   uptime: string
+  uptimeSeconds: number
   version: string
 }
 
