@@ -10,10 +10,10 @@
   </picture>
 </p>
 
-A real-time firewall "live view" for RouterOS, in the spirit of
-OPNsense's live view: see every connection attempt as it happens,
-whether it was accepted, dropped, or rejected, and by which rule —
-filterable by device, IP/CIDR, port, protocol, interface, or rule.
+A real-time firewall "live view" for RouterOS: see every connection
+attempt as it happens, whether it was accepted, dropped, or rejected,
+and by which rule — filterable by device, IP/CIDR, port, protocol,
+interface, or rule.
 
 Ships as a single Docker container. RouterOS pushes firewall log lines
 to it over syslog (no API access, no credentials, near-zero load on the
