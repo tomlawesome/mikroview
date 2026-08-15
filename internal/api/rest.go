@@ -23,10 +23,14 @@ var apiLog = logging.New("api")
 
 func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
-		"status":  "ok",
-		"time":    time.Now().UTC(),
-		"uptime":  time.Since(s.StartTime).String(),
-		"version": s.Version,
+		"status": "ok",
+		"time":   time.Now().UTC(),
+		"uptime": time.Since(s.StartTime).String(),
+		// uptimeSeconds duplicates uptime for the UI's toolbar counter:
+		// Go's duration string ("73h4m2.1s") is for humans reading curl
+		// output, not for a client that wants to keep counting locally.
+		"uptimeSeconds": int64(time.Since(s.StartTime).Seconds()),
+		"version":       s.Version,
 	})
 }
 
