@@ -19,6 +19,18 @@ const (
 	wsBatchMaxSize  = 100
 	wsWriteTimeout  = 10 * time.Second
 	wsPongTimeout   = 60 * time.Second
+	// wsCloseGrace bounds how long a revoked connection waits, after
+	// sending its close frame, for the peer to answer with its own close
+	// frame before the deferred conn.Close() tears the TCP connection
+	// down anyway. Without this grace the teardown races the peer's
+	// reply: a well-behaved client (gorilla's default close handler,
+	// every browser) echoes a close frame on receipt, and if the TCP
+	// connection is already gone that echo fails with a broken pipe --
+	// which the peer then reports instead of the clean close it actually
+	// received (#416). The wait is on the peer's reply reaching our
+	// reader, not open-ended: a mute or hostile peer costs at most this
+	// long, once, on a connection that is being closed regardless.
+	wsCloseGrace = time.Second
 )
 
 // wsPingInterval also doubles as the session-revalidation cadence (see the
@@ -218,6 +230,14 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 			// comment above for why this is the revalidation point.
 			if _, ok := s.sessionUser(r, time.Now()); !ok {
 				closeRevoked(conn)
+				// The reader goroutine returns when the peer's answering
+				// close frame (or anything else fatal) arrives, so waiting
+				// on it here is waiting for the close handshake to finish
+				// -- bounded by wsCloseGrace, see its doc comment (#416).
+				select {
+				case <-closed:
+				case <-time.After(wsCloseGrace):
+				}
 				return
 			}
 			conn.SetWriteDeadline(time.Now().Add(wsWriteTimeout))
