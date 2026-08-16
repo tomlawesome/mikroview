@@ -9,6 +9,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/tomlawesome/mikroview/internal/store"
 )
 
 // Emission is what RenderEmission produces: a definition's firing
@@ -76,6 +78,35 @@ type Emission struct {
 	// returns, not by RenderEmission itself.
 	Country   string
 	EventTime time.Time
+	// TriggeringEvent is the store.Event this emission fired on, carried
+	// only by an expectation-intent definition and nil everywhere else.
+	//
+	// This is the one place Emission is not purely "a definition's
+	// accumulated judgement", and it is deliberate rather than a leak
+	// (#406). matchlog.Record is evidence-first by design -- its own doc
+	// comment: "it embeds the full matched event so an operator
+	// investigating has everything the live view would have shown, not a
+	// summary reconstructed later from a smaller record" -- and it keys
+	// on a matchlog.Tuple (source identity, destination address, port)
+	// that is a property of the triggering packet, not of the window.
+	// Neither can be rebuilt from Detail/Ports/Hosts/Labels: an accumulated
+	// judgement has thrown that information away by construction. So an
+	// expectation-intent definition sets this after RenderEmission
+	// returns, exactly as it sets Target/Country/EventTime, and Route
+	// (router.go) derives MatchlogWrite's Tuple and Event from it --
+	// which is what MatchlogWrite's own doc comment always said would
+	// have to happen: "Only the wiring that has an actual event in hand
+	// (#406) can supply those."
+	//
+	// Route reads it on the expectation branch only. A detection-intent
+	// definition is free to leave it set and it is simply ignored --
+	// which is deliberate, because the alternative would be for a
+	// definition's own Evaluate to branch on its Intent, and Intent
+	// decides what an emission feeds and nothing else (see Intent's own
+	// doc comment). A flags.Flag is an aggregate over a window; handing
+	// it one event would be the single-event-stands-for-the-window claim
+	// #379 found, so routeToFlag never looks at this field at all.
+	TriggeringEvent *store.Event
 	// Provisional marks an emission produced while the definition's
 	// baseline (see Baseline/Snapshot.Ready) had not yet cleared its
 	// history floor -- see docs/decisions/evaluation-engine.md section 1

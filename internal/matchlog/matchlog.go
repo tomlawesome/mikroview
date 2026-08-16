@@ -84,6 +84,22 @@ func (id Identity) identityKey() string {
 	return "ip:" + id.IP
 }
 
+// Key exports identityKey for a caller that needs to *index* by identity
+// rather than compare two of them pairwise -- internal/engine's inverted
+// expectation dispatch, which buckets definitions by the device they
+// scope so an event consults only the ones that could be about it,
+// instead of asking every one of them in turn (#406).
+//
+// Exported rather than reimplemented at that call site precisely because
+// of what identityKey's own doc comment records: the MAC-preferred rule
+// and its lowercasing were once written twice, drifted, and silently
+// stopped collapsing a device's matches when its lease changed. A second
+// copy for indexing would be the same mistake in a new place -- two
+// identities that MatchesSource each other must always land in the same
+// bucket, which is only guaranteed if the bucket key is literally this
+// function.
+func (id Identity) Key() string { return id.identityKey() }
+
 // MatchesSource reports whether a candidate event identity should be
 // treated as the same source as this stored identity, following the
 // same MAC-preferred, IP-fallback rule Tuple.key uses to decide whether a

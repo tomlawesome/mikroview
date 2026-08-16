@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/tomlawesome/mikroview/internal/matchlog"
 	"github.com/tomlawesome/mikroview/internal/store"
 )
 
@@ -47,11 +48,27 @@ const (
 	FieldChain                 Field = "chain"
 	FieldRuleLabel             Field = "ruleLabel"
 	FieldAddressListMembership Field = "addressListMembership"
-	FieldConnectionState       Field = "connectionState"
-	FieldInInterface           Field = "inInterface"
-	FieldOutInterface          Field = "outInterface"
-	FieldTimeOfDay             Field = "timeOfDay"
-	FieldDayOfWeek             Field = "dayOfWeek"
+	// FieldSourceIdentity matches an event's *device* identity rather
+	// than one of its address fields: MAC-preferred, IP as fallback,
+	// matchlog.Identity's rule (#243 section 1), which is not the same
+	// question FieldSourceAddress asks.
+	//
+	// The difference is load-bearing, not stylistic. An expectation
+	// scoped to a MAC must keep matching when its device's IP changes
+	// under DHCP -- that is the entire reason a MAC-bound identity
+	// exists. And, symmetrically, an expectation scoped to an IP must
+	// NOT match an event that carries a source MAC, even when that
+	// event's IP is the right one: matchlog collapses on the
+	// MAC-preferred key, so treating those as the same device would let
+	// one device's match history split or merge depending on which chain
+	// a particular log line arrived on. FieldSourceAddress cannot express
+	// either half. See Condition's doc comment for the Values shape.
+	FieldSourceIdentity  Field = "sourceIdentity"
+	FieldConnectionState Field = "connectionState"
+	FieldInInterface     Field = "inInterface"
+	FieldOutInterface    Field = "outInterface"
+	FieldTimeOfDay       Field = "timeOfDay"
+	FieldDayOfWeek       Field = "dayOfWeek"
 )
 
 // Operator is the closed set of comparisons a Condition may apply to its
@@ -100,6 +117,13 @@ const (
 // for, since nothing in the closed field set is "arbitrary address,
 // caller's choice." Only OpEquals ("is a member") and OpNotEquals ("is
 // not a member") apply to it.
+//
+// FieldSourceIdentity is special in the same way: Values is exactly
+// [mac, ip], the stored identity to compare the event's own resolved
+// identity against, and at least one of the two must be non-empty (an
+// identity with neither names no device at all -- matchlog refuses to
+// store or query one, see matchlog.ErrEmptyIdentity). Only OpEquals
+// ("is this device") and OpNotEquals ("is not this device") apply.
 //
 // One Condition per Field is enforced by compileConditions -- a
 // duplicate field is a construction-time error, not a second AND'd test
@@ -187,6 +211,7 @@ var fieldOperators = map[Field]map[Operator]bool{
 	FieldOutInterface:          setOperators,
 	FieldDayOfWeek:             setOperators,
 	FieldAddressListMembership: membershipOperators,
+	FieldSourceIdentity:        membershipOperators,
 	FieldTimeOfDay:             timeOfDayOperators,
 }
 
@@ -225,6 +250,8 @@ func compileCondition(c Condition) (conditionMatcher, error) {
 		return compilePortCondition(c)
 	case FieldAddressListMembership:
 		return compileMembershipCondition(c)
+	case FieldSourceIdentity:
+		return compileSourceIdentityCondition(c)
 	case FieldTimeOfDay:
 		return compileTimeOfDayCondition(c)
 	case FieldDayOfWeek:
@@ -524,6 +551,39 @@ func compileMembershipCondition(c Condition) (conditionMatcher, error) {
 		}
 		member := members.InAddressList(device, list, e.SrcIP)
 		return member != negate
+	}, nil
+}
+
+// ---- source identity ----
+
+// compileSourceIdentityCondition compiles a FieldSourceIdentity test --
+// see that field's own doc comment. The comparison itself is
+// matchlog.Identity.MatchesSource, called rather than reimplemented: its
+// own doc comment records that Append and Query each implemented the
+// MAC-preferred rule separately once and drifted, which is why the
+// preference (and the MAC lowercasing a real RouterOS makes necessary)
+// lives in exactly one place.
+func compileSourceIdentityCondition(c Condition) (conditionMatcher, error) {
+	if c.Operator != OpEquals && c.Operator != OpNotEquals {
+		return nil, fmt.Errorf("engine: field %q does not accept operator %q", c.Field, c.Operator)
+	}
+	if len(c.Values) != 2 {
+		return nil, fmt.Errorf("engine: field %q wants exactly two values [mac, ip], got %d", c.Field, len(c.Values))
+	}
+	id := matchlog.Identity{MAC: c.Values[0], IP: c.Values[1]}
+	if id.Empty() {
+		return nil, fmt.Errorf("engine: field %q requires a mac or an ip -- an identity with neither names no device", c.Field)
+	}
+	negate := c.Operator == OpNotEquals
+	return func(e store.Event, _ AddressListMembership) bool {
+		candidate := eventIdentity(e)
+		if candidate.Empty() {
+			// Nothing to attribute this event to at all -- neither a
+			// match nor a non-match, and the safe direction is the same
+			// one compileMembershipCondition takes: claim nothing.
+			return false
+		}
+		return id.MatchesSource(candidate) != negate
 	}, nil
 }
 
