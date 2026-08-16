@@ -842,25 +842,23 @@ func main() {
 	// popover -- Tor exit / VPN / datacenter / privacy relay. The
 	// netclass package itself stays display-only by design (see its own
 	// doc comment) and is attached to the API server for that. It is
-	// also attached to the detector chain below, but narrowly: only
-	// observeNetClass (internal/detect/netclass.go) ever reads it, and
-	// only to reinforce confidence on an already-active flag for the two
-	// high-precision categories (Tor, VPN), direction-gated to inbound
-	// traffic only -- never to raise a flag on its own. Nil-safe when no
-	// sources are enabled, same as bl.
+	// also handed to the engine's netclass definition below, but narrowly:
+	// only that definition ever reads it, and only to reinforce confidence
+	// on an already-active flag for the two high-precision categories
+	// (Tor, VPN), direction-gated to inbound traffic only -- never to
+	// raise a flag on its own. Nil-safe when no sources are enabled, same
+	// as bl.
 	netclassLog := logging.New("netclass")
 	nc := netclass.New(cfg.NetClass.Sources, netclassLog)
 
-	// netclass backs the direction-aware VPN/Tor confidence reinforcement
-	// (#114) -- the last optional input internal/detect still consults for
-	// itself. The trusted-mail-sender allowlist (#108) and the local
-	// blocklist match (#113 Part B) both moved onto the engine with their
-	// definitions (issue #405) and reach them through ShippedDeps below.
-	// Each is independently a valid no-op when unconfigured.
-	detector := detect.NewWithSettings(detectCfg, fs, detectorSettings).
-		WithReputation(rep).
-		WithEntities(entityStore).
-		WithNetClass(nc)
+	// Every optional input internal/detect used to consult -- the
+	// trusted-mail-sender allowlist (#108), the local blocklist match
+	// (#113 Part B), the direction-aware VPN/Tor reinforcement (#114) --
+	// now reaches its definition through ShippedDeps below (issue #405).
+	// The detector itself evaluates nothing as of this commit; it is
+	// deleted, along with the rest of internal/detect's engine machinery,
+	// once the last port lands.
+	detector := detect.NewWithSettings(detectCfg, fs, detectorSettings)
 
 	// Shipped declarative definitions (issue #405): built from whatever
 	// the definitions store currently holds for a shipped, available,
