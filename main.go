@@ -812,6 +812,18 @@ func main() {
 	}
 	detectorSettings, err := detect.OpenSettingsStoreWithBackend(detectorBackend, seed)
 	mustOpenStore(detectorsLog, err)
+	// Every shipped definition this binary evaluates has to actually
+	// exist, whatever the persistence situation -- see
+	// engine.SeedShippedDefinitions' own doc comment for why this runs
+	// every boot and is not the same thing as MigrateDefinitions running
+	// once. Anything already in the store (a migration's output, an
+	// operator's edits) is left untouched; only genuinely missing
+	// definitions are added, using this deployment's live detector
+	// settings for enabled/scope so a detector switched off before the
+	// port stays off after it.
+	if err := engine.SeedShippedDefinitions(definitions, detectorSettings.List(), detectCfg); err != nil {
+		definitionsLog.Warn(err.Error())
+	}
 	// bl (issue #113 Part B): always constructed, even with zero enabled
 	// sources (cfg.Blocklist.Sources == []) -- Match/Refresh are both
 	// harmless no-ops in that case (see internal/blocklist.Blocklist's
