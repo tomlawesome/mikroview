@@ -63,6 +63,10 @@ type EvidenceSet struct {
 	portsSeen  bool
 	hostsSeen  bool
 	labelsSeen bool
+
+	// nat is the last NAT translation detail recorded -- see SetNAT for
+	// why this one category is last-writer-wins rather than a set.
+	nat *NATInfo
 }
 
 // NewEvidenceSet constructs an empty EvidenceSet.
@@ -162,4 +166,50 @@ func (s *EvidenceSet) touched() (ports, hosts, labels bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.portsSeen, s.hostsSeen, s.labelsSeen
+}
+
+// NATInfo is one event's NAT translation detail -- store.Event's
+// NatIP/NatPort/NatRaw, carried through an Emission so a detection-intent
+// route can populate flags.Evidence.NAT (see routeToFlag, router.go).
+// This package keeps its own copy of the shape rather than importing
+// flags.NATInfo into the evidence primitive, for the same reason
+// MatchlogWrite is not matchlog.Record: the sink types belong to the
+// stores, and Emission is a definition's judgement, not a store row.
+type NATInfo struct {
+	IP   string
+	Port int
+	Raw  string
+}
+
+// SetNAT records the NAT translation detail of the event currently being
+// folded in, replacing whatever a previous event set -- deliberately
+// last-writer-wins rather than a set, unlike every other category on this
+// type. NAT translation describes one specific packet's rewrite, not a
+// property accumulated across a window, and flags.Evidence.NAT's own
+// contract is "the triggering event's NAT translation info, when
+// present" -- since a definition folds evidence in before rendering, the
+// last value written is the triggering event's, which is exactly what
+// that contract promises. A zero-valued info (no NAT fields on the
+// event) is not recorded at all, so NAT stays nil rather than becoming
+// an empty struct.
+func (s *EvidenceSet) SetNAT(info NATInfo) {
+	if info.IP == "" && info.Raw == "" && info.Port == 0 {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.nat = &info
+}
+
+// NAT returns a copy of the last recorded NAT translation detail, or nil
+// if none was ever recorded -- a copy, not the stored pointer, so this
+// type's copy-on-read boundary holds for this category too.
+func (s *EvidenceSet) NAT() *NATInfo {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.nat == nil {
+		return nil
+	}
+	out := *s.nat
+	return &out
 }

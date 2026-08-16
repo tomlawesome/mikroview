@@ -189,21 +189,30 @@ func convertToDefinitions(settingsDoc map[detect.DetectorName]detect.Settings, e
 // ADR's own wording), so Params is the same default for every operator
 // at migration time.
 //
-// Kind is KindProgrammatic for all twelve, uniformly -- a decision this
-// migration makes on its own, recorded here since docs/decisions/
-// evaluation-engine.md's illustrative list names some of these as future
-// "shipped declarative definitions." That is #405's job, not this one:
-// Definition has no structured-condition representation yet (no package
-// in this repository defines one as of #404), so marking any of these
-// Declarative now would claim a data-driven condition set that does not
-// exist. Programmatic is the honest classification for "built-in Go,
-// wearing the envelope" today; #405 is free to migrate specific
-// detectors to Declarative once real condition data exists for them --
-// that is an Upsert against this store, not a reason to block on it here.
+// Kind was KindProgrammatic for all twelve, uniformly, as #404 shipped
+// it -- that issue's own report noted this was seeded programmatic
+// "pending #405," since Definition had no structured-condition
+// representation yet at that point. #405 is what starts correcting the
+// mapping, one ported detector at a time (see shippedDetector.kind's own
+// doc comment): port_scan is the first to flip to KindDeclarative, built
+// on shipped_declarative.go's buildPortScanDefinition.
 type shippedDetector struct {
 	name   detect.DetectorName
 	schema []ParamSchema
 	params func(cfg detect.Config) Params
+	// kind is the migrated Definition's Kind -- KindProgrammatic for
+	// every detector until issue #405 ports it onto a declarative or
+	// programmatic definition built on this chassis, at which point this
+	// field flips to match (docs/decisions/evaluation-engine.md section
+	// 2's "current detectors whose logic already is threshold-over-window
+	// ... become shipped declarative definitions"). #404's own report
+	// noted every detector was seeded programmatic "pending this issue" --
+	// this field, and shippedDeclarativeBuilders (shipped_declarative.go),
+	// are #405's fix to that mapping, one detector at a time as each is
+	// actually ported (see AGENTS.md's "removals are wholesale" applied
+	// in reverse: nothing here claims a detector is declarative before
+	// its evaluation logic actually exists as one).
+	kind Kind
 }
 
 // shippedDetectorDisplayNames gives each of the 12 settings-toggleable
@@ -239,10 +248,14 @@ var zeroDuration = time.Duration(0).String()
 // through shipped_params.go's ParamSchema, into this migration's default
 // Params -- one entry per internal/detect.AllDetectorNames, same order.
 var shippedDetectors = []shippedDetector{
-	{detect.DetectorPortScan, PortScanParamSchema, func(c detect.Config) Params {
+	// port_scan (issue #405): threshold-over-window, ported onto a
+	// shipped DeclarativeDefinition -- see shipped_declarative.go's
+	// buildPortScanDefinition. Every entry below still marked
+	// KindProgrammatic is one #405 has not ported yet.
+	{name: detect.DetectorPortScan, schema: PortScanParamSchema, kind: KindDeclarative, params: func(c detect.Config) Params {
 		return Params{"threshold": c.PortScanThreshold, "window": c.PortScanWindow.String()}
 	}},
-	{detect.DetectorActivitySpike, ActivitySpikeParamSchema, func(c detect.Config) Params {
+	{name: detect.DetectorActivitySpike, schema: ActivitySpikeParamSchema, kind: KindProgrammatic, params: func(c detect.Config) Params {
 		return Params{
 			"threshold":               c.ActivitySpikeThreshold,
 			"window":                  c.ActivitySpikeWindow.String(),
@@ -254,10 +267,13 @@ var shippedDetectors = []shippedDetector{
 			"baselineFloorDuration":   zeroDuration,
 		}
 	}},
-	{detect.DetectorCriticalPort, CriticalPortParamSchema, func(c detect.Config) Params {
+	// critical_port (issue #405): threshold-over-window keyed per source,
+	// ported onto a shipped DeclarativeDefinition -- see
+	// shipped_declarative.go's buildCriticalPortDefinition.
+	{name: detect.DetectorCriticalPort, schema: CriticalPortParamSchema, kind: KindDeclarative, params: func(c detect.Config) Params {
 		return Params{"ports": c.CriticalPorts, "threshold": c.CriticalPortThreshold, "window": c.CriticalPortWindow.String()}
 	}},
-	{detect.DetectorGlobalSpike, GlobalSpikeParamSchema, func(c detect.Config) Params {
+	{name: detect.DetectorGlobalSpike, schema: GlobalSpikeParamSchema, kind: KindProgrammatic, params: func(c detect.Config) Params {
 		return Params{
 			"multiplier":            c.GlobalSpikeMultiplier,
 			"minEPS":                c.GlobalSpikeMinEPS,
@@ -266,10 +282,16 @@ var shippedDetectors = []shippedDetector{
 			"baselineFloorDuration": zeroDuration,
 		}
 	}},
-	{detect.DetectorDistributedBruteForce, DistributedBruteForceParamSchema, func(c detect.Config) Params {
-		return Params{"threshold": c.DistributedBruteForceThreshold, "window": c.DistributedBruteForceWindow.String()}
+	// distributed_brute_force (issue #405): distinct-source count over a
+	// window keyed per destination port, ported onto a shipped
+	// DeclarativeDefinition -- see shipped_declarative.go's
+	// buildDistributedBruteForceDefinition. Seeded with the same
+	// CriticalPorts list critical_port gets, which is what internal/detect
+	// shared between the two.
+	{name: detect.DetectorDistributedBruteForce, schema: DistributedBruteForceParamSchema, kind: KindDeclarative, params: func(c detect.Config) Params {
+		return Params{"ports": c.CriticalPorts, "threshold": c.DistributedBruteForceThreshold, "window": c.DistributedBruteForceWindow.String()}
 	}},
-	{detect.DetectorOutboundAnomaly, OutboundAnomalyParamSchema, func(c detect.Config) Params {
+	{name: detect.DetectorOutboundAnomaly, schema: OutboundAnomalyParamSchema, kind: KindProgrammatic, params: func(c detect.Config) Params {
 		return Params{
 			"threshold":               c.OutboundAnomalyThreshold,
 			"window":                  c.OutboundAnomalyWindow.String(),
@@ -277,7 +299,7 @@ var shippedDetectors = []shippedDetector{
 			"vpnConfidenceMultiplier": c.VPNConfidenceMultiplier,
 		}
 	}},
-	{detect.DetectorInternalRecon, InternalReconParamSchema, func(c detect.Config) Params {
+	{name: detect.DetectorInternalRecon, schema: InternalReconParamSchema, kind: KindProgrammatic, params: func(c detect.Config) Params {
 		return Params{
 			"threshold":               c.InternalReconThreshold,
 			"window":                  c.InternalReconWindow.String(),
@@ -285,7 +307,7 @@ var shippedDetectors = []shippedDetector{
 			"vpnConfidenceMultiplier": c.VPNConfidenceMultiplier,
 		}
 	}},
-	{detect.DetectorRuleSpike, RuleSpikeParamSchema, func(c detect.Config) Params {
+	{name: detect.DetectorRuleSpike, schema: RuleSpikeParamSchema, kind: KindProgrammatic, params: func(c detect.Config) Params {
 		return Params{
 			"multiplier":            c.RuleSpikeMultiplier,
 			"minRate":               c.RuleSpikeMinRate,
@@ -295,10 +317,14 @@ var shippedDetectors = []shippedDetector{
 			"baselineFloorDuration": zeroDuration,
 		}
 	}},
-	{detect.DetectorRepeatedDrops, RepeatedDropsParamSchema, func(c detect.Config) Params {
+	// repeated_drops (issue #405): threshold-over-window keyed per
+	// (source, destination port), ported onto a shipped
+	// DeclarativeDefinition -- see shipped_declarative.go's
+	// buildRepeatedDropsDefinition.
+	{name: detect.DetectorRepeatedDrops, schema: RepeatedDropsParamSchema, kind: KindDeclarative, params: func(c detect.Config) Params {
 		return Params{"threshold": c.RepeatedDropsThreshold, "window": c.RepeatedDropsWindow.String()}
 	}},
-	{detect.DetectorLowSlowScan, LowSlowScanParamSchema, func(c detect.Config) Params {
+	{name: detect.DetectorLowSlowScan, schema: LowSlowScanParamSchema, kind: KindProgrammatic, params: func(c detect.Config) Params {
 		return Params{
 			"window":             c.LowSlowScanWindow.String(),
 			"portThreshold":      c.LowSlowScanPortThreshold,
@@ -309,7 +335,7 @@ var shippedDetectors = []shippedDetector{
 			"updateCadence":      "perEvent",
 		}
 	}},
-	{detect.DetectorOffHoursActivity, OffHoursActivityParamSchema, func(c detect.Config) Params {
+	{name: detect.DetectorOffHoursActivity, schema: OffHoursActivityParamSchema, kind: KindProgrammatic, params: func(c detect.Config) Params {
 		return Params{
 			"startHour":     c.OffHoursStartHour,
 			"endHour":       c.OffHoursEndHour,
@@ -318,7 +344,7 @@ var shippedDetectors = []shippedDetector{
 			"updateCadence": "perEvent",
 		}
 	}},
-	{detect.DetectorDeviceSilence, DeviceSilenceParamSchema, func(c detect.Config) Params {
+	{name: detect.DetectorDeviceSilence, schema: DeviceSilenceParamSchema, kind: KindProgrammatic, params: func(c detect.Config) Params {
 		return Params{"staleAfter": c.DeviceStaleAfter.String()}
 	}},
 }
@@ -368,7 +394,7 @@ func convertDetectSettings(settingsDoc map[detect.DetectorName]detect.Settings, 
 			Name:        shippedDetectorDisplayNames[sd.name],
 			Description: fmt.Sprintf("Migrated from internal/detect's %q detector settings (issue #404).", sd.name),
 			Intent:      IntentDetection,
-			Kind:        KindProgrammatic,
+			Kind:        sd.kind,
 			Enabled:     settings.Enabled,
 			Scope:       convertDetectScope(settings.Scope),
 			Params:      params,
@@ -602,4 +628,53 @@ func convertInvertedEntry(e *watchlist.Entry, name string) (Definition, error) {
 		// make that detector provenance=custom.
 		Provenance: Provenance{Origin: ProvenanceShipped},
 	}, nil
+}
+
+// SeedShippedDefinitions makes sure every shipped detector definition
+// actually exists in s, adding any that are missing at their shipped
+// defaults (with enabled/scope taken from settingsDoc). Definitions
+// already present are left completely alone -- an operator's edits, and
+// the migration's own output, both win over a default.
+//
+// This is deliberately separate from MigrateDefinitions, and runs on
+// every boot rather than once. Migration answers "what did this
+// deployment have before the definitions store existed"; this answers
+// "does the shipped catalogue this binary evaluates actually exist", and
+// the two are not the same question. Issue #405 is what made the
+// difference matter: before it, an absent or unwritable definitions
+// document cost nothing, because internal/detect evaluated every
+// detector from its own settings store regardless. Once a detector's
+// evaluation logic lives here, a definition that does not exist is a
+// detector that does not run -- and a deployment that simply never
+// configured engine.definitionsStorePath (nothing in the config file
+// requires it) would silently lose every ported detector, with no
+// symptom beyond flags quietly not appearing. That is exactly the
+// "absence of detection presented as absence of threat" failure #380's
+// first item describes.
+//
+// Seeding is therefore not a convenience: it is what makes the shipped
+// catalogue a property of the binary rather than of whether persistence
+// happens to be configured. A deployment with no definitions backend at
+// all still gets every shipped definition, in memory, for the life of
+// the process -- the same "empty path disables persistence, not the
+// feature" contract every other store in this codebase follows.
+func SeedShippedDefinitions(s *DefinitionsStore, settingsDoc map[detect.DetectorName]detect.Settings, cfg detect.Config) error {
+	defs := make(map[string]Definition, len(shippedDetectors))
+	if err := convertDetectSettings(settingsDoc, cfg, defs); err != nil {
+		return fmt.Errorf("engine: seeding shipped definitions: %w", err)
+	}
+	for _, sd := range shippedDetectors {
+		id := string(sd.name)
+		def, ok := defs[id]
+		if !ok {
+			continue
+		}
+		if _, exists := s.Get(id); exists {
+			continue
+		}
+		if err := s.Upsert(def); err != nil {
+			return fmt.Errorf("engine: seeding shipped definition %q: %w", id, err)
+		}
+	}
+	return nil
 }

@@ -109,6 +109,14 @@ func (d *DeclarativeDefinition) Replay(corpus Corpus, candidate Params) (Result,
 	)
 
 	corpusWindow := corpus.Replay(func(e store.Event) {
+		// Scope gates replay identically to live Evaluate (declarative.go)
+		// -- added by #405 alongside Evaluate's own scope enforcement (see
+		// scope_match.go); Replay predates that change and this definition's
+		// receipt would otherwise overclaim by counting events live
+		// evaluation would never have seen at all.
+		if !scopeMatches(d.def.Scope, e) {
+			return
+		}
 		if !d.compiled.match(e, d.members) {
 			return
 		}
@@ -116,10 +124,10 @@ func (d *DeclarativeDefinition) Replay(corpus Corpus, candidate Params) (Result,
 		key := d.keyFor(e)
 		st, ok := states[key]
 		if !ok {
-			st = d.newStateForWindow(window)
+			st = d.newStateForWindow(window, e)
 			states[key] = st
 		}
-		recordEvidence(d.key, st, e)
+		d.recordEvidence(st, e)
 
 		now := e.ReceivedAt
 		var count int
@@ -140,7 +148,7 @@ func (d *DeclarativeDefinition) Replay(corpus Corpus, candidate Params) (Result,
 			return
 		}
 
-		em, err := RenderEmission(st.evidence, d.detailTemplate, false)
+		em, err := RenderEmission(st.evidence, count, st.detailTemplate, false)
 		if err != nil {
 			// Same "log and skip this one occurrence, keep replaying"
 			// policy Evaluate itself uses (declarative.go): a render
@@ -158,7 +166,7 @@ func (d *DeclarativeDefinition) Replay(corpus Corpus, candidate Params) (Result,
 		if len(sample) < replaySampleBound {
 			sample = append(sample, ReplaySample{
 				At:     now,
-				Target: d.targetFor(key),
+				Target: st.target,
 				Detail: em.Detail,
 				Ports:  em.Ports,
 				Hosts:  em.Hosts,
