@@ -882,10 +882,13 @@ func main() {
 	// maybeCheckReputation/maybeCheckGroupReputation split. A definition
 	// with no address to look up (a rule-label or "global" target) is
 	// simply never a lookup candidate.
-	// 8 matches internal/detect.reputationLookupConcurrency
-	// (unexported; kept in sync by hand until that pool is deleted
-	// alongside the rest of internal/detect's engine machinery once every
-	// detector has moved).
+	//
+	// The lookup policy (pool size, timeout, group sampling) comes from
+	// the shipped reputation definition's own params rather than from a
+	// literal here -- see engine.ReputationPolicyFrom. This file used to
+	// carry a hand-synced copy of internal/detect's unexported
+	// concurrency constant; the definition is what replaces it.
+	reputationPolicy := engine.ReputationPolicyFrom(definitions)
 	var shippedDeclDefs []*engine.DeclarativeDefinition
 	for _, sd := range definitions.List() {
 		if !sd.Available || sd.Definition.Kind != engine.KindDeclarative || sd.Definition.Provenance.Origin != engine.ProvenanceShipped {
@@ -902,7 +905,7 @@ func main() {
 			detectorsLog.Warn(fmt.Sprintf("skipping shipped declarative definition %q: %v", sd.Definition.ID, err))
 			continue
 		}
-		dd.OnRoutedEmission = engine.ShippedDeclarativeSink(sd.Definition, fs, rep, 8)
+		dd.OnRoutedEmission = engine.ShippedDeclarativeSink(sd.Definition, fs, rep, reputationPolicy)
 		shippedDeclDefs = append(shippedDeclDefs, dd)
 	}
 	eng.Register(engine.NewDeclarativeSet("shipped-declarative", shippedDeclDefs))
@@ -952,7 +955,7 @@ func main() {
 		if sink, ok := pd.(interface {
 			SetSink(func(engine.RoutedEmission))
 		}); ok {
-			sink.SetSink(engine.ShippedDeclarativeSink(sd.Definition, fs, rep, 8))
+			sink.SetSink(engine.ShippedDeclarativeSink(sd.Definition, fs, rep, reputationPolicy))
 		}
 		eng.Register(pd)
 	}

@@ -360,8 +360,9 @@ func TestShippedOutboundAnomalyVPNBoostsConfidenceAndNamesTheInterface(t *testin
 func TestShippedOutboundAnomalyGroupReputationSamplesAreCapped(t *testing.T) {
 	fs := newTestFlagsStore(t)
 	fake := newFakeReputation()
+	policy := DefaultReputationPolicy()
 	d := newShippedDestSpreadDefinition(t, "outbound_anomaly",
-		GroupReputationSink(fs, fake, 8),
+		GroupReputationSink(fs, fake, policy),
 		Params{"threshold": 15, "window": (5 * time.Minute).String()}, Scope{}, true)
 
 	// Every possible member gets the same score, so it does not matter
@@ -376,12 +377,12 @@ func TestShippedOutboundAnomalyGroupReputationSamplesAreCapped(t *testing.T) {
 
 	// The group's sampling loop is synchronous and does not retry a
 	// member skipped for a saturated pool, so from an otherwise-idle pool
-	// it reaches min(reputationGroupSampleSize, concurrency) real
+	// it reaches min(policy.GroupSampleSize, policy.Concurrency) real
 	// lookups; the remaining sampled-but-skipped members are recorded as
 	// no-data rather than retried.
-	wantStarted := reputationGroupSampleSize
-	if 8 < wantStarted {
-		wantStarted = 8
+	wantStarted := policy.GroupSampleSize
+	if policy.Concurrency < wantStarted {
+		wantStarted = policy.Concurrency
 	}
 	seen := make(map[string]bool)
 	for i := 0; i < wantStarted; i++ {
@@ -393,7 +394,7 @@ func TestShippedOutboundAnomalyGroupReputationSamplesAreCapped(t *testing.T) {
 	repExpectNoneStarted(t, fake.started) // 15 members -- must never exceed the pool
 
 	close(fake.release)
-	wantFloor := int(math.Round(80 * (float64(wantStarted) / float64(reputationGroupSampleSize))))
+	wantFloor := int(math.Round(80 * (float64(wantStarted) / float64(policy.GroupSampleSize))))
 	repWaitForConfidence(t, fs, "192.168.1.50", wantFloor)
 }
 
