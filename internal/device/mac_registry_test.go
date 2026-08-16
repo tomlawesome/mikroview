@@ -3,13 +3,75 @@
 package device
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
+
+	"github.com/tomlawesome/mikroview/internal/persist"
 )
+
+// flushForTest waits for r's write-behind writer to persist whatever is
+// currently dirty -- issue #400 moved persistence off the caller's
+// goroutine, so a test reopening the same path immediately after a Seen
+// now needs an explicit synchronous checkpoint. See
+// flags.flushForTest, the twin of this helper.
+func flushForTest(t *testing.T, r *MACRegistry) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if err := r.Flush(ctx); err != nil {
+		t.Fatalf("flushForTest: %v", err)
+	}
+}
+
+// countingSaveBackend is an in-memory persist.Backend that counts Save
+// calls -- see flags.countingSaveBackend, the twin of this type.
+type countingSaveBackend struct {
+	mu      sync.Mutex
+	payload []byte
+	version int64
+	saves   int
+}
+
+func newCountingSaveBackend() *countingSaveBackend { return &countingSaveBackend{} }
+
+func (b *countingSaveBackend) Load(ctx context.Context) (persist.Snapshot, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return persist.Snapshot{Payload: b.payload, Version: b.version, Exists: b.version != 0}, nil
+}
+
+func (b *countingSaveBackend) Save(ctx context.Context, payload []byte, expect int64) (int64, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if expect != b.version {
+		return 0, persist.ErrConflict
+	}
+	b.saves++
+	b.payload = payload
+	b.version++
+	return b.version, nil
+}
+
+func (b *countingSaveBackend) Close() error     { return nil }
+func (b *countingSaveBackend) Describe() string { return "counting test backend" }
+
+func (b *countingSaveBackend) saveCount() int {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.saves
+}
+
+func (b *countingSaveBackend) lastPayload() []byte {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.payload
+}
 
 func TestOpenMACRegistryEmptyPathIsUsable(t *testing.T) {
 	r, err := OpenMACRegistry("")
@@ -166,57 +228,38 @@ func TestSeenNormalizesMACCase(t *testing.T) {
 
 // TestPersistLockedRateLimitsWrites mirrors flags.Store's own test of the
 // same name/reasoning: a sustained stream of Seen() calls (the ingest hot
-// path, called on every event carrying a SrcMAC) must not hit disk once
-// per call.
+// path, called on every event carrying a SrcMAC) must not hit the
+// backend once per call. Issue #400: persistence is now write-behind, so
+// this counts backend Save calls through a fake persist.Backend rather
+// than racing a file write against a fixed sleep -- see
+// flags.TestPersistLockedRateLimitsWrites for the same rewrite and why.
 func TestMACRegistryPersistLockedRateLimitsWrites(t *testing.T) {
-	// A long window plus a rewound lastPersist, rather than a short
-	// window plus a sleep -- see the twin of this test in
-	// internal/flags for why. Short version: the work between the two
-	// Seen calls is a marshal, a write and a ReadFile, which on a loaded
-	// CI runner takes longer than 80ms, so the second write is
-	// legitimate and the test fails claiming the debounce is broken.
-	orig := macRegistryPersistMinInterval
-	macRegistryPersistMinInterval = 10 * time.Second
-	defer func() { macRegistryPersistMinInterval = orig }()
-
-	path := filepath.Join(t.TempDir(), "mac-registry.json")
-	r, err := OpenMACRegistry(path)
+	b := newCountingSaveBackend()
+	r, err := OpenMACRegistryWithBackend(b)
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	now := time.Now()
 	r.Seen("11:11:11:11:11:11", now)
-	firstWrite, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("expected the first Seen to write immediately (empty lastPersist), got: %v", err)
+	flushForTest(t, r) // the very first write attempts immediately; wait for it as a baseline
+	if got := b.saveCount(); got != 1 {
+		t.Fatalf("expected the first Seen to write immediately, got %d saves", got)
 	}
 
-	// Within the debounce window: must NOT reach disk yet.
+	// Within the debounce window: must coalesce into the next flush
+	// rather than producing its own attempt.
 	r.Seen("22:22:22:22:22:22", now)
-	stillFirst, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(stillFirst) != string(firstWrite) {
-		t.Errorf("expected the second Seen (within %v of the first) to be rate-limited, but the file changed", macRegistryPersistMinInterval)
-	}
-
-	// Past the window: the next call must flush the latest state.
-	// Rewound rather than waited out -- same code path, no wall clock.
-	r.mu.Lock()
-	r.lastPersist = r.lastPersist.Add(-2 * macRegistryPersistMinInterval)
-	r.mu.Unlock()
 	r.Seen("33:33:33:33:33:33", now)
-	final, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
+	flushForTest(t, r)
+	if got := b.saveCount(); got != 2 {
+		t.Errorf("expected 2 total saves after 3 Seens inside one debounce window (1 immediate + 1 coalesced flush), got %d", got)
 	}
 	if len(r.List()) != 3 {
 		t.Fatalf("in-memory state should always have all 3 regardless of persistence timing, got %d", len(r.List()))
 	}
-	if !strings.Contains(string(final), "33:33:33:33:33:33") {
-		t.Errorf("expected the post-window write to include all 3 entries, got:\n%s", final)
+	if payload := b.lastPayload(); !strings.Contains(string(payload), "33:33:33:33:33:33") {
+		t.Errorf("expected the flushed write to include all 3 entries, got:\n%s", payload)
 	}
 }
 
@@ -240,6 +283,8 @@ func TestMACRegistryPersistenceRoundTrip(t *testing.T) {
 	if !r1.Seen("aa:bb:cc:dd:ee:ff", now) {
 		t.Fatal("expected the first sighting to report true (new)")
 	}
+	// #400: write-behind -- flush before reopening, see flushForTest.
+	flushForTest(t, r1)
 
 	r2, err := OpenMACRegistry(path)
 	if err != nil {
@@ -248,6 +293,12 @@ func TestMACRegistryPersistenceRoundTrip(t *testing.T) {
 	if r2.Seen("aa:bb:cc:dd:ee:ff", now.Add(time.Hour)) {
 		t.Error("expected a MAC persisted before restart to still be recognized as already known after reopening")
 	}
+	// Seen() persists unconditionally, even on an already-known MAC (it
+	// still bumps LastSeen), so r2 now has its own pending write-behind
+	// write in flight -- flush it before the test returns and t.TempDir()
+	// removes the directory out from under it, or the two can race
+	// ("directory not empty" from a write landing mid-RemoveAll).
+	flushForTest(t, r2)
 
 	list := r2.List()
 	if len(list) != 1 {
