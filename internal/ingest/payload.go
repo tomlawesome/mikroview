@@ -17,6 +17,7 @@ import (
 	"fmt"
 	"math"
 	"strconv"
+	"strings"
 )
 
 // Kind identifies which RouterOS data source a payload's records came
@@ -151,11 +152,22 @@ type WireguardInterface struct {
 // 4b: "so traffic from it can read 'branch office'"). Only public keys
 // ever appear here -- confirmed against a real router that private keys
 // are absent from a read,test script's view entirely (step 4b).
+//
+// AllowedAddress is RouterOSList because a peer holds *several* allowed
+// addresses and RouterOS says so on the wire: /interface/wireguard/peers
+// print as-value yields allowed-address as an array, so :serialize
+// to=json emits a JSON array, and the string field this used to be
+// refused it -- with the docs' own reference pattern producing the
+// refused payload (issue #443, found on a real deployment: "json: cannot
+// unmarshal array into Go struct field WireguardPeer.allowedAddress of
+// type string"). Every CIDR is kept rather than the first, because
+// naming traffic by peer is the whole point of the field and a peer's
+// second subnet is not less named than its first.
 type WireguardPeer struct {
-	PublicKey       string `json:"publicKey"`
-	AllowedAddress  string `json:"allowedAddress"`
-	EndpointAddress string `json:"endpointAddress"`
-	Comment         string `json:"comment"`
+	PublicKey       string       `json:"publicKey"`
+	AllowedAddress  RouterOSList `json:"allowedAddress"`
+	EndpointAddress string       `json:"endpointAddress"`
+	Comment         string       `json:"comment"`
 }
 
 // RouterOSInt decodes an integer that RouterOS's :serialize to=json may
@@ -193,6 +205,64 @@ func (n *RouterOSInt) UnmarshalJSON(data []byte) error {
 // landmine RouterOSInt exists for. Always decodes to a plain string
 // value so a caller never needs to know which JSON shape it arrived as.
 type RouterOSPortSpec string
+
+// RouterOSList decodes a field RouterOS holds as a *set* of values: a
+// WireGuard peer's allowed addresses, a rule's connection-state match.
+// Such a field arrives as a JSON **array of strings** through
+// :serialize to=json, which is what issue #443 cost a live deployment a
+// refused push to establish -- the same shape-depends-on-content family
+// RouterOSInt and RouterOSPortSpec exist for, and the third member of
+// it this schema has met.
+//
+// A bare JSON string is accepted too, split on commas, for two real
+// callers: a script that joins the array by hand (the workaround #443
+// documented while the schema was still string-only), and RouterOS's own
+// joined rendering of a set ("established,related"). Either way a caller
+// reads a []string and never needs to know which shape it arrived as --
+// the same promise RouterOSPortSpec makes.
+//
+// Absent decodes to nil, which means "unset" -- never "matches nothing".
+// A nil list marshals back as [] rather than null, so a JSON consumer
+// (the rule-table endpoints) always sees an array.
+type RouterOSList []string
+
+func (l *RouterOSList) UnmarshalJSON(data []byte) error {
+	var items []string
+	if err := json.Unmarshal(data, &items); err == nil {
+		*l = items
+		return nil
+	}
+	var s string
+	if err := json.Unmarshal(data, &s); err != nil {
+		return fmt.Errorf("ingest: expected a list of strings or a comma-separated string: %w", err)
+	}
+	if strings.TrimSpace(s) == "" {
+		*l = nil
+		return nil
+	}
+	parts := strings.Split(s, ",")
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		p = strings.TrimSpace(p)
+		if p == "" {
+			continue
+		}
+		out = append(out, p)
+	}
+	*l = out
+	return nil
+}
+
+func (l RouterOSList) MarshalJSON() ([]byte, error) {
+	if l == nil {
+		return []byte("[]"), nil
+	}
+	return json.Marshal([]string(l))
+}
+
+// String renders the list the way RouterOS itself prints a set, for a
+// caller that wants one displayable value rather than the elements.
+func (l RouterOSList) String() string { return strings.Join(l, ",") }
 
 func (p *RouterOSPortSpec) UnmarshalJSON(data []byte) error {
 	var s string

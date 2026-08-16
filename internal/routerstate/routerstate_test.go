@@ -205,6 +205,31 @@ func TestHostNamePrecedence(t *testing.T) {
 	}
 }
 
+// TestHostNameUsesEveryAllowedAddressOfAPeer is the routerstate half of
+// issue #443: a WireGuard peer holds a *set* of allowed addresses, and
+// each one names the peer. Before the schema took the array shape only
+// one string could arrive at all, so "the second subnet is unnamed" was
+// not even reachable as a bug -- it is now, and this is what stops it.
+func TestHostNameUsesEveryAllowedAddressOfAPeer(t *testing.T) {
+	s := New()
+	apply(t, s, "router-1", `{"kind":"wireguard-peer","page":1,"pages":1,"records":[`+
+		`{"publicKey":"k1","allowedAddress":["192.0.2.0/24","198.51.100.0/24","203.0.113.7"],"endpointAddress":"","comment":"branch office"},`+
+		`{"publicKey":"k2","allowedAddress":["198.51.100.9/32"],"endpointAddress":"","comment":"branch NAS"}]}`)
+
+	cases := map[string]string{
+		"192.0.2.15":    "branch office", // first CIDR of the set
+		"198.51.100.20": "branch office", // second CIDR -- the one a single-string schema lost
+		"203.0.113.7":   "branch office", // bare address in the set, promoted to /32
+		"198.51.100.9":  "branch NAS",    // most-specific still wins across peers
+		"203.0.113.8":   "",              // outside every allowed address
+	}
+	for ip, want := range cases {
+		if got := s.HostName("router-1", ip); got != want {
+			t.Errorf("HostName(%q) = %q, want %q", ip, got, want)
+		}
+	}
+}
+
 // Every other read in routerstate.go goes through kindLocked(device,
 // kind) and TestDevicesAreIsolated already asserted that for the rule
 // tables. HostName was the one accessor that never got the same
