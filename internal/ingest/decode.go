@@ -309,7 +309,31 @@ func (r NATRule) validate() error {
 	if err := validateFieldText("chain", r.Chain); err != nil {
 		return err
 	}
-	return validateFieldText("action", r.Action)
+	if err := validateFieldText("action", r.Action); err != nil {
+		return err
+	}
+	if err := validateFieldText("toAddresses", r.ToAddresses); err != nil {
+		return err
+	}
+	if err := validateFieldText("toPorts", string(r.ToPorts)); err != nil {
+		return err
+	}
+	if err := validateFieldText("dstPort", string(r.DstPort)); err != nil {
+		return err
+	}
+	if err := validateFieldText("protocol", r.Protocol); err != nil {
+		return err
+	}
+	if err := validateFieldText("inInterface", r.InInterface); err != nil {
+		return err
+	}
+	if err := validateFieldText("outInterface", r.OutInterface); err != nil {
+		return err
+	}
+	if err := validateFieldText("srcAddress", r.SrcAddress); err != nil {
+		return err
+	}
+	return validateFieldText("dstAddress", r.DstAddress)
 }
 
 func (e DNSStaticEntry) validate() error {

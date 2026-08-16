@@ -32,6 +32,9 @@ func FuzzDecodePayload(f *testing.F) {
 	f.Add(`{"kind":"filter-rule","page":1,"pages":1,"records":[{"ordinal":0,"comment":"","chain":"input","action":"accept","srcAddressList":"","logPrefix":"A|est|","connectionState":["established","related"],"inInterface":"ether1","outInterface":"!ether2"}]}`)
 	f.Add(`{"kind":"filter-rule","page":1,"pages":1,"records":[{"ordinal":0,"comment":"","chain":"input","action":"drop","srcAddressList":"","logPrefix":"","connectionState":"invalid","inInterface":null,"outInterface":null}]}`)
 	f.Add(`{"kind":"nat-rule","page":1,"pages":1,"records":[{"ordinal":0,"comment":"masquerade","chain":"srcnat","action":"masquerade"}]}`)
+	// The full #408/#445 NAT anatomy, with both port shapes -- a single
+	// port as a JSON number, a range as a string.
+	f.Add(`{"kind":"nat-rule","page":1,"pages":1,"records":[{"ordinal":0,"comment":"","chain":"dstnat","action":"dst-nat","toAddresses":"192.0.2.10","toPorts":8080.000000,"dstPort":"1000-2000","protocol":"tcp","inInterface":"ether1","outInterface":null,"srcAddress":null,"dstAddress":"198.51.100.4","disabled":false,"dynamic":true}]}`)
 	f.Add(`{"kind":"dns-static","page":1,"pages":1,"records":[{"name":"nas.lan","address":"192.168.1.20"}]}`)
 	f.Add(`{"kind":"dhcp-lease","page":1,"pages":1,"records":[{"hostname":"laptop","mac":"aa:bb:cc:dd:ee:ff","address":"192.168.1.50"}]}`)
 	f.Add(`{"kind":"arp","page":1,"pages":1,"records":[{"address":"192.168.1.50","mac":"aa:bb:cc:dd:ee:ff"}]}`)

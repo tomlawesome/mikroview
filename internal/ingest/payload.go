@@ -141,11 +141,40 @@ type FilterRule struct {
 // (issue #186 step 4c: "NAT uses the second shape only") -- a log line
 // gives a translation result, never which rule performed it, so there is
 // no LogPrefix/event-resolution field here the way FilterRule has one.
+// That stays true with the fields below: none of them makes a rule
+// answerable for a translation, they only describe what a rule matches
+// and what it translates to.
+//
+// Everything from ToAddresses down was added for issue #408 as #445's
+// stated prerequisite. #445 wants to partition the NAT table into rules
+// *consistent with* an event (chain, protocol, ports and interfaces that
+// do not exclude it) and dim the rest -- a partition the old
+// ordinal/chain/action/comment shape gives nothing to compute, since
+// every rule is equally consistent with everything. Nothing reads them
+// yet; the popup that does is #445.
+//
+// Shapes follow FilterRule's already-verified ones rather than fresh
+// assumptions, since these are the same RouterOS properties on a sibling
+// menu: ports through RouterOSPortSpec (a single port serialises as a
+// JSON number, a list or range as a string), addresses and interface
+// names as plain strings (dots and names cannot become numbers), and
+// Disabled/Dynamic as plain bools where an absent key means false the
+// way FilterRule.Log already documents.
 type NATRule struct {
-	Ordinal RouterOSInt `json:"ordinal"`
-	Comment string      `json:"comment"`
-	Chain   string      `json:"chain"`
-	Action  string      `json:"action"`
+	Ordinal      RouterOSInt      `json:"ordinal"`
+	Comment      string           `json:"comment"`
+	Chain        string           `json:"chain"`
+	Action       string           `json:"action"`
+	ToAddresses  string           `json:"toAddresses"`
+	ToPorts      RouterOSPortSpec `json:"toPorts"`
+	DstPort      RouterOSPortSpec `json:"dstPort"`
+	Protocol     string           `json:"protocol"`
+	InInterface  string           `json:"inInterface"`
+	OutInterface string           `json:"outInterface"`
+	SrcAddress   string           `json:"srcAddress"`
+	DstAddress   string           `json:"dstAddress"`
+	Disabled     bool             `json:"disabled"`
+	Dynamic      bool             `json:"dynamic"`
 }
 
 // DNSStaticEntry mirrors one /ip/dns/static entry.

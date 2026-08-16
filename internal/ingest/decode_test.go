@@ -351,6 +351,50 @@ func TestFilterRuleWithoutNewFieldsStillDecodes(t *testing.T) {
 	}
 }
 
+// TestNATRuleRoundTripsFullAnatomy pins the fields #445 needs to say a
+// rule is "consistent with this event" instead of just listing the
+// table. Both port shapes appear (a single dst-port as a JSON number, a
+// to-ports range as a string), and the last record is the pre-#408 shape
+// -- an older push script omitting all of it, which must still land
+// unset rather than be refused.
+func TestNATRuleRoundTripsFullAnatomy(t *testing.T) {
+	p := decodeOK(t, `{"kind":"nat-rule","page":1,"pages":1,"records":[
+	  {"ordinal":0,"comment":"web to the DMZ host","chain":"dstnat","action":"dst-nat","toAddresses":"192.0.2.10","toPorts":8080.000000,"dstPort":443.000000,"protocol":"tcp","inInterface":"ether1","outInterface":"","srcAddress":"","dstAddress":"198.51.100.4","disabled":false,"dynamic":false},
+	  {"ordinal":1,"comment":"","chain":"srcnat","action":"masquerade","toAddresses":"","toPorts":"","dstPort":"1000-2000","protocol":"udp","inInterface":"","outInterface":"ether1","srcAddress":"192.0.2.0/24","dstAddress":"","disabled":true,"dynamic":true},
+	  {"ordinal":2,"comment":"pre-#408 script","chain":"srcnat","action":"masquerade"}
+	]}`)
+	if len(p.NATRules) != 3 {
+		t.Fatalf("decoded %d NAT rules, want 3", len(p.NATRules))
+	}
+
+	first := p.NATRules[0]
+	if first.ToAddresses != "192.0.2.10" || string(first.ToPorts) != "8080" || string(first.DstPort) != "443" {
+		t.Errorf("rule 0 translation/match = %+v, want to-addresses 192.0.2.10, to-ports 8080, dst-port 443", first)
+	}
+	if first.Protocol != "tcp" || first.InInterface != "ether1" || first.DstAddress != "198.51.100.4" {
+		t.Errorf("rule 0 = %+v, want tcp in on ether1 to 198.51.100.4", first)
+	}
+	if first.Disabled || first.Dynamic {
+		t.Errorf("rule 0 disabled/dynamic = %v/%v, want both false", first.Disabled, first.Dynamic)
+	}
+
+	second := p.NATRules[1]
+	if string(second.DstPort) != "1000-2000" || second.OutInterface != "ether1" || second.SrcAddress != "192.0.2.0/24" {
+		t.Errorf("rule 1 = %+v, want the range/out-interface/src-address shape", second)
+	}
+	if !second.Disabled || !second.Dynamic {
+		t.Errorf("rule 1 disabled/dynamic = %v/%v, want both true -- a disabled or dynamic rule is not the same claim as an active one", second.Disabled, second.Dynamic)
+	}
+
+	third := p.NATRules[2]
+	if third.Comment != "pre-#408 script" || third.Chain != "srcnat" || third.Action != "masquerade" {
+		t.Errorf("rule 2 = %+v, want the old four-field record intact", third)
+	}
+	if third.ToAddresses != "" || third.ToPorts != "" || third.Protocol != "" || third.Disabled || third.Dynamic {
+		t.Errorf("rule 2 = %+v, want every unsent field unset", third)
+	}
+}
+
 // TestWireguardPeerAcceptsRouterOSArrayShape is issue #443's acceptance
 // case, in the exact shape that failed on a live deployment: a peers
 // table pushed by the docs' own reference pattern -- :serialize to=json
