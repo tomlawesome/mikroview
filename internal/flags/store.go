@@ -465,6 +465,27 @@ func (s *Store) AddProvisional(t Type, target, detail string, confidence int, ev
 	return isNew
 }
 
+// AddEmission is AddProvisional with confidence as an optional value
+// rather than a required one: nil means "this detector makes no
+// statistical judgement to score," which is what Flag.Confidence's own
+// nil already meant and what Add (above) has always produced.
+//
+// It exists because internal/engine.FlagsSink needs both halves at once.
+// Every definition ported onto the chassis before #405's final block
+// scored its emissions, so the sink could pass a plain int and default a
+// nil to 0; unexpected_mail_sender is the first that genuinely does not
+// score -- it is deterministic, like new_device and stale_rule -- and
+// defaulting its nil to 0 would silently turn "not scored" into "scored
+// zero confidence," which an analyst reads as a judgement rather than as
+// its absence. That is the gap FlagsSink's own doc comment said was
+// worth widening this API to close rather than papering over; this is
+// the widening.
+func (s *Store) AddEmission(t Type, target, detail string, confidence *int, evidence Evidence, country string, provisional bool, now time.Time) bool {
+	isNew, f := s.add(t, target, detail, confidence, evidence, country, provisional, now)
+	s.maybeNotify(isNew, f)
+	return isNew
+}
+
 // maybeNotify fires onRaise for a newly-raised episode -- called after
 // add() has returned (its deferred unlock has already fired), so the
 // hook never runs while s.mu is held.

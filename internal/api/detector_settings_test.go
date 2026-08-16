@@ -11,7 +11,7 @@ import (
 	"time"
 
 	"github.com/tomlawesome/mikroview/internal/auth"
-	"github.com/tomlawesome/mikroview/internal/detect"
+	"github.com/tomlawesome/mikroview/internal/engine"
 )
 
 // putJSON mirrors postJSON but for PUT, sending the same CSRF header the
@@ -55,8 +55,8 @@ func TestHandleDetectorSettingsListDefaultsAllEnabled(t *testing.T) {
 	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
 		t.Fatal(err)
 	}
-	if len(body.Detectors) != len(detect.AllDetectorNames) {
-		t.Fatalf("expected %d detectors, got %d", len(detect.AllDetectorNames), len(body.Detectors))
+	if want := len(engine.LegacyDetectorIDs()); len(body.Detectors) != want {
+		t.Fatalf("expected %d detectors, got %d", want, len(body.Detectors))
 	}
 	for _, d := range body.Detectors {
 		if !d.Enabled {
@@ -72,9 +72,9 @@ func TestHandleDetectorSettingsUpdateThenListReflectsIt(t *testing.T) {
 
 	req := updateDetectorSettingsRequest{
 		Enabled: false,
-		Scope: detect.Scope{
+		Scope: engine.Scope{
 			Hosts:     []string{"203.0.113.0/24"},
-			HostsMode: detect.ListModeDeny,
+			HostsMode: engine.ListModeDeny,
 		},
 	}
 	resp := putJSON(t, &http.Client{}, ts.URL+"/api/detectors/rule_spike", req)
@@ -83,12 +83,15 @@ func TestHandleDetectorSettingsUpdateThenListReflectsIt(t *testing.T) {
 		t.Fatalf("expected 200, got %d", resp.StatusCode)
 	}
 
-	got := s.DetectorSettings.Get(detect.DetectorRuleSpike)
-	if got.Enabled {
+	stored, ok := s.Definitions.Get("rule_spike")
+	if !ok {
+		t.Fatal("expected the rule_spike definition to exist")
+	}
+	if stored.Definition.Enabled {
 		t.Error("expected rule_spike to now be disabled")
 	}
-	if len(got.Scope.Hosts) != 1 || got.Scope.Hosts[0] != "203.0.113.0/24" {
-		t.Errorf("expected the host scope to be stored, got %+v", got.Scope)
+	if got := stored.Definition.Scope; len(got.Hosts) != 1 || got.Hosts[0] != "203.0.113.0/24" {
+		t.Errorf("expected the host scope to be stored, got %+v", got)
 	}
 }
 

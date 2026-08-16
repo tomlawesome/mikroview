@@ -12,19 +12,21 @@ import (
 
 // TestNetClassDoesNotImportSuspicionMachinery is the structural guard the
 // #114 findings asked for, in the shape of authzMatrix: the build fails
-// if this package ever imports internal/flags or internal/detect.
+// if this package ever imports internal/flags or internal/engine.
 //
 // The whole design of #114 is that a network-class match is display
 // context, not a suspicion signal -- a datacenter label alone covers
 // >10% of routable IPv4. Any path from classification to a confidence
 // score has to go through a caller that decides, deliberately and
-// direction-aware, to allow it. Wiring flags/detect straight into this
-// package would erase that boundary quietly, so the boundary is a
-// compiled-in test rather than a comment someone can drift past.
+// direction-aware, to allow it. Wiring flags or the evaluation engine
+// straight into this package would erase that boundary quietly, so the
+// boundary is a compiled-in test rather than a comment someone can drift
+// past. (internal/detect was the engine when this was written; issue
+// #405 deleted it, and this guards what replaced it.)
 func TestNetClassDoesNotImportSuspicionMachinery(t *testing.T) {
 	forbidden := []string{
 		"github.com/tomlawesome/mikroview/internal/flags",
-		"github.com/tomlawesome/mikroview/internal/detect",
+		"github.com/tomlawesome/mikroview/internal/engine",
 	}
 
 	fset := token.NewFileSet()

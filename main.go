@@ -28,7 +28,6 @@ import (
 	"github.com/tomlawesome/mikroview/internal/auth"
 	"github.com/tomlawesome/mikroview/internal/blocklist"
 	"github.com/tomlawesome/mikroview/internal/config"
-	"github.com/tomlawesome/mikroview/internal/detect"
 	"github.com/tomlawesome/mikroview/internal/device"
 	"github.com/tomlawesome/mikroview/internal/engine"
 	"github.com/tomlawesome/mikroview/internal/entities"
@@ -64,13 +63,10 @@ import (
 // ever waits longer than its own interval for the driver to come round.
 const engineTickInterval = 10 * time.Second
 
-// deviceSilenceCheckInterval is how often DeviceSilenceDetector re-checks
-// every configured device's LastSeen against Config.DeviceStaleAfter.
-// Coarser than globalSpikeCheckInterval on purpose: DeviceStaleAfter's
-// own default (15m) means a device going quiet is detected within this
-// interval of crossing the threshold, which doesn't need EMA-baseline-
-// tracking-grade freshness to be useful to an operator.
-const deviceSilenceCheckInterval = 1 * time.Minute
+// deviceSilenceCheckInterval moved onto the definition that owns it
+// (issue #405, internal/engine/shipped_device_silence.go): a cadence is
+// part of what a definition means, so it is declared by the definition
+// through Ticked.TickInterval rather than chosen by whatever drives it.
 
 // suggestSyncInterval is how often internal/suggest re-scans routerState
 // for new/changed candidates (#243 slice 5). Coarser than either check
@@ -674,10 +670,10 @@ func main() {
 	// unification -- see docs/decisions/evaluation-engine.md): one ingest
 	// queue, one backpressure policy, one lifecycle, one panic boundary.
 	// It holds no definitions yet (that starts with #401), so wiring it
-	// in alongside detector/watchlistEval is a no-behaviour-change
-	// change -- it evaluates nothing, it just now also receives every
-	// stored event. detect.Detector and watchlist.Evaluator collapse
-	// onto it in later issues; this one only adds it.
+	// in alongside watchlistEval is a no-behaviour-change change -- it
+	// evaluates nothing, it just now also receives every stored event.
+	// internal/detect collapsed onto it and was deleted (issue #405);
+	// watchlist.Evaluator follows in #406.
 	eng := engine.New()
 
 	// engineState (#399/#400) persists every definition's per-key
@@ -699,15 +695,17 @@ func main() {
 	// definitions (#404) is the one document holding every definition --
 	// shipped detectors, watchlist expectations, and eventually
 	// builder-authored custom ones. On a not-yet-existing document, it is
-	// seeded once from internal/detect's settings store and
+	// seeded once from the pre-#405 detector-settings document and
 	// internal/watchlist's entries store (engine.MigrateDefinitions),
-	// fail-closed and non-destructive: neither old store's document is
-	// touched, and both keep working exactly as before until #405/#406
-	// port their evaluation logic onto this chassis and retire them. A
-	// second backend handle for the detector-settings store is opened
-	// here purely to read its document for migration -- watchlistBackend
-	// above is reused as-is; detect.OpenSettingsStoreWithBackend below
-	// opens its own handle for live use the same way it always has.
+	// fail-closed and non-destructive: neither source document is
+	// touched.
+	//
+	// The detector-settings document is now a *source only*. The store
+	// that owned it (internal/detect.SettingsStore) is deleted (issue
+	// #405), and nothing writes to it any more: an operator's detector
+	// toggle lands on the definition itself. Its bytes are still read on
+	// every boot, both here and as a seed layer below, so a deployment
+	// upgrading across this change keeps whatever it had switched off.
 	// persistence.backendFor is safe to call more than once for the same
 	// store name (its one-time Postgres adoption step is itself
 	// idempotent -- see storage.backendFor's own doc comment).
@@ -742,7 +740,7 @@ func main() {
 	definitions, err := engine.OpenDefinitionsStoreWithBackend(definitionsBackend)
 	mustOpenStore(definitionsLog, err)
 
-	detectCfg := detect.Config{
+	detectorDefaults := engine.DetectorDefaults{
 		PortScanThreshold:        cfg.Flags.PortScanThreshold,
 		PortScanWindow:           cfg.Flags.PortScanWindow,
 		ActivitySpikeThreshold:   cfg.Flags.ActivitySpikeThreshold,
@@ -791,38 +789,54 @@ func main() {
 		VPNInterfaces:           cfg.Flags.VPNInterfaces,
 		VPNConfidenceMultiplier: cfg.Flags.VPNConfidenceMultiplier,
 	}
-	seed := detect.DefaultSettingsMap()
+	// detectorSeed is the enabled/scope a shipped definition is seeded
+	// with when it does not yet exist in the definitions store: the
+	// catalogue's own defaults (everything on, unscoped), then
+	// config.yaml's flags.detectors entries, then whatever the pre-#405
+	// detector-settings document holds -- the same three-layer order
+	// internal/detect's settings store applied before it was deleted, so
+	// a detector switched off in either place stays off.
+	//
+	// The old document is read as a seed source only. Nothing writes to
+	// it any more: an operator's toggle now lands on the definition
+	// itself (see internal/api's detector handlers), which is what
+	// removes the two-sources-of-truth problem rather than merely moving
+	// it.
+	detectorsLog := logging.New("detectors")
+	detectorSeed := engine.DefaultDetectorSettings()
 	for name, ds := range cfg.Flags.Detectors {
-		seed[detect.DetectorName(name)] = detect.Settings{
+		detectorSeed[name] = engine.DetectorSettings{
 			Enabled: ds.Enabled,
-			Scope: detect.Scope{
+			Scope: engine.Scope{
 				Hosts:          ds.Scope.Hosts,
-				HostsMode:      detect.ListMode(ds.Scope.HostsMode),
+				HostsMode:      engine.ListMode(ds.Scope.HostsMode),
 				Ports:          ds.Scope.Ports,
-				PortsMode:      detect.ListMode(ds.Scope.PortsMode),
+				PortsMode:      engine.ListMode(ds.Scope.PortsMode),
 				Classification: store.Scope(ds.Scope.Classification),
 				Rules:          ds.Scope.Rules,
-				RulesMode:      detect.ListMode(ds.Scope.RulesMode),
+				RulesMode:      engine.ListMode(ds.Scope.RulesMode),
 			},
 		}
 	}
-	detectorsLog := logging.New("detectors")
-	detectorBackend, err := persistence.backendFor(bootCtx, "detector_settings", cfg.Flags.DetectorSettingsStorePath)
-	if err != nil {
-		detectorsLog.Warn(err.Error())
-	}
-	detectorSettings, err := detect.OpenSettingsStoreWithBackend(detectorBackend, seed)
+	persisted, err := engine.ReadDetectorSettingsDocument(bootCtx, migrationDetectorBackend)
 	mustOpenStore(detectorsLog, err)
+	for name, ds := range persisted {
+		detectorSeed[name] = ds
+	}
+
 	// Every shipped definition this binary evaluates has to actually
 	// exist, whatever the persistence situation -- see
 	// engine.SeedShippedDefinitions' own doc comment for why this runs
 	// every boot and is not the same thing as MigrateDefinitions running
 	// once. Anything already in the store (a migration's output, an
 	// operator's edits) is left untouched; only genuinely missing
-	// definitions are added, using this deployment's live detector
-	// settings for enabled/scope so a detector switched off before the
-	// port stays off after it.
-	if err := engine.SeedShippedDefinitions(definitions, detectorSettings.List(), detectCfg); err != nil {
+	// definitions are added.
+	shippedDefaults := engine.ShippedDefaults{
+		DetectorDefaults:       detectorDefaults,
+		StaleRuleMaxAge:        time.Duration(cfg.Flags.StaleRuleDays) * 24 * time.Hour,
+		StaleRuleCheckInterval: cfg.Flags.StaleRuleCheckInterval,
+	}
+	if err := engine.SeedShippedDefinitions(definitions, detectorSeed, shippedDefaults); err != nil {
 		definitionsLog.Warn(err.Error())
 	}
 	// bl (issue #113 Part B): always constructed, even with zero enabled
@@ -840,27 +854,14 @@ func main() {
 	// popover -- Tor exit / VPN / datacenter / privacy relay. The
 	// netclass package itself stays display-only by design (see its own
 	// doc comment) and is attached to the API server for that. It is
-	// also attached to the detector chain below, but narrowly: only
-	// observeNetClass (internal/detect/netclass.go) ever reads it, and
-	// only to reinforce confidence on an already-active flag for the two
-	// high-precision categories (Tor, VPN), direction-gated to inbound
-	// traffic only -- never to raise a flag on its own. Nil-safe when no
-	// sources are enabled, same as bl.
+	// also handed to the engine's netclass definition below, but narrowly:
+	// only that definition ever reads it, and only to reinforce confidence
+	// on an already-active flag for the two high-precision categories
+	// (Tor, VPN), direction-gated to inbound traffic only -- never to
+	// raise a flag on its own. Nil-safe when no sources are enabled, same
+	// as bl.
 	netclassLog := logging.New("netclass")
 	nc := netclass.New(cfg.NetClass.Sources, netclassLog)
-
-	// All four optional inputs are attached in one chain: entities backs
-	// the trusted-mail-sender allowlist (#108), knownBad backs the local
-	// blocklist match (#113 Part B), netclass backs the direction-aware
-	// VPN/Tor confidence reinforcement (#114). Each is independently a
-	// valid no-op when unconfigured.
-	detector := detect.NewWithSettings(detectCfg, fs, detectorSettings).
-		WithReputation(rep).
-		WithEntities(entityStore).
-		WithKnownBadIPs(bl).
-		WithNetClass(nc)
-	deviceSilence := detect.NewDeviceSilenceDetectorWithSettings(detectCfg, fs, detectorSettings, devices)
-	staleRule := detect.NewStaleRuleDetector(ru, fs, time.Duration(cfg.Flags.StaleRuleDays)*24*time.Hour)
 
 	// Shipped declarative definitions (issue #405): built from whatever
 	// the definitions store currently holds for a shipped, available,
@@ -870,8 +871,8 @@ func main() {
 	// distributed_brute_force are ported this way so far
 	// (docs/decisions/evaluation-engine.md section 2,
 	// internal/engine/shipped_declarative.go's shippedDeclarativeBuilders);
-	// every other shipped detector still runs through internal/detect
-	// below until its own #405 port lands. An empty/not-yet-migrated
+	// every one of them is a shipped definition now (issue #405 finished
+	// the port and deleted internal/detect). An empty/not-yet-migrated
 	// definitions store (definitions.List() returns nothing) is a valid,
 	// common state -- see MigrateDefinitions's own doc comment -- and
 	// simply means this DeclarativeSet starts out evaluating nothing,
@@ -884,10 +885,13 @@ func main() {
 	// maybeCheckReputation/maybeCheckGroupReputation split. A definition
 	// with no address to look up (a rule-label or "global" target) is
 	// simply never a lookup candidate.
-	// 8 matches internal/detect.reputationLookupConcurrency
-	// (unexported; kept in sync by hand until that pool is deleted
-	// alongside the rest of internal/detect's engine machinery once every
-	// detector has moved).
+	//
+	// The lookup policy (pool size, timeout, group sampling) comes from
+	// the shipped reputation definition's own params rather than from a
+	// literal here -- see engine.ReputationPolicyFrom. This file used to
+	// carry a hand-synced copy of internal/detect's unexported
+	// concurrency constant; the definition is what replaces it.
+	reputationPolicy := engine.ReputationPolicyFrom(definitions)
 	var shippedDeclDefs []*engine.DeclarativeDefinition
 	for _, sd := range definitions.List() {
 		if !sd.Available || sd.Definition.Kind != engine.KindDeclarative || sd.Definition.Provenance.Origin != engine.ProvenanceShipped {
@@ -898,13 +902,12 @@ func main() {
 			// Not every shipped-provenance declarative definition
 			// necessarily has a registered builder yet (a stale/future
 			// entry outside this binary's current shipped catalogue) --
-			// logged and skipped, not fatal: the rest of the shipped set,
-			// and every programmatic/legacy definition still running
-			// through internal/detect below, keeps working.
+			// logged and skipped, not fatal: the rest of the shipped set
+			// keeps working.
 			detectorsLog.Warn(fmt.Sprintf("skipping shipped declarative definition %q: %v", sd.Definition.ID, err))
 			continue
 		}
-		dd.OnRoutedEmission = engine.ShippedDeclarativeSink(sd.Definition, fs, rep, 8)
+		dd.OnRoutedEmission = engine.ShippedDeclarativeSink(sd.Definition, fs, rep, reputationPolicy)
 		shippedDeclDefs = append(shippedDeclDefs, dd)
 	}
 	eng.Register(engine.NewDeclarativeSet("shipped-declarative", shippedDeclDefs))
@@ -932,7 +935,7 @@ func main() {
 		KnownBad: blocklistLookup{bl: bl},
 		NetClass: netClassLookup{nc: nc},
 		Devices:  deviceLister{reg: devices},
-		Rules:    staleRuleLister{ru: ru, maxAge: time.Duration(cfg.Flags.StaleRuleDays) * 24 * time.Hour},
+		Rules:    staleRuleLister{ru: ru},
 		Rate:     eventRateSource{st: st},
 		State:    engineState,
 	}
@@ -942,19 +945,19 @@ func main() {
 		}
 		pd, err := engine.BuildShippedProgrammaticDefinition(sd.Definition, deps)
 		if err != nil {
-			// Expected, and not a warning, for every detector #405 has
-			// not ported yet: it has a shipped definition (the migration
-			// created one for all twelve) but no Go logic registered on
-			// this chassis, because internal/detect below is still the
-			// thing evaluating it. Logged at info so the shrinking list
-			// is visible during the port without reading as a fault.
+			// Not a warning: a definitions document written by a newer
+			// or differently-built binary can name a programmatic
+			// definition this one has no Go logic for. Logged at info,
+			// skipped, and the rest of the catalogue keeps evaluating --
+			// the same treatment an unrecognized declarative definition
+			// gets above.
 			detectorsLog.Info(fmt.Sprintf("shipped programmatic definition %q is not evaluated by the engine: %v", sd.Definition.ID, err))
 			continue
 		}
 		if sink, ok := pd.(interface {
 			SetSink(func(engine.RoutedEmission))
 		}); ok {
-			sink.SetSink(engine.ShippedDeclarativeSink(sd.Definition, fs, rep, 8))
+			sink.SetSink(engine.ShippedDeclarativeSink(sd.Definition, fs, rep, reputationPolicy))
 		}
 		eng.Register(pd)
 	}
@@ -1024,8 +1027,7 @@ func main() {
 	watchlistEval.WithAddressLists(routerState)
 	names := naming.Resolver{Rules: cfg.RuleNames, Hosts: cfg.HostNames, Entities: entityStore, RouterHosts: routerState}
 
-	go ingest(ctx, raw, st, devices, macRegistry, fs, h, geo, detector, ru, names, watchlistEval, eng, setupStore)
-	go detector.Run(ctx)
+	go ingest(ctx, raw, st, devices, macRegistry, fs, h, geo, ru, names, watchlistEval, eng, setupStore)
 	go watchlistEval.Run(ctx)
 	go eng.Run(ctx)
 	// One driver for every Ticked definition (issue #405). Deliberately
@@ -1056,43 +1058,16 @@ func main() {
 	// shipped programmatic definition now, driven by Engine.Tick at its
 	// own declared TickInterval alongside every other Ticked definition.
 
-	go func() {
-		silenceLog := logging.New("device-silence")
-		ticker := time.NewTicker(deviceSilenceCheckInterval)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-ticker.C:
-				func() {
-					defer logging.Recover(silenceLog)
-					deviceSilence.Check(time.Now())
-				}()
-			}
-		}
-	}()
+	// The device-silence ticker moved onto the engine with the
+	// global-spike one (issue #405): device_silence is a shipped
+	// programmatic definition now, driven by Engine.Tick at its own
+	// declared TickInterval.
 
-	// Stale-rule sweep (issue #102): coarse by design (see
-	// StaleRuleCheckInterval's doc comment) -- staleness is judged in
-	// days, so there's no benefit to checking anywhere near as often as
-	// the global-spike ticker above.
-	go func() {
-		staleRuleLog := logging.New("stale-rule")
-		ticker := time.NewTicker(cfg.Flags.StaleRuleCheckInterval)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-ticker.C:
-				func() {
-					defer logging.Recover(staleRuleLog)
-					staleRule.Check(time.Now())
-				}()
-			}
-		}
-	}()
+	// The stale-rule sweep moved onto the engine with the global-spike and
+	// device-silence tickers (issue #102/#405): stale_rule is a shipped
+	// programmatic definition now, and its cadence -- which was always
+	// operator-set, config.Flags.StaleRuleCheckInterval -- is a param it
+	// declares through Ticked.TickInterval.
 
 	// Local blocklist refresh (issue #113 Part B): a fixed daily cycle
 	// (blocklist.RefreshInterval, not configurable -- see that const's
@@ -1166,7 +1141,7 @@ func main() {
 	// never take down local login, so every failure path here just
 	// leaves srv.OIDC nil (SSO unavailable, 404 on its routes) rather
 	// than exiting -- the same degrade-not-crash contract GeoIP/Flags/
-	// Auth/DetectorSettings already have above for their own optional
+	// Auth/Definitions already have above for their own optional
 	// persistence/integrations.
 	var oidcClient *oidc.Client
 	var oidcState *oidc.StateCodec
@@ -1266,7 +1241,7 @@ func main() {
 		Reputation:        rep,
 		NetClass:          nc,
 		Flags:             fs,
-		DetectorSettings:  detectorSettings,
+		Definitions:       definitions,
 		Entities:          entityStore,
 		Rules:             ru,
 		Audit:             auditStore,
@@ -1518,7 +1493,7 @@ func main() {
 	// MinInterval-debounced write could be (issue #400). Best-effort:
 	// each store already logs its own save failures, so a Close error
 	// here is just the shutdown-budget case, worth one line, not fatal.
-	closeStoreOnShutdown(fs, macRegistry, ru, detectorSettings, watchlistStore, engineState, definitions)
+	closeStoreOnShutdown(fs, macRegistry, ru, watchlistStore, engineState, definitions)
 }
 
 // closeStoreOnShutdown flushes every write-behind-backed store passed to
@@ -2158,17 +2133,17 @@ func readPasswordTwice() (string, error) {
 // Registry never need to arbitrate concurrent writers. Detection is
 // handed off via detector.Enqueue rather than run inline here -- a slow
 // or backed-up detection pass must never delay store insertion or
-// WebSocket broadcast (see detect.Detector.Enqueue/Run, and the
+// WebSocket broadcast (see engine.Engine.Enqueue/Run, and the
 // dedicated detection-worker goroutine main() starts alongside this
 // one).
-func ingest(ctx context.Context, raw <-chan syslog.RawMessage, st *store.Store, devices *device.Registry, macRegistry *device.MACRegistry, fs *flags.Store, h *hub.Hub, geo *geoip.Lookup, detector *detect.Detector, ru *rules.Store, names naming.Resolver, watchlistEval *watchlist.Evaluator, eng *engine.Engine, setupStore *setup.Store) {
+func ingest(ctx context.Context, raw <-chan syslog.RawMessage, st *store.Store, devices *device.Registry, macRegistry *device.MACRegistry, fs *flags.Store, h *hub.Hub, geo *geoip.Lookup, ru *rules.Store, names naming.Resolver, watchlistEval *watchlist.Evaluator, eng *engine.Engine, setupStore *setup.Store) {
 	ingestLog := logging.New("ingest")
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case rm := <-raw:
-			ingestOneRecovered(ingestLog, rm, st, devices, macRegistry, fs, h, geo, detector, ru, names, watchlistEval, eng, setupStore)
+			ingestOneRecovered(ingestLog, rm, st, devices, macRegistry, fs, h, geo, ru, names, watchlistEval, eng, setupStore)
 		}
 	}
 }
@@ -2179,7 +2154,7 @@ func ingest(ctx context.Context, raw <-chan syslog.RawMessage, st *store.Store, 
 // still end the entire ingest goroutine for good on the first bad
 // message (silently stopping all future event processing) rather than
 // just dropping that one message. See logging.Recover's doc comment.
-func ingestOneRecovered(logger *slog.Logger, rm syslog.RawMessage, st *store.Store, devices *device.Registry, macRegistry *device.MACRegistry, fs *flags.Store, h *hub.Hub, geo *geoip.Lookup, detector *detect.Detector, ru *rules.Store, names naming.Resolver, watchlistEval *watchlist.Evaluator, eng *engine.Engine, setupStore *setup.Store) {
+func ingestOneRecovered(logger *slog.Logger, rm syslog.RawMessage, st *store.Store, devices *device.Registry, macRegistry *device.MACRegistry, fs *flags.Store, h *hub.Hub, geo *geoip.Lookup, ru *rules.Store, names naming.Resolver, watchlistEval *watchlist.Evaluator, eng *engine.Engine, setupStore *setup.Store) {
 	defer logging.Recover(logger)
 
 	env := syslog.ParseEnvelope(rm.Data, rm.RecvTime)
@@ -2202,7 +2177,7 @@ func ingestOneRecovered(logger *slog.Logger, rm syslog.RawMessage, st *store.Sto
 
 	// New-device/new-MAC detection (issue #103 phase 1): a deterministic,
 	// once-per-MAC check, so it's raised directly here rather than
-	// through detect.Detector's async worker like every other flag type
+	// through the engine's async worker like every other flag type
 	// -- there's no rolling-window state to maintain, just a "seen
 	// before" lookup against macRegistry's persisted history. Skips
 	// events with no SrcMAC (MACRegistry.Seen already no-ops for those,
@@ -2261,12 +2236,12 @@ func ingestOneRecovered(logger *slog.Logger, rm syslog.RawMessage, st *store.Sto
 
 	stored := st.Insert(e)
 	h.Broadcast(stored)
-	detector.Enqueue(stored)
 	watchlistEval.Enqueue(stored)
-	// eng holds no definitions yet (#398 -- see New's call site above),
-	// so this evaluates nothing today; fanning every stored event to it
-	// now is what makes the later collapse of detector/watchlistEval
-	// onto it (#399 onward) a swap rather than a rewire.
+	// Every detection definition evaluates off this one hand-off now
+	// (issue #405): internal/detect's own queue, worker and drop-log gate
+	// are gone, and the chassis's queue -- with one backpressure policy,
+	// one panic boundary and one fault report -- is what receives every
+	// stored event.
 	eng.Enqueue(stored)
 	// Keeps internal/rules' long-lived per-rule usage record in sync with
 	// internal/store/ring.go's own totalByRule bump inside Insert above --
@@ -2507,20 +2482,20 @@ func (a deviceLister) ListDevices() []engine.DeviceInfo {
 	return out
 }
 
+// staleRuleLister adapts a *rules.Store. It honours the maxAge the
+// definition passes rather than carrying its own copy: the staleness
+// threshold is stale_rule's own maxAge param now (issue #405), seeded
+// from cfg.Flags.StaleRuleDays, so this adapter's job is purely the
+// type conversion internal/rules and internal/engine need between them.
 type staleRuleLister struct {
 	ru *rules.Store
-	// maxAge is the operator-configured staleness threshold
-	// (cfg.Flags.StaleRuleDays). It stays here rather than becoming a
-	// definition param because internal/rules.Store.Stale takes it, and
-	// this adapter is the boundary that knows about that store.
-	maxAge time.Duration
 }
 
-func (a staleRuleLister) StaleRules(_ time.Duration, now time.Time) []engine.RuleUsage {
+func (a staleRuleLister) StaleRules(maxAge time.Duration, now time.Time) []engine.RuleUsage {
 	if a.ru == nil {
 		return nil
 	}
-	stale := a.ru.Stale(a.maxAge, now)
+	stale := a.ru.Stale(maxAge, now)
 	out := make([]engine.RuleUsage, 0, len(stale))
 	for _, u := range stale {
 		out = append(out, engine.RuleUsage{Rule: u.Rule, FirstSeen: u.FirstSeen, LastSeen: u.LastSeen, Count: int(u.Count)})

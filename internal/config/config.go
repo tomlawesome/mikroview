@@ -630,15 +630,18 @@ type Flags struct {
 	// point but hasn't fired again in a long time -- either dead weight
 	// or an unnecessary hole, worth a human's attention either way. See
 	// internal/rules (the long-lived per-rule usage record this reads
-	// from) and internal/detect.StaleRuleDetector (the sweep itself).
+	// from) and internal/engine's stale_rule definition (the sweep
+	// itself).
 	//
 	// RuleUsageStorePath persists that usage record so "hasn't fired in
 	// 30 days" survives a restart -- same optional-persistence contract
 	// as StorePath above (empty disables persistence, not the feature).
 	// StaleRuleDays is how long a rule must go quiet before it's
 	// considered stale. StaleRuleCheckInterval is how often the sweep
-	// re-checks (see main.go's staleRuleCheckInterval-style ticker) --
-	// coarse by design, since staleness is judged in days, not seconds.
+	// re-checks -- coarse by design, since staleness is judged in days,
+	// not seconds. Both seed the stale_rule definition's own maxAge and
+	// checkInterval params (issue #405), which is what the engine's tick
+	// driver honours; see internal/engine.ShippedDefaults.
 	RuleUsageStorePath     string        `yaml:"ruleUsageStorePath"`
 	StaleRuleDays          int           `yaml:"staleRuleDays"`
 	StaleRuleCheckInterval time.Duration `yaml:"staleRuleCheckInterval"`

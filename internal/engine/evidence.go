@@ -213,3 +213,41 @@ func (s *EvidenceSet) NAT() *NATInfo {
 	out := *s.nat
 	return &out
 }
+
+// sortedPortsCapped/sortedHostsCapped are
+// internal/detect.sortedPortsCapped/sortedHostsCapped (see
+// internal/detect/evidence.go) unchanged: a distinct-value set from a
+// DistinctRing query, rendered as the sorted, capped slice
+// flags.Evidence carries.
+//
+// A shipped *programmatic* definition needs these because it does not go
+// through EvidenceSet at all: EvidenceSet exists so a declarative
+// definition's Detail template can only ever name values that were
+// actually accumulated (see RenderEmission), and a programmatic
+// definition's Detail is genuinely computed rather than templated (see
+// programmaticBase.emit). Its evidence still has to be sorted and capped
+// the same way, so the two capping rules stay one pair of constants
+// rather than becoming two.
+func sortedPortsCapped(m map[int]struct{}) []int {
+	out := make([]int, 0, len(m))
+	for p := range m {
+		out = append(out, p)
+	}
+	sort.Ints(out)
+	if len(out) > maxEvidencePorts {
+		out = out[:maxEvidencePorts]
+	}
+	return out
+}
+
+func sortedHostsCapped(m map[string]struct{}) []string {
+	out := make([]string, 0, len(m))
+	for h := range m {
+		out = append(out, h)
+	}
+	sort.Strings(out)
+	if len(out) > maxEvidenceHosts {
+		out = out[:maxEvidenceHosts]
+	}
+	return out
+}

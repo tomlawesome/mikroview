@@ -99,7 +99,9 @@ func repWaitForConfidence(t *testing.T, fs *flags.Store, target string, want int
 func newReputationBackedCriticalPort(t *testing.T, fs *flags.Store, client ReputationLookup, concurrency, threshold int) *DeclarativeDefinition {
 	t.Helper()
 	dd := newShippedCriticalPortDefinition(t, fs, []int{22}, threshold, time.Minute, Scope{})
-	dd.OnRoutedEmission = ReputationSink(fs, client, concurrency)
+	policy := DefaultReputationPolicy()
+	policy.Concurrency = concurrency
+	dd.OnRoutedEmission = ReputationSink(fs, client, policy)
 	return dd
 }
 
@@ -217,7 +219,7 @@ func TestReputationSinkSkippedForInternalTarget(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BuildShippedDeclarativeDefinition(port_scan): %v", err)
 	}
-	dd.OnRoutedEmission = ReputationSink(fs, fake, 8)
+	dd.OnRoutedEmission = ReputationSink(fs, fake, DefaultReputationPolicy())
 
 	now := time.Now()
 	for port := 1; port <= 3; port++ {
@@ -272,7 +274,7 @@ func repFakeExternalIP(i int) string {
 func TestReputationSinkWithNilClientIsPlainFlagsSink(t *testing.T) {
 	fs := newTestFlagsStore(t)
 	dd := newShippedCriticalPortDefinition(t, fs, []int{22}, 3, time.Minute, Scope{})
-	dd.OnRoutedEmission = ReputationSink(fs, nil, 8)
+	dd.OnRoutedEmission = ReputationSink(fs, nil, DefaultReputationPolicy())
 
 	now := time.Now()
 	for i := 0; i < 3; i++ {
@@ -296,7 +298,7 @@ func TestReputationSinkLooksUpTheSourceNotTheCompositeTarget(t *testing.T) {
 	fake := newFakeReputation()
 	fake.setScore("198.51.100.4", 70)
 	dd := newShippedRepeatedDropsDefinition(t, fs, 3, 15*time.Minute, Scope{})
-	dd.OnRoutedEmission = ReputationSink(fs, fake, 8)
+	dd.OnRoutedEmission = ReputationSink(fs, fake, DefaultReputationPolicy())
 
 	now := time.Now()
 	for i := 0; i < 3; i++ {
@@ -319,7 +321,7 @@ func TestReputationSinkSkippedForAnInternalSourceBehindACompositeTarget(t *testi
 	fs := newTestFlagsStore(t)
 	fake := newFakeReputation()
 	dd := newShippedRepeatedDropsDefinition(t, fs, 3, 15*time.Minute, Scope{})
-	dd.OnRoutedEmission = ReputationSink(fs, fake, 8)
+	dd.OnRoutedEmission = ReputationSink(fs, fake, DefaultReputationPolicy())
 
 	now := time.Now()
 	for i := 0; i < 3; i++ {
@@ -346,7 +348,7 @@ func TestGroupReputationSinkAppliesTheDiscountedMeanFloor(t *testing.T) {
 	close(fake.release) // resolve immediately; ordering is not what this pins
 
 	dd := newShippedDistributedBruteForceDefinition(t, fs, []int{22}, 3, 5*time.Minute, Scope{})
-	dd.OnRoutedEmission = GroupReputationSink(fs, fake, 8)
+	dd.OnRoutedEmission = GroupReputationSink(fs, fake, DefaultReputationPolicy())
 
 	t0 := time.Now()
 	for i := 0; i < 3; i++ {
@@ -369,7 +371,7 @@ func TestGroupReputationSinkAppliesTheDiscountedMeanFloor(t *testing.T) {
 }
 
 // TestGroupReputationSinkStaysSilentBelowTheSignificanceFloor pins the
-// other half: fewer than reputationGroupMinSignificantSamples scored
+// other half: fewer than the policy's GroupMinSignificantSamples scored
 // members means no floor at all, not a floor derived from one or two
 // answers. "A single bad-reputation IP out of a group of 25 isn't
 // meaningful signal."
@@ -380,7 +382,7 @@ func TestGroupReputationSinkStaysSilentBelowTheSignificanceFloor(t *testing.T) {
 	close(fake.release)
 
 	dd := newShippedDistributedBruteForceDefinition(t, fs, []int{22}, 3, 5*time.Minute, Scope{})
-	dd.OnRoutedEmission = GroupReputationSink(fs, fake, 8)
+	dd.OnRoutedEmission = GroupReputationSink(fs, fake, DefaultReputationPolicy())
 
 	t0 := time.Now()
 	for i := 0; i < 3; i++ {
