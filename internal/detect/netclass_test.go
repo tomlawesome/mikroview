@@ -46,42 +46,48 @@ func privacyRelayMatch() netclass.Class {
 	return netclass.Class{Matched: true, Category: netclass.CategoryPrivacyRelay, Label: "Apple Private Relay"}
 }
 
-// The four tests below used critical_port purely as a convenient,
-// cheap-to-trigger flag-raiser for a public source IP -- none of them are
-// actually about critical_port's own behaviour, just about
+// The tests below used critical_port, then activity_spike, purely as a
+// convenient, cheap-to-trigger flag-raiser for a public source IP -- none
+// of them are actually about either detector's own behaviour, just about
 // observeNetClass's RaiseConfidenceFloor reinforcement path finding *some*
-// already-raised, source-IP-keyed flag. Now that critical_port has moved
-// to internal/engine as a shipped declarative definition (issue #405) and
-// internal/detect no longer evaluates it at all, they are retargeted onto
-// activity_spike instead, which internal/detect still evaluates and is
-// (like critical_port used to be) in knownBadReinforcedTypes with a
-// Target that is a plain source IP. activity_spike needs six events from
-// the same public source IP, one second apart, to fire at DefaultConfig's
-// real HostActivityMultiplier(3): the first call primes the EMA baseline,
-// and hostActivityMinSamples(5) is reached on the 6th call, by which
-// point the live rate (6) still clears both the absolute floor and 3x the
-// ~1.2 baseline the first five events left behind (verified empirically
-// against host_baseline.go's checkHostActivityBaseline).
+// already-raised, source-IP-keyed flag. Now that activity_spike has also
+// moved to internal/engine (issue #405) and internal/detect no longer
+// evaluates it, the remaining reinforceable types (low_slow_scan,
+// off_hours_activity) both need an elaborate multi-signal or multi-day
+// setup to fire behaviorally, and known_bad_ip/netclass are themselves
+// due to port onto internal/engine shortly, at which point these tests
+// move there anyway -- so chasing another live detector here isn't worth
+// it (see known_bad_ip_test.go's own header comment, which took the same
+// call). Every test below that only needs "a reinforceable flag already
+// exists for this source" pre-seeds a flags.Store entry directly
+// (flags.TypeLowSlowScan, still a plain-source-IP-keyed member of
+// knownBadReinforcedTypes) instead of raising one behaviorally;
+// observeNetClass runs unconditionally at the end of Observe for a public
+// source reaching a private destination, so the reinforcement path itself
+// is exercised exactly as before. Every ReputationFloor/Confidence
+// assertion is unchanged; only how the flag got there is.
 
 func TestNetClassReinforcesTorMatch(t *testing.T) {
 	cfg := DefaultConfig()
-	cfg.ActivitySpikeThreshold = 3
-	cfg.ActivitySpikeWindow = time.Minute
+	ip := "198.51.100.4"
+
+	fs, err := flags.Open("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	fs.AddWithDetail(flags.TypeLowSlowScan, ip, "seeded", 10, flags.Evidence{}, "", now)
 
 	nc := newFakeNetClass()
-	nc.setMatch("198.51.100.4", torMatch())
+	nc.setMatch(ip, torMatch())
 
-	d, fs := newTestDetector(t, cfg)
+	d := NewWithSettings(cfg, fs, AllEnabledSettingsStore())
 	d.WithNetClass(nc)
+	d.Observe(evt(ip, 22, now))
 
-	now := time.Now()
-	for i := 0; i < 6; i++ {
-		d.Observe(evt("198.51.100.4", 22, now.Add(time.Duration(i)*time.Second)))
-	}
-
-	asFlag := findFlag(fs, "198.51.100.4", flags.TypeActivitySpike)
+	asFlag := findFlag(fs, ip, flags.TypeLowSlowScan)
 	if asFlag == nil {
-		t.Fatal("expected a TypeActivitySpike flag to have been raised")
+		t.Fatal("expected the seeded TypeLowSlowScan flag to still exist")
 	}
 	if asFlag.ReputationFloor == nil || *asFlag.ReputationFloor != reputation.TorExitNodeFloor {
 		t.Errorf("expected ReputationFloor to be reinforced to %d (Tor), got %v", reputation.TorExitNodeFloor, asFlag.ReputationFloor)
@@ -90,23 +96,25 @@ func TestNetClassReinforcesTorMatch(t *testing.T) {
 
 func TestNetClassReinforcesVPNMatch(t *testing.T) {
 	cfg := DefaultConfig()
-	cfg.ActivitySpikeThreshold = 3
-	cfg.ActivitySpikeWindow = time.Minute
+	ip := "198.51.100.4"
+
+	fs, err := flags.Open("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	fs.AddWithDetail(flags.TypeLowSlowScan, ip, "seeded", 10, flags.Evidence{}, "", now)
 
 	nc := newFakeNetClass()
-	nc.setMatch("198.51.100.4", vpnMatch())
+	nc.setMatch(ip, vpnMatch())
 
-	d, fs := newTestDetector(t, cfg)
+	d := NewWithSettings(cfg, fs, AllEnabledSettingsStore())
 	d.WithNetClass(nc)
+	d.Observe(evt(ip, 22, now))
 
-	now := time.Now()
-	for i := 0; i < 6; i++ {
-		d.Observe(evt("198.51.100.4", 22, now.Add(time.Duration(i)*time.Second)))
-	}
-
-	asFlag := findFlag(fs, "198.51.100.4", flags.TypeActivitySpike)
+	asFlag := findFlag(fs, ip, flags.TypeLowSlowScan)
 	if asFlag == nil {
-		t.Fatal("expected a TypeActivitySpike flag to have been raised")
+		t.Fatal("expected the seeded TypeLowSlowScan flag to still exist")
 	}
 	if asFlag.ReputationFloor == nil || *asFlag.ReputationFloor != netclassVPNFloor {
 		t.Errorf("expected ReputationFloor to be reinforced to %d (VPN), got %v", netclassVPNFloor, asFlag.ReputationFloor)
@@ -119,23 +127,25 @@ func TestNetClassReinforcesVPNMatch(t *testing.T) {
 // RaiseConfidenceFloor, regardless of direction.
 func TestNetClassDatacenterNeverReinforces(t *testing.T) {
 	cfg := DefaultConfig()
-	cfg.ActivitySpikeThreshold = 3
-	cfg.ActivitySpikeWindow = time.Minute
+	ip := "198.51.100.4"
+
+	fs, err := flags.Open("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	fs.AddWithDetail(flags.TypeLowSlowScan, ip, "seeded", 10, flags.Evidence{}, "", now)
 
 	nc := newFakeNetClass()
-	nc.setMatch("198.51.100.4", datacenterMatch())
+	nc.setMatch(ip, datacenterMatch())
 
-	d, fs := newTestDetector(t, cfg)
+	d := NewWithSettings(cfg, fs, AllEnabledSettingsStore())
 	d.WithNetClass(nc)
+	d.Observe(evt(ip, 22, now))
 
-	now := time.Now()
-	for i := 0; i < 6; i++ {
-		d.Observe(evt("198.51.100.4", 22, now.Add(time.Duration(i)*time.Second)))
-	}
-
-	asFlag := findFlag(fs, "198.51.100.4", flags.TypeActivitySpike)
+	asFlag := findFlag(fs, ip, flags.TypeLowSlowScan)
 	if asFlag == nil {
-		t.Fatal("expected a TypeActivitySpike flag to have been raised (behaviorally, independent of netclass)")
+		t.Fatal("expected the seeded TypeLowSlowScan flag to still exist (independent of netclass)")
 	}
 	if asFlag.ReputationFloor != nil {
 		t.Errorf("expected no ReputationFloor from a datacenter match, got %v", asFlag.ReputationFloor)
@@ -148,23 +158,25 @@ func TestNetClassDatacenterNeverReinforces(t *testing.T) {
 // (Apple Private Relay / Cloudflare WARP -- ordinary consumer traffic).
 func TestNetClassPrivacyRelayNeverReinforces(t *testing.T) {
 	cfg := DefaultConfig()
-	cfg.ActivitySpikeThreshold = 3
-	cfg.ActivitySpikeWindow = time.Minute
+	ip := "198.51.100.4"
+
+	fs, err := flags.Open("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	fs.AddWithDetail(flags.TypeLowSlowScan, ip, "seeded", 10, flags.Evidence{}, "", now)
 
 	nc := newFakeNetClass()
-	nc.setMatch("198.51.100.4", privacyRelayMatch())
+	nc.setMatch(ip, privacyRelayMatch())
 
-	d, fs := newTestDetector(t, cfg)
+	d := NewWithSettings(cfg, fs, AllEnabledSettingsStore())
 	d.WithNetClass(nc)
+	d.Observe(evt(ip, 22, now))
 
-	now := time.Now()
-	for i := 0; i < 6; i++ {
-		d.Observe(evt("198.51.100.4", 22, now.Add(time.Duration(i)*time.Second)))
-	}
-
-	asFlag := findFlag(fs, "198.51.100.4", flags.TypeActivitySpike)
+	asFlag := findFlag(fs, ip, flags.TypeLowSlowScan)
 	if asFlag == nil {
-		t.Fatal("expected a TypeActivitySpike flag to have been raised (behaviorally, independent of netclass)")
+		t.Fatal("expected the seeded TypeLowSlowScan flag to still exist (independent of netclass)")
 	}
 	if asFlag.ReputationFloor != nil {
 		t.Errorf("expected no ReputationFloor from a Private Relay match, got %v", asFlag.ReputationFloor)
@@ -229,32 +241,34 @@ func TestNetClassSkippedForOutboundTraffic(t *testing.T) {
 // TestNetClassSkippedWhenDestinationIsAlsoPublic guards the other half
 // of the direction gate: a classified public source reaching a public
 // destination (not this LAN) is not "arriving here" either. Retargeted
-// onto activity_spike per this file's header comment -- activity_spike's
-// own firing check (checkHostActivityBaseline) is purely a function of
-// SrcIP and doesn't care what DstIP is, so overriding DstIP to a second
-// public address here only affects observeNetClass's direction gate, not
-// whether the flag fires at all.
+// per this file's header comment -- the seeded flag's existence doesn't
+// depend on DstIP at all, so overriding it to a second public address
+// here only affects observeNetClass's direction gate, not whether the
+// flag exists.
 func TestNetClassSkippedWhenDestinationIsAlsoPublic(t *testing.T) {
 	cfg := DefaultConfig()
-	cfg.ActivitySpikeThreshold = 3
-	cfg.ActivitySpikeWindow = time.Minute
+	ip := "198.51.100.4"
+
+	fs, err := flags.Open("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	fs.AddWithDetail(flags.TypeLowSlowScan, ip, "seeded", 10, flags.Evidence{}, "", now)
 
 	nc := newFakeNetClass()
-	nc.setMatch("198.51.100.4", torMatch())
+	nc.setMatch(ip, torMatch())
 
-	d, fs := newTestDetector(t, cfg)
+	d := NewWithSettings(cfg, fs, AllEnabledSettingsStore())
 	d.WithNetClass(nc)
 
-	now := time.Now()
-	for i := 0; i < 6; i++ {
-		e := evt("198.51.100.4", 22, now.Add(time.Duration(i)*time.Second))
-		e.DstIP = "203.0.113.9" // also public, not this LAN
-		d.Observe(e)
-	}
+	e := evt(ip, 22, now)
+	e.DstIP = "203.0.113.9" // also public, not this LAN
+	d.Observe(e)
 
-	asFlag := findFlag(fs, "198.51.100.4", flags.TypeActivitySpike)
+	asFlag := findFlag(fs, ip, flags.TypeLowSlowScan)
 	if asFlag == nil {
-		t.Fatal("expected a TypeActivitySpike flag to have been raised behaviorally")
+		t.Fatal("expected the seeded TypeLowSlowScan flag to still exist")
 	}
 	if asFlag.ReputationFloor != nil {
 		t.Errorf("expected no reinforcement when the destination is also public, got %v", asFlag.ReputationFloor)
@@ -266,34 +280,36 @@ func TestNetClassSkippedWhenDestinationIsAlsoPublic(t *testing.T) {
 // after a higher one is already set must never lower the flag's
 // confidence. Exercised directly at this package's call site, on top of
 // whatever RaiseConfidenceFloor itself already guarantees. Retargeted
-// onto activity_spike per this file's header comment.
+// per this file's header comment.
 func TestNetClassConfidenceNeverDecreases(t *testing.T) {
 	cfg := DefaultConfig()
-	cfg.ActivitySpikeThreshold = 3
-	cfg.ActivitySpikeWindow = time.Minute
+	ip := "198.51.100.4"
+
+	fs, err := flags.Open("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	fs.AddWithDetail(flags.TypeLowSlowScan, ip, "seeded", 10, flags.Evidence{}, "", now)
 
 	nc := newFakeNetClass()
-	nc.setMatch("198.51.100.4", torMatch()) // higher floor (reputation.TorExitNodeFloor)
+	nc.setMatch(ip, torMatch()) // higher floor (reputation.TorExitNodeFloor)
 
-	d, fs := newTestDetector(t, cfg)
+	d := NewWithSettings(cfg, fs, AllEnabledSettingsStore())
 	d.WithNetClass(nc)
+	d.Observe(evt(ip, 22, now))
 
-	now := time.Now()
-	for i := 0; i < 6; i++ {
-		d.Observe(evt("198.51.100.4", 22, now.Add(time.Duration(i)*time.Second)))
-	}
-
-	asFlag := findFlag(fs, "198.51.100.4", flags.TypeActivitySpike)
+	asFlag := findFlag(fs, ip, flags.TypeLowSlowScan)
 	if asFlag == nil || asFlag.Confidence == nil || *asFlag.Confidence != reputation.TorExitNodeFloor {
 		t.Fatalf("expected Confidence == %d after the Tor match, got %+v", reputation.TorExitNodeFloor, asFlag)
 	}
 
 	// Reclassify the same source as VPN (a lower floor) and observe
 	// again -- the already-raised flag's confidence must not drop.
-	nc.setMatch("198.51.100.4", vpnMatch())
-	d.Observe(evt("198.51.100.4", 200, now.Add(6*time.Second)))
+	nc.setMatch(ip, vpnMatch())
+	d.Observe(evt(ip, 200, now.Add(time.Second)))
 
-	asFlag = findFlag(fs, "198.51.100.4", flags.TypeActivitySpike)
+	asFlag = findFlag(fs, ip, flags.TypeLowSlowScan)
 	if asFlag.Confidence == nil || *asFlag.Confidence < reputation.TorExitNodeFloor {
 		t.Errorf("Confidence dropped from %d to %v after a lower-floor reclassification -- RaiseConfidenceFloor must never lower a score", reputation.TorExitNodeFloor, asFlag.Confidence)
 	}
@@ -302,28 +318,36 @@ func TestNetClassConfidenceNeverDecreases(t *testing.T) {
 // TestNetClassRespectsPermanentExclusion proves #114's whitelisting
 // requirement is already satisfied by the existing #111 mechanism, with
 // no new one-off suppression path needed: once a (type, target) pair is
-// permanently excluded, no flag is raised for it even when the source
-// is both classified (Tor) and behaviorally crosses the threshold in the
-// same events. Retargeted onto activity_spike per this file's header
-// comment.
+// permanently excluded, no flag is raised for it even when the source is
+// classified (Tor). Retargeted per this file's header comment -- the
+// original also proved the pair stays unflagged when the source
+// simultaneously crosses a behavioral threshold in the same events; that
+// half is not preserved here (flags.Store.add already refuses to create
+// *any* flag, seeded or behavioral, for an excluded (type, target), so
+// there is nothing left to pre-seed once Exclude has been called first,
+// and re-seeding before excluding would just be testing Exclude() against
+// an existing entry, not this call site). What remains -- that
+// observeNetClass's RaiseConfidenceFloor call does not itself resurrect
+// or create a flag for an excluded target -- is still the same guarantee
+// RaiseConfidenceFloor's own doc comment states generally.
 func TestNetClassRespectsPermanentExclusion(t *testing.T) {
 	cfg := DefaultConfig()
-	cfg.ActivitySpikeThreshold = 3
-	cfg.ActivitySpikeWindow = time.Minute
+	ip := "198.51.100.4"
+
+	fs, err := flags.Open("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	fs.Exclude(flags.TypeLowSlowScan, ip)
 
 	nc := newFakeNetClass()
-	nc.setMatch("198.51.100.4", torMatch())
+	nc.setMatch(ip, torMatch())
 
-	d, fs := newTestDetector(t, cfg)
+	d := NewWithSettings(cfg, fs, AllEnabledSettingsStore())
 	d.WithNetClass(nc)
-	fs.Exclude(flags.TypeActivitySpike, "198.51.100.4")
+	d.Observe(evt(ip, 22, time.Now()))
 
-	now := time.Now()
-	for i := 0; i < 6; i++ {
-		d.Observe(evt("198.51.100.4", 22, now.Add(time.Duration(i)*time.Second)))
-	}
-
-	if f := findFlag(fs, "198.51.100.4", flags.TypeActivitySpike); f != nil {
+	if f := findFlag(fs, ip, flags.TypeLowSlowScan); f != nil {
 		t.Errorf("expected the excluded pair to stay unflagged despite a Tor match, got %+v", f)
 	}
 }

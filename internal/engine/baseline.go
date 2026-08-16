@@ -18,6 +18,37 @@ import (
 // until #405 ports onto this one.
 const emaAlpha = 0.02
 
+// emaFullConfidenceZ is where the confidence score's deviation
+// component maxes out, lifted from internal/detect.emaFullConfidenceZ
+// (ema_confidence.go). Chosen well above emaMinZ so confidence actually
+// scales across the range a real flag can occur in, rather than every
+// flag reading close to 100%.
+const emaFullConfidenceZ = 6.0
+
+// emaConfidence turns a z-score and how much history backs the baseline
+// (samples vs warmupSamples) into a 0-100 confidence score -- lifted
+// unchanged from internal/detect.emaConfidence, which every ported
+// baseline-backed definition scores with, so the numbers an operator
+// sees do not move in the port.
+//
+// It does not decide *whether* to fire: a definition keeps its own
+// firing condition, and this only scores confidence once that condition
+// already holds, so a low value means "crossed the line, but not
+// statistically unusual for this baseline's own volatility."
+//
+// A non-positive warmupSamples is treated as "no warm-up required"
+// rather than divided by: zero gives 0/0 = NaN, and NaN survives both
+// Min and Round to land in Flag.Confidence as an arbitrary integer an
+// analyst reads as a judgement about how sure the detector is. See #285.
+func emaConfidence(z float64, samples, warmupSamples int) int {
+	historyConfidence := 1.0
+	if warmupSamples > 0 {
+		historyConfidence = math.Min(1, float64(samples)/float64(warmupSamples))
+	}
+	deviationConfidence := math.Min(1, math.Max(0, (z-emaMinZ)/(emaFullConfidenceZ-emaMinZ)))
+	return int(math.Round(historyConfidence * deviationConfidence * 100))
+}
+
 // emaMinZ is the deviation floor a z-score must clear before Fire ever
 // reports true, lifted from internal/detect.emaMinZ (see
 // internal/detect/ema_confidence.go) for the same reason as emaAlpha
