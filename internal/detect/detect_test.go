@@ -253,17 +253,20 @@ func TestEvictsOldestSourceWhenOverCap(t *testing.T) {
 func TestEveryDetectorDisabledEntirelySuppressesItsFlagType(t *testing.T) {
 	nameToType := map[DetectorName]flags.Type{
 		DetectorActivitySpike: flags.TypeActivitySpike,
-		// DetectorCriticalPort is deliberately absent here now: critical_port
-		// itself moved to internal/engine as a shipped declarative definition
-		// (issue #405), so internal/detect no longer evaluates it at all --
-		// its own enable/disable pin now lives in
+		// DetectorCriticalPort, DetectorDistributedBruteForce and
+		// DetectorRepeatedDrops are deliberately absent here now: all three
+		// moved to internal/engine as shipped declarative definitions (issue
+		// #405), so internal/detect no longer evaluates any of them -- their
+		// own enable/disable pins now live in
 		// internal/engine/shipped_declarative_test.go's
-		// TestShippedCriticalPortDisabledIsInert.
-		DetectorDistributedBruteForce: flags.TypeDistributedBruteForce,
-		DetectorOutboundAnomaly:       flags.TypeOutboundAnomaly,
-		DetectorInternalRecon:         flags.TypeInternalRecon,
-		DetectorRuleSpike:             flags.TypeRuleSpike,
-		DetectorRepeatedDrops:         flags.TypeRepeatedDrops,
+		// TestShippedCriticalPortDisabledIsInert and its
+		// TestShippedDistributedBruteForce*/TestShippedRepeatedDrops*
+		// counterparts (generically, every ported declarative definition's
+		// disabled-definition contract is the same one
+		// TestShippedCriticalPortDisabledIsInert pins).
+		DetectorOutboundAnomaly: flags.TypeOutboundAnomaly,
+		DetectorInternalRecon:   flags.TypeInternalRecon,
+		DetectorRuleSpike:       flags.TypeRuleSpike,
 	}
 
 	for name, flagType := range nameToType {
@@ -272,43 +275,37 @@ func TestEveryDetectorDisabledEntirelySuppressesItsFlagType(t *testing.T) {
 			cfg.PortScanThreshold = 2
 			cfg.ActivitySpikeThreshold = 2
 			cfg.HostActivityWarmupSamples = 1
-			cfg.CriticalPortThreshold = 2
-			cfg.CriticalPorts = []int{22}
-			cfg.DistributedBruteForceThreshold = 2
 			cfg.OutboundAnomalyThreshold = 2
 			cfg.InternalReconThreshold = 2
 			cfg.RuleSpikeMultiplier = 2
 			cfg.RuleSpikeMinRate = 0
-			cfg.RepeatedDropsThreshold = 2
 
 			seed := DefaultSettingsMap()
 			seed[name] = Settings{Enabled: false}
 			d, fs := newTestDetectorWithSettings(t, cfg, seed)
 
 			now := time.Now()
-			// A barrage designed to trip every detector at once: distinct
-			// external sources hitting a critical port (critical_port +
-			// distributed_brute_force), an internal source touching many
-			// internal and external destinations (internal_recon +
-			// outbound_anomaly), a rule firing repeatedly (rule_spike),
-			// and refused attempts against a local service
-			// (repeated_drops) -- plus enough distinct ports/volume from
-			// one source for port_scan/activity_spike.
+			// A barrage designed to trip every detector this test still
+			// evaluates at once: an internal source touching many internal
+			// and external destinations (internal_recon + outbound_anomaly),
+			// a rule firing repeatedly (rule_spike), and enough distinct
+			// ports/volume from one source for port_scan/activity_spike.
+			// (Older revisions of this barrage also included a distinct-
+			// external-sources-hitting-a-critical-port block for
+			// critical_port/distributed_brute_force, and a refused-attempt
+			// block for repeated_drops -- removed alongside their nameToType
+			// entries above, since all three detectors moved to
+			// internal/engine and no longer evaluate anything this test
+			// observes.)
 			for i := 0; i < 10; i++ {
 				t := now.Add(time.Duration(i) * time.Millisecond)
 				scanner := store.Event{SrcIP: "198.51.100.50", DstIP: "192.168.1.1", DstPort: 1000 + i, ReceivedAt: t, RuleLabel: "r1"}
 				d.Observe(scanner)
 
-				bruteForceSrc := store.Event{SrcIP: "198.51.100." + string(rune('1'+i%9)), DstIP: "192.168.1.1", DstPort: 22, ReceivedAt: t}
-				d.Observe(bruteForceSrc)
-
 				internalScanner := store.Event{SrcIP: "192.168.1.50", DstIP: "192.168.1." + string(rune('1'+i%9)), DstPort: 80, ReceivedAt: t}
 				d.Observe(internalScanner)
 				outbound := store.Event{SrcIP: "192.168.1.50", DstIP: "203.0.113." + string(rune('1'+i%9)), DstPort: 443, ReceivedAt: t}
 				d.Observe(outbound)
-
-				drop := store.Event{SrcIP: "203.0.113.9", DstIP: "192.168.1.1", DstPort: 8080, ReceivedAt: t, Action: store.ActionDrop}
-				d.Observe(drop)
 			}
 
 			for _, f := range fs.List() {

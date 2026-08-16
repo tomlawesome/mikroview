@@ -4,6 +4,7 @@ package engine
 
 import (
 	"fmt"
+	"sort"
 	"testing"
 	"time"
 
@@ -1007,6 +1008,242 @@ func TestShippedRepeatedDropsConfidenceScalesWithOvershoot(t *testing.T) {
 		wellOver.Evaluate(rdEvt("203.0.113.9", "192.168.1.1", 8080, now.Add(time.Duration(i)*30*time.Second)))
 	}
 	if f := rdFlagOfType(fs2); f == nil || f.Confidence == nil || *f.Confidence != 100 {
+		t.Fatalf("expected 100%% confidence at the overshoot ceiling, got %+v", f)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// distributed_brute_force (issue #405)
+// ---------------------------------------------------------------------------
+
+// newShippedDistributedBruteForceDefinition builds
+// distributed_brute_force's live DeclarativeDefinition -- DefaultConfig's
+// real 10-distinct-sources/5-minute threshold unless a test deliberately
+// shrinks it.
+func newShippedDistributedBruteForceDefinition(t *testing.T, fs *flags.Store, ports []int, threshold int, window time.Duration, scope Scope) *DeclarativeDefinition {
+	t.Helper()
+	def := Definition{
+		ID:          "distributed_brute_force",
+		Name:        "Distributed brute force",
+		Intent:      IntentDetection,
+		Kind:        KindDeclarative,
+		Enabled:     true,
+		Scope:       scope,
+		Params:      Params{"ports": ports, "threshold": threshold, "window": window.String()},
+		ParamSchema: DistributedBruteForceParamSchema,
+		Provenance:  Provenance{Origin: ProvenanceShipped},
+	}
+	dd, err := BuildShippedDeclarativeDefinition(def)
+	if err != nil {
+		t.Fatalf("BuildShippedDeclarativeDefinition(distributed_brute_force): %v", err)
+	}
+	dd.OnRoutedEmission = FlagsSink(fs)
+	return dd
+}
+
+func dbfFlagOfType(fs *flags.Store) *flags.Flag {
+	for _, f := range fs.List() {
+		f := f
+		if f.Type == flags.TypeDistributedBruteForce {
+			return &f
+		}
+	}
+	return nil
+}
+
+func sortedCopy(in []string) []string {
+	out := append([]string(nil), in...)
+	sort.Strings(out)
+	return out
+}
+
+// TestShippedDistributedBruteForce_FieldsRefireClearRevive is
+// internal/detect/characterization_test.go's
+// TestCharacterizationDistributedBruteForce_FieldsRefireClearRevive,
+// moved. Every pinned value is unchanged.
+func TestShippedDistributedBruteForce_FieldsRefireClearRevive(t *testing.T) {
+	fs := newTestFlagsStore(t)
+	dd := newShippedDistributedBruteForceDefinition(t, fs, defaultCriticalPorts, 10, 5*time.Minute, Scope{})
+	t0 := time.Now()
+
+	for i := 0; i < 9; i++ {
+		dd.Evaluate(psEvt(fmt.Sprintf("198.51.100.%d", 100+i), 22, t0.Add(time.Duration(i)*10*time.Second)))
+	}
+	if got := dbfFlagOfType(fs); got != nil {
+		t.Fatalf("expected no flag at 9 distinct sources, got %+v", got)
+	}
+
+	dd.Evaluate(psEvt(fmt.Sprintf("198.51.100.%d", 100+9), 22, t0.Add(9*10*time.Second)))
+	f := dbfFlagOfType(fs)
+	if f == nil {
+		t.Fatal("expected a flag at exactly 10 distinct sources")
+	}
+	if f.Target != "port 22" {
+		t.Errorf("Target = %q, want %q", f.Target, "port 22")
+	}
+	if want := "10 distinct source IPs in 5m0s"; f.Detail != want {
+		t.Errorf("Detail = %q, want %q", f.Detail, want)
+	}
+	if f.Confidence == nil || *f.Confidence != 0 {
+		t.Errorf("Confidence = %v, want 0", f.Confidence)
+	}
+	wantHosts := make([]string, 10)
+	for i := range wantHosts {
+		wantHosts[i] = fmt.Sprintf("198.51.100.%d", 100+i)
+	}
+	if fmt.Sprint(f.Evidence.Hosts) != fmt.Sprint(sortedCopy(wantHosts)) {
+		t.Errorf("Evidence.Hosts = %v, want %v", f.Evidence.Hosts, sortedCopy(wantHosts))
+	}
+	// internal/detect passed "" for this flag's country, deliberately: the
+	// emission aggregates many sources, so there is no one country to
+	// badge it with. See DeclarativeSpec.CarrySourceCountry.
+	if f.Country != "" {
+		t.Errorf("Country = %q, want empty (the emission is about many sources, not one)", f.Country)
+	}
+
+	// Re-fire: 11th distinct source.
+	dd.Evaluate(psEvt("198.51.100.110", 22, t0.Add(10*10*time.Second)))
+	f2 := dbfFlagOfType(fs)
+	if f2 == nil || f2.Count != 2 {
+		t.Fatalf("expected Count=2, got %+v", f2)
+	}
+	if f2.Confidence == nil || *f2.Confidence != 5 {
+		t.Errorf("Confidence after re-fire = %v, want 5 (overshootConfidence(11,10))", f2.Confidence)
+	}
+
+	// Clear + revive.
+	if !fs.Clear(f2.ID, t0.Add(11*10*time.Second)) {
+		t.Fatal("expected Clear to succeed")
+	}
+	dd.Evaluate(psEvt("198.51.100.111", 22, t0.Add(12*10*time.Second)))
+	f3 := dbfFlagOfType(fs)
+	if f3 == nil || f3.Cleared {
+		t.Fatalf("expected the flag to revive as active, got %+v", f3)
+	}
+	if f3.Count != 1 {
+		t.Errorf("Count after revival = %d, want 1", f3.Count)
+	}
+	if f3.Confidence == nil || *f3.Confidence != 10 {
+		t.Errorf("Confidence after revival = %v, want 10 (overshootConfidence(12,10))", f3.Confidence)
+	}
+}
+
+// TestShippedDistributedBruteForceIgnoresRepeatsFromSameSource is
+// internal/detect/distributed_brute_force_test.go's test of the same
+// name, and internal/detect/characterization_test.go's
+// TestCharacterizationDistributedBruteForceRequiresDistinctSources: the
+// distinction this detector exists to draw. A countRing here would let
+// one source's retries satisfy a "distributed" threshold, which is why
+// internal/detect used a distinctRing and why this definition is
+// CountingDistinct on sourceAddress.
+func TestShippedDistributedBruteForceIgnoresRepeatsFromSameSource(t *testing.T) {
+	fs := newTestFlagsStore(t)
+	dd := newShippedDistributedBruteForceDefinition(t, fs, []int{22}, 3, 5*time.Minute, Scope{})
+	t0 := time.Now()
+
+	for i := 0; i < 20; i++ {
+		dd.Evaluate(psEvt("198.51.100.4", 22, t0.Add(time.Duration(i)*time.Second)))
+	}
+	if got := dbfFlagOfType(fs); got != nil {
+		t.Fatalf("expected one source's repeats never to satisfy a distinct-source threshold, got %+v", got)
+	}
+
+	dd.Evaluate(psEvt("198.51.100.5", 22, t0.Add(21*time.Second)))
+	dd.Evaluate(psEvt("198.51.100.6", 22, t0.Add(22*time.Second)))
+	if got := dbfFlagOfType(fs); got == nil {
+		t.Fatal("expected three distinct sources to fire")
+	}
+}
+
+// TestShippedDistributedBruteForceIgnoresPrivateSources is
+// internal/detect/distributed_brute_force_test.go's test of the same
+// name: the sourceAddress classification condition admits only external
+// sources.
+func TestShippedDistributedBruteForceIgnoresPrivateSources(t *testing.T) {
+	fs := newTestFlagsStore(t)
+	dd := newShippedDistributedBruteForceDefinition(t, fs, []int{22}, 3, 5*time.Minute, Scope{})
+	t0 := time.Now()
+
+	for i := 0; i < 10; i++ {
+		dd.Evaluate(psEvt(fmt.Sprintf("192.168.1.%d", 10+i), 22, t0.Add(time.Duration(i)*time.Second)))
+	}
+	if got := dbfFlagOfType(fs); got != nil {
+		t.Fatalf("expected LAN sources never to count, got %+v", got)
+	}
+}
+
+// TestShippedDistributedBruteForceTracksEachPortIndependently pins the
+// per-destination-port key: two critical ports never pool their
+// distinct-source counts, which is what internal/detect's criticalPortIPs
+// map (keyed by e.DstPort) gave it.
+func TestShippedDistributedBruteForceTracksEachPortIndependently(t *testing.T) {
+	fs := newTestFlagsStore(t)
+	dd := newShippedDistributedBruteForceDefinition(t, fs, []int{22, 3389}, 4, 5*time.Minute, Scope{})
+	t0 := time.Now()
+
+	for i := 0; i < 3; i++ {
+		dd.Evaluate(psEvt(fmt.Sprintf("198.51.100.%d", 100+i), 22, t0.Add(time.Duration(i)*time.Second)))
+		dd.Evaluate(psEvt(fmt.Sprintf("198.51.100.%d", 200+i), 3389, t0.Add(time.Duration(i)*time.Second)))
+	}
+	if got := dbfFlagOfType(fs); got != nil {
+		t.Fatalf("expected 3 distinct sources per port to stay below a threshold of 4, got %+v", got)
+	}
+
+	dd.Evaluate(psEvt("198.51.100.150", 3389, t0.Add(4*time.Second)))
+	f := dbfFlagOfType(fs)
+	if f == nil {
+		t.Fatal("expected the 4th distinct source against one port to fire")
+	}
+	if f.Target != "port 3389" {
+		t.Errorf("Target = %q, want %q", f.Target, "port 3389")
+	}
+}
+
+// TestShippedDistributedBruteForceRespectsPortsScope is
+// internal/detect/distributed_brute_force_test.go's test of the same
+// name: Scope.Ports narrows the effective subset of the definition's own
+// critical-port list.
+func TestShippedDistributedBruteForceRespectsPortsScope(t *testing.T) {
+	fs := newTestFlagsStore(t)
+	dd := newShippedDistributedBruteForceDefinition(t, fs, []int{22, 3389}, 3, 5*time.Minute,
+		Scope{Ports: []int{22}, PortsMode: ListModeAllow})
+	t0 := time.Now()
+
+	for i := 0; i < 10; i++ {
+		dd.Evaluate(psEvt(fmt.Sprintf("198.51.100.%d", 100+i), 3389, t0.Add(time.Duration(i)*time.Second)))
+	}
+	if got := dbfFlagOfType(fs); got != nil {
+		t.Fatalf("expected an out-of-scope port never to flag, got %+v", got)
+	}
+
+	for i := 0; i < 3; i++ {
+		dd.Evaluate(psEvt(fmt.Sprintf("198.51.100.%d", 200+i), 22, t0.Add(time.Duration(i)*time.Second)))
+	}
+	if got := dbfFlagOfType(fs); got == nil {
+		t.Fatal("expected the in-scope port to still flag at threshold")
+	}
+}
+
+// TestShippedDistributedBruteForceConfidenceScalesWithOvershoot is
+// internal/detect/distributed_brute_force_test.go's test of the same name.
+func TestShippedDistributedBruteForceConfidenceScalesWithOvershoot(t *testing.T) {
+	t0 := time.Now()
+
+	fs := newTestFlagsStore(t)
+	justOver := newShippedDistributedBruteForceDefinition(t, fs, []int{22}, 5, 5*time.Minute, Scope{})
+	for i := 0; i < 5; i++ {
+		justOver.Evaluate(psEvt(fmt.Sprintf("198.51.100.%d", 100+i), 22, t0.Add(time.Duration(i)*time.Second)))
+	}
+	if f := dbfFlagOfType(fs); f == nil || f.Confidence == nil || *f.Confidence != 0 {
+		t.Fatalf("expected 0%% confidence exactly at threshold, got %+v", f)
+	}
+
+	fs2 := newTestFlagsStore(t)
+	wellOver := newShippedDistributedBruteForceDefinition(t, fs2, []int{22}, 5, 5*time.Minute, Scope{})
+	for i := 0; i < 15; i++ {
+		wellOver.Evaluate(psEvt(fmt.Sprintf("198.51.100.%d", 100+i), 22, t0.Add(time.Duration(i)*time.Second)))
+	}
+	if f := dbfFlagOfType(fs2); f == nil || f.Confidence == nil || *f.Confidence != 100 {
 		t.Fatalf("expected 100%% confidence at the overshoot ceiling, got %+v", f)
 	}
 }

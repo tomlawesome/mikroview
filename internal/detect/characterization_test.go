@@ -90,48 +90,20 @@ func TestCharacterizationLowSlowScanFiresAtDefaultWindowScale(t *testing.T) {
 	}
 }
 
-// TestCharacterizationDistributedBruteForceRequiresDistinctSources
-// documents a deliberate divergence from the migration plan's summary
+// TestCharacterizationDistributedBruteForceRequiresDistinctSources used
+// to document a deliberate divergence from the migration plan's summary
 // table, which listed "countRing per key" for
-// observeDistributedBruteForce. The detector's entire point is
-// *distinct* source IPs hammering one port (as opposed to
-// critical-port's "one source hitting it repeatedly") -- a countRing
-// only tracks a raw event count, so swapping in one there would make a
-// single source's retries alone cross the threshold, collapsing the
-// distinction the detector exists to draw. portSources therefore uses
-// distinctRing[string] instead (see distributed_brute_force.go), which
-// is what TestDistributedBruteForceIgnoresRepeatsFromSameSource in
-// distributed_brute_force_test.go already pins down; this test re-states
-// the same guarantee here, next to the rest of this migration's
-// characterization coverage, for anyone comparing this change against
-// the plan's table.
-func TestCharacterizationDistributedBruteForceRequiresDistinctSources(t *testing.T) {
-	cfg := DefaultConfig()
-	cfg.DistributedBruteForceThreshold = 5
-	cfg.CriticalPorts = []int{22}
-	cfg.CriticalPortThreshold = 1000
-	cfg.PortScanThreshold = 1000
-	cfg.ActivitySpikeThreshold = 1000
-	d, fs := newTestDetector(t, cfg)
-
-	now := time.Now()
-	// 20 repeats from a single source must never cross a threshold of 5
-	// distinct sources.
-	for i := 0; i < 20; i++ {
-		d.Observe(evt("198.51.100.1", 22, now.Add(time.Duration(i)*time.Second)))
-	}
-	if len(fs.List()) != 0 {
-		t.Fatalf("expected repeats from one source alone to never flag, got %+v", fs.List())
-	}
-
-	// The 5th distinct source crosses it.
-	for i := 0; i < 5; i++ {
-		d.Observe(evt(fmt.Sprintf("198.51.100.%d", i+2), 22, now))
-	}
-	if len(fs.List()) != 1 {
-		t.Fatalf("expected 5 distinct sources to flag, got %+v", fs.List())
-	}
-}
+// observeDistributedBruteForce -- the detector's entire point is
+// *distinct* source IPs hammering one port, so it needed a
+// distinctRing[string] instead, the same guarantee
+// TestDistributedBruteForceIgnoresRepeatsFromSameSource pinned in
+// distributed_brute_force_test.go; moved to
+// internal/engine/shipped_declarative_test.go's
+// TestShippedDistributedBruteForceIgnoresRepeatsFromSameSource (issue
+// #405: distributed_brute_force is now a shipped declarative definition
+// evaluated by internal/engine, not internal/detect -- see
+// shipped_declarative.go's buildDistributedBruteForceDefinition). Every
+// pinned value carried over unchanged.
 
 // ============================================================================
 // #397: full-suite characterization at DefaultConfig() scale.
@@ -400,68 +372,18 @@ func TestCharacterizationActivitySpike_FieldsRefireClearRevive(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 // TestCharacterizationDistributedBruteForce_FieldsRefireClearRevive
-// pins distributed_brute_force's boundary at DefaultConfig's real
-// 10-distinct-sources/5-minute threshold against a critical port.
-func TestCharacterizationDistributedBruteForce_FieldsRefireClearRevive(t *testing.T) {
-	cfg := DefaultConfig() // DistributedBruteForceThreshold=10, Window=5m
-	d, fs := newTestDetector(t, cfg)
-	t0 := time.Now()
-
-	for i := 0; i < 9; i++ {
-		d.Observe(evt(fmt.Sprintf("198.51.100.%d", 100+i), 22, t0.Add(time.Duration(i)*10*time.Second)))
-	}
-	if got := flagOfType(t, fs, flags.TypeDistributedBruteForce); got != nil {
-		t.Fatalf("expected no flag at 9 distinct sources, got %+v", got)
-	}
-
-	d.Observe(evt(fmt.Sprintf("198.51.100.%d", 100+9), 22, t0.Add(9*10*time.Second)))
-	f := flagOfType(t, fs, flags.TypeDistributedBruteForce)
-	if f == nil {
-		t.Fatal("expected a flag at exactly 10 distinct sources")
-	}
-	if f.Target != "port 22" {
-		t.Errorf("Target = %q, want %q", f.Target, "port 22")
-	}
-	if want := "10 distinct source IPs in 5m0s"; f.Detail != want {
-		t.Errorf("Detail = %q, want %q", f.Detail, want)
-	}
-	if f.Confidence == nil || *f.Confidence != 0 {
-		t.Errorf("Confidence = %v, want 0", f.Confidence)
-	}
-	wantHosts := make([]string, 10)
-	for i := range wantHosts {
-		wantHosts[i] = fmt.Sprintf("198.51.100.%d", 100+i)
-	}
-	if fmt.Sprint(f.Evidence.Hosts) != fmt.Sprint(sortedStrings(wantHosts)) {
-		t.Errorf("Evidence.Hosts = %v, want %v", f.Evidence.Hosts, sortedStrings(wantHosts))
-	}
-
-	// Re-fire: 11th distinct source.
-	d.Observe(evt(fmt.Sprintf("198.51.100.%d", 110), 22, t0.Add(10*10*time.Second)))
-	f2 := flagOfType(t, fs, flags.TypeDistributedBruteForce)
-	if f2 == nil || f2.Count != 2 {
-		t.Fatalf("expected Count=2, got %+v", f2)
-	}
-	if f2.Confidence == nil || *f2.Confidence != 5 {
-		t.Errorf("Confidence after re-fire = %v, want 5 (overshootConfidence(11,10))", f2.Confidence)
-	}
-
-	// Clear + revive.
-	if !fs.Clear(f2.ID, t0.Add(11*10*time.Second)) {
-		t.Fatal("expected Clear to succeed")
-	}
-	d.Observe(evt("198.51.100.111", 22, t0.Add(12*10*time.Second)))
-	f3 := flagOfType(t, fs, flags.TypeDistributedBruteForce)
-	if f3 == nil || f3.Cleared {
-		t.Fatalf("expected the flag to revive as active, got %+v", f3)
-	}
-	if f3.Count != 1 {
-		t.Errorf("Count after revival = %d, want 1", f3.Count)
-	}
-	if f3.Confidence == nil || *f3.Confidence != 10 {
-		t.Errorf("Confidence after revival = %v, want 10 (overshootConfidence(12,10))", f3.Confidence)
-	}
-}
+// used to pin distributed_brute_force's boundary at DefaultConfig's real
+// 10-distinct-sources/5-minute threshold against a critical port, its
+// flag fields, and its re-fire/clear/revive cycle; moved to
+// internal/engine/shipped_declarative_test.go's
+// TestShippedDistributedBruteForce_FieldsRefireClearRevive (issue #405:
+// distributed_brute_force is now a shipped declarative definition
+// evaluated by internal/engine, not internal/detect -- see
+// shipped_declarative.go's buildDistributedBruteForceDefinition). Every
+// pinned value carried over unchanged; also covers what
+// TestDistributedBruteForceFlagsManyDistinctSources and
+// TestDistributedBruteForceEvidenceCapturesSourceHosts pinned in the
+// now-deleted distributed_brute_force_test.go.
 
 func sortedStrings(in []string) []string {
 	out := append([]string(nil), in...)

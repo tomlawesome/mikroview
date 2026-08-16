@@ -32,6 +32,13 @@ const (
 	// -- repeated_drops against one locally-hosted service, dest_spread
 	// as seen from the target's side.
 	KeyPerTarget KeyMode = "perTarget"
+	// KeyPerDestinationPort tracks one window per destination port,
+	// regardless of who the source or target was --
+	// distributed_brute_force's shape: "many different sources hammering
+	// this one service." Naturally bounded by the number of distinct
+	// ports the definition's own conditions admit, which is why
+	// internal/detect's criticalPortIPs map needed no eviction.
+	KeyPerDestinationPort KeyMode = "perDestinationPort"
 	// KeyGlobal tracks a single shared window across every matching
 	// event, regardless of source or target -- distributed_brute_force's
 	// shape (many distinct sources against one condition-selected port),
@@ -41,7 +48,7 @@ const (
 
 func validateKeyMode(k KeyMode) error {
 	switch k {
-	case KeyPerSource, KeyPerSourcePort, KeyPerTarget, KeyGlobal:
+	case KeyPerSource, KeyPerSourcePort, KeyPerTarget, KeyPerDestinationPort, KeyGlobal:
 		return nil
 	default:
 		return fmt.Errorf("engine: invalid key mode %q", k)
@@ -156,6 +163,7 @@ type DeclarativeDefinition struct {
 	distinctField  Field
 	detailTemplate string
 	targetTemplate string
+	carryCountry   bool
 	// evidencePorts/Hosts/Labels/NAT are DeclarativeSpec.Evidence
 	// resolved to booleans once, at construction, so recordEvidence's
 	// per-event path is a few field reads rather than a slice scan.
@@ -228,6 +236,17 @@ type DeclarativeSpec struct {
 	// references only {Count}) and is what keeps an emission from
 	// carrying a category the definition has no business claiming.
 	Evidence []EvidenceField
+	// CarrySourceCountry puts the triggering event's SrcCountry on the
+	// emission (and so on the raised flag's country badge). Only honest
+	// for a definition whose emission is *about* one source: a
+	// per-destination-port or global definition aggregates many sources,
+	// so naming one of their countries would be the same
+	// single-event-stands-for-the-window claim #379 found in two Detail
+	// strings. internal/detect drew this line by hand, passing e.SrcCountry
+	// for its source-keyed detectors and "" for
+	// distributed_brute_force/dest_spread; declaring it keeps that
+	// deliberate rather than incidental.
+	CarrySourceCountry bool
 	// Members resolves FieldAddressListMembership conditions. nil is
 	// valid: a definition with no membership condition never touches it,
 	// and one that does simply never matches (see
@@ -285,6 +304,7 @@ func NewDeclarativeDefinition(def Definition, spec DeclarativeSpec) (*Declarativ
 		distinctField:  spec.DistinctField,
 		detailTemplate: spec.DetailTemplate,
 		targetTemplate: spec.TargetTemplate,
+		carryCountry:   spec.CarrySourceCountry,
 		members:        spec.Members,
 		state:          NewKeyed[*declState](),
 	}
@@ -373,6 +393,8 @@ func (d *DeclarativeDefinition) keyFieldValues(e store.Event) map[string]string 
 		return map[string]string{"SourceAddress": e.SrcIP, "DestinationPort": strconv.Itoa(e.DstPort)}
 	case KeyPerTarget:
 		return map[string]string{"DestinationAddress": e.DstIP}
+	case KeyPerDestinationPort:
+		return map[string]string{"DestinationPort": strconv.Itoa(e.DstPort)}
 	default: // KeyGlobal
 		return map[string]string{}
 	}
@@ -421,6 +443,8 @@ func (d *DeclarativeDefinition) keyFor(e store.Event) string {
 		return fmt.Sprintf("%s:%d", e.SrcIP, e.DstPort)
 	case KeyPerTarget:
 		return e.DstIP
+	case KeyPerDestinationPort:
+		return strconv.Itoa(e.DstPort)
 	default: // KeyGlobal
 		return "global"
 	}
@@ -463,7 +487,7 @@ func (d *DeclarativeDefinition) recordEvidence(st *declState, e store.Event) {
 		if e.DstIP != "" {
 			st.evidence.AddHost(e.DstIP)
 		}
-	default: // KeyPerTarget, KeyGlobal
+	default: // KeyPerTarget, KeyPerDestinationPort, KeyGlobal
 		if e.SrcIP != "" {
 			st.evidence.AddHost(e.SrcIP)
 		}
@@ -546,7 +570,11 @@ func (d *DeclarativeDefinition) Evaluate(e store.Event) {
 	em.Confidence = &conf
 	// Country/EventTime: see Emission's own doc comment on why these are
 	// set here, from the triggering event, rather than by RenderEmission.
-	em.Country = e.SrcCountry
+	// Country only where the definition declared it honest -- see
+	// DeclarativeSpec.CarrySourceCountry.
+	if d.carryCountry {
+		em.Country = e.SrcCountry
+	}
 	em.EventTime = e.ReceivedAt
 
 	routed, err := Route(d.def, em)

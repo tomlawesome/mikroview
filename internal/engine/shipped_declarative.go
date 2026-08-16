@@ -37,9 +37,10 @@ import (
 // the tunable parts from the stored Definition and supplies the fixed
 // parts itself.
 var shippedDeclarativeBuilders = map[string]func(Definition) (*DeclarativeDefinition, error){
-	"port_scan":      buildPortScanDefinition,
-	"critical_port":  buildCriticalPortDefinition,
-	"repeated_drops": buildRepeatedDropsDefinition,
+	"port_scan":               buildPortScanDefinition,
+	"critical_port":           buildCriticalPortDefinition,
+	"repeated_drops":          buildRepeatedDropsDefinition,
+	"distributed_brute_force": buildDistributedBruteForceDefinition,
 }
 
 // BuildShippedDeclarativeDefinition constructs the live *DeclarativeDefinition
@@ -151,6 +152,10 @@ func buildPortScanDefinition(def Definition) (*DeclarativeDefinition, error) {
 		CountingMode:   CountingDistinct,
 		DistinctField:  FieldDestinationPort,
 		DetailTemplate: template,
+		// internal/detect's port_scan passed e.SrcCountry to
+		// AddWithDetail; its emission is about one source, so the country
+		// badge is about that source.
+		CarrySourceCountry: true,
 		// Ports only: internal/detect's old port_scan raised
 		// flags.Evidence{Ports: ...} and nothing else. Declaring the
 		// category explicitly is what keeps that true -- see
@@ -237,12 +242,13 @@ func buildCriticalPortDefinition(def Definition) (*DeclarativeDefinition, error)
 	template := fmt.Sprintf("{Count} attempts against critical ports {Ports} in %s", window)
 
 	return NewDeclarativeDefinition(def, DeclarativeSpec{
-		Conditions:     conds,
-		Key:            KeyPerSource,
-		Window:         window,
-		Threshold:      threshold,
-		CountingMode:   CountingTotal,
-		DetailTemplate: template,
+		Conditions:         conds,
+		Key:                KeyPerSource,
+		Window:             window,
+		Threshold:          threshold,
+		CountingMode:       CountingTotal,
+		DetailTemplate:     template,
+		CarrySourceCountry: true,
 		// Ports: #379's fix. internal/detect's old critical_port raised
 		// flags.Evidence{} (empty) while naming a single port in its
 		// Detail; the accumulated port set is what both the sentence and
@@ -324,6 +330,81 @@ func buildRepeatedDropsDefinition(def Definition) (*DeclarativeDefinition, error
 		CountingMode:   CountingTotal,
 		DetailTemplate: template,
 		TargetTemplate: "{SourceAddress} -> port {DestinationPort}",
-		Evidence:       []EvidenceField{EvidenceHosts, EvidenceNAT},
+		// internal/detect's repeated_drops passed e.SrcCountry: the
+		// window is keyed on one source, so the badge is about it.
+		CarrySourceCountry: true,
+		Evidence:           []EvidenceField{EvidenceHosts, EvidenceNAT},
+	})
+}
+
+// buildDistributedBruteForceDefinition builds distributed_brute_force's
+// live DeclarativeDefinition from a stored Definition -- the shipped
+// declarative counterpart of internal/detect's old
+// observeDistributedBruteForce (distributed_brute_force.go, before issue
+// #405 removed it): "many distinct external sources hammering the same
+// critical port", the inverse of critical_port's "one source hitting it
+// repeatedly."
+//
+//   - Conditions: the same three critical_port uses -- connectionState in
+//     {"", "new"}, sourceAddress matchesClassification "external", and
+//     destinationPort in the critical-port list. internal/detect shared
+//     one Observe gate between the two detectors for exactly this reason;
+//     expressing it twice as data is what lets them separate.
+//   - Key: KeyPerDestinationPort -- one window per critical port, matching
+//     detect.go's criticalPortIPs map. That map needed no eviction because
+//     it is bounded by the port list; the same is true here.
+//   - CountingMode: distinct on FieldSourceAddress. This is the
+//     distinction the detector exists to draw, and the reason
+//     internal/detect used a distinctRing rather than a countRing: a
+//     single source's retries must never satisfy a "distributed"
+//     threshold. See TestShippedDistributedBruteForceIgnoresRepeatsFromSameSource.
+//   - Target: "port {DestinationPort}", the string internal/detect built
+//     by hand. A key component, so constant for the window.
+//   - Evidence: hosts -- for a per-port key, recordEvidence records the
+//     *source* addresses (see its own doc comment), which is exactly
+//     internal/detect's flags.Evidence{Hosts: sortedHostsCapped(distinct)}.
+//   - No CarrySourceCountry: internal/detect passed "" here, deliberately.
+//     The emission aggregates many sources, so badging it with whichever
+//     one happened to cross the threshold would be the same
+//     single-event-stands-for-the-window claim #379 found elsewhere.
+func buildDistributedBruteForceDefinition(def Definition) (*DeclarativeDefinition, error) {
+	params, err := ValidateParams(def.ParamSchema, def.Params)
+	if err != nil {
+		return nil, fmt.Errorf("engine: shipped declarative definition %q: %w", def.ID, err)
+	}
+	threshold, err := paramInt(params, "threshold")
+	if err != nil {
+		return nil, fmt.Errorf("engine: shipped declarative definition %q: %w", def.ID, err)
+	}
+	window, err := paramDuration(params, "window")
+	if err != nil {
+		return nil, fmt.Errorf("engine: shipped declarative definition %q: %w", def.ID, err)
+	}
+	ports, err := paramPortList(params, "ports")
+	if err != nil {
+		return nil, fmt.Errorf("engine: shipped declarative definition %q: %w", def.ID, err)
+	}
+	portValues := make([]string, len(ports))
+	for i, p := range ports {
+		portValues[i] = strconv.Itoa(p)
+	}
+
+	conds := []Condition{
+		{Field: FieldConnectionState, Operator: OpInSet, Values: []string{"", "new"}},
+		{Field: FieldSourceAddress, Operator: OpMatchesClassification, Values: []string{"external"}},
+		{Field: FieldDestinationPort, Operator: OpInSet, Values: portValues},
+	}
+	template := fmt.Sprintf("{Count} distinct source IPs in %s", window)
+
+	return NewDeclarativeDefinition(def, DeclarativeSpec{
+		Conditions:     conds,
+		Key:            KeyPerDestinationPort,
+		Window:         window,
+		Threshold:      threshold,
+		CountingMode:   CountingDistinct,
+		DistinctField:  FieldSourceAddress,
+		DetailTemplate: template,
+		TargetTemplate: "port {DestinationPort}",
+		Evidence:       []EvidenceField{EvidenceHosts},
 	})
 }
