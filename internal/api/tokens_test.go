@@ -208,7 +208,7 @@ func TestBearerTokenCannotReachAdminEndpoints(t *testing.T) {
 	admin := setUpAdmin(t, ts)
 	raw := createToken(t, ts, admin, "birdcage")
 
-	for _, path := range []string{"/api/detectors", "/api/tokens"} {
+	for _, path := range []string{"/api/definitions", "/api/tokens"} {
 		resp := bearerGet(t, ts.URL+path, raw)
 		resp.Body.Close()
 		if resp.StatusCode == http.StatusOK {
