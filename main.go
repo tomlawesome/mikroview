@@ -56,13 +56,6 @@ import (
 	"golang.org/x/term"
 )
 
-// globalSpikeCheckInterval is how often the global volume-spike detector
-// re-samples the store's current events-per-second figure. Independent
-// of STATS_REFRESH_MS on the frontend -- this only needs to be frequent
-// enough for the detector's own EMA baseline to track real trends, not
-// to feel "live" to a person.
-const globalSpikeCheckInterval = 10 * time.Second
-
 // engineTickInterval is how often the engine's tick driver runs (issue
 // #405). Not itself a detector cadence: it is the granularity at which
 // Engine.Tick asks "is anything due", and each Ticked definition still
@@ -866,7 +859,6 @@ func main() {
 		WithEntities(entityStore).
 		WithKnownBadIPs(bl).
 		WithNetClass(nc)
-	globalSpike := detect.NewGlobalSpikeDetectorWithSettings(detectCfg, fs, detectorSettings)
 	deviceSilence := detect.NewDeviceSilenceDetectorWithSettings(detectCfg, fs, detectorSettings, devices)
 	staleRule := detect.NewStaleRuleDetector(ru, fs, time.Duration(cfg.Flags.StaleRuleDays)*24*time.Hour)
 
@@ -1060,22 +1052,9 @@ func main() {
 		go matchLogPostgres.RunPeriodicPurge(ctx, matchLogPurgeInterval)
 	}
 
-	go func() {
-		spikeLog := logging.New("global-spike")
-		ticker := time.NewTicker(globalSpikeCheckInterval)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-ticker.C:
-				func() {
-					defer logging.Recover(spikeLog)
-					globalSpike.Check(st.EventsPerSecond(), time.Now())
-				}()
-			}
-		}
-	}()
+	// The global-spike ticker moved onto the engine (issue #405): it is a
+	// shipped programmatic definition now, driven by Engine.Tick at its
+	// own declared TickInterval alongside every other Ticked definition.
 
 	go func() {
 		silenceLog := logging.New("device-silence")
