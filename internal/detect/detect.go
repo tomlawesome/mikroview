@@ -18,7 +18,6 @@ import (
 	"time"
 
 	"github.com/tomlawesome/mikroview/internal/entities"
-	"github.com/tomlawesome/mikroview/internal/evict"
 	"github.com/tomlawesome/mikroview/internal/flags"
 	"github.com/tomlawesome/mikroview/internal/logging"
 	"github.com/tomlawesome/mikroview/internal/store"
@@ -353,8 +352,7 @@ type Detector struct {
 	// criticalHits (critical_port's per-source attempt-count map) and
 	// criticalPortIPs (distributed_brute_force's per-port distinct-source
 	// map) both moved to internal/engine with their detectors (issue
-	// #405).
-	destWindows map[string]*destWindow
+	// #405), as did destWindows (dest_spread's per-source map).
 
 	// observeQueue backs Enqueue/Run -- see observeQueueSize's doc
 	// comment for the sizing rationale.
@@ -383,7 +381,6 @@ func NewWithSettings(cfg Config, fs *flags.Store, settings *SettingsStore) *Dete
 		fs:           fs,
 		settings:     settings,
 		lookupSlots:  make(chan struct{}, reputationLookupConcurrency),
-		destWindows:  make(map[string]*destWindow),
 		observeQueue: make(chan store.Event, observeQueueSize),
 	}
 }
@@ -476,16 +473,14 @@ func (d *Detector) Observe(e store.Event) {
 	// shipped_declarative.go) -- the "critical port, external source"
 	// precondition they shared here went with them, expressed twice as
 	// conditions, which is what let the two separate.
+	// outbound_anomaly and internal_recon both moved to internal/engine as
+	// shipped programmatic definitions (issue #405, see
+	// shipped_dest_spread.go), taking destWindow's two rings with them --
+	// which is the last thing that struct held, so d.destWindows,
+	// activeWindow and evictOldestByActivity go with them.
 	srcPublic := isPublic(e.SrcIP)
 
 	if !srcPublic && e.DstIP != "" {
-		// source is on the LAN -- track where it's going, split by
-		// whether the destination is also internal (recon/lateral
-		// movement) or external (possible C2/exfiltration). Gated inside
-		// observeDestSpread itself (outbound-anomaly and internal-recon
-		// are independently toggleable but share window state).
-		d.observeDestSpread(e, now)
-
 		// internal-source -> external-destination on an SMTP port (issue
 		// #108) -- always on, unlike the DetectorName-backed checks
 		// above/below, since this is deterministic (see
@@ -522,29 +517,12 @@ func (d *Detector) Observe(e store.Event) {
 // shipped_declarative.go's buildCriticalPortDefinition and main.go's
 // engine.ReputationSink wiring for the reputation-lookup counterpart).
 
-// activeWindow is implemented by every per-key detector state struct
-// (destWindow) purely so evictOldestByActivity can be generic over all
-// of them -- they otherwise share no behavior, just this one field.
-type activeWindow interface {
-	lastActivityTime() time.Time
-}
-
-// evictOldestByActivity sheds the least-recently-active entries once a
-// per-source map is full, shared by every per-key detector state map
-// once it hits maxTrackedSources.
-//
-// The batch-shed reasoning that used to live here now lives in
-// internal/evict, alongside the measurements that motivated it -- #285
-// found the same evict-back-to-exactly-the-cap pattern still live in
-// internal/device and internal/rules, so the remedy is one
-// implementation those packages share rather than a third and fourth
-// hand-copy. This function stays because it is what adapts the
-// activeWindow interface to that helper.
-func evictOldestByActivity[V activeWindow](m map[string]V) {
-	evict.DownTo(m, len(m)-evict.Batch(len(m)), func(w V) time.Time {
-		return w.lastActivityTime()
-	})
-}
+// activeWindow and evictOldestByActivity moved out with the last
+// per-source map that needed them (issue #405): every detector that kept
+// windowed state keyed by source is now a definition on internal/engine,
+// where Keyed (internal/engine/keyed.go) owns the same
+// least-recently-active eviction with the same internal/evict batch-shed
+// policy behind it.
 
 // isTrackableConnState reports whether e should count toward the scan/
 // spike/recon/critical-port/distributed-brute-force detectors below.

@@ -11,6 +11,7 @@ import (
 
 func init() {
 	registerShippedProgrammatic("outbound_anomaly", buildOutboundAnomalyDefinition)
+	registerShippedProgrammatic("internal_recon", buildInternalReconDefinition)
 }
 
 // destDirection selects which half of a LAN source's destination spread a
@@ -69,6 +70,10 @@ type destSpreadDefinition struct {
 
 func buildOutboundAnomalyDefinition(def Definition, deps ShippedDeps) (Evaluated, error) {
 	return buildDestSpreadDefinition(def, deps, destExternal)
+}
+
+func buildInternalReconDefinition(def Definition, deps ShippedDeps) (Evaluated, error) {
+	return buildDestSpreadDefinition(def, deps, destInternal)
 }
 
 func buildDestSpreadDefinition(def Definition, _ ShippedDeps, direction destDirection) (Evaluated, error) {
