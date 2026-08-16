@@ -26,6 +26,11 @@ import (
 func FuzzDecodePayload(f *testing.F) {
 	f.Add(`{"kind":"address-list","page":1,"pages":1,"records":[{"list":"blocked","address":"198.51.100.1","comment":"port scan","dynamic":true}]}`)
 	f.Add(`{"kind":"filter-rule","page":1,"pages":4,"records":[{"ordinal":7.000000,"comment":"allow lan","chain":"forward","action":"accept","srcAddressList":"lan","logPrefix":"r7"}]}`)
+	// The #408 fields in both shapes a connection-state set arrives as,
+	// alongside the record above that omits them entirely (the older
+	// script the documented upgrade order has to keep accepting).
+	f.Add(`{"kind":"filter-rule","page":1,"pages":1,"records":[{"ordinal":0,"comment":"","chain":"input","action":"accept","srcAddressList":"","logPrefix":"A|est|","connectionState":["established","related"],"inInterface":"ether1","outInterface":"!ether2"}]}`)
+	f.Add(`{"kind":"filter-rule","page":1,"pages":1,"records":[{"ordinal":0,"comment":"","chain":"input","action":"drop","srcAddressList":"","logPrefix":"","connectionState":"invalid","inInterface":null,"outInterface":null}]}`)
 	f.Add(`{"kind":"nat-rule","page":1,"pages":1,"records":[{"ordinal":0,"comment":"masquerade","chain":"srcnat","action":"masquerade"}]}`)
 	f.Add(`{"kind":"dns-static","page":1,"pages":1,"records":[{"name":"nas.lan","address":"192.168.1.20"}]}`)
 	f.Add(`{"kind":"dhcp-lease","page":1,"pages":1,"records":[{"hostname":"laptop","mac":"aa:bb:cc:dd:ee:ff","address":"192.168.1.50"}]}`)

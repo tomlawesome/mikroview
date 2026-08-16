@@ -269,6 +269,61 @@ func TestDecodePayloadNeverPanics(t *testing.T) {
 	}
 }
 
+// TestFilterRuleRoundTripsConnectionStateAndInterfaces is issue #408's
+// own scope: the three fields arrive, in both shapes RouterOS can send a
+// set in, and absent means unset rather than "matches nothing".
+func TestFilterRuleRoundTripsConnectionStateAndInterfaces(t *testing.T) {
+	p := decodeOK(t, `{"kind":"filter-rule","page":1,"pages":1,"records":[
+	  {"ordinal":0,"comment":"","chain":"input","action":"accept","srcAddressList":"","logPrefix":"A|est-rel|","connectionState":["established","related"],"inInterface":"ether1","outInterface":""},
+	  {"ordinal":1,"comment":"","chain":"input","action":"drop","srcAddressList":"","logPrefix":"D|invalid|","connectionState":"invalid","inInterface":"","outInterface":"!ether2"},
+	  {"ordinal":2,"comment":"","chain":"forward","action":"drop","srcAddressList":"","logPrefix":"D|all|"}
+	]}`)
+	if len(p.FilterRules) != 3 {
+		t.Fatalf("decoded %d rules, want 3", len(p.FilterRules))
+	}
+
+	if got := p.FilterRules[0].ConnectionState.String(); got != "established,related" {
+		t.Errorf("rule 0 ConnectionState = %q, want established,related", got)
+	}
+	if p.FilterRules[0].InInterface != "ether1" || p.FilterRules[0].OutInterface != "" {
+		t.Errorf("rule 0 interfaces = %q/%q, want ether1/empty", p.FilterRules[0].InInterface, p.FilterRules[0].OutInterface)
+	}
+	// The joined-string shape, and a negated interface: both are one
+	// value, not a set of characters to be clever about.
+	if got := p.FilterRules[1].ConnectionState; len(got) != 1 || got[0] != "invalid" {
+		t.Errorf("rule 1 ConnectionState = %v, want [invalid]", got)
+	}
+	if p.FilterRules[1].OutInterface != "!ether2" {
+		t.Errorf("rule 1 OutInterface = %q, want !ether2", p.FilterRules[1].OutInterface)
+	}
+
+	// A rule that matches on no connection state omits the key. That must
+	// decode to unset -- an empty list -- and not to a rule claiming it
+	// matches some state, since the two say opposite things about what
+	// the rule can be answerable for.
+	third := p.FilterRules[2]
+	if len(third.ConnectionState) != 0 {
+		t.Errorf("an absent connectionState decoded to %v, want unset", third.ConnectionState)
+	}
+	if third.ConnectionState.String() != "" {
+		t.Errorf("an absent connectionState renders as %q, want empty", third.ConnectionState.String())
+	}
+	if third.InInterface != "" || third.OutInterface != "" {
+		t.Errorf("absent interfaces decoded to %q/%q, want empty", third.InInterface, third.OutInterface)
+	}
+}
+
+// TestFilterRuleWithoutNewFieldsStillDecodes is the documented safe
+// upgrade order, pinned: an older push script against this build omits
+// every field added since it was written and is still accepted, unset
+// rather than refused.
+func TestFilterRuleWithoutNewFieldsStillDecodes(t *testing.T) {
+	p := decodeOK(t, `{"kind":"filter-rule","page":1,"pages":1,"records":[{"ordinal":0,"comment":"allow lan","chain":"forward","action":"accept","srcAddressList":"lan","logPrefix":"r0"}]}`)
+	if len(p.FilterRules) != 1 || p.FilterRules[0].Comment != "allow lan" {
+		t.Fatalf("a pre-#408 record was not accepted intact: %+v", p.FilterRules)
+	}
+}
+
 // TestWireguardPeerAcceptsRouterOSArrayShape is issue #443's acceptance
 // case, in the exact shape that failed on a live deployment: a peers
 // table pushed by the docs' own reference pattern -- :serialize to=json

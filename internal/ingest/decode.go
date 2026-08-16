@@ -279,7 +279,16 @@ func (r FilterRule) validate() error {
 	if err := validateFieldText("dstPort", string(r.DstPort)); err != nil {
 		return err
 	}
-	return validateFieldText("protocol", r.Protocol)
+	if err := validateFieldText("protocol", r.Protocol); err != nil {
+		return err
+	}
+	if err := validateFieldList("connectionState", r.ConnectionState); err != nil {
+		return err
+	}
+	if err := validateFieldText("inInterface", r.InInterface); err != nil {
+		return err
+	}
+	return validateFieldText("outInterface", r.OutInterface)
 }
 
 func (r NATRule) validate() error {
