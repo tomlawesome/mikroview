@@ -28,6 +28,7 @@ import (
 	"github.com/tomlawesome/mikroview/internal/config"
 	"github.com/tomlawesome/mikroview/internal/detect"
 	"github.com/tomlawesome/mikroview/internal/device"
+	"github.com/tomlawesome/mikroview/internal/engine"
 	"github.com/tomlawesome/mikroview/internal/entities"
 	"github.com/tomlawesome/mikroview/internal/flags"
 	"github.com/tomlawesome/mikroview/internal/geoip"
@@ -666,6 +667,16 @@ func main() {
 	// than queuing work that could never complete.
 	watchlistEval := watchlist.NewEvaluator(watchlistStore, matchLog)
 
+	// eng is the evaluation chassis (issue #398, part of the v0.3.0
+	// unification -- see docs/decisions/evaluation-engine.md): one ingest
+	// queue, one backpressure policy, one lifecycle, one panic boundary.
+	// It holds no definitions yet (that starts with #401), so wiring it
+	// in alongside detector/watchlistEval is a no-behaviour-change
+	// change -- it evaluates nothing, it just now also receives every
+	// stored event. detect.Detector and watchlist.Evaluator collapse
+	// onto it in later issues; this one only adds it.
+	eng := engine.New()
+
 	detectCfg := detect.Config{
 		PortScanThreshold:        cfg.Flags.PortScanThreshold,
 		PortScanWindow:           cfg.Flags.PortScanWindow,
@@ -840,9 +851,10 @@ func main() {
 	watchlistEval.WithAddressLists(routerState)
 	names := naming.Resolver{Rules: cfg.RuleNames, Hosts: cfg.HostNames, Entities: entityStore, RouterHosts: routerState}
 
-	go ingest(ctx, raw, st, devices, macRegistry, fs, h, geo, detector, ru, names, watchlistEval, setupStore)
+	go ingest(ctx, raw, st, devices, macRegistry, fs, h, geo, detector, ru, names, watchlistEval, eng, setupStore)
 	go detector.Run(ctx)
 	go watchlistEval.Run(ctx)
+	go eng.Run(ctx)
 	go suggestStore.RunPeriodicSync(ctx, routerState, suggestSyncInterval)
 	if matchLogPostgres != nil {
 		go matchLogPostgres.RunPeriodicPurge(ctx, matchLogPurgeInterval)
@@ -1935,14 +1947,14 @@ func readPasswordTwice() (string, error) {
 // WebSocket broadcast (see detect.Detector.Enqueue/Run, and the
 // dedicated detection-worker goroutine main() starts alongside this
 // one).
-func ingest(ctx context.Context, raw <-chan syslog.RawMessage, st *store.Store, devices *device.Registry, macRegistry *device.MACRegistry, fs *flags.Store, h *hub.Hub, geo *geoip.Lookup, detector *detect.Detector, ru *rules.Store, names naming.Resolver, watchlistEval *watchlist.Evaluator, setupStore *setup.Store) {
+func ingest(ctx context.Context, raw <-chan syslog.RawMessage, st *store.Store, devices *device.Registry, macRegistry *device.MACRegistry, fs *flags.Store, h *hub.Hub, geo *geoip.Lookup, detector *detect.Detector, ru *rules.Store, names naming.Resolver, watchlistEval *watchlist.Evaluator, eng *engine.Engine, setupStore *setup.Store) {
 	ingestLog := logging.New("ingest")
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case rm := <-raw:
-			ingestOneRecovered(ingestLog, rm, st, devices, macRegistry, fs, h, geo, detector, ru, names, watchlistEval, setupStore)
+			ingestOneRecovered(ingestLog, rm, st, devices, macRegistry, fs, h, geo, detector, ru, names, watchlistEval, eng, setupStore)
 		}
 	}
 }
@@ -1953,7 +1965,7 @@ func ingest(ctx context.Context, raw <-chan syslog.RawMessage, st *store.Store, 
 // still end the entire ingest goroutine for good on the first bad
 // message (silently stopping all future event processing) rather than
 // just dropping that one message. See logging.Recover's doc comment.
-func ingestOneRecovered(logger *slog.Logger, rm syslog.RawMessage, st *store.Store, devices *device.Registry, macRegistry *device.MACRegistry, fs *flags.Store, h *hub.Hub, geo *geoip.Lookup, detector *detect.Detector, ru *rules.Store, names naming.Resolver, watchlistEval *watchlist.Evaluator, setupStore *setup.Store) {
+func ingestOneRecovered(logger *slog.Logger, rm syslog.RawMessage, st *store.Store, devices *device.Registry, macRegistry *device.MACRegistry, fs *flags.Store, h *hub.Hub, geo *geoip.Lookup, detector *detect.Detector, ru *rules.Store, names naming.Resolver, watchlistEval *watchlist.Evaluator, eng *engine.Engine, setupStore *setup.Store) {
 	defer logging.Recover(logger)
 
 	env := syslog.ParseEnvelope(rm.Data, rm.RecvTime)
@@ -2031,6 +2043,11 @@ func ingestOneRecovered(logger *slog.Logger, rm syslog.RawMessage, st *store.Sto
 	h.Broadcast(stored)
 	detector.Enqueue(stored)
 	watchlistEval.Enqueue(stored)
+	// eng holds no definitions yet (#398 -- see New's call site above),
+	// so this evaluates nothing today; fanning every stored event to it
+	// now is what makes the later collapse of detector/watchlistEval
+	// onto it (#399 onward) a swap rather than a rewire.
+	eng.Enqueue(stored)
 	// Keeps internal/rules' long-lived per-rule usage record in sync with
 	// internal/store/ring.go's own totalByRule bump inside Insert above --
 	// same per-event trigger, so RuleUsage never drifts out of step with
