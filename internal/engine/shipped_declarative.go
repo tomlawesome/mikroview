@@ -4,6 +4,7 @@ package engine
 
 import (
 	"fmt"
+	"strconv"
 	"time"
 )
 
@@ -34,7 +35,8 @@ import (
 // the tunable parts from the stored Definition and supplies the fixed
 // parts itself.
 var shippedDeclarativeBuilders = map[string]func(Definition) (*DeclarativeDefinition, error){
-	"port_scan": buildPortScanDefinition,
+	"port_scan":     buildPortScanDefinition,
+	"critical_port": buildCriticalPortDefinition,
 }
 
 // BuildShippedDeclarativeDefinition constructs the live *DeclarativeDefinition
@@ -138,6 +140,110 @@ func buildPortScanDefinition(def Definition) (*DeclarativeDefinition, error) {
 	}
 	template := fmt.Sprintf("{PortCount} distinct destination ports in %s", window)
 
-	return NewDeclarativeDefinition(def, conds, KeyPerSource, window, threshold,
-		CountingDistinct, FieldDestinationPort, template, nil)
+	return NewDeclarativeDefinition(def, DeclarativeSpec{
+		Conditions:     conds,
+		Key:            KeyPerSource,
+		Window:         window,
+		Threshold:      threshold,
+		CountingMode:   CountingDistinct,
+		DistinctField:  FieldDestinationPort,
+		DetailTemplate: template,
+		// Ports only: internal/detect's old port_scan raised
+		// flags.Evidence{Ports: ...} and nothing else. Declaring the
+		// category explicitly is what keeps that true -- see
+		// DeclarativeSpec.Evidence.
+		Evidence: []EvidenceField{EvidencePorts},
+	})
+}
+
+// paramPortList reads an already-ValidateParams-normalized ParamTypePortList
+// value -- validateIntListParam (params.go) normalizes it to a Go []int.
+func paramPortList(params Params, name string) ([]int, error) {
+	v, ok := params[name].([]int)
+	if !ok {
+		return nil, fmt.Errorf("engine: param %q is not a port list (got %T)", name, params[name])
+	}
+	if len(v) == 0 {
+		return nil, fmt.Errorf("engine: param %q is empty -- a declarative definition requires at least one condition value", name)
+	}
+	return v, nil
+}
+
+// buildCriticalPortDefinition builds critical_port's live
+// DeclarativeDefinition from a stored Definition -- the shipped
+// declarative counterpart of internal/detect's old observeCriticalPort
+// (detect.go, before issue #405 removed it): "N attempts against a
+// critical port from one external source within the window."
+//
+//   - Conditions: connectionState in {"", "new"} (see
+//     buildPortScanDefinition's own doc comment); sourceAddress
+//     matchesClassification "external" -- internal/detect's own
+//     isPublic(e.SrcIP) gate, which classificationMatches (conditions.go)
+//     reproduces exactly (same isPublicIP formula); destinationPort in
+//     the operator-configured critical-ports list (the "ports" param,
+//     CriticalPortParamSchema) -- Scope.Ports/PortsMode (scope_match.go)
+//     then layers a further, operator-narrowable restriction on top of
+//     this list, exactly matching Scope's own doc comment ("restricts the
+//     *effective* subset of the global Config.CriticalPorts list").
+//   - Key: KeyPerSource (e.SrcIP) -- one window per source, matching
+//     detect.go's criticalHits map, so attempts against several different
+//     critical ports from the same source still aggregate into one
+//     episode (settings.go's own field-usage table documents this as
+//     deliberate).
+//   - CountingMode: total -- every matching attempt counts, regardless of
+//     which critical port it targeted (unlike port_scan, this is not
+//     about port *breadth*).
+//   - DetailTemplate: "{Count} attempts against critical ports {Ports} in
+//     <window>" -- issue #405/#379's fix: recordEvidence (declarative.go)
+//     already accumulates every distinct critical port this source
+//     touched into the same per-source EvidenceSet regardless of
+//     CountingMode, so {Ports} is the honest set, not (as
+//     internal/detect's old Detail string wrote) only the single
+//     triggering event's port -- see
+//     TestCharacterizationCriticalPort_DetailNamesTheSetOfPortsTouched in
+//     internal/detect/characterization_test.go, which replaces the
+//     old TestCharacterizationCriticalPort_DetailNamesOnlyTheLastPort
+//     pin of this exact wrong behaviour.
+func buildCriticalPortDefinition(def Definition) (*DeclarativeDefinition, error) {
+	params, err := ValidateParams(def.ParamSchema, def.Params)
+	if err != nil {
+		return nil, fmt.Errorf("engine: shipped declarative definition %q: %w", def.ID, err)
+	}
+	threshold, err := paramInt(params, "threshold")
+	if err != nil {
+		return nil, fmt.Errorf("engine: shipped declarative definition %q: %w", def.ID, err)
+	}
+	window, err := paramDuration(params, "window")
+	if err != nil {
+		return nil, fmt.Errorf("engine: shipped declarative definition %q: %w", def.ID, err)
+	}
+	ports, err := paramPortList(params, "ports")
+	if err != nil {
+		return nil, fmt.Errorf("engine: shipped declarative definition %q: %w", def.ID, err)
+	}
+	portValues := make([]string, len(ports))
+	for i, p := range ports {
+		portValues[i] = strconv.Itoa(p)
+	}
+
+	conds := []Condition{
+		{Field: FieldConnectionState, Operator: OpInSet, Values: []string{"", "new"}},
+		{Field: FieldSourceAddress, Operator: OpMatchesClassification, Values: []string{"external"}},
+		{Field: FieldDestinationPort, Operator: OpInSet, Values: portValues},
+	}
+	template := fmt.Sprintf("{Count} attempts against critical ports {Ports} in %s", window)
+
+	return NewDeclarativeDefinition(def, DeclarativeSpec{
+		Conditions:     conds,
+		Key:            KeyPerSource,
+		Window:         window,
+		Threshold:      threshold,
+		CountingMode:   CountingTotal,
+		DetailTemplate: template,
+		// Ports: #379's fix. internal/detect's old critical_port raised
+		// flags.Evidence{} (empty) while naming a single port in its
+		// Detail; the accumulated port set is what both the sentence and
+		// the Evidence now carry.
+		Evidence: []EvidenceField{EvidencePorts},
+	})
 }

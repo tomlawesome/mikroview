@@ -13,6 +13,7 @@ import (
 
 	"github.com/tomlawesome/mikroview/internal/flags"
 	"github.com/tomlawesome/mikroview/internal/reputation"
+	"github.com/tomlawesome/mikroview/internal/store"
 )
 
 // fakeReputation is a reputationLookup that blocks each call until the
@@ -97,31 +98,45 @@ func waitForConfidence(t *testing.T, fs *flags.Store, target string, want int) {
 	t.Fatalf("timed out waiting for %s to reach confidence %d, got %+v", target, want, fs.List())
 }
 
-func TestCriticalPortAppliesReputationFloor(t *testing.T) {
+// The four tests below (renamed from their original TestCriticalPort*/
+// TestReputation* names naming critical_port) used critical_port purely
+// as a convenient, cheap-to-trigger flag-raiser for a public source IP --
+// none of them are actually about critical_port's own behaviour, just
+// about maybeCheckReputation's async lookup/floor-application path. Now
+// that critical_port has moved to internal/engine as a shipped
+// declarative definition (issue #405) and internal/detect no longer
+// evaluates it at all, they are retargeted onto repeated_drops instead,
+// which internal/detect still evaluates, calls maybeCheckReputation from
+// observeRepeatedDrops with the source IP, and fires off a small threshold
+// of dropped attempts against the same (SrcIP, DstPort) pair. Unlike
+// critical_port's plain-IP Target, repeated_drops' Target is the composite
+// "<ip> -> port <N>" string (see dropPairKey/observeRepeatedDrops), so
+// every assertion keyed on the bare IP below is keyed on that composite
+// string instead.
+
+func TestRepeatedDropsAppliesReputationFloor(t *testing.T) {
 	cfg := DefaultConfig()
-	cfg.CriticalPortThreshold = 3
-	cfg.CriticalPorts = []int{22}
-	cfg.PortScanThreshold = 1000
-	cfg.ActivitySpikeThreshold = 1000
+	cfg.RepeatedDropsThreshold = 3
 
 	fake := newFakeReputation()
 	fake.setScore("198.51.100.4", 85)
 	d, fs := newTestDetector(t, cfg)
 	d.WithReputation(fake)
 
+	target := "198.51.100.4 -> port 8080"
 	now := time.Now()
 	for i := 0; i < 3; i++ {
-		d.Observe(evt("198.51.100.4", 22, now.Add(time.Duration(i)*time.Second)))
+		d.Observe(store.Event{SrcIP: "198.51.100.4", DstIP: "192.168.1.1", DstPort: 8080, Action: store.ActionDrop, ReceivedAt: now.Add(time.Duration(i) * time.Second)})
 	}
 
 	if ip := expectStarted(t, fake.started); ip != "198.51.100.4" {
 		t.Fatalf("expected a lookup for 198.51.100.4, got %s", ip)
 	}
 	close(fake.release)
-	waitForConfidence(t, fs, "198.51.100.4", 85)
+	waitForConfidence(t, fs, target, 85)
 
 	for _, f := range fs.List() {
-		if f.Target == "198.51.100.4" {
+		if f.Target == target {
 			if f.Reputation == nil || f.Reputation.AbuseScore == nil || *f.Reputation.AbuseScore != 85 {
 				t.Errorf("expected the reputation snapshot to be stored on the flag, got %+v", f.Reputation)
 			}
@@ -131,10 +146,7 @@ func TestCriticalPortAppliesReputationFloor(t *testing.T) {
 
 func TestReputationSnapshotCapturedWithoutAbuseScore(t *testing.T) {
 	cfg := DefaultConfig()
-	cfg.CriticalPortThreshold = 3
-	cfg.CriticalPorts = []int{22}
-	cfg.PortScanThreshold = 1000
-	cfg.ActivitySpikeThreshold = 1000
+	cfg.RepeatedDropsThreshold = 3
 
 	// Fake left with no score set for this IP -- simulates a Shodan-only
 	// result (no AbuseIPDB key configured).
@@ -142,9 +154,10 @@ func TestReputationSnapshotCapturedWithoutAbuseScore(t *testing.T) {
 	d, fs := newTestDetector(t, cfg)
 	d.WithReputation(fake)
 
+	target := "198.51.100.4 -> port 8080"
 	now := time.Now()
 	for i := 0; i < 3; i++ {
-		d.Observe(evt("198.51.100.4", 22, now.Add(time.Duration(i)*time.Second)))
+		d.Observe(store.Event{SrcIP: "198.51.100.4", DstIP: "192.168.1.1", DstPort: 8080, Action: store.ActionDrop, ReceivedAt: now.Add(time.Duration(i) * time.Second)})
 	}
 	expectStarted(t, fake.started)
 	close(fake.release)
@@ -152,8 +165,8 @@ func TestReputationSnapshotCapturedWithoutAbuseScore(t *testing.T) {
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
 		for _, f := range fs.List() {
-			if f.Target == "198.51.100.4" && f.Reputation != nil {
-				if f.Confidence == nil || *f.Confidence != overshootConfidence(3, cfg.CriticalPortThreshold) {
+			if f.Target == target && f.Reputation != nil {
+				if f.Confidence == nil || *f.Confidence != overshootConfidence(3, cfg.RepeatedDropsThreshold) {
 					t.Errorf("expected confidence to stay behavior-only without an AbuseScore, got %+v", f.Confidence)
 				}
 				return
@@ -164,53 +177,52 @@ func TestReputationSnapshotCapturedWithoutAbuseScore(t *testing.T) {
 	t.Fatal("timed out waiting for the reputation snapshot to be stored")
 }
 
-func TestReputationLookupOnlyFiresOnNewEpisode(t *testing.T) {
+func TestRepeatedDropsReputationLookupOnlyFiresOnNewEpisode(t *testing.T) {
 	cfg := DefaultConfig()
-	cfg.CriticalPortThreshold = 3
-	cfg.CriticalPorts = []int{22}
-	cfg.PortScanThreshold = 1000
-	cfg.ActivitySpikeThreshold = 1000
+	cfg.RepeatedDropsThreshold = 3
 
 	fake := newFakeReputation()
 	fake.setScore("198.51.100.4", 50)
 	d, fs := newTestDetector(t, cfg)
 	d.WithReputation(fake)
 
+	target := "198.51.100.4 -> port 8080"
 	now := time.Now()
 	for i := 0; i < 3; i++ {
-		d.Observe(evt("198.51.100.4", 22, now.Add(time.Duration(i)*time.Second)))
+		d.Observe(store.Event{SrcIP: "198.51.100.4", DstIP: "192.168.1.1", DstPort: 8080, Action: store.ActionDrop, ReceivedAt: now.Add(time.Duration(i) * time.Second)})
 	}
 	expectStarted(t, fake.started)
 	close(fake.release)
-	waitForConfidence(t, fs, "198.51.100.4", 50)
+	waitForConfidence(t, fs, target, 50)
 
 	// A re-fire of the same still-active flag must not trigger a second lookup.
-	d.Observe(evt("198.51.100.4", 22, now.Add(10*time.Second)))
+	d.Observe(store.Event{SrcIP: "198.51.100.4", DstIP: "192.168.1.1", DstPort: 8080, Action: store.ActionDrop, ReceivedAt: now.Add(10 * time.Second)})
 	expectNoneStarted(t, fake.started)
 }
 
+// TestReputationSkippedForInternalSource used to drive port_scan, which
+// no longer exists in this package (issue #405 moved it to
+// internal/engine) -- as written it passed vacuously, exercising nothing.
+// Retargeted onto repeated_drops with a private source IP so it actually
+// exercises maybeCheckReputation's isPublic gate again.
 func TestReputationSkippedForInternalSource(t *testing.T) {
 	cfg := DefaultConfig()
-	cfg.PortScanThreshold = 3
-	cfg.ActivitySpikeThreshold = 1000
+	cfg.RepeatedDropsThreshold = 3
 
 	fake := newFakeReputation()
 	d, _ := newTestDetector(t, cfg)
 	d.WithReputation(fake)
 
 	now := time.Now()
-	for port := 1; port <= 3; port++ {
-		d.Observe(evt("192.168.1.50", port, now.Add(time.Duration(port)*time.Millisecond)))
+	for i := 0; i < 3; i++ {
+		d.Observe(store.Event{SrcIP: "192.168.1.50", DstIP: "192.168.1.1", DstPort: 8080, Action: store.ActionDrop, ReceivedAt: now.Add(time.Duration(i) * time.Millisecond)})
 	}
 	expectNoneStarted(t, fake.started)
 }
 
-func TestReputationPoolSaturationSkipsExcessLookups(t *testing.T) {
+func TestRepeatedDropsPoolSaturationSkipsExcessLookups(t *testing.T) {
 	cfg := DefaultConfig()
-	cfg.CriticalPortThreshold = 1
-	cfg.CriticalPorts = []int{22}
-	cfg.PortScanThreshold = 1000
-	cfg.ActivitySpikeThreshold = 1000
+	cfg.RepeatedDropsThreshold = 1
 	cfg.DistributedBruteForceThreshold = 1000 // keep the group path quiet so it doesn't also compete for pool slots here
 
 	fake := newFakeReputation()
@@ -219,7 +231,8 @@ func TestReputationPoolSaturationSkipsExcessLookups(t *testing.T) {
 
 	now := time.Now()
 	for i := 1; i <= reputationLookupConcurrency+1; i++ {
-		d.Observe(evt(fakeExternalIP(i), 22, now.Add(time.Duration(i)*time.Second)))
+		ip := fakeExternalIP(i)
+		d.Observe(store.Event{SrcIP: ip, DstIP: "192.168.1.1", DstPort: 8080, Action: store.ActionDrop, ReceivedAt: now.Add(time.Duration(i) * time.Second)})
 	}
 
 	// Exactly reputationLookupConcurrency lookups should start and then
@@ -232,7 +245,7 @@ func TestReputationPoolSaturationSkipsExcessLookups(t *testing.T) {
 		t.Fatalf("expected %d distinct lookups, got %d: %v", reputationLookupConcurrency, len(seen), seen)
 	}
 
-	// The pool is now saturated -- the 5th episode's lookup must be skipped.
+	// The pool is now saturated -- the 9th episode's lookup must be skipped.
 	expectNoneStarted(t, fake.started)
 
 	close(fake.release)

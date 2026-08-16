@@ -30,15 +30,24 @@ import "github.com/tomlawesome/mikroview/internal/flags"
 // worth widening flags.Store's API to close if a real caller ever hits
 // it, not something to silently paper over indefinitely.
 func FlagsSink(fs *flags.Store) func(RoutedEmission) {
-	return func(r RoutedEmission) {
-		if fs == nil || r.Detection == nil {
-			return
-		}
-		f := r.Detection
-		confidence := 0
-		if f.Confidence != nil {
-			confidence = *f.Confidence
-		}
-		fs.AddProvisional(f.Type, f.Target, f.Detail, confidence, f.Evidence, f.Country, f.Provisional, r.EventTime)
+	return func(r RoutedEmission) { raiseDetectionFlag(fs, r) }
+}
+
+// raiseDetectionFlag is FlagsSink's callback body, factored out so
+// ReputationSink (reputation_sink.go) can reuse it while also observing
+// AddProvisional's isNew return -- a plain FlagsSink caller has no reason
+// to see that value, but a reputation lookup must only ever start on a
+// genuinely new episode (a re-fire must never re-trigger it), the same
+// gate internal/detect.maybeCheckReputation's own isNewEpisode parameter
+// enforces.
+func raiseDetectionFlag(fs *flags.Store, r RoutedEmission) (isNew bool) {
+	if fs == nil || r.Detection == nil {
+		return false
 	}
+	f := r.Detection
+	confidence := 0
+	if f.Confidence != nil {
+		confidence = *f.Confidence
+	}
+	return fs.AddProvisional(f.Type, f.Target, f.Detail, confidence, f.Evidence, f.Country, f.Provisional, r.EventTime)
 }

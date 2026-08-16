@@ -208,68 +208,22 @@ func TestActivitySpikeStillFiresWhenWarmupSamplesBelowFloor(t *testing.T) {
 	}
 }
 
-func TestReFiringUpdatesExistingFlagInPlace(t *testing.T) {
-	cfg := DefaultConfig()
-	cfg.CriticalPorts = []int{22}
-	cfg.CriticalPortThreshold = 3
-	cfg.CriticalPortWindow = time.Hour
-	d, fs := newTestDetector(t, cfg)
+// TestReFiringUpdatesExistingFlagInPlace moved to
+// internal/engine/shipped_declarative_test.go's
+// TestShippedCriticalPortReFiringUpdatesExistingFlagInPlace (issue #405:
+// critical_port is now a shipped declarative definition evaluated by
+// internal/engine, not internal/detect -- see shipped_declarative.go's
+// buildCriticalPortDefinition). Every pinned value carried over unchanged.
 
-	now := time.Now()
-	d.Observe(evt("203.0.113.9", 22, now))
-	d.Observe(evt("203.0.113.9", 22, now))
-	d.Observe(evt("203.0.113.9", 22, now)) // crosses the threshold
-	d.Observe(evt("203.0.113.9", 22, now.Add(time.Second)))
+// TestCriticalPortFlagsOnlyForExternalSources moved to
+// internal/engine/shipped_declarative_test.go's
+// TestShippedCriticalPortFlagsOnlyForExternalSources (issue #405). Every
+// pinned value carried over unchanged.
 
-	list := fs.List()
-	if len(list) != 1 {
-		t.Fatalf("expected re-firing to update one flag in place, not create another, got %d: %+v", len(list), list)
-	}
-	if list[0].Count < 2 {
-		t.Errorf("expected Count to reflect multiple firings, got %d", list[0].Count)
-	}
-}
-
-func TestCriticalPortFlagsOnlyForExternalSources(t *testing.T) {
-	cfg := DefaultConfig()
-	cfg.CriticalPortThreshold = 3
-	cfg.CriticalPortWindow = time.Minute
-	cfg.CriticalPorts = []int{22}
-	// keep the other detectors from also firing on the same traffic
-	cfg.PortScanThreshold = 1000
-	cfg.ActivitySpikeThreshold = 1000
-	d, fs := newTestDetector(t, cfg)
-
-	now := time.Now()
-	for i := 0; i < 3; i++ {
-		d.Observe(evt("192.168.1.50", 22, now.Add(time.Duration(i)*time.Second))) // private, should never flag
-	}
-	if len(fs.List()) != 0 {
-		t.Fatalf("expected no flag for a private-source critical-port attempt, got %+v", fs.List())
-	}
-
-	for i := 0; i < 3; i++ {
-		d.Observe(evt("198.51.100.4", 22, now.Add(time.Duration(i)*time.Second)))
-	}
-	list := fs.List()
-	if len(list) != 1 || list[0].Type != flags.TypeCriticalPort || list[0].Target != "198.51.100.4" {
-		t.Fatalf("expected a critical_port flag for the external source only, got %+v", list)
-	}
-}
-
-func TestCriticalPortIgnoresNonCriticalPorts(t *testing.T) {
-	cfg := DefaultConfig()
-	cfg.CriticalPortThreshold = 1
-	cfg.CriticalPorts = []int{22}
-	cfg.PortScanThreshold = 1000
-	cfg.ActivitySpikeThreshold = 1000
-	d, fs := newTestDetector(t, cfg)
-
-	d.Observe(evt("198.51.100.4", 80, time.Now()))
-	if len(fs.List()) != 0 {
-		t.Fatalf("expected no flag for a non-critical port, got %+v", fs.List())
-	}
-}
+// TestCriticalPortIgnoresNonCriticalPorts moved to
+// internal/engine/shipped_declarative_test.go's
+// TestShippedCriticalPortIgnoresNonCriticalPorts (issue #405). Every
+// pinned value carried over unchanged.
 
 func TestEvictsOldestSourceWhenOverCap(t *testing.T) {
 	orig := maxTrackedSources
@@ -298,8 +252,13 @@ func TestEvictsOldestSourceWhenOverCap(t *testing.T) {
 
 func TestEveryDetectorDisabledEntirelySuppressesItsFlagType(t *testing.T) {
 	nameToType := map[DetectorName]flags.Type{
-		DetectorActivitySpike:         flags.TypeActivitySpike,
-		DetectorCriticalPort:          flags.TypeCriticalPort,
+		DetectorActivitySpike: flags.TypeActivitySpike,
+		// DetectorCriticalPort is deliberately absent here now: critical_port
+		// itself moved to internal/engine as a shipped declarative definition
+		// (issue #405), so internal/detect no longer evaluates it at all --
+		// its own enable/disable pin now lives in
+		// internal/engine/shipped_declarative_test.go's
+		// TestShippedCriticalPortDisabledIsInert.
 		DetectorDistributedBruteForce: flags.TypeDistributedBruteForce,
 		DetectorOutboundAnomaly:       flags.TypeOutboundAnomaly,
 		DetectorInternalRecon:         flags.TypeInternalRecon,
@@ -361,34 +320,10 @@ func TestEveryDetectorDisabledEntirelySuppressesItsFlagType(t *testing.T) {
 	}
 }
 
-func TestCriticalPortConfidenceScalesWithOvershoot(t *testing.T) {
-	cfg := DefaultConfig()
-	cfg.CriticalPortThreshold = 5
-	cfg.CriticalPortWindow = time.Minute
-	cfg.CriticalPorts = []int{22}
-	cfg.PortScanThreshold = 1000
-	cfg.ActivitySpikeThreshold = 1000
-
-	now := time.Now()
-
-	justOver, fs := newTestDetector(t, cfg)
-	for i := 0; i < 5; i++ {
-		justOver.Observe(evt("198.51.100.4", 22, now.Add(time.Duration(i)*time.Second)))
-	}
-	list := fs.List()
-	if len(list) != 1 || list[0].Confidence == nil || *list[0].Confidence != 0 {
-		t.Fatalf("expected 0%% confidence exactly at threshold, got %+v", list)
-	}
-
-	wellOver, fs2 := newTestDetector(t, cfg)
-	for i := 0; i < 15; i++ {
-		wellOver.Observe(evt("198.51.100.4", 22, now.Add(time.Duration(i)*time.Second)))
-	}
-	list2 := fs2.List()
-	if len(list2) != 1 || list2[0].Confidence == nil || *list2[0].Confidence != 100 {
-		t.Fatalf("expected 100%% confidence at the overshoot ceiling, got %+v", list2)
-	}
-}
+// TestCriticalPortConfidenceScalesWithOvershoot moved to
+// internal/engine/shipped_declarative_test.go's
+// TestShippedCriticalPortConfidenceScalesWithOvershoot (issue #405). Every
+// pinned value carried over unchanged.
 
 // evtCountry is evt() with an explicit SrcCountry, for tests asserting
 // a flag's Country field is threaded through from the triggering event.
@@ -398,21 +333,10 @@ func evtCountry(srcIP, country string, dstPort int, at time.Time) store.Event {
 	return e
 }
 
-func TestCriticalPortCarriesCountry(t *testing.T) {
-	cfg := DefaultConfig()
-	cfg.CriticalPortThreshold = 1
-	cfg.CriticalPorts = []int{22}
-	cfg.PortScanThreshold = 1000
-	cfg.ActivitySpikeThreshold = 1000
-	d, fs := newTestDetector(t, cfg)
-
-	d.Observe(evtCountry("198.51.100.4", "RU", 22, time.Now()))
-
-	list := fs.List()
-	if len(list) != 1 || list[0].Country != "RU" {
-		t.Fatalf("expected Country to be threaded through, got %+v", list)
-	}
-}
+// TestCriticalPortCarriesCountry moved to
+// internal/engine/shipped_declarative_test.go's
+// TestShippedCriticalPortCarriesCountry (issue #405). Every pinned value
+// carried over unchanged.
 
 func TestActivitySpikeCarriesCountry(t *testing.T) {
 	cfg := DefaultConfig()
