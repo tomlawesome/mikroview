@@ -13,6 +13,7 @@ import (
 
 	"github.com/tomlawesome/mikroview/internal/flags"
 	"github.com/tomlawesome/mikroview/internal/reputation"
+	"github.com/tomlawesome/mikroview/internal/store"
 )
 
 // fakeReputation is a reputationLookup that blocks each call until the
@@ -99,22 +100,24 @@ func waitForConfidence(t *testing.T, fs *flags.Store, target string, want int) {
 
 // The tests below (renamed from their original TestCriticalPort*/
 // TestReputation* names naming critical_port) used critical_port, then
-// repeated_drops, purely as a convenient, cheap-to-trigger flag-raiser for
-// a public source IP -- none of them are actually about either detector's
-// own behaviour, just about maybeCheckReputation's async lookup/floor-
-// application path. Now that repeated_drops has also moved to
-// internal/engine as a shipped declarative definition (issue #405) and
-// internal/detect no longer evaluates it at all, they are retargeted onto
-// activity_spike instead, which internal/detect still evaluates. Per
-// netclass_test.go's documented recipe, activity_spike fires on a public
-// source IP's 6th event (one second apart) at DefaultConfig's real
-// HostActivityMultiplier(3), once ActivitySpikeThreshold is lowered to 3
-// and ActivitySpikeWindow to a minute -- the first call primes the EMA
-// baseline and hostActivityMinSamples(5) is reached on the 6th.
-// checkHostActivityBaseline calls maybeCheckReputation with the plain
-// source IP as both target and ip (unlike repeated_drops' composite
-// "<ip> -> port <N>" target), so every assertion below is keyed on the
-// bare IP rather than a composite string.
+// repeated_drops, then activity_spike, purely as a convenient,
+// cheap-to-trigger flag-raiser for a public source IP -- none of them are
+// actually about any one detector's own behaviour, just about
+// maybeCheckReputation's async lookup/floor-application path. Now that
+// activity_spike has also moved to internal/engine as a shipped
+// programmatic definition (issue #405) and internal/detect no longer
+// evaluates it at all, they are retargeted onto low_slow_scan instead --
+// the only other detector still evaluated by internal/detect whose
+// Observe path calls the single-IP maybeCheckReputation (not the group
+// variant dest_spread.go's outbound_anomaly uses) with a plain source IP
+// as both target and ip (see low_slow_scan.go's observeLowSlowScan). Its
+// own test file's lowSlowCfg()/lowSlowEvt()/feedPacedScan() helpers
+// (low_slow_scan_test.go, same package) already give a small,
+// deterministic recipe -- 8 paced events, 5 minutes apart, each a
+// distinct (port, host) pair with store.ActionDrop -- that clears every
+// one of low_slow_scan's axes (breadth, drop ratio, observation window,
+// baseline) at once, the same role activity_spike's six-events-one-
+// second-apart recipe played before it.
 //
 // Two of the original four no longer need a home here at all:
 // TestRepeatedDropsAppliesReputationFloor's engine counterpart is
@@ -124,20 +127,19 @@ func waitForConfidence(t *testing.T, fs *flags.Store, target string, want int) {
 // TestReputationSinkSkippedForAnInternalSourceBehindACompositeTarget --
 // both deleted here rather than retargeted a third time.
 
-// TestActivitySpikeReputationSnapshotCapturedWithoutAbuseScore is
+// TestLowSlowScanReputationSnapshotCapturedWithoutAbuseScore is
 // TestReputationSnapshotCapturedWithoutAbuseScore, retargeted onto
-// activity_spike. Unlike repeated_drops' plain overshootConfidence,
-// activity_spike's confidence is an EMA z-score with no simple closed
-// form for an arbitrary six-event burst, so what this test pins is no
-// longer a hand-derived number: it captures the behavioral confidence
-// already computed (synchronously, before the async lookup resolves),
-// then asserts that attaching a no-AbuseScore snapshot afterwards leaves
-// that number untouched -- the same "stays behavior-only" guarantee the
-// original test's exact formula was itself standing in for.
-func TestActivitySpikeReputationSnapshotCapturedWithoutAbuseScore(t *testing.T) {
-	cfg := DefaultConfig()
-	cfg.ActivitySpikeThreshold = 3
-	cfg.ActivitySpikeWindow = time.Minute
+// low_slow_scan (formerly activity_spike -- see this file's header
+// comment). Like activity_spike's EMA-derived confidence, low_slow_scan's
+// is a multi-axis composite with no simple closed form for an arbitrary
+// paced-scan burst, so what this test pins is no longer a hand-derived
+// number: it captures the behavioral confidence already computed
+// (synchronously, before the async lookup resolves), then asserts that
+// attaching a no-AbuseScore snapshot afterwards leaves that number
+// untouched -- the same "stays behavior-only" guarantee the original
+// test's exact formula was itself standing in for.
+func TestLowSlowScanReputationSnapshotCapturedWithoutAbuseScore(t *testing.T) {
+	cfg := lowSlowCfg()
 
 	// Fake left with no score set for this IP -- simulates a Shodan-only
 	// result (no AbuseIPDB key configured).
@@ -145,16 +147,14 @@ func TestActivitySpikeReputationSnapshotCapturedWithoutAbuseScore(t *testing.T) 
 	d, fs := newTestDetector(t, cfg)
 	d.WithReputation(fake)
 
-	ip := "198.51.100.4"
-	now := time.Now()
-	for i := 0; i < 6; i++ {
-		d.Observe(evt(ip, 8080, now.Add(time.Duration(i)*time.Second)))
-	}
+	ip := "203.0.113.9"
+	t0 := time.Now()
+	feedPacedScan(d, ip, 8, 5*time.Minute, store.ActionDrop, t0)
 	expectStarted(t, fake.started)
 
-	before := flagOfType(t, fs, flags.TypeActivitySpike)
+	before := flagOfType(t, fs, flags.TypeLowSlowScan)
 	if before == nil || before.Confidence == nil {
-		t.Fatal("expected an activity_spike flag with a behavioral confidence already set")
+		t.Fatal("expected a low_slow_scan flag with a behavioral confidence already set")
 	}
 	wantConfidence := *before.Confidence
 
@@ -162,7 +162,7 @@ func TestActivitySpikeReputationSnapshotCapturedWithoutAbuseScore(t *testing.T) 
 
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
-		if f := flagOfType(t, fs, flags.TypeActivitySpike); f != nil && f.Reputation != nil {
+		if f := flagOfType(t, fs, flags.TypeLowSlowScan); f != nil && f.Reputation != nil {
 			if f.Confidence == nil || *f.Confidence != wantConfidence {
 				t.Errorf("expected confidence to stay behavior-only without an AbuseScore, got %v want %d", f.Confidence, wantConfidence)
 			}
@@ -173,59 +173,48 @@ func TestActivitySpikeReputationSnapshotCapturedWithoutAbuseScore(t *testing.T) 
 	t.Fatal("timed out waiting for the reputation snapshot to be stored")
 }
 
-// TestActivitySpikeReputationLookupOnlyFiresOnNewEpisode is
+// TestLowSlowScanReputationLookupOnlyFiresOnNewEpisode is
 // TestRepeatedDropsReputationLookupOnlyFiresOnNewEpisode, retargeted onto
-// activity_spike.
-func TestActivitySpikeReputationLookupOnlyFiresOnNewEpisode(t *testing.T) {
-	cfg := DefaultConfig()
-	cfg.ActivitySpikeThreshold = 3
-	cfg.ActivitySpikeWindow = time.Minute
+// low_slow_scan (formerly activity_spike -- see this file's header
+// comment).
+func TestLowSlowScanReputationLookupOnlyFiresOnNewEpisode(t *testing.T) {
+	cfg := lowSlowCfg()
 
+	ip := "203.0.113.9"
 	fake := newFakeReputation()
-	fake.setScore("198.51.100.4", 50)
+	fake.setScore(ip, 50)
 	d, fs := newTestDetector(t, cfg)
 	d.WithReputation(fake)
 
-	ip := "198.51.100.4"
-	now := time.Now()
-	for i := 0; i < 6; i++ {
-		d.Observe(evt(ip, 8080, now.Add(time.Duration(i)*time.Second)))
-	}
+	t0 := time.Now()
+	last := feedPacedScan(d, ip, 8, 5*time.Minute, store.ActionDrop, t0)
 	expectStarted(t, fake.started)
 	close(fake.release)
 	waitForConfidence(t, fs, ip, 50)
 
 	// A re-fire of the same still-active flag must not trigger a second lookup.
-	d.Observe(evt(ip, 8080, now.Add(6*time.Second)))
+	d.Observe(lowSlowEvt(ip, "192.168.50.9", 10008, store.ActionDrop, last.Add(5*time.Minute)))
 	expectNoneStarted(t, fake.started)
 }
 
-// TestActivitySpikePoolSaturationSkipsExcessLookups is
+// TestLowSlowScanPoolSaturationSkipsExcessLookups is
 // TestRepeatedDropsPoolSaturationSkipsExcessLookups, retargeted onto
-// activity_spike: reputationLookupConcurrency+1 distinct public source
-// IPs, each independently driven through its own six-event burst (the
-// same recipe as the two tests above), so each crosses the threshold and
-// requests its own lookup slot.
-func TestActivitySpikePoolSaturationSkipsExcessLookups(t *testing.T) {
-	cfg := DefaultConfig()
-	cfg.ActivitySpikeThreshold = 3
-	cfg.ActivitySpikeWindow = time.Minute
+// low_slow_scan (formerly activity_spike -- see this file's header
+// comment): reputationLookupConcurrency+1 distinct public source IPs,
+// each independently driven through its own eight-step paced-scan burst
+// (the same recipe as the two tests above), so each crosses the
+// threshold and requests its own lookup slot.
+func TestLowSlowScanPoolSaturationSkipsExcessLookups(t *testing.T) {
+	cfg := lowSlowCfg()
 
 	fake := newFakeReputation()
 	d, _ := newTestDetector(t, cfg)
 	d.WithReputation(fake)
 
-	// Port 8080 is deliberately not one of DefaultConfig's CriticalPorts,
-	// so distributed_brute_force's critical-port gate (see Observe in
-	// detect.go) never even looks at these events -- no need to also
-	// detune its threshold to keep it quiet, the way the repeated_drops
-	// version of this test had to.
 	now := time.Now()
 	for i := 1; i <= reputationLookupConcurrency+1; i++ {
 		ip := fakeExternalIP(i)
-		for j := 0; j < 6; j++ {
-			d.Observe(evt(ip, 8080, now.Add(time.Duration(i*10+j)*time.Second)))
-		}
+		feedPacedScan(d, ip, 8, 5*time.Minute, store.ActionDrop, now)
 	}
 
 	// Exactly reputationLookupConcurrency lookups should start and then

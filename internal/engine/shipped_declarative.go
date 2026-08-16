@@ -408,3 +408,103 @@ func buildDistributedBruteForceDefinition(def Definition) (*DeclarativeDefinitio
 		Evidence:       []EvidenceField{EvidenceHosts},
 	})
 }
+
+// paramFloat/paramIntOptional/cadenceFromParams/baselineFloorFromParams
+// are the programmatic kind's counterparts to paramInt/paramDuration
+// above -- same contract: they read an already-ValidateParams-normalized
+// value, never a raw one.
+func paramFloat(params Params, name string) (float64, error) {
+	switch v := params[name].(type) {
+	case float64:
+		return v, nil
+	case int:
+		return float64(v), nil
+	default:
+		return 0, fmt.Errorf("engine: param %q is not a number (got %T)", name, params[name])
+	}
+}
+
+// paramIntOptional is paramInt for a non-Required schema entry: an
+// absent value is 0, not an error. 0 is the honest reading of "not set"
+// for every param this is used for (warmupSamples, where 0 means "no
+// warm-up required" -- see emaConfidence's own guard).
+func paramIntOptional(params Params, name string) (int, error) {
+	raw, ok := params[name]
+	if !ok {
+		return 0, nil
+	}
+	v, ok := raw.(int)
+	if !ok {
+		return 0, fmt.Errorf("engine: param %q is not an int (got %T)", name, raw)
+	}
+	return v, nil
+}
+
+// cadenceFromParams reads the #399 updateCadence param. Absent means
+// UpdatePerEvent, which is what every internal/detect baseline did.
+func cadenceFromParams(params Params) (UpdateCadence, error) {
+	raw, ok := params["updateCadence"]
+	if !ok {
+		return UpdatePerEvent, nil
+	}
+	s, ok := raw.(string)
+	if !ok {
+		return 0, fmt.Errorf("engine: param \"updateCadence\" is not a string (got %T)", raw)
+	}
+	switch s {
+	case "", "perEvent":
+		return UpdatePerEvent, nil
+	case "perWindow":
+		return UpdatePerWindow, nil
+	default:
+		return 0, fmt.Errorf("engine: param \"updateCadence\": unknown cadence %q", s)
+	}
+}
+
+// baselineFloorFromParams builds the BaselineFloor a definition's params
+// declare. The window itself is always the floor's minimum duration --
+// that is #368's fix, and it is not operator-tunable downward: a
+// baseline primed from a still-filling window is wrong regardless of
+// what an operator would prefer, which is the whole finding. The
+// baselineFloorDuration param (#399) can only ever *extend* it, and the
+// migration seeds it at zero, which is today's behaviour.
+func baselineFloorFromParams(params Params, window time.Duration) (BaselineFloor, error) {
+	floor := BaselineFloor{MinDuration: window}
+	raw, ok := params["baselineFloorDuration"]
+	if !ok {
+		return floor, nil
+	}
+	s, ok := raw.(string)
+	if !ok {
+		return BaselineFloor{}, fmt.Errorf("engine: param \"baselineFloorDuration\" is not a duration string (got %T)", raw)
+	}
+	extra, err := time.ParseDuration(s)
+	if err != nil {
+		return BaselineFloor{}, fmt.Errorf("engine: param \"baselineFloorDuration\": invalid duration %q: %w", s, err)
+	}
+	if extra > floor.MinDuration {
+		floor.MinDuration = extra
+	}
+	return floor, nil
+}
+
+// paramStringList/paramFloatOptional complete the normalized-param
+// readers above for the optional shapes the programmatic definitions use.
+func paramStringList(params Params, name string) ([]string, error) {
+	raw, ok := params[name]
+	if !ok {
+		return nil, nil
+	}
+	v, ok := raw.([]string)
+	if !ok {
+		return nil, fmt.Errorf("engine: param %q is not a string list (got %T)", name, raw)
+	}
+	return v, nil
+}
+
+func paramFloatOptional(params Params, name string) (float64, error) {
+	if _, ok := params[name]; !ok {
+		return 0, nil
+	}
+	return paramFloat(params, name)
+}

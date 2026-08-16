@@ -56,12 +56,13 @@ import (
 	"golang.org/x/term"
 )
 
-// globalSpikeCheckInterval is how often the global volume-spike detector
-// re-samples the store's current events-per-second figure. Independent
-// of STATS_REFRESH_MS on the frontend -- this only needs to be frequent
-// enough for the detector's own EMA baseline to track real trends, not
-// to feel "live" to a person.
-const globalSpikeCheckInterval = 10 * time.Second
+// engineTickInterval is how often the engine's tick driver runs (issue
+// #405). Not itself a detector cadence: it is the granularity at which
+// Engine.Tick asks "is anything due", and each Ticked definition still
+// runs at its own declared TickInterval. Set to the finest cadence any
+// shipped definition declares (global_spike's 10s, above) so nothing
+// ever waits longer than its own interval for the driver to come round.
+const engineTickInterval = 10 * time.Second
 
 // deviceSilenceCheckInterval is how often DeviceSilenceDetector re-checks
 // every configured device's LastSeen against Config.DeviceStaleAfter.
@@ -858,7 +859,6 @@ func main() {
 		WithEntities(entityStore).
 		WithKnownBadIPs(bl).
 		WithNetClass(nc)
-	globalSpike := detect.NewGlobalSpikeDetectorWithSettings(detectCfg, fs, detectorSettings)
 	deviceSilence := detect.NewDeviceSilenceDetectorWithSettings(detectCfg, fs, detectorSettings, devices)
 	staleRule := detect.NewStaleRuleDetector(ru, fs, time.Duration(cfg.Flags.StaleRuleDays)*24*time.Hour)
 
@@ -908,6 +908,56 @@ func main() {
 		shippedDeclDefs = append(shippedDeclDefs, dd)
 	}
 	eng.Register(engine.NewDeclarativeSet("shipped-declarative", shippedDeclDefs))
+
+	// Shipped programmatic definitions (issue #405): built-in Go wearing
+	// the same envelope, for the detectors that cannot honestly be a
+	// form -- statistical baselines, absence-of-events checks,
+	// external-data lookups (see internal/engine/programmatic.go).
+	// Registered one at a time rather than behind a set: unlike the
+	// declarative kind there is no dispatch pre-index to share, and one
+	// registration per definition is what gives each its own panic
+	// boundary and its own fault report.
+	//
+	// Everything a programmatic definition may need beyond the event
+	// stream arrives through ShippedDeps as a narrow interface, so the
+	// concrete stores stay behind adapters this file owns (see
+	// blocklistLookup and friends at the bottom of this file). Every
+	// field is optional: a deployment with no blocklist sources, no
+	// netclass sources and no entity store still builds the whole
+	// catalogue, with the definitions that need those simply never
+	// firing.
+	deps := engine.ShippedDeps{
+		Flags:    engine.FlagsConfidenceFloorRaiser(fs),
+		Entities: entityTagLookup{es: entityStore},
+		KnownBad: blocklistLookup{bl: bl},
+		NetClass: netClassLookup{nc: nc},
+		Devices:  deviceLister{reg: devices},
+		Rules:    staleRuleLister{ru: ru, maxAge: time.Duration(cfg.Flags.StaleRuleDays) * 24 * time.Hour},
+		Rate:     eventRateSource{st: st},
+		State:    engineState,
+	}
+	for _, sd := range definitions.List() {
+		if !sd.Available || sd.Definition.Kind != engine.KindProgrammatic || sd.Definition.Provenance.Origin != engine.ProvenanceShipped {
+			continue
+		}
+		pd, err := engine.BuildShippedProgrammaticDefinition(sd.Definition, deps)
+		if err != nil {
+			// Expected, and not a warning, for every detector #405 has
+			// not ported yet: it has a shipped definition (the migration
+			// created one for all twelve) but no Go logic registered on
+			// this chassis, because internal/detect below is still the
+			// thing evaluating it. Logged at info so the shrinking list
+			// is visible during the port without reading as a fault.
+			detectorsLog.Info(fmt.Sprintf("shipped programmatic definition %q is not evaluated by the engine: %v", sd.Definition.ID, err))
+			continue
+		}
+		if sink, ok := pd.(interface {
+			SetSink(func(engine.RoutedEmission))
+		}); ok {
+			sink.SetSink(engine.ShippedDeclarativeSink(sd.Definition, fs, rep, 8))
+		}
+		eng.Register(pd)
+	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -978,27 +1028,33 @@ func main() {
 	go detector.Run(ctx)
 	go watchlistEval.Run(ctx)
 	go eng.Run(ctx)
-	go suggestStore.RunPeriodicSync(ctx, routerState, suggestSyncInterval)
-	if matchLogPostgres != nil {
-		go matchLogPostgres.RunPeriodicPurge(ctx, matchLogPurgeInterval)
-	}
-
+	// One driver for every Ticked definition (issue #405). Deliberately
+	// one goroutine at the finest cadence any shipped definition
+	// declares, not one goroutine per definition: Engine.Tick honours
+	// each definition's own TickInterval, so internal/detect's three
+	// separate tickers (10s global spike, 1m device silence, an
+	// operator-configured stale-rule sweep) keep their individual rates
+	// while sharing one timer and one ordering.
 	go func() {
-		spikeLog := logging.New("global-spike")
-		ticker := time.NewTicker(globalSpikeCheckInterval)
+		ticker := time.NewTicker(engineTickInterval)
 		defer ticker.Stop()
 		for {
 			select {
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				func() {
-					defer logging.Recover(spikeLog)
-					globalSpike.Check(st.EventsPerSecond(), time.Now())
-				}()
+				eng.Tick(time.Now())
 			}
 		}
 	}()
+	go suggestStore.RunPeriodicSync(ctx, routerState, suggestSyncInterval)
+	if matchLogPostgres != nil {
+		go matchLogPostgres.RunPeriodicPurge(ctx, matchLogPurgeInterval)
+	}
+
+	// The global-spike ticker moved onto the engine (issue #405): it is a
+	// shipped programmatic definition now, driven by Engine.Tick at its
+	// own declared TickInterval alongside every other Ticked definition.
 
 	go func() {
 		silenceLog := logging.New("device-silence")
@@ -2389,4 +2445,94 @@ func watchForCertificateReload(ctx context.Context, reloader *servertls.Reloader
 			}
 		}
 	}
+}
+
+// --- ShippedDeps adapters (issue #405) -------------------------------
+//
+// internal/engine deliberately depends on narrow interfaces rather than
+// on internal/blocklist, internal/netclass, internal/entities,
+// internal/device or internal/rules -- so a definition's test can supply
+// a fake without standing up a real blocklist download or device
+// registry, and so the chassis does not accumulate a dependency on every
+// package a detector happens to consult. These adapters are where the
+// concrete stores meet those interfaces, and process wiring is exactly
+// what this file is for.
+
+type entityTagLookup struct{ es *entities.Store }
+
+func (a entityTagLookup) HasTag(entityType, id, tag string) bool {
+	if a.es == nil {
+		return false
+	}
+	return a.es.HasTag(entityType, id, tag)
+}
+
+type blocklistLookup struct{ bl *blocklist.Blocklist }
+
+func (a blocklistLookup) MatchIP(ip string) (label, cidr string, ok bool) {
+	if a.bl == nil {
+		return "", "", false
+	}
+	m, matched := a.bl.Match(ip)
+	if !matched {
+		return "", "", false
+	}
+	return m.Label, m.Range, true
+}
+
+type netClassLookup struct{ nc *netclass.Classifier }
+
+func (a netClassLookup) LookupClass(ip string) (matched bool, category, label string) {
+	if a.nc == nil {
+		return false, "", ""
+	}
+	c := a.nc.Lookup(ip)
+	if !c.Matched {
+		return false, "", ""
+	}
+	return true, string(c.Category), c.Label
+}
+
+type deviceLister struct{ reg *device.Registry }
+
+func (a deviceLister) ListDevices() []engine.DeviceInfo {
+	if a.reg == nil {
+		return nil
+	}
+	list := a.reg.List()
+	out := make([]engine.DeviceInfo, 0, len(list))
+	for _, d := range list {
+		out = append(out, engine.DeviceInfo{ID: d.ID, Name: d.Name, LastSeen: d.LastSeen, Configured: d.Configured})
+	}
+	return out
+}
+
+type staleRuleLister struct {
+	ru *rules.Store
+	// maxAge is the operator-configured staleness threshold
+	// (cfg.Flags.StaleRuleDays). It stays here rather than becoming a
+	// definition param because internal/rules.Store.Stale takes it, and
+	// this adapter is the boundary that knows about that store.
+	maxAge time.Duration
+}
+
+func (a staleRuleLister) StaleRules(_ time.Duration, now time.Time) []engine.RuleUsage {
+	if a.ru == nil {
+		return nil
+	}
+	stale := a.ru.Stale(a.maxAge, now)
+	out := make([]engine.RuleUsage, 0, len(stale))
+	for _, u := range stale {
+		out = append(out, engine.RuleUsage{Rule: u.Rule, FirstSeen: u.FirstSeen, LastSeen: u.LastSeen, Count: int(u.Count)})
+	}
+	return out
+}
+
+type eventRateSource struct{ st *store.Store }
+
+func (a eventRateSource) EventsPerSecond() float64 {
+	if a.st == nil {
+		return 0
+	}
+	return a.st.EventsPerSecond()
 }

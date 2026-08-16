@@ -312,24 +312,13 @@ var maxTrackedSources = 4096
 const observeQueueSize = 4096
 
 type sourceWindow struct {
-	// spikes is a plain event count over ActivitySpikeWindow (see
-	// window.go). port_scan's own distinct-destination-port ring used to
-	// live here too (a distinctRing[int] named "ports") -- ported onto
-	// internal/engine as a shipped declarative definition (issue #405,
-	// see internal/engine/shipped_declarative.go); this struct only
-	// tracks what activity_spike/off_hours still need.
-	spikes *countRing
-
 	lastActivity time.Time
 
-	// Per-host activity baseline (see host_baseline.go): an EMA mean and
-	// variance of this source's own event rate, primed on first sight
-	// rather than compared against anything until there's a prior value
-	// to compare to.
-	baseline    float64
-	variance    float64
-	primed      bool
-	sampleCount int
+	// The rolling event-count ring and the per-host EMA baseline that
+	// used to live here moved to internal/engine with activity_spike
+	// (issue #405, shipped_activity_spike.go). What remains is off_hours'
+	// own per-hour state, which is a different statistic over a different
+	// cadence -- see below.
 
 	// hourly is off_hours.go's per-hour-of-day counterpart to
 	// baseline/variance above: 24 independent EMA baselines, one per
@@ -404,7 +393,6 @@ type Detector struct {
 	// map) both moved to internal/engine with their detectors (issue
 	// #405).
 	destWindows    map[string]*destWindow
-	ruleWindows    map[string]*ruleWindow
 	lowSlowWindows map[string]*lowSlowWindow
 
 	// observeQueue backs Enqueue/Run -- see observeQueueSize's doc
@@ -436,7 +424,6 @@ func NewWithSettings(cfg Config, fs *flags.Store, settings *SettingsStore) *Dete
 		lookupSlots:    make(chan struct{}, reputationLookupConcurrency),
 		perSource:      make(map[string]*sourceWindow),
 		destWindows:    make(map[string]*destWindow),
-		ruleWindows:    make(map[string]*ruleWindow),
 		lowSlowWindows: make(map[string]*lowSlowWindow),
 		observeQueue:   make(chan store.Event, observeQueueSize),
 	}
@@ -511,7 +498,11 @@ func (d *Detector) Observe(e store.Event) {
 	}
 	now := e.ReceivedAt
 
-	d.observeScanAndSpike(e, now)
+	// activity_spike moved to internal/engine as a shipped programmatic
+	// definition (issue #405, see shipped_activity_spike.go), taking
+	// sourceWindow's spikes ring and EMA baseline fields with it. #420
+	// stays open: the port reproduces its arithmetic exactly rather than
+	// picking one of that issue's candidate remedies.
 	d.observeLowSlowScan(e, now)
 	d.observeOffHours(e, now)
 
@@ -540,31 +531,11 @@ func (d *Detector) Observe(e store.Event) {
 		}
 	}
 
-	if e.RuleLabel != "" {
-		// Deliberately no "mark the baseline stale" reset here, unlike
-		// GlobalSpikeDetector.Check and checkHostActivityBaseline. #267
-		// finding 17 proposed adding one for consistency; measured, it
-		// makes this detector worse -- see
-		// TestRuleSpikeSurvivesADisableEnableCycleWithoutFalsePositives.
-		//
-		// The difference is where the rate comes from. GlobalSpike is
-		// handed an accurate current EPS, so re-priming gives it a
-		// correct baseline immediately. This detector derives its rate
-		// from a time-windowed hits ring that only fills while it is
-		// enabled, so re-priming on the first event after re-enabling
-		// primes against a nearly empty ring -- and the ordinary refill
-		// back to normal traffic then reads as a spike. low_slow_scan
-		// derives its rate the same way and is left alone for the same
-		// reason.
-		if rs := d.settings.Get(DetectorRuleSpike); rs.Enabled && scopeMatchesRule(rs.Scope, e.RuleLabel) {
-			d.observeRuleRate(e, now)
-		}
-	}
-
-	// repeated_drops moved to internal/engine as a shipped declarative
-	// definition (issue #405, see shipped_declarative.go's
-	// buildRepeatedDropsDefinition) -- its "locally-hosted destination,
-	// refused attempt" gate went with it, expressed as conditions.
+	// rule_spike moved to internal/engine as a shipped programmatic
+	// definition (issue #405, see shipped_rule_spike.go), taking its
+	// ruleWindows map, its EMA baseline and the #267 reasoning about not
+	// re-priming after a disable/enable cycle with it -- the chassis's
+	// Baseline is what carries all three now.
 
 	// Local blocklist match (issue #113 Part B) -- deliberately last:
 	// see observeKnownBadIP's own doc comment for why its
@@ -580,41 +551,6 @@ func (d *Detector) Observe(e store.Event) {
 	d.observeNetClass(e, now)
 }
 
-// observeScanAndSpike is activity_spike's entry point from Observe.
-// port_scan used to share this function and sourceWindow's per-source
-// state (a distinct-destination-port ring, queried here) -- ported onto
-// internal/engine as a shipped declarative definition (issue #405, see
-// internal/engine/shipped_declarative.go's buildPortScanDefinition),
-// which tracks its own state independently of d.perSource. Renamed doc
-// comment aside, this function's remaining behavior (activity_spike's
-// per-host EMA baseline check) is unchanged.
-func (d *Detector) observeScanAndSpike(e store.Event, now time.Time) {
-	if !isTrackableConnState(e) {
-		return
-	}
-
-	as := d.settings.Get(DetectorActivitySpike)
-	if !as.Enabled || !scopeMatchesHost(as.Scope, e.SrcIP) {
-		return
-	}
-
-	w, ok := d.perSource[e.SrcIP]
-	if !ok {
-		if len(d.perSource) >= maxTrackedSources {
-			evictOldestByActivity(d.perSource)
-		}
-		w = &sourceWindow{
-			spikes: newCountRing(d.cfg.ActivitySpikeWindow),
-		}
-		d.perSource[e.SrcIP] = w
-	}
-	w.lastActivity = now
-	w.spikes.Add(now, true)
-
-	spikeCount := w.spikes.Count(now, d.cfg.ActivitySpikeWindow)
-	d.checkHostActivityBaseline(w, e.SrcIP, e.SrcCountry, e.InInterface, spikeCount, now)
-}
-
 // criticalWindow/observeCriticalPort (critical_port's own per-source
 // attempt-count state and its reputation-lookup call site) moved to
 // internal/engine as a shipped declarative definition (issue #405, see
@@ -622,7 +558,7 @@ func (d *Detector) observeScanAndSpike(e store.Event, now time.Time) {
 // engine.ReputationSink wiring for the reputation-lookup counterpart).
 
 // activeWindow is implemented by every per-key detector state struct
-// (sourceWindow, destWindow, ruleWindow, lowSlowWindow)
+// (sourceWindow, destWindow, lowSlowWindow)
 // purely so evictOldestByActivity can be generic over all of them --
 // they otherwise share no behavior, just this one field.
 type activeWindow interface {
