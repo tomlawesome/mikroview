@@ -199,15 +199,17 @@ store:
 #   storePath: /var/lib/mikroview/mac-registry.json
 
 # internal/engine's evaluation chassis (docs/decisions/evaluation-engine.md):
-# persisted per-definition, per-key baseline state, so a statistical
-# baseline resumes warm across a restart instead of losing its whole
-# warm-up. storePath already defaults to
-# /var/lib/mikroview/engine-state.json (see deploy/docker-compose.yml
-# for the matching volume mount) -- only uncomment this block to move
-# that path. Nothing registers a definition against this store yet, so
-# on today's mikroview this document stays empty regardless.
+# storePath persists per-definition, per-key baseline state, so a
+# statistical baseline resumes warm across a restart instead of losing
+# its whole warm-up. definitionsStorePath (issue #404) persists the
+# definitions store -- shipped detectors, migrated watchlist
+# expectations, and eventually builder-authored custom definitions, all
+# in one document. Both already default under /var/lib/mikroview (see
+# deploy/docker-compose.yml for the matching volume mount) -- only
+# uncomment this block to move either path.
 # engine:
 #   storePath: /var/lib/mikroview/engine-state.json
+#   definitionsStorePath: /var/lib/mikroview/definitions.json
 
 # Local IP/CIDR blocklist matching (issue #113 Part B): raises a
 # known_bad_ip flag directly when a source IP falls inside a CIDR range

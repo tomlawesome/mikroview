@@ -678,16 +678,25 @@ type DeviceMAC struct {
 }
 
 // Engine configures internal/engine's evaluation chassis
-// (docs/decisions/evaluation-engine.md) -- currently just its persisted
-// per-definition, per-key baseline state (#399/#400: engine.StateStore),
-// what a Baseline needs to resume warm across a restart instead of
-// being blind for its whole warm-up again. Optional persistence, same
-// contract as Flags.StorePath: left empty, the engine still runs, every
-// Baseline just starts cold on every restart. Nothing registers a
-// definition against this store yet (#401/#405's job), so on today's
-// mikroview this document stays empty regardless.
+// (docs/decisions/evaluation-engine.md): its persisted per-definition,
+// per-key baseline state (#399/#400: engine.StateStore), what a Baseline
+// needs to resume warm across a restart instead of being blind for its
+// whole warm-up again, and (#404) the definitions store -- the one
+// document holding every definition (shipped detectors, watchlist
+// expectations, and eventually builder-authored custom ones), on both
+// backends. Optional persistence, same contract as Flags.StorePath: left
+// empty, the engine still runs, every Baseline just starts cold and the
+// definitions store stays in-memory only.
 type Engine struct {
 	StorePath string `yaml:"storePath"`
+	// DefinitionsStorePath persists the definitions store (#404). On
+	// first boot against an empty document, it is seeded from
+	// internal/detect's settings store and internal/watchlist's entries
+	// store (see engine.MigrateDefinitions) -- non-destructively: both
+	// old stores keep reading and writing their own documents until
+	// #405/#406 port their evaluation logic onto this chassis and retire
+	// them.
+	DefinitionsStorePath string `yaml:"definitionsStorePath"`
 }
 
 // Blocklist configures internal/blocklist's local IP/CIDR "known-bad"
@@ -936,7 +945,8 @@ func defaults() Config {
 			StorePath: DefaultDataDir + "/mac-registry.json",
 		},
 		Engine: Engine{
-			StorePath: DefaultDataDir + "/engine-state.json",
+			StorePath:            DefaultDataDir + "/engine-state.json",
+			DefinitionsStorePath: DefaultDataDir + "/definitions.json",
 		},
 		Blocklist: Blocklist{
 			// Mirrors internal/blocklist.DefaultSources -- kept as a
@@ -1431,6 +1441,9 @@ func applyEnv(cfg *Config) {
 	}
 	if v := os.Getenv("MIKROVIEW_ENGINE_STORE_PATH"); v != "" {
 		cfg.Engine.StorePath = v
+	}
+	if v := os.Getenv("MIKROVIEW_ENGINE_DEFINITIONS_STORE_PATH"); v != "" {
+		cfg.Engine.DefinitionsStorePath = v
 	}
 }
 

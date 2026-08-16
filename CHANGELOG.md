@@ -42,6 +42,48 @@ rewritten.
   already took) so the persisted shape and its round trip are proven
   before anything depends on them.
 
+- **The definitions store** (`internal/engine.DefinitionsStore`, issue
+  #404, another piece of the v0.3.0 engine unification): one document,
+  on both the JSON-file and Postgres backends, holding every definition
+  the evaluation engine will run against -- the twelve shipped
+  detectors' enabled/scope state and default params, an operator's
+  watchlist expectations, and (once the builder UI lands) fully custom
+  definitions, all in one place instead of the two separate documents
+  `internal/detect` and `internal/watchlist` keep today. A new
+  `definitions.json` file appears under mikroview's data directory
+  (`engine.definitionsStorePath` in `config.yaml`,
+  `MIKROVIEW_ENGINE_DEFINITIONS_STORE_PATH` as an env var override,
+  defaulting alongside every other store) and is carried by
+  `-backup`/`-restore` from day one, the same day this store exists --
+  #372's lesson, applied before an operator could ever be caught out by
+  it rather than after.
+
+  The first time a running mikroview reaches this new store with no
+  document of its own yet, it is seeded once from whatever is already on
+  disk: the detector settings store's enabled/scope toggles land as
+  overrides on their matching shipped definition, and every watchlist
+  entry becomes an expectation definition -- a non-inverted entry
+  becoming a declarative one, an inverted entry (including one still
+  mid-observation, with its recorded candidates and promoted
+  destinations) becoming a programmatic one, exactly as it was, nothing
+  reset. This migration only ever reads the old documents; it does not
+  delete or modify either one, and both keep working completely
+  unchanged for now -- `internal/detect` and `internal/watchlist` are
+  not ported onto the new engine in this release, that is still to come.
+  It also only ever writes the new document after everything above has
+  already succeeded in memory, so a source document this version cannot
+  read or parse refuses the whole migration outright (naming the file)
+  rather than starting from a partial or empty result -- the same
+  fail-closed policy issue #378 established for every other store in
+  this codebase, extended to cover a conversion failure partway through,
+  not only a read failure at the start. And nothing operator-authored is
+  ever silently discarded: a definition this version of mikroview
+  cannot make sense of at all -- the shape of things to come from a
+  newer release, encountered after a downgrade, or a shipped definition
+  a future release has since retired -- is kept exactly as stored and
+  marked unavailable rather than dropped, on every write this store ever
+  makes from then on.
+
 ### Fixed
 
 - **A stalled storage backend could freeze flag reads, rule-usage
