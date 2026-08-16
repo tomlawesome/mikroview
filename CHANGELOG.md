@@ -18,6 +18,32 @@ rewritten.
 
 ### Added
 
+- **Two new action categories, `marked` and `natted`**, so mangle mark
+  rules and NAT rules stop being reported as "unknown". RouterOS's
+  non-filter rules produce log lines with no accept/drop/reject verdict
+  in them, and every one of those used to land in the unknown bucket —
+  on a policy-routing deployment (mangle rules steering traffic into a
+  VPN tunnel) that is a permanent, steady dribble, which leaves "unknown"
+  meaning "not a filter rule" instead of "worth investigating". Both
+  categories carry through the parser, the store's `byAction` totals and
+  time series, the API, and the live view's action filter and badges.
+
+  The log-prefix convention gains two letters to go with them: `M` for a
+  mangle mark rule and `N` for a NAT rule, alongside the existing
+  `A`/`D`/`R`/`L`. Tagging is what identifies a mangle rule — RouterOS
+  prints nothing in the line that distinguishes one from a filter rule,
+  so an untagged mangle rule still shows as "unknown", the same as an
+  untagged filter rule always has. See `docs/routeros-setup.md` step 3.
+
+  One case needs no tagging: a `srcnat`/`dstnat` line carrying RouterOS's
+  translated-address annotation is read as `natted` directly, because the
+  line itself states that the packet was translated. Nothing else is
+  inferred — a line the parser cannot genuinely classify stays "unknown",
+  which is the point of the change rather than a limitation of it.
+
+  Existing `A|`-tagged NAT rules keep reporting `accept` until they are
+  re-tagged with `N|`; nothing about them breaks. (#437)
+
 - **An uptime readout in the toolbar**, next to the connection
   indicator: how long the server has been running, counting live,
   visible on every view rather than tucked into a menu. The number
