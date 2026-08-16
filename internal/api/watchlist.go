@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"net/http"
+	"sort"
 	"strconv"
 	"time"
 
@@ -73,6 +74,7 @@ func (s *Server) handleWatchlistEntriesList(w http.ResponseWriter, r *http.Reque
 	}
 
 	entries := s.Watchlist.List()
+	coverage, evidence := s.watchlistCoverage(entries)
 	writeJSON(w, http.StatusOK, map[string]any{
 		"entries": entries,
 		// Per-entry, keyed by entry ID rather than added to Entry
@@ -80,8 +82,27 @@ func (s *Server) handleWatchlistEntriesList(w http.ResponseWriter, r *http.Reque
 		// this moment, not a property of the entry, and putting it on
 		// the stored struct would mean persisting an answer that goes
 		// stale the moment a rule changes. See watchlist.Coverage.
-		"coverage": s.watchlistCoverage(entries),
+		"coverage": coverage,
+		// What the coverage answers above were actually derived from --
+		// see coverageEvidence. Surfaced rather than swallowed (#367):
+		// when the evidence base is incomplete every answer above
+		// degrades to "unknown", and this is the only place a caller can
+		// see *why* it did.
+		"coverageEvidence": evidence,
 	})
+}
+
+// coverageEvidence records whether the pushed filter tables
+// watchlistCoverage read can honestly be treated as *every* table that
+// could feed the watchlist (#367).
+//
+// Complete is false when at least one device has fed mikroview events
+// but has never completed the optional filter-rule state push, so its
+// rules were never read. MissingDevices names them, sorted, so the gap
+// is visible rather than only implied by a downgraded answer.
+type coverageEvidence struct {
+	Complete       bool     `json:"complete"`
+	MissingDevices []string `json:"missingDevices,omitempty"`
 }
 
 // watchlistCoverage answers, per entry, whether anything can actually
@@ -92,7 +113,33 @@ func (s *Server) handleWatchlistEntriesList(w http.ResponseWriter, r *http.Reque
 // entry, rather than per entry: the tables are small but the lock is
 // shared with the ingest path, and this runs on every load of the
 // Watchlist page.
-func (s *Server) watchlistCoverage(entries []watchlist.Entry) map[string]watchlist.CoverageState {
+//
+// # Why a definite negative needs more than the pushed tables (#367)
+//
+// watchlist.Coverage answers only from the map it is handed, and cannot
+// tell "no other router is watching" apart from "another router is
+// watching, but its rules are not in this map" -- the map is built here,
+// from RouterState, which holds only the routers that completed the
+// *optional* filter-rule state push. A router that streams live syslog
+// and is actively producing matches, but never pushed, is silently
+// absent from it. If some other router happens to have pushed a table
+// where nothing logs, watchlist.Coverage then returns CoverageNoLogging
+// -- "no firewall rule on any router you have connected has logging
+// turned on" -- for every entry, while the excluded router's matches are
+// visible on the adjacent live-view page.
+//
+// coverage.go's own stated rule is that a negative answer "requires
+// every relevant rule to have been read and understood." That is a
+// property of the *evidence base*, not of any one entry, so it is
+// checked once here (see coverageEvidenceFor) and applied to every
+// answer: with an incomplete evidence base, both definite negatives --
+// CoverageNoLogging ("nothing anywhere logs") and CoverageOutOfScope
+// ("every logging rule was read, and each excludes this entry") --
+// degrade to CoverageUnknown, which renders as silence rather than as a
+// confident wrong claim. CoverageOK is untouched: it is a positive, and
+// one router demonstrably logging the right traffic stays true however
+// many other routers went unread.
+func (s *Server) watchlistCoverage(entries []watchlist.Entry) (map[string]watchlist.CoverageState, coverageEvidence) {
 	out := make(map[string]watchlist.CoverageState, len(entries))
 	if s.RouterState == nil {
 		// Nothing pushed anything, so nothing can be said. Same answer
@@ -101,7 +148,7 @@ func (s *Server) watchlistCoverage(entries []watchlist.Entry) map[string]watchli
 		for _, e := range entries {
 			out[e.ID] = watchlist.CoverageUnknown
 		}
-		return out
+		return out, s.coverageEvidenceFor(nil)
 	}
 
 	rulesByDevice := make(map[string][]ingest.FilterRule)
@@ -110,11 +157,54 @@ func (s *Server) watchlistCoverage(entries []watchlist.Entry) map[string]watchli
 			rulesByDevice[device] = rules
 		}
 	}
+	evidence := s.coverageEvidenceFor(rulesByDevice)
 
 	for _, e := range entries {
-		out[e.ID] = watchlist.Coverage(e, rulesByDevice)
+		state := watchlist.Coverage(e, rulesByDevice)
+		if !evidence.Complete {
+			switch state {
+			case watchlist.CoverageNoLogging, watchlist.CoverageOutOfScope:
+				state = watchlist.CoverageUnknown
+			}
+		}
+		out[e.ID] = state
 	}
-	return out
+	return out, evidence
+}
+
+// coverageEvidenceFor reports whether rulesByDevice covers every device
+// that has actually fed mikroview events -- the completeness check
+// watchlistCoverage's own doc comment describes (#367).
+//
+// The event-feeding set comes from the device registry, and only
+// entries that have really carried traffic count (EventCount > 0): a
+// device declared in config.yaml but silent so far is not evidence of a
+// gap, because nothing it could log is arriving anyway. A registry entry
+// auto-discovered by source IP has that IP as its ID and so will never
+// match a pushed device name, which correctly reads as incomplete -- an
+// unregistered router streaming events is exactly the case #367 is
+// about, and guessing that it "is probably" one of the pushed routers
+// would be the same confident inference this whole file exists to
+// refuse.
+//
+// A nil registry is likewise treated as incomplete rather than complete:
+// with no way to ask which routers are feeding events, "the pushed set
+// is all of them" is unknowable, not true.
+func (s *Server) coverageEvidenceFor(rulesByDevice map[string][]ingest.FilterRule) coverageEvidence {
+	if s.Devices == nil {
+		return coverageEvidence{}
+	}
+	var missing []string
+	for _, d := range s.Devices.List() {
+		if d.EventCount == 0 {
+			continue
+		}
+		if _, ok := rulesByDevice[d.ID]; !ok {
+			missing = append(missing, d.ID)
+		}
+	}
+	sort.Strings(missing)
+	return coverageEvidence{Complete: len(missing) == 0, MissingDevices: missing}
 }
 
 // handleWatchlistEntriesCreate creates a new entry with a server-generated
