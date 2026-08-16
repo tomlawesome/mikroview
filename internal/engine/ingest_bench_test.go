@@ -92,11 +92,11 @@ func benchShippedDeclarativeSet(b *testing.B, fs *flags.Store) *DeclarativeSet {
 		}
 		params, err := ValidateParams(sd.schema, sd.params(cfg))
 		if err != nil {
-			b.Fatalf("%s: default params: %v", sd.name, err)
+			b.Fatalf("%s: default params: %v", sd.id, err)
 		}
 		dd, err := BuildShippedDeclarativeDefinition(Definition{
-			ID:          string(sd.name),
-			Name:        shippedDetectorDisplayNames[sd.name],
+			ID:          sd.id,
+			Name:        shippedDetectorDisplayNames[sd.id],
 			Intent:      IntentDetection,
 			Kind:        KindDeclarative,
 			Enabled:     true,
@@ -105,7 +105,7 @@ func benchShippedDeclarativeSet(b *testing.B, fs *flags.Store) *DeclarativeSet {
 			Provenance:  Provenance{Origin: ProvenanceShipped, ShippedParams: params},
 		})
 		if err != nil {
-			b.Fatalf("%s: BuildShippedDeclarativeDefinition: %v", sd.name, err)
+			b.Fatalf("%s: BuildShippedDeclarativeDefinition: %v", sd.id, err)
 		}
 		dd.OnRoutedEmission = FlagsSink(fs)
 		defs = append(defs, dd)
@@ -133,16 +133,16 @@ func benchShippedProgrammaticDefs(b *testing.B, fs *flags.Store) []Evaluated {
 		if sd.kind != KindProgrammatic {
 			continue
 		}
-		if _, ok := shippedProgrammaticBuilders[string(sd.name)]; !ok {
+		if _, ok := shippedProgrammaticBuilders[sd.id]; !ok {
 			continue // not ported yet -- internal/detect still evaluates it
 		}
 		params, err := ValidateParams(sd.schema, sd.params(cfg))
 		if err != nil {
-			b.Fatalf("%s: default params: %v", sd.name, err)
+			b.Fatalf("%s: default params: %v", sd.id, err)
 		}
 		pd, err := BuildShippedProgrammaticDefinition(Definition{
-			ID:          string(sd.name),
-			Name:        shippedDetectorDisplayNames[sd.name],
+			ID:          sd.id,
+			Name:        shippedDetectorDisplayNames[sd.id],
 			Intent:      IntentDetection,
 			Kind:        KindProgrammatic,
 			Enabled:     true,
@@ -151,7 +151,7 @@ func benchShippedProgrammaticDefs(b *testing.B, fs *flags.Store) []Evaluated {
 			Provenance:  Provenance{Origin: ProvenanceShipped, ShippedParams: params},
 		}, ShippedDeps{})
 		if err != nil {
-			b.Fatalf("%s: BuildShippedProgrammaticDefinition: %v", sd.name, err)
+			b.Fatalf("%s: BuildShippedProgrammaticDefinition: %v", sd.id, err)
 		}
 		if sink, ok := pd.(interface{ SetSink(func(RoutedEmission)) }); ok {
 			sink.SetSink(FlagsSink(fs))

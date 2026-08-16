@@ -478,18 +478,11 @@ func (d *Detector) Observe(e store.Event) {
 	// shipped_dest_spread.go), taking destWindow's two rings with them --
 	// which is the last thing that struct held, so d.destWindows,
 	// activeWindow and evictOldestByActivity go with them.
-	srcPublic := isPublic(e.SrcIP)
-
-	if !srcPublic && e.DstIP != "" {
-		// internal-source -> external-destination on an SMTP port (issue
-		// #108) -- always on, unlike the DetectorName-backed checks
-		// above/below, since this is deterministic (see
-		// observeMailSender's doc comment) rather than a scoped,
-		// tunable threshold.
-		if isPublic(e.DstIP) && isMailPort(e.DstPort) {
-			d.observeMailSender(e, now)
-		}
-	}
+	//
+	// mail_sender moved with them (see shipped_mail_sender.go), taking the
+	// internal-source/external-destination/SMTP-port gate that used to be
+	// written here rather than inside the detector: on the chassis a
+	// definition's own preconditions belong to the definition.
 
 	// rule_spike moved to internal/engine as a shipped programmatic
 	// definition (issue #405, see shipped_rule_spike.go), taking its
