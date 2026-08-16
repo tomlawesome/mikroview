@@ -3,12 +3,28 @@
 package detect
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/tomlawesome/mikroview/internal/store"
 )
+
+// flushForTest waits for s's write-behind writer to persist whatever is
+// currently dirty -- issue #400 moved persistence off the caller's
+// goroutine, so a test reopening the same path immediately after a Set
+// now needs an explicit synchronous checkpoint. See
+// flags.flushForTest, the twin of this helper.
+func flushForTest(t *testing.T, s *SettingsStore) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if err := s.Flush(ctx); err != nil {
+		t.Fatalf("flushForTest: %v", err)
+	}
+}
 
 func TestOpenSettingsStoreEmptyPathUsesSeedVerbatim(t *testing.T) {
 	seed := DefaultSettingsMap()
@@ -37,6 +53,8 @@ func TestOpenSettingsStorePersistsAndReloads(t *testing.T) {
 		Enabled: true,
 		Scope:   Scope{Ports: []int{22, 3389}, PortsMode: ListModeAllow},
 	})
+	// #400: write-behind -- flush before reopening, see flushForTest.
+	flushForTest(t, s)
 
 	reopened, err := OpenSettingsStore(path, DefaultSettingsMap())
 	if err != nil {
@@ -82,6 +100,8 @@ func TestOpenSettingsStoreFillsMissingDetectorFromSeed(t *testing.T) {
 		t.Fatal(err)
 	}
 	partial.Set(DetectorPortScan, Settings{Enabled: false}) // force a persist
+	// #400: write-behind -- flush before reopening, see flushForTest.
+	flushForTest(t, partial)
 
 	reopened, err := OpenSettingsStore(path, DefaultSettingsMap())
 	if err != nil {
