@@ -46,6 +46,21 @@ func TestBackupRestoreRoundTripCarriesWatchlist(t *testing.T) {
 	if err := wl.Upsert(entry); err != nil {
 		t.Fatalf("watchlist Upsert: %v", err)
 	}
+	// #400: persistence is write-behind now, so Upsert returning is not
+	// the same as the change having reached watchlistPath yet -- runBackup
+	// below reads that file directly, from what is effectively a separate
+	// reader racing this process's own writer goroutine. Flush forces the
+	// write through before proceeding, the same synchronous checkpoint a
+	// real `-backup` invocation against a live server has no equivalent
+	// for (and does not need one for: it only ever sees whatever most
+	// recently landed on disk, same as it always could against the old
+	// debounced-but-synchronous persistLocked).
+	flushCtx, flushCancel := context.WithTimeout(context.Background(), 2*time.Second)
+	if err := wl.Flush(flushCtx); err != nil {
+		flushCancel()
+		t.Fatalf("watchlist Flush: %v", err)
+	}
+	flushCancel()
 
 	// Populate suggestions with one candidate.
 	sg, err := suggest.Open(suggestionsPath)
