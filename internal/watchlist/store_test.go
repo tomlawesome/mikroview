@@ -3,6 +3,7 @@
 package watchlist
 
 import (
+	"context"
 	"errors"
 	"path/filepath"
 	"testing"
@@ -11,12 +12,40 @@ import (
 	"github.com/tomlawesome/mikroview/internal/matchlog"
 )
 
+// flushForTest waits for s's write-behind writer to persist whatever is
+// currently dirty -- issue #400 moved persistence off the caller's
+// goroutine, so a test reopening the same path immediately after a
+// mutation now needs an explicit synchronous checkpoint. See
+// flags.flushForTest, the twin of this helper.
+func flushForTest(t *testing.T, s *Store) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if err := s.Flush(ctx); err != nil {
+		t.Fatalf("flushForTest: %v", err)
+	}
+}
+
 func mustOpenStore(t *testing.T) *Store {
 	t.Helper()
 	s, err := Open(filepath.Join(t.TempDir(), "watchlist.json"))
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
+	// #400: persistence is write-behind now, so this store's writer
+	// goroutine keeps running (and can still be mid-write) past the end
+	// of a test that mutated it -- racing t.TempDir()'s own cleanup,
+	// which removes the directory the writer is writing into ("directory
+	// not empty", or a write landing on an already-removed path). Closing
+	// here, before TempDir's own registered cleanup runs (t.Cleanup runs
+	// LIFO, and TempDir's is registered first since t.TempDir() above
+	// runs before this Cleanup call), makes every test built on this
+	// helper wait for its writer to finish rather than leaking it.
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		s.Close(ctx)
+	})
 	return s
 }
 
@@ -162,6 +191,8 @@ func TestSurvivesRestart(t *testing.T) {
 	if err := s1.Upsert(entry); err != nil {
 		t.Fatal(err)
 	}
+	// #400: write-behind -- flush before reopening, see flushForTest.
+	flushForTest(t, s1)
 
 	s2, err := Open(path)
 	if err != nil {

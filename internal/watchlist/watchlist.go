@@ -202,11 +202,31 @@ var maxEntries = 10000
 // Store holds every watchlist entry. The zero value is not usable;
 // construct with Open or OpenWithBackend.
 type Store struct {
-	mu      sync.RWMutex
-	backend persist.Backend
-	version int64
+	mu sync.RWMutex
+	// wb is nil when persistence isn't configured -- see
+	// persist.WriteBehind for what it now owns: write-behind, the
+	// backend deadline, the after-write-stamped rate limit/back-off, and
+	// version bookkeeping (issue #400). Every method on it is a safe
+	// no-op on a nil receiver. Before #400 this store persisted every
+	// mutation synchronously, unconditionally, under context.Background()
+	// with no deadline -- #380's first item.
+	wb      *persist.WriteBehind
 	entries map[string]*Entry
 }
+
+// watchlistPersistMinInterval rate-limits the write-behind writer's
+// actual backend attempts. Most callers here are operator-interactive
+// (Upsert/Delete/Reset, through the admin-only Watchlist page), but
+// RecordObservation runs from Evaluator on every Observed match --
+// see its own doc comment for why it already avoids persisting a bare
+// Count/LastSeen bump. A short interval, same reasoning
+// detect.settingsPersistMinInterval gives: this store never had any
+// debounce at all before #400 (every mutation persisted synchronously),
+// so a short interval coalesces a burst of admin edits or observations
+// without meaningfully delaying anything a human is watching. A var so
+// tests that need every call to persist immediately can shrink it, same
+// convention as flags.persistMinInterval.
+var watchlistPersistMinInterval = 200 * time.Millisecond
 
 // Open loads path if it exists (a missing file is the expected first-run
 // case) and returns a Store that persists to it from then on. An empty
@@ -225,9 +245,13 @@ func Open(path string) (*Store, error) {
 // OpenWithBackend is Open against any persist.Backend -- a JSON file by
 // default, or Postgres when configured.
 func OpenWithBackend(b persist.Backend) (*Store, error) {
-	s := &Store{backend: b, entries: make(map[string]*Entry)}
+	s := &Store{entries: make(map[string]*Entry)}
 
-	version, existed, err := persist.Open(context.Background(), b, "the watchlist", func(data []byte) error {
+	wb, _, err := persist.OpenWriteBehind(context.Background(), b, "the watchlist", persist.WriteBehindOptions{
+		MinInterval: watchlistPersistMinInterval,
+		OnSaveError: func(msg string) { persistLog.Error(msg) },
+		OnConflict:  func(msg string) { persistLog.Warn(msg) },
+	}, func(data []byte) error {
 		var file storeFile
 		if err := json.Unmarshal(data, &file); err != nil {
 			return err
@@ -247,10 +271,28 @@ func OpenWithBackend(b persist.Backend) (*Store, error) {
 	if err != nil {
 		return nil, err
 	}
-	if existed {
-		s.version = version
-	}
+	s.wb = wb
 	return s, nil
+}
+
+// Flush forces this store's write-behind writer to persist whatever is
+// currently dirty now, without waiting out its usual debounce interval,
+// and blocks until that attempt finishes or ctx expires -- see
+// flags.Store.Flush's own doc comment for when this is the right call
+// (a test, or a `-backup` CLI invocation racing a still-running
+// process). A store with no backend configured (wb == nil) is a safe
+// no-op.
+func (s *Store) Flush(ctx context.Context) error {
+	return s.wb.Flush(ctx)
+}
+
+// Close stops this store's write-behind writer goroutine, flushing
+// whatever is still dirty within persist.SaveTimeout before returning --
+// main's shutdown joins on this so a change made right before exit is
+// not silently dropped. A store with no backend configured (wb == nil)
+// is a safe no-op. Not safe to call any mutating method after Close.
+func (s *Store) Close(ctx context.Context) error {
+	return s.wb.Close(ctx)
 }
 
 // List returns every entry, sorted by ID for a stable, deterministic
@@ -363,8 +405,22 @@ func (s *Store) Reset() {
 	s.persistLocked()
 }
 
+// persistLocked encodes the current state and hands it to the
+// write-behind writer (see persist.WriteBehind), which coalesces it
+// with whatever else is pending and persists it off this goroutine,
+// under its own deadline and rate limit -- closing #380's first item
+// for this store (every persist call used to run under
+// context.Background() with no deadline, synchronously, on whichever
+// goroutine called Upsert/Delete/Reset/RecordObservation/Promote/
+// SetObserving). Marshal failures are swallowed rather than surfaced to
+// the caller: the in-memory state (which every read goes through) stays
+// correct either way, so a transient disk issue degrades to "won't
+// survive a restart right now" rather than breaking live use. Must be
+// called with s.mu already held -- see flags.Store.persistLocked's own
+// doc comment for the "lock covers the encode, not the backend call"
+// contract this mirrors.
 func (s *Store) persistLocked() {
-	if s.backend == nil {
+	if s.wb == nil {
 		return
 	}
 	entries := make([]*Entry, 0, len(s.entries))
@@ -378,15 +434,7 @@ func (s *Store) persistLocked() {
 		persistLog.Error(fmt.Sprintf("encoding the watchlist for persistence failed: %v -- this change exists only in memory and will be lost on restart", err))
 		return
 	}
-	version, conflicted, err := persist.SaveWithRetry(context.Background(), s.backend, data, s.version)
-	if err != nil {
-		persistLog.Error(fmt.Sprintf("writing the watchlist to %s failed: %v -- this change exists only in memory and will be lost on restart", s.backend.Describe(), err))
-		return
-	}
-	if conflicted {
-		persistLog.Warn(fmt.Sprintf("the watchlist was modified by another process while this change was pending (%s); this change was applied on top", s.backend.Describe()))
-	}
-	s.version = version
+	s.wb.MarkDirty(data)
 }
 
 // isTrackableConnState mirrors internal/detect's own private copy of the
