@@ -1,0 +1,104 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+
+package engine
+
+import (
+	"fmt"
+
+	"github.com/tomlawesome/mikroview/internal/flags"
+)
+
+// MatchlogWrite is the intent router's expectation-intent output -- the
+// matchlog counterpart to flags.Flag below. Deliberately not
+// matchlog.Record itself: a Record's Tuple (Source identity, DestIP,
+// Port) and Event are derived from the raw triggering store.Event, which
+// an Emission never carries (see Emission's own doc comment -- it is a
+// definition's accumulated judgement, not the event that produced it).
+// Only the wiring that has an actual event in hand (#406) can supply
+// those; what Route can produce from a Definition and an Emission alone
+// is everything a definition's own judgement determines -- which
+// expectation entry this belongs to, the rendered detail, confidence
+// where computed, and whether the emission was provisional.
+type MatchlogWrite struct {
+	EntryID     string
+	Target      string
+	Detail      string
+	Confidence  *int
+	Provisional bool
+}
+
+// RoutedEmission is Route's output: exactly one of Detection or
+// Expectation is set, chosen by def.Intent -- see Route.
+type RoutedEmission struct {
+	Detection   *flags.Flag
+	Expectation *MatchlogWrite
+}
+
+// Route converts em, an Emission produced by def, into the shape def's
+// Intent feeds -- docs/decisions/evaluation-engine.md section 3's whole
+// point made concrete: Intent decides what an emission feeds and
+// nothing else, so one function suffices for both kinds of definition
+// instead of two divergent call paths growing apart over time. This is
+// what keeps "two kinds" (declarative/programmatic, see Kind) from
+// decaying into "two subsystems" the way internal/detect and
+// internal/watchlist did (see the ADR's "problem" section) -- both
+// kinds' evaluation code ends every Evaluate call by building one
+// Emission and handing it to this one function.
+//
+// A detection-intent definition's emission becomes a flags.Flag, through
+// the same field shape flags.Store.AddProvisional accepts (#405 is
+// expected to call Route's result almost directly into that). Flag's
+// own store-assigned fields (ID, FirstSeen, LastSeen, Count, ClearedAt)
+// are left zero here -- those belong to flags.Store's raise lifecycle,
+// not to translating one emission's judgement.
+//
+// An expectation-intent definition's emission becomes a MatchlogWrite --
+// see its own doc comment for why that is not matchlog.Record itself.
+//
+// No production call site exists yet: nothing constructs a real
+// Definition/Emission pair (#404/#405/#406's job). Route is exercised
+// directly by its own tests, which is also where "both intents can
+// express the same emission" is actually proven -- see
+// TestRouteProducesSymmetricOutputForBothIntents.
+func Route(def Definition, em Emission) (RoutedEmission, error) {
+	if em.DefinitionID != def.ID {
+		return RoutedEmission{}, fmt.Errorf("engine: emission is for definition %q, not %q", em.DefinitionID, def.ID)
+	}
+	switch def.Intent {
+	case IntentDetection:
+		return RoutedEmission{Detection: routeToFlag(em)}, nil
+	case IntentExpectation:
+		return RoutedEmission{Expectation: routeToMatchlog(def, em)}, nil
+	default:
+		return RoutedEmission{}, fmt.Errorf("engine: definition %q has unknown intent %q", def.ID, def.Intent)
+	}
+}
+
+func routeToFlag(em Emission) *flags.Flag {
+	return &flags.Flag{
+		Type:        flags.Type(em.DefinitionID),
+		Target:      em.Target,
+		Detail:      em.Detail,
+		Confidence:  copyIntPtr(em.Confidence),
+		Evidence:    flags.Evidence{Ports: em.Ports, Hosts: em.Hosts},
+		Provisional: em.Provisional,
+	}
+}
+
+func routeToMatchlog(def Definition, em Emission) *MatchlogWrite {
+	return &MatchlogWrite{
+		EntryID:     def.ID,
+		Target:      em.Target,
+		Detail:      em.Detail,
+		Confidence:  copyIntPtr(em.Confidence),
+		Provisional: em.Provisional,
+	}
+}
+
+func copyIntPtr(p *int) *int {
+	if p == nil {
+		return nil
+	}
+	v := *p
+	return &v
+}
