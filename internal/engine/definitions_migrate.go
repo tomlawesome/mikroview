@@ -287,6 +287,7 @@ var shippedDetectorDisplayNames = map[string]string{
 	// The shipped definitions with no DetectorName -- see shippedDetectors.
 	string(flags.TypeUnexpectedMailSender): "Unexpected mail sender",
 	string(flags.TypeStaleRule):            "Stale rule",
+	string(flags.TypeKnownBadIP):           "Known bad IP",
 }
 
 // zeroDuration is time.Duration(0).String() ("0s") -- the default value
@@ -424,6 +425,9 @@ var shippedDetectors = []shippedDetector{
 			"maxAge":        d.StaleRuleMaxAge.String(),
 			"checkInterval": d.StaleRuleCheckInterval.String(),
 		}
+	}},
+	{id: string(flags.TypeKnownBadIP), schema: KnownBadIPParamSchema, kind: KindProgrammatic, params: func(ShippedDefaults) Params {
+		return Params{"confidence": knownBadIPConfidence}
 	}},
 }
 
