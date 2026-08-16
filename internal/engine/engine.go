@@ -26,6 +26,25 @@
 //
 // "No DSL. Structured conditions only. If a real need outgrows them,
 // that is a new ADR, not a quiet extension."
+//
+// #405 adds the programmatic kind (programmatic.go) -- built-in Go
+// wearing the same envelope, for the definitions that cannot honestly be
+// a form: statistical baselines, absence-of-events checks, external-data
+// lookups. It comes with a second boundary, stated here beside the first
+// because it is the same kind of promise and is enforced the same way --
+// structurally, in one place, rather than by remembering:
+//
+// The programmatic kind is shipped-only. provenance=custom implies
+// kind=declarative (Definition.Validate), so no request shape can
+// express a custom programmatic definition; DefinitionsStore.Upsert
+// refuses to replace a shipped definition wholesale, so no request shape
+// can turn an existing declarative one programmatic either. What an
+// operator may do to a shipped programmatic definition is exactly what
+// they may do to a shipped declarative one and no more: enable or
+// disable it, scope it, and override its declared params. Its Go logic
+// is part of this binary, not part of its data -- which is precisely why
+// the two kinds can share one envelope without the programmatic kind
+// becoming a way to smuggle code in through the API.
 package engine
 
 import (
@@ -126,6 +145,92 @@ type Evaluated interface {
 	Evaluate(e store.Event)
 }
 
+// Ordered is implemented by a definition that has to be evaluated after
+// (or before) others for the *same* event, rather than in whatever order
+// the engine happens to hold them.
+//
+// Almost nothing needs this, and a definition that implements it without
+// a real reason is a definition that has quietly made itself dependent
+// on another one. The reason that does exist is reinforcement: a
+// definition whose whole job is to raise the confidence floor of flags
+// *other* definitions just raised for this same event
+// (internal/detect's known_bad_ip and netclass passes, whose own doc
+// comments record that they must run last "so any flag newly raised by
+// this same event already exists in fs by the time RaiseConfidenceFloor
+// is called -- calling this any earlier would silently miss reinforcing
+// a flag raised later in the same pass"). flags.Store.RaiseConfidenceFloor
+// no-ops on a target it does not yet know about, so getting this wrong
+// costs a silently missing confidence floor, not an error.
+//
+// internal/detect enforced that ordering by writing the calls last in
+// one function. The engine cannot: definitions are separate registrations,
+// and a map has no order. Declaring the order is how the same guarantee
+// survives the port -- and evaluateEvent iterating a *sorted* slice is
+// what makes it an invariant rather than an accident of Go's map
+// iteration. See TestEvaluationOrderIsDeterministicAndRespectsOrdered.
+type Ordered interface {
+	// EvaluationOrder returns this definition's evaluation rank for one
+	// event. Lower runs first; the zero value (what a definition that
+	// does not implement this interface gets) is the ordinary rank
+	// everything else evaluates at. Ties break on ID, so the order is
+	// total and stable across process restarts, not merely consistent
+	// within one run.
+	EvaluationOrder() int
+}
+
+// ReinforcementOrder is the rank a reinforcement definition declares --
+// see Ordered. A named constant rather than a bare number at each call
+// site so "runs after every flag-raiser" is stated once, and so the gap
+// to the default rank (0) is visibly large enough that an intermediate
+// rank can be introduced later without renumbering anything.
+const ReinforcementOrder = 100
+
+// Ticked is implemented by a definition whose firing condition is not a
+// property of any event, so no amount of Evaluate calls can ever
+// establish it: "no syslog from this device for fifteen minutes", "this
+// rule has not fired in thirty days", "the network-wide rate is four
+// times its own baseline". docs/decisions/evaluation-engine.md section 2
+// names absence-of-events detectors as one of the reasons the
+// programmatic kind is permanent rather than a stepping stone -- there
+// is no event for a condition to match against.
+//
+// internal/detect drove these from main.go tickers calling Check(now)
+// directly on three concrete types. Tick is the same shape, moved onto
+// the chassis so those definitions get the same envelope, the same panic
+// boundary, the same fault reporting and the same enabled/scope handling
+// as every other definition, instead of three bespoke call sites.
+//
+// Tick is called from Engine.Tick, which is NOT the evaluation
+// goroutine -- see that method's own doc comment for the concurrency
+// contract implementations owe.
+type Ticked interface {
+	// Tick runs this definition's periodic check as of now.
+	Tick(now time.Time)
+	// TickInterval is how often Tick is meant to run. Declared by the
+	// definition rather than chosen by the caller because the cadence is
+	// part of what the definition means: global_spike's EMA advances one
+	// sample per tick, so halving the interval halves the wall-clock
+	// span its baseline covers, while device_silence's cadence only
+	// decides how promptly an already-true condition is noticed. A
+	// single shared cadence would silently retune the first while barely
+	// touching the second -- which is exactly what folding
+	// internal/detect's three separate tickers (10s, 1m, and an
+	// operator-configured stale-rule sweep) into one would have done.
+	//
+	// Engine.Tick honours this: a driver may call it as often as it
+	// likes, and each definition still runs at its own declared rate.
+	TickInterval() time.Duration
+}
+
+// evaluationRank reports d's Ordered rank, or 0 for a definition that
+// does not declare one.
+func evaluationRank(d Evaluated) int {
+	if o, ok := d.(Ordered); ok {
+		return o.EvaluationOrder()
+	}
+	return 0
+}
+
 // Fault is the visible state of a definition the engine has stopped
 // evaluating after it panicked faultThreshold times in a row. It is
 // deliberately a first-class, always-readable value (see Engine.Faults)
@@ -145,9 +250,21 @@ type Fault struct {
 // the evaluation goroutine (on every Evaluate) and from any caller of
 // ClearFault (an operator action, not necessarily on that goroutine).
 type registration struct {
-	def    Evaluated
-	streak int
-	fault  *Fault
+	def Evaluated
+	// rank is def's Ordered rank, read once at registration -- see
+	// Ordered. Cached rather than re-derived per event because the type
+	// assertion is the same answer every time and this sits on the
+	// ingest path.
+	rank int
+	// lastTick is when this definition's Tick last ran -- see
+	// Engine.Tick. The zero value means "never ticked", which counts as
+	// due: a definition registered at boot runs on the driver's first
+	// tick rather than waiting out a full interval first, so a device
+	// that was already silent before this process started is reported
+	// promptly rather than after another whole staleness window.
+	lastTick time.Time
+	streak   int
+	fault    *Fault
 }
 
 // Engine is the chassis: one ingest queue, one backpressure policy, one
@@ -162,6 +279,11 @@ type Engine struct {
 
 	mu   sync.Mutex
 	defs map[string]*registration
+	// order is defs' values sorted by (Ordered rank, ID) -- maintained
+	// on Register rather than sorted per event, since the definition set
+	// changes on an operator action and the sort runs on every single
+	// ingested event. See Ordered for why the order has to exist at all.
+	order []*registration
 }
 
 // New constructs an Engine with an empty queue and no registered
@@ -186,7 +308,24 @@ func New() *Engine {
 func (e *Engine) Register(d Evaluated) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	e.defs[d.ID()] = &registration{def: d}
+	e.defs[d.ID()] = &registration{def: d, rank: evaluationRank(d)}
+	e.reorderLocked()
+}
+
+// reorderLocked rebuilds the evaluation order from defs. Called only
+// from Register (the one place the definition set changes), never from
+// the per-event path.
+func (e *Engine) reorderLocked() {
+	e.order = make([]*registration, 0, len(e.defs))
+	for _, r := range e.defs {
+		e.order = append(e.order, r)
+	}
+	sort.Slice(e.order, func(i, j int) bool {
+		if e.order[i].rank != e.order[j].rank {
+			return e.order[i].rank < e.order[j].rank
+		}
+		return e.order[i].def.ID() < e.order[j].def.ID()
+	})
 }
 
 // Enqueue hands ev off to the evaluation goroutine (see Run) without
@@ -289,15 +428,107 @@ func (e *Engine) drain() {
 // other goroutines while evaluation is in progress.
 func (e *Engine) evaluateEvent(ev store.Event) {
 	e.mu.Lock()
-	regs := make([]*registration, 0, len(e.defs))
-	for _, r := range e.defs {
-		regs = append(regs, r)
-	}
+	regs := append([]*registration(nil), e.order...)
 	e.mu.Unlock()
 
 	for _, r := range regs {
 		e.evaluateOne(r, ev)
 	}
+}
+
+// Tick drives every registered definition that implements Ticked, in the
+// same order and behind the same per-definition panic boundary as
+// evaluateEvent -- the chassis's home for the three checks main.go used
+// to call directly on concrete internal/detect types from its own
+// tickers (see Ticked).
+//
+// Called from whatever goroutine owns the caller's ticker, NOT from the
+// evaluation goroutine, exactly as internal/detect's own
+// GlobalSpikeDetector.Check/DeviceSilenceDetector.Check/StaleRuleDetector.Check
+// were: a Ticked definition therefore owns its own concurrency safety
+// for any state it shares with its own Evaluate. In practice the three
+// shipped ones share none -- an absence-of-events definition has no
+// per-event state to share, and global_spike's baseline is only ever
+// touched from here -- which is why the chassis states the requirement
+// rather than serializing on the caller's behalf and quietly making
+// every tick contend with ingest.
+func (e *Engine) Tick(now time.Time) {
+	if e == nil {
+		return
+	}
+	e.mu.Lock()
+	regs := append([]*registration(nil), e.order...)
+	e.mu.Unlock()
+
+	for _, r := range regs {
+		t, ok := r.def.(Ticked)
+		if !ok {
+			continue
+		}
+		if !e.tickDue(r, t, now) {
+			continue
+		}
+		e.tickOne(r, t, now)
+	}
+}
+
+// tickDue reports whether r is due to tick at now, per its own declared
+// TickInterval, and records the tick if so -- see registration.lastTick.
+// A non-positive interval is treated as "every call", the same
+// permissive reading a zero threshold gets elsewhere in this package.
+func (e *Engine) tickDue(r *registration, t Ticked, now time.Time) bool {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	interval := t.TickInterval()
+	if !r.lastTick.IsZero() && interval > 0 && now.Sub(r.lastTick) < interval {
+		return false
+	}
+	r.lastTick = now
+	return true
+}
+
+// tickOne is evaluateOne for a tick: same fault gate, same
+// consecutive-panic accounting, same recovery boundary. Kept separate
+// rather than generalized over a closure so the two paths' stack traces
+// stay honest about which one panicked.
+func (e *Engine) tickOne(r *registration, t Ticked, now time.Time) {
+	e.mu.Lock()
+	if r.fault != nil {
+		e.mu.Unlock()
+		return
+	}
+	e.mu.Unlock()
+
+	panicked, panicVal := e.tickRecovered(r, t, now)
+
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if !panicked {
+		r.streak = 0
+		return
+	}
+	r.streak++
+	if r.streak >= faultThreshold {
+		r.fault = &Fault{
+			DefinitionID: r.def.ID(),
+			Kind:         r.def.Kind(),
+			Reason:       fmt.Sprintf("panicked on %d consecutive ticks (last: %v)", r.streak, panicVal),
+			At:           time.Now(),
+		}
+		logger.Error(fmt.Sprintf("definition %q (kind=%s) marked faulted after %d consecutive tick panics -- skipped until cleared; this is a coverage hole, see Engine.Faults/ClearFault", r.def.ID(), r.def.Kind(), r.streak))
+	}
+}
+
+func (e *Engine) tickRecovered(r *registration, t Ticked, now time.Time) (panicked bool, panicVal any) {
+	defer func() {
+		if rec := recover(); rec != nil {
+			panicked = true
+			panicVal = rec
+			logger.Error(fmt.Sprintf("recovered from panic ticking definition %q (kind=%s): %v\n%s", r.def.ID(), r.def.Kind(), rec, debug.Stack()))
+		}
+	}()
+	t.Tick(now)
+	return false, nil
 }
 
 // evaluateOne is the one-recover-boundary-per-definition promised by

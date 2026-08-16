@@ -102,89 +102,112 @@ func TestKnownBadIPSkippedForInternalSource(t *testing.T) {
 
 // TestKnownBadIPReinforcesSameEventCriticalPortFlag and
 // TestKnownBadIPReinforcesPreviouslyRaisedFlagOnLaterEvent used
-// critical_port purely as a convenient, cheap-to-trigger flag-raiser for a
-// public source IP -- neither test is actually about critical_port's own
-// behaviour, just about observeKnownBadIP's RaiseConfidenceFloor
-// reinforcement path finding *some* already-raised, source-IP-keyed flag.
-// Now that critical_port has moved to internal/engine as a shipped
-// declarative definition (issue #405) and internal/detect no longer
-// evaluates it at all, both tests below are retargeted onto activity_spike
-// instead, which internal/detect still evaluates and is (like
-// critical_port used to be) in knownBadReinforcedTypes with a Target that
-// is a plain source IP. activity_spike needs six events from the same
-// public source IP, one second apart, to fire at DefaultConfig's real
-// HostActivityMultiplier(3): the first call primes the EMA baseline, and
-// hostActivityMinSamples(5) is reached on the 6th call, by which point the
-// live rate (6) still clears both the absolute floor and 3x the ~1.2
-// baseline the first five events left behind (verified empirically against
-// host_baseline.go's checkHostActivityBaseline).
+// critical_port, then activity_spike, purely as a convenient,
+// cheap-to-trigger flag-raiser for a public source IP -- neither test is
+// actually about either detector's own behaviour, just about
+// observeKnownBadIP's RaiseConfidenceFloor reinforcement path finding
+// *some* already-raised, source-IP-keyed flag. Now that activity_spike has
+// also moved to internal/engine (issue #405) and internal/detect no
+// longer evaluates it, the two remaining reinforceable types
+// (low_slow_scan, off_hours_activity) both need an elaborate multi-signal
+// or multi-day setup to fire behaviorally, and known_bad_ip/netclass are
+// themselves due to port onto internal/engine shortly, at which point
+// these tests move there anyway -- so chasing another live detector here
+// isn't worth it. Both tests below pre-seed a flags.Store entry directly
+// (flags.TypeLowSlowScan is still a plausible source-IP-keyed target --
+// see knownBadReinforcedTypes) rather than raising one behaviorally;
+// observeKnownBadIP runs unconditionally at the end of Observe for any
+// public source, so the reinforcement path itself is exercised exactly as
+// before. Every ReputationFloor/Confidence assertion is unchanged; only
+// how the flag got there is.
 
-func TestKnownBadIPReinforcesSameEventActivitySpikeFlag(t *testing.T) {
+// TestKnownBadIPReinforcesAnAlreadyRaisedFlag is
+// TestKnownBadIPReinforcesSameEventActivitySpikeFlag, retargeted per this
+// file's header comment above -- renamed because it can no longer prove
+// what its old name claimed.
+//
+// The original test's real point was narrower than "a match reinforces an
+// existing flag" (TestKnownBadIPReinforcesPreviouslyRaisedFlagOnLaterEvent,
+// below, already proves that): it proved that a flag raised by *another
+// detector during the same Observe call* is already visible to
+// observeKnownBadIP's reinforcement pass, not just one raised on an
+// earlier call -- see Observe's own doc comment on why observeKnownBadIP
+// runs last. internal/detect can no longer produce that same-call
+// ordering for a public source at any reasonable test cost (every
+// detector still live here either doesn't apply to a bare source-IP
+// target or needs a multi-event/multi-day setup that would no longer be
+// happening within one Observe call from a single triggering event).
+// That half of the pin is not preserved by this test -- it is now
+// exercised by internal/engine's Ordered contract instead
+// (ReinforcementOrder, engine.go, pinned end-to-end by
+// internal/engine/ordering_test.go's
+// TestEvaluationOrderIsDeterministicAndRespectsOrdered), and will be
+// re-pinned for known_bad_ip specifically once known_bad_ip and netclass
+// themselves port onto the engine. Flagged in this port's report as an
+// unpreserved pin rather than silently narrowed.
+func TestKnownBadIPReinforcesAnAlreadyRaisedFlag(t *testing.T) {
 	cfg := DefaultConfig()
-	cfg.ActivitySpikeThreshold = 3
-	cfg.ActivitySpikeWindow = time.Minute
+	ip := "198.51.100.4"
+
+	fs, err := flags.Open("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	fs.AddWithDetail(flags.TypeLowSlowScan, ip, "seeded", 10, flags.Evidence{}, "", now)
 
 	bl := newFakeKnownBadIPs()
-	bl.setMatch("198.51.100.4", blocklist.MatchResult{Source: blocklist.SourceSpamhausDROP, Label: "Spamhaus DROP", Range: "198.51.100.0/24"})
+	bl.setMatch(ip, blocklist.MatchResult{Source: blocklist.SourceSpamhausDROP, Label: "Spamhaus DROP", Range: "198.51.100.0/24"})
 
-	d, fs := newTestDetector(t, cfg)
+	d := NewWithSettings(cfg, fs, AllEnabledSettingsStore())
 	d.WithKnownBadIPs(bl)
+	d.Observe(evt(ip, 22, now))
 
-	now := time.Now()
-	// The 6th event in this same call both crosses the activity-spike
-	// boundary (raising TypeActivitySpike) and matches the blocklist
-	// (raising TypeKnownBadIP) -- observeKnownBadIP runs last within that
-	// same Observe call, so it must still see and reinforce the
-	// just-raised TypeActivitySpike flag, not only ones raised on an
-	// earlier event.
-	for i := 0; i < 6; i++ {
-		d.Observe(evt("198.51.100.4", 22, now.Add(time.Duration(i)*time.Second)))
-	}
-
-	asFlag := findFlag(fs, "198.51.100.4", flags.TypeActivitySpike)
+	asFlag := findFlag(fs, ip, flags.TypeLowSlowScan)
 	if asFlag == nil {
-		t.Fatal("expected a TypeActivitySpike flag to have been raised")
+		t.Fatal("expected the seeded TypeLowSlowScan flag to still exist")
 	}
 	if asFlag.ReputationFloor == nil || *asFlag.ReputationFloor != knownBadIPConfidence {
-		t.Errorf("expected TypeActivitySpike's ReputationFloor to be reinforced to %d by the same-event blocklist match, got %v", knownBadIPConfidence, asFlag.ReputationFloor)
+		t.Errorf("expected TypeLowSlowScan's ReputationFloor to be reinforced to %d, got %v", knownBadIPConfidence, asFlag.ReputationFloor)
 	}
 	if asFlag.Confidence == nil || *asFlag.Confidence < knownBadIPConfidence {
-		t.Errorf("expected TypeActivitySpike's Confidence to be at least %d after reinforcement, got %v", knownBadIPConfidence, asFlag.Confidence)
+		t.Errorf("expected TypeLowSlowScan's Confidence to be at least %d after reinforcement, got %v", knownBadIPConfidence, asFlag.Confidence)
 	}
 }
 
 func TestKnownBadIPReinforcesPreviouslyRaisedFlagOnLaterEvent(t *testing.T) {
 	cfg := DefaultConfig()
-	cfg.ActivitySpikeThreshold = 3
-	cfg.ActivitySpikeWindow = time.Minute
+	ip := "198.51.100.4"
 
-	d, fs := newTestDetector(t, cfg)
-	// No knownBad matcher attached yet -- raise TypeActivitySpike purely
-	// behaviorally first, with no reinforcement in play.
-	now := time.Now()
-	for i := 0; i < 6; i++ {
-		d.Observe(evt("198.51.100.4", 22, now.Add(time.Duration(i)*time.Second)))
+	fs, err := flags.Open("")
+	if err != nil {
+		t.Fatal(err)
 	}
+	now := time.Now()
+	// Raised with no reinforcement in play yet, mirroring the original
+	// test's "behaviorally first, matcher attached later" shape.
+	fs.AddWithDetail(flags.TypeLowSlowScan, ip, "seeded", 10, flags.Evidence{}, "", now)
 
-	asFlag := findFlag(fs, "198.51.100.4", flags.TypeActivitySpike)
+	d := NewWithSettings(cfg, fs, AllEnabledSettingsStore())
+
+	asFlag := findFlag(fs, ip, flags.TypeLowSlowScan)
 	if asFlag == nil {
-		t.Fatal("expected a TypeActivitySpike flag from the six-event burst")
+		t.Fatal("expected the seeded TypeLowSlowScan flag to exist")
 	}
 	if asFlag.ReputationFloor != nil {
 		t.Fatalf("expected no floor yet, got %v", asFlag.ReputationFloor)
 	}
 
 	// Now attach a matcher and observe a later event from the same
-	// source -- the pre-existing TypeActivitySpike flag must be
-	// reinforced.
+	// source -- the pre-existing TypeLowSlowScan flag must be reinforced.
 	bl := newFakeKnownBadIPs()
-	bl.setMatch("198.51.100.4", blocklist.MatchResult{Source: blocklist.SourceSpamhausDROP, Label: "Spamhaus DROP", Range: "198.51.100.0/24"})
+	bl.setMatch(ip, blocklist.MatchResult{Source: blocklist.SourceSpamhausDROP, Label: "Spamhaus DROP", Range: "198.51.100.0/24"})
 	d.WithKnownBadIPs(bl)
-	d.Observe(evt("198.51.100.4", 22, now.Add(6*time.Second)))
+	d.Observe(evt(ip, 22, now.Add(time.Second)))
 
-	asFlag = findFlag(fs, "198.51.100.4", flags.TypeActivitySpike)
+	asFlag = findFlag(fs, ip, flags.TypeLowSlowScan)
 	if asFlag.ReputationFloor == nil || *asFlag.ReputationFloor != knownBadIPConfidence {
-		t.Errorf("expected TypeActivitySpike's ReputationFloor to be reinforced to %d, got %v", knownBadIPConfidence, asFlag.ReputationFloor)
+		t.Errorf("expected TypeLowSlowScan's ReputationFloor to be reinforced to %d, got %v", knownBadIPConfidence, asFlag.ReputationFloor)
 	}
 }
 

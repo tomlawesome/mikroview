@@ -4,6 +4,15 @@ package detect
 
 import "math"
 
+// emaAlpha weights how much each new reading moves an EMA baseline -- a
+// slow-moving average (2% weight per sample) so one genuine spike
+// doesn't immediately drag the baseline up and mask itself, while still
+// adapting over many samples to a real, sustained change in normal
+// traffic levels. Lived in global_spike.go until issue #405 ported that
+// detector onto internal/engine (which keeps its own copy, baseline.go);
+// it stays here for the detectors this package still evaluates.
+const emaAlpha = 0.02
+
 // emaMinZ/emaFullConfidenceZ: shared across every detector built on a
 // per-source/per-rule/network-wide EMA baseline (checkHostActivityBaseline,
 // GlobalSpikeDetector.Check, observeRuleRate) -- one tuning, one formula,

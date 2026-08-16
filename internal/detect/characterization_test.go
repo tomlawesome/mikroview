@@ -169,6 +169,28 @@ func lan3(n int) string { return fmt.Sprintf("192.168.2.%d", 100+n) }
 // ---------------------------------------------------------------------------
 // 2. activity_spike
 // ---------------------------------------------------------------------------
+//
+// activity_spike's own characterization moved to
+// internal/engine/shipped_activity_spike_test.go (issue #405:
+// activity_spike is now a shipped programmatic definition evaluated by
+// internal/engine, not internal/detect -- see shipped_activity_spike.go).
+//
+// TestCharacterizationActivitySpike_ContinuousRampNeverFiresAtDefaultConfig
+// is now TestShippedActivitySpike_ContinuousRampNeverFiresAtDefaultConfig,
+// and TestCharacterizationActivitySpike_FieldsRefireClearRevive is now
+// TestShippedActivitySpike_FieldsRefireClearRevive -- both moved unchanged.
+// Every pinned value carried over unchanged: the rate=199/200 boundary,
+// the byte-for-byte Detail string "200 events in 1m0s vs a baseline of
+// 1.0 for this host (based on 20 samples, 6.0σ above normal)",
+// Confidence=100, the empty Evidence, and Country=FR.
+//
+// #420 (this detector is structurally unfireable through the ordinary
+// event path at shipped defaults) is NOT fixed by this move -- it is
+// pinned rather than fixed. The port reproduces the old arithmetic
+// exactly (the same per-event baseline fold-in, the same 1/emaAlpha lag
+// ceiling), and #420 stays open with the remedy still an open design
+// decision. See shipped_activity_spike.go's own doc comment and #420
+// itself.
 
 // indexOf is strings.Index without importing strings solely for one call
 // site -- kept local and tiny.
@@ -191,155 +213,6 @@ func assertFloatSigmaTail(t *testing.T, s, wantTail string) {
 	re := regexp.MustCompile(`^-?\d+\.\d+σ` + regexp.QuoteMeta(wantTail) + `$`)
 	if !re.MatchString(s) {
 		t.Errorf("tail = %q, want to match ^-?\\d+\\.\\d+σ%s$", s, wantTail)
-	}
-}
-
-// TestCharacterizationActivitySpike_ContinuousRampNeverFiresAtDefaultConfig
-// is a genuine surprise this characterization pass found, not a bug this
-// issue fixes: at DefaultConfig's real values (ActivitySpikeThreshold=200,
-// HostActivityMultiplier=3, emaAlpha=0.02), a single source's traffic
-// ramping continuously up through Observe can never actually raise
-// activity_spike, no matter how far past the threshold it goes.
-//
-// Why: checkHostActivityBaseline runs on *every* event, not once per
-// window, and unconditionally folds the current reading into the EMA
-// baseline immediately afterwards (see host_baseline.go). Because
-// spikeCount only ever changes by +1 per call (Observe adds exactly one
-// event to the window before checkHostActivityBaseline reads it), the
-// gap between the live rate and the baseline chasing it is bounded by
-// the EMA's own lag ceiling, 1/emaAlpha = 50 -- provably, however long
-// the ramp continues (see emaUpdate's recurrence: the lag between rate
-// and baseline for a unit-slope input converges to 1/alpha and never
-// exceeds it). So by the time the absolute floor (200) is reached, the
-// baseline is at best ~150 -- three times that is >= 450, far past any
-// rate a live window can be reporting at that same moment. The 2000-event
-// ramp below is well past the threshold and still never fires, which is
-// the point: this is not a slow warm-up artifact, it is a structural
-// ceiling that holds for any single-episode ramp shape.
-//
-// This is worth flagging, not fixing here: it means the shipped default
-// (HostActivityMultiplier=3 alongside ActivitySpikeThreshold=200) makes
-// this detector effectively unfireable via the exact "one source's
-// traffic climbing steadily" scenario its own doc comment describes as
-// the target. See this file's companion test below, which pins the
-// firing boundary/fields/confidence formula by calling
-// checkHostActivityBaseline directly (as the pre-existing
-// TestActivitySpikeNeverFiresBeforeMinimumSampleFloor already does) --
-// the only way to reach that state at all with these real thresholds,
-// since Observe's ring can never present it with a same-call jump larger
-// than 1.
-func TestCharacterizationActivitySpike_ContinuousRampNeverFiresAtDefaultConfig(t *testing.T) {
-	cfg := DefaultConfig() // ActivitySpikeThreshold=200, HostActivityMultiplier=3, WarmupSamples=20
-	d, fs := newTestDetector(t, cfg)
-	ip := "198.51.100.4"
-	t0 := time.Now()
-
-	// 2000 events on one port (ten times the absolute floor), spaced
-	// closely enough to stay inside one 60s window.
-	for i := 0; i < 2000; i++ {
-		d.Observe(evt(ip, 443, t0.Add(time.Duration(i)*10*time.Millisecond)))
-	}
-	if got := flagOfType(t, fs, flags.TypeActivitySpike); got != nil {
-		t.Fatalf("expected activity_spike to never fire from a continuous single-source ramp at DefaultConfig, got %+v", got)
-	}
-	w := d.perSource[ip]
-	if gap := 2000 - w.baseline; gap < 45 || gap > 55 {
-		t.Errorf("baseline/rate gap = %.2f, want close to the 1/emaAlpha=50 lag ceiling this test's doc comment describes", gap)
-	}
-}
-
-// TestCharacterizationActivitySpike_FieldsRefireClearRevive pins the
-// boundary/fields/confidence/re-fire/clear/revive behaviour of
-// checkHostActivityBaseline itself, called directly (bypassing Observe's
-// ring -- see the companion test above for why that ring can never
-// actually present these values at DefaultConfig's real thresholds).
-// This mirrors the pre-existing direct-call pattern
-// TestActivitySpikeNeverFiresBeforeMinimumSampleFloor/
-// TestActivitySpikeStillFiresWhenWarmupSamplesBelowFloor already use in
-// detect_test.go. Feeding a constant currentRate=1 during warm-up keeps
-// the EMA's variance at exactly zero (see emaZScore's stddev==0 branch),
-// so the boundary values below are fully deterministic.
-func TestCharacterizationActivitySpike_FieldsRefireClearRevive(t *testing.T) {
-	cfg := DefaultConfig() // ActivitySpikeThreshold=200, HostActivityMultiplier=3, WarmupSamples=20
-	ip := "198.51.100.4"
-	now := time.Now()
-
-	warm := func(d *Detector) *sourceWindow {
-		w := &sourceWindow{}
-		for i := 0; i < 25; i++ {
-			d.checkHostActivityBaseline(w, ip, "FR", "", 1, now.Add(time.Duration(i)*time.Second))
-		}
-		return w
-	}
-
-	// The below-floor probe (rate=199) uses its own Detector: like every
-	// other EMA-based detector in this file, checkHostActivityBaseline
-	// unconditionally folds its reading into the baseline afterwards, so
-	// probing on the same instance that goes on to pin the rate=200
-	// boundary would perturb the zero-variance baseline that pin depends
-	// on.
-	probe, probeFS := newTestDetector(t, cfg)
-	pw := warm(probe)
-	probe.checkHostActivityBaseline(pw, ip, "FR", "", 199, now.Add(25*time.Second))
-	if got := flagOfType(t, probeFS, flags.TypeActivitySpike); got != nil {
-		t.Fatalf("expected no flag at rate=199 (ActivitySpikeThreshold=200 is an absolute floor), got %+v", got)
-	}
-
-	d, fs := newTestDetector(t, cfg)
-	w := warm(d)
-	if got := flagOfType(t, fs, flags.TypeActivitySpike); got != nil {
-		t.Fatalf("expected no flag from the steady warm-up phase, got %+v", got)
-	}
-
-	d.checkHostActivityBaseline(w, ip, "FR", "", 200, now.Add(25*time.Second))
-	f := flagOfType(t, fs, flags.TypeActivitySpike)
-	if f == nil {
-		t.Fatal("expected a flag at exactly rate=200")
-	}
-	if f.Target != ip {
-		t.Errorf("Target = %q, want %q", f.Target, ip)
-	}
-	if f.Country != "FR" {
-		t.Errorf("Country = %q, want FR", f.Country)
-	}
-	if want := "200 events in 1m0s vs a baseline of 1.0 for this host (based on 20 samples, 6.0σ above normal)"; f.Detail != want {
-		t.Errorf("Detail = %q, want %q", f.Detail, want)
-	}
-	if !isZeroEvidence(f.Evidence) {
-		t.Errorf("Evidence = %+v, want the zero value (activity_spike carries no structured evidence)", f.Evidence)
-	}
-	if f.Confidence == nil || *f.Confidence != 100 {
-		t.Errorf("Confidence at the boundary = %v, want 100 (zero-variance warm-up collapses emaZScore to its capped ceiling)", f.Confidence)
-	}
-	if f.Count != 1 {
-		t.Errorf("Count = %d, want 1", f.Count)
-	}
-
-	// Re-fire: state past this point is no longer variance-zero, so only
-	// structural properties are asserted (see this file's header comment).
-	d.checkHostActivityBaseline(w, ip, "FR", "", 200, now.Add(27*time.Second))
-	f2 := flagOfType(t, fs, flags.TypeActivitySpike)
-	if f2 == nil || f2.Count != 2 {
-		t.Fatalf("expected Count=2 after a re-fire, got %+v", f2)
-	}
-	if f2.Confidence == nil || *f2.Confidence <= 0 || *f2.Confidence > 100 {
-		t.Errorf("Confidence after re-fire = %v, want a value in (0, 100]", f2.Confidence)
-	}
-
-	// Clear + revive.
-	if !fs.Clear(f2.ID, now.Add(28*time.Second)) {
-		t.Fatal("expected Clear to succeed")
-	}
-	d.checkHostActivityBaseline(w, ip, "FR", "", 200, now.Add(29*time.Second))
-	f3 := flagOfType(t, fs, flags.TypeActivitySpike)
-	if f3 == nil || f3.Cleared {
-		t.Fatalf("expected the flag to revive as active, got %+v", f3)
-	}
-	if f3.Count != 1 {
-		t.Errorf("Count after revival = %d, want 1", f3.Count)
-	}
-	if countTypedFlags(fs, flags.TypeActivitySpike) != 1 {
-		t.Errorf("expected exactly one activity_spike flag, got %d", countTypedFlags(fs, flags.TypeActivitySpike))
 	}
 }
 
@@ -543,114 +416,39 @@ func TestCharacterizationInternalRecon_FieldsRefireClearRevive(t *testing.T) {
 // ---------------------------------------------------------------------------
 // 7. rule_spike
 // ---------------------------------------------------------------------------
-
-// primeRuleSpikeConstantBaseline feeds n ticks of exactly one event to
-// rule at a fixed 65-second cadence (> the default 60s RuleSpikeWindow,
-// so each tick reads a constant rate of 1/60 events/sec) -- collapses
-// the EMA's variance to exactly zero, the same trick used above for
-// activity_spike/global_spike, so the boundary event that follows has a
-// deterministic confidence instead of one this test would have to
-// hand-derive. Returns the time of the last warm-up tick.
-func primeRuleSpikeConstantBaseline(d *Detector, rule string, n int, from time.Time) time.Time {
-	tick := from
-	for i := 0; i < n; i++ {
-		d.Observe(ruleEvt(rule, tick))
-		tick = tick.Add(65 * time.Second)
-	}
-	return tick.Add(-65 * time.Second)
-}
-
-// TestCharacterizationRuleSpike_FieldsRefireClearRevive pins rule_spike's
-// boundary at DefaultConfig's real 5x-multiplier/0.2-events-per-sec/60s
-// config. MinRate (12 events in the 60s window) is the binding
-// constraint here, not the multiplier, since the primed baseline is
-// tiny -- see primeRuleSpikeConstantBaseline's doc comment. Unlike
-// activity_spike/global_spike's boundary pins above, this one cannot
-// hold the EMA's variance at exactly zero right up to the boundary: to
-// reach a window count of 12, the window must actually hold 11 prior
-// hits, and every one of observeRuleRate's calls unconditionally folds
-// its reading into the baseline immediately afterwards (see
-// rule_spike.go) -- so the 11 hits leading up to the boundary event
-// necessarily perturb it first. The Detail/Confidence values below are
-// therefore captured from an actual run rather than hand-derived, the
-// same way every %.1f-formatted EMA field elsewhere in this file is
-// pinned (see this file's header comment).
-func TestCharacterizationRuleSpike_FieldsRefireClearRevive(t *testing.T) {
-	cfg := DefaultConfig() // RuleSpikeMultiplier=5, RuleSpikeMinRate=0.2, Window=60s, WarmupSamples=20
-	cfg.PortScanThreshold = 1000
-	cfg.ActivitySpikeThreshold = 1000
-	rule := "wan-in"
-
-	probe, probeFS := newTestDetector(t, cfg)
-	probeLast := primeRuleSpikeConstantBaseline(probe, rule, 25, time.Now())
-	probeBurst := probeLast.Add(65 * time.Second)
-	for i := 0; i < 11; i++ {
-		probe.Observe(ruleEvt(rule, probeBurst.Add(time.Duration(i)*time.Second)))
-	}
-	if got := flagOfType(t, probeFS, flags.TypeRuleSpike); got != nil {
-		t.Fatalf("expected no flag at 11 hits in the window (11/60=0.183 < MinRate 0.2), got %+v", got)
-	}
-
-	d, fs := newTestDetector(t, cfg)
-	last := primeRuleSpikeConstantBaseline(d, rule, 25, time.Now())
-	burstStart := last.Add(65 * time.Second)
-	for i := 0; i < 11; i++ {
-		d.Observe(ruleEvt(rule, burstStart.Add(time.Duration(i)*time.Second)))
-	}
-	d.Observe(ruleEvt(rule, burstStart.Add(11*time.Second)))
-	f := flagOfType(t, fs, flags.TypeRuleSpike)
-	if f == nil {
-		t.Fatal("expected a flag at exactly 12 hits in the window (12/60=0.2 == MinRate)")
-	}
-	if f.Target != rule {
-		t.Errorf("Target = %q, want %q", f.Target, rule)
-	}
-	wantPrefix := "0.2 hits/s vs a baseline of 0.0 for this rule (based on 20 samples, "
-	if len(f.Detail) < len(wantPrefix) || f.Detail[:len(wantPrefix)] != wantPrefix {
-		t.Errorf("Detail = %q, want prefix %q", f.Detail, wantPrefix)
-	}
-	assertFloatSigmaTail(t, f.Detail[len(wantPrefix):], " above normal)")
-	if f.Confidence == nil || *f.Confidence <= 0 || *f.Confidence > 100 {
-		t.Errorf("Confidence at the boundary = %v, want a value in (0, 100]", f.Confidence)
-	}
-
-	// Re-fire and clear/revive: only structural properties asserted from
-	// here on -- the EMA's variance is no longer exactly zero once the
-	// burst itself has updated it, so the float fields are no longer a
-	// clean hand-derivable pin (see this file's header comment).
-	d.Observe(ruleEvt(rule, burstStart.Add(12*time.Second)))
-	f2 := flagOfType(t, fs, flags.TypeRuleSpike)
-	if f2 == nil || f2.Count != 2 {
-		t.Fatalf("expected Count=2 after a re-fire, got %+v", f2)
-	}
-
-	if !fs.Clear(f2.ID, burstStart.Add(13*time.Second)) {
-		t.Fatal("expected Clear to succeed")
-	}
-	// The prior episode's own hits left the baseline too elevated for a
-	// same-scale 12-hit burst to clear 5x-baseline again immediately
-	// (the window is capped at DefaultConfig's real 60 buckets/60s, so a
-	// continued burst plateaus rather than outrunning the baseline the
-	// way it would with a taller window) -- so this settles the rule
-	// back to a low, quiet baseline the same way the original warm-up
-	// did (spaced ticks, constant rate), then repeats the same 12-hit
-	// burst shape already proven to fire above. This is revival of the
-	// same (Type, Target) flag, not a new one -- flags.Store dedupes by
-	// (Type, Target), so the earlier episode's cleared record is what
-	// gets revived.
-	resettleLast := primeRuleSpikeConstantBaseline(d, rule, 25, burstStart.Add(time.Minute))
-	revive := resettleLast.Add(65 * time.Second)
-	for i := 0; i < 12; i++ {
-		d.Observe(ruleEvt(rule, revive.Add(time.Duration(i)*time.Second)))
-	}
-	f3 := flagOfType(t, fs, flags.TypeRuleSpike)
-	if f3 == nil || f3.Cleared {
-		t.Fatalf("expected the flag to revive as active, got %+v", f3)
-	}
-	if f3.Count != 1 {
-		t.Errorf("Count after revival = %d, want 1", f3.Count)
-	}
-}
+//
+// rule_spike's own characterization moved to
+// internal/engine/shipped_rule_spike_test.go (issue #405: rule_spike is now
+// a shipped programmatic definition evaluated by internal/engine, not
+// internal/detect -- see shipped_rule_spike.go). primeRuleSpikeConstantBaseline
+// moved with it, unchanged in behaviour.
+//
+// TestCharacterizationRuleSpike_FieldsRefireClearRevive did not move like
+// the rest of this section -- it does not survive. This is #405's third
+// and last sanctioned characterization diff, and it implements #368: the
+// old rule_spike primed its EMA baseline from the very first reading, which
+// was measured over a window that had only just started existing and so
+// read artificially low (here, a baseline of 0.0 after a single sample),
+// and the window's own ordinary fill then satisfied "5x baseline" with no
+// actual change in traffic -- exactly 12 hits in a 60s window, the MinRate
+// floor, not a real spike. That boundary -- "a flag at exactly 12 hits in
+// the window" -- was this test's whole point, and it no longer exists to
+// pin: internal/engine's Baseline (baseline.go) refuses to prime inside the
+// first window it observes, and gates firing on a declared BaselineFloor,
+// so a rule's first dozen-odd hits ever (or after a restart with no
+// persisted state) now produce silence instead of a false spike. See
+// internal/engine/shipped_rule_spike_test.go's
+// TestShippedRuleSpikeNoFalseSpikeInsideTheFirstWindow (#368's own scenario,
+// closed) and TestShippedRuleSpikeNoFalseSpikeOnRestart (#368's restart
+// half, both the warm-resume-from-state and cold-restart shapes) for what
+// replaces this pin. Alongside those two, and deliberately not left as the
+// only rule_spike coverage, is
+// TestShippedRuleSpikeFlagsWellAboveOwnBaseline: #368's fix must not have
+// bought its silence by making the detector inert, so a genuine, large
+// departure from a rule's own established baseline is pinned to still
+// fire. This test's re-fire/clear/revive sequence (Count incrementing on a
+// second crossing, Clear, then revival as a fresh active flag) is not
+// separately re-pinned for rule_spike on the engine side.
 
 // ---------------------------------------------------------------------------
 // 8. repeated_drops
@@ -848,84 +646,24 @@ func TestCharacterizationOffHours_FieldsRefireClearRevive(t *testing.T) {
 // ---------------------------------------------------------------------------
 // 11. global_spike
 // ---------------------------------------------------------------------------
-
-// warmGlobalSpike feeds n constant readings of 1 eps to g -- primes
-// baseline=1 and, because the reading never changes, keeps variance at
-// exactly zero throughout (emaUpdate's diff term is 0 on every call
-// after the first), the same trick used above for activity_spike/
-// rule_spike. sampleCount caps at GlobalSpikeWarmupSamples(20) well
-// before n=25 warm-up calls complete.
-func warmGlobalSpike(g *GlobalSpikeDetector, n int, from time.Time) {
-	for i := 0; i < n; i++ {
-		g.Check(1, from.Add(time.Duration(i)*time.Second))
-	}
-}
-
-// TestCharacterizationGlobalSpike_FieldsRefireClearRevive pins
-// global_spike's boundary at DefaultConfig's real 4x-multiplier/5-EPS
-// floor/20-sample-warmup config. Check(eps, now) takes eps directly with
-// no window/ring behind it, so a constant warm-up feed collapses the
-// EMA's variance to exactly zero -- here every field at the boundary is
-// a clean, fully hand-derivable value. The below-MinEPS probe uses its
-// own, separately-warmed detector: Check unconditionally folds every
-// reading into the baseline afterwards (see global_spike.go), so probing
-// eps=4 on the same instance that goes on to pin the eps=5 boundary
-// would perturb the zero-variance baseline that pin depends on.
-func TestCharacterizationGlobalSpike_FieldsRefireClearRevive(t *testing.T) {
-	cfg := DefaultConfig() // GlobalSpikeMultiplier=4, GlobalSpikeMinEPS=5, WarmupSamples=20
-	now := time.Now()
-
-	probe, probeFS := newTestGlobalSpike(t, cfg)
-	warmGlobalSpike(probe, 25, now)
-	probe.Check(4, now.Add(25*time.Second)) // below MinEPS(5)
-	if got := flagOfType(t, probeFS, flags.TypeGlobalSpike); got != nil {
-		t.Fatalf("expected no flag at eps=4 (below GlobalSpikeMinEPS=5), got %+v", got)
-	}
-
-	g, fs := newTestGlobalSpike(t, cfg)
-	warmGlobalSpike(g, 25, now)
-	g.Check(5, now.Add(25*time.Second)) // MinEPS(5) and 5x baseline(1) both clear
-	f := flagOfType(t, fs, flags.TypeGlobalSpike)
-	if f == nil {
-		t.Fatal("expected a flag at eps=5")
-	}
-	if f.Target != "global" {
-		t.Errorf("Target = %q, want %q", f.Target, "global")
-	}
-	if want := "5.0 events/s vs a baseline of 1.0 (based on 20 samples, 6.0σ above normal)"; f.Detail != want {
-		t.Errorf("Detail = %q, want %q", f.Detail, want)
-	}
-	if f.Confidence == nil || *f.Confidence != 100 {
-		t.Errorf("Confidence = %v, want 100 (zero-variance warm-up)", f.Confidence)
-	}
-	if !isZeroEvidence(f.Evidence) {
-		t.Errorf("Evidence = %+v, want the zero value", f.Evidence)
-	}
-	if f.Country != "" {
-		t.Errorf("Country = %q, want empty (global_spike has no per-event source to attribute a country to)", f.Country)
-	}
-
-	// Re-fire.
-	g.Check(5, now.Add(27*time.Second))
-	f2 := flagOfType(t, fs, flags.TypeGlobalSpike)
-	if f2 == nil || f2.Count != 2 {
-		t.Fatalf("expected Count=2, got %+v", f2)
-	}
-
-	// Clear + revive.
-	if !fs.Clear(f2.ID, now.Add(28*time.Second)) {
-		t.Fatal("expected Clear to succeed")
-	}
-	g.Check(5, now.Add(29*time.Second))
-	f3 := flagOfType(t, fs, flags.TypeGlobalSpike)
-	if f3 == nil || f3.Cleared {
-		t.Fatalf("expected the flag to revive as active, got %+v", f3)
-	}
-	if f3.Count != 1 {
-		t.Errorf("Count after revival = %d, want 1", f3.Count)
-	}
-}
-
+//
+// global_spike's own characterization moved to
+// internal/engine/shipped_global_spike_test.go (issue #405: global_spike is
+// now a shipped programmatic Ticked definition evaluated by internal/engine,
+// not internal/detect -- see shipped_global_spike.go). Unlike every other
+// detector this file covers, global_spike was never driven through
+// Observe(): internal/detect ran it off its own ticker in main.go, polling
+// store.Store.EventsPerSecond on an interval, and that ticker is exactly
+// what Engine.Tick has replaced. warmGlobalSpike (the constant-1eps
+// zero-variance warm-up helper) moved with it, unchanged in behaviour.
+//
+// TestCharacterizationGlobalSpike_FieldsRefireClearRevive is now
+// TestShippedGlobalSpike_FieldsRefireClearRevive; every pinned value carried
+// over unchanged -- the 4x-multiplier/5-EPS-floor/20-sample-warmup boundary,
+// the byte-for-byte Detail string "5.0 events/s vs a baseline of 1.0 (based
+// on 20 samples, 6.0σ above normal)", Confidence=100, and the empty Evidence
+// and empty Country.
+//
 // ---------------------------------------------------------------------------
 // 12. device_silence
 // ---------------------------------------------------------------------------
@@ -1032,120 +770,33 @@ func TestCharacterizationDeviceSilence_FieldsRefireClearRevive(t *testing.T) {
 // now a shipped declarative definition evaluated by internal/engine, not
 // internal/detect). Every pinned value carried over unchanged.
 
-// TestCharacterizationScope_Classification pins the Classification axis,
-// at activity_spike's real DefaultConfig scale -- per settings.go's
-// per-detector field usage table, ActivitySpike's Hosts/HostsMode +
-// Classification restrict which source IPs are tracked at all.
-// Previously exercised via port_scan (a plain threshold, so a firing
-// scenario was one loop); port_scan's own Classification pin moved to
-// internal/engine/shipped_declarative_test.go's
-// TestShippedPortScanScope_Classification (issue #405). Retargeted, not
-// deleted, so internal/detect's own scope-axis coverage stays complete;
-// activity_spike's EMA baseline needs a warm-up-then-spike shape (see
-// TestActivitySpikeFlagsGenuineDeviationFromHostsOwnBaseline) rather than
-// a single loop to actually fire.
-func TestCharacterizationScope_Classification(t *testing.T) {
-	cfg := DefaultConfig()
-	cfg.ActivitySpikeThreshold = 2
-	cfg.ActivitySpikeWindow = time.Second
-	cfg.HostActivityMultiplier = 3
-	cfg.HostActivityWarmupSamples = 20
-	seed := DefaultSettingsMap()
-	seed[DetectorActivitySpike] = Settings{Enabled: true, Scope: Scope{Classification: store.ScopeInternal}}
-	d, fs := newTestDetectorWithSettings(t, cfg, seed)
-	now := time.Now()
+// TestCharacterizationScope_Classification pinned the Classification
+// axis at activity_spike's real DefaultConfig scale; moved to
+// internal/engine/shipped_activity_spike_test.go's
+// TestShippedActivitySpikeScope_Classification (issue #405:
+// activity_spike is now a shipped programmatic definition evaluated by
+// internal/engine, not internal/detect).
+//
+// Only half of this test's pin carried over. The external-source half
+// (an out-of-scope source is never even tracked under
+// Classification=Internal, let alone flagged) moved unchanged. The
+// internal-source half -- that a warmed-then-spiked *in-scope* source
+// still flags normally -- did not move with it: like every other
+// Evaluate()-driven activity_spike test on the engine side (see the
+// activity_spike section above), demonstrating a real fire through the
+// ordinary event path runs into #420, and
+// TestShippedActivitySpikeScope_Classification only exercises the
+// never-flags direction. Flagged in this port's report rather than
+// silently dropped.
 
-	warmThenSpike := func(ip string, start time.Time) {
-		tick := time.Duration(0)
-		for i := 0; i < 25; i++ {
-			base := start.Add(tick)
-			d.Observe(evt(ip, 100, base))
-			d.Observe(evt(ip, 101, base.Add(10*time.Millisecond)))
-			tick += 2 * time.Second
-		}
-		spikeBase := start.Add(tick)
-		for i := 0; i < 10; i++ {
-			d.Observe(evt(ip, 200+i, spikeBase.Add(time.Duration(i)*10*time.Millisecond)))
-		}
-	}
-
-	// An external source: never even tracked under Classification=Internal
-	// (asActive gates observeScanAndSpike before any window is created),
-	// so warming it up and spiking it the same way a real deviation would
-	// still never flags.
-	extIP := "203.0.113.9"
-	warmThenSpike(extIP, now)
-	if got := flagOfType(t, fs, flags.TypeActivitySpike); got != nil {
-		t.Fatalf("expected an external source to never flag under Classification=Internal, got %+v", got)
-	}
-
-	// An internal (LAN) source still flags normally.
-	warmThenSpike("192.168.1.77", now.Add(time.Minute))
-	if got := flagOfType(t, fs, flags.TypeActivitySpike); got == nil {
-		t.Fatal("expected an internal source to still flag under Classification=Internal")
-	}
-}
-
-// TestCharacterizationScope_RulesAllow pins the Rules axis under
-// ListModeAllow, at rule_spike's real DefaultConfig scale.
-func TestCharacterizationScope_RulesAllow(t *testing.T) {
-	cfg := DefaultConfig()
-	cfg.PortScanThreshold = 1000
-	cfg.ActivitySpikeThreshold = 1000
-	seed := DefaultSettingsMap()
-	seed[DetectorRuleSpike] = Settings{Enabled: true, Scope: Scope{Rules: []string{"wan-in"}, RulesMode: ListModeAllow}}
-	d, fs := newTestDetectorWithSettings(t, cfg, seed)
-
-	// "other-rule" is not on the allow list -- never even tracked,
-	// regardless of volume.
-	last := primeRuleSpikeConstantBaseline(d, "other-rule", 5, time.Now())
-	burst := last.Add(65 * time.Second)
-	for i := 0; i < 20; i++ {
-		d.Observe(ruleEvt("other-rule", burst.Add(time.Duration(i)*time.Second)))
-	}
-	if got := flagOfType(t, fs, flags.TypeRuleSpike); got != nil {
-		t.Fatalf("expected a non-allowed rule to never flag, got %+v", got)
-	}
-
-	// "wan-in" is allow-listed and behaves normally.
-	last2 := primeRuleSpikeConstantBaseline(d, "wan-in", 25, burst.Add(time.Minute))
-	burst2 := last2.Add(65 * time.Second)
-	for i := 0; i < 12; i++ {
-		d.Observe(ruleEvt("wan-in", burst2.Add(time.Duration(i)*time.Second)))
-	}
-	if got := flagOfType(t, fs, flags.TypeRuleSpike); got == nil {
-		t.Fatal("expected the allow-listed rule to still flag")
-	}
-}
-
-// TestCharacterizationScope_RulesModeDeny pins the RulesMode axis under
-// ListModeDeny, at rule_spike's real DefaultConfig scale.
-func TestCharacterizationScope_RulesModeDeny(t *testing.T) {
-	cfg := DefaultConfig()
-	cfg.PortScanThreshold = 1000
-	cfg.ActivitySpikeThreshold = 1000
-	seed := DefaultSettingsMap()
-	seed[DetectorRuleSpike] = Settings{Enabled: true, Scope: Scope{Rules: []string{"noisy-rule"}, RulesMode: ListModeDeny}}
-	d, fs := newTestDetectorWithSettings(t, cfg, seed)
-
-	last := primeRuleSpikeConstantBaseline(d, "noisy-rule", 5, time.Now())
-	burst := last.Add(65 * time.Second)
-	for i := 0; i < 20; i++ {
-		d.Observe(ruleEvt("noisy-rule", burst.Add(time.Duration(i)*time.Second)))
-	}
-	if got := flagOfType(t, fs, flags.TypeRuleSpike); got != nil {
-		t.Fatalf("expected the denylisted rule to never flag, got %+v", got)
-	}
-
-	last2 := primeRuleSpikeConstantBaseline(d, "wan-in", 25, burst.Add(time.Minute))
-	burst2 := last2.Add(65 * time.Second)
-	for i := 0; i < 12; i++ {
-		d.Observe(ruleEvt("wan-in", burst2.Add(time.Duration(i)*time.Second)))
-	}
-	if got := flagOfType(t, fs, flags.TypeRuleSpike); got == nil {
-		t.Fatal("expected a non-denylisted rule to still flag")
-	}
-}
+// TestCharacterizationScope_RulesAllow and TestCharacterizationScope_
+// RulesModeDeny used to pin the Rules axis (ListModeAllow and ListModeDeny)
+// at rule_spike's real DefaultConfig scale. rule_spike is now a shipped
+// programmatic definition evaluated by internal/engine, not internal/detect
+// (issue #405 -- see shipped_rule_spike.go), so both moved with it: the
+// surviving rules-axis coverage is
+// internal/engine/shipped_rule_spike_test.go's
+// TestShippedRuleSpikeRespectsRulesDenylist.
 
 // TestCharacterizationScope_AxesCombineWithAND used to prove #44's model
 // -- multiple active Scope axes on one detector combine with AND, not OR
