@@ -56,9 +56,27 @@ check(
 const states = await page.$$eval('.setup .state', (els) =>
   els.map((e) => ({ cls: e.className, text: e.textContent ?? '' })),
 )
+
+// Which state the rule-tagging step must show is derived from what the
+// server reports, not hard-coded to "done".
+//
+// Every scenario shares one instance, so whether *all* of its events
+// happen to carry a log-prefix depends on which other scenarios have
+// run -- live-action-classification.mjs deliberately feeds untagged
+// lines, which is a state a real router produces and which correctly
+// makes this step "partial". Hard-coding "done" was asserting a
+// property of the harness rather than of the wizard.
+//
+// Deriving it is the stronger check anyway: it says the wizard agrees
+// with /api/setup/status, rather than that the instance is fully tagged.
+const withEvents = status.devices.filter((d) => d.events > 0)
+const totalEvents = withEvents.reduce((n, d) => n + d.events, 0)
+const totalDecoded = withEvents.reduce((n, d) => n + d.decodedActions, 0)
+const expectedRuleState = totalDecoded === totalEvents ? 'done' : 'partial'
 check(
-  states.some((s) => s.cls.includes('done') && /events/.test(s.text)),
-  `the rule-tagging step reports done (${JSON.stringify(states.map((s) => s.cls))})`,
+  states.some((s) => s.cls.includes(expectedRuleState) && /events/.test(s.text)),
+  `the rule-tagging step reports ${expectedRuleState}, matching ${totalDecoded}/${totalEvents} decoded ` +
+    `(${JSON.stringify(states.map((s) => s.cls))})`,
 )
 
 // The push step must NOT claim success -- nothing has pushed yet in this
