@@ -135,6 +135,30 @@ rewritten.
 
 ### Fixed
 
+- **The watchlist stops claiming "nothing anywhere is watching this"
+  when it has not read every router's rules** (#367). Coverage answers
+  from the filter tables routers have pushed, and the push is optional —
+  so a router that streams syslog and is actively producing matches, but
+  never pushed, was silently missing from the evidence. One other router
+  with a non-logging table was then enough for every entry to be
+  labelled "no firewall rule on any router you have connected has
+  logging turned on", while the excluded router's matches were visible
+  on the live view next door. Both definite negatives (no-logging and
+  out-of-scope) now degrade to saying nothing at all unless every device
+  that has actually carried events has pushed its table, and the entry
+  list names the devices whose rules went unread. A positive answer is
+  unchanged: one router demonstrably logging the right traffic stays
+  true however many others went unread.
+
+- **The watchlist page can no longer show torn observation data**
+  (#376). `GET /api/watchlist` handed out entry copies whose observed
+  and permitted lists still pointed at the live ones, so an entry in
+  observe mode with traffic arriving — or a promotion landing at the
+  same moment — could render a count from one moment beside a
+  last-seen from another, in exactly the list an operator reads to
+  decide what to promote. Self-correcting on the next poll, and never
+  persisted wrong, but wrong on screen while it lasted.
+
 - **WireGuard peer pushes are no longer refused when a peer has more
   than one allowed address** (#443). RouterOS holds `allowed-address` as
   an array, so the documented push script produced a payload the server
