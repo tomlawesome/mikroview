@@ -29,8 +29,15 @@ func evtAt(srcIP, dstIP string, dstPort int, when time.Time) store.Event {
 func TestNewDeclarativeDefinitionRejectsWrongKind(t *testing.T) {
 	d := declTestDef(IntentDetection)
 	d.Kind = KindProgrammatic
-	_, err := NewDeclarativeDefinition(d, []Condition{{Field: FieldDestinationPort, Operator: OpEquals, Values: []string{"22"}}},
-		KeyPerSource, time.Minute, 5, CountingTotal, "", "{PortCount} hits", nil)
+	_, err := NewDeclarativeDefinition(d, DeclarativeSpec{
+		Conditions:     []Condition{{Field: FieldDestinationPort, Operator: OpEquals, Values: []string{"22"}}},
+		Key:            KeyPerSource,
+		Window:         time.Minute,
+		Threshold:      5,
+		CountingMode:   CountingTotal,
+		DetailTemplate: "{PortCount} hits",
+		Evidence:       []EvidenceField{EvidencePorts, EvidenceHosts, EvidenceLabels},
+	})
 	if err == nil {
 		t.Fatal("NewDeclarativeDefinition succeeded with Kind=programmatic, want a hard failure")
 	}
@@ -38,7 +45,15 @@ func TestNewDeclarativeDefinitionRejectsWrongKind(t *testing.T) {
 
 func TestNewDeclarativeDefinitionRejectsBadConditions(t *testing.T) {
 	d := declTestDef(IntentDetection)
-	_, err := NewDeclarativeDefinition(d, nil, KeyPerSource, time.Minute, 5, CountingTotal, "", "x", nil)
+	_, err := NewDeclarativeDefinition(d, DeclarativeSpec{
+		Conditions:     nil,
+		Key:            KeyPerSource,
+		Window:         time.Minute,
+		Threshold:      5,
+		CountingMode:   CountingTotal,
+		DetailTemplate: "x",
+		Evidence:       []EvidenceField{EvidencePorts, EvidenceHosts, EvidenceLabels},
+	})
 	if err == nil {
 		t.Fatal("NewDeclarativeDefinition succeeded with no conditions, want a hard failure")
 	}
@@ -48,10 +63,26 @@ func TestNewDeclarativeDefinitionRejectsNonPositiveWindowOrThreshold(t *testing.
 	d := declTestDef(IntentDetection)
 	conds := []Condition{{Field: FieldDestinationPort, Operator: OpEquals, Values: []string{"22"}}}
 
-	if _, err := NewDeclarativeDefinition(d, conds, KeyPerSource, 0, 5, CountingTotal, "", "x", nil); err == nil {
+	if _, err := NewDeclarativeDefinition(d, DeclarativeSpec{
+		Conditions:     conds,
+		Key:            KeyPerSource,
+		Window:         0,
+		Threshold:      5,
+		CountingMode:   CountingTotal,
+		DetailTemplate: "x",
+		Evidence:       []EvidenceField{EvidencePorts, EvidenceHosts, EvidenceLabels},
+	}); err == nil {
 		t.Fatal("want a hard failure for a zero window")
 	}
-	if _, err := NewDeclarativeDefinition(d, conds, KeyPerSource, time.Minute, 0, CountingTotal, "", "x", nil); err == nil {
+	if _, err := NewDeclarativeDefinition(d, DeclarativeSpec{
+		Conditions:     conds,
+		Key:            KeyPerSource,
+		Window:         time.Minute,
+		Threshold:      0,
+		CountingMode:   CountingTotal,
+		DetailTemplate: "x",
+		Evidence:       []EvidenceField{EvidencePorts, EvidenceHosts, EvidenceLabels},
+	}); err == nil {
 		t.Fatal("want a hard failure for a zero threshold")
 	}
 }
@@ -59,7 +90,16 @@ func TestNewDeclarativeDefinitionRejectsNonPositiveWindowOrThreshold(t *testing.
 func TestNewDeclarativeDefinitionRejectsDistinctWithoutCountableField(t *testing.T) {
 	d := declTestDef(IntentDetection)
 	conds := []Condition{{Field: FieldDestinationPort, Operator: OpEquals, Values: []string{"22"}}}
-	_, err := NewDeclarativeDefinition(d, conds, KeyGlobal, time.Minute, 5, CountingDistinct, FieldTimeOfDay, "x", nil)
+	_, err := NewDeclarativeDefinition(d, DeclarativeSpec{
+		Conditions:     conds,
+		Key:            KeyGlobal,
+		Window:         time.Minute,
+		Threshold:      5,
+		CountingMode:   CountingDistinct,
+		DistinctField:  FieldTimeOfDay,
+		DetailTemplate: "x",
+		Evidence:       []EvidenceField{EvidencePorts, EvidenceHosts, EvidenceLabels},
+	})
 	if err == nil {
 		t.Fatal("NewDeclarativeDefinition succeeded with countingMode=distinct on a non-countable field, want a hard failure")
 	}
@@ -68,7 +108,15 @@ func TestNewDeclarativeDefinitionRejectsDistinctWithoutCountableField(t *testing
 func TestNewDeclarativeDefinitionRejectsEmptyDetailTemplate(t *testing.T) {
 	d := declTestDef(IntentDetection)
 	conds := []Condition{{Field: FieldDestinationPort, Operator: OpEquals, Values: []string{"22"}}}
-	_, err := NewDeclarativeDefinition(d, conds, KeyPerSource, time.Minute, 5, CountingTotal, "", "", nil)
+	_, err := NewDeclarativeDefinition(d, DeclarativeSpec{
+		Conditions:     conds,
+		Key:            KeyPerSource,
+		Window:         time.Minute,
+		Threshold:      5,
+		CountingMode:   CountingTotal,
+		DetailTemplate: "",
+		Evidence:       []EvidenceField{EvidencePorts, EvidenceHosts, EvidenceLabels},
+	})
 	if err == nil {
 		t.Fatal("NewDeclarativeDefinition succeeded with an empty detail template, want a hard failure")
 	}
@@ -85,8 +133,15 @@ func TestDeclarativeDefinitionEndToEnd(t *testing.T) {
 		{Field: FieldDestinationPort, Operator: OpEquals, Values: []string{"22"}},
 		{Field: FieldAction, Operator: OpEquals, Values: []string{string(store.ActionDrop)}},
 	}
-	dd, err := NewDeclarativeDefinition(def, conds, KeyPerSource, time.Minute, 5, CountingTotal, "",
-		"{PortCount} hits on watched ports from this source ({HostCount} hosts touched)", nil)
+	dd, err := NewDeclarativeDefinition(def, DeclarativeSpec{
+		Conditions:     conds,
+		Key:            KeyPerSource,
+		Window:         time.Minute,
+		Threshold:      5,
+		CountingMode:   CountingTotal,
+		DetailTemplate: "{PortCount} hits on watched ports from this source ({HostCount} hosts touched)",
+		Evidence:       []EvidenceField{EvidencePorts, EvidenceHosts, EvidenceLabels},
+	})
 	if err != nil {
 		t.Fatalf("NewDeclarativeDefinition: %v", err)
 	}
@@ -139,7 +194,15 @@ func TestDeclarativeDefinitionEndToEnd(t *testing.T) {
 func TestDeclarativeDefinitionNonMatchingEventsNeverCount(t *testing.T) {
 	def := declTestDef(IntentDetection)
 	conds := []Condition{{Field: FieldDestinationPort, Operator: OpEquals, Values: []string{"22"}}}
-	dd, err := NewDeclarativeDefinition(def, conds, KeyPerSource, time.Minute, 3, CountingTotal, "", "{PortCount} hits", nil)
+	dd, err := NewDeclarativeDefinition(def, DeclarativeSpec{
+		Conditions:     conds,
+		Key:            KeyPerSource,
+		Window:         time.Minute,
+		Threshold:      3,
+		CountingMode:   CountingTotal,
+		DetailTemplate: "{PortCount} hits",
+		Evidence:       []EvidenceField{EvidencePorts, EvidenceHosts, EvidenceLabels},
+	})
 	if err != nil {
 		t.Fatalf("NewDeclarativeDefinition: %v", err)
 	}
@@ -159,7 +222,15 @@ func TestDeclarativeDefinitionDisabledIsInert(t *testing.T) {
 	def := declTestDef(IntentDetection)
 	def.Enabled = false
 	conds := []Condition{{Field: FieldDestinationPort, Operator: OpEquals, Values: []string{"22"}}}
-	dd, err := NewDeclarativeDefinition(def, conds, KeyPerSource, time.Minute, 1, CountingTotal, "", "{PortCount} hits", nil)
+	dd, err := NewDeclarativeDefinition(def, DeclarativeSpec{
+		Conditions:     conds,
+		Key:            KeyPerSource,
+		Window:         time.Minute,
+		Threshold:      1,
+		CountingMode:   CountingTotal,
+		DetailTemplate: "{PortCount} hits",
+		Evidence:       []EvidenceField{EvidencePorts, EvidenceHosts, EvidenceLabels},
+	})
 	if err != nil {
 		t.Fatalf("NewDeclarativeDefinition: %v", err)
 	}
@@ -184,8 +255,16 @@ func TestDeclarativeDefinitionDisabledIsInert(t *testing.T) {
 func TestDeclarativeDistinctCountingModeIsNotSatisfiableByOneSource(t *testing.T) {
 	def := declTestDef(IntentDetection)
 	conds := []Condition{{Field: FieldDestinationPort, Operator: OpEquals, Values: []string{"22"}}}
-	dd, err := NewDeclarativeDefinition(def, conds, KeyGlobal, time.Minute, 5, CountingDistinct, FieldSourceAddress,
-		"{HostCount} distinct sources", nil)
+	dd, err := NewDeclarativeDefinition(def, DeclarativeSpec{
+		Conditions:     conds,
+		Key:            KeyGlobal,
+		Window:         time.Minute,
+		Threshold:      5,
+		CountingMode:   CountingDistinct,
+		DistinctField:  FieldSourceAddress,
+		DetailTemplate: "{HostCount} distinct sources",
+		Evidence:       []EvidenceField{EvidencePorts, EvidenceHosts, EvidenceLabels},
+	})
 	if err != nil {
 		t.Fatalf("NewDeclarativeDefinition: %v", err)
 	}
@@ -219,8 +298,15 @@ func TestDeclarativeDistinctCountingModeIsNotSatisfiableByOneSource(t *testing.T
 func TestDeclarativeCountingTotalIsSatisfiableByOneSource(t *testing.T) {
 	def := declTestDef(IntentDetection)
 	conds := []Condition{{Field: FieldDestinationPort, Operator: OpEquals, Values: []string{"22"}}}
-	dd, err := NewDeclarativeDefinition(def, conds, KeyGlobal, time.Minute, 5, CountingTotal, "",
-		"{PortCount} hits", nil)
+	dd, err := NewDeclarativeDefinition(def, DeclarativeSpec{
+		Conditions:     conds,
+		Key:            KeyGlobal,
+		Window:         time.Minute,
+		Threshold:      5,
+		CountingMode:   CountingTotal,
+		DetailTemplate: "{PortCount} hits",
+		Evidence:       []EvidenceField{EvidencePorts, EvidenceHosts, EvidenceLabels},
+	})
 	if err != nil {
 		t.Fatalf("NewDeclarativeDefinition: %v", err)
 	}
@@ -239,7 +325,15 @@ func TestDeclarativeCountingTotalIsSatisfiableByOneSource(t *testing.T) {
 func TestDeclarativeDefinitionExpectationIntentRoutesToMatchlog(t *testing.T) {
 	def := declTestDef(IntentExpectation)
 	conds := []Condition{{Field: FieldDestinationPort, Operator: OpEquals, Values: []string{"53"}}}
-	dd, err := NewDeclarativeDefinition(def, conds, KeyPerSource, time.Minute, 1, CountingTotal, "", "{PortCount} hits", nil)
+	dd, err := NewDeclarativeDefinition(def, DeclarativeSpec{
+		Conditions:     conds,
+		Key:            KeyPerSource,
+		Window:         time.Minute,
+		Threshold:      1,
+		CountingMode:   CountingTotal,
+		DetailTemplate: "{PortCount} hits",
+		Evidence:       []EvidenceField{EvidencePorts, EvidenceHosts, EvidenceLabels},
+	})
 	if err != nil {
 		t.Fatalf("NewDeclarativeDefinition: %v", err)
 	}
@@ -258,7 +352,15 @@ func TestDeclarativeDefinitionExpectationIntentRoutesToMatchlog(t *testing.T) {
 func TestDeclarativeDefinitionKeyPerSourcePort(t *testing.T) {
 	def := declTestDef(IntentDetection)
 	conds := []Condition{{Field: FieldProtocol, Operator: OpEquals, Values: []string{"tcp"}}}
-	dd, err := NewDeclarativeDefinition(def, conds, KeyPerSourcePort, time.Minute, 3, CountingTotal, "", "{PortCount} hits", nil)
+	dd, err := NewDeclarativeDefinition(def, DeclarativeSpec{
+		Conditions:     conds,
+		Key:            KeyPerSourcePort,
+		Window:         time.Minute,
+		Threshold:      3,
+		CountingMode:   CountingTotal,
+		DetailTemplate: "{PortCount} hits",
+		Evidence:       []EvidenceField{EvidencePorts, EvidenceHosts, EvidenceLabels},
+	})
 	if err != nil {
 		t.Fatalf("NewDeclarativeDefinition: %v", err)
 	}

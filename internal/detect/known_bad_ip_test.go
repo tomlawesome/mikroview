@@ -100,10 +100,29 @@ func TestKnownBadIPSkippedForInternalSource(t *testing.T) {
 	}
 }
 
-func TestKnownBadIPReinforcesSameEventPortScanFlag(t *testing.T) {
+// TestKnownBadIPReinforcesSameEventCriticalPortFlag and
+// TestKnownBadIPReinforcesPreviouslyRaisedFlagOnLaterEvent used
+// critical_port purely as a convenient, cheap-to-trigger flag-raiser for a
+// public source IP -- neither test is actually about critical_port's own
+// behaviour, just about observeKnownBadIP's RaiseConfidenceFloor
+// reinforcement path finding *some* already-raised, source-IP-keyed flag.
+// Now that critical_port has moved to internal/engine as a shipped
+// declarative definition (issue #405) and internal/detect no longer
+// evaluates it at all, both tests below are retargeted onto activity_spike
+// instead, which internal/detect still evaluates and is (like
+// critical_port used to be) in knownBadReinforcedTypes with a Target that
+// is a plain source IP. activity_spike needs six events from the same
+// public source IP, one second apart, to fire at DefaultConfig's real
+// HostActivityMultiplier(3): the first call primes the EMA baseline, and
+// hostActivityMinSamples(5) is reached on the 6th call, by which point the
+// live rate (6) still clears both the absolute floor and 3x the ~1.2
+// baseline the first five events left behind (verified empirically against
+// host_baseline.go's checkHostActivityBaseline).
+
+func TestKnownBadIPReinforcesSameEventActivitySpikeFlag(t *testing.T) {
 	cfg := DefaultConfig()
-	cfg.PortScanThreshold = 3
-	cfg.ActivitySpikeThreshold = 1000
+	cfg.ActivitySpikeThreshold = 3
+	cfg.ActivitySpikeWindow = time.Minute
 
 	bl := newFakeKnownBadIPs()
 	bl.setMatch("198.51.100.4", blocklist.MatchResult{Source: blocklist.SourceSpamhausDROP, Label: "Spamhaus DROP", Range: "198.51.100.0/24"})
@@ -112,60 +131,60 @@ func TestKnownBadIPReinforcesSameEventPortScanFlag(t *testing.T) {
 	d.WithKnownBadIPs(bl)
 
 	now := time.Now()
-	// The 3rd event in this same call both crosses PortScanThreshold
-	// (raising TypePortScan) and matches the blocklist (raising
-	// TypeKnownBadIP) -- observeKnownBadIP runs last within that same
-	// Observe call, so it must still see and reinforce the
-	// just-raised TypePortScan flag, not only ones raised on an
+	// The 6th event in this same call both crosses the activity-spike
+	// boundary (raising TypeActivitySpike) and matches the blocklist
+	// (raising TypeKnownBadIP) -- observeKnownBadIP runs last within that
+	// same Observe call, so it must still see and reinforce the
+	// just-raised TypeActivitySpike flag, not only ones raised on an
 	// earlier event.
-	for i := 0; i < 3; i++ {
-		d.Observe(evt("198.51.100.4", 100+i, now.Add(time.Duration(i)*time.Second)))
+	for i := 0; i < 6; i++ {
+		d.Observe(evt("198.51.100.4", 22, now.Add(time.Duration(i)*time.Second)))
 	}
 
-	psFlag := findFlag(fs, "198.51.100.4", flags.TypePortScan)
-	if psFlag == nil {
-		t.Fatal("expected a TypePortScan flag to have been raised")
+	asFlag := findFlag(fs, "198.51.100.4", flags.TypeActivitySpike)
+	if asFlag == nil {
+		t.Fatal("expected a TypeActivitySpike flag to have been raised")
 	}
-	if psFlag.ReputationFloor == nil || *psFlag.ReputationFloor != knownBadIPConfidence {
-		t.Errorf("expected TypePortScan's ReputationFloor to be reinforced to %d by the same-event blocklist match, got %v", knownBadIPConfidence, psFlag.ReputationFloor)
+	if asFlag.ReputationFloor == nil || *asFlag.ReputationFloor != knownBadIPConfidence {
+		t.Errorf("expected TypeActivitySpike's ReputationFloor to be reinforced to %d by the same-event blocklist match, got %v", knownBadIPConfidence, asFlag.ReputationFloor)
 	}
-	if psFlag.Confidence == nil || *psFlag.Confidence < knownBadIPConfidence {
-		t.Errorf("expected TypePortScan's Confidence to be at least %d after reinforcement, got %v", knownBadIPConfidence, psFlag.Confidence)
+	if asFlag.Confidence == nil || *asFlag.Confidence < knownBadIPConfidence {
+		t.Errorf("expected TypeActivitySpike's Confidence to be at least %d after reinforcement, got %v", knownBadIPConfidence, asFlag.Confidence)
 	}
 }
 
 func TestKnownBadIPReinforcesPreviouslyRaisedFlagOnLaterEvent(t *testing.T) {
 	cfg := DefaultConfig()
-	cfg.CriticalPorts = []int{22}
-	cfg.CriticalPortThreshold = 1
-	cfg.PortScanThreshold = 1000
-	cfg.ActivitySpikeThreshold = 1000
+	cfg.ActivitySpikeThreshold = 3
+	cfg.ActivitySpikeWindow = time.Minute
 
 	d, fs := newTestDetector(t, cfg)
-	// No knownBad matcher attached yet -- raise TypeCriticalPort purely
+	// No knownBad matcher attached yet -- raise TypeActivitySpike purely
 	// behaviorally first, with no reinforcement in play.
 	now := time.Now()
-	d.Observe(evt("198.51.100.4", 22, now))
-
-	cpFlag := findFlag(fs, "198.51.100.4", flags.TypeCriticalPort)
-	if cpFlag == nil {
-		t.Fatal("expected a TypeCriticalPort flag from the first event")
-	}
-	if cpFlag.ReputationFloor != nil {
-		t.Fatalf("expected no floor yet, got %v", cpFlag.ReputationFloor)
+	for i := 0; i < 6; i++ {
+		d.Observe(evt("198.51.100.4", 22, now.Add(time.Duration(i)*time.Second)))
 	}
 
-	// Now attach a matcher and observe a second event from the same
-	// source -- the pre-existing TypeCriticalPort flag must be
+	asFlag := findFlag(fs, "198.51.100.4", flags.TypeActivitySpike)
+	if asFlag == nil {
+		t.Fatal("expected a TypeActivitySpike flag from the six-event burst")
+	}
+	if asFlag.ReputationFloor != nil {
+		t.Fatalf("expected no floor yet, got %v", asFlag.ReputationFloor)
+	}
+
+	// Now attach a matcher and observe a later event from the same
+	// source -- the pre-existing TypeActivitySpike flag must be
 	// reinforced.
 	bl := newFakeKnownBadIPs()
 	bl.setMatch("198.51.100.4", blocklist.MatchResult{Source: blocklist.SourceSpamhausDROP, Label: "Spamhaus DROP", Range: "198.51.100.0/24"})
 	d.WithKnownBadIPs(bl)
-	d.Observe(evt("198.51.100.4", 22, now.Add(time.Second)))
+	d.Observe(evt("198.51.100.4", 22, now.Add(6*time.Second)))
 
-	cpFlag = findFlag(fs, "198.51.100.4", flags.TypeCriticalPort)
-	if cpFlag.ReputationFloor == nil || *cpFlag.ReputationFloor != knownBadIPConfidence {
-		t.Errorf("expected TypeCriticalPort's ReputationFloor to be reinforced to %d, got %v", knownBadIPConfidence, cpFlag.ReputationFloor)
+	asFlag = findFlag(fs, "198.51.100.4", flags.TypeActivitySpike)
+	if asFlag.ReputationFloor == nil || *asFlag.ReputationFloor != knownBadIPConfidence {
+		t.Errorf("expected TypeActivitySpike's ReputationFloor to be reinforced to %d, got %v", knownBadIPConfidence, asFlag.ReputationFloor)
 	}
 }
 
@@ -175,8 +194,6 @@ func TestKnownBadIPDoesNotReinforceUnrelatedTargetTypes(t *testing.T) {
 	// because this source IP happens to be on the blocklist.
 	cfg := DefaultConfig()
 	cfg.DistributedBruteForceThreshold = 1000
-	cfg.CriticalPorts = []int{22}
-	cfg.CriticalPortThreshold = 1000
 	cfg.PortScanThreshold = 1000
 	cfg.ActivitySpikeThreshold = 1000
 

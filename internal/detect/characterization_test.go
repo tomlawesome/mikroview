@@ -57,31 +57,12 @@ import (
 //     branch), the resulting confidence is a deterministic integer and
 //     is pinned exactly.
 
-// TestCharacterizationPortScanFiresAtDefaultConfigScale exercises
-// observeScanAndSpike's port-scan half with DefaultConfig's real
-// PortScanWindow/PortScanThreshold (60s/15) rather than a test-shrunk
-// config, spreading events across the full window so the migration
-// touches most of the ring's 60 one-second buckets (bucketSpanFor(60s)
-// == minBucketSpan == 1s) -- the shape a real slow-burst scan produces.
-func TestCharacterizationPortScanFiresAtDefaultConfigScale(t *testing.T) {
-	cfg := DefaultConfig()
-	cfg.ActivitySpikeThreshold = 1000 // isolate port_scan
-	d, fs := newTestDetector(t, cfg)
-
-	now := time.Now()
-	for port := 1; port < cfg.PortScanThreshold; port++ {
-		d.Observe(evt("203.0.113.9", port, now.Add(time.Duration(port)*3*time.Second)))
-	}
-	if len(fs.List()) != 0 {
-		t.Fatalf("expected no flag below threshold, got %+v", fs.List())
-	}
-
-	d.Observe(evt("203.0.113.9", cfg.PortScanThreshold, now.Add(time.Duration(cfg.PortScanThreshold)*3*time.Second)))
-	list := fs.List()
-	if len(list) != 1 || list[0].Type != flags.TypePortScan || list[0].Target != "203.0.113.9" {
-		t.Fatalf("expected a port_scan flag at threshold, got %+v", list)
-	}
-}
+// TestCharacterizationPortScanFiresAtDefaultConfigScale moved to
+// internal/engine/shipped_declarative_test.go's
+// TestShippedPortScanFiresAtDefaultConfigScale (issue #405: port_scan is
+// now a shipped declarative definition evaluated by internal/engine, not
+// internal/detect -- see shipped_declarative.go's buildPortScanDefinition).
+// Every pinned value carried over unchanged.
 
 // TestCharacterizationLowSlowScanFiresAtDefaultWindowScale runs
 // observeLowSlowScan's three rings (ports/hosts/drops) at
@@ -109,48 +90,20 @@ func TestCharacterizationLowSlowScanFiresAtDefaultWindowScale(t *testing.T) {
 	}
 }
 
-// TestCharacterizationDistributedBruteForceRequiresDistinctSources
-// documents a deliberate divergence from the migration plan's summary
+// TestCharacterizationDistributedBruteForceRequiresDistinctSources used
+// to document a deliberate divergence from the migration plan's summary
 // table, which listed "countRing per key" for
-// observeDistributedBruteForce. The detector's entire point is
-// *distinct* source IPs hammering one port (as opposed to
-// critical-port's "one source hitting it repeatedly") -- a countRing
-// only tracks a raw event count, so swapping in one there would make a
-// single source's retries alone cross the threshold, collapsing the
-// distinction the detector exists to draw. portSources therefore uses
-// distinctRing[string] instead (see distributed_brute_force.go), which
-// is what TestDistributedBruteForceIgnoresRepeatsFromSameSource in
-// distributed_brute_force_test.go already pins down; this test re-states
-// the same guarantee here, next to the rest of this migration's
-// characterization coverage, for anyone comparing this change against
-// the plan's table.
-func TestCharacterizationDistributedBruteForceRequiresDistinctSources(t *testing.T) {
-	cfg := DefaultConfig()
-	cfg.DistributedBruteForceThreshold = 5
-	cfg.CriticalPorts = []int{22}
-	cfg.CriticalPortThreshold = 1000
-	cfg.PortScanThreshold = 1000
-	cfg.ActivitySpikeThreshold = 1000
-	d, fs := newTestDetector(t, cfg)
-
-	now := time.Now()
-	// 20 repeats from a single source must never cross a threshold of 5
-	// distinct sources.
-	for i := 0; i < 20; i++ {
-		d.Observe(evt("198.51.100.1", 22, now.Add(time.Duration(i)*time.Second)))
-	}
-	if len(fs.List()) != 0 {
-		t.Fatalf("expected repeats from one source alone to never flag, got %+v", fs.List())
-	}
-
-	// The 5th distinct source crosses it.
-	for i := 0; i < 5; i++ {
-		d.Observe(evt(fmt.Sprintf("198.51.100.%d", i+2), 22, now))
-	}
-	if len(fs.List()) != 1 {
-		t.Fatalf("expected 5 distinct sources to flag, got %+v", fs.List())
-	}
-}
+// observeDistributedBruteForce -- the detector's entire point is
+// *distinct* source IPs hammering one port, so it needed a
+// distinctRing[string] instead, the same guarantee
+// TestDistributedBruteForceIgnoresRepeatsFromSameSource pinned in
+// distributed_brute_force_test.go; moved to
+// internal/engine/shipped_declarative_test.go's
+// TestShippedDistributedBruteForceIgnoresRepeatsFromSameSource (issue
+// #405: distributed_brute_force is now a shipped declarative definition
+// evaluated by internal/engine, not internal/detect -- see
+// shipped_declarative.go's buildDistributedBruteForceDefinition). Every
+// pinned value carried over unchanged.
 
 // ============================================================================
 // #397: full-suite characterization at DefaultConfig() scale.
@@ -204,101 +157,14 @@ func lan3(n int) string { return fmt.Sprintf("192.168.2.%d", 100+n) }
 // ---------------------------------------------------------------------------
 // 1. port_scan
 // ---------------------------------------------------------------------------
-
-// TestCharacterizationPortScan_FieldsRefireClearRevive pins port_scan's
-// firing boundary at DefaultConfig's real threshold/window (15/60s), the
-// exact shape of the flag it raises, and its re-fire/clear/revive
-// behaviour across a second crossing.
-func TestCharacterizationPortScan_FieldsRefireClearRevive(t *testing.T) {
-	cfg := DefaultConfig() // PortScanThreshold=15, PortScanWindow=60s
-	d, fs := newTestDetector(t, cfg)
-	ip := "203.0.113.9"
-	t0 := time.Now()
-
-	// 14 distinct ports: must not fire.
-	for port := 1; port <= 14; port++ {
-		d.Observe(evtCountry(ip, "DE", port, t0.Add(time.Duration(port-1)*time.Second)))
-	}
-	if got := flagOfType(t, fs, flags.TypePortScan); got != nil {
-		t.Fatalf("expected no flag at 14 distinct ports, got %+v", got)
-	}
-
-	// The 15th distinct port crosses the threshold.
-	d.Observe(evtCountry(ip, "DE", 15, t0.Add(14*time.Second)))
-	f := flagOfType(t, fs, flags.TypePortScan)
-	if f == nil {
-		t.Fatal("expected a port_scan flag at exactly 15 distinct ports")
-	}
-	if f.Target != ip {
-		t.Errorf("Target = %q, want %q", f.Target, ip)
-	}
-	if want := "15 distinct destination ports in 1m0s"; f.Detail != want {
-		t.Errorf("Detail = %q, want %q", f.Detail, want)
-	}
-	if f.Country != "DE" {
-		t.Errorf("Country = %q, want DE", f.Country)
-	}
-	if f.Confidence == nil || *f.Confidence != 0 {
-		t.Errorf("Confidence = %v, want 0 (exactly at threshold)", f.Confidence)
-	}
-	wantPorts := make([]int, 15)
-	for i := range wantPorts {
-		wantPorts[i] = i + 1
-	}
-	if fmt.Sprint(f.Evidence.Ports) != fmt.Sprint(wantPorts) {
-		t.Errorf("Evidence.Ports = %v, want %v", f.Evidence.Ports, wantPorts)
-	}
-	if f.Count != 1 {
-		t.Errorf("Count = %d, want 1", f.Count)
-	}
-
-	// Re-fire: a 16th distinct port within the same window updates the
-	// flag in place (Count increments, still one flag, confidence tracks
-	// the new overshoot).
-	d.Observe(evtCountry(ip, "DE", 16, t0.Add(15*time.Second)))
-	f2 := flagOfType(t, fs, flags.TypePortScan)
-	if f2 == nil || f2.Count != 2 {
-		t.Fatalf("expected Count=2 after a re-fire, got %+v", f2)
-	}
-	if f2.Confidence == nil || *f2.Confidence != 3 {
-		t.Errorf("Confidence after re-fire = %v, want 3 (overshootConfidence(16,15))", f2.Confidence)
-	}
-
-	// Clear it, then feed a 17th distinct port still inside the same
-	// window: the flag revives -- isNew again, Count resets to 1,
-	// FirstSeen moves to the reviving event's time.
-	if !fs.Clear(f2.ID, t0.Add(15500*time.Millisecond)) {
-		t.Fatal("expected Clear to succeed on the active flag")
-	}
-	reviveAt := t0.Add(16 * time.Second)
-	d.Observe(evtCountry(ip, "DE", 17, reviveAt))
-	f3 := flagOfType(t, fs, flags.TypePortScan)
-	if f3 == nil {
-		t.Fatal("expected the flag to revive")
-	}
-	if f3.Cleared {
-		t.Error("expected the revived flag to no longer be Cleared")
-	}
-	if f3.Count != 1 {
-		t.Errorf("Count after revival = %d, want 1 (revival resets Count)", f3.Count)
-	}
-	if !f3.FirstSeen.Equal(reviveAt) {
-		t.Errorf("FirstSeen after revival = %v, want %v (revival resets FirstSeen)", f3.FirstSeen, reviveAt)
-	}
-	// The ring itself never forgot the earlier ports -- Add doesn't know
-	// about flags.Store's clear state -- so the revived episode's count
-	// (and Detail) reflects all 17 distinct ports still inside the
-	// window, not just the one revival event.
-	if want := "17 distinct destination ports in 1m0s"; f3.Detail != want {
-		t.Errorf("Detail after revival = %q, want %q", f3.Detail, want)
-	}
-	if f3.Confidence == nil || *f3.Confidence != 7 {
-		t.Errorf("Confidence after revival = %v, want 7 (overshootConfidence(17,15))", f3.Confidence)
-	}
-	if countTypedFlags(fs, flags.TypePortScan) != 1 {
-		t.Errorf("expected exactly one port_scan flag (revival updates in place, not a second one), got %d", countTypedFlags(fs, flags.TypePortScan))
-	}
-}
+//
+// port_scan's own characterization (firing boundary, flag fields,
+// re-fire/clear/revive, and its Hosts/Classification scope pins) moved to
+// internal/engine/shipped_declarative_test.go's TestShippedPortScan_*
+// series (issue #405: port_scan is now a shipped declarative definition
+// evaluated by internal/engine, not internal/detect -- see
+// shipped_declarative.go's buildPortScanDefinition). Every pinned value
+// carried over unchanged.
 
 // ---------------------------------------------------------------------------
 // 2. activity_spike
@@ -480,188 +346,44 @@ func TestCharacterizationActivitySpike_FieldsRefireClearRevive(t *testing.T) {
 // ---------------------------------------------------------------------------
 // 3. critical_port
 // ---------------------------------------------------------------------------
-
-// TestCharacterizationCriticalPort_FieldsRefireClearRevive pins
-// critical_port's boundary at DefaultConfig's real 5-attempts/5-minute
-// threshold against port 22 (one of DefaultConfig's real CriticalPorts).
-func TestCharacterizationCriticalPort_FieldsRefireClearRevive(t *testing.T) {
-	cfg := DefaultConfig() // CriticalPortThreshold=5, CriticalPortWindow=5m, CriticalPorts includes 22
-	d, fs := newTestDetector(t, cfg)
-	ip := "198.51.100.4"
-	t0 := time.Now()
-
-	for i := 0; i < 4; i++ {
-		d.Observe(evtCountry(ip, "RU", 22, t0.Add(time.Duration(i)*30*time.Second)))
-	}
-	if got := flagOfType(t, fs, flags.TypeCriticalPort); got != nil {
-		t.Fatalf("expected no flag at 4 attempts, got %+v", got)
-	}
-
-	d.Observe(evtCountry(ip, "RU", 22, t0.Add(4*30*time.Second)))
-	f := flagOfType(t, fs, flags.TypeCriticalPort)
-	if f == nil {
-		t.Fatal("expected a flag at exactly 5 attempts")
-	}
-	if f.Target != ip {
-		t.Errorf("Target = %q, want %q", f.Target, ip)
-	}
-	if want := "5 attempts against port 22 in 5m0s"; f.Detail != want {
-		t.Errorf("Detail = %q, want %q", f.Detail, want)
-	}
-	if f.Country != "RU" {
-		t.Errorf("Country = %q, want RU", f.Country)
-	}
-	if !isZeroEvidence(f.Evidence) {
-		t.Errorf("Evidence = %+v, want the zero value", f.Evidence)
-	}
-	if f.Confidence == nil || *f.Confidence != 0 {
-		t.Errorf("Confidence = %v, want 0 (exactly at threshold)", f.Confidence)
-	}
-
-	// Re-fire.
-	d.Observe(evtCountry(ip, "RU", 22, t0.Add(5*30*time.Second)))
-	f2 := flagOfType(t, fs, flags.TypeCriticalPort)
-	if f2 == nil || f2.Count != 2 {
-		t.Fatalf("expected Count=2 after a re-fire, got %+v", f2)
-	}
-	if f2.Confidence == nil || *f2.Confidence != 10 {
-		t.Errorf("Confidence after re-fire = %v, want 10 (overshootConfidence(6,5))", f2.Confidence)
-	}
-
-	// Clear + revive.
-	if !fs.Clear(f2.ID, t0.Add(6*30*time.Second)) {
-		t.Fatal("expected Clear to succeed")
-	}
-	reviveAt := t0.Add(7 * 30 * time.Second)
-	d.Observe(evtCountry(ip, "RU", 22, reviveAt))
-	f3 := flagOfType(t, fs, flags.TypeCriticalPort)
-	if f3 == nil || f3.Cleared {
-		t.Fatalf("expected the flag to revive as active, got %+v", f3)
-	}
-	if f3.Count != 1 {
-		t.Errorf("Count after revival = %d, want 1", f3.Count)
-	}
-	if !f3.FirstSeen.Equal(reviveAt) {
-		t.Errorf("FirstSeen after revival = %v, want %v", f3.FirstSeen, reviveAt)
-	}
-	if want := "7 attempts against port 22 in 5m0s"; f3.Detail != want {
-		t.Errorf("Detail after revival = %q, want %q", f3.Detail, want)
-	}
-	if f3.Confidence == nil || *f3.Confidence != 20 {
-		t.Errorf("Confidence after revival = %v, want 20 (overshootConfidence(7,5))", f3.Confidence)
-	}
-}
-
-// TestCharacterizationCriticalPort_DetailNamesOnlyTheLastPort pins
-// #379's known-wrong behaviour: criticalHits is keyed by source IP only
-// (see detect.go's criticalHits map), so the count that crosses the
-// threshold can span attempts against *several different* critical
-// ports from the same source -- but the Detail string names only
-// e.DstPort, the single port of the triggering event. This test feeds
-// attempts against two different critical ports from one source and
-// pins today's Detail, which names only the last one touched even
-// though the count includes both. #379 is expected to fix this
-// (aggregating per-port or naming the set touched); when it does, this
-// pin should be *updated* to match the corrected wording, not deleted
-// to make the diff quieter -- the point of pinning a known-wrong
-// behaviour is so the fix shows up as an intentional, reviewed change to
-// this test, not a silent one.
-func TestCharacterizationCriticalPort_DetailNamesOnlyTheLastPort(t *testing.T) {
-	cfg := DefaultConfig()
-	cfg.CriticalPorts = []int{22, 23} // two distinct critical ports
-	cfg.CriticalPortThreshold = 5
-	d, fs := newTestDetector(t, cfg)
-	ip := "198.51.100.7"
-	t0 := time.Now()
-
-	// 3 attempts against port 22, then 2 against port 23 -- 5 total
-	// against the *source*, spanning two ports.
-	for i := 0; i < 3; i++ {
-		d.Observe(evt(ip, 22, t0.Add(time.Duration(i)*time.Second)))
-	}
-	for i := 0; i < 2; i++ {
-		d.Observe(evt(ip, 23, t0.Add(time.Duration(3+i)*time.Second)))
-	}
-
-	f := flagOfType(t, fs, flags.TypeCriticalPort)
-	if f == nil {
-		t.Fatal("expected a flag once the combined count across both ports reaches the threshold")
-	}
-	// KNOWN-WRONG, pinned per #379: names only port 23 (the last event's
-	// port), even though 3 of the 5 counted attempts were against port
-	// 22.
-	if want := "5 attempts against port 23 in 5m0s"; f.Detail != want {
-		t.Errorf("Detail = %q, want %q (today's known-wrong single-port naming -- see #379)", f.Detail, want)
-	}
-}
+//
+// critical_port's own characterization moved to
+// internal/engine/shipped_declarative_test.go (issue #405: critical_port is
+// now a shipped declarative definition evaluated by internal/engine, not
+// internal/detect -- see shipped_declarative.go's
+// buildCriticalPortDefinition). The boundary/fields/confidence/re-fire/
+// clear/revive pin that used to live here as
+// TestCharacterizationCriticalPort_FieldsRefireClearRevive is now
+// TestShippedCriticalPort_FieldsRefireClearRevive; the #379 known-wrong
+// Detail-naming pin that used to live here as
+// TestCharacterizationCriticalPort_DetailNamesOnlyTheLastPort is now
+// TestShippedCriticalPort_DetailNamesTheSetOfPortsTouched -- renamed, not
+// just moved, because #379 landed as part of this same port: the Detail
+// string now names the accumulated set of ports touched across the
+// counted attempts instead of only the single triggering event's port,
+// and Evidence.Ports is now populated (it used to be the zero value).
+// Per the original pin's own instruction ("this pin should be *updated*
+// to match the corrected wording, not deleted to make the diff
+// quieter"), the engine-side test was updated in place to match #379's
+// fix rather than deleted and rewritten from scratch.
 
 // ---------------------------------------------------------------------------
 // 4. distributed_brute_force
 // ---------------------------------------------------------------------------
 
 // TestCharacterizationDistributedBruteForce_FieldsRefireClearRevive
-// pins distributed_brute_force's boundary at DefaultConfig's real
-// 10-distinct-sources/5-minute threshold against a critical port.
-func TestCharacterizationDistributedBruteForce_FieldsRefireClearRevive(t *testing.T) {
-	cfg := DefaultConfig() // DistributedBruteForceThreshold=10, Window=5m
-	d, fs := newTestDetector(t, cfg)
-	t0 := time.Now()
-
-	for i := 0; i < 9; i++ {
-		d.Observe(evt(fmt.Sprintf("198.51.100.%d", 100+i), 22, t0.Add(time.Duration(i)*10*time.Second)))
-	}
-	if got := flagOfType(t, fs, flags.TypeDistributedBruteForce); got != nil {
-		t.Fatalf("expected no flag at 9 distinct sources, got %+v", got)
-	}
-
-	d.Observe(evt(fmt.Sprintf("198.51.100.%d", 100+9), 22, t0.Add(9*10*time.Second)))
-	f := flagOfType(t, fs, flags.TypeDistributedBruteForce)
-	if f == nil {
-		t.Fatal("expected a flag at exactly 10 distinct sources")
-	}
-	if f.Target != "port 22" {
-		t.Errorf("Target = %q, want %q", f.Target, "port 22")
-	}
-	if want := "10 distinct source IPs in 5m0s"; f.Detail != want {
-		t.Errorf("Detail = %q, want %q", f.Detail, want)
-	}
-	if f.Confidence == nil || *f.Confidence != 0 {
-		t.Errorf("Confidence = %v, want 0", f.Confidence)
-	}
-	wantHosts := make([]string, 10)
-	for i := range wantHosts {
-		wantHosts[i] = fmt.Sprintf("198.51.100.%d", 100+i)
-	}
-	if fmt.Sprint(f.Evidence.Hosts) != fmt.Sprint(sortedStrings(wantHosts)) {
-		t.Errorf("Evidence.Hosts = %v, want %v", f.Evidence.Hosts, sortedStrings(wantHosts))
-	}
-
-	// Re-fire: 11th distinct source.
-	d.Observe(evt(fmt.Sprintf("198.51.100.%d", 110), 22, t0.Add(10*10*time.Second)))
-	f2 := flagOfType(t, fs, flags.TypeDistributedBruteForce)
-	if f2 == nil || f2.Count != 2 {
-		t.Fatalf("expected Count=2, got %+v", f2)
-	}
-	if f2.Confidence == nil || *f2.Confidence != 5 {
-		t.Errorf("Confidence after re-fire = %v, want 5 (overshootConfidence(11,10))", f2.Confidence)
-	}
-
-	// Clear + revive.
-	if !fs.Clear(f2.ID, t0.Add(11*10*time.Second)) {
-		t.Fatal("expected Clear to succeed")
-	}
-	d.Observe(evt("198.51.100.111", 22, t0.Add(12*10*time.Second)))
-	f3 := flagOfType(t, fs, flags.TypeDistributedBruteForce)
-	if f3 == nil || f3.Cleared {
-		t.Fatalf("expected the flag to revive as active, got %+v", f3)
-	}
-	if f3.Count != 1 {
-		t.Errorf("Count after revival = %d, want 1", f3.Count)
-	}
-	if f3.Confidence == nil || *f3.Confidence != 10 {
-		t.Errorf("Confidence after revival = %v, want 10 (overshootConfidence(12,10))", f3.Confidence)
-	}
-}
+// used to pin distributed_brute_force's boundary at DefaultConfig's real
+// 10-distinct-sources/5-minute threshold against a critical port, its
+// flag fields, and its re-fire/clear/revive cycle; moved to
+// internal/engine/shipped_declarative_test.go's
+// TestShippedDistributedBruteForce_FieldsRefireClearRevive (issue #405:
+// distributed_brute_force is now a shipped declarative definition
+// evaluated by internal/engine, not internal/detect -- see
+// shipped_declarative.go's buildDistributedBruteForceDefinition). Every
+// pinned value carried over unchanged; also covers what
+// TestDistributedBruteForceFlagsManyDistinctSources and
+// TestDistributedBruteForceEvidenceCapturesSourceHosts pinned in the
+// now-deleted distributed_brute_force_test.go.
 
 func sortedStrings(in []string) []string {
 	out := append([]string(nil), in...)
@@ -933,137 +655,30 @@ func TestCharacterizationRuleSpike_FieldsRefireClearRevive(t *testing.T) {
 // ---------------------------------------------------------------------------
 // 8. repeated_drops
 // ---------------------------------------------------------------------------
-
-// TestCharacterizationRepeatedDrops_FieldsRefireClearRevive pins
-// repeated_drops' boundary at DefaultConfig's real
-// 10-attempts/15-minute threshold.
-func TestCharacterizationRepeatedDrops_FieldsRefireClearRevive(t *testing.T) {
-	cfg := DefaultConfig() // RepeatedDropsThreshold=10, Window=15m
-	d, fs := newTestDetector(t, cfg)
-	src, dstIP, dstPort := "203.0.113.9", "192.168.1.1", 8080
-	t0 := time.Now()
-
-	dropEvt := func(at time.Time) store.Event {
-		return store.Event{SrcIP: src, DstIP: dstIP, DstPort: dstPort, Action: store.ActionDrop, SrcCountry: "NL", ReceivedAt: at}
-	}
-
-	for i := 0; i < 9; i++ {
-		d.Observe(dropEvt(t0.Add(time.Duration(i) * time.Minute)))
-	}
-	if got := flagOfType(t, fs, flags.TypeRepeatedDrops); got != nil {
-		t.Fatalf("expected no flag at 9 attempts, got %+v", got)
-	}
-
-	d.Observe(dropEvt(t0.Add(9 * time.Minute)))
-	f := flagOfType(t, fs, flags.TypeRepeatedDrops)
-	if f == nil {
-		t.Fatal("expected a flag at exactly 10 attempts")
-	}
-	wantTarget := "203.0.113.9 -> port 8080"
-	if f.Target != wantTarget {
-		t.Errorf("Target = %q, want %q", f.Target, wantTarget)
-	}
-	wantDetail := "10 attempts against 192.168.1.1:8080 dropped in 15m0s -- check whether this port is meant to be open"
-	if f.Detail != wantDetail {
-		t.Errorf("Detail = %q, want %q", f.Detail, wantDetail)
-	}
-	if f.Country != "NL" {
-		t.Errorf("Country = %q, want NL", f.Country)
-	}
-	if f.Evidence.NAT != nil {
-		t.Errorf("Evidence.NAT = %+v, want nil (no NAT fields set on the triggering event)", f.Evidence.NAT)
-	}
-	if f.Confidence == nil || *f.Confidence != 0 {
-		t.Errorf("Confidence = %v, want 0", f.Confidence)
-	}
-
-	// Re-fire.
-	d.Observe(dropEvt(t0.Add(10 * time.Minute)))
-	f2 := flagOfType(t, fs, flags.TypeRepeatedDrops)
-	if f2 == nil || f2.Count != 2 {
-		t.Fatalf("expected Count=2, got %+v", f2)
-	}
-	if f2.Confidence == nil || *f2.Confidence != 5 {
-		t.Errorf("Confidence after re-fire = %v, want 5 (overshootConfidence(11,10))", f2.Confidence)
-	}
-
-	// Clear + revive.
-	if !fs.Clear(f2.ID, t0.Add(11*time.Minute)) {
-		t.Fatal("expected Clear to succeed")
-	}
-	d.Observe(dropEvt(t0.Add(12 * time.Minute)))
-	f3 := flagOfType(t, fs, flags.TypeRepeatedDrops)
-	if f3 == nil || f3.Cleared {
-		t.Fatalf("expected the flag to revive as active, got %+v", f3)
-	}
-	if f3.Count != 1 {
-		t.Errorf("Count after revival = %d, want 1", f3.Count)
-	}
-	if f3.Confidence == nil || *f3.Confidence != 10 {
-		t.Errorf("Confidence after revival = %v, want 10 (overshootConfidence(12,10))", f3.Confidence)
-	}
-}
-
-// TestCharacterizationRepeatedDrops_EvidenceCapturesNAT pins the
-// Evidence.NAT branch (only ever exercised when the *triggering* event
-// itself carries NAT fields -- see observeRepeatedDrops).
-func TestCharacterizationRepeatedDrops_EvidenceCapturesNAT(t *testing.T) {
-	cfg := DefaultConfig()
-	cfg.RepeatedDropsThreshold = 2
-	d, fs := newTestDetector(t, cfg)
-	t0 := time.Now()
-
-	d.Observe(store.Event{SrcIP: "203.0.113.9", DstIP: "192.168.1.1", DstPort: 8080, Action: store.ActionDrop, ReceivedAt: t0})
-	d.Observe(store.Event{
-		SrcIP: "203.0.113.9", DstIP: "192.168.1.1", DstPort: 8080, Action: store.ActionDrop,
-		NatIP: "10.0.0.5", NatPort: 51820, NatRaw: "dst-nat(10.0.0.5:51820)",
-		ReceivedAt: t0.Add(time.Minute),
-	})
-
-	f := flagOfType(t, fs, flags.TypeRepeatedDrops)
-	if f == nil {
-		t.Fatal("expected a flag")
-	}
-	if f.Evidence.NAT == nil {
-		t.Fatal("expected Evidence.NAT to be set")
-	}
-	if f.Evidence.NAT.IP != "10.0.0.5" || f.Evidence.NAT.Port != 51820 || f.Evidence.NAT.Raw != "dst-nat(10.0.0.5:51820)" {
-		t.Errorf("Evidence.NAT = %+v, want {IP:10.0.0.5 Port:51820 Raw:dst-nat(10.0.0.5:51820)}", f.Evidence.NAT)
-	}
-}
-
-// TestCharacterizationRepeatedDrops_DetailNamesOnlyTheLastDestination
-// pins #379's known-wrong behaviour on repeated_drops' side: the
-// (srcIP, dstPort) key does not include dstIP (see dropPairKey), so the
-// same source repeatedly hitting one port across *several different*
-// destination IPs collapses into a single counter -- but the Detail
-// string names only e.DstIP, the triggering event's destination.
-// Pinned as today's behaviour; #379 is expected to change it (naming the
-// set of destinations, or keying per-destination), and this pin should
-// be *updated*, not deleted, when that lands.
-func TestCharacterizationRepeatedDrops_DetailNamesOnlyTheLastDestination(t *testing.T) {
-	cfg := DefaultConfig()
-	cfg.RepeatedDropsThreshold = 4
-	d, fs := newTestDetector(t, cfg)
-	t0 := time.Now()
-
-	dests := []string{"192.168.1.1", "192.168.1.2", "192.168.1.3", "192.168.1.4"}
-	for i, dst := range dests {
-		d.Observe(store.Event{SrcIP: "203.0.113.9", DstIP: dst, DstPort: 8080, Action: store.ActionDrop, ReceivedAt: t0.Add(time.Duration(i) * time.Minute)})
-	}
-
-	f := flagOfType(t, fs, flags.TypeRepeatedDrops)
-	if f == nil {
-		t.Fatal("expected a flag once the combined count across all four destinations reaches the threshold")
-	}
-	// KNOWN-WRONG, pinned per #379: names only 192.168.1.4 (the last
-	// event's destination), even though 3 of the 4 counted attempts
-	// targeted other IPs.
-	want := "4 attempts against 192.168.1.4:8080 dropped in 15m0s -- check whether this port is meant to be open"
-	if f.Detail != want {
-		t.Errorf("Detail = %q, want %q (today's known-wrong single-destination naming -- see #379)", f.Detail, want)
-	}
-}
+//
+// repeated_drops' own characterization moved to
+// internal/engine/shipped_declarative_test.go (issue #405: repeated_drops is
+// now a shipped declarative definition evaluated by internal/engine, not
+// internal/detect -- see shipped_declarative.go's
+// buildRepeatedDropsDefinition). The boundary/fields/confidence/re-fire/
+// clear/revive pin that used to live here as
+// TestCharacterizationRepeatedDrops_FieldsRefireClearRevive is now
+// TestShippedRepeatedDrops_FieldsRefireClearRevive; the NAT-evidence pin
+// that used to live here as
+// TestCharacterizationRepeatedDrops_EvidenceCapturesNAT is now
+// TestShippedRepeatedDrops_EvidenceCapturesNAT, moved unchanged.
+//
+// TestCharacterizationRepeatedDrops_DetailNamesOnlyTheLastDestination is
+// now TestShippedRepeatedDrops_DetailCarriesTheDestinationSetAsEvidence --
+// renamed, not just moved, because #379 landed as part of this same port:
+// the Detail string no longer names a single destination address (it
+// names only the destination port, which is a key component and so true
+// of every counted attempt), and the distinct destination set -- which
+// used to be nowhere -- now rides in Evidence.Hosts, following
+// dest_spread's pattern. Per the original pin's own instruction ("this
+// pin should be *updated*, not deleted, when that lands"), the
+// engine-side test was updated in place to match #379's fix rather than
+// deleted and rewritten from scratch.
 
 // ---------------------------------------------------------------------------
 // 9. low_slow_scan
@@ -1383,129 +998,90 @@ func TestCharacterizationDeviceSilence_FieldsRefireClearRevive(t *testing.T) {
 // Scope: one case per Settings.Scope axis, plus the #44 AND-together case.
 // ---------------------------------------------------------------------------
 
-// TestCharacterizationScope_HostsAllow pins the Hosts axis under
-// ListModeAllow, at critical_port's real DefaultConfig scale.
-func TestCharacterizationScope_HostsAllow(t *testing.T) {
-	cfg := DefaultConfig()
-	seed := DefaultSettingsMap()
-	seed[DetectorCriticalPort] = Settings{Enabled: true, Scope: Scope{Hosts: []string{"198.51.100.4"}, HostsMode: ListModeAllow}}
-	d, fs := newTestDetectorWithSettings(t, cfg, seed)
-	now := time.Now()
+// TestCharacterizationScope_HostsAllow used to pin the Hosts axis under
+// ListModeAllow at critical_port's DefaultConfig scale; moved to
+// internal/engine/shipped_declarative_test.go's
+// TestShippedCriticalPortScope_HostsAllow (issue #405: critical_port is
+// now a shipped declarative definition evaluated by internal/engine, not
+// internal/detect). Every pinned value carried over unchanged.
 
-	for i := 0; i < 5; i++ {
-		d.Observe(evt("198.51.100.5", 22, now.Add(time.Duration(i)*30*time.Second))) // not on the allow list
-	}
-	if got := flagOfType(t, fs, flags.TypeCriticalPort); got != nil {
-		t.Fatalf("expected a host outside the allow list to never flag, got %+v", got)
-	}
+// TestCharacterizationScope_HostsModeDeny used to pin the HostsMode axis
+// under ListModeDeny at critical_port's DefaultConfig scale (5/5m) --
+// itself already a retarget from port_scan (see the comment this test
+// used to carry). With critical_port's own move to internal/engine (issue
+// #405), there is no internal/detect detector left with an obvious,
+// convenient reason to re-host this axis case, so it isn't retargeted a
+// second time: the Hosts-deny axis is already covered by
+// internal/engine/shipped_declarative_test.go's
+// TestShippedPortScanScope_HostsModeDeny (not a critical_port-named test --
+// port_scan's own HostsMode pin, which this test was itself standing in
+// for before critical_port took over that role).
 
-	for i := 0; i < 5; i++ {
-		d.Observe(evt("198.51.100.4", 22, now.Add(time.Duration(i)*30*time.Second))) // allow-listed
-	}
-	if got := flagOfType(t, fs, flags.TypeCriticalPort); got == nil {
-		t.Fatal("expected the allow-listed host to still flag")
-	}
-}
+// TestCharacterizationScope_PortsAllow used to pin the Ports axis under
+// ListModeAllow at repeated_drops' real DefaultConfig scale (10/15m);
+// moved to internal/engine/shipped_declarative_test.go's
+// TestShippedRepeatedDropsScope_PortsAllow (issue #405: repeated_drops is
+// now a shipped declarative definition evaluated by internal/engine, not
+// internal/detect). Every pinned value carried over unchanged.
 
-// TestCharacterizationScope_HostsModeDeny pins the HostsMode axis under
-// ListModeDeny, at port_scan's real DefaultConfig scale (15/60s).
-func TestCharacterizationScope_HostsModeDeny(t *testing.T) {
-	cfg := DefaultConfig()
-	seed := DefaultSettingsMap()
-	seed[DetectorPortScan] = Settings{Enabled: true, Scope: Scope{Hosts: []string{"203.0.113.9"}, HostsMode: ListModeDeny}}
-	d, fs := newTestDetectorWithSettings(t, cfg, seed)
-	now := time.Now()
-
-	for port := 1; port <= 20; port++ {
-		d.Observe(evt("203.0.113.9", port, now.Add(time.Duration(port)*time.Second))) // denied
-	}
-	if got := flagOfType(t, fs, flags.TypePortScan); got != nil {
-		t.Fatalf("expected the denylisted host to never flag even at 20 distinct ports, got %+v", got)
-	}
-
-	for port := 1; port <= 15; port++ {
-		d.Observe(evt("203.0.113.10", port, now.Add(time.Duration(port)*time.Second))) // not denied
-	}
-	if got := flagOfType(t, fs, flags.TypePortScan); got == nil {
-		t.Fatal("expected a non-denylisted host to still flag at threshold")
-	}
-}
-
-// TestCharacterizationScope_PortsAllow pins the Ports axis under
-// ListModeAllow, at repeated_drops' real DefaultConfig scale (10/15m).
-func TestCharacterizationScope_PortsAllow(t *testing.T) {
-	cfg := DefaultConfig()
-	seed := DefaultSettingsMap()
-	seed[DetectorRepeatedDrops] = Settings{Enabled: true, Scope: Scope{Ports: []int{8080}, PortsMode: ListModeAllow}}
-	d, fs := newTestDetectorWithSettings(t, cfg, seed)
-	now := time.Now()
-
-	for i := 0; i < 10; i++ {
-		d.Observe(store.Event{SrcIP: "203.0.113.9", DstIP: "192.168.1.1", DstPort: 9090, Action: store.ActionDrop, ReceivedAt: now.Add(time.Duration(i) * time.Minute)}) // not on the allow list
-	}
-	if got := flagOfType(t, fs, flags.TypeRepeatedDrops); got != nil {
-		t.Fatalf("expected a non-allowed port to never flag even at 10 attempts, got %+v", got)
-	}
-
-	for i := 0; i < 10; i++ {
-		d.Observe(store.Event{SrcIP: "203.0.113.9", DstIP: "192.168.1.1", DstPort: 8080, Action: store.ActionDrop, ReceivedAt: now.Add(time.Duration(i) * time.Minute)}) // allow-listed
-	}
-	if got := flagOfType(t, fs, flags.TypeRepeatedDrops); got == nil {
-		t.Fatal("expected the allow-listed port to still flag at threshold")
-	}
-}
-
-// TestCharacterizationScope_PortsModeDeny pins the PortsMode axis under
-// ListModeDeny, at critical_port's real DefaultConfig scale, restricting
-// the *effective* subset of Config.CriticalPorts this scoped instance
-// reacts to (Scope doc comment, settings.go).
-func TestCharacterizationScope_PortsModeDeny(t *testing.T) {
-	cfg := DefaultConfig() // CriticalPorts includes both 22 and 23
-	seed := DefaultSettingsMap()
-	seed[DetectorCriticalPort] = Settings{Enabled: true, Scope: Scope{Ports: []int{23}, PortsMode: ListModeDeny}}
-	d, fs := newTestDetectorWithSettings(t, cfg, seed)
-	now := time.Now()
-
-	for i := 0; i < 5; i++ {
-		d.Observe(evt("198.51.100.4", 23, now.Add(time.Duration(i)*30*time.Second))) // denied port
-	}
-	if got := flagOfType(t, fs, flags.TypeCriticalPort); got != nil {
-		t.Fatalf("expected the denylisted port to never count toward the threshold, got %+v", got)
-	}
-
-	for i := 0; i < 5; i++ {
-		d.Observe(evt("198.51.100.5", 22, now.Add(time.Duration(i)*30*time.Second))) // not denied
-	}
-	if got := flagOfType(t, fs, flags.TypeCriticalPort); got == nil {
-		t.Fatal("expected a non-denylisted critical port to still flag at threshold")
-	}
-}
+// TestCharacterizationScope_PortsModeDeny used to pin the PortsMode axis
+// under ListModeDeny at critical_port's DefaultConfig scale, restricting
+// the *effective* subset of Config.CriticalPorts a scoped instance reacts
+// to; moved to internal/engine/shipped_declarative_test.go's
+// TestShippedCriticalPortScope_PortsModeDeny (issue #405: critical_port is
+// now a shipped declarative definition evaluated by internal/engine, not
+// internal/detect). Every pinned value carried over unchanged.
 
 // TestCharacterizationScope_Classification pins the Classification axis,
-// at port_scan's real DefaultConfig scale (15/60s) -- per settings.go's
-// per-detector field usage table, PortScan's Hosts/HostsMode +
+// at activity_spike's real DefaultConfig scale -- per settings.go's
+// per-detector field usage table, ActivitySpike's Hosts/HostsMode +
 // Classification restrict which source IPs are tracked at all.
+// Previously exercised via port_scan (a plain threshold, so a firing
+// scenario was one loop); port_scan's own Classification pin moved to
+// internal/engine/shipped_declarative_test.go's
+// TestShippedPortScanScope_Classification (issue #405). Retargeted, not
+// deleted, so internal/detect's own scope-axis coverage stays complete;
+// activity_spike's EMA baseline needs a warm-up-then-spike shape (see
+// TestActivitySpikeFlagsGenuineDeviationFromHostsOwnBaseline) rather than
+// a single loop to actually fire.
 func TestCharacterizationScope_Classification(t *testing.T) {
 	cfg := DefaultConfig()
+	cfg.ActivitySpikeThreshold = 2
+	cfg.ActivitySpikeWindow = time.Second
+	cfg.HostActivityMultiplier = 3
+	cfg.HostActivityWarmupSamples = 20
 	seed := DefaultSettingsMap()
-	seed[DetectorPortScan] = Settings{Enabled: true, Scope: Scope{Classification: store.ScopeInternal}}
+	seed[DetectorActivitySpike] = Settings{Enabled: true, Scope: Scope{Classification: store.ScopeInternal}}
 	d, fs := newTestDetectorWithSettings(t, cfg, seed)
 	now := time.Now()
 
-	// An external source: never tracked at all under Classification=Internal,
-	// no matter how many distinct ports it touches.
-	for port := 1; port <= 20; port++ {
-		d.Observe(evt("203.0.113.9", port, now.Add(time.Duration(port)*time.Second)))
+	warmThenSpike := func(ip string, start time.Time) {
+		tick := time.Duration(0)
+		for i := 0; i < 25; i++ {
+			base := start.Add(tick)
+			d.Observe(evt(ip, 100, base))
+			d.Observe(evt(ip, 101, base.Add(10*time.Millisecond)))
+			tick += 2 * time.Second
+		}
+		spikeBase := start.Add(tick)
+		for i := 0; i < 10; i++ {
+			d.Observe(evt(ip, 200+i, spikeBase.Add(time.Duration(i)*10*time.Millisecond)))
+		}
 	}
-	if got := flagOfType(t, fs, flags.TypePortScan); got != nil {
+
+	// An external source: never even tracked under Classification=Internal
+	// (asActive gates observeScanAndSpike before any window is created),
+	// so warming it up and spiking it the same way a real deviation would
+	// still never flags.
+	extIP := "203.0.113.9"
+	warmThenSpike(extIP, now)
+	if got := flagOfType(t, fs, flags.TypeActivitySpike); got != nil {
 		t.Fatalf("expected an external source to never flag under Classification=Internal, got %+v", got)
 	}
 
-	// An internal (LAN) source still flags normally at threshold.
-	for port := 1; port <= 15; port++ {
-		d.Observe(evt("192.168.1.77", port, now.Add(time.Duration(port)*time.Second)))
-	}
-	if got := flagOfType(t, fs, flags.TypePortScan); got == nil {
+	// An internal (LAN) source still flags normally.
+	warmThenSpike("192.168.1.77", now.Add(time.Minute))
+	if got := flagOfType(t, fs, flags.TypeActivitySpike); got == nil {
 		t.Fatal("expected an internal source to still flag under Classification=Internal")
 	}
 }
@@ -1571,45 +1147,11 @@ func TestCharacterizationScope_RulesModeDeny(t *testing.T) {
 	}
 }
 
-// TestCharacterizationScope_AxesCombineWithAND proves #44's model --
-// multiple active Scope axes on one detector combine with AND, not OR --
-// using critical_port's Hosts+Ports axes together at DefaultConfig
-// scale.
-func TestCharacterizationScope_AxesCombineWithAND(t *testing.T) {
-	cfg := DefaultConfig() // CriticalPorts includes both 21 and 22
-	seed := DefaultSettingsMap()
-	seed[DetectorCriticalPort] = Settings{
-		Enabled: true,
-		Scope: Scope{
-			Hosts: []string{"198.51.100.4"}, HostsMode: ListModeAllow,
-			Ports: []int{22}, PortsMode: ListModeAllow,
-		},
-	}
-	d, fs := newTestDetectorWithSettings(t, cfg, seed)
-	now := time.Now()
-
-	// Matches the host axis but not the ports axis -- port 21 is a real
-	// critical port, but not in the ports allow-list.
-	for i := 0; i < 5; i++ {
-		d.Observe(evt("198.51.100.4", 21, now.Add(time.Duration(i)*30*time.Second)))
-	}
-	if got := flagOfType(t, fs, flags.TypeCriticalPort); got != nil {
-		t.Fatalf("expected host-only match (wrong port) to never flag, got %+v", got)
-	}
-
-	// Matches the ports axis but not the hosts axis.
-	for i := 0; i < 5; i++ {
-		d.Observe(evt("198.51.100.5", 22, now.Add(time.Duration(i)*30*time.Second)))
-	}
-	if got := flagOfType(t, fs, flags.TypeCriticalPort); got != nil {
-		t.Fatalf("expected port-only match (wrong host) to never flag, got %+v", got)
-	}
-
-	// Matches both axes.
-	for i := 0; i < 5; i++ {
-		d.Observe(evt("198.51.100.4", 22, now.Add(time.Duration(i)*30*time.Second)))
-	}
-	if got := flagOfType(t, fs, flags.TypeCriticalPort); got == nil {
-		t.Fatal("expected a match on both axes together to flag")
-	}
-}
+// TestCharacterizationScope_AxesCombineWithAND used to prove #44's model
+// -- multiple active Scope axes on one detector combine with AND, not OR
+// -- using critical_port's Hosts+Ports axes together at DefaultConfig
+// scale; moved to internal/engine/shipped_declarative_test.go's
+// TestShippedCriticalPortScope_AxesCombineWithAND (issue #405:
+// critical_port is now a shipped declarative definition evaluated by
+// internal/engine, not internal/detect). Every pinned value carried over
+// unchanged.
