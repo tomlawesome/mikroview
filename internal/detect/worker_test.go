@@ -40,8 +40,9 @@ func TestEnqueueNeverBlocksOnFullQueue(t *testing.T) {
 // detector that should fire, does, once Run has had a chance to catch up.
 func TestRunProcessesEnqueuedEvents(t *testing.T) {
 	cfg := DefaultConfig()
-	cfg.PortScanThreshold = 5
-	cfg.PortScanWindow = time.Minute
+	cfg.CriticalPorts = []int{22}
+	cfg.CriticalPortThreshold = 5
+	cfg.CriticalPortWindow = time.Minute
 	d, fs := newTestDetector(t, cfg)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -49,18 +50,18 @@ func TestRunProcessesEnqueuedEvents(t *testing.T) {
 	go d.Run(ctx)
 
 	now := time.Now()
-	for port := 1; port <= 5; port++ {
-		d.Enqueue(evt("203.0.113.9", port, now))
+	for i := 0; i < 5; i++ {
+		d.Enqueue(evt("203.0.113.9", 22, now))
 	}
 
 	deadline := time.After(2 * time.Second)
 	for {
-		if list := fs.List(); len(list) == 1 && list[0].Type == flags.TypePortScan {
+		if list := fs.List(); len(list) == 1 && list[0].Type == flags.TypeCriticalPort {
 			return
 		}
 		select {
 		case <-deadline:
-			t.Fatalf("Run never processed the enqueued events into a port_scan flag; got %+v", fs.List())
+			t.Fatalf("Run never processed the enqueued events into a critical_port flag; got %+v", fs.List())
 		case <-time.After(5 * time.Millisecond):
 		}
 	}

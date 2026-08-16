@@ -100,9 +100,11 @@ func TestKnownBadIPSkippedForInternalSource(t *testing.T) {
 	}
 }
 
-func TestKnownBadIPReinforcesSameEventPortScanFlag(t *testing.T) {
+func TestKnownBadIPReinforcesSameEventCriticalPortFlag(t *testing.T) {
 	cfg := DefaultConfig()
-	cfg.PortScanThreshold = 3
+	cfg.CriticalPorts = []int{22}
+	cfg.CriticalPortThreshold = 3
+	cfg.PortScanThreshold = 1000
 	cfg.ActivitySpikeThreshold = 1000
 
 	bl := newFakeKnownBadIPs()
@@ -112,25 +114,25 @@ func TestKnownBadIPReinforcesSameEventPortScanFlag(t *testing.T) {
 	d.WithKnownBadIPs(bl)
 
 	now := time.Now()
-	// The 3rd event in this same call both crosses PortScanThreshold
-	// (raising TypePortScan) and matches the blocklist (raising
+	// The 3rd event in this same call both crosses CriticalPortThreshold
+	// (raising TypeCriticalPort) and matches the blocklist (raising
 	// TypeKnownBadIP) -- observeKnownBadIP runs last within that same
 	// Observe call, so it must still see and reinforce the
-	// just-raised TypePortScan flag, not only ones raised on an
+	// just-raised TypeCriticalPort flag, not only ones raised on an
 	// earlier event.
 	for i := 0; i < 3; i++ {
-		d.Observe(evt("198.51.100.4", 100+i, now.Add(time.Duration(i)*time.Second)))
+		d.Observe(evt("198.51.100.4", 22, now.Add(time.Duration(i)*time.Second)))
 	}
 
-	psFlag := findFlag(fs, "198.51.100.4", flags.TypePortScan)
-	if psFlag == nil {
-		t.Fatal("expected a TypePortScan flag to have been raised")
+	cpFlag := findFlag(fs, "198.51.100.4", flags.TypeCriticalPort)
+	if cpFlag == nil {
+		t.Fatal("expected a TypeCriticalPort flag to have been raised")
 	}
-	if psFlag.ReputationFloor == nil || *psFlag.ReputationFloor != knownBadIPConfidence {
-		t.Errorf("expected TypePortScan's ReputationFloor to be reinforced to %d by the same-event blocklist match, got %v", knownBadIPConfidence, psFlag.ReputationFloor)
+	if cpFlag.ReputationFloor == nil || *cpFlag.ReputationFloor != knownBadIPConfidence {
+		t.Errorf("expected TypeCriticalPort's ReputationFloor to be reinforced to %d by the same-event blocklist match, got %v", knownBadIPConfidence, cpFlag.ReputationFloor)
 	}
-	if psFlag.Confidence == nil || *psFlag.Confidence < knownBadIPConfidence {
-		t.Errorf("expected TypePortScan's Confidence to be at least %d after reinforcement, got %v", knownBadIPConfidence, psFlag.Confidence)
+	if cpFlag.Confidence == nil || *cpFlag.Confidence < knownBadIPConfidence {
+		t.Errorf("expected TypeCriticalPort's Confidence to be at least %d after reinforcement, got %v", knownBadIPConfidence, cpFlag.Confidence)
 	}
 }
 
