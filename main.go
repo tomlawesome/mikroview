@@ -678,6 +678,22 @@ func main() {
 	// onto it in later issues; this one only adds it.
 	eng := engine.New()
 
+	// engineState (#399/#400) persists every definition's per-key
+	// Baseline state -- opened here, under the same fail-closed
+	// persist.Open contract every other store uses, even though nothing
+	// registers a definition against it yet (#401/#405's job). Opening
+	// it now, rather than waiting for the first real definition, means
+	// mikroview refuses to start on a corrupted engine-state document
+	// from day one instead of only once something actually depends on
+	// reading it correctly.
+	engineStateLog := logging.New("engine-state")
+	engineStateBackend, err := persistence.backendFor(bootCtx, "engine_state", cfg.Engine.StorePath)
+	if err != nil {
+		engineStateLog.Warn(err.Error())
+	}
+	engineState, err := engine.OpenStateStoreWithBackend(engineStateBackend)
+	mustOpenStore(engineStateLog, err)
+
 	detectCfg := detect.Config{
 		PortScanThreshold:        cfg.Flags.PortScanThreshold,
 		PortScanWindow:           cfg.Flags.PortScanWindow,
@@ -1340,7 +1356,7 @@ func main() {
 	// MinInterval-debounced write could be (issue #400). Best-effort:
 	// each store already logs its own save failures, so a Close error
 	// here is just the shutdown-budget case, worth one line, not fatal.
-	closeStoreOnShutdown(fs, macRegistry, ru, detectorSettings, watchlistStore)
+	closeStoreOnShutdown(fs, macRegistry, ru, detectorSettings, watchlistStore, engineState)
 }
 
 // closeStoreOnShutdown flushes every write-behind-backed store passed to
