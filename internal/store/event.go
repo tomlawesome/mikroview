@@ -6,11 +6,48 @@ import "time"
 
 type Action string
 
+// The action vocabulary covers RouterOS's log-producing rule kinds, not
+// just the filter verdicts.
+//
+// The first four are filter-table verdicts and the historical whole set.
+// Everything else -- a mangle mark rule, a NAT translation, a rule that
+// only logs -- had no value to land on, so it fell into ActionUnknown.
+// That is not a rare corner: policy routing (mark-connection /
+// mark-routing / mark-packet steering traffic into a tunnel) is built
+// out of mangle rules, and a deployment doing it logs a steady dribble
+// of events that were all reported as unclassifiable. "Unknown" then
+// stops meaning anything an operator can act on, which is exactly when
+// they should be looking at it. See #437.
+//
+// ActionMarked and ActionNatted name the two non-filter classes that a
+// log line can be attributed to. ActionLog already covered the third
+// (log-only / passthrough rules, prefix code L) and keeps its value --
+// renaming it would move a classification that is already correct.
+//
+// ActionUnknown keeps its literal meaning: the parser could not tell.
+// Nothing infers a class it cannot support from the line itself -- see
+// internal/routeros's inferAction for what is and is not inferable.
 const (
-	ActionAccept  Action = "accept"
-	ActionDrop    Action = "drop"
-	ActionReject  Action = "reject"
-	ActionLog     Action = "log"
+	ActionAccept Action = "accept"
+	ActionDrop   Action = "drop"
+	ActionReject Action = "reject"
+	// ActionLog is a rule that logs without deciding the packet's fate:
+	// RouterOS's action=log, and the log-decoupled-from-policy pattern
+	// where a passthrough rule logs traffic a later rule acts on.
+	ActionLog Action = "log"
+	// ActionMarked is a mangle mark rule -- mark-connection,
+	// mark-routing or mark-packet. The mark itself is not in the log
+	// line (RouterOS does not print it), so this says which kind of rule
+	// logged the packet, not which mark it set.
+	ActionMarked Action = "marked"
+	// ActionNatted is address translation: masquerade, src-nat, dst-nat,
+	// redirect, netmap. The translated address, when RouterOS annotates
+	// the line with it, is in NatIP/NatPort/NatRaw.
+	ActionNatted Action = "natted"
+	// ActionUnknown is a line the parser genuinely could not classify --
+	// no recognised log-prefix and nothing in the line itself that
+	// identifies the rule kind. It is the bucket an operator should
+	// investigate, which only works while nothing is hidden inside it.
 	ActionUnknown Action = "unknown"
 )
 
