@@ -2506,6 +2506,7 @@ Override individual scalar settings without a mounted file:
 | `MIKROVIEW_DEVICE_MAC_STORE_PATH` | `deviceMac.storePath` (see [New-device detection](#new-device-detection-optional-on-by-default)) |
 | `MIKROVIEW_NOTIFY_WEBHOOK_URL` | `notify.webhook.url` |
 | `MIKROVIEW_BLOCKLIST_SOURCES` | `blocklist.sources` (comma-separated, see [Local IP/CIDR blocklist matching](#local-ipcidr-blocklist-matching-optional-on-by-default)) -- note an empty env var value is treated as unset, same as every other list env var here, so *disabling* the feature (`sources: []`) needs the YAML file, not this variable |
+| `MIKROVIEW_ENGINE_STORE_PATH` | `engine.storePath` -- where `internal/engine`'s persisted per-definition baseline state lives. Nothing registers a definition against it yet, so this only matters once one does |
 
 ## Checking your version
 
