@@ -26,7 +26,13 @@ import (
 // changed is the four lines that hand an event to the evaluation path,
 // and the harness below that rebuilds the definitions when the entry set
 // changes (production does the same thing, through
-// watchlist.Store.SetOnChange -- see main.go).
+// DefinitionsStore.SetOnChange -- see main.go and Registry).
+//
+// The entry set itself moved again with #407: watchlist.Store is deleted
+// and entries are expectation definitions in DefinitionsStore. Every
+// assertion below is still the one internal/watchlist wrote -- what
+// changed is which store the harness upserts into, which is exactly what
+// a characterization pin is for.
 //
 // The rest of that file stayed where it is: matchNonInverted's and
 // matchInverted's own rules, the matchlog row shapes and Coverage's four
@@ -37,7 +43,7 @@ import (
 // registrations are rebuilt whenever the entry set changes, and both
 // emit into one real matchlog.Store.
 type expectationHarness struct {
-	entries *watchlist.Store
+	entries *DefinitionsStore
 	ml      matchlog.Store
 	members AddressListMembership
 
@@ -48,9 +54,9 @@ type expectationHarness struct {
 
 func newExpectationHarness(t *testing.T, members AddressListMembership, capacity int) *expectationHarness {
 	t.Helper()
-	entries, err := watchlist.OpenWithBackend(nil)
+	entries, err := OpenDefinitionsStore("")
 	if err != nil {
-		t.Fatalf("watchlist.OpenWithBackend: %v", err)
+		t.Fatalf("OpenDefinitionsStore: %v", err)
 	}
 	ml, err := matchlog.Open(filepath.Join(t.TempDir(), "matchlog.jsonl"), capacity)
 	if err != nil {
@@ -66,7 +72,11 @@ func newExpectationHarness(t *testing.T, members AddressListMembership, capacity
 
 func (h *expectationHarness) rebuild(t *testing.T) {
 	t.Helper()
-	decl, inverted, err := BuildExpectations(h.entries.List(), ExpectationDeps{
+	list, err := h.entries.ListExpectations()
+	if err != nil {
+		t.Fatalf("ListExpectations: %v", err)
+	}
+	decl, inverted, err := BuildExpectations(list, ExpectationDeps{
 		Members:      h.members,
 		Sink:         MatchlogSink(h.ml),
 		Observations: h.entries,
@@ -77,6 +87,22 @@ func (h *expectationHarness) rebuild(t *testing.T) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.decl, h.inverted = decl, inverted
+}
+
+// mustGet reads one entry back out of the definitions store, failing the
+// test rather than returning a zero value: every call site below is
+// asserting on what was stored, so an unreadable entry is a failure to
+// report, never a comparison against an empty struct.
+func (h *expectationHarness) mustGet(t *testing.T, id string) watchlist.Entry {
+	t.Helper()
+	e, ok, err := h.entries.GetExpectation(id)
+	if err != nil {
+		t.Fatalf("GetExpectation(%s): %v", id, err)
+	}
+	if !ok {
+		t.Fatalf("GetExpectation(%s): no such expectation", id)
+	}
+	return e
 }
 
 // evaluate is the harness's stand-in for the ingest path handing one
@@ -104,8 +130,8 @@ func TestCharacterizationNonInverted_EndToEnd(t *testing.T) {
 		{ID: "by-destip", DestIP: "10.0.0.9", Ports: []int{443}},
 		{ID: "by-addrlist", SourceList: watchlist.AddressListRef{Device: "core", List: "mgmt"}, Ports: []int{9999}},
 	} {
-		if err := h.entries.Upsert(e); err != nil {
-			t.Fatalf("Upsert(%s): %v", e.ID, err)
+		if err := h.entries.UpsertExpectation(e); err != nil {
+			t.Fatalf("UpsertExpectation(%s): %v", e.ID, err)
 		}
 	}
 	now := time.Date(2026, 8, 15, 12, 0, 0, 0, time.UTC)
@@ -146,7 +172,7 @@ func TestCharacterizationNonInverted_EndToEnd(t *testing.T) {
 func TestCharacterizationInverted_ObserveToViolation(t *testing.T) {
 	h := newExpectationHarness(t, nil, 100)
 	src := matchlog.Identity{MAC: "aa:bb:cc:dd:ee:ff"}
-	if err := h.entries.Upsert(watchlist.Entry{ID: "device-x", Invert: true, Observing: true, Source: src}); err != nil {
+	if err := h.entries.UpsertExpectation(watchlist.Entry{ID: "device-x", Invert: true, Observing: true, Source: src}); err != nil {
 		t.Fatal(err)
 	}
 	t0 := time.Date(2026, 8, 15, 9, 0, 0, 0, time.UTC)
@@ -154,7 +180,7 @@ func TestCharacterizationInverted_ObserveToViolation(t *testing.T) {
 	destA := store.Event{SrcMAC: src.MAC, DstIP: "198.51.100.10", DstPort: 80, ReceivedAt: t0}
 	h.evaluate(destA)
 
-	e, _ := h.entries.Get("device-x")
+	e := h.mustGet(t, "device-x")
 	if len(e.Observed) != 1 {
 		t.Fatalf("expected 1 observed candidate after the first sighting, got %+v", e.Observed)
 	}
@@ -174,7 +200,7 @@ func TestCharacterizationInverted_ObserveToViolation(t *testing.T) {
 	destAAgain := destA
 	destAAgain.ReceivedAt = t1
 	h.evaluate(destAAgain)
-	e, _ = h.entries.Get("device-x")
+	e = h.mustGet(t, "device-x")
 	if len(e.Observed) != 1 {
 		t.Fatalf("expected the repeat to update the existing candidate, not add a second one, got %+v", e.Observed)
 	}
@@ -193,17 +219,20 @@ func TestCharacterizationInverted_ObserveToViolation(t *testing.T) {
 	t2 := t1.Add(time.Minute)
 	destB := store.Event{SrcMAC: src.MAC, DstIP: "198.51.100.20", DstPort: 443, ReceivedAt: t2}
 	h.evaluate(destB)
-	e, _ = h.entries.Get("device-x")
+	e = h.mustGet(t, "device-x")
 	if len(e.Observed) != 2 {
 		t.Fatalf("expected 2 distinct observed candidates, got %+v", e.Observed)
 	}
 
 	// Promote destA:80 -- removed from Observed, added to Permitted.
 	// Observing is untouched by Promote (invert.go's own doc comment).
-	if err := h.entries.Promote("device-x", []watchlist.PermittedDest{{DestIP: "198.51.100.10", Port: 80}}); err != nil {
+	if err := h.entries.UpdateExpectation("device-x", func(e *watchlist.Entry) error {
+		e.Promote([]watchlist.PermittedDest{{DestIP: "198.51.100.10", Port: 80}})
+		return nil
+	}); err != nil {
 		t.Fatalf("Promote: %v", err)
 	}
-	e, _ = h.entries.Get("device-x")
+	e = h.mustGet(t, "device-x")
 	if len(e.Observed) != 1 || e.Observed[0].DestIP != "198.51.100.20" {
 		t.Fatalf("expected only destB left in Observed after promoting destA, got %+v", e.Observed)
 	}
@@ -215,10 +244,13 @@ func TestCharacterizationInverted_ObserveToViolation(t *testing.T) {
 	}
 
 	// Leave observe mode.
-	if err := h.entries.SetObserving("device-x", false); err != nil {
+	if err := h.entries.UpdateExpectation("device-x", func(e *watchlist.Entry) error {
+		e.Observing = false
+		return nil
+	}); err != nil {
 		t.Fatalf("SetObserving: %v", err)
 	}
-	e, _ = h.entries.Get("device-x")
+	e = h.mustGet(t, "device-x")
 	if e.Observing {
 		t.Fatal("expected Observing to be false after SetObserving(false)")
 	}
@@ -281,7 +313,7 @@ func TestCharacterizationExpectationEditTakesEffectOnTheNextEvent(t *testing.T) 
 		t.Fatalf("an empty entry set recorded %d matches, want 0", got)
 	}
 
-	if err := h.entries.Upsert(watchlist.Entry{ID: "e1", Ports: []int{22}}); err != nil {
+	if err := h.entries.UpsertExpectation(watchlist.Entry{ID: "e1", Ports: []int{22}}); err != nil {
 		t.Fatal(err)
 	}
 	e.ReceivedAt = now.Add(time.Second)
@@ -290,7 +322,9 @@ func TestCharacterizationExpectationEditTakesEffectOnTheNextEvent(t *testing.T) 
 		t.Fatalf("a freshly created entry recorded %d matches on the next event, want 1", got)
 	}
 
-	h.entries.Delete("e1")
+	if err := h.entries.DeleteExpectation("e1"); err != nil {
+		t.Fatalf("DeleteExpectation: %v", err)
+	}
 	e.ReceivedAt = now.Add(2 * time.Second)
 	h.evaluate(e)
 	if got := h.ml.Stats().Count; got != 1 {

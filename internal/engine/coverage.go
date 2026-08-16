@@ -1,12 +1,20 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-package watchlist
+package engine
 
 import (
 	"github.com/tomlawesome/mikroview/internal/ingest"
+	"github.com/tomlawesome/mikroview/internal/watchlist"
 )
 
-// Answering "can anything ever feed this entry?" (#274 item 1).
+// Answering "can anything ever feed this definition?" (#274 item 1).
+//
+// Moved here from internal/watchlist by issue #407's fourth handover:
+// coverage is a per-definition property, so it lives with the
+// definitions rather than beside a store that no longer exists. The rule
+// and every answer it can give are unchanged -- this is a structural
+// move, not a behaviour change; only the entry point (Definition.Coverage
+// rather than watchlist.Coverage) is new.
 //
 // The problem this solves: an entry showing no matches is ambiguous
 // between "nothing happened" and "nothing here is even watching". The
@@ -48,8 +56,12 @@ const (
 	CoverageOutOfScope CoverageState = "out-of-scope"
 )
 
-// Coverage decides what can be said about entry against the filter
-// tables devices have pushed. rulesByDevice is every device's table;
+// Coverage decides what can be said about this definition against the
+// filter tables devices have pushed. Only an expectation definition has
+// a coverage answer at all -- the question is whether a firewall rule
+// could produce an event matching the entry it was authored as -- so a
+// detection definition (or one that cannot be read back as an entry)
+// reports CoverageUnknown, which renders as silence. rulesByDevice is every device's table;
 // an empty map means nothing has been pushed and the answer is
 // CoverageUnknown.
 //
@@ -75,10 +87,23 @@ const (
 // is the token's own scope and revocation, not this function guessing.
 // If entries ever gain a device, this is the first thing that should
 // consult it.
-func Coverage(entry Entry, rulesByDevice map[string][]ingest.FilterRule) CoverageState {
+func (d Definition) Coverage(rulesByDevice map[string][]ingest.FilterRule) CoverageState {
 	if len(rulesByDevice) == 0 {
 		return CoverageUnknown
 	}
+	entry, err := EntryFromDefinition(d)
+	if err != nil {
+		return CoverageUnknown
+	}
+	return coverageForEntry(entry, rulesByDevice)
+}
+
+// coverageForEntry is Coverage's own rule, over the entry a definition
+// converts back to -- kept as its own function so the coverage tests
+// moved with this file still exercise the rule directly, rather than
+// having to build a whole Definition envelope to ask a question about
+// one entry.
+func coverageForEntry(entry watchlist.Entry, rulesByDevice map[string][]ingest.FilterRule) CoverageState {
 
 	sawRule := false
 	sawLoggingRule := false
@@ -129,7 +154,7 @@ func Coverage(entry Entry, rulesByDevice map[string][]ingest.FilterRule) Coverag
 // narrowed by address at all -- any logging rule might carry that
 // device's traffic, and the honest answer is Covers rather than a guess
 // about which subnet the device is on.
-func ruleCovers(entry Entry, rule ingest.FilterRule) ingest.Coverage {
+func ruleCovers(entry watchlist.Entry, rule ingest.FilterRule) ingest.Coverage {
 	// Inverted entries watch every port their device touches, so only
 	// the source scoping applies.
 	if entry.Invert {
@@ -163,7 +188,7 @@ func ruleCovers(entry Entry, rule ingest.FilterRule) ingest.Coverage {
 	return coversSource(entry, rule)
 }
 
-func coversSource(entry Entry, rule ingest.FilterRule) ingest.Coverage {
+func coversSource(entry watchlist.Entry, rule ingest.FilterRule) ingest.Coverage {
 	// A MAC-scoped entry cannot be narrowed: rules carry no MAC
 	// condition. Any logging rule could be the one carrying that
 	// device's traffic.
