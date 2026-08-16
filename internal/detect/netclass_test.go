@@ -11,6 +11,19 @@ import (
 	"github.com/tomlawesome/mikroview/internal/reputation"
 )
 
+// findFlag was internal/detect/known_bad_ip_test.go's helper; that file
+// moved to internal/engine with its detector (issue #405), so the helper
+// lives with the last tests still using it.
+func findFlag(fs *flags.Store, target string, typ flags.Type) *flags.Flag {
+	for _, f := range fs.List() {
+		if f.Target == target && f.Type == typ {
+			f := f
+			return &f
+		}
+	}
+	return nil
+}
+
 // fakeNetClass is a netClassLookup that matches an explicit fixed set of
 // IPs -- same "inject a fake" approach known_bad_ip_test.go's
 // fakeKnownBadIPs establishes for knownBadIPLookup.

@@ -7,7 +7,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tomlawesome/mikroview/internal/blocklist"
 	"github.com/tomlawesome/mikroview/internal/flags"
 	"github.com/tomlawesome/mikroview/internal/store"
 )
@@ -38,34 +37,41 @@ func TestEnqueueNeverBlocksOnFullQueue(t *testing.T) {
 // TestRunProcessesEnqueuedEvents proves Run actually drains the queue
 // and feeds events through Observe -- Enqueue alone (see above) only
 // proves the non-blocking send; this closes the loop by confirming a
-// detector that should fire, does, once Run has had a chance to catch
-// up. It has been retargeted with each port (critical_port ->
-// repeated_drops -> internal_recon -> mail_sender) and lands here on
-// known_bad_ip, one of the two reinforcement passes internal/detect
-// still evaluates (issue #405). Nothing about known_bad_ip's own
-// behaviour is under test: it is picked because it fires
-// deterministically off a single event, which is all this test needs
-// from whichever detector it borrows.
+// detector that should act, does, once Run has had a chance to catch up.
+// It has been retargeted with each port (critical_port -> repeated_drops
+// -> internal_recon -> mail_sender -> known_bad_ip) and lands here on
+// netclass, the one pass internal/detect still evaluates (issue #405).
+//
+// netclass raises no flag of its own -- it only reinforces one -- so the
+// observable effect this waits on is a confidence floor landing on a
+// pre-seeded flag rather than a new flag appearing. Nothing about
+// netclass's own behaviour is under test; it is simply what is left to
+// borrow.
 func TestRunProcessesEnqueuedEvents(t *testing.T) {
 	d, fs := newTestDetector(t, DefaultConfig())
-	bl := newFakeKnownBadIPs()
-	bl.setMatch("203.0.113.9", blocklist.MatchResult{Label: "Spamhaus DROP", Range: "203.0.113.0/24"})
-	d.WithKnownBadIPs(bl)
+	nc := newFakeNetClass()
+	nc.setMatch("203.0.113.9", torMatch())
+	d.WithNetClass(nc)
+
+	now := time.Now()
+	fs.AddWithDetail(flags.TypePortScan, "203.0.113.9", "seeded", 10, flags.Evidence{}, "", now)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go d.Run(ctx)
 
-	d.Enqueue(store.Event{SrcIP: "203.0.113.9", DstIP: "192.168.1.1", DstPort: 22, ReceivedAt: time.Now()})
+	d.Enqueue(store.Event{SrcIP: "203.0.113.9", DstIP: "192.168.1.1", DstPort: 22, ReceivedAt: now})
 
 	deadline := time.After(2 * time.Second)
 	for {
-		if list := fs.List(); len(list) == 1 && list[0].Type == flags.TypeKnownBadIP {
-			return
+		for _, f := range fs.List() {
+			if f.Type == flags.TypePortScan && f.ReputationFloor != nil {
+				return
+			}
 		}
 		select {
 		case <-deadline:
-			t.Fatalf("Run never processed the enqueued event into a known_bad_ip flag; got %+v", fs.List())
+			t.Fatalf("Run never processed the enqueued event into a netclass reinforcement; got %+v", fs.List())
 		case <-time.After(5 * time.Millisecond):
 		}
 	}

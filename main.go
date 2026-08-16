@@ -851,15 +851,15 @@ func main() {
 	netclassLog := logging.New("netclass")
 	nc := netclass.New(cfg.NetClass.Sources, netclassLog)
 
-	// All four optional inputs are attached in one chain: entities backs
-	// the trusted-mail-sender allowlist (#108), knownBad backs the local
-	// blocklist match (#113 Part B), netclass backs the direction-aware
-	// VPN/Tor confidence reinforcement (#114). Each is independently a
-	// valid no-op when unconfigured.
+	// netclass backs the direction-aware VPN/Tor confidence reinforcement
+	// (#114) -- the last optional input internal/detect still consults for
+	// itself. The trusted-mail-sender allowlist (#108) and the local
+	// blocklist match (#113 Part B) both moved onto the engine with their
+	// definitions (issue #405) and reach them through ShippedDeps below.
+	// Each is independently a valid no-op when unconfigured.
 	detector := detect.NewWithSettings(detectCfg, fs, detectorSettings).
 		WithReputation(rep).
 		WithEntities(entityStore).
-		WithKnownBadIPs(bl).
 		WithNetClass(nc)
 
 	// Shipped declarative definitions (issue #405): built from whatever
