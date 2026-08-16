@@ -18,6 +18,99 @@ rewritten.
 
 ### Added
 
+- **One definitions API** (#407): `GET /api/definitions` and its
+  siblings, the operator-facing half of the evaluation-engine
+  unification (`docs/decisions/evaluation-engine.md`). A shipped
+  detector and a watchlist entry are the same thing to the engine -- a
+  definition -- and they are now the same thing over HTTP: one list,
+  with each definition's enabled state, scope, tuned params, declared
+  param schema, provenance, suppressions, replayability, and (for an
+  expectation) its coverage answer.
+
+  What is new rather than merely moved:
+
+  - **Param overrides, validated against each definition's own declared
+    schema.** A threshold outside its bounds is a 400, not a stored zero
+    read back later as though it were configured. `POST
+    /api/definitions/{id}/reset` discards every override in one call;
+    editing a shipped definition keeps it shipped, with the response
+    saying exactly how far from stock it now is.
+  - **Replay over the API** (`POST /api/definitions/{id}/replay`): "what
+    would this have done?", answered from the stored event corpus with
+    candidate params, returning the emission count, a bounded evidence
+    sample, and -- mandatorily -- the window it actually covered. A
+    definition that cannot answer honestly (an inverted expectation,
+    whose judgement comes from an observation period measured in days
+    against a corpus measured in minutes) declines with its reason
+    instead of reporting a misleading zero.
+  - **`GET /api/definitions/schema`**, so the UI renders tuning controls
+    from the server's own declaration rather than a second copy of every
+    definition's knobs written in TypeScript.
+  - **The five definitions that never had a toggle** --
+    `unexpected_mail_sender`, `stale_rule`, `known_bad_ip`, `netclass`
+    and `reputation` -- are listed, switchable and scopable for the
+    first time. They ran as always-on passes with no name and no switch
+    before v0.3.0's engine port gave them the same envelope as everything
+    else; the Detectors page now shows all seventeen.
+
+- **Definition changes take effect on the very next ingested event
+  again** (#407). Toggling a detector became restart-effective as each
+  one was ported onto the engine during v0.3.0 (the port was documented
+  as such at the time, not hidden), because a definition reads its
+  enabled/scope when it is built and that happened once at startup. An
+  edit now re-registers the affected definition immediately -- and only
+  the affected one, so an unrelated save no longer resets any other
+  definition's half-full counting window or warming baseline.
+
+- **The RouterOS push schema carries more of each rule** (#408). Pushed
+  filter rules now carry `connectionState`, `inInterface` and
+  `outInterface`; pushed NAT rules carry the full rule anatomy
+  (`toAddresses`, `toPorts`, `dstPort`, `protocol`, `inInterface`,
+  `outInterface`, `srcAddress`, `dstAddress`, `disabled`, `dynamic`);
+  and every push may state the router's own RouterOS version on the
+  payload (`routerosVersion`, read from `[/system/resource get
+  version]`).
+
+  Nothing reads any of it yet, on purpose. Each field is input for work
+  that is deliberately later — connection-state for the "which rules can
+  actually feed this view" answer, the NAT anatomy for a NAT popup that
+  separates rules an event could have hit from ones it could not (#445),
+  the version for warning that a command was written against a different
+  RouterOS (#436) — and all three are worth designing against data that
+  has genuinely been flowing rather than data assumed into existence.
+
+  Every field is optional: an older push script against this build
+  leaves them unset and is accepted exactly as before. The documented
+  upgrade order is unchanged — update MikroView before the script, never
+  the other way round. `docs/routeros-setup.md` step 4c and its field
+  table carry the new lines, and the setup wizard emits them.
+
+- **Two new action categories, `marked` and `natted`**, so mangle mark
+  rules and NAT rules stop being reported as "unknown". RouterOS's
+  non-filter rules produce log lines with no accept/drop/reject verdict
+  in them, and every one of those used to land in the unknown bucket —
+  on a policy-routing deployment (mangle rules steering traffic into a
+  VPN tunnel) that is a permanent, steady dribble, which leaves "unknown"
+  meaning "not a filter rule" instead of "worth investigating". Both
+  categories carry through the parser, the store's `byAction` totals and
+  time series, the API, and the live view's action filter and badges.
+
+  The log-prefix convention gains two letters to go with them: `M` for a
+  mangle mark rule and `N` for a NAT rule, alongside the existing
+  `A`/`D`/`R`/`L`. Tagging is what identifies a mangle rule — RouterOS
+  prints nothing in the line that distinguishes one from a filter rule,
+  so an untagged mangle rule still shows as "unknown", the same as an
+  untagged filter rule always has. See `docs/routeros-setup.md` step 3.
+
+  One case needs no tagging: a `srcnat`/`dstnat` line carrying RouterOS's
+  translated-address annotation is read as `natted` directly, because the
+  line itself states that the packet was translated. Nothing else is
+  inferred — a line the parser cannot genuinely classify stays "unknown",
+  which is the point of the change rather than a limitation of it.
+
+  Existing `A|`-tagged NAT rules keep reporting `accept` until they are
+  re-tagged with `N|`; nothing about them breaks. (#437)
+
 - **An uptime readout in the toolbar**, next to the connection
   indicator: how long the server has been running, counting live,
   visible on every view rather than tucked into a menu. The number
@@ -26,7 +119,129 @@ rewritten.
   uptime for long. `/api/healthz` grows an `uptimeSeconds` field
   alongside the existing human-readable `uptime` string.
 
+- **A new persisted store for the evaluation engine's baseline state**
+  (`internal/engine.StateStore`, part of the v0.3.0 engine unification
+  -- see `docs/decisions/evaluation-engine.md`), so a statistical
+  baseline can resume warm across a restart instead of losing its whole
+  warm-up every time mikroview restarts. A new `engine-state.json` file
+  appears under mikroview's data directory (`engine.storePath` in
+  `config.yaml`, `MIKROVIEW_ENGINE_STORE_PATH` as an env var override,
+  defaulting alongside every other store under `/var/lib/mikroview`) and
+  is carried by `-backup`/`-restore` from day one. Nothing in this
+  release registers a definition against it yet, so on a running
+  mikroview the file stays empty regardless -- this lands ahead of the
+  definitions that will use it (a deliberate sequencing choice, the same
+  one `Flag.Provisional` and `matchlog.Record`'s equivalent field
+  already took) so the persisted shape and its round trip are proven
+  before anything depends on them.
+
+- **The definitions store** (`internal/engine.DefinitionsStore`, issue
+  #404, another piece of the v0.3.0 engine unification): one document,
+  on both the JSON-file and Postgres backends, holding every definition
+  the evaluation engine will run against -- the twelve shipped
+  detectors' enabled/scope state and default params, an operator's
+  watchlist expectations, and (once the builder UI lands) fully custom
+  definitions, all in one place instead of the two separate documents
+  `internal/detect` and `internal/watchlist` keep today. A new
+  `definitions.json` file appears under mikroview's data directory
+  (`engine.definitionsStorePath` in `config.yaml`,
+  `MIKROVIEW_ENGINE_DEFINITIONS_STORE_PATH` as an env var override,
+  defaulting alongside every other store) and is carried by
+  `-backup`/`-restore` from day one, the same day this store exists --
+  #372's lesson, applied before an operator could ever be caught out by
+  it rather than after.
+
+  The first time a running mikroview reaches this new store with no
+  document of its own yet, it is seeded once from whatever is already on
+  disk: the detector settings store's enabled/scope toggles land as
+  overrides on their matching shipped definition, and every watchlist
+  entry becomes an expectation definition -- a non-inverted entry
+  becoming a declarative one, an inverted entry (including one still
+  mid-observation, with its recorded candidates and promoted
+  destinations) becoming a programmatic one, exactly as it was, nothing
+  reset. This migration only ever reads the old documents; it does not
+  delete or modify either one, and both keep working completely
+  unchanged for now -- `internal/detect` and `internal/watchlist` are
+  not ported onto the new engine in this release, that is still to come.
+  It also only ever writes the new document after everything above has
+  already succeeded in memory, so a source document this version cannot
+  read or parse refuses the whole migration outright (naming the file)
+  rather than starting from a partial or empty result -- the same
+  fail-closed policy issue #378 established for every other store in
+  this codebase, extended to cover a conversion failure partway through,
+  not only a read failure at the start. And nothing operator-authored is
+  ever silently discarded: a definition this version of mikroview
+  cannot make sense of at all -- the shape of things to come from a
+  newer release, encountered after a downgrade, or a shipped definition
+  a future release has since retired -- is kept exactly as stored and
+  marked unavailable rather than dropped, on every write this store ever
+  makes from then on.
+
 ### Fixed
+
+- **The watchlist stops claiming "nothing anywhere is watching this"
+  when it has not read every router's rules** (#367). Coverage answers
+  from the filter tables routers have pushed, and the push is optional —
+  so a router that streams syslog and is actively producing matches, but
+  never pushed, was silently missing from the evidence. One other router
+  with a non-logging table was then enough for every entry to be
+  labelled "no firewall rule on any router you have connected has
+  logging turned on", while the excluded router's matches were visible
+  on the live view next door. Both definite negatives (no-logging and
+  out-of-scope) now degrade to saying nothing at all unless every device
+  that has actually carried events has pushed its table, and the entry
+  list names the devices whose rules went unread. A positive answer is
+  unchanged: one router demonstrably logging the right traffic stays
+  true however many others went unread.
+
+- **The watchlist page can no longer show torn observation data**
+  (#376). `GET /api/watchlist` handed out entry copies whose observed
+  and permitted lists still pointed at the live ones, so an entry in
+  observe mode with traffic arriving — or a promotion landing at the
+  same moment — could render a count from one moment beside a
+  last-seen from another, in exactly the list an operator reads to
+  decide what to promote. Self-correcting on the next poll, and never
+  persisted wrong, but wrong on screen while it lasted.
+
+- **WireGuard peer pushes are no longer refused when a peer has more
+  than one allowed address** (#443). RouterOS holds `allowed-address` as
+  an array, so the documented push script produced a payload the server
+  rejected outright (`cannot unmarshal array into Go struct field
+  WireguardPeer.allowedAddress of type string`) — the whole
+  `wireguard-peer` kind failed on any real router, taking peer-based
+  host naming with it, while the other seven kinds landed fine. The
+  schema now takes the array RouterOS actually sends, and a
+  comma-joined string as well, so a script written against either
+  version of the docs works unchanged. Every allowed address a peer
+  holds now names traffic from it, not just the first: a peer routing
+  two branch subnets reads "branch office" on both.
+
+- **A stalled storage backend could freeze flag reads, rule-usage
+  reads, and the new-device MAC lookup -- all API-served state -- not
+  just the write that triggered it** (#377). `internal/flags.Store`,
+  `internal/rules.Store` and `internal/device.MACRegistry` each
+  persisted synchronously while holding the same lock every read goes
+  through: a backend that stopped responding (a blackhole, an
+  overloaded database, a long lock wait -- the kind of failure a clean
+  disconnect error does not cover) meant every subsequent `Add`/`Touch`/
+  `Seen` call, and every read behind it, blocked for as long as the
+  backend stayed stuck. A related defect made it worse under load: the
+  rate limiter protecting these hot paths stamped its "last write" clock
+  *before* attempting the write, so a write that itself ran long bought
+  no back-off at all -- a stalled backend under sustained traffic was
+  retried once per event, not once per debounce window. Both are fixed
+  at the root by a new shared helper (`persist.WriteBehind`): a mutation
+  now only ever encodes a snapshot under its own lock before handing it
+  off, one writer goroutine does the actual backend call off that lock
+  entirely, every backend call carries a deadline, and the debounce
+  clock is stamped after an attempt completes, not before. Applied to
+  the three stores above plus `internal/detect.SettingsStore` and
+  `internal/watchlist.Store`, which had no deadline on their backend
+  calls at all before this. Each store's public behaviour is unchanged;
+  the practical effect for an operator is that a struggling storage
+  backend now degrades to "this change might take a few seconds longer
+  to become durable" instead of freezing flags, rules, or watchlist
+  reads across the whole API while it lasts.
 
 - **`-backup` silently dropped the entire watchlist -- entries, the
   suggested-entries pool, and the match log -- and `-restore` gave no
@@ -145,9 +360,73 @@ rewritten.
   (`SYN`, `SYN,ACK`, `type 8, code 0`) are a few bytes long, so nothing
   genuine is affected.
 
+- **A long log line arriving over syslog-over-TCP could turn into
+  several garbage, undecoded events instead of the one real one it
+  actually was** (#415). The TCP listener's read loop only recognised a
+  message as continuing into the next read when the current one exactly
+  filled its 64KB buffer -- but TCP promises nothing about how a message
+  gets sliced into reads, so a message *smaller* than 64KB that still
+  happened to arrive fragmented across several non-full reads (a TLS
+  record boundary, ordinary segmentation under load) had each fragment
+  handed to the parser as its own line. None of the fragments carry any
+  framing of their own, so each produced noise in the live view and in
+  detection rather than the one genuine record. Found concretely: a
+  single ~65KB line over the real TLS listener produced 3 stray events
+  where it should have produced 1. Fragmentation is a property of the
+  network path, not of what was sent, so this could happen to any
+  sufficiently long legitimate line -- a verbose NAT detail, a long
+  address-list name -- crossing a segment boundary at the wrong moment,
+  intermittently and with no pattern an operator could pin down. The
+  read loop now reassembles by message framing instead: newline-
+  delimited input is accumulated across as many reads as it takes and
+  split on the delimiter itself, and RouterOS's undelimited bare
+  messages (#202) are still recognised per message, resolved by a brief
+  quiet period on the socket rather than by whether one read happened to
+  fill a buffer. The existing 64KB per-message bound, and what happens
+  when a line genuinely exceeds it, are unchanged.
+
 ## [0.2.0] - 2026-08-14
 
 ### Removed
+
+- **`/api/detectors` and `/api/watchlist/entries`** (#407), replaced
+  wholesale by one definitions surface (see Added below). Every route on
+  both is gone -- `GET /api/detectors`, `PUT /api/detectors/{name}`,
+  `GET|POST /api/watchlist/entries`, `PUT|DELETE
+  /api/watchlist/entries/{id}`, and the promote/observing actions --
+  with no alias, no dual reading, and no handler kept alive to return a
+  friendlier error, per `AGENTS.md`. A stale caller gets a plain 404.
+
+  The replacements, one for one: list/read a detector or an entry ->
+  `GET /api/definitions` (and `GET /api/definitions/{id}`); toggle or
+  scope a detector -> `PUT /api/definitions/{id}`; create/update/delete
+  an entry -> `POST /api/definitions`, `PUT /api/definitions/{id}`,
+  `DELETE /api/definitions/{id}`; promote/observing -> `POST
+  /api/definitions/{id}/promote` and `.../observing`.
+
+  Nothing is lost in the move, including on upgrade: every existing
+  watchlist entry, every recorded observation and every promoted
+  destination is carried into the definitions document on the first boot
+  after upgrading, and the match log is untouched. The watchlist
+  document is now a migration source only -- still read, never written,
+  still carried in `-backup` -- and can be removed after one clean
+  upgrade.
+
+- **`GET /api/watchlist/matches`, renamed to `GET /api/matches`** (#407).
+  Same query parameters (`mac`/`ip`/`since`/`until`/`limit`), same
+  response, same access (any signed-in user, and reachable with a
+  read-only API token). It is a query over the match log rather than
+  anything to do with entries, and leaving one lone route behind on a
+  prefix whose noun had been retired is the kind of half-removal
+  `AGENTS.md` is about. Update any external correlation script's URL;
+  nothing else about it changed.
+
+- **`internal/watchlist.Store`** (#407) -- the second persisted document
+  holding the same entries the definitions document already held. Not an
+  operator-facing change beyond the routes above, but it is why the
+  entry set now has exactly one home: an entry's enabled flag, scope and
+  params lived on its definition while the entry itself lived somewhere
+  else, and nothing structurally stopped the two disagreeing.
 
 - **`spamhaus_edrop` as a blocklist source** -- Spamhaus merged EDROP into
   DROP on 2024-04-10, and the endpoint now returns only a "this list has

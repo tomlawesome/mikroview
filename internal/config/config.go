@@ -630,15 +630,18 @@ type Flags struct {
 	// point but hasn't fired again in a long time -- either dead weight
 	// or an unnecessary hole, worth a human's attention either way. See
 	// internal/rules (the long-lived per-rule usage record this reads
-	// from) and internal/detect.StaleRuleDetector (the sweep itself).
+	// from) and internal/engine's stale_rule definition (the sweep
+	// itself).
 	//
 	// RuleUsageStorePath persists that usage record so "hasn't fired in
 	// 30 days" survives a restart -- same optional-persistence contract
 	// as StorePath above (empty disables persistence, not the feature).
 	// StaleRuleDays is how long a rule must go quiet before it's
 	// considered stale. StaleRuleCheckInterval is how often the sweep
-	// re-checks (see main.go's staleRuleCheckInterval-style ticker) --
-	// coarse by design, since staleness is judged in days, not seconds.
+	// re-checks -- coarse by design, since staleness is judged in days,
+	// not seconds. Both seed the stale_rule definition's own maxAge and
+	// checkInterval params (issue #405), which is what the engine's tick
+	// driver honours; see internal/engine.ShippedDefaults.
 	RuleUsageStorePath     string        `yaml:"ruleUsageStorePath"`
 	StaleRuleDays          int           `yaml:"staleRuleDays"`
 	StaleRuleCheckInterval time.Duration `yaml:"staleRuleCheckInterval"`
@@ -675,6 +678,28 @@ type Flags struct {
 // well beyond the 24h event-retention window.
 type DeviceMAC struct {
 	StorePath string `yaml:"storePath"`
+}
+
+// Engine configures internal/engine's evaluation chassis
+// (docs/decisions/evaluation-engine.md): its persisted per-definition,
+// per-key baseline state (#399/#400: engine.StateStore), what a Baseline
+// needs to resume warm across a restart instead of being blind for its
+// whole warm-up again, and (#404) the definitions store -- the one
+// document holding every definition (shipped detectors, watchlist
+// expectations, and eventually builder-authored custom ones), on both
+// backends. Optional persistence, same contract as Flags.StorePath: left
+// empty, the engine still runs, every Baseline just starts cold and the
+// definitions store stays in-memory only.
+type Engine struct {
+	StorePath string `yaml:"storePath"`
+	// DefinitionsStorePath persists the definitions store (#404). On
+	// first boot against an empty document, it is seeded from
+	// internal/detect's settings store and internal/watchlist's entries
+	// store (see engine.MigrateDefinitions) -- non-destructively: both
+	// old stores keep reading and writing their own documents until
+	// #405/#406 port their evaluation logic onto this chassis and retire
+	// them.
+	DefinitionsStorePath string `yaml:"definitionsStorePath"`
 }
 
 // Blocklist configures internal/blocklist's local IP/CIDR "known-bad"
@@ -778,6 +803,7 @@ type Config struct {
 	DeviceMAC  DeviceMAC  `yaml:"deviceMac"`
 	Blocklist  Blocklist  `yaml:"blocklist"`
 	NetClass   NetClass   `yaml:"netClass"`
+	Engine     Engine     `yaml:"engine"`
 
 	// RuleNames/HostNames are optional friendly-display-name maps -- see
 	// internal/naming. Keyed by the raw value RouterOS reports (a rule
@@ -920,6 +946,10 @@ func defaults() Config {
 		},
 		DeviceMAC: DeviceMAC{
 			StorePath: DefaultDataDir + "/mac-registry.json",
+		},
+		Engine: Engine{
+			StorePath:            DefaultDataDir + "/engine-state.json",
+			DefinitionsStorePath: DefaultDataDir + "/definitions.json",
 		},
 		Blocklist: Blocklist{
 			// Mirrors internal/blocklist.DefaultSources -- kept as a
@@ -1411,6 +1441,12 @@ func applyEnv(cfg *Config) {
 	}
 	if v := os.Getenv("MIKROVIEW_BLOCKLIST_SOURCES"); v != "" {
 		cfg.Blocklist.Sources = parseStringList(v)
+	}
+	if v := os.Getenv("MIKROVIEW_ENGINE_STORE_PATH"); v != "" {
+		cfg.Engine.StorePath = v
+	}
+	if v := os.Getenv("MIKROVIEW_ENGINE_DEFINITIONS_STORE_PATH"); v != "" {
+		cfg.Engine.DefinitionsStorePath = v
 	}
 }
 

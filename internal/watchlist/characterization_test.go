@@ -12,7 +12,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tomlawesome/mikroview/internal/ingest"
 	"github.com/tomlawesome/mikroview/internal/matchlog"
 	"github.com/tomlawesome/mikroview/internal/persist"
 	"github.com/tomlawesome/mikroview/internal/store"
@@ -28,209 +27,32 @@ import (
 // this package does today.
 //
 // This package already carries deep, focused unit coverage of Match
-// (match_test.go), the observe/promote state machine (invert_test.go)
-// and Coverage (coverage_test.go) in isolation -- this file deliberately
-// does not re-litigate those at the same grain. Its job is the thing
-// none of those files do: exercise the *end-to-end* paths (Store +
-// Evaluator + matchlog, not Match() called directly), pin exactly what
-// lands in internal/matchlog for each outcome (the Tuple, the Identity,
-// and the on-disk/on-row shape), and cover Coverage's four states plus
-// #367's known-wrong case together in one place.
-
-// ---------------------------------------------------------------------------
-// 1. Non-inverted matching, end to end, across every axis.
-// ---------------------------------------------------------------------------
-
-// TestCharacterizationNonInverted_EndToEnd runs a mixed entry set (one
-// axis each: plain ports, MAC-scoped source, dest-IP-scoped, and
-// address-list-scoped) through a real Evaluator against a real
-// matchlog.FileStore, and pins exactly which entries fire for which
-// events -- proving the axes are independently enforced through the
-// whole pipeline, not just inside matchNonInverted in isolation.
-func TestCharacterizationNonInverted_EndToEnd(t *testing.T) {
-	entries := mustOpenStore(t)
-	for _, e := range []Entry{
-		{ID: "by-port", Ports: []int{22}},
-		{ID: "by-mac", Source: matchlog.Identity{MAC: "aa:bb:cc:dd:ee:ff"}, Ports: []int{8080}},
-		{ID: "by-destip", DestIP: "10.0.0.9", Ports: []int{443}},
-		{ID: "by-addrlist", SourceList: AddressListRef{Device: "core", List: "mgmt"}, Ports: []int{9999}},
-	} {
-		if err := entries.Upsert(e); err != nil {
-			t.Fatalf("Upsert(%s): %v", e.ID, err)
-		}
-	}
-	ml := mustOpenMatchLog(t, 100)
-	lists := fakeLists{"core\x00mgmt": {"192.168.1.200"}}
-	ev := NewEvaluator(entries, ml).WithAddressLists(lists)
-	now := time.Date(2026, 8, 15, 12, 0, 0, 0, time.UTC)
-
-	cases := []struct {
-		name    string
-		event   store.Event
-		wantHit string // entry ID expected to fire, or "" for none
-	}{
-		{"port match", store.Event{SrcIP: "203.0.113.1", SrcMAC: "11:11:11:11:11:11", DstIP: "10.0.0.1", DstPort: 22}, "by-port"},
-		{"port mismatch", store.Event{SrcIP: "203.0.113.1", SrcMAC: "11:11:11:11:11:11", DstIP: "10.0.0.1", DstPort: 23}, ""},
-		{"mac match", store.Event{SrcMAC: "aa:bb:cc:dd:ee:ff", SrcIP: "192.168.1.5", DstIP: "10.0.0.2", DstPort: 8080}, "by-mac"},
-		{"mac mismatch", store.Event{SrcMAC: "ff:ff:ff:ff:ff:ff", SrcIP: "192.168.1.5", DstIP: "10.0.0.2", DstPort: 8080}, ""},
-		{"destip match", store.Event{SrcIP: "203.0.113.2", SrcMAC: "22:22:22:22:22:22", DstIP: "10.0.0.9", DstPort: 443}, "by-destip"},
-		{"destip mismatch", store.Event{SrcIP: "203.0.113.2", SrcMAC: "22:22:22:22:22:22", DstIP: "10.0.0.10", DstPort: 443}, ""},
-		{"addrlist member", store.Event{SrcIP: "192.168.1.200", SrcMAC: "", DstIP: "10.0.0.3", DstPort: 9999}, "by-addrlist"},
-		{"addrlist non-member", store.Event{SrcIP: "192.168.1.201", SrcMAC: "", DstIP: "10.0.0.3", DstPort: 9999}, ""},
-	}
-	for _, tc := range cases {
-		e := tc.event
-		e.ReceivedAt = now
-		now = now.Add(time.Second)
-		ev.evaluateRecovered(e)
-	}
-
-	got := map[string]int{}
-	for _, id := range []string{"by-port", "by-mac", "by-destip", "by-addrlist"} {
-		var n int
-		if err := ml.Query(context.Background(), matchlog.Query{Source: matchlog.Identity{IP: "203.0.113.1"}, Since: time.Time{}}, func(matchlog.Record) bool { n++; return true }); err != nil {
-			t.Fatalf("Query: %v", err)
-		}
-		got[id] = n
-	}
-	if stats := ml.Stats(); stats.Count != 4 {
-		t.Fatalf("expected exactly 4 recorded matches (one per axis that should have hit), got %d", stats.Count)
-	}
-}
-
-// ---------------------------------------------------------------------------
-// 2. The inverted state machine, end to end.
-// ---------------------------------------------------------------------------
-
-// TestCharacterizationInverted_ObserveToViolation runs the whole
-// inverted lifecycle through the real Store + Evaluator: first
-// observation, a repeat updating LastSeen/Count without touching
-// FirstSeen, promotion to Permitted (which removes the pair from
-// Observed), SetObserving(false) leaving observe mode, a permitted
-// destination never firing, and a still-unpromoted destination firing
-// as a Violation once observing stops.
-func TestCharacterizationInverted_ObserveToViolation(t *testing.T) {
-	entries := mustOpenStore(t)
-	src := matchlog.Identity{MAC: "aa:bb:cc:dd:ee:ff"}
-	if err := entries.Upsert(Entry{ID: "device-x", Invert: true, Observing: true, Source: src}); err != nil {
-		t.Fatal(err)
-	}
-	ml := mustOpenMatchLog(t, 100)
-	ev := NewEvaluator(entries, ml)
-	t0 := time.Date(2026, 8, 15, 9, 0, 0, 0, time.UTC)
-
-	destA := store.Event{SrcMAC: src.MAC, DstIP: "198.51.100.10", DstPort: 80, ReceivedAt: t0}
-	ev.evaluateRecovered(destA)
-
-	e, _ := entries.Get("device-x")
-	if len(e.Observed) != 1 {
-		t.Fatalf("expected 1 observed candidate after the first sighting, got %+v", e.Observed)
-	}
-	first := e.Observed[0]
-	if first.DestIP != "198.51.100.10" || first.Port != 80 || first.Count != 1 {
-		t.Fatalf("first observation = %+v, want {DestIP:198.51.100.10 Port:80 Count:1}", first)
-	}
-	if !first.FirstSeen.Equal(t0) || !first.LastSeen.Equal(t0) {
-		t.Errorf("first observation FirstSeen/LastSeen = %v/%v, want both %v", first.FirstSeen, first.LastSeen, t0)
-	}
-	if ml.Stats().Count != 0 {
-		t.Fatalf("expected no matchlog record while observing, got %d", ml.Stats().Count)
-	}
-
-	// Repeat: same destination/port, later time.
-	t1 := t0.Add(time.Hour)
-	destAAgain := destA
-	destAAgain.ReceivedAt = t1
-	ev.evaluateRecovered(destAAgain)
-	e, _ = entries.Get("device-x")
-	if len(e.Observed) != 1 {
-		t.Fatalf("expected the repeat to update the existing candidate, not add a second one, got %+v", e.Observed)
-	}
-	repeat := e.Observed[0]
-	if repeat.Count != 2 {
-		t.Errorf("Count after a repeat = %d, want 2", repeat.Count)
-	}
-	if !repeat.FirstSeen.Equal(t0) {
-		t.Errorf("FirstSeen after a repeat = %v, want unchanged at %v", repeat.FirstSeen, t0)
-	}
-	if !repeat.LastSeen.Equal(t1) {
-		t.Errorf("LastSeen after a repeat = %v, want updated to %v", repeat.LastSeen, t1)
-	}
-
-	// A second, distinct destination.
-	t2 := t1.Add(time.Minute)
-	destB := store.Event{SrcMAC: src.MAC, DstIP: "198.51.100.20", DstPort: 443, ReceivedAt: t2}
-	ev.evaluateRecovered(destB)
-	e, _ = entries.Get("device-x")
-	if len(e.Observed) != 2 {
-		t.Fatalf("expected 2 distinct observed candidates, got %+v", e.Observed)
-	}
-
-	// Promote destA:80 -- removed from Observed, added to Permitted.
-	// Observing is untouched by Promote (invert.go's own doc comment).
-	if err := entries.Promote("device-x", []PermittedDest{{DestIP: "198.51.100.10", Port: 80}}); err != nil {
-		t.Fatalf("Promote: %v", err)
-	}
-	e, _ = entries.Get("device-x")
-	if len(e.Observed) != 1 || e.Observed[0].DestIP != "198.51.100.20" {
-		t.Fatalf("expected only destB left in Observed after promoting destA, got %+v", e.Observed)
-	}
-	if len(e.Permitted) != 1 || e.Permitted[0] != (PermittedDest{DestIP: "198.51.100.10", Port: 80}) {
-		t.Fatalf("expected destA in Permitted, got %+v", e.Permitted)
-	}
-	if !e.Observing {
-		t.Error("expected Promote to leave Observing untouched (still true)")
-	}
-
-	// Leave observe mode.
-	if err := entries.SetObserving("device-x", false); err != nil {
-		t.Fatalf("SetObserving: %v", err)
-	}
-	e, _ = entries.Get("device-x")
-	if e.Observing {
-		t.Fatal("expected Observing to be false after SetObserving(false)")
-	}
-
-	// The promoted destination never fires, no matter how it got there.
-	t3 := t2.Add(time.Minute)
-	destAThird := destA
-	destAThird.ReceivedAt = t3
-	ev.evaluateRecovered(destAThird)
-	if ml.Stats().Count != 0 {
-		t.Fatalf("expected a permitted destination to never violate even once observing has stopped, got %d matches", ml.Stats().Count)
-	}
-
-	// destB was observed but never promoted -- now that Observing is
-	// false, the identical traffic that used to be recorded as a
-	// candidate becomes a Violation instead.
-	t4 := t3.Add(time.Minute)
-	destBAgain := destB
-	destBAgain.ReceivedAt = t4
-	ev.evaluateRecovered(destBAgain)
-	if ml.Stats().Count != 1 {
-		t.Fatalf("expected exactly 1 violation (destB, unpromoted) once observing stopped, got %d", ml.Stats().Count)
-	}
-	var recorded []matchlog.Record
-	if err := ml.Query(context.Background(), matchlog.Query{Source: src}, func(r matchlog.Record) bool {
-		recorded = append(recorded, r)
-		return true
-	}); err != nil {
-		t.Fatal(err)
-	}
-	if len(recorded) != 1 || recorded[0].Tuple.DestIP != "198.51.100.20" || recorded[0].Tuple.Port != 443 {
-		t.Fatalf("recorded violation = %+v, want destB:443", recorded)
-	}
-
-	// A brand-new, never-observed destination also violates immediately
-	// -- there is no "must have been observed first" requirement once
-	// Observing is false.
-	t5 := t4.Add(time.Minute)
-	destC := store.Event{SrcMAC: src.MAC, DstIP: "198.51.100.30", DstPort: 22, ReceivedAt: t5}
-	ev.evaluateRecovered(destC)
-	if ml.Stats().Count != 2 {
-		t.Fatalf("expected a second violation for the brand-new destination, got %d", ml.Stats().Count)
-	}
-}
+// (match_test.go) and the observe/promote state machine (invert_test.go)
+// in isolation -- this file deliberately does not re-litigate those at
+// the same grain. Its job is the thing none of those files do: pin
+// exactly what lands in internal/matchlog for each outcome (the Tuple,
+// the Identity, and the on-disk/on-row shape).
+//
+// Pins that were here have moved to internal/engine with the code they
+// characterize, twice over:
+//
+//   - #406 ported evaluation onto the chassis: the non-inverted
+//     end-to-end pass and the inverted observe-to-violation lifecycle
+//     both drove Store + Evaluator + matchlog, and the Evaluator is gone.
+//     They are unchanged in what they assert -- see
+//     internal/engine/expectation_characterization_test.go, which says so
+//     and why.
+//   - #407 deleted watchlist.Store and moved Coverage itself to
+//     internal/engine/coverage.go as Definition.Coverage: the
+//     Coverage's-four-states pin and the #367 known-wrong-answer pin
+//     moved with it, driven through ExpectationDefinitionFor + Coverage
+//     rather than the package-level Coverage(entry, rulesByDevice) this
+//     package no longer has -- see
+//     internal/engine/definitions_expectations_coverage_test.go, which
+//     carries the same reasoning forward unchanged.
+//
+// Everything below characterizes code that did not move, so it stays
+// where it was written.
 
 // TestCharacterizationInverted_StructuralNoiseExemption pins
 // isStructurallyExempt's default-exempt/opt-in behaviour end to end
@@ -548,69 +370,5 @@ func TestCharacterizationMatchlog_PostgresRowShape(t *testing.T) {
 	// live column, incremented in place by sqlCollapseUpdate.
 	if r.Count != 2 {
 		t.Errorf("count = %d, want 2 (incremented in place by the collapse update)", r.Count)
-	}
-}
-
-// ---------------------------------------------------------------------------
-// 4. Coverage: each CoverageState, plus #367's known-wrong case.
-// ---------------------------------------------------------------------------
-
-// TestCharacterizationCoverage_EachState pins Coverage's four possible
-// answers side by side, at the same entry, so the four are read as one
-// contrasting set rather than scattered across coverage_test.go's
-// per-mechanism tests (which this does not replace -- see this file's
-// header comment).
-func TestCharacterizationCoverage_EachState(t *testing.T) {
-	entry := Entry{ID: "e", Ports: []int{22}}
-
-	if got := Coverage(entry, nil); got != CoverageUnknown {
-		t.Errorf("no pushed tables at all: Coverage = %v, want %v", got, CoverageUnknown)
-	}
-	noLogging := map[string][]ingest.FilterRule{"router-a": {{Chain: "input", Action: "accept"}}}
-	if got := Coverage(entry, noLogging); got != CoverageNoLogging {
-		t.Errorf("rules pushed, none logging: Coverage = %v, want %v", got, CoverageNoLogging)
-	}
-	outOfScope := map[string][]ingest.FilterRule{"router-a": {{Chain: "input", Action: "accept", Log: true, DstPort: "80"}}}
-	if got := Coverage(entry, outOfScope); got != CoverageOutOfScope {
-		t.Errorf("a logging rule that excludes this entry's port: Coverage = %v, want %v", got, CoverageOutOfScope)
-	}
-	ok := map[string][]ingest.FilterRule{"router-a": {{Chain: "input", Action: "accept", Log: true, DstPort: "22"}}}
-	if got := Coverage(entry, ok); got != CoverageOK {
-		t.Errorf("a logging rule admitting this entry's port: Coverage = %v, want %v", got, CoverageOK)
-	}
-}
-
-// TestCharacterizationCoverage_367IncompleteDeviceMapReadsAsNoLogging
-// pins the exact mechanism #367 reports: Coverage(entry, rulesByDevice)
-// answers only from the rulesByDevice map it is handed, and cannot tell
-// "no other router is watching" apart from "some other router is
-// watching, but its rules simply were not included in this map." The
-// real bug -- and the real fix -- is one level up, in
-// internal/api.watchlistCoverage, which builds rulesByDevice only from
-// routers that completed the optional filter-rule state push, silently
-// omitting a router that streams live syslog (and is actively producing
-// matches) but never did that push. Coverage() itself has no way to
-// know a router is missing from its input, so it confidently returns
-// CoverageNoLogging here -- exactly the "confident wrong answer" #367's
-// severity section calls out, reproduced at the level this package can
-// reach.
-//
-// This pin is expected to *survive* #367's fix unchanged: the fix
-// changes what internal/api.watchlistCoverage passes in (refusing to
-// answer NoLogging unless the pushed device set is known to be
-// complete), not what Coverage() does with whatever map it is given.
-// If a later change teaches Coverage() itself to reason about
-// completeness, this pin is the one to revisit.
-func TestCharacterizationCoverage_367IncompleteDeviceMapReadsAsNoLogging(t *testing.T) {
-	entry := Entry{ID: "e", Ports: []int{22}}
-	// Simulates watchlistCoverage's rulesByDevice after "edge" (which
-	// carries the logging rule for port 22 in the real scenario #367
-	// describes) never completed the optional state push and so is
-	// silently absent -- only "core", whose rules don't log, appears.
-	incomplete := map[string][]ingest.FilterRule{
-		"core": {{Chain: "input", Action: "accept", Log: false}},
-	}
-	if got := Coverage(entry, incomplete); got != CoverageNoLogging {
-		t.Errorf("Coverage = %v, want %v (today's known-wrong answer -- see #367; the map is incomplete, not exhaustive)", got, CoverageNoLogging)
 	}
 }
