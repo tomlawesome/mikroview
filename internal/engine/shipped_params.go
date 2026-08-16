@@ -278,3 +278,21 @@ var KnownBadIPParamSchema = []ParamSchema{
 	{Name: "confidence", Type: ParamTypeInt, Min: floatBound(0), Max: floatBound(100), Required: true,
 		Description: "Confidence a blocklist match is raised at, and the floor it applies to any other active source-keyed flag for the same address."},
 }
+
+// NetClassParamSchema expresses internal/detect's netclassVPNFloor
+// (netclass.go) and the reputation.TorExitNodeFloor it reused for the
+// Tor category -- both package constants there.
+//
+// Only the two high-precision categories get a floor at all, and that is
+// not a param: datacenter space alone covers more than 10% of routable
+// IPv4 (kept display-only rather than assigned an arbitrary small weight
+// that would still mostly be noise), and privacy relays exist
+// specifically to identify traffic that must never read as suspicious.
+// Making those tunable would invite exactly the mis-scoring #114's
+// research rejected.
+var NetClassParamSchema = []ParamSchema{
+	{Name: "torFloor", Type: ParamTypeInt, Min: floatBound(0), Max: floatBound(100), Required: true,
+		Description: "Confidence floor a Tor-exit match applies to an active source-keyed flag for the same address."},
+	{Name: "vpnFloor", Type: ParamTypeInt, Min: floatBound(0), Max: floatBound(100), Required: true,
+		Description: "Confidence floor a commercial-VPN-exit match applies to an active source-keyed flag for the same address."},
+}
