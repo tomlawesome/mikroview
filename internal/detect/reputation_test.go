@@ -13,7 +13,6 @@ import (
 
 	"github.com/tomlawesome/mikroview/internal/flags"
 	"github.com/tomlawesome/mikroview/internal/reputation"
-	"github.com/tomlawesome/mikroview/internal/store"
 )
 
 // fakeReputation is a reputationLookup that blocks each call until the
@@ -127,111 +126,22 @@ func waitForConfidence(t *testing.T, fs *flags.Store, target string, want int) {
 // TestReputationSinkSkippedForAnInternalSourceBehindACompositeTarget --
 // both deleted here rather than retargeted a third time.
 
-// TestLowSlowScanReputationSnapshotCapturedWithoutAbuseScore is
-// TestReputationSnapshotCapturedWithoutAbuseScore, retargeted onto
-// low_slow_scan (formerly activity_spike -- see this file's header
-// comment). Like activity_spike's EMA-derived confidence, low_slow_scan's
-// is a multi-axis composite with no simple closed form for an arbitrary
-// paced-scan burst, so what this test pins is no longer a hand-derived
-// number: it captures the behavioral confidence already computed
-// (synchronously, before the async lookup resolves), then asserts that
-// attaching a no-AbuseScore snapshot afterwards leaves that number
-// untouched -- the same "stays behavior-only" guarantee the original
-// test's exact formula was itself standing in for.
-func TestLowSlowScanReputationSnapshotCapturedWithoutAbuseScore(t *testing.T) {
-	cfg := lowSlowCfg()
-
-	// Fake left with no score set for this IP -- simulates a Shodan-only
-	// result (no AbuseIPDB key configured).
-	fake := newFakeReputation()
-	d, fs := newTestDetector(t, cfg)
-	d.WithReputation(fake)
-
-	ip := "203.0.113.9"
-	t0 := time.Now()
-	feedPacedScan(d, ip, 8, 5*time.Minute, store.ActionDrop, t0)
-	expectStarted(t, fake.started)
-
-	before := flagOfType(t, fs, flags.TypeLowSlowScan)
-	if before == nil || before.Confidence == nil {
-		t.Fatal("expected a low_slow_scan flag with a behavioral confidence already set")
-	}
-	wantConfidence := *before.Confidence
-
-	close(fake.release)
-
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		if f := flagOfType(t, fs, flags.TypeLowSlowScan); f != nil && f.Reputation != nil {
-			if f.Confidence == nil || *f.Confidence != wantConfidence {
-				t.Errorf("expected confidence to stay behavior-only without an AbuseScore, got %v want %d", f.Confidence, wantConfidence)
-			}
-			return
-		}
-		time.Sleep(5 * time.Millisecond)
-	}
-	t.Fatal("timed out waiting for the reputation snapshot to be stored")
-}
-
-// TestLowSlowScanReputationLookupOnlyFiresOnNewEpisode is
-// TestRepeatedDropsReputationLookupOnlyFiresOnNewEpisode, retargeted onto
-// low_slow_scan (formerly activity_spike -- see this file's header
-// comment).
-func TestLowSlowScanReputationLookupOnlyFiresOnNewEpisode(t *testing.T) {
-	cfg := lowSlowCfg()
-
-	ip := "203.0.113.9"
-	fake := newFakeReputation()
-	fake.setScore(ip, 50)
-	d, fs := newTestDetector(t, cfg)
-	d.WithReputation(fake)
-
-	t0 := time.Now()
-	last := feedPacedScan(d, ip, 8, 5*time.Minute, store.ActionDrop, t0)
-	expectStarted(t, fake.started)
-	close(fake.release)
-	waitForConfidence(t, fs, ip, 50)
-
-	// A re-fire of the same still-active flag must not trigger a second lookup.
-	d.Observe(lowSlowEvt(ip, "192.168.50.9", 10008, store.ActionDrop, last.Add(5*time.Minute)))
-	expectNoneStarted(t, fake.started)
-}
-
-// TestLowSlowScanPoolSaturationSkipsExcessLookups is
-// TestRepeatedDropsPoolSaturationSkipsExcessLookups, retargeted onto
-// low_slow_scan (formerly activity_spike -- see this file's header
-// comment): reputationLookupConcurrency+1 distinct public source IPs,
-// each independently driven through its own eight-step paced-scan burst
-// (the same recipe as the two tests above), so each crosses the
-// threshold and requests its own lookup slot.
-func TestLowSlowScanPoolSaturationSkipsExcessLookups(t *testing.T) {
-	cfg := lowSlowCfg()
-
-	fake := newFakeReputation()
-	d, _ := newTestDetector(t, cfg)
-	d.WithReputation(fake)
-
-	now := time.Now()
-	for i := 1; i <= reputationLookupConcurrency+1; i++ {
-		ip := fakeExternalIP(i)
-		feedPacedScan(d, ip, 8, 5*time.Minute, store.ActionDrop, now)
-	}
-
-	// Exactly reputationLookupConcurrency lookups should start and then
-	// block (nothing releases them yet).
-	seen := make(map[string]bool)
-	for i := 0; i < reputationLookupConcurrency; i++ {
-		seen[expectStarted(t, fake.started)] = true
-	}
-	if len(seen) != reputationLookupConcurrency {
-		t.Fatalf("expected %d distinct lookups, got %d: %v", reputationLookupConcurrency, len(seen), seen)
-	}
-
-	// The pool is now saturated -- the 9th episode's lookup must be skipped.
-	expectNoneStarted(t, fake.started)
-
-	close(fake.release)
-}
+// TestLowSlowScanReputationSnapshotCapturedWithoutAbuseScore,
+// TestLowSlowScanReputationLookupOnlyFiresOnNewEpisode and
+// TestLowSlowScanPoolSaturationSkipsExcessLookups all moved to
+// internal/engine (issue #405: low_slow_scan is now a shipped
+// programmatic definition, and the single-address reputation path it
+// drove is engine.ReputationSink). Their pins live on in
+// internal/engine/reputation_sink_test.go's
+// TestReputationSinkSnapshotCapturedWithoutAbuseScore,
+// TestReputationSinkOnlyLooksUpOnANewEpisode and
+// TestReputationSinkPoolSaturationSkipsExcessLookups -- pinned against
+// the sink itself rather than against whichever detector happened to
+// drive it, which is what stops the same three guarantees needing a
+// fourth retargeting every time a detector moves. The engine also pins
+// the lookup actually being requested for a low_slow_scan episode
+// specifically: see
+// TestShippedLowSlowScanTriggersReputationLookup.
 
 // TestOutboundAnomalyGroupReputationSamplesAreCapped is
 // TestGroupReputationSamplesAreCapped, retargeted onto outbound_anomaly

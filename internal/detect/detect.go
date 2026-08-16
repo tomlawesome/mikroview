@@ -354,8 +354,7 @@ type Detector struct {
 	// criticalPortIPs (distributed_brute_force's per-port distinct-source
 	// map) both moved to internal/engine with their detectors (issue
 	// #405).
-	destWindows    map[string]*destWindow
-	lowSlowWindows map[string]*lowSlowWindow
+	destWindows map[string]*destWindow
 
 	// observeQueue backs Enqueue/Run -- see observeQueueSize's doc
 	// comment for the sizing rationale.
@@ -380,13 +379,12 @@ func New(cfg Config, fs *flags.Store) *Detector {
 // on the very next event, no restart needed.
 func NewWithSettings(cfg Config, fs *flags.Store, settings *SettingsStore) *Detector {
 	return &Detector{
-		cfg:            cfg,
-		fs:             fs,
-		settings:       settings,
-		lookupSlots:    make(chan struct{}, reputationLookupConcurrency),
-		destWindows:    make(map[string]*destWindow),
-		lowSlowWindows: make(map[string]*lowSlowWindow),
-		observeQueue:   make(chan store.Event, observeQueueSize),
+		cfg:          cfg,
+		fs:           fs,
+		settings:     settings,
+		lookupSlots:  make(chan struct{}, reputationLookupConcurrency),
+		destWindows:  make(map[string]*destWindow),
+		observeQueue: make(chan store.Event, observeQueueSize),
 	}
 }
 
@@ -464,7 +462,10 @@ func (d *Detector) Observe(e store.Event) {
 	// sourceWindow's spikes ring and EMA baseline fields with it. #420
 	// stays open: the port reproduces its arithmetic exactly rather than
 	// picking one of that issue's candidate remedies.
-	d.observeLowSlowScan(e, now)
+	// low_slow_scan moved to internal/engine as a shipped programmatic
+	// definition (issue #405, see shipped_low_slow_scan.go), taking its
+	// lowSlowWindows map, its three rings and its weakest-axis confidence
+	// rule with it.
 	// off_hours moved to internal/engine as a shipped programmatic
 	// definition (issue #405, see shipped_off_hours.go), taking
 	// sourceWindow's per-hour baselines with it -- which is the last thing
@@ -522,9 +523,8 @@ func (d *Detector) Observe(e store.Event) {
 // engine.ReputationSink wiring for the reputation-lookup counterpart).
 
 // activeWindow is implemented by every per-key detector state struct
-// (destWindow, lowSlowWindow)
-// purely so evictOldestByActivity can be generic over all of them --
-// they otherwise share no behavior, just this one field.
+// (destWindow) purely so evictOldestByActivity can be generic over all
+// of them -- they otherwise share no behavior, just this one field.
 type activeWindow interface {
 	lastActivityTime() time.Time
 }
