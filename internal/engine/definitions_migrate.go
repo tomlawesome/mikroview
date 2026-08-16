@@ -12,6 +12,7 @@ import (
 	"github.com/tomlawesome/mikroview/internal/detect"
 	"github.com/tomlawesome/mikroview/internal/flags"
 	"github.com/tomlawesome/mikroview/internal/persist"
+	"github.com/tomlawesome/mikroview/internal/reputation"
 	"github.com/tomlawesome/mikroview/internal/watchlist"
 )
 
@@ -288,6 +289,7 @@ var shippedDetectorDisplayNames = map[string]string{
 	string(flags.TypeUnexpectedMailSender): "Unexpected mail sender",
 	string(flags.TypeStaleRule):            "Stale rule",
 	string(flags.TypeKnownBadIP):           "Known bad IP",
+	"netclass":                             "Network class reinforcement",
 }
 
 // zeroDuration is time.Duration(0).String() ("0s") -- the default value
@@ -428,6 +430,13 @@ var shippedDetectors = []shippedDetector{
 	}},
 	{id: string(flags.TypeKnownBadIP), schema: KnownBadIPParamSchema, kind: KindProgrammatic, params: func(ShippedDefaults) Params {
 		return Params{"confidence": knownBadIPConfidence}
+	}},
+	// netclass is the one shipped definition whose id is not also a
+	// flags.Type, because it raises no flag of its own -- it only
+	// reinforces flags other definitions raised. See
+	// netClassDefinition's own doc comment.
+	{id: "netclass", schema: NetClassParamSchema, kind: KindProgrammatic, params: func(ShippedDefaults) Params {
+		return Params{"torFloor": reputation.TorExitNodeFloor, "vpnFloor": netclassVPNFloor}
 	}},
 }
 

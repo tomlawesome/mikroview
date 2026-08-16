@@ -338,11 +338,6 @@ type Detector struct {
 	// source flagged, the same "nil is a valid no-op" contract
 	// reputation above uses).
 	entities *entities.Store
-	// netclass backs the synchronous, direction-aware confidence
-	// reinforcement in netclass.go (issue #114) -- see WithNetClass. nil
-	// (the default) is a valid, explicit "not configured" no-op, same
-	// convention as knownBad above.
-	netclass netClassLookup
 
 	// criticalHits (critical_port's per-source attempt-count map) and
 	// criticalPortIPs (distributed_brute_force's per-port distinct-source
@@ -485,16 +480,14 @@ func (d *Detector) Observe(e store.Event) {
 	// re-priming after a disable/enable cycle with it -- the chassis's
 	// Baseline is what carries all three now.
 
-	// known_bad_ip moved to internal/engine as a shipped programmatic
-	// definition (issue #405, see shipped_known_bad_ip.go), where its
-	// "runs after every flag-raiser" requirement is a declared
-	// ReinforcementOrder rather than a call written last in this function.
-	//
-	// Network-class reinforcement (issue #114) -- a RaiseConfidenceFloor-
-	// only pass that needs every flag-raising detector to have already run
-	// for this same event, which is why it stays last here until it
-	// follows known_bad_ip onto the chassis.
-	d.observeNetClass(e, now)
+	// known_bad_ip and netclass, the two reinforcement passes, both moved
+	// to internal/engine as shipped programmatic definitions (issue #405,
+	// see shipped_known_bad_ip.go and shipped_netclass.go). Their "runs
+	// after every flag-raiser" requirement -- which this function used to
+	// guarantee by writing both calls last -- is a declared
+	// ReinforcementOrder on the chassis, pinned end to end through two
+	// real definitions apiece.
+	_ = now
 }
 
 // criticalWindow/observeCriticalPort (critical_port's own per-source

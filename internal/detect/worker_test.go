@@ -3,11 +3,9 @@
 package detect
 
 import (
-	"context"
 	"testing"
 	"time"
 
-	"github.com/tomlawesome/mikroview/internal/flags"
 	"github.com/tomlawesome/mikroview/internal/store"
 )
 
@@ -34,45 +32,13 @@ func TestEnqueueNeverBlocksOnFullQueue(t *testing.T) {
 	}
 }
 
-// TestRunProcessesEnqueuedEvents proves Run actually drains the queue
-// and feeds events through Observe -- Enqueue alone (see above) only
-// proves the non-blocking send; this closes the loop by confirming a
-// detector that should act, does, once Run has had a chance to catch up.
-// It has been retargeted with each port (critical_port -> repeated_drops
-// -> internal_recon -> mail_sender -> known_bad_ip) and lands here on
-// netclass, the one pass internal/detect still evaluates (issue #405).
-//
-// netclass raises no flag of its own -- it only reinforces one -- so the
-// observable effect this waits on is a confidence floor landing on a
-// pre-seeded flag rather than a new flag appearing. Nothing about
-// netclass's own behaviour is under test; it is simply what is left to
-// borrow.
-func TestRunProcessesEnqueuedEvents(t *testing.T) {
-	d, fs := newTestDetector(t, DefaultConfig())
-	nc := newFakeNetClass()
-	nc.setMatch("203.0.113.9", torMatch())
-	d.WithNetClass(nc)
-
-	now := time.Now()
-	fs.AddWithDetail(flags.TypePortScan, "203.0.113.9", "seeded", 10, flags.Evidence{}, "", now)
-
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	go d.Run(ctx)
-
-	d.Enqueue(store.Event{SrcIP: "203.0.113.9", DstIP: "192.168.1.1", DstPort: 22, ReceivedAt: now})
-
-	deadline := time.After(2 * time.Second)
-	for {
-		for _, f := range fs.List() {
-			if f.Type == flags.TypePortScan && f.ReputationFloor != nil {
-				return
-			}
-		}
-		select {
-		case <-deadline:
-			t.Fatalf("Run never processed the enqueued event into a netclass reinforcement; got %+v", fs.List())
-		case <-time.After(5 * time.Millisecond):
-		}
-	}
-}
+// TestRunProcessesEnqueuedEvents is gone with the last thing it could
+// observe. It proved Run drains the queue and feeds events through
+// Observe, and was retargeted with each port (critical_port ->
+// repeated_drops -> internal_recon -> mail_sender -> known_bad_ip ->
+// netclass); with netclass's port (issue #405) Observe has no detector
+// left to call, so there is no observable effect for this test to wait
+// on. The queue/worker/drain guarantee it stood for is the chassis's now
+// and is pinned there: internal/engine/engine_test.go's Run/drain and
+// backpressure tests, over the queue this one is about to be deleted
+// alongside.
