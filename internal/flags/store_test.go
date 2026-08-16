@@ -593,6 +593,66 @@ func TestAddWithDetailPersistsEvidenceAndCountry(t *testing.T) {
 	}
 }
 
+// TestAddProvisionalSetsProvisionalMarker is the in-memory half of
+// Flag.Provisional's contract: AddProvisional(..., provisional=true, ...)
+// sets it, and every other Add* entry point (which never takes a
+// provisional argument) leaves it false.
+func TestAddProvisionalSetsProvisionalMarker(t *testing.T) {
+	s, _ := Open("")
+	now := time.Now()
+
+	s.AddProvisional(TypePortScan, "203.0.113.9", "detail", 10, Evidence{}, "US", true, now)
+	f := s.List()[0]
+	if !f.Provisional {
+		t.Fatal("expected Provisional to be true after AddProvisional(..., true, ...)")
+	}
+
+	s.AddWithDetail(TypeCriticalPort, "203.0.113.10", "detail", 10, Evidence{}, "US", now)
+	var f2 Flag
+	for _, x := range s.List() {
+		if x.Type == TypeCriticalPort {
+			f2 = x
+		}
+	}
+	if f2.Provisional {
+		t.Fatal("expected Provisional to stay false for a flag raised via AddWithDetail")
+	}
+}
+
+// TestAddProvisionalPersistsAndSurvivesReload is #399's "verify the
+// store round-trips it" requirement for internal/flags: Flag.Provisional
+// is additive JSON (omitempty), so nothing about persistedState's shape
+// changes -- this proves that in practice, not just by inspection, the
+// same way TestPersistenceRoundTrip already does for the rest of Flag's
+// fields. Both backends share the same JSON encoding (see
+// persist.Backend), so a file-backend round trip exercises the encoding
+// both would use.
+func TestAddProvisionalPersistsAndSurvivesReload(t *testing.T) {
+	orig := persistMinInterval
+	persistMinInterval = 0
+	defer func() { persistMinInterval = orig }()
+
+	path := filepath.Join(t.TempDir(), "flags.json")
+	s1, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC().Truncate(time.Millisecond)
+	s1.AddProvisional(TypeActivitySpike, "9.9.9.9", "warming up", 40, Evidence{}, "", true, now)
+
+	s2, err := Open(path)
+	if err != nil {
+		t.Fatalf("re-opening the persisted store failed: %v", err)
+	}
+	list := s2.List()
+	if len(list) != 1 {
+		t.Fatalf("expected 1 persisted flag after reopening, got %d: %+v", len(list), list)
+	}
+	if !list[0].Provisional {
+		t.Fatal("expected Provisional=true to survive a persist/reload round trip")
+	}
+}
+
 func TestApplyReputationSnapshotSetsSnapshotAndFloor(t *testing.T) {
 	s, _ := Open("")
 	now := time.Now()
