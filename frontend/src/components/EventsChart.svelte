@@ -5,10 +5,10 @@
   // Stats.TimeSeries). Built by hand in SVG rather than pulling in a
   // charting library, consistent with the rest of this app's lean stack.
   //
-  // Colors deliberately reuse the app's existing fixed accept/drop/reject/
-  // log/unknown semantic colors (see app.css) rather than a fresh
-  // categorical palette, so a line here means the same thing as the same
-  // color everywhere else (ActionBadge, row tinting). Validating that set
+  // Colors deliberately reuse the app's existing fixed per-action
+  // semantic colors (see app.css) rather than a fresh categorical
+  // palette, so a line here means the same thing as the same color
+  // everywhere else (ActionBadge, row tinting). Validating that set
   // as a *chart* palette (dataviz skill's validator) flags low chroma on
   // "unknown" and marginal light-mode contrast on a few slots -- the
   // mitigation applied per the skill's own guidance is a persistent
@@ -16,15 +16,11 @@
   import { appState } from '../lib/state.svelte'
   import { formatHM } from '../lib/format'
   import type { Action, TimeBucket } from '../lib/types'
+  import { ACTIONS, ACTION_LABELS } from '../lib/actions'
 
-  const ACTION_ORDER: Action[] = ['accept', 'drop', 'reject', 'log', 'unknown']
-  const ACTION_LABELS: Record<Action, string> = {
-    accept: 'Accept',
-    drop: 'Drop',
-    reject: 'Reject',
-    log: 'Log',
-    unknown: 'Unknown',
-  }
+  // Order is the legend order and therefore the adjacency the palette
+  // was checked against -- see app.css's note on --marked/--natted.
+  const ACTION_ORDER = ACTIONS
 
   const W = 460
   const H = 180
@@ -281,6 +277,12 @@
   .line-log {
     stroke: var(--log);
   }
+  .line-marked {
+    stroke: var(--marked);
+  }
+  .line-natted {
+    stroke: var(--natted);
+  }
   .line-unknown {
     stroke: var(--unknown);
   }
@@ -301,6 +303,12 @@
   }
   .end-dot-log {
     fill: var(--log);
+  }
+  .end-dot-marked {
+    fill: var(--marked);
+  }
+  .end-dot-natted {
+    fill: var(--natted);
   }
   .end-dot-unknown {
     fill: var(--unknown);
@@ -366,6 +374,12 @@
   }
   .dot-log {
     background: var(--log);
+  }
+  .dot-marked {
+    background: var(--marked);
+  }
+  .dot-natted {
+    background: var(--natted);
   }
   .dot-unknown {
     background: var(--unknown);

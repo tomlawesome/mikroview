@@ -4,11 +4,18 @@
 
   let { action }: { action: Action } = $props()
 
+  // MARKED/NATTED spell out the raw value rather than abbreviating to
+  // MARK/NAT: "NAT" is already the label on the translated-address badge
+  // beside this one, and two different meanings on one row is worse than
+  // a slightly longer pill. Both are the same width as REJECT, so the
+  // column does not change shape.
   const labels: Record<Action, string> = {
     accept: 'ACCEPT',
     drop: 'DROP',
     reject: 'REJECT',
     log: 'LOG',
+    marked: 'MARKED',
+    natted: 'NATTED',
     unknown: '?',
   }
 </script>
@@ -46,6 +53,16 @@
   .badge-log {
     color: var(--log);
     background: var(--log-bg);
+  }
+
+  .badge-marked {
+    color: var(--marked);
+    background: var(--marked-bg);
+  }
+
+  .badge-natted {
+    color: var(--natted);
+    background: var(--natted-bg);
   }
 
   .badge-unknown {
