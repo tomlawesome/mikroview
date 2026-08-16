@@ -576,6 +576,14 @@ func (d *DeclarativeDefinition) Evaluate(e store.Event) {
 		em.Country = e.SrcCountry
 	}
 	em.EventTime = e.ReceivedAt
+	// TriggeringEvent: what an expectation-intent definition's match log
+	// record embeds as evidence, and what its matchlog.Tuple is derived
+	// from (#406). Set unconditionally rather than only for
+	// IntentExpectation, because a definition's own evaluation code
+	// branching on its Intent is exactly what Intent is not for -- Route
+	// is the one place that branch lives, and routeToFlag ignores this
+	// field. See Emission.TriggeringEvent.
+	em.TriggeringEvent = &e
 
 	routed, err := Route(d.def, em)
 	if err != nil {
