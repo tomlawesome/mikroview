@@ -100,8 +100,21 @@ var GlobalSpikeParamSchema = []ParamSchema{
 }
 
 // DistributedBruteForceParamSchema expresses
-// detect.Config.DistributedBruteForceThreshold/Window.
+// detect.Config.DistributedBruteForceThreshold/Window, plus the port
+// list.
+//
+// internal/detect read the port list off the shared
+// Config.CriticalPorts, so critical_port and distributed_brute_force
+// could never be pointed at different sets. Issue #405's port gives each
+// definition its own copy, which is what
+// docs/decisions/evaluation-engine.md means by per-definition params --
+// and is not a behaviour change on migration, since both are seeded from
+// the same DefaultConfig().CriticalPorts (see shippedDetectors,
+// definitions_migrate.go). An operator who wants them to keep agreeing
+// simply leaves both alone.
 var DistributedBruteForceParamSchema = []ParamSchema{
+	{Name: "ports", Type: ParamTypePortList, Required: true,
+		Description: "Destination ports considered critical (e.g. SSH, RDP, RouterOS Winbox/API)."},
 	{Name: "threshold", Type: ParamTypeInt, Unit: "distinct sources", Min: floatBound(countParamMin), Required: true,
 		Description: "Distinct source IPs hitting the same critical port within the window before this fires."},
 	{Name: "window", Type: ParamTypeDuration, Min: durationBound(time.Second), Required: true,
