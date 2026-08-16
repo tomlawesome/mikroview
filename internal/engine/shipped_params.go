@@ -264,3 +264,17 @@ var StaleRuleParamSchema = []ParamSchema{
 	{Name: "checkInterval", Type: ParamTypeDuration, Min: durationBound(time.Second), Required: true,
 		Description: "How often the stale-rule sweep runs. Coarse by design: staleness is judged in days."},
 }
+
+// KnownBadIPParamSchema expresses internal/detect's knownBadIPConfidence
+// (known_bad_ip.go), a package constant there.
+//
+// The reinforced flag-type set is deliberately NOT a param: it is every
+// definition whose Target is a plain source address (see
+// reinforcedFlagTypes), which is a structural fact about those
+// definitions rather than a preference -- pointing a reinforcement pass
+// at a definition whose target is a port label or a device ID would not
+// tune anything, it would simply never match.
+var KnownBadIPParamSchema = []ParamSchema{
+	{Name: "confidence", Type: ParamTypeInt, Min: floatBound(0), Max: floatBound(100), Required: true,
+		Description: "Confidence a blocklist match is raised at, and the floor it applies to any other active source-keyed flag for the same address."},
+}
