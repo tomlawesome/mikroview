@@ -109,7 +109,13 @@ jobs:
   security:
     name: Security (auth-focused)
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    # 15, not 10, because the fuzz step below is bounded by execution
+    # count rather than wall-clock (see mikroview#391 and the comment on
+    # that step). A starved runner now makes the step slower instead of
+    # failing it spuriously, so the job needs room to absorb that: the
+    # whole job is normally ~2.5 minutes, and this survives a runner
+    # several times slower than usual without a false red.
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
 
@@ -128,17 +134,47 @@ jobs:
       # or a leaked token (any read-capable RouterOS user can read one
       # out of a script, see docs/decisions/routeros-ingest-spike.md)
       # all reach it with content nothing has validated yet, the same
-      # footing the other two are on. 30s each is not a deep campaign;
-      # it's a regression gate that catches a newly-introduced crash on
-      # the committed corpus plus a little fresh exploration, without
-      # turning every PR into a fuzzing job. Seed corpora and any
-      # crashers found are committed under testdata/, so a reproducer
-      # stays permanent.
+      # footing the other two are on. This is not a deep campaign; it's a
+      # regression gate that catches a newly-introduced crash on the
+      # committed corpus plus a little fresh exploration, without turning
+      # every PR into a fuzzing job. Seed corpora and any crashers found
+      # are committed under testdata/, so a reproducer stays permanent.
+      #
+      # The budgets are execution counts (`Nx`), not wall-clock (`30s`),
+      # and that is load-bearing -- do not "tidy" them back to durations.
+      # A duration budget makes the fuzz engine wrap its context in
+      # context.WithTimeout(ctx, fuzztime) (src/internal/fuzz/fuzz.go).
+      # When that deadline fires there is a window in which the parent
+      # context is already expired but the derived worker context is not
+      # yet cancelled, so the coordinator's error-suppression check
+      # (`err == fuzzCtx.Err()`) misses and the run reports
+      #
+      #   --- FAIL: FuzzParseEnvelope (30.09s)
+      #       context deadline exceeded
+      #
+      # with no crashing input and no reproducer written. That is
+      # golang/go#75804, fixed by CL 774140 and backported only as far as
+      # release-branch.go1.27 -- the 1.26.6 toolchain pinned above still
+      # has it. The window widens when the runner is starved, which is
+      # how it bit us: mikroview#391, where this target managed ~24k
+      # execs/sec against ~70k for internal/routeros on the same job.
+      #
+      # An `Nx` budget leaves opts.Timeout at zero, so no deadline
+      # context is created at all and the racing code path cannot be
+      # reached; the engine stops cleanly via `c.count >= c.opts.Limit`.
+      # It also makes the gate do the same amount of work on every
+      # runner instead of quietly doing less on a busy one. Each count
+      # is calibrated just under what the previous 30s budget bought at
+      # four fuzz workers -- roughly a GitHub-hosted runner -- measured
+      # at ~1.54M, ~0.98M and ~0.54M execs respectively, so exploration
+      # is not reduced. A starved runner now takes longer instead of
+      # failing, which is what the raised job timeout above pays for.
+      # Once the toolchain here is Go 1.27+, durations are safe again.
       - name: Fuzz the attacker-shaped-input parsers
         run: |
-          go test ./internal/routeros/ -run FuzzParse -fuzz FuzzParse -fuzztime=30s
-          go test ./internal/syslog/ -run FuzzParseEnvelope -fuzz FuzzParseEnvelope -fuzztime=30s
-          go test ./internal/ingest/ -run FuzzDecodePayload -fuzz FuzzDecodePayload -fuzztime=30s
+          go test ./internal/routeros/ -run FuzzParse -fuzz FuzzParse -fuzztime=1400000x
+          go test ./internal/syslog/ -run FuzzParseEnvelope -fuzz FuzzParseEnvelope -fuzztime=900000x
+          go test ./internal/ingest/ -run FuzzDecodePayload -fuzz FuzzDecodePayload -fuzztime=480000x
 
       - name: govulncheck
         run: |
