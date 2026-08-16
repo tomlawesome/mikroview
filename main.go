@@ -659,21 +659,13 @@ func main() {
 		matchLog = ml
 		defer ml.Close()
 	}
-	// Evaluates the watchlist asynchronously off the ingest goroutine --
-	// see Evaluator's doc comment for why, and detector.Run just below
-	// for the identical existing pattern this mirrors. A nil matchLog
-	// (opened above) makes every Enqueue call a documented no-op rather
-	// than queuing work that could never complete.
-	watchlistEval := watchlist.NewEvaluator(watchlistStore, matchLog)
-
 	// eng is the evaluation chassis (issue #398, part of the v0.3.0
 	// unification -- see docs/decisions/evaluation-engine.md): one ingest
 	// queue, one backpressure policy, one lifecycle, one panic boundary.
-	// It holds no definitions yet (that starts with #401), so wiring it
-	// in alongside watchlistEval is a no-behaviour-change change -- it
-	// evaluates nothing, it just now also receives every stored event.
 	// internal/detect collapsed onto it and was deleted (issue #405);
-	// watchlist.Evaluator follows in #406.
+	// internal/watchlist's evaluator followed (issue #406), so this is
+	// now the only thing in the process that evaluates an ingested
+	// event at all.
 	eng := engine.New()
 
 	// engineState (#399/#400) persists every definition's per-key
@@ -1019,16 +1011,44 @@ func main() {
 	// wizard is.
 	setupStore := setup.New()
 	syslog.SetOnConnection(func(host string) { setupStore.NoteSyslogConnection(host, time.Now()) })
-	// What makes an entry scoped to a router's address list resolvable
-	// at match time (#274 item 2). Wired here rather than at
-	// construction because routerState does not exist yet up there --
-	// and safe to do late because the evaluator does not start
-	// consuming until Run below.
-	watchlistEval.WithAddressLists(routerState)
+	// The watchlist as expectation definitions on the engine (issue
+	// #406). Built here rather than up beside the other registrations
+	// because routerState -- what makes an entry scoped to a router's
+	// address list resolvable at match time (#274 item 2) -- does not
+	// exist until now, and safe to build late because the engine does
+	// not start consuming until Run below.
+	//
+	// Rebuilt, not mutated, whenever the entry set changes: the two
+	// registrations are replaced under the same two ids, which is
+	// exactly Engine.Register's contract, so an edit takes effect on the
+	// very next ingested event without the per-event re-read the old
+	// evaluator paid for. See watchlist.Store.SetOnChange.
+	registerExpectations := func() {
+		decl, inverted, err := engine.BuildExpectations(watchlistStore.List(), engine.ExpectationDeps{
+			Members:      routerState,
+			Sink:         engine.MatchlogSink(matchLog),
+			Observations: watchlistStore,
+		})
+		if err != nil {
+			// Never fatal: a single malformed entry must not take the
+			// whole expectation set (or the process) down. Logged loudly
+			// because the consequence is a coverage hole -- the previous
+			// registration stays live, so the set an operator sees on the
+			// Watchlist page and the set actually being evaluated have
+			// diverged, which is precisely the kind of silence #380's
+			// first item is about.
+			watchlistLog.Error(fmt.Sprintf("building the watchlist's expectation definitions failed: %v -- the previously registered set stays live, so a recent watchlist change may not be in effect", err))
+			return
+		}
+		eng.Register(decl)
+		eng.Register(inverted)
+	}
+	watchlistStore.SetOnChange(registerExpectations)
+	registerExpectations()
+
 	names := naming.Resolver{Rules: cfg.RuleNames, Hosts: cfg.HostNames, Entities: entityStore, RouterHosts: routerState}
 
-	go ingest(ctx, raw, st, devices, macRegistry, fs, h, geo, ru, names, watchlistEval, eng, setupStore)
-	go watchlistEval.Run(ctx)
+	go ingest(ctx, raw, st, devices, macRegistry, fs, h, geo, ru, names, eng, setupStore)
 	go eng.Run(ctx)
 	// One driver for every Ticked definition (issue #405). Deliberately
 	// one goroutine at the finest cadence any shipped definition
@@ -2136,14 +2156,14 @@ func readPasswordTwice() (string, error) {
 // WebSocket broadcast (see engine.Engine.Enqueue/Run, and the
 // dedicated detection-worker goroutine main() starts alongside this
 // one).
-func ingest(ctx context.Context, raw <-chan syslog.RawMessage, st *store.Store, devices *device.Registry, macRegistry *device.MACRegistry, fs *flags.Store, h *hub.Hub, geo *geoip.Lookup, ru *rules.Store, names naming.Resolver, watchlistEval *watchlist.Evaluator, eng *engine.Engine, setupStore *setup.Store) {
+func ingest(ctx context.Context, raw <-chan syslog.RawMessage, st *store.Store, devices *device.Registry, macRegistry *device.MACRegistry, fs *flags.Store, h *hub.Hub, geo *geoip.Lookup, ru *rules.Store, names naming.Resolver, eng *engine.Engine, setupStore *setup.Store) {
 	ingestLog := logging.New("ingest")
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case rm := <-raw:
-			ingestOneRecovered(ingestLog, rm, st, devices, macRegistry, fs, h, geo, ru, names, watchlistEval, eng, setupStore)
+			ingestOneRecovered(ingestLog, rm, st, devices, macRegistry, fs, h, geo, ru, names, eng, setupStore)
 		}
 	}
 }
@@ -2154,7 +2174,7 @@ func ingest(ctx context.Context, raw <-chan syslog.RawMessage, st *store.Store, 
 // still end the entire ingest goroutine for good on the first bad
 // message (silently stopping all future event processing) rather than
 // just dropping that one message. See logging.Recover's doc comment.
-func ingestOneRecovered(logger *slog.Logger, rm syslog.RawMessage, st *store.Store, devices *device.Registry, macRegistry *device.MACRegistry, fs *flags.Store, h *hub.Hub, geo *geoip.Lookup, ru *rules.Store, names naming.Resolver, watchlistEval *watchlist.Evaluator, eng *engine.Engine, setupStore *setup.Store) {
+func ingestOneRecovered(logger *slog.Logger, rm syslog.RawMessage, st *store.Store, devices *device.Registry, macRegistry *device.MACRegistry, fs *flags.Store, h *hub.Hub, geo *geoip.Lookup, ru *rules.Store, names naming.Resolver, eng *engine.Engine, setupStore *setup.Store) {
 	defer logging.Recover(logger)
 
 	env := syslog.ParseEnvelope(rm.Data, rm.RecvTime)
@@ -2236,11 +2256,11 @@ func ingestOneRecovered(logger *slog.Logger, rm syslog.RawMessage, st *store.Sto
 
 	stored := st.Insert(e)
 	h.Broadcast(stored)
-	watchlistEval.Enqueue(stored)
-	// Every detection definition evaluates off this one hand-off now
-	// (issue #405): internal/detect's own queue, worker and drop-log gate
-	// are gone, and the chassis's queue -- with one backpressure policy,
-	// one panic boundary and one fault report -- is what receives every
+	// Every definition, of either intent, evaluates off this one hand-off
+	// (issues #405 and #406): internal/detect's queue, worker and
+	// drop-log gate, and internal/watchlist's own duplicate of all three,
+	// are gone. The chassis's queue -- with one backpressure policy, one
+	// panic boundary and one fault report -- is what receives every
 	// stored event.
 	eng.Enqueue(stored)
 	// Keeps internal/rules' long-lived per-rule usage record in sync with

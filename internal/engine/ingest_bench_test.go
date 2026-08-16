@@ -39,12 +39,27 @@ import (
 // ~3,900 events/sec, so the per-event budget is 1e9/3900 =~ 256,410 ns.
 //
 // The synthetic stream and the watchlist tiers deliberately mirror
-// BenchmarkDispatch's, including its two stated non-goals (watchlist
-// entries never match, so this measures the scan and not matchlog's
-// fsync; the watchlist side goes through the exported Store.List(), which
-// sorts per call and so is a conservative upper bound on the real cost).
-// Same shape, same seed, same tiers -- the point is comparability with
-// the recorded baseline, not a better benchmark.
+// BenchmarkDispatch's -- same shape, same seed, same tiers -- because
+// the point is comparability with the recorded baseline, not a better
+// benchmark.
+//
+// What changed under the tiers, and why the comparison still holds
+// (#406): the watchlist half used to be a linear scan, driven here the
+// way production drove it -- Store.List() per event, then
+// watchlist.Match against every entry in turn. Watchlist entries are
+// expectation definitions on this engine now, so that is what this
+// drives: one DeclarativeSet holding every non-inverted expectation,
+// consulted through its dispatch pre-index, exactly as main.go
+// registers it. Both numbers are still "what one event costs the ingest
+// path", which is the only sense in which #397's figures were ever
+// comparable; the fall at the 1,000- and 5,000-entry tiers is the
+// pre-index doing the job the ADR specified it for, and #397's own
+// caveat about Store.List() being a conservative upper bound no longer
+// applies because nothing calls it per event any more.
+//
+// One non-goal carries over unchanged: the entries are seeded on ports
+// the synthetic stream mostly does not use, so this measures dispatch
+// and matching rather than matchlog's fsync.
 func BenchmarkIngest(b *testing.B) {
 	const poolSize = 20000
 	events := ingestBenchEvents(poolSize, 1)
@@ -57,7 +72,7 @@ func BenchmarkIngest(b *testing.B) {
 			}
 			set := benchShippedDeclarativeSet(b, fs)
 			prog := benchShippedProgrammaticDefs(b, fs)
-			wl := buildIngestBenchWatchlist(b, watchlistEntries)
+			expectations := buildIngestBenchExpectations(b, watchlistEntries)
 
 			base := time.Now()
 			step := time.Second / 1200 // busy-hour spacing, see BenchmarkDispatch
@@ -72,9 +87,7 @@ func BenchmarkIngest(b *testing.B) {
 				for _, p := range prog {
 					p.Evaluate(e)
 				}
-				for _, entry := range wl.List() {
-					watchlist.Match(entry, e)
-				}
+				expectations.Evaluate(e)
 			}
 		})
 	}
@@ -164,18 +177,25 @@ func benchShippedProgrammaticDefs(b *testing.B, fs *flags.Store) []Evaluated {
 	return out
 }
 
-func buildIngestBenchWatchlist(b *testing.B, n int) *watchlist.Store {
+// buildIngestBenchExpectations builds n watchlist entries as expectation
+// definitions, in one DeclarativeSet, exactly as main.go registers them
+// -- same entry shape BenchmarkDispatch used (one distinct watched port
+// each), so the tiers stay comparable with #397's recorded baseline.
+//
+// The sink is nil: an emission still renders and routes, it just reaches
+// no match log, which keeps matchlog's fsync out of a measurement about
+// dispatch.
+func buildIngestBenchExpectations(b *testing.B, n int) *DeclarativeSet {
 	b.Helper()
-	s, err := watchlist.OpenWithBackend(nil)
-	if err != nil {
-		b.Fatalf("watchlist.OpenWithBackend: %v", err)
-	}
+	entries := make([]watchlist.Entry, 0, n)
 	for i := 0; i < n; i++ {
-		if err := s.Upsert(watchlist.Entry{ID: fmt.Sprintf("e%d", i), Ports: []int{2222 + i}}); err != nil {
-			b.Fatalf("Upsert: %v", err)
-		}
+		entries = append(entries, watchlist.Entry{ID: fmt.Sprintf("e%d", i), Ports: []int{2222 + i}})
 	}
-	return s
+	set, _, err := BuildExpectations(entries, ExpectationDeps{})
+	if err != nil {
+		b.Fatalf("BuildExpectations: %v", err)
+	}
+	return set
 }
 
 // ingestBenchEvents is internal/detect/dispatch_bench_test.go's

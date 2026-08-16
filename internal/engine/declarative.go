@@ -576,6 +576,24 @@ func (d *DeclarativeDefinition) Evaluate(e store.Event) {
 		em.Country = e.SrcCountry
 	}
 	em.EventTime = e.ReceivedAt
+	// TriggeringEvent: what an expectation-intent definition's match log
+	// record embeds as evidence, and what its matchlog.Tuple is derived
+	// from (#406). Set unconditionally rather than only for
+	// IntentExpectation, because a definition's own evaluation code
+	// branching on its Intent is exactly what Intent is not for -- Route
+	// is the one place that branch lives, and routeToFlag ignores this
+	// field. See Emission.TriggeringEvent.
+	//
+	// A local copy rather than &e: taking the address of the parameter
+	// makes Go's escape analysis heap-allocate it on *every* Evaluate
+	// call, emitting or not -- a per-event allocation of a whole
+	// store.Event, per declarative definition, on the ingest path.
+	// Copying here confines that allocation to the threshold crossings
+	// that actually emit, which are rare by construction. Confirmed with
+	// `go build -gcflags=-m`: with &e the compiler reports
+	// "moved to heap: e" for this function; with the copy it does not.
+	triggering := e
+	em.TriggeringEvent = &triggering
 
 	routed, err := Route(d.def, em)
 	if err != nil {

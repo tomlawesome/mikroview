@@ -104,7 +104,7 @@ func matchInverted(entry Entry, e store.Event) (matchlog.Tuple, Outcome) {
 var maxObservedPerEntry = 1000
 
 // observeDropLogInterval rate-limits the "observation capacity reached"
-// warning the same way evalQueueDropLogInterval rate-limits Evaluator's
+// warning the same way engine.dropLogInterval rate-limits the chassis's
 // own overload log -- logging every dropped observation would add load
 // during exactly the condition being reported.
 const observeDropLogInterval = 30 * time.Second
@@ -122,12 +122,13 @@ var ErrEntryNotFound = errors.New("watchlist: no entry with that id")
 var ErrNotInverted = errors.New("watchlist: entry is not inverted")
 
 // RecordObservation upserts (or bumps) an observed candidate for the
-// inverted entry id -- called from Evaluator on every Observed outcome,
-// so this is a high-frequency path relative to Upsert/Delete (an
+// inverted entry id -- called from the engine's inverted expectation
+// definition on every Observed outcome, so this is a high-frequency path
+// relative to Upsert/Delete (an
 // operator's own, rare, interactive actions), unlike them it does not
 // validate free text (the values come from Match, already derived from
 // a real event, not operator input) and silently no-ops for an unknown
-// or non-inverted entry rather than erroring -- Evaluator has no
+// or non-inverted entry rather than erroring -- the engine has no
 // reasonable action to take on an error from its own hot path beyond
 // what it already does for a full evaluation queue (see its own
 // rate-limited drop log), and an entry that was inverted when Match ran
@@ -136,7 +137,7 @@ var ErrNotInverted = errors.New("watchlist: entry is not inverted")
 //
 // Once entry's Observed list is at maxObservedPerEntry, a genuinely new
 // destination/port pair is dropped (not recorded) rather than growing
-// without bound -- logged, rate-limited, the same shape as Evaluator's
+// without bound -- logged, rate-limited, the same shape as the engine's
 // own queue-overflow warning. A repeat of an already-observed pair still
 // updates its LastSeen/Count even once full, since that costs no new
 // capacity.
@@ -198,6 +199,16 @@ func recordDroppedObservation() {
 // (see SetObserving). A pair already in Permitted is left alone
 // (idempotent).
 func (s *Store) Promote(id string, dests []PermittedDest) error {
+	if err := s.promoteLocking(id, dests); err != nil {
+		return err
+	}
+	// Promotion changes what violates from now on, so the built
+	// expectation definitions have to be rebuilt -- see SetOnChange.
+	s.notifyChange()
+	return nil
+}
+
+func (s *Store) promoteLocking(id string, dests []PermittedDest) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -231,6 +242,14 @@ func (s *Store) Promote(id string, dests []PermittedDest) error {
 // an operator (or a future assisted-promotion flow) should call it,
 // which is #243 open question 3, deliberately left open.
 func (s *Store) SetObserving(id string, observing bool) error {
+	if err := s.setObservingLocking(id, observing); err != nil {
+		return err
+	}
+	s.notifyChange()
+	return nil
+}
+
+func (s *Store) setObservingLocking(id string, observing bool) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
