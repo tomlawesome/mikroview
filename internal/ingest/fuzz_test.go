@@ -32,6 +32,12 @@ func FuzzDecodePayload(f *testing.F) {
 	f.Add(`{"kind":"arp","page":1,"pages":1,"records":[{"address":"192.168.1.50","mac":"aa:bb:cc:dd:ee:ff"}]}`)
 	f.Add(`{"kind":"wireguard-interface","page":1,"pages":1,"records":[{"name":"wg0","comment":"","publicKey":"abc123","listenPort":51820.000000}]}`)
 	f.Add(`{"kind":"wireguard-peer","page":1,"pages":1,"records":[{"publicKey":"abc123","allowedAddress":"10.10.0.0/24","endpointAddress":"203.0.113.5:51820","comment":"branch office"}]}`)
+	// The array shape RouterOS actually sends for a multi-CIDR peer
+	// (issue #443), alongside the joined-string shape above -- both are
+	// accepted, so both are seeds.
+	f.Add(`{"kind":"wireguard-peer","page":1,"pages":1,"records":[{"publicKey":"abc123","allowedAddress":["192.0.2.0/24","198.51.100.0/24"],"endpointAddress":null,"comment":"branch office"}]}`)
+	f.Add(`{"kind":"wireguard-peer","page":1,"pages":1,"records":[{"publicKey":"abc123","allowedAddress":[],"endpointAddress":"","comment":""}]}`)
+	f.Add(`{"kind":"wireguard-peer","page":1,"pages":1,"records":[{"publicKey":"abc123","allowedAddress":[1,2],"endpointAddress":"","comment":""}]}`) // a list of the wrong element type
 
 	// Shapes chosen to probe this package's own specific bounds and
 	// footguns, not generic JSON malformation (the stdlib decoder is

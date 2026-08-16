@@ -32,6 +32,16 @@ const maxFieldLen = 256
 // meant to be reached in practice.
 const maxRecordsPerPage = 1000
 
+// maxListItems bounds how many entries one RouterOSList field may carry
+// -- a WireGuard peer's allowed addresses, a rule's connection-state
+// set. The whole-body limit already bounds this loosely, but a cap on
+// the field itself is what this package does everywhere else, and the
+// legitimate numbers are tiny: RouterOS has five connection states, and
+// a peer routing 64 separate subnets is already far past any real
+// deployment. Refused whole rather than truncated, like every other cap
+// here.
+const maxListItems = 64
+
 // maxPages bounds Payload.Pages so a malformed or malicious value (a
 // page claiming to be one of a billion) can't make a downstream
 // page-tracking or staleness scheme allocate or iterate proportionally
@@ -224,6 +234,22 @@ func validateFieldText(field, s string) error {
 	return nil
 }
 
+// validateFieldList applies validateFieldText to every element of a
+// list-shaped field, and bounds how many there may be -- a field that
+// holds a set is still router-controlled text, one bound short of the
+// scalar case.
+func validateFieldList(field string, l RouterOSList) error {
+	if len(l) > maxListItems {
+		return fmt.Errorf("ingest: %s carries %d entries, over the %d limit", field, len(l), maxListItems)
+	}
+	for _, v := range l {
+		if err := validateFieldText(field, v); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (e AddressListEntry) validate() error {
 	if err := validateFieldText("list", e.List); err != nil {
 		return err
@@ -304,7 +330,7 @@ func (p WireguardPeer) validate() error {
 	if err := validateFieldText("publicKey", p.PublicKey); err != nil {
 		return err
 	}
-	if err := validateFieldText("allowedAddress", p.AllowedAddress); err != nil {
+	if err := validateFieldList("allowedAddress", p.AllowedAddress); err != nil {
 		return err
 	}
 	if err := validateFieldText("endpointAddress", p.EndpointAddress); err != nil {
