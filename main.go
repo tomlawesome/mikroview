@@ -64,13 +64,10 @@ import (
 // ever waits longer than its own interval for the driver to come round.
 const engineTickInterval = 10 * time.Second
 
-// deviceSilenceCheckInterval is how often DeviceSilenceDetector re-checks
-// every configured device's LastSeen against Config.DeviceStaleAfter.
-// Coarser than globalSpikeCheckInterval on purpose: DeviceStaleAfter's
-// own default (15m) means a device going quiet is detected within this
-// interval of crossing the threshold, which doesn't need EMA-baseline-
-// tracking-grade freshness to be useful to an operator.
-const deviceSilenceCheckInterval = 1 * time.Minute
+// deviceSilenceCheckInterval moved onto the definition that owns it
+// (issue #405, internal/engine/shipped_device_silence.go): a cadence is
+// part of what a definition means, so it is declared by the definition
+// through Ticked.TickInterval rather than chosen by whatever drives it.
 
 // suggestSyncInterval is how often internal/suggest re-scans routerState
 // for new/changed candidates (#243 slice 5). Coarser than either check
@@ -859,7 +856,6 @@ func main() {
 		WithEntities(entityStore).
 		WithKnownBadIPs(bl).
 		WithNetClass(nc)
-	deviceSilence := detect.NewDeviceSilenceDetectorWithSettings(detectCfg, fs, detectorSettings, devices)
 	staleRule := detect.NewStaleRuleDetector(ru, fs, time.Duration(cfg.Flags.StaleRuleDays)*24*time.Hour)
 
 	// Shipped declarative definitions (issue #405): built from whatever
@@ -1056,22 +1052,10 @@ func main() {
 	// shipped programmatic definition now, driven by Engine.Tick at its
 	// own declared TickInterval alongside every other Ticked definition.
 
-	go func() {
-		silenceLog := logging.New("device-silence")
-		ticker := time.NewTicker(deviceSilenceCheckInterval)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-ticker.C:
-				func() {
-					defer logging.Recover(silenceLog)
-					deviceSilence.Check(time.Now())
-				}()
-			}
-		}
-	}()
+	// The device-silence ticker moved onto the engine with the
+	// global-spike one (issue #405): device_silence is a shipped
+	// programmatic definition now, driven by Engine.Tick at its own
+	// declared TickInterval.
 
 	// Stale-rule sweep (issue #102): coarse by design (see
 	// StaleRuleCheckInterval's doc comment) -- staleness is judged in
