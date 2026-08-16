@@ -26,7 +26,50 @@ rewritten.
   uptime for long. `/api/healthz` grows an `uptimeSeconds` field
   alongside the existing human-readable `uptime` string.
 
+- **A new persisted store for the evaluation engine's baseline state**
+  (`internal/engine.StateStore`, part of the v0.3.0 engine unification
+  -- see `docs/decisions/evaluation-engine.md`), so a statistical
+  baseline can resume warm across a restart instead of losing its whole
+  warm-up every time mikroview restarts. A new `engine-state.json` file
+  appears under mikroview's data directory (`engine.storePath` in
+  `config.yaml`, `MIKROVIEW_ENGINE_STORE_PATH` as an env var override,
+  defaulting alongside every other store under `/var/lib/mikroview`) and
+  is carried by `-backup`/`-restore` from day one. Nothing in this
+  release registers a definition against it yet, so on a running
+  mikroview the file stays empty regardless -- this lands ahead of the
+  definitions that will use it (a deliberate sequencing choice, the same
+  one `Flag.Provisional` and `matchlog.Record`'s equivalent field
+  already took) so the persisted shape and its round trip are proven
+  before anything depends on them.
+
 ### Fixed
+
+- **A stalled storage backend could freeze flag reads, rule-usage
+  reads, and the new-device MAC lookup -- all API-served state -- not
+  just the write that triggered it** (#377). `internal/flags.Store`,
+  `internal/rules.Store` and `internal/device.MACRegistry` each
+  persisted synchronously while holding the same lock every read goes
+  through: a backend that stopped responding (a blackhole, an
+  overloaded database, a long lock wait -- the kind of failure a clean
+  disconnect error does not cover) meant every subsequent `Add`/`Touch`/
+  `Seen` call, and every read behind it, blocked for as long as the
+  backend stayed stuck. A related defect made it worse under load: the
+  rate limiter protecting these hot paths stamped its "last write" clock
+  *before* attempting the write, so a write that itself ran long bought
+  no back-off at all -- a stalled backend under sustained traffic was
+  retried once per event, not once per debounce window. Both are fixed
+  at the root by a new shared helper (`persist.WriteBehind`): a mutation
+  now only ever encodes a snapshot under its own lock before handing it
+  off, one writer goroutine does the actual backend call off that lock
+  entirely, every backend call carries a deadline, and the debounce
+  clock is stamped after an attempt completes, not before. Applied to
+  the three stores above plus `internal/detect.SettingsStore` and
+  `internal/watchlist.Store`, which had no deadline on their backend
+  calls at all before this. Each store's public behaviour is unchanged;
+  the practical effect for an operator is that a struggling storage
+  backend now degrades to "this change might take a few seconds longer
+  to become durable" instead of freezing flags, rules, or watchlist
+  reads across the whole API while it lasts.
 
 - **`-backup` silently dropped the entire watchlist -- entries, the
   suggested-entries pool, and the match log -- and `-restore` gave no
