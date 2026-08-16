@@ -12,7 +12,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tomlawesome/mikroview/internal/ingest"
 	"github.com/tomlawesome/mikroview/internal/matchlog"
 	"github.com/tomlawesome/mikroview/internal/persist"
 	"github.com/tomlawesome/mikroview/internal/store"
@@ -28,22 +27,32 @@ import (
 // this package does today.
 //
 // This package already carries deep, focused unit coverage of Match
-// (match_test.go), the observe/promote state machine (invert_test.go)
-// and Coverage (coverage_test.go) in isolation -- this file deliberately
-// does not re-litigate those at the same grain. Its job is the thing
-// none of those files do: pin exactly what lands in internal/matchlog
-// for each outcome (the Tuple, the Identity, and the on-disk/on-row
-// shape), and cover Coverage's four states plus #367's known-wrong case
-// together in one place.
+// (match_test.go) and the observe/promote state machine (invert_test.go)
+// in isolation -- this file deliberately does not re-litigate those at
+// the same grain. Its job is the thing none of those files do: pin
+// exactly what lands in internal/matchlog for each outcome (the Tuple,
+// the Identity, and the on-disk/on-row shape).
 //
-// Two pins that were here moved to internal/engine with the code they
-// characterize when #406 ported evaluation onto the chassis: the
-// non-inverted end-to-end pass and the inverted observe-to-violation
-// lifecycle both drove Store + Evaluator + matchlog, and the Evaluator
-// is gone. They are unchanged in what they assert -- see
-// internal/engine/expectation_characterization_test.go, which says so
-// and why. Everything below characterizes code that did not move, so it
-// stays where it was written.
+// Pins that were here have moved to internal/engine with the code they
+// characterize, twice over:
+//
+//   - #406 ported evaluation onto the chassis: the non-inverted
+//     end-to-end pass and the inverted observe-to-violation lifecycle
+//     both drove Store + Evaluator + matchlog, and the Evaluator is gone.
+//     They are unchanged in what they assert -- see
+//     internal/engine/expectation_characterization_test.go, which says so
+//     and why.
+//   - #407 deleted watchlist.Store and moved Coverage itself to
+//     internal/engine/coverage.go as Definition.Coverage: the
+//     Coverage's-four-states pin and the #367 known-wrong-answer pin
+//     moved with it, driven through ExpectationDefinitionFor + Coverage
+//     rather than the package-level Coverage(entry, rulesByDevice) this
+//     package no longer has -- see
+//     internal/engine/definitions_expectations_coverage_test.go, which
+//     carries the same reasoning forward unchanged.
+//
+// Everything below characterizes code that did not move, so it stays
+// where it was written.
 
 // TestCharacterizationInverted_StructuralNoiseExemption pins
 // isStructurallyExempt's default-exempt/opt-in behaviour end to end
@@ -361,69 +370,5 @@ func TestCharacterizationMatchlog_PostgresRowShape(t *testing.T) {
 	// live column, incremented in place by sqlCollapseUpdate.
 	if r.Count != 2 {
 		t.Errorf("count = %d, want 2 (incremented in place by the collapse update)", r.Count)
-	}
-}
-
-// ---------------------------------------------------------------------------
-// 4. Coverage: each CoverageState, plus #367's known-wrong case.
-// ---------------------------------------------------------------------------
-
-// TestCharacterizationCoverage_EachState pins Coverage's four possible
-// answers side by side, at the same entry, so the four are read as one
-// contrasting set rather than scattered across coverage_test.go's
-// per-mechanism tests (which this does not replace -- see this file's
-// header comment).
-func TestCharacterizationCoverage_EachState(t *testing.T) {
-	entry := Entry{ID: "e", Ports: []int{22}}
-
-	if got := Coverage(entry, nil); got != CoverageUnknown {
-		t.Errorf("no pushed tables at all: Coverage = %v, want %v", got, CoverageUnknown)
-	}
-	noLogging := map[string][]ingest.FilterRule{"router-a": {{Chain: "input", Action: "accept"}}}
-	if got := Coverage(entry, noLogging); got != CoverageNoLogging {
-		t.Errorf("rules pushed, none logging: Coverage = %v, want %v", got, CoverageNoLogging)
-	}
-	outOfScope := map[string][]ingest.FilterRule{"router-a": {{Chain: "input", Action: "accept", Log: true, DstPort: "80"}}}
-	if got := Coverage(entry, outOfScope); got != CoverageOutOfScope {
-		t.Errorf("a logging rule that excludes this entry's port: Coverage = %v, want %v", got, CoverageOutOfScope)
-	}
-	ok := map[string][]ingest.FilterRule{"router-a": {{Chain: "input", Action: "accept", Log: true, DstPort: "22"}}}
-	if got := Coverage(entry, ok); got != CoverageOK {
-		t.Errorf("a logging rule admitting this entry's port: Coverage = %v, want %v", got, CoverageOK)
-	}
-}
-
-// TestCharacterizationCoverage_367IncompleteDeviceMapReadsAsNoLogging
-// pins the exact mechanism #367 reports: Coverage(entry, rulesByDevice)
-// answers only from the rulesByDevice map it is handed, and cannot tell
-// "no other router is watching" apart from "some other router is
-// watching, but its rules simply were not included in this map." The
-// real bug -- and the real fix -- is one level up, in
-// internal/api.watchlistCoverage, which builds rulesByDevice only from
-// routers that completed the optional filter-rule state push, silently
-// omitting a router that streams live syslog (and is actively producing
-// matches) but never did that push. Coverage() itself has no way to
-// know a router is missing from its input, so it confidently returns
-// CoverageNoLogging here -- exactly the "confident wrong answer" #367's
-// severity section calls out, reproduced at the level this package can
-// reach.
-//
-// This pin is expected to *survive* #367's fix unchanged: the fix
-// changes what internal/api.watchlistCoverage passes in (refusing to
-// answer NoLogging unless the pushed device set is known to be
-// complete), not what Coverage() does with whatever map it is given.
-// If a later change teaches Coverage() itself to reason about
-// completeness, this pin is the one to revisit.
-func TestCharacterizationCoverage_367IncompleteDeviceMapReadsAsNoLogging(t *testing.T) {
-	entry := Entry{ID: "e", Ports: []int{22}}
-	// Simulates watchlistCoverage's rulesByDevice after "edge" (which
-	// carries the logging rule for port 22 in the real scenario #367
-	// describes) never completed the optional state push and so is
-	// silently absent -- only "core", whose rules don't log, appears.
-	incomplete := map[string][]ingest.FilterRule{
-		"core": {{Chain: "input", Action: "accept", Log: false}},
-	}
-	if got := Coverage(entry, incomplete); got != CoverageNoLogging {
-		t.Errorf("Coverage = %v, want %v (today's known-wrong answer -- see #367; the map is incomplete, not exhaustive)", got, CoverageNoLogging)
 	}
 }

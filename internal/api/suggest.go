@@ -48,19 +48,19 @@ func suggestErrorStatus(err error) int {
 	return http.StatusBadRequest
 }
 
-// handleSuggestionsAccept turns an Off candidate into a real
-// watchlist.Entry -- the only way a suggestion becomes something that
+// handleSuggestionsAccept turns an Off candidate into a real expectation
+// definition -- the only way a suggestion becomes something that
 // actually watches traffic (#243 slice 5: "every generated candidate is
 // one the operator reviews and explicitly acts on -- nothing here ever
 // creates a watchlist.Entry by itself", see internal/suggest's own doc
-// comment). Admin-gated at the same tier as creating a watchlist entry
-// directly (handleWatchlistEntriesCreate): this is exactly that action,
-// just pre-filled from what the router already reported.
+// comment). Admin-gated at the same tier as creating a definition
+// directly (handleDefinitionsCreate): this is exactly that action, just
+// pre-filled from what the router already reported.
 //
 // A device candidate (KindDevice) always becomes an inverted entry that
 // starts Observing with an empty Permitted set -- the same safe,
-// observe-first default handleWatchlistEntriesCreate already applies to
-// every new inverted entry. #243's slice 5 design conversation raised a
+// observe-first default handleDefinitionsCreate already applies to every
+// new inverted expectation. #243's slice 5 design conversation raised a
 // second option (pre-filling Permitted from what the router's rules
 // currently allow) as an admin-chosen, sticky-after-first-use setting,
 // but the pushed RouterOS schema carries no destination-address data to
@@ -85,7 +85,7 @@ func (s *Server) handleSuggestionsAccept(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	e := watchlist.Entry{ID: newWatchlistEntryID(), Name: candidate.Name}
+	e := watchlist.Entry{ID: newDefinitionEntryID(), Name: candidate.Name}
 	switch candidate.Kind {
 	case suggest.KindDevice:
 		e.Invert = true
@@ -115,23 +115,25 @@ func (s *Server) handleSuggestionsAccept(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	if err := s.Watchlist.Upsert(e); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+	if err := s.Definitions.UpsertExpectation(e); err != nil {
+		writeDefinitionError(w, err)
 		return
 	}
 	if err := s.Suggest.Accept(id, e.ID); err != nil {
 		// The candidate changed state between Get and here (another
-		// admin accepted or hid it first) -- undo the entry just
-		// created rather than leave a real watchlist entry no
-		// candidate points back to.
-		s.Watchlist.Delete(e.ID)
+		// admin accepted or hid it first) -- undo the definition just
+		// created rather than leave a real expectation no candidate
+		// points back to.
+		if delErr := s.Definitions.DeleteExpectation(e.ID); delErr != nil {
+			apiLog.Warn("rolling back an accepted suggestion's expectation failed: " + delErr.Error())
+		}
 		http.Error(w, err.Error(), suggestErrorStatus(err))
 		return
 	}
 
-	stored, _ := s.Watchlist.Get(e.ID)
+	stored, _, _ := s.Definitions.GetExpectation(e.ID)
 	updated, _ := s.Suggest.Get(id)
-	s.Audit.Record(auditActor(r), "watchlist.suggestion.accept", stored.ID, stored.Name)
+	s.Audit.Record(auditActor(r), "definition.suggestion.accept", stored.ID, stored.Name)
 	writeJSON(w, http.StatusCreated, map[string]any{"candidate": updated, "entry": stored})
 }
 
@@ -150,7 +152,7 @@ func (s *Server) handleSuggestionsHide(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	c, _ := s.Suggest.Get(id)
-	s.Audit.Record(auditActor(r), "watchlist.suggestion.hide", id, c.Name)
+	s.Audit.Record(auditActor(r), "definition.suggestion.hide", id, c.Name)
 	writeJSON(w, http.StatusOK, c)
 }
 
@@ -169,7 +171,7 @@ func (s *Server) handleSuggestionsUnhide(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	c, _ := s.Suggest.Get(id)
-	s.Audit.Record(auditActor(r), "watchlist.suggestion.unhide", id, c.Name)
+	s.Audit.Record(auditActor(r), "definition.suggestion.unhide", id, c.Name)
 	writeJSON(w, http.StatusOK, c)
 }
 
@@ -207,11 +209,10 @@ func (s *Server) handleSuggestionsReset(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	wiped := len(s.Watchlist.List())
-	s.Watchlist.Reset()
+	wiped := s.Definitions.ResetExpectations()
 	s.Suggest.Reset()
 	s.Suggest.Sync(suggest.Generate(s.RouterState))
 
-	s.Audit.Record(auditActor(r), "watchlist.suggestion.reset", "", fmt.Sprintf("%d entries removed", wiped))
+	s.Audit.Record(auditActor(r), "definition.suggestion.reset", "", fmt.Sprintf("%d entries removed", wiped))
 	writeJSON(w, http.StatusOK, map[string]any{"candidates": s.Suggest.List()})
 }
