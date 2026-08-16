@@ -773,84 +773,24 @@ func TestCharacterizationOffHours_FieldsRefireClearRevive(t *testing.T) {
 // ---------------------------------------------------------------------------
 // 11. global_spike
 // ---------------------------------------------------------------------------
-
-// warmGlobalSpike feeds n constant readings of 1 eps to g -- primes
-// baseline=1 and, because the reading never changes, keeps variance at
-// exactly zero throughout (emaUpdate's diff term is 0 on every call
-// after the first), the same trick used above for activity_spike/
-// rule_spike. sampleCount caps at GlobalSpikeWarmupSamples(20) well
-// before n=25 warm-up calls complete.
-func warmGlobalSpike(g *GlobalSpikeDetector, n int, from time.Time) {
-	for i := 0; i < n; i++ {
-		g.Check(1, from.Add(time.Duration(i)*time.Second))
-	}
-}
-
-// TestCharacterizationGlobalSpike_FieldsRefireClearRevive pins
-// global_spike's boundary at DefaultConfig's real 4x-multiplier/5-EPS
-// floor/20-sample-warmup config. Check(eps, now) takes eps directly with
-// no window/ring behind it, so a constant warm-up feed collapses the
-// EMA's variance to exactly zero -- here every field at the boundary is
-// a clean, fully hand-derivable value. The below-MinEPS probe uses its
-// own, separately-warmed detector: Check unconditionally folds every
-// reading into the baseline afterwards (see global_spike.go), so probing
-// eps=4 on the same instance that goes on to pin the eps=5 boundary
-// would perturb the zero-variance baseline that pin depends on.
-func TestCharacterizationGlobalSpike_FieldsRefireClearRevive(t *testing.T) {
-	cfg := DefaultConfig() // GlobalSpikeMultiplier=4, GlobalSpikeMinEPS=5, WarmupSamples=20
-	now := time.Now()
-
-	probe, probeFS := newTestGlobalSpike(t, cfg)
-	warmGlobalSpike(probe, 25, now)
-	probe.Check(4, now.Add(25*time.Second)) // below MinEPS(5)
-	if got := flagOfType(t, probeFS, flags.TypeGlobalSpike); got != nil {
-		t.Fatalf("expected no flag at eps=4 (below GlobalSpikeMinEPS=5), got %+v", got)
-	}
-
-	g, fs := newTestGlobalSpike(t, cfg)
-	warmGlobalSpike(g, 25, now)
-	g.Check(5, now.Add(25*time.Second)) // MinEPS(5) and 5x baseline(1) both clear
-	f := flagOfType(t, fs, flags.TypeGlobalSpike)
-	if f == nil {
-		t.Fatal("expected a flag at eps=5")
-	}
-	if f.Target != "global" {
-		t.Errorf("Target = %q, want %q", f.Target, "global")
-	}
-	if want := "5.0 events/s vs a baseline of 1.0 (based on 20 samples, 6.0σ above normal)"; f.Detail != want {
-		t.Errorf("Detail = %q, want %q", f.Detail, want)
-	}
-	if f.Confidence == nil || *f.Confidence != 100 {
-		t.Errorf("Confidence = %v, want 100 (zero-variance warm-up)", f.Confidence)
-	}
-	if !isZeroEvidence(f.Evidence) {
-		t.Errorf("Evidence = %+v, want the zero value", f.Evidence)
-	}
-	if f.Country != "" {
-		t.Errorf("Country = %q, want empty (global_spike has no per-event source to attribute a country to)", f.Country)
-	}
-
-	// Re-fire.
-	g.Check(5, now.Add(27*time.Second))
-	f2 := flagOfType(t, fs, flags.TypeGlobalSpike)
-	if f2 == nil || f2.Count != 2 {
-		t.Fatalf("expected Count=2, got %+v", f2)
-	}
-
-	// Clear + revive.
-	if !fs.Clear(f2.ID, now.Add(28*time.Second)) {
-		t.Fatal("expected Clear to succeed")
-	}
-	g.Check(5, now.Add(29*time.Second))
-	f3 := flagOfType(t, fs, flags.TypeGlobalSpike)
-	if f3 == nil || f3.Cleared {
-		t.Fatalf("expected the flag to revive as active, got %+v", f3)
-	}
-	if f3.Count != 1 {
-		t.Errorf("Count after revival = %d, want 1", f3.Count)
-	}
-}
-
+//
+// global_spike's own characterization moved to
+// internal/engine/shipped_global_spike_test.go (issue #405: global_spike is
+// now a shipped programmatic Ticked definition evaluated by internal/engine,
+// not internal/detect -- see shipped_global_spike.go). Unlike every other
+// detector this file covers, global_spike was never driven through
+// Observe(): internal/detect ran it off its own ticker in main.go, polling
+// store.Store.EventsPerSecond on an interval, and that ticker is exactly
+// what Engine.Tick has replaced. warmGlobalSpike (the constant-1eps
+// zero-variance warm-up helper) moved with it, unchanged in behaviour.
+//
+// TestCharacterizationGlobalSpike_FieldsRefireClearRevive is now
+// TestShippedGlobalSpike_FieldsRefireClearRevive; every pinned value carried
+// over unchanged -- the 4x-multiplier/5-EPS-floor/20-sample-warmup boundary,
+// the byte-for-byte Detail string "5.0 events/s vs a baseline of 1.0 (based
+// on 20 samples, 6.0σ above normal)", Confidence=100, and the empty Evidence
+// and empty Country.
+//
 // ---------------------------------------------------------------------------
 // 12. device_silence
 // ---------------------------------------------------------------------------
