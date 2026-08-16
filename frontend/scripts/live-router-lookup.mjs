@@ -74,14 +74,76 @@ check(
     kind: 'filter-rule',
     page: 1,
     pages: 1,
+    // routerosVersion rides the envelope, not a record (#408 carrying
+    // #436's derived version source), and connection-state arrives as
+    // the array RouterOS actually sends.
+    routerosVersion: '7.23.3 (stable)',
     records: [
-      { ordinal: 2, comment: 'Drop the scanners', chain: 'input', action: 'drop', srcAddressList: 'scanners', logPrefix: 'D|live-lookup-rule|' },
+      { ordinal: 2, comment: 'Drop the scanners', chain: 'input', action: 'drop', srcAddressList: 'scanners', logPrefix: 'D|live-lookup-rule|', connectionState: ['new'], inInterface: 'ether1' },
       { ordinal: 5, comment: 'Belt and braces drop', chain: 'forward', action: 'drop', srcAddressList: '', logPrefix: 'D|live-lookup-rule|' },
-      { ordinal: 0, comment: 'Unrelated allow', chain: 'forward', action: 'accept', srcAddressList: 'lan', logPrefix: '' },
+      { ordinal: 0, comment: 'Unrelated allow', chain: 'forward', action: 'accept', srcAddressList: 'lan', logPrefix: '', connectionState: ['established', 'related'] },
     ],
   })) === 200,
   'the filter-rule table is accepted through the real ingest endpoint',
 )
+
+// The #408 schema rework, end to end rather than in a decode test: the
+// NAT table's full anatomy (#445's prerequisite) and a WireGuard peer
+// whose allowed-address is the array RouterOS sends -- the exact shape a
+// live deployment's push was refused for (#443).
+check(
+  (await push({
+    kind: 'nat-rule',
+    page: 1,
+    pages: 1,
+    routerosVersion: '7.23.3 (stable)',
+    records: [
+      {
+        ordinal: 0,
+        comment: 'web to the DMZ host',
+        chain: 'dstnat',
+        action: 'dst-nat',
+        toAddresses: '192.0.2.10',
+        toPorts: 8080,
+        dstPort: 443,
+        protocol: 'tcp',
+        inInterface: 'ether1',
+        outInterface: '',
+        srcAddress: '',
+        dstAddress: '198.51.100.4',
+        disabled: false,
+        dynamic: false,
+      },
+      { ordinal: 1, comment: 'masquerade out', chain: 'srcnat', action: 'masquerade', outInterface: 'ether1', srcAddress: '192.0.2.0/24' },
+    ],
+  })) === 200,
+  'a NAT table with the full rule anatomy is accepted',
+)
+check(
+  (await push({
+    kind: 'wireguard-peer',
+    page: 1,
+    pages: 1,
+    records: [
+      {
+        publicKey: 'c3ludGhldGljLXB1YmxpYy1rZXktb25l',
+        allowedAddress: ['192.0.2.0/24', '198.51.100.0/24'],
+        endpointAddress: '203.0.113.5:51820',
+        comment: 'branch office',
+      },
+    ],
+  })) === 200,
+  'a wireguard-peer table with an array allowed-address is accepted (#443)',
+)
+
+{
+  const natTable = await (await page.request.get(`${URL_BASE}/api/routeros/${encodeURIComponent(DEVICE)}/nat`)).json()
+  const first = natTable.rules?.[0]
+  check(
+    first?.toAddresses === '192.0.2.10' && first?.toPorts === '8080' && first?.dstPort === '443' && first?.protocol === 'tcp',
+    'the NAT table endpoint serves the pushed anatomy, single ports and all',
+  )
+}
 check(
   (await push({
     kind: 'dns-static',

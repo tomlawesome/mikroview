@@ -293,10 +293,10 @@ real RouterOS 7.23.3 router before writing this down:
 ```
 :local recs [:toarray ""]
 :foreach i,v in=[/ip/firewall/filter print as-value] do={
-  :local rec {"ordinal"=$i; "comment"=($v->"comment"); "chain"=($v->"chain"); "action"=($v->"action"); "srcAddressList"=($v->"src-address-list"); "logPrefix"=($v->"log-prefix"); "dstPort"=($v->"dst-port"); "protocol"=($v->"protocol"); "log"=($v->"log"); "dstAddress"=($v->"dst-address"); "srcAddress"=($v->"src-address")}
+  :local rec {"ordinal"=$i; "comment"=($v->"comment"); "chain"=($v->"chain"); "action"=($v->"action"); "srcAddressList"=($v->"src-address-list"); "logPrefix"=($v->"log-prefix"); "dstPort"=($v->"dst-port"); "protocol"=($v->"protocol"); "log"=($v->"log"); "dstAddress"=($v->"dst-address"); "srcAddress"=($v->"src-address"); "connectionState"=($v->"connection-state"); "inInterface"=($v->"in-interface"); "outInterface"=($v->"out-interface")}
   :set recs ($recs, {$rec})
 }
-:local payload [:serialize to=json value={"kind"="filter-rule"; "page"=1; "pages"=1; "records"=$recs}]
+:local payload [:serialize to=json value={"kind"="filter-rule"; "page"=1; "pages"=1; "routerosVersion"=[/system/resource get version]; "records"=$recs}]
 /tool fetch url="https://<mikroview-host>/api/ingest/routeros" http-method=post http-data=$payload http-header-field=("Content-Type: application/json,Authorization: Bearer <your ingest token>") check-certificate=yes output=none
 ```
 
@@ -314,6 +314,25 @@ because no rule on this router logs traffic in its scope. `log` is the
 important one — a rule with `log=no` sends nothing at all, whatever else
 it matches, and without this field MikroView had to guess from whether a
 `log-prefix` happened to be set, which is wrong in both directions.
+
+`connectionState`, `inInterface` and `outInterface` were added for issue
+#408. Nothing in MikroView reads them yet, deliberately: they are the
+input a later "which rules can actually feed this view" answer is built
+from, and that answer is only worth designing against rule data that has
+genuinely been pushed for a while. Sending them now costs one line and
+means the history exists when it's wanted. `connection-state` is a *set*
+— `established,related` is two values — and MikroView takes it either as
+the array RouterOS sends or as a comma-joined string, so
+`($v->"connection-state")` can go straight in with no conversion.
+
+`routerosVersion` on the payload (not on a record — it describes the
+router, not a rule) is the router telling MikroView which RouterOS it is
+running, so MikroView can warn when a command it shows you was written
+against a different version. It is read straight from
+`[/system/resource get version]`. Nothing warns yet; the field is what
+that warning will be derived from, and deriving it is why MikroView
+never has to ask you. Leave it out and everything still works — you just
+get no version-mismatch warning later.
 
 `dstPort`/`protocol` were added for issue #243's suggested-watchlist-entries
 feature: without them mikroview has no way to know which ports a rule
@@ -342,7 +361,9 @@ Line by line:
 - `:local payload [:serialize to=json ...]` turns the whole thing into
   the JSON body — `kind` names which table this is, `page`/`pages` are
   `1`/`1` here since one filter table comfortably fits one push (see
-  pagination below for a large rule set).
+  pagination below for a large rule set), and `routerosVersion` is the
+  router's own version, the one field on the payload rather than on a
+  record. It is optional, and it is the same line in every block.
 - `/tool fetch ... output=none` sends it. `output=none` because a
   scheduled script has no console to print to; drop it if you're
   testing this by hand and want to see the result.
@@ -406,13 +427,27 @@ to cover more than filter rules and DHCP/ARP:
 | `kind` | Source command | Fields |
 |---|---|---|
 | `address-list` | `/ip/firewall/address-list print as-value` | `list`, `address`, `comment`, `dynamic` |
-| `filter-rule` | `/ip/firewall/filter print as-value` | `ordinal` (loop index), `comment`, `chain`, `action`, `srcAddressList` ← `src-address-list`, `logPrefix` ← `log-prefix`, `dstPort` ← `dst-port`, `protocol`, `log`, `dstAddress` ← `dst-address`, `srcAddress` ← `src-address` |
-| `nat-rule` | `/ip/firewall/nat print as-value` | `ordinal` (loop index), `comment`, `chain`, `action` |
+| `filter-rule` | `/ip/firewall/filter print as-value` | `ordinal` (loop index), `comment`, `chain`, `action`, `srcAddressList` ← `src-address-list`, `logPrefix` ← `log-prefix`, `dstPort` ← `dst-port`, `protocol`, `log`, `dstAddress` ← `dst-address`, `srcAddress` ← `src-address`, `connectionState` ← `connection-state` (a set — send it as-is), `inInterface` ← `in-interface`, `outInterface` ← `out-interface` |
+| `nat-rule` | `/ip/firewall/nat print as-value` | `ordinal` (loop index), `comment`, `chain`, `action`, `toAddresses` ← `to-addresses`, `toPorts` ← `to-ports`, `dstPort` ← `dst-port`, `protocol`, `inInterface` ← `in-interface`, `outInterface` ← `out-interface`, `srcAddress` ← `src-address`, `dstAddress` ← `dst-address`, `disabled`, `dynamic` |
 | `dns-static` | `/ip/dns/static print as-value` | `name`, `address` |
 | `dhcp-lease` | `/ip/dhcp-server/lease print as-value` | `hostname` ← `host-name`, `mac` ← `mac-address`, `address` |
 | `arp` | `/ip/arp print as-value` | `address`, `mac` ← `mac-address` |
 | `wireguard-interface` | `/interface/wireguard print as-value` | `name`, `comment`, `publicKey` ← `public-key`, `listenPort` ← `listen-port` |
-| `wireguard-peer` | `/interface/wireguard/peers print as-value` | `publicKey` ← `public-key`, `allowedAddress` ← `allowed-address`, `endpointAddress` ← `endpoint-address`, `comment` |
+| `wireguard-peer` | `/interface/wireguard/peers print as-value` | `publicKey` ← `public-key`, `allowedAddress` ← `allowed-address` (**send the array as-is**), `endpointAddress` ← `endpoint-address`, `comment` |
+
+Every block's payload may carry `"routerosVersion"=[/system/resource get
+version]` alongside `kind`/`page`/`pages`, exactly as 4c's does. It is
+optional and it is the same line everywhere; there is nothing per-kind
+about it.
+
+Two fields are **sets**, not single values, and RouterOS sends them as
+arrays: a WireGuard peer's `allowed-address` (a peer can route several
+CIDRs) and a filter rule's `connection-state`. Pass them straight
+through — `"allowedAddress"=($v->"allowed-address")` — and MikroView
+takes the array. Joining them into a comma-separated string by hand
+still works, so a script written against an earlier version of this page
+does not have to change, but there is no reason to write a new one that
+way.
 
 For host names, `dns-static` and `dhcp-lease` (above) are the two worth
 adding first — they're what turns a raw IP into `nas.lan` everywhere
