@@ -374,120 +374,26 @@ func TestCharacterizationActivitySpike_FieldsRefireClearRevive(t *testing.T) {
 // ---------------------------------------------------------------------------
 // 3. critical_port
 // ---------------------------------------------------------------------------
-
-// TestCharacterizationCriticalPort_FieldsRefireClearRevive pins
-// critical_port's boundary at DefaultConfig's real 5-attempts/5-minute
-// threshold against port 22 (one of DefaultConfig's real CriticalPorts).
-func TestCharacterizationCriticalPort_FieldsRefireClearRevive(t *testing.T) {
-	cfg := DefaultConfig() // CriticalPortThreshold=5, CriticalPortWindow=5m, CriticalPorts includes 22
-	d, fs := newTestDetector(t, cfg)
-	ip := "198.51.100.4"
-	t0 := time.Now()
-
-	for i := 0; i < 4; i++ {
-		d.Observe(evtCountry(ip, "RU", 22, t0.Add(time.Duration(i)*30*time.Second)))
-	}
-	if got := flagOfType(t, fs, flags.TypeCriticalPort); got != nil {
-		t.Fatalf("expected no flag at 4 attempts, got %+v", got)
-	}
-
-	d.Observe(evtCountry(ip, "RU", 22, t0.Add(4*30*time.Second)))
-	f := flagOfType(t, fs, flags.TypeCriticalPort)
-	if f == nil {
-		t.Fatal("expected a flag at exactly 5 attempts")
-	}
-	if f.Target != ip {
-		t.Errorf("Target = %q, want %q", f.Target, ip)
-	}
-	if want := "5 attempts against port 22 in 5m0s"; f.Detail != want {
-		t.Errorf("Detail = %q, want %q", f.Detail, want)
-	}
-	if f.Country != "RU" {
-		t.Errorf("Country = %q, want RU", f.Country)
-	}
-	if !isZeroEvidence(f.Evidence) {
-		t.Errorf("Evidence = %+v, want the zero value", f.Evidence)
-	}
-	if f.Confidence == nil || *f.Confidence != 0 {
-		t.Errorf("Confidence = %v, want 0 (exactly at threshold)", f.Confidence)
-	}
-
-	// Re-fire.
-	d.Observe(evtCountry(ip, "RU", 22, t0.Add(5*30*time.Second)))
-	f2 := flagOfType(t, fs, flags.TypeCriticalPort)
-	if f2 == nil || f2.Count != 2 {
-		t.Fatalf("expected Count=2 after a re-fire, got %+v", f2)
-	}
-	if f2.Confidence == nil || *f2.Confidence != 10 {
-		t.Errorf("Confidence after re-fire = %v, want 10 (overshootConfidence(6,5))", f2.Confidence)
-	}
-
-	// Clear + revive.
-	if !fs.Clear(f2.ID, t0.Add(6*30*time.Second)) {
-		t.Fatal("expected Clear to succeed")
-	}
-	reviveAt := t0.Add(7 * 30 * time.Second)
-	d.Observe(evtCountry(ip, "RU", 22, reviveAt))
-	f3 := flagOfType(t, fs, flags.TypeCriticalPort)
-	if f3 == nil || f3.Cleared {
-		t.Fatalf("expected the flag to revive as active, got %+v", f3)
-	}
-	if f3.Count != 1 {
-		t.Errorf("Count after revival = %d, want 1", f3.Count)
-	}
-	if !f3.FirstSeen.Equal(reviveAt) {
-		t.Errorf("FirstSeen after revival = %v, want %v", f3.FirstSeen, reviveAt)
-	}
-	if want := "7 attempts against port 22 in 5m0s"; f3.Detail != want {
-		t.Errorf("Detail after revival = %q, want %q", f3.Detail, want)
-	}
-	if f3.Confidence == nil || *f3.Confidence != 20 {
-		t.Errorf("Confidence after revival = %v, want 20 (overshootConfidence(7,5))", f3.Confidence)
-	}
-}
-
-// TestCharacterizationCriticalPort_DetailNamesOnlyTheLastPort pins
-// #379's known-wrong behaviour: criticalHits is keyed by source IP only
-// (see detect.go's criticalHits map), so the count that crosses the
-// threshold can span attempts against *several different* critical
-// ports from the same source -- but the Detail string names only
-// e.DstPort, the single port of the triggering event. This test feeds
-// attempts against two different critical ports from one source and
-// pins today's Detail, which names only the last one touched even
-// though the count includes both. #379 is expected to fix this
-// (aggregating per-port or naming the set touched); when it does, this
-// pin should be *updated* to match the corrected wording, not deleted
-// to make the diff quieter -- the point of pinning a known-wrong
-// behaviour is so the fix shows up as an intentional, reviewed change to
-// this test, not a silent one.
-func TestCharacterizationCriticalPort_DetailNamesOnlyTheLastPort(t *testing.T) {
-	cfg := DefaultConfig()
-	cfg.CriticalPorts = []int{22, 23} // two distinct critical ports
-	cfg.CriticalPortThreshold = 5
-	d, fs := newTestDetector(t, cfg)
-	ip := "198.51.100.7"
-	t0 := time.Now()
-
-	// 3 attempts against port 22, then 2 against port 23 -- 5 total
-	// against the *source*, spanning two ports.
-	for i := 0; i < 3; i++ {
-		d.Observe(evt(ip, 22, t0.Add(time.Duration(i)*time.Second)))
-	}
-	for i := 0; i < 2; i++ {
-		d.Observe(evt(ip, 23, t0.Add(time.Duration(3+i)*time.Second)))
-	}
-
-	f := flagOfType(t, fs, flags.TypeCriticalPort)
-	if f == nil {
-		t.Fatal("expected a flag once the combined count across both ports reaches the threshold")
-	}
-	// KNOWN-WRONG, pinned per #379: names only port 23 (the last event's
-	// port), even though 3 of the 5 counted attempts were against port
-	// 22.
-	if want := "5 attempts against port 23 in 5m0s"; f.Detail != want {
-		t.Errorf("Detail = %q, want %q (today's known-wrong single-port naming -- see #379)", f.Detail, want)
-	}
-}
+//
+// critical_port's own characterization moved to
+// internal/engine/shipped_declarative_test.go (issue #405: critical_port is
+// now a shipped declarative definition evaluated by internal/engine, not
+// internal/detect -- see shipped_declarative.go's
+// buildCriticalPortDefinition). The boundary/fields/confidence/re-fire/
+// clear/revive pin that used to live here as
+// TestCharacterizationCriticalPort_FieldsRefireClearRevive is now
+// TestShippedCriticalPort_FieldsRefireClearRevive; the #379 known-wrong
+// Detail-naming pin that used to live here as
+// TestCharacterizationCriticalPort_DetailNamesOnlyTheLastPort is now
+// TestShippedCriticalPort_DetailNamesTheSetOfPortsTouched -- renamed, not
+// just moved, because #379 landed as part of this same port: the Detail
+// string now names the accumulated set of ports touched across the
+// counted attempts instead of only the single triggering event's port,
+// and Evidence.Ports is now populated (it used to be the zero value).
+// Per the original pin's own instruction ("this pin should be *updated*
+// to match the corrected wording, not deleted to make the diff
+// quieter"), the engine-side test was updated in place to match #379's
+// fix rather than deleted and rewritten from scratch.
 
 // ---------------------------------------------------------------------------
 // 4. distributed_brute_force
@@ -1277,58 +1183,24 @@ func TestCharacterizationDeviceSilence_FieldsRefireClearRevive(t *testing.T) {
 // Scope: one case per Settings.Scope axis, plus the #44 AND-together case.
 // ---------------------------------------------------------------------------
 
-// TestCharacterizationScope_HostsAllow pins the Hosts axis under
-// ListModeAllow, at critical_port's real DefaultConfig scale.
-func TestCharacterizationScope_HostsAllow(t *testing.T) {
-	cfg := DefaultConfig()
-	seed := DefaultSettingsMap()
-	seed[DetectorCriticalPort] = Settings{Enabled: true, Scope: Scope{Hosts: []string{"198.51.100.4"}, HostsMode: ListModeAllow}}
-	d, fs := newTestDetectorWithSettings(t, cfg, seed)
-	now := time.Now()
+// TestCharacterizationScope_HostsAllow used to pin the Hosts axis under
+// ListModeAllow at critical_port's DefaultConfig scale; moved to
+// internal/engine/shipped_declarative_test.go's
+// TestShippedCriticalPortScope_HostsAllow (issue #405: critical_port is
+// now a shipped declarative definition evaluated by internal/engine, not
+// internal/detect). Every pinned value carried over unchanged.
 
-	for i := 0; i < 5; i++ {
-		d.Observe(evt("198.51.100.5", 22, now.Add(time.Duration(i)*30*time.Second))) // not on the allow list
-	}
-	if got := flagOfType(t, fs, flags.TypeCriticalPort); got != nil {
-		t.Fatalf("expected a host outside the allow list to never flag, got %+v", got)
-	}
-
-	for i := 0; i < 5; i++ {
-		d.Observe(evt("198.51.100.4", 22, now.Add(time.Duration(i)*30*time.Second))) // allow-listed
-	}
-	if got := flagOfType(t, fs, flags.TypeCriticalPort); got == nil {
-		t.Fatal("expected the allow-listed host to still flag")
-	}
-}
-
-// TestCharacterizationScope_HostsModeDeny pins the HostsMode axis under
-// ListModeDeny, at critical_port's real DefaultConfig scale (5/5m).
-// Previously exercised via port_scan; port_scan's own HostsMode pin moved
-// to internal/engine/shipped_declarative_test.go's
-// TestShippedPortScanScope_HostsModeDeny (issue #405) -- this test is
-// retargeted, not deleted, so internal/detect's own scope-axis coverage
-// stays complete for the detectors still evaluated here.
-func TestCharacterizationScope_HostsModeDeny(t *testing.T) {
-	cfg := DefaultConfig() // CriticalPortThreshold=5, CriticalPortWindow=5m, CriticalPorts includes 22
-	seed := DefaultSettingsMap()
-	seed[DetectorCriticalPort] = Settings{Enabled: true, Scope: Scope{Hosts: []string{"198.51.100.4"}, HostsMode: ListModeDeny}}
-	d, fs := newTestDetectorWithSettings(t, cfg, seed)
-	now := time.Now()
-
-	for i := 0; i < 5; i++ {
-		d.Observe(evt("198.51.100.4", 22, now.Add(time.Duration(i)*30*time.Second))) // denied
-	}
-	if got := flagOfType(t, fs, flags.TypeCriticalPort); got != nil {
-		t.Fatalf("expected the denylisted host to never flag even at 5 attempts, got %+v", got)
-	}
-
-	for i := 0; i < 5; i++ {
-		d.Observe(evt("198.51.100.5", 22, now.Add(time.Duration(i)*30*time.Second))) // not denied
-	}
-	if got := flagOfType(t, fs, flags.TypeCriticalPort); got == nil {
-		t.Fatal("expected a non-denylisted host to still flag at threshold")
-	}
-}
+// TestCharacterizationScope_HostsModeDeny used to pin the HostsMode axis
+// under ListModeDeny at critical_port's DefaultConfig scale (5/5m) --
+// itself already a retarget from port_scan (see the comment this test
+// used to carry). With critical_port's own move to internal/engine (issue
+// #405), there is no internal/detect detector left with an obvious,
+// convenient reason to re-host this axis case, so it isn't retargeted a
+// second time: the Hosts-deny axis is already covered by
+// internal/engine/shipped_declarative_test.go's
+// TestShippedPortScanScope_HostsModeDeny (not a critical_port-named test --
+// port_scan's own HostsMode pin, which this test was itself standing in
+// for before critical_port took over that role).
 
 // TestCharacterizationScope_PortsAllow pins the Ports axis under
 // ListModeAllow, at repeated_drops' real DefaultConfig scale (10/15m).
@@ -1354,31 +1226,13 @@ func TestCharacterizationScope_PortsAllow(t *testing.T) {
 	}
 }
 
-// TestCharacterizationScope_PortsModeDeny pins the PortsMode axis under
-// ListModeDeny, at critical_port's real DefaultConfig scale, restricting
-// the *effective* subset of Config.CriticalPorts this scoped instance
-// reacts to (Scope doc comment, settings.go).
-func TestCharacterizationScope_PortsModeDeny(t *testing.T) {
-	cfg := DefaultConfig() // CriticalPorts includes both 22 and 23
-	seed := DefaultSettingsMap()
-	seed[DetectorCriticalPort] = Settings{Enabled: true, Scope: Scope{Ports: []int{23}, PortsMode: ListModeDeny}}
-	d, fs := newTestDetectorWithSettings(t, cfg, seed)
-	now := time.Now()
-
-	for i := 0; i < 5; i++ {
-		d.Observe(evt("198.51.100.4", 23, now.Add(time.Duration(i)*30*time.Second))) // denied port
-	}
-	if got := flagOfType(t, fs, flags.TypeCriticalPort); got != nil {
-		t.Fatalf("expected the denylisted port to never count toward the threshold, got %+v", got)
-	}
-
-	for i := 0; i < 5; i++ {
-		d.Observe(evt("198.51.100.5", 22, now.Add(time.Duration(i)*30*time.Second))) // not denied
-	}
-	if got := flagOfType(t, fs, flags.TypeCriticalPort); got == nil {
-		t.Fatal("expected a non-denylisted critical port to still flag at threshold")
-	}
-}
+// TestCharacterizationScope_PortsModeDeny used to pin the PortsMode axis
+// under ListModeDeny at critical_port's DefaultConfig scale, restricting
+// the *effective* subset of Config.CriticalPorts a scoped instance reacts
+// to; moved to internal/engine/shipped_declarative_test.go's
+// TestShippedCriticalPortScope_PortsModeDeny (issue #405: critical_port is
+// now a shipped declarative definition evaluated by internal/engine, not
+// internal/detect). Every pinned value carried over unchanged.
 
 // TestCharacterizationScope_Classification pins the Classification axis,
 // at activity_spike's real DefaultConfig scale -- per settings.go's
@@ -1495,45 +1349,11 @@ func TestCharacterizationScope_RulesModeDeny(t *testing.T) {
 	}
 }
 
-// TestCharacterizationScope_AxesCombineWithAND proves #44's model --
-// multiple active Scope axes on one detector combine with AND, not OR --
-// using critical_port's Hosts+Ports axes together at DefaultConfig
-// scale.
-func TestCharacterizationScope_AxesCombineWithAND(t *testing.T) {
-	cfg := DefaultConfig() // CriticalPorts includes both 21 and 22
-	seed := DefaultSettingsMap()
-	seed[DetectorCriticalPort] = Settings{
-		Enabled: true,
-		Scope: Scope{
-			Hosts: []string{"198.51.100.4"}, HostsMode: ListModeAllow,
-			Ports: []int{22}, PortsMode: ListModeAllow,
-		},
-	}
-	d, fs := newTestDetectorWithSettings(t, cfg, seed)
-	now := time.Now()
-
-	// Matches the host axis but not the ports axis -- port 21 is a real
-	// critical port, but not in the ports allow-list.
-	for i := 0; i < 5; i++ {
-		d.Observe(evt("198.51.100.4", 21, now.Add(time.Duration(i)*30*time.Second)))
-	}
-	if got := flagOfType(t, fs, flags.TypeCriticalPort); got != nil {
-		t.Fatalf("expected host-only match (wrong port) to never flag, got %+v", got)
-	}
-
-	// Matches the ports axis but not the hosts axis.
-	for i := 0; i < 5; i++ {
-		d.Observe(evt("198.51.100.5", 22, now.Add(time.Duration(i)*30*time.Second)))
-	}
-	if got := flagOfType(t, fs, flags.TypeCriticalPort); got != nil {
-		t.Fatalf("expected port-only match (wrong host) to never flag, got %+v", got)
-	}
-
-	// Matches both axes.
-	for i := 0; i < 5; i++ {
-		d.Observe(evt("198.51.100.4", 22, now.Add(time.Duration(i)*30*time.Second)))
-	}
-	if got := flagOfType(t, fs, flags.TypeCriticalPort); got == nil {
-		t.Fatal("expected a match on both axes together to flag")
-	}
-}
+// TestCharacterizationScope_AxesCombineWithAND used to prove #44's model
+// -- multiple active Scope axes on one detector combine with AND, not OR
+// -- using critical_port's Hosts+Ports axes together at DefaultConfig
+// scale; moved to internal/engine/shipped_declarative_test.go's
+// TestShippedCriticalPortScope_AxesCombineWithAND (issue #405:
+// critical_port is now a shipped declarative definition evaluated by
+// internal/engine, not internal/detect). Every pinned value carried over
+// unchanged.

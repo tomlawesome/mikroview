@@ -398,8 +398,11 @@ type Detector struct {
 	// convention as knownBad above.
 	netclass netClassLookup
 
-	perSource       map[string]*sourceWindow
-	criticalHits    map[string]*criticalWindow
+	perSource map[string]*sourceWindow
+	// criticalHits (critical_port's own per-source attempt-count map)
+	// moved to internal/engine as a shipped declarative definition (issue
+	// #405) -- criticalPortIPs below is distributed_brute_force's
+	// separate, per-port state, not affected by that port.
 	criticalPortIPs map[int]*portSources
 	destWindows     map[string]*destWindow
 	ruleWindows     map[string]*ruleWindow
@@ -434,7 +437,6 @@ func NewWithSettings(cfg Config, fs *flags.Store, settings *SettingsStore) *Dete
 		settings:        settings,
 		lookupSlots:     make(chan struct{}, reputationLookupConcurrency),
 		perSource:       make(map[string]*sourceWindow),
-		criticalHits:    make(map[string]*criticalWindow),
 		criticalPortIPs: make(map[int]*portSources),
 		destWindows:     make(map[string]*destWindow),
 		ruleWindows:     make(map[string]*ruleWindow),
@@ -517,12 +519,13 @@ func (d *Detector) Observe(e store.Event) {
 	d.observeLowSlowScan(e, now)
 	d.observeOffHours(e, now)
 
+	// critical_port itself moved to internal/engine as a shipped
+	// declarative definition (issue #405, see
+	// shipped_declarative.go's buildCriticalPortDefinition) -- this gate
+	// now only guards distributed_brute_force, which shares the same
+	// "critical port, external source" precondition but isn't ported yet.
 	srcPublic := isPublic(e.SrcIP)
 	if e.DstPort != 0 && isCriticalPort(d.cfg.CriticalPorts, e.DstPort) && srcPublic {
-		if cp := d.settings.Get(DetectorCriticalPort); cp.Enabled &&
-			scopeMatchesHost(cp.Scope, e.SrcIP) && scopeMatchesPort(cp.Scope, e.DstPort) {
-			d.observeCriticalPort(e, now)
-		}
 		if dbf := d.settings.Get(DetectorDistributedBruteForce); dbf.Enabled &&
 			scopeMatchesHost(dbf.Scope, e.SrcIP) && scopeMatchesPort(dbf.Scope, e.DstPort) {
 			d.observeDistributedBruteForce(e, now)
@@ -628,51 +631,21 @@ func (d *Detector) observeScanAndSpike(e store.Event, now time.Time) {
 	d.checkHostActivityBaseline(w, e.SrcIP, e.SrcCountry, e.InInterface, spikeCount, now)
 }
 
-// criticalWindow tracks one source IP's recent attempts against any
-// critical port -- a countRing plus the lastActivity eviction needs,
-// replacing a bare []time.Time hit list.
-type criticalWindow struct {
-	hits         *countRing
-	lastActivity time.Time
-}
-
-func (d *Detector) observeCriticalPort(e store.Event, now time.Time) {
-	if !isTrackableConnState(e) {
-		return
-	}
-	w, ok := d.criticalHits[e.SrcIP]
-	if !ok {
-		if len(d.criticalHits) >= maxTrackedSources {
-			evictOldestByActivity(d.criticalHits)
-		}
-		w = &criticalWindow{hits: newCountRing(d.cfg.CriticalPortWindow)}
-		d.criticalHits[e.SrcIP] = w
-	}
-	w.lastActivity = now
-	w.hits.Add(now, true)
-	count := w.hits.Count(now, d.cfg.CriticalPortWindow)
-
-	if count >= d.cfg.CriticalPortThreshold {
-		isNew := d.fs.AddWithDetail(flags.TypeCriticalPort, e.SrcIP,
-			fmt.Sprintf("%d attempts against port %d in %s", count, e.DstPort, d.cfg.CriticalPortWindow),
-			overshootConfidence(count, d.cfg.CriticalPortThreshold),
-			flags.Evidence{}, e.SrcCountry, now)
-		// e.SrcIP is already guaranteed public here -- Observe only calls
-		// observeCriticalPort when srcPublic is true.
-		d.maybeCheckReputation(flags.TypeCriticalPort, e.SrcIP, e.SrcIP, isNew)
-	}
-}
+// criticalWindow/observeCriticalPort (critical_port's own per-source
+// attempt-count state and its reputation-lookup call site) moved to
+// internal/engine as a shipped declarative definition (issue #405, see
+// shipped_declarative.go's buildCriticalPortDefinition and main.go's
+// engine.ReputationSink wiring for the reputation-lookup counterpart).
 
 // activeWindow is implemented by every per-key detector state struct
-// (sourceWindow, criticalWindow, destWindow, ruleWindow, dropPairWindow,
-// lowSlowWindow) purely so evictOldestByActivity can be generic over
-// all of them -- they otherwise share no behavior, just this one field.
+// (sourceWindow, destWindow, ruleWindow, dropPairWindow, lowSlowWindow)
+// purely so evictOldestByActivity can be generic over all of them --
+// they otherwise share no behavior, just this one field.
 type activeWindow interface {
 	lastActivityTime() time.Time
 }
 
-func (w *sourceWindow) lastActivityTime() time.Time   { return w.lastActivity }
-func (w *criticalWindow) lastActivityTime() time.Time { return w.lastActivity }
+func (w *sourceWindow) lastActivityTime() time.Time { return w.lastActivity }
 
 // evictOldestByActivity sheds the least-recently-active entries once a
 // per-source map is full, shared by every per-key detector state map

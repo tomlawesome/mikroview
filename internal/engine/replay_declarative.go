@@ -127,7 +127,7 @@ func (d *DeclarativeDefinition) Replay(corpus Corpus, candidate Params) (Result,
 			st = d.newStateForWindow(window)
 			states[key] = st
 		}
-		recordEvidence(d.key, st, e)
+		d.recordEvidence(st, e)
 
 		now := e.ReceivedAt
 		var count int
@@ -148,7 +148,7 @@ func (d *DeclarativeDefinition) Replay(corpus Corpus, candidate Params) (Result,
 			return
 		}
 
-		em, err := RenderEmission(st.evidence, d.detailTemplate, false)
+		em, err := RenderEmission(st.evidence, count, d.detailTemplate, false)
 		if err != nil {
 			// Same "log and skip this one occurrence, keep replaying"
 			// policy Evaluate itself uses (declarative.go): a render
