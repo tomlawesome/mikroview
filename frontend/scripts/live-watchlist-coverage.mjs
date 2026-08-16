@@ -22,6 +22,13 @@
 // TestCoverageSaysNothingWithoutPushedRules instead. Assuming otherwise
 // is what the first version of this file did, and it failed for that
 // reason rather than for a defect.
+//
+// #407 moved the entry surface onto /api/definitions, and the coverage
+// answer moved with it: rather than a `body.coverage[id]` map returned
+// alongside the entries, coverage now rides per-definition as
+// `definition.coverage` on the definitions list. coverageFor below
+// re-reads the list and picks the one definition out, rather than
+// indexing a separate map.
 
 import { session, check, done, feedSyslog } from './live-browser.mjs'
 
@@ -39,11 +46,17 @@ async function api(method, path_, body) {
 }
 
 async function coverageFor(id) {
-  const got = await api('GET', '/api/watchlist/entries')
-  return got.body?.coverage?.[id]
+  const got = await api('GET', '/api/definitions')
+  const d = (got.body?.definitions ?? []).find((d) => d.id === id)
+  return d?.coverage
 }
 
-const entry = await api('POST', '/api/watchlist/entries', { name: 'coverage ssh', ports: [22] })
+const entry = await api('POST', '/api/definitions', {
+  name: 'coverage ssh',
+  intent: 'expectation',
+  kind: 'declarative',
+  expectation: { ports: [22] },
+})
 check(entry.status === 201, `an entry is created (${entry.status})`)
 const id = entry.body?.id
 
@@ -118,10 +131,11 @@ check(
 // unreadable address and no port condition genuinely covers an
 // unscoped entry, which is the right answer and not a silence bug.
 // The first version of this asserted otherwise and was wrong.
-const scoped = await api('POST', '/api/watchlist/entries', {
+const scoped = await api('POST', '/api/definitions', {
   name: 'coverage scoped',
-  ports: [22],
-  destIp: '10.1.2.3',
+  intent: 'expectation',
+  kind: 'declarative',
+  expectation: { ports: [22], destIp: '10.1.2.3' },
 })
 check(scoped.status === 201, `a destination-scoped entry is created (${scoped.status})`)
 
@@ -150,7 +164,7 @@ check(
   (await coverageFor(scoped.body?.id)) === 'out-of-scope',
   'with only readable rules, the destination-scoped entry gets a definite answer',
 )
-await api('DELETE', `/api/watchlist/entries/${scoped.body?.id}`)
+await api('DELETE', `/api/definitions/${scoped.body?.id}`)
 
 // --- The warning is what the operator actually sees ---------------------
 
@@ -179,5 +193,5 @@ check(
   'the warning says what to actually do about it, not just that something is wrong',
 )
 
-await api('DELETE', `/api/watchlist/entries/${id}`)
+await api('DELETE', `/api/definitions/${id}`)
 done()

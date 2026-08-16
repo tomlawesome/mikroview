@@ -134,7 +134,7 @@ func (s *Server) sessionUser(r *http.Request, now time.Time) (*auth.User, bool) 
 // served). That's what makes
 // "a token can never reach a write/clear/config endpoint" structural:
 // there is no code path from a bearer-authenticated request to
-// handleFlagsClear, handleDetectorSettingsUpdate, handleAuthCreateUser,
+// handleFlagsClear, handleDefinitionsUpdate, handleAuthCreateUser,
 // etc. -- those handlers are simply never registered on this mux, so a
 // request for any of them (regardless of method) falls through to
 // ServeMux's own 404, the same as a route that never existed.
@@ -144,7 +144,7 @@ func (s *Server) readOnlyRoutes() http.Handler {
 	mux.HandleFunc("GET /api/flags", s.handleFlagsList)
 	mux.HandleFunc("GET /api/stats", s.handleStats)
 	mux.HandleFunc("GET /api/devices", s.handleDevices)
-	mux.HandleFunc("GET /api/watchlist/matches", s.handleWatchlistMatchesQuery)
+	mux.HandleFunc("GET /api/matches", s.handleMatchesQuery)
 	return mux
 }
 

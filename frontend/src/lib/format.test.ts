@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 import { describe, expect, it } from 'vitest'
-import { formatRelative, formatDurationShort, formatBufferDepth } from './format'
+import { formatRelative, formatDurationShort, formatUptimeFull, formatBufferDepth } from './format'
 
 describe('formatRelative', () => {
   const now = new Date('2026-01-01T12:00:00.000Z').getTime()
@@ -58,6 +58,24 @@ describe('formatDurationShort', () => {
 
   it('never goes negative', () => {
     expect(formatDurationShort(-50)).toBe('0s')
+  })
+})
+
+describe('formatUptimeFull', () => {
+  it('always shows all four units, zero-padding only the seconds', () => {
+    expect(formatUptimeFull(3 * 86_400 + 4 * 3600 + 12 * 60 + 5)).toBe('3d 4h 12m 05s')
+  })
+
+  it('shows a zero days unit rather than dropping it under a day', () => {
+    expect(formatUptimeFull(3 * 60 + 9)).toBe('0d 0h 3m 09s')
+  })
+
+  it('renders zero as all-zero units', () => {
+    expect(formatUptimeFull(0)).toBe('0d 0h 0m 00s')
+  })
+
+  it('never goes negative', () => {
+    expect(formatUptimeFull(-50)).toBe('0d 0h 0m 00s')
   })
 })
 

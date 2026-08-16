@@ -1,18 +1,11 @@
 <script lang="ts">
   // SPDX-License-Identifier: AGPL-3.0-only
   import { appState } from '../lib/state.svelte'
-  import type { Action } from '../lib/types'
+  import { ACTION_FILTER_OPTIONS } from '../lib/actions'
   import FilterPresetsMenu from './FilterPresetsMenu.svelte'
   import { viewportState } from '../lib/viewport.svelte'
 
-  const actions: { value: Action | ''; label: string }[] = [
-    { value: '', label: 'Any action' },
-    { value: 'accept', label: 'Accept' },
-    { value: 'drop', label: 'Drop' },
-    { value: 'reject', label: 'Reject' },
-    { value: 'log', label: 'Log' },
-    { value: 'unknown', label: 'Unknown' },
-  ]
+  const actions = ACTION_FILTER_OPTIONS
 
   // Below the breakpoint, the ~9 fields below move into a slide-up
   // drawer behind a trigger (issue #85) rather than staying always-

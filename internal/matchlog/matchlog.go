@@ -84,6 +84,22 @@ func (id Identity) identityKey() string {
 	return "ip:" + id.IP
 }
 
+// Key exports identityKey for a caller that needs to *index* by identity
+// rather than compare two of them pairwise -- internal/engine's inverted
+// expectation dispatch, which buckets definitions by the device they
+// scope so an event consults only the ones that could be about it,
+// instead of asking every one of them in turn (#406).
+//
+// Exported rather than reimplemented at that call site precisely because
+// of what identityKey's own doc comment records: the MAC-preferred rule
+// and its lowercasing were once written twice, drifted, and silently
+// stopped collapsing a device's matches when its lease changed. A second
+// copy for indexing would be the same mistake in a new place -- two
+// identities that MatchesSource each other must always land in the same
+// bucket, which is only guaranteed if the bucket key is literally this
+// function.
+func (id Identity) Key() string { return id.identityKey() }
+
 // MatchesSource reports whether a candidate event identity should be
 // treated as the same source as this stored identity, following the
 // same MAC-preferred, IP-fallback rule Tuple.key uses to decide whether a
@@ -133,6 +149,17 @@ type Record struct {
 	FirstSeen time.Time   `json:"firstSeen"`
 	LastSeen  time.Time   `json:"lastSeen"`
 	Count     uint64      `json:"count"`
+	// Provisional marks a match recorded while its expectation
+	// definition's baseline had not yet cleared its history floor --
+	// internal/engine.Baseline's warm-up gating
+	// (docs/decisions/evaluation-engine.md section 1, #368's fix made a
+	// chassis contract), the matchlog counterpart to flags.Flag.Provisional.
+	// false (the default, omitted from JSON) for every record recorded
+	// today: nothing wires the watchlist onto internal/engine.Baseline
+	// yet -- that is #406's job. Fixed at creation, like FirstSeen and
+	// Tuple: a collapsed repeat (see Append/AppendProvisional) never
+	// changes it.
+	Provisional bool `json:"provisional,omitempty"`
 }
 
 // Query selects matches by source identity and a time window. Since is
@@ -210,6 +237,16 @@ type Store interface {
 	// (entryID, tuple) per Tuple.key's rule, or starts a new one.
 	Append(entryID string, tuple Tuple, event store.Event, t time.Time) error
 
+	// AppendProvisional is Append, but marks a newly-created record's
+	// Provisional field -- see that field's doc comment. Added by #399
+	// alongside the field itself; no caller uses it yet (#406 wires the
+	// watchlist side onto internal/engine.Baseline's warm-up gating) --
+	// it exists now so the persisted shape, on both backends, and the
+	// round trip are proven ahead of anything depending on them.
+	// provisional is ignored when Append collapses into an already-open
+	// record: Provisional is fixed at creation, like FirstSeen.
+	AppendProvisional(entryID string, tuple Tuple, event store.Event, t time.Time, provisional bool) error
+
 	// Query streams matches for q's source within [q.Since, q.Until),
 	// most recent (by LastSeen) first, up to q.Limit, calling yield for
 	// each. yield returning false stops delivery early. Query still
@@ -220,7 +257,7 @@ type Store interface {
 	// ctx cancels the query. It matters most on the Postgres backend,
 	// where the work happens server-side and a client that has gone
 	// away would otherwise leave it running to completion; the file
-	// backend checks it between records. GET /api/watchlist/matches is
+	// backend checks it between records. GET /api/matches is
 	// reachable with a read-only API token and has no rate limiter, so
 	// "the caller left" needs to actually stop the work.
 	Query(ctx context.Context, q Query, yield func(Record) bool) error

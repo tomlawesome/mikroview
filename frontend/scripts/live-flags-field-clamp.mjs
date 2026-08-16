@@ -19,19 +19,14 @@
 // real API response a client actually receives -- rather than trusting
 // that nothing between the parser and the wire re-introduces the gap.
 //
-// The payload here is deliberately much smaller than the unit tests'
-// (a few KB, not 65KB): this layer is proving the wiring, which the
-// parser-level tests already establish is correct at any size, and a
-// large single-line write is not guaranteed to reach the TCP listener
-// in one Read() -- crossing that boundary hit an unrelated bug in
-// internal/syslog/tcp_listener.go's read loop (its message-reassembly
-// logic only recognises a read that exactly fills its 64KB buffer as
-// "message continues"; a large-but-under-64KB message that still
-// arrives fragmented across multiple non-full reads is not recognised,
-// and each fragment gets parsed as its own garbage event). Real, found
-// live while sizing this scenario, but a distinct defect from #369 and
-// out of scope for it -- flagged separately rather than fixed here.
-// Staying small avoids exercising that path at all.
+// The payload matches the unit tests' 65KB worst case. It used to stay
+// at 4,000 bytes instead, as a workaround for a real but distinct bug
+// in internal/syslog/tcp_listener.go's read loop (#415): a message
+// under 64KB that arrived fragmented across multiple non-full reads
+// wasn't recognised as one message, so each fragment was parsed as its
+// own garbage event. #415 fixed the listener to reassemble by message
+// framing rather than by whether a read happened to fill its buffer,
+// so this can exercise the real worst case end to end again.
 import { session, feedRaw, check, done } from './live-browser.mjs'
 
 const URL_BASE = process.env.MV_URL
@@ -39,10 +34,10 @@ const RULE = 'flags-clamp-live'
 
 // Balanced parens, no top-level comma inside them -- the shape the
 // finding was reproduced with (splitTopLevel's paren-aware path, not
-// its naive unbalanced-parens fallback). 4000 bytes is >15x maxFieldLen
-// (256), comfortably enough to prove the clamp fires, while staying
-// well under a single TLS record.
-const oversized = 'a'.repeat(4000)
+// its naive unbalanced-parens fallback). 65,000 bytes matches the
+// worst case the unit tests pin (internal/routeros/clamp_test.go's
+// TestFlagsFieldIsClamped).
+const oversized = 'a'.repeat(65000)
 feedRaw(
   `A|${RULE}|forward: in:ether1 out:bridge1, proto TCP (${oversized}), ` +
     '198.51.100.77:1024->203.0.113.9:443, len 60',

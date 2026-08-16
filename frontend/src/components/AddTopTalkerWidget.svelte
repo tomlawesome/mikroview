@@ -6,18 +6,12 @@
   // rather than appState.filters, since a widget's filter is independent
   // of whatever's active in the live view.
   import { appState } from '../lib/state.svelte'
-  import { emptyFilters, type Action, type Filters } from '../lib/types'
+  import { emptyFilters, type Filters } from '../lib/types'
+  import { ACTION_FILTER_OPTIONS } from '../lib/actions'
   import { GROUP_BY_FIELDS, GROUP_BY_LABELS, type GroupByField } from '../lib/groupBy'
   import { topTalkerWidgetsState } from '../lib/topTalkers.svelte'
 
-  const actions: { value: Action | ''; label: string }[] = [
-    { value: '', label: 'Any action' },
-    { value: 'accept', label: 'Accept' },
-    { value: 'drop', label: 'Drop' },
-    { value: 'reject', label: 'Reject' },
-    { value: 'log', label: 'Log' },
-    { value: 'unknown', label: 'Unknown' },
-  ]
+  const actions = ACTION_FILTER_OPTIONS
 
   let expanded = $state(false)
   let title = $state('')

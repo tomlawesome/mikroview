@@ -16,7 +16,6 @@ import (
 	"time"
 
 	"github.com/tomlawesome/mikroview/internal/auth"
-	"github.com/tomlawesome/mikroview/internal/detect"
 	"github.com/tomlawesome/mikroview/internal/device"
 	"github.com/tomlawesome/mikroview/internal/flags"
 	"github.com/tomlawesome/mikroview/internal/geoip"
@@ -31,7 +30,7 @@ import (
 // ingestOneRecovered needs, all unconfigured/in-memory (no GeoIP DB, no
 // flags/MAC-registry persistence) -- enough to exercise the new-device
 // wiring itself (issue #103 phase 1) without touching disk.
-func newIngestTestDeps(t *testing.T) (*store.Store, *device.Registry, *device.MACRegistry, *flags.Store, *hub.Hub, *geoip.Lookup, *detect.Detector, *rules.Store) {
+func newIngestTestDeps(t *testing.T) (*store.Store, *device.Registry, *device.MACRegistry, *flags.Store, *hub.Hub, *geoip.Lookup, *rules.Store) {
 	t.Helper()
 	st := store.New(1000, time.Hour)
 	devices := device.NewRegistry(nil)
@@ -48,12 +47,11 @@ func newIngestTestDeps(t *testing.T) (*store.Store, *device.Registry, *device.MA
 	if err != nil {
 		t.Fatal(err)
 	}
-	detector := detect.New(detect.DefaultConfig(), fs)
 	ru, err := rules.Open("")
 	if err != nil {
 		t.Fatal(err)
 	}
-	return st, devices, macRegistry, fs, h, geo, detector, ru
+	return st, devices, macRegistry, fs, h, geo, ru
 }
 
 const firewallLineWithMAC = "A|lan-wan|forward: in:ether1 out:bridge1, connection-state:new src-mac aa:bb:cc:dd:ee:ff, proto TCP (SYN), 192.168.1.50:51234->1.2.3.4:443, len 60"
@@ -62,11 +60,11 @@ const firewallLineWithMAC = "A|lan-wan|forward: in:ether1 out:bridge1, connectio
 // contract from issue #103: the first event carrying a given SrcMAC
 // raises exactly one TypeNewDevice flag, targeted at that MAC.
 func TestIngestRaisesNewDeviceFlagOnceForFirstSighting(t *testing.T) {
-	st, devices, macRegistry, fs, h, geo, detector, ru := newIngestTestDeps(t)
+	st, devices, macRegistry, fs, h, geo, ru := newIngestTestDeps(t)
 	logger := slog.Default()
 
 	rm := syslog.RawMessage{SourceIP: "192.168.1.1", Data: []byte(firewallLineWithMAC), RecvTime: time.Now()}
-	ingestOneRecovered(logger, rm, st, devices, macRegistry, fs, h, geo, detector, ru, naming.Resolver{}, nil, nil)
+	ingestOneRecovered(logger, rm, st, devices, macRegistry, fs, h, geo, ru, naming.Resolver{}, nil, nil)
 
 	list := fs.List()
 	var found *flags.Flag
@@ -92,13 +90,13 @@ func TestIngestRaisesNewDeviceFlagOnceForFirstSighting(t *testing.T) {
 // same SrcMAC must not create a second TypeNewDevice episode or bump the
 // existing one's Count.
 func TestIngestDoesNotReRaiseNewDeviceFlagOnSubsequentEvents(t *testing.T) {
-	st, devices, macRegistry, fs, h, geo, detector, ru := newIngestTestDeps(t)
+	st, devices, macRegistry, fs, h, geo, ru := newIngestTestDeps(t)
 	logger := slog.Default()
 	now := time.Now()
 
 	for i := 0; i < 3; i++ {
 		rm := syslog.RawMessage{SourceIP: "192.168.1.1", Data: []byte(firewallLineWithMAC), RecvTime: now.Add(time.Duration(i) * time.Minute)}
-		ingestOneRecovered(logger, rm, st, devices, macRegistry, fs, h, geo, detector, ru, naming.Resolver{}, nil, nil)
+		ingestOneRecovered(logger, rm, st, devices, macRegistry, fs, h, geo, ru, naming.Resolver{}, nil, nil)
 	}
 
 	var newDeviceFlags []flags.Flag
@@ -119,12 +117,12 @@ func TestIngestDoesNotReRaiseNewDeviceFlagOnSubsequentEvents(t *testing.T) {
 // coverage caveat: a WAN-side rule set typically carries no src-mac at
 // all, and that must never be treated as a "new device."
 func TestIngestSkipsNewDeviceFlagForEmptySrcMAC(t *testing.T) {
-	st, devices, macRegistry, fs, h, geo, detector, ru := newIngestTestDeps(t)
+	st, devices, macRegistry, fs, h, geo, ru := newIngestTestDeps(t)
 	logger := slog.Default()
 
 	const lineWithoutMAC = "A|wan-in|forward: in:ether1 out:bridge1, connection-state:new, proto TCP (SYN), 203.0.113.5:51234->192.168.1.10:443, len 60"
 	rm := syslog.RawMessage{SourceIP: "192.168.1.1", Data: []byte(lineWithoutMAC), RecvTime: time.Now()}
-	ingestOneRecovered(logger, rm, st, devices, macRegistry, fs, h, geo, detector, ru, naming.Resolver{}, nil, nil)
+	ingestOneRecovered(logger, rm, st, devices, macRegistry, fs, h, geo, ru, naming.Resolver{}, nil, nil)
 
 	for _, f := range fs.List() {
 		if f.Type == flags.TypeNewDevice {

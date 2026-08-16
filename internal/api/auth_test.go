@@ -57,6 +57,27 @@ func postJSON(t *testing.T, client *http.Client, url string, body any) *http.Res
 	return resp
 }
 
+// putJSON mirrors postJSON but for PUT, sending the same CSRF header the
+// real frontend always sends (see csrfHeaderName).
+func putJSON(t *testing.T, client *http.Client, url string, body any) *http.Response {
+	t.Helper()
+	b, err := json.Marshal(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req, err := http.NewRequest(http.MethodPut, url, bytes.NewReader(b))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set(csrfHeaderName, csrfHeaderValue)
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return resp
+}
+
 // TestUndecidedStateRestrictsToBootstrapPaths covers the gap the old
 // blanket-open zero-account behavior left: before a real decision has
 // been made (neither an account created nor auth explicitly skipped),
@@ -788,7 +809,7 @@ func TestChangePasswordRotatesTheSessionAndEndsOthers(t *testing.T) {
 	// A second signed-in browser, which must not survive the change --
 	// "sign out everywhere" is the point, not a side effect.
 	other := loggedInClient(t, ts.URL, "admin", "password123")
-	if resp, err := other.Get(ts.URL + "/api/watchlist/entries"); err != nil || resp.StatusCode != http.StatusOK {
+	if resp, err := other.Get(ts.URL + "/api/definitions"); err != nil || resp.StatusCode != http.StatusOK {
 		t.Fatalf("setup: the second session is not usable (%v)", err)
 	}
 
@@ -811,13 +832,13 @@ func TestChangePasswordRotatesTheSessionAndEndsOthers(t *testing.T) {
 
 	// This browser stays signed in: being signed out by your own
 	// password change is the behaviour that stops people doing it.
-	if got, err := client.Get(ts.URL + "/api/watchlist/entries"); err != nil || got.StatusCode != http.StatusOK {
+	if got, err := client.Get(ts.URL + "/api/definitions"); err != nil || got.StatusCode != http.StatusOK {
 		t.Errorf("the browser that changed the password was signed out (%v)", err)
 	}
 
 	// The other one is gone, immediately -- not merely doomed on its
 	// next PasswordChangedAt check.
-	if got, err := other.Get(ts.URL + "/api/watchlist/entries"); err == nil && got.StatusCode == http.StatusOK {
+	if got, err := other.Get(ts.URL + "/api/definitions"); err == nil && got.StatusCode == http.StatusOK {
 		t.Error("a session opened before the password change is still usable")
 	}
 	if _, ok := s.Auth.Get(user.ID); !ok {
