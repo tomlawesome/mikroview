@@ -963,7 +963,7 @@ so it's kept at full fidelity -- the whole matched event, not a summary.
 A repeated identical match collapses into a count with first-seen/
 last-seen timestamps rather than being stored again, so a noisy entry
 cannot consume the capacity a genuinely novel match needs. Queried via
-`GET /api/watchlist/matches` (see [API reference](#api-reference)) --
+`GET /api/matches` (see [API reference](#api-reference)) --
 open to any signed-in user and reachable via a read-only API token, the
 same tier as `/api/events`/`/api/flags`/`/api/stats`/`/api/devices`,
 since correlating a device against its recorded matches from an external
@@ -1643,10 +1643,11 @@ together:
   future restarts read -- `config.yaml`'s values are only ever consulted
   for a detector the definitions store does not already hold.
 
-  **Takes effect on restart, not on the next event.** Every detector is
-  a definition evaluated by the engine now, and a definition reads its
-  enabled/scope when it is built, which happens once at startup. Live
-  re-registration arrives with the definitions API.
+  **Takes effect on the very next ingested event, not on restart.** Every
+  detector is a definition evaluated by the engine now; changing one
+  re-registers it immediately, and every other definition carries on with
+  whatever it had already accumulated (a half-full counting window is not
+  reset by an unrelated edit).
 
   `detectorSettingsStorePath` is no longer written to. It is still
   *read*, once, to carry an existing deployment's toggles into the
@@ -1678,6 +1679,12 @@ restriction you've actually set. Within one field (`hosts`, `ports`, or
 `deny` (listed entries are excluded) -- never both directions on the same
 field at once. `hosts` entries accept a bare IP or a CIDR.
 
+The last five rows below are definitions that had no toggle at all
+before v0.3.0: they ran as always-on passes with no name, no switch and
+no scope. Giving every evaluated thing the same envelope made them
+configurable for the first time, and they appear on the Detectors page
+alongside the original twelve.
+
 Not every field means something to every detector -- a detector only
 consults the axes relevant to how it's keyed:
 
@@ -1695,6 +1702,11 @@ consults the axes relevant to how it's keyed:
 | `low_slow_scan` | which source IPs are tracked at all | which distinct ports *count* toward its own breadth total | -- |
 | `off_hours_activity` | which source IPs are tracked at all | -- | -- |
 | `device_silence` | -- (a per-configured-device sweep, not keyed by host/port/rule) | -- | -- |
+| `unexpected_mail_sender` | which source (LAN) IPs are watched | -- | -- |
+| `known_bad_ip` | which source IPs are looked up at all | -- | -- |
+| `netclass` | which source IPs are classified at all | -- | -- |
+| `reputation` | -- (lookup policy, not a per-event detector) | -- | -- |
+| `stale_rule` | -- (a periodic sweep over rule usage) | -- | -- |
 
 `global_spike` and `device_silence` only ever consult `enabled` -- the
 former is a single network-wide aggregate, the latter a periodic sweep
@@ -2013,9 +2025,9 @@ else.** A valid token grants `Authorization: Bearer <token>` access to:
 - `GET /api/flags`
 - `GET /api/stats`
 - `GET /api/devices`
-- `GET /api/watchlist/matches`
+- `GET /api/matches`
 
-and *nothing* else -- no clearing a flag, no changing a detector, no
+and *nothing* else -- no clearing a flag, no changing a definition, no
 managing users or other tokens, regardless of the method or path
 requested. This isn't a per-request permission check that a future
 handler could accidentally bypass: a bearer-authenticated request is
@@ -2769,21 +2781,24 @@ exits, rather than starting the server. See
 | `POST /api/flags/{id}/clear-permanent` | admin-only: clear one flag *and* permanently exclude its (detector, target) pair going forward. Audit-logged |
 | `GET /api/flags/exclusions` | admin-only: every currently-excluded (detector, target) pair |
 | `DELETE /api/flags/exclusions/{id}` | admin-only: remove one exclusion, letting that pair raise again |
-| `GET /api/detectors` | admin-only: every detector's current enabled+scope (see [Per-detector toggles](#per-detector-toggles-and-scope-restrictions-optional)) |
-| `PUT /api/detectors/{name}` | admin-only: replace one detector's enabled+scope wholesale |
+| `GET /api/definitions` | admin-only: every definition the engine evaluates -- shipped detectors and your own watchlist expectations alike -- each with its enabled state, scope, tuned params, param schema, provenance, replayability, and (for an expectation) its coverage answer. Replaced `GET /api/detectors` and `GET /api/watchlist/entries` in v0.3.0 |
+| `POST /api/definitions` | admin-only: create a custom definition. Declarative only -- `kind: "programmatic"` is refused, because programmatic logic is Go compiled into the binary rather than data |
+| `GET /api/definitions/schema` | admin-only: every definition's param schema, keyed by id, so a UI renders tuning controls from the server's own declaration |
+| `GET /api/definitions/{id}` | admin-only: one definition |
+| `PUT /api/definitions/{id}` | admin-only: change any of `enabled`, `scope`, `params`, `suppressions`, `name`/`expectation` (expectations only). An absent field is left alone; a param outside its declared bounds is a 400, never a stored zero. Takes effect on the next ingested event |
+| `DELETE /api/definitions/{id}` | admin-only: remove a custom definition. A shipped one is refused with a 409 -- shipped definitions are disabled, never deleted |
+| `POST /api/definitions/{id}/clone` | admin-only: copy an expectation into a new definition with its own id. Refused for a shipped detector, whose logic is keyed by its own id and would evaluate nothing in a copy |
+| `POST /api/definitions/{id}/reset` | admin-only: discard every param override, putting a shipped definition back to what it shipped with |
+| `POST /api/definitions/{id}/replay` | admin-only: re-run one definition over the stored event corpus with candidate params, returning a receipt (emission count, evidence sample, and the window it actually covered) or a stated decline. A definition that can never answer honestly declines with its reason rather than reporting a misleading zero |
+| `POST /api/definitions/{id}/promote` | admin-only: move one or more observed destinations into an inverted expectation's permitted set |
+| `POST /api/definitions/{id}/observing` | admin-only: turn an inverted expectation's observe mode on or off |
 | `GET /api/entities` | admin-only (see [Entities](#entities-ui-managed-hostruleport-labels-and-tags-optional)): every persisted entity |
 | `POST /api/entities` | admin-only: create or replace (upsert) one entity, identified by `(type, key)` in the JSON body |
 | `DELETE /api/entities` | admin-only: remove the entity identified by `(type, key)` in the JSON body |
 | `GET /api/audit` | admin-only: a windowed slice of the admin action audit log (see [Audit log](#audit-log-admin-action-accountability-optional)), newest activity last, accepting `since`/`until`/`limit` query params like `GET /api/events` |
-| `GET /api/watchlist/entries` | admin-only: every watchlist entry (see [Watchlist](#watchlist-optional)) |
-| `POST /api/watchlist/entries` | admin-only: create one entry |
-| `PUT /api/watchlist/entries/{id}` | admin-only: replace one entry's name/source/destination/ports/invert/includeStructuralNoise -- never its Permitted/Observed state, which only the two endpoints below can change |
-| `DELETE /api/watchlist/entries/{id}` | admin-only: remove one entry |
-| `POST /api/watchlist/entries/{id}/promote` | admin-only: move one or more observed destinations into that entry's Permitted set |
-| `POST /api/watchlist/entries/{id}/observing` | admin-only: turn an inverted entry's observe mode on or off |
-| `GET /api/watchlist/matches` | a windowed query over the persisted match log, by `mac`/`ip`/`since`/`until`/`limit` -- open to any signed-in user and reachable via a read-only API token, same tier as `/api/events`/`/api/flags`/`/api/stats`/`/api/devices` |
+| `GET /api/matches` | a windowed query over the persisted match log, by `mac`/`ip`/`since`/`until`/`limit` -- open to any signed-in user and reachable via a read-only API token, same tier as `/api/events`/`/api/flags`/`/api/stats`/`/api/devices` |
 | `GET /api/suggestions` | admin-only: every suggested watchlist entry (see [Suggested watchlist entries](#suggested-watchlist-entries-issue-243)), optionally filtered with `?status=off\|on\|hide` |
-| `POST /api/suggestions/{id}/accept` | admin-only: accept an undecided suggestion, creating a real watchlist entry |
+| `POST /api/suggestions/{id}/accept` | admin-only: accept an undecided suggestion, creating a real expectation definition |
 | `POST /api/suggestions/{id}/hide` | admin-only: decline an undecided suggestion |
 | `POST /api/suggestions/{id}/unhide` | admin-only: return a hidden suggestion to undecided |
 | `POST /api/suggestions/reset` | admin-only, destructive: wipes the entire watchlist and regenerates suggestions from scratch -- requires `{"confirm": true}` in the request body |

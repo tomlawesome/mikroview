@@ -7,7 +7,6 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
-	"time"
 
 	"github.com/tomlawesome/mikroview/internal/backup"
 	"github.com/tomlawesome/mikroview/internal/engine"
@@ -22,8 +21,8 @@ import (
 // mirroring TestBackupRestoreRoundTripCarriesWatchlist's own shape for
 // #372.
 //
-// Setting up "a migrated deployment" (a detector settings store and a
-// watchlist store with real content, converted once via
+// Setting up "a migrated deployment" (a detector settings document and a
+// watchlist document with real content, converted once via
 // engine.MigrateDefinitions) is precondition setup, not the thing under
 // test -- what's actually asserted is that the definitions document that
 // setup produced survives runBackup followed by runRestore into a fresh
@@ -44,14 +43,13 @@ func TestBackupRestoreRoundTripCarriesMigratedDefinitions(t *testing.T) {
 		t.Fatalf("writing the detector settings document: %v", err)
 	}
 
-	wl, err := watchlist.Open(watchlistPath)
-	if err != nil {
-		t.Fatalf("watchlist.Open: %v", err)
-	}
-	if err := wl.Upsert(watchlist.Entry{ID: "e1", Name: "ssh-watch", Ports: []int{22}}); err != nil {
-		t.Fatalf("watchlist Upsert: %v", err)
-	}
-	flushStore(t, wl)
+	// A pre-#407 watchlist document, written as bytes rather than through
+	// a store: internal/watchlist.Store is deleted (issue #407), but its
+	// document is still a migration source, and this test's setup needs
+	// exactly the same "migrated from a real watchlist document" starting
+	// point TestBackupRestoreRoundTripCarriesWatchlist writes through
+	// writeWatchlistDocument.
+	writeWatchlistDocument(t, watchlistPath, watchlist.Entry{ID: "e1", Name: "ssh-watch", Ports: []int{22}})
 
 	migrated, err := engine.MigrateDefinitions(context.Background(),
 		persist.NewFileBackend(definitionsPath),
@@ -157,28 +155,5 @@ func TestBackupRestoreRoundTripCarriesMigratedDefinitions(t *testing.T) {
 	restoredEntry, ok := defsAfter.Get("e1")
 	if !ok || restoredEntry.Definition.Name != "ssh-watch" {
 		t.Errorf("restored watchlist-derived definition e1 = %+v, %v", restoredEntry, ok)
-	}
-}
-
-// storeFlusher is the small common surface flushStore needs --
-// watchlist.Store satisfies it, the same way closeStoreOnShutdown's own
-// interface{ Close(context.Context) error } parameter works in main.go.
-type storeFlusher interface {
-	Flush(context.Context) error
-}
-
-// flushStore forces a store's write-behind writer to persist now --
-// #400 made every store's persistence write-behind, so a Set/Upsert
-// returning is not the same as the change having reached disk yet, and
-// this test reads those files back through a completely separate
-// *DefinitionsStore/engine.MigrateDefinitions call immediately
-// afterward. Same synchronous checkpoint
-// backup_watchlist_roundtrip_test.go's own flush calls document.
-func flushStore(t *testing.T, s storeFlusher) {
-	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-	if err := s.Flush(ctx); err != nil {
-		t.Fatalf("Flush: %v", err)
 	}
 }

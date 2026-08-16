@@ -20,8 +20,8 @@
 //     default. See invert.go.
 //
 // An operator manages entries through the HTTP API (internal/api/
-// watchlist.go: entry CRUD, promote, observing toggle, and the match
-// query) and the admin-only Watchlist page in the UI
+// definitions.go: the definitions routes, which an expectation
+// definition is one kind of) and the admin-only Watchlist page in the UI
 // (frontend/src/components/Watchlist.svelte) -- #243's slice 4.
 //
 // What this package is NOT, since issue #406: an evaluator. It used to
@@ -29,32 +29,30 @@
 // backpressure policy and its own panic boundary -- a second copy of
 // machinery internal/detect had built independently, right down to two
 // constants whose comments said they mirrored their counterparts'
-// reasoning exactly. All of it is gone. Entries are expectation
-// definitions on internal/engine now (see engine.BuildExpectations), and
-// what remains here is the entry set itself, the matching rules those
-// definitions call (Match, invert.go), and Coverage. With no entries
-// configured the whole thing is still provably inert: an empty store
-// builds an empty definition set, which matches nothing.
+// reasoning exactly. All of it is gone.
+//
+// What this package is NOT, since issue #407: a store. The entry set
+// lived on here after #406 as a second persisted document holding the
+// same entries the definitions document already held, converted on every
+// registration -- the two-sources-of-truth shape docs/decisions/
+// evaluation-engine.md's Migration section exists to remove. Entries are
+// expectation definitions in engine.DefinitionsStore now (see
+// engine.EntryFromDefinition and the expectation methods beside it), and
+// what remains here is the entry *shape* (Entry and its validation) plus
+// the matching rules those definitions call (Match, invert.go). With no
+// entries configured the whole thing is still provably inert: an empty
+// definition set matches nothing.
 package watchlist
 
 import (
-	"context"
-	"encoding/json"
 	"errors"
-	"fmt"
-	"sort"
-	"sync"
 	"time"
 	"unicode"
 	"unicode/utf8"
 
-	"github.com/tomlawesome/mikroview/internal/logging"
 	"github.com/tomlawesome/mikroview/internal/matchlog"
-	"github.com/tomlawesome/mikroview/internal/persist"
 	"github.com/tomlawesome/mikroview/internal/store"
 )
-
-var persistLog = logging.New("watchlist")
 
 // Entry is one watchlist entry. Source and DestIP are both optional for
 // a non-inverted entry -- zero-value means unscoped ("any source"/"any
@@ -111,11 +109,12 @@ type Entry struct {
 	// Observing is only meaningful when Invert is true. While true,
 	// nothing this entry sees fires as a violation -- distinct
 	// destinations are recorded into Observed instead (see
-	// Store.RecordObservation), for the operator to review and promote.
-	// A new inverted entry starts Observing; Store.SetObserving is the
-	// mechanism to leave that state, on whatever cadence an operator (or
-	// slice 4's UI) decides -- this package makes no judgement about
-	// when that should happen (#243 open question 3).
+	// engine.DefinitionsStore.RecordObservation), for the operator to
+	// review and promote. A new inverted entry starts Observing; the
+	// definitions API's observing action is the mechanism to leave that
+	// state, on whatever cadence an operator (or slice 4's UI) decides --
+	// this package makes no judgement about when that should happen (#243
+	// open question 3).
 	Observing bool `json:"observing,omitempty"`
 	// IncludeStructuralNoise opts an inverted entry INTO evaluating
 	// non-unicast destinations (broadcast/multicast/link-local), which
@@ -131,9 +130,9 @@ type Entry struct {
 	// every distinct destination/port the device has touched that isn't
 	// already Permitted, with first/last-seen and a count (the same
 	// evidence shape matchlog.Record uses, so "how often" is visible
-	// before deciding). Capped at maxObservedPerEntry; see
-	// Store.RecordObservation for what happens once full. Unused for a
-	// non-inverted entry.
+	// before deciding). Capped at engine.maxObservedPerEntry; see
+	// engine.DefinitionsStore.RecordObservation for what happens once
+	// full. Unused for a non-inverted entry.
 	Observed []ObservedDest `json:"observed,omitempty"`
 
 	CreatedAt time.Time `json:"createdAt"`
@@ -156,20 +155,20 @@ type ObservedDest struct {
 	Count     uint64    `json:"count"`
 }
 
-// ErrInvalidEntry is returned by Upsert for an entry with no ID.
+// ErrInvalidEntry is returned by ValidateEntry for an entry with no ID.
 var ErrInvalidEntry = errors.New("watchlist: an entry must have an id")
 
-// ErrNoPorts is returned by Upsert for a non-inverted entry with an
-// empty Ports -- see Entry.Ports.
+// ErrNoPorts is returned by ValidateEntry for a non-inverted entry with
+// an empty Ports -- see Entry.Ports.
 var ErrNoPorts = errors.New("watchlist: a non-inverted entry must watch at least one port")
 
-// ErrInvertedRequiresSource is returned by Upsert for an inverted entry
-// with no Source -- see Entry.Invert. An inverted entry with no device
+// ErrInvertedRequiresSource is returned by ValidateEntry for an inverted
+// entry with no Source -- see Entry.Invert. An inverted entry with no device
 // to scope it would mean "nothing in particular should reach anything in
 // particular," which isn't a coherent policy to enforce.
 var ErrInvertedRequiresSource = errors.New("watchlist: an inverted entry must scope a source device")
 
-// ErrInvalidText is returned by Upsert for a Name, DestIP or Source
+// ErrInvalidText is returned by ValidateEntry for a Name, DestIP or Source
 // field containing control or format characters, or one that is too
 // long -- the same contract internal/entities.Upsert enforces on its own
 // free-text fields, for the same reason: these values render directly in
@@ -197,273 +196,14 @@ func validText(s string) bool {
 	return true
 }
 
-// storeFile is the on-disk shape, mirroring internal/entities.storeFile.
-type storeFile struct {
-	Entries []*Entry `json:"entries"`
-}
-
-// maxEntries bounds the store generously -- entries are operator-created
-// one at a time through a UI (#243 slice 4), not a high-rate hot path, so
-// this is a safety net mirroring internal/flags.Store's maxFlags, not a
-// limit expected to be hit in normal use.
-var maxEntries = 10000
-
-// Store holds every watchlist entry. The zero value is not usable;
-// construct with Open or OpenWithBackend.
-type Store struct {
-	mu sync.RWMutex
-	// wb is nil when persistence isn't configured -- see
-	// persist.WriteBehind for what it now owns: write-behind, the
-	// backend deadline, the after-write-stamped rate limit/back-off, and
-	// version bookkeeping (issue #400). Every method on it is a safe
-	// no-op on a nil receiver. Before #400 this store persisted every
-	// mutation synchronously, unconditionally, under context.Background()
-	// with no deadline -- #380's first item.
-	wb      *persist.WriteBehind
-	entries map[string]*Entry
-
-	// onChange is notified after any change to what this entry set
-	// *matches* -- see SetOnChange. Guarded by mu for writes, read under
-	// mu and then called outside it.
-	onChange func()
-}
-
-// SetOnChange registers fn to be called after any change to what this
-// entry set matches: Upsert, Delete, Reset, Promote and SetObserving.
-//
-// This exists because evaluation moved onto internal/engine (#406).
-// Expectation definitions are built from this store once and registered
-// on the engine, so -- unlike the per-event scan they replaced -- they
-// do not re-read the store on every event. Without a notification, an
-// operator's edit would sit inert until the next restart, and the
-// endpoint's own promise that a change takes effect on the very next
-// ingested event would quietly stop being true. Rebuilding on change
-// rather than re-reading per event is the whole point of the dispatch
-// pre-index: the definition set changes on an operator action, the
-// ingest path runs thousands of times a second.
-//
-// RecordObservation deliberately does NOT notify. An observation
-// changes Observed, which matchInverted never consults (only Permitted
-// gates a violation), so a rebuild would be pure cost on the one path
-// here that runs at event rate.
-//
-// fn is called with no lock held, so it is free to call back into this
-// store (List, in practice). It runs on whichever goroutine made the
-// change -- an operator's request goroutine -- so a slow fn delays that
-// request, not evaluation.
-func (s *Store) SetOnChange(fn func()) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.onChange = fn
-}
-
-// notifyChange calls the change hook, if any. Must be called with s.mu
-// NOT held -- see SetOnChange.
-func (s *Store) notifyChange() {
-	s.mu.RLock()
-	fn := s.onChange
-	s.mu.RUnlock()
-	if fn != nil {
-		fn()
-	}
-}
-
-// watchlistPersistMinInterval rate-limits the write-behind writer's
-// actual backend attempts. Most callers here are operator-interactive
-// (Upsert/Delete/Reset, through the admin-only Watchlist page), but
-// RecordObservation runs from the engine on every Observed match --
-// see its own doc comment for why it already avoids persisting a bare
-// Count/LastSeen bump. A short interval, same reasoning
-// detect.settingsPersistMinInterval gives: this store never had any
-// debounce at all before #400 (every mutation persisted synchronously),
-// so a short interval coalesces a burst of admin edits or observations
-// without meaningfully delaying anything a human is watching. A var so
-// tests that need every call to persist immediately can shrink it, same
-// convention as flags.persistMinInterval.
-var watchlistPersistMinInterval = 200 * time.Millisecond
-
-// Open loads path if it exists (a missing file is the expected first-run
-// case) and returns a Store that persists to it from then on. An empty
-// path keeps everything in-memory only, the same optional-persistence
-// contract every other small store in this codebase follows. A document
-// that exists but cannot be read or parsed is a hard error (issue #378):
-// the caller gets (nil, err) rather than a store whose live backend
-// would overwrite that document on the first write. See persist.Open.
-func Open(path string) (*Store, error) {
-	if path == "" {
-		return OpenWithBackend(nil)
-	}
-	return OpenWithBackend(persist.NewFileBackend(path))
-}
-
-// OpenWithBackend is Open against any persist.Backend -- a JSON file by
-// default, or Postgres when configured.
-func OpenWithBackend(b persist.Backend) (*Store, error) {
-	s := &Store{entries: make(map[string]*Entry)}
-
-	wb, _, err := persist.OpenWriteBehind(context.Background(), b, "the watchlist", persist.WriteBehindOptions{
-		MinInterval: watchlistPersistMinInterval,
-		OnSaveError: func(msg string) { persistLog.Error(msg) },
-		OnConflict:  func(msg string) { persistLog.Warn(msg) },
-	}, func(data []byte) error {
-		var file storeFile
-		if err := json.Unmarshal(data, &file); err != nil {
-			return err
-		}
-		for _, e := range file.Entries {
-			// A JSON array containing `null` is syntactically valid and
-			// unmarshals into a nil *Entry -- skipped here so a
-			// malformed entry can't crash startup by indexing through a
-			// nil pointer (same guard every sibling store applies).
-			if e == nil {
-				continue
-			}
-			s.entries[e.ID] = e
-		}
-		return nil
-	})
-	if err != nil {
-		return nil, err
-	}
-	s.wb = wb
-	return s, nil
-}
-
-// Flush forces this store's write-behind writer to persist whatever is
-// currently dirty now, without waiting out its usual debounce interval,
-// and blocks until that attempt finishes or ctx expires -- see
-// flags.Store.Flush's own doc comment for when this is the right call
-// (a test, or a `-backup` CLI invocation racing a still-running
-// process). A store with no backend configured (wb == nil) is a safe
-// no-op.
-func (s *Store) Flush(ctx context.Context) error {
-	return s.wb.Flush(ctx)
-}
-
-// Close stops this store's write-behind writer goroutine, flushing
-// whatever is still dirty within persist.SaveTimeout before returning --
-// main's shutdown joins on this so a change made right before exit is
-// not silently dropped. A store with no backend configured (wb == nil)
-// is a safe no-op. Not safe to call any mutating method after Close.
-func (s *Store) Close(ctx context.Context) error {
-	return s.wb.Close(ctx)
-}
-
-// List returns every entry, sorted by ID for a stable, deterministic
-// order -- callers that want a different order (creation time, name)
-// sort the result themselves rather than this store guessing which
-// order a caller wants.
-//
-// Every returned Entry is a deep copy (see clone): List's callers are
-// the HTTP handlers, which marshal the result on a request goroutine
-// after this store's lock is long gone, while the evaluation goroutine
-// is still mutating the live entries. See clone's own doc comment for
-// why the deep copy is here and deliberately not in entriesSnapshot.
-func (s *Store) List() []Entry {
-	out := s.entriesClone()
-	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
-	return out
-}
-
-// entriesClone is entriesSnapshot with a real deep copy of every entry,
-// taken while s.mu is still held -- which is the whole point: cloning
-// after the lock is released would itself read the backing arrays
-// concurrently with RecordObservation's element write, so the copy has
-// to happen inside the critical section, not after it. See Entry.clone.
-func (s *Store) entriesClone() []Entry {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
-	out := make([]Entry, 0, len(s.entries))
-	for _, e := range s.entries {
-		out = append(out, e.clone())
-	}
-	return out
-}
-
-// clone returns e with its own copies of Ports/Permitted/Observed rather
-// than slice headers still pointing at the stored entry's backing arrays
-// -- issue #376.
-//
-// The defect: entriesSnapshot's `*e` is a shallow struct copy, so those
-// three slices aliased the live entry. RecordObservation and Promote
-// (invert.go) both mutate those backing arrays *in place* -- an element
-// write for a repeat observation, an in-place compaction for a promotion
-// -- rather than replacing the slice, and both are reachable
-// concurrently with a lock-free reader: RecordObservation from the
-// evaluation goroutine, Promote from POST /api/watchlist/{id}/promote.
-// A GET /api/watchlist marshalling a List() result therefore raced them,
-// reproduced with -race as a torn Count/LastSeen pair, and as entries
-// shifting mid-iteration during a promote's compaction. That is a
-// security-relevant list an operator reads to decide what to promote,
-// so it being momentarily untrue is the top-priority category of defect
-// here, not a cosmetic one.
-//
-// Deliberately called from List and Get only -- the two places a
-// snapshot crosses a goroutine boundary -- and NOT from entriesSnapshot
-// itself, which is also the evaluator's own per-event read. That path
-// never crosses goroutines (the same goroutine reads the snapshot and
-// then calls RecordObservation, so program order already orders them),
-// and it is the measured hot path entriesSnapshot's own doc comment
-// exists for: dropping sort.Slice from it was worth 4.3ms/event at 5,000
-// entries, and adding three allocations per entry per event back would
-// spend that saving again for no correctness benefit at all.
-func (e Entry) clone() Entry {
-	if e.Ports != nil {
-		e.Ports = append([]int(nil), e.Ports...)
-	}
-	if e.Permitted != nil {
-		e.Permitted = append([]PermittedDest(nil), e.Permitted...)
-	}
-	if e.Observed != nil {
-		e.Observed = append([]ObservedDest(nil), e.Observed...)
-	}
-	return e
-}
-
-// entriesSnapshot is List without the sort, for evaluateRecovered's
-// per-event Match loop -- Match doesn't care about order, so the
-// sort.Slice call List() does purely for API/UI stability was dead
-// weight on that path, measured at up to 4.3ms/event at 5,000 entries.
-// Still copies every entry rather than returning s.entries directly:
-// the caller (evaluateRecovered) iterates the result after this
-// returns, without holding s.mu, because it calls RecordObservation
-// mid-loop, which takes its own Lock -- holding RLock across that call
-// would deadlock.
-func (s *Store) entriesSnapshot() []Entry {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
-	out := make([]Entry, 0, len(s.entries))
-	for _, e := range s.entries {
-		out = append(out, *e)
-	}
-	return out
-}
-
-// Get returns the entry with the given ID, or false if none exists.
-//
-// A deep copy, for the same reason List's is -- Get feeds the
-// create/update/promote/observing handlers' response marshalling, which
-// happens on a request goroutine without this store's lock. See clone.
-func (s *Store) Get(id string) (Entry, bool) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	e, ok := s.entries[id]
-	if !ok {
-		return Entry{}, false
-	}
-	return e.clone(), true
-}
-
-// Upsert creates or replaces the entry at e.ID, setting CreatedAt only
-// on first creation -- an update must not reset how long an entry has
-// existed. Rejects an entry with no ID, invalid text, or a scoping
-// requirement its mode doesn't satisfy (non-inverted: at least one port;
-// inverted: a source device) before it ever reaches disk, the same
-// "refuse malformed data at the write boundary" contract
-// internal/entities.Upsert follows.
-func (s *Store) Upsert(e Entry) error {
+// ValidateEntry rejects an entry with no ID, invalid text, or a scoping
+// requirement its mode does not satisfy (non-inverted: at least one
+// port; inverted: a source device) -- the write-boundary contract
+// watchlist.Store.Upsert enforced before issue #407 moved the entry set
+// into engine.DefinitionsStore. The rules did not move with the storage:
+// this is the same function body, exported so the one store that now
+// holds entries calls it rather than re-deriving it.
+func ValidateEntry(e Entry) error {
 	if e.ID == "" {
 		return ErrInvalidEntry
 	}
@@ -479,105 +219,7 @@ func (s *Store) Upsert(e Entry) error {
 			return ErrInvalidText
 		}
 	}
-
-	if err := s.upsertLocking(e); err != nil {
-		return err
-	}
-	s.notifyChange()
 	return nil
-}
-
-// upsertLocking is Upsert's critical section, split out so notifyChange
-// runs after the lock is released -- see SetOnChange.
-func (s *Store) upsertLocking(e Entry) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	existing, exists := s.entries[e.ID]
-	if !exists && len(s.entries) >= maxEntries {
-		return fmt.Errorf("watchlist: at the %d-entry limit", maxEntries)
-	}
-	if exists {
-		e.CreatedAt = existing.CreatedAt
-	} else if e.CreatedAt.IsZero() {
-		e.CreatedAt = time.Now()
-	}
-	cp := e
-	s.entries[e.ID] = &cp
-	s.persistLocked()
-	return nil
-}
-
-// Delete removes the entry with the given ID. Deleting an ID that
-// doesn't exist is a no-op, not an error -- the caller's intent (this ID
-// should not be in the store) is already satisfied.
-func (s *Store) Delete(id string) {
-	if !s.deleteLocking(id) {
-		return
-	}
-	s.notifyChange()
-}
-
-func (s *Store) deleteLocking(id string) bool {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if _, ok := s.entries[id]; !ok {
-		return false
-	}
-	delete(s.entries, id)
-	s.persistLocked()
-	return true
-}
-
-// Reset wipes every entry -- the watchlist half of #243 slice 5's "nuke"
-// action: a deliberate, confirm-gated, fully destructive reset back to a
-// fresh look at the router. The suggestion candidate tracking
-// (internal/suggest) is a separate store; the caller (internal/api) is
-// responsible for wiping both together, since nuking one without the
-// other would leave every candidate pointing at an EntryID that no
-// longer exists.
-func (s *Store) Reset() {
-	s.resetLocking()
-	s.notifyChange()
-}
-
-func (s *Store) resetLocking() {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.entries = make(map[string]*Entry)
-	s.persistLocked()
-}
-
-// persistLocked encodes the current state and hands it to the
-// write-behind writer (see persist.WriteBehind), which coalesces it
-// with whatever else is pending and persists it off this goroutine,
-// under its own deadline and rate limit -- closing #380's first item
-// for this store (every persist call used to run under
-// context.Background() with no deadline, synchronously, on whichever
-// goroutine called Upsert/Delete/Reset/RecordObservation/Promote/
-// SetObserving). Marshal failures are swallowed rather than surfaced to
-// the caller: the in-memory state (which every read goes through) stays
-// correct either way, so a transient disk issue degrades to "won't
-// survive a restart right now" rather than breaking live use. Must be
-// called with s.mu already held -- see flags.Store.persistLocked's own
-// doc comment for the "lock covers the encode, not the backend call"
-// contract this mirrors.
-func (s *Store) persistLocked() {
-	if s.wb == nil {
-		return
-	}
-	entries := make([]*Entry, 0, len(s.entries))
-	for _, e := range s.entries {
-		entries = append(entries, e)
-	}
-	sort.Slice(entries, func(i, j int) bool { return entries[i].ID < entries[j].ID })
-
-	data, err := json.MarshalIndent(storeFile{Entries: entries}, "", "  ")
-	if err != nil {
-		persistLog.Error(fmt.Sprintf("encoding the watchlist for persistence failed: %v -- this change exists only in memory and will be lost on restart", err))
-		return
-	}
-	s.wb.MarkDirty(data)
 }
 
 // isTrackableConnState is the "this is an attempt, not an established
