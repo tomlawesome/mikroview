@@ -629,3 +629,52 @@ func convertInvertedEntry(e *watchlist.Entry, name string) (Definition, error) {
 		Provenance: Provenance{Origin: ProvenanceShipped},
 	}, nil
 }
+
+// SeedShippedDefinitions makes sure every shipped detector definition
+// actually exists in s, adding any that are missing at their shipped
+// defaults (with enabled/scope taken from settingsDoc). Definitions
+// already present are left completely alone -- an operator's edits, and
+// the migration's own output, both win over a default.
+//
+// This is deliberately separate from MigrateDefinitions, and runs on
+// every boot rather than once. Migration answers "what did this
+// deployment have before the definitions store existed"; this answers
+// "does the shipped catalogue this binary evaluates actually exist", and
+// the two are not the same question. Issue #405 is what made the
+// difference matter: before it, an absent or unwritable definitions
+// document cost nothing, because internal/detect evaluated every
+// detector from its own settings store regardless. Once a detector's
+// evaluation logic lives here, a definition that does not exist is a
+// detector that does not run -- and a deployment that simply never
+// configured engine.definitionsStorePath (nothing in the config file
+// requires it) would silently lose every ported detector, with no
+// symptom beyond flags quietly not appearing. That is exactly the
+// "absence of detection presented as absence of threat" failure #380's
+// first item describes.
+//
+// Seeding is therefore not a convenience: it is what makes the shipped
+// catalogue a property of the binary rather than of whether persistence
+// happens to be configured. A deployment with no definitions backend at
+// all still gets every shipped definition, in memory, for the life of
+// the process -- the same "empty path disables persistence, not the
+// feature" contract every other store in this codebase follows.
+func SeedShippedDefinitions(s *DefinitionsStore, settingsDoc map[detect.DetectorName]detect.Settings, cfg detect.Config) error {
+	defs := make(map[string]Definition, len(shippedDetectors))
+	if err := convertDetectSettings(settingsDoc, cfg, defs); err != nil {
+		return fmt.Errorf("engine: seeding shipped definitions: %w", err)
+	}
+	for _, sd := range shippedDetectors {
+		id := string(sd.name)
+		def, ok := defs[id]
+		if !ok {
+			continue
+		}
+		if _, exists := s.Get(id); exists {
+			continue
+		}
+		if err := s.Upsert(def); err != nil {
+			return fmt.Errorf("engine: seeding shipped definition %q: %w", id, err)
+		}
+	}
+	return nil
+}
