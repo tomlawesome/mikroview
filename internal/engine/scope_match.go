@@ -50,6 +50,25 @@ func scopeMatches(sc Scope, e store.Event) bool {
 		matchesList(sc.Rules, sc.RulesMode, e.RuleLabel)
 }
 
+// scopeMatchesSource is internal/detect.scopeMatchesHost unchanged: the
+// hosts-and-classification half of a Scope, applied to a source address
+// alone.
+//
+// It exists because scopeMatches above deliberately checks every axis
+// against every event, and a handful of ported programmatic definitions
+// cannot use that: internal/detect applied their Ports axis at *query*
+// time -- narrowing which distinct destination ports count toward a
+// breadth threshold -- rather than as a gate on whether the event was
+// tracked at all (see detect.Scope's own per-detector field-usage
+// table). low_slow_scan is the case in this port: gating the whole event
+// on the Ports axis would also change its host-breadth count and its
+// drop ratio, which are computed from the same tracked events, so the
+// query-time application is reproduced literally rather than folded into
+// the uniform gate.
+func scopeMatchesSource(sc Scope, ip string) bool {
+	return matchesHostList(sc.Hosts, sc.HostsMode, ip) && scopeClassificationMatches(sc.Classification, ip)
+}
+
 // matchesHostList is internal/detect.matchesHostList unchanged: reports
 // whether ip is admitted by list under mode, an entry being either a bare
 // IP or a CIDR (see hostEntryMatchesScope).

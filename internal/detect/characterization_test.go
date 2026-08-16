@@ -64,31 +64,14 @@ import (
 // internal/detect -- see shipped_declarative.go's buildPortScanDefinition).
 // Every pinned value carried over unchanged.
 
-// TestCharacterizationLowSlowScanFiresAtDefaultWindowScale runs
-// observeLowSlowScan's three rings (ports/hosts/drops) at
-// DefaultConfig's real 3-hour LowSlowScanWindow, where
-// bucketSpanFor(3h) == 3m -- a much coarser bucket than the port-scan
-// test above, exercising the case this migration cares most about
-// (hours-scale windows that would be expensive to linear-rescan on
-// every event).
-func TestCharacterizationLowSlowScanFiresAtDefaultWindowScale(t *testing.T) {
-	cfg := DefaultConfig()
-	cfg.PortScanThreshold = 1000
-	cfg.ActivitySpikeThreshold = 1000
-	cfg.RepeatedDropsThreshold = 1000
-	d, fs := newTestDetector(t, cfg)
-
-	t0 := time.Now()
-	// One paced, mostly-refused attempt every ~13 minutes -- comfortably
-	// spaced past LowSlowScanMinObservation (45m) and past a 3-minute
-	// bucket span by the time enough samples accumulate to clear the
-	// port/host breadth thresholds (8/5).
-	feedPacedScan(d, "203.0.113.9", cfg.LowSlowScanPortThreshold+2, 13*time.Minute, store.ActionDrop, t0)
-
-	if findLowSlowFlag(fs) == nil {
-		t.Fatalf("expected a low_slow_scan flag at default-config scale, got %+v", fs.List())
-	}
-}
+// TestCharacterizationLowSlowScanFiresAtDefaultWindowScale moved to
+// internal/engine/shipped_low_slow_scan_test.go's
+// TestShippedLowSlowScanFiresAtDefaultWindowScale (issue #405:
+// low_slow_scan is now a shipped programmatic definition evaluated by
+// internal/engine -- see shipped_low_slow_scan.go). The hours-scale
+// window this test exists to exercise (bucketSpanFor(3h) == 3m) is
+// unchanged: internal/engine's DistinctRing/CountRing are
+// internal/detect's own rings, lifted.
 
 // TestCharacterizationDistributedBruteForceRequiresDistinctSources used
 // to document a deliberate divergence from the migration plan's summary
@@ -471,76 +454,14 @@ func TestCharacterizationInternalRecon_FieldsRefireClearRevive(t *testing.T) {
 // 9. low_slow_scan
 // ---------------------------------------------------------------------------
 
-// TestCharacterizationLowSlowScan_FieldsRefireClearRevive pins
-// low_slow_scan's boundary at DefaultConfig's real thresholds
-// (PortThreshold=8, HostThreshold=5, MinObservation=45m,
-// DropRatio=0.8, BaselineMultiplier=3, Window=3h). feedPacedScan (see
-// low_slow_scan_test.go, same package) gives each step a distinct port
-// AND a distinct host, so port/host breadth grow together and
-// PortThreshold(8) -- the higher of the two -- is what actually gates
-// the boundary. overshootConfidence(portCount, PortThreshold) is 0 right
-// at that boundary and is provably the minimum of the four axis
-// confidences combined (see observeLowSlowScan), which is what makes
-// the boundary event's Confidence a clean, hand-verifiable 0 despite the
-// EMA baseline/z-score terms not being round numbers.
-func TestCharacterizationLowSlowScan_FieldsRefireClearRevive(t *testing.T) {
-	cfg := DefaultConfig()
-	cfg.PortScanThreshold = 100000
-	cfg.ActivitySpikeThreshold = 100000
-	cfg.RepeatedDropsThreshold = 100000
-	d, fs := newTestDetector(t, cfg)
-	ip := "203.0.113.9"
-	t0 := time.Now()
-
-	// 7 steps: portCount=hostCount=7 < PortThreshold(8) -- breadth not
-	// cleared yet, so no flag regardless of anything else.
-	feedPacedScan(d, ip, 7, 10*time.Minute, store.ActionDrop, t0)
-	if got := flagOfType(t, fs, flags.TypeLowSlowScan); got != nil {
-		t.Fatalf("expected no flag at portCount=hostCount=7, got %+v", got)
-	}
-
-	// The 8th step clears every axis at once.
-	last := t0.Add(7 * 10 * time.Minute)
-	d.Observe(lowSlowEvt(ip, "192.168.50.8", 10007, store.ActionDrop, last))
-	f := flagOfType(t, fs, flags.TypeLowSlowScan)
-	if f == nil {
-		t.Fatal("expected a flag at exactly portCount=hostCount=8")
-	}
-	if f.Target != ip {
-		t.Errorf("Target = %q, want %q", f.Target, ip)
-	}
-	if f.Confidence == nil || *f.Confidence != 0 {
-		t.Errorf("Confidence at the boundary = %v, want 0 (portConfidence=overshootConfidence(8,8)=0 is the minimum of the four axis confidences)", f.Confidence)
-	}
-	wantDetailPrefix := "8 distinct ports, 8 distinct hosts over 3h0m0s (100% drop/reject, "
-	if len(f.Detail) < len(wantDetailPrefix) || f.Detail[:len(wantDetailPrefix)] != wantDetailPrefix {
-		t.Errorf("Detail = %q, want prefix %q", f.Detail, wantDetailPrefix)
-	}
-	assertFloatSigmaTail(t, f.Detail[len(wantDetailPrefix):], " above this source's normal breadth)")
-	if len(f.Evidence.Ports) != 8 || len(f.Evidence.Hosts) != 8 {
-		t.Errorf("Evidence = %+v, want 8 ports and 8 hosts", f.Evidence)
-	}
-
-	// Re-fire.
-	d.Observe(lowSlowEvt(ip, "192.168.50.9", 10008, store.ActionDrop, t0.Add(8*10*time.Minute)))
-	f2 := flagOfType(t, fs, flags.TypeLowSlowScan)
-	if f2 == nil || f2.Count != 2 {
-		t.Fatalf("expected Count=2, got %+v", f2)
-	}
-
-	// Clear + revive.
-	if !fs.Clear(f2.ID, t0.Add(9*10*time.Minute)) {
-		t.Fatal("expected Clear to succeed")
-	}
-	d.Observe(lowSlowEvt(ip, "192.168.50.10", 10009, store.ActionDrop, t0.Add(10*10*time.Minute)))
-	f3 := flagOfType(t, fs, flags.TypeLowSlowScan)
-	if f3 == nil || f3.Cleared {
-		t.Fatalf("expected the flag to revive as active, got %+v", f3)
-	}
-	if f3.Count != 1 {
-		t.Errorf("Count after revival = %d, want 1", f3.Count)
-	}
-}
+// TestCharacterizationLowSlowScan_FieldsRefireClearRevive moved to
+// internal/engine/shipped_low_slow_scan_test.go's
+// TestShippedLowSlowScan_FieldsRefireClearRevive (issue #405). Every
+// pinned value carried over unchanged: the boundary landing exactly on
+// portThreshold=8, Target, the hand-verifiable Confidence of 0 (the
+// weakest-clearing axis, overshootConfidence(8,8), is what bounds it),
+// the byte-for-byte Detail prefix, the σ-tail shape, the 8-port/8-host
+// Evidence, and the re-fire/clear/revive sequence.
 
 // ---------------------------------------------------------------------------
 // 10. off_hours_activity
