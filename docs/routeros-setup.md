@@ -89,7 +89,8 @@ from the rule's `log-prefix`, using a compact convention:
 <ACTION>|<rule-slug>|
 ```
 
-- `A` = accept, `D` = drop, `R` = reject, `L` = log-only/passthrough
+- `A` = accept, `D` = drop, `R` = reject, `L` = log-only/passthrough,
+  `M` = mangle mark rule, `N` = NAT
 - `rule-slug` is a short, human-meaningful label (lowercase, hyphens)
 - **the trailing `|` is required** — RouterOS concatenates the log-prefix
   directly onto the log message with no guaranteed separating space, so
@@ -115,9 +116,10 @@ rule number with `/ip firewall filter print`, then:
 ```
 
 (`A` here because that example rule accepts traffic — use `D`/`R`/`L`
-for a drop/reject/log-only rule instead.) Repeat for whichever rules you
-want to see in the live view — your default drop rule and a couple of
-accept rules is a good starting point.
+for a drop/reject/log-only rule instead, and `M`/`N` for the mangle and
+NAT rules covered below.) Repeat for whichever rules you want to see in
+the live view — your default drop rule and a couple of accept rules is a
+good starting point.
 
 Rules without a `log-prefix` (or without `log=yes` at all) still work —
 they show up with action "unknown" and no rule label, since MikroView has
@@ -149,8 +151,12 @@ about:
 
 ```
 /system logging add topics=firewall,info action=mikroview
-/ip firewall nat set <rule-number> log=yes log-prefix="A|port-fwd|"
+/ip firewall nat set <rule-number> log=yes log-prefix="N|port-fwd|"
 ```
+
+`N`, not `A`: a NAT rule translates an address, it does not decide
+whether the packet lives, so it gets its own action — `natted` — rather
+than borrowing a filter verdict it never made.
 
 Events from a NAT rule show up with `chain` set to `srcnat` or `dstnat`
 (whichever the rule belongs to). If RouterOS includes its translated-
@@ -161,6 +167,35 @@ fixed format for that annotation, so MikroView parses it defensively
 fixed layout) — if a translated address ever looks wrong for your
 RouterOS version, the untouched raw line is still available in the row's
 tooltip for comparison.
+
+### Mangle rules and policy routing (optional)
+
+Policy routing — mangle rules marking connections, routes or packets to
+steer traffic into a VPN tunnel or across a second WAN — logs the same
+way, with `M`:
+
+```
+/ip firewall mangle set <rule-number> log=yes log-prefix="M|vpn-route|"
+```
+
+Those events show up with action `marked`, and the action filter will
+narrow the live view to them.
+
+`M` is not optional decoration here, it is the *only* thing that
+identifies the rule. A mangle log line is byte-for-byte the shape of a
+filter line — the same chain names, the same fields — and RouterOS
+prints neither the action nor the mark it set. Without the prefix
+MikroView has nothing to read the answer off, so the events land in
+"unknown" alongside genuinely unparseable ones. (The one exception,
+which needs no tagging, is a `srcnat`/`dstnat` line carrying RouterOS's
+translated-address annotation: that line states the translation, so
+MikroView reads `natted` straight off it.)
+
+**Mind the volume before you turn this on.** `mark-packet` rules match
+every packet rather than every connection, which is your whole traffic
+throughput arriving as log lines — the same trap as logging the
+established/related accept rule. Start with the `mark-connection` or
+`mark-routing` rule at the head of the chain, not all of them.
 
 ## 4. Push router state for names and rule lookups (optional)
 
