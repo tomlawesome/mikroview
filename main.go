@@ -7,6 +7,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"crypto/tls"
+	"errors"
 	"fmt"
 	"log/slog"
 	"math/rand/v2"
@@ -694,6 +695,52 @@ func main() {
 	engineState, err := engine.OpenStateStoreWithBackend(engineStateBackend)
 	mustOpenStore(engineStateLog, err)
 
+	// definitions (#404) is the one document holding every definition --
+	// shipped detectors, watchlist expectations, and eventually
+	// builder-authored custom ones. On a not-yet-existing document, it is
+	// seeded once from internal/detect's settings store and
+	// internal/watchlist's entries store (engine.MigrateDefinitions),
+	// fail-closed and non-destructive: neither old store's document is
+	// touched, and both keep working exactly as before until #405/#406
+	// port their evaluation logic onto this chassis and retire them. A
+	// second backend handle for the detector-settings store is opened
+	// here purely to read its document for migration -- watchlistBackend
+	// above is reused as-is; detect.OpenSettingsStoreWithBackend below
+	// opens its own handle for live use the same way it always has.
+	// persistence.backendFor is safe to call more than once for the same
+	// store name (its one-time Postgres adoption step is itself
+	// idempotent -- see storage.backendFor's own doc comment).
+	definitionsLog := logging.New("definitions")
+	definitionsBackend, err := persistence.backendFor(bootCtx, "definitions", cfg.Engine.DefinitionsStorePath)
+	if err != nil {
+		definitionsLog.Warn(err.Error())
+	}
+	migrationDetectorBackend, err := persistence.backendFor(bootCtx, "detector_settings", cfg.Flags.DetectorSettingsStorePath)
+	if err != nil {
+		definitionsLog.Warn(err.Error())
+	}
+	if _, err := engine.MigrateDefinitions(bootCtx, definitionsBackend, migrationDetectorBackend, watchlistBackend); err != nil {
+		if errors.Is(err, engine.ErrMigrationWriteFailed) {
+			// Nothing was lost -- see ErrMigrationWriteFailed's own doc
+			// comment: neither source was touched, and the definitions
+			// document still does not exist either way, so this is
+			// retried automatically on the next restart once whatever
+			// blocked the write (a missing/unwritable data directory, a
+			// momentarily unreachable Postgres) is fixed. Same
+			// log-and-continue severity every other store here gives an
+			// ordinary "can't currently reach my backend" failure.
+			definitionsLog.Warn(err.Error() + " -- continuing without a migrated definitions store; this is retried automatically on the next restart")
+		} else {
+			// An unreadable/corrupt source, or a conversion that could
+			// not be trusted to be complete -- issue #404's fail-closed
+			// contract: refuse to start rather than risk ever writing a
+			// partial or wrong definitions document.
+			mustOpenStore(definitionsLog, err)
+		}
+	}
+	definitions, err := engine.OpenDefinitionsStoreWithBackend(definitionsBackend)
+	mustOpenStore(definitionsLog, err)
+
 	detectCfg := detect.Config{
 		PortScanThreshold:        cfg.Flags.PortScanThreshold,
 		PortScanWindow:           cfg.Flags.PortScanWindow,
@@ -1356,7 +1403,7 @@ func main() {
 	// MinInterval-debounced write could be (issue #400). Best-effort:
 	// each store already logs its own save failures, so a Close error
 	// here is just the shutdown-budget case, worth one line, not fatal.
-	closeStoreOnShutdown(fs, macRegistry, ru, detectorSettings, watchlistStore, engineState)
+	closeStoreOnShutdown(fs, macRegistry, ru, detectorSettings, watchlistStore, engineState, definitions)
 }
 
 // closeStoreOnShutdown flushes every write-behind-backed store passed to
