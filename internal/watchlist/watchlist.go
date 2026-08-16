@@ -22,10 +22,19 @@
 // An operator manages entries through the HTTP API (internal/api/
 // watchlist.go: entry CRUD, promote, observing toggle, and the match
 // query) and the admin-only Watchlist page in the UI
-// (frontend/src/components/Watchlist.svelte) -- #243's slice 4. This
-// package itself remains fully wired into the live ingest path (see
-// main.go) and, with no entries configured, provably inert -- an empty
-// Store matches nothing.
+// (frontend/src/components/Watchlist.svelte) -- #243's slice 4.
+//
+// What this package is NOT, since issue #406: an evaluator. It used to
+// carry its own event queue, its own worker goroutine, its own
+// backpressure policy and its own panic boundary -- a second copy of
+// machinery internal/detect had built independently, right down to two
+// constants whose comments said they mirrored their counterparts'
+// reasoning exactly. All of it is gone. Entries are expectation
+// definitions on internal/engine now (see engine.BuildExpectations), and
+// what remains here is the entry set itself, the matching rules those
+// definitions call (Match, invert.go), and Coverage. With no entries
+// configured the whole thing is still provably inert: an empty store
+// builds an empty definition set, which matches nothing.
 package watchlist
 
 import (
@@ -212,12 +221,57 @@ type Store struct {
 	// with no deadline -- #380's first item.
 	wb      *persist.WriteBehind
 	entries map[string]*Entry
+
+	// onChange is notified after any change to what this entry set
+	// *matches* -- see SetOnChange. Guarded by mu for writes, read under
+	// mu and then called outside it.
+	onChange func()
+}
+
+// SetOnChange registers fn to be called after any change to what this
+// entry set matches: Upsert, Delete, Reset, Promote and SetObserving.
+//
+// This exists because evaluation moved onto internal/engine (#406).
+// Expectation definitions are built from this store once and registered
+// on the engine, so -- unlike the per-event scan they replaced -- they
+// do not re-read the store on every event. Without a notification, an
+// operator's edit would sit inert until the next restart, and the
+// endpoint's own promise that a change takes effect on the very next
+// ingested event would quietly stop being true. Rebuilding on change
+// rather than re-reading per event is the whole point of the dispatch
+// pre-index: the definition set changes on an operator action, the
+// ingest path runs thousands of times a second.
+//
+// RecordObservation deliberately does NOT notify. An observation
+// changes Observed, which matchInverted never consults (only Permitted
+// gates a violation), so a rebuild would be pure cost on the one path
+// here that runs at event rate.
+//
+// fn is called with no lock held, so it is free to call back into this
+// store (List, in practice). It runs on whichever goroutine made the
+// change -- an operator's request goroutine -- so a slow fn delays that
+// request, not evaluation.
+func (s *Store) SetOnChange(fn func()) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.onChange = fn
+}
+
+// notifyChange calls the change hook, if any. Must be called with s.mu
+// NOT held -- see SetOnChange.
+func (s *Store) notifyChange() {
+	s.mu.RLock()
+	fn := s.onChange
+	s.mu.RUnlock()
+	if fn != nil {
+		fn()
+	}
 }
 
 // watchlistPersistMinInterval rate-limits the write-behind writer's
 // actual backend attempts. Most callers here are operator-interactive
 // (Upsert/Delete/Reset, through the admin-only Watchlist page), but
-// RecordObservation runs from Evaluator on every Observed match --
+// RecordObservation runs from the engine on every Observed match --
 // see its own doc comment for why it already avoids persisting a bare
 // Count/LastSeen bump. A short interval, same reasoning
 // detect.settingsPersistMinInterval gives: this store never had any
@@ -426,6 +480,16 @@ func (s *Store) Upsert(e Entry) error {
 		}
 	}
 
+	if err := s.upsertLocking(e); err != nil {
+		return err
+	}
+	s.notifyChange()
+	return nil
+}
+
+// upsertLocking is Upsert's critical section, split out so notifyChange
+// runs after the lock is released -- see SetOnChange.
+func (s *Store) upsertLocking(e Entry) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -448,13 +512,21 @@ func (s *Store) Upsert(e Entry) error {
 // doesn't exist is a no-op, not an error -- the caller's intent (this ID
 // should not be in the store) is already satisfied.
 func (s *Store) Delete(id string) {
+	if !s.deleteLocking(id) {
+		return
+	}
+	s.notifyChange()
+}
+
+func (s *Store) deleteLocking(id string) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if _, ok := s.entries[id]; !ok {
-		return
+		return false
 	}
 	delete(s.entries, id)
 	s.persistLocked()
+	return true
 }
 
 // Reset wipes every entry -- the watchlist half of #243 slice 5's "nuke"
@@ -465,6 +537,11 @@ func (s *Store) Delete(id string) {
 // other would leave every candidate pointing at an EntryID that no
 // longer exists.
 func (s *Store) Reset() {
+	s.resetLocking()
+	s.notifyChange()
+}
+
+func (s *Store) resetLocking() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.entries = make(map[string]*Entry)
@@ -503,13 +580,14 @@ func (s *Store) persistLocked() {
 	s.wb.MarkDirty(data)
 }
 
-// isTrackableConnState mirrors internal/detect's own private copy of the
-// same check (detect.go's isTrackableConnState): without it, a busy
-// accepted service's own return traffic would swamp a watchlist entry
-// the same way it would the fast port-scan detector. Not shared as a
-// single exported helper across packages -- same "each package keeps its
-// own small private copy" precedent internal/detect's own doc comment on
-// isPublic already sets for this codebase.
+// isTrackableConnState is the "this is an attempt, not an established
+// conversation's return traffic" filter: RouterOS commonly logs both
+// directions of an established connection on one stateful accept rule,
+// and without this a busy accepted service's own return traffic would
+// swamp a watchlist entry. internal/engine expresses the same rule as a
+// declarative condition on its expectation definitions (connectionState
+// in {"", "new"} -- see BuildExpectationDefinition); this copy is what
+// the inverted state machine below still applies directly.
 func isTrackableConnState(e store.Event) bool {
 	return e.ConnState == "" || e.ConnState == "new"
 }
@@ -557,7 +635,7 @@ type Outcome int
 const (
 	// NoMatch: this entry has nothing to say about this event -- wrong
 	// port, wrong source, a permitted inverted destination, or any of
-	// the other reasons covered below. The Evaluator takes no action.
+	// the other reasons covered below. The caller takes no action.
 	NoMatch Outcome = iota
 	// Violation: record this to internal/matchlog -- a non-inverted
 	// entry's watched port was reached, or an inverted entry's device
@@ -565,7 +643,7 @@ const (
 	Violation
 	// Observed: an inverted entry, still Observing, saw its device reach
 	// a destination that is neither permitted nor dismissed yet. The
-	// Evaluator records this as a candidate (Store.RecordObservation)
+	// the caller records this as a candidate (Store.RecordObservation)
 	// rather than a violation -- nothing fires while observing.
 	Observed
 )
