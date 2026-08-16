@@ -8,27 +8,32 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tomlawesome/mikroview/internal/detect"
 	"github.com/tomlawesome/mikroview/internal/flags"
 	"github.com/tomlawesome/mikroview/internal/store"
 	"github.com/tomlawesome/mikroview/internal/watchlist"
 )
 
 // BenchmarkIngest is issue #405's own budget gate, and the successor to
-// internal/detect/dispatch_bench_test.go's BenchmarkDispatch for as long
-// as detection is split across two packages.
+// internal/detect/dispatch_bench_test.go's BenchmarkDispatch, which was
+// deleted with that package.
 //
-// It exists because BenchmarkDispatch measures a shrinking thing. That
-// benchmark drives detect.Detector.Observe, and every detector #405 ports
-// leaves that path -- so its ns/op falls with each commit for reasons
-// that have nothing to do with the ingest cost an operator actually pays.
-// Comparing it against #397's recorded baseline mid-port would flatter
-// the port by measuring less of it. This benchmark drives BOTH halves per
-// event, exactly as main.go's ingest goroutine does: Detector.Observe for
-// the detectors internal/detect still owns, and a DeclarativeSet holding
-// every shipped declarative definition for the ones this package now
-// owns. Its ns/op is therefore directly comparable against #397's
-// recorded figures for the whole detection path.
+// It exists because BenchmarkDispatch measured a shrinking thing. That
+// benchmark drove detect.Detector.Observe, and every detector #405 ported
+// left that path -- so its ns/op fell with each commit for reasons that
+// had nothing to do with the ingest cost an operator actually pays.
+// Comparing it against #397's recorded baseline mid-port would have
+// flattered the port by measuring less of it. This benchmark drives every
+// shipped definition per event, exactly as main.go's ingest goroutine
+// does: one DeclarativeSet holding every declarative definition (so its
+// dispatch pre-index is exercised) plus each programmatic definition in
+// turn. Its ns/op is therefore directly comparable against #397's
+// recorded figures for the whole detection path -- with one caveat now
+// that the port is finished, stated here rather than left to be
+// rediscovered: #397's figures included internal/detect's own per-event
+// work, and internal/detect no longer exists. The comparison is still
+// like-for-like in the only sense that matters -- both numbers are "what
+// one event costs the ingest path" -- but the composition of that number
+// has changed, and a drop is expected rather than suspicious.
 //
 // The budget, unchanged from #397: mikroview's measured burst rate is
 // ~3,900 events/sec, so the per-event budget is 1e9/3900 =~ 256,410 ns.
@@ -50,7 +55,6 @@ func BenchmarkIngest(b *testing.B) {
 			if err != nil {
 				b.Fatalf("flags.Open: %v", err)
 			}
-			d := detect.NewWithSettings(detect.DefaultConfig(), fs, detect.AllEnabledSettingsStore())
 			set := benchShippedDeclarativeSet(b, fs)
 			prog := benchShippedProgrammaticDefs(b, fs)
 			wl := buildIngestBenchWatchlist(b, watchlistEntries)
@@ -64,7 +68,6 @@ func BenchmarkIngest(b *testing.B) {
 				e := events[i%poolSize]
 				e.ReceivedAt = base.Add(time.Duration(i) * step)
 
-				d.Observe(e)
 				set.Evaluate(e)
 				for _, p := range prog {
 					p.Evaluate(e)
@@ -84,7 +87,7 @@ func BenchmarkIngest(b *testing.B) {
 // dispatch pre-index is exercised too).
 func benchShippedDeclarativeSet(b *testing.B, fs *flags.Store) *DeclarativeSet {
 	b.Helper()
-	cfg := detect.DefaultConfig()
+	cfg := DefaultShippedDefaults()
 	var defs []*DeclarativeDefinition
 	for _, sd := range shippedDetectors {
 		if sd.kind != KindDeclarative {
@@ -92,11 +95,11 @@ func benchShippedDeclarativeSet(b *testing.B, fs *flags.Store) *DeclarativeSet {
 		}
 		params, err := ValidateParams(sd.schema, sd.params(cfg))
 		if err != nil {
-			b.Fatalf("%s: default params: %v", sd.name, err)
+			b.Fatalf("%s: default params: %v", sd.id, err)
 		}
 		dd, err := BuildShippedDeclarativeDefinition(Definition{
-			ID:          string(sd.name),
-			Name:        shippedDetectorDisplayNames[sd.name],
+			ID:          sd.id,
+			Name:        shippedDetectorDisplayNames[sd.id],
 			Intent:      IntentDetection,
 			Kind:        KindDeclarative,
 			Enabled:     true,
@@ -105,7 +108,7 @@ func benchShippedDeclarativeSet(b *testing.B, fs *flags.Store) *DeclarativeSet {
 			Provenance:  Provenance{Origin: ProvenanceShipped, ShippedParams: params},
 		})
 		if err != nil {
-			b.Fatalf("%s: BuildShippedDeclarativeDefinition: %v", sd.name, err)
+			b.Fatalf("%s: BuildShippedDeclarativeDefinition: %v", sd.id, err)
 		}
 		dd.OnRoutedEmission = FlagsSink(fs)
 		defs = append(defs, dd)
@@ -127,22 +130,22 @@ func benchShippedDeclarativeSet(b *testing.B, fs *flags.Store) *DeclarativeSet {
 // this benchmark should show.
 func benchShippedProgrammaticDefs(b *testing.B, fs *flags.Store) []Evaluated {
 	b.Helper()
-	cfg := detect.DefaultConfig()
+	cfg := DefaultShippedDefaults()
 	var out []Evaluated
 	for _, sd := range shippedDetectors {
 		if sd.kind != KindProgrammatic {
 			continue
 		}
-		if _, ok := shippedProgrammaticBuilders[string(sd.name)]; !ok {
+		if _, ok := shippedProgrammaticBuilders[sd.id]; !ok {
 			continue // not ported yet -- internal/detect still evaluates it
 		}
 		params, err := ValidateParams(sd.schema, sd.params(cfg))
 		if err != nil {
-			b.Fatalf("%s: default params: %v", sd.name, err)
+			b.Fatalf("%s: default params: %v", sd.id, err)
 		}
 		pd, err := BuildShippedProgrammaticDefinition(Definition{
-			ID:          string(sd.name),
-			Name:        shippedDetectorDisplayNames[sd.name],
+			ID:          sd.id,
+			Name:        shippedDetectorDisplayNames[sd.id],
 			Intent:      IntentDetection,
 			Kind:        KindProgrammatic,
 			Enabled:     true,
@@ -151,7 +154,7 @@ func benchShippedProgrammaticDefs(b *testing.B, fs *flags.Store) []Evaluated {
 			Provenance:  Provenance{Origin: ProvenanceShipped, ShippedParams: params},
 		}, ShippedDeps{})
 		if err != nil {
-			b.Fatalf("%s: BuildShippedProgrammaticDefinition: %v", sd.name, err)
+			b.Fatalf("%s: BuildShippedProgrammaticDefinition: %v", sd.id, err)
 		}
 		if sink, ok := pd.(interface{ SetSink(func(RoutedEmission)) }); ok {
 			sink.SetSink(FlagsSink(fs))

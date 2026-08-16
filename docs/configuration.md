@@ -591,12 +591,13 @@ against public IPs a human clicks "investigate" on), mikroview also
 maintains a small local cache of known-malicious CIDR ranges from a
 vetted menu of free threat-intel feeds, and checks every ingested
 event's source IP against it — raising a `known_bad_ip` flag directly on
-a match, regardless of any behavioral threshold. This isn't a
-"detector" in the `flags.detectors`/scope sense above (see
-"Per-detector toggles"): there's no threshold to tune and no scope
-narrower than "does this exact IP fall in a range on the list," so it
-has no matching entry there, the same precedent `new_device`/
-`stale_rule` already set.
+a match, regardless of any behavioral threshold. It isn't listed under
+`flags.detectors` above (see "Per-detector toggles"): there's no
+threshold to tune and no scope narrower than "does this exact IP fall in
+a range on the list," so it has no matching entry there, the same
+precedent `new_device` already set. It *is* a definition the engine
+evaluates like any other, with its own confidence as a tunable
+parameter; it simply has no entry on the detector-toggles page yet.
 
 ```yaml
 blocklist:
@@ -1636,14 +1637,21 @@ together:
 
 - **`config.yaml`** sets the *starting point* on boot (`flags.detectors`
   below).
-- **A live, admin-only UI** ("Detectors" in the toolbar, visible once
-  signed in as an admin) can override that starting point without a
-  restart -- takes effect on the very next ingested event. A live change
-  persists to `detectorSettingsStorePath` (same optional-persistence
-  contract as `flags.storePath` above: left unset, a live toggle still
-  works, it just resets to `config.yaml`'s values on restart) and, once
-  persisted, is what future restarts seed from -- `config.yaml`'s values
-  are only ever consulted the *first* time that file doesn't exist yet.
+- **An admin-only UI** ("Detectors" in the toolbar, visible once signed
+  in as an admin) can override that starting point. A change persists to
+  the definitions store (`engine.definitionsStorePath`) and is what
+  future restarts read -- `config.yaml`'s values are only ever consulted
+  for a detector the definitions store does not already hold.
+
+  **Takes effect on restart, not on the next event.** Every detector is
+  a definition evaluated by the engine now, and a definition reads its
+  enabled/scope when it is built, which happens once at startup. Live
+  re-registration arrives with the definitions API.
+
+  `detectorSettingsStorePath` is no longer written to. It is still
+  *read*, once, to carry an existing deployment's toggles into the
+  definitions store on first boot after upgrading, and is then inert --
+  leave it configured through one upgrade, and it can be removed after.
 
 ```yaml
 flags:
@@ -2761,7 +2769,7 @@ exits, rather than starting the server. See
 | `POST /api/flags/{id}/clear-permanent` | admin-only: clear one flag *and* permanently exclude its (detector, target) pair going forward. Audit-logged |
 | `GET /api/flags/exclusions` | admin-only: every currently-excluded (detector, target) pair |
 | `DELETE /api/flags/exclusions/{id}` | admin-only: remove one exclusion, letting that pair raise again |
-| `GET /api/detectors` | admin-only: every detector's live enabled+scope (see [Per-detector toggles](#per-detector-toggles-and-scope-restrictions-optional)) |
+| `GET /api/detectors` | admin-only: every detector's current enabled+scope (see [Per-detector toggles](#per-detector-toggles-and-scope-restrictions-optional)) |
 | `PUT /api/detectors/{name}` | admin-only: replace one detector's enabled+scope wholesale |
 | `GET /api/entities` | admin-only (see [Entities](#entities-ui-managed-hostruleport-labels-and-tags-optional)): every persisted entity |
 | `POST /api/entities` | admin-only: create or replace (upsert) one entity, identified by `(type, key)` in the JSON body |

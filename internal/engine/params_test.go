@@ -5,11 +5,9 @@ package engine
 import (
 	"reflect"
 	"testing"
-
-	"github.com/tomlawesome/mikroview/internal/detect"
 )
 
-// configFieldMapping ties one internal/detect.Config field to the
+// configFieldMapping ties one DetectorDefaults field to the
 // shipped ParamSchema (shipped_params.go) and param name that expresses
 // it. A field consulted by more than one detector (VPNInterfaces,
 // VPNConfidenceMultiplier -- see shipped_params.go's own doc comment)
@@ -80,10 +78,10 @@ var configFieldMappings = []configFieldMapping{
 
 // TestShippedParamSchemaCoversEveryConfigField is issue #401's required
 // field-by-field walk, proven rather than asserted: it reflects over
-// detect.Config's actual fields and fails if any of them has no entry in
+// DetectorDefaults' actual fields and fails if any of them has no entry in
 // configFieldMappings above, and separately fails if a mapping claims a
 // param name that doesn't actually exist in the schema it points at (a
-// stale mapping would otherwise pass silently). detect.AllDetectorNames
+// stale mapping would otherwise pass silently). The shipped catalogue
 // has 12 entries (not the 17 the issue text's first draft guessed) --
 // see TestAllDetectorNamesIsTwelve below, and shipped_params.go has
 // exactly one []ParamSchema per name.
@@ -99,51 +97,54 @@ func TestShippedParamSchemaCoversEveryConfigField(t *testing.T) {
 			}
 		}
 		if !found {
-			t.Errorf("mapping for detect.Config.%s claims param %q, but no such entry exists in the schema it points at", m.configField, m.paramName)
+			t.Errorf("mapping for DetectorDefaults.%s claims param %q, but no such entry exists in the schema it points at", m.configField, m.paramName)
 		}
 	}
 
-	cfgType := reflect.TypeOf(detect.Config{})
+	cfgType := reflect.TypeOf(DetectorDefaults{})
 	for i := 0; i < cfgType.NumField(); i++ {
 		name := cfgType.Field(i).Name
 		if !covered[name] {
-			t.Errorf("detect.Config.%s has no ParamSchema mapping -- every shipped detector param must be expressed as a schema entry, see docs/decisions/evaluation-engine.md section 4", name)
+			t.Errorf("DetectorDefaults.%s has no ParamSchema mapping -- every shipped detector param must be expressed as a schema entry, see docs/decisions/evaluation-engine.md section 4", name)
 		}
 	}
 }
 
 // TestAllDetectorNamesIsTwelve pins the detector count issue #401 itself
 // records as corrected: the issue text's own first draft said 17, the
-// true count -- internal/detect.AllDetectorNames -- is 12.
+// true count -- the twelve settings-toggleable detectors internal/detect
+// shipped -- is 12. Five more shipped definitions exist that it had no
+// name for at all (see ShippedDefinitionIDs); this pin is about the
+// twelve the schemas below were written against.
 func TestAllDetectorNamesIsTwelve(t *testing.T) {
-	if got := len(detect.AllDetectorNames); got != 12 {
-		t.Fatalf("len(detect.AllDetectorNames) = %d, want 12", got)
+	if got := len(LegacyDetectorIDs()); got != 12 {
+		t.Fatalf("len(LegacyDetectorIDs()) = %d, want 12", got)
 	}
 }
 
 // TestShippedParamSchemaHasOneSliceForEveryDetector confirms
 // shipped_params.go's coverage extends to detector identity too, not
-// just field count: every name in detect.AllDetectorNames has a
+// just field count: every one of the twelve legacy detector ids has a
 // corresponding non-empty ParamSchema slice in this file.
 func TestShippedParamSchemaHasOneSliceForEveryDetector(t *testing.T) {
-	byDetector := map[detect.DetectorName][]ParamSchema{
-		detect.DetectorPortScan:              PortScanParamSchema,
-		detect.DetectorActivitySpike:         ActivitySpikeParamSchema,
-		detect.DetectorCriticalPort:          CriticalPortParamSchema,
-		detect.DetectorGlobalSpike:           GlobalSpikeParamSchema,
-		detect.DetectorDistributedBruteForce: DistributedBruteForceParamSchema,
-		detect.DetectorOutboundAnomaly:       OutboundAnomalyParamSchema,
-		detect.DetectorInternalRecon:         InternalReconParamSchema,
-		detect.DetectorRuleSpike:             RuleSpikeParamSchema,
-		detect.DetectorRepeatedDrops:         RepeatedDropsParamSchema,
-		detect.DetectorLowSlowScan:           LowSlowScanParamSchema,
-		detect.DetectorOffHoursActivity:      OffHoursActivityParamSchema,
-		detect.DetectorDeviceSilence:         DeviceSilenceParamSchema,
+	byDetector := map[string][]ParamSchema{
+		"port_scan":               PortScanParamSchema,
+		"activity_spike":          ActivitySpikeParamSchema,
+		"critical_port":           CriticalPortParamSchema,
+		"global_spike":            GlobalSpikeParamSchema,
+		"distributed_brute_force": DistributedBruteForceParamSchema,
+		"outbound_anomaly":        OutboundAnomalyParamSchema,
+		"internal_recon":          InternalReconParamSchema,
+		"rule_spike":              RuleSpikeParamSchema,
+		"repeated_drops":          RepeatedDropsParamSchema,
+		"low_slow_scan":           LowSlowScanParamSchema,
+		"off_hours_activity":      OffHoursActivityParamSchema,
+		"device_silence":          DeviceSilenceParamSchema,
 	}
-	if len(byDetector) != len(detect.AllDetectorNames) {
-		t.Fatalf("byDetector has %d entries, detect.AllDetectorNames has %d -- every shipped detector needs exactly one schema", len(byDetector), len(detect.AllDetectorNames))
+	if len(byDetector) != len(LegacyDetectorIDs()) {
+		t.Fatalf("byDetector has %d entries, LegacyDetectorIDs has %d -- every one needs exactly one schema", len(byDetector), len(LegacyDetectorIDs()))
 	}
-	for _, name := range detect.AllDetectorNames {
+	for _, name := range LegacyDetectorIDs() {
 		schema, ok := byDetector[name]
 		if !ok {
 			t.Errorf("detector %q has no shipped ParamSchema", name)
