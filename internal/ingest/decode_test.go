@@ -351,6 +351,27 @@ func TestFilterRuleWithoutNewFieldsStillDecodes(t *testing.T) {
 	}
 }
 
+// TestPayloadCarriesRouterOSVersion covers #436's carry: the router
+// states its own version on the envelope, every kind's push carries it,
+// and a script that does not send it is still a valid push.
+func TestPayloadCarriesRouterOSVersion(t *testing.T) {
+	p := decodeOK(t, `{"kind":"arp","page":1,"pages":1,"routerosVersion":"7.23.3 (stable)","records":[{"address":"192.0.2.50","mac":"aa:bb:cc:dd:ee:ff"}]}`)
+	if p.RouterOSVersion != "7.23.3 (stable)" {
+		t.Errorf("RouterOSVersion = %q, want the version the router stated", p.RouterOSVersion)
+	}
+
+	// Absent is "not stated", not an error and not a version.
+	p = decodeOK(t, `{"kind":"arp","page":1,"pages":1,"records":[{"address":"192.0.2.50","mac":"aa:bb:cc:dd:ee:ff"}]}`)
+	if p.RouterOSVersion != "" {
+		t.Errorf("an omitted routerosVersion decoded to %q, want empty", p.RouterOSVersion)
+	}
+
+	// Router-controlled text, so it is bounded and screened like any
+	// record field rather than trusted for being on the envelope.
+	decodeErr(t, `{"kind":"arp","page":1,"pages":1,"routerosVersion":"`+strings.Repeat("7", maxFieldLen+1)+`","records":[]}`)
+	decodeErr(t, `{"kind":"arp","page":1,"pages":1,"routerosVersion":"7.23.3\u202e","records":[]}`)
+}
+
 // TestNATRuleRoundTripsFullAnatomy pins the fields #445 needs to say a
 // rule is "consistent with this event" instead of just listing the
 // table. Both port shapes appear (a single dst-port as a JSON number, a
