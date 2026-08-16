@@ -4,7 +4,9 @@ package engine
 
 import (
 	"context"
+	"math"
 	"net"
+	"sync"
 	"time"
 
 	"github.com/tomlawesome/mikroview/internal/flags"
@@ -115,4 +117,151 @@ func isPublicIPAddress(s string) bool {
 		return false
 	}
 	return isPublicIP(ip)
+}
+
+// reputationGroupSampleSize/reputationGroupMinSignificantSamples mirror
+// internal/detect's constants of the same names (reputation.go): how
+// many of a group's distinct members get checked per episode, and how
+// many must return real data before the aggregate is trusted at all.
+// Checking every member of a distributed brute force is unreasonable in
+// raw count and against AbuseIPDB's rate limit; a single bad-reputation
+// IP out of twenty-five is not meaningful signal, several out of a
+// bounded sample is closer to it.
+const (
+	reputationGroupSampleSize            = 10
+	reputationGroupMinSignificantSamples = 3
+)
+
+// groupReputationCollector aggregates up to len(sample) independent
+// async lookups for one flag episode into a single confidence floor,
+// applied once every sample has resolved (data, no-data, or skipped for
+// a saturated pool -- all three count as resolved, so this always
+// completes). Unchanged in behaviour from internal/detect's collector of
+// the same name: the floor is the mean of the successfully scored
+// members, discounted by how much of the sample cap was actually filled
+// with real data.
+type groupReputationCollector struct {
+	mu      sync.Mutex
+	scores  []int
+	pending int
+	t       flags.Type
+	target  string
+	fs      *flags.Store
+}
+
+func (c *groupReputationCollector) recordAndMaybeApply(score *int) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if score != nil {
+		c.scores = append(c.scores, *score)
+	}
+	c.pending--
+	if c.pending > 0 {
+		return
+	}
+	if len(c.scores) < reputationGroupMinSignificantSamples {
+		return
+	}
+	sum := 0
+	for _, s := range c.scores {
+		sum += s
+	}
+	mean := float64(sum) / float64(len(c.scores))
+	significance := math.Min(1, float64(len(c.scores))/float64(reputationGroupSampleSize))
+	c.fs.RaiseConfidenceFloor(c.t, c.target, int(math.Round(mean*significance)))
+}
+
+// GroupReputationSink is ReputationSink's counterpart for a definition
+// whose emission represents *many* distinct external addresses rather
+// than one -- distributed_brute_force's source set, outbound_anomaly's
+// destination set. The engine-side port of
+// internal/detect.maybeCheckGroupReputation.
+//
+// The sample comes from the emission's own accumulated Evidence.Hosts,
+// which is the honest source: it is exactly the set the flag itself
+// shows an operator, so a floor derived from it is a floor derived from
+// what was actually claimed. One consequence worth stating rather than
+// discovering later: Evidence.Hosts is capped (maxEvidenceHosts, 20)
+// where internal/detect sampled from the full uncapped member map, so on
+// an episode with more than 20 distinct members the sampling pool is
+// narrower here. Both then take at most reputationGroupSampleSize (10)
+// from it, so the sample size itself is unchanged; only which 10 are
+// eligible differs, and the capped set is the deterministic, sorted one
+// rather than Go's randomized map order.
+//
+// client == nil is a valid, explicit "not configured" no-op, same
+// convention as ReputationSink.
+func GroupReputationSink(fs *flags.Store, client ReputationLookup, concurrency int) func(RoutedEmission) {
+	if client == nil {
+		return FlagsSink(fs)
+	}
+	slots := make(chan struct{}, concurrency)
+	return func(r RoutedEmission) {
+		isNew := raiseDetectionFlag(fs, r)
+		if !isNew || r.Detection == nil {
+			return
+		}
+		f := r.Detection
+		sample := make([]string, 0, reputationGroupSampleSize)
+		for _, ip := range f.Evidence.Hosts {
+			if !isPublicIPAddress(ip) {
+				continue
+			}
+			sample = append(sample, ip)
+			if len(sample) >= reputationGroupSampleSize {
+				break
+			}
+		}
+		if len(sample) == 0 {
+			return
+		}
+
+		collector := &groupReputationCollector{pending: len(sample), t: f.Type, target: f.Target, fs: fs}
+		for _, ip := range sample {
+			select {
+			case slots <- struct{}{}:
+			default:
+				// Pool saturated -- counts as resolved-with-no-data, not a
+				// permanent stall, exactly as internal/detect's own loop does.
+				collector.recordAndMaybeApply(nil)
+				continue
+			}
+			go func() {
+				defer func() { <-slots }()
+				defer logging.Recover(reputationSinkLogger)
+				ctx, cancel := context.WithTimeout(context.Background(), reputationLookupTimeout)
+				defer cancel()
+				result, err := client.Lookup(ctx, ip)
+				if err != nil {
+					collector.recordAndMaybeApply(nil)
+					return
+				}
+				collector.recordAndMaybeApply(result.AbuseScore)
+			}()
+		}
+	}
+}
+
+// shippedGroupReputationIDs names the shipped definitions whose emission
+// is about a *set* of external addresses rather than one, and so wants
+// GroupReputationSink instead of ReputationSink -- the same split
+// internal/detect drew by calling maybeCheckGroupReputation from
+// distributed_brute_force and dest_spread's outbound half, and
+// maybeCheckReputation everywhere else. Kept as a table next to the
+// sinks, rather than a branch in main.go, for the same reason
+// shippedDeclarativeBuilders is a table: "which shipped definition
+// behaves how" is this package's knowledge, not the process wiring's.
+var shippedGroupReputationIDs = map[string]bool{
+	"distributed_brute_force": true,
+}
+
+// ShippedDeclarativeSink picks the emission sink a shipped definition
+// should be wired to: the group-sampling reputation path for a
+// definition whose flag represents many external addresses, the
+// single-address path otherwise. This is the one call site main.go needs.
+func ShippedDeclarativeSink(def Definition, fs *flags.Store, client ReputationLookup, concurrency int) func(RoutedEmission) {
+	if shippedGroupReputationIDs[def.ID] {
+		return GroupReputationSink(fs, client, concurrency)
+	}
+	return ReputationSink(fs, client, concurrency)
 }

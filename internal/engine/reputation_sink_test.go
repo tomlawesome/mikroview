@@ -4,6 +4,7 @@ package engine
 
 import (
 	"context"
+	"fmt"
 	"strconv"
 	"sync"
 	"testing"
@@ -328,4 +329,72 @@ func TestReputationSinkSkippedForAnInternalSourceBehindACompositeTarget(t *testi
 		t.Fatal("expected the definition to have fired for the LAN source (otherwise this test is vacuous)")
 	}
 	repExpectNoneStarted(t, fake.started)
+}
+
+// TestGroupReputationSinkAppliesTheDiscountedMeanFloor pins
+// GroupReputationSink's aggregate: the mean of the successfully scored
+// members, discounted by how much of the sample cap was actually filled
+// with real data -- internal/detect's groupReputationCollector
+// behaviour, unchanged. Three scored members out of a sample of three
+// gives significance 3/10, so a mean of 90 lands as a floor of 27.
+func TestGroupReputationSinkAppliesTheDiscountedMeanFloor(t *testing.T) {
+	fs := newTestFlagsStore(t)
+	fake := newFakeReputation()
+	for i := 0; i < 3; i++ {
+		fake.setScore(fmt.Sprintf("198.51.100.%d", 100+i), 90)
+	}
+	close(fake.release) // resolve immediately; ordering is not what this pins
+
+	dd := newShippedDistributedBruteForceDefinition(t, fs, []int{22}, 3, 5*time.Minute, Scope{})
+	dd.OnRoutedEmission = GroupReputationSink(fs, fake, 8)
+
+	t0 := time.Now()
+	for i := 0; i < 3; i++ {
+		dd.Evaluate(psEvt(fmt.Sprintf("198.51.100.%d", 100+i), 22, t0.Add(time.Duration(i)*time.Second)))
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		for _, f := range fs.List() {
+			if f.Target == "port 22" && f.ReputationFloor != nil {
+				if *f.ReputationFloor != 27 {
+					t.Errorf("ReputationFloor = %d, want 27 (mean 90 discounted by 3/10 sample significance)", *f.ReputationFloor)
+				}
+				return
+			}
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for a group reputation floor, got %+v", fs.List())
+}
+
+// TestGroupReputationSinkStaysSilentBelowTheSignificanceFloor pins the
+// other half: fewer than reputationGroupMinSignificantSamples scored
+// members means no floor at all, not a floor derived from one or two
+// answers. "A single bad-reputation IP out of a group of 25 isn't
+// meaningful signal."
+func TestGroupReputationSinkStaysSilentBelowTheSignificanceFloor(t *testing.T) {
+	fs := newTestFlagsStore(t)
+	fake := newFakeReputation()
+	fake.setScore("198.51.100.100", 95) // only one member ever returns a score
+	close(fake.release)
+
+	dd := newShippedDistributedBruteForceDefinition(t, fs, []int{22}, 3, 5*time.Minute, Scope{})
+	dd.OnRoutedEmission = GroupReputationSink(fs, fake, 8)
+
+	t0 := time.Now()
+	for i := 0; i < 3; i++ {
+		dd.Evaluate(psEvt(fmt.Sprintf("198.51.100.%d", 100+i), 22, t0.Add(time.Duration(i)*time.Second)))
+	}
+
+	// Drain the three lookups so the collector definitely resolved.
+	for i := 0; i < 3; i++ {
+		repExpectStarted(t, fake.started)
+	}
+	time.Sleep(50 * time.Millisecond)
+	for _, f := range fs.List() {
+		if f.Target == "port 22" && f.ReputationFloor != nil {
+			t.Fatalf("expected no floor from a single scored member, got %d", *f.ReputationFloor)
+		}
+	}
 }
