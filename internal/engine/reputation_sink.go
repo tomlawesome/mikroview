@@ -65,7 +65,17 @@ func ReputationSink(fs *flags.Store, client ReputationLookup, concurrency int) f
 			return
 		}
 		f := r.Detection
-		ip := f.Target
+		// r.SourceIP where the definition supplied one, falling back to
+		// the Target: the two coincide for a source-keyed definition
+		// (port_scan, critical_port), and differ for one whose Target is a
+		// composite (repeated_drops' "<source> -> port <N>"). This is the
+		// same (target, ip) split internal/detect.maybeCheckReputation
+		// took as two parameters -- the flag is keyed on the target, the
+		// lookup is about the address.
+		ip := r.SourceIP
+		if ip == "" {
+			ip = f.Target
+		}
 		if !isPublicIPAddress(ip) {
 			return
 		}

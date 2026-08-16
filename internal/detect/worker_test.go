@@ -4,6 +4,7 @@ package detect
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -38,17 +39,18 @@ func TestEnqueueNeverBlocksOnFullQueue(t *testing.T) {
 // and feeds events through Observe -- Enqueue alone (see above) only
 // proves the non-blocking send; this closes the loop by confirming a
 // detector that should fire, does, once Run has had a chance to catch up.
-// Originally drove this via critical_port; retargeted onto repeated_drops
-// now that critical_port has moved to internal/engine as a shipped
-// declarative definition (issue #405) and internal/detect no longer
-// evaluates it at all -- repeated_drops fires easily and deterministically
-// off a small threshold of dropped attempts against the same (SrcIP,
-// DstPort) pair, which is all this test actually needs from whichever
-// detector it picks: proof Run is draining the queue, not anything
-// specific to repeated_drops' own behaviour.
+// Originally drove this via critical_port, then repeated_drops; retargeted
+// again onto internal_recon now that repeated_drops has also moved to
+// internal/engine as a shipped declarative definition (issue #405) --
+// internal/detect still evaluates internal_recon (via observeDestSpread in
+// dest_spread.go), and it fires easily and deterministically off a small
+// threshold of distinct private destinations from one private source,
+// which is all this test actually needs from whichever detector it picks:
+// proof Run is draining the queue, not anything specific to
+// internal_recon's own behaviour.
 func TestRunProcessesEnqueuedEvents(t *testing.T) {
 	cfg := DefaultConfig()
-	cfg.RepeatedDropsThreshold = 5
+	cfg.InternalReconThreshold = 5
 	d, fs := newTestDetector(t, cfg)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -57,17 +59,17 @@ func TestRunProcessesEnqueuedEvents(t *testing.T) {
 
 	now := time.Now()
 	for i := 0; i < 5; i++ {
-		d.Enqueue(store.Event{SrcIP: "203.0.113.9", DstIP: "192.168.1.1", DstPort: 8080, Action: store.ActionDrop, ReceivedAt: now})
+		d.Enqueue(store.Event{SrcIP: "192.168.1.50", DstIP: fmt.Sprintf("192.168.1.%d", 10+i), DstPort: 80, ReceivedAt: now})
 	}
 
 	deadline := time.After(2 * time.Second)
 	for {
-		if list := fs.List(); len(list) == 1 && list[0].Type == flags.TypeRepeatedDrops {
+		if list := fs.List(); len(list) == 1 && list[0].Type == flags.TypeInternalRecon {
 			return
 		}
 		select {
 		case <-deadline:
-			t.Fatalf("Run never processed the enqueued events into a repeated_drops flag; got %+v", fs.List())
+			t.Fatalf("Run never processed the enqueued events into an internal_recon flag; got %+v", fs.List())
 		case <-time.After(5 * time.Millisecond):
 		}
 	}

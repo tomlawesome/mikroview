@@ -854,8 +854,8 @@ func main() {
 	// the definitions store currently holds for a shipped, available,
 	// declarative-kind definition, wrapped in one DeclarativeSet (its own
 	// dispatch pre-index, see internal/engine/dispatch.go) and registered
-	// on the engine -- port_scan and critical_port are ported this way so
-	// far (docs/decisions/evaluation-engine.md section 2,
+	// on the engine -- port_scan, critical_port and repeated_drops are
+	// ported this way so far (docs/decisions/evaluation-engine.md section 2,
 	// internal/engine/shipped_declarative.go's shippedDeclarativeBuilders);
 	// every other shipped detector still runs through internal/detect
 	// below until its own #405 port lands. An empty/not-yet-migrated

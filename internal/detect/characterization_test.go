@@ -733,137 +733,30 @@ func TestCharacterizationRuleSpike_FieldsRefireClearRevive(t *testing.T) {
 // ---------------------------------------------------------------------------
 // 8. repeated_drops
 // ---------------------------------------------------------------------------
-
-// TestCharacterizationRepeatedDrops_FieldsRefireClearRevive pins
-// repeated_drops' boundary at DefaultConfig's real
-// 10-attempts/15-minute threshold.
-func TestCharacterizationRepeatedDrops_FieldsRefireClearRevive(t *testing.T) {
-	cfg := DefaultConfig() // RepeatedDropsThreshold=10, Window=15m
-	d, fs := newTestDetector(t, cfg)
-	src, dstIP, dstPort := "203.0.113.9", "192.168.1.1", 8080
-	t0 := time.Now()
-
-	dropEvt := func(at time.Time) store.Event {
-		return store.Event{SrcIP: src, DstIP: dstIP, DstPort: dstPort, Action: store.ActionDrop, SrcCountry: "NL", ReceivedAt: at}
-	}
-
-	for i := 0; i < 9; i++ {
-		d.Observe(dropEvt(t0.Add(time.Duration(i) * time.Minute)))
-	}
-	if got := flagOfType(t, fs, flags.TypeRepeatedDrops); got != nil {
-		t.Fatalf("expected no flag at 9 attempts, got %+v", got)
-	}
-
-	d.Observe(dropEvt(t0.Add(9 * time.Minute)))
-	f := flagOfType(t, fs, flags.TypeRepeatedDrops)
-	if f == nil {
-		t.Fatal("expected a flag at exactly 10 attempts")
-	}
-	wantTarget := "203.0.113.9 -> port 8080"
-	if f.Target != wantTarget {
-		t.Errorf("Target = %q, want %q", f.Target, wantTarget)
-	}
-	wantDetail := "10 attempts against 192.168.1.1:8080 dropped in 15m0s -- check whether this port is meant to be open"
-	if f.Detail != wantDetail {
-		t.Errorf("Detail = %q, want %q", f.Detail, wantDetail)
-	}
-	if f.Country != "NL" {
-		t.Errorf("Country = %q, want NL", f.Country)
-	}
-	if f.Evidence.NAT != nil {
-		t.Errorf("Evidence.NAT = %+v, want nil (no NAT fields set on the triggering event)", f.Evidence.NAT)
-	}
-	if f.Confidence == nil || *f.Confidence != 0 {
-		t.Errorf("Confidence = %v, want 0", f.Confidence)
-	}
-
-	// Re-fire.
-	d.Observe(dropEvt(t0.Add(10 * time.Minute)))
-	f2 := flagOfType(t, fs, flags.TypeRepeatedDrops)
-	if f2 == nil || f2.Count != 2 {
-		t.Fatalf("expected Count=2, got %+v", f2)
-	}
-	if f2.Confidence == nil || *f2.Confidence != 5 {
-		t.Errorf("Confidence after re-fire = %v, want 5 (overshootConfidence(11,10))", f2.Confidence)
-	}
-
-	// Clear + revive.
-	if !fs.Clear(f2.ID, t0.Add(11*time.Minute)) {
-		t.Fatal("expected Clear to succeed")
-	}
-	d.Observe(dropEvt(t0.Add(12 * time.Minute)))
-	f3 := flagOfType(t, fs, flags.TypeRepeatedDrops)
-	if f3 == nil || f3.Cleared {
-		t.Fatalf("expected the flag to revive as active, got %+v", f3)
-	}
-	if f3.Count != 1 {
-		t.Errorf("Count after revival = %d, want 1", f3.Count)
-	}
-	if f3.Confidence == nil || *f3.Confidence != 10 {
-		t.Errorf("Confidence after revival = %v, want 10 (overshootConfidence(12,10))", f3.Confidence)
-	}
-}
-
-// TestCharacterizationRepeatedDrops_EvidenceCapturesNAT pins the
-// Evidence.NAT branch (only ever exercised when the *triggering* event
-// itself carries NAT fields -- see observeRepeatedDrops).
-func TestCharacterizationRepeatedDrops_EvidenceCapturesNAT(t *testing.T) {
-	cfg := DefaultConfig()
-	cfg.RepeatedDropsThreshold = 2
-	d, fs := newTestDetector(t, cfg)
-	t0 := time.Now()
-
-	d.Observe(store.Event{SrcIP: "203.0.113.9", DstIP: "192.168.1.1", DstPort: 8080, Action: store.ActionDrop, ReceivedAt: t0})
-	d.Observe(store.Event{
-		SrcIP: "203.0.113.9", DstIP: "192.168.1.1", DstPort: 8080, Action: store.ActionDrop,
-		NatIP: "10.0.0.5", NatPort: 51820, NatRaw: "dst-nat(10.0.0.5:51820)",
-		ReceivedAt: t0.Add(time.Minute),
-	})
-
-	f := flagOfType(t, fs, flags.TypeRepeatedDrops)
-	if f == nil {
-		t.Fatal("expected a flag")
-	}
-	if f.Evidence.NAT == nil {
-		t.Fatal("expected Evidence.NAT to be set")
-	}
-	if f.Evidence.NAT.IP != "10.0.0.5" || f.Evidence.NAT.Port != 51820 || f.Evidence.NAT.Raw != "dst-nat(10.0.0.5:51820)" {
-		t.Errorf("Evidence.NAT = %+v, want {IP:10.0.0.5 Port:51820 Raw:dst-nat(10.0.0.5:51820)}", f.Evidence.NAT)
-	}
-}
-
-// TestCharacterizationRepeatedDrops_DetailNamesOnlyTheLastDestination
-// pins #379's known-wrong behaviour on repeated_drops' side: the
-// (srcIP, dstPort) key does not include dstIP (see dropPairKey), so the
-// same source repeatedly hitting one port across *several different*
-// destination IPs collapses into a single counter -- but the Detail
-// string names only e.DstIP, the triggering event's destination.
-// Pinned as today's behaviour; #379 is expected to change it (naming the
-// set of destinations, or keying per-destination), and this pin should
-// be *updated*, not deleted, when that lands.
-func TestCharacterizationRepeatedDrops_DetailNamesOnlyTheLastDestination(t *testing.T) {
-	cfg := DefaultConfig()
-	cfg.RepeatedDropsThreshold = 4
-	d, fs := newTestDetector(t, cfg)
-	t0 := time.Now()
-
-	dests := []string{"192.168.1.1", "192.168.1.2", "192.168.1.3", "192.168.1.4"}
-	for i, dst := range dests {
-		d.Observe(store.Event{SrcIP: "203.0.113.9", DstIP: dst, DstPort: 8080, Action: store.ActionDrop, ReceivedAt: t0.Add(time.Duration(i) * time.Minute)})
-	}
-
-	f := flagOfType(t, fs, flags.TypeRepeatedDrops)
-	if f == nil {
-		t.Fatal("expected a flag once the combined count across all four destinations reaches the threshold")
-	}
-	// KNOWN-WRONG, pinned per #379: names only 192.168.1.4 (the last
-	// event's destination), even though 3 of the 4 counted attempts
-	// targeted other IPs.
-	want := "4 attempts against 192.168.1.4:8080 dropped in 15m0s -- check whether this port is meant to be open"
-	if f.Detail != want {
-		t.Errorf("Detail = %q, want %q (today's known-wrong single-destination naming -- see #379)", f.Detail, want)
-	}
-}
+//
+// repeated_drops' own characterization moved to
+// internal/engine/shipped_declarative_test.go (issue #405: repeated_drops is
+// now a shipped declarative definition evaluated by internal/engine, not
+// internal/detect -- see shipped_declarative.go's
+// buildRepeatedDropsDefinition). The boundary/fields/confidence/re-fire/
+// clear/revive pin that used to live here as
+// TestCharacterizationRepeatedDrops_FieldsRefireClearRevive is now
+// TestShippedRepeatedDrops_FieldsRefireClearRevive; the NAT-evidence pin
+// that used to live here as
+// TestCharacterizationRepeatedDrops_EvidenceCapturesNAT is now
+// TestShippedRepeatedDrops_EvidenceCapturesNAT, moved unchanged.
+//
+// TestCharacterizationRepeatedDrops_DetailNamesOnlyTheLastDestination is
+// now TestShippedRepeatedDrops_DetailCarriesTheDestinationSetAsEvidence --
+// renamed, not just moved, because #379 landed as part of this same port:
+// the Detail string no longer names a single destination address (it
+// names only the destination port, which is a key component and so true
+// of every counted attempt), and the distinct destination set -- which
+// used to be nowhere -- now rides in Evidence.Hosts, following
+// dest_spread's pattern. Per the original pin's own instruction ("this
+// pin should be *updated*, not deleted, when that lands"), the
+// engine-side test was updated in place to match #379's fix rather than
+// deleted and rewritten from scratch.
 
 // ---------------------------------------------------------------------------
 // 9. low_slow_scan
@@ -1202,29 +1095,12 @@ func TestCharacterizationDeviceSilence_FieldsRefireClearRevive(t *testing.T) {
 // port_scan's own HostsMode pin, which this test was itself standing in
 // for before critical_port took over that role).
 
-// TestCharacterizationScope_PortsAllow pins the Ports axis under
-// ListModeAllow, at repeated_drops' real DefaultConfig scale (10/15m).
-func TestCharacterizationScope_PortsAllow(t *testing.T) {
-	cfg := DefaultConfig()
-	seed := DefaultSettingsMap()
-	seed[DetectorRepeatedDrops] = Settings{Enabled: true, Scope: Scope{Ports: []int{8080}, PortsMode: ListModeAllow}}
-	d, fs := newTestDetectorWithSettings(t, cfg, seed)
-	now := time.Now()
-
-	for i := 0; i < 10; i++ {
-		d.Observe(store.Event{SrcIP: "203.0.113.9", DstIP: "192.168.1.1", DstPort: 9090, Action: store.ActionDrop, ReceivedAt: now.Add(time.Duration(i) * time.Minute)}) // not on the allow list
-	}
-	if got := flagOfType(t, fs, flags.TypeRepeatedDrops); got != nil {
-		t.Fatalf("expected a non-allowed port to never flag even at 10 attempts, got %+v", got)
-	}
-
-	for i := 0; i < 10; i++ {
-		d.Observe(store.Event{SrcIP: "203.0.113.9", DstIP: "192.168.1.1", DstPort: 8080, Action: store.ActionDrop, ReceivedAt: now.Add(time.Duration(i) * time.Minute)}) // allow-listed
-	}
-	if got := flagOfType(t, fs, flags.TypeRepeatedDrops); got == nil {
-		t.Fatal("expected the allow-listed port to still flag at threshold")
-	}
-}
+// TestCharacterizationScope_PortsAllow used to pin the Ports axis under
+// ListModeAllow at repeated_drops' real DefaultConfig scale (10/15m);
+// moved to internal/engine/shipped_declarative_test.go's
+// TestShippedRepeatedDropsScope_PortsAllow (issue #405: repeated_drops is
+// now a shipped declarative definition evaluated by internal/engine, not
+// internal/detect). Every pinned value carried over unchanged.
 
 // TestCharacterizationScope_PortsModeDeny used to pin the PortsMode axis
 // under ListModeDeny at critical_port's DefaultConfig scale, restricting

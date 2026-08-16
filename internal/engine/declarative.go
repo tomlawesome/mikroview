@@ -4,6 +4,8 @@ package engine
 
 import (
 	"fmt"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/tomlawesome/mikroview/internal/store"
@@ -97,11 +99,15 @@ const (
 	EvidenceHosts EvidenceField = "hosts"
 	// EvidenceLabels accumulates the rule label of every matching event.
 	EvidenceLabels EvidenceField = "labels"
+	// EvidenceNAT records the NAT translation detail of the matching
+	// event -- last-writer-wins rather than a set, see
+	// EvidenceSet.SetNAT for why this one category works that way.
+	EvidenceNAT EvidenceField = "nat"
 )
 
 func validateEvidenceField(f EvidenceField) error {
 	switch f {
-	case EvidencePorts, EvidenceHosts, EvidenceLabels:
+	case EvidencePorts, EvidenceHosts, EvidenceLabels, EvidenceNAT:
 		return nil
 	default:
 		return fmt.Errorf("engine: invalid evidence field %q", f)
@@ -120,6 +126,13 @@ type declState struct {
 	count    *CountRing
 	distinct *DistinctRing[string]
 	evidence *EvidenceSet
+	// detailTemplate/target are this key's own resolved text: the
+	// definition's templates with every key-component token already
+	// substituted (see newStateForWindow). Computed once per key rather
+	// than per emission, and constant for the key's whole life by
+	// construction -- a key token IS the key.
+	detailTemplate string
+	target         string
 }
 
 // DeclarativeDefinition is one declarative definition (issue #402):
@@ -142,12 +155,14 @@ type DeclarativeDefinition struct {
 	countingMode   CountingMode
 	distinctField  Field
 	detailTemplate string
-	// evidencePorts/Hosts/Labels are DeclarativeSpec.Evidence resolved to
-	// three booleans once, at construction, so recordEvidence's per-event
-	// path is three field reads rather than a slice scan.
+	targetTemplate string
+	// evidencePorts/Hosts/Labels/NAT are DeclarativeSpec.Evidence
+	// resolved to booleans once, at construction, so recordEvidence's
+	// per-event path is a few field reads rather than a slice scan.
 	evidencePorts  bool
 	evidenceHosts  bool
 	evidenceLabels bool
+	evidenceNAT    bool
 
 	members AddressListMembership
 
@@ -190,9 +205,23 @@ type DeclarativeSpec struct {
 	// ignored for CountingTotal.
 	CountingMode  CountingMode
 	DistinctField Field
-	// DetailTemplate is the emission's Detail text -- see RenderEmission
-	// for the token set, which is bounded by Evidence below.
+	// DetailTemplate is the emission's Detail text. Two token families
+	// resolve in it: the key-component tokens this definition's KeyMode
+	// supplies ({SourceAddress}, {DestinationAddress},
+	// {DestinationPort} -- see keyFieldValues), substituted once per key,
+	// and RenderEmission's evidence/count tokens, bounded by Evidence
+	// below.
 	DetailTemplate string
+	// TargetTemplate is the emission's Target text, over the same
+	// key-component token set as DetailTemplate. Empty (the default)
+	// means the Target is the key itself -- a source address, a target
+	// address, the literal "global". Only a definition whose
+	// operator-facing target has a shape of its own needs this:
+	// repeated_drops' "<source> -> port <N>", distributed_brute_force's
+	// "port <N>". Deliberately restricted to key components, so a Target
+	// can never name something that varies within the window it
+	// describes.
+	TargetTemplate string
 	// Evidence declares which categories this definition accumulates --
 	// see EvidenceField. Empty means this definition accumulates no
 	// evidence at all, which is legitimate (its Detail template then
@@ -255,6 +284,7 @@ func NewDeclarativeDefinition(def Definition, spec DeclarativeSpec) (*Declarativ
 		countingMode:   spec.CountingMode,
 		distinctField:  spec.DistinctField,
 		detailTemplate: spec.DetailTemplate,
+		targetTemplate: spec.TargetTemplate,
 		members:        spec.Members,
 		state:          NewKeyed[*declState](),
 	}
@@ -269,7 +299,15 @@ func NewDeclarativeDefinition(def Definition, spec DeclarativeSpec) (*Declarativ
 			d.evidenceHosts = true
 		case EvidenceLabels:
 			d.evidenceLabels = true
+		case EvidenceNAT:
+			d.evidenceNAT = true
 		}
+	}
+	if err := d.validateKeyTokens("detailTemplate", spec.DetailTemplate); err != nil {
+		return nil, err
+	}
+	if err := d.validateKeyTokens("targetTemplate", spec.TargetTemplate); err != nil {
+		return nil, err
 	}
 	return d, nil
 }
@@ -292,15 +330,19 @@ func (d *DeclarativeDefinition) Conditions() []Condition {
 	return append([]Condition(nil), d.conditions...)
 }
 
-func (d *DeclarativeDefinition) newState() *declState {
-	return d.newStateForWindow(d.window)
-}
-
-// newStateForWindow is newState, sized to window rather than
-// unconditionally to d.window -- the seam Replay (replay_declarative.go)
-// uses to build fresh per-key state against a candidate window override
-// without touching d.window itself.
-func (d *DeclarativeDefinition) newStateForWindow(window time.Duration) *declState {
+// newStateForWindow builds one key's fresh state, sized to window (rather
+// than unconditionally to d.window -- the seam Replay,
+// replay_declarative.go, uses to build state against a candidate window
+// override without touching d.window itself) and with this key's own
+// detail/target text resolved once here rather than on every emission.
+//
+// Resolving the key tokens per key, at state creation, is what makes
+// them honest: a key token's value is constant for the whole life of
+// that key's window *by construction* -- it is what the key is -- so
+// interpolating it into a sentence describing the whole window cannot
+// misdescribe it, which is precisely the property e.DstPort lacked in
+// critical_port's pre-#379 Detail string.
+func (d *DeclarativeDefinition) newStateForWindow(window time.Duration, e store.Event) *declState {
 	s := &declState{evidence: NewEvidenceSet()}
 	switch d.countingMode {
 	case CountingTotal:
@@ -308,7 +350,66 @@ func (d *DeclarativeDefinition) newStateForWindow(window time.Duration) *declSta
 	case CountingDistinct:
 		s.distinct = NewDistinctRing[string](window)
 	}
+	kv := d.keyFieldValues(e)
+	s.detailTemplate = substituteKeyTokens(d.detailTemplate, kv)
+	s.target = d.keyFor(e)
+	if d.targetTemplate != "" {
+		s.target = substituteKeyTokens(d.targetTemplate, kv)
+	}
 	return s
+}
+
+// keyFieldValues returns the event fields that make up this definition's
+// key -- the closed token vocabulary a Detail or Target template may
+// interpolate (see keyTokenNames). Only the fields the KeyMode actually
+// keys on are present: a per-source definition has no honest way to name
+// "the" destination port, because its window spans every port that
+// source touched.
+func (d *DeclarativeDefinition) keyFieldValues(e store.Event) map[string]string {
+	switch d.key {
+	case KeyPerSource:
+		return map[string]string{"SourceAddress": e.SrcIP}
+	case KeyPerSourcePort:
+		return map[string]string{"SourceAddress": e.SrcIP, "DestinationPort": strconv.Itoa(e.DstPort)}
+	case KeyPerTarget:
+		return map[string]string{"DestinationAddress": e.DstIP}
+	default: // KeyGlobal
+		return map[string]string{}
+	}
+}
+
+// keyTokenNames is the closed set of key-component token names, listed
+// once so NewDeclarativeDefinition can reject a template naming one its
+// KeyMode cannot supply -- a construction-time error rather than a
+// per-emission render failure, since the mismatch is a property of the
+// definition, not of any one event.
+var keyTokenNames = []string{"SourceAddress", "DestinationAddress", "DestinationPort"}
+
+// substituteKeyTokens replaces every {Name} in tmpl that kv holds a value
+// for, leaving every other token untouched for RenderEmission to resolve
+// (or reject) against the evidence set.
+func substituteKeyTokens(tmpl string, kv map[string]string) string {
+	return emissionToken.ReplaceAllStringFunc(tmpl, func(tok string) string {
+		if v, ok := kv[tok[1:len(tok)-1]]; ok {
+			return v
+		}
+		return tok
+	})
+}
+
+// validateKeyTokens rejects a template naming a key-component token this
+// KeyMode does not supply -- see keyTokenNames.
+func (d *DeclarativeDefinition) validateKeyTokens(what, tmpl string) error {
+	available := d.keyFieldValues(store.Event{})
+	for _, name := range keyTokenNames {
+		if _, ok := available[name]; ok {
+			continue
+		}
+		if strings.Contains(tmpl, "{"+name+"}") {
+			return fmt.Errorf("engine: definition %q: %s names {%s}, which key mode %q does not supply", d.def.ID, what, name, d.key)
+		}
+	}
+	return nil
 }
 
 // keyFor computes this definition's state key for e, per KeyMode.
@@ -324,14 +425,6 @@ func (d *DeclarativeDefinition) keyFor(e store.Event) string {
 		return "global"
 	}
 }
-
-// targetFor computes an Emission's Target -- the key itself for every
-// per-* mode (a source address, a source+port pair, a target address),
-// or the literal "global" for KeyGlobal, mirroring
-// internal/detect.observeDistributedBruteForce's own "port %d" / IP
-// targets: what a definition's Target names is whatever its own key
-// means, and KeyGlobal's key IS "global" already (see keyFor).
-func (d *DeclarativeDefinition) targetFor(key string) string { return key }
 
 // recordEvidence folds e into st.evidence, but only for the categories
 // this definition declared (DeclarativeSpec.Evidence) -- an undeclared
@@ -358,6 +451,9 @@ func (d *DeclarativeDefinition) recordEvidence(st *declState, e store.Event) {
 	}
 	if d.evidenceLabels && e.RuleLabel != "" {
 		st.evidence.AddLabel(e.RuleLabel)
+	}
+	if d.evidenceNAT {
+		st.evidence.SetNAT(NATInfo{IP: e.NatIP, Port: e.NatPort, Raw: e.NatRaw})
 	}
 	if !d.evidenceHosts {
 		return
@@ -402,7 +498,7 @@ func (d *DeclarativeDefinition) Evaluate(e store.Event) {
 
 	now := e.ReceivedAt
 	key := d.keyFor(e)
-	st := d.state.GetOrCreate(key, now, d.newState)
+	st := d.state.GetOrCreate(key, now, func() *declState { return d.newStateForWindow(d.window, e) })
 
 	d.recordEvidence(st, e)
 
@@ -424,13 +520,20 @@ func (d *DeclarativeDefinition) Evaluate(e store.Event) {
 		return
 	}
 
-	em, err := RenderEmission(st.evidence, count, d.detailTemplate, false)
+	em, err := RenderEmission(st.evidence, count, st.detailTemplate, false)
 	if err != nil {
 		logger.Error(fmt.Sprintf("declarative definition %q: RenderEmission failed: %v", d.def.ID, err))
 		return
 	}
 	em.DefinitionID = d.def.ID
-	em.Target = d.targetFor(key)
+	em.Target = st.target
+	// SourceIP is the reputation-lookup candidate, carried separately from
+	// Target because they are not always the same string: repeated_drops'
+	// Target is a "<source> -> port <N>" composite, and a lookup needs the
+	// address, not the composite -- exactly the split
+	// internal/detect.maybeCheckReputation's own (target, ip) parameter
+	// pair drew by hand.
+	em.SourceIP = e.SrcIP
 	// Confidence: every declarative definition's firing shape is a plain
 	// threshold-over-window crossing (docs/decisions/evaluation-engine.md
 	// section 2), which is exactly what overshootConfidence
