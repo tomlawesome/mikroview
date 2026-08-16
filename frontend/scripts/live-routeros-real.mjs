@@ -134,17 +134,22 @@ const realMac = forward?.srcMac ?? ''
 const typedMac = realMac.toLowerCase()
 check(typedMac !== realMac, `the router reports MACs in a different case to the conventional form (${realMac} vs ${typedMac})`)
 
-const watched = await api('POST', '/api/watchlist/entries', {
+// #407 folded the entry surface into /api/definitions: an entry is an
+// expectation definition, created with its matching data in an
+// `expectation` block and read back under the same key. The routes it
+// replaced are gone outright, so nothing here can fall back to them.
+const watched = await api('POST', '/api/definitions', {
   name: 'real router input',
-  ports: [15902],
-  source: { mac: typedMac },
+  intent: 'expectation',
+  kind: 'declarative',
+  expectation: { ports: [15902], source: { mac: typedMac } },
 })
 check(watched.status === 201, `an entry scoped to the router's real device is created (${watched.status})`)
 
 router('traffic', '3')
 
 const matches = await waitFor(async () => {
-  const got = await api('GET', `/api/watchlist/matches?mac=${encodeURIComponent(typedMac)}`)
+  const got = await api('GET', `/api/matches?mac=${encodeURIComponent(typedMac)}`)
   return got.body?.matches?.length ? got.body.matches : null
 })
 check(
@@ -166,13 +171,13 @@ check(
 // with a count, not a record per packet.
 router('traffic', '4')
 const collapsed = await waitFor(async () => {
-  const got = await api('GET', `/api/watchlist/matches?mac=${encodeURIComponent(typedMac)}`)
+  const got = await api('GET', `/api/matches?mac=${encodeURIComponent(typedMac)}`)
   const rec = got.body?.matches?.find((m) => m.tuple?.port === 15902)
   return rec && rec.count > 1 ? rec : null
 })
 check(!!collapsed, `repeated identical real traffic collapsed into one record (count ${collapsed?.count})`)
 check(
-  (await api('GET', `/api/watchlist/matches?mac=${encodeURIComponent(typedMac)}`)).body.matches.filter(
+  (await api('GET', `/api/matches?mac=${encodeURIComponent(typedMac)}`)).body.matches.filter(
     (m) => m.tuple?.port === 15902,
   ).length === 1,
   'collapsing produced exactly one record for that tuple, not one per burst',
@@ -180,27 +185,31 @@ check(
 
 // --- #243: inverted entry, observe then promote, on real traffic --------
 
-const inverted = await api('POST', '/api/watchlist/entries', {
+const inverted = await api('POST', '/api/definitions', {
   name: 'real router egress',
-  invert: true,
-  source: { mac: typedMac },
+  intent: 'expectation',
+  kind: 'declarative',
+  expectation: { invert: true, source: { mac: typedMac } },
 })
-check(inverted.status === 201 && inverted.body?.observing === true, 'an inverted entry on the real device starts observing')
+check(
+  inverted.status === 201 && inverted.body?.expectation?.observing === true,
+  'an inverted entry on the real device starts observing',
+)
 
 router('traffic', '3')
 
 const observed = await waitFor(async () => {
-  const got = await api('GET', '/api/watchlist/entries')
-  const e = got.body?.entries?.find((x) => x.id === inverted.body?.id)
-  return e?.observed?.length ? e.observed[0] : null
+  const got = await api('GET', '/api/definitions')
+  const d = (got.body?.definitions ?? []).find((x) => x.id === inverted.body?.id)
+  return d?.expectation?.observed?.length ? d.expectation.observed[0] : null
 })
 check(!!observed, 'real traffic from the device became an Observed candidate while observing')
 
-const promoted = await api('POST', `/api/watchlist/entries/${inverted.body?.id}/promote`, {
+const promoted = await api('POST', `/api/definitions/${inverted.body?.id}/promote`, {
   destinations: [{ destIp: observed?.destIp, port: observed?.port }],
 })
 check(
-  promoted.status === 200 && (promoted.body?.permitted ?? []).length === 1,
+  promoted.status === 200 && (promoted.body?.expectation?.permitted ?? []).length === 1,
   `the real destination promoted into Permitted (${promoted.status})`,
 )
 
