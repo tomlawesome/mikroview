@@ -77,7 +77,6 @@ func (d *Detector) observeOffHours(e store.Event, now time.Time) {
 		}
 		w = &sourceWindow{
 			spikes: newCountRing(d.cfg.ActivitySpikeWindow),
-			ports:  newDistinctRing[int](d.cfg.PortScanWindow),
 		}
 		d.perSource[e.SrcIP] = w
 	}

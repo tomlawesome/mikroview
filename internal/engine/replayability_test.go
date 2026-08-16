@@ -87,7 +87,15 @@ func TestReplayabilityReportsNotOkForBothInterfaces(t *testing.T) {
 func TestDeclarativeDefinitionImplementsReplayable(t *testing.T) {
 	def := declTestDef(IntentDetection)
 	conds := []Condition{{Field: FieldDestinationPort, Operator: OpEquals, Values: []string{"22"}}}
-	dd, err := NewDeclarativeDefinition(def, conds, KeyPerSource, time.Minute, 5, CountingTotal, "", "{PortCount} hits", nil)
+	dd, err := NewDeclarativeDefinition(def, DeclarativeSpec{
+		Conditions:     conds,
+		Key:            KeyPerSource,
+		Window:         time.Minute,
+		Threshold:      5,
+		CountingMode:   CountingTotal,
+		DetailTemplate: "{PortCount} hits",
+		Evidence:       []EvidenceField{EvidencePorts, EvidenceHosts, EvidenceLabels},
+	})
 	if err != nil {
 		t.Fatalf("NewDeclarativeDefinition: %v", err)
 	}

@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // Emission is what RenderEmission produces: a definition's firing
@@ -34,6 +35,14 @@ type Emission struct {
 	Target string
 	// Detail is RenderEmission's rendered text -- see its doc comment.
 	Detail string
+	// SourceIP is the triggering event's source address, carried
+	// separately from Target because the two are not always the same
+	// string -- repeated_drops' Target is a "<source> -> port <N>"
+	// composite, while anything wanting to look the source up (see
+	// ReputationSink) needs the address itself. Empty when the definition
+	// has no single meaningful source (a global-keyed one). Populated by
+	// the definition's own evaluation code, like Target.
+	SourceIP string
 	// Ports/Hosts/Labels are the same accumulated values Detail was
 	// rendered from, exposed structurally (e.g. for flags.Evidence)
 	// rather than requiring a caller to re-derive them by re-parsing
@@ -41,6 +50,10 @@ type Emission struct {
 	Ports  []int
 	Hosts  []string
 	Labels []string
+	// NAT is the triggering event's NAT translation detail, when the
+	// definition declared EvidenceNAT and the event carried one -- see
+	// EvidenceSet.SetNAT.
+	NAT *NATInfo
 	// Confidence is 0-100, set only by a definition that makes a
 	// statistical judgment call rather than a deterministic threshold
 	// crossing -- the Emission-level counterpart to flags.Flag.Confidence
@@ -48,6 +61,21 @@ type Emission struct {
 	// the definition's own evaluation code, not by RenderEmission, which
 	// has no confidence computation of its own.
 	Confidence *int
+	// Country/EventTime carry the triggering store.Event's SrcCountry and
+	// ReceivedAt forward -- added by #405, which is this package's first
+	// real producer of an Emission from live traffic (router.go's own doc
+	// comment on Route notes flags.Flag's store-assigned fields are left
+	// zero "those belong to flags.Store's raise lifecycle," but Country
+	// and the raise timestamp are not store-assigned: flags.Store.AddProvisional
+	// needs both supplied by its caller on every call, the same way
+	// internal/detect's own detectors read them straight off the
+	// triggering event -- see e.g. observeCriticalPort's
+	// AddWithDetail(..., e.SrcCountry, now) call). RenderEmission has no
+	// event to read them from, so -- like Target/DefinitionID -- these are
+	// set by the definition's own evaluation code after RenderEmission
+	// returns, not by RenderEmission itself.
+	Country   string
+	EventTime time.Time
 	// Provisional marks an emission produced while the definition's
 	// baseline (see Baseline/Snapshot.Ready) had not yet cleared its
 	// history floor -- see docs/decisions/evaluation-engine.md section 1
@@ -80,25 +108,41 @@ var emissionToken = regexp.MustCompile(`\{([A-Za-z]+)\}`)
 // why that indirection is the whole point: it is the mechanism behind
 // #379's wrong-naming findings (a flag claiming a port/host/label it
 // never actually recorded). detailTemplate may reference {Ports}/
-// {Hosts}/{Labels} (the accumulated, sorted values) and {PortCount}/
-// {HostCount}/{LabelCount} (their lengths) -- nothing else.
+// {Hosts}/{Labels} (the accumulated, sorted values), {PortCount}/
+// {HostCount}/{LabelCount} (their lengths), and {Count} (see below) --
+// nothing else.
+//
+// count is the threshold-crossing tally that caused this emission --
+// CountRing.Count for CountingTotal, DistinctRing.Count for
+// CountingDistinct (see DeclarativeDefinition.Evaluate/Replay, both of
+// which already compute this value before calling RenderEmission) --
+// exposed as {Count} so a Detail template can state "how many" without
+// that number necessarily equalling any evidence category's own length:
+// critical_port's #379 fix is the reason this parameter exists at all --
+// "N attempts against critical ports {Ports} in <window>" needs N (the
+// total attempt count) and {Ports} (the distinct port set) to both be
+// real, independently-sized numbers in the same sentence, and PortCount
+// alone cannot honestly be both. Unlike Ports/Hosts/Labels, {Count} is
+// always available (never gated on "was anything accumulated") since a
+// definition only ever calls RenderEmission once its own threshold has
+// actually been crossed by some count.
 //
 // Referencing a name evidence was never Add-ed to (see
-// EvidenceSet.touched), or any name outside that fixed set, is a hard
-// render error, not a silently empty value: RenderEmission only ever
-// substitutes a token whose name is a key in a data set built from the
-// categories evidence actually touched, so a template asking for
-// {Hosts} when nothing ever called AddHost fails exactly the way it
-// would if {Hosts} were misspelled -- the un-accumulated-value mistake
-// #379 found is structural here, not a matter of care. See
-// TestRenderEmissionFailsOnUnaccumulatedValue.
-func RenderEmission(evidence *EvidenceSet, detailTemplate string, provisional bool) (Emission, error) {
+// EvidenceSet.touched), or any name outside the fixed set above, is a
+// hard render error, not a silently empty value: RenderEmission only
+// ever substitutes a token whose name is a key in a data set built from
+// the categories evidence actually touched (plus the always-present
+// Count), so a template asking for {Hosts} when nothing ever called
+// AddHost fails exactly the way it would if {Hosts} were misspelled --
+// the un-accumulated-value mistake #379 found is structural here, not a
+// matter of care. See TestRenderEmissionFailsOnUnaccumulatedValue.
+func RenderEmission(evidence *EvidenceSet, count int, detailTemplate string, provisional bool) (Emission, error) {
 	if evidence == nil {
 		evidence = NewEvidenceSet()
 	}
 
 	em := Emission{Provisional: provisional}
-	data := map[string]string{}
+	data := map[string]string{"Count": strconv.Itoa(count)}
 
 	portsSeen, hostsSeen, labelsSeen := evidence.touched()
 	if portsSeen {
@@ -116,6 +160,11 @@ func RenderEmission(evidence *EvidenceSet, detailTemplate string, provisional bo
 		data["Labels"] = formatStrings(em.Labels)
 		data["LabelCount"] = strconv.Itoa(len(em.Labels))
 	}
+	// NAT is structural only -- it has no token, because it describes one
+	// specific packet's rewrite rather than anything accumulated across
+	// the window, and a Detail sentence naming it would make exactly the
+	// single-event-stands-for-the-window claim #379 found.
+	em.NAT = evidence.NAT()
 
 	var unaccumulated []string
 	detail := emissionToken.ReplaceAllStringFunc(detailTemplate, func(tok string) string {

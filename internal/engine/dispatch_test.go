@@ -20,7 +20,15 @@ func mkDeclDef(t *testing.T, id string, cond Condition) *DeclarativeDefinition {
 	def.ID = id
 	def.Enabled = true
 	def.Provenance = Provenance{Origin: ProvenanceCustom}
-	dd, err := NewDeclarativeDefinition(def, []Condition{cond}, KeyGlobal, time.Minute, 1, CountingTotal, "", "{PortCount} hits", nil)
+	dd, err := NewDeclarativeDefinition(def, DeclarativeSpec{
+		Conditions:     []Condition{cond},
+		Key:            KeyGlobal,
+		Window:         time.Minute,
+		Threshold:      1,
+		CountingMode:   CountingTotal,
+		DetailTemplate: "{PortCount} hits",
+		Evidence:       []EvidenceField{EvidencePorts, EvidenceHosts, EvidenceLabels},
+	})
 	if err != nil {
 		t.Fatalf("NewDeclarativeDefinition(%s): %v", id, err)
 	}
@@ -89,10 +97,18 @@ func TestBuildDispatchIndexPortTakesPriorityOverChain(t *testing.T) {
 	def.ID = "both"
 	def.Enabled = true
 	def.Provenance = Provenance{Origin: ProvenanceCustom}
-	dd, err := NewDeclarativeDefinition(def, []Condition{
-		{Field: FieldDestinationPort, Operator: OpEquals, Values: []string{"22"}},
-		{Field: FieldChain, Operator: OpEquals, Values: []string{"forward"}},
-	}, KeyGlobal, time.Minute, 1, CountingTotal, "", "{PortCount} hits", nil)
+	dd, err := NewDeclarativeDefinition(def, DeclarativeSpec{
+		Conditions: []Condition{
+			{Field: FieldDestinationPort, Operator: OpEquals, Values: []string{"22"}},
+			{Field: FieldChain, Operator: OpEquals, Values: []string{"forward"}},
+		},
+		Key:            KeyGlobal,
+		Window:         time.Minute,
+		Threshold:      1,
+		CountingMode:   CountingTotal,
+		DetailTemplate: "{PortCount} hits",
+		Evidence:       []EvidenceField{EvidencePorts, EvidenceHosts, EvidenceLabels},
+	})
 	if err != nil {
 		t.Fatalf("NewDeclarativeDefinition: %v", err)
 	}
