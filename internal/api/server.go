@@ -12,8 +12,8 @@ import (
 
 	"github.com/tomlawesome/mikroview/internal/audit"
 	"github.com/tomlawesome/mikroview/internal/auth"
-	"github.com/tomlawesome/mikroview/internal/detect"
 	"github.com/tomlawesome/mikroview/internal/device"
+	"github.com/tomlawesome/mikroview/internal/engine"
 	"github.com/tomlawesome/mikroview/internal/entities"
 	"github.com/tomlawesome/mikroview/internal/flags"
 	"github.com/tomlawesome/mikroview/internal/hub"
@@ -39,15 +39,24 @@ type Server struct {
 	// no sources were enabled, and every use is nil-guarded -- the same
 	// nil-means-disabled convention as Reputation. Deliberately display-
 	// only: it is read in handleIPLookup and nowhere near flag scoring.
-	NetClass         *netclass.Classifier
-	Flags            *flags.Store
-	DetectorSettings *detect.SettingsStore
+	NetClass *netclass.Classifier
+	Flags    *flags.Store
+	// Definitions is the one document holding every definition the engine
+	// evaluates -- shipped detectors, watchlist expectations, and
+	// eventually builder-authored custom ones (issue #404). It backs
+	// GET/PUT /api/detectors, which used to read internal/detect's own
+	// settings store: a definition's envelope is where enabled and scope
+	// live now, so there is one answer to "is this detector on" rather
+	// than two that can disagree. Always non-nil
+	// (engine.OpenDefinitionsStore("") returns a usable, empty,
+	// unpersisted store), same always-usable convention as Flags above.
+	Definitions *engine.DefinitionsStore
 	// Entities is the persisted, admin-manageable (type, key) -> label/
 	// tags store backing GET/POST/DELETE /api/entities (issue #107) --
 	// the shared foundation for a future mail-sender allowlist and
 	// UI-managed IP/port/rule aliasing. Always non-nil (internal/entities.
 	// Open("") returns a usable, empty, unpersisted store), same
-	// always-usable convention as Flags/DetectorSettings above.
+	// always-usable convention as Flags/Definitions above.
 	Entities *entities.Store
 	// Watchlist is the persisted, admin-manageable entry set backing
 	// GET/POST/PUT/DELETE /api/watchlist/entries (issue #243) -- what
@@ -92,7 +101,7 @@ type Server struct {
 	// device.Registry's own "auto-discovered, shown even before
 	// configured/labeled" pattern. Always non-nil (internal/rules.
 	// Open("") returns a usable, empty, unpersisted store), same
-	// always-usable convention as Entities/Flags/DetectorSettings above.
+	// always-usable convention as Entities/Flags/Definitions above.
 	Rules *rules.Store
 	// Audit is the persisted, admin-only accountability log of every
 	// admin-privileged mutation (issue #112) -- who created a user,
@@ -104,7 +113,7 @@ type Server struct {
 	// mikroview, not behavior mikroview observes on the network. Always
 	// non-nil (internal/audit.Open("") returns a usable, empty,
 	// unpersisted store), same always-usable convention as Entities/
-	// Flags/DetectorSettings above.
+	// Flags/Definitions above.
 	Audit *audit.Store
 	// DeviceStaleAfter (issue #98) is how long a device's LastSeen may go
 	// without updating before GET /api/devices reports it as "stale" --
