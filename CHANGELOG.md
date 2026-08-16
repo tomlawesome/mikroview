@@ -145,6 +145,31 @@ rewritten.
   (`SYN`, `SYN,ACK`, `type 8, code 0`) are a few bytes long, so nothing
   genuine is affected.
 
+- **A long log line arriving over syslog-over-TCP could turn into
+  several garbage, undecoded events instead of the one real one it
+  actually was** (#415). The TCP listener's read loop only recognised a
+  message as continuing into the next read when the current one exactly
+  filled its 64KB buffer -- but TCP promises nothing about how a message
+  gets sliced into reads, so a message *smaller* than 64KB that still
+  happened to arrive fragmented across several non-full reads (a TLS
+  record boundary, ordinary segmentation under load) had each fragment
+  handed to the parser as its own line. None of the fragments carry any
+  framing of their own, so each produced noise in the live view and in
+  detection rather than the one genuine record. Found concretely: a
+  single ~65KB line over the real TLS listener produced 3 stray events
+  where it should have produced 1. Fragmentation is a property of the
+  network path, not of what was sent, so this could happen to any
+  sufficiently long legitimate line -- a verbose NAT detail, a long
+  address-list name -- crossing a segment boundary at the wrong moment,
+  intermittently and with no pattern an operator could pin down. The
+  read loop now reassembles by message framing instead: newline-
+  delimited input is accumulated across as many reads as it takes and
+  split on the delimiter itself, and RouterOS's undelimited bare
+  messages (#202) are still recognised per message, resolved by a brief
+  quiet period on the socket rather than by whether one read happened to
+  fill a buffer. The existing 64KB per-message bound, and what happens
+  when a line genuinely exceeds it, are unchanged.
+
 ## [0.2.0] - 2026-08-14
 
 ### Removed
