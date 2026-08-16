@@ -18,6 +18,20 @@ import (
 // declares -- this issue is the contract those ports build on, not the
 // port itself, so nothing constructs an Emission from real traffic yet.
 type Emission struct {
+	// DefinitionID identifies which Definition produced this emission --
+	// grown onto Emission by #401 so Route (router.go) can check it
+	// against the Definition it's routing for, rather than trusting a
+	// caller never to mix the two up. Not set by RenderEmission (which
+	// has no notion of which definition it's rendering for): a
+	// definition's own evaluation code sets it after RenderEmission
+	// returns, the same way Target/Confidence below are populated.
+	DefinitionID string
+	// Target is what this emission is about -- a source IP, "global",
+	// a device ID, a rule label, whatever the definition's own Kind
+	// keys its judgement on (the same range flags.Flag.Target and
+	// matchlog.Tuple already cover). Populated by the definition's own
+	// evaluation code, not by RenderEmission.
+	Target string
 	// Detail is RenderEmission's rendered text -- see its doc comment.
 	Detail string
 	// Ports/Hosts/Labels are the same accumulated values Detail was
@@ -27,6 +41,13 @@ type Emission struct {
 	Ports  []int
 	Hosts  []string
 	Labels []string
+	// Confidence is 0-100, set only by a definition that makes a
+	// statistical judgment call rather than a deterministic threshold
+	// crossing -- the Emission-level counterpart to flags.Flag.Confidence
+	// and mirroring its "nil means not scored" convention. Populated by
+	// the definition's own evaluation code, not by RenderEmission, which
+	// has no confidence computation of its own.
+	Confidence *int
 	// Provisional marks an emission produced while the definition's
 	// baseline (see Baseline/Snapshot.Ready) had not yet cleared its
 	// history floor -- see docs/decisions/evaluation-engine.md section 1
