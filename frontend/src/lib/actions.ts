@@ -57,15 +57,15 @@ export const ACTION_LABELS: Record<Action, string> = {
  * the other -- and the widget's filters are saved and replayed, so a
  * missing option there is a filter an operator cannot rebuild.
  */
+const FILTER_LABEL_OVERRIDES: Partial<Record<Action, string>> = {
+  marked: 'Marked (mangle)',
+  natted: 'Natted (NAT)',
+}
+
 export const ACTION_FILTER_OPTIONS: { value: Action | ''; label: string }[] = [
   { value: '', label: 'Any action' },
   ...ACTIONS.map((value) => ({
     value: value as Action | '',
-    label:
-      value === 'marked'
-        ? 'Marked (mangle)'
-        : value === 'natted'
-          ? 'Natted (NAT)'
-          : ACTION_LABELS[value],
+    label: FILTER_LABEL_OVERRIDES[value] ?? ACTION_LABELS[value],
   })),
 ]
