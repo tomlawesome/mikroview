@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"regexp"
 	"testing"
-	"time"
 
 	"github.com/tomlawesome/mikroview/internal/flags"
 )
@@ -408,69 +407,17 @@ func sortedStrings(in []string) []string {
 // 12. device_silence
 // ---------------------------------------------------------------------------
 
-// TestCharacterizationDeviceSilence_FieldsRefireClearRevive pins
-// device_silence's boundary at DefaultConfig's real 15-minute
-// DeviceStaleAfter (TestDeviceSilenceFiresExactlyAtTheThreshold in
-// device_silence_test.go already pins the fire/no-fire boundary itself;
-// this test adds the Detail/Evidence/Confidence field pin and the
-// clear+revive step that file doesn't cover).
-func TestCharacterizationDeviceSilence_FieldsRefireClearRevive(t *testing.T) {
-	cfg := DefaultConfig() // DeviceStaleAfter=15m
-	now := time.Now()
-
-	devices := fakeDeviceLister{
-		{ID: "core", Name: "Core Router", SourceIP: "192.168.1.1", Configured: true,
-			FirstSeen: now.Add(-time.Hour), LastSeen: now.Add(-15 * time.Minute), EventCount: 500},
-	}
-	d, fs := newTestDeviceSilence(t, cfg, devices)
-	d.Check(now)
-
-	f := flagOfType(t, fs, flags.TypeDeviceSilence)
-	if f == nil {
-		t.Fatal("expected a flag exactly at the 15-minute threshold")
-	}
-	if f.Target != "core" {
-		t.Errorf("Target = %q, want %q", f.Target, "core")
-	}
-	wantDetail := "Core Router has sent no syslog for 15m0s, exceeding the 15m0s staleness threshold"
-	if f.Detail != wantDetail {
-		t.Errorf("Detail = %q, want %q", f.Detail, wantDetail)
-	}
-	if f.Confidence == nil || *f.Confidence != 0 {
-		t.Errorf("Confidence = %v, want 0 (exactly at threshold)", f.Confidence)
-	}
-	if !isZeroEvidence(f.Evidence) {
-		t.Errorf("Evidence = %+v, want the zero value", f.Evidence)
-	}
-
-	// Re-fire: further past the threshold.
-	laterDevices := fakeDeviceLister{
-		{ID: "core", Name: "Core Router", Configured: true, LastSeen: now.Add(-15 * time.Minute)},
-	}
-	d2 := NewDeviceSilenceDetectorWithSettings(cfg, fs, AllEnabledSettingsStore(), laterDevices)
-	d2.Check(now.Add(30 * time.Minute)) // elapsed=45m -> overshootConfidence(2700,900)=100
-	f2 := flagOfType(t, fs, flags.TypeDeviceSilence)
-	if f2 == nil || f2.Count != 2 {
-		t.Fatalf("expected Count=2, got %+v", f2)
-	}
-	if f2.Confidence == nil || *f2.Confidence != 100 {
-		t.Errorf("Confidence after re-fire = %v, want 100 (overshootConfidence(2700,900))", f2.Confidence)
-	}
-
-	// Clear + revive.
-	if !fs.Clear(f2.ID, now.Add(31*time.Minute)) {
-		t.Fatal("expected Clear to succeed")
-	}
-	d3 := NewDeviceSilenceDetectorWithSettings(cfg, fs, AllEnabledSettingsStore(), laterDevices)
-	d3.Check(now.Add(32 * time.Minute))
-	f3 := flagOfType(t, fs, flags.TypeDeviceSilence)
-	if f3 == nil || f3.Cleared {
-		t.Fatalf("expected the flag to revive as active, got %+v", f3)
-	}
-	if f3.Count != 1 {
-		t.Errorf("Count after revival = %d, want 1", f3.Count)
-	}
-}
+// TestCharacterizationDeviceSilence_FieldsRefireClearRevive moved to
+// internal/engine/shipped_device_silence_test.go's
+// TestShippedDeviceSilence_FieldsRefireClearRevive (issue #405:
+// device_silence is now a shipped programmatic definition evaluated by
+// internal/engine -- see shipped_device_silence.go, and note it is
+// Ticked rather than per-event, so the engine's own tick driver runs it
+// where main.go used to keep a bespoke ticker). Every pinned value
+// carried over unchanged: the boundary at the real 15-minute default,
+// Target, the byte-for-byte Detail, Confidence 0 at the boundary and 100
+// at 45 minutes, the zero Evidence, and the re-fire/clear/revive
+// sequence.
 
 // ---------------------------------------------------------------------------
 // Scope: one case per Settings.Scope axis, plus the #44 AND-together case.
