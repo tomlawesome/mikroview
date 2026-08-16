@@ -26,7 +26,7 @@
 // make live-routeros rather than requiring one just to be included.
 
 import { fileURLToPath } from 'url'
-import { session, check, done, feedPortScan } from './live-browser.mjs'
+import { session, check, done, feedPortScan, waitForFlag } from './live-browser.mjs'
 
 const URL_BASE = process.env.MV_URL
 
@@ -145,53 +145,69 @@ check((await push('not-a-real-token', validArp)) === 401, 'an invalid token is r
 
 feedPortScan(20, '198.51.100.9')
 
-// Poll rather than wait on a DOM selector -- this scenario reads
-// /api/flags directly throughout and never navigates to the Flags
-// view, so there's no rendered card to wait on.
-let scanFlag
-for (let i = 0; i < 30 && !scanFlag; i++) {
-  const flags = await getTable('/api/flags')
-  scanFlag = flags.body.flags?.find((f) => f.target === '198.51.100.9')
-  if (!scanFlag) await new Promise((r) => setTimeout(r, 500))
-}
-check(!!scanFlag, 'the port scan raised a real flag for 198.51.100.9')
+// Confirm server-side before comparing anything (#361). This used to be
+// its own poll loop here -- 30 tries at 500ms, 15s total -- and on a miss
+// it left `scanFlag` undefined and reported only `check(!!scanFlag, ...)`
+// failing, with no statement of whether the flag genuinely never arrived
+// or the poll simply ran out first, and nothing about what the server
+// actually had. waitForFlag (#354) is both a bigger budget (20s) and,
+// more importantly, says which: a failure names the target and lists
+// every flag the server does have.
+//
+// Polled through fetch rather than a DOM wait either way -- this
+// scenario reads /api/flags directly throughout and never navigates to
+// the Flags view, so there's no rendered card to wait on.
+const raised = await waitForFlag(page, '198.51.100.9')
+check(raised.ok, raised.message)
 
-// Let the flag settle before snapshotting it.
-//
-// The scan's own events are still arriving when it first appears, and
-// each re-fire raises confidence -- so comparing a snapshot taken at
-// first sight against one taken after the pushes measures ingest still
-// progressing, not what the pushes did. Wait for two consecutive reads
-// to agree, then snapshot: the assertion below is about pushed data
-// being inert, and it should fail only for that reason.
-//
-// It passed under live-env.sh and failed against the container, which
-// is the same race with more latency either side of it.
-for (let i = 0; i < 40; i++) {
-  await new Promise((r) => setTimeout(r, 250))
-  const flags = await getTable('/api/flags')
-  const now = flags.body.flags?.find((f) => f.target === '198.51.100.9')
-  if (now && now.confidence === scanFlag.confidence && now.count === scanFlag.count) {
-    scanFlag = now
-    break
+// The "pushes cannot touch it" assertion below only means anything
+// relative to a flag confirmed to exist -- with none, it has nothing to
+// compare and is skipped rather than reported as a second, independent
+// failure it cannot actually evaluate (#361).
+let scanFlag = raised.ok
+  ? (await getTable('/api/flags')).body.flags?.find((f) => f.target === '198.51.100.9')
+  : undefined
+
+if (scanFlag) {
+  // Let the flag settle before snapshotting it.
+  //
+  // The scan's own events are still arriving when it first appears, and
+  // each re-fire raises confidence -- so comparing a snapshot taken at
+  // first sight against one taken after the pushes measures ingest still
+  // progressing, not what the pushes did. Wait for two consecutive reads
+  // to agree, then snapshot: the assertion below is about pushed data
+  // being inert, and it should fail only for that reason.
+  //
+  // It passed under live-env.sh and failed against the container, which
+  // is the same race with more latency either side of it.
+  for (let i = 0; i < 40; i++) {
+    await new Promise((r) => setTimeout(r, 250))
+    const flags = await getTable('/api/flags')
+    const now = flags.body.flags?.find((f) => f.target === '198.51.100.9')
+    if (now && now.confidence === scanFlag.confidence && now.count === scanFlag.count) {
+      scanFlag = now
+      break
+    }
+    if (now) scanFlag = now
   }
-  if (now) scanFlag = now
-}
 
-for (let i = 0; i < 5; i++) {
-  await push(tokA.body.value, {
-    kind: 'address-list',
-    page: 1,
-    pages: 1,
-    records: [{ list: 'blocked', address: '198.51.100.9', comment: `push ${i}`, dynamic: false }],
-  })
-}
+  for (let i = 0; i < 5; i++) {
+    await push(tokA.body.value, {
+      kind: 'address-list',
+      page: 1,
+      pages: 1,
+      records: [{ list: 'blocked', address: '198.51.100.9', comment: `push ${i}`, dynamic: false }],
+    })
+  }
 
-const flagsAfter = await getTable('/api/flags')
-const scanFlagAfter = flagsAfter.body.flags.find((f) => f.target === '198.51.100.9')
-check(
-  !!scanFlagAfter && scanFlagAfter.cleared === scanFlag.cleared && scanFlagAfter.confidence === scanFlag.confidence,
-  'five pushes naming the exact same address left the flag completely unchanged -- pushed data cannot clear, lower, or otherwise touch it',
-)
+  const flagsAfter = await getTable('/api/flags')
+  const scanFlagAfter = flagsAfter.body.flags.find((f) => f.target === '198.51.100.9')
+  check(
+    !!scanFlagAfter && scanFlagAfter.cleared === scanFlag.cleared && scanFlagAfter.confidence === scanFlag.confidence,
+    'five pushes naming the exact same address left the flag completely unchanged -- pushed data cannot clear, lower, or otherwise touch it',
+  )
+} else {
+  check(true, `skipped -- five pushes cannot be checked against a flag that never arrived (${raised.message})`)
+}
 
 done()
