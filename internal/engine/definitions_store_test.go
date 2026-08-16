@@ -5,6 +5,8 @@ package engine
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -411,5 +413,91 @@ func TestDefinitionsStoreListIncludesUnavailableDefinitions(t *testing.T) {
 	}
 	if list[0].Definition.ID != "unavailable-1" {
 		t.Errorf("List() lost the ID of an unavailable entry: %+v", list[0])
+	}
+}
+
+// TestSetEnabledAndScopeWorksOnAShippedDefinition is the door
+// ErrDefinitionImmutable's own message always implied and issue #405
+// finally had to open: "disable it instead (Enabled=false)" was
+// unfollowable while Upsert refused a shipped definition wholesale and
+// nothing else could change one. internal/detect's settings store used
+// to be where a detector toggle landed; it is deleted, so this is.
+func TestSetEnabledAndScopeWorksOnAShippedDefinition(t *testing.T) {
+	s, err := OpenDefinitionsStore("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := SeedShippedDefinitions(s, nil, DefaultShippedDefaults()); err != nil {
+		t.Fatalf("SeedShippedDefinitions: %v", err)
+	}
+
+	scope := Scope{Hosts: []string{"203.0.113.0/24"}, HostsMode: ListModeDeny}
+	if err := s.SetEnabledAndScope("port_scan", false, scope); err != nil {
+		t.Fatalf("SetEnabledAndScope: %v", err)
+	}
+
+	got, ok := s.Get("port_scan")
+	if !ok {
+		t.Fatal("expected port_scan to still exist")
+	}
+	if got.Definition.Enabled {
+		t.Error("expected port_scan to be disabled")
+	}
+	if len(got.Definition.Scope.Hosts) != 1 || got.Definition.Scope.HostsMode != ListModeDeny {
+		t.Errorf("Scope = %+v, want the one just set", got.Definition.Scope)
+	}
+	// Everything else is untouched -- the narrowness is the point.
+	// Params come back JSON-decoded (a float64 where the schema says int
+	// -- decodeStored deliberately does not re-validate, see its own doc
+	// comment), so this compares the value rather than the Go type.
+	if fmt.Sprint(got.Definition.Params["threshold"]) != fmt.Sprint(DefaultShippedDefaults().PortScanThreshold) {
+		t.Errorf("Params were disturbed: %+v", got.Definition.Params)
+	}
+	if got.Definition.Provenance.Origin != ProvenanceShipped {
+		t.Errorf("Provenance = %q, want it unchanged", got.Definition.Provenance.Origin)
+	}
+}
+
+func TestSetEnabledAndScopeRejectsAnUnknownID(t *testing.T) {
+	s, err := OpenDefinitionsStore("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetEnabledAndScope("not_a_definition", false, Scope{}); !errors.Is(err, ErrNoSuchDefinition) {
+		t.Errorf("SetEnabledAndScope on an unknown id = %v, want ErrNoSuchDefinition", err)
+	}
+}
+
+func TestSetEnabledAndScopeRejectsAMalformedScope(t *testing.T) {
+	s, err := OpenDefinitionsStore("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := SeedShippedDefinitions(s, nil, DefaultShippedDefaults()); err != nil {
+		t.Fatalf("SeedShippedDefinitions: %v", err)
+	}
+	err = s.SetEnabledAndScope("port_scan", true, Scope{HostsMode: ListMode("maybe")})
+	if err == nil {
+		t.Fatal("expected an invalid list mode to be refused")
+	}
+	if got, _ := s.Get("port_scan"); !got.Definition.Enabled || len(got.Definition.Scope.Hosts) != 0 {
+		t.Errorf("a refused change must leave the definition untouched, got %+v", got.Definition)
+	}
+}
+
+// TestSetEnabledAndScopeRefusesAnUnavailableDefinition pins the one case
+// it does refuse: toggling something whose meaning this binary cannot
+// read is exactly as unsafe as overwriting it.
+func TestSetEnabledAndScopeRefusesAnUnavailableDefinition(t *testing.T) {
+	s, err := OpenDefinitionsStore("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.mu.Lock()
+	s.raw["mystery"] = json.RawMessage(`{"id":"mystery","kind":"who-knows"}`)
+	s.mu.Unlock()
+
+	if err := s.SetEnabledAndScope("mystery", false, Scope{}); !errors.Is(err, ErrDefinitionImmutable) {
+		t.Errorf("SetEnabledAndScope on an unavailable definition = %v, want ErrDefinitionImmutable", err)
 	}
 }

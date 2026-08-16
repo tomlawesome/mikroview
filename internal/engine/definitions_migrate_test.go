@@ -11,7 +11,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tomlawesome/mikroview/internal/detect"
 	"github.com/tomlawesome/mikroview/internal/matchlog"
 	"github.com/tomlawesome/mikroview/internal/persist"
 	"github.com/tomlawesome/mikroview/internal/watchlist"
@@ -98,7 +97,7 @@ func TestMigrateDefinitionsEmptySources(t *testing.T) {
 func TestMigrateDefinitionsDefaultSources(t *testing.T) {
 	eachBackend(t, "migrate-default", func(t *testing.T, newBackend func() persist.Backend) {
 		defsBackend, settingsBackend, wlBackend := newBackend(), newBackend(), newBackend()
-		writeJSON(t, settingsBackend, detect.DefaultSettingsMap())
+		writeJSON(t, settingsBackend, DefaultDetectorSettings())
 		writeJSON(t, wlBackend, migrateWatchlistFile{})
 
 		migrated, err := MigrateDefinitions(context.Background(), defsBackend, settingsBackend, wlBackend)
@@ -116,7 +115,7 @@ func TestMigrateDefinitionsDefaultSources(t *testing.T) {
 		if len(s.List()) != len(shippedDetectors) {
 			t.Fatalf("got %d definitions, want %d", len(s.List()), len(shippedDetectors))
 		}
-		got, ok := s.Get(string(detect.DetectorPortScan))
+		got, ok := s.Get("port_scan")
 		if !ok || !got.Available || !got.Definition.Enabled {
 			t.Fatalf("port_scan = %+v, %v", got, ok)
 		}
@@ -132,20 +131,20 @@ func TestMigrateDefinitionsHeavilyCustomised(t *testing.T) {
 	eachBackend(t, "migrate-custom", func(t *testing.T, newBackend func() persist.Backend) {
 		defsBackend, settingsBackend, wlBackend := newBackend(), newBackend(), newBackend()
 
-		settings := map[detect.DetectorName]detect.Settings{
-			detect.DetectorPortScan: {Enabled: false},
-			detect.DetectorCriticalPort: {
+		settings := map[string]DetectorSettings{
+			"port_scan": {Enabled: false},
+			"critical_port": {
 				Enabled: true,
-				Scope: detect.Scope{
+				Scope: Scope{
 					Hosts:     []string{"10.0.0.0/24", "192.168.1.5"},
-					HostsMode: detect.ListModeDeny,
+					HostsMode: ListModeDeny,
 					Ports:     []int{22, 3389},
-					PortsMode: detect.ListModeAllow,
+					PortsMode: ListModeAllow,
 				},
 			},
-			detect.DetectorRuleSpike: {
+			"rule_spike": {
 				Enabled: true,
-				Scope:   detect.Scope{Rules: []string{"lan-in", "wan-in"}, RulesMode: detect.ListModeAllow},
+				Scope:   Scope{Rules: []string{"lan-in", "wan-in"}, RulesMode: ListModeAllow},
 			},
 		}
 		writeJSON(t, settingsBackend, settings)
@@ -191,14 +190,14 @@ func TestMigrateDefinitionsHeavilyCustomised(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		if got, _ := s.Get(string(detect.DetectorPortScan)); got.Definition.Enabled {
+		if got, _ := s.Get("port_scan"); got.Definition.Enabled {
 			t.Error("port_scan should have migrated as disabled")
 		}
-		cp, ok := s.Get(string(detect.DetectorCriticalPort))
+		cp, ok := s.Get("critical_port")
 		if !ok || len(cp.Definition.Scope.Hosts) != 2 || cp.Definition.Scope.HostsMode != ListModeDeny {
 			t.Errorf("critical_port scope did not migrate: %+v", cp.Definition.Scope)
 		}
-		rs, ok := s.Get(string(detect.DetectorRuleSpike))
+		rs, ok := s.Get("rule_spike")
 		if !ok || len(rs.Definition.Scope.Rules) != 2 {
 			t.Errorf("rule_spike scope did not migrate: %+v", rs.Definition.Scope)
 		}
@@ -304,9 +303,9 @@ func TestMigrateDefinitionsUnrecognizedDetectorNameIsPreservedUnavailable(t *tes
 	eachBackend(t, "migrate-unknown-detector", func(t *testing.T, newBackend func() persist.Backend) {
 		defsBackend, settingsBackend, wlBackend := newBackend(), newBackend(), newBackend()
 
-		settings := map[detect.DetectorName]detect.Settings{
-			detect.DetectorPortScan:             {Enabled: true},
-			detect.DetectorName("future_thing"): {Enabled: true, Scope: detect.Scope{Hosts: []string{"10.0.0.1"}}},
+		settings := map[string]DetectorSettings{
+			"port_scan":            {Enabled: true},
+			string("future_thing"): {Enabled: true, Scope: Scope{Hosts: []string{"10.0.0.1"}}},
 		}
 		writeJSON(t, settingsBackend, settings)
 
@@ -382,7 +381,7 @@ func TestMigrateDefinitionsCorruptDetectSettingsSourceFailsClosed(t *testing.T) 
 func TestMigrateDefinitionsCorruptWatchlistSourceFailsClosed(t *testing.T) {
 	eachBackend(t, "migrate-corrupt-watchlist", func(t *testing.T, newBackend func() persist.Backend) {
 		defsBackend, settingsBackend, wlBackend := newBackend(), newBackend(), newBackend()
-		writeJSON(t, settingsBackend, detect.DefaultSettingsMap())
+		writeJSON(t, settingsBackend, DefaultDetectorSettings())
 		corrupt := []byte(`{"entries": [{`)
 		writeRaw(t, wlBackend, corrupt)
 
@@ -415,7 +414,7 @@ func TestMigrateDefinitionsCorruptWatchlistSourceFailsClosed(t *testing.T) {
 func TestMigrateDefinitionsRefusesOnConversionFailure(t *testing.T) {
 	eachBackend(t, "migrate-conversion-fail", func(t *testing.T, newBackend func() persist.Backend) {
 		defsBackend, settingsBackend, wlBackend := newBackend(), newBackend(), newBackend()
-		writeJSON(t, settingsBackend, detect.DefaultSettingsMap())
+		writeJSON(t, settingsBackend, DefaultDetectorSettings())
 		entries := []*watchlist.Entry{
 			{ID: "wl-ok", Name: "fine", Ports: []int{443}},
 			{ID: "wl-bad", Name: "out of range", Ports: []int{99999}},
@@ -446,7 +445,7 @@ func TestMigrateDefinitionsRefusesOnConversionFailure(t *testing.T) {
 func TestMigrateDefinitionsSecondBootIsANoOp(t *testing.T) {
 	eachBackend(t, "migrate-idempotent", func(t *testing.T, newBackend func() persist.Backend) {
 		defsBackend, settingsBackend, wlBackend := newBackend(), newBackend(), newBackend()
-		writeJSON(t, settingsBackend, detect.DefaultSettingsMap())
+		writeJSON(t, settingsBackend, DefaultDetectorSettings())
 
 		migrated, err := MigrateDefinitions(context.Background(), defsBackend, settingsBackend, wlBackend)
 		if err != nil || !migrated {
@@ -456,7 +455,7 @@ func TestMigrateDefinitionsSecondBootIsANoOp(t *testing.T) {
 
 		// The source changes after the first migration -- must not be
 		// picked up by a second boot.
-		mutated := map[detect.DetectorName]detect.Settings{detect.DetectorPortScan: {Enabled: false}}
+		mutated := map[string]DetectorSettings{"port_scan": {Enabled: false}}
 		if _, err := settingsBackend.Save(context.Background(), mustMarshal(t, mutated), 0); err == nil {
 			// This particular Save is expected to conflict (the store
 			// already has a document from writeJSON above); either

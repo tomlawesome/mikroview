@@ -293,6 +293,61 @@ func (s *DefinitionsStore) Upsert(d Definition) error {
 	return nil
 }
 
+// SetEnabledAndScope changes only the two fields an operator is allowed
+// to change on any definition, shipped included -- what
+// ErrDefinitionImmutable's own message means by "disable it instead
+// (Enabled=false)". Until issue #405 there was no way to actually do
+// that: Upsert refused a shipped definition wholesale, so the advice the
+// error gave could not be followed. This is the narrow door that advice
+// always implied.
+//
+// Narrow deliberately. Params, kind, intent, schema and provenance are
+// untouchable on a shipped definition because they are properties of the
+// binary, not of the deployment -- a shipped definition whose params
+// were replaced wholesale would silently stop matching the Go logic
+// built for it. Enabled and Scope are the two the ADR names as
+// operator-owned on every definition ("enabled, scope, its typed
+// params"), and they are the two internal/detect's settings store
+// carried before it was deleted, which is what this replaces.
+//
+// Returns ErrNoSuchDefinition for an unknown id and ErrDefinitionImmutable
+// for one this binary cannot identify (see StoredDefinition.Available):
+// toggling something whose meaning is unknown is exactly as unsafe as
+// overwriting it.
+func (s *DefinitionsStore) SetEnabledAndScope(id string, enabled bool, scope Scope) error {
+	if err := ValidateScope(scope); err != nil {
+		return err
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	existing, ok := s.raw[id]
+	if !ok {
+		return fmt.Errorf("%w: %q", ErrNoSuchDefinition, id)
+	}
+	sd := decodeStored(id, existing)
+	if !sd.Available {
+		return fmt.Errorf("%w: %q is a definition this binary cannot identify -- refusing to toggle something whose meaning it cannot read (see StoredDefinition.Available)", ErrDefinitionImmutable, id)
+	}
+
+	updated := sd.Definition
+	updated.Enabled = enabled
+	updated.Scope = scope
+	raw, err := json.Marshal(updated)
+	if err != nil {
+		return fmt.Errorf("engine: encoding definition %q: %w", id, err)
+	}
+	s.raw[id] = raw
+	s.persistLocked()
+	return nil
+}
+
+// ErrNoSuchDefinition is returned by SetEnabledAndScope for an id this
+// store does not hold -- distinct from ErrDefinitionImmutable so a
+// caller (see internal/api) can answer 404 rather than 409.
+var ErrNoSuchDefinition = errors.New("engine: no such definition")
+
 // Delete removes the definition at id. Deleting an ID that doesn't exist
 // is a no-op, not an error -- the caller's intent (this ID should not be
 // in the store) is already satisfied, same convention as

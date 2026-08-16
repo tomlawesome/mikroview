@@ -4,8 +4,6 @@ package engine
 
 import (
 	"testing"
-
-	"github.com/tomlawesome/mikroview/internal/detect"
 )
 
 // TestSeedShippedDefinitionsPopulatesAnUnpersistedStore is the
@@ -25,12 +23,12 @@ func TestSeedShippedDefinitionsPopulatesAnUnpersistedStore(t *testing.T) {
 		t.Fatalf("expected an unpersisted store to open empty, got %d", got)
 	}
 
-	if err := SeedShippedDefinitions(s, detect.DefaultSettingsMap(), DefaultShippedDefaults()); err != nil {
+	if err := SeedShippedDefinitions(s, DefaultDetectorSettings(), DefaultShippedDefaults()); err != nil {
 		t.Fatalf("SeedShippedDefinitions: %v", err)
 	}
 
-	for _, name := range detect.AllDetectorNames {
-		sd, ok := s.Get(string(name))
+	for _, name := range ShippedDefinitionIDs() {
+		sd, ok := s.Get(name)
 		if !ok {
 			t.Errorf("%q missing after seeding", name)
 			continue
@@ -76,7 +74,7 @@ func TestSeedShippedDefinitionsNeverOverwrites(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenDefinitionsStoreWithBackend(nil): %v", err)
 	}
-	if err := SeedShippedDefinitions(s, detect.DefaultSettingsMap(), DefaultShippedDefaults()); err != nil {
+	if err := SeedShippedDefinitions(s, DefaultDetectorSettings(), DefaultShippedDefaults()); err != nil {
 		t.Fatalf("SeedShippedDefinitions: %v", err)
 	}
 	first, ok := s.Get("port_scan")
@@ -86,8 +84,8 @@ func TestSeedShippedDefinitionsNeverOverwrites(t *testing.T) {
 
 	// A second seed against settings that would produce a *different*
 	// definition must change nothing.
-	settings := detect.DefaultSettingsMap()
-	settings[detect.DetectorPortScan] = detect.Settings{Enabled: false}
+	settings := DefaultDetectorSettings()
+	settings["port_scan"] = DetectorSettings{Enabled: false}
 	if err := SeedShippedDefinitions(s, settings, DefaultShippedDefaults()); err != nil {
 		t.Fatalf("SeedShippedDefinitions (second run): %v", err)
 	}
@@ -112,10 +110,10 @@ func TestSeedShippedDefinitionsCarriesLiveDetectorSettings(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenDefinitionsStoreWithBackend(nil): %v", err)
 	}
-	settings := detect.DefaultSettingsMap()
-	settings[detect.DetectorPortScan] = detect.Settings{
+	settings := DefaultDetectorSettings()
+	settings["port_scan"] = DetectorSettings{
 		Enabled: false,
-		Scope:   detect.Scope{Hosts: []string{"198.51.100.4"}, HostsMode: detect.ListModeDeny},
+		Scope:   Scope{Hosts: []string{"198.51.100.4"}, HostsMode: ListModeDeny},
 	}
 	if err := SeedShippedDefinitions(s, settings, DefaultShippedDefaults()); err != nil {
 		t.Fatalf("SeedShippedDefinitions: %v", err)

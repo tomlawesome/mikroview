@@ -1,42 +1,33 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-// Package detect watches the ingested event stream for a small set of
-// behavioral patterns worth a human's attention -- a source scanning many
-// ports, a source generating an unusual volume of traffic, repeated
-// attempts against a critical service port from outside the LAN, and a
-// sudden spike in overall traffic. It's an "interrogation helper," not an
-// intrusion prevention system: every detector only ever raises a flag
-// (see internal/flags) for a human to look at and clear. Nothing here
-// blocks, drops, or otherwise acts on traffic.
-package detect
+package engine
 
 import (
 	"context"
-	"fmt"
-	"net"
-	"sync/atomic"
+	"encoding/json"
 	"time"
 
-	"github.com/tomlawesome/mikroview/internal/entities"
-	"github.com/tomlawesome/mikroview/internal/flags"
-	"github.com/tomlawesome/mikroview/internal/logging"
-	"github.com/tomlawesome/mikroview/internal/store"
+	"github.com/tomlawesome/mikroview/internal/persist"
 )
 
-var logger = logging.New("detect")
+// This file is where internal/detect.Config landed when that package's
+// engine machinery was deleted (issue #405). It is the same struct,
+// moved rather than reworked: every field, its default and its doc
+// comment are unchanged, because they are the values every shipped
+// definition's params are seeded from and changing any of them would be
+// a retuning riding along with a deletion.
+//
+// What did change is what it is FOR. In internal/detect it was live
+// configuration, read on every event by whichever detector consulted it.
+// Here it is a seed: SeedShippedDefinitions turns it into each shipped
+// definition's Params once, and from then on the definition's own params
+// are what evaluation reads. The struct is a migration boundary, not a
+// runtime one.
 
-// observeQueueDropLogInterval bounds how often a full observeQueue
-// actually logs -- sustained overload is exactly the scenario this
-// guards against, so logging every single drop would itself add load
-// at the worst possible moment. A periodic summary is enough to make
-// an otherwise-invisible "detection silently fell behind" condition
-// observable without that cost.
-const observeQueueDropLogInterval = 30 * time.Second
-
-// Config holds every detector's tunable thresholds, sourced from
+// DetectorDefaults holds every shipped detector's tunable thresholds, sourced from
 // internal/config so an operator can adjust them (or the critical port
 // list) for their own network without a code change.
-type Config struct {
+type DetectorDefaults struct {
 	PortScanThreshold      int
 	PortScanWindow         time.Duration
 	ActivitySpikeThreshold int
@@ -225,14 +216,14 @@ type Config struct {
 	VPNConfidenceMultiplier float64
 }
 
-// DefaultConfig returns sensible defaults for a home/small-office
+// DefaultDetectorDefaults returns sensible defaults for a home/small-office
 // RouterOS deployment. CriticalPorts covers the services most commonly
 // targeted by internet-wide scanning: SSH, Telnet, FTP, SMB, RDP, VNC,
 // and RouterOS's own Winbox/API ports (8291, 8728, 8729) -- worth
 // watching precisely because they're MikroTik-specific and a common
 // target once a scanner has fingerprinted a device as RouterOS.
-func DefaultConfig() Config {
-	return Config{
+func DefaultDetectorDefaults() DetectorDefaults {
+	return DetectorDefaults{
 		PortScanThreshold:        15,
 		PortScanWindow:           60 * time.Second,
 		ActivitySpikeThreshold:   200,
@@ -294,242 +285,118 @@ func DefaultConfig() Config {
 	}
 }
 
-// maxTrackedSources bounds the per-source rolling-window state the same
-// way every other buffer in mikroview has an explicit ceiling (see
-// internal/store's ring buffer, internal/flags' maxFlags) -- without it,
-// a scan using many spoofed or ephemeral source IPs could grow this
-// state without bound. The least-recently-active source is evicted first
-// once the cap is reached. A var rather than a const so tests can shrink
-// it without needing thousands of distinct source IPs.
-var maxTrackedSources = 4096
-
-// observeQueueSize bounds Detector's async detection queue (see Enqueue/
-// Run) -- sized to the same tier as main.go's raw syslog channel (4096),
-// since Enqueue is offered once per stored event, the same rate as
-// ingestion itself (unlike internal/notify's much smaller queue, which
-// only receives newly-raised flags, a far rarer event).
-const observeQueueSize = 4096
-
-// Detector tracks per-source rolling-window state for the port-scan,
-// activity-spike, and critical-port detectors, raising flags into fs
-// when a threshold is crossed. Observe itself is intended to be called
-// only from a single detection-worker goroutine (see Run) -- the same
-// single-writer assumption internal/store and internal/device make, so
-// like them it takes no lock of its own. Enqueue, in contrast, is safe
-// to call from any goroutine (mikroview's ingest goroutine calls it) --
-// it only ever hands an event off across a channel to that worker.
-type Detector struct {
-	cfg      Config
-	fs       *flags.Store
-	settings *SettingsStore
-
-	// reputation and lookupSlots back the async, best-effort
-	// confidence-floor lookups in reputation.go -- see WithReputation.
-	// reputation is nil unless WithReputation is called explicitly
-	// (never by New/NewWithSettings themselves, so tests never make
-	// real network calls by default).
-	reputation  reputationLookup
-	lookupSlots chan struct{}
-
-	// entities backs observeMailSender's trusted-mail-sender allowlist
-	// check (issue #108) -- see WithEntities. nil unless WithEntities is
-	// called explicitly (never by New/NewWithSettings themselves, so
-	// tests that don't care about the allowlist just see every untagged
-	// source flagged, the same "nil is a valid no-op" contract
-	// reputation above uses).
-	entities *entities.Store
-
-	// criticalHits (critical_port's per-source attempt-count map) and
-	// criticalPortIPs (distributed_brute_force's per-port distinct-source
-	// map) both moved to internal/engine with their detectors (issue
-	// #405), as did destWindows (dest_spread's per-source map).
-
-	// observeQueue backs Enqueue/Run -- see observeQueueSize's doc
-	// comment for the sizing rationale.
-	observeQueue chan store.Event
-
-	// droppedEvents backs Enqueue's rate-limited overload logging --
-	// the gate itself is dropLogGate (see recordDroppedEvent).
-	droppedEvents atomic.Uint64
+// DetectorSettings is one shipped detector's enabled + scope pair as the
+// pre-#405 detector-settings document stored it -- internal/detect.Settings,
+// moved here with the same JSON tags so the document round-trips
+// byte-identically.
+//
+// It is deliberately NOT the shape anything evaluates. A definition's
+// enabled/scope live on the Definition itself (definition.go); this type
+// exists for exactly two callers: MigrateDefinitions, which reads a
+// pre-existing detector-settings document once to seed the definitions
+// store, and SeedShippedDefinitions, which layers config.yaml's own
+// per-detector toggles over the shipped defaults on every boot. Both are
+// seeding paths, which is why an "operator settings" type survives the
+// deletion of the store that used to own it.
+type DetectorSettings struct {
+	Enabled bool  `json:"enabled"`
+	Scope   Scope `json:"scope"`
 }
 
-// New constructs a Detector with every detector enabled and unscoped --
-// see NewWithSettings for per-detector on/off + scope control (issue
-// #44). Kept for callers (and the ~30 existing tests) that don't need
-// that control.
-func New(cfg Config, fs *flags.Store) *Detector {
-	return NewWithSettings(cfg, fs, AllEnabledSettingsStore())
-}
+// detectorSettingsDocument is the whole pre-#405 detector-settings
+// document: a flat map of detector name to settings. Kept as this
+// package's own small copy of a shape internal/detect used to own,
+// exactly the precedent migrateWatchlistFile (definitions_migrate.go)
+// already sets for reading another package's persisted document without
+// depending on that package.
+type detectorSettingsDocument map[string]DetectorSettings
 
-// NewWithSettings is New, but backed by an explicit, live, mutable
-// SettingsStore -- Observe consults it on every call, so toggling a
-// detector on/off or narrowing its scope via settings.Set takes effect
-// on the very next event, no restart needed.
-func NewWithSettings(cfg Config, fs *flags.Store, settings *SettingsStore) *Detector {
-	return &Detector{
-		cfg:          cfg,
-		fs:           fs,
-		settings:     settings,
-		lookupSlots:  make(chan struct{}, reputationLookupConcurrency),
-		observeQueue: make(chan store.Event, observeQueueSize),
+// ReadDetectorSettingsDocument loads the pre-#405 detector-settings
+// document from b, or nil if b is not configured or holds no document.
+//
+// Fail-closed, like every other store's read: an unreadable or
+// unparseable document refuses to start rather than being treated as
+// empty (#378), because "no toggles found" and "your toggles could not
+// be read" must never look the same to an operator who switched a
+// detector off deliberately.
+func ReadDetectorSettingsDocument(ctx context.Context, b persist.Backend) (map[string]DetectorSettings, error) {
+	var doc detectorSettingsDocument
+	if _, _, err := persist.Open(ctx, b, "the detector settings store", func(data []byte) error {
+		return json.Unmarshal(data, &doc)
+	}); err != nil {
+		return nil, err
 	}
+	return doc, nil
 }
 
-// Enqueue hands e off to the detection-worker goroutine (see Run)
-// without ever blocking the caller -- a non-blocking select/default
-// send, dropping e if the queue is full. mikroview's ingest goroutine
-// calls this so a slow or backed-up detection pass never delays event
-// storage or WebSocket broadcast, only detection itself -- a dropped
-// event is still stored/broadcast normally, it just isn't fed through
-// the detectors.
-func (d *Detector) Enqueue(e store.Event) {
-	select {
-	case d.observeQueue <- e:
-	default:
-		d.recordDroppedEvent()
+// DefaultDetectorSettings returns every shipped definition enabled and
+// unscoped -- internal/detect.DefaultSettingsMap's replacement, and the
+// starting point config.yaml's flags.detectors entries are layered onto.
+func DefaultDetectorSettings() map[string]DetectorSettings {
+	m := make(map[string]DetectorSettings, len(shippedDetectors))
+	for _, sd := range shippedDetectors {
+		m[sd.id] = DetectorSettings{Enabled: true}
 	}
+	return m
 }
 
-// recordDroppedEvent tracks an Enqueue drop and logs a rate-limited
-// summary -- logging every single drop would itself add load during
-// exactly the sustained-overload condition this is meant to surface
-// (same reasoning internal/syslog/tcp_listener.go's handleTCPConn uses
-// to justify never logging a drop at all), but staying silent forever --
-// this function's predecessor -- left a real failure mode invisible:
-// detection can silently fall behind with zero operator-facing signal,
-// unlike a backed-up ingest goroutine, which at least shows up as
-// dropped-syslog-packet symptoms elsewhere.
-func (d *Detector) recordDroppedEvent() {
-	total := d.droppedEvents.Add(1)
-	if _, ok := dropLogGate.Allow(); ok {
-		logger.Warn(fmt.Sprintf("detection queue full -- %d event(s) dropped from detection so far (still stored/broadcast normally)", total))
+// ShippedDefinitionIDs is every id the shipped catalogue defines, in a
+// stable order -- what internal/detect.AllDetectorNames was for, grown to
+// cover the five definitions that package had no name for at all.
+func ShippedDefinitionIDs() []string {
+	out := make([]string, 0, len(shippedDetectors))
+	for _, sd := range shippedDetectors {
+		out = append(out, sd.id)
 	}
+	return out
 }
 
-// dropLogGate implements observeQueueDropLogInterval -- package-level
-// rather than per-Detector because it only gates log noise, and there
-// is one Detector per process outside tests.
-var dropLogGate = logging.NewLimiter(observeQueueDropLogInterval)
-
-// Run drains observeQueue, calling Observe for each event in order,
-// until ctx is done. Meant to run in its own goroutine, separate from
-// whatever goroutine calls Enqueue -- see Detector's doc comment.
-func (d *Detector) Run(ctx context.Context) {
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case e := <-d.observeQueue:
-			d.observeRecovered(e)
+// IsShippedDefinitionID reports whether id names a definition in this
+// binary's shipped catalogue.
+func IsShippedDefinitionID(id string) bool {
+	for _, sd := range shippedDetectors {
+		if sd.id == id {
+			return true
 		}
 	}
+	return false
 }
 
-// observeRecovered isolates Observe's panic-recovery to a single event
-// rather than Run's whole lifetime -- recover only unwinds as far as
-// the nearest deferring function, so if the defer lived in Run itself
-// instead, one bad event would still end Run for good (silently
-// stopping all future detection) rather than just being skipped. See
-// logging.Recover's doc comment for why this is needed at all: nothing
-// else in Go contains a panic in a goroutine like this one.
-func (d *Detector) observeRecovered(e store.Event) {
-	defer logging.Recover(logger)
-	d.Observe(e)
-}
-
-// Observe feeds one stored event through every per-event detector.
-func (d *Detector) Observe(e store.Event) {
-	if e.SrcIP == "" {
-		return
+// LegacyDetectorIDs is internal/detect.AllDetectorNames, frozen: the
+// twelve definitions that package exposed as settings-toggleable, in its
+// own order.
+//
+// It is deliberately NOT ShippedDefinitionIDs(). The shipped catalogue
+// grew five definitions with issue #405's final block
+// (unexpected_mail_sender, stale_rule, known_bad_ip, netclass,
+// reputation), each of which internal/detect ran as an always-on pass
+// with no name, no toggle and no scope. Giving them an envelope makes
+// them toggleable for the first time -- but the detector-settings page
+// carries hand-written label, explanation, scope-note and example copy
+// per detector for exactly these twelve, so listing five more through
+// that endpoint would render rows with no name and no explanation.
+//
+// That is a product surface with product copy to write, not a deletion's
+// business: #405's own rule is that no behaviour change rides along with
+// the port. The five are fully present in the definitions store, fully
+// evaluated, and fully toggleable through the definitions API when #407
+// builds it with the UI to match. Until then this endpoint answers the
+// same twelve it always did.
+func LegacyDetectorIDs() []string {
+	return []string{
+		"port_scan", "activity_spike", "critical_port",
+		"global_spike", "distributed_brute_force", "outbound_anomaly",
+		"internal_recon", "rule_spike", "repeated_drops",
+		"low_slow_scan", "off_hours_activity", "device_silence",
 	}
-	now := e.ReceivedAt
-
-	// activity_spike moved to internal/engine as a shipped programmatic
-	// definition (issue #405, see shipped_activity_spike.go), taking
-	// sourceWindow's spikes ring and EMA baseline fields with it. #420
-	// stays open: the port reproduces its arithmetic exactly rather than
-	// picking one of that issue's candidate remedies.
-	// low_slow_scan moved to internal/engine as a shipped programmatic
-	// definition (issue #405, see shipped_low_slow_scan.go), taking its
-	// lowSlowWindows map, its three rings and its weakest-axis confidence
-	// rule with it.
-	// off_hours moved to internal/engine as a shipped programmatic
-	// definition (issue #405, see shipped_off_hours.go), taking
-	// sourceWindow's per-hour baselines with it -- which is the last thing
-	// that struct held, so d.perSource goes with it.
-
-	// critical_port and distributed_brute_force both moved to
-	// internal/engine as shipped declarative definitions (issue #405, see
-	// shipped_declarative.go) -- the "critical port, external source"
-	// precondition they shared here went with them, expressed twice as
-	// conditions, which is what let the two separate.
-	// outbound_anomaly and internal_recon both moved to internal/engine as
-	// shipped programmatic definitions (issue #405, see
-	// shipped_dest_spread.go), taking destWindow's two rings with them --
-	// which is the last thing that struct held, so d.destWindows,
-	// activeWindow and evictOldestByActivity go with them.
-	//
-	// mail_sender moved with them (see shipped_mail_sender.go), taking the
-	// internal-source/external-destination/SMTP-port gate that used to be
-	// written here rather than inside the detector: on the chassis a
-	// definition's own preconditions belong to the definition.
-
-	// rule_spike moved to internal/engine as a shipped programmatic
-	// definition (issue #405, see shipped_rule_spike.go), taking its
-	// ruleWindows map, its EMA baseline and the #267 reasoning about not
-	// re-priming after a disable/enable cycle with it -- the chassis's
-	// Baseline is what carries all three now.
-
-	// known_bad_ip and netclass, the two reinforcement passes, both moved
-	// to internal/engine as shipped programmatic definitions (issue #405,
-	// see shipped_known_bad_ip.go and shipped_netclass.go). Their "runs
-	// after every flag-raiser" requirement -- which this function used to
-	// guarantee by writing both calls last -- is a declared
-	// ReinforcementOrder on the chassis, pinned end to end through two
-	// real definitions apiece.
-	_ = now
 }
 
-// criticalWindow/observeCriticalPort (critical_port's own per-source
-// attempt-count state and its reputation-lookup call site) moved to
-// internal/engine as a shipped declarative definition (issue #405, see
-// shipped_declarative.go's buildCriticalPortDefinition and main.go's
-// engine.ReputationSink wiring for the reputation-lookup counterpart).
-
-// activeWindow and evictOldestByActivity moved out with the last
-// per-source map that needed them (issue #405): every detector that kept
-// windowed state keyed by source is now a definition on internal/engine,
-// where Keyed (internal/engine/keyed.go) owns the same
-// least-recently-active eviction with the same internal/evict batch-shed
-// policy behind it.
-
-// isTrackableConnState reports whether e should count toward the scan/
-// spike/recon/critical-port/distributed-brute-force detectors below.
-// RouterOS commonly logs both directions of an established connection on
-// a single stateful accept rule -- without this filter, a busy server's
-// ordinary *return* traffic (many distinct client ephemeral ports, many
-// distinct clients) trivially crosses thresholds meant to catch new
-// connection attempts, producing false positives on any host that's just
-// legitimately busy (see the flag detail these detectors' Add calls
-// write, and mikroview issue #35). Empty ConnState -- a log line without
-// one, or one routeros.Parse couldn't recognize -- is treated as
-// trackable rather than discarded, so setups that don't log connection
-// state at all keep today's behavior.
-func isTrackableConnState(e store.Event) bool {
-	return e.ConnState == "" || e.ConnState == "new"
-}
-
-// isPublic mirrors the same small check internal/geoip and
-// internal/reputation each keep their own private copy of, rather than
-// sharing one -- consistent with how this codebase already does it.
-func isPublic(ipStr string) bool {
-	ip := net.ParseIP(ipStr)
-	if ip == nil {
-		return false
+// IsLegacyDetectorID reports whether id is one of LegacyDetectorIDs.
+func IsLegacyDetectorID(id string) bool {
+	for _, name := range LegacyDetectorIDs() {
+		if name == id {
+			return true
+		}
 	}
-	return !ip.IsPrivate() &&
-		!ip.IsLoopback() &&
-		!ip.IsUnspecified() &&
-		!ip.IsLinkLocalUnicast() &&
-		!ip.IsLinkLocalMulticast()
+	return false
 }
