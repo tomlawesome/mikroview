@@ -192,17 +192,6 @@ func lan3(n int) string { return fmt.Sprintf("192.168.2.%d", 100+n) }
 // decision. See shipped_activity_spike.go's own doc comment and #420
 // itself.
 
-// indexOf is strings.Index without importing strings solely for one call
-// site -- kept local and tiny.
-func indexOf(s, sub string) int {
-	for i := 0; i+len(sub) <= len(s); i++ {
-		if s[i:i+len(sub)] == sub {
-			return i
-		}
-	}
-	return -1
-}
-
 // assertFloatSigmaTail asserts that s is exactly a %.1f-formatted
 // (possibly multi-digit) float followed by "σ" and wantTail -- the
 // shape every EMA-derived Detail string in this package ends in. Kept
@@ -557,91 +546,38 @@ func TestCharacterizationLowSlowScan_FieldsRefireClearRevive(t *testing.T) {
 // 10. off_hours_activity
 // ---------------------------------------------------------------------------
 
-// TestCharacterizationOffHours_FieldsRefireClearRevive pins
-// off_hours_activity's boundary at DefaultConfig's real
-// OffHoursMinSampleDays(14)/MinCount(5)/window(23:00-06:00). 14 distinct
-// prior days of one event/day at 03:00 establish the baseline; day 15's
-// events then arrive one at a time, and since checkOffHoursActivity only
-// folds a day's baseline contribution on the *next* day's first event
-// (see off_hours.go), the baseline/variance are fixed for the whole of
-// day 15 -- count is the only thing moving, so the search below finds
-// day 15's exact boundary event deterministically rather than this test
-// hand-deriving it.
-func TestCharacterizationOffHours_FieldsRefireClearRevive(t *testing.T) {
-	cfg := DefaultConfig() // OffHoursMinSampleDays=14, OffHoursMinCount=5, window 23:00-06:00
-	d, fs := newTestDetector(t, cfg)
-	ip := "198.51.100.30"
-
-	for i := 0; i < 14; i++ {
-		d.Observe(evtCountry(ip, "GB", 100, offHoursAt(2024, time.March, 1+i, 3)))
-	}
-	if got := flagOfType(t, fs, flags.TypeOffHoursActivity); got != nil {
-		t.Fatalf("expected no flag from the 14-day steady warm-up, got %+v", got)
-	}
-
-	day15 := offHoursAt(2024, time.March, 15, 3)
-	var boundary int
-	for i := 1; i <= cfg.OffHoursMinCount+5; i++ {
-		d.Observe(evtCountry(ip, "GB", 100+i, day15.Add(time.Duration(i)*time.Millisecond)))
-		if flagOfType(t, fs, flags.TypeOffHoursActivity) != nil {
-			boundary = i
-			break
-		}
-	}
-	if boundary == 0 {
-		t.Fatalf("expected a flag to fire within %d events on day 15, got none; flags=%+v", cfg.OffHoursMinCount+5, fs.List())
-	}
-	if boundary != cfg.OffHoursMinCount {
-		t.Errorf("boundary event = %d, want %d (OffHoursMinCount is the binding gate given this warm-up's tiny baseline)", boundary, cfg.OffHoursMinCount)
-	}
-
-	f := flagOfType(t, fs, flags.TypeOffHoursActivity)
-	if f.Target != ip {
-		t.Errorf("Target = %q, want %q", f.Target, ip)
-	}
-	if f.Country != "GB" {
-		t.Errorf("Country = %q, want GB", f.Country)
-	}
-	wantPrefix := fmt.Sprintf("%d events at 03:00 vs a baseline of ", boundary)
-	if len(f.Detail) < len(wantPrefix) || f.Detail[:len(wantPrefix)] != wantPrefix {
-		t.Errorf("Detail = %q, want prefix %q", f.Detail, wantPrefix)
-	}
-	wantMid := " for this host at this hour (14 days of history, "
-	if idx := indexOf(f.Detail, wantMid); idx < 0 {
-		t.Errorf("Detail = %q, want to contain %q", f.Detail, wantMid)
-	} else {
-		assertFloatSigmaTail(t, f.Detail[idx+len(wantMid):], " above normal)")
-	}
-	if f.Confidence == nil || *f.Confidence <= 0 || *f.Confidence > 100 {
-		t.Errorf("Confidence = %v, want a value in (0, 100]", f.Confidence)
-	}
-	if !isZeroEvidence(f.Evidence) {
-		t.Errorf("Evidence = %+v, want the zero value", f.Evidence)
-	}
-
-	// Re-fire: same day, count keeps climbing.
-	d.Observe(evtCountry(ip, "GB", 200, day15.Add(time.Duration(boundary+1)*time.Millisecond)))
-	f2 := flagOfType(t, fs, flags.TypeOffHoursActivity)
-	if f2 == nil || f2.Count != 2 {
-		t.Fatalf("expected Count=2, got %+v", f2)
-	}
-
-	// Clear + revive: a burst on a later day inside the window.
-	if !fs.Clear(f2.ID, day15.Add(time.Hour)) {
-		t.Fatal("expected Clear to succeed")
-	}
-	day16 := offHoursAt(2024, time.March, 16, 3)
-	for i := 1; i <= boundary; i++ {
-		d.Observe(evtCountry(ip, "GB", 300+i, day16.Add(time.Duration(i)*time.Millisecond)))
-	}
-	f3 := flagOfType(t, fs, flags.TypeOffHoursActivity)
-	if f3 == nil || f3.Cleared {
-		t.Fatalf("expected the flag to revive as active on day 16, got %+v", f3)
-	}
-	if f3.Count != 1 {
-		t.Errorf("Count after revival = %d, want 1", f3.Count)
-	}
-}
+// TestCharacterizationOffHours_FieldsRefireClearRevive moved to
+// internal/engine/shipped_off_hours_test.go's
+// TestShippedOffHours_FieldsRefireClearRevive (issue #405: off_hours is
+// now a shipped programmatic definition evaluated by internal/engine,
+// not internal/detect -- see shipped_off_hours.go). Every pinned value
+// carried over unchanged: the boundary landing exactly on minCount=5
+// after a 14-day warm-up, Target, Country=GB, the Detail
+// prefix/middle/σ-tail shape, the empty Evidence, Count=1, and the
+// re-fire/clear/revive sequence.
+//
+// off_hours is also the one detector in this port that changed *kind*,
+// not just location, and that is worth recording here rather than only
+// in shipped_off_hours.go: docs/decisions/evaluation-engine.md section 2
+// and #405's own plan both listed off_hours among the detectors expected
+// to become shipped *declarative* definitions -- conditions plus a
+// window plus a threshold, expressed as data. Actually porting it showed
+// that expectation was wrong. off_hours carries twenty-four independent
+// EMA baselines per source, one per clock hour, each advancing exactly
+// once per calendar day, and it fires on a z-score computed against that
+// hour's own history, gated by how many distinct prior days that hour
+// has been observed on. There is no window whose contents are being
+// counted, and the thing being compared is a per-hour daily mean, not an
+// event count -- that is not conditions-plus-a-count under any honest
+// reading. Making it declarative would have meant either inventing a
+// per-hour-of-day counting mode nothing else in the condition language
+// needs, or weakening the statistic in exactly the way
+// OffHoursMinSampleDays exists to prevent (see
+// TestShippedOffHoursNeverFiresWithoutEstablishedSampleDays). So it
+// stayed programmatic instead, alongside host_baseline, global_spike,
+// rule_spike and the other definitions the ADR already carves out for
+// the same reason: some of what this product does cannot honestly be a
+// form.
 
 // ---------------------------------------------------------------------------
 // 11. global_spike
