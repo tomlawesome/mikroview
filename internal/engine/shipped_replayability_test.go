@@ -3,6 +3,7 @@
 package engine
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/tomlawesome/mikroview/internal/detect"
@@ -89,6 +90,96 @@ func TestEveryDeclarativeShippedDetectorHasABuilder(t *testing.T) {
 		}
 		if _, ok := shippedDeclarativeBuilders[string(sd.name)]; !ok {
 			t.Errorf("%q migrates as kind %q but has no shipped declarative builder registered", sd.name, sd.kind)
+		}
+	}
+}
+
+// TestEveryShippedProgrammaticBuilderMatchesItsCatalogueEntry is the
+// programmatic counterpart of the two declarative agreement tests above,
+// and it exists because the port broke exactly this way once: off_hours
+// was registered under "off_hours" while its shipped definition -- and
+// therefore its flag type, since routeToFlag keys on the definition id --
+// is "off_hours_activity". Every unit test still passed, because they
+// built the definition by hand under the id the builder expected. In
+// production main.go would have found no builder for
+// "off_hours_activity", logged an info line, and evaluated nothing.
+//
+// So: every registered programmatic builder must name a shipped detector
+// this binary actually migrates, and that entry must be KindProgrammatic.
+func TestEveryShippedProgrammaticBuilderMatchesItsCatalogueEntry(t *testing.T) {
+	byName := make(map[detect.DetectorName]shippedDetector, len(shippedDetectors))
+	for _, sd := range shippedDetectors {
+		byName[sd.name] = sd
+	}
+	for id := range shippedProgrammaticBuilders {
+		sd, ok := byName[detect.DetectorName(id)]
+		if !ok {
+			t.Errorf("shipped programmatic builder %q names no shipped detector -- main.go would never find it, and the definition would evaluate nothing", id)
+			continue
+		}
+		if sd.kind != KindProgrammatic {
+			t.Errorf("%q has a programmatic builder registered but migrates as kind %q -- the two must agree", id, sd.kind)
+		}
+	}
+}
+
+// TestEveryShippedDefinitionIsClassifiedForReplay is #405's replayability
+// requirement stated once for the whole catalogue rather than per kind:
+// every shipped definition this binary can actually build must resolve to
+// exactly one of Replayable or NonReplayable. A definition implementing
+// neither is a construction bug; one implementing both is an
+// unresolvable ambiguity Go cannot catch at compile time.
+//
+// Definitions with no builder yet are skipped rather than failed -- they
+// are still evaluated by internal/detect, and this test grows to cover
+// them as each one lands.
+func TestEveryShippedDefinitionIsClassifiedForReplay(t *testing.T) {
+	cfg := detect.DefaultConfig()
+	for _, sd := range shippedDetectors {
+		params, err := ValidateParams(sd.schema, sd.params(cfg))
+		if err != nil {
+			t.Errorf("%s: building default params: %v", sd.name, err)
+			continue
+		}
+		def := Definition{
+			ID:          string(sd.name),
+			Name:        shippedDetectorDisplayNames[sd.name],
+			Intent:      IntentDetection,
+			Kind:        sd.kind,
+			Enabled:     true,
+			Params:      params,
+			ParamSchema: sd.schema,
+			Provenance:  Provenance{Origin: ProvenanceShipped, ShippedParams: params},
+		}
+
+		var built Evaluated
+		switch sd.kind {
+		case KindDeclarative:
+			dd, err := BuildShippedDeclarativeDefinition(def)
+			if err != nil {
+				t.Errorf("%s: BuildShippedDeclarativeDefinition: %v", sd.name, err)
+				continue
+			}
+			built = dd
+		case KindProgrammatic:
+			if _, ok := shippedProgrammaticBuilders[string(sd.name)]; !ok {
+				continue // not ported yet
+			}
+			pd, err := BuildShippedProgrammaticDefinition(def, ShippedDeps{})
+			if err != nil {
+				t.Errorf("%s: BuildShippedProgrammaticDefinition: %v", sd.name, err)
+				continue
+			}
+			built = pd
+		}
+
+		receiptCapable, reason, ok := Replayability(built)
+		if !ok {
+			t.Errorf("%s: Replayability could not classify it -- it implements neither Replayable nor NonReplayable, or both", sd.name)
+			continue
+		}
+		if !receiptCapable && strings.TrimSpace(reason) == "" {
+			t.Errorf("%s declares itself non-replayable with an empty reason -- declaring is the opposite of hiding, so the reason is the whole point", sd.name)
 		}
 	}
 }

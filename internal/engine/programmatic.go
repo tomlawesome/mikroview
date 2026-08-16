@@ -340,6 +340,24 @@ type baselineSet struct {
 	cadence UpdateCadence
 	state   *StateStore
 	keyed   *Keyed[*keyedBaseline]
+	// zeroSeeded starts a cold key already primed at zero, so its very
+	// first reading is folded in by the ordinary EMA update rather than
+	// becoming the baseline outright.
+	//
+	// Only off_hours wants this, and it wants it because its statistic is
+	// genuinely a different thing. Every other baseline here answers
+	// "what is this key's normal rate", and seeding that from the first
+	// observation is right -- one observation is the best estimate
+	// available. off_hours answers "how many events does this host
+	// produce during this clock hour, on how many distinct prior days",
+	// and internal/detect accumulated it from a standing start of zero:
+	// the first day observed at an hour moves the baseline by
+	// emaAlpha * count, not to count. Priming instead would make one
+	// night's traffic the whole baseline, which is exactly the
+	// single-busy-night false positive OffHoursMinSampleDays exists to
+	// rule out. Reproducing it is not a stylistic choice; the pinned
+	// Detail strings carry the resulting baseline value.
+	zeroSeeded bool
 }
 
 func newBaselineSet(defID string, primeWindow time.Duration, floor BaselineFloor, cadence UpdateCadence, state *StateStore) *baselineSet {
@@ -353,6 +371,47 @@ func newBaselineSet(defID string, primeWindow time.Duration, floor BaselineFloor
 	}
 }
 
+// zeroSeed marks this set's cold keys as starting primed at zero -- see
+// the field's own doc comment. Returns s for chaining at construction.
+func (s *baselineSet) zeroSeed() *baselineSet {
+	s.zeroSeeded = true
+	return s
+}
+
+// get returns key's Baseline, constructing it (or resuming it from
+// persisted state) if this is the first time key has been seen. For a
+// definition that needs to read a baseline without folding a reading in,
+// or to fold on a cadence of its own rather than once per call -- see
+// off_hours, whose baseline advances once per calendar day while its
+// firing check runs on every event.
+func (s *baselineSet) get(key string, now time.Time) *Baseline {
+	return s.keyed.GetOrCreate(key, now, func() *keyedBaseline { return &keyedBaseline{b: s.newBaseline(key, now)} }).b
+}
+
+// persist offers key's current state to the StateStore, subject to
+// baselinePersistInterval. Called by a definition that folds readings
+// through get rather than through reading.
+func (s *baselineSet) persist(key string, now time.Time) {
+	kb, ok := s.keyed.Get(key)
+	if !ok {
+		return
+	}
+	s.maybePersist(key, kb, now)
+}
+
+func (s *baselineSet) newBaseline(key string, now time.Time) *Baseline {
+	if s.state != nil {
+		if persisted, ok := s.state.Get(s.defID, key); ok {
+			return RestoreBaseline(s.primeWindow, s.floor, s.cadence, persisted)
+		}
+	}
+	if s.zeroSeeded {
+		return RestoreBaseline(s.primeWindow, s.floor, s.cadence,
+			BaselineState{Primed: true, FirstSeen: now})
+	}
+	return NewBaseline(s.primeWindow, s.floor, s.cadence)
+}
+
 // reading folds one reading into key's baseline and returns the Snapshot
 // as it stood before it -- Baseline.Reading's own contract, so a firing
 // decision compares against the baseline as it was, not as it becomes.
@@ -364,14 +423,7 @@ func newBaselineSet(defID string, primeWindow time.Duration, floor BaselineFloor
 // first window, so the very first sample is a fully-observed rate rather
 // than a still-filling ring's artificially low one.
 func (s *baselineSet) reading(key string, now time.Time, value float64) Snapshot {
-	kb := s.keyed.GetOrCreate(key, now, func() *keyedBaseline {
-		if s.state != nil {
-			if persisted, ok := s.state.Get(s.defID, key); ok {
-				return &keyedBaseline{b: RestoreBaseline(s.primeWindow, s.floor, s.cadence, persisted)}
-			}
-		}
-		return &keyedBaseline{b: NewBaseline(s.primeWindow, s.floor, s.cadence)}
-	})
+	kb := s.keyed.GetOrCreate(key, now, func() *keyedBaseline { return &keyedBaseline{b: s.newBaseline(key, now)} })
 	before := kb.b.Reading(now, value)
 	s.maybePersist(key, kb, now)
 	return before

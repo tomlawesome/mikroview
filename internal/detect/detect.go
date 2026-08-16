@@ -311,43 +311,6 @@ var maxTrackedSources = 4096
 // only receives newly-raised flags, a far rarer event).
 const observeQueueSize = 4096
 
-type sourceWindow struct {
-	lastActivity time.Time
-
-	// The rolling event-count ring and the per-host EMA baseline that
-	// used to live here moved to internal/engine with activity_spike
-	// (issue #405, shipped_activity_spike.go). What remains is off_hours'
-	// own per-hour state, which is a different statistic over a different
-	// cadence -- see below.
-
-	// hourly is off_hours.go's per-hour-of-day counterpart to
-	// baseline/variance above: 24 independent EMA baselines, one per
-	// clock hour, each tracking how many events this source typically
-	// produces during that specific hour. Unlike baseline/variance
-	// (which judge every observation against one rolling-window rate),
-	// each entry here only advances once per calendar day -- see
-	// hourlyDay/hourlyCount below and checkOffHoursActivity's own doc
-	// comment for why daily granularity is what "distinct prior days of
-	// history" (sampleDays) actually requires.
-	hourly [24]struct {
-		baseline   float64
-		variance   float64
-		sampleDays int
-	}
-	// hourlyDay is the calendar day (server-local "2006-01-02") each
-	// hour bucket is currently accumulating hourlyCount for -- "" if
-	// that hour has never been observed. checkOffHoursActivity folds the
-	// previous day's hourlyCount into hourly[h]'s EMA (and advances
-	// sampleDays) the moment a later day is first seen at that hour,
-	// then starts today's count fresh.
-	hourlyDay [24]string
-	// hourlyCount is today's (hourlyDay[h]'s) running event count for
-	// hour h, not yet folded into hourly[h]'s baseline -- this is the
-	// "current count" checkOffHoursActivity compares against that
-	// baseline, live, as events arrive.
-	hourlyCount [24]int
-}
-
 // Detector tracks per-source rolling-window state for the port-scan,
 // activity-spike, and critical-port detectors, raising flags into fs
 // when a threshold is crossed. Observe itself is intended to be called
@@ -387,7 +350,6 @@ type Detector struct {
 	// convention as knownBad above.
 	netclass netClassLookup
 
-	perSource map[string]*sourceWindow
 	// criticalHits (critical_port's per-source attempt-count map) and
 	// criticalPortIPs (distributed_brute_force's per-port distinct-source
 	// map) both moved to internal/engine with their detectors (issue
@@ -422,7 +384,6 @@ func NewWithSettings(cfg Config, fs *flags.Store, settings *SettingsStore) *Dete
 		fs:             fs,
 		settings:       settings,
 		lookupSlots:    make(chan struct{}, reputationLookupConcurrency),
-		perSource:      make(map[string]*sourceWindow),
 		destWindows:    make(map[string]*destWindow),
 		lowSlowWindows: make(map[string]*lowSlowWindow),
 		observeQueue:   make(chan store.Event, observeQueueSize),
@@ -504,7 +465,10 @@ func (d *Detector) Observe(e store.Event) {
 	// stays open: the port reproduces its arithmetic exactly rather than
 	// picking one of that issue's candidate remedies.
 	d.observeLowSlowScan(e, now)
-	d.observeOffHours(e, now)
+	// off_hours moved to internal/engine as a shipped programmatic
+	// definition (issue #405, see shipped_off_hours.go), taking
+	// sourceWindow's per-hour baselines with it -- which is the last thing
+	// that struct held, so d.perSource goes with it.
 
 	// critical_port and distributed_brute_force both moved to
 	// internal/engine as shipped declarative definitions (issue #405, see
@@ -558,14 +522,12 @@ func (d *Detector) Observe(e store.Event) {
 // engine.ReputationSink wiring for the reputation-lookup counterpart).
 
 // activeWindow is implemented by every per-key detector state struct
-// (sourceWindow, destWindow, lowSlowWindow)
+// (destWindow, lowSlowWindow)
 // purely so evictOldestByActivity can be generic over all of them --
 // they otherwise share no behavior, just this one field.
 type activeWindow interface {
 	lastActivityTime() time.Time
 }
-
-func (w *sourceWindow) lastActivityTime() time.Time { return w.lastActivity }
 
 // evictOldestByActivity sheds the least-recently-active entries once a
 // per-source map is full, shared by every per-key detector state map
