@@ -1,7 +1,16 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 // Mirrors internal/store/event.go's JSON tags.
-export type Action = 'accept' | 'drop' | 'reject' | 'log' | 'unknown'
+//
+// accept/drop/reject are filter-table verdicts; log is a rule that logs
+// without deciding the packet's fate; marked is a mangle mark rule
+// (mark-connection / mark-routing / mark-packet) and natted is address
+// translation (masquerade / src-nat / dst-nat / redirect). unknown means
+// the parser genuinely could not tell -- see internal/store/event.go for
+// what it will and will not infer. Adding a member here is a
+// deliberately loud change: every Record<Action, ...> in the UI stops
+// type-checking until it has a label and a color. See #437.
+export type Action = 'accept' | 'drop' | 'reject' | 'log' | 'marked' | 'natted' | 'unknown'
 
 export interface FirewallEvent {
   id: number

@@ -76,6 +76,12 @@
   .row-log {
     background: var(--row-log-bg);
   }
+  .row-marked {
+    background: var(--row-marked-bg);
+  }
+  .row-natted {
+    background: var(--row-natted-bg);
+  }
   .row-unknown {
     background: var(--row-unknown-bg);
   }

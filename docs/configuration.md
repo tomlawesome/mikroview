@@ -2795,7 +2795,9 @@ Every mutating (`POST`/`PUT`/`DELETE`) request also requires an
 mitigation, see SECURITY.md).
 
 `/api/events` query parameters: `device`, `action` (`accept`/`drop`/
-`reject`/`log`/`unknown`), `protocol`, `chain`, `interface`, `ip` (exact
+`reject`/`log`/`marked`/`natted`/`unknown` -- see
+[RouterOS setup](routeros-setup.md#3-tag-your-firewall-rules) for which
+kind of rule produces each), `protocol`, `chain`, `interface`, `ip` (exact
 or CIDR, matches source or destination), `port` (matches source or
 destination), `srcScope`/`dstScope` (`internal` or `external`, restricts
 that side of the connection to a private/LAN or public address
