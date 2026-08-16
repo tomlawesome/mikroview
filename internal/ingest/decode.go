@@ -71,6 +71,20 @@ type wireFormat struct {
 	Page    int             `json:"page"`
 	Pages   int             `json:"pages"`
 	Records json.RawMessage `json:"records"`
+	// RouterOSVersion is what the pushing router reports as its own
+	// software version ([/system/resource get version]) -- issue #436's
+	// derived-version source, carried here rather than asked for, since a
+	// router already pushing its tables can say what it runs for one more
+	// key. It sits on the envelope rather than on a record because it
+	// describes the router, not a row of any table, so every kind's push
+	// carries it.
+	//
+	// Optional, like every field this schema has gained: a script that
+	// omits it decodes fine and reports nothing, which is the documented
+	// safe upgrade order (an older script against a newer mikroview
+	// leaves new fields unset). Nothing warns on a mismatch yet -- that
+	// half of #436 is not this issue.
+	RouterOSVersion string `json:"routerosVersion"`
 }
 
 // Payload is one fully decoded and validated page of RouterOS state.
@@ -83,6 +97,11 @@ type Payload struct {
 	Kind  Kind
 	Page  int
 	Pages int
+
+	// RouterOSVersion is what the router said it was running when it sent
+	// this page, or "" when its script does not send it. See
+	// wireFormat.RouterOSVersion.
+	RouterOSVersion string
 
 	AddressList         []AddressListEntry
 	FilterRules         []FilterRule
@@ -148,7 +167,15 @@ func DecodePayload(r io.Reader) (Payload, error) {
 		return Payload{}, ErrBadPage
 	}
 
-	out := Payload{Kind: wire.Kind, Page: wire.Page, Pages: wire.Pages}
+	// The version string is router-controlled text like every field in a
+	// record, so it is held to the same length bound and the same
+	// control/format-character refusal rather than trusted for sitting on
+	// the envelope.
+	if err := validateFieldText("routerosVersion", wire.RouterOSVersion); err != nil {
+		return Payload{}, err
+	}
+
+	out := Payload{Kind: wire.Kind, Page: wire.Page, Pages: wire.Pages, RouterOSVersion: wire.RouterOSVersion}
 
 	var err error
 	switch wire.Kind {

@@ -73,6 +73,12 @@ type Store struct {
 
 type deviceState struct {
 	kinds map[ingest.Kind]*kindState
+	// routerosVersion is the last version this device reported on a push
+	// envelope, and when it reported it (#436's derived source, carried
+	// by #408's schema). Per device, like everything else here: a router
+	// says what *it* runs, never what another one does.
+	routerosVersion   string
+	routerosVersionAt time.Time
 	// hostsExact/hostsCIDR are the identity index rebuilt whenever an
 	// identity-carrying kind changes -- see rebuildIdentityLocked. Kept
 	// per device rather than globally so one device's re-push doesn't
@@ -146,6 +152,17 @@ func (s *Store) Apply(device string, p ingest.Payload, now time.Time) error {
 
 	ks.pages[p.Page] = p
 	ks.updatedAt = now
+
+	// A push that names a version replaces what this device reported; a
+	// push that omits it leaves the last answer alone rather than
+	// clearing it. Absence of evidence is not evidence here either -- an
+	// operator who reverts to an older push script has not downgraded
+	// RouterOS, and forgetting on the strength of a silent page would
+	// invent a state change nothing observed.
+	if p.RouterOSVersion != "" {
+		ds.routerosVersion = p.RouterOSVersion
+		ds.routerosVersionAt = now
+	}
 
 	switch p.Kind {
 	case ingest.KindDNSStatic, ingest.KindDHCPLease, ingest.KindWireguardPeer:
@@ -467,6 +484,30 @@ func (s *Store) Devices() []string {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return sortedDeviceNamesLocked(s.devices)
+}
+
+// RouterOSVersion reports what device last said it was running, and
+// when it said it. ok is false when that device has never pushed a
+// version at all -- which is every device whose push script predates
+// issue #408's schema, and is not an error: it means "not stated", and a
+// caller must not read it as old, unsupported, or anything else.
+//
+// The version is the router's own claim about itself, unverified by
+// construction: mikroview never connects to a router (AGENTS.md,
+// "mikroview observes; it never scans or connects"), so there is nothing
+// to check it against. Scoped to the pushing device for the same reason
+// every other read here is -- see HostName.
+//
+// Nothing warns on a mismatch yet; that is #436's own work. This is the
+// field arriving and being readable, which is what #408 carried.
+func (s *Store) RouterOSVersion(device string) (version string, updatedAt time.Time, ok bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	ds, found := s.devices[device]
+	if !found || ds.routerosVersion == "" {
+		return "", time.Time{}, false
+	}
+	return ds.routerosVersion, ds.routerosVersionAt, true
 }
 
 // PushedKinds reports, for one device, every table it has pushed and
