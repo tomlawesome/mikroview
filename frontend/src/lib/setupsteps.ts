@@ -137,7 +137,8 @@ const blockSpecs: Record<string, BlockSpec> = {
     record:
       '{"ordinal"=$i; "comment"=($v->"comment"); "chain"=($v->"chain"); "action"=($v->"action"); ' +
       '"srcAddressList"=($v->"src-address-list"); "logPrefix"=($v->"log-prefix"); "dstPort"=($v->"dst-port"); ' +
-      '"protocol"=($v->"protocol"); "log"=($v->"log"); "dstAddress"=($v->"dst-address"); "srcAddress"=($v->"src-address")}',
+      '"protocol"=($v->"protocol"); "log"=($v->"log"); "dstAddress"=($v->"dst-address"); "srcAddress"=($v->"src-address"); ' +
+      '"connectionState"=($v->"connection-state"); "inInterface"=($v->"in-interface"); "outInterface"=($v->"out-interface")}',
   },
   'address-list': {
     varName: 'al',
@@ -168,7 +169,11 @@ export function pushBlock(address: string, token: string, kind: string): string 
     `  :local rec ${spec.record}`,
     `  :set ${recs} ($${recs}, {$rec})`,
     `}`,
-    `:local ${payload} [:serialize to=json value={"kind"="${kind}"; "page"=1; "pages"=1; "records"=$${recs}}]`,
+    // routerosVersion rides the payload rather than a record: it
+    // describes the router, not a row of any table (#408 carrying
+    // #436's derived version source). Optional server-side, and the
+    // same line in every block.
+    `:local ${payload} [:serialize to=json value={"kind"="${kind}"; "page"=1; "pages"=1; "routerosVersion"=[/system/resource get version]; "records"=$${recs}}]`,
     `/tool fetch url="https://${address}/api/ingest/routeros" http-method=post http-data=$${payload} ` +
       `http-header-field=("Content-Type: application/json,Authorization: Bearer ${token}") ` +
       `check-certificate=yes output=none`,
