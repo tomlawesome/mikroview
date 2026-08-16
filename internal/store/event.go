@@ -9,9 +9,9 @@ type Action string
 // The action vocabulary covers RouterOS's log-producing rule kinds, not
 // just the filter verdicts.
 //
-// The first four are filter-table verdicts and the historical whole set.
-// Everything else -- a mangle mark rule, a NAT translation, a rule that
-// only logs -- had no value to land on, so it fell into ActionUnknown.
+// accept/drop/reject/log were the whole set, which is the filter table
+// and nothing else. A mangle mark rule or a NAT translation had no
+// value to land on, so both fell into ActionUnknown.
 // That is not a rare corner: policy routing (mark-connection /
 // mark-routing / mark-packet steering traffic into a tunnel) is built
 // out of mangle rules, and a deployment doing it logs a steady dribble
@@ -19,10 +19,10 @@ type Action string
 // stops meaning anything an operator can act on, which is exactly when
 // they should be looking at it. See #437.
 //
-// ActionMarked and ActionNatted name the two non-filter classes that a
-// log line can be attributed to. ActionLog already covered the third
-// (log-only / passthrough rules, prefix code L) and keeps its value --
-// renaming it would move a classification that is already correct.
+// ActionMarked and ActionNatted name those two. The third non-filter
+// class the issue names, log-only / passthrough rules, was already
+// covered by ActionLog (prefix code L) and keeps its value -- renaming
+// it would move a classification that is already correct.
 //
 // ActionUnknown keeps its literal meaning: the parser could not tell.
 // Nothing infers a class it cannot support from the line itself -- see
