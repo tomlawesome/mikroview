@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"strconv"
 	"time"
+
+	"github.com/tomlawesome/mikroview/internal/store"
 )
 
 // This file is issue #405's declarative half of internal/detect's port
@@ -35,8 +37,9 @@ import (
 // the tunable parts from the stored Definition and supplies the fixed
 // parts itself.
 var shippedDeclarativeBuilders = map[string]func(Definition) (*DeclarativeDefinition, error){
-	"port_scan":     buildPortScanDefinition,
-	"critical_port": buildCriticalPortDefinition,
+	"port_scan":      buildPortScanDefinition,
+	"critical_port":  buildCriticalPortDefinition,
+	"repeated_drops": buildRepeatedDropsDefinition,
 }
 
 // BuildShippedDeclarativeDefinition constructs the live *DeclarativeDefinition
@@ -245,5 +248,82 @@ func buildCriticalPortDefinition(def Definition) (*DeclarativeDefinition, error)
 		// Detail; the accumulated port set is what both the sentence and
 		// the Evidence now carry.
 		Evidence: []EvidenceField{EvidencePorts},
+	})
+}
+
+// buildRepeatedDropsDefinition builds repeated_drops' live
+// DeclarativeDefinition from a stored Definition -- the shipped
+// declarative counterpart of internal/detect's old observeRepeatedDrops
+// (repeated_drops.go, before issue #405 removed it): "the same (source,
+// destination port) pair repeatedly refused by a locally-hosted
+// service."
+//
+//   - Conditions: destinationAddress matchesClassification "internal"
+//     (internal/detect's !isPublic(e.DstIP) gate, which
+//     classificationMatches reproduces with the same isPublicIP formula)
+//     and action in {drop, reject}. Unlike critical_port there is no
+//     connection-state filter and no curated port list: the point here is
+//     not "someone probing a sensitive service" but "something keeps
+//     failing to reach one of your ports", which is why this detector
+//     fires on a much longer window and higher threshold instead.
+//     internal/detect additionally required e.DstIP != "" and
+//     e.DstPort != 0; both are implied here -- an empty destination
+//     address cannot be classified internal, and a zero destination port
+//     would key every such event together, which
+//     TestShippedRepeatedDropsIgnoresPortlessEvents pins is not what
+//     happens.
+//   - Key: KeyPerSourcePort -- one window per (source, destination port)
+//     pair, matching detect.go's dropPairKey. Deliberately not keyed on
+//     the destination address: docs/configuration.md documents the
+//     source+port keying, and #379's judge confirms that aggregation is
+//     correct. It was the *sentence* that was wrong.
+//   - CountingMode: total -- every refused attempt counts.
+//   - Target: "{SourceAddress} -> port {DestinationPort}", the composite
+//     internal/detect built by hand. Both tokens are key components, so
+//     they are constant for the window by construction.
+//   - DetailTemplate: issue #379's repeated_drops fix. internal/detect
+//     rendered "N attempts against <e.DstIP>:<port> dropped in W", naming
+//     the single triggering event's destination for a count spread across
+//     every internal host sharing that port -- "exactly one attempt ever
+//     reached .19; the advice points the operator at a host that saw a
+//     single packet." The destination address leaves the sentence, which
+//     now names only the port (a key component, so always true of every
+//     counted attempt), and the distinct destination set moves into
+//     Evidence.Hosts, following dest_spread's existing pattern exactly as
+//     #405's plan specifies.
+//   - Evidence: hosts (the distinct destinations, per above) and NAT (the
+//     triggering event's translation detail, which internal/detect
+//     already attached -- see flags.Evidence.NAT's own doc comment).
+func buildRepeatedDropsDefinition(def Definition) (*DeclarativeDefinition, error) {
+	params, err := ValidateParams(def.ParamSchema, def.Params)
+	if err != nil {
+		return nil, fmt.Errorf("engine: shipped declarative definition %q: %w", def.ID, err)
+	}
+	threshold, err := paramInt(params, "threshold")
+	if err != nil {
+		return nil, fmt.Errorf("engine: shipped declarative definition %q: %w", def.ID, err)
+	}
+	window, err := paramDuration(params, "window")
+	if err != nil {
+		return nil, fmt.Errorf("engine: shipped declarative definition %q: %w", def.ID, err)
+	}
+
+	conds := []Condition{
+		{Field: FieldDestinationAddress, Operator: OpMatchesClassification, Values: []string{"internal"}},
+		{Field: FieldAction, Operator: OpInSet, Values: []string{string(store.ActionDrop), string(store.ActionReject)}},
+	}
+	template := fmt.Sprintf(
+		"{Count} attempts against port {DestinationPort} dropped in %s -- check whether this port is meant to be open",
+		window)
+
+	return NewDeclarativeDefinition(def, DeclarativeSpec{
+		Conditions:     conds,
+		Key:            KeyPerSourcePort,
+		Window:         window,
+		Threshold:      threshold,
+		CountingMode:   CountingTotal,
+		DetailTemplate: template,
+		TargetTemplate: "{SourceAddress} -> port {DestinationPort}",
+		Evidence:       []EvidenceField{EvidenceHosts, EvidenceNAT},
 	})
 }

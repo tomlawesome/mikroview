@@ -13,7 +13,6 @@ import (
 
 	"github.com/tomlawesome/mikroview/internal/flags"
 	"github.com/tomlawesome/mikroview/internal/reputation"
-	"github.com/tomlawesome/mikroview/internal/store"
 )
 
 // fakeReputation is a reputationLookup that blocks each call until the
@@ -98,55 +97,47 @@ func waitForConfidence(t *testing.T, fs *flags.Store, target string, want int) {
 	t.Fatalf("timed out waiting for %s to reach confidence %d, got %+v", target, want, fs.List())
 }
 
-// The four tests below (renamed from their original TestCriticalPort*/
-// TestReputation* names naming critical_port) used critical_port purely
-// as a convenient, cheap-to-trigger flag-raiser for a public source IP --
-// none of them are actually about critical_port's own behaviour, just
-// about maybeCheckReputation's async lookup/floor-application path. Now
-// that critical_port has moved to internal/engine as a shipped
-// declarative definition (issue #405) and internal/detect no longer
-// evaluates it at all, they are retargeted onto repeated_drops instead,
-// which internal/detect still evaluates, calls maybeCheckReputation from
-// observeRepeatedDrops with the source IP, and fires off a small threshold
-// of dropped attempts against the same (SrcIP, DstPort) pair. Unlike
-// critical_port's plain-IP Target, repeated_drops' Target is the composite
-// "<ip> -> port <N>" string (see dropPairKey/observeRepeatedDrops), so
-// every assertion keyed on the bare IP below is keyed on that composite
-// string instead.
+// The tests below (renamed from their original TestCriticalPort*/
+// TestReputation* names naming critical_port) used critical_port, then
+// repeated_drops, purely as a convenient, cheap-to-trigger flag-raiser for
+// a public source IP -- none of them are actually about either detector's
+// own behaviour, just about maybeCheckReputation's async lookup/floor-
+// application path. Now that repeated_drops has also moved to
+// internal/engine as a shipped declarative definition (issue #405) and
+// internal/detect no longer evaluates it at all, they are retargeted onto
+// activity_spike instead, which internal/detect still evaluates. Per
+// netclass_test.go's documented recipe, activity_spike fires on a public
+// source IP's 6th event (one second apart) at DefaultConfig's real
+// HostActivityMultiplier(3), once ActivitySpikeThreshold is lowered to 3
+// and ActivitySpikeWindow to a minute -- the first call primes the EMA
+// baseline and hostActivityMinSamples(5) is reached on the 6th.
+// checkHostActivityBaseline calls maybeCheckReputation with the plain
+// source IP as both target and ip (unlike repeated_drops' composite
+// "<ip> -> port <N>" target), so every assertion below is keyed on the
+// bare IP rather than a composite string.
+//
+// Two of the original four no longer need a home here at all:
+// TestRepeatedDropsAppliesReputationFloor's engine counterpart is
+// internal/engine/reputation_sink_test.go's
+// TestReputationSinkLooksUpTheSourceNotTheCompositeTarget, and
+// TestReputationSkippedForInternalSource's is
+// TestReputationSinkSkippedForAnInternalSourceBehindACompositeTarget --
+// both deleted here rather than retargeted a third time.
 
-func TestRepeatedDropsAppliesReputationFloor(t *testing.T) {
+// TestActivitySpikeReputationSnapshotCapturedWithoutAbuseScore is
+// TestReputationSnapshotCapturedWithoutAbuseScore, retargeted onto
+// activity_spike. Unlike repeated_drops' plain overshootConfidence,
+// activity_spike's confidence is an EMA z-score with no simple closed
+// form for an arbitrary six-event burst, so what this test pins is no
+// longer a hand-derived number: it captures the behavioral confidence
+// already computed (synchronously, before the async lookup resolves),
+// then asserts that attaching a no-AbuseScore snapshot afterwards leaves
+// that number untouched -- the same "stays behavior-only" guarantee the
+// original test's exact formula was itself standing in for.
+func TestActivitySpikeReputationSnapshotCapturedWithoutAbuseScore(t *testing.T) {
 	cfg := DefaultConfig()
-	cfg.RepeatedDropsThreshold = 3
-
-	fake := newFakeReputation()
-	fake.setScore("198.51.100.4", 85)
-	d, fs := newTestDetector(t, cfg)
-	d.WithReputation(fake)
-
-	target := "198.51.100.4 -> port 8080"
-	now := time.Now()
-	for i := 0; i < 3; i++ {
-		d.Observe(store.Event{SrcIP: "198.51.100.4", DstIP: "192.168.1.1", DstPort: 8080, Action: store.ActionDrop, ReceivedAt: now.Add(time.Duration(i) * time.Second)})
-	}
-
-	if ip := expectStarted(t, fake.started); ip != "198.51.100.4" {
-		t.Fatalf("expected a lookup for 198.51.100.4, got %s", ip)
-	}
-	close(fake.release)
-	waitForConfidence(t, fs, target, 85)
-
-	for _, f := range fs.List() {
-		if f.Target == target {
-			if f.Reputation == nil || f.Reputation.AbuseScore == nil || *f.Reputation.AbuseScore != 85 {
-				t.Errorf("expected the reputation snapshot to be stored on the flag, got %+v", f.Reputation)
-			}
-		}
-	}
-}
-
-func TestReputationSnapshotCapturedWithoutAbuseScore(t *testing.T) {
-	cfg := DefaultConfig()
-	cfg.RepeatedDropsThreshold = 3
+	cfg.ActivitySpikeThreshold = 3
+	cfg.ActivitySpikeWindow = time.Minute
 
 	// Fake left with no score set for this IP -- simulates a Shodan-only
 	// result (no AbuseIPDB key configured).
@@ -154,85 +145,87 @@ func TestReputationSnapshotCapturedWithoutAbuseScore(t *testing.T) {
 	d, fs := newTestDetector(t, cfg)
 	d.WithReputation(fake)
 
-	target := "198.51.100.4 -> port 8080"
+	ip := "198.51.100.4"
 	now := time.Now()
-	for i := 0; i < 3; i++ {
-		d.Observe(store.Event{SrcIP: "198.51.100.4", DstIP: "192.168.1.1", DstPort: 8080, Action: store.ActionDrop, ReceivedAt: now.Add(time.Duration(i) * time.Second)})
+	for i := 0; i < 6; i++ {
+		d.Observe(evt(ip, 8080, now.Add(time.Duration(i)*time.Second)))
 	}
 	expectStarted(t, fake.started)
+
+	before := flagOfType(t, fs, flags.TypeActivitySpike)
+	if before == nil || before.Confidence == nil {
+		t.Fatal("expected an activity_spike flag with a behavioral confidence already set")
+	}
+	wantConfidence := *before.Confidence
+
 	close(fake.release)
 
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
-		for _, f := range fs.List() {
-			if f.Target == target && f.Reputation != nil {
-				if f.Confidence == nil || *f.Confidence != overshootConfidence(3, cfg.RepeatedDropsThreshold) {
-					t.Errorf("expected confidence to stay behavior-only without an AbuseScore, got %+v", f.Confidence)
-				}
-				return
+		if f := flagOfType(t, fs, flags.TypeActivitySpike); f != nil && f.Reputation != nil {
+			if f.Confidence == nil || *f.Confidence != wantConfidence {
+				t.Errorf("expected confidence to stay behavior-only without an AbuseScore, got %v want %d", f.Confidence, wantConfidence)
 			}
+			return
 		}
 		time.Sleep(5 * time.Millisecond)
 	}
 	t.Fatal("timed out waiting for the reputation snapshot to be stored")
 }
 
-func TestRepeatedDropsReputationLookupOnlyFiresOnNewEpisode(t *testing.T) {
+// TestActivitySpikeReputationLookupOnlyFiresOnNewEpisode is
+// TestRepeatedDropsReputationLookupOnlyFiresOnNewEpisode, retargeted onto
+// activity_spike.
+func TestActivitySpikeReputationLookupOnlyFiresOnNewEpisode(t *testing.T) {
 	cfg := DefaultConfig()
-	cfg.RepeatedDropsThreshold = 3
+	cfg.ActivitySpikeThreshold = 3
+	cfg.ActivitySpikeWindow = time.Minute
 
 	fake := newFakeReputation()
 	fake.setScore("198.51.100.4", 50)
 	d, fs := newTestDetector(t, cfg)
 	d.WithReputation(fake)
 
-	target := "198.51.100.4 -> port 8080"
+	ip := "198.51.100.4"
 	now := time.Now()
-	for i := 0; i < 3; i++ {
-		d.Observe(store.Event{SrcIP: "198.51.100.4", DstIP: "192.168.1.1", DstPort: 8080, Action: store.ActionDrop, ReceivedAt: now.Add(time.Duration(i) * time.Second)})
+	for i := 0; i < 6; i++ {
+		d.Observe(evt(ip, 8080, now.Add(time.Duration(i)*time.Second)))
 	}
 	expectStarted(t, fake.started)
 	close(fake.release)
-	waitForConfidence(t, fs, target, 50)
+	waitForConfidence(t, fs, ip, 50)
 
 	// A re-fire of the same still-active flag must not trigger a second lookup.
-	d.Observe(store.Event{SrcIP: "198.51.100.4", DstIP: "192.168.1.1", DstPort: 8080, Action: store.ActionDrop, ReceivedAt: now.Add(10 * time.Second)})
+	d.Observe(evt(ip, 8080, now.Add(6*time.Second)))
 	expectNoneStarted(t, fake.started)
 }
 
-// TestReputationSkippedForInternalSource used to drive port_scan, which
-// no longer exists in this package (issue #405 moved it to
-// internal/engine) -- as written it passed vacuously, exercising nothing.
-// Retargeted onto repeated_drops with a private source IP so it actually
-// exercises maybeCheckReputation's isPublic gate again.
-func TestReputationSkippedForInternalSource(t *testing.T) {
+// TestActivitySpikePoolSaturationSkipsExcessLookups is
+// TestRepeatedDropsPoolSaturationSkipsExcessLookups, retargeted onto
+// activity_spike: reputationLookupConcurrency+1 distinct public source
+// IPs, each independently driven through its own six-event burst (the
+// same recipe as the two tests above), so each crosses the threshold and
+// requests its own lookup slot.
+func TestActivitySpikePoolSaturationSkipsExcessLookups(t *testing.T) {
 	cfg := DefaultConfig()
-	cfg.RepeatedDropsThreshold = 3
+	cfg.ActivitySpikeThreshold = 3
+	cfg.ActivitySpikeWindow = time.Minute
 
 	fake := newFakeReputation()
 	d, _ := newTestDetector(t, cfg)
 	d.WithReputation(fake)
 
-	now := time.Now()
-	for i := 0; i < 3; i++ {
-		d.Observe(store.Event{SrcIP: "192.168.1.50", DstIP: "192.168.1.1", DstPort: 8080, Action: store.ActionDrop, ReceivedAt: now.Add(time.Duration(i) * time.Millisecond)})
-	}
-	expectNoneStarted(t, fake.started)
-}
-
-func TestRepeatedDropsPoolSaturationSkipsExcessLookups(t *testing.T) {
-	cfg := DefaultConfig()
-	cfg.RepeatedDropsThreshold = 1
-	cfg.DistributedBruteForceThreshold = 1000 // keep the group path quiet so it doesn't also compete for pool slots here
-
-	fake := newFakeReputation()
-	d, _ := newTestDetector(t, cfg)
-	d.WithReputation(fake)
-
+	// Port 8080 is deliberately not one of DefaultConfig's CriticalPorts,
+	// so distributed_brute_force's critical-port gate (see Observe in
+	// detect.go) never even looks at these events -- no need to also
+	// detune its threshold to keep it quiet, the way the repeated_drops
+	// version of this test had to.
 	now := time.Now()
 	for i := 1; i <= reputationLookupConcurrency+1; i++ {
 		ip := fakeExternalIP(i)
-		d.Observe(store.Event{SrcIP: ip, DstIP: "192.168.1.1", DstPort: 8080, Action: store.ActionDrop, ReceivedAt: now.Add(time.Duration(i) * time.Second)})
+		for j := 0; j < 6; j++ {
+			d.Observe(evt(ip, 8080, now.Add(time.Duration(i*10+j)*time.Second)))
+		}
 	}
 
 	// Exactly reputationLookupConcurrency lookups should start and then

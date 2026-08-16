@@ -124,7 +124,7 @@ func (d *DeclarativeDefinition) Replay(corpus Corpus, candidate Params) (Result,
 		key := d.keyFor(e)
 		st, ok := states[key]
 		if !ok {
-			st = d.newStateForWindow(window)
+			st = d.newStateForWindow(window, e)
 			states[key] = st
 		}
 		d.recordEvidence(st, e)
@@ -148,7 +148,7 @@ func (d *DeclarativeDefinition) Replay(corpus Corpus, candidate Params) (Result,
 			return
 		}
 
-		em, err := RenderEmission(st.evidence, count, d.detailTemplate, false)
+		em, err := RenderEmission(st.evidence, count, st.detailTemplate, false)
 		if err != nil {
 			// Same "log and skip this one occurrence, keep replaying"
 			// policy Evaluate itself uses (declarative.go): a render
@@ -166,7 +166,7 @@ func (d *DeclarativeDefinition) Replay(corpus Corpus, candidate Params) (Result,
 		if len(sample) < replaySampleBound {
 			sample = append(sample, ReplaySample{
 				At:     now,
-				Target: d.targetFor(key),
+				Target: st.target,
 				Detail: em.Detail,
 				Ports:  em.Ports,
 				Hosts:  em.Hosts,

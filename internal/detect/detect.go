@@ -406,7 +406,6 @@ type Detector struct {
 	criticalPortIPs map[int]*portSources
 	destWindows     map[string]*destWindow
 	ruleWindows     map[string]*ruleWindow
-	dropPairs       map[string]*dropPairWindow
 	lowSlowWindows  map[string]*lowSlowWindow
 
 	// observeQueue backs Enqueue/Run -- see observeQueueSize's doc
@@ -440,7 +439,6 @@ func NewWithSettings(cfg Config, fs *flags.Store, settings *SettingsStore) *Dete
 		criticalPortIPs: make(map[int]*portSources),
 		destWindows:     make(map[string]*destWindow),
 		ruleWindows:     make(map[string]*ruleWindow),
-		dropPairs:       make(map[string]*dropPairWindow),
 		lowSlowWindows:  make(map[string]*lowSlowWindow),
 		observeQueue:    make(chan store.Event, observeQueueSize),
 	}
@@ -571,16 +569,10 @@ func (d *Detector) Observe(e store.Event) {
 		}
 	}
 
-	if e.DstIP != "" && e.DstPort != 0 && !isPublic(e.DstIP) && (e.Action == store.ActionDrop || e.Action == store.ActionReject) {
-		// destination is a locally-hosted service, and this attempt was
-		// refused -- track repeats regardless of whether the source is
-		// internal or external, unlike the critical-port detector this
-		// isn't restricted to a curated port list or to external sources.
-		if rd := d.settings.Get(DetectorRepeatedDrops); rd.Enabled &&
-			scopeMatchesHost(rd.Scope, e.SrcIP) && scopeMatchesPort(rd.Scope, e.DstPort) {
-			d.observeRepeatedDrops(e, now)
-		}
-	}
+	// repeated_drops moved to internal/engine as a shipped declarative
+	// definition (issue #405, see shipped_declarative.go's
+	// buildRepeatedDropsDefinition) -- its "locally-hosted destination,
+	// refused attempt" gate went with it, expressed as conditions.
 
 	// Local blocklist match (issue #113 Part B) -- deliberately last:
 	// see observeKnownBadIP's own doc comment for why its
@@ -638,7 +630,7 @@ func (d *Detector) observeScanAndSpike(e store.Event, now time.Time) {
 // engine.ReputationSink wiring for the reputation-lookup counterpart).
 
 // activeWindow is implemented by every per-key detector state struct
-// (sourceWindow, destWindow, ruleWindow, dropPairWindow, lowSlowWindow)
+// (sourceWindow, destWindow, ruleWindow, lowSlowWindow)
 // purely so evictOldestByActivity can be generic over all of them --
 // they otherwise share no behavior, just this one field.
 type activeWindow interface {
