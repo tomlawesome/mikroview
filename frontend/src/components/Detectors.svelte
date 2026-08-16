@@ -1,14 +1,17 @@
 <script lang="ts">
   // SPDX-License-Identifier: AGPL-3.0-only
   // Admin-only: per-detector on/off + scope restrictions (see
-  // internal/detect.Scope's doc comment and docs/configuration.md's
-  // "Per-detector toggles" section for exactly what each field does per
-  // detector). A real view (see appState.view), gated the same way the
+  // engine.Scope's doc comment and docs/configuration.md's "Detection
+  // definitions" section for exactly what each field does per
+  // definition). Backed by GET/PUT /api/definitions since issue #407
+  // replaced /api/detectors wholesale -- the projection down to what
+  // this page needs lives in detectorSettings.svelte.ts, so this page
+  // keeps its shape until phase 2 replaces it outright. A real view (see appState.view), gated the same way the
   // old modal was -- only reachable via Toolbar's admin-or-open-gated
   // button -- rather than a route of its own, since it has no meaning
   // for a non-admin caller.
   import { detectorSettingsState } from '../lib/detectorSettings.svelte'
-  import type { DetectorName, DetectorScope, ListMode } from '../lib/types'
+  import type { DetectorScope, ListMode } from '../lib/types'
 
   interface DetectorInfo {
     label: string
@@ -27,7 +30,14 @@
     example?: string
   }
 
-  const DETECTORS: Record<DetectorName, DetectorInfo> = {
+  // Hand-written copy, keyed by definition id. Deliberately a partial
+  // record rather than an exhaustive one: GET /api/definitions lists
+  // every detection definition this binary evaluates, and a definition
+  // with no entry here still renders -- from the server's own name and
+  // description -- rather than being silently omitted. A detector that
+  // is evaluating but invisible on the page that exists to say what is
+  // being watched is the worst failure this page can have.
+  const DETECTORS: Partial<Record<string, DetectorInfo>> = {
     port_scan: {
       label: 'Port scan',
       explanation:
@@ -113,6 +123,36 @@
         "Hosts/Classification restrict which source IPs this detector watches, same as activity spike. Ports and rule labels don't apply -- it isn't keyed by destination.",
       example: 'Exclude a host with a legitimate overnight job (backup, sync): Hosts = 192.168.1.40, mode = deny.',
     },
+    unexpected_mail_sender: {
+      label: 'Unexpected mail sender',
+      explanation:
+        'Flags a LAN host connecting outbound to an SMTP port (25, 465, 587) when nothing has marked it as a legitimate mail sender. On a home or small-office network almost nothing should be talking SMTP directly to the internet -- a device that starts is either misconfigured or sending mail on somebody else\'s behalf. Tag the host as a trusted mail sender in Entities to exempt it.',
+      scopeNote: 'Hosts restricts which LAN source IPs are watched. Nothing else applies -- the destination ports are the definition\'s own tunable list, not a scope field.',
+      example: 'Stop flagging your own mail relay without tagging it: Hosts = 192.168.1.25, mode = deny.',
+    },
+    known_bad_ip: {
+      label: 'Known bad IP',
+      explanation:
+        'Raises the confidence floor of flags already raised for a source address that appears in one of the locally-fetched blocklists (Spamhaus DROP and friends -- fetched at runtime on your own device, never shipped with mikroview). It raises nothing by itself: its whole job is to make an existing judgement about an address more confident when an independent source already considers that address hostile.',
+      scopeNote: 'Hosts restricts which source IPs are looked up at all.',
+      example: 'Skip lookups for a range you know is yours: Hosts = 203.0.113.0/24, mode = deny.',
+    },
+    netclass: {
+      label: 'Network class reinforcement',
+      explanation:
+        'Like known bad IP, but for what kind of network an address belongs to: a Tor exit node or a commercial VPN endpoint reaching inbound raises the confidence floor of flags already raised for it. Only the two high-precision categories count, only inbound traffic is considered, and it never raises a flag on its own -- being behind a VPN is not itself suspicious.',
+      scopeNote: 'Hosts restricts which source IPs are classified at all.',
+    },
+    reputation: {
+      label: 'Reputation enrichment',
+      explanation:
+        'Not a detector: this definition carries the lookup policy every other definition\'s reputation enrichment uses -- how many lookups may be in flight at once, how long one may take, and how large a sample is taken when a flag names a group of addresses rather than one. Turning it off stops that enrichment happening; nothing stops being detected.',
+    },
+    stale_rule: {
+      label: 'Stale firewall rule',
+      explanation:
+        'Flags a firewall rule label that has not fired in a long time (30 days by default), checked on a timer rather than per event. A rule nothing has matched in a month is usually one that no longer does what its author intended -- a leftover from a service that moved, or one made unreachable by a rule above it.',
+    },
     device_silence: {
       label: 'Device gone quiet',
       explanation:
@@ -124,7 +164,13 @@
   // internal/detect.Scope's doc comment. Showing a control that does
   // nothing for a given detector would be actively misleading, so the
   // form only ever renders what's meaningful.
-  const SCOPE_FIELDS: Record<DetectorName, Array<'hosts' | 'ports' | 'classification' | 'rules'>> = {
+  // A definition with no entry here shows no scope editor at all, which
+  // is the honest default: showing a control that does nothing for a
+  // given definition would be actively misleading, and guessing which
+  // axes an unrecognized definition consults is exactly a guess. Its
+  // on/off toggle still works, and its scope remains settable through
+  // the API.
+  const SCOPE_FIELDS: Partial<Record<string, Array<'hosts' | 'ports' | 'classification' | 'rules'>>> = {
     port_scan: ['hosts', 'classification', 'ports'],
     activity_spike: ['hosts', 'classification'],
     critical_port: ['hosts', 'classification', 'ports'],
@@ -137,18 +183,28 @@
     low_slow_scan: ['hosts', 'classification', 'ports'],
     off_hours_activity: ['hosts', 'classification'],
     device_silence: [],
+    // The five definitions that were always-on passes before the engine
+    // port gave them an envelope. Each consults only the source-host
+    // axis (scopeMatchesSource) or none at all -- reputation raises
+    // nothing per event, and stale_rule runs on a timer, so no scope
+    // field reaches either.
+    unexpected_mail_sender: ['hosts'],
+    known_bad_ip: ['hosts'],
+    netclass: ['hosts'],
+    reputation: [],
+    stale_rule: [],
   }
 
-  let expanded = $state<DetectorName | null>(null)
-  let errors = $state<Partial<Record<DetectorName, string>>>({})
-  let saving = $state<Partial<Record<DetectorName, boolean>>>({})
+  let expanded = $state<string | null>(null)
+  let errors = $state<Partial<Record<string, string>>>({})
+  let saving = $state<Partial<Record<string, boolean>>>({})
 
   // Local editable copies, keyed by detector name -- edits don't touch
   // detectorSettingsState.list until Save, so closing without saving
   // discards them.
   let drafts = $state<Record<string, { hosts: string; ports: string; rules: string; hostsMode: ListMode; portsMode: ListMode; rulesMode: ListMode; classification: DetectorScope['classification'] }>>({})
 
-  function draftFor(name: DetectorName) {
+  function draftFor(name: string) {
     const existing = detectorSettingsState.list.find((d) => d.name === name)
     const sc = existing?.scope ?? {}
     return {
@@ -162,7 +218,7 @@
     }
   }
 
-  function toggleExpanded(name: DetectorName) {
+  function toggleExpanded(name: string) {
     if (expanded === name) {
       expanded = null
       return
@@ -184,14 +240,14 @@
       .filter((n) => Number.isInteger(n) && n > 0)
   }
 
-  async function toggleEnabled(name: DetectorName, enabled: boolean, scope: DetectorScope) {
+  async function toggleEnabled(name: string, enabled: boolean, scope: DetectorScope) {
     saving[name] = true
     const err = await detectorSettingsState.update(name, enabled, scope)
     saving[name] = false
     errors[name] = err ?? undefined
   }
 
-  async function saveScope(name: DetectorName) {
+  async function saveScope(name: string) {
     const d = drafts[name]
     const existing = detectorSettingsState.list.find((x) => x.name === name)
     const scope: DetectorScope = {
@@ -243,7 +299,7 @@
 
   <ul class="list">
     {#each detectorSettingsState.list as d (d.name)}
-      {@const info = DETECTORS[d.name]}
+      {@const info = DETECTORS[d.name] ?? { label: d.label, explanation: d.description ?? '' }}
       <li class="card">
         <div class="card-main">
           <label class="switch">
@@ -262,7 +318,7 @@
         </div>
 
         <div class="card-scope">
-          {#if SCOPE_FIELDS[d.name].length === 0}
+          {#if (SCOPE_FIELDS[d.name] ?? []).length === 0}
             <span class="scope-label">Scope</span>
             <p class="no-scope">No scope restrictions apply to this detector -- it isn't keyed by any host, port, or rule. Only the on/off toggle applies.</p>
           {:else}
