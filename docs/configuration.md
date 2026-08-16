@@ -1140,7 +1140,12 @@ flags:
   list covers SSH/Telnet/FTP/SMB/RDP/VNC and RouterOS's own
   Winbox/API ports (8291/8728/8729) — worth watching precisely because
   they're MikroTik-specific and a common target once a scanner has
-  fingerprinted a device as RouterOS.
+  fingerprinted a device as RouterOS. The count is per *source*, summed
+  across the whole critical-port list (an internet scanner hitting five
+  different well-known ports once each is one incident, not five), so
+  the alert names every critical port that source touched within the
+  window and carries them as evidence — not just the one port that
+  happened to trip the threshold.
 - **Global volume spike** — current events/sec vs. a slow-moving
   baseline of itself (an exponential moving average, not a fixed
   number), so it adapts to your network's real traffic level over time

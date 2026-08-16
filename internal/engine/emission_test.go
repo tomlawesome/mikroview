@@ -16,7 +16,7 @@ func TestRenderEmissionFailsOnUnaccumulatedValue(t *testing.T) {
 	evidence.AddPort(443)
 	// Never AddHost -- this is the mistake: naming {Hosts} anyway.
 
-	_, err := RenderEmission(evidence, "{PortCount} ports; hosts seen: {Hosts}", false)
+	_, err := RenderEmission(evidence, 0, "{PortCount} ports; hosts seen: {Hosts}", false)
 	if err == nil {
 		t.Fatal("RenderEmission succeeded referencing {Hosts}, which nothing ever accumulated -- want a hard failure")
 	}
@@ -31,7 +31,7 @@ func TestRenderEmissionFailsOnMisspelledField(t *testing.T) {
 	evidence := NewEvidenceSet()
 	evidence.AddPort(22)
 
-	_, err := RenderEmission(evidence, "{PortCuont} ports", false)
+	_, err := RenderEmission(evidence, 0, "{PortCuont} ports", false)
 	if err == nil {
 		t.Fatal("RenderEmission succeeded on a misspelled field name, want a hard failure")
 	}
@@ -43,7 +43,7 @@ func TestRenderEmissionSucceedsOnAccumulatedValues(t *testing.T) {
 	evidence.AddPort(80)
 	evidence.AddHost("203.0.113.5")
 
-	em, err := RenderEmission(evidence, "{PortCount} distinct ports, {HostCount} host(s)", false)
+	em, err := RenderEmission(evidence, 0, "{PortCount} distinct ports, {HostCount} host(s)", false)
 	if err != nil {
 		t.Fatalf("RenderEmission: %v", err)
 	}
@@ -67,7 +67,7 @@ func TestRenderEmissionInlinesTheActualPortsAndHostsList(t *testing.T) {
 	evidence.AddPort(22)
 	evidence.AddHost("203.0.113.5")
 
-	em, err := RenderEmission(evidence, "ports: {Ports}; hosts: {Hosts}", false)
+	em, err := RenderEmission(evidence, 0, "ports: {Ports}; hosts: {Hosts}", false)
 	if err != nil {
 		t.Fatalf("RenderEmission: %v", err)
 	}
@@ -80,7 +80,7 @@ func TestRenderEmissionCarriesProvisionalThrough(t *testing.T) {
 	evidence := NewEvidenceSet()
 	evidence.AddPort(22)
 
-	em, err := RenderEmission(evidence, "{PortCount} ports", true)
+	em, err := RenderEmission(evidence, 0, "{PortCount} ports", true)
 	if err != nil {
 		t.Fatalf("RenderEmission: %v", err)
 	}
@@ -89,8 +89,28 @@ func TestRenderEmissionCarriesProvisionalThrough(t *testing.T) {
 	}
 }
 
+// TestRenderEmissionCountIsIndependentOfEvidenceCounts pins #379's
+// critical_port fix: {Count} is the threshold-crossing tally the caller
+// supplies, not derived from evidence at all -- it can legitimately
+// differ from {PortCount} (e.g. 5 attempts against a set of 2 distinct
+// critical ports), and {Count} needs no corresponding Add call, unlike
+// Ports/Hosts/Labels.
+func TestRenderEmissionCountIsIndependentOfEvidenceCounts(t *testing.T) {
+	evidence := NewEvidenceSet()
+	evidence.AddPort(22)
+	evidence.AddPort(23)
+
+	em, err := RenderEmission(evidence, 5, "{Count} attempts against critical ports {Ports}", false)
+	if err != nil {
+		t.Fatalf("RenderEmission: %v", err)
+	}
+	if want := "5 attempts against critical ports 22, 23"; em.Detail != want {
+		t.Errorf("Detail = %q, want %q", em.Detail, want)
+	}
+}
+
 func TestRenderEmissionWithNoTemplateReferencesSucceedsEvenWithNoEvidence(t *testing.T) {
-	em, err := RenderEmission(NewEvidenceSet(), "device went silent", false)
+	em, err := RenderEmission(NewEvidenceSet(), 0, "device went silent", false)
 	if err != nil {
 		t.Fatalf("RenderEmission: %v", err)
 	}

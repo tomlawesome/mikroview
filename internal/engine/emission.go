@@ -96,25 +96,41 @@ var emissionToken = regexp.MustCompile(`\{([A-Za-z]+)\}`)
 // why that indirection is the whole point: it is the mechanism behind
 // #379's wrong-naming findings (a flag claiming a port/host/label it
 // never actually recorded). detailTemplate may reference {Ports}/
-// {Hosts}/{Labels} (the accumulated, sorted values) and {PortCount}/
-// {HostCount}/{LabelCount} (their lengths) -- nothing else.
+// {Hosts}/{Labels} (the accumulated, sorted values), {PortCount}/
+// {HostCount}/{LabelCount} (their lengths), and {Count} (see below) --
+// nothing else.
+//
+// count is the threshold-crossing tally that caused this emission --
+// CountRing.Count for CountingTotal, DistinctRing.Count for
+// CountingDistinct (see DeclarativeDefinition.Evaluate/Replay, both of
+// which already compute this value before calling RenderEmission) --
+// exposed as {Count} so a Detail template can state "how many" without
+// that number necessarily equalling any evidence category's own length:
+// critical_port's #379 fix is the reason this parameter exists at all --
+// "N attempts against critical ports {Ports} in <window>" needs N (the
+// total attempt count) and {Ports} (the distinct port set) to both be
+// real, independently-sized numbers in the same sentence, and PortCount
+// alone cannot honestly be both. Unlike Ports/Hosts/Labels, {Count} is
+// always available (never gated on "was anything accumulated") since a
+// definition only ever calls RenderEmission once its own threshold has
+// actually been crossed by some count.
 //
 // Referencing a name evidence was never Add-ed to (see
-// EvidenceSet.touched), or any name outside that fixed set, is a hard
-// render error, not a silently empty value: RenderEmission only ever
-// substitutes a token whose name is a key in a data set built from the
-// categories evidence actually touched, so a template asking for
-// {Hosts} when nothing ever called AddHost fails exactly the way it
-// would if {Hosts} were misspelled -- the un-accumulated-value mistake
-// #379 found is structural here, not a matter of care. See
-// TestRenderEmissionFailsOnUnaccumulatedValue.
-func RenderEmission(evidence *EvidenceSet, detailTemplate string, provisional bool) (Emission, error) {
+// EvidenceSet.touched), or any name outside the fixed set above, is a
+// hard render error, not a silently empty value: RenderEmission only
+// ever substitutes a token whose name is a key in a data set built from
+// the categories evidence actually touched (plus the always-present
+// Count), so a template asking for {Hosts} when nothing ever called
+// AddHost fails exactly the way it would if {Hosts} were misspelled --
+// the un-accumulated-value mistake #379 found is structural here, not a
+// matter of care. See TestRenderEmissionFailsOnUnaccumulatedValue.
+func RenderEmission(evidence *EvidenceSet, count int, detailTemplate string, provisional bool) (Emission, error) {
 	if evidence == nil {
 		evidence = NewEvidenceSet()
 	}
 
 	em := Emission{Provisional: provisional}
-	data := map[string]string{}
+	data := map[string]string{"Count": strconv.Itoa(count)}
 
 	portsSeen, hostsSeen, labelsSeen := evidence.touched()
 	if portsSeen {

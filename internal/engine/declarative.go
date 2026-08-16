@@ -68,6 +68,46 @@ const (
 	CountingDistinct CountingMode = "distinct"
 )
 
+// EvidenceField names one category a declarative definition accumulates
+// evidence for. Declared explicitly per definition (see
+// DeclarativeSpec.Evidence) rather than inferred from KeyMode or from the
+// Detail template, because neither infers it correctly: two definitions
+// keyed identically can honestly claim different evidence
+// (port_scan's per-source window is about the *ports* it touched;
+// repeated_drops', per #379, is about the *destinations* it hit), and a
+// definition may legitimately carry evidence its Detail sentence never
+// names (distributed_brute_force's Detail counts sources while its
+// Evidence lists them).
+//
+// Declaring is what makes the #379 class of defect structural: an
+// emission can only ever carry -- and its Detail template can only ever
+// reference -- a category this definition actually accumulates. A
+// template naming an undeclared category is a hard render error
+// (RenderEmission, emission.go), not a silently empty value.
+type EvidenceField string
+
+const (
+	// EvidencePorts accumulates the destination port of every matching
+	// event (port 0 excluded -- see recordEvidence).
+	EvidencePorts EvidenceField = "ports"
+	// EvidenceHosts accumulates one address per matching event, chosen by
+	// the definition's KeyMode: the destination address for a
+	// per-source/per-source-port definition (what the source touched),
+	// the source address for a per-target/global one (who touched it).
+	EvidenceHosts EvidenceField = "hosts"
+	// EvidenceLabels accumulates the rule label of every matching event.
+	EvidenceLabels EvidenceField = "labels"
+)
+
+func validateEvidenceField(f EvidenceField) error {
+	switch f {
+	case EvidencePorts, EvidenceHosts, EvidenceLabels:
+		return nil
+	default:
+		return fmt.Errorf("engine: invalid evidence field %q", f)
+	}
+}
+
 // declState is one key's tracked window state -- exactly one of count/
 // distinct is non-nil, selected by the owning DeclarativeDefinition's
 // CountingMode at construction (see newState). evidence accumulates
@@ -102,6 +142,12 @@ type DeclarativeDefinition struct {
 	countingMode   CountingMode
 	distinctField  Field
 	detailTemplate string
+	// evidencePorts/Hosts/Labels are DeclarativeSpec.Evidence resolved to
+	// three booleans once, at construction, so recordEvidence's per-event
+	// path is three field reads rather than a slice scan.
+	evidencePorts  bool
+	evidenceHosts  bool
+	evidenceLabels bool
 
 	members AddressListMembership
 
@@ -119,70 +165,113 @@ type DeclarativeDefinition struct {
 	OnRoutedEmission func(RoutedEmission)
 }
 
+// DeclarativeSpec is everything a declarative definition needs beyond
+// its own envelope (Definition): the match language, the key/window/
+// threshold/counting shape, the emission template, and the evidence
+// categories it accumulates. A struct rather than a positional argument
+// list because #405's ports made the list long enough that call sites
+// stopped being readable -- three consecutive string/Field arguments
+// where an empty one means "not applicable" is exactly the shape a
+// mis-ordered argument hides in.
+type DeclarativeSpec struct {
+	// Conditions is this definition's structured match language -- AND
+	// across fields, OR within a field. Empty matches every event.
+	Conditions []Condition
+	// Key selects what this definition's window/threshold state is keyed
+	// by -- see KeyMode.
+	Key KeyMode
+	// Window and Threshold are the crossing this definition fires on:
+	// Threshold or more counted things within Window. Both required
+	// (positive).
+	Window    time.Duration
+	Threshold int
+	// CountingMode selects CountRing vs DistinctRing; DistinctField is
+	// required (and must be distinct-countable) for CountingDistinct,
+	// ignored for CountingTotal.
+	CountingMode  CountingMode
+	DistinctField Field
+	// DetailTemplate is the emission's Detail text -- see RenderEmission
+	// for the token set, which is bounded by Evidence below.
+	DetailTemplate string
+	// Evidence declares which categories this definition accumulates --
+	// see EvidenceField. Empty means this definition accumulates no
+	// evidence at all, which is legitimate (its Detail template then
+	// references only {Count}) and is what keeps an emission from
+	// carrying a category the definition has no business claiming.
+	Evidence []EvidenceField
+	// Members resolves FieldAddressListMembership conditions. nil is
+	// valid: a definition with no membership condition never touches it,
+	// and one that does simply never matches (see
+	// compileMembershipCondition's safe-direction handling).
+	Members AddressListMembership
+}
+
 // NewDeclarativeDefinition validates and compiles everything a
 // declarative definition needs up front -- conditions (compileConditions),
 // the envelope (Definition.Validate), key mode, window/threshold bounds,
-// and counting-mode/DistinctField compatibility -- so Evaluate's hot path
-// never re-validates or re-parses anything per event. members may be nil
-// (a definition with no FieldAddressListMembership condition never
-// touches it; one that does simply never matches -- see
-// compileMembershipCondition's safe-direction handling).
-func NewDeclarativeDefinition(
-	def Definition,
-	conditions []Condition,
-	key KeyMode,
-	window time.Duration,
-	threshold int,
-	countingMode CountingMode,
-	distinctField Field,
-	detailTemplate string,
-	members AddressListMembership,
-) (*DeclarativeDefinition, error) {
+// counting-mode/DistinctField compatibility, and the declared evidence
+// fields -- so Evaluate's hot path never re-validates or re-parses
+// anything per event.
+func NewDeclarativeDefinition(def Definition, spec DeclarativeSpec) (*DeclarativeDefinition, error) {
 	if def.Kind != KindDeclarative {
 		return nil, fmt.Errorf("engine: declarative definition %q has kind %q, want %q", def.ID, def.Kind, KindDeclarative)
 	}
 	if err := def.Validate(); err != nil {
 		return nil, err
 	}
-	compiled, err := compileConditions(conditions)
+	compiled, err := compileConditions(spec.Conditions)
 	if err != nil {
 		return nil, fmt.Errorf("engine: definition %q: %w", def.ID, err)
 	}
-	if err := validateKeyMode(key); err != nil {
+	if err := validateKeyMode(spec.Key); err != nil {
 		return nil, fmt.Errorf("engine: definition %q: %w", def.ID, err)
 	}
-	if window <= 0 {
-		return nil, fmt.Errorf("engine: definition %q: window must be positive, got %s", def.ID, window)
+	if spec.Window <= 0 {
+		return nil, fmt.Errorf("engine: definition %q: window must be positive, got %s", def.ID, spec.Window)
 	}
-	if threshold <= 0 {
-		return nil, fmt.Errorf("engine: definition %q: threshold must be positive, got %d", def.ID, threshold)
+	if spec.Threshold <= 0 {
+		return nil, fmt.Errorf("engine: definition %q: threshold must be positive, got %d", def.ID, spec.Threshold)
 	}
-	switch countingMode {
+	switch spec.CountingMode {
 	case CountingTotal:
 	case CountingDistinct:
-		if !distinctCountableFields[distinctField] {
-			return nil, fmt.Errorf("engine: definition %q: countingMode=distinct requires a countable distinctField, got %q", def.ID, distinctField)
+		if !distinctCountableFields[spec.DistinctField] {
+			return nil, fmt.Errorf("engine: definition %q: countingMode=distinct requires a countable distinctField, got %q", def.ID, spec.DistinctField)
 		}
 	default:
-		return nil, fmt.Errorf("engine: definition %q: invalid countingMode %q", def.ID, countingMode)
+		return nil, fmt.Errorf("engine: definition %q: invalid countingMode %q", def.ID, spec.CountingMode)
 	}
-	if detailTemplate == "" {
+	if spec.DetailTemplate == "" {
 		return nil, fmt.Errorf("engine: definition %q: detailTemplate is required", def.ID)
 	}
 
-	return &DeclarativeDefinition{
+	d := &DeclarativeDefinition{
 		def:            def,
-		conditions:     conditions,
+		conditions:     spec.Conditions,
 		compiled:       compiled,
-		key:            key,
-		window:         window,
-		threshold:      threshold,
-		countingMode:   countingMode,
-		distinctField:  distinctField,
-		detailTemplate: detailTemplate,
-		members:        members,
+		key:            spec.Key,
+		window:         spec.Window,
+		threshold:      spec.Threshold,
+		countingMode:   spec.CountingMode,
+		distinctField:  spec.DistinctField,
+		detailTemplate: spec.DetailTemplate,
+		members:        spec.Members,
 		state:          NewKeyed[*declState](),
-	}, nil
+	}
+	for _, f := range spec.Evidence {
+		if err := validateEvidenceField(f); err != nil {
+			return nil, fmt.Errorf("engine: definition %q: %w", def.ID, err)
+		}
+		switch f {
+		case EvidencePorts:
+			d.evidencePorts = true
+		case EvidenceHosts:
+			d.evidenceHosts = true
+		case EvidenceLabels:
+			d.evidenceLabels = true
+		}
+	}
+	return d, nil
 }
 
 // ID satisfies Evaluated.
@@ -244,23 +333,36 @@ func (d *DeclarativeDefinition) keyFor(e store.Event) string {
 // means, and KeyGlobal's key IS "global" already (see keyFor).
 func (d *DeclarativeDefinition) targetFor(key string) string { return key }
 
-// recordEvidence folds e into st.evidence -- ports and rule labels
-// unconditionally (they mean the same thing regardless of key), and
-// hosts on whichever side is NOT what this definition is keyed on: a
-// per-source/per-source-port definition's evidence records what the
-// source touched (destination addresses), while a per-target/global
-// definition's evidence records who touched it (source addresses) --
-// the same asymmetry internal/detect.observeDistributedBruteForce (keyed
-// by port, evidence = distinct source IPs) and port_scan (keyed by
-// source, evidence = distinct destination ports) already draw by hand.
-func recordEvidence(key KeyMode, st *declState, e store.Event) {
-	if e.DstPort != 0 {
+// recordEvidence folds e into st.evidence, but only for the categories
+// this definition declared (DeclarativeSpec.Evidence) -- an undeclared
+// category is never accumulated, so an emission can never carry, and its
+// Detail template can never reference, evidence the definition has no
+// business claiming. That gate is the point: it is what makes #379's
+// wrong-naming class structural rather than a matter of care, and #405
+// added it after the port_scan port showed the cost of not having it (a
+// per-source definition silently accumulating destination addresses it
+// never claimed before, purely because the shared helper recorded them
+// unconditionally).
+//
+// Which address EvidenceHosts records is still decided by KeyMode, since
+// that is genuinely a property of what the key means: a per-source/
+// per-source-port definition's evidence records what the source touched
+// (destination addresses), while a per-target/global definition's
+// records who touched it (source addresses) -- the same asymmetry
+// internal/detect.observeDistributedBruteForce (keyed by port, evidence =
+// distinct source IPs) and dest_spread (keyed by source, evidence =
+// distinct destination IPs) already drew by hand.
+func (d *DeclarativeDefinition) recordEvidence(st *declState, e store.Event) {
+	if d.evidencePorts && e.DstPort != 0 {
 		st.evidence.AddPort(e.DstPort)
 	}
-	if e.RuleLabel != "" {
+	if d.evidenceLabels && e.RuleLabel != "" {
 		st.evidence.AddLabel(e.RuleLabel)
 	}
-	switch key {
+	if !d.evidenceHosts {
+		return
+	}
+	switch d.key {
 	case KeyPerSource, KeyPerSourcePort:
 		if e.DstIP != "" {
 			st.evidence.AddHost(e.DstIP)
@@ -302,7 +404,7 @@ func (d *DeclarativeDefinition) Evaluate(e store.Event) {
 	key := d.keyFor(e)
 	st := d.state.GetOrCreate(key, now, d.newState)
 
-	recordEvidence(d.key, st, e)
+	d.recordEvidence(st, e)
 
 	var count int
 	switch d.countingMode {
@@ -322,7 +424,7 @@ func (d *DeclarativeDefinition) Evaluate(e store.Event) {
 		return
 	}
 
-	em, err := RenderEmission(st.evidence, d.detailTemplate, false)
+	em, err := RenderEmission(st.evidence, count, d.detailTemplate, false)
 	if err != nil {
 		logger.Error(fmt.Sprintf("declarative definition %q: RenderEmission failed: %v", d.def.ID, err))
 		return

@@ -854,15 +854,27 @@ func main() {
 	// the definitions store currently holds for a shipped, available,
 	// declarative-kind definition, wrapped in one DeclarativeSet (its own
 	// dispatch pre-index, see internal/engine/dispatch.go) and registered
-	// on the engine -- port_scan is the first detector ported this way
-	// (docs/decisions/evaluation-engine.md section 2,
-	// internal/engine/shipped_declarative.go's buildPortScanDefinition);
+	// on the engine -- port_scan and critical_port are ported this way so
+	// far (docs/decisions/evaluation-engine.md section 2,
+	// internal/engine/shipped_declarative.go's shippedDeclarativeBuilders);
 	// every other shipped detector still runs through internal/detect
 	// below until its own #405 port lands. An empty/not-yet-migrated
 	// definitions store (definitions.List() returns nothing) is a valid,
 	// common state -- see MigrateDefinitions's own doc comment -- and
 	// simply means this DeclarativeSet starts out evaluating nothing,
 	// same as registering an empty one on a freshly-constructed Engine.
+	// declSink raises into fs and, for a newly-raised episode whose
+	// Target parses as a public IP, kicks off the same best-effort async
+	// reputation lookup internal/detect's WithReputation-configured
+	// detectors have always had (engine.ReputationSink's own doc comment)
+	// -- ReputationSink is a safe default for every shipped declarative
+	// definition, not just the ones that happen to be IP-keyed, since a
+	// non-IP Target (a rule label, "global") is simply never a lookup
+	// candidate. 8 matches internal/detect.reputationLookupConcurrency
+	// (unexported; kept in sync by hand until that pool is deleted
+	// alongside the rest of internal/detect's engine machinery once every
+	// detector has moved).
+	declSink := engine.ReputationSink(fs, rep, 8)
 	var shippedDeclDefs []*engine.DeclarativeDefinition
 	for _, sd := range definitions.List() {
 		if !sd.Available || sd.Definition.Kind != engine.KindDeclarative || sd.Definition.Provenance.Origin != engine.ProvenanceShipped {
@@ -879,7 +891,7 @@ func main() {
 			detectorsLog.Warn(fmt.Sprintf("skipping shipped declarative definition %q: %v", sd.Definition.ID, err))
 			continue
 		}
-		dd.OnRoutedEmission = engine.FlagsSink(fs)
+		dd.OnRoutedEmission = declSink
 		shippedDeclDefs = append(shippedDeclDefs, dd)
 	}
 	eng.Register(engine.NewDeclarativeSet("shipped-declarative", shippedDeclDefs))

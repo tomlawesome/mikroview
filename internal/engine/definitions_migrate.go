@@ -250,9 +250,8 @@ var zeroDuration = time.Duration(0).String()
 var shippedDetectors = []shippedDetector{
 	// port_scan (issue #405): threshold-over-window, ported onto a
 	// shipped DeclarativeDefinition -- see shipped_declarative.go's
-	// buildPortScanDefinition. The only entry below with
-	// kind: KindDeclarative so far; every other detector stays
-	// KindProgrammatic until its own #405 port lands.
+	// buildPortScanDefinition. Every entry below still marked
+	// KindProgrammatic is one #405 has not ported yet.
 	{name: detect.DetectorPortScan, schema: PortScanParamSchema, kind: KindDeclarative, params: func(c detect.Config) Params {
 		return Params{"threshold": c.PortScanThreshold, "window": c.PortScanWindow.String()}
 	}},
@@ -268,7 +267,10 @@ var shippedDetectors = []shippedDetector{
 			"baselineFloorDuration":   zeroDuration,
 		}
 	}},
-	{name: detect.DetectorCriticalPort, schema: CriticalPortParamSchema, kind: KindProgrammatic, params: func(c detect.Config) Params {
+	// critical_port (issue #405): threshold-over-window keyed per source,
+	// ported onto a shipped DeclarativeDefinition -- see
+	// shipped_declarative.go's buildCriticalPortDefinition.
+	{name: detect.DetectorCriticalPort, schema: CriticalPortParamSchema, kind: KindDeclarative, params: func(c detect.Config) Params {
 		return Params{"ports": c.CriticalPorts, "threshold": c.CriticalPortThreshold, "window": c.CriticalPortWindow.String()}
 	}},
 	{name: detect.DetectorGlobalSpike, schema: GlobalSpikeParamSchema, kind: KindProgrammatic, params: func(c detect.Config) Params {
