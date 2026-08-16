@@ -38,6 +38,12 @@ func FuzzDecodePayload(f *testing.F) {
 	f.Add(`{"kind":"dns-static","page":1,"pages":1,"records":[{"name":"nas.lan","address":"192.168.1.20"}]}`)
 	f.Add(`{"kind":"dhcp-lease","page":1,"pages":1,"records":[{"hostname":"laptop","mac":"aa:bb:cc:dd:ee:ff","address":"192.168.1.50"}]}`)
 	f.Add(`{"kind":"arp","page":1,"pages":1,"records":[{"address":"192.168.1.50","mac":"aa:bb:cc:dd:ee:ff"}]}`)
+	// The envelope's #436 version field, which every kind's push may
+	// carry and none has to (the record above is the same push without
+	// it).
+	f.Add(`{"kind":"arp","page":1,"pages":1,"routerosVersion":"7.23.3 (stable)","records":[{"address":"192.168.1.50","mac":"aa:bb:cc:dd:ee:ff"}]}`)
+	f.Add(`{"kind":"arp","page":1,"pages":1,"routerosVersion":null,"records":[]}`)
+	f.Add(`{"kind":"arp","page":1,"pages":1,"routerosVersion":7.23,"records":[]}`) // the version as a number, not a string
 	f.Add(`{"kind":"wireguard-interface","page":1,"pages":1,"records":[{"name":"wg0","comment":"","publicKey":"abc123","listenPort":51820.000000}]}`)
 	f.Add(`{"kind":"wireguard-peer","page":1,"pages":1,"records":[{"publicKey":"abc123","allowedAddress":"10.10.0.0/24","endpointAddress":"203.0.113.5:51820","comment":"branch office"}]}`)
 	// The array shape RouterOS actually sends for a multi-CIDR peer
