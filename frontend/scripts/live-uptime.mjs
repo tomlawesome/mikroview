@@ -12,7 +12,12 @@ const { page, consoleErrors } = await session()
 const badge = page.locator('.uptime')
 await badge.waitFor({ timeout: 10000 })
 const first = await badge.textContent()
-check(/^up \d+[smhd]/.test(first.trim()), `uptime badge renders a duration (got "${first.trim()}")`)
+// [Nd Nh Nm NNs] -- all four units always shown, seconds zero-padded to
+// two digits so the badge's width never twitches (#444, formatUptimeFull
+// in lib/format.ts). Was `up Nx`, one unit; #444 changed the format and
+// missed that this scenario asserted the old shape, so it failed on
+// every run against dev once #444 landed.
+check(/^\[\d+d \d+h \d+m \d{2}s\]$/.test(first.trim()), `uptime badge renders a duration (got "${first.trim()}")`)
 
 // The server-side number and the badge must agree. healthz is unauthed,
 // so read it through the page's own fetch.
