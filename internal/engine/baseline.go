@@ -208,9 +208,48 @@ func NewBaseline(window time.Duration, floor BaselineFloor, cadence UpdateCadenc
 	return &Baseline{window: window, floor: floor, cadence: cadence}
 }
 
+// RestoreBaseline is NewBaseline plus seeding the EMA state directly
+// from a previously-persisted BaselineState (see StateStore) instead of
+// starting cold -- what lets a definition resume warm across a restart
+// rather than being blind for its whole warm-up again (#399's decision,
+// docs/decisions/evaluation-engine.md section 1). window/floor/cadence
+// are declared exactly as NewBaseline: what a definition needs varies by
+// version, not by what happened to be persisted, so a restored Baseline
+// is still gated by the *current* floor, not whatever floor produced s.
+func RestoreBaseline(window time.Duration, floor BaselineFloor, cadence UpdateCadence, s BaselineState) *Baseline {
+	return &Baseline{
+		window:    window,
+		floor:     floor,
+		cadence:   cadence,
+		firstSeen: s.FirstSeen,
+		primed:    s.Primed,
+		value:     s.Value,
+		variance:  s.Variance,
+		samples:   s.Samples,
+	}
+}
+
 // Cadence reports the cadence this Baseline was declared with.
 func (b *Baseline) Cadence() UpdateCadence {
 	return b.cadence
+}
+
+// State returns the persistable snapshot of this Baseline's EMA state --
+// exactly what StateStore.Set needs and RestoreBaseline needs back,
+// deliberately narrower than Snapshot (no ZScore, no Ready: those are
+// meaningless without an in-flight reading and a floor to gate against,
+// neither of which a persisted document carries). Safe to call
+// concurrently with Reading, same contract as Snapshot.
+func (b *Baseline) State() BaselineState {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return BaselineState{
+		Value:     b.value,
+		Variance:  b.variance,
+		Samples:   b.samples,
+		FirstSeen: b.firstSeen,
+		Primed:    b.primed,
+	}
 }
 
 // Reading folds one reading into this Baseline's tracked history and
