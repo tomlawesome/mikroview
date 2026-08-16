@@ -18,7 +18,9 @@ import (
 //
 // Lines that don't match the convention (third-party rules, or a bare
 // log=yes with no prefix) are passed through unchanged with action/label
-// left empty — the caller falls back to store.ActionUnknown.
+// left empty — Parse then hands them to inferAction, which classifies
+// the one case the line itself states and otherwise settles on
+// store.ActionUnknown.
 func stripPrefix(msg string) (action store.Action, label string, rest string) {
 	if len(msg) < 2 || msg[1] != '|' {
 		return "", "", msg
