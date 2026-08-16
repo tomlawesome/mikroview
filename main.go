@@ -18,6 +18,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -1329,6 +1330,41 @@ func main() {
 		logging.New("http").Error(serveErr.Error())
 		os.Exit(1)
 	}
+
+	// httpServer.Shutdown has returned by this point (that's what let
+	// ServeTLS/ListenAndServe return above), so ingest and every
+	// evaluation goroutine downstream of it have stopped submitting new
+	// mutations. Flush every write-behind-backed store's final dirty
+	// state now, within a bounded deadline, so a change made right
+	// before shutdown is not silently dropped the way an ordinary
+	// MinInterval-debounced write could be (issue #400). Best-effort:
+	// each store already logs its own save failures, so a Close error
+	// here is just the shutdown-budget case, worth one line, not fatal.
+	closeStoreOnShutdown(fs, macRegistry, ru, detectorSettings, watchlistStore)
+}
+
+// closeStoreOnShutdown flushes every write-behind-backed store passed to
+// it, in parallel (one slow backend must not delay the others) and
+// under one shared deadline -- see persist.WriteBehind.Close. Each
+// argument is a *T with a Close(context.Context) error method; a nil
+// store (persistence never configured, or the caller has none to offer)
+// is a safe no-op via that method's own nil-receiver contract.
+func closeStoreOnShutdown(stores ...interface{ Close(context.Context) error }) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	log := logging.New("shutdown")
+	var wg sync.WaitGroup
+	for _, s := range stores {
+		wg.Add(1)
+		go func(s interface{ Close(context.Context) error }) {
+			defer wg.Done()
+			if err := s.Close(ctx); err != nil {
+				log.Warn(fmt.Sprintf("flushing a store's final state on shutdown: %v", err))
+			}
+		}(s)
+	}
+	wg.Wait()
 }
 
 // runVersion backs the `-version` mode -- prints the build-time-stamped

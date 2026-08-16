@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net"
 	"sync"
+	"time"
 
 	"github.com/tomlawesome/mikroview/internal/persist"
 	"github.com/tomlawesome/mikroview/internal/store"
@@ -267,13 +268,32 @@ func DefaultSettingsMap() map[DetectorName]Settings {
 // persistence) -- see internal/flags/store.go. The zero value is not
 // usable; construct with OpenSettingsStore.
 type SettingsStore struct {
-	mu      sync.RWMutex
-	backend persist.Backend
-	// version is the backend's token for the document as of the last
-	// load or save -- see persist.SaveWithRetry.
-	version int64
-	byName  map[DetectorName]Settings
+	mu sync.RWMutex
+	// wb is nil when persistence isn't configured -- see
+	// persist.WriteBehind for what it now owns: write-behind, the
+	// backend deadline, the after-write-stamped rate limit/back-off, and
+	// version bookkeeping (issue #400). Every method on it is a safe
+	// no-op on a nil receiver. Before #400 this store persisted every
+	// Set() call synchronously, unconditionally, under context.Background()
+	// with no deadline -- #380's first item; it now goes through the
+	// same write-behind path every other small JSON store in this
+	// codebase uses.
+	wb     *persist.WriteBehind
+	byName map[DetectorName]Settings
 }
+
+// settingsPersistMinInterval rate-limits the write-behind writer's
+// actual backend attempts. Set is an admin-only, interactive action (the
+// per-detector toggle UI), not a hot path -- unlike flags.persistMinInterval
+// this store never had any debounce at all before #400, since every Set
+// call persisted synchronously. A short interval rather than none: an
+// operator toggling several detectors in quick succession (the settings
+// page saves each field independently) now coalesces into one write
+// instead of one per field, without meaningfully delaying an
+// interactive action a human is watching. A var so tests that need
+// every call to persist immediately can shrink it, same convention as
+// flags.persistMinInterval.
+var settingsPersistMinInterval = 200 * time.Millisecond
 
 // OpenSettingsStore loads path if it exists (a missing file is the
 // expected first-run case, not an error) and returns a Store that
@@ -302,12 +322,16 @@ func OpenSettingsStore(path string, seed map[DetectorName]Settings) (*SettingsSt
 // persist.Backend -- a JSON file by default, or Postgres when
 // configured (issue #131).
 func OpenSettingsStoreWithBackend(b persist.Backend, seed map[DetectorName]Settings) (*SettingsStore, error) {
-	s := &SettingsStore{backend: b, byName: make(map[DetectorName]Settings, len(seed))}
+	s := &SettingsStore{byName: make(map[DetectorName]Settings, len(seed))}
 	for name, st := range seed {
 		s.byName[name] = st
 	}
 
-	version, existed, err := persist.Open(context.Background(), b, "the detector settings store", func(data []byte) error {
+	wb, _, err := persist.OpenWriteBehind(context.Background(), b, "the detector settings store", persist.WriteBehindOptions{
+		MinInterval: settingsPersistMinInterval,
+		OnSaveError: func(msg string) { logger.Error(msg) },
+		OnConflict:  func(msg string) { logger.Warn(msg) },
+	}, func(data []byte) error {
 		var onDisk map[DetectorName]Settings
 		if err := json.Unmarshal(data, &onDisk); err != nil {
 			return err
@@ -320,10 +344,28 @@ func OpenSettingsStoreWithBackend(b persist.Backend, seed map[DetectorName]Setti
 	if err != nil {
 		return nil, err
 	}
-	if existed {
-		s.version = version
-	}
+	s.wb = wb
 	return s, nil
+}
+
+// Flush forces this store's write-behind writer to persist whatever is
+// currently dirty now, without waiting out its usual debounce interval,
+// and blocks until that attempt finishes or ctx expires -- see
+// flags.Store.Flush's own doc comment for when this is the right call
+// (a test, or a `-backup` CLI invocation racing a still-running
+// process). A store with no backend configured (wb == nil) is a safe
+// no-op.
+func (s *SettingsStore) Flush(ctx context.Context) error {
+	return s.wb.Flush(ctx)
+}
+
+// Close stops this store's write-behind writer goroutine, flushing
+// whatever is still dirty within persist.SaveTimeout before returning --
+// main's shutdown joins on this so a change made right before exit is
+// not silently dropped. A store with no backend configured (wb == nil)
+// is a safe no-op. Not safe to call Set after Close.
+func (s *SettingsStore) Close(ctx context.Context) error {
+	return s.wb.Close(ctx)
 }
 
 // AllEnabledSettingsStore backs New/NewGlobalSpikeDetector's original
@@ -366,13 +408,21 @@ func (s *SettingsStore) List() map[DetectorName]Settings {
 	return out
 }
 
-// persistLocked writes the current state to disk if persistence is
-// configured. Write failures are swallowed rather than surfaced to
-// Set's caller: the in-memory state (which every read goes through)
-// stays correct either way, so a transient disk issue degrades to
-// "won't survive a restart right now" rather than breaking live use.
+// persistLocked encodes the current state and hands it to the
+// write-behind writer (see persist.WriteBehind), which coalesces it
+// with whatever else is pending and persists it off this goroutine,
+// under its own deadline and rate limit -- closing #380's first item
+// for this store (every persist call used to run under
+// context.Background() with no deadline, synchronously, on whichever
+// goroutine called Set). Marshal failures are swallowed rather than
+// surfaced to Set's caller: the in-memory state (which every read goes
+// through) stays correct either way, so a transient disk issue degrades
+// to "won't survive a restart right now" rather than breaking live use.
+// Must be called with s.mu already held -- see flags.Store.persistLocked's
+// own doc comment for the "lock covers the encode, not the backend
+// call" contract this mirrors.
 func (s *SettingsStore) persistLocked() {
-	if s.backend == nil {
+	if s.wb == nil {
 		return
 	}
 	data, err := json.MarshalIndent(s.byName, "", "  ")
@@ -380,13 +430,5 @@ func (s *SettingsStore) persistLocked() {
 		logger.Error(fmt.Sprintf("encoding detector settings for persistence failed: %v -- this change exists only in memory and will be lost on restart", err))
 		return
 	}
-	version, conflicted, err := persist.SaveWithRetry(context.Background(), s.backend, data, s.version)
-	if err != nil {
-		logger.Error(fmt.Sprintf("writing detector settings to %s failed: %v -- this change exists only in memory and will be lost on restart", s.backend.Describe(), err))
-		return
-	}
-	if conflicted {
-		logger.Warn(fmt.Sprintf("the detector settings store was modified by another process while this change was pending (%s); this change was applied on top", s.backend.Describe()))
-	}
-	s.version = version
+	s.wb.MarkDirty(data)
 }

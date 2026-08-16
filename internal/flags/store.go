@@ -267,12 +267,15 @@ type persistedState struct {
 // marks it rather than deleting it, so recent history stays visible. The
 // zero value is not usable; construct with Open.
 type Store struct {
-	mu      sync.RWMutex
-	backend persist.Backend
-	// version is the backend's token for the document as of the last
-	// load or save -- see persist.SaveWithRetry.
-	version int64
-	byID    map[string]*Flag
+	mu sync.RWMutex
+	// wb is nil when persistence isn't configured, same "nil means
+	// off" convention every field it replaced (backend/version/
+	// lastPersist) used to follow individually -- see persist.WriteBehind
+	// for what it now owns: write-behind, the backend deadline, the
+	// after-write-stamped rate limit/back-off, and version bookkeeping.
+	// Every method on it is a safe no-op on a nil receiver.
+	wb   *persist.WriteBehind
+	byID map[string]*Flag
 	// clearedCount tracks how many entries in byID are Cleared, so
 	// pruneLocked can skip its scan entirely when there is nothing
 	// evictable. Under a flood the store sits full of *active* flags, so
@@ -288,10 +291,6 @@ type Store struct {
 	// flagID key as byID -- see Store.Exclude's doc comment. Checked at
 	// the top of add() so an excluded pair never raises again.
 	excluded map[string]Exclusion
-
-	// lastPersist backs persistLocked's rate limiting -- see
-	// persistMinInterval.
-	lastPersist time.Time
 
 	// minuteBuckets/minuteBucketTime implement the same lazily-reset
 	// rolling-bucket trick as internal/store/ring.go's Store.minuteBuckets
@@ -345,11 +344,13 @@ func Open(path string) (*Store, error) {
 // default, or Postgres when configured (issue #131). A nil backend gives
 // a usable, in-memory-only store.
 func OpenWithBackend(b persist.Backend) (*Store, error) {
-	s := &Store{backend: b, byID: make(map[string]*Flag), excluded: make(map[string]Exclusion)}
+	s := &Store{byID: make(map[string]*Flag), excluded: make(map[string]Exclusion)}
 
-	ctx, cancel := context.WithTimeout(context.Background(), persistTimeout)
-	defer cancel()
-	version, existed, err := persist.Open(ctx, b, "the flags store", func(data []byte) error {
+	wb, _, err := persist.OpenWriteBehind(context.Background(), b, "the flags store", persist.WriteBehindOptions{
+		MinInterval: persistMinInterval,
+		OnSaveError: func(msg string) { persistLog.Error(msg) },
+		OnConflict:  func(msg string) { persistLog.Warn(msg) },
+	}, func(data []byte) error {
 		var state persistedState
 		if err := json.Unmarshal(data, &state); err != nil {
 			return err
@@ -377,10 +378,30 @@ func OpenWithBackend(b persist.Backend) (*Store, error) {
 	if err != nil {
 		return nil, err
 	}
-	if existed {
-		s.version = version
-	}
+	s.wb = wb
 	return s, nil
+}
+
+// Flush forces this store's write-behind writer to persist whatever is
+// currently dirty now, without waiting out its usual debounce interval,
+// and blocks until that attempt finishes or ctx expires -- for a caller
+// that genuinely needs to know a change has reached the backend before
+// proceeding (a test, or a `-backup` CLI invocation racing a change made
+// moments earlier in a separate, still-running process). Not meant for
+// routine use -- persistence off the hot path is the whole point of
+// issue #400; this is the deliberate escape hatch, not a replacement for
+// it. A store with no backend configured (wb == nil) is a safe no-op.
+func (s *Store) Flush(ctx context.Context) error {
+	return s.wb.Flush(ctx)
+}
+
+// Close stops this store's write-behind writer goroutine, flushing
+// whatever is still dirty within persist.SaveTimeout before returning --
+// main's shutdown joins on this so a change made right before exit is
+// not silently dropped. A store with no backend configured (wb == nil)
+// is a safe no-op. Not safe to call any mutating method after Close.
+func (s *Store) Close(ctx context.Context) error {
+	return s.wb.Close(ctx)
 }
 
 func flagID(t Type, target string) string {
@@ -966,38 +987,28 @@ func (s *Store) pruneLocked() {
 // A var rather than a const so tests that need every call to persist
 // immediately (e.g. a round-trip test with no delay between calls) can
 // shrink it, same convention as maxFlags/maxTrackedSources/
-// maxTCPConnections elsewhere in this codebase.
+// maxTCPConnections elsewhere in this codebase. Now persist.WriteBehind's
+// MinInterval -- see OpenWithBackend -- rather than a field this type
+// checks itself; the rate-limiting/back-off logic that used to live
+// here, and its #377 stall-under-load defect, both moved to that type
+// (issue #400).
 var persistMinInterval = time.Second
 
-// persistTimeout bounds every Load/Save against backend. Add/
-// AddWithDetail run synchronously on the single ingest goroutine (see
-// main.go's ingestOneRecovered), so an unresponsive backend -- a
-// Postgres connection stuck behind a network blackhole or a long lock
-// wait, not a clean disconnect -- would otherwise block that goroutine
-// forever under context.Background(), freezing the whole ingest
-// pipeline until the syslog listener's buffered channel fills and
-// starts silently dropping packets (internal/syslog/tcp_listener.go).
-// 5s is generous for a write this small: long enough that ordinary
-// latency never trips it, short enough that a genuinely stuck backend
-// degrades to a logged failure (see persistLocked) rather than an
-// indefinite hang.
-const persistTimeout = 5 * time.Second
-
-// persistLocked writes the current state -- flags and exclusions alike,
-// see persistedState -- to disk if persistence is configured and enough
-// time has passed since the last write -- see persistMinInterval. Write
-// failures are swallowed rather than surfaced to Add/Clear/Exclude's
-// callers: the in-memory state (which every read goes through) stays
-// correct either way, so a transient disk issue degrades to "won't
-// survive a restart right now" rather than breaking live use.
+// persistLocked encodes the current state -- flags and exclusions alike,
+// see persistedState -- and hands it to the write-behind writer (see
+// persist.WriteBehind), which coalesces it with whatever else is
+// pending and persists it off this goroutine, under its own deadline and
+// rate limit. Marshal failures are swallowed rather than surfaced to
+// Add/Clear/Exclude's callers: the in-memory state (which every read
+// goes through) stays correct either way, so a transient disk issue
+// degrades to "won't survive a restart right now" rather than breaking
+// live use. Must be called with s.mu already held -- the "lock covers
+// the in-memory mutation and an encode/snapshot, nothing past that"
+// contract issue #400 asks for; MarkDirty itself never touches the
+// backend.
 func (s *Store) persistLocked() {
-	if s.backend == nil {
+	if s.wb == nil {
 		return
-	}
-	if now := time.Now(); now.Sub(s.lastPersist) < persistMinInterval {
-		return
-	} else {
-		s.lastPersist = now
 	}
 
 	excluded := make([]Exclusion, 0, len(s.excluded))
@@ -1011,17 +1022,5 @@ func (s *Store) persistLocked() {
 		persistLog.Error(fmt.Sprintf("encoding flags for persistence failed: %v -- this change exists only in memory and will be lost on restart", err))
 		return
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), persistTimeout)
-	defer cancel()
-	version, conflicted, err := persist.SaveWithRetry(ctx, s.backend, data, s.version)
-	if err != nil {
-		persistLog.Error(fmt.Sprintf("writing flags to %s failed: %v -- this change exists only in memory and will be lost on restart",
-			s.backend.Describe(), err))
-		return
-	}
-	if conflicted {
-		persistLog.Warn(fmt.Sprintf("flag store was modified by another process while this change was pending (%s); this change was applied on top",
-			s.backend.Describe()))
-	}
-	s.version = version
+	s.wb.MarkDirty(data)
 }
