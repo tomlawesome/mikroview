@@ -3,6 +3,7 @@
 package ingest
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -266,6 +267,106 @@ func TestDecodePayloadNeverPanics(t *testing.T) {
 			DecodePayload(strings.NewReader(in))
 		}()
 	}
+}
+
+// TestWireguardPeerAcceptsRouterOSArrayShape is issue #443's acceptance
+// case, in the exact shape that failed on a live deployment: a peers
+// table pushed by the docs' own reference pattern -- :serialize to=json
+// over /interface/wireguard/peers print as-value -- where allowed-address
+// is an array because a peer holds several allowed CIDRs.
+//
+// The refusal it reproduces was "json: cannot unmarshal array into Go
+// struct field WireguardPeer.allowedAddress of type string", a 400 on
+// every push of this kind, with the other seven kinds landing fine
+// because each block is independently guarded on the router side. The
+// deployment deliberately kept its wg-peer block *unpatched* (owner
+// decision on #443) so the next scheduled push after this lands is the
+// live acceptance test -- which means this decoding cleanly with zero
+// script changes is the whole contract, not just a convenience.
+//
+// Field order, null endpoint and float ordinal below are RouterOS's own
+// serialisation, not tidied: :serialize emits keys alphabetically, an
+// unset property as null, and integers as floats.
+func TestWireguardPeerAcceptsRouterOSArrayShape(t *testing.T) {
+	const body = `{"kind":"wireguard-peer","page":1,"pages":1,"records":[
+	  {"allowedAddress":["192.0.2.0/24","198.51.100.0/24","203.0.113.7/32"],"comment":"branch office","endpointAddress":"203.0.113.5:51820","publicKey":"c3ludGhldGljLXB1YmxpYy1rZXktb25l"},
+	  {"allowedAddress":["203.0.113.42/32"],"comment":"laptop","endpointAddress":null,"publicKey":"c3ludGhldGljLXB1YmxpYy1rZXktdHdv"},
+	  {"allowedAddress":[],"comment":"no ranges yet","endpointAddress":null,"publicKey":"c3ludGhldGljLXB1YmxpYy1rZXktdGhy"}
+	]}`
+
+	p := decodeOK(t, body)
+	if len(p.WireguardPeers) != 3 {
+		t.Fatalf("decoded %d peers, want 3", len(p.WireguardPeers))
+	}
+	want := [][]string{
+		{"192.0.2.0/24", "198.51.100.0/24", "203.0.113.7/32"},
+		{"203.0.113.42/32"},
+		{},
+	}
+	for i, w := range want {
+		got := p.WireguardPeers[i].AllowedAddress
+		if len(got) != len(w) {
+			t.Fatalf("peer %d: AllowedAddress = %v, want %v", i, got, w)
+		}
+		for j := range w {
+			if got[j] != w[j] {
+				t.Errorf("peer %d: AllowedAddress[%d] = %q, want %q", i, j, got[j], w[j])
+			}
+		}
+	}
+	// Every CIDR survives, not just the first -- a peer's second subnet
+	// is what the multi-CIDR case exists for.
+	if p.WireguardPeers[0].AllowedAddress.String() != "192.0.2.0/24,198.51.100.0/24,203.0.113.7/32" {
+		t.Errorf("String() = %q, want the whole set joined", p.WireguardPeers[0].AllowedAddress.String())
+	}
+}
+
+// TestWireguardPeerAcceptsJoinedStringShape keeps the compatibility half
+// of #443's fix honest: the join workaround the issue documented (and
+// any script still running it) sends a comma-joined string, and a bare
+// single CIDR is the shape every push before this schema sent.
+func TestWireguardPeerAcceptsJoinedStringShape(t *testing.T) {
+	cases := map[string][]string{
+		`"192.0.2.0/24,198.51.100.0/24"`: {"192.0.2.0/24", "198.51.100.0/24"},
+		`"192.0.2.0/24"`:                 {"192.0.2.0/24"},
+		`""`:                             nil,
+		`null`:                           nil,
+	}
+	for shape, want := range cases {
+		p := decodeOK(t, `{"kind":"wireguard-peer","page":1,"pages":1,"records":[{"publicKey":"k","allowedAddress":`+shape+`,"endpointAddress":"","comment":"c"}]}`)
+		got := p.WireguardPeers[0].AllowedAddress
+		if len(got) != len(want) {
+			t.Fatalf("allowedAddress %s decoded to %v, want %v", shape, got, want)
+		}
+		for i := range want {
+			if got[i] != want[i] {
+				t.Errorf("allowedAddress %s -> [%d] = %q, want %q", shape, i, got[i], want[i])
+			}
+		}
+	}
+}
+
+func TestRouterOSListRejectsBadShapesAndOversizedSets(t *testing.T) {
+	// A list of numbers is not a set of RouterOS values, and neither is
+	// an object -- refused rather than coerced.
+	decodeErr(t, `{"kind":"wireguard-peer","page":1,"pages":1,"records":[{"publicKey":"k","allowedAddress":[1,2],"endpointAddress":"","comment":"c"}]}`)
+	decodeErr(t, `{"kind":"wireguard-peer","page":1,"pages":1,"records":[{"publicKey":"k","allowedAddress":{"a":"b"},"endpointAddress":"","comment":"c"}]}`)
+
+	// Each element is held to the same text bound a scalar field is.
+	long := strings.Repeat("a", maxFieldLen+1)
+	decodeErr(t, `{"kind":"wireguard-peer","page":1,"pages":1,"records":[{"publicKey":"k","allowedAddress":["192.0.2.0/24","`+long+`"],"endpointAddress":"","comment":"c"}]}`)
+
+	// And the set itself is bounded, refused whole rather than trimmed.
+	var b strings.Builder
+	b.WriteString(`{"kind":"wireguard-peer","page":1,"pages":1,"records":[{"publicKey":"k","allowedAddress":[`)
+	for i := 0; i <= maxListItems; i++ {
+		if i > 0 {
+			b.WriteByte(',')
+		}
+		fmt.Fprintf(&b, `"192.0.2.%d/32"`, i%256)
+	}
+	b.WriteString(`],"endpointAddress":"","comment":"c"}]}`)
+	decodeErr(t, b.String())
 }
 
 // TestDecodeRealFilterRulePush decodes a payload captured verbatim from a

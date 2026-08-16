@@ -193,25 +193,34 @@ func (ds *deviceState) rebuildIdentityLocked() {
 	if ks, ok := ds.kinds[ingest.KindWireguardPeer]; ok {
 		for _, p := range ks.pages {
 			for _, peer := range p.WireguardPeers {
-				if peer.Comment == "" || peer.AllowedAddress == "" {
+				if peer.Comment == "" {
 					continue
 				}
-				prefix, err := netip.ParsePrefix(peer.AllowedAddress)
-				if err != nil {
-					// A bare address is fine too -- same promotion
-					// parse rule internal/netclass's plain-CIDR parser
-					// applies.
-					addr, aerr := netip.ParseAddr(peer.AllowedAddress)
-					if aerr != nil {
+				// Every allowed address the peer holds names the peer,
+				// not just the first: a peer routing two branch subnets
+				// is "branch office" on both (issue #443, which is where
+				// this field stopped being a single string).
+				for _, allowed := range peer.AllowedAddress {
+					if allowed == "" {
 						continue
 					}
-					bits := 32
-					if addr.Is6() {
-						bits = 128
+					prefix, err := netip.ParsePrefix(allowed)
+					if err != nil {
+						// A bare address is fine too -- same promotion
+						// parse rule internal/netclass's plain-CIDR parser
+						// applies.
+						addr, aerr := netip.ParseAddr(allowed)
+						if aerr != nil {
+							continue
+						}
+						bits := 32
+						if addr.Is6() {
+							bits = 128
+						}
+						prefix = netip.PrefixFrom(addr, bits)
 					}
-					prefix = netip.PrefixFrom(addr, bits)
+					cidrs = append(cidrs, cidrName{prefix: prefix.Masked(), name: peer.Comment})
 				}
-				cidrs = append(cidrs, cidrName{prefix: prefix.Masked(), name: peer.Comment})
 			}
 		}
 	}
