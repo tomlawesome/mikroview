@@ -286,6 +286,14 @@ func (d *DeclarativeDefinition) Evaluate(e store.Event) {
 	if !d.def.Enabled {
 		return
 	}
+	// Scope (docs/decisions/evaluation-engine.md section 2's envelope,
+	// "scope (hosts AND netclass, the existing #44 model)") gates
+	// evaluation before this definition's own conditions ever run -- #402
+	// deliberately left this unenforced (see scope_match.go's own doc
+	// comment); #405 is what wires it in.
+	if !scopeMatches(d.def.Scope, e) {
+		return
+	}
 	if !d.compiled.match(e, d.members) {
 		return
 	}
@@ -321,6 +329,20 @@ func (d *DeclarativeDefinition) Evaluate(e store.Event) {
 	}
 	em.DefinitionID = d.def.ID
 	em.Target = d.targetFor(key)
+	// Confidence: every declarative definition's firing shape is a plain
+	// threshold-over-window crossing (docs/decisions/evaluation-engine.md
+	// section 2), which is exactly what overshootConfidence
+	// (scope_match.go) scores -- "how far over the line" count is, unlike
+	// a programmatic definition's statistical Baseline/Snapshot.ZScore.
+	// #402 left this unset entirely (see scope_match.go's own doc
+	// comment); #405 is this package's first real producer of a firing
+	// Emission, so it is what fills it in.
+	conf := overshootConfidence(count, d.threshold)
+	em.Confidence = &conf
+	// Country/EventTime: see Emission's own doc comment on why these are
+	// set here, from the triggering event, rather than by RenderEmission.
+	em.Country = e.SrcCountry
+	em.EventTime = e.ReceivedAt
 
 	routed, err := Route(d.def, em)
 	if err != nil {

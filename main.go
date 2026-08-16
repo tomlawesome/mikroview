@@ -850,6 +850,40 @@ func main() {
 	deviceSilence := detect.NewDeviceSilenceDetectorWithSettings(detectCfg, fs, detectorSettings, devices)
 	staleRule := detect.NewStaleRuleDetector(ru, fs, time.Duration(cfg.Flags.StaleRuleDays)*24*time.Hour)
 
+	// Shipped declarative definitions (issue #405): built from whatever
+	// the definitions store currently holds for a shipped, available,
+	// declarative-kind definition, wrapped in one DeclarativeSet (its own
+	// dispatch pre-index, see internal/engine/dispatch.go) and registered
+	// on the engine -- port_scan is the first detector ported this way
+	// (docs/decisions/evaluation-engine.md section 2,
+	// internal/engine/shipped_declarative.go's buildPortScanDefinition);
+	// every other shipped detector still runs through internal/detect
+	// below until its own #405 port lands. An empty/not-yet-migrated
+	// definitions store (definitions.List() returns nothing) is a valid,
+	// common state -- see MigrateDefinitions's own doc comment -- and
+	// simply means this DeclarativeSet starts out evaluating nothing,
+	// same as registering an empty one on a freshly-constructed Engine.
+	var shippedDeclDefs []*engine.DeclarativeDefinition
+	for _, sd := range definitions.List() {
+		if !sd.Available || sd.Definition.Kind != engine.KindDeclarative || sd.Definition.Provenance.Origin != engine.ProvenanceShipped {
+			continue
+		}
+		dd, err := engine.BuildShippedDeclarativeDefinition(sd.Definition)
+		if err != nil {
+			// Not every shipped-provenance declarative definition
+			// necessarily has a registered builder yet (a stale/future
+			// entry outside this binary's current shipped catalogue) --
+			// logged and skipped, not fatal: the rest of the shipped set,
+			// and every programmatic/legacy definition still running
+			// through internal/detect below, keeps working.
+			detectorsLog.Warn(fmt.Sprintf("skipping shipped declarative definition %q: %v", sd.Definition.ID, err))
+			continue
+		}
+		dd.OnRoutedEmission = engine.FlagsSink(fs)
+		shippedDeclDefs = append(shippedDeclDefs, dd)
+	}
+	eng.Register(engine.NewDeclarativeSet("shipped-declarative", shippedDeclDefs))
+
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 

@@ -48,7 +48,9 @@ func privacyRelayMatch() netclass.Class {
 
 func TestNetClassReinforcesTorMatch(t *testing.T) {
 	cfg := DefaultConfig()
-	cfg.PortScanThreshold = 3
+	cfg.CriticalPorts = []int{22}
+	cfg.CriticalPortThreshold = 3
+	cfg.PortScanThreshold = 1000
 	cfg.ActivitySpikeThreshold = 1000
 
 	nc := newFakeNetClass()
@@ -59,21 +61,23 @@ func TestNetClassReinforcesTorMatch(t *testing.T) {
 
 	now := time.Now()
 	for i := 0; i < 3; i++ {
-		d.Observe(evt("198.51.100.4", 100+i, now.Add(time.Duration(i)*time.Second)))
+		d.Observe(evt("198.51.100.4", 22, now.Add(time.Duration(i)*time.Second)))
 	}
 
-	psFlag := findFlag(fs, "198.51.100.4", flags.TypePortScan)
-	if psFlag == nil {
-		t.Fatal("expected a TypePortScan flag to have been raised")
+	cpFlag := findFlag(fs, "198.51.100.4", flags.TypeCriticalPort)
+	if cpFlag == nil {
+		t.Fatal("expected a TypeCriticalPort flag to have been raised")
 	}
-	if psFlag.ReputationFloor == nil || *psFlag.ReputationFloor != reputation.TorExitNodeFloor {
-		t.Errorf("expected ReputationFloor to be reinforced to %d (Tor), got %v", reputation.TorExitNodeFloor, psFlag.ReputationFloor)
+	if cpFlag.ReputationFloor == nil || *cpFlag.ReputationFloor != reputation.TorExitNodeFloor {
+		t.Errorf("expected ReputationFloor to be reinforced to %d (Tor), got %v", reputation.TorExitNodeFloor, cpFlag.ReputationFloor)
 	}
 }
 
 func TestNetClassReinforcesVPNMatch(t *testing.T) {
 	cfg := DefaultConfig()
-	cfg.PortScanThreshold = 3
+	cfg.CriticalPorts = []int{22}
+	cfg.CriticalPortThreshold = 3
+	cfg.PortScanThreshold = 1000
 	cfg.ActivitySpikeThreshold = 1000
 
 	nc := newFakeNetClass()
@@ -84,15 +88,15 @@ func TestNetClassReinforcesVPNMatch(t *testing.T) {
 
 	now := time.Now()
 	for i := 0; i < 3; i++ {
-		d.Observe(evt("198.51.100.4", 100+i, now.Add(time.Duration(i)*time.Second)))
+		d.Observe(evt("198.51.100.4", 22, now.Add(time.Duration(i)*time.Second)))
 	}
 
-	psFlag := findFlag(fs, "198.51.100.4", flags.TypePortScan)
-	if psFlag == nil {
-		t.Fatal("expected a TypePortScan flag to have been raised")
+	cpFlag := findFlag(fs, "198.51.100.4", flags.TypeCriticalPort)
+	if cpFlag == nil {
+		t.Fatal("expected a TypeCriticalPort flag to have been raised")
 	}
-	if psFlag.ReputationFloor == nil || *psFlag.ReputationFloor != netclassVPNFloor {
-		t.Errorf("expected ReputationFloor to be reinforced to %d (VPN), got %v", netclassVPNFloor, psFlag.ReputationFloor)
+	if cpFlag.ReputationFloor == nil || *cpFlag.ReputationFloor != netclassVPNFloor {
+		t.Errorf("expected ReputationFloor to be reinforced to %d (VPN), got %v", netclassVPNFloor, cpFlag.ReputationFloor)
 	}
 }
 
@@ -102,7 +106,9 @@ func TestNetClassReinforcesVPNMatch(t *testing.T) {
 // RaiseConfidenceFloor, regardless of direction.
 func TestNetClassDatacenterNeverReinforces(t *testing.T) {
 	cfg := DefaultConfig()
-	cfg.PortScanThreshold = 3
+	cfg.CriticalPorts = []int{22}
+	cfg.CriticalPortThreshold = 3
+	cfg.PortScanThreshold = 1000
 	cfg.ActivitySpikeThreshold = 1000
 
 	nc := newFakeNetClass()
@@ -113,15 +119,15 @@ func TestNetClassDatacenterNeverReinforces(t *testing.T) {
 
 	now := time.Now()
 	for i := 0; i < 3; i++ {
-		d.Observe(evt("198.51.100.4", 100+i, now.Add(time.Duration(i)*time.Second)))
+		d.Observe(evt("198.51.100.4", 22, now.Add(time.Duration(i)*time.Second)))
 	}
 
-	psFlag := findFlag(fs, "198.51.100.4", flags.TypePortScan)
-	if psFlag == nil {
-		t.Fatal("expected a TypePortScan flag to have been raised (behaviorally, independent of netclass)")
+	cpFlag := findFlag(fs, "198.51.100.4", flags.TypeCriticalPort)
+	if cpFlag == nil {
+		t.Fatal("expected a TypeCriticalPort flag to have been raised (behaviorally, independent of netclass)")
 	}
-	if psFlag.ReputationFloor != nil {
-		t.Errorf("expected no ReputationFloor from a datacenter match, got %v", psFlag.ReputationFloor)
+	if cpFlag.ReputationFloor != nil {
+		t.Errorf("expected no ReputationFloor from a datacenter match, got %v", cpFlag.ReputationFloor)
 	}
 }
 
@@ -131,7 +137,9 @@ func TestNetClassDatacenterNeverReinforces(t *testing.T) {
 // (Apple Private Relay / Cloudflare WARP -- ordinary consumer traffic).
 func TestNetClassPrivacyRelayNeverReinforces(t *testing.T) {
 	cfg := DefaultConfig()
-	cfg.PortScanThreshold = 3
+	cfg.CriticalPorts = []int{22}
+	cfg.CriticalPortThreshold = 3
+	cfg.PortScanThreshold = 1000
 	cfg.ActivitySpikeThreshold = 1000
 
 	nc := newFakeNetClass()
@@ -142,15 +150,15 @@ func TestNetClassPrivacyRelayNeverReinforces(t *testing.T) {
 
 	now := time.Now()
 	for i := 0; i < 3; i++ {
-		d.Observe(evt("198.51.100.4", 100+i, now.Add(time.Duration(i)*time.Second)))
+		d.Observe(evt("198.51.100.4", 22, now.Add(time.Duration(i)*time.Second)))
 	}
 
-	psFlag := findFlag(fs, "198.51.100.4", flags.TypePortScan)
-	if psFlag == nil {
-		t.Fatal("expected a TypePortScan flag to have been raised (behaviorally, independent of netclass)")
+	cpFlag := findFlag(fs, "198.51.100.4", flags.TypeCriticalPort)
+	if cpFlag == nil {
+		t.Fatal("expected a TypeCriticalPort flag to have been raised (behaviorally, independent of netclass)")
 	}
-	if psFlag.ReputationFloor != nil {
-		t.Errorf("expected no ReputationFloor from a Private Relay match, got %v", psFlag.ReputationFloor)
+	if cpFlag.ReputationFloor != nil {
+		t.Errorf("expected no ReputationFloor from a Private Relay match, got %v", cpFlag.ReputationFloor)
 	}
 }
 
@@ -214,7 +222,9 @@ func TestNetClassSkippedForOutboundTraffic(t *testing.T) {
 // destination (not this LAN) is not "arriving here" either.
 func TestNetClassSkippedWhenDestinationIsAlsoPublic(t *testing.T) {
 	cfg := DefaultConfig()
-	cfg.PortScanThreshold = 3
+	cfg.CriticalPorts = []int{22}
+	cfg.CriticalPortThreshold = 3
+	cfg.PortScanThreshold = 1000
 	cfg.ActivitySpikeThreshold = 1000
 
 	nc := newFakeNetClass()
@@ -225,17 +235,17 @@ func TestNetClassSkippedWhenDestinationIsAlsoPublic(t *testing.T) {
 
 	now := time.Now()
 	for i := 0; i < 3; i++ {
-		e := evt("198.51.100.4", 100+i, now.Add(time.Duration(i)*time.Second))
+		e := evt("198.51.100.4", 22, now.Add(time.Duration(i)*time.Second))
 		e.DstIP = "203.0.113.9" // also public, not this LAN
 		d.Observe(e)
 	}
 
-	psFlag := findFlag(fs, "198.51.100.4", flags.TypePortScan)
-	if psFlag == nil {
-		t.Fatal("expected a TypePortScan flag to have been raised behaviorally")
+	cpFlag := findFlag(fs, "198.51.100.4", flags.TypeCriticalPort)
+	if cpFlag == nil {
+		t.Fatal("expected a TypeCriticalPort flag to have been raised behaviorally")
 	}
-	if psFlag.ReputationFloor != nil {
-		t.Errorf("expected no reinforcement when the destination is also public, got %v", psFlag.ReputationFloor)
+	if cpFlag.ReputationFloor != nil {
+		t.Errorf("expected no reinforcement when the destination is also public, got %v", cpFlag.ReputationFloor)
 	}
 }
 
@@ -246,7 +256,9 @@ func TestNetClassSkippedWhenDestinationIsAlsoPublic(t *testing.T) {
 // whatever RaiseConfidenceFloor itself already guarantees.
 func TestNetClassConfidenceNeverDecreases(t *testing.T) {
 	cfg := DefaultConfig()
-	cfg.PortScanThreshold = 3
+	cfg.CriticalPorts = []int{22}
+	cfg.CriticalPortThreshold = 3
+	cfg.PortScanThreshold = 1000
 	cfg.ActivitySpikeThreshold = 1000
 
 	nc := newFakeNetClass()
@@ -257,12 +269,12 @@ func TestNetClassConfidenceNeverDecreases(t *testing.T) {
 
 	now := time.Now()
 	for i := 0; i < 3; i++ {
-		d.Observe(evt("198.51.100.4", 100+i, now.Add(time.Duration(i)*time.Second)))
+		d.Observe(evt("198.51.100.4", 22, now.Add(time.Duration(i)*time.Second)))
 	}
 
-	psFlag := findFlag(fs, "198.51.100.4", flags.TypePortScan)
-	if psFlag == nil || psFlag.Confidence == nil || *psFlag.Confidence != reputation.TorExitNodeFloor {
-		t.Fatalf("expected Confidence == %d after the Tor match, got %+v", reputation.TorExitNodeFloor, psFlag)
+	cpFlag := findFlag(fs, "198.51.100.4", flags.TypeCriticalPort)
+	if cpFlag == nil || cpFlag.Confidence == nil || *cpFlag.Confidence != reputation.TorExitNodeFloor {
+		t.Fatalf("expected Confidence == %d after the Tor match, got %+v", reputation.TorExitNodeFloor, cpFlag)
 	}
 
 	// Reclassify the same source as VPN (a lower floor) and observe
@@ -270,9 +282,9 @@ func TestNetClassConfidenceNeverDecreases(t *testing.T) {
 	nc.setMatch("198.51.100.4", vpnMatch())
 	d.Observe(evt("198.51.100.4", 200, now.Add(10*time.Second)))
 
-	psFlag = findFlag(fs, "198.51.100.4", flags.TypePortScan)
-	if psFlag.Confidence == nil || *psFlag.Confidence < reputation.TorExitNodeFloor {
-		t.Errorf("Confidence dropped from %d to %v after a lower-floor reclassification -- RaiseConfidenceFloor must never lower a score", reputation.TorExitNodeFloor, psFlag.Confidence)
+	cpFlag = findFlag(fs, "198.51.100.4", flags.TypeCriticalPort)
+	if cpFlag.Confidence == nil || *cpFlag.Confidence < reputation.TorExitNodeFloor {
+		t.Errorf("Confidence dropped from %d to %v after a lower-floor reclassification -- RaiseConfidenceFloor must never lower a score", reputation.TorExitNodeFloor, cpFlag.Confidence)
 	}
 }
 
@@ -284,7 +296,9 @@ func TestNetClassConfidenceNeverDecreases(t *testing.T) {
 // same events.
 func TestNetClassRespectsPermanentExclusion(t *testing.T) {
 	cfg := DefaultConfig()
-	cfg.PortScanThreshold = 3
+	cfg.CriticalPorts = []int{22}
+	cfg.CriticalPortThreshold = 3
+	cfg.PortScanThreshold = 1000
 	cfg.ActivitySpikeThreshold = 1000
 
 	nc := newFakeNetClass()
@@ -292,14 +306,14 @@ func TestNetClassRespectsPermanentExclusion(t *testing.T) {
 
 	d, fs := newTestDetector(t, cfg)
 	d.WithNetClass(nc)
-	fs.Exclude(flags.TypePortScan, "198.51.100.4")
+	fs.Exclude(flags.TypeCriticalPort, "198.51.100.4")
 
 	now := time.Now()
 	for i := 0; i < 3; i++ {
-		d.Observe(evt("198.51.100.4", 100+i, now.Add(time.Duration(i)*time.Second)))
+		d.Observe(evt("198.51.100.4", 22, now.Add(time.Duration(i)*time.Second)))
 	}
 
-	if f := findFlag(fs, "198.51.100.4", flags.TypePortScan); f != nil {
+	if f := findFlag(fs, "198.51.100.4", flags.TypeCriticalPort); f != nil {
 		t.Errorf("expected the excluded pair to stay unflagged despite a Tor match, got %+v", f)
 	}
 }
