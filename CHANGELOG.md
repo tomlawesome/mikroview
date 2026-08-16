@@ -18,6 +18,29 @@ rewritten.
 
 ### Added
 
+- **The RouterOS push schema carries more of each rule** (#408). Pushed
+  filter rules now carry `connectionState`, `inInterface` and
+  `outInterface`; pushed NAT rules carry the full rule anatomy
+  (`toAddresses`, `toPorts`, `dstPort`, `protocol`, `inInterface`,
+  `outInterface`, `srcAddress`, `dstAddress`, `disabled`, `dynamic`);
+  and every push may state the router's own RouterOS version on the
+  payload (`routerosVersion`, read from `[/system/resource get
+  version]`).
+
+  Nothing reads any of it yet, on purpose. Each field is input for work
+  that is deliberately later — connection-state for the "which rules can
+  actually feed this view" answer, the NAT anatomy for a NAT popup that
+  separates rules an event could have hit from ones it could not (#445),
+  the version for warning that a command was written against a different
+  RouterOS (#436) — and all three are worth designing against data that
+  has genuinely been flowing rather than data assumed into existence.
+
+  Every field is optional: an older push script against this build
+  leaves them unset and is accepted exactly as before. The documented
+  upgrade order is unchanged — update MikroView before the script, never
+  the other way round. `docs/routeros-setup.md` step 4c and its field
+  table carry the new lines, and the setup wizard emits them.
+
 - **Two new action categories, `marked` and `natted`**, so mangle mark
   rules and NAT rules stop being reported as "unknown". RouterOS's
   non-filter rules produce log lines with no accept/drop/reject verdict
@@ -111,6 +134,19 @@ rewritten.
   makes from then on.
 
 ### Fixed
+
+- **WireGuard peer pushes are no longer refused when a peer has more
+  than one allowed address** (#443). RouterOS holds `allowed-address` as
+  an array, so the documented push script produced a payload the server
+  rejected outright (`cannot unmarshal array into Go struct field
+  WireguardPeer.allowedAddress of type string`) — the whole
+  `wireguard-peer` kind failed on any real router, taking peer-based
+  host naming with it, while the other seven kinds landed fine. The
+  schema now takes the array RouterOS actually sends, and a
+  comma-joined string as well, so a script written against either
+  version of the docs works unchanged. Every allowed address a peer
+  holds now names traffic from it, not just the first: a peer routing
+  two branch subnets reads "branch office" on both.
 
 - **A stalled storage backend could freeze flag reads, rule-usage
   reads, and the new-device MAC lookup -- all API-served state -- not

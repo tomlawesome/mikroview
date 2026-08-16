@@ -3,6 +3,7 @@
 package ingest
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -266,6 +267,253 @@ func TestDecodePayloadNeverPanics(t *testing.T) {
 			DecodePayload(strings.NewReader(in))
 		}()
 	}
+}
+
+// TestFilterRuleAddressFieldsAreBoundedLikeEveryOtherField closes a gap
+// found while adding the #408 fields: dstAddress and srcAddress were the
+// only record fields in this package with no validate() line, so a
+// router-controlled value could arrive oversized or carrying a
+// bidi-override character and reach the UI, the exports and the audit
+// trail unscreened. Every sibling field already refuses both.
+func TestFilterRuleAddressFieldsAreBoundedLikeEveryOtherField(t *testing.T) {
+	long := strings.Repeat("a", maxFieldLen+1)
+	const prefix = `{"kind":"filter-rule","page":1,"pages":1,"records":[{"ordinal":0,"comment":"","chain":"","action":"","srcAddressList":"","logPrefix":"",`
+	decodeErr(t, prefix+`"dstAddress":"`+long+`"}]}`)
+	decodeErr(t, prefix+`"srcAddress":"`+long+`"}]}`)
+	// \u202e is RIGHT-TO-LEFT OVERRIDE and \u0007 is BEL, both written as
+	// JSON escapes so the decoder accepts them and validateFieldText gets
+	// a real rune to refuse -- the bidi-spoofing class
+	// internal/auth.ValidateUsername cites, and the control class beside
+	// it.
+	decodeErr(t, prefix+`"dstAddress":"203.0.113.9\u202e"}]}`)
+	decodeErr(t, prefix+`"srcAddress":"198.51.100.1\u0007"}]}`)
+
+	// The ordinary shapes still pass -- this bounds the field, it does not
+	// narrow what a rule may legitimately match on.
+	p := decodeOK(t, prefix+`"dstAddress":"!192.0.2.0/24","srcAddress":"198.51.100.1-198.51.100.5"}]}`)
+	if p.FilterRules[0].DstAddress != "!192.0.2.0/24" || p.FilterRules[0].SrcAddress != "198.51.100.1-198.51.100.5" {
+		t.Errorf("a negated CIDR and a range must still round-trip, got %+v", p.FilterRules[0])
+	}
+}
+
+// TestFilterRuleRoundTripsConnectionStateAndInterfaces is issue #408's
+// own scope: the three fields arrive, in both shapes RouterOS can send a
+// set in, and absent means unset rather than "matches nothing".
+func TestFilterRuleRoundTripsConnectionStateAndInterfaces(t *testing.T) {
+	p := decodeOK(t, `{"kind":"filter-rule","page":1,"pages":1,"records":[
+	  {"ordinal":0,"comment":"","chain":"input","action":"accept","srcAddressList":"","logPrefix":"A|est-rel|","connectionState":["established","related"],"inInterface":"ether1","outInterface":""},
+	  {"ordinal":1,"comment":"","chain":"input","action":"drop","srcAddressList":"","logPrefix":"D|invalid|","connectionState":"invalid","inInterface":"","outInterface":"!ether2"},
+	  {"ordinal":2,"comment":"","chain":"forward","action":"drop","srcAddressList":"","logPrefix":"D|all|"}
+	]}`)
+	if len(p.FilterRules) != 3 {
+		t.Fatalf("decoded %d rules, want 3", len(p.FilterRules))
+	}
+
+	if got := p.FilterRules[0].ConnectionState.String(); got != "established,related" {
+		t.Errorf("rule 0 ConnectionState = %q, want established,related", got)
+	}
+	if p.FilterRules[0].InInterface != "ether1" || p.FilterRules[0].OutInterface != "" {
+		t.Errorf("rule 0 interfaces = %q/%q, want ether1/empty", p.FilterRules[0].InInterface, p.FilterRules[0].OutInterface)
+	}
+	// The joined-string shape, and a negated interface: both are one
+	// value, not a set of characters to be clever about.
+	if got := p.FilterRules[1].ConnectionState; len(got) != 1 || got[0] != "invalid" {
+		t.Errorf("rule 1 ConnectionState = %v, want [invalid]", got)
+	}
+	if p.FilterRules[1].OutInterface != "!ether2" {
+		t.Errorf("rule 1 OutInterface = %q, want !ether2", p.FilterRules[1].OutInterface)
+	}
+
+	// A rule that matches on no connection state omits the key. That must
+	// decode to unset -- an empty list -- and not to a rule claiming it
+	// matches some state, since the two say opposite things about what
+	// the rule can be answerable for.
+	third := p.FilterRules[2]
+	if len(third.ConnectionState) != 0 {
+		t.Errorf("an absent connectionState decoded to %v, want unset", third.ConnectionState)
+	}
+	if third.ConnectionState.String() != "" {
+		t.Errorf("an absent connectionState renders as %q, want empty", third.ConnectionState.String())
+	}
+	if third.InInterface != "" || third.OutInterface != "" {
+		t.Errorf("absent interfaces decoded to %q/%q, want empty", third.InInterface, third.OutInterface)
+	}
+}
+
+// TestFilterRuleWithoutNewFieldsStillDecodes is the documented safe
+// upgrade order, pinned: an older push script against this build omits
+// every field added since it was written and is still accepted, unset
+// rather than refused.
+func TestFilterRuleWithoutNewFieldsStillDecodes(t *testing.T) {
+	p := decodeOK(t, `{"kind":"filter-rule","page":1,"pages":1,"records":[{"ordinal":0,"comment":"allow lan","chain":"forward","action":"accept","srcAddressList":"lan","logPrefix":"r0"}]}`)
+	if len(p.FilterRules) != 1 || p.FilterRules[0].Comment != "allow lan" {
+		t.Fatalf("a pre-#408 record was not accepted intact: %+v", p.FilterRules)
+	}
+}
+
+// TestPayloadCarriesRouterOSVersion covers #436's carry: the router
+// states its own version on the envelope, every kind's push carries it,
+// and a script that does not send it is still a valid push.
+func TestPayloadCarriesRouterOSVersion(t *testing.T) {
+	p := decodeOK(t, `{"kind":"arp","page":1,"pages":1,"routerosVersion":"7.23.3 (stable)","records":[{"address":"192.0.2.50","mac":"aa:bb:cc:dd:ee:ff"}]}`)
+	if p.RouterOSVersion != "7.23.3 (stable)" {
+		t.Errorf("RouterOSVersion = %q, want the version the router stated", p.RouterOSVersion)
+	}
+
+	// Absent is "not stated", not an error and not a version.
+	p = decodeOK(t, `{"kind":"arp","page":1,"pages":1,"records":[{"address":"192.0.2.50","mac":"aa:bb:cc:dd:ee:ff"}]}`)
+	if p.RouterOSVersion != "" {
+		t.Errorf("an omitted routerosVersion decoded to %q, want empty", p.RouterOSVersion)
+	}
+
+	// Router-controlled text, so it is bounded and screened like any
+	// record field rather than trusted for being on the envelope.
+	decodeErr(t, `{"kind":"arp","page":1,"pages":1,"routerosVersion":"`+strings.Repeat("7", maxFieldLen+1)+`","records":[]}`)
+	decodeErr(t, `{"kind":"arp","page":1,"pages":1,"routerosVersion":"7.23.3\u202e","records":[]}`)
+}
+
+// TestNATRuleRoundTripsFullAnatomy pins the fields #445 needs to say a
+// rule is "consistent with this event" instead of just listing the
+// table. Both port shapes appear (a single dst-port as a JSON number, a
+// to-ports range as a string), and the last record is the pre-#408 shape
+// -- an older push script omitting all of it, which must still land
+// unset rather than be refused.
+func TestNATRuleRoundTripsFullAnatomy(t *testing.T) {
+	p := decodeOK(t, `{"kind":"nat-rule","page":1,"pages":1,"records":[
+	  {"ordinal":0,"comment":"web to the DMZ host","chain":"dstnat","action":"dst-nat","toAddresses":"192.0.2.10","toPorts":8080.000000,"dstPort":443.000000,"protocol":"tcp","inInterface":"ether1","outInterface":"","srcAddress":"","dstAddress":"198.51.100.4","disabled":false,"dynamic":false},
+	  {"ordinal":1,"comment":"","chain":"srcnat","action":"masquerade","toAddresses":"","toPorts":"","dstPort":"1000-2000","protocol":"udp","inInterface":"","outInterface":"ether1","srcAddress":"192.0.2.0/24","dstAddress":"","disabled":true,"dynamic":true},
+	  {"ordinal":2,"comment":"pre-#408 script","chain":"srcnat","action":"masquerade"}
+	]}`)
+	if len(p.NATRules) != 3 {
+		t.Fatalf("decoded %d NAT rules, want 3", len(p.NATRules))
+	}
+
+	first := p.NATRules[0]
+	if first.ToAddresses != "192.0.2.10" || string(first.ToPorts) != "8080" || string(first.DstPort) != "443" {
+		t.Errorf("rule 0 translation/match = %+v, want to-addresses 192.0.2.10, to-ports 8080, dst-port 443", first)
+	}
+	if first.Protocol != "tcp" || first.InInterface != "ether1" || first.DstAddress != "198.51.100.4" {
+		t.Errorf("rule 0 = %+v, want tcp in on ether1 to 198.51.100.4", first)
+	}
+	if first.Disabled || first.Dynamic {
+		t.Errorf("rule 0 disabled/dynamic = %v/%v, want both false", first.Disabled, first.Dynamic)
+	}
+
+	second := p.NATRules[1]
+	if string(second.DstPort) != "1000-2000" || second.OutInterface != "ether1" || second.SrcAddress != "192.0.2.0/24" {
+		t.Errorf("rule 1 = %+v, want the range/out-interface/src-address shape", second)
+	}
+	if !second.Disabled || !second.Dynamic {
+		t.Errorf("rule 1 disabled/dynamic = %v/%v, want both true -- a disabled or dynamic rule is not the same claim as an active one", second.Disabled, second.Dynamic)
+	}
+
+	third := p.NATRules[2]
+	if third.Comment != "pre-#408 script" || third.Chain != "srcnat" || third.Action != "masquerade" {
+		t.Errorf("rule 2 = %+v, want the old four-field record intact", third)
+	}
+	if third.ToAddresses != "" || third.ToPorts != "" || third.Protocol != "" || third.Disabled || third.Dynamic {
+		t.Errorf("rule 2 = %+v, want every unsent field unset", third)
+	}
+}
+
+// TestWireguardPeerAcceptsRouterOSArrayShape is issue #443's acceptance
+// case, in the exact shape that failed on a live deployment: a peers
+// table pushed by the docs' own reference pattern -- :serialize to=json
+// over /interface/wireguard/peers print as-value -- where allowed-address
+// is an array because a peer holds several allowed CIDRs.
+//
+// The refusal it reproduces was "json: cannot unmarshal array into Go
+// struct field WireguardPeer.allowedAddress of type string", a 400 on
+// every push of this kind, with the other seven kinds landing fine
+// because each block is independently guarded on the router side. The
+// deployment deliberately kept its wg-peer block *unpatched* (owner
+// decision on #443) so the next scheduled push after this lands is the
+// live acceptance test -- which means this decoding cleanly with zero
+// script changes is the whole contract, not just a convenience.
+//
+// Field order, null endpoint and float ordinal below are RouterOS's own
+// serialisation, not tidied: :serialize emits keys alphabetically, an
+// unset property as null, and integers as floats.
+func TestWireguardPeerAcceptsRouterOSArrayShape(t *testing.T) {
+	const body = `{"kind":"wireguard-peer","page":1,"pages":1,"records":[
+	  {"allowedAddress":["192.0.2.0/24","198.51.100.0/24","203.0.113.7/32"],"comment":"branch office","endpointAddress":"203.0.113.5:51820","publicKey":"c3ludGhldGljLXB1YmxpYy1rZXktb25l"},
+	  {"allowedAddress":["203.0.113.42/32"],"comment":"laptop","endpointAddress":null,"publicKey":"c3ludGhldGljLXB1YmxpYy1rZXktdHdv"},
+	  {"allowedAddress":[],"comment":"no ranges yet","endpointAddress":null,"publicKey":"c3ludGhldGljLXB1YmxpYy1rZXktdGhy"}
+	]}`
+
+	p := decodeOK(t, body)
+	if len(p.WireguardPeers) != 3 {
+		t.Fatalf("decoded %d peers, want 3", len(p.WireguardPeers))
+	}
+	want := [][]string{
+		{"192.0.2.0/24", "198.51.100.0/24", "203.0.113.7/32"},
+		{"203.0.113.42/32"},
+		{},
+	}
+	for i, w := range want {
+		got := p.WireguardPeers[i].AllowedAddress
+		if len(got) != len(w) {
+			t.Fatalf("peer %d: AllowedAddress = %v, want %v", i, got, w)
+		}
+		for j := range w {
+			if got[j] != w[j] {
+				t.Errorf("peer %d: AllowedAddress[%d] = %q, want %q", i, j, got[j], w[j])
+			}
+		}
+	}
+	// Every CIDR survives, not just the first -- a peer's second subnet
+	// is what the multi-CIDR case exists for.
+	if p.WireguardPeers[0].AllowedAddress.String() != "192.0.2.0/24,198.51.100.0/24,203.0.113.7/32" {
+		t.Errorf("String() = %q, want the whole set joined", p.WireguardPeers[0].AllowedAddress.String())
+	}
+}
+
+// TestWireguardPeerAcceptsJoinedStringShape keeps the compatibility half
+// of #443's fix honest: the join workaround the issue documented (and
+// any script still running it) sends a comma-joined string, and a bare
+// single CIDR is the shape every push before this schema sent.
+func TestWireguardPeerAcceptsJoinedStringShape(t *testing.T) {
+	cases := map[string][]string{
+		`"192.0.2.0/24,198.51.100.0/24"`: {"192.0.2.0/24", "198.51.100.0/24"},
+		`"192.0.2.0/24"`:                 {"192.0.2.0/24"},
+		`""`:                             nil,
+		`null`:                           nil,
+	}
+	for shape, want := range cases {
+		p := decodeOK(t, `{"kind":"wireguard-peer","page":1,"pages":1,"records":[{"publicKey":"k","allowedAddress":`+shape+`,"endpointAddress":"","comment":"c"}]}`)
+		got := p.WireguardPeers[0].AllowedAddress
+		if len(got) != len(want) {
+			t.Fatalf("allowedAddress %s decoded to %v, want %v", shape, got, want)
+		}
+		for i := range want {
+			if got[i] != want[i] {
+				t.Errorf("allowedAddress %s -> [%d] = %q, want %q", shape, i, got[i], want[i])
+			}
+		}
+	}
+}
+
+func TestRouterOSListRejectsBadShapesAndOversizedSets(t *testing.T) {
+	// A list of numbers is not a set of RouterOS values, and neither is
+	// an object -- refused rather than coerced.
+	decodeErr(t, `{"kind":"wireguard-peer","page":1,"pages":1,"records":[{"publicKey":"k","allowedAddress":[1,2],"endpointAddress":"","comment":"c"}]}`)
+	decodeErr(t, `{"kind":"wireguard-peer","page":1,"pages":1,"records":[{"publicKey":"k","allowedAddress":{"a":"b"},"endpointAddress":"","comment":"c"}]}`)
+
+	// Each element is held to the same text bound a scalar field is.
+	long := strings.Repeat("a", maxFieldLen+1)
+	decodeErr(t, `{"kind":"wireguard-peer","page":1,"pages":1,"records":[{"publicKey":"k","allowedAddress":["192.0.2.0/24","`+long+`"],"endpointAddress":"","comment":"c"}]}`)
+
+	// And the set itself is bounded, refused whole rather than trimmed.
+	var b strings.Builder
+	b.WriteString(`{"kind":"wireguard-peer","page":1,"pages":1,"records":[{"publicKey":"k","allowedAddress":[`)
+	for i := 0; i <= maxListItems; i++ {
+		if i > 0 {
+			b.WriteByte(',')
+		}
+		fmt.Fprintf(&b, `"192.0.2.%d/32"`, i%256)
+	}
+	b.WriteString(`],"endpointAddress":"","comment":"c"}]}`)
+	decodeErr(t, b.String())
 }
 
 // TestDecodeRealFilterRulePush decodes a payload captured verbatim from a
