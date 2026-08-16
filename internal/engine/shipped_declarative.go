@@ -487,3 +487,24 @@ func baselineFloorFromParams(params Params, window time.Duration) (BaselineFloor
 	}
 	return floor, nil
 }
+
+// paramStringList/paramFloatOptional complete the normalized-param
+// readers above for the optional shapes the programmatic definitions use.
+func paramStringList(params Params, name string) ([]string, error) {
+	raw, ok := params[name]
+	if !ok {
+		return nil, nil
+	}
+	v, ok := raw.([]string)
+	if !ok {
+		return nil, fmt.Errorf("engine: param %q is not a string list (got %T)", name, raw)
+	}
+	return v, nil
+}
+
+func paramFloatOptional(params Params, name string) (float64, error) {
+	if _, ok := params[name]; !ok {
+		return 0, nil
+	}
+	return paramFloat(params, name)
+}
