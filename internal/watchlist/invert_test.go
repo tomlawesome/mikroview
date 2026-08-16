@@ -264,6 +264,8 @@ func TestObserveAndPermittedSurviveRestart(t *testing.T) {
 	if err := s1.SetObserving("e1", false); err != nil {
 		t.Fatal(err)
 	}
+	// #400: write-behind -- flush before reopening, see flushForTest.
+	flushForTest(t, s1)
 
 	s2, err := Open(path)
 	if err != nil {

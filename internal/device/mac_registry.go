@@ -46,16 +46,14 @@ var maxMACRegistryEntries = 50_000
 // rest of mikroview uses (see SECURITY.md's "Data handling" section).
 // The zero value is not usable; construct with OpenMACRegistry.
 type MACRegistry struct {
-	mu      sync.RWMutex
-	backend persist.Backend
-	// version is the backend's token for the document as of the last
-	// load or save -- see persist.SaveWithRetry.
-	version int64
-	byMAC   map[string]*MACEntry
-
-	// lastPersist backs persistLocked's rate limiting -- see
-	// macRegistryPersistMinInterval.
-	lastPersist time.Time
+	mu sync.RWMutex
+	// wb is nil when persistence isn't configured -- see
+	// persist.WriteBehind for what it now owns: write-behind, the
+	// backend deadline, the after-write-stamped rate limit/back-off, and
+	// version bookkeeping (issue #400). Every method on it is a safe
+	// no-op on a nil receiver.
+	wb    *persist.WriteBehind
+	byMAC map[string]*MACEntry
 }
 
 // macRegistryPersistMinInterval rate-limits persistLocked's actual disk
@@ -65,20 +63,11 @@ type MACRegistry struct {
 // per call would put disk I/O directly on that path. A var rather than a
 // const so tests that need every call to persist immediately can shrink
 // it.
+// Now persist.WriteBehind's MinInterval (see OpenMACRegistryWithBackend)
+// rather than a field this type checks itself -- the rate-limiting/
+// back-off logic that used to live here, and its #377 stall-under-load
+// defect, both moved to that type (issue #400).
 var macRegistryPersistMinInterval = time.Second
-
-// persistTimeout bounds every Load/Save against backend. Seen runs
-// synchronously on the single ingest goroutine (see main.go's
-// ingestOneRecovered), so an unresponsive backend -- a Postgres
-// connection stuck behind a network blackhole or a long lock wait, not
-// a clean disconnect -- would otherwise block that goroutine forever
-// under context.Background(), freezing the whole ingest pipeline until
-// the syslog listener's buffered channel fills and starts silently
-// dropping packets (internal/syslog/tcp_listener.go). 5s is generous
-// for a write this small: long enough that ordinary latency never trips
-// it, short enough that a genuinely stuck backend degrades to a logged
-// failure (see persistLocked) rather than an indefinite hang.
-const persistTimeout = 5 * time.Second
 
 // OpenMACRegistry loads path if it exists (a missing file is the
 // expected first-run case, not an error) and returns a MACRegistry that
@@ -100,11 +89,13 @@ func OpenMACRegistry(path string) (*MACRegistry, error) {
 // OpenMACRegistryWithBackend is OpenMACRegistry against any persist.Backend
 // -- a JSON file by default, or Postgres when configured (issue #131).
 func OpenMACRegistryWithBackend(b persist.Backend) (*MACRegistry, error) {
-	r := &MACRegistry{backend: b, byMAC: make(map[string]*MACEntry)}
+	r := &MACRegistry{byMAC: make(map[string]*MACEntry)}
 
-	ctx, cancel := context.WithTimeout(context.Background(), persistTimeout)
-	defer cancel()
-	version, existed, err := persist.Open(ctx, b, "the MAC registry", func(data []byte) error {
+	wb, _, err := persist.OpenWriteBehind(context.Background(), b, "the MAC registry", persist.WriteBehindOptions{
+		MinInterval: macRegistryPersistMinInterval,
+		OnSaveError: func(msg string) { persistLog.Error(msg) },
+		OnConflict:  func(msg string) { persistLog.Warn(msg) },
+	}, func(data []byte) error {
 		var list []*MACEntry
 		if err := json.Unmarshal(data, &list); err != nil {
 			return err
@@ -123,10 +114,28 @@ func OpenMACRegistryWithBackend(b persist.Backend) (*MACRegistry, error) {
 	if err != nil {
 		return nil, err
 	}
-	if existed {
-		r.version = version
-	}
+	r.wb = wb
 	return r, nil
+}
+
+// Flush forces this registry's write-behind writer to persist whatever
+// is currently dirty now, without waiting out its usual debounce
+// interval, and blocks until that attempt finishes or ctx expires -- see
+// flags.Store.Flush's own doc comment for when this is the right call
+// (a test, or a `-backup` CLI invocation racing a still-running
+// process). A registry with no backend configured (wb == nil) is a safe
+// no-op.
+func (r *MACRegistry) Flush(ctx context.Context) error {
+	return r.wb.Flush(ctx)
+}
+
+// Close stops this registry's write-behind writer goroutine, flushing
+// whatever is still dirty within persist.SaveTimeout before returning --
+// main's shutdown joins on this so a change made right before exit is
+// not silently dropped. A registry with no backend configured (wb ==
+// nil) is a safe no-op. Not safe to call Seen after Close.
+func (r *MACRegistry) Close(ctx context.Context) error {
+	return r.wb.Close(ctx)
 }
 
 // normalizeMAC lowercases a MAC address so textually-different forms of
@@ -219,36 +228,24 @@ func (r *MACRegistry) pruneLocked() {
 	})
 }
 
-// persistLocked writes the current state to disk if persistence is
-// configured and enough time has passed since the last write -- see
-// macRegistryPersistMinInterval. Write failures are swallowed rather
-// than surfaced to Seen's caller: the in-memory state (which every read
-// goes through) stays correct either way, so a transient disk issue
-// degrades to "won't survive a restart right now" rather than breaking
-// live detection.
+// persistLocked encodes the current state and hands it to the
+// write-behind writer (see persist.WriteBehind), which coalesces it
+// with whatever else is pending and persists it off this goroutine,
+// under its own deadline and rate limit. Marshal failures are swallowed
+// rather than surfaced to Seen's caller: the in-memory state (which
+// every read goes through) stays correct either way, so a transient
+// disk issue degrades to "won't survive a restart right now" rather
+// than breaking live detection. Must be called with r.mu already held --
+// see flags.Store.persistLocked's own doc comment for the "lock covers
+// the encode, not the backend call" contract this mirrors.
 func (r *MACRegistry) persistLocked() {
-	if r.backend == nil {
+	if r.wb == nil {
 		return
-	}
-	if now := time.Now(); now.Sub(r.lastPersist) < macRegistryPersistMinInterval {
-		return
-	} else {
-		r.lastPersist = now
 	}
 	data, err := json.MarshalIndent(r.listLocked(), "", "  ")
 	if err != nil {
 		persistLog.Error(fmt.Sprintf("encoding MAC registry for persistence failed: %v -- this change exists only in memory and will be lost on restart", err))
 		return
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), persistTimeout)
-	defer cancel()
-	version, conflicted, err := persist.SaveWithRetry(ctx, r.backend, data, r.version)
-	if err != nil {
-		persistLog.Error(fmt.Sprintf("writing MAC registry to %s failed: %v -- this change exists only in memory and will be lost on restart", r.backend.Describe(), err))
-		return
-	}
-	if conflicted {
-		persistLog.Warn(fmt.Sprintf("the MAC registry store was modified by another process while this change was pending (%s); this change was applied on top", r.backend.Describe()))
-	}
-	r.version = version
+	r.wb.MarkDirty(data)
 }

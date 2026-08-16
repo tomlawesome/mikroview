@@ -237,6 +237,11 @@ func BenchmarkEvaluateRecovered(b *testing.B) {
 			if err != nil {
 				b.Fatalf("Open: %v", err)
 			}
+			b.Cleanup(func() {
+				ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+				defer cancel()
+				entries.Close(ctx)
+			})
 			for i := 0; i < n; i++ {
 				if err := entries.Upsert(Entry{ID: fmt.Sprintf("e%d", i), Ports: []int{2222}}); err != nil {
 					b.Fatalf("Upsert: %v", err)

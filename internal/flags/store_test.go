@@ -3,14 +3,79 @@
 package flags
 
 import (
+	"context"
 	"fmt"
+	"github.com/tomlawesome/mikroview/internal/persist"
 	"github.com/tomlawesome/mikroview/internal/reputation"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
+
+// countingSaveBackend is an in-memory persist.Backend that counts Save
+// calls -- used to prove write-behind coalescing by call count rather
+// than by racing a file write against a fixed sleep (the flakiness
+// TestPersistLockedRateLimitsWrites' own history already warns about).
+type countingSaveBackend struct {
+	mu      sync.Mutex
+	payload []byte
+	version int64
+	saves   int
+}
+
+func newCountingSaveBackend() *countingSaveBackend { return &countingSaveBackend{} }
+
+func (b *countingSaveBackend) Load(ctx context.Context) (persist.Snapshot, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return persist.Snapshot{Payload: b.payload, Version: b.version, Exists: b.version != 0}, nil
+}
+
+func (b *countingSaveBackend) Save(ctx context.Context, payload []byte, expect int64) (int64, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if expect != b.version {
+		return 0, persist.ErrConflict
+	}
+	b.saves++
+	b.payload = payload
+	b.version++
+	return b.version, nil
+}
+
+func (b *countingSaveBackend) Close() error     { return nil }
+func (b *countingSaveBackend) Describe() string { return "counting test backend" }
+
+func (b *countingSaveBackend) saveCount() int {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.saves
+}
+
+func (b *countingSaveBackend) lastPayload() []byte {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.payload
+}
+
+// flushForTest waits for s's write-behind writer to persist whatever is
+// currently dirty -- issue #400 moved persistence off the caller's
+// goroutine, so a test that used to rely on Add/Clear/etc. returning
+// only once the write had already landed (Open() immediately reopening
+// the same path, for instance) now needs an explicit synchronous
+// checkpoint. Fails the test outright rather than returning an error,
+// since every call site treats a flush failure as a broken test setup.
+func flushForTest(t *testing.T, s *Store) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if err := s.Flush(ctx); err != nil {
+		t.Fatalf("flushForTest: %v", err)
+	}
+}
 
 func TestOpenEmptyPathIsUsable(t *testing.T) {
 	s, err := Open("")
@@ -225,79 +290,45 @@ func TestListOrdersMostRecentlyActiveFirst(t *testing.T) {
 }
 
 // TestPersistLockedRateLimitsWrites proves the debounce actually skips
-// disk writes within the window (not just that it compiles) -- a
+// backend writes within the window (not just that it compiles) -- a
 // sustained re-fire burst (the scenario this exists for) must not hit
-// disk once per event.
+// the backend once per event. Issue #400: persistence moved off the
+// caller's goroutine onto persist.WriteBehind's own writer, so this no
+// longer reads the file directly (there is no guarantee a write has
+// landed by the time Add returns) -- it counts backend Save calls
+// through a fake persist.Backend instead, which is a claim about
+// behaviour rather than about timing either way.
 func TestPersistLockedRateLimitsWrites(t *testing.T) {
-	// A long window plus a rewound lastPersist, rather than a short
-	// window plus a sleep.
-	//
-	// This test used to set the window to 80ms and assume the work
-	// between the two Adds -- a marshal, a file write and a ReadFile --
-	// finished inside it. On a loaded CI runner it does not, the second
-	// Add writes legitimately, and the test fails claiming the debounce
-	// is broken when it is working exactly as designed. That is what
-	// blocked a preview image publish.
-	//
-	// Ten seconds is long enough that no scheduling jitter crosses it,
-	// and the "past the window" half below rewinds lastPersist instead
-	// of waiting -- so this now asserts the behaviour rather than the
-	// speed of the machine, and runs in microseconds instead of 100ms.
-	orig := persistMinInterval
-	persistMinInterval = 10 * time.Second
-	defer func() { persistMinInterval = orig }()
-
-	path := filepath.Join(t.TempDir(), "flags.json")
-	s, err := Open(path)
+	b := newCountingSaveBackend()
+	s, err := OpenWithBackend(b)
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	now := time.Now()
 	s.Add(TypePortScan, "1.1.1.1", "first", now)
-	firstWrite, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("expected the first Add to write immediately (empty lastPersist), got: %v", err)
+	flushForTest(t, s) // the very first write attempts immediately; wait for it as a baseline
+	if got := b.saveCount(); got != 1 {
+		t.Fatalf("expected the first Add to write immediately, got %d saves", got)
 	}
 
-	// Within the debounce window: must NOT reach disk yet.
+	// Within the debounce window: must coalesce into the next flush
+	// rather than producing its own attempt.
 	s.Add(TypePortScan, "2.2.2.2", "second, still within the window", now)
-	stillFirst, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(stillFirst) != string(firstWrite) {
-		t.Errorf("expected the second Add (within %v of the first) to be rate-limited, but the file changed", persistMinInterval)
-	}
-
-	// Past the window: the next call must flush the latest state.
-	// Rewound rather than waited out -- same code path, no wall clock.
-	s.mu.Lock()
-	s.lastPersist = s.lastPersist.Add(-2 * persistMinInterval)
-	s.mu.Unlock()
-	s.Add(TypePortScan, "3.3.3.3", "third, after the window", now)
-	final, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
+	s.Add(TypePortScan, "3.3.3.3", "third, still within the window", now)
+	flushForTest(t, s)
+	if got := b.saveCount(); got != 2 {
+		t.Errorf("expected 2 total saves after 3 Adds inside one debounce window (1 immediate + 1 coalesced flush), got %d", got)
 	}
 	if len(s.List()) != 3 {
 		t.Fatalf("in-memory state should always have all 3 regardless of persistence timing, got %d", len(s.List()))
 	}
-	if !strings.Contains(string(final), "3.3.3.3") {
-		t.Errorf("expected the post-window write to include all 3 flags, got:\n%s", final)
+	if payload := b.lastPayload(); !strings.Contains(string(payload), "3.3.3.3") {
+		t.Errorf("expected the flushed write to include all 3 flags, got:\n%s", payload)
 	}
 }
 
 func TestPersistenceRoundTrip(t *testing.T) {
-	// Every Add/Clear below happens back-to-back with no real delay --
-	// persistMinInterval's rate limiting would otherwise skip all but
-	// the first write, and reopening immediately after would read stale
-	// data. Real callers spread naturally over wall-clock time; this
-	// test doesn't.
-	orig := persistMinInterval
-	persistMinInterval = 0
-	defer func() { persistMinInterval = orig }()
-
 	path := filepath.Join(t.TempDir(), "nested", "flags.json")
 
 	s1, err := Open(path)
@@ -309,6 +340,11 @@ func TestPersistenceRoundTrip(t *testing.T) {
 	s1.AddWithConfidence(TypeActivitySpike, "9.9.9.9", "5x baseline", 82, now)
 	id := s1.List()[0].ID
 	s1.Clear(id, now.Add(time.Minute))
+	// #400: persistence is now write-behind (persist.WriteBehind), so a
+	// reopen immediately after these calls would otherwise race the
+	// writer goroutine -- flush explicitly first, the synchronous
+	// checkpoint this type exists to provide.
+	flushForTest(t, s1)
 
 	s2, err := Open(path)
 	if err != nil {
@@ -639,6 +675,8 @@ func TestAddProvisionalPersistsAndSurvivesReload(t *testing.T) {
 	}
 	now := time.Now().UTC().Truncate(time.Millisecond)
 	s1.AddProvisional(TypeActivitySpike, "9.9.9.9", "warming up", 40, Evidence{}, "", true, now)
+	// #400: write-behind -- flush before reopening, see flushForTest.
+	flushForTest(t, s1)
 
 	s2, err := Open(path)
 	if err != nil {
@@ -998,6 +1036,8 @@ func TestExclusionPersistenceRoundTrip(t *testing.T) {
 	// Also persist an ordinary active flag alongside the exclusions, to
 	// prove the two coexist correctly in the same file.
 	s1.Add(TypeActivitySpike, "10.0.0.5", "5x baseline", time.Now())
+	// #400: write-behind -- flush before reopening, see flushForTest.
+	flushForTest(t, s1)
 
 	s2, err := Open(path)
 	if err != nil {
@@ -1166,6 +1206,8 @@ func TestClearedCountSurvivesReload(t *testing.T) {
 		s1.Clear(flagID(TypePortScan, target), now.Add(time.Second))
 	}
 	s1.Add(TypePortScan, "198.51.100.1", "still active", now)
+	// #400: write-behind -- flush before reopening, see flushForTest.
+	flushForTest(t, s1)
 
 	s2, err := Open(path)
 	if err != nil {
