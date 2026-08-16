@@ -103,8 +103,15 @@ func buildBenchDeclarativeSet(b *testing.B, n int) *DeclarativeSet {
 			cond = Condition{Field: FieldConnectionState, Operator: OpNotEquals, Values: []string{"established"}}
 		}
 
-		dd, err := NewDeclarativeDefinition(def, []Condition{cond}, KeyPerSource, time.Minute, 5, CountingTotal, "",
-			"{PortCount} hits", nil)
+		dd, err := NewDeclarativeDefinition(def, DeclarativeSpec{
+			Conditions:     []Condition{cond},
+			Key:            KeyPerSource,
+			Window:         time.Minute,
+			Threshold:      5,
+			CountingMode:   CountingTotal,
+			DetailTemplate: "{PortCount} hits",
+			Evidence:       []EvidenceField{EvidencePorts, EvidenceHosts, EvidenceLabels},
+		})
 		if err != nil {
 			b.Fatalf("NewDeclarativeDefinition: %v", err)
 		}
