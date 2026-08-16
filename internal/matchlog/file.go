@@ -36,13 +36,14 @@ const maxLineBytes = 256 * 1024
 // time from how many lines contributed to a record (Query/replay), which
 // removes any need to track or trust a running count across writes.
 type fileLine struct {
-	Kind      string      `json:"kind"`
-	ID        string      `json:"id"`
-	EntryID   string      `json:"entryId,omitempty"`
-	Tuple     Tuple       `json:"tuple,omitempty"`
-	Event     store.Event `json:"event,omitempty"`
-	FirstSeen time.Time   `json:"firstSeen,omitempty"`
-	LastSeen  time.Time   `json:"lastSeen"`
+	Kind        string      `json:"kind"`
+	ID          string      `json:"id"`
+	EntryID     string      `json:"entryId,omitempty"`
+	Tuple       Tuple       `json:"tuple,omitempty"`
+	Event       store.Event `json:"event,omitempty"`
+	FirstSeen   time.Time   `json:"firstSeen,omitempty"`
+	LastSeen    time.Time   `json:"lastSeen"`
+	Provisional bool        `json:"provisional,omitempty"`
 }
 
 // FileStore is the append-only, JSON-lines file backend. The only
@@ -133,6 +134,15 @@ func (s *FileStore) replay() error {
 
 // Append implements Store.
 func (s *FileStore) Append(entryID string, tuple Tuple, event store.Event, t time.Time) error {
+	return s.appendProvisional(entryID, tuple, event, t, false)
+}
+
+// AppendProvisional implements Store.
+func (s *FileStore) AppendProvisional(entryID string, tuple Tuple, event store.Event, t time.Time, provisional bool) error {
+	return s.appendProvisional(entryID, tuple, event, t, provisional)
+}
+
+func (s *FileStore) appendProvisional(entryID string, tuple Tuple, event store.Event, t time.Time, provisional bool) error {
 	if tuple.Source.Empty() {
 		return ErrEmptyIdentity
 	}
@@ -142,6 +152,8 @@ func (s *FileStore) Append(entryID string, tuple Tuple, event store.Event, t tim
 
 	key := tuple.key(entryID)
 	if id, open := s.index[key]; open {
+		// Provisional is fixed at creation -- a collapsed repeat only
+		// ever touches ID/LastSeen, same as before this field existed.
 		return s.writeLineLocked(fileLine{Kind: kindUpdate, ID: id, LastSeen: t})
 	}
 	if len(s.index) >= s.capacity {
@@ -151,7 +163,7 @@ func (s *FileStore) Append(entryID string, tuple Tuple, event store.Event, t tim
 	id := newID()
 	if err := s.writeLineLocked(fileLine{
 		Kind: kindRecord, ID: id, EntryID: entryID, Tuple: tuple, Event: event,
-		FirstSeen: t, LastSeen: t,
+		FirstSeen: t, LastSeen: t, Provisional: provisional,
 	}); err != nil {
 		return err
 	}
@@ -290,6 +302,7 @@ func (s *FileStore) Query(ctx context.Context, q Query, yield func(Record) bool)
 		byID[l.ID] = Record{
 			ID: l.ID, EntryID: l.EntryID, Tuple: l.Tuple, Event: l.Event,
 			FirstSeen: l.FirstSeen, LastSeen: m.lastSeen, Count: m.count,
+			Provisional: l.Provisional,
 		}
 	})
 	if err != nil {

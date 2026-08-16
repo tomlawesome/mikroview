@@ -178,6 +178,9 @@ type panicOnAppendMatchLog struct{}
 func (panicOnAppendMatchLog) Append(string, matchlog.Tuple, store.Event, time.Time) error {
 	panic("simulated panic from Append")
 }
+func (panicOnAppendMatchLog) AppendProvisional(string, matchlog.Tuple, store.Event, time.Time, bool) error {
+	panic("simulated panic from AppendProvisional")
+}
 func (panicOnAppendMatchLog) Query(context.Context, matchlog.Query, func(matchlog.Record) bool) error {
 	return nil
 }

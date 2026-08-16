@@ -217,6 +217,16 @@ type Flag struct {
 	// Evidence is structured supporting detail beyond Detail -- see
 	// Evidence's own doc comment.
 	Evidence Evidence `json:"evidence,omitzero"`
+	// Provisional marks a flag raised while its judgement's baseline had
+	// not yet cleared its history floor -- internal/engine.Baseline's
+	// warm-up gating (docs/decisions/evaluation-engine.md section 1,
+	// #368's fix made a chassis contract). false (the default, omitted
+	// from JSON) is correct for every flag raised today: nothing wires a
+	// detector onto internal/engine.Baseline yet -- that is #405's job.
+	// This field, and its matchlog.Record counterpart, land now
+	// (additive, no migration needed) so the persisted shape and its
+	// round trip are proven ahead of anything setting it to true.
+	Provisional bool `json:"provisional,omitempty"`
 }
 
 // FlagTimeBucket is one point in Store.TimeSeries: counts of newly-raised
@@ -396,7 +406,7 @@ func flagID(t Type, target string) string {
 // DefaultConfig are kept in internal/detect for tests that don't need
 // their own full configurability.
 func (s *Store) Add(t Type, target, detail string, now time.Time) bool {
-	isNew, f := s.add(t, target, detail, nil, Evidence{}, "", now)
+	isNew, f := s.add(t, target, detail, nil, Evidence{}, "", false, now)
 	s.maybeNotify(isNew, f)
 	return isNew
 }
@@ -405,7 +415,7 @@ func (s *Store) Add(t Type, target, detail string, now time.Time) bool {
 // confident it is in this specific flag (0-100) rather than a simple
 // deterministic threshold crossing -- see Flag.Confidence.
 func (s *Store) AddWithConfidence(t Type, target, detail string, confidence int, now time.Time) bool {
-	isNew, f := s.add(t, target, detail, &confidence, Evidence{}, "", now)
+	isNew, f := s.add(t, target, detail, &confidence, Evidence{}, "", false, now)
 	s.maybeNotify(isNew, f)
 	return isNew
 }
@@ -415,7 +425,21 @@ func (s *Store) AddWithConfidence(t Type, target, detail string, confidence int,
 // exactly what was touched, not just a count -- see Evidence and
 // Flag.Country.
 func (s *Store) AddWithDetail(t Type, target, detail string, confidence int, evidence Evidence, country string, now time.Time) bool {
-	isNew, f := s.add(t, target, detail, &confidence, evidence, country, now)
+	isNew, f := s.add(t, target, detail, &confidence, evidence, country, false, now)
+	s.maybeNotify(isNew, f)
+	return isNew
+}
+
+// AddProvisional is AddWithDetail, plus marking the raised/re-fired
+// episode provisional -- see Flag.Provisional's doc comment. Added by
+// #399 alongside the field itself; no production detector calls this
+// yet (#405 wires internal/detect onto internal/engine.Baseline's
+// warm-up gating, which is what would ever pass provisional=true) -- it
+// exists now so the persisted shape, on both backends, and the round
+// trip are proven ahead of anything depending on them. See
+// TestAddProvisionalPersistsAndSurvivesReload.
+func (s *Store) AddProvisional(t Type, target, detail string, confidence int, evidence Evidence, country string, provisional bool, now time.Time) bool {
+	isNew, f := s.add(t, target, detail, &confidence, evidence, country, provisional, now)
 	s.maybeNotify(isNew, f)
 	return isNew
 }
@@ -429,7 +453,7 @@ func (s *Store) maybeNotify(isNew bool, f Flag) {
 	}
 }
 
-func (s *Store) add(t Type, target, detail string, confidence *int, evidence Evidence, country string, now time.Time) (bool, Flag) {
+func (s *Store) add(t Type, target, detail string, confidence *int, evidence Evidence, country string, provisional bool, now time.Time) (bool, Flag) {
 	id := flagID(t, target)
 
 	s.mu.Lock()
@@ -464,6 +488,7 @@ func (s *Store) add(t Type, target, detail string, confidence *int, evidence Evi
 	f.Confidence = mergeConfidence(confidence, f.ReputationFloor)
 	f.Evidence = evidence
 	f.Country = country
+	f.Provisional = provisional
 	f.LastSeen = now
 	f.Count++
 
