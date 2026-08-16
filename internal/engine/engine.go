@@ -12,6 +12,20 @@
 // definition, an Engine evaluates nothing; wiring it into main.go
 // alongside detect.Detector and watchlist.Evaluator is therefore a
 // no-behaviour-change change.
+//
+// #402 adds the declarative kind's own match language on top of that
+// chassis: structured (field, operator, value) conditions over a closed
+// field set and a closed operator set, both enumerated once in
+// conditions.go, plus threshold-over-window evaluation (declarative.go)
+// and a dispatch pre-index (dispatch.go) so a large declarative
+// definition set costs the ingest budget the handful of definitions an
+// event could actually match, not all of them linearly.
+// docs/decisions/evaluation-engine.md's own words on why the condition
+// language stops where it does, quoted verbatim so the boundary is
+// visible from this package's doc comment and not only from the ADR:
+//
+// "No DSL. Structured conditions only. If a real need outgrows them,
+// that is a new ADR, not a quiet extension."
 package engine
 
 import (
