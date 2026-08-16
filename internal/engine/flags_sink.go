@@ -20,15 +20,17 @@ import "github.com/tomlawesome/mikroview/internal/flags"
 // (r.Detection == nil) is silently ignored -- this sink only ever
 // handles the detection half; a matchlog counterpart is #406's job.
 //
-// Confidence: every declarative definition shipped so far
-// (shipped_declarative.go) sets Emission.Confidence via
-// overshootConfidence, so f.Confidence is never nil in practice today.
-// If a future definition kind ever left it nil ("not scored"),
-// flags.Store has no public method that accepts detail+evidence+country+
-// provisional without a confidence value -- this sink defaults that case
-// to 0 rather than failing to raise the flag at all, which is a real gap
-// worth widening flags.Store's API to close if a real caller ever hits
-// it, not something to silently paper over indefinitely.
+// Confidence is passed through as the optional value it is, nil
+// included. Every declarative definition sets it via
+// overshootConfidence, but a deterministic programmatic one
+// (unexpected_mail_sender) genuinely does not score its emissions, and
+// "not scored" must not arrive at the store as "scored zero" -- an
+// analyst reads a 0 as a judgement, not as its absence. This sink used
+// to default nil to 0 because flags.Store had no method accepting an
+// optional confidence alongside evidence/country/provisional; #405's
+// final block widened that API (flags.Store.AddEmission) rather than
+// keep papering over it, which is exactly what that note said should
+// happen once a real caller hit it.
 func FlagsSink(fs *flags.Store) func(RoutedEmission) {
 	return func(r RoutedEmission) { raiseDetectionFlag(fs, r) }
 }
@@ -45,11 +47,7 @@ func raiseDetectionFlag(fs *flags.Store, r RoutedEmission) (isNew bool) {
 		return false
 	}
 	f := r.Detection
-	confidence := 0
-	if f.Confidence != nil {
-		confidence = *f.Confidence
-	}
-	return fs.AddProvisional(f.Type, f.Target, f.Detail, confidence, f.Evidence, f.Country, f.Provisional, r.EventTime)
+	return fs.AddEmission(f.Type, f.Target, f.Detail, f.Confidence, f.Evidence, f.Country, f.Provisional, r.EventTime)
 }
 
 // FlagsConfidenceFloorRaiser adapts a *flags.Store to
