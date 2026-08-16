@@ -17,6 +17,7 @@ import (
 	"fmt"
 	"math"
 	"strconv"
+	"strings"
 )
 
 // Kind identifies which RouterOS data source a payload's records came
@@ -92,29 +93,88 @@ type AddressListEntry struct {
 //     serialise as a number the way a single port does. Absent when
 //     unset, which means "any address" -- not "no addresses", and the
 //     difference decides whether a rule covers an entry.
+//
+// ConnectionState, InInterface and OutInterface were added for issue
+// #408, and nothing reads them yet -- that is deliberate, and the issue
+// says so: the field has to be flowing before the consumer designed
+// against it (#392's coverage model, phase 2) has any real pushed data
+// to be shaped by rather than assumed ones.
+//
+//   - ConnectionState is RouterOSList, not a plain string, for the same
+//     reason WireguardPeer.AllowedAddress is: RouterOS holds
+//     connection-state as a *set* (established,related is two values,
+//     not one string), and #443 is this schema's paid-for lesson about
+//     what a set serialises as -- an array through :serialize to=json,
+//     which a plain string field refuses outright. The list type takes
+//     the array shape and the joined-string shape both, so neither a
+//     RouterOS-native push nor a script that joins by hand is refused,
+//     and a negated state ("!invalid") is just an element.
+//
+//     Absent means unset, which means "any state" -- deliberately not
+//     Log's absent-means-false convention, because "matched no state"
+//     and "did not match on state at all" are different claims and only
+//     the second is true of a rule that carries no connection-state.
+//
+//   - InInterface/OutInterface are single interface names, so they are
+//     plain strings: a rule matches at most one of each (an interface
+//     *list* match is a separate RouterOS property, not in this schema),
+//     and a name cannot serialise as a number the way a single port
+//     does. Negation ("!ether1") is part of the string.
 type FilterRule struct {
-	Ordinal        RouterOSInt      `json:"ordinal"`
-	Comment        string           `json:"comment"`
-	Chain          string           `json:"chain"`
-	Action         string           `json:"action"`
-	SrcAddressList string           `json:"srcAddressList"`
-	LogPrefix      string           `json:"logPrefix"`
-	DstPort        RouterOSPortSpec `json:"dstPort"`
-	Protocol       string           `json:"protocol"`
-	Log            bool             `json:"log"`
-	DstAddress     string           `json:"dstAddress"`
-	SrcAddress     string           `json:"srcAddress"`
+	Ordinal         RouterOSInt      `json:"ordinal"`
+	Comment         string           `json:"comment"`
+	Chain           string           `json:"chain"`
+	Action          string           `json:"action"`
+	SrcAddressList  string           `json:"srcAddressList"`
+	LogPrefix       string           `json:"logPrefix"`
+	DstPort         RouterOSPortSpec `json:"dstPort"`
+	Protocol        string           `json:"protocol"`
+	Log             bool             `json:"log"`
+	DstAddress      string           `json:"dstAddress"`
+	SrcAddress      string           `json:"srcAddress"`
+	ConnectionState RouterOSList     `json:"connectionState"`
+	InInterface     string           `json:"inInterface"`
+	OutInterface    string           `json:"outInterface"`
 }
 
 // NATRule mirrors one /ip/firewall/nat rule. Display-table shape only
 // (issue #186 step 4c: "NAT uses the second shape only") -- a log line
 // gives a translation result, never which rule performed it, so there is
 // no LogPrefix/event-resolution field here the way FilterRule has one.
+// That stays true with the fields below: none of them makes a rule
+// answerable for a translation, they only describe what a rule matches
+// and what it translates to.
+//
+// Everything from ToAddresses down was added for issue #408 as #445's
+// stated prerequisite. #445 wants to partition the NAT table into rules
+// *consistent with* an event (chain, protocol, ports and interfaces that
+// do not exclude it) and dim the rest -- a partition the old
+// ordinal/chain/action/comment shape gives nothing to compute, since
+// every rule is equally consistent with everything. Nothing reads them
+// yet; the popup that does is #445.
+//
+// Shapes follow FilterRule's already-verified ones rather than fresh
+// assumptions, since these are the same RouterOS properties on a sibling
+// menu: ports through RouterOSPortSpec (a single port serialises as a
+// JSON number, a list or range as a string), addresses and interface
+// names as plain strings (dots and names cannot become numbers), and
+// Disabled/Dynamic as plain bools where an absent key means false the
+// way FilterRule.Log already documents.
 type NATRule struct {
-	Ordinal RouterOSInt `json:"ordinal"`
-	Comment string      `json:"comment"`
-	Chain   string      `json:"chain"`
-	Action  string      `json:"action"`
+	Ordinal      RouterOSInt      `json:"ordinal"`
+	Comment      string           `json:"comment"`
+	Chain        string           `json:"chain"`
+	Action       string           `json:"action"`
+	ToAddresses  string           `json:"toAddresses"`
+	ToPorts      RouterOSPortSpec `json:"toPorts"`
+	DstPort      RouterOSPortSpec `json:"dstPort"`
+	Protocol     string           `json:"protocol"`
+	InInterface  string           `json:"inInterface"`
+	OutInterface string           `json:"outInterface"`
+	SrcAddress   string           `json:"srcAddress"`
+	DstAddress   string           `json:"dstAddress"`
+	Disabled     bool             `json:"disabled"`
+	Dynamic      bool             `json:"dynamic"`
 }
 
 // DNSStaticEntry mirrors one /ip/dns/static entry.
@@ -151,11 +211,22 @@ type WireguardInterface struct {
 // 4b: "so traffic from it can read 'branch office'"). Only public keys
 // ever appear here -- confirmed against a real router that private keys
 // are absent from a read,test script's view entirely (step 4b).
+//
+// AllowedAddress is RouterOSList because a peer holds *several* allowed
+// addresses and RouterOS says so on the wire: /interface/wireguard/peers
+// print as-value yields allowed-address as an array, so :serialize
+// to=json emits a JSON array, and the string field this used to be
+// refused it -- with the docs' own reference pattern producing the
+// refused payload (issue #443, found on a real deployment: "json: cannot
+// unmarshal array into Go struct field WireguardPeer.allowedAddress of
+// type string"). Every CIDR is kept rather than the first, because
+// naming traffic by peer is the whole point of the field and a peer's
+// second subnet is not less named than its first.
 type WireguardPeer struct {
-	PublicKey       string `json:"publicKey"`
-	AllowedAddress  string `json:"allowedAddress"`
-	EndpointAddress string `json:"endpointAddress"`
-	Comment         string `json:"comment"`
+	PublicKey       string       `json:"publicKey"`
+	AllowedAddress  RouterOSList `json:"allowedAddress"`
+	EndpointAddress string       `json:"endpointAddress"`
+	Comment         string       `json:"comment"`
 }
 
 // RouterOSInt decodes an integer that RouterOS's :serialize to=json may
@@ -193,6 +264,64 @@ func (n *RouterOSInt) UnmarshalJSON(data []byte) error {
 // landmine RouterOSInt exists for. Always decodes to a plain string
 // value so a caller never needs to know which JSON shape it arrived as.
 type RouterOSPortSpec string
+
+// RouterOSList decodes a field RouterOS holds as a *set* of values: a
+// WireGuard peer's allowed addresses, a rule's connection-state match.
+// Such a field arrives as a JSON **array of strings** through
+// :serialize to=json, which is what issue #443 cost a live deployment a
+// refused push to establish -- the same shape-depends-on-content family
+// RouterOSInt and RouterOSPortSpec exist for, and the third member of
+// it this schema has met.
+//
+// A bare JSON string is accepted too, split on commas, for two real
+// callers: a script that joins the array by hand (the workaround #443
+// documented while the schema was still string-only), and RouterOS's own
+// joined rendering of a set ("established,related"). Either way a caller
+// reads a []string and never needs to know which shape it arrived as --
+// the same promise RouterOSPortSpec makes.
+//
+// Absent decodes to nil, which means "unset" -- never "matches nothing".
+// A nil list marshals back as [] rather than null, so a JSON consumer
+// (the rule-table endpoints) always sees an array.
+type RouterOSList []string
+
+func (l *RouterOSList) UnmarshalJSON(data []byte) error {
+	var items []string
+	if err := json.Unmarshal(data, &items); err == nil {
+		*l = items
+		return nil
+	}
+	var s string
+	if err := json.Unmarshal(data, &s); err != nil {
+		return fmt.Errorf("ingest: expected a list of strings or a comma-separated string: %w", err)
+	}
+	if strings.TrimSpace(s) == "" {
+		*l = nil
+		return nil
+	}
+	parts := strings.Split(s, ",")
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		p = strings.TrimSpace(p)
+		if p == "" {
+			continue
+		}
+		out = append(out, p)
+	}
+	*l = out
+	return nil
+}
+
+func (l RouterOSList) MarshalJSON() ([]byte, error) {
+	if l == nil {
+		return []byte("[]"), nil
+	}
+	return json.Marshal([]string(l))
+}
+
+// String renders the list the way RouterOS itself prints a set, for a
+// caller that wants one displayable value rather than the elements.
+func (l RouterOSList) String() string { return strings.Join(l, ",") }
 
 func (p *RouterOSPortSpec) UnmarshalJSON(data []byte) error {
 	var s string
