@@ -282,6 +282,17 @@ func (r FilterRule) validate() error {
 	if err := validateFieldText("protocol", r.Protocol); err != nil {
 		return err
 	}
+	// dstAddress/srcAddress arrived with #274 without a line here, so
+	// they were the two record fields in this package reaching the UI,
+	// the exports and the audit trail unbounded and unscreened for the
+	// control and bidi-override characters every other field is screened
+	// for. Noticed while adding the #408 fields beside them.
+	if err := validateFieldText("dstAddress", r.DstAddress); err != nil {
+		return err
+	}
+	if err := validateFieldText("srcAddress", r.SrcAddress); err != nil {
+		return err
+	}
 	if err := validateFieldList("connectionState", r.ConnectionState); err != nil {
 		return err
 	}
