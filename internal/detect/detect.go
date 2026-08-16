@@ -399,14 +399,13 @@ type Detector struct {
 	netclass netClassLookup
 
 	perSource map[string]*sourceWindow
-	// criticalHits (critical_port's own per-source attempt-count map)
-	// moved to internal/engine as a shipped declarative definition (issue
-	// #405) -- criticalPortIPs below is distributed_brute_force's
-	// separate, per-port state, not affected by that port.
-	criticalPortIPs map[int]*portSources
-	destWindows     map[string]*destWindow
-	ruleWindows     map[string]*ruleWindow
-	lowSlowWindows  map[string]*lowSlowWindow
+	// criticalHits (critical_port's per-source attempt-count map) and
+	// criticalPortIPs (distributed_brute_force's per-port distinct-source
+	// map) both moved to internal/engine with their detectors (issue
+	// #405).
+	destWindows    map[string]*destWindow
+	ruleWindows    map[string]*ruleWindow
+	lowSlowWindows map[string]*lowSlowWindow
 
 	// observeQueue backs Enqueue/Run -- see observeQueueSize's doc
 	// comment for the sizing rationale.
@@ -431,16 +430,15 @@ func New(cfg Config, fs *flags.Store) *Detector {
 // on the very next event, no restart needed.
 func NewWithSettings(cfg Config, fs *flags.Store, settings *SettingsStore) *Detector {
 	return &Detector{
-		cfg:             cfg,
-		fs:              fs,
-		settings:        settings,
-		lookupSlots:     make(chan struct{}, reputationLookupConcurrency),
-		perSource:       make(map[string]*sourceWindow),
-		criticalPortIPs: make(map[int]*portSources),
-		destWindows:     make(map[string]*destWindow),
-		ruleWindows:     make(map[string]*ruleWindow),
-		lowSlowWindows:  make(map[string]*lowSlowWindow),
-		observeQueue:    make(chan store.Event, observeQueueSize),
+		cfg:            cfg,
+		fs:             fs,
+		settings:       settings,
+		lookupSlots:    make(chan struct{}, reputationLookupConcurrency),
+		perSource:      make(map[string]*sourceWindow),
+		destWindows:    make(map[string]*destWindow),
+		ruleWindows:    make(map[string]*ruleWindow),
+		lowSlowWindows: make(map[string]*lowSlowWindow),
+		observeQueue:   make(chan store.Event, observeQueueSize),
 	}
 }
 
@@ -517,18 +515,12 @@ func (d *Detector) Observe(e store.Event) {
 	d.observeLowSlowScan(e, now)
 	d.observeOffHours(e, now)
 
-	// critical_port itself moved to internal/engine as a shipped
-	// declarative definition (issue #405, see
-	// shipped_declarative.go's buildCriticalPortDefinition) -- this gate
-	// now only guards distributed_brute_force, which shares the same
-	// "critical port, external source" precondition but isn't ported yet.
+	// critical_port and distributed_brute_force both moved to
+	// internal/engine as shipped declarative definitions (issue #405, see
+	// shipped_declarative.go) -- the "critical port, external source"
+	// precondition they shared here went with them, expressed twice as
+	// conditions, which is what let the two separate.
 	srcPublic := isPublic(e.SrcIP)
-	if e.DstPort != 0 && isCriticalPort(d.cfg.CriticalPorts, e.DstPort) && srcPublic {
-		if dbf := d.settings.Get(DetectorDistributedBruteForce); dbf.Enabled &&
-			scopeMatchesHost(dbf.Scope, e.SrcIP) && scopeMatchesPort(dbf.Scope, e.DstPort) {
-			d.observeDistributedBruteForce(e, now)
-		}
-	}
 
 	if !srcPublic && e.DstIP != "" {
 		// source is on the LAN -- track where it's going, split by
@@ -654,15 +646,6 @@ func evictOldestByActivity[V activeWindow](m map[string]V) {
 	evict.DownTo(m, len(m)-evict.Batch(len(m)), func(w V) time.Time {
 		return w.lastActivityTime()
 	})
-}
-
-func isCriticalPort(ports []int, p int) bool {
-	for _, cp := range ports {
-		if cp == p {
-			return true
-		}
-	}
-	return false
 }
 
 // isTrackableConnState reports whether e should count toward the scan/

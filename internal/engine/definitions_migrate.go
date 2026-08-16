@@ -282,8 +282,14 @@ var shippedDetectors = []shippedDetector{
 			"baselineFloorDuration": zeroDuration,
 		}
 	}},
-	{name: detect.DetectorDistributedBruteForce, schema: DistributedBruteForceParamSchema, kind: KindProgrammatic, params: func(c detect.Config) Params {
-		return Params{"threshold": c.DistributedBruteForceThreshold, "window": c.DistributedBruteForceWindow.String()}
+	// distributed_brute_force (issue #405): distinct-source count over a
+	// window keyed per destination port, ported onto a shipped
+	// DeclarativeDefinition -- see shipped_declarative.go's
+	// buildDistributedBruteForceDefinition. Seeded with the same
+	// CriticalPorts list critical_port gets, which is what internal/detect
+	// shared between the two.
+	{name: detect.DetectorDistributedBruteForce, schema: DistributedBruteForceParamSchema, kind: KindDeclarative, params: func(c detect.Config) Params {
+		return Params{"ports": c.CriticalPorts, "threshold": c.DistributedBruteForceThreshold, "window": c.DistributedBruteForceWindow.String()}
 	}},
 	{name: detect.DetectorOutboundAnomaly, schema: OutboundAnomalyParamSchema, kind: KindProgrammatic, params: func(c detect.Config) Params {
 		return Params{
