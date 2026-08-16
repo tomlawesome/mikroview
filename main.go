@@ -819,7 +819,12 @@ func main() {
 	// definitions are added, using this deployment's live detector
 	// settings for enabled/scope so a detector switched off before the
 	// port stays off after it.
-	if err := engine.SeedShippedDefinitions(definitions, detectorSettings.List(), detectCfg); err != nil {
+	shippedDefaults := engine.ShippedDefaults{
+		Config:                 detectCfg,
+		StaleRuleMaxAge:        time.Duration(cfg.Flags.StaleRuleDays) * 24 * time.Hour,
+		StaleRuleCheckInterval: cfg.Flags.StaleRuleCheckInterval,
+	}
+	if err := engine.SeedShippedDefinitions(definitions, detectorSettings.List(), shippedDefaults); err != nil {
 		definitionsLog.Warn(err.Error())
 	}
 	// bl (issue #113 Part B): always constructed, even with zero enabled
@@ -856,7 +861,6 @@ func main() {
 		WithEntities(entityStore).
 		WithKnownBadIPs(bl).
 		WithNetClass(nc)
-	staleRule := detect.NewStaleRuleDetector(ru, fs, time.Duration(cfg.Flags.StaleRuleDays)*24*time.Hour)
 
 	// Shipped declarative definitions (issue #405): built from whatever
 	// the definitions store currently holds for a shipped, available,
@@ -928,7 +932,7 @@ func main() {
 		KnownBad: blocklistLookup{bl: bl},
 		NetClass: netClassLookup{nc: nc},
 		Devices:  deviceLister{reg: devices},
-		Rules:    staleRuleLister{ru: ru, maxAge: time.Duration(cfg.Flags.StaleRuleDays) * 24 * time.Hour},
+		Rules:    staleRuleLister{ru: ru},
 		Rate:     eventRateSource{st: st},
 		State:    engineState,
 	}
@@ -1057,26 +1061,11 @@ func main() {
 	// programmatic definition now, driven by Engine.Tick at its own
 	// declared TickInterval.
 
-	// Stale-rule sweep (issue #102): coarse by design (see
-	// StaleRuleCheckInterval's doc comment) -- staleness is judged in
-	// days, so there's no benefit to checking anywhere near as often as
-	// the global-spike ticker above.
-	go func() {
-		staleRuleLog := logging.New("stale-rule")
-		ticker := time.NewTicker(cfg.Flags.StaleRuleCheckInterval)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-ticker.C:
-				func() {
-					defer logging.Recover(staleRuleLog)
-					staleRule.Check(time.Now())
-				}()
-			}
-		}
-	}()
+	// The stale-rule sweep moved onto the engine with the global-spike and
+	// device-silence tickers (issue #102/#405): stale_rule is a shipped
+	// programmatic definition now, and its cadence -- which was always
+	// operator-set, config.Flags.StaleRuleCheckInterval -- is a param it
+	// declares through Ticked.TickInterval.
 
 	// Local blocklist refresh (issue #113 Part B): a fixed daily cycle
 	// (blocklist.RefreshInterval, not configurable -- see that const's
@@ -2491,20 +2480,20 @@ func (a deviceLister) ListDevices() []engine.DeviceInfo {
 	return out
 }
 
+// staleRuleLister adapts a *rules.Store. It honours the maxAge the
+// definition passes rather than carrying its own copy: the staleness
+// threshold is stale_rule's own maxAge param now (issue #405), seeded
+// from cfg.Flags.StaleRuleDays, so this adapter's job is purely the
+// type conversion internal/rules and internal/engine need between them.
 type staleRuleLister struct {
 	ru *rules.Store
-	// maxAge is the operator-configured staleness threshold
-	// (cfg.Flags.StaleRuleDays). It stays here rather than becoming a
-	// definition param because internal/rules.Store.Stale takes it, and
-	// this adapter is the boundary that knows about that store.
-	maxAge time.Duration
 }
 
-func (a staleRuleLister) StaleRules(_ time.Duration, now time.Time) []engine.RuleUsage {
+func (a staleRuleLister) StaleRules(maxAge time.Duration, now time.Time) []engine.RuleUsage {
 	if a.ru == nil {
 		return nil
 	}
-	stale := a.ru.Stale(a.maxAge, now)
+	stale := a.ru.Stale(maxAge, now)
 	out := make([]engine.RuleUsage, 0, len(stale))
 	for _, u := range stale {
 		out = append(out, engine.RuleUsage{Rule: u.Rule, FirstSeen: u.FirstSeen, LastSeen: u.LastSeen, Count: int(u.Count)})

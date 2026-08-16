@@ -25,7 +25,7 @@ func TestSeedShippedDefinitionsPopulatesAnUnpersistedStore(t *testing.T) {
 		t.Fatalf("expected an unpersisted store to open empty, got %d", got)
 	}
 
-	if err := SeedShippedDefinitions(s, detect.DefaultSettingsMap(), detect.DefaultConfig()); err != nil {
+	if err := SeedShippedDefinitions(s, detect.DefaultSettingsMap(), DefaultShippedDefaults()); err != nil {
 		t.Fatalf("SeedShippedDefinitions: %v", err)
 	}
 
@@ -76,7 +76,7 @@ func TestSeedShippedDefinitionsNeverOverwrites(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenDefinitionsStoreWithBackend(nil): %v", err)
 	}
-	if err := SeedShippedDefinitions(s, detect.DefaultSettingsMap(), detect.DefaultConfig()); err != nil {
+	if err := SeedShippedDefinitions(s, detect.DefaultSettingsMap(), DefaultShippedDefaults()); err != nil {
 		t.Fatalf("SeedShippedDefinitions: %v", err)
 	}
 	first, ok := s.Get("port_scan")
@@ -88,7 +88,7 @@ func TestSeedShippedDefinitionsNeverOverwrites(t *testing.T) {
 	// definition must change nothing.
 	settings := detect.DefaultSettingsMap()
 	settings[detect.DetectorPortScan] = detect.Settings{Enabled: false}
-	if err := SeedShippedDefinitions(s, settings, detect.DefaultConfig()); err != nil {
+	if err := SeedShippedDefinitions(s, settings, DefaultShippedDefaults()); err != nil {
 		t.Fatalf("SeedShippedDefinitions (second run): %v", err)
 	}
 	after, ok := s.Get("port_scan")
@@ -117,7 +117,7 @@ func TestSeedShippedDefinitionsCarriesLiveDetectorSettings(t *testing.T) {
 		Enabled: false,
 		Scope:   detect.Scope{Hosts: []string{"198.51.100.4"}, HostsMode: detect.ListModeDeny},
 	}
-	if err := SeedShippedDefinitions(s, settings, detect.DefaultConfig()); err != nil {
+	if err := SeedShippedDefinitions(s, settings, DefaultShippedDefaults()); err != nil {
 		t.Fatalf("SeedShippedDefinitions: %v", err)
 	}
 

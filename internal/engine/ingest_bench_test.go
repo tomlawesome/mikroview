@@ -84,7 +84,7 @@ func BenchmarkIngest(b *testing.B) {
 // dispatch pre-index is exercised too).
 func benchShippedDeclarativeSet(b *testing.B, fs *flags.Store) *DeclarativeSet {
 	b.Helper()
-	cfg := detect.DefaultConfig()
+	cfg := DefaultShippedDefaults()
 	var defs []*DeclarativeDefinition
 	for _, sd := range shippedDetectors {
 		if sd.kind != KindDeclarative {
@@ -127,7 +127,7 @@ func benchShippedDeclarativeSet(b *testing.B, fs *flags.Store) *DeclarativeSet {
 // this benchmark should show.
 func benchShippedProgrammaticDefs(b *testing.B, fs *flags.Store) []Evaluated {
 	b.Helper()
-	cfg := detect.DefaultConfig()
+	cfg := DefaultShippedDefaults()
 	var out []Evaluated
 	for _, sd := range shippedDetectors {
 		if sd.kind != KindProgrammatic {
