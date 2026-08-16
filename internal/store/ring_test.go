@@ -386,6 +386,45 @@ func TestStatsTimeSeries(t *testing.T) {
 	}
 }
 
+// TestEveryActionHasItsOwnTimeSeriesSlot guards the one way the action
+// vocabulary can be extended and still quietly lose events (#437).
+//
+// Stats.ByAction is a map and grows on its own; Stats.TimeSeries is a
+// fixed array indexed by actionSlots, and actionSlot folds anything
+// missing from that list into the last slot -- which is ActionUnknown.
+// An Action constant added without a slot therefore reports correctly in
+// one half of the same Stats call and as "unknown" in the other, with
+// nothing failing.
+func TestEveryActionHasItsOwnTimeSeriesSlot(t *testing.T) {
+	all := []Action{
+		ActionAccept, ActionDrop, ActionReject, ActionLog,
+		ActionMarked, ActionNatted, ActionUnknown,
+	}
+	if len(all) != len(actionSlots) {
+		t.Fatalf("this test lists %d actions but actionSlots has %d -- add the new one to both", len(all), len(actionSlots))
+	}
+
+	s := New(100, time.Hour)
+	now := time.Now()
+	for i, a := range all {
+		for n := 0; n <= i; n++ { // a distinct count per action
+			s.Insert(mkEvent(now, "core", a))
+		}
+	}
+
+	stats := s.Stats()
+	last := stats.TimeSeries[len(stats.TimeSeries)-1]
+	for i, a := range all {
+		want := uint64(i + 1)
+		if got := last.ByAction[a]; got != want {
+			t.Errorf("time-series count for %q = %d, want %d (folded into another slot?)", a, got, want)
+		}
+		if got := stats.ByAction[a]; got != want {
+			t.Errorf("total count for %q = %d, want %d", a, got, want)
+		}
+	}
+}
+
 func ids(events []Event) []uint64 {
 	out := make([]uint64, len(events))
 	for i, e := range events {

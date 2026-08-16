@@ -45,12 +45,12 @@ const (
 	sqlCollapseUpdate = `UPDATE match_log SET last_seen = $2, count = count + 1 WHERE tuple_key = $1`
 
 	sqlInsertRecord = `INSERT INTO match_log
-	                    (id, entry_id, tuple_key, source_identity_key, source_mac, source_ip, dest_ip, port, event, first_seen, last_seen, count)
-	                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $10, 1)`
+	                    (id, entry_id, tuple_key, source_identity_key, source_mac, source_ip, dest_ip, port, event, first_seen, last_seen, count, provisional)
+	                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $10, 1, $11)`
 
 	sqlCount = `SELECT count(*) FROM match_log`
 
-	sqlSelectMatches = `SELECT id, entry_id, source_mac, source_ip, dest_ip, port, event, first_seen, last_seen, count
+	sqlSelectMatches = `SELECT id, entry_id, source_mac, source_ip, dest_ip, port, event, first_seen, last_seen, count, provisional
 	                     FROM match_log
 	                     WHERE source_identity_key = $1
 	                       AND last_seen >= $2
@@ -103,6 +103,15 @@ func OpenPostgres(pool *persist.Pool, retention time.Duration) *PostgresStore {
 
 // Append implements Store.
 func (s *PostgresStore) Append(entryID string, tuple Tuple, event store.Event, t time.Time) error {
+	return s.appendProvisional(entryID, tuple, event, t, false)
+}
+
+// AppendProvisional implements Store.
+func (s *PostgresStore) AppendProvisional(entryID string, tuple Tuple, event store.Event, t time.Time, provisional bool) error {
+	return s.appendProvisional(entryID, tuple, event, t, provisional)
+}
+
+func (s *PostgresStore) appendProvisional(entryID string, tuple Tuple, event store.Event, t time.Time, provisional bool) error {
 	if tuple.Source.Empty() {
 		return ErrEmptyIdentity
 	}
@@ -112,7 +121,8 @@ func (s *PostgresStore) Append(entryID string, tuple Tuple, event store.Event, t
 
 	// Collapse first: a repeat of an already-open tuple is the common
 	// case once a watchlist entry has been live for a while, and this
-	// never needs the capacity/insert path below.
+	// never needs the capacity/insert path below. provisional is
+	// ignored on this path -- it is fixed at creation, like first_seen.
 	tag, err := s.pool.Exec(ctx, sqlCollapseUpdate, key, t)
 	if err != nil {
 		return fmt.Errorf("matchlog: collapsing a match: %w", err)
@@ -127,7 +137,7 @@ func (s *PostgresStore) Append(entryID string, tuple Tuple, event store.Event, t
 	}
 	_, err = s.pool.Exec(ctx, sqlInsertRecord,
 		newID(), entryID, key, tuple.Source.identityKey(), tuple.Source.MAC, tuple.Source.IP,
-		tuple.DestIP, tuple.Port, string(eventJSON), t)
+		tuple.DestIP, tuple.Port, string(eventJSON), t, provisional)
 	if err == nil {
 		return nil
 	}
@@ -174,7 +184,7 @@ func (s *PostgresStore) Query(ctx context.Context, q Query, yield func(Record) b
 		var r Record
 		var eventJSON string
 		if err := rows.Scan(&r.ID, &r.EntryID, &r.Tuple.Source.MAC, &r.Tuple.Source.IP, &r.Tuple.DestIP, &r.Tuple.Port,
-			&eventJSON, &r.FirstSeen, &r.LastSeen, &r.Count); err != nil {
+			&eventJSON, &r.FirstSeen, &r.LastSeen, &r.Count, &r.Provisional); err != nil {
 			return fmt.Errorf("matchlog: reading a match: %w", err)
 		}
 		if err := json.Unmarshal([]byte(eventJSON), &r.Event); err != nil {
