@@ -1,0 +1,138 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+
+package engine
+
+import (
+	"fmt"
+	"testing"
+	"time"
+
+	"github.com/tomlawesome/mikroview/internal/store"
+)
+
+// TestMemoryCorpusReplayDoesNotStallIngest is issue #403's own required
+// pin: "Concurrent replay + burst-rate ingest test/benchmark proves no
+// ingest stall." It drives store.Store.Insert on one goroutine at
+// mikroview's measured burst rate (~3,900 events/sec -- the same figure
+// internal/detect/dispatch_bench_test.go and declarative_bench_test.go
+// already cite as the ingest budget's basis) while MemoryCorpus.Replay
+// runs repeatedly on another, and asserts that no single Insert call
+// was ever blocked for anywhere near as long as one full Replay pass
+// over the whole corpus takes -- see corpus.go's own doc comment for
+// why that is the right claim: Insert and Query still share one
+// sync.RWMutex, so a concurrent Query legitimately delays an Insert by
+// however long that one Query call takes; what must never happen is a
+// single lock hold spanning the *whole* replay pass, which is exactly
+// what a snapshot-the-whole-ring design would cost instead of the
+// iterate-in-bounded-pages design MemoryCorpus.Replay actually uses.
+//
+// The bound is deliberately relative (a fraction of one full,
+// uncontended Replay pass's own measured duration), not a fixed
+// absolute duration: an absolute millisecond figure is exactly the kind
+// of thing that is fast on a quiet workstation and flakes under
+// go test -race's instrumentation overhead (measured: a fixed 10ms bound
+// held comfortably without -race but failed at ~23ms under it) or a
+// loaded CI runner. Comparing against a duration measured in the same
+// run, under the same instrumentation, self-calibrates away that
+// variance while still proving the structural claim: a page read costs
+// a small fraction of the whole pass, not something approaching it.
+func TestMemoryCorpusReplayDoesNotStallIngest(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping concurrency timing test in -short mode")
+	}
+
+	const (
+		burstRate = 3900 // events/sec, see this test's own doc comment
+		testDur   = 300 * time.Millisecond
+		// stallFraction bounds max single Insert latency to at most this
+		// fraction of one full, uncontended Replay pass -- generous
+		// enough (a quarter) to tolerate scheduling noise while still
+		// being far below "approaches the whole pass," which is the
+		// failure mode (a single lock spanning the entire corpus) this
+		// test exists to catch.
+		stallFraction = 0.25
+	)
+	insertInterval := time.Second / time.Duration(burstRate)
+
+	s := store.New(50_000, time.Hour)
+
+	// Seed a realistic corpus before either phase starts, so Replay has
+	// real work to do (not an empty store) -- a few seconds' worth at
+	// the burst rate.
+	base := time.Now().Add(-time.Minute)
+	for i := 0; i < 20_000; i++ {
+		s.Insert(corpusEvent(base.Add(time.Duration(i)*time.Millisecond), fmt.Sprintf("10.9.%d.%d", i/250, i%250)))
+	}
+
+	corpus := NewMemoryCorpus(s)
+
+	// Baseline: one full, uncontended Replay pass over the same corpus,
+	// under the same test binary/instrumentation -- the "whole replay
+	// pass" duration max Insert latency gets compared against.
+	baselineStart := time.Now()
+	corpus.Replay(func(store.Event) {})
+	fullReplayDuration := time.Since(baselineStart)
+
+	stop := make(chan struct{})
+	replayDone := make(chan struct{})
+	go func() {
+		defer close(replayDone)
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+				corpus.Replay(func(store.Event) {})
+			}
+		}
+	}()
+
+	var maxInsertLatency time.Duration
+	var insertCount int
+	deadline := time.Now().Add(testDur)
+	next := time.Now()
+	for time.Now().Before(deadline) {
+		if until := time.Until(next); until > 0 {
+			time.Sleep(until)
+		}
+		start := time.Now()
+		s.Insert(corpusEvent(start, "10.8.0.1"))
+		elapsed := time.Since(start)
+		if elapsed > maxInsertLatency {
+			maxInsertLatency = elapsed
+		}
+		insertCount++
+		next = next.Add(insertInterval)
+	}
+
+	close(stop)
+	<-replayDone
+
+	stallBound := time.Duration(float64(fullReplayDuration) * stallFraction)
+	t.Logf("one full uncontended Replay pass = %s; inserted %d events over %s (target rate %d/s) while Replay ran continuously; max single Insert latency = %s (bound = %s)",
+		fullReplayDuration, insertCount, testDur, burstRate, maxInsertLatency, stallBound)
+
+	if maxInsertLatency > stallBound {
+		t.Fatalf("max single Insert latency = %s, want <= %s (%.0f%% of one full Replay pass = %s) -- a concurrent replay stalled ingest for longer than one bounded page read should ever cost",
+			maxInsertLatency, stallBound, stallFraction*100, fullReplayDuration)
+	}
+}
+
+// BenchmarkMemoryCorpusReplay reports MemoryCorpus.Replay's own cost in
+// isolation (no concurrent ingest) at a realistic default-capacity
+// corpus size, for comparison against
+// TestMemoryCorpusReplayDoesNotStallIngest's concurrent-ingest numbers.
+func BenchmarkMemoryCorpusReplay(b *testing.B) {
+	s := store.New(200_000, time.Hour)
+	base := time.Now().Add(-6 * time.Minute)
+	for i := 0; i < 200_000; i++ {
+		s.Insert(corpusEvent(base.Add(time.Duration(i)*2*time.Millisecond), fmt.Sprintf("10.7.%d.%d", i/250, i%250)))
+	}
+	corpus := NewMemoryCorpus(s)
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		corpus.Replay(func(store.Event) {})
+	}
+}
