@@ -133,6 +133,17 @@ type Record struct {
 	FirstSeen time.Time   `json:"firstSeen"`
 	LastSeen  time.Time   `json:"lastSeen"`
 	Count     uint64      `json:"count"`
+	// Provisional marks a match recorded while its expectation
+	// definition's baseline had not yet cleared its history floor --
+	// internal/engine.Baseline's warm-up gating
+	// (docs/decisions/evaluation-engine.md section 1, #368's fix made a
+	// chassis contract), the matchlog counterpart to flags.Flag.Provisional.
+	// false (the default, omitted from JSON) for every record recorded
+	// today: nothing wires the watchlist onto internal/engine.Baseline
+	// yet -- that is #406's job. Fixed at creation, like FirstSeen and
+	// Tuple: a collapsed repeat (see Append/AppendProvisional) never
+	// changes it.
+	Provisional bool `json:"provisional,omitempty"`
 }
 
 // Query selects matches by source identity and a time window. Since is
@@ -209,6 +220,16 @@ type Store interface {
 	// event. Collapses into an existing open record for the same
 	// (entryID, tuple) per Tuple.key's rule, or starts a new one.
 	Append(entryID string, tuple Tuple, event store.Event, t time.Time) error
+
+	// AppendProvisional is Append, but marks a newly-created record's
+	// Provisional field -- see that field's doc comment. Added by #399
+	// alongside the field itself; no caller uses it yet (#406 wires the
+	// watchlist side onto internal/engine.Baseline's warm-up gating) --
+	// it exists now so the persisted shape, on both backends, and the
+	// round trip are proven ahead of anything depending on them.
+	// provisional is ignored when Append collapses into an already-open
+	// record: Provisional is fixed at creation, like FirstSeen.
+	AppendProvisional(entryID string, tuple Tuple, event store.Event, t time.Time, provisional bool) error
 
 	// Query streams matches for q's source within [q.Since, q.Until),
 	// most recent (by LastSeen) first, up to q.Limit, calling yield for
