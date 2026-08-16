@@ -543,114 +543,39 @@ func TestCharacterizationInternalRecon_FieldsRefireClearRevive(t *testing.T) {
 // ---------------------------------------------------------------------------
 // 7. rule_spike
 // ---------------------------------------------------------------------------
-
-// primeRuleSpikeConstantBaseline feeds n ticks of exactly one event to
-// rule at a fixed 65-second cadence (> the default 60s RuleSpikeWindow,
-// so each tick reads a constant rate of 1/60 events/sec) -- collapses
-// the EMA's variance to exactly zero, the same trick used above for
-// activity_spike/global_spike, so the boundary event that follows has a
-// deterministic confidence instead of one this test would have to
-// hand-derive. Returns the time of the last warm-up tick.
-func primeRuleSpikeConstantBaseline(d *Detector, rule string, n int, from time.Time) time.Time {
-	tick := from
-	for i := 0; i < n; i++ {
-		d.Observe(ruleEvt(rule, tick))
-		tick = tick.Add(65 * time.Second)
-	}
-	return tick.Add(-65 * time.Second)
-}
-
-// TestCharacterizationRuleSpike_FieldsRefireClearRevive pins rule_spike's
-// boundary at DefaultConfig's real 5x-multiplier/0.2-events-per-sec/60s
-// config. MinRate (12 events in the 60s window) is the binding
-// constraint here, not the multiplier, since the primed baseline is
-// tiny -- see primeRuleSpikeConstantBaseline's doc comment. Unlike
-// activity_spike/global_spike's boundary pins above, this one cannot
-// hold the EMA's variance at exactly zero right up to the boundary: to
-// reach a window count of 12, the window must actually hold 11 prior
-// hits, and every one of observeRuleRate's calls unconditionally folds
-// its reading into the baseline immediately afterwards (see
-// rule_spike.go) -- so the 11 hits leading up to the boundary event
-// necessarily perturb it first. The Detail/Confidence values below are
-// therefore captured from an actual run rather than hand-derived, the
-// same way every %.1f-formatted EMA field elsewhere in this file is
-// pinned (see this file's header comment).
-func TestCharacterizationRuleSpike_FieldsRefireClearRevive(t *testing.T) {
-	cfg := DefaultConfig() // RuleSpikeMultiplier=5, RuleSpikeMinRate=0.2, Window=60s, WarmupSamples=20
-	cfg.PortScanThreshold = 1000
-	cfg.ActivitySpikeThreshold = 1000
-	rule := "wan-in"
-
-	probe, probeFS := newTestDetector(t, cfg)
-	probeLast := primeRuleSpikeConstantBaseline(probe, rule, 25, time.Now())
-	probeBurst := probeLast.Add(65 * time.Second)
-	for i := 0; i < 11; i++ {
-		probe.Observe(ruleEvt(rule, probeBurst.Add(time.Duration(i)*time.Second)))
-	}
-	if got := flagOfType(t, probeFS, flags.TypeRuleSpike); got != nil {
-		t.Fatalf("expected no flag at 11 hits in the window (11/60=0.183 < MinRate 0.2), got %+v", got)
-	}
-
-	d, fs := newTestDetector(t, cfg)
-	last := primeRuleSpikeConstantBaseline(d, rule, 25, time.Now())
-	burstStart := last.Add(65 * time.Second)
-	for i := 0; i < 11; i++ {
-		d.Observe(ruleEvt(rule, burstStart.Add(time.Duration(i)*time.Second)))
-	}
-	d.Observe(ruleEvt(rule, burstStart.Add(11*time.Second)))
-	f := flagOfType(t, fs, flags.TypeRuleSpike)
-	if f == nil {
-		t.Fatal("expected a flag at exactly 12 hits in the window (12/60=0.2 == MinRate)")
-	}
-	if f.Target != rule {
-		t.Errorf("Target = %q, want %q", f.Target, rule)
-	}
-	wantPrefix := "0.2 hits/s vs a baseline of 0.0 for this rule (based on 20 samples, "
-	if len(f.Detail) < len(wantPrefix) || f.Detail[:len(wantPrefix)] != wantPrefix {
-		t.Errorf("Detail = %q, want prefix %q", f.Detail, wantPrefix)
-	}
-	assertFloatSigmaTail(t, f.Detail[len(wantPrefix):], " above normal)")
-	if f.Confidence == nil || *f.Confidence <= 0 || *f.Confidence > 100 {
-		t.Errorf("Confidence at the boundary = %v, want a value in (0, 100]", f.Confidence)
-	}
-
-	// Re-fire and clear/revive: only structural properties asserted from
-	// here on -- the EMA's variance is no longer exactly zero once the
-	// burst itself has updated it, so the float fields are no longer a
-	// clean hand-derivable pin (see this file's header comment).
-	d.Observe(ruleEvt(rule, burstStart.Add(12*time.Second)))
-	f2 := flagOfType(t, fs, flags.TypeRuleSpike)
-	if f2 == nil || f2.Count != 2 {
-		t.Fatalf("expected Count=2 after a re-fire, got %+v", f2)
-	}
-
-	if !fs.Clear(f2.ID, burstStart.Add(13*time.Second)) {
-		t.Fatal("expected Clear to succeed")
-	}
-	// The prior episode's own hits left the baseline too elevated for a
-	// same-scale 12-hit burst to clear 5x-baseline again immediately
-	// (the window is capped at DefaultConfig's real 60 buckets/60s, so a
-	// continued burst plateaus rather than outrunning the baseline the
-	// way it would with a taller window) -- so this settles the rule
-	// back to a low, quiet baseline the same way the original warm-up
-	// did (spaced ticks, constant rate), then repeats the same 12-hit
-	// burst shape already proven to fire above. This is revival of the
-	// same (Type, Target) flag, not a new one -- flags.Store dedupes by
-	// (Type, Target), so the earlier episode's cleared record is what
-	// gets revived.
-	resettleLast := primeRuleSpikeConstantBaseline(d, rule, 25, burstStart.Add(time.Minute))
-	revive := resettleLast.Add(65 * time.Second)
-	for i := 0; i < 12; i++ {
-		d.Observe(ruleEvt(rule, revive.Add(time.Duration(i)*time.Second)))
-	}
-	f3 := flagOfType(t, fs, flags.TypeRuleSpike)
-	if f3 == nil || f3.Cleared {
-		t.Fatalf("expected the flag to revive as active, got %+v", f3)
-	}
-	if f3.Count != 1 {
-		t.Errorf("Count after revival = %d, want 1", f3.Count)
-	}
-}
+//
+// rule_spike's own characterization moved to
+// internal/engine/shipped_rule_spike_test.go (issue #405: rule_spike is now
+// a shipped programmatic definition evaluated by internal/engine, not
+// internal/detect -- see shipped_rule_spike.go). primeRuleSpikeConstantBaseline
+// moved with it, unchanged in behaviour.
+//
+// TestCharacterizationRuleSpike_FieldsRefireClearRevive did not move like
+// the rest of this section -- it does not survive. This is #405's third
+// and last sanctioned characterization diff, and it implements #368: the
+// old rule_spike primed its EMA baseline from the very first reading, which
+// was measured over a window that had only just started existing and so
+// read artificially low (here, a baseline of 0.0 after a single sample),
+// and the window's own ordinary fill then satisfied "5x baseline" with no
+// actual change in traffic -- exactly 12 hits in a 60s window, the MinRate
+// floor, not a real spike. That boundary -- "a flag at exactly 12 hits in
+// the window" -- was this test's whole point, and it no longer exists to
+// pin: internal/engine's Baseline (baseline.go) refuses to prime inside the
+// first window it observes, and gates firing on a declared BaselineFloor,
+// so a rule's first dozen-odd hits ever (or after a restart with no
+// persisted state) now produce silence instead of a false spike. See
+// internal/engine/shipped_rule_spike_test.go's
+// TestShippedRuleSpikeNoFalseSpikeInsideTheFirstWindow (#368's own scenario,
+// closed) and TestShippedRuleSpikeNoFalseSpikeOnRestart (#368's restart
+// half, both the warm-resume-from-state and cold-restart shapes) for what
+// replaces this pin. Alongside those two, and deliberately not left as the
+// only rule_spike coverage, is
+// TestShippedRuleSpikeFlagsWellAboveOwnBaseline: #368's fix must not have
+// bought its silence by making the detector inert, so a genuine, large
+// departure from a rule's own established baseline is pinned to still
+// fire. This test's re-fire/clear/revive sequence (Count incrementing on a
+// second crossing, Clear, then revival as a fresh active flag) is not
+// separately re-pinned for rule_spike on the engine side.
 
 // ---------------------------------------------------------------------------
 // 8. repeated_drops
@@ -1086,66 +1011,14 @@ func TestCharacterizationScope_Classification(t *testing.T) {
 	}
 }
 
-// TestCharacterizationScope_RulesAllow pins the Rules axis under
-// ListModeAllow, at rule_spike's real DefaultConfig scale.
-func TestCharacterizationScope_RulesAllow(t *testing.T) {
-	cfg := DefaultConfig()
-	cfg.PortScanThreshold = 1000
-	cfg.ActivitySpikeThreshold = 1000
-	seed := DefaultSettingsMap()
-	seed[DetectorRuleSpike] = Settings{Enabled: true, Scope: Scope{Rules: []string{"wan-in"}, RulesMode: ListModeAllow}}
-	d, fs := newTestDetectorWithSettings(t, cfg, seed)
-
-	// "other-rule" is not on the allow list -- never even tracked,
-	// regardless of volume.
-	last := primeRuleSpikeConstantBaseline(d, "other-rule", 5, time.Now())
-	burst := last.Add(65 * time.Second)
-	for i := 0; i < 20; i++ {
-		d.Observe(ruleEvt("other-rule", burst.Add(time.Duration(i)*time.Second)))
-	}
-	if got := flagOfType(t, fs, flags.TypeRuleSpike); got != nil {
-		t.Fatalf("expected a non-allowed rule to never flag, got %+v", got)
-	}
-
-	// "wan-in" is allow-listed and behaves normally.
-	last2 := primeRuleSpikeConstantBaseline(d, "wan-in", 25, burst.Add(time.Minute))
-	burst2 := last2.Add(65 * time.Second)
-	for i := 0; i < 12; i++ {
-		d.Observe(ruleEvt("wan-in", burst2.Add(time.Duration(i)*time.Second)))
-	}
-	if got := flagOfType(t, fs, flags.TypeRuleSpike); got == nil {
-		t.Fatal("expected the allow-listed rule to still flag")
-	}
-}
-
-// TestCharacterizationScope_RulesModeDeny pins the RulesMode axis under
-// ListModeDeny, at rule_spike's real DefaultConfig scale.
-func TestCharacterizationScope_RulesModeDeny(t *testing.T) {
-	cfg := DefaultConfig()
-	cfg.PortScanThreshold = 1000
-	cfg.ActivitySpikeThreshold = 1000
-	seed := DefaultSettingsMap()
-	seed[DetectorRuleSpike] = Settings{Enabled: true, Scope: Scope{Rules: []string{"noisy-rule"}, RulesMode: ListModeDeny}}
-	d, fs := newTestDetectorWithSettings(t, cfg, seed)
-
-	last := primeRuleSpikeConstantBaseline(d, "noisy-rule", 5, time.Now())
-	burst := last.Add(65 * time.Second)
-	for i := 0; i < 20; i++ {
-		d.Observe(ruleEvt("noisy-rule", burst.Add(time.Duration(i)*time.Second)))
-	}
-	if got := flagOfType(t, fs, flags.TypeRuleSpike); got != nil {
-		t.Fatalf("expected the denylisted rule to never flag, got %+v", got)
-	}
-
-	last2 := primeRuleSpikeConstantBaseline(d, "wan-in", 25, burst.Add(time.Minute))
-	burst2 := last2.Add(65 * time.Second)
-	for i := 0; i < 12; i++ {
-		d.Observe(ruleEvt("wan-in", burst2.Add(time.Duration(i)*time.Second)))
-	}
-	if got := flagOfType(t, fs, flags.TypeRuleSpike); got == nil {
-		t.Fatal("expected a non-denylisted rule to still flag")
-	}
-}
+// TestCharacterizationScope_RulesAllow and TestCharacterizationScope_
+// RulesModeDeny used to pin the Rules axis (ListModeAllow and ListModeDeny)
+// at rule_spike's real DefaultConfig scale. rule_spike is now a shipped
+// programmatic definition evaluated by internal/engine, not internal/detect
+// (issue #405 -- see shipped_rule_spike.go), so both moved with it: the
+// surviving rules-axis coverage is
+// internal/engine/shipped_rule_spike_test.go's
+// TestShippedRuleSpikeRespectsRulesDenylist.
 
 // TestCharacterizationScope_AxesCombineWithAND used to prove #44's model
 // -- multiple active Scope axes on one detector combine with AND, not OR
