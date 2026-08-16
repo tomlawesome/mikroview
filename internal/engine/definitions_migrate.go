@@ -189,21 +189,30 @@ func convertToDefinitions(settingsDoc map[detect.DetectorName]detect.Settings, e
 // ADR's own wording), so Params is the same default for every operator
 // at migration time.
 //
-// Kind is KindProgrammatic for all twelve, uniformly -- a decision this
-// migration makes on its own, recorded here since docs/decisions/
-// evaluation-engine.md's illustrative list names some of these as future
-// "shipped declarative definitions." That is #405's job, not this one:
-// Definition has no structured-condition representation yet (no package
-// in this repository defines one as of #404), so marking any of these
-// Declarative now would claim a data-driven condition set that does not
-// exist. Programmatic is the honest classification for "built-in Go,
-// wearing the envelope" today; #405 is free to migrate specific
-// detectors to Declarative once real condition data exists for them --
-// that is an Upsert against this store, not a reason to block on it here.
+// Kind was KindProgrammatic for all twelve, uniformly, as #404 shipped
+// it -- that issue's own report noted this was seeded programmatic
+// "pending #405," since Definition had no structured-condition
+// representation yet at that point. #405 is what starts correcting the
+// mapping, one ported detector at a time (see shippedDetector.kind's own
+// doc comment): port_scan is the first to flip to KindDeclarative, built
+// on shipped_declarative.go's buildPortScanDefinition.
 type shippedDetector struct {
 	name   detect.DetectorName
 	schema []ParamSchema
 	params func(cfg detect.Config) Params
+	// kind is the migrated Definition's Kind -- KindProgrammatic for
+	// every detector until issue #405 ports it onto a declarative or
+	// programmatic definition built on this chassis, at which point this
+	// field flips to match (docs/decisions/evaluation-engine.md section
+	// 2's "current detectors whose logic already is threshold-over-window
+	// ... become shipped declarative definitions"). #404's own report
+	// noted every detector was seeded programmatic "pending this issue" --
+	// this field, and shippedDeclarativeBuilders (shipped_declarative.go),
+	// are #405's fix to that mapping, one detector at a time as each is
+	// actually ported (see AGENTS.md's "removals are wholesale" applied
+	// in reverse: nothing here claims a detector is declarative before
+	// its evaluation logic actually exists as one).
+	kind Kind
 }
 
 // shippedDetectorDisplayNames gives each of the 12 settings-toggleable
@@ -239,10 +248,15 @@ var zeroDuration = time.Duration(0).String()
 // through shipped_params.go's ParamSchema, into this migration's default
 // Params -- one entry per internal/detect.AllDetectorNames, same order.
 var shippedDetectors = []shippedDetector{
-	{detect.DetectorPortScan, PortScanParamSchema, func(c detect.Config) Params {
+	// port_scan (issue #405): threshold-over-window, ported onto a
+	// shipped DeclarativeDefinition -- see shipped_declarative.go's
+	// buildPortScanDefinition. The only entry below with
+	// kind: KindDeclarative so far; every other detector stays
+	// KindProgrammatic until its own #405 port lands.
+	{name: detect.DetectorPortScan, schema: PortScanParamSchema, kind: KindDeclarative, params: func(c detect.Config) Params {
 		return Params{"threshold": c.PortScanThreshold, "window": c.PortScanWindow.String()}
 	}},
-	{detect.DetectorActivitySpike, ActivitySpikeParamSchema, func(c detect.Config) Params {
+	{name: detect.DetectorActivitySpike, schema: ActivitySpikeParamSchema, kind: KindProgrammatic, params: func(c detect.Config) Params {
 		return Params{
 			"threshold":               c.ActivitySpikeThreshold,
 			"window":                  c.ActivitySpikeWindow.String(),
@@ -254,10 +268,10 @@ var shippedDetectors = []shippedDetector{
 			"baselineFloorDuration":   zeroDuration,
 		}
 	}},
-	{detect.DetectorCriticalPort, CriticalPortParamSchema, func(c detect.Config) Params {
+	{name: detect.DetectorCriticalPort, schema: CriticalPortParamSchema, kind: KindProgrammatic, params: func(c detect.Config) Params {
 		return Params{"ports": c.CriticalPorts, "threshold": c.CriticalPortThreshold, "window": c.CriticalPortWindow.String()}
 	}},
-	{detect.DetectorGlobalSpike, GlobalSpikeParamSchema, func(c detect.Config) Params {
+	{name: detect.DetectorGlobalSpike, schema: GlobalSpikeParamSchema, kind: KindProgrammatic, params: func(c detect.Config) Params {
 		return Params{
 			"multiplier":            c.GlobalSpikeMultiplier,
 			"minEPS":                c.GlobalSpikeMinEPS,
@@ -266,10 +280,10 @@ var shippedDetectors = []shippedDetector{
 			"baselineFloorDuration": zeroDuration,
 		}
 	}},
-	{detect.DetectorDistributedBruteForce, DistributedBruteForceParamSchema, func(c detect.Config) Params {
+	{name: detect.DetectorDistributedBruteForce, schema: DistributedBruteForceParamSchema, kind: KindProgrammatic, params: func(c detect.Config) Params {
 		return Params{"threshold": c.DistributedBruteForceThreshold, "window": c.DistributedBruteForceWindow.String()}
 	}},
-	{detect.DetectorOutboundAnomaly, OutboundAnomalyParamSchema, func(c detect.Config) Params {
+	{name: detect.DetectorOutboundAnomaly, schema: OutboundAnomalyParamSchema, kind: KindProgrammatic, params: func(c detect.Config) Params {
 		return Params{
 			"threshold":               c.OutboundAnomalyThreshold,
 			"window":                  c.OutboundAnomalyWindow.String(),
@@ -277,7 +291,7 @@ var shippedDetectors = []shippedDetector{
 			"vpnConfidenceMultiplier": c.VPNConfidenceMultiplier,
 		}
 	}},
-	{detect.DetectorInternalRecon, InternalReconParamSchema, func(c detect.Config) Params {
+	{name: detect.DetectorInternalRecon, schema: InternalReconParamSchema, kind: KindProgrammatic, params: func(c detect.Config) Params {
 		return Params{
 			"threshold":               c.InternalReconThreshold,
 			"window":                  c.InternalReconWindow.String(),
@@ -285,7 +299,7 @@ var shippedDetectors = []shippedDetector{
 			"vpnConfidenceMultiplier": c.VPNConfidenceMultiplier,
 		}
 	}},
-	{detect.DetectorRuleSpike, RuleSpikeParamSchema, func(c detect.Config) Params {
+	{name: detect.DetectorRuleSpike, schema: RuleSpikeParamSchema, kind: KindProgrammatic, params: func(c detect.Config) Params {
 		return Params{
 			"multiplier":            c.RuleSpikeMultiplier,
 			"minRate":               c.RuleSpikeMinRate,
@@ -295,10 +309,10 @@ var shippedDetectors = []shippedDetector{
 			"baselineFloorDuration": zeroDuration,
 		}
 	}},
-	{detect.DetectorRepeatedDrops, RepeatedDropsParamSchema, func(c detect.Config) Params {
+	{name: detect.DetectorRepeatedDrops, schema: RepeatedDropsParamSchema, kind: KindProgrammatic, params: func(c detect.Config) Params {
 		return Params{"threshold": c.RepeatedDropsThreshold, "window": c.RepeatedDropsWindow.String()}
 	}},
-	{detect.DetectorLowSlowScan, LowSlowScanParamSchema, func(c detect.Config) Params {
+	{name: detect.DetectorLowSlowScan, schema: LowSlowScanParamSchema, kind: KindProgrammatic, params: func(c detect.Config) Params {
 		return Params{
 			"window":             c.LowSlowScanWindow.String(),
 			"portThreshold":      c.LowSlowScanPortThreshold,
@@ -309,7 +323,7 @@ var shippedDetectors = []shippedDetector{
 			"updateCadence":      "perEvent",
 		}
 	}},
-	{detect.DetectorOffHoursActivity, OffHoursActivityParamSchema, func(c detect.Config) Params {
+	{name: detect.DetectorOffHoursActivity, schema: OffHoursActivityParamSchema, kind: KindProgrammatic, params: func(c detect.Config) Params {
 		return Params{
 			"startHour":     c.OffHoursStartHour,
 			"endHour":       c.OffHoursEndHour,
@@ -318,7 +332,7 @@ var shippedDetectors = []shippedDetector{
 			"updateCadence": "perEvent",
 		}
 	}},
-	{detect.DetectorDeviceSilence, DeviceSilenceParamSchema, func(c detect.Config) Params {
+	{name: detect.DetectorDeviceSilence, schema: DeviceSilenceParamSchema, kind: KindProgrammatic, params: func(c detect.Config) Params {
 		return Params{"staleAfter": c.DeviceStaleAfter.String()}
 	}},
 }
@@ -368,7 +382,7 @@ func convertDetectSettings(settingsDoc map[detect.DetectorName]detect.Settings, 
 			Name:        shippedDetectorDisplayNames[sd.name],
 			Description: fmt.Sprintf("Migrated from internal/detect's %q detector settings (issue #404).", sd.name),
 			Intent:      IntentDetection,
-			Kind:        KindProgrammatic,
+			Kind:        sd.kind,
 			Enabled:     settings.Enabled,
 			Scope:       convertDetectScope(settings.Scope),
 			Params:      params,

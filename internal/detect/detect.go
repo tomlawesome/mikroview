@@ -312,13 +312,13 @@ var maxTrackedSources = 4096
 const observeQueueSize = 4096
 
 type sourceWindow struct {
-	// spikes/ports replace a single []sample slice with two purpose-
-	// sized rings (see window.go): spikes is a plain event count over
-	// ActivitySpikeWindow, ports is the distinct-destination-port set
-	// over PortScanWindow -- split because each is sized to its own
-	// detector's window, which can differ.
+	// spikes is a plain event count over ActivitySpikeWindow (see
+	// window.go). port_scan's own distinct-destination-port ring used to
+	// live here too (a distinctRing[int] named "ports") -- ported onto
+	// internal/engine as a shipped declarative definition (issue #405,
+	// see internal/engine/shipped_declarative.go); this struct only
+	// tracks what activity_spike/off_hours still need.
 	spikes *countRing
-	ports  *distinctRing[int]
 
 	lastActivity time.Time
 
@@ -593,20 +593,21 @@ func (d *Detector) Observe(e store.Event) {
 	d.observeNetClass(e, now)
 }
 
+// observeScanAndSpike is activity_spike's entry point from Observe.
+// port_scan used to share this function and sourceWindow's per-source
+// state (a distinct-destination-port ring, queried here) -- ported onto
+// internal/engine as a shipped declarative definition (issue #405, see
+// internal/engine/shipped_declarative.go's buildPortScanDefinition),
+// which tracks its own state independently of d.perSource. Renamed doc
+// comment aside, this function's remaining behavior (activity_spike's
+// per-host EMA baseline check) is unchanged.
 func (d *Detector) observeScanAndSpike(e store.Event, now time.Time) {
 	if !isTrackableConnState(e) {
 		return
 	}
 
-	// Independently toggleable even though they share sourceWindow/
-	// w.samples below -- both consulted once up front so a detector
-	// that's off contributes no work beyond this pair of settings
-	// lookups, and short-circuits entirely if neither wants this source.
-	ps := d.settings.Get(DetectorPortScan)
 	as := d.settings.Get(DetectorActivitySpike)
-	psActive := ps.Enabled && scopeMatchesHost(ps.Scope, e.SrcIP)
-	asActive := as.Enabled && scopeMatchesHost(as.Scope, e.SrcIP)
-	if !psActive && !asActive {
+	if !as.Enabled || !scopeMatchesHost(as.Scope, e.SrcIP) {
 		return
 	}
 
@@ -617,52 +618,14 @@ func (d *Detector) observeScanAndSpike(e store.Event, now time.Time) {
 		}
 		w = &sourceWindow{
 			spikes: newCountRing(d.cfg.ActivitySpikeWindow),
-			ports:  newDistinctRing[int](d.cfg.PortScanWindow),
 		}
 		d.perSource[e.SrcIP] = w
 	}
-	if !asActive {
-		// Mark the baseline stale rather than leaving it be: w.primed
-		// otherwise stays true from whenever activity-spike was last
-		// active, so the *next* time it's active again,
-		// checkHostActivityBaseline would instantly compare against a
-		// baseline that's since gone stale instead of cleanly re-priming
-		// (see that function's own w.primed handling).
-		w.primed = false
-	}
 	w.lastActivity = now
-	// Recorded unconditionally (like the old shared w.samples slice was)
-	// regardless of which of psActive/asActive is on -- only the query
-	// below is gated per-detector, so re-enabling a detector later sees
-	// the samples that accumulated while it was off.
 	w.spikes.Add(now, true)
-	w.ports.Add(now, e.DstPort)
 
-	// Skipped entirely while inactive, rather than kept warm: the EMA
-	// baseline self-protects on re-prime (see checkHostActivityBaseline
-	// -- the first call after w.primed resets only primes, it never
-	// fires), so re-priming after a period of being off is the safer
-	// behavior, not a gap.
-	if asActive {
-		spikeCount := w.spikes.Count(now, d.cfg.ActivitySpikeWindow)
-		d.checkHostActivityBaseline(w, e.SrcIP, e.SrcCountry, e.InInterface, spikeCount, now)
-	}
-	if psActive {
-		// port 0 and scope are both query-time filters (not applied at
-		// Add) so a live SettingsStore.Set narrowing the port scope takes
-		// effect on the very next event, not only once old samples age
-		// out of the window.
-		portFilter := func(p int) bool { return p != 0 && scopeMatchesPort(ps.Scope, p) }
-		portCount := w.ports.Count(now, d.cfg.PortScanWindow, portFilter)
-		if portCount >= d.cfg.PortScanThreshold {
-			distinctPorts := w.ports.Values(now, d.cfg.PortScanWindow, portFilter)
-			isNew := d.fs.AddWithDetail(flags.TypePortScan, e.SrcIP,
-				fmt.Sprintf("%d distinct destination ports in %s", portCount, d.cfg.PortScanWindow),
-				overshootConfidence(portCount, d.cfg.PortScanThreshold),
-				flags.Evidence{Ports: sortedPortsCapped(distinctPorts)}, e.SrcCountry, now)
-			d.maybeCheckReputation(flags.TypePortScan, e.SrcIP, e.SrcIP, isNew)
-		}
-	}
+	spikeCount := w.spikes.Count(now, d.cfg.ActivitySpikeWindow)
+	d.checkHostActivityBaseline(w, e.SrcIP, e.SrcCountry, e.InInterface, spikeCount, now)
 }
 
 // criticalWindow tracks one source IP's recent attempts against any

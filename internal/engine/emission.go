@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // Emission is what RenderEmission produces: a definition's firing
@@ -48,6 +49,21 @@ type Emission struct {
 	// the definition's own evaluation code, not by RenderEmission, which
 	// has no confidence computation of its own.
 	Confidence *int
+	// Country/EventTime carry the triggering store.Event's SrcCountry and
+	// ReceivedAt forward -- added by #405, which is this package's first
+	// real producer of an Emission from live traffic (router.go's own doc
+	// comment on Route notes flags.Flag's store-assigned fields are left
+	// zero "those belong to flags.Store's raise lifecycle," but Country
+	// and the raise timestamp are not store-assigned: flags.Store.AddProvisional
+	// needs both supplied by its caller on every call, the same way
+	// internal/detect's own detectors read them straight off the
+	// triggering event -- see e.g. observeCriticalPort's
+	// AddWithDetail(..., e.SrcCountry, now) call). RenderEmission has no
+	// event to read them from, so -- like Target/DefinitionID -- these are
+	// set by the definition's own evaluation code after RenderEmission
+	// returns, not by RenderEmission itself.
+	Country   string
+	EventTime time.Time
 	// Provisional marks an emission produced while the definition's
 	// baseline (see Baseline/Snapshot.Ready) had not yet cleared its
 	// history floor -- see docs/decisions/evaluation-engine.md section 1

@@ -57,31 +57,12 @@ import (
 //     branch), the resulting confidence is a deterministic integer and
 //     is pinned exactly.
 
-// TestCharacterizationPortScanFiresAtDefaultConfigScale exercises
-// observeScanAndSpike's port-scan half with DefaultConfig's real
-// PortScanWindow/PortScanThreshold (60s/15) rather than a test-shrunk
-// config, spreading events across the full window so the migration
-// touches most of the ring's 60 one-second buckets (bucketSpanFor(60s)
-// == minBucketSpan == 1s) -- the shape a real slow-burst scan produces.
-func TestCharacterizationPortScanFiresAtDefaultConfigScale(t *testing.T) {
-	cfg := DefaultConfig()
-	cfg.ActivitySpikeThreshold = 1000 // isolate port_scan
-	d, fs := newTestDetector(t, cfg)
-
-	now := time.Now()
-	for port := 1; port < cfg.PortScanThreshold; port++ {
-		d.Observe(evt("203.0.113.9", port, now.Add(time.Duration(port)*3*time.Second)))
-	}
-	if len(fs.List()) != 0 {
-		t.Fatalf("expected no flag below threshold, got %+v", fs.List())
-	}
-
-	d.Observe(evt("203.0.113.9", cfg.PortScanThreshold, now.Add(time.Duration(cfg.PortScanThreshold)*3*time.Second)))
-	list := fs.List()
-	if len(list) != 1 || list[0].Type != flags.TypePortScan || list[0].Target != "203.0.113.9" {
-		t.Fatalf("expected a port_scan flag at threshold, got %+v", list)
-	}
-}
+// TestCharacterizationPortScanFiresAtDefaultConfigScale moved to
+// internal/engine/shipped_declarative_test.go's
+// TestShippedPortScanFiresAtDefaultConfigScale (issue #405: port_scan is
+// now a shipped declarative definition evaluated by internal/engine, not
+// internal/detect -- see shipped_declarative.go's buildPortScanDefinition).
+// Every pinned value carried over unchanged.
 
 // TestCharacterizationLowSlowScanFiresAtDefaultWindowScale runs
 // observeLowSlowScan's three rings (ports/hosts/drops) at
@@ -204,101 +185,14 @@ func lan3(n int) string { return fmt.Sprintf("192.168.2.%d", 100+n) }
 // ---------------------------------------------------------------------------
 // 1. port_scan
 // ---------------------------------------------------------------------------
-
-// TestCharacterizationPortScan_FieldsRefireClearRevive pins port_scan's
-// firing boundary at DefaultConfig's real threshold/window (15/60s), the
-// exact shape of the flag it raises, and its re-fire/clear/revive
-// behaviour across a second crossing.
-func TestCharacterizationPortScan_FieldsRefireClearRevive(t *testing.T) {
-	cfg := DefaultConfig() // PortScanThreshold=15, PortScanWindow=60s
-	d, fs := newTestDetector(t, cfg)
-	ip := "203.0.113.9"
-	t0 := time.Now()
-
-	// 14 distinct ports: must not fire.
-	for port := 1; port <= 14; port++ {
-		d.Observe(evtCountry(ip, "DE", port, t0.Add(time.Duration(port-1)*time.Second)))
-	}
-	if got := flagOfType(t, fs, flags.TypePortScan); got != nil {
-		t.Fatalf("expected no flag at 14 distinct ports, got %+v", got)
-	}
-
-	// The 15th distinct port crosses the threshold.
-	d.Observe(evtCountry(ip, "DE", 15, t0.Add(14*time.Second)))
-	f := flagOfType(t, fs, flags.TypePortScan)
-	if f == nil {
-		t.Fatal("expected a port_scan flag at exactly 15 distinct ports")
-	}
-	if f.Target != ip {
-		t.Errorf("Target = %q, want %q", f.Target, ip)
-	}
-	if want := "15 distinct destination ports in 1m0s"; f.Detail != want {
-		t.Errorf("Detail = %q, want %q", f.Detail, want)
-	}
-	if f.Country != "DE" {
-		t.Errorf("Country = %q, want DE", f.Country)
-	}
-	if f.Confidence == nil || *f.Confidence != 0 {
-		t.Errorf("Confidence = %v, want 0 (exactly at threshold)", f.Confidence)
-	}
-	wantPorts := make([]int, 15)
-	for i := range wantPorts {
-		wantPorts[i] = i + 1
-	}
-	if fmt.Sprint(f.Evidence.Ports) != fmt.Sprint(wantPorts) {
-		t.Errorf("Evidence.Ports = %v, want %v", f.Evidence.Ports, wantPorts)
-	}
-	if f.Count != 1 {
-		t.Errorf("Count = %d, want 1", f.Count)
-	}
-
-	// Re-fire: a 16th distinct port within the same window updates the
-	// flag in place (Count increments, still one flag, confidence tracks
-	// the new overshoot).
-	d.Observe(evtCountry(ip, "DE", 16, t0.Add(15*time.Second)))
-	f2 := flagOfType(t, fs, flags.TypePortScan)
-	if f2 == nil || f2.Count != 2 {
-		t.Fatalf("expected Count=2 after a re-fire, got %+v", f2)
-	}
-	if f2.Confidence == nil || *f2.Confidence != 3 {
-		t.Errorf("Confidence after re-fire = %v, want 3 (overshootConfidence(16,15))", f2.Confidence)
-	}
-
-	// Clear it, then feed a 17th distinct port still inside the same
-	// window: the flag revives -- isNew again, Count resets to 1,
-	// FirstSeen moves to the reviving event's time.
-	if !fs.Clear(f2.ID, t0.Add(15500*time.Millisecond)) {
-		t.Fatal("expected Clear to succeed on the active flag")
-	}
-	reviveAt := t0.Add(16 * time.Second)
-	d.Observe(evtCountry(ip, "DE", 17, reviveAt))
-	f3 := flagOfType(t, fs, flags.TypePortScan)
-	if f3 == nil {
-		t.Fatal("expected the flag to revive")
-	}
-	if f3.Cleared {
-		t.Error("expected the revived flag to no longer be Cleared")
-	}
-	if f3.Count != 1 {
-		t.Errorf("Count after revival = %d, want 1 (revival resets Count)", f3.Count)
-	}
-	if !f3.FirstSeen.Equal(reviveAt) {
-		t.Errorf("FirstSeen after revival = %v, want %v (revival resets FirstSeen)", f3.FirstSeen, reviveAt)
-	}
-	// The ring itself never forgot the earlier ports -- Add doesn't know
-	// about flags.Store's clear state -- so the revived episode's count
-	// (and Detail) reflects all 17 distinct ports still inside the
-	// window, not just the one revival event.
-	if want := "17 distinct destination ports in 1m0s"; f3.Detail != want {
-		t.Errorf("Detail after revival = %q, want %q", f3.Detail, want)
-	}
-	if f3.Confidence == nil || *f3.Confidence != 7 {
-		t.Errorf("Confidence after revival = %v, want 7 (overshootConfidence(17,15))", f3.Confidence)
-	}
-	if countTypedFlags(fs, flags.TypePortScan) != 1 {
-		t.Errorf("expected exactly one port_scan flag (revival updates in place, not a second one), got %d", countTypedFlags(fs, flags.TypePortScan))
-	}
-}
+//
+// port_scan's own characterization (firing boundary, flag fields,
+// re-fire/clear/revive, and its Hosts/Classification scope pins) moved to
+// internal/engine/shipped_declarative_test.go's TestShippedPortScan_*
+// series (issue #405: port_scan is now a shipped declarative definition
+// evaluated by internal/engine, not internal/detect -- see
+// shipped_declarative.go's buildPortScanDefinition). Every pinned value
+// carried over unchanged.
 
 // ---------------------------------------------------------------------------
 // 2. activity_spike
@@ -1408,25 +1302,30 @@ func TestCharacterizationScope_HostsAllow(t *testing.T) {
 }
 
 // TestCharacterizationScope_HostsModeDeny pins the HostsMode axis under
-// ListModeDeny, at port_scan's real DefaultConfig scale (15/60s).
+// ListModeDeny, at critical_port's real DefaultConfig scale (5/5m).
+// Previously exercised via port_scan; port_scan's own HostsMode pin moved
+// to internal/engine/shipped_declarative_test.go's
+// TestShippedPortScanScope_HostsModeDeny (issue #405) -- this test is
+// retargeted, not deleted, so internal/detect's own scope-axis coverage
+// stays complete for the detectors still evaluated here.
 func TestCharacterizationScope_HostsModeDeny(t *testing.T) {
-	cfg := DefaultConfig()
+	cfg := DefaultConfig() // CriticalPortThreshold=5, CriticalPortWindow=5m, CriticalPorts includes 22
 	seed := DefaultSettingsMap()
-	seed[DetectorPortScan] = Settings{Enabled: true, Scope: Scope{Hosts: []string{"203.0.113.9"}, HostsMode: ListModeDeny}}
+	seed[DetectorCriticalPort] = Settings{Enabled: true, Scope: Scope{Hosts: []string{"198.51.100.4"}, HostsMode: ListModeDeny}}
 	d, fs := newTestDetectorWithSettings(t, cfg, seed)
 	now := time.Now()
 
-	for port := 1; port <= 20; port++ {
-		d.Observe(evt("203.0.113.9", port, now.Add(time.Duration(port)*time.Second))) // denied
+	for i := 0; i < 5; i++ {
+		d.Observe(evt("198.51.100.4", 22, now.Add(time.Duration(i)*30*time.Second))) // denied
 	}
-	if got := flagOfType(t, fs, flags.TypePortScan); got != nil {
-		t.Fatalf("expected the denylisted host to never flag even at 20 distinct ports, got %+v", got)
+	if got := flagOfType(t, fs, flags.TypeCriticalPort); got != nil {
+		t.Fatalf("expected the denylisted host to never flag even at 5 attempts, got %+v", got)
 	}
 
-	for port := 1; port <= 15; port++ {
-		d.Observe(evt("203.0.113.10", port, now.Add(time.Duration(port)*time.Second))) // not denied
+	for i := 0; i < 5; i++ {
+		d.Observe(evt("198.51.100.5", 22, now.Add(time.Duration(i)*30*time.Second))) // not denied
 	}
-	if got := flagOfType(t, fs, flags.TypePortScan); got == nil {
+	if got := flagOfType(t, fs, flags.TypeCriticalPort); got == nil {
 		t.Fatal("expected a non-denylisted host to still flag at threshold")
 	}
 }
@@ -1482,30 +1381,55 @@ func TestCharacterizationScope_PortsModeDeny(t *testing.T) {
 }
 
 // TestCharacterizationScope_Classification pins the Classification axis,
-// at port_scan's real DefaultConfig scale (15/60s) -- per settings.go's
-// per-detector field usage table, PortScan's Hosts/HostsMode +
+// at activity_spike's real DefaultConfig scale -- per settings.go's
+// per-detector field usage table, ActivitySpike's Hosts/HostsMode +
 // Classification restrict which source IPs are tracked at all.
+// Previously exercised via port_scan (a plain threshold, so a firing
+// scenario was one loop); port_scan's own Classification pin moved to
+// internal/engine/shipped_declarative_test.go's
+// TestShippedPortScanScope_Classification (issue #405). Retargeted, not
+// deleted, so internal/detect's own scope-axis coverage stays complete;
+// activity_spike's EMA baseline needs a warm-up-then-spike shape (see
+// TestActivitySpikeFlagsGenuineDeviationFromHostsOwnBaseline) rather than
+// a single loop to actually fire.
 func TestCharacterizationScope_Classification(t *testing.T) {
 	cfg := DefaultConfig()
+	cfg.ActivitySpikeThreshold = 2
+	cfg.ActivitySpikeWindow = time.Second
+	cfg.HostActivityMultiplier = 3
+	cfg.HostActivityWarmupSamples = 20
 	seed := DefaultSettingsMap()
-	seed[DetectorPortScan] = Settings{Enabled: true, Scope: Scope{Classification: store.ScopeInternal}}
+	seed[DetectorActivitySpike] = Settings{Enabled: true, Scope: Scope{Classification: store.ScopeInternal}}
 	d, fs := newTestDetectorWithSettings(t, cfg, seed)
 	now := time.Now()
 
-	// An external source: never tracked at all under Classification=Internal,
-	// no matter how many distinct ports it touches.
-	for port := 1; port <= 20; port++ {
-		d.Observe(evt("203.0.113.9", port, now.Add(time.Duration(port)*time.Second)))
+	warmThenSpike := func(ip string, start time.Time) {
+		tick := time.Duration(0)
+		for i := 0; i < 25; i++ {
+			base := start.Add(tick)
+			d.Observe(evt(ip, 100, base))
+			d.Observe(evt(ip, 101, base.Add(10*time.Millisecond)))
+			tick += 2 * time.Second
+		}
+		spikeBase := start.Add(tick)
+		for i := 0; i < 10; i++ {
+			d.Observe(evt(ip, 200+i, spikeBase.Add(time.Duration(i)*10*time.Millisecond)))
+		}
 	}
-	if got := flagOfType(t, fs, flags.TypePortScan); got != nil {
+
+	// An external source: never even tracked under Classification=Internal
+	// (asActive gates observeScanAndSpike before any window is created),
+	// so warming it up and spiking it the same way a real deviation would
+	// still never flags.
+	extIP := "203.0.113.9"
+	warmThenSpike(extIP, now)
+	if got := flagOfType(t, fs, flags.TypeActivitySpike); got != nil {
 		t.Fatalf("expected an external source to never flag under Classification=Internal, got %+v", got)
 	}
 
-	// An internal (LAN) source still flags normally at threshold.
-	for port := 1; port <= 15; port++ {
-		d.Observe(evt("192.168.1.77", port, now.Add(time.Duration(port)*time.Second)))
-	}
-	if got := flagOfType(t, fs, flags.TypePortScan); got == nil {
+	// An internal (LAN) source still flags normally.
+	warmThenSpike("192.168.1.77", now.Add(time.Minute))
+	if got := flagOfType(t, fs, flags.TypeActivitySpike); got == nil {
 		t.Fatal("expected an internal source to still flag under Classification=Internal")
 	}
 }

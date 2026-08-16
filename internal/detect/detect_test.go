@@ -45,17 +45,18 @@ func evtState(srcIP string, dstPort int, connState string, at time.Time) store.E
 	return e
 }
 
+// TestScanAndSpikeIgnoreEstablishedTraffic reproduces the false-positive
+// pattern a busy server produces when a RouterOS ruleset logs both
+// directions of an established connection: many "established" events
+// (the *client's* varying ephemeral port, high volume) must not trip
+// activity-spike, even though a "new"-only version of the same traffic
+// would. port_scan's own half of this guarantee (it shared
+// isTrackableConnState/observeScanAndSpike's filter) moved with it onto
+// internal/engine's shipped declarative definition (issue #405) -- see
+// internal/engine/shipped_declarative_test.go for its counterpart there.
 func TestScanAndSpikeIgnoreEstablishedTraffic(t *testing.T) {
-	// Reproduces the false-positive pattern a busy server produces when a
-	// RouterOS ruleset logs both directions of an established connection:
-	// many "established" events with distinct ports (the *client's*
-	// varying ephemeral port) and high volume must not trip the port-scan
-	// or activity-spike detectors, even though a "new"-only version of the
-	// same traffic would.
 	cfg := DefaultConfig()
-	cfg.PortScanThreshold = 3
 	cfg.ActivitySpikeThreshold = 3
-	cfg.PortScanWindow = time.Minute
 	cfg.ActivitySpikeWindow = time.Minute
 	d, fs := newTestDetector(t, cfg)
 
@@ -64,53 +65,23 @@ func TestScanAndSpikeIgnoreEstablishedTraffic(t *testing.T) {
 		d.Observe(evtState("192.168.1.10", port, "established", now.Add(time.Duration(port)*time.Millisecond)))
 	}
 	if len(fs.List()) != 0 {
-		t.Fatalf("expected established-state traffic to never trip port-scan/activity-spike, got %+v", fs.List())
+		t.Fatalf("expected established-state traffic to never trip activity-spike, got %+v", fs.List())
+	}
+	if _, ok := d.perSource["192.168.1.10"]; ok {
+		t.Fatal("expected established-state traffic to never even touch per-source window state")
 	}
 
-	// The same volume of "new" traffic still flags as before -- confirms
-	// this is a state filter, not an accidental threshold change.
+	// The same volume of "new" traffic is recorded (proving this is a
+	// state filter, not an accidental threshold change) -- activity_spike
+	// itself needs a primed EMA baseline to actually fire, which its own
+	// dedicated tests (TestActivitySpikeFlagsGenuineDeviationFromHostsOwnBaseline
+	// and friends) already cover; this test only pins the connState gate.
 	for port := 1; port <= 5; port++ {
 		d.Observe(evtState("192.168.1.11", port, "new", now.Add(time.Duration(port)*time.Millisecond)))
 	}
-	if len(fs.List()) == 0 {
-		t.Fatalf("expected new-state traffic to still trip port-scan/activity-spike")
-	}
-}
-
-func TestPortScanFlagsAtThreshold(t *testing.T) {
-	cfg := DefaultConfig()
-	cfg.PortScanThreshold = 5
-	cfg.PortScanWindow = time.Minute
-	d, fs := newTestDetector(t, cfg)
-
-	now := time.Now()
-	for port := 1; port <= 4; port++ {
-		d.Observe(evt("203.0.113.9", port, now))
-	}
-	if len(fs.List()) != 0 {
-		t.Fatalf("expected no flag below threshold, got %+v", fs.List())
-	}
-
-	d.Observe(evt("203.0.113.9", 5, now))
-	list := fs.List()
-	if len(list) != 1 || list[0].Type != flags.TypePortScan || list[0].Target != "203.0.113.9" {
-		t.Fatalf("expected a port_scan flag for 203.0.113.9, got %+v", list)
-	}
-}
-
-func TestPortScanIgnoresSamplesOutsideWindow(t *testing.T) {
-	cfg := DefaultConfig()
-	cfg.PortScanThreshold = 3
-	cfg.PortScanWindow = 10 * time.Second
-	d, fs := newTestDetector(t, cfg)
-
-	now := time.Now()
-	d.Observe(evt("203.0.113.9", 1, now))
-	d.Observe(evt("203.0.113.9", 2, now.Add(20*time.Second))) // outside the 10s window from the first
-	d.Observe(evt("203.0.113.9", 3, now.Add(21*time.Second)))
-
-	if len(fs.List()) != 0 {
-		t.Fatalf("expected the first sample to have aged out, got %+v", fs.List())
+	w, ok := d.perSource["192.168.1.11"]
+	if !ok || w.spikes.Count(now.Add(6*time.Millisecond), cfg.ActivitySpikeWindow) != 5 {
+		t.Fatalf("expected new-state traffic to still be recorded into the per-source window")
 	}
 }
 
@@ -239,15 +210,16 @@ func TestActivitySpikeStillFiresWhenWarmupSamplesBelowFloor(t *testing.T) {
 
 func TestReFiringUpdatesExistingFlagInPlace(t *testing.T) {
 	cfg := DefaultConfig()
-	cfg.PortScanThreshold = 3
-	cfg.PortScanWindow = time.Hour
+	cfg.CriticalPorts = []int{22}
+	cfg.CriticalPortThreshold = 3
+	cfg.CriticalPortWindow = time.Hour
 	d, fs := newTestDetector(t, cfg)
 
 	now := time.Now()
-	d.Observe(evt("203.0.113.9", 1, now))
-	d.Observe(evt("203.0.113.9", 2, now))
-	d.Observe(evt("203.0.113.9", 3, now)) // crosses the threshold
-	d.Observe(evt("203.0.113.9", 4, now.Add(time.Second)))
+	d.Observe(evt("203.0.113.9", 22, now))
+	d.Observe(evt("203.0.113.9", 22, now))
+	d.Observe(evt("203.0.113.9", 22, now)) // crosses the threshold
+	d.Observe(evt("203.0.113.9", 22, now.Add(time.Second)))
 
 	list := fs.List()
 	if len(list) != 1 {
@@ -324,101 +296,8 @@ func TestEvictsOldestSourceWhenOverCap(t *testing.T) {
 	}
 }
 
-func TestPortScanRespectsHostsDenylist(t *testing.T) {
-	cfg := DefaultConfig()
-	cfg.PortScanThreshold = 3
-	cfg.PortScanWindow = time.Minute
-	cfg.ActivitySpikeThreshold = 1000
-
-	seed := DefaultSettingsMap()
-	seed[DetectorPortScan] = Settings{
-		Enabled: true,
-		Scope:   Scope{Hosts: []string{"203.0.113.9"}, HostsMode: ListModeDeny},
-	}
-	d, fs := newTestDetectorWithSettings(t, cfg, seed)
-
-	now := time.Now()
-	for port := 1; port <= 5; port++ {
-		d.Observe(evt("203.0.113.9", port, now.Add(time.Duration(port)*time.Millisecond)))
-	}
-	if len(fs.List()) != 0 {
-		t.Fatalf("expected the denylisted source to never flag, got %+v", fs.List())
-	}
-
-	for port := 1; port <= 5; port++ {
-		d.Observe(evt("203.0.113.10", port, now.Add(time.Duration(port)*time.Millisecond)))
-	}
-	if len(fs.List()) != 1 {
-		t.Fatalf("expected a non-denylisted source to still flag, got %+v", fs.List())
-	}
-}
-
-func TestPortScanPortsScopeRestrictsCountedPortsOnly(t *testing.T) {
-	// Denylisting one port excludes it from the port-scan distinct-count,
-	// but the underlying event still counts toward activity-spike's
-	// total -- proving Ports/PortsMode narrows what port-scan counts,
-	// not which events are tracked at all (see Scope's doc comment).
-	cfg := DefaultConfig()
-	cfg.PortScanThreshold = 3
-	cfg.PortScanWindow = time.Minute
-	cfg.ActivitySpikeThreshold = 3
-	cfg.ActivitySpikeWindow = time.Minute
-	cfg.HostActivityWarmupSamples = 1000 // keep the baseline detector from also firing
-
-	seed := DefaultSettingsMap()
-	seed[DetectorPortScan] = Settings{
-		Enabled: true,
-		Scope:   Scope{Ports: []int{9999}, PortsMode: ListModeDeny},
-	}
-	d, fs := newTestDetectorWithSettings(t, cfg, seed)
-
-	now := time.Now()
-	for port := 1; port <= 3; port++ {
-		d.Observe(evt("203.0.113.9", 9999, now.Add(time.Duration(port)*time.Millisecond)))
-	}
-	if len(fs.List()) != 0 {
-		t.Fatalf("expected a denylisted port to never count toward the distinct-port total, got %+v", fs.List())
-	}
-}
-
-func TestPortScanAndActivitySpikeToggleIndependently(t *testing.T) {
-	cfg := DefaultConfig()
-	cfg.PortScanThreshold = 3
-	cfg.PortScanWindow = time.Minute
-	cfg.ActivitySpikeThreshold = 3
-	cfg.ActivitySpikeWindow = time.Minute
-	cfg.HostActivityWarmupSamples = 1
-
-	seed := DefaultSettingsMap()
-	seed[DetectorActivitySpike] = Settings{Enabled: false}
-	d, fs := newTestDetectorWithSettings(t, cfg, seed)
-
-	now := time.Now()
-	for port := 1; port <= 5; port++ {
-		d.Observe(evt("203.0.113.9", port, now.Add(time.Duration(port)*time.Millisecond)))
-	}
-
-	list := fs.List()
-	sawPortScan, sawActivitySpike := false, false
-	for _, f := range list {
-		switch f.Type {
-		case flags.TypePortScan:
-			sawPortScan = true
-		case flags.TypeActivitySpike:
-			sawActivitySpike = true
-		}
-	}
-	if !sawPortScan {
-		t.Error("expected port_scan to still fire while enabled")
-	}
-	if sawActivitySpike {
-		t.Error("expected activity_spike to never fire while disabled, even on the same shared window")
-	}
-}
-
 func TestEveryDetectorDisabledEntirelySuppressesItsFlagType(t *testing.T) {
 	nameToType := map[DetectorName]flags.Type{
-		DetectorPortScan:              flags.TypePortScan,
 		DetectorActivitySpike:         flags.TypeActivitySpike,
 		DetectorCriticalPort:          flags.TypeCriticalPort,
 		DetectorDistributedBruteForce: flags.TypeDistributedBruteForce,
@@ -482,33 +361,6 @@ func TestEveryDetectorDisabledEntirelySuppressesItsFlagType(t *testing.T) {
 	}
 }
 
-func TestPortScanConfidenceScalesWithOvershoot(t *testing.T) {
-	cfg := DefaultConfig()
-	cfg.PortScanThreshold = 5
-	cfg.PortScanWindow = time.Minute
-	cfg.ActivitySpikeThreshold = 1000
-
-	now := time.Now()
-
-	justOver, fs := newTestDetector(t, cfg)
-	for port := 1; port <= 5; port++ {
-		justOver.Observe(evt("203.0.113.9", port, now.Add(time.Duration(port)*time.Millisecond)))
-	}
-	list := fs.List()
-	if len(list) != 1 || list[0].Confidence == nil || *list[0].Confidence != 0 {
-		t.Fatalf("expected 0%% confidence exactly at threshold, got %+v", list)
-	}
-
-	wellOver, fs2 := newTestDetector(t, cfg)
-	for port := 1; port <= 15; port++ {
-		wellOver.Observe(evt("203.0.113.9", port, now.Add(time.Duration(port)*time.Millisecond)))
-	}
-	list2 := fs2.List()
-	if len(list2) != 1 || list2[0].Confidence == nil || *list2[0].Confidence != 100 {
-		t.Fatalf("expected 100%% confidence at the overshoot ceiling, got %+v", list2)
-	}
-}
-
 func TestCriticalPortConfidenceScalesWithOvershoot(t *testing.T) {
 	cfg := DefaultConfig()
 	cfg.CriticalPortThreshold = 5
@@ -544,30 +396,6 @@ func evtCountry(srcIP, country string, dstPort int, at time.Time) store.Event {
 	e := evt(srcIP, dstPort, at)
 	e.SrcCountry = country
 	return e
-}
-
-func TestPortScanEvidenceCapturesTouchedPorts(t *testing.T) {
-	cfg := DefaultConfig()
-	cfg.PortScanThreshold = 3
-	cfg.PortScanWindow = time.Minute
-	cfg.ActivitySpikeThreshold = 1000
-	d, fs := newTestDetector(t, cfg)
-
-	now := time.Now()
-	for port := 1; port <= 3; port++ {
-		d.Observe(evtCountry("203.0.113.9", "DE", port, now.Add(time.Duration(port)*time.Millisecond)))
-	}
-
-	list := fs.List()
-	if len(list) != 1 {
-		t.Fatalf("expected one flag, got %+v", list)
-	}
-	if list[0].Country != "DE" {
-		t.Errorf("expected Country to be threaded through from the event, got %q", list[0].Country)
-	}
-	if got := list[0].Evidence.Ports; len(got) != 3 || got[0] != 1 || got[2] != 3 {
-		t.Errorf("expected the evidence to list the touched ports sorted, got %v", got)
-	}
 }
 
 func TestCriticalPortCarriesCountry(t *testing.T) {

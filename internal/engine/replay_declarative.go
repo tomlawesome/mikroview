@@ -109,6 +109,14 @@ func (d *DeclarativeDefinition) Replay(corpus Corpus, candidate Params) (Result,
 	)
 
 	corpusWindow := corpus.Replay(func(e store.Event) {
+		// Scope gates replay identically to live Evaluate (declarative.go)
+		// -- added by #405 alongside Evaluate's own scope enforcement (see
+		// scope_match.go); Replay predates that change and this definition's
+		// receipt would otherwise overclaim by counting events live
+		// evaluation would never have seen at all.
+		if !scopeMatches(d.def.Scope, e) {
+			return
+		}
 		if !d.compiled.match(e, d.members) {
 			return
 		}

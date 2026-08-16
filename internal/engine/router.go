@@ -4,6 +4,7 @@ package engine
 
 import (
 	"fmt"
+	"time"
 
 	"github.com/tomlawesome/mikroview/internal/flags"
 )
@@ -32,6 +33,19 @@ type MatchlogWrite struct {
 type RoutedEmission struct {
 	Detection   *flags.Flag
 	Expectation *MatchlogWrite
+	// EventTime is the triggering store.Event's ReceivedAt, carried
+	// through from Emission.EventTime (added by #405 -- see that field's
+	// own doc comment) -- neither flags.Flag nor MatchlogWrite has
+	// anywhere to hold it (both leave their own timestamp fields to
+	// whatever store actually raises them: flags.Store.AddProvisional's
+	// own `now` parameter, matchlog's own Append), so a caller wiring
+	// OnRoutedEmission onto a real store needs it available here, not
+	// re-derived from wall-clock time.Now() -- which would silently
+	// diverge from the event that actually caused this emission under
+	// any real queueing delay, and would break every timestamp-based
+	// characterization pin outright when replayed against historical
+	// events (a test corpus, or Replay itself).
+	EventTime time.Time
 }
 
 // Route converts em, an Emission produced by def, into the shape def's
@@ -55,20 +69,21 @@ type RoutedEmission struct {
 // An expectation-intent definition's emission becomes a MatchlogWrite --
 // see its own doc comment for why that is not matchlog.Record itself.
 //
-// No production call site exists yet: nothing constructs a real
-// Definition/Emission pair (#404/#405/#406's job). Route is exercised
-// directly by its own tests, which is also where "both intents can
-// express the same emission" is actually proven -- see
-// TestRouteProducesSymmetricOutputForBothIntents.
+// #405 is this package's first production call site: DeclarativeDefinition.Evaluate
+// (declarative.go) calls Route on every threshold crossing and hands the
+// result to OnRoutedEmission, which main.go wires onto a real
+// flags.Store/matchlog.Store. Route is also exercised directly by its own
+// tests, which is where "both intents can express the same emission" is
+// proven -- see TestRouteProducesSymmetricOutputForBothIntents.
 func Route(def Definition, em Emission) (RoutedEmission, error) {
 	if em.DefinitionID != def.ID {
 		return RoutedEmission{}, fmt.Errorf("engine: emission is for definition %q, not %q", em.DefinitionID, def.ID)
 	}
 	switch def.Intent {
 	case IntentDetection:
-		return RoutedEmission{Detection: routeToFlag(em)}, nil
+		return RoutedEmission{Detection: routeToFlag(em), EventTime: em.EventTime}, nil
 	case IntentExpectation:
-		return RoutedEmission{Expectation: routeToMatchlog(def, em)}, nil
+		return RoutedEmission{Expectation: routeToMatchlog(def, em), EventTime: em.EventTime}, nil
 	default:
 		return RoutedEmission{}, fmt.Errorf("engine: definition %q has unknown intent %q", def.ID, def.Intent)
 	}
@@ -81,6 +96,7 @@ func routeToFlag(em Emission) *flags.Flag {
 		Detail:      em.Detail,
 		Confidence:  copyIntPtr(em.Confidence),
 		Evidence:    flags.Evidence{Ports: em.Ports, Hosts: em.Hosts},
+		Country:     em.Country,
 		Provisional: em.Provisional,
 	}
 }
