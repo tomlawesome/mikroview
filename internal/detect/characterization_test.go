@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/tomlawesome/mikroview/internal/flags"
-	"github.com/tomlawesome/mikroview/internal/store"
 )
 
 // This file holds two generations of characterization coverage.
@@ -259,72 +258,15 @@ func sortedStrings(in []string) []string {
 // 6. internal_recon
 // ---------------------------------------------------------------------------
 
-// TestCharacterizationInternalRecon_FieldsRefireClearRevive pins
-// internal_recon's boundary at DefaultConfig's real
-// 10-distinct-destinations/60-second threshold.
-func TestCharacterizationInternalRecon_FieldsRefireClearRevive(t *testing.T) {
-	cfg := DefaultConfig() // InternalReconThreshold=10, Window=60s
-	d, fs := newTestDetector(t, cfg)
-	src := "192.168.1.50"
-	t0 := time.Now()
-
-	for i := 0; i < 9; i++ {
-		d.Observe(store.Event{SrcIP: src, DstIP: lan3(i), DstPort: 445, ReceivedAt: t0.Add(time.Duration(i) * time.Second)})
-	}
-	if got := flagOfType(t, fs, flags.TypeInternalRecon); got != nil {
-		t.Fatalf("expected no flag at 9 distinct internal destinations, got %+v", got)
-	}
-
-	d.Observe(store.Event{SrcIP: src, DstIP: lan3(9), DstPort: 445, ReceivedAt: t0.Add(9 * time.Second)})
-	f := flagOfType(t, fs, flags.TypeInternalRecon)
-	if f == nil {
-		t.Fatal("expected a flag at exactly 10 distinct internal destinations")
-	}
-	if f.Target != src {
-		t.Errorf("Target = %q, want %q", f.Target, src)
-	}
-	if want := "10 distinct internal destinations in 1m0s"; f.Detail != want {
-		t.Errorf("Detail = %q, want %q", f.Detail, want)
-	}
-	if f.Confidence == nil || *f.Confidence != 0 {
-		t.Errorf("Confidence = %v, want 0", f.Confidence)
-	}
-	wantHosts := make([]string, 10)
-	for i := range wantHosts {
-		wantHosts[i] = lan3(i)
-	}
-	if fmt.Sprint(f.Evidence.Hosts) != fmt.Sprint(sortedStrings(wantHosts)) {
-		t.Errorf("Evidence.Hosts = %v, want %v", f.Evidence.Hosts, sortedStrings(wantHosts))
-	}
-
-	// internal_recon's own AddWithDetail call ignores its isNew return
-	// (see dest_spread.go -- no maybeCheckGroupReputation for this one),
-	// but re-fire/clear/revival still go through flags.Store the same as
-	// every other detector.
-	d.Observe(store.Event{SrcIP: src, DstIP: lan3(10), DstPort: 445, ReceivedAt: t0.Add(10 * time.Second)})
-	f2 := flagOfType(t, fs, flags.TypeInternalRecon)
-	if f2 == nil || f2.Count != 2 {
-		t.Fatalf("expected Count=2, got %+v", f2)
-	}
-	if f2.Confidence == nil || *f2.Confidence != 5 {
-		t.Errorf("Confidence after re-fire = %v, want 5 (overshootConfidence(11,10))", f2.Confidence)
-	}
-
-	if !fs.Clear(f2.ID, t0.Add(11*time.Second)) {
-		t.Fatal("expected Clear to succeed")
-	}
-	d.Observe(store.Event{SrcIP: src, DstIP: lan3(11), DstPort: 445, ReceivedAt: t0.Add(12 * time.Second)})
-	f3 := flagOfType(t, fs, flags.TypeInternalRecon)
-	if f3 == nil || f3.Cleared {
-		t.Fatalf("expected the flag to revive as active, got %+v", f3)
-	}
-	if f3.Count != 1 {
-		t.Errorf("Count after revival = %d, want 1", f3.Count)
-	}
-	if f3.Confidence == nil || *f3.Confidence != 10 {
-		t.Errorf("Confidence after revival = %v, want 10 (overshootConfidence(12,10))", f3.Confidence)
-	}
-}
+// TestCharacterizationInternalRecon_FieldsRefireClearRevive moved to
+// internal/engine/shipped_dest_spread_test.go's
+// TestShippedInternalRecon_FieldsRefireClearRevive (issue #405:
+// internal_recon is now a shipped programmatic definition evaluated by
+// internal/engine -- see shipped_dest_spread.go). Every pinned value
+// carried over unchanged: the 9/10 boundary at the real
+// 10-destinations/60-second defaults, Target, the byte-for-byte Detail
+// "10 distinct internal destinations in 1m0s", Confidence 0/5/10 across
+// boundary, re-fire and revival, and the exact sorted Evidence.Hosts.
 
 // ---------------------------------------------------------------------------
 // 7. rule_spike

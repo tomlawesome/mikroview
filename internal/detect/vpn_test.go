@@ -6,7 +6,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tomlawesome/mikroview/internal/flags"
 	"github.com/tomlawesome/mikroview/internal/store"
 )
 
@@ -145,54 +144,9 @@ func vpnTaggedEvt(srcIP, dstIP, iface string, at time.Time) store.Event {
 // TestShippedOutboundAnomalyVPNBoostsConfidenceAndNamesTheInterface
 // (issue #405).
 
-func TestInternalReconConfidenceHigherOverVPNInterfaceThanIdenticalLAN(t *testing.T) {
-	cfg := DefaultConfig()
-	cfg.InternalReconThreshold = 5
-	cfg.InternalReconWindow = time.Minute
-	cfg.PortScanThreshold = 1000
-	cfg.ActivitySpikeThreshold = 1000
-	cfg.VPNInterfaces = []string{"wireguard*"}
-	cfg.VPNConfidenceMultiplier = 2
-	d, fs := newTestDetector(t, cfg)
-
-	now := time.Now()
-	internals := []string{"192.168.1.2", "192.168.1.3", "192.168.1.4", "192.168.1.5", "192.168.1.6", "192.168.1.7"}
-
-	const lanIP, vpnIP = "192.168.1.70", "192.168.1.71"
-	for i, dst := range internals {
-		t := now.Add(time.Duration(i) * time.Second)
-		d.Observe(vpnTaggedEvt(lanIP, dst, "ether1", t))
-		d.Observe(vpnTaggedEvt(vpnIP, dst, "wireguard1", t))
-	}
-
-	var lanConf, vpnConf *int
-	for _, f := range fs.List() {
-		if f.Type != flags.TypeInternalRecon {
-			continue
-		}
-		switch f.Target {
-		case lanIP:
-			lanConf = f.Confidence
-		case vpnIP:
-			vpnConf = f.Confidence
-		}
-	}
-	if lanConf == nil || vpnConf == nil {
-		t.Fatalf("expected both sources to raise internal_recon, got %+v", fs.List())
-	}
-
-	wantLAN := overshootConfidence(len(internals), cfg.InternalReconThreshold)
-	wantVPN := d.vpnBoostConfidence(wantLAN, "wireguard1")
-	if *lanConf != wantLAN {
-		t.Errorf("LAN confidence = %d, want %d", *lanConf, wantLAN)
-	}
-	if *vpnConf != wantVPN {
-		t.Errorf("VPN confidence = %d, want %d", *vpnConf, wantVPN)
-	}
-	if *vpnConf <= *lanConf {
-		t.Fatalf("expected VPN-interface confidence (%d) to exceed identical LAN-interface confidence (%d)", *vpnConf, *lanConf)
-	}
-}
+// TestInternalReconConfidenceHigherOverVPNInterfaceThanIdenticalLAN
+// moved to internal/engine/shipped_dest_spread_test.go's
+// TestShippedInternalReconVPNBoostsConfidence (issue #405).
 
 // TestDestSpreadConfidenceIdenticalRegardlessOfInterfaceWhenVPNInterfacesUnset
 // moved to internal/engine/shipped_dest_spread_test.go's
