@@ -290,6 +290,7 @@ var shippedDetectorDisplayNames = map[string]string{
 	string(flags.TypeStaleRule):            "Stale rule",
 	string(flags.TypeKnownBadIP):           "Known bad IP",
 	"netclass":                             "Network class reinforcement",
+	"reputation":                           "Reputation enrichment",
 }
 
 // zeroDuration is time.Duration(0).String() ("0s") -- the default value
@@ -437,6 +438,19 @@ var shippedDetectors = []shippedDetector{
 	// netClassDefinition's own doc comment.
 	{id: "netclass", schema: NetClassParamSchema, kind: KindProgrammatic, params: func(ShippedDefaults) Params {
 		return Params{"torFloor": reputation.TorExitNodeFloor, "vpnFloor": netclassVPNFloor}
+	}},
+	// reputation, like netclass, has no flags.Type: it raises nothing and
+	// only enriches other definitions' episodes. See
+	// reputationDefinition's own doc comment for why it is a definition
+	// rather than a set of constants.
+	{id: "reputation", schema: ReputationParamSchema, kind: KindProgrammatic, params: func(ShippedDefaults) Params {
+		p := DefaultReputationPolicy()
+		return Params{
+			"lookupConcurrency":          p.Concurrency,
+			"lookupTimeout":              p.Timeout.String(),
+			"groupSampleSize":            p.GroupSampleSize,
+			"groupMinSignificantSamples": p.GroupMinSignificantSamples,
+		}
 	}},
 }
 

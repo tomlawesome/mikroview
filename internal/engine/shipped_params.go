@@ -296,3 +296,22 @@ var NetClassParamSchema = []ParamSchema{
 	{Name: "vpnFloor", Type: ParamTypeInt, Min: floatBound(0), Max: floatBound(100), Required: true,
 		Description: "Confidence floor a commercial-VPN-exit match applies to an active source-keyed flag for the same address."},
 }
+
+// ReputationParamSchema expresses the four constants internal/detect's
+// reputation.go hard-coded -- reputationLookupConcurrency,
+// reputationLookupTimeout, reputationGroupSampleSize and
+// reputationGroupMinSignificantSamples -- plus the one place they were
+// duplicated: main.go passed a literal 8 into the engine's sinks with a
+// comment saying it was "kept in sync by hand" with internal/detect's
+// unexported constant until that pool was deleted. This schema is what
+// deletes the hand-syncing along with it.
+var ReputationParamSchema = []ParamSchema{
+	{Name: "lookupConcurrency", Type: ParamTypeInt, Min: floatBound(countParamMin), Required: true,
+		Description: "Maximum reputation lookups in flight at once, shared by the single-address and group-sampling paths. A saturated pool skips that episode's lookup rather than queuing."},
+	{Name: "lookupTimeout", Type: ParamTypeDuration, Min: durationBound(time.Second), Required: true,
+		Description: "Bound on one lookup's context -- headroom above the reputation client's own HTTP timeout, not the primary bound."},
+	{Name: "groupSampleSize", Type: ParamTypeInt, Min: floatBound(countParamMin), Required: true,
+		Description: "How many of a group episode's distinct addresses are checked. Kept at or below lookupConcurrency, so a group check starting from an idle pool can reach its own cap."},
+	{Name: "groupMinSignificantSamples", Type: ParamTypeInt, Min: floatBound(countParamMin), Required: true,
+		Description: "How many sampled addresses must return a real score before a group aggregate is trusted at all. Below this, no floor is applied either way."},
+}

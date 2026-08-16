@@ -250,7 +250,7 @@ func TestShippedLowSlowScanTriggersReputationLookup(t *testing.T) {
 	fs := newTestFlagsStore(t)
 	fake := newFakeReputation()
 	defer close(fake.release)
-	d := newShippedLowSlowScanDefinition(t, ReputationSink(fs, fake, 8), lowSlowTestParams(), Scope{}, true)
+	d := newShippedLowSlowScanDefinition(t, ReputationSink(fs, fake, DefaultReputationPolicy()), lowSlowTestParams(), Scope{}, true)
 
 	t0 := time.Now()
 	feedPacedScan(d, "203.0.113.9", 8, 5*time.Minute, store.ActionDrop, t0)
