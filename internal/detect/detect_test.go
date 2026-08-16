@@ -120,41 +120,15 @@ func evtState(srcIP string, dstPort int, connState string, at time.Time) store.E
 // TestShippedCriticalPortIgnoresNonCriticalPorts (issue #405). Every
 // pinned value carried over unchanged.
 
-// TestEvictsOldestSourceWhenOverCap used to drive this through
-// d.perSource, then (once off_hours moved) through d.lowSlowWindows.
-// Both are gone: activity_spike, off_hours and low_slow_scan are all
-// shipped programmatic definitions on internal/engine now (issue #405).
-// evictOldestByActivity itself is untouched -- it stayed generic over
-// activeWindow specifically so this kind of retargeting would be
-// possible -- so this test is retargeted once more onto d.destWindows,
-// dest_spread's own per-source map. That map is only populated for a
-// LAN source with a destination (see Observe), so the fixture IPs are
-// private here where the previous generations' were public; the
-// eviction assertion itself carries over exactly.
-func TestEvictsOldestSourceWhenOverCap(t *testing.T) {
-	orig := maxTrackedSources
-	maxTrackedSources = 2
-	defer func() { maxTrackedSources = orig }()
-
-	cfg := DefaultConfig()
-	d, _ := newTestDetector(t, cfg)
-
-	now := time.Now()
-	d.Observe(evt("192.168.1.11", 1, now))
-	d.Observe(evt("192.168.1.12", 1, now.Add(time.Second)))
-	if len(d.destWindows) != 2 {
-		t.Fatalf("expected 2 tracked sources, got %d", len(d.destWindows))
-	}
-
-	// third distinct source should evict the least-recently-active one (192.168.1.11)
-	d.Observe(evt("192.168.1.13", 1, now.Add(2*time.Second)))
-	if len(d.destWindows) != 2 {
-		t.Fatalf("expected eviction to hold the tracked-source count at the cap, got %d", len(d.destWindows))
-	}
-	if _, ok := d.destWindows["192.168.1.11"]; ok {
-		t.Error("expected the least-recently-active source (192.168.1.11) to be evicted")
-	}
-}
+// TestEvictsOldestSourceWhenOverCap is gone with the thing it tested.
+// It drove d.perSource, then d.lowSlowWindows, then d.destWindows as
+// each detector moved; internal/detect now keeps no per-source windowed
+// state at all (issue #405), so evictOldestByActivity and the
+// activeWindow interface went with the last map. The same
+// least-recently-active eviction, over the same internal/evict batch-shed
+// policy, is pinned on the chassis primitive that owns it now:
+// internal/engine/keyed_test.go's
+// TestKeyedEvictsLeastRecentlyActiveOnceOverCap.
 
 func TestEveryDetectorDisabledEntirelySuppressesItsFlagType(t *testing.T) {
 	nameToType := map[DetectorName]flags.Type{
