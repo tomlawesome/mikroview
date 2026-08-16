@@ -18,6 +18,50 @@ rewritten.
 
 ### Added
 
+- **One definitions API** (#407): `GET /api/definitions` and its
+  siblings, the operator-facing half of the evaluation-engine
+  unification (`docs/decisions/evaluation-engine.md`). A shipped
+  detector and a watchlist entry are the same thing to the engine -- a
+  definition -- and they are now the same thing over HTTP: one list,
+  with each definition's enabled state, scope, tuned params, declared
+  param schema, provenance, suppressions, replayability, and (for an
+  expectation) its coverage answer.
+
+  What is new rather than merely moved:
+
+  - **Param overrides, validated against each definition's own declared
+    schema.** A threshold outside its bounds is a 400, not a stored zero
+    read back later as though it were configured. `POST
+    /api/definitions/{id}/reset` discards every override in one call;
+    editing a shipped definition keeps it shipped, with the response
+    saying exactly how far from stock it now is.
+  - **Replay over the API** (`POST /api/definitions/{id}/replay`): "what
+    would this have done?", answered from the stored event corpus with
+    candidate params, returning the emission count, a bounded evidence
+    sample, and -- mandatorily -- the window it actually covered. A
+    definition that cannot answer honestly (an inverted expectation,
+    whose judgement comes from an observation period measured in days
+    against a corpus measured in minutes) declines with its reason
+    instead of reporting a misleading zero.
+  - **`GET /api/definitions/schema`**, so the UI renders tuning controls
+    from the server's own declaration rather than a second copy of every
+    definition's knobs written in TypeScript.
+  - **The five definitions that never had a toggle** --
+    `unexpected_mail_sender`, `stale_rule`, `known_bad_ip`, `netclass`
+    and `reputation` -- are listed, switchable and scopable for the
+    first time. They ran as always-on passes with no name and no switch
+    before v0.3.0's engine port gave them the same envelope as everything
+    else; the Detectors page now shows all seventeen.
+
+- **Definition changes take effect on the very next ingested event
+  again** (#407). Toggling a detector became restart-effective as each
+  one was ported onto the engine during v0.3.0 (the port was documented
+  as such at the time, not hidden), because a definition reads its
+  enabled/scope when it is built and that happened once at startup. An
+  edit now re-registers the affected definition immediately -- and only
+  the affected one, so an unrelated save no longer resets any other
+  definition's half-full counting window or warming baseline.
+
 - **The RouterOS push schema carries more of each rule** (#408). Pushed
   filter rules now carry `connectionState`, `inInterface` and
   `outInterface`; pushed NAT rules carry the full rule anatomy
@@ -344,6 +388,45 @@ rewritten.
 ## [0.2.0] - 2026-08-14
 
 ### Removed
+
+- **`/api/detectors` and `/api/watchlist/entries`** (#407), replaced
+  wholesale by one definitions surface (see Added below). Every route on
+  both is gone -- `GET /api/detectors`, `PUT /api/detectors/{name}`,
+  `GET|POST /api/watchlist/entries`, `PUT|DELETE
+  /api/watchlist/entries/{id}`, and the promote/observing actions --
+  with no alias, no dual reading, and no handler kept alive to return a
+  friendlier error, per `AGENTS.md`. A stale caller gets a plain 404.
+
+  The replacements, one for one: list/read a detector or an entry ->
+  `GET /api/definitions` (and `GET /api/definitions/{id}`); toggle or
+  scope a detector -> `PUT /api/definitions/{id}`; create/update/delete
+  an entry -> `POST /api/definitions`, `PUT /api/definitions/{id}`,
+  `DELETE /api/definitions/{id}`; promote/observing -> `POST
+  /api/definitions/{id}/promote` and `.../observing`.
+
+  Nothing is lost in the move, including on upgrade: every existing
+  watchlist entry, every recorded observation and every promoted
+  destination is carried into the definitions document on the first boot
+  after upgrading, and the match log is untouched. The watchlist
+  document is now a migration source only -- still read, never written,
+  still carried in `-backup` -- and can be removed after one clean
+  upgrade.
+
+- **`GET /api/watchlist/matches`, renamed to `GET /api/matches`** (#407).
+  Same query parameters (`mac`/`ip`/`since`/`until`/`limit`), same
+  response, same access (any signed-in user, and reachable with a
+  read-only API token). It is a query over the match log rather than
+  anything to do with entries, and leaving one lone route behind on a
+  prefix whose noun had been retired is the kind of half-removal
+  `AGENTS.md` is about. Update any external correlation script's URL;
+  nothing else about it changed.
+
+- **`internal/watchlist.Store`** (#407) -- the second persisted document
+  holding the same entries the definitions document already held. Not an
+  operator-facing change beyond the routes above, but it is why the
+  entry set now has exactly one home: an entry's enabled flag, scope and
+  params lived on its definition while the entry itself lived somewhere
+  else, and nothing structurally stopped the two disagreeing.
 
 - **`spamhaus_edrop` as a blocklist source** -- Spamhaus merged EDROP into
   DROP on 2024-04-10, and the endpoint now returns only a "this list has
