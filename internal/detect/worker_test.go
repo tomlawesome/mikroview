@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/tomlawesome/mikroview/internal/blocklist"
 	"github.com/tomlawesome/mikroview/internal/flags"
 	"github.com/tomlawesome/mikroview/internal/store"
 )
@@ -39,28 +40,32 @@ func TestEnqueueNeverBlocksOnFullQueue(t *testing.T) {
 // proves the non-blocking send; this closes the loop by confirming a
 // detector that should fire, does, once Run has had a chance to catch
 // up. It has been retargeted with each port (critical_port ->
-// repeated_drops -> internal_recon) and lands here on mail_sender, the
-// one always-on detector internal/detect still evaluates (issue #405).
-// Nothing about mail_sender's own behaviour is under test: it is picked
-// because it fires deterministically off a single event, which is all
-// this test needs from whichever detector it borrows.
+// repeated_drops -> internal_recon -> mail_sender) and lands here on
+// known_bad_ip, one of the two reinforcement passes internal/detect
+// still evaluates (issue #405). Nothing about known_bad_ip's own
+// behaviour is under test: it is picked because it fires
+// deterministically off a single event, which is all this test needs
+// from whichever detector it borrows.
 func TestRunProcessesEnqueuedEvents(t *testing.T) {
 	d, fs := newTestDetector(t, DefaultConfig())
+	bl := newFakeKnownBadIPs()
+	bl.setMatch("203.0.113.9", blocklist.MatchResult{Label: "Spamhaus DROP", Range: "203.0.113.0/24"})
+	d.WithKnownBadIPs(bl)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go d.Run(ctx)
 
-	d.Enqueue(store.Event{SrcIP: "192.168.1.50", DstIP: "203.0.113.7", DstPort: 25, ReceivedAt: time.Now()})
+	d.Enqueue(store.Event{SrcIP: "203.0.113.9", DstIP: "192.168.1.1", DstPort: 22, ReceivedAt: time.Now()})
 
 	deadline := time.After(2 * time.Second)
 	for {
-		if list := fs.List(); len(list) == 1 && list[0].Type == flags.TypeUnexpectedMailSender {
+		if list := fs.List(); len(list) == 1 && list[0].Type == flags.TypeKnownBadIP {
 			return
 		}
 		select {
 		case <-deadline:
-			t.Fatalf("Run never processed the enqueued event into an unexpected_mail_sender flag; got %+v", fs.List())
+			t.Fatalf("Run never processed the enqueued event into a known_bad_ip flag; got %+v", fs.List())
 		case <-time.After(5 * time.Millisecond):
 		}
 	}

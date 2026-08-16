@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/tomlawesome/mikroview/internal/detect"
+	"github.com/tomlawesome/mikroview/internal/flags"
 	"github.com/tomlawesome/mikroview/internal/persist"
 	"github.com/tomlawesome/mikroview/internal/watchlist"
 )
@@ -197,7 +198,17 @@ func convertToDefinitions(settingsDoc map[detect.DetectorName]detect.Settings, e
 // doc comment): port_scan is the first to flip to KindDeclarative, built
 // on shipped_declarative.go's buildPortScanDefinition.
 type shippedDetector struct {
-	name   detect.DetectorName
+	// id is the definition id this catalogue entry becomes -- and, for a
+	// detection-intent definition, therefore its flags.Type too (see
+	// routeToFlag). A plain string rather than detect.DetectorName
+	// because the catalogue is no longer a copy of that enum: #405's
+	// final block adds shipped definitions internal/detect never had a
+	// DetectorName for at all (mail_sender, known_bad_ip, netclass,
+	// stale_rule), because they were always-on passes rather than
+	// settings-toggleable detectors there. The twelve that do have a
+	// DetectorName still read their enabled/scope from the migration
+	// source document by exactly that string.
+	id     string
 	schema []ParamSchema
 	params func(cfg detect.Config) Params
 	// kind is the migrated Definition's Kind -- KindProgrammatic for
@@ -220,19 +231,22 @@ type shippedDetector struct {
 // (e.g. "low_slow_scan") are machine keys, not display text, mirroring
 // why Definition.ID is never the display name (see that field's own doc
 // comment).
-var shippedDetectorDisplayNames = map[detect.DetectorName]string{
-	detect.DetectorPortScan:              "Port scan",
-	detect.DetectorActivitySpike:         "Activity spike",
-	detect.DetectorCriticalPort:          "Critical port",
-	detect.DetectorGlobalSpike:           "Global spike",
-	detect.DetectorDistributedBruteForce: "Distributed brute force",
-	detect.DetectorOutboundAnomaly:       "Outbound anomaly",
-	detect.DetectorInternalRecon:         "Internal recon",
-	detect.DetectorRuleSpike:             "Rule spike",
-	detect.DetectorRepeatedDrops:         "Repeated drops",
-	detect.DetectorLowSlowScan:           "Low & slow scan",
-	detect.DetectorOffHoursActivity:      "Off-hours activity",
-	detect.DetectorDeviceSilence:         "Device silence",
+var shippedDetectorDisplayNames = map[string]string{
+	string(detect.DetectorPortScan):              "Port scan",
+	string(detect.DetectorActivitySpike):         "Activity spike",
+	string(detect.DetectorCriticalPort):          "Critical port",
+	string(detect.DetectorGlobalSpike):           "Global spike",
+	string(detect.DetectorDistributedBruteForce): "Distributed brute force",
+	string(detect.DetectorOutboundAnomaly):       "Outbound anomaly",
+	string(detect.DetectorInternalRecon):         "Internal recon",
+	string(detect.DetectorRuleSpike):             "Rule spike",
+	string(detect.DetectorRepeatedDrops):         "Repeated drops",
+	string(detect.DetectorLowSlowScan):           "Low & slow scan",
+	string(detect.DetectorOffHoursActivity):      "Off-hours activity",
+	string(detect.DetectorDeviceSilence):         "Device silence",
+
+	// The shipped definitions with no DetectorName -- see shippedDetectors.
+	string(flags.TypeUnexpectedMailSender): "Unexpected mail sender",
 }
 
 // zeroDuration is time.Duration(0).String() ("0s") -- the default value
@@ -252,10 +266,10 @@ var shippedDetectors = []shippedDetector{
 	// shipped DeclarativeDefinition -- see shipped_declarative.go's
 	// buildPortScanDefinition. Every entry below still marked
 	// KindProgrammatic is one #405 has not ported yet.
-	{name: detect.DetectorPortScan, schema: PortScanParamSchema, kind: KindDeclarative, params: func(c detect.Config) Params {
+	{id: string(detect.DetectorPortScan), schema: PortScanParamSchema, kind: KindDeclarative, params: func(c detect.Config) Params {
 		return Params{"threshold": c.PortScanThreshold, "window": c.PortScanWindow.String()}
 	}},
-	{name: detect.DetectorActivitySpike, schema: ActivitySpikeParamSchema, kind: KindProgrammatic, params: func(c detect.Config) Params {
+	{id: string(detect.DetectorActivitySpike), schema: ActivitySpikeParamSchema, kind: KindProgrammatic, params: func(c detect.Config) Params {
 		return Params{
 			"threshold":               c.ActivitySpikeThreshold,
 			"window":                  c.ActivitySpikeWindow.String(),
@@ -270,10 +284,10 @@ var shippedDetectors = []shippedDetector{
 	// critical_port (issue #405): threshold-over-window keyed per source,
 	// ported onto a shipped DeclarativeDefinition -- see
 	// shipped_declarative.go's buildCriticalPortDefinition.
-	{name: detect.DetectorCriticalPort, schema: CriticalPortParamSchema, kind: KindDeclarative, params: func(c detect.Config) Params {
+	{id: string(detect.DetectorCriticalPort), schema: CriticalPortParamSchema, kind: KindDeclarative, params: func(c detect.Config) Params {
 		return Params{"ports": c.CriticalPorts, "threshold": c.CriticalPortThreshold, "window": c.CriticalPortWindow.String()}
 	}},
-	{name: detect.DetectorGlobalSpike, schema: GlobalSpikeParamSchema, kind: KindProgrammatic, params: func(c detect.Config) Params {
+	{id: string(detect.DetectorGlobalSpike), schema: GlobalSpikeParamSchema, kind: KindProgrammatic, params: func(c detect.Config) Params {
 		return Params{
 			"multiplier":            c.GlobalSpikeMultiplier,
 			"minEPS":                c.GlobalSpikeMinEPS,
@@ -288,10 +302,10 @@ var shippedDetectors = []shippedDetector{
 	// buildDistributedBruteForceDefinition. Seeded with the same
 	// CriticalPorts list critical_port gets, which is what internal/detect
 	// shared between the two.
-	{name: detect.DetectorDistributedBruteForce, schema: DistributedBruteForceParamSchema, kind: KindDeclarative, params: func(c detect.Config) Params {
+	{id: string(detect.DetectorDistributedBruteForce), schema: DistributedBruteForceParamSchema, kind: KindDeclarative, params: func(c detect.Config) Params {
 		return Params{"ports": c.CriticalPorts, "threshold": c.DistributedBruteForceThreshold, "window": c.DistributedBruteForceWindow.String()}
 	}},
-	{name: detect.DetectorOutboundAnomaly, schema: OutboundAnomalyParamSchema, kind: KindProgrammatic, params: func(c detect.Config) Params {
+	{id: string(detect.DetectorOutboundAnomaly), schema: OutboundAnomalyParamSchema, kind: KindProgrammatic, params: func(c detect.Config) Params {
 		return Params{
 			"threshold":               c.OutboundAnomalyThreshold,
 			"window":                  c.OutboundAnomalyWindow.String(),
@@ -299,7 +313,7 @@ var shippedDetectors = []shippedDetector{
 			"vpnConfidenceMultiplier": c.VPNConfidenceMultiplier,
 		}
 	}},
-	{name: detect.DetectorInternalRecon, schema: InternalReconParamSchema, kind: KindProgrammatic, params: func(c detect.Config) Params {
+	{id: string(detect.DetectorInternalRecon), schema: InternalReconParamSchema, kind: KindProgrammatic, params: func(c detect.Config) Params {
 		return Params{
 			"threshold":               c.InternalReconThreshold,
 			"window":                  c.InternalReconWindow.String(),
@@ -307,7 +321,7 @@ var shippedDetectors = []shippedDetector{
 			"vpnConfidenceMultiplier": c.VPNConfidenceMultiplier,
 		}
 	}},
-	{name: detect.DetectorRuleSpike, schema: RuleSpikeParamSchema, kind: KindProgrammatic, params: func(c detect.Config) Params {
+	{id: string(detect.DetectorRuleSpike), schema: RuleSpikeParamSchema, kind: KindProgrammatic, params: func(c detect.Config) Params {
 		return Params{
 			"multiplier":            c.RuleSpikeMultiplier,
 			"minRate":               c.RuleSpikeMinRate,
@@ -321,10 +335,10 @@ var shippedDetectors = []shippedDetector{
 	// (source, destination port), ported onto a shipped
 	// DeclarativeDefinition -- see shipped_declarative.go's
 	// buildRepeatedDropsDefinition.
-	{name: detect.DetectorRepeatedDrops, schema: RepeatedDropsParamSchema, kind: KindDeclarative, params: func(c detect.Config) Params {
+	{id: string(detect.DetectorRepeatedDrops), schema: RepeatedDropsParamSchema, kind: KindDeclarative, params: func(c detect.Config) Params {
 		return Params{"threshold": c.RepeatedDropsThreshold, "window": c.RepeatedDropsWindow.String()}
 	}},
-	{name: detect.DetectorLowSlowScan, schema: LowSlowScanParamSchema, kind: KindProgrammatic, params: func(c detect.Config) Params {
+	{id: string(detect.DetectorLowSlowScan), schema: LowSlowScanParamSchema, kind: KindProgrammatic, params: func(c detect.Config) Params {
 		return Params{
 			"window":             c.LowSlowScanWindow.String(),
 			"portThreshold":      c.LowSlowScanPortThreshold,
@@ -335,7 +349,7 @@ var shippedDetectors = []shippedDetector{
 			"updateCadence":      "perEvent",
 		}
 	}},
-	{name: detect.DetectorOffHoursActivity, schema: OffHoursActivityParamSchema, kind: KindProgrammatic, params: func(c detect.Config) Params {
+	{id: string(detect.DetectorOffHoursActivity), schema: OffHoursActivityParamSchema, kind: KindProgrammatic, params: func(c detect.Config) Params {
 		return Params{
 			"startHour":     c.OffHoursStartHour,
 			"endHour":       c.OffHoursEndHour,
@@ -344,8 +358,26 @@ var shippedDetectors = []shippedDetector{
 			"updateCadence": "perEvent",
 		}
 	}},
-	{name: detect.DetectorDeviceSilence, schema: DeviceSilenceParamSchema, kind: KindProgrammatic, params: func(c detect.Config) Params {
+	{id: string(detect.DetectorDeviceSilence), schema: DeviceSilenceParamSchema, kind: KindProgrammatic, params: func(c detect.Config) Params {
 		return Params{"staleAfter": c.DeviceStaleAfter.String()}
+	}},
+
+	// Below this line: shipped definitions internal/detect had no
+	// DetectorName for, because it ran them as always-on passes rather
+	// than settings-toggleable detectors (issue #405's final block). Their
+	// params take no argument from detect.Config -- there was nothing in
+	// it for them -- and are seeded at exactly the values internal/detect
+	// hard-coded, so the port changes no behaviour. See
+	// shipped_params.go's own note on why they get an envelope at all.
+	//
+	// Each id is also its flags.Type (routeToFlag keys on the definition
+	// id), which is why these read as flag names rather than as detector
+	// names: "unexpected_mail_sender", not "mail_sender".
+	{id: string(flags.TypeUnexpectedMailSender), schema: UnexpectedMailSenderParamSchema, kind: KindProgrammatic, params: func(detect.Config) Params {
+		return Params{
+			"ports":      []int{25, 465, 587},
+			"trustedTag": []string{"trusted-mail-sender"},
+		}
 	}},
 }
 
@@ -379,7 +411,7 @@ func convertDetectScope(s detect.Scope) Scope {
 // TestMigrateDefinitionsUnrecognizedDetectorNameIsPreservedUnavailable.
 func convertDetectSettings(settingsDoc map[detect.DetectorName]detect.Settings, cfg detect.Config, out map[string]Definition) error {
 	for _, sd := range shippedDetectors {
-		settings, ok := settingsDoc[sd.name]
+		settings, ok := settingsDoc[detect.DetectorName(sd.id)]
 		if !ok {
 			// Matches detect.DefaultSettingsMap()'s own default: enabled,
 			// unscoped.
@@ -387,12 +419,12 @@ func convertDetectSettings(settingsDoc map[detect.DetectorName]detect.Settings, 
 		}
 		params, err := ValidateParams(sd.schema, sd.params(cfg))
 		if err != nil {
-			return fmt.Errorf("shipped detector %q: building default params: %w", sd.name, err)
+			return fmt.Errorf("shipped detector %q: building default params: %w", sd.id, err)
 		}
-		out[string(sd.name)] = Definition{
-			ID:          string(sd.name),
-			Name:        shippedDetectorDisplayNames[sd.name],
-			Description: fmt.Sprintf("Migrated from internal/detect's %q detector settings (issue #404).", sd.name),
+		out[sd.id] = Definition{
+			ID:          sd.id,
+			Name:        shippedDetectorDisplayNames[sd.id],
+			Description: fmt.Sprintf("Migrated from internal/detect's %q detector settings (issue #404).", sd.id),
 			Intent:      IntentDetection,
 			Kind:        sd.kind,
 			Enabled:     settings.Enabled,
@@ -664,7 +696,7 @@ func SeedShippedDefinitions(s *DefinitionsStore, settingsDoc map[detect.Detector
 		return fmt.Errorf("engine: seeding shipped definitions: %w", err)
 	}
 	for _, sd := range shippedDetectors {
-		id := string(sd.name)
+		id := sd.id
 		def, ok := defs[id]
 		if !ok {
 			continue

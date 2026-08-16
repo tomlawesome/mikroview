@@ -221,3 +221,29 @@ var DeviceSilenceParamSchema = []ParamSchema{
 	{Name: "staleAfter", Type: ParamTypeDuration, Min: durationBound(0), Required: true,
 		Description: "How long a configured device's LastSeen may go without updating before this fires. Zero disables the detector."},
 }
+
+// --- schemas for the shipped definitions internal/detect had no
+// DetectorName for -----------------------------------------------------
+//
+// The four below (plus reputation's, see ReputationParamSchema) are new
+// with #405's final block. internal/detect ran each of them as an
+// always-on pass rather than a settings-toggleable detector -- there was
+// no DetectorName, no Settings entry and no scope for any of them (see
+// e.g. observeMailSender's and observeKnownBadIP's own doc comments on
+// why). That was never a statement that they should be untunable; it was
+// a consequence of internal/detect's settings store being a fixed
+// twelve-entry enum. On the chassis every definition wears the same
+// envelope, so these get one too, and the constants each of them hard-
+// coded in Go become params at exactly the values they were compiled
+// with -- which is what makes the port a no-behaviour-change move rather
+// than a retuning.
+
+// UnexpectedMailSenderParamSchema expresses internal/detect's mailPorts
+// and tagTrustedMailSender (mail_sender.go), both package constants
+// there.
+var UnexpectedMailSenderParamSchema = []ParamSchema{
+	{Name: "ports", Type: ParamTypePortList, Required: true,
+		Description: "Destination ports treated as outbound SMTP -- the unencrypted, implicit-TLS and STARTTLS submission ports."},
+	{Name: "trustedTag", Type: ParamTypeStringList, Max: floatBound(1),
+		Description: "Entity tag marking a host as a known, legitimate outbound mail sender; a host carrying it is never flagged."},
+}
