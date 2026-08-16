@@ -311,7 +311,11 @@ var shippedDetectors = []shippedDetector{
 			"baselineFloorDuration": zeroDuration,
 		}
 	}},
-	{name: detect.DetectorRepeatedDrops, schema: RepeatedDropsParamSchema, kind: KindProgrammatic, params: func(c detect.Config) Params {
+	// repeated_drops (issue #405): threshold-over-window keyed per
+	// (source, destination port), ported onto a shipped
+	// DeclarativeDefinition -- see shipped_declarative.go's
+	// buildRepeatedDropsDefinition.
+	{name: detect.DetectorRepeatedDrops, schema: RepeatedDropsParamSchema, kind: KindDeclarative, params: func(c detect.Config) Params {
 		return Params{"threshold": c.RepeatedDropsThreshold, "window": c.RepeatedDropsWindow.String()}
 	}},
 	{name: detect.DetectorLowSlowScan, schema: LowSlowScanParamSchema, kind: KindProgrammatic, params: func(c detect.Config) Params {

@@ -46,6 +46,9 @@ type RoutedEmission struct {
 	// characterization pin outright when replayed against historical
 	// events (a test corpus, or Replay itself).
 	EventTime time.Time
+	// SourceIP carries Emission.SourceIP through -- see that field's own
+	// doc comment for why a sink cannot just use Detection.Target.
+	SourceIP string
 }
 
 // Route converts em, an Emission produced by def, into the shape def's
@@ -81,21 +84,25 @@ func Route(def Definition, em Emission) (RoutedEmission, error) {
 	}
 	switch def.Intent {
 	case IntentDetection:
-		return RoutedEmission{Detection: routeToFlag(em), EventTime: em.EventTime}, nil
+		return RoutedEmission{Detection: routeToFlag(em), EventTime: em.EventTime, SourceIP: em.SourceIP}, nil
 	case IntentExpectation:
-		return RoutedEmission{Expectation: routeToMatchlog(def, em), EventTime: em.EventTime}, nil
+		return RoutedEmission{Expectation: routeToMatchlog(def, em), EventTime: em.EventTime, SourceIP: em.SourceIP}, nil
 	default:
 		return RoutedEmission{}, fmt.Errorf("engine: definition %q has unknown intent %q", def.ID, def.Intent)
 	}
 }
 
 func routeToFlag(em Emission) *flags.Flag {
+	ev := flags.Evidence{Ports: em.Ports, Hosts: em.Hosts}
+	if em.NAT != nil {
+		ev.NAT = &flags.NATInfo{IP: em.NAT.IP, Port: em.NAT.Port, Raw: em.NAT.Raw}
+	}
 	return &flags.Flag{
 		Type:        flags.Type(em.DefinitionID),
 		Target:      em.Target,
 		Detail:      em.Detail,
 		Confidence:  copyIntPtr(em.Confidence),
-		Evidence:    flags.Evidence{Ports: em.Ports, Hosts: em.Hosts},
+		Evidence:    ev,
 		Country:     em.Country,
 		Provisional: em.Provisional,
 	}

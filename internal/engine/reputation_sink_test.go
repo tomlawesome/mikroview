@@ -281,3 +281,51 @@ func TestReputationSinkWithNilClientIsPlainFlagsSink(t *testing.T) {
 		t.Fatal("expected the flag to be raised with no reputation client configured")
 	}
 }
+
+// TestReputationSinkLooksUpTheSourceNotTheCompositeTarget is
+// internal/detect/reputation_test.go's TestRepeatedDropsAppliesReputationFloor,
+// moved -- and the reason RoutedEmission carries SourceIP at all.
+// repeated_drops' flag target is "<source> -> port <N>", which is not an
+// address; without the separate source field the sink would parse the
+// composite, fail, and silently skip a lookup internal/detect has always
+// performed (its maybeCheckReputation took target and ip as two
+// parameters for exactly this case).
+func TestReputationSinkLooksUpTheSourceNotTheCompositeTarget(t *testing.T) {
+	fs := newTestFlagsStore(t)
+	fake := newFakeReputation()
+	fake.setScore("198.51.100.4", 70)
+	dd := newShippedRepeatedDropsDefinition(t, fs, 3, 15*time.Minute, Scope{})
+	dd.OnRoutedEmission = ReputationSink(fs, fake, 8)
+
+	now := time.Now()
+	for i := 0; i < 3; i++ {
+		dd.Evaluate(rdEvt("198.51.100.4", "192.168.1.1", 8080, now.Add(time.Duration(i)*time.Minute)))
+	}
+
+	if ip := repExpectStarted(t, fake.started); ip != "198.51.100.4" {
+		t.Fatalf("expected a lookup for the source address, got %q", ip)
+	}
+	close(fake.release)
+	repWaitForConfidence(t, fs, "198.51.100.4 -> port 8080", 70)
+}
+
+// TestReputationSinkSkippedForAnInternalSourceBehindACompositeTarget is
+// internal/detect/reputation_test.go's TestReputationSkippedForInternalSource,
+// moved: the isPublic gate applies to the source address, not to the
+// composite target string (which never parses as an address either way,
+// so a test driving it through the target alone would pass vacuously).
+func TestReputationSinkSkippedForAnInternalSourceBehindACompositeTarget(t *testing.T) {
+	fs := newTestFlagsStore(t)
+	fake := newFakeReputation()
+	dd := newShippedRepeatedDropsDefinition(t, fs, 3, 15*time.Minute, Scope{})
+	dd.OnRoutedEmission = ReputationSink(fs, fake, 8)
+
+	now := time.Now()
+	for i := 0; i < 3; i++ {
+		dd.Evaluate(rdEvt("192.168.1.50", "192.168.1.1", 8080, now.Add(time.Duration(i)*time.Minute)))
+	}
+	if rdFlagOfType(fs) == nil {
+		t.Fatal("expected the definition to have fired for the LAN source (otherwise this test is vacuous)")
+	}
+	repExpectNoneStarted(t, fake.started)
+}

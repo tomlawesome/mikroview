@@ -1195,7 +1195,12 @@ flags:
   misconfigured port-forward or firewall rule — the real client keeps
   retrying a port that isn't actually open the way you think — rather
   than necessarily an attack, so treat it as "worth a look," not
-  "critical."
+  "critical." The count is keyed on source *and port only*, never on the
+  destination address, so the same source retrying one port across
+  several internal hosts is one incident. The alert therefore names only
+  the port, and lists every internal destination that was actually
+  attempted as evidence, rather than naming whichever host happened to
+  receive the attempt that crossed the threshold.
 - **Low-and-slow port scan** — a scan deliberately paced to stay under
   the fast port-scan detector's short `portScanWindow`. Judged over the
   much longer `lowSlowScanWindow` (hours, not seconds), and deliberately

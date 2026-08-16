@@ -650,3 +650,363 @@ func TestShippedCriticalPortDisabledIsInert(t *testing.T) {
 		t.Fatalf("expected a disabled definition to never flag, got %+v", got)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// repeated_drops (issue #405)
+// ---------------------------------------------------------------------------
+
+// newShippedRepeatedDropsDefinition builds repeated_drops' live
+// DeclarativeDefinition -- DefaultConfig's real 10-attempts/15-minute
+// threshold unless a test deliberately shrinks it (see
+// internal/detect.DefaultConfig).
+func newShippedRepeatedDropsDefinition(t *testing.T, fs *flags.Store, threshold int, window time.Duration, scope Scope) *DeclarativeDefinition {
+	t.Helper()
+	def := Definition{
+		ID:          "repeated_drops",
+		Name:        "Repeated drops",
+		Intent:      IntentDetection,
+		Kind:        KindDeclarative,
+		Enabled:     true,
+		Scope:       scope,
+		Params:      Params{"threshold": threshold, "window": window.String()},
+		ParamSchema: RepeatedDropsParamSchema,
+		Provenance:  Provenance{Origin: ProvenanceShipped},
+	}
+	dd, err := BuildShippedDeclarativeDefinition(def)
+	if err != nil {
+		t.Fatalf("BuildShippedDeclarativeDefinition(repeated_drops): %v", err)
+	}
+	dd.OnRoutedEmission = FlagsSink(fs)
+	return dd
+}
+
+// rdEvt is a refused attempt against a locally-hosted service -- the
+// event shape repeated_drops' conditions select for.
+func rdEvt(srcIP, dstIP string, dstPort int, at time.Time) store.Event {
+	return store.Event{SrcIP: srcIP, DstIP: dstIP, DstPort: dstPort, Action: store.ActionDrop, ReceivedAt: at}
+}
+
+func rdFlagOfType(fs *flags.Store) *flags.Flag {
+	for _, f := range fs.List() {
+		f := f
+		if f.Type == flags.TypeRepeatedDrops {
+			return &f
+		}
+	}
+	return nil
+}
+
+// TestShippedRepeatedDrops_FieldsRefireClearRevive is
+// internal/detect/characterization_test.go's
+// TestCharacterizationRepeatedDrops_FieldsRefireClearRevive, moved.
+//
+// One pinned value changes, deliberately: #379's repeated_drops item.
+// The Detail string named the single triggering event's destination
+// address for a count keyed only on (source, destination port) -- the
+// sentence claimed single-destination attribution the aggregation never
+// had. It now names only the destination port, which is a key component
+// and therefore true of every counted attempt, and the distinct
+// destination set moved into Evidence.Hosts. Target, Country,
+// Confidence, Count, the firing boundary and the whole
+// re-fire/clear/revive sequence are unchanged.
+func TestShippedRepeatedDrops_FieldsRefireClearRevive(t *testing.T) {
+	fs := newTestFlagsStore(t)
+	dd := newShippedRepeatedDropsDefinition(t, fs, 10, 15*time.Minute, Scope{})
+	src, dstIP, dstPort := "203.0.113.9", "192.168.1.1", 8080
+	t0 := time.Now()
+
+	dropEvt := func(at time.Time) store.Event {
+		e := rdEvt(src, dstIP, dstPort, at)
+		e.SrcCountry = "NL"
+		return e
+	}
+
+	for i := 0; i < 9; i++ {
+		dd.Evaluate(dropEvt(t0.Add(time.Duration(i) * time.Minute)))
+	}
+	if got := rdFlagOfType(fs); got != nil {
+		t.Fatalf("expected no flag at 9 attempts, got %+v", got)
+	}
+
+	dd.Evaluate(dropEvt(t0.Add(9 * time.Minute)))
+	f := rdFlagOfType(fs)
+	if f == nil {
+		t.Fatal("expected a flag at exactly 10 attempts")
+	}
+	if want := "203.0.113.9 -> port 8080"; f.Target != want {
+		t.Errorf("Target = %q, want %q", f.Target, want)
+	}
+	// #379: was "10 attempts against 192.168.1.1:8080 dropped in 15m0s -- ...".
+	want := "10 attempts against port 8080 dropped in 15m0s -- check whether this port is meant to be open"
+	if f.Detail != want {
+		t.Errorf("Detail = %q, want %q", f.Detail, want)
+	}
+	if f.Country != "NL" {
+		t.Errorf("Country = %q, want NL", f.Country)
+	}
+	// #379: the distinct destination set, which used to be nowhere.
+	if fmt.Sprint(f.Evidence.Hosts) != fmt.Sprint([]string{dstIP}) {
+		t.Errorf("Evidence.Hosts = %v, want [%s]", f.Evidence.Hosts, dstIP)
+	}
+	if f.Evidence.NAT != nil {
+		t.Errorf("Evidence.NAT = %+v, want nil (no NAT fields set on the triggering event)", f.Evidence.NAT)
+	}
+	if f.Confidence == nil || *f.Confidence != 0 {
+		t.Errorf("Confidence = %v, want 0", f.Confidence)
+	}
+
+	// Re-fire.
+	dd.Evaluate(dropEvt(t0.Add(10 * time.Minute)))
+	f2 := rdFlagOfType(fs)
+	if f2 == nil || f2.Count != 2 {
+		t.Fatalf("expected Count=2, got %+v", f2)
+	}
+	if f2.Confidence == nil || *f2.Confidence != 5 {
+		t.Errorf("Confidence after re-fire = %v, want 5 (overshootConfidence(11,10))", f2.Confidence)
+	}
+
+	// Clear + revive.
+	if !fs.Clear(f2.ID, t0.Add(11*time.Minute)) {
+		t.Fatal("expected Clear to succeed")
+	}
+	dd.Evaluate(dropEvt(t0.Add(12 * time.Minute)))
+	f3 := rdFlagOfType(fs)
+	if f3 == nil || f3.Cleared {
+		t.Fatalf("expected the flag to revive as active, got %+v", f3)
+	}
+	if f3.Count != 1 {
+		t.Errorf("Count after revival = %d, want 1", f3.Count)
+	}
+	if f3.Confidence == nil || *f3.Confidence != 10 {
+		t.Errorf("Confidence after revival = %v, want 10 (overshootConfidence(12,10))", f3.Confidence)
+	}
+}
+
+// TestShippedRepeatedDrops_DetailCarriesTheDestinationSetAsEvidence
+// replaces internal/detect/characterization_test.go's
+// TestCharacterizationRepeatedDrops_DetailNamesOnlyTheLastDestination --
+// #397's pin of #379's known-wrong behaviour, updated here by the fix
+// that closes it, in the same commit.
+//
+// The old pin: four refused attempts from one source against port 8080,
+// spread across four different internal destinations, produced
+// "4 attempts against 192.168.1.4:8080 dropped in 15m0s -- ...", naming
+// the last destination for a count three-quarters of which went
+// elsewhere. Today the sentence names only the port, and the four
+// destinations are in Evidence.Hosts.
+func TestShippedRepeatedDrops_DetailCarriesTheDestinationSetAsEvidence(t *testing.T) {
+	fs := newTestFlagsStore(t)
+	dd := newShippedRepeatedDropsDefinition(t, fs, 4, 15*time.Minute, Scope{})
+	t0 := time.Now()
+
+	dests := []string{"192.168.1.1", "192.168.1.2", "192.168.1.3", "192.168.1.4"}
+	for i, dst := range dests {
+		dd.Evaluate(rdEvt("203.0.113.9", dst, 8080, t0.Add(time.Duration(i)*time.Minute)))
+	}
+
+	f := rdFlagOfType(fs)
+	if f == nil {
+		t.Fatal("expected a flag once the combined count across all four destinations reaches the threshold")
+	}
+	want := "4 attempts against port 8080 dropped in 15m0s -- check whether this port is meant to be open"
+	if f.Detail != want {
+		t.Errorf("Detail = %q, want %q", f.Detail, want)
+	}
+	if fmt.Sprint(f.Evidence.Hosts) != fmt.Sprint(dests) {
+		t.Errorf("Evidence.Hosts = %v, want %v", f.Evidence.Hosts, dests)
+	}
+}
+
+// TestShippedRepeatedDrops_EvidenceCapturesNAT is
+// internal/detect/characterization_test.go's
+// TestCharacterizationRepeatedDrops_EvidenceCapturesNAT, moved unchanged:
+// Evidence.NAT carries the triggering event's translation detail, and
+// only the triggering event's -- see EvidenceSet.SetNAT for why that one
+// category is last-writer-wins.
+func TestShippedRepeatedDrops_EvidenceCapturesNAT(t *testing.T) {
+	fs := newTestFlagsStore(t)
+	dd := newShippedRepeatedDropsDefinition(t, fs, 2, 15*time.Minute, Scope{})
+	t0 := time.Now()
+
+	dd.Evaluate(rdEvt("203.0.113.9", "192.168.1.1", 8080, t0))
+	nat := rdEvt("203.0.113.9", "192.168.1.1", 8080, t0.Add(time.Minute))
+	nat.NatIP, nat.NatPort, nat.NatRaw = "10.0.0.5", 51820, "dst-nat(10.0.0.5:51820)"
+	dd.Evaluate(nat)
+
+	f := rdFlagOfType(fs)
+	if f == nil {
+		t.Fatal("expected a flag")
+	}
+	if f.Evidence.NAT == nil {
+		t.Fatal("expected Evidence.NAT to be set")
+	}
+	if f.Evidence.NAT.IP != "10.0.0.5" || f.Evidence.NAT.Port != 51820 || f.Evidence.NAT.Raw != "dst-nat(10.0.0.5:51820)" {
+		t.Errorf("Evidence.NAT = %+v, want {IP:10.0.0.5 Port:51820 Raw:dst-nat(10.0.0.5:51820)}", f.Evidence.NAT)
+	}
+}
+
+// TestShippedRepeatedDropsIgnoresAcceptedTraffic is
+// internal/detect/repeated_drops_test.go's test of the same name: the
+// action condition admits only drop/reject.
+func TestShippedRepeatedDropsIgnoresAcceptedTraffic(t *testing.T) {
+	fs := newTestFlagsStore(t)
+	dd := newShippedRepeatedDropsDefinition(t, fs, 3, 15*time.Minute, Scope{})
+	t0 := time.Now()
+
+	for i := 0; i < 10; i++ {
+		e := rdEvt("203.0.113.9", "192.168.1.1", 8080, t0.Add(time.Duration(i)*time.Minute))
+		e.Action = store.ActionAccept
+		dd.Evaluate(e)
+	}
+	if got := rdFlagOfType(fs); got != nil {
+		t.Fatalf("expected accepted traffic never to count, got %+v", got)
+	}
+}
+
+// TestShippedRepeatedDropsIgnoresExternalDestinations is
+// internal/detect/repeated_drops_test.go's test of the same name: the
+// destinationAddress classification condition admits only a
+// locally-hosted service.
+func TestShippedRepeatedDropsIgnoresExternalDestinations(t *testing.T) {
+	fs := newTestFlagsStore(t)
+	dd := newShippedRepeatedDropsDefinition(t, fs, 3, 15*time.Minute, Scope{})
+	t0 := time.Now()
+
+	for i := 0; i < 10; i++ {
+		dd.Evaluate(rdEvt("192.168.1.50", "203.0.113.20", 8080, t0.Add(time.Duration(i)*time.Minute)))
+	}
+	if got := rdFlagOfType(fs); got != nil {
+		t.Fatalf("expected an external destination never to count, got %+v", got)
+	}
+}
+
+// TestShippedRepeatedDropsTracksEachPortIndependently is
+// internal/detect/repeated_drops_test.go's test of the same name: the
+// key is (source, destination port), so two ports never pool their
+// counts.
+func TestShippedRepeatedDropsTracksEachPortIndependently(t *testing.T) {
+	fs := newTestFlagsStore(t)
+	dd := newShippedRepeatedDropsDefinition(t, fs, 4, 15*time.Minute, Scope{})
+	t0 := time.Now()
+
+	for i := 0; i < 3; i++ {
+		dd.Evaluate(rdEvt("203.0.113.9", "192.168.1.1", 8080, t0.Add(time.Duration(i)*time.Minute)))
+		dd.Evaluate(rdEvt("203.0.113.9", "192.168.1.1", 9090, t0.Add(time.Duration(i)*time.Minute)))
+	}
+	if got := rdFlagOfType(fs); got != nil {
+		t.Fatalf("expected 3 attempts per port to stay below a threshold of 4, got %+v", got)
+	}
+
+	dd.Evaluate(rdEvt("203.0.113.9", "192.168.1.1", 8080, t0.Add(4*time.Minute)))
+	f := rdFlagOfType(fs)
+	if f == nil {
+		t.Fatal("expected the 4th attempt against one port to fire")
+	}
+	if want := "203.0.113.9 -> port 8080"; f.Target != want {
+		t.Errorf("Target = %q, want %q", f.Target, want)
+	}
+}
+
+// TestShippedRepeatedDropsIgnoresPortlessEvents pins what
+// internal/detect enforced with an explicit e.DstPort != 0 guard: an
+// event with no destination port is not a (source, port) pair worth
+// tracking. Here it is implied rather than written -- a zero port would
+// key every such event into one window and render "port 0" -- so the
+// guarantee is pinned rather than assumed.
+func TestShippedRepeatedDropsIgnoresPortlessEvents(t *testing.T) {
+	fs := newTestFlagsStore(t)
+	dd := newShippedRepeatedDropsDefinition(t, fs, 3, 15*time.Minute,
+		Scope{Ports: []int{8080}, PortsMode: ListModeAllow})
+	t0 := time.Now()
+
+	for i := 0; i < 10; i++ {
+		dd.Evaluate(rdEvt("203.0.113.9", "192.168.1.1", 0, t0.Add(time.Duration(i)*time.Minute)))
+	}
+	if got := rdFlagOfType(fs); got != nil {
+		t.Fatalf("expected a port-less event never to reach a port-scoped window, got %+v", got)
+	}
+}
+
+// TestShippedRepeatedDropsScope_PortsAllow is
+// internal/detect/characterization_test.go's
+// TestCharacterizationScope_PortsAllow, moved: pins the Ports axis under
+// ListModeAllow at repeated_drops' real DefaultConfig scale (10/15m).
+func TestShippedRepeatedDropsScope_PortsAllow(t *testing.T) {
+	fs := newTestFlagsStore(t)
+	dd := newShippedRepeatedDropsDefinition(t, fs, 10, 15*time.Minute,
+		Scope{Ports: []int{8080}, PortsMode: ListModeAllow})
+	now := time.Now()
+
+	for i := 0; i < 10; i++ {
+		dd.Evaluate(rdEvt("203.0.113.9", "192.168.1.1", 9090, now.Add(time.Duration(i)*time.Minute))) // not on the allow list
+	}
+	if got := rdFlagOfType(fs); got != nil {
+		t.Fatalf("expected a non-allowed port to never flag even at 10 attempts, got %+v", got)
+	}
+
+	for i := 0; i < 10; i++ {
+		dd.Evaluate(rdEvt("203.0.113.9", "192.168.1.1", 8080, now.Add(time.Duration(i)*time.Minute))) // allow-listed
+	}
+	if got := rdFlagOfType(fs); got == nil {
+		t.Fatal("expected the allow-listed port to still flag at threshold")
+	}
+}
+
+// TestShippedRepeatedDropsHostsAndPortsScopeCombineWithAND is
+// internal/detect/repeated_drops_test.go's test of the same name.
+func TestShippedRepeatedDropsHostsAndPortsScopeCombineWithAND(t *testing.T) {
+	fs := newTestFlagsStore(t)
+	dd := newShippedRepeatedDropsDefinition(t, fs, 3, 15*time.Minute, Scope{
+		Hosts: []string{"203.0.113.9"}, HostsMode: ListModeAllow,
+		Ports: []int{8080}, PortsMode: ListModeAllow,
+	})
+	now := time.Now()
+
+	// Right host, wrong port.
+	for i := 0; i < 5; i++ {
+		dd.Evaluate(rdEvt("203.0.113.9", "192.168.1.1", 9090, now.Add(time.Duration(i)*time.Minute)))
+	}
+	if got := rdFlagOfType(fs); got != nil {
+		t.Fatalf("expected host-only match (wrong port) to never flag, got %+v", got)
+	}
+
+	// Wrong host, right port.
+	for i := 0; i < 5; i++ {
+		dd.Evaluate(rdEvt("203.0.113.10", "192.168.1.1", 8080, now.Add(time.Duration(i)*time.Minute)))
+	}
+	if got := rdFlagOfType(fs); got != nil {
+		t.Fatalf("expected port-only match (wrong host) to never flag, got %+v", got)
+	}
+
+	// Both.
+	for i := 0; i < 3; i++ {
+		dd.Evaluate(rdEvt("203.0.113.9", "192.168.1.1", 8080, now.Add(time.Duration(i)*time.Minute)))
+	}
+	if got := rdFlagOfType(fs); got == nil {
+		t.Fatal("expected a match on both axes together to flag")
+	}
+}
+
+// TestShippedRepeatedDropsConfidenceScalesWithOvershoot is
+// internal/detect/repeated_drops_test.go's test of the same name.
+func TestShippedRepeatedDropsConfidenceScalesWithOvershoot(t *testing.T) {
+	now := time.Now()
+
+	fs := newTestFlagsStore(t)
+	justOver := newShippedRepeatedDropsDefinition(t, fs, 5, 15*time.Minute, Scope{})
+	for i := 0; i < 5; i++ {
+		justOver.Evaluate(rdEvt("203.0.113.9", "192.168.1.1", 8080, now.Add(time.Duration(i)*time.Minute)))
+	}
+	if f := rdFlagOfType(fs); f == nil || f.Confidence == nil || *f.Confidence != 0 {
+		t.Fatalf("expected 0%% confidence exactly at threshold, got %+v", f)
+	}
+
+	fs2 := newTestFlagsStore(t)
+	wellOver := newShippedRepeatedDropsDefinition(t, fs2, 5, 15*time.Minute, Scope{})
+	for i := 0; i < 15; i++ {
+		wellOver.Evaluate(rdEvt("203.0.113.9", "192.168.1.1", 8080, now.Add(time.Duration(i)*30*time.Second)))
+	}
+	if f := rdFlagOfType(fs2); f == nil || f.Confidence == nil || *f.Confidence != 100 {
+		t.Fatalf("expected 100%% confidence at the overshoot ceiling, got %+v", f)
+	}
+}

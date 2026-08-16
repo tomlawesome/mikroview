@@ -35,6 +35,14 @@ type Emission struct {
 	Target string
 	// Detail is RenderEmission's rendered text -- see its doc comment.
 	Detail string
+	// SourceIP is the triggering event's source address, carried
+	// separately from Target because the two are not always the same
+	// string -- repeated_drops' Target is a "<source> -> port <N>"
+	// composite, while anything wanting to look the source up (see
+	// ReputationSink) needs the address itself. Empty when the definition
+	// has no single meaningful source (a global-keyed one). Populated by
+	// the definition's own evaluation code, like Target.
+	SourceIP string
 	// Ports/Hosts/Labels are the same accumulated values Detail was
 	// rendered from, exposed structurally (e.g. for flags.Evidence)
 	// rather than requiring a caller to re-derive them by re-parsing
@@ -42,6 +50,10 @@ type Emission struct {
 	Ports  []int
 	Hosts  []string
 	Labels []string
+	// NAT is the triggering event's NAT translation detail, when the
+	// definition declared EvidenceNAT and the event carried one -- see
+	// EvidenceSet.SetNAT.
+	NAT *NATInfo
 	// Confidence is 0-100, set only by a definition that makes a
 	// statistical judgment call rather than a deterministic threshold
 	// crossing -- the Emission-level counterpart to flags.Flag.Confidence
@@ -148,6 +160,11 @@ func RenderEmission(evidence *EvidenceSet, count int, detailTemplate string, pro
 		data["Labels"] = formatStrings(em.Labels)
 		data["LabelCount"] = strconv.Itoa(len(em.Labels))
 	}
+	// NAT is structural only -- it has no token, because it describes one
+	// specific packet's rewrite rather than anything accumulated across
+	// the window, and a Detail sentence naming it would make exactly the
+	// single-event-stands-for-the-window claim #379 found.
+	em.NAT = evidence.NAT()
 
 	var unaccumulated []string
 	detail := emissionToken.ReplaceAllStringFunc(detailTemplate, func(tok string) string {
