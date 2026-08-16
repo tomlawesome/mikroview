@@ -1,0 +1,59 @@
+{
+  "id": "0123456789abcdef0123456789abcdef",
+  "name": "Port scan",
+  "description": "Many distinct destination ports from one source in a short window.",
+  "intent": "detection",
+  "kind": "declarative",
+  "enabled": false,
+  "scope": {
+    "hosts": [
+      "10.0.0.0/24"
+    ],
+    "hostsMode": "deny",
+    "ports": [
+      22,
+      443
+    ],
+    "portsMode": "allow",
+    "classification": "external",
+    "rules": [
+      "lan-in"
+    ],
+    "rulesMode": "allow"
+  },
+  "params": {
+    "threshold": 15,
+    "window": "60s"
+  },
+  "paramSchema": [
+    {
+      "name": "threshold",
+      "type": "int",
+      "description": "Distinct destination ports from one source within the window that counts as a port scan.",
+      "unit": "distinct ports",
+      "required": true,
+      "min": 1
+    },
+    {
+      "name": "window",
+      "type": "duration",
+      "description": "Rolling window the distinct-port count is measured over.",
+      "required": true,
+      "min": 1000000000
+    }
+  ],
+  "provenance": {
+    "origin": "shipped",
+    "shippedParams": {
+      "threshold": 15,
+      "window": "60s"
+    }
+  },
+  "suppressions": [
+    {
+      "id": "supp-1",
+      "target": "198.51.100.9",
+      "reason": "known monitoring host"
+    }
+  ]
+}
