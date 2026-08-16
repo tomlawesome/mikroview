@@ -508,3 +508,77 @@ background periodically, not instantly on push -- see
 Nothing showing up there usually means no lease on your network has a
 reported hostname yet, or no rule has both `action=drop`/`reject` and a
 specific `dst-port` -- both real, common states, not a broken push.
+
+## 6. Recommended logging posture: log connections, not traffic
+
+Steps 1–3 make MikroView show what your router logs. This section is
+about choosing *what to log* — because the default instinct on both
+ends of the spectrum is wrong, and the difference between a good
+posture and a bad one is roughly two orders of magnitude of volume
+with no loss of signal.
+
+The failure mode on the noisy end: logging on broad accept rules that
+match `established`/`related` traffic. Every packet-bearing flow then
+logs its tail over and over — lines that carry no connection-level
+information at all, because the interesting fact (this connection was
+opened, by whom, to where) was only ever present at its birth. On a
+real deployment this measured as ~90% of all volume from two such
+rules, ~51M events/day at ~594 events/sec average — compressing the
+default 120MiB event buffer to **4–6 minutes** of visible history.
+Removing logging from those two rules alone (nothing else) cut
+sustained volume by 97–99%, to ~12–14 events/sec measured across the
+following days — and stretched the same buffer to **several hours**,
+while the deny signal that had been drowned (a steady ~14 unsolicited
+WAN drops/minute) became visible in the top rules for the first time.
+
+The failure mode on the quiet end: logging only drops. A drops-only
+log is blind to every attack that *works* — successful inbound is an
+accept, a compromised device phoning home is an accept, lateral
+movement between segments is an accept. The things most worth seeing
+are all accepts; they just need logging at the connection level, not
+the packet level.
+
+The posture, as a starting point any deployment can adapt:
+
+| Rule | Log? | Why |
+|---|---|---|
+| accept established/related (or fasttrack) | **no** | the tail of a connection already seen at birth — zero detection signal |
+| accept **new** WAN→LAN (port-forwards) | **always** | inbound success: the highest-signal line there is, at tiny volume |
+| accept **new** LAN→WAN | yes | each device's first contact with each destination — the compromise/exfiltration signal |
+| accept new LAN→LAN / inter-VLAN | yes | lateral movement |
+| known-chatty internal services (DNS to the local resolver, NTP, mDNS) | quiet accept rules **above** the loggers | a *chosen, named* blind spot instead of drowning |
+| drops | yes | cheap, and already the norm |
+
+Three caveats that belong next to that table, not in a footnote:
+
+- **Never add `connection-state=new` to an existing accept rule as the
+  "fix".** That changes what the rule *accepts*, not just what it
+  logs — established traffic that matched the rule yesterday stops
+  matching it today, and you have black-holed live connections. The
+  safe shape is an earlier no-log accept for
+  `connection-state=established,related`, so the broad rule below it
+  only ever sees — and therefore only ever logs — connection opens.
+  (This is also why a log-only `action=passthrough` rule placed above
+  an accept is a safe way to add logging without touching policy at
+  all.)
+- **Fasttrack changes what the filter chain sees.** With a
+  `fasttrack-connection` rule in place, established packets bypass most
+  of the chain entirely — which is fine for this posture (the
+  connection open still traverses and still logs), but it means a
+  logging rule placed *below* the fasttrack rule may see far less than
+  you expect. Check with `/ip firewall filter print stats`: a logger
+  whose counters barely move while traffic flows is being bypassed,
+  not idle.
+- **Per-packet volume and flow duration are bandwidth questions, and
+  NetFlow is the right tool for them** (`/ip traffic-flow`). MikroView
+  is a log interrogator on purpose: it answers *who connected to what,
+  when, and what the firewall decided*. If the question is "how many
+  gigabytes did this flow move", logging more firewall lines will
+  never answer it — export flow data to a NetFlow collector instead,
+  and keep the firewall log for decisions.
+
+Section 3's tagging convention applies to everything this posture
+logs: give each logging rule a distinct `log-prefix`, and MikroView's
+per-rule counts will tell you — in numbers, within a day — whether any
+single rule is dominating your volume and deserves the same scrutiny
+the established-accept rules got above.
