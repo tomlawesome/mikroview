@@ -169,6 +169,28 @@ func lan3(n int) string { return fmt.Sprintf("192.168.2.%d", 100+n) }
 // ---------------------------------------------------------------------------
 // 2. activity_spike
 // ---------------------------------------------------------------------------
+//
+// activity_spike's own characterization moved to
+// internal/engine/shipped_activity_spike_test.go (issue #405:
+// activity_spike is now a shipped programmatic definition evaluated by
+// internal/engine, not internal/detect -- see shipped_activity_spike.go).
+//
+// TestCharacterizationActivitySpike_ContinuousRampNeverFiresAtDefaultConfig
+// is now TestShippedActivitySpike_ContinuousRampNeverFiresAtDefaultConfig,
+// and TestCharacterizationActivitySpike_FieldsRefireClearRevive is now
+// TestShippedActivitySpike_FieldsRefireClearRevive -- both moved unchanged.
+// Every pinned value carried over unchanged: the rate=199/200 boundary,
+// the byte-for-byte Detail string "200 events in 1m0s vs a baseline of
+// 1.0 for this host (based on 20 samples, 6.0σ above normal)",
+// Confidence=100, the empty Evidence, and Country=FR.
+//
+// #420 (this detector is structurally unfireable through the ordinary
+// event path at shipped defaults) is NOT fixed by this move -- it is
+// pinned rather than fixed. The port reproduces the old arithmetic
+// exactly (the same per-event baseline fold-in, the same 1/emaAlpha lag
+// ceiling), and #420 stays open with the remedy still an open design
+// decision. See shipped_activity_spike.go's own doc comment and #420
+// itself.
 
 // indexOf is strings.Index without importing strings solely for one call
 // site -- kept local and tiny.
@@ -191,155 +213,6 @@ func assertFloatSigmaTail(t *testing.T, s, wantTail string) {
 	re := regexp.MustCompile(`^-?\d+\.\d+σ` + regexp.QuoteMeta(wantTail) + `$`)
 	if !re.MatchString(s) {
 		t.Errorf("tail = %q, want to match ^-?\\d+\\.\\d+σ%s$", s, wantTail)
-	}
-}
-
-// TestCharacterizationActivitySpike_ContinuousRampNeverFiresAtDefaultConfig
-// is a genuine surprise this characterization pass found, not a bug this
-// issue fixes: at DefaultConfig's real values (ActivitySpikeThreshold=200,
-// HostActivityMultiplier=3, emaAlpha=0.02), a single source's traffic
-// ramping continuously up through Observe can never actually raise
-// activity_spike, no matter how far past the threshold it goes.
-//
-// Why: checkHostActivityBaseline runs on *every* event, not once per
-// window, and unconditionally folds the current reading into the EMA
-// baseline immediately afterwards (see host_baseline.go). Because
-// spikeCount only ever changes by +1 per call (Observe adds exactly one
-// event to the window before checkHostActivityBaseline reads it), the
-// gap between the live rate and the baseline chasing it is bounded by
-// the EMA's own lag ceiling, 1/emaAlpha = 50 -- provably, however long
-// the ramp continues (see emaUpdate's recurrence: the lag between rate
-// and baseline for a unit-slope input converges to 1/alpha and never
-// exceeds it). So by the time the absolute floor (200) is reached, the
-// baseline is at best ~150 -- three times that is >= 450, far past any
-// rate a live window can be reporting at that same moment. The 2000-event
-// ramp below is well past the threshold and still never fires, which is
-// the point: this is not a slow warm-up artifact, it is a structural
-// ceiling that holds for any single-episode ramp shape.
-//
-// This is worth flagging, not fixing here: it means the shipped default
-// (HostActivityMultiplier=3 alongside ActivitySpikeThreshold=200) makes
-// this detector effectively unfireable via the exact "one source's
-// traffic climbing steadily" scenario its own doc comment describes as
-// the target. See this file's companion test below, which pins the
-// firing boundary/fields/confidence formula by calling
-// checkHostActivityBaseline directly (as the pre-existing
-// TestActivitySpikeNeverFiresBeforeMinimumSampleFloor already does) --
-// the only way to reach that state at all with these real thresholds,
-// since Observe's ring can never present it with a same-call jump larger
-// than 1.
-func TestCharacterizationActivitySpike_ContinuousRampNeverFiresAtDefaultConfig(t *testing.T) {
-	cfg := DefaultConfig() // ActivitySpikeThreshold=200, HostActivityMultiplier=3, WarmupSamples=20
-	d, fs := newTestDetector(t, cfg)
-	ip := "198.51.100.4"
-	t0 := time.Now()
-
-	// 2000 events on one port (ten times the absolute floor), spaced
-	// closely enough to stay inside one 60s window.
-	for i := 0; i < 2000; i++ {
-		d.Observe(evt(ip, 443, t0.Add(time.Duration(i)*10*time.Millisecond)))
-	}
-	if got := flagOfType(t, fs, flags.TypeActivitySpike); got != nil {
-		t.Fatalf("expected activity_spike to never fire from a continuous single-source ramp at DefaultConfig, got %+v", got)
-	}
-	w := d.perSource[ip]
-	if gap := 2000 - w.baseline; gap < 45 || gap > 55 {
-		t.Errorf("baseline/rate gap = %.2f, want close to the 1/emaAlpha=50 lag ceiling this test's doc comment describes", gap)
-	}
-}
-
-// TestCharacterizationActivitySpike_FieldsRefireClearRevive pins the
-// boundary/fields/confidence/re-fire/clear/revive behaviour of
-// checkHostActivityBaseline itself, called directly (bypassing Observe's
-// ring -- see the companion test above for why that ring can never
-// actually present these values at DefaultConfig's real thresholds).
-// This mirrors the pre-existing direct-call pattern
-// TestActivitySpikeNeverFiresBeforeMinimumSampleFloor/
-// TestActivitySpikeStillFiresWhenWarmupSamplesBelowFloor already use in
-// detect_test.go. Feeding a constant currentRate=1 during warm-up keeps
-// the EMA's variance at exactly zero (see emaZScore's stddev==0 branch),
-// so the boundary values below are fully deterministic.
-func TestCharacterizationActivitySpike_FieldsRefireClearRevive(t *testing.T) {
-	cfg := DefaultConfig() // ActivitySpikeThreshold=200, HostActivityMultiplier=3, WarmupSamples=20
-	ip := "198.51.100.4"
-	now := time.Now()
-
-	warm := func(d *Detector) *sourceWindow {
-		w := &sourceWindow{}
-		for i := 0; i < 25; i++ {
-			d.checkHostActivityBaseline(w, ip, "FR", "", 1, now.Add(time.Duration(i)*time.Second))
-		}
-		return w
-	}
-
-	// The below-floor probe (rate=199) uses its own Detector: like every
-	// other EMA-based detector in this file, checkHostActivityBaseline
-	// unconditionally folds its reading into the baseline afterwards, so
-	// probing on the same instance that goes on to pin the rate=200
-	// boundary would perturb the zero-variance baseline that pin depends
-	// on.
-	probe, probeFS := newTestDetector(t, cfg)
-	pw := warm(probe)
-	probe.checkHostActivityBaseline(pw, ip, "FR", "", 199, now.Add(25*time.Second))
-	if got := flagOfType(t, probeFS, flags.TypeActivitySpike); got != nil {
-		t.Fatalf("expected no flag at rate=199 (ActivitySpikeThreshold=200 is an absolute floor), got %+v", got)
-	}
-
-	d, fs := newTestDetector(t, cfg)
-	w := warm(d)
-	if got := flagOfType(t, fs, flags.TypeActivitySpike); got != nil {
-		t.Fatalf("expected no flag from the steady warm-up phase, got %+v", got)
-	}
-
-	d.checkHostActivityBaseline(w, ip, "FR", "", 200, now.Add(25*time.Second))
-	f := flagOfType(t, fs, flags.TypeActivitySpike)
-	if f == nil {
-		t.Fatal("expected a flag at exactly rate=200")
-	}
-	if f.Target != ip {
-		t.Errorf("Target = %q, want %q", f.Target, ip)
-	}
-	if f.Country != "FR" {
-		t.Errorf("Country = %q, want FR", f.Country)
-	}
-	if want := "200 events in 1m0s vs a baseline of 1.0 for this host (based on 20 samples, 6.0σ above normal)"; f.Detail != want {
-		t.Errorf("Detail = %q, want %q", f.Detail, want)
-	}
-	if !isZeroEvidence(f.Evidence) {
-		t.Errorf("Evidence = %+v, want the zero value (activity_spike carries no structured evidence)", f.Evidence)
-	}
-	if f.Confidence == nil || *f.Confidence != 100 {
-		t.Errorf("Confidence at the boundary = %v, want 100 (zero-variance warm-up collapses emaZScore to its capped ceiling)", f.Confidence)
-	}
-	if f.Count != 1 {
-		t.Errorf("Count = %d, want 1", f.Count)
-	}
-
-	// Re-fire: state past this point is no longer variance-zero, so only
-	// structural properties are asserted (see this file's header comment).
-	d.checkHostActivityBaseline(w, ip, "FR", "", 200, now.Add(27*time.Second))
-	f2 := flagOfType(t, fs, flags.TypeActivitySpike)
-	if f2 == nil || f2.Count != 2 {
-		t.Fatalf("expected Count=2 after a re-fire, got %+v", f2)
-	}
-	if f2.Confidence == nil || *f2.Confidence <= 0 || *f2.Confidence > 100 {
-		t.Errorf("Confidence after re-fire = %v, want a value in (0, 100]", f2.Confidence)
-	}
-
-	// Clear + revive.
-	if !fs.Clear(f2.ID, now.Add(28*time.Second)) {
-		t.Fatal("expected Clear to succeed")
-	}
-	d.checkHostActivityBaseline(w, ip, "FR", "", 200, now.Add(29*time.Second))
-	f3 := flagOfType(t, fs, flags.TypeActivitySpike)
-	if f3 == nil || f3.Cleared {
-		t.Fatalf("expected the flag to revive as active, got %+v", f3)
-	}
-	if f3.Count != 1 {
-		t.Errorf("Count after revival = %d, want 1", f3.Count)
-	}
-	if countTypedFlags(fs, flags.TypeActivitySpike) != 1 {
-		t.Errorf("expected exactly one activity_spike flag, got %d", countTypedFlags(fs, flags.TypeActivitySpike))
 	}
 }
 
@@ -897,59 +770,24 @@ func TestCharacterizationDeviceSilence_FieldsRefireClearRevive(t *testing.T) {
 // now a shipped declarative definition evaluated by internal/engine, not
 // internal/detect). Every pinned value carried over unchanged.
 
-// TestCharacterizationScope_Classification pins the Classification axis,
-// at activity_spike's real DefaultConfig scale -- per settings.go's
-// per-detector field usage table, ActivitySpike's Hosts/HostsMode +
-// Classification restrict which source IPs are tracked at all.
-// Previously exercised via port_scan (a plain threshold, so a firing
-// scenario was one loop); port_scan's own Classification pin moved to
-// internal/engine/shipped_declarative_test.go's
-// TestShippedPortScanScope_Classification (issue #405). Retargeted, not
-// deleted, so internal/detect's own scope-axis coverage stays complete;
-// activity_spike's EMA baseline needs a warm-up-then-spike shape (see
-// TestActivitySpikeFlagsGenuineDeviationFromHostsOwnBaseline) rather than
-// a single loop to actually fire.
-func TestCharacterizationScope_Classification(t *testing.T) {
-	cfg := DefaultConfig()
-	cfg.ActivitySpikeThreshold = 2
-	cfg.ActivitySpikeWindow = time.Second
-	cfg.HostActivityMultiplier = 3
-	cfg.HostActivityWarmupSamples = 20
-	seed := DefaultSettingsMap()
-	seed[DetectorActivitySpike] = Settings{Enabled: true, Scope: Scope{Classification: store.ScopeInternal}}
-	d, fs := newTestDetectorWithSettings(t, cfg, seed)
-	now := time.Now()
-
-	warmThenSpike := func(ip string, start time.Time) {
-		tick := time.Duration(0)
-		for i := 0; i < 25; i++ {
-			base := start.Add(tick)
-			d.Observe(evt(ip, 100, base))
-			d.Observe(evt(ip, 101, base.Add(10*time.Millisecond)))
-			tick += 2 * time.Second
-		}
-		spikeBase := start.Add(tick)
-		for i := 0; i < 10; i++ {
-			d.Observe(evt(ip, 200+i, spikeBase.Add(time.Duration(i)*10*time.Millisecond)))
-		}
-	}
-
-	// An external source: never even tracked under Classification=Internal
-	// (asActive gates observeScanAndSpike before any window is created),
-	// so warming it up and spiking it the same way a real deviation would
-	// still never flags.
-	extIP := "203.0.113.9"
-	warmThenSpike(extIP, now)
-	if got := flagOfType(t, fs, flags.TypeActivitySpike); got != nil {
-		t.Fatalf("expected an external source to never flag under Classification=Internal, got %+v", got)
-	}
-
-	// An internal (LAN) source still flags normally.
-	warmThenSpike("192.168.1.77", now.Add(time.Minute))
-	if got := flagOfType(t, fs, flags.TypeActivitySpike); got == nil {
-		t.Fatal("expected an internal source to still flag under Classification=Internal")
-	}
-}
+// TestCharacterizationScope_Classification pinned the Classification
+// axis at activity_spike's real DefaultConfig scale; moved to
+// internal/engine/shipped_activity_spike_test.go's
+// TestShippedActivitySpikeScope_Classification (issue #405:
+// activity_spike is now a shipped programmatic definition evaluated by
+// internal/engine, not internal/detect).
+//
+// Only half of this test's pin carried over. The external-source half
+// (an out-of-scope source is never even tracked under
+// Classification=Internal, let alone flagged) moved unchanged. The
+// internal-source half -- that a warmed-then-spiked *in-scope* source
+// still flags normally -- did not move with it: like every other
+// Evaluate()-driven activity_spike test on the engine side (see the
+// activity_spike section above), demonstrating a real fire through the
+// ordinary event path runs into #420, and
+// TestShippedActivitySpikeScope_Classification only exercises the
+// never-flags direction. Flagged in this port's report rather than
+// silently dropped.
 
 // TestCharacterizationScope_RulesAllow and TestCharacterizationScope_
 // RulesModeDeny used to pin the Rules axis (ListModeAllow and ListModeDeny)

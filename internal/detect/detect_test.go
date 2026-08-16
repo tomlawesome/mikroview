@@ -45,168 +45,63 @@ func evtState(srcIP string, dstPort int, connState string, at time.Time) store.E
 	return e
 }
 
-// TestScanAndSpikeIgnoreEstablishedTraffic reproduces the false-positive
-// pattern a busy server produces when a RouterOS ruleset logs both
-// directions of an established connection: many "established" events
-// (the *client's* varying ephemeral port, high volume) must not trip
-// activity-spike, even though a "new"-only version of the same traffic
-// would. port_scan's own half of this guarantee (it shared
-// isTrackableConnState/observeScanAndSpike's filter) moved with it onto
-// internal/engine's shipped declarative definition (issue #405) -- see
+// TestScanAndSpikeIgnoreEstablishedTraffic moved to
+// internal/engine/shipped_activity_spike_test.go's
+// TestShippedActivitySpikeIgnoresEstablishedTraffic (issue #405:
+// activity_spike is now a shipped programmatic definition evaluated by
+// internal/engine, not internal/detect -- see shipped_activity_spike.go).
+// port_scan's own half of this guarantee moved earlier still, onto
+// internal/engine's shipped declarative definition -- see
 // internal/engine/shipped_declarative_test.go for its counterpart there.
-func TestScanAndSpikeIgnoreEstablishedTraffic(t *testing.T) {
-	cfg := DefaultConfig()
-	cfg.ActivitySpikeThreshold = 3
-	cfg.ActivitySpikeWindow = time.Minute
-	d, fs := newTestDetector(t, cfg)
+// Every pinned value carried over unchanged.
 
-	now := time.Now()
-	for port := 1; port <= 5; port++ {
-		d.Observe(evtState("192.168.1.10", port, "established", now.Add(time.Duration(port)*time.Millisecond)))
-	}
-	if len(fs.List()) != 0 {
-		t.Fatalf("expected established-state traffic to never trip activity-spike, got %+v", fs.List())
-	}
-	if _, ok := d.perSource["192.168.1.10"]; ok {
-		t.Fatal("expected established-state traffic to never even touch per-source window state")
-	}
+// TestActivitySpikeIgnoresSteadyBaselineTraffic and
+// TestActivitySpikeFlagsGenuineDeviationFromHostsOwnBaseline moved to
+// internal/engine (issue #405: activity_spike is now a shipped
+// programmatic definition evaluated by internal/engine, not
+// internal/detect -- see shipped_activity_spike.go).
+//
+// The first (a low, perfectly steady rate never flags, however long it
+// continues) is covered by
+// internal/engine/shipped_activity_spike_test.go's
+// TestShippedActivitySpike_ContinuousRampNeverFiresAtDefaultConfig: that
+// test's own doc comment states the structural "never fires" result
+// holds for any single-episode ramp shape, and a flat/steady rate is the
+// zero-slope case of that same shape -- the mechanism (the baseline
+// chasing the rate closely enough that rate < baseline*multiplier never
+// releases) is the one this test pinned too, just demonstrated at a
+// different config scale (this test used a small custom
+// threshold/window to get a boundary reachable within a short test,
+// rather than DefaultConfig's real 200/3x).
+//
+// The second (a genuine, sharp deviation from an established baseline
+// does flag, with a valid confidence score) is only partially covered.
+// TestShippedActivitySpike_FieldsRefireClearRevive pins the same
+// boundary/fields/confidence/re-fire/clear/revive behaviour this test
+// exercised, but -- like the pre-existing
+// TestActivitySpikeNeverFiresBeforeMinimumSampleFloor pattern this test
+// followed -- it drives checkBaseline directly rather than through
+// Observe()/Evaluate(), because #420 means no input through the ordinary
+// event path can reach a firing state at DefaultConfig's real
+// thresholds. What this test additionally proved -- that a real burst of
+// events run through the actual Observe()/Evaluate() ring-and-baseline
+// path (not a hand-fed rate) can still produce a fire, at a non-default
+// but plausible config -- has no engine-side counterpart: every
+// Evaluate()-driven activity_spike test on the engine side either
+// asserts no flag (the ramp test above, the established-traffic test,
+// and the Classification-scope test's external-source half) or drives
+// checkBaseline directly. Flagged in this port's report rather than
+// silently dropped.
 
-	// The same volume of "new" traffic is recorded (proving this is a
-	// state filter, not an accidental threshold change) -- activity_spike
-	// itself needs a primed EMA baseline to actually fire, which its own
-	// dedicated tests (TestActivitySpikeFlagsGenuineDeviationFromHostsOwnBaseline
-	// and friends) already cover; this test only pins the connState gate.
-	for port := 1; port <= 5; port++ {
-		d.Observe(evtState("192.168.1.11", port, "new", now.Add(time.Duration(port)*time.Millisecond)))
-	}
-	w, ok := d.perSource["192.168.1.11"]
-	if !ok || w.spikes.Count(now.Add(6*time.Millisecond), cfg.ActivitySpikeWindow) != 5 {
-		t.Fatalf("expected new-state traffic to still be recorded into the per-source window")
-	}
-}
+// TestActivitySpikeNeverFiresBeforeMinimumSampleFloor moved to
+// internal/engine/shipped_activity_spike_test.go's
+// TestShippedActivitySpikeNeverFiresBeforeMinimumSampleFloor (issue
+// #405). Every pinned value carried over unchanged.
 
-func TestActivitySpikeIgnoresSteadyBaselineTraffic(t *testing.T) {
-	// A host with a low but perfectly steady rate should never flag, no
-	// matter how long it keeps going -- this is exactly the false-positive
-	// pattern (a naturally busy host) the per-host baseline replaced the
-	// old fixed threshold to fix.
-	cfg := DefaultConfig()
-	cfg.ActivitySpikeThreshold = 2
-	cfg.ActivitySpikeWindow = time.Second
-	cfg.PortScanThreshold = 1000
-
-	d, fs := newTestDetector(t, cfg)
-	now := time.Now()
-	tick := time.Duration(0)
-	for i := 0; i < 30; i++ {
-		base := now.Add(tick)
-		d.Observe(evt("198.51.100.4", 100, base))
-		d.Observe(evt("198.51.100.4", 101, base.Add(10*time.Millisecond)))
-		tick += 2 * time.Second
-	}
-
-	if len(fs.List()) != 0 {
-		t.Fatalf("expected steady baseline traffic to never flag, got %+v", fs.List())
-	}
-}
-
-func TestActivitySpikeFlagsGenuineDeviationFromHostsOwnBaseline(t *testing.T) {
-	cfg := DefaultConfig()
-	cfg.ActivitySpikeThreshold = 2
-	cfg.ActivitySpikeWindow = time.Second
-	cfg.PortScanThreshold = 1000
-	cfg.HostActivityMultiplier = 3
-	cfg.HostActivityWarmupSamples = 20
-
-	d, fs := newTestDetector(t, cfg)
-	ip := "198.51.100.4"
-	now := time.Now()
-	tick := time.Duration(0)
-
-	// Warm up a steady baseline of ~2 events/window, spaced more than
-	// ActivitySpikeWindow apart so each tick's window doesn't accumulate
-	// into the next.
-	for i := 0; i < 25; i++ {
-		base := now.Add(tick)
-		d.Observe(evt(ip, 100, base))
-		d.Observe(evt(ip, 101, base.Add(10*time.Millisecond)))
-		tick += 2 * time.Second
-	}
-	if len(fs.List()) != 0 {
-		t.Fatalf("expected the warm-up phase itself to never flag, got %+v", fs.List())
-	}
-
-	// A genuine spike: well above the floor and several times the
-	// established baseline, all within one window.
-	spikeBase := now.Add(tick)
-	for i := 0; i < 10; i++ {
-		d.Observe(evt(ip, 200+i, spikeBase.Add(time.Duration(i)*10*time.Millisecond)))
-	}
-
-	list := fs.List()
-	if len(list) != 1 || list[0].Type != flags.TypeActivitySpike || list[0].Target != ip {
-		t.Fatalf("expected an activity_spike flag for %s, got %+v", ip, list)
-	}
-	if list[0].Confidence == nil || *list[0].Confidence <= 0 || *list[0].Confidence > 100 {
-		t.Fatalf("expected a confidence score in (0, 100], got %+v", list[0].Confidence)
-	}
-}
-
-func TestActivitySpikeNeverFiresBeforeMinimumSampleFloor(t *testing.T) {
-	// Calls checkHostActivityBaseline directly with a hand-controlled
-	// rate, sidestepping observeScanAndSpike's cumulative-window counting
-	// (where a tight burst's rate climbs with every call regardless of
-	// sampleCount, making "no flag from a cold start" otherwise ambiguous
-	// to assert by hand). Feeds the same extreme, easily-threshold-
-	// clearing reading repeatedly -- proves the hard floor, not just that
-	// nothing happened to be extreme enough yet.
-	cfg := DefaultConfig()
-	cfg.ActivitySpikeThreshold = 1
-	cfg.HostActivityMultiplier = 2
-	d, fs := newTestDetector(t, cfg)
-
-	w := &sourceWindow{}
-	ip := "198.51.100.9"
-	now := time.Now()
-
-	d.checkHostActivityBaseline(w, ip, "", "", 1, now) // primes: sampleCount=1
-
-	for i := 0; i < hostActivityMinSamples-1; i++ {
-		d.checkHostActivityBaseline(w, ip, "", "", 100, now.Add(time.Duration(i+1)*time.Second))
-		if len(fs.List()) != 0 {
-			t.Fatalf("expected no flag while sampleCount < hostActivityMinSamples (call %d), got %+v", i+2, fs.List())
-		}
-	}
-}
-
-func TestActivitySpikeStillFiresWhenWarmupSamplesBelowFloor(t *testing.T) {
-	// A plausible operator tuning attempt -- "trust it faster" -- used
-	// to cap sampleCount at HostActivityWarmupSamples even when that
-	// value sat below hostActivityMinSamples, so the firing gate
-	// (sampleCount >= hostActivityMinSamples) could never pass again:
-	// lowering the warmup to detect *sooner* silently disabled detection
-	// entirely, permanently, for every host. Proves the counter still
-	// climbs to the hard floor regardless of a lower warmup setting.
-	cfg := DefaultConfig()
-	cfg.ActivitySpikeThreshold = 1
-	cfg.HostActivityMultiplier = 2
-	cfg.HostActivityWarmupSamples = 2 // below hostActivityMinSamples (5)
-	d, fs := newTestDetector(t, cfg)
-
-	w := &sourceWindow{}
-	ip := "198.51.100.10"
-	now := time.Now()
-
-	d.checkHostActivityBaseline(w, ip, "", "", 1, now) // primes: sampleCount=1
-
-	for i := 0; i < hostActivityMinSamples; i++ {
-		d.checkHostActivityBaseline(w, ip, "", "", 100, now.Add(time.Duration(i+1)*time.Second))
-	}
-
-	if len(fs.List()) != 1 {
-		t.Fatalf("expected activity_spike to fire once sampleCount reaches hostActivityMinSamples despite a lower HostActivityWarmupSamples, got %+v", fs.List())
-	}
-}
+// TestActivitySpikeStillFiresWhenWarmupSamplesBelowFloor moved to
+// internal/engine/shipped_activity_spike_test.go's
+// TestShippedActivitySpikeStillFiresWhenWarmupSamplesBelowFloor (issue
+// #405). Every pinned value carried over unchanged.
 
 // TestReFiringUpdatesExistingFlagInPlace moved to
 // internal/engine/shipped_declarative_test.go's
@@ -252,12 +147,13 @@ func TestEvictsOldestSourceWhenOverCap(t *testing.T) {
 
 func TestEveryDetectorDisabledEntirelySuppressesItsFlagType(t *testing.T) {
 	nameToType := map[DetectorName]flags.Type{
-		DetectorActivitySpike: flags.TypeActivitySpike,
-		// DetectorCriticalPort, DetectorDistributedBruteForce,
-		// DetectorRepeatedDrops and DetectorRuleSpike are deliberately
-		// absent here now: all four moved to internal/engine (issue #405)
-		// -- the first three as shipped declarative definitions, rule_spike
-		// as a shipped programmatic one (its own baseline/history-floor
+		// DetectorActivitySpike, DetectorCriticalPort,
+		// DetectorDistributedBruteForce, DetectorRepeatedDrops and
+		// DetectorRuleSpike are deliberately absent here now: all five
+		// moved to internal/engine (issue #405) -- critical_port,
+		// distributed_brute_force and repeated_drops as shipped
+		// declarative definitions, activity_spike and rule_spike as
+		// shipped programmatic ones (their own baseline/history-floor
 		// logic didn't fit the declarative shape the other three share) --
 		// so internal/detect no longer evaluates any of them. Their own
 		// enable/disable pins now live in
@@ -266,11 +162,18 @@ func TestEveryDetectorDisabledEntirelySuppressesItsFlagType(t *testing.T) {
 		// TestShippedDistributedBruteForce*/TestShippedRepeatedDrops*
 		// counterparts (generically, every ported declarative definition's
 		// disabled-definition contract is the same one
-		// TestShippedCriticalPortDisabledIsInert pins), and rule_spike's in
+		// TestShippedCriticalPortDisabledIsInert pins). The two
+		// programmatic ones share their own single gate instead
+		// (programmaticBase.active, which every shipped programmatic
+		// definition's Evaluate checks before doing anything else):
+		// rule_spike's half is
 		// internal/engine/shipped_rule_spike_test.go's
-		// TestShippedRuleSpikeSurvivesADisableEnableCycleWithoutFalsePositives,
-		// which toggles Enabled false then true and asserts nothing fires
-		// during the off period.
+		// TestShippedRuleSpikeSurvivesADisableEnableCycleWithoutFalsePositives
+		// and global_spike's is
+		// internal/engine/shipped_global_spike_test.go's
+		// TestShippedGlobalSpikeDisabledNeverFires; activity_spike does not
+		// have its own dedicated disabled-definition test alongside them
+		// (see this port's report).
 		DetectorOutboundAnomaly: flags.TypeOutboundAnomaly,
 		DetectorInternalRecon:   flags.TypeInternalRecon,
 	}
@@ -279,8 +182,6 @@ func TestEveryDetectorDisabledEntirelySuppressesItsFlagType(t *testing.T) {
 		t.Run(string(name), func(t *testing.T) {
 			cfg := DefaultConfig()
 			cfg.PortScanThreshold = 2
-			cfg.ActivitySpikeThreshold = 2
-			cfg.HostActivityWarmupSamples = 1
 			cfg.OutboundAnomalyThreshold = 2
 			cfg.InternalReconThreshold = 2
 
@@ -342,32 +243,8 @@ func evtCountry(srcIP, country string, dstPort int, at time.Time) store.Event {
 // TestShippedCriticalPortCarriesCountry (issue #405). Every pinned value
 // carried over unchanged.
 
-func TestActivitySpikeCarriesCountry(t *testing.T) {
-	cfg := DefaultConfig()
-	cfg.ActivitySpikeThreshold = 2
-	cfg.ActivitySpikeWindow = time.Second
-	cfg.PortScanThreshold = 1000
-	cfg.HostActivityMultiplier = 3
-	cfg.HostActivityWarmupSamples = 20
-
-	d, fs := newTestDetector(t, cfg)
-	ip := "198.51.100.4"
-	now := time.Now()
-	tick := time.Duration(0)
-
-	for i := 0; i < 25; i++ {
-		base := now.Add(tick)
-		d.Observe(evtCountry(ip, "FR", 100, base))
-		d.Observe(evtCountry(ip, "FR", 101, base.Add(10*time.Millisecond)))
-		tick += 2 * time.Second
-	}
-	spikeBase := now.Add(tick)
-	for i := 0; i < 10; i++ {
-		d.Observe(evtCountry(ip, "FR", 200+i, spikeBase.Add(time.Duration(i)*10*time.Millisecond)))
-	}
-
-	list := fs.List()
-	if len(list) != 1 || list[0].Country != "FR" {
-		t.Fatalf("expected Country to be threaded through activity_spike, got %+v", list)
-	}
-}
+// TestActivitySpikeCarriesCountry moved to internal/engine: covered by
+// the Country=="FR" assertion in
+// internal/engine/shipped_activity_spike_test.go's
+// TestShippedActivitySpike_FieldsRefireClearRevive (issue #405). Every
+// pinned value carried over unchanged.
