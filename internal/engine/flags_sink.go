@@ -51,3 +51,21 @@ func raiseDetectionFlag(fs *flags.Store, r RoutedEmission) (isNew bool) {
 	}
 	return fs.AddProvisional(f.Type, f.Target, f.Detail, confidence, f.Evidence, f.Country, f.Provisional, r.EventTime)
 }
+
+// FlagsConfidenceFloorRaiser adapts a *flags.Store to
+// ConfidenceFloorRaiser (programmatic.go) -- the one place flags.Type's
+// string identity is relied on, kept here rather than spread across the
+// two reinforcement definitions that need it. A nil store is a safe
+// no-op, same convention as FlagsSink.
+func FlagsConfidenceFloorRaiser(fs *flags.Store) ConfidenceFloorRaiser {
+	return flagsFloorRaiser{fs: fs}
+}
+
+type flagsFloorRaiser struct{ fs *flags.Store }
+
+func (r flagsFloorRaiser) RaiseConfidenceFloor(t FlagType, target string, floor int) {
+	if r.fs == nil {
+		return
+	}
+	r.fs.RaiseConfidenceFloor(flags.Type(t), target, floor)
+}
