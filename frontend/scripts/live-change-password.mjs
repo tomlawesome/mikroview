@@ -42,8 +42,15 @@ const other = await otherCtx.newPage()
 await other.goto(URL_BASE, { waitUntil: 'networkidle' })
 const otherLogin = await api(other.request, 'POST', '/api/auth/login', { username: USER, password: PASS })
 check(otherLogin.status === 200, `a second browser signs in (${otherLogin.status})`)
+// GET /api/definitions is used below purely as an "is this session still
+// an authenticated admin" probe -- any admin-gated read would do, and
+// this is the one every other scenario in this directory already
+// exercises directly, so a session-store or cookie regression here would
+// not be a novel failure mode. #407 retired the watchlist entries route
+// this used to probe with; the admin gate it enforced carries over
+// identically onto /api/definitions.
 check(
-  (await api(other.request, 'GET', '/api/watchlist/entries')).status === 200,
+  (await api(other.request, 'GET', '/api/definitions')).status === 200,
   'the second browser has a working session before the change',
 )
 
@@ -63,7 +70,7 @@ check(
 )
 // Still the old password after every refusal.
 check(
-  (await api(page.request, 'GET', '/api/watchlist/entries')).status === 200,
+  (await api(page.request, 'GET', '/api/definitions')).status === 200,
   'the caller is still signed in after the refusals',
 )
 
@@ -76,11 +83,11 @@ const changed = await api(page.request, 'POST', '/api/auth/password', {
 check(changed.status === 200, `the password is changed (${changed.status})`)
 
 check(
-  (await api(page.request, 'GET', '/api/watchlist/entries')).status === 200,
+  (await api(page.request, 'GET', '/api/definitions')).status === 200,
   'the browser that made the change is still signed in -- being signed out by your own action is what stops people doing it',
 )
 check(
-  (await api(other.request, 'GET', '/api/watchlist/entries')).status !== 200,
+  (await api(other.request, 'GET', '/api/definitions')).status !== 200,
   'the other browser is signed out -- this is the "sign out everywhere" a suspected theft needs',
 )
 
