@@ -137,6 +137,36 @@ func TestPostgresAppendAndQueryRoundTrip(t *testing.T) {
 	}
 }
 
+// TestPostgresAppendProvisionalRoundTrips is #399's "verify the store
+// round-trips it" requirement for the Postgres backend: Record.Provisional
+// survives the real INSERT/SELECT round trip against the new provisional
+// column (migration 0003_match_log_provisional.sql), and a plain Append
+// on a distinct tuple leaves it false.
+func TestPostgresAppendProvisionalRoundTrips(t *testing.T) {
+	s := mustOpenPostgres(t, 7*24*time.Hour)
+	src := Identity{MAC: "aa:bb:cc:dd:ee:ff"}
+	tuple := Tuple{Source: src, DestIP: "10.0.0.5", Port: 8883}
+	now := time.Date(2026, 8, 9, 12, 0, 0, 0, time.UTC)
+
+	if err := s.AppendProvisional("entry-1", tuple, testEvent("first"), now, true); err != nil {
+		t.Fatalf("AppendProvisional: %v", err)
+	}
+	got := collectPG(t, s, Query{Source: src})
+	if len(got) != 1 || !got[0].Provisional {
+		t.Fatalf("expected Provisional=true, got %+v", got)
+	}
+
+	other := Tuple{Source: src, DestIP: "10.0.0.6", Port: 443}
+	if err := s.Append("entry-1", other, testEvent("second"), now); err != nil {
+		t.Fatal(err)
+	}
+	for _, r := range collectPG(t, s, Query{Source: src}) {
+		if r.Tuple.DestIP == "10.0.0.6" && r.Provisional {
+			t.Error("expected a plain Append to leave Provisional false")
+		}
+	}
+}
+
 // The core of #243 section 4, same as the file backend's own
 // TestRepeatedTupleCollapses: a repeated identical tuple must not become
 // a second stored row.
