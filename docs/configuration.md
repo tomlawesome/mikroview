@@ -1140,7 +1140,12 @@ flags:
   list covers SSH/Telnet/FTP/SMB/RDP/VNC and RouterOS's own
   Winbox/API ports (8291/8728/8729) — worth watching precisely because
   they're MikroTik-specific and a common target once a scanner has
-  fingerprinted a device as RouterOS.
+  fingerprinted a device as RouterOS. The count is per *source*, summed
+  across the whole critical-port list (an internet scanner hitting five
+  different well-known ports once each is one incident, not five), so
+  the alert names every critical port that source touched within the
+  window and carries them as evidence — not just the one port that
+  happened to trip the threshold.
 - **Global volume spike** — current events/sec vs. a slow-moving
   baseline of itself (an exponential moving average, not a fixed
   number), so it adapts to your network's real traffic level over time
@@ -1190,7 +1195,12 @@ flags:
   misconfigured port-forward or firewall rule — the real client keeps
   retrying a port that isn't actually open the way you think — rather
   than necessarily an attack, so treat it as "worth a look," not
-  "critical."
+  "critical." The count is keyed on source *and port only*, never on the
+  destination address, so the same source retrying one port across
+  several internal hosts is one incident. The alert therefore names only
+  the port, and lists every internal destination that was actually
+  attempted as evidence, rather than naming whichever host happened to
+  receive the attempt that crossed the threshold.
 - **Low-and-slow port scan** — a scan deliberately paced to stay under
   the fast port-scan detector's short `portScanWindow`. Judged over the
   much longer `lowSlowScanWindow` (hours, not seconds), and deliberately

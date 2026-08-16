@@ -49,8 +49,15 @@ func buildReplayTestDef(t *testing.T) *DeclarativeDefinition {
 		{Field: FieldDestinationPort, Operator: OpEquals, Values: []string{"22"}},
 		{Field: FieldAction, Operator: OpEquals, Values: []string{string(store.ActionDrop)}},
 	}
-	dd, err := NewDeclarativeDefinition(def, conds, KeyPerSource, replayTestWindow, 5, CountingTotal, "",
-		"{PortCount} hits on watched ports from this source", nil)
+	dd, err := NewDeclarativeDefinition(def, DeclarativeSpec{
+		Conditions:     conds,
+		Key:            KeyPerSource,
+		Window:         replayTestWindow,
+		Threshold:      5,
+		CountingMode:   CountingTotal,
+		DetailTemplate: "{PortCount} hits on watched ports from this source",
+		Evidence:       []EvidenceField{EvidencePorts, EvidenceHosts, EvidenceLabels},
+	})
 	if err != nil {
 		t.Fatalf("NewDeclarativeDefinition: %v", err)
 	}
@@ -290,7 +297,15 @@ func TestDeclarativeDefinitionReplaySampleBound(t *testing.T) {
 	// so replaySampleBound+20 matching events produce that many
 	// emissions. window=replayTestWindow, spaced 1s apart, so the
 	// corpus span (n-1 seconds) comfortably clears it.
-	dd, err := NewDeclarativeDefinition(def, conds, KeyPerSource, replayTestWindow, 1, CountingTotal, "", "hit", nil)
+	dd, err := NewDeclarativeDefinition(def, DeclarativeSpec{
+		Conditions:     conds,
+		Key:            KeyPerSource,
+		Window:         replayTestWindow,
+		Threshold:      1,
+		CountingMode:   CountingTotal,
+		DetailTemplate: "hit",
+		Evidence:       []EvidenceField{EvidencePorts, EvidenceHosts, EvidenceLabels},
+	})
 	if err != nil {
 		t.Fatalf("NewDeclarativeDefinition: %v", err)
 	}

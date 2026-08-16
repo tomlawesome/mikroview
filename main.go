@@ -812,6 +812,18 @@ func main() {
 	}
 	detectorSettings, err := detect.OpenSettingsStoreWithBackend(detectorBackend, seed)
 	mustOpenStore(detectorsLog, err)
+	// Every shipped definition this binary evaluates has to actually
+	// exist, whatever the persistence situation -- see
+	// engine.SeedShippedDefinitions' own doc comment for why this runs
+	// every boot and is not the same thing as MigrateDefinitions running
+	// once. Anything already in the store (a migration's output, an
+	// operator's edits) is left untouched; only genuinely missing
+	// definitions are added, using this deployment's live detector
+	// settings for enabled/scope so a detector switched off before the
+	// port stays off after it.
+	if err := engine.SeedShippedDefinitions(definitions, detectorSettings.List(), detectCfg); err != nil {
+		definitionsLog.Warn(err.Error())
+	}
 	// bl (issue #113 Part B): always constructed, even with zero enabled
 	// sources (cfg.Blocklist.Sources == []) -- Match/Refresh are both
 	// harmless no-ops in that case (see internal/blocklist.Blocklist's
@@ -849,6 +861,53 @@ func main() {
 	globalSpike := detect.NewGlobalSpikeDetectorWithSettings(detectCfg, fs, detectorSettings)
 	deviceSilence := detect.NewDeviceSilenceDetectorWithSettings(detectCfg, fs, detectorSettings, devices)
 	staleRule := detect.NewStaleRuleDetector(ru, fs, time.Duration(cfg.Flags.StaleRuleDays)*24*time.Hour)
+
+	// Shipped declarative definitions (issue #405): built from whatever
+	// the definitions store currently holds for a shipped, available,
+	// declarative-kind definition, wrapped in one DeclarativeSet (its own
+	// dispatch pre-index, see internal/engine/dispatch.go) and registered
+	// on the engine -- port_scan, critical_port, repeated_drops and
+	// distributed_brute_force are ported this way so far
+	// (docs/decisions/evaluation-engine.md section 2,
+	// internal/engine/shipped_declarative.go's shippedDeclarativeBuilders);
+	// every other shipped detector still runs through internal/detect
+	// below until its own #405 port lands. An empty/not-yet-migrated
+	// definitions store (definitions.List() returns nothing) is a valid,
+	// common state -- see MigrateDefinitions's own doc comment -- and
+	// simply means this DeclarativeSet starts out evaluating nothing,
+	// same as registering an empty one on a freshly-constructed Engine.
+	// Each definition's sink raises into fs and, for a newly-raised
+	// episode, kicks off the same best-effort async reputation lookup
+	// internal/detect's WithReputation-configured detectors have always
+	// had -- single-address or group-sampling, chosen per definition by
+	// engine.ShippedDeclarativeSink, mirroring internal/detect's own
+	// maybeCheckReputation/maybeCheckGroupReputation split. A definition
+	// with no address to look up (a rule-label or "global" target) is
+	// simply never a lookup candidate.
+	// 8 matches internal/detect.reputationLookupConcurrency
+	// (unexported; kept in sync by hand until that pool is deleted
+	// alongside the rest of internal/detect's engine machinery once every
+	// detector has moved).
+	var shippedDeclDefs []*engine.DeclarativeDefinition
+	for _, sd := range definitions.List() {
+		if !sd.Available || sd.Definition.Kind != engine.KindDeclarative || sd.Definition.Provenance.Origin != engine.ProvenanceShipped {
+			continue
+		}
+		dd, err := engine.BuildShippedDeclarativeDefinition(sd.Definition)
+		if err != nil {
+			// Not every shipped-provenance declarative definition
+			// necessarily has a registered builder yet (a stale/future
+			// entry outside this binary's current shipped catalogue) --
+			// logged and skipped, not fatal: the rest of the shipped set,
+			// and every programmatic/legacy definition still running
+			// through internal/detect below, keeps working.
+			detectorsLog.Warn(fmt.Sprintf("skipping shipped declarative definition %q: %v", sd.Definition.ID, err))
+			continue
+		}
+		dd.OnRoutedEmission = engine.ShippedDeclarativeSink(sd.Definition, fs, rep, 8)
+		shippedDeclDefs = append(shippedDeclDefs, dd)
+	}
+	eng.Register(engine.NewDeclarativeSet("shipped-declarative", shippedDeclDefs))
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
