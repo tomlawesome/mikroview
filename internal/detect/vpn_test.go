@@ -104,110 +104,35 @@ func TestVPNBoostConfidenceEmptyInterfacesLeavesEveryScoreUnchanged(t *testing.T
 }
 
 // --- checkHostActivityBaseline (TypeActivitySpike): direct VPN-vs-LAN comparison ---
-
-func TestActivitySpikeConfidenceHigherOverVPNInterfaceThanIdenticalLAN(t *testing.T) {
-	cfg := DefaultConfig()
-	cfg.ActivitySpikeThreshold = 1
-	cfg.HostActivityMultiplier = 1.5
-	cfg.HostActivityWarmupSamples = 20
-	cfg.VPNInterfaces = []string{"wireguard*"}
-	cfg.VPNConfidenceMultiplier = 2
-	d, fs := newTestDetector(t, cfg)
-
-	now := time.Now()
-	const rate, baseline, variance = 16, 10, 4 // z = (16-10)/sqrt(4) = 3
-
-	fire := func(ip, iface string) {
-		w := &sourceWindow{
-			baseline:    baseline,
-			variance:    variance,
-			primed:      true,
-			sampleCount: hostActivityMinSamples, // == floor, < warmupSamples: partial history credit
-		}
-		d.checkHostActivityBaseline(w, ip, "", iface, rate, now)
-	}
-
-	const lanIP, vpnIP = "198.51.100.20", "198.51.100.21"
-	fire(lanIP, "ether1")
-	fire(vpnIP, "wireguard1")
-
-	var lanConf, vpnConf *int
-	for _, f := range fs.List() {
-		if f.Type != flags.TypeActivitySpike {
-			continue
-		}
-		switch f.Target {
-		case lanIP:
-			lanConf = f.Confidence
-		case vpnIP:
-			vpnConf = f.Confidence
-		}
-	}
-	if lanConf == nil || vpnConf == nil {
-		t.Fatalf("expected both the LAN and VPN sources to raise activity_spike, got %+v", fs.List())
-	}
-
-	// Compute the expected LAN confidence the same way the production
-	// code does (emaZScore + emaConfidence), so this test tracks the
-	// real formula rather than a hand-copied duplicate of it.
-	z := emaZScore(rate, baseline, variance)
-	wantLAN := emaConfidence(z, hostActivityMinSamples, cfg.HostActivityWarmupSamples)
-	wantVPN := d.vpnBoostConfidence(wantLAN, "wireguard1")
-
-	if *lanConf != wantLAN {
-		t.Errorf("LAN confidence = %d, want %d", *lanConf, wantLAN)
-	}
-	if *vpnConf != wantVPN {
-		t.Errorf("VPN confidence = %d, want %d", *vpnConf, wantVPN)
-	}
-	if *vpnConf <= *lanConf {
-		t.Fatalf("expected VPN-interface confidence (%d) to exceed identical LAN-interface confidence (%d)", *vpnConf, *lanConf)
-	}
-}
-
-func TestActivitySpikeConfidenceIdenticalRegardlessOfInterfaceWhenVPNInterfacesUnset(t *testing.T) {
-	cfg := DefaultConfig()
-	cfg.ActivitySpikeThreshold = 1
-	cfg.HostActivityMultiplier = 1.5
-	cfg.HostActivityWarmupSamples = 20
-	// VPNInterfaces deliberately left unset (the default) -- confidence
-	// must be identical no matter what InInterface an event carries.
-	d, fs := newTestDetector(t, cfg)
-
-	now := time.Now()
-	const rate, baseline, variance = 16, 10, 4
-
-	fire := func(ip, iface string) {
-		w := &sourceWindow{
-			baseline: baseline, variance: variance, primed: true,
-			sampleCount: hostActivityMinSamples,
-		}
-		d.checkHostActivityBaseline(w, ip, "", iface, rate, now)
-	}
-
-	const plainIP, wgLookalikeIP = "198.51.100.30", "198.51.100.31"
-	fire(plainIP, "ether1")
-	fire(wgLookalikeIP, "wireguard1") // matches nothing since VPNInterfaces is empty
-
-	var plainConf, wgConf *int
-	for _, f := range fs.List() {
-		if f.Type != flags.TypeActivitySpike {
-			continue
-		}
-		switch f.Target {
-		case plainIP:
-			plainConf = f.Confidence
-		case wgLookalikeIP:
-			wgConf = f.Confidence
-		}
-	}
-	if plainConf == nil || wgConf == nil {
-		t.Fatalf("expected both sources to raise activity_spike, got %+v", fs.List())
-	}
-	if *plainConf != *wgConf {
-		t.Errorf("expected identical confidence with VPNInterfaces unset regardless of InInterface, got LAN-iface=%d wireguard-iface=%d", *plainConf, *wgConf)
-	}
-}
+//
+// TestActivitySpikeConfidenceHigherOverVPNInterfaceThanIdenticalLAN and
+// TestActivitySpikeConfidenceIdenticalRegardlessOfInterfaceWhenVPNInterfacesUnset
+// moved to internal/engine (issue #405: activity_spike is now a shipped
+// programmatic definition evaluated by internal/engine, not
+// internal/detect -- see shipped_activity_spike.go), since both drove
+// checkHostActivityBaseline directly against sourceWindow fields
+// (baseline/variance/primed/sampleCount) that moved with it.
+//
+// The first is now
+// internal/engine/shipped_activity_spike_test.go's
+// TestShippedActivitySpikeVPNBoostsConfidence, though not pinned quite as
+// exhaustively: it asserts the VPN-tagged interface scores strictly
+// higher than an identical LAN one and pins the Detail suffix, but
+// (unlike this test) does not separately recompute the expected LAN
+// confidence from emaZScore/emaConfidence by hand and assert exact
+// equality.
+//
+// The second has no engine-side counterpart at all -- no
+// activity_spike test on the engine side pins that, with VPNInterfaces
+// left unset on one definition instance, two different interface names
+// (including one that superficially looks like a VPN interface) produce
+// byte-identical confidence. The underlying mechanism (vpnBoostConfidence
+// treating an empty pattern list as a no-op for any interface) is still
+// covered generically by this file's own
+// TestVPNBoostConfidenceEmptyInterfacesLeavesEveryScoreUnchanged, which
+// exercises internal/detect's still-live copy of that function directly
+// (used by dest_spread's two halves) -- not activity_spike's wiring to
+// it. Flagged in this port's report rather than silently dropped.
 
 // --- observeDestSpread (TypeOutboundAnomaly/TypeInternalRecon): direct VPN-vs-LAN comparison ---
 

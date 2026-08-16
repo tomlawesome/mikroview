@@ -75,9 +75,7 @@ func (d *Detector) observeOffHours(e store.Event, now time.Time) {
 		if len(d.perSource) >= maxTrackedSources {
 			evictOldestByActivity(d.perSource)
 		}
-		w = &sourceWindow{
-			spikes: newCountRing(d.cfg.ActivitySpikeWindow),
-		}
+		w = &sourceWindow{}
 		d.perSource[e.SrcIP] = w
 	}
 	w.lastActivity = now
