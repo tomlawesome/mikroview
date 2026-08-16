@@ -4,8 +4,10 @@ import type {
   ApiToken,
   AuditResult,
   AuthSession,
+  CoverageEvidence,
+  Definition,
+  DefinitionSuppression,
   DetectorScope,
-  DetectorSettings,
   Device,
   Entity,
   EventsResult,
@@ -330,21 +332,63 @@ export async function deleteUser(id: string): Promise<string | null> {
   return (await res.text()) || `deleteUser: ${res.status}`
 }
 
-export async function fetchDetectorSettings(): Promise<DetectorSettings[]> {
-  const res = await fetch('/api/detectors')
-  if (!res.ok) throw new ApiError(`fetchDetectorSettings: ${res.status}`, res.status)
+// The one definitions surface (issue #407), replacing /api/detectors and
+// /api/watchlist/entries wholesale -- both are gone server-side, with no
+// alias and no friendlier-error stub, so nothing below may fall back to
+// them. A shipped detector and a watchlist expectation are the same
+// thing to the engine, and they are one list here for the same reason:
+// two endpoints over one thing is what let a detector's enabled flag and
+// an entry's scope drift into two answers to the same question.
+export async function fetchDefinitions(): Promise<{
+  definitions: Definition[]
+  coverageEvidence: CoverageEvidence
+}> {
+  const res = await fetch('/api/definitions')
+  if (!res.ok) throw new ApiError(`fetchDefinitions: ${res.status}`, res.status)
   const body = await res.json()
-  return body.detectors ?? []
+  return {
+    definitions: body.definitions ?? [],
+    coverageEvidence: body.coverageEvidence ?? { complete: false },
+  }
 }
 
-export async function updateDetectorSettings(
-  name: string,
-  enabled: boolean,
-  scope: DetectorScope,
-): Promise<string | null> {
-  const res = await putJSON(`/api/detectors/${encodeURIComponent(name)}`, { enabled, scope })
-  if (res.ok) return null
-  return (await res.text()) || `updateDetectorSettings: ${res.status}`
+// updateDefinition sends only the fields it is given. Every field is
+// optional server-side and an absent one means "leave this alone", so a
+// caller toggling `enabled` cannot silently clear a definition's scope
+// by not sending one.
+export interface DefinitionUpdate {
+  name?: string
+  enabled?: boolean
+  scope?: DetectorScope
+  params?: Record<string, unknown>
+  suppressions?: DefinitionSuppression[]
+  expectation?: WatchlistEntryRequest
+}
+
+export async function updateDefinition(id: string, req: DefinitionUpdate): Promise<Definition | string> {
+  const res = await putJSON(`/api/definitions/${encodeURIComponent(id)}`, req)
+  if (res.ok) return await res.json()
+  return (await res.text()) || `updateDefinition: ${res.status}`
+}
+
+// resetDefinition discards every param override in one call, putting a
+// shipped definition back to exactly what it shipped with. Clearing
+// every override and "reset to default" are the same state server-side,
+// not two operations that could fall out of sync.
+export async function resetDefinition(id: string): Promise<Definition | string> {
+  const res = await postJSON(`/api/definitions/${encodeURIComponent(id)}/reset`)
+  if (res.ok) return await res.json()
+  return (await res.text()) || `resetDefinition: ${res.status}`
+}
+
+// cloneDefinition copies an expectation definition into a new one with
+// its own identity. Refused server-side for a shipped detection
+// definition, whose logic is compiled into the binary and keyed by its
+// own id -- a copy of one would evaluate nothing.
+export async function cloneDefinition(id: string, name?: string): Promise<Definition | string> {
+  const res = await postJSON(`/api/definitions/${encodeURIComponent(id)}/clone`, { name: name ?? '' })
+  if (res.ok) return await res.json()
+  return (await res.text()) || `cloneDefinition: ${res.status}`
 }
 
 // fetchEntities/upsertEntity/deleteEntity: admin-only CRUD over
@@ -379,10 +423,12 @@ export async function deleteEntity(type: string, key: string): Promise<string | 
 // entry's id is server-generated, not an operator-chosen key), so this
 // mirrors that split rather than forcing one shared function.
 
-// watchlistEntryRequest is the wire shape internal/api's
-// watchlistEntryRequest accepts -- deliberately narrower than
+// WatchlistEntryRequest is the expectation block internal/api's
+// expectationRequest accepts -- deliberately narrower than
 // WatchlistEntry itself: observing/permitted/observed are never settable
-// here, only through their own dedicated endpoints below.
+// here, only through their own dedicated endpoints below, so a plain
+// edit cannot silently wipe an entry's accumulated observations. name
+// rides beside it on create, and is not part of the block itself.
 export interface WatchlistEntryRequest {
   name?: string
   source?: WatchlistIdentity
@@ -390,6 +436,19 @@ export interface WatchlistEntryRequest {
   ports?: number[]
   invert?: boolean
   includeStructuralNoise?: boolean
+}
+
+// expectationBlock splits a request into the two halves the definitions
+// API takes: the entry's own matching data, and the name that lives on
+// the definition envelope around it.
+function expectationBlock(req: WatchlistEntryRequest) {
+  return {
+    source: req.source ?? {},
+    destIp: req.destIp ?? '',
+    ports: req.ports ?? [],
+    invert: req.invert ?? false,
+    includeStructuralNoise: req.includeStructuralNoise ?? false,
+  }
 }
 
 // Returns the entries and, alongside them, what can be said about
@@ -400,51 +459,72 @@ export async function fetchWatchlistEntries(): Promise<{
   entries: WatchlistEntry[]
   coverage: Record<string, WatchlistCoverage>
 }> {
-  const res = await fetch('/api/watchlist/entries')
-  if (!res.ok) throw new ApiError(`fetchWatchlistEntries: ${res.status}`, res.status)
-  const body = await res.json()
-  return { entries: body.entries ?? [], coverage: body.coverage ?? {} }
+  const { definitions } = await fetchDefinitions()
+  const entries: WatchlistEntry[] = []
+  const coverage: Record<string, WatchlistCoverage> = {}
+  for (const d of definitions) {
+    if (d.intent !== 'expectation' || !d.expectation) continue
+    // The definition's own name is the envelope's, not the entry's --
+    // the entry carries a copy for rendering, but the server is the one
+    // that decides it (an entry created with no name gets a generated
+    // one), so it is read back from the definition rather than assumed.
+    entries.push({ ...d.expectation, name: d.name })
+    if (d.coverage) coverage[d.id] = d.coverage
+  }
+  return { entries, coverage }
 }
 
 export async function createWatchlistEntry(req: WatchlistEntryRequest): Promise<WatchlistEntry | string> {
-  const res = await postJSON('/api/watchlist/entries', req)
-  if (res.ok) return await res.json()
+  const res = await postJSON('/api/definitions', {
+    name: req.name ?? '',
+    intent: 'expectation',
+    kind: 'declarative',
+    expectation: expectationBlock(req),
+  })
+  if (res.ok) return definitionEntry(await res.json())
   return (await res.text()) || `createWatchlistEntry: ${res.status}`
 }
 
 export async function updateWatchlistEntry(id: string, req: WatchlistEntryRequest): Promise<WatchlistEntry | string> {
-  const res = await putJSON(`/api/watchlist/entries/${encodeURIComponent(id)}`, req)
-  if (res.ok) return await res.json()
-  return (await res.text()) || `updateWatchlistEntry: ${res.status}`
+  const result = await updateDefinition(id, { name: req.name ?? '', expectation: expectationBlock(req) })
+  if (typeof result === 'string') return result
+  return definitionEntry(result)
 }
 
 export async function deleteWatchlistEntry(id: string): Promise<string | null> {
-  const res = await deleteJSON(`/api/watchlist/entries/${encodeURIComponent(id)}`)
+  const res = await deleteJSON(`/api/definitions/${encodeURIComponent(id)}`)
   if (res.ok) return null
   return (await res.text()) || `deleteWatchlistEntry: ${res.status}`
 }
 
+// definitionEntry pulls the operator-facing entry out of a definition
+// response. The entry is always present for an expectation definition;
+// the fallback exists so a shape change surfaces as an entry with no
+// fields rather than as a thrown TypeError inside a Svelte render.
+function definitionEntry(d: Definition): WatchlistEntry {
+  return { ...(d.expectation ?? { id: d.id, createdAt: '' }), name: d.name }
+}
+
 // promoteWatchlistDestinations moves the given destination/port pairs
-// from an inverted entry's Observed candidate list into its Permitted
-// allow-list (internal/watchlist.Store.Promote) -- a pair not previously
-// observed is still accepted, the same "deliberate choice, not an
+// from an inverted expectation's Observed candidate list into its
+// Permitted allow-list -- a pair not previously observed is still
+// accepted, the same "deliberate choice, not an
 // error" contract the backend documents.
 export async function promoteWatchlistDestinations(
   id: string,
   destinations: WatchlistPermittedDest[],
 ): Promise<WatchlistEntry | string> {
-  const res = await postJSON(`/api/watchlist/entries/${encodeURIComponent(id)}/promote`, { destinations })
-  if (res.ok) return await res.json()
+  const res = await postJSON(`/api/definitions/${encodeURIComponent(id)}/promote`, { destinations })
+  if (res.ok) return definitionEntry(await res.json())
   return (await res.text()) || `promoteWatchlistDestinations: ${res.status}`
 }
 
-// setWatchlistObserving flips whether an inverted entry is in observe
-// mode (internal/watchlist.Store.SetObserving) -- the raw mechanism
-// only; see that method's own doc comment for why this package makes no
-// judgement about when to call it.
+// setWatchlistObserving flips whether an inverted expectation is in
+// observe mode -- the raw mechanism only; see the handler's own doc
+// comment for why nothing here judges when to call it.
 export async function setWatchlistObserving(id: string, observing: boolean): Promise<WatchlistEntry | string> {
-  const res = await postJSON(`/api/watchlist/entries/${encodeURIComponent(id)}/observing`, { observing })
-  if (res.ok) return await res.json()
+  const res = await postJSON(`/api/definitions/${encodeURIComponent(id)}/observing`, { observing })
+  if (res.ok) return definitionEntry(await res.json())
   return (await res.text()) || `setWatchlistObserving: ${res.status}`
 }
 
@@ -469,7 +549,7 @@ export async function fetchWatchlistMatches(params: {
   if (params.since) q.set('since', params.since)
   if (params.until) q.set('until', params.until)
   if (params.limit) q.set('limit', String(params.limit))
-  const res = await fetch(`/api/watchlist/matches?${q.toString()}`)
+  const res = await fetch(`/api/matches?${q.toString()}`)
   if (!res.ok) throw new ApiError(`fetchWatchlistMatches: ${res.status}`, res.status)
   const body = await res.json()
   return body.matches ?? []

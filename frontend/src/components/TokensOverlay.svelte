@@ -135,7 +135,7 @@
         <p class="hint">
           <strong>Read-only</strong> tokens give scripted/service access to <code>/api/events</code>,
           <code>/api/flags</code>, <code>/api/stats</code>, <code>/api/devices</code>, and
-          <code>/api/watchlist/matches</code> -- nothing else. <strong>Ingest</strong> tokens let one
+          <code>/api/matches</code> -- nothing else. <strong>Ingest</strong> tokens let one
           router push its state to <code>/api/ingest/routeros</code> -- nothing else -- and are scoped
           to that device. The value is shown once, at creation.
         </p>

@@ -171,6 +171,105 @@ func convertToDefinitions(settingsDoc map[string]DetectorSettings, entries []*wa
 	return out, nil
 }
 
+// AdoptWatchlistEntries seeds this store with every watchlist entry the
+// definitions document does not already hold, and reports how many it
+// added -- issue #407's half of the entry-set move, and the reason an
+// upgrade across it keeps every entry, every observation and every
+// promoted destination.
+//
+// It is deliberately separate from MigrateDefinitions and, like
+// SeedShippedDefinitions, runs on every boot rather than once. The two
+// answer different questions, and the difference is exactly what this
+// function exists for: MigrateDefinitions asks "what did this deployment
+// have before the definitions document existed", and answers it only
+// while that document does not exist. A deployment that upgraded during
+// #404/#405/#406 therefore already has a definitions document -- and
+// went on creating watchlist entries in internal/watchlist's own store
+// afterwards, because that store was still the operator-facing entry set
+// until this issue deleted it. Those entries are in no definitions
+// document anywhere. Without this, the upgrade that deletes the store
+// silently loses them, which is precisely the failure #380's first item
+// describes: no error, no warning, just an entry set that is quietly
+// smaller than it was.
+//
+// The #404 migration conventions apply unchanged:
+//
+//   - Fail-closed on the source. An unreadable or unparseable watchlist
+//     document is a hard error (persist.Open, #378), not "no entries" --
+//     starting with a silently empty entry set is the outcome this
+//     refuses.
+//   - One write at the end. Every entry is converted first, entirely in
+//     memory; a single failure returns before anything is written, so a
+//     half-converted set can never reach the document.
+//   - The source is never touched. internal/watchlist's document is read
+//     and left exactly as it was, so a failure anywhere leaves the
+//     entries recoverable and the next boot simply tries again.
+//   - Idempotent. An entry already present (by ID) is left completely
+//     alone -- an operator's later edits win over the source document,
+//     which is what makes running this on every boot safe rather than a
+//     slow overwrite of live state.
+func AdoptWatchlistEntries(ctx context.Context, s *DefinitionsStore, watchlistBackend persist.Backend) (int, error) {
+	if s == nil || watchlistBackend == nil {
+		return 0, nil
+	}
+
+	var wlFile migrateWatchlistFile
+	if _, _, err := persist.Open(ctx, watchlistBackend, "the watchlist (entry adoption source)", func(data []byte) error {
+		return json.Unmarshal(data, &wlFile)
+	}); err != nil {
+		return 0, err
+	}
+	if len(wlFile.Entries) == 0 {
+		return 0, nil
+	}
+
+	converted := make(map[string]json.RawMessage, len(wlFile.Entries))
+	for _, e := range wlFile.Entries {
+		if e == nil || e.ID == "" {
+			continue
+		}
+		if _, exists := s.Get(e.ID); exists {
+			continue
+		}
+		d, err := convertWatchlistEntry(e)
+		if err != nil {
+			return 0, fmt.Errorf("engine: adopting watchlist entry %q: %w", e.ID, err)
+		}
+		raw, err := json.Marshal(d)
+		if err != nil {
+			return 0, fmt.Errorf("engine: encoding adopted watchlist entry %q: %w", e.ID, err)
+		}
+		converted[e.ID] = raw
+	}
+	if len(converted) == 0 {
+		return 0, nil
+	}
+	return s.adoptRaw(converted), nil
+}
+
+// adoptRaw inserts already-converted definitions for ids this store does
+// not hold, under one lock and one persist -- the "one write at the end"
+// half of AdoptWatchlistEntries' contract. Anything that appeared in the
+// store between conversion and here (a concurrent boot, an operator
+// creating the same id) wins: this never overwrites.
+func (s *DefinitionsStore) adoptRaw(defs map[string]json.RawMessage) int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	added := 0
+	for id, raw := range defs {
+		if _, exists := s.raw[id]; exists {
+			continue
+		}
+		s.raw[id] = raw
+		added++
+	}
+	if added > 0 {
+		s.persistLocked()
+	}
+	return added
+}
+
 // --- internal/detect.SettingsStore -> shipped definitions --------------
 
 // ShippedDefaults is every value the shipped catalogue seeds a

@@ -3,7 +3,6 @@
 package api
 
 import (
-	"bytes"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -259,29 +258,33 @@ func TestExclusionRemoveRecordsAuditEntry(t *testing.T) {
 	}
 }
 
-// TestDetectorSettingsUpdateRecordsAuditEntry covers
-// handleDetectorSettingsUpdate, gated by callerIsAdminOrOpen.
-func TestDetectorSettingsUpdateRecordsAuditEntry(t *testing.T) {
+// TestShippedDefinitionUpdateRecordsAuditEntry covers
+// handleDefinitionsUpdate, gated by callerIsAdmin -- the #407 successor
+// to handleDetectorSettingsUpdate, whose action string this test used to
+// pin as "detector.update". Every definition update now records under
+// one action, "definition.update", whichever kind of definition it
+// touches (see definitionAuditDetail).
+func TestShippedDefinitionUpdateRecordsAuditEntry(t *testing.T) {
 	s := newAuthTestServer(t)
 	ts := httptest.NewServer(s.Routes())
 	defer ts.Close()
 	admin := registerAdmin(t, ts)
 
-	resp := putJSONTest(t, admin, ts.URL+"/api/detectors/port_scan", updateDetectorSettingsRequest{Enabled: false})
+	resp := putJSON(t, admin, ts.URL+"/api/definitions/port_scan", updateDefinitionRequest{Enabled: boolPtr(false)})
 	resp.Body.Close()
 
 	res := fetchAudit(t, admin, ts)
 	var found bool
 	for _, e := range res.Entries {
-		if e.Action == "detector.update" && e.Target == "port_scan" {
+		if e.Action == "definition.update" && e.Target == "port_scan" {
 			found = true
 			if e.Detail != "enabled=false" {
-				t.Errorf("expected the detector.update entry's detail to record the new enabled state, got %q", e.Detail)
+				t.Errorf("expected the definition.update entry's detail to record the new enabled state, got %q", e.Detail)
 			}
 		}
 	}
 	if !found {
-		t.Fatalf("expected a detector.update audit entry, got %+v", res.Entries)
+		t.Fatalf("expected a definition.update audit entry, got %+v", res.Entries)
 	}
 }
 
@@ -300,25 +303,4 @@ func postFlagsAction(t *testing.T, client *http.Client, url string) {
 		t.Fatal(err)
 	}
 	resp.Body.Close()
-}
-
-// putJSONTest mirrors postJSON (auth_test.go) but for PUT, which
-// handleDetectorSettingsUpdate reads a JSON body from.
-func putJSONTest(t *testing.T, client *http.Client, url string, body any) *http.Response {
-	t.Helper()
-	b, err := json.Marshal(body)
-	if err != nil {
-		t.Fatal(err)
-	}
-	req, err := http.NewRequest(http.MethodPut, url, bytes.NewReader(b))
-	if err != nil {
-		t.Fatal(err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set(csrfHeaderName, csrfHeaderValue)
-	resp, err := client.Do(req)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return resp
 }

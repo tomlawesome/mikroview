@@ -312,6 +312,26 @@ func (e *Engine) Register(d Evaluated) {
 	e.reorderLocked()
 }
 
+// Unregister removes the definition registered under id, so the engine
+// stops evaluating it entirely -- the counterpart Register always
+// implied and nothing needed until definitions became editable at
+// runtime (issue #407): a deleted definition that stayed registered
+// would keep evaluating, and keep raising, after the operator removed
+// it.
+//
+// Reports whether anything was actually removed. Safe to call
+// concurrently with Run; the next event picks up the change.
+func (e *Engine) Unregister(id string) bool {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if _, ok := e.defs[id]; !ok {
+		return false
+	}
+	delete(e.defs, id)
+	e.reorderLocked()
+	return true
+}
+
 // reorderLocked rebuilds the evaluation order from defs. Called only
 // from Register (the one place the definition set changes), never from
 // the per-event path.

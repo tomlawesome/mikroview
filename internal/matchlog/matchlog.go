@@ -257,7 +257,7 @@ type Store interface {
 	// ctx cancels the query. It matters most on the Postgres backend,
 	// where the work happens server-side and a client that has gone
 	// away would otherwise leave it running to completion; the file
-	// backend checks it between records. GET /api/watchlist/matches is
+	// backend checks it between records. GET /api/matches is
 	// reachable with a read-only API token and has no rate limiter, so
 	// "the caller left" needs to actually stop the work.
 	Query(ctx context.Context, q Query, yield func(Record) bool) error

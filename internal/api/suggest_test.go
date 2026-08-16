@@ -16,6 +16,20 @@ import (
 	"github.com/tomlawesome/mikroview/internal/watchlist"
 )
 
+// getExpectation is a small helper mirroring the old
+// s.Watchlist.Get(id): reads back one expectation definition as the
+// entry it converts to, failing the test on a decode error rather than
+// returning it -- every call site here already knows the id should
+// exist.
+func getExpectation(t *testing.T, s *Server, id string) (watchlist.Entry, bool) {
+	t.Helper()
+	e, ok, err := s.Definitions.GetExpectation(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return e, ok
+}
+
 // seedCandidate syncs one candidate directly into s.Suggest -- bypassing
 // generation from routerState, which the reset-specific tests below
 // exercise for real.
@@ -75,7 +89,7 @@ func TestHandleSuggestionsAcceptDeviceCreatesInvertedEntry(t *testing.T) {
 	if !ok || updated.Status != suggest.StatusOn || updated.EntryID == "" {
 		t.Fatalf("candidate not accepted correctly: %+v (ok=%v)", updated, ok)
 	}
-	entry, ok := s.Watchlist.Get(updated.EntryID)
+	entry, ok := getExpectation(t, s, updated.EntryID)
 	if !ok {
 		t.Fatal("no watchlist entry was created")
 	}
@@ -104,7 +118,7 @@ func TestHandleSuggestionsAcceptPortCreatesNonInvertedEntry(t *testing.T) {
 	}
 
 	updated, _ := s.Suggest.Get(id)
-	entry, ok := s.Watchlist.Get(updated.EntryID)
+	entry, ok := getExpectation(t, s, updated.EntryID)
 	if !ok {
 		t.Fatal("no watchlist entry was created")
 	}
@@ -129,7 +143,7 @@ func TestHandleSuggestionsAcceptRejectsNonOff(t *testing.T) {
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Errorf("expected 400 for accepting a hidden candidate, got %d", resp.StatusCode)
 	}
-	if _, ok := s.Watchlist.Get(id); ok {
+	if _, ok := getExpectation(t, s, id); ok {
 		t.Error("no watchlist entry should have been created")
 	}
 }
@@ -191,7 +205,7 @@ func TestHandleSuggestionsResetRequiresConfirm(t *testing.T) {
 	ts := httptest.NewServer(asAdmin(s.mux()))
 	defer ts.Close()
 
-	if err := s.Watchlist.Upsert(watchlistEntryForTest("e1")); err != nil {
+	if err := s.Definitions.UpsertExpectation(watchlistEntryForTest("e1")); err != nil {
 		t.Fatal(err)
 	}
 
@@ -200,7 +214,7 @@ func TestHandleSuggestionsResetRequiresConfirm(t *testing.T) {
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Errorf("expected 400 without confirm:true, got %d", resp.StatusCode)
 	}
-	if _, ok := s.Watchlist.Get("e1"); !ok {
+	if _, ok := getExpectation(t, s, "e1"); !ok {
 		t.Error("the watchlist must not be touched when confirm is false")
 	}
 }
@@ -210,7 +224,7 @@ func TestHandleSuggestionsResetWipesWatchlistAndRegeneratesCandidates(t *testing
 	ts := httptest.NewServer(asAdmin(s.mux()))
 	defer ts.Close()
 
-	if err := s.Watchlist.Upsert(watchlistEntryForTest("e1")); err != nil {
+	if err := s.Definitions.UpsertExpectation(watchlistEntryForTest("e1")); err != nil {
 		t.Fatal(err)
 	}
 	seedCandidate(t, s, suggest.Candidate{ID: "port\x00r1\x00x", Kind: suggest.KindPort, Name: "p", RouterDevice: "r1", Ports: []int{22}})
@@ -233,8 +247,12 @@ func TestHandleSuggestionsResetWipesWatchlistAndRegeneratesCandidates(t *testing
 		t.Fatalf("expected 200, got %d", resp.StatusCode)
 	}
 
-	if entries := s.Watchlist.List(); len(entries) != 0 {
-		t.Errorf("expected the watchlist to be fully wiped, got %+v", entries)
+	entries, err := s.Definitions.ListExpectations()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Errorf("expected every expectation definition to be wiped, got %+v", entries)
 	}
 	if _, ok := s.Suggest.Get("port\x00r1\x00x"); ok {
 		t.Error("expected the old accepted candidate to be gone, not just reset to off")
@@ -249,7 +267,7 @@ func TestHandleSuggestionsResetWipesWatchlistAndRegeneratesCandidates(t *testing
 	}
 }
 
-func TestHandleWatchlistEntriesDeleteHidesOriginatingSuggestion(t *testing.T) {
+func TestHandleDefinitionsDeleteHidesOriginatingSuggestion(t *testing.T) {
 	s, _ := newTestServer(t)
 	ts := httptest.NewServer(asAdmin(s.mux()))
 	defer ts.Close()
@@ -268,7 +286,7 @@ func TestHandleWatchlistEntriesDeleteHidesOriginatingSuggestion(t *testing.T) {
 	json.NewDecoder(resp.Body).Decode(&acceptBody)
 	resp.Body.Close()
 
-	req, _ := http.NewRequest(http.MethodDelete, ts.URL+"/api/watchlist/entries/"+acceptBody.Entry.ID, nil)
+	req, _ := http.NewRequest(http.MethodDelete, ts.URL+"/api/definitions/"+acceptBody.Entry.ID, nil)
 	req.Header.Set(csrfHeaderName, csrfHeaderValue)
 	delResp, err := (&http.Client{}).Do(req)
 	if err != nil {
