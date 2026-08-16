@@ -2130,10 +2130,16 @@ func ingestOneRecovered(logger *slog.Logger, rm syslog.RawMessage, st *store.Sto
 	parsed := routeros.Parse(env.Message)
 	deviceID := devices.Resolve(rm.SourceIP, rm.RecvTime)
 	// Whether the rule's log-prefix decoded (#320 step 3): a router
-	// logging without the <A|D|R|L>|slug| convention sends events that
-	// look healthy on every other measure and carry no action at all.
+	// logging without the <A|D|R|L|M|N>|slug| convention sends events
+	// that look healthy on every other measure and carry no action at
+	// all.
+	//
+	// ActionFromPrefix rather than "action != unknown": since #437 the
+	// parser classifies some untagged lines on its own (a NAT chain
+	// carrying a translation), and counting those would tell an operator
+	// their prefixes were working when none are configured.
 	if setupStore != nil {
-		setupStore.NoteEvent(deviceID, parsed.Action != store.ActionUnknown, rm.RecvTime)
+		setupStore.NoteEvent(deviceID, parsed.ActionFromPrefix, rm.RecvTime)
 	}
 	srcCountry, _ := geo.Country(parsed.SrcIP)
 	dstCountry, _ := geo.Country(parsed.DstIP)

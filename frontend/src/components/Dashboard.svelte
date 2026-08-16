@@ -8,19 +8,12 @@
   // stays in sync with whatever filters/retention are active there.
   import { appState } from '../lib/state.svelte'
   import type { Action } from '../lib/types'
+  import { ACTION_LABELS } from '../lib/actions'
   import { topNBy } from '../lib/topN'
   import EventsChart from './EventsChart.svelte'
   import FlagsChart from './FlagsChart.svelte'
   import BarList from './BarList.svelte'
   import CustomTopTalkers from './CustomTopTalkers.svelte'
-
-  const ACTION_LABELS: Record<Action, string> = {
-    accept: 'Accept',
-    drop: 'Drop',
-    reject: 'Reject',
-    log: 'Log',
-    unknown: 'Unknown',
-  }
 
   const TOP_N = 10
 
