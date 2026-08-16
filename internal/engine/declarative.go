@@ -204,12 +204,20 @@ func (d *DeclarativeDefinition) Conditions() []Condition {
 }
 
 func (d *DeclarativeDefinition) newState() *declState {
+	return d.newStateForWindow(d.window)
+}
+
+// newStateForWindow is newState, sized to window rather than
+// unconditionally to d.window -- the seam Replay (replay_declarative.go)
+// uses to build fresh per-key state against a candidate window override
+// without touching d.window itself.
+func (d *DeclarativeDefinition) newStateForWindow(window time.Duration) *declState {
 	s := &declState{evidence: NewEvidenceSet()}
 	switch d.countingMode {
 	case CountingTotal:
-		s.count = NewCountRing(d.window)
+		s.count = NewCountRing(window)
 	case CountingDistinct:
-		s.distinct = NewDistinctRing[string](d.window)
+		s.distinct = NewDistinctRing[string](window)
 	}
 	return s
 }
