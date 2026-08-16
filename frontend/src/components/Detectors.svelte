@@ -343,7 +343,7 @@
               {/if}
 
             <div class="scope-form">
-              {#if SCOPE_FIELDS[d.name].includes('hosts')}
+              {#if (SCOPE_FIELDS[d.name] ?? []).includes('hosts')}
                 <label class="field">
                   <span>Hosts (comma-separated IPs or CIDRs)</span>
                   <div class="field-row">
@@ -356,7 +356,7 @@
                   </div>
                 </label>
               {/if}
-              {#if SCOPE_FIELDS[d.name].includes('classification')}
+              {#if (SCOPE_FIELDS[d.name] ?? []).includes('classification')}
                 <label class="field">
                   <span>Source classification</span>
                   <select bind:value={drafts[d.name].classification}>
@@ -366,7 +366,7 @@
                   </select>
                 </label>
               {/if}
-              {#if SCOPE_FIELDS[d.name].includes('ports')}
+              {#if (SCOPE_FIELDS[d.name] ?? []).includes('ports')}
                 <label class="field">
                   <span>Ports (comma-separated)</span>
                   <div class="field-row">
@@ -379,7 +379,7 @@
                   </div>
                 </label>
               {/if}
-              {#if SCOPE_FIELDS[d.name].includes('rules')}
+              {#if (SCOPE_FIELDS[d.name] ?? []).includes('rules')}
                 <label class="field">
                   <span>Rule labels (comma-separated)</span>
                   <div class="field-row">
