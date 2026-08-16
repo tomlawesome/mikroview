@@ -140,54 +140,10 @@ func vpnTaggedEvt(srcIP, dstIP, iface string, at time.Time) store.Event {
 	return store.Event{SrcIP: srcIP, DstIP: dstIP, InInterface: iface, ReceivedAt: at}
 }
 
-func TestOutboundAnomalyConfidenceHigherOverVPNInterfaceThanIdenticalLAN(t *testing.T) {
-	cfg := DefaultConfig()
-	cfg.OutboundAnomalyThreshold = 5
-	cfg.OutboundAnomalyWindow = time.Minute
-	cfg.PortScanThreshold = 1000
-	cfg.ActivitySpikeThreshold = 1000
-	cfg.VPNInterfaces = []string{"wireguard*"}
-	cfg.VPNConfidenceMultiplier = 2
-	d, fs := newTestDetector(t, cfg)
-
-	now := time.Now()
-	externals := []string{"203.0.113.1", "203.0.113.2", "203.0.113.3", "203.0.113.4", "203.0.113.5", "203.0.113.6"}
-
-	const lanIP, vpnIP = "192.168.1.60", "192.168.1.61"
-	for i, dst := range externals {
-		t := now.Add(time.Duration(i) * time.Second)
-		d.Observe(vpnTaggedEvt(lanIP, dst, "ether1", t))
-		d.Observe(vpnTaggedEvt(vpnIP, dst, "wireguard1", t))
-	}
-
-	var lanConf, vpnConf *int
-	for _, f := range fs.List() {
-		if f.Type != flags.TypeOutboundAnomaly {
-			continue
-		}
-		switch f.Target {
-		case lanIP:
-			lanConf = f.Confidence
-		case vpnIP:
-			vpnConf = f.Confidence
-		}
-	}
-	if lanConf == nil || vpnConf == nil {
-		t.Fatalf("expected both sources to raise outbound_anomaly, got %+v", fs.List())
-	}
-
-	wantLAN := overshootConfidence(len(externals), cfg.OutboundAnomalyThreshold)
-	wantVPN := d.vpnBoostConfidence(wantLAN, "wireguard1")
-	if *lanConf != wantLAN {
-		t.Errorf("LAN confidence = %d, want %d", *lanConf, wantLAN)
-	}
-	if *vpnConf != wantVPN {
-		t.Errorf("VPN confidence = %d, want %d", *vpnConf, wantVPN)
-	}
-	if *vpnConf <= *lanConf {
-		t.Fatalf("expected VPN-interface confidence (%d) to exceed identical LAN-interface confidence (%d)", *vpnConf, *lanConf)
-	}
-}
+// TestOutboundAnomalyConfidenceHigherOverVPNInterfaceThanIdenticalLAN
+// moved to internal/engine/shipped_dest_spread_test.go's
+// TestShippedOutboundAnomalyVPNBoostsConfidenceAndNamesTheInterface
+// (issue #405).
 
 func TestInternalReconConfidenceHigherOverVPNInterfaceThanIdenticalLAN(t *testing.T) {
 	cfg := DefaultConfig()
@@ -238,41 +194,7 @@ func TestInternalReconConfidenceHigherOverVPNInterfaceThanIdenticalLAN(t *testin
 	}
 }
 
-func TestDestSpreadConfidenceIdenticalRegardlessOfInterfaceWhenVPNInterfacesUnset(t *testing.T) {
-	cfg := DefaultConfig()
-	cfg.OutboundAnomalyThreshold = 5
-	cfg.OutboundAnomalyWindow = time.Minute
-	cfg.PortScanThreshold = 1000
-	cfg.ActivitySpikeThreshold = 1000
-	// VPNInterfaces deliberately left unset (the default).
-	d, fs := newTestDetector(t, cfg)
-
-	now := time.Now()
-	externals := []string{"203.0.113.1", "203.0.113.2", "203.0.113.3", "203.0.113.4", "203.0.113.5", "203.0.113.6"}
-
-	const plainIP, wgLookalikeIP = "192.168.1.80", "192.168.1.81"
-	for i, dst := range externals {
-		t := now.Add(time.Duration(i) * time.Second)
-		d.Observe(vpnTaggedEvt(plainIP, dst, "ether1", t))
-		d.Observe(vpnTaggedEvt(wgLookalikeIP, dst, "wireguard1", t))
-	}
-
-	var plainConf, wgConf *int
-	for _, f := range fs.List() {
-		if f.Type != flags.TypeOutboundAnomaly {
-			continue
-		}
-		switch f.Target {
-		case plainIP:
-			plainConf = f.Confidence
-		case wgLookalikeIP:
-			wgConf = f.Confidence
-		}
-	}
-	if plainConf == nil || wgConf == nil {
-		t.Fatalf("expected both sources to raise outbound_anomaly, got %+v", fs.List())
-	}
-	if *plainConf != *wgConf {
-		t.Errorf("expected identical confidence with VPNInterfaces unset regardless of InInterface, got LAN-iface=%d wireguard-iface=%d", *plainConf, *wgConf)
-	}
-}
+// TestDestSpreadConfidenceIdenticalRegardlessOfInterfaceWhenVPNInterfacesUnset
+// moved to internal/engine/shipped_dest_spread_test.go's
+// TestShippedOutboundAnomalyConfidenceIdenticalWhenVPNInterfacesUnset
+// (issue #405).

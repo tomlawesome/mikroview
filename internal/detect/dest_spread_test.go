@@ -41,29 +41,11 @@ func TestInternalReconIgnoresEstablishedTraffic(t *testing.T) {
 	}
 }
 
-func TestOutboundAnomalyFlagsManyDistinctExternalDestinations(t *testing.T) {
-	cfg := DefaultConfig()
-	cfg.OutboundAnomalyThreshold = 5
-	cfg.OutboundAnomalyWindow = time.Minute
-	cfg.PortScanThreshold = 1000
-	cfg.ActivitySpikeThreshold = 1000
-	d, fs := newTestDetector(t, cfg)
-
-	now := time.Now()
-	externals := []string{"203.0.113.1", "203.0.113.2", "203.0.113.3", "203.0.113.4"}
-	for i, dst := range externals {
-		d.Observe(lanEvt("192.168.1.50", dst, now.Add(time.Duration(i)*time.Second)))
-	}
-	if len(fs.List()) != 0 {
-		t.Fatalf("expected no flag below the distinct-destination threshold, got %+v", fs.List())
-	}
-
-	d.Observe(lanEvt("192.168.1.50", "203.0.113.5", now.Add(5*time.Second)))
-	list := fs.List()
-	if len(list) != 1 || list[0].Type != flags.TypeOutboundAnomaly || list[0].Target != "192.168.1.50" {
-		t.Fatalf("expected an outbound_anomaly flag for the LAN source, got %+v", list)
-	}
-}
+// TestOutboundAnomalyFlagsManyDistinctExternalDestinations moved to
+// internal/engine/shipped_dest_spread_test.go's
+// TestShippedOutboundAnomalyFlagsManyDistinctExternalDestinations (issue
+// #405: outbound_anomaly is now a shipped programmatic definition
+// evaluated by internal/engine -- see shipped_dest_spread.go).
 
 func TestInternalReconFlagsManyDistinctInternalDestinations(t *testing.T) {
 	cfg := DefaultConfig()
@@ -90,7 +72,6 @@ func TestInternalReconFlagsManyDistinctInternalDestinations(t *testing.T) {
 
 func TestDestSpreadIgnoresExternalSources(t *testing.T) {
 	cfg := DefaultConfig()
-	cfg.OutboundAnomalyThreshold = 2
 	cfg.InternalReconThreshold = 2
 	cfg.PortScanThreshold = 1000
 	cfg.ActivitySpikeThreshold = 1000
@@ -106,7 +87,6 @@ func TestDestSpreadIgnoresExternalSources(t *testing.T) {
 
 func TestDestSpreadClassifiesEachDestinationIndependently(t *testing.T) {
 	cfg := DefaultConfig()
-	cfg.OutboundAnomalyThreshold = 3
 	cfg.InternalReconThreshold = 3
 	cfg.PortScanThreshold = 1000
 	cfg.ActivitySpikeThreshold = 1000
@@ -125,38 +105,22 @@ func TestDestSpreadClassifiesEachDestinationIndependently(t *testing.T) {
 	}
 }
 
-func TestOutboundAnomalyRespectsHostsScope(t *testing.T) {
+// TestOutboundAnomalyRespectsHostsScope moved to
+// internal/engine/shipped_dest_spread_test.go's
+// TestShippedOutboundAnomalyRespectsHostsScope (issue #405).
+
+// TestOutboundAnomalyAndInternalReconToggleIndependently used to prove
+// the two detectors were independently toggleable while sharing one
+// destWindow. The sharing is gone: outbound_anomaly moved to
+// internal/engine (issue #405, see shipped_dest_spread.go), and each
+// direction is now its own definition with its own enablement -- so
+// independence is structural rather than something a test has to
+// establish. What survives here is the half internal/detect still
+// evaluates: a disabled internal_recon fires nothing.
+// internal/engine/shipped_dest_spread_test.go's
+// TestShippedOutboundAnomalyDisabledIsInert is its counterpart.
+func TestInternalReconDisabledFiresNothing(t *testing.T) {
 	cfg := DefaultConfig()
-	cfg.OutboundAnomalyThreshold = 3
-	cfg.PortScanThreshold = 1000
-	cfg.ActivitySpikeThreshold = 1000
-
-	seed := DefaultSettingsMap()
-	seed[DetectorOutboundAnomaly] = Settings{
-		Enabled: true,
-		Scope:   Scope{Hosts: []string{"192.168.1.50"}, HostsMode: ListModeAllow},
-	}
-	d, fs := newTestDetectorWithSettings(t, cfg, seed)
-
-	now := time.Now()
-	for i, dst := range []string{"203.0.113.1", "203.0.113.2", "203.0.113.3"} {
-		d.Observe(lanEvt("192.168.1.99", dst, now.Add(time.Duration(i)*time.Second))) // not in the allowlist
-	}
-	if len(fs.List()) != 0 {
-		t.Fatalf("expected a source outside the allowlist to never flag, got %+v", fs.List())
-	}
-
-	for i, dst := range []string{"203.0.113.1", "203.0.113.2", "203.0.113.3"} {
-		d.Observe(lanEvt("192.168.1.50", dst, now.Add(time.Duration(i)*time.Second)))
-	}
-	if len(fs.List()) != 1 {
-		t.Fatalf("expected the allowlisted source to still flag, got %+v", fs.List())
-	}
-}
-
-func TestOutboundAnomalyAndInternalReconToggleIndependently(t *testing.T) {
-	cfg := DefaultConfig()
-	cfg.OutboundAnomalyThreshold = 2
 	cfg.InternalReconThreshold = 2
 	cfg.PortScanThreshold = 1000
 	cfg.ActivitySpikeThreshold = 1000
@@ -166,54 +130,20 @@ func TestOutboundAnomalyAndInternalReconToggleIndependently(t *testing.T) {
 	d, fs := newTestDetectorWithSettings(t, cfg, seed)
 
 	now := time.Now()
-	d.Observe(lanEvt("192.168.1.50", "203.0.113.1", now))
-	d.Observe(lanEvt("192.168.1.50", "203.0.113.2", now))
 	d.Observe(lanEvt("192.168.1.50", "192.168.1.5", now))
 	d.Observe(lanEvt("192.168.1.50", "192.168.1.6", now))
 
-	sawOutbound, sawRecon := false, false
 	for _, f := range fs.List() {
-		switch f.Type {
-		case flags.TypeOutboundAnomaly:
-			sawOutbound = true
-		case flags.TypeInternalRecon:
-			sawRecon = true
+		if f.Type == flags.TypeInternalRecon {
+			t.Error("expected internal_recon to never fire while disabled")
 		}
 	}
-	if !sawOutbound {
-		t.Error("expected outbound_anomaly to still fire while enabled")
-	}
-	if sawRecon {
-		t.Error("expected internal_recon to never fire while disabled, even on the same shared window")
-	}
 }
 
-func TestOutboundAnomalyConfidenceScalesWithOvershoot(t *testing.T) {
-	cfg := DefaultConfig()
-	cfg.OutboundAnomalyThreshold = 5
-	cfg.PortScanThreshold = 1000
-	cfg.ActivitySpikeThreshold = 1000
-
-	now := time.Now()
-
-	justOver, fs := newTestDetector(t, cfg)
-	for i := 1; i <= 5; i++ {
-		justOver.Observe(lanEvt("192.168.1.50", fmt.Sprintf("203.0.113.%d", i), now.Add(time.Duration(i)*time.Second)))
-	}
-	list := fs.List()
-	if len(list) != 1 || list[0].Confidence == nil || *list[0].Confidence != 0 {
-		t.Fatalf("expected 0%% confidence exactly at threshold, got %+v", list)
-	}
-
-	wellOver, fs2 := newTestDetector(t, cfg)
-	for i := 1; i <= 15; i++ {
-		wellOver.Observe(lanEvt("192.168.1.50", fmt.Sprintf("203.0.113.%d", i), now.Add(time.Duration(i)*time.Second)))
-	}
-	list2 := fs2.List()
-	if len(list2) != 1 || list2[0].Confidence == nil || *list2[0].Confidence != 100 {
-		t.Fatalf("expected 100%% confidence at the overshoot ceiling, got %+v", list2)
-	}
-}
+// TestOutboundAnomalyConfidenceScalesWithOvershoot moved to
+// internal/engine/shipped_dest_spread_test.go's
+// TestShippedOutboundAnomalyConfidenceScalesWithOvershoot (issue #405),
+// pinned value for value.
 
 func TestInternalReconConfidenceScalesWithOvershoot(t *testing.T) {
 	cfg := DefaultConfig()
@@ -242,36 +172,31 @@ func TestInternalReconConfidenceScalesWithOvershoot(t *testing.T) {
 	}
 }
 
-func TestOutboundAnomalyAndInternalReconEvidenceCapturesDestinations(t *testing.T) {
+// TestOutboundAnomalyAndInternalReconEvidenceCapturesDestinations kept
+// only its internal_recon half here; outbound_anomaly's is covered by
+// internal/engine/shipped_dest_spread_test.go's
+// TestShippedOutboundAnomaly_FieldsRefireClearRevive, which pins the
+// evidence set exactly (sorted, capped at maxEvidenceHosts) rather than
+// only its length.
+func TestInternalReconEvidenceCapturesDestinations(t *testing.T) {
 	cfg := DefaultConfig()
-	cfg.OutboundAnomalyThreshold = 3
 	cfg.InternalReconThreshold = 3
 	cfg.PortScanThreshold = 1000
 	cfg.ActivitySpikeThreshold = 1000
 	d, fs := newTestDetector(t, cfg)
 
 	now := time.Now()
-	externals := []string{"203.0.113.1", "203.0.113.2", "203.0.113.3"}
 	internals := []string{"192.168.1.1", "192.168.1.2", "192.168.1.3"}
-	for i, dst := range externals {
-		d.Observe(lanEvt("192.168.1.50", dst, now.Add(time.Duration(i)*time.Second)))
-	}
 	for i, dst := range internals {
 		d.Observe(lanEvt("192.168.1.50", dst, now.Add(time.Duration(i)*time.Second)))
 	}
 
-	var outbound, recon *flags.Flag
+	var recon *flags.Flag
 	list := fs.List()
 	for i := range list {
-		switch list[i].Type {
-		case flags.TypeOutboundAnomaly:
-			outbound = &list[i]
-		case flags.TypeInternalRecon:
+		if list[i].Type == flags.TypeInternalRecon {
 			recon = &list[i]
 		}
-	}
-	if outbound == nil || len(outbound.Evidence.Hosts) != 3 {
-		t.Errorf("expected outbound_anomaly evidence to list the 3 external destinations, got %+v", outbound)
 	}
 	if recon == nil || len(recon.Evidence.Hosts) != 3 {
 		t.Errorf("expected internal_recon evidence to list the 3 internal destinations, got %+v", recon)

@@ -244,75 +244,16 @@ func sortedStrings(in []string) []string {
 // 5. outbound_anomaly
 // ---------------------------------------------------------------------------
 
-// TestCharacterizationOutboundAnomaly_FieldsRefireClearRevive pins
-// outbound_anomaly's boundary at DefaultConfig's real
-// 25-distinct-destinations/5-minute threshold, including the
-// maxEvidenceHosts=20 cap (evidence.go) on the flag's Evidence.Hosts.
-func TestCharacterizationOutboundAnomaly_FieldsRefireClearRevive(t *testing.T) {
-	cfg := DefaultConfig() // OutboundAnomalyThreshold=25, Window=5m
-	d, fs := newTestDetector(t, cfg)
-	src := "192.168.1.50" // LAN source
-	t0 := time.Now()
-
-	for i := 0; i < 24; i++ {
-		d.Observe(store.Event{SrcIP: src, DstIP: pub3(i), DstPort: 443, ReceivedAt: t0.Add(time.Duration(i) * time.Second)})
-	}
-	if got := flagOfType(t, fs, flags.TypeOutboundAnomaly); got != nil {
-		t.Fatalf("expected no flag at 24 distinct external destinations, got %+v", got)
-	}
-
-	d.Observe(store.Event{SrcIP: src, DstIP: pub3(24), DstPort: 443, ReceivedAt: t0.Add(24 * time.Second)})
-	f := flagOfType(t, fs, flags.TypeOutboundAnomaly)
-	if f == nil {
-		t.Fatal("expected a flag at exactly 25 distinct external destinations")
-	}
-	if f.Target != src {
-		t.Errorf("Target = %q, want %q", f.Target, src)
-	}
-	if want := "25 distinct external destinations in 5m0s"; f.Detail != want {
-		t.Errorf("Detail = %q, want %q", f.Detail, want)
-	}
-	if f.Confidence == nil || *f.Confidence != 0 {
-		t.Errorf("Confidence = %v, want 0", f.Confidence)
-	}
-	if len(f.Evidence.Hosts) != 20 {
-		t.Fatalf("Evidence.Hosts length = %d, want 20 (maxEvidenceHosts cap)", len(f.Evidence.Hosts))
-	}
-	wantAll := make([]string, 25)
-	for i := range wantAll {
-		wantAll[i] = pub3(i)
-	}
-	wantCapped := sortedStrings(wantAll)[:20]
-	if fmt.Sprint(f.Evidence.Hosts) != fmt.Sprint(wantCapped) {
-		t.Errorf("Evidence.Hosts = %v, want %v (sorted, capped at 20)", f.Evidence.Hosts, wantCapped)
-	}
-
-	// Re-fire.
-	d.Observe(store.Event{SrcIP: src, DstIP: pub3(25), DstPort: 443, ReceivedAt: t0.Add(25 * time.Second)})
-	f2 := flagOfType(t, fs, flags.TypeOutboundAnomaly)
-	if f2 == nil || f2.Count != 2 {
-		t.Fatalf("expected Count=2, got %+v", f2)
-	}
-	if f2.Confidence == nil || *f2.Confidence != 2 {
-		t.Errorf("Confidence after re-fire = %v, want 2 (overshootConfidence(26,25))", f2.Confidence)
-	}
-
-	// Clear + revive.
-	if !fs.Clear(f2.ID, t0.Add(26*time.Second)) {
-		t.Fatal("expected Clear to succeed")
-	}
-	d.Observe(store.Event{SrcIP: src, DstIP: pub3(26), DstPort: 443, ReceivedAt: t0.Add(27 * time.Second)})
-	f3 := flagOfType(t, fs, flags.TypeOutboundAnomaly)
-	if f3 == nil || f3.Cleared {
-		t.Fatalf("expected the flag to revive as active, got %+v", f3)
-	}
-	if f3.Count != 1 {
-		t.Errorf("Count after revival = %d, want 1", f3.Count)
-	}
-	if f3.Confidence == nil || *f3.Confidence != 4 {
-		t.Errorf("Confidence after revival = %v, want 4 (overshootConfidence(27,25))", f3.Confidence)
-	}
-}
+// TestCharacterizationOutboundAnomaly_FieldsRefireClearRevive moved to
+// internal/engine/shipped_dest_spread_test.go's
+// TestShippedOutboundAnomaly_FieldsRefireClearRevive (issue #405:
+// outbound_anomaly is now a shipped programmatic definition evaluated by
+// internal/engine -- see shipped_dest_spread.go). Every pinned value
+// carried over unchanged: the 24/25 boundary at the real
+// 25-destinations/5-minute defaults, Target, the byte-for-byte Detail
+// "25 distinct external destinations in 5m0s", Confidence=0 at the
+// boundary and 2 after one more, the maxEvidenceHosts=20 cap with its
+// exact sorted contents, and the re-fire/clear/revive sequence.
 
 // ---------------------------------------------------------------------------
 // 6. internal_recon
