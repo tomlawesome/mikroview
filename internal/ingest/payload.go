@@ -93,18 +93,48 @@ type AddressListEntry struct {
 //     serialise as a number the way a single port does. Absent when
 //     unset, which means "any address" -- not "no addresses", and the
 //     difference decides whether a rule covers an entry.
+//
+// ConnectionState, InInterface and OutInterface were added for issue
+// #408, and nothing reads them yet -- that is deliberate, and the issue
+// says so: the field has to be flowing before the consumer designed
+// against it (#392's coverage model, phase 2) has any real pushed data
+// to be shaped by rather than assumed ones.
+//
+//   - ConnectionState is RouterOSList, not a plain string, for the same
+//     reason WireguardPeer.AllowedAddress is: RouterOS holds
+//     connection-state as a *set* (established,related is two values,
+//     not one string), and #443 is this schema's paid-for lesson about
+//     what a set serialises as -- an array through :serialize to=json,
+//     which a plain string field refuses outright. The list type takes
+//     the array shape and the joined-string shape both, so neither a
+//     RouterOS-native push nor a script that joins by hand is refused,
+//     and a negated state ("!invalid") is just an element.
+//
+//     Absent means unset, which means "any state" -- deliberately not
+//     Log's absent-means-false convention, because "matched no state"
+//     and "did not match on state at all" are different claims and only
+//     the second is true of a rule that carries no connection-state.
+//
+//   - InInterface/OutInterface are single interface names, so they are
+//     plain strings: a rule matches at most one of each (an interface
+//     *list* match is a separate RouterOS property, not in this schema),
+//     and a name cannot serialise as a number the way a single port
+//     does. Negation ("!ether1") is part of the string.
 type FilterRule struct {
-	Ordinal        RouterOSInt      `json:"ordinal"`
-	Comment        string           `json:"comment"`
-	Chain          string           `json:"chain"`
-	Action         string           `json:"action"`
-	SrcAddressList string           `json:"srcAddressList"`
-	LogPrefix      string           `json:"logPrefix"`
-	DstPort        RouterOSPortSpec `json:"dstPort"`
-	Protocol       string           `json:"protocol"`
-	Log            bool             `json:"log"`
-	DstAddress     string           `json:"dstAddress"`
-	SrcAddress     string           `json:"srcAddress"`
+	Ordinal         RouterOSInt      `json:"ordinal"`
+	Comment         string           `json:"comment"`
+	Chain           string           `json:"chain"`
+	Action          string           `json:"action"`
+	SrcAddressList  string           `json:"srcAddressList"`
+	LogPrefix       string           `json:"logPrefix"`
+	DstPort         RouterOSPortSpec `json:"dstPort"`
+	Protocol        string           `json:"protocol"`
+	Log             bool             `json:"log"`
+	DstAddress      string           `json:"dstAddress"`
+	SrcAddress      string           `json:"srcAddress"`
+	ConnectionState RouterOSList     `json:"connectionState"`
+	InInterface     string           `json:"inInterface"`
+	OutInterface    string           `json:"outInterface"`
 }
 
 // NATRule mirrors one /ip/firewall/nat rule. Display-table shape only
