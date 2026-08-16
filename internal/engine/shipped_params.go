@@ -247,3 +247,20 @@ var UnexpectedMailSenderParamSchema = []ParamSchema{
 	{Name: "trustedTag", Type: ParamTypeStringList, Max: floatBound(1),
 		Description: "Entity tag marking a host as a known, legitimate outbound mail sender; a host carrying it is never flagged."},
 }
+
+// StaleRuleParamSchema expresses the two values internal/detect took as
+// constructor arguments to StaleRuleDetector rather than as Config
+// fields: config.Flags.StaleRuleDays (as a duration) and
+// config.Flags.StaleRuleCheckInterval. See ShippedDefaults for why they
+// were never in detect.Config.
+//
+// checkInterval is a param rather than a constant because it always was
+// operator-configurable -- main.go read cfg.Flags.StaleRuleCheckInterval
+// straight into its own ticker. Ticked.TickInterval makes a definition
+// declare its cadence, so the declaration reads the param.
+var StaleRuleParamSchema = []ParamSchema{
+	{Name: "maxAge", Type: ParamTypeDuration, Min: durationBound(time.Second), Required: true,
+		Description: "How long a firewall rule must go without firing before it is reported as stale."},
+	{Name: "checkInterval", Type: ParamTypeDuration, Min: durationBound(time.Second), Required: true,
+		Description: "How often the stale-rule sweep runs. Coarse by design: staleness is judged in days."},
+}
