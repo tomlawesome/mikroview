@@ -161,53 +161,16 @@ func waitForConfidence(t *testing.T, fs *flags.Store, target string, want int) {
 // shape, the LAN source IP; members move from distinct source IPs
 // hitting one port to distinct external destinations one LAN source
 // contacts.
-func TestOutboundAnomalyGroupReputationSamplesAreCapped(t *testing.T) {
-	cfg := DefaultConfig()
-	cfg.OutboundAnomalyThreshold = 15
-	cfg.InternalReconThreshold = 1000
-	cfg.PortScanThreshold = 1000
-	cfg.ActivitySpikeThreshold = 1000
+// TestOutboundAnomalyGroupReputationSamplesAreCapped moved to
+// internal/engine/shipped_dest_spread_test.go's
+// TestShippedOutboundAnomalyGroupReputationSamplesAreCapped (issue
+// #405: outbound_anomaly is now a shipped programmatic definition, and
+// the group-sampling reputation path it drove is
+// engine.GroupReputationSink -- see shippedGroupReputationIDs). Every
+// pinned value carried over: the pool-bounded distinct-lookup count, the
+// "never exceeds the pool" assertion, and the significance-discounted
+// mean floor.
 
-	fake := newFakeReputation()
-	d, fs := newTestDetector(t, cfg)
-	d.WithReputation(fake)
-
-	// Every possible member gets the same score, so it doesn't matter
-	// which members Go's randomized map iteration happens to pick, or
-	// how many of them the shared lookup pool actually has room for.
-	now := time.Now()
-	for i := 1; i <= 15; i++ {
-		dst := fakeExternalIP(i)
-		fake.setScore(dst, 80)
-		d.Observe(lanEvt("192.168.1.50", dst, now.Add(time.Duration(i)*time.Millisecond)))
-	}
-
-	// The group's sampling loop is synchronous and doesn't retry a
-	// member skipped for a saturated pool, so from an otherwise-idle
-	// pool it reaches min(reputationGroupSampleSize,
-	// reputationLookupConcurrency) real lookups, not the full sample
-	// cap -- the remaining sampled-but-skipped members are recorded as
-	// no-data rather than retried.
-	wantStarted := reputationGroupSampleSize
-	if reputationLookupConcurrency < wantStarted {
-		wantStarted = reputationLookupConcurrency
-	}
-	seen := make(map[string]bool)
-	for i := 0; i < wantStarted; i++ {
-		seen[expectStarted(t, fake.started)] = true
-	}
-	if len(seen) != wantStarted {
-		t.Fatalf("expected exactly %d distinct lookups, got %d", wantStarted, len(seen))
-	}
-	expectNoneStarted(t, fake.started) // the group has 15 members -- must never exceed the pool
-
-	close(fake.release)
-	wantConfidence := int(math.Round(80 * (float64(wantStarted) / float64(reputationGroupSampleSize))))
-	waitForConfidence(t, fs, "192.168.1.50", wantConfidence)
-}
-
-// fakeExternalIP builds a distinct public IP in the TEST-NET-3 range
-// for group-reputation tests that need many distinct source addresses.
 func fakeExternalIP(n int) string {
 	return fmt.Sprintf("203.0.113.%d", n)
 }

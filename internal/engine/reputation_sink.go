@@ -253,6 +253,15 @@ func GroupReputationSink(fs *flags.Store, client ReputationLookup, concurrency i
 // behaves how" is this package's knowledge, not the process wiring's.
 var shippedGroupReputationIDs = map[string]bool{
 	"distributed_brute_force": true,
+	// outbound_anomaly's emission is about the set of external
+	// destinations one LAN source reached, not about the source itself
+	// (which is a LAN address and never a lookup candidate at all) --
+	// internal/detect called maybeCheckGroupReputation here for exactly
+	// that reason. internal_recon deliberately has no entry: its
+	// destinations are internal by construction, so every member of its
+	// set would be skipped as non-public, and internal/detect made no
+	// reputation call from it either.
+	"outbound_anomaly": true,
 }
 
 // ShippedDeclarativeSink picks the emission sink a shipped definition
