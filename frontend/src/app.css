@@ -16,6 +16,19 @@
   --reject-bg: rgba(239, 68, 68, 0.12);
   --log: #38bdf8;
   --log-bg: rgba(56, 189, 248, 0.12);
+  /* The two non-filter action classes (#437): a mangle mark rule and an
+     address translation. Placed in the two widest gaps the existing five
+     leave on the hue circle -- violet between --log (sky, ~235) and the
+     reds, and teal between --accept (green, ~155) and --log -- and
+     ordered in EventsChart's ACTION_ORDER so neither ends up adjacent to
+     its nearest neighbour there (log -> marked -> natted -> unknown).
+     Same secondary-encoding mitigation as the rest of this palette: the
+     chart carries a persistent text legend and every row carries a text
+     badge, so identity never rests on hue alone. */
+  --marked: #a78bfa;
+  --marked-bg: rgba(167, 139, 250, 0.12);
+  --natted: #2dd4bf;
+  --natted-bg: rgba(45, 212, 191, 0.12);
   --unknown: #838d9e;
   --unknown-bg: rgba(131, 141, 158, 0.12);
 
@@ -32,8 +45,8 @@
      non-adjacent pairs among the violet/fuchsia/pink family (rendered
      together only if several rare detector types fire in the same hour)
      fall into the 6-8 "legal only with secondary encoding" band -- the
-     mitigation is the same one already applied to the 5-color action
-     palette this extends: a persistent legend with text labels, so
+     mitigation is the same one already applied to the action palette
+     this extends: a persistent legend with text labels, so
      identity never depends on color alone. */
   /* Underscored, not hyphenated, to match flags.Type's raw string values
      (e.g. "port_scan") exactly -- FlagsChart.svelte builds these var
@@ -67,6 +80,8 @@
   --drop-tinted: color-mix(in srgb, var(--drop) 85%, var(--accent) 15%);
   --reject-tinted: color-mix(in srgb, var(--reject) 85%, var(--accent) 15%);
   --log-tinted: color-mix(in srgb, var(--log) 85%, var(--accent) 15%);
+  --marked-tinted: color-mix(in srgb, var(--marked) 85%, var(--accent) 15%);
+  --natted-tinted: color-mix(in srgb, var(--natted) 85%, var(--accent) 15%);
 
   /* Full-row fill, one per action, at lower alpha than the badge tints
      above since this washes the entire row rather than a small pill. */
@@ -78,6 +93,13 @@
   --row-reject-bg-hover: color-mix(in srgb, var(--reject-tinted) 15%, transparent);
   --row-log-bg: color-mix(in srgb, var(--log-tinted) 7%, transparent);
   --row-log-bg-hover: color-mix(in srgb, var(--log-tinted) 13%, transparent);
+  /* 7%/13% like --row-log, not 9%/15% like the verdicts: marked and
+     natted are bookkeeping rather than a decision about the packet, and
+     should not pull the eye as hard as a drop. */
+  --row-marked-bg: color-mix(in srgb, var(--marked-tinted) 7%, transparent);
+  --row-marked-bg-hover: color-mix(in srgb, var(--marked-tinted) 13%, transparent);
+  --row-natted-bg: color-mix(in srgb, var(--natted-tinted) 7%, transparent);
+  --row-natted-bg-hover: color-mix(in srgb, var(--natted-tinted) 13%, transparent);
   --row-unknown-bg: rgba(131, 141, 158, 0.06);
   --row-unknown-bg-hover: rgba(131, 141, 158, 0.11);
 
@@ -120,6 +142,8 @@
   --drop-tinted: color-mix(in srgb, #d97706 85%, var(--accent) 15%);
   --reject-tinted: color-mix(in srgb, #dc2626 85%, var(--accent) 15%);
   --log-tinted: color-mix(in srgb, #0284c7 85%, var(--accent) 15%);
+  --marked-tinted: color-mix(in srgb, #7c3aed 85%, var(--accent) 15%);
+  --natted-tinted: color-mix(in srgb, #0d9488 85%, var(--accent) 15%);
 
   --row-accept-bg: color-mix(in srgb, var(--accept-tinted) 10%, transparent);
   --row-accept-bg-hover: color-mix(in srgb, var(--accept-tinted) 17%, transparent);
@@ -129,6 +153,10 @@
   --row-reject-bg-hover: color-mix(in srgb, var(--reject-tinted) 17%, transparent);
   --row-log-bg: color-mix(in srgb, var(--log-tinted) 8%, transparent);
   --row-log-bg-hover: color-mix(in srgb, var(--log-tinted) 14%, transparent);
+  --row-marked-bg: color-mix(in srgb, var(--marked-tinted) 8%, transparent);
+  --row-marked-bg-hover: color-mix(in srgb, var(--marked-tinted) 14%, transparent);
+  --row-natted-bg: color-mix(in srgb, var(--natted-tinted) 8%, transparent);
+  --row-natted-bg-hover: color-mix(in srgb, var(--natted-tinted) 14%, transparent);
   --row-unknown-bg: rgba(100, 110, 125, 0.07);
   --row-unknown-bg-hover: rgba(100, 110, 125, 0.13);
 }
@@ -153,6 +181,8 @@
     --drop-tinted: color-mix(in srgb, #d97706 85%, var(--accent) 15%);
     --reject-tinted: color-mix(in srgb, #dc2626 85%, var(--accent) 15%);
     --log-tinted: color-mix(in srgb, #0284c7 85%, var(--accent) 15%);
+    --marked-tinted: color-mix(in srgb, #7c3aed 85%, var(--accent) 15%);
+    --natted-tinted: color-mix(in srgb, #0d9488 85%, var(--accent) 15%);
 
     --row-accept-bg: color-mix(in srgb, var(--accept-tinted) 10%, transparent);
     --row-accept-bg-hover: color-mix(in srgb, var(--accept-tinted) 17%, transparent);
@@ -162,6 +192,10 @@
     --row-reject-bg-hover: color-mix(in srgb, var(--reject-tinted) 17%, transparent);
     --row-log-bg: color-mix(in srgb, var(--log-tinted) 8%, transparent);
     --row-log-bg-hover: color-mix(in srgb, var(--log-tinted) 14%, transparent);
+    --row-marked-bg: color-mix(in srgb, var(--marked-tinted) 8%, transparent);
+    --row-marked-bg-hover: color-mix(in srgb, var(--marked-tinted) 14%, transparent);
+    --row-natted-bg: color-mix(in srgb, var(--natted-tinted) 8%, transparent);
+    --row-natted-bg-hover: color-mix(in srgb, var(--natted-tinted) 14%, transparent);
     --row-unknown-bg: rgba(100, 110, 125, 0.07);
     --row-unknown-bg-hover: rgba(100, 110, 125, 0.13);
   }
