@@ -7,23 +7,40 @@ import (
 	"time"
 
 	"github.com/tomlawesome/mikroview/internal/flags"
+	"github.com/tomlawesome/mikroview/internal/matchlog"
+	"github.com/tomlawesome/mikroview/internal/store"
 )
 
 // MatchlogWrite is the intent router's expectation-intent output -- the
 // matchlog counterpart to flags.Flag below. Deliberately not
-// matchlog.Record itself: a Record's Tuple (Source identity, DestIP,
-// Port) and Event are derived from the raw triggering store.Event, which
-// an Emission never carries (see Emission's own doc comment -- it is a
-// definition's accumulated judgement, not the event that produced it).
-// Only the wiring that has an actual event in hand (#406) can supply
-// those; what Route can produce from a Definition and an Emission alone
-// is everything a definition's own judgement determines -- which
-// expectation entry this belongs to, the rendered detail, confidence
-// where computed, and whether the emission was provisional.
+// matchlog.Record itself: a Record carries store-assigned fields (ID,
+// FirstSeen, LastSeen, Count) that belong to matchlog's own append/
+// collapse lifecycle, not to translating one emission, exactly as
+// flags.Flag's raise lifecycle is left to flags.Store below.
+//
+// Tuple and Event are what an expectation write needs beyond a
+// definition's own judgement, and both come from the triggering event
+// (Emission.TriggeringEvent, added by #406 -- see that field's own doc
+// comment for why an accumulated judgement cannot reconstruct them).
+// This type's earlier shape said only "the wiring that has an actual
+// event in hand (#406) can supply those"; this is that wiring, and the
+// supply happens here rather than at each sink so nothing open-codes
+// the identity rule.
 type MatchlogWrite struct {
-	EntryID     string
-	Target      string
-	Detail      string
+	EntryID string
+	Target  string
+	Detail  string
+	// Tuple is what matchlog collapses on: the event's own real,
+	// specific source identity (MAC-preferred, IP fallback -- see
+	// eventIdentity), the destination address, and the destination port.
+	// Always the *event's* identity, never the definition's own
+	// (possibly unscoped) source scoping, so an unscoped expectation
+	// watching many devices still produces one record per device rather
+	// than one shared record every device's traffic collapses into.
+	Tuple matchlog.Tuple
+	// Event is the full triggering event, kept as evidence -- see
+	// matchlog.Record's own evidence-first doc comment.
+	Event       store.Event
 	Confidence  *int
 	Provisional bool
 }
@@ -109,13 +126,35 @@ func routeToFlag(em Emission) *flags.Flag {
 }
 
 func routeToMatchlog(def Definition, em Emission) *MatchlogWrite {
-	return &MatchlogWrite{
+	w := &MatchlogWrite{
 		EntryID:     def.ID,
 		Target:      em.Target,
 		Detail:      em.Detail,
 		Confidence:  copyIntPtr(em.Confidence),
 		Provisional: em.Provisional,
 	}
+	if em.TriggeringEvent != nil {
+		w.Event = *em.TriggeringEvent
+		w.Tuple = matchlog.Tuple{
+			Source: eventIdentity(w.Event),
+			DestIP: w.Event.DstIP,
+			Port:   w.Event.DstPort,
+		}
+	}
+	return w
+}
+
+// eventIdentity resolves an event's source identity the MAC-preferred,
+// IP-fallback way matchlog.Identity.MatchesSource compares against:
+// SrcMAC when the parser found one, SrcIP otherwise.
+//
+// Which chains carry src-mac is a property of the firmware, not
+// something to rely on: on a real RouterOS 7.23.3 both forward and input
+// carry it (#273), while output -- traffic the router originates, so
+// there is no incoming frame to read a source MAC from -- does not. The
+// IP fallback is what makes that not matter.
+func eventIdentity(e store.Event) matchlog.Identity {
+	return matchlog.Identity{MAC: e.SrcMAC, IP: e.SrcIP}
 }
 
 func copyIntPtr(p *int) *int {
