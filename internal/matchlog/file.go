@@ -218,7 +218,7 @@ func (s *FileStore) writeLineLocked(l fileLine) error {
 // been read (a kindUpdate line arbitrarily far down the file moves it).
 // So Limit: 1 still materialised everything: measured at 237 MiB of heap
 // and 1.86s to return one record, against a 164 MiB log holding 20,000
-// records for one MAC. GET /api/watchlist/matches reaches this on the
+// records for one MAC. GET /api/matches reaches this on the
 // lowest-privilege credential mikroview issues -- a read-only API token
 // -- with no rate limiter in front of it, so the cost is repeatable at
 // will.

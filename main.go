@@ -50,7 +50,6 @@ import (
 	"github.com/tomlawesome/mikroview/internal/suggest"
 	"github.com/tomlawesome/mikroview/internal/syslog"
 	"github.com/tomlawesome/mikroview/internal/tlssniff"
-	"github.com/tomlawesome/mikroview/internal/watchlist"
 	"github.com/tomlawesome/mikroview/web"
 	"golang.org/x/term"
 )
@@ -586,16 +585,20 @@ func main() {
 	auditStore, err := audit.OpenWithBackend(auditBackend)
 	mustOpenStore(auditLog, err)
 
-	// The watchlist entry set (#243). Persistence itself is optional; a
-	// document that exists and can't be loaded is not that case -- see
-	// mustOpenStore.
+	// The watchlist document (#243). A migration *source* only since
+	// issue #407: the store that owned it (internal/watchlist.Store) is
+	// deleted, and an operator's entries live in the definitions document
+	// with every other definition. Its bytes are still read on every boot
+	// -- by MigrateDefinitions on a deployment that predates the
+	// definitions document, and by AdoptWatchlistEntries on one that
+	// created entries after that document already existed -- so an
+	// upgrade across this change keeps every entry, every observation and
+	// every promoted destination.
 	watchlistLog := logging.New("watchlist")
 	watchlistBackend, err := persistence.backendFor(bootCtx, "watchlist", cfg.Watchlist.StorePath)
 	if err != nil {
 		watchlistLog.Warn(err.Error())
 	}
-	watchlistStore, err := watchlist.OpenWithBackend(watchlistBackend)
-	mustOpenStore(watchlistLog, err)
 
 	// The suggestion candidate pool (#243 slice 5): watchlist entries
 	// suggested from data RouterOS has already pushed. Persistence
@@ -831,6 +834,20 @@ func main() {
 	if err := engine.SeedShippedDefinitions(definitions, detectorSeed, shippedDefaults); err != nil {
 		definitionsLog.Warn(err.Error())
 	}
+	// Every watchlist entry the definitions document does not already
+	// hold (issue #407). Runs on every boot, for the reason
+	// AdoptWatchlistEntries' own doc comment gives: a deployment that
+	// upgraded during #404-#406 has a definitions document *and* went on
+	// creating entries in internal/watchlist's own store afterwards,
+	// because that store was still the operator-facing entry set until
+	// this issue deleted it. A failure to read the source document is
+	// fatal (#378's fail-closed contract): starting with a silently
+	// smaller entry set is the outcome that refusal exists to prevent.
+	adopted, err := engine.AdoptWatchlistEntries(bootCtx, definitions, watchlistBackend)
+	mustOpenStore(watchlistLog, err)
+	if adopted > 0 {
+		watchlistLog.Info(fmt.Sprintf("adopted %d watchlist entr(ies) into the definitions store -- the watchlist document is a migration source only now (issue #407)", adopted))
+	}
 	// bl (issue #113 Part B): always constructed, even with zero enabled
 	// sources (cfg.Blocklist.Sources == []) -- Match/Refresh are both
 	// harmless no-ops in that case (see internal/blocklist.Blocklist's
@@ -855,63 +872,44 @@ func main() {
 	netclassLog := logging.New("netclass")
 	nc := netclass.New(cfg.NetClass.Sources, netclassLog)
 
-	// Shipped declarative definitions (issue #405): built from whatever
-	// the definitions store currently holds for a shipped, available,
-	// declarative-kind definition, wrapped in one DeclarativeSet (its own
-	// dispatch pre-index, see internal/engine/dispatch.go) and registered
-	// on the engine -- port_scan, critical_port, repeated_drops and
-	// distributed_brute_force are ported this way so far
-	// (docs/decisions/evaluation-engine.md section 2,
-	// internal/engine/shipped_declarative.go's shippedDeclarativeBuilders);
-	// every one of them is a shipped definition now (issue #405 finished
-	// the port and deleted internal/detect). An empty/not-yet-migrated
-	// definitions store (definitions.List() returns nothing) is a valid,
-	// common state -- see MigrateDefinitions's own doc comment -- and
-	// simply means this DeclarativeSet starts out evaluating nothing,
-	// same as registering an empty one on a freshly-constructed Engine.
-	// Each definition's sink raises into fs and, for a newly-raised
-	// episode, kicks off the same best-effort async reputation lookup
-	// internal/detect's WithReputation-configured detectors have always
-	// had -- single-address or group-sampling, chosen per definition by
-	// engine.ShippedDeclarativeSink, mirroring internal/detect's own
-	// maybeCheckReputation/maybeCheckGroupReputation split. A definition
-	// with no address to look up (a rule-label or "global" target) is
-	// simply never a lookup candidate.
-	//
-	// The lookup policy (pool size, timeout, group sampling) comes from
-	// the shipped reputation definition's own params rather than from a
-	// literal here -- see engine.ReputationPolicyFrom. This file used to
-	// carry a hand-synced copy of internal/detect's unexported
-	// concurrency constant; the definition is what replaces it.
-	reputationPolicy := engine.ReputationPolicyFrom(definitions)
-	var shippedDeclDefs []*engine.DeclarativeDefinition
-	for _, sd := range definitions.List() {
-		if !sd.Available || sd.Definition.Kind != engine.KindDeclarative || sd.Definition.Provenance.Origin != engine.ProvenanceShipped {
-			continue
-		}
-		dd, err := engine.BuildShippedDeclarativeDefinition(sd.Definition)
-		if err != nil {
-			// Not every shipped-provenance declarative definition
-			// necessarily has a registered builder yet (a stale/future
-			// entry outside this binary's current shipped catalogue) --
-			// logged and skipped, not fatal: the rest of the shipped set
-			// keeps working.
-			detectorsLog.Warn(fmt.Sprintf("skipping shipped declarative definition %q: %v", sd.Definition.ID, err))
-			continue
-		}
-		dd.OnRoutedEmission = engine.ShippedDeclarativeSink(sd.Definition, fs, rep, reputationPolicy)
-		shippedDeclDefs = append(shippedDeclDefs, dd)
-	}
-	eng.Register(engine.NewDeclarativeSet("shipped-declarative", shippedDeclDefs))
+	// routerState (issue #186 step 4): each device's most recent pushed
+	// state, in-memory only by that package's design. Constructed here,
+	// before the definitions are registered, because an expectation
+	// scoped to a router's address list resolves membership live against
+	// it (#274 item 2). Wired into the naming resolver below (RouterOS
+	// always wins on host names -- the owner's 4c decision) and into the
+	// API server for the ingest endpoint to write and the table endpoints
+	// to read.
+	routerState := routerstate.New()
 
-	// Shipped programmatic definitions (issue #405): built-in Go wearing
-	// the same envelope, for the detectors that cannot honestly be a
-	// form -- statistical baselines, absence-of-events checks,
-	// external-data lookups (see internal/engine/programmatic.go).
-	// Registered one at a time rather than behind a set: unlike the
-	// declarative kind there is no dispatch pre-index to share, and one
-	// registration per definition is what gives each its own panic
-	// boundary and its own fault report.
+	// Everything the engine evaluates, registered from the one
+	// definitions document and kept in step with it (issues #405/#406/
+	// #407): shipped declarative definitions behind their own dispatch
+	// pre-index, shipped programmatic ones registered individually so
+	// each keeps its own panic boundary and fault report, the operator's
+	// non-inverted expectations behind a second index, and the single
+	// inverted-expectation state machine.
+	//
+	// Registry.Sync is called once here and again on every definition
+	// change (definitions.SetOnChange, below) -- which is what makes an
+	// operator's edit take effect on the very next ingested event rather
+	// than on the next restart. It rebuilds only the definitions whose
+	// stored bytes actually changed, so one edit does not reset every
+	// other definition's half-full window; see engine.Registry's own doc
+	// comment.
+	//
+	// An empty/not-yet-migrated definitions store is a valid, common
+	// state -- see MigrateDefinitions's own doc comment -- and simply
+	// means the sets start out evaluating nothing.
+	//
+	// Each shipped definition's sink raises into fs and, for a
+	// newly-raised episode, kicks off the same best-effort async
+	// reputation lookup internal/detect's WithReputation-configured
+	// detectors have always had -- single-address or group-sampling,
+	// chosen per definition by engine.ShippedDeclarativeSink. The lookup
+	// policy (pool size, timeout, group sampling) comes from the shipped
+	// reputation definition's own params rather than from a literal here,
+	// so it is re-read on every Sync along with everything else.
 	//
 	// Everything a programmatic definition may need beyond the event
 	// stream arrives through ShippedDeps as a narrow interface, so the
@@ -921,38 +919,38 @@ func main() {
 	// netclass sources and no entity store still builds the whole
 	// catalogue, with the definitions that need those simply never
 	// firing.
-	deps := engine.ShippedDeps{
-		Flags:    engine.FlagsConfidenceFloorRaiser(fs),
-		Entities: entityTagLookup{es: entityStore},
-		KnownBad: blocklistLookup{bl: bl},
-		NetClass: netClassLookup{nc: nc},
-		Devices:  deviceLister{reg: devices},
-		Rules:    staleRuleLister{ru: ru},
-		Rate:     eventRateSource{st: st},
-		State:    engineState,
+	registry := engine.NewRegistry(eng, definitions, engine.RegistrationDeps{
+		Shipped: engine.ShippedDeps{
+			Flags:    engine.FlagsConfidenceFloorRaiser(fs),
+			Entities: entityTagLookup{es: entityStore},
+			KnownBad: blocklistLookup{bl: bl},
+			NetClass: netClassLookup{nc: nc},
+			Devices:  deviceLister{reg: devices},
+			Rules:    staleRuleLister{ru: ru},
+			Rate:     eventRateSource{st: st},
+			State:    engineState,
+		},
+		Expectations: engine.ExpectationDeps{
+			Members:      routerState,
+			Sink:         engine.MatchlogSink(matchLog),
+			Observations: definitions,
+		},
+		Flags:      fs,
+		Reputation: rep,
+	})
+	syncDefinitions := func() {
+		for _, problem := range registry.Sync() {
+			// Never fatal: one unbuildable definition must not take the
+			// whole set (or the process) down. Logged loudly because the
+			// consequence is a coverage hole -- the set an operator sees
+			// on the settings pages and the set actually being evaluated
+			// have diverged, which is precisely the kind of silence
+			// #380's first item is about.
+			detectorsLog.Error(fmt.Sprintf("a definition could not be registered: %v -- it is not being evaluated", problem))
+		}
 	}
-	for _, sd := range definitions.List() {
-		if !sd.Available || sd.Definition.Kind != engine.KindProgrammatic || sd.Definition.Provenance.Origin != engine.ProvenanceShipped {
-			continue
-		}
-		pd, err := engine.BuildShippedProgrammaticDefinition(sd.Definition, deps)
-		if err != nil {
-			// Not a warning: a definitions document written by a newer
-			// or differently-built binary can name a programmatic
-			// definition this one has no Go logic for. Logged at info,
-			// skipped, and the rest of the catalogue keeps evaluating --
-			// the same treatment an unrecognized declarative definition
-			// gets above.
-			detectorsLog.Info(fmt.Sprintf("shipped programmatic definition %q is not evaluated by the engine: %v", sd.Definition.ID, err))
-			continue
-		}
-		if sink, ok := pd.(interface {
-			SetSink(func(engine.RoutedEmission))
-		}); ok {
-			sink.SetSink(engine.ShippedDeclarativeSink(sd.Definition, fs, rep, reputationPolicy))
-		}
-		eng.Register(pd)
-	}
+	syncDefinitions()
+	definitions.SetOnChange(syncDefinitions)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -998,54 +996,12 @@ func main() {
 	// Entities takes precedence over Rules/Hosts for any key it has a
 	// label for -- see naming.Resolver's doc comment and issue #107's
 	// migration/precedence design.
-	// routerState (issue #186 step 4): each device's most recent pushed
-	// state, in-memory only by that package's design. Wired into the
-	// naming resolver first (RouterOS always wins on host names -- the
-	// owner's 4c decision) and into the API server for the ingest
-	// endpoint to write and the table endpoints to read.
-	routerState := routerstate.New()
-
 	// What the guided setup wizard (#320) has actually observed of each
 	// router's setup. Hooked into the syslog accept path here rather
 	// than inside internal/syslog, which has no business knowing what a
 	// wizard is.
 	setupStore := setup.New()
 	syslog.SetOnConnection(func(host string) { setupStore.NoteSyslogConnection(host, time.Now()) })
-	// The watchlist as expectation definitions on the engine (issue
-	// #406). Built here rather than up beside the other registrations
-	// because routerState -- what makes an entry scoped to a router's
-	// address list resolvable at match time (#274 item 2) -- does not
-	// exist until now, and safe to build late because the engine does
-	// not start consuming until Run below.
-	//
-	// Rebuilt, not mutated, whenever the entry set changes: the two
-	// registrations are replaced under the same two ids, which is
-	// exactly Engine.Register's contract, so an edit takes effect on the
-	// very next ingested event without the per-event re-read the old
-	// evaluator paid for. See watchlist.Store.SetOnChange.
-	registerExpectations := func() {
-		decl, inverted, err := engine.BuildExpectations(watchlistStore.List(), engine.ExpectationDeps{
-			Members:      routerState,
-			Sink:         engine.MatchlogSink(matchLog),
-			Observations: watchlistStore,
-		})
-		if err != nil {
-			// Never fatal: a single malformed entry must not take the
-			// whole expectation set (or the process) down. Logged loudly
-			// because the consequence is a coverage hole -- the previous
-			// registration stays live, so the set an operator sees on the
-			// Watchlist page and the set actually being evaluated have
-			// diverged, which is precisely the kind of silence #380's
-			// first item is about.
-			watchlistLog.Error(fmt.Sprintf("building the watchlist's expectation definitions failed: %v -- the previously registered set stays live, so a recent watchlist change may not be in effect", err))
-			return
-		}
-		eng.Register(decl)
-		eng.Register(inverted)
-	}
-	watchlistStore.SetOnChange(registerExpectations)
-	registerExpectations()
-
 	names := naming.Resolver{Rules: cfg.RuleNames, Hosts: cfg.HostNames, Entities: entityStore, RouterHosts: routerState}
 
 	go ingest(ctx, raw, st, devices, macRegistry, fs, h, geo, ru, names, eng, setupStore)
@@ -1265,7 +1221,6 @@ func main() {
 		Entities:          entityStore,
 		Rules:             ru,
 		Audit:             auditStore,
-		Watchlist:         watchlistStore,
 		Suggest:           suggestStore,
 		DefaultWatchPorts: cfg.Flags.CriticalPorts,
 		MatchLog:          matchLog,
@@ -1513,7 +1468,7 @@ func main() {
 	// MinInterval-debounced write could be (issue #400). Best-effort:
 	// each store already logs its own save failures, so a Close error
 	// here is just the shutdown-budget case, worth one line, not fatal.
-	closeStoreOnShutdown(fs, macRegistry, ru, watchlistStore, engineState, definitions)
+	closeStoreOnShutdown(fs, macRegistry, ru, engineState, definitions)
 }
 
 // closeStoreOnShutdown flushes every write-behind-backed store passed to

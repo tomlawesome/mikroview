@@ -79,6 +79,12 @@ type DefinitionsStore struct {
 	// keyed by ID -- see definitionsDocument's own doc comment for why
 	// this layer stores bytes rather than decoded Definition values.
 	raw map[string]json.RawMessage
+
+	// onChange is notified after any change to what this store's
+	// definitions evaluate -- see SetOnChange
+	// (definitions_expectations.go). Guarded by mu for writes, read under
+	// mu and then called outside it.
+	onChange func()
 }
 
 // OpenDefinitionsStore loads path if it exists (a missing file is the
@@ -268,6 +274,16 @@ var ErrDefinitionImmutable = errors.New("engine: this definition cannot be modif
 // keeps the change in memory only, same optional-persistence contract as
 // every other store here.
 func (s *DefinitionsStore) Upsert(d Definition) error {
+	if err := s.upsertLocking(d); err != nil {
+		return err
+	}
+	s.notifyChange()
+	return nil
+}
+
+// upsertLocking is Upsert's critical section, split out so notifyChange
+// runs after the lock is released -- see SetOnChange.
+func (s *DefinitionsStore) upsertLocking(d Definition) error {
 	if d.ID == "" {
 		return fmt.Errorf("engine: a definition must have an id")
 	}
@@ -318,7 +334,103 @@ func (s *DefinitionsStore) SetEnabledAndScope(id string, enabled bool, scope Sco
 	if err := ValidateScope(scope); err != nil {
 		return err
 	}
+	return s.mutate(id, func(d *Definition) error {
+		d.Enabled = enabled
+		d.Scope = scope
+		return nil
+	})
+}
 
+// SetParams replaces a definition's params wholesale, validated against
+// that definition's own declared ParamSchema -- the param-override door
+// docs/decisions/evaluation-engine.md section 4 describes ("every
+// definition exposes, uniformly: enabled, scope, its typed params"), and
+// the reason an out-of-bounds value from the API is a 400 rather than a
+// stored zero (#407): ValidateParams runs here, on the way in, so a
+// rejected value never reaches the document at all.
+//
+// Open to a shipped definition as well as a custom one, deliberately and
+// narrowly: overriding a shipped definition's declared params is exactly
+// what "editing a shipped definition keeps it shipped, with overrides"
+// means (#401's ratified invariant), and Provenance.ShippedParams is
+// untouched by this, so Distance -- and therefore Reset -- keeps
+// answering from the values the binary actually shipped rather than from
+// whatever was last written. What stays refused is replacing a shipped
+// definition's kind, intent, schema or provenance (see Upsert): those are
+// properties of the binary, not of the deployment.
+func (s *DefinitionsStore) SetParams(id string, params Params) error {
+	return s.mutate(id, func(d *Definition) error {
+		normalized, err := ValidateParams(d.ParamSchema, params)
+		if err != nil {
+			return err
+		}
+		d.Params = normalized
+		return nil
+	})
+}
+
+// SetSuppressions replaces a definition's own scoped exclusions -- see
+// Suppression. Every suppression must name a target; an entry without one
+// would silently exclude nothing while reading, in the UI, as though
+// something were excluded.
+func (s *DefinitionsStore) SetSuppressions(id string, suppressions []Suppression) error {
+	return s.mutate(id, func(d *Definition) error {
+		for i, sup := range suppressions {
+			if sup.Target == "" {
+				return fmt.Errorf("engine: suppression %d has no target", i)
+			}
+			if suppressions[i].ID == "" {
+				suppressions[i].ID = newDefinitionID()
+			}
+		}
+		d.Suppressions = suppressions
+		return nil
+	})
+}
+
+// ErrNoShippedDefaults is returned by ResetParams for a definition with
+// nothing to reset to -- a custom definition, which has no stock to diff
+// against (see Definition.Distance's own doc comment).
+var ErrNoShippedDefaults = errors.New("engine: this definition has no shipped defaults to reset to")
+
+// ResetParams puts a shipped definition's params back to exactly the
+// values it shipped with (Provenance.ShippedParams), which is what makes
+// "reset to default" and "clear every override" the same state rather
+// than two operations that could fall out of sync -- see
+// Definition.Distance, which reports an empty map afterwards.
+func (s *DefinitionsStore) ResetParams(id string) error {
+	return s.mutate(id, func(d *Definition) error {
+		if d.Provenance.Origin != ProvenanceShipped || len(d.Provenance.ShippedParams) == 0 {
+			return fmt.Errorf("%w: %q", ErrNoShippedDefaults, id)
+		}
+		reset := make(Params, len(d.Provenance.ShippedParams))
+		for k, v := range d.Provenance.ShippedParams {
+			reset[k] = v
+		}
+		d.Params = reset
+		return nil
+	})
+}
+
+// mutate applies fn to the definition stored at id and writes the result
+// back, under one lock -- the shared read-modify-write door every narrow
+// mutator above goes through, so none of them re-implements the
+// decode/validate/encode round trip or races another one halfway through
+// it. Notifies the change hook after the lock is released.
+//
+// fn may not change the definition's ID, Kind, Intent, ParamSchema or
+// Provenance: those are what an id *is*, and a mutator that could change
+// them would be Upsert with the immutability check bypassed. Refused
+// rather than silently ignored.
+func (s *DefinitionsStore) mutate(id string, fn func(*Definition) error) error {
+	if err := s.mutateLocking(id, fn); err != nil {
+		return err
+	}
+	s.notifyChange()
+	return nil
+}
+
+func (s *DefinitionsStore) mutateLocking(id string, fn func(*Definition) error) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -328,18 +440,41 @@ func (s *DefinitionsStore) SetEnabledAndScope(id string, enabled bool, scope Sco
 	}
 	sd := decodeStored(id, existing)
 	if !sd.Available {
-		return fmt.Errorf("%w: %q is a definition this binary cannot identify -- refusing to toggle something whose meaning it cannot read (see StoredDefinition.Available)", ErrDefinitionImmutable, id)
+		return fmt.Errorf("%w: %q is a definition this binary cannot identify -- refusing to edit something whose meaning it cannot read (see StoredDefinition.Available)", ErrDefinitionImmutable, id)
 	}
 
 	updated := sd.Definition
-	updated.Enabled = enabled
-	updated.Scope = scope
+	if err := fn(&updated); err != nil {
+		return err
+	}
+	if err := refuseIdentityChange(sd.Definition, updated); err != nil {
+		return err
+	}
+	if err := updated.Validate(); err != nil {
+		return err
+	}
 	raw, err := json.Marshal(updated)
 	if err != nil {
 		return fmt.Errorf("engine: encoding definition %q: %w", id, err)
 	}
 	s.raw[id] = raw
 	s.persistLocked()
+	return nil
+}
+
+// refuseIdentityChange reports an error when a mutator changed one of the
+// fields that decide what a definition *is* -- see mutate.
+func refuseIdentityChange(before, after Definition) error {
+	switch {
+	case before.ID != after.ID:
+		return fmt.Errorf("engine: a definition's id may not change (%q -> %q)", before.ID, after.ID)
+	case before.Kind != after.Kind:
+		return fmt.Errorf("engine: definition %q: kind may not change (%q -> %q)", before.ID, before.Kind, after.Kind)
+	case before.Intent != after.Intent:
+		return fmt.Errorf("engine: definition %q: intent may not change (%q -> %q)", before.ID, before.Intent, after.Intent)
+	case before.Provenance.Origin != after.Provenance.Origin:
+		return fmt.Errorf("engine: definition %q: provenance may not change (%q -> %q)", before.ID, before.Provenance.Origin, after.Provenance.Origin)
+	}
 	return nil
 }
 
@@ -354,19 +489,28 @@ var ErrNoSuchDefinition = errors.New("engine: no such definition")
 // watchlist.Store.Delete. Refuses (ErrDefinitionImmutable) for a shipped
 // or unavailable definition -- see that error's own doc comment.
 func (s *DefinitionsStore) Delete(id string) error {
+	deleted, err := s.deleteLocking(id)
+	if err != nil || !deleted {
+		return err
+	}
+	s.notifyChange()
+	return nil
+}
+
+func (s *DefinitionsStore) deleteLocking(id string) (bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	existing, ok := s.raw[id]
 	if !ok {
-		return nil
+		return false, nil
 	}
 	if err := refuseIfImmutable(id, existing); err != nil {
-		return err
+		return false, err
 	}
 	delete(s.raw, id)
 	s.persistLocked()
-	return nil
+	return true, nil
 }
 
 // refuseIfImmutable reports ErrDefinitionImmutable when existing decodes
