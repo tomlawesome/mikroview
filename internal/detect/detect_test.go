@@ -253,20 +253,26 @@ func TestEvictsOldestSourceWhenOverCap(t *testing.T) {
 func TestEveryDetectorDisabledEntirelySuppressesItsFlagType(t *testing.T) {
 	nameToType := map[DetectorName]flags.Type{
 		DetectorActivitySpike: flags.TypeActivitySpike,
-		// DetectorCriticalPort, DetectorDistributedBruteForce and
-		// DetectorRepeatedDrops are deliberately absent here now: all three
-		// moved to internal/engine as shipped declarative definitions (issue
-		// #405), so internal/detect no longer evaluates any of them -- their
-		// own enable/disable pins now live in
+		// DetectorCriticalPort, DetectorDistributedBruteForce,
+		// DetectorRepeatedDrops and DetectorRuleSpike are deliberately
+		// absent here now: all four moved to internal/engine (issue #405)
+		// -- the first three as shipped declarative definitions, rule_spike
+		// as a shipped programmatic one (its own baseline/history-floor
+		// logic didn't fit the declarative shape the other three share) --
+		// so internal/detect no longer evaluates any of them. Their own
+		// enable/disable pins now live in
 		// internal/engine/shipped_declarative_test.go's
 		// TestShippedCriticalPortDisabledIsInert and its
 		// TestShippedDistributedBruteForce*/TestShippedRepeatedDrops*
 		// counterparts (generically, every ported declarative definition's
 		// disabled-definition contract is the same one
-		// TestShippedCriticalPortDisabledIsInert pins).
+		// TestShippedCriticalPortDisabledIsInert pins), and rule_spike's in
+		// internal/engine/shipped_rule_spike_test.go's
+		// TestShippedRuleSpikeSurvivesADisableEnableCycleWithoutFalsePositives,
+		// which toggles Enabled false then true and asserts nothing fires
+		// during the off period.
 		DetectorOutboundAnomaly: flags.TypeOutboundAnomaly,
 		DetectorInternalRecon:   flags.TypeInternalRecon,
-		DetectorRuleSpike:       flags.TypeRuleSpike,
 	}
 
 	for name, flagType := range nameToType {
@@ -277,8 +283,6 @@ func TestEveryDetectorDisabledEntirelySuppressesItsFlagType(t *testing.T) {
 			cfg.HostActivityWarmupSamples = 1
 			cfg.OutboundAnomalyThreshold = 2
 			cfg.InternalReconThreshold = 2
-			cfg.RuleSpikeMultiplier = 2
-			cfg.RuleSpikeMinRate = 0
 
 			seed := DefaultSettingsMap()
 			seed[name] = Settings{Enabled: false}
@@ -288,15 +292,18 @@ func TestEveryDetectorDisabledEntirelySuppressesItsFlagType(t *testing.T) {
 			// A barrage designed to trip every detector this test still
 			// evaluates at once: an internal source touching many internal
 			// and external destinations (internal_recon + outbound_anomaly),
-			// a rule firing repeatedly (rule_spike), and enough distinct
-			// ports/volume from one source for port_scan/activity_spike.
-			// (Older revisions of this barrage also included a distinct-
-			// external-sources-hitting-a-critical-port block for
+			// and enough distinct ports/volume from one source for
+			// port_scan/activity_spike. (Older revisions of this barrage
+			// also included a rule firing repeatedly for rule_spike and a
+			// distinct-external-sources-hitting-a-critical-port block for
 			// critical_port/distributed_brute_force, and a refused-attempt
 			// block for repeated_drops -- removed alongside their nameToType
-			// entries above, since all three detectors moved to
+			// entries above, since all four detectors moved to
 			// internal/engine and no longer evaluate anything this test
-			// observes.)
+			// observes. scanner's RuleLabel is vestigial now that
+			// rule_spike is gone from this test, but harmless, so it is
+			// left as-is rather than reshaping an event literal for no
+			// behavioural gain.)
 			for i := 0; i < 10; i++ {
 				t := now.Add(time.Duration(i) * time.Millisecond)
 				scanner := store.Event{SrcIP: "198.51.100.50", DstIP: "192.168.1.1", DstPort: 1000 + i, ReceivedAt: t, RuleLabel: "r1"}

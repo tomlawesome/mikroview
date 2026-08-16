@@ -151,6 +151,11 @@ type ShippedDeps struct {
 	Rules StaleRuleLister
 	// Rate backs global_spike's network-wide events-per-second reading.
 	Rate EventRateSource
+	// State is the engine-state store every baseline-backed definition
+	// resumes from across a restart (#399/#400). nil is the expected
+	// "persistence not configured" case: baselines start cold and warm
+	// up again, which is what internal/detect did unconditionally.
+	State *StateStore
 }
 
 // shippedProgrammaticBuilders maps a shipped definition id to the Go
@@ -274,4 +279,122 @@ type StaleRuleLister interface {
 // number, asked for rather than pushed in.
 type EventRateSource interface {
 	EventsPerSecond() float64
+}
+
+// baselinePersistInterval bounds how often one key's Baseline state is
+// handed to the StateStore. StateStore.Set is write-behind, but it
+// re-encodes the whole document on every call, so calling it per event
+// would put a marshal on the ingest path -- exactly what #400's "baseline
+// state must never be a write per event" rules out. A minute is far
+// finer than the store's own 5-minute flush cadence, so it costs nothing
+// in freshness, and coarse enough that even a definition tracking
+// thousands of keys does a bounded amount of work.
+var baselinePersistInterval = time.Minute
+
+// keyedBaseline is one key's Baseline plus the bookkeeping baselineSet
+// needs around it.
+type keyedBaseline struct {
+	b *Baseline
+	// lastPersisted is when this key's state last reached the
+	// StateStore -- see baselinePersistInterval.
+	lastPersisted time.Time
+}
+
+// baselineSet is the per-key EMA baseline machinery every
+// baseline-backed programmatic definition shares: bounded per-key
+// storage (Keyed), warm resume from the engine-state store on first
+// sight of a key, and coarse write-back.
+//
+// It exists so #368's history floor is declared once per definition and
+// then structurally unavoidable, rather than being a condition each
+// detector remembers to check. internal/detect had the opposite shape --
+// four detectors each hand-rolling prime/compare/update, three of them
+// with a history floor and rule_spike without -- which is exactly how
+// #368 happened.
+type baselineSet struct {
+	defID string
+	// primeWindow is how long a key must have been observed before its
+	// baseline may be primed at all (Baseline.Reading's own gate). It is
+	// declared per definition rather than always being the definition's
+	// window, because whether a still-filling window's reading is
+	// dangerous depends on what the reading *is*:
+	//
+	//   - rule_spike's reading is count/window.Seconds(), which climbs
+	//     purely as the ring fills. Priming from it is #368 exactly, so
+	//     its prime window is its full window.
+	//   - low_slow_scan's, activity_spike's and global_spike's baselines
+	//     were primed by internal/detect on the very first reading, and
+	//     each has its own separate firing floor (LowSlowScanMinObservation,
+	//     hostActivityMinSamples, and none respectively). Deferring their
+	//     priming would change when they can fire -- low_slow_scan's
+	//     earliest possible flag would move from 45 minutes to three
+	//     hours -- which is a behaviour change #405 is not licensed to
+	//     make. They pass zero, priming on first reading exactly as
+	//     before.
+	//
+	// Zero means "prime on the first reading": Baseline.Reading's gate is
+	// observedFor < window, which is never true for a zero window.
+	primeWindow time.Duration
+	// floor gates firing (Snapshot.Ready), independently of priming.
+	floor   BaselineFloor
+	cadence UpdateCadence
+	state   *StateStore
+	keyed   *Keyed[*keyedBaseline]
+}
+
+func newBaselineSet(defID string, primeWindow time.Duration, floor BaselineFloor, cadence UpdateCadence, state *StateStore) *baselineSet {
+	return &baselineSet{
+		defID:       defID,
+		primeWindow: primeWindow,
+		floor:       floor,
+		cadence:     cadence,
+		state:       state,
+		keyed:       NewKeyed[*keyedBaseline](),
+	}
+}
+
+// reading folds one reading into key's baseline and returns the Snapshot
+// as it stood before it -- Baseline.Reading's own contract, so a firing
+// decision compares against the baseline as it was, not as it becomes.
+//
+// A key seen for the first time resumes from persisted state when there
+// is any, so a restart does not throw away a warm baseline and spend
+// another whole warm-up blind. That is half of what closes #368: the
+// other half is Baseline.Reading refusing to prime at all inside the
+// first window, so the very first sample is a fully-observed rate rather
+// than a still-filling ring's artificially low one.
+func (s *baselineSet) reading(key string, now time.Time, value float64) Snapshot {
+	kb := s.keyed.GetOrCreate(key, now, func() *keyedBaseline {
+		if s.state != nil {
+			if persisted, ok := s.state.Get(s.defID, key); ok {
+				return &keyedBaseline{b: RestoreBaseline(s.primeWindow, s.floor, s.cadence, persisted)}
+			}
+		}
+		return &keyedBaseline{b: NewBaseline(s.primeWindow, s.floor, s.cadence)}
+	})
+	before := kb.b.Reading(now, value)
+	s.maybePersist(key, kb, now)
+	return before
+}
+
+// snapshot reports key's baseline without folding in a reading -- for a
+// definition that needs to consult a baseline it is not currently
+// advancing.
+func (s *baselineSet) snapshot(key string, now time.Time) (Snapshot, bool) {
+	kb, ok := s.keyed.Get(key)
+	if !ok {
+		return Snapshot{}, false
+	}
+	return kb.b.Snapshot(now), true
+}
+
+func (s *baselineSet) maybePersist(key string, kb *keyedBaseline, now time.Time) {
+	if s.state == nil {
+		return
+	}
+	if !kb.lastPersisted.IsZero() && now.Sub(kb.lastPersisted) < baselinePersistInterval {
+		return
+	}
+	kb.lastPersisted = now
+	s.state.Set(s.defID, key, kb.b.State())
 }

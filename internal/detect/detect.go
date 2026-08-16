@@ -404,7 +404,6 @@ type Detector struct {
 	// map) both moved to internal/engine with their detectors (issue
 	// #405).
 	destWindows    map[string]*destWindow
-	ruleWindows    map[string]*ruleWindow
 	lowSlowWindows map[string]*lowSlowWindow
 
 	// observeQueue backs Enqueue/Run -- see observeQueueSize's doc
@@ -436,7 +435,6 @@ func NewWithSettings(cfg Config, fs *flags.Store, settings *SettingsStore) *Dete
 		lookupSlots:    make(chan struct{}, reputationLookupConcurrency),
 		perSource:      make(map[string]*sourceWindow),
 		destWindows:    make(map[string]*destWindow),
-		ruleWindows:    make(map[string]*ruleWindow),
 		lowSlowWindows: make(map[string]*lowSlowWindow),
 		observeQueue:   make(chan store.Event, observeQueueSize),
 	}
@@ -540,31 +538,11 @@ func (d *Detector) Observe(e store.Event) {
 		}
 	}
 
-	if e.RuleLabel != "" {
-		// Deliberately no "mark the baseline stale" reset here, unlike
-		// GlobalSpikeDetector.Check and checkHostActivityBaseline. #267
-		// finding 17 proposed adding one for consistency; measured, it
-		// makes this detector worse -- see
-		// TestRuleSpikeSurvivesADisableEnableCycleWithoutFalsePositives.
-		//
-		// The difference is where the rate comes from. GlobalSpike is
-		// handed an accurate current EPS, so re-priming gives it a
-		// correct baseline immediately. This detector derives its rate
-		// from a time-windowed hits ring that only fills while it is
-		// enabled, so re-priming on the first event after re-enabling
-		// primes against a nearly empty ring -- and the ordinary refill
-		// back to normal traffic then reads as a spike. low_slow_scan
-		// derives its rate the same way and is left alone for the same
-		// reason.
-		if rs := d.settings.Get(DetectorRuleSpike); rs.Enabled && scopeMatchesRule(rs.Scope, e.RuleLabel) {
-			d.observeRuleRate(e, now)
-		}
-	}
-
-	// repeated_drops moved to internal/engine as a shipped declarative
-	// definition (issue #405, see shipped_declarative.go's
-	// buildRepeatedDropsDefinition) -- its "locally-hosted destination,
-	// refused attempt" gate went with it, expressed as conditions.
+	// rule_spike moved to internal/engine as a shipped programmatic
+	// definition (issue #405, see shipped_rule_spike.go), taking its
+	// ruleWindows map, its EMA baseline and the #267 reasoning about not
+	// re-priming after a disable/enable cycle with it -- the chassis's
+	// Baseline is what carries all three now.
 
 	// Local blocklist match (issue #113 Part B) -- deliberately last:
 	// see observeKnownBadIP's own doc comment for why its
@@ -622,7 +600,7 @@ func (d *Detector) observeScanAndSpike(e store.Event, now time.Time) {
 // engine.ReputationSink wiring for the reputation-lookup counterpart).
 
 // activeWindow is implemented by every per-key detector state struct
-// (sourceWindow, destWindow, ruleWindow, lowSlowWindow)
+// (sourceWindow, destWindow, lowSlowWindow)
 // purely so evictOldestByActivity can be generic over all of them --
 // they otherwise share no behavior, just this one field.
 type activeWindow interface {
