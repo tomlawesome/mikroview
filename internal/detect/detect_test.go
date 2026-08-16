@@ -120,6 +120,18 @@ func evtState(srcIP string, dstPort int, connState string, at time.Time) store.E
 // TestShippedCriticalPortIgnoresNonCriticalPorts (issue #405). Every
 // pinned value carried over unchanged.
 
+// TestEvictsOldestSourceWhenOverCap used to drive this through
+// d.perSource, the map sourceWindow (activity_spike/off_hours' shared
+// per-source state) lived in. perSource is gone now that off_hours --
+// the last detector still writing to it -- moved to internal/engine
+// (issue #405, see detect.go's Observe). evictOldestByActivity itself is
+// untouched (it stayed generic over activeWindow specifically so this
+// kind of retargeting would be possible), so this test is retargeted
+// onto d.lowSlowWindows, low_slow_scan's own per-source map: it is
+// populated unconditionally by any trackable event (evt()'s default
+// ConnState=="" already qualifies -- see isTrackableConnState) with
+// low_slow_scan enabled by default, so the eviction assertion carries
+// over exactly, just against a different map of the same shape.
 func TestEvictsOldestSourceWhenOverCap(t *testing.T) {
 	orig := maxTrackedSources
 	maxTrackedSources = 2
@@ -129,19 +141,19 @@ func TestEvictsOldestSourceWhenOverCap(t *testing.T) {
 	d, _ := newTestDetector(t, cfg)
 
 	now := time.Now()
-	d.Observe(evt("1.1.1.1", 1, now))
-	d.Observe(evt("2.2.2.2", 1, now.Add(time.Second)))
-	if len(d.perSource) != 2 {
-		t.Fatalf("expected 2 tracked sources, got %d", len(d.perSource))
+	d.Observe(evt("198.51.100.1", 1, now))
+	d.Observe(evt("198.51.100.2", 1, now.Add(time.Second)))
+	if len(d.lowSlowWindows) != 2 {
+		t.Fatalf("expected 2 tracked sources, got %d", len(d.lowSlowWindows))
 	}
 
-	// third distinct source should evict the least-recently-active one (1.1.1.1)
-	d.Observe(evt("3.3.3.3", 1, now.Add(2*time.Second)))
-	if len(d.perSource) != 2 {
-		t.Fatalf("expected eviction to hold the tracked-source count at the cap, got %d", len(d.perSource))
+	// third distinct source should evict the least-recently-active one (198.51.100.1)
+	d.Observe(evt("198.51.100.3", 1, now.Add(2*time.Second)))
+	if len(d.lowSlowWindows) != 2 {
+		t.Fatalf("expected eviction to hold the tracked-source count at the cap, got %d", len(d.lowSlowWindows))
 	}
-	if _, ok := d.perSource["1.1.1.1"]; ok {
-		t.Error("expected the least-recently-active source (1.1.1.1) to be evicted")
+	if _, ok := d.lowSlowWindows["198.51.100.1"]; ok {
+		t.Error("expected the least-recently-active source (198.51.100.1) to be evicted")
 	}
 }
 
@@ -174,6 +186,18 @@ func TestEveryDetectorDisabledEntirelySuppressesItsFlagType(t *testing.T) {
 		// TestShippedGlobalSpikeDisabledNeverFires; activity_spike does not
 		// have its own dedicated disabled-definition test alongside them
 		// (see this port's report).
+		//
+		// off_hours (DetectorOffHoursActivity) was never a member of this
+		// map to begin with -- unlike the barrage below, its firing
+		// boundary depends on 14 distinct prior calendar days of history,
+		// which doesn't fit this test's single-barrage-of-events shape, so
+		// it always had its own dedicated disabled-definition test instead
+		// (internal/detect/off_hours_test.go's
+		// TestOffHoursDetectorDisabledSuppressesFlag). Now that off_hours
+		// has moved to internal/engine as a shipped programmatic definition
+		// too (issue #405, see shipped_off_hours.go), that same test lives
+		// on as internal/engine/shipped_off_hours_test.go's
+		// TestShippedOffHoursDisabledIsInert, moved unchanged.
 		DetectorOutboundAnomaly: flags.TypeOutboundAnomaly,
 		DetectorInternalRecon:   flags.TypeInternalRecon,
 	}
