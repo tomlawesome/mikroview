@@ -52,6 +52,7 @@ func BenchmarkIngest(b *testing.B) {
 			}
 			d := detect.NewWithSettings(detect.DefaultConfig(), fs, detect.AllEnabledSettingsStore())
 			set := benchShippedDeclarativeSet(b, fs)
+			prog := benchShippedProgrammaticDefs(b, fs)
 			wl := buildIngestBenchWatchlist(b, watchlistEntries)
 
 			base := time.Now()
@@ -65,6 +66,9 @@ func BenchmarkIngest(b *testing.B) {
 
 				d.Observe(e)
 				set.Evaluate(e)
+				for _, p := range prog {
+					p.Evaluate(e)
+				}
 				for _, entry := range wl.List() {
 					watchlist.Match(entry, e)
 				}
@@ -107,6 +111,54 @@ func benchShippedDeclarativeSet(b *testing.B, fs *flags.Store) *DeclarativeSet {
 		defs = append(defs, dd)
 	}
 	return NewDeclarativeSet("shipped-declarative", defs)
+}
+
+// benchShippedProgrammaticDefs builds every shipped programmatic
+// definition that has a builder registered, at its migrated default
+// params -- the same set main.go registers individually on the engine.
+// Driven per event here exactly as Engine.evaluateEvent drives them, so
+// the measured cost is the real one rather than the declarative half
+// alone.
+//
+// Ticked definitions are included: their Evaluate is a no-op by
+// construction, and the point of driving them anyway is that the cost of
+// having them registered at all -- one interface call per event per
+// definition -- is part of what an operator pays and so part of what
+// this benchmark should show.
+func benchShippedProgrammaticDefs(b *testing.B, fs *flags.Store) []Evaluated {
+	b.Helper()
+	cfg := detect.DefaultConfig()
+	var out []Evaluated
+	for _, sd := range shippedDetectors {
+		if sd.kind != KindProgrammatic {
+			continue
+		}
+		if _, ok := shippedProgrammaticBuilders[string(sd.name)]; !ok {
+			continue // not ported yet -- internal/detect still evaluates it
+		}
+		params, err := ValidateParams(sd.schema, sd.params(cfg))
+		if err != nil {
+			b.Fatalf("%s: default params: %v", sd.name, err)
+		}
+		pd, err := BuildShippedProgrammaticDefinition(Definition{
+			ID:          string(sd.name),
+			Name:        shippedDetectorDisplayNames[sd.name],
+			Intent:      IntentDetection,
+			Kind:        KindProgrammatic,
+			Enabled:     true,
+			Params:      params,
+			ParamSchema: sd.schema,
+			Provenance:  Provenance{Origin: ProvenanceShipped, ShippedParams: params},
+		}, ShippedDeps{})
+		if err != nil {
+			b.Fatalf("%s: BuildShippedProgrammaticDefinition: %v", sd.name, err)
+		}
+		if sink, ok := pd.(interface{ SetSink(func(RoutedEmission)) }); ok {
+			sink.SetSink(FlagsSink(fs))
+		}
+		out = append(out, pd)
+	}
+	return out
 }
 
 func buildIngestBenchWatchlist(b *testing.B, n int) *watchlist.Store {
