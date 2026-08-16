@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/tomlawesome/mikroview/internal/backup"
-	"github.com/tomlawesome/mikroview/internal/detect"
 	"github.com/tomlawesome/mikroview/internal/engine"
 	"github.com/tomlawesome/mikroview/internal/persist"
 	"github.com/tomlawesome/mikroview/internal/watchlist"
@@ -36,12 +35,14 @@ func TestBackupRestoreRoundTripCarriesMigratedDefinitions(t *testing.T) {
 	watchlistPath := filepath.Join(srcDir, "watchlist.json")
 	definitionsPath := filepath.Join(srcDir, "definitions.json")
 
-	settings, err := detect.OpenSettingsStoreWithBackend(persist.NewFileBackend(settingsPath), detect.DefaultSettingsMap())
-	if err != nil {
-		t.Fatalf("detect.OpenSettingsStoreWithBackend: %v", err)
+	// A pre-#405 detector-settings document, written as bytes rather than
+	// through a store: internal/detect owned that store and is deleted
+	// (issue #405), but its document is still a migration source and this
+	// test's whole point is a deployment migrated from one.
+	settingsDoc := `{"port_scan":{"enabled":false},"critical_port":{"enabled":true}}`
+	if err := os.WriteFile(settingsPath, []byte(settingsDoc), 0o600); err != nil {
+		t.Fatalf("writing the detector settings document: %v", err)
 	}
-	settings.Set(detect.DetectorPortScan, detect.Settings{Enabled: false})
-	flushStore(t, settings)
 
 	wl, err := watchlist.Open(watchlistPath)
 	if err != nil {
@@ -149,7 +150,7 @@ func TestBackupRestoreRoundTripCarriesMigratedDefinitions(t *testing.T) {
 
 	// The disabled detector and the migrated watchlist entry
 	// specifically -- not just the count.
-	portScan, ok := defsAfter.Get(string(detect.DetectorPortScan))
+	portScan, ok := defsAfter.Get("port_scan")
 	if !ok || portScan.Definition.Enabled {
 		t.Errorf("restored port_scan = %+v, %v, want present and disabled", portScan, ok)
 	}
@@ -160,9 +161,8 @@ func TestBackupRestoreRoundTripCarriesMigratedDefinitions(t *testing.T) {
 }
 
 // storeFlusher is the small common surface flushStore needs --
-// detect.SettingsStore and watchlist.Store both satisfy it, the same way
-// closeStoreOnShutdown's own interface{ Close(context.Context) error }
-// parameter works in main.go.
+// watchlist.Store satisfies it, the same way closeStoreOnShutdown's own
+// interface{ Close(context.Context) error } parameter works in main.go.
 type storeFlusher interface {
 	Flush(context.Context) error
 }

@@ -7,7 +7,6 @@ import (
 	"math"
 	"net"
 	"sync"
-	"time"
 
 	"github.com/tomlawesome/mikroview/internal/flags"
 	"github.com/tomlawesome/mikroview/internal/logging"
@@ -25,12 +24,6 @@ type ReputationLookup interface {
 	Lookup(ctx context.Context, ip string) (reputation.Result, error)
 }
 
-// reputationLookupTimeout mirrors internal/detect.reputationLookupTimeout
-// -- generous headroom above reputation.Client's own internal 5s HTTP
-// timeout, belt-and-braces against a leaked/hung context rather than the
-// primary bound.
-const reputationLookupTimeout = 10 * time.Second
-
 // ReputationSink is FlagsSink plus a best-effort, async, pool-bounded
 // reputation lookup against a newly-raised (never a re-fire) episode's
 // Target -- the engine-side counterpart to internal/detect's
@@ -46,21 +39,14 @@ const reputationLookupTimeout = 10 * time.Second
 // this codebase follows (internal/detect.Detector's own
 // reputation/entities/knownBad/netclass fields).
 //
-// concurrency bounds in-flight lookups -- a *separate* pool from
-// internal/detect's own reputationLookupConcurrency-sized one, not
-// shared, since the two subsystems still run side by side (feeding the
-// same *reputation.Client, but budgeting their own concurrency
-// independently) until every detector has moved off internal/detect.
-// main.go is expected to pass the same concurrency figure
-// internal/detect uses today, so the two pools' combined worst case
-// stays within what this codebase has already tuned AbuseIPDB's free-tier
-// quota against, until #405 finishes and internal/detect's own pool is
-// deleted.
-func ReputationSink(fs *flags.Store, client ReputationLookup, concurrency int) func(RoutedEmission) {
+// policy carries the pool size and the per-lookup timeout -- the shipped
+// reputation definition's own params (see ReputationPolicy), not a
+// number chosen here or duplicated in process wiring.
+func ReputationSink(fs *flags.Store, client ReputationLookup, policy ReputationPolicy) func(RoutedEmission) {
 	if client == nil {
 		return FlagsSink(fs)
 	}
-	slots := make(chan struct{}, concurrency)
+	slots := make(chan struct{}, policy.Concurrency)
 	return func(r RoutedEmission) {
 		isNew := raiseDetectionFlag(fs, r)
 		if !isNew || r.Detection == nil {
@@ -89,7 +75,7 @@ func ReputationSink(fs *flags.Store, client ReputationLookup, concurrency int) f
 		go func() {
 			defer func() { <-slots }()
 			defer logging.Recover(reputationSinkLogger)
-			ctx, cancel := context.WithTimeout(context.Background(), reputationLookupTimeout)
+			ctx, cancel := context.WithTimeout(context.Background(), policy.Timeout)
 			defer cancel()
 			result, err := client.Lookup(ctx, ip)
 			if err != nil {
@@ -119,19 +105,6 @@ func isPublicIPAddress(s string) bool {
 	return isPublicIP(ip)
 }
 
-// reputationGroupSampleSize/reputationGroupMinSignificantSamples mirror
-// internal/detect's constants of the same names (reputation.go): how
-// many of a group's distinct members get checked per episode, and how
-// many must return real data before the aggregate is trusted at all.
-// Checking every member of a distributed brute force is unreasonable in
-// raw count and against AbuseIPDB's rate limit; a single bad-reputation
-// IP out of twenty-five is not meaningful signal, several out of a
-// bounded sample is closer to it.
-const (
-	reputationGroupSampleSize            = 10
-	reputationGroupMinSignificantSamples = 3
-)
-
 // groupReputationCollector aggregates up to len(sample) independent
 // async lookups for one flag episode into a single confidence floor,
 // applied once every sample has resolved (data, no-data, or skipped for
@@ -147,6 +120,11 @@ type groupReputationCollector struct {
 	t       flags.Type
 	target  string
 	fs      *flags.Store
+	// sampleSize/minSignificant are the policy's own two group figures,
+	// carried on the collector rather than read from a constant -- see
+	// ReputationPolicy.
+	sampleSize     int
+	minSignificant int
 }
 
 func (c *groupReputationCollector) recordAndMaybeApply(score *int) {
@@ -159,7 +137,7 @@ func (c *groupReputationCollector) recordAndMaybeApply(score *int) {
 	if c.pending > 0 {
 		return
 	}
-	if len(c.scores) < reputationGroupMinSignificantSamples {
+	if len(c.scores) < c.minSignificant {
 		return
 	}
 	sum := 0
@@ -167,7 +145,7 @@ func (c *groupReputationCollector) recordAndMaybeApply(score *int) {
 		sum += s
 	}
 	mean := float64(sum) / float64(len(c.scores))
-	significance := math.Min(1, float64(len(c.scores))/float64(reputationGroupSampleSize))
+	significance := math.Min(1, float64(len(c.scores))/float64(c.sampleSize))
 	c.fs.RaiseConfidenceFloor(c.t, c.target, int(math.Round(mean*significance)))
 }
 
@@ -191,24 +169,24 @@ func (c *groupReputationCollector) recordAndMaybeApply(score *int) {
 //
 // client == nil is a valid, explicit "not configured" no-op, same
 // convention as ReputationSink.
-func GroupReputationSink(fs *flags.Store, client ReputationLookup, concurrency int) func(RoutedEmission) {
+func GroupReputationSink(fs *flags.Store, client ReputationLookup, policy ReputationPolicy) func(RoutedEmission) {
 	if client == nil {
 		return FlagsSink(fs)
 	}
-	slots := make(chan struct{}, concurrency)
+	slots := make(chan struct{}, policy.Concurrency)
 	return func(r RoutedEmission) {
 		isNew := raiseDetectionFlag(fs, r)
 		if !isNew || r.Detection == nil {
 			return
 		}
 		f := r.Detection
-		sample := make([]string, 0, reputationGroupSampleSize)
+		sample := make([]string, 0, policy.GroupSampleSize)
 		for _, ip := range f.Evidence.Hosts {
 			if !isPublicIPAddress(ip) {
 				continue
 			}
 			sample = append(sample, ip)
-			if len(sample) >= reputationGroupSampleSize {
+			if len(sample) >= policy.GroupSampleSize {
 				break
 			}
 		}
@@ -216,7 +194,14 @@ func GroupReputationSink(fs *flags.Store, client ReputationLookup, concurrency i
 			return
 		}
 
-		collector := &groupReputationCollector{pending: len(sample), t: f.Type, target: f.Target, fs: fs}
+		collector := &groupReputationCollector{
+			pending:        len(sample),
+			t:              f.Type,
+			target:         f.Target,
+			fs:             fs,
+			sampleSize:     policy.GroupSampleSize,
+			minSignificant: policy.GroupMinSignificantSamples,
+		}
 		for _, ip := range sample {
 			select {
 			case slots <- struct{}{}:
@@ -229,7 +214,7 @@ func GroupReputationSink(fs *flags.Store, client ReputationLookup, concurrency i
 			go func() {
 				defer func() { <-slots }()
 				defer logging.Recover(reputationSinkLogger)
-				ctx, cancel := context.WithTimeout(context.Background(), reputationLookupTimeout)
+				ctx, cancel := context.WithTimeout(context.Background(), policy.Timeout)
 				defer cancel()
 				result, err := client.Lookup(ctx, ip)
 				if err != nil {
@@ -253,15 +238,24 @@ func GroupReputationSink(fs *flags.Store, client ReputationLookup, concurrency i
 // behaves how" is this package's knowledge, not the process wiring's.
 var shippedGroupReputationIDs = map[string]bool{
 	"distributed_brute_force": true,
+	// outbound_anomaly's emission is about the set of external
+	// destinations one LAN source reached, not about the source itself
+	// (which is a LAN address and never a lookup candidate at all) --
+	// internal/detect called maybeCheckGroupReputation here for exactly
+	// that reason. internal_recon deliberately has no entry: its
+	// destinations are internal by construction, so every member of its
+	// set would be skipped as non-public, and internal/detect made no
+	// reputation call from it either.
+	"outbound_anomaly": true,
 }
 
 // ShippedDeclarativeSink picks the emission sink a shipped definition
 // should be wired to: the group-sampling reputation path for a
 // definition whose flag represents many external addresses, the
 // single-address path otherwise. This is the one call site main.go needs.
-func ShippedDeclarativeSink(def Definition, fs *flags.Store, client ReputationLookup, concurrency int) func(RoutedEmission) {
+func ShippedDeclarativeSink(def Definition, fs *flags.Store, client ReputationLookup, policy ReputationPolicy) func(RoutedEmission) {
 	if shippedGroupReputationIDs[def.ID] {
-		return GroupReputationSink(fs, client, concurrency)
+		return GroupReputationSink(fs, client, policy)
 	}
-	return ReputationSink(fs, client, concurrency)
+	return ReputationSink(fs, client, policy)
 }

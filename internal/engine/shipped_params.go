@@ -221,3 +221,97 @@ var DeviceSilenceParamSchema = []ParamSchema{
 	{Name: "staleAfter", Type: ParamTypeDuration, Min: durationBound(0), Required: true,
 		Description: "How long a configured device's LastSeen may go without updating before this fires. Zero disables the detector."},
 }
+
+// --- schemas for the shipped definitions internal/detect had no
+// DetectorName for -----------------------------------------------------
+//
+// The four below (plus reputation's, see ReputationParamSchema) are new
+// with #405's final block. internal/detect ran each of them as an
+// always-on pass rather than a settings-toggleable detector -- there was
+// no DetectorName, no Settings entry and no scope for any of them (see
+// e.g. observeMailSender's and observeKnownBadIP's own doc comments on
+// why). That was never a statement that they should be untunable; it was
+// a consequence of internal/detect's settings store being a fixed
+// twelve-entry enum. On the chassis every definition wears the same
+// envelope, so these get one too, and the constants each of them hard-
+// coded in Go become params at exactly the values they were compiled
+// with -- which is what makes the port a no-behaviour-change move rather
+// than a retuning.
+
+// UnexpectedMailSenderParamSchema expresses internal/detect's mailPorts
+// and tagTrustedMailSender (mail_sender.go), both package constants
+// there.
+var UnexpectedMailSenderParamSchema = []ParamSchema{
+	{Name: "ports", Type: ParamTypePortList, Required: true,
+		Description: "Destination ports treated as outbound SMTP -- the unencrypted, implicit-TLS and STARTTLS submission ports."},
+	{Name: "trustedTag", Type: ParamTypeStringList, Max: floatBound(1),
+		Description: "Entity tag marking a host as a known, legitimate outbound mail sender; a host carrying it is never flagged."},
+}
+
+// StaleRuleParamSchema expresses the two values internal/detect took as
+// constructor arguments to StaleRuleDetector rather than as Config
+// fields: config.Flags.StaleRuleDays (as a duration) and
+// config.Flags.StaleRuleCheckInterval. See ShippedDefaults for why they
+// were never in detect.Config.
+//
+// checkInterval is a param rather than a constant because it always was
+// operator-configurable -- main.go read cfg.Flags.StaleRuleCheckInterval
+// straight into its own ticker. Ticked.TickInterval makes a definition
+// declare its cadence, so the declaration reads the param.
+var StaleRuleParamSchema = []ParamSchema{
+	{Name: "maxAge", Type: ParamTypeDuration, Min: durationBound(time.Second), Required: true,
+		Description: "How long a firewall rule must go without firing before it is reported as stale."},
+	{Name: "checkInterval", Type: ParamTypeDuration, Min: durationBound(time.Second), Required: true,
+		Description: "How often the stale-rule sweep runs. Coarse by design: staleness is judged in days."},
+}
+
+// KnownBadIPParamSchema expresses internal/detect's knownBadIPConfidence
+// (known_bad_ip.go), a package constant there.
+//
+// The reinforced flag-type set is deliberately NOT a param: it is every
+// definition whose Target is a plain source address (see
+// reinforcedFlagTypes), which is a structural fact about those
+// definitions rather than a preference -- pointing a reinforcement pass
+// at a definition whose target is a port label or a device ID would not
+// tune anything, it would simply never match.
+var KnownBadIPParamSchema = []ParamSchema{
+	{Name: "confidence", Type: ParamTypeInt, Min: floatBound(0), Max: floatBound(100), Required: true,
+		Description: "Confidence a blocklist match is raised at, and the floor it applies to any other active source-keyed flag for the same address."},
+}
+
+// NetClassParamSchema expresses internal/detect's netclassVPNFloor
+// (netclass.go) and the reputation.TorExitNodeFloor it reused for the
+// Tor category -- both package constants there.
+//
+// Only the two high-precision categories get a floor at all, and that is
+// not a param: datacenter space alone covers more than 10% of routable
+// IPv4 (kept display-only rather than assigned an arbitrary small weight
+// that would still mostly be noise), and privacy relays exist
+// specifically to identify traffic that must never read as suspicious.
+// Making those tunable would invite exactly the mis-scoring #114's
+// research rejected.
+var NetClassParamSchema = []ParamSchema{
+	{Name: "torFloor", Type: ParamTypeInt, Min: floatBound(0), Max: floatBound(100), Required: true,
+		Description: "Confidence floor a Tor-exit match applies to an active source-keyed flag for the same address."},
+	{Name: "vpnFloor", Type: ParamTypeInt, Min: floatBound(0), Max: floatBound(100), Required: true,
+		Description: "Confidence floor a commercial-VPN-exit match applies to an active source-keyed flag for the same address."},
+}
+
+// ReputationParamSchema expresses the four constants internal/detect's
+// reputation.go hard-coded -- reputationLookupConcurrency,
+// reputationLookupTimeout, reputationGroupSampleSize and
+// reputationGroupMinSignificantSamples -- plus the one place they were
+// duplicated: main.go passed a literal 8 into the engine's sinks with a
+// comment saying it was "kept in sync by hand" with internal/detect's
+// unexported constant until that pool was deleted. This schema is what
+// deletes the hand-syncing along with it.
+var ReputationParamSchema = []ParamSchema{
+	{Name: "lookupConcurrency", Type: ParamTypeInt, Min: floatBound(countParamMin), Required: true,
+		Description: "Maximum reputation lookups in flight at once, shared by the single-address and group-sampling paths. A saturated pool skips that episode's lookup rather than queuing."},
+	{Name: "lookupTimeout", Type: ParamTypeDuration, Min: durationBound(time.Second), Required: true,
+		Description: "Bound on one lookup's context -- headroom above the reputation client's own HTTP timeout, not the primary bound."},
+	{Name: "groupSampleSize", Type: ParamTypeInt, Min: floatBound(countParamMin), Required: true,
+		Description: "How many of a group episode's distinct addresses are checked. Kept at or below lookupConcurrency, so a group check starting from an idle pool can reach its own cap."},
+	{Name: "groupMinSignificantSamples", Type: ParamTypeInt, Min: floatBound(countParamMin), Required: true,
+		Description: "How many sampled addresses must return a real score before a group aggregate is trusted at all. Below this, no floor is applied either way."},
+}

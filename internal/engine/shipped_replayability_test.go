@@ -5,8 +5,6 @@ package engine
 import (
 	"strings"
 	"testing"
-
-	"github.com/tomlawesome/mikroview/internal/detect"
 )
 
 // TestEveryShippedDeclarativeDefinitionIsReplayable is issue #405's
@@ -29,14 +27,14 @@ import (
 // question that was asked; being non-replayable is a permanent property
 // of the definition. Only the second needs declaring.
 func TestEveryShippedDeclarativeDefinitionIsReplayable(t *testing.T) {
-	cfg := detect.DefaultConfig()
-	byName := make(map[detect.DetectorName]shippedDetector, len(shippedDetectors))
+	cfg := DefaultShippedDefaults()
+	byName := make(map[string]shippedDetector, len(shippedDetectors))
 	for _, sd := range shippedDetectors {
-		byName[sd.name] = sd
+		byName[sd.id] = sd
 	}
 
 	for id := range shippedDeclarativeBuilders {
-		sd, ok := byName[detect.DetectorName(id)]
+		sd, ok := byName[id]
 		if !ok {
 			t.Errorf("shipped declarative builder %q has no shippedDetectors entry to seed default params from", id)
 			continue
@@ -52,7 +50,7 @@ func TestEveryShippedDeclarativeDefinitionIsReplayable(t *testing.T) {
 		}
 		def := Definition{
 			ID:          id,
-			Name:        shippedDetectorDisplayNames[sd.name],
+			Name:        shippedDetectorDisplayNames[sd.id],
 			Intent:      IntentDetection,
 			Kind:        KindDeclarative,
 			Enabled:     true,
@@ -88,8 +86,8 @@ func TestEveryDeclarativeShippedDetectorHasABuilder(t *testing.T) {
 		if sd.kind != KindDeclarative {
 			continue
 		}
-		if _, ok := shippedDeclarativeBuilders[string(sd.name)]; !ok {
-			t.Errorf("%q migrates as kind %q but has no shipped declarative builder registered", sd.name, sd.kind)
+		if _, ok := shippedDeclarativeBuilders[sd.id]; !ok {
+			t.Errorf("%q migrates as kind %q but has no shipped declarative builder registered", sd.id, sd.kind)
 		}
 	}
 }
@@ -107,12 +105,12 @@ func TestEveryDeclarativeShippedDetectorHasABuilder(t *testing.T) {
 // So: every registered programmatic builder must name a shipped detector
 // this binary actually migrates, and that entry must be KindProgrammatic.
 func TestEveryShippedProgrammaticBuilderMatchesItsCatalogueEntry(t *testing.T) {
-	byName := make(map[detect.DetectorName]shippedDetector, len(shippedDetectors))
+	byName := make(map[string]shippedDetector, len(shippedDetectors))
 	for _, sd := range shippedDetectors {
-		byName[sd.name] = sd
+		byName[sd.id] = sd
 	}
 	for id := range shippedProgrammaticBuilders {
-		sd, ok := byName[detect.DetectorName(id)]
+		sd, ok := byName[id]
 		if !ok {
 			t.Errorf("shipped programmatic builder %q names no shipped detector -- main.go would never find it, and the definition would evaluate nothing", id)
 			continue
@@ -134,16 +132,16 @@ func TestEveryShippedProgrammaticBuilderMatchesItsCatalogueEntry(t *testing.T) {
 // are still evaluated by internal/detect, and this test grows to cover
 // them as each one lands.
 func TestEveryShippedDefinitionIsClassifiedForReplay(t *testing.T) {
-	cfg := detect.DefaultConfig()
+	cfg := DefaultShippedDefaults()
 	for _, sd := range shippedDetectors {
 		params, err := ValidateParams(sd.schema, sd.params(cfg))
 		if err != nil {
-			t.Errorf("%s: building default params: %v", sd.name, err)
+			t.Errorf("%s: building default params: %v", sd.id, err)
 			continue
 		}
 		def := Definition{
-			ID:          string(sd.name),
-			Name:        shippedDetectorDisplayNames[sd.name],
+			ID:          sd.id,
+			Name:        shippedDetectorDisplayNames[sd.id],
 			Intent:      IntentDetection,
 			Kind:        sd.kind,
 			Enabled:     true,
@@ -157,17 +155,17 @@ func TestEveryShippedDefinitionIsClassifiedForReplay(t *testing.T) {
 		case KindDeclarative:
 			dd, err := BuildShippedDeclarativeDefinition(def)
 			if err != nil {
-				t.Errorf("%s: BuildShippedDeclarativeDefinition: %v", sd.name, err)
+				t.Errorf("%s: BuildShippedDeclarativeDefinition: %v", sd.id, err)
 				continue
 			}
 			built = dd
 		case KindProgrammatic:
-			if _, ok := shippedProgrammaticBuilders[string(sd.name)]; !ok {
+			if _, ok := shippedProgrammaticBuilders[sd.id]; !ok {
 				continue // not ported yet
 			}
 			pd, err := BuildShippedProgrammaticDefinition(def, ShippedDeps{})
 			if err != nil {
-				t.Errorf("%s: BuildShippedProgrammaticDefinition: %v", sd.name, err)
+				t.Errorf("%s: BuildShippedProgrammaticDefinition: %v", sd.id, err)
 				continue
 			}
 			built = pd
@@ -175,11 +173,11 @@ func TestEveryShippedDefinitionIsClassifiedForReplay(t *testing.T) {
 
 		receiptCapable, reason, ok := Replayability(built)
 		if !ok {
-			t.Errorf("%s: Replayability could not classify it -- it implements neither Replayable nor NonReplayable, or both", sd.name)
+			t.Errorf("%s: Replayability could not classify it -- it implements neither Replayable nor NonReplayable, or both", sd.id)
 			continue
 		}
 		if !receiptCapable && strings.TrimSpace(reason) == "" {
-			t.Errorf("%s declares itself non-replayable with an empty reason -- declaring is the opposite of hiding, so the reason is the whole point", sd.name)
+			t.Errorf("%s declares itself non-replayable with an empty reason -- declaring is the opposite of hiding, so the reason is the whole point", sd.id)
 		}
 	}
 }

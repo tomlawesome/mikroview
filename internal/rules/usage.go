@@ -164,7 +164,7 @@ func (s *Store) listLocked() []Usage {
 
 // Stale returns every rule whose LastSeen is older than maxAge as of
 // now, sorted by rule label for a stable, deterministic sweep order.
-// Used by internal/detect.StaleRuleDetector's periodic sweep (see
+// Used by internal/engine's stale_rule definition sweep (see
 // main.go) to decide which rules to (re-)flag.
 func (s *Store) Stale(maxAge time.Duration, now time.Time) []Usage {
 	s.mu.RLock()

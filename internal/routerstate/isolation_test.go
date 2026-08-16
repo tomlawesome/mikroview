@@ -28,7 +28,7 @@ import (
 func TestPushedDataCannotTouchSuspicionMachinery(t *testing.T) {
 	const (
 		flagsPkg       = "github.com/tomlawesome/mikroview/internal/flags"
-		detectPkg      = "github.com/tomlawesome/mikroview/internal/detect"
+		enginePkg      = "github.com/tomlawesome/mikroview/internal/engine"
 		routerstatePkg = "github.com/tomlawesome/mikroview/internal/routerstate"
 	)
 
@@ -57,7 +57,10 @@ func TestPushedDataCannotTouchSuspicionMachinery(t *testing.T) {
 		}
 	}
 
-	assertNoImport(".", flagsPkg, detectPkg)
+	// internal/detect was the suspicion machinery when #186 wrote this;
+	// internal/engine is (issue #405 deleted that package and this test
+	// follows the thing it was guarding, not the name it had).
+	assertNoImport(".", flagsPkg, enginePkg)
 	assertNoImport("../flags", routerstatePkg)
-	assertNoImport("../detect", routerstatePkg)
+	assertNoImport("../engine", routerstatePkg)
 }

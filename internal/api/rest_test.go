@@ -15,8 +15,8 @@ import (
 	"github.com/tomlawesome/mikroview/internal/audit"
 	"github.com/tomlawesome/mikroview/internal/auth"
 	"github.com/tomlawesome/mikroview/internal/config"
-	"github.com/tomlawesome/mikroview/internal/detect"
 	"github.com/tomlawesome/mikroview/internal/device"
+	"github.com/tomlawesome/mikroview/internal/engine"
 	"github.com/tomlawesome/mikroview/internal/entities"
 	"github.com/tomlawesome/mikroview/internal/flags"
 	"github.com/tomlawesome/mikroview/internal/hub"
@@ -63,26 +63,26 @@ func newTestServer(t *testing.T) (*Server, *store.Store) {
 		t.Fatal(err)
 	}
 	s := &Server{
-		Store:            st,
-		Devices:          device.NewRegistry([]config.Device{{ID: "core", Name: "Core", SourceIP: "192.168.1.1"}}),
-		Hub:              hub.New(),
-		Reputation:       reputation.New(""),
-		Flags:            fs,
-		DetectorSettings: detect.AllEnabledSettingsStore(),
-		Entities:         es,
-		Rules:            ru,
-		Audit:            as,
-		Watchlist:        ws,
-		Suggest:          ss,
-		MatchLog:         ml,
-		Auth:             authStore,
-		Sessions:         auth.NewSessionStore(time.Hour),
-		LoginLimiter:     auth.NewLoginLimiter(10, time.Minute),
-		Tokens:           tokenStore,
-		IngestLimiter:    auth.NewLoginLimiter(ingestLimiterThreshold, ingestLimiterWindow),
-		RouterState:      routerstate.New(),
-		StartTime:        time.Now(),
-		Version:          "test-version",
+		Store:         st,
+		Devices:       device.NewRegistry([]config.Device{{ID: "core", Name: "Core", SourceIP: "192.168.1.1"}}),
+		Hub:           hub.New(),
+		Reputation:    reputation.New(""),
+		Flags:         fs,
+		Definitions:   newTestDefinitionsStore(t),
+		Entities:      es,
+		Rules:         ru,
+		Audit:         as,
+		Watchlist:     ws,
+		Suggest:       ss,
+		MatchLog:      ml,
+		Auth:          authStore,
+		Sessions:      auth.NewSessionStore(time.Hour),
+		LoginLimiter:  auth.NewLoginLimiter(10, time.Minute),
+		Tokens:        tokenStore,
+		IngestLimiter: auth.NewLoginLimiter(ingestLimiterThreshold, ingestLimiterWindow),
+		RouterState:   routerstate.New(),
+		StartTime:     time.Now(),
+		Version:       "test-version",
 	}
 	return s, st
 }
@@ -442,4 +442,21 @@ func asAdmin(h http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		h.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), userContextKey, admin)))
 	})
+}
+
+// newTestDefinitionsStore is an in-memory definitions store seeded with
+// the whole shipped catalogue at its defaults -- what a real boot
+// produces (see engine.SeedShippedDefinitions), and the replacement for
+// the detect.AllEnabledSettingsStore() fixture this file used before
+// internal/detect was deleted (issue #405).
+func newTestDefinitionsStore(t *testing.T) *engine.DefinitionsStore {
+	t.Helper()
+	defs, err := engine.OpenDefinitionsStore("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := engine.SeedShippedDefinitions(defs, nil, engine.DefaultShippedDefaults()); err != nil {
+		t.Fatal(err)
+	}
+	return defs
 }
