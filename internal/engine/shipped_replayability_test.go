@@ -5,8 +5,6 @@ package engine
 import (
 	"strings"
 	"testing"
-
-	"github.com/tomlawesome/mikroview/internal/detect"
 )
 
 // TestEveryShippedDeclarativeDefinitionIsReplayable is issue #405's
@@ -29,7 +27,7 @@ import (
 // question that was asked; being non-replayable is a permanent property
 // of the definition. Only the second needs declaring.
 func TestEveryShippedDeclarativeDefinitionIsReplayable(t *testing.T) {
-	cfg := detect.DefaultConfig()
+	cfg := DefaultShippedDefaults()
 	byName := make(map[string]shippedDetector, len(shippedDetectors))
 	for _, sd := range shippedDetectors {
 		byName[sd.id] = sd
@@ -134,7 +132,7 @@ func TestEveryShippedProgrammaticBuilderMatchesItsCatalogueEntry(t *testing.T) {
 // are still evaluated by internal/detect, and this test grows to cover
 // them as each one lands.
 func TestEveryShippedDefinitionIsClassifiedForReplay(t *testing.T) {
-	cfg := detect.DefaultConfig()
+	cfg := DefaultShippedDefaults()
 	for _, sd := range shippedDetectors {
 		params, err := ValidateParams(sd.schema, sd.params(cfg))
 		if err != nil {
