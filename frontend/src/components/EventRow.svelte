@@ -285,6 +285,12 @@
   .row-log .cell {
     background: var(--row-log-bg);
   }
+  .row-marked .cell {
+    background: var(--row-marked-bg);
+  }
+  .row-natted .cell {
+    background: var(--row-natted-bg);
+  }
   .row-unknown .cell {
     background: var(--row-unknown-bg);
   }
@@ -302,6 +308,12 @@
   }
   .row-log:hover .cell {
     background: var(--row-log-bg-hover);
+  }
+  .row-marked:hover .cell {
+    background: var(--row-marked-bg-hover);
+  }
+  .row-natted:hover .cell {
+    background: var(--row-natted-bg-hover);
   }
   .row-unknown:hover .cell {
     background: var(--row-unknown-bg-hover);
@@ -328,6 +340,12 @@
   .row-log .time {
     background: linear-gradient(var(--row-log-bg), var(--row-log-bg)), var(--bg-elevated);
   }
+  .row-marked .time {
+    background: linear-gradient(var(--row-marked-bg), var(--row-marked-bg)), var(--bg-elevated);
+  }
+  .row-natted .time {
+    background: linear-gradient(var(--row-natted-bg), var(--row-natted-bg)), var(--bg-elevated);
+  }
   .row-unknown .time {
     background: linear-gradient(var(--row-unknown-bg), var(--row-unknown-bg)), var(--bg-elevated);
   }
@@ -342,6 +360,12 @@
   }
   .row-log:hover .time {
     background: linear-gradient(var(--row-log-bg-hover), var(--row-log-bg-hover)), var(--bg-elevated);
+  }
+  .row-marked:hover .time {
+    background: linear-gradient(var(--row-marked-bg-hover), var(--row-marked-bg-hover)), var(--bg-elevated);
+  }
+  .row-natted:hover .time {
+    background: linear-gradient(var(--row-natted-bg-hover), var(--row-natted-bg-hover)), var(--bg-elevated);
   }
   .row-unknown:hover .time {
     background: linear-gradient(var(--row-unknown-bg-hover), var(--row-unknown-bg-hover)), var(--bg-elevated);
