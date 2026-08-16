@@ -159,13 +159,35 @@ export interface RouterFilterRule {
   action: string
   srcAddressList: string
   logPrefix: string
+  // #408's schema fields. Optional here because a router whose push
+  // script predates them sends nothing, and because nothing in the UI
+  // reads them yet -- typed so the data is not lost on the way in, not
+  // because a component depends on it.
+  connectionState?: string[]
+  inInterface?: string
+  outInterface?: string
 }
 
+// The NAT record's full rule anatomy (#408, as #445's prerequisite):
+// what a rule matches and what it translates to. #445 is what will read
+// it -- partitioning the table into rules consistent with an event
+// rather than showing all of them equally -- so these stay optional and
+// unrendered until that lands.
 export interface RouterNatRule {
   ordinal: number
   comment: string
   chain: string
   action: string
+  toAddresses?: string
+  toPorts?: string
+  dstPort?: string
+  protocol?: string
+  inInterface?: string
+  outInterface?: string
+  srcAddress?: string
+  dstAddress?: string
+  disabled?: boolean
+  dynamic?: boolean
 }
 
 export interface RouterTable<T> {

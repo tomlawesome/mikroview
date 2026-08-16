@@ -94,9 +94,22 @@ describe('generated commands', () => {
     const block = pushBlock('h', 't', 'filter-rule')
     expect(block).toContain('"logPrefix"=($v->"log-prefix")')
     expect(block).toContain('"srcAddressList"=($v->"src-address-list")')
+    // #408's fields. connection-state is a set, passed through as the
+    // array RouterOS sends rather than joined by the script.
+    expect(block).toContain('"connectionState"=($v->"connection-state")')
+    expect(block).toContain('"inInterface"=($v->"in-interface")')
+    expect(block).toContain('"outInterface"=($v->"out-interface")')
     // The wrapping that makes it a list of records rather than one
     // merged map -- silently wrong without it.
     expect(block).toContain('{$rec}')
+  })
+
+  it('reports the router version on every block, on the payload not a record', () => {
+    const script = pushScript('h', 't', ['filter-rule', 'arp'])
+    expect(script.match(/"routerosVersion"=\[\/system\/resource get version\]/g)).toHaveLength(2)
+    // On the envelope beside kind/page/pages -- never inside the
+    // per-record map, which describes a rule and not the router.
+    expect(script).not.toContain('"routerosVersion"=[/system/resource get version]; "comment"')
   })
 
   it('gives each block its own variables, since they share one script', () => {
