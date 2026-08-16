@@ -269,6 +269,33 @@ func TestDecodePayloadNeverPanics(t *testing.T) {
 	}
 }
 
+// TestFilterRuleAddressFieldsAreBoundedLikeEveryOtherField closes a gap
+// found while adding the #408 fields: dstAddress and srcAddress were the
+// only record fields in this package with no validate() line, so a
+// router-controlled value could arrive oversized or carrying a
+// bidi-override character and reach the UI, the exports and the audit
+// trail unscreened. Every sibling field already refuses both.
+func TestFilterRuleAddressFieldsAreBoundedLikeEveryOtherField(t *testing.T) {
+	long := strings.Repeat("a", maxFieldLen+1)
+	const prefix = `{"kind":"filter-rule","page":1,"pages":1,"records":[{"ordinal":0,"comment":"","chain":"","action":"","srcAddressList":"","logPrefix":"",`
+	decodeErr(t, prefix+`"dstAddress":"`+long+`"}]}`)
+	decodeErr(t, prefix+`"srcAddress":"`+long+`"}]}`)
+	// \u202e is RIGHT-TO-LEFT OVERRIDE and \u0007 is BEL, both written as
+	// JSON escapes so the decoder accepts them and validateFieldText gets
+	// a real rune to refuse -- the bidi-spoofing class
+	// internal/auth.ValidateUsername cites, and the control class beside
+	// it.
+	decodeErr(t, prefix+`"dstAddress":"203.0.113.9\u202e"}]}`)
+	decodeErr(t, prefix+`"srcAddress":"198.51.100.1\u0007"}]}`)
+
+	// The ordinary shapes still pass -- this bounds the field, it does not
+	// narrow what a rule may legitimately match on.
+	p := decodeOK(t, prefix+`"dstAddress":"!192.0.2.0/24","srcAddress":"198.51.100.1-198.51.100.5"}]}`)
+	if p.FilterRules[0].DstAddress != "!192.0.2.0/24" || p.FilterRules[0].SrcAddress != "198.51.100.1-198.51.100.5" {
+		t.Errorf("a negated CIDR and a range must still round-trip, got %+v", p.FilterRules[0])
+	}
+}
+
 // TestFilterRuleRoundTripsConnectionStateAndInterfaces is issue #408's
 // own scope: the three fields arrive, in both shapes RouterOS can send a
 // set in, and absent means unset rather than "matches nothing".
