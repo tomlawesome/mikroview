@@ -42,6 +42,7 @@ func backedUpStores(cfg config.Config) []struct{ Name, Path string } {
 		{"detector_settings", cfg.Flags.DetectorSettingsStorePath},
 		{"entities", cfg.Entities.StorePath},
 		{"mac_registry", cfg.DeviceMAC.StorePath},
+		{"engine_state", cfg.Engine.StorePath},
 		{"audit", cfg.Audit.StorePath},
 		{"watchlist", cfg.Watchlist.StorePath},
 		{"suggestions", cfg.Watchlist.SuggestionsStorePath},

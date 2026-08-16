@@ -677,6 +677,19 @@ type DeviceMAC struct {
 	StorePath string `yaml:"storePath"`
 }
 
+// Engine configures internal/engine's evaluation chassis
+// (docs/decisions/evaluation-engine.md) -- currently just its persisted
+// per-definition, per-key baseline state (#399/#400: engine.StateStore),
+// what a Baseline needs to resume warm across a restart instead of
+// being blind for its whole warm-up again. Optional persistence, same
+// contract as Flags.StorePath: left empty, the engine still runs, every
+// Baseline just starts cold on every restart. Nothing registers a
+// definition against this store yet (#401/#405's job), so on today's
+// mikroview this document stays empty regardless.
+type Engine struct {
+	StorePath string `yaml:"storePath"`
+}
+
 // Blocklist configures internal/blocklist's local IP/CIDR "known-bad"
 // matching against a small, vetted menu of free threat-intel feeds
 // (issue #113 Part B) -- see that package's own doc comment for the
@@ -778,6 +791,7 @@ type Config struct {
 	DeviceMAC  DeviceMAC  `yaml:"deviceMac"`
 	Blocklist  Blocklist  `yaml:"blocklist"`
 	NetClass   NetClass   `yaml:"netClass"`
+	Engine     Engine     `yaml:"engine"`
 
 	// RuleNames/HostNames are optional friendly-display-name maps -- see
 	// internal/naming. Keyed by the raw value RouterOS reports (a rule
@@ -920,6 +934,9 @@ func defaults() Config {
 		},
 		DeviceMAC: DeviceMAC{
 			StorePath: DefaultDataDir + "/mac-registry.json",
+		},
+		Engine: Engine{
+			StorePath: DefaultDataDir + "/engine-state.json",
 		},
 		Blocklist: Blocklist{
 			// Mirrors internal/blocklist.DefaultSources -- kept as a
@@ -1411,6 +1428,9 @@ func applyEnv(cfg *Config) {
 	}
 	if v := os.Getenv("MIKROVIEW_BLOCKLIST_SOURCES"); v != "" {
 		cfg.Blocklist.Sources = parseStringList(v)
+	}
+	if v := os.Getenv("MIKROVIEW_ENGINE_STORE_PATH"); v != "" {
+		cfg.Engine.StorePath = v
 	}
 }
 
