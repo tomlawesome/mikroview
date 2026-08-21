@@ -237,7 +237,7 @@ every restart) but not fatal.
   [docs/configuration.md](docs/configuration.md) for the API and the
   server/client filtering split.
 - **UI**: Svelte, no component framework, dark professional theme,
-  ~50KB JS bundle.
+  ~78KB of JavaScript over the wire (~260KB before compression).
 - **Logging**: leveled (debug/info/warn/error) and colorized server
   output, auto-plain when piped or `NO_COLOR` is set. See
   [docs/configuration.md](docs/configuration.md)'s "Logging" section.
