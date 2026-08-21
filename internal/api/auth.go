@@ -152,7 +152,7 @@ func (s *Server) readOnlyRoutes() http.Handler {
 // #186) can ever reach -- its own separate *http.ServeMux, the same
 // structural reasoning readOnlyRoutes documents above: there is no code
 // path from an ingest-authenticated request to anything else registered
-// on the real mux, including readOnlyRoutes' own four GETs. That
+// on the real mux, including readOnlyRoutes' own GETs. That
 // separation is exactly what stops an ingest token -- readable by any
 // `read`-capable user on the router it came from, per #186 step 5 --
 // from becoming a read-everything credential the way a stolen one
