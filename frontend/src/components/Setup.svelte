@@ -97,7 +97,11 @@
   const kinds = $derived(status?.pushKinds ?? [])
 </script>
 
-<div class="setup">
+<!-- `scrollbar` pairs with the scroll container declared in the style
+     block below, the same way every other scrollable view pairs them --
+     without it this one gets the default OS scrollbar instead of the
+     themed thin one. -->
+<div class="setup scrollbar">
   <header>
     <h2>Connect a router</h2>
     <p class="lede">
@@ -231,6 +235,16 @@
 
 <style>
   .setup {
+    /* The same three lines every other view's root carries (Watchlist,
+       Entities, Fleet, Detectors, Exclusions, Suggestions, AuditLog,
+       Dashboard): #app is height: 100vh; overflow: hidden, so a view
+       that does not declare its own scroll container simply has its
+       overflow clipped and unreachable. This one did not, which made
+       the guided setup unscrollable at any viewport its steps outgrew
+       -- #383. */
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
     max-width: 780px;
     margin: 0 auto;
     padding: 16px;
