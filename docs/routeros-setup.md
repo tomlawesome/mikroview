@@ -51,6 +51,13 @@ you want. Import the certificate once:
 /certificate import file-name=mikroview-ca.crt passphrase=""
 ```
 
+If MikroView runs with `tls.enabled: false` — the reverse-proxy
+deployment, where the proxy terminates TLS for browsers and the syslog
+TLS listener still runs for this router — use `http://` in that URL
+instead. MikroView still generates and serves the CA in that case (it is
+what the syslog listener presents), but plain HTTP is what is answering
+on that port.
+
 `check-certificate=no` here is the one and only place it belongs in
 this whole setup: there is nothing to verify against yet, since this
 fetch is *getting* the thing to verify against. Every fetch and logging
