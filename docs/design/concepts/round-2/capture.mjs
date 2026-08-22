@@ -9,10 +9,11 @@ const require = createRequire(path.join(here, '../../../../frontend/package.json
 const { chromium } = require('playwright');
 
 const files = [
-  ['direction-f-atlas2.html', 'f', ['s1', 's2', 's3']],
+  ['direction-f-atlas2.html', 'f', ['s1', 's2', 's3', 's4']],
   ['direction-g-riverline.html', 'g', ['s1', 's2', 's3']],
   ['direction-h-halo.html', 'h', ['s1', 's2', 's3', 's4']],
   ['direction-i-strata.html', 'i', ['s1', 's2', 's3']],
+  ['direction-j-gauntlet.html', 'j', ['s1', 's2', 's3']],
 ];
 
 const browser = await chromium.launch();
