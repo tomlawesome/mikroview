@@ -194,6 +194,25 @@ rewritten.
 
 ### Fixed
 
+- **`close-issues-on-dev.yml` no longer closes an issue over a negated or
+  code-quoted keyword** (#503). Its closing-keyword regex matched
+  `close`/`fix`/`resolve` anywhere in a merged PR's title+body, with no
+  regard for what came before or around it -- `Not fixed: #371` and
+  `Does not close #363` both read as closes, and so did a keyword
+  quoted inside a code span purely to explain that it had been removed
+  (`` `Closes #442` ``), even though GitHub's own closing-keyword
+  parser skips code spans. All three false positives happened for
+  real on 2026-08-22 (PRs #496, #497, #499) and wrongly closed issues
+  #371, #363 and #442 while their work was still open; all three were
+  reopened by hand. The matching logic is now
+  `.github/scripts/close-issues-matcher.js`, tested against the actual
+  PR bodies that broke it (`.github/scripts/close-issues-matcher.test.js`,
+  fixtures in `.github/scripts/fixtures/`): a keyword immediately
+  preceded by a negation ("not", "doesn't", "never", ...) no longer
+  matches, and markdown code spans/fenced blocks are stripped before
+  matching runs. A genuine `Closes #NNN` trailer, negation-free and
+  outside code, still closes as before.
+
 - **A router with `remote-log-format=syslog` set and a non-UTC system
   clock had every event's displayed time off by its clock's offset**
   (#379). RouterOS's BSD syslog output carries no timezone at all --
