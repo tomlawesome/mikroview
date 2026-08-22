@@ -11,7 +11,7 @@ const { chromium } = require('playwright');
 const files = [
   ['direction-f-atlas2.html', 'f'],
   ['direction-g-riverline.html', 'g'],
-  ['direction-h-compass.html', 'h'],
+  ['direction-h-halo.html', 'h'],
   ['direction-i-strata.html', 'i'],
 ];
 
