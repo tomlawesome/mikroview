@@ -101,9 +101,8 @@ func TestServeTCPHandlesMultipleConnections(t *testing.T) {
 }
 
 func TestServeTCPRejectsBeyondConnectionLimit(t *testing.T) {
-	orig := maxTCPConnections
-	maxTCPConnections = 1
-	defer func() { maxTCPConnections = orig }()
+	orig := maxTCPConnections.Swap(1)
+	defer maxTCPConnections.Store(orig)
 
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
