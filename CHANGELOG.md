@@ -179,6 +179,21 @@ rewritten.
 
 ### Fixed
 
+- **A router with `remote-log-format=syslog` set and a non-UTC system
+  clock had every event's displayed time off by its clock's offset**
+  (#379). RouterOS's BSD syslog output carries no timezone at all --
+  `internal/syslog/envelope.go`'s parser took the bare wall-clock digits
+  as literal UTC, so a router on Europe/London during BST (UTC+1)
+  logging 14:00 the instant the message arrived at 13:00 UTC produced an
+  event timestamped an hour into the future, in the live view, the CSV
+  export, and every timestamp-windowed query. The receiving host's own
+  clock is trusted and known accurate, so the parser now infers the
+  device's real offset from the gap between it and the device's
+  self-reported time -- rounded to the nearest 15 minutes, since every
+  real-world UTC offset lands on that grid -- instead of assuming the
+  gap is zero. A UTC-clocked router (the documented default deployment)
+  sees no change: ordinary network delay still rounds to no correction.
+
 - **The watchlist stops claiming "nothing anywhere is watching this"
   when it has not read every router's rules** (#367). Coverage answers
   from the filter tables routers have pushed, and the push is optional —
