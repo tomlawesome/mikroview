@@ -231,6 +231,62 @@ func TestServeTLSOversizedMessageStaysBoundedAcrossRecords(t *testing.T) {
 	}
 }
 
+// TestOnConnectionFiresOnlyAfterHandshake pins #371: the setup wizard's
+// syslog step reported "done" the instant a bare TCP connect landed on
+// the TLS listener, before tls.Listener's deliberately lazy handshake
+// (see tls_listener.go's own doc comment) ever ran -- so a router
+// mid-handshake-failure (wrong CA, certificate host mismatch, the exact
+// misconfiguration the wizard's CA-trust step exists to catch), or an
+// unrelated LAN port scan / health check, satisfied the wizard's
+// "connected" step despite completing no handshake and sending nothing.
+//
+// This must distinguish "TCP connected" from "TLS handshake completed",
+// not merely observe that a connection happened: the first half dials
+// plain TCP at the TLS listener and asserts OnConnection stays silent;
+// only the second half, a real TLS handshake, must fire it.
+func TestOnConnectionFiresOnlyAfterHandshake(t *testing.T) {
+	out := make(chan RawMessage, 4)
+	addr, stop := serveTLSForTest(t, out)
+	defer stop()
+
+	seen := make(chan string, 4)
+	SetOnConnection(func(host string) { seen <- host })
+	t.Cleanup(func() { SetOnConnection(nil) })
+
+	// A bare TCP connect that never speaks TLS at all -- the exact shape
+	// of a LAN port scan, a plain TCP health check, or a router that
+	// fails the handshake before sending a single byte.
+	bare, err := net.Dial("tcp", addr)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+
+	select {
+	case host := <-seen:
+		t.Fatalf("OnConnection fired for a bare TCP connect with no completed TLS handshake (host=%q) -- #371", host)
+	case <-time.After(300 * time.Millisecond):
+	}
+	bare.Close()
+
+	// A genuine, completed TLS handshake -- with no application data
+	// written at all -- must still fire the hook: the wizard's "done"
+	// state has to remain reachable, and a connected-but-not-yet-logging
+	// router (no rule with log=yes configured) is a real, already
+	// distinct state (setup.Store.NoteSyslogConnection's own doc
+	// comment) that must not collapse into "never connected".
+	tlsConn := dialTLSInsecure(t, addr)
+	defer tlsConn.Close()
+
+	select {
+	case host := <-seen:
+		if host == "" {
+			t.Error("OnConnection fired with an empty host")
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("OnConnection never fired after a completed TLS handshake with no data sent")
+	}
+}
+
 // TestListenTLSBindsByAddress is a thin check that ListenTLS itself (not
 // just ServeTLS) binds a real listener at the given address -- the one
 // piece ServeTLS-based tests above can't exercise, since they bind their
