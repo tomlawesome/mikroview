@@ -6,6 +6,8 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -102,6 +104,13 @@ func TestAdoptWatchlistEntriesCarriesAnUpgradeIntact(t *testing.T) {
 		if adopted != 3 {
 			t.Fatalf("adopted %d entries, want 3", adopted)
 		}
+		// #474: adoptRaw's persistLocked hands the write to the store's
+		// write-behind writer and returns -- it does not wait for the
+		// save to land. Without this flush, that save can still be in
+		// flight when eachBackend's t.TempDir() is removed at the end of
+		// this subtest, racing RemoveAll (see flushDefinitionsForTest's
+		// own doc comment for the established pattern this follows).
+		flushDefinitionsForTest(t, s)
 
 		entries, err := s.ListExpectations()
 		if err != nil {
@@ -186,6 +195,12 @@ func TestAdoptWatchlistEntriesIsIdempotentAndNeverOverwrites(t *testing.T) {
 		if adopted, err := AdoptWatchlistEntries(context.Background(), s, wlBackend); err != nil || adopted != 0 {
 			t.Fatalf("second adoption: adopted=%d err=%v, want 0 and no error", adopted, err)
 		}
+		// #474: the first adoption and UpdateExpectation both mark the
+		// store dirty; the write-behind writer's save for either can
+		// still be in flight here. Flush before this subtest's
+		// t.TempDir() is removed, same as every other write-behind test
+		// in this package (flushDefinitionsForTest/flushForTest).
+		flushDefinitionsForTest(t, s)
 
 		e, ok, err := s.GetExpectation("plain")
 		if err != nil || !ok {
@@ -283,4 +298,67 @@ func TestAdoptWatchlistEntriesWithNoSourceIsANoop(t *testing.T) {
 			t.Fatalf("absent document: adopted=%d err=%v, want 0 and no error", adopted, err)
 		}
 	})
+}
+
+// TestAdoptWatchlistEntriesTeardownDoesNotRaceAPendingWrite is #474's
+// regression test.
+//
+// TestAdoptWatchlistEntriesIsIdempotentAndNeverOverwrites failed on PR
+// #473's CI (a frontend-only diff) with "TempDir RemoveAll cleanup:
+// unlinkat ...: directory not empty" -- t.TempDir()'s own cleanup
+// racing an asynchronous write into that directory. The mechanism:
+// adoptRaw and UpdateExpectation both call persistLocked, which hands
+// the encoded document to the store's write-behind writer (MarkDirty)
+// and returns immediately -- nothing waits for that save to actually
+// land. Before this issue, neither adopt test flushed before returning,
+// so the writer goroutine's save could still be in flight when
+// eachBackend's t.TempDir() was removed at subtest teardown.
+//
+// This is confirmed here, not assumed: run in a tight loop that skips
+// go test's own per-subtest scheduling overhead (which is what made the
+// race too rare to hit reliably through -race -count=50 against the
+// real subtest -- confirmed by running exactly that: 500 iterations, no
+// failure), running the same AdoptWatchlistEntries+UpdateExpectation
+// sequence the fixed tests above now run, immediately followed by the
+// same os.RemoveAll a TempDir cleanup performs. Without a flush in
+// between, this reproduces the exact failure this test pins against
+// (observed empirically: about 1 failure in 500 runs). With the flush
+// -- the fix both tests above now carry -- RemoveAll is unconditionally
+// safe, because Flush blocks until the write-behind writer reports
+// nothing is dirty any more, i.e. the save has actually completed.
+func TestAdoptWatchlistEntriesTeardownDoesNotRaceAPendingWrite(t *testing.T) {
+	const iterations = 200
+	for i := 0; i < iterations; i++ {
+		dir, err := os.MkdirTemp("", "adopt-teardown-race-")
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		defsBackend := persist.NewFileBackend(filepath.Join(dir, "defs.json"))
+		wlBackend := persist.NewFileBackend(filepath.Join(dir, "watchlist.json"))
+		seedWatchlistDocument(t, wlBackend, watchlist.Entry{ID: "plain", Name: "watch ssh", Ports: []int{22}})
+
+		s, err := OpenDefinitionsStoreWithBackend(defsBackend)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := AdoptWatchlistEntries(context.Background(), s, wlBackend); err != nil {
+			t.Fatalf("iteration %d: AdoptWatchlistEntries: %v", i, err)
+		}
+		if err := s.UpdateExpectation("plain", func(e *watchlist.Entry) error {
+			e.Name = "renamed by the operator"
+			return nil
+		}); err != nil {
+			t.Fatalf("iteration %d: UpdateExpectation: %v", i, err)
+		}
+
+		// The fix: block until the write-behind writer has actually
+		// persisted this change before anything removes the directory
+		// it lives in -- see flushDefinitionsForTest.
+		flushDefinitionsForTest(t, s)
+
+		if err := os.RemoveAll(dir); err != nil {
+			t.Fatalf("iteration %d: RemoveAll raced a pending write despite Flush: %v", i, err)
+		}
+	}
 }
