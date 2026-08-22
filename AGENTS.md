@@ -312,9 +312,9 @@ was about, repeated.
 
 ## UX and UI design is Fable 5's work
 
-**Any UX or UI *design* work on mikroview is done by Fable 5.** This is a
-deliberate exception to the global default of fanning work out to cheaper
-models, and it holds regardless of how small the surface looks.
+The global rules route design and architecture judgement to Fable 5. This
+section records what that covers **here**, because "is this design?" is the
+question that decides which rule applies.
 
 What counts as design here: choosing an interaction model, laying out a
 screen or a family of screens, deciding what a control affords and how it
@@ -336,12 +336,9 @@ it costs a redesign rather than a patch. #439 is the worked example --
 the first model proposed was rejected as fiddly, and the replacement came
 from design judgement rather than from process.
 
-**How to apply.** When work turns out to need a design decision rather
-than an implementation one, say so and stop rather than deciding it in
-passing; a design decision made incidentally is still a design decision,
-and this rule is about where it gets made. Record the decision on the
-issue when it lands (the body, per the issues rule below), so the next
-person implements against a written model rather than re-deriving it.
+**How to apply.** Record the design decision on the issue when it lands
+(the body, per the issues rule below), so the next person implements
+against a written model rather than re-deriving it.
 
 ## Run it before you ship it
 
