@@ -260,7 +260,22 @@ func httpsRedirectTarget(r *http.Request, allowedHosts []string) string {
 	if len(allowedHosts) > 0 && !slices.Contains(allowedHosts, host) {
 		host = allowedHosts[0]
 	}
-	return "https://" + host + r.URL.RequestURI()
+	return "https://" + bracketIPv6Host(host) + r.URL.RequestURI()
+}
+
+// bracketIPv6Host wraps an IPv6 literal in brackets for use in a URL
+// authority component with no port attached -- net.JoinHostPort does the
+// same bracketing, but only when given a port to join it with, and this
+// call site (unlike samePortRedirectHost's) never has one: the plain-HTTP
+// redirect always targets the browser-default 443 implicitly. Without
+// this, "https://" + host for an IPv6 literal produces a URL no client
+// can parse, because the address's own colons are indistinguishable from
+// a host:port separator (issue #380 item 5).
+func bracketIPv6Host(host string) string {
+	if strings.Contains(host, ":") {
+		return "[" + host + "]"
+	}
+	return host
 }
 
 // samePortRedirectHost is the host policy for the plaintext-on-the-TLS-
@@ -356,6 +371,30 @@ func localRedirectHosts() []string {
 	add("localhost")
 	add("127.0.0.1")
 	return hosts
+}
+
+// joinOnShutdown registers a goroutine with wg that waits for ctx to be
+// cancelled and then calls shutdown with a context bounded by a 5s
+// deadline -- and, critically, does not report itself Done until
+// shutdown returns. Every server (and anything else with an equivalent
+// drain-then-finish shutdown call) that must be allowed to finish before
+// main proceeds has to be registered through this rather than a bare `go
+// func() { <-ctx.Done(); shutdown(...) }()`, or nothing observes when
+// the drain actually completes and the graceful window is a no-op
+// (issue #380 item 2: main previously fired httpServer.Shutdown and the
+// redirect server's Shutdown this way, and ServeTLS/ListenAndServe
+// unblocking as soon as Shutdown was *called* let main fall straight
+// through -- including into closeStoreOnShutdown below, whose own
+// comment wrongly assumed Shutdown had already returned by then).
+func joinOnShutdown(wg *sync.WaitGroup, ctx context.Context, shutdown func(context.Context) error) {
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		<-ctx.Done()
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		shutdown(shutdownCtx)
+	}()
 }
 
 func main() {
@@ -955,6 +994,17 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
+	// shutdownWG tracks every goroutine that has to finish before main
+	// proceeds past the blocking Serve call below, so the process
+	// actually waits out the graceful window instead of exiting the
+	// instant Shutdown is *called* rather than when it *returns* (issue
+	// #380 item 2). Without this, ServeTLS/ListenAndServe unblocks as
+	// soon as the listener closes, main falls straight through, and the
+	// configured 5s drain -- along with the notify dispatcher's
+	// documented shutdown-time flush below -- never gets a chance to
+	// run.
+	var shutdownWG sync.WaitGroup
+
 	// Notify (issues #30/#31/#96): alerting on newly-raised flags outside the
 	// UI, through whichever channels are configured -- each independently
 	// enabled by its own identifying field being set (same "empty means
@@ -987,7 +1037,11 @@ func main() {
 	}
 	if len(notifiers) > 0 {
 		dispatcher := notify.NewDispatcher(cfg.Notify.BatchWindow, notifiers)
-		go dispatcher.Run(ctx)
+		shutdownWG.Add(1)
+		go func() {
+			defer shutdownWG.Done()
+			dispatcher.Run(ctx)
+		}()
 		fs.WithOnRaise(dispatcher.Enqueue)
 	}
 
@@ -1395,12 +1449,7 @@ func main() {
 				ReadHeaderTimeout: 10 * time.Second,
 				ErrorLog:          slog.NewLogLogger(redirectLog.Handler(), slog.LevelWarn),
 			}
-			go func() {
-				<-ctx.Done()
-				shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-				defer cancel()
-				redirectServer.Shutdown(shutdownCtx)
-			}()
+			joinOnShutdown(&shutdownWG, ctx, redirectServer.Shutdown)
 			go func() {
 				redirectLog.Info(fmt.Sprintf("redirecting plain HTTP on %s -> https", cfg.Listen.HTTPRedirect))
 				if err := redirectServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
@@ -1423,12 +1472,7 @@ func main() {
 		}()
 	}
 
-	go func() {
-		<-ctx.Done()
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		httpServer.Shutdown(shutdownCtx)
-	}()
+	joinOnShutdown(&shutdownWG, ctx, httpServer.Shutdown)
 
 	syslogSummary := "syslog disabled (listen.syslogTls is empty)"
 	if cfg.Listen.SyslogTLS != "" {
@@ -1459,15 +1503,24 @@ func main() {
 		os.Exit(1)
 	}
 
-	// httpServer.Shutdown has returned by this point (that's what let
-	// ServeTLS/ListenAndServe return above), so ingest and every
-	// evaluation goroutine downstream of it have stopped submitting new
-	// mutations. Flush every write-behind-backed store's final dirty
-	// state now, within a bounded deadline, so a change made right
-	// before shutdown is not silently dropped the way an ordinary
-	// MinInterval-debounced write could be (issue #400). Best-effort:
-	// each store already logs its own save failures, so a Close error
-	// here is just the shutdown-budget case, worth one line, not fatal.
+	// ServeTLS/ListenAndServe unblocks as soon as Shutdown is *called*
+	// (the moment the listener closes), not once it has finished
+	// draining in-flight requests -- this Wait is what actually makes
+	// httpServer.Shutdown (and the redirect server's, and the notify
+	// dispatcher's shutdown-time flush) have returned by the time
+	// control reaches here, closing the gap a previous version of this
+	// comment wrongly assumed was already closed (issue #380 item 2).
+	shutdownWG.Wait()
+
+	// httpServer.Shutdown has now genuinely returned, so ingest and
+	// every evaluation goroutine downstream of it have stopped
+	// submitting new mutations. Flush every write-behind-backed store's
+	// final dirty state now, within a bounded deadline, so a change
+	// made right before shutdown is not silently dropped the way an
+	// ordinary MinInterval-debounced write could be (issue #400).
+	// Best-effort: each store already logs its own save failures, so a
+	// Close error here is just the shutdown-budget case, worth one
+	// line, not fatal.
 	closeStoreOnShutdown(fs, macRegistry, ru, engineState, definitions)
 }
 
