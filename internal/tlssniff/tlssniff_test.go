@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/http"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -183,5 +184,89 @@ func TestASilentClientDoesNotBlockOthers(t *testing.T) {
 		}
 	case <-time.After(8 * time.Second):
 		t.Error("a silent connection blocked the accept loop")
+	}
+}
+
+// fakeTemporaryAcceptError is the shape a real EMFILE/ENFILE from
+// accept(2) takes: a net.Error whose Temporary() reports true.
+type fakeTemporaryAcceptError struct{}
+
+func (fakeTemporaryAcceptError) Error() string   { return "fake temporary accept error (EMFILE-shaped)" }
+func (fakeTemporaryAcceptError) Timeout() bool   { return false }
+func (fakeTemporaryAcceptError) Temporary() bool { return true }
+
+// flakyOnceListener wraps a real net.Listener and answers its very first
+// Accept call with a temporary error, then delegates every call after
+// that to the real listener -- reproducing a transient FD-exhaustion
+// error that resolves as soon as some other file descriptor is freed.
+type flakyOnceListener struct {
+	net.Listener
+	mu     sync.Mutex
+	failed bool
+}
+
+func (l *flakyOnceListener) Accept() (net.Conn, error) {
+	l.mu.Lock()
+	if !l.failed {
+		l.failed = true
+		l.mu.Unlock()
+		return nil, fakeTemporaryAcceptError{}
+	}
+	l.mu.Unlock()
+	return l.Listener.Accept()
+}
+
+// TestAcceptLoopRetriesATemporaryError pins issue #380 item 3. Before the
+// fix, accept() (tlssniff.go) treated every inner.Accept() error as
+// terminal: it sent the one error on l.errs (capacity 1) and returned,
+// killing the goroutine that owns l.conns/l.errs for good. http.Server.
+// Serve, given that first error back through sniffed.Accept(), sees a
+// net.Error with Temporary()==true and -- following its own documented
+// contract -- retries by calling sniffed.Accept() again. But l.errs was
+// already drained, l.done was still open, and nothing was left to ever
+// deliver a connection or another error: that second Accept, and every
+// one after it, blocked forever. The whole HTTPS listener went silently
+// deaf after exactly one transient error, with the process still up and
+// nothing further logged.
+//
+// This reproduces the transient error with a fake inner listener
+// (flakyOnceListener) rather than actually exhausting file descriptors,
+// and proves the loop survives it: a real client dialling in afterwards
+// must still be served, not hang.
+func TestAcceptLoopRetriesATemporaryError(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	flaky := &flakyOnceListener{Listener: ln}
+
+	cert, err := selfSigned()
+	if err != nil {
+		t.Fatalf("generating a certificate: %v", err)
+	}
+	srv := &http.Server{
+		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			fmt.Fprint(w, "served over tls")
+		}),
+		TLSConfig: &tls.Config{Certificates: []tls.Certificate{cert}},
+	}
+	sniffed := Listener(flaky, testLog(), nil)
+	go srv.ServeTLS(sniffed, "", "")
+	defer srv.Close()
+
+	client := &http.Client{
+		Timeout:   2 * time.Second,
+		Transport: &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}},
+	}
+	res, err := client.Get("https://" + ln.Addr().String() + "/")
+	if err != nil {
+		t.Fatalf("a connection dialled after one transient accept error failed: %v -- "+
+			"the accept loop died instead of backing off and retrying, leaving the "+
+			"listener silently deaf", err)
+	}
+	defer res.Body.Close()
+	body, _ := io.ReadAll(res.Body)
+	if string(body) != "served over tls" {
+		t.Errorf("body = %q, want %q", body, "served over tls")
 	}
 }

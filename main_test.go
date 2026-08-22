@@ -3,15 +3,18 @@
 package main
 
 import (
+	"context"
 	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -269,6 +272,63 @@ func TestHTTPSRedirectTargetKeepsAHostTheMachineActuallyHas(t *testing.T) {
 		if got := httpsRedirectTarget(r, nil); got != want {
 			t.Errorf("httpsRedirectTarget for own host %q = %q, want %q", h, got, want)
 		}
+	}
+}
+
+// An IPv6 literal Host has to come back bracketed, or the Location header
+// is not a URL any client can parse -- url.Parse rejects the unbracketed
+// form because the colons inside the address are indistinguishable from a
+// host:port separator. samePortRedirectHost (added for #325) already
+// brackets IPv6 via net.JoinHostPort; httpsRedirectTarget, written
+// earlier, never did. See issue #380 item 5.
+func TestHTTPSRedirectTargetBracketsIPv6Host(t *testing.T) {
+	r := httptest.NewRequest(http.MethodGet, "http://[2001:db8::1]/dashboard", nil)
+	r.Host = "[2001:db8::1]:80"
+	got := httpsRedirectTarget(r, []string{"2001:db8::1", "fd00::5"})
+	want := "https://[2001:db8::1]/dashboard"
+	if got != want {
+		t.Errorf("httpsRedirectTarget = %q, want %q", got, want)
+	}
+	if _, err := url.Parse(got); err != nil {
+		t.Errorf("httpsRedirectTarget produced an unparseable URL %q: %v", got, err)
+	}
+}
+
+// TestJoinOnShutdownWaitsForShutdownToFinishDraining pins issue #380 item
+// 2: main previously fired httpServer.Shutdown (and the redirect
+// server's) in a bare goroutine nothing waited on, so ServeTLS/
+// ListenAndServe returning as soon as Shutdown was *called* -- not once
+// it finished draining -- let main fall straight through to the end of
+// the function. The configured 5s graceful window, and the notify
+// dispatcher's documented shutdown-time flush, never got a chance to
+// run: an in-flight request was reset instead of completed.
+//
+// joinOnShutdown is the extracted mechanism the real fix now routes
+// every such shutdown through. This proves its contract directly: a
+// caller's wg.Wait() must not return before the registered shutdown
+// func has actually finished, not merely started.
+func TestJoinOnShutdownWaitsForShutdownToFinishDraining(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var wg sync.WaitGroup
+	started := make(chan struct{})
+	finished := make(chan struct{})
+
+	joinOnShutdown(&wg, ctx, func(context.Context) error {
+		close(started)
+		time.Sleep(50 * time.Millisecond)
+		close(finished)
+		return nil
+	})
+
+	cancel()
+	<-started
+	wg.Wait()
+
+	select {
+	case <-finished:
+	default:
+		t.Error("wg.Wait() returned before the registered shutdown func finished -- main would exit mid-drain")
 	}
 }
 

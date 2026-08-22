@@ -71,6 +71,77 @@ func TestParseEnvelope(t *testing.T) {
 	}
 }
 
+// TestParseEnvelopeNonUTCRouterClock pins #379 item 4: a router whose
+// system clock is set to a non-UTC zone (RouterOS's remote-log-format=
+// syslog output carries no timezone at all) must not have its bare
+// wall-clock digits taken as if they were already UTC. A router on
+// Europe/London during BST (UTC+1) logging "14:00:00" the instant a
+// message arrives at 13:00:00 UTC previously produced Timestamp
+// 2026-08-15T14:00:00Z -- an hour ahead of the moment it actually
+// happened, which is what reached the UI and the CSV export.
+func TestParseEnvelopeNonUTCRouterClock(t *testing.T) {
+	tests := []struct {
+		name string
+		raw  string
+		recv time.Time
+		want time.Time
+	}{
+		{
+			// BST, UTC+1: device wall clock reads an hour ahead of the
+			// receiving host's trusted UTC clock.
+			name: "UTC+1 (BST) router logs an hour ahead of receipt",
+			raw:  "<134>Aug 15 14:00:00 MikroTik A|lan-wan|forward: in:ether1 out:bridge1, proto TCP (SYN), 192.168.1.50:51234->1.2.3.4:443, len 60",
+			recv: time.Date(2026, time.August, 15, 13, 0, 0, 0, time.UTC),
+			want: time.Date(2026, time.August, 15, 13, 0, 0, 0, time.UTC),
+		},
+		{
+			// A quarter-hour offset (Kathmandu, UTC+5:45) still lands on
+			// the 15-minute grid every real-world timezone uses.
+			name: "UTC+5:45 (Kathmandu) fractional offset",
+			raw:  "<134>Aug 15 14:00:00 MikroTik A|lan-wan|forward: in:ether1 out:bridge1, proto TCP (SYN), 192.168.1.50:51234->1.2.3.4:443, len 60",
+			recv: time.Date(2026, time.August, 15, 8, 15, 0, 0, time.UTC),
+			want: time.Date(2026, time.August, 15, 8, 15, 0, 0, time.UTC),
+		},
+		{
+			// A negative offset crossing a day boundary (US Eastern,
+			// UTC-4 in summer) near midnight local time.
+			name: "UTC-4 (US Eastern, EDT) crossing midnight",
+			raw:  "<134>Aug 16 00:30:00 MikroTik A|lan-wan|forward: in:ether1 out:bridge1, proto TCP (SYN), 192.168.1.50:51234->1.2.3.4:443, len 60",
+			recv: time.Date(2026, time.August, 15, 20, 31, 0, 0, time.UTC),
+			want: time.Date(2026, time.August, 15, 20, 30, 0, 0, time.UTC),
+		},
+		{
+			// A UTC-clocked router (the documented/default deployment)
+			// must see no change at all: the small gap from ordinary
+			// network delay rounds to zero offset.
+			name: "UTC router, ordinary propagation delay: unaffected",
+			raw:  "<134>Aug 15 13:00:02 MikroTik A|lan-wan|forward: in:ether1 out:bridge1, proto TCP (SYN), 192.168.1.50:51234->1.2.3.4:443, len 60",
+			recv: time.Date(2026, time.August, 15, 13, 0, 3, 0, time.UTC),
+			want: time.Date(2026, time.August, 15, 13, 0, 2, 0, time.UTC),
+		},
+		{
+			// A gap far outside any real-world UTC offset (-12:00 to
+			// +14:00) is a broken/unsynced device clock, not a timezone
+			// -- a pre-existing, separate failure mode (store.Event.Time's
+			// doc comment) that must not be guessed at. Left uncorrected,
+			// same as before this fix.
+			name: "gap beyond any real-world offset is left uncorrected",
+			raw:  "<134>Aug 10 14:00:00 MikroTik A|lan-wan|forward: in:ether1 out:bridge1, proto TCP (SYN), 192.168.1.50:51234->1.2.3.4:443, len 60",
+			recv: time.Date(2026, time.August, 15, 13, 0, 0, 0, time.UTC),
+			want: time.Date(2026, time.August, 10, 14, 0, 0, 0, time.UTC),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			env := ParseEnvelope([]byte(tt.raw), tt.recv)
+			if !env.Timestamp.Equal(tt.want) {
+				t.Errorf("Timestamp = %v, want %v", env.Timestamp, tt.want)
+			}
+		})
+	}
+}
+
 func TestInferYear(t *testing.T) {
 	tests := []struct {
 		name     string
