@@ -89,5 +89,34 @@ await page.click('button:text-is("Group")')
 await page.waitForTimeout(500)
 check((await rowCount()) === normalRows, 'turning it off restores every row')
 
+// --- The control does not exist where it cannot work (#381) -------------
+// Below 700px LiveTable renders EventCardMobile, which has no grouped
+// form. The button used to survive into that layout, take its active
+// styling, flip its title, and persist the preference -- while changing
+// nothing on screen. A control that lies about what it did is worse than
+// a missing one, so it is hidden rather than reimplemented.
+//
+// Asserted in a real browser because that is the only place the
+// breakpoint exists: viewportState reads matchMedia, which jsdom does not
+// implement (LiveTable's unit tests stub it to a permanent `false`), so
+// no unit test in this repo can tell these two layouts apart.
+await page.setViewportSize({ width: 480, height: 900 })
+await page.waitForTimeout(400)
+
+const mobileCards = await page.$$eval('.card', (els) => els.length)
+check(mobileCards > 0, `phone width renders the card layout (${mobileCards} cards)`)
+check(
+  !(await page.isVisible('button:text-is("Group")')),
+  'the Group button is absent at phone width, where grouping has no effect',
+)
+
+// Back to desktop width: the control returns, and returns usable.
+await page.setViewportSize({ width: 1280, height: 720 })
+await page.waitForTimeout(400)
+check(
+  await page.isVisible('button:text-is("Group")'),
+  'the Group button comes back at desktop width',
+)
+
 check(consoleErrors.length === 0, `no console errors (${consoleErrors.join('; ')})`)
 done()
