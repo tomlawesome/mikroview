@@ -272,3 +272,42 @@ describe('Clear releases the freeze snapshot (issue #381)', () => {
     expect(container.querySelectorAll('.row').length).toBe(0)
   })
 })
+
+describe('Group expansion does not outlive its group (issue #381 item 3)', () => {
+  function pairFor(ip: string) {
+    const shared = { srcIp: ip, dstIp: '203.0.113.9', dstPort: 22, protocol: 'TCP', action: 'drop' as const }
+    return [
+      makeEvent(`${ip}-a`, { id: Math.random(), ruleLabel: 'test-rule', ...shared }),
+      makeEvent(`${ip}-b`, { id: Math.random(), ruleLabel: 'test-rule', ...shared }),
+    ]
+  }
+
+  it('renders a recurring group collapsed after its events left the window', () => {
+    groupModeState.enabled = true
+    appState.events = pairFor('198.51.100.7')
+
+    const { container } = render(LiveTable)
+    flushSync()
+
+    // Expand it.
+    container.querySelector<HTMLElement>('[aria-expanded]')!.click()
+    flushSync()
+    expect(container.querySelectorAll('.row').length).toBe(3)
+
+    // Its traffic leaves the buffer entirely -- the shape of events
+    // aging out or a filter excluding them.
+    appState.events = pairFor('203.0.113.77')
+    flushSync()
+
+    // The old connection recurs. Before the prune, its stale open state
+    // survived the absence and the group rendered pre-expanded --
+    // an expansion the operator performed against events that no longer
+    // exist, silently reapplied to different ones.
+    appState.events = pairFor('198.51.100.7')
+    flushSync()
+
+    const toggle = container.querySelector('[aria-expanded]')
+    expect(toggle?.getAttribute('aria-expanded')).toBe('false')
+    expect(container.querySelectorAll('.row.member').length).toBe(0)
+  })
+})

@@ -164,6 +164,20 @@
     openGroups = next
   }
 
+  // An expansion does not outlive the group it expanded (#381, owner
+  // decision 2026-08-22): when a group's key leaves the rendered window
+  // -- its traffic aged out, a filter excluded it, or grouping was
+  // turned off -- its open state goes with it, so the same connection
+  // recurring later renders collapsed rather than silently pre-expanded
+  // against a set of events the operator never chose to open. One
+  // reactive prune covers every eviction path; the write is guarded so
+  // an unchanged set does not re-trigger the effect.
+  $effect(() => {
+    const present = new Set(groups.map((g) => g.key))
+    const kept = [...openGroups].filter((k) => present.has(k))
+    if (kept.length !== openGroups.size) openGroups = new Set(kept)
+  })
+
   function deviceName(id: string): string {
     return deviceNames.get(id) ?? id
   }
