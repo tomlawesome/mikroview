@@ -195,7 +195,7 @@
 <div class="concept">
   <b>DIRECTION F — ATLAS II</b>
   <span>atlas, refined · the stream is never gone · flags &amp; watches are lenses with teeth · one saturated colour: the alarm</span>
-  <span style="margin-left:auto"><a href="#s1">1 the place</a><a href="#s2">2 live, full</a><a href="#s3">3 flags &amp; watches</a></span>
+  <span style="margin-left:auto"><a href="#s1">1 the place</a><a href="#s2">2 live, full</a><a href="#s3">3 flags &amp; watches</a><a href="#s4">4 reach &amp; compose</a></span>
 </div>
 
 <!-- ============ SCENE 1 : THE PLACE, WITH THE STREAM UNDERFOOT ============ -->
@@ -548,6 +548,193 @@
     <div class="trow"><span class="t">14:02:11.482</span><span class="drop">DROP</span><span>cam-porch → nas :445 smb · iot-to-lan-drop</span></div>
     <div class="trow"><span class="t">14:02:11.407</span><span class="nat">NAT</span><span>phone-tom → 142.250.187.206 :443 quic · nat-wan</span></div>
     <div class="trow"><span class="t">14:02:10.951</span><span class="drop">DROP</span><span>185.220.101.34 DE → rb5009 :8291 winbox · wan-in-drop</span></div>
+  </div>
+</section>
+
+<!-- ============ SCENE 4 : REACH & COMPOSE ============ -->
+<style>
+  /* scene-4 additions: the reach canvas and the rule composer */
+  .steps { position: absolute; top: 108px; left: 36px; z-index: 6; display: flex; gap: 8px; align-items: center; font-size: 11.5px; }
+  .step { display: inline-flex; align-items: center; gap: 7px; border: 1px solid var(--hair-2); border-radius: 999px; padding: 5px 13px; color: var(--ink-2); }
+  .step b { color: var(--ink); font-weight: 650; }
+  .step.done { border-color: rgba(55,179,100,0.5); }
+  .step.done .n { color: var(--ok); font-weight: 800; }
+  .step.now { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(157,184,232,0.12); }
+  .step .n { color: var(--ink-3); font-weight: 800; font-size: 10px; }
+  .steps .sep { color: var(--ink-3); }
+
+  .cluster { fill: rgba(13, 18, 32, 0.6); stroke: var(--hair-2); }
+  .cluster-sel { stroke: var(--accent); stroke-width: 1.6; filter: drop-shadow(0 0 10px rgba(157,184,232,0.25)); }
+  .chiprow { font-family: var(--mono); font-size: 10px; }
+  .cr-ok { fill: var(--ok); } .cr-bad { fill: var(--alarm); } .cr-mut { fill: var(--ink-3); }
+
+  .portpanel {
+    position: absolute; top: 108px; right: 36px; z-index: 7; width: 316px;
+    background: var(--glass); border: 1px solid var(--accent); border-radius: 14px;
+    backdrop-filter: blur(12px); padding: 14px 16px;
+    box-shadow: 0 0 0 3px rgba(157,184,232,0.1);
+  }
+  .portpanel h4 { font-size: 12.5px; font-weight: 700; margin-bottom: 3px; }
+  .portpanel .q { font-size: 10.5px; color: var(--ink-3); margin-bottom: 10px; }
+  .pchip {
+    display: flex; align-items: baseline; gap: 8px; border: 1px solid var(--hair-2); border-radius: 9px;
+    padding: 7px 11px; margin: 6px 0; font-size: 12px; color: var(--ink-2); cursor: default;
+  }
+  .pchip b { font-family: var(--mono); color: var(--ink); font-weight: 650; }
+  .pchip .why { margin-left: auto; font-size: 10px; color: var(--iot); }
+  .pchip.sel { border-color: var(--ok); background: rgba(55,179,100,0.07); }
+  .pchip.sel b { color: var(--ok); }
+  .pfree { display: flex; gap: 8px; margin: 8px 0 4px; }
+  .pfree input { flex: 1; background: rgba(8,11,20,0.8); border: 1px solid var(--hair-2); border-radius: 8px; color: var(--ink); font: 12px var(--mono); padding: 7px 10px; outline: none; }
+  .scope { font-size: 11px; color: var(--ink-2); margin-top: 10px; }
+  .scope .opt { display: inline-block; border: 1px solid var(--hair-2); border-radius: 999px; padding: 2px 10px; margin: 3px 4px 0 0; color: var(--ink-3); font-size: 10.5px; }
+  .scope .opt.sel { border-color: var(--ok); color: var(--ok); font-weight: 650; }
+  .statef { font-size: 10px; color: var(--ink-3); margin-top: 9px; line-height: 1.6; }
+
+  .cmdcard {
+    position: absolute; left: 50%; transform: translateX(-50%); bottom: 118px; z-index: 7;
+    width: min(820px, 72vw); background: rgba(4, 6, 12, 0.94); border: 1px solid var(--hair-2);
+    border-radius: 14px; backdrop-filter: blur(12px); padding: 12px 16px 14px;
+  }
+  .cmdtabs { display: flex; gap: 8px; margin-bottom: 9px; }
+  .ctab { font-size: 11px; font-weight: 650; border: 1px solid var(--hair-2); border-radius: 999px; padding: 4px 13px; color: var(--ink-3); }
+  .ctab.sel { color: var(--ok); border-color: rgba(55,179,100,0.6); }
+  .ctab .k { font-size: 9px; color: var(--ink-3); font-weight: 800; margin-right: 5px; }
+  .cmdtabs .copy { margin-left: auto; font-size: 11px; color: var(--void); background: var(--accent); border-radius: 999px; padding: 4px 15px; font-weight: 700; }
+  .cmd { font: 11.5px/1.7 var(--mono); color: #d9c79a; white-space: pre-wrap; }
+  .cmd i { color: var(--ink-3); font-style: normal; }
+  .cmdnote { font-size: 10.5px; color: var(--ink-3); margin-top: 8px; line-height: 1.6; }
+  .cmdnote b { color: var(--ink-2); }
+</style>
+<section class="scene" id="s4">
+  <div class="scene-tag">Scene 4 — reach &amp; compose. See what a host may talk to; point at what it should; paste the rule.</div>
+  <div class="crumb">
+    <div class="wordmark">MIKRO<em>VIEW</em></div>
+    <div class="path">Network <span class="sep">▸</span> IoT <span class="sep">▸</span> <span class="here">cam-porch</span></div>
+    <div class="sub">reaches <b>3</b> · reached by <b>1</b> · <b style="color:var(--alarm)">blocked toward Servers — knocking 14×</b></div>
+  </div>
+  <div class="lenses">
+    <span class="lens on">Reach</span><span class="lens">Traffic</span><span class="lens">Policy</span><span class="lens">Flags<span class="ct">6</span></span><span class="lens">Watch</span>
+  </div>
+
+  <div class="steps">
+    <span class="step done"><span class="n">1 ✓</span> host <b>cam-porch</b></span><span class="sep">→</span>
+    <span class="step done"><span class="n">2 ✓</span> may talk to <b>Servers · 10.0.40.0/24</b></span><span class="sep">→</span>
+    <span class="step done"><span class="n">3 ✓</span> saying <b>tcp/445</b></span><span class="sep">→</span>
+    <span class="step now"><span class="n">4</span> paste the command ↓</span>
+  </div>
+
+  <div class="stage" style="bottom:104px">
+    <svg viewBox="0 0 1400 620" preserveAspectRatio="xMidYMid meet" role="img"
+         aria-label="Reach and compose: cam-porch inside its membrane with its lane-mates. Green strands pass the membrane to what it may talk to; the strand toward Servers dies at the membrane, pulsing where it keeps knocking. The Servers group is selected as the destination of a new rule being composed.">
+
+      <!-- membrane -->
+      <circle cx="560" cy="330" r="152" fill="rgba(157,184,232,0.03)" stroke="var(--hair-2)" stroke-width="1.3"/>
+      <text x="560" y="502" text-anchor="middle" class="n-sub">the membrane — lane-mates inside talk freely; every crossing needs a rule, per direction</text>
+
+      <!-- strands -->
+      <!-- to Servers cluster: nvr+pihole allowed (green), nas blocked (dies at membrane, knocking) -->
+      <path class="rib" d="M 508 200 C 460 150, 410 110, 366 84" stroke="var(--ok)" stroke-width="2.4" opacity="0.8"/>
+      <circle class="mote" r="2.2" fill="var(--ok)" style="offset-path: path('M 508 200 C 460 150, 410 110, 366 84'); animation: travel 2.2s linear infinite;" aria-hidden="true"/>
+      <path class="rib" d="M 620 192 C 646 158, 668 132, 686 110" stroke="var(--alarm)" stroke-width="2.2" opacity="0.9"/>
+      <g transform="translate(686 110) rotate(52)">
+        <line x1="-8" y1="0" x2="8" y2="0" stroke="var(--alarm)" stroke-width="3"/>
+        <circle r="5" fill="none" stroke="var(--alarm)" class="halo"/>
+      </g>
+      <path d="M 696 96 C 712 78, 726 62, 738 48" fill="none" stroke="var(--alarm)" stroke-width="1" stroke-dasharray="2 6" opacity="0.4"/>
+      <circle r="2.6" fill="var(--alarm)" style="filter:drop-shadow(0 0 4px var(--alarm)); offset-path: path('M 620 192 C 646 158, 668 132, 686 110'); animation: travel 1.6s linear infinite;" aria-hidden="true"/>
+      <text x="700" y="146" class="chip-t" style="fill:var(--alarm)">⊣ dies at the membrane · knocking 14× — the rule being written below fixes exactly this</text>
+
+      <!-- to LAN: in allowed, out blocked -->
+      <path class="rib" d="M 1004 268 C 900 282, 800 296, 716 310" stroke="var(--ok)" stroke-width="2.2" opacity="0.8"/>
+      <circle class="mote" r="2.2" fill="var(--ok)" style="offset-path: path('M 1004 268 C 900 282, 800 296, 716 310'); animation: travel 2.2s linear infinite;" aria-hidden="true"/>
+      <path class="rib" d="M 618 350 C 660 354, 692 357, 710 358" stroke="var(--alarm)" stroke-width="1.8" opacity="0.8"/>
+      <g transform="translate(710 358) rotate(90)"><line x1="-7" y1="0" x2="7" y2="0" stroke="var(--alarm)" stroke-width="3"/></g>
+      <text x="742" y="380" class="chip-t" style="fill:var(--alarm)">⊣ may not look back · one-way by design</text>
+      <text x="800" y="252" class="chip-t" style="fill:var(--ok)">:8554 he may look in · lan-to-iot-cam →</text>
+
+      <!-- to internet: ntp allowed, Hangzhou blocked -->
+      <path class="rib" d="M 486 448 C 440 490, 390 524, 344 548" stroke="var(--ok)" stroke-width="1.8" opacity="0.75"/>
+      <circle class="mote" r="2" fill="var(--ok)" style="offset-path: path('M 486 448 C 440 490, 390 524, 344 548'); animation: travel 3s linear infinite;" aria-hidden="true"/>
+      <path class="rib" d="M 622 446 C 640 462, 656 476, 670 488" stroke="var(--alarm)" stroke-width="1.8" opacity="0.85"/>
+      <g transform="translate(670 488) rotate(42)">
+        <line x1="-8" y1="0" x2="8" y2="0" stroke="var(--alarm)" stroke-width="3"/>
+        <circle r="4.5" fill="none" stroke="var(--alarm)" class="halo"/>
+      </g>
+      <path d="M 682 502 C 712 528, 744 550, 772 566" fill="none" stroke="var(--alarm)" stroke-width="1" stroke-dasharray="2 6" opacity="0.4"/>
+      <text x="700" y="530" class="chip-t" style="fill:var(--alarm)">⊣ :443 to Hangzhou · iot-egress-drop · 3×</text>
+      <text x="286" y="516" class="chip-t" style="fill:var(--ok)">:123 ntp →</text>
+
+      <!-- centre: the host and its lane-mates -->
+      <g transform="translate(560 330)">
+        <circle r="46" fill="rgba(201,133,0,0.1)" stroke="var(--iot)" stroke-opacity="0.7" stroke-width="1.5"/>
+        <text y="-5" text-anchor="middle" class="n-name">cam-porch</text>
+        <text y="12" text-anchor="middle" class="n-cidr" style="font-size:9.5px">10.0.20.31 ✎</text>
+      </g>
+      <g transform="translate(478 408)"><circle r="20" fill="rgba(201,133,0,0.06)" stroke="var(--iot)" stroke-opacity="0.35"/><text y="34" text-anchor="middle" class="n-sub">hue-bridge</text></g>
+      <g transform="translate(646 412)"><circle r="20" fill="rgba(201,133,0,0.06)" stroke="var(--iot)" stroke-opacity="0.35"/><text y="34" text-anchor="middle" class="n-sub">thermostat</text></g>
+
+      <!-- Servers cluster — SELECTED as destination -->
+      <g transform="translate(240 26)">
+        <rect class="cluster cluster-sel" x="0" y="0" width="330" height="96" rx="12"/>
+        <circle cx="20" cy="22" r="4" fill="var(--srv)"/>
+        <text x="32" y="27" class="n-name" style="font-size:13.5px">Servers</text>
+        <text x="116" y="27" class="n-cidr">10.0.40.0/24 · vlan40</text>
+        <text x="252" y="27" class="cov" style="fill:var(--accent)">② DESTINATION</text>
+        <text x="20" y="52" class="chiprow"><tspan class="cr-ok">✓⇄</tspan> nvr :554 · <tspan class="cr-ok">✓→</tspan> pihole :53 · <tspan class="cr-bad">⊣</tspan> nas — knocking 14×</text>
+        <text x="20" y="74" class="chiprow cr-mut">click a host inside to narrow the rule to it → nas is picked, in the panel</text>
+      </g>
+
+      <!-- LAN cluster -->
+      <g transform="translate(1010 224)">
+        <rect class="cluster" x="0" y="0" width="270" height="88" rx="12"/>
+        <circle cx="20" cy="22" r="4" fill="var(--lan)"/>
+        <text x="32" y="27" class="n-name" style="font-size:13.5px">LAN</text>
+        <text x="86" y="27" class="n-cidr">10.0.10.0/24</text>
+        <text x="20" y="52" class="chiprow"><tspan class="cr-ok">✓→in</tspan> tom-desktop :8554 · <tspan class="cr-bad">⊣out</tspan></text>
+        <text x="20" y="72" class="chiprow cr-mut">one-way: they watch it; it never calls them</text>
+      </g>
+
+      <!-- Internet band -->
+      <path d="M 180 574 C 460 622, 940 622, 1220 574" fill="none" stroke="var(--hair-2)" stroke-width="1.1"/>
+      <text x="1250" y="580" class="n-sub">INTERNET</text>
+      <text x="300" y="566" class="n-sub" style="fill:var(--ink-2)">time.cloudflare.com</text>
+      <text x="790" y="586" class="n-sub" style="fill:var(--alarm)">47.246.129.8 · Hangzhou</text>
+    </svg>
+  </div>
+
+  <!-- ③ the port panel -->
+  <div class="portpanel">
+    <h4>③ What may it say to Servers?</h4>
+    <div class="q">the ports it has been asking for come first — a denial becomes a rule in two clicks</div>
+    <div class="pchip sel"><b>tcp/445</b> smb <span class="why">it's been asking · 14×</span></div>
+    <div class="pchip"><b>tcp/139</b> netbios <span class="why">asked 3×</span></div>
+    <div class="pchip"><b>tcp/554</b> rtsp</div>
+    <div class="pfree"><input placeholder="or type a port or service…"></div>
+    <div class="scope">to:
+      <span class="opt sel">just nas · .40.10</span>
+      <span class="opt">the whole subnet /24</span>
+    </div>
+    <div class="statef">replies ride back — stateful, no return rule needed.<br>also allow nas → cam-porch: <b style="color:var(--ink-2)">off</b> (the one-way stays one-way)</div>
+  </div>
+
+  <!-- ④ the command -->
+  <div class="cmdcard">
+    <div class="cmdtabs">
+      <span class="ctab sel"><span class="k">④</span>Allow it</span>
+      <span class="ctab">Name the block instead</span>
+      <span class="copy">⧉ copy</span>
+    </div>
+    <div class="cmd">/ip firewall filter add chain=forward src-address=10.0.20.31 dst-address=10.0.40.10 \
+    protocol=tcp dst-port=445 action=accept log=yes log-prefix="cam-nas-smb" \
+    comment="porch camera → nas smb" place-before=[find comment="iot-to-lan-drop"]</div>
+    <div class="cmdnote"><b>Paste it in RouterOS yourself — mikroview never touches the router.</b> Placed before iot-to-lan-drop, logged and named, so the map learns it: on the next rule push this strand turns green and the UNPLANNED stamp retires itself. If you'd rather keep the camera out, “Name the block” drafts the explicit logged drop instead.</div>
+  </div>
+
+  <div class="ticker">
+    <div class="head"><span class="lab"><i></i>The stream · 34/s</span><span class="lift">▲ lift to full live view</span></div>
+    <div class="trow"><span class="t">14:02:11.482</span><span class="drop">DROP</span><span>cam-porch → nas :445 smb · iot-to-lan-drop</span></div>
+    <div class="trow"><span class="t">14:02:11.407</span><span class="nat">NAT</span><span>phone-tom → 142.250.187.206 :443 quic · nat-wan</span></div>
   </div>
 </section>
 

@@ -83,6 +83,30 @@ boundary where they fired; watch bands run along their strata and the
 break at 13:52 is visible mid-paper. Zoomed out, ticks become texture
 and the day reads at a glance — lookback and live are one gesture.
 
+### J — Gauntlet (`direction-j-gauntlet.html`) — the true horizontal
+
+Added 2026-08-23 after the owner's mid-round batch: Riverline was
+"super weak" — water is a metaphor, not a truth. The strong horizontal
+is the one RouterOS already is: **the x-axis is rule order**. Each rule
+is a gate; strands thread the gauntlet and are absorbed by the gate
+that judges them. The established gate visibly swallows the bulk; a
+hot gate glows with its counter; a dormant rule is a gate untouched
+for 30 days; and the unplanned flow runs all 41 gates untouched into
+the default-drop wall — which is what "unplanned" means. Scene 3 is
+the gates report: hot gates, dormant gates (with a print-the-command
+retirement draft), watched gates, flags on the gates that fired them.
+
+## Running batch (2026-08-23, owner, mid-round)
+
+- Down to **Atlas II** and **Strata II** — though Atlas II reads
+  "underwhelming"; what appeals are the strong concepts (Strata's time
+  basis, Halo's circularity). **Halo dropped** as a top-level view; its
+  Reach view survives in F scene 4, developed into **Reach & Compose**
+  (point at host → destination → port → mikroview prints the RouterOS
+  command; observed denials become drafted rules). **Riverline
+  dropped** ("super weak"); **Gauntlet** replaces it as the horizontal
+  with a true argument.
+
 ## Shared discipline
 
 Palettes validated CVD-safe per surface (dataviz validator); no meaning
