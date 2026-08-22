@@ -69,6 +69,20 @@ run it. A feature that needs mikroview itself to touch the network is
 either redesigned around pushed or passive data, or it belongs in a
 different tool.
 
+## A stale origin/dev incident
+
+**This is not hypothetical.** In this same repo, a branch was cut with
+`git checkout -b <name> origin/dev` shortly after several PRs had just
+been merged into `dev` via the GitHub API -- which does not update a
+local clone's `origin/dev` remote-tracking ref, only `git fetch` does.
+The local ref was hours stale, so the new branch was built on the
+*pre-merge* `dev`, not the real one. Nothing was lost -- `dev` on GitHub
+was fine -- but every file the recent PRs had touched appeared "reverted"
+in the new branch's working tree, and opening a PR from it would have
+shown all of that work being undone. Caught by checking `git log
+--oneline` against a freshly-fetched `origin/dev` before pushing, not by
+assuming the checkout had done the right thing.
+
 ## Where code review happens: GitHub and GitLab, split by branch
 
 > **UNDER CONSTRUCTION — NOT YET LIVE. DO NOT USE.**
@@ -98,12 +112,9 @@ different tool.
 > yet. Until that works, cutting over would silently stop GitHub issues
 > closing on merge.
 >
-> Current build status, and what is still open, lives in
-> `gitlab-ci-plan/07-implementation-status-and-handover.md`, which
-> supersedes the earlier planning docs in that folder. Note it describes
-> **two** GitLab projects for different purposes — `ai/mikroview` (the
-> eventual cutover target) and `ai/mikroview-mirror` (parallel checks
-> only, no integration) — which are not interchangeable.
+> The cutover involves **two** GitLab projects for different purposes —
+> `ai/mikroview` (the eventual cutover target) and `ai/mikroview-mirror`
+> (parallel checks only, no integration) — which are not interchangeable.
 
 Issues, planning, and decisions stay on GitHub, per the rest of this file.
 Code review does not, for one lane: `dev` (and the feature branches that
@@ -258,6 +269,10 @@ them, digests cost nothing and should be taken. Until then the tag is
 the safer of two imperfect options, and the images in question are
 official ones from Google and Docker.
 
+This is about `FROM` lines only. It does not affect promoting the exact
+tested preview digest to the release tag — that digest pin is the point
+of the release step, per the global delivery rules.
+
 ## Removals are wholesale
 
 When a feature, flag, endpoint, or code path is removed, it is removed
@@ -282,6 +297,18 @@ Issue-body, decision-recording and supersession rules follow the global
 agent instructions. Project-specific: `.github/ISSUE_TEMPLATE/work-item.md`
 puts the current plan at the top for new issues; existing issues get
 fixed as they are picked up.
+
+This is not hypothetical. On #97 a `tar.gz` design had been dropped in
+favour of a gzipped JSON envelope, with the reasoning in a comment — and
+the tar design was later picked back up and re-analysed as though it
+were still the plan, because the body still said so. The wasted work was
+the small cost; proposing a superseded design back to the owner as a
+live option was the real one.
+
+#162 is the same failure the other way: its body still described a
+hand-over-file design that had been implemented and then removed, so the
+issue actively misinformed anyone reading it -- the exact failure #97
+was about, repeated.
 
 ## Run it before you ship it
 
