@@ -177,6 +177,21 @@ rewritten.
   marked unavailable rather than dropped, on every write this store ever
   makes from then on.
 
+### Changed
+
+- **Live view: newest event at the top, not the bottom** (#363). The
+  table used to append new rows at the bottom and autoscroll down to
+  follow them; it now inserts at the top and autoscroll holds the view
+  there instead. Ungrouped rows and Group mode's collapsed rows both
+  follow this -- a group still keeps the position of its *first*
+  arrival rather than jumping around as it's hit again, so nothing
+  reorders while you're reading it. Turning Autoscroll off still holds
+  a scrolled-back view exactly where it was, with rows that don't move
+  or renumber under you as new events arrive elsewhere in the buffer.
+
+  If you use the live view unfiltered as a moving feed, the newest
+  traffic is now at the top of the screen instead of the bottom.
+
 ### Fixed
 
 - **The watchlist stops claiming "nothing anywhere is watching this"
