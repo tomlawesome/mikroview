@@ -156,7 +156,7 @@
 <div class="concept">
   <b>DIRECTION H — HALO</b>
   <span>radial · the router is the core · the internet is the outer ring that surrounds everything · the unplanned flow is a chord across the mandala</span>
-  <span style="margin-left:auto"><a href="#s1">1 the halo</a><a href="#s2">2 live, full</a><a href="#s3">3 brackets &amp; lights</a></span>
+  <span style="margin-left:auto"><a href="#s1">1 the halo</a><a href="#s2">2 live, full</a><a href="#s3">3 brackets &amp; lights</a><a href="#s4">4 the reach</a></span>
 </div>
 
 <!-- ============ SCENE 1 : THE ORBIT ============ -->
@@ -434,6 +434,143 @@
       <div class="wrow"><div class="top"><b>iot egress cadence</b><span class="st viol">BROKEN 13:52</span></div><div class="why">the bracket snapped where cam-porch sits — visible from across the room</div></div>
     </div>
   </aside>
+
+  <div class="ticker">
+    <div class="h"><span class="lab"><i></i>The stream · 34/s</span><span class="lift">▲ lift to full live view</span></div>
+    <div class="trow" style="color:var(--ink)"><span class="t">14:02:11.482</span><span class="drop">DROP</span><span>cam-porch → nas :445 smb · iot-to-lan-drop</span></div>
+    <div class="trow"><span class="t">14:02:11.407</span><span class="nat">NAT</span><span>phone-tom → 142.250.187.206 :443 quic · nat-wan</span></div>
+    <div class="trow"><span class="t">14:02:10.951</span><span class="drop">DROP</span><span>185.220.101.34 DE → rb5009 :8291 winbox · wan-in-drop</span></div>
+  </div>
+</section>
+
+<!-- ============ SCENE 4 : THE REACH — CLICK A HOST ============ -->
+<section class="scene" id="s4">
+  <div class="scene-tag">Scene 4 — a host was clicked. Its reach, at a glance: lit = may talk · stopped at the membrane = may not.</div>
+  <div class="crumb">
+    <div class="wm">MIKRO<em>VIEW</em></div>
+    <h1>cam-porch <span class="here">· its reach</span></h1>
+    <div class="sub">reaches <b>4</b> · reached by <b>2</b> · <b style="color:var(--alarm)">2 blocked — 1 still knocking</b> · every strand names its rule</div>
+  </div>
+  <div class="lenses">
+    <span class="lens on">Reach</span><span class="lens">Traffic</span><span class="lens">Policy</span><span class="lens">Flags<span class="ct">6</span></span>
+  </div>
+
+  <div class="stage" style="bottom:104px">
+    <svg viewBox="0 0 1400 700" preserveAspectRatio="xMidYMid meet" role="img"
+         aria-label="Reach view for cam-porch: the host sits inside its membrane with its lane-mates. Green strands pass through the membrane to everything it may talk to; blocked directions stop dead at the membrane with a bar. tom-desktop may look in at the camera but the camera's strand back at him dies at its own membrane.">
+
+      <!-- ==== the membrane: inside it, no rule stands between hosts ==== -->
+      <circle cx="640" cy="390" r="178" fill="rgba(170,180,255,0.03)" stroke="var(--hair-2)" stroke-width="1.4"/>
+      <text x="1004" y="524" class="n-sub">the membrane — inside it, lane-mates talk freely;</text>
+      <text x="1004" y="538" class="n-sub">every crossing needs a rule, per direction</text>
+
+      <!-- ==== strands: OUT (from centre) and IN (to centre), per counterpart ==== -->
+      <!-- nvr · out ALLOWED :554 · in replies-only -->
+      <path d="M 610 348 C 540 280, 480 230, 442 196" fill="none" stroke="var(--ok)" stroke-width="2.4" opacity="0.85"/>
+      <path d="M 462 214 C 512 262, 556 306, 588 342" fill="none" stroke="var(--ok)" stroke-width="1.2" stroke-dasharray="3 5" opacity="0.6"/>
+      <circle r="2.5" fill="var(--ok)" style="offset-path: path('M 610 348 C 540 280, 480 230, 442 196'); animation: travel 2.2s linear infinite;" aria-hidden="true"/>
+      <text x="470" y="266" class="ann" style="fill:var(--ok)">:554 rtsp · iot-nvr-allow → · replies ride back</text>
+
+      <!-- pihole · out ALLOWED :53 · in replies-only -->
+      <path d="M 640 344 C 640 280, 640 220, 640 172" fill="none" stroke="var(--ok)" stroke-width="2" opacity="0.85"/>
+      <path d="M 654 176 C 656 230, 656 290, 654 340" fill="none" stroke="var(--ok)" stroke-width="1.2" stroke-dasharray="3 5" opacity="0.6"/>
+      <circle r="2.5" fill="var(--ok)" style="offset-path: path('M 640 344 C 640 280, 640 220, 640 172'); animation: travel 2.6s linear infinite;" aria-hidden="true"/>
+      <text x="662" y="250" class="ann" style="fill:var(--ok)">:53 dns · iot-dns-allow →</text>
+
+      <!-- ntp · out ALLOWED :123 -->
+      <path d="M 594 550 C 540 600, 480 636, 430 656" fill="none" stroke="var(--ok)" stroke-width="1.8" opacity="0.8"/>
+      <circle r="2.2" fill="var(--ok)" style="offset-path: path('M 594 550 C 540 600, 480 636, 430 656'); animation: travel 3s linear infinite;" aria-hidden="true"/>
+      <text x="420" y="622" class="ann" style="fill:var(--ok)">:123 ntp · iot-ntp-allow →</text>
+
+      <!-- nas · out BLOCKED at the membrane, still knocking · in BLOCKED -->
+      <path d="M 668 350 C 706 314, 736 288, 762 261" fill="none" stroke="var(--alarm)" stroke-width="2.2" opacity="0.9"/>
+      <g transform="translate(762 261) rotate(-45)">
+        <line x1="-9" y1="0" x2="9" y2="0" stroke="var(--alarm)" stroke-width="3"/>
+        <circle r="5" fill="none" stroke="var(--alarm)" class="halo"/>
+      </g>
+      <path d="M 774 249 C 812 214, 850 178, 878 152" fill="none" stroke="var(--alarm)" stroke-width="1" stroke-dasharray="2 6" opacity="0.4"/>
+      <path d="M 886 166 C 850 200, 812 234, 782 262" fill="none" stroke="var(--ink-3)" stroke-width="1" stroke-dasharray="2 6" opacity="0.5"/>
+      <circle r="2.8" fill="var(--alarm)" style="filter:drop-shadow(0 0 4px var(--alarm)); offset-path: path('M 668 350 C 706 314, 736 288, 762 261'); animation: travel 1.6s linear infinite;" aria-hidden="true"/>
+      <text x="700" y="228" class="ann" style="fill:var(--alarm)">⊣ dies at the membrane · iot-to-lan-drop · 14×</text>
+      <text x="700" y="242" class="ann">← nas may not begin either</text>
+
+      <!-- tom-desktop · IN ALLOWED :8554 · out BLOCKED — the one-way -->
+      <path d="M 1008 342 C 920 352, 860 362, 822 372" fill="none" stroke="var(--ok)" stroke-width="2.4" opacity="0.85"/>
+      <circle r="2.5" fill="var(--ok)" style="offset-path: path('M 1008 342 C 920 352, 860 362, 822 372'); animation: travel 2s linear infinite;" aria-hidden="true"/>
+      <path d="M 700 402 C 750 404, 790 406, 816 407" fill="none" stroke="var(--alarm)" stroke-width="1.8" opacity="0.8"/>
+      <g transform="translate(816 407) rotate(90)">
+        <line x1="-8" y1="0" x2="8" y2="0" stroke="var(--alarm)" stroke-width="3"/>
+      </g>
+      <text x="836" y="330" class="ann" style="fill:var(--ok)">:8554 he may look in · lan-to-iot-cam →</text>
+      <text x="836" y="430" class="ann" style="fill:var(--alarm)">⊣ it may not look back · one-way by design</text>
+
+      <!-- internet 47.246.129.8 · out BLOCKED, knocking · in BLOCKED (nothing outside begins) -->
+      <path d="M 672 512 C 686 528, 698 542, 710 554" fill="none" stroke="var(--alarm)" stroke-width="2" opacity="0.85"/>
+      <path d="M 720 566 C 758 606, 796 636, 830 654" fill="none" stroke="var(--alarm)" stroke-width="1" stroke-dasharray="2 6" opacity="0.4"/>
+      <g transform="translate(710 554) rotate(45)">
+        <line x1="-9" y1="0" x2="9" y2="0" stroke="var(--alarm)" stroke-width="3"/>
+        <circle r="5" fill="none" stroke="var(--alarm)" class="halo"/>
+      </g>
+      <circle r="2.6" fill="var(--alarm)" style="filter:drop-shadow(0 0 4px var(--alarm)); offset-path: path('M 672 512 C 686 528, 698 542, 710 554'); animation: travel 1.4s linear infinite;" aria-hidden="true"/>
+      <text x="812" y="600" class="ann" style="fill:var(--alarm)">⊣ :443 to Hangzhou · iot-egress-drop · 3×</text>
+      <text x="812" y="614" class="ann">← nothing outside may begin a conversation with the camera</text>
+
+      <!-- ==== inside the membrane: the free-talk set ==== -->
+      <g transform="translate(640 390)">
+        <circle r="52" fill="rgba(201,133,0,0.1)" stroke="var(--iot)" stroke-opacity="0.7" stroke-width="1.6"/>
+        <text y="-6" text-anchor="middle" class="n-name" style="font-size:16px">cam-porch</text>
+        <text y="12" text-anchor="middle" class="n-cidr">10.0.20.31 ✎</text>
+        <circle r="60" fill="none" stroke="var(--alarm)" stroke-width="1" class="halo"/>
+      </g>
+      <g transform="translate(544 470)">
+        <circle r="26" fill="rgba(201,133,0,0.06)" stroke="var(--iot)" stroke-opacity="0.4"/>
+        <text y="-32" text-anchor="middle" class="n-sub" style="fill:var(--ink-2)">hue-bridge</text>
+      </g>
+      <g transform="translate(742 476)">
+        <circle r="26" fill="rgba(201,133,0,0.06)" stroke="var(--iot)" stroke-opacity="0.4"/>
+        <text y="-32" text-anchor="middle" class="n-sub" style="fill:var(--ink-2)">thermostat</text>
+      </g>
+      <text x="640" y="512" text-anchor="middle" class="n-sub">lane-mates — no rule between you</text>
+
+      <!-- ==== counterparts outside ==== -->
+      <g transform="translate(420 168)">
+        <circle r="30" fill="rgba(25,158,112,0.08)" stroke="var(--srv)" stroke-opacity="0.6"/>
+        <text y="-42" text-anchor="middle" class="n-name" style="font-size:13px">nvr</text>
+        <text y="4" text-anchor="middle" class="n-cidr" style="font-size:9px">.40.20</text>
+      </g>
+      <g transform="translate(640 144)">
+        <circle r="30" fill="rgba(25,158,112,0.08)" stroke="var(--srv)" stroke-opacity="0.6"/>
+        <text y="-42" text-anchor="middle" class="n-name" style="font-size:13px">pihole</text>
+        <text y="4" text-anchor="middle" class="n-cidr" style="font-size:9px">.40.53</text>
+      </g>
+      <g transform="translate(900 130)">
+        <circle r="30" fill="rgba(25,158,112,0.08)" stroke="var(--srv)" stroke-opacity="0.6" stroke-dasharray="3 4"/>
+        <text y="-42" text-anchor="middle" class="n-name" style="font-size:13px">nas</text>
+        <text y="4" text-anchor="middle" class="n-cidr" style="font-size:9px">.40.10</text>
+      </g>
+      <g transform="translate(1040 340)">
+        <circle r="30" fill="rgba(57,135,229,0.08)" stroke="var(--lan)" stroke-opacity="0.6"/>
+        <text y="-42" text-anchor="middle" class="n-name" style="font-size:13px">tom-desktop</text>
+        <text y="4" text-anchor="middle" class="n-cidr" style="font-size:9px">.10.21</text>
+      </g>
+      <g transform="translate(400 668)">
+        <text text-anchor="middle" class="n-name" style="font-size:12px; fill:var(--ink-2)">time.cloudflare.com</text>
+      </g>
+      <g transform="translate(880 668)">
+        <text text-anchor="middle" class="n-name" style="font-size:12px; fill:var(--alarm)">47.246.129.8 · Hangzhou</text>
+      </g>
+      <path d="M 240 640 C 500 700, 900 700, 1160 640" fill="none" stroke="var(--hair-2)" stroke-width="1.2"/>
+      <text x="1200" y="648" class="n-sub">INTERNET</text>
+
+      <!-- the two-second key -->
+      <g transform="translate(64 560)">
+        <text class="n-sub" y="0" style="fill:var(--ink-2); font-weight:600">read it in two seconds:</text>
+        <text class="n-sub" y="20"><tspan fill="var(--ok)">━━</tspan>  lit and through the membrane = may talk (motes = talking now)</text>
+        <text class="n-sub" y="40"><tspan fill="var(--alarm)">━⊣</tspan>  dies at the membrane = may not · pulsing = trying anyway</text>
+        <text class="n-sub" y="60"><tspan fill="var(--ink-2)">⇄</tspan>  every pair is judged per direction — one-way is visible, not implied</text>
+      </g>
+    </svg>
+  </div>
 
   <div class="ticker">
     <div class="h"><span class="lab"><i></i>The stream · 34/s</span><span class="lift">▲ lift to full live view</span></div>
