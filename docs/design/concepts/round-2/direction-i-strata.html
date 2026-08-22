@@ -6,27 +6,24 @@
 <title>Mikroview — Direction I: Strata</title>
 <style>
   /* ============================================================
-     DIRECTION I — "STRATA"
-     Time-first. The whole app is a chart recorder: every boundary
-     is a stratum, time flows left to right, and the paper never
-     stops. Events are ticks; density is texture; the NOW cursor
-     burns amber at the right edge and the newest ticks materialise
-     under it — the leading edge of the paper IS the live view, and
-     expanding any stratum (including ALL) gives it in full.
+     DIRECTION I — "STRATA"  (II — the legibility pass, 2026-08-23)
+     Time-first. Every boundary is a stratum on never-stopping
+     paper; the amber NOW cursor burns at the right edge and the
+     newest events land under it.
 
-     Flags are printed at the moment they fired, on the stratum
-     where they fired. A watch is an expectation band running along
-     its stratum — you can see it holding for days, and you can see
-     the exact minute it broke. History, detection and expectation
-     stop being different pages: they are the same paper, read at
-     different distances.
-
-     The wager: mikroview's real questions are "when did this
-     change, and was it expected?" — so time deserves the x-axis
-     of the whole product.
+     Developed after the owner's feedback ("interesting, but hard
+     to read — I wasn't sure what I was looking at"):
+     · volume is a SILHOUETTE now, not tick-noise — accepts draw
+       as a soft hill per row; red marks are reserved for drops
+     · each row has a proper index card: name, live rate, status
+     · right of NOW, the NOW GUTTER prints each row's latest log
+       line — the bridge between a mark and its meaning
+     · an attention strip and a how-to-read line let the paper
+       explain itself
      ============================================================ */
   :root {
     --paper: #0d0f12;
+    --panel: #12151a;
     --grid: #1a1e25;
     --grid-2: #262c36;
     --ink: #e7e9ee;
@@ -37,7 +34,6 @@
     --ok: #3fae5a;
     --drop: #e05252;
     --nat: #a08df0;
-    --tick: #7c8594;
     --sans: system-ui, -apple-system, "Segoe UI", sans-serif;
     --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
   }
@@ -52,10 +48,10 @@
   .concept b { color: var(--now); letter-spacing: 0.1em; }
   .concept a { color: var(--ink-2); text-decoration: none; margin-left: 12px; }
 
-  .scene { min-height: 100vh; position: relative; border-bottom: 1px solid var(--grid-2); overflow: hidden; padding-bottom: 20px; }
+  .scene { min-height: 100vh; position: relative; border-bottom: 1px solid var(--grid-2); overflow: hidden; padding-bottom: 24px; }
   .scene-tag { font-size: 10.5px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--ink-3); padding: 13px 36px 0; }
 
-  .bar { display: flex; align-items: baseline; gap: 20px; padding: 20px 36px 6px; }
+  .bar { display: flex; align-items: baseline; gap: 20px; padding: 16px 36px 2px; }
   .bar .wm { font-size: 12px; font-weight: 800; letter-spacing: 0.22em; color: var(--ink-3); }
   .bar .wm em { color: var(--now); font-style: normal; }
   .bar h1 { font-size: 20px; font-weight: 600; }
@@ -66,21 +62,44 @@
   .rng { font-size: 12px; font-weight: 550; color: var(--ink-3); padding: 3px 12px; cursor: default; }
   .rng.on { color: var(--ink); border-bottom: 2px solid var(--now); margin-bottom: -6px; }
 
-  .recorder { margin: 8px 36px 0; position: relative; }
+  /* what needs you, and how to read the paper */
+  .attention { display: flex; gap: 10px; align-items: center; padding: 8px 36px 0; flex-wrap: wrap; }
+  .att {
+    display: inline-flex; align-items: center; gap: 7px; font-size: 11.5px; font-weight: 650;
+    border: 1px solid var(--grid-2); border-radius: 999px; padding: 4px 13px; color: var(--ink-2);
+  }
+  .att i { width: 6px; height: 6px; border-radius: 50%; }
+  .att.alarm { border-color: rgba(224,82,82,0.5); color: var(--drop); }
+  .att.alarm i { background: var(--drop); animation: pulse 1.6s ease-in-out infinite; }
+  .att.dark { color: var(--drop); } .att.dark i { background: transparent; border: 1px solid var(--drop); }
+  .att.calm { color: var(--ok); } .att.calm i { background: var(--ok); }
+  @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.3; } }
+  .howto { padding: 6px 36px 0; font-size: 11.5px; color: var(--ink-3); }
+  .howto b { color: var(--ink-2); font-weight: 600; }
+
+  .recorder { margin: 10px 36px 0; }
   .recorder svg { width: 100%; display: block; }
   svg text { font-family: var(--mono); }
-  .rowlab { fill: var(--ink); font-size: 12.5px; font-weight: 650; font-family: var(--sans); }
-  .rowsub { fill: var(--ink-3); font-size: 9.5px; }
+  .tlab { fill: var(--ink-3); font-size: 9.5px; }
   .gridline { stroke: var(--grid); stroke-width: 1; }
   .gridline5 { stroke: var(--grid-2); stroke-width: 1; }
-  .tlab { fill: var(--ink-3); font-size: 9.5px; }
   .rowline { stroke: var(--grid-2); stroke-width: 1; }
-  .ticks-acc { stroke: var(--tick); stroke-width: 1.5; opacity: 0.75; }
-  .ticks-drop { stroke: var(--drop); stroke-width: 1.5; }
-  .ticks-nat { stroke: var(--nat); stroke-width: 1.5; opacity: 0.9; }
-  .band-ok { stroke: var(--ok); stroke-width: 2.5; opacity: 0.75; }
-  .band-broken { stroke: var(--drop); stroke-width: 2.5; }
-  .bandlab { font-size: 8.5px; font-weight: 700; letter-spacing: 0.08em; font-family: var(--sans); }
+
+  /* index cards */
+  .card { fill: var(--panel); stroke: var(--grid-2); }
+  .cname { fill: var(--ink); font-size: 13px; font-weight: 700; font-family: var(--sans); }
+  .csub { fill: var(--ink-3); font-size: 9px; font-family: var(--sans); }
+  .crate { fill: var(--ink-2); font-size: 11px; font-weight: 600; }
+  .chip { font-size: 8.5px; font-weight: 800; letter-spacing: 0.08em; font-family: var(--sans); }
+  .ch-ok { fill: var(--ok); } .ch-bad { fill: var(--drop); } .ch-mut { fill: var(--ink-3); }
+
+  /* the strata themselves */
+  .vol { opacity: 0.95; }
+  .ticks-drop { stroke: var(--drop); stroke-width: 1.6; }
+  .ticks-nat { stroke: var(--nat); stroke-width: 1.6; opacity: 0.9; }
+  .band-ok { stroke: var(--ok); stroke-width: 2; opacity: 0.8; }
+  .band-broken { stroke: var(--drop); stroke-width: 2; }
+  .bandlab { font-size: 8.5px; font-weight: 700; letter-spacing: 0.06em; font-family: var(--sans); }
   .b-ok { fill: var(--ok); } .b-viol { fill: var(--drop); }
   .nowline { stroke: var(--now); stroke-width: 1.6; }
   .nowhead { fill: var(--now); }
@@ -90,17 +109,18 @@
   @keyframes blink { 50% { opacity: 0.15; } }
   .halo { animation: halo 2.2s ease-out infinite; transform-origin: center; transform-box: fill-box; }
   @keyframes halo { 0% { opacity: 0.7; transform: scale(0.5); } 100% { opacity: 0; transform: scale(2.4); } }
-  .flagmark { fill: var(--paper); stroke-width: 1.4; }
   .anno { fill: var(--ink-3); font-size: 9px; }
-  .lanedot { r: 3.5; }
-  .stamp-svg { font-size: 9px; font-weight: 800; letter-spacing: 0.1em; font-family: var(--sans); }
   .darkband { fill: url(#hatch); opacity: 0.5; }
+
+  /* the NOW gutter: latest line per row, in words */
+  .gut-t { fill: var(--ink-3); font-size: 8.5px; }
+  .gut-l { fill: var(--ink-2); font-size: 9.5px; }
+  .gut-drop { fill: var(--drop); font-weight: 700; } .gut-acc { fill: var(--ok); font-weight: 700; } .gut-nat { fill: var(--nat); font-weight: 700; }
 
   .legend { display: flex; gap: 22px; padding: 10px 36px 0; font-size: 10.5px; color: var(--ink-2); flex-wrap: wrap; }
   .legend .k { display: inline-flex; align-items: center; gap: 7px; }
-  .lk { display: inline-block; width: 12px; height: 0; border-top: 2px solid var(--tick); }
 
-  /* scene 2: the stratum opens */
+  /* scene 2 */
   .openrow { margin: 10px 36px 0; border: 1px solid var(--grid-2); border-radius: 8px; overflow: hidden; }
   .openhead { display: flex; align-items: baseline; gap: 14px; padding: 12px 16px; background: #101318; border-bottom: 1px solid var(--grid-2); }
   .openhead h2 { font-size: 15px; font-weight: 700; }
@@ -136,176 +156,204 @@
 <body>
 
 <div class="concept">
-  <b>DIRECTION I — STRATA</b>
-  <span>time-first · every boundary is a stratum on never-stopping paper · flags print where they fired · watches are bands you see break · the leading edge is live</span>
-  <span style="margin-left:auto"><a href="#s1">1 the recorder</a><a href="#s2">2 a stratum opens</a><a href="#s3">3 flags on the paper</a></span>
+  <b>DIRECTION I — STRATA · II</b>
+  <span>time-first, made legible · volume is a silhouette · red is only ever a drop · the NOW gutter says it in words</span>
+  <span style="margin-left:auto"><a href="#s1">1 the recorder</a><a href="#s2">2 a stratum opens</a><a href="#s3">3 the day</a></span>
 </div>
 
-<!-- ============ SCENE 1 : THE RECORDER ============ -->
+<!-- ============ SCENE 1 : THE RECORDER, MADE LEGIBLE ============ -->
 <section class="scene" id="s1">
-  <div class="scene-tag">Scene 1 — the recorder. Eight boundaries, fifteen minutes, one page. NOW burns at the right edge.</div>
+  <div class="scene-tag">Scene 1 — the recorder. Eight boundaries, fifteen minutes. The paper explains itself.</div>
   <div class="bar">
     <span class="wm">MIKRO<em>VIEW</em></span>
     <h1>The recorder <span class="here">· live</span></h1>
     <span class="sub">rb5009 · <b>41 rules</b> 14:01 · tom (admin)</span>
     <span class="ranges"><span class="rng on">15 m</span><span class="rng">1 h</span><span class="rng">24 h</span><span class="rng">14 d</span></span>
   </div>
+  <div class="attention">
+    <span class="att alarm"><i></i>UNPLANNED — iot → lan, since 13:52</span>
+    <span class="att alarm"><i></i>WATCH BROKEN — iot egress, 13:52</span>
+    <span class="att dark"><i></i>DARK — guest → wan, unmetered</span>
+    <span class="att calm"><i></i>everything else is holding</span>
+  </div>
+  <p class="howto"><b>How to read this:</b> each row is one boundary. The shaded hill is how much traffic; <b style="color:var(--drop)">red marks are drops</b> — nothing else is ever red. ◉ is a flag at the minute it fired. The amber edge is now, and to its right each row says its newest line in words. Hover any mark for its log line; drag any span to open it.</p>
 
   <div class="recorder">
-    <svg viewBox="0 0 1360 604" role="img"
-         aria-label="A chart recorder: eight boundary rows over fifteen minutes. The IoT-to-LAN row was silent until 13:52, then shows a metronomic run of red drops to now. The guest-to-WAN row is hatched dark, meaning unlogged. Watch bands run along three rows; the IoT egress band breaks at 13:52.">
+    <svg viewBox="0 0 1360 610" role="img"
+         aria-label="A chart recorder, one row per boundary. Traffic volume draws as a soft hill per row, drops as red marks. The IoT-to-LAN row is empty until 13:52, then shows a metronomic run of red drops to now. The guest row is hatched dark. Right of the amber NOW cursor, each row prints its latest event as text.">
       <defs>
         <pattern id="hatch" width="8" height="8" patternTransform="rotate(45)" patternUnits="userSpaceOnUse">
           <line x1="0" y1="0" x2="0" y2="8" stroke="var(--grid-2)" stroke-width="1.5"/>
         </pattern>
       </defs>
 
-      <!-- time grid: 15 minutes, 240..1320 → 72px/min -->
+      <!-- time grid: 240..1056, 15 min -->
       <g>
-        <line class="gridline5" x1="240" y1="26" x2="240" y2="560"/><text class="tlab" x="240" y="18" text-anchor="middle">13:47</text>
-        <line class="gridline" x1="312" y1="26" x2="312" y2="560"/>
-        <line class="gridline" x1="384" y1="26" x2="384" y2="560"/>
-        <line class="gridline" x1="456" y1="26" x2="456" y2="560"/>
-        <line class="gridline" x1="528" y1="26" x2="528" y2="560"/>
-        <line class="gridline5" x1="600" y1="26" x2="600" y2="560"/><text class="tlab" x="600" y="18" text-anchor="middle">13:52</text>
-        <line class="gridline" x1="672" y1="26" x2="672" y2="560"/>
-        <line class="gridline" x1="744" y1="26" x2="744" y2="560"/>
-        <line class="gridline" x1="816" y1="26" x2="816" y2="560"/>
-        <line class="gridline" x1="888" y1="26" x2="888" y2="560"/>
-        <line class="gridline5" x1="960" y1="26" x2="960" y2="560"/><text class="tlab" x="960" y="18" text-anchor="middle">13:57</text>
-        <line class="gridline" x1="1032" y1="26" x2="1032" y2="560"/>
-        <line class="gridline" x1="1104" y1="26" x2="1104" y2="560"/>
-        <line class="gridline" x1="1176" y1="26" x2="1176" y2="560"/>
-        <line class="gridline" x1="1248" y1="26" x2="1248" y2="560"/>
+        <line class="gridline5" x1="240" y1="24" x2="240" y2="574"/><text class="tlab" x="240" y="16" text-anchor="middle">13:47</text>
+        <line class="gridline" x1="376" y1="24" x2="376" y2="574"/>
+        <line class="gridline5" x1="512" y1="24" x2="512" y2="574"/><text class="tlab" x="512" y="16" text-anchor="middle">13:52</text>
+        <line class="gridline" x1="648" y1="24" x2="648" y2="574"/>
+        <line class="gridline5" x1="784" y1="24" x2="784" y2="574"/><text class="tlab" x="784" y="16" text-anchor="middle">13:57</text>
+        <line class="gridline" x1="920" y1="24" x2="920" y2="574"/>
+        <line class="gridline5" x1="1056" y1="24" x2="1056" y2="574"/>
       </g>
 
-      <!-- ═ row 1: wan → rb5009 (input) ═ y 40..92 -->
-      <g transform="translate(0 40)">
-        <circle class="lanedot" cx="16" cy="20" r="3.5" fill="var(--ink-3)"/>
-        <text class="rowlab" x="28" y="24">wan → rb5009</text>
-        <text class="rowsub" x="28" y="40">input · the weather</text>
-        <g transform="translate(0 6)">
-          <path class="ticks-drop" d="M258 0v34M300 0v34M341 0v34M389 0v34M434 0v34M478 0v34M540 0v34M577 0v34M634 0v34M672 0v34M713 0v34M741 0v34M781 0v34M804 0v34M838 0v34M862 0v34M886 0v34M906 0v34M926 0v34M947 0v34M965 0v34M983 0v34M999 0v34M1014 0v34M1030 0v34M1044 0v34M1060 0v34M1073 0v34M1088 0v34M1101 0v34M1116 0v34M1129 0v34M1143 0v34M1158 0v34M1172 0v34M1187 0v34M1200 0v34M1214 0v34M1229 0v34M1243 0v34M1257 0v34M1270 0v34M1284 0v34M1297 0v34M1310 0v34"/>
-          <path class="ticks-acc" d="M330 0v34M610 0v34M890 0v34M1180 0v34"/>
-          <path class="ticks-drop blink" d="M1322 0v34"/>
+      <!-- ═ row 1 · wan → rb5009 ═ y 30..96 -->
+      <g transform="translate(0 30)">
+        <rect class="card" x="6" y="4" width="216" height="56" rx="5"/>
+        <rect x="6" y="4" width="3" height="56" rx="1.5" fill="var(--ink-3)"/>
+        <text class="cname" x="20" y="24">wan → rb5009</text>
+        <text class="csub" x="20" y="39">input · the weather</text>
+        <text class="chip ch-ok" x="20" y="53">WATCHED ✓ QUIET 41 D</text>
+        <text class="crate" x="212" y="24" text-anchor="end" style="fill:var(--drop)">6.2/s</text>
+        <!-- volume hill: drops ramping since 13:30 -->
+        <polygon class="vol" fill="rgba(224,82,82,0.13)" points="240,58 300,55 360,56 420,54 480,55 540,52 600,50 660,48 720,44 780,40 840,35 900,30 960,25 1010,19 1056,14 1056,60 240,60"/>
+        <polyline fill="none" stroke="rgba(224,82,82,0.55)" stroke-width="1.4" points="240,58 300,55 360,56 420,54 480,55 540,52 600,50 660,48 720,44 780,40 840,35 900,30 960,25 1010,19 1056,14"/>
+        <g transform="translate(0 0)">
+          <path class="ticks-drop" d="M300 50v10M420 48v12M540 46v14M634 44v16M713 42v18M781 40v20M838 37v23M886 34v26M926 32v28M965 29v31M999 27v33M1030 24v36M1050 21v39"/>
+          <path class="ticks-drop blink" d="M1054 18v42"/>
         </g>
-        <text class="anno" x="880" y="2">densifying since 13:30 · ▲3.1× · all wan-in-drop</text>
-        <line class="band-ok" x1="240" y1="50" x2="1330" y2="50"/>
-        <text class="bandlab b-ok" x="244" y="61">WATCH · inbound quiet — nothing unsolicited passes ✓ 41 d</text>
-        <line class="rowline" x1="0" y1="64" x2="1360" y2="64" transform="translate(0 2)"/>
-      </g>
-
-      <!-- ═ row 2: lan → wan ═ y 108..160 -->
-      <g transform="translate(0 108)">
-        <circle class="lanedot" cx="16" cy="20" r="3.5" fill="var(--lan)"/>
-        <text class="rowlab" x="28" y="24">lan → wan</text>
-        <text class="rowsub" x="28" y="40">the household breathing</text>
-        <g transform="translate(0 6)">
-          <path class="ticks-acc" d="M246 0v34M262 0v34M275 0v34M290 0v34M304 0v34M319 0v34M330 0v34M345 0v34M361 0v34M375 0v34M391 0v34M404 0v34M419 0v34M434 0v34M448 0v34M463 0v34M477 0v34M492 0v34M508 0v34M521 0v34M537 0v34M552 0v34M566 0v34M580 0v34M595 0v34M609 0v34M625 0v34M641 0v34M654 0v34M669 0v34M684 0v34M698 0v34M713 0v34M729 0v34M743 0v34M757 0v34M772 0v34M786 0v34M801 0v34M816 0v34M832 0v34M846 0v34M860 0v34M875 0v34M890 0v34M905 0v34M919 0v34M933 0v34M948 0v34M963 0v34M978 0v34M993 0v34M1008 0v34M1022 0v34M1037 0v34M1051 0v34M1066 0v34M1081 0v34M1096 0v34M1110 0v34M1125 0v34M1140 0v34M1155 0v34M1169 0v34M1183 0v34M1198 0v34M1213 0v34M1228 0v34M1243 0v34M1258 0v34M1273 0v34M1287 0v34M1301 0v34M1315 0v34"/>
-          <path class="ticks-nat" d="M310 0v34M480 0v34M655 0v34M830 0v34M1005 0v34M1178 0v34M1290 0v34"/>
-          <path class="ticks-acc blink" d="M1326 0v34"/>
-        </g>
-        <line class="band-ok" x1="240" y1="50" x2="1330" y2="50"/>
-        <text class="bandlab b-ok" x="244" y="61">WATCH · egress shape = 80/443/853 ✓</text>
+        <text class="anno" x="700" y="34" style="fill:var(--drop)">▲3.1× since 13:30 · all named by wan-in-drop</text>
+        <line class="band-ok" x1="240" y1="8" x2="1056" y2="8"/>
+        <text class="bandlab b-ok" x="244" y="20">watch · inbound quiet ✓</text>
+        <!-- NOW gutter -->
+        <text class="gut-t" x="1076" y="26">14:02:10.9 <tspan class="gut-drop">DROP</tspan></text>
+        <text class="gut-l" x="1076" y="40">185.220.101.34 → :8291</text>
         <line class="rowline" x1="0" y1="66" x2="1360" y2="66"/>
       </g>
 
-      <!-- ═ row 3: lan → srv ═ y 176..222 -->
-      <g transform="translate(0 176)">
-        <circle class="lanedot" cx="16" cy="20" r="3.5" fill="var(--srv)"/>
-        <text class="rowlab" x="28" y="24">lan → srv</text>
-        <text class="rowsub" x="28" y="40">445 · 5001 · 53</text>
-        <g transform="translate(0 6)">
-          <path class="ticks-acc" d="M250 0v30M285 0v30M322 0v30M356 0v30M400 0v30M431 0v30M470 0v30M512 0v30M548 0v30M590 0v30M622 0v30M667 0v30M701 0v30M745 0v30M779 0v30M820 0v30M858 0v30M897 0v30M932 0v30M974 0v30M1010 0v30M1052 0v30M1088 0v30M1129 0v30M1166 0v30M1204 0v30M1245 0v30M1281 0v30M1316 0v30"/>
-        </g>
-        <line class="rowline" x1="0" y1="60" x2="1360" y2="60"/>
-      </g>
-
-      <!-- ═ row 4: iot → wan ═ y 238..290 -->
-      <g transform="translate(0 238)">
-        <circle class="lanedot" cx="16" cy="20" r="3.5" fill="var(--iot)"/>
-        <text class="rowlab" x="28" y="24">iot → wan</text>
-        <text class="rowsub" x="28" y="40">443 · 123 · egress guarded</text>
-        <g transform="translate(0 6)">
-          <path class="ticks-acc" d="M264 0v30M340 0v30M415 0v30M492 0v30M568 0v30M642 0v30M718 0v30M794 0v30M870 0v30M945 0v30M1021 0v30M1096 0v30M1172 0v30M1248 0v30M1322 0v30"/>
-          <path class="ticks-drop" d="M1102 0v30M1188 0v30M1274 0v30"/>
-        </g>
-        <text class="anno" x="1090" y="2" style="fill:var(--drop)">cam-porch → 47.246.129.8 · dropped</text>
-        <line class="band-ok" x1="240" y1="50" x2="600" y2="50"/>
-        <line class="band-broken" x1="600" y1="50" x2="1330" y2="50" stroke-dasharray="4 5"/>
-        <text class="bandlab b-viol" x="608" y="61">WATCH · cadence BROKEN 13:52 — the band snapped here, mid-paper</text>
+      <!-- ═ row 2 · lan → wan ═ y 100..166 -->
+      <g transform="translate(0 100)">
+        <rect class="card" x="6" y="4" width="216" height="56" rx="5"/>
+        <rect x="6" y="4" width="3" height="56" rx="1.5" fill="var(--lan)"/>
+        <text class="cname" x="20" y="24">lan → wan</text>
+        <text class="csub" x="20" y="39">the household breathing</text>
+        <text class="chip ch-ok" x="20" y="53">WATCHED ✓ SHAPE 80/443/853</text>
+        <text class="crate" x="212" y="24" text-anchor="end">14/s</text>
+        <polygon class="vol" fill="rgba(57,135,229,0.16)" points="240,34 320,30 400,36 480,28 560,32 640,26 720,30 800,24 880,28 960,22 1020,26 1056,24 1056,60 240,60"/>
+        <polyline fill="none" stroke="rgba(57,135,229,0.55)" stroke-width="1.4" points="240,34 320,30 400,36 480,28 560,32 640,26 720,30 800,24 880,28 960,22 1020,26 1056,24"/>
+        <path class="ticks-nat" d="M310 44v14M480 44v14M655 44v14M830 44v14M1005 44v14"/>
+        <line class="band-ok" x1="240" y1="8" x2="1056" y2="8"/>
+        <text class="bandlab b-ok" x="244" y="20">watch · egress shape ✓</text>
+        <text class="gut-t" x="1076" y="26">14:02:11.4 <tspan class="gut-nat">NAT</tspan></text>
+        <text class="gut-l" x="1076" y="40">phone-tom → quic :443</text>
         <line class="rowline" x1="0" y1="66" x2="1360" y2="66"/>
       </g>
 
-      <!-- ═ row 5: iot → srv ═ y 306..352 -->
+      <!-- ═ row 3 · lan → srv ═ y 170..232 -->
+      <g transform="translate(0 170)">
+        <rect class="card" x="6" y="4" width="216" height="52" rx="5"/>
+        <rect x="6" y="4" width="3" height="52" rx="1.5" fill="var(--srv)"/>
+        <text class="cname" x="20" y="24">lan → srv</text>
+        <text class="csub" x="20" y="39">445 · 5001 · 53</text>
+        <text class="crate" x="212" y="24" text-anchor="end">8/s</text>
+        <polygon class="vol" fill="rgba(25,158,112,0.15)" points="240,42 340,38 440,44 540,36 640,42 740,38 840,44 940,36 1020,40 1056,38 1056,56 240,56"/>
+        <polyline fill="none" stroke="rgba(25,158,112,0.5)" stroke-width="1.4" points="240,42 340,38 440,44 540,36 640,42 740,38 840,44 940,36 1020,40 1056,38"/>
+        <text class="gut-t" x="1076" y="26">14:02:10.7 <tspan class="gut-acc">ACC</tspan></text>
+        <text class="gut-l" x="1076" y="40">tom-desktop → nas :5001</text>
+        <line class="rowline" x1="0" y1="62" x2="1360" y2="62"/>
+      </g>
+
+      <!-- ═ row 4 · iot → wan ═ y 236..302 -->
+      <g transform="translate(0 236)">
+        <rect class="card" x="6" y="4" width="216" height="56" rx="5"/>
+        <rect x="6" y="4" width="3" height="56" rx="1.5" fill="var(--iot)"/>
+        <text class="cname" x="20" y="24">iot → wan</text>
+        <text class="csub" x="20" y="39">443 · 123 · egress guarded</text>
+        <text class="chip ch-bad" x="20" y="53">WATCH BROKEN 13:52</text>
+        <text class="crate" x="212" y="24" text-anchor="end">1.2/s</text>
+        <polygon class="vol" fill="rgba(201,133,0,0.15)" points="240,50 340,48 440,50 540,47 640,49 740,47 840,49 940,47 1020,49 1056,48 1056,60 240,60"/>
+        <polyline fill="none" stroke="rgba(201,133,0,0.5)" stroke-width="1.4" points="240,50 340,48 440,50 540,47 640,49 740,47 840,49 940,47 1020,49 1056,48"/>
+        <path class="ticks-drop" d="M900 36v22M960 36v22M1030 36v22"/>
+        <text class="anno" x="880" y="30" style="fill:var(--drop)">cam-porch → 47.246.129.8 · dropped</text>
+        <line class="band-ok" x1="240" y1="8" x2="512" y2="8"/>
+        <line class="band-broken" x1="512" y1="8" x2="1056" y2="8" stroke-dasharray="4 5"/>
+        <text class="bandlab b-viol" x="520" y="20">watch · cadence BROKEN here, 13:52</text>
+        <text class="gut-t" x="1076" y="26">14:02:09.7 <tspan class="gut-drop">DROP</tspan></text>
+        <text class="gut-l" x="1076" y="40">cam-porch → 47.246… :443</text>
+        <line class="rowline" x1="0" y1="66" x2="1360" y2="66"/>
+      </g>
+
+      <!-- ═ row 5 · iot → srv ═ y 306..368 -->
       <g transform="translate(0 306)">
-        <circle class="lanedot" cx="16" cy="20" r="3.5" fill="var(--iot)"/>
-        <text class="rowlab" x="28" y="24">iot → srv</text>
-        <text class="rowsub" x="28" y="40">dns to pihole · metronomic</text>
-        <g transform="translate(0 6)">
-          <path class="ticks-acc" d="M255 0v30M310 0v30M365 0v30M420 0v30M475 0v30M530 0v30M585 0v30M640 0v30M695 0v30M750 0v30M805 0v30M860 0v30M915 0v30M970 0v30M1025 0v30M1080 0v30M1135 0v30M1190 0v30M1245 0v30M1300 0v30"/>
-        </g>
-        <line class="rowline" x1="0" y1="60" x2="1360" y2="60"/>
+        <rect class="card" x="6" y="4" width="216" height="52" rx="5"/>
+        <rect x="6" y="4" width="3" height="52" rx="1.5" fill="var(--iot)"/>
+        <text class="cname" x="20" y="24">iot → srv</text>
+        <text class="csub" x="20" y="39">dns to pihole · metronomic</text>
+        <text class="crate" x="212" y="24" text-anchor="end">0.4/s</text>
+        <polygon class="vol" fill="rgba(201,133,0,0.12)" points="240,52 268,52 282,46 296,52 323,52 337,46 351,52 378,52 392,46 406,52 433,52 447,46 461,52 488,52 502,46 516,52 543,52 557,46 571,52 598,52 612,46 626,52 653,52 667,46 681,52 708,52 722,46 736,52 763,52 777,46 791,52 818,52 832,46 846,52 873,52 887,46 901,52 928,52 942,46 956,52 983,52 997,46 1011,52 1038,52 1052,46 1056,48 1056,56 240,56"/>
+        <text class="anno" x="700" y="34">an even pulse — this is what “expected” looks like</text>
+        <text class="gut-t" x="1076" y="26">14:02:10.6 <tspan class="gut-acc">ACC</tspan></text>
+        <text class="gut-l" x="1076" y="40">hue-bridge → pihole :53</text>
+        <line class="rowline" x1="0" y1="62" x2="1360" y2="62"/>
       </g>
 
-      <!-- ═ row 6: iot → lan — THE ROW ═ y 368..424 -->
-      <g transform="translate(0 368)">
-        <rect x="600" y="0" width="740" height="52" fill="rgba(224,82,82,0.05)"/>
-        <circle class="lanedot" cx="16" cy="20" r="3.5" fill="var(--iot)"/>
-        <text class="rowlab" x="28" y="24" style="fill:var(--drop)">iot → lan</text>
-        <text class="stamp-svg" x="28" y="40" fill="var(--drop)" transform="rotate(-1 28 40)">UNPLANNED</text>
-        <g transform="translate(0 6)">
-          <path class="ticks-drop" d="M604 0v34M668 0v34M732 0v34M796 0v34M860 0v34M924 0v34M988 0v34M1052 0v34M1116 0v34M1180 0v34M1244 0v34M1308 0v34"/>
-          <path class="ticks-drop blink" d="M1326 0v34"/>
-        </g>
-        <g transform="translate(600 2)">
+      <!-- ═ row 6 · iot → lan — THE ROW ═ y 372..440 -->
+      <g transform="translate(0 372)">
+        <rect x="512" y="2" width="544" height="60" fill="rgba(224,82,82,0.06)"/>
+        <rect class="card" x="6" y="4" width="216" height="58" rx="5" stroke="rgba(224,82,82,0.6)"/>
+        <rect x="6" y="4" width="3" height="58" rx="1.5" fill="var(--drop)"/>
+        <text class="cname" x="20" y="24" style="fill:var(--drop)">iot → lan</text>
+        <text class="csub" x="20" y="39">41 blank days, then this</text>
+        <text class="chip ch-bad" x="20" y="54" transform="rotate(-1 20 54)">UNPLANNED · SINCE 13:52</text>
+        <text class="crate" x="212" y="24" text-anchor="end" style="fill:var(--drop)">14×</text>
+        <path class="ticks-drop" d="M516 26v30M580 26v30M644 26v30M708 26v30M772 26v30M836 26v30M900 26v30M964 26v30M1028 26v30"/>
+        <path class="ticks-drop blink" d="M1052 26v30"/>
+        <g transform="translate(512 18)">
           <circle r="5" fill="var(--paper)" stroke="var(--drop)" stroke-width="1.4"/>
           <circle r="5" fill="none" stroke="var(--drop)" class="halo"/>
           <circle r="1.8" fill="var(--drop)"/>
         </g>
-        <text class="anno" x="612" y="0" style="fill:var(--drop)">new_talker fired here — 41 days of silence, then this</text>
-        <text class="anno" x="700" y="50">metronomic · ~64 s · tcp/445 · all caught by default drop · open the stratum ▸</text>
+        <text class="anno" x="524" y="14" style="fill:var(--drop)">◉ new_talker fired here, with the first knock</text>
+        <text class="anno" x="640" y="70" transform="translate(0 -6)">metronomic · ~64 s · tcp/445 · all caught by default drop · open ▸</text>
+        <text class="gut-t" x="1076" y="26">14:02:11.4 <tspan class="gut-drop">DROP</tspan></text>
+        <text class="gut-l" x="1076" y="40">cam-porch → nas :445</text>
+        <line class="rowline" x1="0" y1="68" x2="1360" y2="68"/>
+      </g>
+
+      <!-- ═ row 7 · guest → wan — DARK ═ y 444..506 -->
+      <g transform="translate(0 444)">
+        <rect class="card" x="6" y="4" width="216" height="52" rx="5"/>
+        <rect x="6" y="4" width="3" height="52" rx="1.5" fill="var(--guest)"/>
+        <text class="cname" x="20" y="24">guest → wan</text>
+        <text class="csub" x="20" y="39">carries traffic · unmetered</text>
+        <text class="chip ch-bad" x="20" y="53">DARK — NO LOG RULE</text>
+        <text class="crate" x="212" y="24" text-anchor="end" style="fill:var(--ink-3)">?</text>
+        <rect class="darkband" x="240" y="10" width="816" height="42"/>
+        <text class="anno" x="560" y="34" style="fill:var(--drop); font-weight:700">the recorder has no pen here — that is the finding</text>
+        <text class="gut-t" x="1076" y="26" style="fill:var(--ink-3)">— nothing to print</text>
+        <text class="gut-l" x="1076" y="40" style="fill:var(--ink-3)">log the boundary to see it</text>
         <line class="rowline" x1="0" y1="62" x2="1360" y2="62"/>
       </g>
 
-      <!-- ═ row 7: guest → wan — DARK ═ y 440..486 -->
-      <g transform="translate(0 440)">
-        <circle class="lanedot" cx="16" cy="20" r="3.5" fill="var(--guest)"/>
-        <text class="rowlab" x="28" y="24">guest → wan</text>
-        <text class="rowsub" x="28" y="40">carries traffic · unmetered</text>
-        <rect class="darkband" x="240" y="4" width="1090" height="32"/>
-        <text class="anno" x="700" y="26" style="fill:var(--drop); font-weight:700">DARK — no log rule on this boundary · the recorder has no pen here</text>
-        <line class="rowline" x1="0" y1="60" x2="1360" y2="60"/>
-      </g>
-
-      <!-- ═ row 8: wg → rb5009 ═ y 502..548 -->
-      <g transform="translate(0 502)">
-        <circle class="lanedot" cx="16" cy="20" r="3.5" fill="var(--ink-3)"/>
-        <text class="rowlab" x="28" y="24">wg → rb5009</text>
-        <text class="rowsub" x="28" y="40">quiet by choice</text>
-        <g transform="translate(0 6)">
-          <path class="ticks-acc" d="M420 0v30M900 0v30M1290 0v30"/>
-        </g>
+      <!-- ═ row 8 · wg → rb5009 ═ y 510..568 -->
+      <g transform="translate(0 510)">
+        <rect class="card" x="6" y="4" width="216" height="48" rx="5"/>
+        <rect x="6" y="4" width="3" height="48" rx="1.5" fill="var(--ink-3)"/>
+        <text class="cname" x="20" y="24">wg → rb5009</text>
+        <text class="csub" x="20" y="39">quiet by choice</text>
+        <text class="crate" x="212" y="24" text-anchor="end" style="fill:var(--ink-3)">~0</text>
+        <polygon class="vol" fill="rgba(154,161,173,0.1)" points="240,50 400,50 420,44 440,50 880,50 900,44 920,50 1040,50 1056,49 1056,52 240,52"/>
+        <text class="gut-t" x="1076" y="26">14:02:09.4 <tspan class="gut-acc">ACC</tspan></text>
+        <text class="gut-l" x="1076" y="40">phone-tom-wg :51820</text>
         <line class="rowline" x1="0" y1="58" x2="1360" y2="58"/>
       </g>
 
       <!-- NOW -->
-      <line class="nowline nowpulse" x1="1330" y1="26" x2="1330" y2="560"/>
-      <circle class="nowhead nowpulse" cx="1330" cy="20" r="4"/>
-      <text x="1352" y="580" text-anchor="end" style="fill:var(--now); font-size:10px; font-weight:700">NOW · 14:02:11</text>
-      <text x="1352" y="596" text-anchor="end" class="rowsub">the newest ticks land here — the leading edge is the live view</text>
+      <line class="nowline nowpulse" x1="1056" y1="24" x2="1056" y2="574"/>
+      <circle class="nowhead nowpulse" cx="1056" cy="18" r="4"/>
+      <text x="1056" y="592" text-anchor="middle" style="fill:var(--now); font-size:10px; font-weight:700">NOW · 14:02:11</text>
+      <text x="1208" y="592" text-anchor="middle" class="csub" style="font-size:9.5px">← each row’s newest line, in words</text>
     </svg>
   </div>
 
   <div class="legend">
-    <span class="k"><span class="lk"></span>accept</span>
-    <span class="k"><span class="lk" style="border-color:var(--drop)"></span>drop</span>
-    <span class="k"><span class="lk" style="border-color:var(--nat)"></span>nat</span>
-    <span class="k"><span class="lk" style="border-color:var(--ok)"></span>watch band — holding</span>
-    <span class="k"><span class="lk" style="border-color:var(--drop); border-top-style:dashed"></span>watch band — broken</span>
-    <span class="k">◉ flag, printed at the minute it fired</span>
-    <span class="k">▨ dark — no pen on this boundary</span>
-    <span class="k" style="color:var(--now)">│ NOW</span>
+    <span class="k">shaded hill = traffic volume (lane colour)</span>
+    <span class="k" style="color:var(--drop)">red mark = a drop — red never means anything else</span>
+    <span class="k" style="color:var(--nat)">violet = nat</span>
+    <span class="k" style="color:var(--ok)">thin green line = a watch, holding</span>
+    <span class="k" style="color:var(--drop)">dashed red = the watch, broken</span>
+    <span class="k">◉ flag at the minute it fired · ▨ dark = no pen</span>
   </div>
 </section>
 
@@ -320,25 +368,25 @@
   </div>
 
   <div class="recorder">
-    <svg viewBox="0 0 1360 128" role="img" aria-label="The recorder, compressed: all strata still printing while one is open below.">
-      <g transform="translate(0 8)">
-        <text class="rowsub" x="16" y="14">ALL</text>
-        <path class="ticks-acc" d="M246 4v14M260 4v14M273 4v14M290 4v14M304 4v14M321 4v14M334 4v14M350 4v14M366 4v14M380 4v14M395 4v14M410 4v14M424 4v14M440 4v14M455 4v14M470 4v14M486 4v14M500 4v14M516 4v14M530 4v14M545 4v14M561 4v14M576 4v14M590 4v14M606 4v14M620 4v14M636 4v14M650 4v14M666 4v14M681 4v14M695 4v14M710 4v14M726 4v14M740 4v14M755 4v14M770 4v14M785 4v14M800 4v14M815 4v14M830 4v14M845 4v14M860 4v14M876 4v14M890 4v14M905 4v14M920 4v14M935 4v14M950 4v14M965 4v14M980 4v14M995 4v14M1010 4v14M1025 4v14M1040 4v14M1055 4v14M1070 4v14M1085 4v14M1100 4v14M1115 4v14M1130 4v14M1145 4v14M1160 4v14M1176 4v14M1190 4v14M1205 4v14M1220 4v14M1235 4v14M1250 4v14M1265 4v14M1280 4v14M1295 4v14M1310 4v14"/>
-        <line class="rowline" x1="0" y1="26" x2="1360" y2="26"/>
+    <svg viewBox="0 0 1360 122" role="img" aria-label="The recorder, compressed: the ALL stream and two boundary rows still printing while one stratum is open below.">
+      <g transform="translate(0 6)">
+        <text class="csub" x="16" y="16" style="font-size:10px">ALL</text>
+        <polygon class="vol" fill="rgba(154,161,173,0.14)" points="240,20 340,16 440,22 540,14 640,18 740,12 840,16 940,10 1020,14 1056,12 1056,28 240,28"/>
+        <line class="rowline" x1="0" y1="32" x2="1360" y2="32"/>
       </g>
       <g transform="translate(0 42)">
-        <text class="rowsub" x="16" y="14">wan→rtr</text>
-        <path class="ticks-drop" d="M258 4v14M341 4v14M434 4v14M540 4v14M634 4v14M713 4v14M781 4v14M838 4v14M886 4v14M926 4v14M965 4v14M999 4v14M1030 4v14M1060 4v14M1088 4v14M1116 4v14M1143 4v14M1172 4v14M1200 4v14M1229 4v14M1257 4v14M1284 4v14M1310 4v14"/>
-        <line class="rowline" x1="0" y1="26" x2="1360" y2="26"/>
+        <text class="csub" x="16" y="16" style="font-size:10px">wan→rtr</text>
+        <polygon class="vol" fill="rgba(224,82,82,0.12)" points="240,24 440,22 640,19 780,16 900,12 1010,8 1056,6 1056,28 240,28"/>
+        <line class="rowline" x1="0" y1="32" x2="1360" y2="32"/>
       </g>
-      <g transform="translate(0 76)">
-        <rect x="0" y="-4" width="1360" height="30" fill="rgba(224,82,82,0.07)"/>
-        <text class="rowsub" x="16" y="14" style="fill:var(--drop); font-weight:700">iot→lan ▾</text>
-        <path class="ticks-drop" d="M604 4v14M668 4v14M732 4v14M796 4v14M860 4v14M924 4v14M988 4v14M1052 4v14M1116 4v14M1180 4v14M1244 4v14M1308 4v14"/>
-        <g transform="translate(600 11)"><circle r="4" fill="var(--paper)" stroke="var(--drop)" stroke-width="1.3"/><circle r="1.5" fill="var(--drop)"/></g>
-        <line class="rowline" x1="0" y1="26" x2="1360" y2="26"/>
+      <g transform="translate(0 78)">
+        <rect x="0" y="0" width="1360" height="32" fill="rgba(224,82,82,0.07)"/>
+        <text class="csub" x="16" y="16" style="fill:var(--drop); font-weight:700; font-size:10px">iot→lan ▾</text>
+        <path class="ticks-drop" d="M516 6v20M580 6v20M644 6v20M708 6v20M772 6v20M836 6v20M900 6v20M964 6v20M1028 6v20"/>
+        <g transform="translate(512 16)"><circle r="4" fill="var(--paper)" stroke="var(--drop)" stroke-width="1.3"/><circle r="1.5" fill="var(--drop)"/></g>
+        <line class="rowline" x1="0" y1="32" x2="1360" y2="32"/>
       </g>
-      <line class="nowline nowpulse" x1="1330" y1="4" x2="1330" y2="118"/>
+      <line class="nowline nowpulse" x1="1056" y1="4" x2="1056" y2="112"/>
     </svg>
   </div>
 
@@ -386,95 +434,95 @@
   </div>
 </section>
 
-<!-- ============ SCENE 3 : FLAGS ON THE PAPER ============ -->
+<!-- ============ SCENE 3 : THE DAY AT ARM'S LENGTH ============ -->
 <section class="scene" id="s3">
-  <div class="scene-tag">Scene 3 — the day at arm's length. Zoom out and the paper becomes the story of when.</div>
+  <div class="scene-tag">Scene 3 — zoomed to 24 hours: hills become the day's story, and every flag sits at its moment.</div>
   <div class="bar">
     <span class="wm">MIKRO<em>VIEW</em></span>
     <h1>Today <span class="here">· 6 flags · 3 watches</span></h1>
-    <span class="sub">flags print where and when they fired — the paper is the flag list</span>
+    <span class="sub">the flag list and the timeline are the same thing</span>
     <span class="ranges"><span class="rng">15 m</span><span class="rng">1 h</span><span class="rng on">24 h</span><span class="rng">14 d</span></span>
   </div>
 
   <div class="recorder">
-    <svg viewBox="0 0 1360 420" role="img"
-         aria-label="The same recorder zoomed to 24 hours: event density becomes texture, six flags sit printed at their moments, the IoT watch band visibly breaks at 13:52.">
+    <svg viewBox="0 0 1360 400" role="img"
+         aria-label="The recorder zoomed to 24 hours: volume hills tell the day's story, six flags sit printed at their moments, the IoT watch band breaks at 13:52.">
       <g>
-        <line class="gridline5" x1="240" y1="26" x2="240" y2="380"/><text class="tlab" x="240" y="18" text-anchor="middle">00:00</text>
-        <line class="gridline" x1="376" y1="26" x2="376" y2="380"/><text class="tlab" x="376" y="18" text-anchor="middle">03:00</text>
-        <line class="gridline" x1="512" y1="26" x2="512" y2="380"/><text class="tlab" x="512" y="18" text-anchor="middle">06:00</text>
-        <line class="gridline" x1="648" y1="26" x2="648" y2="380"/><text class="tlab" x="648" y="18" text-anchor="middle">09:00</text>
-        <line class="gridline5" x1="784" y1="26" x2="784" y2="380"/><text class="tlab" x="784" y="18" text-anchor="middle">12:00</text>
-        <line class="gridline" x1="920" y1="26" x2="920" y2="380"/><text class="tlab" x="920" y="18" text-anchor="middle">15:00 — nothing after NOW, ever</text>
+        <line class="gridline5" x1="240" y1="24" x2="240" y2="360"/><text class="tlab" x="240" y="16" text-anchor="middle">00:00</text>
+        <line class="gridline" x1="376" y1="24" x2="376" y2="360"/><text class="tlab" x="376" y="16" text-anchor="middle">03:00</text>
+        <line class="gridline" x1="512" y1="24" x2="512" y2="360"/><text class="tlab" x="512" y="16" text-anchor="middle">06:00</text>
+        <line class="gridline" x1="648" y1="24" x2="648" y2="360"/><text class="tlab" x="648" y="16" text-anchor="middle">09:00</text>
+        <line class="gridline5" x1="784" y1="24" x2="784" y2="360"/><text class="tlab" x="784" y="16" text-anchor="middle">12:00</text>
+        <line class="gridline" x1="920" y1="24" x2="920" y2="360"/><text class="tlab" x="920" y="16" text-anchor="middle">15:00</text>
       </g>
 
-      <!-- density strips (24h texture): use soft rects -->
-      <g transform="translate(0 40)">
-        <circle class="lanedot" cx="16" cy="16" r="3.5" fill="var(--ink-3)"/>
-        <text class="rowlab" x="28" y="20">wan → rb5009</text>
-        <rect x="240" y="2" width="597" height="26" fill="var(--drop)" opacity="0.13"/>
-        <rect x="700" y="2" width="80" height="26" fill="var(--drop)" opacity="0.3"/>
-        <rect x="806" y="2" width="31" height="26" fill="var(--drop)" opacity="0.45"/>
-        <g transform="translate(660 14)"><circle r="5" class="flagmark" stroke="var(--iot)"/><circle r="1.8" fill="var(--iot)"/></g>
-        <text class="anno" x="672" y="10">port_scan 09:03</text>
-        <g transform="translate(750 14)"><circle r="5" class="flagmark" stroke="var(--iot)"/><circle r="1.8" fill="var(--iot)"/></g>
-        <text class="anno" x="762" y="10">known_bad_ip 11:20 ×2</text>
-        <g transform="translate(816 14)"><circle r="5" class="flagmark" stroke="var(--iot)"/><circle r="1.8" fill="var(--iot)"/></g>
-        <text class="anno" x="826" y="44">port_scan 13:41 · port_scan 12:58</text>
-        <line class="band-ok" x1="240" y1="34" x2="837" y2="34"/>
-        <text class="bandlab b-ok" x="244" y="45">WATCH · inbound quiet ✓ all day</text>
-        <line class="rowline" x1="0" y1="52" x2="1360" y2="52"/>
+      <g transform="translate(0 30)">
+        <rect class="card" x="6" y="4" width="216" height="52" rx="5"/>
+        <rect x="6" y="4" width="3" height="52" rx="1.5" fill="var(--ink-3)"/>
+        <text class="cname" x="20" y="24">wan → rb5009</text>
+        <text class="chip ch-ok" x="20" y="40">WATCHED ✓ ALL DAY</text>
+        <polygon class="vol" fill="rgba(224,82,82,0.13)" points="240,48 340,46 440,47 540,45 640,44 700,42 740,36 780,30 806,24 837,16 837,54 240,54"/>
+        <g transform="translate(660 30)"><circle r="5" fill="var(--paper)" stroke="var(--iot)" stroke-width="1.4"/><circle r="1.8" fill="var(--iot)"/></g>
+        <text class="anno" x="672" y="26">port_scan 09:03</text>
+        <g transform="translate(750 22)"><circle r="5" fill="var(--paper)" stroke="var(--iot)" stroke-width="1.4"/><circle r="1.8" fill="var(--iot)"/></g>
+        <text class="anno" x="762" y="18">known_bad_ip 11:20 ×2 · port_scan 12:58 · 13:41</text>
+        <line class="rowline" x1="0" y1="60" x2="1360" y2="60"/>
       </g>
 
-      <g transform="translate(0 116)">
-        <circle class="lanedot" cx="16" cy="16" r="3.5" fill="var(--lan)"/>
-        <text class="rowlab" x="28" y="20">lan → wan</text>
-        <rect x="240" y="2" width="200" height="26" fill="var(--tick)" opacity="0.08"/>
-        <rect x="500" y="2" width="337" height="26" fill="var(--tick)" opacity="0.2"/>
-        <line class="band-ok" x1="240" y1="34" x2="837" y2="34"/>
-        <line class="rowline" x1="0" y1="52" x2="1360" y2="52"/>
+      <g transform="translate(0 98)">
+        <rect class="card" x="6" y="4" width="216" height="48" rx="5"/>
+        <rect x="6" y="4" width="3" height="48" rx="1.5" fill="var(--lan)"/>
+        <text class="cname" x="20" y="24">lan → wan</text>
+        <text class="chip ch-ok" x="20" y="40">WATCHED ✓</text>
+        <polygon class="vol" fill="rgba(57,135,229,0.14)" points="240,50 340,48 400,44 460,40 500,42 560,32 620,36 680,28 740,32 800,26 837,28 837,54 240,54"/>
+        <text class="anno" x="600" y="20">the household wakes at eight</text>
+        <line class="rowline" x1="0" y1="60" x2="1360" y2="60"/>
       </g>
 
-      <g transform="translate(0 192)">
-        <rect x="796" y="-4" width="560" height="48" fill="rgba(224,82,82,0.05)"/>
-        <circle class="lanedot" cx="16" cy="16" r="3.5" fill="var(--iot)"/>
-        <text class="rowlab" x="28" y="20" style="fill:var(--drop)">iot → lan</text>
-        <text class="stamp-svg" x="28" y="36" fill="var(--drop)" transform="rotate(-1 28 36)">UNPLANNED</text>
-        <rect x="800" y="2" width="37" height="26" fill="var(--drop)" opacity="0.5"/>
-        <g transform="translate(800 14)"><circle r="5" class="flagmark" stroke="var(--drop)"/><circle r="5" fill="none" stroke="var(--drop)" class="halo"/><circle r="1.8" fill="var(--drop)"/></g>
-        <text class="anno" x="812" y="10" style="fill:var(--drop)">new_talker 13:52 — 41 blank days, then this streak, still printing at NOW</text>
-        <line class="rowline" x1="0" y1="52" x2="1360" y2="52"/>
+      <g transform="translate(0 166)">
+        <rect x="784" y="0" width="572" height="56" fill="rgba(224,82,82,0.06)"/>
+        <rect class="card" x="6" y="4" width="216" height="52" rx="5" stroke="rgba(224,82,82,0.6)"/>
+        <rect x="6" y="4" width="3" height="52" rx="1.5" fill="var(--drop)"/>
+        <text class="cname" x="20" y="24" style="fill:var(--drop)">iot → lan</text>
+        <text class="chip ch-bad" x="20" y="40" transform="rotate(-1 20 40)">UNPLANNED · SINCE 13:52</text>
+        <path class="ticks-drop" d="M800 16v28M812 16v28M824 16v28M836 16v28"/>
+        <g transform="translate(800 12)"><circle r="5" fill="var(--paper)" stroke="var(--drop)" stroke-width="1.4"/><circle r="5" fill="none" stroke="var(--drop)" class="halo"/><circle r="1.8" fill="var(--drop)"/></g>
+        <text class="anno" x="852" y="20" style="fill:var(--drop)">new_talker 13:52 — 41 blank days, then this streak, still printing at NOW</text>
+        <line class="rowline" x1="0" y1="60" x2="1360" y2="60"/>
       </g>
 
-      <g transform="translate(0 268)">
-        <circle class="lanedot" cx="16" cy="16" r="3.5" fill="var(--iot)"/>
-        <text class="rowlab" x="28" y="20">iot → wan</text>
-        <rect x="240" y="2" width="597" height="26" fill="var(--tick)" opacity="0.1"/>
-        <rect x="806" y="2" width="31" height="26" fill="var(--drop)" opacity="0.35"/>
-        <line class="band-ok" x1="240" y1="34" x2="800" y2="34"/>
-        <line class="band-broken" x1="800" y1="34" x2="837" y2="34" stroke-dasharray="4 5"/>
-        <text class="bandlab b-viol" x="846" y="38">BROKEN 13:52</text>
-        <line class="rowline" x1="0" y1="52" x2="1360" y2="52"/>
+      <g transform="translate(0 234)">
+        <rect class="card" x="6" y="4" width="216" height="48" rx="5"/>
+        <rect x="6" y="4" width="3" height="48" rx="1.5" fill="var(--iot)"/>
+        <text class="cname" x="20" y="24">iot → wan</text>
+        <text class="chip ch-bad" x="20" y="40">WATCH BROKEN 13:52</text>
+        <polygon class="vol" fill="rgba(201,133,0,0.13)" points="240,48 400,47 560,48 700,47 780,46 806,40 837,38 837,54 240,54"/>
+        <line class="band-ok" x1="240" y1="8" x2="784" y2="8"/>
+        <line class="band-broken" x1="784" y1="8" x2="837" y2="8" stroke-dasharray="4 5"/>
+        <text class="bandlab b-viol" x="846" y="12">BROKEN 13:52</text>
+        <line class="rowline" x1="0" y1="60" x2="1360" y2="60"/>
       </g>
 
-      <g transform="translate(0 344)">
-        <circle class="lanedot" cx="16" cy="16" r="3.5" fill="var(--guest)"/>
-        <text class="rowlab" x="28" y="20">guest → wan</text>
-        <rect class="darkband" x="240" y="2" width="597" height="26"/>
-        <text class="anno" x="500" y="19" style="fill:var(--drop); font-weight:700">DARK all day — the pen this recorder is missing</text>
-        <line class="rowline" x1="0" y1="52" x2="1360" y2="52"/>
+      <g transform="translate(0 302)">
+        <rect class="card" x="6" y="4" width="216" height="48" rx="5"/>
+        <rect x="6" y="4" width="3" height="48" rx="1.5" fill="var(--guest)"/>
+        <text class="cname" x="20" y="24">guest → wan</text>
+        <text class="chip ch-bad" x="20" y="40">DARK ALL DAY</text>
+        <rect class="darkband" x="240" y="8" width="597" height="40"/>
+        <text class="anno" x="500" y="32" style="fill:var(--drop); font-weight:700">the pen this recorder is missing</text>
+        <line class="rowline" x1="0" y1="60" x2="1360" y2="60"/>
       </g>
 
-      <line class="nowline nowpulse" x1="837" y1="26" x2="837" y2="380"/>
-      <circle class="nowhead nowpulse" cx="837" cy="20" r="4"/>
-      <text x="837" y="400" text-anchor="middle" style="fill:var(--now); font-size:10px; font-weight:700">NOW · 14:02</text>
+      <line class="nowline nowpulse" x1="837" y1="24" x2="837" y2="366"/>
+      <circle class="nowhead nowpulse" cx="837" cy="18" r="4"/>
+      <text x="837" y="384" text-anchor="middle" style="fill:var(--now); font-size:10px; font-weight:700">NOW · 14:02</text>
     </svg>
   </div>
 
   <div class="legend">
-    <span class="k">zoomed out, ticks become texture — the day reads at a glance</span>
-    <span class="k">◉ every flag sits at its moment, on its boundary — the flag list and the timeline are the same thing</span>
-    <span class="k" style="color:var(--ink-2)">drag any span → that stratum opens as the live table for that window (lookback and live are one gesture)</span>
+    <span class="k">zoomed out, hills become the day's story — the spike has a shape, the silence has a start</span>
+    <span class="k">◉ every flag sits at its moment, on its boundary</span>
+    <span class="k" style="color:var(--ink-2)">drag any span → that stratum opens as the live table for that window — lookback and live are one gesture</span>
   </div>
 </section>
 

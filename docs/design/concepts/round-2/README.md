@@ -55,6 +55,14 @@ Full live view keeps the orbit as a still-breathing corner medallion.
 
 ### I — Strata (`direction-i-strata.html`) — wild №2, time-first
 
+> Developed 2026-08-23 after owner feedback (*"very interesting to look
+> at but a bit hard to read — I wasn't sure what I was looking at"*).
+> The legibility pass: traffic volume is a soft silhouette per row
+> instead of tick-noise; red marks mean drops and nothing else; each
+> row gets an index card (name, live rate, status); a NOW gutter right
+> of the cursor prints each row's newest event in words; an attention
+> strip and a how-to-read line let the paper explain itself.
+
 The whole app is a chart recorder: boundaries are strata, time flows
 toward an amber NOW cursor, and the newest ticks land at the leading
 edge — which *is* the live view; any stratum (including ALL) expands
