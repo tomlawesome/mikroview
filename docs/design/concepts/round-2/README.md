@@ -53,6 +53,18 @@ is a red chord cutting across the mandala beneath the core. Watches
 are bracket arcs — the broken one visibly snaps where cam-porch sits.
 Full live view keeps the orbit as a still-breathing corner medallion.
 
+**Scene 4 — the Reach view** (added 2026-08-23, from the owner's
+"bubbles within bubbles" riff): click any host and its world arranges
+around it. The membrane is the free-talk set — inside it, lane-mates
+need no rule; every crossing needs one, judged per direction. Green
+strands pass through the membrane (may talk; motes = talking now);
+blocked directions die *at* the membrane with a stop bar, pulsing where
+the host is actually knocking. One-way rules are visible, not implied:
+tom-desktop's strand passes in to watch the camera while the camera's
+strand back at him stops at its own membrane. Built for the two-second
+check: "what can this thing talk to?" The view is direction-agnostic —
+it drops into F (or any winner) as the host drill-in.
+
 ### I — Strata (`direction-i-strata.html`) — wild №2, time-first
 
 > Developed 2026-08-23 after owner feedback (*"very interesting to look
