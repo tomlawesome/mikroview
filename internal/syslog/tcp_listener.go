@@ -478,19 +478,30 @@ func handleTCPConn(ctx context.Context, conn net.Conn, out chan<- RawMessage) {
 	// had to handle: a write bigger than maxTCPMessageBytes with no
 	// newline in reach. The first maxTCPMessageBytes are delivered once,
 	// truncated (honest -- it is the genuine start of what was sent),
-	// and continuation reads are discarded and counted until one ends
-	// the run -- unchanged from before #415, and still driven by
-	// read-fill state rather than pending: once a message is already
-	// known to be over the limit, exactly how its discarded remainder
-	// happened to be sliced by the network no longer matters, only that
-	// none of it reaches the parser. See #285 finding 18.
+	// and continuation bytes are discarded and counted until a newline
+	// ends the run -- with whatever follows that newline in the same
+	// read salvaged into pending rather than discarded with it, since
+	// it belongs to the next message, not this one. Entry into this
+	// state happens by pending crossing the cap (see below) and is
+	// unaffected by what follows here: once the cap is already crossed
+	// and counted, the only question left is whether this run has
+	// reached its terminator, and read size doesn't answer that --
+	// under TLS, the only production transport, a single Read can never
+	// fill the buffer (tls.Conn hands back at most one record's
+	// plaintext, well under the 64 KiB cap), so a discard check that
+	// also required a full read reset itself on the very first
+	// continuation read and let the next chunk of discard garbage back
+	// in as if it were a fresh message, corrupting whatever real line
+	// followed it. See #285 finding 18 and #379.
 	buf := make([]byte, maxTCPMessageBytes)
 	// pending holds bytes read but not yet resolved into a complete
 	// message: either the tail of a newline-delimited message still
 	// missing its '\n', or the whole of a bare message whose end hasn't
-	// been confirmed yet. Left untouched while oversized is true -- that
-	// path never accumulates, for the memory-bound reason
-	// maxTCPMessageBytes exists in the first place.
+	// been confirmed yet. Left untouched while oversized is true and no
+	// terminator has turned up yet -- that path never accumulates, for
+	// the memory-bound reason maxTCPMessageBytes exists in the first
+	// place; it only receives the salvaged remainder once a terminator
+	// does turn up, per the discard branch below.
 	var pending []byte
 	oversized := false
 
@@ -530,21 +541,34 @@ func handleTCPConn(ctx context.Context, conn net.Conn, out chan<- RawMessage) {
 
 			if oversized {
 				// Still discarding the tail of a message whose start was
-				// already delivered truncated. A read that fills the
-				// buffer with no newline in it is more of the same; a
-				// short read, or a newline turning up mid-discard, ends
-				// the run -- unchanged from the pre-#415 behaviour this
-				// path has always used.
-				full := n == len(buf) && !bytes.Contains(buf[:n], []byte{'\n'})
+				// already delivered truncated, and whose cap-crossing
+				// was already counted on entry. The first newline in
+				// this read ends the run -- but only the bytes up to and
+				// including it were ever part of the oversized message;
+				// anything after it is the start of whatever comes
+				// next, salvaged into pending rather than thrown away
+				// with the rest of the read. Without that, a terminator
+				// that happens to arrive in the same read as the
+				// following message's own bytes (one TLS record holding
+				// both) would silently destroy that message -- data
+				// loss of a genuine event, not merely an over-eager
+				// discard. No newline anywhere in this read means it's
+				// still all discard, however it happened to be sliced
+				// by the network.
+				idx := bytes.IndexByte(buf[:n], '\n')
 				tcpOversized.Add(1)
-				oversized = full
-				if err != nil {
-					return
+				if idx < 0 {
+					oversized = true
+					if err != nil {
+						return
+					}
+					continue
 				}
-				continue
+				oversized = false
+				pending = append(pending, buf[idx+1:n]...)
+			} else {
+				pending = append(pending, buf[:n]...)
 			}
-
-			pending = append(pending, buf[:n]...)
 
 			for {
 				idx := bytes.IndexByte(pending, '\n')
