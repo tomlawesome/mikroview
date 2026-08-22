@@ -194,6 +194,25 @@ rewritten.
 
 ### Fixed
 
+- **The setup wizard's syslog step reported "done" on a bare TCP
+  connect, before any TLS handshake completed** (#371). `noteConnection`
+  fired from `ServeTCP`'s accept branch in `internal/syslog/tcp_listener.go`
+  -- before `handleTCPConn` ever read a byte, and `tls.Listener.Accept`
+  negotiates its handshake lazily, on first read, not on accept. A
+  router configured with `check-certificate=yes` against a certificate
+  that didn't cover its address -- the exact misconfiguration the
+  wizard's own CA-trust step exists to catch -- connected at TCP,
+  failed the handshake, and sent nothing, yet the wizard still rendered
+  "A router has an open syslog connection: done" and sent the operator
+  off to fix firewall `log=yes` rules that were never the problem. A LAN
+  port scan or a plain TCP health check against the syslog port produced
+  the identical false "done". The hook now fires from inside
+  `handleTCPConn`, past a completed `tls.Conn.HandshakeContext`, so a
+  bare connect or a failed handshake no longer satisfies the step --
+  while a genuine handshake with no logging rule configured yet still
+  does, keeping that state distinct from "never connected" (see
+  `setup.Store.NoteSyslogConnection`'s doc comment).
+
 - **A router with `remote-log-format=syslog` set and a non-UTC system
   clock had every event's displayed time off by its clock's offset**
   (#379). RouterOS's BSD syslog output carries no timezone at all --
