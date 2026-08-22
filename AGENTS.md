@@ -83,6 +83,33 @@ shown all of that work being undone. Caught by checking `git log
 --oneline` against a freshly-fetched `origin/dev` before pushing, not by
 assuming the checkout had done the right thing.
 
+## Never `git stash` here: the stash is shared, the worktree is not
+
+**This is not hypothetical either.** Several agents were working this
+repo at once, each in its own `git worktree`, and one used `git stash
+push` / `git stash pop` to temporarily revert its fix and prove a test
+failed against unfixed code -- the fail-first discipline below. **The
+stash is repository-global, not per-worktree.** Its `pop` took the top
+entry, which belonged to a *different* agent, and that agent's
+uncommitted `main.go` landed in this one's tree as a merge conflict. It
+was caught and reverted, and nothing was lost, but the two trees had no
+other way of colliding: the isolation people expect from a worktree does
+not extend to the stash, and neither agent could see the other's entries
+as anything but an anonymous `stash@{0}`.
+
+So: **do not use `git stash` in this repository.** To revert a change
+temporarily and put it back, use a patch file, which is local to your
+tree and named:
+
+```sh
+git diff > /tmp/my-fix.patch     # save
+git apply -R /tmp/my-fix.patch   # revert, run the test, watch it fail
+git apply /tmp/my-fix.patch      # restore
+```
+
+Committing the fix and testing at `HEAD~1` on a scratch branch works too.
+Both leave other worktrees untouched.
+
 ## Where code review happens: GitHub and GitLab, split by branch
 
 > **UNDER CONSTRUCTION — NOT YET LIVE. DO NOT USE.**
