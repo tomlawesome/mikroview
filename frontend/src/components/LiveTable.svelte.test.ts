@@ -6,6 +6,7 @@ import { flushSync } from 'svelte'
 import type { ClientEvent } from '../lib/types'
 import { emptyFilters } from '../lib/types'
 import { appState } from '../lib/state.svelte'
+import { groupModeState } from '../lib/groupMode.svelte'
 import { MAX_RENDERED_ROWS } from '../lib/constants'
 
 // jsdom (unlike a real browser) has no window.matchMedia -- LiveTable
@@ -65,6 +66,11 @@ beforeEach(() => {
   // Now module-level rather than component-local (see appState.frozenPool),
   // so it survives unmount -- and would leak between tests without this.
   appState.frozenPool = null
+  // Reset centrally, not at the end of whichever test set it. A test body
+  // that fails never reaches its own cleanup line, and the next test then
+  // renders in grouped mode and fails for a reason that has nothing to do
+  // with what it is checking -- one real failure reported as two.
+  groupModeState.enabled = false
 })
 
 describe('LiveTable autoscroll-off freezing (issue #232)', () => {
@@ -195,5 +201,74 @@ describe('LiveTable autoscroll-off freezing (issue #232)', () => {
     // The global Autoscroll toggle must not freeze a table that has no
     // Autoscroll control of its own.
     expect(container.querySelector('[title="event-two"]')).toBeTruthy()
+  })
+})
+
+describe('Group mode drawer consistency (issue #381)', () => {
+  // Two events that share a group key but differ in rule label, so a rule
+  // filter can narrow the group to one member while its drawer is open.
+  function pair() {
+    const shared = {
+      srcIp: '198.51.100.7',
+      dstIp: '203.0.113.9',
+      dstPort: 22,
+      protocol: 'TCP',
+      action: 'drop' as const,
+    }
+    return [
+      makeEvent('member-a', { id: 1, ruleLabel: 'test-rule', ...shared }),
+      makeEvent('member-b', { id: 2, ruleLabel: 'other', ...shared }),
+    ]
+  }
+
+  it('drops the drawer when a filter narrows an open group to one member', () => {
+    groupModeState.enabled = true
+    appState.events = pair()
+
+    const { container } = render(LiveTable)
+    flushSync()
+
+    // Expand the group: head plus its two members.
+    const toggle = container.querySelector<HTMLElement>('[aria-expanded]')
+    expect(toggle).toBeTruthy()
+    toggle!.click()
+    flushSync()
+    expect(container.querySelectorAll('.row').length).toBe(3)
+
+    // Narrow to one member. The group's count falls to 1, so the toggle
+    // goes away -- and before #381 the drawer did not, leaving the single
+    // remaining event rendered twice, once as a child of itself, with no
+    // control left to collapse it.
+    appState.filters = { ...emptyFilters(), rule: 'other' }
+    flushSync()
+
+    const rows = container.querySelectorAll('.row')
+    expect(rows.length).toBe(1)
+    expect(container.querySelectorAll('.row.member').length).toBe(0)
+  })
+})
+
+describe('Clear releases the freeze snapshot (issue #381)', () => {
+  it('empties the table when Clear is pressed with autoscroll off', async () => {
+    appState.events = [makeEvent('e-one', { id: 1 }), makeEvent('e-two', { id: 2 })]
+
+    const { container } = render(LiveTable)
+    flushSync()
+    expect(container.querySelectorAll('.row').length).toBe(2)
+
+    // Freeze, per #232.
+    appState.autoscroll = false
+    flushSync()
+    expect(container.querySelectorAll('.row').length).toBe(2)
+
+    // Clear used to empty the buffer and leave the screen untouched: the
+    // frozen pool still held both rows, with nothing on screen to explain
+    // why and no way out but toggling autoscroll back on.
+    appState.clearBuffer()
+    flushSync()
+
+    expect(appState.events.length).toBe(0)
+    expect(appState.frozenPool).toEqual([])
+    expect(container.querySelectorAll('.row').length).toBe(0)
   })
 })
