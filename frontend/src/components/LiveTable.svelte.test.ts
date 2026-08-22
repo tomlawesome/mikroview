@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-import { beforeEach, describe, expect, it } from 'vitest'
-import { render } from '@testing-library/svelte'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { render, fireEvent } from '@testing-library/svelte'
 import { flushSync } from 'svelte'
 import type { ClientEvent } from '../lib/types'
 import { emptyFilters } from '../lib/types'
@@ -309,5 +309,118 @@ describe('Group expansion does not outlive its group (issue #381 item 3)', () =>
     const toggle = container.querySelector('[aria-expanded]')
     expect(toggle?.getAttribute('aria-expanded')).toBe('false')
     expect(container.querySelectorAll('.row.member').length).toBe(0)
+  })
+})
+describe('EventRow token interaction (#439)', () => {
+  const HOST_IP = '203.0.113.77'
+  const HOST_NAME = 'nas.example.internal'
+  const RAW_RULE = 'raw-rule-label-42'
+  const FRIENDLY_RULE = 'Block known-bad scanners'
+
+  // The label/raw gap (b) needs a row where a friendly name is actively
+  // resolved over the raw value -- otherwise "copies the raw value"
+  // can't be told apart from "copies whatever text is shown".
+  function renderLabelledRow() {
+    const e = makeEvent('token-row', {
+      srcIp: HOST_IP,
+      srcHostName: HOST_NAME,
+      ruleLabel: RAW_RULE,
+      ruleName: FRIENDLY_RULE,
+    })
+    const utils = render(LiveTable, { props: { events: [e] } })
+    flushSync()
+    return utils
+  }
+
+  function selectTextIn(el: Element) {
+    const range = document.createRange()
+    range.selectNodeContents(el)
+    const sel = window.getSelection()
+    sel?.removeAllRanges()
+    sel?.addRange(range)
+  }
+
+  function clearSelection() {
+    window.getSelection()?.removeAllRanges()
+  }
+
+  // (a) row text is selectable.
+  //
+  // There's no `user-select: none` anywhere in app.css to assert
+  // against removing (investigation found none -- the actual cause was
+  // every token being a <button>, and no browser makes button content
+  // selectable regardless of CSS). So the real, checkable condition is
+  // the element swap this issue's fix makes: a plain element with
+  // role="button"/tabindex, not a <button>.
+  it('renders row tokens as plain selectable elements, not <button>s', () => {
+    const { container } = renderLabelledRow()
+    const addrToken = container.querySelector('.addr-btn')
+    expect(addrToken).toBeTruthy()
+    expect(addrToken?.tagName).not.toBe('BUTTON')
+    expect(addrToken?.getAttribute('role')).toBe('button')
+    expect(addrToken?.getAttribute('tabindex')).toBe('0')
+  })
+
+  // (b) copy glyph present on tokens, writes the RAW value.
+  it('shows a copy control per token that writes the RAW value behind a resolved label', async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined)
+    Object.defineProperty(navigator, 'clipboard', {
+      value: { writeText },
+      configurable: true,
+    })
+
+    const { container } = renderLabelledRow()
+
+    expect(container.querySelectorAll('.copy-btn').length).toBeGreaterThan(0)
+
+    // The source-address cell displays the resolved hostname, not the
+    // IP -- exactly the gap #439 exists to bridge -- but its copy
+    // control must still write the IP.
+    const addrCell = container.querySelector('.cell.addr')
+    expect(addrCell?.textContent).toContain(HOST_NAME)
+    expect(addrCell?.textContent).not.toContain(HOST_IP)
+
+    const addrCopyBtn = addrCell?.querySelector('.copy-btn') as HTMLButtonElement
+    expect(addrCopyBtn).toBeTruthy()
+    await fireEvent.click(addrCopyBtn)
+    expect(writeText).toHaveBeenCalledWith(HOST_IP)
+
+    // Same story for the rule cell: the friendly name is what's shown,
+    // the raw rule label is what gets copied.
+    const ruleCell = container.querySelector('.cell.rule')
+    expect(ruleCell?.textContent).toContain(FRIENDLY_RULE)
+    const ruleCopyBtn = ruleCell?.querySelector('.copy-btn') as HTMLButtonElement
+    expect(ruleCopyBtn).toBeTruthy()
+    await fireEvent.click(ruleCopyBtn)
+    expect(writeText).toHaveBeenCalledWith(RAW_RULE)
+  })
+
+  // (c) click-with-selection does not filter; click-without-selection does.
+  it('suppresses the click-to-filter action once a drag has left a selection behind, but not a plain click', async () => {
+    const { container } = renderLabelledRow()
+    const addrToken = container.querySelector('.addr-btn') as HTMLElement
+    expect(addrToken).toBeTruthy()
+
+    // A drag-to-select: press, select some of the row's own text,
+    // release. The release must not be read as a click -- the
+    // selection it left behind is what the gesture actually did.
+    selectTextIn(addrToken)
+    await fireEvent.mouseDown(addrToken)
+    await fireEvent.mouseUp(addrToken)
+    expect(appState.filters.ip).toBe('')
+
+    // A plain click -- no selection left behind -- still filters,
+    // unchanged from before this issue.
+    clearSelection()
+    await fireEvent.mouseDown(addrToken)
+    await fireEvent.mouseUp(addrToken)
+    expect(appState.filters.ip).toBe(HOST_IP)
+  })
+
+  it('keeps keyboard activation working for filter cells (Enter), now that they are not <button>s', async () => {
+    const { container } = renderLabelledRow()
+    const addrToken = container.querySelector('.addr-btn') as HTMLElement
+    await fireEvent.keyDown(addrToken, { key: 'Enter' })
+    expect(appState.filters.ip).toBe(HOST_IP)
   })
 })
