@@ -24,11 +24,33 @@
 # the LAN -- which is the exact property MV_BIND gives up.
 set -euo pipefail
 
-MV_DIR="${MV_DIR:-/tmp/mikroview-live}"
+# Defaults are derived per checkout, not fixed, because two live checks
+# running at once used to destroy each other rather than merely clash.
+# `up` calls `down` and then `rm -rf "$MV_DIR"`, so a second run on the
+# same defaults killed the first run's server and deleted its data
+# directory mid-scenario -- surfacing as an unexplained scenario timeout
+# in the run that got trampled, with nothing in its own log to explain
+# it. Observed 2026-08-22 with several agents driving live-check from
+# separate git worktrees at the same time.
+#
+# The slot is a hash of the checkout path, so each worktree gets its own
+# directory and its own port block, stable across repeated runs in the
+# same tree -- which keeps $MV_DIR/server.log and `down` predictable
+# between invocations. An explicit MV_DIR or MV_*_PORT still wins.
+#
+# 64 slots is not a guarantee: two checkouts can hash to the same one.
+# That is what the bind check in `up` is for -- it turns a residual
+# collision into a named error instead of a silent trampling.
+MV_SLOT="$(printf '%s' "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)" | cksum | awk '{print $1 % 64}')"
+
+MV_DIR="${MV_DIR:-/tmp/mikroview-live-$MV_SLOT}"
 MV_BIND="${MV_BIND:-127.0.0.1}"
-HTTP_PORT="${MV_HTTP_PORT:-19801}"
-SYSLOG_PORT="${MV_SYSLOG_PORT:-16801}"
-SYSLOG_TLS_PORT="${MV_SYSLOG_TLS_PORT:-16803}"
+# Distinct bands so the three never overlap across slots: HTTP occupies
+# 19800-19863, syslog the even ports 16800-16926, syslog-TLS the odd
+# ports 16801-16927.
+HTTP_PORT="${MV_HTTP_PORT:-$((19800 + MV_SLOT))}"
+SYSLOG_PORT="${MV_SYSLOG_PORT:-$((16800 + MV_SLOT * 2))}"
+SYSLOG_TLS_PORT="${MV_SYSLOG_TLS_PORT:-$((16801 + MV_SLOT * 2))}"
 MV_USER="live-admin"
 MV_PASS="live-password-123"
 
@@ -117,6 +139,18 @@ build() {
   go build -buildvcs=false -o "$MV_DIR/mikroview" .
 }
 
+# True if anything is listening on the given TCP port on this host.
+# Prefers ss; falls back to a bash /dev/tcp connect probe where it is
+# absent (the container images used by live-container have no iproute2).
+port_in_use() {
+  if command -v ss >/dev/null 2>&1; then
+    ss -ltnH "sport = :$1" 2>/dev/null | grep -q .
+  else
+    (exec 3<>"/dev/tcp/127.0.0.1/$1") 2>/dev/null && exec 3>&- && return 0
+    return 1
+  fi
+}
+
 up() {
   # Always start from nothing. Without this an earlier instance keeps the
   # port, the new binary fails to bind, and the admin registration lands
@@ -124,8 +158,27 @@ up() {
   # thing under test rather than in the harness.
   down >/dev/null 2>&1 || true
   for _ in $(seq 1 20); do
-    if ! curl -fsS "${CURL_TLS[@]+"${CURL_TLS[@]}"}" "$MV_SCHEME://$MV_BIND:$HTTP_PORT/api/healthz" >/dev/null 2>&1; then break; fi
+    # --max-time, because this loop waits for our *own* previous instance
+    # to stop answering. A foreign process on the port that accepts a
+    # connection and never replies would otherwise hang each iteration on
+    # curl's default (effectively unbounded) timeout, turning a 5-second
+    # wait into minutes -- found while testing the bind check below.
+    if ! curl -fsS --max-time 2 "${CURL_TLS[@]+"${CURL_TLS[@]}"}" "$MV_SCHEME://$MV_BIND:$HTTP_PORT/api/healthz" >/dev/null 2>&1; then break; fi
     sleep 0.25
+  done
+  # Refuse to proceed if something still holds a port after our own
+  # teardown, rather than deleting $MV_DIR and racing it. Whatever is
+  # listening is not ours -- `down` above already stopped anything this
+  # slot started -- so it is another checkout that hashed to the same
+  # slot, or an unrelated process. Both cases need a human choice, and
+  # the destructive step is the very next line.
+  for port in "$HTTP_PORT" "$SYSLOG_TLS_PORT"; do
+    if port_in_use "$port"; then
+      echo "live-env: port $port is still in use after teardown." >&2
+      echo "live-env: another live check is probably running from a different checkout." >&2
+      echo "live-env: set MV_DIR and MV_HTTP_PORT/MV_SYSLOG_PORT/MV_SYSLOG_TLS_PORT to run alongside it." >&2
+      exit 1
+    fi
   done
   rm -rf "$MV_DIR"; mkdir -p "$MV_DIR/data"
   build
