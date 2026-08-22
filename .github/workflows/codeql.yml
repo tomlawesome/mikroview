@@ -1,41 +1,63 @@
 name: CodeQL
 
 # Static analysis (SAST) via GitHub's own tooling. Runs on PRs into
-# preview/main (not dev -- keeps dev's fast-feedback loop cheap; a SAST
-# pass on half-finished dev work isn't actionable the way it is once
-# something's headed toward a release) plus a weekly scan so a newly
-# published CodeQL query set still gets applied to existing code, not
-# just new changes.
+# dev/preview/main (dev included -- six workflow files under
+# .github/workflows/ were previously never scanned for injection or
+# untrusted-checkout patterns until a change landed on dev) plus a weekly
+# scan so a newly published CodeQL query set still gets applied to
+# existing code, not just new changes.
 on:
   pull_request:
-    branches: [preview, main]
+    branches: [dev, preview, main]
   push:
-    branches: [preview, main]
+    branches: [dev, preview, main]
   schedule:
     - cron: '0 6 * * 1'
   workflow_dispatch: {}
 
+concurrency:
+  group: codeql-${{ github.workflow }}-${{ github.ref }}-${{ github.event.pull_request.number || github.sha }}
+  # Cancel only a superseded pull-request commit. A push must never cancel the
+  # validation of an earlier merge: the delivery model requires trusted evidence
+  # for that exact merge SHA, and a cancelled run leaves it permanently without.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 permissions:
   contents: read
-  security-events: write
 
 jobs:
   analyze:
     name: Analyze (${{ matrix.language }})
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    permissions:
+      contents: read
+      security-events: write
     strategy:
       fail-fast: false
       matrix:
-        language: [go, javascript-typescript]
+        include:
+          # The GitHub Actions and javascript-typescript extractors are
+          # both interpreted-language extractors: build-mode must be
+          # none, there is nothing to compile. Go does not support
+          # build-mode: none at all and needs autobuild to produce
+          # anything CodeQL can analyze. Setting build-mode on the init
+          # step is sufficient in this codeql-action version -- it runs
+          # the build itself, so no separate autobuild step is needed.
+          - language: actions
+            build-mode: none
+          - language: go
+            build-mode: autobuild
+          - language: javascript-typescript
+            build-mode: none
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - uses: github/codeql-action/init@db488ddef3bf6cb639b32c2e9a7c0a7ea8271d28 # v4.37.8
         with:
           languages: ${{ matrix.language }}
-
-      - uses: github/codeql-action/autobuild@db488ddef3bf6cb639b32c2e9a7c0a7ea8271d28 # v4.37.8
+          build-mode: ${{ matrix.build-mode }}
+          queries: security-extended
 
       - uses: github/codeql-action/analyze@db488ddef3bf6cb639b32c2e9a7c0a7ea8271d28 # v4.37.8
         with:
