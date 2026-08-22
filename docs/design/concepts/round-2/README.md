@@ -40,11 +40,12 @@ is where the default drop kills it — with its intent continuing as a
 dashed ghost that never passes. Watches are gauges clamped onto flows;
 flags are buoys. The current (stream) runs underfoot and lifts to full.
 
-### H — Compass (`direction-h-compass.html`) — wild №1, radial
+### H — Halo (`direction-h-halo.html`) — wild №1, radial
 
-> Renamed from “Orbit” 2026-08-23 — the owner already has a project
-> named Orbit. Compass keeps the rose layout and, unlike Radar/Sonar,
-> stays a *passive* instrument, matching the observer invariant.
+> Renamed from “Orbit” (the owner already has an Orbit project),
+> settled as “Halo” at the owner’s pick, 2026-08-23 — the internet
+> ring *is* the halo. Radar/Sonar were rejected: they imply the
+> active scanning mikroview never does.
 
 The router is the core; the lanes orbit it; the internet is the outer
 ring that truthfully surrounds everything you own. The unplanned flow
