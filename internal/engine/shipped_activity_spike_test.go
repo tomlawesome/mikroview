@@ -55,24 +55,26 @@ func asFlagOfType(fs *flags.Store) *flags.Flag {
 	return nil
 }
 
-// TestShippedActivitySpike_ContinuousRampNeverFiresAtDefaultConfig is
-// internal/detect/characterization_test.go's test of the same name,
-// moved: #420's finding, pinned rather than fixed.
+// TestShippedActivitySpike_ContinuousRampFiresAtDefaultConfig retires
+// TestShippedActivitySpike_ContinuousRampNeverFiresAtDefaultConfig
+// (#420's finding, previously pinned rather than fixed): the owner
+// decision recorded on #420 (2026-08-22) is the freeze/bucket redesign
+// this file now implements, and this is its fail-first replacement --
+// run against the pre-redesign code it fails exactly as the old pin
+// asserted (no flag; see the old pin's own git history for that run),
+// and against the redesign it passes.
 //
-// At DefaultConfig's real values the baseline folds in the current
-// reading on every event, and the window's live count can only change by
-// +1 per call, so the baseline can never lag the observed rate by more
-// than 1/emaAlpha = 50. Firing needs the rate to clear both the absolute
-// threshold (200) and 3x the baseline, and by the time any single-source
-// ramp reaches 200 the baseline has caught up to within ~50 -- around
-// 150+ -- so the 3x condition cannot be satisfied.
-//
-// #405 ports this detector as-is and #420 stays open: the remedy is a
-// design decision (freeze the fold-in during a candidate spike, fold in
-// per window instead of per event, or retune the multiplier/alpha
-// relationship), not something a port is licensed to pick. This test is
-// what would notice if the port had quietly picked one.
-func TestShippedActivitySpike_ContinuousRampNeverFiresAtDefaultConfig(t *testing.T) {
+// At DefaultConfig's real values, the old per-event EMA fold-in could
+// never lag the observed rate by more than 1/emaAlpha = 50 events (see
+// baseline.go's emaAlpha), so by the time a ramp reached the 200-event
+// threshold the baseline had already caught up to within ~50 of it and
+// the 3x multiplier condition was unreachable. The freeze this file adds
+// (checkBaseline) breaks that chase: once the ramp's z-score first
+// clears emaMinZ -- which happens early, while the baseline is still
+// close to the source's genuine pre-ramp normal -- the baseline stops
+// moving entirely, so the gap the 3x condition needs opens up as the
+// ramp continues past it.
+func TestShippedActivitySpike_ContinuousRampFiresAtDefaultConfig(t *testing.T) {
 	fs := newTestFlagsStore(t)
 	d := newShippedActivitySpikeDefinition(t, fs, nil, Scope{})
 	ip := "198.51.100.4"
@@ -85,18 +87,27 @@ func TestShippedActivitySpike_ContinuousRampNeverFiresAtDefaultConfig(t *testing
 			ReceivedAt: t0.Add(time.Duration(i) * 10 * time.Millisecond)})
 	}
 
-	if got := asFlagOfType(fs); got != nil {
-		t.Fatalf("a continuous ramp fired at DefaultConfig -- #420 says it structurally cannot, so either the arithmetic changed or #420 is fixed; either way this pin needs updating deliberately: %+v", got)
+	got := asFlagOfType(fs)
+	if got == nil {
+		t.Fatal("expected a continuous ramp to fire at DefaultConfig once the freeze fix is in place -- see this test's own doc comment for why")
+	}
+	if got.Target != ip {
+		t.Errorf("Target = %q, want %q", got.Target, ip)
+	}
+	if got.Confidence == nil || *got.Confidence <= 0 {
+		t.Errorf("Confidence = %v, want a positive score", got.Confidence)
 	}
 
-	// The lag ceiling itself, so the reason is pinned and not just the
-	// symptom: the baseline lands within ~50 of the final count.
+	// The mechanism, not just the symptom: the baseline the ramp fired
+	// against stayed near the source's early, pre-ramp normal --
+	// nowhere close to "caught up" the way the retired pin proved it
+	// used to.
 	snap, ok := d.baselines.snapshot(ip, t0.Add(2000*10*time.Millisecond))
 	if !ok {
 		t.Fatal("expected a baseline to exist for the ramping source")
 	}
-	if snap.Value < 1900 {
-		t.Errorf("baseline = %.1f after a 2,000-event ramp, want it to have caught up to within ~50 (the 1/emaAlpha lag ceiling #420 derives)", snap.Value)
+	if snap.Value > 50 {
+		t.Errorf("baseline = %.1f after a 2,000-event ramp, want it frozen near the source's early normal (far below the old ~1,900+ catch-up point)", snap.Value)
 	}
 }
 
@@ -324,10 +335,16 @@ func TestShippedActivitySpikeScope_Classification(t *testing.T) {
 	}
 }
 
-// TestShippedActivitySpikeIsReplayable pins the classification. The
-// receipt over an ordinary corpus is expected to be zero at shipped
-// defaults, which is #420's finding restated as a number rather than a
-// failure -- and is the instrument #420 asks for to demonstrate a fix.
+// TestShippedActivitySpikeIsReplayable pins the classification, and --
+// since the owner decision on #420 rejected "replay stays on the old
+// arithmetic" as its own kind of dishonesty -- pins replay/live
+// equivalence: replaying the same continuous ramp
+// TestShippedActivitySpike_ContinuousRampFiresAtDefaultConfig proves
+// fires live must also fire here, against the same corpus, through the
+// same activitySpikeCheck. A replay that still reported zero on this
+// exact scenario would be the product contradicting itself: "fires,
+// but only if you actually run it" is not a claim replay-with-receipts
+// is allowed to make once the live detector genuinely fires.
 func TestShippedActivitySpikeIsReplayable(t *testing.T) {
 	fs := newTestFlagsStore(t)
 	d := newShippedActivitySpikeDefinition(t, fs, nil, Scope{})
@@ -337,6 +354,12 @@ func TestShippedActivitySpikeIsReplayable(t *testing.T) {
 		t.Fatalf("Replayability = (%v, %q, %v), want a replayable classification", receiptCapable, reason, ok)
 	}
 
+	// 50ms spacing (not TestShippedActivitySpike_ContinuousRampFiresAtDefaultConfig's
+	// 10ms): the corpus itself must span longer than the window
+	// (DefaultConfig's 60s) or Replay declines outright (see the span<window
+	// check below) -- 2,000 * 50ms = 100s clears that, 2,000 * 10ms's 20s
+	// would not. Still the same shape of scenario: a continuous
+	// single-source ramp with no gaps.
 	t0 := time.Now()
 	var events []store.Event
 	for i := 0; i < 2000; i++ {
@@ -350,24 +373,21 @@ func TestShippedActivitySpikeIsReplayable(t *testing.T) {
 	if res.Receipt == nil {
 		t.Fatalf("expected a receipt over a corpus longer than the window, got %+v", res)
 	}
-	if res.Receipt.EmissionCount() != 0 {
-		t.Errorf("EmissionCount = %d, want 0 -- #420 says this detector cannot fire at shipped defaults, so a non-zero replay means the arithmetic moved", res.Receipt.EmissionCount())
+	if res.Receipt.EmissionCount() == 0 {
+		t.Fatal("EmissionCount = 0, want a non-zero count -- this is the same continuous ramp that fires live at DefaultConfig (TestShippedActivitySpike_ContinuousRampFiresAtDefaultConfig); replay running different arithmetic than live is exactly what #420's owner decision rejected")
+	}
+	samples := res.Receipt.Sample()
+	if len(samples) == 0 {
+		t.Fatal("expected at least one sample emission on the receipt")
+	}
+	if s := samples[0]; s.Target != "198.51.100.4" || s.Detail == "" {
+		t.Errorf("sample[0] = %+v, want a populated Target/Detail", s)
 	}
 
-	// And the finding replay makes visible that #420's issue body does
-	// not: loosening the multiplier all the way to 1.05 still produces
-	// nothing. The multiplier is not the only thing binding -- the
-	// z-score floor (emaMinZ) binds independently, because a baseline
-	// that folds in every reading tracks the rate closely enough that
-	// the deviation never reaches two standard deviations either.
-	//
-	// That matters for whoever takes #420 on: it rules out "retune the
-	// multiplier" as a sufficient fix on its own, and points at the two
-	// remedies #420 lists that change the *cadence* of the fold-in
-	// rather than the thresholds around it. Pinned here rather than left
-	// as a note, because a future change that made a multiplier sweep
-	// start working would be exactly the signal that the cadence
-	// question had been answered.
+	// A tighter multiplier only ever needed z-score alone to bind before
+	// (see the old pin this replaced): now that entry is z-score-gated
+	// and independent of the multiplier, loosening it further changes
+	// nothing about whether this ramp fires -- it already does.
 	res2, err := d.Replay(fakeCorpus{events: events}, Params{"baselineMultiplier": 1.05})
 	if err != nil {
 		t.Fatalf("Replay (candidate): %v", err)
@@ -375,8 +395,8 @@ func TestShippedActivitySpikeIsReplayable(t *testing.T) {
 	if res2.Receipt == nil {
 		t.Fatalf("expected a receipt for the candidate sweep, got %+v", res2)
 	}
-	if res2.Receipt.EmissionCount() != 0 {
-		t.Errorf("EmissionCount = %d with baselineMultiplier=1.05, want 0 -- if a multiplier sweep now fires, the per-event fold-in cadence has changed and #420's analysis needs revisiting", res2.Receipt.EmissionCount())
+	if res2.Receipt.EmissionCount() == 0 {
+		t.Error("EmissionCount = 0 with baselineMultiplier=1.05, want a non-zero count -- a looser multiplier must not turn off a firing that already happens at the shipped multiplier")
 	}
 }
 
@@ -531,5 +551,284 @@ func TestShippedActivitySpikeVPNUnsetLeavesConfidenceUnchanged(t *testing.T) {
 	}
 	if lan.Detail != wg.Detail {
 		t.Errorf("with vpnInterfaces unset, Detail differed by interface:\n  ether1     = %q\n  wireguard1 = %q", lan.Detail, wg.Detail)
+	}
+}
+
+// TestShippedActivitySpikeFreezeHoldsBaselineDuringCandidateSpike is the
+// #420 redesign's central freeze property (design item 4): once a
+// reading's z-score against the applicable baseline clears emaMinZ,
+// every subsequent reading during that same candidate spike must leave
+// the baseline being measured against completely unmoved, not merely
+// slowed down.
+func TestShippedActivitySpikeFreezeHoldsBaselineDuringCandidateSpike(t *testing.T) {
+	fs := newTestFlagsStore(t)
+	d := newShippedActivitySpikeDefinition(t, fs,
+		Params{"threshold": 2, "warmupSamples": 100}, Scope{})
+	ip := "198.51.100.4"
+	now := time.Now()
+
+	// Warm up a steady, zero-variance baseline at rate=1.
+	for i := 0; i < 25; i++ {
+		d.checkBaseline(ip, "", "", 1, now.Add(time.Duration(i)*time.Second))
+	}
+	before, ok := d.baselines.snapshot(ip, now.Add(25*time.Second))
+	if !ok || before.Value != 1 {
+		t.Fatalf("expected a warmed-up baseline of exactly 1.0, got %+v (ok=%v)", before, ok)
+	}
+
+	// A sustained candidate spike: several elevated readings in a row,
+	// each one individually enough to have moved a non-frozen EMA
+	// baseline. The value/variance/samples the spike is measured
+	// against must not change across any of them.
+	for i := 0; i < 10; i++ {
+		d.checkBaseline(ip, "", "", 10, now.Add(time.Duration(26+i)*time.Second))
+		snap, ok := d.baselines.snapshot(ip, now.Add(time.Duration(26+i)*time.Second))
+		if !ok {
+			t.Fatalf("iteration %d: expected the baseline to still exist", i)
+		}
+		if snap.Value != before.Value || snap.Variance != before.Variance || snap.Samples != before.Samples {
+			t.Fatalf("iteration %d: baseline moved during a candidate spike -- before=%+v after=%+v", i, before, snap)
+		}
+	}
+}
+
+// TestShippedActivitySpikeBackstopForcesOneFoldInAndReconverges is the
+// #420 redesign's backstop (design item 4): a freeze held continuously
+// past activitySpikeFreezeBackstop*window forces exactly one fold-in,
+// then re-evaluates and re-freezes if the plateau is still elevated.
+// Held over many such cycles, the baseline must trend toward the
+// plateau's own rate -- spot-checked by direction, not an exact value,
+// per #420's own instruction (an exact EMA trajectory is an
+// implementation detail, not the property that matters).
+func TestShippedActivitySpikeBackstopForcesOneFoldInAndReconverges(t *testing.T) {
+	fs := newTestFlagsStore(t)
+	window := time.Second // ParamSchema's window floor is 1s (durationBound(time.Second))
+	d := newShippedActivitySpikeDefinition(t, fs,
+		Params{"threshold": 2, "window": window.String(), "warmupSamples": 100}, Scope{})
+	ip := "198.51.100.4"
+	now := time.Now()
+	const plateau = 50.0
+
+	for i := 0; i < 25; i++ {
+		d.checkBaseline(ip, "", "", 1, now.Add(time.Duration(i)*time.Second))
+	}
+	entryAt := now.Add(25 * time.Second)
+	d.checkBaseline(ip, "", "", plateau, entryAt) // entry: freeze engages
+	afterEntry, ok := d.baselines.snapshot(ip, entryAt)
+	if !ok || afterEntry.Samples != 25 {
+		t.Fatalf("expected the entry reading itself to be excluded from folding (samples still 25), got %+v (ok=%v)", afterEntry, ok)
+	}
+
+	// Repeated plateau readings well inside the backstop window (5x the
+	// 1s window = 5s) must not fold at all -- still frozen, still no
+	// backstop trigger.
+	for i, at := range []time.Duration{time.Second, 2 * time.Second, 4 * time.Second} {
+		d.checkBaseline(ip, "", "", plateau, entryAt.Add(at))
+		snap, _ := d.baselines.snapshot(ip, entryAt.Add(at))
+		if snap.Samples != 25 {
+			t.Fatalf("plateau reading %d (t+%s): expected no fold-in yet (samples still 25), got samples=%d", i, at, snap.Samples)
+		}
+	}
+
+	// The reading that crosses the backstop threshold forces exactly one
+	// fold-in.
+	backstopAt := entryAt.Add(5500 * time.Millisecond)
+	d.checkBaseline(ip, "", "", plateau, backstopAt)
+	afterBackstop, ok := d.baselines.snapshot(ip, backstopAt)
+	if !ok || afterBackstop.Samples != 26 {
+		t.Fatalf("expected exactly one forced fold-in at the backstop (samples=26), got %+v (ok=%v)", afterBackstop, ok)
+	}
+	if afterBackstop.Value <= afterEntry.Value {
+		t.Fatalf("expected the backstop's forced fold-in to move the baseline toward the plateau, got %.4f (was %.4f)", afterBackstop.Value, afterEntry.Value)
+	}
+
+	// Many more backstop cycles, spaced comfortably past the 5s backstop
+	// window each time: the baseline must keep trending toward the
+	// plateau rate, never away from it.
+	last := afterBackstop.Value
+	at := backstopAt
+	for cycle := 0; cycle < 20; cycle++ {
+		at = at.Add(5500 * time.Millisecond)
+		d.checkBaseline(ip, "", "", plateau, at)
+		snap, _ := d.baselines.snapshot(ip, at)
+		if snap.Value < last {
+			t.Fatalf("cycle %d: baseline regressed (%.4f -> %.4f), want monotonic convergence toward the plateau", cycle, last, snap.Value)
+		}
+		last = snap.Value
+	}
+	if last <= afterBackstop.Value {
+		t.Fatalf("expected the baseline to have moved further toward the plateau over 20 more cycles: after first backstop=%.4f, after 20 more=%.4f", afterBackstop.Value, last)
+	}
+	if last >= plateau {
+		t.Fatalf("baseline = %.4f overshot the plateau rate %.1f -- an EMA fold-in can approach but never exceed a constant target", last, plateau)
+	}
+}
+
+// TestShippedActivitySpikeThawResumesNormalFoldInWithNoJump is the
+// #420 redesign's primary thaw path (design item 4): once the rate
+// drops back under the absolute threshold, fold-in resumes immediately,
+// as one ordinary small EMA step -- not a jump to the just-observed
+// value, and not a lingering freeze.
+func TestShippedActivitySpikeThawResumesNormalFoldInWithNoJump(t *testing.T) {
+	fs := newTestFlagsStore(t)
+	d := newShippedActivitySpikeDefinition(t, fs,
+		Params{"threshold": 10, "warmupSamples": 100}, Scope{})
+	ip := "198.51.100.4"
+	now := time.Now()
+
+	for i := 0; i < 25; i++ {
+		d.checkBaseline(ip, "", "", 1, now.Add(time.Duration(i)*time.Second))
+	}
+	entryAt := now.Add(25 * time.Second)
+	d.checkBaseline(ip, "", "", 50, entryAt) // entry: freeze engages, rate=50 >= threshold=10
+	frozen, ok := d.baselines.snapshot(ip, entryAt)
+	if !ok || frozen.Samples != 25 || frozen.Value != 1 {
+		t.Fatalf("expected the entry reading excluded from folding (samples=25, value=1), got %+v (ok=%v)", frozen, ok)
+	}
+
+	// rate=5 is below the absolute threshold (10) -- thaw, and this
+	// reading itself folds in normally (the ordinary per-event cadence
+	// resumes on the very reading that thaws).
+	thawAt := entryAt.Add(time.Second)
+	d.checkBaseline(ip, "", "", 5, thawAt)
+	thawed, ok := d.baselines.snapshot(ip, thawAt)
+	if !ok {
+		t.Fatal("expected the baseline to still exist after thaw")
+	}
+	if thawed.Samples != 26 {
+		t.Fatalf("expected exactly one fold-in on the thawing reading (samples=26), got samples=%d", thawed.Samples)
+	}
+	wantValue, wantVariance := emaUpdate(5, frozen.Value, frozen.Variance)
+	if thawed.Value != wantValue || thawed.Variance != wantVariance {
+		t.Fatalf("expected an ordinary emaUpdate(5, %.4f, %.4f) step = (%.4f, %.4f), got (%.4f, %.4f)",
+			frozen.Value, frozen.Variance, wantValue, wantVariance, thawed.Value, thawed.Variance)
+	}
+	if thawed.Value >= 5 {
+		t.Fatalf("baseline = %.4f jumped to (or past) the thawing reading's own value 5 -- want a small alpha-weighted step, not a jump", thawed.Value)
+	}
+
+	// Fold-in keeps resuming normally afterward -- not a one-off.
+	d.checkBaseline(ip, "", "", 1, thawAt.Add(time.Second))
+	afterNext, ok := d.baselines.snapshot(ip, thawAt.Add(time.Second))
+	if !ok || afterNext.Samples != 27 {
+		t.Fatalf("expected normal fold-in to continue after thaw (samples=27), got %+v (ok=%v)", afterNext, ok)
+	}
+}
+
+// TestShippedActivitySpikeImmatureBucketFallsBackToGlobalEMA is design
+// item 3's "mature bucket, else warm-up fallback": a source with no
+// hour-bucket history yet (the ordinary case for every source until it
+// has lived through at least one full prior day at some hour) must be
+// judged against the fallback EMA, exactly as before the #420 redesign.
+func TestShippedActivitySpikeImmatureBucketFallsBackToGlobalEMA(t *testing.T) {
+	fs := newTestFlagsStore(t)
+	d := newShippedActivitySpikeDefinition(t, fs,
+		Params{"threshold": 2, "warmupSamples": 20}, Scope{})
+	ip := "198.51.100.4"
+	now := time.Now()
+
+	for i := 0; i < 25; i++ {
+		d.checkBaseline(ip, "", "", 1, now.Add(time.Duration(i)*time.Second))
+	}
+	fireAt := now.Add(25 * time.Second)
+	d.checkBaseline(ip, "", "", 10, fireAt)
+
+	f := asFlagOfType(fs)
+	if f == nil {
+		t.Fatal("expected a flag from the fallback path")
+	}
+	if want := "10 events in 1m0s vs a baseline of 1.0 for this host (based on 20 samples, 6.0σ above normal)"; f.Detail != want {
+		t.Errorf("Detail = %q, want the fallback-style template %q (not the mature-bucket template, which names an hour and a day count)", f.Detail, want)
+	}
+
+	key := activityBucketKey(ip, fireAt.Hour())
+	if _, ok := d.buckets.snapshot(key, fireAt); ok {
+		t.Error("expected no hour-bucket state to exist at all for a source that has never lived through a day boundary")
+	}
+}
+
+// TestShippedActivitySpike_BucketLearnsAcrossNights is the backup-shape
+// scenario the #420 redesign exists for (design item 1/3): sustained
+// elevated traffic recurring at the same hour on two simulated calendar
+// days, with time driven entirely through event timestamps (never a
+// wall-clock read). Night one has no same-hour history yet, so it is
+// judged against the fallback EMA and fires. By night two, the hour's
+// own bucket has learned night one's peak and become the applicable
+// baseline -- night two's identical traffic is that bucket's own normal,
+// so it does not fire.
+func TestShippedActivitySpike_BucketLearnsAcrossNights(t *testing.T) {
+	fs := newTestFlagsStore(t)
+	d := newShippedActivitySpikeDefinition(t, fs,
+		Params{"threshold": 20, "window": (5 * time.Second).String(), "warmupSamples": 50}, Scope{})
+	ip := "198.51.100.4"
+
+	// A fixed, explicit UTC day-one 22:00 -- every subsequent timestamp
+	// is derived from this by simple addition, never time.Now().
+	night1 := time.Date(2024, 3, 1, 22, 0, 0, 0, time.UTC)
+	daytime := night1.Add(-10 * time.Hour) // 12:00 the same day
+
+	// Daytime baseline: ordinary, low, steady traffic at a different
+	// hour, spaced past the window so each reading is a clean rate=1 --
+	// what night one's spike is judged against.
+	for i := 0; i < 10; i++ {
+		d.Evaluate(store.Event{SrcIP: ip, DstIP: "192.168.1.1", DstPort: 80, ConnState: "new",
+			ReceivedAt: daytime.Add(time.Duration(i) * 6 * time.Second)})
+	}
+
+	burst := func(start time.Time) {
+		for i := 0; i < 30; i++ {
+			d.Evaluate(store.Event{SrcIP: ip, DstIP: "192.168.1.1", DstPort: 80, ConnState: "new",
+				ReceivedAt: start.Add(time.Duration(i) * 100 * time.Millisecond)})
+		}
+	}
+
+	// Night one: sustained elevated traffic at 22:00 -- no history for
+	// this hour yet, judged against the fallback EMA, fires.
+	burst(night1)
+	if got := asFlagOfType(fs); got == nil {
+		t.Fatal("expected night one's spike to fire against the fallback EMA")
+	}
+	if _, ok := d.buckets.snapshot(activityBucketKey(ip, 22), night1); ok {
+		t.Error("expected the hour-22 bucket to still not exist mid-way through night one (it only ever folds at the next day's rollover)")
+	}
+
+	// Thaw before the day rolls over, still within hour 22 on day one --
+	// otherwise rollHourBucket would see the source still frozen at the
+	// day boundary and withhold night one's fold-in entirely (see that
+	// function's own doc comment on why an active freeze withholds it).
+	d.Evaluate(store.Event{SrcIP: ip, DstIP: "192.168.1.1", DstPort: 80, ConnState: "new",
+		ReceivedAt: night1.Add(10 * time.Second)})
+
+	fs.Clear(asFlagOfType(fs).ID, night1.Add(11*time.Second))
+
+	// Night two: the identical burst, 24 hours later. The first event of
+	// this burst is also the first hour-22 event since the day rolled
+	// over, so it is what triggers rollHourBucket to fold night one's
+	// peak (30) into the bucket before this same event is judged.
+	night2 := night1.Add(24 * time.Hour)
+	burst(night2)
+
+	bucketSnap, ok := d.buckets.snapshot(activityBucketKey(ip, 22), night2)
+	if !ok || !bucketSnap.Ready {
+		t.Fatalf("expected the hour-22 bucket to be mature by night two, got %+v (ok=%v)", bucketSnap, ok)
+	}
+	if bucketSnap.Value != 30 {
+		t.Errorf("hour-22 bucket value = %.1f, want 30 (night one's peak windowed rate)", bucketSnap.Value)
+	}
+	// asFlagOfType returns night one's flag regardless -- clearing does
+	// not delete it, only marks it Cleared (see the FieldsRefireClearRevive
+	// pin above for that same revive-on-refire shape). Not firing on
+	// night two means that flag stays cleared, with no new firing to
+	// revive it: Count/LastSeen must be exactly what night one left them
+	// at, not moved forward by any night-two firing.
+	got := asFlagOfType(fs)
+	if got == nil {
+		t.Fatal("expected night one's (cleared) flag to still exist")
+	}
+	if !got.Cleared {
+		t.Fatalf("expected night two's identical traffic to be judged against the now-mature hour-22 bucket and NOT fire (which would have revived the cleared flag), got %+v", got)
+	}
+	if got.Count != 11 || !got.LastSeen.Equal(night1.Add(2900*time.Millisecond)) {
+		t.Fatalf("expected the flag untouched by night two (Count=11, LastSeen=night one's last burst event), got Count=%d LastSeen=%v", got.Count, got.LastSeen)
 	}
 }
