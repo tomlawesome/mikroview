@@ -40,7 +40,11 @@ is where the default drop kills it — with its intent continuing as a
 dashed ghost that never passes. Watches are gauges clamped onto flows;
 flags are buoys. The current (stream) runs underfoot and lifts to full.
 
-### H — Orbit (`direction-h-orbit.html`) — wild №1, radial
+### H — Compass (`direction-h-compass.html`) — wild №1, radial
+
+> Renamed from “Orbit” 2026-08-23 — the owner already has a project
+> named Orbit. Compass keeps the rose layout and, unlike Radar/Sonar,
+> stays a *passive* instrument, matching the observer invariant.
 
 The router is the core; the lanes orbit it; the internet is the outer
 ring that truthfully surrounds everything you own. The unplanned flow
