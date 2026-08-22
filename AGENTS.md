@@ -310,6 +310,39 @@ hand-over-file design that had been implemented and then removed, so the
 issue actively misinformed anyone reading it -- the exact failure #97
 was about, repeated.
 
+## UX and UI design is Fable 5's work
+
+**Any UX or UI *design* work on mikroview is done by Fable 5.** This is a
+deliberate exception to the global default of fanning work out to cheaper
+models, and it holds regardless of how small the surface looks.
+
+What counts as design here: choosing an interaction model, laying out a
+screen or a family of screens, deciding what a control affords and how it
+is discovered, wording what the interface tells the operator, and the
+storyboard rounds #385's phase 2 is built around. If the question is
+"what should this feel like to use", it is design.
+
+What does not: implementing a design already decided, wiring an
+already-specified control, styling to match an existing pattern, or
+fixing a defect in shipped UI. Those are ordinary implementation and
+follow the normal delegation rules.
+
+**Why.** The interface is the product here -- a firewall-log
+interrogation helper is the sense its operator can make of the log, and
+that sense is made or lost in the interface. Design mistakes are also the
+expensive kind: an interaction model chosen badly is inherited by every
+screen built on it and by the next feature that has to fit alongside, and
+it costs a redesign rather than a patch. #439 is the worked example --
+the first model proposed was rejected as fiddly, and the replacement came
+from design judgement rather than from process.
+
+**How to apply.** When work turns out to need a design decision rather
+than an implementation one, say so and stop rather than deciding it in
+passing; a design decision made incidentally is still a design decision,
+and this rule is about where it gets made. Record the decision on the
+issue when it lands (the body, per the issues rule below), so the next
+person implements against a written model rather than re-deriving it.
+
 ## Run it before you ship it
 
 Every change that touches the server, the UI or the CLI gets a live check
