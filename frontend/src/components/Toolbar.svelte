@@ -94,16 +94,26 @@
            one row with a count, so a host retrying the same thing four
            hundred times costs one line. An option on the live view, not
            a different view -- every event is still there, and the row
-           opens to show them. -->
-      <button
-        class:active={groupModeState.enabled}
-        onclick={() => groupModeState.toggle()}
-        title={groupModeState.enabled
-          ? 'Show every event on its own row'
-          : 'Collapse repeats of the same connection into one row with a count'}
-      >
-        Group
-      </button>
+           opens to show them.
+
+           Hidden at phone width, same as the display-duration select
+           above. LiveTable renders EventCardMobile there, which has no
+           grouped branch, so the button took its active styling, flipped
+           its title, persisted the preference to localStorage, and
+           changed nothing on screen (#381). Grouping earns its keep by
+           collapsing a dense grid; a single-column card list is already
+           skimmable, so the control is removed rather than reimplemented. -->
+      {#if !viewportState.isMobile}
+        <button
+          class:active={groupModeState.enabled}
+          onclick={() => groupModeState.toggle()}
+          title={groupModeState.enabled
+            ? 'Show every event on its own row'
+            : 'Collapse repeats of the same connection into one row with a count'}
+        >
+          Group
+        </button>
+      {/if}
 
       <button onclick={() => appState.clearBuffer()} title="Clear the local event buffer">
         Clear

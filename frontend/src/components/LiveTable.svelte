@@ -164,6 +164,20 @@
     openGroups = next
   }
 
+  // An expansion does not outlive the group it expanded (#381, owner
+  // decision 2026-08-22): when a group's key leaves the rendered window
+  // -- its traffic aged out, a filter excluded it, or grouping was
+  // turned off -- its open state goes with it, so the same connection
+  // recurring later renders collapsed rather than silently pre-expanded
+  // against a set of events the operator never chose to open. One
+  // reactive prune covers every eviction path; the write is guarded so
+  // an unchanged set does not re-trigger the effect.
+  $effect(() => {
+    const present = new Set(groups.map((g) => g.key))
+    const kept = [...openGroups].filter((k) => present.has(k))
+    if (kept.length !== openGroups.size) openGroups = new Set(kept)
+  })
+
   function deviceName(id: string): string {
     return deviceNames.get(id) ?? id
   }
@@ -267,7 +281,17 @@
               expanded={openGroups.has(group.key)}
               onToggle={() => toggleGroup(group.key)}
             />
-            {#if openGroups.has(group.key)}
+            <!-- Gated on group.count > 1 as well as the open flag, matching
+                 the `expandable` predicate on the toggle above. The two used
+                 to be written independently, and `groups` is $derived from
+                 `rendered` while `openGroups` is not, so they diverged the
+                 moment a group's count fell to 1 with its drawer open (a
+                 filter narrowing to one member, or older members sliding out
+                 of MAX_RENDERED_ROWS). The toggle disappeared while the
+                 drawer stayed, rendering the one remaining event twice --
+                 once as itself and once as a child of itself -- with no
+                 control left to collapse it (#381). -->
+            {#if group.count > 1 && openGroups.has(group.key)}
               {#each drawerEvents(group) as member (member.id)}
                 <EventRow
                   event={member}

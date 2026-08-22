@@ -72,7 +72,13 @@ export type View =
 // together cover both "instant" and "actually complete" filtering.
 class AppState {
   view = $state<View>('live')
-  events = $state<ClientEvent[]>([])
+  // $state.raw, not $state: every write to this array replaces it whole
+  // (setInitialEvents, appendUnseen and flushIncoming all reassign rather
+  // than mutate), so the deep per-element proxy a plain $state would build
+  // over 20,000 events buys no reactivity that is ever used and taxes
+  // every read in the ageFiltered -> liveFiltered -> rendered chain, which
+  // re-runs on each flush and on each 250 ms tick (#381).
+  events = $state.raw<ClientEvent[]>([])
   filters = $state<Filters>(emptyFilters())
   devices = $state<Device[]>([])
   stats = $state<Stats | null>(null)
@@ -112,7 +118,9 @@ class AppState {
   // re-applies the *current* filters to it, so narrowing and widening the
   // filter still work while frozen, but only ever within what was already
   // captured. An event that arrives after the freeze can never appear.
-  frozenPool = $state<ClientEvent[] | null>(null)
+  // Raw for the same reason as `events` above: replaced whole, never
+  // mutated in place.
+  frozenPool = $state.raw<ClientEvent[] | null>(null)
 
   // Updated periodically by App.svelte (see tick()) so the age-based cutoff
   // in filteredEvents actually re-evaluates over time, not just when the
@@ -335,6 +343,16 @@ class AppState {
     this.pendingBuffer = []
     this.pendingCount = 0
     this.incomingBuffer = []
+    // Release the #232 freeze snapshot too, or Clear is a no-op on screen
+    // whenever autoscroll is off: the buffer empties and the table keeps
+    // rendering the frozen pool, with nothing to explain why and no way
+    // out but toggling autoscroll back on (#381).
+    //
+    // Nulling it is enough on its own. LiveTable's freeze effect reads
+    // frozenPool inside the branch it takes while autoscroll is false, so
+    // this write re-triggers that effect, which re-enters the same branch,
+    // finds no pool, and captures a fresh (now empty) one.
+    this.frozenPool = null
   }
 
   resetFilters() {
