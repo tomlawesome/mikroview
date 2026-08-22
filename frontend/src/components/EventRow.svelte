@@ -83,22 +83,39 @@
   // the same element with no selection left behind, or Enter/Space -- to
   // `run`. Every click-to-filter cell below uses this instead of each
   // separately re-deriving the same three handlers.
-  function activator(run: () => void) {
+  //
+  // A Svelte action (use:activate) rather than a spread of handler
+  // props, and that is a licensing decision as much as a style one: an
+  // element spread compiles through svelte's set_attributes runtime,
+  // which imports clsx -- pulling a package into the shipped bundle
+  // that nothing here uses, and one whose exports map hides its
+  // package.json from tools/licenses/generate-notices.mjs, failing the
+  // attribution gate. An action attaches the same listeners directly to
+  // the node and compiles to none of that.
+  function activate(node: HTMLElement, run: () => void) {
+    const onmousedown = (e: MouseEvent) => {
+      pressedTarget = e.currentTarget
+    }
+    const onmouseup = (e: MouseEvent) => {
+      const startedHere = pressedTarget === e.currentTarget
+      pressedTarget = null
+      if (!startedHere) return
+      if (selectionWithinRow()) return
+      run()
+    }
+    const onkeydown = (e: KeyboardEvent) => {
+      if (e.key !== 'Enter' && e.key !== ' ') return
+      e.preventDefault()
+      run()
+    }
+    node.addEventListener('mousedown', onmousedown)
+    node.addEventListener('mouseup', onmouseup)
+    node.addEventListener('keydown', onkeydown)
     return {
-      onmousedown: (e: MouseEvent) => {
-        pressedTarget = e.currentTarget
-      },
-      onmouseup: (e: MouseEvent) => {
-        const startedHere = pressedTarget === e.currentTarget
-        pressedTarget = null
-        if (!startedHere) return
-        if (selectionWithinRow()) return
-        run()
-      },
-      onkeydown: (e: KeyboardEvent) => {
-        if (e.key !== 'Enter' && e.key !== ' ') return
-        e.preventDefault()
-        run()
+      destroy() {
+        node.removeEventListener('mousedown', onmousedown)
+        node.removeEventListener('mouseup', onmouseup)
+        node.removeEventListener('keydown', onkeydown)
       },
     }
   }
@@ -137,7 +154,7 @@
       role="button"
       tabindex="0"
       title="Filter to device: {deviceName}"
-      {...activator(() => appState.setFilter('device', event.deviceId))}
+      use:activate={() => appState.setFilter('device', event.deviceId)}
     >
       {deviceName}
     </span>
@@ -149,7 +166,7 @@
     role="button"
     tabindex="0"
     title="Filter to action: {event.action}"
-    {...activator(() => appState.setFilter('action', event.action))}
+    use:activate={() => appState.setFilter('action', event.action)}
   >
     <ActionBadge action={event.action} />
   </span>
@@ -160,7 +177,7 @@
       role="button"
       tabindex="0"
       title="Filter to chain: {event.chain}"
-      {...activator(() => appState.setFilter('chain', event.chain))}
+      use:activate={() => appState.setFilter('chain', event.chain)}
     >
       {event.chain}
     </span>
@@ -175,7 +192,7 @@
         role="button"
         tabindex="0"
         title={event.srcHostName ? `${event.srcHostName} — filter to IP: ${event.srcIp}` : `Filter to IP: ${event.srcIp}`}
-        {...activator(() => appState.setFilter('ip', event.srcIp ?? ''))}
+        use:activate={() => appState.setFilter('ip', event.srcIp ?? '')}
       >
         {srcFlag ? `${srcFlag} ` : ''}{event.srcHostName || event.srcIp}
       </span>
@@ -197,7 +214,7 @@
         title={event.srcPortName
           ? `${event.srcPortName} — filter to port: ${event.srcPort}`
           : `Filter to port: ${event.srcPort}`}
-        {...activator(() => appState.setFilter('port', String(event.srcPort)))}
+        use:activate={() => appState.setFilter('port', String(event.srcPort))}
       >
         {event.srcPortName || event.srcPort}
       </span>
@@ -217,7 +234,7 @@
         role="button"
         tabindex="0"
         title={event.dstHostName ? `${event.dstHostName} — filter to IP: ${event.dstIp}` : `Filter to IP: ${event.dstIp}`}
-        {...activator(() => appState.setFilter('ip', event.dstIp ?? ''))}
+        use:activate={() => appState.setFilter('ip', event.dstIp ?? '')}
       >
         {dstFlag ? `${dstFlag} ` : ''}{event.dstHostName || event.dstIp}
       </span>
@@ -239,7 +256,7 @@
         title={event.dstPortName
           ? `${event.dstPortName} — filter to port: ${event.dstPort}`
           : `Filter to port: ${event.dstPort}`}
-        {...activator(() => appState.setFilter('port', String(event.dstPort)))}
+        use:activate={() => appState.setFilter('port', String(event.dstPort))}
       >
         {event.dstPortName || event.dstPort}
       </span>
@@ -267,7 +284,7 @@
       role="button"
       tabindex="0"
       title="Filter to protocol: {event.protocol}"
-      {...activator(() => appState.setFilter('protocol', event.protocol ?? ''))}
+      use:activate={() => appState.setFilter('protocol', event.protocol ?? '')}
     >
       {event.protocol}
     </span>
@@ -284,7 +301,7 @@
         role="button"
         tabindex="0"
         title={event.ruleName ? `${event.ruleName} — filter to rule: ${event.ruleLabel}` : `Filter to rule: ${event.ruleLabel}`}
-        {...activator(() => (appState.filters = { ...appState.filters, rule: event.ruleLabel, ruleRegex: false }))}
+        use:activate={() => (appState.filters = { ...appState.filters, rule: event.ruleLabel, ruleRegex: false })}
       >
         {event.ruleName || event.ruleLabel}
       </span>
