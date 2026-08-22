@@ -194,6 +194,18 @@ rewritten.
 
 ### Fixed
 
+- **A definition update touching only `enabled` or only `scope` could
+  silently revert a concurrent change to the other field** (#494, a
+  narrower survivor of #380 item 4 that outlived the engine port).
+  `handleDefinitionsUpdate` filled in whichever of the two a request left
+  unset from a snapshot taken *before* the client-paced request-body read
+  -- an admin's enabled-only toggle, mid-flight while another admin's
+  scope-only change landed, would write its own stale pre-read scope back
+  over that change. Fixed by re-reading fresh state and writing under one
+  lock spanning both, the same get-fresh-state/mutate/write shape
+  `engine.DefinitionsStore.UpdateExpectation` and `RecordObservation`
+  already used for the broader case #380 item 4 originally reported.
+
 - **A router with `remote-log-format=syslog` set and a non-UTC system
   clock had every event's displayed time off by its clock's offset**
   (#379). RouterOS's BSD syslog output carries no timezone at all --
