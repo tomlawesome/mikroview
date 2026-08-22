@@ -12,8 +12,12 @@ import (
 
 // Envelope is the outer syslog wrapper around a RouterOS log message.
 type Envelope struct {
-	Facility  int // -1 if absent/unparseable
-	Severity  int // -1 if absent/unparseable
+	Facility int // -1 if absent/unparseable
+	Severity int // -1 if absent/unparseable
+	// Timestamp is the device's self-reported time, corrected for its
+	// inferred UTC offset (see resolveOffset) rather than taken as literal
+	// UTC. It falls back to recvTime when no BSD timestamp is present or
+	// parseable.
 	Timestamp time.Time
 	Hostname  string
 	Message   string
@@ -64,7 +68,8 @@ func ParseEnvelope(raw []byte, recvTime time.Time) Envelope {
 
 	if len(rest) >= len(bsdTimeLayout) {
 		if ts, err := time.Parse(bsdTimeLayout, rest[:len(bsdTimeLayout)]); err == nil {
-			env.Timestamp = inferYear(ts, recvTime)
+			naive := inferYear(ts, recvTime)
+			env.Timestamp = naive.Add(resolveOffset(recvTime.Sub(naive)))
 			rest = strings.TrimPrefix(rest[len(bsdTimeLayout):], " ")
 
 			if sp := strings.IndexByte(rest, ' '); sp > 0 {
@@ -91,4 +96,41 @@ func inferYear(ts, recvTime time.Time) time.Time {
 		candidate = candidate.AddDate(1, 0, 0)
 	}
 	return candidate
+}
+
+// resolveOffset infers the device's UTC offset from the gap between its
+// self-reported wall-clock time and recvTime, instead of assuming that gap
+// is zero (#379 item 4). RouterOS's remote-log-format=syslog output is bare
+// RFC3164 -- "Jan 15 14:00:00" -- and carries no timezone at all, so a
+// router whose system clock is set to a non-UTC zone previously had its
+// local wall-clock digits taken as if they already were UTC: BST (UTC+1)
+// logging 14:00 the instant a message arrived at 13:00 UTC produced a
+// Timestamp an hour ahead of the moment it actually happened.
+//
+// recvTime is a trusted local clock, so the gap between it and the naive
+// (assumed-UTC) candidate is itself evidence of the device's real offset.
+// Every real-world UTC offset lands on a 15-minute boundary between -12:00
+// and +14:00 (whole-hour zones down to quarter-hour ones like Kathmandu's
+// +05:45), so rounding the gap to the nearest 15 minutes recovers a stable
+// device's actual offset without needing an operator to declare it
+// per-device. This is the same technique inferYear already uses to recover
+// the year a BSD timestamp omits -- resolving what the wire didn't send
+// from the one clock actually known to be right.
+//
+// A gap outside that real-world range isn't a timezone: it means the
+// device's absolute clock is wrong by more than an offset (unsynced or
+// stopped), which is the pre-existing, separate failure mode
+// store.Event.Time's doc comment already warns about. That case is left
+// uncorrected rather than guessed at.
+func resolveOffset(gap time.Duration) time.Duration {
+	const (
+		quantum         = 15 * time.Minute
+		maxOffsetAhead  = 14 * time.Hour
+		maxOffsetBehind = -12 * time.Hour
+	)
+	rounded := gap.Round(quantum)
+	if rounded > maxOffsetAhead || rounded < maxOffsetBehind {
+		return 0
+	}
+	return rounded
 }

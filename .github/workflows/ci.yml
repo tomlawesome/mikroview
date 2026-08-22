@@ -70,6 +70,24 @@ jobs:
           npm ci
           npx svelte-check --tsconfig ./tsconfig.app.json
 
+      # Real build, not a proxy for one -- the size budget just below
+      # measures this output, and a stale or missing dist/ would make
+      # that check either fail for the wrong reason or, worse, silently
+      # measure nothing. See check-bundle-budget.mjs for why "nothing to
+      # measure" is a failure rather than a skip.
+      - name: Build frontend
+        run: |
+          cd frontend
+          npm run build
+
+      # CI size budget for the shipped JS bundle (#462). README.md
+      # quotes this figure and it went 3-5x stale (#382) before anything
+      # measured the real build to check it. Budget and rationale live
+      # in the script, not here, so there is one place to update both
+      # together.
+      - name: JS bundle size budget
+        run: node frontend/scripts/check-bundle-budget.mjs
+
       # Licence compliance, not tidiness. Every Go module linked into the
       # binary and every frontend package bundled into the embedded
       # assets ships under a licence (MIT, BSD-3-Clause, ISC,
