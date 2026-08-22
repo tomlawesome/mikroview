@@ -13,6 +13,12 @@
   import type { FirewallEvent } from '../lib/types'
   import IpInvestigateButton from './IpInvestigateButton.svelte'
   import PortInvestigateButton from './PortInvestigateButton.svelte'
+  // #439: raw-value copy per field, mobile's answer to desktop's
+  // hover-revealed CopyButton in EventRow.svelte. There's no hover here
+  // (touch), so unlike EventRow's, these are just always shown -- see
+  // CopyButton.svelte's own doc comment for why that's the default
+  // rather than something this file has to turn back on.
+  import CopyButton from './CopyButton.svelte'
 
   let { event, deviceName, onClose }: { event: FirewallEvent; deviceName: string; onClose: () => void } =
     $props()
@@ -56,7 +62,10 @@
   <div class="rows">
     <div class="row">
       <span class="k">Device</span>
-      <button class="v link" onclick={() => filterAndClose('device', event.deviceId)}>{deviceName}</button>
+      <span class="v-group">
+        <button class="v link" onclick={() => filterAndClose('device', event.deviceId)}>{deviceName}</button>
+        <CopyButton value={event.deviceId} label="device id" />
+      </span>
     </div>
     {#if event.chain}
       <div class="row">
@@ -71,6 +80,7 @@
           <button class="v link" onclick={() => filterAndClose('ip', event.srcIp ?? '')}>
             {event.srcHostName || event.srcIp}
           </button>
+          <CopyButton value={event.srcIp} label="source IP" />
           {#if isPublicIp(event.srcIp)}<IpInvestigateButton ip={event.srcIp} />{/if}
         </span>
       </div>
@@ -82,6 +92,7 @@
           <button class="v link" onclick={() => filterAndClose('port', String(event.srcPort))}>
             {event.srcPortName || event.srcPort}
           </button>
+          <CopyButton value={String(event.srcPort)} label="source port" />
           {#if lookupPort(event.srcPort)}<PortInvestigateButton port={event.srcPort} />{/if}
         </span>
       </div>
@@ -93,6 +104,7 @@
           <button class="v link" onclick={() => filterAndClose('ip', event.dstIp ?? '')}>
             {event.dstHostName || event.dstIp}
           </button>
+          <CopyButton value={event.dstIp} label="destination IP" />
           {#if isPublicIp(event.dstIp)}<IpInvestigateButton ip={event.dstIp} />{/if}
         </span>
       </div>
@@ -104,6 +116,7 @@
           <button class="v link" onclick={() => filterAndClose('port', String(event.dstPort))}>
             {event.dstPortName || event.dstPort}
           </button>
+          <CopyButton value={String(event.dstPort)} label="destination port" />
           {#if lookupPort(event.dstPort)}<PortInvestigateButton port={event.dstPort} />{/if}
         </span>
       </div>
@@ -127,15 +140,18 @@
     {#if event.ruleLabel}
       <div class="row">
         <span class="k">Rule</span>
-        <button
-          class="v link"
-          onclick={() => {
-            appState.filters = { ...appState.filters, rule: event.ruleLabel, ruleRegex: false }
-            onClose()
-          }}
-        >
-          {event.ruleName || event.ruleLabel}
-        </button>
+        <span class="v-group">
+          <button
+            class="v link"
+            onclick={() => {
+              appState.filters = { ...appState.filters, rule: event.ruleLabel, ruleRegex: false }
+              onClose()
+            }}
+          >
+            {event.ruleName || event.ruleLabel}
+          </button>
+          <CopyButton value={event.ruleLabel} label="rule label" />
+        </span>
       </div>
     {/if}
   </div>

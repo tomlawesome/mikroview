@@ -31,6 +31,9 @@
   import UsersOverlay from './components/UsersOverlay.svelte'
   import SSOLinkOverlay from './components/SSOLinkOverlay.svelte'
   import TokensOverlay from './components/TokensOverlay.svelte'
+  // #439's "copied" confirmation -- see lib/toast.svelte.ts for why this
+  // is new rather than reusing something that already existed.
+  import Toast from './components/Toast.svelte'
 
   // Any polling call that fails with a 401 (an expired or reset-
   // invalidated session -- see internal/api's sessionUser) bounces to
@@ -183,6 +186,7 @@
   <UsersOverlay />
   <SSOLinkOverlay />
   <TokensOverlay />
+  <Toast />
 {/if}
 
 <style>
