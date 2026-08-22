@@ -179,6 +179,43 @@ rewritten.
 
 ### Fixed
 
+- **One transient accept error no longer permanently deafens the HTTPS
+  listener** (#380 item 3). `tlssniff.Listener`'s accept loop treated
+  every `Accept` error as terminal -- hitting the process's
+  file-descriptor limit (EMFILE/ENFILE, surfaced as a temporary
+  `net.Error`) killed the loop's goroutine for good, and `http.Server.
+  Serve`, which retries a temporary error by calling `Accept` again
+  following its own documented contract, then blocked forever on a
+  listener with nothing left to ever deliver a connection or another
+  error. The web UI and the whole API stopped accepting connections
+  permanently while the process stayed up and logged nothing further.
+  Now mirrors `internal/syslog`'s existing capped-exponential-backoff
+  accept retry: a temporary error is retried, and only a genuinely fatal
+  one ends the loop.
+
+- **`maxTCPConnections` is safe for concurrent access** (#380 item 6).
+  It was a plain `int` read by `ServeTCP`'s accept loop on every
+  iteration; a test shrinking it to exercise the rejection path raced
+  that read with no Go-level happens-before edge between them --
+  `go test -race -count=2 ./internal/syslog/` failed 3/3 with a data
+  race. Now an `atomic.Int64`, the same fix already applied to its two
+  neighbours (`maxTCPConnectionsPerSource`, `tcpIdleTimeoutNS`) and to
+  the same bug class in #45.
+
+- **Postgres match-log timestamps come back in UTC, not the server
+  process's local zone** (#380 item 7). `pgx` v5's default
+  `TimestamptzCodec` scans a `timestamptz` using `ScanLocation`
+  `time.Local`, which doesn't change the instant a record's `FirstSeen`/
+  `LastSeen` represent but does change how it serializes -- `+01:00`
+  instead of `Z` on a non-UTC host -- so a record's own timestamps and
+  its embedded event's `receivedAt` (decoded from JSON, always UTC)
+  rendered as the same instant two different ways in one response body,
+  and a consumer keying or grouping on the timestamp string (the
+  birdcage correlation case #29 exists for) matched on the file backend
+  and failed on Postgres. `PostgresStore.Query` now normalizes both
+  fields with `.UTC()` after `Scan`, matching every other timestamp
+  mikroview emits.
+
 - **The watchlist stops claiming "nothing anywhere is watching this"
   when it has not read every router's rules** (#367). Coverage answers
   from the filter tables routers have pushed, and the push is optional —
