@@ -34,9 +34,25 @@ type RawMessage struct {
 // connections -- misbehaving devices, or a scan of the LAN -- would each
 // hold a goroutine and a socket open indefinitely.
 //
-// A var rather than a const so tests can shrink it to exercise the
-// rejection path without opening 256+ real sockets.
-var maxTCPConnections = 256
+// atomic.Int64 rather than a plain int for exactly the reason
+// maxTCPConnectionsPerSource and tcpIdleTimeoutNS below document: a test
+// shrinking this to exercise the rejection path races ServeTCP's accept
+// loop still reading it, with no Go-level happens-before edge between
+// "the test observed the rejection" and "the accept loop finished
+// reading the old value" -- caught by `go test -race -count=2`, which
+// failed 3/3 while this was a plain var (issue #380 item 6). Read
+// through maxTCPConns(); use of a raw value elsewhere in the process is
+// never mutated, so it is a var only to remain test-shrinkable.
+var maxTCPConnections atomic.Int64
+
+func init() {
+	maxTCPConnections.Store(256)
+}
+
+// maxTCPConns reads the current connection ceiling. See maxTCPConnections.
+func maxTCPConns() int {
+	return int(maxTCPConnections.Load())
+}
 
 // maxTCPConnectionsPerSource caps how many of the global slots any one
 // source IP may hold. Without it the global cap alone is exhaustible by
@@ -169,7 +185,7 @@ func reservedSlots() int {
 	if m == nil || len(*m) == 0 {
 		return 0
 	}
-	if r := maxTCPConnections / reservedFraction; r > 0 {
+	if r := maxTCPConns() / reservedFraction; r > 0 {
 		return r
 	}
 	return 1
@@ -210,7 +226,7 @@ type ListenerStats struct {
 func Stats() ListenerStats {
 	return ListenerStats{
 		InUse:                 int(tcpInUse.Load()),
-		Capacity:              maxTCPConnections,
+		Capacity:              maxTCPConns(),
 		ReservedForConfigured: reservedSlots(),
 		Rejected:              tcpRejected.Load(),
 		RejectedConfigured:    tcpRejectedConfigured.Load(),
@@ -281,7 +297,7 @@ func ServeTCP(ctx context.Context, ln net.Listener, out chan<- RawMessage) error
 	// A buffered channel used purely as a counting semaphore: acquiring a
 	// slot is receiving capacity to send, releasing is the deferred read
 	// once the connection's goroutine exits.
-	slots := make(chan struct{}, maxTCPConnections)
+	slots := make(chan struct{}, maxTCPConns())
 
 	// Per-source counts, guarded by its own mutex: the accept loop
 	// increments, each connection's goroutine decrements on exit.
@@ -321,7 +337,7 @@ func ServeTCP(ctx context.Context, ln net.Listener, out chan<- RawMessage) error
 		// free slot. Without this a flood of undeclared sources fills
 		// the pool and the operator's own routers are locked out -- see
 		// reservedFraction.
-		unreservedCap := maxTCPConnections - reservedSlots()
+		unreservedCap := maxTCPConns() - reservedSlots()
 		perSourceMu.Lock()
 		atCap := perSource[host] >= perSourceLimit()
 		outOfUnreserved := !configured && undeclaredInUse >= unreservedCap
@@ -345,7 +361,7 @@ func ServeTCP(ctx context.Context, ln net.Listener, out chan<- RawMessage) error
 			if total, ok := unreservedRejectGate.Allow(); ok {
 				tcpLog.Warn(fmt.Sprintf(
 					"undeclared sources are using all %d unreserved connection slots (%d of %d held for routers listed under devices: in config.yaml) -- rejecting %s (%d such rejections since start)",
-					unreservedCap, reservedSlots(), maxTCPConnections, host, total))
+					unreservedCap, reservedSlots(), maxTCPConns(), host, total))
 			}
 			conn.Close()
 			continue
@@ -379,7 +395,7 @@ func ServeTCP(ctx context.Context, ln net.Listener, out chan<- RawMessage) error
 			// At capacity: reject immediately rather than queuing, so the
 			// accept loop itself never blocks waiting for a slot to free up.
 			if total, ok := globalRejectGate.Allow(); ok {
-				tcpLog.Warn(fmt.Sprintf("connection limit (%d) reached -- rejecting %s (%d such rejections since start)", maxTCPConnections, conn.RemoteAddr(), total))
+				tcpLog.Warn(fmt.Sprintf("connection limit (%d) reached -- rejecting %s (%d such rejections since start)", maxTCPConns(), conn.RemoteAddr(), total))
 			}
 			conn.Close()
 		}

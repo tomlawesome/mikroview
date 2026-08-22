@@ -29,11 +29,11 @@ func TestReservedSlotsOnlyExistWhenDevicesAreDeclared(t *testing.T) {
 	}
 
 	SetConfiguredSources([]string{"192.0.2.1"})
-	want := maxTCPConnections / reservedFraction
+	want := maxTCPConns() / reservedFraction
 	if got := reservedSlots(); got != want {
 		t.Errorf("reservedSlots = %d, want %d", got, want)
 	}
-	if reservedSlots() >= maxTCPConnections {
+	if reservedSlots() >= maxTCPConns() {
 		t.Error("the reservation consumed the whole pool -- discovery is still the normal path and must keep capacity")
 	}
 }
@@ -64,8 +64,8 @@ func TestStatsReportsCapacityAndReservation(t *testing.T) {
 	SetConfiguredSources([]string{"192.0.2.1"})
 
 	s := Stats()
-	if s.Capacity != maxTCPConnections {
-		t.Errorf("Capacity = %d, want %d", s.Capacity, maxTCPConnections)
+	if s.Capacity != maxTCPConns() {
+		t.Errorf("Capacity = %d, want %d", s.Capacity, maxTCPConns())
 	}
 	if s.ReservedForConfigured != reservedSlots() {
 		t.Errorf("ReservedForConfigured = %d, want %d", s.ReservedForConfigured, reservedSlots())
