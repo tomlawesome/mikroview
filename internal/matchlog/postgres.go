@@ -187,6 +187,19 @@ func (s *PostgresStore) Query(ctx context.Context, q Query, yield func(Record) b
 			&eventJSON, &r.FirstSeen, &r.LastSeen, &r.Count, &r.Provisional); err != nil {
 			return fmt.Errorf("matchlog: reading a match: %w", err)
 		}
+		// pgx v5's default TimestamptzCodec scans a timestamptz into
+		// time.Local (no ScanLocation is set anywhere in this package,
+		// unlike search_path's explicit pin in
+		// internal/persist/postgres.go's pinSearchPath) -- so without
+		// this, FirstSeen/LastSeen come back in the server process's
+		// local zone while the embedded event.Event.Time (decoded from
+		// eventJSON just below, via encoding/json) stays UTC, and the
+		// file backend returns UTC for both. .UTC() here normalizes to
+		// the "every other timestamp mikroview emits is UTC" invariant
+		// without touching the connection's session state (issue #380
+		// item 7).
+		r.FirstSeen = r.FirstSeen.UTC()
+		r.LastSeen = r.LastSeen.UTC()
 		if err := json.Unmarshal([]byte(eventJSON), &r.Event); err != nil {
 			return fmt.Errorf("matchlog: decoding a match's event: %w", err)
 		}
