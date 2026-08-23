@@ -137,6 +137,23 @@ glance. Click a shut cell → compose the rule.
   two requested wild concepts, orthogonal to everything prior and to
   each other: language and relation.
 
+## Final batch (2026-08-23, owner) — round 2 closes
+
+- **Dispatch (K): a no as the driving UI.** The text-only narrative
+  concept is kept on the record as a surviving feature idea (alongside
+  Gauntlet's gates report) — sentences that cite their rows may yet
+  earn a place *inside* whatever wins, but the front page is not
+  written.
+- **Lattice (L): a no** ("I don't like the lattice").
+- **The proposed composite** (Lattice as topography + Strata as time +
+  Dispatch as front page + Reach & Compose as drill-in) **does not
+  stand** — it leaned on two dropped pieces.
+- **Strata is the surviving thread.** The owner's round-3 brief:
+  *"Strata as a vertical, not a horizontal — not just a port; the
+  switch deserves its own fully thought-through concept. And two wild
+  takes on strata, same macro concept, wildly different executions.
+  These will be the last mockups."* → `../round-3/`.
+
 ## Shared discipline
 
 Palettes validated CVD-safe per surface (dataviz validator); no meaning
@@ -146,6 +163,7 @@ with `cd frontend && node ../docs/design/concepts/round-2/capture.mjs`.
 
 ## What happens next
 
-Owner returns one batch across F/G/H/I (blend welcome — F's dock model,
-I's time axis and H's glanceability compose). The chosen direction
-drives the #482 ADR, proven against these scenes.
+Round 3 (`../round-3/`) is the final mockup round: Strata rebuilt as a
+vertical, plus two wild executions of the same time-first concept. The
+direction ratified there drives the #482 ADR, proven against its
+scenes.
