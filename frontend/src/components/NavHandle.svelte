@@ -11,18 +11,30 @@
   // owner accepted it "for now" and recorded that it will be revisited;
   // it is not open for redesign here.
   //
-  // Two things the record puts on the handle that this issue does not
-  // build: the open-flag count badge is #546's, and the pulse is
-  // specified as "the receiving dot's pulse" -- the rail-head dot itself
-  // is #549's chrome work and does not exist yet, so the hub pulses off
-  // the same signal the dot will use (a live stream) rather than
-  // inventing a second source of truth.
+  // The open-flag count badge arrived with #546: docking the navigation
+  // never docks the alarm, so the one count on the rail follows it here.
+  // Still not built: the pulse is specified as "the receiving dot's
+  // pulse" -- the rail-head dot itself is #549's chrome work and does not
+  // exist yet, so the hub pulses off the same signal the dot will use (a
+  // live stream) rather than inventing a second source of truth.
   import { appState } from '../lib/state.svelte'
+  import { flagsState } from '../lib/flags.svelte'
   import { railPref } from '../lib/rail.svelte'
 
   let { onrestore }: { onrestore: () => void } = $props()
 
   const receiving = $derived(appState.connState === 'open')
+
+  // Same count the rail's Flags row carries -- see NavRail.svelte for why
+  // activeCount is already "open *unexcluded*" with no filter on top.
+  const flagCount = $derived(flagsState.activeCount)
+
+  // Connection state is never the handle's job (the record is explicit),
+  // so the label says what the control does and what the alarm holds,
+  // and nothing about the stream.
+  const label = $derived(
+    flagCount > 0 ? `Restore navigation — ${flagCount} open flags` : 'Restore navigation',
+  )
 
   let el: HTMLButtonElement | undefined = $state()
 
@@ -40,8 +52,8 @@
   class:receiving
   bind:this={el}
   onclick={onrestore}
-  aria-label="Restore navigation"
-  title="Restore navigation"
+  aria-label={label}
+  title={label}
 >
   <svg class="mark" viewBox="0 0 30 84" aria-hidden="true" focusable="false">
     <!-- Hub sits on the edge itself rather than centred in the tab: it is
@@ -53,6 +65,12 @@
     </g>
     <circle class="hub" cx="8" cy="42" r="4.5" fill="currentColor" />
   </svg>
+
+  {#if flagCount > 0}
+    <!-- aria-hidden for the same reason as the rail's: the button's own
+         label already speaks the count in words. -->
+    <span class="count" aria-hidden="true">{flagCount}</span>
+  {/if}
 </button>
 
 <style>
@@ -96,6 +114,24 @@
   .mark {
     width: 30px;
     height: 84px;
+  }
+
+  /* Sits at the foot of the tab rather than stacked under the mark: the
+     mark is drawn across the full 84px with its hub on the centre line,
+     so anything placed beside it would land on the links fanning inward.
+     The bottom strip is the one part of the tab the drawing leaves free. */
+  .count {
+    position: absolute;
+    bottom: 6px;
+    left: 50%;
+    transform: translateX(-50%);
+    border-radius: 7px;
+    padding: 0.5px 4px;
+    background: var(--alarm);
+    color: var(--bg);
+    font-size: 0.62rem;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
   }
 
   @media (prefers-reduced-motion: no-preference) {
