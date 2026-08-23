@@ -57,7 +57,13 @@ const current = async () =>
 
 check((await current()) === 'Stream', `Stream is the landing -- got ${await current()}`)
 
-await page.click('.rail .item:text-is("Metrics")')
+// Matching the label rather than the button: #545 gave each row an icon
+// and moved its text into a <span class="label">, and Playwright's text
+// engine only matches an element that *directly* contains the text, so
+// `.item:text-is(...)` stopped matching the button. Kept as an exact
+// match on the label rather than loosened to :has-text, which would also
+// match a row that merely contained the word.
+await page.click('.rail .item .label:text-is("Metrics")')
 await page.waitForFunction(
   () => document.querySelector('.rail .item[aria-current="page"]')?.textContent.trim() === 'Metrics',
   null,
@@ -69,7 +75,7 @@ check(
   'exactly one rail item is aria-current at a time',
 )
 
-await page.click('.rail .item:text-is("Stream")')
+await page.click('.rail .item .label:text-is("Stream")')
 await page.waitForSelector('.grid .row', { timeout: 5000 })
 check((await current()) === 'Stream', 'and back to Stream, with the live table rendered')
 
