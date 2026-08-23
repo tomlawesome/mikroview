@@ -46,4 +46,10 @@ the existing `--warn` amber for forced-past.
 
 ## Verdicts
 
-Pending — round not yet reviewed by the owner.
+Owner, 2026-08-23, on direction S: **"Wizard looks great, but use more
+of the screen, no need to squash things in."** — accepted, with a size
+correction. Applied in this round's files the same session: the modal
+grew from 640px to 940px (94% cap), the step list to 224px, type and
+spacing up a notch throughout. The direction, anatomy and wording
+stand unchanged; direction S carries into the design record / round 2
+at the larger size.

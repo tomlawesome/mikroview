@@ -105,33 +105,33 @@
   .veil { position: absolute; inset: 0; background: rgba(3, 5, 10, 0.62); z-index: 20; backdrop-filter: blur(2.5px); }
   .wiz {
     position: absolute; z-index: 25; left: 50%; top: 50%; transform: translate(-50%, -50%);
-    width: min(640px, 92%); max-height: 88%; display: flex; flex-direction: column;
+    width: min(940px, 94%); max-height: 92%; display: flex; flex-direction: column;
     background: rgba(10, 14, 24, 0.97); border: 1px solid var(--hair-2); border-radius: 14px;
     box-shadow: 0 30px 80px rgba(0,0,0,0.6);
   }
-  .wiz .whead { display: flex; align-items: baseline; gap: 12px; padding: 14px 18px 10px; border-bottom: 1px solid var(--hair); }
-  .wiz .whead .step { font-size: 10px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--ink-3); font-weight: 650; }
-  .wiz .whead h3 { font-size: 15.5px; font-weight: 600; }
+  .wiz .whead { display: flex; align-items: baseline; gap: 12px; padding: 18px 24px 12px; border-bottom: 1px solid var(--hair); }
+  .wiz .whead .step { font-size: 10.5px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--ink-3); font-weight: 650; }
+  .wiz .whead h3 { font-size: 17.5px; font-weight: 600; }
   .wiz .whead .x { margin-left: auto; align-self: center; width: 24px; height: 24px; border: 1px solid var(--hair-2); border-radius: 7px; display: grid; place-items: center; color: var(--ink-2); font-size: 12px; }
   .wbody { display: flex; min-height: 0; flex: 1; }
-  .wsteps { width: 172px; flex: none; border-right: 1px solid var(--hair); padding: 12px 0; }
-  .ws { display: flex; gap: 8px; align-items: baseline; padding: 6px 14px; font-size: 11.5px; color: var(--ink-3); border-left: 2px solid transparent; }
+  .wsteps { width: 224px; flex: none; border-right: 1px solid var(--hair); padding: 14px 0; }
+  .ws { display: flex; gap: 9px; align-items: baseline; padding: 8px 18px; font-size: 12.5px; color: var(--ink-3); border-left: 2px solid transparent; }
   .ws .st { width: 13px; flex: none; text-align: center; font-size: 10px; }
   .ws.done { color: var(--ink-2); } .ws.done .st { color: var(--ok); }
   .ws.on { color: var(--ink); border-left-color: var(--accent); background: rgba(157,184,232,0.05); }
   .ws.forced { color: var(--ink-2); } .ws.forced .st { color: var(--warn); }
   .ws.skipped .st { color: var(--ink-3); }
-  .ws .sub { display: block; font-size: 9px; color: var(--ink-3); margin-top: 1px; }
+  .ws .sub { display: block; font-size: 10px; color: var(--ink-3); margin-top: 1px; }
   .ws.forced .sub { color: var(--warn); }
-  .wmain { flex: 1; padding: 16px 18px 14px; min-width: 0; overflow: hidden; }
-  .wmain .lead { font-size: 12.5px; color: var(--ink-2); }
+  .wmain { flex: 1; padding: 20px 24px 18px; min-width: 0; overflow: hidden; }
+  .wmain .lead { font-size: 13.5px; color: var(--ink-2); }
   .wmain .lead b { color: var(--ink); font-weight: 600; }
-  .cmd { font: 10.5px/1.6 var(--mono); color: var(--ink-2); background: rgba(4,6,11,0.9); border: 1px solid var(--hair); border-radius: 9px; padding: 10px 12px; margin-top: 10px; overflow-x: auto; white-space: pre; }
+  .cmd { font: 11.5px/1.65 var(--mono); color: var(--ink-2); background: rgba(4,6,11,0.9); border: 1px solid var(--hair); border-radius: 9px; padding: 12px 14px; margin-top: 12px; overflow-x: auto; white-space: pre; }
   .cmd .cm { color: var(--ink-3); }
   .cmd .hi { color: var(--accent); }
   .copy { font-size: 10px; color: var(--ink-2); border: 1px solid var(--hair-2); border-radius: 6px; padding: 2px 8px; margin-top: 7px; display: inline-block; }
   /* the observation line — the step's evidence, always visible, always dated */
-  .obs { display: flex; gap: 9px; align-items: baseline; margin-top: 12px; padding: 9px 12px; border-radius: 9px; font-size: 11.5px; }
+  .obs { display: flex; gap: 10px; align-items: baseline; margin-top: 14px; padding: 11px 14px; border-radius: 9px; font-size: 12.5px; }
   .obs .st { flex: none; font-size: 11px; }
   .obs.waiting { border: 1px dashed var(--hair-2); color: var(--ink-2); }
   .obs.waiting .st { color: var(--ink-3); animation: pulse 2s ease-in-out infinite; }
@@ -145,8 +145,8 @@
   .warncard p { font-size: 11.5px; color: var(--ink-2); margin-top: 6px; }
   .warncard p b { color: var(--ink); font-weight: 600; }
   .warncard .rec { font-family: var(--mono); font-size: 10px; color: var(--warn); background: rgba(4,6,11,0.7); border-radius: 7px; padding: 6px 9px; margin-top: 9px; }
-  .wfoot { display: flex; gap: 8px; align-items: center; padding: 12px 18px; border-top: 1px solid var(--hair); }
-  .btn { font-size: 11.5px; font-weight: 600; border-radius: 8px; padding: 6px 14px; border: 1px solid var(--hair-2); color: var(--ink-2); }
+  .wfoot { display: flex; gap: 10px; align-items: center; padding: 14px 24px; border-top: 1px solid var(--hair); }
+  .btn { font-size: 12.5px; font-weight: 600; border-radius: 8px; padding: 8px 18px; border: 1px solid var(--hair-2); color: var(--ink-2); }
   .btn.primary { background: var(--accent); color: var(--void); border-color: var(--accent); }
   .btn.ghost { border-color: transparent; color: var(--ink-3); }
   .btn.warn { border-color: rgba(232,176,90,0.6); color: var(--warn); }
@@ -318,7 +318,8 @@
       </div>
       <div class="cap"><b>b · Arrived.</b> The same step, evidence in: who, what, when. The step list will remember the receipt ("ca.crt fetched · 13:39") for the rest of the wizard's life — and Next simply proceeds.</div>
     </div>
-    <div class="frame">
+  </div>
+  <div class="frame wide">
       <div class="main">
         <div class="wiz">
           <div class="whead"><span class="step">Step 4 of 5</span><h3>Push router state</h3><span class="x" role="button" aria-label="Close setup — finish later from Admin ▸ Run setup…">✕</span></div>
@@ -348,7 +349,6 @@
         </div>
       </div>
       <div class="cap"><b>c · The one step that takes input.</b> Step 4 acts (a token is created on Next-entry — mikroview-side, its own audit line) then returns to form: print the command, watch for arrival. Same anatomy, same observation line.</div>
-    </div>
   </div>
   <div class="notes">
     <div class="anno"><b>One anatomy, five steps.</b> Lead sentence · the router-side command · the observation line. Step 3 (tag rules) is the pure case — it can never fail, only count upward; its Next is always free. The anatomy holds even for step 4's input, which is why the modal never feels like five different dialogs.</div>
