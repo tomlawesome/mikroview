@@ -9,7 +9,6 @@
   import DeviceStatus from './DeviceStatus.svelte'
   import UptimeBadge from './UptimeBadge.svelte'
   import LogoLockup from './LogoLockup.svelte'
-  import NavMenu from './NavMenu.svelte'
   import ThemeMenu from './ThemeMenu.svelte'
 
   function onMaxAgeChange(e: Event) {
@@ -123,12 +122,10 @@
     <!-- Appearance stays standalone and always visible (issue #137):
          #73's inline-vs-menu split filed it under "everything else",
          but theme switching is reached for constantly and wants to be
-         one click away. Export went the other way -- an occasional,
-         deliberate action that was holding an inline slot -- and now
-         lives in NavMenu on both breakpoints, where mobile already had
-         it. -->
+         one click away. Export left the toolbar for the same reason it
+         once left the inline slot -- it belongs to the live view, and
+         since #544 it sits in FilterBar beside Clear filters. -->
     <ThemeMenu />
-    <NavMenu />
   </div>
 </header>
 

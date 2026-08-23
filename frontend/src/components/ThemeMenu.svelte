@@ -3,14 +3,15 @@
   //
   // Appearance as a standalone, always-visible control (issue #137).
   //
-  // This existed before #73 consolidated the toolbar into NavMenu, and
+  // This existed before #73 consolidated the toolbar into the nav menu
+  // that #544 has since retired, and
   // burying it there was a regression rather than a tidy-up: theme and
   // colorway switching is reached for often and wants to be one click
   // away, not two. Reinstated in the pre-#73 shape, now also carrying
   // the light/dark/auto mode picker that was split out separately.
   //
   // At mobile widths the dropdown becomes a bottom sheet, for the same
-  // reason NavMenu's does (issue #85): a right-anchored dropdown assumes
+  // reason the retired nav menu's did (issue #85): a right-anchored dropdown assumes
   // the trigger stays at the toolbar's right edge, and a wrapped toolbar
   // can put it anywhere.
   import { COLORWAYS, colorwayState } from '../lib/colorway.svelte'
@@ -139,8 +140,8 @@
     z-index: 20;
   }
 
-  /* Same viewport-anchored treatment, scrim and z-order as NavMenu's
-     mobile sheet -- one visual language for phone-width panels. */
+  /* Same viewport-anchored treatment, scrim and z-order as the retired
+     nav menu's mobile sheet -- one visual language for phone-width panels. */
   .scrim {
     position: fixed;
     inset: 0;

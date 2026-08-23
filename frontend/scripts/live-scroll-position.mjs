@@ -26,8 +26,7 @@ await page.setViewportSize({ width: 1280, height: 720 })
 // Setup.svelte was the only view missing the flex/min-height/overflow-y
 // trio the other eight carry, which made the guided setup -- the
 // first-run experience specifically -- impossible to read past the fold.
-await page.click('.nav-menu .trigger')
-await page.click('.nav-menu button:has-text("Connect a router")')
+await page.click('.rail .item:has-text("Run setup…")')
 await page.waitForSelector('.setup')
 
 const setup = await page.$eval('.setup', (el) => ({
@@ -82,8 +81,7 @@ check(
 // --- #384: naming an entity leaves the operator where they were ---------
 // The workflow the defect punished is the one the view exists for:
 // working down a long discovered list naming things one after another.
-await page.click('.nav-menu .trigger')
-await page.click('.nav-menu button:has-text("Entities")')
+await page.click('.rail .item:has-text("Entities")')
 await page.waitForSelector('.page .row.discovered')
 
 const entities = await page.$eval('.page', (el) => ({
