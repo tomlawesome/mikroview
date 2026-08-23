@@ -85,13 +85,27 @@ async function deleteJSON(url: string, body?: unknown): Promise<Response> {
   })
 }
 
-// isAddressOrCidr reports whether v is something store.Query.IP
-// (internal/store/query.go) already understands on its own: a bare IP or
-// a CIDR block, matched server-side against src OR dst. Anything else --
-// a name, a label fragment -- has no server-side equivalent at all.
-function isAddressOrCidr(v: string): boolean {
+// asAddressOrCidr returns v trimmed, if that trimmed form is something
+// store.Query.IP (internal/store/query.go) already understands on its
+// own -- a bare IP or a CIDR block, matched server-side against src OR
+// dst -- or null otherwise (a name, a label fragment, which has no
+// server-side equivalent at all).
+//
+// Returns the normalised (trimmed) string rather than a plain boolean so
+// the value that was validated is necessarily the value that gets sent.
+// A boolean-returning check, with the caller then forwarding the
+// original untrimmed field, was this function's first version -- and it
+// shipped a real bug: a pasted address with trailing whitespace (e.g.
+// " 203.0.113.5 ") passed the check but was sent padded, which fails both
+// parseQuery's net.ParseIP and net.ParseCIDR, dropping matchesFilters to
+// its exact-string-equal fallback -- which no event's address can equal,
+// so the "server-filtered baseline" comes back empty while the
+// client-side matcher (which does trim) leaves the existing rows looking
+// fine. Silently wrong, not visibly broken. Returning the validated
+// string itself removes the class of bug rather than just this instance.
+function asAddressOrCidr(v: string): string | null {
   const trimmed = v.trim()
-  return !!parseAddress(trimmed) || !!parseCidr(trimmed)
+  return parseAddress(trimmed) || parseCidr(trimmed) ? trimmed : null
 }
 
 // Exported so lib/state.svelte.ts can build the same query-param shape for
@@ -142,10 +156,12 @@ export function buildQuery(filters: Partial<Filters> & { limit?: number; sinceId
   if (filters.interface) params.set('interface', filters.interface)
   if (filters.srcQuery) params.set('srcQuery', filters.srcQuery)
   if (filters.dstQuery) params.set('dstQuery', filters.dstQuery)
-  if (filters.srcQuery && isAddressOrCidr(filters.srcQuery)) {
-    params.set('ip', filters.srcQuery)
-  } else if (filters.dstQuery && isAddressOrCidr(filters.dstQuery)) {
-    params.set('ip', filters.dstQuery)
+  const srcAddr = filters.srcQuery ? asAddressOrCidr(filters.srcQuery) : null
+  const dstAddr = filters.dstQuery ? asAddressOrCidr(filters.dstQuery) : null
+  if (srcAddr) {
+    params.set('ip', srcAddr)
+  } else if (dstAddr) {
+    params.set('ip', dstAddr)
   }
   // Only forwarded when it parses as the plain integer parseQuery expects
   // (see internal/api/rest.go) -- #438 lets this field hold text (a
