@@ -4,7 +4,7 @@ package main
 
 import (
 	"os"
-	"path/filepath"
+	"os/exec"
 	"strings"
 	"testing"
 )
@@ -63,37 +63,69 @@ var allowed = map[string][]string{
 	"internal/matchlog/postgres.go": {`jackc/pgx`},
 }
 
-func TestNoForbiddenGoInjectionSinks(t *testing.T) {
-	root, err := os.Getwd()
+// sources lists the files matching pathspec that git considers part of
+// the working tree -- tracked files plus untracked ones, minus anything
+// gitignored.
+//
+// Both sweeps below enumerate from git rather than walking the working
+// tree, and that is load-bearing (#520). This project puts linked git
+// worktrees inside the repo at .claude/worktrees/, which is gitignored
+// and so invisible to git but fully visible to a walk. A walk therefore
+// finds a second copy of every source file, at a path like
+// .claude/worktrees/<name>/internal/persist/postgres.go -- which does
+// not match the `internal/persist/postgres.go` key in allowed, so a
+// legitimately exempt file failed the gate for no reason beyond another
+// session having a branch checked out. ci.yml's gofmt step already
+// derives its file list from git for comparable reasons.
+//
+// The danger that motivated the fix was not the noise itself: it is that
+// the quickest way to silence it is to add a worktree path to `allowed`,
+// which would loosen the real gate to paper over local directory layout.
+//
+// --others --exclude-standard rather than tracked files alone, so a
+// newly written file is swept before it is ever staged. Ignored paths
+// are the only thing dropped, which is exactly the nested-worktree copy
+// and never anything that can reach production.
+//
+// Fails closed. If git cannot be reached, or matches nothing, the gate
+// errors rather than sweeping zero files and reporting success -- the
+// same reasoning as check-bundle-budget.mjs treating "nothing to
+// measure" as a failure.
+func sources(t *testing.T, pathspec ...string) []string {
+	t.Helper()
+
+	args := append([]string{"ls-files", "-z", "--cached", "--others", "--exclude-standard", "--"}, pathspec...)
+	out, err := exec.Command("git", args...).Output()
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("git ls-files %v: %v\n\n"+
+			"This gate derives its file list from git on purpose; see the comment on sources() and #520.",
+			pathspec, err)
 	}
 
-	err = filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
-		if err != nil {
-			return err
+	var files []string
+	for _, p := range strings.Split(string(out), "\x00") {
+		if p != "" {
+			files = append(files, p)
 		}
-		if d.IsDir() {
-			switch d.Name() {
-			case ".git", "node_modules", "frontend", "web", "docs", "deploy":
-				return filepath.SkipDir
-			}
-			return nil
-		}
-		if !strings.HasSuffix(path, ".go") {
-			return nil
-		}
+	}
+	if len(files) == 0 {
+		t.Fatalf("git ls-files %v matched no files -- refusing to pass on an empty sweep", pathspec)
+	}
+	return files
+}
+
+func TestNoForbiddenGoInjectionSinks(t *testing.T) {
+	for _, rel := range sources(t, "*.go") {
 		// Test files are excluded: this file names every forbidden
 		// string, and a test that fails on its own source is useless.
-		if strings.HasSuffix(path, "_test.go") {
-			return nil
+		if strings.HasSuffix(rel, "_test.go") {
+			continue
 		}
 
-		data, readErr := os.ReadFile(path)
-		if readErr != nil {
-			return readErr
+		data, err := os.ReadFile(rel)
+		if err != nil {
+			t.Fatal(err)
 		}
-		rel, _ := filepath.Rel(root, path)
 		src := string(data)
 
 		for _, sink := range forbiddenGoSinks {
@@ -108,10 +140,6 @@ func TestNoForbiddenGoInjectionSinks(t *testing.T) {
 				"and re-run the injection audit for that path (docs/decisions/injection-audit.md).",
 				rel, sink.substring, sink.why)
 		}
-		return nil
-	})
-	if err != nil {
-		t.Fatal(err)
 	}
 }
 
@@ -134,33 +162,13 @@ func exempt(rel, substring string) bool {
 // Svelte auto-escapes {expression}; {@html} opts out entirely, and
 // innerHTML/insertAdjacentHTML/outerHTML do the same from plain TS.
 func TestNoHTMLInjectionSinksInTheFrontend(t *testing.T) {
-	root, err := os.Getwd()
-	if err != nil {
-		t.Fatal(err)
-	}
-	src := filepath.Join(root, "frontend", "src")
 	forbidden := []string{"{@html", "innerHTML", "outerHTML", "insertAdjacentHTML"}
 
-	err = filepath.WalkDir(src, func(path string, d os.DirEntry, err error) error {
+	for _, rel := range sources(t, "frontend/src/*.svelte", "frontend/src/*.ts") {
+		data, err := os.ReadFile(rel)
 		if err != nil {
-			return err
+			t.Fatal(err)
 		}
-		if d.IsDir() {
-			if d.Name() == "node_modules" {
-				return filepath.SkipDir
-			}
-			return nil
-		}
-		switch {
-		case strings.HasSuffix(path, ".svelte"), strings.HasSuffix(path, ".ts"):
-		default:
-			return nil
-		}
-		data, readErr := os.ReadFile(path)
-		if readErr != nil {
-			return readErr
-		}
-		rel, _ := filepath.Rel(root, path)
 		for _, bad := range forbidden {
 			if strings.Contains(string(data), bad) {
 				t.Errorf("%s contains %q -- it bypasses Svelte's escaping. "+
@@ -168,9 +176,5 @@ func TestNoHTMLInjectionSinksInTheFrontend(t *testing.T) {
 					"it needs an entry in docs/decisions/injection-audit.md first.", rel, bad)
 			}
 		}
-		return nil
-	})
-	if err != nil {
-		t.Fatal(err)
 	}
 }
