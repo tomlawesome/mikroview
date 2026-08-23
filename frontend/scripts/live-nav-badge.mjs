@@ -43,19 +43,19 @@ const FLAGS_ITEM = '.rail .item:has(.label:text-is("Flags"))'
  * still landing mid-check cannot make a correct badge look wrong. Returns
  * the agreed count, or null if they never converged.
  */
-async function settledCount(selector, timeoutMs = 15000) {
+async function settledCount(timeoutMs = 15000) {
   const deadline = Date.now() + timeoutMs
   let last = null
   while (Date.now() < deadline) {
-    last = await page.evaluate(async (sel) => {
+    last = await page.evaluate(async () => {
       const res = await fetch('/api/flags', { cache: 'no-store' })
       if (!res.ok) return { open: -1, badge: null }
       const body = await res.json()
       const list = Array.isArray(body) ? body : (body.flags ?? [])
       const open = list.filter((f) => !f.cleared).length
-      const el = document.querySelector(sel)
+      const el = document.querySelector('.rail .count')
       return { open, badge: el ? el.textContent.trim() : null }
-    }, selector)
+    })
     // No badge is the correct rendering of zero: the record puts one
     // alarm-filled count in the chrome, and only when it has something to
     // say -- a permanent "0" on Flags is the failure, not the goal.
@@ -68,7 +68,7 @@ async function settledCount(selector, timeoutMs = 15000) {
 }
 
 // --- Before anything is raised -------------------------------------------
-const initial = await settledCount(`${FLAGS_ITEM} .count`)
+const initial = await settledCount()
 check(initial !== null, `the badge agrees with the server before any scan (${initial} open)`)
 
 // --- Raise one, and it has to follow -------------------------------------
@@ -78,7 +78,7 @@ const raised = await waitForFlag(page, SCANNER, { timeoutMs: 30000 })
 check(raised.ok, `${raised.message} (a miss here is usually #450's known race, not this badge)`)
 
 if (raised.ok) {
-  const open = await settledCount(`${FLAGS_ITEM} .count`)
+  const open = await settledCount()
   check(open !== null && open > 0, `the badge follows the server once a flag is raised (${open} open)`)
 
   if (open) {
