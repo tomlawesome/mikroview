@@ -16,6 +16,8 @@ rewritten.
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-08-23
+
 ### Added
 
 - **One definitions API** (#407): `GET /api/definitions` and its
@@ -177,7 +179,72 @@ rewritten.
   marked unavailable rather than dropped, on every write this store ever
   makes from then on.
 
+### Changed
+
+- **Live view: newest event at the top, not the bottom** (#363). The
+  table used to append new rows at the bottom and autoscroll down to
+  follow them; it now inserts at the top and autoscroll holds the view
+  there instead. Ungrouped rows and Group mode's collapsed rows both
+  follow this -- a group still keeps the position of its *first*
+  arrival rather than jumping around as it's hit again, so nothing
+  reorders while you're reading it. Turning Autoscroll off still holds
+  a scrolled-back view exactly where it was, with rows that don't move
+  or renumber under you as new events arrive elsewhere in the buffer.
+
+  If you use the live view unfiltered as a moving feed, the newest
+  traffic is now at the top of the screen instead of the bottom.
+
 ### Fixed
+
+- **The setup wizard's syslog step reported "done" on a bare TCP
+  connect, before any TLS handshake completed** (#371). `noteConnection`
+  fired from `ServeTCP`'s accept branch in `internal/syslog/tcp_listener.go`
+  -- before `handleTCPConn` ever read a byte, and `tls.Listener.Accept`
+  negotiates its handshake lazily, on first read, not on accept. A
+  router configured with `check-certificate=yes` against a certificate
+  that didn't cover its address -- the exact misconfiguration the
+  wizard's own CA-trust step exists to catch -- connected at TCP,
+  failed the handshake, and sent nothing, yet the wizard still rendered
+  "A router has an open syslog connection: done" and sent the operator
+  off to fix firewall `log=yes` rules that were never the problem. A LAN
+  port scan or a plain TCP health check against the syslog port produced
+  the identical false "done". The hook now fires from inside
+  `handleTCPConn`, past a completed `tls.Conn.HandshakeContext`, so a
+  bare connect or a failed handshake no longer satisfies the step --
+  while a genuine handshake with no logging rule configured yet still
+  does, keeping that state distinct from "never connected" (see
+  `setup.Store.NoteSyslogConnection`'s doc comment).
+
+- **`close-issues-on-dev.yml` no longer closes an issue over a negated or
+  code-quoted keyword** (#503). Its closing-keyword regex matched
+  `close`/`fix`/`resolve` anywhere in a merged PR's title+body, with no
+  regard for what came before or around it -- `Not fixed: #371` and
+  `Does not close #363` both read as closes, and so did a keyword
+  quoted inside a code span purely to explain that it had been removed
+  (`` `Closes #442` ``), even though GitHub's own closing-keyword
+  parser skips code spans. All three false positives happened for
+  real on 2026-08-22 (PRs #496, #497, #499) and wrongly closed issues
+  #371, #363 and #442 while their work was still open; all three were
+  reopened by hand. The matching logic is now
+  `.github/scripts/close-issues-matcher.js`, tested against the actual
+  PR bodies that broke it (`.github/scripts/close-issues-matcher.test.js`,
+  fixtures in `.github/scripts/fixtures/`): a keyword immediately
+  preceded by a negation ("not", "doesn't", "never", ...) no longer
+  matches, and markdown code spans/fenced blocks are stripped before
+  matching runs. A genuine `Closes #NNN` trailer, negation-free and
+  outside code, still closes as before.
+
+- **A definition update touching only `enabled` or only `scope` could
+  silently revert a concurrent change to the other field** (#494, a
+  narrower survivor of #380 item 4 that outlived the engine port).
+  `handleDefinitionsUpdate` filled in whichever of the two a request left
+  unset from a snapshot taken *before* the client-paced request-body read
+  -- an admin's enabled-only toggle, mid-flight while another admin's
+  scope-only change landed, would write its own stale pre-read scope back
+  over that change. Fixed by re-reading fresh state and writing under one
+  lock spanning both, the same get-fresh-state/mutate/write shape
+  `engine.DefinitionsStore.UpdateExpectation` and `RecordObservation`
+  already used for the broader case #380 item 4 originally reported.
 
 - **A router with `remote-log-format=syslog` set and a non-UTC system
   clock had every event's displayed time off by its clock's offset**
@@ -194,6 +261,43 @@ rewritten.
   gap is zero. A UTC-clocked router (the documented default deployment)
   sees no change: ordinary network delay still rounds to no correction.
 
+- **One transient accept error no longer permanently deafens the HTTPS
+  listener** (#380 item 3). `tlssniff.Listener`'s accept loop treated
+  every `Accept` error as terminal -- hitting the process's
+  file-descriptor limit (EMFILE/ENFILE, surfaced as a temporary
+  `net.Error`) killed the loop's goroutine for good, and `http.Server.
+  Serve`, which retries a temporary error by calling `Accept` again
+  following its own documented contract, then blocked forever on a
+  listener with nothing left to ever deliver a connection or another
+  error. The web UI and the whole API stopped accepting connections
+  permanently while the process stayed up and logged nothing further.
+  Now mirrors `internal/syslog`'s existing capped-exponential-backoff
+  accept retry: a temporary error is retried, and only a genuinely fatal
+  one ends the loop.
+
+- **`maxTCPConnections` is safe for concurrent access** (#380 item 6).
+  It was a plain `int` read by `ServeTCP`'s accept loop on every
+  iteration; a test shrinking it to exercise the rejection path raced
+  that read with no Go-level happens-before edge between them --
+  `go test -race -count=2 ./internal/syslog/` failed 3/3 with a data
+  race. Now an `atomic.Int64`, the same fix already applied to its two
+  neighbours (`maxTCPConnectionsPerSource`, `tcpIdleTimeoutNS`) and to
+  the same bug class in #45.
+
+- **Postgres match-log timestamps come back in UTC, not the server
+  process's local zone** (#380 item 7). `pgx` v5's default
+  `TimestamptzCodec` scans a `timestamptz` using `ScanLocation`
+  `time.Local`, which doesn't change the instant a record's `FirstSeen`/
+  `LastSeen` represent but does change how it serializes -- `+01:00`
+  instead of `Z` on a non-UTC host -- so a record's own timestamps and
+  its embedded event's `receivedAt` (decoded from JSON, always UTC)
+  rendered as the same instant two different ways in one response body,
+  and a consumer keying or grouping on the timestamp string (the
+  birdcage correlation case #29 exists for) matched on the file backend
+  and failed on Postgres. `PostgresStore.Query` now normalizes both
+  fields with `.UTC()` after `Scan`, matching every other timestamp
+  mikroview emits.
+
 - **The watchlist stops claiming "nothing anywhere is watching this"
   when it has not read every router's rules** (#367). Coverage answers
   from the filter tables routers have pushed, and the push is optional —
@@ -208,6 +312,21 @@ rewritten.
   list names the devices whose rules went unread. A positive answer is
   unchanged: one router demonstrably logging the right traffic stays
   true however many others went unread.
+
+- **A failed filter refetch (or initial load) no longer reads as "no
+  events match"** (#373). `refetchWithFilters()` re-queries the server so
+  a filter that misses the client's ~20,000-event buffer (an older
+  event, a device that hasn't logged recently) still finds a real match
+  in the server's larger store — but a rejected request (a 503, a
+  dropped connection) left `events` exactly as it was, with nothing
+  recording that the query never completed. The live view then rendered
+  that untouched, incomplete buffer as a definite "No events match the
+  current filters" (or, on first load, the equally silent "Waiting for
+  events…"), telling the operator traffic didn't happen when the truth
+  was that mikroview couldn't ask. `appState.fetchFailed` now records the
+  failure on both call sites and clears on the next successful one; the
+  live view shows an honest "could not load" message instead of asserting
+  emptiness whenever it's set.
 
 - **The watchlist page can no longer show torn observation data**
   (#376). `GET /api/watchlist` handed out entry copies whose observed
