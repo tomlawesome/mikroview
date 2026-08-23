@@ -16,6 +16,44 @@ rewritten.
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-08-23
+
+### Changed
+
+- **Mikroview now refuses to start when its data directory is unusable**
+  (#536), instead of starting and discarding every change on the next
+  restart. Each store used to log an error and carry on -- so the
+  interface worked, a watchlist entry you added appeared, and it was
+  gone after a restart. Startup now checks every configured store, and
+  a refusal names the store, the path and the fix. An unset path is
+  still a supported "do not persist" choice, and Postgres deployments
+  are unaffected.
+
+- **Mikroview now refuses to start rather than silently replacing a TLS
+  certificate authority it cannot use** (#535). The generated CA is what
+  your router trusts before it will send logs over TLS, so replacing it
+  stops ingest entirely -- and the old behaviour made that invisible:
+  a CA that was present but unreadable was treated as no CA at all, so
+  mikroview minted a new one, overwrote the original, and logged the
+  same line it logs on a first run.
+
+  Two cases now stop startup, each naming the file and the fix: the
+  store directory cannot be written, and CA files that are present but
+  cannot be read or parsed. An empty directory is still a normal first
+  run. To start over with a new CA deliberately, delete the files in
+  `tls.storePath` and restart.
+
+  **If mikroview stops starting after this upgrade, it was already
+  regenerating your CA on every restart and you had no way to see it.**
+  The usual cause is the data directory not being writable by uid
+  `65532` -- the shipped `deploy/docker-compose.yml` mounts the
+  `mikroview-data` volume at `/var/lib/mikroview` for this; a bind mount
+  needs the permissions step in README.md's "Persistent data" section.
+
+- The startup log now says **"reusing the stored local CA"** when it
+  reuses one, instead of saying "generated a local CA" every time
+  regardless (#535).
+
 ## [0.3.0] - 2026-08-23
 
 ### Added
