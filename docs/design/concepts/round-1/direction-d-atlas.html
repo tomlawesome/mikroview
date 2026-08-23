@@ -1,0 +1,606 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mikroview — Direction D: Atlas</title>
+<style>
+  /* ============================================================
+     DIRECTION D — "ATLAS"
+     The map is the app. There are no pages: the network is the
+     one place you stand, and everything else is a lens over it
+     or a dock beneath it. Click an edge and the stream rises to
+     meet you — you never leave. Time is a scrubber: drag it and
+     the last fifteen minutes replay on the map itself.
+
+     The wager: an interrogation helper should feel like standing
+     in front of the network, not like visiting its paperwork.
+     ============================================================ */
+  :root {
+    --void: #05070d;
+    --mist: rgba(140, 170, 255, 0.06);
+    --glass: rgba(14, 20, 38, 0.72);
+    --glass-hi: rgba(22, 32, 60, 0.85);
+    --edge: rgba(150, 180, 255, 0.16);
+    --edge-2: rgba(150, 180, 255, 0.32);
+    --ink: #f0f4ff;
+    --ink-2: #a4b1d6;
+    --ink-3: #5b6890;
+    --accent: #8fc2ff;
+    /* validated categorical (dark, surface #05070d): */
+    --lan: #3987e5;
+    --srv: #199e70;
+    --iot: #c98500;
+    --guest: #d95926;
+    --ok: #2fbf5f;
+    --alarm: #ff5470;
+    --sans: system-ui, -apple-system, "Segoe UI", sans-serif;
+    --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  }
+  * { box-sizing: border-box; margin: 0; }
+  html { scroll-behavior: smooth; }
+  body {
+    background:
+      radial-gradient(1200px 700px at 70% -10%, rgba(70, 110, 220, 0.10), transparent 60%),
+      radial-gradient(900px 600px at 10% 110%, rgba(70, 110, 220, 0.07), transparent 60%),
+      var(--void);
+    color: var(--ink); font: 13.5px/1.5 var(--sans);
+    -webkit-font-smoothing: antialiased;
+  }
+  .concept {
+    position: sticky; top: 0; z-index: 90;
+    display: flex; gap: 16px; align-items: baseline;
+    padding: 8px 20px; background: rgba(2, 4, 9, 0.94);
+    border-bottom: 1px solid var(--edge); backdrop-filter: blur(8px);
+    font-size: 11px; color: var(--ink-3);
+  }
+  .concept b { color: var(--accent); letter-spacing: 0.1em; }
+  .concept a { color: var(--ink-2); text-decoration: none; margin-left: 12px; }
+
+  .scene { min-height: 100vh; position: relative; border-bottom: 1px solid var(--edge); overflow: hidden; }
+  .scene-tag {
+    position: absolute; top: 14px; left: 50%; transform: translateX(-50%);
+    font-size: 10.5px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--ink-3);
+    z-index: 5; white-space: nowrap;
+  }
+
+  /* ---- the sparse chrome: it floats, it never frames ---- */
+  .crumb {
+    position: absolute; top: 40px; left: 34px; z-index: 6;
+  }
+  .crumb .wordmark { font-size: 13px; font-weight: 800; letter-spacing: 0.22em; color: var(--ink-2); }
+  .crumb .wordmark em { color: var(--accent); font-style: normal; }
+  .crumb .path { font-size: 21px; font-weight: 650; letter-spacing: -0.01em; margin-top: 6px; }
+  .crumb .path .sep { color: var(--ink-3); font-weight: 400; padding: 0 8px; }
+  .crumb .path .here { color: var(--accent); }
+  .crumb .sub { font-size: 11.5px; color: var(--ink-3); margin-top: 4px; }
+  .crumb .sub b { color: var(--ink-2); font-weight: 600; }
+
+  .lenses {
+    position: absolute; top: 44px; right: 34px; z-index: 6;
+    display: flex; gap: 6px; padding: 5px;
+    background: var(--glass); border: 1px solid var(--edge); border-radius: 999px;
+    backdrop-filter: blur(12px);
+  }
+  .lens {
+    font-size: 11.5px; font-weight: 600; color: var(--ink-3);
+    padding: 6px 14px; border-radius: 999px; cursor: default; letter-spacing: 0.03em;
+  }
+  .lens.on {
+    color: var(--void); background: var(--accent);
+    box-shadow: 0 0 18px rgba(143, 194, 255, 0.35);
+  }
+  .lens-note {
+    position: absolute; top: 96px; right: 34px; z-index: 6;
+    font-size: 10.5px; color: var(--ink-3); text-align: right; line-height: 1.7;
+  }
+
+  /* ---- the map itself ---- */
+  .stage { position: absolute; inset: 0; }
+  .stage svg { width: 100%; height: 100%; display: block; }
+  svg text { font-family: var(--sans); }
+  .n-name { fill: var(--ink); font-size: 16px; font-weight: 700; letter-spacing: 0.01em; }
+  .n-sub { fill: var(--ink-3); font-size: 10px; }
+  .n-cidr { fill: var(--ink-2); font-size: 10.5px; font-family: var(--mono); }
+  .n-member { fill: var(--ink-2); font-size: 10px; }
+  .n-rate { fill: var(--ink-2); font-size: 10px; font-family: var(--mono); }
+  .isl { fill: var(--glass); stroke-width: 1.2; }
+  .cov-l { fill: var(--ok); font-size: 8.5px; font-weight: 800; letter-spacing: 0.1em; }
+  .cov-q { fill: var(--ink-3); font-size: 8.5px; font-weight: 800; letter-spacing: 0.1em; }
+  .cov-d { fill: var(--alarm); font-size: 8.5px; font-weight: 800; letter-spacing: 0.1em; }
+
+  .rib-case { fill: none; stroke: var(--edge); stroke-width: 11; stroke-linecap: round; }
+  .rib-soft { fill: none; stroke-linecap: round; opacity: 0.22; }
+  .rib-core { fill: none; stroke-linecap: round; opacity: 0.85; filter: drop-shadow(0 0 6px currentColor); }
+  .rib-ghost { fill: none; stroke: var(--ink-3); stroke-width: 1.6; stroke-dasharray: 2 7; opacity: 0.8; }
+  .rib-alarm { fill: none; stroke: var(--alarm); stroke-width: 2.4; opacity: 0.8; filter: drop-shadow(0 0 7px var(--alarm)); }
+  @keyframes travel { from { offset-distance: 0%; } to { offset-distance: 100%; } }
+  .halo { animation: halo 2s ease-out infinite; transform-origin: center; transform-box: fill-box; }
+  @keyframes halo { 0% { opacity: 0.8; transform: scale(0.5); } 100% { opacity: 0; transform: scale(2.4); } }
+
+  .chip-g { fill: rgba(10, 15, 30, 0.85); stroke: var(--edge-2); }
+  .chip-a { fill: #22101c; stroke: var(--alarm); }
+  .chip-t { fill: var(--ink-2); font-size: 9.5px; font-family: var(--mono); }
+
+  /* ---- the time scrubber: the last 15 minutes as film ---- */
+  .scrub {
+    position: absolute; left: 50%; transform: translateX(-50%); bottom: 26px; z-index: 6;
+    width: min(760px, 70vw); padding: 10px 16px 8px;
+    background: var(--glass); border: 1px solid var(--edge); border-radius: 16px;
+    backdrop-filter: blur(12px);
+  }
+  .scrub .row { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 4px; }
+  .scrub .lab { font-size: 9.5px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--ink-3); font-weight: 650; }
+  .scrub .live { font-size: 10px; font-weight: 800; color: var(--ok); letter-spacing: 0.1em; }
+  .scrub .replay { font-size: 10px; font-weight: 800; color: var(--accent); letter-spacing: 0.06em; }
+  .scrub svg { display: block; width: 100%; height: 44px; }
+  .scrub .film { fill: rgba(143, 194, 255, 0.18); }
+  .scrub .filmline { fill: none; stroke: var(--accent); stroke-width: 1.6; }
+  .scrub .head { stroke: var(--ink); stroke-width: 2; }
+  .scrub .headknob { fill: var(--ink); }
+  .scrub .ticks { font: 9px var(--mono); fill: var(--ink-3); }
+
+  .manifesto {
+    position: absolute; left: 34px; bottom: 30px; z-index: 6;
+    font-size: 11.5px; color: var(--ink-3); line-height: 1.8; max-width: 260px;
+  }
+  .manifesto b { color: var(--ink-2); }
+
+  /* ---- scene 2: the dock ---- */
+  .dim .rib-core, .dim .rib-soft { opacity: 0.06; filter: none; }
+  .dim .isl { opacity: 0.35; }
+  .dim text { opacity: 0.35; }
+  .dim .keep, .dim .keep text, .dim .keep .isl { opacity: 1; }
+  .dim .keep .rib-core { opacity: 0.85; filter: drop-shadow(0 0 6px currentColor); }
+
+  .dock {
+    position: absolute; left: 0; right: 0; bottom: 0; z-index: 7; height: 47vh; min-height: 380px;
+    background: rgba(8, 12, 24, 0.88); border-top: 1px solid var(--edge-2);
+    backdrop-filter: blur(16px);
+    border-radius: 22px 22px 0 0; padding: 0 26px;
+  }
+  .dock-head { display: flex; align-items: baseline; gap: 16px; padding: 16px 4px 12px; }
+  .dock-head h2 { font-size: 16px; font-weight: 700; }
+  .dock-head h2 .to { color: var(--ink-3); font-weight: 400; padding: 0 6px; }
+  .stamp {
+    display: inline-block; font-size: 9.5px; font-weight: 800; letter-spacing: 0.12em;
+    color: var(--alarm); border: 1.5px solid var(--alarm); border-radius: 4px;
+    padding: 2px 8px; transform: rotate(-1deg);
+  }
+  .dock-head .meta { font-size: 11.5px; color: var(--ink-3); }
+  .dock-head .meta b { color: var(--ink-2); }
+  .dock-head .close { margin-left: auto; font-size: 11px; color: var(--ink-3); border: 1px solid var(--edge-2); border-radius: 999px; padding: 4px 12px; }
+  .holdnote { font-size: 11px; color: var(--iot); }
+
+  table.dockstream { width: 100%; border-collapse: collapse; }
+  .dockstream th {
+    text-align: left; font-size: 9px; letter-spacing: 0.12em; text-transform: uppercase;
+    color: var(--ink-3); font-weight: 650; padding: 6px 10px; border-bottom: 1px solid var(--edge-2);
+  }
+  .dockstream td { padding: 6px 10px; border-bottom: 1px solid rgba(150,180,255,0.07); font-family: var(--mono); font-size: 12px; white-space: nowrap; }
+  .t { color: var(--ink-3); font-size: 11px; }
+  .act { font-size: 10px; font-weight: 800; letter-spacing: 0.06em; padding: 1px 8px; border-radius: 999px; }
+  .act.drop { color: var(--alarm); background: rgba(255, 84, 112, 0.1); }
+  .host { color: var(--ink); }
+  .ip { color: var(--ink-3); font-size: 11px; margin-left: 5px; }
+  .arrow { color: var(--ink-3); }
+  .tools { display: inline-flex; gap: 5px; margin-left: 8px; }
+  .g { width: 19px; height: 19px; display: inline-flex; align-items: center; justify-content: center; border-radius: 6px; background: rgba(143,194,255,0.12); border: 1px solid rgba(143,194,255,0.3); color: var(--accent); font-size: 10px; }
+
+  .anchor { position: relative; }
+  .editor {
+    position: absolute; left: 0; bottom: 26px; z-index: 40; width: 330px; white-space: normal;
+    background: var(--glass-hi); border: 1px solid var(--accent); border-radius: 16px;
+    backdrop-filter: blur(18px); font-family: var(--sans);
+    box-shadow: 0 -14px 50px rgba(0,0,0,0.5), 0 0 26px rgba(143,194,255,0.12);
+    padding: 15px 17px;
+  }
+  .editor h3 { font-size: 13.5px; font-weight: 700; margin-bottom: 6px; }
+  .editor .ident { font-size: 11.5px; color: var(--ink-2); margin-bottom: 10px; }
+  .editor .ident b { color: var(--ink); font-family: var(--mono); }
+  .editor input[type=text] {
+    width: 100%; background: rgba(5, 8, 16, 0.85); border: 1px solid var(--accent); border-radius: 10px;
+    color: var(--ink); font: 13px var(--sans); padding: 8px 11px; outline: none;
+    box-shadow: 0 0 0 3px rgba(143, 194, 255, 0.15);
+  }
+  .editor .scope { font-size: 11px; color: var(--ink-2); margin: 9px 0 2px; }
+  .editor .note { font-size: 10.5px; color: var(--ink-3); margin-bottom: 11px; }
+  .editor .row { display: flex; gap: 9px; justify-content: flex-end; }
+  .editor .save { background: var(--accent); color: var(--void); border: 0; font: 700 11.5px var(--sans); padding: 7px 16px; border-radius: 999px; }
+  .editor .cancel { background: transparent; border: 1px solid var(--edge-2); color: var(--ink-2); font: 11.5px var(--sans); padding: 7px 13px; border-radius: 999px; }
+
+  /* ---- scene 3: lenses + numbers on the map ---- */
+  .metrics-float {
+    position: absolute; top: 128px; left: 34px; z-index: 6; display: flex; gap: 12px;
+    flex-wrap: wrap; width: 352px;
+  }
+  .mcard {
+    background: var(--glass); border: 1px solid var(--edge); border-radius: 16px;
+    backdrop-filter: blur(12px); padding: 12px 16px; min-width: 148px;
+  }
+  .mcard h4 { font-size: 9px; letter-spacing: 0.13em; text-transform: uppercase; color: var(--ink-3); font-weight: 650; margin-bottom: 5px; }
+  .mcard .v { font-size: 26px; font-weight: 750; letter-spacing: -0.02em; line-height: 1; }
+  .mcard .v small { font-size: 11px; color: var(--ink-3); font-weight: 500; margin-left: 4px; }
+  .mcard .d { font-size: 10.5px; margin-top: 4px; font-weight: 650; }
+  .mcard .d.up { color: var(--ok); } .mcard .d.warn { color: var(--alarm); }
+  .mcard .fchips { display: flex; gap: 5px; margin-top: 6px; flex-wrap: wrap; }
+  .mcard .fchip { font-size: 9.5px; border: 1px solid var(--edge-2); border-radius: 999px; padding: 1px 8px; color: var(--ink-2); }
+
+  @media (prefers-reduced-motion: reduce) { * { animation: none !important; } }
+</style>
+</head>
+<body>
+
+<div class="concept">
+  <b>DIRECTION D — ATLAS</b>
+  <span>the map is the app · no pages, only lenses and docks · time is a scrubber · click = you never leave</span>
+  <span style="margin-left:auto">
+    <a href="#s1">1 the place</a><a href="#s2">2 the dock</a><a href="#s3">3 lens + time</a>
+  </span>
+</div>
+
+<!-- ============ SCENE 1 : THE PLACE ============ -->
+<section class="scene" id="s1">
+  <div class="scene-tag">Scene 1 — home is the network itself. Traffic lens, live.</div>
+
+  <div class="crumb">
+    <div class="wordmark">MIKRO<em>VIEW</em></div>
+    <div class="path">Network <span class="sep">▸</span> <span class="here">—</span></div>
+    <div class="sub">rb5009 · <b>41 rules</b> pushed 14:01 · tom (admin)</div>
+  </div>
+
+  <div class="lenses">
+    <span class="lens on">Traffic</span><span class="lens">Policy</span><span class="lens">Coverage</span><span class="lens">Flags</span>
+  </div>
+  <div class="lens-note">lenses repaint this map —<br>they are not pages</div>
+
+  <div class="stage">
+    <svg viewBox="0 0 1400 720" preserveAspectRatio="xMidYMid meet" role="img"
+         aria-label="The whole application is a live network map: internet above, router rb5009 centre, four network islands below. Traffic moves as light along the ribbons. A red arc marks an unplanned IoT-to-LAN flow. A drop concentration and an unlogged guest boundary are labelled.">
+
+      <!-- ribbons: casing / soft glow / bright core -->
+      <path class="rib-case" d="M700 118 V 258"/>
+      <path class="rib-case" d="M640 342 C 560 430, 350 465, 278 545"/>
+      <path class="rib-case" d="M682 342 C 652 430, 592 475, 572 545"/>
+      <path class="rib-case" d="M722 342 C 752 430, 822 475, 852 545"/>
+      <path class="rib-case" d="M762 342 C 852 425, 1055 462, 1122 545"/>
+      <path class="rib-case" d="M1092 172 C 1000 212, 890 245, 848 264"/>
+      <path class="rib-ghost" d="M1112 178 C 950 320, 700 430, 606 540"/>
+
+      <path class="rib-soft" d="M700 118 V 258" stroke="var(--accent)" stroke-width="8"/>
+      <path class="rib-core" d="M700 118 V 258" stroke="var(--accent)" stroke-width="3" style="color:var(--accent)"/>
+      <path class="rib-soft" d="M640 342 C 560 430, 350 465, 278 545" stroke="var(--lan)" stroke-width="8"/>
+      <path class="rib-core" d="M640 342 C 560 430, 350 465, 278 545" stroke="var(--lan)" stroke-width="3" style="color:var(--lan)"/>
+      <path class="rib-soft" d="M682 342 C 652 430, 592 475, 572 545" stroke="var(--srv)" stroke-width="6"/>
+      <path class="rib-core" d="M682 342 C 652 430, 592 475, 572 545" stroke="var(--srv)" stroke-width="2.2" style="color:var(--srv)"/>
+      <path class="rib-soft" d="M722 342 C 752 430, 822 475, 852 545" stroke="var(--iot)" stroke-width="5"/>
+      <path class="rib-core" d="M722 342 C 752 430, 822 475, 852 545" stroke="var(--iot)" stroke-width="1.8" style="color:var(--iot)"/>
+      <path class="rib-soft" d="M762 342 C 852 425, 1055 462, 1122 545" stroke="var(--guest)" stroke-width="5"/>
+      <path class="rib-core" d="M762 342 C 852 425, 1055 462, 1122 545" stroke="var(--guest)" stroke-width="1.8" style="color:var(--guest)"/>
+      <path class="rib-soft" d="M1092 172 C 1000 212, 890 245, 848 264" stroke="var(--lan)" stroke-width="5"/>
+      <path class="rib-core" d="M1092 172 C 1000 212, 890 245, 848 264" stroke="var(--lan)" stroke-width="1.8" style="color:var(--lan)"/>
+
+      <!-- the alarm arc -->
+      <path class="rib-alarm" d="M832 552 C 725 440, 405 440, 300 552"/>
+
+      <!-- comets -->
+      <g aria-hidden="true">
+        <circle r="3.5" fill="var(--accent)" style="filter:drop-shadow(0 0 5px var(--accent)); offset-path: path('M700 118 V 258'); animation: travel 1.5s linear infinite;"/>
+        <circle r="3.5" fill="var(--accent)" style="filter:drop-shadow(0 0 5px var(--accent)); offset-path: path('M700 118 V 258'); animation: travel 1.5s linear 0.75s infinite;"/>
+        <circle r="3.5" fill="var(--lan)" style="filter:drop-shadow(0 0 5px var(--lan)); offset-path: path('M640 342 C 560 430, 350 465, 278 545'); animation: travel 2s linear infinite;"/>
+        <circle r="3.5" fill="var(--lan)" style="filter:drop-shadow(0 0 5px var(--lan)); offset-path: path('M640 342 C 560 430, 350 465, 278 545'); animation: travel 2s linear 0.66s infinite;"/>
+        <circle r="3.5" fill="var(--lan)" style="filter:drop-shadow(0 0 5px var(--lan)); offset-path: path('M640 342 C 560 430, 350 465, 278 545'); animation: travel 2s linear 1.33s infinite;"/>
+        <circle r="3" fill="var(--srv)" style="filter:drop-shadow(0 0 5px var(--srv)); offset-path: path('M682 342 C 652 430, 592 475, 572 545'); animation: travel 2.4s linear infinite;"/>
+        <circle r="3" fill="var(--srv)" style="filter:drop-shadow(0 0 5px var(--srv)); offset-path: path('M682 342 C 652 430, 592 475, 572 545'); animation: travel 2.4s linear 1.2s infinite;"/>
+        <circle r="3" fill="var(--iot)" style="filter:drop-shadow(0 0 5px var(--iot)); offset-path: path('M722 342 C 752 430, 822 475, 852 545'); animation: travel 3s linear infinite;"/>
+        <circle r="3" fill="var(--guest)" style="filter:drop-shadow(0 0 5px var(--guest)); offset-path: path('M762 342 C 852 425, 1055 462, 1122 545'); animation: travel 3.4s linear infinite;"/>
+        <circle r="3" fill="var(--lan)" style="filter:drop-shadow(0 0 5px var(--lan)); offset-path: path('M1092 172 C 1000 212, 890 245, 848 264'); animation: travel 3.2s linear infinite;"/>
+        <circle r="4" fill="var(--alarm)" style="filter:drop-shadow(0 0 6px var(--alarm)); offset-path: path('M832 552 C 725 440, 405 440, 300 552'); animation: travel 1.7s linear infinite;"/>
+      </g>
+
+      <!-- rate chips on ribbons -->
+      <g transform="translate(668 190)"><rect class="chip-g" x="-8" y="-12" width="52" height="19" rx="9"/><text class="chip-t" x="0" y="2">18/s</text></g>
+      <g transform="translate(430 452)"><rect class="chip-g" x="-8" y="-12" width="48" height="19" rx="9"/><text class="chip-t" x="0" y="2">9/s</text></g>
+      <g transform="translate(598 462)"><rect class="chip-g" x="-8" y="-12" width="48" height="19" rx="9"/><text class="chip-t" x="0" y="2">5/s</text></g>
+      <g transform="translate(800 452)"><rect class="chip-g" x="-8" y="-12" width="52" height="19" rx="9"/><text class="chip-t" x="0" y="2">1.2/s</text></g>
+      <g transform="translate(1005 428)"><rect class="chip-g" x="-8" y="-12" width="52" height="19" rx="9"/><text class="chip-t" x="0" y="2">0.4/s</text></g>
+
+      <!-- alarm chip on the arc apex -->
+      <g transform="translate(462 402)">
+        <rect class="chip-a" x="-12" y="-16" width="236" height="42" rx="11"/>
+        <circle cx="2" cy="-3" r="3.5" fill="var(--alarm)"/>
+        <circle cx="2" cy="-3" r="3.5" fill="none" stroke="var(--alarm)" class="halo"/>
+        <text x="14" y="0" font-size="10" font-weight="800" fill="var(--alarm)">UNPLANNED FLOW · iot → lan</text>
+        <text x="14" y="15" class="chip-t">tcp/445 · caught by default drop · 14×</text>
+      </g>
+
+      <!-- drop weather on wan -->
+      <g transform="translate(742 150)">
+        <rect class="chip-g" x="-8" y="-13" width="196" height="22" rx="10" style="stroke:var(--alarm)"/>
+        <text x="2" y="3" font-size="9.5" font-weight="700" fill="var(--alarm)">1.4k drops/h · wan-in-drop ▲3.1×</text>
+      </g>
+
+      <!-- WAN -->
+      <g transform="translate(700 78)">
+        <rect class="isl" x="-105" y="-32" width="210" height="64" rx="18" stroke="var(--edge-2)"/>
+        <text x="-86" y="-4" class="n-name">Internet</text>
+        <text x="-86" y="15" class="n-cidr">ether1 · 203.0.113.7</text>
+        <text x="52" y="-8" class="cov-l">LOGGED</text>
+        <text x="52" y="5" class="n-sub">in / out</text>
+      </g>
+
+      <!-- router: the waist, wearing a quiet ring -->
+      <g transform="translate(700 300)">
+        <rect class="isl" x="-140" y="-38" width="280" height="76" rx="20" stroke="rgba(143,194,255,0.55)" style="filter: drop-shadow(0 0 18px rgba(143,194,255,0.22))"/>
+        <text x="-120" y="-8" class="n-name">rb5009</text>
+        <text x="-120" y="12" class="n-sub">RouterOS 7.20.1 · every flow crosses this waist · 41 rules</text>
+      </g>
+
+      <!-- WG -->
+      <g transform="translate(1140 148)">
+        <rect class="isl" x="-88" y="-30" width="192" height="60" rx="16" stroke="var(--edge-2)"/>
+        <text x="-70" y="-3" class="n-name" style="font-size:14px">WireGuard</text>
+        <text x="-70" y="15" class="n-cidr">wg0 · 10.99.0.0/24</text>
+        <text x="56" y="-8" class="cov-q">QUIET</text>
+        <text x="56" y="5" class="n-sub">by choice</text>
+      </g>
+
+      <!-- islands -->
+      <g transform="translate(278 552)">
+        <rect class="isl" x="-115" y="0" width="230" height="128" rx="18" stroke="var(--lan)" stroke-opacity="0.55"/>
+        <circle cx="-96" cy="24" r="4.5" fill="var(--lan)" style="filter:drop-shadow(0 0 5px var(--lan))"/>
+        <text x="-84" y="29" class="n-name">LAN</text><text x="26" y="29" class="n-cidr">10.0.10.0/24</text>
+        <text x="-96" y="56" class="n-member">tom-desktop · phone-tom · laptop-anna</text>
+        <text x="-96" y="74" class="n-sub">+9 quiet hosts</text>
+        <text x="-96" y="108" class="cov-l">LOGGED BOTH WAYS</text>
+      </g>
+      <g transform="translate(572 552)">
+        <rect class="isl" x="-115" y="0" width="230" height="128" rx="18" stroke="var(--srv)" stroke-opacity="0.55"/>
+        <circle cx="-96" cy="24" r="4.5" fill="var(--srv)" style="filter:drop-shadow(0 0 5px var(--srv))"/>
+        <text x="-84" y="29" class="n-name">Servers</text><text x="26" y="29" class="n-cidr">10.0.40.0/24</text>
+        <text x="-96" y="56" class="n-member">nas · pihole · unifi</text>
+        <text x="-96" y="108" class="cov-l">LOGGED BOTH WAYS</text>
+      </g>
+      <g transform="translate(852 552)">
+        <rect class="isl" x="-115" y="0" width="230" height="128" rx="18" stroke="var(--iot)" stroke-opacity="0.55"/>
+        <circle cx="-96" cy="24" r="4.5" fill="var(--iot)" style="filter:drop-shadow(0 0 5px var(--iot))"/>
+        <text x="-84" y="29" class="n-name">IoT</text><text x="26" y="29" class="n-cidr">10.0.20.0/24</text>
+        <text x="-96" y="56" class="n-member">cam-porch · hue-bridge · thermostat</text>
+        <text x="-96" y="74" class="n-sub">+4 quiet hosts</text>
+        <text x="-96" y="108" class="cov-l">LOGGED BOTH WAYS</text>
+        <!-- a flag blooming where it happened -->
+        <circle cx="-62" cy="52" r="5" fill="none" stroke="var(--alarm)" stroke-width="1.5" class="halo"/>
+      </g>
+      <g transform="translate(1122 552)">
+        <rect class="isl" x="-115" y="0" width="230" height="128" rx="18" stroke="var(--guest)" stroke-opacity="0.55"/>
+        <circle cx="-96" cy="24" r="4.5" fill="var(--guest)" style="filter:drop-shadow(0 0 5px var(--guest))"/>
+        <text x="-84" y="29" class="n-name">Guest</text><text x="26" y="29" class="n-cidr">10.0.30.0/24</text>
+        <text x="-96" y="56" class="n-member">guest-e8b2 · +2 quiet</text>
+        <text x="-96" y="92" class="cov-d">DARK TOWARD WAN</text>
+        <text x="-96" y="108" class="n-sub">no log rule on this boundary</text>
+      </g>
+    </svg>
+  </div>
+
+  <div class="manifesto">
+    <b>There are no pages.</b><br>
+    Live is a dock. Metrics is a lens.<br>
+    Flags bloom where they happen.<br>
+    Click anything — you never leave.
+  </div>
+
+  <div class="scrub">
+    <div class="row"><span class="lab">The last 15 minutes</span><span class="live">● LIVE</span></div>
+    <svg viewBox="0 0 720 44" preserveAspectRatio="none" role="img" aria-label="Timeline of the last fifteen minutes of events, playhead at live edge">
+      <polygon class="film" points="0,44 0,26 30,24 60,27 90,22 120,25 150,19 180,22 210,17 240,20 270,14 300,18 330,7 360,12 390,17 420,15 450,19 480,16 510,13 540,17 570,12 600,15 630,11 660,13 690,12 720,14 720,44"/>
+      <polyline class="filmline" points="0,26 30,24 60,27 90,22 120,25 150,19 180,22 210,17 240,20 270,14 300,18 330,7 360,12 390,17 420,15 450,19 480,16 510,13 540,17 570,12 600,15 630,11 660,13 690,12 720,14"/>
+      <line class="head" x1="718" y1="2" x2="718" y2="44"/><circle class="headknob" cx="718" cy="4" r="3.5"/>
+      <text class="ticks" x="2" y="42">13:47</text><text class="ticks" x="330" y="42">13:55 — that spike is a question</text><text class="ticks" x="694" y="42">now</text>
+    </svg>
+  </div>
+</section>
+
+<!-- ============ SCENE 2 : THE DOCK ============ -->
+<section class="scene" id="s2">
+  <div class="scene-tag">Scene 2 — an edge was clicked. The stream rises to meet you; the map stays under your feet.</div>
+
+  <div class="crumb">
+    <div class="wordmark">MIKRO<em>VIEW</em></div>
+    <div class="path">Network <span class="sep">▸</span> <span class="here">iot → lan</span></div>
+    <div class="sub">the boundary’s own stream · nothing was navigated</div>
+  </div>
+
+  <div class="lenses">
+    <span class="lens on">Traffic</span><span class="lens">Policy</span><span class="lens">Coverage</span><span class="lens">Flags</span>
+  </div>
+
+  <div class="stage dim" style="bottom:47vh">
+    <svg viewBox="0 0 1400 460" preserveAspectRatio="xMidYMin meet" aria-hidden="true">
+      <path class="rib-case" d="M700 90 V 200"/>
+      <path class="rib-soft" d="M700 90 V 200" stroke="var(--accent)" stroke-width="8"/>
+      <path class="rib-core" d="M700 90 V 200" stroke="var(--accent)" stroke-width="3" style="color:var(--accent)"/>
+      <path class="rib-case" d="M640 262 C 560 320, 350 340, 278 392"/>
+      <path class="rib-soft" d="M640 262 C 560 320, 350 340, 278 392" stroke="var(--lan)" stroke-width="8"/>
+      <path class="rib-case" d="M682 262 C 652 320, 592 350, 572 392"/>
+      <path class="rib-soft" d="M682 262 C 652 320, 592 350, 572 392" stroke="var(--srv)" stroke-width="6"/>
+      <path class="rib-case" d="M722 262 C 752 320, 822 350, 852 392"/>
+      <path class="rib-soft" d="M722 262 C 752 320, 822 350, 852 392" stroke="var(--iot)" stroke-width="5"/>
+      <path class="rib-case" d="M762 262 C 852 315, 1055 335, 1122 392"/>
+      <path class="rib-soft" d="M762 262 C 852 315, 1055 335, 1122 392" stroke="var(--guest)" stroke-width="5"/>
+
+      <g class="keep">
+        <path class="rib-alarm" d="M832 398 C 725 300, 405 300, 300 398"/>
+        <circle r="4" fill="var(--alarm)" style="filter:drop-shadow(0 0 6px var(--alarm)); offset-path: path('M832 398 C 725 300, 405 300, 300 398'); animation: travel 1.7s linear infinite;"/>
+        <circle r="4" fill="var(--alarm)" style="filter:drop-shadow(0 0 6px var(--alarm)); offset-path: path('M832 398 C 725 300, 405 300, 300 398'); animation: travel 1.7s linear 0.85s infinite;"/>
+      </g>
+
+      <g transform="translate(700 262)">
+        <rect class="isl" x="-140" y="-34" width="280" height="68" rx="20" stroke="rgba(143,194,255,0.35)"/>
+        <text x="-120" y="-4" class="n-name">rb5009</text>
+        <text x="-120" y="15" class="n-sub">the waist — this boundary crosses it</text>
+      </g>
+      <g transform="translate(700 66)"><rect class="isl" x="-90" y="-26" width="180" height="52" rx="16" stroke="var(--edge-2)"/><text x="-72" y="4" class="n-name" style="font-size:13px">Internet</text></g>
+
+      <g class="keep" transform="translate(278 398)">
+        <rect class="isl" x="-115" y="0" width="230" height="60" rx="18" stroke="var(--lan)" stroke-opacity="0.8"/>
+        <circle cx="-96" cy="24" r="4.5" fill="var(--lan)" style="filter:drop-shadow(0 0 5px var(--lan))"/>
+        <text x="-84" y="29" class="n-name">LAN</text><text x="26" y="29" class="n-cidr">10.0.10.0/24</text>
+      </g>
+      <g transform="translate(572 398)"><rect class="isl" x="-115" y="0" width="230" height="60" rx="18" stroke="var(--srv)" stroke-opacity="0.5"/><text x="-96" y="29" class="n-name" style="font-size:13px">Servers</text></g>
+      <g class="keep" transform="translate(852 398)">
+        <rect class="isl" x="-115" y="0" width="230" height="60" rx="18" stroke="var(--iot)" stroke-opacity="0.8"/>
+        <circle cx="-96" cy="24" r="4.5" fill="var(--iot)" style="filter:drop-shadow(0 0 5px var(--iot))"/>
+        <text x="-84" y="29" class="n-name">IoT</text><text x="26" y="29" class="n-cidr">10.0.20.0/24</text>
+      </g>
+      <g transform="translate(1122 398)"><rect class="isl" x="-115" y="0" width="230" height="60" rx="18" stroke="var(--guest)" stroke-opacity="0.5"/><text x="-96" y="29" class="n-name" style="font-size:13px">Guest</text></g>
+    </svg>
+  </div>
+
+  <div class="dock">
+    <div class="dock-head">
+      <h2>iot <span class="to">→</span> lan</h2>
+      <span class="stamp">UNPLANNED</span>
+      <span class="meta"><b>14 events</b> in 15 min · all tcp/445 · all caught by the default drop</span>
+      <span class="holdnote">◉ stream held — editor open</span>
+      <span class="close">✕ back to the map</span>
+    </div>
+    <table class="dockstream">
+      <thead><tr><th>time</th><th>action</th><th>source</th><th></th><th>destination</th><th>proto/port</th><th>rule</th></tr></thead>
+      <tbody>
+        <tr>
+          <td class="t">14:02:11.482</td><td><span class="act drop">DROP</span></td>
+          <td class="anchor"><span class="host">cam-porch</span><span class="ip">10.0.20.31</span>
+            <span class="tools"><span class="g" title="Copy raw value">⧉</span><span class="g" title="Edit name for 10.0.20.31">✎</span></span>
+            <div class="editor" role="dialog" aria-label="Name this host">
+              <h3>Name this host</h3>
+              <div class="ident"><b>10.0.20.31</b> — currently “cam-porch”, from a DHCP lease</div>
+              <input type="text" value="Porch camera" aria-label="Display name">
+              <p class="scope">Applies everywhere 10.0.20.31 appears — including this map.</p>
+              <p class="note">Display only. Filters, groups and copies keep using the raw value.</p>
+              <div class="row"><button class="cancel">Cancel</button><button class="save">Save</button></div>
+            </div>
+          </td>
+          <td class="arrow">→</td>
+          <td><span class="host">nas</span><span class="ip">10.0.40.10</span></td>
+          <td>tcp/445 <span class="t">smb</span></td><td class="t">iot-to-lan-drop</td>
+        </tr>
+        <tr><td class="t">14:01:58.104</td><td><span class="act drop">DROP</span></td><td><span class="host">cam-porch</span><span class="ip">10.0.20.31</span></td><td class="arrow">→</td><td><span class="host">nas</span><span class="ip">10.0.40.10</span></td><td>tcp/445 <span class="t">smb</span></td><td class="t">iot-to-lan-drop</td></tr>
+        <tr><td class="t">14:01:43.771</td><td><span class="act drop">DROP</span></td><td><span class="host">cam-porch</span><span class="ip">10.0.20.31</span></td><td class="arrow">→</td><td><span class="host">tom-desktop</span><span class="ip">10.0.10.21</span></td><td>tcp/445 <span class="t">smb</span></td><td class="t">iot-to-lan-drop</td></tr>
+        <tr><td class="t">14:01:29.310</td><td><span class="act drop">DROP</span></td><td><span class="host">cam-porch</span><span class="ip">10.0.20.31</span></td><td class="arrow">→</td><td><span class="host">nas</span><span class="ip">10.0.40.10</span></td><td>tcp/139 <span class="t">netbios</span></td><td class="t">iot-to-lan-drop</td></tr>
+        <tr><td class="t">14:01:12.089</td><td><span class="act drop">DROP</span></td><td><span class="host">cam-porch</span><span class="ip">10.0.20.31</span></td><td class="arrow">→</td><td><span class="host">nas</span><span class="ip">10.0.40.10</span></td><td>tcp/445 <span class="t">smb</span></td><td class="t">iot-to-lan-drop</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<!-- ============ SCENE 3 : LENSES + TIME ============ -->
+<section class="scene" id="s3">
+  <div class="scene-tag">Scene 3 — Coverage lens on, scrubber dragged back to the spike. Same place, different question.</div>
+
+  <div class="crumb">
+    <div class="wordmark">MIKRO<em>VIEW</em></div>
+    <div class="path">Network <span class="sep">▸</span> <span class="here">13:55, replayed</span></div>
+    <div class="sub">what could the log have seen, and where is it blind?</div>
+  </div>
+
+  <div class="lenses">
+    <span class="lens">Traffic</span><span class="lens">Policy</span><span class="lens on">Coverage</span><span class="lens">Flags</span>
+  </div>
+
+  <div class="metrics-float">
+    <div class="mcard"><h4>Events / s</h4><div class="v">61<small>at 13:55</small></div><div class="d up">▲ spike under the playhead</div></div>
+    <div class="mcard"><h4>Drops / s</h4><div class="v">6.2</div><div class="d warn">▲ 3.1× · wan input</div></div>
+    <div class="mcard"><h4>Flags today</h4><div class="v">6</div><div class="fchips"><span class="fchip"><b>3</b> port_scan</span><span class="fchip"><b>2</b> bad_ip</span><span class="fchip"><b>1</b> new</span></div></div>
+    <div class="mcard"><h4>Coverage</h4><div class="v">9<small>of 11</small></div><div class="d">1 quiet · <span style="color:var(--alarm)">1 dark</span></div></div>
+  </div>
+
+  <div class="stage">
+    <svg viewBox="0 0 1400 720" preserveAspectRatio="xMidYMid meet" role="img"
+         aria-label="The same map wearing the coverage lens: logged boundaries drawn solid, the WireGuard boundary marked quiet by choice, and the guest-to-WAN boundary hollow and red, labelled dark.">
+
+      <path class="rib-case" d="M700 118 V 258"/>
+      <path class="rib-core" d="M700 118 V 258" stroke="var(--ok)" stroke-width="2.6" style="color:var(--ok)"/>
+      <path class="rib-case" d="M640 342 C 560 430, 350 465, 278 545"/>
+      <path class="rib-core" d="M640 342 C 560 430, 350 465, 278 545" stroke="var(--ok)" stroke-width="2.6" style="color:var(--ok)"/>
+      <path class="rib-case" d="M682 342 C 652 430, 592 475, 572 545"/>
+      <path class="rib-core" d="M682 342 C 652 430, 592 475, 572 545" stroke="var(--ok)" stroke-width="2.6" style="color:var(--ok)"/>
+      <path class="rib-case" d="M722 342 C 752 430, 822 475, 852 545"/>
+      <path class="rib-core" d="M722 342 C 752 430, 822 475, 852 545" stroke="var(--ok)" stroke-width="2.6" style="color:var(--ok)"/>
+      <!-- guest: DARK — hollow, alarm-outlined -->
+      <path class="rib-case" d="M762 342 C 852 425, 1055 462, 1122 545" style="stroke: rgba(255,84,112,0.3); stroke-dasharray: 5 7;"/>
+      <!-- wg: QUIET by choice — dim, deliberate -->
+      <path class="rib-case" d="M1092 172 C 1000 212, 890 245, 848 264" style="stroke-dasharray: 1 9;"/>
+
+      <g transform="translate(940 470)">
+        <rect class="chip-a" x="-12" y="-16" width="252" height="44" rx="11"/>
+        <text x="2" y="-1" font-size="10" font-weight="800" fill="var(--alarm)">DARK · guest → wan carries traffic</text>
+        <text x="2" y="15" class="chip-t">no log rule — mikroview cannot see it</text>
+      </g>
+      <g transform="translate(880 208)">
+        <rect class="chip-g" x="-10" y="-14" width="210" height="24" rx="10"/>
+        <text x="2" y="3" class="chip-t">QUIET by choice — wg marked deliberate</text>
+      </g>
+
+      <g transform="translate(700 78)">
+        <rect class="isl" x="-105" y="-32" width="210" height="64" rx="18" stroke="var(--edge-2)"/>
+        <text x="-86" y="-4" class="n-name">Internet</text>
+        <text x="-86" y="15" class="n-cidr">ether1 · 203.0.113.7</text>
+        <text x="52" y="-2" class="cov-l">LOGGED</text>
+      </g>
+      <g transform="translate(700 300)">
+        <rect class="isl" x="-140" y="-38" width="280" height="76" rx="20" stroke="rgba(143,194,255,0.55)"/>
+        <text x="-120" y="-8" class="n-name">rb5009</text>
+        <text x="-120" y="12" class="n-sub">coverage is a property of each boundary and direction</text>
+      </g>
+      <g transform="translate(1140 148)">
+        <rect class="isl" x="-88" y="-30" width="192" height="60" rx="16" stroke="var(--edge-2)"/>
+        <text x="-70" y="-3" class="n-name" style="font-size:14px">WireGuard</text>
+        <text x="-70" y="15" class="n-cidr">wg0 · 10.99.0.0/24</text>
+        <text x="56" y="-2" class="cov-q">QUIET</text>
+      </g>
+      <g transform="translate(278 552)">
+        <rect class="isl" x="-115" y="0" width="230" height="96" rx="18" stroke="var(--lan)" stroke-opacity="0.4"/>
+        <text x="-96" y="29" class="n-name">LAN</text><text x="26" y="29" class="n-cidr">10.0.10.0/24</text>
+        <text x="-96" y="58" class="cov-l">LOGGED BOTH WAYS</text>
+        <text x="-96" y="76" class="n-sub">1,940 ev/min at the playhead</text>
+      </g>
+      <g transform="translate(572 552)">
+        <rect class="isl" x="-115" y="0" width="230" height="96" rx="18" stroke="var(--srv)" stroke-opacity="0.4"/>
+        <text x="-96" y="29" class="n-name">Servers</text><text x="26" y="29" class="n-cidr">10.0.40.0/24</text>
+        <text x="-96" y="58" class="cov-l">LOGGED BOTH WAYS</text>
+        <text x="-96" y="76" class="n-sub">1,210 ev/min</text>
+      </g>
+      <g transform="translate(852 552)">
+        <rect class="isl" x="-115" y="0" width="230" height="96" rx="18" stroke="var(--iot)" stroke-opacity="0.4"/>
+        <text x="-96" y="29" class="n-name">IoT</text><text x="26" y="29" class="n-cidr">10.0.20.0/24</text>
+        <text x="-96" y="58" class="cov-l">LOGGED BOTH WAYS</text>
+        <text x="-96" y="76" class="n-sub">640 ev/min</text>
+      </g>
+      <g transform="translate(1122 552)">
+        <rect class="isl" x="-115" y="0" width="230" height="96" rx="18" stroke="var(--guest)" stroke-opacity="0.7"/>
+        <text x="-96" y="29" class="n-name">Guest</text><text x="26" y="29" class="n-cidr">10.0.30.0/24</text>
+        <text x="-96" y="58" class="cov-d">DARK TOWARD WAN</text>
+        <text x="-96" y="76" class="n-sub">88 ev/min seen — the rest unknowable</text>
+      </g>
+    </svg>
+  </div>
+
+  <div class="manifesto">
+    <b>Same place, different question.</b><br>
+    The coverage lens asks: where is<br>
+    the log blind, and is it on purpose?
+  </div>
+
+  <div class="scrub">
+    <div class="row"><span class="lab">The last 15 minutes</span><span class="replay">◂◂ REPLAYING 13:55:04 · release to return to live</span></div>
+    <svg viewBox="0 0 720 44" preserveAspectRatio="none" role="img" aria-label="Timeline scrubbed back to 13:55, playhead on the spike">
+      <polygon class="film" points="0,44 0,26 30,24 60,27 90,22 120,25 150,19 180,22 210,17 240,20 270,14 300,18 330,7 360,12 390,17 420,15 450,19 480,16 510,13 540,17 570,12 600,15 630,11 660,13 690,12 720,14 720,44"/>
+      <polyline class="filmline" points="0,26 30,24 60,27 90,22 120,25 150,19 180,22 210,17 240,20 270,14 300,18 330,7 360,12 390,17 420,15 450,19 480,16 510,13 540,17 570,12 600,15 630,11 660,13 690,12 720,14"/>
+      <line class="head" x1="330" y1="2" x2="330" y2="44"/><circle class="headknob" cx="330" cy="4" r="3.5"/>
+      <text class="ticks" x="2" y="42">13:47</text><text class="ticks" x="344" y="42">13:55 — the map is showing this moment</text><text class="ticks" x="694" y="42">now</text>
+    </svg>
+  </div>
+</section>
+
+</body>
+</html>
