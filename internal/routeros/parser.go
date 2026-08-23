@@ -22,6 +22,18 @@ type Parsed struct {
 	RuleLabel string
 	Chain     string
 
+	// ActionFromPrefix records that Action was declared by the rule's
+	// log-prefix, rather than inferred from the line or left unknown.
+	//
+	// Not part of store.Event, unlike every other field here: it is
+	// about how this line was read, not about the packet. The setup
+	// wizard is what needs it (#320 step 3) -- "events are arriving but
+	// your rules carry no log-prefix" is a real and easily-missed state,
+	// and once the parser can classify some untagged lines on its own
+	// (#437's NAT inference) a plain "did we get an action?" check would
+	// report that configuration as healthy.
+	ActionFromPrefix bool
+
 	InInterface  string
 	OutInterface string
 	ConnState    string
@@ -99,8 +111,20 @@ func clampField(s string) string {
 // None of these fields can legitimately contain a control character:
 // they are IPs, MAC addresses, RouterOS identifiers and protocol names.
 // See #285.
+//
+// Order matters here and is easy to get backwards: logging.Printable runs
+// first, clampField second. Printable replaces each invalid rune with the
+// 3-byte U+FFFD, so it can grow a string -- a run of stray continuation
+// bytes (attacker-chosen, not valid UTF-8 by construction) is decoded one
+// invalid byte at a time and each becomes a 3-byte replacement, up to 3x
+// longer than the input. Clamping before sanitising bounds the input to
+// maxFieldLen but not the output, which can then land back above it --
+// found by FuzzParse once the fuzz target started asserting the clamp
+// itself (#369) rather than only panics and port ranges. Clamping last
+// makes the maxFieldLen guarantee hold regardless of what Printable does
+// to the byte count.
 func safeField(s string) string {
-	return logging.Printable(clampField(s))
+	return clampField(logging.Printable(s))
 }
 
 // clampAll applies safeField to every extracted string field. Raw is
@@ -119,6 +143,7 @@ func (p *Parsed) clampAll() {
 	p.DstIP = safeField(p.DstIP)
 	p.NatIP = safeField(p.NatIP)
 	p.NatRaw = safeField(p.NatRaw)
+	p.Flags = safeField(p.Flags)
 }
 
 // The named return matters: clampAll runs in a defer, and with an
@@ -132,9 +157,7 @@ func Parse(msg string) (p Parsed) {
 
 	action, label, rest := stripPrefix(msg)
 	p.Action, p.RuleLabel = action, label
-	if p.Action == "" {
-		p.Action = store.ActionUnknown
-	}
+	p.ActionFromPrefix = action != ""
 
 	chain, body, ok := strings.Cut(rest, ":")
 	if ok {
@@ -153,7 +176,67 @@ func Parse(msg string) (p Parsed) {
 		applyField(seg, &p)
 	}
 
+	if p.Action == "" {
+		p.Action = inferAction(p)
+	}
+
 	return p
+}
+
+// inferAction classifies a line whose log-prefix did not declare an
+// action -- an untagged rule, or one tagged with a code this parser does
+// not know. It runs last, because what it reads (the chain, and whether
+// RouterOS annotated the line with a translation) is only known once the
+// body has been parsed.
+//
+// The bar is deliberately high: this returns a class only where the line
+// *states* it, never where the shape merely suggests it. An operator who
+// looks at the unknown bucket is entitled to find genuinely
+// unclassifiable lines there rather than ones this guessed wrong about,
+// so everything below is a rule about what the line proves.
+//
+// What qualifies:
+//
+//   - srcnat/dstnat chain carrying a "NAT (...)" annotation ->
+//     ActionNatted. Those two chain names exist only in
+//     /ip firewall nat, and the annotation is RouterOS reporting that
+//     this packet was translated. Both halves are required. The chain
+//     alone is not enough, because a NAT-table rule can be action=accept
+//     or action=log (a masquerade exemption, say), and those translate
+//     nothing -- and correspondingly get no annotation, so requiring one
+//     rules them out rather than mislabelling them. The annotation alone
+//     is not enough either: a *filter* rule in the forward chain logs
+//     the annotation too, for a translation some earlier NAT rule
+//     performed, and that line's action belongs to the filter rule.
+//
+// What does not, and why:
+//
+//   - postrouting exists only in /ip firewall mangle, so a line there is
+//     certainly a mangle rule -- but mangle's actions include change-mss,
+//     change-ttl, set-priority, sniff-tzsp and a dozen more besides the
+//     three mark actions, and nothing in the line says which. "marked"
+//     would be a coin flip dressed as a fact.
+//   - prerouting is shared between mangle and raw, and input/forward/
+//     output between filter, mangle and raw, so the chain narrows
+//     nothing at all.
+//
+// Mangle therefore reaches ActionMarked only through the M log-prefix
+// code (see prefix.go), which is the operator stating it -- the same
+// mechanism that already carries accept-versus-drop, and for the same
+// reason: RouterOS does not put it in the line.
+func inferAction(p Parsed) store.Action {
+	if isNATChain(p.Chain) && p.NatRaw != "" {
+		return store.ActionNatted
+	}
+	return store.ActionUnknown
+}
+
+// isNATChain reports whether chain is one of the two /ip firewall nat
+// chains. Case-insensitive: RouterOS emits these lower-case, and a
+// classification that silently stopped working on a firmware that did
+// not is the sort of thing #273 found for src-mac.
+func isNATChain(chain string) bool {
+	return strings.EqualFold(chain, "srcnat") || strings.EqualFold(chain, "dstnat")
 }
 
 // applyField applies one comma-separated segment of the message body.

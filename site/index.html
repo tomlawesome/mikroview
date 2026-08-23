@@ -99,16 +99,6 @@
     font-size: 14px;
   }
   nav.site-nav a:hover { color: var(--fg); }
-  .ai-badge {
-    font-family: var(--font-mono);
-    font-size: 11.5px;
-    color: var(--fg-dim);
-    border: 1px solid var(--border);
-    border-radius: 5px;
-    padding: 5px 10px;
-    white-space: nowrap;
-    cursor: help;
-  }
   .btn {
     display: inline-flex;
     align-items: center;
@@ -420,7 +410,6 @@
       <a href="#features">Features</a>
       <a href="#screenshot">Screenshot</a>
       <a href="#quickstart">Quickstart</a>
-      <span class="ai-badge" title="MikroView was coded by Claude under human direction">Coded by Claude</span>
       <button class="theme-toggle" id="theme-toggle" type="button">Theme: System</button>
       <a class="btn btn-primary" href="https://github.com/tomlawesome/mikroview">GitHub →</a>
     </nav>
@@ -436,9 +425,9 @@
       <h1>See what your<br/>firewall <span class="accent">just did.</span></h1>
       <p class="hero-sub">
         MikroView turns RouterOS's firewall log into a real-time, filterable live
-        view — like OPNsense's live view, for RouterOS. Every connection, accepted,
-        dropped, or rejected, and by which rule. Syslog-based, so there's no API
-        access and no credentials on the router — just <code>docker compose up</code>.
+        view. Every connection, accepted, dropped, or rejected, and by which
+        rule. Syslog-based, so there's no API access and no credentials on the
+        router — just <code>docker compose up</code>.
       </p>
       <div class="hero-ctas">
         <a class="btn btn-primary" href="https://github.com/tomlawesome/mikroview">View on GitHub</a>
@@ -474,9 +463,10 @@
         log-prefix convention.</p>
       </div>
       <div class="feature-card">
-        <h3><span class="chip"></span>One container, 15MB</h3>
+        <h3><span class="chip"></span>One small container</h3>
         <p>A single Go binary with the UI embedded, shipped in a distroless
-        image. <code>docker compose up</code> and you're watching traffic.</p>
+        image under 30MB. <code>docker compose up</code> and you're watching
+        traffic.</p>
       </div>
       <div class="feature-card">
         <h3><span class="chip"></span>Filter like you mean it</h3>
@@ -485,9 +475,10 @@
       </div>
       <div class="feature-card">
         <h3><span class="chip"></span>Flags, not just logs</h3>
-        <p>Port scans, activity spikes, and repeated hits on critical ports
-        (SSH, RDP, Winbox...) raise a flag for a human to review — never
-        an automatic action.</p>
+        <p>Port scans, activity spikes, repeated hits on critical ports
+        (SSH, RDP, Winbox...) and a dozen more detectors raise a flag for a
+        human to review — never an automatic action. A watchlist covers the
+        other direction: what <em>should</em> happen, and what deviated.</p>
       </div>
       <div class="feature-card">
         <h3><span class="chip"></span>Secure by default</h3>
@@ -515,12 +506,14 @@
     <div class="terminal">
       <div class="chrome"><span></span><span></span><span></span></div>
       <pre><span class="prompt">$</span> <span class="cmd">docker run -d --name mikroview \</span>
-    <span class="flag">-p</span> <span class="val">514:1514/udp</span> <span class="flag">-p</span> <span class="val">514:1514/tcp</span> <span class="flag">-p</span> <span class="val">8080:8080</span> \
+    <span class="flag">-p</span> <span class="val">6514:6514/tcp</span> <span class="flag">-p</span> <span class="val">443:8080</span> \
     ghcr.io/tomlawesome/mikroview:latest</pre>
     </div>
     <p class="quickstart-note">
-      Then point RouterOS at it — two commands and a log-prefix convention,
-      see <a href="https://github.com/tomlawesome/mikroview/blob/main/docs/routeros-setup.md">docs/routeros-setup.md</a>.
+      Then point RouterOS at it — syslog over TLS (RouterOS 7.18+), and the
+      built-in guided wizard writes every command with your values already
+      filled in. Reference:
+      <a href="https://github.com/tomlawesome/mikroview/blob/main/docs/routeros-setup.md">docs/routeros-setup.md</a>.
     </p>
   </div>
 </section>

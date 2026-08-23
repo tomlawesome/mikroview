@@ -32,6 +32,16 @@ const maxFieldLen = 256
 // meant to be reached in practice.
 const maxRecordsPerPage = 1000
 
+// maxListItems bounds how many entries one RouterOSList field may carry
+// -- a WireGuard peer's allowed addresses, a rule's connection-state
+// set. The whole-body limit already bounds this loosely, but a cap on
+// the field itself is what this package does everywhere else, and the
+// legitimate numbers are tiny: RouterOS has five connection states, and
+// a peer routing 64 separate subnets is already far past any real
+// deployment. Refused whole rather than truncated, like every other cap
+// here.
+const maxListItems = 64
+
 // maxPages bounds Payload.Pages so a malformed or malicious value (a
 // page claiming to be one of a billion) can't make a downstream
 // page-tracking or staleness scheme allocate or iterate proportionally
@@ -61,6 +71,20 @@ type wireFormat struct {
 	Page    int             `json:"page"`
 	Pages   int             `json:"pages"`
 	Records json.RawMessage `json:"records"`
+	// RouterOSVersion is what the pushing router reports as its own
+	// software version ([/system/resource get version]) -- issue #436's
+	// derived-version source, carried here rather than asked for, since a
+	// router already pushing its tables can say what it runs for one more
+	// key. It sits on the envelope rather than on a record because it
+	// describes the router, not a row of any table, so every kind's push
+	// carries it.
+	//
+	// Optional, like every field this schema has gained: a script that
+	// omits it decodes fine and reports nothing, which is the documented
+	// safe upgrade order (an older script against a newer mikroview
+	// leaves new fields unset). Nothing warns on a mismatch yet -- that
+	// half of #436 is not this issue.
+	RouterOSVersion string `json:"routerosVersion"`
 }
 
 // Payload is one fully decoded and validated page of RouterOS state.
@@ -73,6 +97,11 @@ type Payload struct {
 	Kind  Kind
 	Page  int
 	Pages int
+
+	// RouterOSVersion is what the router said it was running when it sent
+	// this page, or "" when its script does not send it. See
+	// wireFormat.RouterOSVersion.
+	RouterOSVersion string
 
 	AddressList         []AddressListEntry
 	FilterRules         []FilterRule
@@ -138,7 +167,15 @@ func DecodePayload(r io.Reader) (Payload, error) {
 		return Payload{}, ErrBadPage
 	}
 
-	out := Payload{Kind: wire.Kind, Page: wire.Page, Pages: wire.Pages}
+	// The version string is router-controlled text like every field in a
+	// record, so it is held to the same length bound and the same
+	// control/format-character refusal rather than trusted for sitting on
+	// the envelope.
+	if err := validateFieldText("routerosVersion", wire.RouterOSVersion); err != nil {
+		return Payload{}, err
+	}
+
+	out := Payload{Kind: wire.Kind, Page: wire.Page, Pages: wire.Pages, RouterOSVersion: wire.RouterOSVersion}
 
 	var err error
 	switch wire.Kind {
@@ -224,6 +261,22 @@ func validateFieldText(field, s string) error {
 	return nil
 }
 
+// validateFieldList applies validateFieldText to every element of a
+// list-shaped field, and bounds how many there may be -- a field that
+// holds a set is still router-controlled text, one bound short of the
+// scalar case.
+func validateFieldList(field string, l RouterOSList) error {
+	if len(l) > maxListItems {
+		return fmt.Errorf("ingest: %s carries %d entries, over the %d limit", field, len(l), maxListItems)
+	}
+	for _, v := range l {
+		if err := validateFieldText(field, v); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (e AddressListEntry) validate() error {
 	if err := validateFieldText("list", e.List); err != nil {
 		return err
@@ -253,7 +306,27 @@ func (r FilterRule) validate() error {
 	if err := validateFieldText("dstPort", string(r.DstPort)); err != nil {
 		return err
 	}
-	return validateFieldText("protocol", r.Protocol)
+	if err := validateFieldText("protocol", r.Protocol); err != nil {
+		return err
+	}
+	// dstAddress/srcAddress arrived with #274 without a line here, so
+	// they were the two record fields in this package reaching the UI,
+	// the exports and the audit trail unbounded and unscreened for the
+	// control and bidi-override characters every other field is screened
+	// for. Noticed while adding the #408 fields beside them.
+	if err := validateFieldText("dstAddress", r.DstAddress); err != nil {
+		return err
+	}
+	if err := validateFieldText("srcAddress", r.SrcAddress); err != nil {
+		return err
+	}
+	if err := validateFieldList("connectionState", r.ConnectionState); err != nil {
+		return err
+	}
+	if err := validateFieldText("inInterface", r.InInterface); err != nil {
+		return err
+	}
+	return validateFieldText("outInterface", r.OutInterface)
 }
 
 func (r NATRule) validate() error {
@@ -263,7 +336,31 @@ func (r NATRule) validate() error {
 	if err := validateFieldText("chain", r.Chain); err != nil {
 		return err
 	}
-	return validateFieldText("action", r.Action)
+	if err := validateFieldText("action", r.Action); err != nil {
+		return err
+	}
+	if err := validateFieldText("toAddresses", r.ToAddresses); err != nil {
+		return err
+	}
+	if err := validateFieldText("toPorts", string(r.ToPorts)); err != nil {
+		return err
+	}
+	if err := validateFieldText("dstPort", string(r.DstPort)); err != nil {
+		return err
+	}
+	if err := validateFieldText("protocol", r.Protocol); err != nil {
+		return err
+	}
+	if err := validateFieldText("inInterface", r.InInterface); err != nil {
+		return err
+	}
+	if err := validateFieldText("outInterface", r.OutInterface); err != nil {
+		return err
+	}
+	if err := validateFieldText("srcAddress", r.SrcAddress); err != nil {
+		return err
+	}
+	return validateFieldText("dstAddress", r.DstAddress)
 }
 
 func (e DNSStaticEntry) validate() error {
@@ -304,7 +401,7 @@ func (p WireguardPeer) validate() error {
 	if err := validateFieldText("publicKey", p.PublicKey); err != nil {
 		return err
 	}
-	if err := validateFieldText("allowedAddress", p.AllowedAddress); err != nil {
+	if err := validateFieldList("allowedAddress", p.AllowedAddress); err != nil {
 		return err
 	}
 	if err := validateFieldText("endpointAddress", p.EndpointAddress); err != nil {

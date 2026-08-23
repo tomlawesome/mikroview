@@ -88,12 +88,10 @@ type Store struct {
 // Open loads path if it exists (a missing file is the expected first-run
 // case, not an error) and returns a Store that persists to it from then
 // on. An empty path is the expected "persistence not configured" case: a
-// fully usable, in-memory-only Store is returned. A malformed file is
-// treated as empty rather than failing -- a corrupted audit file should
-// never block mikroview from starting, same as every other optional
-// store in this codebase. Either way the returned Store is always safe
-// to use unconditionally; a non-nil error is only ever informational,
-// for the caller to log.
+// fully usable, in-memory-only Store is returned. A document that exists
+// but cannot be read or parsed is a hard error (issue #378): the caller
+// gets (nil, err) rather than a store whose live backend would overwrite
+// that document on the first write. See persist.Open.
 func Open(path string) (*Store, error) {
 	if path == "" {
 		return OpenWithBackend(nil)
@@ -106,32 +104,32 @@ func Open(path string) (*Store, error) {
 func OpenWithBackend(b persist.Backend) (*Store, error) {
 	s := &Store{backend: b, nextID: 1}
 
-	data, version, err := persist.LoadDocument(context.Background(), b)
-	if err != nil {
-		return s, err
-	}
-	if data == nil {
-		return s, nil
-	}
-	s.version = version
-
-	var file storeFile
-	if err := json.Unmarshal(data, &file); err != nil {
-		return s, err
-	}
-	s.entries = make([]Entry, 0, len(file.Entries))
-	for _, e := range file.Entries {
-		s.entries = append(s.entries, e)
-		if e.ID >= s.nextID {
-			s.nextID = e.ID + 1
+	version, existed, err := persist.Open(context.Background(), b, "the audit log", func(data []byte) error {
+		var file storeFile
+		if err := json.Unmarshal(data, &file); err != nil {
+			return err
 		}
+		s.entries = make([]Entry, 0, len(file.Entries))
+		for _, e := range file.Entries {
+			s.entries = append(s.entries, e)
+			if e.ID >= s.nextID {
+				s.nextID = e.ID + 1
+			}
+		}
+		// A persisted NextID higher than any entry actually carries
+		// (e.g. every entry at or above it was pruned in a previous
+		// run) must still win, or a restart could hand out an ID that
+		// collides with one that existed before pruning.
+		if file.NextID > s.nextID {
+			s.nextID = file.NextID
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
 	}
-	// A persisted NextID higher than any entry actually carries (e.g.
-	// every entry at or above it was pruned in a previous run) must still
-	// win, or a restart could hand out an ID that collides with one that
-	// existed before pruning.
-	if file.NextID > s.nextID {
-		s.nextID = file.NextID
+	if existed {
+		s.version = version
 	}
 	return s, nil
 }

@@ -217,6 +217,16 @@ type Flag struct {
 	// Evidence is structured supporting detail beyond Detail -- see
 	// Evidence's own doc comment.
 	Evidence Evidence `json:"evidence,omitzero"`
+	// Provisional marks a flag raised while its judgement's baseline had
+	// not yet cleared its history floor -- internal/engine.Baseline's
+	// warm-up gating (docs/decisions/evaluation-engine.md section 1,
+	// #368's fix made a chassis contract). false (the default, omitted
+	// from JSON) is correct for every flag raised today: nothing wires a
+	// detector onto internal/engine.Baseline yet -- that is #405's job.
+	// This field, and its matchlog.Record counterpart, land now
+	// (additive, no migration needed) so the persisted shape and its
+	// round trip are proven ahead of anything setting it to true.
+	Provisional bool `json:"provisional,omitempty"`
 }
 
 // FlagTimeBucket is one point in Store.TimeSeries: counts of newly-raised
@@ -257,12 +267,15 @@ type persistedState struct {
 // marks it rather than deleting it, so recent history stays visible. The
 // zero value is not usable; construct with Open.
 type Store struct {
-	mu      sync.RWMutex
-	backend persist.Backend
-	// version is the backend's token for the document as of the last
-	// load or save -- see persist.SaveWithRetry.
-	version int64
-	byID    map[string]*Flag
+	mu sync.RWMutex
+	// wb is nil when persistence isn't configured, same "nil means
+	// off" convention every field it replaced (backend/version/
+	// lastPersist) used to follow individually -- see persist.WriteBehind
+	// for what it now owns: write-behind, the backend deadline, the
+	// after-write-stamped rate limit/back-off, and version bookkeeping.
+	// Every method on it is a safe no-op on a nil receiver.
+	wb   *persist.WriteBehind
+	byID map[string]*Flag
 	// clearedCount tracks how many entries in byID are Cleared, so
 	// pruneLocked can skip its scan entirely when there is nothing
 	// evictable. Under a flood the store sits full of *active* flags, so
@@ -278,10 +291,6 @@ type Store struct {
 	// flagID key as byID -- see Store.Exclude's doc comment. Checked at
 	// the top of add() so an excluded pair never raises again.
 	excluded map[string]Exclusion
-
-	// lastPersist backs persistLocked's rate limiting -- see
-	// persistMinInterval.
-	lastPersist time.Time
 
 	// minuteBuckets/minuteBucketTime implement the same lazily-reset
 	// rolling-bucket trick as internal/store/ring.go's Store.minuteBuckets
@@ -320,12 +329,10 @@ func (s *Store) WithOnRaise(fn func(Flag)) *Store {
 // Open loads path if it exists (a missing file is the expected first-run
 // case, not an error) and returns a Store that persists to it from then
 // on. An empty path is the expected "persistence not configured" case:
-// a fully usable, in-memory-only Store is returned. A malformed file is
-// treated as empty rather than failing -- a corrupted flags file should
-// never block mikroview from starting, since flags are a helper signal,
-// not critical state. Either way the returned Store is always safe to
-// use unconditionally; a non-nil error is only ever informational, for
-// the caller to log.
+// a fully usable, in-memory-only Store is returned. A document that
+// exists but cannot be read or parsed is a hard error (issue #378): the
+// caller gets (nil, err) rather than a store whose live backend would
+// overwrite that document on the first write. See persist.Open.
 func Open(path string) (*Store, error) {
 	if path == "" {
 		return OpenWithBackend(nil)
@@ -337,43 +344,64 @@ func Open(path string) (*Store, error) {
 // default, or Postgres when configured (issue #131). A nil backend gives
 // a usable, in-memory-only store.
 func OpenWithBackend(b persist.Backend) (*Store, error) {
-	s := &Store{backend: b, byID: make(map[string]*Flag), excluded: make(map[string]Exclusion)}
+	s := &Store{byID: make(map[string]*Flag), excluded: make(map[string]Exclusion)}
 
-	ctx, cancel := context.WithTimeout(context.Background(), persistTimeout)
-	defer cancel()
-	data, version, err := persist.LoadDocument(ctx, b)
+	wb, _, err := persist.OpenWriteBehind(context.Background(), b, "the flags store", persist.WriteBehindOptions{
+		MinInterval: persistMinInterval,
+		OnSaveError: func(msg string) { persistLog.Error(msg) },
+		OnConflict:  func(msg string) { persistLog.Warn(msg) },
+	}, func(data []byte) error {
+		var state persistedState
+		if err := json.Unmarshal(data, &state); err != nil {
+			return err
+		}
+		for _, f := range state.Flags {
+			// A JSON `null` in this array decodes to a zero-value Flag
+			// rather than a nil pointer (the field is []Flag, not
+			// []*Flag), so it cannot crash the way the entities loader
+			// can -- it just lands an ID-less entry in the map. Dropped
+			// here rather than kept as a bogus entry.
+			if f.ID == "" {
+				continue
+			}
+			f := f
+			s.byID[f.ID] = &f
+			if f.Cleared {
+				s.clearedCount++
+			}
+		}
+		for _, e := range state.Excluded {
+			s.excluded[e.ID] = e
+		}
+		return nil
+	})
 	if err != nil {
-		return s, err
+		return nil, err
 	}
-	if data == nil {
-		return s, nil
-	}
-	s.version = version
-
-	var state persistedState
-	if err := json.Unmarshal(data, &state); err != nil {
-		return s, err
-	}
-	for _, f := range state.Flags {
-		// A JSON `null` in this array decodes to a zero-value Flag
-		// rather than a nil pointer (the field is []Flag, not []*Flag),
-		// so it cannot crash the way the entities loader can -- it just
-		// lands an ID-less entry in the map. Dropped here to keep
-		// Open's "a malformed file is treated as empty rather than
-		// failing" contract honest.
-		if f.ID == "" {
-			continue
-		}
-		f := f
-		s.byID[f.ID] = &f
-		if f.Cleared {
-			s.clearedCount++
-		}
-	}
-	for _, e := range state.Excluded {
-		s.excluded[e.ID] = e
-	}
+	s.wb = wb
 	return s, nil
+}
+
+// Flush forces this store's write-behind writer to persist whatever is
+// currently dirty now, without waiting out its usual debounce interval,
+// and blocks until that attempt finishes or ctx expires -- for a caller
+// that genuinely needs to know a change has reached the backend before
+// proceeding (a test, or a `-backup` CLI invocation racing a change made
+// moments earlier in a separate, still-running process). Not meant for
+// routine use -- persistence off the hot path is the whole point of
+// issue #400; this is the deliberate escape hatch, not a replacement for
+// it. A store with no backend configured (wb == nil) is a safe no-op.
+func (s *Store) Flush(ctx context.Context) error {
+	return s.wb.Flush(ctx)
+}
+
+// Close stops this store's write-behind writer goroutine, flushing
+// whatever is still dirty within persist.SaveTimeout before returning --
+// main's shutdown joins on this so a change made right before exit is
+// not silently dropped. A store with no backend configured (wb == nil)
+// is a safe no-op. Not safe to call any mutating method after Close.
+func (s *Store) Close(ctx context.Context) error {
+	return s.wb.Close(ctx)
 }
 
 func flagID(t Type, target string) string {
@@ -399,7 +427,7 @@ func flagID(t Type, target string) string {
 // DefaultConfig are kept in internal/detect for tests that don't need
 // their own full configurability.
 func (s *Store) Add(t Type, target, detail string, now time.Time) bool {
-	isNew, f := s.add(t, target, detail, nil, Evidence{}, "", now)
+	isNew, f := s.add(t, target, detail, nil, Evidence{}, "", false, now)
 	s.maybeNotify(isNew, f)
 	return isNew
 }
@@ -408,7 +436,7 @@ func (s *Store) Add(t Type, target, detail string, now time.Time) bool {
 // confident it is in this specific flag (0-100) rather than a simple
 // deterministic threshold crossing -- see Flag.Confidence.
 func (s *Store) AddWithConfidence(t Type, target, detail string, confidence int, now time.Time) bool {
-	isNew, f := s.add(t, target, detail, &confidence, Evidence{}, "", now)
+	isNew, f := s.add(t, target, detail, &confidence, Evidence{}, "", false, now)
 	s.maybeNotify(isNew, f)
 	return isNew
 }
@@ -418,7 +446,42 @@ func (s *Store) AddWithConfidence(t Type, target, detail string, confidence int,
 // exactly what was touched, not just a count -- see Evidence and
 // Flag.Country.
 func (s *Store) AddWithDetail(t Type, target, detail string, confidence int, evidence Evidence, country string, now time.Time) bool {
-	isNew, f := s.add(t, target, detail, &confidence, evidence, country, now)
+	isNew, f := s.add(t, target, detail, &confidence, evidence, country, false, now)
+	s.maybeNotify(isNew, f)
+	return isNew
+}
+
+// AddProvisional is AddWithDetail, plus marking the raised/re-fired
+// episode provisional -- see Flag.Provisional's doc comment. Added by
+// #399 alongside the field itself; no production detector calls this
+// yet (#405 wires internal/detect onto internal/engine.Baseline's
+// warm-up gating, which is what would ever pass provisional=true) -- it
+// exists now so the persisted shape, on both backends, and the round
+// trip are proven ahead of anything depending on them. See
+// TestAddProvisionalPersistsAndSurvivesReload.
+func (s *Store) AddProvisional(t Type, target, detail string, confidence int, evidence Evidence, country string, provisional bool, now time.Time) bool {
+	isNew, f := s.add(t, target, detail, &confidence, evidence, country, provisional, now)
+	s.maybeNotify(isNew, f)
+	return isNew
+}
+
+// AddEmission is AddProvisional with confidence as an optional value
+// rather than a required one: nil means "this detector makes no
+// statistical judgement to score," which is what Flag.Confidence's own
+// nil already meant and what Add (above) has always produced.
+//
+// It exists because internal/engine.FlagsSink needs both halves at once.
+// Every definition ported onto the chassis before #405's final block
+// scored its emissions, so the sink could pass a plain int and default a
+// nil to 0; unexpected_mail_sender is the first that genuinely does not
+// score -- it is deterministic, like new_device and stale_rule -- and
+// defaulting its nil to 0 would silently turn "not scored" into "scored
+// zero confidence," which an analyst reads as a judgement rather than as
+// its absence. That is the gap FlagsSink's own doc comment said was
+// worth widening this API to close rather than papering over; this is
+// the widening.
+func (s *Store) AddEmission(t Type, target, detail string, confidence *int, evidence Evidence, country string, provisional bool, now time.Time) bool {
+	isNew, f := s.add(t, target, detail, confidence, evidence, country, provisional, now)
 	s.maybeNotify(isNew, f)
 	return isNew
 }
@@ -432,7 +495,7 @@ func (s *Store) maybeNotify(isNew bool, f Flag) {
 	}
 }
 
-func (s *Store) add(t Type, target, detail string, confidence *int, evidence Evidence, country string, now time.Time) (bool, Flag) {
+func (s *Store) add(t Type, target, detail string, confidence *int, evidence Evidence, country string, provisional bool, now time.Time) (bool, Flag) {
 	id := flagID(t, target)
 
 	s.mu.Lock()
@@ -467,6 +530,7 @@ func (s *Store) add(t Type, target, detail string, confidence *int, evidence Evi
 	f.Confidence = mergeConfidence(confidence, f.ReputationFloor)
 	f.Evidence = evidence
 	f.Country = country
+	f.Provisional = provisional
 	f.LastSeen = now
 	f.Count++
 
@@ -944,38 +1008,28 @@ func (s *Store) pruneLocked() {
 // A var rather than a const so tests that need every call to persist
 // immediately (e.g. a round-trip test with no delay between calls) can
 // shrink it, same convention as maxFlags/maxTrackedSources/
-// maxTCPConnections elsewhere in this codebase.
+// maxTCPConnections elsewhere in this codebase. Now persist.WriteBehind's
+// MinInterval -- see OpenWithBackend -- rather than a field this type
+// checks itself; the rate-limiting/back-off logic that used to live
+// here, and its #377 stall-under-load defect, both moved to that type
+// (issue #400).
 var persistMinInterval = time.Second
 
-// persistTimeout bounds every Load/Save against backend. Add/
-// AddWithDetail run synchronously on the single ingest goroutine (see
-// main.go's ingestOneRecovered), so an unresponsive backend -- a
-// Postgres connection stuck behind a network blackhole or a long lock
-// wait, not a clean disconnect -- would otherwise block that goroutine
-// forever under context.Background(), freezing the whole ingest
-// pipeline until the syslog listener's buffered channel fills and
-// starts silently dropping packets (internal/syslog/tcp_listener.go).
-// 5s is generous for a write this small: long enough that ordinary
-// latency never trips it, short enough that a genuinely stuck backend
-// degrades to a logged failure (see persistLocked) rather than an
-// indefinite hang.
-const persistTimeout = 5 * time.Second
-
-// persistLocked writes the current state -- flags and exclusions alike,
-// see persistedState -- to disk if persistence is configured and enough
-// time has passed since the last write -- see persistMinInterval. Write
-// failures are swallowed rather than surfaced to Add/Clear/Exclude's
-// callers: the in-memory state (which every read goes through) stays
-// correct either way, so a transient disk issue degrades to "won't
-// survive a restart right now" rather than breaking live use.
+// persistLocked encodes the current state -- flags and exclusions alike,
+// see persistedState -- and hands it to the write-behind writer (see
+// persist.WriteBehind), which coalesces it with whatever else is
+// pending and persists it off this goroutine, under its own deadline and
+// rate limit. Marshal failures are swallowed rather than surfaced to
+// Add/Clear/Exclude's callers: the in-memory state (which every read
+// goes through) stays correct either way, so a transient disk issue
+// degrades to "won't survive a restart right now" rather than breaking
+// live use. Must be called with s.mu already held -- the "lock covers
+// the in-memory mutation and an encode/snapshot, nothing past that"
+// contract issue #400 asks for; MarkDirty itself never touches the
+// backend.
 func (s *Store) persistLocked() {
-	if s.backend == nil {
+	if s.wb == nil {
 		return
-	}
-	if now := time.Now(); now.Sub(s.lastPersist) < persistMinInterval {
-		return
-	} else {
-		s.lastPersist = now
 	}
 
 	excluded := make([]Exclusion, 0, len(s.excluded))
@@ -989,17 +1043,5 @@ func (s *Store) persistLocked() {
 		persistLog.Error(fmt.Sprintf("encoding flags for persistence failed: %v -- this change exists only in memory and will be lost on restart", err))
 		return
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), persistTimeout)
-	defer cancel()
-	version, conflicted, err := persist.SaveWithRetry(ctx, s.backend, data, s.version)
-	if err != nil {
-		persistLog.Error(fmt.Sprintf("writing flags to %s failed: %v -- this change exists only in memory and will be lost on restart",
-			s.backend.Describe(), err))
-		return
-	}
-	if conflicted {
-		persistLog.Warn(fmt.Sprintf("flag store was modified by another process while this change was pending (%s); this change was applied on top",
-			s.backend.Describe()))
-	}
-	s.version = version
+	s.wb.MarkDirty(data)
 }

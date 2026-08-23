@@ -225,10 +225,13 @@ func Open(path string) (*Store, error) {
 // is the unpersisted case.
 //
 // A backend that exists but cannot be read, or holds a document that
-// cannot be parsed, is a hard error. That distinction is load-bearing:
-// treating an unreadable accounts store as an absent one turns a
-// corrupted file into a fresh install, silently reopening registration
-// to whoever loads the page next. main.go refuses to start on it.
+// cannot be parsed, is a hard error (issue #378): OpenWithBackend
+// returns (nil, err) rather than a store whose live backend would
+// overwrite that document on the first write. That distinction is
+// load-bearing: treating an unreadable accounts store as an absent one
+// turns a corrupted file into a fresh install, silently reopening
+// registration to whoever loads the page next. main.go refuses to
+// start on it. See persist.Open.
 func OpenWithBackend(b persist.Backend) (*Store, error) {
 	s := &Store{
 		backend:   b,
@@ -236,23 +239,25 @@ func OpenWithBackend(b persist.Backend) (*Store, error) {
 		byName:    make(map[string]string),
 		oidcIndex: make(map[oidcKey]string),
 	}
-	if b == nil {
-		return s, nil
-	}
 
-	snap, err := b.Load(context.Background())
+	version, existed, err := persist.Open(context.Background(), b, "the accounts store", func(data []byte) error {
+		var file storeFile
+		if err := json.Unmarshal(data, &file); err != nil {
+			return err
+		}
+		// version isn't in scope yet here -- persist.Open hasn't
+		// returned it to this statement's left-hand side. applyLoaded
+		// is called with a placeholder and corrected below once
+		// persist.Open's real version is available.
+		s.applyLoaded(file, 0)
+		return nil
+	})
 	if err != nil {
-		return s, err
+		return nil, err
 	}
-	if !snap.Exists {
-		return s, nil // never written: a real first run
+	if existed {
+		s.version = version
 	}
-
-	var file storeFile
-	if err := json.Unmarshal(snap.Payload, &file); err != nil {
-		return s, err
-	}
-	s.applyLoaded(file, snap.Version)
 	return s, nil
 }
 

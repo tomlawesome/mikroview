@@ -91,11 +91,14 @@
   const liveRendered = $derived(liveFiltered.slice(-MAX_RENDERED_ROWS))
 
   // Autoscroll off (issue #232) means "don't move the view", not just
-  // "don't force-jump to the bottom" -- liveRendered is a sliding window
-  // over MAX_RENDERED_ROWS, so once the total exceeds that cap, rows keep
-  // falling off the top as new ones arrive at the bottom regardless of
-  // autoscroll, which reads as the page scrolling itself out from under
-  // you.
+  // "don't force-jump to the newest row" -- liveRendered is a sliding
+  // window over MAX_RENDERED_ROWS, so once the total exceeds that cap,
+  // rows keep falling off one end of this array as new ones arrive at
+  // the other, regardless of autoscroll, which reads as the page
+  // scrolling itself out from under you. (This array itself stays
+  // oldest-first -- see displayRendered below for where newest-at-top
+  // is actually applied. "Falling off" here is about eviction from the
+  // buffer, not about which end of the screen it happens on.)
   //
   // frozenPool captures the RAW pool (pre-filter, post-age-cutoff) once,
   // the moment autoscroll turns off -- not the already-filtered/sliced
@@ -147,7 +150,28 @@
   // lens over exactly what the view would have shown -- the counts
   // account for every row the ungrouped view has, and no more. Grouping
   // a wider set would quietly change what a filter means.
+  //
+  // `rendered` and `groups` both stay in arrival order (oldest first) --
+  // that's what the freeze logic above and groupEvents' "head is the
+  // first arrival" rule are written against. Newest-at-top (#363) is
+  // purely a rendering concern, applied once, below, rather than
+  // threaded back through either of those.
   const groups = $derived(groupModeState.enabled ? groupEvents(rendered) : [])
+
+  // Newest-at-top (#363, decided 2026-08-13: "Most recent at the top,
+  // older at the bottom is easy, simple design language"). `rendered`
+  // and `groups` are oldest-first internally (see above); reversed only
+  // here, at the last step before the template iterates them, so this is
+  // the one place display order lives. A plain reverse of a `.slice()`
+  // copy -- never the source arrays -- so it can't disturb the frozen
+  // pool or the grouping key's "first arrival wins" rule.
+  //
+  // Groups still keep their position once display order is inverted:
+  // "position" now means "how recently this group first appeared",
+  // measured from the top instead of from the bottom, but a group being
+  // hit again still doesn't move -- see groupEvents' head comment.
+  const displayRendered = $derived([...rendered].reverse())
+  const displayGroups = $derived([...groups].reverse())
 
   // Sources carrying an active flag, for the row marker. Recomputed from
   // the flag list rather than per row, so this is one pass rather than
@@ -163,6 +187,20 @@
     if (!next.delete(key)) next.add(key)
     openGroups = next
   }
+
+  // An expansion does not outlive the group it expanded (#381, owner
+  // decision 2026-08-22): when a group's key leaves the rendered window
+  // -- its traffic aged out, a filter excluded it, or grouping was
+  // turned off -- its open state goes with it, so the same connection
+  // recurring later renders collapsed rather than silently pre-expanded
+  // against a set of events the operator never chose to open. One
+  // reactive prune covers every eviction path; the write is guarded so
+  // an unchanged set does not re-trigger the effect.
+  $effect(() => {
+    const present = new Set(groups.map((g) => g.key))
+    const kept = [...openGroups].filter((k) => present.has(k))
+    if (kept.length !== openGroups.size) openGroups = new Set(kept)
+  })
 
   function deviceName(id: string): string {
     return deviceNames.get(id) ?? id
@@ -205,8 +243,13 @@
   $effect(() => {
     rendered.length // re-run this effect whenever the rendered set changes
     if (appState.autoscroll && !appState.paused && bodyEl) {
+      // Newest-at-top (#363): the newest row renders first now, so
+      // "follow the newest event" means holding scrollTop at 0, not
+      // chasing scrollHeight. Still an rAF, not a synchronous set --
+      // the DOM has to actually contain the new row before scrolling to
+      // it means anything.
       requestAnimationFrame(() => {
-        if (bodyEl) bodyEl.scrollTop = bodyEl.scrollHeight
+        if (bodyEl) bodyEl.scrollTop = 0
       })
     }
   })
@@ -215,15 +258,17 @@
 <div class="table-wrap">
   {#if viewportState.isMobile}
     <div class="body scrollbar">
-      {#each rendered as event (event.id)}
+      {#each displayRendered as event (event.id)}
         <EventCardMobile {event} deviceName={deviceName(event.deviceId)} onOpen={() => (selectedEvent = event)} />
       {/each}
       {#if rendered.length === 0}
         <div class="empty">
           {emptyMessage ??
-            (appState.events.length === 0
-              ? 'Waiting for events…'
-              : 'No events match the current filters.')}
+            (appState.fetchFailed
+              ? 'Could not load events from the server — this is not a confirmed empty result.'
+              : appState.events.length === 0
+                ? 'Waiting for events…'
+                : 'No events match the current filters.')}
         </div>
       {/if}
     </div>
@@ -257,7 +302,7 @@
         </div>
 
         {#if groupModeState.enabled}
-          {#each groups as group (group.key)}
+          {#each displayGroups as group (group.key)}
             <EventRow
               event={group.head}
               deviceName={deviceName(group.head.deviceId)}
@@ -267,7 +312,17 @@
               expanded={openGroups.has(group.key)}
               onToggle={() => toggleGroup(group.key)}
             />
-            {#if openGroups.has(group.key)}
+            <!-- Gated on group.count > 1 as well as the open flag, matching
+                 the `expandable` predicate on the toggle above. The two used
+                 to be written independently, and `groups` is $derived from
+                 `rendered` while `openGroups` is not, so they diverged the
+                 moment a group's count fell to 1 with its drawer open (a
+                 filter narrowing to one member, or older members sliding out
+                 of MAX_RENDERED_ROWS). The toggle disappeared while the
+                 drawer stayed, rendering the one remaining event twice --
+                 once as itself and once as a child of itself -- with no
+                 control left to collapse it (#381). -->
+            {#if group.count > 1 && openGroups.has(group.key)}
               {#each drawerEvents(group) as member (member.id)}
                 <EventRow
                   event={member}
@@ -291,7 +346,7 @@
             {/if}
           {/each}
         {:else}
-          {#each rendered as event (event.id)}
+          {#each displayRendered as event (event.id)}
             <EventRow
               {event}
               deviceName={deviceName(event.deviceId)}
@@ -303,9 +358,11 @@
       {#if rendered.length === 0}
         <div class="empty">
           {emptyMessage ??
-            (appState.events.length === 0
-              ? 'Waiting for events…'
-              : 'No events match the current filters.')}
+            (appState.fetchFailed
+              ? 'Could not load events from the server — this is not a confirmed empty result.'
+              : appState.events.length === 0
+                ? 'Waiting for events…'
+                : 'No events match the current filters.')}
         </div>
       {/if}
     </div>

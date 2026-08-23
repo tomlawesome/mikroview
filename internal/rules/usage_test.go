@@ -3,11 +3,67 @@
 package rules
 
 import (
+	"context"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
+
+	"github.com/tomlawesome/mikroview/internal/persist"
 )
+
+// flushForTest waits for s's write-behind writer to persist whatever is
+// currently dirty -- issue #400 moved persistence off the caller's
+// goroutine, so a test reopening the same path immediately after a
+// Touch now needs an explicit synchronous checkpoint. See
+// flags.flushForTest, the twin of this helper.
+func flushForTest(t *testing.T, s *Store) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if err := s.Flush(ctx); err != nil {
+		t.Fatalf("flushForTest: %v", err)
+	}
+}
+
+// countingSaveBackend is an in-memory persist.Backend that counts Save
+// calls -- see flags.countingSaveBackend, the twin of this type.
+type countingSaveBackend struct {
+	mu      sync.Mutex
+	payload []byte
+	version int64
+	saves   int
+}
+
+func newCountingSaveBackend() *countingSaveBackend { return &countingSaveBackend{} }
+
+func (b *countingSaveBackend) Load(ctx context.Context) (persist.Snapshot, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return persist.Snapshot{Payload: b.payload, Version: b.version, Exists: b.version != 0}, nil
+}
+
+func (b *countingSaveBackend) Save(ctx context.Context, payload []byte, expect int64) (int64, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if expect != b.version {
+		return 0, persist.ErrConflict
+	}
+	b.saves++
+	b.payload = payload
+	b.version++
+	return b.version, nil
+}
+
+func (b *countingSaveBackend) Close() error     { return nil }
+func (b *countingSaveBackend) Describe() string { return "counting test backend" }
+
+func (b *countingSaveBackend) saveCount() int {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.saves
+}
 
 func TestOpenEmptyPathIsUsable(t *testing.T) {
 	s, err := Open("")
@@ -51,22 +107,22 @@ func TestOpenSkipsNilArrayElements(t *testing.T) {
 	}
 }
 
-func TestOpenMalformedFileStartsEmpty(t *testing.T) {
+// TestOpenMalformedFileFailsClosed pins issue #378's policy: a document
+// that exists but cannot be parsed is refused outright, not treated as
+// empty. See flags.TestOpenMalformedFileFailsClosed for the full
+// reasoning -- same fix, same shape, applied through the same shared
+// persist.Open helper.
+func TestOpenMalformedFileFailsClosed(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "rule-usage.json")
 	if err := os.WriteFile(path, []byte("not valid json"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	s, err := Open(path)
 	if err == nil {
-		t.Error("expected a non-nil informational error for a malformed file")
+		t.Fatal("expected a non-nil error for a malformed file, want fail-closed")
 	}
-	if len(s.List()) != 0 {
-		t.Errorf("expected a malformed file to start empty, got %d entries", len(s.List()))
-	}
-	// still usable despite the error
-	s.Touch("r1", time.Now())
-	if len(s.List()) != 1 {
-		t.Error("store returned from Open() with a malformed file should still be usable")
+	if s != nil {
+		t.Error("expected a nil store on a load failure -- a non-nil store here would still carry a live backend")
 	}
 }
 
@@ -147,6 +203,8 @@ func TestPersistenceRoundTrip(t *testing.T) {
 	s.Touch("r1", now)
 	s.Touch("r2", now.Add(time.Minute))
 	s.Touch("r1", now.Add(2*time.Minute))
+	// #400: write-behind -- flush before reopening, see flushForTest.
+	flushForTest(t, s)
 
 	if _, err := os.Stat(path); err != nil {
 		t.Fatalf("expected a persisted file to exist: %v", err)
@@ -178,34 +236,35 @@ func TestPersistenceRoundTrip(t *testing.T) {
 	}
 }
 
-// TestPersistenceRateLimited confirms Touch doesn't hit disk on every
-// single call -- the same hot-path protection flags.persistMinInterval
+// TestPersistenceRateLimited confirms Touch doesn't hit the backend on
+// every single call -- the same hot-path protection flags.persistMinInterval
 // gives Add, needed here since Touch runs at the same per-event rate as
-// internal/store/ring.go's totalByRule bump.
+// internal/store/ring.go's totalByRule bump. Issue #400: persistence is
+// now write-behind, so this counts backend Save calls through a fake
+// persist.Backend rather than racing a file's mtime against a fixed
+// sleep -- see flags.TestPersistLockedRateLimitsWrites for why that
+// shape is the one this codebase has already been bitten by.
 func TestPersistenceRateLimited(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "rule-usage.json")
-	s, err := Open(path)
+	b := newCountingSaveBackend()
+	s, err := OpenWithBackend(b)
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	now := time.Now()
-	s.Touch("r1", now) // first write always happens (lastPersist is zero)
-	if _, err := os.Stat(path); err != nil {
-		t.Fatalf("expected the first Touch to persist: %v", err)
-	}
-	info1, err := os.Stat(path)
-	if err != nil {
-		t.Fatal(err)
+	s.Touch("r1", now) // first write always attempts immediately (no prior attempt to debounce against)
+	flushForTest(t, s)
+	if got := b.saveCount(); got != 1 {
+		t.Fatalf("expected the first Touch to persist immediately, got %d saves", got)
 	}
 
-	s.Touch("r1", now.Add(time.Millisecond)) // well within persistMinInterval
-	info2, err := os.Stat(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !info1.ModTime().Equal(info2.ModTime()) {
-		t.Error("expected a Touch within persistMinInterval to skip the disk write")
+	// Two more Touches, both well inside persistMinInterval, must
+	// coalesce into a single additional attempt -- not one each.
+	s.Touch("r1", now.Add(time.Millisecond))
+	s.Touch("r2", now.Add(2*time.Millisecond))
+	flushForTest(t, s)
+	if got := b.saveCount(); got != 2 {
+		t.Errorf("expected 2 Touches inside one debounce window to coalesce into 1 additional save (2 total), got %d", got)
 	}
 }
 

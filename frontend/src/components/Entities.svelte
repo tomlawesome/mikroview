@@ -137,13 +137,29 @@
   async function saveInline(type: string, key: string, tags: string[] = []) {
     inlineError = null
     inlineSaving = true
+    // inlineKey is cleared *before* the await, not after (#384).
+    //
+    // upsert() refreshes the whole list before it returns, so the newly
+    // named entity is already in entitiesState.list by the time we get
+    // control back. Its row key in "Named entities" is the same
+    // type:key that was just being edited down in "Discovered" -- so a
+    // still-set inlineKey makes that brand-new row render the inline
+    // input, focusOnMount focuses it, and the browser scrolls the row
+    // (near the top of the page) into view. Clearing afterwards
+    // unmounts the input again, so the only trace left is the
+    // operator's scroll position, thrown away on every add -- which is
+    // precisely the workflow this view is for.
+    const wasEditing = inlineKey
+    inlineKey = null
     const err = await entitiesState.upsert({ type, key, label: inlineDraft.trim(), tags })
     inlineSaving = false
     if (err) {
+      // Nothing was created, so the only row matching this key is the
+      // one the operator is already looking at -- reopening its editor
+      // puts the cursor back where the error needs fixing.
+      inlineKey = wasEditing
       inlineError = err
-      return
     }
-    inlineKey = null
   }
 
   function onInlineKeydown(e: KeyboardEvent, type: string, key: string, tags: string[] = []) {

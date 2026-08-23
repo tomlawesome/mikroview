@@ -180,40 +180,45 @@ func OpenTokenStore(path string) (*TokenStore, error) {
 
 // OpenTokenStoreWithBackend is OpenTokenStore against any persist.Backend
 // -- a JSON file by default, or Postgres when configured (issue #131).
+//
+// A document that exists but cannot be read or parsed is a hard error
+// (issue #378): the caller gets (nil, err) rather than a store whose
+// live backend would overwrite that document on the first write. See
+// persist.Open.
 func OpenTokenStoreWithBackend(b persist.Backend) (*TokenStore, error) {
 	s := &TokenStore{backend: b, byID: make(map[string]*Token), byHash: make(map[string]string)}
 
-	data, version, err := persist.LoadDocument(context.Background(), b)
+	version, existed, err := persist.Open(context.Background(), b, "the API tokens store", func(data []byte) error {
+		var list []*Token
+		if err := json.Unmarshal(data, &list); err != nil {
+			return err
+		}
+		for _, t := range list {
+			if t == nil { // see Store.Open's identical guard for why this is needed
+				continue
+			}
+			s.byID[t.ID] = t
+			// A token whose kind this build does not recognise is kept
+			// in byID but deliberately left out of byHash, so it is
+			// listable and revocable but cannot authenticate anything.
+			// Failing closed is the only safe direction: the
+			// alternative is guessing which kind a stored token meant,
+			// and guessing "read-only API" for a value that reads
+			// everything mikroview knows is not a guess worth making.
+			// An operator sees it in the token list and reissues it.
+			if !t.Kind.Valid() {
+				persistLog.Warn(fmt.Sprintf("token %q has unknown kind %q -- it will not authenticate; revoke and reissue it", t.Name, t.Kind))
+				continue
+			}
+			s.byHash[t.HashedValue] = t.ID
+		}
+		return nil
+	})
 	if err != nil {
-		return s, err
+		return nil, err
 	}
-	if data == nil {
-		return s, nil
-	}
-	s.version = version
-
-	var list []*Token
-	if err := json.Unmarshal(data, &list); err != nil {
-		return s, err
-	}
-	for _, t := range list {
-		if t == nil { // see Store.Open's identical guard for why this is needed
-			continue
-		}
-		s.byID[t.ID] = t
-		// A token whose kind this build does not recognise is kept in
-		// byID but deliberately left out of byHash, so it is listable
-		// and revocable but cannot authenticate anything. Failing closed
-		// is the only safe direction: the alternative is guessing which
-		// kind a stored token meant, and guessing "read-only API" for a
-		// value that reads everything mikroview knows is not a guess
-		// worth making. An operator sees it in the token list and
-		// reissues it.
-		if !t.Kind.Valid() {
-			persistLog.Warn(fmt.Sprintf("token %q has unknown kind %q -- it will not authenticate; revoke and reissue it", t.Name, t.Kind))
-			continue
-		}
-		s.byHash[t.HashedValue] = t.ID
+	if existed {
+		s.version = version
 	}
 	return s, nil
 }

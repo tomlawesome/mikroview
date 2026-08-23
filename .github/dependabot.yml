@@ -5,14 +5,23 @@ updates:
     directory: /
     schedule:
       interval: weekly
+      day: monday
+      time: "05:00"
+      timezone: Europe/London
     target-branch: dev
     open-pull-requests-limit: 10
+    groups:
+      gomod-minor-patch:
+        update-types: [minor, patch]
 
   # Frontend dependencies (frontend/package.json).
   - package-ecosystem: npm
     directory: /frontend
     schedule:
       interval: weekly
+      day: monday
+      time: "05:30"
+      timezone: Europe/London
     target-branch: dev
     open-pull-requests-limit: 10
     ignore:
@@ -20,6 +29,9 @@ updates:
       # breaks `npm run check`. Drop this once svelte-check supports it.
       - dependency-name: "typescript"
         versions: ["7.x"]
+    groups:
+      npm-minor-patch:
+        update-types: [minor, patch]
 
   # The Go/Node base images pinned in Dockerfile -- exactly the kind of
   # drift that left this project on an unsupported Go patch version with
@@ -28,11 +40,23 @@ updates:
     directory: /
     schedule:
       interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: Europe/London
     target-branch: dev
+    groups:
+      docker-minor-patch:
+        update-types: [minor, patch]
 
   # Action versions pinned in .github/workflows/*.yml.
   - package-ecosystem: github-actions
     directory: /
     schedule:
       interval: weekly
+      day: monday
+      time: "06:30"
+      timezone: Europe/London
     target-branch: dev
+    groups:
+      github-actions-minor-patch:
+        update-types: [minor, patch]

@@ -12,8 +12,8 @@ import (
 
 	"github.com/tomlawesome/mikroview/internal/audit"
 	"github.com/tomlawesome/mikroview/internal/auth"
-	"github.com/tomlawesome/mikroview/internal/detect"
 	"github.com/tomlawesome/mikroview/internal/device"
+	"github.com/tomlawesome/mikroview/internal/engine"
 	"github.com/tomlawesome/mikroview/internal/entities"
 	"github.com/tomlawesome/mikroview/internal/flags"
 	"github.com/tomlawesome/mikroview/internal/hub"
@@ -26,7 +26,6 @@ import (
 	"github.com/tomlawesome/mikroview/internal/setup"
 	"github.com/tomlawesome/mikroview/internal/store"
 	"github.com/tomlawesome/mikroview/internal/suggest"
-	"github.com/tomlawesome/mikroview/internal/watchlist"
 )
 
 type Server struct {
@@ -39,25 +38,27 @@ type Server struct {
 	// no sources were enabled, and every use is nil-guarded -- the same
 	// nil-means-disabled convention as Reputation. Deliberately display-
 	// only: it is read in handleIPLookup and nowhere near flag scoring.
-	NetClass         *netclass.Classifier
-	Flags            *flags.Store
-	DetectorSettings *detect.SettingsStore
+	NetClass *netclass.Classifier
+	Flags    *flags.Store
+	// Definitions is the one document holding every definition the engine
+	// evaluates -- shipped detectors, the operator's expectations, and
+	// anything a builder UI authors from scratch (issue #404). It backs
+	// the whole /api/definitions surface (issue #407), which replaced
+	// /api/detectors and /api/watchlist/entries wholesale: a definition's
+	// envelope is where enabled, scope and params live, so there is one
+	// answer to "is this on" rather than two documents that can disagree.
+	// Always non-nil (engine.OpenDefinitionsStore("") returns a usable,
+	// empty, unpersisted store), same always-usable convention as Flags
+	// above.
+	Definitions *engine.DefinitionsStore
 	// Entities is the persisted, admin-manageable (type, key) -> label/
 	// tags store backing GET/POST/DELETE /api/entities (issue #107) --
 	// the shared foundation for a future mail-sender allowlist and
 	// UI-managed IP/port/rule aliasing. Always non-nil (internal/entities.
 	// Open("") returns a usable, empty, unpersisted store), same
-	// always-usable convention as Flags/DetectorSettings above.
+	// always-usable convention as Flags/Definitions above.
 	Entities *entities.Store
-	// Watchlist is the persisted, admin-manageable entry set backing
-	// GET/POST/PUT/DELETE /api/watchlist/entries (issue #243) -- what
-	// Control Ports grows into. Always non-nil (internal/watchlist.
-	// Open("") returns a usable, empty, unpersisted store), same
-	// always-usable convention as Entities above. Matches (what an
-	// entry has actually recorded, via internal/matchlog) are exposed
-	// separately, via MatchLog below.
-	Watchlist *watchlist.Store
-	// MatchLog answers GET /api/watchlist/matches, the query surface
+	// MatchLog answers GET /api/matches, the query surface
 	// #243 section 3 exists for -- birdcage-style correlation by source
 	// IP over a time range. Unlike every store field above, this can be
 	// nil: internal/matchlog has no in-memory-only fallback (durability
@@ -92,7 +93,7 @@ type Server struct {
 	// device.Registry's own "auto-discovered, shown even before
 	// configured/labeled" pattern. Always non-nil (internal/rules.
 	// Open("") returns a usable, empty, unpersisted store), same
-	// always-usable convention as Entities/Flags/DetectorSettings above.
+	// always-usable convention as Entities/Flags/Definitions above.
 	Rules *rules.Store
 	// Audit is the persisted, admin-only accountability log of every
 	// admin-privileged mutation (issue #112) -- who created a user,
@@ -104,7 +105,7 @@ type Server struct {
 	// mikroview, not behavior mikroview observes on the network. Always
 	// non-nil (internal/audit.Open("") returns a usable, empty,
 	// unpersisted store), same always-usable convention as Entities/
-	// Flags/DetectorSettings above.
+	// Flags/Definitions above.
 	Audit *audit.Store
 	// DeviceStaleAfter (issue #98) is how long a device's LastSeen may go
 	// without updating before GET /api/devices reports it as "stale" --
@@ -207,6 +208,18 @@ type Server struct {
 	// every test constructs) needs no extra setup.
 	ingestAuditMu sync.Mutex
 	ingestAudit   map[ingestAuditKey]ingestAuditState
+
+	// definitionsEnabledScopeMu serializes handleDefinitionsUpdate's
+	// read-merge-write of a definition's Enabled/Scope fields (issue
+	// #494): those two are the only fields on Definition this handler
+	// fills in from the existing stored value for whichever the request
+	// left unset, and engine.DefinitionsStore.SetEnabledAndScope writes
+	// both unconditionally, so it cannot tell a caller-supplied value
+	// from a stale one read before the client-paced decodeJSONBody call.
+	// Holding this for the fresh read through the write closes that
+	// window for the one production caller of SetEnabledAndScope (this
+	// handler); zero value is ready to use, same as ingestAuditMu above.
+	definitionsEnabledScopeMu sync.Mutex
 }
 
 // route is one registered endpoint. Routes are declared as data rather
@@ -249,20 +262,34 @@ func (s *Server) routes() []route {
 		{http.MethodGet, "/api/flags/exclusions", s.handleExclusionsList},
 		{http.MethodDelete, "/api/flags/exclusions/{id}", s.handleExclusionRemove},
 
-		{http.MethodGet, "/api/detectors", s.handleDetectorSettingsList},
-		{http.MethodPut, "/api/detectors/{name}", s.handleDetectorSettingsUpdate},
+		// The one definitions surface (issue #407), replacing
+		// /api/detectors and /api/watchlist/entries wholesale. A shipped
+		// detector and a watchlist expectation are the same thing to the
+		// engine, so they are the same thing here.
+		{http.MethodGet, "/api/definitions", s.handleDefinitionsList},
+		{http.MethodPost, "/api/definitions", s.handleDefinitionsCreate},
+		// Registered before the {id} pattern purely for readability --
+		// ServeMux matches longest-pattern-wins, so a literal "schema"
+		// segment always beats the wildcard regardless of order here.
+		{http.MethodGet, "/api/definitions/schema", s.handleDefinitionsSchema},
+		{http.MethodGet, "/api/definitions/{id}", s.handleDefinitionsGet},
+		{http.MethodPut, "/api/definitions/{id}", s.handleDefinitionsUpdate},
+		{http.MethodDelete, "/api/definitions/{id}", s.handleDefinitionsDelete},
+		{http.MethodPost, "/api/definitions/{id}/clone", s.handleDefinitionsClone},
+		{http.MethodPost, "/api/definitions/{id}/reset", s.handleDefinitionsReset},
+		{http.MethodPost, "/api/definitions/{id}/replay", s.handleDefinitionsReplay},
+		{http.MethodPost, "/api/definitions/{id}/promote", s.handleDefinitionsPromote},
+		{http.MethodPost, "/api/definitions/{id}/observing", s.handleDefinitionsSetObserving},
 
 		{http.MethodGet, "/api/entities", s.handleEntitiesList},
 		{http.MethodPost, "/api/entities", s.handleEntitiesUpsert},
 		{http.MethodDelete, "/api/entities", s.handleEntitiesDelete},
 
-		{http.MethodGet, "/api/watchlist/entries", s.handleWatchlistEntriesList},
-		{http.MethodPost, "/api/watchlist/entries", s.handleWatchlistEntriesCreate},
-		{http.MethodPut, "/api/watchlist/entries/{id}", s.handleWatchlistEntriesUpdate},
-		{http.MethodDelete, "/api/watchlist/entries/{id}", s.handleWatchlistEntriesDelete},
-		{http.MethodPost, "/api/watchlist/entries/{id}/promote", s.handleWatchlistEntriesPromote},
-		{http.MethodPost, "/api/watchlist/entries/{id}/observing", s.handleWatchlistEntriesSetObserving},
-		{http.MethodGet, "/api/watchlist/matches", s.handleWatchlistMatchesQuery},
+		// The match log query -- a read over evidence already collected,
+		// and the one thing on the retired /api/watchlist prefix the
+		// engine does not replace. Renamed with the noun rather than left
+		// behind on a prefix nothing else uses; see handleMatchesQuery.
+		{http.MethodGet, "/api/matches", s.handleMatchesQuery},
 
 		// Suggested watchlist entries (#243 slice 5), generated in the
 		// background from pushed router data -- see suggest.go.
