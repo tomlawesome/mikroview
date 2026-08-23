@@ -20,8 +20,7 @@ feedPortScan(20, '198.51.100.91')
 const { page } = await session()
 
 async function openMenuView(label) {
-  await page.click('.nav-menu .trigger')
-  await page.click(`.nav-menu button:has-text("${label}")`)
+  await page.click(`.rail .item:has-text("${label}")`)
 }
 
 await openMenuView('Flags')
