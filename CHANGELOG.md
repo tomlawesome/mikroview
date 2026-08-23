@@ -16,6 +16,29 @@ rewritten.
 
 ## [Unreleased]
 
+### Changed
+
+- **The "known bad IP" flag now only fires on traffic your firewall let
+  through** (#555). It used to fire on every packet from a blocklisted
+  address, and since your firewall blocks most of that, the flag mostly
+  reported the firewall working correctly — burying the one case worth
+  your attention. A blocklisted address that got *in* still flags; one
+  that was dropped or rejected no longer does. Expect to see this flag
+  far less often, which is the point.
+
+  Two details. Lines from rules that only log or only tag a packet
+  (`L|` and `M|`) no longer flag either, because they do not say what
+  happened to the packet — the rule that actually decided does, and that
+  is the line now judged. And where MikroView cannot tell what happened,
+  including NAT rules and any rule without a log prefix, it still flags:
+  it would rather tell you about something that turned out to be blocked
+  than go quiet about something that got in. See "Log your accept and
+  drop rules" in `docs/routeros-setup.md`.
+
+  Unchanged: a blocklist match still strengthens other flags for the same
+  address — port scans and slow scans are built almost entirely from
+  blocked traffic, and that evidence is still counted.
+
 ### Added
 
 - **The navigation rail can now be narrowed or hidden** (#545). It has

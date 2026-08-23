@@ -132,6 +132,13 @@ Rules without a `log-prefix` (or without `log=yes` at all) still work —
 they show up with action "unknown" and no rule label, since MikroView has
 no way to know what RouterOS decided without one.
 
+**Log your accept and drop rules, not only bare `log` rules.** A rule
+with `action=log` writes a line and then hands the packet to the next
+rule, so it never says what happened in the end — and some flags are
+deliberately quiet about traffic your firewall blocked, which they can
+only tell from the rule that did the blocking. If the only rules you log
+are `L|` ones, those flags have nothing to go on and stay silent.
+
 ### If you're starting from a blank firewall
 
 The rules below are an *illustrative example*, not a universal script —
