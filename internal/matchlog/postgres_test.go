@@ -4,6 +4,7 @@ package matchlog
 
 import (
 	"context"
+	"encoding/json"
 	"net/url"
 	"os"
 	"strings"
@@ -134,6 +135,64 @@ func TestPostgresAppendAndQueryRoundTrip(t *testing.T) {
 	}
 	if !r.FirstSeen.Equal(now) || !r.LastSeen.Equal(now) {
 		t.Errorf("FirstSeen/LastSeen = %v/%v, want both %v", r.FirstSeen, r.LastSeen, now)
+	}
+}
+
+// TestPostgresQueryReturnsUTCTimestamps pins issue #380 item 7. pgx v5's
+// default TimestamptzCodec scans a timestamptz using ScanLocation
+// time.Local, not UTC -- that doesn't change which instant FirstSeen/
+// LastSeen represent (time.Time.Equal compares instants and would not
+// have caught this, which is why TestPostgresAppendAndQueryRoundTrip
+// above didn't), but it does change Location() and, downstream,
+// json.Marshal's output: "+01:00" instead of "Z". A record's own
+// FirstSeen/LastSeen would then render as a different-looking instant
+// from its embedded event's receivedAt (decoded from JSON via
+// encoding/json, always UTC) in the same response body, and any
+// consumer keying or grouping on the timestamp string -- the birdcage
+// correlation case #29 exists for -- matches on the file backend and
+// fails on Postgres.
+//
+// time.Local is pointed at Europe/London for the duration of this test,
+// mirroring the issue's own TZ=Europe/London reproduction: a host
+// already running with time.Local == UTC would hide the bug entirely,
+// since the (wrong) location and the right one produce identical output
+// when their offset happens to be zero.
+func TestPostgresQueryReturnsUTCTimestamps(t *testing.T) {
+	loc, err := time.LoadLocation("Europe/London")
+	if err != nil {
+		t.Skipf("Europe/London tzdata not available: %v", err)
+	}
+	origLocal := time.Local
+	time.Local = loc
+	t.Cleanup(func() { time.Local = origLocal })
+
+	s := mustOpenPostgres(t, 7*24*time.Hour)
+	now := time.Date(2026, 8, 14, 12, 0, 0, 123456000, time.UTC)
+
+	tuple := Tuple{Source: Identity{MAC: "aa:bb:cc:dd:ee:ff"}, DestIP: "10.0.0.5", Port: 8883}
+	if err := s.Append("entry-1", tuple, testEvent("first"), now); err != nil {
+		t.Fatalf("Append: %v", err)
+	}
+
+	got := collectPG(t, s, Query{Source: Identity{MAC: "aa:bb:cc:dd:ee:ff"}})
+	if len(got) != 1 {
+		t.Fatalf("got %d records, want 1", len(got))
+	}
+	r := got[0]
+
+	if _, offset := r.FirstSeen.Zone(); offset != 0 {
+		t.Errorf("FirstSeen zone offset = %ds, want 0 (UTC) -- got location %v", offset, r.FirstSeen.Location())
+	}
+	if _, offset := r.LastSeen.Zone(); offset != 0 {
+		t.Errorf("LastSeen zone offset = %ds, want 0 (UTC) -- got location %v", offset, r.LastSeen.Location())
+	}
+
+	firstSeenJSON, err := json.Marshal(r.FirstSeen)
+	if err != nil {
+		t.Fatalf("marshalling FirstSeen: %v", err)
+	}
+	if !strings.HasSuffix(string(firstSeenJSON), `Z"`) {
+		t.Errorf("FirstSeen serializes as %s, want a Z-suffixed (UTC) RFC3339 string -- otherwise a record's own FirstSeen and its embedded event's receivedAt (always UTC, decoded from JSON) render as the same instant two different ways in one response", firstSeenJSON)
 	}
 }
 

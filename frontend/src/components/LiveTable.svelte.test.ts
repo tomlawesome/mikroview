@@ -66,6 +66,10 @@ beforeEach(() => {
   // Now module-level rather than component-local (see appState.frozenPool),
   // so it survives unmount -- and would leak between tests without this.
   appState.frozenPool = null
+  // Same reasoning -- a test that sets this and fails before its own
+  // cleanup would otherwise leak a false "fetch failed" empty-state
+  // message into whichever test runs next (issue #373).
+  appState.fetchFailed = false
   // Reset centrally, not at the end of whichever test set it. A test body
   // that fails never reaches its own cleanup line, and the next test then
   // renders in grouped mode and fails for a reason that has nothing to do
@@ -422,5 +426,91 @@ describe('EventRow token interaction (#439)', () => {
     const addrToken = container.querySelector('.addr-btn') as HTMLElement
     await fireEvent.keyDown(addrToken, { key: 'Enter' })
     expect(appState.filters.ip).toBe(HOST_IP)
+  })
+})
+
+// Row order itself (as opposed to scroll position, which jsdom has no real
+// layout for -- see live-newest-first.mjs for the pixel-level proof) is
+// exactly what jsdom CAN pin: the `{#each}` iterates a plain array, and
+// array order doesn't depend on layout at all. Deliberately not asserting
+// anything about scrollTop/scrollHeight here -- jsdom reports 0 for both
+// regardless of what the component does, which would make a "scrolled to
+// the top" assertion pass whether or not the code actually did that.
+describe('LiveTable newest-at-top ordering (issue #363)', () => {
+  function rowTitles(container: HTMLElement): (string | null)[] {
+    return Array.from(container.querySelectorAll('.grid .row')).map((el) => el.getAttribute('title'))
+  }
+
+  it('renders the newest event first and the oldest last', () => {
+    const e1 = makeEvent('event-one')
+    const e2 = makeEvent('event-two')
+    const e3 = makeEvent('event-three')
+    // Arrival order is oldest first, matching how appState.events/the
+    // frozen pool actually accumulate (push at the end) -- the component
+    // must invert this for display, not receive it pre-inverted.
+    const { container } = render(LiveTable, { props: { events: [e1, e2, e3] } })
+    flushSync()
+
+    expect(rowTitles(container)).toEqual(['event-three', 'event-two', 'event-one'])
+  })
+
+  it('puts the most recently *started* group at the top, and a repeat hit does not move an older group down there instead', () => {
+    groupModeState.enabled = true
+
+    const connA = { srcIp: '10.0.0.1', dstIp: '10.0.0.2', dstPort: 80, protocol: 'tcp', action: 'accept' as const }
+    const connB = { srcIp: '10.0.0.3', dstIp: '10.0.0.4', dstPort: 22, protocol: 'tcp', action: 'accept' as const }
+
+    const a1 = makeEvent('A-first', connA)
+    const b1 = makeEvent('B-first', connB)
+    // Arrives last, but it's a repeat of connection A, which arrived
+    // first -- groupEvents anchors a group on its first arrival (see
+    // grouping.ts), so this must grow group A's count in place rather
+    // than pulling group A back to the top ahead of group B.
+    const a2 = makeEvent('A-second', connA)
+
+    const { container } = render(LiveTable, { props: { events: [a1, b1, a2] } })
+    flushSync()
+
+    // Group B started more recently than group A (b1 arrived after a1),
+    // so newest-at-top puts B's row above A's -- even though A was the
+    // one that was just hit again.
+    expect(rowTitles(container)).toEqual(['B-first', 'A-first'])
+
+    const countCell = container.querySelector('[title="A-first"] .count')
+    expect(countCell?.textContent?.trim()).toBe('2')
+  })
+})
+
+// Issue #373: a failed refetch (or initial load) used to leave `events`
+// exactly as it was, with nothing recording that the fetch itself failed --
+// so an empty (or stale-and-non-matching) buffer rendered the same "No
+// events match the current filters" message a real, confirmed-empty query
+// would. appState.fetchFailed (set by loadInitial()/refetchWithFilters() on
+// rejection -- see state.svelte.ts) is what LiveTable now checks first, so a
+// failure reads as a failure instead of a false negative.
+describe('LiveTable distinguishes a failed fetch from a confirmed empty result (issue #373)', () => {
+  it('shows a failure message, not "No events match", when the last fetch failed and the buffer is empty', () => {
+    appState.fetchFailed = true
+    appState.events = []
+
+    const { container } = render(LiveTable, {})
+    flushSync()
+
+    const empty = container.querySelector('.empty')
+    expect(empty).not.toBeNull()
+    expect(empty?.textContent).not.toContain('No events match the current filters.')
+    expect(empty?.textContent?.toLowerCase()).toMatch(/could not load|failed|error/)
+  })
+
+  it('still shows the genuine "no matches" message once the buffer is real and the fetch is not flagged as failed', () => {
+    appState.fetchFailed = false
+    appState.events = [makeEvent('present')]
+    appState.filters = { ...emptyFilters(), rule: 'no-such-rule-anywhere' }
+
+    const { container } = render(LiveTable, {})
+    flushSync()
+
+    const empty = container.querySelector('.empty')
+    expect(empty?.textContent).toContain('No events match the current filters.')
   })
 })
