@@ -16,6 +16,8 @@ rewritten.
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-08-23
+
 ### Added
 
 - **One definitions API** (#407): `GET /api/definitions` and its
@@ -212,6 +214,37 @@ rewritten.
   while a genuine handshake with no logging rule configured yet still
   does, keeping that state distinct from "never connected" (see
   `setup.Store.NoteSyslogConnection`'s doc comment).
+
+- **`close-issues-on-dev.yml` no longer closes an issue over a negated or
+  code-quoted keyword** (#503). Its closing-keyword regex matched
+  `close`/`fix`/`resolve` anywhere in a merged PR's title+body, with no
+  regard for what came before or around it -- `Not fixed: #371` and
+  `Does not close #363` both read as closes, and so did a keyword
+  quoted inside a code span purely to explain that it had been removed
+  (`` `Closes #442` ``), even though GitHub's own closing-keyword
+  parser skips code spans. All three false positives happened for
+  real on 2026-08-22 (PRs #496, #497, #499) and wrongly closed issues
+  #371, #363 and #442 while their work was still open; all three were
+  reopened by hand. The matching logic is now
+  `.github/scripts/close-issues-matcher.js`, tested against the actual
+  PR bodies that broke it (`.github/scripts/close-issues-matcher.test.js`,
+  fixtures in `.github/scripts/fixtures/`): a keyword immediately
+  preceded by a negation ("not", "doesn't", "never", ...) no longer
+  matches, and markdown code spans/fenced blocks are stripped before
+  matching runs. A genuine `Closes #NNN` trailer, negation-free and
+  outside code, still closes as before.
+
+- **A definition update touching only `enabled` or only `scope` could
+  silently revert a concurrent change to the other field** (#494, a
+  narrower survivor of #380 item 4 that outlived the engine port).
+  `handleDefinitionsUpdate` filled in whichever of the two a request left
+  unset from a snapshot taken *before* the client-paced request-body read
+  -- an admin's enabled-only toggle, mid-flight while another admin's
+  scope-only change landed, would write its own stale pre-read scope back
+  over that change. Fixed by re-reading fresh state and writing under one
+  lock spanning both, the same get-fresh-state/mutate/write shape
+  `engine.DefinitionsStore.UpdateExpectation` and `RecordObservation`
+  already used for the broader case #380 item 4 originally reported.
 
 - **A router with `remote-log-format=syslog` set and a non-UTC system
   clock had every event's displayed time off by its clock's offset**
