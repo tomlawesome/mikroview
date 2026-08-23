@@ -61,6 +61,18 @@ func TestQueryRetainedMemoryScalesWithLimitNotHistory(t *testing.T) {
 			t.Fatalf("Query(limit=%d) returned %d records", limit, len(held))
 		}
 
+		// Collect first, then measure. Without this GC the delta counts
+		// the query's transient garbage as well as what it retained,
+		// and a two-pass query over 4000 records generates a lot of
+		// churn -- so the figure tracked GC pacing rather than Limit,
+		// which is the opposite of what this test claims to measure.
+		//
+		// That made it an assertion about the allocator: it failed
+		// under Go 1.27's size-specialised malloc, and fails on any
+		// toolchain under GOGC=off, both times while the property under
+		// test still held perfectly. held is kept alive across the GC
+		// by the KeepAlive below, so what survives here is retention.
+		runtime.GC()
 		runtime.ReadMemStats(&after)
 		runtime.KeepAlive(held)
 		if after.HeapAlloc < before.HeapAlloc {
