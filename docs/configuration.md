@@ -2768,7 +2768,7 @@ exits, rather than starting the server. See
 | Endpoint | Description |
 |---|---|
 | `GET /api/healthz` | liveness/uptime/version check |
-| `GET /ca.crt` | mikroview's self-generated CA certificate, unauthenticated -- only present when TLS is on and mikroview generated its own CA (never for a supplied cert or `tls.enabled: false`); see [TLS](#tls) |
+| `GET /ca.crt` | mikroview's self-generated CA certificate, unauthenticated -- present whenever mikroview generated its own CA, which it does if `tls.enabled` is true **or** `listen.syslogTls` is non-empty, and never for an operator-supplied cert. With `tls.enabled: false` it is served over plain HTTP, which is the case the reverse-proxy deployment needs; see [TLS](#tls) |
 | `GET /api/events` | filtered, windowed historical query (see below) |
 | `GET /api/devices` | known devices (configured + auto-discovered), each with a `status` of `live`/`stale`/`never_seen` (issue #98, see [Behavioral flags](#behavioral-flags-optional-on-by-default)'s "Device silence" entry) -- feeds the Fleet view |
 | `GET /api/rules` | every rule label mikroview has ever seen fire, with first/last-seen time and count (`internal/rules.Store`) -- the "discovered but unnamed rules" source for the Entities panel (see [Entities](#entities-ui-managed-hostruleport-labels-and-tags-optional)), open to any signed-in user, not admin-gated |
@@ -2782,7 +2782,7 @@ exits, rather than starting the server. See
 | `GET /api/flags/exclusions` | admin-only: every currently-excluded (detector, target) pair |
 | `DELETE /api/flags/exclusions/{id}` | admin-only: remove one exclusion, letting that pair raise again |
 | `GET /api/definitions` | admin-only: every definition the engine evaluates -- shipped detectors and your own watchlist expectations alike -- each with its enabled state, scope, tuned params, param schema, provenance, replayability, and (for an expectation) its coverage answer. Replaced `GET /api/detectors` and `GET /api/watchlist/entries` in v0.3.0 |
-| `POST /api/definitions` | admin-only: create a custom definition. Declarative only -- `kind: "programmatic"` is refused, because programmatic logic is Go compiled into the binary rather than data |
+| `POST /api/definitions` | admin-only: create a custom definition. Declarative only -- `kind: "programmatic"` is refused, because programmatic logic is Go compiled into the binary rather than data. `intent: "detection"` is refused too, for now: a custom detector's match conditions have nowhere on the envelope to be stored yet, so accepting one would create a definition that lists and evaluates nothing. Only expectation definitions can be created here today; custom detector authoring is tracked in issue #502 |
 | `GET /api/definitions/schema` | admin-only: every definition's param schema, keyed by id, so a UI renders tuning controls from the server's own declaration |
 | `GET /api/definitions/{id}` | admin-only: one definition |
 | `PUT /api/definitions/{id}` | admin-only: change any of `enabled`, `scope`, `params`, `suppressions`, `name`/`expectation` (expectations only). An absent field is left alone; a param outside its declared bounds is a 400, never a stored zero. Takes effect on the next ingested event |
@@ -2820,8 +2820,8 @@ exits, rather than starting the server. See
 Every route above `/api/auth/session`/`/register`/`/login`/`/logout` and
 `/api/healthz` requires a valid session once an account exists -- see
 [Authentication](#authentication). `GET /api/events`, `/flags`, `/stats`,
-and `/devices` additionally accept a valid `Authorization: Bearer
-<token>` header instead of a session (see [API tokens](#api-tokens-read-only));
+`/devices`, and `/matches` additionally accept a valid `Authorization:
+Bearer <token>` header instead of a session (see [API tokens](#api-tokens-read-only));
 no other route accepts one.
 Every mutating (`POST`/`PUT`/`DELETE`) request also requires an
 `X-Requested-With: mikroview` header once an account exists (a CSRF

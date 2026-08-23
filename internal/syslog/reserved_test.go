@@ -29,11 +29,11 @@ func TestReservedSlotsOnlyExistWhenDevicesAreDeclared(t *testing.T) {
 	}
 
 	SetConfiguredSources([]string{"192.0.2.1"})
-	want := maxTCPConnections / reservedFraction
+	want := maxTCPConns() / reservedFraction
 	if got := reservedSlots(); got != want {
 		t.Errorf("reservedSlots = %d, want %d", got, want)
 	}
-	if reservedSlots() >= maxTCPConnections {
+	if reservedSlots() >= maxTCPConns() {
 		t.Error("the reservation consumed the whole pool -- discovery is still the normal path and must keep capacity")
 	}
 }
@@ -64,8 +64,8 @@ func TestStatsReportsCapacityAndReservation(t *testing.T) {
 	SetConfiguredSources([]string{"192.0.2.1"})
 
 	s := Stats()
-	if s.Capacity != maxTCPConnections {
-		t.Errorf("Capacity = %d, want %d", s.Capacity, maxTCPConnections)
+	if s.Capacity != maxTCPConns() {
+		t.Errorf("Capacity = %d, want %d", s.Capacity, maxTCPConns())
 	}
 	if s.ReservedForConfigured != reservedSlots() {
 		t.Errorf("ReservedForConfigured = %d, want %d", s.ReservedForConfigured, reservedSlots())
@@ -121,13 +121,20 @@ func TestOversizedMessageYieldsOneEventNotSeveral(t *testing.T) {
 	}()
 
 	// One message of two and a half buffers, with no newline anywhere --
-	// the shape a RouterOS sender produces, just far too large.
-	oversized := bytes.Repeat([]byte("A"), maxTCPMessageBytes*2+maxTCPMessageBytes/2)
+	// the shape a RouterOS sender produces, just far too large -- then a
+	// '\n' terminator before the normal message that follows. The
+	// terminator is the only honest end-of-run signal a receiver has:
+	// an unterminated blob followed by more bytes is, to any receiver,
+	// still one message, so ending the discard without one would mean
+	// guessing at a boundary the sender never sent.
+	oversized := append(bytes.Repeat([]byte("A"), maxTCPMessageBytes*2+maxTCPMessageBytes/2), '\n')
 	if _, err := clientConn.Write(oversized); err != nil {
 		t.Fatalf("write: %v", err)
 	}
 	// A normal message afterwards must still arrive: the discard has to
-	// end with the oversized message, not swallow what follows.
+	// end with the oversized message's own terminator, not swallow what
+	// follows. Left without a trailing newline of its own so this also
+	// exercises the EOF-flush path below, not just the newline path.
 	if _, err := clientConn.Write([]byte("D|wan-in|forward: proto TCP, 192.0.2.1:1->198.51.100.1:80")); err != nil {
 		t.Fatalf("write: %v", err)
 	}

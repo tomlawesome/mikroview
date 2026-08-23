@@ -94,16 +94,48 @@ type sniffingListener struct {
 // goroutine per connection rather than inline: a client that connects
 // and sends nothing would otherwise stall every other connection behind
 // it for sniffTimeout.
+//
+// A temporary Accept error (net.Error.Temporary() == true -- e.g. EMFILE
+// or ENFILE from hitting the process's file-descriptor limit) does not
+// end the loop: it is retried with a capped exponential backoff, the
+// same shape internal/syslog/tcp_listener.go's ServeTCP already uses for
+// its own accept loop. Without this, one transient error killed this
+// goroutine for good, and http.Server.Serve -- which retries a temporary
+// Accept error itself, following its own documented contract -- called
+// Accept again on a listener that could now only ever block forever:
+// l.errs had already delivered its one error and l.done was still open
+// (issue #380 item 3). A non-temporary error (the listener was Close'd,
+// or something genuinely fatal) still ends the loop and is delivered to
+// the caller via l.errs exactly as before.
 func (l *sniffingListener) accept() {
+	var backoff time.Duration
 	for {
 		c, err := l.inner.Accept()
 		if err != nil {
+			if ne, ok := err.(net.Error); ok && ne.Temporary() {
+				if backoff == 0 {
+					backoff = 5 * time.Millisecond
+				} else {
+					backoff *= 2
+				}
+				if max := time.Second; backoff > max {
+					backoff = max
+				}
+				l.log.Warn(fmt.Sprintf("tlssniff: temporary accept error: %v; retrying in %v", err, backoff))
+				select {
+				case <-time.After(backoff):
+				case <-l.done:
+					return
+				}
+				continue
+			}
 			select {
 			case l.errs <- err:
 			case <-l.done:
 			}
 			return
 		}
+		backoff = 0
 		select {
 		case l.slots <- struct{}{}:
 		default:
