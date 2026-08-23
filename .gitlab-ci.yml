@@ -48,7 +48,7 @@ variables:
 
 lint:go:
   stage: lint
-  image: golang:1.26
+  image: golang:1.27
   <<: *dev_or_mr
   script:
     - go build ./...
@@ -81,7 +81,7 @@ lint:frontend:
 
 test:go:
   stage: test
-  image: golang:1.26
+  image: golang:1.27
   <<: *dev_or_mr
   # GitLab's docker executor runs this container as root by default; GitHub's
   # ci.yml runs the same test directly on the runner VM as an unprivileged
@@ -138,7 +138,7 @@ security:gosec:
 
 security:govulncheck:
   stage: security
-  image: golang:1.26
+  image: golang:1.27
   <<: *dev_or_mr
   script:
     - go install golang.org/x/vuln/cmd/govulncheck@v1.4.0

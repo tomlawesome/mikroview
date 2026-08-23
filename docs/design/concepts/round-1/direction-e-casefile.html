@@ -1,0 +1,522 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mikroview — Direction E: Casefile</title>
+<style>
+  /* ============================================================
+     DIRECTION E — "CASEFILE"
+     Mikroview calls itself an interrogation helper. This direction
+     takes it literally: the interface is built around questions,
+     not pages. Everything on screen is a question you can ask —
+     click a host, an edge, a rule, and its ANSWER takes the stage
+     as a dossier. The stream never stops running at the edge of
+     your vision. The questions you asked become a case: pinned
+     evidence, connected by a thread, ending in a conclusion and
+     a command you can run.
+
+     The wager: an operator doesn't browse a firewall log. They
+     work a case.
+     ============================================================ */
+  :root {
+    --slate: #101013;
+    --slate-2: #17171b;
+    --slate-3: #1e1e24;
+    --line: #2a2a32;
+    --line-2: #3a3a44;
+    --ink: #f2f0eb;
+    --ink-2: #a5a29a;
+    --ink-3: #66645e;
+    --amber: #ffb454;
+    --amber-dim: rgba(255, 180, 84, 0.12);
+    --thread: #d64545;
+    /* validated categorical (dark, surface #101013): */
+    --lan: #3987e5;
+    --srv: #199e70;
+    --iot: #c98500;
+    --guest: #d95926;
+    --ok: #3fae5a;
+    --drop: #e05252;
+    --sans: system-ui, -apple-system, "Segoe UI", sans-serif;
+    --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  }
+  * { box-sizing: border-box; margin: 0; }
+  html { scroll-behavior: smooth; }
+  body { background: var(--slate); color: var(--ink); font: 13px/1.5 var(--sans); -webkit-font-smoothing: antialiased; }
+
+  .concept {
+    position: sticky; top: 0; z-index: 90;
+    display: flex; gap: 16px; align-items: baseline;
+    padding: 8px 20px; background: #0a0a0c; border-bottom: 1px solid var(--line);
+    font-size: 11px; color: var(--ink-3);
+  }
+  .concept b { color: var(--amber); letter-spacing: 0.1em; }
+  .concept a { color: var(--ink-2); text-decoration: none; margin-left: 12px; }
+
+  .scene { min-height: 100vh; border-bottom: 1px solid var(--line-2); }
+  .scene-tag { font-size: 10.5px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--ink-3); padding: 12px 20px 0; }
+
+  /* ---- top bar: the question box is the navigation ---- */
+  .bar {
+    display: flex; align-items: center; gap: 18px; padding: 12px 20px;
+    border-bottom: 1px solid var(--line);
+  }
+  .wordmark { font-size: 13px; font-weight: 800; letter-spacing: 0.2em; }
+  .wordmark em { color: var(--amber); font-style: normal; }
+  .ask {
+    flex: 1; max-width: 520px; display: flex; align-items: center; gap: 10px;
+    background: var(--slate-2); border: 1px solid var(--line-2); border-radius: 8px;
+    padding: 8px 14px; color: var(--ink-3); font-size: 12.5px;
+  }
+  .ask b { color: var(--ink-2); font-weight: 600; }
+  .ask kbd { margin-left: auto; font: 10px var(--mono); border: 1px solid var(--line-2); border-radius: 4px; padding: 1px 6px; color: var(--ink-3); }
+  .bar .who { margin-left: auto; font-size: 11px; color: var(--ink-3); }
+  .bar .who b { color: var(--ink-2); }
+
+  .frame { display: grid; grid-template-columns: 292px 1fr 280px; min-height: calc(100vh - 120px); }
+
+  /* ---- left: the stream never stops ---- */
+  .streamrail { border-right: 1px solid var(--line); padding: 12px 0 20px; min-width: 0; }
+  .streamrail h3 {
+    display: flex; align-items: center; gap: 8px;
+    font-size: 9.5px; letter-spacing: 0.14em; text-transform: uppercase;
+    color: var(--ink-3); font-weight: 700; padding: 0 16px 8px;
+  }
+  .streamrail h3 i { width: 6px; height: 6px; border-radius: 50%; background: var(--ok); animation: pulse 2s ease-in-out infinite; }
+  @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.3; } }
+  .srow { padding: 5px 16px; border-left: 2px solid transparent; font-family: var(--mono); font-size: 10.5px; color: var(--ink-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .srow .t { color: var(--ink-3); font-size: 9.5px; }
+  .srow .a-drop { color: var(--drop); font-weight: 700; }
+  .srow .a-acc { color: var(--ok); font-weight: 700; }
+  .srow .a-nat { color: #a08df0; font-weight: 700; }
+  .srow.hot { border-left-color: var(--amber); background: var(--amber-dim); color: var(--ink); }
+  .srow.hot .mark { color: var(--amber); }
+  .streamrail .note { font-size: 10px; color: var(--ink-3); padding: 10px 16px 0; line-height: 1.7; }
+
+  /* ---- centre: the dossier stage ---- */
+  .stage { padding: 18px 28px 32px; min-width: 0; }
+  .kicker { font-size: 10px; letter-spacing: 0.16em; text-transform: uppercase; color: var(--amber); font-weight: 800; }
+  .stagehead { display: flex; align-items: baseline; gap: 16px; margin: 6px 0 4px; flex-wrap: wrap; }
+  .stagehead h1 { font-size: 30px; font-weight: 800; letter-spacing: -0.02em; }
+  .stagehead h1 .to { color: var(--ink-3); font-weight: 300; padding: 0 6px; }
+  .stamp {
+    font-size: 10px; font-weight: 800; letter-spacing: 0.14em;
+    border: 2px solid var(--drop); color: var(--drop); border-radius: 4px;
+    padding: 3px 10px; transform: rotate(-2deg); display: inline-block;
+  }
+  .stamp.ok { border-color: var(--ok); color: var(--ok); }
+  .stagehead .sub { width: 100%; font-size: 12.5px; color: var(--ink-2); }
+  .stagehead .sub b { color: var(--ink); }
+
+  .evidence { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-top: 16px; }
+  .ev { background: var(--slate-2); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; min-width: 0; }
+  .ev.wide { grid-column: span 2; }
+  .ev h4 {
+    display: flex; align-items: baseline; gap: 10px;
+    font-size: 9.5px; letter-spacing: 0.14em; text-transform: uppercase;
+    color: var(--ink-3); font-weight: 700; margin-bottom: 10px;
+  }
+  .ev h4 .pin { margin-left: auto; font-size: 10px; color: var(--amber); letter-spacing: 0.04em; border: 1px solid var(--line-2); border-radius: 999px; padding: 1px 9px; }
+  svg text { font-family: var(--mono); }
+  .f-name { fill: var(--ink); font-size: 12px; font-weight: 700; font-family: var(--sans); }
+  .f-sub { fill: var(--ink-3); font-size: 9.5px; }
+  .f-val { fill: var(--ink-2); font-size: 10px; }
+  .fanline { fill: none; stroke-width: 2; stroke-linecap: round; }
+
+  .partition .sect { font-size: 11px; font-weight: 700; margin: 8px 0 4px; }
+  .partition .sect.could { color: var(--ink); }
+  .partition .sect.out { color: var(--ink-3); }
+  .rrow { display: grid; grid-template-columns: 26px 1fr auto; gap: 10px; padding: 4px 0; font-family: var(--mono); font-size: 11px; border-top: 1px solid var(--line); }
+  .rrow .n { color: var(--ink-3); }
+  .rrow .why { color: var(--ink-3); font-size: 10px; }
+  .rrow.dim { opacity: 0.55; }
+  .rrow b { color: var(--ink); font-weight: 600; }
+
+  .timeline svg { width: 100%; height: 56px; display: block; }
+  .timeline .bar-ev { fill: var(--drop); }
+  .timeline .axis { font: 9px var(--mono); fill: var(--ink-3); }
+
+  .cmd { background: #0a0a0c; border: 1px solid var(--line-2); border-radius: 8px; padding: 12px 14px; font: 11.5px var(--mono); color: var(--amber); overflow-x: auto; white-space: pre; }
+  .cmd-note { font-size: 11px; color: var(--ink-3); margin-top: 8px; line-height: 1.6; }
+  .cmd-note b { color: var(--ink-2); }
+
+  /* the #413 editor as a first-class stage element */
+  .rename {
+    display: grid; grid-template-columns: 1fr auto auto; gap: 10px 12px; align-items: center;
+    background: var(--slate-2); border: 1px solid var(--amber); border-radius: 10px;
+    padding: 14px 16px; margin-top: 14px; box-shadow: 0 0 0 3px var(--amber-dim);
+  }
+  .rename .prov { grid-column: span 3; font-size: 11.5px; color: var(--ink-2); }
+  .rename .prov b { color: var(--ink); font-family: var(--mono); }
+  .rename input[type=text] {
+    background: #0a0a0c; border: 1px solid var(--amber); border-radius: 7px;
+    color: var(--ink); font: 14px var(--sans); padding: 9px 12px; outline: none; width: 100%;
+  }
+  .rename .save { background: var(--amber); color: #191104; border: 0; font: 800 12px var(--sans); padding: 9px 18px; border-radius: 7px; }
+  .rename .cancel { background: transparent; border: 1px solid var(--line-2); color: var(--ink-2); font: 12px var(--sans); padding: 9px 14px; border-radius: 7px; }
+  .rename .scope { grid-column: span 3; font-size: 11px; color: var(--ink-3); }
+
+  .idgrid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 6px 18px; font-size: 12px; }
+  .idgrid .k { color: var(--ink-3); font-size: 10px; letter-spacing: 0.1em; text-transform: uppercase; }
+  .idgrid .v { font-family: var(--mono); color: var(--ink); }
+  .idgrid .v small { color: var(--ink-3); }
+
+  /* ---- right: the case trail ---- */
+  .trail { border-left: 1px solid var(--line); padding: 12px 0 20px; position: relative; min-width: 0; }
+  .trail h3 { font-size: 9.5px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--ink-3); font-weight: 700; padding: 0 18px 4px; }
+  .trail h3 b { color: var(--amber); }
+  .trail .thread { position: absolute; top: 40px; bottom: 60px; left: 30px; width: 2px; background: linear-gradient(var(--thread), rgba(214,69,69,0.15)); }
+  .pincard {
+    position: relative; margin: 10px 18px 10px 44px; padding: 10px 12px;
+    background: var(--slate-2); border: 1px solid var(--line); border-radius: 8px;
+  }
+  .pincard::before {
+    content: ""; position: absolute; left: -18px; top: 16px; width: 16px; height: 2px; background: var(--thread);
+  }
+  .pincard::after {
+    content: ""; position: absolute; left: -21px; top: 13px; width: 8px; height: 8px;
+    border-radius: 50%; background: var(--thread); box-shadow: 0 0 0 3px rgba(214,69,69,0.2);
+  }
+  .pincard .k { font-size: 9px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--ink-3); font-weight: 700; }
+  .pincard .n { font-size: 12.5px; font-weight: 700; margin: 2px 0; }
+  .pincard .n small { font: 10.5px var(--mono); color: var(--ink-3); font-weight: 400; }
+  .pincard .s { font-size: 10.5px; color: var(--ink-2); }
+  .pincard.now { border-color: var(--amber); box-shadow: 0 0 0 3px var(--amber-dim); }
+  .trail .addnote { font-size: 10.5px; color: var(--ink-3); margin: 14px 18px 0 44px; line-height: 1.7; }
+
+  /* ---- scene 3: the board ---- */
+  .board {
+    position: relative; padding: 20px 28px 30px; min-height: 70vh;
+    background:
+      radial-gradient(circle, var(--line) 1px, transparent 1px);
+    background-size: 26px 26px;
+  }
+  .board-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 18px; position: relative; z-index: 2; }
+  .bcard { background: var(--slate-2); border: 1px solid var(--line-2); border-radius: 10px; padding: 14px 16px; box-shadow: 0 10px 30px rgba(0,0,0,0.4); }
+  .bcard .k { font-size: 9px; letter-spacing: 0.13em; text-transform: uppercase; color: var(--ink-3); font-weight: 700; }
+  .bcard h4 { font-size: 15px; font-weight: 800; margin: 3px 0 6px; }
+  .bcard h4 small { font: 10.5px var(--mono); color: var(--ink-3); font-weight: 400; }
+  .bcard p { font-size: 11.5px; color: var(--ink-2); line-height: 1.6; }
+  .bcard.conclusion { border-color: var(--amber); background: linear-gradient(180deg, rgba(255,180,84,0.06), transparent); }
+  .bcard .actions { display: flex; gap: 8px; margin-top: 10px; }
+  .bact { font-size: 11px; font-weight: 700; border-radius: 6px; padding: 6px 12px; border: 1px solid var(--line-2); color: var(--ink-2); }
+  .bact.hot { background: var(--amber); color: #191104; border-color: var(--amber); }
+  .threadsvg { position: absolute; inset: 0; z-index: 1; pointer-events: none; }
+  .threadsvg path { fill: none; stroke: var(--thread); stroke-width: 1.5; opacity: 0.5; }
+  .metricstrip { display: flex; gap: 20px; align-items: center; padding: 14px 28px; border-top: 1px solid var(--line); font-size: 11px; color: var(--ink-2); }
+  .metricstrip b { color: var(--ink); font-size: 15px; font-weight: 800; }
+  .metricstrip .warn { color: var(--drop); font-weight: 700; }
+  .metricstrip .spark { display: inline-block; vertical-align: middle; }
+  .metricstrip .spark polyline { fill: none; stroke-width: 1.6; }
+
+  @media (prefers-reduced-motion: reduce) { * { animation: none !important; } }
+</style>
+</head>
+<body>
+
+<div class="concept">
+  <b>DIRECTION E — CASEFILE</b>
+  <span>the interrogation is the interface · every token is a question · answers take the stage · the trail becomes a case</span>
+  <span style="margin-left:auto">
+    <a href="#s1">1 the answer</a><a href="#s2">2 the host</a><a href="#s3">3 the case</a>
+  </span>
+</div>
+
+<!-- ============ SCENE 1 : AN ANSWER TAKES THE STAGE ============ -->
+<section class="scene" id="s1">
+  <div class="scene-tag">Scene 1 — you clicked the red arc. Its dossier takes the stage. The stream keeps running on the left.</div>
+  <div class="bar">
+    <span class="wordmark">MIKRO<em>VIEW</em></span>
+    <span class="ask">ask anything — <b>a name, an IP, a port, a rule, a country</b><kbd>/</kbd></span>
+    <span class="who">rb5009 · connected · <b>tom</b> (admin)</span>
+  </div>
+  <div class="frame">
+
+    <aside class="streamrail">
+      <h3><i></i>The stream · 34/s</h3>
+      <div class="srow hot"><span class="t">14:02:11</span> <span class="a-drop">DROP</span> <span class="mark">cam-porch → nas</span> :445</div>
+      <div class="srow"><span class="t">14:02:11</span> <span class="a-nat">NAT</span> phone-tom → 142.250.187.206</div>
+      <div class="srow"><span class="t">14:02:10</span> <span class="a-drop">DROP</span> 185.220.101.34 → rb5009 :8291</div>
+      <div class="srow"><span class="t">14:02:10</span> <span class="a-acc">ACC</span> tom-desktop → nas :5001</div>
+      <div class="srow"><span class="t">14:02:10</span> <span class="a-acc">ACC</span> hue-bridge → pihole :53</div>
+      <div class="srow"><span class="t">14:02:10</span> <span class="a-drop">DROP</span> 45.148.10.78 → rb5009 :22</div>
+      <div class="srow"><span class="t">14:02:10</span> <span class="a-drop">DROP</span> guest-e8b2 → tom-desktop :445</div>
+      <div class="srow"><span class="t">14:02:09</span> <span class="a-nat">NAT</span> 84.9.112.55 → nas :443</div>
+      <div class="srow"><span class="t">14:02:09</span> <span class="a-acc">ACC</span> laptop-anna → 151.101.0.223 :443</div>
+      <div class="srow hot"><span class="t">14:02:09</span> <span class="a-drop">DROP</span> <span class="mark">cam-porch → 47.246.129.8</span> :443</div>
+      <div class="srow"><span class="t">14:02:09</span> <span class="a-acc">ACC</span> phone-tom-wg → rb5009 :51820</div>
+      <div class="srow"><span class="t">14:02:09</span> <span class="a-acc">ACC</span> tom-desktop → pihole :53</div>
+      <div class="note">Amber marks rows touching the open case. Click any row to ask about it — the stage pivots, the stream keeps flowing.</div>
+    </aside>
+
+    <main class="stage">
+      <div class="kicker">Boundary · asked 14:02</div>
+      <div class="stagehead">
+        <h1>iot <span class="to">→</span> lan</h1>
+        <span class="stamp">UNPLANNED</span>
+        <span class="sub">No rule anticipates this path. <b>14 attempts in 15 minutes</b>, all from one host, all caught by the default drop — the router is holding, but nothing was ever told to expect this.</span>
+      </div>
+
+      <div class="evidence">
+        <div class="ev">
+          <h4>Who is knocking <span class="pin">📌 pinned</span></h4>
+          <svg viewBox="0 0 470 150" role="img" aria-label="Flow fan: cam-porch reaches toward nas on ports 445 and 139, and tom-desktop on 445; all dropped">
+            <circle cx="60" cy="75" r="5" fill="var(--iot)"/>
+            <text x="34" y="56" class="f-name">cam-porch</text>
+            <text x="34" y="103" class="f-sub">10.0.20.31 · iot lane</text>
+            <path class="fanline" d="M72 68 C 160 30, 240 30, 310 44" stroke="var(--drop)"/>
+            <path class="fanline" d="M72 75 C 160 70, 240 70, 310 82" stroke="var(--drop)"/>
+            <path class="fanline" d="M72 82 C 160 115, 240 115, 310 120" stroke="var(--drop)"/>
+            <text x="318" y="42" class="f-val">nas :445 · ×9</text>
+            <text x="318" y="83" class="f-val">nas :139 · ×3</text>
+            <text x="318" y="122" class="f-val">tom-desktop :445 · ×2</text>
+            <text x="20" y="140" class="f-sub">every reach dropped · smb / netbios — a camera has no business here</text>
+          </svg>
+        </div>
+
+        <div class="ev partition">
+          <h4>What the rules say <span class="pin">📌 pin</span></h4>
+          <div class="sect could">Could have allowed it — 0 of 41</div>
+          <div class="rrow"><span class="n">—</span><span>No forward rule permits iot → lan on any port.</span><span class="why"></span></div>
+          <div class="sect out">Catching it instead</div>
+          <div class="rrow"><span class="n">#41</span><span><b>default drop</b> · chain forward</span><span class="why">unlogged by name</span></div>
+          <div class="sect out">Ruled out — sample of 39</div>
+          <div class="rrow dim"><span class="n">#6</span><span>wg → srv allow</span><span class="why">wrong source</span></div>
+          <div class="rrow dim"><span class="n">#12</span><span>iot-dns-allow → pihole :53</span><span class="why">port 445 ≠ 53</span></div>
+          <div class="rrow dim"><span class="n">#18</span><span>lan-to-srv</span><span class="why">wrong direction</span></div>
+        </div>
+
+        <div class="ev timeline wide">
+          <h4>When it knocked — 15 minutes <span class="pin">📌 pinned</span></h4>
+          <svg viewBox="0 0 900 56" preserveAspectRatio="none" role="img" aria-label="Timeline of the 14 attempts: paced roughly every 15 seconds, no burst">
+            <line x1="0" y1="44" x2="900" y2="44" stroke="var(--line-2)"/>
+            <rect class="bar-ev" x="60" y="26" width="4" height="18"/><rect class="bar-ev" x="124" y="26" width="4" height="18"/>
+            <rect class="bar-ev" x="187" y="26" width="4" height="18"/><rect class="bar-ev" x="255" y="26" width="4" height="18"/>
+            <rect class="bar-ev" x="318" y="26" width="4" height="18"/><rect class="bar-ev" x="392" y="26" width="4" height="18"/>
+            <rect class="bar-ev" x="449" y="26" width="4" height="18"/><rect class="bar-ev" x="514" y="26" width="4" height="18"/>
+            <rect class="bar-ev" x="578" y="26" width="4" height="18"/><rect class="bar-ev" x="642" y="26" width="4" height="18"/>
+            <rect class="bar-ev" x="706" y="26" width="4" height="18"/><rect class="bar-ev" x="770" y="26" width="4" height="18"/>
+            <rect class="bar-ev" x="835" y="26" width="4" height="18"/><rect class="bar-ev" x="884" y="14" width="4" height="30"/>
+            <text x="2" y="54" class="axis" style="font-family:var(--mono); font-size:9px; fill:var(--ink-3)">13:47</text>
+            <text x="580" y="16" class="axis" style="font-family:var(--mono); font-size:9px; fill:var(--ink-3)">metronomic · ~every 64 s · that is firmware, not a finger</text>
+            <text x="868" y="54" class="axis" style="font-family:var(--mono); font-size:9px; fill:var(--ink-3)">now</text>
+          </svg>
+        </div>
+
+        <div class="ev wide">
+          <h4>What you can do about it — mikroview never touches the router</h4>
+          <div class="cmd">/ip firewall filter add chain=forward src-address=10.0.20.0/24 dst-address=10.0.10.0/24 \
+    action=drop log=yes log-prefix="iot-to-lan-drop" comment="name the thing the default drop was hiding" \
+    place-before=[find comment="default-drop"]</div>
+          <p class="cmd-note"><b>Print the command, never run it.</b> This names the boundary so the next knock arrives with a rule name instead of silence — and the UNPLANNED stamp on this edge retires itself the moment the router starts saying so.</p>
+        </div>
+      </div>
+    </main>
+
+    <aside class="trail">
+      <h3>Case · <b>the camera that knocks</b></h3>
+      <div class="thread"></div>
+      <div class="pincard">
+        <div class="k">Flag · 13:52</div>
+        <div class="n">new_talker <small>cam-porch</small></div>
+        <div class="s">first sighting on this boundary</div>
+      </div>
+      <div class="pincard now">
+        <div class="k">Boundary · now on stage</div>
+        <div class="n">iot → lan <small>tcp/445</small></div>
+        <div class="s">UNPLANNED · 14 attempts · default drop</div>
+      </div>
+      <div class="pincard">
+        <div class="k">Host</div>
+        <div class="n">cam-porch <small>10.0.20.31</small></div>
+        <div class="s">also probing 47.246.129.8 · dropped</div>
+      </div>
+      <div class="addnote">Every pin is a question you asked. The thread is the case. Close it with a conclusion — or export it as a lookback query.</div>
+    </aside>
+  </div>
+</section>
+
+<!-- ============ SCENE 2 : A HOST ON THE STAGE, RENAMED IN PLACE ============ -->
+<section class="scene" id="s2">
+  <div class="scene-tag">Scene 2 — the host's dossier. Naming it is not a popover here: it is the top of the file.</div>
+  <div class="bar">
+    <span class="wordmark">MIKRO<em>VIEW</em></span>
+    <span class="ask">ask anything — <b>a name, an IP, a port, a rule, a country</b><kbd>/</kbd></span>
+    <span class="who">rb5009 · connected · <b>tom</b> (admin)</span>
+  </div>
+  <div class="frame">
+
+    <aside class="streamrail">
+      <h3><i></i>The stream · 34/s</h3>
+      <div class="srow hot"><span class="t">14:02:11</span> <span class="a-drop">DROP</span> <span class="mark">cam-porch → nas</span> :445</div>
+      <div class="srow"><span class="t">14:02:11</span> <span class="a-nat">NAT</span> phone-tom → 142.250.187.206</div>
+      <div class="srow"><span class="t">14:02:10</span> <span class="a-drop">DROP</span> 185.220.101.34 → rb5009 :8291</div>
+      <div class="srow"><span class="t">14:02:10</span> <span class="a-acc">ACC</span> tom-desktop → nas :5001</div>
+      <div class="srow"><span class="t">14:02:10</span> <span class="a-acc">ACC</span> hue-bridge → pihole :53</div>
+      <div class="srow"><span class="t">14:02:10</span> <span class="a-drop">DROP</span> 45.148.10.78 → rb5009 :22</div>
+      <div class="srow"><span class="t">14:02:10</span> <span class="a-drop">DROP</span> guest-e8b2 → tom-desktop :445</div>
+      <div class="srow hot"><span class="t">14:02:09</span> <span class="a-drop">DROP</span> <span class="mark">cam-porch → 47.246.129.8</span> :443</div>
+      <div class="srow"><span class="t">14:02:09</span> <span class="a-acc">ACC</span> laptop-anna → 151.101.0.223 :443</div>
+      <div class="srow"><span class="t">14:02:09</span> <span class="a-acc">ACC</span> phone-tom-wg → rb5009 :51820</div>
+      <div class="note">The subject's rows glow amber as they happen — the dossier and the stream are one clock.</div>
+    </aside>
+
+    <main class="stage">
+      <div class="kicker">Host · asked 14:02 · admin can rename</div>
+      <div class="stagehead">
+        <h1>cam-porch</h1>
+        <span class="stamp">KNOCKING</span>
+        <span class="sub">A camera that talks when it should listen. <b>Two reaches beyond its lane in 15 minutes</b> — one at your nas, one at an address in Hangzhou.</span>
+      </div>
+
+      <div class="rename" role="group" aria-label="Name this host">
+        <div class="prov"><b>10.0.20.31</b> — currently “cam-porch”, from a DHCP lease · renaming is display only; raw values stay the identity</div>
+        <input type="text" value="Porch camera" aria-label="Display name">
+        <button class="cancel">Cancel</button>
+        <button class="save">Save name</button>
+        <div class="scope">Applies everywhere 10.0.20.31 appears — the stream, the map, every case that ever mentions it.</div>
+      </div>
+
+      <div class="evidence">
+        <div class="ev">
+          <h4>Identity</h4>
+          <div class="idgrid">
+            <div><div class="k">address</div><div class="v">10.0.20.31</div></div>
+            <div><div class="k">mac</div><div class="v">D8:0D:17:2A:4C:9E <small>· TP-Link</small></div></div>
+            <div><div class="k">lane</div><div class="v">iot · vlan20</div></div>
+            <div><div class="k">first seen</div><div class="v">41 days ago</div></div>
+            <div><div class="k">dhcp lease</div><div class="v">cam-porch · 22 h left</div></div>
+            <div><div class="k">flags</div><div class="v">new_talker <small>13:52 today</small></div></div>
+          </div>
+        </div>
+
+        <div class="ev">
+          <h4>Where it reaches <span class="pin">📌 pin</span></h4>
+          <svg viewBox="0 0 470 150" role="img" aria-label="cam-porch talks to its NVR normally, but also reaches nas, tom-desktop and a Hangzhou address; those are dropped">
+            <circle cx="60" cy="75" r="5" fill="var(--iot)"/>
+            <text x="34" y="56" class="f-name">cam-porch</text>
+            <path class="fanline" d="M72 70 C 160 30, 240 26, 310 34" stroke="var(--ok)"/>
+            <path class="fanline" d="M72 75 C 160 66, 240 64, 310 72" stroke="var(--drop)"/>
+            <path class="fanline" d="M72 80 C 160 104, 240 106, 310 110" stroke="var(--drop)"/>
+            <path class="fanline" d="M72 85 C 150 132, 240 138, 310 140" stroke="var(--drop)"/>
+            <text x="318" y="36" class="f-val" style="fill:var(--ok)">nvr :554 ok</text>
+            <text x="318" y="74" class="f-val">nas :445 ✕</text>
+            <text x="318" y="112" class="f-val">tom-desktop ✕</text>
+            <text x="318" y="142" class="f-val">47.246.129.8 ✕</text>
+          </svg>
+        </div>
+
+        <div class="ev timeline wide">
+          <h4>Its fortnight — events/day, drops in red</h4>
+          <svg viewBox="0 0 900 56" preserveAspectRatio="none" role="img" aria-label="Fourteen days of history: quiet streaming until three days ago, then daily drop clusters begin">
+            <line x1="0" y1="44" x2="900" y2="44" stroke="var(--line-2)"/>
+            <rect x="20" y="34" width="40" height="10" fill="var(--iot)" opacity="0.5"/><rect x="84" y="32" width="40" height="12" fill="var(--iot)" opacity="0.5"/>
+            <rect x="148" y="35" width="40" height="9" fill="var(--iot)" opacity="0.5"/><rect x="212" y="33" width="40" height="11" fill="var(--iot)" opacity="0.5"/>
+            <rect x="276" y="34" width="40" height="10" fill="var(--iot)" opacity="0.5"/><rect x="340" y="32" width="40" height="12" fill="var(--iot)" opacity="0.5"/>
+            <rect x="404" y="34" width="40" height="10" fill="var(--iot)" opacity="0.5"/><rect x="468" y="33" width="40" height="11" fill="var(--iot)" opacity="0.5"/>
+            <rect x="532" y="34" width="40" height="10" fill="var(--iot)" opacity="0.5"/><rect x="596" y="32" width="40" height="12" fill="var(--iot)" opacity="0.5"/>
+            <rect x="660" y="33" width="40" height="11" fill="var(--iot)" opacity="0.5"/>
+            <rect x="724" y="24" width="40" height="20" fill="var(--drop)"/><rect x="788" y="20" width="40" height="24" fill="var(--drop)"/>
+            <rect x="852" y="16" width="40" height="28" fill="var(--drop)"/>
+            <text x="20" y="54" style="font:9px var(--mono); fill:var(--ink-3)">14 d ago — rtsp to the nvr, nothing else</text>
+            <text x="560" y="14" style="font:9px var(--mono); fill:var(--drop)">3 days ago the knocking began — firmware update was 4 days ago</text>
+          </svg>
+        </div>
+      </div>
+    </main>
+
+    <aside class="trail">
+      <h3>Case · <b>the camera that knocks</b></h3>
+      <div class="thread"></div>
+      <div class="pincard">
+        <div class="k">Flag · 13:52</div>
+        <div class="n">new_talker <small>cam-porch</small></div>
+        <div class="s">first sighting on this boundary</div>
+      </div>
+      <div class="pincard">
+        <div class="k">Boundary</div>
+        <div class="n">iot → lan <small>tcp/445</small></div>
+        <div class="s">UNPLANNED · 14 attempts</div>
+      </div>
+      <div class="pincard now">
+        <div class="k">Host · now on stage</div>
+        <div class="n">cam-porch <small>10.0.20.31</small></div>
+        <div class="s">renaming to “Porch camera”</div>
+      </div>
+      <div class="addnote">The trail remembers the order you asked. Scene 3 is where it becomes a verdict.</div>
+    </aside>
+  </div>
+</section>
+
+<!-- ============ SCENE 3 : THE CASE BOARD ============ -->
+<section class="scene" id="s3">
+  <div class="scene-tag">Scene 3 — the case board: the evidence, the verdict, and the two ways out (a command, a watch).</div>
+  <div class="bar">
+    <span class="wordmark">MIKRO<em>VIEW</em></span>
+    <span class="ask">ask anything — <b>a name, an IP, a port, a rule, a country</b><kbd>/</kbd></span>
+    <span class="who">rb5009 · connected · <b>tom</b> (admin)</span>
+  </div>
+
+  <div class="board">
+    <svg class="threadsvg" aria-hidden="true" width="100%" height="100%">
+      <path d="M 240 130 C 400 90, 520 100, 620 140"/>
+      <path d="M 640 160 C 740 200, 800 220, 940 180"/>
+      <path d="M 250 160 C 350 260, 500 300, 610 330"/>
+      <path d="M 960 200 C 900 280, 780 320, 660 350"/>
+    </svg>
+    <div class="kicker" style="position:relative; z-index:2; margin-bottom:4px">Case · opened 13:52 · 5 pins</div>
+    <h1 style="position:relative; z-index:2; font-size:26px; font-weight:800; margin-bottom:16px">The camera that knocks <span class="stamp" style="vertical-align:6px; margin-left:10px">OPEN</span></h1>
+
+    <div class="board-grid">
+      <div class="bcard">
+        <div class="k">Flag · 13:52</div>
+        <h4>new_talker <small>cam-porch</small></h4>
+        <p>First contact on iot → lan. The flag opened this case; it closes when the case does — not before.</p>
+      </div>
+      <div class="bcard">
+        <div class="k">Boundary</div>
+        <h4>iot → lan <small>tcp/445 · 139</small></h4>
+        <p>UNPLANNED — zero of 41 rules anticipate it. Default drop holding, metronomic ~64 s cadence.</p>
+      </div>
+      <div class="bcard">
+        <div class="k">Host</div>
+        <h4>Porch camera <small>10.0.20.31</small></h4>
+        <p>TP-Link · iot lane · 41 days quiet, knocking for 3 — since the day after its firmware update.</p>
+      </div>
+      <div class="bcard">
+        <div class="k">Evidence · timeline</div>
+        <h4>The fortnight</h4>
+        <p>rtsp-only for 11 days, then daily drop clusters. The change has a date, and the date has a cause.</p>
+      </div>
+      <div class="bcard conclusion">
+        <div class="k">Verdict · draft</div>
+        <h4>Firmware got chatty, not compromised</h4>
+        <p>Paced SMB discovery after an update reads as vendor telemetry/discovery, not an operator. Name the boundary, watch for escalation, expect nothing further.</p>
+        <div class="actions">
+          <span class="bact hot">Print the command</span>
+          <span class="bact">Watch this boundary</span>
+          <span class="bact">Export as lookback</span>
+        </div>
+      </div>
+      <div class="bcard">
+        <div class="k">If the verdict is wrong</div>
+        <h4>The watch will say so</h4>
+        <p>“Watch this boundary” hands the case to Expect: any iot → lan traffic that is not this cadence, this port, this host — violation, and the case reopens itself.</p>
+      </div>
+    </div>
+  </div>
+
+  <div class="metricstrip">
+    <span><b>34</b> ev/s</span>
+    <svg class="spark" width="90" height="20" viewBox="0 0 90 20"><polyline stroke="var(--ink-3)" points="0,12 9,10 18,12 27,9 36,11 45,7 54,9 63,5 72,8 81,6 90,7"/></svg>
+    <span><b>6.2</b> drops/s <span class="warn">▲3.1×</span></span>
+    <span><b>6</b> flags today</span>
+    <span><b>3</b> watches · 0 violations</span>
+    <span><b>1</b> open case</span>
+    <span style="margin-left:auto; color:var(--ink-3)">the ambient numbers never need their own page — they ride along</span>
+  </div>
+</section>
+
+</body>
+</html>
