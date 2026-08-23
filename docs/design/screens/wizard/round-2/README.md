@@ -34,4 +34,6 @@ different. No new palette; the round-1 note stands.
 
 ## Verdicts
 
-Pending — round not yet reviewed by the owner.
+Owner, 2026-08-23, on S II: **"Yes, looks good."** — ratified whole.
+The consolidated record is `../DESIGN.md`; the build implements from
+there.
