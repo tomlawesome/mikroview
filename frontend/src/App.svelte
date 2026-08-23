@@ -10,6 +10,8 @@
   import { filtersFromSearchParams } from './lib/types'
   import Toolbar from './components/Toolbar.svelte'
   import NavRail from './components/NavRail.svelte'
+  import NavHandle from './components/NavHandle.svelte'
+  import { railPref } from './lib/rail.svelte'
   import ConnectionBanner from './components/ConnectionBanner.svelte'
   import ConfigProblemBanner from './components/ConfigProblemBanner.svelte'
   import FilterBar from './components/FilterBar.svelte'
@@ -160,9 +162,17 @@
        the rail, so a skip-link inside the rail would sit behind every
        toolbar control and skip nothing worth skipping. -->
   <a class="skip-link" href="#main-content">Skip to content</a>
+  <!-- First in tab order after the skip-link, per the record: the handle
+       is the only way back to a docked rail, so it cannot sit behind the
+       page's own controls. -->
+  {#if railPref.isDocked}
+    <NavHandle onrestore={() => railPref.restore()} />
+  {/if}
   <Toolbar />
   <div class="shell">
-    <NavRail />
+    {#if !railPref.isDocked}
+      <NavRail />
+    {/if}
     <!-- The banner tops the content column and pushes content rather than
          overlaying it, per the ratified record; that is why the banners
          live inside this column and not above the rail. -->
@@ -197,6 +207,10 @@
       </main>
     </div>
   </div>
+  <!-- Outside the rail on purpose: docking unmounts the rail, so a region
+       living inside it would vanish in the same tick as the change it is
+       meant to announce. -->
+  <p class="sr-only" role="status">{railPref.announcement}</p>
   <IpLookupPopover />
   <PortLookupPopover />
   <RouterLookupPopover />
@@ -208,6 +222,20 @@
 {/if}
 
 <style>
+  /* Clipped rather than display:none or hidden -- both remove the element
+     from the accessibility tree, which would silence the live region
+     this exists to carry. */
+  .sr-only {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    margin: -1px;
+    padding: 0;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+
   .skip-link {
     position: absolute;
     left: -9999px;
