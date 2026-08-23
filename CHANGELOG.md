@@ -280,6 +280,21 @@ rewritten.
   unchanged: one router demonstrably logging the right traffic stays
   true however many others went unread.
 
+- **A failed filter refetch (or initial load) no longer reads as "no
+  events match"** (#373). `refetchWithFilters()` re-queries the server so
+  a filter that misses the client's ~20,000-event buffer (an older
+  event, a device that hasn't logged recently) still finds a real match
+  in the server's larger store — but a rejected request (a 503, a
+  dropped connection) left `events` exactly as it was, with nothing
+  recording that the query never completed. The live view then rendered
+  that untouched, incomplete buffer as a definite "No events match the
+  current filters" (or, on first load, the equally silent "Waiting for
+  events…"), telling the operator traffic didn't happen when the truth
+  was that mikroview couldn't ask. `appState.fetchFailed` now records the
+  failure on both call sites and clears on the next successful one; the
+  live view shows an honest "could not load" message instead of asserting
+  emptiness whenever it's set.
+
 - **The watchlist page can no longer show torn observation data**
   (#376). `GET /api/watchlist` handed out entry copies whose observed
   and permitted lists still pointed at the live ones, so an entry in
