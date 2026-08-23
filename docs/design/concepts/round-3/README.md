@@ -112,7 +112,25 @@ receiver's own idiom.
 - Screenshots in `shots/`, regenerated with
   `cd frontend && node ../docs/design/concepts/round-3/capture.mjs`.
 
-## What happens next
+## The owner's batch (2026-08-23) — round 3 closes, and converges
+
+- **M Core: dropped.** *"I like this graphically, but the waterfall just
+  does this better."* The vertical's devices survive on the record
+  (depth compression, horizons, words-beside-marks) but the fall is
+  the better execution of newest-at-top time.
+- **N Score: dropped.** *"Cute, but it's just confusing to read and
+  you've got to be a musician to appreciate it."*
+- **O Waterfall: the fall is ratified as the hero.** *"You might have
+  smashed it here with 'the fall'."* The other O scenes (tuned, day
+  fall) were not kept.
+- **Convergence brief** → `../round-4/`: Atlas II — now called plain
+  **Atlas** — keeps its topography and live view but the fall becomes
+  the landing page. Two style identities on the same bones: a water
+  theme (networks flow) and a space theme (the starfall). The live
+  table's columns get properly aligned, and Reach folds into the
+  topography with a recentring interaction.
+
+## What happens next (superseded — see above)
 
 Owner returns one batch across M/N/O — kill / keep / blend. Because all
 three share the macro-concept, blends are cheap: M's depth-compression
