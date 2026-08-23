@@ -61,8 +61,19 @@ var reinforcedFlagTypes = []FlagType{
 // # Two jobs, and the second is why it declares an order
 //
 // It raises its own flag, and it raises the confidence floor of every
-// other active source-keyed flag for the same address. The second half
-// only works if every definition that could raise such a flag has
+// other active source-keyed flag for the same address.
+//
+// The two halves no longer answer to the same rule. Since #555 the flag
+// is raised only when the firewall let the traffic through, or when the
+// action cannot be read (knownBadIPFlags); the confidence floor is still
+// raised for every action, blocked traffic included. The distinction is
+// that the flag is a report to the operator -- and a listed address the
+// firewall stopped is not a threat that happened -- whereas the floor
+// only adds weight to behaviour another definition found on its own,
+// where a blocklist match remains a fact about the address regardless of
+// what became of one packet.
+//
+// The second half only works if every definition that could raise such a flag has
 // already run for this same event: flags.Store.RaiseConfidenceFloor
 // no-ops on a target it does not yet know about, so running early costs
 // a silently missing floor rather than an error -- the worst kind of bug
@@ -129,6 +140,25 @@ func (d *knownBadIPDefinition) Evaluate(e store.Event) {
 		return
 	}
 
+	// Reinforcement first, and deliberately before the action gate below:
+	// the two jobs answer different questions. A blocklist match is a fact
+	// about the address whatever became of this particular packet, so it
+	// still lends confidence to what another detector found on its own --
+	// and port_scan and low_slow_scan are built almost entirely out of
+	// blocked traffic, so gating this half would gut them (#555).
+	//
+	// Safe to run before emit because reinforcedFlagTypes does not include
+	// this definition's own flag; the two halves touch different targets.
+	if d.flagsAPI != nil {
+		for _, t := range reinforcedFlagTypes {
+			d.flagsAPI.RaiseConfidenceFloor(t, e.SrcIP, d.confidence)
+		}
+	}
+
+	if !knownBadIPFlags(e.Action) {
+		return
+	}
+
 	confidence := d.confidence
 	d.emit(Emission{
 		Target:     e.SrcIP,
@@ -139,12 +169,54 @@ func (d *knownBadIPDefinition) Evaluate(e store.Event) {
 		SourceIP:  e.SrcIP,
 		EventTime: e.ReceivedAt,
 	})
+}
 
-	if d.flagsAPI == nil {
-		return
-	}
-	for _, t := range reinforcedFlagTypes {
-		d.flagsAPI.RaiseConfidenceFloor(t, e.SrcIP, d.confidence)
+// knownBadIPFlags reports whether an event's action is one this
+// definition raises a flag for (#555).
+//
+// The rule is: flag when the firewall let the traffic through, or when we
+// cannot tell; stay quiet when it definitely did not. A listed address
+// the firewall blocked is the firewall working as intended, and because
+// most traffic from a listed address is blocked, flagging it buried the
+// one case worth an operator's attention.
+//
+// Drop and reject are the definite denials. The other three suppressed
+// and permitted cases each need a reason:
+//
+//   - Log and mangle lines decide nothing. RouterOS action=log writes a
+//     line and hands the packet to the next rule, and a mangle rule only
+//     tags it, so the same packet almost always produces a second line
+//     saying what actually happened -- and that line is the one worth
+//     judging. Flagging the first would mean a config that logs ahead of
+//     its drop rules raises a flag for every blocked probe, which is the
+//     noise this change exists to remove.
+//
+//   - NAT lines also decide nothing on their own -- a port forward is
+//     applied in prerouting, before the filter chain runs, so the packet
+//     can still be dropped afterwards. They flag anyway, because unlike
+//     log and mangle there is no habit of a second line following: the
+//     setup guide's own NAT example logs the port-forward rule by itself
+//     (docs/routeros-setup.md). Staying quiet would risk discarding the
+//     only evidence that a listed address reached a port forward. Both
+//     NAT directions flag, so the chain never has to be consulted.
+//
+//   - Unknown means the action could not be read at all, which is what
+//     any line not following mikroview's log-prefix convention becomes
+//     (internal/routeros/parser.go's inferAction). It has to flag: if it
+//     did not, this definition would switch itself off completely for a
+//     deployment not using the convention -- running, reporting nothing,
+//     and saying nothing about why.
+//
+// Nothing here overstates the case, because the flag's own Detail says
+// the address is listed rather than that it was allowed in. If that
+// wording is ever changed to claim acceptance, it must stop covering the
+// natted and unknown cases.
+func knownBadIPFlags(a store.Action) bool {
+	switch a {
+	case store.ActionDrop, store.ActionReject, store.ActionLog, store.ActionMarked:
+		return false
+	default:
+		return true
 	}
 }
 
