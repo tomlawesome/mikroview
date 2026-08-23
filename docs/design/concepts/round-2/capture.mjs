@@ -14,6 +14,8 @@ const files = [
   ['direction-h-halo.html', 'h', ['s1', 's2', 's3', 's4']],
   ['direction-i-strata.html', 'i', ['s1', 's2', 's3']],
   ['direction-j-gauntlet.html', 'j', ['s1', 's2', 's3']],
+  ['direction-k-dispatch.html', 'k', ['s1', 's2', 's3']],
+  ['direction-l-lattice.html', 'l', ['s1', 's2', 's3']],
 ];
 
 const browser = await chromium.launch();
