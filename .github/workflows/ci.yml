@@ -158,10 +158,23 @@ jobs:
       # out of a script, see docs/decisions/routeros-ingest-spike.md)
       # all reach it with content nothing has validated yet, the same
       # footing the other two are on. This is not a deep campaign; it's a
-      # regression gate that catches a newly-introduced crash on the
-      # committed corpus plus a little fresh exploration, without turning
-      # every PR into a fuzzing job. Seed corpora and any crashers found
-      # are committed under testdata/, so a reproducer stays permanent.
+      # regression gate that catches a newly-introduced crash on the seed
+      # corpus plus a little fresh exploration, without turning every PR
+      # into a fuzzing job.
+      #
+      # The seed corpus is the f.Add calls in each target's own source,
+      # not a testdata/ directory -- there is none, and that is
+      # deliberate (#526). The seeds are hand-written synthetic lines
+      # rather than captured device output, so moving them into files
+      # would add a repository artefact that grows and buy nothing.
+      #
+      # What testdata/fuzz/ is actually for here is a crasher. Go writes
+      # a failing input to testdata/fuzz/<Target>/ in the package
+      # directory, which on a runner is discarded with the workspace --
+      # hence the upload step below, which rescues it as a job artefact.
+      # If one is ever found, commit that file: plain `go test` then
+      # replays it on every run with no -fuzz flag, which is what makes
+      # a reproducer permanent.
       #
       # The budgets are execution counts (`Nx`), not wall-clock (`30s`),
       # and that is load-bearing -- do not "tidy" them back to durations.
@@ -211,6 +224,21 @@ jobs:
           go test ./internal/routeros/ -run FuzzParse -fuzz FuzzParse -fuzztime=160000x
           go test ./internal/syslog/ -run FuzzParseEnvelope -fuzz FuzzParseEnvelope -fuzztime=590000x
           go test ./internal/ingest/ -run FuzzDecodePayload -fuzz FuzzDecodePayload -fuzztime=156000x
+
+      # Without this the crashing input dies with the workspace and the
+      # only evidence is escaped bytes in the job log -- see #526. It
+      # runs on any earlier failure, not just the fuzz step's, because
+      # `failure()` cannot be narrowed to one step; the race-detector
+      # step above produces no such files, so the ignore below makes
+      # that case a no-op rather than a second red mark.
+      - name: Rescue a crashing input, if the fuzz step found one
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: fuzz-crashers-${{ github.run_id }}
+          path: internal/*/testdata/fuzz/**
+          if-no-files-found: ignore
+          retention-days: 30
 
       - name: govulncheck
         run: |
