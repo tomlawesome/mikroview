@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
+import { parseAddress, parseCidr } from './addressMatch'
 import type {
   ApiToken,
   AuditResult,
@@ -84,22 +85,54 @@ async function deleteJSON(url: string, body?: unknown): Promise<Response> {
   })
 }
 
+// isAddressOrCidr reports whether v is something store.Query.IP
+// (internal/store/query.go) already understands on its own: a bare IP or
+// a CIDR block, matched server-side against src OR dst. Anything else --
+// a name, a label fragment -- has no server-side equivalent at all.
+function isAddressOrCidr(v: string): boolean {
+  const trimmed = v.trim()
+  return !!parseAddress(trimmed) || !!parseCidr(trimmed)
+}
+
 // Exported so lib/state.svelte.ts can build the same query-param shape for
 // the URL bar (see App.svelte's filter-sync effect) without duplicating
 // the "which filter fields are non-empty" logic.
 //
-// srcQuery/dstQuery/srcCountry/dstCountry (#438) round-trip through the URL
-// for bookmarking like every other field, but GET /api/events's own query
-// parser (internal/api/rest.go's parseQuery) does not act on them -- it has
-// no concept of the label-matching or country data those fields need. That
-// is not a regression: the `rule` param already has the same shape (it
-// narrows by ruleLabel/raw only, never the ruleName alias #438 also added to
-// the client-side matcher), and refetchWithFilters() re-applies the full
-// client-side filter to whatever the server returns regardless, so nothing
-// server-unaware ever reaches the screen unfiltered -- only, in the worst
-// case, a refetch that is broader than it could be. Extending
-// store.Query/parseQuery to understand these fields is left to a future
-// change; this issue's contract is the bar, not the query endpoint.
+// This is also what refetchWithFilters() sends to GET /api/events, and
+// that request is not a nice-to-have: state.svelte.ts's own doc comment
+// calls it the "actually complete" layer, because internal/store/query.go
+// scans the *whole* retained buffer newest-to-oldest and fills its
+// 500-event limit with events that already match the query (see that
+// file's Query loop, matchesFilters called before the `len(matched) >=
+// limit` check) -- not just the 500 most recent overall. Sending nothing
+// for an address filter would silently swap that for "the 500 most recent
+// events, address unfiltered", which can starve out a selective address
+// that only appears further back than 500 events of unrelated traffic.
+//
+// So: whichever of srcQuery/dstQuery parses as a plain IP or CIDR is sent
+// as `ip` too (internal/api/rest.go's parseQuery, unchanged) -- store.Query.IP
+// matches either side, so it is always a *superset* of what the
+// client-side matcher (lib/addressMatch.ts) then narrows to for its own
+// side. Never a false negative, only ever "the server did slightly less
+// narrowing than the one field alone needed". If both boxes hold an
+// address, only one can be forwarded (the store's `ip` param carries a
+// single value) -- srcQuery wins arbitrarily, matching the row's own
+// left-to-right column order; either choice is still a valid superset,
+// since the client re-applies both sides' matchers regardless of what the
+// server already excluded.
+//
+// Everything else this issue added -- srcQuery/dstQuery holding a name or
+// label fragment, srcCountry/dstCountry, and text in the Port box -- has
+// no server-side match at all: parseQuery has no concept of a resolved
+// label, a GeoIP country code, or a port's display name. Those still
+// round-trip through the URL for bookmarking, but the request they
+// produce is genuinely broader (the 500 most recent events, that one
+// field unfiltered) until a future change teaches store.Query/parseQuery
+// about them -- this issue's contract was the bar, not the query engine.
+// refetchWithFilters() re-applies the full client-side filter to
+// whatever comes back regardless, so nothing unfiltered ever reaches the
+// screen; the cost is confined to how deep into the retained buffer a
+// label/country/text-port search can actually reach.
 export function buildQuery(filters: Partial<Filters> & { limit?: number; sinceId?: number }): string {
   const params = new URLSearchParams()
   if (filters.device) params.set('device', filters.device)
@@ -109,6 +142,11 @@ export function buildQuery(filters: Partial<Filters> & { limit?: number; sinceId
   if (filters.interface) params.set('interface', filters.interface)
   if (filters.srcQuery) params.set('srcQuery', filters.srcQuery)
   if (filters.dstQuery) params.set('dstQuery', filters.dstQuery)
+  if (filters.srcQuery && isAddressOrCidr(filters.srcQuery)) {
+    params.set('ip', filters.srcQuery)
+  } else if (filters.dstQuery && isAddressOrCidr(filters.dstQuery)) {
+    params.set('ip', filters.dstQuery)
+  }
   // Only forwarded when it parses as the plain integer parseQuery expects
   // (see internal/api/rest.go) -- #438 lets this field hold text (a
   // service name, an operator label), and the server 400s on anything it

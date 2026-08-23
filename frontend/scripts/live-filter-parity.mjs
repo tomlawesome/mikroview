@@ -22,7 +22,7 @@
 // *names* for 192.0.2.0/24 and 198.51.100.0/24, which doesn't matter for
 // this check -- it's about the raw address, not the label).
 
-import { session, feedRaw, check, done } from './live-browser.mjs'
+import { session, feedRaw, feedSyslog, check, done } from './live-browser.mjs'
 
 const URL_BASE = process.env.MV_URL
 
@@ -279,6 +279,84 @@ if (hasUnknownOption) {
   )
 } else {
   check(true, 'skipped the Unknown-country selection check -- the option was never offered')
+}
+
+// --- Regression guard: an address whose only traffic is older than an ---
+// --- unfiltered fetch's top-500 window must still be found once filtered -
+//
+// This is the exact bug that slipped through review once already:
+// without forwarding a parseable address as `ip` to GET /api/events (see
+// lib/api.ts's buildQuery doc comment), refetchWithFilters() falls back
+// to "the 500 most recent events, address unfiltered" -- silently
+// starving out a selective address whenever its only traffic is older
+// than that, even though internal/store/query.go's own scan would have
+// found it easily. A flood of fresher noise pushes the target below the
+// unfiltered top-500 boundary server-side; a genuine page reload (not
+// just clearing the bar) then reproduces the exact vulnerable starting
+// point -- App.svelte's mount effect does the same unfiltered
+// limit:500 fetch a first-ever load would, which is what
+// refetchWithFilters replaces the instant a filter is typed.
+const OLD_TRAFFIC_RULE = 'mv438-oldtraffic'
+const OLD_TRAFFIC_IP = '198.51.100.222'
+const NOISE_RULE = 'mv438-noiseflood'
+
+const oldTrafficArrived = await waitForArrival(
+  OLD_TRAFFIC_RULE,
+  `firewall,info A|${OLD_TRAFFIC_RULE}| forward: in:bridge1 out:ether1, connection-state:new, ` +
+    `proto TCP (SYN), ${OLD_TRAFFIC_IP}:5000->192.168.1.10:443, len 60`,
+)
+check(oldTrafficArrived, `the ${OLD_TRAFFIC_RULE} test event (the one the flood below must bury) reached the server`)
+
+if (oldTrafficArrived) {
+  feedSyslog(600, NOISE_RULE)
+
+  // Polls for actual arrival, not just the socket write feedSyslog's
+  // execFileSync call returning -- same reasoning as waitForArrival above.
+  const noiseLanded = await waitUntil(
+    async () => {
+      const { body } = await api(`/api/events?rule=${NOISE_RULE}&limit=500`)
+      return (body?.events?.length ?? 0) >= 500
+    },
+    40000,
+    1000,
+  )
+  check(
+    !!noiseLanded,
+    `at least 500 events of fresher noise reached the server (enough to push ${OLD_TRAFFIC_RULE} below an unfiltered top-500 fetch)`,
+  )
+
+  let reloaded = true
+  try {
+    await page.goto(URL_BASE, { waitUntil: 'networkidle' })
+    await page.waitForSelector('input.rule', { timeout: 15000 })
+  } catch {
+    reloaded = false
+  }
+  check(reloaded, 'the page reloaded back to a fresh, unfiltered live view')
+
+  if (reloaded) {
+    const rowsAfterReload = await waitUntil(() => page.locator('.row').count().then((n) => n > 0))
+    check(!!rowsAfterReload, 'the fresh load rendered some rows')
+
+    // Diagnostic, not a hard assertion -- on an already-busy shared
+    // instance (the full suite) other scenarios' own traffic could
+    // coincidentally also bury the target, or an unusually quiet run
+    // could leave it just inside reach. Either way what actually matters,
+    // asserted below, is that filtering finds it regardless.
+    const oldRowVisibleUnfiltered = await rowFor(OLD_TRAFFIC_RULE).isVisible().catch(() => false)
+    console.log(`DIAGNOSTIC: ${OLD_TRAFFIC_RULE} visible in the fresh unfiltered load: ${oldRowVisibleUnfiltered}`)
+
+    await page.fill('input[aria-label="Source — name, IP or CIDR"]', OLD_TRAFFIC_IP)
+    const foundAfterFilter = await waitUntil(() => rowFor(OLD_TRAFFIC_RULE).isVisible(), 15000)
+    check(
+      !!foundAfterFilter,
+      `filtering to an address whose only traffic is older than the unfiltered top-500 window still finds it -- server-side narrowing via ip= (unfiltered-visible was ${oldRowVisibleUnfiltered})`,
+    )
+  } else {
+    check(false, 'skipped the server-side-narrowing regression check -- the reload never completed')
+  }
+} else {
+  check(false, `skipped the server-side-narrowing regression check -- ${OLD_TRAFFIC_RULE} never arrived`)
 }
 
 await clearFilters()
