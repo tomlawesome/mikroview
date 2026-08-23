@@ -55,4 +55,14 @@ tokens throughout.
 
 ## Verdicts
 
-None yet — awaiting the owner.
+Owner, 2026-08-23, on direction W (verbatim):
+
+> It's fine, acceptable but I'd like you to take a couple of wild
+> passes at this, really go out of the box and explore what we could
+> do here if don't just stick to convention
+
+Read as: **W accepted as a workable baseline, not ratified** — round 2
+explores unconventional directions before anything is consolidated.
+W's grammar (type tabs, the unnamed fold, naming as a row state, the
+composed filter/lens, arrived-facts-only) stands as the conventional
+benchmark the wild passes are measured against.
