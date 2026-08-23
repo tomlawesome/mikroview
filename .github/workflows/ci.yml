@@ -287,10 +287,19 @@ jobs:
           # reason to also pay to write it.
           cache-from: type=gha
 
+      # The tmpfs at /var/lib/mikroview is not a convenience: without a
+      # writable data directory this container was the only deployment
+      # anywhere that ran with nowhere to persist its CA, and the app
+      # carried a "persistence is optional" contract purely so this job
+      # would stay green (#535). The shipped deploy/docker-compose.yml
+      # pairs read_only: true with the mikroview-data volume, so a real
+      # hardened deployment always has one -- this now tests that shape,
+      # with every hardening flag it tested before.
       - name: Run hardened container
         run: >-
           docker run --detach --name mikroview-test
           --read-only --tmpfs /tmp:rw,noexec,nosuid,size=16m
+          --tmpfs /var/lib/mikroview:rw,noexec,nosuid,size=16m,uid=65532,gid=65532
           --cap-drop ALL --security-opt no-new-privileges
           --pids-limit 64 --memory 128m --cpus 0.5
           --publish 127.0.0.1:8080:8080
