@@ -19,8 +19,25 @@ const (
 	wsBatchMaxSize  = 100
 	wsWriteTimeout  = 10 * time.Second
 	wsPongTimeout   = 60 * time.Second
-	wsPingInterval  = 30 * time.Second
+	// wsCloseGrace bounds how long a revoked connection waits, after
+	// sending its close frame, for the peer to answer with its own close
+	// frame before the deferred conn.Close() tears the TCP connection
+	// down anyway. Without this grace the teardown races the peer's
+	// reply: a well-behaved client (gorilla's default close handler,
+	// every browser) echoes a close frame on receipt, and if the TCP
+	// connection is already gone that echo fails with a broken pipe --
+	// which the peer then reports instead of the clean close it actually
+	// received (#416). The wait is on the peer's reply reaching our
+	// reader, not open-ended: a mute or hostile peer costs at most this
+	// long, once, on a connection that is being closed regardless.
+	wsCloseGrace = time.Second
 )
+
+// wsPingInterval also doubles as the session-revalidation cadence (see the
+// pingTicker.C case in handleWS below) -- a var, not a const, so a test can
+// shrink it rather than waiting out a real 30s tick. maxClients in
+// internal/hub does the same for the same reason.
+var wsPingInterval = 30 * time.Second
 
 // CheckOrigin always allows at the gorilla/websocket-upgrader level --
 // the actual origin check happens in handleWS below, where s (and so
@@ -73,11 +90,60 @@ type wsEnvelope struct {
 	Dropped uint64        `json:"dropped,omitempty"`
 }
 
+// closeRevoked sends a real WebSocket close frame rather than just
+// dropping the TCP connection (which the deferred conn.Close() in
+// handleWS still does afterwards regardless). gorilla/websocket's client
+// treats an abrupt drop and a close frame similarly for the purposes that
+// matter here (both fire the browser's onclose), but a close frame carries
+// a code and reason a client-side log or future diagnostic can read,
+// rather than looking identical to a network blip.
+func closeRevoked(conn *websocket.Conn) {
+	conn.SetWriteDeadline(time.Now().Add(wsWriteTimeout))
+	msg := websocket.FormatCloseMessage(websocket.ClosePolicyViolation, "session no longer valid")
+	_ = conn.WriteMessage(websocket.CloseMessage, msg)
+}
+
 // handleWS serves the live-tail feed: after the client has loaded a
 // snapshot via GET /api/events, this pushes every subsequently inserted
 // event, unfiltered, batched every wsBatchInterval (or wsBatchMaxSize,
 // whichever comes first) into a single WS frame. The frontend applies
 // filters client-side — see docs/configuration.md for the rationale.
+//
+// requireAuth only authenticates once, at the HTTP upgrade -- the request
+// that carries the session cookie is otherwise never looked at again for
+// the socket's whole lifetime. Left alone, that means logout, a password
+// change ("sign out everywhere"), and account deletion all revoke the
+// session in Sessions/Auth without the open socket ever finding out, so a
+// stolen cookie kept streaming live firewall events after every other
+// endpoint had started 401ing it (#375).
+//
+// The fix piggybacks on the ping/pong keepalive that already exists for a
+// different reason (detecting a dead TCP peer): every pingTicker.C tick,
+// before sending the ping, re-run r through sessionUser -- the same
+// cookie-lookup/Validate/PasswordChangedAt check requireAuth uses on every
+// ordinary request. A closed-over *http.Request stays valid for this the
+// whole time; nothing about it changes across the connection's life. If
+// the session no longer checks out, the socket sends a real close frame
+// (so the browser's onclose fires and its reconnect logic runs, landing
+// back on the login screen once the next reconnect attempt 401s) and
+// returns.
+//
+// This was chosen over threading a session ID into the hub and having
+// Sessions.Revoke/RevokeAllForUser push a close to matching connections:
+// it reuses the one piece of code that already knows every invalidation
+// rule instead of duplicating them on a second, push-driven path that
+// could drift from the request-time one; it needs no new state anywhere
+// (no connection registry keyed by session, no wiring from
+// internal/auth back out to internal/hub or internal/api); and it costs
+// one map lookup plus one Auth.Get every 30s per open socket. The
+// trade-off is bounded latency instead of instant revocation -- worst
+// case one wsPingInterval plus however long the write takes, not the
+// wsPongTimeout window (that only bounds a *dead* peer going unnoticed,
+// which is a different failure than a *revoked but still alive* one).
+// For the blast radius here (read-only access to an already-open stream,
+// not credentials or write access), that bound is an acceptable,
+// documented trade against the complexity of a push-based alternative --
+// see #375 for the fuller reasoning.
 func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 	if !s.checkOrigin(r) {
 		http.Error(w, "cross-origin WebSocket connections are not allowed", http.StatusForbidden)
@@ -156,6 +222,24 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		case <-pingTicker.C:
+			// Checked before sending the ping, not after: this is about
+			// the session's validity, a separate question from the
+			// peer's liveness that the ping/pong/ReadDeadline machinery
+			// already answers, and there's no reason to spend a write on
+			// a socket that's about to be closed anyway. See the doc
+			// comment above for why this is the revalidation point.
+			if _, ok := s.sessionUser(r, time.Now()); !ok {
+				closeRevoked(conn)
+				// The reader goroutine returns when the peer's answering
+				// close frame (or anything else fatal) arrives, so waiting
+				// on it here is waiting for the close handshake to finish
+				// -- bounded by wsCloseGrace, see its doc comment (#416).
+				select {
+				case <-closed:
+				case <-time.After(wsCloseGrace):
+				}
+				return
+			}
 			conn.SetWriteDeadline(time.Now().Add(wsWriteTimeout))
 			if err := conn.WriteMessage(websocket.PingMessage, nil); err != nil {
 				return

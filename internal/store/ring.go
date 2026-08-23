@@ -45,7 +45,17 @@ const timeSeriesMinutes = 60
 // actionSlots fixes which array index each Action occupies in
 // minuteBuckets, so per-minute-per-action counts live in a plain array
 // instead of allocating a map on every Insert.
-var actionSlots = [...]Action{ActionAccept, ActionDrop, ActionReject, ActionLog, ActionUnknown}
+//
+// Every Action constant must appear here, and ActionUnknown must stay
+// last: actionSlot falls back to the final slot for anything it does not
+// recognise, so an action missing from this list would be silently
+// counted as unknown in the time series while Stats.ByAction (a map)
+// reported it correctly -- the two views of the same events disagreeing.
+var actionSlots = [...]Action{
+	ActionAccept, ActionDrop, ActionReject, ActionLog,
+	ActionMarked, ActionNatted,
+	ActionUnknown,
+}
 
 func actionSlot(a Action) int {
 	for i, s := range actionSlots {
@@ -200,7 +210,7 @@ type RuleCount struct {
 
 // TimeBucket is one point in Stats.TimeSeries: counts by action for a
 // single one-minute window. ByAction omits actions with a zero count for
-// that minute rather than listing all five every time.
+// that minute rather than listing every slot every time.
 type TimeBucket struct {
 	Time     time.Time         `json:"time"`
 	ByAction map[Action]uint64 `json:"byAction"`

@@ -3,27 +3,27 @@
 package main
 
 import (
-	"errors"
+	"context"
 	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/tomlawesome/mikroview/internal/auth"
-	"github.com/tomlawesome/mikroview/internal/detect"
 	"github.com/tomlawesome/mikroview/internal/device"
 	"github.com/tomlawesome/mikroview/internal/flags"
 	"github.com/tomlawesome/mikroview/internal/geoip"
 	"github.com/tomlawesome/mikroview/internal/hub"
 	"github.com/tomlawesome/mikroview/internal/naming"
-	"github.com/tomlawesome/mikroview/internal/persist"
 	"github.com/tomlawesome/mikroview/internal/rules"
 	"github.com/tomlawesome/mikroview/internal/store"
 	"github.com/tomlawesome/mikroview/internal/syslog"
@@ -33,7 +33,7 @@ import (
 // ingestOneRecovered needs, all unconfigured/in-memory (no GeoIP DB, no
 // flags/MAC-registry persistence) -- enough to exercise the new-device
 // wiring itself (issue #103 phase 1) without touching disk.
-func newIngestTestDeps(t *testing.T) (*store.Store, *device.Registry, *device.MACRegistry, *flags.Store, *hub.Hub, *geoip.Lookup, *detect.Detector, *rules.Store) {
+func newIngestTestDeps(t *testing.T) (*store.Store, *device.Registry, *device.MACRegistry, *flags.Store, *hub.Hub, *geoip.Lookup, *rules.Store) {
 	t.Helper()
 	st := store.New(1000, time.Hour)
 	devices := device.NewRegistry(nil)
@@ -50,12 +50,11 @@ func newIngestTestDeps(t *testing.T) (*store.Store, *device.Registry, *device.MA
 	if err != nil {
 		t.Fatal(err)
 	}
-	detector := detect.New(detect.DefaultConfig(), fs)
 	ru, err := rules.Open("")
 	if err != nil {
 		t.Fatal(err)
 	}
-	return st, devices, macRegistry, fs, h, geo, detector, ru
+	return st, devices, macRegistry, fs, h, geo, ru
 }
 
 const firewallLineWithMAC = "A|lan-wan|forward: in:ether1 out:bridge1, connection-state:new src-mac aa:bb:cc:dd:ee:ff, proto TCP (SYN), 192.168.1.50:51234->1.2.3.4:443, len 60"
@@ -64,11 +63,11 @@ const firewallLineWithMAC = "A|lan-wan|forward: in:ether1 out:bridge1, connectio
 // contract from issue #103: the first event carrying a given SrcMAC
 // raises exactly one TypeNewDevice flag, targeted at that MAC.
 func TestIngestRaisesNewDeviceFlagOnceForFirstSighting(t *testing.T) {
-	st, devices, macRegistry, fs, h, geo, detector, ru := newIngestTestDeps(t)
+	st, devices, macRegistry, fs, h, geo, ru := newIngestTestDeps(t)
 	logger := slog.Default()
 
 	rm := syslog.RawMessage{SourceIP: "192.168.1.1", Data: []byte(firewallLineWithMAC), RecvTime: time.Now()}
-	ingestOneRecovered(logger, rm, st, devices, macRegistry, fs, h, geo, detector, ru, naming.Resolver{}, nil, nil)
+	ingestOneRecovered(logger, rm, st, devices, macRegistry, fs, h, geo, ru, naming.Resolver{}, nil, nil)
 
 	list := fs.List()
 	var found *flags.Flag
@@ -94,13 +93,13 @@ func TestIngestRaisesNewDeviceFlagOnceForFirstSighting(t *testing.T) {
 // same SrcMAC must not create a second TypeNewDevice episode or bump the
 // existing one's Count.
 func TestIngestDoesNotReRaiseNewDeviceFlagOnSubsequentEvents(t *testing.T) {
-	st, devices, macRegistry, fs, h, geo, detector, ru := newIngestTestDeps(t)
+	st, devices, macRegistry, fs, h, geo, ru := newIngestTestDeps(t)
 	logger := slog.Default()
 	now := time.Now()
 
 	for i := 0; i < 3; i++ {
 		rm := syslog.RawMessage{SourceIP: "192.168.1.1", Data: []byte(firewallLineWithMAC), RecvTime: now.Add(time.Duration(i) * time.Minute)}
-		ingestOneRecovered(logger, rm, st, devices, macRegistry, fs, h, geo, detector, ru, naming.Resolver{}, nil, nil)
+		ingestOneRecovered(logger, rm, st, devices, macRegistry, fs, h, geo, ru, naming.Resolver{}, nil, nil)
 	}
 
 	var newDeviceFlags []flags.Flag
@@ -121,12 +120,12 @@ func TestIngestDoesNotReRaiseNewDeviceFlagOnSubsequentEvents(t *testing.T) {
 // coverage caveat: a WAN-side rule set typically carries no src-mac at
 // all, and that must never be treated as a "new device."
 func TestIngestSkipsNewDeviceFlagForEmptySrcMAC(t *testing.T) {
-	st, devices, macRegistry, fs, h, geo, detector, ru := newIngestTestDeps(t)
+	st, devices, macRegistry, fs, h, geo, ru := newIngestTestDeps(t)
 	logger := slog.Default()
 
 	const lineWithoutMAC = "A|wan-in|forward: in:ether1 out:bridge1, connection-state:new, proto TCP (SYN), 203.0.113.5:51234->192.168.1.10:443, len 60"
 	rm := syslog.RawMessage{SourceIP: "192.168.1.1", Data: []byte(lineWithoutMAC), RecvTime: time.Now()}
-	ingestOneRecovered(logger, rm, st, devices, macRegistry, fs, h, geo, detector, ru, naming.Resolver{}, nil, nil)
+	ingestOneRecovered(logger, rm, st, devices, macRegistry, fs, h, geo, ru, naming.Resolver{}, nil, nil)
 
 	for _, f := range fs.List() {
 		if f.Type == flags.TypeNewDevice {
@@ -276,6 +275,63 @@ func TestHTTPSRedirectTargetKeepsAHostTheMachineActuallyHas(t *testing.T) {
 	}
 }
 
+// An IPv6 literal Host has to come back bracketed, or the Location header
+// is not a URL any client can parse -- url.Parse rejects the unbracketed
+// form because the colons inside the address are indistinguishable from a
+// host:port separator. samePortRedirectHost (added for #325) already
+// brackets IPv6 via net.JoinHostPort; httpsRedirectTarget, written
+// earlier, never did. See issue #380 item 5.
+func TestHTTPSRedirectTargetBracketsIPv6Host(t *testing.T) {
+	r := httptest.NewRequest(http.MethodGet, "http://[2001:db8::1]/dashboard", nil)
+	r.Host = "[2001:db8::1]:80"
+	got := httpsRedirectTarget(r, []string{"2001:db8::1", "fd00::5"})
+	want := "https://[2001:db8::1]/dashboard"
+	if got != want {
+		t.Errorf("httpsRedirectTarget = %q, want %q", got, want)
+	}
+	if _, err := url.Parse(got); err != nil {
+		t.Errorf("httpsRedirectTarget produced an unparseable URL %q: %v", got, err)
+	}
+}
+
+// TestJoinOnShutdownWaitsForShutdownToFinishDraining pins issue #380 item
+// 2: main previously fired httpServer.Shutdown (and the redirect
+// server's) in a bare goroutine nothing waited on, so ServeTLS/
+// ListenAndServe returning as soon as Shutdown was *called* -- not once
+// it finished draining -- let main fall straight through to the end of
+// the function. The configured 5s graceful window, and the notify
+// dispatcher's documented shutdown-time flush, never got a chance to
+// run: an in-flight request was reset instead of completed.
+//
+// joinOnShutdown is the extracted mechanism the real fix now routes
+// every such shutdown through. This proves its contract directly: a
+// caller's wg.Wait() must not return before the registered shutdown
+// func has actually finished, not merely started.
+func TestJoinOnShutdownWaitsForShutdownToFinishDraining(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var wg sync.WaitGroup
+	started := make(chan struct{})
+	finished := make(chan struct{})
+
+	joinOnShutdown(&wg, ctx, func(context.Context) error {
+		close(started)
+		time.Sleep(50 * time.Millisecond)
+		close(finished)
+		return nil
+	})
+
+	cancel()
+	<-started
+	wg.Wait()
+
+	select {
+	case <-finished:
+	default:
+		t.Error("wg.Wait() returned before the registered shutdown func finished -- main would exit mid-drain")
+	}
+}
+
 func TestSecurityHeadersSetOnEveryResponse(t *testing.T) {
 	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) })
 
@@ -372,62 +428,63 @@ func TestRunVersionPrintsTheBareVersionString(t *testing.T) {
 // that must refuse to start. Both "no persistence configured" (storePath
 // == "", err always nil per auth.Open) and "file genuinely doesn't exist"
 // (a real fresh install, err == nil) must keep booting normally.
-func TestAuthShouldFailClosed(t *testing.T) {
-	someErr := errors.New("boom")
-
-	// The second argument is now the backend rather than a path -- a
-	// nil backend is the "persistence not configured" case that used to
-	// be an empty string. Same predicate, same three cases.
-	configured := persist.NewFileBackend("/var/lib/mikroview/accounts.json")
-
-	cases := []struct {
-		name    string
-		err     error
-		backend persist.Backend
-		want    bool
-	}{
-		{"corrupt document with a configured backend fails closed", someErr, configured, true},
-		{"nil error never fails closed regardless of backend", nil, configured, false},
-		{"nil error with no backend never fails closed", nil, nil, false},
-		{"error with no backend never fails closed", someErr, nil, false},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			if got := authShouldFailClosed(tc.err, tc.backend); got != tc.want {
-				t.Errorf("authShouldFailClosed(%v, %v) = %v, want %v", tc.err, tc.backend != nil, got, tc.want)
-			}
-		})
+// TestMustOpenStoreIsANoOpOnSuccess proves mustOpenStore's non-fatal
+// path never touches the logger or the process -- since its fatal path
+// calls os.Exit and so can't run in-process inside `go test`, this and
+// TestAuthOpenErrorShapeDrivesFailClosed below are what actually cover
+// it: this pins "nil error survives," that one pins "the real error
+// shape mustOpenStore is fed is what issue #378 needs asserted."
+func TestMustOpenStoreIsANoOpOnSuccess(t *testing.T) {
+	var buf strings.Builder
+	log := slog.New(slog.NewTextHandler(&buf, nil))
+	mustOpenStore(log, nil)
+	if buf.Len() != 0 {
+		t.Errorf("mustOpenStore(nil) logged something, want silence: %q", buf.String())
 	}
 }
 
-// TestAuthOpenErrorShapeDrivesFailClosed proves the real-world trigger for
-// authShouldFailClosed against the actual auth.Store.Open implementation
-// (not just the predicate in isolation): a file that exists but fails to
-// parse produces a non-nil error, while a path with no file at all (fresh
-// install) does not -- the exact distinction main()'s boot sequence relies
-// on to tell "was configured, now broken" apart from "never configured".
+// TestAuthOpenErrorShapeDrivesFailClosed proves the real-world trigger
+// mustOpenStore's boot-sequence call sites depend on, against the actual
+// auth.Store.OpenWithBackend implementation (not just persist.Open in
+// isolation): a file that exists but fails to parse produces a non-nil
+// error and a nil store, while a path with no file at all (fresh
+// install) produces neither -- the exact distinction main()'s boot
+// sequence relies on to tell "was configured, now broken" apart from
+// "never configured". The corrupt case also asserts the error names the
+// file and states a remedy (issue #378's Done-when: the message content
+// is what an operator reads, not just its non-nilness).
 func TestAuthOpenErrorShapeDrivesFailClosed(t *testing.T) {
 	dir := t.TempDir()
 
 	freshPath := filepath.Join(dir, "fresh", "accounts.json")
-	_, err := auth.Open(freshPath)
+	freshStore, err := auth.Open(freshPath)
 	if err != nil {
 		t.Fatalf("auth.Open on a not-yet-created path returned an error, want nil (fresh install must still boot): %v", err)
 	}
-	if authShouldFailClosed(err, persist.NewFileBackend(freshPath)) {
-		t.Error("authShouldFailClosed reported true for a genuine fresh install")
+	if freshStore == nil {
+		t.Error("auth.Open on a fresh install returned a nil store, want a usable empty one")
 	}
 
 	corruptPath := filepath.Join(dir, "accounts.json")
 	if err := os.WriteFile(corruptPath, []byte("{not valid json"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	_, err = auth.Open(corruptPath)
+	corruptStore, err := auth.Open(corruptPath)
 	if err == nil {
 		t.Fatal("auth.Open on a corrupt existing file returned nil error, want non-nil")
 	}
-	if !authShouldFailClosed(err, persist.NewFileBackend(corruptPath)) {
-		t.Error("authShouldFailClosed reported false for a corrupt existing accounts file")
+	if corruptStore != nil {
+		t.Error("auth.Open on a corrupt file returned a non-nil store -- it would still carry a live backend (issue #378)")
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, corruptPath) {
+		t.Errorf("error %q does not name the file path %q", msg, corruptPath)
+	}
+	if !strings.Contains(msg, "restore") && !strings.Contains(msg, "backup") {
+		t.Errorf("error %q does not state a remedy (restore from backup / move aside)", msg)
+	}
+	if !strings.Contains(msg, "accounts") {
+		t.Errorf("error %q does not name which store this is", msg)
 	}
 }
 

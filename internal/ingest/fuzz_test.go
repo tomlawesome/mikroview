@@ -26,12 +26,32 @@ import (
 func FuzzDecodePayload(f *testing.F) {
 	f.Add(`{"kind":"address-list","page":1,"pages":1,"records":[{"list":"blocked","address":"198.51.100.1","comment":"port scan","dynamic":true}]}`)
 	f.Add(`{"kind":"filter-rule","page":1,"pages":4,"records":[{"ordinal":7.000000,"comment":"allow lan","chain":"forward","action":"accept","srcAddressList":"lan","logPrefix":"r7"}]}`)
+	// The #408 fields in both shapes a connection-state set arrives as,
+	// alongside the record above that omits them entirely (the older
+	// script the documented upgrade order has to keep accepting).
+	f.Add(`{"kind":"filter-rule","page":1,"pages":1,"records":[{"ordinal":0,"comment":"","chain":"input","action":"accept","srcAddressList":"","logPrefix":"A|est|","connectionState":["established","related"],"inInterface":"ether1","outInterface":"!ether2"}]}`)
+	f.Add(`{"kind":"filter-rule","page":1,"pages":1,"records":[{"ordinal":0,"comment":"","chain":"input","action":"drop","srcAddressList":"","logPrefix":"","connectionState":"invalid","inInterface":null,"outInterface":null}]}`)
 	f.Add(`{"kind":"nat-rule","page":1,"pages":1,"records":[{"ordinal":0,"comment":"masquerade","chain":"srcnat","action":"masquerade"}]}`)
+	// The full #408/#445 NAT anatomy, with both port shapes -- a single
+	// port as a JSON number, a range as a string.
+	f.Add(`{"kind":"nat-rule","page":1,"pages":1,"records":[{"ordinal":0,"comment":"","chain":"dstnat","action":"dst-nat","toAddresses":"192.0.2.10","toPorts":8080.000000,"dstPort":"1000-2000","protocol":"tcp","inInterface":"ether1","outInterface":null,"srcAddress":null,"dstAddress":"198.51.100.4","disabled":false,"dynamic":true}]}`)
 	f.Add(`{"kind":"dns-static","page":1,"pages":1,"records":[{"name":"nas.lan","address":"192.168.1.20"}]}`)
 	f.Add(`{"kind":"dhcp-lease","page":1,"pages":1,"records":[{"hostname":"laptop","mac":"aa:bb:cc:dd:ee:ff","address":"192.168.1.50"}]}`)
 	f.Add(`{"kind":"arp","page":1,"pages":1,"records":[{"address":"192.168.1.50","mac":"aa:bb:cc:dd:ee:ff"}]}`)
+	// The envelope's #436 version field, which every kind's push may
+	// carry and none has to (the record above is the same push without
+	// it).
+	f.Add(`{"kind":"arp","page":1,"pages":1,"routerosVersion":"7.23.3 (stable)","records":[{"address":"192.168.1.50","mac":"aa:bb:cc:dd:ee:ff"}]}`)
+	f.Add(`{"kind":"arp","page":1,"pages":1,"routerosVersion":null,"records":[]}`)
+	f.Add(`{"kind":"arp","page":1,"pages":1,"routerosVersion":7.23,"records":[]}`) // the version as a number, not a string
 	f.Add(`{"kind":"wireguard-interface","page":1,"pages":1,"records":[{"name":"wg0","comment":"","publicKey":"abc123","listenPort":51820.000000}]}`)
 	f.Add(`{"kind":"wireguard-peer","page":1,"pages":1,"records":[{"publicKey":"abc123","allowedAddress":"10.10.0.0/24","endpointAddress":"203.0.113.5:51820","comment":"branch office"}]}`)
+	// The array shape RouterOS actually sends for a multi-CIDR peer
+	// (issue #443), alongside the joined-string shape above -- both are
+	// accepted, so both are seeds.
+	f.Add(`{"kind":"wireguard-peer","page":1,"pages":1,"records":[{"publicKey":"abc123","allowedAddress":["192.0.2.0/24","198.51.100.0/24"],"endpointAddress":null,"comment":"branch office"}]}`)
+	f.Add(`{"kind":"wireguard-peer","page":1,"pages":1,"records":[{"publicKey":"abc123","allowedAddress":[],"endpointAddress":"","comment":""}]}`)
+	f.Add(`{"kind":"wireguard-peer","page":1,"pages":1,"records":[{"publicKey":"abc123","allowedAddress":[1,2],"endpointAddress":"","comment":""}]}`) // a list of the wrong element type
 
 	// Shapes chosen to probe this package's own specific bounds and
 	// footguns, not generic JSON malformation (the stdlib decoder is

@@ -43,6 +43,16 @@ export default defineConfig({
         // exist as static files to accidentally sweep in. Explicit here
         // so that stays true if the build output ever changes shape.
         globPatterns: ['**/*.{js,css,html,svg,png,ico}'],
+        // The comment above guarded *caching*, but navigations are a
+        // separate code path: the generated worker's navigateFallback
+        // answers any typed URL with the cached shell, so an operator
+        // visiting /api/stats in the address bar got the frontend
+        // instead of JSON -- while the UI's own fetch() calls, which are
+        // not navigations, passed through fine. Server-owned paths must
+        // reach the server even when typed: /api/* (curl-able JSON, per
+        // docs/configuration.md's API reference) and /ca.crt (the one
+        // path a router or reverse proxy fetches directly).
+        navigateFallbackDenylist: [/^\/api(\/|$)/, /^\/ca\.crt$/],
       },
     }),
   ],

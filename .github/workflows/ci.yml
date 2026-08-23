@@ -38,11 +38,11 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - uses: actions/setup-go@v7
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: '1.26.6'
+          go-version: '1.27.0'
       - run: go build ./...
       - run: go vet ./...
       - run: go test ./...
@@ -60,7 +60,7 @@ jobs:
             exit 1
           fi
 
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: '22'
           cache: 'npm'
@@ -69,6 +69,24 @@ jobs:
           cd frontend
           npm ci
           npx svelte-check --tsconfig ./tsconfig.app.json
+
+      # Real build, not a proxy for one -- the size budget just below
+      # measures this output, and a stale or missing dist/ would make
+      # that check either fail for the wrong reason or, worse, silently
+      # measure nothing. See check-bundle-budget.mjs for why "nothing to
+      # measure" is a failure rather than a skip.
+      - name: Build frontend
+        run: |
+          cd frontend
+          npm run build
+
+      # CI size budget for the shipped JS bundle (#462). README.md
+      # quotes this figure and it went 3-5x stale (#382) before anything
+      # measured the real build to check it. Budget and rationale live
+      # in the script, not here, so there is one place to update both
+      # together.
+      - name: JS bundle size budget
+        run: node frontend/scripts/check-bundle-budget.mjs
 
       # Licence compliance, not tidiness. Every Go module linked into the
       # binary and every frontend package bundled into the embedded
@@ -109,13 +127,24 @@ jobs:
   security:
     name: Security (auth-focused)
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    # 15, not 10, because the fuzz step below is bounded by execution
+    # count rather than wall-clock (see mikroview#391 and the comment on
+    # that step): a slow runner makes the step take longer rather than
+    # failing it, so the job needs room to absorb that.
+    #
+    # Kept at 15 rather than lowered with the budgets in #523. The fuzz
+    # step still drops to 0 execs/sec for 30-60s at a stretch -- that is
+    # the runner and remains unexplained -- so the margin absorbs a
+    # stall rather than a slow machine. With the recalibrated counts the
+    # step is ~90s of work, so this is real headroom now; before it was
+    # about 1.5x, and one run was killed at the limit.
+    timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - uses: actions/setup-go@v7
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: '1.26.6'
+          go-version: '1.27.0'
       - name: Race-detector tests (auth + API)
         run: go test -race ./internal/auth/... ./internal/api/...
 
@@ -128,24 +157,67 @@ jobs:
       # or a leaked token (any read-capable RouterOS user can read one
       # out of a script, see docs/decisions/routeros-ingest-spike.md)
       # all reach it with content nothing has validated yet, the same
-      # footing the other two are on. 30s each is not a deep campaign;
-      # it's a regression gate that catches a newly-introduced crash on
-      # the committed corpus plus a little fresh exploration, without
-      # turning every PR into a fuzzing job. Seed corpora and any
-      # crashers found are committed under testdata/, so a reproducer
-      # stays permanent.
+      # footing the other two are on. This is not a deep campaign; it's a
+      # regression gate that catches a newly-introduced crash on the
+      # committed corpus plus a little fresh exploration, without turning
+      # every PR into a fuzzing job. Seed corpora and any crashers found
+      # are committed under testdata/, so a reproducer stays permanent.
+      #
+      # The budgets are execution counts (`Nx`), not wall-clock (`30s`),
+      # and that is load-bearing -- do not "tidy" them back to durations.
+      #
+      # They were adopted to dodge golang/go#75804, where a duration
+      # budget wraps the engine's context in context.WithTimeout and a
+      # race on deadline expiry reports `context deadline exceeded` as a
+      # failure with no crashing input and no reproducer (mikroview#391).
+      # The toolchain pinned above is now 1.27, which carries the fix
+      # (CL 774140), so that reason has expired -- durations would be
+      # safe here again.
+      #
+      # The counts stay for the reason that outlived it: an `Nx` budget
+      # makes the gate do the same amount of work on every runner,
+      # where a duration budget quietly explores less on a busy one
+      # while still reporting success. A check that gets weaker without
+      # saying so is the failure mode AGENTS.md rejects elsewhere (the
+      # svelte-check/TypeScript hold, #286).
+      #
+      # Each count is what 30 seconds of wall-clock actually buys on a
+      # GitHub-hosted runner, measured from this repository's own runs
+      # (#523): routeros ~5.3k execs/sec, syslog ~19.7k, ingest ~5.2k.
+      #
+      # Those are wall-clock rates, stalls included, which is the right
+      # basis for converting a 30s budget -- but note the underlying
+      # rates are much higher (ingest fuzzes at ~23k/sec and spends the
+      # rest of its wall-clock stalled). Recalibrate the same way if the
+      # stalls are ever fixed, or the budgets will silently shrink.
+      #
+      # The previous counts (1.4M / 900k / 480k) were nine times these,
+      # because the rate behind them had been measured on a development
+      # machine -- ~51k execs/sec against the runner's ~5.3k. That is
+      # what made a step meant to take ninety seconds take seven
+      # minutes, and once exhaust the job timeout above with no crashing
+      # input and no reproducer. The stalls to 0 execs/sec that show up
+      # in the logs are the runner, not the parsers: the same targets
+      # run flat at ~110k execs/sec locally with no stall at all.
+      #
+      # Cutting back is a restoration, not a weakening. Discovery is
+      # front-loaded -- a local 90s routeros run found 11 of its 13 new
+      # interesting inputs inside the first 30 seconds -- so the removed
+      # budget was the flat tail of the curve. This step is a regression
+      # gate, per the paragraph above; a deep campaign belongs in a
+      # scheduled run, not on every PR.
       - name: Fuzz the attacker-shaped-input parsers
         run: |
-          go test ./internal/routeros/ -run FuzzParse -fuzz FuzzParse -fuzztime=30s
-          go test ./internal/syslog/ -run FuzzParseEnvelope -fuzz FuzzParseEnvelope -fuzztime=30s
-          go test ./internal/ingest/ -run FuzzDecodePayload -fuzz FuzzDecodePayload -fuzztime=30s
+          go test ./internal/routeros/ -run FuzzParse -fuzz FuzzParse -fuzztime=160000x
+          go test ./internal/syslog/ -run FuzzParseEnvelope -fuzz FuzzParseEnvelope -fuzztime=590000x
+          go test ./internal/ingest/ -run FuzzDecodePayload -fuzz FuzzDecodePayload -fuzztime=156000x
 
       - name: govulncheck
         run: |
           go install golang.org/x/vuln/cmd/govulncheck@latest
           govulncheck ./...
 
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: '22'
           cache: 'npm'
@@ -171,12 +243,12 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - uses: docker/setup-buildx-action@v4
+      - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
 
       - name: Build image
-        uses: docker/build-push-action@v7
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
         with:
           context: .
           load: true
@@ -227,11 +299,11 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - uses: actions/setup-go@v7
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: '1.26.6'
+          go-version: '1.27.0'
 
       # Not a `services:` container. internal/persist refuses any
       # connection that could fall back to plaintext (see its

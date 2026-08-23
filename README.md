@@ -10,10 +10,10 @@
   </picture>
 </p>
 
-A real-time firewall "live view" for RouterOS, in the spirit of
-OPNsense's live view: see every connection attempt as it happens,
-whether it was accepted, dropped, or rejected, and by which rule —
-filterable by device, IP/CIDR, port, protocol, interface, or rule.
+A real-time firewall "live view" for RouterOS: see every connection
+attempt as it happens, whether it was accepted, dropped, or rejected,
+and by which rule — filterable by device, IP/CIDR, port, protocol,
+interface, or rule.
 
 Ships as a single Docker container. RouterOS pushes firewall log lines
 to it over syslog (no API access, no credentials, near-zero load on the
@@ -237,7 +237,10 @@ every restart) but not fatal.
   [docs/configuration.md](docs/configuration.md) for the API and the
   server/client filtering split.
 - **UI**: Svelte, no component framework, dark professional theme,
-  ~50KB JS bundle.
+  ~79KB of JavaScript over the wire (~260KB before compression). CI
+  gates the bundle at 200KB gzipped — headroom for the v0.4.0
+  interface reshape, re-derived as measured+15% once it ships (see
+  [docs/decisions/ui-framework.md](docs/decisions/ui-framework.md)).
 - **Logging**: leveled (debug/info/warn/error) and colorized server
   output, auto-plain when piped or `NO_COLOR` is set. See
   [docs/configuration.md](docs/configuration.md)'s "Logging" section.

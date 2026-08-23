@@ -44,8 +44,16 @@ export function hostname(hostPort: string): string {
 // getting it wrong produces a failure three steps later
 // ("name verification failed") whose cause is on MikroView's side, not
 // the router's.
+//
+// tls.enabled only turns HTTPS off on the API port -- it does not stop
+// a certificate from being loaded. main.go loads/generates one whenever
+// cfg.TLS.Enabled || cfg.Listen.SyslogTLS != "", and hands that same
+// certificate to the syslog TLS listener regardless of tls.enabled
+// (#374). So the check only skips entirely when neither HTTP TLS nor
+// syslog TLS is on -- matching main.go's own condition for when a
+// certificate is even in play.
 export function certificateCovers(status: SetupStatus, address: string): boolean {
-  if (!status.instance.tlsEnabled) return true
+  if (!status.instance.tlsEnabled && !status.instance.syslogEnabled) return true
   const host = hostname(address)
   const hosts = status.instance.hosts
   // An empty list means the generated certificate covers
@@ -88,6 +96,14 @@ export function portOf(listenAddr: string): string {
 // only way one command can set the right letter: MikroView decodes
 // accept/drop/reject from the prefix, so a single generic prefix would
 // label every row the same.
+//
+// Filter rules only, deliberately. The prefix convention also covers
+// mangle (M) and NAT (N) rules -- see docs/routeros-setup.md -- but
+// bulk-enabling log=yes across every mangle rule can turn a router's
+// whole packet throughput into log lines, since mark-packet matches per
+// packet rather than per connection. That is the established/related
+// trap below, one order of magnitude worse, and it is not something to
+// do to someone from a "run this" box. The doc walks it per rule.
 export function ruleTaggingCommands(): string {
   return [
     `/ip firewall filter set [find !dynamic action=drop] log=yes log-prefix="D|drop|"`,
@@ -129,7 +145,8 @@ const blockSpecs: Record<string, BlockSpec> = {
     record:
       '{"ordinal"=$i; "comment"=($v->"comment"); "chain"=($v->"chain"); "action"=($v->"action"); ' +
       '"srcAddressList"=($v->"src-address-list"); "logPrefix"=($v->"log-prefix"); "dstPort"=($v->"dst-port"); ' +
-      '"protocol"=($v->"protocol"); "log"=($v->"log"); "dstAddress"=($v->"dst-address"); "srcAddress"=($v->"src-address")}',
+      '"protocol"=($v->"protocol"); "log"=($v->"log"); "dstAddress"=($v->"dst-address"); "srcAddress"=($v->"src-address"); ' +
+      '"connectionState"=($v->"connection-state"); "inInterface"=($v->"in-interface"); "outInterface"=($v->"out-interface")}',
   },
   'address-list': {
     varName: 'al',
@@ -160,7 +177,11 @@ export function pushBlock(address: string, token: string, kind: string): string 
     `  :local rec ${spec.record}`,
     `  :set ${recs} ($${recs}, {$rec})`,
     `}`,
-    `:local ${payload} [:serialize to=json value={"kind"="${kind}"; "page"=1; "pages"=1; "records"=$${recs}}]`,
+    // routerosVersion rides the payload rather than a record: it
+    // describes the router, not a row of any table (#408 carrying
+    // #436's derived version source). Optional server-side, and the
+    // same line in every block.
+    `:local ${payload} [:serialize to=json value={"kind"="${kind}"; "page"=1; "pages"=1; "routerosVersion"=[/system/resource get version]; "records"=$${recs}}]`,
     `/tool fetch url="https://${address}/api/ingest/routeros" http-method=post http-data=$${payload} ` +
       `http-header-field=("Content-Type: application/json,Authorization: Bearer ${token}") ` +
       `check-certificate=yes output=none`,
@@ -233,8 +254,8 @@ export function rulesStep(status: SetupStatus): StepStatus {
     return {
       state: 'partial',
       detail:
-        'Events are arriving, but none carry an action. The rules log without a log-prefix, ' +
-        'so every row shows "unknown". Add the prefixes below.',
+        'Events are arriving, but none carry an action from a log-prefix. The rules log ' +
+        'without one, so rows show "unknown". Add the prefixes below.',
     }
   }
   const total = withEvents.reduce((n, d) => n + d.events, 0)

@@ -124,10 +124,10 @@ type Store struct {
 // first-run case, not an error) and returns a Store that persists to it
 // from then on. An empty path is the expected "persistence not
 // configured" case: a fully usable, in-memory-only Store is returned. A
-// malformed file is treated as empty rather than failing -- a corrupted
-// entities file should never block mikroview from starting. Either way
-// the returned Store is always safe to use unconditionally; a non-nil
-// error is only ever informational, for the caller to log.
+// document that exists but cannot be read or parsed is a hard error
+// (issue #378): the caller gets (nil, err) rather than a store whose
+// live backend would overwrite that document on the first write. See
+// persist.Open.
 func Open(path string) (*Store, error) {
 	if path == "" {
 		return OpenWithBackend(nil)
@@ -140,30 +140,30 @@ func Open(path string) (*Store, error) {
 func OpenWithBackend(b persist.Backend) (*Store, error) {
 	s := &Store{backend: b, byID: make(map[string]*Entity)}
 
-	data, version, err := persist.LoadDocument(context.Background(), b)
-	if err != nil {
-		return s, err
-	}
-	if data == nil {
-		return s, nil
-	}
-	s.version = version
-
-	var file storeFile
-	if err := json.Unmarshal(data, &file); err != nil {
-		return s, err
-	}
-	for _, e := range file.Entities {
-		// A JSON array containing `null` is syntactically valid and
-		// unmarshals into a nil *Entity -- skipped here for the same
-		// reason flags.Open/auth.Store.Open skip it: a malformed file
-		// must never crash startup by indexing through a nil pointer.
-		if e == nil {
-			continue
+	version, existed, err := persist.Open(context.Background(), b, "the entities store", func(data []byte) error {
+		var file storeFile
+		if err := json.Unmarshal(data, &file); err != nil {
+			return err
 		}
-		s.byID[id(e.Type, e.Key)] = e
+		for _, e := range file.Entities {
+			// A JSON array containing `null` is syntactically valid and
+			// unmarshals into a nil *Entity -- skipped here so a
+			// malformed entry can't crash startup by indexing through a
+			// nil pointer.
+			if e == nil {
+				continue
+			}
+			s.byID[id(e.Type, e.Key)] = e
+		}
+		s.seeded = file.Seeded
+		return nil
+	})
+	if err != nil {
+		return nil, err
 	}
-	s.seeded = file.Seeded
+	if existed {
+		s.version = version
+	}
 	return s, nil
 }
 

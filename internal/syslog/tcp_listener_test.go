@@ -3,10 +3,12 @@
 package syslog
 
 import (
+	"bytes"
 	"context"
 	"io"
 	"net"
 	"runtime"
+	"strings"
 	"testing"
 	"time"
 )
@@ -99,9 +101,8 @@ func TestServeTCPHandlesMultipleConnections(t *testing.T) {
 }
 
 func TestServeTCPRejectsBeyondConnectionLimit(t *testing.T) {
-	orig := maxTCPConnections
-	maxTCPConnections = 1
-	defer func() { maxTCPConnections = orig }()
+	orig := maxTCPConnections.Swap(1)
+	defer maxTCPConnections.Store(orig)
 
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -361,5 +362,202 @@ func TestTCPNewlineDelimitedStillWorks(t *testing.T) {
 		case <-time.After(3 * time.Second):
 			t.Fatalf("never received %q", want)
 		}
+	}
+}
+
+// readOneMessage dials addr, runs send (which must deliver exactly one
+// logical message down the resulting connection), and returns the first
+// RawMessage that arrives on out. Shared by the #415 regression tests
+// below, which need the same dial-send-receive shape for both a
+// fragmented and an unfragmented delivery.
+func readOneMessage(t *testing.T, addr string, out <-chan RawMessage, send func(conn net.Conn)) RawMessage {
+	t.Helper()
+	conn, err := net.Dial("tcp", addr)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer conn.Close()
+
+	send(conn)
+
+	select {
+	case msg := <-out:
+		return msg
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for the message")
+		return RawMessage{}
+	}
+}
+
+// TestTCPFragmentedMessageReassemblesAcrossPartialReads is the
+// regression test for #415: the read loop used to recognise a message
+// as continuing into the next read only when the current one exactly
+// filled the 64KB buffer. A message well under that size which still
+// arrived fragmented across several non-full reads was never
+// recognised as one message -- each fragment, carrying no framing of
+// its own, was parsed as its own line. Observed concretely against the
+// real TLS listener: a single ~65KB line produced 3 stray undecoded
+// events instead of one real one.
+//
+// This fails on the pre-fix code: none of the five writes below fill
+// the 64KB buffer, so each landed as its own garbage event rather than
+// the read loop ever recognising a continuation.
+func TestTCPFragmentedMessageReassemblesAcrossPartialReads(t *testing.T) {
+	out := make(chan RawMessage, 8)
+	addr, stop := serveTCPForTest(t, out)
+	defer stop()
+
+	// Long enough that five roughly-equal pieces are each a plausible
+	// single TCP/TLS segment on their own -- the same shape a long
+	// address-list or NAT-detail line takes in the wild -- while
+	// staying comfortably under maxTCPMessageBytes so the oversized
+	// path (covered separately below) never engages.
+	line := "D|frag-test| forward: in:ether1 out:bridge1, proto TCP (SYN), " +
+		"198.51.100.5:1024->203.0.113.9:443, detail=" + strings.Repeat("x", 20000)
+
+	// Baseline: the same line delivered whole, in one write. What the
+	// fragmented delivery below must match byte for byte.
+	baseline := readOneMessage(t, addr, out, func(conn net.Conn) {
+		if _, err := conn.Write([]byte(line + "\n")); err != nil {
+			t.Fatalf("baseline write: %v", err)
+		}
+	})
+	if string(baseline.Data) != line {
+		t.Fatalf("baseline itself is wrong: got %d bytes, want %d matching the source line", len(baseline.Data), len(line))
+	}
+
+	// The same line, delivered across several writes with a short pause
+	// between each -- enough for the kernel to hand the reader what has
+	// arrived so far as its own short Read(), which is exactly the
+	// shape that fragmented a single message into several reads for the
+	// real bug. None of these individual reads fill the 64KB buffer,
+	// and none but the last contains the terminating newline.
+	fragmented := readOneMessage(t, addr, out, func(conn net.Conn) {
+		full := line + "\n"
+		const parts = 5
+		chunkLen := len(full)/parts + 1
+		for i := 0; i < len(full); i += chunkLen {
+			end := i + chunkLen
+			if end > len(full) {
+				end = len(full)
+			}
+			if _, err := conn.Write([]byte(full[i:end])); err != nil {
+				t.Fatalf("fragment write: %v", err)
+			}
+			time.Sleep(5 * time.Millisecond)
+		}
+	})
+
+	if !bytes.Equal(fragmented.Data, baseline.Data) {
+		t.Errorf("fragmented delivery produced %d bytes, want %d bytes byte-identical to the unfragmented baseline",
+			len(fragmented.Data), len(baseline.Data))
+	}
+
+	select {
+	case extra := <-out:
+		t.Errorf("expected exactly one event for the fragmented message, got an extra %d-byte event -- the message was shredded into more than one", len(extra.Data))
+	case <-time.After(200 * time.Millisecond):
+	}
+}
+
+// TestTCPOversizedMessageFragmentedAcrossManyReadsStaysBounded is the
+// oversize-path counterpart to the regression test above. It targets
+// specifically what #415 changed about this path: pending now crosses
+// the maxTCPMessageBytes cap by accumulation across several reads,
+// rather than by one read happening to exactly fill the buffer the way
+// TestOversizedMessageYieldsOneEventNotSeveral's net.Pipe delivery does.
+// The lead-up to the cap here is deliberately fragmented across several
+// small real-socket writes to exercise that accumulation.
+//
+// Once the message is already known to be over the limit, ending the
+// discard is newline-driven, not read-size-driven (#379): read size
+// can't signal a boundary under TLS, where a single Read never fills
+// the buffer, so only a '\n' in the stream honestly marks the end of
+// the run. This test folds that terminator onto the end of the
+// continuation write, so it arrives in the same read as the discard
+// tail rather than as its own read -- exercising the case that matters
+// most: a terminator coalesced with discard bytes and the following
+// message's own bytes, all in one read, over a real socket. Salvaging
+// whatever follows the terminator into pending is what keeps that case
+// from silently destroying the message that follows.
+func TestTCPOversizedMessageFragmentedAcrossManyReadsStaysBounded(t *testing.T) {
+	out := make(chan RawMessage, 32)
+	addr, stop := serveTCPForTest(t, out)
+	defer stop()
+
+	conn, err := net.Dial("tcp", addr)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer conn.Close()
+
+	// The lead-up to the cap, with no newline anywhere -- the shape a
+	// RouterOS sender would produce, just far too large -- delivered in
+	// several small paced writes so the kernel hands the reader
+	// genuinely separate, non-full reads and pending has to cross
+	// maxTCPMessageBytes by accumulation, not by one read filling the
+	// buffer.
+	leadUp := strings.Repeat("A", maxTCPMessageBytes)
+	const parts = 6
+	chunkLen := len(leadUp)/parts + 1
+	for i := 0; i < len(leadUp); i += chunkLen {
+		end := i + chunkLen
+		if end > len(leadUp) {
+			end = len(leadUp)
+		}
+		if _, err := conn.Write([]byte(leadUp[i:end])); err != nil {
+			t.Fatalf("write: %v", err)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	// The continuation past the cap -- still part of the same
+	// over-limit message, discarded rather than parsed -- terminated
+	// with '\n' right here, in the same write as the discard tail: the
+	// only honest end-of-run signal is the terminator itself, and
+	// folding it onto this write (rather than pacing it apart from what
+	// follows) is deliberate -- it's what lets the normal message below
+	// arrive coalesced with the discard tail in a single read, the case
+	// that actually exercises the salvage behaviour.
+	if _, err := conn.Write([]byte(strings.Repeat("A", 20000) + "\n")); err != nil {
+		t.Fatalf("continuation write: %v", err)
+	}
+	// No pause before the normal message: with salvage in place,
+	// whether this lands in its own read or coalesced with the discard
+	// tail above must be harmless either way, and removing the pause
+	// that used to keep them apart is what would expose a regression in
+	// that.
+	if _, err := conn.Write([]byte("D|wan-in|forward: proto TCP, 192.0.2.1:1->198.51.100.1:80\n")); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	var got []string
+	deadline := time.After(5 * time.Second)
+	for len(got) < 2 {
+		select {
+		case m := <-out:
+			got = append(got, string(m.Data))
+		case <-deadline:
+			lengths := make([]int, len(got))
+			for i, g := range got {
+				lengths[i] = len(g)
+			}
+			t.Fatalf("timed out; received %d messages with lengths %v", len(got), lengths)
+		}
+	}
+
+	select {
+	case extra := <-out:
+		t.Errorf("expected exactly 2 events (one truncated oversized, one normal), got a 3rd of %d bytes -- the oversized message was split into garbage instead of staying bounded", len(extra.Data))
+	case <-time.After(300 * time.Millisecond):
+	}
+
+	if len(got[0]) != maxTCPMessageBytes {
+		t.Errorf("first message is %d bytes, want the %d-byte cap -- the start of the oversized message, delivered once", len(got[0]), maxTCPMessageBytes)
+	}
+	if got[1] != "D|wan-in|forward: proto TCP, 192.0.2.1:1->198.51.100.1:80" {
+		t.Errorf("second message = %q, want the normal line that followed", got[1])
+	}
+	if Stats().Oversized == 0 {
+		t.Error("the discarded continuation was not counted")
 	}
 }

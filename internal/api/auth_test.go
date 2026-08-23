@@ -5,6 +5,7 @@ package api
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/cookiejar"
@@ -45,6 +46,27 @@ func postJSON(t *testing.T, client *http.Client, url string, body any) *http.Res
 		t.Fatal(err)
 	}
 	req, err := http.NewRequest(http.MethodPost, url, bytes.NewReader(b))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set(csrfHeaderName, csrfHeaderValue)
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return resp
+}
+
+// putJSON mirrors postJSON but for PUT, sending the same CSRF header the
+// real frontend always sends (see csrfHeaderName).
+func putJSON(t *testing.T, client *http.Client, url string, body any) *http.Response {
+	t.Helper()
+	b, err := json.Marshal(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req, err := http.NewRequest(http.MethodPut, url, bytes.NewReader(b))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -788,7 +810,7 @@ func TestChangePasswordRotatesTheSessionAndEndsOthers(t *testing.T) {
 	// A second signed-in browser, which must not survive the change --
 	// "sign out everywhere" is the point, not a side effect.
 	other := loggedInClient(t, ts.URL, "admin", "password123")
-	if resp, err := other.Get(ts.URL + "/api/watchlist/entries"); err != nil || resp.StatusCode != http.StatusOK {
+	if resp, err := other.Get(ts.URL + "/api/definitions"); err != nil || resp.StatusCode != http.StatusOK {
 		t.Fatalf("setup: the second session is not usable (%v)", err)
 	}
 
@@ -811,13 +833,13 @@ func TestChangePasswordRotatesTheSessionAndEndsOthers(t *testing.T) {
 
 	// This browser stays signed in: being signed out by your own
 	// password change is the behaviour that stops people doing it.
-	if got, err := client.Get(ts.URL + "/api/watchlist/entries"); err != nil || got.StatusCode != http.StatusOK {
+	if got, err := client.Get(ts.URL + "/api/definitions"); err != nil || got.StatusCode != http.StatusOK {
 		t.Errorf("the browser that changed the password was signed out (%v)", err)
 	}
 
 	// The other one is gone, immediately -- not merely doomed on its
 	// next PasswordChangedAt check.
-	if got, err := other.Get(ts.URL + "/api/watchlist/entries"); err == nil && got.StatusCode == http.StatusOK {
+	if got, err := other.Get(ts.URL + "/api/definitions"); err == nil && got.StatusCode == http.StatusOK {
 		t.Error("a session opened before the password change is still usable")
 	}
 	if _, ok := s.Auth.Get(user.ID); !ok {
@@ -887,5 +909,39 @@ func TestChangePasswordRequiresASession(t *testing.T) {
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusUnauthorized {
 		t.Errorf("status = %d, want 401", resp.StatusCode)
+	}
+}
+
+// A request target is attacker-controlled and arrives decoded, so a
+// %0A in it becomes a real newline by the time it reaches a log call.
+// Before #528 the auth log wrote it raw, which let anyone who could
+// reach the login route -- no credentials needed -- append convincing
+// lines to mikroview's own log. Same shape as authzMatrix: the decision
+// is recorded as a test so removing the quoting fails here rather than
+// being noticed in an incident.
+func TestAuthErrorLogLineCannotForgeALogEntry(t *testing.T) {
+	forged := "/api/x\n2026-08-23 INFO  auth │ forged entry"
+
+	line := authErrorLogLine("GET", forged, errors.New("bad credentials"))
+
+	if strings.ContainsAny(line, "\n\r") {
+		t.Errorf("log line carries a raw newline, so a request can forge entries:\n%s", line)
+	}
+	if !strings.Contains(line, `\n`) {
+		t.Errorf("expected the injected newline to survive as an escape, got %q", line)
+	}
+	if !strings.Contains(line, "forged entry") {
+		t.Errorf("expected the path to still be readable for diagnosis, got %q", line)
+	}
+}
+
+// The error is quoted for the same reason as the path: this branch runs
+// for errors we did not anticipate, so its text is the most likely to
+// have come from something a caller sent.
+func TestAuthErrorLogLineQuotesTheError(t *testing.T) {
+	line := authErrorLogLine("POST", "/api/login", errors.New("boom\nWARN auth │ fake"))
+
+	if strings.ContainsAny(line, "\n\r") {
+		t.Errorf("error text broke out of its line:\n%s", line)
 	}
 }
