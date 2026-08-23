@@ -100,4 +100,19 @@ is text; text wears text tokens; both directions survive greyscale
 
 ## Verdicts
 
-None yet — awaiting the owner.
+Owner, 2026-08-23, on direction Y (verbatim):
+
+> Oooo the survey is cool! But could be do it better by making it
+> vertical, with the table to the right of it? That way, it can be as
+> long as it likes and we use the otherwise empty space in the table.
+> It would also work well for mobile view as we could have a drawer
+> and a pull tab for that medium.
+
+Read as: **Y liked; evolve, don't keep as drawn** — the survey goes
+upright in round 3 (`../round-3/`): terrain vertical, the roll to its
+right (the terrain as long as it likes, the roll's dead space put to
+work), and on mobile the terrain becomes a drawer with a pull tab.
+Vertical is also the house's own orientation — the fall drops and the
+register reads downward.
+
+**X (the field guide)**: no verdict yet — awaiting the owner.
