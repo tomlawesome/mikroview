@@ -1,0 +1,472 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mikroview — Direction J: Gauntlet</title>
+<style>
+  /* ============================================================
+     DIRECTION J — "GAUNTLET"
+     The strong horizontal. Not a river — the rule chain itself.
+     RouterOS judges every packet by running it left to right
+     through the rules until one claims it. So that IS the x-axis:
+     each rule is a gate, traffic streams thread the gauntlet, and
+     every strand is absorbed by the gate that judges it.
+
+     What falls out for free, because the layout is the truth:
+     · the established-state gate visibly swallows most traffic
+     · a hot gate glows with its drop counter
+     · a dormant rule is a gate nothing has touched in 30 days
+     · and the unplanned flow is the strand that runs the WHOLE
+       gauntlet untouched and slams into the default-drop wall —
+       which is exactly what "unplanned" means.
+
+     The stream is never gone (ticker underfoot, lifts to full);
+     flags and watches clamp onto the gates they concern.
+     ============================================================ */
+  :root {
+    --iron: #0a0d10;
+    --slat: #151a20;
+    --slat-2: #1d242c;
+    --hair: rgba(190, 205, 220, 0.13);
+    --hair-2: rgba(190, 205, 220, 0.28);
+    --ink: #eaeef2;
+    --ink-2: #9aa6b2;
+    --ink-3: #5a6672;
+    --brass: #f0c33c;
+    --lan: #3987e5; --srv: #199e70; --iot: #c98500; --guest: #d95926;
+    --ok: #3fae5a;
+    --alarm: #ff5470;
+    --nat: #a08df0;
+    --sans: system-ui, -apple-system, "Segoe UI", sans-serif;
+    --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  }
+  * { box-sizing: border-box; margin: 0; }
+  html { scroll-behavior: smooth; }
+  body { background: var(--iron); color: var(--ink); font: 13.5px/1.5 var(--sans); -webkit-font-smoothing: antialiased; }
+  .concept {
+    position: sticky; top: 0; z-index: 90; display: flex; gap: 16px; align-items: baseline;
+    padding: 8px 20px; background: #06080a; border-bottom: 1px solid var(--hair);
+    font-size: 11px; color: var(--ink-3);
+  }
+  .concept b { color: var(--brass); letter-spacing: 0.1em; }
+  .concept a { color: var(--ink-2); text-decoration: none; margin-left: 12px; }
+
+  .scene { min-height: 100vh; position: relative; border-bottom: 1px solid var(--hair-2); overflow: hidden; }
+  .scene-tag { position: absolute; top: 13px; left: 50%; transform: translateX(-50%); z-index: 5;
+    font-size: 10.5px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--ink-3); white-space: nowrap; }
+
+  .crumb { position: absolute; top: 36px; left: 36px; z-index: 6; }
+  .crumb .wm { font-size: 12px; font-weight: 800; letter-spacing: 0.22em; color: var(--ink-3); }
+  .crumb .wm em { color: var(--brass); font-style: normal; }
+  .crumb h1 { font-size: 20px; font-weight: 600; margin-top: 5px; }
+  .crumb h1 .here { color: var(--brass); }
+  .crumb .sub { font-size: 11px; color: var(--ink-3); margin-top: 2px; }
+  .crumb .sub b { color: var(--ink-2); }
+  .lenses { position: absolute; top: 42px; right: 36px; z-index: 6; display: flex; gap: 2px;
+    border-bottom: 1px solid var(--hair-2); padding-bottom: 6px; }
+  .lens { font-size: 12px; font-weight: 550; color: var(--ink-3); padding: 4px 13px; cursor: default; }
+  .lens.on { color: var(--ink); border-bottom: 2px solid var(--brass); margin-bottom: -7px; }
+  .lens .ct { font-size: 10px; color: var(--alarm); vertical-align: 4px; margin-left: 3px; font-weight: 700; }
+
+  .stage { position: absolute; inset: 0; }
+  .stage svg { width: 100%; height: 100%; display: block; }
+  svg text { font-family: var(--sans); }
+  .n-name { fill: var(--ink); font-size: 14px; font-weight: 650; }
+  .n-sub { fill: var(--ink-3); font-size: 9.5px; }
+  .n-cidr { fill: var(--ink-2); font-size: 10px; font-family: var(--mono); }
+  .ann { fill: var(--ink-3); font-size: 9px; font-family: var(--mono); }
+  .gname { fill: var(--ink-2); font-size: 10px; font-family: var(--mono); }
+  .gnum { fill: var(--ink-3); font-size: 9px; font-family: var(--mono); }
+  .gcount { font-size: 9.5px; font-weight: 800; font-family: var(--mono); }
+
+  .gate { fill: var(--slat); stroke: var(--hair-2); stroke-width: 1; }
+  .gate-hot { stroke: var(--alarm); filter: drop-shadow(0 0 8px rgba(255,84,112,0.3)); }
+  .gate-accept { stroke: rgba(63,174,90,0.6); }
+  .gate-dormant { stroke-dasharray: 3 4; opacity: 0.55; }
+  .wall { fill: #1a1214; stroke: var(--alarm); stroke-opacity: 0.7; stroke-width: 1.4; }
+  .strand { fill: none; stroke-linecap: round; opacity: 0.65; }
+  .absorb-ok { fill: var(--ok); }
+  .absorb-bad { fill: var(--alarm); }
+  @keyframes travel { from { offset-distance: 0%; } to { offset-distance: 100%; } }
+  .halo { animation: halo 2.2s ease-out infinite; transform-origin: center; transform-box: fill-box; }
+  @keyframes halo { 0% { opacity: 0.7; transform: scale(0.5); } 100% { opacity: 0; transform: scale(2.4); } }
+  .heat { animation: heat 2.6s ease-in-out infinite; }
+  @keyframes heat { 0%,100% { opacity: 0.35; } 50% { opacity: 0.8; } }
+
+  .ticker {
+    position: absolute; left: 0; right: 0; bottom: 0; z-index: 8;
+    background: rgba(4, 6, 8, 0.93); border-top: 1px solid var(--hair-2); padding: 8px 36px 10px;
+  }
+  .ticker .h { display: flex; align-items: baseline; gap: 14px; margin-bottom: 5px; }
+  .ticker .lab { font-size: 9.5px; letter-spacing: 0.13em; text-transform: uppercase; color: var(--ink-3); font-weight: 650; }
+  .ticker .lab i { display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: var(--ok); margin-right: 7px; animation: pulse 2s ease-in-out infinite; }
+  @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.3; } }
+  .ticker .lift { margin-left: auto; font-size: 11px; color: var(--brass); }
+  .trow { display: flex; gap: 14px; font: 11px var(--mono); color: var(--ink-2); padding: 2.5px 0; white-space: nowrap; overflow: hidden; }
+  .trow .t { color: var(--ink-3); }
+  .trow .g { color: var(--brass); }
+  .trow .drop { color: var(--alarm); font-weight: 700; } .trow .acc { color: var(--ok); font-weight: 700; } .trow .nat { color: var(--nat); font-weight: 700; }
+
+  /* scene 2 */
+  .full { position: relative; padding-top: 100px; }
+  .fold { display: flex; align-items: center; gap: 18px; margin: 0 36px; padding: 10px 16px;
+    background: rgba(21, 26, 32, 0.7); border: 1px solid var(--hair); border-radius: 8px; }
+  .fold .lab { font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--ink-3); font-weight: 650; white-space: nowrap; }
+  .fold svg { height: 30px; flex: 1; }
+  .fold .un { font-size: 11px; color: var(--brass); white-space: nowrap; }
+  .livewrap { margin: 14px 36px 30px; }
+  .filterbar { display: flex; flex-wrap: wrap; gap: 10px; align-items: flex-end; padding: 12px 0; border-bottom: 1px solid var(--hair-2); }
+  .ff { display: flex; flex-direction: column; gap: 3px; }
+  .ff label { font-size: 9px; letter-spacing: 0.11em; text-transform: uppercase; color: var(--ink-3); }
+  .ff input, .ff select { background: #07090b; border: 1px solid var(--hair-2); border-radius: 5px;
+    color: var(--ink); font: 12.5px var(--sans); padding: 6px 10px; width: 172px; outline: none; }
+  .ff select { width: 118px; } .ff.small input { width: 110px; }
+  .swap { background: transparent; border: 1px solid var(--hair-2); color: var(--brass); font-size: 13px; border-radius: 5px; padding: 5px 10px; cursor: default; }
+  .fright { margin-left: auto; display: flex; gap: 8px; }
+  .btn { background: transparent; border: 1px solid var(--hair-2); color: var(--ink-2); font: 11.5px var(--sans); padding: 6px 13px; border-radius: 5px; cursor: default; }
+  .btn.on { color: var(--brass); border-color: var(--brass); }
+  table.stream { width: 100%; border-collapse: collapse; }
+  .stream th { text-align: left; font-size: 9px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--ink-3); font-weight: 650; padding: 9px 10px 7px; border-bottom: 1px solid var(--hair-2); }
+  .stream td { padding: 6px 10px; border-bottom: 1px solid var(--hair); font-family: var(--mono); font-size: 12px; white-space: nowrap; }
+  .t { color: var(--ink-3); font-size: 11px; }
+  .chain { color: var(--ink-3); font-size: 11px; font-family: var(--sans); }
+  .act { font-size: 10px; font-weight: 700; }
+  .act.drop { color: var(--alarm); } .act.acc { color: var(--ok); } .act.nat { color: var(--nat); }
+  .host { color: var(--ink); } .ip { color: var(--ink-3); font-size: 11px; margin-left: 5px; }
+  .ld { display: inline-block; width: 6px; height: 6px; border-radius: 50%; margin-right: 7px; }
+  .arrow { color: var(--ink-3); } .rule-c { color: var(--brass); font-size: 11.5px; } .cc { font-size: 10px; color: var(--ink-3); }
+  .gatecol { color: var(--ink-3); font-size: 10.5px; }
+
+  /* scene 3: the gates report */
+  .report { margin: 14px 36px 0; display: grid; grid-template-columns: 1.2fr 1fr 1fr; gap: 14px; }
+  .rcard { background: rgba(21, 26, 32, 0.6); border: 1px solid var(--hair); border-radius: 10px; padding: 14px 16px; }
+  .rcard h4 { font-size: 9.5px; letter-spacing: 0.13em; text-transform: uppercase; color: var(--ink-3); font-weight: 700; margin-bottom: 10px; }
+  .grow { display: grid; grid-template-columns: 34px 1fr auto; gap: 10px; padding: 6px 0; border-top: 1px solid var(--hair); font-size: 12px; align-items: baseline; }
+  .grow:first-of-type { border-top: 0; }
+  .grow .n { font-family: var(--mono); color: var(--ink-3); font-size: 10.5px; }
+  .grow b { font-family: var(--mono); font-weight: 650; }
+  .grow .v { font-family: var(--mono); font-size: 11px; color: var(--ink-2); text-align: right; }
+  .grow .v.hot { color: var(--alarm); font-weight: 700; }
+  .grow .v.ok { color: var(--ok); }
+  .grow .why { grid-column: 2 / 4; font-size: 10.5px; color: var(--ink-3); margin-top: -2px; }
+
+  @media (prefers-reduced-motion: reduce) { * { animation: none !important; } }
+</style>
+</head>
+<body>
+
+<div class="concept">
+  <b>DIRECTION J — GAUNTLET</b>
+  <span>the true horizontal · the x-axis is rule order · every strand is absorbed by the gate that judges it · unplanned = ran the whole gauntlet</span>
+  <span style="margin-left:auto"><a href="#s1">1 the gauntlet</a><a href="#s2">2 live, full</a><a href="#s3">3 the gates report</a></span>
+</div>
+
+<!-- ============ SCENE 1 : THE GAUNTLET ============ -->
+<section class="scene" id="s1">
+  <div class="scene-tag">Scene 1 — the gauntlet. This is not a metaphor: it is the order RouterOS actually judges in.</div>
+  <div class="crumb">
+    <div class="wm">MIKRO<em>VIEW</em></div>
+    <h1>The gauntlet <span class="here">· live</span></h1>
+    <div class="sub">rb5009 · <b>41 gates</b> pushed 14:01 · run left to right until one claims you</div>
+  </div>
+  <div class="lenses">
+    <span class="lens on">Judgement</span><span class="lens">Policy</span><span class="lens">Coverage</span><span class="lens">Flags<span class="ct">6</span></span><span class="lens">Watch</span>
+  </div>
+
+  <div class="stage" style="bottom:104px">
+    <svg viewBox="0 0 1400 620" preserveAspectRatio="xMidYMid meet" role="img"
+         aria-label="The firewall as a gauntlet: traffic streams enter from the left and run rightward through the rule gates in real RouterOS order. Most traffic is swallowed by the established-state gate at once. The WAN drop gate glows hot. One rule gate is dormant. A red strand from IoT runs past every gate untouched and slams into the default-drop wall at the far end.">
+
+      <!-- entry manifold -->
+      <g transform="translate(50 96)">
+        <text class="n-name" x="0" y="0" style="font-size:12px">Internet</text>
+        <text class="n-cidr" x="0" y="15" style="font-size:9px">ether1</text>
+      </g>
+      <g transform="translate(50 236)"><text class="n-name" x="0" y="0" style="font-size:12px; fill:var(--lan)">LAN</text></g>
+      <g transform="translate(50 316)"><text class="n-name" x="0" y="0" style="font-size:12px; fill:var(--srv)">Servers</text></g>
+      <g transform="translate(50 396)"><text class="n-name" x="0" y="0" style="font-size:12px; fill:var(--iot)">IoT</text></g>
+      <g transform="translate(50 476)"><text class="n-name" x="0" y="0" style="font-size:12px; fill:var(--guest)">Guest</text></g>
+      <text class="n-sub" x="50" y="574">everything that wants through, sorted by who is asking</text>
+
+      <!-- ═══ the gates, in real order ═══ -->
+      <!-- #2 established/related — the big swallow -->
+      <g>
+        <rect class="gate gate-accept" x="286" y="60" width="30" height="440" rx="5"/>
+        <text class="gnum" x="301" y="50" text-anchor="middle">#2</text>
+        <text class="gname" x="301" y="524" text-anchor="middle">established</text>
+        <text class="gcount" x="301" y="540" text-anchor="middle" style="fill:var(--ok)">✓ 91% of everything</text>
+      </g>
+      <!-- #5 wan-in-drop — hot -->
+      <g>
+        <rect class="gate gate-hot" x="420" y="60" width="26" height="440" rx="5"/>
+        <rect x="420" y="60" width="26" height="440" rx="5" fill="var(--alarm)" opacity="0.35" class="heat"/>
+        <text class="gnum" x="433" y="50" text-anchor="middle">#5</text>
+        <text class="gname" x="433" y="524" text-anchor="middle">wan-in-drop</text>
+        <text class="gcount" x="433" y="540" text-anchor="middle" style="fill:var(--alarm)">✕ 1.4k/h ▲3.1×</text>
+      </g>
+      <!-- #6 wg→srv — dormant -->
+      <g>
+        <rect class="gate gate-dormant" x="520" y="60" width="24" height="440" rx="5"/>
+        <text class="gnum" x="532" y="50" text-anchor="middle">#6</text>
+        <text class="gname" x="532" y="524" text-anchor="middle" style="opacity:0.6">wg→srv allow</text>
+        <text class="gcount" x="532" y="540" text-anchor="middle" style="fill:var(--ink-3)">nothing · 30 d</text>
+      </g>
+      <!-- #12 iot-dns-allow -->
+      <g>
+        <rect class="gate gate-accept" x="614" y="60" width="26" height="440" rx="5"/>
+        <text class="gnum" x="627" y="50" text-anchor="middle">#12</text>
+        <text class="gname" x="627" y="524" text-anchor="middle">iot-dns-allow</text>
+        <text class="gcount" x="627" y="540" text-anchor="middle" style="fill:var(--ok)">✓ 0.4/s</text>
+      </g>
+      <!-- #18 lan-to-srv -->
+      <g>
+        <rect class="gate gate-accept" x="712" y="60" width="26" height="440" rx="5"/>
+        <text class="gnum" x="725" y="50" text-anchor="middle">#18</text>
+        <text class="gname" x="725" y="524" text-anchor="middle">lan-to-srv</text>
+        <text class="gcount" x="725" y="540" text-anchor="middle" style="fill:var(--ok)">✓ 5/s</text>
+      </g>
+      <!-- #24 lan-to-iot-cam -->
+      <g>
+        <rect class="gate gate-accept" x="810" y="60" width="26" height="440" rx="5"/>
+        <text class="gnum" x="823" y="50" text-anchor="middle">#24</text>
+        <text class="gname" x="823" y="524" text-anchor="middle">lan-to-iot-cam</text>
+        <text class="gcount" x="823" y="540" text-anchor="middle" style="fill:var(--ok)">✓ one-way in</text>
+      </g>
+      <!-- #31 guest-isolation -->
+      <g>
+        <rect class="gate" x="908" y="60" width="26" height="440" rx="5"/>
+        <text class="gnum" x="921" y="50" text-anchor="middle">#31</text>
+        <text class="gname" x="921" y="524" text-anchor="middle">guest-isolation</text>
+        <text class="gcount" x="921" y="540" text-anchor="middle" style="fill:var(--alarm)">✕ 0.1/s</text>
+      </g>
+      <!-- #38 iot-egress-drop -->
+      <g>
+        <rect class="gate" x="1006" y="60" width="26" height="440" rx="5"/>
+        <text class="gnum" x="1019" y="50" text-anchor="middle">#38</text>
+        <text class="gname" x="1019" y="524" text-anchor="middle">iot-egress-drop</text>
+        <text class="gcount" x="1019" y="540" text-anchor="middle" style="fill:var(--alarm)">✕ 3 today</text>
+      </g>
+      <!-- collapsed quiet run -->
+      <g>
+        <rect class="gate" x="1096" y="60" width="14" height="440" rx="4" opacity="0.4"/>
+        <rect class="gate" x="1116" y="60" width="14" height="440" rx="4" opacity="0.3"/>
+        <text class="gnum" x="1113" y="524" text-anchor="middle" style="opacity:0.6">…9 quiet…</text>
+      </g>
+      <!-- #41 THE WALL -->
+      <g>
+        <rect class="wall" x="1190" y="60" width="44" height="440" rx="6"/>
+        <text class="gnum" x="1212" y="50" text-anchor="middle" style="fill:var(--alarm)">#41</text>
+        <text class="gname" x="1212" y="524" text-anchor="middle" style="fill:var(--alarm)">default drop</text>
+        <text class="gcount" x="1212" y="540" text-anchor="middle" style="fill:var(--alarm)">✕ the wall · 14× today</text>
+      </g>
+
+      <!-- ═══ strands: absorbed by the gate that judges them ═══ -->
+      <!-- bulk established: everyone → #2, wide -->
+      <path class="strand" d="M 120 110 C 180 130, 230 190, 286 220" stroke="var(--ink-2)" stroke-width="7" opacity="0.28"/>
+      <path class="strand" d="M 120 250 C 170 255, 230 250, 286 246" stroke="var(--lan)" stroke-width="6" opacity="0.4"/>
+      <path class="strand" d="M 120 330 C 170 320, 230 300, 286 280" stroke="var(--srv)" stroke-width="4" opacity="0.4"/>
+      <path class="strand" d="M 120 410 C 170 390, 230 340, 286 306" stroke="var(--iot)" stroke-width="3" opacity="0.4"/>
+      <circle cx="301" cy="262" r="7" class="absorb-ok" opacity="0.8"/>
+      <text class="ann" x="150" y="152">the seen-before bulk — gate #2 swallows it at once</text>
+
+      <!-- wan attack strand → #5, hot -->
+      <path class="strand" d="M 120 96 C 230 96, 330 100, 420 108" stroke="var(--alarm)" stroke-width="2.6" opacity="0.8"/>
+      <circle cx="433" cy="112" r="6" class="absorb-bad"/>
+      <circle cx="433" cy="112" r="6" fill="none" stroke="var(--alarm)" class="halo"/>
+      <circle r="2.6" fill="var(--alarm)" style="filter:drop-shadow(0 0 4px var(--alarm)); offset-path: path('M 120 96 C 230 96, 330 100, 420 108'); animation: travel 1.7s linear infinite;" aria-hidden="true"/>
+      <text class="ann" x="176" y="80" style="fill:var(--alarm)">the knockers · :8291 :22 · caught and named at #5</text>
+
+      <!-- iot dns → #12 -->
+      <path class="strand" d="M 120 400 C 300 396, 480 388, 614 380" stroke="var(--iot)" stroke-width="2" opacity="0.7"/>
+      <circle cx="627" cy="378" r="5.5" class="absorb-ok"/>
+      <circle r="2.2" fill="var(--iot)" style="offset-path: path('M 120 400 C 300 396, 480 388, 614 380'); animation: travel 2.6s linear infinite;" aria-hidden="true"/>
+      <text class="ann" x="470" y="372">iot dns · claimed by #12</text>
+
+      <!-- lan → srv new conns → #18 -->
+      <path class="strand" d="M 120 258 C 340 268, 560 300, 712 318" stroke="var(--lan)" stroke-width="2" opacity="0.7"/>
+      <circle cx="725" cy="320" r="5.5" class="absorb-ok"/>
+      <circle r="2.2" fill="var(--lan)" style="offset-path: path('M 120 258 C 340 268, 560 300, 712 318'); animation: travel 2.8s linear infinite;" aria-hidden="true"/>
+
+      <!-- lan → iot cam → #24 -->
+      <path class="strand" d="M 120 266 C 380 290, 640 356, 810 388" stroke="var(--lan)" stroke-width="1.8" opacity="0.6"/>
+      <circle cx="823" cy="390" r="5" class="absorb-ok"/>
+
+      <!-- guest → lan attempt → #31 -->
+      <path class="strand" d="M 120 470 C 400 462, 700 448, 908 436" stroke="var(--guest)" stroke-width="1.8" opacity="0.7"/>
+      <circle cx="921" cy="434" r="5.5" class="absorb-bad"/>
+      <circle r="2.2" fill="var(--guest)" style="offset-path: path('M 120 470 C 400 462, 700 448, 908 436'); animation: travel 3s linear infinite;" aria-hidden="true"/>
+      <text class="ann" x="760" y="428">guest reaching for lan · stopped by #31</text>
+
+      <!-- iot egress attempt → #38 -->
+      <path class="strand" d="M 120 418 C 420 428, 780 448, 1006 458" stroke="var(--iot)" stroke-width="1.6" opacity="0.6"/>
+      <circle cx="1019" cy="460" r="5" class="absorb-bad"/>
+      <text class="ann" x="860" y="474">cam-porch → Hangzhou · #38 said no</text>
+
+      <!-- THE UNPLANNED STRAND: runs everything, hits the wall -->
+      <path class="strand" d="M 120 432 C 500 372, 900 340, 1190 336" stroke="var(--alarm)" stroke-width="2.6" opacity="0.95" style="filter:drop-shadow(0 0 6px var(--alarm))"/>
+      <circle cx="1206" cy="336" r="7" class="absorb-bad"/>
+      <circle cx="1206" cy="336" r="7" fill="none" stroke="var(--alarm)" class="halo"/>
+      <circle r="3" fill="var(--alarm)" style="filter:drop-shadow(0 0 5px var(--alarm)); offset-path: path('M 120 432 C 500 372, 900 340, 1190 336'); animation: travel 2.4s linear infinite;" aria-hidden="true"/>
+      <circle r="3" fill="var(--alarm)" style="filter:drop-shadow(0 0 5px var(--alarm)); offset-path: path('M 120 432 C 500 372, 900 340, 1190 336'); animation: travel 2.4s linear 1.2s infinite;" aria-hidden="true"/>
+      <g transform="translate(760 300)">
+        <rect x="-12" y="-15" width="356" height="40" rx="7" fill="#170a10" stroke="var(--alarm)" stroke-opacity="0.8"/>
+        <circle cx="2" cy="-2" r="3" fill="var(--alarm)"/><circle cx="2" cy="-2" r="3" fill="none" stroke="var(--alarm)" class="halo"/>
+        <text x="14" y="1" fill="var(--alarm)" font-size="9.5" font-weight="700" font-family="var(--mono)">UNPLANNED · cam-porch → nas :445 · ran all 41 gates untouched</text>
+        <text x="14" y="15" class="ann">no gate expected it — that is the finding · compose the gate it deserves ▸</text>
+      </g>
+
+      <!-- axis caption -->
+      <text x="700" y="588" text-anchor="middle" class="n-sub">→ rule order, exactly as RouterOS judges · a strand ends where its verdict lives · the wall is where the unexpected goes to be refused</text>
+    </svg>
+  </div>
+
+  <div class="ticker">
+    <div class="h"><span class="lab"><i></i>The stream · 34/s · every line names its gate</span><span class="lift">▲ lift to full live view</span></div>
+    <div class="trow" style="color:var(--ink)"><span class="t">14:02:11.482</span><span class="drop">DROP</span><span>cam-porch → nas :445 smb</span><span class="g">gate #41 · default drop</span></div>
+    <div class="trow"><span class="t">14:02:10.951</span><span class="drop">DROP</span><span>185.220.101.34 DE → rb5009 :8291</span><span class="g">gate #5 · wan-in-drop</span></div>
+    <div class="trow"><span class="t">14:02:10.783</span><span class="acc">ACC</span><span>tom-desktop → nas :5001</span><span class="g">gate #18 · lan-to-srv</span></div>
+  </div>
+</section>
+
+<!-- ============ SCENE 2 : LIVE, IN FULL ============ -->
+<section class="scene full" id="s2">
+  <div class="scene-tag">Scene 2 — full live view. The gauntlet folds to a strip; the gate column stays, because the verdict's address matters.</div>
+  <div class="crumb">
+    <div class="wm">MIKRO<em>VIEW</em></div>
+    <h1>Live <span class="here">· 34/s</span></h1>
+    <div class="sub">buffer <b>15 min</b> · <b>2,041</b> shown</div>
+  </div>
+  <div class="lenses">
+    <span class="lens on">Judgement</span><span class="lens">Policy</span><span class="lens">Coverage</span><span class="lens">Flags<span class="ct">6</span></span><span class="lens">Watch</span>
+  </div>
+
+  <div class="fold">
+    <span class="lab">The gauntlet, folded</span>
+    <svg viewBox="0 0 900 30" preserveAspectRatio="none" aria-label="The gauntlet as a strip: gates as slats, the hot gate glowing, the unplanned strand still hitting the wall">
+      <rect x="180" y="4" width="8" height="22" rx="2" fill="var(--slat)" stroke="rgba(63,174,90,0.5)"/>
+      <rect x="270" y="4" width="8" height="22" rx="2" fill="var(--slat)" stroke="var(--alarm)"/>
+      <rect x="340" y="4" width="7" height="22" rx="2" fill="var(--slat)" stroke="var(--hair-2)" stroke-dasharray="2 3"/>
+      <rect x="420" y="4" width="8" height="22" rx="2" fill="var(--slat)" stroke="rgba(63,174,90,0.5)"/>
+      <rect x="500" y="4" width="8" height="22" rx="2" fill="var(--slat)" stroke="rgba(63,174,90,0.5)"/>
+      <rect x="580" y="4" width="8" height="22" rx="2" fill="var(--slat)" stroke="var(--hair-2)"/>
+      <rect x="700" y="4" width="14" height="22" rx="2" fill="#1a1214" stroke="var(--alarm)" stroke-opacity="0.7"/>
+      <path d="M 40 20 C 300 16, 560 15, 700 15" stroke="var(--alarm)" stroke-width="1.6" fill="none" opacity="0.8"/>
+      <circle r="2" fill="var(--alarm)" style="offset-path: path('M 40 20 C 300 16, 560 15, 700 15'); animation: travel 2.2s linear infinite;"/>
+      <circle cx="705" cy="15" r="3.5" fill="none" stroke="var(--alarm)" class="halo"/>
+      <text x="730" y="20" fill="var(--alarm)" font-size="9" font-weight="700" font-family="var(--sans)">still hitting the wall · live</text>
+      <text x="46" y="12" fill="var(--ink-3)" font-size="8.5" font-family="var(--sans)">41 gates</text>
+    </svg>
+    <span class="un">▾ unfold the gauntlet</span>
+  </div>
+
+  <div class="livewrap">
+    <div class="filterbar">
+      <div class="ff"><label>Source — name, IP or CIDR</label><input placeholder="internal ▾"></div>
+      <button class="swap" aria-label="Swap source and destination filters">⇄</button>
+      <div class="ff"><label>Destination — name, IP or CIDR</label><input placeholder="any ▾"></div>
+      <div class="ff"><label>Chain</label><select><option>Any chain</option><option>input</option><option>forward</option><option>output</option><option>srcnat</option><option>dstnat</option></select></div>
+      <div class="ff small"><label>Port — number or service</label><input></div>
+      <div class="ff small"><label>Gate — number or rule</label><input></div>
+      <div class="fright"><button class="btn on">Autoscroll</button><button class="btn">Group</button><button class="btn">Presets ▾</button></div>
+    </div>
+    <table class="stream">
+      <thead><tr><th>time</th><th>chain</th><th>action</th><th>source</th><th></th><th>destination</th><th>proto/port</th><th>gate</th></tr></thead>
+      <tbody>
+        <tr><td class="t">14:02:11.482</td><td class="chain">forward</td><td><span class="act drop">DROP</span></td>
+          <td><span class="ld" style="background:var(--iot)"></span><span class="host">cam-porch</span><span class="ip">10.0.20.31</span></td>
+          <td class="arrow">→</td><td><span class="ld" style="background:var(--srv)"></span><span class="host">nas</span><span class="ip">10.0.40.10</span></td>
+          <td>tcp/445 <span class="cc">smb</span></td><td class="rule-c">#41 <span class="gatecol">default drop</span></td></tr>
+        <tr><td class="t">14:02:11.407</td><td class="chain">srcnat</td><td><span class="act nat">NAT</span></td>
+          <td><span class="ld" style="background:var(--lan)"></span><span class="host">phone-tom</span><span class="ip">10.0.10.34</span></td>
+          <td class="arrow">→</td><td><span class="host">142.250.187.206</span> <span class="cc">🇺🇸 US</span></td>
+          <td>udp/443 <span class="cc">quic</span></td><td class="rule-c">nat-wan</td></tr>
+        <tr><td class="t">14:02:10.951</td><td class="chain">input</td><td><span class="act drop">DROP</span></td>
+          <td><span class="host">185.220.101.34</span> <span class="cc">🇩🇪 DE</span></td>
+          <td class="arrow">→</td><td><span class="host">rb5009</span><span class="ip">203.0.113.7</span></td>
+          <td>tcp/8291 <span class="cc">winbox</span></td><td class="rule-c">#5 <span class="gatecol">wan-in-drop</span></td></tr>
+        <tr><td class="t">14:02:10.783</td><td class="chain">forward</td><td><span class="act acc">ACCEPT</span></td>
+          <td><span class="ld" style="background:var(--lan)"></span><span class="host">tom-desktop</span><span class="ip">10.0.10.21</span></td>
+          <td class="arrow">→</td><td><span class="ld" style="background:var(--srv)"></span><span class="host">nas</span><span class="ip">10.0.40.10</span></td>
+          <td>tcp/5001 <span class="cc">syncthing</span></td><td class="rule-c">#18 <span class="gatecol">lan-to-srv</span></td></tr>
+        <tr><td class="t">14:02:10.611</td><td class="chain">forward</td><td><span class="act acc">ACCEPT</span></td>
+          <td><span class="ld" style="background:var(--iot)"></span><span class="host">hue-bridge</span><span class="ip">10.0.20.14</span></td>
+          <td class="arrow">→</td><td><span class="ld" style="background:var(--srv)"></span><span class="host">pihole</span><span class="ip">10.0.40.53</span></td>
+          <td>udp/53 <span class="cc">dns</span></td><td class="rule-c">#12 <span class="gatecol">iot-dns-allow</span></td></tr>
+        <tr><td class="t">14:02:10.512</td><td class="chain">input</td><td><span class="act drop">DROP</span></td>
+          <td><span class="host">45.148.10.78</span> <span class="cc">🇳🇱 NL</span></td>
+          <td class="arrow">→</td><td><span class="host">rb5009</span><span class="ip">203.0.113.7</span></td>
+          <td>tcp/22 <span class="cc">ssh</span></td><td class="rule-c">#5 <span class="gatecol">wan-in-drop</span></td></tr>
+        <tr><td class="t">14:02:10.288</td><td class="chain">forward</td><td><span class="act drop">DROP</span></td>
+          <td><span class="ld" style="background:var(--guest)"></span><span class="host">guest-e8b2</span><span class="ip">10.0.30.17</span></td>
+          <td class="arrow">→</td><td><span class="ld" style="background:var(--lan)"></span><span class="host">tom-desktop</span><span class="ip">10.0.10.21</span></td>
+          <td>tcp/445 <span class="cc">smb</span></td><td class="rule-c">#31 <span class="gatecol">guest-isolation</span></td></tr>
+        <tr><td class="t">14:02:09.934</td><td class="chain">dstnat</td><td><span class="act nat">NAT</span></td>
+          <td><span class="host">84.9.112.55</span> <span class="cc">🇬🇧 GB</span></td>
+          <td class="arrow">→</td><td><span class="ld" style="background:var(--srv)"></span><span class="host">nas</span><span class="ip">10.0.40.10</span></td>
+          <td>tcp/443 <span class="cc">https</span></td><td class="rule-c">nat-wan-https</td></tr>
+        <tr><td class="t">14:02:09.856</td><td class="chain">forward</td><td><span class="act acc">ACCEPT</span></td>
+          <td><span class="ld" style="background:var(--lan)"></span><span class="host">laptop-anna</span><span class="ip">10.0.10.29</span></td>
+          <td class="arrow">→</td><td><span class="host">151.101.0.223</span> <span class="cc">🇺🇸 US</span></td>
+          <td>tcp/443 <span class="cc">https</span></td><td class="rule-c">#2 <span class="gatecol">established</span></td></tr>
+        <tr><td class="t">14:02:09.701</td><td class="chain">forward</td><td><span class="act drop">DROP</span></td>
+          <td><span class="ld" style="background:var(--iot)"></span><span class="host">cam-porch</span><span class="ip">10.0.20.31</span></td>
+          <td class="arrow">→</td><td><span class="host">47.246.129.8</span> <span class="cc">🇨🇳 CN</span></td>
+          <td>tcp/443 <span class="cc">https</span></td><td class="rule-c">#38 <span class="gatecol">iot-egress-drop</span></td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<!-- ============ SCENE 3 : THE GATES REPORT ============ -->
+<section class="scene" id="s3">
+  <div class="scene-tag">Scene 3 — the gates report: which gates work, which glow, which have never been touched.</div>
+  <div class="crumb">
+    <div class="wm">MIKRO<em>VIEW</em></div>
+    <h1>The gates <span class="here">· 41 · 3 watched · 1 dormant</span></h1>
+    <div class="sub">a firewall is only as honest as its unused rules are questioned</div>
+  </div>
+  <div class="lenses">
+    <span class="lens">Judgement</span><span class="lens">Policy</span><span class="lens">Coverage</span><span class="lens on">Flags<span class="ct">6</span></span><span class="lens on">Watch</span>
+  </div>
+
+  <div class="report" style="margin-top:110px">
+    <div class="rcard">
+      <h4>Working hardest — this hour</h4>
+      <div class="grow"><span class="n">#2</span><b>established/related</b><span class="v ok">✓ 109k · 91%</span>
+        <span class="why">the seen-before bulk — healthy; if this ever falls, everything below gets loud</span></div>
+      <div class="grow"><span class="n">#5</span><b>wan-in-drop</b><span class="v hot">✕ 1.4k/h ▲3.1×</span>
+        <span class="why">internet weather, worsening since 13:30 · WATCH holding: nothing unsolicited passes</span></div>
+      <div class="grow"><span class="n">#18</span><b>lan-to-srv</b><span class="v ok">✓ 18k</span></div>
+      <div class="grow"><span class="n">#41</span><b>default drop</b><span class="v hot">✕ 14 today — all one story</span>
+        <span class="why">everything here is by definition unplanned · today: cam-porch → nas :445 · open the case ▸</span></div>
+    </div>
+    <div class="rcard">
+      <h4>Never touched — the dormant gates</h4>
+      <div class="grow"><span class="n">#6</span><b>wg→srv allow</b><span class="v">0 · 30 d</span>
+        <span class="why">policy without traffic is a question: retire it, or is something supposed to be using it and isn't?</span></div>
+      <div class="grow"><span class="n">#27</span><b>guest-printer allow</b><span class="v">0 · 90 d</span>
+        <span class="why">the printer moved lanes in May — this gate guards a door nobody walks through</span></div>
+      <div class="grow"><span class="n">—</span><b>compose the retirement</b><span class="v" style="color:var(--brass)">print the command ▸</span>
+        <span class="why">mikroview drafts the removal; you paste it — it never touches the router</span></div>
+    </div>
+    <div class="rcard">
+      <h4>Watched gates · flags</h4>
+      <div class="grow"><span class="n">#5</span><b>inbound quiet</b><span class="v ok">HOLDING · 41 d</span></div>
+      <div class="grow"><span class="n">#38</span><b>iot egress cadence</b><span class="v hot">BROKEN 13:52</span>
+        <span class="why">cam-porch left its rtsp-only shape · the flag opened the case</span></div>
+      <div class="grow"><span class="n">◉</span><b>6 flags today</b><span class="v">4 at #5 · 1 at #38 · 1 at #41</span>
+        <span class="why">flags live on the gates where they fired — the report is the flag list</span></div>
+    </div>
+  </div>
+
+  <div class="ticker">
+    <div class="h"><span class="lab"><i></i>The stream · 34/s · every line names its gate</span><span class="lift">▲ lift to full live view</span></div>
+    <div class="trow" style="color:var(--ink)"><span class="t">14:02:11.482</span><span class="drop">DROP</span><span>cam-porch → nas :445 smb</span><span class="g">gate #41 · default drop</span></div>
+    <div class="trow"><span class="t">14:02:10.951</span><span class="drop">DROP</span><span>185.220.101.34 DE → rb5009 :8291</span><span class="g">gate #5 · wan-in-drop</span></div>
+    <div class="trow"><span class="t">14:02:10.783</span><span class="acc">ACC</span><span>tom-desktop → nas :5001</span><span class="g">gate #18 · lan-to-srv</span></div>
+  </div>
+</section>
+
+</body>
+</html>
