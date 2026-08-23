@@ -129,10 +129,16 @@ jobs:
     runs-on: ubuntu-latest
     # 15, not 10, because the fuzz step below is bounded by execution
     # count rather than wall-clock (see mikroview#391 and the comment on
-    # that step). A starved runner now makes the step slower instead of
-    # failing it spuriously, so the job needs room to absorb that: the
-    # whole job is normally ~2.5 minutes, and this survives a runner
-    # several times slower than usual without a false red.
+    # that step): a slow runner makes the step take longer rather than
+    # failing it, so the job needs room to absorb that.
+    #
+    # This margin is thinner than it looks, and #523 is open on it. The
+    # fuzz step intermittently drops to 0 execs/sec for 30-60s at a
+    # stretch; a normal job is ~2.5 minutes, a stalling one has been
+    # measured at 9, and one run exhausted the 15 and was killed with no
+    # crashing input and no reproducer. Do not read this number as
+    # comfortable headroom, and do not raise it as a reflex either --
+    # #523 is where the trade-off is being decided.
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -177,9 +183,14 @@ jobs:
       # svelte-check/TypeScript hold, #286). Each count is calibrated
       # just under what the previous 30s budget bought at four fuzz
       # workers -- roughly a GitHub-hosted runner -- measured at ~1.54M,
-      # ~0.98M and ~0.54M execs, so exploration is not reduced. A
-      # starved runner takes longer instead of failing, which is what
-      # the raised job timeout above pays for.
+      # ~0.98M and ~0.54M execs, so exploration is not reduced.
+      #
+      # What that property costs is wall-clock, and it is not free: a
+      # slow run takes longer rather than failing, but only up to the
+      # job timeout above, which one run has already hit. #523 tracks
+      # that -- read it before adjusting either the counts or the
+      # timeout, because the two are the same trade seen from opposite
+      # ends.
       - name: Fuzz the attacker-shaped-input parsers
         run: |
           go test ./internal/routeros/ -run FuzzParse -fuzz FuzzParse -fuzztime=1400000x
