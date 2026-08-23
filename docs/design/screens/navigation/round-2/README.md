@@ -57,7 +57,22 @@ docked · **s3** the controls close up (with the keyboard story) ·
 3. Carried from round 1: wordmark in the rail head — keep, or reserve
    it for login? (Docked already hides it.)
 
-## Owner verdicts
+## Owner verdicts — round 2 closed (2026-08-23)
 
-_Pending — recorded verbatim here when the batch returns; the running
-log lives on #518._
+> "The menu open icon should be much nicer, more interesting and
+> networking appropriate, it should be vertically centralised,
+> always. I like it in total though, but it would be nice to see mock
+> ups in both light and dark; you don't need to generate extra
+> content, just alternate for the screenshots. More work to be done
+> but this is acceptable for now. The arrow should restore persistent
+> state and you select that state from the footer."
+
+- **The model stands** ("acceptable for now" — more rounds to come).
+- **The handle is re-designed in round 3**: networking-appropriate
+  mark, vertically centred on the viewport, always.
+- **The drawer and its pin are dropped**: the handle restores the
+  persistent state; states are selected in the footer only.
+- **Round 3 shows every scene in light and dark** — same content,
+  alternate screenshots (token swap only; identity work stays #492's).
+- Wordmark: **keep for now**. The Expect-dot question was unclear —
+  re-asked in plainer words with round 3.
