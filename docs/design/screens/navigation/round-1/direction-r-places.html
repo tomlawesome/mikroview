@@ -1,0 +1,535 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mikroview navigation — Direction R: Places</title>
+<style>
+  /* ============================================================
+     DESIGN PASS (#518) — NAVIGATION (#486) — ROUND 1
+     DIRECTION R — "PLACES"
+
+     Round 4's implicit nav line grown honest: the things you
+     watch are top-level places — FALL, STREAM, FLAGS, WATCH —
+     and only the working drawers (Investigate, Admin) keep a
+     second level. The five-verb taxonomy dissolves: Detect and
+     Expect survive as the pages themselves. Flattest chrome of
+     the three; the cost is paid inside Flags, where the
+     machinery (Detectors) becomes a tab beside the alarms.
+     ============================================================ */
+  :root {
+    --void: #06080e;
+    --glass: rgba(15, 20, 34, 0.66);
+    --glass-2: rgba(8, 11, 20, 0.88);
+    --hair: rgba(160, 185, 230, 0.13);
+    --hair-2: rgba(160, 185, 230, 0.26);
+    --ink: #e9eefb; --ink-2: #97a4c4; --ink-3: #55628a;
+    --accent: #9db8e8;
+    --lan: #3987e5; --srv: #199e70; --iot: #c98500; --guest: #d76a9e;
+    --ok: #37b364; --alarm: #ff5470;
+    --acc: #5aa7f0; --drop: #e05252; --nat: #a08df0; --now: #e8b05a;
+    --sans: system-ui, -apple-system, "Segoe UI", sans-serif;
+    --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  }
+  * { box-sizing: border-box; margin: 0; }
+  html { scroll-behavior: smooth; }
+  body { background: var(--void); color: var(--ink); font: 13.5px/1.5 var(--sans); -webkit-font-smoothing: antialiased; }
+  .concept {
+    position: sticky; top: 0; z-index: 90; display: flex; gap: 16px; align-items: baseline;
+    padding: 8px 20px; background: rgba(2,3,7,0.95); border-bottom: 1px solid var(--hair);
+    font-size: 11px; color: var(--ink-3);
+  }
+  .concept b { color: var(--accent); letter-spacing: 0.1em; }
+  .concept a { color: var(--ink-2); text-decoration: none; margin-left: 12px; }
+  .scene { min-height: 100vh; position: relative; border-bottom: 1px solid var(--hair-2); overflow: hidden; padding-bottom: 30px; }
+  .scene-tag {
+    position: sticky; top: 33px; z-index: 80; text-align: center;
+    font-size: 10.5px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--ink-3);
+    padding: 6px 0; background: rgba(2,3,7,0.85);
+  }
+
+  .frame { position: relative; margin: 26px auto 0; width: min(1400px, 96%); border: 1px solid var(--hair-2); border-radius: 14px; overflow: hidden; background: var(--void); }
+  .masthead {
+    display: flex; align-items: center; gap: 26px; padding: 0 22px; height: 50px;
+    background: var(--glass); backdrop-filter: blur(10px); border-bottom: 1px solid var(--hair);
+    position: relative; z-index: 10;
+  }
+  .wm { font-size: 12px; font-weight: 700; letter-spacing: 0.24em; color: var(--ink-3); }
+  .wm em { color: var(--accent); font-style: normal; }
+  .places { display: flex; gap: 4px; align-items: center; }
+  .plc {
+    white-space: nowrap;
+    font-size: 10.5px; font-weight: 650; letter-spacing: 0.13em; text-transform: uppercase;
+    color: var(--ink-3); padding: 15px 12px 13px; border-bottom: 2px solid transparent; text-decoration: none; cursor: default;
+  }
+  .plc.on { color: var(--ink); border-bottom-color: var(--accent); }
+  .plc .ct { font-size: 9.5px; color: var(--void); background: var(--alarm); border-radius: 8px; padding: 1px 5px; margin-left: 6px; vertical-align: 1px; font-weight: 700; letter-spacing: 0; }
+  .gap { width: 1px; height: 18px; background: var(--hair-2); margin: 0 8px; }
+  .mast-right { margin-left: auto; display: flex; align-items: center; gap: 18px; }
+  .conn { font-size: 10.5px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--ink-3); }
+  .conn i { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--ok); margin-right: 7px; animation: pulse 2s ease-in-out infinite; }
+  @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.3; } }
+  .account { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--ink-2); }
+  .role { font-size: 9px; font-weight: 700; letter-spacing: 0.12em; color: var(--ink-3); border: 1px solid var(--hair-2); border-radius: 8px; padding: 1.5px 7px; text-transform: uppercase; }
+  .subline {
+    display: flex; gap: 2px; align-items: center; padding: 0 22px; height: 38px;
+    background: var(--glass-2); backdrop-filter: blur(10px); border-bottom: 1px solid var(--hair);
+    position: relative; z-index: 9;
+  }
+  .pg { font-size: 12px; font-weight: 550; color: var(--ink-3); padding: 9px 13px; text-decoration: none; cursor: default; border-bottom: 2px solid transparent; }
+  .pg.on { color: var(--ink); border-bottom-color: var(--accent); }
+  .pg.action { margin-left: auto; color: var(--accent); font-size: 11.5px; }
+  .pg.action::before { content: "⟳ "; }
+
+  .canvas { position: relative; min-height: 560px; }
+  .canvas.short { min-height: 420px; }
+  .crumb { padding: 22px 26px 0; position: relative; z-index: 6; }
+  .crumb .over { font-size: 10px; letter-spacing: 0.16em; text-transform: uppercase; color: var(--ink-3); }
+  .crumb h2 { font-size: 20px; font-weight: 550; letter-spacing: -0.01em; margin-top: 2px; }
+  .crumb h2 .dim { color: var(--ink-3); font-weight: 400; }
+  .crumb .ro { font-size: 10px; font-weight: 700; letter-spacing: 0.1em; color: var(--now); border: 1px solid rgba(232,176,90,0.4); border-radius: 8px; padding: 2px 8px; margin-left: 10px; vertical-align: 3px; }
+
+  .anno { position: absolute; z-index: 40; max-width: 300px; font-size: 11px; color: var(--ink-2); background: var(--glass-2); border: 1px solid var(--hair-2); border-left: 2px solid var(--accent); border-radius: 8px; padding: 9px 12px; backdrop-filter: blur(8px); }
+  .anno b { color: var(--accent); font-weight: 650; }
+  .anno.warn { border-left-color: var(--alarm); }
+  .anno.warn b { color: var(--alarm); }
+  .notes { display: flex; gap: 14px; align-items: stretch; margin: 14px auto 0; width: min(1400px, 96%); }
+  .notes .anno { position: static; flex: 1; max-width: none; }
+
+  .fallwrap { position: absolute; inset: 0; opacity: 0.85; }
+  .fallwrap svg { width: 100%; height: 100%; display: block; }
+  svg text { font-family: var(--sans); }
+  .blab { fill: var(--ink); font-size: 11px; font-weight: 650; }
+  .chip { font-size: 8px; font-weight: 700; letter-spacing: 0.08em; }
+  .ch-ok { fill: var(--ok); } .ch-bad { fill: var(--alarm); }
+  .gridline { stroke: var(--hair); stroke-width: 1; }
+  .tlab { fill: var(--ink-3); font-size: 9px; font-family: var(--mono); }
+  .fanno { fill: var(--ink-3); font-size: 9.5px; }
+  .nowline { stroke: var(--now); stroke-width: 1.6; }
+  .nowpulse { animation: nowp 2.4s ease-in-out infinite; }
+  @keyframes nowp { 0%,100% { opacity: 1; } 50% { opacity: 0.55; } }
+
+  .attention { position: absolute; left: 26px; right: 26px; bottom: 18px; z-index: 6; display: flex; gap: 10px; flex-wrap: wrap; }
+  .att { font-size: 10.5px; font-weight: 600; letter-spacing: 0.04em; color: var(--ink-2); background: var(--glass-2); border: 1px solid var(--hair-2); border-radius: 9px; padding: 5px 11px; }
+  .att i { display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: var(--ink-3); margin-right: 7px; vertical-align: 1px; }
+  .att.bad { color: var(--alarm); border-color: rgba(255,84,112,0.35); } .att.bad i { background: var(--alarm); }
+
+  .tabs { display: flex; flex-wrap: nowrap; overflow-x: auto; gap: 2px; margin: 18px 26px 0; border-bottom: 1px solid var(--hair-2); }
+  .tab { white-space: nowrap; font-size: 12px; font-weight: 550; color: var(--ink-3); padding: 8px 14px; border-bottom: 2px solid transparent; margin-bottom: -1px; cursor: default; }
+  .tab.on { color: var(--ink); border-bottom-color: var(--accent); }
+  .tab .ct { font-size: 9.5px; color: var(--void); background: var(--alarm); border-radius: 8px; padding: 1px 5px; margin-left: 6px; font-weight: 700; }
+  .tab .ct.quiet { background: none; color: var(--ink-3); border: 1px solid var(--hair-2); }
+  .tab.mach { margin-left: auto; }
+  .tab.mach::before { content: "⚙ "; color: var(--ink-3); }
+  .list { margin: 14px 26px; }
+  .rowi { display: flex; align-items: baseline; gap: 14px; padding: 11px 14px; border: 1px solid var(--hair); border-radius: 10px; margin-bottom: 8px; background: rgba(13,18,32,0.5); }
+  .rowi .sev { width: 8px; height: 8px; border-radius: 50%; background: var(--ink-3); align-self: center; flex: none; }
+  .rowi.alarm .sev { background: var(--alarm); box-shadow: 0 0 8px var(--alarm); }
+  .rowi .what { font-weight: 600; font-size: 13px; }
+  .rowi.alarm .what { color: var(--alarm); }
+  .rowi .who { font-family: var(--mono); font-size: 11.5px; color: var(--ink-2); }
+  .rowi .when { margin-left: auto; font-family: var(--mono); font-size: 11px; color: var(--ink-3); }
+  .rowi .lane { font-size: 9px; font-weight: 700; letter-spacing: 0.08em; padding: 1.5px 7px; border-radius: 7px; }
+
+  .table { margin: 16px 26px; border: 1px solid var(--hair); border-radius: 10px; overflow: hidden; }
+  .tr { display: grid; grid-template-columns: 1.2fr 1fr 0.9fr 1.4fr; padding: 9px 16px; border-bottom: 1px solid var(--hair); font-size: 12px; }
+  .tr:last-child { border-bottom: none; }
+  .tr.head { font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--ink-3); background: rgba(13,18,32,0.6); }
+  .tr .mono { font-family: var(--mono); color: var(--ink-2); }
+  .tr .lane { font-size: 9px; font-weight: 700; letter-spacing: 0.08em; padding: 1.5px 7px; border-radius: 7px; justify-self: start; align-self: center; }
+
+  .phones { display: flex; gap: 26px; justify-content: center; align-items: flex-start; margin: 26px 0 10px; flex-wrap: wrap; }
+  .phone { width: 300px; height: 560px; border: 1px solid var(--hair-2); border-radius: 22px; overflow: hidden; position: relative; background: var(--void); flex: none; }
+  .phone .cap { position: absolute; left: 0; right: 0; bottom: 0; z-index: 30; font-size: 10px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--ink-3); text-align: center; padding: 6px 0 8px; background: rgba(2,3,7,0.9); }
+  .m-head { display: flex; align-items: center; gap: 10px; padding: 0 14px; height: 44px; background: var(--glass); border-bottom: 1px solid var(--hair); position: relative; z-index: 10; }
+  .m-head .wm { font-size: 10.5px; }
+  .m-head .conn2 { margin-left: auto; }
+  .m-head .conn2 i { display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: var(--ok); }
+  .m-sub { font-size: 10px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--ink-3); padding: 8px 14px 0; }
+  .m-title { font-size: 17px; font-weight: 550; padding: 0 14px; }
+  .mplaces { display: flex; gap: 2px; overflow-x: auto; padding: 8px 10px 0; background: var(--glass-2); border-bottom: 1px solid var(--hair); position: relative; z-index: 9; }
+  .mplc { font-size: 9.5px; font-weight: 650; letter-spacing: 0.1em; text-transform: uppercase; color: var(--ink-3); padding: 4px 9px 8px; border-bottom: 2px solid transparent; white-space: nowrap; }
+  .mplc.on { color: var(--ink); border-bottom-color: var(--accent); }
+  .mplc .ct { font-size: 8.5px; color: var(--void); background: var(--alarm); border-radius: 7px; padding: 0.5px 4px; margin-left: 4px; font-weight: 700; }
+  .morerow { position: absolute; inset: 0; z-index: 20; background: rgba(3,4,9,0.94); backdrop-filter: blur(12px); padding: 14px 18px; }
+  .morerow .close { position: absolute; top: 12px; right: 14px; width: 30px; height: 30px; border: 1px solid var(--hair-2); border-radius: 8px; display: grid; place-items: center; color: var(--ink-2); }
+  .morerow .gsec { font-size: 10px; letter-spacing: 0.15em; text-transform: uppercase; color: var(--ink-3); margin: 16px 0 4px; }
+  .morerow .gpg { display: block; font-size: 15px; font-weight: 550; color: var(--ink-2); padding: 6px 0 6px 12px; border-left: 2px solid transparent; }
+  .morerow .gpg.on { color: var(--ink); border-left-color: var(--accent); }
+  .morerow .gpg.action { color: var(--accent); font-size: 13px; }
+
+  .panels { display: flex; gap: 26px; justify-content: center; margin: 26px auto 0; width: min(1400px, 96%); }
+  .panel { flex: 1; border: 1px solid var(--hair-2); border-radius: 14px; overflow: hidden; background: var(--void); position: relative; min-height: 430px; }
+  .panel .cap { position: absolute; left: 0; right: 0; bottom: 0; z-index: 30; font-size: 10.5px; color: var(--ink-2); padding: 9px 14px; background: rgba(2,3,7,0.92); border-top: 1px solid var(--hair); }
+  .panel .cap b { color: var(--accent); }
+  .mini-mast { display: flex; flex-wrap: nowrap; align-items: center; gap: 6px; padding: 0 14px; height: 40px; background: var(--glass); border-bottom: 1px solid var(--hair); }
+  .mini-mast .wm { font-size: 9.5px; }
+  .mini-mast .plc { padding: 12px 6px 10px; font-size: 8px; }
+  .banner { background: rgba(255,84,112,0.12); border-bottom: 1px solid rgba(255,84,112,0.4); color: var(--alarm); font-size: 11px; padding: 7px 14px; }
+  .banner b { font-weight: 700; }
+  .modal-veil { position: absolute; inset: 0; background: rgba(3,4,9,0.72); z-index: 8; display: grid; place-items: center; }
+  .modal { width: 78%; background: #0c111e; border: 1px solid var(--hair-2); border-radius: 14px; padding: 18px 20px 16px; box-shadow: 0 18px 60px rgba(0,0,0,0.6); }
+  .modal .steps { display: flex; gap: 6px; margin-bottom: 12px; }
+  .modal .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--ink-3); }
+  .modal .dot.on { background: var(--accent); }
+  .modal h3 { font-size: 15px; font-weight: 600; margin-bottom: 6px; }
+  .modal p { font-size: 11.5px; color: var(--ink-2); }
+  .modal .x { float: right; color: var(--ink-3); font-size: 13px; }
+  .ghostrow { height: 11px; border-radius: 5px; background: rgba(151,164,196,0.08); margin: 10px 26px; }
+
+  .specnote { margin: 22px auto 8px; width: min(1400px, 96%); font-size: 11.5px; color: var(--ink-2); }
+  .specnote b { color: var(--accent); }
+  @media (prefers-reduced-motion: reduce) { * { animation: none !important; } }
+</style>
+</head>
+<body>
+
+<div class="concept"><b>DIRECTION R — PLACES</b> navigation round 1 · #486 under #518 · the watched things top-level, the drawers behind them
+  <span style="margin-left:auto"><a href="direction-p-masthead.html">← P — Masthead</a><a href="direction-q-rail.html">← Q — Rail</a><a href="index.html">index</a></span>
+</div>
+
+<!-- ================= SCENE 1 : THE LANDING ================= -->
+<section class="scene" id="s1">
+  <div class="scene-tag">Scene 1 — the landing. One line of chrome, 50px: the places, then the drawers. The fall owns the rest.</div>
+  <div class="frame">
+    <div class="masthead" role="navigation" aria-label="Navigation">
+      <span class="wm">MIKRO<em>VIEW</em></span>
+      <span class="places">
+        <span class="plc on">The fall</span>
+        <span class="plc">Stream</span>
+        <span class="plc">Flags<span class="ct">6</span></span>
+        <span class="plc">Watch</span>
+        <span class="gap"></span>
+        <span class="plc">Investigate</span>
+        <span class="plc">Admin</span>
+      </span>
+      <span class="mast-right">
+        <span class="conn"><i></i>receiving</span>
+        <span class="account">tom <span class="role">admin</span></span>
+      </span>
+    </div>
+    <div class="canvas">
+      <div class="fallwrap">
+        <svg viewBox="0 0 1360 600" role="img" aria-label="The ratified fall, dimmed as context: eight channels, the live edge, the brink at 14:02:11, the red current at tcp/445 since 13:52.">
+          <g>
+            <text class="blab" x="82" y="26">WAN · IN</text><text class="chip ch-ok" x="82" y="40">WATCH ✓ QUIET 41 D</text>
+            <rect x="76" y="46" width="150" height="3" rx="1.5" fill="var(--ink-3)"/>
+            <text class="blab" x="242" y="26">LAN → WAN</text><text class="chip ch-ok" x="242" y="40">SHAPE ✓ 80/443/853</text>
+            <rect x="236" y="46" width="150" height="3" rx="1.5" fill="var(--lan)"/>
+            <text class="blab" x="402" y="26">LAN → SRV</text>
+            <rect x="396" y="46" width="150" height="3" rx="1.5" fill="var(--srv)"/>
+            <text class="blab" x="562" y="26">GUEST → WAN</text><text class="chip ch-bad" x="562" y="40">UNCHARTED — NO GAUGE</text>
+            <rect x="556" y="46" width="150" height="3" rx="1.5" fill="var(--guest)"/>
+            <text class="blab" x="722" y="26">IOT → WAN</text><text class="chip ch-bad" x="722" y="40">WATCH BROKEN 13:52</text>
+            <rect x="716" y="46" width="150" height="3" rx="1.5" fill="var(--iot)"/>
+            <text class="blab" x="882" y="26">IOT → SRV</text>
+            <rect x="876" y="46" width="150" height="3" rx="1.5" fill="var(--iot)"/>
+            <text class="blab" x="1042" y="26">IOT → LAN</text><text class="chip ch-bad" x="1042" y="40">ALARM FIRED 13:52</text>
+            <rect x="1036" y="46" width="150" height="3" rx="1.5" fill="var(--iot)"/>
+            <text class="blab" x="1202" y="26">WG</text>
+            <rect x="1196" y="46" width="150" height="3" rx="1.5" fill="var(--ink-3)"/>
+          </g>
+          <line class="nowline nowpulse" x1="76" y1="86" x2="1346" y2="86"/>
+          <text x="80" y="102" style="fill:var(--now); font-size:10px; font-weight:700">THE BRINK · NOW · 14:02:11</text>
+          <g>
+            <line class="gridline" x1="76" y1="190" x2="1346" y2="190"/><text class="tlab" x="62" y="193" text-anchor="end">14:00</text>
+            <line class="gridline" x1="76" y1="320" x2="1346" y2="320"/><text class="tlab" x="62" y="323" text-anchor="end">13:57</text>
+            <text class="tlab" x="62" y="463" text-anchor="end" style="fill:var(--drop); font-weight:700">13:52 ◉</text>
+            <line class="gridline" x1="76" y1="580" x2="1346" y2="580"/><text class="tlab" x="62" y="583" text-anchor="end">13:47</text>
+          </g>
+          <g>
+            <g stroke="var(--drop)" stroke-width="1.4" opacity="0.6">
+              <line x1="104" y1="90" x2="104" y2="580" stroke-dasharray="3 32"/>
+              <line x1="136" y1="94" x2="136" y2="580" stroke-dasharray="3 40"/>
+              <line x1="168" y1="92" x2="168" y2="580" stroke-dasharray="3 25"/>
+              <line x1="200" y1="96" x2="200" y2="580" stroke-dasharray="2 60"/>
+            </g>
+            <rect x="266" y="90" width="48" height="490" fill="rgba(90,167,240,0.10)"/>
+            <line x1="290" y1="90" x2="290" y2="580" stroke="var(--acc)" stroke-width="2.4" opacity="0.8"/>
+            <line x1="330" y1="90" x2="330" y2="580" stroke="var(--acc)" stroke-width="1.2" stroke-dasharray="8 14" opacity="0.55"/>
+            <line x1="460" y1="90" x2="460" y2="580" stroke="var(--acc)" stroke-width="2" opacity="0.7"/>
+            <rect x="556" y="90" width="150" height="490" fill="rgba(85,98,138,0.06)"/>
+            <text class="fanno" x="631" y="330" text-anchor="middle">uncharted — nothing is gauged,</text>
+            <text class="fanno" x="631" y="343" text-anchor="middle">not nothing flowing</text>
+            <line x1="762" y1="90" x2="762" y2="580" stroke="var(--acc)" stroke-width="1.8" stroke-dasharray="14 9" opacity="0.65"/>
+            <line x1="922" y1="90" x2="922" y2="580" stroke="var(--acc)" stroke-width="1.8" stroke-dasharray="4 14" opacity="0.75"/>
+            <rect x="1036" y="90" width="150" height="373" fill="rgba(224,82,82,0.05)"/>
+            <line x1="1104" y1="90" x2="1104" y2="120" stroke="var(--drop)" stroke-width="2.6" class="nowpulse"/>
+            <line x1="1104" y1="120" x2="1104" y2="463" stroke="var(--drop)" stroke-width="2.6" stroke-dasharray="6 22"/>
+            <circle cx="1104" cy="463" r="5" fill="var(--void)" stroke="var(--drop)" stroke-width="1.4"/>
+            <text class="fanno" x="1114" y="440" style="fill:var(--drop)">◉ first water in 41 days</text>
+            <line x1="76" y1="463" x2="1346" y2="463" stroke="rgba(224,82,82,0.35)" stroke-width="1"/>
+          </g>
+        </svg>
+      </div>
+      <div class="attention">
+        <span class="att bad"><i></i>NEW CURRENT — iot → lan, since 13:52</span>
+        <span class="att bad"><i></i>WATCH BROKEN — iot egress cadence, 13:52</span>
+        <span class="att"><i></i>UNCHARTED — guest → wan, no gauge</span>
+        <span class="att"><i></i>every other channel sounds like itself</span>
+      </div>
+    </div>
+  </div>
+  <div class="notes">
+      <div class="anno">
+        <b>The watched things are the nav.</b> Fall, Stream, Flags, Watch: what you look at, top-level, one keystroke apart. The hairline gap separates them from the two drawers you occasionally open. On places there is no second chrome row at all — 50px total.
+      </div>
+      <div class="anno">
+        <b>Map joins the places at v0.5.0</b> — second slot, after The fall. Reserved in the spec, absent from the DOM until then. Nav never links to a surface that does not exist yet.
+      </div>
+  </div>
+  <p class="specnote"><b>The taxonomy cost, owned:</b> the five verbs (Live · Investigate · Detect · Expect · Admin) stop being nav — Detect and Expect survive as Flags and Watch themselves. If the verbs are how the owner thinks about the product, P or Q keeps them; R bets the *things* are how the product is actually reached.</p>
+</section>
+
+<!-- ================= SCENE 2 : FLAGS, WITH ITS MACHINERY ================= -->
+<section class="scene" id="s2">
+  <div class="scene-tag">Scene 2 — Flags as a place. Exclusions AND Detectors fold in as tabs: the alarms and their machinery, one address.</div>
+  <div class="frame">
+    <div class="masthead">
+      <span class="wm">MIKRO<em>VIEW</em></span>
+      <span class="places">
+        <span class="plc">The fall</span>
+        <span class="plc">Stream</span>
+        <span class="plc on">Flags<span class="ct">6</span></span>
+        <span class="plc">Watch</span>
+        <span class="gap"></span>
+        <span class="plc">Investigate</span>
+        <span class="plc">Admin</span>
+      </span>
+      <span class="mast-right">
+        <span class="conn"><i></i>receiving</span>
+        <span class="account">tom <span class="role">admin</span></span>
+      </span>
+    </div>
+    <div class="canvas short">
+      <div class="crumb">
+        <h2>Flags <span class="dim">· 6 open · newest first</span></h2>
+      </div>
+      <div class="tabs" role="tablist" aria-label="Flags views">
+        <span class="tab on">Open<span class="ct">6</span></span>
+        <span class="tab">Resolved</span>
+        <span class="tab">Exclusions<span class="ct quiet">2</span></span>
+        <span class="tab mach">Detectors</span>
+      </div>
+      <div class="list">
+        <div class="rowi alarm">
+          <span class="sev"></span>
+          <span class="what">New talker on a silent boundary</span>
+          <span class="who">cam-porch → nas · tcp/445 · every 64 s, all refused</span>
+          <span class="lane" style="color:var(--iot); border:1px solid var(--iot)">IOT → LAN</span>
+          <span class="when">13:52 · today</span>
+        </div>
+        <div class="rowi alarm">
+          <span class="sev"></span>
+          <span class="what">Egress cadence broken</span>
+          <span class="who">cam-porch → wan · the 300 s heartbeat stumbled</span>
+          <span class="lane" style="color:var(--iot); border:1px solid var(--iot)">IOT → WAN</span>
+          <span class="when">13:52 · today</span>
+        </div>
+        <div class="rowi">
+          <span class="sev"></span>
+          <span class="what">Inbound pressure rising</span>
+          <span class="who">wan · :8291 knocks ▲3.1× since 13:30</span>
+          <span class="lane" style="color:var(--ink-3); border:1px solid var(--hair-2)">WAN · IN</span>
+          <span class="when">13:41 · today</span>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="notes">
+      <div class="anno warn">
+        <b>The honest cost lives here.</b> Detectors — the machinery — becomes a right-shelved tab beside the alarms it drives, marked ⚙ as not-a-view. Everything about detection is one address, but a tab row now mixes views of the data with configuration of it. This is the trade R makes for its flat top line.
+      </div>
+      <div class="anno">
+        <b>Watch works the same way:</b> Watchlist · Suggestions · Matches as tabs of one place. Both merges the owner already decided (#385) — R just spends no section name on them.
+      </div>
+  </div>
+  <p class="specnote"><b>No crumb "over" line on places</b> — a place's name is already lit in the masthead; repeating it above the title would say Flags twice in 60px. Drawer pages (scene 3) keep the over-line, because there the masthead names the drawer, not the page.</p>
+</section>
+
+<!-- ================= SCENE 3 : ADMIN AS A VIEWER ================= -->
+<section class="scene" id="s3">
+  <div class="scene-tag">Scene 3 — a drawer, as a viewer. Admin opens a sub-line like P's; sam sees pages, no action, and the read-only chip.</div>
+  <div class="frame">
+    <div class="masthead">
+      <span class="wm">MIKRO<em>VIEW</em></span>
+      <span class="places">
+        <span class="plc">The fall</span>
+        <span class="plc">Stream</span>
+        <span class="plc">Flags<span class="ct">6</span></span>
+        <span class="plc">Watch</span>
+        <span class="gap"></span>
+        <span class="plc">Investigate</span>
+        <span class="plc on">Admin</span>
+      </span>
+      <span class="mast-right">
+        <span class="conn"><i></i>receiving</span>
+        <span class="account">sam <span class="role">viewer</span></span>
+      </span>
+    </div>
+    <div class="subline" role="navigation" aria-label="Pages in Admin">
+      <span class="pg">Users</span>
+      <span class="pg">Tokens</span>
+      <span class="pg">Fleet</span>
+      <span class="pg on">Entities</span>
+    </div>
+    <div class="canvas short">
+      <div class="crumb">
+        <div class="over">Admin</div>
+        <h2>Entities <span class="dim">· 23 named hosts</span><span class="ro">READ-ONLY — ADMINS EDIT</span></h2>
+      </div>
+      <div class="table">
+        <div class="tr head"><span>Name</span><span>Address</span><span>Lane</span><span>Named from</span></div>
+        <div class="tr"><span>nas</span><span class="mono">10.0.20.4</span><span class="lane" style="color:var(--srv); border:1px solid var(--srv)">SRV</span><span class="mono">your label</span></div>
+        <div class="tr"><span>cam-porch</span><span class="mono">10.0.40.23</span><span class="lane" style="color:var(--iot); border:1px solid var(--iot)">IOT</span><span class="mono">DHCP lease</span></div>
+        <div class="tr"><span>tom-desktop</span><span class="mono">10.0.10.2</span><span class="lane" style="color:var(--lan); border:1px solid var(--lan)">LAN</span><span class="mono">DNS static</span></div>
+      </div>
+    </div>
+  </div>
+  <div class="notes">
+      <div class="anno">
+        <b>Drawers behave like P's sections:</b> a sub-line of pages appears only when a drawer is open, so the flat top line stays flat on the places. For admins, "⟳ Run setup…" sits at this sub-line's right end; for sam it does not render at all.
+      </div>
+  </div>
+  <p class="specnote"><b>Same #490 grammar in every direction:</b> visibility for all, edit affordances only where they act, read-only declared once in the page header — in words, not in grey.</p>
+</section>
+
+<!-- ================= SCENE 4 : SMALL SCREEN ================= -->
+<section class="scene" id="s4">
+  <div class="scene-tag">Scene 4 — small screens. The places line scrolls horizontally under the wordmark; drawers open as a sheet.</div>
+  <div class="phones">
+    <div class="phone">
+      <div class="m-head">
+        <span class="wm">MIKRO<em>VIEW</em></span>
+        <span class="conn2"><i></i></span>
+      </div>
+      <div class="mplaces">
+        <span class="mplc on">The fall</span>
+        <span class="mplc">Stream</span>
+        <span class="mplc">Flags<span class="ct">6</span></span>
+        <span class="mplc">Watch</span>
+        <span class="mplc">Investigate</span>
+        <span class="mplc">Admin</span>
+      </div>
+      <div class="fallwrap" style="top: 78px; opacity: 0.75;">
+        <svg viewBox="0 0 300 460" aria-hidden="true">
+          <line class="nowline nowpulse" x1="10" y1="30" x2="290" y2="30"/>
+          <text x="12" y="20" style="fill:var(--now); font-size:8px; font-weight:700">THE BRINK · 14:02:11</text>
+          <g stroke="var(--drop)" stroke-width="1.2" opacity="0.6">
+            <line x1="26" y1="34" x2="26" y2="440" stroke-dasharray="3 30"/>
+            <line x1="44" y1="36" x2="44" y2="440" stroke-dasharray="2 44"/>
+          </g>
+          <line x1="86" y1="34" x2="86" y2="440" stroke="var(--acc)" stroke-width="2.2" opacity="0.8"/>
+          <rect x="150" y="34" width="52" height="406" fill="rgba(85,98,138,0.07)"/>
+          <line x1="238" y1="34" x2="238" y2="60" stroke="var(--drop)" stroke-width="2.4" class="nowpulse"/>
+          <line x1="238" y1="60" x2="238" y2="320" stroke="var(--drop)" stroke-width="2.4" stroke-dasharray="5 18"/>
+          <circle cx="238" cy="320" r="4" fill="var(--void)" stroke="var(--drop)" stroke-width="1.3"/>
+          <text x="160" y="344" style="fill:var(--drop); font-size:8px">◉ 13:52 — first in 41 days</text>
+        </svg>
+      </div>
+      <div class="cap">A · places scroll; the alarm badge stays visible</div>
+    </div>
+    <div class="phone">
+      <div class="m-head">
+        <span class="wm">MIKRO<em>VIEW</em></span>
+        <span class="conn2"><i></i></span>
+      </div>
+      <div class="morerow" role="dialog" aria-label="Admin">
+        <span class="close">✕</span>
+        <div class="gsec">Admin</div>
+        <span class="gpg">Users</span>
+        <span class="gpg">Tokens</span>
+        <span class="gpg">Fleet</span>
+        <span class="gpg on">Entities</span>
+        <span class="gpg action">⟳ Run setup…</span>
+      </div>
+      <div class="cap">B · a drawer opens as the house sheet</div>
+    </div>
+    <div class="phone">
+      <div class="m-head">
+        <span class="wm">MIKRO<em>VIEW</em></span>
+        <span class="conn2"><i></i></span>
+      </div>
+      <div class="mplaces">
+        <span class="mplc">The fall</span>
+        <span class="mplc">Stream</span>
+        <span class="mplc on">Flags<span class="ct">6</span></span>
+        <span class="mplc">Watch</span>
+        <span class="mplc">Investigate</span>
+        <span class="mplc">Admin</span>
+      </div>
+      <div class="m-title" style="padding-top: 10px;">Flags <span style="color:var(--ink-3); font-weight:400">· 6 open</span></div>
+      <div class="tabs" style="margin: 10px 14px 0;">
+        <span class="tab on" style="font-size:11px; padding: 7px 10px;">Open<span class="ct">6</span></span>
+        <span class="tab" style="font-size:11px; padding: 7px 10px;">Resolved</span>
+        <span class="tab" style="font-size:11px; padding: 7px 10px;">Exclusions</span>
+        <span class="tab" style="font-size:11px; padding: 7px 10px;">⚙ Detectors</span>
+      </div>
+      <div class="list" style="margin: 10px 14px;">
+        <div class="rowi alarm" style="flex-wrap: wrap; gap: 6px;">
+          <span class="sev"></span>
+          <span class="what" style="font-size:12px">New talker on a silent boundary</span>
+          <span class="who" style="font-size:10px; width:100%; padding-left:22px;">cam-porch → nas · tcp/445 · 13:52</span>
+        </div>
+        <div class="ghostrow" style="margin: 8px 0; width: 90%"></div>
+      </div>
+      <div class="cap">C · a place: tabs scroll, same order as desktop</div>
+    </div>
+  </div>
+  <p class="specnote" style="text-align:center"><b>One pattern, not two:</b> places are always the horizontal line (it scrolls when narrow); drawers are always a sheet. Nothing moves between patterns as the screen shrinks, so muscle memory survives rotation.</p>
+</section>
+
+<!-- ================= SCENE 5 : THE STATES ================= -->
+<section class="scene" id="s5">
+  <div class="scene-tag">Scene 5 — the chrome's own states: first run, connection lost, and v0.4.0 before the map exists.</div>
+  <div class="panels">
+    <div class="panel">
+      <div class="mini-mast">
+        <span class="wm">MIKRO<em>VIEW</em></span>
+        <span class="places">
+          <span class="plc on">The fall</span><span class="plc">Stream</span><span class="plc">Flags</span><span class="plc">Watch</span><span class="gap"></span><span class="plc">Investigate</span><span class="plc">Admin</span>
+        </span>
+      </div>
+      <div class="ghostrow" style="margin-top: 26px"></div>
+      <div class="ghostrow" style="width: 70%"></div>
+      <div class="ghostrow" style="width: 55%"></div>
+      <div class="modal-veil">
+        <div class="modal">
+          <span class="x">✕</span>
+          <div class="steps"><span class="dot on"></span><span class="dot"></span><span class="dot"></span><span class="dot"></span><span class="dot"></span></div>
+          <h3>Set up mikroview</h3>
+          <p>Point your router's log stream here. MikroView still never connects to your router.</p>
+        </div>
+      </div>
+      <div class="cap"><b>First run.</b> Shell behind the wizard (#487); no badge on Flags yet. Close early and every empty state points to Admin ▸ Run setup….</div>
+    </div>
+    <div class="panel">
+      <div class="mini-mast">
+        <span class="wm">MIKRO<em>VIEW</em></span>
+        <span class="places">
+          <span class="plc on">The fall</span><span class="plc">Stream</span><span class="plc">Flags</span><span class="plc">Watch</span><span class="gap"></span><span class="plc">Investigate</span><span class="plc">Admin</span>
+        </span>
+        <span class="mast-right"><span class="conn" title="Connection lost" style="color:var(--alarm)"><i style="background:var(--alarm); animation:none; margin-right:0"></i></span></span>
+      </div>
+      <div class="banner"><b>Connection lost 14:02:11</b> — showing what had arrived. Reconnecting…</div>
+      <div class="ghostrow" style="margin-top: 18px"></div>
+      <div class="ghostrow" style="width: 80%"></div>
+      <div class="cap"><b>Connection lost.</b> Dot to alarm, banner under the masthead, nav fully operable, the fall holds its last brink time rather than faking liveness.</div>
+    </div>
+    <div class="panel">
+      <div class="mini-mast">
+        <span class="wm">MIKRO<em>VIEW</em></span>
+        <span class="places">
+          <span class="plc on">The fall</span><span class="plc">Stream</span><span class="plc">Flags</span><span class="plc">Watch</span><span class="gap"></span><span class="plc">Investigate</span><span class="plc">Admin</span>
+        </span>
+      </div>
+      <div class="ghostrow" style="margin-top: 26px"></div>
+      <div class="ghostrow" style="width: 66%"></div>
+      <div class="cap"><b>Before the map (v0.4.0).</b> Exactly what is drawn above — Map simply is not there yet. At v0.5.0 it appears between The fall and Stream. Same rule holds Lookback out of Investigate's drawer until built. No stubs.</div>
+    </div>
+  </div>
+  <p class="specnote" style="text-align:center">Loading is the shell plus ghost rows — never a spinner page; error states name the failing thing in words and keep the chrome alive.</p>
+</section>
+
+</body>
+</html>
