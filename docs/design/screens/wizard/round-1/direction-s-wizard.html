@@ -1,0 +1,502 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mikroview wizard — round 1 — S: the observed setup</title>
+<style>
+  /* ============================================================
+     DESIGN PASS (#518) — WIZARD AS MODAL (#487) — ROUND 1
+     S — THE OBSERVED SETUP
+
+     The wizard becomes a modal over the ratified shell (#486's
+     DESIGN.md, carried forward verbatim). The design idea: every
+     check the wizard runs is an OBSERVATION — mikroview never
+     connects to the router — so each step is a claim about what
+     has arrived. Waiting, arrived, and forced-past-and-recorded
+     are the three honest states, and the modal wears them openly.
+     Flow model is owner-recorded on #487: steps with back/next/
+     skip, explicit close only, forced-past validations recorded,
+     relaunch from Admin ▸ Run setup….
+     ============================================================ */
+  :root {
+    --canvas: #1b2340;   /* demo page behind the frames — navy, never the app surface */
+    --void: #06080e;
+    --glass: rgba(15, 20, 34, 0.66);
+    --glass-2: rgba(8, 11, 20, 0.88);
+    --hair: rgba(160, 185, 230, 0.13);
+    --hair-2: rgba(160, 185, 230, 0.26);
+    --ink: #e9eefb; --ink-2: #97a4c4; --ink-3: #55628a;
+    --accent: #9db8e8;
+    --lan: #3987e5; --srv: #199e70; --iot: #c98500; --guest: #d76a9e;
+    --ok: #37b364; --alarm: #ff5470;
+    --acc: #5aa7f0; --drop: #e05252; --nat: #a08df0; --now: #e8b05a;
+    --warn: #e8b05a;
+    --sans: system-ui, -apple-system, "Segoe UI", sans-serif;
+    --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  }
+  * { box-sizing: border-box; margin: 0; }
+  html { scroll-behavior: smooth; }
+  body { background: var(--canvas); color: var(--ink); font: 13.5px/1.5 var(--sans); -webkit-font-smoothing: antialiased; }
+  .concept {
+    position: sticky; top: 0; z-index: 90; display: flex; gap: 16px; align-items: baseline;
+    padding: 8px 20px; background: rgba(2,3,7,0.95); border-bottom: 1px solid var(--hair);
+    font-size: 11px; color: var(--ink-3);
+  }
+  .concept b { color: var(--accent); letter-spacing: 0.1em; }
+  .concept a { color: var(--ink-2); text-decoration: none; margin-left: 12px; }
+  .scene { min-height: 100vh; position: relative; border-bottom: 1px solid var(--hair-2); overflow: hidden; padding-bottom: 30px; }
+  .scene-tag {
+    position: sticky; top: 33px; z-index: 80; text-align: center;
+    font-size: 10.5px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--ink-3);
+    padding: 6px 0; background: rgba(2,3,7,0.85);
+  }
+
+  /* ---- frames (round-5 pattern) ---- */
+  .row { display: flex; gap: 24px; justify-content: center; align-items: stretch; margin: 26px auto 0; width: min(1460px, 97%); }
+  .frame { position: relative; border: 1px solid var(--hair-2); border-radius: 14px; overflow: hidden; background: var(--void); flex: 1; min-height: 640px; display: flex; }
+  .frame .cap { position: absolute; left: 0; right: 0; bottom: 0; z-index: 30; font-size: 10.5px; color: var(--ink-2); padding: 9px 14px; background: rgba(2,3,7,0.92); border-top: 1px solid var(--hair); }
+  .frame .cap b { color: var(--accent); }
+  .frame .rail { padding-bottom: 110px; }
+  .frame.wide { flex: none; width: min(1460px, 97%); margin: 26px auto 0; display: flex; min-height: 680px; }
+
+  /* ---- the ratified rail, carried forward verbatim from Q ---- */
+  .rail {
+    width: 216px; flex: none; background: var(--glass-2); border-right: 1px solid var(--hair);
+    display: flex; flex-direction: column; padding: 14px 0 10px; position: relative; z-index: 10;
+    backdrop-filter: blur(10px);
+  }
+  .rail .wm { font-size: 11px; font-weight: 700; letter-spacing: 0.24em; color: var(--ink-3); padding: 0 16px 3px; }
+  .rail .wm em { color: var(--accent); font-style: normal; }
+  .rail .conn { font-size: 9.5px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--ink-3); padding: 0 16px 8px; }
+  .rail .conn i { display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: var(--ok); margin-right: 6px; animation: pulse 2s ease-in-out infinite; }
+  .rail .conn i.idle { background: var(--ink-3); animation: none; }
+  @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.3; } }
+  .gsec { font-size: 9px; letter-spacing: 0.16em; text-transform: uppercase; color: var(--ink-3); padding: 11px 16px 2px; font-weight: 650; }
+  .gpg {
+    display: flex; align-items: center; gap: 9px; font-size: 12px; font-weight: 550; color: var(--ink-2);
+    padding: 5px 16px 5px 14px; border-left: 2px solid transparent; text-decoration: none; cursor: default; position: relative;
+  }
+  .gpg .ic { width: 15px; text-align: center; color: var(--ink-3); font-size: 12px; flex: none; }
+  .gpg.on { color: var(--ink); border-left-color: var(--accent); background: rgba(157,184,232,0.06); }
+  .gpg.on .ic { color: var(--accent); }
+  .gpg .ct { font-size: 9px; color: var(--void); background: var(--alarm); border-radius: 8px; padding: 1px 5px; margin-left: auto; font-weight: 700; }
+  .gpg.action { color: var(--accent); font-size: 11px; margin-top: 2px; }
+  .rail .foot { margin-top: auto; padding: 10px 16px 0; border-top: 1px solid var(--hair); display: flex; align-items: center; gap: 7px; font-size: 11.5px; color: var(--ink-2); }
+  .role { font-size: 8.5px; font-weight: 700; letter-spacing: 0.12em; color: var(--ink-3); border: 1px solid var(--hair-2); border-radius: 8px; padding: 1px 6px; text-transform: uppercase; }
+  .rbtn { color: var(--ink-3); font-size: 12px; border: 1px solid var(--hair-2); border-radius: 6px; width: 22px; height: 22px; display: grid; place-items: center; flex: none; }
+  .rbtn.first { margin-left: auto; }
+
+  .main { flex: 1; position: relative; min-width: 0; }
+  .crumb { padding: 20px 24px 0; position: relative; z-index: 6; }
+  .crumb .over { font-size: 10px; letter-spacing: 0.16em; text-transform: uppercase; color: var(--ink-3); }
+  .crumb h2 { font-size: 19px; font-weight: 550; margin-top: 2px; }
+  .crumb h2 .dim { color: var(--ink-3); font-weight: 400; }
+  .ghostrow { height: 11px; border-radius: 5px; background: rgba(151,164,196,0.08); margin: 10px 24px; }
+
+  /* first-run empty state on a page behind/after the wizard */
+  .emptystate { margin: 60px auto 0; width: min(430px, 80%); text-align: center; position: relative; z-index: 6; }
+  .emptystate .big { font-size: 15px; font-weight: 600; color: var(--ink-2); }
+  .emptystate p { font-size: 12px; color: var(--ink-3); margin-top: 8px; }
+  .emptystate p b { color: var(--accent); font-weight: 600; }
+  .emptystate .record { display: inline-block; margin-top: 14px; font-size: 10.5px; color: var(--warn); border: 1px solid rgba(232,176,90,0.4); border-radius: 8px; padding: 4px 10px; }
+
+  /* ---- the modal ---- */
+  .veil { position: absolute; inset: 0; background: rgba(3, 5, 10, 0.62); z-index: 20; backdrop-filter: blur(2.5px); }
+  .wiz {
+    position: absolute; z-index: 25; left: 50%; top: 50%; transform: translate(-50%, -50%);
+    width: min(940px, 94%); max-height: 92%; display: flex; flex-direction: column;
+    background: rgba(10, 14, 24, 0.97); border: 1px solid var(--hair-2); border-radius: 14px;
+    box-shadow: 0 30px 80px rgba(0,0,0,0.6);
+  }
+  .wiz .whead { display: flex; align-items: baseline; gap: 12px; padding: 18px 24px 12px; border-bottom: 1px solid var(--hair); }
+  .wiz .whead .step { font-size: 10.5px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--ink-3); font-weight: 650; }
+  .wiz .whead h3 { font-size: 17.5px; font-weight: 600; }
+  .wiz .whead .x { margin-left: auto; align-self: center; width: 24px; height: 24px; border: 1px solid var(--hair-2); border-radius: 7px; display: grid; place-items: center; color: var(--ink-2); font-size: 12px; }
+  .wbody { display: flex; min-height: 0; flex: 1; }
+  .wsteps { width: 224px; flex: none; border-right: 1px solid var(--hair); padding: 14px 0; }
+  .ws { display: flex; gap: 9px; align-items: baseline; padding: 8px 18px; font-size: 12.5px; color: var(--ink-3); border-left: 2px solid transparent; }
+  .ws .st { width: 13px; flex: none; text-align: center; font-size: 10px; }
+  .ws.done { color: var(--ink-2); } .ws.done .st { color: var(--ok); }
+  .ws.on { color: var(--ink); border-left-color: var(--accent); background: rgba(157,184,232,0.05); }
+  .ws.forced { color: var(--ink-2); } .ws.forced .st { color: var(--warn); }
+  .ws.skipped .st { color: var(--ink-3); }
+  .ws .sub { display: block; font-size: 10px; color: var(--ink-3); margin-top: 1px; }
+  .ws.forced .sub { color: var(--warn); }
+  .wmain { flex: 1; padding: 20px 24px 18px; min-width: 0; overflow: hidden; }
+  .wmain .lead { font-size: 13.5px; color: var(--ink-2); }
+  .wmain .lead b { color: var(--ink); font-weight: 600; }
+  .cmd { font: 11.5px/1.65 var(--mono); color: var(--ink-2); background: rgba(4,6,11,0.9); border: 1px solid var(--hair); border-radius: 9px; padding: 12px 14px; margin-top: 12px; overflow-x: auto; white-space: pre; }
+  .cmd .cm { color: var(--ink-3); }
+  .cmd .hi { color: var(--accent); }
+  .copy { font-size: 10px; color: var(--ink-2); border: 1px solid var(--hair-2); border-radius: 6px; padding: 2px 8px; margin-top: 7px; display: inline-block; }
+  /* the observation line — the step's evidence, always visible, always dated */
+  .obs { display: flex; gap: 10px; align-items: baseline; margin-top: 14px; padding: 11px 14px; border-radius: 9px; font-size: 12.5px; }
+  .obs .st { flex: none; font-size: 11px; }
+  .obs.waiting { border: 1px dashed var(--hair-2); color: var(--ink-2); }
+  .obs.waiting .st { color: var(--ink-3); animation: pulse 2s ease-in-out infinite; }
+  .obs.ok { border: 1px solid rgba(55,179,100,0.35); background: rgba(55,179,100,0.07); color: var(--ink-2); }
+  .obs.ok .st, .obs.ok b { color: var(--ok); }
+  .obs .why { display: block; font-size: 10px; color: var(--ink-3); margin-top: 2px; }
+  .obs time { font-family: var(--mono); font-size: 10px; color: var(--ink-3); margin-left: auto; flex: none; }
+  /* heavy warning (force-past) */
+  .warncard { margin-top: 12px; border: 1px solid rgba(232,176,90,0.5); background: rgba(232,176,90,0.07); border-radius: 10px; padding: 12px 14px; }
+  .warncard h4 { font-size: 12px; color: var(--warn); font-weight: 650; }
+  .warncard p { font-size: 11.5px; color: var(--ink-2); margin-top: 6px; }
+  .warncard p b { color: var(--ink); font-weight: 600; }
+  .warncard .rec { font-family: var(--mono); font-size: 10px; color: var(--warn); background: rgba(4,6,11,0.7); border-radius: 7px; padding: 6px 9px; margin-top: 9px; }
+  .wfoot { display: flex; gap: 10px; align-items: center; padding: 14px 24px; border-top: 1px solid var(--hair); }
+  .btn { font-size: 12.5px; font-weight: 600; border-radius: 8px; padding: 8px 18px; border: 1px solid var(--hair-2); color: var(--ink-2); }
+  .btn.primary { background: var(--accent); color: var(--void); border-color: var(--accent); }
+  .btn.ghost { border-color: transparent; color: var(--ink-3); }
+  .btn.warn { border-color: rgba(232,176,90,0.6); color: var(--warn); }
+  .wfoot .gap { margin-left: auto; }
+  .wfoot .hint { font-size: 10px; color: var(--ink-3); }
+
+  /* select + fields for step 4 */
+  .field { margin-top: 10px; font-size: 11px; color: var(--ink-3); }
+  .field .sel { display: flex; align-items: center; gap: 8px; margin-top: 4px; border: 1px solid var(--hair-2); border-radius: 8px; padding: 7px 10px; font-size: 12px; color: var(--ink); background: rgba(4,6,11,0.6); }
+  .field .sel .ar { margin-left: auto; color: var(--ink-3); font-size: 10px; }
+  .tokchip { font-family: var(--mono); font-size: 10.5px; color: var(--srv); border: 1px solid rgba(25,158,112,0.4); border-radius: 7px; padding: 3px 8px; display: inline-block; margin-top: 8px; }
+
+  .notes { display: flex; gap: 14px; align-items: stretch; margin: 14px auto 0; width: min(1460px, 97%); }
+  .anno { font-size: 11px; color: var(--ink-2); background: var(--glass-2); border: 1px solid var(--hair-2); border-left: 2px solid var(--accent); border-radius: 8px; padding: 9px 12px; flex: 1; }
+  .anno b { color: var(--accent); font-weight: 650; }
+  .specnote { margin: 22px auto 8px; width: min(1460px, 97%); font-size: 11.5px; color: var(--ink-2); }
+  .specnote b { color: var(--accent); }
+
+  /* ---- light — a token swap for comparison shots only ---- */
+  body.light {
+    --canvas: #c3c9d4; --void: #eef1f7;
+    --glass: rgba(252, 253, 255, 0.72); --glass-2: rgba(244, 247, 252, 0.92);
+    --hair: rgba(28, 44, 84, 0.12); --hair-2: rgba(28, 44, 84, 0.26);
+    --ink: #17223c; --ink-2: #46536f; --ink-3: #7d89a6;
+    --accent: #3f66b0;
+    --lan: #2f77d3; --srv: #12855d; --iot: #a06a00; --guest: #c2508a;
+    --ok: #1e7f43; --alarm: #d63c5e;
+    --acc: #2f77d3; --drop: #c03636; --nat: #6a54c8; --now: #9a6b10; --warn: #9a6b10;
+  }
+  body.light .concept, body.light .scene-tag { background: rgba(244, 247, 252, 0.95); }
+  body.light .frame .cap { background: rgba(244, 247, 252, 0.95); }
+  body.light .gpg.on { background: rgba(63, 102, 176, 0.09); }
+  body.light .ghostrow { background: rgba(70, 83, 111, 0.1); }
+  body.light .veil { background: rgba(60, 72, 100, 0.45); }
+  body.light .wiz { background: rgba(252, 253, 255, 0.98); }
+  body.light .cmd, body.light .warncard .rec { background: rgba(233, 238, 248, 0.9); }
+  body.light .field .sel { background: rgba(233, 238, 248, 0.7); }
+  @media (prefers-reduced-motion: reduce) { * { animation: none !important; } }
+</style>
+</head>
+<body>
+
+<div class="concept"><b>ROUND 1 — S · THE OBSERVED SETUP</b> #487 under #518 · the wizard as a modal over the ratified shell · <a href="?theme=light" style="margin-left:0">light</a> · <a href="?" style="margin-left:4px">dark</a>
+  <span style="margin-left:auto"><a href="../../navigation/round-5/direction-q5-rail.html">shell: Q V</a><a href="index.html">index</a></span>
+</div>
+
+<!-- ================= SCENE 1 : AUTO-LAUNCH AT FIRST RUN ================= -->
+<section class="scene" id="s1">
+  <div class="scene-tag">Scene 1 — first run: the shell renders, then the wizard arrives over it. Explicit close only; the page behind is real, not a backdrop.</div>
+  <div class="frame wide">
+    <aside class="rail" aria-label="Navigation">
+      <span class="wm">MIKRO<em>VIEW</em></span>
+      <span class="conn"><i class="idle"></i>waiting</span>
+      <div class="gsec">Live</div>
+      <span class="gpg on"><span class="ic">≡</span><span class="lab">Stream</span></span>
+      <div class="gsec">Investigate</div>
+      <span class="gpg"><span class="ic">∿</span><span class="lab">Metrics</span></span>
+      <span class="gpg"><span class="ic">¶</span><span class="lab">Audit log</span></span>
+      <div class="gsec">Detect</div>
+      <span class="gpg"><span class="ic">⚑</span><span class="lab">Flags</span></span>
+      <span class="gpg"><span class="ic">⚙</span><span class="lab">Detectors</span></span>
+      <div class="gsec">Expect</div>
+      <span class="gpg"><span class="ic">◉</span><span class="lab">Watchlist</span></span>
+      <div class="gsec">Admin</div>
+      <span class="gpg"><span class="ic">§</span><span class="lab">Users</span></span>
+      <span class="gpg"><span class="ic">✱</span><span class="lab">Tokens</span></span>
+      <span class="gpg"><span class="ic">⌂</span><span class="lab">Fleet</span></span>
+      <span class="gpg"><span class="ic">⊞</span><span class="lab">Entities</span></span>
+      <span class="gpg action"><span class="ic">⟳</span><span class="lab">Run setup…</span></span>
+      <div class="foot"><span class="nm">tom</span><span class="role">admin</span><span class="rbtn first" title="Icons only">⇔</span><span class="rbtn" title="Dock the rail">⇤</span></div>
+    </aside>
+    <div class="main">
+      <div class="crumb"><div class="over">Live</div><h2>Stream <span class="dim">· nothing has arrived yet</span></h2></div>
+      <div class="ghostrow" style="margin-top: 18px"></div>
+      <div class="ghostrow" style="width: 84%"></div>
+      <div class="ghostrow" style="width: 72%"></div>
+      <div class="veil"></div>
+      <div class="wiz" role="dialog" aria-modal="true" aria-label="Set up MikroView — step 1 of 5">
+        <div class="whead"><span class="step">Step 1 of 5</span><h3>Trust MikroView's certificate</h3><span class="x" role="button" aria-label="Close setup — finish later from Admin ▸ Run setup…">✕</span></div>
+        <div class="wbody">
+          <div class="wsteps" aria-label="Setup steps">
+            <div class="ws on"><span class="st">1</span><span>Trust the certificate</span></div>
+            <div class="ws"><span class="st">2</span><span>Send logs</span></div>
+            <div class="ws"><span class="st">3</span><span>Tag firewall rules</span></div>
+            <div class="ws"><span class="st">4</span><span>Push router state</span></div>
+            <div class="ws"><span class="st">5</span><span>Name your router</span></div>
+          </div>
+          <div class="wmain">
+            <p class="lead">Have the router fetch and trust this MikroView's certificate, so the log stream can travel encrypted. <b>Run this on the router</b> — MikroView never connects to it.</p>
+            <div class="cmd"><span class="cm"># RouterOS terminal</span>
+/tool fetch url="https://<span class="hi">192.168.11.30</span>/ca.crt" dst-path=mikroview-ca.crt
+/certificate import file-name=mikroview-ca.crt</div>
+            <span class="copy">Copy</span>
+            <div class="obs waiting"><span class="st">●</span><span>Waiting — nothing has fetched the certificate yet.<span class="why">MikroView can only see what arrives; it will notice the fetch the moment it happens.</span></span><time>13:38:02</time></div>
+          </div>
+        </div>
+        <div class="wfoot"><span class="btn ghost">Back</span><span class="btn ghost">Skip this step</span><span class="gap"></span><span class="hint">Next checks what has arrived</span><span class="btn primary">Next</span></div>
+      </div>
+    </div>
+    <div class="cap"><b>Auto-launch, once.</b> First admin sign-in with no router sending: the shell paints first (rail, ghost rows, honest "nothing has arrived yet"), then the modal opens on step 1. Clicking the dimmed page does nothing — closing is the ✕ (or Esc), and both say where setup lives afterwards.</div>
+  </div>
+  <div class="notes">
+    <div class="anno"><b>The modal is a claim ledger.</b> Left, the five steps — each will end done (green), skipped (quiet), or forced past (amber, recorded). The step body is always: what to do, where to do it, and what MikroView has observed arrive, with a timestamp.</div>
+    <div class="anno"><b>Explicit close only</b> (owner-recorded): no click-outside dismissal, so a stray click never destroys ten minutes of router-side work. ✕ and Esc both close; progress keeps — observed evidence is server-side state, not modal state.</div>
+    <div class="anno"><b>Viewers never see this.</b> The wizard auto-launches for admins only; #490's grammar means Run setup… is absent for viewers, so there is no read-only wizard — the surface simply does not exist for them.</div>
+  </div>
+</section>
+
+<!-- ================= SCENE 2 : A STEP'S THREE BODIES ================= -->
+<section class="scene" id="s2">
+  <div class="scene-tag">Scene 2 — the step body: waiting, arrived, and the one step that takes input. Same anatomy every time: do this · here · this is what arrived.</div>
+  <div class="row">
+    <div class="frame">
+      <div class="main">
+        <div class="veil" style="background: none"></div>
+        <div class="wiz">
+          <div class="whead"><span class="step">Step 2 of 5</span><h3>Send logs to MikroView</h3><span class="x" role="button" aria-label="Close setup — finish later from Admin ▸ Run setup…">✕</span></div>
+          <div class="wbody">
+            <div class="wsteps">
+              <div class="ws done"><span class="st">✓</span><span>Trust the certificate<span class="sub">ca.crt fetched · 13:39</span></span></div>
+              <div class="ws on"><span class="st">2</span><span>Send logs</span></div>
+              <div class="ws"><span class="st">3</span><span>Tag firewall rules</span></div>
+              <div class="ws"><span class="st">4</span><span>Push router state</span></div>
+              <div class="ws"><span class="st">5</span><span>Name your router</span></div>
+            </div>
+            <div class="wmain">
+              <p class="lead">Point the router's logging at this MikroView, TLS on:</p>
+              <div class="cmd">/system logging action add \
+    name=mikroview target=remote \
+    remote=<span class="hi">192.168.11.30</span> \
+    remote-port=<span class="hi">6514</span> tls=yes
+/system logging add \
+    topics=firewall action=mikroview</div>
+              <span class="copy">Copy</span>
+              <div class="obs waiting"><span class="st">●</span><span>Waiting for the router's first TLS hello.<span class="why">A connection that fails its handshake will not count — arriving means arriving encrypted.</span></span><time>13:40:11</time></div>
+            </div>
+          </div>
+          <div class="wfoot"><span class="btn ghost">Back</span><span class="btn ghost">Skip this step</span><span class="gap"></span><span class="hint">Next checks what has arrived</span><span class="btn primary">Next</span></div>
+        </div>
+      </div>
+      <div class="cap"><b>a · Waiting.</b> The observation line is dashed and patient. It never says "error" — nothing is wrong, nothing has arrived. The distinction is the product's voice.</div>
+    </div>
+    <div class="frame">
+      <div class="main">
+        <div class="wiz">
+          <div class="whead"><span class="step">Step 2 of 5</span><h3>Send logs to MikroView</h3><span class="x" role="button" aria-label="Close setup — finish later from Admin ▸ Run setup…">✕</span></div>
+          <div class="wbody">
+            <div class="wsteps">
+              <div class="ws done"><span class="st">✓</span><span>Trust the certificate<span class="sub">ca.crt fetched · 13:39</span></span></div>
+              <div class="ws on"><span class="st">2</span><span>Send logs</span></div>
+              <div class="ws"><span class="st">3</span><span>Tag firewall rules</span></div>
+              <div class="ws"><span class="st">4</span><span>Push router state</span></div>
+              <div class="ws"><span class="st">5</span><span>Name your router</span></div>
+            </div>
+            <div class="wmain">
+              <p class="lead">Point the router's logging at this MikroView, TLS on:</p>
+              <div class="cmd">/system logging action add \
+    name=mikroview target=remote \
+    remote=<span class="hi">192.168.11.30</span> \
+    remote-port=<span class="hi">6514</span> tls=yes
+/system logging add \
+    topics=firewall action=mikroview</div>
+              <span class="copy">Copy</span>
+              <div class="obs ok"><span class="st">✓</span><span><b>Logs are arriving.</b> TLS handshake complete; first line from 192.168.11.1.<span class="why">14 lines so far. This is observed arrival, not a probe — MikroView never connected out.</span></span><time>13:41:07</time></div>
+            </div>
+          </div>
+          <div class="wfoot"><span class="btn ghost">Back</span><span class="btn ghost">Skip this step</span><span class="gap"></span><span class="btn primary">Next</span></div>
+        </div>
+      </div>
+      <div class="cap"><b>b · Arrived.</b> The same step, evidence in: who, what, when. The step list will remember the receipt ("ca.crt fetched · 13:39") for the rest of the wizard's life — and Next simply proceeds.</div>
+    </div>
+  </div>
+  <div class="frame wide">
+      <div class="main">
+        <div class="wiz">
+          <div class="whead"><span class="step">Step 4 of 5</span><h3>Push router state</h3><span class="x" role="button" aria-label="Close setup — finish later from Admin ▸ Run setup…">✕</span></div>
+          <div class="wbody">
+            <div class="wsteps">
+              <div class="ws done"><span class="st">✓</span><span>Trust the certificate<span class="sub">ca.crt fetched · 13:39</span></span></div>
+              <div class="ws done"><span class="st">✓</span><span>Send logs<span class="sub">arriving · 13:41</span></span></div>
+              <div class="ws done"><span class="st">✓</span><span>Tag firewall rules<span class="sub">3 rules decoding</span></span></div>
+              <div class="ws on"><span class="st">4</span><span>Push router state</span></div>
+              <div class="ws"><span class="st">5</span><span>Name your router</span></div>
+            </div>
+            <div class="wmain">
+              <p class="lead">A push token lets the router send its rule names, leases and neighbours — so the stream can speak in names.</p>
+              <div class="field">Device this token is for
+                <div class="sel"><span>rb5009 — gateway</span><span class="ar">▾</span></div>
+              </div>
+              <span class="tokchip">token created · mv-push-7f…2c · scoped to state push only</span>
+              <div class="cmd"><span class="cm"># scheduled on the router;</span>
+<span class="cm"># full script below</span>
+/tool fetch http-method=post \
+    url="https://<span class="hi">192.168.11.30</span>\
+/api/push/state" …</div>
+              <div class="obs waiting"><span class="st">●</span><span>Waiting for the first push.<span class="why">The token exists; nothing has used it yet.</span></span><time>13:43:29</time></div>
+            </div>
+          </div>
+          <div class="wfoot"><span class="btn ghost">Back</span><span class="btn ghost">Skip this step</span><span class="gap"></span><span class="btn primary">Next</span></div>
+        </div>
+      </div>
+      <div class="cap"><b>c · The one step that takes input.</b> Step 4 acts (a token is created on Next-entry — mikroview-side, its own audit line) then returns to form: print the command, watch for arrival. Same anatomy, same observation line.</div>
+  </div>
+  <div class="notes">
+    <div class="anno"><b>One anatomy, five steps.</b> Lead sentence · the router-side command · the observation line. Step 3 (tag rules) is the pure case — it can never fail, only count upward; its Next is always free. The anatomy holds even for step 4's input, which is why the modal never feels like five different dialogs.</div>
+    <div class="anno"><b>Skip is quiet, force is loud.</b> Skip records "skipped by tom · 13:41" in the step list and moves on — no ceremony; skipping is a legitimate plan. Forcing past a <i>waiting check</i> is scene 3.</div>
+  </div>
+</section>
+
+<!-- ================= SCENE 3 : FORCED PAST, RECORDED ================= -->
+<section class="scene" id="s3">
+  <div class="scene-tag">Scene 3 — Next with nothing arrived: the heavy warning, the exact record it will leave, and where that record surfaces later.</div>
+  <div class="row">
+    <div class="frame">
+      <div class="main">
+        <div class="wiz">
+          <div class="whead"><span class="step">Step 2 of 5</span><h3>Send logs to MikroView</h3><span class="x" role="button" aria-label="Close setup — finish later from Admin ▸ Run setup…">✕</span></div>
+          <div class="wbody">
+            <div class="wsteps">
+              <div class="ws done"><span class="st">✓</span><span>Trust the certificate<span class="sub">ca.crt fetched · 13:39</span></span></div>
+              <div class="ws on"><span class="st">2</span><span>Send logs</span></div>
+              <div class="ws"><span class="st">3</span><span>Tag firewall rules</span></div>
+              <div class="ws"><span class="st">4</span><span>Push router state</span></div>
+              <div class="ws"><span class="st">5</span><span>Name your router</span></div>
+            </div>
+            <div class="wmain">
+              <div class="obs waiting" style="margin-top: 2px"><span class="st">●</span><span>Waiting for the router's first TLS hello.</span><time>13:44:18</time></div>
+              <div class="warncard">
+                <h4>Nothing has arrived yet</h4>
+                <p>MikroView never connects to your router, so it <b>cannot check the router's side</b> — it can only tell you no logs have arrived here. Going on now means the rest of setup runs without a log stream, and every screen stays empty until one arrives.</p>
+                <p>Going on is recorded, so later diagnostics can say why the stream is silent:</p>
+                <div class="rec">setup · step 2 forced past · no TLS handshake observed · tom · 13:44</div>
+              </div>
+            </div>
+          </div>
+          <div class="wfoot"><span class="btn ghost">Back</span><span class="gap"></span><span class="btn primary">Keep waiting</span><span class="btn warn">Go on anyway — recorded</span></div>
+        </div>
+      </div>
+      <div class="cap"><b>a · The heavy warning.</b> Next with a waiting check opens this in place — the step body's command scrolls away, the warning takes the room. "Keep waiting" is the primary; the amber button quotes the exact line it will write. No third option, no "are you sure".</div>
+    </div>
+    <div class="frame">
+      <aside class="rail" aria-label="Navigation">
+        <span class="wm">MIKRO<em>VIEW</em></span>
+        <span class="conn"><i class="idle"></i>waiting</span>
+        <div class="gsec">Live</div>
+        <span class="gpg on"><span class="ic">≡</span><span class="lab">Stream</span></span>
+        <div class="gsec">Investigate</div>
+        <span class="gpg"><span class="ic">∿</span><span class="lab">Metrics</span></span>
+        <span class="gpg"><span class="ic">¶</span><span class="lab">Audit log</span></span>
+        <div class="gsec">Detect</div>
+        <span class="gpg"><span class="ic">⚑</span><span class="lab">Flags</span></span>
+        <span class="gpg"><span class="ic">⚙</span><span class="lab">Detectors</span></span>
+        <div class="gsec">Expect</div>
+        <span class="gpg"><span class="ic">◉</span><span class="lab">Watchlist</span></span>
+        <div class="gsec">Admin</div>
+        <span class="gpg"><span class="ic">§</span><span class="lab">Users</span></span>
+        <span class="gpg"><span class="ic">✱</span><span class="lab">Tokens</span></span>
+        <span class="gpg"><span class="ic">⌂</span><span class="lab">Fleet</span></span>
+        <span class="gpg"><span class="ic">⊞</span><span class="lab">Entities</span></span>
+        <span class="gpg action"><span class="ic">⟳</span><span class="lab">Run setup…</span></span>
+        <div class="foot"><span class="nm">tom</span><span class="role">admin</span><span class="rbtn first" title="Icons only">⇔</span><span class="rbtn" title="Dock the rail">⇤</span></div>
+      </aside>
+      <div class="main">
+        <div class="crumb"><div class="over">Live</div><h2>Stream <span class="dim">· silent</span></h2></div>
+        <div class="emptystate">
+          <div class="big">No logs have ever arrived.</div>
+          <p>Setup's log step was <b>forced past without evidence</b>, so silence here is expected, not a mystery. The router-side command is one click away.</p>
+          <span class="record">setup · step 2 forced past · no TLS handshake observed · tom · 13:44</span>
+          <p><b>Admin ▸ Run setup…</b> reopens setup at this step.</p>
+        </div>
+      </div>
+      <div class="cap"><b>b · Where the record surfaces.</b> The Stream's empty state quotes the override verbatim — diagnostics can say <i>why</i> the stream is silent instead of shrugging. The same line lives in the audit log and in the reopened wizard's step list.</div>
+    </div>
+  </div>
+  <div class="notes">
+    <div class="anno"><b>The record is the feature</b> (owner-recorded model): a forced-past validation is written down — step, what was not observed, who, when — and surfaces wherever that absence later needs explaining. An operator who forced past on purpose reads confirmation; one who forgot reads the answer.</div>
+    <div class="anno"><b>Forced ≠ failed.</b> The check can still come good: if a handshake arrives at 14:10, the step flips to done and the empty states clear — the override line stays in the audit log as history, not as a scar the interface keeps pointing at.</div>
+  </div>
+</section>
+
+<!-- ================= SCENE 4 : CLOSE EARLY, COME BACK ================= -->
+<section class="scene" id="s4">
+  <div class="scene-tag">Scene 4 — closing early and coming back: the empty states carry the map, Admin ▸ Run setup… reopens, and evidence that arrived meanwhile is already green.</div>
+  <div class="row">
+    <div class="frame">
+      <aside class="rail" aria-label="Navigation">
+        <span class="wm">MIKRO<em>VIEW</em></span>
+        <span class="conn"><i></i>receiving</span>
+        <div class="gsec">Live</div>
+        <span class="gpg"><span class="ic">≡</span><span class="lab">Stream</span></span>
+        <div class="gsec">Investigate</div>
+        <span class="gpg"><span class="ic">∿</span><span class="lab">Metrics</span></span>
+        <span class="gpg"><span class="ic">¶</span><span class="lab">Audit log</span></span>
+        <div class="gsec">Detect</div>
+        <span class="gpg"><span class="ic">⚑</span><span class="lab">Flags</span></span>
+        <span class="gpg"><span class="ic">⚙</span><span class="lab">Detectors</span></span>
+        <div class="gsec">Expect</div>
+        <span class="gpg on"><span class="ic">◉</span><span class="lab">Watchlist</span></span>
+        <div class="gsec">Admin</div>
+        <span class="gpg"><span class="ic">§</span><span class="lab">Users</span></span>
+        <span class="gpg"><span class="ic">✱</span><span class="lab">Tokens</span></span>
+        <span class="gpg"><span class="ic">⌂</span><span class="lab">Fleet</span></span>
+        <span class="gpg"><span class="ic">⊞</span><span class="lab">Entities</span></span>
+        <span class="gpg action"><span class="ic">⟳</span><span class="lab">Run setup…</span></span>
+        <div class="foot"><span class="nm">tom</span><span class="role">admin</span><span class="rbtn first" title="Icons only">⇔</span><span class="rbtn" title="Dock the rail">⇤</span></div>
+      </aside>
+      <div class="main">
+        <div class="crumb"><div class="over">Expect</div><h2>Watchlist <span class="dim">· empty</span></h2></div>
+        <div class="emptystate">
+          <div class="big">Nothing is expected yet.</div>
+          <p>Watches speak in names, and naming is setup's last step — <b>3 of 5 steps are done</b>.</p>
+          <p><b>Admin ▸ Run setup…</b> picks setup back up where the evidence left off.</p>
+        </div>
+      </div>
+      <div class="cap"><b>a · Closed early, two steps short.</b> Every empty state names its missing prerequisite and points the same way: Admin ▸ Run setup…. The wizard being closed costs nothing — the router-side work already done keeps counting.</div>
+    </div>
+    <div class="frame">
+      <div class="main">
+        <div class="wiz">
+          <div class="whead"><span class="step">Step 4 of 5</span><h3>Push router state</h3><span class="x" role="button" aria-label="Close setup — finish later from Admin ▸ Run setup…">✕</span></div>
+          <div class="wbody">
+            <div class="wsteps">
+              <div class="ws done"><span class="st">✓</span><span>Trust the certificate<span class="sub">ca.crt fetched · 13:39</span></span></div>
+              <div class="ws done"><span class="st">✓</span><span>Send logs<span class="sub">arriving · 13:41</span></span></div>
+              <div class="ws done"><span class="st">✓</span><span>Tag firewall rules<span class="sub">5 rules decoding</span></span></div>
+              <div class="ws on"><span class="st">4</span><span>Push router state<span class="sub">token exists · no push yet</span></span></div>
+              <div class="ws"><span class="st">5</span><span>Name your router</span></div>
+            </div>
+            <div class="wmain">
+              <p class="lead">Reopened at the first step still waiting. Everything observed while the wizard was closed is already counted — <b>the wizard reads the same ledger the app does.</b></p>
+              <div class="obs ok" style="margin-top: 10px"><span class="st">✓</span><span><b>Steps 1–3 stand on their own evidence.</b><span class="why">Arrival is server-side state; closing the modal never un-arrives anything.</span></span><time>14:02</time></div>
+              <div class="obs waiting"><span class="st">●</span><span>Waiting for the first push with token mv-push-7f…2c.</span><time>14:02:44</time></div>
+            </div>
+          </div>
+          <div class="wfoot"><span class="btn ghost">Back</span><span class="btn ghost">Skip this step</span><span class="gap"></span><span class="btn primary">Next</span></div>
+        </div>
+      </div>
+      <div class="cap"><b>b · Run setup… reopens the ledger.</b> Not a restart: the step list shows every receipt, and the wizard lands on the first step still waiting. Running it a third or tenth time is the same cheap, honest act.</div>
+    </div>
+  </div>
+  <div class="notes">
+    <div class="anno"><b>Relaunch is the same door as first run</b> — Admin ▸ Run setup… is an action, not a page (ratified in the nav record); the modal it opens is this one, in whatever state the evidence is in. No separate "setup status" surface to drift out of sync.</div>
+    <div class="anno"><b>Keyboard &amp; motion:</b> focus is trapped in the modal; Esc closes (explicit, like ✕); Tab order is steps → body → footer; the waiting dot's pulse stops under reduced motion; step changes are announced ("Step 4 of 5 — Push router state — waiting for the first push").</div>
+  </div>
+  <p class="specnote"><b>Carried forward, untouched:</b> the Q V rail and its states, the first-run chrome (no badge before the first flag), and the #490 grammar (no wizard for viewers). <b>The data story is the same world, day one:</b> rb5009 at 192.168.11.1, MikroView at 192.168.11.30, cam-porch and nas already on the wire — this is the afternoon the navigation rounds' story begins; their "first in 41 days" quiet starts counting when this wizard's logs start arriving.</p>
+</section>
+
+<script>
+  // light/dark for comparison shots: ?theme=light — a token swap, nothing else
+  if (new URLSearchParams(location.search).get('theme') === 'light') document.body.classList.add('light');
+</script>
+</body>
+</html>
