@@ -61,4 +61,15 @@ text wears text tokens; greyscale-safe (counts printed at every bar).
 
 ## Verdicts
 
-None yet — awaiting the owner.
+Owner, 2026-08-23, on direction AA (verbatim):
+
+> The survey looks good, but quite narrow, maybe it should be user
+> adjustable? Make sure the vertical diagram the items align to their
+> rows properly centralised on the row.
+
+Read as: **AA liked; evolve again** — round 4 (`../round-4/`) makes
+the terrain's width a user-adjustable, per-user-persisted seam, and
+re-founds the map so its items align to their rows by construction:
+the map becomes a column of the ledger itself, each row owning its
+mark, centred on the row, with the octet carried on a horizontal
+mini-axis in the plot column.
