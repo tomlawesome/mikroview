@@ -66,6 +66,10 @@ beforeEach(() => {
   // Now module-level rather than component-local (see appState.frozenPool),
   // so it survives unmount -- and would leak between tests without this.
   appState.frozenPool = null
+  // Same reasoning -- a test that sets this and fails before its own
+  // cleanup would otherwise leak a false "fetch failed" empty-state
+  // message into whichever test runs next (issue #373).
+  appState.fetchFailed = false
   // Reset centrally, not at the end of whichever test set it. A test body
   // that fails never reaches its own cleanup line, and the next test then
   // renders in grouped mode and fails for a reason that has nothing to do
@@ -474,5 +478,39 @@ describe('LiveTable newest-at-top ordering (issue #363)', () => {
 
     const countCell = container.querySelector('[title="A-first"] .count')
     expect(countCell?.textContent?.trim()).toBe('2')
+  })
+})
+
+// Issue #373: a failed refetch (or initial load) used to leave `events`
+// exactly as it was, with nothing recording that the fetch itself failed --
+// so an empty (or stale-and-non-matching) buffer rendered the same "No
+// events match the current filters" message a real, confirmed-empty query
+// would. appState.fetchFailed (set by loadInitial()/refetchWithFilters() on
+// rejection -- see state.svelte.ts) is what LiveTable now checks first, so a
+// failure reads as a failure instead of a false negative.
+describe('LiveTable distinguishes a failed fetch from a confirmed empty result (issue #373)', () => {
+  it('shows a failure message, not "No events match", when the last fetch failed and the buffer is empty', () => {
+    appState.fetchFailed = true
+    appState.events = []
+
+    const { container } = render(LiveTable, {})
+    flushSync()
+
+    const empty = container.querySelector('.empty')
+    expect(empty).not.toBeNull()
+    expect(empty?.textContent).not.toContain('No events match the current filters.')
+    expect(empty?.textContent?.toLowerCase()).toMatch(/could not load|failed|error/)
+  })
+
+  it('still shows the genuine "no matches" message once the buffer is real and the fetch is not flagged as failed', () => {
+    appState.fetchFailed = false
+    appState.events = [makeEvent('present')]
+    appState.filters = { ...emptyFilters(), rule: 'no-such-rule-anywhere' }
+
+    const { container } = render(LiveTable, {})
+    flushSync()
+
+    const empty = container.querySelector('.empty')
+    expect(empty?.textContent).toContain('No events match the current filters.')
   })
 })
