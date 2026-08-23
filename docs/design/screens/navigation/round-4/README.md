@@ -35,7 +35,12 @@ Screenshots in `shots/` (`q4-<scene>-<theme>.png`), regenerated with
 2. The broken ring as drawn (1.5px alarm outline, 2px off the icon):
    right weight, or heavier?
 
-## Owner verdicts
+## Owner verdicts — round 4 closed (2026-08-23)
 
-_Pending — recorded verbatim here when the batch returns; the running
-log lives on #518._
+> "1. they're gine. 2. SLightly heavier, and... Red outline goes
+> round the icon and the word, if that view is selected, icon only if
+> the bar is icon only."
+
+- **Canvas tones stand** (navy `#1b2340` · grey `#c3c9d4`).
+- **The ring**: slightly heavier, and it encloses icon + word in
+  icons+text density, the icon alone in icons only → round 5.
