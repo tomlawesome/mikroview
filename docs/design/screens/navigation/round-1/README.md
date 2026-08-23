@@ -101,7 +101,20 @@ Direction verdict (kill / keep / blend) plus:
    or reserve the wordmark for the login screen and spend the space
    on the section line?
 
-## Owner verdicts
+## Owner verdicts — round 1 closed (2026-08-23)
 
-_Pending — recorded verbatim here when the batch returns; the running
-log lives on #518._
+> "I like Q, the rail, but we need it so that there's a fully docked
+> option (only a little symbol to pop it back out shows) and a way to
+> have it show either icons only or icons and text."
+
+- **Q — Rail: kept**, with two requirements → round 2: a fully docked
+  state (pop-out handle only), and an explicit icons-only vs
+  icons+text choice.
+- **P — Masthead: killed.** Nothing unique survives (its bones were
+  the shared ones).
+- **R — Places: killed.** Its Detectors-into-Flags fold dies with it —
+  Detectors stays a page under Detect.
+- Q's round-1 auto-collapse on Live places is **superseded** by the
+  explicit states the verdict asks for (recorded in round 2).
+- Still open with the owner: the Expect broken-watch dot, and the
+  wordmark's place in the chrome (asked again with round 2).

@@ -1,0 +1,447 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mikroview navigation — round 2 — Q II: the rail, docked and in two densities</title>
+<style>
+  /* ============================================================
+     DESIGN PASS (#518) — NAVIGATION (#486) — ROUND 2
+     Q II — THE RAIL, DOCKED & IN TWO DENSITIES
+
+     Round-1 verdict: Q keeps, with two requirements — a fully
+     docked state (only a small symbol to pop it back out), and
+     an explicit icons-only vs icons+text choice.
+
+     The model: THREE PERSISTENT STATES — full · icons · docked —
+     chosen by the operator, persisted, never second-guessed.
+     Round 1's auto-collapse on Live places is superseded: dock
+     is now what immersion is for. From docked, the handle opens
+     a DRAWER (transient overlay in your last density) that
+     dismisses on navigate/Esc/click-away; its pin control makes
+     it stick. The alarm never docks: the handle wears the badge.
+     ============================================================ */
+  :root {
+    --void: #06080e;
+    --glass: rgba(15, 20, 34, 0.66);
+    --glass-2: rgba(8, 11, 20, 0.88);
+    --hair: rgba(160, 185, 230, 0.13);
+    --hair-2: rgba(160, 185, 230, 0.26);
+    --ink: #e9eefb; --ink-2: #97a4c4; --ink-3: #55628a;
+    --accent: #9db8e8;
+    --lan: #3987e5; --srv: #199e70; --iot: #c98500; --guest: #d76a9e;
+    --ok: #37b364; --alarm: #ff5470;
+    --acc: #5aa7f0; --drop: #e05252; --nat: #a08df0; --now: #e8b05a;
+    --sans: system-ui, -apple-system, "Segoe UI", sans-serif;
+    --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  }
+  * { box-sizing: border-box; margin: 0; }
+  html { scroll-behavior: smooth; }
+  body { background: var(--void); color: var(--ink); font: 13.5px/1.5 var(--sans); -webkit-font-smoothing: antialiased; }
+  .concept {
+    position: sticky; top: 0; z-index: 90; display: flex; gap: 16px; align-items: baseline;
+    padding: 8px 20px; background: rgba(2,3,7,0.95); border-bottom: 1px solid var(--hair);
+    font-size: 11px; color: var(--ink-3);
+  }
+  .concept b { color: var(--accent); letter-spacing: 0.1em; }
+  .concept a { color: var(--ink-2); text-decoration: none; margin-left: 12px; }
+  .scene { min-height: 100vh; position: relative; border-bottom: 1px solid var(--hair-2); overflow: hidden; padding-bottom: 30px; }
+  .scene-tag {
+    position: sticky; top: 33px; z-index: 80; text-align: center;
+    font-size: 10.5px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--ink-3);
+    padding: 6px 0; background: rgba(2,3,7,0.85);
+  }
+
+  /* ---- frames ---- */
+  .row { display: flex; gap: 24px; justify-content: center; align-items: stretch; margin: 26px auto 0; width: min(1460px, 97%); }
+  .frame { position: relative; border: 1px solid var(--hair-2); border-radius: 14px; overflow: hidden; background: var(--void); flex: 1; min-height: 640px; display: flex; }
+  .frame .cap { position: absolute; left: 0; right: 0; bottom: 0; z-index: 30; font-size: 10.5px; color: var(--ink-2); padding: 9px 14px; background: rgba(2,3,7,0.92); border-top: 1px solid var(--hair); }
+  .frame .cap b { color: var(--accent); }
+  .frame .rail { padding-bottom: 76px; }
+  .frame.wide { flex: none; width: min(1460px, 97%); margin: 26px auto 0; display: flex; min-height: 620px; }
+
+  /* ---- the rail, three states ---- */
+  .rail {
+    width: 216px; flex: none; background: var(--glass-2); border-right: 1px solid var(--hair);
+    display: flex; flex-direction: column; padding: 14px 0 10px; position: relative; z-index: 10;
+    backdrop-filter: blur(10px);
+  }
+  .rail .wm { font-size: 11px; font-weight: 700; letter-spacing: 0.24em; color: var(--ink-3); padding: 0 16px 3px; }
+  .rail .wm em { color: var(--accent); font-style: normal; }
+  .rail .conn { font-size: 9.5px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--ink-3); padding: 0 16px 8px; }
+  .rail .conn i { display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: var(--ok); margin-right: 6px; animation: pulse 2s ease-in-out infinite; }
+  @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.3; } }
+  .gsec { font-size: 9px; letter-spacing: 0.16em; text-transform: uppercase; color: var(--ink-3); padding: 11px 16px 2px; font-weight: 650; }
+  .gpg {
+    display: flex; align-items: center; gap: 9px; font-size: 12px; font-weight: 550; color: var(--ink-2);
+    padding: 5px 16px 5px 14px; border-left: 2px solid transparent; text-decoration: none; cursor: default; position: relative;
+  }
+  .gpg .ic { width: 15px; text-align: center; color: var(--ink-3); font-size: 12px; flex: none; }
+  .gpg.on { color: var(--ink); border-left-color: var(--accent); background: rgba(157,184,232,0.06); }
+  .gpg.on .ic { color: var(--accent); }
+  .gpg .ct { font-size: 9px; color: var(--void); background: var(--alarm); border-radius: 8px; padding: 1px 5px; margin-left: auto; font-weight: 700; }
+  .gpg.action { color: var(--accent); font-size: 11px; margin-top: 2px; }
+  .rail .foot { margin-top: auto; padding: 10px 16px 0; border-top: 1px solid var(--hair); display: flex; align-items: center; gap: 7px; font-size: 11.5px; color: var(--ink-2); }
+  .role { font-size: 8.5px; font-weight: 700; letter-spacing: 0.12em; color: var(--ink-3); border: 1px solid var(--hair-2); border-radius: 8px; padding: 1px 6px; text-transform: uppercase; }
+  .rbtn { color: var(--ink-3); font-size: 12px; border: 1px solid var(--hair-2); border-radius: 6px; width: 22px; height: 22px; display: grid; place-items: center; flex: none; }
+  .rbtn.first { margin-left: auto; }
+  .rbtn.pin { color: var(--accent); border-color: var(--accent); }
+
+  .rail.slim { width: 54px; align-items: center; }
+  .rail.slim .wm { padding: 0 0 5px; letter-spacing: 0; }
+  .rail.slim .wm span { display: none; }
+  .rail.slim .conn { padding: 0 0 6px; } .rail.slim .conn b { display: none; } .rail.slim .conn i { margin-right: 0; }
+  .rail.slim .gsec { display: none; }
+  .rail.slim .gpg { padding: 7px 0; width: 100%; justify-content: center; }
+  .rail.slim .gpg .lab { display: none; }
+  .rail.slim .gpg .ct { position: absolute; top: 1px; right: 6px; margin: 0; }
+  .rail.slim .foot { padding: 8px 0 0; flex-direction: column; gap: 6px; }
+  .rail.slim .foot .nm, .rail.slim .foot .role { display: none; }
+  .rail.slim .rbtn.first { margin-left: 0; }
+
+  /* drawer = the rail overlaid */
+  .rail.drawer { position: absolute; top: 0; bottom: 0; left: 0; box-shadow: 14px 0 44px rgba(0,0,0,0.55); border-right: 1px solid var(--hair-2); }
+
+  /* the handle (docked state) */
+  .handle {
+    position: absolute; top: 14px; left: 0; z-index: 12; width: 26px; height: 44px;
+    background: var(--glass-2); border: 1px solid var(--hair-2); border-left: none;
+    border-radius: 0 10px 10px 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px;
+    backdrop-filter: blur(8px);
+  }
+  .handle .g { color: var(--ink-2); font-size: 12px; line-height: 1; }
+  .handle .ct { font-size: 8.5px; color: var(--void); background: var(--alarm); border-radius: 7px; padding: 0.5px 4px; font-weight: 700; }
+
+  .main { flex: 1; position: relative; min-width: 0; }
+  .crumb { padding: 20px 24px 0; position: relative; z-index: 6; }
+  .crumb .over { font-size: 10px; letter-spacing: 0.16em; text-transform: uppercase; color: var(--ink-3); }
+  .crumb h2 { font-size: 19px; font-weight: 550; margin-top: 2px; }
+  .crumb h2 .dim { color: var(--ink-3); font-weight: 400; }
+
+  /* fall backdrop (reduced, context only — the ratified fall lives in round 3/4 files) */
+  .fallwrap { position: absolute; inset: 0; opacity: 0.8; }
+  .fallwrap svg { width: 100%; height: 100%; display: block; }
+  svg text { font-family: var(--sans); }
+  .tlab { fill: var(--ink-3); font-size: 8.5px; font-family: var(--mono); }
+  .fanno { fill: var(--ink-3); font-size: 9px; }
+  .nowline { stroke: var(--now); stroke-width: 1.5; }
+  .nowpulse { animation: nowp 2.4s ease-in-out infinite; }
+  @keyframes nowp { 0%,100% { opacity: 1; } 50% { opacity: 0.55; } }
+  .gridline { stroke: var(--hair); stroke-width: 1; }
+
+  /* flags furniture (s4) */
+  .tabs { display: flex; flex-wrap: nowrap; overflow-x: auto; gap: 2px; margin: 16px 24px 0; border-bottom: 1px solid var(--hair-2); }
+  .tab { white-space: nowrap; font-size: 12px; font-weight: 550; color: var(--ink-3); padding: 8px 14px; border-bottom: 2px solid transparent; margin-bottom: -1px; cursor: default; }
+  .tab.on { color: var(--ink); border-bottom-color: var(--accent); }
+  .tab .ct { font-size: 9.5px; color: var(--void); background: var(--alarm); border-radius: 8px; padding: 1px 5px; margin-left: 6px; font-weight: 700; }
+  .tab .ct.quiet { background: none; color: var(--ink-3); border: 1px solid var(--hair-2); }
+  .list { margin: 14px 24px; }
+  .rowi { display: flex; align-items: baseline; gap: 14px; padding: 10px 14px; border: 1px solid var(--hair); border-radius: 10px; margin-bottom: 8px; background: rgba(13,18,32,0.5); }
+  .rowi .sev { width: 8px; height: 8px; border-radius: 50%; background: var(--ink-3); align-self: center; flex: none; }
+  .rowi.alarm .sev { background: var(--alarm); box-shadow: 0 0 8px var(--alarm); }
+  .rowi .what { font-weight: 600; font-size: 12.5px; }
+  .rowi.alarm .what { color: var(--alarm); }
+  .rowi .who { font-family: var(--mono); font-size: 11px; color: var(--ink-2); }
+  .rowi .when { margin-left: auto; font-family: var(--mono); font-size: 10.5px; color: var(--ink-3); }
+  .rowi .lane { font-size: 8.5px; font-weight: 700; letter-spacing: 0.08em; padding: 1.5px 7px; border-radius: 7px; }
+  .ghostrow { height: 11px; border-radius: 5px; background: rgba(151,164,196,0.08); margin: 10px 24px; }
+
+  /* tooltip on focused slim item (s4) */
+  .tip { position: absolute; left: 60px; z-index: 20; background: #0c111e; border: 1px solid var(--hair-2); border-radius: 7px; padding: 4px 9px; font-size: 11px; color: var(--ink); white-space: nowrap; box-shadow: 0 6px 18px rgba(0,0,0,0.5); }
+  .focusring { outline: 2px solid var(--accent); outline-offset: -2px; border-radius: 4px; }
+
+  /* zoom panels (s3) */
+  .zoom { background: rgba(13,18,32,0.5); border: 1px solid var(--hair); border-radius: 12px; padding: 18px; flex: 1; }
+  .zoom h3 { font-size: 11px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--ink-3); margin-bottom: 12px; font-weight: 650; }
+  .zoom .demo { display: flex; gap: 20px; align-items: flex-start; }
+  .kbd { font: 10.5px var(--mono); color: var(--ink-2); border: 1px solid var(--hair-2); border-bottom-width: 2px; border-radius: 5px; padding: 1px 6px; }
+  .speclist { font-size: 11.5px; color: var(--ink-2); line-height: 1.75; }
+  .speclist b { color: var(--accent); font-weight: 650; }
+  .big { transform: scale(1.5); transform-origin: top left; }
+
+  .notes { display: flex; gap: 14px; align-items: stretch; margin: 14px auto 0; width: min(1460px, 97%); }
+  .anno { font-size: 11px; color: var(--ink-2); background: var(--glass-2); border: 1px solid var(--hair-2); border-left: 2px solid var(--accent); border-radius: 8px; padding: 9px 12px; flex: 1; }
+  .anno b { color: var(--accent); font-weight: 650; }
+  .specnote { margin: 22px auto 8px; width: min(1460px, 97%); font-size: 11.5px; color: var(--ink-2); }
+  .specnote b { color: var(--accent); }
+  @media (prefers-reduced-motion: reduce) { * { animation: none !important; } }
+</style>
+</head>
+<body>
+
+<div class="concept"><b>ROUND 2 — Q II · THE RAIL, DOCKED &amp; IN TWO DENSITIES</b> #486 under #518 · answering the round-1 verdict
+  <span style="margin-left:auto"><a href="../round-1/direction-q-rail.html">← round 1: Q</a><a href="index.html">index</a></span>
+</div>
+
+<!-- ================= SCENE 1 : THE THREE STATES ================= -->
+<section class="scene" id="s1">
+  <div class="scene-tag">Scene 1 — one rail, three persistent states: full · icons · docked. The operator chooses; nothing second-guesses the choice.</div>
+  <div class="row">
+    <div class="frame">
+      <aside class="rail" aria-label="Navigation">
+        <span class="wm">MIKRO<em>VIEW</em></span>
+        <span class="conn"><i></i>receiving</span>
+        <div class="gsec">Live</div>
+        <span class="gpg on"><span class="ic">▿</span><span class="lab">The fall</span></span>
+        <span class="gpg"><span class="ic">≡</span><span class="lab">Stream</span></span>
+        <div class="gsec">Investigate</div>
+        <span class="gpg"><span class="ic">∿</span><span class="lab">Metrics</span></span>
+        <span class="gpg"><span class="ic">¶</span><span class="lab">Audit log</span></span>
+        <div class="gsec">Detect</div>
+        <span class="gpg"><span class="ic">⚑</span><span class="lab">Flags</span><span class="ct">6</span></span>
+        <span class="gpg"><span class="ic">⚙</span><span class="lab">Detectors</span></span>
+        <div class="gsec">Expect</div>
+        <span class="gpg"><span class="ic">◉</span><span class="lab">Watchlist</span></span>
+        <div class="gsec">Admin</div>
+        <span class="gpg"><span class="ic">§</span><span class="lab">Users</span></span>
+        <span class="gpg"><span class="ic">✱</span><span class="lab">Tokens</span></span>
+        <span class="gpg"><span class="ic">⌂</span><span class="lab">Fleet</span></span>
+        <span class="gpg"><span class="ic">⊞</span><span class="lab">Entities</span></span>
+        <span class="gpg action"><span class="ic">⟳</span><span class="lab">Run setup…</span></span>
+        <div class="foot"><span class="nm">tom</span><span class="role">admin</span><span class="rbtn first" title="Icons only">⇔</span><span class="rbtn" title="Dock the rail">⇤</span></div>
+      </aside>
+      <div class="main">
+        <div class="fallwrap"><svg viewBox="0 0 420 470" preserveAspectRatio="xMidYMin meet" aria-hidden="true">
+          <line class="nowline nowpulse" x1="14" y1="30" x2="406" y2="30"/>
+          <text x="16" y="19" style="fill:var(--now); font-size:8.5px; font-weight:700">THE BRINK · 14:02:11</text>
+          <g stroke="var(--drop)" stroke-width="1.2" opacity="0.6"><line x1="36" y1="34" x2="36" y2="460" stroke-dasharray="3 30"/><line x1="58" y1="36" x2="58" y2="460" stroke-dasharray="2 44"/></g>
+          <line x1="120" y1="34" x2="120" y2="460" stroke="var(--acc)" stroke-width="2.2" opacity="0.8"/>
+          <line x1="156" y1="34" x2="156" y2="460" stroke="var(--acc)" stroke-width="1.1" stroke-dasharray="8 14" opacity="0.5"/>
+          <rect x="205" y="34" width="66" height="426" fill="rgba(85,98,138,0.07)"/>
+          <line x1="332" y1="34" x2="332" y2="62" stroke="var(--drop)" stroke-width="2.4" class="nowpulse"/>
+          <line x1="332" y1="62" x2="332" y2="330" stroke="var(--drop)" stroke-width="2.4" stroke-dasharray="5 18"/>
+          <circle cx="332" cy="330" r="4" fill="var(--void)" stroke="var(--drop)" stroke-width="1.3"/>
+          <text x="240" y="352" style="fill:var(--drop); font-size:8px">◉ 13:52 — first in 41 days</text>
+        </svg></div>
+      </div>
+      <div class="cap"><b>Full — icons + text, 216px.</b> The whole geography readable. Foot: ⇔ switches density, ⇤ docks.</div>
+    </div>
+    <div class="frame">
+      <aside class="rail slim" aria-label="Navigation">
+        <span class="wm">M<em>V</em><span>IEW</span></span>
+        <span class="conn"><i></i><b>receiving</b></span>
+        <span class="gpg on" title="The fall"><span class="ic">▿</span><span class="lab">The fall</span></span>
+        <span class="gpg" title="Stream"><span class="ic">≡</span><span class="lab">Stream</span></span>
+        <span class="gpg" title="Metrics"><span class="ic">∿</span><span class="lab">Metrics</span></span>
+        <span class="gpg" title="Audit log"><span class="ic">¶</span><span class="lab">Audit log</span></span>
+        <span class="gpg" title="Flags — 6 open"><span class="ic">⚑</span><span class="lab">Flags</span><span class="ct">6</span></span>
+        <span class="gpg" title="Detectors"><span class="ic">⚙</span><span class="lab">Detectors</span></span>
+        <span class="gpg" title="Watchlist"><span class="ic">◉</span><span class="lab">Watchlist</span></span>
+        <span class="gpg" title="Users"><span class="ic">§</span><span class="lab">Users</span></span>
+        <span class="gpg" title="Tokens"><span class="ic">✱</span><span class="lab">Tokens</span></span>
+        <span class="gpg" title="Fleet"><span class="ic">⌂</span><span class="lab">Fleet</span></span>
+        <span class="gpg" title="Entities"><span class="ic">⊞</span><span class="lab">Entities</span></span>
+        <span class="gpg action" title="Run setup"><span class="ic">⟳</span><span class="lab">Run setup…</span></span>
+        <div class="foot"><span class="rbtn first" title="Icons and text">⇔</span><span class="rbtn" title="Dock the rail">⇤</span></div>
+      </aside>
+      <div class="main">
+        <div class="fallwrap"><svg viewBox="0 0 560 470" preserveAspectRatio="xMidYMin meet" aria-hidden="true">
+          <line class="nowline nowpulse" x1="14" y1="30" x2="546" y2="30"/>
+          <text x="16" y="19" style="fill:var(--now); font-size:8.5px; font-weight:700">THE BRINK · 14:02:11</text>
+          <g stroke="var(--drop)" stroke-width="1.2" opacity="0.6"><line x1="40" y1="34" x2="40" y2="460" stroke-dasharray="3 30"/><line x1="66" y1="36" x2="66" y2="460" stroke-dasharray="2 44"/></g>
+          <line x1="150" y1="34" x2="150" y2="460" stroke="var(--acc)" stroke-width="2.2" opacity="0.8"/>
+          <line x1="196" y1="34" x2="196" y2="460" stroke="var(--acc)" stroke-width="1.1" stroke-dasharray="8 14" opacity="0.5"/>
+          <rect x="260" y="34" width="88" height="426" fill="rgba(85,98,138,0.07)"/>
+          <text class="fanno" x="304" y="250" text-anchor="middle">uncharted</text>
+          <line x1="440" y1="34" x2="440" y2="62" stroke="var(--drop)" stroke-width="2.4" class="nowpulse"/>
+          <line x1="440" y1="62" x2="440" y2="330" stroke="var(--drop)" stroke-width="2.4" stroke-dasharray="5 18"/>
+          <circle cx="440" cy="330" r="4" fill="var(--void)" stroke="var(--drop)" stroke-width="1.3"/>
+          <text x="348" y="352" style="fill:var(--drop); font-size:8px">◉ 13:52 — first in 41 days</text>
+        </svg></div>
+      </div>
+      <div class="cap"><b>Icons — 54px.</b> Same items, same order, same badge. Labels survive as tooltips and aria-labels; nothing is icon-only to a keyboard or a reader.</div>
+    </div>
+    <div class="frame">
+      <span class="handle" role="button" aria-label="Show navigation — 6 open flags"><span class="g">»</span><span class="ct">6</span></span>
+      <div class="main">
+        <div class="fallwrap"><svg viewBox="0 0 640 470" preserveAspectRatio="xMidYMin meet" aria-hidden="true">
+          <line class="nowline nowpulse" x1="40" y1="30" x2="626" y2="30"/>
+          <text x="42" y="19" style="fill:var(--now); font-size:8.5px; font-weight:700">THE BRINK · 14:02:11</text>
+          <g stroke="var(--drop)" stroke-width="1.2" opacity="0.6"><line x1="66" y1="34" x2="66" y2="460" stroke-dasharray="3 30"/><line x1="94" y1="36" x2="94" y2="460" stroke-dasharray="2 44"/></g>
+          <line x1="190" y1="34" x2="190" y2="460" stroke="var(--acc)" stroke-width="2.2" opacity="0.8"/>
+          <line x1="240" y1="34" x2="240" y2="460" stroke="var(--acc)" stroke-width="1.1" stroke-dasharray="8 14" opacity="0.5"/>
+          <rect x="310" y="34" width="100" height="426" fill="rgba(85,98,138,0.07)"/>
+          <text class="fanno" x="360" y="250" text-anchor="middle">uncharted — no gauge</text>
+          <line x1="510" y1="34" x2="510" y2="62" stroke="var(--drop)" stroke-width="2.4" class="nowpulse"/>
+          <line x1="510" y1="62" x2="510" y2="330" stroke="var(--drop)" stroke-width="2.4" stroke-dasharray="5 18"/>
+          <circle cx="510" cy="330" r="4" fill="var(--void)" stroke="var(--drop)" stroke-width="1.3"/>
+          <text x="418" y="352" style="fill:var(--drop); font-size:8px">◉ 13:52 — first in 41 days</text>
+        </svg></div>
+      </div>
+      <div class="cap"><b>Docked — 0px + the handle.</b> The fall owns the screen. The handle is the only chrome, and it wears the alarm badge: docking navigation never docks the alarm.</div>
+    </div>
+  </div>
+  <div class="notes">
+    <div class="anno"><b>Three persistent states, one owner.</b> The state is a per-user preference and survives reload. Round 1's auto-collapse on Live places is superseded — with dock available, immersion is a choice, not a guess, and the rail never moves on its own.</div>
+    <div class="anno"><b>Defaults:</b> full at ≥1280px, icons below. Docked is never a default — an operator docks it themselves, so they know where the handle lives.</div>
+  </div>
+  <p class="specnote"><b>Connection state:</b> the rail-head dot exists in full and icons. Docked, connection loss is the banner's job (it renders regardless of rail state) — the handle stays a one-job control: bring the rail back, and say if the alarm has something for you.</p>
+</section>
+
+<!-- ================= SCENE 2 : FROM DOCKED — THE DRAWER ================= -->
+<section class="scene" id="s2">
+  <div class="scene-tag">Scene 2 — from docked, » opens a drawer, not a state change: navigate once, and the rail is gone again.</div>
+  <div class="row">
+    <div class="frame">
+      <span class="handle" role="button" aria-label="Show navigation — 6 open flags"><span class="g">»</span><span class="ct">6</span></span>
+      <div class="main">
+        <div class="fallwrap" style="opacity: 0.7"><svg viewBox="0 0 640 470" preserveAspectRatio="xMidYMin meet" aria-hidden="true">
+          <line class="nowline nowpulse" x1="40" y1="30" x2="626" y2="30"/>
+          <line x1="190" y1="34" x2="190" y2="460" stroke="var(--acc)" stroke-width="2.2" opacity="0.8"/>
+          <line x1="510" y1="34" x2="510" y2="62" stroke="var(--drop)" stroke-width="2.4" class="nowpulse"/>
+          <line x1="510" y1="62" x2="510" y2="330" stroke="var(--drop)" stroke-width="2.4" stroke-dasharray="5 18"/>
+          <circle cx="510" cy="330" r="4" fill="var(--void)" stroke="var(--drop)" stroke-width="1.3"/>
+        </svg></div>
+      </div>
+      <div class="cap"><b>a · Docked.</b> Click » (or Tab to it — it is first in tab order — and press Enter).</div>
+    </div>
+    <div class="frame">
+      <aside class="rail slim drawer" aria-label="Navigation">
+        <span class="wm">M<em>V</em></span>
+        <span class="conn"><i></i></span>
+        <span class="gpg on" title="The fall"><span class="ic">▿</span><span class="lab">The fall</span></span>
+        <span class="gpg focusring" title="Stream"><span class="ic">≡</span><span class="lab">Stream</span></span>
+        <span class="gpg" title="Metrics"><span class="ic">∿</span><span class="lab">Metrics</span></span>
+        <span class="gpg" title="Audit log"><span class="ic">¶</span><span class="lab">Audit log</span></span>
+        <span class="gpg" title="Flags — 6 open"><span class="ic">⚑</span><span class="lab">Flags</span><span class="ct">6</span></span>
+        <span class="gpg" title="Detectors"><span class="ic">⚙</span><span class="lab">Detectors</span></span>
+        <span class="gpg" title="Watchlist"><span class="ic">◉</span><span class="lab">Watchlist</span></span>
+        <span class="gpg" title="Users"><span class="ic">§</span><span class="lab">Users</span></span>
+        <span class="gpg" title="Tokens"><span class="ic">✱</span><span class="lab">Tokens</span></span>
+        <span class="gpg" title="Fleet"><span class="ic">⌂</span><span class="lab">Fleet</span></span>
+        <span class="gpg" title="Entities"><span class="ic">⊞</span><span class="lab">Entities</span></span>
+        <span class="gpg action" title="Run setup"><span class="ic">⟳</span><span class="lab">Run setup…</span></span>
+        <div class="foot"><span class="rbtn first pin" title="Keep the rail open">⇥</span><span class="rbtn" title="Icons and text">⇔</span></div>
+      </aside>
+      <div class="tip" style="top: 118px;">Stream</div>
+      <div class="main" style="filter: brightness(0.75);">
+        <div class="fallwrap" style="opacity: 0.55"><svg viewBox="0 0 640 470" preserveAspectRatio="xMidYMin meet" aria-hidden="true">
+          <line class="nowline" x1="40" y1="30" x2="626" y2="30"/>
+          <line x1="190" y1="34" x2="190" y2="460" stroke="var(--acc)" stroke-width="2.2" opacity="0.8"/>
+          <line x1="510" y1="34" x2="510" y2="330" stroke="var(--drop)" stroke-width="2.4" stroke-dasharray="5 18"/>
+        </svg></div>
+      </div>
+      <div class="cap"><b>b · The drawer.</b> The rail slides over the fall in your last density; focus lands on the current page. Arrow/Tab to Stream, Enter. Esc or click-away dismisses. ⇥ pins it open (that is the one state change on offer here).</div>
+    </div>
+    <div class="frame">
+      <span class="handle" role="button" aria-label="Show navigation — 6 open flags"><span class="g">»</span><span class="ct">6</span></span>
+      <div class="main">
+        <div class="crumb" style="padding-left: 44px;"><div class="over">Live</div><h2>Stream <span class="dim">· newest first · receiving</span></h2></div>
+        <div class="ghostrow" style="margin-top: 16px"></div>
+        <div class="ghostrow" style="width: 84%"></div>
+        <div class="ghostrow" style="width: 90%"></div>
+        <div class="ghostrow" style="width: 78%"></div>
+      </div>
+      <div class="cap"><b>c · Arrived, re-docked.</b> Navigating dismissed the drawer by itself — one click to travel, zero clicks to tidy up. Focus lands on the page (the skip-link target).</div>
+    </div>
+  </div>
+  <div class="notes">
+    <div class="anno"><b>Why a drawer and not a state flip:</b> docked exists for watching. The reason you pop the rail out is to go somewhere; making that flip the persistent state would tax every trip with a re-dock click. The drawer makes the common case free and keeps ⇥ for the deliberate case.</div>
+    <div class="anno"><b>Reduced motion:</b> the slide becomes an instant appear/disappear — same states, no travel.</div>
+  </div>
+</section>
+
+<!-- ================= SCENE 3 : THE CONTROLS, CLOSE UP ================= -->
+<section class="scene" id="s3">
+  <div class="scene-tag">Scene 3 — the controls, close up: two buttons, one handle, and the whole keyboard story.</div>
+  <div class="row">
+    <div class="zoom">
+      <h3>The foot — full rail</h3>
+      <div class="demo">
+        <div class="big" style="display: flex; align-items: center; gap: 7px; padding: 8px 12px; border: 1px solid var(--hair); border-radius: 9px; background: var(--glass-2); font-size: 11.5px; color: var(--ink-2);">
+          <span>tom</span><span class="role">admin</span><span class="rbtn first" title="Icons only">⇔</span><span class="rbtn" title="Dock the rail">⇤</span>
+        </div>
+      </div>
+      <p class="speclist" style="margin-top: 54px;"><b>⇔ Density</b> — toggles icons ⟷ icons+text. aria-label states the destination: "Show icons only" / "Show icons and text".<br><b>⇤ Dock</b> — hides the rail to the handle. aria-label: "Dock the navigation — reopen with the tab at the top left". The wording teaches the way back at the moment of hiding.</p>
+    </div>
+    <div class="zoom">
+      <h3>The foot — drawer (overlaid)</h3>
+      <div class="demo">
+        <div class="big" style="display: flex; align-items: center; gap: 7px; padding: 8px 12px; border: 1px solid var(--hair); border-radius: 9px; background: var(--glass-2);">
+          <span class="rbtn first pin" title="Keep the rail open">⇥</span><span class="rbtn" title="Icons and text">⇔</span>
+        </div>
+      </div>
+      <p class="speclist" style="margin-top: 54px;"><b>⇥ Keep open</b> — the same slot ⇤ occupied, meaning inverted: pins the drawer into the persistent undocked state. One slot, two directions, no third control.<br><b>⇔</b> works inside the drawer too — density is one preference wherever it is set.</p>
+    </div>
+    <div class="zoom">
+      <h3>The handle</h3>
+      <div class="demo" style="position: relative; height: 100px;">
+        <span class="handle big" style="position: static;"><span class="g">»</span><span class="ct">6</span></span>
+      </div>
+      <p class="speclist"><b>26 × 44px</b>, glass, top-left, fixed. First in tab order after the skip-link; <span class="kbd">Enter</span> opens the drawer. Wears the open-flag count — the one number that must survive docking. No other duty: connection loss stays the banner's job.</p>
+    </div>
+  </div>
+  <div class="notes">
+    <div class="anno"><b>Keyboard, end to end:</b> <span class="kbd">Tab</span> reaches handle/rail items in order · <span class="kbd">Enter</span> activates · drawer: focus lands on the current page, <span class="kbd">Esc</span> returns it to the handle · docking returns focus to the handle · pinning keeps focus where it sits. Every control is a real button with a spoken label; the states are announced ("navigation docked", "navigation pinned open").</div>
+    <div class="anno"><b>Persistence:</b> one preference, three values (full · icons · docked), stored per user, applied before first paint so the rail never flashes between states on load.</div>
+  </div>
+</section>
+
+<!-- ================= SCENE 4 : A WORKING PAGE, ICONS MODE ================= -->
+<section class="scene" id="s4">
+  <div class="scene-tag">Scene 4 — a working page in icons mode: the slim rail earns its keep off the fall too, and labels never abandon the keyboard.</div>
+  <div class="frame wide">
+    <aside class="rail slim" aria-label="Navigation">
+      <span class="wm">M<em>V</em></span>
+      <span class="conn"><i></i></span>
+      <span class="gpg" title="The fall"><span class="ic">▿</span><span class="lab">The fall</span></span>
+      <span class="gpg" title="Stream"><span class="ic">≡</span><span class="lab">Stream</span></span>
+      <span class="gpg" title="Metrics"><span class="ic">∿</span><span class="lab">Metrics</span></span>
+      <span class="gpg" title="Audit log"><span class="ic">¶</span><span class="lab">Audit log</span></span>
+      <span class="gpg on focusring" title="Flags — 6 open"><span class="ic">⚑</span><span class="lab">Flags</span><span class="ct">6</span></span>
+      <span class="gpg" title="Detectors"><span class="ic">⚙</span><span class="lab">Detectors</span></span>
+      <span class="gpg" title="Watchlist"><span class="ic">◉</span><span class="lab">Watchlist</span></span>
+      <span class="gpg" title="Users"><span class="ic">§</span><span class="lab">Users</span></span>
+      <span class="gpg" title="Tokens"><span class="ic">✱</span><span class="lab">Tokens</span></span>
+      <span class="gpg" title="Fleet"><span class="ic">⌂</span><span class="lab">Fleet</span></span>
+      <span class="gpg" title="Entities"><span class="ic">⊞</span><span class="lab">Entities</span></span>
+      <span class="gpg action" title="Run setup"><span class="ic">⟳</span><span class="lab">Run setup…</span></span>
+      <div class="foot"><span class="rbtn first" title="Icons and text">⇔</span><span class="rbtn" title="Dock the rail">⇤</span></div>
+    </aside>
+    <div class="tip" style="top: 208px;">Flags — 6 open</div>
+    <div class="main">
+      <div class="crumb">
+        <div class="over">Detect</div>
+        <h2>Flags <span class="dim">· 6 open · newest first</span></h2>
+      </div>
+      <div class="tabs" role="tablist" aria-label="Flags views">
+        <span class="tab on">Open<span class="ct">6</span></span>
+        <span class="tab">Resolved</span>
+        <span class="tab">Exclusions<span class="ct quiet">2</span></span>
+      </div>
+      <div class="list">
+        <div class="rowi alarm">
+          <span class="sev"></span>
+          <span class="what">New talker on a silent boundary</span>
+          <span class="who">cam-porch → nas · tcp/445 · every 64 s, all refused</span>
+          <span class="lane" style="color:var(--iot); border:1px solid var(--iot)">IOT → LAN</span>
+          <span class="when">13:52 · today</span>
+        </div>
+        <div class="rowi alarm">
+          <span class="sev"></span>
+          <span class="what">Egress cadence broken</span>
+          <span class="who">cam-porch → wan · the 300 s heartbeat stumbled</span>
+          <span class="lane" style="color:var(--iot); border:1px solid var(--iot)">IOT → WAN</span>
+          <span class="when">13:52 · today</span>
+        </div>
+        <div class="rowi">
+          <span class="sev"></span>
+          <span class="what">Inbound pressure rising</span>
+          <span class="who">wan · :8291 knocks ▲3.1× since 13:30</span>
+          <span class="lane" style="color:var(--ink-3); border:1px solid var(--hair-2)">WAN · IN</span>
+          <span class="when">13:41 · today</span>
+        </div>
+        <div class="ghostrow" style="width:58%; margin: 10px 0"></div>
+        <div class="ghostrow" style="width:50%; margin: 10px 0"></div>
+      </div>
+    </div>
+  </div>
+  <div class="notes">
+    <div class="anno"><b>The focused icon speaks.</b> Keyboard focus on a slim item shows the visible ring and the tooltip with the full label and count — the same words the reader hears. Hover shows the tooltip too, but nothing here is hover-only.</div>
+    <div class="anno"><b>Mobile is untouched by this round:</b> the round-1 bottom bar stands. Dock and density are pointer-width affordances; a phone's rail is already minimal.</div>
+  </div>
+  <p class="specnote"><b>What did not change from round 1:</b> the five groups and their order, every page's home, the badge semantics, the reserved-slot rule, the #490 grammar, and the chrome states (first run · connection lost · pre-map v0.4.0) — all carried forward verbatim from the ratified Q scenes.</p>
+</section>
+
+</body>
+</html>
