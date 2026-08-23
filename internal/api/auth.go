@@ -379,12 +379,29 @@ var authErrorMessages = map[error]string{
 func writeAuthError(w http.ResponseWriter, r *http.Request, err error, status int) {
 	msg, ok := authErrorMessages[err]
 	if !ok {
-		// The route is ours (server-controlled), so naming it is safe
-		// and turns a bare error into one that says where to look.
-		authLog.Warn(fmt.Sprintf("%s %s: %v", r.Method, r.URL.Path, err))
+		authLog.Warn(authErrorLogLine(r.Method, r.URL.Path, err))
 		msg = "unable to complete the request"
 	}
 	http.Error(w, msg, status)
+}
+
+// authErrorLogLine renders the server-side line for an auth error that
+// has no user-facing message, naming the route so a bare error says
+// where to look.
+//
+// Every field is quoted, and that is the point rather than styling.
+// None of them is server-controlled: r.URL.Path is the *decoded*
+// request target, so a request for `/api/x%0A...` arrives here carrying
+// a real newline, and writing it raw let an unauthenticated caller
+// append whatever it liked to mikroview's own log -- a forged INFO line
+// is indistinguishable from a genuine one (#528). The error is quoted
+// on the same reasoning: this branch is the one for errors we did not
+// anticipate, which are the likeliest to carry something a caller sent.
+//
+// %q escapes the control characters, so the entry stays on one line and
+// an injected newline shows up as the `\n` it really is.
+func authErrorLogLine(method, path string, err error) string {
+	return fmt.Sprintf("%q %q: %q", method, path, fmt.Sprint(err))
 }
 
 // credentialsRequest is the body of both login and first-run
