@@ -54,7 +54,23 @@ same four scenes, three changes:
    red count on the rail, told once.)
 3. Wordmark: kept, per round 2.
 
-## Owner verdicts
+## Owner verdicts — round 3 closed (2026-08-23)
 
-_Pending — recorded verbatim here when the batch returns; the running
-log lives on #518._
+> "Your themes are just so extreme, it's really hard for a human to
+> read/see as everything in dark is SO dark and everything in light
+> is SO bright."
+
+clarified, after a first misread (an app-token recalibration was
+started and discarded):
+
+> "My point was the back ground for each demo page is practically the
+> same colour as the screenshots you're showing. Give the light theme
+> a grey background and the dark one a navy blue"
+
+- **The demo canvas, not the app tokens, was the problem** → round 4:
+  navy canvas behind the dark frames, grey behind the light ones; app
+  surfaces unchanged.
+- **The handle: fine for now** ("we'll change it later").
+- **Broken state: red outline on the icon** instead of the proposed
+  dot — the Watchlist icon wears a red ring while a watch is broken.
+- Wordmark: kept (round 2).
