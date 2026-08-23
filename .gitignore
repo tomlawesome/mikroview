@@ -19,3 +19,7 @@
 
 # live-check scratch directory (scripts/live-env.sh)
 /tmp-live/
+
+# Session handoff snapshots. They are in-flight notes for whoever picks the
+# work up next, not repository state -- the issues and PRs are that.
+/.agents/
