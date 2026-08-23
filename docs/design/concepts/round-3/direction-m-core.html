@@ -1,0 +1,623 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mikroview — Direction M: Core</title>
+<style>
+  /* ============================================================
+     DIRECTION M — "CORE"  (Strata turned vertical, 2026-08-23)
+     Not a rotation: a change of substance. Three things become
+     true the moment time runs downward that were impossible when
+     it ran across:
+
+     · SCROLL IS THE TIME MACHINE. The wheel is the web's native
+       gesture and it now means "deeper into the past". The range
+       tabs (15m/1h/24h/14d) are GONE — depth is the range, and
+       the ground compresses as it goes down, so one surface holds
+       the last quarter-hour in fine grain and the whole day below
+       the fold. Sediment compaction, honestly applied to time.
+
+     · WORDS AND MARKS SHARE A DEPTH. Text runs horizontally; time
+       no longer competes with it. Any event can carry its log
+       line printed beside its mark at the same y. Strata II could
+       only afford words in a gutter after NOW; here the ground
+       itself can speak wherever it matters.
+
+     · A MOMENT IS A HORIZON. One instant cuts across every core
+       at the same depth, like an ash layer through rock. At the
+       13:52 horizon you can SEE two things happen at once: the
+       new talker starts knocking AND the egress cadence breaks —
+       correlation by geometry, not by reading timestamps.
+
+     And the quiet fourth: the live table is already vertical
+     time, newest at the top (#363). The chart and the table stop
+     being two surfaces — a core opened IS the table; the table is
+     the core at full magnification.
+
+     Palette: lanes revalidated this round (dataviz six checks,
+     surface #0d0f12) — guest moved from orange #d95926 to rose
+     #d76a9e; orange↔amber failed CVD (ΔE 4.8 deutan) and the
+     normal-vision floor (10.6). Column order keeps rose and amber
+     apart from red marks. Red is only ever a drop.
+     ============================================================ */
+  :root {
+    --paper: #0d0f12;
+    --panel: #12151a;
+    --grid: #1a1e25;
+    --grid-2: #262c36;
+    --ink: #e7e9ee;
+    --ink-2: #9aa1ad;
+    --ink-3: #59606e;
+    --now: #e8b05a;
+    --lan: #3987e5; --srv: #199e70; --iot: #c98500; --guest: #d76a9e;
+    --ok: #3fae5a;
+    --drop: #e05252;
+    --nat: #a08df0;
+    --sans: system-ui, -apple-system, "Segoe UI", sans-serif;
+    --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  }
+  * { box-sizing: border-box; margin: 0; }
+  html { scroll-behavior: smooth; }
+  body { background: var(--paper); color: var(--ink); font: 13.5px/1.5 var(--sans); -webkit-font-smoothing: antialiased; }
+  .concept {
+    position: sticky; top: 0; z-index: 90; display: flex; gap: 16px; align-items: baseline;
+    padding: 8px 20px; background: #08090c; border-bottom: 1px solid var(--grid-2);
+    font-size: 11px; color: var(--ink-3);
+  }
+  .concept b { color: var(--now); letter-spacing: 0.1em; }
+  .concept a { color: var(--ink-2); text-decoration: none; margin-left: 12px; }
+
+  .scene { min-height: 100vh; position: relative; border-bottom: 1px solid var(--grid-2); overflow: hidden; padding-bottom: 24px; }
+  .scene-tag { font-size: 10.5px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--ink-3); padding: 13px 36px 0; }
+
+  .bar { display: flex; align-items: baseline; gap: 20px; padding: 16px 36px 2px; }
+  .bar .wm { font-size: 12px; font-weight: 800; letter-spacing: 0.22em; color: var(--ink-3); }
+  .bar .wm em { color: var(--now); font-style: normal; }
+  .bar h1 { font-size: 20px; font-weight: 600; }
+  .bar h1 .here { color: var(--now); }
+  .bar .sub { font-size: 11px; color: var(--ink-3); }
+  .bar .sub b { color: var(--ink-2); }
+  .depthrule { margin-left: auto; font-size: 11px; color: var(--ink-2); border: 1px solid var(--grid-2); border-radius: 999px; padding: 4px 14px; }
+  .depthrule b { color: var(--now); font-weight: 650; }
+
+  .attention { display: flex; gap: 10px; align-items: center; padding: 8px 36px 0; flex-wrap: wrap; }
+  .att {
+    display: inline-flex; align-items: center; gap: 7px; font-size: 11.5px; font-weight: 650;
+    border: 1px solid var(--grid-2); border-radius: 999px; padding: 4px 13px; color: var(--ink-2);
+  }
+  .att i { width: 6px; height: 6px; border-radius: 50%; }
+  .att.alarm { border-color: rgba(224,82,82,0.5); color: var(--drop); }
+  .att.alarm i { background: var(--drop); animation: pulse 1.6s ease-in-out infinite; }
+  .att.dark { color: var(--drop); } .att.dark i { background: transparent; border: 1px solid var(--drop); }
+  .att.calm { color: var(--ok); } .att.calm i { background: var(--ok); }
+  @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.3; } }
+  .howto { padding: 6px 36px 0; font-size: 11.5px; color: var(--ink-3); }
+  .howto b { color: var(--ink-2); font-weight: 600; }
+
+  .dig { margin: 10px 36px 0; }
+  .dig svg { width: 100%; display: block; }
+  svg text { font-family: var(--mono); }
+  .tlab { fill: var(--ink-3); font-size: 9.5px; }
+  .gridline { stroke: var(--grid); stroke-width: 1; }
+  .gridline5 { stroke: var(--grid-2); stroke-width: 1; }
+
+  .card { fill: var(--panel); stroke: var(--grid-2); }
+  .cname { fill: var(--ink); font-size: 12.5px; font-weight: 700; font-family: var(--sans); }
+  .csub { fill: var(--ink-3); font-size: 8.5px; font-family: var(--sans); }
+  .crate { fill: var(--ink-2); font-size: 10.5px; font-weight: 600; }
+  .chip { font-size: 8px; font-weight: 800; letter-spacing: 0.07em; font-family: var(--sans); }
+  .ch-ok { fill: var(--ok); } .ch-bad { fill: var(--drop); } .ch-mut { fill: var(--ink-3); }
+
+  .vol { opacity: 0.95; }
+  .ticks-drop { stroke: var(--drop); stroke-width: 1.6; }
+  .ticks-nat { stroke: var(--nat); stroke-width: 1.6; opacity: 0.9; }
+  .thread-ok { stroke: var(--ok); stroke-width: 2; opacity: 0.8; }
+  .thread-broken { stroke: var(--drop); stroke-width: 2; }
+  .threadlab { font-size: 8.5px; font-weight: 700; letter-spacing: 0.05em; font-family: var(--sans); }
+  .t-ok { fill: var(--ok); } .t-viol { fill: var(--drop); }
+  .nowline { stroke: var(--now); stroke-width: 1.6; }
+  .nowhead { fill: var(--now); }
+  .nowpulse { animation: nowpulse 1.4s ease-in-out infinite; }
+  @keyframes nowpulse { 0%,100% { opacity: 1; } 50% { opacity: 0.35; } }
+  .blink { animation: blink 1.4s steps(2) infinite; }
+  @keyframes blink { 50% { opacity: 0.15; } }
+  .halo { animation: halo 2.2s ease-out infinite; transform-origin: center; transform-box: fill-box; }
+  @keyframes halo { 0% { opacity: 0.7; transform: scale(0.5); } 100% { opacity: 0; transform: scale(2.4); } }
+  /* the ground settles: everything below the surface sinks as new sediment lands */
+  .settles { animation: settle 9s ease-in-out infinite; }
+  @keyframes settle { 0% { transform: translateY(0); } 88% { transform: translateY(4.5px); } 100% { transform: translateY(0); } }
+  .anno { fill: var(--ink-3); font-size: 9px; }
+  .darkband { fill: url(#hatchM); opacity: 0.5; }
+  .horizon { stroke: var(--drop); stroke-width: 1; stroke-dasharray: 2 6; opacity: 0.55; }
+  .horizon-old { stroke: var(--grid-2); stroke-width: 1; stroke-dasharray: 2 6; }
+  .hlab { font-size: 9px; font-weight: 700; font-family: var(--sans); }
+
+  .legend { display: flex; gap: 22px; padding: 10px 36px 0; font-size: 10.5px; color: var(--ink-2); flex-wrap: wrap; }
+  .legend .k { display: inline-flex; align-items: center; gap: 7px; }
+
+  /* scene 2 */
+  .openrow { margin: 10px 36px 0; border: 1px solid var(--grid-2); border-radius: 8px; overflow: hidden; }
+  .openhead { display: flex; align-items: baseline; gap: 14px; padding: 12px 16px; background: #101318; border-bottom: 1px solid var(--grid-2); }
+  .openhead h2 { font-size: 15px; font-weight: 700; }
+  .openhead h2 .to { color: var(--ink-3); font-weight: 300; padding: 0 5px; }
+  .stamp { font-size: 9.5px; font-weight: 800; letter-spacing: 0.12em; color: var(--drop); border: 1.5px solid var(--drop); border-radius: 4px; padding: 2px 8px; transform: rotate(-1deg); }
+  .openhead .meta { font-size: 11px; color: var(--ink-3); }
+  .openhead .meta b { color: var(--ink-2); }
+  .openhead .close { margin-left: auto; font-size: 11px; color: var(--now); }
+  .filterbar { display: flex; flex-wrap: wrap; gap: 10px; align-items: flex-end; padding: 10px 16px; border-bottom: 1px solid var(--grid); }
+  .ff { display: flex; flex-direction: column; gap: 3px; }
+  .ff label { font-size: 8.5px; letter-spacing: 0.11em; text-transform: uppercase; color: var(--ink-3); }
+  .ff input, .ff select { background: #08090c; border: 1px solid var(--grid-2); border-radius: 3px;
+    color: var(--ink); font: 12px var(--mono); padding: 5px 9px; width: 165px; outline: none; }
+  .ff select { width: 115px; } .ff.small input { width: 105px; }
+  .swap { background: transparent; border: 1px solid var(--grid-2); color: var(--now); font-size: 13px; border-radius: 3px; padding: 4px 9px; cursor: default; }
+  .fright { margin-left: auto; display: flex; gap: 8px; }
+  .btn { background: transparent; border: 1px solid var(--grid-2); color: var(--ink-2); font: 11px var(--sans); padding: 5px 12px; border-radius: 3px; cursor: default; }
+  .btn.on { color: var(--now); border-color: var(--now); }
+  .openbody { display: flex; }
+  .ribbon { flex: 0 0 96px; border-right: 1px solid var(--grid); }
+  .ribbon svg { display: block; width: 100%; }
+  table.stream { width: 100%; border-collapse: collapse; }
+  .stream th { text-align: left; font-size: 8.5px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--ink-3); font-weight: 650; padding: 8px 16px 6px; border-bottom: 1px solid var(--grid-2); }
+  .stream td { padding: 5.5px 16px; border-bottom: 1px solid var(--grid); font-family: var(--mono); font-size: 12px; white-space: nowrap; }
+  .t { color: var(--ink-3); font-size: 11px; }
+  .chain { color: var(--ink-3); font-size: 11px; font-family: var(--sans); }
+  .act { font-size: 10px; font-weight: 700; }
+  .act.drop { color: var(--drop); } .act.acc { color: var(--ok); } .act.nat { color: var(--nat); }
+  .host { color: var(--ink); } .ip { color: var(--ink-3); font-size: 11px; margin-left: 5px; }
+  .ld { display: inline-block; width: 6px; height: 6px; border-radius: 50%; margin-right: 7px; }
+  .arrow { color: var(--ink-3); } .rule-c { color: var(--ink-2); font-size: 11.5px; } .cc { font-size: 10px; color: var(--ink-3); }
+
+  @media (prefers-reduced-motion: reduce) { * { animation: none !important; } }
+</style>
+</head>
+<body>
+
+<div class="concept">
+  <b>DIRECTION M — CORE</b>
+  <span>strata, vertical — and vertical changes what it is: scroll is the time machine · words share a depth with marks · a moment is a horizon across every core</span>
+  <span style="margin-left:auto"><a href="#s1">1 the ground</a><a href="#s2">2 a core opens</a><a href="#s3">3 the fortnight</a><a href="index.html">index</a></span>
+</div>
+
+<!-- ============ SCENE 1 : THE GROUND — TODAY IN ONE SURFACE ============ -->
+<section class="scene" id="s1">
+  <div class="scene-tag">Scene 1 — the ground. Eight cores, the surface is NOW, and the whole day is on this one screen: no range tabs anywhere.</div>
+  <div class="bar">
+    <span class="wm">MIKRO<em>VIEW</em></span>
+    <h1>The ground <span class="here">· surface = now</span></h1>
+    <span class="sub">rb5009 · <b>41 rules</b> 14:01 · tom (admin)</span>
+    <span class="depthrule"><b>▼ scroll = back in time</b> · fine grain to 13:45 · the ground compresses below · no tabs — depth is the range</span>
+  </div>
+  <div class="attention">
+    <span class="att alarm"><i></i>UNPLANNED — iot → lan, since 13:52</span>
+    <span class="att alarm"><i></i>WATCH BROKEN — iot egress, 13:52</span>
+    <span class="att dark"><i></i>DARK — guest → wan, unmetered</span>
+    <span class="att calm"><i></i>everything else is holding</span>
+  </div>
+  <p class="howto"><b>How to read this:</b> each column is one boundary, drilled down through time. The surface is now; every mark is buried by what came after it. The shaded bulge is how much traffic; <b style="color:var(--drop)">red marks are drops</b> — nothing else is ever red. ◉ is a flag at its depth, and the dashed line through all eight cores is that moment as a horizon. Words print beside marks at the same depth. Scroll deeper for older; the scale compresses at the fold.</p>
+
+  <div class="dig">
+    <svg viewBox="0 0 1360 880" role="img"
+         aria-label="Eight vertical cores side by side, one per boundary, newest at the top surface under an amber NOW line. Depth is time, compressed below a fold so the whole day fits. The IoT-to-LAN core is blank all the way down except a run of red drop marks from the 13:52 horizon to the surface, each printed with its log line. The 13:52 horizon also breaks the IoT egress watch thread. The guest core is hatched: nothing is recorded there.">
+      <defs>
+        <pattern id="hatchM" width="8" height="8" patternTransform="rotate(45)" patternUnits="userSpaceOnUse">
+          <line x1="0" y1="0" x2="0" y2="8" stroke="var(--grid-2)" stroke-width="1.5"/>
+        </pattern>
+        <linearGradient id="hazeM" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0" stop-color="rgba(224,82,82,0.10)"/><stop offset="1" stop-color="rgba(224,82,82,0.03)"/>
+        </linearGradient>
+      </defs>
+
+      <!-- ══ depth rail ══ -->
+      <g>
+        <text class="tlab" x="62" y="99" text-anchor="end" style="fill:var(--now); font-weight:700">14:02:11</text>
+        <line class="gridline" x1="76" y1="157" x2="1346" y2="157"/><text class="tlab" x="62" y="160" text-anchor="end">14:00</text>
+        <line class="gridline" x1="76" y1="297" x2="1346" y2="297"/><text class="tlab" x="62" y="300" text-anchor="end">13:55</text>
+        <text class="tlab" x="62" y="385" text-anchor="end" style="fill:var(--drop); font-weight:700">13:52 ◉</text>
+        <line class="gridline" x1="76" y1="522" x2="1346" y2="522"/><text class="tlab" x="62" y="525" text-anchor="end">13:47</text>
+        <!-- the compression seam -->
+        <g>
+          <path d="M76 552 l14 5 14 -5 14 5 14 -5 14 5 14 -5 14 5 14 -5 14 5 14 -5 14 5 14 -5 14 5 14 -5 14 5 14 -5 14 5 14 -5 14 5 14 -5 14 5 14 -5 14 5 14 -5 14 5 14 -5 14 5 14 -5 14 5 14 -5 14 5 14 -5 14 5 14 -5 14 5 14 -5 14 5 14 -5 14 5 14 -5 14 5 14 -5 14 5 14 -5 12 4" fill="none" stroke="var(--grid-2)" stroke-width="1"/>
+          <text class="tlab" x="711" y="547" text-anchor="middle" style="fill:var(--ink-2)">— the ground compresses: a minute of grain above, the rest of the day below —</text>
+        </g>
+        <line class="gridline" x1="76" y1="614" x2="1346" y2="614"/><text class="tlab" x="62" y="617" text-anchor="end">13:30</text>
+        <text class="tlab" x="62" y="651" text-anchor="end">12:58 ◉</text>
+        <line class="gridline" x1="76" y1="686" x2="1346" y2="686"/><text class="tlab" x="62" y="689" text-anchor="end">12:00</text>
+        <text class="tlab" x="62" y="715" text-anchor="end">11:20 ◉</text>
+        <text class="tlab" x="62" y="759" text-anchor="end">09:03 ◉</text>
+        <line class="gridline" x1="76" y1="776" x2="1346" y2="776"/><text class="tlab" x="62" y="779" text-anchor="end">08:00</text>
+        <line class="gridline5" x1="76" y1="838" x2="1346" y2="838"/><text class="tlab" x="62" y="841" text-anchor="end">00:00</text>
+      </g>
+
+      <!-- ══ horizons ══ -->
+      <g>
+        <line class="horizon" x1="76" y1="382" x2="1346" y2="382"/>
+        <line class="horizon-old" x1="76" y1="648" x2="1346" y2="648"/>
+        <line class="horizon-old" x1="76" y1="712" x2="1346" y2="712"/>
+        <line class="horizon-old" x1="76" y1="756" x2="1346" y2="756"/>
+        <line class="horizon-old" x1="76" y1="592" x2="1346" y2="592"/>
+      </g>
+
+      <!-- ════ column 1 · wan → rb5009 · x 76..226 (neutral) ════ -->
+      <g>
+        <rect class="card" x="76" y="6" width="150" height="60" rx="5"/>
+        <rect x="76" y="6" width="3" height="60" rx="1.5" fill="var(--ink-3)"/>
+        <text class="cname" x="88" y="24">wan → rb5009</text>
+        <text class="csub" x="88" y="37">input · the weather</text>
+        <text class="chip ch-ok" x="88" y="52">WATCHED ✓ QUIET 41 D</text>
+        <text class="crate" x="220" y="24" text-anchor="end" style="fill:var(--drop)">6.2/s</text>
+        <g class="settles">
+          <!-- volume: drop pressure building since 13:30 — widest at the surface -->
+          <polygon class="vol" fill="rgba(224,82,82,0.13)" points="80,96 132,96 128,140 124,190 118,250 112,310 104,382 98,450 92,522 88,560 80,560"/>
+          <polyline fill="none" stroke="rgba(224,82,82,0.55)" stroke-width="1.4" points="132,96 128,140 124,190 118,250 112,310 104,382 98,450 92,522 88,560"/>
+          <!-- drop marks, denser toward the surface -->
+          <path class="ticks-drop" d="M82 101h18M82 116h18M82 130h17M82 145h17M82 161h16M82 178h16M82 196h15M82 215h15M82 236h14M82 259h14M82 284h13M82 312h13M82 343h12M82 379h12M82 420h11M82 466h11M82 516h10"/>
+          <path class="ticks-drop blink" d="M82 98h18"/>
+          <!-- compressed zone: the ramp's beginning and the morning's weather -->
+          <path class="ticks-drop" d="M82 570h9M82 583h9M82 598h9M82 610h9M82 625h8M82 640h8M82 660h8M82 680h8M82 700h8M82 724h8M82 748h8M82 770h8M82 796h8M82 820h8"/>
+          <text class="anno" x="105" y="475" style="fill:var(--drop)" transform="rotate(90 105 475)">▲3.1× since 13:30 · all named by wan-in-drop</text>
+          <g transform="translate(88 648)"><circle r="4.5" fill="var(--paper)" stroke="var(--iot)" stroke-width="1.4"/><circle r="1.6" fill="var(--iot)"/></g>
+          <g transform="translate(88 712)"><circle r="4.5" fill="var(--paper)" stroke="var(--iot)" stroke-width="1.4"/><circle r="1.6" fill="var(--iot)"/></g>
+          <g transform="translate(88 756)"><circle r="4.5" fill="var(--paper)" stroke="var(--iot)" stroke-width="1.4"/><circle r="1.6" fill="var(--iot)"/></g>
+        </g>
+        <!-- watch thread: holding, full depth -->
+        <line class="thread-ok" x1="218" y1="96" x2="218" y2="838"/>
+        <text class="threadlab t-ok" x="213" y="450" transform="rotate(90 213 450)">watch · inbound quiet ✓</text>
+        <!-- newest, in words, at its own depth -->
+        <text class="gut-t tlab" x="104" y="99">14:02:10.9 <tspan style="fill:var(--drop); font-weight:700">DROP</tspan></text>
+        <text class="tlab" x="104" y="110" style="fill:var(--ink-2)">185.220.101.34 → :8291</text>
+      </g>
+
+      <!-- ════ column 2 · lan → wan · x 236..386 (blue) ════ -->
+      <g>
+        <rect class="card" x="236" y="6" width="150" height="60" rx="5"/>
+        <rect x="236" y="6" width="3" height="60" rx="1.5" fill="var(--lan)"/>
+        <text class="cname" x="248" y="24">lan → wan</text>
+        <text class="csub" x="248" y="37">the household breathing</text>
+        <text class="chip ch-ok" x="248" y="52">WATCHED ✓ SHAPE 80/443/853</text>
+        <text class="crate" x="380" y="24" text-anchor="end">14/s</text>
+        <g class="settles">
+          <polygon class="vol" fill="rgba(57,135,229,0.16)" points="240,96 310,96 302,150 314,210 298,270 310,330 300,382 312,440 302,500 308,560 296,600 288,650 280,700 262,776 252,820 240,838"/>
+          <polyline fill="none" stroke="rgba(57,135,229,0.55)" stroke-width="1.4" points="310,96 302,150 314,210 298,270 310,330 300,382 312,440 302,500 308,560 296,600 288,650 280,700 262,776 252,820 240,838"/>
+          <path class="ticks-nat" d="M242 130h14M242 240h14M242 350h14M242 458h14M242 540h14"/>
+          <text class="anno" x="330" y="700" transform="rotate(90 330 700)">the household wakes at eight ↓</text>
+        </g>
+        <line class="thread-ok" x1="378" y1="96" x2="378" y2="838"/>
+        <text class="threadlab t-ok" x="373" y="450" transform="rotate(90 373 450)">watch · egress shape ✓</text>
+        <text class="gut-t tlab" x="264" y="99">14:02:11.4 <tspan style="fill:var(--nat); font-weight:700">NAT</tspan></text>
+        <text class="tlab" x="264" y="110" style="fill:var(--ink-2)">phone-tom → quic :443</text>
+      </g>
+
+      <!-- ════ column 3 · lan → srv · x 396..546 (green) ════ -->
+      <g>
+        <rect class="card" x="396" y="6" width="150" height="60" rx="5"/>
+        <rect x="396" y="6" width="3" height="60" rx="1.5" fill="var(--srv)"/>
+        <text class="cname" x="408" y="24">lan → srv</text>
+        <text class="csub" x="408" y="37">445 · 5001 · 53</text>
+        <text class="crate" x="540" y="24" text-anchor="end">8/s</text>
+        <g class="settles">
+          <polygon class="vol" fill="rgba(25,158,112,0.15)" points="400,96 452,96 446,180 456,260 444,340 454,420 446,500 452,560 442,620 436,700 424,776 412,838 400,838"/>
+          <polyline fill="none" stroke="rgba(25,158,112,0.5)" stroke-width="1.4" points="452,96 446,180 456,260 444,340 454,420 446,500 452,560 442,620 436,700 424,776 412,838"/>
+        </g>
+        <text class="gut-t tlab" x="424" y="99">14:02:10.7 <tspan style="fill:var(--ok); font-weight:700">ACC</tspan></text>
+        <text class="tlab" x="424" y="110" style="fill:var(--ink-2)">tom-desktop → nas :5001</text>
+      </g>
+
+      <!-- ════ column 4 · guest → wan — DARK · x 556..706 (rose) ════ -->
+      <g>
+        <rect class="card" x="556" y="6" width="150" height="60" rx="5"/>
+        <rect x="556" y="6" width="3" height="60" rx="1.5" fill="var(--guest)"/>
+        <text class="cname" x="568" y="24">guest → wan</text>
+        <text class="csub" x="568" y="37">carries traffic · unmetered</text>
+        <text class="chip ch-bad" x="568" y="52">DARK — NO LOG RULE</text>
+        <text class="crate" x="700" y="24" text-anchor="end" style="fill:var(--ink-3)">?</text>
+        <rect class="darkband" x="560" y="96" width="142" height="742"/>
+        <text class="anno" x="631" y="300" text-anchor="middle" style="fill:var(--drop); font-weight:700">no core was drilled here</text>
+        <text class="anno" x="631" y="314" text-anchor="middle" style="fill:var(--drop)">— that is the finding —</text>
+        <text class="anno" x="631" y="336" text-anchor="middle">log the boundary to start one</text>
+      </g>
+
+      <!-- ════ column 5 · iot → wan · x 716..866 (amber) ════ -->
+      <g>
+        <rect class="card" x="716" y="6" width="150" height="60" rx="5"/>
+        <rect x="716" y="6" width="3" height="60" rx="1.5" fill="var(--iot)"/>
+        <text class="cname" x="728" y="24">iot → wan</text>
+        <text class="csub" x="728" y="37">443 · 123 · egress guarded</text>
+        <text class="chip ch-bad" x="728" y="52">WATCH BROKEN 13:52</text>
+        <text class="crate" x="860" y="24" text-anchor="end">1.2/s</text>
+        <g class="settles">
+          <polygon class="vol" fill="rgba(201,133,0,0.15)" points="720,96 748,96 744,180 750,260 742,340 748,382 744,460 750,540 744,614 748,700 742,776 738,838 720,838"/>
+          <polyline fill="none" stroke="rgba(201,133,0,0.5)" stroke-width="1.4" points="748,96 744,180 750,260 742,340 748,382 744,460 750,540 744,614 748,700 742,776 738,838"/>
+          <path class="ticks-drop" d="M722 120h14M722 200h14M722 290h13"/>
+          <text class="anno" x="850" y="204" text-anchor="end" style="fill:var(--drop)">cam-porch → 47.246… dropped</text>
+        </g>
+        <!-- the watch thread: green below the horizon, broken red above it -->
+        <line class="thread-ok" x1="858" y1="382" x2="858" y2="838"/>
+        <line class="thread-broken" x1="858" y1="96" x2="858" y2="374" stroke-dasharray="4 5"/>
+        <path d="M853 374 l10 8 M853 382 l10 -8" stroke="var(--drop)" stroke-width="1.6"/>
+        <text class="gut-t tlab" x="744" y="99">14:02:09.7 <tspan style="fill:var(--drop); font-weight:700">DROP</tspan></text>
+        <text class="tlab" x="744" y="110" style="fill:var(--ink-2)">cam-porch → 47.246… :443</text>
+      </g>
+
+      <!-- ════ column 6 · iot → srv · x 876..1026 (amber) ════ -->
+      <g>
+        <rect class="card" x="876" y="6" width="150" height="60" rx="5"/>
+        <rect x="876" y="6" width="3" height="60" rx="1.5" fill="var(--iot)"/>
+        <text class="cname" x="888" y="24">iot → srv</text>
+        <text class="csub" x="888" y="37">dns to pihole · metronomic</text>
+        <text class="crate" x="1020" y="24" text-anchor="end">0.4/s</text>
+        <g class="settles">
+          <!-- the metronome: an even bump every ~30s, all the way down -->
+          <polygon class="vol" fill="rgba(201,133,0,0.12)" points="880,96 886,96 894,104 886,112 886,124 894,132 886,140 886,152 894,160 886,168 886,180 894,188 886,196 886,208 894,216 886,224 886,236 894,244 886,252 886,264 894,272 886,280 886,292 894,300 886,308 886,320 894,328 886,336 886,348 894,356 886,364 886,376 894,384 886,392 886,404 894,412 886,420 886,432 894,440 886,448 886,460 894,468 886,476 886,488 894,496 886,504 886,516 894,524 886,532 886,542 894,550 886,558 880,560"/>
+          <rect x="880" y="560" width="9" height="278" fill="rgba(201,133,0,0.10)"/>
+          <text class="anno" x="912" y="330" transform="rotate(90 912 330)">an even pulse — this is what “expected” looks like, at every depth</text>
+        </g>
+        <text class="gut-t tlab" x="904" y="99">14:02:10.6 <tspan style="fill:var(--ok); font-weight:700">ACC</tspan></text>
+        <text class="tlab" x="904" y="110" style="fill:var(--ink-2)">hue-bridge → pihole :53</text>
+      </g>
+
+      <!-- ════ column 7 · iot → lan — THE CORE · x 1036..1186 (amber lane, red marks) ════ -->
+      <g>
+        <rect x="1036" y="96" width="150" height="286" fill="url(#hazeM)"/>
+        <rect class="card" x="1036" y="6" width="150" height="60" rx="5" stroke="rgba(224,82,82,0.6)"/>
+        <rect x="1036" y="6" width="3" height="60" rx="1.5" fill="var(--iot)"/>
+        <text class="cname" x="1048" y="24" style="fill:var(--drop)">iot → lan</text>
+        <text class="csub" x="1048" y="37">41 blank days, then this</text>
+        <text class="chip ch-bad" x="1048" y="53" transform="rotate(-1 1048 53)">UNPLANNED · SINCE 13:52</text>
+        <text class="crate" x="1180" y="24" text-anchor="end" style="fill:var(--drop)">14×</text>
+        <g class="settles">
+          <!-- every knock, with its words at its depth — only a vertical core can do this -->
+          <path class="ticks-drop blink" d="M1040 98h14"/><text class="tlab" x="1058" y="101" style="fill:var(--ink-2)">14:02:11 nas :445</text>
+          <path class="ticks-drop" d="M1040 128h14"/><text class="tlab" x="1058" y="131" style="fill:var(--ink-2)">14:01:58 nas :445</text>
+          <path class="ticks-drop" d="M1040 158h14"/><text class="tlab" x="1058" y="161" style="fill:var(--ink-2)">14:01:43 desktop :445</text>
+          <path class="ticks-drop" d="M1040 187h14"/><text class="tlab" x="1058" y="190" style="fill:var(--ink-2)">14:01:29 nas :139</text>
+          <path class="ticks-drop" d="M1040 217h14"/><text class="tlab" x="1058" y="220" style="fill:var(--ink-3)">14:01:12 nas :445</text>
+          <path class="ticks-drop" d="M1040 247h14"/><text class="tlab" x="1058" y="250" style="fill:var(--ink-3)">14:00:58 nas :445</text>
+          <path class="ticks-drop" d="M1040 277h14"/><text class="tlab" x="1058" y="280" style="fill:var(--ink-3)">14:00:44 nas :139</text>
+          <path class="ticks-drop" d="M1040 306h14"/><text class="tlab" x="1058" y="309" style="fill:var(--ink-3)">14:00:29 nas :445</text>
+          <path class="ticks-drop" d="M1040 336h14"/><text class="tlab" x="1058" y="339" style="fill:var(--ink-3)">⋮ every ~64 s</text>
+          <path class="ticks-drop" d="M1040 366h14"/>
+          <!-- the flag, at its depth, where the streak begins -->
+          <g transform="translate(1047 379)">
+            <circle r="5" fill="var(--paper)" stroke="var(--drop)" stroke-width="1.4"/>
+            <circle r="5" fill="none" stroke="var(--drop)" class="halo"/>
+            <circle r="1.8" fill="var(--drop)"/>
+          </g>
+          <text class="anno" x="1060" y="376" style="fill:var(--drop)">◉ new_talker — the first knock</text>
+          <text class="anno" x="1060" y="398">metronomic · ~64 s · tcp/445</text>
+          <text class="anno" x="1060" y="410">all caught by default drop · open ▸</text>
+          <!-- below the horizon: nothing, and the nothing is the point -->
+          <text class="anno" x="1111" y="500" text-anchor="middle" style="fill:var(--ink-3)">— blank —</text>
+          <text class="anno" x="1111" y="700" text-anchor="middle" style="fill:var(--ink-3)">blank all the way down:</text>
+          <text class="anno" x="1111" y="712" text-anchor="middle" style="fill:var(--ink-3)">41 days of this core is empty ground</text>
+        </g>
+        <text class="gut-t tlab" x="1064" y="90" style="fill:var(--drop); font-weight:700">still printing at the surface ↑</text>
+      </g>
+
+      <!-- ════ column 8 · wg → rb5009 · x 1196..1346 (neutral) ════ -->
+      <g>
+        <rect class="card" x="1196" y="6" width="150" height="60" rx="5"/>
+        <rect x="1196" y="6" width="3" height="60" rx="1.5" fill="var(--ink-3)"/>
+        <text class="cname" x="1208" y="24">wg → rb5009</text>
+        <text class="csub" x="1208" y="37">quiet by choice</text>
+        <text class="crate" x="1340" y="24" text-anchor="end" style="fill:var(--ink-3)">~0</text>
+        <g class="settles">
+          <polygon class="vol" fill="rgba(154,161,173,0.1)" points="1200,96 1204,96 1204,300 1210,320 1204,340 1204,600 1210,620 1204,640 1204,838 1200,838"/>
+        </g>
+        <text class="gut-t tlab" x="1224" y="99">14:02:09.4 <tspan style="fill:var(--ok); font-weight:700">ACC</tspan></text>
+        <text class="tlab" x="1224" y="110" style="fill:var(--ink-2)">phone-tom-wg :51820</text>
+      </g>
+
+      <!-- ══ horizon labels (over everything, right rail) ══ -->
+      <text class="hlab" x="402" y="374" style="fill:var(--drop)">13:52 — the horizon: the knocking starts AND the egress cadence breaks — one depth, two truths ⟶</text>
+      <text class="hlab" x="1346" y="644" text-anchor="end" style="fill:var(--ink-3)">12:58 port_scan</text>
+      <text class="hlab" x="1346" y="708" text-anchor="end" style="fill:var(--ink-3)">11:20 known_bad_ip ×2</text>
+      <text class="hlab" x="1346" y="752" text-anchor="end" style="fill:var(--ink-3)">09:03 port_scan</text>
+      <text class="hlab" x="1346" y="588" text-anchor="end" style="fill:var(--ink-3)">13:41 port_scan</text>
+
+      <!-- ══ THE SURFACE ══ -->
+      <line class="nowline nowpulse" x1="76" y1="92" x2="1346" y2="92"/>
+      <circle class="nowhead nowpulse" cx="70" cy="92" r="4"/>
+      <text x="76" y="86" style="fill:var(--now); font-size:10px; font-weight:700">SURFACE · NOW · 14:02:11 — the newest grain lands here and buries everything below it</text>
+    </svg>
+  </div>
+
+  <div class="legend">
+    <span class="k">shaded bulge = traffic volume (lane colour)</span>
+    <span class="k" style="color:var(--drop)">red mark = a drop — red never means anything else</span>
+    <span class="k" style="color:var(--nat)">violet = nat</span>
+    <span class="k" style="color:var(--ok)">thread = a watch, holding</span>
+    <span class="k" style="color:var(--drop)">dashed thread = broken above its horizon</span>
+    <span class="k">◉ flag at its depth · ┄ horizon = one moment through every core · ▨ dark = no core drilled</span>
+  </div>
+</section>
+
+<!-- ============ SCENE 2 : A CORE OPENS — THE TABLE IS THE CORE ============ -->
+<section class="scene" id="s2">
+  <div class="scene-tag">Scene 2 — a core opened. The live table is already vertical time: the table IS the core, at full magnification.</div>
+  <div class="bar">
+    <span class="wm">MIKRO<em>VIEW</em></span>
+    <h1>iot → lan <span class="here">· opened</span></h1>
+    <span class="sub">the ground stays live behind it · <b>14 events</b> in view</span>
+    <span class="depthrule">newest at the top — the table and the core agree about which way time points</span>
+  </div>
+
+  <div class="openrow">
+    <div class="openhead">
+      <h2>iot <span class="to">→</span> lan</h2>
+      <span class="stamp">UNPLANNED</span>
+      <span class="meta"><b>14 events</b> · all tcp/445-139 · all default drop · first knock 13:52, flagged as it landed</span>
+      <span class="close">◂ fold back into the ground</span>
+    </div>
+    <div class="filterbar">
+      <div class="ff"><label>Source — name, IP or CIDR</label><input value="10.0.20.0/24"></div>
+      <button class="swap" aria-label="Swap source and destination filters">⇄</button>
+      <div class="ff"><label>Destination — name, IP or CIDR</label><input value="10.0.10.0/24"></div>
+      <div class="ff"><label>Chain</label><select><option>forward</option></select></div>
+      <div class="ff small"><label>Port — number or service</label><input></div>
+      <div class="ff small"><label>Rule</label><input></div>
+      <div class="fright"><button class="btn on">Autoscroll</button><button class="btn">Group</button><button class="btn">Presets ▾</button></div>
+    </div>
+    <div class="openbody">
+      <div class="ribbon">
+        <svg viewBox="0 0 96 330" role="img" aria-label="The opened core as a ribbon: each drop mark connects by a leader line to its table row — the chart and the table are the same object.">
+          <line class="nowline nowpulse" x1="8" y1="12" x2="88" y2="12"/>
+          <text class="tlab" x="10" y="26" style="fill:var(--now)">NOW</text>
+          <path class="ticks-drop blink" d="M14 40h12"/><line x1="26" y1="40" x2="96" y2="52" stroke="var(--grid-2)" stroke-width="1"/>
+          <path class="ticks-drop" d="M14 78h12"/><line x1="26" y1="78" x2="96" y2="86" stroke="var(--grid-2)" stroke-width="1"/>
+          <path class="ticks-drop" d="M14 116h12"/><line x1="26" y1="116" x2="96" y2="120" stroke="var(--grid-2)" stroke-width="1"/>
+          <path class="ticks-drop" d="M14 154h12"/><line x1="26" y1="154" x2="96" y2="154" stroke="var(--grid-2)" stroke-width="1"/>
+          <path class="ticks-drop" d="M14 192h12"/><line x1="26" y1="192" x2="96" y2="188" stroke="var(--grid-2)" stroke-width="1"/>
+          <text class="tlab" x="14" y="235" style="fill:var(--ink-3)">⋮ 9 more</text>
+          <g transform="translate(20 290)">
+            <circle r="5" fill="var(--paper)" stroke="var(--drop)" stroke-width="1.4"/>
+            <circle r="1.8" fill="var(--drop)"/>
+          </g>
+          <text class="tlab" x="32" y="293" style="fill:var(--drop)">13:52</text>
+          <text class="tlab" x="14" y="316" style="fill:var(--ink-3)">blank ↓</text>
+        </svg>
+      </div>
+      <table class="stream">
+        <thead><tr><th>time</th><th>chain</th><th>action</th><th>source</th><th></th><th>destination</th><th>proto/port</th><th>rule</th></tr></thead>
+        <tbody>
+          <tr><td class="t">14:02:11.482</td><td class="chain">forward</td><td><span class="act drop">DROP</span></td>
+            <td><span class="ld" style="background:var(--iot)"></span><span class="host">cam-porch</span><span class="ip">10.0.20.31</span></td>
+            <td class="arrow">→</td><td><span class="ld" style="background:var(--srv)"></span><span class="host">nas</span><span class="ip">10.0.40.10</span></td>
+            <td>tcp/445 <span class="cc">smb</span></td><td class="rule-c">iot-to-lan-drop</td></tr>
+          <tr><td class="t">14:01:58.104</td><td class="chain">forward</td><td><span class="act drop">DROP</span></td>
+            <td><span class="ld" style="background:var(--iot)"></span><span class="host">cam-porch</span><span class="ip">10.0.20.31</span></td>
+            <td class="arrow">→</td><td><span class="ld" style="background:var(--srv)"></span><span class="host">nas</span><span class="ip">10.0.40.10</span></td>
+            <td>tcp/445 <span class="cc">smb</span></td><td class="rule-c">iot-to-lan-drop</td></tr>
+          <tr><td class="t">14:01:43.771</td><td class="chain">forward</td><td><span class="act drop">DROP</span></td>
+            <td><span class="ld" style="background:var(--iot)"></span><span class="host">cam-porch</span><span class="ip">10.0.20.31</span></td>
+            <td class="arrow">→</td><td><span class="ld" style="background:var(--lan)"></span><span class="host">tom-desktop</span><span class="ip">10.0.10.21</span></td>
+            <td>tcp/445 <span class="cc">smb</span></td><td class="rule-c">iot-to-lan-drop</td></tr>
+          <tr><td class="t">14:01:29.310</td><td class="chain">forward</td><td><span class="act drop">DROP</span></td>
+            <td><span class="ld" style="background:var(--iot)"></span><span class="host">cam-porch</span><span class="ip">10.0.20.31</span></td>
+            <td class="arrow">→</td><td><span class="ld" style="background:var(--srv)"></span><span class="host">nas</span><span class="ip">10.0.40.10</span></td>
+            <td>tcp/139 <span class="cc">netbios</span></td><td class="rule-c">iot-to-lan-drop</td></tr>
+          <tr><td class="t">14:01:12.089</td><td class="chain">forward</td><td><span class="act drop">DROP</span></td>
+            <td><span class="ld" style="background:var(--iot)"></span><span class="host">cam-porch</span><span class="ip">10.0.20.31</span></td>
+            <td class="arrow">→</td><td><span class="ld" style="background:var(--srv)"></span><span class="host">nas</span><span class="ip">10.0.40.10</span></td>
+            <td>tcp/445 <span class="cc">smb</span></td><td class="rule-c">iot-to-lan-drop</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+  <div class="legend">
+    <span class="k">the ribbon is the core you clicked — every mark leads to its row, every row is a grain of the ground</span>
+    <span class="k">same filters as everywhere (#438): source ⇄ destination, chain, port, rule</span>
+  </div>
+</section>
+
+<!-- ============ SCENE 3 : THE FORTNIGHT — DEEP GROUND ============ -->
+<section class="scene" id="s3">
+  <div class="scene-tag">Scene 3 — scrolled deep: fourteen days of ground. The blank column is the evidence.</div>
+  <div class="bar">
+    <span class="wm">MIKRO<em>VIEW</em></span>
+    <h1>Deep ground <span class="here">· 14 days</span></h1>
+    <span class="sub">same surface, further down — nothing was switched, only scrolled</span>
+    <span class="depthrule">the ground goes as deep as retention</span>
+  </div>
+
+  <div class="dig">
+    <svg viewBox="0 0 1360 480" role="img"
+         aria-label="The same eight cores at fortnight depth: day bands ripple down the LAN core, the WAN core carries steady red weather, the IoT-to-LAN core is blank for forty-one days with today's red streak only at the very surface, and the guest core is hatched the whole way down.">
+      <defs>
+        <pattern id="hatchM3" width="8" height="8" patternTransform="rotate(45)" patternUnits="userSpaceOnUse">
+          <line x1="0" y1="0" x2="0" y2="8" stroke="var(--grid-2)" stroke-width="1.5"/>
+        </pattern>
+      </defs>
+      <!-- depth rail: days -->
+      <g>
+        <text class="tlab" x="62" y="40" text-anchor="end" style="fill:var(--now); font-weight:700">today</text>
+        <line class="gridline" x1="76" y1="60" x2="1346" y2="60"/><text class="tlab" x="62" y="63" text-anchor="end">fri 22</text>
+        <line class="gridline" x1="76" y1="92" x2="1346" y2="92"/><text class="tlab" x="62" y="95" text-anchor="end">thu 21</text>
+        <line class="gridline" x1="76" y1="124" x2="1346" y2="124"/><text class="tlab" x="62" y="127" text-anchor="end">wed 20</text>
+        <line class="gridline" x1="76" y1="156" x2="1346" y2="156"/><text class="tlab" x="62" y="159" text-anchor="end">tue 19</text>
+        <line class="gridline" x1="76" y1="188" x2="1346" y2="188"/><text class="tlab" x="62" y="191" text-anchor="end">mon 18</text>
+        <line class="gridline5" x1="76" y1="220" x2="1346" y2="220"/><text class="tlab" x="62" y="223" text-anchor="end">sun 17</text>
+        <line class="gridline" x1="76" y1="252" x2="1346" y2="252"/><text class="tlab" x="62" y="255" text-anchor="end">sat 16</text>
+        <line class="gridline" x1="76" y1="284" x2="1346" y2="284"/><text class="tlab" x="62" y="287" text-anchor="end">fri 15</text>
+        <line class="gridline" x1="76" y1="316" x2="1346" y2="316"/><text class="tlab" x="62" y="319" text-anchor="end">thu 14</text>
+        <line class="gridline" x1="76" y1="348" x2="1346" y2="348"/><text class="tlab" x="62" y="351" text-anchor="end">wed 13</text>
+        <line class="gridline" x1="76" y1="380" x2="1346" y2="380"/><text class="tlab" x="62" y="383" text-anchor="end">tue 12</text>
+        <line class="gridline" x1="76" y1="412" x2="1346" y2="412"/><text class="tlab" x="62" y="415" text-anchor="end">mon 11</text>
+        <line class="gridline" x1="76" y1="444" x2="1346" y2="444"/><text class="tlab" x="62" y="447" text-anchor="end">sun 10</text>
+      </g>
+
+      <!-- wan: steady weather, a little heavier today -->
+      <g>
+        <text class="csub" x="80" y="16" style="font-size:10px; fill:var(--ink-2)">wan → rb5009</text>
+        <polygon class="vol" fill="rgba(224,82,82,0.12)" points="80,24 122,24 112,60 104,92 108,124 102,156 106,188 100,220 104,252 108,284 102,316 106,348 102,380 104,412 100,444 80,444"/>
+        <g transform="translate(88 36)"><circle r="4" fill="var(--paper)" stroke="var(--iot)" stroke-width="1.3"/><circle r="1.4" fill="var(--iot)"/></g>
+        <text class="anno" x="98" y="39">×4 today</text>
+        <g transform="translate(88 290)"><circle r="4" fill="var(--paper)" stroke="var(--iot)" stroke-width="1.3"/><circle r="1.4" fill="var(--iot)"/></g>
+        <text class="anno" x="98" y="293">port_scan fri 15</text>
+      </g>
+      <!-- lan: the household breathes in day-bands -->
+      <g>
+        <text class="csub" x="240" y="16" style="font-size:10px; fill:var(--ink-2)">lan → wan</text>
+        <polygon class="vol" fill="rgba(57,135,229,0.16)"
+          points="240,24 320,24 300,42 246,60 300,74 320,92 300,106 246,124 300,138 320,156 300,170 246,188 306,204 330,220 306,236 250,252 330,268 340,284 300,298 246,316 300,330 320,348 300,362 246,380 300,394 320,412 300,428 246,444 240,444"/>
+        <text class="anno" x="342" y="200">weekends bulge —</text>
+        <text class="anno" x="342" y="212">the household's heartbeat, day by day</text>
+      </g>
+      <!-- srv: steady -->
+      <g>
+        <text class="csub" x="400" y="16" style="font-size:10px; fill:var(--ink-2)">lan → srv</text>
+        <polygon class="vol" fill="rgba(25,158,112,0.14)" points="400,24 444,24 436,92 446,156 436,220 448,284 436,348 444,412 436,444 400,444"/>
+      </g>
+      <!-- guest: dark the whole record -->
+      <g>
+        <text class="csub" x="560" y="16" style="font-size:10px; fill:var(--ink-2)">guest → wan</text>
+        <rect fill="url(#hatchM3)" opacity="0.5" x="560" y="24" width="142" height="420"/>
+        <text class="anno" x="631" y="320" text-anchor="middle" style="fill:var(--drop); font-weight:700">dark for as long as the record runs</text>
+      </g>
+      <!-- iot→wan: cadence, with the watch thread green for 13.9 days -->
+      <g>
+        <text class="csub" x="720" y="16" style="font-size:10px; fill:var(--ink-2)">iot → wan</text>
+        <polygon class="vol" fill="rgba(201,133,0,0.14)" points="720,24 746,24 742,92 748,156 742,220 748,284 742,348 746,412 742,444 720,444"/>
+        <line class="thread-broken" x1="858" y1="24" x2="858" y2="30" stroke-dasharray="4 5"/>
+        <line class="thread-ok" x1="858" y1="30" x2="858" y2="444"/>
+        <text class="threadlab t-ok" x="853" y="200" transform="rotate(90 853 200)">held for 13.9 of 14 days — broke at the very top</text>
+      </g>
+      <!-- iot→srv: metronome forever -->
+      <g>
+        <text class="csub" x="880" y="16" style="font-size:10px; fill:var(--ink-2)">iot → srv</text>
+        <rect x="880" y="24" width="8" height="420" fill="rgba(201,133,0,0.12)"/>
+        <text class="anno" x="904" y="240" transform="rotate(90 904 240)">the metronome never missed</text>
+      </g>
+      <!-- iot→lan: THE BLANK COLUMN -->
+      <g>
+        <text class="csub" x="1040" y="16" style="font-size:10px; fill:var(--drop); font-weight:700">iot → lan</text>
+        <path class="ticks-drop" d="M1044 26h14M1044 31h14"/>
+        <g transform="translate(1051 38)"><circle r="4" fill="var(--paper)" stroke="var(--drop)" stroke-width="1.3"/><circle r="4" fill="none" stroke="var(--drop)" class="halo"/><circle r="1.4" fill="var(--drop)"/></g>
+        <text class="anno" x="1064" y="34" style="fill:var(--drop)">today, 13:52 — ten minutes of red at the surface</text>
+        <rect x="1044" y="48" width="134" height="396" fill="none"/>
+        <text class="anno" x="1111" y="150" text-anchor="middle" style="fill:var(--ink-2)">and below it: nothing.</text>
+        <text class="anno" x="1111" y="166" text-anchor="middle" style="fill:var(--ink-2)">not one grain in fourteen days of ground —</text>
+        <text class="anno" x="1111" y="182" text-anchor="middle" style="fill:var(--ink-2)">the blank column IS the evidence</text>
+        <text class="anno" x="1111" y="198" text-anchor="middle" style="fill:var(--ink-3)">(and it is blank for 27 more days below this screen)</text>
+      </g>
+      <!-- wg -->
+      <g>
+        <text class="csub" x="1200" y="16" style="font-size:10px; fill:var(--ink-2)">wg → rb5009</text>
+        <polygon class="vol" fill="rgba(154,161,173,0.1)" points="1200,24 1204,24 1204,140 1210,150 1204,160 1204,300 1210,310 1204,320 1204,444 1200,444"/>
+      </g>
+
+      <line class="nowline nowpulse" x1="76" y1="22" x2="1346" y2="22"/>
+      <text x="711" y="42" text-anchor="middle" style="fill:var(--now); font-size:10px; font-weight:700">— the same surface, scrolled 14 days deep without leaving it —</text>
+    </svg>
+  </div>
+
+  <div class="legend">
+    <span class="k">no range tabs were used to draw this scene — the wheel did all of it</span>
+    <span class="k">drag any span of any core → that window opens as the live table (lookback and live are one gesture)</span>
+    <span class="k" style="color:var(--drop)">a blank core under a red surface is the strongest sentence this interface can say</span>
+  </div>
+</section>
+
+</body>
+</html>
