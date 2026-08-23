@@ -16,13 +16,13 @@
 //
 // BUDGET_BYTES is the gzip-compressed size, in bytes, of the built entry
 // bundle (dist/assets/index-*.js), gzipped at level 9 -- the same method
-// this script uses below. Set to 92,000 by the owner's decision on #462
-// (2026-08-21): roughly 15% headroom over the 79,783-byte reading that
-// decision was made against. Re-measured with this script when the check
-// was wired into CI: 80,794 bytes gzipped (268,233 raw), on top of a few
-// more frontend commits since that decision -- 92,000 still leaves
-// nearly 14% headroom over that fresher reading, so the number stands
-// unchanged.
+// this script uses below. History: set to 92,000 on #462 (2026-08-21),
+// ~15% headroom over the then-current bundle. Reset to 200,000 by the
+// owner's decision on #482 (2026-08-23, docs/decisions/ui-framework.md):
+// the gate is a tripwire against drift, not a design ceiling, and the
+// v0.4.0 interface reshape builds against room rather than a number
+// derived from the interface it replaces. Once the reshaped UI ships,
+// re-derive this the original way: the measured gzip reading + ~15%.
 //
 // Raise this only alongside a stated reason in the commit that does so,
 // and update README.md's "UI" bullet (the shipped-bundle figure) in the
@@ -30,7 +30,7 @@
 // this check exists to close off. Do not "tidy" it down to match
 // whatever the bundle happens to measure today; that would turn the
 // very next legitimate feature PR into a spurious CI failure.
-const BUDGET_BYTES = 92_000
+const BUDGET_BYTES = 200_000
 
 import { readFileSync, existsSync, globSync } from 'node:fs'
 import { gzipSync, constants as zlibConstants } from 'node:zlib'
