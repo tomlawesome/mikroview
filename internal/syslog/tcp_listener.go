@@ -5,6 +5,7 @@ package syslog
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"fmt"
 	"net"
 	"net/netip"
@@ -34,9 +35,25 @@ type RawMessage struct {
 // connections -- misbehaving devices, or a scan of the LAN -- would each
 // hold a goroutine and a socket open indefinitely.
 //
-// A var rather than a const so tests can shrink it to exercise the
-// rejection path without opening 256+ real sockets.
-var maxTCPConnections = 256
+// atomic.Int64 rather than a plain int for exactly the reason
+// maxTCPConnectionsPerSource and tcpIdleTimeoutNS below document: a test
+// shrinking this to exercise the rejection path races ServeTCP's accept
+// loop still reading it, with no Go-level happens-before edge between
+// "the test observed the rejection" and "the accept loop finished
+// reading the old value" -- caught by `go test -race -count=2`, which
+// failed 3/3 while this was a plain var (issue #380 item 6). Read
+// through maxTCPConns(); use of a raw value elsewhere in the process is
+// never mutated, so it is a var only to remain test-shrinkable.
+var maxTCPConnections atomic.Int64
+
+func init() {
+	maxTCPConnections.Store(256)
+}
+
+// maxTCPConns reads the current connection ceiling. See maxTCPConnections.
+func maxTCPConns() int {
+	return int(maxTCPConnections.Load())
+}
 
 // maxTCPConnectionsPerSource caps how many of the global slots any one
 // source IP may hold. Without it the global cap alone is exhaustible by
@@ -62,6 +79,21 @@ var maxTCPConnectionsPerSource atomic.Int64
 // an unbounded read is an unbounded allocation driven by whatever is on
 // the other end of the socket.
 const maxTCPMessageBytes = 64 * 1024
+
+// tcpQuiescence is how long handleTCPConn's read loop waits, once a
+// read has left an accumulated message fragment with no newline in it,
+// before deciding the sender has actually finished that message rather
+// than merely paused between segments of it. Needed only for
+// RouterOS-shaped bare messages (#202), which carry no delimiter at
+// all -- a newline-terminated message never waits on this, since the
+// newline itself resolves it the instant it arrives.
+//
+// 75ms is comfortably above same-write fragmentation on a LAN (a TLS
+// record boundary or ordinary TCP segmentation resolves in
+// microseconds in practice -- see #415) and comfortably below any gap
+// that would exist between two genuinely distinct log lines, so two
+// bare messages sent back to back are never coalesced into one.
+const tcpQuiescence = 75 * time.Millisecond
 
 func init() {
 	maxTCPConnectionsPerSource.Store(8)
@@ -120,15 +152,21 @@ func SetConfiguredSources(addrs []string) {
 	configuredSources.Store(&m)
 }
 
-// OnConnection is called once per accepted syslog connection, with the
+// OnConnection is called once per accepted syslog connection that has
+// gone on to complete a TLS handshake (see handleTCPConn), with the
 // source host. Nil unless set. It exists for the setup wizard (#320),
 // which has to distinguish "the router cannot reach me at all" from
-// "it is connected but no rule is logging yet" -- and only the
-// connection itself separates those. A package-level hook rather than a
-// ServeTCP parameter, matching SetConfiguredSources above: this is
-// process-wide observation, not per-listener configuration.
+// "it is connected but no rule is logging yet" -- and only a completed
+// handshake actually separates those; a bare TCP connect (a LAN port
+// scan, a health check, or a router failing the handshake against a
+// certificate that doesn't cover its address) does not (#371). A
+// package-level hook rather than a ServeTCP parameter, matching
+// SetConfiguredSources above: this is process-wide observation, not
+// per-listener configuration.
 //
-// Called on the accept path, so it must not block.
+// Called from each connection's own goroutine, past its handshake, not
+// from the accept loop -- so it may take as long as it likes; it is the
+// accept loop itself, in ServeTCP, that must never block.
 var OnConnection atomic.Pointer[func(host string)]
 
 // SetOnConnection installs the hook. Call once at startup.
@@ -154,7 +192,7 @@ func reservedSlots() int {
 	if m == nil || len(*m) == 0 {
 		return 0
 	}
-	if r := maxTCPConnections / reservedFraction; r > 0 {
+	if r := maxTCPConns() / reservedFraction; r > 0 {
 		return r
 	}
 	return 1
@@ -195,7 +233,7 @@ type ListenerStats struct {
 func Stats() ListenerStats {
 	return ListenerStats{
 		InUse:                 int(tcpInUse.Load()),
-		Capacity:              maxTCPConnections,
+		Capacity:              maxTCPConns(),
 		ReservedForConfigured: reservedSlots(),
 		Rejected:              tcpRejected.Load(),
 		RejectedConfigured:    tcpRejectedConfigured.Load(),
@@ -266,7 +304,7 @@ func ServeTCP(ctx context.Context, ln net.Listener, out chan<- RawMessage) error
 	// A buffered channel used purely as a counting semaphore: acquiring a
 	// slot is receiving capacity to send, releasing is the deferred read
 	// once the connection's goroutine exits.
-	slots := make(chan struct{}, maxTCPConnections)
+	slots := make(chan struct{}, maxTCPConns())
 
 	// Per-source counts, guarded by its own mutex: the accept loop
 	// increments, each connection's goroutine decrements on exit.
@@ -306,7 +344,7 @@ func ServeTCP(ctx context.Context, ln net.Listener, out chan<- RawMessage) error
 		// free slot. Without this a flood of undeclared sources fills
 		// the pool and the operator's own routers are locked out -- see
 		// reservedFraction.
-		unreservedCap := maxTCPConnections - reservedSlots()
+		unreservedCap := maxTCPConns() - reservedSlots()
 		perSourceMu.Lock()
 		atCap := perSource[host] >= perSourceLimit()
 		outOfUnreserved := !configured && undeclaredInUse >= unreservedCap
@@ -330,7 +368,7 @@ func ServeTCP(ctx context.Context, ln net.Listener, out chan<- RawMessage) error
 			if total, ok := unreservedRejectGate.Allow(); ok {
 				tcpLog.Warn(fmt.Sprintf(
 					"undeclared sources are using all %d unreserved connection slots (%d of %d held for routers listed under devices: in config.yaml) -- rejecting %s (%d such rejections since start)",
-					unreservedCap, reservedSlots(), maxTCPConnections, host, total))
+					unreservedCap, reservedSlots(), maxTCPConns(), host, total))
 			}
 			conn.Close()
 			continue
@@ -349,7 +387,6 @@ func ServeTCP(ctx context.Context, ln net.Listener, out chan<- RawMessage) error
 
 		select {
 		case slots <- struct{}{}:
-			noteConnection(host)
 			tcpInUse.Add(1)
 			go func() {
 				defer func() { <-slots }()
@@ -364,7 +401,7 @@ func ServeTCP(ctx context.Context, ln net.Listener, out chan<- RawMessage) error
 			// At capacity: reject immediately rather than queuing, so the
 			// accept loop itself never blocks waiting for a slot to free up.
 			if total, ok := globalRejectGate.Allow(); ok {
-				tcpLog.Warn(fmt.Sprintf("connection limit (%d) reached -- rejecting %s (%d such rejections since start)", maxTCPConnections, conn.RemoteAddr(), total))
+				tcpLog.Warn(fmt.Sprintf("connection limit (%d) reached -- rejecting %s (%d such rejections since start)", maxTCPConns(), conn.RemoteAddr(), total))
 			}
 			conn.Close()
 		}
@@ -417,92 +454,223 @@ func handleTCPConn(ctx context.Context, conn net.Conn, out chan<- RawMessage) {
 
 	host, _, _ := net.SplitHostPort(conn.RemoteAddr().String())
 
-	// One read is one message, unless the read contains newlines, in
-	// which case it is several.
+	// The idle deadline applies to a TLS handshake exactly as it does to
+	// the read loop below -- HandshakeContext performs its own reads and
+	// writes on this same conn, and honours whatever deadline is set on
+	// it -- so a connection that opens and then never completes (or
+	// never attempts) a handshake doesn't hold its slot forever.
+	conn.SetReadDeadline(time.Now().Add(tcpIdleTimeout()))
+
+	// noteConnection fires here, past a completed TLS handshake, not
+	// from ServeTCP's accept branch: tls.Listener.Accept negotiates the
+	// handshake lazily (see tls_listener.go's own doc comment), so a
+	// bare TCP connect -- a LAN port scan, a health check, or a router
+	// whose handshake is about to fail against a certificate that
+	// doesn't cover its address -- must not satisfy the setup wizard's
+	// "syslog connected" step (#371). Gated on a completed handshake,
+	// not on the first byte of application data, because a working
+	// handshake with no logging rule configured yet is a different,
+	// already-distinguished state (see setup.Store.NoteSyslogConnection's
+	// doc comment) that this must not collapse into "never connected".
+	if tlsConn, ok := conn.(*tls.Conn); ok {
+		if err := tlsConn.HandshakeContext(ctx); err != nil {
+			return
+		}
+	}
+	noteConnection(host)
+
+	// Framing has two shapes, and this loop distinguishes them by
+	// content, not by how many Read()s a message happened to arrive in
+	// -- that distinction by read-size was the bug (#415, below).
 	//
-	// This used to be a bufio.Scanner on the default ScanLines split,
-	// which meant it ingested nothing at all from a RouterOS router
-	// (#202): RouterOS sends each message as a bare payload with no
-	// trailing newline and no octet count, so Scan() sat waiting for a
-	// delimiter that never arrived. Measured against a real CHR, TCP
-	// delivered 0 events where UDP delivered 3 of the same messages, and
-	// nothing was logged -- the connection was accepted, held, and
-	// silently discarded.
+	// A conventional syslog sender terminates every line with \n and may
+	// pack several into one read; RouterOS terminates none of them --
+	// it sends each message as a bare payload, no trailing newline and
+	// no octet count (#202, verified against a real CHR: TCP delivered 0
+	// events where UDP delivered 3 of the same messages, because the
+	// bufio.Scanner this replaced sat waiting for a delimiter that never
+	// arrived). Both shapes are handled by the same accumulator: bytes
+	// read are appended to pending and scanned for '\n'. Anything up to
+	// a newline is a complete message, however many reads it took to
+	// arrive.
 	//
-	// Handling both shapes is deliberate. A conventional syslog sender
-	// does terminate its lines and may pack several into one read;
-	// RouterOS terminates nothing. Splitting on newlines when they are
-	// present, and otherwise taking the read whole, serves both without
-	// the receiver having to know which kind of sender it has.
+	// That "however many reads it took" is what #415 fixed. The
+	// previous version only recognised a message as continuing into the
+	// next read when the current one exactly filled the buffer -- so a
+	// message under the buffer size that still arrived fragmented
+	// across several non-full reads (a TLS record boundary, ordinary
+	// TCP segmentation under load) had each fragment parsed as its own
+	// line: no fragment carries framing of its own, so each produced a
+	// garbage, undecoded event in place of the one real one. Measured
+	// concretely: a single ~65KB line over the real TLS listener
+	// produced 3 stray events before this fix, with none of the
+	// individual reads filling the 64KB buffer.
 	//
-	// Measured, not assumed: a 500-message burst from a real router
-	// arrived as 500 events, none lost and none merged. TCP is permitted
-	// to coalesce writes, and with no delimiter there would be nothing to
-	// split them back apart with -- but RouterOS writes one message per
-	// send, and that is what the wire shows. Worth keeping an eye on,
-	// not a defect to design around.
-	// One further case the above does not cover: a message *larger* than
-	// the buffer. A 100 KiB write arrives as two or three full reads,
-	// and treating each as its own message manufactured two or three
-	// events out of one. Not merely wrong in count -- each fragment was
-	// then parsed as though it were a whole log line, so the second and
-	// third produced garbage fields attributed to a real device.
+	// A bare RouterOS-shaped message never gets a '\n', so pending alone
+	// can never resolve it -- the only signal available is that nothing
+	// more arrived for a while. tcpQuiescence is that signal: once a
+	// read leaves pending non-empty with no newline in it, the next read
+	// uses a short deadline instead of the ordinary idle one, and a
+	// timeout there means the sender is done with this message, not
+	// merely between segments of it -- so pending is flushed as one
+	// complete message. Genuine same-message fragmentation (RouterOS
+	// bursts, TLS records arriving back to back) resolves within
+	// microseconds on a LAN, comfortably inside the window; the gap
+	// between two genuinely distinct bare messages does not, so they are
+	// never coalesced into one. See #202 for the burst-handling
+	// behaviour this has to keep working, and tcpQuiescence's own
+	// comment for the window itself.
 	//
-	// A read that completely fills the buffer with no newline in it is
-	// the signature: no real RouterOS line is 64 KiB. The first such
-	// chunk is delivered (truncated, which is honest -- it is the
-	// beginning of what was sent) and the continuation is discarded and
-	// counted until a short read ends it. See #285 finding 18.
+	// A message *larger* than the cap is the other case this has always
+	// had to handle: a write bigger than maxTCPMessageBytes with no
+	// newline in reach. The first maxTCPMessageBytes are delivered once,
+	// truncated (honest -- it is the genuine start of what was sent),
+	// and continuation bytes are discarded and counted until a newline
+	// ends the run -- with whatever follows that newline in the same
+	// read salvaged into pending rather than discarded with it, since
+	// it belongs to the next message, not this one. Entry into this
+	// state happens by pending crossing the cap (see below) and is
+	// unaffected by what follows here: once the cap is already crossed
+	// and counted, the only question left is whether this run has
+	// reached its terminator, and read size doesn't answer that --
+	// under TLS, the only production transport, a single Read can never
+	// fill the buffer (tls.Conn hands back at most one record's
+	// plaintext, well under the 64 KiB cap), so a discard check that
+	// also required a full read reset itself on the very first
+	// continuation read and let the next chunk of discard garbage back
+	// in as if it were a fresh message, corrupting whatever real line
+	// followed it. See #285 finding 18 and #379.
 	buf := make([]byte, maxTCPMessageBytes)
+	// pending holds bytes read but not yet resolved into a complete
+	// message: either the tail of a newline-delimited message still
+	// missing its '\n', or the whole of a bare message whose end hasn't
+	// been confirmed yet. Left untouched while oversized is true and no
+	// terminator has turned up yet -- that path never accumulates, for
+	// the memory-bound reason maxTCPMessageBytes exists in the first
+	// place; it only receives the salvaged remainder once a terminator
+	// does turn up, per the discard branch below.
+	var pending []byte
 	oversized := false
+
+	emit := func(data []byte) {
+		data = bytes.TrimRight(data, "\r")
+		if len(data) == 0 {
+			return
+		}
+		cp := make([]byte, len(data))
+		copy(cp, data)
+
+		select {
+		case out <- RawMessage{SourceIP: host, Data: cp, RecvTime: time.Now()}:
+		default:
+			// The ingest channel is full, which means the single ingest
+			// goroutine is not keeping up -- a stalled persistence
+			// backend, a detector flood, anything downstream. Dropping
+			// is right (blocking here would stall the whole listener),
+			// but dropping *silently* was not: real router records
+			// vanished with no log line and no counter anywhere, so an
+			// operator saw the live view go quiet with nothing to
+			// explain it.
+			//
+			// internal/detect.Enqueue and internal/watchlist's evaluator
+			// already pair this exact select/default with a counter and
+			// a rate-limited warning; this is the one handoff that did
+			// not. See #285 finding 9.
+			noteIngestDrop()
+		}
+	}
+
 	conn.SetReadDeadline(time.Now().Add(tcpIdleTimeout()))
 	for {
 		n, err := conn.Read(buf)
 		if n > 0 {
 			conn.SetReadDeadline(time.Now().Add(tcpIdleTimeout()))
-			full := n == len(buf) && !bytes.Contains(buf[:n], []byte{'\n'})
-			if oversized {
-				// Still inside the message whose start was already
-				// delivered. Drop the continuation rather than parse it.
-				tcpOversized.Add(1)
-				oversized = full
-				if err != nil {
-					return
-				}
-				continue
-			}
-			oversized = full
 
-			for _, line := range bytes.Split(buf[:n], []byte{'\n'}) {
-				line = bytes.TrimRight(line, "\r")
-				if len(line) == 0 {
+			if oversized {
+				// Still discarding the tail of a message whose start was
+				// already delivered truncated, and whose cap-crossing
+				// was already counted on entry. The first newline in
+				// this read ends the run -- but only the bytes up to and
+				// including it were ever part of the oversized message;
+				// anything after it is the start of whatever comes
+				// next, salvaged into pending rather than thrown away
+				// with the rest of the read. Without that, a terminator
+				// that happens to arrive in the same read as the
+				// following message's own bytes (one TLS record holding
+				// both) would silently destroy that message -- data
+				// loss of a genuine event, not merely an over-eager
+				// discard. No newline anywhere in this read means it's
+				// still all discard, however it happened to be sliced
+				// by the network.
+				idx := bytes.IndexByte(buf[:n], '\n')
+				tcpOversized.Add(1)
+				if idx < 0 {
+					oversized = true
+					if err != nil {
+						return
+					}
 					continue
 				}
-				data := make([]byte, len(line))
-				copy(data, line)
+				oversized = false
+				pending = append(pending, buf[idx+1:n]...)
+			} else {
+				pending = append(pending, buf[:n]...)
+			}
 
-				select {
-				case out <- RawMessage{SourceIP: host, Data: data, RecvTime: time.Now()}:
-				default:
-					// The ingest channel is full, which means the single
-					// ingest goroutine is not keeping up -- a stalled
-					// persistence backend, a detector flood, anything
-					// downstream. Dropping is right (blocking here would
-					// stall the whole listener), but dropping *silently*
-					// was not: real router records vanished with no log
-					// line and no counter anywhere, so an operator saw
-					// the live view go quiet with nothing to explain it.
-					//
-					// internal/detect.Enqueue and internal/watchlist's
-					// evaluator already pair this exact select/default
-					// with a counter and a rate-limited warning; this is
-					// the one handoff that did not. See #285 finding 9.
-					noteIngestDrop()
+			for {
+				idx := bytes.IndexByte(pending, '\n')
+				if idx < 0 {
+					break
 				}
+				emit(pending[:idx])
+				pending = pending[idx+1:]
+			}
+
+			if len(pending) >= maxTCPMessageBytes {
+				// pending itself has crossed the cap with no newline in
+				// it: the same "message larger than the limit" case the
+				// old full-buffer check caught, reached here by
+				// accumulation instead. Deliver the truncated start
+				// once, honestly, and drop what's left of this read past
+				// the cap -- entering the discard path above for
+				// whatever continues it.
+				emit(pending[:maxTCPMessageBytes])
+				pending = pending[:0]
+				oversized = true
 			}
 		}
+
 		if err != nil {
+			// A pending, not-yet-resolved fragment is flushed rather
+			// than silently lost on any error -- a connection that
+			// closes right behind its last bare message, or resets
+			// mid-stream, still gets what it sent rather than nothing.
+			ambiguous := !oversized && len(pending) > 0
+			if ambiguous {
+				emit(pending)
+				pending = pending[:0]
+			}
+			if ne, ok := err.(net.Error); ok && ne.Timeout() && ambiguous {
+				// This was tcpQuiescence's short deadline, not the
+				// ordinary idle one: the sender simply finished a bare
+				// message rather than going idle. Flushed above; the
+				// connection stays open.
+				conn.SetReadDeadline(time.Now().Add(tcpIdleTimeout()))
+				continue
+			}
+			// Either a genuine idle timeout with nothing pending to
+			// excuse it, or a real error (EOF, reset) -- either way the
+			// connection is done.
 			return
+		}
+
+		if len(pending) > 0 {
+			// pending holds an unresolved, newline-less fragment:
+			// tighten the deadline so a quiet spell resolves it quickly
+			// rather than waiting out the full idle timeout.
+			conn.SetReadDeadline(time.Now().Add(tcpQuiescence))
+		} else {
+			conn.SetReadDeadline(time.Now().Add(tcpIdleTimeout()))
 		}
 	}
 }

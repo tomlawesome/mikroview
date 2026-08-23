@@ -205,6 +205,74 @@ func TestHostNamePrecedence(t *testing.T) {
 	}
 }
 
+// TestRouterOSVersionIsPerDeviceAndSticky covers #436's derived-version
+// source as #408 carries it: the router states its version on a push
+// envelope, the store keeps the last one it stated, a device that never
+// stated one reports not-stated rather than a guess, and one device's
+// claim never answers for another's.
+func TestRouterOSVersionIsPerDeviceAndSticky(t *testing.T) {
+	s := New()
+
+	if _, _, ok := s.RouterOSVersion("router-1"); ok {
+		t.Error("a device that never pushed reported a version")
+	}
+
+	apply(t, s, "router-1", `{"kind":"arp","page":1,"pages":1,"routerosVersion":"7.23.3 (stable)","records":[{"address":"192.0.2.50","mac":"aa:bb:cc:dd:ee:01"}]}`)
+	got, at, ok := s.RouterOSVersion("router-1")
+	if !ok || got != "7.23.3 (stable)" {
+		t.Fatalf("RouterOSVersion = %q/%v, want the stated version", got, ok)
+	}
+	if at.IsZero() {
+		t.Error("updatedAt is zero for a version that arrived")
+	}
+
+	// A push with no version does not clear the last answer: reverting to
+	// an older push script is not a RouterOS downgrade, and forgetting on
+	// a silent page would invent a state change nothing observed.
+	apply(t, s, "router-1", `{"kind":"arp","page":1,"pages":1,"records":[{"address":"192.0.2.51","mac":"aa:bb:cc:dd:ee:02"}]}`)
+	if got, _, ok := s.RouterOSVersion("router-1"); !ok || got != "7.23.3 (stable)" {
+		t.Errorf("a version-less push cleared the stored version (%q/%v)", got, ok)
+	}
+
+	// A later push that states one replaces it.
+	apply(t, s, "router-1", `{"kind":"arp","page":1,"pages":1,"routerosVersion":"7.24.1 (stable)","records":[{"address":"192.0.2.52","mac":"aa:bb:cc:dd:ee:03"}]}`)
+	if got, _, _ := s.RouterOSVersion("router-1"); got != "7.24.1 (stable)" {
+		t.Errorf("RouterOSVersion = %q, want the newly stated version", got)
+	}
+
+	// Scoped like every other read here: router-2 has pushed, and says
+	// nothing about its own version, so nothing is what it reports.
+	apply(t, s, "router-2", `{"kind":"arp","page":1,"pages":1,"records":[{"address":"192.0.2.60","mac":"aa:bb:cc:dd:ee:04"}]}`)
+	if got, _, ok := s.RouterOSVersion("router-2"); ok || got != "" {
+		t.Errorf("router-2 reported %q from router-1's claim", got)
+	}
+}
+
+// TestHostNameUsesEveryAllowedAddressOfAPeer is the routerstate half of
+// issue #443: a WireGuard peer holds a *set* of allowed addresses, and
+// each one names the peer. Before the schema took the array shape only
+// one string could arrive at all, so "the second subnet is unnamed" was
+// not even reachable as a bug -- it is now, and this is what stops it.
+func TestHostNameUsesEveryAllowedAddressOfAPeer(t *testing.T) {
+	s := New()
+	apply(t, s, "router-1", `{"kind":"wireguard-peer","page":1,"pages":1,"records":[`+
+		`{"publicKey":"k1","allowedAddress":["192.0.2.0/24","198.51.100.0/24","203.0.113.7"],"endpointAddress":"","comment":"branch office"},`+
+		`{"publicKey":"k2","allowedAddress":["198.51.100.9/32"],"endpointAddress":"","comment":"branch NAS"}]}`)
+
+	cases := map[string]string{
+		"192.0.2.15":    "branch office", // first CIDR of the set
+		"198.51.100.20": "branch office", // second CIDR -- the one a single-string schema lost
+		"203.0.113.7":   "branch office", // bare address in the set, promoted to /32
+		"198.51.100.9":  "branch NAS",    // most-specific still wins across peers
+		"203.0.113.8":   "",              // outside every allowed address
+	}
+	for ip, want := range cases {
+		if got := s.HostName("router-1", ip); got != want {
+			t.Errorf("HostName(%q) = %q, want %q", ip, got, want)
+		}
+	}
+}
+
 // Every other read in routerstate.go goes through kindLocked(device,
 // kind) and TestDevicesAreIsolated already asserted that for the rule
 // tables. HostName was the one accessor that never got the same

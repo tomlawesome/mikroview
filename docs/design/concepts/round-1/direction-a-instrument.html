@@ -1,0 +1,684 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mikroview — Direction A: Instrument</title>
+<style>
+  /* ============================================================
+     DIRECTION A — "INSTRUMENT"
+     The flight-deck reading of mikroview: near-black, hairline
+     rules, phosphor accent, monospaced numerals. Motion is signal:
+     things move only because packets moved. Density is the point —
+     calm, precise, authoritative.
+     ============================================================ */
+  :root {
+    --bg: #0b0e12;
+    --panel: #10141b;
+    --panel-2: #141924;
+    --line: #1e2530;
+    --line-strong: #2c3646;
+    --ink: #e8edf4;
+    --ink-2: #97a2b4;
+    --ink-3: #5d6a7e;
+    --accent: #2fd6c3;
+    --accent-dim: rgba(47, 214, 195, 0.14);
+    /* validated categorical (dark, surface #0b0e12): */
+    --lan: #3987e5;
+    --srv: #199e70;
+    --iot: #c98500;
+    --guest: #d95926;
+    /* status — never meaning by colour alone; text badges always */
+    --ok: #0ca30c;
+    --drop: #e05252;
+    --reject: #ec835a;
+    --nat: #8f7ae8;
+    --mono: ui-monospace, "SF Mono", "Cascadia Mono", Menlo, Consolas, monospace;
+    --sans: system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  * { box-sizing: border-box; margin: 0; }
+  html { scroll-behavior: smooth; }
+  body {
+    background: var(--bg); color: var(--ink);
+    font: 13px/1.45 var(--sans);
+    -webkit-font-smoothing: antialiased;
+  }
+  ::selection { background: var(--accent-dim); }
+
+  /* ---- concept banner (not part of the product) ---- */
+  .concept {
+    position: sticky; top: 0; z-index: 50;
+    display: flex; gap: 16px; align-items: baseline;
+    padding: 8px 18px; background: #000; border-bottom: 1px solid var(--line);
+    font-family: var(--mono); font-size: 11px; color: var(--ink-3);
+  }
+  .concept b { color: var(--accent); font-weight: 600; letter-spacing: 0.08em; }
+  .concept a { color: var(--ink-2); text-decoration: none; margin-left: 10px; }
+  .concept a:hover { color: var(--ink); }
+
+  .scene { min-height: 100vh; padding: 0; border-bottom: 1px solid var(--line-strong); }
+  .scene-tag {
+    font-family: var(--mono); font-size: 10px; letter-spacing: 0.14em;
+    text-transform: uppercase; color: var(--ink-3); padding: 14px 18px 0;
+  }
+
+  /* ================= app shell ================= */
+  .app { display: grid; grid-template-columns: 176px 1fr; min-height: 92vh; }
+  .rail {
+    border-right: 1px solid var(--line); background: var(--panel);
+    padding: 14px 0; display: flex; flex-direction: column; gap: 2px;
+  }
+  .brand {
+    font-family: var(--mono); font-size: 12px; letter-spacing: 0.18em;
+    color: var(--ink); padding: 4px 16px 14px; border-bottom: 1px solid var(--line);
+    margin-bottom: 10px;
+  }
+  .brand em { color: var(--accent); font-style: normal; }
+  .nav-item {
+    display: flex; align-items: center; gap: 9px;
+    padding: 7px 16px; color: var(--ink-2); cursor: default;
+    border-left: 2px solid transparent; font-size: 12.5px;
+  }
+  .nav-item svg { flex: none; opacity: 0.75; }
+  .nav-item.active {
+    color: var(--ink); border-left-color: var(--accent);
+    background: linear-gradient(90deg, var(--accent-dim), transparent 70%);
+  }
+  .nav-item.active svg { opacity: 1; }
+  .nav-sub {
+    font-family: var(--mono); font-size: 10.5px; color: var(--ink-3);
+    padding: 1px 16px 6px 43px; letter-spacing: 0.02em;
+  }
+  .rail .spacer { flex: 1; }
+  .rail .whoami {
+    font-family: var(--mono); font-size: 10.5px; color: var(--ink-3);
+    padding: 10px 16px 0; border-top: 1px solid var(--line);
+  }
+  .main { padding: 16px 20px 40px; min-width: 0; }
+
+  .viewbar { display: flex; align-items: baseline; gap: 14px; margin-bottom: 12px; }
+  .viewbar h1 { font-size: 15px; font-weight: 600; letter-spacing: 0.01em; }
+  .live-dot {
+    width: 7px; height: 7px; border-radius: 50%; background: var(--accent);
+    display: inline-block; margin-right: 7px;
+    animation: pulse 2s ease-in-out infinite;
+  }
+  @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.35; } }
+  .viewbar .meta { font-family: var(--mono); font-size: 11px; color: var(--ink-3); }
+  .viewbar .meta b { color: var(--ink-2); font-weight: 500; }
+
+  /* ================= scene 1: topography ================= */
+  .topo-wrap { border: 1px solid var(--line); background: var(--panel); }
+  .topo-head {
+    display: flex; gap: 18px; align-items: baseline;
+    padding: 10px 14px; border-bottom: 1px solid var(--line);
+  }
+  .topo-head h2 { font-size: 13px; font-weight: 600; }
+  .topo-head .sub { font-family: var(--mono); font-size: 10.5px; color: var(--ink-3); }
+  svg text { font-family: var(--mono); }
+  .t-label { fill: var(--ink); font-size: 12px; font-weight: 600; }
+  .t-sub { fill: var(--ink-3); font-size: 9.5px; }
+  .t-cidr { fill: var(--ink-2); font-size: 10px; }
+  .t-member { fill: var(--ink-2); font-size: 9.5px; }
+  .t-port { fill: var(--ink-2); font-size: 9px; }
+  .t-badge-text { font-size: 9px; font-weight: 600; }
+
+  .edge-casing { fill: none; stroke: var(--line-strong); stroke-width: 7; stroke-linecap: round; opacity: 0.55; }
+  .edge-flow { fill: none; stroke-linecap: round; stroke-dasharray: 7 11; animation: march 1.4s linear infinite; }
+  @keyframes march { to { stroke-dashoffset: -18; } }
+  .edge-ghost { fill: none; stroke: var(--ink-3); stroke-width: 1.5; stroke-dasharray: 2 5; opacity: 0.8; }
+  .edge-delta { fill: none; stroke: var(--drop); stroke-width: 2.5; stroke-dasharray: 7 11; animation: march 0.9s linear infinite; }
+  .tick { stroke: var(--drop); stroke-width: 1.5; }
+
+  .topo-legend {
+    display: flex; flex-wrap: wrap; gap: 18px; padding: 10px 14px;
+    border-top: 1px solid var(--line); font-family: var(--mono);
+    font-size: 10.5px; color: var(--ink-2);
+  }
+  .topo-legend .k { display: inline-flex; align-items: center; gap: 7px; }
+  .swatch { width: 22px; height: 0; border-top: 3px solid var(--ink-2); display: inline-block; }
+
+  /* coverage chips (text carries meaning; colour assists) */
+  .cov { font-size: 8.5px; font-weight: 700; letter-spacing: 0.06em; }
+  .cov-logged { fill: var(--ok); }
+  .cov-quiet { fill: var(--ink-3); }
+  .cov-dark { fill: var(--drop); }
+
+  /* ================= scene 2: live view ================= */
+  .filterbar {
+    display: flex; flex-wrap: wrap; gap: 8px; align-items: center;
+    padding: 10px 12px; border: 1px solid var(--line); background: var(--panel);
+    margin-bottom: 0;
+  }
+  .fb-field { display: flex; flex-direction: column; gap: 3px; }
+  .fb-field label {
+    font-family: var(--mono); font-size: 9px; letter-spacing: 0.1em;
+    text-transform: uppercase; color: var(--ink-3);
+  }
+  .fb-field input, .fb-field select {
+    background: var(--bg); border: 1px solid var(--line-strong);
+    color: var(--ink); font: 12px var(--mono); padding: 5px 8px; width: 168px;
+  }
+  .fb-field select { width: 118px; }
+  .fb-field.small input { width: 108px; }
+  .fb-swap {
+    align-self: flex-end; background: var(--panel-2); color: var(--accent);
+    border: 1px solid var(--line-strong); font: 13px var(--mono);
+    padding: 4px 9px; cursor: default;
+  }
+  .fb-right { margin-left: auto; display: flex; gap: 8px; align-items: flex-end; }
+  .btn {
+    background: var(--panel-2); border: 1px solid var(--line-strong);
+    color: var(--ink-2); font: 11px var(--mono); padding: 5px 10px; cursor: default;
+  }
+  .btn.on { color: var(--accent); border-color: var(--accent); }
+  .hold-note { font-family: var(--mono); font-size: 10px; color: var(--iot); }
+
+  table.stream { width: 100%; border-collapse: collapse; border: 1px solid var(--line); border-top: 0; }
+  .stream th {
+    text-align: left; font-family: var(--mono); font-size: 9.5px;
+    letter-spacing: 0.1em; text-transform: uppercase; color: var(--ink-3);
+    font-weight: 500; padding: 7px 10px; background: var(--panel);
+    border-bottom: 1px solid var(--line-strong); position: sticky; top: 0;
+  }
+  .stream td {
+    padding: 5px 10px; border-bottom: 1px solid var(--line);
+    font-family: var(--mono); font-size: 12px; white-space: nowrap;
+  }
+  .stream tr:hover td { background: var(--panel-2); }
+  .stream .t { color: var(--ink-3); font-size: 11px; }
+  .stream tr.new td { animation: rowin 0.5s ease-out; }
+  @keyframes rowin { from { background: var(--accent-dim); } to { background: transparent; } }
+
+  .chip {
+    display: inline-block; padding: 1px 7px; font-size: 10px; font-weight: 700;
+    letter-spacing: 0.05em; border: 1px solid;
+  }
+  .chip.accept { color: var(--ok); border-color: var(--ok); background: rgba(12,163,12,0.08); }
+  .chip.drop { color: var(--drop); border-color: var(--drop); background: rgba(224,82,82,0.08); }
+  .chip.nat { color: var(--nat); border-color: var(--nat); background: rgba(143,122,232,0.08); }
+  .chain { color: var(--ink-2); font-size: 11px; }
+  .host { color: var(--ink); }
+  .host .ip { color: var(--ink-3); font-size: 11px; }
+  .lanetick { display: inline-block; width: 3px; height: 11px; margin-right: 6px; vertical-align: -1px; }
+  .arrow { color: var(--ink-3); padding: 0 2px; }
+  .rule { color: var(--ink-2); }
+  .flag { font-size: 10px; color: var(--ink-3); }
+  .rowtools { display: inline-flex; gap: 4px; margin-left: 8px; }
+  .glyph {
+    width: 18px; height: 18px; display: inline-flex; align-items: center; justify-content: center;
+    border: 1px solid var(--line-strong); background: var(--panel-2);
+    color: var(--accent); font-size: 10px; cursor: default;
+  }
+
+  /* the #413 editor popover, anchored to the row-1 source token */
+  .editor-anchor { position: relative; }
+  .editor {
+    position: absolute; left: 0; top: 24px; z-index: 30; width: 320px;
+    background: var(--panel-2); border: 1px solid var(--accent);
+    box-shadow: 0 14px 40px rgba(0,0,0,0.6), 0 0 0 4px rgba(47,214,195,0.07);
+    padding: 13px 14px; white-space: normal;
+  }
+  .editor h3 { font: 600 12.5px var(--sans); margin-bottom: 7px; }
+  .editor .ident { font: 11px var(--mono); color: var(--ink-2); margin-bottom: 9px; }
+  .editor .ident b { color: var(--ink); font-weight: 600; }
+  .editor input[type=text] {
+    width: 100%; background: var(--bg); border: 1px solid var(--accent);
+    color: var(--ink); font: 13px var(--mono); padding: 6px 8px; outline: none;
+    box-shadow: 0 0 0 3px var(--accent-dim);
+  }
+  .editor .scope { font-size: 11px; color: var(--ink-2); margin: 8px 0 2px; }
+  .editor .note { font-size: 10.5px; color: var(--ink-3); margin-bottom: 10px; }
+  .editor .row { display: flex; gap: 8px; justify-content: flex-end; }
+  .editor .save { background: var(--accent); color: #06231f; border: 0; font: 600 11px var(--mono); padding: 6px 14px; }
+  .editor .cancel { background: transparent; border: 1px solid var(--line-strong); color: var(--ink-2); font: 11px var(--mono); padding: 6px 12px; }
+
+  /* ================= scene 3: metrics ================= */
+  .tiles { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; }
+  .tile { border: 1px solid var(--line); background: var(--panel); padding: 11px 13px; min-width: 0; }
+  .tile.wide { grid-column: span 2; }
+  .tile h3 {
+    font-family: var(--mono); font-size: 9.5px; letter-spacing: 0.12em;
+    text-transform: uppercase; color: var(--ink-3); font-weight: 500; margin-bottom: 7px;
+  }
+  .hero { font: 600 30px/1 var(--mono); letter-spacing: -0.01em; }
+  .hero small { font-size: 12px; color: var(--ink-3); font-weight: 400; margin-left: 5px; }
+  .delta-up { color: var(--ok); font: 11px var(--mono); }
+  .delta-warn { color: var(--reject); font: 11px var(--mono); }
+  .spark { display: block; margin-top: 8px; }
+  .spark polyline { fill: none; stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
+  .spark .area { stroke: none; opacity: 0.14; }
+  .barlist .b { display: grid; grid-template-columns: 110px 1fr 68px; gap: 8px; align-items: center; margin: 5px 0; }
+  .barlist .n { font: 11.5px var(--mono); color: var(--ink); overflow: hidden; text-overflow: ellipsis; }
+  .barlist .bar { height: 8px; background: var(--panel-2); position: relative; }
+  .barlist .bar i { position: absolute; inset: 0 auto 0 0; background: var(--accent); border-radius: 0 4px 4px 0; }
+  .barlist .v { font: 10.5px var(--mono); color: var(--ink-2); text-align: right; }
+  .lanerow { display: grid; grid-template-columns: 52px 1fr 58px; gap: 8px; align-items: center; margin: 3px 0; }
+  .lanerow .n { font: 10.5px var(--mono); }
+  .lanerow .v { font: 10.5px var(--mono); color: var(--ink-2); text-align: right; }
+  .flagchips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+  .fchip { font: 10px var(--mono); border: 1px solid var(--line-strong); color: var(--ink-2); padding: 2px 7px; }
+  .fchip b { color: var(--ink); }
+  .covstat { font: 11px var(--mono); color: var(--ink-2); line-height: 1.8; }
+  .covstat .ok { color: var(--ok); } .covstat .dk { color: var(--drop); font-weight: 700; }
+
+  @media (prefers-reduced-motion: reduce) {
+    * { animation: none !important; transition: none !important; }
+  }
+</style>
+</head>
+<body>
+
+<div class="concept">
+  <b>DIRECTION A — INSTRUMENT</b>
+  <span>near-black · hairlines · phosphor · monospaced numerals · motion = signal</span>
+  <span style="margin-left:auto">
+    <a href="#s1">1 topography</a><a href="#s2">2 live</a><a href="#s3">3 shell + metrics</a>
+  </span>
+</div>
+
+<!-- ============ SCENE 1 : THE LIVING TOPOGRAPHY ============ -->
+<section class="scene" id="s1">
+  <div class="scene-tag">Scene 1 / Topography — policy vs reality, drawn</div>
+  <div class="app">
+    <nav class="rail">
+      <div class="brand">MIKRO<em>VIEW</em></div>
+      <div class="nav-item"><svg width="14" height="14" viewBox="0 0 14 14"><circle cx="7" cy="7" r="5" fill="none" stroke="currentColor" stroke-width="1.5"/><circle cx="7" cy="7" r="1.8" fill="currentColor"/></svg>Live</div>
+      <div class="nav-item active"><svg width="14" height="14" viewBox="0 0 14 14"><path d="M2 12 6 6l3 3 3-7" fill="none" stroke="currentColor" stroke-width="1.5"/></svg>Investigate</div>
+      <div class="nav-sub">Topography · Metrics · Lookback · Audit</div>
+      <div class="nav-item"><svg width="14" height="14" viewBox="0 0 14 14"><path d="M7 1l5 3v4c0 3-2.4 4.6-5 5-2.6-.4-5-2-5-5V4z" fill="none" stroke="currentColor" stroke-width="1.5"/></svg>Detect</div>
+      <div class="nav-item"><svg width="14" height="14" viewBox="0 0 14 14"><circle cx="7" cy="7" r="5.5" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M7 4v3l2.2 2.2" fill="none" stroke="currentColor" stroke-width="1.5"/></svg>Expect</div>
+      <div class="nav-item"><svg width="14" height="14" viewBox="0 0 14 14"><circle cx="7" cy="5" r="2.5" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M2 12.5c.6-2.6 2.6-4 5-4s4.4 1.4 5 4" fill="none" stroke="currentColor" stroke-width="1.5"/></svg>Admin</div>
+      <div class="spacer"></div>
+      <div class="whoami">tom · admin<br>rb5009 · connected</div>
+    </nav>
+    <main class="main">
+      <div class="viewbar">
+        <h1><span class="live-dot"></span>Network topography</h1>
+        <span class="meta">policy from pushed rules <b>14:01:52</b> · observed window <b>15 min</b></span>
+      </div>
+      <div class="topo-wrap">
+        <div class="topo-head">
+          <h2>rb5009 — intended vs observed</h2>
+          <span class="sub">casing = intended by rules · lit core = observed traffic · every boundary carries its logging state</span>
+        </div>
+
+        <svg viewBox="0 0 1240 610" width="100%" role="img"
+             aria-label="Network map: WAN at top, router rb5009 as the waist, four lanes below. One unplanned flow from IoT toward LAN is highlighted; one WireGuard-to-servers rule has never matched; WAN input shows a drop concentration; the guest-to-WAN boundary is not logged.">
+
+          <!-- ==== edges: casing (intended) ==== -->
+          <path class="edge-casing" d="M620 96 V 176"/>
+          <path class="edge-casing" d="M560 240 C 460 300, 250 320, 218 428"/>
+          <path class="edge-casing" d="M600 240 C 560 310, 480 330, 462 428"/>
+          <path class="edge-casing" d="M660 240 C 700 310, 760 330, 772 428"/>
+          <path class="edge-casing" d="M690 240 C 790 300, 990 320, 1022 428"/>
+          <path class="edge-casing" d="M1078 128 C 960 150, 780 180, 706 210"/>
+          <!-- intended, never exercised: wg -> srv (ghost, no core) -->
+          <path class="edge-ghost" d="M1090 150 C 950 240, 640 300, 486 426"/>
+
+          <!-- ==== edges: observed core (marching flow; width = rate) ==== -->
+          <path class="edge-flow" d="M620 96 V 176" stroke="var(--accent)" stroke-width="4.5"/>
+          <path class="edge-flow" d="M560 240 C 460 300, 250 320, 218 428" stroke="var(--lan)" stroke-width="4.5"/>
+          <path class="edge-flow" d="M600 240 C 560 310, 480 330, 462 428" stroke="var(--srv)" stroke-width="3"/>
+          <path class="edge-flow" d="M660 240 C 700 310, 760 330, 772 428" stroke="var(--iot)" stroke-width="2"/>
+          <path class="edge-flow" d="M690 240 C 790 300, 990 320, 1022 428" stroke="var(--guest)" stroke-width="2"/>
+          <path class="edge-flow" d="M1078 128 C 960 150, 780 180, 706 210" stroke="var(--lan)" stroke-width="2" style="animation-duration:2.4s"/>
+
+          <!-- ==== the delta: observed flow no rule anticipated (iot -> lan) ==== -->
+          <path class="edge-delta" d="M718 430 C 640 330, 340 330, 262 430"/>
+          <g transform="translate(432 330)">
+            <rect x="-11" y="-13" width="238" height="34" fill="var(--bg)" stroke="var(--drop)"/>
+            <text x="0" y="0" class="t-badge-text" fill="var(--drop)">UNPLANNED FLOW</text>
+            <text x="0" y="13" class="t-port">iot → lan · tcp/445 · caught by default drop</text>
+          </g>
+
+          <!-- dormant-rule note -->
+          <g transform="translate(700 305)">
+            <rect x="-8" y="-12" width="176" height="30" fill="var(--bg)" stroke="var(--line-strong)"/>
+            <text x="0" y="0" class="t-port" style="fill:var(--ink-2)">rule never matched · 30 d</text>
+            <text x="0" y="11" class="t-port">wg → srv allow (#6 in forward)</text>
+          </g>
+
+          <!-- drop concentration on wan input -->
+          <g transform="translate(690 96)">
+            <line class="tick" x1="0" y1="0" x2="0" y2="8"/><line class="tick" x1="5" y1="0" x2="5" y2="8"/>
+            <line class="tick" x1="10" y1="0" x2="10" y2="8"/><line class="tick" x1="15" y1="0" x2="15" y2="8"/>
+            <line class="tick" x1="20" y1="0" x2="20" y2="8"/>
+            <text x="28" y="8" class="t-badge-text" fill="var(--drop)">1.4k drops/h · wan-in-drop</text>
+          </g>
+
+          <!-- ==== WAN node ==== -->
+          <g transform="translate(620 62)">
+            <rect x="-88" y="-30" width="176" height="60" rx="3" fill="var(--panel-2)" stroke="var(--line-strong)"/>
+            <text x="-72" y="-6" class="t-label">INTERNET</text>
+            <text x="-72" y="12" class="t-sub">ether1 · 203.0.113.7</text>
+            <g transform="translate(46 -12)"><text class="cov cov-logged" x="0" y="0">LOGGED</text><text class="cov cov-logged" x="0" y="11">in / out</text></g>
+          </g>
+
+          <!-- ==== router waist ==== -->
+          <g transform="translate(620 208)">
+            <rect x="-130" y="-32" width="260" height="64" rx="3" fill="var(--panel-2)" stroke="var(--accent)" stroke-opacity="0.6"/>
+            <text x="-114" y="-6" class="t-label">rb5009</text>
+            <text x="-114" y="12" class="t-sub">RouterOS 7.20.1 · 41 rules pushed · fw waist</text>
+          </g>
+
+          <!-- ==== WG node ==== -->
+          <g transform="translate(1130 118)">
+            <rect x="-72" y="-28" width="172" height="56" rx="3" fill="var(--panel-2)" stroke="var(--line-strong)"/>
+            <text x="-58" y="-5" class="t-label">WG</text>
+            <text x="-58" y="12" class="t-sub">wg0 · 10.99.0.0/24</text>
+            <g transform="translate(38 -10)"><text class="cov cov-quiet" x="0" y="0">QUIET</text><text class="cov cov-quiet" x="0" y="11">by choice</text></g>
+          </g>
+
+          <!-- ==== lanes ==== -->
+          <!-- LAN -->
+          <g transform="translate(218 430)">
+            <rect x="-110" y="0" width="220" height="150" rx="3" fill="var(--panel)" stroke="var(--lan)" stroke-opacity="0.55"/>
+            <rect x="-110" y="0" width="220" height="26" rx="3" fill="var(--lan)" fill-opacity="0.12"/>
+            <text x="-98" y="17" class="t-label">LAN</text>
+            <text x="6" y="17" class="t-cidr">10.0.10.0/24</text>
+            <text x="-98" y="46" class="t-member">tom-desktop · .21</text>
+            <text x="-98" y="64" class="t-member">phone-tom · .34</text>
+            <text x="-98" y="82" class="t-member">laptop-anna · .29</text>
+            <text x="-98" y="100" class="t-sub">+9 quiet hosts</text>
+            <text x="-98" y="132" class="cov cov-logged">LOGGED both ways</text>
+          </g>
+          <!-- SRV -->
+          <g transform="translate(462 430)">
+            <rect x="-110" y="0" width="220" height="150" rx="3" fill="var(--panel)" stroke="var(--srv)" stroke-opacity="0.55"/>
+            <rect x="-110" y="0" width="220" height="26" rx="3" fill="var(--srv)" fill-opacity="0.12"/>
+            <text x="-98" y="17" class="t-label">SERVERS</text>
+            <text x="6" y="17" class="t-cidr">10.0.40.0/24</text>
+            <text x="-98" y="46" class="t-member">nas · .10</text>
+            <text x="-98" y="64" class="t-member">pihole · .53</text>
+            <text x="-98" y="82" class="t-member">unifi · .12</text>
+            <text x="-98" y="132" class="cov cov-logged">LOGGED both ways</text>
+          </g>
+          <!-- IOT -->
+          <g transform="translate(772 430)">
+            <rect x="-110" y="0" width="220" height="150" rx="3" fill="var(--panel)" stroke="var(--iot)" stroke-opacity="0.55"/>
+            <rect x="-110" y="0" width="220" height="26" rx="3" fill="var(--iot)" fill-opacity="0.12"/>
+            <text x="-98" y="17" class="t-label">IOT</text>
+            <text x="6" y="17" class="t-cidr">10.0.20.0/24 · vlan20</text>
+            <text x="-98" y="46" class="t-member">cam-porch · .31</text>
+            <text x="-98" y="64" class="t-member">hue-bridge · .14</text>
+            <text x="-98" y="82" class="t-member">thermostat · .18</text>
+            <text x="-98" y="100" class="t-sub">+4 quiet hosts</text>
+            <text x="-98" y="132" class="cov cov-logged">LOGGED both ways</text>
+          </g>
+          <!-- GUEST -->
+          <g transform="translate(1022 430)">
+            <rect x="-110" y="0" width="220" height="150" rx="3" fill="var(--panel)" stroke="var(--guest)" stroke-opacity="0.55"/>
+            <rect x="-110" y="0" width="220" height="26" rx="3" fill="var(--guest)" fill-opacity="0.12"/>
+            <text x="-98" y="17" class="t-label">GUEST</text>
+            <text x="6" y="17" class="t-cidr">10.0.30.0/24 · vlan30</text>
+            <text x="-98" y="46" class="t-member">guest-e8b2 · .17</text>
+            <text x="-98" y="64" class="t-sub">+2 quiet hosts</text>
+            <text x="-98" y="118" class="cov cov-dark">DARK toward wan</text>
+            <text x="-98" y="132" class="t-sub">no log rule on this boundary</text>
+          </g>
+
+          <!-- ==== port badges on edges ==== -->
+          <g transform="translate(305 318)"><rect x="-6" y="-11" width="88" height="16" fill="var(--bg)" stroke="var(--line)"/><text class="t-port" x="0" y="1">any → wan</text></g>
+          <g transform="translate(492 374)"><rect x="-6" y="-11" width="96" height="16" fill="var(--bg)" stroke="var(--line)"/><text class="t-port" x="0" y="1">445 5001 53</text></g>
+          <g transform="translate(816 330)"><rect x="-6" y="-11" width="76" height="16" fill="var(--bg)" stroke="var(--line)"/><text class="t-port" x="0" y="1">443 123</text></g>
+          <g transform="translate(930 318)"><rect x="-6" y="-11" width="110" height="16" fill="var(--bg)" stroke="var(--line)"/><text class="t-port" x="0" y="1">wan only · dark</text></g>
+          <g transform="translate(560 130)"><rect x="-6" y="-11" width="118" height="16" fill="var(--bg)" stroke="var(--line)"/><text class="t-port" x="0" y="1">dstnat 443 → nas</text></g>
+
+          <!-- click-through hint -->
+          <text x="620" y="598" text-anchor="middle" class="t-sub">click any edge → live view filtered to that boundary · click a lane → its hosts</text>
+        </svg>
+
+        <div class="topo-legend">
+          <span class="k"><span class="swatch" style="border-color:var(--line-strong); border-width:7px"></span>intended by rules</span>
+          <span class="k"><span class="swatch" style="border-color:var(--accent)"></span>observed (width = rate)</span>
+          <span class="k"><span class="swatch" style="border-style:dashed; border-color:var(--ink-3); border-width:2px"></span>rule never exercised</span>
+          <span class="k"><span class="swatch" style="border-style:dashed; border-color:var(--drop); border-width:2px"></span>flow no rule anticipated</span>
+          <span class="k">LOGGED / QUIET / DARK — logging coverage per boundary</span>
+        </div>
+      </div>
+    </main>
+  </div>
+</section>
+
+<!-- ============ SCENE 2 : THE LIVE VIEW ============ -->
+<section class="scene" id="s2">
+  <div class="scene-tag">Scene 2 / Live — the daily driver, with the #413 editor open</div>
+  <div class="app">
+    <nav class="rail">
+      <div class="brand">MIKRO<em>VIEW</em></div>
+      <div class="nav-item active"><svg width="14" height="14" viewBox="0 0 14 14"><circle cx="7" cy="7" r="5" fill="none" stroke="currentColor" stroke-width="1.5"/><circle cx="7" cy="7" r="1.8" fill="currentColor"/></svg>Live</div>
+      <div class="nav-item"><svg width="14" height="14" viewBox="0 0 14 14"><path d="M2 12 6 6l3 3 3-7" fill="none" stroke="currentColor" stroke-width="1.5"/></svg>Investigate</div>
+      <div class="nav-item"><svg width="14" height="14" viewBox="0 0 14 14"><path d="M7 1l5 3v4c0 3-2.4 4.6-5 5-2.6-.4-5-2-5-5V4z" fill="none" stroke="currentColor" stroke-width="1.5"/></svg>Detect</div>
+      <div class="nav-item"><svg width="14" height="14" viewBox="0 0 14 14"><circle cx="7" cy="7" r="5.5" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M7 4v3l2.2 2.2" fill="none" stroke="currentColor" stroke-width="1.5"/></svg>Expect</div>
+      <div class="nav-item"><svg width="14" height="14" viewBox="0 0 14 14"><circle cx="7" cy="5" r="2.5" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M2 12.5c.6-2.6 2.6-4 5-4s4.4 1.4 5 4" fill="none" stroke="currentColor" stroke-width="1.5"/></svg>Admin</div>
+      <div class="spacer"></div>
+      <div class="whoami">tom · admin<br>rb5009 · connected</div>
+    </nav>
+    <main class="main">
+      <div class="viewbar">
+        <h1><span class="live-dot"></span>Live</h1>
+        <span class="meta"><b>34</b> events/s · buffer <b>15 min</b> · <b>2,041</b> shown</span>
+      </div>
+
+      <div class="filterbar">
+        <div class="fb-field"><label>Source — name, IP or CIDR</label><input value="" placeholder="internal ▾"></div>
+        <button class="fb-swap" title="Swap source and destination filters" aria-label="Swap source and destination filters">⇄</button>
+        <div class="fb-field"><label>Destination — name, IP or CIDR</label><input value="" placeholder="any ▾"></div>
+        <div class="fb-field"><label>Chain</label><select><option>Any chain</option><option>input</option><option>forward</option><option>output</option><option>srcnat</option><option>dstnat</option></select></div>
+        <div class="fb-field small"><label>Port — number or service</label><input placeholder=""></div>
+        <div class="fb-field small"><label>Rule</label><input placeholder=""></div>
+        <div class="fb-right">
+          <span class="hold-note">■ stream held — editor open</span>
+          <button class="btn on">Autoscroll</button>
+          <button class="btn">Group</button>
+          <button class="btn">Presets ▾</button>
+        </div>
+      </div>
+
+      <table class="stream">
+        <thead><tr>
+          <th>time</th><th>chain</th><th>action</th><th>source</th><th></th><th>destination</th><th>proto / port</th><th>rule</th>
+        </tr></thead>
+        <tbody>
+          <tr class="new">
+            <td class="t">14:02:11.482</td><td class="chain">forward</td><td><span class="chip drop">DROP</span></td>
+            <td class="editor-anchor">
+              <span class="lanetick" style="background:var(--iot)"></span><span class="host">cam-porch <span class="ip">10.0.20.31</span></span>
+              <span class="rowtools"><span class="glyph" title="Copy raw value">⧉</span><span class="glyph" title="Edit name for 10.0.20.31">✎</span></span>
+              <!-- the #413 anchored editor, focus-trapped, stream held while open -->
+              <div class="editor" role="dialog" aria-label="Name this host">
+                <h3>Name this host</h3>
+                <div class="ident"><b>10.0.20.31</b> — currently “cam-porch”, from a DHCP lease</div>
+                <input type="text" value="Porch camera" aria-label="Display name">
+                <p class="scope">Applies everywhere 10.0.20.31 appears, in every view.</p>
+                <p class="note">Display only. Filters, groups and copies keep using the raw value.</p>
+                <div class="row"><button class="cancel">Cancel</button><button class="save">Save</button></div>
+              </div>
+            </td>
+            <td class="arrow">→</td>
+            <td><span class="lanetick" style="background:var(--srv)"></span><span class="host">nas <span class="ip">10.0.40.10</span></span></td>
+            <td>tcp/445 <span class="flag">smb</span></td><td class="rule">iot-to-lan-drop</td>
+          </tr>
+          <tr>
+            <td class="t">14:02:11.407</td><td class="chain">srcnat</td><td><span class="chip nat">NAT</span></td>
+            <td><span class="lanetick" style="background:var(--lan)"></span><span class="host">phone-tom <span class="ip">10.0.10.34</span></span></td>
+            <td class="arrow">→</td>
+            <td><span class="host">142.250.187.206 <span class="flag">🇺🇸 US</span></span></td>
+            <td>udp/443 <span class="flag">quic</span></td><td class="rule">nat-wan <span class="flag">→ 203.0.113.7</span></td>
+          </tr>
+          <tr>
+            <td class="t">14:02:10.951</td><td class="chain">input</td><td><span class="chip drop">DROP</span></td>
+            <td><span class="host">185.220.101.34 <span class="flag">🇩🇪 DE</span></span></td>
+            <td class="arrow">→</td>
+            <td><span class="host">rb5009 <span class="ip">203.0.113.7</span></span></td>
+            <td>tcp/8291 <span class="flag">winbox</span></td><td class="rule">wan-in-drop</td>
+          </tr>
+          <tr>
+            <td class="t">14:02:10.783</td><td class="chain">forward</td><td><span class="chip accept">ACCEPT</span></td>
+            <td><span class="lanetick" style="background:var(--lan)"></span><span class="host">tom-desktop <span class="ip">10.0.10.21</span></span></td>
+            <td class="arrow">→</td>
+            <td><span class="lanetick" style="background:var(--srv)"></span><span class="host">nas <span class="ip">10.0.40.10</span></span></td>
+            <td>tcp/5001 <span class="flag">syncthing</span></td><td class="rule">lan-to-srv</td>
+          </tr>
+          <tr>
+            <td class="t">14:02:10.611</td><td class="chain">forward</td><td><span class="chip accept">ACCEPT</span></td>
+            <td><span class="lanetick" style="background:var(--iot)"></span><span class="host">hue-bridge <span class="ip">10.0.20.14</span></span></td>
+            <td class="arrow">→</td>
+            <td><span class="lanetick" style="background:var(--srv)"></span><span class="host">pihole <span class="ip">10.0.40.53</span></span></td>
+            <td>udp/53 <span class="flag">dns</span></td><td class="rule">iot-dns-allow</td>
+          </tr>
+          <tr>
+            <td class="t">14:02:10.512</td><td class="chain">input</td><td><span class="chip drop">DROP</span></td>
+            <td><span class="host">45.148.10.78 <span class="flag">🇳🇱 NL</span></span></td>
+            <td class="arrow">→</td>
+            <td><span class="host">rb5009 <span class="ip">203.0.113.7</span></span></td>
+            <td>tcp/22 <span class="flag">ssh</span></td><td class="rule">wan-in-drop</td>
+          </tr>
+          <tr>
+            <td class="t">14:02:10.288</td><td class="chain">forward</td><td><span class="chip drop">DROP</span></td>
+            <td><span class="lanetick" style="background:var(--guest)"></span><span class="host">guest-e8b2 <span class="ip">10.0.30.17</span></span></td>
+            <td class="arrow">→</td>
+            <td><span class="lanetick" style="background:var(--lan)"></span><span class="host">tom-desktop <span class="ip">10.0.10.21</span></span></td>
+            <td>tcp/445 <span class="flag">smb</span></td><td class="rule">guest-isolation</td>
+          </tr>
+          <tr>
+            <td class="t">14:02:09.934</td><td class="chain">dstnat</td><td><span class="chip nat">NAT</span></td>
+            <td><span class="host">84.9.112.55 <span class="flag">🇬🇧 GB</span></span></td>
+            <td class="arrow">→</td>
+            <td><span class="lanetick" style="background:var(--srv)"></span><span class="host">nas <span class="ip">10.0.40.10</span></span></td>
+            <td>tcp/443 <span class="flag">https</span></td><td class="rule">nat-wan-https <span class="glyph" style="width:14px;height:14px" title="NAT rule lookup">ⓘ</span></td>
+          </tr>
+          <tr>
+            <td class="t">14:02:09.856</td><td class="chain">forward</td><td><span class="chip accept">ACCEPT</span></td>
+            <td><span class="lanetick" style="background:var(--lan)"></span><span class="host">laptop-anna <span class="ip">10.0.10.29</span></span></td>
+            <td class="arrow">→</td>
+            <td><span class="host">151.101.0.223 <span class="flag">🇺🇸 US</span></span></td>
+            <td>tcp/443 <span class="flag">https</span></td><td class="rule">lan-to-wan</td>
+          </tr>
+          <tr>
+            <td class="t">14:02:09.701</td><td class="chain">forward</td><td><span class="chip drop">DROP</span></td>
+            <td><span class="lanetick" style="background:var(--iot)"></span><span class="host">cam-porch <span class="ip">10.0.20.31</span></span></td>
+            <td class="arrow">→</td>
+            <td><span class="host">47.246.129.8 <span class="flag">🇨🇳 CN</span></span></td>
+            <td>tcp/443 <span class="flag">https</span></td><td class="rule">iot-egress-drop</td>
+          </tr>
+          <tr>
+            <td class="t">14:02:09.455</td><td class="chain">input</td><td><span class="chip accept">ACCEPT</span></td>
+            <td><span class="host">phone-tom-wg <span class="ip">10.99.0.2</span></span></td>
+            <td class="arrow">→</td>
+            <td><span class="host">rb5009 <span class="ip">203.0.113.7</span></span></td>
+            <td>udp/51820 <span class="flag">wireguard</span></td><td class="rule">wg-in</td>
+          </tr>
+          <tr>
+            <td class="t">14:02:09.312</td><td class="chain">forward</td><td><span class="chip accept">ACCEPT</span></td>
+            <td><span class="lanetick" style="background:var(--lan)"></span><span class="host">tom-desktop <span class="ip">10.0.10.21</span></span></td>
+            <td class="arrow">→</td>
+            <td><span class="lanetick" style="background:var(--srv)"></span><span class="host">pihole <span class="ip">10.0.40.53</span></span></td>
+            <td>udp/53 <span class="flag">dns</span></td><td class="rule">lan-to-srv</td>
+          </tr>
+        </tbody>
+      </table>
+    </main>
+  </div>
+</section>
+
+<!-- ============ SCENE 3 : SHELL + METRICS DENSITY ============ -->
+<section class="scene" id="s3">
+  <div class="scene-tag">Scene 3 / Investigate → Metrics — small multiples at sparkline scale</div>
+  <div class="app">
+    <nav class="rail">
+      <div class="brand">MIKRO<em>VIEW</em></div>
+      <div class="nav-item"><svg width="14" height="14" viewBox="0 0 14 14"><circle cx="7" cy="7" r="5" fill="none" stroke="currentColor" stroke-width="1.5"/><circle cx="7" cy="7" r="1.8" fill="currentColor"/></svg>Live</div>
+      <div class="nav-item active"><svg width="14" height="14" viewBox="0 0 14 14"><path d="M2 12 6 6l3 3 3-7" fill="none" stroke="currentColor" stroke-width="1.5"/></svg>Investigate</div>
+      <div class="nav-sub">Topography · <b style="color:var(--ink)">Metrics</b> · Lookback · Audit</div>
+      <div class="nav-item"><svg width="14" height="14" viewBox="0 0 14 14"><path d="M7 1l5 3v4c0 3-2.4 4.6-5 5-2.6-.4-5-2-5-5V4z" fill="none" stroke="currentColor" stroke-width="1.5"/></svg>Detect</div>
+      <div class="nav-item"><svg width="14" height="14" viewBox="0 0 14 14"><circle cx="7" cy="7" r="5.5" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M7 4v3l2.2 2.2" fill="none" stroke="currentColor" stroke-width="1.5"/></svg>Expect</div>
+      <div class="nav-item"><svg width="14" height="14" viewBox="0 0 14 14"><circle cx="7" cy="5" r="2.5" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M2 12.5c.6-2.6 2.6-4 5-4s4.4 1.4 5 4" fill="none" stroke="currentColor" stroke-width="1.5"/></svg>Admin</div>
+      <div class="spacer"></div>
+      <div class="whoami">tom · admin<br>rb5009 · connected</div>
+    </nav>
+    <main class="main">
+      <div class="viewbar">
+        <h1><span class="live-dot"></span>Metrics</h1>
+        <span class="meta">window <b>60 min</b> · all series from the event stream</span>
+      </div>
+      <div class="tiles">
+        <div class="tile">
+          <h3>Events / s</h3>
+          <div class="hero">34<small>now</small></div>
+          <span class="delta-up">▲ 12% vs prev hour</span>
+          <svg class="spark" width="100%" height="36" viewBox="0 0 200 36" preserveAspectRatio="none" role="img" aria-label="Events per second, last hour: steady around 30 with a spike to 61 at 13:41">
+            <polygon class="area" fill="var(--accent)" points="0,36 0,22 10,20 20,23 30,19 40,21 50,16 60,18 70,14 80,17 90,12 100,15 110,4 120,9 130,14 140,12 150,16 160,13 170,11 180,14 190,10 200,12 200,36"/>
+            <polyline stroke="var(--accent)" points="0,22 10,20 20,23 30,19 40,21 50,16 60,18 70,14 80,17 90,12 100,15 110,4 120,9 130,14 140,12 150,16 160,13 170,11 180,14 190,10 200,12"/>
+          </svg>
+        </div>
+        <div class="tile">
+          <h3>Drops / s</h3>
+          <div class="hero">6.2<small>now</small></div>
+          <span class="delta-warn">▲ 3.1× vs prev hour · wan-in</span>
+          <svg class="spark" width="100%" height="36" viewBox="0 0 200 36" preserveAspectRatio="none" role="img" aria-label="Drops per second, last hour: low until 13:30, rising to 6.2">
+            <polyline stroke="var(--drop)" points="0,32 10,31 20,32 30,30 40,31 50,29 60,30 70,28 80,26 90,27 100,22 110,24 120,18 130,20 140,15 150,17 160,12 170,14 180,10 190,8 200,7"/>
+          </svg>
+        </div>
+        <div class="tile">
+          <h3>Flags · today</h3>
+          <div class="hero">6</div>
+          <div class="flagchips">
+            <span class="fchip"><b>3</b> port_scan</span>
+            <span class="fchip"><b>2</b> known_bad_ip</span>
+            <span class="fchip"><b>1</b> new_talker</span>
+          </div>
+        </div>
+        <div class="tile">
+          <h3>Watchlist</h3>
+          <div class="hero">3<small>watches</small></div>
+          <div class="covstat" style="margin-top:6px"><span class="ok">0 violations</span> · 14 observations<br>last match 13:56:02</div>
+        </div>
+
+        <div class="tile wide">
+          <h3>Traffic by lane — events/min</h3>
+          <div class="lanerow"><span class="n" style="color:var(--lan)">LAN</span>
+            <svg class="spark" height="18" width="100%" viewBox="0 0 200 18" preserveAspectRatio="none"><polyline stroke="var(--lan)" points="0,12 20,10 40,11 60,8 80,9 100,6 120,8 140,5 160,7 180,4 200,6"/></svg>
+            <span class="v">1,940</span></div>
+          <div class="lanerow"><span class="n" style="color:var(--srv)">SRV</span>
+            <svg class="spark" height="18" width="100%" viewBox="0 0 200 18" preserveAspectRatio="none"><polyline stroke="var(--srv)" points="0,10 20,11 40,9 60,10 80,8 100,9 120,7 140,9 160,8 180,9 200,8"/></svg>
+            <span class="v">1,210</span></div>
+          <div class="lanerow"><span class="n" style="color:var(--iot)">IOT</span>
+            <svg class="spark" height="18" width="100%" viewBox="0 0 200 18" preserveAspectRatio="none"><polyline stroke="var(--iot)" points="0,14 20,13 40,14 60,12 80,13 100,11 120,13 140,12 160,10 180,12 200,11"/></svg>
+            <span class="v">640</span></div>
+          <div class="lanerow"><span class="n" style="color:var(--guest)">GUEST</span>
+            <svg class="spark" height="18" width="100%" viewBox="0 0 200 18" preserveAspectRatio="none"><polyline stroke="var(--guest)" points="0,15 20,15 40,14 60,15 80,13 100,14 120,15 140,13 160,14 180,15 200,14"/></svg>
+            <span class="v">88</span></div>
+        </div>
+
+        <div class="tile wide barlist">
+          <h3>Top talkers — events, this hour</h3>
+          <div class="b"><span class="n">nas</span><span class="bar"><i style="width:92%"></i></span><span class="v">4,102</span></div>
+          <div class="b"><span class="n">tom-desktop</span><span class="bar"><i style="width:63%"></i></span><span class="v">2,817</span></div>
+          <div class="b"><span class="n">cam-porch</span><span class="bar"><i style="width:43%; background:var(--iot)"></i></span><span class="v">1,904</span></div>
+          <div class="b"><span class="n">phone-tom</span><span class="bar"><i style="width:28%"></i></span><span class="v">1,233</span></div>
+          <div class="b"><span class="n">185.220.101.34</span><span class="bar"><i style="width:19%; background:var(--drop)"></i></span><span class="v">861 <span style="color:var(--drop)">drop</span></span></div>
+        </div>
+
+        <div class="tile wide barlist">
+          <h3>Drops by chain — this hour</h3>
+          <div class="b"><span class="n">input</span><span class="bar"><i style="width:82%; background:var(--drop)"></i></span><span class="v">82%</span></div>
+          <div class="b"><span class="n">forward</span><span class="bar"><i style="width:17%; background:var(--drop)"></i></span><span class="v">17%</span></div>
+          <div class="b"><span class="n">srcnat</span><span class="bar"><i style="width:1%; background:var(--drop)"></i></span><span class="v">1%</span></div>
+        </div>
+
+        <div class="tile wide">
+          <h3>Logging coverage</h3>
+          <div class="covstat">
+            <span class="ok">9 boundaries LOGGED</span> · 1 QUIET (wg, by choice) · <span class="dk">1 DARK — guest → wan</span><br>
+            the dark boundary is also painted on the topography
+          </div>
+        </div>
+      </div>
+    </main>
+  </div>
+</section>
+
+</body>
+</html>

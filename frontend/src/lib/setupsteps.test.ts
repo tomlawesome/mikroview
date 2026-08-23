@@ -57,9 +57,28 @@ describe('certificate cover check', () => {
     expect(certificateCovers(s, '192.168.1.5:8080')).toBe(false)
   })
 
-  it('is not a question when TLS is off', () => {
-    const s = status({ instance: { tlsEnabled: false, hosts: [], syslogPort: ':6514', syslogEnabled: true } })
+  it('is not a question when both HTTP TLS and syslog are off', () => {
+    const s = status({ instance: { tlsEnabled: false, hosts: [], syslogPort: ':6514', syslogEnabled: false } })
     expect(certificateCovers(s, 'anything:8080')).toBe(true)
+  })
+
+  // #374: tls.enabled=false only turns off HTTPS on the API port. When
+  // syslog TLS is on (main.go loads/generates the certificate whenever
+  // cfg.TLS.Enabled || cfg.Listen.SyslogTLS != ""), the router still
+  // gets a certificate whose SANs come from tls.hosts, and a mismatch
+  // still fails the router's handshake exactly as it would with HTTP
+  // TLS on. The short-circuit must key off syslogEnabled too, not just
+  // tlsEnabled.
+  it('still checks the host when HTTP TLS is off but syslog TLS is on', () => {
+    const s = status({ instance: { tlsEnabled: false, hosts: [], syslogPort: ':6514', syslogEnabled: true } })
+    expect(certificateCovers(s, '192.168.11.30:18084')).toBe(false)
+  })
+
+  it('accepts a covered host when HTTP TLS is off but syslog TLS is on', () => {
+    const s = status({
+      instance: { tlsEnabled: false, hosts: ['192.168.11.30'], syslogPort: ':6514', syslogEnabled: true },
+    })
+    expect(certificateCovers(s, '192.168.11.30:18084')).toBe(true)
   })
 })
 
@@ -94,9 +113,22 @@ describe('generated commands', () => {
     const block = pushBlock('h', 't', 'filter-rule')
     expect(block).toContain('"logPrefix"=($v->"log-prefix")')
     expect(block).toContain('"srcAddressList"=($v->"src-address-list")')
+    // #408's fields. connection-state is a set, passed through as the
+    // array RouterOS sends rather than joined by the script.
+    expect(block).toContain('"connectionState"=($v->"connection-state")')
+    expect(block).toContain('"inInterface"=($v->"in-interface")')
+    expect(block).toContain('"outInterface"=($v->"out-interface")')
     // The wrapping that makes it a list of records rather than one
     // merged map -- silently wrong without it.
     expect(block).toContain('{$rec}')
+  })
+
+  it('reports the router version on every block, on the payload not a record', () => {
+    const script = pushScript('h', 't', ['filter-rule', 'arp'])
+    expect(script.match(/"routerosVersion"=\[\/system\/resource get version\]/g)).toHaveLength(2)
+    // On the envelope beside kind/page/pages -- never inside the
+    // per-record map, which describes a rule and not the router.
+    expect(script).not.toContain('"routerosVersion"=[/system/resource get version]; "comment"')
   })
 
   it('gives each block its own variables, since they share one script', () => {

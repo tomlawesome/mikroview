@@ -78,6 +78,57 @@ func TestAppendAndQueryRoundTrip(t *testing.T) {
 	}
 }
 
+// TestAppendProvisionalRoundTripsThroughQueryAndRestart is #399's
+// "verify the store round-trips it" requirement for the file backend:
+// Record.Provisional survives both an ordinary Query (proving the JSON
+// line encoding round-trips it) and a process restart (proving replay's
+// index rebuild doesn't need it, but the record it points at still
+// carries it).
+func TestAppendProvisionalRoundTripsThroughQueryAndRestart(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "matchlog.jsonl")
+	src := Identity{MAC: "aa:bb:cc:dd:ee:ff"}
+	tuple := Tuple{Source: src, DestIP: "10.0.0.5", Port: 8883}
+	now := time.Date(2026, 8, 9, 12, 0, 0, 0, time.UTC)
+
+	s1, err := Open(path, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s1.AppendProvisional("entry-1", tuple, testEvent("first"), now, true); err != nil {
+		t.Fatalf("AppendProvisional: %v", err)
+	}
+
+	got := collect(t, s1, Query{Source: src})
+	if len(got) != 1 || !got[0].Provisional {
+		t.Fatalf("expected Provisional=true immediately after AppendProvisional, got %+v", got)
+	}
+	if err := s1.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	s2, err := Open(path, 10)
+	if err != nil {
+		t.Fatalf("reopening after restart: %v", err)
+	}
+	defer s2.Close()
+	got = collect(t, s2, Query{Source: src})
+	if len(got) != 1 || !got[0].Provisional {
+		t.Fatalf("expected Provisional=true to survive a restart, got %+v", got)
+	}
+
+	// A plain Append (never provisional) on a distinct tuple must leave
+	// Provisional false -- the field isn't accidentally sticky.
+	other := Tuple{Source: src, DestIP: "10.0.0.6", Port: 443}
+	if err := s2.Append("entry-1", other, testEvent("second"), now); err != nil {
+		t.Fatal(err)
+	}
+	for _, r := range collect(t, s2, Query{Source: src}) {
+		if r.Tuple.DestIP == "10.0.0.6" && r.Provisional {
+			t.Error("expected a plain Append to leave Provisional false")
+		}
+	}
+}
+
 // The core of #243 section 4: a repeated identical tuple must not become
 // a second stored record.
 func TestRepeatedTupleCollapses(t *testing.T) {

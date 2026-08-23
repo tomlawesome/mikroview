@@ -134,7 +134,7 @@ func (s *Server) sessionUser(r *http.Request, now time.Time) (*auth.User, bool) 
 // served). That's what makes
 // "a token can never reach a write/clear/config endpoint" structural:
 // there is no code path from a bearer-authenticated request to
-// handleFlagsClear, handleDetectorSettingsUpdate, handleAuthCreateUser,
+// handleFlagsClear, handleDefinitionsUpdate, handleAuthCreateUser,
 // etc. -- those handlers are simply never registered on this mux, so a
 // request for any of them (regardless of method) falls through to
 // ServeMux's own 404, the same as a route that never existed.
@@ -144,7 +144,7 @@ func (s *Server) readOnlyRoutes() http.Handler {
 	mux.HandleFunc("GET /api/flags", s.handleFlagsList)
 	mux.HandleFunc("GET /api/stats", s.handleStats)
 	mux.HandleFunc("GET /api/devices", s.handleDevices)
-	mux.HandleFunc("GET /api/watchlist/matches", s.handleWatchlistMatchesQuery)
+	mux.HandleFunc("GET /api/matches", s.handleMatchesQuery)
 	return mux
 }
 
@@ -152,7 +152,7 @@ func (s *Server) readOnlyRoutes() http.Handler {
 // #186) can ever reach -- its own separate *http.ServeMux, the same
 // structural reasoning readOnlyRoutes documents above: there is no code
 // path from an ingest-authenticated request to anything else registered
-// on the real mux, including readOnlyRoutes' own four GETs. That
+// on the real mux, including readOnlyRoutes' own GETs. That
 // separation is exactly what stops an ingest token -- readable by any
 // `read`-capable user on the router it came from, per #186 step 5 --
 // from becoming a read-everything credential the way a stolen one
@@ -379,12 +379,29 @@ var authErrorMessages = map[error]string{
 func writeAuthError(w http.ResponseWriter, r *http.Request, err error, status int) {
 	msg, ok := authErrorMessages[err]
 	if !ok {
-		// The route is ours (server-controlled), so naming it is safe
-		// and turns a bare error into one that says where to look.
-		authLog.Warn(fmt.Sprintf("%s %s: %v", r.Method, r.URL.Path, err))
+		authLog.Warn(authErrorLogLine(r.Method, r.URL.Path, err))
 		msg = "unable to complete the request"
 	}
 	http.Error(w, msg, status)
+}
+
+// authErrorLogLine renders the server-side line for an auth error that
+// has no user-facing message, naming the route so a bare error says
+// where to look.
+//
+// Every field is quoted, and that is the point rather than styling.
+// None of them is server-controlled: r.URL.Path is the *decoded*
+// request target, so a request for `/api/x%0A...` arrives here carrying
+// a real newline, and writing it raw let an unauthenticated caller
+// append whatever it liked to mikroview's own log -- a forged INFO line
+// is indistinguishable from a genuine one (#528). The error is quoted
+// on the same reasoning: this branch is the one for errors we did not
+// anticipate, which are the likeliest to carry something a caller sent.
+//
+// %q escapes the control characters, so the entry stays on one line and
+// an injected newline shows up as the `\n` it really is.
+func authErrorLogLine(method, path string, err error) string {
+	return fmt.Sprintf("%q %q: %q", method, path, fmt.Sprint(err))
 }
 
 // credentialsRequest is the body of both login and first-run

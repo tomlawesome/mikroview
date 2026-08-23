@@ -591,12 +591,13 @@ against public IPs a human clicks "investigate" on), mikroview also
 maintains a small local cache of known-malicious CIDR ranges from a
 vetted menu of free threat-intel feeds, and checks every ingested
 event's source IP against it — raising a `known_bad_ip` flag directly on
-a match, regardless of any behavioral threshold. This isn't a
-"detector" in the `flags.detectors`/scope sense above (see
-"Per-detector toggles"): there's no threshold to tune and no scope
-narrower than "does this exact IP fall in a range on the list," so it
-has no matching entry there, the same precedent `new_device`/
-`stale_rule` already set.
+a match, regardless of any behavioral threshold. It isn't listed under
+`flags.detectors` above (see "Per-detector toggles"): there's no
+threshold to tune and no scope narrower than "does this exact IP fall in
+a range on the list," so it has no matching entry there, the same
+precedent `new_device` already set. It *is* a definition the engine
+evaluates like any other, with its own confidence as a tunable
+parameter; it simply has no entry on the detector-toggles page yet.
 
 ```yaml
 blocklist:
@@ -962,7 +963,7 @@ so it's kept at full fidelity -- the whole matched event, not a summary.
 A repeated identical match collapses into a count with first-seen/
 last-seen timestamps rather than being stored again, so a noisy entry
 cannot consume the capacity a genuinely novel match needs. Queried via
-`GET /api/watchlist/matches` (see [API reference](#api-reference)) --
+`GET /api/matches` (see [API reference](#api-reference)) --
 open to any signed-in user and reachable via a read-only API token, the
 same tier as `/api/events`/`/api/flags`/`/api/stats`/`/api/devices`,
 since correlating a device against its recorded matches from an external
@@ -1140,7 +1141,12 @@ flags:
   list covers SSH/Telnet/FTP/SMB/RDP/VNC and RouterOS's own
   Winbox/API ports (8291/8728/8729) — worth watching precisely because
   they're MikroTik-specific and a common target once a scanner has
-  fingerprinted a device as RouterOS.
+  fingerprinted a device as RouterOS. The count is per *source*, summed
+  across the whole critical-port list (an internet scanner hitting five
+  different well-known ports once each is one incident, not five), so
+  the alert names every critical port that source touched within the
+  window and carries them as evidence — not just the one port that
+  happened to trip the threshold.
 - **Global volume spike** — current events/sec vs. a slow-moving
   baseline of itself (an exponential moving average, not a fixed
   number), so it adapts to your network's real traffic level over time
@@ -1190,7 +1196,12 @@ flags:
   misconfigured port-forward or firewall rule — the real client keeps
   retrying a port that isn't actually open the way you think — rather
   than necessarily an attack, so treat it as "worth a look," not
-  "critical."
+  "critical." The count is keyed on source *and port only*, never on the
+  destination address, so the same source retrying one port across
+  several internal hosts is one incident. The alert therefore names only
+  the port, and lists every internal destination that was actually
+  attempted as evidence, rather than naming whichever host happened to
+  receive the attempt that crossed the threshold.
 - **Low-and-slow port scan** — a scan deliberately paced to stay under
   the fast port-scan detector's short `portScanWindow`. Judged over the
   much longer `lowSlowScanWindow` (hours, not seconds), and deliberately
@@ -1626,14 +1637,22 @@ together:
 
 - **`config.yaml`** sets the *starting point* on boot (`flags.detectors`
   below).
-- **A live, admin-only UI** ("Detectors" in the toolbar, visible once
-  signed in as an admin) can override that starting point without a
-  restart -- takes effect on the very next ingested event. A live change
-  persists to `detectorSettingsStorePath` (same optional-persistence
-  contract as `flags.storePath` above: left unset, a live toggle still
-  works, it just resets to `config.yaml`'s values on restart) and, once
-  persisted, is what future restarts seed from -- `config.yaml`'s values
-  are only ever consulted the *first* time that file doesn't exist yet.
+- **An admin-only UI** ("Detectors" in the toolbar, visible once signed
+  in as an admin) can override that starting point. A change persists to
+  the definitions store (`engine.definitionsStorePath`) and is what
+  future restarts read -- `config.yaml`'s values are only ever consulted
+  for a detector the definitions store does not already hold.
+
+  **Takes effect on the very next ingested event, not on restart.** Every
+  detector is a definition evaluated by the engine now; changing one
+  re-registers it immediately, and every other definition carries on with
+  whatever it had already accumulated (a half-full counting window is not
+  reset by an unrelated edit).
+
+  `detectorSettingsStorePath` is no longer written to. It is still
+  *read*, once, to carry an existing deployment's toggles into the
+  definitions store on first boot after upgrading, and is then inert --
+  leave it configured through one upgrade, and it can be removed after.
 
 ```yaml
 flags:
@@ -1660,6 +1679,12 @@ restriction you've actually set. Within one field (`hosts`, `ports`, or
 `deny` (listed entries are excluded) -- never both directions on the same
 field at once. `hosts` entries accept a bare IP or a CIDR.
 
+The last five rows below are definitions that had no toggle at all
+before v0.3.0: they ran as always-on passes with no name, no switch and
+no scope. Giving every evaluated thing the same envelope made them
+configurable for the first time, and they appear on the Detectors page
+alongside the original twelve.
+
 Not every field means something to every detector -- a detector only
 consults the axes relevant to how it's keyed:
 
@@ -1677,6 +1702,11 @@ consults the axes relevant to how it's keyed:
 | `low_slow_scan` | which source IPs are tracked at all | which distinct ports *count* toward its own breadth total | -- |
 | `off_hours_activity` | which source IPs are tracked at all | -- | -- |
 | `device_silence` | -- (a per-configured-device sweep, not keyed by host/port/rule) | -- | -- |
+| `unexpected_mail_sender` | which source (LAN) IPs are watched | -- | -- |
+| `known_bad_ip` | which source IPs are looked up at all | -- | -- |
+| `netclass` | which source IPs are classified at all | -- | -- |
+| `reputation` | -- (lookup policy, not a per-event detector) | -- | -- |
+| `stale_rule` | -- (a periodic sweep over rule usage) | -- | -- |
 
 `global_spike` and `device_silence` only ever consult `enabled` -- the
 former is a single network-wide aggregate, the latter a periodic sweep
@@ -1748,7 +1778,24 @@ mikroview -restore /secure/place/mikroview-backup.json.gz
 ```
 
 One gzipped file holding every store: accounts, API tokens, recovery-key
-digests, flags, entities, detector settings, the audit log.
+digests, flags, rule usage, detector settings, entities, the MAC
+registry, the audit log, the watchlist, watchlist suggestions, and the
+watchlist match log.
+
+Three things are deliberately left out, and always have been:
+
+- **The TLS certificate and key material** (`tls.storePath`) — a
+  directory of generated key material, not a single document like every
+  store above, and restoring it onto a different host is more likely to
+  be wrong than right (different hostname/IP SANs, a CA nothing there
+  has trusted yet). It regenerates on its own the next time mikroview
+  starts without it.
+- **The recovery pepper** (`auth.recoveryPepperPath`) — the secret mixed
+  into every recovery-key digest. Keeping it out means a stolen backup
+  carries the digests and nothing able to verify them against.
+- **The GeoIP database** (`geoip.dbPath`) — a file you downloaded from
+  MaxMind yourself, not something mikroview wrote. A fresh download
+  replaces it exactly.
 
 **It contains your credentials.** That is deliberate — a backup that
 leaves them out cannot restore a working system, and you would find that
@@ -1978,9 +2025,9 @@ else.** A valid token grants `Authorization: Bearer <token>` access to:
 - `GET /api/flags`
 - `GET /api/stats`
 - `GET /api/devices`
-- `GET /api/watchlist/matches`
+- `GET /api/matches`
 
-and *nothing* else -- no clearing a flag, no changing a detector, no
+and *nothing* else -- no clearing a flag, no changing a definition, no
 managing users or other tokens, regardless of the method or path
 requested. This isn't a per-request permission check that a future
 handler could accidentally bypass: a bearer-authenticated request is
@@ -2489,6 +2536,8 @@ Override individual scalar settings without a mounted file:
 | `MIKROVIEW_DEVICE_MAC_STORE_PATH` | `deviceMac.storePath` (see [New-device detection](#new-device-detection-optional-on-by-default)) |
 | `MIKROVIEW_NOTIFY_WEBHOOK_URL` | `notify.webhook.url` |
 | `MIKROVIEW_BLOCKLIST_SOURCES` | `blocklist.sources` (comma-separated, see [Local IP/CIDR blocklist matching](#local-ipcidr-blocklist-matching-optional-on-by-default)) -- note an empty env var value is treated as unset, same as every other list env var here, so *disabling* the feature (`sources: []`) needs the YAML file, not this variable |
+| `MIKROVIEW_ENGINE_STORE_PATH` | `engine.storePath` -- where `internal/engine`'s persisted per-definition baseline state lives. Nothing registers a definition against it yet, so this only matters once one does |
+| `MIKROVIEW_ENGINE_DEFINITIONS_STORE_PATH` | `engine.definitionsStorePath` -- where the definitions store (issue #404) lives: shipped detectors, migrated watchlist expectations, and eventually builder-authored custom definitions, all in one document |
 
 ## Checking your version
 
@@ -2719,7 +2768,7 @@ exits, rather than starting the server. See
 | Endpoint | Description |
 |---|---|
 | `GET /api/healthz` | liveness/uptime/version check |
-| `GET /ca.crt` | mikroview's self-generated CA certificate, unauthenticated -- only present when TLS is on and mikroview generated its own CA (never for a supplied cert or `tls.enabled: false`); see [TLS](#tls) |
+| `GET /ca.crt` | mikroview's self-generated CA certificate, unauthenticated -- present whenever mikroview generated its own CA, which it does if `tls.enabled` is true **or** `listen.syslogTls` is non-empty, and never for an operator-supplied cert. With `tls.enabled: false` it is served over plain HTTP, which is the case the reverse-proxy deployment needs; see [TLS](#tls) |
 | `GET /api/events` | filtered, windowed historical query (see below) |
 | `GET /api/devices` | known devices (configured + auto-discovered), each with a `status` of `live`/`stale`/`never_seen` (issue #98, see [Behavioral flags](#behavioral-flags-optional-on-by-default)'s "Device silence" entry) -- feeds the Fleet view |
 | `GET /api/rules` | every rule label mikroview has ever seen fire, with first/last-seen time and count (`internal/rules.Store`) -- the "discovered but unnamed rules" source for the Entities panel (see [Entities](#entities-ui-managed-hostruleport-labels-and-tags-optional)), open to any signed-in user, not admin-gated |
@@ -2732,21 +2781,24 @@ exits, rather than starting the server. See
 | `POST /api/flags/{id}/clear-permanent` | admin-only: clear one flag *and* permanently exclude its (detector, target) pair going forward. Audit-logged |
 | `GET /api/flags/exclusions` | admin-only: every currently-excluded (detector, target) pair |
 | `DELETE /api/flags/exclusions/{id}` | admin-only: remove one exclusion, letting that pair raise again |
-| `GET /api/detectors` | admin-only: every detector's live enabled+scope (see [Per-detector toggles](#per-detector-toggles-and-scope-restrictions-optional)) |
-| `PUT /api/detectors/{name}` | admin-only: replace one detector's enabled+scope wholesale |
+| `GET /api/definitions` | admin-only: every definition the engine evaluates -- shipped detectors and your own watchlist expectations alike -- each with its enabled state, scope, tuned params, param schema, provenance, replayability, and (for an expectation) its coverage answer. Replaced `GET /api/detectors` and `GET /api/watchlist/entries` in v0.3.0 |
+| `POST /api/definitions` | admin-only: create a custom definition. Declarative only -- `kind: "programmatic"` is refused, because programmatic logic is Go compiled into the binary rather than data. `intent: "detection"` is refused too, for now: a custom detector's match conditions have nowhere on the envelope to be stored yet, so accepting one would create a definition that lists and evaluates nothing. Only expectation definitions can be created here today; custom detector authoring is tracked in issue #502 |
+| `GET /api/definitions/schema` | admin-only: every definition's param schema, keyed by id, so a UI renders tuning controls from the server's own declaration |
+| `GET /api/definitions/{id}` | admin-only: one definition |
+| `PUT /api/definitions/{id}` | admin-only: change any of `enabled`, `scope`, `params`, `suppressions`, `name`/`expectation` (expectations only). An absent field is left alone; a param outside its declared bounds is a 400, never a stored zero. Takes effect on the next ingested event |
+| `DELETE /api/definitions/{id}` | admin-only: remove a custom definition. A shipped one is refused with a 409 -- shipped definitions are disabled, never deleted |
+| `POST /api/definitions/{id}/clone` | admin-only: copy an expectation into a new definition with its own id. Refused for a shipped detector, whose logic is keyed by its own id and would evaluate nothing in a copy |
+| `POST /api/definitions/{id}/reset` | admin-only: discard every param override, putting a shipped definition back to what it shipped with |
+| `POST /api/definitions/{id}/replay` | admin-only: re-run one definition over the stored event corpus with candidate params, returning a receipt (emission count, evidence sample, and the window it actually covered) or a stated decline. A definition that can never answer honestly declines with its reason rather than reporting a misleading zero |
+| `POST /api/definitions/{id}/promote` | admin-only: move one or more observed destinations into an inverted expectation's permitted set |
+| `POST /api/definitions/{id}/observing` | admin-only: turn an inverted expectation's observe mode on or off |
 | `GET /api/entities` | admin-only (see [Entities](#entities-ui-managed-hostruleport-labels-and-tags-optional)): every persisted entity |
 | `POST /api/entities` | admin-only: create or replace (upsert) one entity, identified by `(type, key)` in the JSON body |
 | `DELETE /api/entities` | admin-only: remove the entity identified by `(type, key)` in the JSON body |
 | `GET /api/audit` | admin-only: a windowed slice of the admin action audit log (see [Audit log](#audit-log-admin-action-accountability-optional)), newest activity last, accepting `since`/`until`/`limit` query params like `GET /api/events` |
-| `GET /api/watchlist/entries` | admin-only: every watchlist entry (see [Watchlist](#watchlist-optional)) |
-| `POST /api/watchlist/entries` | admin-only: create one entry |
-| `PUT /api/watchlist/entries/{id}` | admin-only: replace one entry's name/source/destination/ports/invert/includeStructuralNoise -- never its Permitted/Observed state, which only the two endpoints below can change |
-| `DELETE /api/watchlist/entries/{id}` | admin-only: remove one entry |
-| `POST /api/watchlist/entries/{id}/promote` | admin-only: move one or more observed destinations into that entry's Permitted set |
-| `POST /api/watchlist/entries/{id}/observing` | admin-only: turn an inverted entry's observe mode on or off |
-| `GET /api/watchlist/matches` | a windowed query over the persisted match log, by `mac`/`ip`/`since`/`until`/`limit` -- open to any signed-in user and reachable via a read-only API token, same tier as `/api/events`/`/api/flags`/`/api/stats`/`/api/devices` |
+| `GET /api/matches` | a windowed query over the persisted match log, by `mac`/`ip`/`since`/`until`/`limit` -- open to any signed-in user and reachable via a read-only API token, same tier as `/api/events`/`/api/flags`/`/api/stats`/`/api/devices` |
 | `GET /api/suggestions` | admin-only: every suggested watchlist entry (see [Suggested watchlist entries](#suggested-watchlist-entries-issue-243)), optionally filtered with `?status=off\|on\|hide` |
-| `POST /api/suggestions/{id}/accept` | admin-only: accept an undecided suggestion, creating a real watchlist entry |
+| `POST /api/suggestions/{id}/accept` | admin-only: accept an undecided suggestion, creating a real expectation definition |
 | `POST /api/suggestions/{id}/hide` | admin-only: decline an undecided suggestion |
 | `POST /api/suggestions/{id}/unhide` | admin-only: return a hidden suggestion to undecided |
 | `POST /api/suggestions/reset` | admin-only, destructive: wipes the entire watchlist and regenerates suggestions from scratch -- requires `{"confirm": true}` in the request body |
@@ -2768,15 +2820,17 @@ exits, rather than starting the server. See
 Every route above `/api/auth/session`/`/register`/`/login`/`/logout` and
 `/api/healthz` requires a valid session once an account exists -- see
 [Authentication](#authentication). `GET /api/events`, `/flags`, `/stats`,
-and `/devices` additionally accept a valid `Authorization: Bearer
-<token>` header instead of a session (see [API tokens](#api-tokens-read-only));
+`/devices`, and `/matches` additionally accept a valid `Authorization:
+Bearer <token>` header instead of a session (see [API tokens](#api-tokens-read-only));
 no other route accepts one.
 Every mutating (`POST`/`PUT`/`DELETE`) request also requires an
 `X-Requested-With: mikroview` header once an account exists (a CSRF
 mitigation, see SECURITY.md).
 
 `/api/events` query parameters: `device`, `action` (`accept`/`drop`/
-`reject`/`log`/`unknown`), `protocol`, `chain`, `interface`, `ip` (exact
+`reject`/`log`/`marked`/`natted`/`unknown` -- see
+[RouterOS setup](routeros-setup.md#3-tag-your-firewall-rules) for which
+kind of rule produces each), `protocol`, `chain`, `interface`, `ip` (exact
 or CIDR, matches source or destination), `port` (matches source or
 destination), `srcScope`/`dstScope` (`internal` or `external`, restricts
 that side of the connection to a private/LAN or public address

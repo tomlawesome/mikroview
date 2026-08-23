@@ -7,6 +7,7 @@
   import IpInvestigateButton from './IpInvestigateButton.svelte'
   import PortInvestigateButton from './PortInvestigateButton.svelte'
   import RouterRuleButton from './RouterRuleButton.svelte'
+  import CopyButton from './CopyButton.svelte'
   import { lookupPort } from '../lib/commonPorts'
 
   let {
@@ -43,9 +44,85 @@
 
   const srcFlag = $derived(countryFlag(event.srcCountry))
   const dstFlag = $derived(countryFlag(event.dstCountry))
+
+  // #439: row tokens (device, action, chain, addresses, ports, protocol,
+  // rule) used to be <button> elements. That's *why* row text couldn't be
+  // selected/copied before this -- every browser's UA stylesheet makes
+  // button content unselectable, independent of anything app.css did or
+  // didn't set (there was no explicit `user-select: none` anywhere to
+  // remove). They're plain elements with role="button" now, so their
+  // text is ordinary selectable content, and click-to-filter is wired up
+  // by hand below instead of coming for free from <button onclick>.
+  let rowEl: HTMLDivElement | undefined = $state()
+
+  // Tracks which element a mouse press started on, so a release is only
+  // treated as "activating this token" if it started there too --
+  // mirrors a native <button>'s own click semantics (mousedown+mouseup
+  // on the same element), which stopped being automatic once these
+  // cells stopped being <button>s. A plain closure variable rather than
+  // $state: nothing reads it reactively, only the next mouseup for the
+  // same press, so there's nothing for Svelte to track.
+  let pressedTarget: EventTarget | null = null
+
+  // True if the current selection has any content inside this row. Used
+  // to tell "clicked" from "just finished dragging to select text"
+  // apart at mouseup -- the one moment both look identical (a mousedown
+  // and mouseup on the same token) but mean opposite things. Deliberately
+  // checked at mouseup, not mousedown: Chrome does not collapse a
+  // pre-existing selection until mouseup when the press started inside
+  // it (so the selection can still be dragged), so mousedown is too
+  // early to see it.
+  function selectionWithinRow(): boolean {
+    if (!rowEl) return false
+    const sel = window.getSelection()
+    if (!sel || sel.isCollapsed || sel.rangeCount === 0) return false
+    return rowEl.contains(sel.getRangeAt(0).commonAncestorContainer)
+  }
+
+  // Wires one token's three activation paths -- mouse press+release on
+  // the same element with no selection left behind, or Enter/Space -- to
+  // `run`. Every click-to-filter cell below uses this instead of each
+  // separately re-deriving the same three handlers.
+  //
+  // A Svelte action (use:activate) rather than a spread of handler
+  // props, and that is a licensing decision as much as a style one: an
+  // element spread compiles through svelte's set_attributes runtime,
+  // which imports clsx -- pulling a package into the shipped bundle
+  // that nothing here uses, and one whose exports map hides its
+  // package.json from tools/licenses/generate-notices.mjs, failing the
+  // attribution gate. An action attaches the same listeners directly to
+  // the node and compiles to none of that.
+  function activate(node: HTMLElement, run: () => void) {
+    const onmousedown = (e: MouseEvent) => {
+      pressedTarget = e.currentTarget
+    }
+    const onmouseup = (e: MouseEvent) => {
+      const startedHere = pressedTarget === e.currentTarget
+      pressedTarget = null
+      if (!startedHere) return
+      if (selectionWithinRow()) return
+      run()
+    }
+    const onkeydown = (e: KeyboardEvent) => {
+      if (e.key !== 'Enter' && e.key !== ' ') return
+      e.preventDefault()
+      run()
+    }
+    node.addEventListener('mousedown', onmousedown)
+    node.addEventListener('mouseup', onmouseup)
+    node.addEventListener('keydown', onkeydown)
+    return {
+      destroy() {
+        node.removeEventListener('mousedown', onmousedown)
+        node.removeEventListener('mouseup', onmouseup)
+        node.removeEventListener('keydown', onkeydown)
+      },
+    }
+  }
 </script>
 
 <div
+  bind:this={rowEl}
   class="row row-{event.action}"
   class:member
   class:expandable
@@ -71,43 +148,55 @@
     </span>
   {/if}
 
-  <button
-    class="cell device cell-btn"
-    onclick={() => appState.setFilter('device', event.deviceId)}
-    title="Filter to device: {deviceName}"
-  >
-    {deviceName}
-  </button>
+  <span class="cell device">
+    <span
+      class="cell-btn device-btn"
+      role="button"
+      tabindex="0"
+      title="Filter to device: {deviceName}"
+      use:activate={() => appState.setFilter('device', event.deviceId)}
+    >
+      {deviceName}
+    </span>
+    <CopyButton value={event.deviceId} label="device id" />
+  </span>
 
-  <button
+  <span
     class="cell action cell-btn"
-    onclick={() => appState.setFilter('action', event.action)}
+    role="button"
+    tabindex="0"
     title="Filter to action: {event.action}"
+    use:activate={() => appState.setFilter('action', event.action)}
   >
     <ActionBadge action={event.action} />
-  </button>
+  </span>
 
   {#if event.chain}
-    <button
+    <span
       class="cell chain cell-btn"
-      onclick={() => appState.setFilter('chain', event.chain)}
+      role="button"
+      tabindex="0"
       title="Filter to chain: {event.chain}"
+      use:activate={() => appState.setFilter('chain', event.chain)}
     >
       {event.chain}
-    </button>
+    </span>
   {:else}
     <span class="cell chain">—</span>
   {/if}
 
   {#if event.srcIp}
     <span class="cell addr">
-      <button
+      <span
         class="cell-btn addr-btn"
+        role="button"
+        tabindex="0"
         title={event.srcHostName ? `${event.srcHostName} — filter to IP: ${event.srcIp}` : `Filter to IP: ${event.srcIp}`}
-        onclick={() => appState.setFilter('ip', event.srcIp ?? '')}
+        use:activate={() => appState.setFilter('ip', event.srcIp ?? '')}
       >
         {srcFlag ? `${srcFlag} ` : ''}{event.srcHostName || event.srcIp}
-      </button>
+      </span>
+      <CopyButton value={event.srcIp} label="source IP" />
       {#if isPublicIp(event.srcIp)}
         <IpInvestigateButton ip={event.srcIp} />
       {/if}
@@ -118,15 +207,18 @@
 
   {#if event.srcPort}
     <span class="cell port">
-      <button
+      <span
         class="cell-btn port-btn"
+        role="button"
+        tabindex="0"
         title={event.srcPortName
           ? `${event.srcPortName} — filter to port: ${event.srcPort}`
           : `Filter to port: ${event.srcPort}`}
-        onclick={() => appState.setFilter('port', String(event.srcPort))}
+        use:activate={() => appState.setFilter('port', String(event.srcPort))}
       >
         {event.srcPortName || event.srcPort}
-      </button>
+      </span>
+      <CopyButton value={String(event.srcPort)} label="source port" />
       {#if lookupPort(event.srcPort)}
         <PortInvestigateButton port={event.srcPort} />
       {/if}
@@ -137,13 +229,16 @@
 
   {#if event.dstIp}
     <span class="cell addr">
-      <button
+      <span
         class="cell-btn addr-btn"
+        role="button"
+        tabindex="0"
         title={event.dstHostName ? `${event.dstHostName} — filter to IP: ${event.dstIp}` : `Filter to IP: ${event.dstIp}`}
-        onclick={() => appState.setFilter('ip', event.dstIp ?? '')}
+        use:activate={() => appState.setFilter('ip', event.dstIp ?? '')}
       >
         {dstFlag ? `${dstFlag} ` : ''}{event.dstHostName || event.dstIp}
-      </button>
+      </span>
+      <CopyButton value={event.dstIp} label="destination IP" />
       {#if isPublicIp(event.dstIp)}
         <IpInvestigateButton ip={event.dstIp} />
       {/if}
@@ -154,15 +249,18 @@
 
   {#if event.dstPort}
     <span class="cell port">
-      <button
+      <span
         class="cell-btn port-btn"
+        role="button"
+        tabindex="0"
         title={event.dstPortName
           ? `${event.dstPortName} — filter to port: ${event.dstPort}`
           : `Filter to port: ${event.dstPort}`}
-        onclick={() => appState.setFilter('port', String(event.dstPort))}
+        use:activate={() => appState.setFilter('port', String(event.dstPort))}
       >
         {event.dstPortName || event.dstPort}
-      </button>
+      </span>
+      <CopyButton value={String(event.dstPort)} label="destination port" />
       {#if lookupPort(event.dstPort)}
         <PortInvestigateButton port={event.dstPort} />
       {/if}
@@ -181,13 +279,15 @@
   </span>
 
   {#if event.protocol}
-    <button
+    <span
       class="cell proto cell-btn"
-      onclick={() => appState.setFilter('protocol', event.protocol ?? '')}
+      role="button"
+      tabindex="0"
       title="Filter to protocol: {event.protocol}"
+      use:activate={() => appState.setFilter('protocol', event.protocol ?? '')}
     >
       {event.protocol}
-    </button>
+    </span>
   {:else}
     <span class="cell proto">—</span>
   {/if}
@@ -196,13 +296,16 @@
 
   {#if event.ruleLabel}
     <span class="cell rule">
-      <button
+      <span
         class="cell-btn rule-btn"
-        onclick={() => (appState.filters = { ...appState.filters, rule: event.ruleLabel, ruleRegex: false })}
+        role="button"
+        tabindex="0"
         title={event.ruleName ? `${event.ruleName} — filter to rule: ${event.ruleLabel}` : `Filter to rule: ${event.ruleLabel}`}
+        use:activate={() => (appState.filters = { ...appState.filters, rule: event.ruleLabel, ruleRegex: false })}
       >
         {event.ruleName || event.ruleLabel}
-      </button>
+      </span>
+      <CopyButton value={event.ruleLabel} label="rule label" />
       <RouterRuleButton mode="rule" device={event.deviceId} ruleLabel={event.ruleLabel} />
     </span>
   {:else}
@@ -285,6 +388,12 @@
   .row-log .cell {
     background: var(--row-log-bg);
   }
+  .row-marked .cell {
+    background: var(--row-marked-bg);
+  }
+  .row-natted .cell {
+    background: var(--row-natted-bg);
+  }
   .row-unknown .cell {
     background: var(--row-unknown-bg);
   }
@@ -302,6 +411,12 @@
   }
   .row-log:hover .cell {
     background: var(--row-log-bg-hover);
+  }
+  .row-marked:hover .cell {
+    background: var(--row-marked-bg-hover);
+  }
+  .row-natted:hover .cell {
+    background: var(--row-natted-bg-hover);
   }
   .row-unknown:hover .cell {
     background: var(--row-unknown-bg-hover);
@@ -328,6 +443,12 @@
   .row-log .time {
     background: linear-gradient(var(--row-log-bg), var(--row-log-bg)), var(--bg-elevated);
   }
+  .row-marked .time {
+    background: linear-gradient(var(--row-marked-bg), var(--row-marked-bg)), var(--bg-elevated);
+  }
+  .row-natted .time {
+    background: linear-gradient(var(--row-natted-bg), var(--row-natted-bg)), var(--bg-elevated);
+  }
   .row-unknown .time {
     background: linear-gradient(var(--row-unknown-bg), var(--row-unknown-bg)), var(--bg-elevated);
   }
@@ -342,6 +463,12 @@
   }
   .row-log:hover .time {
     background: linear-gradient(var(--row-log-bg-hover), var(--row-log-bg-hover)), var(--bg-elevated);
+  }
+  .row-marked:hover .time {
+    background: linear-gradient(var(--row-marked-bg-hover), var(--row-marked-bg-hover)), var(--bg-elevated);
+  }
+  .row-natted:hover .time {
+    background: linear-gradient(var(--row-natted-bg-hover), var(--row-natted-bg-hover)), var(--bg-elevated);
   }
   .row-unknown:hover .time {
     background: linear-gradient(var(--row-unknown-bg-hover), var(--row-unknown-bg-hover)), var(--bg-elevated);
@@ -384,13 +511,30 @@
     color: var(--fg-muted);
   }
 
+  /* The device cell now holds the click-to-filter target plus its copy
+     button side by side -- same shape as .cell.addr below. */
+  .cell.device {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+  }
+
+  .device-btn {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
   .rule {
     font-family: var(--font-mono);
     color: var(--fg-muted);
   }
 
-  /* The rule cell holds the click-to-filter button plus the pushed-table
-     lookup trigger side by side -- same layout the addr cells use. */
+  /* The rule cell holds the click-to-filter button, its copy button, and
+     the pushed-table lookup trigger side by side -- same layout the addr
+     cells use. */
   .cell.rule {
     display: flex;
     align-items: center;
@@ -405,7 +549,11 @@
     white-space: nowrap;
   }
 
-  /* Same shape for the NAT cell: value plus the NAT-table trigger. */
+  /* Same shape for the NAT cell: value plus the NAT-table trigger. No
+     copy button here -- NAT isn't one of #439's row-token categories
+     (addresses/ports/rules/device names), and unlike those it has no
+     resolved-label-vs-raw-value gap to bridge: what's shown already is
+     the raw address. */
   .nat-value {
     flex: 1;
     min-width: 0;
@@ -421,8 +569,13 @@
 
   /* Reset button chrome on click-to-filter cells so they read exactly
      like the plain-text cells they replace -- only a hover underline
-     hints they're interactive. */
+     hints they're interactive. These are role="button" elements, not
+     <button>s (see #439 in the script block above: <button> content is
+     never selectable, in any browser, regardless of this stylesheet) --
+     `display: block` replaces the block-level box a <button> used to
+     provide by default. */
   .cell-btn {
+    display: block;
     background: none;
     border: none;
     font: inherit;
@@ -436,11 +589,21 @@
     text-decoration: underline;
   }
 
-  /* Address cells hold the IP filter button and (for public IPs) the
-     investigate trigger side by side -- overflow/ellipsis moves from
-     `.cell` (which now just lays the two out) onto the filter button
-     itself, since that's the element with the actual long text. Port is
-     its own column now (see .port below), not crammed in here. */
+  /* outline-offset is negative (inset), not positive like most of the
+     app's other :focus-visible rings (e.g. Toolbar.svelte's
+     .logo-button) -- .cell clips overflow, so an outline drawn outside
+     the box would be cut off here. */
+  .cell-btn:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: -2px;
+    border-radius: 2px;
+  }
+
+  /* Address cells hold the IP filter button, its copy button, and (for
+     public IPs) the investigate trigger side by side -- overflow/ellipsis
+     moves from `.cell` (which now just lays them out) onto the filter
+     button itself, since that's the element with the actual long text.
+     Port is its own column now (see .port below), not crammed in here. */
   .cell.addr {
     display: flex;
     align-items: center;
@@ -455,9 +618,9 @@
     white-space: nowrap;
   }
 
-  /* Same side-by-side shape as .cell.addr above (filter button + optional
-     investigate trigger), but right-aligned since port numbers are
-     numeric. */
+  /* Same side-by-side shape as .cell.addr above (filter button + copy
+     button + optional investigate trigger), but right-aligned since port
+     numbers are numeric. */
   .cell.port {
     display: flex;
     align-items: center;
@@ -469,5 +632,27 @@
     flex: none;
     width: auto;
     text-align: right;
+  }
+
+  /* #439: hover-revealed per-token copy glyph (CopyButton.svelte).
+     Hidden by opacity (never display/visibility) so it stays in the tab
+     order and reachable by keyboard -- :focus-within covers tabbing to
+     it directly, without first hovering the row. Scoped to `.row` (not
+     each `.cell`) to match hovering *anywhere* in the row revealing
+     every token's glyph at once, not just the one directly under the
+     pointer. */
+  :global(.copy-btn) {
+    opacity: 0;
+  }
+
+  .row:hover :global(.copy-btn),
+  .row:focus-within :global(.copy-btn) {
+    opacity: 1;
+  }
+
+  @media (prefers-reduced-motion: no-preference) {
+    :global(.copy-btn) {
+      transition: opacity 0.12s ease;
+    }
   }
 </style>

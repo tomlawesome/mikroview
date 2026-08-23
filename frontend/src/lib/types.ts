@@ -1,7 +1,16 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 // Mirrors internal/store/event.go's JSON tags.
-export type Action = 'accept' | 'drop' | 'reject' | 'log' | 'unknown'
+//
+// accept/drop/reject are filter-table verdicts; log is a rule that logs
+// without deciding the packet's fate; marked is a mangle mark rule
+// (mark-connection / mark-routing / mark-packet) and natted is address
+// translation (masquerade / src-nat / dst-nat / redirect). unknown means
+// the parser genuinely could not tell -- see internal/store/event.go for
+// what it will and will not infer. Adding a member here is a
+// deliberately loud change: every Record<Action, ...> in the UI stops
+// type-checking until it has a label and a color. See #437.
+export type Action = 'accept' | 'drop' | 'reject' | 'log' | 'marked' | 'natted' | 'unknown'
 
 export interface FirewallEvent {
   id: number
@@ -108,6 +117,7 @@ export interface Healthz {
   status: string
   time: string
   uptime: string
+  uptimeSeconds: number
   version: string
 }
 
@@ -263,9 +273,15 @@ export type FlagType =
   // above.
   | 'known_bad_ip'
 
-// Mirrors internal/detect.DetectorName's 12 string values. No longer a
-// FlagType alias (see new_device/stale_rule above) -- kept as its own
-// literal union now that FlagType has entries with no matching detector.
+// The definition ids the detector-settings page carries hand-written
+// copy for. No longer a closed set of everything the server evaluates:
+// GET /api/definitions lists every shipped definition, including the
+// five that were always-on passes before the engine port gave them an
+// envelope (unexpected_mail_sender, stale_rule, known_bad_ip, netclass,
+// reputation). A definition whose id is not in this union still renders
+// -- from the server's own name and description -- so the page can never
+// silently omit something that is actually evaluating. See
+// Detectors.svelte.
 export type DetectorName =
   | 'port_scan'
   | 'activity_spike'
@@ -296,12 +312,101 @@ export interface DetectorScope {
   rulesMode?: ListMode
 }
 
-// Mirrors internal/detect.Settings' JSON tags, plus the detector's own
-// name (as returned by GET /api/detectors).
+// One detection definition as the detector-settings page needs it,
+// projected from GET /api/definitions' own envelope (see Definition
+// below). name is the definition's id -- the same string the old
+// /api/detectors endpoint keyed on, so a deployment's saved scope and
+// the page's hand-written copy both still line up -- while label and
+// description carry the server's own operator-facing text, which is the
+// only copy that exists for a definition this page has no entry for.
 export interface DetectorSettings {
-  name: DetectorName
+  name: string
+  label: string
+  description?: string
   enabled: boolean
   scope: DetectorScope
+}
+
+// Mirrors internal/api's definitionView (issue #407) -- one definition
+// as the definitions API serves it: the whole engine envelope, plus the
+// four things a caller cannot derive from it (whether this binary can
+// evaluate it, how far its params are from the shipped defaults, whether
+// it can answer a replay question, and -- for an expectation -- whether
+// anything can actually feed it).
+export type DefinitionIntent = 'detection' | 'expectation'
+export type DefinitionKind = 'declarative' | 'programmatic'
+export type DefinitionOrigin = 'shipped' | 'custom'
+
+// One param's declared type/bounds/description, so a tuning control is
+// rendered from the server's declaration rather than from a second copy
+// of every definition's knobs written in TypeScript -- the duplication
+// the evaluation-engine ADR exists to remove, which re-listing them here
+// would simply move up a layer.
+export interface DefinitionParamSchema {
+  name: string
+  type: 'int' | 'duration' | 'float' | 'portList' | 'hostList' | 'stringList' | 'enum' | 'bool'
+  description: string
+  unit?: string
+  required?: boolean
+  min?: number
+  max?: number
+  enumValues?: string[]
+}
+
+export interface DefinitionProvenance {
+  origin: DefinitionOrigin
+  shippedParams?: Record<string, unknown>
+}
+
+export interface DefinitionSuppression {
+  id: string
+  target: string
+  reason?: string
+}
+
+// A definition either produces a replay receipt or declares why it never
+// can; known is false only when the server could not build it at all.
+// Kept as three fields rather than collapsed into one, because "cannot
+// build" and "can never answer" are different facts and showing the
+// second for the first would state a property nobody established.
+export interface DefinitionReplayability {
+  known: boolean
+  capable: boolean
+  reason?: string
+}
+
+export interface Definition {
+  id: string
+  name: string
+  description?: string
+  intent: DefinitionIntent
+  kind: DefinitionKind
+  enabled: boolean
+  scope?: DetectorScope
+  params?: Record<string, unknown>
+  paramSchema?: DefinitionParamSchema[]
+  provenance: DefinitionProvenance
+  suppressions?: DefinitionSuppression[]
+  available: boolean
+  // Present only where a param differs from what the definition shipped
+  // with -- an empty object and an absent key both mean "stock".
+  distance?: Record<string, { shipped?: unknown; current?: unknown }>
+  replay: DefinitionReplayability
+  // Set only for an expectation definition; see WatchlistCoverage.
+  coverage?: WatchlistCoverage
+  // The operator-facing entry an expectation converts back to. Absent
+  // for a detection definition.
+  expectation?: WatchlistEntry
+}
+
+// What GET /api/definitions returns alongside the definitions: whether
+// the pushed filter tables every coverage answer was derived from can
+// honestly be treated as all of them (#367). When complete is false,
+// every definite negative has already been downgraded to 'unknown'
+// server-side, and this is the only place a caller can see why.
+export interface CoverageEvidence {
+  complete: boolean
+  missingDevices?: string[]
 }
 
 // Mirrors internal/entities.Entity's JSON tags (issue #107). type is

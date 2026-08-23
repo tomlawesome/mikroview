@@ -1,0 +1,658 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mikroview — Direction C: Luminous</title>
+<style>
+  /* ============================================================
+     DIRECTION C — "LUMINOUS"
+     The network as a living thing, drawn in light. Deep dusk
+     gradient, glass panels floating over the map, traffic as
+     particle streams, alerts as pulses. Rounded, soft, alive —
+     but the text stays crisp and the evidence stays text.
+     ============================================================ */
+  :root {
+    --bg-0: #070b16;
+    --bg-1: #101a33;
+    --glass: rgba(17, 26, 50, 0.62);
+    --glass-2: rgba(24, 36, 66, 0.72);
+    --edge: rgba(160, 190, 255, 0.14);
+    --edge-2: rgba(160, 190, 255, 0.28);
+    --ink: #eef2ff;
+    --ink-2: #a8b4d4;
+    --ink-3: #64719a;
+    --accent: #6ea8ff;
+    --glow: rgba(110, 168, 255, 0.45);
+    /* validated categorical (dark, surface #0d1426): */
+    --lan: #3987e5;
+    --srv: #199e70;
+    --iot: #c98500;
+    --guest: #d95926;
+    --ok: #2fbf5f;
+    --drop: #ff6b6b;
+    --nat: #a08df0;
+    --sans: system-ui, -apple-system, "Segoe UI", sans-serif;
+    --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  }
+  * { box-sizing: border-box; margin: 0; }
+  html { scroll-behavior: smooth; }
+  body {
+    background: linear-gradient(165deg, var(--bg-0), var(--bg-1) 60%, #0c1428);
+    color: var(--ink); font: 13.5px/1.5 var(--sans);
+    -webkit-font-smoothing: antialiased;
+  }
+  .concept {
+    position: sticky; top: 0; z-index: 60;
+    display: flex; gap: 16px; align-items: baseline;
+    padding: 8px 20px; background: rgba(4, 7, 14, 0.92);
+    border-bottom: 1px solid var(--edge);
+    font-size: 11px; color: var(--ink-3); backdrop-filter: blur(8px);
+  }
+  .concept b { color: var(--accent); letter-spacing: 0.1em; }
+  .concept a { color: var(--ink-2); text-decoration: none; margin-left: 12px; }
+
+  .scene { min-height: 100vh; padding: 18px 22px 60px; border-bottom: 1px solid var(--edge); }
+  .scene-tag { font-size: 10.5px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--ink-3); margin-bottom: 14px; }
+
+  /* ============ floating glass shell ============ */
+  .app { display: grid; grid-template-columns: 84px 1fr; gap: 18px; }
+  .rail {
+    background: var(--glass); border: 1px solid var(--edge); border-radius: 20px;
+    backdrop-filter: blur(14px); padding: 16px 0; height: fit-content;
+    display: flex; flex-direction: column; align-items: center; gap: 4px;
+    position: sticky; top: 52px;
+  }
+  .logo {
+    width: 40px; height: 40px; border-radius: 13px; margin-bottom: 12px;
+    background: radial-gradient(circle at 30% 30%, var(--accent), #2b52c7);
+    box-shadow: 0 0 22px var(--glow);
+    display: flex; align-items: center; justify-content: center;
+    font: 800 15px var(--sans); color: #061027;
+  }
+  .nv {
+    width: 62px; padding: 9px 0 7px; border-radius: 14px; text-align: center;
+    color: var(--ink-3); font-size: 9.5px; letter-spacing: 0.04em; cursor: default;
+  }
+  .nv svg { display: block; margin: 0 auto 4px; }
+  .nv.active {
+    color: var(--ink); background: rgba(110, 168, 255, 0.14);
+    box-shadow: inset 0 0 0 1px rgba(110, 168, 255, 0.35), 0 0 18px rgba(110, 168, 255, 0.12);
+  }
+  .main { min-width: 0; }
+
+  .viewbar { display: flex; align-items: center; gap: 14px; margin-bottom: 14px; }
+  .viewbar h1 { font-size: 19px; font-weight: 650; letter-spacing: -0.01em; }
+  .livepill {
+    display: inline-flex; align-items: center; gap: 7px;
+    background: rgba(47, 191, 95, 0.12); border: 1px solid rgba(47, 191, 95, 0.4);
+    color: var(--ok); border-radius: 999px; padding: 3px 12px; font-size: 11.5px; font-weight: 600;
+  }
+  .livepill i {
+    width: 7px; height: 7px; border-radius: 50%; background: var(--ok);
+    box-shadow: 0 0 8px var(--ok); animation: pulse 2s ease-in-out infinite;
+  }
+  @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.3; } }
+  .viewbar .meta { font-size: 12px; color: var(--ink-3); }
+  .viewbar .meta b { color: var(--ink-2); font-weight: 600; }
+
+  .card {
+    background: var(--glass); border: 1px solid var(--edge); border-radius: 20px;
+    backdrop-filter: blur(14px); overflow: hidden;
+  }
+
+  /* ============ scene 1: the living map ============ */
+  .map-head { display: flex; gap: 16px; align-items: baseline; padding: 14px 20px; border-bottom: 1px solid var(--edge); }
+  .map-head h2 { font-size: 14px; font-weight: 650; }
+  .map-head .sub { font-size: 11.5px; color: var(--ink-3); }
+  svg text { font-family: var(--sans); }
+  .t-name { fill: var(--ink); font-size: 12.5px; font-weight: 700; }
+  .t-sub { fill: var(--ink-3); font-size: 9.5px; }
+  .t-cidr { fill: var(--ink-2); font-size: 10px; font-family: var(--mono); }
+  .t-member { fill: var(--ink-2); font-size: 9.5px; }
+  .t-port { fill: var(--ink-2); font-size: 9px; font-family: var(--mono); }
+
+  .lane-glass { fill: rgba(20, 30, 58, 0.55); stroke-width: 1.2; rx: 16; }
+  .e-int { fill: none; stroke: var(--edge-2); stroke-width: 6; stroke-linecap: round; }
+  .e-obs { fill: none; stroke-linecap: round; opacity: 0.5; }
+  .e-ghost { fill: none; stroke: var(--ink-3); stroke-width: 1.4; stroke-dasharray: 2 6; opacity: 0.8; }
+  .e-delta { fill: none; stroke: var(--drop); stroke-width: 2; opacity: 0.65; filter: drop-shadow(0 0 5px var(--drop)); }
+
+  /* particles: traffic drawn as moving light (SVG circles on motion paths) */
+  .map-stage { position: relative; }
+  .map-stage svg { display: block; }
+  @keyframes travel { from { offset-distance: 0%; } to { offset-distance: 100%; } }
+  .pulse-halo { animation: halo 2.2s ease-out infinite; transform-origin: center; transform-box: fill-box; }
+  @keyframes halo { 0% { opacity: 0.7; transform: scale(0.6); } 100% { opacity: 0; transform: scale(2.1); } }
+
+  .badge-alert {
+    fill: #241019; stroke: var(--drop); rx: 10;
+  }
+  .badge-note { fill: rgba(20, 30, 58, 0.8); stroke: var(--edge-2); rx: 10; }
+  .cov-l { fill: var(--ok); font-size: 8.5px; font-weight: 800; letter-spacing: 0.08em; }
+  .cov-q { fill: var(--ink-3); font-size: 8.5px; font-weight: 800; letter-spacing: 0.08em; }
+  .cov-d { fill: var(--drop); font-size: 8.5px; font-weight: 800; letter-spacing: 0.08em; }
+  .map-legend { display: flex; flex-wrap: wrap; gap: 18px; padding: 12px 20px; border-top: 1px solid var(--edge); font-size: 11px; color: var(--ink-2); }
+  .map-legend .k { display: inline-flex; align-items: center; gap: 7px; }
+  .dotk { width: 7px; height: 7px; border-radius: 50%; display: inline-block; }
+
+  /* ============ scene 2: live view ============ */
+  .filterbar { display: flex; flex-wrap: wrap; gap: 10px; align-items: flex-end; padding: 14px 18px; border-bottom: 1px solid var(--edge); }
+  .ff { display: flex; flex-direction: column; gap: 4px; }
+  .ff label { font-size: 9.5px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--ink-3); }
+  .ff input, .ff select {
+    background: rgba(10, 16, 34, 0.7); border: 1px solid var(--edge-2); border-radius: 11px;
+    color: var(--ink); font: 12.5px var(--sans); padding: 7px 11px; width: 175px; outline: none;
+  }
+  .ff select { width: 120px; }
+  .ff.small input { width: 112px; }
+  .swap {
+    background: rgba(110, 168, 255, 0.12); border: 1px solid rgba(110, 168, 255, 0.4);
+    color: var(--accent); font-size: 14px; border-radius: 11px; padding: 6px 11px; cursor: default;
+  }
+  .fright { margin-left: auto; display: flex; gap: 9px; align-items: center; }
+  .btn { background: rgba(10, 16, 34, 0.7); border: 1px solid var(--edge-2); color: var(--ink-2); font: 12px var(--sans); padding: 7px 14px; border-radius: 999px; cursor: default; }
+  .btn.on { color: var(--accent); border-color: rgba(110, 168, 255, 0.5); box-shadow: 0 0 14px rgba(110, 168, 255, 0.15); }
+  .holdnote { font-size: 11px; color: var(--iot); }
+
+  table.stream { width: 100%; border-collapse: collapse; }
+  .stream th {
+    text-align: left; font-size: 9.5px; letter-spacing: 0.12em; text-transform: uppercase;
+    color: var(--ink-3); font-weight: 600; padding: 10px 14px 8px; border-bottom: 1px solid var(--edge-2);
+  }
+  .stream td { padding: 7px 14px; border-bottom: 1px solid var(--edge); font-size: 12.5px; white-space: nowrap; }
+  .stream tr:hover td { background: rgba(110, 168, 255, 0.05); }
+  .t { color: var(--ink-3); font-size: 11px; font-family: var(--mono); }
+  .chain { color: var(--ink-3); font-size: 11.5px; }
+  .chip {
+    display: inline-flex; align-items: center; gap: 5px;
+    font-size: 10px; font-weight: 700; letter-spacing: 0.06em;
+    border-radius: 999px; padding: 2px 10px;
+  }
+  .chip i { width: 5px; height: 5px; border-radius: 50%; }
+  .chip.accept { color: var(--ok); background: rgba(47,191,95,0.1); } .chip.accept i { background: var(--ok); box-shadow: 0 0 6px var(--ok); }
+  .chip.drop { color: var(--drop); background: rgba(255,107,107,0.1); } .chip.drop i { background: var(--drop); box-shadow: 0 0 6px var(--drop); }
+  .chip.nat { color: var(--nat); background: rgba(160,141,240,0.1); } .chip.nat i { background: var(--nat); box-shadow: 0 0 6px var(--nat); }
+  .host { color: var(--ink); font-weight: 550; }
+  .ip { color: var(--ink-3); font-size: 11px; font-family: var(--mono); margin-left: 5px; }
+  .ldot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; margin-right: 7px; vertical-align: 0; }
+  .arrow { color: var(--ink-3); }
+  .rule-c { color: var(--ink-2); font-size: 12px; }
+  .cc { font-size: 10.5px; color: var(--ink-3); }
+  .tools { display: inline-flex; gap: 5px; margin-left: 8px; }
+  .g {
+    width: 20px; height: 20px; display: inline-flex; align-items: center; justify-content: center;
+    border-radius: 7px; background: rgba(110,168,255,0.12); border: 1px solid rgba(110,168,255,0.3);
+    color: var(--accent); font-size: 10px; cursor: default;
+  }
+
+  .anchor { position: relative; }
+  .editor {
+    position: absolute; left: 0; top: 27px; z-index: 40; width: 330px; white-space: normal;
+    background: var(--glass-2); border: 1px solid rgba(110, 168, 255, 0.45); border-radius: 18px;
+    backdrop-filter: blur(18px);
+    box-shadow: 0 18px 50px rgba(0, 0, 0, 0.55), 0 0 30px rgba(110, 168, 255, 0.12);
+    padding: 16px 18px;
+  }
+  .editor h3 { font-size: 14px; font-weight: 650; margin-bottom: 6px; }
+  .editor .ident { font-size: 11.5px; color: var(--ink-2); margin-bottom: 11px; }
+  .editor .ident b { color: var(--ink); font-family: var(--mono); }
+  .editor input[type=text] {
+    width: 100%; background: rgba(8, 13, 28, 0.8); border: 1px solid var(--accent); border-radius: 11px;
+    color: var(--ink); font: 13.5px var(--sans); padding: 8px 12px; outline: none;
+    box-shadow: 0 0 0 3px rgba(110, 168, 255, 0.15);
+  }
+  .editor .scope { font-size: 11.5px; color: var(--ink-2); margin: 10px 0 2px; }
+  .editor .note { font-size: 10.5px; color: var(--ink-3); margin-bottom: 12px; }
+  .editor .row { display: flex; gap: 9px; justify-content: flex-end; }
+  .editor .save {
+    background: linear-gradient(135deg, var(--accent), #4b7fe8); color: #071129;
+    border: 0; font: 650 12px var(--sans); padding: 8px 18px; border-radius: 999px;
+    box-shadow: 0 0 16px rgba(110, 168, 255, 0.3);
+  }
+  .editor .cancel { background: transparent; border: 1px solid var(--edge-2); color: var(--ink-2); font: 12px var(--sans); padding: 8px 14px; border-radius: 999px; }
+
+  /* ============ scene 3: metrics ============ */
+  .tiles { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; }
+  .tile { background: var(--glass); border: 1px solid var(--edge); border-radius: 20px; backdrop-filter: blur(14px); padding: 15px 18px; min-width: 0; }
+  .tile.wide { grid-column: span 2; }
+  .tile h3 { font-size: 9.5px; letter-spacing: 0.13em; text-transform: uppercase; color: var(--ink-3); font-weight: 650; margin-bottom: 9px; }
+  .hero { font-size: 32px; font-weight: 700; letter-spacing: -0.02em; line-height: 1; }
+  .hero small { font-size: 12px; color: var(--ink-3); font-weight: 500; margin-left: 6px; }
+  .up { color: var(--ok); font-size: 11.5px; font-weight: 600; }
+  .warn { color: var(--drop); font-size: 11.5px; font-weight: 600; }
+  .spark { display: block; margin-top: 10px; }
+  .spark polyline { fill: none; stroke-width: 2.2; stroke-linejoin: round; stroke-linecap: round; }
+  .spark .area { stroke: none; opacity: 0.16; }
+  .glowline { filter: drop-shadow(0 0 4px currentColor); }
+  .lanerow { display: grid; grid-template-columns: 56px 1fr 60px; gap: 10px; align-items: center; margin: 4px 0; }
+  .lanerow .n { font-size: 11.5px; font-weight: 650; }
+  .lanerow .v { font-size: 11px; color: var(--ink-2); text-align: right; font-family: var(--mono); }
+  .bl .b { display: grid; grid-template-columns: 116px 1fr 72px; gap: 10px; align-items: center; margin: 6px 0; }
+  .bl .n { font-size: 12px; }
+  .bl .bar { height: 8px; background: rgba(10, 16, 34, 0.8); border-radius: 999px; position: relative; overflow: hidden; }
+  .bl .bar i { position: absolute; inset: 0 auto 0 0; border-radius: 999px; background: linear-gradient(90deg, #2b52c7, var(--accent)); box-shadow: 0 0 10px rgba(110,168,255,0.4); }
+  .bl .v { font-size: 11px; color: var(--ink-2); text-align: right; font-family: var(--mono); }
+  .fchips { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
+  .fchip { font-size: 11px; border: 1px solid var(--edge-2); border-radius: 999px; padding: 3px 11px; color: var(--ink-2); }
+  .fchip b { color: var(--ink); }
+  .fnote { font-size: 11.5px; color: var(--ink-2); line-height: 1.8; }
+  .fnote .ok2 { color: var(--ok); font-weight: 650; }
+  .fnote .dk { color: var(--drop); font-weight: 700; }
+
+  @media (prefers-reduced-motion: reduce) { * { animation: none !important; } }
+</style>
+</head>
+<body>
+
+<div class="concept">
+  <b>DIRECTION C — LUMINOUS</b>
+  <span>dusk gradient · glass · traffic as light · particles · pulses — text stays crisp</span>
+  <span style="margin-left:auto">
+    <a href="#s1">1 topography</a><a href="#s2">2 live</a><a href="#s3">3 shell + metrics</a>
+  </span>
+</div>
+
+<!-- ============ SCENE 1 : THE LIVING MAP ============ -->
+<section class="scene" id="s1">
+  <div class="scene-tag">Scene 1 / Topography — the network, drawn in light</div>
+  <div class="app">
+    <nav class="rail">
+      <div class="logo">mv</div>
+      <div class="nv"><svg width="16" height="16" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6" fill="none" stroke="currentColor" stroke-width="1.6"/><circle cx="8" cy="8" r="2" fill="currentColor"/></svg>Live</div>
+      <div class="nv active"><svg width="16" height="16" viewBox="0 0 16 16"><path d="M2 13.5 7 7l3.5 3.5L14 3" fill="none" stroke="currentColor" stroke-width="1.6"/></svg>Investigate</div>
+      <div class="nv"><svg width="16" height="16" viewBox="0 0 16 16"><path d="M8 1.5l5.5 3.2v4.4c0 3.2-2.6 5-5.5 5.4-2.9-.4-5.5-2.2-5.5-5.4V4.7z" fill="none" stroke="currentColor" stroke-width="1.6"/></svg>Detect</div>
+      <div class="nv"><svg width="16" height="16" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6.2" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M8 4.5V8l2.6 2.6" fill="none" stroke="currentColor" stroke-width="1.6"/></svg>Expect</div>
+      <div class="nv"><svg width="16" height="16" viewBox="0 0 16 16"><circle cx="8" cy="5.5" r="2.8" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M2.5 14c.7-3 3-4.5 5.5-4.5s4.8 1.5 5.5 4.5" fill="none" stroke="currentColor" stroke-width="1.6"/></svg>Admin</div>
+    </nav>
+    <main class="main">
+      <div class="viewbar">
+        <h1>Topography</h1>
+        <span class="livepill"><i></i>LIVE</span>
+        <span class="meta">policy from <b>41 rules</b> pushed 14:01 · observed window <b>15 min</b></span>
+      </div>
+      <div class="card">
+        <div class="map-head">
+          <h2>rb5009 — intended vs observed</h2>
+          <span class="sub">glass casings = intended by rules · moving light = observed traffic · every boundary names its logging state</span>
+        </div>
+
+        <div class="map-stage">
+        <svg viewBox="0 0 1180 590" width="100%" role="img"
+             aria-label="Network map drawn in light: internet at top, router rb5009 centre, four glass lanes below. A red pulsing arc marks an unplanned IoT-to-LAN flow; a dotted path marks a never-matched WireGuard rule; the guest-to-WAN boundary is labelled dark, meaning unlogged.">
+
+          <!-- intended casings -->
+          <path class="e-int" d="M590 92 V 168"/>
+          <path class="e-int" id="pw" d="M536 226 C 440 285, 240 305, 205 413"/>
+          <path class="e-int" d="M572 226 C 537 292, 462 312, 442 413"/>
+          <path class="e-int" d="M624 226 C 663 292, 723 312, 736 413"/>
+          <path class="e-int" d="M655 226 C 750 285, 940 305, 972 413"/>
+          <path class="e-int" d="M1015 128 C 910 150, 745 172, 672 198"/>
+          <path class="e-ghost" d="M1030 148 C 900 235, 610 292, 462 411"/>
+
+          <!-- observed glow underlay -->
+          <path class="e-obs glowline" d="M590 92 V 168" stroke="var(--accent)" stroke-width="3.5" style="color:var(--accent)"/>
+          <path class="e-obs glowline" d="M536 226 C 440 285, 240 305, 205 413" stroke="var(--lan)" stroke-width="3.5" style="color:var(--lan)"/>
+          <path class="e-obs glowline" d="M572 226 C 537 292, 462 312, 442 413" stroke="var(--srv)" stroke-width="2.5" style="color:var(--srv)"/>
+          <path class="e-obs glowline" d="M624 226 C 663 292, 723 312, 736 413" stroke="var(--iot)" stroke-width="1.8" style="color:var(--iot)"/>
+          <path class="e-obs glowline" d="M655 226 C 750 285, 940 305, 972 413" stroke="var(--guest)" stroke-width="1.8" style="color:var(--guest)"/>
+          <path class="e-obs glowline" d="M1015 128 C 910 150, 745 172, 672 198" stroke="var(--lan)" stroke-width="1.8" style="color:var(--lan)"/>
+
+          <!-- the delta arc, pulsing -->
+          <path class="e-delta" d="M683 415 C 610 318, 320 318, 248 415"/>
+
+          <!-- alert badge -->
+          <g transform="translate(380 322)">
+            <rect class="badge-alert" x="-12" y="-15" width="230" height="40" rx="10"/>
+            <circle cx="4" cy="-1" r="3.5" fill="var(--drop)"/>
+            <circle cx="4" cy="-1" r="3.5" fill="none" stroke="var(--drop)" class="pulse-halo"/>
+            <text x="16" y="2" font-size="10" font-weight="800" fill="var(--drop)">UNPLANNED FLOW</text>
+            <text x="16" y="16" class="t-port">iot → lan · tcp/445 · caught by default drop</text>
+          </g>
+
+          <!-- dormant note -->
+          <g transform="translate(690 310)">
+            <rect class="badge-note" x="-10" y="-14" width="200" height="36" rx="10"/>
+            <text x="2" y="0" font-size="9.5" font-weight="700" fill="var(--ink-2)">RULE NEVER MATCHED · 30 D</text>
+            <text x="2" y="14" class="t-port">wg → srv allow (#6 in forward)</text>
+          </g>
+
+          <!-- drop concentration -->
+          <g transform="translate(640 120)">
+            <rect class="badge-note" x="-10" y="-14" width="196" height="30" rx="10" style="stroke:var(--drop)"/>
+            <text x="0" y="4" font-size="9.5" font-weight="700" fill="var(--drop)">1.4K DROPS/H · wan-in-drop</text>
+          </g>
+
+          <!-- WAN -->
+          <g transform="translate(590 60)">
+            <rect class="lane-glass" x="-90" y="-28" width="180" height="56" rx="16" stroke="var(--edge-2)"/>
+            <text x="-72" y="-4" class="t-name">Internet</text>
+            <text x="-72" y="13" class="t-cidr">ether1 · 203.0.113.7</text>
+            <text x="42" y="-8" class="cov-l">LOGGED</text>
+            <text x="42" y="4" class="t-sub">in / out</text>
+          </g>
+
+          <!-- router -->
+          <g transform="translate(590 197)">
+            <rect class="lane-glass" x="-118" y="-30" width="236" height="60" rx="18" stroke="rgba(110,168,255,0.5)" style="filter: drop-shadow(0 0 14px rgba(110,168,255,0.25))"/>
+            <text x="-100" y="-5" class="t-name">rb5009</text>
+            <text x="-100" y="13" class="t-sub">RouterOS 7.20.1 · 41 rules pushed · the waist every flow crosses</text>
+          </g>
+
+          <!-- WG -->
+          <g transform="translate(1065 118)">
+            <rect class="lane-glass" x="-70" y="-26" width="145" height="52" rx="16" stroke="var(--edge-2)"/>
+            <text x="-54" y="-3" class="t-name">WireGuard</text>
+            <text x="-54" y="13" class="t-cidr">wg0 · 10.99.0.0/24</text>
+            <text x="34" y="-8" class="cov-q">QUIET</text>
+          </g>
+
+          <!-- lanes -->
+          <g transform="translate(205 415)">
+            <rect class="lane-glass" x="-100" y="0" width="200" height="140" rx="16" stroke="var(--lan)" stroke-opacity="0.5"/>
+            <circle cx="-84" cy="20" r="4" fill="var(--lan)" style="filter: drop-shadow(0 0 5px var(--lan))"/>
+            <text x="-72" y="24" class="t-name">LAN</text><text x="14" y="24" class="t-cidr">10.0.10.0/24</text>
+            <text x="-84" y="50" class="t-member">tom-desktop · .21</text>
+            <text x="-84" y="67" class="t-member">phone-tom · .34</text>
+            <text x="-84" y="84" class="t-member">laptop-anna · .29</text>
+            <text x="-84" y="101" class="t-sub">+9 quiet hosts</text>
+            <text x="-84" y="127" class="cov-l">LOGGED BOTH WAYS</text>
+          </g>
+          <g transform="translate(442 415)">
+            <rect class="lane-glass" x="-100" y="0" width="200" height="140" rx="16" stroke="var(--srv)" stroke-opacity="0.5"/>
+            <circle cx="-84" cy="20" r="4" fill="var(--srv)" style="filter: drop-shadow(0 0 5px var(--srv))"/>
+            <text x="-72" y="24" class="t-name">Servers</text><text x="14" y="24" class="t-cidr">10.0.40.0/24</text>
+            <text x="-84" y="50" class="t-member">nas · .10</text>
+            <text x="-84" y="67" class="t-member">pihole · .53</text>
+            <text x="-84" y="84" class="t-member">unifi · .12</text>
+            <text x="-84" y="127" class="cov-l">LOGGED BOTH WAYS</text>
+          </g>
+          <g transform="translate(736 415)">
+            <rect class="lane-glass" x="-100" y="0" width="200" height="140" rx="16" stroke="var(--iot)" stroke-opacity="0.5"/>
+            <circle cx="-84" cy="20" r="4" fill="var(--iot)" style="filter: drop-shadow(0 0 5px var(--iot))"/>
+            <text x="-72" y="24" class="t-name">IoT</text><text x="14" y="24" class="t-cidr">10.0.20.0/24</text>
+            <text x="-84" y="50" class="t-member">cam-porch · .31</text>
+            <text x="-84" y="67" class="t-member">hue-bridge · .14</text>
+            <text x="-84" y="84" class="t-member">thermostat · .18</text>
+            <text x="-84" y="101" class="t-sub">+4 quiet hosts</text>
+            <text x="-84" y="127" class="cov-l">LOGGED BOTH WAYS</text>
+          </g>
+          <g transform="translate(972 415)">
+            <rect class="lane-glass" x="-100" y="0" width="200" height="140" rx="16" stroke="var(--guest)" stroke-opacity="0.5"/>
+            <circle cx="-84" cy="20" r="4" fill="var(--guest)" style="filter: drop-shadow(0 0 5px var(--guest))"/>
+            <text x="-72" y="24" class="t-name">Guest</text><text x="14" y="24" class="t-cidr">10.0.30.0/24</text>
+            <text x="-84" y="50" class="t-member">guest-e8b2 · .17</text>
+            <text x="-84" y="67" class="t-sub">+2 quiet hosts</text>
+            <text x="-84" y="112" class="cov-d">DARK TOWARD WAN</text>
+            <text x="-84" y="127" class="t-sub">no log rule on this boundary</text>
+          </g>
+
+          <!-- port badges -->
+          <g transform="translate(292 322)"><rect class="badge-note" x="-8" y="-12" width="86" height="20" rx="8"/><text class="t-port" x="0" y="2">any → wan</text></g>
+          <g transform="translate(470 398)"><rect class="badge-note" x="-8" y="-12" width="100" height="20" rx="8"/><text class="t-port" x="0" y="2">445 5001 53</text></g>
+          <g transform="translate(790 340)"><rect class="badge-note" x="-8" y="-12" width="70" height="20" rx="8"/><text class="t-port" x="0" y="2">443 123</text></g>
+          <g transform="translate(890 322)"><rect class="badge-note" x="-8" y="-12" width="80" height="20" rx="8"/><text class="t-port" x="0" y="2">wan only</text></g>
+          <g transform="translate(492 126)"><rect class="badge-note" x="-8" y="-12" width="118" height="20" rx="8"/><text class="t-port" x="0" y="2">dstnat 443 → nas</text></g>
+
+          <text x="590" y="578" text-anchor="middle" class="t-sub">click an edge → live view filtered to that boundary · click a lane → its hosts</text>
+
+          <!-- particles riding the edges: SVG circles on CSS motion paths, so they
+               share the viewBox coordinate space and scale with the drawing -->
+          <g aria-hidden="true">
+            <circle r="3" fill="var(--accent)" style="filter:drop-shadow(0 0 4px var(--accent)); offset-path: path('M590 92 V 168'); animation: travel 1.6s linear infinite;"/>
+            <circle r="3" fill="var(--accent)" style="filter:drop-shadow(0 0 4px var(--accent)); offset-path: path('M590 92 V 168'); animation: travel 1.6s linear 0.8s infinite;"/>
+            <circle r="3" fill="var(--lan)" style="filter:drop-shadow(0 0 4px var(--lan)); offset-path: path('M536 226 C 440 285, 240 305, 205 413'); animation: travel 2.2s linear infinite;"/>
+            <circle r="3" fill="var(--lan)" style="filter:drop-shadow(0 0 4px var(--lan)); offset-path: path('M536 226 C 440 285, 240 305, 205 413'); animation: travel 2.2s linear 0.7s infinite;"/>
+            <circle r="3" fill="var(--lan)" style="filter:drop-shadow(0 0 4px var(--lan)); offset-path: path('M536 226 C 440 285, 240 305, 205 413'); animation: travel 2.2s linear 1.5s infinite;"/>
+            <circle r="3" fill="var(--srv)" style="filter:drop-shadow(0 0 4px var(--srv)); offset-path: path('M572 226 C 537 292, 462 312, 442 413'); animation: travel 2.6s linear infinite;"/>
+            <circle r="3" fill="var(--srv)" style="filter:drop-shadow(0 0 4px var(--srv)); offset-path: path('M572 226 C 537 292, 462 312, 442 413'); animation: travel 2.6s linear 1.3s infinite;"/>
+            <circle r="3" fill="var(--iot)" style="filter:drop-shadow(0 0 4px var(--iot)); offset-path: path('M624 226 C 663 292, 723 312, 736 413'); animation: travel 3.2s linear infinite;"/>
+            <circle r="3" fill="var(--guest)" style="filter:drop-shadow(0 0 4px var(--guest)); offset-path: path('M655 226 C 750 285, 940 305, 972 413'); animation: travel 3.6s linear infinite;"/>
+            <circle r="3" fill="var(--lan)" style="filter:drop-shadow(0 0 4px var(--lan)); offset-path: path('M1015 128 C 910 150, 745 172, 672 198'); animation: travel 3.4s linear infinite;"/>
+            <circle r="3.5" fill="var(--drop)" style="filter:drop-shadow(0 0 5px var(--drop)); offset-path: path('M683 415 C 610 318, 320 318, 248 415'); animation: travel 1.8s linear infinite;"/>
+          </g>
+        </svg>
+        </div>
+
+        <div class="map-legend">
+          <span class="k"><span class="dotk" style="background:var(--accent); box-shadow:0 0 6px var(--accent)"></span>moving light = observed (speed &amp; density = rate)</span>
+          <span class="k">glass casing = intended by rules</span>
+          <span class="k">dotted = rule never exercised</span>
+          <span class="k"><span class="dotk" style="background:var(--drop); box-shadow:0 0 6px var(--drop)"></span>red pulse = flow no rule anticipated</span>
+          <span class="k">LOGGED / QUIET / DARK on every boundary</span>
+        </div>
+      </div>
+    </main>
+  </div>
+</section>
+
+<!-- ============ SCENE 2 : LIVE VIEW ============ -->
+<section class="scene" id="s2">
+  <div class="scene-tag">Scene 2 / Live — the daily driver, with the #413 editor open</div>
+  <div class="app">
+    <nav class="rail">
+      <div class="logo">mv</div>
+      <div class="nv active"><svg width="16" height="16" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6" fill="none" stroke="currentColor" stroke-width="1.6"/><circle cx="8" cy="8" r="2" fill="currentColor"/></svg>Live</div>
+      <div class="nv"><svg width="16" height="16" viewBox="0 0 16 16"><path d="M2 13.5 7 7l3.5 3.5L14 3" fill="none" stroke="currentColor" stroke-width="1.6"/></svg>Investigate</div>
+      <div class="nv"><svg width="16" height="16" viewBox="0 0 16 16"><path d="M8 1.5l5.5 3.2v4.4c0 3.2-2.6 5-5.5 5.4-2.9-.4-5.5-2.2-5.5-5.4V4.7z" fill="none" stroke="currentColor" stroke-width="1.6"/></svg>Detect</div>
+      <div class="nv"><svg width="16" height="16" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6.2" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M8 4.5V8l2.6 2.6" fill="none" stroke="currentColor" stroke-width="1.6"/></svg>Expect</div>
+      <div class="nv"><svg width="16" height="16" viewBox="0 0 16 16"><circle cx="8" cy="5.5" r="2.8" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M2.5 14c.7-3 3-4.5 5.5-4.5s4.8 1.5 5.5 4.5" fill="none" stroke="currentColor" stroke-width="1.6"/></svg>Admin</div>
+    </nav>
+    <main class="main">
+      <div class="viewbar">
+        <h1>Live</h1>
+        <span class="livepill"><i></i>34 /s</span>
+        <span class="meta">buffer <b>15 min</b> · <b>2,041</b> shown</span>
+      </div>
+      <div class="card">
+        <div class="filterbar">
+          <div class="ff"><label>Source — name, IP or CIDR</label><input placeholder="internal ▾"></div>
+          <button class="swap" aria-label="Swap source and destination filters">⇄</button>
+          <div class="ff"><label>Destination — name, IP or CIDR</label><input placeholder="any ▾"></div>
+          <div class="ff"><label>Chain</label><select><option>Any chain</option><option>input</option><option>forward</option><option>output</option><option>srcnat</option><option>dstnat</option></select></div>
+          <div class="ff small"><label>Port — number or service</label><input></div>
+          <div class="ff small"><label>Rule</label><input></div>
+          <div class="fright">
+            <span class="holdnote">◉ stream held — editor open</span>
+            <button class="btn on">Autoscroll</button><button class="btn">Group</button><button class="btn">Presets ▾</button>
+          </div>
+        </div>
+        <table class="stream">
+          <thead><tr><th>time</th><th>chain</th><th>action</th><th>source</th><th></th><th>destination</th><th>proto/port</th><th>rule</th></tr></thead>
+          <tbody>
+            <tr>
+              <td class="t">14:02:11.482</td><td class="chain">forward</td><td><span class="chip drop"><i></i>DROP</span></td>
+              <td class="anchor"><span class="ldot" style="background:var(--iot); box-shadow:0 0 5px var(--iot)"></span><span class="host">cam-porch<span class="ip">10.0.20.31</span></span>
+                <span class="tools"><span class="g" title="Copy raw value">⧉</span><span class="g" title="Edit name for 10.0.20.31">✎</span></span>
+                <div class="editor" role="dialog" aria-label="Name this host">
+                  <h3>Name this host</h3>
+                  <div class="ident"><b>10.0.20.31</b> — currently “cam-porch”, from a DHCP lease</div>
+                  <input type="text" value="Porch camera" aria-label="Display name">
+                  <p class="scope">Applies everywhere 10.0.20.31 appears, in every view.</p>
+                  <p class="note">Display only. Filters, groups and copies keep using the raw value.</p>
+                  <div class="row"><button class="cancel">Cancel</button><button class="save">Save</button></div>
+                </div>
+              </td>
+              <td class="arrow">→</td>
+              <td><span class="ldot" style="background:var(--srv); box-shadow:0 0 5px var(--srv)"></span><span class="host">nas<span class="ip">10.0.40.10</span></span></td>
+              <td class="t" style="color:var(--ink-2)">tcp/445 <span class="cc">smb</span></td><td class="rule-c">iot-to-lan-drop</td>
+            </tr>
+            <tr>
+              <td class="t">14:02:11.407</td><td class="chain">srcnat</td><td><span class="chip nat"><i></i>NAT</span></td>
+              <td><span class="ldot" style="background:var(--lan); box-shadow:0 0 5px var(--lan)"></span><span class="host">phone-tom<span class="ip">10.0.10.34</span></span></td>
+              <td class="arrow">→</td>
+              <td><span class="host">142.250.187.206</span> <span class="cc">🇺🇸 US</span></td>
+              <td class="t" style="color:var(--ink-2)">udp/443 <span class="cc">quic</span></td><td class="rule-c">nat-wan <span class="cc">→ 203.0.113.7</span></td>
+            </tr>
+            <tr>
+              <td class="t">14:02:10.951</td><td class="chain">input</td><td><span class="chip drop"><i></i>DROP</span></td>
+              <td><span class="host">185.220.101.34</span> <span class="cc">🇩🇪 DE</span></td>
+              <td class="arrow">→</td>
+              <td><span class="host">rb5009<span class="ip">203.0.113.7</span></span></td>
+              <td class="t" style="color:var(--ink-2)">tcp/8291 <span class="cc">winbox</span></td><td class="rule-c">wan-in-drop</td>
+            </tr>
+            <tr>
+              <td class="t">14:02:10.783</td><td class="chain">forward</td><td><span class="chip accept"><i></i>ACCEPT</span></td>
+              <td><span class="ldot" style="background:var(--lan); box-shadow:0 0 5px var(--lan)"></span><span class="host">tom-desktop<span class="ip">10.0.10.21</span></span></td>
+              <td class="arrow">→</td>
+              <td><span class="ldot" style="background:var(--srv); box-shadow:0 0 5px var(--srv)"></span><span class="host">nas<span class="ip">10.0.40.10</span></span></td>
+              <td class="t" style="color:var(--ink-2)">tcp/5001 <span class="cc">syncthing</span></td><td class="rule-c">lan-to-srv</td>
+            </tr>
+            <tr>
+              <td class="t">14:02:10.611</td><td class="chain">forward</td><td><span class="chip accept"><i></i>ACCEPT</span></td>
+              <td><span class="ldot" style="background:var(--iot); box-shadow:0 0 5px var(--iot)"></span><span class="host">hue-bridge<span class="ip">10.0.20.14</span></span></td>
+              <td class="arrow">→</td>
+              <td><span class="ldot" style="background:var(--srv); box-shadow:0 0 5px var(--srv)"></span><span class="host">pihole<span class="ip">10.0.40.53</span></span></td>
+              <td class="t" style="color:var(--ink-2)">udp/53 <span class="cc">dns</span></td><td class="rule-c">iot-dns-allow</td>
+            </tr>
+            <tr>
+              <td class="t">14:02:10.512</td><td class="chain">input</td><td><span class="chip drop"><i></i>DROP</span></td>
+              <td><span class="host">45.148.10.78</span> <span class="cc">🇳🇱 NL</span></td>
+              <td class="arrow">→</td>
+              <td><span class="host">rb5009<span class="ip">203.0.113.7</span></span></td>
+              <td class="t" style="color:var(--ink-2)">tcp/22 <span class="cc">ssh</span></td><td class="rule-c">wan-in-drop</td>
+            </tr>
+            <tr>
+              <td class="t">14:02:10.288</td><td class="chain">forward</td><td><span class="chip drop"><i></i>DROP</span></td>
+              <td><span class="ldot" style="background:var(--guest); box-shadow:0 0 5px var(--guest)"></span><span class="host">guest-e8b2<span class="ip">10.0.30.17</span></span></td>
+              <td class="arrow">→</td>
+              <td><span class="ldot" style="background:var(--lan); box-shadow:0 0 5px var(--lan)"></span><span class="host">tom-desktop<span class="ip">10.0.10.21</span></span></td>
+              <td class="t" style="color:var(--ink-2)">tcp/445 <span class="cc">smb</span></td><td class="rule-c">guest-isolation</td>
+            </tr>
+            <tr>
+              <td class="t">14:02:09.934</td><td class="chain">dstnat</td><td><span class="chip nat"><i></i>NAT</span></td>
+              <td><span class="host">84.9.112.55</span> <span class="cc">🇬🇧 GB</span></td>
+              <td class="arrow">→</td>
+              <td><span class="ldot" style="background:var(--srv); box-shadow:0 0 5px var(--srv)"></span><span class="host">nas<span class="ip">10.0.40.10</span></span></td>
+              <td class="t" style="color:var(--ink-2)">tcp/443 <span class="cc">https</span></td><td class="rule-c">nat-wan-https <span class="g" style="width:16px;height:16px;font-size:9px" title="NAT rule lookup">ⓘ</span></td>
+            </tr>
+            <tr>
+              <td class="t">14:02:09.856</td><td class="chain">forward</td><td><span class="chip accept"><i></i>ACCEPT</span></td>
+              <td><span class="ldot" style="background:var(--lan); box-shadow:0 0 5px var(--lan)"></span><span class="host">laptop-anna<span class="ip">10.0.10.29</span></span></td>
+              <td class="arrow">→</td>
+              <td><span class="host">151.101.0.223</span> <span class="cc">🇺🇸 US</span></td>
+              <td class="t" style="color:var(--ink-2)">tcp/443 <span class="cc">https</span></td><td class="rule-c">lan-to-wan</td>
+            </tr>
+            <tr>
+              <td class="t">14:02:09.701</td><td class="chain">forward</td><td><span class="chip drop"><i></i>DROP</span></td>
+              <td><span class="ldot" style="background:var(--iot); box-shadow:0 0 5px var(--iot)"></span><span class="host">cam-porch<span class="ip">10.0.20.31</span></span></td>
+              <td class="arrow">→</td>
+              <td><span class="host">47.246.129.8</span> <span class="cc">🇨🇳 CN</span></td>
+              <td class="t" style="color:var(--ink-2)">tcp/443 <span class="cc">https</span></td><td class="rule-c">iot-egress-drop</td>
+            </tr>
+            <tr>
+              <td class="t">14:02:09.455</td><td class="chain">input</td><td><span class="chip accept"><i></i>ACCEPT</span></td>
+              <td><span class="host">phone-tom-wg<span class="ip">10.99.0.2</span></span></td>
+              <td class="arrow">→</td>
+              <td><span class="host">rb5009<span class="ip">203.0.113.7</span></span></td>
+              <td class="t" style="color:var(--ink-2)">udp/51820 <span class="cc">wireguard</span></td><td class="rule-c">wg-in</td>
+            </tr>
+            <tr>
+              <td class="t">14:02:09.312</td><td class="chain">forward</td><td><span class="chip accept"><i></i>ACCEPT</span></td>
+              <td><span class="ldot" style="background:var(--lan); box-shadow:0 0 5px var(--lan)"></span><span class="host">tom-desktop<span class="ip">10.0.10.21</span></span></td>
+              <td class="arrow">→</td>
+              <td><span class="ldot" style="background:var(--srv); box-shadow:0 0 5px var(--srv)"></span><span class="host">pihole<span class="ip">10.0.40.53</span></span></td>
+              <td class="t" style="color:var(--ink-2)">udp/53 <span class="cc">dns</span></td><td class="rule-c">lan-to-srv</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </main>
+  </div>
+</section>
+
+<!-- ============ SCENE 3 : SHELL + METRICS ============ -->
+<section class="scene" id="s3">
+  <div class="scene-tag">Scene 3 / Investigate → Metrics — light where it matters</div>
+  <div class="app">
+    <nav class="rail">
+      <div class="logo">mv</div>
+      <div class="nv"><svg width="16" height="16" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6" fill="none" stroke="currentColor" stroke-width="1.6"/><circle cx="8" cy="8" r="2" fill="currentColor"/></svg>Live</div>
+      <div class="nv active"><svg width="16" height="16" viewBox="0 0 16 16"><path d="M2 13.5 7 7l3.5 3.5L14 3" fill="none" stroke="currentColor" stroke-width="1.6"/></svg>Investigate</div>
+      <div class="nv"><svg width="16" height="16" viewBox="0 0 16 16"><path d="M8 1.5l5.5 3.2v4.4c0 3.2-2.6 5-5.5 5.4-2.9-.4-5.5-2.2-5.5-5.4V4.7z" fill="none" stroke="currentColor" stroke-width="1.6"/></svg>Detect</div>
+      <div class="nv"><svg width="16" height="16" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6.2" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M8 4.5V8l2.6 2.6" fill="none" stroke="currentColor" stroke-width="1.6"/></svg>Expect</div>
+      <div class="nv"><svg width="16" height="16" viewBox="0 0 16 16"><circle cx="8" cy="5.5" r="2.8" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M2.5 14c.7-3 3-4.5 5.5-4.5s4.8 1.5 5.5 4.5" fill="none" stroke="currentColor" stroke-width="1.6"/></svg>Admin</div>
+    </nav>
+    <main class="main">
+      <div class="viewbar">
+        <h1>Metrics</h1>
+        <span class="livepill"><i></i>LIVE</span>
+        <span class="meta">window <b>60 min</b> · all series from the event stream</span>
+      </div>
+      <div class="tiles">
+        <div class="tile">
+          <h3>Events / s</h3>
+          <div class="hero">34<small>now</small></div>
+          <span class="up">▲ 12% vs prev hour</span>
+          <svg class="spark" width="100%" height="38" viewBox="0 0 200 38" preserveAspectRatio="none" role="img" aria-label="Events per second, last hour: steady around 30 with a spike to 61 at 13:41">
+            <polygon class="area" fill="var(--accent)" points="0,38 0,23 10,21 20,24 30,20 40,22 50,17 60,19 70,15 80,18 90,13 100,16 110,5 120,10 130,15 140,13 150,17 160,14 170,12 180,15 190,11 200,13 200,38"/>
+            <polyline class="glowline" stroke="var(--accent)" style="color:var(--accent)" points="0,23 10,21 20,24 30,20 40,22 50,17 60,19 70,15 80,18 90,13 100,16 110,5 120,10 130,15 140,13 150,17 160,14 170,12 180,15 190,11 200,13"/>
+          </svg>
+        </div>
+        <div class="tile">
+          <h3>Drops / s</h3>
+          <div class="hero">6.2<small>now</small></div>
+          <span class="warn">▲ 3.1× vs prev hour · wan-in</span>
+          <svg class="spark" width="100%" height="38" viewBox="0 0 200 38" preserveAspectRatio="none" role="img" aria-label="Drops per second, last hour: low until 13:30, rising to 6.2">
+            <polyline class="glowline" stroke="var(--drop)" style="color:var(--drop)" points="0,33 10,32 20,33 30,31 40,32 50,30 60,31 70,29 80,27 90,28 100,23 110,25 120,19 130,21 140,16 150,18 160,13 170,15 180,11 190,9 200,8"/>
+          </svg>
+        </div>
+        <div class="tile">
+          <h3>Flags · today</h3>
+          <div class="hero">6</div>
+          <div class="fchips">
+            <span class="fchip"><b>3</b> port_scan</span>
+            <span class="fchip"><b>2</b> known_bad_ip</span>
+            <span class="fchip"><b>1</b> new_talker</span>
+          </div>
+        </div>
+        <div class="tile">
+          <h3>Watchlist</h3>
+          <div class="hero">3<small>watches</small></div>
+          <p class="fnote" style="margin-top:6px"><span class="ok2">0 violations</span> · 14 observations<br>last match 13:56:02</p>
+        </div>
+
+        <div class="tile wide">
+          <h3>Traffic by lane — events/min</h3>
+          <div class="lanerow"><span class="n" style="color:var(--lan)">LAN</span>
+            <svg class="spark" style="margin:0" height="18" width="100%" viewBox="0 0 200 18" preserveAspectRatio="none"><polyline stroke="var(--lan)" points="0,12 20,10 40,11 60,8 80,9 100,6 120,8 140,5 160,7 180,4 200,6"/></svg>
+            <span class="v">1,940</span></div>
+          <div class="lanerow"><span class="n" style="color:var(--srv)">Servers</span>
+            <svg class="spark" style="margin:0" height="18" width="100%" viewBox="0 0 200 18" preserveAspectRatio="none"><polyline stroke="var(--srv)" points="0,10 20,11 40,9 60,10 80,8 100,9 120,7 140,9 160,8 180,9 200,8"/></svg>
+            <span class="v">1,210</span></div>
+          <div class="lanerow"><span class="n" style="color:var(--iot)">IoT</span>
+            <svg class="spark" style="margin:0" height="18" width="100%" viewBox="0 0 200 18" preserveAspectRatio="none"><polyline stroke="var(--iot)" points="0,14 20,13 40,14 60,12 80,13 100,11 120,13 140,12 160,10 180,12 200,11"/></svg>
+            <span class="v">640</span></div>
+          <div class="lanerow"><span class="n" style="color:var(--guest)">Guest</span>
+            <svg class="spark" style="margin:0" height="18" width="100%" viewBox="0 0 200 18" preserveAspectRatio="none"><polyline stroke="var(--guest)" points="0,15 20,15 40,14 60,15 80,13 100,14 120,15 140,13 160,14 180,15 200,14"/></svg>
+            <span class="v">88</span></div>
+        </div>
+
+        <div class="tile wide bl">
+          <h3>Top talkers — events, this hour</h3>
+          <div class="b"><span class="n">nas</span><span class="bar"><i style="width:92%"></i></span><span class="v">4,102</span></div>
+          <div class="b"><span class="n">tom-desktop</span><span class="bar"><i style="width:63%"></i></span><span class="v">2,817</span></div>
+          <div class="b"><span class="n">cam-porch</span><span class="bar"><i style="width:43%"></i></span><span class="v">1,904</span></div>
+          <div class="b"><span class="n">phone-tom</span><span class="bar"><i style="width:28%"></i></span><span class="v">1,233</span></div>
+          <div class="b"><span class="n">185.220.101.34</span><span class="bar"><i style="width:19%; background:linear-gradient(90deg,#8a2f2f,var(--drop)); box-shadow:0 0 10px rgba(255,107,107,0.4)"></i></span><span class="v" style="color:var(--drop)">861 drop</span></div>
+        </div>
+
+        <div class="tile wide bl">
+          <h3>Drops by chain — this hour</h3>
+          <div class="b"><span class="n">input</span><span class="bar"><i style="width:82%; background:linear-gradient(90deg,#8a2f2f,var(--drop))"></i></span><span class="v">82%</span></div>
+          <div class="b"><span class="n">forward</span><span class="bar"><i style="width:17%; background:linear-gradient(90deg,#8a2f2f,var(--drop))"></i></span><span class="v">17%</span></div>
+          <div class="b"><span class="n">srcnat</span><span class="bar"><i style="width:1%; background:linear-gradient(90deg,#8a2f2f,var(--drop))"></i></span><span class="v">1%</span></div>
+        </div>
+
+        <div class="tile wide">
+          <h3>Logging coverage</h3>
+          <p class="fnote"><span class="ok2">9 boundaries LOGGED</span> · 1 QUIET (wg, by choice) · <span class="dk">1 DARK — guest → wan</span><br>
+          the dark boundary pulses on the topography until it is logged or marked quiet</p>
+        </div>
+      </div>
+    </main>
+  </div>
+</section>
+
+</body>
+</html>

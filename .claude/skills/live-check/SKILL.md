@@ -41,6 +41,26 @@ cd frontend && node scripts/live-smoke.mjs
 scripts/live-env.sh down
 ```
 
+## Running two live checks at once
+
+Safe by default. `MV_DIR` and the three ports are derived from a hash of
+the checkout path, so each `git worktree` gets its own data directory and
+its own port block, and repeated runs in the same tree stay on the same
+slot.
+
+This matters because the collision used to be destructive, not noisy:
+`up` runs `down` and then `rm -rf "$MV_DIR"`, so a second live check on
+shared defaults killed the first one's server and deleted its data
+mid-scenario. The run that got trampled failed with an unexplained
+scenario timeout and nothing in its own log to account for it.
+
+Two checkouts can still hash to the same slot. `up` therefore refuses to
+start if either port is held after its own teardown, naming the ports and
+telling you to override, rather than proceeding into the `rm -rf`. To run
+alongside another check deliberately, set `MV_DIR`, `MV_HTTP_PORT`,
+`MV_SYSLOG_PORT` and `MV_SYSLOG_TLS_PORT` — explicit values always win
+over the derived ones.
+
 ## Driving a real router
 
 `make live-routeros` boots MikroTik's own CHR image under QEMU, stands

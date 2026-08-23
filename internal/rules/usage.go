@@ -42,28 +42,24 @@ type Usage struct {
 // label, safe for concurrent use. The zero value is not usable;
 // construct with Open.
 type Store struct {
-	mu      sync.RWMutex
-	backend persist.Backend
-	// version is the backend's token for the document as of the last
-	// load or save -- see persist.SaveWithRetry.
-	version int64
-	byRule  map[string]*Usage
-
-	// lastPersist backs persistLocked's rate limiting -- see
-	// persistMinInterval.
-	lastPersist time.Time
+	mu sync.RWMutex
+	// wb is nil when persistence isn't configured -- see
+	// persist.WriteBehind for what it now owns: write-behind, the
+	// backend deadline, the after-write-stamped rate limit/back-off, and
+	// version bookkeeping (issue #400). Every method on it is a safe
+	// no-op on a nil receiver.
+	wb     *persist.WriteBehind
+	byRule map[string]*Usage
 }
 
 // Open loads path if it exists (a missing file is the expected
 // first-run case, not an error) and returns a Store that persists to it
 // from then on. An empty path is the expected "persistence not
 // configured" case: a fully usable, in-memory-only Store is returned. A
-// malformed file is treated as empty rather than failing -- a corrupted
-// rule-usage file should never block mikroview from starting, since
-// this is a helper signal, not critical state. Either way the returned
-// Store is always safe to use unconditionally; a non-nil error is only
-// ever informational, for the caller to log. Mirrors flags.Open's
-// contract exactly.
+// document that exists but cannot be read or parsed is a hard error
+// (issue #378): the caller gets (nil, err) rather than a store whose
+// live backend would overwrite that document on the first write. See
+// persist.Open.
 func Open(path string) (*Store, error) {
 	if path == "" {
 		return OpenWithBackend(nil)
@@ -74,34 +70,52 @@ func Open(path string) (*Store, error) {
 // OpenWithBackend is Open against any persist.Backend
 // -- a JSON file by default, or Postgres when configured (issue #131).
 func OpenWithBackend(b persist.Backend) (*Store, error) {
-	s := &Store{backend: b, byRule: make(map[string]*Usage)}
+	s := &Store{byRule: make(map[string]*Usage)}
 
-	ctx, cancel := context.WithTimeout(context.Background(), persistTimeout)
-	defer cancel()
-	data, version, err := persist.LoadDocument(ctx, b)
-	if err != nil {
-		return s, err
-	}
-	if data == nil {
-		return s, nil
-	}
-	s.version = version
-
-	var list []*Usage
-	if err := json.Unmarshal(data, &list); err != nil {
-		return s, err
-	}
-	for _, u := range list {
-		// Same "a JSON array containing null unmarshals into a nil
-		// pointer" edge case flags.Open's doc comment calls out --
-		// skipping it here is what actually delivers the "malformed
-		// file treated as empty" contract for that specific case.
-		if u == nil || u.Rule == "" {
-			continue
+	wb, _, err := persist.OpenWriteBehind(context.Background(), b, "the rule-usage store", persist.WriteBehindOptions{
+		MinInterval: persistMinInterval,
+		OnSaveError: func(msg string) { persistLog.Error(msg) },
+		OnConflict:  func(msg string) { persistLog.Warn(msg) },
+	}, func(data []byte) error {
+		var list []*Usage
+		if err := json.Unmarshal(data, &list); err != nil {
+			return err
 		}
-		s.byRule[u.Rule] = u
+		for _, u := range list {
+			// Same "a JSON array containing null unmarshals into a nil
+			// pointer" edge case flags.Open's doc comment calls out.
+			if u == nil || u.Rule == "" {
+				continue
+			}
+			s.byRule[u.Rule] = u
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
 	}
+	s.wb = wb
 	return s, nil
+}
+
+// Flush forces this store's write-behind writer to persist whatever is
+// currently dirty now, without waiting out its usual debounce interval,
+// and blocks until that attempt finishes or ctx expires -- see
+// flags.Store.Flush's own doc comment for when this is the right call
+// (a test, or a `-backup` CLI invocation racing a still-running
+// process). A store with no backend configured (wb == nil) is a safe
+// no-op.
+func (s *Store) Flush(ctx context.Context) error {
+	return s.wb.Flush(ctx)
+}
+
+// Close stops this store's write-behind writer goroutine, flushing
+// whatever is still dirty within persist.SaveTimeout before returning --
+// main's shutdown joins on this so a change made right before exit is
+// not silently dropped. A store with no backend configured (wb == nil)
+// is a safe no-op. Not safe to call any mutating method after Close.
+func (s *Store) Close(ctx context.Context) error {
+	return s.wb.Close(ctx)
 }
 
 // Touch records rule as having fired at now, creating a new record
@@ -150,7 +164,7 @@ func (s *Store) listLocked() []Usage {
 
 // Stale returns every rule whose LastSeen is older than maxAge as of
 // now, sorted by rule label for a stable, deterministic sweep order.
-// Used by internal/detect.StaleRuleDetector's periodic sweep (see
+// Used by internal/engine's stale_rule definition sweep (see
 // main.go) to decide which rules to (re-)flag.
 func (s *Store) Stale(maxAge time.Duration, now time.Time) []Usage {
 	s.mu.RLock()
@@ -180,20 +194,11 @@ func (s *Store) Stale(maxAge time.Duration, now time.Time) []Usage {
 //
 // A var rather than a const so tests that need every call to persist
 // immediately can shrink it, same convention as flags.persistMinInterval.
+// Now persist.WriteBehind's MinInterval (see OpenWithBackend) rather
+// than a field this type checks itself -- the rate-limiting/back-off
+// logic that used to live here, and its #377 stall-under-load defect,
+// both moved to that type (issue #400).
 var persistMinInterval = time.Second
-
-// persistTimeout bounds every Load/Save against backend. Touch runs
-// synchronously on the single ingest goroutine (see main.go's
-// ingestOneRecovered), so an unresponsive backend -- a Postgres
-// connection stuck behind a network blackhole or a long lock wait, not
-// a clean disconnect -- would otherwise block that goroutine forever
-// under context.Background(), freezing the whole ingest pipeline until
-// the syslog listener's buffered channel fills and starts silently
-// dropping packets (internal/syslog/tcp_listener.go). 5s is generous
-// for a write this small: long enough that ordinary latency never trips
-// it, short enough that a genuinely stuck backend degrades to a logged
-// failure (see persistLocked) rather than an indefinite hang.
-const persistTimeout = 5 * time.Second
 
 // maxRuleEntries bounds byRule, which is keyed on the rule label parsed
 // straight out of a syslog line -- an entirely unauthenticated input.
@@ -232,20 +237,19 @@ func (s *Store) pruneLocked() {
 	})
 }
 
-// persistLocked writes the current state to disk if persistence is
-// configured and enough time has passed since the last write. Write
-// failures are swallowed rather than surfaced to Touch's caller: the
-// in-memory state stays correct either way, so a transient disk issue
-// degrades to "won't survive a restart right now" rather than breaking
-// live use. Mirrors flags.Store.persistLocked exactly.
+// persistLocked encodes the current state and hands it to the
+// write-behind writer (see persist.WriteBehind), which coalesces it
+// with whatever else is pending and persists it off this goroutine,
+// under its own deadline and rate limit. Marshal failures are swallowed
+// rather than surfaced to Touch's caller: the in-memory state stays
+// correct either way, so a transient disk issue degrades to "won't
+// survive a restart right now" rather than breaking live use. Must be
+// called with s.mu already held -- see flags.Store.persistLocked's own
+// doc comment for the "lock covers the encode, not the backend call"
+// contract this mirrors.
 func (s *Store) persistLocked() {
-	if s.backend == nil {
+	if s.wb == nil {
 		return
-	}
-	if now := time.Now(); now.Sub(s.lastPersist) < persistMinInterval {
-		return
-	} else {
-		s.lastPersist = now
 	}
 
 	data, err := json.MarshalIndent(s.listLocked(), "", "  ")
@@ -253,15 +257,5 @@ func (s *Store) persistLocked() {
 		persistLog.Error(fmt.Sprintf("encoding rule usage for persistence failed: %v -- this change exists only in memory and will be lost on restart", err))
 		return
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), persistTimeout)
-	defer cancel()
-	version, conflicted, err := persist.SaveWithRetry(ctx, s.backend, data, s.version)
-	if err != nil {
-		persistLog.Error(fmt.Sprintf("writing rule usage to %s failed: %v -- this change exists only in memory and will be lost on restart", s.backend.Describe(), err))
-		return
-	}
-	if conflicted {
-		persistLog.Warn(fmt.Sprintf("the rule usage store was modified by another process while this change was pending (%s); this change was applied on top", s.backend.Describe()))
-	}
-	s.version = version
+	s.wb.MarkDirty(data)
 }

@@ -141,6 +141,39 @@ func TestParse(t *testing.T) {
 			},
 		},
 		{
+			// #437: a mangle mark rule tagged with the M code. RouterOS
+			// prints nothing that distinguishes a mangle line from a
+			// filter line, so the prefix is the only thing that can say
+			// so -- exactly as it is for accept-versus-drop.
+			name: "mangle mark rule via the M prefix code",
+			msg:  "firewall,info M|vpn-mark| prerouting: in:bridge1 out:(unknown 0), connection-state:new, proto TCP (SYN), 192.168.88.20:51512->203.0.113.44:443, len 60",
+			want: Parsed{
+				Action: store.ActionMarked, RuleLabel: "vpn-mark", Chain: "prerouting",
+				InInterface: "bridge1", OutInterface: "(unknown 0)",
+				ConnState: "new",
+				Protocol:  "TCP", Flags: "SYN",
+				SrcIP: "192.168.88.20", SrcPort: 51512,
+				DstIP: "203.0.113.44", DstPort: 443,
+				Length: 60,
+			},
+		},
+		{
+			// #437: a NAT rule tagged with the N code. The translated
+			// address still parses the same way it did under A|.
+			name: "nat rule via the N prefix code",
+			msg:  "N|masq|srcnat: in:bridge1 out:ether1, proto UDP, 192.168.88.20:51258->198.51.100.53:53, NAT (203.0.113.10:51258->198.51.100.53:53), len 73",
+			want: Parsed{
+				Action: store.ActionNatted, RuleLabel: "masq", Chain: "srcnat",
+				InInterface: "bridge1", OutInterface: "ether1",
+				Protocol: "UDP",
+				SrcIP:    "192.168.88.20", SrcPort: 51258,
+				DstIP: "198.51.100.53", DstPort: 53,
+				NatIP: "203.0.113.10", NatPort: 51258,
+				NatRaw: "(203.0.113.10:51258->198.51.100.53:53)",
+				Length: 73,
+			},
+		},
+		{
 			// A truncated line missing the closing ")" on the proto detail
 			// must not swallow every field after it (see splitTopLevel):
 			// the address pair and length should still parse even though
@@ -164,6 +197,11 @@ func TestParse(t *testing.T) {
 			got := Parse(tt.msg)
 			got.Raw = "" // not compared field-by-field below
 			tt.want.Raw = ""
+			// ActionFromPrefix is about how the action was arrived at,
+			// not about a field extracted from the line, and repeating
+			// it in every want above would say nothing this table is
+			// for. TestActionClassification pins it per case instead.
+			got.ActionFromPrefix = false
 			if got != tt.want {
 				t.Errorf("Parse() =\n  %+v\nwant\n  %+v", got, tt.want)
 			}
@@ -260,8 +298,150 @@ func TestParseRealRouterLines(t *testing.T) {
 			got := Parse(tt.msg)
 			got.Raw = ""
 			tt.want.Raw = ""
+			got.ActionFromPrefix = false // see TestParse above
 			if got != tt.want {
 				t.Errorf("Parse() =\n  %+v\nwant\n  %+v", got, tt.want)
+			}
+		})
+	}
+}
+
+// TestActionClassification pins the whole action taxonomy in one place:
+// what each prefix code means, what the parser will infer from an
+// untagged line, and -- the half that matters most -- what it refuses to
+// infer and leaves honestly unknown (#437).
+//
+// The refusals are assertions, not omissions. "Unknown" is what an
+// operator is told to investigate when it grows, which only works if
+// nothing recognisable is hiding in it *and* nothing unrecognisable has
+// been given a confident label on the way past. A future change that
+// makes the parser guess harder should have to delete a line here and
+// argue with it.
+func TestActionClassification(t *testing.T) {
+	tests := []struct {
+		name string
+		msg  string
+		want store.Action
+		// fromPrefix is whether the operator's log-prefix declared the
+		// action, as opposed to the parser inferring it or giving up.
+		// The setup wizard counts only declared ones, so that "your
+		// rules log without a prefix" cannot go green off an inference.
+		fromPrefix bool
+		why        string
+	}{
+		// ---- declared by the operator, via the log-prefix code ----
+		{
+			name:       "A code",
+			msg:        "A|wan-in|forward: in:ether1 out:bridge1, proto TCP (SYN), 198.51.100.7:41000->192.168.88.10:443, len 60",
+			want:       store.ActionAccept,
+			fromPrefix: true,
+			why:        "the filter verdicts are unchanged by #437",
+		},
+		{
+			name:       "D code",
+			msg:        "D|fwd-def|forward: in:ether1 out:bridge1, proto TCP (SYN), 198.51.100.7:41000->192.168.88.10:23, len 60",
+			want:       store.ActionDrop,
+			fromPrefix: true,
+			why:        "the filter verdicts are unchanged by #437",
+		},
+		{
+			name:       "R code",
+			msg:        "R|no-match|forward: in:ether1 out:bridge1, proto ICMP (type 8, code 0), 198.51.100.7->192.168.88.10, len 84",
+			want:       store.ActionReject,
+			fromPrefix: true,
+			why:        "the filter verdicts are unchanged by #437",
+		},
+		{
+			name:       "L code is log-only / passthrough",
+			msg:        "L|audit|forward: in:ether1 out:bridge1, proto TCP (SYN), 198.51.100.7:41000->192.168.88.10:443, len 60",
+			want:       store.ActionLog,
+			fromPrefix: true,
+			why:        "a rule that logs without deciding the packet's fate already had a value; #437 did not rename it",
+		},
+		{
+			name:       "M code is a mangle mark rule",
+			msg:        "M|vpn-mark|prerouting: in:bridge1 out:(unknown 0), proto TCP (SYN), 192.168.88.20:51512->203.0.113.44:443, len 60",
+			want:       store.ActionMarked,
+			fromPrefix: true,
+			why:        "nothing in a mangle line identifies it, so the operator declaring it is the only honest source",
+		},
+		{
+			name:       "N code is a NAT rule",
+			msg:        "N|port-fwd|dstnat: in:ether1 out:bridge1, proto TCP (SYN), 198.51.100.7:41000->203.0.113.10:8080, NAT 198.51.100.7:41000->(192.168.88.10:8080), len 60",
+			want:       store.ActionNatted,
+			fromPrefix: true,
+			why:        "the N code declares a NAT-table rule",
+		},
+
+		// ---- inferred from the line itself ----
+		{
+			name:       "untagged srcnat line carrying a translation",
+			msg:        "srcnat: in:bridge1 out:ether1, proto UDP, 192.168.88.20:51258->198.51.100.53:53, NAT (203.0.113.10:51258->198.51.100.53:53), len 73",
+			want:       store.ActionNatted,
+			fromPrefix: false,
+			why:        "srcnat exists only in /ip firewall nat, and the annotation is RouterOS reporting the translation it just performed",
+		},
+		{
+			name:       "untagged dstnat line carrying a translation",
+			msg:        "dstnat: in:ether1 out:bridge1, proto TCP (SYN), 198.51.100.7:41000->203.0.113.10:8080, NAT 198.51.100.7:41000->(192.168.88.10:8080), len 60",
+			want:       store.ActionNatted,
+			fromPrefix: false,
+			why:        "same, for the inbound direction",
+		},
+
+		// ---- refused, and honestly unknown ----
+		{
+			name:       "untagged srcnat line with no translation annotation",
+			msg:        "srcnat: in:bridge1 out:ether1, proto UDP, 192.168.88.20:51258->198.51.100.53:53, len 73",
+			want:       store.ActionUnknown,
+			fromPrefix: false,
+			why:        "a NAT-table rule can be accept/log/passthrough and translate nothing; the chain alone does not say this packet was natted",
+		},
+		{
+			name:       "untagged forward line that carries someone else's translation",
+			msg:        "forward: in:ether1 out:ether1, connection-state:new,dnat, proto TCP (SYN), 198.51.100.7:33202->203.0.113.9:9999, NAT 198.51.100.7:33202->(192.168.88.10:15903->203.0.113.9:9999), len 44",
+			want:       store.ActionUnknown,
+			fromPrefix: false,
+			why:        "the annotation is a translation an earlier NAT rule performed; this line belongs to a filter rule whose verdict is not stated",
+		},
+		{
+			name:       "untagged postrouting line",
+			msg:        "postrouting: in:(unknown 0) out:ether1, proto TCP (ACK), 192.168.88.20:51512->203.0.113.44:443, len 52",
+			want:       store.ActionUnknown,
+			fromPrefix: false,
+			why:        "postrouting is mangle-only, but mangle's actions are not all marks -- change-mss, change-ttl, set-priority and more live there too",
+		},
+		{
+			name:       "untagged prerouting line",
+			msg:        "prerouting: in:ether1 out:(unknown 0), proto TCP (SYN), 198.51.100.7:41000->192.168.88.10:443, len 60",
+			want:       store.ActionUnknown,
+			fromPrefix: false,
+			why:        "prerouting is shared between mangle and raw, so the chain narrows nothing",
+		},
+		{
+			name:       "untagged filter line",
+			msg:        "forward: in:bridge1 out:ether1, proto UDP, 192.168.88.20:53212->198.51.100.53:53, len 52",
+			want:       store.ActionUnknown,
+			fromPrefix: false,
+			why:        "a filter line without a prefix has never said what the rule decided, and #437 did not change that",
+		},
+		{
+			name:       "unrecognised prefix code",
+			msg:        "X|whatever|forward: in:bridge1 out:ether1, proto UDP, 192.168.88.20:53212->198.51.100.53:53, len 52",
+			want:       store.ActionUnknown,
+			fromPrefix: false,
+			why:        "an unknown code is passed through rather than guessed at",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := Parse(tt.msg)
+			if got.Action != tt.want {
+				t.Errorf("Parse().Action = %q, want %q -- %s", got.Action, tt.want, tt.why)
+			}
+			if got.ActionFromPrefix != tt.fromPrefix {
+				t.Errorf("Parse().ActionFromPrefix = %v, want %v", got.ActionFromPrefix, tt.fromPrefix)
 			}
 		})
 	}
@@ -292,13 +472,14 @@ func TestSplitTopLevel(t *testing.T) {
 func TestParseStripsTerminalEscapesFromExtractedFields(t *testing.T) {
 	const esc = "\x1b[2J\x1b[1;31m"
 	p := Parse("D|" + esc + "rule| forward: in:" + esc + "ether1 out:ether2, " +
-		"src-mac aa:bb:cc:" + esc + "dd:ee:ff, proto TCP, " +
+		"src-mac aa:bb:cc:" + esc + "dd:ee:ff, proto TCP (" + esc + "SYN), " +
 		"192.0.2.1:1234->198.51.100.1:80, len 60")
 
 	fields := map[string]string{
 		"RuleLabel":   p.RuleLabel,
 		"InInterface": p.InInterface,
 		"SrcMAC":      p.SrcMAC,
+		"Flags":       p.Flags,
 	}
 	for name, got := range fields {
 		if strings.ContainsRune(got, 0x1b) {

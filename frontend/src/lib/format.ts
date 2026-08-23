@@ -70,6 +70,21 @@ export function formatDurationShort(totalSeconds: number): string {
   return `${d}d ${h % 24}h`
 }
 
+// formatUptimeFull renders a duration in seconds as all four units --
+// "3d 4h 12m 05s" -- for the toolbar's server-uptime readout, which sits
+// right beside the connection indicator and wants a fixed-width,
+// always-fully-qualified string rather than formatDurationShort's
+// "drop to the two units that matter" summary. Seconds are zero-padded
+// so the string doesn't twitch in width every ten ticks.
+export function formatUptimeFull(totalSeconds: number): string {
+  const s = Math.max(0, Math.round(totalSeconds))
+  const days = Math.floor(s / 86_400)
+  const hours = Math.floor((s % 86_400) / 3600)
+  const minutes = Math.floor((s % 3600) / 60)
+  const seconds = s % 60
+  return `${days}d ${hours}h ${minutes}m ${String(seconds).padStart(2, '0')}s`
+}
+
 // formatBufferDepth summarizes how full the server's in-memory event ring
 // (store.maxEvents) is and, once full, roughly how far back it reaches at
 // the current rate -- the two facts an operator needs to tell "the ring
