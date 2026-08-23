@@ -5,6 +5,7 @@ package api
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/cookiejar"
@@ -908,5 +909,39 @@ func TestChangePasswordRequiresASession(t *testing.T) {
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusUnauthorized {
 		t.Errorf("status = %d, want 401", resp.StatusCode)
+	}
+}
+
+// A request target is attacker-controlled and arrives decoded, so a
+// %0A in it becomes a real newline by the time it reaches a log call.
+// Before #528 the auth log wrote it raw, which let anyone who could
+// reach the login route -- no credentials needed -- append convincing
+// lines to mikroview's own log. Same shape as authzMatrix: the decision
+// is recorded as a test so removing the quoting fails here rather than
+// being noticed in an incident.
+func TestAuthErrorLogLineCannotForgeALogEntry(t *testing.T) {
+	forged := "/api/x\n2026-08-23 INFO  auth │ forged entry"
+
+	line := authErrorLogLine("GET", forged, errors.New("bad credentials"))
+
+	if strings.ContainsAny(line, "\n\r") {
+		t.Errorf("log line carries a raw newline, so a request can forge entries:\n%s", line)
+	}
+	if !strings.Contains(line, `\n`) {
+		t.Errorf("expected the injected newline to survive as an escape, got %q", line)
+	}
+	if !strings.Contains(line, "forged entry") {
+		t.Errorf("expected the path to still be readable for diagnosis, got %q", line)
+	}
+}
+
+// The error is quoted for the same reason as the path: this branch runs
+// for errors we did not anticipate, so its text is the most likely to
+// have come from something a caller sent.
+func TestAuthErrorLogLineQuotesTheError(t *testing.T) {
+	line := authErrorLogLine("POST", "/api/login", errors.New("boom\nWARN auth │ fake"))
+
+	if strings.ContainsAny(line, "\n\r") {
+		t.Errorf("error text broke out of its line:\n%s", line)
 	}
 }
