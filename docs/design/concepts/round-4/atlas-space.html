@@ -1,0 +1,719 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mikroview — Atlas · space theme</title>
+<style>
+  /* ============================================================
+     ATLAS — SPACE THEME  (round 4, convergence · 2026-08-23)
+     The second of two theme identities on identical bones — see
+     `atlas-water.html` for the reference build and the full
+     rationale. Same markup, same geometry, same data story: the
+     diff between the two files is this token block, the fall's
+     mark rendering (star trails instead of currents, a static
+     starfield behind the dark surfaces), and the tongue. That is
+     the point: a theme is a set of tokens, not a rewrite (#492
+     ships themes against exactly this separation; #482's choice
+     must support it).
+
+     SPACE. The landing is the starfall — everything arriving as
+     falling light. A steady talker leaves a trail; a burst is a
+     shower; the unlogged boundary is an unobserved sector (no
+     telescope pointed there — the sky is not empty, we are not
+     looking). In the companion birdcage's tongue, a canary would
+     be a black hole (naming lives in birdcage; no honeypot logic
+     lives here). Ambience only: DROP is always DROP, a watch is
+     a watch — the working surfaces stay plain in every theme.
+
+     Palette: lane set revalidated on this surface (#06070d) —
+     six checks pass. Heat is a sequential ramp per hue (blue =
+     accepted starlight, red = dropped); bright ramp steps sit
+     above the categorical lightness band by design. The indigo
+     theme accent is chrome-only — never a data mark, and kept
+     visually distinct from NAT violet, which appears only on
+     marks with a label. Red is only ever a drop.
+     ============================================================ */
+  :root {
+    --surface: #06070d;
+    --panel: #0c0e18;
+    --grid: #131627;
+    --grid-2: #212642;
+    --ink: #e8e9f2;
+    --ink-2: #9aa0b8;
+    --ink-3: #5a5f78;
+    --theme: #7d8be8;            /* chrome only, never data; distinct from NAT violet on marks */
+    --now: #e8b05a;
+    --lan: #3987e5; --srv: #199e70; --iot: #c98500; --guest: #d76a9e;
+    --ok: #3fae5a;
+    --drop: #e05252;
+    --nat: #a08df0;
+    --acc: #5aa7f0;              /* accepted energy, bright ramp step */
+    --sans: system-ui, -apple-system, "Segoe UI", sans-serif;
+    --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  }
+  * { box-sizing: border-box; margin: 0; }
+  html { scroll-behavior: smooth; }
+  body { background: var(--surface); color: var(--ink); font: 13.5px/1.5 var(--sans); -webkit-font-smoothing: antialiased; }
+  .concept {
+    position: sticky; top: 0; z-index: 90; display: flex; gap: 16px; align-items: baseline;
+    padding: 8px 20px; background: #04050a; border-bottom: 1px solid var(--grid-2);
+    font-size: 11px; color: var(--ink-3);
+  }
+  .concept b { color: var(--theme); letter-spacing: 0.1em; }
+  .concept a { color: var(--ink-2); text-decoration: none; margin-left: 12px; }
+
+  .scene { min-height: 100vh; position: relative; border-bottom: 1px solid var(--grid-2); overflow: hidden; padding-bottom: 24px; }
+  .scene-tag { font-size: 10.5px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--ink-3); padding: 13px 36px 0; }
+
+  .bar { display: flex; align-items: baseline; gap: 20px; padding: 16px 36px 2px; }
+  .bar .wm { font-size: 12px; font-weight: 800; letter-spacing: 0.22em; color: var(--ink-3); }
+  .bar .wm em { color: var(--theme); font-style: normal; }
+  .bar h1 { font-size: 20px; font-weight: 600; }
+  .bar h1 .here { color: var(--theme); }
+  .bar .sub { font-size: 11px; color: var(--ink-3); }
+  .bar .sub b { color: var(--ink-2); }
+  .nav { margin-left: auto; display: flex; gap: 4px; }
+  .nv { font-size: 11px; font-weight: 650; letter-spacing: 0.08em; color: var(--ink-3); padding: 4px 12px; border-radius: 999px; border: 1px solid transparent; }
+  .nv.on { color: var(--theme); border-color: var(--theme); }
+
+  .attention { display: flex; gap: 10px; align-items: center; padding: 8px 36px 0; flex-wrap: wrap; }
+  .att {
+    display: inline-flex; align-items: center; gap: 7px; font-size: 11.5px; font-weight: 650;
+    border: 1px solid var(--grid-2); border-radius: 999px; padding: 4px 13px; color: var(--ink-2);
+  }
+  .att i { width: 6px; height: 6px; border-radius: 50%; }
+  .att.alarm { border-color: rgba(224,82,82,0.5); color: var(--drop); }
+  .att.alarm i { background: var(--drop); animation: pulse 1.6s ease-in-out infinite; }
+  .att.dark { color: var(--drop); } .att.dark i { background: transparent; border: 1px solid var(--drop); }
+  .att.calm { color: var(--ok); } .att.calm i { background: var(--ok); }
+  @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.3; } }
+  .howto { padding: 6px 36px 0; font-size: 11.5px; color: var(--ink-3); }
+  .howto b { color: var(--ink-2); font-weight: 600; }
+
+  .board { margin: 10px 36px 0; }
+  .board svg { width: 100%; display: block; }
+  svg text { font-family: var(--mono); }
+  .tlab { fill: var(--ink-3); font-size: 9.5px; }
+  .blab { fill: var(--ink); font-size: 11px; font-weight: 700; font-family: var(--sans); }
+  .bsub { fill: var(--ink-3); font-size: 8.5px; font-family: var(--sans); }
+  .bandline { stroke: var(--grid-2); stroke-width: 1; }
+  .gridline { stroke: var(--grid); stroke-width: 1; }
+  .chip { font-size: 8px; font-weight: 800; letter-spacing: 0.07em; font-family: var(--sans); }
+  .ch-ok { fill: var(--ok); } .ch-bad { fill: var(--drop); } .ch-mut { fill: var(--ink-3); }
+  .plab { fill: var(--ink-2); font-size: 8.5px; }
+  .spec { fill: none; stroke-width: 1.4; }
+  .spec-acc { stroke: var(--acc); }
+  .spec-drop { stroke: var(--drop); }
+  .specfill-acc { fill: rgba(90,167,240,0.14); }
+  .specfill-drop { fill: rgba(224,82,82,0.14); }
+  .carrier-acc { stroke: var(--acc); }
+  .carrier-drop { stroke: var(--drop); }
+  .nowline { stroke: var(--now); stroke-width: 1.6; }
+  .nowpulse { animation: nowpulse 1.4s ease-in-out infinite; }
+  @keyframes nowpulse { 0%,100% { opacity: 1; } 50% { opacity: 0.35; } }
+  .blink { animation: blink 1.4s steps(2) infinite; }
+  @keyframes blink { 50% { opacity: 0.15; } }
+  .halo { animation: halo 2.2s ease-out infinite; transform-origin: center; transform-box: fill-box; }
+  @keyframes halo { 0% { opacity: 0.7; transform: scale(0.5); } 100% { opacity: 0; transform: scale(2.4); } }
+  .pours { animation: pour 8s linear infinite; }
+  @keyframes pour { from { transform: translateY(0); } to { transform: translateY(6px); } }
+  .flow { stroke-dasharray: 2 10; animation: flowdash 1.6s linear infinite; }
+  @keyframes flowdash { to { stroke-dashoffset: -12; } }
+  .anno { fill: var(--ink-3); font-size: 9px; }
+  .darkband { fill: url(#hatchW); opacity: 0.45; }
+  .horizon { stroke: var(--drop); stroke-width: 1; stroke-dasharray: 2 6; opacity: 0.55; }
+
+  /* topography */
+  .region { fill: rgba(125,139,232,0.03); stroke-width: 1.2; stroke-dasharray: 1 5; }
+  .rlab { fill: var(--ink-2); font-size: 10px; font-weight: 700; font-family: var(--sans); letter-spacing: 0.1em; }
+  .host { fill: var(--panel); stroke: var(--grid-2); }
+  .hlab2 { fill: var(--ink); font-size: 10.5px; font-weight: 650; font-family: var(--sans); }
+  .hip { fill: var(--ink-3); font-size: 8.5px; }
+  .edge { stroke: var(--grid-2); stroke-width: 1.4; fill: none; }
+  .edge-live { stroke: var(--acc); stroke-width: 1.6; fill: none; opacity: 0.55; }
+  .portchip { fill: var(--panel); stroke: var(--grid-2); }
+  .portchip-t { fill: var(--ink-2); font-size: 8.5px; }
+  .covchip { font-size: 7.5px; font-weight: 800; letter-spacing: 0.08em; font-family: var(--sans); }
+
+  .legend { display: flex; gap: 22px; padding: 10px 36px 0; font-size: 10.5px; color: var(--ink-2); flex-wrap: wrap; }
+  .legend .k { display: inline-flex; align-items: center; gap: 7px; }
+
+  /* the aligned stream */
+  .openrow { margin: 10px 36px 0; border: 1px solid var(--grid-2); border-radius: 8px; overflow: hidden; }
+  .filterbar { display: flex; flex-wrap: wrap; gap: 10px; align-items: flex-end; padding: 10px 16px; border-bottom: 1px solid var(--grid); }
+  .ff { display: flex; flex-direction: column; gap: 3px; }
+  .ff label { font-size: 8.5px; letter-spacing: 0.11em; text-transform: uppercase; color: var(--ink-3); }
+  .ff input, .ff select { background: #04050a; border: 1px solid var(--grid-2); border-radius: 3px;
+    color: var(--ink); font: 12px var(--mono); padding: 5px 9px; width: 165px; outline: none; }
+  .ff select { width: 115px; } .ff.small input { width: 105px; }
+  .swap { background: transparent; border: 1px solid var(--grid-2); color: var(--theme); font-size: 13px; border-radius: 3px; padding: 4px 9px; cursor: default; }
+  .fright { margin-left: auto; display: flex; gap: 8px; }
+  .btn { background: transparent; border: 1px solid var(--grid-2); color: var(--ink-2); font: 11px var(--sans); padding: 5px 12px; border-radius: 3px; cursor: default; }
+  .btn.on { color: var(--theme); border-color: var(--theme); }
+  table.stream { width: 100%; border-collapse: collapse; table-layout: fixed; }
+  .stream col.c-time { width: 118px; } .stream col.c-chain { width: 72px; } .stream col.c-act { width: 62px; }
+  .stream col.c-shost { width: 130px; } .stream col.c-sip { width: 108px; } .stream col.c-arr { width: 30px; }
+  .stream col.c-dhost { width: 130px; } .stream col.c-dip { width: 108px; }
+  .stream col.c-proto { width: 52px; } .stream col.c-port { width: 72px; } .stream col.c-rule { width: auto; }
+  .stream th { text-align: left; font-size: 8.5px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--ink-3); font-weight: 650; padding: 8px 10px 6px; border-bottom: 1px solid var(--grid-2); }
+  .stream td { padding: 5.5px 10px; border-bottom: 1px solid var(--grid); font-family: var(--mono); font-size: 12px; white-space: nowrap; overflow: hidden; }
+  .stream td.sep, .stream th.sep { border-left: 1px solid var(--grid); }
+  .stream .num, .stream th.num { text-align: right; font-variant-numeric: tabular-nums; }
+  .t { color: var(--ink-3); font-size: 11px; font-variant-numeric: tabular-nums; }
+  .chain { color: var(--ink-3); font-size: 11px; font-family: var(--sans); }
+  .act { display: inline-block; width: 40px; text-align: center; font-size: 10px; font-weight: 700; border-radius: 3px; padding: 1px 0; }
+  .act.drop { color: var(--drop); border: 1px solid rgba(224,82,82,0.4); }
+  .act.acc { color: var(--ok); border: 1px solid rgba(63,174,90,0.4); }
+  .act.nat { color: var(--nat); border: 1px solid rgba(160,141,240,0.4); }
+  .hostc { color: var(--ink); } .ipc { color: var(--ink-3); font-size: 11px; font-variant-numeric: tabular-nums; }
+  .ld { display: inline-block; width: 6px; height: 6px; border-radius: 50%; margin-right: 7px; }
+  .arrow { color: var(--ink-3); } .rule-c { color: var(--ink-2); font-size: 11.5px; } .cc { font-size: 10px; color: var(--ink-3); margin-left: 6px; }
+
+  /* vocabulary strip */
+  .vocab { margin: 18px 36px 0; border-top: 1px solid var(--grid); padding-top: 10px; font-size: 10.5px; color: var(--ink-3); }
+  .vocab b { color: var(--theme); font-weight: 650; }
+  .vocab .pair { margin-right: 22px; white-space: nowrap; display: inline-block; }
+
+  @media (prefers-reduced-motion: reduce) { * { animation: none !important; } }
+</style>
+</head>
+<body>
+
+<div class="concept">
+  <b>ATLAS · SPACE</b>
+  <span>the sky, watched — the starfall is the landing, the map is the place, the stream is the record · same bones as the water theme; only the tokens differ</span>
+  <span style="margin-left:auto"><a href="#s1">1 the starfall</a><a href="#s2">2 the map</a><a href="#s3">3 reach</a><a href="#s4">4 the stream</a><a href="index.html">index</a></span>
+</div>
+
+<!-- ============ SCENE 1 : THE FALL — THE LANDING PAGE ============ -->
+<section class="scene" id="s1">
+  <div class="scene-tag">Scene 1 — the landing. You arrive at the starfall: everything arriving as falling light, streaking into memory.</div>
+  <div class="bar">
+    <span class="wm">MIKRO<em>VIEW</em></span>
+    <h1>The starfall <span class="here">· watching</span></h1>
+    <span class="sub">rb5009 · <b>41 rules</b> 14:01 · tom (admin)</span>
+    <span class="nav"><span class="nv on">FALL</span><span class="nv">MAP</span><span class="nv">STREAM</span><span class="nv">FLAGS</span><span class="nv">SETTINGS</span></span>
+  </div>
+  <div class="attention">
+    <span class="att alarm"><i></i>NEW LIGHT — iot → lan sector, since 13:52</span>
+    <span class="att alarm"><i></i>WATCH BROKEN — iot egress cadence, 13:52</span>
+    <span class="att dark"><i></i>UNOBSERVED — guest → wan, no telescope</span>
+    <span class="att calm"><i></i>every other sector looks like itself</span>
+  </div>
+  <p class="howto"><b>How to read this:</b> each sector of the sky is one boundary; within a sector, position is the port. The strip on top is the live edge — light arriving this instant. Below it, time falls: a steady talker leaves a trail; <b style="color:var(--drop)">red light is dropped traffic — red never means anything else</b>; blue light was accepted. A sector that has always been dark kindling a trail is the thing the starfall exists to show. Click anything to open it in the stream.</p>
+
+  <div class="board">
+    <svg viewBox="0 0 1360 660" role="img"
+         aria-label="The starfall, space-themed: eight sectors across under a faint starfield, a live edge on top, fifteen minutes of light falling downward. The household's broad blue trail burns steadily; the WAN sector carries red meteor weather thickening toward now; the IoT-to-LAN sector is dark the whole way down except a red trail at tcp/445 kindling at the 13:52 line and still burning at the top. The guest sector is unobserved.">
+      <defs>
+        <pattern id="hatchW" width="8" height="8" patternTransform="rotate(45)" patternUnits="userSpaceOnUse">
+          <line x1="0" y1="0" x2="0" y2="8" stroke="var(--grid-2)" stroke-width="1.5"/>
+        </pattern>
+        <linearGradient id="tideW" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0" stop-color="rgba(224,82,82,0.15)"/><stop offset="1" stop-color="rgba(224,82,82,0.02)"/>
+        </linearGradient>
+        <linearGradient id="depthW" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0" stop-color="rgba(125,139,232,0.04)"/><stop offset="1" stop-color="rgba(125,139,232,0.0)"/>
+        </linearGradient>
+        <g id="starsW" fill="var(--ink-2)">
+          <circle cx="22" cy="14" r="0.9" opacity="0.22"/><circle cx="61" cy="52" r="0.7" opacity="0.14"/>
+          <circle cx="118" cy="30" r="1" opacity="0.18"/><circle cx="170" cy="74" r="0.7" opacity="0.12"/>
+          <circle cx="216" cy="22" r="0.8" opacity="0.2"/><circle cx="262" cy="60" r="0.6" opacity="0.12"/>
+          <circle cx="303" cy="36" r="1" opacity="0.16"/><circle cx="351" cy="12" r="0.7" opacity="0.2"/>
+          <circle cx="398" cy="66" r="0.8" opacity="0.13"/><circle cx="447" cy="40" r="0.6" opacity="0.18"/>
+          <circle cx="490" cy="18" r="0.9" opacity="0.14"/><circle cx="540" cy="58" r="0.7" opacity="0.2"/>
+          <circle cx="587" cy="34" r="0.7" opacity="0.12"/><circle cx="638" cy="70" r="1" opacity="0.16"/>
+          <circle cx="682" cy="26" r="0.7" opacity="0.2"/><circle cx="731" cy="48" r="0.8" opacity="0.12"/>
+        </g>
+      </defs>
+
+      <rect x="76" y="126" width="1270" height="514" fill="url(#depthW)"/>
+      <g opacity="0.8">
+        <use href="#starsW" x="80" y="140"/><use href="#starsW" x="500" y="200"/><use href="#starsW" x="120" y="360"/>
+        <use href="#starsW" x="620" y="430"/><use href="#starsW" x="300" y="520"/><use href="#starsW" x="860" y="300"/>
+      </g>
+
+      <!-- ══ the channel heads ══ -->
+      <g>
+        <text class="blab" x="82" y="20">WAN · IN</text><text class="bsub" x="82" y="33">the meteor weather</text>
+        <text class="chip ch-ok" x="82" y="46">WATCH ✓ QUIET 41 D</text>
+        <rect x="76" y="52" width="150" height="3" rx="1.5" fill="var(--ink-3)"/>
+        <text class="blab" x="242" y="20">LAN → WAN</text><text class="bsub" x="242" y="33">the household</text>
+        <text class="chip ch-ok" x="242" y="46">SHAPE ✓ 80/443/853</text>
+        <rect x="236" y="52" width="150" height="3" rx="1.5" fill="var(--lan)"/>
+        <text class="blab" x="402" y="20">LAN → SRV</text><text class="bsub" x="402" y="33">445 · 5001 · 53</text>
+        <rect x="396" y="52" width="150" height="3" rx="1.5" fill="var(--srv)"/>
+        <text class="blab" x="562" y="20">GUEST → WAN</text><text class="bsub" x="562" y="33">unmetered</text>
+        <text class="chip ch-bad" x="562" y="46">UNOBSERVED — NO TELESCOPE</text>
+        <rect x="556" y="52" width="150" height="3" rx="1.5" fill="var(--guest)"/>
+        <text class="blab" x="722" y="20">IOT → WAN</text><text class="bsub" x="722" y="33">egress guarded</text>
+        <text class="chip ch-bad" x="722" y="46">WATCH BROKEN 13:52</text>
+        <rect x="716" y="52" width="150" height="3" rx="1.5" fill="var(--iot)"/>
+        <text class="blab" x="882" y="20">IOT → SRV</text><text class="bsub" x="882" y="33">dns · metronomic</text>
+        <rect x="876" y="52" width="150" height="3" rx="1.5" fill="var(--iot)"/>
+        <text class="blab" x="1042" y="20">IOT → LAN</text><text class="bsub" x="1042" y="33">41 dark days</text>
+        <text class="chip ch-bad" x="1042" y="46">ALARM FIRED 13:52</text>
+        <rect x="1036" y="52" width="150" height="3" rx="1.5" fill="var(--iot)"/>
+        <text class="blab" x="1202" y="20">WG</text><text class="bsub" x="1202" y="33">quiet by choice</text>
+        <rect x="1196" y="52" width="150" height="3" rx="1.5" fill="var(--ink-3)"/>
+      </g>
+
+      <!-- ══ the live edge ══ -->
+      <g>
+        <line class="gridline" x1="76" y1="80" x2="1346" y2="80"/>
+        <polygon class="specfill-drop" points="76,116 96,116 104,84 112,116 128,116 136,102 144,116 176,116 184,66 192,116 206,116 212,105 218,116 226,116"/>
+        <polyline class="spec spec-drop" points="76,116 96,116 104,84 112,116 128,116 136,102 144,116 176,116 184,66 192,116 206,116 212,105 218,116 226,116"/>
+        <text class="plab" x="184" y="60" text-anchor="middle" style="fill:var(--drop)">:8291</text>
+        <polygon class="specfill-acc" points="236,116 252,116 262,102 274,70 290,58 306,70 318,98 330,88 338,108 352,104 360,116 386,116"/>
+        <polyline class="spec spec-acc" points="236,116 252,116 262,102 274,70 290,58 306,70 318,98 330,88 338,108 352,104 360,116 386,116"/>
+        <text class="plab" x="290" y="52" text-anchor="middle" style="fill:var(--acc)">:443</text>
+        <polygon class="specfill-acc" points="396,116 420,116 428,92 436,116 452,116 460,80 468,116 496,116 504,100 512,116 546,116"/>
+        <polyline class="spec spec-acc" points="396,116 420,116 428,92 436,116 452,116 460,80 468,116 496,116 504,100 512,116 546,116"/>
+        <text class="plab" x="460" y="74" text-anchor="middle" style="fill:var(--acc)">:5001</text>
+        <line x1="556" y1="116" x2="706" y2="116" stroke="var(--grid-2)" stroke-width="1" stroke-dasharray="2 4"/>
+        <text class="anno" x="631" y="100" text-anchor="middle" style="fill:var(--drop)">no telescope — no image, and no claim of one</text>
+        <polygon class="specfill-acc" points="716,116 754,116 762,90 770,116 866,116"/>
+        <polyline class="spec spec-acc" points="716,116 754,116 762,90 770,116 866,116"/>
+        <text class="plab" x="762" y="84" text-anchor="middle" style="fill:var(--acc)">:443</text>
+        <polygon class="specfill-acc" points="876,116 916,116 922,68 928,116 1026,116"/>
+        <polyline class="spec spec-acc" points="876,116 916,116 922,68 928,116 1026,116"/>
+        <text class="plab" x="922" y="62" text-anchor="middle" style="fill:var(--acc)">:53</text>
+        <polygon class="specfill-drop" points="1036,116 1096,116 1104,58 1112,116 1186,116"/>
+        <polyline class="spec spec-drop nowpulse" points="1036,116 1096,116 1104,58 1112,116 1186,116"/>
+        <text class="plab" x="1114" y="76" style="fill:var(--drop); font-weight:700">:445 · knocking now</text>
+        <polyline class="spec spec-acc" points="1196,116 1288,116 1292,112 1296,116 1346,116" opacity="0.5"/>
+      </g>
+
+      <!-- ══ THE BRINK ══ -->
+      <line class="nowline nowpulse" x1="76" y1="126" x2="1346" y2="126"/>
+      <rect x="76" y="130" width="596" height="16" fill="var(--surface)" opacity="0.82"/>
+      <text x="80" y="142" style="fill:var(--now); font-size:10px; font-weight:700">THE PRESENT · NOW · 14:02:11 — light lands here and falls away into memory</text>
+
+      <!-- ══ the fall: 15 minutes ══ -->
+      <g>
+        <text class="tlab" x="62" y="140" text-anchor="end" style="fill:var(--now)">14:02</text>
+        <line class="gridline" x1="76" y1="208" x2="1346" y2="208"/><text class="tlab" x="62" y="211" text-anchor="end">14:00</text>
+        <line class="gridline" x1="76" y1="306" x2="1346" y2="306"/><text class="tlab" x="62" y="309" text-anchor="end">13:57</text>
+        <text class="tlab" x="62" y="475" text-anchor="end" style="fill:var(--drop); font-weight:700">13:52 ◉</text>
+        <line class="gridline" x1="76" y1="620" x2="1346" y2="620"/><text class="tlab" x="62" y="623" text-anchor="end">13:47</text>
+        <line class="bandline" x1="231" y1="126" x2="231" y2="640"/>
+        <line class="bandline" x1="391" y1="126" x2="391" y2="640"/>
+        <line class="bandline" x1="551" y1="126" x2="551" y2="640"/>
+        <line class="bandline" x1="711" y1="126" x2="711" y2="640"/>
+        <line class="bandline" x1="871" y1="126" x2="871" y2="640"/>
+        <line class="bandline" x1="1031" y1="126" x2="1031" y2="640"/>
+        <line class="bandline" x1="1191" y1="126" x2="1191" y2="640"/>
+
+        <g class="pours">
+          <!-- wan: red rain, the tide coming in -->
+          <rect x="76" y="126" width="150" height="514" fill="url(#tideW)"/>
+          <g stroke="var(--drop)" stroke-width="1.4" opacity="0.75">
+            <line x1="104" y1="126" x2="104" y2="640" stroke-dasharray="3 32"/>
+            <line x1="120" y1="130" x2="120" y2="640" stroke-dasharray="2 51"/>
+            <line x1="136" y1="134" x2="136" y2="640" stroke-dasharray="3 40"/>
+            <line x1="152" y1="128" x2="152" y2="640" stroke-dasharray="2 68"/>
+            <line x1="168" y1="132" x2="168" y2="640" stroke-dasharray="3 25"/>
+            <line x1="200" y1="136" x2="200" y2="640" stroke-dasharray="2 60"/>
+            <line x1="214" y1="126" x2="214" y2="640" stroke-dasharray="3 45"/>
+          </g>
+          <line class="carrier-drop" x1="184" y1="126" x2="184" y2="330" stroke-width="2" stroke-dasharray="6 8" opacity="0.9"/>
+          <line class="carrier-drop" x1="184" y1="330" x2="184" y2="640" stroke-width="1.2" stroke-dasharray="3 24" opacity="0.6"/>
+          <text class="anno" x="80" y="168" style="fill:var(--drop)">▲3.1× since 13:30</text>
+          <text class="anno" x="80" y="180" style="fill:var(--drop)">meteor weather, thickening</text>
+
+          <!-- lan→wan: the household's broad current -->
+          <rect x="266" y="126" width="48" height="514" fill="rgba(90,167,240,0.10)"/>
+          <rect x="278" y="126" width="24" height="514" fill="rgba(90,167,240,0.14)"/>
+          <line class="carrier-acc" x1="290" y1="126" x2="290" y2="640" stroke-width="2.4" opacity="0.85"/>
+          <circle cx="290" cy="130" r="2.6" fill="var(--acc)" class="nowpulse"/>
+          <line class="carrier-acc" x1="330" y1="126" x2="330" y2="640" stroke-width="1.2" stroke-dasharray="8 14" opacity="0.6"/>
+          <line x1="350" y1="126" x2="350" y2="640" stroke="var(--nat)" stroke-width="1.2" stroke-dasharray="2 84" opacity="0.9"/>
+
+          <!-- lan→srv -->
+          <line class="carrier-acc" x1="428" y1="126" x2="428" y2="640" stroke-width="1.6" stroke-dasharray="10 10" opacity="0.7"/>
+          <line class="carrier-acc" x1="460" y1="126" x2="460" y2="640" stroke-width="2" opacity="0.75"/>
+          <line class="carrier-acc" x1="504" y1="126" x2="504" y2="640" stroke-width="1.2" stroke-dasharray="4 20" opacity="0.6"/>
+
+          <!-- guest: uncharted -->
+          <rect class="darkband" x="556" y="126" width="150" height="514"/>
+          <text class="anno" x="631" y="330" text-anchor="middle" style="fill:var(--drop); font-weight:700">the sector is dark because</text>
+          <text class="anno" x="631" y="342" text-anchor="middle" style="fill:var(--drop); font-weight:700">nothing is imaged —</text>
+          <text class="anno" x="631" y="354" text-anchor="middle">not because nothing shines</text>
+
+          <!-- iot→wan -->
+          <line class="carrier-acc" x1="762" y1="126" x2="762" y2="640" stroke-width="1.8" stroke-dasharray="14 9" opacity="0.75"/>
+          <line class="carrier-acc" x1="800" y1="126" x2="800" y2="640" stroke-width="1" stroke-dasharray="2 110" opacity="0.6"/>
+          <line x1="826" y1="292" x2="826" y2="310" stroke="var(--drop)" stroke-width="2.4"/>
+          <text class="anno" x="718" y="284" style="fill:var(--drop)">cam-porch → 47.246… dropped</text>
+
+          <!-- iot→srv: the metronome -->
+          <line class="carrier-acc" x1="922" y1="126" x2="922" y2="640" stroke-width="1.8" stroke-dasharray="4 14" opacity="0.85"/>
+          <circle cx="922" cy="129" r="2.2" fill="var(--acc)" class="nowpulse"/>
+
+          <!-- iot→lan: THE NEW CURRENT -->
+          <rect x="1036" y="126" width="150" height="349" fill="rgba(224,82,82,0.05)"/>
+          <line class="carrier-drop blink" x1="1104" y1="126" x2="1104" y2="154" stroke-width="2.6"/>
+          <circle cx="1104" cy="129" r="2.8" fill="var(--drop)" class="nowpulse"/>
+          <line class="carrier-drop" x1="1104" y1="154" x2="1104" y2="475" stroke-width="2.6" stroke-dasharray="6 22"/>
+          <g transform="translate(1104 475)">
+            <circle r="5" fill="var(--surface)" stroke="var(--drop)" stroke-width="1.4"/>
+            <circle r="5" fill="none" stroke="var(--drop)" class="halo"/>
+            <circle r="1.8" fill="var(--drop)"/>
+          </g>
+          <text class="anno" x="1114" y="452" style="fill:var(--drop)">◉ a new light kindles 13:52</text>
+          <text class="anno" x="1114" y="464" style="fill:var(--drop)">— first light in 41 days</text>
+          <text class="anno" x="1114" y="230" >dash = one knock, every 64 s</text>
+          <text class="anno" x="1114" y="242">tcp/445 · all refused · open ▸</text>
+          <text class="anno" x="1111" y="560" text-anchor="middle" style="fill:var(--ink-3)">below: dark to the floor</text>
+
+          <!-- wg -->
+          <line class="carrier-acc" x1="1292" y1="168" x2="1292" y2="174" stroke-width="1.4" opacity="0.6"/>
+          <line class="carrier-acc" x1="1292" y1="540" x2="1292" y2="546" stroke-width="1.4" opacity="0.5"/>
+        </g>
+
+        <line class="horizon" x1="76" y1="475" x2="1346" y2="475"/>
+        <text class="anno" x="80" y="490" style="fill:var(--drop)">13:52 — the line through every sector: the light kindles AND the egress cadence stumbles</text>
+      </g>
+      <!-- port scale -->
+      <g>
+        <text class="plab" x="290" y="654" text-anchor="middle" style="fill:var(--acc)">:443</text>
+        <text class="plab" x="330" y="654" text-anchor="middle">:853</text>
+        <text class="plab" x="460" y="654" text-anchor="middle" style="fill:var(--acc)">:5001</text>
+        <text class="plab" x="922" y="654" text-anchor="middle" style="fill:var(--acc)">:53</text>
+        <text class="plab" x="1104" y="654" text-anchor="middle" style="fill:var(--drop); font-weight:700">:445</text>
+        <text class="plab" x="1292" y="654" text-anchor="middle">:51820</text>
+      </g>
+    </svg>
+  </div>
+
+  <div class="legend">
+    <span class="k" style="color:var(--acc)">blue light = accepted (brightness = rate)</span>
+    <span class="k" style="color:var(--drop)">red light = dropped — red never means anything else</span>
+    <span class="k" style="color:var(--nat)">violet = nat</span>
+    <span class="k">a trail = a steady talker · dash rhythm = its cadence</span>
+    <span class="k">▨ unobserved = unlogged (≠ a dark sector)</span>
+    <span class="k">◉ flag at its moment</span>
+  </div>
+</section>
+
+<!-- ============ SCENE 2 : THE MAP ============ -->
+<section class="scene" id="s2">
+  <div class="scene-tag">Scene 2 — the map. The network as a sky: lanes are clusters, boundaries are routes, and coverage is drawn on every one.</div>
+  <div class="bar">
+    <span class="wm">MIKRO<em>VIEW</em></span>
+    <h1>The map <span class="here">· policy vs reality</span></h1>
+    <span class="sub">rb5009 · <b>41 rules</b> 14:01 · tom (admin)</span>
+    <span class="nav"><span class="nv">FALL</span><span class="nv on">MAP</span><span class="nv">STREAM</span><span class="nv">FLAGS</span><span class="nv">SETTINGS</span></span>
+  </div>
+  <p class="howto"><b>How to read this:</b> each cluster is a lane; each route between clusters is a boundary, stamped with its coverage — <b>OBSERVED</b>, <b>QUIET</b>, or <b style="color:var(--drop)">UNOBSERVED</b>. Flowing dashes are traffic observed now; port chips are what policy admits. The red arc is the unplanned crossing, cut at the boundary where the default drop kills it. <b>Click any host to enter reach — the map recentres on what that host can talk to.</b></p>
+
+  <div class="board">
+    <svg viewBox="0 0 1360 620" role="img"
+         aria-label="A network map, space-themed: the WAN as deep space on top, the router as the station, five clusters holding the household's hosts on faint orbits. Routes between clusters carry coverage stamps and port chips; observed traffic moves as light; the unplanned IoT-to-LAN crossing is a red arc cut at the boundary. A slim ribbon of the starfall runs under the whole map.">
+      <defs>
+        <pattern id="hatchW2" width="8" height="8" patternTransform="rotate(45)" patternUnits="userSpaceOnUse">
+          <line x1="0" y1="0" x2="0" y2="8" stroke="var(--grid-2)" stroke-width="1.5"/>
+        </pattern>
+      </defs>
+
+      <!-- WAN: open water -->
+      <rect x="76" y="16" width="1270" height="56" rx="10" fill="rgba(90,167,240,0.04)" stroke="var(--grid-2)"/>
+      <text class="rlab" x="100" y="40">WAN — DEEP SPACE</text>
+      <text class="anno" x="100" y="56" style="fill:var(--drop)">the weather: drops ▲3.1× since 13:30 · all named by wan-in-drop · latest 185.220.101.34 → :8291</text>
+      <g stroke="var(--drop)" stroke-width="1.2" opacity="0.5">
+        <line x1="1050" y1="24" x2="1050" y2="66" stroke-dasharray="2 10"/>
+        <line x1="1090" y1="24" x2="1090" y2="66" stroke-dasharray="2 14"/>
+        <line x1="1130" y1="24" x2="1130" y2="66" stroke-dasharray="2 8"/>
+        <line x1="1170" y1="24" x2="1170" y2="66" stroke-dasharray="2 16"/>
+      </g>
+
+      <!-- router: the harbour mouth -->
+      <g>
+        <rect x="620" y="120" width="120" height="44" rx="9" fill="var(--panel)" stroke="var(--theme)"/>
+        <text class="hlab2" x="680" y="139" text-anchor="middle">rb5009</text>
+        <text class="hip" x="680" y="153" text-anchor="middle">the station · 41 rules</text>
+        <line class="edge-live flow" x1="680" y1="72" x2="680" y2="120"/>
+        <g transform="translate(695 96)"><rect class="portchip" x="-2" y="-9" width="118" height="14" rx="7"/><text class="portchip-t" x="4" y="2">wan ↔ router · OBSERVED ✓</text></g>
+      </g>
+
+      <!-- LAN basin -->
+      <g>
+        <path class="region" stroke="var(--lan)" d="M96 236 q40 -34 130 -30 q120 6 150 44 q22 34 -8 84 q-34 50 -140 46 q-104 -4 -136 -52 q-24 -44 4 -92 z"/>
+        <text class="rlab" x="130" y="252" style="fill:var(--lan)">LAN · the household</text>
+        <g><rect class="host" x="140" y="272" width="118" height="30" rx="6"/><text class="hlab2" x="152" y="285">tom-desktop</text><text class="hip" x="152" y="296">10.0.10.21</text></g>
+        <g><rect class="host" x="150" y="316" width="104" height="30" rx="6"/><text class="hlab2" x="162" y="329">phone-tom</text><text class="hip" x="162" y="340">10.0.10.32</text></g>
+        <g><rect class="host" x="142" y="358" width="100" height="30" rx="6"/><text class="hlab2" x="154" y="371">tv-lounge</text><text class="hip" x="154" y="382">10.0.10.44</text></g>
+        <line class="edge-live flow" x1="330" y1="270" x2="628" y2="160" opacity="0.5"/>
+        <g transform="translate(400 220)"><rect class="portchip" x="-2" y="-9" width="168" height="14" rx="7"/><text class="portchip-t" x="4" y="2">lan → wan · OBSERVED ✓ shape 80/443/853</text></g>
+      </g>
+
+      <!-- SRV basin -->
+      <g>
+        <path class="region" stroke="var(--srv)" d="M900 220 q60 -26 150 -14 q86 12 100 58 q12 42 -30 76 q-46 36 -140 24 q-90 -12 -108 -62 q-14 -44 28 -82 z"/>
+        <text class="rlab" x="930" y="240" style="fill:var(--srv)">SRV · the services</text>
+        <g><rect class="host" x="950" y="258" width="80" height="30" rx="6"/><text class="hlab2" x="962" y="271">nas</text><text class="hip" x="962" y="282">10.0.40.10</text></g>
+        <g><rect class="host" x="1044" y="258" width="92" height="30" rx="6"/><text class="hlab2" x="1056" y="271">pihole</text><text class="hip" x="1056" y="282">10.0.40.11</text></g>
+        <line class="edge-live flow" x1="920" y1="252" x2="742" y2="156" opacity="0.5"/>
+        <g transform="translate(760 196)"><rect class="portchip" x="-2" y="-9" width="150" height="14" rx="7"/><text class="portchip-t" x="4" y="2">lan → srv · :445 :5001 :53 ✓</text></g>
+      </g>
+
+      <!-- IOT basin -->
+      <g>
+        <path class="region" stroke="var(--iot)" d="M560 400 q50 -30 150 -26 q110 4 140 48 q24 38 -6 78 q-36 46 -146 42 q-106 -4 -140 -54 q-26 -42 2 -88 z"/>
+        <text class="rlab" x="590" y="416" style="fill:var(--iot)">IOT · the things</text>
+        <g>
+          <rect class="host" x="600" y="432" width="108" height="30" rx="6" stroke="var(--drop)" stroke-width="1.4"/>
+          <text class="hlab2" x="612" y="445" style="fill:var(--drop)">cam-porch</text><text class="hip" x="612" y="456">10.0.20.31</text>
+          <circle cx="708" cy="436" r="4" fill="none" stroke="var(--drop)" class="halo"/>
+        </g>
+        <g><rect class="host" x="722" y="432" width="104" height="30" rx="6"/><text class="hlab2" x="734" y="445">hue-bridge</text><text class="hip" x="734" y="456">10.0.20.14</text></g>
+        <g><rect class="host" x="640" y="474" width="118" height="30" rx="6"/><text class="hlab2" x="652" y="487">therm-lounge</text><text class="hip" x="652" y="498">10.0.20.22</text></g>
+        <line class="edge-live flow" x1="700" y1="398" x2="686" y2="166" opacity="0.5"/>
+        <g transform="translate(700 330)"><rect class="portchip" x="-2" y="-9" width="196" height="14" rx="7"/><text class="portchip-t" x="4" y="2">iot → wan · :443 :123 · WATCH BROKEN 13:52</text></g>
+        <line class="edge-live flow" x1="830" y1="430" x2="960" y2="300" opacity="0.5"/>
+        <g transform="translate(852 372)"><rect class="portchip" x="-2" y="-9" width="150" height="14" rx="7"/><text class="portchip-t" x="4" y="2">iot → srv · :53 ✓ metronomic</text></g>
+        <!-- THE UNPLANNED CROSSING: heads for nas, cut at the lane's edge; its intent ghosts on and never arrives -->
+        <path d="M668 428 C 700 396, 726 378, 758 362" fill="none" stroke="var(--drop)" stroke-width="2.2" stroke-dasharray="7 7" class="nowpulse"/>
+        <line x1="748" y1="346" x2="770" y2="376" stroke="var(--drop)" stroke-width="3"/>
+        <path d="M772 354 C 830 326, 890 302, 942 288" fill="none" stroke="var(--drop)" stroke-width="1.2" stroke-dasharray="3 9" opacity="0.3"/>
+        <path d="M942 288 l-13 -1 M942 288 l-7 11" stroke="var(--drop)" stroke-width="1.2" opacity="0.3"/>
+        <text class="anno" x="470" y="404" text-anchor="end" style="fill:var(--drop); font-weight:700">UNPLANNED — cam-porch knocking at nas :445 · ×14 since 13:52</text>
+        <text class="anno" x="470" y="416" text-anchor="end" style="fill:var(--drop)">cut at the lane's edge by the default drop —</text>
+        <text class="anno" x="470" y="428" text-anchor="end" style="fill:var(--drop)">the ghost is where it wanted to go; it never arrives</text>
+      </g>
+
+      <!-- GUEST basin -->
+      <g>
+        <path class="region" stroke="var(--guest)" d="M180 440 q40 -24 110 -20 q80 6 96 44 q12 34 -14 62 q-32 34 -104 28 q-72 -6 -92 -46 q-16 -36 4 -68 z"/>
+        <rect fill="url(#hatchW2)" opacity="0.4" x="190" y="428" width="196" height="112" rx="20"/>
+        <text class="rlab" x="210" y="456" style="fill:var(--guest)">GUEST</text>
+        <text class="anno" x="210" y="472" style="fill:var(--drop); font-weight:700">UNOBSERVED — no telescope on this cluster</text>
+        <text class="anno" x="210" y="486">carries traffic · unmetered</text>
+        <text class="anno" x="210" y="500">log it to image it</text>
+      </g>
+
+      <!-- WG jetty -->
+      <g>
+        <rect class="host" x="430" y="180" width="104" height="30" rx="6"/>
+        <text class="hlab2" x="442" y="193">wg tunnel</text><text class="hip" x="442" y="204">phone-tom-wg</text>
+        <line class="edge" x1="534" y1="195" x2="622" y2="160"/>
+        <text class="anno" x="430" y="174">quiet by choice — an airlock, rarely opened</text>
+      </g>
+
+      <!-- the fall ribbon -->
+      <g>
+        <line class="gridline" x1="76" y1="566" x2="1346" y2="566"/>
+        <text class="anno" x="76" y="580" style="fill:var(--theme)">the starfall runs under everything — the last 15 minutes, one pixel per sector · click to land ▾</text>
+        <g transform="translate(0 588)">
+          <rect x="76" y="0" width="150" height="18" fill="rgba(224,82,82,0.10)"/>
+          <rect x="236" y="0" width="150" height="18" fill="rgba(90,167,240,0.12)"/>
+          <rect x="396" y="0" width="150" height="18" fill="rgba(90,167,240,0.08)"/>
+          <rect x="556" y="0" width="150" height="18" fill="url(#hatchW2)" opacity="0.4"/>
+          <rect x="716" y="0" width="150" height="18" fill="rgba(90,167,240,0.07)"/>
+          <rect x="876" y="0" width="150" height="18" fill="rgba(90,167,240,0.09)"/>
+          <rect x="1036" y="0" width="150" height="18" fill="rgba(224,82,82,0.14)"/>
+          <line x1="1104" y1="2" x2="1104" y2="16" stroke="var(--drop)" stroke-width="2" class="blink"/>
+          <rect x="1196" y="0" width="150" height="18" fill="rgba(154,161,173,0.05)"/>
+        </g>
+      </g>
+    </svg>
+  </div>
+
+  <div class="legend">
+    <span class="k">cluster = a lane · route = a boundary, stamped OBSERVED / QUIET / UNOBSERVED</span>
+    <span class="k">moving light = traffic observed now · port chips = what policy admits</span>
+    <span class="k" style="color:var(--drop)">red arc = the unplanned crossing, cut where the default drop kills it</span>
+    <span class="k">click any host → reach</span>
+  </div>
+</section>
+
+<!-- ============ SCENE 3 : REACH — THE MAP, RECENTRED ============ -->
+<section class="scene" id="s3">
+  <div class="scene-tag">Scene 3 — reach. The same map, recentred on one host: what can THIS thing talk to? Every node is a lens; click one and the question moves.</div>
+  <div class="bar">
+    <span class="wm">MIKRO<em>VIEW</em></span>
+    <h1>Reach <span class="here">· cam-porch</span></h1>
+    <span class="sub">map ▸ reach — <b>◂ back to the map</b></span>
+    <span class="nav"><span class="nv">FALL</span><span class="nv on">MAP</span><span class="nv">STREAM</span><span class="nv">FLAGS</span><span class="nv">SETTINGS</span></span>
+  </div>
+  <p class="howto"><b>How to read this:</b> the centred host's world arranges around it. Inside the orbit are its lane-mates — no rule needed. Every strand crossing the ring is judged per direction: <b style="color:var(--ok)">green passes</b>, with the ports policy admits; <b style="color:var(--drop)">a red stop bar is a direction that dies at the orbit</b> — pulsing where it is being knocked right now. One-way rules are visible, not implied. <b>Click any node to recentre the question on it.</b></p>
+
+  <div class="board">
+    <svg viewBox="0 0 1360 600" role="img"
+         aria-label="The reach view centred on cam-porch: an orbit holds its IoT lane-mates; green strands pass out to the WAN and to the DNS server with their ports; red stop bars kill the strands toward the NAS and the desktop at the ring, the NAS one pulsing with live knocks; one green strand passes inward from tom-desktop on the RTSP port. The NAS node carries a recentre hint. A compose dock drafts the RouterOS rule for what is being observed.">
+      <!-- ripple rings -->
+      <g fill="none" stroke="var(--grid-2)">
+        <circle cx="620" cy="300" r="128"/>
+        <circle cx="620" cy="300" r="180" opacity="0.5" stroke-dasharray="2 8"/>
+        <circle cx="620" cy="300" r="232" opacity="0.25" stroke-dasharray="2 12"/>
+      </g>
+      <text class="anno" x="620" y="446" text-anchor="middle">the orbit is the lane: inside it, no rule is needed — every crossing is judged, per direction</text>
+
+      <!-- centre: cam-porch -->
+      <g>
+        <circle cx="620" cy="300" r="34" fill="var(--panel)" stroke="var(--drop)" stroke-width="1.6"/>
+        <circle cx="620" cy="300" r="34" fill="none" stroke="var(--drop)" class="halo"/>
+        <text class="hlab2" x="620" y="297" text-anchor="middle" style="fill:var(--drop)">cam-porch</text>
+        <text class="hip" x="620" y="311" text-anchor="middle">10.0.20.31 · iot</text>
+      </g>
+      <!-- lane-mates inside the ring -->
+      <g>
+        <circle cx="540" cy="228" r="20" fill="var(--panel)" stroke="var(--grid-2)"/>
+        <text class="hip" x="540" y="225" text-anchor="middle" style="fill:var(--ink-2)">hue-</text><text class="hip" x="540" y="236" text-anchor="middle" style="fill:var(--ink-2)">bridge</text>
+        <circle cx="706" cy="368" r="20" fill="var(--panel)" stroke="var(--grid-2)"/>
+        <text class="hip" x="706" y="365" text-anchor="middle" style="fill:var(--ink-2)">therm-</text><text class="hip" x="706" y="376" text-anchor="middle" style="fill:var(--ink-2)">lounge</text>
+        <text class="anno" x="540" y="264" text-anchor="middle">lane-mates — nothing observed</text>
+      </g>
+
+      <!-- OUT ✓ to WAN -->
+      <g>
+        <rect class="host" x="1060" y="96" width="150" height="40" rx="8"/>
+        <text class="hlab2" x="1135" y="113" text-anchor="middle">WAN · deep space</text>
+        <text class="hip" x="1135" y="127" text-anchor="middle">the outside</text>
+        <line class="edge-live flow" x1="652" y1="282" x2="1066" y2="128" style="stroke:var(--ok)"/>
+        <g transform="translate(800 216)"><rect class="portchip" x="-2" y="-9" width="188" height="14" rx="7"/><text class="portchip-t" x="4" y="2">out ✓ :443 https · :123 ntp · via iot-out</text></g>
+      </g>
+      <!-- OUT ✓ to pihole -->
+      <g>
+        <rect class="host" x="1010" y="420" width="100" height="40" rx="8" />
+        <text class="hlab2" x="1060" y="437" text-anchor="middle">pihole</text>
+        <text class="hip" x="1060" y="451" text-anchor="middle">10.0.40.11 · srv</text>
+        <line class="edge-live flow" x1="652" y1="316" x2="1012" y2="432" style="stroke:var(--ok)"/>
+        <g transform="translate(802 396)"><rect class="portchip" x="-2" y="-9" width="140" height="14" rx="7"/><text class="portchip-t" x="4" y="2">out ✓ :53 dns · metronomic</text></g>
+      </g>
+      <!-- OUT ✗ to nas — dies at the ring, knocking NOW -->
+      <g>
+        <rect class="host" x="240" y="112" width="100" height="40" rx="8"/>
+        <text class="hlab2" x="290" y="129" text-anchor="middle">nas</text>
+        <text class="hip" x="290" y="143" text-anchor="middle">10.0.40.10 · srv</text>
+        <line x1="598" y1="272" x2="524" y2="222" stroke="var(--drop)" stroke-width="1.8" stroke-dasharray="6 6"/>
+        <line x1="512" y1="204" x2="530" y2="234" stroke="var(--drop)" stroke-width="3" class="nowpulse"/>
+        <line x1="516" y1="216" x2="344" y2="150" stroke="var(--grid-2)" stroke-width="1.2" stroke-dasharray="2 8"/>
+        <g transform="translate(370 186)"><rect class="portchip" x="-2" y="-9" width="216" height="14" rx="7" stroke="rgba(224,82,82,0.5)"/><text class="portchip-t" x="4" y="2" style="fill:var(--drop)">out ✗ :445 :139 — knocking NOW · ×14 · default drop</text></g>
+        <!-- recentre affordance -->
+        <circle cx="290" cy="132" r="30" fill="none" stroke="var(--theme)" stroke-dasharray="4 5"/>
+        <text class="anno" x="290" y="86" text-anchor="middle" style="fill:var(--theme); font-weight:700">⤾ click: what can nas reach?</text>
+      </g>
+      <!-- OUT ✗ to tom-desktop / IN ✓ rtsp -->
+      <g>
+        <rect class="host" x="200" y="420" width="128" height="40" rx="8"/>
+        <text class="hlab2" x="264" y="437" text-anchor="middle">tom-desktop</text>
+        <text class="hip" x="264" y="451" text-anchor="middle">10.0.10.21 · lan</text>
+        <line x1="592" y1="326" x2="524" y2="360" stroke="var(--drop)" stroke-width="1.8" stroke-dasharray="6 6"/>
+        <line x1="514" y1="344" x2="530" y2="376" stroke="var(--drop)" stroke-width="3"/>
+        <text class="anno" x="452" y="404" text-anchor="end" style="fill:var(--drop)">out ✗ — one knock at 14:01:43, dropped</text>
+        <line class="edge-live flow" x1="330" y1="436" x2="588 " y2="318" style="stroke:var(--ok)"/>
+        <g transform="translate(360 380)"><rect class="portchip" x="-2" y="-9" width="196" height="14" rx="7"/><text class="portchip-t" x="4" y="2">in ✓ :554 rtsp — he watches the camera;</text></g>
+        <text class="anno" x="364" y="418">it cannot look back — the strands are not symmetric</text>
+      </g>
+
+      <!-- compose dock -->
+      <g>
+        <rect x="960" y="500" width="386" height="84" rx="9" fill="var(--panel)" stroke="var(--grid-2)"/>
+        <text class="chip" x="976" y="522" style="fill:var(--theme)">REACH &amp; COMPOSE — drafted from what you just watched</text>
+        <text class="anno" x="976" y="540" style="fill:var(--ink-2); font-family:var(--mono)">/ip firewall filter add chain=forward src-address=10.0.20.31</text>
+        <text class="anno" x="976" y="552" style="fill:var(--ink-2); font-family:var(--mono)">  dst-address=10.0.40.10 protocol=tcp dst-port=445,139</text>
+        <text class="anno" x="976" y="564" style="fill:var(--ink-2); font-family:var(--mono)">  action=drop log=yes log-prefix="cam-nas-smb" place-before=41</text>
+        <text class="anno" x="976" y="578" style="fill:var(--ink-3)">print it and run it yourself — mikroview never touches the router</text>
+      </g>
+      <text class="anno" x="20" y="580">every node is a lens: recentre and the strands redraw for ITS question — devices, directions, ports</text>
+    </svg>
+  </div>
+
+  <div class="legend">
+    <span class="k" style="color:var(--ok)">green beam = may pass, with its ports · motes = talking now</span>
+    <span class="k" style="color:var(--drop)">stop bar = dies at the orbit · pulsing = being knocked right now</span>
+    <span class="k">in and out are judged separately — asymmetry is visible</span>
+    <span class="k" style="color:var(--theme)">⤾ any node recentres the view</span>
+  </div>
+</section>
+
+<!-- ============ SCENE 4 : THE STREAM — COLUMNS THAT ALIGN ============ -->
+<section class="scene" id="s4">
+  <div class="scene-tag">Scene 4 — the stream. The full live view, columns squared: names under names, addresses under addresses, ports under ports.</div>
+  <div class="bar">
+    <span class="wm">MIKRO<em>VIEW</em></span>
+    <h1>The stream <span class="here">· live</span></h1>
+    <span class="sub">rb5009 · <b>41 rules</b> 14:01 · tom (admin)</span>
+    <span class="nav"><span class="nv">FALL</span><span class="nv">MAP</span><span class="nv on">STREAM</span><span class="nv">FLAGS</span><span class="nv">SETTINGS</span></span>
+  </div>
+  <p class="howto"><b>What changed:</b> every field lives in its own column with a fixed edge — hostname and address are separate columns, protocol and port are separate columns, ports and times are right-aligned tabular numerals. Scan down any column and the same kind of fact is always under your eye. The theme stays out of the table: working surfaces are plain in every theme.</p>
+
+  <div class="openrow">
+    <div class="filterbar">
+      <div class="ff"><label>Source — name, IP or CIDR</label><input value=""></div>
+      <button class="swap" aria-label="Swap source and destination filters">⇄</button>
+      <div class="ff"><label>Destination — name, IP or CIDR</label><input value=""></div>
+      <div class="ff"><label>Chain</label><select><option>all</option></select></div>
+      <div class="ff small"><label>Port — number or service</label><input></div>
+      <div class="ff small"><label>Rule</label><input></div>
+      <div class="fright"><button class="btn on">Autoscroll</button><button class="btn">Group</button><button class="btn">Presets ▾</button></div>
+    </div>
+    <table class="stream">
+      <colgroup>
+        <col class="c-time"><col class="c-chain"><col class="c-act">
+        <col class="c-shost"><col class="c-sip"><col class="c-arr">
+        <col class="c-dhost"><col class="c-dip">
+        <col class="c-proto"><col class="c-port"><col class="c-rule">
+      </colgroup>
+      <thead><tr>
+        <th class="num">time</th><th class="sep">chain</th><th class="sep">action</th>
+        <th class="sep">source</th><th class="num">address</th><th></th>
+        <th class="sep">destination</th><th class="num">address</th>
+        <th class="sep">proto</th><th class="num">port</th><th class="sep">rule</th>
+      </tr></thead>
+      <tbody>
+        <tr><td class="t num">14:02:11.482</td><td class="chain sep">forward</td><td class="sep"><span class="act drop">DROP</span></td>
+          <td class="sep"><span class="ld" style="background:var(--iot)"></span><span class="hostc">cam-porch</span></td><td class="ipc num">10.0.20.31</td><td class="arrow">→</td>
+          <td class="sep"><span class="ld" style="background:var(--srv)"></span><span class="hostc">nas</span></td><td class="ipc num">10.0.40.10</td>
+          <td class="sep">tcp</td><td class="num">445<span class="cc">smb</span></td><td class="rule-c sep">iot-to-lan-drop</td></tr>
+        <tr><td class="t num">14:02:11.401</td><td class="chain sep">srcnat</td><td class="sep"><span class="act nat">NAT</span></td>
+          <td class="sep"><span class="ld" style="background:var(--lan)"></span><span class="hostc">phone-tom</span></td><td class="ipc num">10.0.10.32</td><td class="arrow">→</td>
+          <td class="sep"><span class="ld" style="background:var(--ink-3)"></span><span class="hostc">quic outbound</span></td><td class="ipc num">142.250.74.14</td>
+          <td class="sep">udp</td><td class="num">443<span class="cc">quic</span></td><td class="rule-c sep">masquerade</td></tr>
+        <tr><td class="t num">14:02:10.907</td><td class="chain sep">input</td><td class="sep"><span class="act drop">DROP</span></td>
+          <td class="sep"><span class="ld" style="background:var(--ink-3)"></span><span class="hostc">—</span></td><td class="ipc num">185.220.101.34</td><td class="arrow">→</td>
+          <td class="sep"><span class="ld" style="background:var(--ink-3)"></span><span class="hostc">rb5009</span></td><td class="ipc num">203.0.113.7</td>
+          <td class="sep">tcp</td><td class="num">8291<span class="cc">winbox</span></td><td class="rule-c sep">wan-in-drop</td></tr>
+        <tr><td class="t num">14:02:10.712</td><td class="chain sep">forward</td><td class="sep"><span class="act acc">ACC</span></td>
+          <td class="sep"><span class="ld" style="background:var(--lan)"></span><span class="hostc">tom-desktop</span></td><td class="ipc num">10.0.10.21</td><td class="arrow">→</td>
+          <td class="sep"><span class="ld" style="background:var(--srv)"></span><span class="hostc">nas</span></td><td class="ipc num">10.0.40.10</td>
+          <td class="sep">tcp</td><td class="num">5001<span class="cc">syno</span></td><td class="rule-c sep">lan-to-srv</td></tr>
+        <tr><td class="t num">14:02:10.598</td><td class="chain sep">forward</td><td class="sep"><span class="act acc">ACC</span></td>
+          <td class="sep"><span class="ld" style="background:var(--iot)"></span><span class="hostc">hue-bridge</span></td><td class="ipc num">10.0.20.14</td><td class="arrow">→</td>
+          <td class="sep"><span class="ld" style="background:var(--srv)"></span><span class="hostc">pihole</span></td><td class="ipc num">10.0.40.11</td>
+          <td class="sep">udp</td><td class="num">53<span class="cc">dns</span></td><td class="rule-c sep">iot-to-dns</td></tr>
+        <tr><td class="t num">14:01:58.104</td><td class="chain sep">forward</td><td class="sep"><span class="act drop">DROP</span></td>
+          <td class="sep"><span class="ld" style="background:var(--iot)"></span><span class="hostc">cam-porch</span></td><td class="ipc num">10.0.20.31</td><td class="arrow">→</td>
+          <td class="sep"><span class="ld" style="background:var(--srv)"></span><span class="hostc">nas</span></td><td class="ipc num">10.0.40.10</td>
+          <td class="sep">tcp</td><td class="num">445<span class="cc">smb</span></td><td class="rule-c sep">iot-to-lan-drop</td></tr>
+        <tr><td class="t num">14:01:43.771</td><td class="chain sep">forward</td><td class="sep"><span class="act drop">DROP</span></td>
+          <td class="sep"><span class="ld" style="background:var(--iot)"></span><span class="hostc">cam-porch</span></td><td class="ipc num">10.0.20.31</td><td class="arrow">→</td>
+          <td class="sep"><span class="ld" style="background:var(--lan)"></span><span class="hostc">tom-desktop</span></td><td class="ipc num">10.0.10.21</td>
+          <td class="sep">tcp</td><td class="num">445<span class="cc">smb</span></td><td class="rule-c sep">iot-to-lan-drop</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="legend">
+    <span class="k">hostname column and address column are separate — addresses align as tabular numerals</span>
+    <span class="k">proto and port are separate — ports right-align under ports</span>
+    <span class="k">action badges are fixed-width, so the eye's column never wobbles</span>
+  </div>
+
+  <div class="vocab">
+    <b>The space tongue</b> — ambience only; operational language never varies by theme (DROP is always DROP, a watch is a watch):
+    <br>
+    <span class="pair">landing = <b>the starfall</b></span>
+    <span class="pair">steady talker = <b>a trail</b></span>
+    <span class="pair">burst = <b>a shower</b></span>
+    <span class="pair">unlogged = <b>unobserved</b></span>
+    <span class="pair">WAN = <b>deep space</b></span>
+    <span class="pair">router = <b>the station</b></span>
+    <span class="pair">(in birdcage, a canary = <b>a black hole</b> — naming lives there, no honeypot logic here)</span>
+  </div>
+</section>
+
+</body>
+</html>

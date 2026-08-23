@@ -1,0 +1,392 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mikroview — Direction L: Lattice</title>
+<style>
+  /* ============================================================
+     DIRECTION L — "LATTICE"
+     The who-may-talk-to-whom matrix. Sources down the side,
+     destinations across the top; every cell is one DIRECTED
+     boundary. The cell's face is policy — open with its ports,
+     closed, waiting, or dark — and reality pulses on top of it.
+
+     This IS a topography: the complete one. A node map shows the
+     edges someone chose to draw; the lattice shows every possible
+     conversation, including the ones nobody thought about — which
+     is where trouble lives. The unplanned flow is a closed cell
+     that is knocking, burning red in a grid of quiet ones. The
+     asymmetry of one-way rules is just… the matrix not being
+     symmetric, visible at a glance.
+
+     Click an open cell → that boundary's stream. Click a closed
+     cell → compose the rule. The grid is the map, the audit and
+     the composer in one surface.
+     ============================================================ */
+  :root {
+    --deep: #0b0f13;
+    --cell: #11161c;
+    --cell-open: #0f1a17;
+    --hair: rgba(160, 200, 220, 0.12);
+    --hair-2: rgba(160, 200, 220, 0.26);
+    --ink: #e9eef2;
+    --ink-2: #98a5b0;
+    --ink-3: #56636e;
+    --steel: #6fb3d2;
+    --lan: #3987e5; --srv: #199e70; --iot: #c98500; --guest: #d95926;
+    --ok: #3fae5a;
+    --alarm: #ff5470;
+    --wait: #c9a54a;
+    --nat: #a08df0;
+    --sans: system-ui, -apple-system, "Segoe UI", sans-serif;
+    --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  }
+  * { box-sizing: border-box; margin: 0; }
+  html { scroll-behavior: smooth; }
+  body { background: var(--deep); color: var(--ink); font: 13.5px/1.5 var(--sans); -webkit-font-smoothing: antialiased; }
+  .concept {
+    position: sticky; top: 0; z-index: 90; display: flex; gap: 16px; align-items: baseline;
+    padding: 8px 20px; background: #070a0d; border-bottom: 1px solid var(--hair);
+    font-size: 11px; color: var(--ink-3);
+  }
+  .concept b { color: var(--steel); letter-spacing: 0.1em; }
+  .concept a { color: var(--ink-2); text-decoration: none; margin-left: 12px; }
+
+  .scene { min-height: 100vh; position: relative; border-bottom: 1px solid var(--hair-2); padding-bottom: 116px; }
+  .scene-tag { font-size: 10.5px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--ink-3); padding: 13px 40px 0; }
+
+  .bar { display: flex; align-items: baseline; gap: 20px; padding: 16px 40px 10px; }
+  .bar .wm { font-size: 12px; font-weight: 800; letter-spacing: 0.22em; color: var(--ink-3); }
+  .bar .wm em { color: var(--steel); font-style: normal; }
+  .bar h1 { font-size: 20px; font-weight: 600; }
+  .bar h1 .here { color: var(--steel); }
+  .bar .sub { font-size: 11px; color: var(--ink-3); }
+  .bar .sub b { color: var(--ink-2); }
+  .bar .tally { margin-left: auto; font-size: 11.5px; color: var(--ink-2); display: flex; gap: 14px; }
+  .bar .tally b { font-weight: 800; }
+
+  .gridwrap { padding: 6px 40px 0; }
+  table.lat { border-collapse: separate; border-spacing: 5px; width: 100%; table-layout: fixed; }
+  .lat th { font-size: 11px; font-weight: 650; color: var(--ink-2); padding: 4px 6px; text-align: left; }
+  .lat th .d { display: inline-block; width: 7px; height: 7px; border-radius: 50%; margin-right: 6px; }
+  .lat th .cid { display: block; font: 9px var(--mono); color: var(--ink-3); font-weight: 400; }
+  .lat th.corner { font-size: 9.5px; color: var(--ink-3); font-weight: 600; }
+  .lat th.corner .to { color: var(--steel); }
+  .lat td {
+    background: var(--cell); border: 1px solid var(--hair); border-radius: 8px;
+    height: 86px; padding: 8px 10px; vertical-align: top; position: relative; overflow: hidden;
+  }
+  .c-state { font-size: 8.5px; font-weight: 800; letter-spacing: 0.09em; }
+  .s-open { color: var(--ok); }
+  .s-shut { color: var(--ink-3); }
+  .s-knock { color: var(--alarm); }
+  .s-wait { color: var(--wait); }
+  .s-dark { color: var(--alarm); }
+  .s-free { color: var(--ink-3); }
+  .c-ports { font: 10px var(--mono); color: var(--ink-2); margin-top: 4px; line-height: 1.6; }
+  .c-rate { position: absolute; right: 9px; top: 8px; font: 9.5px var(--mono); color: var(--ink-3); }
+  .c-rate.hot { color: var(--ink-2); }
+  .c-note { position: absolute; left: 10px; bottom: 7px; font-size: 9px; color: var(--ink-3); }
+  td.open { background: var(--cell-open); border-color: rgba(63,174,90,0.35); }
+  td.free { background: rgba(17, 22, 28, 0.5); border-style: dashed; }
+  td.na { background: transparent; border-color: transparent; }
+  td.na::after { content: ""; }
+  td.knock {
+    background: #1b0f14; border-color: var(--alarm);
+    box-shadow: 0 0 0 1px rgba(255,84,112,0.35), 0 0 18px rgba(255,84,112,0.18);
+    animation: cellpulse 1.8s ease-in-out infinite;
+  }
+  @keyframes cellpulse { 0%,100% { box-shadow: 0 0 0 1px rgba(255,84,112,0.35), 0 0 18px rgba(255,84,112,0.14); } 50% { box-shadow: 0 0 0 2px rgba(255,84,112,0.6), 0 0 26px rgba(255,84,112,0.3); } }
+  td.wait { border-color: rgba(201,165,74,0.5); border-style: dashed; }
+  td.dark {
+    background: repeating-linear-gradient(45deg, #11161c 0 7px, #161c23 7px 9px);
+    border-color: rgba(255,84,112,0.4);
+  }
+  .pulse { display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: var(--ok); margin-right: 5px; animation: pulse 2s ease-in-out infinite; }
+  @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.25; } }
+  .pulse.red { background: var(--alarm); }
+
+  .legend { display: flex; gap: 20px; padding: 12px 40px 0; font-size: 10.5px; color: var(--ink-2); flex-wrap: wrap; }
+  .legend .k { display: inline-flex; align-items: center; gap: 7px; }
+  .sw { width: 14px; height: 10px; border-radius: 3px; border: 1px solid var(--hair-2); display: inline-block; }
+
+  .ticker {
+    position: absolute; left: 0; right: 0; bottom: 0; z-index: 8;
+    background: #070a0d; border-top: 1px solid var(--hair-2); padding: 8px 40px 10px;
+  }
+  .ticker .h { display: flex; align-items: baseline; gap: 14px; margin-bottom: 5px; }
+  .ticker .lab { font-size: 9.5px; letter-spacing: 0.13em; text-transform: uppercase; color: var(--ink-3); font-weight: 650; }
+  .ticker .lab i { display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: var(--ok); margin-right: 7px; animation: pulse 2s ease-in-out infinite; }
+  .ticker .lift { margin-left: auto; font-size: 11px; color: var(--steel); }
+  .trow { display: flex; gap: 14px; font: 11px var(--mono); color: var(--ink-2); padding: 2.5px 0; white-space: nowrap; overflow: hidden; }
+  .trow .t { color: var(--ink-3); }
+  .trow .drop { color: var(--alarm); font-weight: 700; } .trow .acc { color: var(--ok); font-weight: 700; } .trow .nat { color: var(--nat); font-weight: 700; }
+
+  /* scene 2: a cell opens */
+  .cellhead { margin: 14px 40px 0; padding: 14px 18px; background: var(--cell); border: 1px solid var(--alarm); border-radius: 10px; display: flex; align-items: baseline; gap: 16px; }
+  .cellhead h2 { font-size: 16px; font-weight: 750; }
+  .cellhead h2 .to { color: var(--ink-3); font-weight: 300; padding: 0 6px; }
+  .stamp { font-size: 9.5px; font-weight: 800; letter-spacing: 0.12em; color: var(--alarm); border: 1.5px solid var(--alarm); border-radius: 4px; padding: 2px 8px; transform: rotate(-1deg); }
+  .cellhead .meta { font-size: 11px; color: var(--ink-3); }
+  .cellhead .meta b { color: var(--ink-2); }
+  .cellhead .close { margin-left: auto; font-size: 11px; color: var(--steel); }
+  .livewrap { margin: 12px 40px 0; }
+  .filterbar { display: flex; flex-wrap: wrap; gap: 10px; align-items: flex-end; padding: 10px 0; border-bottom: 1px solid var(--hair-2); }
+  .ff { display: flex; flex-direction: column; gap: 3px; }
+  .ff label { font-size: 9px; letter-spacing: 0.11em; text-transform: uppercase; color: var(--ink-3); }
+  .ff input, .ff select { background: #080b0e; border: 1px solid var(--hair-2); border-radius: 6px;
+    color: var(--ink); font: 12px var(--mono); padding: 6px 10px; width: 165px; outline: none; }
+  .ff select { width: 115px; }
+  .fright { margin-left: auto; display: flex; gap: 8px; }
+  .btn { background: transparent; border: 1px solid var(--hair-2); color: var(--ink-2); font: 11.5px var(--sans); padding: 6px 13px; border-radius: 6px; cursor: default; }
+  .btn.on { color: var(--steel); border-color: var(--steel); }
+  table.stream { width: 100%; border-collapse: collapse; }
+  .stream th { text-align: left; font-size: 9px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--ink-3); font-weight: 650; padding: 9px 10px 7px; border-bottom: 1px solid var(--hair-2); }
+  .stream td { padding: 6px 10px; border-bottom: 1px solid var(--hair); font-family: var(--mono); font-size: 12px; white-space: nowrap; height: auto; background: none; border-radius: 0; }
+  .t2 { color: var(--ink-3); font-size: 11px; }
+  .act2 { font-size: 10px; font-weight: 700; } .act2.drop { color: var(--alarm); }
+  .host { color: var(--ink); } .ip { color: var(--ink-3); font-size: 11px; margin-left: 5px; }
+  .arrow { color: var(--ink-3); } .rule-c { color: var(--ink-2); font-size: 11.5px; } .cc { font-size: 10px; color: var(--ink-3); }
+
+  /* scene 3: policy vs reality */
+  .duo { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin: 14px 40px 0; }
+  .pane { border: 1px solid var(--hair); border-radius: 10px; padding: 12px 14px; }
+  .pane h3 { font-size: 10px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--ink-3); font-weight: 800; margin-bottom: 8px; }
+  .pane h3 b { color: var(--ink-2); }
+  .mini { border-collapse: separate; border-spacing: 3px; width: 100%; table-layout: fixed; }
+  .mini th { font-size: 8.5px; color: var(--ink-3); font-weight: 600; padding: 2px; text-align: left; }
+  .mini td { height: 40px; border-radius: 5px; background: var(--cell); border: 1px solid var(--hair); font: 8.5px var(--mono); color: var(--ink-3); padding: 4px 6px; vertical-align: top; }
+  .mini td.o { background: var(--cell-open); border-color: rgba(63,174,90,0.35); color: var(--ok); }
+  .mini td.k { background: #1b0f14; border-color: var(--alarm); color: var(--alarm); font-weight: 700; }
+  .mini td.w { border-color: rgba(201,165,74,0.5); border-style: dashed; color: var(--wait); }
+  .mini td.dk { background: repeating-linear-gradient(45deg, #11161c 0 6px, #161c23 6px 8px); border-color: rgba(255,84,112,0.4); color: var(--alarm); }
+  .mini td.f { border-style: dashed; }
+  .mini td.na { background: transparent; border-color: transparent; }
+  .diffs { margin: 18px 40px 0; border: 1px solid var(--hair); border-radius: 10px; padding: 14px 18px; }
+  .diffs h3 { font-size: 10px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--ink-3); font-weight: 800; margin-bottom: 8px; }
+  .drow { display: grid; grid-template-columns: 170px 1fr auto; gap: 14px; padding: 8px 0; border-top: 1px solid var(--hair); font-size: 12.5px; align-items: baseline; }
+  .drow:first-of-type { border-top: 0; }
+  .drow b { font-family: var(--mono); font-weight: 650; }
+  .drow .why { color: var(--ink-2); }
+  .drow .act { font-size: 11px; color: var(--steel); white-space: nowrap; }
+  .drow.bad b { color: var(--alarm); }
+  .drow.warn b { color: var(--wait); }
+
+  @media (prefers-reduced-motion: reduce) { * { animation: none !important; } }
+</style>
+</head>
+<body>
+
+<div class="concept">
+  <b>DIRECTION L — LATTICE</b>
+  <span>the who-may-talk-to-whom matrix · every cell is a directed boundary · policy is the face, reality pulses on it · the complete topography</span>
+  <span style="margin-left:auto"><a href="#s1">1 the lattice</a><a href="#s2">2 a cell opens</a><a href="#s3">3 policy vs reality</a></span>
+</div>
+
+<!-- ============ SCENE 1 : THE LATTICE ============ -->
+<section class="scene" id="s1">
+  <div class="scene-tag">Scene 1 — the lattice. Every possible conversation on one screen, including the ones nobody thought about.</div>
+  <div class="bar">
+    <span class="wm">MIKRO<em>VIEW</em></span>
+    <h1>The lattice <span class="here">· live</span></h1>
+    <span class="sub">rb5009 · <b>41 rules</b> compiled into <b>30 directed boundaries</b></span>
+    <span class="tally"><span><b style="color:var(--ok)">9</b> open</span><span><b style="color:var(--ink-2)">17</b> shut &amp; quiet</span><span><b style="color:var(--alarm)">1</b> shut &amp; knocking</span><span><b style="color:var(--wait)">1</b> open &amp; waiting</span><span><b style="color:var(--alarm)">1</b> dark</span></span>
+  </div>
+
+  <div class="gridwrap">
+    <table class="lat" role="grid" aria-label="Reachability matrix: sources down the side, destinations across the top. Each cell shows whether that direction is open (with its ports), shut, waiting, or dark, with live traffic pulsing on open cells. The IoT-to-LAN cell is shut but knocking, highlighted red.">
+      <tr>
+        <th class="corner">from ↓ <span class="to">to →</span></th>
+        <th><span class="d" style="background:#8ea0b5"></span>Internet</th>
+        <th><span class="d" style="background:var(--lan)"></span>LAN<span class="cid">10.0.10.0/24</span></th>
+        <th><span class="d" style="background:var(--srv)"></span>Servers<span class="cid">10.0.40.0/24</span></th>
+        <th><span class="d" style="background:var(--iot)"></span>IoT<span class="cid">10.0.20.0/24</span></th>
+        <th><span class="d" style="background:var(--guest)"></span>Guest<span class="cid">10.0.30.0/24</span></th>
+        <th><span class="d" style="background:#9aa4cf"></span>WG<span class="cid">10.99.0.0/24</span></th>
+      </tr>
+      <tr>
+        <th><span class="d" style="background:#8ea0b5"></span>Internet</th>
+        <td class="na"></td>
+        <td><span class="c-state s-shut">SHUT</span><span class="c-rate">·</span><div class="c-ports">nothing begins from outside</div></td>
+        <td class="open"><span class="c-state s-open"><span class="pulse"></span>OPEN</span><span class="c-rate hot">2.1/s</span><div class="c-ports">:443 :853 → nas <i style="font-style:normal; color:var(--ink-3)">dstnat</i></div></td>
+        <td><span class="c-state s-shut">SHUT</span><div class="c-ports">no camera answers outside</div></td>
+        <td><span class="c-state s-shut">SHUT</span></td>
+        <td class="open"><span class="c-state s-open"><span class="pulse"></span>OPEN</span><span class="c-rate">0.1/s</span><div class="c-ports">:51820 wireguard</div></td>
+      </tr>
+      <tr>
+        <th><span class="d" style="background:var(--lan)"></span>LAN</th>
+        <td class="open"><span class="c-state s-open"><span class="pulse"></span>OPEN</span><span class="c-rate hot">14/s</span><div class="c-ports">any — the household's door</div><span class="c-note">watched ✓ shape holds</span></td>
+        <td class="free"><span class="c-state s-free">SAME LANE</span><div class="c-ports">free talk — no rule</div></td>
+        <td class="open"><span class="c-state s-open"><span class="pulse"></span>OPEN</span><span class="c-rate">5/s</span><div class="c-ports">:445 :5001 :53</div></td>
+        <td class="open"><span class="c-state s-open"><span class="pulse"></span>OPEN</span><span class="c-rate">0.2/s</span><div class="c-ports">:8554 cam · one-way — see its twin below</div></td>
+        <td><span class="c-state s-shut">SHUT</span></td>
+        <td><span class="c-state s-shut">SHUT</span></td>
+      </tr>
+      <tr>
+        <th><span class="d" style="background:var(--srv)"></span>Servers</th>
+        <td class="open"><span class="c-state s-open"><span class="pulse"></span>OPEN</span><span class="c-rate">1.8/s</span><div class="c-ports">updates · relays</div></td>
+        <td><span class="c-state s-shut">SHUT</span><div class="c-ports">replies only</div></td>
+        <td class="free"><span class="c-state s-free">SAME LANE</span></td>
+        <td><span class="c-state s-shut">SHUT</span></td>
+        <td><span class="c-state s-shut">SHUT</span></td>
+        <td><span class="c-state s-shut">SHUT</span></td>
+      </tr>
+      <tr>
+        <th><span class="d" style="background:var(--iot)"></span>IoT</th>
+        <td class="open"><span class="c-state s-open"><span class="pulse"></span>OPEN</span><span class="c-rate">1.2/s</span><div class="c-ports">:443 :123 only</div><span class="c-note" style="color:var(--alarm)">watch broken 13:52</span></td>
+        <td class="knock"><span class="c-state s-knock"><span class="pulse red"></span>SHUT · KNOCKING</span><span class="c-rate" style="color:var(--alarm)">14×</span><div class="c-ports" style="color:var(--alarm)">cam-porch → :445 :139</div><span class="c-note" style="color:var(--alarm)">UNPLANNED · open the cell ▸</span></td>
+        <td class="open"><span class="c-state s-open"><span class="pulse"></span>OPEN</span><span class="c-rate">0.4/s</span><div class="c-ports">:53 → pihole · :554 → nvr</div></td>
+        <td class="free"><span class="c-state s-free">SAME LANE</span></td>
+        <td><span class="c-state s-shut">SHUT</span></td>
+        <td><span class="c-state s-shut">SHUT</span></td>
+      </tr>
+      <tr>
+        <th><span class="d" style="background:var(--guest)"></span>Guest</th>
+        <td class="dark"><span class="c-state s-dark">DARK</span><span class="c-rate">?</span><div class="c-ports" style="color:var(--ink-2)">carries traffic · unlogged</div><span class="c-note" style="color:var(--alarm)">no pen on this cell · light it ▸</span></td>
+        <td><span class="c-state s-shut">SHUT</span><span class="c-rate">0.1/s ✕</span><div class="c-ports">guest-isolation holds</div></td>
+        <td><span class="c-state s-shut">SHUT</span></td>
+        <td><span class="c-state s-shut">SHUT</span></td>
+        <td class="free"><span class="c-state s-free">SAME LANE</span></td>
+        <td><span class="c-state s-shut">SHUT</span></td>
+      </tr>
+      <tr>
+        <th><span class="d" style="background:#9aa4cf"></span>WG</th>
+        <td><span class="c-state s-shut">SHUT</span></td>
+        <td class="open"><span class="c-state s-open"><span class="pulse"></span>OPEN</span><span class="c-rate">0.1/s</span><div class="c-ports">any — the keyholder's door</div></td>
+        <td class="wait"><span class="c-state s-wait">OPEN · WAITING</span><span class="c-rate">0 · 30d</span><div class="c-ports">rule #6 holds a door nobody uses</div><span class="c-note" style="color:var(--wait)">retire it? ▸</span></td>
+        <td><span class="c-state s-shut">SHUT</span></td>
+        <td><span class="c-state s-shut">SHUT</span></td>
+        <td class="free"><span class="c-state s-free">SAME LANE</span></td>
+      </tr>
+    </table>
+  </div>
+
+  <div class="legend">
+    <span class="k"><span class="sw" style="background:var(--cell-open); border-color:rgba(63,174,90,0.4)"></span>open — its ports listed, live rate pulsing</span>
+    <span class="k"><span class="sw"></span>shut &amp; quiet — as it should be</span>
+    <span class="k"><span class="sw" style="border-color:var(--alarm); background:#1b0f14"></span>shut &amp; KNOCKING — the cell to look at</span>
+    <span class="k"><span class="sw" style="border-color:var(--wait); border-style:dashed"></span>open &amp; waiting — a door nobody uses</span>
+    <span class="k"><span class="sw" style="background:repeating-linear-gradient(45deg,#11161c 0 4px,#161c23 4px 6px); border-color:rgba(255,84,112,0.4)"></span>dark — unlogged, unknowable</span>
+    <span class="k" style="color:var(--ink-3)">the matrix isn't symmetric — that's one-way policy, visible</span>
+    <span class="k" style="color:var(--ink-3)">click open → its stream · click shut → compose the rule</span>
+  </div>
+
+  <div class="ticker">
+    <div class="h"><span class="lab"><i></i>The stream · 34/s</span><span class="lift">▲ lift to full live view</span></div>
+    <div class="trow" style="color:var(--ink)"><span class="t">14:02:11.482</span><span class="drop">DROP</span><span>cam-porch → nas :445 smb · iot-to-lan-drop · cell iot→lan</span></div>
+    <div class="trow"><span class="t">14:02:11.407</span><span class="nat">NAT</span><span>phone-tom → 142.250.187.206 :443 quic · cell lan→internet</span></div>
+    <div class="trow"><span class="t">14:02:10.951</span><span class="drop">DROP</span><span>185.220.101.34 DE → rb5009 :8291 · cell internet→rtr</span></div>
+  </div>
+</section>
+
+<!-- ============ SCENE 2 : A CELL OPENS ============ -->
+<section class="scene" id="s2">
+  <div class="scene-tag">Scene 2 — the knocking cell was clicked. Its boundary becomes the full live view.</div>
+  <div class="bar">
+    <span class="wm">MIKRO<em>VIEW</em></span>
+    <h1>iot → lan <span class="here">· cell opened</span></h1>
+    <span class="sub">one cell of thirty · the rest of the lattice is one key away</span>
+  </div>
+
+  <div class="cellhead">
+    <h2>IoT <span class="to">→</span> LAN</h2>
+    <span class="stamp">SHUT · KNOCKING</span>
+    <span class="meta"><b>14 events</b> · all cam-porch · :445 :139 · every one caught by the default drop · first knock 13:52</span>
+    <span class="close">⊞ back to the lattice</span>
+  </div>
+  <div class="livewrap">
+    <div class="filterbar">
+      <div class="ff"><label>Source — name, IP or CIDR</label><input value="10.0.20.0/24"></div>
+      <div class="ff"><label>Destination — name, IP or CIDR</label><input value="10.0.10.0/24"></div>
+      <div class="ff"><label>Chain</label><select><option>forward</option></select></div>
+      <div class="ff"><label>Port — number or service</label><input></div>
+      <div class="ff"><label>Rule</label><input></div>
+      <div class="fright"><button class="btn on">Autoscroll</button><button class="btn">Group</button><button class="btn">Compose the rule ▸</button></div>
+    </div>
+    <table class="stream">
+      <thead><tr><th>time</th><th>action</th><th>source</th><th></th><th>destination</th><th>proto/port</th><th>rule</th></tr></thead>
+      <tbody>
+        <tr><td class="t2">14:02:11.482</td><td><span class="act2 drop">DROP</span></td>
+          <td><span class="host">cam-porch</span><span class="ip">10.0.20.31</span></td><td class="arrow">→</td>
+          <td><span class="host">nas</span><span class="ip">10.0.40.10</span></td>
+          <td>tcp/445 <span class="cc">smb</span></td><td class="rule-c">iot-to-lan-drop</td></tr>
+        <tr><td class="t2">14:01:58.104</td><td><span class="act2 drop">DROP</span></td>
+          <td><span class="host">cam-porch</span><span class="ip">10.0.20.31</span></td><td class="arrow">→</td>
+          <td><span class="host">nas</span><span class="ip">10.0.40.10</span></td>
+          <td>tcp/445 <span class="cc">smb</span></td><td class="rule-c">iot-to-lan-drop</td></tr>
+        <tr><td class="t2">14:01:43.771</td><td><span class="act2 drop">DROP</span></td>
+          <td><span class="host">cam-porch</span><span class="ip">10.0.20.31</span></td><td class="arrow">→</td>
+          <td><span class="host">tom-desktop</span><span class="ip">10.0.10.21</span></td>
+          <td>tcp/445 <span class="cc">smb</span></td><td class="rule-c">iot-to-lan-drop</td></tr>
+        <tr><td class="t2">14:01:29.310</td><td><span class="act2 drop">DROP</span></td>
+          <td><span class="host">cam-porch</span><span class="ip">10.0.20.31</span></td><td class="arrow">→</td>
+          <td><span class="host">nas</span><span class="ip">10.0.40.10</span></td>
+          <td>tcp/139 <span class="cc">netbios</span></td><td class="rule-c">iot-to-lan-drop</td></tr>
+        <tr><td class="t2">14:01:12.089</td><td><span class="act2 drop">DROP</span></td>
+          <td><span class="host">cam-porch</span><span class="ip">10.0.20.31</span></td><td class="arrow">→</td>
+          <td><span class="host">nas</span><span class="ip">10.0.40.10</span></td>
+          <td>tcp/445 <span class="cc">smb</span></td><td class="rule-c">iot-to-lan-drop</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="ticker">
+    <div class="h"><span class="lab"><i></i>The stream · 34/s</span><span class="lift">▲ everything, unfiltered</span></div>
+    <div class="trow" style="color:var(--ink)"><span class="t">14:02:11.482</span><span class="drop">DROP</span><span>cam-porch → nas :445 smb · cell iot→lan</span></div>
+    <div class="trow"><span class="t">14:02:10.951</span><span class="drop">DROP</span><span>185.220.101.34 DE → rb5009 :8291 · cell internet→rtr</span></div>
+  </div>
+</section>
+
+<!-- ============ SCENE 3 : POLICY vs REALITY ============ -->
+<section class="scene" id="s3">
+  <div class="scene-tag">Scene 3 — the same lattice, asked two questions: what did you intend, and what actually happens?</div>
+  <div class="bar">
+    <span class="wm">MIKRO<em>VIEW</em></span>
+    <h1>Policy vs reality <span class="here">· 3 cells disagree</span></h1>
+    <span class="sub">a firewall audit is one glance when intent and observation share a grid</span>
+  </div>
+
+  <div class="duo">
+    <div class="pane">
+      <h3><b>Policy</b> — what the 41 rules intend</h3>
+      <table class="mini">
+        <tr><th></th><th>Int</th><th>LAN</th><th>Srv</th><th>IoT</th><th>Gst</th><th>WG</th></tr>
+        <tr><th>Int</th><td class="na"></td><td>·</td><td class="o">open</td><td>·</td><td>·</td><td class="o">open</td></tr>
+        <tr><th>LAN</th><td class="o">open</td><td class="f">—</td><td class="o">open</td><td class="o">open</td><td>·</td><td>·</td></tr>
+        <tr><th>Srv</th><td class="o">open</td><td>·</td><td class="f">—</td><td>·</td><td>·</td><td>·</td></tr>
+        <tr><th>IoT</th><td class="o">open</td><td>·</td><td class="o">open</td><td class="f">—</td><td>·</td><td>·</td></tr>
+        <tr><th>Gst</th><td class="o">open</td><td>·</td><td>·</td><td>·</td><td class="f">—</td><td>·</td></tr>
+        <tr><th>WG</th><td>·</td><td class="o">open</td><td class="w">open</td><td>·</td><td>·</td><td class="f">—</td></tr>
+      </table>
+    </div>
+    <div class="pane">
+      <h3><b>Reality</b> — what the last 24 h observed</h3>
+      <table class="mini">
+        <tr><th></th><th>Int</th><th>LAN</th><th>Srv</th><th>IoT</th><th>Gst</th><th>WG</th></tr>
+        <tr><th>Int</th><td class="na"></td><td>·</td><td class="o">2.1/s</td><td>·</td><td>·</td><td class="o">0.1/s</td></tr>
+        <tr><th>LAN</th><td class="o">14/s</td><td class="f">—</td><td class="o">5/s</td><td class="o">0.2/s</td><td>·</td><td>·</td></tr>
+        <tr><th>Srv</th><td class="o">1.8/s</td><td>·</td><td class="f">—</td><td>·</td><td>·</td><td>·</td></tr>
+        <tr><th>IoT</th><td class="o">1.2/s</td><td class="k">14× ✕</td><td class="o">0.4/s</td><td class="f">—</td><td>·</td><td>·</td></tr>
+        <tr><th>Gst</th><td class="dk">? dark</td><td>0.1✕</td><td>·</td><td>·</td><td class="f">—</td><td>·</td></tr>
+        <tr><th>WG</th><td>·</td><td class="o">0.1/s</td><td class="w">0 · 30d</td><td>·</td><td>·</td><td class="f">—</td></tr>
+      </table>
+    </div>
+  </div>
+
+  <div class="diffs">
+    <h3>Where intent and observation disagree — the audit, done</h3>
+    <div class="drow bad"><b>iot → lan</b><span class="why">policy says shut; reality is knocking 14×. Nobody intended this conversation — the definition of a finding.</span><span class="act">open the cell ▸ · compose ▸</span></div>
+    <div class="drow bad"><b>guest → internet</b><span class="why">policy says open; reality is unknowable — the boundary is unlogged, so intent can't be audited here at all.</span><span class="act">light the cell ▸</span></div>
+    <div class="drow warn"><b>wg → srv</b><span class="why">policy says open; reality says nobody has used the door in 30 days. Unused permission is quiet risk.</span><span class="act">retire the rule ▸</span></div>
+  </div>
+
+  <div class="ticker">
+    <div class="h"><span class="lab"><i></i>The stream · 34/s</span><span class="lift">▲ lift to full live view</span></div>
+    <div class="trow" style="color:var(--ink)"><span class="t">14:02:11.482</span><span class="drop">DROP</span><span>cam-porch → nas :445 smb · cell iot→lan</span></div>
+    <div class="trow"><span class="t">14:02:11.407</span><span class="nat">NAT</span><span>phone-tom → 142.250.187.206 :443 quic · cell lan→internet</span></div>
+  </div>
+</section>
+
+</body>
+</html>

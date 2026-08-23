@@ -523,19 +523,42 @@ func (s *Server) handleDefinitionsUpdate(w http.ResponseWriter, r *http.Request)
 	}
 
 	if req.Enabled != nil || req.Scope != nil {
-		enabled := sd.Definition.Enabled
+		// Re-read fresh here rather than reusing sd above: sd was
+		// snapshotted before decodeJSONBody's client-paced read, so
+		// filling in whichever of Enabled/Scope this request left unset
+		// from sd could silently revert a concurrent change to that
+		// other field made while this request's body was still in
+		// flight (issue #494). definitionsEnabledScopeMu holds the read
+		// and the write together as one critical section -- the same
+		// get-fresh-state/mutate/write shape
+		// engine.DefinitionsStore.UpdateExpectation and RecordObservation
+		// use under their own lock -- so a second request touching only
+		// the other field can't land in between; SetEnabledAndScope's
+		// own lock protects only its write, not the read that decided
+		// what to write.
+		s.definitionsEnabledScopeMu.Lock()
+		fresh, ok := s.Definitions.Get(id)
+		if !ok {
+			s.definitionsEnabledScopeMu.Unlock()
+			http.Error(w, "no such definition", http.StatusNotFound)
+			return
+		}
+		enabled := fresh.Definition.Enabled
 		if req.Enabled != nil {
 			enabled = *req.Enabled
 		}
-		scope := sd.Definition.Scope
+		scope := fresh.Definition.Scope
 		if req.Scope != nil {
 			scope = *req.Scope
 		}
 		if err := engine.ValidateScope(scope); err != nil {
+			s.definitionsEnabledScopeMu.Unlock()
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
-		if err := s.Definitions.SetEnabledAndScope(id, enabled, scope); err != nil {
+		err := s.Definitions.SetEnabledAndScope(id, enabled, scope)
+		s.definitionsEnabledScopeMu.Unlock()
+		if err != nil {
 			writeDefinitionError(w, err)
 			return
 		}
