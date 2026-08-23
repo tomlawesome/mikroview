@@ -100,4 +100,30 @@ is text; text wears text tokens; both directions survive greyscale
 
 ## Verdicts
 
-None yet — awaiting the owner.
+Owner, 2026-08-23, on direction Y (verbatim):
+
+> Oooo the survey is cool! But could be do it better by making it
+> vertical, with the table to the right of it? That way, it can be as
+> long as it likes and we use the otherwise empty space in the table.
+> It would also work well for mobile view as we could have a drawer
+> and a pull tab for that medium.
+
+Read as: **Y liked; evolve, don't keep as drawn** — the survey goes
+upright in round 3 (`../round-3/`): terrain vertical, the roll to its
+right (the terrain as long as it likes, the roll's dead space put to
+work), and on mobile the terrain becomes a drawer with a pull tab.
+Vertical is also the house's own orientation — the fall drops and the
+register reads downward.
+
+**X (the field guide)** — owner, 2026-08-23, ruling on the field
+guide and the survey together (verbatim):
+
+> I guess both really, then?
+
+Read as: **both ship, combined** — the survey (in its final round-4
+form, `../round-4/`) is the page's reading layout; the field guide's
+sitting is the page's naming mode. The consolidated buildable record
+is [`../DESIGN.md`](../DESIGN.md). X's ledger view is superseded by
+the survey page; its surviving organs (the dossier card, the deck,
+the earned empty, the deck-remembers cross-references) are absorbed
+into the record.
