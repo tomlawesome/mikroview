@@ -208,6 +208,18 @@ type Server struct {
 	// every test constructs) needs no extra setup.
 	ingestAuditMu sync.Mutex
 	ingestAudit   map[ingestAuditKey]ingestAuditState
+
+	// definitionsEnabledScopeMu serializes handleDefinitionsUpdate's
+	// read-merge-write of a definition's Enabled/Scope fields (issue
+	// #494): those two are the only fields on Definition this handler
+	// fills in from the existing stored value for whichever the request
+	// left unset, and engine.DefinitionsStore.SetEnabledAndScope writes
+	// both unconditionally, so it cannot tell a caller-supplied value
+	// from a stale one read before the client-paced decodeJSONBody call.
+	// Holding this for the fresh read through the write closes that
+	// window for the one production caller of SetEnabledAndScope (this
+	// handler); zero value is ready to use, same as ingestAuditMu above.
+	definitionsEnabledScopeMu sync.Mutex
 }
 
 // route is one registered endpoint. Routes are declared as data rather

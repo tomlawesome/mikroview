@@ -101,9 +101,8 @@ func TestServeTCPHandlesMultipleConnections(t *testing.T) {
 }
 
 func TestServeTCPRejectsBeyondConnectionLimit(t *testing.T) {
-	orig := maxTCPConnections
-	maxTCPConnections = 1
-	defer func() { maxTCPConnections = orig }()
+	orig := maxTCPConnections.Swap(1)
+	defer maxTCPConnections.Store(orig)
 
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -468,11 +467,19 @@ func TestTCPFragmentedMessageReassemblesAcrossPartialReads(t *testing.T) {
 // rather than by one read happening to exactly fill the buffer the way
 // TestOversizedMessageYieldsOneEventNotSeveral's net.Pipe delivery does.
 // The lead-up to the cap here is deliberately fragmented across several
-// small real-socket writes to exercise that accumulation; once the
-// message is already known to be over the limit, discarding its
-// continuation is unchanged from before #415 (see handleTCPConn's
-// comment) and is exactly what the net.Pipe test already covers, so
-// that part is sent as a single write here rather than re-testing it.
+// small real-socket writes to exercise that accumulation.
+//
+// Once the message is already known to be over the limit, ending the
+// discard is newline-driven, not read-size-driven (#379): read size
+// can't signal a boundary under TLS, where a single Read never fills
+// the buffer, so only a '\n' in the stream honestly marks the end of
+// the run. This test folds that terminator onto the end of the
+// continuation write, so it arrives in the same read as the discard
+// tail rather than as its own read -- exercising the case that matters
+// most: a terminator coalesced with discard bytes and the following
+// message's own bytes, all in one read, over a real socket. Salvaging
+// whatever follows the terminator into pending is what keeps that case
+// from silently destroying the message that follows.
 func TestTCPOversizedMessageFragmentedAcrossManyReadsStaysBounded(t *testing.T) {
 	out := make(chan RawMessage, 32)
 	addr, stop := serveTCPForTest(t, out)
@@ -504,16 +511,21 @@ func TestTCPOversizedMessageFragmentedAcrossManyReadsStaysBounded(t *testing.T) 
 		time.Sleep(5 * time.Millisecond)
 	}
 	// The continuation past the cap -- still part of the same
-	// over-limit message, discarded rather than parsed. One write, since
-	// the discard path's own read-boundary handling is unchanged by
-	// #415 and already covered by the net.Pipe test above.
-	if _, err := conn.Write([]byte(strings.Repeat("A", 20000))); err != nil {
+	// over-limit message, discarded rather than parsed -- terminated
+	// with '\n' right here, in the same write as the discard tail: the
+	// only honest end-of-run signal is the terminator itself, and
+	// folding it onto this write (rather than pacing it apart from what
+	// follows) is deliberate -- it's what lets the normal message below
+	// arrive coalesced with the discard tail in a single read, the case
+	// that actually exercises the salvage behaviour.
+	if _, err := conn.Write([]byte(strings.Repeat("A", 20000) + "\n")); err != nil {
 		t.Fatalf("continuation write: %v", err)
 	}
-	// A pause before the normal message, so it lands as its own read
-	// rather than risking coalescing with the oversized message's final
-	// discarded fragment.
-	time.Sleep(20 * time.Millisecond)
+	// No pause before the normal message: with salvage in place,
+	// whether this lands in its own read or coalesced with the discard
+	// tail above must be harmless either way, and removing the pause
+	// that used to keep them apart is what would expose a regression in
+	// that.
 	if _, err := conn.Write([]byte("D|wan-in|forward: proto TCP, 192.0.2.1:1->198.51.100.1:80\n")); err != nil {
 		t.Fatalf("write: %v", err)
 	}

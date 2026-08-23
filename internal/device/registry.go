@@ -5,6 +5,7 @@ package device
 
 import (
 	"net"
+	"sort"
 	"sync"
 	"time"
 
@@ -181,6 +182,75 @@ func (r *Registry) List() []Info {
 	out := make([]Info, 0, len(r.byIP))
 	for _, info := range r.byIP {
 		out = append(out, *info)
+	}
+	return out
+}
+
+// MultihomedCandidate pairs one declared device that has never received
+// an event under its own sourceIp with every currently auto-discovered
+// device -- the evidence shape issue #442 describes: "the declared
+// device... never matches anything and sits idle" while "the real
+// stream auto-discovers as a second device". A RouterOS device is
+// multi-homed by definition (an address on every subnet it routes), so
+// syslog frequently arrives stamped with a different interface address
+// than the one declared as sourceIp.
+type MultihomedCandidate struct {
+	// DeclaredID and DeclaredSourceIP identify the configured device
+	// that has never matched any syslog traffic.
+	DeclaredID       string
+	DeclaredSourceIP string
+	// Discovered is every device auto-discovered from syslog traffic
+	// that has not been declared in config.yaml, in ID order. Registry
+	// has no further evidence to narrow this to a single "same box"
+	// answer -- see MultihomedCandidates' own comment -- so every live
+	// discovered device is reported, not a guess at one.
+	Discovered []Info
+}
+
+// MultihomedCandidates returns one entry per configured device that has
+// received zero events under its own declared sourceIp, alongside every
+// device auto-discovered from syslog traffic that is not itself
+// declared. nil when either side is empty: a declared device with no
+// traffic yet is unremarkable if nothing has been discovered either
+// (the router may simply not have started logging yet), and a
+// discovered device is unremarkable on its own if every declared device
+// is receiving its own traffic fine.
+//
+// This is deliberately just the evidence, not a diagnosis: Registry
+// only knows source IPs, first/last-seen times, and which devices came
+// from config.yaml, so it cannot itself tell which discovered device
+// (if any) is actually the same physical router as a given silent
+// declared one -- that judgement, and where to surface it to the
+// operator, is left to the caller. See #442.
+func (r *Registry) MultihomedCandidates() []MultihomedCandidate {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	var silent []Info
+	var discovered []Info
+	for _, info := range r.byIP {
+		if info.Configured {
+			if info.EventCount == 0 {
+				silent = append(silent, *info)
+			}
+			continue
+		}
+		discovered = append(discovered, *info)
+	}
+	if len(silent) == 0 || len(discovered) == 0 {
+		return nil
+	}
+
+	sort.Slice(silent, func(i, j int) bool { return silent[i].ID < silent[j].ID })
+	sort.Slice(discovered, func(i, j int) bool { return discovered[i].ID < discovered[j].ID })
+
+	out := make([]MultihomedCandidate, 0, len(silent))
+	for _, s := range silent {
+		out = append(out, MultihomedCandidate{
+			DeclaredID:       s.ID,
+			DeclaredSourceIP: s.SourceIP,
+			Discovered:       discovered,
+		})
 	}
 	return out
 }

@@ -3,6 +3,7 @@
 package api
 
 import (
+	"bytes"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -288,6 +289,108 @@ func TestShippedDefinitionUpdateThenGetReflectsIt(t *testing.T) {
 	}
 	if got := stored.Definition.Scope; len(got.Hosts) != 1 || got.Hosts[0] != "203.0.113.0/24" {
 		t.Errorf("expected the host scope to be stored, got %+v", got)
+	}
+}
+
+// TestConcurrentEnabledOnlyUpdateDoesNotRevertAConcurrentScopeChange pins
+// issue #494: handleDefinitionsUpdate used to fill in whichever of
+// Enabled/Scope a request left unset from a snapshot taken *before*
+// decodeJSONBody's client-paced body read, so an enabled-only request
+// that was mid-flight while a scope-only request landed would write the
+// enabled-only request's stale, pre-decode Scope back over the concurrent
+// change -- silently reverting it.
+//
+// The two requests are driven straight at the handler (asAdmin(s.mux()),
+// no real network) so the interleaving is deterministic rather than
+// timing-dependent: request A's body is an io.Pipe that yields
+// `{"enabled":` and then blocks. A pipe Write only returns once a Read
+// has consumed it, and decodeJSONBody's json.Decoder only calls Read
+// after handleDefinitionsUpdate's pre-decode snapshot has already been
+// taken -- so the moment the goroutine below observes that first Write
+// return, A is certainly past that snapshot and blocked inside decode,
+// with its snapshot fixed. Request B (a complete, ordinary scope-only
+// request) is then run to completion synchronously, and only afterwards
+// is A released to finish decoding and write. That fixes the
+// interleaving the issue describes without any sleep.
+//
+// Fails against the pre-fix handler: A's write lands after B's and
+// carries A's snapshot's Scope (the zero value, taken before B ran),
+// clobbering the Deny/203.0.113.0/24 scope B just set. Passes once
+// handleDefinitionsUpdate re-reads fresh state under a lock spanning the
+// read and the write (definitionsEnabledScopeMu), because that fresh
+// read -- taken only after A's body is fully decoded and its turn to
+// write has come -- observes B's scope rather than the pre-decode one.
+func TestConcurrentEnabledOnlyUpdateDoesNotRevertAConcurrentScopeChange(t *testing.T) {
+	s, _ := newTestServer(t)
+	handler := asAdmin(s.mux())
+	const id = "rule_spike"
+
+	pr, pw := io.Pipe()
+	firstChunkRead := make(chan struct{})
+	release := make(chan struct{})
+	writeErrCh := make(chan error, 1)
+	go func() {
+		if _, err := pw.Write([]byte(`{"enabled":`)); err != nil {
+			writeErrCh <- err
+			return
+		}
+		close(firstChunkRead)
+		<-release
+		if _, err := pw.Write([]byte(`false}`)); err != nil {
+			writeErrCh <- err
+			return
+		}
+		writeErrCh <- pw.Close()
+	}()
+
+	reqA := httptest.NewRequest(http.MethodPut, "/api/definitions/"+id, pr)
+	reqA.Header.Set("Content-Type", "application/json")
+	reqA.Header.Set(csrfHeaderName, csrfHeaderValue)
+	recA := httptest.NewRecorder()
+	doneA := make(chan struct{})
+	go func() {
+		handler.ServeHTTP(recA, reqA)
+		close(doneA)
+	}()
+
+	select {
+	case <-firstChunkRead:
+	case <-doneA:
+		t.Fatal("request A finished before its body was even half-sent")
+	}
+
+	wantScope := engine.Scope{Hosts: []string{"203.0.113.0/24"}, HostsMode: engine.ListModeDeny}
+	bodyB, err := json.Marshal(updateDefinitionRequest{Scope: &wantScope})
+	if err != nil {
+		t.Fatal(err)
+	}
+	reqB := httptest.NewRequest(http.MethodPut, "/api/definitions/"+id, bytes.NewReader(bodyB))
+	reqB.Header.Set("Content-Type", "application/json")
+	reqB.Header.Set(csrfHeaderName, csrfHeaderValue)
+	recB := httptest.NewRecorder()
+	handler.ServeHTTP(recB, reqB)
+	if recB.Code != http.StatusOK {
+		t.Fatalf("request B (scope-only): expected 200, got %d: %s", recB.Code, recB.Body.String())
+	}
+
+	close(release)
+	<-doneA
+	if err := <-writeErrCh; err != nil {
+		t.Fatalf("writing request A's body: %v", err)
+	}
+	if recA.Code != http.StatusOK {
+		t.Fatalf("request A (enabled-only): expected 200, got %d: %s", recA.Code, recA.Body.String())
+	}
+
+	stored, ok := s.Definitions.Get(id)
+	if !ok {
+		t.Fatal("expected the definition to still exist")
+	}
+	if stored.Definition.Enabled {
+		t.Error("expected rule_spike to be disabled after request A")
+	}
+	if got := stored.Definition.Scope; len(got.Hosts) != 1 || got.Hosts[0] != "203.0.113.0/24" || got.HostsMode != engine.ListModeDeny {
+		t.Errorf("request B's concurrent scope change was reverted by request A's stale snapshot: got %+v, want %+v", got, wantScope)
 	}
 }
 

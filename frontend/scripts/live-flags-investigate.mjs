@@ -11,7 +11,7 @@
 // control and shouldn't assert on.
 
 import { fileURLToPath } from 'url'
-import { session, check, done, feedPortScan } from './live-browser.mjs'
+import { session, check, done, feedPortScan, waitForFlag } from './live-browser.mjs'
 
 
 
@@ -25,8 +25,35 @@ async function openMenuView(label) {
   await page.click(`.nav-menu button:has-text("${label}")`)
 }
 
+// Wait for the flag on the *server* before asking the UI about it
+// (#354's pattern, applied here per #450).
+//
+// This scenario used to wait on `.card .type` and go straight into its
+// assertions. That selector only proves some card rendered, and every
+// scenario shares one instance, so an earlier scenario's flag satisfies
+// it -- which made the wait no wait at all for this target. When the
+// port scan's own flag was still in flight the result was not one clean
+// failure but four: three assertions reporting false, and then an
+// uncaught Playwright timeout at the first .click() on a card that was
+// never there, which reads as a broken scenario rather than a flag that
+// did not arrive. Observed 2026-08-21 on a back-to-back live-check run,
+// the load pattern #450 documents.
+const raised = await waitForFlag(page, TARGET_IP)
+check(raised.ok, raised.message)
+
+if (!raised.ok) {
+  // Nothing below can be evaluated without the card, so it is reported
+  // as blocked rather than as a pile of independent failures it cannot
+  // actually distinguish from real regressions (#361).
+  check(true, `skipped -- the investigate button cannot be exercised on a flag card that never arrived (${raised.message})`)
+  done()
+}
+
 await openMenuView('Flags')
-await page.waitForSelector('.card .type', { timeout: 15000 })
+// Scoped to this scenario's own target, not to any card at all.
+await page.waitForSelector(`section[aria-labelledby="active-heading"] .card:has-text("${TARGET_IP}")`, {
+  timeout: 15000,
+})
 
 const card = page.locator('section[aria-labelledby="active-heading"] .card', { hasText: TARGET_IP })
 check(await card.isVisible(), 'the port scan raised a card with a real, filterable target IP')

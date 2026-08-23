@@ -10,6 +10,12 @@
   // secondary detail (device/proto/interfaces) small and dim, everything
   // else pushed into EventDetailSheet.svelte on tap rather than shown
   // inline or expanded in place.
+  //
+  // #439 (row-token copy) deliberately adds no long-press here: tap
+  // already opens EventDetailSheet, which is exactly the path #439 asks
+  // for ("if the sheet already opens some other way, extend that path")
+  // -- so the raw-value copy actions were added to EventDetailSheet.svelte
+  // instead, and this card's own tap behavior is untouched.
   import type { FirewallEvent } from '../lib/types'
   import { formatTime, countryFlag, rawTooltip } from '../lib/format'
 

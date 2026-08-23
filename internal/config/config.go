@@ -1485,7 +1485,7 @@ func parseIntList(v string) ([]int, bool) {
 
 func applyFlags(cfg *Config, args []string) error {
 	fs := flag.NewFlagSet("mikroview", flag.ContinueOnError)
-	syslogTLS := fs.String("syslog-tls", cfg.Listen.SyslogTLS, "syslog TLS listen address, RouterOS remote-protocol=tls (only started when tls.enabled is true; empty disables it)")
+	syslogTLS := fs.String("syslog-tls", cfg.Listen.SyslogTLS, "syslog TLS listen address, RouterOS remote-protocol=tls (started whenever non-empty, independently of tls.enabled; empty disables it)")
 	httpAddr := fs.String("http", cfg.Listen.HTTP, "HTTP listen address")
 	httpRedirectAddr := fs.String("http-redirect", cfg.Listen.HTTPRedirect, "HTTP listen address for the redirect-to-HTTPS-only listener (empty disables it)")
 	retention := fs.Duration("retention", cfg.Store.Retention, "event retention window")

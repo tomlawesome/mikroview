@@ -51,6 +51,13 @@ you want. Import the certificate once:
 /certificate import file-name=mikroview-ca.crt passphrase=""
 ```
 
+If MikroView runs with `tls.enabled: false` — the reverse-proxy
+deployment, where the proxy terminates TLS for browsers and the syslog
+TLS listener still runs for this router — use `http://` in that URL
+instead. MikroView still generates and serves the CA in that case (it is
+what the syslog listener presents), but plain HTTP is what is answering
+on that port.
+
 `check-certificate=no` here is the one and only place it belongs in
 this whole setup: there is nothing to verify against yet, since this
 fetch is *getting* the thing to verify against. Every fetch and logging
@@ -261,6 +268,18 @@ returning `200` while the enrichment silently stops. Declaring it with
 no `id` is safe: the id defaults to its `sourceIp`, which is exactly
 what it already had. Otherwise, reissue the token after declaring it.
 See [configuration.md](configuration.md).
+
+Underneath all of this is one rule: the token's device must equal the
+event's deviceId, or the push and the traffic it's meant to enrich land
+under two different identities and nothing tells you why. A multi-homed
+router — one with an address on every subnet it routes, which is most
+of them — is the usual reason it doesn't: syslog is stamped with
+whichever interface's address faces MikroView, and that's frequently
+not the address you declared as `sourceIp`. If pushes return `200` in
+the audit log but the "i" popups still say no data has been pushed,
+check whether the device id the token is scoped to actually matches the
+`deviceId` on the events you're looking at — a mismatched source
+address is the most likely cause.
 
 Or via the API:
 
