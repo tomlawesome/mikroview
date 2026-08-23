@@ -59,4 +59,15 @@ survives greyscale.
 
 ## Verdicts
 
-None yet — awaiting the owner.
+Owner, 2026-08-23 (verbatim):
+
+> The old version of engine room was better. Lets go with that.
+> Sometimes simple is better.
+
+**AE killed; the engine room ships in its round-2 form** (AC, the
+sketch). The consolidated buildable record is
+[`../DESIGN.md`](../DESIGN.md) — it records the simple room, and
+answers the estate questions AE raised the simple way: surfaces
+that already have their own good pages (Watchlist, Entities, the
+audit log, Flags' exclusions) keep them; the room absorbs only the
+settings that had no better home.
