@@ -92,16 +92,20 @@
   {:else if name === 'about'}
     <circle cx="8" cy="8" r="6.25" />
     <path d="M8 7.25v4M8 4.75v.01" />
+    <!-- Density and dock sit next to each other in the footer, so they
+         must not both read as "an arrow pointing at a bar". Density is a
+         panel whose sidebar column changes width; dock is the arrow. -->
   {:else if name === 'density-wide'}
-    <!-- Widening: the bar stays put and the content pushes right. -->
-    <path d="M2.5 2.75v10.5" />
-    <path d="M6 8h8M10.75 4.75 14 8l-3.25 3.25" />
+    <rect x="1.75" y="3" width="12.5" height="10" rx="1.5" />
+    <path d="M7 3v10" />
+    <path d="M3.4 6.25h2.2M3.4 9.75h2.2" />
   {:else if name === 'density-narrow'}
-    <path d="M2.5 2.75v10.5" />
-    <path d="M14 8H6M9.25 4.75 6 8l3.25 3.25" />
+    <rect x="1.75" y="3" width="12.5" height="10" rx="1.5" />
+    <path d="M5 3v10" />
+    <path d="M3.4 8h0.01" />
   {:else if name === 'dock'}
-    <path d="M2.5 2.75v10.5" />
-    <path d="M13.5 8h-7.5M9 5l-3 3 3 3" />
+    <path d="M2.25 2.75v10.5" />
+    <path d="M14 8H6.5M9.5 4.75 6.25 8l3.25 3.25" />
   {/if}
 </svg>
 
