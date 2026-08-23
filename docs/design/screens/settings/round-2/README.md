@@ -101,4 +101,13 @@ both pages survive greyscale.
 
 ## Verdicts
 
-None yet — awaiting the owner.
+Owner, 2026-08-23 (verbatim):
+
+> Engine room, but it's weak and needs development
+
+**AC (the engine room) wins; AB (the charter) is killed** as the
+settings page. What survives the charter's kill as ideas on record:
+the amendment-margin posture (history beside the thing it changed)
+and the possible printable "how is this network kept?" export — noted
+options, not commitments. The engine room proceeds to a development
+round (`../round-3/`) before any consolidation.
