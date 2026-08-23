@@ -4,6 +4,16 @@
   import { ACTION_FILTER_OPTIONS } from '../lib/actions'
   import FilterPresetsMenu from './FilterPresetsMenu.svelte'
   import { viewportState } from '../lib/viewport.svelte'
+  import { downloadEventsCsv } from '../lib/export'
+  import { retentionState, MAX_AGE_OPTIONS } from '../lib/retention.svelte'
+
+  // Phone-width only, mirroring what the retired hamburger did (#544):
+  // Toolbar.svelte:64 already carries this control at desktop width, so
+  // duplicating it here unconditionally would put two of them on screen.
+  function onMaxAgeChange(e: Event) {
+    const raw = (e.currentTarget as HTMLSelectElement).value
+    retentionState.set(raw === 'null' ? null : Number(raw))
+  }
 
   const actions = ACTION_FILTER_OPTIONS
 
@@ -135,6 +145,37 @@
     {#if appState.hasActiveFilters && !viewportState.isMobile}
       <button class="clear" onclick={() => appState.resetFilters()}>Clear filters</button>
     {/if}
+
+    <!-- Also moved off the retired hamburger (#544). Phone-width only:
+         the desktop control is Toolbar's. -->
+    {#if viewportState.isMobile}
+      <label class="duration">
+        Display duration
+        <select
+          value={retentionState.maxAgeSeconds === null ? 'null' : String(retentionState.maxAgeSeconds)}
+          onchange={onMaxAgeChange}
+          aria-label="Display duration"
+        >
+          {#each MAX_AGE_OPTIONS as opt (opt.value)}
+            <option value={opt.value === null ? 'null' : String(opt.value)}>{opt.label}</option>
+          {/each}
+        </select>
+      </label>
+    {/if}
+
+    <!-- Moved here from the retired hamburger menu (#544). It acts on the
+         events this bar has filtered, so it belongs to the live view
+         rather than to the chrome. Deliberately one entry, not one per
+         format: #94 defers additional formats, and when they land this
+         becomes a submenu rather than a flat item each. -->
+    <button
+      class="export"
+      onclick={() => downloadEventsCsv(appState.filteredEvents)}
+      disabled={appState.filteredEvents.length === 0}
+      title="Export the currently shown/filtered events to a CSV file"
+    >
+      Export to CSV
+    </button>
   </div>
 {/if}
 
@@ -336,6 +377,34 @@
   }
 
   .mobile-row .clear {
+    min-height: 44px;
+  }
+
+  .export {
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--fg-muted);
+    border-radius: 5px;
+    padding: 8px 14px;
+    font-size: 14px;
+  }
+
+  .export:hover:not(:disabled) {
+    color: var(--fg);
+    border-color: var(--fg-muted);
+  }
+
+  .export:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+
+  .duration {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    color: var(--fg-muted);
+    font-size: 14px;
     min-height: 44px;
   }
 

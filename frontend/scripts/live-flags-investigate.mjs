@@ -21,8 +21,7 @@ feedPortScan(20, TARGET_IP)
 const { page } = await session()
 
 async function openMenuView(label) {
-  await page.click('.nav-menu .trigger')
-  await page.click(`.nav-menu button:has-text("${label}")`)
+  await page.click(`.rail .item:has-text("${label}")`)
 }
 
 // Wait for the flag on the *server* before asking the UI about it

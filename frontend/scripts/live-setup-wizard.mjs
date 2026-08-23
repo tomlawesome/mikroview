@@ -14,8 +14,7 @@ const URL_BASE = process.env.MV_URL
 
 const { page, consoleErrors } = await session({ waitForEvents: 20 })
 
-await page.click('.nav-menu .trigger')
-await page.click('.nav-menu button:has-text("Connect a router")')
+await page.click('.rail .item:has-text("Run setup…")')
 await page.waitForSelector('.setup')
 
 // --- Commands carry real values, never placeholders ---------------------
