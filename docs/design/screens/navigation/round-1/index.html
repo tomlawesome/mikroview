@@ -14,6 +14,10 @@
   p.lede { color: var(--ink2); margin: 12px 0 30px; font-size: 13px; }
   a.card { display: block; border: 1px solid var(--hair2); border-radius: 12px; padding: 16px 20px; margin-bottom: 14px; text-decoration: none; color: var(--ink); }
   a.card:hover { border-color: var(--accent); }
+  a.card.dead { opacity: 0.4; }
+  a.card.dead .t::after { content: " — killed, round 1"; color: var(--ink3); font-weight: 400; font-size: 12px; }
+  a.card.kept { border-color: var(--accent); }
+  a.card.kept .t::after { content: " — KEPT → round 2"; color: var(--accent); font-size: 12px; }
   .card b { color: var(--accent); font-size: 12px; letter-spacing: 0.14em; }
   .card .t { font-size: 15px; font-weight: 600; margin: 3px 0 4px; }
   .card .d { font-size: 12.5px; color: var(--ink2); }
@@ -24,22 +28,22 @@
 <div class="wrap">
   <h1><b>DESIGN PASS · #518 · ROUND 1</b> Navigation consolidation (#486): the five phase-3 surfaces need a home before any of them can be drawn.</h1>
   <p class="lede">Every direction shares the ratified bones — the fall as landing, the token floor, Exclusions inside Flags, Suggestions/Matches inside Watchlist, Users/Tokens/Fleet/Entities as Admin pages, wizard relaunch as an Admin action, read-only Admin for viewers, and the reserved-slot rule (nav never links to a surface that does not exist yet). They differ on the two open questions: what the top level *is*, and where it *sits*. Five scenes each: landing · working section · Admin as viewer · small screens · states.</p>
-  <a class="card" href="direction-p-masthead.html">
+  <a class="card dead" href="direction-p-masthead.html">
     <b>P — MASTHEAD</b>
     <div class="t">The five sections as a glass top line</div>
     <div class="d">Live · Investigate · Detect · Expect · Admin in the masthead; the section's pages in a sub-line beneath. The #385 starting point, executed in Atlas's chrome idiom. 88px of glass chrome.</div>
   </a>
-  <a class="card" href="direction-q-rail.html">
+  <a class="card kept" href="direction-q-rail.html">
     <b>Q — RAIL</b>
     <div class="t">The same five sections as the ADR's nav-rail primitive, taken literally</div>
     <div class="d">One left rail holds the whole geography — sections as headings, eleven pages visible at once. Collapses to icons on Live's places, deterministically. Zero navigation depth; costs width.</div>
   </a>
-  <a class="card" href="direction-r-places.html">
+  <a class="card dead" href="direction-r-places.html">
     <b>R — PLACES</b>
     <div class="t">The watched things top-level, the drawers behind them</div>
     <div class="d">The fall · Stream · Flags · Watch ｜ Investigate · Admin. Round 4's implicit line grown honest: the verb sections dissolve, Detectors folds into Flags as a tab. Flattest chrome; the cost is owned on the Flags tab row.</div>
   </a>
-  <p class="note">Self-contained HTML, no build step. Same fictional data story as rounds 1–4 (rb5009 · the brink at 14:02:11 · cam-porch's first water in 41 days at 13:52 · 6 open flags). Verdict log lives on #518; the round record is README.md beside this file.</p>
+  <p class="note">Self-contained HTML, no build step. Same fictional data story as rounds 1–4 (rb5009 · the brink at 14:02:11 · cam-porch's first water in 41 days at 13:52 · 6 open flags). Round 1 closed 2026-08-23: Q kept (docked state + density choice required), P and R killed. Round 2: <a href="../round-2/index.html" style="color:#9db8e8">the rail, docked and in two densities</a>. Verdict log on #518.</p>
 </div>
 </body>
 </html>
