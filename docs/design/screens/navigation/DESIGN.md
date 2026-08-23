@@ -1,0 +1,121 @@
+# Navigation — the ratified design (#486, under #518)
+
+Ratified by the owner across five rounds, 2026-08-23 (`round-1/` …
+`round-5/` beside this file carry the mockups, screenshots and the
+verbatim verdict trail; the same trail is on #518). This document is
+the consolidated record the build implements from. The mockups are
+reference for execution quality; where this text and a mockup detail
+disagree, this text wins.
+
+## The model
+
+One **left rail** — the ADR's nav-rail primitive — holds the whole
+geography. No masthead. Five groups in fixed order, group headings as
+labels (never controls, no landing pages, no accordion):
+
+| Group | Pages (in order) |
+|---|---|
+| Live | The fall · [Map, v0.5.0] · Stream |
+| Investigate | Metrics · Audit log · [Lookback, when built] |
+| Detect | Flags · Detectors |
+| Expect | Watchlist |
+| Admin | Users · Tokens · Fleet · Entities · ⟳ Run setup… |
+
+- The fall is the landing (#483/#363, already ratified).
+- Exclusions is a tab of Flags; Suggestions and Matches are tabs of
+  Watchlist; Users/Tokens/Fleet/Entities are pages (the overlays
+  retire); "Run setup…" is an action (opens #487's modal), not a page.
+- **Reserved-slot rule**: the rail never renders a link to a surface
+  that does not exist yet (Map before v0.5.0, Lookback until built).
+  Slots are reserved in this spec, not in the DOM. No stubs.
+
+## Three persistent states
+
+**Full (216px, icons+text) · icons (54px) · docked (0px + handle).**
+One per-user preference, applied before first paint, never changed by
+the app on its own. Defaults: full at ≥1280px, icons below; docked is
+never a default. States change **in the rail footer only**: ⇔ toggles
+density (aria-label names the destination), ⇤ docks (its label
+teaches the way back). The handle **restores** the persistent
+undocked state — same density, same scroll, focus on the current
+page; it never writes the preference. (Round-2's drawer/pin was
+considered and dropped by the owner — Superseded below.)
+
+## The handle
+
+A 30×84px glass tab on the left edge, **vertically centred on the
+viewport, always** — independent of scroll and page. Mark: a hub on
+the edge with three links fanning inward, hub carrying the receiving
+dot's pulse (off under reduced motion). Wears the open-flag count
+badge. First in tab order after the skip-link; Enter restores.
+Connection state is never the handle's job. *Owner note: the mark is
+accepted "for now" and will be revisited (“we'll change it later”).*
+
+## Badges and broken state
+
+- **One count on the rail**: open unexcluded flags, alarm-red, on
+  Flags (and on the handle when docked). Quiet counts inside pages
+  (e.g. Exclusions' tab) are outlined, never alarm-filled.
+- **Broken is a ring, not a number**: anything in a currently-broken
+  state (e.g. Watchlist while a watch is broken) wears a 2px
+  alarm-red outline, 3px offset — around **icon + word** in
+  icons+text, around the **icon alone** in icons only (one element;
+  hiding the label tightens the ring). Clears when the break clears;
+  the aria-label carries the reason.
+
+## States of the chrome
+
+- **First run**: the shell and rail render behind the auto-launched
+  wizard modal (#487); no badge yet; closing early leaves empty
+  states that each point to Admin ▸ Run setup….
+- **Connection lost**: rail-head dot turns alarm; the banner tops the
+  content column and pushes content (never overlays); nav stays
+  operable; the fall holds its last brink time rather than faking
+  liveness. Docked: the banner alone carries it.
+- **Loading**: shell plus ghost rows — never a spinner page. Errors
+  name the failing thing in words and keep the chrome alive.
+- **Viewer (#490 grammar)**: Admin and its pages render for viewers;
+  read-only declared once, in words, in the page header chip
+  ("READ-ONLY — ADMINS EDIT"); edit affordances and admin-only rows
+  (Run setup…) are **absent, never disabled**.
+
+## Keyboard and accessibility
+
+Skip-link first. Rail items are plain links, `aria-current="page"`;
+group headings are list labels. Icons density keeps full labels:
+tooltip on hover **and** focus, label+count in aria-labels, visible
+focus ring. Tabs inside pages are the house tablist (arrow keys).
+Every control is a real button with a spoken label; state changes are
+announced ("navigation docked", "navigation restored — icons only").
+Docking returns focus to the handle; restoring lands it on the
+current page. Nothing in the chrome is hover-only. Reduced motion:
+all pulses and slides become instant.
+
+## Small screens
+
+Bottom bar of the five groups (badge intact); tapping a group with
+more than one page raises a half-sheet (house modal: focus trap,
+Esc/back closes); single-page groups go straight to the page. Dock
+and density are pointer-width affordances — they do not exist on the
+bottom bar.
+
+## Themes, for the build's purposes
+
+Light and dark are token swaps on the ADR floor; the light surface
+requires its own validated lane steps (lan `#2f77d3` · srv `#12855d`
+· guest `#c2508a` · iot `#a06a00` on `#dfe5ef`+; record in
+`round-3/README.md`). Theme *identity* stays #492's. The navy/grey
+canvases in rounds 4–5 are mockup presentation, not app tokens.
+
+## Superseded (considered and closed)
+
+- **P — Masthead** and **R — Places** (round 1): killed by verdict;
+  R's Detectors-into-Flags fold died with it.
+- **Auto-collapse on Live places** (rounds 1–2): superseded by the
+  explicit three-state preference.
+- **The drawer + pin from docked** (round 2): the owner chose
+  restore-from-footer-state instead.
+- **A dot for broken watch state** (round 3 question): replaced by
+  the broken ring, owner's design.
+- Icon glyphs in the mockups are placeholders; the icon set is an
+  implementation asset, not part of this record.
