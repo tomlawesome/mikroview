@@ -264,9 +264,11 @@
       {#if rendered.length === 0}
         <div class="empty">
           {emptyMessage ??
-            (appState.events.length === 0
-              ? 'Waiting for events…'
-              : 'No events match the current filters.')}
+            (appState.fetchFailed
+              ? 'Could not load events from the server — this is not a confirmed empty result.'
+              : appState.events.length === 0
+                ? 'Waiting for events…'
+                : 'No events match the current filters.')}
         </div>
       {/if}
     </div>
@@ -356,9 +358,11 @@
       {#if rendered.length === 0}
         <div class="empty">
           {emptyMessage ??
-            (appState.events.length === 0
-              ? 'Waiting for events…'
-              : 'No events match the current filters.')}
+            (appState.fetchFailed
+              ? 'Could not load events from the server — this is not a confirmed empty result.'
+              : appState.events.length === 0
+                ? 'Waiting for events…'
+                : 'No events match the current filters.')}
         </div>
       {/if}
     </div>

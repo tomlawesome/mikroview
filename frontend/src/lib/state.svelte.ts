@@ -95,6 +95,18 @@ class AppState {
   // as "no results".
   ruleMatchStatus = $state<'idle' | 'evaluating' | 'invalid' | 'too-slow'>('idle')
 
+  // True when the most recent loadInitial()/refetchWithFilters() call
+  // failed (server error, 503, dropped connection, etc.) rather than
+  // succeeding with a real (possibly empty) result. Without this, a
+  // failed request left `events` exactly as it was before the attempt --
+  // stale, or empty on first load -- and LiveTable had no way to tell
+  // that apart from a genuinely empty answer, so it asserted "No events
+  // match the current filters" (or, on first load, sat on the ambiguous
+  // "Waiting for events…") when the true state was "the query that would
+  // have answered that never completed" (#373). Cleared on the next
+  // successful call, whichever of the two runs it.
+  fetchFailed = $state(false)
+
   private matcher = new RuleMatcher()
   private ruleDebounce: ReturnType<typeof setTimeout> | null = null
   private matchedPattern = ''
@@ -371,22 +383,43 @@ class AppState {
     // the URL's query string (if present) before calling loadInitial(), so
     // a shared/bookmarked filtered link loads pre-filtered instead of
     // fetching everything and only filtering after the fact.
-    const [eventsRes, devices, stats] = await Promise.all([
-      fetchEvents({ ...this.filters, limit: 500 }),
-      fetchDevices(),
-      fetchStats(),
-    ])
-    this.setInitialEvents(eventsRes.events)
-    this.devices = devices
-    this.stats = stats
+    try {
+      const [eventsRes, devices, stats] = await Promise.all([
+        fetchEvents({ ...this.filters, limit: 500 }),
+        fetchDevices(),
+        fetchStats(),
+      ])
+      this.setInitialEvents(eventsRes.events)
+      this.devices = devices
+      this.stats = stats
+      this.fetchFailed = false
+    } catch (err) {
+      // Left the buffer exactly as it was (empty, on first load) rather
+      // than treating the rejection as "zero events" -- see fetchFailed's
+      // doc comment. Rethrown so App.svelte's existing
+      // .catch(handleApiError) still handles a 401 the same way it always
+      // has; this only adds the on-screen honesty signal alongside that.
+      this.fetchFailed = true
+      throw err
+    }
   }
 
   // Re-queries the server with the current filters and replaces `events`
   // with the result. See the class doc comment above for why this needs
   // to exist alongside client-side filtering, not instead of it.
   async refetchWithFilters() {
-    const res = await fetchEvents({ ...this.filters, limit: 500 })
-    this.setInitialEvents(res.events)
+    try {
+      const res = await fetchEvents({ ...this.filters, limit: 500 })
+      this.setInitialEvents(res.events)
+      this.fetchFailed = false
+    } catch (err) {
+      // Deliberately does not touch `events` -- the pre-refetch buffer is
+      // left as-is (see the class doc comment: it is the "instant but
+      // possibly incomplete" layer). fetchFailed is what stops that
+      // untouched buffer from being read as a definite, complete answer.
+      this.fetchFailed = true
+      throw err
+    }
   }
 
   async refreshDevicesAndStats() {
