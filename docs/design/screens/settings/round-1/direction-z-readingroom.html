@@ -1,0 +1,488 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mikroview settings — round 1 — Z: the reading room</title>
+<style>
+  /* ============================================================
+     DESIGN PASS (#518) — SETTINGS SURFACES (#490) — ROUND 1
+     Z — THE READING ROOM  ·  the same room, fewer hands
+
+     The #385 owner decision: general users view, admins edit —
+     across every settings surface. The ratified grammar (#486
+     record, proven on Entities): read-only is declared ONCE, in
+     words, in the page header chip; edit affordances are ABSENT,
+     NEVER DISABLED. This round applies that grammar to the
+     settings estate and settles the three translations it forces:
+
+     1. A control is a fact wearing a handle. The viewer keeps the
+        fact and loses the handle — a checkbox becomes the word
+        "Running", a scope form becomes a sentence — never a
+        greyed ghost of the control.
+     2. Explanations of absent affordances are absent too (the
+        admin row's "can't be removed here" note has no job in a
+        room with no Remove).
+     3. Permission-absent and busy-disabled are different dresses:
+        permission never renders a disabled control; a mid-save
+        control may briefly disable, and only there.
+
+     And the clause that makes it real: the API refuses what the
+     page no longer offers. Writes are 403 for non-admins
+     regardless of what any client renders; the settings GETs are
+     widened to signed-in users deliberately, one authz-matrix row
+     at a time; secrets appear in no GET at all.
+
+     No charts on this page; no data palette. Colour stays
+     meaning-only: accent for interactive, amber as time's tick,
+     alarm only on the rail's flag badge.
+     ============================================================ */
+  :root {
+    --canvas: #1b2340; --void: #06080e;
+    --glass: rgba(15, 20, 34, 0.66); --glass-2: rgba(8, 11, 20, 0.88);
+    --hair: rgba(160, 185, 230, 0.13); --hair-2: rgba(160, 185, 230, 0.26);
+    --ink: #e9eefb; --ink-2: #97a4c4; --ink-3: #55628a;
+    --accent: #9db8e8;
+    --ok: #37b364; --alarm: #ff5470; --now: #e8b05a;
+    --tile: #0d1220;
+    --sans: system-ui, -apple-system, "Segoe UI", sans-serif;
+    --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  }
+  * { box-sizing: border-box; margin: 0; }
+  html { scroll-behavior: smooth; }
+  body { background: var(--canvas); color: var(--ink); font: 13.5px/1.5 var(--sans); -webkit-font-smoothing: antialiased; }
+  .concept {
+    position: sticky; top: 0; z-index: 90; display: flex; gap: 16px; align-items: baseline;
+    padding: 8px 20px; background: rgba(2,3,7,0.95); border-bottom: 1px solid var(--hair);
+    font-size: 11px; color: var(--ink-3);
+  }
+  .concept b { color: var(--accent); letter-spacing: 0.1em; }
+  .concept a { color: var(--ink-2); text-decoration: none; margin-left: 12px; }
+  .scene { min-height: 100vh; position: relative; border-bottom: 1px solid var(--hair-2); overflow: hidden; padding-bottom: 30px; }
+  .scene-tag {
+    position: sticky; top: 33px; z-index: 80; text-align: center;
+    font-size: 10.5px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--ink-3);
+    padding: 6px 0; background: rgba(2,3,7,0.85);
+  }
+  .row2 { display: flex; gap: 24px; justify-content: center; align-items: stretch; margin: 26px auto 0; width: min(1460px, 97%); }
+  .frame { position: relative; border: 1px solid var(--hair-2); border-radius: 14px; overflow: hidden; background: var(--void); flex: 1; min-height: 660px; display: flex; }
+  .frame .cap { position: absolute; left: 0; right: 0; bottom: 0; z-index: 30; font-size: 10.5px; color: var(--ink-2); padding: 9px 14px; background: rgba(2,3,7,0.92); border-top: 1px solid var(--hair); }
+  .frame .cap b { color: var(--accent); }
+
+  /* ---- the ratified rail (#486), carried forward verbatim; the
+         viewer variant differs only where the record says: the
+         action row is absent, the foot wears the viewer ---- */
+  .rail {
+    width: 200px; flex: none; background: var(--glass-2); border-right: 1px solid var(--hair);
+    display: flex; flex-direction: column; padding: 14px 0 10px; position: relative; z-index: 10;
+    backdrop-filter: blur(10px); padding-bottom: 90px;
+  }
+  .rail .wm { font-size: 11px; font-weight: 700; letter-spacing: 0.24em; color: var(--ink-3); padding: 0 16px 3px; }
+  .rail .wm em { color: var(--accent); font-style: normal; }
+  .rail .conn { font-size: 9.5px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--ink-3); padding: 0 16px 8px; }
+  .rail .conn i { display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: var(--ok); margin-right: 6px; animation: pulse 2s ease-in-out infinite; }
+  @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.3; } }
+  .gsec { font-size: 9px; letter-spacing: 0.16em; text-transform: uppercase; color: var(--ink-3); padding: 11px 16px 2px; font-weight: 650; }
+  .gpg { display: flex; align-items: center; gap: 9px; font-size: 12px; font-weight: 550; color: var(--ink-2); padding: 5px 16px 5px 14px; border-left: 2px solid transparent; text-decoration: none; cursor: default; position: relative; }
+  .gpg .ic { width: 15px; text-align: center; color: var(--ink-3); font-size: 12px; flex: none; }
+  .gpg.on { color: var(--ink); border-left-color: var(--accent); background: rgba(157,184,232,0.06); }
+  .gpg.on .ic { color: var(--accent); }
+  .gpg .ct { font-size: 9px; color: var(--void); background: var(--alarm); border-radius: 8px; padding: 1px 5px; margin-left: auto; font-weight: 700; }
+  .gpg.action { color: var(--accent); font-size: 11px; margin-top: 2px; }
+  .brokenring { display: inline-flex; align-items: center; gap: 9px; outline: 2px solid var(--alarm); outline-offset: 3px; border-radius: 6px; }
+  .rail .foot { margin-top: auto; padding: 10px 16px 0; border-top: 1px solid var(--hair); display: flex; align-items: center; gap: 7px; font-size: 11.5px; color: var(--ink-2); }
+  .role { font-size: 8.5px; font-weight: 700; letter-spacing: 0.12em; color: var(--ink-3); border: 1px solid var(--hair-2); border-radius: 8px; padding: 1px 6px; text-transform: uppercase; }
+  .rbtn { color: var(--ink-3); font-size: 12px; border: 1px solid var(--hair-2); border-radius: 6px; width: 22px; height: 22px; display: grid; place-items: center; flex: none; }
+  .rbtn.first { margin-left: auto; }
+
+  .main { flex: 1; position: relative; min-width: 0; padding: 0 20px 56px; display: flex; flex-direction: column; }
+  .crumb { padding: 16px 0 0; display: flex; align-items: baseline; gap: 12px; }
+  .crumb .over { font-size: 10px; letter-spacing: 0.16em; text-transform: uppercase; color: var(--ink-3); }
+  .crumb h2 { font-size: 18px; font-weight: 550; display: flex; align-items: baseline; gap: 10px; }
+  .crumb h2 .dim { color: var(--ink-3); font-weight: 400; font-size: 12.5px; }
+  .rochip { margin-left: auto; font-size: 9px; font-weight: 700; letter-spacing: 0.1em; color: var(--ink-2); border: 1px solid var(--hair-2); border-radius: 8px; padding: 2px 8px; white-space: nowrap; }
+
+  /* ---- forms and lists ---- */
+  .formrow { display: flex; gap: 8px; align-items: center; margin-top: 14px; }
+  .fin { background: var(--tile); border: 1px solid var(--hair-2); border-radius: 8px; padding: 6px 10px; font-size: 12px; color: var(--ink-3); display: inline-flex; align-items: center; gap: 6px; }
+  .fin.on { color: var(--ink); border-color: var(--accent); }
+  .caret { display: inline-block; width: 1px; height: 13px; background: var(--accent); animation: blink 1.1s step-end infinite; }
+  @keyframes blink { 50% { opacity: 0; } }
+  .fbtn { font-size: 11.5px; color: var(--accent); border: 1px solid var(--hair-2); border-radius: 8px; padding: 5px 12px; white-space: nowrap; }
+  .fbtn.mut { color: var(--ink-3); }
+  .fbtn.busy { color: var(--ink-3); border-style: dashed; }
+  .sel { color: var(--ink-2); }
+  .sel b { color: var(--ink); font-weight: 550; }
+
+  .list { margin-top: 14px; }
+  .lr { display: flex; gap: 12px; align-items: baseline; padding: 9px 12px; border-bottom: 1px solid var(--hair); font-size: 12px; }
+  .lr .who { color: var(--ink); font-weight: 600; min-width: 90px; }
+  .lr .badge { font-size: 8.5px; font-weight: 700; letter-spacing: 0.1em; color: var(--ink-2); border: 1px solid var(--hair-2); border-radius: 8px; padding: 1px 6px; text-transform: uppercase; }
+  .lr .fact { color: var(--ink-3); font-size: 11px; font-family: var(--mono); }
+  .lr .fact i { display: inline-block; width: 5px; height: 5px; border-radius: 50%; background: var(--now); margin-right: 5px; vertical-align: 1px; }
+  .lr .act { margin-left: auto; font-size: 10.5px; color: var(--accent); white-space: nowrap; }
+  .lr .act.mut { color: var(--ink-3); }
+  .lr .note { margin-left: auto; font-size: 10.5px; color: var(--ink-3); font-style: italic; }
+  .lr .grow { flex: 1; }
+
+  .secretbanner { margin-top: 14px; border: 1px solid var(--hair-2); border-left: 2px solid var(--now); border-radius: 10px; background: rgba(232,176,90,0.06); padding: 10px 14px; font-size: 12px; color: var(--ink-2); display: flex; gap: 12px; align-items: center; }
+  .secretbanner .sk { font-family: var(--mono); color: var(--ink); font-size: 12px; }
+  .secretbanner b { color: var(--ink); }
+  .secretbanner .fbtn { margin-left: auto; }
+
+  /* ---- detector cards ---- */
+  .dcard { border: 1px solid var(--hair); border-radius: 12px; background: var(--tile); padding: 12px 16px; margin-top: 12px; }
+  .dhead { display: flex; align-items: baseline; gap: 10px; }
+  .dhead .nm { font-weight: 600; color: var(--ink); font-size: 13px; }
+  .dhead .k { font-family: var(--mono); font-size: 10px; color: var(--ink-3); }
+  .dhead .state { margin-left: auto; font-size: 11px; color: var(--ink-2); display: flex; align-items: center; gap: 6px; }
+  .dhead .state i { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--ok); }
+  .dhead .state.pausd i { background: none; border: 1px solid var(--ink-3); }
+  .dhead .state.pausd { color: var(--ink-3); }
+  .cbx { width: 14px; height: 14px; border: 1px solid var(--accent); border-radius: 4px; display: inline-grid; place-items: center; color: var(--accent); font-size: 10px; flex: none; align-self: center; }
+  .cbx.off { border-color: var(--ink-3); color: transparent; }
+  .cbx.busy { border-style: dashed; border-color: var(--ink-3); color: var(--ink-3); }
+  .dbody { font-size: 11.5px; color: var(--ink-2); margin-top: 6px; line-height: 1.6; }
+  .dbody b { color: var(--ink); font-weight: 550; }
+  .scopeform { margin-top: 10px; border-top: 1px solid var(--hair); padding-top: 10px; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; font-size: 11.5px; color: var(--ink-2); }
+  .savingnote { font-size: 10.5px; color: var(--ink-3); font-style: italic; margin-left: 8px; }
+  .kbd { font: 10.5px var(--mono); color: var(--ink-2); border: 1px solid var(--hair-2); border-bottom-width: 2px; border-radius: 5px; padding: 1px 6px; }
+
+  .speclist { font-size: 11.5px; color: var(--ink-2); line-height: 1.7; margin-top: 14px; }
+  .speclist b { color: var(--accent); font-weight: 650; }
+
+  .notes { display: flex; gap: 14px; align-items: stretch; margin: 14px auto 0; width: min(1460px, 97%); }
+  .anno { font-size: 11px; color: var(--ink-2); background: var(--glass-2); border: 1px solid var(--hair-2); border-left: 2px solid var(--accent); border-radius: 8px; padding: 9px 12px; flex: 1; }
+  .anno b { color: var(--accent); font-weight: 650; }
+
+  /* ---- light — token swap for comparison shots only ---- */
+  body.light {
+    --canvas: #c3c9d4; --void: #eef1f7;
+    --glass: rgba(252, 253, 255, 0.72); --glass-2: rgba(244, 247, 252, 0.92);
+    --hair: rgba(28, 44, 84, 0.12); --hair-2: rgba(28, 44, 84, 0.26);
+    --ink: #17223c; --ink-2: #46536f; --ink-3: #7d89a6;
+    --accent: #3f66b0; --ok: #1e7f43; --alarm: #d63c5e; --now: #9a6b10;
+    --tile: #ffffff;
+  }
+  body.light .concept, body.light .scene-tag { background: rgba(244, 247, 252, 0.95); }
+  body.light .frame .cap { background: rgba(244, 247, 252, 0.95); }
+  body.light .gpg.on { background: rgba(63, 102, 176, 0.09); }
+  body.light .secretbanner { background: rgba(154,107,16,0.07); }
+
+  @media (prefers-reduced-motion: reduce) { * { animation: none !important; } }
+</style>
+</head>
+<body>
+
+<div class="concept"><b>ROUND 1 — Z · THE READING ROOM</b> #490 under #518 · the same room, fewer hands · <a href="?theme=light" style="margin-left:0">light</a> · <a href="?" style="margin-left:4px">dark</a>
+  <span style="margin-left:auto"><a href="../../entities/round-1/direction-w-entities.html">the grammar's precedent: W scene 3</a><a href="index.html">index</a></span>
+</div>
+
+<!-- ================= SCENE 1 : USERS — THE PATTERN, TWICE ================= -->
+<section class="scene" id="s1">
+  <div class="scene-tag">Scene 1 — Users, both ways: the admin's room and the viewer's reading room are the same room.</div>
+  <div class="row2">
+    <div class="frame">
+      <aside class="rail" aria-label="Navigation">
+        <span class="wm">MIKRO<em>VIEW</em></span>
+        <span class="conn"><i></i>receiving</span>
+        <div class="gsec">Live</div>
+        <span class="gpg"><span class="ic">▿</span><span class="lab">The fall</span></span>
+        <span class="gpg"><span class="ic">≡</span><span class="lab">Stream</span></span>
+        <div class="gsec">Investigate</div>
+        <span class="gpg"><span class="ic">∿</span><span class="lab">Metrics</span></span>
+        <span class="gpg"><span class="ic">¶</span><span class="lab">Audit log</span></span>
+        <div class="gsec">Detect</div>
+        <span class="gpg"><span class="ic">⚑</span><span class="lab">Flags</span><span class="ct">6</span></span>
+        <span class="gpg"><span class="ic">⚙</span><span class="lab">Detectors</span></span>
+        <div class="gsec">Expect</div>
+        <span class="gpg"><span class="brokenring"><span class="ic">◉</span><span class="lab">Watchlist</span></span></span>
+        <div class="gsec">Admin</div>
+        <span class="gpg on"><span class="ic">§</span><span class="lab">Users</span></span>
+        <span class="gpg"><span class="ic">✱</span><span class="lab">Tokens</span></span>
+        <span class="gpg"><span class="ic">⌂</span><span class="lab">Fleet</span></span>
+        <span class="gpg"><span class="ic">⊞</span><span class="lab">Entities</span></span>
+        <span class="gpg action"><span class="ic">⟳</span><span class="lab">Run setup…</span></span>
+        <div class="foot"><span class="nm">tom</span><span class="role">admin</span><span class="rbtn first" title="Icons only">⇔</span><span class="rbtn" title="Dock the rail">⇤</span></div>
+      </aside>
+      <div class="main">
+        <div class="crumb">
+          <div>
+            <div class="over">Admin</div>
+            <h2>Users <span class="dim">· who can sign in</span></h2>
+          </div>
+        </div>
+        <div class="formrow">
+          <span class="fin on">kai's replacement…<span class="caret"></span></span>
+          <span class="fin">password</span>
+          <span class="fbtn">Add user</span>
+        </div>
+        <div class="list">
+          <div class="lr">
+            <span class="who">tom</span><span class="badge">admin</span>
+            <span class="fact">added 02 Aug · <i></i>signed in 13:41</span>
+            <span class="note">role transfer is a console operation</span>
+          </div>
+          <div class="lr">
+            <span class="who">kai</span>
+            <span class="fact">added 12 Aug · <i></i>signed in 12:07</span>
+            <span class="act mut" style="margin-left:auto">Remove</span>
+          </div>
+          <div class="lr">
+            <span class="who">mira</span><span class="badge">sso</span>
+            <span class="fact">added 12 Aug · signed in Tue 18:20</span>
+            <span class="act mut" style="margin-left:auto">Remove</span>
+          </div>
+        </div>
+        <div class="speclist">
+          <b>Remove names its consequences</b> before it acts — the confirm
+          says whose sessions end and that sign-in stops, in words. There is
+          deliberately no role field on the add form: new accounts are
+          viewers, and the single admin is a console-transfer fact, stated
+          inline where an admin would look for the missing control.
+        </div>
+      </div>
+      <div class="cap"><b>The admin's room.</b> One form, one list, Remove on every row that can honestly carry it. The admin row states its own rule as a fact — the one place a sentence stands in for a control <b>for the admin too</b>, because the operation lives in the console, not here.</div>
+    </div>
+    <div class="frame">
+      <aside class="rail" aria-label="Navigation">
+        <span class="wm">MIKRO<em>VIEW</em></span>
+        <span class="conn"><i></i>receiving</span>
+        <div class="gsec">Live</div>
+        <span class="gpg"><span class="ic">▿</span><span class="lab">The fall</span></span>
+        <span class="gpg"><span class="ic">≡</span><span class="lab">Stream</span></span>
+        <div class="gsec">Investigate</div>
+        <span class="gpg"><span class="ic">∿</span><span class="lab">Metrics</span></span>
+        <span class="gpg"><span class="ic">¶</span><span class="lab">Audit log</span></span>
+        <div class="gsec">Detect</div>
+        <span class="gpg"><span class="ic">⚑</span><span class="lab">Flags</span><span class="ct">6</span></span>
+        <span class="gpg"><span class="ic">⚙</span><span class="lab">Detectors</span></span>
+        <div class="gsec">Expect</div>
+        <span class="gpg"><span class="brokenring"><span class="ic">◉</span><span class="lab">Watchlist</span></span></span>
+        <div class="gsec">Admin</div>
+        <span class="gpg on"><span class="ic">§</span><span class="lab">Users</span></span>
+        <span class="gpg"><span class="ic">✱</span><span class="lab">Tokens</span></span>
+        <span class="gpg"><span class="ic">⌂</span><span class="lab">Fleet</span></span>
+        <span class="gpg"><span class="ic">⊞</span><span class="lab">Entities</span></span>
+        <div class="foot"><span class="nm">kai</span><span class="role">user</span><span class="rbtn first" title="Icons only">⇔</span><span class="rbtn" title="Dock the rail">⇤</span></div>
+      </aside>
+      <div class="main">
+        <div class="crumb">
+          <div>
+            <div class="over">Admin</div>
+            <h2>Users <span class="dim">· who can sign in</span></h2>
+          </div>
+          <span class="rochip">READ-ONLY — ADMINS EDIT</span>
+        </div>
+        <div class="list" style="margin-top: 18px">
+          <div class="lr">
+            <span class="who">tom</span><span class="badge">admin</span>
+            <span class="fact">added 02 Aug · <i></i>signed in 13:41</span>
+          </div>
+          <div class="lr">
+            <span class="who">kai</span>
+            <span class="fact">added 12 Aug · <i></i>signed in 12:07</span>
+          </div>
+          <div class="lr">
+            <span class="who">mira</span><span class="badge">sso</span>
+            <span class="fact">added 12 Aug · signed in Tue 18:20</span>
+          </div>
+        </div>
+        <div class="speclist">
+          <b>Everything that remains is true for kai too.</b> Who has an
+          account, who is the admin, who signed in when — the reading a
+          viewer actually needs from this page ("is my colleague's account
+          still here", "who do I ask for a change"). The add form, Remove,
+          and even the admin row's console note are gone: <b>explanations of
+          absent affordances are absent too</b>.
+        </div>
+      </div>
+      <div class="cap"><b>The viewer's reading room (#490 grammar).</b> Declared once, in the chip. Nothing else moved: same rows, same order, same facts, same rail — minus the one action row (<b>Run setup…</b>) that is a door to a workshop, not a page to read.</div>
+    </div>
+  </div>
+  <div class="notes">
+    <div class="anno"><b>The rail change this implies.</b> Today the shipped rail deletes the whole Admin group for viewers; the ratified record (#486) already says the opposite — the pages render, read-only. Z is that record applied: viewers keep Users · Tokens · Fleet · Entities as places to read, and lose only <b>Run setup…</b>, which is an action.</div>
+    <div class="anno"><b>The API clause.</b> Every write on this page is 403 for non-admins at the server, whatever any client renders. The viewer's page exists because <span style="font-family:var(--mono)">GET /api/auth/users</span> is widened from admin to signed-in — deliberately, with its own row in the authz matrix, the way the matrix's own comment says this was always meant to happen.</div>
+    <div class="anno"><b>One grammar, whoever you are.</b> The admin also meets the sentence-for-a-control pattern (the console-transfer note), so the viewer's room is not a second dialect — it is the same language with fewer verbs.</div>
+  </div>
+</section>
+
+<!-- ================= SCENE 2 : DETECTORS — THE HARD TRANSLATION ================= -->
+<section class="scene" id="s2">
+  <div class="scene-tag">Scene 2 — Detectors: a control is a fact wearing a handle. The viewer keeps the fact, in words — never a greyed ghost.</div>
+  <div class="row2">
+    <div class="frame">
+      <div class="main" style="padding-left: 18px">
+        <div class="crumb">
+          <div>
+            <div class="over">Detect</div>
+            <h2>Detectors <span class="dim">· what watches the traffic</span></h2>
+          </div>
+        </div>
+        <div class="dcard">
+          <div class="dhead"><span class="cbx">✓</span><span class="nm">Port scan</span><span class="k">port_scan</span><span class="state"><i></i>running</span></div>
+          <div class="dbody">Flags a source probing many ports in a short window. Caught <b>203.0.113.44</b> at 13:52 — 88 hits, one minute.</div>
+          <div class="scopeform">
+            <span>Sources:</span><span class="fin sel"><b>external only</b> ▾</span>
+            <span>Hosts:</span><span class="fin sel">deny ▾</span><span class="fin">none listed…</span>
+            <span class="fbtn">Save scope</span><span class="fbtn mut">Cancel</span>
+          </div>
+        </div>
+        <div class="dcard">
+          <div class="dhead"><span class="cbx busy">✓</span><span class="nm">Activity spike</span><span class="k">activity_spike</span><span class="state"><i></i>running</span><span class="savingnote">saving…</span></div>
+          <div class="dbody">Flags a device suddenly far above its own baseline.</div>
+        </div>
+        <div class="dcard">
+          <div class="dhead"><span class="cbx off"></span><span class="nm">Off-hours activity</span><span class="k">off_hours_activity</span><span class="state pausd"><i></i>paused</span></div>
+          <div class="dbody">Flags traffic in the quiet hours. Paused 12 Aug — the night backup kept tripping it; scope it to clients before resuming.</div>
+        </div>
+        <div class="dcard">
+          <div class="dhead"><span class="cbx">✓</span><span class="nm">Device silence</span><span class="k">device_silence</span><span class="state"><i></i>running</span></div>
+          <div class="dbody">Flags a known device going quiet. <b>Nothing to scope</b>: it consults the fleet, not a host list — stated here in prose, for the admin too.</div>
+        </div>
+        <div class="speclist">
+          <b>Busy-disabled is not permission-disabled.</b> The dashed
+          checkbox above is <i>saving</i> — a one-breath state with its own
+          word beside it. It is the only disabled control this page ever
+          shows, and it never means "not yours".
+        </div>
+      </div>
+      <div class="cap"><b>The admin's room.</b> Enable is a checkbox, scope is a form, and a detector with nothing to scope says so in a sentence — the admin already lives with all three shapes on this page today.</div>
+    </div>
+    <div class="frame">
+      <div class="main" style="padding-left: 18px">
+        <div class="crumb">
+          <div>
+            <div class="over">Detect</div>
+            <h2>Detectors <span class="dim">· what watches the traffic</span></h2>
+          </div>
+          <span class="rochip">READ-ONLY — ADMINS EDIT</span>
+        </div>
+        <div class="dcard">
+          <div class="dhead"><span class="nm">Port scan</span><span class="k">port_scan</span><span class="state"><i></i>running</span></div>
+          <div class="dbody">Flags a source probing many ports in a short window. Caught <b>203.0.113.44</b> at 13:52 — 88 hits, one minute.<br><b>Watches external sources only</b>; no hosts excluded.</div>
+        </div>
+        <div class="dcard">
+          <div class="dhead"><span class="nm">Activity spike</span><span class="k">activity_spike</span><span class="state"><i></i>running</span></div>
+          <div class="dbody">Flags a device suddenly far above its own baseline. Watches everything.</div>
+        </div>
+        <div class="dcard">
+          <div class="dhead"><span class="nm">Off-hours activity</span><span class="k">off_hours_activity</span><span class="state pausd"><i></i>paused</span></div>
+          <div class="dbody">Flags traffic in the quiet hours. <b>Paused 12 Aug</b> — the night backup kept tripping it. A viewer reading the flags page now knows why quiet hours are quiet.</div>
+        </div>
+        <div class="dcard">
+          <div class="dhead"><span class="nm">Device silence</span><span class="k">device_silence</span><span class="state"><i></i>running</span></div>
+          <div class="dbody">Flags a known device going quiet. Consults the fleet, not a host list.</div>
+        </div>
+        <div class="speclist">
+          <b>The checkbox became a word.</b> Running · paused, with the same
+          quiet dot the admin sees. The scope form became a sentence in the
+          card body — "watches external sources only" — because the scope
+          <b>is</b> a fact about what guards this network, and viewers are
+          exactly who read facts.
+        </div>
+      </div>
+      <div class="cap"><b>The viewer's reading room.</b> No checkbox, no form, no Save — and nothing greyed to wonder about. The card is not a degraded admin card; it is a complete answer to the viewer's real question: <b>what is watching, what is not, and why.</b></div>
+    </div>
+  </div>
+  <div class="notes">
+    <div class="anno"><b>Why never a disabled control.</b> A disabled checkbox advertises an action the viewer can't take (#198's words, already shipped as the rail's rule) and hides whether the thing is off or merely untouchable. The word "paused" cannot be misread either way.</div>
+    <div class="anno"><b>The translation is mechanical, and the record says so.</b> Toggle → state word · scope form → scope sentence · action button → absent. The build applies the table to Watchlist and every future surface without new design judgement — that is this round's job under #518.</div>
+  </div>
+</section>
+
+<!-- ================= SCENE 3 : TOKENS — SECRETS, AND THE ESTATE'S EDGES ================= -->
+<section class="scene" id="s3">
+  <div class="scene-tag">Scene 3 — Tokens: the secret exists only in the admin's minting moment; and where the estate's edges lie.</div>
+  <div class="row2">
+    <div class="frame">
+      <div class="main" style="padding-left: 18px">
+        <div class="crumb">
+          <div>
+            <div class="over">Admin</div>
+            <h2>Tokens <span class="dim">· keys the machines hold</span></h2>
+          </div>
+        </div>
+        <div class="formrow">
+          <span class="fin on">name the token…<span class="caret"></span></span>
+          <span class="fin sel"><b>ingest</b> ▾</span>
+          <span class="fin sel">device: <b>rb5009</b> ▾</span>
+          <span class="fbtn">Mint</span>
+        </div>
+        <div class="secretbanner">
+          <span><b>Copy it now — it is shown once.</b><br><span class="sk">mv1_9f3a…c07e</span></span>
+          <span class="fbtn">Copy</span>
+        </div>
+        <div class="list">
+          <div class="lr">
+            <span class="who" style="min-width:130px">grafana-read</span><span class="badge">api · read-only</span>
+            <span class="fact">created 12 Aug · <i></i>last used 13:59</span>
+            <span class="act mut" style="margin-left:auto">Revoke</span>
+          </div>
+          <div class="lr">
+            <span class="who" style="min-width:130px">rb5009-ingest</span><span class="badge">ingest: rb5009</span>
+            <span class="fact">created 02 Aug · <i></i>last used 14:02</span>
+            <span class="act mut" style="margin-left:auto">Revoke</span>
+          </div>
+        </div>
+        <div class="speclist">
+          <b>The secret's whole life is this banner.</b> It is minted, shown
+          once, copied, and gone — after this breath it exists in no GET, no
+          list row, no admin page either. Revoke is the only verb a listed
+          token ever carries; there is no rotate-in-place, because a new key
+          is a new mint.
+        </div>
+      </div>
+      <div class="cap"><b>The admin's room.</b> Mint at the top, the one-time secret in its amber moment, the list below carrying only facts that stay true: name, kind, device, created, last used.</div>
+    </div>
+    <div class="frame">
+      <div class="main" style="padding-left: 18px">
+        <div class="crumb">
+          <div>
+            <div class="over">Admin</div>
+            <h2>Tokens <span class="dim">· keys the machines hold</span></h2>
+          </div>
+          <span class="rochip">READ-ONLY — ADMINS EDIT</span>
+        </div>
+        <div class="list" style="margin-top: 18px">
+          <div class="lr">
+            <span class="who" style="min-width:130px">grafana-read</span><span class="badge">api · read-only</span>
+            <span class="fact">created 12 Aug · <i></i>last used 13:59</span>
+          </div>
+          <div class="lr">
+            <span class="who" style="min-width:130px">rb5009-ingest</span><span class="badge">ingest: rb5009</span>
+            <span class="fact">created 02 Aug · <i></i>last used 14:02</span>
+          </div>
+        </div>
+        <div class="speclist">
+          <b>Why a viewer sees this page at all:</b> "is ingest alive?" is a
+          viewer-grade question, and <b>last used 14:02</b> answers it. What a
+          viewer's page can never contain is a secret — not because the mint
+          form is absent, but because <b>no GET serves one to anyone</b>. The
+          admin's banner is a moment, not a field this page lost.
+        </div>
+        <div class="speclist" style="border-top: 1px solid var(--hair); padding-top: 12px">
+          <b>The estate's edges, settled here:</b> Watchlist and Flags'
+          exclusions read the same way (rules and suppressions as facts, the
+          draft forms and Remove absent). <b>Fleet</b> and the <b>audit log</b>
+          were already reading rooms and gain the chip only. <b>Run setup…</b>
+          stays admin-only outright — it mints credentials; there is nothing
+          in it to read. Account doors (password, SSO) are every user's own
+          and unchanged.
+        </div>
+      </div>
+      <div class="cap"><b>The viewer's reading room.</b> Same list, same facts, chip declared once. The absence that matters here is the server's, not the page's: secrets appear in no response a viewer — or an admin — can fetch twice.</div>
+    </div>
+  </div>
+  <div class="notes">
+    <div class="anno"><b>What the build inherits (the #490 done-when).</b> Client: the chip, the affordance-absence, the word-state translations, the viewer rail. Server: writes already 403 everywhere; the settings GETs (users, tokens, definitions, entities, suggestions, audit) widened to signed-in users one deliberate authz-matrix row at a time; token values in no GET.</div>
+    <div class="anno"><b>Keyboard and announcement.</b> The chip is read once by assistive tech as the page's description, not repeated per control. Every fact row is plain text — nothing focusable pretends to be pressable, which is the keyboard's version of absent-never-disabled.</div>
+  </div>
+</section>
+
+<script>
+  // light/dark for comparison shots: ?theme=light — a token swap, nothing else
+  if (new URLSearchParams(location.search).get('theme') === 'light') document.body.classList.add('light');
+</script>
+</body>
+</html>
