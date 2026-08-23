@@ -264,3 +264,84 @@ func evaluateThroughEngine(t *testing.T, eng *Engine, e store.Event) {
 	t.Helper()
 	eng.evaluateEvent(e)
 }
+
+// TestShippedKnownBadIPFlagsOnlyWhatGotThrough is #555: a listed address
+// the firewall stopped is the firewall working, and since most traffic
+// from a listed address is stopped, flagging it buried the one case
+// worth an operator's attention.
+//
+// Table-driven over every action the parser can produce rather than the
+// three the issue's "Done when" asks for. The three suppressed non-filter
+// cases are the ones a future change is most likely to get wrong: log and
+// marked look like traffic but decide nothing, and natted looks like the
+// same kind of non-verdict while deliberately flagging anyway.
+func TestShippedKnownBadIPFlagsOnlyWhatGotThrough(t *testing.T) {
+	cases := []struct {
+		action store.Action
+		want   bool
+		why    string
+	}{
+		{store.ActionAccept, true, "the case the flag exists for"},
+		{store.ActionDrop, false, "the firewall did its job"},
+		{store.ActionReject, false, "the firewall did its job"},
+		{store.ActionLog, false, "logs without deciding; the verdict line follows and is judged instead"},
+		{store.ActionMarked, false, "a mangle rule decides nothing; same"},
+		{store.ActionNatted, true, "decides nothing either, but nothing follows it -- a listed address reaching a port forward is worth knowing"},
+		{store.ActionUnknown, true, "unreadable action must not silently switch the detector off"},
+	}
+
+	for _, tc := range cases {
+		t.Run(string(tc.action), func(t *testing.T) {
+			fs := newTestFlagsStore(t)
+			bl := newFakeKnownBadIPs()
+			bl.setMatch("198.51.100.4", "Spamhaus DROP", "198.51.100.0/24")
+			d := newShippedKnownBadIPDefinition(t, fs, bl)
+
+			e := psEvt("198.51.100.4", 22, time.Now())
+			e.Action = tc.action
+			d.Evaluate(e)
+
+			got := findFlag(fs, "198.51.100.4", flags.TypeKnownBadIP) != nil
+			if got != tc.want {
+				t.Errorf("action %q raised a flag = %v, want %v -- %s", tc.action, got, tc.want, tc.why)
+			}
+		})
+	}
+}
+
+// TestShippedKnownBadIPReinforcesEvenWhenBlocked pins the half of #555
+// that deliberately did *not* change. port_scan and low_slow_scan are
+// built almost entirely out of blocked traffic, so a confidence floor
+// that only rose on accepted traffic would gut them -- and unlike the
+// flag, the floor is not a report of a threat to the operator, it only
+// adds weight to behaviour another definition found on its own.
+func TestShippedKnownBadIPReinforcesEvenWhenBlocked(t *testing.T) {
+	for _, action := range []store.Action{store.ActionDrop, store.ActionReject, store.ActionLog} {
+		t.Run(string(action), func(t *testing.T) {
+			fs := newTestFlagsStore(t)
+			bl := newFakeKnownBadIPs()
+			bl.setMatch("198.51.100.4", "Spamhaus DROP", "198.51.100.0/24")
+			d := newShippedKnownBadIPDefinition(t, fs, bl)
+
+			// A port_scan flag the blocklist match should reinforce, with
+			// a confidence below the floor known_bad_ip raises to.
+			fs.AddWithConfidence(flags.TypePortScan, "198.51.100.4", "scanned 20 ports", 10, time.Now())
+
+			e := psEvt("198.51.100.4", 22, time.Now())
+			e.Action = action
+			d.Evaluate(e)
+
+			if f := findFlag(fs, "198.51.100.4", flags.TypeKnownBadIP); f != nil {
+				t.Errorf("action %q should raise no flag of its own, got %+v", action, f)
+			}
+			ps := findFlag(fs, "198.51.100.4", flags.TypePortScan)
+			if ps == nil {
+				t.Fatal("the port_scan flag disappeared")
+			}
+			if ps.Confidence == nil || *ps.Confidence != knownBadIPConfidence {
+				t.Errorf("port_scan Confidence = %v, want the floor %d raised even on %q",
+					ps.Confidence, knownBadIPConfidence, action)
+			}
+		})
+	}
+}
