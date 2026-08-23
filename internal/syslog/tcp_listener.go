@@ -5,6 +5,7 @@ package syslog
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"fmt"
 	"net"
 	"net/netip"
@@ -34,9 +35,25 @@ type RawMessage struct {
 // connections -- misbehaving devices, or a scan of the LAN -- would each
 // hold a goroutine and a socket open indefinitely.
 //
-// A var rather than a const so tests can shrink it to exercise the
-// rejection path without opening 256+ real sockets.
-var maxTCPConnections = 256
+// atomic.Int64 rather than a plain int for exactly the reason
+// maxTCPConnectionsPerSource and tcpIdleTimeoutNS below document: a test
+// shrinking this to exercise the rejection path races ServeTCP's accept
+// loop still reading it, with no Go-level happens-before edge between
+// "the test observed the rejection" and "the accept loop finished
+// reading the old value" -- caught by `go test -race -count=2`, which
+// failed 3/3 while this was a plain var (issue #380 item 6). Read
+// through maxTCPConns(); use of a raw value elsewhere in the process is
+// never mutated, so it is a var only to remain test-shrinkable.
+var maxTCPConnections atomic.Int64
+
+func init() {
+	maxTCPConnections.Store(256)
+}
+
+// maxTCPConns reads the current connection ceiling. See maxTCPConnections.
+func maxTCPConns() int {
+	return int(maxTCPConnections.Load())
+}
 
 // maxTCPConnectionsPerSource caps how many of the global slots any one
 // source IP may hold. Without it the global cap alone is exhaustible by
@@ -135,15 +152,21 @@ func SetConfiguredSources(addrs []string) {
 	configuredSources.Store(&m)
 }
 
-// OnConnection is called once per accepted syslog connection, with the
+// OnConnection is called once per accepted syslog connection that has
+// gone on to complete a TLS handshake (see handleTCPConn), with the
 // source host. Nil unless set. It exists for the setup wizard (#320),
 // which has to distinguish "the router cannot reach me at all" from
-// "it is connected but no rule is logging yet" -- and only the
-// connection itself separates those. A package-level hook rather than a
-// ServeTCP parameter, matching SetConfiguredSources above: this is
-// process-wide observation, not per-listener configuration.
+// "it is connected but no rule is logging yet" -- and only a completed
+// handshake actually separates those; a bare TCP connect (a LAN port
+// scan, a health check, or a router failing the handshake against a
+// certificate that doesn't cover its address) does not (#371). A
+// package-level hook rather than a ServeTCP parameter, matching
+// SetConfiguredSources above: this is process-wide observation, not
+// per-listener configuration.
 //
-// Called on the accept path, so it must not block.
+// Called from each connection's own goroutine, past its handshake, not
+// from the accept loop -- so it may take as long as it likes; it is the
+// accept loop itself, in ServeTCP, that must never block.
 var OnConnection atomic.Pointer[func(host string)]
 
 // SetOnConnection installs the hook. Call once at startup.
@@ -169,7 +192,7 @@ func reservedSlots() int {
 	if m == nil || len(*m) == 0 {
 		return 0
 	}
-	if r := maxTCPConnections / reservedFraction; r > 0 {
+	if r := maxTCPConns() / reservedFraction; r > 0 {
 		return r
 	}
 	return 1
@@ -210,7 +233,7 @@ type ListenerStats struct {
 func Stats() ListenerStats {
 	return ListenerStats{
 		InUse:                 int(tcpInUse.Load()),
-		Capacity:              maxTCPConnections,
+		Capacity:              maxTCPConns(),
 		ReservedForConfigured: reservedSlots(),
 		Rejected:              tcpRejected.Load(),
 		RejectedConfigured:    tcpRejectedConfigured.Load(),
@@ -281,7 +304,7 @@ func ServeTCP(ctx context.Context, ln net.Listener, out chan<- RawMessage) error
 	// A buffered channel used purely as a counting semaphore: acquiring a
 	// slot is receiving capacity to send, releasing is the deferred read
 	// once the connection's goroutine exits.
-	slots := make(chan struct{}, maxTCPConnections)
+	slots := make(chan struct{}, maxTCPConns())
 
 	// Per-source counts, guarded by its own mutex: the accept loop
 	// increments, each connection's goroutine decrements on exit.
@@ -321,7 +344,7 @@ func ServeTCP(ctx context.Context, ln net.Listener, out chan<- RawMessage) error
 		// free slot. Without this a flood of undeclared sources fills
 		// the pool and the operator's own routers are locked out -- see
 		// reservedFraction.
-		unreservedCap := maxTCPConnections - reservedSlots()
+		unreservedCap := maxTCPConns() - reservedSlots()
 		perSourceMu.Lock()
 		atCap := perSource[host] >= perSourceLimit()
 		outOfUnreserved := !configured && undeclaredInUse >= unreservedCap
@@ -345,7 +368,7 @@ func ServeTCP(ctx context.Context, ln net.Listener, out chan<- RawMessage) error
 			if total, ok := unreservedRejectGate.Allow(); ok {
 				tcpLog.Warn(fmt.Sprintf(
 					"undeclared sources are using all %d unreserved connection slots (%d of %d held for routers listed under devices: in config.yaml) -- rejecting %s (%d such rejections since start)",
-					unreservedCap, reservedSlots(), maxTCPConnections, host, total))
+					unreservedCap, reservedSlots(), maxTCPConns(), host, total))
 			}
 			conn.Close()
 			continue
@@ -364,7 +387,6 @@ func ServeTCP(ctx context.Context, ln net.Listener, out chan<- RawMessage) error
 
 		select {
 		case slots <- struct{}{}:
-			noteConnection(host)
 			tcpInUse.Add(1)
 			go func() {
 				defer func() { <-slots }()
@@ -379,7 +401,7 @@ func ServeTCP(ctx context.Context, ln net.Listener, out chan<- RawMessage) error
 			// At capacity: reject immediately rather than queuing, so the
 			// accept loop itself never blocks waiting for a slot to free up.
 			if total, ok := globalRejectGate.Allow(); ok {
-				tcpLog.Warn(fmt.Sprintf("connection limit (%d) reached -- rejecting %s (%d such rejections since start)", maxTCPConnections, conn.RemoteAddr(), total))
+				tcpLog.Warn(fmt.Sprintf("connection limit (%d) reached -- rejecting %s (%d such rejections since start)", maxTCPConns(), conn.RemoteAddr(), total))
 			}
 			conn.Close()
 		}
@@ -431,6 +453,31 @@ func handleTCPConn(ctx context.Context, conn net.Conn, out chan<- RawMessage) {
 	}()
 
 	host, _, _ := net.SplitHostPort(conn.RemoteAddr().String())
+
+	// The idle deadline applies to a TLS handshake exactly as it does to
+	// the read loop below -- HandshakeContext performs its own reads and
+	// writes on this same conn, and honours whatever deadline is set on
+	// it -- so a connection that opens and then never completes (or
+	// never attempts) a handshake doesn't hold its slot forever.
+	conn.SetReadDeadline(time.Now().Add(tcpIdleTimeout()))
+
+	// noteConnection fires here, past a completed TLS handshake, not
+	// from ServeTCP's accept branch: tls.Listener.Accept negotiates the
+	// handshake lazily (see tls_listener.go's own doc comment), so a
+	// bare TCP connect -- a LAN port scan, a health check, or a router
+	// whose handshake is about to fail against a certificate that
+	// doesn't cover its address -- must not satisfy the setup wizard's
+	// "syslog connected" step (#371). Gated on a completed handshake,
+	// not on the first byte of application data, because a working
+	// handshake with no logging rule configured yet is a different,
+	// already-distinguished state (see setup.Store.NoteSyslogConnection's
+	// doc comment) that this must not collapse into "never connected".
+	if tlsConn, ok := conn.(*tls.Conn); ok {
+		if err := tlsConn.HandshakeContext(ctx); err != nil {
+			return
+		}
+	}
+	noteConnection(host)
 
 	// Framing has two shapes, and this loop distinguishes them by
 	// content, not by how many Read()s a message happened to arrive in

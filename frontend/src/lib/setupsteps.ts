@@ -44,8 +44,16 @@ export function hostname(hostPort: string): string {
 // getting it wrong produces a failure three steps later
 // ("name verification failed") whose cause is on MikroView's side, not
 // the router's.
+//
+// tls.enabled only turns HTTPS off on the API port -- it does not stop
+// a certificate from being loaded. main.go loads/generates one whenever
+// cfg.TLS.Enabled || cfg.Listen.SyslogTLS != "", and hands that same
+// certificate to the syslog TLS listener regardless of tls.enabled
+// (#374). So the check only skips entirely when neither HTTP TLS nor
+// syslog TLS is on -- matching main.go's own condition for when a
+// certificate is even in play.
 export function certificateCovers(status: SetupStatus, address: string): boolean {
-  if (!status.instance.tlsEnabled) return true
+  if (!status.instance.tlsEnabled && !status.instance.syslogEnabled) return true
   const host = hostname(address)
   const hosts = status.instance.hosts
   // An empty list means the generated certificate covers
