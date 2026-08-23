@@ -1,7 +1,18 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-import { describe, expect, it } from 'vitest'
-import { applyFilters } from './state.svelte'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
+
+// Mocked so loadInitial()/refetchWithFilters() below can be made to
+// reject on demand, the same way a 503 or a dropped connection would --
+// see the "swallowed failure" tests (issue #373).
+vi.mock('./api', () => ({
+  fetchEvents: vi.fn(),
+  fetchDevices: vi.fn(),
+  fetchStats: vi.fn(),
+}))
+
+import { fetchDevices, fetchEvents, fetchStats } from './api'
+import { appState, applyFilters } from './state.svelte'
 import { matchingIds } from './ruleMatcher'
 import { emptyFilters, type FirewallEvent, type Filters } from './types'
 
@@ -116,6 +127,67 @@ describe('applyFilters port', () => {
     const events = [evt({ id: 1, srcPort: 443 }), evt({ id: 2, dstPort: 22 })]
     const got = applyFilters(events, { ...emptyFilters(), port: 'abc' })
     expect(got).toHaveLength(2)
+  })
+})
+
+// Issue #373: a failed refetch (or initial load) used to be indistinguishable
+// from a genuinely empty result -- handleApiError (App.svelte) only acts on
+// 401s, so the rejection from fetchEvents/fetchDevices/fetchStats was dropped
+// on the floor and appState.events was simply left as whatever it already
+// held. LiveTable then read that untouched buffer as a definite "nothing
+// matches". These tests simulate the real failure (a rejected fetch, e.g. a
+// 503 from the server) and check that appState records the failure rather
+// than silently keeping the stale-but-plausible-looking buffer.
+describe('AppState surfaces a failed refetch/initial load (issue #373)', () => {
+  beforeEach(() => {
+    vi.resetAllMocks()
+    appState.events = []
+    appState.filters = emptyFilters()
+    appState.fetchFailed = false
+  })
+
+  it('flags the failure when refetchWithFilters rejects, and does not silently accept an empty buffer as the answer', async () => {
+    // Buffer holds an event from before the filter was narrowed -- exactly
+    // the "incomplete client-side buffer" the issue describes.
+    appState.events = [evt({ id: 1 })] as unknown as (typeof appState)['events']
+
+    vi.mocked(fetchEvents).mockRejectedValue(new Error('503 Service Unavailable'))
+
+    await expect(appState.refetchWithFilters()).rejects.toThrow()
+
+    // The real defect: without this, appState.events is left untouched and
+    // nothing anywhere records that the query that would have proven
+    // completeness never ran.
+    expect(appState.fetchFailed).toBe(true)
+  })
+
+  it('clears the flag once a refetch actually succeeds', async () => {
+    appState.fetchFailed = true
+    vi.mocked(fetchEvents).mockResolvedValue({
+      events: [],
+      hasMore: false,
+      windowStart: '2026-01-01T00:00:00Z',
+      serverTime: '2026-01-01T00:00:00Z',
+    })
+
+    await appState.refetchWithFilters()
+
+    expect(appState.fetchFailed).toBe(false)
+  })
+
+  it('flags the failure when the initial load rejects', async () => {
+    vi.mocked(fetchEvents).mockRejectedValue(new Error('network error'))
+    vi.mocked(fetchDevices).mockResolvedValue([])
+    vi.mocked(fetchStats).mockResolvedValue({
+      total: 0,
+      byAction: {},
+      topRules: [],
+      timeline: [],
+    } as unknown as Awaited<ReturnType<typeof fetchStats>>)
+
+    await expect(appState.loadInitial()).rejects.toThrow()
+
+    expect(appState.fetchFailed).toBe(true)
   })
 })
 
