@@ -3,9 +3,16 @@ name: docker
 # dev deliberately publishes nothing -- keeps dev cheap/fast, and a
 # moving-target image built from unreviewed dev work isn't something
 # worth shipping to the registry. preview publishes the actual release
-# candidate; main never rebuilds, it only ever promotes (retags) the
-# exact digest that was already built and smoke-tested from preview --
-# see ci.yml's container/security jobs, which both run on preview.
+# candidate -- see ci.yml's container/security jobs, which both run
+# on preview.
+#
+# main takes one of two paths, chosen by detect-release based on
+# whether VERSION is already tagged:
+#   - release: builds a fresh image, smoke-tests that build, then
+#     moves latest to it and tags last. The rebuild is deliberate,
+#     not a bug -- see the comment on the release job for why.
+#   - promote-to-main: an ordinary merge, no rebuild -- retags
+#     preview's exact already-tested digest as latest.
 on:
   push:
     branches: [preview, main]
