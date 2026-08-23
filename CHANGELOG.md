@@ -16,6 +16,32 @@ rewritten.
 
 ## [Unreleased]
 
+### Changed
+
+- **Navigation is now a permanent left rail instead of a hamburger menu**
+  (#544). Every view is one click away and always visible, grouped as
+  Live, Investigate, Detect, Expect and Admin. The menu's other contents
+  moved rather than disappearing: **Export to CSV** is now in the live
+  view's filter bar next to Clear filters, where it acts on exactly the
+  events you have filtered; **account actions** (change password,
+  connect SSO, sign out) and **About & licence** are in the rail's
+  footer; and on phones the **display duration** selector moved to the
+  filter bar too. The version number is no longer shown in the chrome --
+  it is in About & licence, `GET /api/healthz` and `mikroview -version`,
+  as before.
+
+### Removed
+
+- **The hamburger menu is gone** (#544), wholesale, along with its
+  overlay. Nothing is aliased or stubbed behind it; see the moves above
+  for where each of its contents now lives.
+
+- **Exclusions and Suggestions are temporarily unreachable.** The
+  ratified design makes them tabs of Flags and Watchlist rather than
+  pages of their own, and that merge is #547. Their data is untouched
+  and both return as tabs when it lands. This is a deliberate gap
+  between two development releases, not a removal.
+
 ## [0.3.1] - 2026-08-23
 
 ### Changed

@@ -16,8 +16,7 @@ const URL_BASE = process.env.MV_URL
 
 const { page, consoleErrors } = await session()
 
-await page.click('.nav-menu .trigger')
-await page.click('.nav-menu button:has-text("API tokens")')
+await page.click('.rail .item:has-text("Tokens")')
 await page.waitForSelector('.modal[aria-label="API tokens"]')
 
 // --- Ingest token, entirely through the dialog --------------------------
