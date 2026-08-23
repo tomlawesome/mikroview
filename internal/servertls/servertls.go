@@ -18,7 +18,9 @@ import (
 	"crypto/x509/pkix"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
 	"fmt"
+	"io/fs"
 	"math/big"
 	"net"
 	"os"
@@ -68,22 +70,36 @@ type Config struct {
 // establish trust) -- nil when CertFile/KeyFile were used instead, since
 // there's no mikroview-generated CA in that case.
 //
-// The two error returns are deliberately distinct. err is fatal --
-// nothing usable to serve at all (an operator-supplied cert failed to
-// load, or generation itself failed) -- the caller should stop
-// starting. persistErr is never fatal: generation already succeeded, so
-// the returned cert is genuinely usable, it just didn't make it to disk
-// (e.g. a read-only root filesystem -- see the "hardened container"
-// smoke test), meaning every restart will regenerate -- and re-trust --
-// a fresh CA instead of reusing this one. The caller should log it as a
-// warning, not treat it as startup failure.
-func Load(cfg Config) (cert tls.Certificate, caCertPEM []byte, persistErr error, err error) {
+// Every error is fatal and the caller should stop starting (#535).
+// That includes the two failures this used to survive: a stored CA that
+// is present but unusable, and a newly generated CA that cannot be
+// written to StorePath.
+//
+// Both used to be warnings, on the reasoning that the in-memory
+// certificate is genuinely usable so the server may as well serve. What
+// that missed is who else is affected. A regenerated CA is a *new*
+// trust anchor: the router pushing syslog over TLS rejects it and stops
+// delivering, so mikroview goes quiet in exactly the way it exists to
+// warn about. Refusing to start puts the operator in the logs, where
+// the reason is stated plainly, instead of leaving a warning to scroll
+// past while everything looks fine.
+//
+// reusedCA reports whether the CA came from StorePath rather than being
+// minted here, so the caller can say "reusing" instead of "generated".
+// It used to say "generated a local CA" on every start, reused or not,
+// which is what made a genuinely regenerating deployment impossible to
+// spot from the logs.
+//
+// Only the CA is treated this way. A missing or unusable *leaf* costs
+// one regeneration and no re-trust, because clients pin the CA -- see
+// loadStoredLeaf.
+func Load(cfg Config) (cert tls.Certificate, caCertPEM []byte, reusedCA bool, err error) {
 	if cfg.CertFile != "" && cfg.KeyFile != "" {
 		cert, err := tls.LoadX509KeyPair(cfg.CertFile, cfg.KeyFile)
 		if err != nil {
-			return tls.Certificate{}, nil, nil, fmt.Errorf("servertls: loading %s/%s: %w", cfg.CertFile, cfg.KeyFile, err)
+			return tls.Certificate{}, nil, false, fmt.Errorf("servertls: loading %s/%s: %w", cfg.CertFile, cfg.KeyFile, err)
 		}
-		return cert, nil, nil, nil
+		return cert, nil, false, nil
 	}
 
 	hosts := cfg.Hosts
@@ -95,34 +111,50 @@ func Load(cfg Config) (cert tls.Certificate, caCertPEM []byte, persistErr error,
 
 	var ca *caPair
 	if cfg.StorePath != "" {
-		ca = loadStoredCA(cfg.StorePath)
+		stored, err := loadStoredCA(cfg.StorePath)
+		if err != nil {
+			return tls.Certificate{}, nil, false, fmt.Errorf(
+				"servertls: %w -- refusing to start, because generating a new CA "+
+					"would break every browser, reverse proxy and router that trusts "+
+					"the current one. Fix the permissions or contents of %s, or remove "+
+					"the files there to deliberately start over with a new CA that "+
+					"everything must re-trust", err, cfg.StorePath)
+		}
+		ca = stored
+		reusedCA = ca != nil
 	}
 	if ca == nil {
 		var err error
 		ca, err = generateCA()
 		if err != nil {
-			return tls.Certificate{}, nil, nil, fmt.Errorf("servertls: generating local CA: %w", err)
+			return tls.Certificate{}, nil, false, fmt.Errorf("servertls: generating local CA: %w", err)
 		}
 	}
 
 	if cfg.StorePath != "" {
 		if cert, ok := loadStoredLeaf(cfg.StorePath, sortedHosts, ca); ok {
-			return cert, ca.certPEM, nil, nil
+			return cert, ca.certPEM, reusedCA, nil
 		}
 	}
 
 	leaf, err := generateLeaf(ca, sortedHosts)
 	if err != nil {
-		return tls.Certificate{}, nil, nil, fmt.Errorf("servertls: generating leaf certificate: %w", err)
+		return tls.Certificate{}, nil, false, fmt.Errorf("servertls: generating leaf certificate: %w", err)
 	}
 
 	if cfg.StorePath != "" {
 		if saveErr := saveStored(cfg.StorePath, ca, leaf, sortedHosts); saveErr != nil {
-			persistErr = fmt.Errorf("servertls: persisting to %s: %w", cfg.StorePath, saveErr)
+			return tls.Certificate{}, nil, false, fmt.Errorf(
+				"servertls: persisting to %s: %w -- refusing to start, because a CA "+
+					"that cannot be saved is regenerated on every restart, and each "+
+					"one has to be trusted again by every browser, reverse proxy and "+
+					"router. Give mikroview a writable data directory (the shipped "+
+					"deploy/docker-compose.yml mounts the mikroview-data volume at "+
+					"/var/lib/mikroview for this)", cfg.StorePath, saveErr)
 		}
 	}
 
-	return leaf, ca.certPEM, persistErr, nil
+	return leaf, ca.certPEM, reusedCA, nil
 }
 
 type caPair struct {
@@ -235,36 +267,61 @@ func storePaths(storePath string) (caCert, caKey, leafCert, leafKey, meta string
 // other optional store in this codebase already follows (flags.Open,
 // auth.Open, detect.OpenSettingsStore), so Load falls back to
 // generating a fresh one.
-func loadStoredCA(storePath string) *caPair {
+// The three outcomes are deliberately distinct, because they used to be
+// one (#535). Every branch below returned a bare nil, so "no CA has ever
+// been stored" and "the CA is right there but I cannot read it" were the
+// same answer -- and the answer to both was to mint a new CA and
+// overwrite the old one, destroying the only copy of the trust anchor
+// the router was pinned to. The log line said "generated a local CA",
+// identical to a first run.
+//
+//   - (nil, nil)  no CA stored yet. A first run; the caller generates.
+//   - (ca, nil)   a usable CA. Reused.
+//   - (nil, err)  CA material is present and cannot be used. Fatal:
+//     the caller stops rather than replacing it.
+//
+// An expired CA is the first case, not the third: it is intact, its time
+// is simply up, and regenerating is the only thing left to do. Ten years
+// on, that re-trust is unavoidable rather than a fault.
+func loadStoredCA(storePath string) (*caPair, error) {
 	caCertPath, caKeyPath, _, _, _ := storePaths(storePath)
 	certPEM, err := os.ReadFile(caCertPath)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil, nil
+	}
 	if err != nil {
-		return nil
+		return nil, fmt.Errorf("reading %s: %w", caCertPath, err)
 	}
 	keyPEM, err := os.ReadFile(caKeyPath)
+	if errors.Is(err, fs.ErrNotExist) {
+		// The certificate is there and its key is not. Not a first run,
+		// and not recoverable: without the key nothing can be signed
+		// with this CA again.
+		return nil, fmt.Errorf("%s exists but its key %s is missing", caCertPath, caKeyPath)
+	}
 	if err != nil {
-		return nil
+		return nil, fmt.Errorf("reading %s: %w", caKeyPath, err)
 	}
 	block, _ := pem.Decode(certPEM)
 	if block == nil {
-		return nil
+		return nil, fmt.Errorf("%s is not valid PEM", caCertPath)
 	}
 	cert, err := x509.ParseCertificate(block.Bytes)
 	if err != nil {
-		return nil
+		return nil, fmt.Errorf("parsing %s: %w", caCertPath, err)
 	}
 	keyBlock, _ := pem.Decode(keyPEM)
 	if keyBlock == nil {
-		return nil
+		return nil, fmt.Errorf("%s is not valid PEM", caKeyPath)
 	}
 	key, err := x509.ParseECPrivateKey(keyBlock.Bytes)
 	if err != nil {
-		return nil
+		return nil, fmt.Errorf("parsing %s: %w", caKeyPath, err)
 	}
 	if time.Now().After(cert.NotAfter) {
-		return nil
+		return nil, nil
 	}
-	return &caPair{cert: cert, key: key, certPEM: certPEM}
+	return &caPair{cert: cert, key: key, certPEM: certPEM}, nil
 }
 
 // loadStoredLeaf returns the previously-generated leaf certificate, if
