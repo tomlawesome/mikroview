@@ -291,6 +291,19 @@ Removals are communicated in `CHANGELOG.md`, which is what release notes
 are for. That is the correct channel for "this is gone and here is what
 to do instead" -- not a stub in `main.go`.
 
+## Where documentation goes
+
+`docs/configuration.md` carries every configuration option exhaustively, with
+opt-in ones present but commented out. Never trim it to "just the essentials":
+an operator who cannot find an option assumes it does not exist.
+
+`README.md` does not carry those snippets. It stays a lean public advert for
+the app, for the reason given further up.
+
+Deep security rationale belongs in `docs/security-by-design.md`, not in a setup
+guide. The setup guide says what a setting does and why you would want it, in
+plain language.
+
 ## Issues
 
 Issue-body, decision-recording and supersession rules follow the global
