@@ -194,6 +194,44 @@ rewritten.
 
 ### Fixed
 
+- **The setup wizard's syslog step reported "done" on a bare TCP
+  connect, before any TLS handshake completed** (#371). `noteConnection`
+  fired from `ServeTCP`'s accept branch in `internal/syslog/tcp_listener.go`
+  -- before `handleTCPConn` ever read a byte, and `tls.Listener.Accept`
+  negotiates its handshake lazily, on first read, not on accept. A
+  router configured with `check-certificate=yes` against a certificate
+  that didn't cover its address -- the exact misconfiguration the
+  wizard's own CA-trust step exists to catch -- connected at TCP,
+  failed the handshake, and sent nothing, yet the wizard still rendered
+  "A router has an open syslog connection: done" and sent the operator
+  off to fix firewall `log=yes` rules that were never the problem. A LAN
+  port scan or a plain TCP health check against the syslog port produced
+  the identical false "done". The hook now fires from inside
+  `handleTCPConn`, past a completed `tls.Conn.HandshakeContext`, so a
+  bare connect or a failed handshake no longer satisfies the step --
+  while a genuine handshake with no logging rule configured yet still
+  does, keeping that state distinct from "never connected" (see
+  `setup.Store.NoteSyslogConnection`'s doc comment).
+
+- **`close-issues-on-dev.yml` no longer closes an issue over a negated or
+  code-quoted keyword** (#503). Its closing-keyword regex matched
+  `close`/`fix`/`resolve` anywhere in a merged PR's title+body, with no
+  regard for what came before or around it -- `Not fixed: #371` and
+  `Does not close #363` both read as closes, and so did a keyword
+  quoted inside a code span purely to explain that it had been removed
+  (`` `Closes #442` ``), even though GitHub's own closing-keyword
+  parser skips code spans. All three false positives happened for
+  real on 2026-08-22 (PRs #496, #497, #499) and wrongly closed issues
+  #371, #363 and #442 while their work was still open; all three were
+  reopened by hand. The matching logic is now
+  `.github/scripts/close-issues-matcher.js`, tested against the actual
+  PR bodies that broke it (`.github/scripts/close-issues-matcher.test.js`,
+  fixtures in `.github/scripts/fixtures/`): a keyword immediately
+  preceded by a negation ("not", "doesn't", "never", ...) no longer
+  matches, and markdown code spans/fenced blocks are stripped before
+  matching runs. A genuine `Closes #NNN` trailer, negation-free and
+  outside code, still closes as before.
+
 - **A definition update touching only `enabled` or only `scope` could
   silently revert a concurrent change to the other field** (#494, a
   narrower survivor of #380 item 4 that outlived the engine port).
@@ -272,6 +310,21 @@ rewritten.
   list names the devices whose rules went unread. A positive answer is
   unchanged: one router demonstrably logging the right traffic stays
   true however many others went unread.
+
+- **A failed filter refetch (or initial load) no longer reads as "no
+  events match"** (#373). `refetchWithFilters()` re-queries the server so
+  a filter that misses the client's ~20,000-event buffer (an older
+  event, a device that hasn't logged recently) still finds a real match
+  in the server's larger store — but a rejected request (a 503, a
+  dropped connection) left `events` exactly as it was, with nothing
+  recording that the query never completed. The live view then rendered
+  that untouched, incomplete buffer as a definite "No events match the
+  current filters" (or, on first load, the equally silent "Waiting for
+  events…"), telling the operator traffic didn't happen when the truth
+  was that mikroview couldn't ask. `appState.fetchFailed` now records the
+  failure on both call sites and clears on the next successful one; the
+  live view shows an honest "could not load" message instead of asserting
+  emptiness whenever it's set.
 
 - **The watchlist page can no longer show torn observation data**
   (#376). `GET /api/watchlist` handed out entry copies whose observed
