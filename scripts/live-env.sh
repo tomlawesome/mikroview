@@ -56,7 +56,12 @@ MV_PASS="live-password-123"
 
 if [ "$MV_BIND" = "127.0.0.1" ]; then
   MV_SCHEME=http
-  TLS_BLOCK='tls: {enabled: false}'
+  # storePath even with enabled: false. The syslog-TLS listener loads a
+  # certificate independently of the HTTPS one (main.go's
+  # cfg.TLS.Enabled || cfg.Listen.SyslogTLS != ""), so a CA is still
+  # generated here -- and without a path it lands on the
+  # /var/lib/mikroview default that no developer machine can write.
+  TLS_BLOCK="tls: {enabled: false, storePath: $MV_DIR/data/tls}"
   SECURE_COOKIE=false
   CURL_TLS=()
   # Syslog TLS runs even with tls.enabled=false, unlike httpRedirect:
