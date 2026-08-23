@@ -16,6 +16,25 @@ rewritten.
 
 ## [Unreleased]
 
+### Added
+
+- **The navigation rail can now be narrowed or hidden** (#545). It has
+  three states you choose from the two buttons at the bottom of the rail:
+  full width with icons and labels, a 54px strip of icons alone, or
+  hidden entirely. Hidden leaves a small tab on the left edge of the
+  window — click it, or press Tab twice from the top of the page and
+  Enter, and the rail comes back exactly as you left it. Your choice is
+  remembered per browser and applied before the page draws, so the rail
+  never flickers between states on load. New installs start at full width
+  on wide screens and icons-only on narrower ones; nothing is ever hidden
+  for you automatically.
+
+  Bringing the rail back with the edge tab is deliberately temporary: it
+  lasts for as long as you are on the page, and a reload returns to
+  hidden. Only the two buttons in the rail itself change what is
+  remembered. Every rail row also gained an icon, so the icons-only state
+  has something to show; hovering **or** keyboard-focusing a row names it.
+
 ### Changed
 
 - **Navigation is now a permanent left rail instead of a hamburger menu**
