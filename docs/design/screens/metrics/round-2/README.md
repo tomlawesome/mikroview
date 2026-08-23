@@ -79,4 +79,17 @@ tokens throughout; alarm red stays reserved for badge/ring semantics.
 
 ## Verdicts
 
-None yet — awaiting the owner.
+**Both directions accepted; V wins and is the default; both ship.**
+Owner, 2026-08-23, verbatim:
+
+> Love the metrics view for both U and V tbh, I think seismography
+> wins overall, and should be the default but I'd actually like to
+> ship with BOTH these options, and let the user decide!
+
+What that means for the build: metrics ships **three views of one
+data set — Seismograph (default) · Register · Table** — chosen in the
+page header, persisted as a per-user preference the same way the
+rail's density is (applied before first paint, never changed by the
+app on its own). The consolidated buildable record is
+[`../DESIGN.md`](../DESIGN.md); where that text and a mockup detail
+disagree, the text wins.
