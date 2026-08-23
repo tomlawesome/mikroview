@@ -38,7 +38,7 @@
   // rulesUsage backs the "discovered rules" section -- GET /api/rules'
   // full history (issue #103's internal/rules.Store), fetched once per
   // panel open the same way entitiesState.refresh() is triggered by
-  // NavMenu's toggleEntities (this component is unmounted/remounted on
+  // the rail's Entities item (this component is unmounted/remounted on
   // every view toggle, so onMount firing once per open is exactly right).
   let rulesUsage = $state<RuleUsage[]>([])
   let rulesError = $state(false)

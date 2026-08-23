@@ -56,14 +56,12 @@ check((await page.locator('.row').count()) === frozenCount, `row count is unchan
 // Navigating away to another view and back must not disturb the freeze
 // -- LiveTable unmounts on every view switch, so this only proves
 // anything if appState.frozenPool genuinely outlives the component.
-await page.click('.nav-menu .trigger')
-await page.click('.nav-menu button:has-text("Metrics")')
+await page.click('.rail .item:has-text("Metrics")')
 await page.waitForTimeout(300)
 
-// Re-clicking the view you are already on is what toggleView() maps
-// back to 'live'.
-await page.click('.nav-menu .trigger')
-await page.click('.nav-menu button:has-text("Metrics")')
+// Back to the live view via its own rail item -- the rail has no
+// re-click-to-return-to-live behaviour the old menu trigger had.
+await page.click('.rail .item:has-text("Stream")')
 await page.waitForTimeout(300)
 check(
   (await page.locator('.row[title*="after-freeze"]').count()) === 0,
