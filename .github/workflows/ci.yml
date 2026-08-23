@@ -132,13 +132,12 @@ jobs:
     # that step): a slow runner makes the step take longer rather than
     # failing it, so the job needs room to absorb that.
     #
-    # This margin is thinner than it looks, and #523 is open on it. The
-    # fuzz step intermittently drops to 0 execs/sec for 30-60s at a
-    # stretch; a normal job is ~2.5 minutes, a stalling one has been
-    # measured at 9, and one run exhausted the 15 and was killed with no
-    # crashing input and no reproducer. Do not read this number as
-    # comfortable headroom, and do not raise it as a reflex either --
-    # #523 is where the trade-off is being decided.
+    # Kept at 15 rather than lowered with the budgets in #523. The fuzz
+    # step still drops to 0 execs/sec for 30-60s at a stretch -- that is
+    # the runner and remains unexplained -- so the margin absorbs a
+    # stall rather than a slow machine. With the recalibrated counts the
+    # step is ~90s of work, so this is real headroom now; before it was
+    # about 1.5x, and one run was killed at the limit.
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -180,22 +179,38 @@ jobs:
       # where a duration budget quietly explores less on a busy one
       # while still reporting success. A check that gets weaker without
       # saying so is the failure mode AGENTS.md rejects elsewhere (the
-      # svelte-check/TypeScript hold, #286). Each count is calibrated
-      # just under what the previous 30s budget bought at four fuzz
-      # workers -- roughly a GitHub-hosted runner -- measured at ~1.54M,
-      # ~0.98M and ~0.54M execs, so exploration is not reduced.
+      # svelte-check/TypeScript hold, #286).
       #
-      # What that property costs is wall-clock, and it is not free: a
-      # slow run takes longer rather than failing, but only up to the
-      # job timeout above, which one run has already hit. #523 tracks
-      # that -- read it before adjusting either the counts or the
-      # timeout, because the two are the same trade seen from opposite
-      # ends.
+      # Each count is what 30 seconds of wall-clock actually buys on a
+      # GitHub-hosted runner, measured from this repository's own runs
+      # (#523): routeros ~5.3k execs/sec, syslog ~19.7k, ingest ~5.2k.
+      #
+      # Those are wall-clock rates, stalls included, which is the right
+      # basis for converting a 30s budget -- but note the underlying
+      # rates are much higher (ingest fuzzes at ~23k/sec and spends the
+      # rest of its wall-clock stalled). Recalibrate the same way if the
+      # stalls are ever fixed, or the budgets will silently shrink.
+      #
+      # The previous counts (1.4M / 900k / 480k) were nine times these,
+      # because the rate behind them had been measured on a development
+      # machine -- ~51k execs/sec against the runner's ~5.3k. That is
+      # what made a step meant to take ninety seconds take seven
+      # minutes, and once exhaust the job timeout above with no crashing
+      # input and no reproducer. The stalls to 0 execs/sec that show up
+      # in the logs are the runner, not the parsers: the same targets
+      # run flat at ~110k execs/sec locally with no stall at all.
+      #
+      # Cutting back is a restoration, not a weakening. Discovery is
+      # front-loaded -- a local 90s routeros run found 11 of its 13 new
+      # interesting inputs inside the first 30 seconds -- so the removed
+      # budget was the flat tail of the curve. This step is a regression
+      # gate, per the paragraph above; a deep campaign belongs in a
+      # scheduled run, not on every PR.
       - name: Fuzz the attacker-shaped-input parsers
         run: |
-          go test ./internal/routeros/ -run FuzzParse -fuzz FuzzParse -fuzztime=1400000x
-          go test ./internal/syslog/ -run FuzzParseEnvelope -fuzz FuzzParseEnvelope -fuzztime=900000x
-          go test ./internal/ingest/ -run FuzzDecodePayload -fuzz FuzzDecodePayload -fuzztime=480000x
+          go test ./internal/routeros/ -run FuzzParse -fuzz FuzzParse -fuzztime=160000x
+          go test ./internal/syslog/ -run FuzzParseEnvelope -fuzz FuzzParseEnvelope -fuzztime=590000x
+          go test ./internal/ingest/ -run FuzzDecodePayload -fuzz FuzzDecodePayload -fuzztime=156000x
 
       - name: govulncheck
         run: |
