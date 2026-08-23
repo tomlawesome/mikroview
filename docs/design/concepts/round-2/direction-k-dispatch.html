@@ -1,0 +1,362 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mikroview — Direction K: Dispatch</title>
+<style>
+  /* ============================================================
+     DIRECTION K — "DISPATCH"
+     The log as narrative. There is no chart on the front page at
+     all: the interface WRITES what is happening, in sentences,
+     and every sentence cites the rows that make it true. Nouns
+     are tokens — click one and the stage pivots. Watches are
+     standing sentences that stay true until they don't. Flags
+     are bulletins. The day, zoomed out, is a story.
+
+     The wager: mikroview's job is sense-making, and the oldest,
+     densest, most honest interface for sense is language. A
+     sentence can carry what no sparkline can: intent, exception,
+     and how sure we are. Nothing is said that cannot be shown.
+     ============================================================ */
+  :root {
+    --black: #0b0b0d;
+    --panel: #131316;
+    --hair: rgba(220, 220, 210, 0.12);
+    --hair-2: rgba(220, 220, 210, 0.26);
+    --ink: #f2f1ec;
+    --ink-2: #a4a29a;
+    --ink-3: #64625c;
+    --lan: #3987e5; --srv: #199e70; --iot: #c98500; --guest: #d95926;
+    --ok: #3fae5a;
+    --drop: #e05252;
+    --nat: #a08df0;
+    --sans: system-ui, -apple-system, "Segoe UI", sans-serif;
+    --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  }
+  * { box-sizing: border-box; margin: 0; }
+  html { scroll-behavior: smooth; }
+  body { background: var(--black); color: var(--ink); font: 14px/1.55 var(--sans); -webkit-font-smoothing: antialiased; }
+  .concept {
+    position: sticky; top: 0; z-index: 90; display: flex; gap: 16px; align-items: baseline;
+    padding: 8px 20px; background: #070708; border-bottom: 1px solid var(--hair);
+    font-size: 11px; color: var(--ink-3);
+  }
+  .concept b { color: var(--ink); letter-spacing: 0.1em; }
+  .concept a { color: var(--ink-2); text-decoration: none; margin-left: 12px; }
+
+  .scene { min-height: 100vh; position: relative; border-bottom: 1px solid var(--hair-2); padding-bottom: 120px; }
+  .scene-tag { font-size: 10.5px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--ink-3); padding: 13px 0 0 48px; }
+
+  .masthead { display: flex; align-items: baseline; gap: 18px; padding: 22px 48px 14px; border-bottom: 1px solid var(--hair-2); }
+  .wm { font-size: 13px; font-weight: 800; letter-spacing: 0.24em; }
+  .wm i { font-style: normal; color: var(--ink-3); }
+  .masthead .ed { font-size: 11.5px; color: var(--ink-3); }
+  .masthead .ed b { color: var(--ink-2); }
+  .masthead .live { margin-left: auto; font-size: 11px; font-weight: 800; letter-spacing: 0.1em; color: var(--ok); }
+  .masthead .live i { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--ok); margin-right: 7px; animation: pulse 2s ease-in-out infinite; }
+  @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.3; } }
+  .masthead nav { display: flex; gap: 20px; margin-left: 30px; font-size: 12.5px; color: var(--ink-3); }
+  .masthead nav .on { color: var(--ink); font-weight: 650; border-bottom: 2px solid var(--ink); padding-bottom: 2px; }
+
+  .page { max-width: 1180px; padding: 0 48px; margin: 0 auto; }
+
+  /* tokens: every noun is a handle */
+  .tk { font-weight: 650; color: var(--ink); border-bottom: 1px solid var(--hair-2); padding-bottom: 1px; cursor: default; white-space: nowrap; }
+  .tk .d { display: inline-block; width: 7px; height: 7px; border-radius: 50%; margin-right: 5px; vertical-align: 0; }
+  .num { font-variant-numeric: tabular-nums; }
+
+  /* the lead */
+  .lead { padding: 34px 0 6px; }
+  .kick { font-size: 11px; letter-spacing: 0.16em; text-transform: uppercase; color: var(--drop); font-weight: 800; margin-bottom: 12px; }
+  .kick.calm { color: var(--ok); }
+  .lead h1 { font-size: 36px; line-height: 1.25; font-weight: 750; letter-spacing: -0.015em; max-width: 900px; }
+  .lead h1 .q { color: var(--drop); }
+  .lead .deck { font-size: 15px; color: var(--ink-2); margin-top: 14px; max-width: 780px; line-height: 1.6; }
+  .cites { display: flex; gap: 10px; margin-top: 16px; flex-wrap: wrap; }
+  .cite { font-size: 11.5px; border: 1px solid var(--hair-2); border-radius: 999px; padding: 5px 14px; color: var(--ink-2); cursor: default; }
+  .cite b { color: var(--ink); }
+  .cite.act { border-color: var(--ink); color: var(--ink); font-weight: 650; }
+
+  .rulehr { border: 0; border-top: 1px solid var(--hair-2); margin: 26px 0 0; }
+
+  /* bulletins */
+  .cols { display: grid; grid-template-columns: 1.5fr 1fr; gap: 0 44px; }
+  .bulletins { padding: 18px 0; }
+  .b { display: grid; grid-template-columns: 64px 1fr; gap: 14px; padding: 14px 0; border-bottom: 1px solid var(--hair); }
+  .b .when { font: 10.5px var(--mono); color: var(--ink-3); padding-top: 4px; }
+  .b p { font-size: 15.5px; line-height: 1.55; color: var(--ink); max-width: 640px; }
+  .b p .soft { color: var(--ink-2); }
+  .b .tail { margin-top: 6px; display: flex; gap: 10px; }
+  .b .cite { font-size: 10.5px; padding: 3px 11px; }
+  .b.alarm p::first-letter { }
+  .b.alarm .when { color: var(--drop); font-weight: 700; }
+
+  /* standing sentences: the watches */
+  .standing { padding: 18px 0; }
+  .standing h3, .bulletins h3 { font-size: 10px; letter-spacing: 0.16em; text-transform: uppercase; color: var(--ink-3); font-weight: 800; margin-bottom: 6px; }
+  .st { padding: 12px 0; border-bottom: 1px solid var(--hair); font-size: 13.5px; line-height: 1.55; color: var(--ink-2); }
+  .st .mark { font-weight: 800; margin-right: 8px; }
+  .st.ok .mark { color: var(--ok); }
+  .st.broken { color: var(--ink); }
+  .st.broken .mark { color: var(--drop); }
+  .st .since { font: 10px var(--mono); color: var(--ink-3); margin-left: 8px; }
+  .ethos { margin-top: 18px; font-size: 11.5px; color: var(--ink-3); line-height: 1.7; border-left: 2px solid var(--hair-2); padding-left: 14px; }
+  .ethos b { color: var(--ink-2); }
+
+  /* ticker */
+  .ticker {
+    position: absolute; left: 0; right: 0; bottom: 0; z-index: 8;
+    background: #070708; border-top: 1px solid var(--hair-2); padding: 8px 48px 10px;
+  }
+  .ticker .h { display: flex; align-items: baseline; gap: 14px; margin-bottom: 5px; }
+  .ticker .lab { font-size: 9.5px; letter-spacing: 0.13em; text-transform: uppercase; color: var(--ink-3); font-weight: 650; }
+  .ticker .lift { margin-left: auto; font-size: 11px; color: var(--ink-2); }
+  .trow { display: flex; gap: 14px; font: 11px var(--mono); color: var(--ink-2); padding: 2.5px 0; white-space: nowrap; overflow: hidden; }
+  .trow .t { color: var(--ink-3); }
+  .trow .drop { color: var(--drop); font-weight: 700; } .trow .acc { color: var(--ok); font-weight: 700; } .trow .nat { color: var(--nat); font-weight: 700; }
+
+  /* scene 2: the sentence and its rows */
+  .pinned { margin: 26px 0 0; padding: 20px 24px; background: var(--panel); border: 1px solid var(--hair-2); border-radius: 10px; }
+  .pinned .kick { margin-bottom: 8px; }
+  .pinned h2 { font-size: 22px; font-weight: 750; line-height: 1.3; }
+  .pinned .sub { font-size: 12.5px; color: var(--ink-2); margin-top: 8px; }
+  .filterline { display: flex; flex-wrap: wrap; gap: 10px; align-items: flex-end; padding: 16px 0 12px; border-bottom: 1px solid var(--hair-2); }
+  .ff { display: flex; flex-direction: column; gap: 3px; }
+  .ff label { font-size: 9px; letter-spacing: 0.11em; text-transform: uppercase; color: var(--ink-3); }
+  .ff input, .ff select { background: var(--panel); border: 1px solid var(--hair-2); border-radius: 6px;
+    color: var(--ink); font: 12.5px var(--mono); padding: 6px 10px; width: 168px; outline: none; }
+  .ff select { width: 118px; }
+  .fright { margin-left: auto; display: flex; gap: 8px; }
+  .btn { background: transparent; border: 1px solid var(--hair-2); color: var(--ink-2); font: 11.5px var(--sans); padding: 6px 13px; border-radius: 6px; cursor: default; }
+  .btn.on { color: var(--ink); border-color: var(--ink); }
+  table.stream { width: 100%; border-collapse: collapse; }
+  .stream th { text-align: left; font-size: 9px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--ink-3); font-weight: 650; padding: 9px 10px 7px; border-bottom: 1px solid var(--hair-2); }
+  .stream td { padding: 6px 10px; border-bottom: 1px solid var(--hair); font-family: var(--mono); font-size: 12px; white-space: nowrap; }
+  .t2 { color: var(--ink-3); font-size: 11px; }
+  .act2 { font-size: 10px; font-weight: 700; }
+  .act2.drop { color: var(--drop); }
+  .host { color: var(--ink); } .ip { color: var(--ink-3); font-size: 11px; margin-left: 5px; }
+  .arrow { color: var(--ink-3); } .rule-c { color: var(--ink-2); font-size: 11.5px; } .cc { font-size: 10px; color: var(--ink-3); }
+
+  /* scene 3: the day, told */
+  .day { padding: 10px 0; }
+  .chap { display: grid; grid-template-columns: 76px 1fr; gap: 16px; padding: 16px 0; border-bottom: 1px solid var(--hair); }
+  .chap .at { font: 11px var(--mono); color: var(--ink-3); padding-top: 5px; }
+  .chap h4 { font-size: 17px; font-weight: 700; margin-bottom: 4px; }
+  .chap h4 .q { color: var(--drop); }
+  .chap p { font-size: 13.5px; color: var(--ink-2); max-width: 700px; line-height: 1.6; }
+  .chap .tail { margin-top: 6px; display: flex; gap: 10px; }
+  .chap .cite { font-size: 10.5px; padding: 3px 11px; }
+
+  @media (prefers-reduced-motion: reduce) { * { animation: none !important; } }
+</style>
+</head>
+<body>
+
+<div class="concept">
+  <b>DIRECTION K — DISPATCH</b>
+  <span>the log as narrative · nouns are tokens · every sentence cites its rows · watches are standing sentences · nothing said that cannot be shown</span>
+  <span style="margin-left:auto"><a href="#s1">1 the briefing</a><a href="#s2">2 the rows behind it</a><a href="#s3">3 the day, told</a></span>
+</div>
+
+<!-- ============ SCENE 1 : THE BRIEFING, LIVE ============ -->
+<section class="scene" id="s1">
+  <div class="scene-tag">Scene 1 — the briefing. The front page is written, not drawn.</div>
+  <header class="masthead">
+    <span class="wm">MIKRO<i>VIEW</i></span>
+    <nav><span class="on">Briefing</span><span>Stream</span><span>Lookback</span><span>Watches</span><span>Admin</span></nav>
+    <span class="ed">rb5009 · <b class="num">41 rules</b> 14:01 · tom (admin)</span>
+    <span class="live"><i></i>LIVE · 34/s</span>
+  </header>
+
+  <main class="page">
+    <div class="lead">
+      <div class="kick">Developing · since 13:52</div>
+      <h1>The <span class="tk"><span class="d" style="background:var(--iot)"></span>camera</span> is knocking on the <span class="tk"><span class="d" style="background:var(--srv)"></span>nas</span> — <span class="q num">14 times</span> in 15 minutes, every one refused.</h1>
+      <p class="deck">It has never done this before. The knocks are metronomic — one every 64 seconds, all <span class="tk num">smb</span> — which reads as firmware, not fingers. The router is holding: nothing was ever told to allow this, so the <span class="tk">default drop</span> is catching each attempt, namelessly. Its habit broke the day after a firmware update.</p>
+      <div class="cites">
+        <span class="cite"><b class="num">14 rows</b> · see every knock ▸</span>
+        <span class="cite">its reach ▸</span>
+        <span class="cite act">compose the rule it deserves ▸</span>
+        <span class="cite">watch for escalation ▸</span>
+      </div>
+    </div>
+    <hr class="rulehr">
+
+    <div class="cols">
+      <div class="bulletins">
+        <h3>The last hour, in order of interest</h3>
+        <div class="b">
+          <span class="when">13:30 →</span>
+          <div>
+            <p>The internet tried <span class="num">1,412</span> doors; <span class="tk">wan-in-drop</span> refused every one. <span class="soft">Three times the usual weather, mostly <span class="num">:8291</span> and <span class="num">:22</span> — someone is walking the block trying handles.</span></p>
+            <div class="tail"><span class="cite"><b class="num">1,412 rows</b> ▸</span><span class="cite">the four flags it raised ▸</span></div>
+          </div>
+        </div>
+        <div class="b">
+          <span class="when">all hour</span>
+          <div>
+            <p><span class="tk"><span class="d" style="background:var(--lan)"></span>The household</span> went about its business — <span class="num">109k</span> conversations, web and sync and telly, <span class="soft">nothing worth a sentence.</span></p>
+          </div>
+        </div>
+        <div class="b alarm">
+          <span class="when">standing</span>
+          <div>
+            <p><span class="tk"><span class="d" style="background:var(--guest)"></span>Guest devices</span> leave for the internet <span class="q">unrecorded</span>. <span class="soft">Mikroview cannot see that boundary — there is no log rule on it. This page cannot report what it cannot hear.</span></p>
+            <div class="tail"><span class="cite act">print the command that lights it ▸</span></div>
+          </div>
+        </div>
+        <div class="b">
+          <span class="when">30 days</span>
+          <div>
+            <p><span class="tk">wg → srv allow</span> has waited a month for a packet that never came. <span class="soft">A door held open onto an empty corridor is a question, not a convenience.</span></p>
+            <div class="tail"><span class="cite">retire it? ▸</span></div>
+          </div>
+        </div>
+        <div class="b">
+          <span class="when">all hour</span>
+          <div>
+            <p><span class="tk"><span class="d" style="background:var(--iot)"></span>hue-bridge</span> asked <span class="tk"><span class="d" style="background:var(--srv)"></span>pihole</span> for directions <span class="num">840</span> times. <span class="soft">The usual. Metronomes are what “expected” sounds like.</span></p>
+          </div>
+        </div>
+      </div>
+
+      <aside class="standing">
+        <h3>Standing sentences · the watches</h3>
+        <div class="st ok"><span class="mark">✓</span>Nothing unsolicited has passed from the internet<span class="since">41 days and holding</span></div>
+        <div class="st ok"><span class="mark">✓</span>The household's outbound shape held: web, mail, sync<span class="since">14 checks today</span></div>
+        <div class="st broken"><span class="mark">✕</span>The camera kept to its lane — <b>until 13:52.</b> This sentence stopped being true, and that is the lead above.<span class="since">broken today</span></div>
+        <p class="ethos"><b>How this page is written:</b> every sentence is compiled from the stream and cites the rows that make it true — the verbs are a fixed vocabulary (knocked, refused, passed, went dark), each with one meaning in the log. Nothing is said that cannot be shown. Click any noun to pivot; click any count for the evidence.</p>
+      </aside>
+    </div>
+  </main>
+
+  <div class="ticker">
+    <div class="h"><span class="lab">The stream, verbatim · 34/s</span><span class="lift">▲ lift to full live view</span></div>
+    <div class="trow" style="color:var(--ink)"><span class="t">14:02:11.482</span><span class="drop">DROP</span><span>cam-porch → nas :445 smb · iot-to-lan-drop</span></div>
+    <div class="trow"><span class="t">14:02:11.407</span><span class="nat">NAT</span><span>phone-tom → 142.250.187.206 :443 quic · nat-wan</span></div>
+    <div class="trow"><span class="t">14:02:10.951</span><span class="drop">DROP</span><span>185.220.101.34 DE → rb5009 :8291 winbox · wan-in-drop</span></div>
+  </div>
+</section>
+
+<!-- ============ SCENE 2 : THE ROWS BEHIND THE SENTENCE ============ -->
+<section class="scene" id="s2">
+  <div class="scene-tag">Scene 2 — a citation was clicked. The sentence stays pinned; below it, the rows that make it true. This is the full live view.</div>
+  <header class="masthead">
+    <span class="wm">MIKRO<i>VIEW</i></span>
+    <nav><span>Briefing</span><span class="on">Stream</span><span>Lookback</span><span>Watches</span><span>Admin</span></nav>
+    <span class="ed">rb5009 · connected</span>
+    <span class="live"><i></i>LIVE · 34/s</span>
+  </header>
+
+  <main class="page">
+    <div class="pinned">
+      <div class="kick">The claim</div>
+      <h2>The camera is knocking on the nas — 14 times in 15 minutes, every one refused.</h2>
+      <div class="sub">filter compiled from the sentence: src 10.0.20.31 · dst 10.0.10.0/24 ∪ 10.0.40.0/24 · forward · newest first — <b style="color:var(--ink)">the full stream is one click: “everything” ▸</b></div>
+    </div>
+    <div class="filterline">
+      <div class="ff"><label>Source — name, IP or CIDR</label><input value="cam-porch"></div>
+      <div class="ff"><label>Destination — name, IP or CIDR</label><input value="10.0.40.0/24"></div>
+      <div class="ff"><label>Chain</label><select><option>forward</option></select></div>
+      <div class="ff"><label>Port — number or service</label><input></div>
+      <div class="ff"><label>Rule</label><input></div>
+      <div class="fright"><button class="btn on">Autoscroll</button><button class="btn">Group</button><button class="btn">Everything</button></div>
+    </div>
+    <table class="stream">
+      <thead><tr><th>time</th><th>action</th><th>source</th><th></th><th>destination</th><th>proto/port</th><th>rule</th></tr></thead>
+      <tbody>
+        <tr><td class="t2">14:02:11.482</td><td><span class="act2 drop">DROP</span></td>
+          <td><span class="host">cam-porch</span><span class="ip">10.0.20.31</span></td><td class="arrow">→</td>
+          <td><span class="host">nas</span><span class="ip">10.0.40.10</span></td>
+          <td>tcp/445 <span class="cc">smb</span></td><td class="rule-c">iot-to-lan-drop</td></tr>
+        <tr><td class="t2">14:01:58.104</td><td><span class="act2 drop">DROP</span></td>
+          <td><span class="host">cam-porch</span><span class="ip">10.0.20.31</span></td><td class="arrow">→</td>
+          <td><span class="host">nas</span><span class="ip">10.0.40.10</span></td>
+          <td>tcp/445 <span class="cc">smb</span></td><td class="rule-c">iot-to-lan-drop</td></tr>
+        <tr><td class="t2">14:01:43.771</td><td><span class="act2 drop">DROP</span></td>
+          <td><span class="host">cam-porch</span><span class="ip">10.0.20.31</span></td><td class="arrow">→</td>
+          <td><span class="host">tom-desktop</span><span class="ip">10.0.10.21</span></td>
+          <td>tcp/445 <span class="cc">smb</span></td><td class="rule-c">iot-to-lan-drop</td></tr>
+        <tr><td class="t2">14:01:29.310</td><td><span class="act2 drop">DROP</span></td>
+          <td><span class="host">cam-porch</span><span class="ip">10.0.20.31</span></td><td class="arrow">→</td>
+          <td><span class="host">nas</span><span class="ip">10.0.40.10</span></td>
+          <td>tcp/139 <span class="cc">netbios</span></td><td class="rule-c">iot-to-lan-drop</td></tr>
+        <tr><td class="t2">14:01:12.089</td><td><span class="act2 drop">DROP</span></td>
+          <td><span class="host">cam-porch</span><span class="ip">10.0.20.31</span></td><td class="arrow">→</td>
+          <td><span class="host">nas</span><span class="ip">10.0.40.10</span></td>
+          <td>tcp/445 <span class="cc">smb</span></td><td class="rule-c">iot-to-lan-drop</td></tr>
+      </tbody>
+    </table>
+  </main>
+
+  <div class="ticker">
+    <div class="h"><span class="lab">The stream, verbatim · 34/s</span><span class="lift">▲ everything, unfiltered</span></div>
+    <div class="trow" style="color:var(--ink)"><span class="t">14:02:11.482</span><span class="drop">DROP</span><span>cam-porch → nas :445 smb · iot-to-lan-drop</span></div>
+    <div class="trow"><span class="t">14:02:11.407</span><span class="nat">NAT</span><span>phone-tom → 142.250.187.206 :443 quic · nat-wan</span></div>
+  </div>
+</section>
+
+<!-- ============ SCENE 3 : THE DAY, TOLD ============ -->
+<section class="scene" id="s3">
+  <div class="scene-tag">Scene 3 — lookback as a story: the day in chapters, every one citing its evidence.</div>
+  <header class="masthead">
+    <span class="wm">MIKRO<i>VIEW</i></span>
+    <nav><span>Briefing</span><span>Stream</span><span class="on">Lookback</span><span>Watches</span><span>Admin</span></nav>
+    <span class="ed">Friday 22 August · told from <b class="num">2.9M</b> events</span>
+    <span class="live"><i></i>LIVE · 34/s</span>
+  </header>
+
+  <main class="page">
+    <div class="day">
+      <div class="chap">
+        <span class="at">00:00–06:00</span>
+        <div>
+          <h4>The house slept; the internet didn't.</h4>
+          <p>Six hours of quiet inside. Outside, <span class="num">418</span> knocks on the WAN — the ordinary nocturnal weather, all refused by <span class="tk">wan-in-drop</span>, none worth waking anyone for.</p>
+        </div>
+      </div>
+      <div class="chap">
+        <span class="at">07:40</span>
+        <div>
+          <h4>The household woke on schedule.</h4>
+          <p>Phones first, then <span class="tk">tom-desktop</span>, then the telly. Outbound shape exactly as watched: web, mail, sync. <span class="tk">The watch</span> stayed a true sentence all day.</p>
+        </div>
+      </div>
+      <div class="chap">
+        <span class="at">09:03 · 11:20 · 12:58 · 13:41</span>
+        <div>
+          <h4>Four flags before lunch, all outside the walls.</h4>
+          <p>Two port-scans, a known-bad address seen twice, another scan. All broke against <span class="tk">wan-in-drop</span>; the morning's weather worsened toward a <span class="num">3.1×</span> squall by mid-afternoon.</p>
+          <div class="tail"><span class="cite">the four flags ▸</span><span class="cite"><b class="num">1,412 rows</b> ▸</span></div>
+        </div>
+      </div>
+      <div class="chap">
+        <span class="at">13:52</span>
+        <div>
+          <h4><span class="q">Then the camera broke its habit.</span></h4>
+          <p>Forty-one days of rtsp-and-nothing-else ended at 13:52:07 — the first <span class="num">smb</span> knock on the <span class="tk">nas</span>, then one every 64 seconds since. The <span class="tk">new_talker</span> flag fired with the first knock; the egress watch broke a breath later. Still happening as this page is read.</p>
+          <div class="tail"><span class="cite"><b class="num">14 rows</b> ▸</span><span class="cite act">compose the rule ▸</span><span class="cite">this is the live lead ▸</span></div>
+        </div>
+      </div>
+      <div class="chap">
+        <span class="at">unwritten</span>
+        <div>
+          <h4>What this day could not say.</h4>
+          <p>Whatever <span class="tk">guest devices</span> did on the internet — that boundary is unlogged, and a story with a missing chapter says so rather than guessing. <span class="tk">wg → srv allow</span> spent another day waiting for a packet that never came.</p>
+          <div class="tail"><span class="cite act">light the dark boundary ▸</span><span class="cite">retire the waiting rule ▸</span></div>
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <div class="ticker">
+    <div class="h"><span class="lab">The stream, verbatim · 34/s</span><span class="lift">▲ lift to full live view</span></div>
+    <div class="trow" style="color:var(--ink)"><span class="t">14:02:11.482</span><span class="drop">DROP</span><span>cam-porch → nas :445 smb · iot-to-lan-drop</span></div>
+    <div class="trow"><span class="t">14:02:10.951</span><span class="drop">DROP</span><span>185.220.101.34 DE → rb5009 :8291 winbox · wan-in-drop</span></div>
+  </div>
+</section>
+
+</body>
+</html>
