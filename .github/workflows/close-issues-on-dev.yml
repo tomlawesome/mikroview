@@ -23,6 +23,7 @@ on:
     branches: [dev]
 
 permissions:
+  contents: read
   issues: write
 
 jobs:
@@ -31,18 +32,30 @@ jobs:
     if: github.event.pull_request.merged == true
     runs-on: ubuntu-latest
     steps:
+      # Checked out so the matching logic can be required from a tested,
+      # version-controlled file (.github/scripts/close-issues-matcher.js)
+      # instead of living only as an inline script -- see #503. `ref: dev`
+      # rather than the default PR-merge ref, since by the time this job
+      # runs the merge has already landed there and that's the matcher
+      # version this close decision should be made with.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: dev
       - uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         with:
           script: |
+            const { extractClosedIssueNumbers } = require('${{ github.workspace }}/.github/scripts/close-issues-matcher.js');
+
             const pr = context.payload.pull_request;
             const text = `${pr.title}\n\n${pr.body || ''}`;
 
-            // The closing keywords GitHub itself honours, so a PR
-            // written for the default-branch behaviour keeps working
-            // unchanged if the default ever moves.
-            const pattern = /\b(close[sd]?|fix(e[sd])?|resolve[sd]?)\s*:?\s+#(\d+)/gi;
-            const numbers = new Set();
-            for (const m of text.matchAll(pattern)) numbers.add(Number(m[3]));
+            // Closing keywords GitHub itself honours, with two
+            // corrections GitHub's own default-branch behaviour already
+            // makes and this workflow previously didn't (#503): a
+            // negated keyword ("Not fixed: #123", "doesn't close #123")
+            // is not a close, and a keyword quoted inside markdown code
+            // (a code span or fenced block) is not a close either.
+            const numbers = extractClosedIssueNumbers(text);
 
             if (numbers.size === 0) {
               core.info('No closing keywords in this PR -- nothing to do.');
