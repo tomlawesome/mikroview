@@ -87,6 +87,19 @@ async function deleteJSON(url: string, body?: unknown): Promise<Response> {
 // Exported so lib/state.svelte.ts can build the same query-param shape for
 // the URL bar (see App.svelte's filter-sync effect) without duplicating
 // the "which filter fields are non-empty" logic.
+//
+// srcQuery/dstQuery/srcCountry/dstCountry (#438) round-trip through the URL
+// for bookmarking like every other field, but GET /api/events's own query
+// parser (internal/api/rest.go's parseQuery) does not act on them -- it has
+// no concept of the label-matching or country data those fields need. That
+// is not a regression: the `rule` param already has the same shape (it
+// narrows by ruleLabel/raw only, never the ruleName alias #438 also added to
+// the client-side matcher), and refetchWithFilters() re-applies the full
+// client-side filter to whatever the server returns regardless, so nothing
+// server-unaware ever reaches the screen unfiltered -- only, in the worst
+// case, a refetch that is broader than it could be. Extending
+// store.Query/parseQuery to understand these fields is left to a future
+// change; this issue's contract is the bar, not the query endpoint.
 export function buildQuery(filters: Partial<Filters> & { limit?: number; sinceId?: number }): string {
   const params = new URLSearchParams()
   if (filters.device) params.set('device', filters.device)
@@ -94,10 +107,19 @@ export function buildQuery(filters: Partial<Filters> & { limit?: number; sinceId
   if (filters.protocol) params.set('protocol', filters.protocol)
   if (filters.chain) params.set('chain', filters.chain)
   if (filters.interface) params.set('interface', filters.interface)
-  if (filters.ip) params.set('ip', filters.ip)
-  if (filters.port) params.set('port', filters.port)
+  if (filters.srcQuery) params.set('srcQuery', filters.srcQuery)
+  if (filters.dstQuery) params.set('dstQuery', filters.dstQuery)
+  // Only forwarded when it parses as the plain integer parseQuery expects
+  // (see internal/api/rest.go) -- #438 lets this field hold text (a
+  // service name, an operator label), and the server 400s on anything it
+  // can't strconv.Atoi, which would turn a text port search into a failed
+  // refetch (appState.fetchFailed) instead of the client-side-only match
+  // it should be.
+  if (filters.port && /^\d+$/.test(filters.port)) params.set('port', filters.port)
   if (filters.srcScope) params.set('srcScope', filters.srcScope)
   if (filters.dstScope) params.set('dstScope', filters.dstScope)
+  if (filters.srcCountry) params.set('srcCountry', filters.srcCountry)
+  if (filters.dstCountry) params.set('dstCountry', filters.dstCountry)
   if (filters.rule) params.set('rule', filters.rule)
   if (filters.rule && filters.ruleRegex) params.set('ruleRegex', 'true')
   if (filters.limit) params.set('limit', String(filters.limit))

@@ -217,7 +217,7 @@
   }
 
   function filterToSource(sourceIp: string) {
-    appState.setFilter('ip', sourceIp)
+    appState.setFilter('srcQuery', sourceIp)
     appState.view = 'live'
   }
 
@@ -277,7 +277,7 @@
       case 'off_hours_activity':
       case 'unexpected_mail_sender':
       case 'known_bad_ip':
-        appState.setFilter('ip', f.target)
+        appState.setFilter('srcQuery', f.target)
         break
       case 'distributed_brute_force':
         appState.setFilter('port', f.target.replace(/^port /, ''))
@@ -287,7 +287,7 @@
         appState.setFilter('rule', f.target)
         break
       case 'repeated_drops':
-        appState.setFilter('ip', f.target.split(' -> ')[0])
+        appState.setFilter('srcQuery', f.target.split(' -> ')[0])
         break
       case 'device_silence':
         appState.setFilter('device', f.target)
