@@ -470,6 +470,22 @@ func main() {
 	logging.PrintBanner()
 	logVersionAndMigration(logging.New("mikroview"))
 
+	// Before anything is built on top of them (#536). Checked here
+	// rather than at each store's first write so the operator gets one
+	// refusal naming the path, instead of the app coming up and
+	// discarding their work one change at a time.
+	if err := checkStoresUsable(cfg); err != nil {
+		storeLog := logging.New("storage")
+		storeLog.Error(err.Error())
+		var unusable *storeUnusable
+		if errors.As(err, &unusable) {
+			for _, line := range storeFailureAdvice(unusable) {
+				storeLog.Error(line)
+			}
+		}
+		os.Exit(1)
+	}
+
 	storeCapacity := cfg.Store.Capacity()
 	logging.New("store").Info(fmt.Sprintf(
 		"event buffer: %s reserved for up to %d events (store.maxMemory) -- once traffic arrives, GET /api/stats reports how full it is and how far back it actually reaches",
@@ -1384,7 +1400,7 @@ func main() {
 			Hosts:     cfg.TLS.Hosts,
 			StorePath: cfg.TLS.StorePath,
 		}
-		c, caCertPEM, persistErr, err := servertls.Load(tlsCfg)
+		c, caCertPEM, reusedCA, err := servertls.Load(tlsCfg)
 		if err != nil {
 			tlsLog.Error(err.Error())
 			os.Exit(1)
@@ -1394,12 +1410,19 @@ func main() {
 		// syslog port as well as HTTPS -- see servertls.Reloader.
 		certReloader = servertls.NewReloader(tlsCfg, cert)
 		go watchForCertificateReload(ctx, certReloader, tlsLog, cfg.TLS.CertFile != "")
-		if persistErr != nil {
-			tlsLog.Warn(fmt.Sprintf("%v (continuing with an unpersisted certificate -- every restart will generate a fresh, untrusted-again CA)", persistErr))
-		}
 		if caCertPEM != nil {
 			fingerprint := sha256.Sum256(cert.Certificate[0])
-			tlsLog.Info(fmt.Sprintf("generated a local CA (leaf fingerprint %x) -- served at /ca.crt for your browser, reverse proxy, or router to trust", fingerprint))
+			// Reused and generated are different events with the same
+			// consequence for the operator only in one direction: a
+			// generated CA has to be trusted again by everything,
+			// including the router. Saying "generated" for both (#535)
+			// meant a deployment that really was regenerating on every
+			// restart read exactly like one that never had.
+			verb := "generated a local CA"
+			if reusedCA {
+				verb = "reusing the stored local CA"
+			}
+			tlsLog.Info(fmt.Sprintf("%s (leaf fingerprint %x) -- served at /ca.crt for your browser, reverse proxy, or router to trust", verb, fingerprint))
 			rootMux.HandleFunc("GET /ca.crt", func(w http.ResponseWriter, r *http.Request) {
 				// Recorded so the wizard can confirm the router reached
 				// mikroview and took the CA -- the first step whose
