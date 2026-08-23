@@ -2340,8 +2340,9 @@ tls:
   # own.
   hosts: []
   # Persists the self-generated CA + certificate across restarts, so
-  # the trust step only happens once. Optional, same contract as
-  # flags.storePath.
+  # the trust step only happens once. Unlike flags.storePath, this one
+  # is not optional: mikroview refuses to start if it cannot read or
+  # write here.
   storePath: "/var/lib/mikroview/tls"
 ```
 
@@ -2365,10 +2366,32 @@ tls:
   generated cert only covers `localhost`/`127.0.0.1` -- connections from
   any other name/IP are still fully encrypted, just not strictly
   verifiable against that name without adding it here.
-- **`storePath`** — where a generated CA + certificate persist across
-  restarts. Left unset, TLS still works, it just regenerates (and needs
-  re-trusting) every restart -- the same optional-persistence contract
-  `flags.storePath` has.
+- **`storePath`** — where the generated CA + certificate persist across
+  restarts. **Mikroview refuses to start if this directory cannot be
+  read or written**, which is the one place it deliberately differs from
+  every other `storePath` in this file.
+
+  The reason is who else is affected. The other stores hold mikroview's
+  own data, and losing an unsaved entry is annoying but visible. The CA
+  is a *trust anchor*: your router is configured to trust that specific
+  CA before it will send logs over TLS. Replace it and the router stops
+  delivering, mikroview goes quiet, and nothing looks broken from the
+  inside -- so a silent regeneration costs you the log stream, not just
+  a setting.
+
+  Two failures stop startup, both naming the file and what to do:
+
+  - the directory cannot be written, so a newly generated CA could not
+    be saved and would be replaced again on the next restart;
+  - CA files are present but cannot be read or parsed -- typically
+    ownership, since the container runs as uid `65532`. Mikroview will
+    not overwrite them, because those files may be the only copy of the
+    anchor everything currently trusts.
+
+  An empty directory is a normal first run and generates silently. To
+  deliberately start over with a new CA -- accepting that every browser,
+  reverse proxy and router must trust it again -- delete the files and
+  restart.
 
 ### Renewing your own certificate
 
