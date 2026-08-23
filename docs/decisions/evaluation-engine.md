@@ -5,6 +5,19 @@ architecture the rest of v0.3.0 is built against; per the epic, no
 significant UI investment lands on the detector or watchlist surfaces
 until it is ratified.
 
+**Update, 2026-08-23: the release numbering changed (#385), so "the rest
+of v0.3.0" above no longer means what it did when this was written.** At
+the time, this engine and the interface reshape it enables were both
+expected to ship together as v0.3.0. The owner has since decided to cut
+an interim release straight from `dev` once this engine work lands, so
+detector testing does not wait on the interface work: **that interim
+release is v0.3.0** (this document's engine, shipped on its own), **the
+interface reshape is now v0.4.0**, and the ratified-concepts release
+(topography, auto-tune, themes) is **v0.5.0**. Read "the rest of v0.3.0"
+in the paragraph above as "the interface reshape, now v0.4.0" -- nothing
+below this note is rewritten to match; the decision and its reasoning
+are recorded as they were made.
+
 ## The problem
 
 mikroview evaluates the event stream twice, through two subsystems that
