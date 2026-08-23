@@ -20,9 +20,18 @@
 // answer is free.
 //
 // The number actually worth watching is the cost of re-filtering a
-// buffer of *reactive* objects on every render -- 2.4 ms for 50,000
-// plain ones, so there is room, but that is what would bite first if
-// this is raised again, not bytes.
+// buffer of *reactive* objects on every render. #342 named that as the
+// figure to watch and then quoted the *plain*-object one (2.4 ms for
+// 50,000) as if it answered the question, which it does not -- a proxied
+// property read is far more expensive than a plain one, and the whole
+// ageFiltered -> liveFiltered -> rendered chain runs on every flush and
+// every 250 ms tick.
+//
+// That gap is now closed at the source rather than by lowering this
+// number: `events` and `frozenPool` are `$state.raw` (see
+// state.svelte.ts), so the buffer holds plain objects and the plain
+// figure above is the one that applies. Raising this cap again is a
+// question about memory and render volume, not about proxy overhead.
 export const MAX_CLIENT_EVENTS = 20000
 
 // How many rows are actually rendered in the DOM at once. Kept well below
