@@ -81,4 +81,17 @@ tokens throughout.
 
 ## Verdicts
 
-None yet — awaiting the owner.
+Owner, 2026-08-23, on direction Z (verbatim):
+
+> Again... same issue, it's fine but it's boring. Please go wild with
+> two out of the box concepts instead of direction z
+
+**Z killed as a direction** — round 2 (`../round-2/`) replaces it with
+two out-of-the-box concepts. What survives the kill as requirements
+any direction must still carry: the three translations (control →
+worded fact; explanations of absent affordances absent too;
+busy-disabled ≠ permission-absent), the estate's edges, and the API
+clause (writes 403 regardless of client; settings GETs widened
+deliberately per authz-matrix row; secrets in no GET) — those are
+facts about the build, not Z's styling, and the wild passes inherit
+them.
