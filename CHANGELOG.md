@@ -16,6 +16,8 @@ rewritten.
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-08-23
+
 ### Added
 
 - **One definitions API** (#407): `GET /api/definitions` and its
