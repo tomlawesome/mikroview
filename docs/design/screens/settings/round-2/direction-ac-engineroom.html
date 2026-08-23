@@ -1,0 +1,443 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mikroview settings — round 2 — AC: the engine room</title>
+<style>
+  /* ============================================================
+     DESIGN PASS (#518) — SETTINGS SURFACES (#490) — ROUND 2
+     AC — THE ENGINE ROOM  ·  settings live on the machine
+
+     The wild premise: a setting is meaningless apart from the
+     machinery it governs, so stop filing settings by noun and
+     draw THE MACHINE. The engine room is mikroview's own signal
+     path, drawn as a live vertical diagram — the direction the
+     app already reads — with real, arrived throughput on every
+     station:
+
+        the DOOR (syslog listener)  ← the router pushes in
+        the STORE (what is kept)
+        the WATCHERS (detectors)
+        the FLAGS DESK (what they raised)
+        the HERALDS (how word goes out)
+
+     and beside the path, the two side doors that govern entry:
+     WHO MAY LOOK IN (users) and WHICH MACHINES MAY SPEAK
+     (tokens). Every setting is touched where the data flows
+     through it; configuring the thing teaches how the thing
+     works, and the room doubles as a live status page — the
+     numbers on it are the hour's real traffic, nothing probed.
+
+     Z's build facts inherited: worded states, busy ≠ permission,
+     writes 403 server-side, GETs widened deliberately, secrets
+     in no GET. No charts; no data palette — colour stays
+     meaning-only (accent interactive, amber time, ok green only
+     as the receiving pulse it already is in the rail).
+     ============================================================ */
+  :root {
+    --canvas: #1b2340; --void: #06080e;
+    --glass: rgba(15, 20, 34, 0.66); --glass-2: rgba(8, 11, 20, 0.88);
+    --hair: rgba(160, 185, 230, 0.13); --hair-2: rgba(160, 185, 230, 0.26);
+    --ink: #e9eefb; --ink-2: #97a4c4; --ink-3: #55628a;
+    --accent: #9db8e8;
+    --ok: #37b364; --alarm: #ff5470; --now: #e8b05a;
+    --tile: #0d1220;
+    --sans: system-ui, -apple-system, "Segoe UI", sans-serif;
+    --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  }
+  * { box-sizing: border-box; margin: 0; }
+  html { scroll-behavior: smooth; }
+  body { background: var(--canvas); color: var(--ink); font: 13.5px/1.5 var(--sans); -webkit-font-smoothing: antialiased; }
+  .concept {
+    position: sticky; top: 0; z-index: 90; display: flex; gap: 16px; align-items: baseline;
+    padding: 8px 20px; background: rgba(2,3,7,0.95); border-bottom: 1px solid var(--hair);
+    font-size: 11px; color: var(--ink-3);
+  }
+  .concept b { color: var(--accent); letter-spacing: 0.1em; }
+  .concept a { color: var(--ink-2); text-decoration: none; margin-left: 12px; }
+  .scene { min-height: 100vh; position: relative; border-bottom: 1px solid var(--hair-2); overflow: hidden; padding-bottom: 30px; }
+  .scene-tag {
+    position: sticky; top: 33px; z-index: 80; text-align: center;
+    font-size: 10.5px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--ink-3);
+    padding: 6px 0; background: rgba(2,3,7,0.85);
+  }
+  .row2 { display: flex; gap: 24px; justify-content: center; align-items: stretch; margin: 26px auto 0; width: min(1460px, 97%); }
+  .frame { position: relative; border: 1px solid var(--hair-2); border-radius: 14px; overflow: hidden; background: var(--void); flex: 1; min-height: 700px; display: flex; }
+  .frame .cap { position: absolute; left: 0; right: 0; bottom: 0; z-index: 30; font-size: 10.5px; color: var(--ink-2); padding: 9px 14px; background: rgba(2,3,7,0.92); border-top: 1px solid var(--hair); }
+  .frame .cap b { color: var(--accent); }
+  .frame.wide { flex: none; width: min(1460px, 97%); margin: 26px auto 0; display: flex; min-height: 900px; }
+
+  /* ---- the ratified rail (#486), carried forward verbatim ---- */
+  .rail {
+    width: 200px; flex: none; background: var(--glass-2); border-right: 1px solid var(--hair);
+    display: flex; flex-direction: column; padding: 14px 0 90px; position: relative; z-index: 10;
+    backdrop-filter: blur(10px);
+  }
+  .rail .wm { font-size: 11px; font-weight: 700; letter-spacing: 0.24em; color: var(--ink-3); padding: 0 16px 3px; }
+  .rail .wm em { color: var(--accent); font-style: normal; }
+  .rail .conn { font-size: 9.5px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--ink-3); padding: 0 16px 8px; }
+  .rail .conn i { display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: var(--ok); margin-right: 6px; animation: pulse 2s ease-in-out infinite; }
+  @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.3; } }
+  .gsec { font-size: 9px; letter-spacing: 0.16em; text-transform: uppercase; color: var(--ink-3); padding: 11px 16px 2px; font-weight: 650; }
+  .gpg { display: flex; align-items: center; gap: 9px; font-size: 12px; font-weight: 550; color: var(--ink-2); padding: 5px 16px 5px 14px; border-left: 2px solid transparent; }
+  .gpg .ic { width: 15px; text-align: center; color: var(--ink-3); font-size: 12px; flex: none; }
+  .gpg.on { color: var(--ink); border-left-color: var(--accent); background: rgba(157,184,232,0.06); }
+  .gpg.on .ic { color: var(--accent); }
+  .gpg .ct { font-size: 9px; color: var(--void); background: var(--alarm); border-radius: 8px; padding: 1px 5px; margin-left: auto; font-weight: 700; }
+  .gpg.action { color: var(--accent); font-size: 11px; margin-top: 2px; }
+  .brokenring { display: inline-flex; align-items: center; gap: 9px; outline: 2px solid var(--alarm); outline-offset: 3px; border-radius: 6px; }
+  .rail .foot { margin-top: auto; padding: 10px 16px 0; border-top: 1px solid var(--hair); display: flex; align-items: center; gap: 7px; font-size: 11.5px; color: var(--ink-2); }
+  .role { font-size: 8.5px; font-weight: 700; letter-spacing: 0.12em; color: var(--ink-3); border: 1px solid var(--hair-2); border-radius: 8px; padding: 1px 6px; text-transform: uppercase; }
+  .rbtn { color: var(--ink-3); font-size: 12px; border: 1px solid var(--hair-2); border-radius: 6px; width: 22px; height: 22px; display: grid; place-items: center; flex: none; }
+  .rbtn.first { margin-left: auto; }
+
+  .main { flex: 1; position: relative; min-width: 0; padding: 0 24px 56px; }
+  .crumb { padding: 16px 0 0; display: flex; align-items: baseline; gap: 12px; }
+  .crumb .over { font-size: 10px; letter-spacing: 0.16em; text-transform: uppercase; color: var(--ink-3); }
+  .crumb h2 { font-size: 18px; font-weight: 550; display: flex; align-items: baseline; gap: 10px; }
+  .crumb h2 .dim { color: var(--ink-3); font-weight: 400; font-size: 12.5px; }
+  .rochip { margin-left: auto; font-size: 9px; font-weight: 700; letter-spacing: 0.1em; color: var(--ink-2); border: 1px solid var(--hair-2); border-radius: 8px; padding: 2px 8px; white-space: nowrap; }
+
+  /* ---- the room: a spine of stations, side doors to the right ---- */
+  .room { display: flex; gap: 26px; margin-top: 18px; }
+  .path { flex: 1.25; position: relative; padding-left: 26px; }
+  .spine { position: absolute; left: 8px; top: 8px; bottom: 8px; width: 2px; background: linear-gradient(var(--hair-2), var(--hair-2)); }
+  .spine::after { content: ""; position: absolute; left: -2.5px; bottom: -2px; border: 4px solid transparent; border-top-color: var(--hair-2); }
+  .pulseflow { position: absolute; left: 7.25px; top: 8px; width: 3.5px; height: 26px; border-radius: 3px; background: var(--accent); opacity: 0.6; animation: flow 3.2s linear infinite; }
+  @keyframes flow { from { transform: translateY(0); } to { transform: translateY(56vh); opacity: 0; } }
+  .arrives { font-size: 10.5px; color: var(--ink-3); font-style: italic; margin-bottom: 8px; }
+  .arrives .mono { font-family: var(--mono); font-style: normal; color: var(--ink-2); }
+  .station { position: relative; background: var(--tile); border: 1px solid var(--hair); border-radius: 12px; padding: 12px 16px; margin-bottom: 16px; }
+  .station::before { content: ""; position: absolute; left: -22.5px; top: 20px; width: 11px; height: 11px; border-radius: 50%; background: var(--void); border: 2px solid var(--accent); }
+  .shead { display: flex; align-items: baseline; gap: 10px; }
+  .shead .nm { font-size: 12.5px; font-weight: 650; letter-spacing: 0.02em; }
+  .shead .what { font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--ink-3); }
+  .shead .live { margin-left: auto; font-size: 10.5px; color: var(--ink-2); font-family: var(--mono); white-space: nowrap; }
+  .shead .live i { display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: var(--now); margin-right: 5px; }
+  .sbody { font-size: 11.5px; color: var(--ink-2); margin-top: 6px; line-height: 1.65; }
+  .sbody b { color: var(--ink); font-weight: 600; }
+  .sbody .knob { color: var(--ink); font-weight: 600; border-bottom: 1px dashed var(--accent); white-space: nowrap; }
+  .sbody .mono { font-family: var(--mono); font-size: 0.92em; }
+  .sbody .yaml { color: var(--ink-3); font-style: italic; }
+
+  .doors { flex: 1; display: flex; flex-direction: column; gap: 16px; }
+  .doorlbl { font-size: 9.5px; letter-spacing: 0.16em; text-transform: uppercase; color: var(--ink-3); font-weight: 650; }
+  .door { background: var(--tile); border: 1px solid var(--hair); border-radius: 12px; padding: 12px 16px; }
+  .door .shead .nm { font-size: 12.5px; }
+  .lr { display: flex; gap: 10px; align-items: baseline; padding: 7px 0; border-bottom: 1px solid var(--hair); font-size: 12px; }
+  .lr:last-child { border-bottom: 0; }
+  .lr .who { color: var(--ink); font-weight: 600; min-width: 86px; }
+  .lr .badge { font-size: 8.5px; font-weight: 700; letter-spacing: 0.1em; color: var(--ink-2); border: 1px solid var(--hair-2); border-radius: 8px; padding: 1px 6px; text-transform: uppercase; }
+  .lr .fact { color: var(--ink-3); font-size: 10.5px; font-family: var(--mono); }
+  .lr .fact i { display: inline-block; width: 5px; height: 5px; border-radius: 50%; background: var(--now); margin-right: 5px; vertical-align: 1px; }
+  .lr .act { margin-left: auto; font-size: 10.5px; color: var(--accent); white-space: nowrap; }
+  .lr .act.mut { color: var(--ink-3); }
+
+  /* opened station: detector benches */
+  .bench { border-top: 1px solid var(--hair); margin-top: 8px; padding-top: 8px; display: flex; align-items: baseline; gap: 10px; font-size: 11.5px; }
+  .bench .cbx { width: 13px; height: 13px; border: 1px solid var(--accent); border-radius: 4px; display: inline-grid; place-items: center; color: var(--accent); font-size: 9px; flex: none; align-self: center; }
+  .bench .cbx.off { border-color: var(--ink-3); color: transparent; }
+  .bench .dn { color: var(--ink); font-weight: 600; }
+  .bench .k { font-family: var(--mono); font-size: 9.5px; color: var(--ink-3); }
+  .bench .scope { color: var(--ink-2); }
+  .bench .scope .knob { color: var(--ink); font-weight: 600; border-bottom: 1px dashed var(--accent); }
+  .bench .state { margin-left: auto; font-size: 10.5px; color: var(--ink-2); white-space: nowrap; }
+  .bench .state i { display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: var(--ok); margin-right: 5px; }
+  .bench .state.pausd { color: var(--ink-3); }
+  .bench .state.pausd i { background: none; border: 1px solid var(--ink-3); }
+
+  .secretbanner { margin-top: 8px; border: 1px solid var(--hair-2); border-left: 2px solid var(--now); border-radius: 8px; background: rgba(232,176,90,0.06); padding: 8px 12px; font-size: 11.5px; color: var(--ink-2); display: flex; gap: 10px; align-items: center; }
+  .secretbanner .sk { font-family: var(--mono); color: var(--ink); }
+  .secretbanner b { color: var(--ink); }
+  .fbtn { font-size: 11px; color: var(--accent); border: 1px solid var(--hair-2); border-radius: 7px; padding: 3px 10px; white-space: nowrap; margin-left: auto; }
+
+  .speclist { font-size: 11.5px; color: var(--ink-2); line-height: 1.7; margin-top: 14px; }
+  .speclist b { color: var(--accent); font-weight: 650; }
+  .kbd { font: 10.5px var(--mono); color: var(--ink-2); border: 1px solid var(--hair-2); border-bottom-width: 2px; border-radius: 5px; padding: 1px 6px; }
+
+  .notes { display: flex; gap: 14px; align-items: stretch; margin: 14px auto 0; width: min(1460px, 97%); }
+  .anno { font-size: 11px; color: var(--ink-2); background: var(--glass-2); border: 1px solid var(--hair-2); border-left: 2px solid var(--accent); border-radius: 8px; padding: 9px 12px; flex: 1; }
+  .anno b { color: var(--accent); font-weight: 650; }
+
+  body.light {
+    --canvas: #c3c9d4; --void: #eef1f7;
+    --glass: rgba(252, 253, 255, 0.72); --glass-2: rgba(244, 247, 252, 0.92);
+    --hair: rgba(28, 44, 84, 0.12); --hair-2: rgba(28, 44, 84, 0.26);
+    --ink: #17223c; --ink-2: #46536f; --ink-3: #7d89a6;
+    --accent: #3f66b0; --ok: #1e7f43; --alarm: #d63c5e; --now: #9a6b10;
+    --tile: #ffffff;
+  }
+  body.light .concept, body.light .scene-tag { background: rgba(244, 247, 252, 0.95); }
+  body.light .frame .cap { background: rgba(244, 247, 252, 0.95); }
+  body.light .gpg.on { background: rgba(63, 102, 176, 0.09); }
+  body.light .secretbanner { background: rgba(154,107,16,0.07); }
+  body.light .station::before { background: var(--void); }
+
+  @media (prefers-reduced-motion: reduce) { * { animation: none !important; } }
+</style>
+</head>
+<body>
+
+<div class="concept"><b>ROUND 2 — AC · THE ENGINE ROOM</b> #490 under #518 · settings live on the machine · <a href="?theme=light" style="margin-left:0">light</a> · <a href="?" style="margin-left:4px">dark</a>
+  <span style="margin-left:auto"><a href="../round-1/direction-z-readingroom.html">round 1: Z (killed)</a><a href="index.html">index</a></span>
+</div>
+
+<!-- ================= SCENE 1 : THE ROOM ================= -->
+<section class="scene" id="s1">
+  <div class="scene-tag">Scene 1 — the room: the signal path drawn top to bottom with the hour's real traffic on it, and the side doors beside it.</div>
+  <div class="frame wide">
+    <aside class="rail" aria-label="Navigation">
+      <span class="wm">MIKRO<em>VIEW</em></span>
+      <span class="conn"><i></i>receiving</span>
+      <div class="gsec">Live</div>
+      <span class="gpg"><span class="ic">▿</span><span class="lab">The fall</span></span>
+      <span class="gpg"><span class="ic">≡</span><span class="lab">Stream</span></span>
+      <div class="gsec">Investigate</div>
+      <span class="gpg"><span class="ic">∿</span><span class="lab">Metrics</span></span>
+      <span class="gpg"><span class="ic">¶</span><span class="lab">Audit log</span></span>
+      <div class="gsec">Detect</div>
+      <span class="gpg"><span class="ic">⚑</span><span class="lab">Flags</span><span class="ct">6</span></span>
+      <div class="gsec">Expect</div>
+      <span class="gpg"><span class="brokenring"><span class="ic">◉</span><span class="lab">Watchlist</span></span></span>
+      <div class="gsec">Admin</div>
+      <span class="gpg on"><span class="ic">⚙</span><span class="lab">The engine room</span></span>
+      <span class="gpg"><span class="ic">⊞</span><span class="lab">Entities</span></span>
+      <span class="gpg"><span class="ic">⌂</span><span class="lab">Fleet</span></span>
+      <span class="gpg action"><span class="ic">⟳</span><span class="lab">Run setup…</span></span>
+      <div class="foot"><span class="nm">tom</span><span class="role">admin</span><span class="rbtn first" title="Icons only">⇔</span><span class="rbtn" title="Dock the rail">⇤</span></div>
+    </aside>
+    <div class="main">
+      <div class="crumb">
+        <div>
+          <div class="over">Admin</div>
+          <h2>The engine room <span class="dim">· the machine, and its settings where they live</span></h2>
+        </div>
+      </div>
+      <div class="room">
+        <div class="path" aria-label="The signal path, top to bottom">
+          <div class="spine"></div>
+          <div class="pulseflow"></div>
+          <div class="arrives">the router speaks — <span class="mono">rb5009</span> pushes its log, <span class="mono">7.4 events/s</span> this minute · mikroview never speaks back</div>
+          <div class="station">
+            <div class="shead"><span class="nm">The door</span><span class="what">syslog listener</span><span class="live"><i></i>7.4/s in</span></div>
+            <div class="sbody">Open on <span class="mono">5514/udp</span>, TLS on <span class="mono">6514</span> — <span class="yaml">set in config.yaml, read at start; the room shows what is, the file decides.</span> Only holders of an <b>ingest key</b> may speak here (the machines' door, right).</div>
+          </div>
+          <div class="station">
+            <div class="shead"><span class="nm">The store</span><span class="what">what is kept</span><span class="live"><i></i>41 208 events held</span></div>
+            <div class="sbody">Keeps <span class="knob">72 hours</span> and lets the oldest fall off the end. Everything below reads from here; nothing anywhere probes.</div>
+          </div>
+          <div class="station">
+            <div class="shead"><span class="nm">The watchers</span><span class="what">detectors</span><span class="live"><i></i>11 of 12 running</span></div>
+            <div class="sbody">Port scans <span class="knob">from external sources only</span> — caught <span class="mono">203.0.113.44</span> at 13:52. Off-hours activity <span class="knob">paused</span> since 12 Aug. <b>Open the station</b> for the full bench.</div>
+          </div>
+          <div class="station">
+            <div class="shead"><span class="nm">The flags desk</span><span class="what">what they raised</span><span class="live"><i></i>6 open</span></div>
+            <div class="sbody">Raised flags wait here for a human; permanent clears become <b>exclusions</b>, kept on the desk where anyone can read why something stays quiet.</div>
+          </div>
+          <div class="station">
+            <div class="shead"><span class="nm">The heralds</span><span class="what">how word goes out</span><span class="live">smtp · webhook</span></div>
+            <div class="sbody"><span class="yaml">Configured in config.yaml — stated here, amended there.</span> The room never pretends a knob it does not hold.</div>
+          </div>
+        </div>
+        <div class="doors">
+          <span class="doorlbl">The side doors — who and what may come in</span>
+          <div class="door">
+            <div class="shead"><span class="nm">Who may look in</span><span class="what">users</span></div>
+            <div class="lr"><span class="who">tom</span><span class="badge">admin</span><span class="fact"><i></i>signed in 13:41</span></div>
+            <div class="lr"><span class="who">kai</span><span class="fact"><i></i>signed in 12:07</span><span class="act mut">Remove</span></div>
+            <div class="lr"><span class="who">mira</span><span class="badge">sso</span><span class="fact">Tue 18:20</span><span class="act mut">Remove</span></div>
+            <div class="lr"><span class="act">+ Let someone in</span></div>
+          </div>
+          <div class="door">
+            <div class="shead"><span class="nm">Which machines may speak</span><span class="what">tokens</span></div>
+            <div class="lr"><span class="who" style="min-width:118px">rb5009-ingest</span><span class="badge">ingest</span><span class="fact"><i></i>spoke 14:02</span><span class="act mut">Revoke</span></div>
+            <div class="lr"><span class="who" style="min-width:118px">grafana-read</span><span class="badge">read</span><span class="fact"><i></i>read 13:59</span><span class="act mut">Revoke</span></div>
+            <div class="lr"><span class="act">+ Mint a key</span></div>
+          </div>
+          <div class="speclist">
+            <b>The room is also the status page.</b> Every number on it is the hour's real, arrived traffic — 7.4/s at the door, 41 208 in the store, 6 on the desk. A setting is read against what it is actually governing, in the same glance.
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="cap"><b>Stop filing settings by noun; draw the machine.</b> The signal path runs top to bottom — the direction this app reads — from the router's push to the heralds, and every setting lives on the station it governs. The side doors (people, machines) stand beside the path because that is where they stand in reality: they govern entry, not flow. Configuring the thing teaches how the thing works.</div>
+  </div>
+  <div class="notes">
+    <div class="anno"><b>Where a knob lives is information.</b> "Retention" filed under a Settings page is a word; <b>72 hours written on the store, between the door and the watchers</b>, explains itself — what it holds back, who reads from it, what falls off the end. The diagram is the documentation.</div>
+    <div class="anno"><b>Honesty about reach.</b> Stations the UI cannot amend (the door's ports, the heralds) say "set in config.yaml — the room shows what is, the file decides" — the config-problems banner's remediation posture, promoted to a design principle. No knob is drawn that does not exist.</div>
+    <div class="anno"><b>Z's build facts inherited.</b> Dashed-underline knobs are the admin's ink; writes 403 server-side; the GETs behind each station widened deliberately, one matrix row each; the flow pulse is the rail's receiving pulse, instant under reduced motion.</div>
+  </div>
+</section>
+
+<!-- ================= SCENE 2 : A STATION OPENED ================= -->
+<section class="scene" id="s2">
+  <div class="scene-tag">Scene 2 — a station opened: the watchers' bench unfolds in place, and a key is minted at the machines' door.</div>
+  <div class="row2">
+    <div class="frame">
+      <div class="main" style="padding-left: 18px">
+        <div class="crumb">
+          <div>
+            <div class="over">Admin</div>
+            <h2>The engine room <span class="dim">· the watchers, opened</span></h2>
+          </div>
+        </div>
+        <div class="room" style="margin-top: 14px">
+          <div class="path" style="flex: 1">
+            <div class="spine"></div>
+            <div class="station" style="opacity: 0.5">
+              <div class="shead"><span class="nm">The store</span><span class="live"><i></i>41 208 held</span></div>
+            </div>
+            <div class="station">
+              <div class="shead"><span class="nm">The watchers</span><span class="what">detectors</span><span class="live"><i></i>11 of 12 running</span></div>
+              <div class="bench">
+                <span class="cbx">✓</span><span class="dn">Port scan</span><span class="k">port_scan</span>
+                <span class="scope">— <span class="knob">external sources only</span></span>
+                <span class="state"><i></i>running</span>
+              </div>
+              <div class="bench">
+                <span class="cbx">✓</span><span class="dn">Activity spike</span><span class="k">activity_spike</span>
+                <span class="scope">— <span class="knob">everywhere</span></span>
+                <span class="state"><i></i>running</span>
+              </div>
+              <div class="bench">
+                <span class="cbx off"></span><span class="dn">Off-hours activity</span><span class="k">off_hours_activity</span>
+                <span class="scope">— paused 12 Aug, the night backup kept tripping it</span>
+                <span class="state pausd"><i></i>paused</span>
+              </div>
+              <div class="bench">
+                <span class="cbx">✓</span><span class="dn">Device silence</span><span class="k">device_silence</span>
+                <span class="scope">— consults the fleet; nothing to scope</span>
+                <span class="state"><i></i>running</span>
+              </div>
+            </div>
+            <div class="station" style="opacity: 0.5">
+              <div class="shead"><span class="nm">The flags desk</span><span class="live"><i></i>6 open</span></div>
+            </div>
+          </div>
+        </div>
+        <div class="speclist">
+          <b>The station unfolds in place</b> — the path stays visible, dimmed above and below, so "what feeds this and what it feeds" never leaves the screen. The bench keeps Z's grammar: a checkbox to run, a dashed knob for scope, worded states, and while one saves it wears "saving…" — the only disabled dress in the room.
+        </div>
+      </div>
+      <div class="cap"><b>Opening a station is zooming, not navigating.</b> The watchers unfold between the store and the desk — exactly where they work. A detector's scope knob opens where it is written; the sentence around it is the context a form page always lost.</div>
+    </div>
+    <div class="frame">
+      <div class="main" style="padding-left: 18px">
+        <div class="crumb">
+          <div>
+            <div class="over">Admin</div>
+            <h2>The engine room <span class="dim">· minting at the machines' door</span></h2>
+          </div>
+        </div>
+        <div class="room" style="margin-top: 14px">
+          <div class="doors" style="flex: 1">
+            <span class="doorlbl">Which machines may speak</span>
+            <div class="door">
+              <div class="shead"><span class="nm">Minting: nas-read</span><span class="what">read-only key</span></div>
+              <div class="secretbanner"><span><b>Copy it now — shown once.</b><br><span class="sk">mv1_4c21…9b0d</span></span><span class="fbtn">Copy</span></div>
+              <div class="lr"><span class="who" style="min-width:118px">rb5009-ingest</span><span class="badge">ingest</span><span class="fact"><i></i>spoke 14:02</span><span class="act mut">Revoke</span></div>
+              <div class="lr"><span class="who" style="min-width:118px">grafana-read</span><span class="badge">read</span><span class="fact"><i></i>read 13:59</span><span class="act mut">Revoke</span></div>
+            </div>
+            <div class="speclist">
+              <b>A key is minted at the door it opens.</b> An ingest key is minted where the router speaks; a read key where the API answers. The secret's whole life is the amber banner — after this breath it exists in no GET, no station, no door. Revoke is the only verb a circulating key carries.
+            </div>
+            <div class="speclist" style="border-top: 1px solid var(--hair); padding-top: 12px">
+              <b>The people's door works the same way</b> — someone is let in where looking-in happens, removed with their sessions named, and the one admin's role moves only by console, stated on the door as a fact.
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="cap"><b>Doors govern entry; the path governs flow.</b> The room's two kinds of settings never mix: what comes in (people, machines) is amended at the doors, what happens to it (keep, watch, flag, tell) is amended on the path. That split is the system's real architecture — the UI just stops hiding it.</div>
+    </div>
+  </div>
+  <div class="notes">
+    <div class="anno"><b>Setup joins the room honestly.</b> "Run setup…" remains the workshop off the engine room — it mints the first ingest key and prints router commands for the operator to run — admin-only outright, per the ratified rail. The room links to it from the door station; it never inlines it.</div>
+    <div class="anno"><b>What the build inherits.</b> One room view over the existing GETs (status, definitions, users, tokens, flags counts); stations map to today's components 1:1; no new stores. The cost note in the round README: the room must stay a diagram, not become a dashboard — its numbers are context for knobs, never charts.</div>
+  </div>
+</section>
+
+<!-- ================= SCENE 3 : THE VIEWER'S ENGINE ROOM ================= -->
+<section class="scene" id="s3">
+  <div class="scene-tag">Scene 3 — the viewer's engine room: the same machine, the same live truth, no hands on the knobs.</div>
+  <div class="row2">
+    <div class="frame">
+      <div class="main" style="padding-left: 18px">
+        <div class="crumb">
+          <div>
+            <div class="over">Admin</div>
+            <h2>The engine room <span class="dim">· the machine, and its settings where they live</span></h2>
+          </div>
+          <span class="rochip">READ-ONLY — ADMINS EDIT</span>
+        </div>
+        <div class="room" style="margin-top: 14px">
+          <div class="path" style="flex: 1.4">
+            <div class="spine"></div>
+            <div class="arrives">the router speaks — <span class="mono">7.4 events/s</span> this minute</div>
+            <div class="station">
+              <div class="shead"><span class="nm">The door</span><span class="what">syslog listener</span><span class="live"><i></i>7.4/s in</span></div>
+              <div class="sbody">Open on <span class="mono">5514/udp</span>, TLS on <span class="mono">6514</span>. Only ingest-key holders may speak here.</div>
+            </div>
+            <div class="station">
+              <div class="shead"><span class="nm">The store</span><span class="what">what is kept</span><span class="live"><i></i>41 208 held</span></div>
+              <div class="sbody">Keeps <b>72 hours</b> and lets the oldest fall off the end.</div>
+            </div>
+            <div class="station">
+              <div class="shead"><span class="nm">The watchers</span><span class="what">detectors</span><span class="live"><i></i>11 of 12 running</span></div>
+              <div class="sbody">Port scans watched <b>from external sources only</b> — caught <span class="mono">203.0.113.44</span> at 13:52. Off-hours activity <b>paused</b> since 12 Aug — the night backup kept tripping it.</div>
+            </div>
+            <div class="station">
+              <div class="shead"><span class="nm">The flags desk</span><span class="what">what they raised</span><span class="live"><i></i>6 open</span></div>
+            </div>
+          </div>
+          <div class="doors">
+            <span class="doorlbl">The side doors</span>
+            <div class="door">
+              <div class="shead"><span class="nm">Who may look in</span></div>
+              <div class="lr"><span class="who">tom</span><span class="badge">admin</span><span class="fact"><i></i>13:41</span></div>
+              <div class="lr"><span class="who">kai</span><span class="fact"><i></i>12:07</span></div>
+              <div class="lr"><span class="who">mira</span><span class="badge">sso</span><span class="fact">Tue</span></div>
+            </div>
+            <div class="door">
+              <div class="shead"><span class="nm">Which machines may speak</span></div>
+              <div class="lr"><span class="who" style="min-width:118px">rb5009-ingest</span><span class="fact"><i></i>spoke 14:02</span></div>
+              <div class="lr"><span class="who" style="min-width:118px">grafana-read</span><span class="fact"><i></i>read 13:59</span></div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="cap"><b>The viewer's room (#490 grammar).</b> Declared once in the chip. The dashed underlines — the admin's ink — left the page; the knobs' values stayed, as bold facts in the stations' own sentences. Mint, Remove, Revoke, Let someone in: absent, never disabled. The machine and its live numbers are identical, because the room was always mostly reading.</div>
+    </div>
+    <div class="frame">
+      <div class="main" style="padding-left: 18px">
+        <div class="crumb">
+          <div>
+            <div class="over">Admin</div>
+            <h2>The engine room <span class="dim">· what a viewer learns here</span></h2>
+          </div>
+          <span class="rochip">READ-ONLY — ADMINS EDIT</span>
+        </div>
+        <div class="speclist" style="margin-top: 20px; max-width: 560px">
+          <b>Why a viewer gets the whole room.</b> Kai's real questions — is ingest alive, what is watching tonight, why are quiet hours quiet, how long does the log go back, who do I ask — are each a number or a sentence <b>on the station where it belongs</b>. The room answers them in one glance, in the machine's own shape, which no per-noun settings page ever did.
+        </div>
+        <div class="speclist" style="max-width: 560px">
+          <b>The room teaches the product.</b> A new viewer who reads the path once — door, store, watchers, desk, heralds — has been told mikroview's whole architecture, including its manners: the router speaks first, nothing is probed, word goes out only by the heralds. The settings surface doubles as the missing "how it works" page.
+        </div>
+        <div class="speclist" style="max-width: 560px; border-top: 1px solid var(--hair); padding-top: 14px">
+          <b>Keyboard and announcement.</b> The path is a list landmark read top to bottom; <span class="kbd">Enter</span> opens a station (zoom, not navigation); <span class="kbd">Tab</span> walks knobs (admins) or stations (viewers); the chip is read once as the page's description. The flow pulse is decorative and silent.
+        </div>
+      </div>
+      <div class="cap"><b>Read-only is the room at rest.</b> The engine room's viewer form is not a stripped page — it is the machine observed rather than adjusted, which is what mikroview itself does to the network all day. The product's own ethic, applied to its own controls.</div>
+    </div>
+  </div>
+  <div class="notes">
+    <div class="anno"><b>AB and AC agree on the bones.</b> Both wild passes keep Z's build facts (worded states, 403 writes, deliberate GET widening, secrets in no GET), the one-admin console rule, and Run setup… as the admin's workshop. They differ in the organising idea: the charter files everything by <i>meaning in prose</i>; the engine room files everything by <i>place in the machine</i>.</div>
+    <div class="anno"><b>The choice they pose.</b> The charter reads best and is cheapest to build (prose over existing GETs); the engine room teaches best and doubles as status. Both could even coexist — the room as the page, the charter as its printable "how is this network kept?" export — but that is a round-3 question, not a claim.</div>
+  </div>
+</section>
+
+<script>
+  if (new URLSearchParams(location.search).get('theme') === 'light') document.body.classList.add('light');
+</script>
+</body>
+</html>

@@ -1,0 +1,346 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mikroview settings — round 2 — AB: the charter</title>
+<style>
+  /* ============================================================
+     DESIGN PASS (#518) — SETTINGS SURFACES (#490) — ROUND 2
+     AB — THE CHARTER  ·  the configuration is a document
+
+     The wild premise: settings pages are an artefact of databases,
+     not of understanding. What an operator actually wants to know
+     is "how is this network kept?" — and the natural form of that
+     answer is a DOCUMENT. The charter writes the entire
+     configuration as one continuous, literate text — the network's
+     constitution — in articles: who may look in, which machines
+     may speak, what is watched for, what is kept, how word is sent
+     out. Every editable value is a TERM in a sentence. An admin
+     amends a term in place; the margin keeps the amendment trail
+     (the audit log as marginalia). A viewer reads the very same
+     document — read-only IS a document, so the viewer gets the
+     native form, not a degraded one.
+
+     Z's requirements carry (they are build facts, not styling):
+     control → worded fact (here, everything is already words),
+     busy-disabled ≠ permission, writes 403 server-side, GETs
+     widened deliberately, secrets in no GET.
+
+     No charts; no data palette. Colour stays meaning-only: accent
+     for amendable terms (the admin's ink), amber for time.
+     ============================================================ */
+  :root {
+    --canvas: #1b2340; --void: #06080e;
+    --glass: rgba(15, 20, 34, 0.66); --glass-2: rgba(8, 11, 20, 0.88);
+    --hair: rgba(160, 185, 230, 0.13); --hair-2: rgba(160, 185, 230, 0.26);
+    --ink: #e9eefb; --ink-2: #97a4c4; --ink-3: #55628a;
+    --accent: #9db8e8;
+    --ok: #37b364; --alarm: #ff5470; --now: #e8b05a;
+    --tile: #0d1220;
+    --sans: system-ui, -apple-system, "Segoe UI", sans-serif;
+    --serif: Charter, Georgia, "Times New Roman", serif;
+    --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  }
+  * { box-sizing: border-box; margin: 0; }
+  html { scroll-behavior: smooth; }
+  body { background: var(--canvas); color: var(--ink); font: 13.5px/1.5 var(--sans); -webkit-font-smoothing: antialiased; }
+  .concept {
+    position: sticky; top: 0; z-index: 90; display: flex; gap: 16px; align-items: baseline;
+    padding: 8px 20px; background: rgba(2,3,7,0.95); border-bottom: 1px solid var(--hair);
+    font-size: 11px; color: var(--ink-3);
+  }
+  .concept b { color: var(--accent); letter-spacing: 0.1em; }
+  .concept a { color: var(--ink-2); text-decoration: none; margin-left: 12px; }
+  .scene { min-height: 100vh; position: relative; border-bottom: 1px solid var(--hair-2); overflow: hidden; padding-bottom: 30px; }
+  .scene-tag {
+    position: sticky; top: 33px; z-index: 80; text-align: center;
+    font-size: 10.5px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--ink-3);
+    padding: 6px 0; background: rgba(2,3,7,0.85);
+  }
+  .row2 { display: flex; gap: 24px; justify-content: center; align-items: stretch; margin: 26px auto 0; width: min(1460px, 97%); }
+  .frame { position: relative; border: 1px solid var(--hair-2); border-radius: 14px; overflow: hidden; background: var(--void); flex: 1; min-height: 700px; display: flex; }
+  .frame .cap { position: absolute; left: 0; right: 0; bottom: 0; z-index: 30; font-size: 10.5px; color: var(--ink-2); padding: 9px 14px; background: rgba(2,3,7,0.92); border-top: 1px solid var(--hair); }
+  .frame .cap b { color: var(--accent); }
+  .frame.wide { flex: none; width: min(1460px, 97%); margin: 26px auto 0; display: flex; min-height: 820px; }
+
+  /* ---- the ratified rail (#486), carried forward verbatim ---- */
+  .rail {
+    width: 200px; flex: none; background: var(--glass-2); border-right: 1px solid var(--hair);
+    display: flex; flex-direction: column; padding: 14px 0 90px; position: relative; z-index: 10;
+    backdrop-filter: blur(10px);
+  }
+  .rail .wm { font-size: 11px; font-weight: 700; letter-spacing: 0.24em; color: var(--ink-3); padding: 0 16px 3px; }
+  .rail .wm em { color: var(--accent); font-style: normal; }
+  .rail .conn { font-size: 9.5px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--ink-3); padding: 0 16px 8px; }
+  .rail .conn i { display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: var(--ok); margin-right: 6px; animation: pulse 2s ease-in-out infinite; }
+  @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.3; } }
+  .gsec { font-size: 9px; letter-spacing: 0.16em; text-transform: uppercase; color: var(--ink-3); padding: 11px 16px 2px; font-weight: 650; }
+  .gpg { display: flex; align-items: center; gap: 9px; font-size: 12px; font-weight: 550; color: var(--ink-2); padding: 5px 16px 5px 14px; border-left: 2px solid transparent; }
+  .gpg .ic { width: 15px; text-align: center; color: var(--ink-3); font-size: 12px; flex: none; }
+  .gpg.on { color: var(--ink); border-left-color: var(--accent); background: rgba(157,184,232,0.06); }
+  .gpg.on .ic { color: var(--accent); }
+  .gpg .ct { font-size: 9px; color: var(--void); background: var(--alarm); border-radius: 8px; padding: 1px 5px; margin-left: auto; font-weight: 700; }
+  .gpg.action { color: var(--accent); font-size: 11px; margin-top: 2px; }
+  .brokenring { display: inline-flex; align-items: center; gap: 9px; outline: 2px solid var(--alarm); outline-offset: 3px; border-radius: 6px; }
+  .rail .foot { margin-top: auto; padding: 10px 16px 0; border-top: 1px solid var(--hair); display: flex; align-items: center; gap: 7px; font-size: 11.5px; color: var(--ink-2); }
+  .role { font-size: 8.5px; font-weight: 700; letter-spacing: 0.12em; color: var(--ink-3); border: 1px solid var(--hair-2); border-radius: 8px; padding: 1px 6px; text-transform: uppercase; }
+  .rbtn { color: var(--ink-3); font-size: 12px; border: 1px solid var(--hair-2); border-radius: 6px; width: 22px; height: 22px; display: grid; place-items: center; flex: none; }
+  .rbtn.first { margin-left: auto; }
+
+  .main { flex: 1; position: relative; min-width: 0; padding: 0 26px 56px; display: flex; }
+  .doc { max-width: 640px; margin: 0 auto; padding-top: 22px; font-family: var(--serif); }
+  .doc .over { font-size: 10px; letter-spacing: 0.16em; text-transform: uppercase; color: var(--ink-3); font-family: var(--sans); }
+  .doc h2 { font-size: 22px; font-weight: 550; margin-top: 2px; }
+  .doc h2 .dim { color: var(--ink-3); font-weight: 400; font-size: 13px; font-family: var(--sans); }
+  .doc .pre { font-size: 12px; color: var(--ink-3); font-style: italic; margin-top: 6px; }
+  .art { margin-top: 26px; }
+  .art h3 { font-size: 11px; letter-spacing: 0.16em; text-transform: uppercase; color: var(--ink-3); font-weight: 650; font-family: var(--sans); padding-bottom: 6px; border-bottom: 1px solid var(--hair); }
+  .art p { font-size: 14.5px; line-height: 1.85; color: var(--ink-2); margin-top: 12px; }
+  .art p b { color: var(--ink); font-weight: 600; }
+  .term { color: var(--ink); font-weight: 600; border-bottom: 1px dashed var(--accent); cursor: default; white-space: nowrap; }
+  .term.plain { border-bottom: 0; }
+  .mono { font-family: var(--mono); font-size: 0.88em; }
+  .tick { display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: var(--now); margin: 0 4px 1px 2px; }
+  .rochip { font-size: 9px; font-weight: 700; letter-spacing: 0.1em; color: var(--ink-2); border: 1px solid var(--hair-2); border-radius: 8px; padding: 2px 8px; font-family: var(--sans); vertical-align: 2px; margin-left: 10px; white-space: nowrap; }
+
+  /* the margin: amendments as marginalia */
+  .margin { width: 230px; flex: none; padding: 96px 0 0 26px; border-left: 1px solid var(--hair); margin-left: 30px; }
+  .mnote { font-size: 10.5px; color: var(--ink-3); line-height: 1.6; margin-bottom: 18px; position: relative; }
+  .mnote b { color: var(--ink-2); font-weight: 600; }
+  .mnote .when { font-family: var(--mono); font-size: 9.5px; color: var(--ink-3); display: block; }
+  .mnote.fresh { color: var(--ink-2); border-left: 2px solid var(--now); padding-left: 8px; margin-left: -10px; }
+
+  /* the amendment popover */
+  .amend { position: relative; display: inline-block; }
+  .popover {
+    position: absolute; left: -12px; top: 26px; z-index: 40; white-space: nowrap;
+    background: var(--tile); border: 1px solid var(--accent); border-radius: 10px; padding: 10px 12px;
+    box-shadow: 0 14px 40px rgba(0,0,0,0.55); font-family: var(--sans); font-size: 12px;
+    display: flex; gap: 8px; align-items: center;
+  }
+  .popover .sel { background: var(--void); border: 1px solid var(--hair-2); border-radius: 7px; padding: 4px 10px; color: var(--ink); }
+  .popover .go { color: var(--accent); border: 1px solid var(--hair-2); border-radius: 7px; padding: 4px 10px; }
+  .popover .mut { color: var(--ink-3); }
+  .kbd { font: 10.5px var(--mono); color: var(--ink-2); border: 1px solid var(--hair-2); border-bottom-width: 2px; border-radius: 5px; padding: 1px 6px; }
+
+  .secretline { background: rgba(232,176,90,0.07); border: 1px solid var(--hair-2); border-left: 2px solid var(--now); border-radius: 8px; padding: 8px 12px; font-size: 13px; margin-top: 10px; }
+  .secretline .mono { color: var(--ink); }
+
+  .speclist { font-size: 11.5px; color: var(--ink-2); line-height: 1.7; margin-top: 14px; font-family: var(--sans); }
+  .speclist b { color: var(--accent); font-weight: 650; }
+
+  .notes { display: flex; gap: 14px; align-items: stretch; margin: 14px auto 0; width: min(1460px, 97%); }
+  .anno { font-size: 11px; color: var(--ink-2); background: var(--glass-2); border: 1px solid var(--hair-2); border-left: 2px solid var(--accent); border-radius: 8px; padding: 9px 12px; flex: 1; }
+  .anno b { color: var(--accent); font-weight: 650; }
+
+  body.light {
+    --canvas: #c3c9d4; --void: #eef1f7;
+    --glass: rgba(252, 253, 255, 0.72); --glass-2: rgba(244, 247, 252, 0.92);
+    --hair: rgba(28, 44, 84, 0.12); --hair-2: rgba(28, 44, 84, 0.26);
+    --ink: #17223c; --ink-2: #46536f; --ink-3: #7d89a6;
+    --accent: #3f66b0; --ok: #1e7f43; --alarm: #d63c5e; --now: #9a6b10;
+    --tile: #ffffff;
+  }
+  body.light .concept, body.light .scene-tag { background: rgba(244, 247, 252, 0.95); }
+  body.light .frame .cap { background: rgba(244, 247, 252, 0.95); }
+  body.light .gpg.on { background: rgba(63, 102, 176, 0.09); }
+  body.light .popover { box-shadow: 0 14px 40px rgba(28,44,84,0.2); }
+  body.light .secretline { background: rgba(154,107,16,0.07); }
+
+  @media (prefers-reduced-motion: reduce) { * { animation: none !important; } }
+</style>
+</head>
+<body>
+
+<div class="concept"><b>ROUND 2 — AB · THE CHARTER</b> #490 under #518 · the configuration is a document · <a href="?theme=light" style="margin-left:0">light</a> · <a href="?" style="margin-left:4px">dark</a>
+  <span style="margin-left:auto"><a href="../round-1/direction-z-readingroom.html">round 1: Z (killed)</a><a href="index.html">index</a></span>
+</div>
+
+<!-- ================= SCENE 1 : THE CHARTER ================= -->
+<section class="scene" id="s1">
+  <div class="scene-tag">Scene 1 — the charter: the whole configuration as one literate document, the audit trail as marginalia.</div>
+  <div class="frame wide">
+    <aside class="rail" aria-label="Navigation">
+      <span class="wm">MIKRO<em>VIEW</em></span>
+      <span class="conn"><i></i>receiving</span>
+      <div class="gsec">Live</div>
+      <span class="gpg"><span class="ic">▿</span><span class="lab">The fall</span></span>
+      <span class="gpg"><span class="ic">≡</span><span class="lab">Stream</span></span>
+      <div class="gsec">Investigate</div>
+      <span class="gpg"><span class="ic">∿</span><span class="lab">Metrics</span></span>
+      <span class="gpg"><span class="ic">¶</span><span class="lab">Audit log</span></span>
+      <div class="gsec">Detect</div>
+      <span class="gpg"><span class="ic">⚑</span><span class="lab">Flags</span><span class="ct">6</span></span>
+      <div class="gsec">Expect</div>
+      <span class="gpg"><span class="brokenring"><span class="ic">◉</span><span class="lab">Watchlist</span></span></span>
+      <div class="gsec">Admin</div>
+      <span class="gpg on"><span class="ic">¶</span><span class="lab">The charter</span></span>
+      <span class="gpg"><span class="ic">⊞</span><span class="lab">Entities</span></span>
+      <span class="gpg"><span class="ic">⌂</span><span class="lab">Fleet</span></span>
+      <span class="gpg action"><span class="ic">⟳</span><span class="lab">Run setup…</span></span>
+      <div class="foot"><span class="nm">tom</span><span class="role">admin</span><span class="rbtn first" title="Icons only">⇔</span><span class="rbtn" title="Dock the rail">⇤</span></div>
+    </aside>
+    <div class="main">
+      <div class="doc">
+        <div class="over">Admin</div>
+        <h2>The charter <span class="dim">· how this network is kept</span></h2>
+        <p class="pre">One document, always current. Underlined terms are amendable in place; everything else is fact. <span class="kbd">/</span> finds anything.</p>
+        <div class="art">
+          <h3>I · Who may look in</h3>
+          <p>Three people can sign in. <b>tom</b> administers — the one admin this deployment will have; handing that role on is a <span class="term plain">console operation</span>, not a page. <b>kai</b> and <b>mira</b> view; mira arrives by <b>SSO</b>. <span class="tick"></span>tom signed in at 13:41; new accounts start as viewers, and an account is <span class="term">removable</span> the moment its person leaves.</p>
+        </div>
+        <div class="art">
+          <h3>II · Which machines may speak</h3>
+          <p>Two keys are in circulation. <b>rb5009-ingest</b> lets the router push its log here<span class="tick"></span>— last spoke at 14:02, which is the sentence that says ingest is alive. <b>grafana-read</b> may read the API and nothing else<span class="tick"></span>— last used 13:59. Either can be <span class="term">revoked</span> in a word; a new key is a new <span class="term">minting</span>, shown once and kept nowhere.</p>
+        </div>
+        <div class="art">
+          <h3>III · What is watched for</h3>
+          <p>Twelve watchers can run; <b>eleven are running</b>. Port scans are flagged <span class="term">from external sources only</span> — that clause caught <span class="mono">203.0.113.44</span> at 13:52, 88 hits in one minute. Activity spikes are flagged <span class="term">everywhere</span>. Off-hours activity is <span class="term">paused</span> — amended 12 Aug, when the night backup kept tripping it. Device silence consults the fleet, not a host list; there is nothing in it to scope.</p>
+        </div>
+        <div class="art">
+          <h3>IV · What is kept, and for how long</h3>
+          <p>The store keeps <span class="term">72 hours</span> of events — 41 208 at this minute — and lets the oldest fall off the end. Nothing mikroview shows was asked for: every line arrived on the router's own push, and the charter has no article that probes.</p>
+        </div>
+      </div>
+      <div class="margin" aria-label="Amendments">
+        <div class="mnote"><span class="when">12 Aug · tom</span><b>Off-hours activity paused</b> — the night backup kept tripping it.</div>
+        <div class="mnote"><span class="when">12 Aug · tom</span><b>grafana-read minted</b>, read-only.</div>
+        <div class="mnote"><span class="when">12 Aug · tom</span><b>kai, mira</b> may look in.</div>
+        <div class="mnote"><span class="when">02 Aug · tom</span><b>rb5009-ingest minted</b>; the router began to speak.</div>
+        <div class="mnote"><span class="when">02 Aug</span><b>The charter adopted</b> — first run.</div>
+      </div>
+    </div>
+    <div class="cap"><b>Settings pages are an artefact of databases, not of understanding.</b> The question an operator actually has is "how is this network kept?", and its natural form is a document. The charter writes the whole configuration as articles — who may look in, which machines may speak, what is watched for, what is kept — with every editable value as a term in a sentence, and the audit log where a document keeps its history: the margin.</div>
+  </div>
+  <div class="notes">
+    <div class="anno"><b>One document, one place.</b> "Which page is that setting on?" dissolves — there is one page, it reads top to bottom in under a minute, and <span style="font-family:var(--mono)">/</span> finds any word of it. The rail's Admin section collapses to The charter (plus Entities and Fleet, which are records, not rules).</div>
+    <div class="anno"><b>Facts and terms share sentences.</b> "Last spoke at 14:02" (fact, plain ink) sits beside "revocable in a word" (term, underlined) — because configuration only means anything against what the system is actually doing. The charter is the only settings form that can say both in one breath.</div>
+    <div class="anno"><b>Z's build facts inherited.</b> Writes 403 server-side whatever renders; the charter's GET widened deliberately (one authz-matrix row); secrets in no GET; the margin is the audit log, not a new store.</div>
+  </div>
+</section>
+
+<!-- ================= SCENE 2 : AMENDING A TERM ================= -->
+<section class="scene" id="s2">
+  <div class="scene-tag">Scene 2 — amending in place: a term opens where it stands, and the mint's one secret moment stays a moment.</div>
+  <div class="row2">
+    <div class="frame">
+      <div class="main">
+        <div class="doc" style="max-width: 560px">
+          <div class="over">Admin</div>
+          <h2>The charter <span class="dim">· amending article III</span></h2>
+          <div class="art">
+            <h3>III · What is watched for</h3>
+            <p>Port scans are flagged <span class="amend"><span class="term">from external sources only</span>
+              <span class="popover" role="dialog" aria-label="Amend: port scan sources">
+                <span class="sel">external only ▾</span>
+                <span class="go">Amend</span>
+                <span class="mut">Cancel</span>
+              </span></span> — that clause caught <span class="mono">203.0.113.44</span> at 13:52, 88 hits in one minute.</p>
+            <p style="margin-top: 64px">Activity spikes are flagged <span class="term">everywhere</span>. Off-hours activity is <span class="term">paused</span> — amended 12 Aug, when the night backup kept tripping it.</p>
+          </div>
+          <div class="speclist">
+            <b>The sentence is the form.</b> A term opens where it stands — the popover holds only the values the sentence could truthfully say, and <span class="kbd">Enter</span> amends. While it saves, the term wears its own word ("amending…"), the one briefly-disabled state the page knows. The paragraph never moves; the margin gains its note the moment the amendment lands.
+          </div>
+        </div>
+        <div class="margin" style="padding-top: 130px">
+          <div class="mnote fresh"><span class="when">now · tom</span><b>Port-scan sources</b> — amendment open…</div>
+          <div class="mnote"><span class="when">12 Aug · tom</span><b>Off-hours activity paused</b>.</div>
+        </div>
+      </div>
+      <div class="cap"><b>Editing is amending, and it happens in the prose.</b> No form page, no save bar at the foot of nothing — the term is the control, the sentence is its context, and the margin is its receipt. What the popover offers is exactly what the sentence can truthfully end with.</div>
+    </div>
+    <div class="frame">
+      <div class="main">
+        <div class="doc" style="max-width: 560px">
+          <div class="over">Admin</div>
+          <h2>The charter <span class="dim">· article II, a minting</span></h2>
+          <div class="art">
+            <h3>II · Which machines may speak</h3>
+            <p>Two keys are in circulation — and a third is being <b>minted now</b>: <b>nas-read</b>, allowed to read the API and nothing else.</p>
+            <div class="secretline">Its value is <span class="mono">mv1_4c21…9b0d</span> — <b>copy it now; it is shown once</b> and the charter keeps no copy. After this sentence it exists in no page, no GET, no margin note.</div>
+            <p>rb5009-ingest lets the router push its log here<span class="tick"></span>— last spoke 14:02. grafana-read may read the API<span class="tick"></span>— last used 13:59. Either can be <span class="term">revoked</span> in a word.</p>
+          </div>
+          <div class="speclist">
+            <b>The secret is a sentence that expires.</b> The amber line is the mint's one moment — written in the document's own voice, then gone. The margin records that a minting happened, never what was minted.
+          </div>
+        </div>
+        <div class="margin" style="padding-top: 130px">
+          <div class="mnote fresh"><span class="when">now · tom</span><b>nas-read minted</b>, read-only.</div>
+          <div class="mnote"><span class="when">12 Aug · tom</span><b>grafana-read minted</b>, read-only.</div>
+        </div>
+      </div>
+      <div class="cap"><b>Even the one-time secret speaks charter.</b> The mint writes itself into article II as a sentence with an expiry, amber because it is a fact about <i>now</i>. The document stays honest: what it can't repeat, it says it can't repeat.</div>
+    </div>
+  </div>
+  <div class="notes">
+    <div class="anno"><b>Why amendments beat forms.</b> A form asks the operator to translate a sentence in their head into scattered controls and back. The charter deletes the translation: what you read is what you amend, and what you amended is what the next reader reads.</div>
+    <div class="anno"><b>The margin is the audit log.</b> Same store, new posture: history lives beside the article it changed, so "why is off-hours paused?" is answered by the note sitting next to the clause — not by a separate page sorted by timestamp.</div>
+  </div>
+</section>
+
+<!-- ================= SCENE 3 : THE VIEWER'S CHARTER ================= -->
+<section class="scene" id="s3">
+  <div class="scene-tag">Scene 3 — the viewer's charter: the same document is the native read-only form; nothing is degraded because nothing was a control.</div>
+  <div class="row2">
+    <div class="frame">
+      <div class="main">
+        <div class="doc" style="max-width: 560px">
+          <div class="over">Admin</div>
+          <h2>The charter <span class="rochip">READ-ONLY — ADMINS EDIT</span></h2>
+          <p class="pre">One document, always current. <span class="kbd">/</span> finds anything.</p>
+          <div class="art">
+            <h3>I · Who may look in</h3>
+            <p>Three people can sign in. <b>tom</b> administers. <b>kai</b> and <b>mira</b> view; mira arrives by <b>SSO</b>. <span class="tick"></span>tom signed in at 13:41.</p>
+          </div>
+          <div class="art">
+            <h3>II · Which machines may speak</h3>
+            <p>Two keys are in circulation. <b>rb5009-ingest</b> lets the router push its log here<span class="tick"></span>— last spoke at 14:02, which is the sentence that says ingest is alive. <b>grafana-read</b> may read the API and nothing else<span class="tick"></span>— last used 13:59.</p>
+          </div>
+          <div class="art">
+            <h3>III · What is watched for</h3>
+            <p>Twelve watchers can run; <b>eleven are running</b>. Port scans are flagged from external sources only — that clause caught <span class="mono">203.0.113.44</span> at 13:52. Off-hours activity is paused — amended 12 Aug, when the night backup kept tripping it.</p>
+          </div>
+          <div class="speclist">
+            <b>Same articles, same sentences, plain ink.</b> The underline — the admin's ink — is the only thing that left the page; every fact stays, only the verbs are shed.
+          </div>
+        </div>
+        <div class="margin" style="padding-top: 130px">
+          <div class="mnote"><span class="when">12 Aug · tom</span><b>Off-hours activity paused</b>.</div>
+          <div class="mnote"><span class="when">12 Aug · tom</span><b>kai, mira</b> may look in.</div>
+        </div>
+      </div>
+      <div class="cap"><b>The viewer gets the native form.</b> Every settings UI degrades for viewers except a document — a document is <i>already</i> read-only. Kai reads the same charter, margin and all: who to ask, what watches, why quiet hours are quiet. Declared once in the chip; no ghosts, because there were never controls.</div>
+    </div>
+    <div class="frame">
+      <div class="main">
+        <div class="doc" style="max-width: 560px">
+          <div class="over">Admin</div>
+          <h2>The charter <span class="dim">· article V — the edges</span></h2>
+          <div class="art">
+            <h3>V · What the charter does not govern</h3>
+            <p><b>The listener's doors</b> — syslog, TLS, trusted proxies — are set in <span class="mono">config.yaml</span> and read at start; the charter states them but cannot amend them, and says so here rather than pretending. <b>Run setup…</b> is a workshop, not an article: it mints credentials, so it stays the admin's outright. <b>Passwords and SSO links</b> are each person's own door. <b>Entities</b> is the network's dictionary and keeps its own page (#489); the charter cites names, it does not keep them.</p>
+          </div>
+          <div class="art">
+            <h3>VI · The server's own clause</h3>
+            <p>Whatever any page renders, the server refuses a non-admin's amendment — every write is <span class="mono">403</span> without the admin role. The charter's readability to viewers is itself a deliberate grant: one route, one authz-matrix row, opened on purpose. No key's value survives its minting sentence anywhere the API can repeat.</p>
+          </div>
+          <div class="speclist">
+            <b>The charter about itself.</b> The estate's edges and the API clause are articles too — written where every reader, admin or viewer, will actually meet them, instead of in a design document nobody operates from.
+          </div>
+        </div>
+      </div>
+      <div class="cap"><b>Honesty as an article.</b> What is configured outside the UI says so; what only admins may touch says why; what the server enforces is written as the network's own law. The document form makes the system's rules legible in the same voice as its values — which is the whole premise.</div>
+    </div>
+  </div>
+  <div class="notes">
+    <div class="anno"><b>What the build inherits.</b> One charter view composed from the existing GETs (users, tokens, definitions, audit, status); terms map 1:1 onto existing write endpoints; the margin is the audit log filtered by article. No new stores. The risk to weigh: prose templates need care per locale and per fact-shape — the round README carries the cost note.</div>
+    <div class="anno"><b>Keyboard.</b> <span class="kbd">/</span> finds; <span class="kbd">Tab</span> walks terms (admins) or headings (viewers); <span class="kbd">Enter</span> opens a term where it stands; the margin is a list landmark. A screen reader hears a document, because it is one.</div>
+  </div>
+</section>
+
+<script>
+  if (new URLSearchParams(location.search).get('theme') === 'light') document.body.classList.add('light');
+</script>
+</body>
+</html>
