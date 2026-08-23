@@ -38,6 +38,26 @@ describe('buildQuery: ip forwarding for srcQuery/dstQuery (#438)', () => {
     expect(new URLSearchParams(qs).get('ip')).toBe('203.0.113.5')
   })
 
+  // A pasted address routinely carries leading/trailing whitespace. The
+  // forwarded value must be trimmed: internal/store/query.go's
+  // net.ParseIP/net.ParseCIDR both fail on padding, which drops
+  // matchesFilters to its exact-string-equal fallback -- matching no
+  // event at all -- while the client-side matcher (which does trim)
+  // leaves the already-buffered rows looking fine. Silently wrong, not
+  // visibly broken, which is exactly why this is pinned rather than left
+  // to be caught by eye.
+  it('trims whitespace from the forwarded ip, not just from the srcQuery param', () => {
+    const qs = buildQuery({ ...emptyFilters(), srcQuery: '  203.0.113.5  ' })
+    const params = new URLSearchParams(qs)
+    expect(params.get('ip')).toBe('203.0.113.5')
+    expect(params.get('ip')).not.toMatch(/\s/)
+  })
+
+  it('trims whitespace from a padded CIDR too', () => {
+    const qs = buildQuery({ ...emptyFilters(), dstQuery: '\t198.51.100.0/24\n' })
+    expect(new URLSearchParams(qs).get('ip')).toBe('198.51.100.0/24')
+  })
+
   it('does not forward a label/name fragment as ip -- no server-side equivalent exists', () => {
     const qs = buildQuery({ ...emptyFilters(), srcQuery: 'nas-basement' })
     expect(new URLSearchParams(qs).get('ip')).toBeNull()
