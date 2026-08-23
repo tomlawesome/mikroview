@@ -96,6 +96,32 @@ the default-drop wall — which is what "unplanned" means. Scene 3 is
 the gates report: hot gates, dormant gates (with a print-the-command
 retirement draft), watched gates, flags on the gates that fired them.
 
+### K — Dispatch (`direction-k-dispatch.html`) — wild №3, the log as narrative
+
+No chart on the front page at all: the interface writes what is
+happening in sentences, in a controlled verb vocabulary (knocked,
+refused, passed, went dark), and every sentence cites the rows that
+make it true — nothing said that cannot be shown. Nouns are clickable
+tokens; watches are standing sentences ("Nothing unsolicited has
+passed in 41 days ✓") whose breaking IS the news; the dark boundary is
+reported as the story's missing chapter. Scene 2 pins a sentence over
+the full live view it compiles to; scene 3 tells the day in chapters.
+
+### L — Lattice (`direction-l-lattice.html`) — wild №4, the reachability matrix
+
+Sources down, destinations across: every cell is one directed
+boundary. Policy is the cell's face — open with its ports, shut,
+open-but-waiting (rule #6, 30 days unused), dark (hatched, unlogged) —
+and reality pulses on top. The unplanned flow is a shut cell that is
+knocking, burning red in a grid of quiet ones. One-way policy is
+simply the matrix being asymmetric. This is also the answer to
+"Strata has no topography": the lattice is the complete topography —
+all N² conversations visible, including the ones nobody thought
+about — and composes with Strata (lattice = every pair now; strata =
+chosen pairs over time). Scene 3 shows Policy and Reality side by
+side with the three-cell disagreement list: the audit, done at a
+glance. Click a shut cell → compose the rule.
+
 ## Running batch (2026-08-23, owner, mid-round)
 
 - Down to **Atlas II** and **Strata II** — though Atlas II reads
@@ -104,8 +130,12 @@ retirement draft), watched gates, flags on the gates that fired them.
   Reach view survives in F scene 4, developed into **Reach & Compose**
   (point at host → destination → port → mikroview prints the RouterOS
   command; observed denials become drafted rules). **Riverline
-  dropped** ("super weak"); **Gauntlet** replaces it as the horizontal
-  with a true argument.
+  dropped** ("super weak"); **Gauntlet** replaced it — and was a no
+  ("Gauntlet's a no"). Atlas II stays but reads "safe, boring, fine".
+  Strata II "better, still very interesting" — its missing topography
+  is answered by Lattice. K (Dispatch) and L (Lattice) added as the
+  two requested wild concepts, orthogonal to everything prior and to
+  each other: language and relation.
 
 ## Shared discipline
 
