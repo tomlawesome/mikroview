@@ -14,6 +14,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -155,13 +156,17 @@ func TestNearExpiryLeafIsRenewed(t *testing.T) {
 	}
 }
 
-// TestUnwritableStorePathSurfacesPersistErrButStillLoads reproduces the
-// "hardened container" (--read-only root filesystem) scenario found via
-// the CI smoke test: generation must still succeed and return a usable
-// cert, but the caller needs to know persistence silently failed so it
-// can warn an operator, rather than the CA quietly regenerating (and
-// needing to be re-trusted) on every restart with no indication why.
-func TestUnwritableStorePathSurfacesPersistErrButStillLoads(t *testing.T) {
+// TestUnwritableStorePathIsFatal covers the case that used to be a
+// warning: generation succeeds, the cert in hand is usable, but it
+// cannot be written. Load now refuses (#535).
+//
+// It was survivable on the reasoning that an unpersisted cert still
+// serves. What that ignores is the router: a CA regenerated on every
+// restart is a new trust anchor each time, so syslog over TLS stops
+// arriving and mikroview goes quiet without saying why. The only
+// deployment that ever ran this way was the hardened-container smoke
+// test, which now gets a writable data directory like every real one.
+func TestUnwritableStorePathIsFatal(t *testing.T) {
 	parent := t.TempDir()
 	if err := os.Chmod(parent, 0o500); err != nil { // read+execute, no write
 		t.Fatal(err)
@@ -170,17 +175,84 @@ func TestUnwritableStorePathSurfacesPersistErrButStillLoads(t *testing.T) {
 
 	storePath := filepath.Join(parent, "tls")
 
-	cert, caPEM, persistErr, err := Load(Config{Hosts: []string{"mikroview.local"}, StorePath: storePath})
-	if err != nil {
-		t.Fatalf("expected Load to still succeed with an unwritable store path, got err: %v", err)
+	_, _, _, err := Load(Config{Hosts: []string{"mikroview.local"}, StorePath: storePath})
+	if err == nil {
+		t.Fatal("expected an unwritable store path to stop startup, got nil")
 	}
-	if persistErr == nil {
-		t.Error("expected a non-nil persistErr for an unwritable store path")
+	if !strings.Contains(err.Error(), storePath) {
+		t.Errorf("error should name the path the operator has to fix, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "refusing to start") {
+		t.Errorf("error should say plainly that it is refusing to start, got: %v", err)
+	}
+}
+
+// TestUnreadableStoredCAIsFatalRatherThanReplaced is the defect #535 was
+// actually filed for. A CA that is present but cannot be read used to be
+// indistinguishable from no CA at all: every failure branch returned a
+// bare nil, so mikroview minted a replacement and overwrote the original
+// -- destroying the trust anchor the router was pinned to, while logging
+// the same cheerful line as a first run.
+func TestUnreadableStoredCAIsFatalRatherThanReplaced(t *testing.T) {
+	dir := t.TempDir()
+
+	if _, _, _, err := Load(Config{Hosts: []string{"mikroview.local"}, StorePath: dir}); err != nil {
+		t.Fatalf("seeding a stored CA: %v", err)
+	}
+	caCertPath, caKeyPath, _, _, _ := storePaths(dir)
+	before, err := os.ReadFile(caCertPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Unreadable, not absent -- the distinction the old code could not make.
+	if err := os.Chmod(caKeyPath, 0o000); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chmod(caKeyPath, filePermission) })
+
+	_, _, _, err = Load(Config{Hosts: []string{"mikroview.local"}, StorePath: dir})
+	if err == nil {
+		t.Fatal("expected an unreadable stored CA to stop startup, got nil")
+	}
+	if !strings.Contains(err.Error(), caKeyPath) {
+		t.Errorf("error should name the unreadable file, got: %v", err)
+	}
+
+	// The original must still be on disk: replacing it is the harm.
+	after, readErr := os.ReadFile(caCertPath)
+	if readErr != nil {
+		t.Fatalf("the stored CA certificate should be untouched, got: %v", readErr)
+	}
+	if string(after) != string(before) {
+		t.Error("the stored CA was overwritten -- that is exactly what #535 forbids")
+	}
+}
+
+// TestFirstRunWithEmptyStoreIsNotAnError guards the other side of the
+// same distinction: an empty store is a first run, not a fault, and must
+// still generate silently.
+func TestFirstRunWithEmptyStoreIsNotAnError(t *testing.T) {
+	dir := t.TempDir()
+
+	_, caPEM, reused, err := Load(Config{Hosts: []string{"mikroview.local"}, StorePath: dir})
+	if err != nil {
+		t.Fatalf("a first run into an empty store must succeed, got: %v", err)
 	}
 	if caPEM == nil {
-		t.Error("expected a usable generated CA despite the persist failure")
+		t.Error("expected a generated CA")
 	}
-	_ = leafOf(t, cert)
+	if reused {
+		t.Error("nothing was stored yet, so the CA cannot have been reused")
+	}
+
+	_, _, reusedAgain, err := Load(Config{Hosts: []string{"mikroview.local"}, StorePath: dir})
+	if err != nil {
+		t.Fatalf("second Load: %v", err)
+	}
+	if !reusedAgain {
+		t.Error("the second start must reuse the stored CA, not mint another one")
+	}
 }
 
 func TestFilesSkipGeneration(t *testing.T) {
@@ -200,7 +272,11 @@ func TestFilesSkipGeneration(t *testing.T) {
 	}
 }
 
-func TestCorruptStoreFallsBackToRegeneration(t *testing.T) {
+// Corrupt CA material used to be treated as absent, and quietly
+// replaced. Under #535 it stops startup instead: unreadable and
+// nonsense-on-disk are both "something is there and I cannot use it",
+// and overwriting it destroys the trust anchor the router is pinned to.
+func TestCorruptStoreIsFatal(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "ca.crt"), []byte("not a cert"), 0o600); err != nil {
 		t.Fatal(err)
@@ -209,21 +285,24 @@ func TestCorruptStoreFallsBackToRegeneration(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	cert, caPEM, _, err := Load(Config{StorePath: dir})
-	if err != nil {
-		t.Fatalf("expected a corrupt store to be treated as absent, not fail Load: %v", err)
+	_, _, _, err := Load(Config{StorePath: dir})
+	if err == nil {
+		t.Fatal("expected a corrupt store to stop startup, got nil")
 	}
-	if caPEM == nil {
-		t.Error("expected a freshly generated CA despite the corrupt store")
+	if !strings.Contains(err.Error(), "ca.crt") {
+		t.Errorf("error should name the unusable file, got: %v", err)
 	}
-	_ = leafOf(t, cert)
 }
 
-// The combination TestCorruptStoreFallsBackToRegeneration does not
-// reach: a corrupt CA with the leaf files intact. Load mints a fresh CA
-// in that case, and used to keep serving the stored leaf alongside it --
-// a pair that validates against nothing, so every client that trusted
-// the original CA fails with a certificate error and no other clue.
+// A fresh CA must never be served alongside a stored leaf: that pair
+// validates against nothing, so every client that trusted the original
+// CA fails with a certificate error and no other clue.
+//
+// Corruption used to be the way to reach this state; #535 makes that
+// fatal instead, so the case is driven here the way it can still legally
+// happen -- the CA files are gone entirely (an operator clearing them to
+// start over, which the refusal message above suggests), leaving the
+// leaf files behind.
 func TestCorruptCAWithIntactLeafRegeneratesTheLeafToo(t *testing.T) {
 	dir := t.TempDir()
 
@@ -235,9 +314,11 @@ func TestCorruptCAWithIntactLeafRegeneratesTheLeafToo(t *testing.T) {
 	}
 	firstLeaf := leafOf(t, first)
 
-	// Only the CA is destroyed. The leaf files stay exactly as written.
-	if err := os.WriteFile(filepath.Join(dir, "ca.crt"), []byte("not a cert"), 0o600); err != nil {
-		t.Fatal(err)
+	// Only the CA is removed. The leaf files stay exactly as written.
+	for _, name := range []string{"ca.crt", "ca.key"} {
+		if err := os.Remove(filepath.Join(dir, name)); err != nil {
+			t.Fatal(err)
+		}
 	}
 
 	second, secondCA, _, err := Load(Config{StorePath: dir, Hosts: []string{"127.0.0.1"}})
@@ -323,7 +404,7 @@ func TestPersistedKeysAreTightenedOnRewrite(t *testing.T) {
 	dir := t.TempDir()
 	cfg := Config{Hosts: []string{"localhost"}, StorePath: dir}
 
-	if _, _, err, _ := Load(cfg); err != nil {
+	if _, _, _, err := Load(cfg); err != nil {
 		t.Fatalf("first Load: %v", err)
 	}
 
@@ -343,7 +424,7 @@ func TestPersistedKeysAreTightenedOnRewrite(t *testing.T) {
 
 	// Force a rewrite by asking for a different SAN set.
 	cfg.Hosts = []string{"localhost", "mikroview.local"}
-	if _, _, err, _ := Load(cfg); err != nil {
+	if _, _, _, err := Load(cfg); err != nil {
 		t.Fatalf("second Load: %v", err)
 	}
 
