@@ -13,6 +13,8 @@ const page = await browser.newPage({ viewport: { width: 1600, height: 1000 }, de
 for (const theme of ['dark', 'light']) {
   const qs = theme === 'light' ? '?theme=light' : '';
   await page.goto('file://' + path.join(here, 'direction-s-wizard.html') + qs);
+  // sticky bars ride mid-scene when a scene is taller than the viewport
+  await page.addStyleTag({ content: '.concept, .scene-tag { position: static !important; }' });
   await page.waitForTimeout(1200);
   for (const scene of ['s1', 's2', 's3', 's4']) {
     const el = page.locator('#' + scene);
