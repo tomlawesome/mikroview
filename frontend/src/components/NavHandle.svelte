@@ -44,13 +44,14 @@
   title="Restore navigation"
 >
   <svg class="mark" viewBox="0 0 30 84" aria-hidden="true" focusable="false">
-    <!-- Hub sits on the edge itself: half the circle is off-canvas, which
-         is what makes it read as attached to the viewport edge rather
-         than floating in the tab. -->
-    <g fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round">
-      <path d="M6 42h6.5M6 42l7-7M6 42l7 7" opacity="0.85" />
+    <!-- Hub sits on the edge itself rather than centred in the tab: it is
+         meant to read as something attached to the viewport edge. The
+         links fan inward from it, which is the direction the rail
+         returns from. -->
+    <g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+      <path d="M8 42h11M8 42l10-9M8 42l10 9" />
     </g>
-    <circle class="hub" cx="6" cy="42" r="3.4" fill="currentColor" />
+    <circle class="hub" cx="8" cy="42" r="4.5" fill="currentColor" />
   </svg>
 </button>
 
@@ -71,9 +72,12 @@
     border-radius: 0 8px 8px 0;
     /* "Glass": the content column has to remain legible through it, so
        this is a translucent surface with a blur rather than a solid one. */
-    background: color-mix(in srgb, var(--bg-elevated) 72%, transparent);
+    background: color-mix(in srgb, var(--bg-elevated) 88%, transparent);
     backdrop-filter: blur(6px);
-    color: var(--fg-muted);
+    /* The only route back to a hidden rail, so it earns full-strength
+       foreground rather than the muted tone the rail's own rows use. */
+    color: var(--fg);
+    box-shadow: 1px 0 8px rgb(0 0 0 / 0.28);
     cursor: pointer;
     display: grid;
     place-items: center;
