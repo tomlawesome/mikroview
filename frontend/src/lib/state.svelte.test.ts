@@ -119,14 +119,101 @@ describe('applyFilters port', () => {
     expect(got.map((e) => e.id)).toEqual([1, 2])
   })
 
-  // Number("abc") is NaN, and every `!==` comparison against NaN is
-  // true -- an unguarded filter would hide every event, including ones
-  // with no port at all, reading as "no traffic" while the operator is
-  // still mid-typing a port number.
-  it('treats a non-numeric value as unfiltered rather than hiding everything', () => {
+  // #438: text is no longer silently ignored -- it searches the
+  // displayed port label (operator name or well-known service name, see
+  // lib/portMatch.ts/portMatch.test.ts for the full precedence table).
+  // A label that matches nothing genuinely filters everything out,
+  // which is the point of a text search box; it is only a *numeric*
+  // value that is still exact-or-nothing on the port number itself.
+  it('matches a well-known service name against the displayed port label', () => {
     const events = [evt({ id: 1, srcPort: 443 }), evt({ id: 2, dstPort: 22 })]
-    const got = applyFilters(events, { ...emptyFilters(), port: 'abc' })
-    expect(got).toHaveLength(2)
+    const got = applyFilters(events, { ...emptyFilters(), port: 'https' })
+    expect(got.map((e) => e.id)).toEqual([1])
+  })
+
+  it('a text value matching no port label filters out events that have no ports at all', () => {
+    const events = [evt({ id: 1, srcPort: 443 }), evt({ id: 2, dstPort: 22 })]
+    const got = applyFilters(events, { ...emptyFilters(), port: 'nonesuch' })
+    expect(got).toHaveLength(0)
+  })
+})
+
+// #438: srcQuery/dstQuery replaced the single "ip" box. The label/IP/CIDR
+// precedence itself is pinned in addressMatch.test.ts's table tests; these
+// cover applyFilters's own wiring -- which candidates each side builds,
+// including the NAT-parity rule (srcnat/dstnat only, per
+// internal/routeros/parser.go's isNATChain).
+describe('applyFilters srcQuery/dstQuery', () => {
+  it('matches the source and destination independently', () => {
+    const events = [
+      evt({ id: 1, srcIp: '10.0.0.5', dstIp: '203.0.113.9' }),
+      evt({ id: 2, srcIp: '10.0.0.9', dstIp: '203.0.113.5' }),
+    ]
+    expect(applyFilters(events, { ...emptyFilters(), srcQuery: '10.0.0.5' }).map((e) => e.id)).toEqual([1])
+    expect(applyFilters(events, { ...emptyFilters(), dstQuery: '203.0.113.5' }).map((e) => e.id)).toEqual([2])
+  })
+
+  it('matches the resolved label, live -- not frozen when the filter was set (#413 integration)', () => {
+    const events = [evt({ id: 1, srcIp: '10.0.0.5', srcHostName: 'nas-basement' })]
+    expect(applyFilters(events, { ...emptyFilters(), srcQuery: 'nas' })).toHaveLength(1)
+  })
+
+  it('includes a srcnat row\'s translated source, but not an unrelated forward row\'s inherited NAT annotation', () => {
+    const natted = evt({
+      id: 1,
+      chain: 'srcnat',
+      srcIp: '10.0.0.5',
+      natIp: '198.51.100.9',
+    })
+    const inherited = evt({
+      id: 2,
+      chain: 'forward',
+      srcIp: '10.0.0.6',
+      natIp: '198.51.100.9',
+    })
+    const got = applyFilters([natted, inherited], { ...emptyFilters(), srcQuery: '198.51.100.9' })
+    expect(got.map((e) => e.id)).toEqual([1])
+  })
+
+  it('includes a dstnat row\'s translated destination', () => {
+    const events = [evt({ id: 1, chain: 'dstnat', dstIp: '192.168.1.10', natIp: '198.51.100.9' })]
+    expect(applyFilters(events, { ...emptyFilters(), dstQuery: '198.51.100.9' })).toHaveLength(1)
+  })
+
+  it('a srcnat row\'s NAT address does not leak into destination matching', () => {
+    const events = [evt({ id: 1, chain: 'srcnat', srcIp: '10.0.0.5', natIp: '198.51.100.9' })]
+    expect(applyFilters(events, { ...emptyFilters(), dstQuery: '198.51.100.9' })).toHaveLength(0)
+  })
+})
+
+describe('applyFilters srcCountry/dstCountry', () => {
+  it('matches a resolved country code', () => {
+    const events = [evt({ id: 1, srcIp: '8.8.8.8', srcCountry: 'US' }), evt({ id: 2, srcIp: '1.1.1.1', srcCountry: 'AU' })]
+    expect(applyFilters(events, { ...emptyFilters(), srcCountry: 'US' }).map((e) => e.id)).toEqual([1])
+  })
+
+  it('the Unknown sentinel finds addressed rows with no resolved country, and excludes address-less ones', () => {
+    const events = [
+      evt({ id: 1, srcIp: '10.0.0.5' }), // has an address, no country -- unknown
+      evt({ id: 2 }), // no source address at all -- not "unknown", not applicable
+      evt({ id: 3, srcIp: '8.8.8.8', srcCountry: 'US' }),
+    ]
+    const got = applyFilters(events, { ...emptyFilters(), srcCountry: 'unknown' })
+    expect(got.map((e) => e.id)).toEqual([1])
+  })
+})
+
+describe('applyFilters chain (#438: same field, now reachable from the bar)', () => {
+  it('matches the exact chain', () => {
+    const events = [evt({ id: 1, chain: 'srcnat' }), evt({ id: 2, chain: 'forward' })]
+    expect(applyFilters(events, { ...emptyFilters(), chain: 'srcnat' }).map((e) => e.id)).toEqual([1])
+  })
+})
+
+describe('applyFilters rule (ruleName alias, #438)', () => {
+  it('matches the operator-configured alias in addition to ruleLabel and raw', () => {
+    const events = [evt({ id: 1, ruleLabel: 'r13', ruleName: 'block-guest-wifi' })]
+    expect(applyFilters(events, { ...emptyFilters(), rule: 'guest-wifi' })).toHaveLength(1)
   })
 })
 

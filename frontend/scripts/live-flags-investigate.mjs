@@ -83,7 +83,10 @@ await card.locator('button.target').click()
 await page.waitForTimeout(300)
 check(await page.isVisible('input.rule'), 'clicking the target chip still navigates to the live view, unaffected by the new button')
 check(
-  (await page.inputValue('input[aria-label="IP address or CIDR"]')) === TARGET_IP,
+  // #438 split the single "IP or CIDR" box into side-scoped Source/
+  // Destination boxes; a flag target is a source address (Flags.svelte's
+  // filterToTarget), so it lands in the Source box now.
+  (await page.inputValue('input[aria-label="Source — name, IP or CIDR"]')) === TARGET_IP,
   "the live view is filtered to the flag's IP, same as before this change",
 )
 
