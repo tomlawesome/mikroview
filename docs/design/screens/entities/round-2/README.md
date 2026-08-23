@@ -115,4 +115,15 @@ work), and on mobile the terrain becomes a drawer with a pull tab.
 Vertical is also the house's own orientation — the fall drops and the
 register reads downward.
 
-**X (the field guide)**: no verdict yet — awaiting the owner.
+**X (the field guide)** — owner, 2026-08-23, ruling on the field
+guide and the survey together (verbatim):
+
+> I guess both really, then?
+
+Read as: **both ship, combined** — the survey (in its final round-4
+form, `../round-4/`) is the page's reading layout; the field guide's
+sitting is the page's naming mode. The consolidated buildable record
+is [`../DESIGN.md`](../DESIGN.md). X's ledger view is superseded by
+the survey page; its surviving organs (the dossier card, the deck,
+the earned empty, the deck-remembers cross-references) are absorbed
+into the record.

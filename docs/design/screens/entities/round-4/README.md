@@ -51,4 +51,12 @@ the record where the facts live.
 
 ## Verdicts
 
-None yet — awaiting the owner.
+Owner, 2026-08-23, ruling on the survey and the field guide together
+(verbatim):
+
+> I guess both really, then?
+
+Read as: **both ship, combined** — AD is the page's reading layout;
+the field guide's sitting (round 2, X) is its naming mode. The
+consolidated buildable record is [`../DESIGN.md`](../DESIGN.md);
+where that text and any mockup detail disagree, the text wins.
