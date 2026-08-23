@@ -5,11 +5,13 @@
   // docs/design/screens/navigation/DESIGN.md, which is the authoritative
   // record -- where it and a mockup disagree, the record wins.
   //
-  // Only the full 216px density exists here. The icons/docked states and
-  // the handle are #545's; badges and the broken ring are #546's.
+  // Badges and the broken ring are #546's; the three persistent states,
+  // the icon set and the handle arrived with #545.
   import { appState, type View } from '../lib/state.svelte'
   import { authState } from '../lib/auth.svelte'
+  import { railPref, describe, type RailDensity } from '../lib/rail.svelte'
   import AboutOverlay from './AboutOverlay.svelte'
+  import RailIcon, { type IconName } from './RailIcon.svelte'
 
   type Item = {
     label: string
@@ -19,6 +21,7 @@
     act?: () => void
     admin?: boolean
     title: string
+    icon: IconName
   }
 
   type Group = { name: string; items: Item[] }
@@ -32,13 +35,13 @@
   const groups: Group[] = [
     {
       name: 'Live',
-      items: [{ label: 'Stream', view: 'live', title: 'The live event stream' }],
+      items: [{ label: 'Stream', view: 'live', icon: 'stream', title: 'The live event stream' }],
     },
     {
       name: 'Investigate',
       items: [
-        { label: 'Metrics', view: 'metrics', title: 'Event charts and traffic breakdowns' },
-        { label: 'Audit log', view: 'audit', admin: true, title: 'Who changed what, and when' },
+        { label: 'Metrics', view: 'metrics', icon: 'metrics', title: 'Event charts and traffic breakdowns' },
+        { label: 'Audit log', view: 'audit', admin: true, icon: 'audit', title: 'Who changed what, and when' },
       ],
     },
     {
@@ -47,12 +50,14 @@
         {
           label: 'Flags',
           view: 'flags',
+          icon: 'flags',
           title: 'Behavioral flags: port scans, activity spikes, critical-port attempts, and volume spikes',
         },
         {
           label: 'Detectors',
           view: 'detectors',
           admin: true,
+          icon: 'detectors',
           title: 'Toggle behavioral detectors on/off and restrict their scope',
         },
       ],
@@ -60,7 +65,13 @@
     {
       name: 'Expect',
       items: [
-        { label: 'Watchlist', view: 'watchlist', admin: true, title: 'Hosts and ports you expect to see' },
+        {
+          label: 'Watchlist',
+          view: 'watchlist',
+          admin: true,
+          icon: 'watchlist',
+          title: 'Hosts and ports you expect to see',
+        },
       ],
     },
     {
@@ -70,24 +81,34 @@
           label: 'Users',
           act: () => (authState.showUsers = true),
           admin: true,
+          icon: 'users',
           title: 'Add or remove accounts',
         },
         {
           label: 'Tokens',
           act: () => (authState.showTokens = true),
           admin: true,
+          icon: 'tokens',
           title: 'Create/revoke read-only API bearer tokens for scripted access',
         },
         {
           label: 'Fleet',
           view: 'fleet',
+          icon: 'fleet',
           title: 'Every known RouterOS device: live/stale/never-seen status, last-seen, and event counts',
         },
-        { label: 'Entities', view: 'entities', admin: true, title: 'Named hosts, ports and services' },
+        {
+          label: 'Entities',
+          view: 'entities',
+          admin: true,
+          icon: 'entities',
+          title: 'Named hosts, ports and services',
+        },
         {
           label: 'Run setup…',
           view: 'setup',
           admin: true,
+          icon: 'setup',
           title: 'Re-run the setup wizard',
         },
       ],
@@ -143,6 +164,45 @@
   // See AboutOverlay.svelte's own comment for why this exists at all
   // (AGPL 5(d)/13, not decoration).
   let showAbout = $state(false)
+
+  const iconsOnly = $derived(railPref.effective === 'icons')
+  const nextDensity = $derived<RailDensity>(iconsOnly ? 'full' : 'icons')
+
+  let railEl: HTMLElement | undefined = $state()
+  const itemEls: Record<string, HTMLButtonElement | undefined> = $state({})
+
+  // One shared tooltip, positioned fixed, rather than one absolutely
+  // positioned inside each row. The rail scrolls (overflow-y: auto), and
+  // a box with overflow on one axis clips the other regardless of what
+  // overflow-x says -- so a tooltip living inside a row would be cut off
+  // at 54px, which is exactly where it is needed.
+  let tip = $state<{ text: string; top: number } | null>(null)
+
+  function showTip(e: Event, text: string) {
+    if (!iconsOnly) return
+    const r = (e.currentTarget as HTMLElement).getBoundingClientRect()
+    tip = { text, top: r.top + r.height / 2 }
+  }
+
+  const hideTip = () => (tip = null)
+
+  // Restoring from docked owes the operator "same density, same scroll,
+  // focus on the current page". Density is the preference's own job; the
+  // other two are here because docking unmounts this component, so both
+  // have to be re-applied when it comes back rather than merely left
+  // alone. Guarded to the first run so an ordinary re-render never steals
+  // focus -- and skipped entirely unless the handle was what brought the
+  // rail back, so a plain page load leaves focus where it landed.
+  let settled = false
+  $effect(() => {
+    if (!railEl || settled) return
+    settled = true
+    railEl.scrollTop = railPref.scrollTop
+    if (railPref.restored) {
+      const current = visible.flatMap((g) => g.items).find(isCurrent)
+      if (current) itemEls[current.label]?.focus()
+    }
+  })
 </script>
 
 <!-- Window-level, not a div handler: the account row's wrapper div has
@@ -151,13 +211,22 @@
      by accountOpen, same as AboutOverlay's own onkeydown. -->
 <svelte:window onkeydown={onAccountKeydown} />
 
-<nav class="rail" aria-label="Main">
+<nav
+  class="rail"
+  class:icons={iconsOnly}
+  aria-label="Main"
+  bind:this={railEl}
+  onscroll={() => railEl && (railPref.scrollTop = railEl.scrollTop)}
+>
   <ul class="groups">
     {#each visible as group (group.name)}
       {@const headingId = `rail-group-${group.name.toLowerCase()}`}
       <li class="group">
         <!-- Headings are labels, never controls: no landing page, no
-             accordion. The record is explicit about this. -->
+             accordion. The record is explicit about this. At icons
+             density they stay in the accessibility tree and lose only
+             their pixels -- a 54px rail has no room for the word, but
+             dropping the heading would also drop the grouping. -->
         <h2 class="group-heading" id={headingId}>{group.name}</h2>
         <ul class="items" aria-labelledby={headingId}>
           {#each group.items as item (item.label)}
@@ -166,10 +235,17 @@
                 class="item"
                 class:current={isCurrent(item)}
                 aria-current={isCurrent(item) ? 'page' : undefined}
-                title={item.title}
+                aria-label={iconsOnly ? item.label : undefined}
+                title={iconsOnly ? undefined : item.title}
+                bind:this={itemEls[item.label]}
                 onclick={() => activate(item)}
+                onmouseenter={(e) => showTip(e, item.label)}
+                onmouseleave={hideTip}
+                onfocus={(e) => showTip(e, item.label)}
+                onblur={hideTip}
               >
-                {item.label}
+                <RailIcon name={item.icon} />
+                <span class="label">{item.label}</span>
               </button>
             </li>
           {/each}
@@ -200,13 +276,15 @@
           onclick={() => (accountOpen = !accountOpen)}
           aria-haspopup="true"
           aria-expanded={accountOpen}
-          title="Account"
+          aria-label={iconsOnly ? `Account: ${authState.username}` : undefined}
+          title={iconsOnly ? undefined : 'Account'}
+          onmouseenter={(e) => showTip(e, authState.username)}
+          onmouseleave={hideTip}
+          onfocus={(e) => showTip(e, authState.username)}
+          onblur={hideTip}
         >
-          <svg class="glyph" viewBox="0 0 16 16" aria-hidden="true" focusable="false">
-            <circle cx="8" cy="5.5" r="3" fill="currentColor" />
-            <path d="M2 14.5c0-3.6 2.7-6.5 6-6.5s6 2.9 6 6.5" fill="currentColor" />
-          </svg>
-          {authState.username}
+          <RailIcon name="account" />
+          <span class="label">{authState.username}</span>
         </button>
 
         {#if accountOpen}
@@ -270,17 +348,66 @@
       requires the source offer to network users. Both live in
       AboutOverlay. Present regardless of auth state or role.
     -->
-    <button class="footer-item" onclick={() => (showAbout = true)} title="Version, copyright, licence and source code">
-      About &amp; licence
+    <button
+      class="footer-item"
+      onclick={() => (showAbout = true)}
+      aria-label={iconsOnly ? 'About & licence' : undefined}
+      title={iconsOnly ? undefined : 'Version, copyright, licence and source code'}
+      onmouseenter={(e) => showTip(e, 'About & licence')}
+      onmouseleave={hideTip}
+      onfocus={(e) => showTip(e, 'About & licence')}
+      onblur={hideTip}
+    >
+      <RailIcon name="about" />
+      <span class="label">About &amp; licence</span>
     </button>
+
+    <!-- The only place a state is selected. The handle restores, but it
+         never writes the preference, so these two buttons are the whole
+         of the persistent choice. -->
+    <div class="states">
+      <button
+        class="state-btn"
+        onclick={() => railPref.setDensity(nextDensity)}
+        aria-label="Show {describe(nextDensity)}"
+        onmouseenter={(e) => showTip(e, `Show ${describe(nextDensity)}`)}
+        onmouseleave={hideTip}
+        onfocus={(e) => showTip(e, `Show ${describe(nextDensity)}`)}
+        onblur={hideTip}
+      >
+        <RailIcon name={iconsOnly ? 'density-wide' : 'density-narrow'} />
+      </button>
+      <!-- The label teaches the way back at the moment of hiding: once
+           docked there is no rail left to explain itself. -->
+      <button
+        class="state-btn"
+        onclick={() => railPref.dock()}
+        aria-label="Dock the navigation — reopen with the tab at the left edge"
+        onmouseenter={(e) => showTip(e, 'Dock the navigation')}
+        onmouseleave={hideTip}
+        onfocus={(e) => showTip(e, 'Dock the navigation')}
+        onblur={hideTip}
+      >
+        <RailIcon name="dock" />
+      </button>
+    </div>
   </div>
 </nav>
+
+<!-- Outside the rail, because the rail scrolls and would clip it. Purely
+     visual: every row it describes already carries the same words in its
+     aria-label, so announcing this too would just double up. -->
+{#if tip}
+  <div class="tip" style="top: {tip.top}px" aria-hidden="true">{tip.text}</div>
+{/if}
 
 <AboutOverlay bind:open={showAbout} />
 
 <style>
-  /* Full density only (216px, icons+text). #545 adds the 54px icons and
-     0px docked states. */
+  /* Two rendered densities: 216px icons+text, 54px icons. The third
+     state (docked) is the absence of this element entirely -- App.svelte
+     renders the handle instead -- rather than a 0px-wide rail, so nothing
+     docked stays in the tab order. */
   .rail {
     width: 216px;
     flex: 0 0 216px;
@@ -291,6 +418,12 @@
     border-right: 1px solid var(--border);
     background: var(--bg-elevated);
     overflow-y: auto;
+  }
+
+  .rail.icons {
+    width: 54px;
+    flex: 0 0 54px;
+    padding: 10px 7px;
   }
 
   .groups,
@@ -315,7 +448,10 @@
   }
 
   .item {
-    display: block;
+    position: relative;
+    display: flex;
+    align-items: center;
+    gap: 8px;
     width: 100%;
     padding: 6px 8px;
     border: 0;
@@ -363,6 +499,7 @@
   }
 
   .footer-item {
+    position: relative;
     display: flex;
     align-items: center;
     gap: 8px;
@@ -389,10 +526,103 @@
     color: var(--fg);
   }
 
-  .glyph {
-    width: 14px;
-    height: 14px;
-    flex: none;
+  .label {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  /* The two state controls sit side by side rather than as two more full
+     rows: they are chrome for the rail, not destinations in it. */
+  .states {
+    display: flex;
+    gap: 2px;
+    margin-top: 4px;
+  }
+
+  .state-btn {
+    position: relative;
+    display: flex;
+    flex: 1;
+    align-items: center;
+    justify-content: center;
+    padding: 6px;
+    border: 0;
+    border-radius: 4px;
+    background: none;
+    color: var(--fg-dim);
+    cursor: pointer;
+  }
+
+  .state-btn:hover {
+    background: var(--bg-hover);
+    color: var(--fg);
+  }
+
+  .state-btn:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: -2px;
+    color: var(--fg);
+  }
+
+  .rail.icons .states {
+    flex-direction: column;
+  }
+
+  /* Hidden rather than removed: the grouping stays in the accessibility
+     tree at 54px, where the word itself does not fit. */
+  .rail.icons .group-heading {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    margin: -1px;
+    padding: 0;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+
+  .rail.icons .group + .group {
+    margin-top: 8px;
+    padding-top: 8px;
+    border-top: 1px solid var(--border);
+  }
+
+  .rail.icons .item,
+  .rail.icons .footer-item {
+    justify-content: center;
+    padding: 8px 6px;
+  }
+
+  .rail.icons .label {
+    display: none;
+  }
+
+  /* The record asks for the label on hover *and* focus at icons density.
+     A native `title` answers hover only, so this is a real element --
+     fixed rather than absolute so the rail's own scrolling cannot clip
+     it, and only ever rendered when showTip decides the density calls
+     for one. */
+  .tip {
+    position: fixed;
+    left: 60px;
+    transform: translateY(-50%);
+    z-index: 60;
+    padding: 4px 8px;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    background: var(--bg-elevated);
+    color: var(--fg);
+    font-size: 0.8rem;
+    white-space: nowrap;
+    pointer-events: none;
+  }
+
+  /* At 54px the rail is narrower than the menu's own contents, so it
+     opens rightward from the edge instead of filling the rail's width. */
+  .rail.icons .popover {
+    right: auto;
+    min-width: 200px;
   }
 
   /* Opens upward: the row it hangs off sits at the bottom of the rail,
