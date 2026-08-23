@@ -15,7 +15,7 @@
   import IpInvestigateButton from './IpInvestigateButton.svelte'
   import type { Flag, FlagType } from '../lib/types'
 
-  // Same gate NavMenu uses for the Detectors view.
+  // Same gate the rail uses for the Detectors view.
   const isAdminOrOpen = $derived(authState.state === 'authenticated' && authState.role === 'admin')
 
   // lib/flags.svelte.ts's clear/clearAll/clearPermanent optimistically
@@ -35,7 +35,7 @@
   // breakpoint regardless of what's selected (issue #199's responsive
   // floor) -- computed here in JS rather than as a CSS media query, so
   // it reuses viewportState's one 700px breakpoint (the same value
-  // NavMenu/Toolbar/ThemeMenu already switch on) instead of a second
+  // Toolbar/ThemeMenu already switch on) instead of a second
   // hardcoded copy of it, and so the *card* content also reverts to its
   // full, non-compact detail at exactly the width the grid itself
   // renders as one column. A CSS-only floor would narrow the grid but

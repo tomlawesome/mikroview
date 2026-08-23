@@ -9,6 +9,7 @@
   import { buildQuery, ApiError } from './lib/api'
   import { filtersFromSearchParams } from './lib/types'
   import Toolbar from './components/Toolbar.svelte'
+  import NavRail from './components/NavRail.svelte'
   import ConnectionBanner from './components/ConnectionBanner.svelte'
   import ConfigProblemBanner from './components/ConfigProblemBanner.svelte'
   import FilterBar from './components/FilterBar.svelte'
@@ -31,6 +32,9 @@
   import UsersOverlay from './components/UsersOverlay.svelte'
   import SSOLinkOverlay from './components/SSOLinkOverlay.svelte'
   import TokensOverlay from './components/TokensOverlay.svelte'
+  // Mounted here, not in the rail that triggers it: the rail is chrome
+  // for authenticated pages, and this overlay outlives any one of them.
+  import ChangePasswordOverlay from './components/ChangePasswordOverlay.svelte'
   // #439's "copied" confirmation -- see lib/toast.svelte.ts for why this
   // is new rather than reusing something that already existed.
   import Toast from './components/Toast.svelte'
@@ -151,11 +155,22 @@
 {:else if authState.state === 'unauthenticated'}
   <AuthLogin />
 {:else}
+  <!-- First in tab order, which is why it is here rather than in the rail
+       that owns the rest of the navigation: the toolbar renders ahead of
+       the rail, so a skip-link inside the rail would sit behind every
+       toolbar control and skip nothing worth skipping. -->
+  <a class="skip-link" href="#main-content">Skip to content</a>
   <Toolbar />
-  <ConnectionBanner />
-  <ConfigProblemBanner />
-  <main>
-    {#if appState.view === 'live'}
+  <div class="shell">
+    <NavRail />
+    <!-- The banner tops the content column and pushes content rather than
+         overlaying it, per the ratified record; that is why the banners
+         live inside this column and not above the rail. -->
+    <div class="content">
+      <ConnectionBanner />
+      <ConfigProblemBanner />
+      <main id="main-content">
+        {#if appState.view === 'live'}
       <FilterBar />
       <LiveTable />
     {:else if appState.view === 'watchlist'}
@@ -176,20 +191,54 @@
       <AuditLog />
     {:else if appState.view === 'exclusions'}
       <Exclusions />
-    {:else}
-      <Dashboard />
-    {/if}
-  </main>
+        {:else}
+          <Dashboard />
+        {/if}
+      </main>
+    </div>
+  </div>
   <IpLookupPopover />
   <PortLookupPopover />
   <RouterLookupPopover />
   <UsersOverlay />
   <SSOLinkOverlay />
   <TokensOverlay />
+  <ChangePasswordOverlay />
   <Toast />
 {/if}
 
 <style>
+  .skip-link {
+    position: absolute;
+    left: -9999px;
+    top: 0;
+    z-index: 100;
+    padding: 8px 12px;
+    background: var(--bg-elevated);
+    color: var(--fg);
+    border: 1px solid var(--accent);
+    border-radius: 4px;
+  }
+
+  .skip-link:focus {
+    left: 8px;
+    top: 8px;
+  }
+
+  .shell {
+    flex: 1;
+    display: flex;
+    min-height: 0;
+  }
+
+  .content {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    min-height: 0;
+  }
+
   main {
     flex: 1;
     display: flex;
