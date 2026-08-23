@@ -13,6 +13,7 @@ here (or in its issue body), never from the concept mockups.
 |---|---|---|
 | Navigation consolidation | #486 | `navigation/` |
 | Wizard as modal | #487 | `wizard/` |
+| Metrics density | #488 | `metrics/` |
 
 Same mechanics as the concept rounds: self-contained HTML, no build
 step, the shared fictional data story, `capture.mjs` screenshots into
