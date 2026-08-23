@@ -101,7 +101,33 @@ surfaces are plain in every theme.
 - Screenshots in `shots/`, regenerated with
   `cd frontend && node ../docs/design/concepts/round-4/capture.mjs`.
 
-## What happens next
+## The owner's batch (2026-08-23) — round 4 closes; the direction is ratified
+
+- **The fall stands** as the hero and the landing page.
+- **The round-4 map and reach scenes are rejected**: *"lots of stuff
+  overlaying, looks messy, unorganised. I hate the topology view — you
+  should stick to the previous Atlas II refined version for that."*
+  The standing topography reference is **round 2's
+  `direction-f-atlas2.html`**, not this round's scenes 2–3. The reach
+  *interaction model* the owner asked for (recentring on any node, its
+  connections, ports, per-direction) still stands as a requirement; its
+  visual execution gets rebuilt on Atlas II's foundation during the
+  phase-3 build, not from these mockups.
+- **The theme-identity exploration was judged too shallow**: *"theme
+  identities run a lot deeper than just changing a few trivial colours
+  — that's an amateur interpretation and a missed opportunity."*
+  Recorded as the scope-setting lesson for #492: tokens are plumbing,
+  not identity. A real theme identity is design work — voice, texture,
+  motion, mark rendering, the whole soul — done per theme above the
+  token floor. The water/space *concepts* (and the birdcage naming
+  riff: whirlpool / black hole) stay on the record as the two
+  identities #492 builds properly.
+- **Overall: "we have our direction."** Atlas — the fall as landing,
+  Atlas II's topography, the live view with the round-4 column
+  alignment, reach folded into the map per the interaction model
+  above. Phase 2's remaining act is the #482 ADR, written from this.
+
+## What happens next (superseded — see above)
 
 Owner reviews both themes at `round-4/` and returns a batch: theme
 verdicts (either, both as shipped alternates, or a blend), plus any
