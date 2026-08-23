@@ -40,8 +40,7 @@ await page.route('**/api/setup/status', async (route) => {
   await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(body) })
 })
 
-await page.click('.nav-menu .trigger')
-await page.click('.nav-menu button:has-text("Connect a router")')
+await page.click('.rail .item:has-text("Run setup…")')
 await page.waitForSelector('.setup')
 
 // The mismatch must surface as blocked, not be waved through because

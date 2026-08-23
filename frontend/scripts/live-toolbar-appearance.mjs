@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 //
 // Issue #137: Appearance is a standalone toolbar control again, and
-// Export moved into the menu on both breakpoints.
+// Export lives in the live view's filter bar (moved off the retired
+// hamburger menu by #544) on both breakpoints.
 //
 // Driven in a real browser at both widths because that is the whole of
 // what this change is -- a UI reorganisation has no unit-testable truth
@@ -35,19 +36,18 @@ check(
   'no inline Export button on the desktop toolbar',
 )
 
-// ...and in the menu, where it must actually still export.
-await page.click('.nav-menu .trigger')
+// ...and in the live view's filter bar, where it must actually still export.
 check(
-  await page.isVisible('.nav-menu button:has-text("Export to CSV")'),
-  'Export to CSV is in the menu on desktop',
+  await page.isVisible('.bar button:has-text("Export to CSV")'),
+  'Export to CSV is in the filter bar on desktop',
 )
 const [download] = await Promise.all([
   page.waitForEvent('download', { timeout: 10000 }),
-  page.click('.nav-menu button:has-text("Export to CSV")'),
+  page.click('.bar button:has-text("Export to CSV")'),
 ])
 check(
   (download.suggestedFilename() ?? '').endsWith('.csv'),
-  `the menu entry downloads a CSV (${download.suggestedFilename()})`,
+  `the filter bar entry downloads a CSV (${download.suggestedFilename()})`,
 )
 
 // --- Mobile ----------------------------------------------------------
@@ -66,10 +66,11 @@ await page.click('.theme-menu .mobile-sheet button:has-text("Signal")')
 const mobileColorway = await page.getAttribute('html', 'data-colorway')
 check(mobileColorway === 'signal', `a colorway applies from the sheet (data-colorway=${mobileColorway})`)
 
-await page.click('.nav-menu .trigger')
+// Phone width puts the filter bar behind a drawer -- open it first.
+await page.click('.mobile-row .trigger')
 check(
-  await page.isVisible('.nav-menu button:has-text("Export to CSV")'),
-  'Export to CSV is still in the menu on mobile',
+  await page.isVisible('.bar.drawer button:has-text("Export to CSV")'),
+  'Export to CSV is still in the filter bar on mobile',
 )
 
 done()
