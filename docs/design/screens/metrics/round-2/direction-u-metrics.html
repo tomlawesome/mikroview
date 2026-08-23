@@ -1,0 +1,600 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mikroview metrics — round 2 — U: the register</title>
+<style>
+  /* ============================================================
+     DESIGN PASS (#518) — METRICS DENSITY (#488) — ROUND 2
+     U — THE REGISTER  ·  the hour, read down
+
+     The organising idea: mikroview's time already runs downward.
+     The fall drops, the brink is the top edge — so metrics stops
+     being a wall of little left-to-right charts and becomes one
+     instrument read the way the app already reads. The hour hangs
+     from the brink and recedes downward; every series is a ribbon
+     in the same register, so ONE INSTANT IS ONE STRAIGHT LINE
+     across the whole page. Down is the story of the hour; across
+     is the cross-section of a minute.
+
+     Chart inks unchanged and revalidated: traffic blue, refused
+     red. Amber is the brink and the cursor — a time marker, never
+     a series. Results in this round's README.
+     ============================================================ */
+  :root {
+    --canvas: #1b2340; --void: #06080e;
+    --glass: rgba(15, 20, 34, 0.66); --glass-2: rgba(8, 11, 20, 0.88);
+    --hair: rgba(160, 185, 230, 0.13); --hair-2: rgba(160, 185, 230, 0.26);
+    --ink: #e9eefb; --ink-2: #97a4c4; --ink-3: #55628a;
+    --accent: #9db8e8;
+    --ok: #37b364; --alarm: #ff5470; --now: #e8b05a;
+    --tile: #0d1220;                 /* chart surface (validated against) */
+    --traffic: #3987e5;              /* series ink: traffic */
+    --refused: #e66767;              /* series ink: refused (drop, reject) */
+    --ribbon-t: rgba(57,135,229,0.30);
+    --ribbon-r: rgba(230,103,103,0.32);
+    --sans: system-ui, -apple-system, "Segoe UI", sans-serif;
+    --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  }
+  * { box-sizing: border-box; margin: 0; }
+  html { scroll-behavior: smooth; }
+  body { background: var(--canvas); color: var(--ink); font: 13.5px/1.5 var(--sans); -webkit-font-smoothing: antialiased; }
+  .concept {
+    position: sticky; top: 0; z-index: 90; display: flex; gap: 16px; align-items: baseline;
+    padding: 8px 20px; background: rgba(2,3,7,0.95); border-bottom: 1px solid var(--hair);
+    font-size: 11px; color: var(--ink-3);
+  }
+  .concept b { color: var(--accent); letter-spacing: 0.1em; }
+  .concept a { color: var(--ink-2); text-decoration: none; margin-left: 12px; }
+  .scene { min-height: 100vh; position: relative; border-bottom: 1px solid var(--hair-2); overflow: hidden; padding-bottom: 30px; }
+  .scene-tag {
+    position: sticky; top: 33px; z-index: 80; text-align: center;
+    font-size: 10.5px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--ink-3);
+    padding: 6px 0; background: rgba(2,3,7,0.85);
+  }
+  .frame { position: relative; border: 1px solid var(--hair-2); border-radius: 14px; overflow: hidden; background: var(--void); flex: 1; display: flex; }
+  .frame .cap { position: absolute; left: 0; right: 0; bottom: 0; z-index: 30; font-size: 10.5px; color: var(--ink-2); padding: 9px 14px; background: rgba(2,3,7,0.92); border-top: 1px solid var(--hair); }
+  .frame .cap b { color: var(--accent); }
+  .frame .rail { padding-bottom: 110px; }
+  .frame.wide { flex: none; width: min(1460px, 97%); margin: 26px auto 0; display: flex; min-height: 700px; }
+
+  /* ---- the ratified rail (#486), carried forward verbatim ---- */
+  .rail {
+    width: 216px; flex: none; background: var(--glass-2); border-right: 1px solid var(--hair);
+    display: flex; flex-direction: column; padding: 14px 0 10px; position: relative; z-index: 10;
+    backdrop-filter: blur(10px);
+  }
+  .rail .wm { font-size: 11px; font-weight: 700; letter-spacing: 0.24em; color: var(--ink-3); padding: 0 16px 3px; }
+  .rail .wm em { color: var(--accent); font-style: normal; }
+  .rail .conn { font-size: 9.5px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--ink-3); padding: 0 16px 8px; }
+  .rail .conn i { display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: var(--ok); margin-right: 6px; animation: pulse 2s ease-in-out infinite; }
+  @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.3; } }
+  .gsec { font-size: 9px; letter-spacing: 0.16em; text-transform: uppercase; color: var(--ink-3); padding: 11px 16px 2px; font-weight: 650; }
+  .gpg { display: flex; align-items: center; gap: 9px; font-size: 12px; font-weight: 550; color: var(--ink-2); padding: 5px 16px 5px 14px; border-left: 2px solid transparent; text-decoration: none; cursor: default; position: relative; }
+  .gpg .ic { width: 15px; text-align: center; color: var(--ink-3); font-size: 12px; flex: none; }
+  .gpg.on { color: var(--ink); border-left-color: var(--accent); background: rgba(157,184,232,0.06); }
+  .gpg.on .ic { color: var(--accent); }
+  .gpg .ct { font-size: 9px; color: var(--void); background: var(--alarm); border-radius: 8px; padding: 1px 5px; margin-left: auto; font-weight: 700; }
+  .gpg.action { color: var(--accent); font-size: 11px; margin-top: 2px; }
+  .brokenring { display: inline-flex; align-items: center; gap: 9px; outline: 2px solid var(--alarm); outline-offset: 3px; border-radius: 6px; }
+  .rail .foot { margin-top: auto; padding: 10px 16px 0; border-top: 1px solid var(--hair); display: flex; align-items: center; gap: 7px; font-size: 11.5px; color: var(--ink-2); }
+  .role { font-size: 8.5px; font-weight: 700; letter-spacing: 0.12em; color: var(--ink-3); border: 1px solid var(--hair-2); border-radius: 8px; padding: 1px 6px; text-transform: uppercase; }
+  .rbtn { color: var(--ink-3); font-size: 12px; border: 1px solid var(--hair-2); border-radius: 6px; width: 22px; height: 22px; display: grid; place-items: center; flex: none; }
+  .rbtn.first { margin-left: auto; }
+
+  .main { flex: 1; position: relative; min-width: 0; padding: 0 22px 56px; display: flex; flex-direction: column; }
+  .crumb { padding: 18px 0 0; display: flex; align-items: baseline; gap: 12px; }
+  .crumb .over { font-size: 10px; letter-spacing: 0.16em; text-transform: uppercase; color: var(--ink-3); }
+  .crumb h2 { font-size: 19px; font-weight: 550; display: flex; align-items: baseline; gap: 10px; }
+  .crumb h2 .dim { color: var(--ink-3); font-weight: 400; font-size: 13px; }
+  .ctl { margin-left: auto; display: flex; gap: 8px; align-items: center; }
+  .ctl span { font-size: 10.5px; color: var(--ink-2); border: 1px solid var(--hair-2); border-radius: 6px; padding: 2px 9px; }
+  .ctl span.on { color: var(--ink); border-color: var(--accent); }
+
+  /* ---- the hour line: the one number, and the hour in a sentence ---- */
+  .hourline { display: flex; align-items: baseline; gap: 14px; margin-top: 12px; padding-bottom: 11px; border-bottom: 1px solid var(--hair); }
+  .hourline .big { font: 650 27px/1 var(--mono); color: var(--ink); letter-spacing: -0.01em; }
+  .hourline .big span { font-size: 11.5px; color: var(--ink-3); font-weight: 500; font-family: var(--sans); margin-left: 5px; }
+  .hourline .sep { color: var(--ink-3); opacity: 0.5; }
+  .hourline .fact { font-size: 11.5px; color: var(--ink-2); }
+  .hourline .fact b { color: var(--ink); font-weight: 600; font-family: var(--mono); font-size: 11.5px; }
+  .hourline .brinkmark { margin-left: auto; font: 10px var(--mono); color: var(--now); letter-spacing: 0.08em; }
+
+  /* ---- the register ---- */
+  .register { margin-top: 4px; flex: 1; min-height: 0; }
+  .register svg { display: block; width: 100%; height: auto; }
+  .rib-t { fill: var(--ribbon-t); stroke: var(--traffic); stroke-width: 1; stroke-linejoin: round; }
+  .rib-r { fill: var(--ribbon-r); stroke: var(--refused); stroke-width: 1; stroke-linejoin: round; }
+  .axis { stroke: rgba(160,185,230,0.22); stroke-width: 1; shape-rendering: crispEdges; }
+  .decade { stroke: rgba(160,185,230,0.07); stroke-width: 1; shape-rendering: crispEdges; }
+  .brink { stroke: var(--now); stroke-width: 1; shape-rendering: crispEdges; }
+  .brinkglow { stroke: var(--now); stroke-width: 3; opacity: 0.16; animation: breathe 4s ease-in-out infinite; }
+  @keyframes breathe { 0%,100% { opacity: 0.16; } 50% { opacity: 0.05; } }
+  .tlab { font: 9.5px var(--mono); fill: var(--ink-3); }
+  .tlab.now { fill: var(--now); }
+  .cname { font: 600 11px var(--sans); fill: var(--ink-2); letter-spacing: 0.02em; }
+  .cnow { font: 600 15px var(--mono); fill: var(--ink); }
+  .cnow.r { fill: var(--refused); }
+  .cunit { font: 9px var(--mono); fill: var(--ink-3); }
+  .cscale { font: 8.5px var(--mono); fill: var(--ink-3); }
+  .grouplab { font: 650 9px var(--sans); fill: var(--ink-3); letter-spacing: 0.16em; }
+  .bracket { stroke: var(--hair-2); stroke-width: 1; fill: none; shape-rendering: crispEdges; }
+  .noteline { stroke: var(--refused); stroke-width: 1; }
+  .notehead { font: 600 10.5px var(--mono); fill: var(--ink); }
+  .notebody { font: 10px var(--sans); fill: var(--ink-3); }
+  .burstdot { fill: var(--refused); }
+  .cursor { stroke: var(--now); stroke-width: 1; shape-rendering: crispEdges; }
+  .cursorband { fill: var(--now); opacity: 0.07; }
+  .xs-lab { font: 10px var(--sans); fill: var(--ink-3); }
+  .xs-val { font: 600 11px var(--mono); fill: var(--ink); }
+  .xs-val.r { fill: var(--refused); }
+  .mark { stroke-width: 3; stroke-linecap: round; }
+  .mark.t { stroke: var(--traffic); }
+  .mark.r { stroke: var(--refused); }
+  .silent { stroke: rgba(160,185,230,0.16); stroke-width: 1; shape-rendering: crispEdges; }
+  .vlab { font: 10px var(--sans); fill: var(--ink-2); }
+  .vlab.q { fill: var(--ink-3); opacity: 0.75; }
+
+  .sectionlab { font-size: 10px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--ink-3); font-weight: 650; margin-top: 16px; display: flex; align-items: baseline; gap: 10px; }
+  .sectionlab .quiet { text-transform: none; letter-spacing: 0; font-weight: 500; font-size: 10.5px; }
+  .sectionlab .tbl { margin-left: auto; font-size: 10px; letter-spacing: 0; text-transform: none; color: var(--ink-2); border: 1px solid var(--hair-2); border-radius: 6px; padding: 2px 8px; font-weight: 500; }
+
+  /* ---- the ledger (what the cards became) ---- */
+  .ledger { display: grid; grid-template-columns: repeat(3, 1fr); gap: 26px; margin-top: 10px; padding-top: 11px; border-top: 1px solid var(--hair); }
+  .led h4 { font-size: 10px; font-weight: 650; color: var(--ink-3); letter-spacing: 0.1em; text-transform: uppercase; }
+  .lrow { display: flex; align-items: center; gap: 9px; margin-top: 6px; font-size: 11px; color: var(--ink-2); }
+  .lrow .lab { width: 88px; flex: none; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .lrow .bar { flex: 1; height: 5px; border-radius: 0 3px 3px 0; background: var(--traffic); opacity: 0.8; }
+  .lrow .bar.refused { background: var(--refused); }
+  .lrow .v { font: 10px var(--mono); color: var(--ink-3); width: 46px; text-align: right; flex: none; }
+
+  .quietfold { font-size: 11px; color: var(--ink-2); margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--hair); }
+  .quietfold b { color: var(--accent); font-weight: 650; }
+  .quietfold .names { color: var(--ink-3); font-family: var(--mono); font-size: 10px; }
+
+  /* ---- panels under a frame ---- */
+  .panels { display: flex; gap: 14px; margin: 14px auto 0; width: min(1460px, 97%); }
+  .zoom { background: rgba(13,18,32,0.5); border: 1px solid var(--hair); border-radius: 12px; padding: 16px 18px; flex: 1; }
+  .zoom h3 { font-size: 11px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--ink-3); margin-bottom: 10px; font-weight: 650; }
+  .speclist { font-size: 11.5px; color: var(--ink-2); line-height: 1.7; }
+  .speclist b { color: var(--accent); font-weight: 650; }
+  .kbd { font: 10.5px var(--mono); color: var(--ink-2); border: 1px solid var(--hair-2); border-bottom-width: 2px; border-radius: 5px; padding: 1px 6px; }
+  table.peer { width: 100%; border-collapse: collapse; font: 10.5px var(--mono); color: var(--ink-2); }
+  table.peer th { text-align: right; font-weight: 600; color: var(--ink-3); padding: 3px 7px; border-bottom: 1px solid var(--hair-2); font-size: 9.5px; letter-spacing: 0.06em; text-transform: uppercase; }
+  table.peer th:first-child, table.peer td:first-child { text-align: left; }
+  table.peer td { text-align: right; padding: 3px 7px; border-bottom: 1px solid var(--hair); }
+  table.peer tr.hi td { background: rgba(232,176,90,0.10); color: var(--ink); }
+  table.peer td.r { color: var(--refused); }
+
+  .notes { display: flex; gap: 14px; align-items: stretch; margin: 14px auto 0; width: min(1460px, 97%); }
+  .anno { font-size: 11px; color: var(--ink-2); background: var(--glass-2); border: 1px solid var(--hair-2); border-left: 2px solid var(--accent); border-radius: 8px; padding: 9px 12px; flex: 1; }
+  .anno b { color: var(--accent); font-weight: 650; }
+
+  /* ---- light — token swap for comparison shots only ---- */
+  body.light {
+    --canvas: #c3c9d4; --void: #eef1f7;
+    --glass: rgba(252, 253, 255, 0.72); --glass-2: rgba(244, 247, 252, 0.92);
+    --hair: rgba(28, 44, 84, 0.12); --hair-2: rgba(28, 44, 84, 0.26);
+    --ink: #17223c; --ink-2: #46536f; --ink-3: #7d89a6;
+    --accent: #3f66b0; --ok: #1e7f43; --alarm: #d63c5e; --now: #9a6b10;
+    --tile: #ffffff;
+    --traffic: #2a78d6; --refused: #e34948;
+    --ribbon-t: rgba(42,120,214,0.22); --ribbon-r: rgba(227,73,72,0.24);
+  }
+  body.light .concept, body.light .scene-tag { background: rgba(244, 247, 252, 0.95); }
+  body.light .frame .cap { background: rgba(244, 247, 252, 0.95); }
+  body.light .gpg.on { background: rgba(63, 102, 176, 0.09); }
+  body.light .zoom { background: rgba(255,255,255,0.55); }
+  body.light .axis { stroke: rgba(28,44,84,0.22); }
+  body.light .decade { stroke: rgba(28,44,84,0.08); }
+  body.light .silent { stroke: rgba(28,44,84,0.18); }
+  body.light table.peer tr.hi td { background: rgba(154,107,16,0.12); }
+
+  @media (prefers-reduced-motion: reduce) { * { animation: none !important; } }
+</style>
+</head>
+<body>
+
+<div class="concept"><b>ROUND 2 — U · THE REGISTER</b> #488 under #518 · the hour, read down: one instant is one line · <a href="?theme=light" style="margin-left:0">light</a> · <a href="?" style="margin-left:4px">dark</a>
+  <span style="margin-left:auto"><a href="../../navigation/round-5/direction-q5-rail.html">shell: Q V</a><a href="index.html">index</a></span>
+</div>
+
+<!-- ================= SCENE 1 : THE PAGE ================= -->
+<section class="scene" id="s1">
+  <div class="scene-tag">Scene 1 — the metrics page: the hour hangs from the brink and reads downward. Seven series, one register, one shared row per minute.</div>
+  <div class="frame wide">
+    <aside class="rail" aria-label="Navigation">
+      <span class="wm">MIKRO<em>VIEW</em></span>
+      <span class="conn"><i></i>receiving</span>
+      <div class="gsec">Live</div>
+      <span class="gpg"><span class="ic">▿</span><span class="lab">The fall</span></span>
+      <span class="gpg"><span class="ic">≡</span><span class="lab">Stream</span></span>
+      <div class="gsec">Investigate</div>
+      <span class="gpg on"><span class="ic">∿</span><span class="lab">Metrics</span></span>
+      <span class="gpg"><span class="ic">¶</span><span class="lab">Audit log</span></span>
+      <div class="gsec">Detect</div>
+      <span class="gpg"><span class="ic">⚑</span><span class="lab">Flags</span><span class="ct">6</span></span>
+      <span class="gpg"><span class="ic">⚙</span><span class="lab">Detectors</span></span>
+      <div class="gsec">Expect</div>
+      <span class="gpg"><span class="brokenring"><span class="ic">◉</span><span class="lab">Watchlist</span></span></span>
+      <div class="gsec">Admin</div>
+      <span class="gpg"><span class="ic">§</span><span class="lab">Users</span></span>
+      <span class="gpg"><span class="ic">✱</span><span class="lab">Tokens</span></span>
+      <span class="gpg"><span class="ic">⌂</span><span class="lab">Fleet</span></span>
+      <span class="gpg"><span class="ic">⊞</span><span class="lab">Entities</span></span>
+      <span class="gpg action"><span class="ic">⟳</span><span class="lab">Run setup…</span></span>
+      <div class="foot"><span class="nm">tom</span><span class="role">admin</span><span class="rbtn first" title="Icons only">⇔</span><span class="rbtn" title="Dock the rail">⇤</span></div>
+    </aside>
+    <div class="main">
+      <div class="crumb">
+        <div>
+          <div class="over">Investigate</div>
+          <h2>Metrics <span class="dim">· the hour to 14:02</span></h2>
+        </div>
+        <div class="ctl"><span class="on">Register</span><span>Table</span><span>last hour ▾</span></div>
+      </div>
+      <div class="hourline">
+        <div class="big">7.4<span>events/s now</span></div>
+        <span class="sep">·</span>
+        <div class="fact"><b>443</b>/min, steady</div>
+        <span class="sep">·</span>
+        <div class="fact"><b>26 592</b> events in the hour</div>
+        <span class="sep">·</span>
+        <div class="fact">one thing happened: <b>13:52</b></div>
+        <div class="brinkmark">▲ the brink · 14:02:11</div>
+      </div>
+      <div class="register" id="reg1"></div>
+      <div class="sectionlab">The ledger <span class="quiet">· the same hour in totals — magnitude, not time</span></div>
+      <div class="ledger" id="led1"></div>
+    </div>
+    <div class="cap"><b>One register, not eight boxes.</b> Time runs down, as it does in the fall, and every series shares the rows — so the 13:52 burst is answerable at a glance: <b>drop swelled, accept did not move</b>. The old cards are gone as cards; their answers live in the ledger below, which owns magnitude and never pretends to own time.</div>
+  </div>
+  <div class="notes">
+    <div class="anno"><b>Why down.</b> Mikroview already reads downward — the fall drops, the brink is the top edge, newest first (#363). A metrics page whose time ran left-to-right asked the operator to turn their head between the two screens that describe the same hour. Here the brink is the same line in both.</div>
+    <div class="anno"><b>Why the cards broke.</b> "The cards stay" was reopened when round 1 was killed. Cards fragmented the hour into boxes that each restated the time axis. The ledger keeps every answer they gave — which rule, who talked, which device — as one strip that is honestly not a time series.</div>
+    <div class="anno"><b>Per-column scale, declared.</b> A shared axis would flatten drop (12/min) under accept (421/min), which is what the old overlay did. Each column's width is its own hour maximum, printed under its name — floored at 12/min so a series that whispered all hour draws as the thread it was, never inflated to look busy.</div>
+  </div>
+</section>
+
+<!-- ================= SCENE 2 : FLAGS IN THE SAME REGISTER ================= -->
+<section class="scene" id="s2">
+  <div class="scene-tag">Scene 2 — sixteen flag types in the same register: rates are ribbons, episodes are marks, and silence is visible without twelve empty charts.</div>
+  <div class="frame wide" style="min-height: 640px">
+    <aside class="rail" aria-label="Navigation">
+      <span class="wm">MIKRO<em>VIEW</em></span>
+      <span class="conn"><i></i>receiving</span>
+      <div class="gsec">Live</div>
+      <span class="gpg"><span class="ic">▿</span><span class="lab">The fall</span></span>
+      <span class="gpg"><span class="ic">≡</span><span class="lab">Stream</span></span>
+      <div class="gsec">Investigate</div>
+      <span class="gpg on"><span class="ic">∿</span><span class="lab">Metrics</span></span>
+      <span class="gpg"><span class="ic">¶</span><span class="lab">Audit log</span></span>
+      <div class="gsec">Detect</div>
+      <span class="gpg"><span class="ic">⚑</span><span class="lab">Flags</span><span class="ct">6</span></span>
+      <span class="gpg"><span class="ic">⚙</span><span class="lab">Detectors</span></span>
+      <div class="gsec">Expect</div>
+      <span class="gpg"><span class="brokenring"><span class="ic">◉</span><span class="lab">Watchlist</span></span></span>
+      <div class="gsec">Admin</div>
+      <span class="gpg"><span class="ic">§</span><span class="lab">Users</span></span>
+      <span class="gpg"><span class="ic">✱</span><span class="lab">Tokens</span></span>
+      <span class="gpg"><span class="ic">⌂</span><span class="lab">Fleet</span></span>
+      <span class="gpg"><span class="ic">⊞</span><span class="lab">Entities</span></span>
+      <span class="gpg action"><span class="ic">⟳</span><span class="lab">Run setup…</span></span>
+      <div class="foot"><span class="nm">tom</span><span class="role">admin</span><span class="rbtn first" title="Icons only">⇔</span><span class="rbtn" title="Dock the rail">⇤</span></div>
+    </aside>
+    <div class="main">
+      <div class="crumb">
+        <div>
+          <div class="over">Investigate</div>
+          <h2>Metrics <span class="dim">· the hour to 14:02 · flag episodes</span></h2>
+        </div>
+        <div class="ctl"><span>Actions</span><span class="on">Flags</span><span>Table</span></div>
+      </div>
+      <div class="hourline">
+        <div class="big">6<span>episodes raised this hour</span></div>
+        <span class="sep">·</span>
+        <div class="fact"><b>4</b> of 16 types spoke</div>
+        <span class="sep">·</span>
+        <div class="fact">half of them in one minute: <b>13:52</b></div>
+        <div class="brinkmark">▲ the brink · 14:02:11</div>
+      </div>
+      <div class="register" id="reg2"></div>
+      <div class="quietfold">
+        <b>Twelve types stayed silent</b> — no episode raised in this hour. They keep their column, drawn as the hairline it truthfully is, so the wall never hides a detector or pretends a flat chart is news:
+        <span class="names" id="quietnames"></span>
+      </div>
+    </div>
+    <div class="cap"><b>One coordinate space, two marks.</b> A rate earns a ribbon; an episode is a discrete thing, so it earns a tick at its minute and nothing more. Because the rows are shared with the traffic register, <b>13:52 reads straight across</b> — the burst and the three flags it raised are one line, not two screens.</div>
+  </div>
+  <div class="notes">
+    <div class="anno"><b>Sixteen types cost sixteen hairlines, not sixteen charts.</b> Round 1 folded silent types into a sentence and drew nothing. This keeps the sentence and gives silence a shape: an operator can see at a glance that twelve detectors are running and quiet, which a sentence alone cannot show.</div>
+    <div class="anno"><b>Identity never touches colour.</b> Sixteen types, no hue cycle: the label carries identity, the ink carries meaning only where meaning exists — episodes raised on refused traffic sit in refused red, the rest in traffic blue. The screen survives greyscale, and the Table view proves it.</div>
+    <div class="anno"><b>Episodes are not open work.</b> This counts episodes raised in the hour; the rail's badge counts open unexcluded flags. The two disagree whenever triage lags, and both are true — the labels say which is which rather than reconciling them silently.</div>
+  </div>
+</section>
+
+<!-- ================= SCENE 3 : THE CROSS-SECTION ================= -->
+<section class="scene" id="s3">
+  <div class="scene-tag">Scene 3 — interrogating a minute: one cursor, one row, every series at once — and the table as a peer, not a fallback.</div>
+  <div class="frame wide" style="min-height: 660px">
+    <aside class="rail" aria-label="Navigation">
+      <span class="wm">MIKRO<em>VIEW</em></span>
+      <span class="conn"><i></i>receiving</span>
+      <div class="gsec">Live</div>
+      <span class="gpg"><span class="ic">▿</span><span class="lab">The fall</span></span>
+      <span class="gpg"><span class="ic">≡</span><span class="lab">Stream</span></span>
+      <div class="gsec">Investigate</div>
+      <span class="gpg on"><span class="ic">∿</span><span class="lab">Metrics</span></span>
+      <span class="gpg"><span class="ic">¶</span><span class="lab">Audit log</span></span>
+      <div class="gsec">Detect</div>
+      <span class="gpg"><span class="ic">⚑</span><span class="lab">Flags</span><span class="ct">6</span></span>
+      <span class="gpg"><span class="ic">⚙</span><span class="lab">Detectors</span></span>
+      <div class="gsec">Expect</div>
+      <span class="gpg"><span class="brokenring"><span class="ic">◉</span><span class="lab">Watchlist</span></span></span>
+      <div class="gsec">Admin</div>
+      <span class="gpg"><span class="ic">§</span><span class="lab">Users</span></span>
+      <span class="gpg"><span class="ic">✱</span><span class="lab">Tokens</span></span>
+      <span class="gpg"><span class="ic">⌂</span><span class="lab">Fleet</span></span>
+      <span class="gpg"><span class="ic">⊞</span><span class="lab">Entities</span></span>
+      <span class="gpg action"><span class="ic">⟳</span><span class="lab">Run setup…</span></span>
+      <div class="foot"><span class="nm">tom</span><span class="role">admin</span><span class="rbtn first" title="Icons only">⇔</span><span class="rbtn" title="Dock the rail">⇤</span></div>
+    </aside>
+    <div class="main">
+      <div class="crumb">
+        <div>
+          <div class="over">Investigate</div>
+          <h2>Metrics <span class="dim">· the hour to 14:02 · reading 13:52</span></h2>
+        </div>
+        <div class="ctl"><span class="on">Register</span><span>Table</span><span>last hour ▾</span></div>
+      </div>
+      <div class="hourline">
+        <div class="big">13:52<span>the minute under the cursor</span></div>
+        <span class="sep">·</span>
+        <div class="fact"><b>88</b> drops, against a median of <b>12</b></div>
+        <span class="sep">·</span>
+        <div class="fact">one source: <b>203.0.113.44</b></div>
+        <div class="brinkmark">↑↓ a minute · ⇧ ten · ⏎ opens the fall here</div>
+      </div>
+      <div class="register" id="reg3"></div>
+    </div>
+    <div class="cap"><b>The cursor is a straight edge.</b> One amber rule crosses every column at the same instant — amber is the brink's colour and marks time, never a series — and the cross-section on the right reads the whole minute in one column of figures. Nothing here was provoked: this is the traffic that arrived, at the minute it arrived.</div>
+  </div>
+  <div class="panels">
+    <div class="zoom">
+      <h3>The table, a peer view — identity without colour</h3>
+      <table class="peer">
+        <thead><tr><th>minute</th><th>accept</th><th>natted</th><th>log</th><th>marked</th><th>unknown</th><th>drop</th><th>reject</th></tr></thead>
+        <tbody id="peertbl"></tbody>
+      </table>
+      <div class="speclist" style="margin-top: 10px">Same data, same hour, sortable and copyable. The register and the table are <b>two readings of one thing</b>, not a chart with an accessibility fallback bolted on — <span class="kbd">Table</span> in the header switches, and the cursor's minute stays selected across the switch.</div>
+    </div>
+    <div class="zoom" style="flex: 0 0 30%">
+      <h3>Sharp, and reachable</h3>
+      <div class="speclist">
+        <b>Device pixels.</b> Ribbons are filled paths on a whole-pixel grid; axes and rules use <span class="kbd">shape-rendering: crispEdges</span>, so hairlines land on a device pixel instead of blurring across two. Redrawn on DPR change, never upscaled from a raster.<br>
+        <b>Keyboard.</b> <span class="kbd">↑</span><span class="kbd">↓</span> move the cursor a minute, <span class="kbd">⇧</span> ten, <span class="kbd">Home</span> the brink. Each move announces the minute and its figures.<br>
+        <b>Reduced motion.</b> The brink's breath and the ribbon's arrival are the only motion; both become instant.
+      </div>
+    </div>
+  </div>
+</section>
+
+<script>
+  // ============================================================
+  // ONE DATA STORY, shared with every direction in this round and
+  // carried from round 1: the hour 13:02–14:02, brink 14:02:11,
+  // 7.4 events/s (443/min, 26 592 in the hour), and one event —
+  // drop's 13:52 burst, 88/min against a median of 12.
+  // Deterministic by construction: no Math.random, so every
+  // capture of every direction draws the identical hour.
+  // ============================================================
+  const M = 60;                       // minutes in view
+  const rng = s => () => ((s = (s * 1664525 + 1013904223) >>> 0) / 4294967296);
+
+  const ACTIONS = [
+    { k: 'accept',  ink: 't', now: 421, lo: 388, hi: 447, seed: 11 },
+    { k: 'natted',  ink: 't', now: 178, lo: 149, hi: 189, seed: 23 },
+    { k: 'log',     ink: 't', now: 143, lo: 118, hi: 151, seed: 37 },
+    { k: 'marked',  ink: 't', now: 9,   lo: 5,   hi: 12,  seed: 41 },
+    { k: 'unknown', ink: 't', now: 1,   lo: 0,   hi: 2,   seed: 53 },
+    { k: 'drop',    ink: 'r', now: 12,  lo: 7,   hi: 88,  seed: 67, burst: true, quiethi: 16 },
+    { k: 'reject',  ink: 'r', now: 3,   lo: 1,   hi: 5,   seed: 79 },
+  ];
+
+  function values(d) {
+    const r = rng(d.seed), raw = [];
+    for (let m = 0; m <= M; m++) raw.push(0.5 + 0.5 * Math.sin(m / 6.5 + d.seed) + (r() - 0.5) * 1.15);
+    // a 3-point moving average keeps the hour's texture without the jaggies
+    const sm = raw.map((x, i) => (raw[Math.max(0, i - 1)] + x + raw[Math.min(M, i + 1)]) / 3);
+    const mn = Math.min(...sm), mx = Math.max(...sm), hi = d.quiethi || d.hi;
+    const v = sm.map(x => d.lo + (x - mn) / (mx - mn) * (hi - d.lo));
+    v[0] = d.now;
+    // the burst stays sharp — it is the hour's story, not noise to soften
+    if (d.burst) { v[8] = 17; v[9] = 44; v[10] = 88; v[11] = 57; v[12] = 21; v[13] = 14; }
+    return v;
+  }
+  ACTIONS.forEach(d => d.v = values(d));
+
+  const fmt = n => Math.round(n).toLocaleString('en-GB').replace(/,/g, ' ');
+  const esc = s => s.replace(/&/g, '&amp;').replace(/</g, '&lt;');
+
+  // ---- geometry of the register -------------------------------
+  const G = { x0: 78, cw: 130, half: 52, y0: 96, dy: 8, w: 1200, hdr: 96 };
+  const yOf = m => G.y0 + m * G.dy;                       // m = minutes before the brink
+  const cxOf = i => G.x0 + G.cw / 2 + i * G.cw;
+
+  function ribbon(v, cx, scale) {
+    const L = [], R = [];
+    v.forEach((val, m) => {
+      const w = Math.max(0.35, (val / scale) * G.half), y = yOf(m);
+      L.push([cx - w, y]); R.push([cx + w, y]);
+    });
+    // midpoint quadratics: a calligraphic edge instead of 60 straight segments
+    const edge = pts => pts.slice(1).map((p, i) => {
+      const q = pts[i], mx = (q[0] + p[0]) / 2, my = (q[1] + p[1]) / 2;
+      return `Q${q[0].toFixed(1)},${q[1]} ${mx.toFixed(1)},${my}`;
+    }).join(' ') + ` L${pts[pts.length - 1][0].toFixed(1)},${pts[pts.length - 1][1]}`;
+    return `M${L[0][0].toFixed(1)},${L[0][1]} ` + edge(L) +
+           ` L${R[M][0].toFixed(1)},${R[M][1]} ` + edge(R.reverse()) + ' Z';
+  }
+
+  function timeGutter(rows) {
+    let s = '';
+    for (let m = 0; m <= M; m += 10) {
+      const y = yOf(m), h = 14 - Math.floor(m / 10), mm = 2 + (60 - m) % 60;
+      const label = m === 0 ? '14:02' : (13 + Math.floor((62 - m) / 60)) + ':' + String((62 - m) % 60).padStart(2, '0');
+      s += `<text class="tlab${m === 0 ? ' now' : ''}" x="62" y="${y + 3.5}" text-anchor="end">${label}</text>`;
+      if (m > 0) s += `<line class="decade" x1="70" y1="${y}" x2="${rows}" y2="${y}"/>`;
+    }
+    return s;
+  }
+
+  function brinkLine(rows) {
+    return `<line class="brinkglow" x1="70" y1="${G.y0}" x2="${rows}" y2="${G.y0}"/>
+            <line class="brink" x1="70" y1="${G.y0}" x2="${rows}" y2="${G.y0}"/>`;
+  }
+
+  // ---- scene 1 + 3: the action register -----------------------
+  function actionRegister(opts) {
+    const right = G.x0 + ACTIONS.length * G.cw;           // 78 + 910 = 988
+    const bottom = yOf(M);
+    let s = '';
+
+    // group brackets: the whole colour story, in place of a legend
+    s += `<text class="grouplab" x="${G.x0 + 4}" y="18">TRAFFIC</text>`;
+    s += `<path class="bracket" d="M${G.x0 + 2} 26 L${G.x0 + 2} 31 L${cxOf(4) + G.half} 31 L${cxOf(4) + G.half} 26"/>`;
+    s += `<text class="grouplab" x="${cxOf(5) - G.half + 2}" y="18">REFUSED</text>`;
+    s += `<path class="bracket" d="M${cxOf(5) - G.half + 2} 26 L${cxOf(5) - G.half + 2} 31 L${right - 22} 31 L${right - 22} 26"/>`;
+
+    s += timeGutter(right);
+
+    ACTIONS.forEach((d, i) => {
+      const cx = cxOf(i), cls = d.ink === 't' ? 'rib-t' : 'rib-r';
+      // a quiet series stays visually quiet: no column is read against a
+      // scale finer than 12/min, so unknown at 1/min is a thread, not a blob
+      const scale = Math.max(d.hi, 12);
+      s += `<text class="cname" x="${cx - G.half}" y="52">${d.k}</text>`;
+      s += `<text class="cnow${d.ink === 'r' ? ' r' : ''}" x="${cx - G.half}" y="72">${fmt(d.now)}<tspan class="cunit"> /min</tspan></text>`;
+      s += `<text class="cscale" x="${cx - G.half}" y="86">width ${fmt(scale)}/min</text>`;
+      s += `<line class="axis" x1="${cx}" y1="${G.y0}" x2="${cx}" y2="${bottom}"/>`;
+      s += `<path class="${cls}" d="${ribbon(d.v, cx, scale)}" aria-label="${d.k}, per minute, last hour"/>`;
+    });
+
+    s += brinkLine(right);
+
+    if (opts.burstNote) {
+      const y = yOf(10), cx = cxOf(5);
+      s += `<circle class="burstdot" cx="${cx + (88 / 88) * G.half}" cy="${y}" r="2.6"/>`;
+      s += `<line class="noteline" x1="${cx + G.half + 4}" y1="${y}" x2="${right + 14}" y2="${y}"/>`;
+      s += `<text class="notehead" x="${right + 22}" y="${y - 5}">13:52 · drop 88/min</text>`;
+      s += `<text class="notebody" x="${right + 22}" y="${y + 10}">7× the hour's median, one source,</text>`;
+      s += `<text class="notebody" x="${right + 22}" y="${y + 24}">first in 41 days. Accept never moved.</text>`;
+    }
+
+    if (opts.cursor !== undefined) {
+      const m = opts.cursor, y = yOf(m);
+      s += `<rect class="cursorband" x="70" y="${y - 4}" width="${right - 70}" height="8"/>`;
+      s += `<line class="cursor" x1="70" y1="${y}" x2="${right + 14}" y2="${y}"/>`;
+      s += `<text class="tlab now" x="62" y="${y + 3.5}" text-anchor="end" style="font-weight:700">13:52</text>`;
+      // the cross-section: the whole minute as one column of figures
+      s += `<text class="grouplab" x="${right + 22}" y="${G.y0 + 14}">THE MINUTE 13:52</text>`;
+      ACTIONS.forEach((d, i) => {
+        const yy = G.y0 + 40 + i * 26;
+        s += `<text class="xs-lab" x="${right + 22}" y="${yy}">${d.k}</text>`;
+        s += `<text class="xs-val${d.ink === 'r' ? ' r' : ''}" x="${right + 200}" y="${yy}" text-anchor="end">${fmt(d.v[m])}</text>`;
+      });
+      const yy = G.y0 + 40 + 7 * 26 + 10;
+      s += `<line class="decade" x1="${right + 22}" y1="${yy - 14}" x2="${right + 200}" y2="${yy - 14}"/>`;
+      s += `<text class="xs-lab" x="${right + 22}" y="${yy + 4}">flags raised</text>`;
+      s += `<text class="xs-val" x="${right + 200}" y="${yy + 4}" text-anchor="end">3</text>`;
+      s += `<text class="notebody" x="${right + 22}" y="${yy + 22}">repeated drops ×2 · activity spike</text>`;
+    }
+
+    const h = bottom + 34;
+    s += `<text class="cscale" x="78" y="${bottom + 16}">the hour ends here — older minutes are a scroll away</text>`;
+    return `<svg viewBox="0 0 ${G.w} ${h}" role="img" aria-label="Seven traffic series for the hour to 14:02, drawn as vertical ribbons on one shared minute axis">${s}</svg>`;
+  }
+
+  document.getElementById('reg1').innerHTML = actionRegister({ burstNote: true });
+  document.getElementById('reg3').innerHTML = actionRegister({ cursor: 10 });
+
+  // ---- the ledger --------------------------------------------
+  const LEDGER = [
+    { h: 'Top rules', rows: [['fwd-drop', 1206, 1], ['wan-in', 748, 0], ['nat', 531, 0], ['lan-fwd', 255, 0]] },
+    { h: 'Top talkers', rows: [['nas', 9481, 0], ['cam-porch', 4550, 1], ['laptop-tom', 3129, 0], ['tv-lounge', 1704, 0]] },
+    { h: 'By device', rows: [['rb5009', 26592, 0], ['hap-attic', 3218, 0]] },
+  ];
+  document.getElementById('led1').innerHTML = LEDGER.map(c => {
+    const max = Math.max(...c.rows.map(r => r[1]));
+    return `<div class="led"><h4>${c.h}</h4>` + c.rows.map(r =>
+      `<div class="lrow"><span class="lab">${r[0]}</span><span class="bar${r[2] ? ' refused' : ''}" style="max-width:${(r[1] / max * 100).toFixed(1)}%"></span><span class="v">${fmt(r[1])}</span></div>`
+    ).join('') + `</div>`;
+  }).join('');
+
+  // ---- scene 2: the flags register ---------------------------
+  // Four types spoke this hour; twelve kept their column and said nothing.
+  const SPOKE = [
+    { k: 'repeated drops', ink: 'r', at: [[10, 2]], n: 2 },
+    { k: 'activity spike', ink: 'r', at: [[10, 1], [34, 1]], n: 2 },
+    { k: 'new device', ink: 't', at: [[27, 1]], n: 1 },
+    { k: 'device silence', ink: 't', at: [[46, 1]], n: 1 },
+  ];
+  // the twelve real detectors that stayed silent (types.ts FlagType,
+  // labels abbreviated to fit the rotated gutter)
+  const QUIET = ['port scan', 'critical port', 'global spike', 'brute force',
+    'outbound', 'internal recon', 'rule spike', 'low & slow',
+    'off-hours', 'stale rule', 'mail sender', 'known-bad ip'];
+
+  function flagRegister() {
+    const CW2 = 56, x0 = 78, half = 16;
+    const cx = i => x0 + CW2 / 2 + i * CW2;
+    const right = x0 + 16 * CW2;                          // 78 + 896 = 974
+    const bottom = yOf(M);
+    let s = timeGutter(right);
+
+    SPOKE.forEach((f, i) => {
+      const x = cx(i);
+      s += `<line class="axis" x1="${x}" y1="${G.y0}" x2="${x}" y2="${bottom}"/>`;
+      s += `<text class="vlab" transform="rotate(-90 ${x + 3.5} 88)" x="${x + 3.5}" y="88">${f.k}</text>`;
+      s += `<text class="cnow${f.ink === 'r' ? ' r' : ''}" x="${x}" y="${bottom + 18}" text-anchor="middle" style="font-size:12px">${f.n}</text>`;
+      f.at.forEach(([m, n]) => {
+        s += `<line class="mark ${f.ink}" x1="${x - half}" y1="${yOf(m)}" x2="${x + half}" y2="${yOf(m)}"/>`;
+        if (n > 1) s += `<text class="notebody" x="${x + half + 5}" y="${yOf(m) + 3.5}">×${n}</text>`;
+      });
+    });
+    QUIET.forEach((q, j) => {
+      const x = cx(4 + j);
+      s += `<line class="silent" x1="${x}" y1="${G.y0}" x2="${x}" y2="${bottom}"/>`;
+      s += `<text class="vlab q" transform="rotate(-90 ${x + 3.5} 88)" x="${x + 3.5}" y="88">${q}</text>`;
+      s += `<text class="cscale" x="${x}" y="${bottom + 18}" text-anchor="middle">0</text>`;
+    });
+
+    // the minute that carried three of the six
+    const y = yOf(10);
+    s += `<rect class="cursorband" x="70" y="${y - 4}" width="${right - 70}" height="8"/>`;
+    s += brinkLine(right);
+    s += `<line class="noteline" x1="${cx(1) + half + 4}" y1="${y}" x2="${right + 14}" y2="${y}"/>`;
+    s += `<text class="notehead" x="${right + 22}" y="${y - 5}">13:52 · three episodes</text>`;
+    s += `<text class="notebody" x="${right + 22}" y="${y + 10}">the same minute as the drop burst —</text>`;
+    s += `<text class="notebody" x="${right + 22}" y="${y + 24}">one row, read straight across.</text>`;
+    s += `<text class="grouplab" x="${x0}" y="${bottom + 36}">EPISODES RAISED IN THE HOUR</text>`;
+
+    return `<svg viewBox="0 0 ${G.w} ${bottom + 48}" role="img" aria-label="Sixteen flag types for the hour to 14:02; four raised episodes, twelve silent">${s}</svg>`;
+  }
+  document.getElementById('reg2').innerHTML = flagRegister();
+  document.getElementById('quietnames').textContent = QUIET.join(' · ') + '.';
+
+  // ---- the peer table (scene 3) -------------------------------
+  const rows = [10, 11, 12, 13, 14, 15];
+  document.getElementById('peertbl').innerHTML = rows.map(m => {
+    const label = '13:' + String(62 - m).padStart(2, '0');
+    const cells = ACTIONS.map(d => `<td${d.ink === 'r' ? ' class="r"' : ''}>${fmt(d.v[m])}</td>`).join('');
+    return `<tr class="${m === 10 ? 'hi' : ''}"><td>${label}</td>${cells}</tr>`;
+  }).join('');
+
+  // light/dark for comparison shots: ?theme=light — a token swap, nothing else
+  if (new URLSearchParams(location.search).get('theme') === 'light') document.body.classList.add('light');
+</script>
+</body>
+</html>
