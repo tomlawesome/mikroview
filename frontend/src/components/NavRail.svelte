@@ -5,15 +5,17 @@
   // docs/design/screens/navigation/DESIGN.md, which is the authoritative
   // record -- where it and a mockup disagree, the record wins.
   //
-  // The open-flag count badge is #546's; the three persistent states, the
-  // icon set and the handle arrived with #545. The broken ring is also
-  // #546's but is not built here -- see that issue: the record specifies
-  // what a broken state looks like, but nothing in the product yet decides
-  // when a watch is in one.
+  // The open-flag count badge and the broken ring are both #546's; the
+  // three persistent states, the icon set and the handle arrived with
+  // #545. The ring waited on a separate ratified decision about what
+  // "broken" means -- see the issue's "Ratified: what puts something in a
+  // broken state" comment: Watchlist rings when an *enabled* expectation's
+  // coverage is 'no-logging', and nothing else qualifies.
   import { appState, type View } from '../lib/state.svelte'
   import { authState } from '../lib/auth.svelte'
   import { flagsState } from '../lib/flags.svelte'
-  import { railPref, describe, type RailDensity } from '../lib/rail.svelte'
+  import { watchlistState } from '../lib/watchlist.svelte'
+  import { railPref, describe, spokenLabel, type RailDensity } from '../lib/rail.svelte'
   import AboutOverlay from './AboutOverlay.svelte'
   import RailIcon, { type IconName } from './RailIcon.svelte'
 
@@ -31,6 +33,12 @@
     // from the store at render time instead of being copied into this
     // table, which is built once at module load.
     badge?: boolean
+    // The broken ring (#546): a marker for the same reason badge is one.
+    // Watchlist is the only row that carries it today -- coverage is an
+    // expectation-only question (see the ratified decision) -- but the
+    // rendering below does not assume that, so a second surface can pick
+    // this up later without touching the row markup.
+    ring?: boolean
   }
 
   type Group = { name: string; items: Item[] }
@@ -80,6 +88,7 @@
           view: 'watchlist',
           admin: true,
           icon: 'watchlist',
+          ring: true,
           title: 'Hosts and ports you expect to see',
         },
       ],
@@ -147,12 +156,38 @@
     return item.badge === true && flagCount > 0
   }
 
-  // What the row is called out loud. The count is folded in because a
-  // badge read on its own is a bare number next to a word -- the record
-  // asks for "label+count in aria-labels", and the ratified mockup words
-  // it "Flags — 6 open".
+  // #546's ring: fires only for the row marked `ring` and only while
+  // watchlistState.brokenCount says something is actually broken. A live
+  // reading of the store, not a record -- there is deliberately no
+  // acknowledge/dismiss/snooze state to check here, so the ring clears
+  // itself the instant the next poll's coverage answer does.
+  function showRing(item: Item): boolean {
+    return item.ring === true && watchlistState.brokenCount > 0
+  }
+
+  // The ring's whole meaning lives in this sentence -- it is a plain red
+  // outline and nothing else. Plain operator language naming the count
+  // and the cause, per the ratified wording: not "coverage is
+  // no-logging", which is vocabulary the operator never chose.
+  function ringReason(): string {
+    const n = watchlistState.brokenCount
+    return n === 1
+      ? `1 watch can't be checked: the firewall rules it needs aren't being logged`
+      : `${n} watches can't be checked: the firewall rules they need aren't being logged`
+  }
+
+  // What the row is called out loud. The count and the ring reason are
+  // folded in because a badge or outline read on its own says nothing --
+  // the record asks for "label+count in aria-labels", and the ratified
+  // mockup words the count "Flags — 6 open". A count and a ring are
+  // independent (a row could in principle carry both), so both are
+  // gathered and composed by spokenLabel rather than one overwriting the
+  // other.
   function spoken(item: Item): string {
-    return showCount(item) ? `${item.label} — ${flagCount} open` : item.label
+    const bits: string[] = []
+    if (showCount(item)) bits.push(`${flagCount} open`)
+    if (showRing(item)) bits.push(ringReason())
+    return spokenLabel(item.label, bits)
   }
 
   function activate(item: Item) {
@@ -264,8 +299,9 @@
               <button
                 class="item"
                 class:current={isCurrent(item)}
+                class:broken={showRing(item)}
                 aria-current={isCurrent(item) ? 'page' : undefined}
-                aria-label={iconsOnly || showCount(item) ? spoken(item) : undefined}
+                aria-label={iconsOnly || showCount(item) || showRing(item) ? spoken(item) : undefined}
                 title={iconsOnly ? undefined : item.title}
                 bind:this={itemEls[item.label]}
                 onclick={() => activate(item)}
@@ -504,6 +540,18 @@
   .item:hover {
     background: var(--bg-hover);
     color: var(--fg);
+  }
+
+  /* #546's broken ring: 2px alarm-red outline, 3px offset, per the
+     record. Goes on .item itself -- already one element wrapping icon
+     and label -- so .rail.icons .label { display: none } below tightens
+     it to the icon alone at 54px with no extra rule needed. Declared
+     before :focus-visible so tabbing to a broken row still shows the
+     ordinary focus ring rather than fighting the alarm outline for the
+     same CSS property. */
+  .item.broken {
+    outline: 2px solid var(--alarm);
+    outline-offset: 3px;
   }
 
   /* Never hover-only, per the record: focus is always visible. */
