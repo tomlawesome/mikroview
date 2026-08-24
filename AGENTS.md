@@ -379,7 +379,7 @@ external identity provider), say so plainly in the PR rather than letting
 ### Match CI's exact commands, not the obvious equivalents
 
 Local verification is incomplete unless it used the same commands CI uses —
-check `.github/workflows/*.yml` for the precise invocation. Two known traps:
+check `.github/workflows/*.yml` for the precise invocation. Three known traps:
 
 - `npx svelte-check --tsconfig ./tsconfig.json` (the solution-level config)
   reports 0 errors even when the app has a real type error; it only checks
@@ -388,6 +388,11 @@ check `.github/workflows/*.yml` for the precise invocation. Two known traps:
 - Run `gofmt -l $(git ls-files '*.go')` before pushing. `go build`, `go
   test` and `go vet` do not catch formatting drift, and CI has a dedicated
   gofmt step that fails the whole Go + frontend job on it.
+- Run `go test ./...` before pushing **even for a frontend-only change**.
+  `injection_sinks_test.go` is a Go test scanning `frontend/src` for
+  `{@html`, `innerHTML`, `outerHTML` and `insertAdjacentHTML`, matched as
+  text anywhere — a comment saying a fixture avoids `innerHTML` fails for
+  naming it.
 
-Both were found on PR #257 (Watchlist frontend), which failed CI twice on
-things a supposedly complete local pass should have caught.
+The first two were found on PR #257 (Watchlist frontend), the third on
+#581 — each a supposedly complete local pass that CI caught out.
