@@ -25,7 +25,17 @@
 
   const srcFlag = $derived(countryFlag(event.srcCountry))
   const dstFlag = $derived(countryFlag(event.dstCountry))
-  const ifaces = $derived([event.inInterface, event.outInterface].filter(Boolean).join(' → ') || '—')
+
+  // Mirrors EventRow.svelte's natFilterKey exactly -- see that file's
+  // comment for why only the two dedicated NAT chains say which side was
+  // translated.
+  const natFilterKey = $derived(
+    event.chain?.toLowerCase() === 'srcnat'
+      ? 'srcQuery'
+      : event.chain?.toLowerCase() === 'dstnat'
+        ? 'dstQuery'
+        : null,
+  )
 
   // Same click-to-filter convention every other cell in the app uses
   // (see EventRow.svelte, Flags.svelte's target button) -- closes the
@@ -54,9 +64,23 @@
   </div>
 
   <p class="title">
-    {srcFlag ? `${srcFlag} ` : ''}{formatAddr(event.srcIp, event.srcPort)}
+    {#if srcFlag}
+      <button
+        class="flag-link"
+        onclick={() => filterAndClose('srcCountry', event.srcCountry ?? '')}
+        aria-label="Filter to source country: {event.srcCountry}"
+      >{srcFlag}</button>
+    {/if}
+    {formatAddr(event.srcIp, event.srcPort)}
     <span class="arrow">→</span>
-    {dstFlag ? `${dstFlag} ` : ''}{formatAddr(event.dstIp, event.dstPort)}
+    {#if dstFlag}
+      <button
+        class="flag-link"
+        onclick={() => filterAndClose('dstCountry', event.dstCountry ?? '')}
+        aria-label="Filter to destination country: {event.dstCountry}"
+      >{dstFlag}</button>
+    {/if}
+    {formatAddr(event.dstIp, event.dstPort)}
   </p>
 
   <div class="rows">
@@ -77,7 +101,7 @@
       <div class="row">
         <span class="k">Source</span>
         <span class="v-group">
-          <button class="v link" onclick={() => filterAndClose('ip', event.srcIp ?? '')}>
+          <button class="v link" onclick={() => filterAndClose('srcQuery', event.srcIp ?? '')}>
             {event.srcHostName || event.srcIp}
           </button>
           <CopyButton value={event.srcIp} label="source IP" />
@@ -101,7 +125,7 @@
       <div class="row">
         <span class="k">Destination</span>
         <span class="v-group">
-          <button class="v link" onclick={() => filterAndClose('ip', event.dstIp ?? '')}>
+          <button class="v link" onclick={() => filterAndClose('dstQuery', event.dstIp ?? '')}>
             {event.dstHostName || event.dstIp}
           </button>
           <CopyButton value={event.dstIp} label="destination IP" />
@@ -124,7 +148,16 @@
     {#if event.natIp}
       <div class="row">
         <span class="k">NAT</span>
-        <span class="v accent">→ {formatAddr(event.natIp, event.natPort)}</span>
+        {#if natFilterKey}
+          <button
+            class="v accent link"
+            onclick={() => {
+              if (natFilterKey) filterAndClose(natFilterKey, event.natIp ?? '')
+            }}
+          >→ {formatAddr(event.natIp, event.natPort)}</button>
+        {:else}
+          <span class="v accent">→ {formatAddr(event.natIp, event.natPort)}</span>
+        {/if}
       </div>
     {/if}
     {#if event.protocol}
@@ -135,7 +168,18 @@
     {/if}
     <div class="row">
       <span class="k">Interfaces</span>
-      <span class="v">{ifaces}</span>
+      <span class="v-group">
+        {#if event.inInterface}
+          <button class="v link" onclick={() => filterAndClose('interface', event.inInterface ?? '')}>{event.inInterface}</button>
+        {/if}
+        {#if event.inInterface && event.outInterface}
+          <span class="v arrow">→</span>
+        {/if}
+        {#if event.outInterface}
+          <button class="v link" onclick={() => filterAndClose('interface', event.outInterface ?? '')}>{event.outInterface}</button>
+        {/if}
+        {#if !event.inInterface && !event.outInterface}<span class="v">—</span>{/if}
+      </span>
     </div>
     {#if event.ruleLabel}
       <div class="row">
@@ -226,6 +270,21 @@
   .title .arrow {
     color: var(--fg-dim);
     margin: 0 2px;
+  }
+
+  /* #438: the country flag in the summary title is now a click-to-filter
+     token like every other -- plain inline button, no border/background,
+     so it still reads as part of the running text. */
+  .flag-link {
+    background: none;
+    border: none;
+    padding: 0;
+    font: inherit;
+    cursor: pointer;
+  }
+
+  .flag-link:hover {
+    text-decoration: underline;
   }
 
   .rows {
