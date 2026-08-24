@@ -162,10 +162,13 @@ type setupMarkRequest struct {
 // Two writes, deliberately, because they answer different questions.
 // The mark goes to internal/setup, where it sits beside the evidence it
 // qualifies and is read back by every surface that has a silence to
-// explain. The audit entry goes to internal/audit, which is where
-// diagnostics look and where the line stays as history even after
-// evidence arrives and the step turns green -- the design record's
-// "forced is not failed".
+// explain; it is persisted there, so the explanation survives the
+// restart an upgrade brings. The audit entry goes to internal/audit,
+// which is where diagnostics look and where the line stays as history
+// even after evidence arrives and the step turns green -- the design
+// record's "forced is not failed". Neither derives from the other:
+// internal/audit prunes to maxEntries, so marks read back out of the
+// log would silently vanish once enough entries accumulated.
 func (s *Server) handleSetupMark(w http.ResponseWriter, r *http.Request) {
 	if !callerIsAdmin(r) {
 		http.Error(w, "admin role required", http.StatusForbidden)
