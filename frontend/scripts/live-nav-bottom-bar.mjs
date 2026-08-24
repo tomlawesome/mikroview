@@ -50,13 +50,32 @@ check(
 
 // --- Single-page group: straight to the page, no sheet --------------------
 // Expect holds only Watchlist -- tapping it must land there directly.
-await page.click('.bottom-bar .group-btn .label:text-is("Expect")')
-await page.waitForFunction(
-  () => document.querySelector('.bottom-bar .group-btn[aria-current="page"] .label')?.textContent.trim() === 'Expect',
-  null,
-  { timeout: 5000 },
-)
-check((await page.$$('[role="dialog"]')).length === 0, 'a single-page group navigates directly -- no sheet raised')
+// Detect became the second such group with #490: it held Flags and
+// Detectors, and Detectors went into the engine room, so tapping Detect
+// must now land on Flags rather than raise a one-item sheet.
+for (const [group, landsOn] of [
+  ['Expect', '.watchlist-page'],
+  ['Detect', '.flags-page'],
+]) {
+  await page.click(`.bottom-bar .group-btn .label:text-is("${group}")`)
+  await page.waitForFunction(
+    (want) =>
+      document.querySelector('.bottom-bar .group-btn[aria-current="page"] .label')?.textContent.trim() === want,
+    group,
+    { timeout: 5000 },
+  )
+  check(
+    (await page.$$('[role="dialog"]')).length === 0,
+    `${group} holds one page, so tapping it navigates directly -- no sheet raised`,
+  )
+  check(
+    await page
+      .locator(landsOn)
+      .waitFor({ timeout: 5000 })
+      .then(() => true, () => false),
+    `${group} lands on its one page (${landsOn})`,
+  )
+}
 
 // --- Multi-page group: raises the half-sheet -------------------------------
 await page.click('.bottom-bar .group-btn .label:text-is("Investigate")')
@@ -99,15 +118,21 @@ check(true, 'the browser back button also closes the half-sheet')
 check(await page.isVisible('.bottom-bar'), 'closing via back leaves the app in place, not a real navigation away')
 
 // --- Selecting a page in the sheet navigates and closes it -----------------
-await page.click('.bottom-bar .group-btn .label:text-is("Detect")')
+// Investigate, not Detect: Detect stopped being a multi-page group when
+// #490 moved Detectors into the engine room, so it no longer raises a
+// sheet to select anything from.
+await page.click('.bottom-bar .group-btn .label:text-is("Investigate")')
 await page.waitForSelector('[role="dialog"]', { timeout: 5000 })
-await page.click('.sheet .sheet-item .label:text-is("Flags")')
+await page.click('.sheet .sheet-item .label:text-is("Metrics")')
 await page.waitForFunction(() => document.querySelector('[role="dialog"]') === null, null, { timeout: 5000 })
-await page.waitForSelector('.flags', { timeout: 5000 })
+await page.waitForSelector('.dashboard', { timeout: 5000 })
 const currentGroup = await page
   .$eval('.bottom-bar .group-btn.current .label', (e) => e.textContent.trim())
   .catch(() => null)
-check(currentGroup === 'Detect', `selecting Flags moves the bar's current-group marker to Detect -- got ${currentGroup}`)
+check(
+  currentGroup === 'Investigate',
+  `selecting Metrics moves the bar's current-group marker to Investigate -- got ${currentGroup}`,
+)
 
 // --- The flag badge still shows -------------------------------------------
 const SCANNER = '198.51.100.66'

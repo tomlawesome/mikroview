@@ -145,6 +145,12 @@ describe('The engine room (#490)', () => {
 
     // Tokens door is viewer-readable but its verbs are gated.
     expect(screen.getByText('rb5009-ingest')).toBeTruthy()
+
+    // An ingest key names the device it speaks for, not just its kind:
+    // with two routers pushing, "ingest" alone does not say which key
+    // belongs to which, and that is the fact an admin revokes on. The
+    // old Tokens page carried it and the door has to as well.
+    expect(screen.getByText(/ingest: rb5009/)).toBeTruthy()
     expect(screen.queryByRole('button', { name: 'Revoke' })).toBeNull()
     expect(screen.queryByRole('button', { name: '+ Mint a key' })).toBeNull()
 
