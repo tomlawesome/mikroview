@@ -278,3 +278,49 @@ describe('AppState surfaces a failed refetch/initial load (issue #373)', () => {
   })
 })
 
+// #549's Loading chrome state (LiveTable/Fleet's ghost-rows branch) reads
+// initialLoadDone to tell "the first fetch hasn't come back" apart from
+// "it came back and there is genuinely nothing" -- both look like an
+// empty buffer. These prove the flag itself settles correctly on both
+// outcomes, independent of any component reading it.
+describe('AppState.initialLoadDone (#549)', () => {
+  beforeEach(() => {
+    vi.resetAllMocks()
+    appState.initialLoadDone = false
+  })
+
+  it('is set once loadInitial succeeds', async () => {
+    vi.mocked(fetchEvents).mockResolvedValue({
+      events: [],
+      hasMore: false,
+      windowStart: '2026-01-01T00:00:00Z',
+      serverTime: '2026-01-01T00:00:00Z',
+    })
+    vi.mocked(fetchDevices).mockResolvedValue([])
+    vi.mocked(fetchStats).mockResolvedValue({
+      total: 0,
+      byAction: {},
+      topRules: [],
+      timeline: [],
+    } as unknown as Awaited<ReturnType<typeof fetchStats>>)
+
+    expect(appState.initialLoadDone).toBe(false)
+    await appState.loadInitial()
+    expect(appState.initialLoadDone).toBe(true)
+  })
+
+  it('is also set when loadInitial fails -- a failure still ends the "still loading" window', async () => {
+    vi.mocked(fetchEvents).mockRejectedValue(new Error('network error'))
+    vi.mocked(fetchDevices).mockResolvedValue([])
+    vi.mocked(fetchStats).mockResolvedValue({
+      total: 0,
+      byAction: {},
+      topRules: [],
+      timeline: [],
+    } as unknown as Awaited<ReturnType<typeof fetchStats>>)
+
+    await expect(appState.loadInitial()).rejects.toThrow()
+    expect(appState.initialLoadDone).toBe(true)
+  })
+})
+

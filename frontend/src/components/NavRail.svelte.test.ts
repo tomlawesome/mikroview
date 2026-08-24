@@ -14,6 +14,7 @@ vi.mock('../lib/api', () => ({
   logout: vi.fn(),
 }))
 
+import { appState } from '../lib/state.svelte'
 import { flagsState } from '../lib/flags.svelte'
 import { watchlistState } from '../lib/watchlist.svelte'
 import { authState } from '../lib/auth.svelte'
@@ -182,5 +183,48 @@ describe('NavRail broken ring', () => {
         name: "Watchlist — 1 watch can't be checked: the firewall rules it needs aren't being logged",
       }),
     ).toBeTruthy()
+  })
+})
+
+// #549: the rail-head dot. Whether it actually clears the 54px icons rail
+// without being clipped is a layout fact only a real browser can answer
+// (frontend/scripts/live-nav-connection.mjs) -- this only proves the class
+// tracks appState.connState the way the record asks: alarm on 'closed',
+// quiet otherwise, and decorative either way since ConnectionBanner (not
+// this dot) carries the accessible text.
+describe('NavRail rail-head dot (#549)', () => {
+  it('is quiet while open', () => {
+    appState.connState = 'open'
+    const { container } = render(NavRail)
+    expect(container.querySelector('.rail-head-dot')?.className).not.toContain('alarm')
+  })
+
+  it('is quiet while merely connecting -- alarm is reserved for an actual loss', () => {
+    appState.connState = 'connecting'
+    const { container } = render(NavRail)
+    expect(container.querySelector('.rail-head-dot')?.className).not.toContain('alarm')
+  })
+
+  it('turns alarm once the connection is lost', () => {
+    appState.connState = 'closed'
+    const { container } = render(NavRail)
+    expect(container.querySelector('.rail-head-dot')?.className).toContain('alarm')
+  })
+
+  it('clears again once the connection recovers', () => {
+    appState.connState = 'closed'
+    const { container } = render(NavRail)
+    expect(container.querySelector('.rail-head-dot')?.className).toContain('alarm')
+
+    appState.connState = 'open'
+    flushSync()
+
+    expect(container.querySelector('.rail-head-dot')?.className).not.toContain('alarm')
+  })
+
+  it('is decorative -- the accessible text lives on ConnectionBanner, not here', () => {
+    appState.connState = 'closed'
+    const { container } = render(NavRail)
+    expect(container.querySelector('.rail-head')?.getAttribute('aria-hidden')).toBe('true')
   })
 })
