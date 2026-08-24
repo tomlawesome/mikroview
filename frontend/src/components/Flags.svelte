@@ -18,7 +18,7 @@
   import Exclusions from './Exclusions.svelte'
   import type { Flag, FlagType } from '../lib/types'
 
-  // Same gate the rail uses for the Detectors view.
+  // Same gate the rail uses for the engine room's watchers station.
   const isAdminOrOpen = $derived(authState.state === 'authenticated' && authState.role === 'admin')
 
   // Exclusions is a tab of Flags (#547, per the ratified navigation

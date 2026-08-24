@@ -23,7 +23,7 @@
   import Watchlist from './components/Watchlist.svelte'
   import Setup from './components/Setup.svelte'
   import Flags from './components/Flags.svelte'
-  import Detectors from './components/Detectors.svelte'
+  import EngineRoom from './components/EngineRoom.svelte'
   import Entities from './components/Entities.svelte'
   import Fleet from './components/Fleet.svelte'
   import AuditLog from './components/AuditLog.svelte'
@@ -32,9 +32,7 @@
   import RouterLookupPopover from './components/RouterLookupPopover.svelte'
   import AuthSetup from './components/AuthSetup.svelte'
   import AuthLogin from './components/AuthLogin.svelte'
-  import Users from './components/Users.svelte'
   import SSOLinkOverlay from './components/SSOLinkOverlay.svelte'
-  import Tokens from './components/Tokens.svelte'
   // Mounted here, not in the rail that triggers it: the rail is chrome
   // for authenticated pages, and this overlay outlives any one of them.
   import ChangePasswordOverlay from './components/ChangePasswordOverlay.svelte'
@@ -225,18 +223,14 @@
       <Setup />
     {:else if appState.view === 'flags'}
       <Flags />
-    {:else if appState.view === 'detectors'}
-      <Detectors />
     {:else if appState.view === 'entities'}
       <Entities />
     {:else if appState.view === 'fleet'}
       <Fleet />
     {:else if appState.view === 'audit'}
       <AuditLog />
-    {:else if appState.view === 'users'}
-      <Users />
-    {:else if appState.view === 'tokens'}
-      <Tokens />
+    {:else if appState.view === 'engineroom'}
+      <EngineRoom />
         {:else}
           <Dashboard />
         {/if}
