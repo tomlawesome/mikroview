@@ -74,6 +74,19 @@ rewritten.
 
 ### Added
 
+- **The rail now shows how many flags are waiting for you** (#546). A red
+  count sits on the Flags row whenever there are open flags, and
+  disappears once there are none left — so an empty count never sits
+  there looking like something to deal with. Flags that you cleared, and
+  ones whose detector and target you excluded permanently, are not
+  counted. Hiding the navigation does not hide the count: it moves to the
+  tab on the left edge of the window, so docking the rail never docks the
+  alarm. Screen readers hear the row as "Flags — 6 open" rather than a
+  word and a loose number.
+
+  Only Flags carries a count of this kind. That is deliberate: a red
+  count that appears in several places at once stops meaning "look here".
+
 - **The navigation rail can now be narrowed or hidden** (#545). It has
   three states you choose from the two buttons at the bottom of the rail:
   full width with icons and labels, a 54px strip of icons alone, or
