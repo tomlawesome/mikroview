@@ -5,10 +5,14 @@
   // docs/design/screens/navigation/DESIGN.md, which is the authoritative
   // record -- where it and a mockup disagree, the record wins.
   //
-  // Badges and the broken ring are #546's; the three persistent states,
-  // the icon set and the handle arrived with #545.
+  // The open-flag count badge is #546's; the three persistent states, the
+  // icon set and the handle arrived with #545. The broken ring is also
+  // #546's but is not built here -- see that issue: the record specifies
+  // what a broken state looks like, but nothing in the product yet decides
+  // when a watch is in one.
   import { appState, type View } from '../lib/state.svelte'
   import { authState } from '../lib/auth.svelte'
+  import { flagsState } from '../lib/flags.svelte'
   import { railPref, describe, type RailDensity } from '../lib/rail.svelte'
   import AboutOverlay from './AboutOverlay.svelte'
   import RailIcon, { type IconName } from './RailIcon.svelte'
@@ -22,6 +26,11 @@
     admin?: boolean
     title: string
     icon: IconName
+    // The record's "one count on the rail": Flags carries it and nothing
+    // else does. A marker rather than a number so the count stays derived
+    // from the store at render time instead of being copied into this
+    // table, which is built once at module load.
+    badge?: boolean
   }
 
   type Group = { name: string; items: Item[] }
@@ -51,6 +60,7 @@
           label: 'Flags',
           view: 'flags',
           icon: 'flags',
+          badge: true,
           title: 'Behavioral flags: port scans, activity spikes, critical-port attempts, and volume spikes',
         },
         {
@@ -124,6 +134,26 @@
       .map((g) => ({ ...g, items: g.items.filter((i) => !i.admin || isAdmin) }))
       .filter((g) => g.items.length > 0),
   )
+
+  // "Open unexcluded flags" is exactly flagsState.activeCount, with no
+  // exclusion filter needed on top: internal/flags.Store keeps the two in
+  // step deliberately. ClearAndExclude clears as it excludes, and Exclude
+  // clears any pair that is already active -- its own comment calls an
+  // excluded flag left sitting uncleared "a landmine for the next caller".
+  // So an excluded pair can never be counted here as open.
+  const flagCount = $derived(flagsState.activeCount)
+
+  function showCount(item: Item): boolean {
+    return item.badge === true && flagCount > 0
+  }
+
+  // What the row is called out loud. The count is folded in because a
+  // badge read on its own is a bare number next to a word -- the record
+  // asks for "label+count in aria-labels", and the ratified mockup words
+  // it "Flags — 6 open".
+  function spoken(item: Item): string {
+    return showCount(item) ? `${item.label} — ${flagCount} open` : item.label
+  }
 
   function activate(item: Item) {
     if (item.act) item.act()
@@ -235,17 +265,24 @@
                 class="item"
                 class:current={isCurrent(item)}
                 aria-current={isCurrent(item) ? 'page' : undefined}
-                aria-label={iconsOnly ? item.label : undefined}
+                aria-label={iconsOnly || showCount(item) ? spoken(item) : undefined}
                 title={iconsOnly ? undefined : item.title}
                 bind:this={itemEls[item.label]}
                 onclick={() => activate(item)}
-                onmouseenter={(e) => showTip(e, item.label)}
+                onmouseenter={(e) => showTip(e, spoken(item))}
                 onmouseleave={hideTip}
-                onfocus={(e) => showTip(e, item.label)}
+                onfocus={(e) => showTip(e, spoken(item))}
                 onblur={hideTip}
               >
                 <RailIcon name={item.icon} />
                 <span class="label">{item.label}</span>
+                {#if showCount(item)}
+                  <!-- aria-hidden because the button's own aria-label
+                       already speaks the count in words ("Flags — 6
+                       open"); left audible it would be announced twice,
+                       the second time as a bare number. -->
+                  <span class="count" aria-hidden="true">{flagCount}</span>
+                {/if}
               </button>
             </li>
           {/each}
@@ -482,6 +519,22 @@
     font-weight: 600;
   }
 
+  /* The rail's only alarm-filled count, per the record. Text is --bg
+     rather than a fixed dark, so it stays legible against the bright red
+     of the dark lane and the darker red of the light one. */
+  .count {
+    margin-left: auto;
+    border-radius: 8px;
+    padding: 1px 5px;
+    background: var(--alarm);
+    color: var(--bg);
+    font-size: 0.68rem;
+    font-weight: 700;
+    /* So the row does not shift width as the count ticks between, say,
+       9 and 10 while traffic arrives. */
+    font-variant-numeric: tabular-nums;
+  }
+
   /* Pinned to the bottom of the rail's own flex column via margin-top:
      auto, rather than a second scroll region -- #545 appends density/
      dock controls as further rows here, below About & licence. */
@@ -596,6 +649,16 @@
 
   .rail.icons .label {
     display: none;
+  }
+
+  /* At 54px there is no row left to push the count to, so it sits on the
+     icon's top-right corner instead. The item is already
+     position: relative for the same reason the tooltip is not. */
+  .rail.icons .count {
+    position: absolute;
+    top: 1px;
+    right: 6px;
+    margin: 0;
   }
 
   /* The record asks for the label on hover *and* focus at icons density.
