@@ -44,6 +44,11 @@ type Store struct {
 	caFetched  map[string]time.Time
 	syslogSeen map[string]syslogObservation
 	prefixes   map[string]prefixHealth
+	// marks is the operator's own decisions about steps that produced no
+	// evidence -- see "The ledger's own marks" at the foot of this file.
+	// Keyed by step number; lazily created, since most instances never
+	// record one.
+	marks map[int]Mark
 }
 
 type syslogObservation struct {
@@ -193,4 +198,100 @@ func evictOldest[V any](m map[string]V, cap int, stamp func(V) time.Time) {
 		}
 	}
 	delete(m, oldestKey)
+}
+
+// --- The ledger's own marks ---------------------------------------------
+//
+// Everything above is evidence: something arrived here and was noted.
+// A mark is the other half of the wizard's claim ledger (#487) -- the
+// operator's own statement about a step that has *not* produced
+// evidence: "skipped" (quiet, moves on) or "forced" (gone past with a
+// heavy warning, and recorded).
+//
+// Marks live here, beside the evidence they qualify, and share its
+// lifetime rather than getting a persistence backend of their own. That
+// is the design record's "stateless beyond the evidence": a mark
+// describes the state of a setup that is still arriving, so a mark that
+// outlived the observations it sits next to would be a claim about a
+// world nobody is still watching. The durable copy of a forced-past
+// decision is its audit entry (internal/audit), which is where the
+// design record sends diagnostics to look and where it stays as history
+// once evidence arrives and the step turns green anyway.
+
+// MarkOutcome is what the operator did with a step whose evidence had
+// not arrived.
+type MarkOutcome string
+
+const (
+	// MarkSkipped: moved past deliberately, no ceremony. The step's
+	// consequence is stated in the ledger, not treated as a fault.
+	MarkSkipped MarkOutcome = "skipped"
+	// MarkForced: moved past after the heavy warning, with the exact
+	// record quoted on the button that wrote it.
+	MarkForced MarkOutcome = "forced"
+)
+
+// maxStep bounds the step numbers a mark may carry. Five steps, per the
+// ratified design; a mark outside that range is a client bug or a probe,
+// and either way has nothing to describe.
+const maxStep = 5
+
+// Mark is one recorded decision about one step.
+type Mark struct {
+	Step    int         `json:"step"`
+	Outcome MarkOutcome `json:"outcome"`
+	// Actor is the acting username, resolved server-side from the
+	// session -- never taken from the request body, so the ledger cannot
+	// be made to name somebody else.
+	Actor string    `json:"actor"`
+	At    time.Time `json:"at"`
+	// Note is what was not observed at the moment the mark was made
+	// ("no router has fetched /ca.crt"), which is what makes a
+	// forced-past line explain a silence rather than merely report a
+	// click.
+	Note string `json:"note,omitempty"`
+}
+
+// maxNote caps the free text a client may attach. Long enough for the
+// observation lines the wizard actually sends, short enough that the
+// field cannot be used as storage.
+const maxNote = 200
+
+// NoteMark records one step decision, replacing any previous mark for
+// the same step: a step has exactly one outcome at a time, and changing
+// one's mind is not a second claim. Reports whether the mark was
+// accepted, so a caller can refuse to write an audit entry for input it
+// rejected.
+func (s *Store) NoteMark(step int, outcome MarkOutcome, actor, note string, now time.Time) (Mark, bool) {
+	if step < 1 || step > maxStep {
+		return Mark{}, false
+	}
+	if outcome != MarkSkipped && outcome != MarkForced {
+		return Mark{}, false
+	}
+	if len(note) > maxNote {
+		note = note[:maxNote]
+	}
+	m := Mark{Step: step, Outcome: outcome, Actor: actor, At: now, Note: note}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.marks == nil {
+		s.marks = make(map[int]Mark, maxStep)
+	}
+	s.marks[step] = m
+	return m, true
+}
+
+// Marks returns every recorded decision, ordered by step so the ledger
+// renders in the same order it is read.
+func (s *Store) Marks() []Mark {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := make([]Mark, 0, len(s.marks))
+	for step := 1; step <= maxStep; step++ {
+		if m, ok := s.marks[step]; ok {
+			out = append(out, m)
+		}
+	}
+	return out
 }

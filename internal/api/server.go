@@ -304,8 +304,11 @@ func (s *Server) routes() []route {
 		{http.MethodGet, "/api/audit", s.handleAuditList},
 
 		// The guided setup wizard's view of what has actually landed
-		// (#320) -- admin-only, see handleSetupStatus.
+		// (#320) -- open to any signed-in user, see handleSetupStatus.
 		{http.MethodGet, "/api/setup/status", s.handleSetupStatus},
+		// The claim ledger's own marks (#487): a step skipped or forced
+		// past. Admin-only, matching the modal it is written from.
+		{http.MethodPost, "/api/setup/mark", s.handleSetupMark},
 		{http.MethodGet, "/api/config/problems", s.handleConfigProblems},
 
 		{http.MethodGet, "/api/auth/session", s.handleAuthSession},
