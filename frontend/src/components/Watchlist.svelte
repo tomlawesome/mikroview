@@ -20,11 +20,40 @@
   // Exclusions.
   import { onMount } from 'svelte'
   import { watchlistState } from '../lib/watchlist.svelte'
+  import { suggestState } from '../lib/suggest.svelte'
+  import TabList from './TabList.svelte'
+  import Suggestions from './Suggestions.svelte'
   import type { WatchlistEntry, WatchlistMatch, WatchlistPermittedDest } from '../lib/types'
 
   onMount(() => {
     watchlistState.refresh()
+    suggestState.refresh()
   })
+
+  // Suggestions is a tab of Watchlist (#547, per the ratified navigation
+  // record). No admin-gating needed on the tab itself -- Watchlist only
+  // ever mounts for an admin in the first place (see navGroups.ts's
+  // `admin: true` on the Watchlist row), and /api/suggestions* agrees
+  // server-side (internal/api/authz_matrix_test.go).
+  const tabs = [
+    { id: 'watchlist', label: 'Watchlist' },
+    { id: 'suggestions', label: 'Suggestions' },
+  ]
+  let activeTab = $state<'watchlist' | 'suggestions'>('watchlist')
+
+  function selectTab(id: string) {
+    activeTab = id as 'watchlist' | 'suggestions'
+    // Before #547, Watchlist and Suggestions were two separate views
+    // that remounted -- and so refetched -- every time you navigated
+    // between them. Both now stay mounted (just hidden) once you switch
+    // away, which loses that free refetch-on-arrival -- most visibly for
+    // accepting a suggestion, which creates a real watchlist entry that
+    // the Watchlist tab would otherwise keep showing its pre-accept
+    // snapshot without. Refreshed here instead, on every switch, so
+    // either tab is never more than one switch stale.
+    if (activeTab === 'watchlist') watchlistState.refresh()
+    else suggestState.refresh()
+  }
 
   // --- Add/edit form -----------------------------------------------
 
@@ -204,7 +233,16 @@
   }
 </script>
 
-<div class="page scrollbar">
+<div class="watchlist-page">
+  <TabList {tabs} selected={activeTab} onselect={selectTab} label="Watchlist views" />
+  <div
+    class="page scrollbar"
+    role="tabpanel"
+    id="panel-watchlist"
+    aria-labelledby="tab-watchlist"
+    tabindex="0"
+    hidden={activeTab !== 'watchlist'}
+  >
   <p class="intro">
     Watch attempts against specific ports (<strong>record</strong>), or flip an
     entry around to watch what one device does (<strong>invert</strong>): "this device should only ever reach X" --
@@ -398,9 +436,35 @@
       </ul>
     {/if}
   </section>
+  </div>
+
+  <div
+    class="suggestions-panel"
+    role="tabpanel"
+    id="panel-suggestions"
+    aria-labelledby="tab-suggestions"
+    tabindex="0"
+    hidden={activeTab !== 'suggestions'}
+  >
+    <Suggestions />
+  </div>
 </div>
 
 <style>
+  .watchlist-page {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .suggestions-panel {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+  }
+
   .page {
     flex: 1;
     min-height: 0;
