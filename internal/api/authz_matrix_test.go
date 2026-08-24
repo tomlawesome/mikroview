@@ -124,15 +124,14 @@ var authzMatrix = []routeExpectation{
 		"the review surface for permanent exclusions"},
 	{http.MethodDelete, "/api/flags/exclusions/{id}", accessAdmin,
 		"undoes an exclusion, re-arming detection"},
-	// The definitions surface (#407). Admin-only throughout, exactly
-	// matching what /api/detectors and /api/watchlist/entries each
-	// enforced before it replaced them. #385 records the owner decision
-	// that non-admins should eventually see settings surfaces read-only,
-	// but that is phase 2's RBAC work: shipping a read-open route now
-	// that phase 2 might have to narrow is worse than shipping it closed
-	// and widening it deliberately.
-	{http.MethodGet, "/api/definitions", accessAdmin,
-		"every definition's on/off state, scope and tuned params -- reveals exactly what this deployment is and isn't watching, and an operator's watchlist scope besides"},
+	// The definitions surface (#407), writes still strictly admin --
+	// exactly matching what /api/detectors and /api/watchlist/entries
+	// each enforced before it replaced them. #385 records the owner
+	// decision that non-admins should eventually see settings surfaces
+	// read-only; #490 is that phase 2's RBAC work, widening the list GET
+	// below one row at a time while leaving every mutation here closed.
+	{http.MethodGet, "/api/definitions", accessUser,
+		"widened for the viewer-readable settings page (#490): a signed-in non-admin can see every definition's on/off state, scope and tuned params, same as an admin -- the design record's authz-matrix clause widens this GET deliberately, one row at a time, while every write below it stays admin-only"},
 	{http.MethodPost, "/api/definitions", accessAdmin,
 		"creates a definition -- a non-admin should not be able to add new server-side traffic surveillance"},
 	{http.MethodGet, "/api/definitions/schema", accessAdmin,
@@ -171,14 +170,15 @@ var authzMatrix = []routeExpectation{
 		"converts your OWN account to SSO-only; the target comes from the session, never the request, so a user can only ever affect themselves"},
 	{http.MethodPost, "/api/auth/users", accessAdmin, "account creation"},
 	{http.MethodGet, "/api/auth/users", accessAdmin,
-		"who holds an account, and which one is the admin -- that is the map of whose account is worth attacking"},
+		"who holds an account, and which one is the admin -- that is the map of whose account is worth attacking. #490 widened the other three settings GETs for the viewer-readable engine room and deliberately left this one closed: the owner's ruling, 2026-08-24, is that the account list stays admin-only, so the room's people door is absent for a viewer rather than read-only"},
 	{http.MethodDelete, "/api/auth/users/{id}", accessAdmin,
 		"removes an account and revokes its sessions and API tokens"},
 	{http.MethodPost, "/api/tokens", accessAdmin, "mints a bearer credential"},
-	{http.MethodGet, "/api/tokens", accessAdmin, "lists issued bearer credentials"},
+	{http.MethodGet, "/api/tokens", accessUser,
+		"widened for the viewer-readable settings page (#490): a signed-in non-admin can see issued bearer credentials' metadata, same as an admin -- safe because the raw value never appears here, only in the one-time mint response, and minting/revoking below stay admin-only"},
 	{http.MethodDelete, "/api/tokens/{id}", accessAdmin, "revokes a bearer credential"},
-	{http.MethodGet, "/api/setup/status", accessAdmin,
-		"enumerates every device, every source address that has connected or fetched the CA, and which tables each router pushes -- the same map of the deployment GET /api/auth/users is admin-gated for, and the wizard that reads it is an admin task anyway"},
+	{http.MethodGet, "/api/setup/status", accessUser,
+		"widened for the viewer-readable settings page (#490): a signed-in non-admin can see every device, source address and pushed table the setup wizard shows, same as an admin -- there is no corresponding write endpoint to keep closed"},
 	{http.MethodGet, "/api/audit", accessAdmin,
 		"the admin action trail; also the record an attacker would want to read to see whether they were noticed"},
 }

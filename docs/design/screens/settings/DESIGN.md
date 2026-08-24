@@ -76,10 +76,21 @@ re-implement.
   machine and its live numbers identical — the room at rest.
 - **API:** every settings write is 403 for non-admins server-side
   regardless of client; the viewer page exists by widening the
-  settings GETs (users, tokens, definitions, setup status) from
+  settings GETs (tokens, definitions, setup status) from
   admin to signed-in user deliberately, one authz-matrix row at a
   time; token values appear in no GET — the mint response is the
   secret's whole life.
+  **Amended 2026-08-24, by the owner:** the account list
+  (`GET /api/auth/users`) is **not** widened and stays admin-only.
+  The clause originally named it among the four. The rationale that
+  had guarded it — "who holds an account, and which one is the admin
+  … is the map of whose account is worth attacking" — was written
+  when a non-admin could read every page, and the ratified viewer
+  grammar removed that premise; the owner's ruling is that it stays
+  closed regardless. The consequence for the room is that the
+  **people door is absent for a viewer**, not read-only, per the
+  absent-never-disabled grammar above. The machines door remains
+  viewer-readable.
 - **Colour is meaning**: no charts, no data palette; accent is the
   admin's amendable ink and interactive colour; amber is time (the
   seen/spoke ticks, the mint's now-or-never moment); ok green only

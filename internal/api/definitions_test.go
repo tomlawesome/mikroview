@@ -926,3 +926,45 @@ func TestBearerTokenCannotReachDefinitions(t *testing.T) {
 		t.Error("expected a read-only bearer token to be unable to reach the definitions surface, got 200")
 	}
 }
+
+// TestDefinitionsListOpenToViewer pins the viewer-readable settings
+// widening (#490) for GET /api/definitions: a signed-in non-admin now
+// gets 200, a signed-out caller is still refused, and creating a
+// definition -- the write that sits right beside this GET -- stays
+// admin-only.
+func TestDefinitionsListOpenToViewer(t *testing.T) {
+	s := newAuthTestServer(t)
+	ts := httptest.NewServer(s.Routes())
+	defer ts.Close()
+
+	adminClient := setUpAdmin(t, ts)
+	postJSON(t, adminClient, ts.URL+"/api/auth/users", createUserRequest{Username: "viewer", Password: "password456", Role: "user"}).Body.Close()
+
+	viewerClient := &http.Client{Jar: mustCookieJar(t)}
+	postJSON(t, viewerClient, ts.URL+"/api/auth/login", credentialsRequest{Username: "viewer", Password: "password456"}).Body.Close()
+
+	resp, err := viewerClient.Get(ts.URL + "/api/definitions")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("expected a viewer to read the definitions list (#490), got %d", resp.StatusCode)
+	}
+
+	anonResp, err := http.Get(ts.URL + "/api/definitions")
+	if err != nil {
+		t.Fatal(err)
+	}
+	anonResp.Body.Close()
+	if anonResp.StatusCode != http.StatusUnauthorized {
+		t.Errorf("expected a signed-out caller to still be refused, got %d", anonResp.StatusCode)
+	}
+
+	writeResp := postJSON(t, viewerClient, ts.URL+"/api/definitions",
+		createDefinitionRequest{Name: "should-fail", Expectation: &expectationRequest{Ports: []int{22}}})
+	defer writeResp.Body.Close()
+	if writeResp.StatusCode != http.StatusForbidden {
+		t.Errorf("expected definition creation to stay admin-only, got %d", writeResp.StatusCode)
+	}
+}
