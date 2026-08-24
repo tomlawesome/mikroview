@@ -15,6 +15,7 @@
   import { formatRelative, formatHM } from '../lib/format'
   import type { Device } from '../lib/types'
   import GhostRows from './GhostRows.svelte'
+  import PageHeader from './PageHeader.svelte'
 
   // How far back "recent activity" looks, client-side, from the live
   // event buffer -- a rough per-device rate to complement the lifetime
@@ -83,6 +84,10 @@
 </script>
 
 <div class="page scrollbar">
+  <!-- No readOnly chip (#548/#490's grammar): this table has no edit
+       affordance for anyone, admin included, so there is no
+       admin-vs-viewer distinction here for a chip to declare. -->
+  <PageHeader title="Fleet" />
   <p class="intro">
     Every RouterOS device mikroview has seen syslog from, or that's configured in <code>devices</code> but hasn't
     sent anything yet. A <strong>configured</strong> device that goes quiet for longer than the configured staleness

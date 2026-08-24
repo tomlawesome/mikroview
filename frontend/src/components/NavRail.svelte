@@ -21,10 +21,11 @@
 
   type Item = {
     label: string
-    // A view the app already renders, or an action for surfaces that are
-    // not views yet (Users/Tokens are still overlays until #548).
-    view?: View
-    act?: () => void
+    // Every row is a view the app already renders -- "Run setup…" reads
+    // as an action in the record, but its interim mechanics (#548) are
+    // the same view switch as any page; see the Admin group's comment
+    // below for why.
+    view: View
     admin?: boolean
     title: string
     icon: IconName
@@ -95,17 +96,29 @@
     },
     {
       name: 'Admin',
+      // Users, Tokens, Fleet and Entities are pages (#548) -- the
+      // overlays that used to carry Users/Tokens retired wholesale.
+      // "Run setup…" stays an action, not a page: interim, per #548's
+      // body, it opens the existing wizard page (view: 'setup') until
+      // #487's modal replaces the target. Users/Tokens/Entities keep
+      // `admin: true` -- the backend still 403s their GET routes for a
+      // non-admin (see internal/api/auth.go, tokens.go, entities.go's
+      // callerIsAdmin checks), so rendering them for a viewer would be a
+      // page that loads and immediately fails, not a read-only one. See
+      // the #548 PR notes for the open question of whether that gate
+      // should loosen so these three can carry the same viewer grammar
+      // Fleet already does.
       items: [
         {
           label: 'Users',
-          act: () => (authState.showUsers = true),
+          view: 'users',
           admin: true,
           icon: 'users',
           title: 'Add or remove accounts',
         },
         {
           label: 'Tokens',
-          act: () => (authState.showTokens = true),
+          view: 'tokens',
           admin: true,
           icon: 'tokens',
           title: 'Create/revoke read-only API bearer tokens for scripted access',
@@ -191,12 +204,11 @@
   }
 
   function activate(item: Item) {
-    if (item.act) item.act()
-    else if (item.view) appState.view = item.view
+    appState.view = item.view
   }
 
   function isCurrent(item: Item): boolean {
-    return item.view !== undefined && appState.view === item.view
+    return appState.view === item.view
   }
 
   // The footer's Account popover, per #544's design record ("homes for
