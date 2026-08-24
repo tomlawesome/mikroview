@@ -42,6 +42,60 @@ func TestTokensCreateRequiresAdmin(t *testing.T) {
 	}
 }
 
+// TestTokensListOpenToViewer pins the viewer-readable settings widening
+// (#490) for GET /api/tokens: a signed-in non-admin now gets 200, a
+// signed-out caller is still refused, minting stays admin-only, and --
+// the part that makes widening this GET safe at all -- the raw token
+// value never appears in the list, only in the one-time mint response.
+func TestTokensListOpenToViewer(t *testing.T) {
+	s := newAuthTestServer(t)
+	ts := httptest.NewServer(s.Routes())
+	defer ts.Close()
+
+	adminClient := setUpAdmin(t, ts)
+	postJSON(t, adminClient, ts.URL+"/api/auth/users", createUserRequest{Username: "viewer", Password: "password456", Role: "user"}).Body.Close()
+	postJSON(t, adminClient, ts.URL+"/api/tokens", createTokenRequest{Name: "birdcage"}).Body.Close()
+
+	viewerClient := &http.Client{Jar: mustCookieJar(t)}
+	postJSON(t, viewerClient, ts.URL+"/api/auth/login", credentialsRequest{Username: "viewer", Password: "password456"}).Body.Close()
+
+	resp, err := viewerClient.Get(ts.URL + "/api/tokens")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected a viewer to read the token list (#490), got %d", resp.StatusCode)
+	}
+	var body struct {
+		Tokens []tokenResponse `json:"tokens"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	if len(body.Tokens) != 1 {
+		t.Fatalf("expected the one minted token to be listed, got %d", len(body.Tokens))
+	}
+	if body.Tokens[0].Value != "" {
+		t.Errorf("the token list must never carry the raw value -- got %q", body.Tokens[0].Value)
+	}
+
+	anonResp, err := http.Get(ts.URL + "/api/tokens")
+	if err != nil {
+		t.Fatal(err)
+	}
+	anonResp.Body.Close()
+	if anonResp.StatusCode != http.StatusUnauthorized {
+		t.Errorf("expected a signed-out caller to still be refused, got %d", anonResp.StatusCode)
+	}
+
+	writeResp := postJSON(t, viewerClient, ts.URL+"/api/tokens", createTokenRequest{Name: "should-fail"})
+	defer writeResp.Body.Close()
+	if writeResp.StatusCode != http.StatusForbidden {
+		t.Errorf("expected token creation to stay admin-only, got %d", writeResp.StatusCode)
+	}
+}
+
 func TestAdminCanCreateListAndRevokeTokens(t *testing.T) {
 	s := newAuthTestServer(t)
 	ts := httptest.NewServer(s.Routes())
