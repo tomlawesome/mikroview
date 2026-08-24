@@ -544,7 +544,7 @@ export async function fetchWatchlistEntries(): Promise<{
     // the entry carries a copy for rendering, but the server is the one
     // that decides it (an entry created with no name gets a generated
     // one), so it is read back from the definition rather than assumed.
-    entries.push({ ...d.expectation, name: d.name })
+    entries.push({ ...d.expectation, name: d.name, enabled: d.enabled })
     if (d.coverage) coverage[d.id] = d.coverage
   }
   return { entries, coverage }
@@ -578,7 +578,7 @@ export async function deleteWatchlistEntry(id: string): Promise<string | null> {
 // the fallback exists so a shape change surfaces as an entry with no
 // fields rather than as a thrown TypeError inside a Svelte render.
 function definitionEntry(d: Definition): WatchlistEntry {
-  return { ...(d.expectation ?? { id: d.id, createdAt: '' }), name: d.name }
+  return { ...(d.expectation ?? { id: d.id, createdAt: '' }), name: d.name, enabled: d.enabled }
 }
 
 // promoteWatchlistDestinations moves the given destination/port pairs

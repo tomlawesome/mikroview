@@ -5,6 +5,7 @@
   import { themeState } from './lib/theme.svelte'
   import { colorwayState } from './lib/colorway.svelte'
   import { flagsState } from './lib/flags.svelte'
+  import { watchlistState } from './lib/watchlist.svelte'
   import { authState } from './lib/auth.svelte'
   import { buildQuery, ApiError } from './lib/api'
   import { filtersFromSearchParams } from './lib/types'
@@ -98,10 +99,18 @@
     appState.loadInitial().catch(handleApiError)
     liveSocket.connect()
     flagsState.refresh().catch(handleApiError)
+    // #546's broken ring needs a live coverage answer even when Watchlist
+    // itself is never opened -- the rail is chrome, not a page, so it
+    // cannot wait on that page's own onMount. Gated to admin because
+    // GET /api/definitions (which the ring's coverage rides on) is
+    // admin-only throughout (internal/api/definitions.go), and the
+    // Watchlist row this feeds is itself admin-only in the rail.
+    if (authState.role === 'admin') watchlistState.refresh().catch(handleApiError)
 
     const statsInterval = setInterval(() => {
       appState.refreshDevicesAndStats().catch(handleApiError)
       flagsState.refresh().catch(handleApiError)
+      if (authState.role === 'admin') watchlistState.refresh().catch(handleApiError)
     }, STATS_REFRESH_MS)
 
     const tickInterval = setInterval(() => appState.tick(), TICK_MS)

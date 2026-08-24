@@ -87,6 +87,20 @@ rewritten.
   Only Flags carries a count of this kind. That is deliberate: a red
   count that appears in several places at once stops meaning "look here".
 
+- **Watchlist now wears a red outline when it can't do its job** (#546).
+  The ring appears the moment an enabled watch can't be checked — no
+  firewall rule you've pushed logs the traffic it needs — and names why:
+  "Watchlist — 3 watches can't be checked: the firewall rules they need
+  aren't being logged" (singular wording for one). It clears itself the
+  moment you log the missing rule; there is nothing to acknowledge or
+  dismiss. A watch mikroview simply has no evidence about, or one that's
+  out of scope for every rule that does log, never rings — only a
+  definite "this can't work" does. Switching a watch off takes it out of
+  the count too. Like the flag count beside it, hiding the navigation
+  down to icons only tightens the ring around the icon rather than
+  hiding it; unlike the flag count, the ring stays with the page and does
+  not follow the rail to the edge tab when navigation is hidden.
+
 - **The navigation rail can now be narrowed or hidden** (#545). It has
   three states you choose from the two buttons at the bottom of the rail:
   full width with icons and labels, a 54px strip of icons alone, or
