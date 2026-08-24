@@ -2,6 +2,7 @@
 
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { render, screen } from '@testing-library/svelte'
+import { flushSync } from 'svelte'
 
 // NavRail itself makes no requests -- this only stops the stores it pulls
 // in from reaching for the network when they initialise under jsdom.
@@ -14,7 +15,9 @@ vi.mock('../lib/api', () => ({
 }))
 
 import { flagsState } from '../lib/flags.svelte'
-import type { Flag } from '../lib/types'
+import { watchlistState } from '../lib/watchlist.svelte'
+import { authState } from '../lib/auth.svelte'
+import type { Flag, WatchlistEntry } from '../lib/types'
 import NavRail from './NavRail.svelte'
 
 function flag(id: string, cleared: boolean): Flag {
@@ -65,5 +68,119 @@ describe('NavRail flag badge', () => {
     flagsState.list = [flag('1', true)]
     render(NavRail)
     expect(screen.getByRole('button', { name: 'Flags' })).toBeTruthy()
+  })
+})
+
+let nextEntryId = 1
+
+function watchlistEntry(overrides: Partial<WatchlistEntry> = {}): WatchlistEntry {
+  const id = `e${nextEntryId++}`
+  return {
+    id,
+    name: `watch ${id}`,
+    enabled: true,
+    createdAt: '2026-01-01T00:00:00Z',
+    ...overrides,
+  }
+}
+
+// #546's broken ring. Only Watchlist carries `ring` (see NavRail.svelte's
+// Item table), and Watchlist is admin-only, so these need an authenticated
+// admin session to render at all -- unlike the Flags badge above, which
+// is visible to every role. Whether the outline is actually 2px/3px and
+// tightens to the icon at 54px is a layout fact only a real browser can
+// answer -- frontend/scripts/live-nav-broken-ring.mjs covers that, plus
+// agreement with the server's own coverage answer, against a running
+// instance.
+describe('NavRail broken ring', () => {
+  beforeEach(() => {
+    flagsState.list = []
+    watchlistState.entries = []
+    watchlistState.coverage = {}
+    authState.state = 'authenticated'
+    authState.role = 'admin'
+    nextEntryId = 1
+  })
+
+  it('wears no ring when nothing is broken', () => {
+    render(NavRail)
+    const row = screen.getByRole('button', { name: 'Watchlist' })
+    expect(row.className).not.toContain('broken')
+  })
+
+  it('wears no ring for unknown, out-of-scope or covered coverage', () => {
+    const a = watchlistEntry()
+    const b = watchlistEntry()
+    const c = watchlistEntry()
+    watchlistState.entries = [a, b, c]
+    watchlistState.coverage = { [a.id]: 'unknown', [b.id]: 'out-of-scope', [c.id]: 'covered' }
+    render(NavRail)
+    const row = screen.getByRole('button', { name: 'Watchlist' })
+    expect(row.className).not.toContain('broken')
+  })
+
+  it('rings and names the reason, singular, for exactly one broken watch', () => {
+    const e = watchlistEntry()
+    watchlistState.entries = [e]
+    watchlistState.coverage = { [e.id]: 'no-logging' }
+    render(NavRail)
+    const row = screen.getByRole('button', {
+      name: "Watchlist — 1 watch can't be checked: the firewall rules it needs aren't being logged",
+    })
+    expect(row.className).toContain('broken')
+  })
+
+  it('rings and pluralises the reason for more than one broken watch', () => {
+    const a = watchlistEntry()
+    const b = watchlistEntry()
+    watchlistState.entries = [a, b]
+    watchlistState.coverage = { [a.id]: 'no-logging', [b.id]: 'no-logging' }
+    render(NavRail)
+    const row = screen.getByRole('button', {
+      name: "Watchlist — 2 watches can't be checked: the firewall rules they need aren't being logged",
+    })
+    expect(row.className).toContain('broken')
+  })
+
+  it('excludes a disabled entry from both the ring and its count', () => {
+    const e = watchlistEntry({ enabled: false })
+    watchlistState.entries = [e]
+    watchlistState.coverage = { [e.id]: 'no-logging' }
+    render(NavRail)
+    const row = screen.getByRole('button', { name: 'Watchlist' })
+    expect(row.className).not.toContain('broken')
+  })
+
+  it('clears the ring once coverage recovers -- a live reading, not a record, with no acknowledge step', () => {
+    const e = watchlistEntry()
+    watchlistState.entries = [e]
+    watchlistState.coverage = { [e.id]: 'no-logging' }
+    render(NavRail)
+    expect(screen.getByRole('button', { name: /can't be checked/ })).toBeTruthy()
+
+    watchlistState.coverage = { [e.id]: 'covered' }
+    flushSync()
+
+    expect(screen.getByRole('button', { name: 'Watchlist' })).toBeTruthy()
+  })
+
+  // Flags carries a count and Watchlist carries a ring, and neither row
+  // carries the other marker today -- so this proves the two independent
+  // signals coexist on their own rows without one clobbering the other's
+  // label. What happens on a single row carrying *both* is
+  // spokenLabel's own unit tests (lib/rail.svelte.test.ts), since no real
+  // item does that yet for this to exercise end to end.
+  it('shows an unrelated count and ring on their own rows at once', () => {
+    const e = watchlistEntry()
+    watchlistState.entries = [e]
+    watchlistState.coverage = { [e.id]: 'no-logging' }
+    flagsState.list = [flag('1', false), flag('2', false)]
+    render(NavRail)
+    expect(screen.getByRole('button', { name: 'Flags — 2 open' })).toBeTruthy()
+    expect(
+      screen.getByRole('button', {
+        name: "Watchlist — 1 watch can't be checked: the firewall rules it needs aren't being logged",
+      }),
+    ).toBeTruthy()
   })
 })
