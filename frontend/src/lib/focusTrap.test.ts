@@ -3,10 +3,11 @@
 import { describe, expect, it, afterEach } from 'vitest'
 import { trapFocus } from './focusTrap'
 
-// Built with createElement rather than an innerHTML assignment --
-// guards/injection-sinks.test.ts forbids that sink across src/ regardless
-// of whether the string is a literal, so test fixtures follow the same
-// rule as app code.
+// Fixtures are built with createElement rather than by assigning markup
+// as a string. injection_sinks_test.go greps src/ for the forbidden
+// sinks by name and does not care whether the hit is code, a string or a
+// comment -- so naming one here, even to explain its absence, fails the
+// build. Test fixtures follow the same rule as app code.
 function mountTrap(labels: string[]) {
   const node = document.createElement('div')
   for (const label of labels) {
