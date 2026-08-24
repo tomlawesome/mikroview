@@ -18,6 +18,12 @@ rewritten.
 
 ### Added
 
+- **Users, Tokens, Fleet and Entities are pages under Admin now** (#548),
+  reached the same way as every other row in the rail rather than through
+  a menu overlay. **Run setup…** stays an action, not a page: interim,
+  until #487's dedicated modal ships, it opens the existing setup wizard
+  page.
+
 - **The live view's filter bar can now filter by everything the table
   shows you** (#438). A few gaps, closed:
 
@@ -157,6 +163,11 @@ rewritten.
   pages of their own, and that merge is #547. Their data is untouched
   and both return as tabs when it lands. This is a deliberate gap
   between two development releases, not a removal.
+
+- **The Users and Tokens account/token-management overlays are gone**
+  (#548), wholesale, along with the rail's account-actions-as-a-modal
+  pattern that opened them. Nothing is aliased or stubbed behind them —
+  see Added above for where the same management now lives.
 
 ## [0.3.1] - 2026-08-23
 

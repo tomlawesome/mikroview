@@ -32,9 +32,9 @@
   import RouterLookupPopover from './components/RouterLookupPopover.svelte'
   import AuthSetup from './components/AuthSetup.svelte'
   import AuthLogin from './components/AuthLogin.svelte'
-  import UsersOverlay from './components/UsersOverlay.svelte'
+  import Users from './components/Users.svelte'
   import SSOLinkOverlay from './components/SSOLinkOverlay.svelte'
-  import TokensOverlay from './components/TokensOverlay.svelte'
+  import Tokens from './components/Tokens.svelte'
   // Mounted here, not in the rail that triggers it: the rail is chrome
   // for authenticated pages, and this overlay outlives any one of them.
   import ChangePasswordOverlay from './components/ChangePasswordOverlay.svelte'
@@ -231,6 +231,10 @@
       <AuditLog />
     {:else if appState.view === 'exclusions'}
       <Exclusions />
+    {:else if appState.view === 'users'}
+      <Users />
+    {:else if appState.view === 'tokens'}
+      <Tokens />
         {:else}
           <Dashboard />
         {/if}
@@ -244,9 +248,7 @@
   <IpLookupPopover />
   <PortLookupPopover />
   <RouterLookupPopover />
-  <UsersOverlay />
   <SSOLinkOverlay />
-  <TokensOverlay />
   <ChangePasswordOverlay />
   <Toast />
 {/if}
