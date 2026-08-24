@@ -68,15 +68,14 @@ type setupDevice struct {
 	PushedKinds map[string]time.Time `json:"pushedKinds,omitempty"`
 }
 
-// handleSetupStatus serves the wizard's view. Admin-only: it enumerates
-// every device and source mikroview knows about, which is the same map
-// of the deployment GET /api/auth/users is admin-gated for.
+// handleSetupStatus serves the wizard's view: every device and source
+// mikroview knows about.
+//
+// Open to any signed-in user (#490): the settings page's viewer-readable
+// widening reaches setup status too, same as the other three GETs it
+// widens alongside. There is no corresponding write endpoint here to
+// keep closed.
 func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
-	if !callerIsAdmin(r) {
-		http.Error(w, "admin role required", http.StatusForbidden)
-		return
-	}
-
 	var sources []setup.SourceObservation
 	prefixByDevice := map[string]setup.DeviceObservation{}
 	if s.Setup != nil {

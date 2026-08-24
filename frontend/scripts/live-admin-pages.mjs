@@ -1,32 +1,25 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 //
-// #548: Users, Tokens, Fleet and Entities are pages under Admin now, and
-// the overlays that used to carry Users/Tokens (UsersOverlay.svelte,
-// TokensOverlay.svelte) retired wholesale. What needs a real browser
-// rather than a unit test:
+// The Admin group's pages, driven in a real browser. #548 made Users,
+// Tokens, Fleet and Entities pages instead of overlays; #490 then
+// removed Users, Tokens and Detectors outright, absorbing them into the
+// engine room. What survives from both changes, and needs a real
+// browser rather than a unit test:
 //
-//  - Each of the four pages is actually reachable from the rail, and no
-//    modal renders anywhere in the Admin group any more -- a unit test
-//    of NavRail alone cannot see whether App.svelte still mounts the
-//    retired overlay components.
+//  - Every remaining Admin row is actually reachable from the rail, and
+//    no modal renders anywhere in the group -- a unit test of NavRail
+//    alone cannot see whether App.svelte still mounts a retired
+//    component.
+//  - The three absorbed pages are gone with no alias: no rail row, and
+//    nothing that renders their old headers.
 //  - "Run setup…" launches the existing wizard page, per #548's interim
 //    call (it opens #487's modal once that ships).
-//  - A viewer's rail follows #490's absent-never-disabled grammar for
-//    the Admin group's admin-only rows, proved end to end with a real
-//    second account rather than a mocked authState.role.
+//  - A viewer's rail follows the absent-never-disabled grammar, proved
+//    end to end with a real second account rather than a mocked
+//    authState.role.
 //
-// What this cannot cover, and why: the "READ-ONLY — ADMINS EDIT" chip
-// and the edit-affordances-absent grammar on the Users/Tokens/Entities
-// pages themselves. Those three stayed admin-gated end to end in this
-// pass -- GET /api/auth/users, /api/tokens and /api/entities all still
-// 403 a non-admin caller (see internal/api/authz_matrix_test.go, whose
-// own reasoning for GET /api/auth/users is that the account list maps
-// which one is the admin, the single highest-value target in the
-// system). Fleet is the only Admin-group page a viewer reaches today,
-// and it has no edit affordance for anyone to gate, so its header
-// carries no chip either -- see PageHeader.svelte's own comment. This is
-// flagged as an open question for the owner rather than decided here;
-// see the PR notes.
+// The room's own read-only grammar is live-engine-room.mjs's job. This
+// scenario stops at the rail and the group's page-level facts.
 
 import { chromium } from 'playwright'
 import { session, check, done } from './live-browser.mjs'
@@ -50,16 +43,28 @@ async function openAndCheck(label, headerText) {
 
 // --- Admin: each page is reachable, the overlays are genuinely gone -----
 
-await openAndCheck('Users', 'Users')
-check((await page.$$('.modal[aria-label="Users"]')).length === 0, 'no Users modal renders -- it is a page')
-
-await openAndCheck('Tokens', 'Tokens')
-check((await page.$$('.modal[aria-label="API tokens"]')).length === 0, 'no Tokens modal renders -- it is a page')
-
+await openAndCheck('The engine room', 'The engine room')
 await openAndCheck('Fleet', 'Fleet')
 await openAndCheck('Entities', 'Entities')
 
 check((await page.$$('.modal')).length === 0, 'no modal of any kind renders anywhere in the Admin group')
+
+// --- The absorbed pages left nothing behind (#490) ----------------------
+// Removals here are wholesale: no rail row, no alias, no stub. Checking
+// the rail's own labels is the honest test -- a `:has-text()` click that
+// finds nothing would just time out and say "timeout", not "the row is
+// correctly absent".
+const adminLabels = await page.$$eval('.rail .item', (els) => els.map((e) => e.textContent.trim()))
+for (const gone of ['Users', 'Tokens', 'Detectors']) {
+  check(
+    !adminLabels.some((l) => l === gone),
+    `${gone} has no rail row of its own any more -- rail shows ${JSON.stringify(adminLabels)}`,
+  )
+}
+check(
+  adminLabels.some((l) => l.includes('The engine room')),
+  'the engine room is what replaced them',
+)
 
 // --- Run setup… launches the existing wizard page, per #548's interim ---
 
@@ -72,16 +77,21 @@ await page.waitForFunction(
 check(true, 'Run setup… opens the existing setup wizard page')
 
 // --- A real viewer account, created the way an admin actually would ----
+// Through the engine room's people door now, which is where adding an
+// account lives since #490.
 
 const VIEWER_USER = 'live-viewer-548'
 const VIEWER_PASS = 'live-viewer-548-password'
+const PEOPLE = '.door:has-text("Who may look in")'
 
-await openAndCheck('Users', 'Users')
-await page.fill('.create-form input[type="text"]', VIEWER_USER)
-await page.fill('.create-form input[type="password"]', VIEWER_PASS)
-await page.click('.create-form .save')
-await page.waitForSelector(`.row:has-text("${VIEWER_USER}")`)
-check(true, `the viewer account "${VIEWER_USER}" is created from the Users page`)
+await openAndCheck('The engine room', 'The engine room')
+await page.click(`${PEOPLE} .footer-action`)
+await page.waitForSelector(`${PEOPLE} .inline-form`)
+await page.fill(`${PEOPLE} .inline-form input[type="text"]`, VIEWER_USER)
+await page.fill(`${PEOPLE} .inline-form input[type="password"]`, VIEWER_PASS)
+await page.click(`${PEOPLE} .inline-form .save`)
+await page.waitForSelector(`${PEOPLE} .row:has-text("${VIEWER_USER}")`)
+check(true, `the viewer account "${VIEWER_USER}" is created from the engine room's people door`)
 
 // --- Viewer: absent, never disabled -------------------------------------
 
@@ -95,13 +105,17 @@ await viewerPage.click('button[type="submit"]')
 await viewerPage.waitForSelector('.rail .item', { timeout: 15000 })
 
 const viewerLabels = await viewerPage.$$eval('.rail .item', (els) => els.map((e) => e.textContent.trim()))
-for (const absent of ['Users', 'Tokens', 'Entities', 'Run setup…']) {
+for (const absent of ['Users', 'Tokens', 'Detectors', 'Entities', 'Run setup…']) {
   check(
-    !viewerLabels.includes(absent),
+    !viewerLabels.some((l) => l === absent),
     `${absent} is absent from a viewer's rail -- rail shows ${JSON.stringify(viewerLabels)}`,
   )
 }
-check(viewerLabels.includes('Fleet'), 'Fleet -- the one Admin-group row with no admin gate -- is still there')
+check(viewerLabels.includes('Fleet'), 'Fleet -- an Admin-group row with no admin gate -- is still there')
+check(
+  viewerLabels.some((l) => l.includes('The engine room')),
+  'the engine room is on a viewer\'s rail too -- the one Admin row that is deliberately viewer-readable',
+)
 
 // A disabled stub would satisfy "absent" in spirit while breaking the
 // letter of it -- prove nothing in the viewer's rail is disabled either.
@@ -115,16 +129,16 @@ await viewerPage.click('.rail .item:has-text("Fleet")')
 await viewerPage.waitForFunction(() => document.querySelector('.page-header h2')?.textContent.trim() === 'Fleet', null, {
   timeout: 5000,
 })
-check(true, 'Fleet -- the one viewer-reachable Admin-group page -- renders for a viewer')
+check(true, 'Fleet renders for a viewer')
 
 await browser.close()
 
 // --- Clean up: this account should not outlive the scenario -------------
 
-await openAndCheck('Users', 'Users')
+await openAndCheck('The engine room', 'The engine room')
 page.on('dialog', (d) => d.accept())
-await page.click(`.row:has-text("${VIEWER_USER}") .revoke`)
-await page.waitForSelector(`.row:has-text("${VIEWER_USER}")`, { state: 'detached' })
+await page.click(`${PEOPLE} .row:has-text("${VIEWER_USER}") .verb`)
+await page.waitForSelector(`${PEOPLE} .row:has-text("${VIEWER_USER}")`, { state: 'detached' })
 check(true, `the viewer account "${VIEWER_USER}" is removed again`)
 
 check(consoleErrors.length === 0, `no console errors -- got ${JSON.stringify(consoleErrors)}`)

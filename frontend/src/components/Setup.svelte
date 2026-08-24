@@ -236,8 +236,8 @@
 <style>
   .setup {
     /* The same three lines every other view's root carries (Watchlist,
-       Entities, Fleet, Detectors, Exclusions, Suggestions, AuditLog,
-       Dashboard): #app is height: 100vh; overflow: hidden, so a view
+       Entities, Fleet, the engine room, Exclusions, Suggestions,
+       AuditLog, Dashboard): #app is height: 100vh; overflow: hidden, so a view
        that does not declare its own scroll container simply has its
        overflow clipped and unreachable. This one did not, which made
        the guided setup unscrollable at any viewport its steps outgrew

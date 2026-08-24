@@ -16,6 +16,22 @@ rewritten.
 
 ## [Unreleased]
 
+### Added
+
+- **The engine room replaces the settings pages** (#490). Settings are no
+  longer filed by noun: mikroview's own signal path is drawn as a live
+  vertical diagram -- the door (syslog listener), the store, the
+  watchers, the flags desk, the heralds -- with every setting on the
+  station it governs, and two side doors beside it for who may look in
+  and which machines may speak. Opening a station unfolds it in place
+  rather than navigating away, so what feeds it and what it feeds stay
+  on screen. Every number on the page is arrived traffic, not a chart:
+  events/s at the door, events held in the store, flags open on the
+  desk, so a setting is read against the thing it actually governs.
+  It lives under Admin and, for the first time, **a non-admin can read
+  it** -- the header declares READ-ONLY once and every verb is simply
+  absent rather than greyed out.
+
 ### Changed
 
 - **Exclusions is now a tab of Flags, and Suggestions is now a tab of
@@ -28,6 +44,31 @@ rewritten.
   which stays Flags' alone. Access is unchanged either way: Exclusions is
   admin-only inside a Flags page a viewer can otherwise use, and
   Suggestions is admin-only because the whole of Watchlist already is.
+
+### Removed
+
+- **The Users, Tokens and Detectors pages are gone** (#490), absorbed by
+  the engine room: Users and Tokens became its two side doors, and
+  Detectors became the watchers station's bench. Everything they did is
+  still there -- adding and removing accounts, minting and revoking
+  tokens with the same one-time secret banner, running and scoping
+  detectors -- but the rail rows and the `users`, `tokens` and
+  `detectors` routes are removed outright, with no alias and no
+  redirect. The Detect group now holds Flags alone, so on a small screen
+  tapping Detect goes straight to Flags instead of raising a half-sheet.
+
+### Security
+
+- **Three settings reads are now open to any signed-in user** (#490):
+  the token list, the detector definitions, and the setup status, each
+  widened deliberately and recorded as its own row in the route
+  authorization matrix. This is what makes the engine room readable by a
+  non-admin. **The account list is deliberately not among them** and
+  stays admin-only, so the people door is absent for a viewer rather
+  than read-only. No write changed: creating or deleting an account,
+  minting or revoking a token, and every definitions write still refuse
+  a non-admin. The raw value of a token still appears in exactly one
+  place, the response to minting it, and in no GET at all.
 
 ### Added
 

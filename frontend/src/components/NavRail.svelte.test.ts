@@ -229,52 +229,48 @@ describe('NavRail rail-head dot (#549)', () => {
   })
 })
 
-// #548: Users, Tokens, Fleet and Entities are pages under Admin now,
+// #548/#490: Fleet, Entities and the engine room are pages under Admin,
 // reached the same way every other row is (appState.view), not the
-// act()-driven overlay toggles this replaced. The reserved-slot/
-// absent-never-disabled behaviour itself is already covered generally
-// by live-nav-rail.mjs; this is the unit-level proof that the two rows
-// that used to be act() handlers are now ordinary view rows, and that
-// admin-gating for the Admin group's other rows is unchanged.
-describe('NavRail Admin group pages (#548)', () => {
+// act()-driven overlay toggles Users/Tokens/Detectors used to be before
+// #490 absorbed all three into the engine room wholesale (see
+// EngineRoom.svelte). The reserved-slot/absent-never-disabled behaviour
+// itself is already covered generally by live-nav-rail.mjs; this is the
+// unit-level proof that the engine room's own row carries no admin gate
+// (per the design record's viewer-readable clause) while the Admin
+// group's other rows are unchanged.
+describe('NavRail Admin group pages (#548/#490)', () => {
   beforeEach(() => {
     flagsState.list = []
     watchlistState.entries = []
     watchlistState.coverage = {}
   })
 
-  it('renders Users and Tokens as ordinary view rows for an admin', () => {
+  it('renders The engine room as an ordinary view row for an admin', () => {
     authState.state = 'authenticated'
     authState.role = 'admin'
     appState.view = 'live'
     render(NavRail)
 
-    const users = screen.getByRole('button', { name: 'Users' })
-    const tokens = screen.getByRole('button', { name: 'Tokens' })
-    expect(users.getAttribute('aria-current')).toBeNull()
-    expect(tokens.getAttribute('aria-current')).toBeNull()
+    const room = screen.getByRole('button', { name: 'The engine room' })
+    expect(room.getAttribute('aria-current')).toBeNull()
 
-    users.click()
+    room.click()
     flushSync()
-    expect(appState.view).toBe('users')
-    expect(screen.getByRole('button', { name: 'Users' }).getAttribute('aria-current')).toBe('page')
-
-    tokens.click()
-    flushSync()
-    expect(appState.view).toBe('tokens')
-    expect(screen.getByRole('button', { name: 'Tokens' }).getAttribute('aria-current')).toBe('page')
+    expect(appState.view).toBe('engineroom')
+    expect(screen.getByRole('button', { name: 'The engine room' }).getAttribute('aria-current')).toBe('page')
   })
 
-  it('keeps Users, Tokens, Entities and Run setup… absent for a viewer, per #490s absent-never-disabled grammar', () => {
+  it('keeps Entities and Run setup… absent for a viewer, but shows The engine room, per #490s absent-never-disabled grammar', () => {
     authState.state = 'authenticated'
     authState.role = 'user'
     render(NavRail)
 
-    for (const label of ['Users', 'Tokens', 'Entities', 'Run setup…']) {
+    for (const label of ['Entities', 'Run setup…']) {
       expect(screen.queryByRole('button', { name: label })).toBeNull()
     }
-    // Fleet has no admin gate -- it is the one Admin-group row a viewer
-    // reaches today.
+    // Fleet and The engine room have no admin gate -- both reach a
+    // viewer today.
     expect(screen.getByRole('button', { name: 'Fleet' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'The engine room' })).toBeTruthy()
   })
 })
