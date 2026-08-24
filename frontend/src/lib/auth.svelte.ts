@@ -23,12 +23,6 @@ class AuthState {
   state = $state<AuthViewState>("loading");
   username = $state("");
   role = $state<"admin" | "user" | "">("");
-  // Drives UsersOverlay -- a modal toggled from the rail's Admin group, mounted at the
-  // App root.
-  showUsers = $state(false);
-  // Drives TokensOverlay (issue #101) -- same pattern as showUsers
-  // above, toggled from the rail's admin-only Admin group.
-  showTokens = $state(false);
   // Whether the backend has OIDC/SSO configured at all -- gates
   // rendering the "Sign in with SSO" link (see AuthLogin.svelte/
   // AuthSetup.svelte). Independent of state above: SSO can be
