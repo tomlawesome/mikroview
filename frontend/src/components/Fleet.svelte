@@ -10,9 +10,11 @@
   // indicator (see its own doc comment); this one is where you'd actually
   // come to check on a whole fleet.
   import { appState } from '../lib/state.svelte'
+  import { authState } from '../lib/auth.svelte'
   import { flagsState } from '../lib/flags.svelte'
   import { formatRelative, formatHM } from '../lib/format'
   import type { Device } from '../lib/types'
+  import GhostRows from './GhostRows.svelte'
 
   // How far back "recent activity" looks, client-side, from the live
   // event buffer -- a rough per-device rate to complement the lifetime
@@ -60,6 +62,24 @@
   function hasActiveSilenceFlag(deviceId: string): boolean {
     return flagsState.list.some((f) => f.type === 'device_silence' && f.target === deviceId && !f.cleared)
   }
+
+  // Mirrors LiveTable's own emptyState derived (#549): a zero-row table
+  // is either "the app's one loadInitial() call hasn't come back yet" or
+  // "it has, and mikroview has never seen a device" -- the second is
+  // first-run's sharpest client-side signal, since seeing a device is
+  // exactly what running setup produces. See appState.initialLoadDone's
+  // doc comment for why that flag, rather than rows.length or fetchFailed
+  // alone, is what tells the two apart.
+  const emptyState = $derived.by((): { kind: 'ghost' } | { kind: 'text'; text: string } => {
+    if (!appState.initialLoadDone) return { kind: 'ghost' }
+    return {
+      kind: 'text',
+      text:
+        authState.role === 'admin'
+          ? 'No RouterOS devices seen yet — Admin ▸ Run setup… to point one at mikroview.'
+          : 'No RouterOS devices seen yet. Ask an administrator to run setup.',
+    }
+  })
 </script>
 
 <div class="page scrollbar">
@@ -71,7 +91,11 @@
   </p>
 
   {#if rows.length === 0}
-    <div class="empty">No RouterOS devices seen yet.</div>
+    {#if emptyState.kind === 'ghost'}
+      <GhostRows label="Loading devices…" rows={4} />
+    {:else}
+      <div class="empty">{emptyState.text}</div>
+    {/if}
   {:else}
     <div class="table-wrap">
       <table>

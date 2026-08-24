@@ -6,6 +6,7 @@ import { flushSync } from 'svelte'
 import type { ClientEvent } from '../lib/types'
 import { emptyFilters } from '../lib/types'
 import { appState } from '../lib/state.svelte'
+import { authState } from '../lib/auth.svelte'
 import { groupModeState } from '../lib/groupMode.svelte'
 import { MAX_RENDERED_ROWS } from '../lib/constants'
 
@@ -70,6 +71,13 @@ beforeEach(() => {
   // cleanup would otherwise leak a false "fetch failed" empty-state
   // message into whichever test runs next (issue #373).
   appState.fetchFailed = false
+  // Settled by default -- the "still loading" ghost-rows branch (#549)
+  // only matters to the tests that specifically exercise it below, and
+  // leaving this at its module default (false) would have it silently
+  // apply to every other empty-buffer case in this file instead.
+  appState.initialLoadDone = true
+  appState.devices = []
+  authState.role = ''
   // Reset centrally, not at the end of whichever test set it. A test body
   // that fails never reaches its own cleanup line, and the next test then
   // renders in grouped mode and fails for a reason that has nothing to do
@@ -512,5 +520,79 @@ describe('LiveTable distinguishes a failed fetch from a confirmed empty result (
 
     const empty = container.querySelector('.empty')
     expect(empty?.textContent).toContain('No events match the current filters.')
+  })
+})
+
+// #549's chrome Loading state ("shell plus ghost rows -- never a spinner
+// page") and its first-run empty state ("point the operator at Admin ▸
+// Run setup…"). Both hang off the same empty buffer that #373's tests
+// above cover -- these add the two readings #373 predates: "still
+// loading" and "confirmed empty because no device has ever sent
+// anything".
+describe('LiveTable Loading and first-run empty states (#549)', () => {
+  it('shows ghost rows, not text, while the initial fetch has not settled yet', () => {
+    appState.fetchFailed = false
+    appState.events = []
+    appState.initialLoadDone = false
+
+    const { container } = render(LiveTable, {})
+    flushSync()
+
+    expect(container.querySelector('.ghost-rows')).not.toBeNull()
+    expect(container.querySelector('.empty')).toBeNull()
+  })
+
+  it('does not show ghost rows once the fetch has settled, even with an empty result', () => {
+    appState.fetchFailed = false
+    appState.events = []
+    appState.initialLoadDone = true
+
+    const { container } = render(LiveTable, {})
+    flushSync()
+
+    expect(container.querySelector('.ghost-rows')).toBeNull()
+    expect(container.querySelector('.empty')).not.toBeNull()
+  })
+
+  it('points an admin at Admin ▸ Run setup… once settled with no devices ever seen', () => {
+    appState.fetchFailed = false
+    appState.events = []
+    appState.initialLoadDone = true
+    appState.devices = []
+    authState.role = 'admin'
+
+    const { container } = render(LiveTable, {})
+    flushSync()
+
+    expect(container.querySelector('.empty')?.textContent).toMatch(/Admin ▸ Run setup…/)
+  })
+
+  it('tells a viewer to ask an administrator instead, rather than naming a control they cannot reach', () => {
+    appState.fetchFailed = false
+    appState.events = []
+    appState.initialLoadDone = true
+    appState.devices = []
+    authState.role = 'user'
+
+    const { container } = render(LiveTable, {})
+    flushSync()
+
+    const text = container.querySelector('.empty')?.textContent ?? ''
+    expect(text).not.toMatch(/Run setup…/)
+    expect(text.toLowerCase()).toMatch(/administrator/)
+  })
+
+  it('reads as an ordinary quiet buffer, not first run, once at least one device exists', () => {
+    appState.fetchFailed = false
+    appState.events = []
+    appState.initialLoadDone = true
+    appState.devices = [
+      { id: 'r1', name: 'router1', configured: true, status: 'live', lastSeen: null, sourceIp: '10.0.0.1', eventCount: 0 },
+    ] as unknown as (typeof appState)['devices']
+
+    const { container } = render(LiveTable, {})
+    flushSync()
+
+    expect(container.querySelector('.empty')?.textContent).toContain('Waiting for events…')
   })
 })
