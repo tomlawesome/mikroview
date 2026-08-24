@@ -273,15 +273,15 @@ export type FlagType =
   // above.
   | 'known_bad_ip'
 
-// The definition ids the detector-settings page carries hand-written
-// copy for. No longer a closed set of everything the server evaluates:
-// GET /api/definitions lists every shipped definition, including the
-// five that were always-on passes before the engine port gave them an
-// envelope (unexpected_mail_sender, stale_rule, known_bad_ip, netclass,
-// reputation). A definition whose id is not in this union still renders
-// -- from the server's own name and description -- so the page can never
-// silently omit something that is actually evaluating. See
-// Detectors.svelte.
+// The definition ids the engine room's watchers station carries
+// hand-written copy for (lib/detectorCopy.ts). No longer a closed set of
+// everything the server evaluates: GET /api/definitions lists every
+// shipped definition, including the five that were always-on passes
+// before the engine port gave them an envelope (unexpected_mail_sender,
+// stale_rule, known_bad_ip, netclass, reputation). A definition whose id
+// is not in this union still renders -- from the server's own name and
+// description -- so the station can never silently omit something that
+// is actually evaluating. See EngineRoomWatchers.svelte.
 export type DetectorName =
   | 'port_scan'
   | 'activity_spike'

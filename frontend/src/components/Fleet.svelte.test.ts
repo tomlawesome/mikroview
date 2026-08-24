@@ -15,8 +15,8 @@ vi.mock('../lib/api', () => ({}))
 // zero-device table is either "the app's one loadInitial() call hasn't
 // come back yet" (ghost rows) or "it has, and mikroview has genuinely
 // never seen a device" (the first-run pointer). Fleet has no admin gate
-// of its own in the rail (unlike Watchlist/Detectors/etc.), so the
-// viewer-vs-admin wording split matters here too.
+// of its own in the rail (unlike Watchlist/the engine room's watchers
+// station/etc.), so the viewer-vs-admin wording split matters here too.
 describe('Fleet Loading and first-run empty states (#549)', () => {
   beforeEach(() => {
     appState.devices = []

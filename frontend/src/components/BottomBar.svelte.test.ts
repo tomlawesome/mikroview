@@ -139,14 +139,18 @@ describe('BottomBar half-sheet', () => {
   })
 
   it('switching groups while a sheet is open replaces its contents rather than stacking', () => {
+    // Detect is a single-page group since #490 folded Detectors into the
+    // engine room (see lib/navGroups.ts), so it no longer raises a sheet
+    // at all -- Admin (Engine room/Fleet/Entities/Run setup…) is the
+    // stand-in multi-page group here instead.
     render(BottomBar)
     screen.getByRole('button', { name: 'Investigate' }).click()
     flushSync()
-    screen.getByRole('button', { name: 'Detect' }).click()
+    screen.getByRole('button', { name: 'Admin' }).click()
     flushSync()
 
     expect(screen.getAllByRole('dialog').length).toBe(1)
-    expect(screen.getByRole('button', { name: 'Flags' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Fleet' })).toBeTruthy()
     expect(screen.queryByRole('button', { name: 'Metrics' })).toBeNull()
   })
 
