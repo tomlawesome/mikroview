@@ -8,6 +8,16 @@
   --fg-dim: #6b7686;
   --accent: #4d9fff;
 
+  /* The chrome's one alarm colour, from the ratified navigation record
+     (docs/design/screens/navigation/DESIGN.md): the open-flag count badge
+     and the broken ring, and nothing else. Deliberately not --reject,
+     which names a firewall action and is read as one everywhere else --
+     an alarm that shares a token with "this packet was rejected" cannot
+     be restyled without moving verdict colours with it. Text on it is
+     --bg, which flips with the theme and so stays legible against both
+     the bright red here and the darker one below. */
+  --alarm: #ff5470;
+
   --accept: #3ecf7e;
   --accept-bg: rgba(62, 207, 126, 0.12);
   --drop: #f5a623;
@@ -134,6 +144,10 @@
   --fg-dim: #8c8677;
   color-scheme: light;
 
+  /* The light lane's own alarm step, per the record: the dark-mode red is
+     a light tone and loses its urgency on a light page. */
+  --alarm: #d63c5e;
+
   /* Light mode uses its own darker/more saturated base tones here (a
      0.12-alpha wash of the dark-mode --accept reads too washed-out on a
      light page) -- same accent-tinting idea as :root, just starting from
@@ -176,6 +190,8 @@
     --fg-muted: #635e54;
     --fg-dim: #8c8677;
     color-scheme: light;
+
+    --alarm: #d63c5e;
 
     --accept-tinted: color-mix(in srgb, #16a34a 85%, var(--accent) 15%);
     --drop-tinted: color-mix(in srgb, #d97706 85%, var(--accent) 15%);
