@@ -945,7 +945,7 @@ bundler actually emitted into the shipped JavaScript and service worker.
 Build-time-only tooling (Vite, TypeScript, Playwright, Vitest) is
 deliberately absent -- none of it reaches the artefact.
 
-### svelte 5.56.9 — MIT
+### svelte 5.56.10 — MIT
 
 <!-- LICENSE.md -->
 
