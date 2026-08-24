@@ -74,10 +74,16 @@ accepted "for now" and will be revisited (“we'll change it later”).*
   liveness. Docked: the banner alone carries it.
 - **Loading**: shell plus ghost rows — never a spinner page. Errors
   name the failing thing in words and keep the chrome alive.
-- **Viewer (#490 grammar)**: Admin and its pages render for viewers;
-  read-only declared once, in words, in the page header chip
+- **Viewer (#490 grammar)**: the Admin group renders for viewers, and so
+  do the pages in it a viewer may actually read — today Fleet alone.
+  Read-only is declared once, in words, in the page header chip
   ("READ-ONLY — ADMINS EDIT"); edit affordances and admin-only rows
-  (Run setup…) are **absent, never disabled**.
+  (Run setup…) are **absent, never disabled**. Users, Tokens and
+  Entities stay admin-only and the grammar does not reach them: their
+  data is gated server-side for reasons recorded in
+  `internal/api/authz_matrix_test.go` — `GET /api/auth/users` is "the map
+  of whose account is worth attacking", and `GET /api/tokens` "lists
+  issued bearer credentials".
 
 ## Keyboard and accessibility
 
@@ -117,5 +123,12 @@ canvases in rounds 4–5 are mockup presentation, not app tokens.
   restore-from-footer-state instead.
 - **A dot for broken watch state** (round 3 question): replaced by
   the broken ring, owner's design.
+- **Every Admin page readable by viewers** (how the viewer bullet read
+  until 2026-08-24): closed by the owner on #548. Building it meant
+  loosening three admin-gated endpoints so a viewer could enumerate
+  accounts and issued API credentials — a real and permanent security
+  cost, bought for a read-only label on pages a viewer has no reason to
+  open. The rounds wrote the bullet about hiding edit affordances and
+  did not weigh that.
 - Icon glyphs in the mockups are placeholders; the icon set is an
   implementation asset, not part of this record.
