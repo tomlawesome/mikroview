@@ -559,6 +559,13 @@ export interface WatchlistObservedDest {
 export interface WatchlistEntry {
   id: string
   name?: string
+  // Read back from the owning definition's own `enabled`, same as name
+  // above -- it is an envelope property, not part of the entry itself,
+  // but the only one the broken-ring predicate (#546) needs, so it rides
+  // along here rather than in a second id-keyed map. Only enabled
+  // expectations count toward "broken": an operator who switched a watch
+  // off is not promising mikroview can see it.
+  enabled: boolean
   source?: WatchlistIdentity
   destIp?: string
   ports?: number[]

@@ -5,6 +5,7 @@
   import { themeState } from './lib/theme.svelte'
   import { colorwayState } from './lib/colorway.svelte'
   import { flagsState } from './lib/flags.svelte'
+  import { watchlistState } from './lib/watchlist.svelte'
   import { authState } from './lib/auth.svelte'
   import { buildQuery, ApiError } from './lib/api'
   import { filtersFromSearchParams } from './lib/types'
@@ -51,6 +52,17 @@
   }
 
   const STATS_REFRESH_MS = 5000
+  // #546's broken ring rides the coverage answer in GET /api/definitions,
+  // which is computed per request (definitionsCoverage in
+  // internal/api/definitions.go) rather than cached -- not free to poll at
+  // STATS_REFRESH_MS's cadence. What it is actually watching for is a
+  // pushed filter table changing, and docs/routeros-setup.md's documented
+  // push scheduler runs at interval=20m, so the answer this polls for
+  // cannot move faster than that in a standard deployment. 60s keeps the
+  // ring effectively live from the operator's point of view (still ~20x
+  // faster than the fastest the answer can actually change) at a twelfth
+  // of the request rate a shared STATS_REFRESH_MS interval would cost.
+  const WATCHLIST_COVERAGE_REFRESH_MS = 60000
   const FILTER_DEBOUNCE_MS = 300
   // Drives the age-based display cutoff in appState.filteredEvents. Needs
   // its own fast interval, separate from STATS_REFRESH_MS: the shortest
@@ -98,17 +110,35 @@
     appState.loadInitial().catch(handleApiError)
     liveSocket.connect()
     flagsState.refresh().catch(handleApiError)
+    // #546's broken ring needs a live coverage answer even when Watchlist
+    // itself is never opened -- the rail is chrome, not a page, so it
+    // cannot wait on that page's own onMount. Gated to admin because
+    // GET /api/definitions (which the ring's coverage rides on) is
+    // admin-only throughout (internal/api/definitions.go), and the
+    // Watchlist row this feeds is itself admin-only in the rail. The
+    // immediate call here is what makes the ring correct on first paint;
+    // WATCHLIST_COVERAGE_REFRESH_MS above is what keeps it correct after.
+    if (authState.role === 'admin') watchlistState.refresh().catch(handleApiError)
 
     const statsInterval = setInterval(() => {
       appState.refreshDevicesAndStats().catch(handleApiError)
       flagsState.refresh().catch(handleApiError)
     }, STATS_REFRESH_MS)
 
+    // Its own slower interval rather than riding statsInterval -- see
+    // WATCHLIST_COVERAGE_REFRESH_MS's own comment for why the two cadences
+    // are deliberately different rather than an oversight.
+    const watchlistInterval =
+      authState.role === 'admin'
+        ? setInterval(() => watchlistState.refresh().catch(handleApiError), WATCHLIST_COVERAGE_REFRESH_MS)
+        : undefined
+
     const tickInterval = setInterval(() => appState.tick(), TICK_MS)
 
     return () => {
       liveSocket.disconnect()
       clearInterval(statsInterval)
+      clearInterval(watchlistInterval)
       clearInterval(tickInterval)
     }
   })
