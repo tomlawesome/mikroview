@@ -60,13 +60,9 @@ export const navGroups: NavGroup[] = [
         badge: true,
         title: 'Behavioral flags: port scans, activity spikes, critical-port attempts, and volume spikes',
       },
-      {
-        label: 'Detectors',
-        view: 'detectors',
-        admin: true,
-        icon: 'detectors',
-        title: 'Toggle behavioral detectors on/off and restrict their scope',
-      },
+      // Detectors moved wholesale into the engine room's watchers
+      // station (#490) -- see EngineRoomWatchers.svelte. No rail row of
+      // its own any more.
     ],
   },
   {
@@ -84,22 +80,31 @@ export const navGroups: NavGroup[] = [
   },
   {
     name: 'Admin',
-    // Users, Tokens, Fleet and Entities are pages (#548) -- the overlays
-    // that used to carry Users/Tokens retired wholesale. "Run setup…"
-    // stays an action, not a page: interim, per #548's body, it opens the
-    // existing wizard page (view: 'setup') until #487's modal replaces
-    // the target. Users/Tokens/Entities keep `admin: true` -- the backend
-    // still 403s their GET routes for a non-admin, so rendering them for
-    // a viewer would be a page that loads and immediately fails, not a
-    // read-only one.
+    // Fleet and Entities are pages (#548). "Run setup…" stays an action,
+    // not a page: interim, per #548's body, it opens the existing wizard
+    // page (view: 'setup') until #487's modal replaces the target.
+    //
+    // Users and Tokens retired wholesale into the engine room (#490) --
+    // see EngineRoomDoors.svelte -- along with Detectors (see the Detect
+    // group's own comment above). The engine room itself carries no
+    // `admin: true`: it is deliberately viewer-readable (the design
+    // record's authz-matrix clause widens the tokens/definitions/setup-
+    // status GETs it reads to any signed-in user), with per-control
+    // verbs gated inside the page instead. GET /api/auth/users is the
+    // one exception -- the owner overrode the record's original "widen
+    // users too" clause mid-build, so the engine room's own "who may
+    // look in" door stays admin-only *within* an otherwise
+    // viewer-readable page (see EngineRoomDoors.svelte).
+    //
+    // Entities keeps `admin: true` -- the backend still 403s its GET
+    // route for a non-admin, so rendering it for a viewer would be a
+    // page that loads and immediately fails, not a read-only one.
     items: [
-      { label: 'Users', view: 'users', admin: true, icon: 'users', title: 'Add or remove accounts' },
       {
-        label: 'Tokens',
-        view: 'tokens',
-        admin: true,
-        icon: 'tokens',
-        title: 'Create/revoke read-only API bearer tokens for scripted access',
+        label: 'The engine room',
+        view: 'engineroom',
+        icon: 'engineroom',
+        title: "Mikroview's own signal path, live, with every setting on the station it governs",
       },
       {
         label: 'Fleet',

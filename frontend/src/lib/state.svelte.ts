@@ -43,21 +43,28 @@ export type ConnState = 'connecting' | 'open' | 'closed'
 // Flags.svelte) -- it also carries an Exclusions tab (issue #207,
 // merged in by #547) listing every permanently-excluded (detector,
 // target) pair, with its own quiet, outlined count per
-// docs/design/screens/navigation/DESIGN.md's badge rules; 'detectors'
-// is the admin-only per-detector on/off + scope settings tab (see
-// Detectors.svelte); 'entities' is the admin-only persisted host/rule
-// label+tag management tab (see Entities.svelte, issue #107); 'fleet'
-// (issue #98) is the multi-router-fleet health table (see Fleet.svelte)
-// -- every known device, live/stale/never-seen status, last-seen, and
-// event counts in one place, richer than the toolbar's always-on
-// DeviceStatus dot-strip; 'audit' (issue #112) is the admin-only,
-// read-only log of admin-privileged mutations (see AuditLog.svelte);
-// 'users' and 'tokens' (#548) are the admin-only account/API-token
+// docs/design/screens/navigation/DESIGN.md's badge rules; 'entities' is
+// the admin-only persisted host/rule label+tag management tab (see
+// Entities.svelte, issue #107); 'fleet' (issue #98) is the
+// multi-router-fleet health table (see Fleet.svelte) -- every known
+// device, live/stale/never-seen status, last-seen, and event counts in
+// one place, richer than the toolbar's always-on DeviceStatus dot-strip;
+// 'audit' (issue #112) is the admin-only, read-only log of
+// admin-privileged mutations (see AuditLog.svelte); 'engineroom' (#490)
+// is mikroview's own signal path drawn as a live vertical diagram, with
+// every setting on the station it governs (see EngineRoom.svelte) --
+// viewer-readable, unlike every other Admin-group view, per the design
+// record's authz-matrix clause. It absorbed three former admin-only
+// pages wholesale: 'users' and 'tokens' (#548's account/API-token
 // management pages, successors to the UsersOverlay/TokensOverlay
-// modals that retired with it (see Users.svelte/Tokens.svelte). A real
-// (if minimal) view switch -- only one is ever mounted at a time --
-// rather than a modal layered over the live table, which used to leave
-// LiveTable running underneath.
+// modals) and 'detectors' (the per-detector on/off + scope settings
+// tab) -- all three retired with no alias once the engine room's doors
+// and watchers station existed to replace them (see
+// EngineRoomDoors.svelte/EngineRoomWatchers.svelte, which reuse their
+// state modules and API calls unchanged). A real (if minimal) view
+// switch -- only one is ever mounted at a time -- rather than a modal
+// layered over the live table, which used to leave LiveTable running
+// underneath.
 //
 // 'exclusions' and 'suggestions' are deliberately not views any more:
 // #544 dropped their rail rows and #547 removed the routes themselves
@@ -68,12 +75,10 @@ export type View =
   | 'watchlist'
   | 'setup'
   | 'flags'
-  | 'detectors'
   | 'entities'
   | 'fleet'
   | 'audit'
-  | 'users'
-  | 'tokens'
+  | 'engineroom'
 
 // Central reactive state for the live view. The WebSocket tail pushes
 // every new event unfiltered into `events`; `filteredEvents` re-filters
