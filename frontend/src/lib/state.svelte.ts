@@ -117,6 +117,20 @@ class AppState {
   // successful call, whichever of the two runs it.
   fetchFailed = $state(false)
 
+  // True once the app's one loadInitial() call (App.svelte's mount
+  // effect) has settled, success or failure -- never cleared afterward.
+  // #549's "Loading" chrome state (shell plus ghost rows, never a
+  // spinner page) needs to tell "the first fetch just hasn't come back
+  // yet" apart from "it came back and there is genuinely nothing" --
+  // both look like an empty `events`/`devices` array, and only the first
+  // one should render ghost rows. Deliberately not derived from
+  // `fetchFailed` or from `events.length`/`devices.length`: neither
+  // stays false-while-loading, true-once-settled on its own (fetchFailed
+  // is false in both the "still loading" and "loaded, no error" cases;
+  // an empty buffer is equally true before the fetch and after a
+  // confirmed-empty one).
+  initialLoadDone = $state(false)
+
   private matcher = new RuleMatcher()
   private ruleDebounce: ReturnType<typeof setTimeout> | null = null
   private matchedPattern = ''
@@ -451,6 +465,11 @@ class AppState {
       // has; this only adds the on-screen honesty signal alongside that.
       this.fetchFailed = true
       throw err
+    } finally {
+      // Settled either way -- a failure still means the "still loading"
+      // window is over, and the fetchFailed branch above is what tells
+      // that apart from a confirmed-empty result from here on.
+      this.initialLoadDone = true
     }
   }
 

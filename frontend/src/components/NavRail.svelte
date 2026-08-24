@@ -283,6 +283,18 @@
   bind:this={railEl}
   onscroll={() => railEl && (railPref.scrollTop = railEl.scrollTop)}
 >
+  <!-- The rail-head dot (#549): "connection lost" turns the rail itself
+       alarm, not just the banner -- see docs/design/screens/navigation/
+       DESIGN.md's "States of the chrome". Purely visual (aria-hidden): the
+       accessible text for a lost connection is ConnectionBanner's own
+       role="status", which renders whether or not the rail is even
+       mounted (see its own comment), so nothing here needs to repeat it.
+       Docked, this element does not exist at all -- the handle is a
+       one-job control and connection state is explicitly never its job
+       (NavHandle.svelte), so the banner alone carries it there. -->
+  <div class="rail-head" aria-hidden="true">
+    <span class="rail-head-dot" class:alarm={appState.connState === 'closed'}></span>
+  </div>
   <ul class="groups">
     {#each visible as group (group.name)}
       {@const headingId = `rail-group-${group.name.toLowerCase()}`}
@@ -497,6 +509,28 @@
     width: 54px;
     flex: 0 0 54px;
     padding: 10px 7px;
+  }
+
+  /* The rail-head dot: quiet by default (the same tone the rail's own
+     muted rows use), alarm-red only once the connection is actually
+     lost -- turning it on for 'connecting' too would make every ordinary
+     reconnect flicker alarm-red, which is not what the record asks for. */
+  .rail-head {
+    display: flex;
+    justify-content: center;
+    padding: 0 0 8px;
+  }
+
+  .rail-head-dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--fg-dim);
+  }
+
+  .rail-head-dot.alarm {
+    background: var(--alarm);
+    box-shadow: 0 0 6px var(--alarm);
   }
 
   .groups,

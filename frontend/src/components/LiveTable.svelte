@@ -1,6 +1,7 @@
 <script lang="ts">
   // SPDX-License-Identifier: AGPL-3.0-only
   import { appState, applyFilters } from '../lib/state.svelte'
+  import { authState } from '../lib/auth.svelte'
   import { MAX_RENDERED_ROWS } from '../lib/constants'
   import { COLUMNS, columnState } from '../lib/columns.svelte'
   import { groupModeState } from '../lib/groupMode.svelte'
@@ -11,6 +12,7 @@
   import EventRow from './EventRow.svelte'
   import EventCardMobile from './EventCardMobile.svelte'
   import EventDetailSheet from './EventDetailSheet.svelte'
+  import GhostRows from './GhostRows.svelte'
 
   // Both optional -- default to the live view's own state, so the
   // existing `<LiveTable />` call site (App.svelte's 'live' branch)
@@ -173,6 +175,52 @@
   const displayRendered = $derived([...rendered].reverse())
   const displayGroups = $derived([...groups].reverse())
 
+  // What the empty-body area shows when `rendered` has nothing in it --
+  // one derived rather than the inline ternary chain this used to be,
+  // because #549 adds a fourth case (still loading) ahead of the three
+  // #373 already distinguished (failed, confirmed-empty, filtered-empty),
+  // and a fifth reading on top of that (confirmed-empty *because setup
+  // has never run*). Order matters: fetchFailed is checked first because
+  // a failure can happen with a non-empty buffer still on screen (a
+  // refetch that failed leaves the pre-refetch buffer in place -- see
+  // refetchWithFilters' own comment) as well as an empty one, and it
+  // always outranks every other reading once true.
+  const emptyState = $derived.by((): { kind: 'ghost' } | { kind: 'text'; text: string } => {
+    if (emptyMessage) return { kind: 'text', text: emptyMessage }
+    if (appState.fetchFailed) {
+      return { kind: 'text', text: 'Could not load events from the server — this is not a confirmed empty result.' }
+    }
+    // A real, non-empty buffer that the *current filter* happens to
+    // exclude -- nothing to do with loading or first run, checked ahead
+    // of both so a narrow filter on a healthy, populated buffer never
+    // reads as either.
+    if (appState.events.length > 0) return { kind: 'text', text: 'No events match the current filters.' }
+    // The buffer is empty and nothing has failed -- either the app's one
+    // loadInitial() call (App.svelte's mount effect) hasn't come back
+    // yet, or it has and the server genuinely has nothing. Ghost rows,
+    // not a spinner, per the record's Loading state, cover the former;
+    // ghost rows are the wrong answer to the latter (there is nothing
+    // coming to fill them), which is why this only fires while
+    // initialLoadDone is still false.
+    if (!appState.initialLoadDone) return { kind: 'ghost' }
+    // Confirmed empty, and no device has ever sent anything -- the
+    // sharpest first-run signal available client-side, since it is
+    // exactly what running setup (pointing a RouterOS device at
+    // mikroview) produces. #490's grammar already keeps "Run setup…"
+    // absent for viewers, never disabled, so the pointer only names it
+    // for an admin who can actually reach it; a viewer is told who can.
+    if (appState.devices.length === 0) {
+      return {
+        kind: 'text',
+        text:
+          authState.role === 'admin'
+            ? 'No devices have sent anything yet — Admin ▸ Run setup… to point a RouterOS device at mikroview.'
+            : 'No devices have sent anything yet. Ask an administrator to run setup.',
+      }
+    }
+    return { kind: 'text', text: 'Waiting for events…' }
+  })
+
   // Sources carrying an active flag, for the row marker. Recomputed from
   // the flag list rather than per row, so this is one pass rather than
   // one lookup per rendered row.
@@ -262,14 +310,11 @@
         <EventCardMobile {event} deviceName={deviceName(event.deviceId)} onOpen={() => (selectedEvent = event)} />
       {/each}
       {#if rendered.length === 0}
-        <div class="empty">
-          {emptyMessage ??
-            (appState.fetchFailed
-              ? 'Could not load events from the server — this is not a confirmed empty result.'
-              : appState.events.length === 0
-                ? 'Waiting for events…'
-                : 'No events match the current filters.')}
-        </div>
+        {#if emptyState.kind === 'ghost'}
+          <GhostRows label="Loading events…" rows={4} />
+        {:else}
+          <div class="empty">{emptyState.text}</div>
+        {/if}
       {/if}
     </div>
   {:else}
@@ -356,14 +401,11 @@
         {/if}
       </div>
       {#if rendered.length === 0}
-        <div class="empty">
-          {emptyMessage ??
-            (appState.fetchFailed
-              ? 'Could not load events from the server — this is not a confirmed empty result.'
-              : appState.events.length === 0
-                ? 'Waiting for events…'
-                : 'No events match the current filters.')}
-        </div>
+        {#if emptyState.kind === 'ghost'}
+          <GhostRows label="Loading events…" rows={6} />
+        {:else}
+          <div class="empty">{emptyState.text}</div>
+        {/if}
       {/if}
     </div>
   {/if}
