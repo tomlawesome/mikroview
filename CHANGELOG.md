@@ -42,6 +42,16 @@ rewritten.
   a full-bleed sheet with a button that flips between the step and the
   ledger, and the commands come pre-broken so nothing scrolls sideways.
 
+  Those decisions **survive a restart**, in a new small JSON document at
+  `setup.storePath` (default `/var/lib/mikroview/setup.json`, or
+  `MIKROVIEW_SETUP_STORE_PATH`, or a row in Postgres where that is
+  configured) -- the same optional-persistence contract as
+  `audit.storePath`, and included in `-backup`. A restart is most likely
+  at upgrade, which is exactly when someone is looking for the
+  explanation, so an in-memory-only record would have gone missing at
+  the worst moment. What the wizard has *observed* is deliberately not
+  stored: that is re-made from arriving traffic every run.
+
 - **The engine room replaces the settings pages** (#490). Settings are no
   longer filed by noun: mikroview's own signal path is drawn as a live
   vertical diagram -- the door (syslog listener), the store, the
