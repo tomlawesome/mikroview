@@ -105,6 +105,37 @@ Esc/back closes); single-page groups go straight to the page. Dock
 and density are pointer-width affordances — they do not exist on the
 bottom bar.
 
+**The broken ring, on a bar of groups** (#583, ratified 2026-08-24 —
+this section was silent on it until then, because the ring's trigger
+was settled after the small-screen rounds were written). The ring is
+a safety signal, so it is never conditional on screen width:
+
+- **It rings the group, and the sheet says which page.** The group's
+  claim is the rail's claim one level up — *an answer behind this
+  group cannot be trusted*. The precision is deferred, not lost, and
+  deferral is honest only because the next tap resolves it. Hence the
+  general rule, binding on every future broken state, not just this
+  one: **a group may wear the ring only where opening that group
+  shows which page carries it.** A group ring the sheet does not
+  resolve is a dead end, and is not shown.
+- **Geometry tightens to the space.** Around the **icon alone** on
+  the bar — five items across a phone-width bar leave a 2px/3px
+  outline nowhere to go around a stacked icon-and-word — which is the
+  same form the rail uses in icons-only, for the same reason. Inside
+  the half-sheet the rows are full-width list items, so the ring
+  follows the icons+text form, around **icon + word**.
+- **One sentence, narrowing subject.** Group: *Expect — 1 watch can't
+  be checked…*; sheet row: *Watchlist — 1 watch can't be checked…*;
+  page: the entry itself. The operator reads the same sentence three
+  times, each time about a smaller thing. Plural agreement follows
+  the count.
+- **Two alarm-red marks on one bar is allowed.** Flags' filled count
+  and Expect's outline ring are different marks on different groups,
+  and the rail already permits both at once. Not a clash to be fixed
+  later.
+- `unknown` and `out-of-scope` coverage never ring, on any surface —
+  an honesty rule, not a rail detail. The trigger itself is #546's.
+
 ## Themes, for the build's purposes
 
 Light and dark are token swaps on the ADR floor; the light surface
