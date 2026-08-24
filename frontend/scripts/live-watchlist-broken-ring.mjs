@@ -87,10 +87,19 @@ const watchlistItem = page.locator(WATCHLIST_ITEM)
 /**
  * Polls the ring's DOM state and the server's coverage answer together
  * until they agree on whether this entry should be ringing, so
- * App.svelte's 5s poll landing mid-check cannot make a correct ring look
- * wrong. Mirrors live-nav-badge.mjs's settledCount for the same reason.
+ * App.svelte's own coverage poll landing mid-check cannot make a correct
+ * ring look wrong. Mirrors live-nav-badge.mjs's settledCount for the same
+ * reason.
+ *
+ * The default timeout is well above App.svelte's
+ * WATCHLIST_COVERAGE_REFRESH_MS (60s): unlike the flag count, coverage
+ * only ever changes as fast as a pushed filter table can (RouterOS's
+ * documented push scheduler is interval=20m), so the ring rides a much
+ * slower poll than the 5s stats tick -- see that constant's own comment.
+ * A short timeout here would just be testing this scenario's patience,
+ * not a regression.
  */
-async function settledRing(timeoutMs = 15000) {
+async function settledRing(timeoutMs = 75000) {
   const deadline = Date.now() + timeoutMs
   let last = null
   while (Date.now() < deadline) {
