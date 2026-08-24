@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { render, screen } from '@testing-library/svelte'
 import { flushSync } from 'svelte'
 
@@ -17,7 +17,9 @@ vi.mock('../lib/api', () => ({
 import { appState } from '../lib/state.svelte'
 import { flagsState } from '../lib/flags.svelte'
 import { authState } from '../lib/auth.svelte'
-import type { Flag } from '../lib/types'
+import { watchlistState } from '../lib/watchlist.svelte'
+import { navGroups, type NavItem } from '../lib/navGroups'
+import type { Flag, WatchlistEntry } from '../lib/types'
 import BottomBar from './BottomBar.svelte'
 
 function flag(id: string, cleared: boolean): Flag {
@@ -33,8 +35,18 @@ function flag(id: string, cleared: boolean): Flag {
   }
 }
 
+let nextEntryId = 1
+
+function watchlistEntry(overrides: Partial<WatchlistEntry> = {}): WatchlistEntry {
+  const id = `e${nextEntryId++}`
+  return { id, name: `watch ${id}`, enabled: true, createdAt: '2026-01-01T00:00:00Z', ...overrides }
+}
+
 beforeEach(() => {
   flagsState.list = []
+  watchlistState.entries = []
+  watchlistState.coverage = {}
+  nextEntryId = 1
   appState.view = 'live'
   authState.state = 'authenticated'
   authState.role = 'admin'
@@ -207,5 +219,171 @@ describe('BottomBar flag badge', () => {
     flagsState.list = [flag('1', false)]
     render(BottomBar)
     expect(screen.getByRole('button', { name: 'Live' })).toBeTruthy()
+  })
+})
+
+
+// #583's ring on the bar. The group's claim is one level up from the
+// rail's -- "an answer behind this group cannot be trusted" -- and the
+// record allows it only because the next tap resolves it, so the group
+// ring and the page ring are read from the same source here rather than
+// computed twice. Whether the outline is really 2px/3px and hugs the icon
+// rather than the label is a layout fact only a real browser can answer:
+// frontend/scripts/live-nav-bottom-bar.mjs covers that at a small
+// viewport, against a real server's coverage answer.
+describe('BottomBar broken ring on the group', () => {
+  function ringOn(name: string): boolean {
+    const slot = screen.getByRole('button', { name }).querySelector('.icon-slot')
+    return slot?.className.includes('broken') ?? false
+  }
+
+  function breakOne() {
+    const e = watchlistEntry()
+    watchlistState.entries = [e]
+    watchlistState.coverage = { [e.id]: 'no-logging' }
+    return e
+  }
+
+  it('wears no ring when nothing is broken', () => {
+    render(BottomBar)
+    expect(ringOn('Expect')).toBe(false)
+    expect(screen.getByRole('button', { name: 'Expect' }).getAttribute('aria-label')).toBeNull()
+  })
+
+  it('wears no ring for unknown, out-of-scope or covered coverage', () => {
+    const a = watchlistEntry()
+    const b = watchlistEntry()
+    const c = watchlistEntry()
+    watchlistState.entries = [a, b, c]
+    watchlistState.coverage = { [a.id]: 'unknown', [b.id]: 'out-of-scope', [c.id]: 'covered' }
+    render(BottomBar)
+    expect(ringOn('Expect')).toBe(false)
+  })
+
+  it('rings Expect and speaks the reason, singular, for exactly one broken watch', () => {
+    breakOne()
+    render(BottomBar)
+    const name = "Expect — 1 watch can't be checked: the firewall rules it needs aren't being logged"
+    expect(ringOn(name)).toBe(true)
+  })
+
+  it('pluralises the reason for more than one broken watch', () => {
+    const a = watchlistEntry()
+    const b = watchlistEntry()
+    watchlistState.entries = [a, b]
+    watchlistState.coverage = { [a.id]: 'no-logging', [b.id]: 'no-logging' }
+    render(BottomBar)
+    const name = "Expect — 2 watches can't be checked: the firewall rules they need aren't being logged"
+    expect(ringOn(name)).toBe(true)
+  })
+
+  it('excludes a disabled entry from the ring', () => {
+    const e = watchlistEntry({ enabled: false })
+    watchlistState.entries = [e]
+    watchlistState.coverage = { [e.id]: 'no-logging' }
+    render(BottomBar)
+    expect(ringOn('Expect')).toBe(false)
+  })
+
+  it('rings no other group -- the claim names the one group the break is behind', () => {
+    breakOne()
+    render(BottomBar)
+    for (const name of ['Live', 'Investigate', 'Detect', 'Admin']) expect(ringOn(name)).toBe(false)
+  })
+
+  it('clears the ring once coverage recovers -- a live reading, not a record', () => {
+    const e = breakOne()
+    render(BottomBar)
+    expect(screen.getByRole('button', { name: /can't be checked/ })).toBeTruthy()
+
+    watchlistState.coverage = { [e.id]: 'covered' }
+    flushSync()
+
+    expect(screen.getByRole('button', { name: 'Expect' })).toBeTruthy()
+    expect(ringOn('Expect')).toBe(false)
+  })
+
+  // The record's "two alarm-red marks on one bar is allowed": Flags'
+  // filled count on Detect and Expect's outline ring at the same time.
+  // Different marks, different groups -- recorded so it is not later
+  // "fixed" as a clash.
+  it('shows the flag count and the ring at once, on their own groups', () => {
+    breakOne()
+    flagsState.list = [flag('1', false), flag('2', false)]
+    render(BottomBar)
+    expect(screen.getByRole('button', { name: 'Detect — 2 open' })).toBeTruthy()
+    expect(
+      ringOn("Expect — 1 watch can't be checked: the firewall rules it needs aren't being logged"),
+    ).toBe(true)
+  })
+
+  it('shows no ring to a viewer, who has no Watchlist page for it to point at', () => {
+    breakOne()
+    authState.role = 'user'
+    const { container } = render(BottomBar)
+    expect(screen.queryByRole('button', { name: 'Expect' })).toBeNull()
+    expect(container.querySelector('.icon-slot.broken')).toBeNull()
+  })
+})
+
+// The half-sheet's page row. Expect holds one page today, so tapping it
+// navigates straight to Watchlist and no sheet is ever raised for the one
+// group that can ring -- which leaves the sheet's own rendering of the
+// ring unreachable through the shipped table. A second page is added to
+// Expect for this block alone, since what is under test is the sheet's
+// rendering rule ("a group ring the sheet does not resolve is a dead end,
+// and is not shown"), not today's geography.
+describe('BottomBar broken ring in the half-sheet', () => {
+  const expectGroup = navGroups.find((g) => g.name === 'Expect')!
+  const secondPage: NavItem = {
+    label: 'Coverage',
+    view: 'metrics',
+    icon: 'watchlist',
+    title: 'Stand-in second page, so Expect raises a sheet at all',
+  }
+
+  beforeEach(() => {
+    expectGroup.items = [...expectGroup.items, secondPage]
+    const e = watchlistEntry()
+    watchlistState.entries = [e]
+    watchlistState.coverage = { [e.id]: 'no-logging' }
+  })
+
+  afterEach(() => {
+    expectGroup.items = expectGroup.items.filter((i) => i !== secondPage)
+  })
+
+  it('rings the page that carries the break, and names it, inside the sheet', () => {
+    render(BottomBar)
+    screen.getByRole('button', { name: /^Expect/ }).click()
+    flushSync()
+
+    const row = screen.getByRole('button', {
+      name: "Watchlist — 1 watch can't be checked: the firewall rules it needs aren't being logged",
+    })
+    expect(row.className).toContain('broken')
+  })
+
+  it('leaves the group\'s other pages unringed -- the sheet is what resolves the group ring', () => {
+    render(BottomBar)
+    screen.getByRole('button', { name: /^Expect/ }).click()
+    flushSync()
+
+    const other = screen.getByRole('button', { name: 'Coverage' })
+    expect(other.className).not.toContain('broken')
+    expect(other.getAttribute('aria-label')).toBeNull()
+  })
+
+  it('resolves the group ring: the group rings only while some page in the sheet does', () => {
+    render(BottomBar)
+    const group = screen.getByRole('button', { name: /^Expect/ })
+    expect(group.querySelector('.icon-slot')?.className).toContain('broken')
+
+    watchlistState.coverage = {}
+    flushSync()
+
+    screen.getByRole('button', { name: 'Expect' }).click()
+    flushSync()
+    expect(screen.getByRole('button', { name: 'Watchlist' }).className).not.toContain('broken')
   })
 })
