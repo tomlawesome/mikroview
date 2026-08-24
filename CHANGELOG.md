@@ -74,6 +74,20 @@ rewritten.
 
 ### Added
 
+- **The chrome now has its own connection-lost, loading and first-run
+  states** (#549). A dropped connection turns a small dot at the top of
+  the rail alarm-red, and a banner tops the content column and pushes it
+  down rather than covering it — navigation stays fully usable while
+  disconnected, and both clear the moment the connection recovers. Hide
+  the rail down to the edge tab and the banner alone carries the state;
+  the tab was never given a second job. A page whose data hasn't arrived
+  yet — the live view, the fleet table — now shows a few placeholder rows
+  instead of "Waiting…" text or a spinner, and a table that comes back
+  confirmed empty because no RouterOS device has ever sent anything
+  points you at **Admin ▸ Run setup…** (or, if you can't reach that
+  yourself, at whoever can) instead of leaving you guessing whether
+  something is broken.
+
 - **The rail now shows how many flags are waiting for you** (#546). A red
   count sits on the Flags row whenever there are open flags, and
   disappears once there are none left — so an empty count never sits
