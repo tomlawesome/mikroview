@@ -34,9 +34,17 @@ export type ConnState = 'connecting' | 'open' | 'closed'
 // 'live' is the scrolling event table + filter bar; 'metrics' is the
 // dashboard (see Dashboard.svelte); 'watchlist' (issue #243) is the
 // admin-only watched-ports/watched-devices management tab (see
-// Watchlist.svelte, successor to the old Control Ports tab); 'flags' is the
-// behavioral-flags review tab (see Flags.svelte); 'detectors' is the
-// admin-only per-detector on/off + scope settings tab (see
+// Watchlist.svelte, successor to the old Control Ports tab) -- it also
+// carries a Suggestions tab (#243 slice 5, merged in by #547) for
+// watchlist entries suggested from data RouterOS has already pushed,
+// since accepting/hiding a suggestion is a different workflow from
+// managing an entry directly but belongs alongside it rather than on a
+// route of its own; 'flags' is the behavioral-flags review tab (see
+// Flags.svelte) -- it also carries an Exclusions tab (issue #207,
+// merged in by #547) listing every permanently-excluded (detector,
+// target) pair, with its own quiet, outlined count per
+// docs/design/screens/navigation/DESIGN.md's badge rules; 'detectors'
+// is the admin-only per-detector on/off + scope settings tab (see
 // Detectors.svelte); 'entities' is the admin-only persisted host/rule
 // label+tag management tab (see Entities.svelte, issue #107); 'fleet'
 // (issue #98) is the multi-router-fleet health table (see Fleet.svelte)
@@ -44,32 +52,26 @@ export type ConnState = 'connecting' | 'open' | 'closed'
 // event counts in one place, richer than the toolbar's always-on
 // DeviceStatus dot-strip; 'audit' (issue #112) is the admin-only,
 // read-only log of admin-privileged mutations (see AuditLog.svelte);
-// 'exclusions' (issue #207) is the admin-only page listing every
-// permanently-excluded (detector, target) pair, split out of the bottom
-// of Flags.svelte since reviewing exclusions underneath a list of
-// hundreds of active flags was a pain. 'suggestions' (#243 slice 5) is
-// the admin-only review page for watchlist entries suggested from data
-// RouterOS has already pushed (see Suggestions.svelte) -- kept separate
-// from Watchlist.svelte itself since accepting/hiding a suggestion is a
-// different workflow from managing an entry directly. 'users' and
-// 'tokens' (#548) are the admin-only account/API-token management
-// pages, successors to the UsersOverlay/TokensOverlay modals that
-// retired with it (see Users.svelte/Tokens.svelte). A real (if
-// minimal) view switch -- only one is ever mounted at a time -- rather
-// than a modal layered over the live table, which used to leave
+// 'users' and 'tokens' (#548) are the admin-only account/API-token
+// management pages, successors to the UsersOverlay/TokensOverlay
+// modals that retired with it (see Users.svelte/Tokens.svelte). A real
+// (if minimal) view switch -- only one is ever mounted at a time --
+// rather than a modal layered over the live table, which used to leave
 // LiveTable running underneath.
+//
+// 'exclusions' and 'suggestions' are deliberately not views any more:
+// #544 dropped their rail rows and #547 removed the routes themselves
+// wholesale (no aliases) once the tabs above existed to replace them.
 export type View =
   | 'live'
   | 'metrics'
   | 'watchlist'
-  | 'suggestions'
   | 'setup'
   | 'flags'
   | 'detectors'
   | 'entities'
   | 'fleet'
   | 'audit'
-  | 'exclusions'
   | 'users'
   | 'tokens'
 
