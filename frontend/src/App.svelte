@@ -12,7 +12,9 @@
   import Toolbar from './components/Toolbar.svelte'
   import NavRail from './components/NavRail.svelte'
   import NavHandle from './components/NavHandle.svelte'
+  import BottomBar from './components/BottomBar.svelte'
   import { railPref } from './lib/rail.svelte'
+  import { viewportState } from './lib/viewport.svelte'
   import ConnectionBanner from './components/ConnectionBanner.svelte'
   import ConfigProblemBanner from './components/ConfigProblemBanner.svelte'
   import FilterBar from './components/FilterBar.svelte'
@@ -195,12 +197,18 @@
   <!-- First in tab order after the skip-link, per the record: the handle
        is the only way back to a docked rail, so it cannot sit behind the
        page's own controls. -->
-  {#if railPref.isDocked}
+  <!-- Dock and density are pointer-width affordances (DESIGN.md's "Small
+       screens"): at a small viewport the bottom bar is the whole of
+       navigation, and neither NavRail nor NavHandle (which only ever
+       restores a rail state) mounts at all. -->
+  {#if viewportState.isMobile}
+    <BottomBar />
+  {:else if railPref.isDocked}
     <NavHandle onrestore={() => railPref.restore()} />
   {/if}
   <Toolbar />
-  <div class="shell">
-    {#if !railPref.isDocked}
+  <div class="shell" class:with-bottom-bar={viewportState.isMobile}>
+    {#if !viewportState.isMobile && !railPref.isDocked}
       <NavRail />
     {/if}
     <!-- The banner tops the content column and pushes content rather than
@@ -289,6 +297,13 @@
     flex: 1;
     display: flex;
     min-height: 0;
+  }
+
+  /* Reserves room for BottomBar.svelte's fixed-position bar so it never
+     covers the last row of content -- 52px matches .group-btn's
+     min-height there. */
+  .shell.with-bottom-bar {
+    padding-bottom: calc(52px + env(safe-area-inset-bottom));
   }
 
   .content {
