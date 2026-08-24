@@ -178,7 +178,9 @@ var authzMatrix = []routeExpectation{
 		"widened for the viewer-readable settings page (#490): a signed-in non-admin can see issued bearer credentials' metadata, same as an admin -- safe because the raw value never appears here, only in the one-time mint response, and minting/revoking below stay admin-only"},
 	{http.MethodDelete, "/api/tokens/{id}", accessAdmin, "revokes a bearer credential"},
 	{http.MethodGet, "/api/setup/status", accessUser,
-		"widened for the viewer-readable settings page (#490): a signed-in non-admin can see every device, source address and pushed table the setup wizard shows, same as an admin -- there is no corresponding write endpoint to keep closed"},
+		"widened for the viewer-readable settings page (#490): a signed-in non-admin can see every device, source address and pushed table the setup wizard shows, same as an admin. It now also carries the ledger's marks (#487), for the same reason: an empty stream explains its own silence with the forced-past line that accounts for it, and a viewer looking at that stream needs the explanation as much as an admin does. The write side is a separate, admin-only route (POST /api/setup/mark)"},
+	{http.MethodPost, "/api/setup/mark", accessAdmin,
+		"writes to the setup wizard's claim ledger and to the audit log (#487) -- #490 keeps \"Run setup…\" absent for viewers and there is no read-only wizard, so a viewer has neither a way to reach this nor any business recording a decision under their own name"},
 	{http.MethodGet, "/api/audit", accessAdmin,
 		"the admin action trail; also the record an attacker would want to read to see whether they were noticed"},
 }

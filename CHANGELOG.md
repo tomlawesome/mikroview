@@ -18,6 +18,30 @@ rewritten.
 
 ### Added
 
+- **The setup wizard is a modal now, and it is a claim ledger** (#487).
+  Setup opens over whatever you were already looking at instead of
+  taking you to a page, and it auto-opens once on a first admin sign-in
+  with no router sending -- after the shell has painted, so you see the
+  real (empty) app first. Five steps, always five, each ending in
+  exactly one of three states: **done**, with its receipt (what arrived,
+  when, from where); **skipped**, quietly, with the consequence stated
+  rather than a telling-off; or **forced past**, in amber, recorded.
+  Mikroview still never connects to your router, so every check is an
+  observation of what arrived here -- which is why Next on a step that
+  is still waiting does not fail, it explains that nothing has arrived
+  and offers exactly two choices: keep waiting, or go on anyway with the
+  exact record quoted on the button before you press it. That record
+  reaches the audit log (`setup.step_forced`, `setup.step_skipped`) and
+  the setup status every other surface reads, so an empty stream can say
+  which decision accounts for its silence. If the evidence turns up
+  later the step simply goes green; the audit line stays as history.
+  Closing is explicit only -- ✕ or Esc, never a stray click outside --
+  and nothing is lost by closing, because the ledger is rebuilt from
+  what the server has observed every time you open it. **Admin ▸ Run
+  setup…** reopens it at the first step still waiting. On a phone it is
+  a full-bleed sheet with a button that flips between the step and the
+  ledger, and the commands come pre-broken so nothing scrolls sideways.
+
 - **The engine room replaces the settings pages** (#490). Settings are no
   longer filed by noun: mikroview's own signal path is drawn as a live
   vertical diagram -- the door (syslog listener), the store, the
@@ -46,6 +70,11 @@ rewritten.
   Suggestions is admin-only because the whole of Watchlist already is.
 
 ### Removed
+
+- **The setup wizard page is gone** (#487), replaced wholesale by the
+  modal above. The `setup` route is removed outright -- no alias, no
+  redirect, nothing left that answers to it. Setup is reached from
+  **Admin ▸ Run setup…**, or by the modal opening itself on a first run.
 
 - **The Users, Tokens and Detectors pages are gone** (#490), absorbed by
   the engine room: Users and Tokens became its two side doors, and
@@ -82,9 +111,9 @@ rewritten.
 
 - **Users, Tokens, Fleet and Entities are pages under Admin now** (#548),
   reached the same way as every other row in the rail rather than through
-  a menu overlay. **Run setup…** stays an action, not a page: interim,
-  until #487's dedicated modal ships, it opens the existing setup wizard
-  page.
+  a menu overlay. **Run setup…** stays an action, not a page -- since
+  #487 (above) it opens the setup modal, retiring the interim view
+  switch this shipped with.
 
 - **The live view's filter bar can now filter by everything the table
   shows you** (#438). A few gaps, closed:
