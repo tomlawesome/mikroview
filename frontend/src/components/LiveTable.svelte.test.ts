@@ -411,21 +411,21 @@ describe('EventRow token interaction (#439)', () => {
     selectTextIn(addrToken)
     await fireEvent.mouseDown(addrToken)
     await fireEvent.mouseUp(addrToken)
-    expect(appState.filters.ip).toBe('')
+    expect(appState.filters.srcQuery).toBe('')
 
     // A plain click -- no selection left behind -- still filters,
     // unchanged from before this issue.
     clearSelection()
     await fireEvent.mouseDown(addrToken)
     await fireEvent.mouseUp(addrToken)
-    expect(appState.filters.ip).toBe(HOST_IP)
+    expect(appState.filters.srcQuery).toBe(HOST_IP)
   })
 
   it('keeps keyboard activation working for filter cells (Enter), now that they are not <button>s', async () => {
     const { container } = renderLabelledRow()
     const addrToken = container.querySelector('.addr-btn') as HTMLElement
     await fireEvent.keyDown(addrToken, { key: 'Enter' })
-    expect(appState.filters.ip).toBe(HOST_IP)
+    expect(appState.filters.srcQuery).toBe(HOST_IP)
   })
 })
 
