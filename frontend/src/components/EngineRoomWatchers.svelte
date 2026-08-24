@@ -201,6 +201,9 @@
 
   .cbx {
     align-self: center;
+    /* Never a flex item that grows: the checkbox is a fixed mark at the
+       head of the row, and the row's alignment depends on it. */
+    flex: none;
   }
 
   .name {
@@ -225,6 +228,11 @@
   .scope-knob {
     color: var(--fg);
     font-weight: 600;
+    /* border: none first -- app.css resets a button's font but not its
+       border, so setting only the dashed underline left Chromium's
+       default button border boxing in what the record calls the admin's
+       ink: a dashed underline under a value, not a button. */
+    border: none;
     border-bottom: 1px dashed var(--accent);
     background: transparent;
     padding: 0;
@@ -301,8 +309,13 @@
     gap: 6px;
   }
 
-  input,
-  select {
+  /* Scoped to the scope form. As bare element selectors these also hit
+     the bench's run/pause checkbox -- which is an <input> on the same
+     row -- and `flex: 1` made it absorb the row's free space, so every
+     detector name started at a different x depending on how long it
+     was. The bench read as ragged for that reason alone. */
+  .scope-form input,
+  .scope-form select {
     background: var(--bg-elevated);
     border: 1px solid var(--border);
     color: var(--fg);
@@ -311,7 +324,7 @@
     font-size: 12px;
   }
 
-  input {
+  .scope-form input {
     flex: 1;
     min-width: 0;
   }

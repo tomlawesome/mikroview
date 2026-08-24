@@ -416,6 +416,11 @@
   .open-link {
     color: var(--fg);
     font-weight: 650;
+    /* The three other sides explicitly, not just the underline: app.css
+       resets a button's font but not its border, so leaving them out
+       kept Chromium's default button border and drew a grey box around
+       a control that reads as a word inside a sentence. */
+    border: none;
     border-bottom: 1px solid var(--border);
     background: transparent;
     padding: 0;
