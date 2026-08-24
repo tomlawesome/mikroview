@@ -17,67 +17,20 @@
   // free rather than having to override a default-hidden state back to
   // shown.
   import { toastState } from '../lib/toast.svelte'
+  // The secure-context fallback lives in lib/clipboard.ts, shared with
+  // the metrics Table's own copy control (#488) so there is one answer
+  // to "what happens with TLS terminated upstream", not two.
+  import { copyToClipboard } from '../lib/clipboard'
 
   let { value, label }: { value: string; label: string } = $props()
 
-  // navigator.clipboard.writeText requires a secure context (HTTPS or
-  // localhost). mikroview serves TLS by default and needs no
-  // configuration to get it (README.md), but docs/configuration.md's
-  // "Running behind a reverse proxy" section explicitly documents
-  // disabling it (MIKROVIEW_TLS_ENABLED=false) for an operator whose own
-  // reverse proxy terminates TLS instead -- on an isolated management
-  // network that is a supported deployment, not a misconfiguration, and
-  // it leaves the Clipboard API unavailable. legacyCopy below (a hidden
-  // textarea + document.execCommand('copy'), which carries no
-  // secure-context requirement) is what keeps the glyph doing real work
-  // there instead of silently failing every time it's clicked -- the
-  // same "try the good path, fall back rather than go dead" shape
-  // TokensOverlay.svelte's copyValue already uses for its one-time token
-  // banner, just with an actual fallback instead of relying on the value
-  // staying manually selectable (this control lives on text that, after
-  // this issue, *is* selectable, but a control advertised as "click to
-  // copy" that sometimes just does nothing is worse than one that always
-  // works).
   async function copy(e: Event) {
     // Stop this reaching the row -- purely defensive, since this button
     // is always a sibling of the filter target, never nested inside it,
     // so the row's own mousedown/mouseup click-vs-drag handlers are
     // never attached to this element's ancestors either way.
     e.stopPropagation()
-
-    let ok = false
-    if (navigator.clipboard?.writeText) {
-      try {
-        await navigator.clipboard.writeText(value)
-        ok = true
-      } catch {
-        ok = false
-      }
-    }
-    if (!ok) ok = legacyCopy(value)
-
-    toastState.show(ok ? 'Copied' : 'Copy failed')
-  }
-
-  function legacyCopy(text: string): boolean {
-    const ta = document.createElement('textarea')
-    ta.value = text
-    ta.setAttribute('readonly', '')
-    // Off-screen rather than hidden -- a hidden/zero-size element cannot
-    // be selected, which execCommand('copy') needs.
-    ta.style.position = 'fixed'
-    ta.style.top = '-1000px'
-    ta.style.left = '-1000px'
-    document.body.appendChild(ta)
-    ta.select()
-    let ok = false
-    try {
-      ok = document.execCommand('copy')
-    } catch {
-      ok = false
-    }
-    document.body.removeChild(ta)
-    return ok
+    toastState.show((await copyToClipboard(value)) ? 'Copied' : 'Copy failed')
   }
 </script>
 
