@@ -20,6 +20,7 @@ import type {
   ReputationResult,
   RuleUsage,
   Stats,
+  SetupMark,
   SetupStatus,
   Suggestion,
   SuggestionStatus,
@@ -743,4 +744,23 @@ export async function fetchSetupStatus(): Promise<SetupStatus> {
   const res = await fetch('/api/setup/status')
   if (!res.ok) throw new ApiError(`fetchSetupStatus: ${res.status}`, res.status)
   return res.json()
+}
+
+// markSetupStep records that a setup step was skipped or forced past
+// (#487) -- admin-only server-side, matching the modal it is written
+// from.
+//
+// `note` is what had not arrived at the moment of the decision, in the
+// wizard's own words, which is what lets a forced-past line explain a
+// silence somewhere else later. Who did it is deliberately not a
+// parameter: the server takes the actor from the session, so the ledger
+// cannot be signed with somebody else's name.
+export async function markSetupStep(
+  step: number,
+  outcome: 'skipped' | 'forced',
+  note: string,
+): Promise<SetupMark | string> {
+  const res = await postJSON('/api/setup/mark', { step, outcome, note })
+  if (res.ok) return res.json()
+  return (await res.text()) || `markSetupStep: ${res.status}`
 }
