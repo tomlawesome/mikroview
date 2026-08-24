@@ -211,7 +211,13 @@ if (firstRaised.every((r) => r.ok)) {
     (await activeCount(page)) === beforePermanent - 1 && !(await target.isVisible()),
     'the permanent-clear menu item still clears the flag, keyboard-driven',
   )
-  check(await page.isVisible('text=Permanently-excluded'), 'the exclusions pointer appears once an exclusion exists')
+  // #547: the standalone Exclusions page (and its "Permanently-excluded"
+  // pointer here) is gone -- exclusions are now Flags' own Exclusions
+  // tab, carrying a quiet, outlined count instead of a pointer sentence.
+  check(
+    await page.isVisible('[role="tab"]:has-text("Exclusions") .count'),
+    'the Exclusions tab carries a count once an exclusion exists',
+  )
 
   // --- Clear all: click-again confirm ---
 

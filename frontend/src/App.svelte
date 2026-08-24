@@ -21,14 +21,12 @@
   import LiveTable from './components/LiveTable.svelte'
   import Dashboard from './components/Dashboard.svelte'
   import Watchlist from './components/Watchlist.svelte'
-  import Suggestions from './components/Suggestions.svelte'
   import Setup from './components/Setup.svelte'
   import Flags from './components/Flags.svelte'
   import Detectors from './components/Detectors.svelte'
   import Entities from './components/Entities.svelte'
   import Fleet from './components/Fleet.svelte'
   import AuditLog from './components/AuditLog.svelte'
-  import Exclusions from './components/Exclusions.svelte'
   import IpLookupPopover from './components/IpLookupPopover.svelte'
   import PortLookupPopover from './components/PortLookupPopover.svelte'
   import RouterLookupPopover from './components/RouterLookupPopover.svelte'
@@ -223,8 +221,6 @@
       <LiveTable />
     {:else if appState.view === 'watchlist'}
       <Watchlist />
-    {:else if appState.view === 'suggestions'}
-      <Suggestions />
     {:else if appState.view === 'setup'}
       <Setup />
     {:else if appState.view === 'flags'}
@@ -237,8 +233,6 @@
       <Fleet />
     {:else if appState.view === 'audit'}
       <AuditLog />
-    {:else if appState.view === 'exclusions'}
-      <Exclusions />
     {:else if appState.view === 'users'}
       <Users />
     {:else if appState.view === 'tokens'}

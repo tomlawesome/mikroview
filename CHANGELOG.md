@@ -16,6 +16,19 @@ rewritten.
 
 ## [Unreleased]
 
+### Changed
+
+- **Exclusions is now a tab of Flags, and Suggestions is now a tab of
+  Watchlist** (#547), closing the gap #544 opened when their own rail rows
+  disappeared. Both are reached by the house tablist (arrow keys move
+  between tabs) instead of a menu row or a page of their own, and the old
+  `exclusions`/`suggestions` routes are gone -- no alias, no redirect.
+  Exclusions carries a quiet, outlined count of the current permanent
+  exclusions on its tab, distinct from the rail's own red flag count,
+  which stays Flags' alone. Access is unchanged either way: Exclusions is
+  admin-only inside a Flags page a viewer can otherwise use, and
+  Suggestions is admin-only because the whole of Watchlist already is.
+
 ### Added
 
 - **A bottom bar and half-sheets replace the rail at small widths** (#550).
@@ -165,12 +178,6 @@ rewritten.
 - **The hamburger menu is gone** (#544), wholesale, along with its
   overlay. Nothing is aliased or stubbed behind it; see the moves above
   for where each of its contents now lives.
-
-- **Exclusions and Suggestions are temporarily unreachable.** The
-  ratified design makes them tabs of Flags and Watchlist rather than
-  pages of their own, and that merge is #547. Their data is untouched
-  and both return as tabs when it lands. This is a deliberate gap
-  between two development releases, not a removal.
 
 - **The Users and Tokens account/token-management overlays are gone**
   (#548), wholesale, along with the rail's account-actions-as-a-modal
