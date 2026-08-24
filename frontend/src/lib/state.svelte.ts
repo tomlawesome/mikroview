@@ -32,7 +32,7 @@ function stamp(events: FirewallEvent[]): ClientEvent[] {
 export type ConnState = 'connecting' | 'open' | 'closed'
 
 // 'live' is the scrolling event table + filter bar; 'metrics' is the
-// dashboard (see Dashboard.svelte); 'watchlist' (issue #243) is the
+// metrics page (see Metrics.svelte); 'watchlist' (issue #243) is the
 // admin-only watched-ports/watched-devices management tab (see
 // Watchlist.svelte, successor to the old Control Ports tab) -- it also
 // carries a Suggestions tab (#243 slice 5, merged in by #547) for

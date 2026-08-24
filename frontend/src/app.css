@@ -39,7 +39,7 @@
      address translation. Placed in the two widest gaps the existing five
      leave on the hue circle -- violet between --log (sky, ~235) and the
      reds, and teal between --accept (green, ~155) and --log -- and
-     ordered in EventsChart's ACTION_ORDER so neither ends up adjacent to
+     ordered in lib/actions.ts's ACTIONS so neither ends up adjacent to
      its nearest neighbour there (log -> marked -> natted -> unknown).
      Same secondary-encoding mitigation as the rest of this palette: the
      chart carries a persistent text legend and every row carries a text
@@ -51,42 +51,40 @@
   --unknown: #838d9e;
   --unknown-bg: rgba(131, 141, 158, 0.12);
 
-  /* Flag-type chart colors (FlagsChart.svelte) -- fixed and
-     theme-invariant, same convention as --accept/--drop/--reject/--log/
-     --unknown above (those four are reused directly for the first four
-     flag types below; --unknown is reused for device_silence, a
-     deliberate semantic fit for "gone quiet"/no-signal). The 9 new hues
-     were chosen and ordered with the dataviz skill's validator
-     (scripts/validate_palette.js): with 14 total categorical series --
-     well past the ~8 an OKLab-CVD-safe palette can guarantee -- every
-     *adjacent* pair in this declared order clears both the CVD-ΔE and
-     full-color-vision-ΔE floors in light and dark; a handful of
-     non-adjacent pairs among the violet/fuchsia/pink family (rendered
-     together only if several rare detector types fire in the same hour)
-     fall into the 6-8 "legal only with secondary encoding" band -- the
-     mitigation is the same one already applied to the action palette
-     this extends: a persistent legend with text labels, so
-     identity never depends on color alone. */
-  /* Underscored, not hyphenated, to match flags.Type's raw string values
-     (e.g. "port_scan") exactly -- FlagsChart.svelte builds these var
-     names directly off a flag type string (`--flag-${type}`) rather than
-     hyphenating first. */
-  --flag-port_scan: var(--accept);
-  --flag-activity_spike: var(--drop);
-  --flag-critical_port: var(--reject);
-  --flag-global_spike: var(--log);
-  --flag-distributed_brute_force: #6366f1;
-  --flag-outbound_anomaly: #eab308;
-  --flag-internal_recon: #9333ea;
-  --flag-rule_spike: #65a30d;
-  --flag-repeated_drops: #c026d3;
-  --flag-low_slow_scan: #0d9488;
-  --flag-off_hours_activity: #92400e;
-  --flag-device_silence: var(--unknown);
-  --flag-new_device: #db2777;
-  --flag-stale_rule: #0891b2;
-  --flag-unexpected_mail_sender: #2563eb;
-  --flag-known_bad_ip: #b91c1c;
+  /* The metrics record's two chart inks (#488, docs/design/screens/
+     metrics/DESIGN.md): "Identity is the label, colour is meaning. Two
+     chart inks only: traffic blue, refused red (drop . reject -- the
+     fall's grammar). No cycled hues anywhere; every screen survives
+     greyscale."
+
+     They replaced a 16-hue per-flag-type chart palette, which went with
+     the overlay charts that were its only consumer -- past the ~8 series
+     an OKLab-CVD-safe palette can guarantee, and the reason the ratified
+     design stopped encoding identity in hue at all.
+
+     Their own tokens rather than reuses of --drop/--reject: those name
+     one packet's fate and are read as a verdict badge everywhere else,
+     while "refused" here is the pair of them as one meaning. Fixed
+     across colorways for the same reason the action badges are.
+
+     Validated with the dataviz six-checks validator, categorical,
+     --pairs all, against this app's real surfaces rather than the
+     mockups':
+       dark  (#3987e5, #e66767 on --bg #0b0e14): ALL CHECKS PASS --
+              CVD dE 19.2 (protan), normal-vision dE 29.0, both >= 3:1.
+       light (#2a78d6, #e34948 on --bg #dedad2): passes every check
+              except contrast, where the refused ink lands at 2.84:1 on
+              this theme's warm paper (the ratified hex was validated
+              against a cooler #eef1f7). The validator's required relief
+              is "visible labels or a table view", and the ratified
+              design carries both by construction: every series is named
+              in its gutter or column head, and the Table is a peer view
+              rather than a fallback. Left at the ratified value rather
+              than nudged darker, so the shipped ink is the one the
+              owner accepted -- revisit together if the light theme's
+              --bg ever changes. */
+  --chart-traffic: #3987e5;
+  --chart-refused: #e66767;
 
   /* Nudged toward the active colorway's --accent (see the [data-colorway]
      rules below) before being washed to a low-alpha row fill just below
@@ -160,6 +158,8 @@
   /* The light lane's own time step, matching the engine room's round-2
      mockup light theme (docs/design/screens/settings/round-2). */
   --now: #9a6b10;
+  --chart-traffic: #2a78d6;
+  --chart-refused: #e34948;
 
   /* Light mode uses its own darker/more saturated base tones here (a
      0.12-alpha wash of the dark-mode --accept reads too washed-out on a
@@ -206,6 +206,8 @@
 
     --alarm: #d63c5e;
     --now: #9a6b10;
+    --chart-traffic: #2a78d6;
+    --chart-refused: #e34948;
 
     --accept-tinted: color-mix(in srgb, #16a34a 85%, var(--accent) 15%);
     --drop-tinted: color-mix(in srgb, #d97706 85%, var(--accent) 15%);
