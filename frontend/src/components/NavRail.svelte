@@ -11,151 +11,26 @@
   // "broken" means -- see the issue's "Ratified: what puts something in a
   // broken state" comment: Watchlist rings when an *enabled* expectation's
   // coverage is 'no-logging', and nothing else qualifies.
-  import { appState, type View } from '../lib/state.svelte'
+  import { appState } from '../lib/state.svelte'
   import { authState } from '../lib/auth.svelte'
   import { flagsState } from '../lib/flags.svelte'
   import { watchlistState } from '../lib/watchlist.svelte'
   import { railPref, describe, spokenLabel, type RailDensity } from '../lib/rail.svelte'
+  import { visibleGroups, type NavItem } from '../lib/navGroups'
   import AboutOverlay from './AboutOverlay.svelte'
-  import RailIcon, { type IconName } from './RailIcon.svelte'
+  import RailIcon from './RailIcon.svelte'
 
-  type Item = {
-    label: string
-    // Every row is a view the app already renders -- "Run setup…" reads
-    // as an action in the record, but its interim mechanics (#548) are
-    // the same view switch as any page; see the Admin group's comment
-    // below for why.
-    view: View
-    admin?: boolean
-    title: string
-    icon: IconName
-    // The record's "one count on the rail": Flags carries it and nothing
-    // else does. A marker rather than a number so the count stays derived
-    // from the store at render time instead of being copied into this
-    // table, which is built once at module load.
-    badge?: boolean
-    // The broken ring (#546): a marker for the same reason badge is one.
-    // Watchlist is the only row that carries it today -- coverage is an
-    // expectation-only question (see the ratified decision) -- but the
-    // rendering below does not assume that, so a second surface can pick
-    // this up later without touching the row markup.
-    ring?: boolean
-  }
-
-  type Group = { name: string; items: Item[] }
-
-  // Fixed order, per the record. The reserved-slot rule lives here rather
-  // than in the DOM: Map (v0.5.0) and Lookback (unbuilt) are deliberately
-  // absent, not stubbed or disabled.
-  //
-  // Interim, per #544's body: the Live group carries Stream alone until
-  // the fall ships, and Stream is the landing.
-  const groups: Group[] = [
-    {
-      name: 'Live',
-      items: [{ label: 'Stream', view: 'live', icon: 'stream', title: 'The live event stream' }],
-    },
-    {
-      name: 'Investigate',
-      items: [
-        { label: 'Metrics', view: 'metrics', icon: 'metrics', title: 'Event charts and traffic breakdowns' },
-        { label: 'Audit log', view: 'audit', admin: true, icon: 'audit', title: 'Who changed what, and when' },
-      ],
-    },
-    {
-      name: 'Detect',
-      items: [
-        {
-          label: 'Flags',
-          view: 'flags',
-          icon: 'flags',
-          badge: true,
-          title: 'Behavioral flags: port scans, activity spikes, critical-port attempts, and volume spikes',
-        },
-        {
-          label: 'Detectors',
-          view: 'detectors',
-          admin: true,
-          icon: 'detectors',
-          title: 'Toggle behavioral detectors on/off and restrict their scope',
-        },
-      ],
-    },
-    {
-      name: 'Expect',
-      items: [
-        {
-          label: 'Watchlist',
-          view: 'watchlist',
-          admin: true,
-          icon: 'watchlist',
-          ring: true,
-          title: 'Hosts and ports you expect to see',
-        },
-      ],
-    },
-    {
-      name: 'Admin',
-      // Users, Tokens, Fleet and Entities are pages (#548) -- the
-      // overlays that used to carry Users/Tokens retired wholesale.
-      // "Run setup…" stays an action, not a page: interim, per #548's
-      // body, it opens the existing wizard page (view: 'setup') until
-      // #487's modal replaces the target. Users/Tokens/Entities keep
-      // `admin: true` -- the backend still 403s their GET routes for a
-      // non-admin (see internal/api/auth.go, tokens.go, entities.go's
-      // callerIsAdmin checks), so rendering them for a viewer would be a
-      // page that loads and immediately fails, not a read-only one. See
-      // the #548 PR notes for the open question of whether that gate
-      // should loosen so these three can carry the same viewer grammar
-      // Fleet already does.
-      items: [
-        {
-          label: 'Users',
-          view: 'users',
-          admin: true,
-          icon: 'users',
-          title: 'Add or remove accounts',
-        },
-        {
-          label: 'Tokens',
-          view: 'tokens',
-          admin: true,
-          icon: 'tokens',
-          title: 'Create/revoke read-only API bearer tokens for scripted access',
-        },
-        {
-          label: 'Fleet',
-          view: 'fleet',
-          icon: 'fleet',
-          title: 'Every known RouterOS device: live/stale/never-seen status, last-seen, and event counts',
-        },
-        {
-          label: 'Entities',
-          view: 'entities',
-          admin: true,
-          icon: 'entities',
-          title: 'Named hosts, ports and services',
-        },
-        {
-          label: 'Run setup…',
-          view: 'setup',
-          admin: true,
-          icon: 'setup',
-          title: 'Re-run the setup wizard',
-        },
-      ],
-    },
-  ]
+  // The geography itself -- the five groups, their pages, the
+  // reserved-slot rule and the badge/ring markers -- lives in
+  // lib/navGroups.ts, shared with #550's small-screen bottom bar and
+  // half-sheet so the two surfaces cannot drift apart.
+  type Item = NavItem
 
   // #490's grammar: admin-only rows are absent for viewers, never
   // disabled. A group whose every item is admin-only disappears with
   // them rather than rendering an empty heading.
   const isAdmin = $derived(authState.state === 'authenticated' && authState.role === 'admin')
-  const visible = $derived(
-    groups
-      .map((g) => ({ ...g, items: g.items.filter((i) => !i.admin || isAdmin) }))
-      .filter((g) => g.items.length > 0),
-  )
+  const visible = $derived(visibleGroups(isAdmin))
 
   // "Open unexcluded flags" is exactly flagsState.activeCount, with no
   // exclusion filter needed on top: internal/flags.Store keeps the two in
