@@ -18,6 +18,66 @@ rewritten.
 
 ### Changed
 
+- **Exclusions is now a tab of Flags, and Suggestions is now a tab of
+  Watchlist** (#547), closing the gap #544 opened when their own rail rows
+  disappeared. Both are reached by the house tablist (arrow keys move
+  between tabs) instead of a menu row or a page of their own, and the old
+  `exclusions`/`suggestions` routes are gone -- no alias, no redirect.
+  Exclusions carries a quiet, outlined count of the current permanent
+  exclusions on its tab, distinct from the rail's own red flag count,
+  which stays Flags' alone. Access is unchanged either way: Exclusions is
+  admin-only inside a Flags page a viewer can otherwise use, and
+  Suggestions is admin-only because the whole of Watchlist already is.
+
+### Added
+
+- **A bottom bar and half-sheets replace the rail at small widths** (#550).
+  The five groups render as a bar of buttons along the bottom of the
+  screen, flag badge intact; tapping a group with more than one page
+  raises a half-sheet listing them (focus-trapped, closed by Esc or the
+  browser's own Back button), and a single-page group goes straight to
+  its page. Dock and density stay pointer-width affordances — neither
+  renders on the bar in any form.
+
+- **Users, Tokens, Fleet and Entities are pages under Admin now** (#548),
+  reached the same way as every other row in the rail rather than through
+  a menu overlay. **Run setup…** stays an action, not a page: interim,
+  until #487's dedicated modal ships, it opens the existing setup wizard
+  page.
+
+- **The live view's filter bar can now filter by everything the table
+  shows you** (#438). A few gaps, closed:
+
+  - **Chain** has a proper picker now (`Any chain`, the built-in RouterOS
+    chains, plus any custom one your rules use), and clicking a chain in
+    the table shows up in it — before this, clicking a chain cell quietly
+    applied a filter you had no way to see, change or clear.
+  - The single **"IP or CIDR"** box is now two: **Source** and
+    **Destination**, each next to its own internal/external switch. Type
+    a name, a bare address or a CIDR block into either — a name or
+    address fragment matches both the label you see and the underlying
+    address, live, so renaming a device updates what it matches. A small
+    **⇄** button between them swaps everything you've typed, scopes
+    included, for when you filter the wrong side.
+  - **Port** now also takes a service name (`https`, `ssh`, `mikrotik
+    api`...), not just a bare number.
+  - **Rule** now also matches the friendly name you gave a rule, not just
+    its raw label.
+  - The **NAT** translated address and the **interface** in/out pair are
+    click-to-filter now, the same as every other value in the table.
+  - The **country flag** next to an address is click-to-filter too, into
+    a new country picker (one per side). Where MikroView couldn't
+    determine a country, the row still shows and the picker offers an
+    **Unknown** entry to find those rows on purpose, rather than them
+    just being unreachable from the bar.
+
+  Saved filter presets and bookmarked filter links from before this
+  change lose whatever they had in the old IP box — it isn't carried
+  over into the new Source/Destination fields automatically, so double
+  check a preset that used it still does what you expect.
+
+### Changed
+
 - **The "known bad IP" flag now only fires on traffic your firewall let
   through** (#555). It used to fire on every packet from a blocklisted
   address, and since your firewall blocks most of that, the flag mostly
@@ -40,6 +100,47 @@ rewritten.
   blocked traffic, and that evidence is still counted.
 
 ### Added
+
+- **The chrome now has its own connection-lost, loading and first-run
+  states** (#549). A dropped connection turns a small dot at the top of
+  the rail alarm-red, and a banner tops the content column and pushes it
+  down rather than covering it — navigation stays fully usable while
+  disconnected, and both clear the moment the connection recovers. Hide
+  the rail down to the edge tab and the banner alone carries the state;
+  the tab was never given a second job. A page whose data hasn't arrived
+  yet — the live view, the fleet table — now shows a few placeholder rows
+  instead of "Waiting…" text or a spinner, and a table that comes back
+  confirmed empty because no RouterOS device has ever sent anything
+  points you at **Admin ▸ Run setup…** (or, if you can't reach that
+  yourself, at whoever can) instead of leaving you guessing whether
+  something is broken.
+
+- **The rail now shows how many flags are waiting for you** (#546). A red
+  count sits on the Flags row whenever there are open flags, and
+  disappears once there are none left — so an empty count never sits
+  there looking like something to deal with. Flags that you cleared, and
+  ones whose detector and target you excluded permanently, are not
+  counted. Hiding the navigation does not hide the count: it moves to the
+  tab on the left edge of the window, so docking the rail never docks the
+  alarm. Screen readers hear the row as "Flags — 6 open" rather than a
+  word and a loose number.
+
+  Only Flags carries a count of this kind. That is deliberate: a red
+  count that appears in several places at once stops meaning "look here".
+
+- **Watchlist now wears a red outline when it can't do its job** (#546).
+  The ring appears the moment an enabled watch can't be checked — no
+  firewall rule you've pushed logs the traffic it needs — and names why:
+  "Watchlist — 3 watches can't be checked: the firewall rules they need
+  aren't being logged" (singular wording for one). It clears itself the
+  moment you log the missing rule; there is nothing to acknowledge or
+  dismiss. A watch mikroview simply has no evidence about, or one that's
+  out of scope for every rule that does log, never rings — only a
+  definite "this can't work" does. Switching a watch off takes it out of
+  the count too. Like the flag count beside it, hiding the navigation
+  down to icons only tightens the ring around the icon rather than
+  hiding it; unlike the flag count, the ring stays with the page and does
+  not follow the rail to the edge tab when navigation is hidden.
 
 - **The navigation rail can now be narrowed or hidden** (#545). It has
   three states you choose from the two buttons at the bottom of the rail:
@@ -78,11 +179,10 @@ rewritten.
   overlay. Nothing is aliased or stubbed behind it; see the moves above
   for where each of its contents now lives.
 
-- **Exclusions and Suggestions are temporarily unreachable.** The
-  ratified design makes them tabs of Flags and Watchlist rather than
-  pages of their own, and that merge is #547. Their data is untouched
-  and both return as tabs when it lands. This is a deliberate gap
-  between two development releases, not a removal.
+- **The Users and Tokens account/token-management overlays are gone**
+  (#548), wholesale, along with the rail's account-actions-as-a-modal
+  pattern that opened them. Nothing is aliased or stubbed behind them —
+  see Added above for where the same management now lives.
 
 ## [0.3.1] - 2026-08-23
 

@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
+import { parseAddress, parseCidr } from './addressMatch'
 import type {
   ApiToken,
   AuditResult,
@@ -84,9 +85,68 @@ async function deleteJSON(url: string, body?: unknown): Promise<Response> {
   })
 }
 
+// asAddressOrCidr returns v trimmed, if that trimmed form is something
+// store.Query.IP (internal/store/query.go) already understands on its
+// own -- a bare IP or a CIDR block, matched server-side against src OR
+// dst -- or null otherwise (a name, a label fragment, which has no
+// server-side equivalent at all).
+//
+// Returns the normalised (trimmed) string rather than a plain boolean so
+// the value that was validated is necessarily the value that gets sent.
+// A boolean-returning check, with the caller then forwarding the
+// original untrimmed field, was this function's first version -- and it
+// shipped a real bug: a pasted address with trailing whitespace (e.g.
+// " 203.0.113.5 ") passed the check but was sent padded, which fails both
+// parseQuery's net.ParseIP and net.ParseCIDR, dropping matchesFilters to
+// its exact-string-equal fallback -- which no event's address can equal,
+// so the "server-filtered baseline" comes back empty while the
+// client-side matcher (which does trim) leaves the existing rows looking
+// fine. Silently wrong, not visibly broken. Returning the validated
+// string itself removes the class of bug rather than just this instance.
+function asAddressOrCidr(v: string): string | null {
+  const trimmed = v.trim()
+  return parseAddress(trimmed) || parseCidr(trimmed) ? trimmed : null
+}
+
 // Exported so lib/state.svelte.ts can build the same query-param shape for
 // the URL bar (see App.svelte's filter-sync effect) without duplicating
 // the "which filter fields are non-empty" logic.
+//
+// This is also what refetchWithFilters() sends to GET /api/events, and
+// that request is not a nice-to-have: state.svelte.ts's own doc comment
+// calls it the "actually complete" layer, because internal/store/query.go
+// scans the *whole* retained buffer newest-to-oldest and fills its
+// 500-event limit with events that already match the query (see that
+// file's Query loop, matchesFilters called before the `len(matched) >=
+// limit` check) -- not just the 500 most recent overall. Sending nothing
+// for an address filter would silently swap that for "the 500 most recent
+// events, address unfiltered", which can starve out a selective address
+// that only appears further back than 500 events of unrelated traffic.
+//
+// So: whichever of srcQuery/dstQuery parses as a plain IP or CIDR is sent
+// as `ip` too (internal/api/rest.go's parseQuery, unchanged) -- store.Query.IP
+// matches either side, so it is always a *superset* of what the
+// client-side matcher (lib/addressMatch.ts) then narrows to for its own
+// side. Never a false negative, only ever "the server did slightly less
+// narrowing than the one field alone needed". If both boxes hold an
+// address, only one can be forwarded (the store's `ip` param carries a
+// single value) -- srcQuery wins arbitrarily, matching the row's own
+// left-to-right column order; either choice is still a valid superset,
+// since the client re-applies both sides' matchers regardless of what the
+// server already excluded.
+//
+// Everything else this issue added -- srcQuery/dstQuery holding a name or
+// label fragment, srcCountry/dstCountry, and text in the Port box -- has
+// no server-side match at all: parseQuery has no concept of a resolved
+// label, a GeoIP country code, or a port's display name. Those still
+// round-trip through the URL for bookmarking, but the request they
+// produce is genuinely broader (the 500 most recent events, that one
+// field unfiltered) until a future change teaches store.Query/parseQuery
+// about them -- this issue's contract was the bar, not the query engine.
+// refetchWithFilters() re-applies the full client-side filter to
+// whatever comes back regardless, so nothing unfiltered ever reaches the
+// screen; the cost is confined to how deep into the retained buffer a
+// label/country/text-port search can actually reach.
 export function buildQuery(filters: Partial<Filters> & { limit?: number; sinceId?: number }): string {
   const params = new URLSearchParams()
   if (filters.device) params.set('device', filters.device)
@@ -94,10 +154,26 @@ export function buildQuery(filters: Partial<Filters> & { limit?: number; sinceId
   if (filters.protocol) params.set('protocol', filters.protocol)
   if (filters.chain) params.set('chain', filters.chain)
   if (filters.interface) params.set('interface', filters.interface)
-  if (filters.ip) params.set('ip', filters.ip)
-  if (filters.port) params.set('port', filters.port)
+  if (filters.srcQuery) params.set('srcQuery', filters.srcQuery)
+  if (filters.dstQuery) params.set('dstQuery', filters.dstQuery)
+  const srcAddr = filters.srcQuery ? asAddressOrCidr(filters.srcQuery) : null
+  const dstAddr = filters.dstQuery ? asAddressOrCidr(filters.dstQuery) : null
+  if (srcAddr) {
+    params.set('ip', srcAddr)
+  } else if (dstAddr) {
+    params.set('ip', dstAddr)
+  }
+  // Only forwarded when it parses as the plain integer parseQuery expects
+  // (see internal/api/rest.go) -- #438 lets this field hold text (a
+  // service name, an operator label), and the server 400s on anything it
+  // can't strconv.Atoi, which would turn a text port search into a failed
+  // refetch (appState.fetchFailed) instead of the client-side-only match
+  // it should be.
+  if (filters.port && /^\d+$/.test(filters.port)) params.set('port', filters.port)
   if (filters.srcScope) params.set('srcScope', filters.srcScope)
   if (filters.dstScope) params.set('dstScope', filters.dstScope)
+  if (filters.srcCountry) params.set('srcCountry', filters.srcCountry)
+  if (filters.dstCountry) params.set('dstCountry', filters.dstCountry)
   if (filters.rule) params.set('rule', filters.rule)
   if (filters.rule && filters.ruleRegex) params.set('ruleRegex', 'true')
   if (filters.limit) params.set('limit', String(filters.limit))
@@ -468,7 +544,7 @@ export async function fetchWatchlistEntries(): Promise<{
     // the entry carries a copy for rendering, but the server is the one
     // that decides it (an entry created with no name gets a generated
     // one), so it is read back from the definition rather than assumed.
-    entries.push({ ...d.expectation, name: d.name })
+    entries.push({ ...d.expectation, name: d.name, enabled: d.enabled })
     if (d.coverage) coverage[d.id] = d.coverage
   }
   return { entries, coverage }
@@ -502,7 +578,7 @@ export async function deleteWatchlistEntry(id: string): Promise<string | null> {
 // the fallback exists so a shape change surfaces as an entry with no
 // fields rather than as a thrown TypeError inside a Svelte render.
 function definitionEntry(d: Definition): WatchlistEntry {
-  return { ...(d.expectation ?? { id: d.id, createdAt: '' }), name: d.name }
+  return { ...(d.expectation ?? { id: d.id, createdAt: '' }), name: d.name, enabled: d.enabled }
 }
 
 // promoteWatchlistDestinations moves the given destination/port pairs

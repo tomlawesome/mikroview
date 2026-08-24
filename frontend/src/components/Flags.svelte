@@ -10,13 +10,59 @@
   import { formatHM, countryFlag, isPublicIp } from '../lib/format'
   import { flagLayoutState, type FlagColumns } from '../lib/flagLayout.svelte'
   import { viewportState } from '../lib/viewport.svelte'
+  import { exclusionsState } from '../lib/exclusions.svelte'
   import ReputationDetails from './ReputationDetails.svelte'
   import BarList from './BarList.svelte'
   import IpInvestigateButton from './IpInvestigateButton.svelte'
+  import TabList from './TabList.svelte'
+  import Exclusions from './Exclusions.svelte'
   import type { Flag, FlagType } from '../lib/types'
 
   // Same gate the rail uses for the Detectors view.
   const isAdminOrOpen = $derived(authState.state === 'authenticated' && authState.role === 'admin')
+
+  // Exclusions is a tab of Flags (#547, per the ratified navigation
+  // record) -- admin-only because GET/DELETE /api/flags/exclusions both
+  // 403 a non-admin caller (see Exclusions.svelte's own doc comment), so
+  // the tab itself is absent for a viewer rather than present-and-empty.
+  // With no second tab to switch between, a viewer never sees any tab
+  // chrome at all -- just the flags content, as before #547.
+  type TabId = 'flags' | 'exclusions'
+  let activeTab = $state<TabId>('flags')
+  const tabs = $derived<{ id: string; label: string; count?: number }[]>(
+    isAdminOrOpen
+      ? [
+          { id: 'flags', label: 'Flags' },
+          // Quiet, outlined count -- never the rail's alarm-filled one,
+          // which the record reserves for Flags' own open-count alone.
+          // Omitted rather than shown as a permanent "0", same reasoning
+          // as NavRail's own open-count badge: a count that never has
+          // anything to say shouldn't sit on the tab forever.
+          {
+            id: 'exclusions',
+            label: 'Exclusions',
+            count: exclusionsState.list.length > 0 ? exclusionsState.list.length : undefined,
+          },
+        ]
+      : [{ id: 'flags', label: 'Flags' }],
+  )
+
+  function selectTab(id: string) {
+    activeTab = id as TabId
+    // Exclusions.svelte stays mounted (just hidden) once switched away
+    // from, unlike the standalone page it used to be, which remounted
+    // -- and so refetched -- on every navigation to it. Refreshing on
+    // each switch back keeps that same freshness rather than showing
+    // whatever the list looked like the last time this tab was open.
+    if (activeTab === 'exclusions') exclusionsState.refresh()
+  }
+
+  // Fetched here rather than centrally in App.svelte (unlike flagsState,
+  // which every role needs): only an admin ever sees this tab, so only
+  // an admin session should ever ask the admin-only endpoint for it.
+  $effect(() => {
+    if (isAdminOrOpen) exclusionsState.refresh()
+  })
 
   // lib/flags.svelte.ts's clear/clearAll/clearPermanent optimistically
   // update, then roll back and *rethrow* on failure. None of the call
@@ -217,7 +263,7 @@
   }
 
   function filterToSource(sourceIp: string) {
-    appState.setFilter('ip', sourceIp)
+    appState.setFilter('srcQuery', sourceIp)
     appState.view = 'live'
   }
 
@@ -277,7 +323,7 @@
       case 'off_hours_activity':
       case 'unexpected_mail_sender':
       case 'known_bad_ip':
-        appState.setFilter('ip', f.target)
+        appState.setFilter('srcQuery', f.target)
         break
       case 'distributed_brute_force':
         appState.setFilter('port', f.target.replace(/^port /, ''))
@@ -287,7 +333,7 @@
         appState.setFilter('rule', f.target)
         break
       case 'repeated_drops':
-        appState.setFilter('ip', f.target.split(' -> ')[0])
+        appState.setFilter('srcQuery', f.target.split(' -> ')[0])
         break
       case 'device_silence':
         appState.setFilter('device', f.target)
@@ -312,12 +358,20 @@
   // flag's exact (Type, Target) going forward (see internal/flags.
   // Store.Exclude's doc comment for why this is a deliberate permanent
   // suppression, not a timed snooze). Reviewing/undoing an exclusion
-  // made by mistake is the admin-only "Manage exclusions" panel below,
-  // not a confirmation dialog here.
+  // made by mistake is the admin-only Exclusions tab, not a confirmation
+  // dialog here.
   async function clearPermanent(id: string) {
     error = null
     try {
       await flagsState.clearPermanent(id)
+      // This is what creates the exclusion the tab's own count and list
+      // are reading -- before #547, that tab was a separate view that
+      // remounted (and so refetched) every time you navigated to it.
+      // Mounted-but-hidden doesn't get that for free, so it is refreshed
+      // explicitly on the one action that changes it. selectTab below
+      // covers the rest (switching to the tab, or a change made
+      // elsewhere in the meantime).
+      exclusionsState.refresh()
     } catch (err) {
       reportFailure('Could not permanently clear this flag', err)
     }
@@ -334,7 +388,18 @@
   }
 </script>
 
-<div class="flags scrollbar">
+<div class="flags-page">
+  {#if tabs.length > 1}
+    <TabList {tabs} selected={activeTab} onselect={selectTab} label="Flags views" />
+  {/if}
+  <div
+    class="flags scrollbar"
+    role="tabpanel"
+    id="panel-flags"
+    aria-labelledby="tab-flags"
+    tabindex="0"
+    hidden={activeTab !== 'flags'}
+  >
   {#if error}
     <p class="mutation-error" role="alert">{error}</p>
   {/if}
@@ -583,21 +648,41 @@
     {/if}
   </section>
 
+  </div>
+
   {#if isAdminOrOpen}
-    <!-- Moved to its own page (issue #207): reaching and reviewing
-         exclusions underneath a potentially large active-flags list was
-         a pain. Left as a pointer here rather than removed outright, so
-         the path stays discoverable from where the permanent-clear
-         action itself lives. -->
-    <p class="exclusions-pointer">
-      Permanently-excluded (detector, target) pairs are reviewed on the
-      <button class="link" onclick={() => (appState.view = 'exclusions')}>Exclusions</button>
-      page (also in the menu).
-    </p>
+    <!-- The Exclusions tab (#547): permanently-excluded (detector,
+         target) pairs, reviewed and undone here rather than from a
+         pointer to a separate page -- see Exclusions.svelte's own doc
+         comment for why this is admin-only. -->
+    <div
+      class="exclusions-panel"
+      role="tabpanel"
+      id="panel-exclusions"
+      aria-labelledby="tab-exclusions"
+      tabindex="0"
+      hidden={activeTab !== 'exclusions'}
+    >
+      <Exclusions />
+    </div>
   {/if}
 </div>
 
 <style>
+  .flags-page {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .exclusions-panel {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+  }
+
   .flags {
     flex: 1;
     min-height: 0;
@@ -1060,19 +1145,4 @@
     cursor: default;
   }
 
-  .exclusions-pointer {
-    margin: 0;
-    font-size: 12px;
-    color: var(--fg-muted);
-  }
-
-  .link {
-    background: none;
-    border: none;
-    padding: 0;
-    font: inherit;
-    color: var(--accent);
-    text-decoration: underline;
-    cursor: pointer;
-  }
 </style>
