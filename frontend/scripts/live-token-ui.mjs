@@ -100,12 +100,31 @@ check(pushed.status === 200, `the UI-minted ingest token pushes a filter-rule pa
 await page.fill('.create-form input[type="text"]', 'ui-readonly')
 await page.selectOption('.kind-select', 'api')
 await page.click('.create-form .save')
-await page.waitForSelector('.created-value')
-const roToken = (await page.textContent('.created-value'))?.trim() ?? ''
+
+// Both waits below look redundant and are not. The copy-once banner is
+// already on screen from the ingest token above, so waiting for
+// `.created-value` returns instantly and proves nothing -- it has to be
+// the *text* that is waited on, or this reads the ingest token back and
+// the /api/events check gets the 404 an ingest token is meant to get.
+// page.isVisible() has the same shape of problem: it answers
+// immediately rather than waiting, and the new row lands a few tens of
+// milliseconds after the click. Both passed only by luck until
+// live-suggestions.mjs started running ahead of this scenario (#547)
+// and put one more token in the list to fetch and render.
+const roRow = page.locator('.row:has-text("ui-readonly") .kind-badge:has-text("read-only")')
 check(
-  await page.isVisible('.row:has-text("ui-readonly") .kind-badge:has-text("read-only")'),
+  await roRow.waitFor({ timeout: 15000 }).then(() => true, () => false),
   'a default-kind token is labelled read-only in the list',
 )
+await page
+  .waitForFunction(
+    (previous) => document.querySelector('.created-value')?.textContent?.trim() !== previous,
+    token,
+    { timeout: 15000 },
+  )
+  .catch(() => {})
+const roToken = (await page.textContent('.created-value'))?.trim() ?? ''
+check(roToken !== token, 'the banner shows the new read-only token, not the ingest one above')
 const events = await fetch(`${URL_BASE}/api/events`, {
   headers: { Authorization: `Bearer ${roToken}` },
 })
