@@ -16,8 +16,18 @@ const URL_BASE = process.env.MV_URL
 
 const { page, consoleErrors } = await session()
 
+// #548: Tokens is a page now, not a modal -- TokensOverlay retired
+// wholesale. Waiting on the page header (rather than reusing
+// `.create-form`, which existed under both names) is what actually
+// proves the navigation landed on the new page rather than merely that
+// *some* form rendered somewhere.
 await page.click('.rail .item:has-text("Tokens")')
-await page.waitForSelector('.modal[aria-label="API tokens"]')
+await page.waitForSelector('.page-header h2')
+check(
+  (await page.textContent('.page-header h2'))?.trim() === 'Tokens',
+  'the rail\'s Tokens row opens the Tokens page',
+)
+check((await page.$$('.modal')).length === 0, 'no modal renders -- the overlay is gone, this is a page')
 
 // --- Ingest token, entirely through the dialog --------------------------
 await page.fill('.create-form input[type="text"]', 'ui-ingest')

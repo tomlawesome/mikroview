@@ -51,7 +51,10 @@ export type ConnState = 'connecting' | 'open' | 'closed'
 // the admin-only review page for watchlist entries suggested from data
 // RouterOS has already pushed (see Suggestions.svelte) -- kept separate
 // from Watchlist.svelte itself since accepting/hiding a suggestion is a
-// different workflow from managing an entry directly. A real (if
+// different workflow from managing an entry directly. 'users' and
+// 'tokens' (#548) are the admin-only account/API-token management
+// pages, successors to the UsersOverlay/TokensOverlay modals that
+// retired with it (see Users.svelte/Tokens.svelte). A real (if
 // minimal) view switch -- only one is ever mounted at a time -- rather
 // than a modal layered over the live table, which used to leave
 // LiveTable running underneath.
@@ -67,6 +70,8 @@ export type View =
   | 'fleet'
   | 'audit'
   | 'exclusions'
+  | 'users'
+  | 'tokens'
 
 // Central reactive state for the live view. The WebSocket tail pushes
 // every new event unfiltered into `events`; `filteredEvents` re-filters
