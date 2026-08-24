@@ -228,3 +228,53 @@ describe('NavRail rail-head dot (#549)', () => {
     expect(container.querySelector('.rail-head')?.getAttribute('aria-hidden')).toBe('true')
   })
 })
+
+// #548: Users, Tokens, Fleet and Entities are pages under Admin now,
+// reached the same way every other row is (appState.view), not the
+// act()-driven overlay toggles this replaced. The reserved-slot/
+// absent-never-disabled behaviour itself is already covered generally
+// by live-nav-rail.mjs; this is the unit-level proof that the two rows
+// that used to be act() handlers are now ordinary view rows, and that
+// admin-gating for the Admin group's other rows is unchanged.
+describe('NavRail Admin group pages (#548)', () => {
+  beforeEach(() => {
+    flagsState.list = []
+    watchlistState.entries = []
+    watchlistState.coverage = {}
+  })
+
+  it('renders Users and Tokens as ordinary view rows for an admin', () => {
+    authState.state = 'authenticated'
+    authState.role = 'admin'
+    appState.view = 'live'
+    render(NavRail)
+
+    const users = screen.getByRole('button', { name: 'Users' })
+    const tokens = screen.getByRole('button', { name: 'Tokens' })
+    expect(users.getAttribute('aria-current')).toBeNull()
+    expect(tokens.getAttribute('aria-current')).toBeNull()
+
+    users.click()
+    flushSync()
+    expect(appState.view).toBe('users')
+    expect(screen.getByRole('button', { name: 'Users' }).getAttribute('aria-current')).toBe('page')
+
+    tokens.click()
+    flushSync()
+    expect(appState.view).toBe('tokens')
+    expect(screen.getByRole('button', { name: 'Tokens' }).getAttribute('aria-current')).toBe('page')
+  })
+
+  it('keeps Users, Tokens, Entities and Run setup… absent for a viewer, per #490s absent-never-disabled grammar', () => {
+    authState.state = 'authenticated'
+    authState.role = 'user'
+    render(NavRail)
+
+    for (const label of ['Users', 'Tokens', 'Entities', 'Run setup…']) {
+      expect(screen.queryByRole('button', { name: label })).toBeNull()
+    }
+    // Fleet has no admin gate -- it is the one Admin-group row a viewer
+    // reaches today.
+    expect(screen.getByRole('button', { name: 'Fleet' })).toBeTruthy()
+  })
+})
