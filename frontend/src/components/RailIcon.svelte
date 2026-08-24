@@ -21,10 +21,8 @@
     | 'metrics'
     | 'audit'
     | 'flags'
-    | 'detectors'
     | 'watchlist'
-    | 'users'
-    | 'tokens'
+    | 'engineroom'
     | 'fleet'
     | 'entities'
     | 'setup'
@@ -61,20 +59,17 @@
   {:else if name === 'flags'}
     <path d="M4 14.5V2" />
     <path d="M4 2.5h7.75l-1.75 2.75 1.75 2.75H4" />
-  {:else if name === 'detectors'}
-    <circle cx="8" cy="8" r="1.4" fill="currentColor" stroke="none" />
-    <path d="M5.2 10.8a4 4 0 0 1 0-5.6M10.8 5.2a4 4 0 0 1 0 5.6" />
-    <path d="M3.1 12.9a7 7 0 0 1 0-9.8M12.9 3.1a7 7 0 0 1 0 9.8" />
   {:else if name === 'watchlist'}
     <path d="M1.5 8S4 3.5 8 3.5 14.5 8 14.5 8 12 12.5 8 12.5 1.5 8 1.5 8z" />
     <circle cx="8" cy="8" r="1.75" />
-  {:else if name === 'users'}
-    <circle cx="6" cy="5.5" r="2.5" />
-    <path d="M1.5 14c0-2.5 2-4.5 4.5-4.5s4.5 2 4.5 4.5" />
-    <path d="M11 3.6a2.4 2.4 0 0 1 0 3.8M12.4 9.8A4.6 4.6 0 0 1 14.5 14" />
-  {:else if name === 'tokens'}
-    <circle cx="5" cy="8" r="3" />
-    <path d="M8 8h6.5M12.6 8v2.4M10.6 8v1.8" />
+  {:else if name === 'engineroom'}
+    <!-- A gear: the engine room's own glyph (#490) -- distinct from
+         'setup' (the wrench-ish "Run setup…" action) so the two Admin
+         rows never read as the same row twice. -->
+    <circle cx="8" cy="8" r="2.25" />
+    <path
+      d="M8 2.25v1.7M8 12.05v1.7M13.75 8h-1.7M3.95 8h-1.7M12.16 3.84l-1.2 1.2M5.04 10.96l-1.2 1.2M12.16 12.16l-1.2-1.2M5.04 5.04l-1.2-1.2"
+    />
   {:else if name === 'fleet'}
     <rect x="2" y="3" width="12" height="4" rx="1.2" />
     <rect x="2" y="9" width="12" height="4" rx="1.2" />

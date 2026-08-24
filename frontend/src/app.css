@@ -18,6 +18,15 @@
      the bright red here and the darker one below. */
   --alarm: #ff5470;
 
+  /* The engine room's one time colour (#490, docs/design/screens/settings/
+     DESIGN.md's "colour is meaning" clause): the seen/spoke ticks and the
+     mint banner's now-or-never moment. Deliberately its own token rather
+     than reusing --drop -- that name is read as the firewall "drop"
+     verdict everywhere else in the app (see --alarm's own comment above
+     for the same reasoning applied to --reject), and a time colour has
+     nothing to do with a packet's fate. */
+  --now: #e8b05a;
+
   --accept: #3ecf7e;
   --accept-bg: rgba(62, 207, 126, 0.12);
   --drop: #f5a623;
@@ -148,6 +157,10 @@
      a light tone and loses its urgency on a light page. */
   --alarm: #d63c5e;
 
+  /* The light lane's own time step, matching the engine room's round-2
+     mockup light theme (docs/design/screens/settings/round-2). */
+  --now: #9a6b10;
+
   /* Light mode uses its own darker/more saturated base tones here (a
      0.12-alpha wash of the dark-mode --accept reads too washed-out on a
      light page) -- same accent-tinting idea as :root, just starting from
@@ -192,6 +205,7 @@
     color-scheme: light;
 
     --alarm: #d63c5e;
+    --now: #9a6b10;
 
     --accept-tinted: color-mix(in srgb, #16a34a 85%, var(--accent) 15%);
     --drop-tinted: color-mix(in srgb, #d97706 85%, var(--accent) 15%);

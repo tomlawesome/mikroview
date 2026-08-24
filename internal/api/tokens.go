@@ -107,13 +107,11 @@ func (s *Server) handleTokensCreate(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleTokensList returns every token's metadata -- name/created/last-
-// used, never the hash or raw value -- admin-only.
+// used, never the hash or raw value -- open to any signed-in user (#490):
+// the raw value only ever appears in handleTokensCreate's one-time
+// response, so widening this GET cannot hand out a secret. Minting and
+// revoking a token stay admin-only below.
 func (s *Server) handleTokensList(w http.ResponseWriter, r *http.Request) {
-	if !callerIsAdmin(r) {
-		http.Error(w, "admin role required", http.StatusForbidden)
-		return
-	}
-
 	tokens := s.Tokens.List()
 	out := make([]tokenResponse, 0, len(tokens))
 	for _, t := range tokens {
