@@ -13,10 +13,15 @@
   //
   // The open-flag count badge arrived with #546: docking the navigation
   // never docks the alarm, so the one count on the rail follows it here.
-  // Still not built: the pulse is specified as "the receiving dot's
-  // pulse" -- the rail-head dot itself is #549's chrome work and does not
-  // exist yet, so the hub pulses off the same signal the dot will use (a
-  // live stream) rather than inventing a second source of truth.
+  // The pulse is specified as "the receiving dot's pulse" -- #549 built
+  // that dot (NavRail.svelte's .rail-head-dot), but it is not mounted
+  // while docked, so the hub here pulses off the same underlying signal
+  // (connState === 'open') rather than reaching for a dot that is not on
+  // screen. Deliberately still not connection loss, though: the record is
+  // explicit that connection state is never the handle's job (see the
+  // label below), so 'closed' does not turn this alarm-red the way it
+  // turns the dot -- only ConnectionBanner (ConnectionBanner.svelte,
+  // mounted regardless of dock state) carries that here.
   import { appState } from '../lib/state.svelte'
   import { flagsState } from '../lib/flags.svelte'
   import { railPref } from '../lib/rail.svelte'
