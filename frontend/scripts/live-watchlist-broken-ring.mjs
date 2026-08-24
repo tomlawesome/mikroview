@@ -9,14 +9,26 @@
 //   happens to hold would keep passing even if that wiring silently broke.
 // - The ring is chrome, not page content -- it has to appear and clear
 //   without the operator ever opening Watchlist, driven by App.svelte's
-//   own poll (see its #546 comment). This scenario never navigates off
-//   Stream, so nothing short of the real poll landing can make it pass.
+//   own poll (see its #546 comment). Both the appearing and the clearing
+//   are checked from Stream, so nothing short of the real poll landing
+//   can make either pass. (The #583 leg below does open Watchlist once,
+//   deliberately and only after the ring has already appeared, to prove
+//   the group ring's claim is resolved by the next tap.)
 // - "hiding the label tightens the ring to the icon" is a layout claim:
 //   the outline is drawn outside the item's border box via
 //   outline-offset, inside a rail whose own overflow-y:auto forces
 //   overflow-x to clip too -- the same trap that clipped #545's tooltip
 //   and #546's own count badge. Only a real layout engine can say whether
 //   it survives.
+// - #583 put the same ring on the small-screen bottom bar, on the
+//   *group*. The breakpoint is a live matchMedia listener jsdom does not
+//   implement, so no unit test in this repo can tell a phone viewport
+//   from a desktop one; and "the ring tightens to the icon alone rather
+//   than icon + word" is a layout fact about a flex column, not a prop.
+//   Driving that leg here rather than in live-nav-bottom-bar.mjs is
+//   forced by ordering: it needs a pushed filter table to make coverage
+//   'no-logging', and live-router-lookup.mjs -- which sorts before every
+//   live-nav-* scenario -- asserts that no table has been pushed yet.
 //
 // Named and sorted alongside the other watchlist scenarios, not the nav
 // ones, and deliberately: live-router-lookup.mjs (which sorts earlier)
@@ -194,6 +206,118 @@ check(
 
 await page.click('.state-btn[aria-label^="Show icons"]')
 
+// --- Small screens (#583): the same alarm, on the bar of groups ----------
+// A phone-only operator is not a lesser operator: the ring's guarantee
+// cannot be conditional on screen width. The bar shows groups rather than
+// pages, so Expect wears it and makes the weaker claim -- "an answer
+// behind this group cannot be trusted" -- which the record allows only
+// because the next tap resolves it. That resolution is checked at the end
+// of this leg.
+//
+// The record's second ring, on the page row inside the half-sheet, cannot
+// be driven here and it is not an omission: Expect holds Watchlist alone,
+// so tapping it goes straight to the page and no sheet is ever raised for
+// the one group that can ring today. BottomBar.svelte.test.ts covers that
+// row against a stand-in second page.
+await page.setViewportSize({ width: 390, height: 844 })
+const bar = page.locator('.bottom-bar')
+await bar.waitFor({ timeout: 5000 })
+check((await page.$$('.rail')).length === 0, 'at 390px the rail is gone and the bar is the whole of navigation')
+
+const expectGroup = page.locator('.bottom-bar .group-btn:has(.label:text-is("Expect"))')
+const ringedIcon = expectGroup.locator('.icon-slot.broken')
+check(
+  await ringedIcon.waitFor({ timeout: 5000 }).then(
+    () => true,
+    () => false,
+  ),
+  'the Expect group wears the ring on the bar, without the operator opening anything',
+)
+
+const barRing = await ringedIcon.evaluate((el) => {
+  const s = getComputedStyle(el)
+  return { style: s.outlineStyle, width: s.outlineWidth, offset: s.outlineOffset }
+})
+check(
+  barRing.style === 'solid' && barRing.width === '2px' && barRing.offset === '3px',
+  `the bar's ring is the same 2px outline at 3px offset as the rail's -- got ${JSON.stringify(barRing)}`,
+)
+
+// Tightened to the icon, per the record: five groups across a phone-width
+// bar leave a 2px outline at 3px offset nowhere to go around a stacked
+// icon-and-word. The outline extends 5px (2px width + 3px offset) past the
+// icon's own box, so this also checks it does not spill into the
+// neighbouring group's button.
+const boxes = await expectGroup.evaluate((el) => {
+  // Plain numbers rather than the DOMRects themselves: a DOMRect's
+  // properties live on its prototype, so one handed back across the
+  // evaluate boundary arrives as an empty object.
+  const plain = (r) => ({ left: r.left, right: r.right, width: r.width })
+  return {
+    btn: plain(el.getBoundingClientRect()),
+    icon: plain(el.querySelector('.icon-slot').getBoundingClientRect()),
+    label: plain(el.querySelector('.label').getBoundingClientRect()),
+  }
+})
+const RING_EXTENT = 5
+check(
+  boxes.icon.width + 2 * RING_EXTENT < boxes.btn.width,
+  `the ring goes round the icon alone, not icon + label -- icon ${Math.round(boxes.icon.width)}px inside a ${Math.round(boxes.btn.width)}px button`,
+)
+check(
+  boxes.icon.width < boxes.label.width,
+  `the label is wider than what the ring wraps, so the ring is demonstrably not around both -- icon ${Math.round(boxes.icon.width)}px vs label ${Math.round(boxes.label.width)}px`,
+)
+check(
+  boxes.icon.left - RING_EXTENT >= boxes.btn.left && boxes.icon.right + RING_EXTENT <= boxes.btn.right,
+  'the ring stays inside its own group button rather than crowding its neighbours',
+)
+
+const spokenGroup = await expectGroup.getAttribute('aria-label')
+check(
+  spokenGroup === "Expect — 1 watch can't be checked: the firewall rules it needs aren't being logged",
+  `the group speaks the same sentence about a bigger subject -- got ${JSON.stringify(spokenGroup)}`,
+)
+check(
+  !/coverage|no-logging/i.test(spokenGroup ?? ''),
+  'and it leaks no more internal vocabulary on the bar than it does on the rail',
+)
+
+const ringedGroups = await page.$$eval('.bottom-bar .group-btn:has(.icon-slot.broken) .label', (els) =>
+  els.map((e) => e.textContent.trim()),
+)
+check(
+  JSON.stringify(ringedGroups) === JSON.stringify(['Expect']),
+  `only the group the break is behind rings -- got ${JSON.stringify(ringedGroups)}`,
+)
+
+// The deferral is honest only because the next tap resolves it. Expect
+// holds one page today, so the tap lands straight on Watchlist -- the
+// third and narrowest reading of the same sentence, the entry itself.
+await expectGroup.click()
+check(
+  await page
+    .locator('.watchlist-page')
+    .waitFor({ timeout: 5000 })
+    .then(
+      () => true,
+      () => false,
+    ),
+  'tapping the ringed group resolves the claim: it lands on the page that carries the break',
+)
+
+// Back to Stream and back to a desk-width viewport, so the clearing below
+// is still the rail reading App.svelte's own poll rather than a page
+// refetch of its own.
+await page.click('.bottom-bar .group-btn .label:text-is("Live")')
+await page.waitForFunction(
+  () => document.querySelector('.bottom-bar .group-btn[aria-current="page"] .label')?.textContent.trim() === 'Live',
+  null,
+  { timeout: 5000 },
+)
+await page.setViewportSize({ width: 1280, height: 720 })
+await watchlistItem.waitFor({ timeout: 5000 })
+
 // --- Driven back out: covered, and the ring clears with no acknowledge ---
 check(
   (await push([{ ordinal: 0, chain: 'forward', action: 'drop', log: true, dstPort: String(PORT) }])) === 200,
@@ -206,6 +330,20 @@ check(
   (await watchlistItem.getAttribute('aria-label')) === null,
   'and the aria-label override drops with it, back to the plain row',
 )
+
+// The bar clears with it: same store, same live reading, no per-surface
+// acknowledge state to go stale on a phone.
+await page.setViewportSize({ width: 390, height: 844 })
+await bar.waitFor({ timeout: 5000 })
+check(
+  (await page.$$('.bottom-bar .icon-slot.broken')).length === 0,
+  'the bar drops its ring the moment coverage recovers, just as the rail does',
+)
+check(
+  (await expectGroup.getAttribute('aria-label')) === null,
+  'and the group goes back to speaking its plain name',
+)
+await page.setViewportSize({ width: 1280, height: 720 })
 
 // --- Cleanup: leave the shared instance the way live-watchlist-coverage.mjs
 // expects to find it -- "tables pushed by earlier scenarios have no
