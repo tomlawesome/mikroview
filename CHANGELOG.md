@@ -16,6 +16,39 @@ rewritten.
 
 ## [Unreleased]
 
+### Added
+
+- **The live view's filter bar can now filter by everything the table
+  shows you** (#438). A few gaps, closed:
+
+  - **Chain** has a proper picker now (`Any chain`, the built-in RouterOS
+    chains, plus any custom one your rules use), and clicking a chain in
+    the table shows up in it — before this, clicking a chain cell quietly
+    applied a filter you had no way to see, change or clear.
+  - The single **"IP or CIDR"** box is now two: **Source** and
+    **Destination**, each next to its own internal/external switch. Type
+    a name, a bare address or a CIDR block into either — a name or
+    address fragment matches both the label you see and the underlying
+    address, live, so renaming a device updates what it matches. A small
+    **⇄** button between them swaps everything you've typed, scopes
+    included, for when you filter the wrong side.
+  - **Port** now also takes a service name (`https`, `ssh`, `mikrotik
+    api`...), not just a bare number.
+  - **Rule** now also matches the friendly name you gave a rule, not just
+    its raw label.
+  - The **NAT** translated address and the **interface** in/out pair are
+    click-to-filter now, the same as every other value in the table.
+  - The **country flag** next to an address is click-to-filter too, into
+    a new country picker (one per side). Where MikroView couldn't
+    determine a country, the row still shows and the picker offers an
+    **Unknown** entry to find those rows on purpose, rather than them
+    just being unreachable from the bar.
+
+  Saved filter presets and bookmarked filter links from before this
+  change lose whatever they had in the old IP box — it isn't carried
+  over into the new Source/Destination fields automatically, so double
+  check a preset that used it still does what you expect.
+
 ### Changed
 
 - **The "known bad IP" flag now only fires on traffic your firewall let
