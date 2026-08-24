@@ -18,6 +18,14 @@ rewritten.
 
 ### Added
 
+- **A bottom bar and half-sheets replace the rail at small widths** (#550).
+  The five groups render as a bar of buttons along the bottom of the
+  screen, flag badge intact; tapping a group with more than one page
+  raises a half-sheet listing them (focus-trapped, closed by Esc or the
+  browser's own Back button), and a single-page group goes straight to
+  its page. Dock and density stay pointer-width affordances — neither
+  renders on the bar in any form.
+
 - **Users, Tokens, Fleet and Entities are pages under Admin now** (#548),
   reached the same way as every other row in the rail rather than through
   a menu overlay. **Run setup…** stays an action, not a page: interim,
