@@ -597,7 +597,7 @@ threshold to tune and no scope narrower than "does this exact IP fall in
 a range on the list," so it has no matching entry there, the same
 precedent `new_device` already set. It *is* a definition the engine
 evaluates like any other, with its own confidence as a tunable
-parameter; it simply has no entry on the detector-toggles page yet.
+parameter; it simply has no entry on the watchers station yet.
 
 ```yaml
 blocklist:
@@ -1637,9 +1637,12 @@ together:
 
 - **`config.yaml`** sets the *starting point* on boot (`flags.detectors`
   below).
-- **An admin-only UI** ("Detectors" in the toolbar, visible once signed
-  in as an admin) can override that starting point. A change persists to
-  the definitions store (`engine.definitionsStorePath`) and is what
+- **The watchers station** -- part of the engine room, in the navigation
+  rail's Admin group -- lets an admin override that starting point. Any
+  signed-in user can open the engine room and see the watchers station,
+  with a READ-ONLY marker in the header; the on/off switches and scope
+  fields simply aren't there unless you're the admin. A change persists
+  to the definitions store (`engine.definitionsStorePath`) and is what
   future restarts read -- `config.yaml`'s values are only ever consulted
   for a detector the definitions store does not already hold.
 
@@ -1682,8 +1685,8 @@ field at once. `hosts` entries accept a bare IP or a CIDR.
 The last five rows below are definitions that had no toggle at all
 before v0.3.0: they ran as always-on passes with no name, no switch and
 no scope. Giving every evaluated thing the same envelope made them
-configurable for the first time, and they appear on the Detectors page
-alongside the original twelve.
+configurable for the first time, and they appear on the watchers
+station alongside the original twelve.
 
 Not every field means something to every detector -- a detector only
 consults the axes relevant to how it's keyed:
@@ -1819,20 +1822,26 @@ file, where the alternative to "unchanged" is "locked out".
 
 ### Adding and removing people
 
-Open **Menu → Users**. Only the admin sees it.
+Open the engine room (Admin group in the navigation rail) and its
+**"who may look in"** door. Only the admin sees this door -- it's
+absent entirely for anyone else, not shown read-only.
 
-![The Users panel, showing the admin account and one ordinary user](screenshots/users-panel.png)
+![The engine room's people door, showing the admin account and one ordinary user](screenshots/engine-room-people-door.png)
 
-Type a username and password, press **Add**, and the account appears in
-the list. Everyone added here can see everything MikroView shows, but
-can't change settings, manage accounts, or create API tokens.
+Press **+ Let someone in**, type a username and password, press **Let
+them in**, and the account appears in the list. Everyone added here gets an ordinary account: admin-only
+pages are simply absent from their navigation, with one exception --
+they can open the engine room and read it, but every control there is
+missing rather than greyed out, so they still can't change settings,
+manage accounts, or create API tokens.
 
-**Delete** removes an account. That person is signed out straight away,
+**Remove** deletes an account. That person is signed out straight away,
 on any device, and any API tokens they created stop working at the same
 moment.
 
-The admin account has no Delete button. There is exactly one admin, and
-moving that role is a command-line step (see below) — so nobody who gets
+The admin account has no Remove button -- it is marked **console-only**
+instead. There is exactly one admin, and moving that role is a
+command-line step (see below) — so nobody who gets
 hold of an admin's browser session can take ownership of your
 deployment or lock you out of it.
 
@@ -2015,8 +2024,9 @@ no browser involved -- e.g. a companion OpenCanary-dashboard project
 cross-referencing incidents against mikroview's event/flag history -- a
 session cookie doesn't work: there's no login flow to hold one. API
 tokens are a long-lived bearer credential for exactly that case,
-admin-created from the "API tokens" panel in the menu's Account section
-(or directly via the API below).
+admin-created from the engine room's **"which machines may speak"**
+door (Admin group in the navigation rail), or directly via the API
+below.
 
 **Scope is deliberately narrow: read-only, five endpoints, nothing
 else.** A valid token grants `Authorization: Bearer <token>` access to:
@@ -2043,7 +2053,7 @@ string, well outside brute-forceable range). Losing the value means
 issuing a new token; there's no way to view an existing one again.
 
 There is no expiry -- like sessions and accounts, a token stays valid
-until explicitly revoked from the same panel (or `DELETE
+until explicitly revoked from the same door (or `DELETE
 /api/tokens/{id}`).
 
 ```sh
@@ -2804,7 +2814,7 @@ exits, rather than starting the server. See
 | `POST /api/flags/{id}/clear-permanent` | admin-only: clear one flag *and* permanently exclude its (detector, target) pair going forward. Audit-logged |
 | `GET /api/flags/exclusions` | admin-only: every currently-excluded (detector, target) pair |
 | `DELETE /api/flags/exclusions/{id}` | admin-only: remove one exclusion, letting that pair raise again |
-| `GET /api/definitions` | admin-only: every definition the engine evaluates -- shipped detectors and your own watchlist expectations alike -- each with its enabled state, scope, tuned params, param schema, provenance, replayability, and (for an expectation) its coverage answer. Replaced `GET /api/detectors` and `GET /api/watchlist/entries` in v0.3.0 |
+| `GET /api/definitions` | open to any signed-in user, not admin-gated (#490 -- the engine room's watchers station reads it, and a non-admin can read the room): every definition the engine evaluates -- shipped detectors and your own watchlist expectations alike -- each with its enabled state, scope, tuned params, param schema, provenance, replayability, and (for an expectation) its coverage answer. Replaced `GET /api/detectors` and `GET /api/watchlist/entries` in v0.3.0 |
 | `POST /api/definitions` | admin-only: create a custom definition. Declarative only -- `kind: "programmatic"` is refused, because programmatic logic is Go compiled into the binary rather than data. `intent: "detection"` is refused too, for now: a custom detector's match conditions have nowhere on the envelope to be stored yet, so accepting one would create a definition that lists and evaluates nothing. Only expectation definitions can be created here today; custom detector authoring is tracked in issue #502 |
 | `GET /api/definitions/schema` | admin-only: every definition's param schema, keyed by id, so a UI renders tuning controls from the server's own declaration |
 | `GET /api/definitions/{id}` | admin-only: one definition |
@@ -2833,7 +2843,7 @@ exits, rather than starting the server. See
 | `POST /api/auth/users` | admin-only: create an additional account |
 | `DELETE /api/auth/users/{id}` | admin-only: remove an account |
 | `POST /api/tokens` | admin-only: create a read-only API token (see [API tokens](#api-tokens-read-only)) -- returns the raw value once |
-| `GET /api/tokens` | admin-only: list tokens (name/created/last-used, never the value or hash) |
+| `GET /api/tokens` | open to any signed-in user, not admin-gated (#490 -- the engine room's "which machines may speak" door reads it): list tokens (name/created/last-used, never the value or hash -- a token's raw value appears in the response that mints it and nowhere else, which is what makes widening this safe) |
 | `DELETE /api/tokens/{id}` | admin-only: revoke a token |
 | `GET /api/auth/oidc/login` | start the SSO flow -- a top-level browser redirect to the configured provider, only present when [OIDC](#single-sign-on-oidcsso) is configured |
 | `GET /api/auth/oidc/callback` | the provider's redirect target completing the SSO flow -- see [Single sign-on](#single-sign-on-oidcsso) |

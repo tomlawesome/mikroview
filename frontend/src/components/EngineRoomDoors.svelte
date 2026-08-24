@@ -200,7 +200,13 @@
       {#each tokensState.list as tok (tok.id)}
         <li class="row">
           <span class="who">{tok.name}</span>
-          <span class="chip" class:ingest={tok.kind === 'ingest'}>{tok.kind === 'ingest' ? 'ingest' : 'read'}</span>
+          <!-- An ingest key names the device it speaks for, not just its
+               kind: with two routers pushing, "ingest" alone does not say
+               which key belongs to which, and that is the fact an
+               operator revokes on. -->
+          <span class="chip" class:ingest={tok.kind === 'ingest'}>
+            {tok.kind === 'ingest' ? `ingest: ${tok.device ?? 'unscoped'}` : 'read'}
+          </span>
           <span class="fact">
             <span class="tick"></span>
             {tok.lastUsedAt ? `spoke ${formatHM(tok.lastUsedAt)}` : 'never spoke'}
