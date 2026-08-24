@@ -38,12 +38,24 @@
     member?: boolean
   } = $props()
 
-  const ifaces = $derived(
-    [event.inInterface, event.outInterface].filter(Boolean).join(' → ') || '—',
-  )
-
   const srcFlag = $derived(countryFlag(event.srcCountry))
   const dstFlag = $derived(countryFlag(event.dstCountry))
+
+  // Which Filters field (if either) a NAT token's translated address
+  // belongs to (#438's NAT-parity section). Only the two dedicated NAT
+  // chains say which side was rewritten -- see
+  // internal/routeros/parser.go's isNATChain, mirrored exactly here and
+  // in lib/state.svelte.ts's srcCandidates/dstCandidates. A NAT
+  // annotation inherited onto some other chain (that file's parseNAT
+  // comment) has no such chain to read the direction off, so it stays
+  // inert rather than filtering the wrong side.
+  const natFilterKey = $derived(
+    event.chain?.toLowerCase() === 'srcnat'
+      ? 'srcQuery'
+      : event.chain?.toLowerCase() === 'dstnat'
+        ? 'dstQuery'
+        : null,
+  )
 
   // #439: row tokens (device, action, chain, addresses, ports, protocol,
   // rule) used to be <button> elements. That's *why* row text couldn't be
@@ -187,14 +199,23 @@
 
   {#if event.srcIp}
     <span class="cell addr">
+      {#if srcFlag}
+        <span
+          class="cell-btn flag-btn"
+          role="button"
+          tabindex="0"
+          title="Filter to source country: {event.srcCountry}"
+          use:activate={() => appState.setFilter('srcCountry', event.srcCountry ?? '')}
+        >{srcFlag}</span>
+      {/if}
       <span
         class="cell-btn addr-btn"
         role="button"
         tabindex="0"
-        title={event.srcHostName ? `${event.srcHostName} — filter to IP: ${event.srcIp}` : `Filter to IP: ${event.srcIp}`}
-        use:activate={() => appState.setFilter('ip', event.srcIp ?? '')}
+        title={event.srcHostName ? `${event.srcHostName} — filter to source: ${event.srcIp}` : `Filter to source: ${event.srcIp}`}
+        use:activate={() => appState.setFilter('srcQuery', event.srcIp ?? '')}
       >
-        {srcFlag ? `${srcFlag} ` : ''}{event.srcHostName || event.srcIp}
+        {event.srcHostName || event.srcIp}
       </span>
       <CopyButton value={event.srcIp} label="source IP" />
       {#if isPublicIp(event.srcIp)}
@@ -229,14 +250,23 @@
 
   {#if event.dstIp}
     <span class="cell addr">
+      {#if dstFlag}
+        <span
+          class="cell-btn flag-btn"
+          role="button"
+          tabindex="0"
+          title="Filter to destination country: {event.dstCountry}"
+          use:activate={() => appState.setFilter('dstCountry', event.dstCountry ?? '')}
+        >{dstFlag}</span>
+      {/if}
       <span
         class="cell-btn addr-btn"
         role="button"
         tabindex="0"
-        title={event.dstHostName ? `${event.dstHostName} — filter to IP: ${event.dstIp}` : `Filter to IP: ${event.dstIp}`}
-        use:activate={() => appState.setFilter('ip', event.dstIp ?? '')}
+        title={event.dstHostName ? `${event.dstHostName} — filter to destination: ${event.dstIp}` : `Filter to destination: ${event.dstIp}`}
+        use:activate={() => appState.setFilter('dstQuery', event.dstIp ?? '')}
       >
-        {dstFlag ? `${dstFlag} ` : ''}{event.dstHostName || event.dstIp}
+        {event.dstHostName || event.dstIp}
       </span>
       <CopyButton value={event.dstIp} label="destination IP" />
       {#if isPublicIp(event.dstIp)}
@@ -271,7 +301,19 @@
 
   <span class="cell addr nat" class:has-value={!!event.natIp} title={event.natRaw}>
     {#if event.natIp}
-      <span class="nat-value">→ {formatAddr(event.natIp, event.natPort)}</span>
+      {#if natFilterKey}
+        <span
+          class="cell-btn nat-value"
+          role="button"
+          tabindex="0"
+          title="Filter to {natFilterKey === 'srcQuery' ? 'source' : 'destination'}: {event.natIp}"
+          use:activate={() => {
+            if (natFilterKey) appState.setFilter(natFilterKey, event.natIp ?? '')
+          }}
+        >→ {formatAddr(event.natIp, event.natPort)}</span>
+      {:else}
+        <span class="nat-value">→ {formatAddr(event.natIp, event.natPort)}</span>
+      {/if}
       <RouterRuleButton mode="nat" device={event.deviceId} />
     {:else}
       —
@@ -292,7 +334,35 @@
     <span class="cell proto">—</span>
   {/if}
 
-  <span class="cell iface">{ifaces}</span>
+  <!-- #438: the one cell that wasn't click-to-filter, despite the bar
+       already having an Interface box to receive it. Split into its two
+       tokens (in/out) so either can be clicked independently -- both
+       still write the same shared `interface` filter, which already
+       matches either side (unchanged). -->
+  <span class="cell iface">
+    {#if event.inInterface}
+      <span
+        class="cell-btn iface-btn"
+        role="button"
+        tabindex="0"
+        title="Filter to interface: {event.inInterface}"
+        use:activate={() => appState.setFilter('interface', event.inInterface ?? '')}
+      >{event.inInterface}</span>
+    {/if}
+    {#if event.inInterface && event.outInterface}
+      <span class="iface-sep">→</span>
+    {/if}
+    {#if event.outInterface}
+      <span
+        class="cell-btn iface-btn"
+        role="button"
+        tabindex="0"
+        title="Filter to interface: {event.outInterface}"
+        use:activate={() => appState.setFilter('interface', event.outInterface ?? '')}
+      >{event.outInterface}</span>
+    {/if}
+    {#if !event.inInterface && !event.outInterface}—{/if}
+  </span>
 
   {#if event.ruleLabel}
     <span class="cell rule">
@@ -562,9 +632,23 @@
     white-space: nowrap;
   }
 
-  .iface {
+  /* #438: split into its in/out tokens (see the markup above), same
+     side-by-side shape as the other multi-part cells. */
+  .cell.iface {
+    display: flex;
+    align-items: center;
+    gap: 4px;
     color: var(--fg-muted);
     font-size: 13px;
+  }
+
+  .iface-btn {
+    flex: none;
+    width: auto;
+  }
+
+  .iface-sep {
+    color: var(--fg-dim);
   }
 
   /* Reset button chrome on click-to-filter cells so they read exactly
@@ -616,6 +700,14 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+  }
+
+  /* #438: the country flag is now its own click-to-filter token (sets
+     Source/Destination country in the bar), separate from the address
+     token beside it -- a fixed-width emoji, no ellipsis needed. */
+  .flag-btn {
+    flex: none;
+    width: auto;
   }
 
   /* Same side-by-side shape as .cell.addr above (filter button + copy

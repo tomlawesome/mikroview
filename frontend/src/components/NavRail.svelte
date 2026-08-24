@@ -5,133 +5,85 @@
   // docs/design/screens/navigation/DESIGN.md, which is the authoritative
   // record -- where it and a mockup disagree, the record wins.
   //
-  // Badges and the broken ring are #546's; the three persistent states,
-  // the icon set and the handle arrived with #545.
-  import { appState, type View } from '../lib/state.svelte'
+  // The open-flag count badge and the broken ring are both #546's; the
+  // three persistent states, the icon set and the handle arrived with
+  // #545. The ring waited on a separate ratified decision about what
+  // "broken" means -- see the issue's "Ratified: what puts something in a
+  // broken state" comment: Watchlist rings when an *enabled* expectation's
+  // coverage is 'no-logging', and nothing else qualifies.
+  import { appState } from '../lib/state.svelte'
   import { authState } from '../lib/auth.svelte'
-  import { railPref, describe, type RailDensity } from '../lib/rail.svelte'
+  import { flagsState } from '../lib/flags.svelte'
+  import { watchlistState } from '../lib/watchlist.svelte'
+  import { railPref, describe, spokenLabel, type RailDensity } from '../lib/rail.svelte'
+  import { visibleGroups, type NavItem } from '../lib/navGroups'
   import AboutOverlay from './AboutOverlay.svelte'
-  import RailIcon, { type IconName } from './RailIcon.svelte'
+  import RailIcon from './RailIcon.svelte'
 
-  type Item = {
-    label: string
-    // A view the app already renders, or an action for surfaces that are
-    // not views yet (Users/Tokens are still overlays until #548).
-    view?: View
-    act?: () => void
-    admin?: boolean
-    title: string
-    icon: IconName
-  }
-
-  type Group = { name: string; items: Item[] }
-
-  // Fixed order, per the record. The reserved-slot rule lives here rather
-  // than in the DOM: Map (v0.5.0) and Lookback (unbuilt) are deliberately
-  // absent, not stubbed or disabled.
-  //
-  // Interim, per #544's body: the Live group carries Stream alone until
-  // the fall ships, and Stream is the landing.
-  const groups: Group[] = [
-    {
-      name: 'Live',
-      items: [{ label: 'Stream', view: 'live', icon: 'stream', title: 'The live event stream' }],
-    },
-    {
-      name: 'Investigate',
-      items: [
-        { label: 'Metrics', view: 'metrics', icon: 'metrics', title: 'Event charts and traffic breakdowns' },
-        { label: 'Audit log', view: 'audit', admin: true, icon: 'audit', title: 'Who changed what, and when' },
-      ],
-    },
-    {
-      name: 'Detect',
-      items: [
-        {
-          label: 'Flags',
-          view: 'flags',
-          icon: 'flags',
-          title: 'Behavioral flags: port scans, activity spikes, critical-port attempts, and volume spikes',
-        },
-        {
-          label: 'Detectors',
-          view: 'detectors',
-          admin: true,
-          icon: 'detectors',
-          title: 'Toggle behavioral detectors on/off and restrict their scope',
-        },
-      ],
-    },
-    {
-      name: 'Expect',
-      items: [
-        {
-          label: 'Watchlist',
-          view: 'watchlist',
-          admin: true,
-          icon: 'watchlist',
-          title: 'Hosts and ports you expect to see',
-        },
-      ],
-    },
-    {
-      name: 'Admin',
-      items: [
-        {
-          label: 'Users',
-          act: () => (authState.showUsers = true),
-          admin: true,
-          icon: 'users',
-          title: 'Add or remove accounts',
-        },
-        {
-          label: 'Tokens',
-          act: () => (authState.showTokens = true),
-          admin: true,
-          icon: 'tokens',
-          title: 'Create/revoke read-only API bearer tokens for scripted access',
-        },
-        {
-          label: 'Fleet',
-          view: 'fleet',
-          icon: 'fleet',
-          title: 'Every known RouterOS device: live/stale/never-seen status, last-seen, and event counts',
-        },
-        {
-          label: 'Entities',
-          view: 'entities',
-          admin: true,
-          icon: 'entities',
-          title: 'Named hosts, ports and services',
-        },
-        {
-          label: 'Run setup…',
-          view: 'setup',
-          admin: true,
-          icon: 'setup',
-          title: 'Re-run the setup wizard',
-        },
-      ],
-    },
-  ]
+  // The geography itself -- the five groups, their pages, the
+  // reserved-slot rule and the badge/ring markers -- lives in
+  // lib/navGroups.ts, shared with #550's small-screen bottom bar and
+  // half-sheet so the two surfaces cannot drift apart.
+  type Item = NavItem
 
   // #490's grammar: admin-only rows are absent for viewers, never
   // disabled. A group whose every item is admin-only disappears with
   // them rather than rendering an empty heading.
   const isAdmin = $derived(authState.state === 'authenticated' && authState.role === 'admin')
-  const visible = $derived(
-    groups
-      .map((g) => ({ ...g, items: g.items.filter((i) => !i.admin || isAdmin) }))
-      .filter((g) => g.items.length > 0),
-  )
+  const visible = $derived(visibleGroups(isAdmin))
+
+  // "Open unexcluded flags" is exactly flagsState.activeCount, with no
+  // exclusion filter needed on top: internal/flags.Store keeps the two in
+  // step deliberately. ClearAndExclude clears as it excludes, and Exclude
+  // clears any pair that is already active -- its own comment calls an
+  // excluded flag left sitting uncleared "a landmine for the next caller".
+  // So an excluded pair can never be counted here as open.
+  const flagCount = $derived(flagsState.activeCount)
+
+  function showCount(item: Item): boolean {
+    return item.badge === true && flagCount > 0
+  }
+
+  // #546's ring: fires only for the row marked `ring` and only while
+  // watchlistState.brokenCount says something is actually broken. A live
+  // reading of the store, not a record -- there is deliberately no
+  // acknowledge/dismiss/snooze state to check here, so the ring clears
+  // itself the instant the next poll's coverage answer does.
+  function showRing(item: Item): boolean {
+    return item.ring === true && watchlistState.brokenCount > 0
+  }
+
+  // The ring's whole meaning lives in this sentence -- it is a plain red
+  // outline and nothing else. Plain operator language naming the count
+  // and the cause, per the ratified wording: not "coverage is
+  // no-logging", which is vocabulary the operator never chose.
+  function ringReason(): string {
+    const n = watchlistState.brokenCount
+    return n === 1
+      ? `1 watch can't be checked: the firewall rules it needs aren't being logged`
+      : `${n} watches can't be checked: the firewall rules they need aren't being logged`
+  }
+
+  // What the row is called out loud. The count and the ring reason are
+  // folded in because a badge or outline read on its own says nothing --
+  // the record asks for "label+count in aria-labels", and the ratified
+  // mockup words the count "Flags — 6 open". A count and a ring are
+  // independent (a row could in principle carry both), so both are
+  // gathered and composed by spokenLabel rather than one overwriting the
+  // other.
+  function spoken(item: Item): string {
+    const bits: string[] = []
+    if (showCount(item)) bits.push(`${flagCount} open`)
+    if (showRing(item)) bits.push(ringReason())
+    return spokenLabel(item.label, bits)
+  }
 
   function activate(item: Item) {
-    if (item.act) item.act()
-    else if (item.view) appState.view = item.view
+    appState.view = item.view
   }
 
   function isCurrent(item: Item): boolean {
-    return item.view !== undefined && appState.view === item.view
+    return appState.view === item.view
   }
 
   // The footer's Account popover, per #544's design record ("homes for
@@ -218,6 +170,18 @@
   bind:this={railEl}
   onscroll={() => railEl && (railPref.scrollTop = railEl.scrollTop)}
 >
+  <!-- The rail-head dot (#549): "connection lost" turns the rail itself
+       alarm, not just the banner -- see docs/design/screens/navigation/
+       DESIGN.md's "States of the chrome". Purely visual (aria-hidden): the
+       accessible text for a lost connection is ConnectionBanner's own
+       role="status", which renders whether or not the rail is even
+       mounted (see its own comment), so nothing here needs to repeat it.
+       Docked, this element does not exist at all -- the handle is a
+       one-job control and connection state is explicitly never its job
+       (NavHandle.svelte), so the banner alone carries it there. -->
+  <div class="rail-head" aria-hidden="true">
+    <span class="rail-head-dot" class:alarm={appState.connState === 'closed'}></span>
+  </div>
   <ul class="groups">
     {#each visible as group (group.name)}
       {@const headingId = `rail-group-${group.name.toLowerCase()}`}
@@ -234,18 +198,26 @@
               <button
                 class="item"
                 class:current={isCurrent(item)}
+                class:broken={showRing(item)}
                 aria-current={isCurrent(item) ? 'page' : undefined}
-                aria-label={iconsOnly ? item.label : undefined}
+                aria-label={iconsOnly || showCount(item) || showRing(item) ? spoken(item) : undefined}
                 title={iconsOnly ? undefined : item.title}
                 bind:this={itemEls[item.label]}
                 onclick={() => activate(item)}
-                onmouseenter={(e) => showTip(e, item.label)}
+                onmouseenter={(e) => showTip(e, spoken(item))}
                 onmouseleave={hideTip}
-                onfocus={(e) => showTip(e, item.label)}
+                onfocus={(e) => showTip(e, spoken(item))}
                 onblur={hideTip}
               >
                 <RailIcon name={item.icon} />
                 <span class="label">{item.label}</span>
+                {#if showCount(item)}
+                  <!-- aria-hidden because the button's own aria-label
+                       already speaks the count in words ("Flags — 6
+                       open"); left audible it would be announced twice,
+                       the second time as a bare number. -->
+                  <span class="count" aria-hidden="true">{flagCount}</span>
+                {/if}
               </button>
             </li>
           {/each}
@@ -426,6 +398,28 @@
     padding: 10px 7px;
   }
 
+  /* The rail-head dot: quiet by default (the same tone the rail's own
+     muted rows use), alarm-red only once the connection is actually
+     lost -- turning it on for 'connecting' too would make every ordinary
+     reconnect flicker alarm-red, which is not what the record asks for. */
+  .rail-head {
+    display: flex;
+    justify-content: center;
+    padding: 0 0 8px;
+  }
+
+  .rail-head-dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--fg-dim);
+  }
+
+  .rail-head-dot.alarm {
+    background: var(--alarm);
+    box-shadow: 0 0 6px var(--alarm);
+  }
+
   .groups,
   .items {
     list-style: none;
@@ -469,6 +463,18 @@
     color: var(--fg);
   }
 
+  /* #546's broken ring: 2px alarm-red outline, 3px offset, per the
+     record. Goes on .item itself -- already one element wrapping icon
+     and label -- so .rail.icons .label { display: none } below tightens
+     it to the icon alone at 54px with no extra rule needed. Declared
+     before :focus-visible so tabbing to a broken row still shows the
+     ordinary focus ring rather than fighting the alarm outline for the
+     same CSS property. */
+  .item.broken {
+    outline: 2px solid var(--alarm);
+    outline-offset: 3px;
+  }
+
   /* Never hover-only, per the record: focus is always visible. */
   .item:focus-visible {
     outline: 2px solid var(--accent);
@@ -480,6 +486,22 @@
     background: var(--accent-bg);
     color: var(--fg);
     font-weight: 600;
+  }
+
+  /* The rail's only alarm-filled count, per the record. Text is --bg
+     rather than a fixed dark, so it stays legible against the bright red
+     of the dark lane and the darker red of the light one. */
+  .count {
+    margin-left: auto;
+    border-radius: 8px;
+    padding: 1px 5px;
+    background: var(--alarm);
+    color: var(--bg);
+    font-size: 0.68rem;
+    font-weight: 700;
+    /* So the row does not shift width as the count ticks between, say,
+       9 and 10 while traffic arrives. */
+    font-variant-numeric: tabular-nums;
   }
 
   /* Pinned to the bottom of the rail's own flex column via margin-top:
@@ -596,6 +618,16 @@
 
   .rail.icons .label {
     display: none;
+  }
+
+  /* At 54px there is no row left to push the count to, so it sits on the
+     icon's top-right corner instead. The item is already
+     position: relative for the same reason the tooltip is not. */
+  .rail.icons .count {
+    position: absolute;
+    top: 1px;
+    right: 6px;
+    margin: 0;
   }
 
   /* The record asks for the label on hover *and* focus at icons density.
