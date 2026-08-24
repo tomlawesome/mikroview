@@ -5,35 +5,36 @@
   import { themeState } from './lib/theme.svelte'
   import { colorwayState } from './lib/colorway.svelte'
   import { flagsState } from './lib/flags.svelte'
+  import { watchlistState } from './lib/watchlist.svelte'
   import { authState } from './lib/auth.svelte'
   import { buildQuery, ApiError } from './lib/api'
   import { filtersFromSearchParams } from './lib/types'
   import Toolbar from './components/Toolbar.svelte'
   import NavRail from './components/NavRail.svelte'
   import NavHandle from './components/NavHandle.svelte'
+  import BottomBar from './components/BottomBar.svelte'
   import { railPref } from './lib/rail.svelte'
+  import { viewportState } from './lib/viewport.svelte'
   import ConnectionBanner from './components/ConnectionBanner.svelte'
   import ConfigProblemBanner from './components/ConfigProblemBanner.svelte'
   import FilterBar from './components/FilterBar.svelte'
   import LiveTable from './components/LiveTable.svelte'
   import Dashboard from './components/Dashboard.svelte'
   import Watchlist from './components/Watchlist.svelte'
-  import Suggestions from './components/Suggestions.svelte'
   import Setup from './components/Setup.svelte'
   import Flags from './components/Flags.svelte'
   import Detectors from './components/Detectors.svelte'
   import Entities from './components/Entities.svelte'
   import Fleet from './components/Fleet.svelte'
   import AuditLog from './components/AuditLog.svelte'
-  import Exclusions from './components/Exclusions.svelte'
   import IpLookupPopover from './components/IpLookupPopover.svelte'
   import PortLookupPopover from './components/PortLookupPopover.svelte'
   import RouterLookupPopover from './components/RouterLookupPopover.svelte'
   import AuthSetup from './components/AuthSetup.svelte'
   import AuthLogin from './components/AuthLogin.svelte'
-  import UsersOverlay from './components/UsersOverlay.svelte'
+  import Users from './components/Users.svelte'
   import SSOLinkOverlay from './components/SSOLinkOverlay.svelte'
-  import TokensOverlay from './components/TokensOverlay.svelte'
+  import Tokens from './components/Tokens.svelte'
   // Mounted here, not in the rail that triggers it: the rail is chrome
   // for authenticated pages, and this overlay outlives any one of them.
   import ChangePasswordOverlay from './components/ChangePasswordOverlay.svelte'
@@ -51,6 +52,17 @@
   }
 
   const STATS_REFRESH_MS = 5000
+  // #546's broken ring rides the coverage answer in GET /api/definitions,
+  // which is computed per request (definitionsCoverage in
+  // internal/api/definitions.go) rather than cached -- not free to poll at
+  // STATS_REFRESH_MS's cadence. What it is actually watching for is a
+  // pushed filter table changing, and docs/routeros-setup.md's documented
+  // push scheduler runs at interval=20m, so the answer this polls for
+  // cannot move faster than that in a standard deployment. 60s keeps the
+  // ring effectively live from the operator's point of view (still ~20x
+  // faster than the fastest the answer can actually change) at a twelfth
+  // of the request rate a shared STATS_REFRESH_MS interval would cost.
+  const WATCHLIST_COVERAGE_REFRESH_MS = 60000
   const FILTER_DEBOUNCE_MS = 300
   // Drives the age-based display cutoff in appState.filteredEvents. Needs
   // its own fast interval, separate from STATS_REFRESH_MS: the shortest
@@ -98,17 +110,35 @@
     appState.loadInitial().catch(handleApiError)
     liveSocket.connect()
     flagsState.refresh().catch(handleApiError)
+    // #546's broken ring needs a live coverage answer even when Watchlist
+    // itself is never opened -- the rail is chrome, not a page, so it
+    // cannot wait on that page's own onMount. Gated to admin because
+    // GET /api/definitions (which the ring's coverage rides on) is
+    // admin-only throughout (internal/api/definitions.go), and the
+    // Watchlist row this feeds is itself admin-only in the rail. The
+    // immediate call here is what makes the ring correct on first paint;
+    // WATCHLIST_COVERAGE_REFRESH_MS above is what keeps it correct after.
+    if (authState.role === 'admin') watchlistState.refresh().catch(handleApiError)
 
     const statsInterval = setInterval(() => {
       appState.refreshDevicesAndStats().catch(handleApiError)
       flagsState.refresh().catch(handleApiError)
     }, STATS_REFRESH_MS)
 
+    // Its own slower interval rather than riding statsInterval -- see
+    // WATCHLIST_COVERAGE_REFRESH_MS's own comment for why the two cadences
+    // are deliberately different rather than an oversight.
+    const watchlistInterval =
+      authState.role === 'admin'
+        ? setInterval(() => watchlistState.refresh().catch(handleApiError), WATCHLIST_COVERAGE_REFRESH_MS)
+        : undefined
+
     const tickInterval = setInterval(() => appState.tick(), TICK_MS)
 
     return () => {
       liveSocket.disconnect()
       clearInterval(statsInterval)
+      clearInterval(watchlistInterval)
       clearInterval(tickInterval)
     }
   })
@@ -165,12 +195,18 @@
   <!-- First in tab order after the skip-link, per the record: the handle
        is the only way back to a docked rail, so it cannot sit behind the
        page's own controls. -->
-  {#if railPref.isDocked}
+  <!-- Dock and density are pointer-width affordances (DESIGN.md's "Small
+       screens"): at a small viewport the bottom bar is the whole of
+       navigation, and neither NavRail nor NavHandle (which only ever
+       restores a rail state) mounts at all. -->
+  {#if viewportState.isMobile}
+    <BottomBar />
+  {:else if railPref.isDocked}
     <NavHandle onrestore={() => railPref.restore()} />
   {/if}
   <Toolbar />
-  <div class="shell">
-    {#if !railPref.isDocked}
+  <div class="shell" class:with-bottom-bar={viewportState.isMobile}>
+    {#if !viewportState.isMobile && !railPref.isDocked}
       <NavRail />
     {/if}
     <!-- The banner tops the content column and pushes content rather than
@@ -185,8 +221,6 @@
       <LiveTable />
     {:else if appState.view === 'watchlist'}
       <Watchlist />
-    {:else if appState.view === 'suggestions'}
-      <Suggestions />
     {:else if appState.view === 'setup'}
       <Setup />
     {:else if appState.view === 'flags'}
@@ -199,8 +233,10 @@
       <Fleet />
     {:else if appState.view === 'audit'}
       <AuditLog />
-    {:else if appState.view === 'exclusions'}
-      <Exclusions />
+    {:else if appState.view === 'users'}
+      <Users />
+    {:else if appState.view === 'tokens'}
+      <Tokens />
         {:else}
           <Dashboard />
         {/if}
@@ -214,9 +250,7 @@
   <IpLookupPopover />
   <PortLookupPopover />
   <RouterLookupPopover />
-  <UsersOverlay />
   <SSOLinkOverlay />
-  <TokensOverlay />
   <ChangePasswordOverlay />
   <Toast />
 {/if}
@@ -257,6 +291,13 @@
     flex: 1;
     display: flex;
     min-height: 0;
+  }
+
+  /* Reserves room for BottomBar.svelte's fixed-position bar so it never
+     covers the last row of content -- 52px matches .group-btn's
+     min-height there. */
+  .shell.with-bottom-bar {
+    padding-bottom: calc(52px + env(safe-area-inset-bottom));
   }
 
   .content {

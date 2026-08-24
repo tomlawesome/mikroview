@@ -559,6 +559,13 @@ export interface WatchlistObservedDest {
 export interface WatchlistEntry {
   id: string
   name?: string
+  // Read back from the owning definition's own `enabled`, same as name
+  // above -- it is an envelope property, not part of the entry itself,
+  // but the only one the broken-ring predicate (#546) needs, so it rides
+  // along here rather than in a second id-keyed map. Only enabled
+  // expectations count toward "broken": an operator who switched a watch
+  // off is not promising mikroview can see it.
+  enabled: boolean
   source?: WatchlistIdentity
   destIp?: string
   ports?: number[]
@@ -642,16 +649,28 @@ export interface Suggestion {
 // Mirrors internal/store's Scope.
 export type Scope = '' | 'internal' | 'external'
 
+// #438 replaced the single "ip" box (matched src OR dst, either raw) with
+// side-scoped srcQuery/dstQuery -- see lib/addressMatch.ts for what each
+// accepts (label, IP or CIDR) and lib/state.svelte.ts's swapSourceDestination
+// for how the two sides (plus their scope and country) swap together.
+// srcCountry/dstCountry are the owner-ratified country section of that
+// issue -- see lib/countryMatch.ts. Per the project's dev-stage norm
+// (AGENTS.md "Removals are wholesale"), the retired `ip` field is not
+// migrated: a saved preset or bookmarked URL that still carries it simply
+// stops applying that half of its filter.
 export interface Filters {
   device: string
   action: Action | ''
   protocol: string
   chain: string
   interface: string
-  ip: string
+  srcQuery: string
+  dstQuery: string
   port: string
   srcScope: Scope
   dstScope: Scope
+  srcCountry: string
+  dstCountry: string
   rule: string
   ruleRegex: boolean
 }
@@ -663,10 +682,13 @@ export function emptyFilters(): Filters {
     protocol: '',
     chain: '',
     interface: '',
-    ip: '',
+    srcQuery: '',
+    dstQuery: '',
     port: '',
     srcScope: '',
     dstScope: '',
+    srcCountry: '',
+    dstCountry: '',
     rule: '',
     ruleRegex: false,
   }
@@ -689,10 +711,13 @@ export function filtersFromSearchParams(params: URLSearchParams): Filters {
     protocol: params.get('protocol') ?? '',
     chain: params.get('chain') ?? '',
     interface: params.get('interface') ?? '',
-    ip: params.get('ip') ?? '',
+    srcQuery: params.get('srcQuery') ?? '',
+    dstQuery: params.get('dstQuery') ?? '',
     port: params.get('port') ?? '',
     srcScope: parseScope(params.get('srcScope')),
     dstScope: parseScope(params.get('dstScope')),
+    srcCountry: params.get('srcCountry') ?? '',
+    dstCountry: params.get('dstCountry') ?? '',
     rule: params.get('rule') ?? '',
     ruleRegex: params.get('ruleRegex') === 'true',
   }

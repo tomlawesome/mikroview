@@ -27,6 +27,17 @@ export function describe(d: RailDensity): string {
   return d === 'icons' ? 'icons only' : 'icons and text'
 }
 
+// The chrome's shared "label — reason; reason" composition. The Flags
+// count badge and the broken ring (#546) are independent per the record
+// -- a row can in principle carry both -- so this takes a list of
+// applicable reasons rather than assuming there is exactly one, and joins
+// whatever is present rather than one marker overwriting another's label.
+// A bare label with no reasons is the common case (most rows carry
+// neither).
+export function spokenLabel(label: string, bits: string[]): string {
+  return bits.length > 0 ? `${label} — ${bits.join('; ')}` : label
+}
+
 // One preference, three values (full - icons - docked), per the record.
 // `density` is what that record calls "the undocked half of it": the
 // density to come back to, kept alongside so a docked rail still knows
