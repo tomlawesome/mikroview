@@ -13,6 +13,13 @@
 // sheet" is a claim about the browser's own tab order across real
 // rendered elements, not about the component's props.
 //
+// The broken ring on the bar (#583) is deliberately not here: making
+// coverage 'no-logging' needs a pushed filter table, and
+// live-router-lookup.mjs -- which the scenario runner reaches before
+// every live-nav-* file -- asserts that nothing has pushed one yet. It is
+// driven from live-watchlist-broken-ring.mjs instead, which already owns
+// that push and sorts after.
+//
 // The browser Back button: closing the sheet on Back is the one behaviour
 // in lib/focusTrap.ts's neighbour (BottomBar's own history.pushState/
 // popstate handling) that only a real session-history stack can exercise

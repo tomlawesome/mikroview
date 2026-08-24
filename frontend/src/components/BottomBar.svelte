@@ -13,10 +13,21 @@
   // rule all come from lib/navGroups.ts, the same table NavRail.svelte
   // renders -- carried forward rather than redefined here, so the two
   // surfaces cannot disagree about the geography.
+  //
+  // #583 added the broken ring here, per its ratified design: the ring
+  // goes on the *group* in the bar and again on the *page row* inside the
+  // half-sheet. The group's claim is the weaker one -- "an answer behind
+  // this group cannot be trusted" -- and that is honest only because the
+  // next tap resolves it, which gives the general rule the record now
+  // carries: a group may wear the ring only where opening it shows which
+  // page carries it. Both rings read the same source (an item's `ring`
+  // marker against watchlistState.brokenCount), so the group can never
+  // ring over a sheet that fails to say which page is broken.
   import { appState } from '../lib/state.svelte'
   import { authState } from '../lib/auth.svelte'
   import { flagsState } from '../lib/flags.svelte'
-  import { spokenLabel } from '../lib/rail.svelte'
+  import { watchlistState } from '../lib/watchlist.svelte'
+  import { ringReason, spokenLabel } from '../lib/rail.svelte'
   import { visibleGroups, type NavGroup, type NavItem } from '../lib/navGroups'
   import { trapFocus } from '../lib/focusTrap'
   import RailIcon from './RailIcon.svelte'
@@ -40,6 +51,23 @@
     return group.items.some((i) => i.badge) && flagCount > 0 ? flagCount : 0
   }
 
+  // #546's ring, read exactly as NavRail reads it: only for a page marked
+  // `ring`, and only while the store says something is actually broken. A
+  // live reading with no acknowledge/dismiss step, so it clears itself the
+  // instant the next coverage poll does. 'unknown' and 'out-of-scope'
+  // never reach brokenCount, so they cannot ring here either.
+  function showRing(item: NavItem): boolean {
+    return item.ring === true && watchlistState.brokenCount > 0
+  }
+
+  // A group rings if any of its *visible* pages does -- today only
+  // Watchlist, inside Expect. Filtering happens upstream in
+  // visibleGroups(), so a viewer who cannot see Watchlist never sees a
+  // ring pointing at a page that is not there.
+  function groupHasRing(group: NavGroup): boolean {
+    return group.items.some(showRing)
+  }
+
   function isCurrent(item: NavItem): boolean {
     return appState.view === item.view
   }
@@ -48,13 +76,25 @@
     return group.items.some(isCurrent)
   }
 
+  // One sentence, narrowing subject, per #583's ratified wording: the
+  // group speaks "Expect — 1 watch can't be checked: …" and the sheet's
+  // page row speaks the same sentence about Watchlist. A count and a ring
+  // are independent -- Flags' alarm-red badge and Expect's alarm-red ring
+  // are allowed on the bar at once, on different groups -- so both are
+  // gathered and composed rather than one overwriting the other.
   function spokenGroup(group: NavGroup): string {
+    const bits: string[] = []
     const n = groupCount(group)
-    return spokenLabel(group.name, n > 0 ? [`${n} open`] : [])
+    if (n > 0) bits.push(`${n} open`)
+    if (groupHasRing(group)) bits.push(ringReason(watchlistState.brokenCount))
+    return spokenLabel(group.name, bits)
   }
 
   function spokenItem(item: NavItem): string {
-    return spokenLabel(item.label, showCount(item) ? [`${flagCount} open`] : [])
+    const bits: string[] = []
+    if (showCount(item)) bits.push(`${flagCount} open`)
+    if (showRing(item)) bits.push(ringReason(watchlistState.brokenCount))
+    return spokenLabel(item.label, bits)
   }
 
   // The half-sheet's open group, or null when none is raised. Only a
@@ -129,10 +169,17 @@
       aria-current={group.items.length === 1 && isCurrent(group.items[0]) ? 'page' : undefined}
       aria-haspopup={group.items.length > 1 ? 'dialog' : undefined}
       aria-expanded={group.items.length > 1 ? openGroupName === group.name : undefined}
-      aria-label={groupCount(group) > 0 ? spokenGroup(group) : undefined}
+      aria-label={groupCount(group) > 0 || groupHasRing(group) ? spokenGroup(group) : undefined}
       onclick={() => activateGroup(group)}
     >
-      <RailIcon name={group.items[0].icon} />
+      <!-- The ring goes around the icon alone here, not icon + label:
+           five items across a phone-width bar leave a 2px outline at 3px
+           offset nowhere to go around a stacked icon-and-word without
+           crowding its neighbours. Same visual idea as the rail's
+           icons-only state, tightened where the space is. -->
+      <span class="icon-slot" class:broken={groupHasRing(group)}>
+        <RailIcon name={group.items[0].icon} />
+      </span>
       <span class="label">{group.name}</span>
       {#if groupCount(group) > 0}
         <!-- aria-hidden: the button's own aria-label already speaks the
@@ -164,8 +211,9 @@
           <button
             class="sheet-item"
             class:current={isCurrent(item)}
+            class:broken={showRing(item)}
             aria-current={isCurrent(item) ? 'page' : undefined}
-            aria-label={showCount(item) ? spokenItem(item) : undefined}
+            aria-label={showCount(item) || showRing(item) ? spokenItem(item) : undefined}
             onclick={() => selectItem(item)}
           >
             <RailIcon name={item.icon} />
@@ -225,6 +273,24 @@
   .group-btn.current {
     color: var(--fg);
     font-weight: 600;
+  }
+
+  /* Exists only to give the ring something icon-shaped to wrap. Inline
+     flex so it hugs the 16px glyph rather than stretching to the button's
+     full width, which would put the outline back around the label. */
+  .icon-slot {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  /* #546's ring, same 2px alarm-red outline at 3px offset the rail uses.
+     The bar does not scroll, so unlike the rail there is no overflow
+     container to clip the 5px the outline extends past the glyph. */
+  .icon-slot.broken {
+    outline: 2px solid var(--alarm);
+    outline-offset: 3px;
+    border-radius: 2px;
   }
 
   .label {
@@ -335,6 +401,16 @@
     font-size: 0.92rem;
     text-align: left;
     cursor: pointer;
+  }
+
+  /* Inside the sheet the rows are full-width list items, so the ring
+     follows the rail's icons+text form: around icon + word, on the button
+     itself. Declared before :focus-visible so tabbing to a broken row
+     still shows the ordinary focus ring rather than two rules fighting
+     over the same property. */
+  .sheet-item.broken {
+    outline: 2px solid var(--alarm);
+    outline-offset: 3px;
   }
 
   .sheet-item:hover {
