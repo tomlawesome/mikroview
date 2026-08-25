@@ -273,15 +273,15 @@ export type FlagType =
   // above.
   | 'known_bad_ip'
 
-// The definition ids the detector-settings page carries hand-written
-// copy for. No longer a closed set of everything the server evaluates:
-// GET /api/definitions lists every shipped definition, including the
-// five that were always-on passes before the engine port gave them an
-// envelope (unexpected_mail_sender, stale_rule, known_bad_ip, netclass,
-// reputation). A definition whose id is not in this union still renders
-// -- from the server's own name and description -- so the page can never
-// silently omit something that is actually evaluating. See
-// Detectors.svelte.
+// The definition ids the engine room's watchers station carries
+// hand-written copy for (lib/detectorCopy.ts). No longer a closed set of
+// everything the server evaluates: GET /api/definitions lists every
+// shipped definition, including the five that were always-on passes
+// before the engine port gave them an envelope (unexpected_mail_sender,
+// stale_rule, known_bad_ip, netclass, reputation). A definition whose id
+// is not in this union still renders -- from the server's own name and
+// description -- so the station can never silently omit something that
+// is actually evaluating. See EngineRoomWatchers.svelte.
 export type DetectorName =
   | 'port_scan'
   | 'activity_spike'
@@ -424,6 +424,44 @@ export interface Entity {
   tags?: string[]
 }
 
+// Mirrors internal/api's nameProvenanceResponse (issue #413): where the
+// name currently shown for one row token comes from, and whether saving
+// a label for it here would change anything.
+//
+// `editable` is the field the inline editor is built around. The owner
+// ruled on 2026-08-22 that RouterOS keeps winning (#186 step 4c), so a
+// label saved for a host the router already names is stored and then
+// never displayed. POST /api/entities cannot tell the caller that -- the
+// write really did succeed -- so the editor asks this first and renders
+// an explanation instead of an input when the answer is false. `source`
+// says which pushed table holds the winning name and `router` says on
+// which device, because "change it on the router" is not actionable
+// without both.
+export type NameSource =
+  | 'none'
+  | 'entity'
+  | 'config'
+  | 'router-dns-static'
+  | 'router-dhcp-lease'
+  | 'router-wireguard-peer'
+  | 'router'
+
+export interface NameProvenance {
+  type: EntityType
+  key: string
+  device?: string
+  // name is what is displayed today, '' when nothing names the key.
+  name: string
+  source: NameSource
+  // label is the operator's own saved label for this key, reported even
+  // when a router-pushed name out-ranks it -- so the editor can say
+  // "your label is not what is shown" rather than presenting an empty
+  // field over the top of one that exists.
+  label: string
+  editable: boolean
+  router?: string
+}
+
 // Mirrors internal/audit.Entry's JSON tags (issue #112) -- one recorded
 // admin-privileged mutation (user created, entity upserted/deleted, API
 // token created/revoked, detector setting changed, flag exclusion
@@ -559,6 +597,13 @@ export interface WatchlistObservedDest {
 export interface WatchlistEntry {
   id: string
   name?: string
+  // Read back from the owning definition's own `enabled`, same as name
+  // above -- it is an envelope property, not part of the entry itself,
+  // but the only one the broken-ring predicate (#546) needs, so it rides
+  // along here rather than in a second id-keyed map. Only enabled
+  // expectations count toward "broken": an operator who switched a watch
+  // off is not promising mikroview can see it.
+  enabled: boolean
   source?: WatchlistIdentity
   destIp?: string
   ports?: number[]
@@ -642,16 +687,28 @@ export interface Suggestion {
 // Mirrors internal/store's Scope.
 export type Scope = '' | 'internal' | 'external'
 
+// #438 replaced the single "ip" box (matched src OR dst, either raw) with
+// side-scoped srcQuery/dstQuery -- see lib/addressMatch.ts for what each
+// accepts (label, IP or CIDR) and lib/state.svelte.ts's swapSourceDestination
+// for how the two sides (plus their scope and country) swap together.
+// srcCountry/dstCountry are the owner-ratified country section of that
+// issue -- see lib/countryMatch.ts. Per the project's dev-stage norm
+// (AGENTS.md "Removals are wholesale"), the retired `ip` field is not
+// migrated: a saved preset or bookmarked URL that still carries it simply
+// stops applying that half of its filter.
 export interface Filters {
   device: string
   action: Action | ''
   protocol: string
   chain: string
   interface: string
-  ip: string
+  srcQuery: string
+  dstQuery: string
   port: string
   srcScope: Scope
   dstScope: Scope
+  srcCountry: string
+  dstCountry: string
   rule: string
   ruleRegex: boolean
 }
@@ -663,10 +720,13 @@ export function emptyFilters(): Filters {
     protocol: '',
     chain: '',
     interface: '',
-    ip: '',
+    srcQuery: '',
+    dstQuery: '',
     port: '',
     srcScope: '',
     dstScope: '',
+    srcCountry: '',
+    dstCountry: '',
     rule: '',
     ruleRegex: false,
   }
@@ -689,10 +749,13 @@ export function filtersFromSearchParams(params: URLSearchParams): Filters {
     protocol: params.get('protocol') ?? '',
     chain: params.get('chain') ?? '',
     interface: params.get('interface') ?? '',
-    ip: params.get('ip') ?? '',
+    srcQuery: params.get('srcQuery') ?? '',
+    dstQuery: params.get('dstQuery') ?? '',
     port: params.get('port') ?? '',
     srcScope: parseScope(params.get('srcScope')),
     dstScope: parseScope(params.get('dstScope')),
+    srcCountry: params.get('srcCountry') ?? '',
+    dstCountry: params.get('dstCountry') ?? '',
     rule: params.get('rule') ?? '',
     ruleRegex: params.get('ruleRegex') === 'true',
   }
@@ -739,4 +802,27 @@ export interface SetupStatus {
     pushedKinds?: Record<string, string>
   }[]
   pushKinds: string[]
+  // The claim ledger's own marks (#487) -- see SetupMark. Always
+  // present, empty when nothing has been skipped or forced past.
+  marks: SetupMark[]
+}
+
+// Mirrors internal/setup.Mark (#487): the operator's own statement about
+// a step that produced no evidence. The other half of the claim ledger,
+// and served alongside the evidence because the surfaces that need it
+// are not only the wizard -- an empty stream explains its own silence
+// with the forced-past line that accounts for it.
+export interface SetupMark {
+  // 1-5, matching the wizard's five steps.
+  step: number
+  // 'skipped' is quiet and moves on; 'forced' went past the heavy
+  // warning and is recorded loudly. There is no third outcome: a step
+  // with evidence needs no mark at all.
+  outcome: 'skipped' | 'forced'
+  // Resolved server-side from the session, never sent by the client.
+  actor: string
+  at: string
+  // What had not arrived when the decision was made, as the wizard's own
+  // observation line worded it.
+  note?: string
 }

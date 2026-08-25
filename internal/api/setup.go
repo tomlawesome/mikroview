@@ -3,6 +3,7 @@
 package api
 
 import (
+	"fmt"
 	"net/http"
 	"time"
 
@@ -32,6 +33,12 @@ type setupStatus struct {
 	// so adding a kind to internal/ingest cannot silently leave the
 	// wizard describing an incomplete script.
 	PushKinds []string `json:"pushKinds"`
+	// Marks is the other half of the claim ledger (#487): the steps the
+	// operator skipped or forced past, each with who and when. Served
+	// alongside the evidence because the surfaces that need it are not
+	// only the wizard -- an empty stream explains its own silence with
+	// the forced-past line that accounts for it.
+	Marks []setup.Mark `json:"marks"`
 }
 
 type setupInstance struct {
@@ -68,15 +75,14 @@ type setupDevice struct {
 	PushedKinds map[string]time.Time `json:"pushedKinds,omitempty"`
 }
 
-// handleSetupStatus serves the wizard's view. Admin-only: it enumerates
-// every device and source mikroview knows about, which is the same map
-// of the deployment GET /api/auth/users is admin-gated for.
+// handleSetupStatus serves the wizard's view: every device and source
+// mikroview knows about.
+//
+// Open to any signed-in user (#490): the settings page's viewer-readable
+// widening reaches setup status too, same as the other three GETs it
+// widens alongside. There is no corresponding write endpoint here to
+// keep closed.
 func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
-	if !callerIsAdmin(r) {
-		http.Error(w, "admin role required", http.StatusForbidden)
-		return
-	}
-
 	var sources []setup.SourceObservation
 	prefixByDevice := map[string]setup.DeviceObservation{}
 	if s.Setup != nil {
@@ -114,6 +120,11 @@ func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	marks := []setup.Mark{}
+	if s.Setup != nil {
+		marks = s.Setup.Marks()
+	}
+
 	writeJSON(w, http.StatusOK, setupStatus{
 		Instance: setupInstance{
 			TLSEnabled:    s.SetupInstance.TLSEnabled,
@@ -124,7 +135,69 @@ func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 		Sources:   sources,
 		Devices:   devices,
 		PushKinds: ingestKindNames,
+		Marks:     marks,
 	})
+}
+
+// setupMarkRequest is one step decision from the wizard's footer.
+//
+// Deliberately no actor field: who did this is resolved from the session
+// (auditActor), never from the body. A ledger a client can sign with
+// somebody else's name is not a record of anything.
+type setupMarkRequest struct {
+	Step    int    `json:"step"`
+	Outcome string `json:"outcome"`
+	// Note is what had not arrived at the moment the decision was made,
+	// as the wizard's own observation line worded it. It is what turns
+	// "step 2 forced past" into a line that explains a silence.
+	Note string `json:"note"`
+}
+
+// handleSetupMark records that a step was skipped or forced past.
+//
+// Admin-only, matching the wizard itself: #490 keeps "Run setup…" absent
+// for viewers and there is no read-only wizard, so a viewer has no way
+// to reach this and no business writing to the ledger.
+//
+// Two writes, deliberately, because they answer different questions.
+// The mark goes to internal/setup, where it sits beside the evidence it
+// qualifies and is read back by every surface that has a silence to
+// explain; it is persisted there, so the explanation survives the
+// restart an upgrade brings. The audit entry goes to internal/audit,
+// which is where diagnostics look and where the line stays as history
+// even after evidence arrives and the step turns green -- the design
+// record's "forced is not failed". Neither derives from the other:
+// internal/audit prunes to maxEntries, so marks read back out of the
+// log would silently vanish once enough entries accumulated.
+func (s *Server) handleSetupMark(w http.ResponseWriter, r *http.Request) {
+	if !callerIsAdmin(r) {
+		http.Error(w, "admin role required", http.StatusForbidden)
+		return
+	}
+	var req setupMarkRequest
+	if err := decodeJSONBody(w, r, &req); err != nil {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+	if s.Setup == nil {
+		http.Error(w, "setup observations are not available", http.StatusServiceUnavailable)
+		return
+	}
+	mark, ok := s.Setup.NoteMark(req.Step, setup.MarkOutcome(req.Outcome), auditActor(r), req.Note, time.Now())
+	if !ok {
+		http.Error(w, "step must be 1-5 and outcome one of skipped, forced", http.StatusBadRequest)
+		return
+	}
+	// The audit vocabulary is owned by the caller (see internal/audit's
+	// Entry.Action), and these two are worded so a reader scanning the
+	// log sees the difference the design record insists on: skip is
+	// quiet, force is loud.
+	action := "setup.step_skipped"
+	if mark.Outcome == setup.MarkForced {
+		action = "setup.step_forced"
+	}
+	s.Audit.Record(mark.Actor, action, fmt.Sprintf("step %d", mark.Step), mark.Note)
+	writeJSON(w, http.StatusOK, mark)
 }
 
 // SetupInstance is the running configuration the wizard needs to write
