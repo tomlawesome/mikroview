@@ -169,18 +169,32 @@ class AppState {
   // own state and its button are untouched and the preference is exactly
   // as they left it when the surface closes. Where the view is already
   // frozen the hold composes as a no-op -- LiveTable freezes on either.
-  streamHolds = $state(0)
+  //
+  // The count is a plain field and only the boolean is reactive. That
+  // split is load-bearing, not tidiness: holders take the hold from
+  // inside an $effect (that is what makes the release survive an
+  // unmount), and `count++` *reads* the count before writing it. Had the
+  // count been $state, the read would have made the effect depend on a
+  // signal it was itself changing, so it would re-run, increment again,
+  // and re-run again -- Svelte aborts that with
+  // effect_update_depth_exceeded, which does not just break the hold: it
+  // stops the whole app re-rendering, so a popover sticks on "Loading…"
+  // and Esc silently does nothing. Found by running it; nothing in the
+  // type system or the test suite objects to the reactive version.
+  // Writing the boolean is safe because assigning the value it already
+  // holds notifies nobody.
+  private holds = 0
 
-  get streamHeld(): boolean {
-    return this.streamHolds > 0
-  }
+  streamHeld = $state(false)
 
   holdStream() {
-    this.streamHolds++
+    this.holds++
+    this.streamHeld = true
   }
 
   releaseStream() {
-    if (this.streamHolds > 0) this.streamHolds--
+    if (this.holds > 0) this.holds--
+    this.streamHeld = this.holds > 0
   }
 
   // The raw event pool captured the moment Autoscroll is switched off
