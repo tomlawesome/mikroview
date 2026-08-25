@@ -126,9 +126,13 @@
   // re-taken on return. See appState.frozenPool. An out-of-scope instance
   // returns early rather than clearing it -- otherwise merely mounting an
   // unrelated view would release the live view's freeze.
+  // appState.streamHeld is the transient hold an open row-anchored
+  // surface takes (see appState.holdStream): it freezes on exactly the
+  // same terms as Autoscroll-off, so the two compose as one condition
+  // here rather than as a second freeze mechanism.
   $effect(() => {
     if (!honorAutoscroll) return
-    if (appState.autoscroll) {
+    if (appState.autoscroll && !appState.streamHeld) {
       appState.frozenPool = null
     } else if (appState.frozenPool === null) {
       appState.frozenPool = events ?? appState.ageFilteredEvents
@@ -145,7 +149,9 @@
   )
 
   const rendered = $derived(
-    honorAutoscroll && !appState.autoscroll ? (frozenRendered ?? liveRendered) : liveRendered,
+    honorAutoscroll && (!appState.autoscroll || appState.streamHeld)
+      ? (frozenRendered ?? liveRendered)
+      : liveRendered,
   )
 
   // Grouping (#341): collapse repeats of the same connection. Built
@@ -296,7 +302,7 @@
 
   $effect(() => {
     rendered.length // re-run this effect whenever the rendered set changes
-    if (appState.autoscroll && !appState.paused && bodyEl) {
+    if (appState.autoscroll && !appState.streamHeld && !appState.paused && bodyEl) {
       // Newest-at-top (#363): the newest row renders first now, so
       // "follow the newest event" means holding scrollTop at 0, not
       // chasing scrollHeight. Still an rAF, not a synchronous set --

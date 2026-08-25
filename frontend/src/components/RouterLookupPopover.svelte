@@ -5,13 +5,26 @@
   // PortLookupPopover, driven by lib/routerLookup.svelte.ts's singleton.
   //
   // Renders the pushed rule/NAT data from mikroview's own store (issue
-  // #186 step 4). Three honest states beyond loading/error, and they are
-  // deliberately distinct: the device never pushed a table ("no data
-  // yet" -- with a pointer at what enables it), the table exists but no
-  // rule carries this prefix (prefix resolution is the operator's
-  // convention, see #186 step 4c), and one-or-more matches (a shared
-  // prefix legitimately resolves to several rules).
-  import { routerLookupState as st } from '../lib/routerLookup.svelte'
+  // #186 step 4). For a filter rule there are three honest states beyond
+  // loading/error, and they are deliberately distinct: the device never
+  // pushed a table ("no data yet" -- with a pointer at what enables it),
+  // the table exists but no rule carries this prefix (prefix resolution
+  // is the operator's convention, see #186 step 4c), and one-or-more
+  // matches (a shared prefix legitimately resolves to several rules).
+  //
+  // For NAT there are two *modes*, and #445's central requirement is
+  // that they never share a rendering. A logged translation names its
+  // rule and states a fact. An unlogged one cannot name anything, so it
+  // shows the table partitioned by what the event rules out, with the
+  // reason against every exclusion. Those are different claims, and a
+  // reader who mistook the second for the first would have been misled
+  // by this component -- so the mode is said in the header and again in
+  // a text chip, never left as a footnote to be skimmed past. The chip
+  // is accent-coloured in logged mode, but the distinction it carries is
+  // the word, never the colour.
+  import { routerLookupState as st, natChip, natTitle } from '../lib/routerLookup.svelte'
+  import { appState } from '../lib/state.svelte'
+  import RouterNatLookup from './RouterNatLookup.svelte'
 
   const POPOVER_WIDTH = 320
 
@@ -36,6 +49,18 @@
     }
   })
 
+  // Hold-while-open (#413's decision, shared by #445 and #439's lookup
+  // popovers): this popover is anchored to a row, and under newest-at-top
+  // that row slides down the screen as events arrive. The hold is taken
+  // in an effect keyed on the anchor rather than inside the store's
+  // open/close, so the release travels with the same lifecycle that took
+  // it -- including an unmount, which no explicit close() would run.
+  $effect(() => {
+    if (!st.anchor) return
+    appState.holdStream()
+    return () => appState.releaseStream()
+  })
+
   const style = $derived.by(() => {
     const a = st.anchor
     if (!a) return ''
@@ -45,8 +70,12 @@
   })
 
   const title = $derived(
-    st.mode === 'rule' ? `Rules with log-prefix “${st.ruleLabel}”` : `NAT table — ${st.device}`,
+    st.mode === 'rule'
+      ? `Rules with log-prefix “${st.ruleLabel}”`
+      : natTitle(st.device, st.natMode),
   )
+
+  const chip = $derived(natChip(st.natMode))
 </script>
 
 <svelte:window onkeydown={onKeydown} />
@@ -55,24 +84,32 @@
   <div bind:this={popoverEl} class="popover" {style} role="dialog" aria-label={title}>
     <div class="header">
       <span class="title">{title}</span>
+      {#if st.mode === 'nat' && !st.loading && !st.error}
+        <span class="chip" class:logged={st.natMode === 'logged'}>{chip}</span>
+      {/if}
       <button class="close" onclick={() => st.close()} aria-label="Close">✕</button>
     </div>
 
-    {#if st.loading}
+    <!-- The NAT half is delegated whole -- loading, error and
+         never-pushed included -- so the popover and the mobile sheet
+         cannot end up wording the same state two different ways. -->
+    {#if st.mode === 'nat'}
+      <RouterNatLookup />
+    {:else if st.loading}
       <div class="status">Loading…</div>
     {:else if st.error}
       <div class="status error">{st.error}</div>
     {:else if !st.available}
       <div class="status">
-        No {st.mode === 'rule' ? 'rule' : 'NAT'} table pushed by “{st.device}” yet — this data
-        arrives via the RouterOS push integration, not syslog.
+        No rule table pushed by “{st.device}” yet — this data arrives via the RouterOS push
+        integration, not syslog.
       </div>
-    {:else if st.mode === 'rule' && st.rules.length === 0}
+    {:else if st.rules.length === 0}
       <div class="status">
         No rule in the pushed table ({st.tableSize} rules) carries the log-prefix “{st.ruleLabel}”.
         Prefixes are set per rule in RouterOS (<code>log-prefix=</code>).
       </div>
-    {:else if st.mode === 'rule'}
+    {:else}
       <div class="entries">
         {#each st.rules as r (r.ordinal)}
           <div class="entry">
@@ -94,35 +131,6 @@
       </div>
       <div class="footnote">
         Numbered as RouterOS numbers them — “go look at rule {st.rules[0].ordinal} in RouterOS”.
-      </div>
-    {:else if st.natRules.length === 0}
-      <!-- The rule mode has had an empty state since it was written;
-           this one did not (#267, Uncertain), so a router that pushed a
-           NAT table with no rules in it -- entirely ordinary, plenty of
-           routers do no NAT -- got an empty box and a footnote
-           explaining how to read rules that are not there. -->
-      <div class="status">
-        “{st.device}” has pushed its NAT table and it is empty — no NAT rules are configured on
-        that router.
-      </div>
-    {:else}
-      <div class="entries nat">
-        {#each st.natRules as r (r.ordinal)}
-          <div class="entry">
-            <div class="entry-header">
-              <span class="ordinal">#{r.ordinal}</span>
-              <span class="chain">{r.chain}</span>
-              <span class="badge">{r.action}</span>
-            </div>
-            {#if r.comment}
-              <div class="comment">{r.comment}</div>
-            {/if}
-          </div>
-        {/each}
-      </div>
-      <div class="footnote">
-        The full pushed NAT table — a log line shows the translation result, never which rule
-        performed it, so match it up by eye.
       </div>
     {/if}
   </div>
@@ -159,6 +167,28 @@
     white-space: nowrap;
   }
 
+  /* The mode announcement. Bordered and coloured, but every bit of the
+     distinction it carries is in its text -- an operator who cannot tell
+     the accent from the muted border still reads "logged" or "not
+     logged". */
+  .chip {
+    flex: none;
+    margin-left: auto;
+    font-family: var(--font-mono);
+    font-size: 10px;
+    letter-spacing: 0.02em;
+    padding: 1px 6px;
+    border-radius: 4px;
+    color: var(--fg-muted);
+    border: 1px solid var(--border);
+    white-space: nowrap;
+  }
+
+  .chip.logged {
+    color: var(--accent);
+    border-color: var(--accent);
+  }
+
   .close {
     flex: none;
     background: transparent;
@@ -190,6 +220,7 @@
     font-size: 12px;
   }
 
+
   .entries {
     display: flex;
     flex-direction: column;
@@ -218,6 +249,7 @@
     color: var(--fg-muted);
     flex: 1;
   }
+
 
   .badge {
     flex: none;
@@ -257,7 +289,9 @@
     font-size: 11px;
     color: var(--fg-dim);
     margin-top: 2px;
+    overflow-wrap: anywhere;
   }
+
 
   .footnote {
     margin-top: 10px;
@@ -266,4 +300,5 @@
     color: var(--fg-dim);
     font-size: 11.5px;
   }
+
 </style>

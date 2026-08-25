@@ -336,10 +336,12 @@ func (s *Store) FilterRules(device string) (rules []ingest.FilterRule, updatedAt
 	return rules, ks.updatedAt, true
 }
 
-// NATRules is FilterRules for the NAT table -- display-table shape only,
-// per #186 step 4c: a log line carries a translation result, never which
-// rule performed it, so there is no event-to-NAT-rule resolution to
-// offer, just the faithful numbered table.
+// NATRules is FilterRules for the NAT table, in RouterOS's own display
+// order. The whole table, unconditionally: #445's popup does its own
+// prefix join and its own could-have/ruled-out partition client-side
+// from exactly this table, and both of those need every rule -- the
+// ruled-out half is shown, with its reasons, precisely so the operator
+// can audit the partition rather than trust it.
 func (s *Store) NATRules(device string) (rules []ingest.NATRule, updatedAt time.Time, ok bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
