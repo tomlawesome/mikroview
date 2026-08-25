@@ -11,6 +11,8 @@ import type {
   DetectorScope,
   Device,
   Entity,
+  EntityType,
+  NameProvenance,
   EventsResult,
   Exclusion,
   Filters,
@@ -466,6 +468,25 @@ export async function cloneDefinition(id: string, name?: string): Promise<Defini
   const res = await postJSON(`/api/definitions/${encodeURIComponent(id)}/clone`, { name: name ?? '' })
   if (res.ok) return await res.json()
   return (await res.text()) || `cloneDefinition: ${res.status}`
+}
+
+// fetchNameProvenance asks where the name shown for one token comes
+// from, and whether labelling it here would take effect (issue #413).
+// Admin-only, like the entity store it reads and the pencil that calls
+// it. Always ask before offering an editable field: see NameProvenance.
+//
+// device scopes the router-pushed layer only, and only host names have
+// one -- a rule or port lookup passes '' and loses nothing.
+export async function fetchNameProvenance(
+  type: EntityType,
+  key: string,
+  device: string,
+): Promise<NameProvenance> {
+  const params = new URLSearchParams({ type, key })
+  if (device) params.set('device', device)
+  const res = await fetch(`/api/naming/provenance?${params}`)
+  if (!res.ok) throw new ApiError(`fetchNameProvenance: ${res.status}`, res.status)
+  return await res.json()
 }
 
 // fetchEntities/upsertEntity/deleteEntity: admin-only CRUD over

@@ -18,6 +18,30 @@ rewritten.
 
 ### Added
 
+- **Rename hosts, ports and rules from the live view itself** (#413).
+  The moment you recognise what a row is and the moment you label it are
+  now the same moment: hover a row (or tab into it) and a pencil appears
+  beside the copy glyph on the address, port and rule tokens, opening a
+  small editor anchored to the token you were looking at. Type a display
+  name, press Enter, and every row already on screen showing that same
+  raw value changes with it -- no navigating to Entities, no reload. The
+  raw value stays visible in the editor throughout and stays what
+  filters, groups and copies use; leaving the field empty removes the
+  name and shows the raw value again. Admins only, and a viewer sees no
+  pencil at all rather than one that cannot do anything. The stream holds
+  still while any row-anchored popover is open -- this editor and the
+  existing lookup popovers -- and lets go when it closes, without
+  changing what the Autoscroll button says it will do.
+
+  **It will not accept a rename that would do nothing.** RouterOS still
+  wins on host names (#186), so on a host your router already names --
+  from a DHCP lease, a DNS static entry or a WireGuard peer comment --
+  there is no text field at all. Instead the editor says which of those
+  supplies the name, names the router to go and change it on, and, if you
+  had already saved a name for that host, tells you it is saved but not
+  what is shown. Previously that name was accepted, confirmed, and then
+  silently never displayed.
+
 - **The setup wizard is a modal now, and it is a claim ledger** (#487).
   Setup opens over whatever you were already looking at instead of
   taking you to a page, and it auto-opens once on a first admin sign-in

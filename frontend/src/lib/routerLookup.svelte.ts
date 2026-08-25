@@ -7,6 +7,7 @@ import {
   type RouterNatRule,
   type RouterTable,
 } from './api'
+import { appState } from './state.svelte'
 
 interface Anchor {
   x: number
@@ -76,6 +77,12 @@ class RouterLookupState {
   }
 
   private open(rect: DOMRect, load: () => Promise<void>) {
+  // Hold the stream while this is open (#413's "the stream holds while
+  // you edit", stated once for every row-anchored surface). Newest-at-top
+  // pushes rows down as events arrive, and a popover anchored to a row
+  // that keeps moving is hostile. Guarded on anchor so re-opening for a
+  // different token does not take a second hold it will never release.
+    if (this.anchor === null) appState.holdStream()
     this.anchor = { x: rect.left, y: rect.bottom }
     this.loading = true
     this.error = null
@@ -99,7 +106,9 @@ class RouterLookupState {
   }
 
   close() {
+    if (this.anchor === null) return
     this.anchor = null
+    appState.releaseStream()
   }
 }
 
