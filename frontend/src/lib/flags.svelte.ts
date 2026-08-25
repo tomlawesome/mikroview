@@ -44,7 +44,7 @@ export function extractSourceIp(target: string): string | null {
 class FlagsState {
   list = $state<Flag[]>([])
   // Last hour of newly-raised-episode counts by type at 1-minute
-  // resolution (see internal/flags.Store.TimeSeries), for FlagsChart --
+  // resolution (see internal/flags.Store.TimeSeries), for metrics --
   // fetched alongside list in the same GET /api/flags response.
   timeSeries = $state<FlagTimeBucket[]>([])
 

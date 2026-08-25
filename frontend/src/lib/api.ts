@@ -289,7 +289,7 @@ export async function fetchRouterNat(device: string): Promise<RouterTable<Router
 
 // Mirrors internal/api/flags.go's handleFlagsList response: the flag
 // list plus the last hour of newly-raised-episode counts by type (see
-// FlagTimeBucket) for FlagsChart -- one endpoint, same convention
+// FlagTimeBucket) for the metrics page -- one endpoint, same convention
 // GET /api/stats already uses for its own timeSeries field.
 export interface FlagsResponse {
   flags: Flag[]
