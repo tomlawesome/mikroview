@@ -137,7 +137,9 @@ check(bannerBox.left >= railBox.right - 1, 'the banner starts after the rail, no
 
 // --- Nav stays operable while disconnected ---------------------------------
 await page.click(METRICS_ITEM)
-await page.waitForSelector('.dashboard', { timeout: 5000 })
+// .metrics is the metrics page's root (Metrics.svelte), .dashboard
+// until #488 replaced that page wholesale.
+await page.waitForSelector('.metrics', { timeout: 5000 })
 check(true, 'clicking a rail item still switches the view while disconnected')
 await page.click(STREAM_ITEM)
 await page.waitForSelector('input.rule', { timeout: 5000 })
