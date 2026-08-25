@@ -1,7 +1,7 @@
 <script lang="ts">
   // SPDX-License-Identifier: AGPL-3.0-only
   // Collapsed by default (just a "+" trigger card, same footprint as the
-  // other dashboard panels); expands into a small filter form -- a
+  // saved widgets beside it); expands into a small filter form -- a
   // purpose-built subset of FilterBar's fields bound to local draft state
   // rather than appState.filters, since a widget's filter is independent
   // of whatever's active in the live view.
