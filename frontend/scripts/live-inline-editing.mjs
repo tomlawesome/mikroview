@@ -70,17 +70,17 @@ check(!!DEVICE, `the instance reports the device events arrive from (${DEVICE})`
 const tokenRes = await api('POST', '/api/tokens', { name: RULE, kind: 'ingest', device: DEVICE })
 check(tokenRes.status === 201, `an ingest token is issued (${tokenRes.status})`)
 
-const pushed = await fetch(`${URL_BASE}/api/ingest/routeros`, {
-  method: 'POST',
-  headers: { Authorization: `Bearer ${tokenRes.body.value}`, 'Content-Type': 'application/json' },
-  body: JSON.stringify({
-    kind: 'dhcp-lease',
-    page: 1,
-    pages: 1,
-    records: [{ hostname: LEASE_NAME, mac: 'aa:bb:cc:dd:ee:13', address: LEASED_IP }],
-  }),
-})
-check(pushed.status === 200, `the router pushes a DHCP lease naming ${LEASED_IP} (${pushed.status})`)
+async function pushLeases(records) {
+  const res = await fetch(`${URL_BASE}/api/ingest/routeros`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${tokenRes.body.value}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ kind: 'dhcp-lease', page: 1, pages: 1, records }),
+  })
+  return res.status
+}
+
+const pushed = await pushLeases([{ hostname: LEASE_NAME, mac: 'aa:bb:cc:dd:ee:13', address: LEASED_IP }])
+check(pushed === 200, `the router pushes a DHCP lease naming ${LEASED_IP} (${pushed})`)
 
 // --- One event carrying both tokens --------------------------------------
 
@@ -267,6 +267,50 @@ try {
   restored = false
 }
 check(restored, 'an emptied field removes the label and the raw value shows again')
+
+// --- Put the instance back the way it was found -------------------------
+//
+// Not tidiness. run-scenarios.sh globs alphabetically against ONE shared
+// server, so everything left behind here is an input to every scenario
+// that sorts after this one -- and the failure surfaces over there, as
+// an unrelated scenario asserting a number that used to be right.
+//
+// That is not hypothetical: this scenario's DHCP lease carries a
+// hostname and a MAC, which is exactly what internal/suggest's Generate
+// turns into a *device candidate* (see generate.go -- a lease needs both
+// to become one). Generate scans every device in RouterState, and
+// live-suggestions.mjs pushes its own lease under a device name of its
+// own ("live-suggest-router"), so the two coexisted rather than
+// replacing each other and its "the Undecided filter counts both"
+// assertion saw three candidates where it expects two. Confirmed by
+// running live-suggestions.mjs alone on a clean instance (pass), then
+// after this scenario (fail on exactly that line).
+//
+// Retiring the lease, rather than avoiding a MAC to dodge the candidate
+// rule, is the fix: a real lease has a MAC, and a scenario quietly
+// shaped around another package's generation rule would break again the
+// moment that rule changed, in someone else's scenario.
+//
+// Asserted, not merely attempted: a cleanup that silently stops working
+// has to fail here, where the cause is obvious, rather than somewhere
+// downstream where it is not.
+const retired = await pushLeases([])
+check(retired === 200, `the pushed DHCP lease is retired (${retired})`)
+
+const revoked = await api('DELETE', `/api/tokens/${tokenRes.body.id}`)
+check(revoked.status === 200, `the ingest token is revoked (${revoked.status})`)
+
+// The emptied-field step above already removed the host entity, but
+// that is an assertion about the product, not a guarantee about this
+// scenario's footprint -- if it ever regresses, the entity would leak
+// into every later scenario. Delete unconditionally, then prove it.
+await api('DELETE', '/api/entities', { type: 'host', key: FREE_IP })
+await api('DELETE', '/api/entities', { type: 'host', key: LEASED_IP })
+const leftovers = await api('GET', '/api/entities')
+check(
+  !(leftovers.body?.entities ?? []).some((e) => e.key === FREE_IP || e.key === LEASED_IP),
+  'no entity from this scenario is left behind for the next one to trip over',
+)
 
 check(consoleErrors.length === 0, `no console errors (${consoleErrors.join('; ')})`)
 done()
