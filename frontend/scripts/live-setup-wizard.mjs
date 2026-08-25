@@ -111,14 +111,24 @@ check(
   `the rule-tagging step counts what has arrived (${ruleObservation})`,
 )
 
-// The push step must NOT claim success -- nothing has pushed yet in this
-// scenario, and a wizard that reports a step it cannot see is the whole
+// The push step must agree with the server about whether anything has
+// pushed -- a wizard that reports a step it cannot see is the whole
 // failure mode being guarded against.
+//
+// Derived from /api/setup/status, not hard-coded to "waiting". Every
+// scenario shares one instance and live-routeros-ingest.mjs pushes real
+// tables before this runs, so whether the push step has evidence
+// depends on what else has run -- asserting "waiting" was asserting a
+// property of the harness rather than of the wizard, which is the exact
+// mistake the rule-tagging check above avoids. It failed that way on
+// first run.
+const alreadyPushed = status.devices.some((d) => Object.keys(d.pushedKinds ?? {}).length > 0)
 await page.locator('.setup-wizard .steps li:nth-child(4) .step-row').click()
 const pushObservation = (await page.locator('.setup-wizard .observation').getAttribute('class')) ?? ''
 check(
-  !pushObservation.includes('arrived'),
-  `the push step does not claim success before anything pushed (${pushObservation})`,
+  pushObservation.includes('arrived') === alreadyPushed,
+  `the push step ${alreadyPushed ? 'reports what arrived' : 'does not claim success before anything pushed'} ` +
+    `(${pushObservation}, server says pushed=${alreadyPushed})`,
 )
 
 // --- Forcing past is loud, and the record is the feature ---------------
@@ -223,11 +233,17 @@ check(pushed.status === 200, `the wizard-minted token is accepted for a push (${
 
 // And the wizard notices, without a reload -- evidence outranks a mark,
 // which is what makes the ledger honest rather than a form.
-await page.locator('.setup-wizard .steps li:nth-child(4) .step-row.done').waitFor({
-  state: 'visible',
-  timeout: 20000,
-})
-check(true, 'the push step turns green on its own once a table arrives')
+//
+// Waits for the receipt to name `arp` specifically, not merely for the
+// row to be green: on a shared instance an earlier scenario may already
+// have pushed other tables, so "green" can be true before this push
+// lands and would prove nothing about it.
+await page
+  .locator('.setup-wizard .steps li:nth-child(4) .step-row.done .step-receipt:has-text("arp")')
+  .waitFor({ state: 'visible', timeout: 20000 })
+const pushReceipt =
+  ((await page.textContent('.setup-wizard .steps li:nth-child(4) .step-receipt')) ?? '').trim()
+check(true, `the push step records this push on its own once the table arrives (${pushReceipt})`)
 
 // --- The finish reads the ledger back ---------------------------------
 await page.locator('.setup-wizard .steps li:nth-child(6) .step-row').click()
