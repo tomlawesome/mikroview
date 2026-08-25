@@ -83,14 +83,34 @@ type deviceState struct {
 	// identity-carrying kind changes -- see rebuildIdentityLocked. Kept
 	// per device rather than globally so one device's re-push doesn't
 	// rebuild every other's.
-	hostsExact map[string]string
+	hostsExact map[string]hostName
 	hostsCIDR  []cidrName
+}
+
+// hostName is one resolved router-supplied name plus which pushed table
+// supplied it. The source travels with the name because a caller that
+// only learns "the router named this" cannot tell an operator where to
+// go and change it -- and #413's editor has to name that place, since
+// the name it displays is the one that wins (see internal/naming's
+// RouterOS-always-wins precedence).
+type hostName struct {
+	name   string
+	source string
 }
 
 type cidrName struct {
 	prefix netip.Prefix
 	name   string
 }
+
+// Host name sources, as reported by HostNameSource -- which pushed
+// table a name came out of, named after the ingest kind that carried
+// it so the two never drift apart.
+const (
+	HostSourceDNSStatic     = "dns-static"
+	HostSourceDHCPLease     = "dhcp-lease"
+	HostSourceWireguardPeer = "wireguard-peer"
+)
 
 type kindState struct {
 	// pages holds each arrived page's full validated payload, keyed by
@@ -122,7 +142,7 @@ func (s *Store) Apply(device string, p ingest.Payload, now time.Time) error {
 		if len(s.devices) >= maxDevices {
 			return fmt.Errorf("routerstate: %d devices already tracked -- refusing a new one", len(s.devices))
 		}
-		ds = &deviceState{kinds: make(map[ingest.Kind]*kindState), hostsExact: make(map[string]string)}
+		ds = &deviceState{kinds: make(map[ingest.Kind]*kindState), hostsExact: make(map[string]hostName)}
 		s.devices[device] = ds
 	}
 
@@ -184,7 +204,7 @@ func (s *Store) Apply(device string, p ingest.Payload, now time.Time) error {
 // thousand entries at most (maxRecordsPerKind), so simplicity wins over
 // a delta scheme nothing needs.
 func (ds *deviceState) rebuildIdentityLocked() {
-	exact := make(map[string]string)
+	exact := make(map[string]hostName)
 	var cidrs []cidrName
 
 	// DHCP first, then DNS static over the top, so a static entry wins
@@ -193,7 +213,7 @@ func (ds *deviceState) rebuildIdentityLocked() {
 		for _, p := range ks.pages {
 			for _, l := range p.DHCPLeases {
 				if l.Address != "" && l.Hostname != "" {
-					exact[l.Address] = l.Hostname
+					exact[l.Address] = hostName{name: l.Hostname, source: HostSourceDHCPLease}
 				}
 			}
 		}
@@ -202,7 +222,7 @@ func (ds *deviceState) rebuildIdentityLocked() {
 		for _, p := range ks.pages {
 			for _, e := range p.DNSStatic {
 				if e.Address != "" && e.Name != "" {
-					exact[e.Address] = e.Name
+					exact[e.Address] = hostName{name: e.Name, source: HostSourceDNSStatic}
 				}
 			}
 		}
@@ -289,30 +309,51 @@ func (ds *deviceState) rebuildIdentityLocked() {
 // one read lock, one map hit, and a linear scan of a small CIDR list
 // only when the map misses.
 func (s *Store) HostName(device, ip string) string {
+	name, _ := s.HostNameSource(device, ip)
+	return name
+}
+
+// HostNameSource is HostName plus which pushed table the name came out
+// of -- one of the HostSource* constants, or "" whenever name is "".
+//
+// The source exists for #413's inline editor, which must refuse an edit
+// that would have no effect. Because RouterOS wins (internal/naming),
+// a mikroview-side label for a router-named host is never displayed, so
+// the editor disables the field and says where the name really comes
+// from. "The router named it" is not enough to act on -- an operator
+// told that still has to find *which* of dns-static, a DHCP lease or a
+// WireGuard peer comment to go and change -- so the answer names the
+// table.
+//
+// HostName is the hot-path caller and delegates here rather than the
+// other way round: the work is identical (one map hit, or one scan of
+// the small CIDR list), so there is no faster path to preserve, and one
+// implementation cannot drift from the other.
+func (s *Store) HostNameSource(device, ip string) (name, source string) {
 	if device == "" || ip == "" {
-		return ""
+		return "", ""
 	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
 	ds, ok := s.devices[device]
 	if !ok {
-		return ""
+		return "", ""
 	}
 	if v, ok := ds.hostsExact[ip]; ok {
-		return v
+		return v.name, v.source
 	}
 	if len(ds.hostsCIDR) > 0 {
 		if addr, err := netip.ParseAddr(ip); err == nil {
 			addr = addr.Unmap()
 			for _, c := range ds.hostsCIDR {
 				if c.prefix.Contains(addr) {
-					return c.name
+					return c.name, HostSourceWireguardPeer
 				}
 			}
 		}
 	}
-	return ""
+	return "", ""
 }
 
 // FilterRules returns device's pushed firewall filter table in RouterOS's

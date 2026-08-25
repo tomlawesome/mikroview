@@ -155,6 +155,9 @@ var authzMatrix = []routeExpectation{
 		"changes what future traffic counts as expected for a device -- same weight as creating the definition"},
 	{http.MethodPost, "/api/definitions/{id}/observing", accessAdmin,
 		"same reasoning as promote"},
+	{http.MethodGet, "/api/naming/provenance", accessAdmin,
+		"says which layer supplies the name shown for one token, and whether a label saved here would be shadowed by a router-pushed one (#413). Admin for two reasons: the editor it serves gives viewers no pencil at all, so no viewer ever calls it; and the answer is a partial map of which router names which host, the same administrative metadata GET /api/entities is gated for"},
+
 	{http.MethodGet, "/api/entities", accessAdmin, "admin-managed labels/tags"},
 	{http.MethodPost, "/api/entities", accessAdmin, "admin-managed labels/tags"},
 	{http.MethodDelete, "/api/entities", accessAdmin, "admin-managed labels/tags"},

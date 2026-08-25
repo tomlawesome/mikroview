@@ -825,9 +825,21 @@ only way a port ever gets a friendly name.
 
 Entities are managed via `GET`/`POST`/`DELETE /api/entities`
 (admin-gated the same way `POST /api/auth/users` is -- see
-[API reference](#api-reference)), or the **Entities** panel in the menu.
-That panel is also where you'd go to name something *without* already
-knowing its raw IP/rule label/port number: a **Discovered** section
+[API reference](#api-reference)), the **Entities** panel in the menu, or
+the pencil on any address, port or rule token in the live view -- which
+is usually where you want it, since it puts the naming at the moment you
+recognised what the row was.
+
+That pencil will not offer you a field for a host RouterOS already
+names. Router-pushed names win over anything set here, so a label saved
+for such a host would be stored and never displayed; instead the editor
+says which pushed table supplies the name -- a DHCP lease, a DNS static
+entry, a WireGuard peer comment -- and names the router to go and change
+it on. Rule and port labels have no router layer at all, so they are
+always editable.
+
+The Entities panel is also where you'd go to name something *without*
+already knowing its raw IP/rule label/port number: a **Discovered** section
 lists hosts, rules, and ports seen in live traffic that don't have a
 label yet (mirroring the auto-discovered-device pattern the **Fleet**
 view already uses for RouterOS sources), each with a one-click "Name it"
@@ -2869,6 +2881,7 @@ exits, rather than starting the server. See
 | `GET /api/entities` | admin-only (see [Entities](#entities-ui-managed-hostruleport-labels-and-tags-optional)): every persisted entity |
 | `POST /api/entities` | admin-only: create or replace (upsert) one entity, identified by `(type, key)` in the JSON body |
 | `DELETE /api/entities` | admin-only: remove the entity identified by `(type, key)` in the JSON body |
+| `GET /api/naming/provenance` | admin-only: where the name currently shown for one token comes from, given `type` (`host`/`rule`/`port`), `key` (the raw value) and, for a host, `device`. Answers `source` (`none`, `entity`, `config`, or one of `router-dns-static`/`router-dhcp-lease`/`router-wireguard-peer`), the `name` in use, your own saved `label` if any, and `editable` -- false when a router-pushed name would shadow anything saved here, which is what the live view's inline editor checks before offering a field |
 | `GET /api/audit` | admin-only: a windowed slice of the admin action audit log (see [Audit log](#audit-log-admin-action-accountability-optional)), newest activity last, accepting `since`/`until`/`limit` query params like `GET /api/events` |
 | `GET /api/matches` | a windowed query over the persisted match log, in one of two modes -- by device, with `mac` and/or `ip` (at least one required), or across every watchlist entry with `entries=all`, which returns the most recent matches anywhere in the log, newest first. `entries=all` may not be combined with `mac`/`ip`. Both modes take `since`/`until` (RFC 3339) and `limit`, and both are bounded: `limit` defaults to 100 and is capped at 5000 whatever the caller asks for. Open to any signed-in user and reachable via a read-only API token, same tier as `/api/events`/`/api/flags`/`/api/stats`/`/api/devices` |
 | `GET /api/suggestions` | admin-only: every suggested watchlist entry (see [Suggested watchlist entries](#suggested-watchlist-entries-issue-243)), optionally filtered with `?status=off\|on\|hide` |
