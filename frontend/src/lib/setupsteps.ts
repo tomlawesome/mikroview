@@ -8,9 +8,14 @@
 // exists to prevent, and "the wizard said step 3 was done when it
 // wasn't" would be worse than no wizard at all.
 
-import type { Device, SetupStatus } from './types'
+import type { Device, SetupMark, SetupStatus } from './types'
 
-export type StepState = 'done' | 'waiting' | 'blocked' | 'partial'
+// 'quiet' is #487's fifth reading, and the only one that is not a claim
+// about a router: a step with nothing to wait for (step 5's naming is
+// config-file work) is neither done nor waiting, and calling it either
+// would be a small lie in a feature whose whole point is not telling
+// them.
+export type StepState = 'done' | 'waiting' | 'blocked' | 'partial' | 'quiet'
 
 export interface StepStatus {
   state: StepState
@@ -292,4 +297,347 @@ export function pushStep(status: SetupStatus): StepStatus {
 // a name of the operator's choosing.
 export function undeclaredDevices(devices: Device[]): Device[] {
   return devices.filter((d) => !d.configured)
+}
+
+// --- The claim ledger ---------------------------------------------------
+//
+// #487 turns the wizard page into a modal, and the modal into a claim
+// ledger: every check above is an observation -- mikroview never
+// connects to the router -- so each step is a claim about what has
+// arrived, and ends in exactly one of done, skipped, or forced past.
+// See docs/design/screens/wizard/DESIGN.md, the ratified record this
+// implements; where it and a mockup disagree, the record wins.
+//
+// Everything here is pure: the component renders it and the modal's
+// state module drives it, but neither owns the wording or the rules.
+// Getting a claim wrong is the failure this whole feature exists to
+// prevent, so the claims stay testable without a browser.
+
+// Flavour is how an observation line reads. The record names four and
+// calls them the complete set -- waiting, arrived, counting, quiet.
+//
+// 'attention' is not a fifth flavour of observation: it is the
+// mikroview-side check logic this design inherits from #371/#374, where
+// nothing is being waited for because nothing router-side can work yet
+// (the certificate cannot cover the address; the syslog listener is
+// off). Kept distinct precisely so it never borrows the patient,
+// nothing-is-wrong voice the waiting flavour is required to use.
+export type Flavour = 'waiting' | 'arrived' | 'counting' | 'quiet' | 'attention'
+
+// Outcome is where a step stands in the ledger. 'open' is a step that
+// has neither evidence nor a decision yet -- it is not a fourth
+// outcome, it is the absence of one.
+export type Outcome = 'done' | 'skipped' | 'forced' | 'open'
+
+export interface LedgerStep {
+  n: number
+  title: string
+  // The step body's lead sentence -- one anatomy for every step:
+  // lead sentence, the router-side command (with Copy), the observation
+  // line.
+  lead: string
+  status: StepStatus
+  flavour: Flavour
+  outcome: Outcome
+  // The step list's sub-line, carried for the wizard's life: the receipt
+  // when evidence arrived, the decision when one was recorded, and the
+  // honest gap when neither.
+  receipt: string
+  // Whether Next runs a check here. Step 3 counts and can only count
+  // upward, and step 5 has nothing to wait for, so on both Next is
+  // always free -- there is no waiting check to force past.
+  hasCheck: boolean
+}
+
+// STEP_TITLES is the ratified five, in order. Exported because the step
+// list, the header and the spoken announcement all name the same step
+// and must not drift.
+export const STEP_TITLES = [
+  'Trust the certificate',
+  'Send logs',
+  'Tag firewall rules',
+  'Push router state',
+  'Name your router',
+] as const
+
+export const STEP_COUNT = STEP_TITLES.length
+
+// arrived reports whether a step's evidence has landed. 'partial' counts:
+// every step's check is "waiting → arrived", and a partial reading means
+// the first push (or the first tagged rule) has already arrived -- it is
+// a growing receipt, not a half-failure.
+function arrived(state: StepState): boolean {
+  return state === 'done' || state === 'partial'
+}
+
+// when renders a receipt's timestamp. Local time, no date for something
+// that happened today: a receipt is read next to the thing it describes,
+// and "14:02:11" says more at a glance than a full ISO string.
+function when(iso: string): string {
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return iso
+  const today = new Date()
+  const sameDay =
+    d.getFullYear() === today.getFullYear() &&
+    d.getMonth() === today.getMonth() &&
+    d.getDate() === today.getDate()
+  const time = d.toLocaleTimeString(undefined, { hour12: false })
+  return sameDay ? time : `${d.toLocaleDateString()} ${time}`
+}
+
+// caReceipt: what arrived, when, from where. The source address is the
+// "from where" -- on a first run it is also the first proof the router
+// can reach mikroview at all.
+export function caReceipt(status: SetupStatus): string {
+  const fetched = status.sources.filter((s) => s.caFetchedAt)
+  if (fetched.length === 0) return ''
+  const first = fetched[0]
+  const more = fetched.length > 1 ? ` (+${fetched.length - 1} more)` : ''
+  return `ca.crt fetched by ${first.source} · ${when(first.caFetchedAt ?? '')}${more}`
+}
+
+export function syslogReceipt(status: SetupStatus): string {
+  const seen = status.sources.filter((s) => s.syslogFirstSeenAt)
+  if (seen.length === 0) return ''
+  const first = seen[0]
+  const more = seen.length > 1 ? ` (+${seen.length - 1} more)` : ''
+  return `syslog connected from ${first.source} · ${when(first.syslogFirstSeenAt ?? '')}${more}`
+}
+
+export function rulesReceipt(status: SetupStatus): string {
+  const withEvents = status.devices.filter((d) => d.events > 0)
+  if (withEvents.length === 0) return ''
+  const total = withEvents.reduce((n, d) => n + d.events, 0)
+  const decoded = withEvents.reduce((n, d) => n + d.decodedActions, 0)
+  return `${decoded} of ${total} events carry an action`
+}
+
+export function pushReceipt(status: SetupStatus): string {
+  let newest = ''
+  const kinds = new Set<string>()
+  for (const d of status.devices) {
+    for (const [kind, at] of Object.entries(d.pushedKinds ?? {})) {
+      kinds.add(kind)
+      if (!newest || at > newest) newest = at
+    }
+  }
+  if (kinds.size === 0) return ''
+  return `${[...kinds].sort().join(', ')} · ${when(newest)}`
+}
+
+// nameStep is step 5. It is conditional and informational rather than a
+// check: naming a router is config-file work mikroview deliberately does
+// not do for the operator (the sourceIp -> id mapping decides who an
+// event stream is attributed to, so it stays under file control), which
+// means there is nothing here to wait for and nothing to force past.
+//
+// The row exists either way, so the ledger's count of five is stable --
+// it is simply marked "nothing to name" until a push surfaces a device
+// config.yaml does not name.
+export function nameStep(devices: Device[]): StepStatus {
+  const undeclared = undeclaredDevices(devices)
+  if (undeclared.length === 0) {
+    return { state: 'quiet', detail: 'Nothing to name — every router sending is already declared.' }
+  }
+  const which = undeclared.map((d) => d.sourceIp || d.id).join(', ')
+  return {
+    state: 'quiet',
+    detail:
+      `${undeclared.length === 1 ? 'One router is' : `${undeclared.length} routers are`} ` +
+      `identified by address (${which}). Naming ${undeclared.length === 1 ? 'it' : 'them'} is a ` +
+      `config.yaml edit — there is nothing to wait for here.`,
+  }
+}
+
+// LEADS are the step bodies' lead sentences. Wording is design, so it
+// lives with the step it belongs to rather than being assembled in the
+// component.
+const LEADS = [
+  "The router has to trust mikroview's certificate authority before it will open a TLS connection. Run this on the router; it fetches the certificate and imports it.",
+  'Point the router at this instance. The handshake itself is the evidence — a failed one never counts as arrived.',
+  'The letter in the log-prefix is how mikroview knows what a rule did. This tags every existing filter rule by its action, in one pass.',
+  'A push turns addresses into names, fills the rule lookups, and gives suggestions something to suggest from. The token below is minted for one router and is already in the script.',
+  'Mikroview does not edit config.yaml itself: the sourceIp mapping decides who an event stream is attributed to, so it stays under your control.',
+] as const
+
+// stepMarks indexes marks by step, so building the ledger stays one pass.
+function markFor(marks: SetupMark[], step: number): SetupMark | undefined {
+  return marks.find((m) => m.step === step)
+}
+
+// decisionReceipt words a recorded decision for the step list. Skip is
+// quiet and force is loud, and the two must stay tellable apart at a
+// glance, so they are worded as differently as they are coloured.
+function decisionReceipt(mark: SetupMark): string {
+  if (mark.outcome === 'skipped') return `skipped by ${mark.actor} · ${when(mark.at)}`
+  return `forced past by ${mark.actor} · ${when(mark.at)}`
+}
+
+// flavourFor maps a check's state onto how its observation line reads.
+// Step 3 is the counting one -- it can only count upward, so any
+// arrival there reads as counting rather than as a single arrival.
+function flavourFor(step: number, state: StepState): Flavour {
+  if (state === 'blocked') return 'attention'
+  if (state === 'quiet') return 'quiet'
+  if (!arrived(state)) return 'waiting'
+  return step === 3 ? 'counting' : 'arrived'
+}
+
+// buildLedger is the whole ledger in one pure function: the five steps,
+// what each one has observed, and where each one stands.
+//
+// Evidence outranks a mark, always. That is the record's "forced is not
+// failed": a step forced past that later receives its evidence turns
+// green and stops explaining anybody's silence, while the audit entry
+// stays as history rather than as a scar the interface keeps pointing
+// at.
+export function buildLedger(status: SetupStatus, devices: Device[], address: string): LedgerStep[] {
+  const checks: StepStatus[] = [
+    caStep(status, address),
+    syslogStep(status),
+    rulesStep(status),
+    pushStep(status),
+    nameStep(devices),
+  ]
+  const receipts = [
+    caReceipt(status),
+    syslogReceipt(status),
+    rulesReceipt(status),
+    pushReceipt(status),
+    '',
+  ]
+  // Steps 3 and 5 have no waiting check to force past: step 3 counts
+  // upward and step 5 has nothing to wait for, so Next is always free
+  // on both.
+  const checked = [true, true, false, true, false]
+
+  return checks.map((check, i) => {
+    const n = i + 1
+    const mark = markFor(status.marks, n)
+    const hasEvidence = arrived(check.state)
+    let outcome: Outcome = 'open'
+    if (hasEvidence) outcome = 'done'
+    else if (mark) outcome = mark.outcome
+    return {
+      n,
+      title: STEP_TITLES[i],
+      lead: LEADS[i],
+      status: check,
+      flavour: flavourFor(n, check.state),
+      outcome,
+      receipt: hasEvidence ? receipts[i] : mark ? decisionReceipt(mark) : '',
+      hasCheck: checked[i],
+    }
+  })
+}
+
+// firstOpenStep is where Run setup… reopens the ledger: the first step
+// still waiting. A step already decided is not still waiting, so
+// reopening does not drop the operator back onto a question they have
+// answered -- and if nothing is left open, the ledger opens on its
+// first step rather than on the finish, since reopening deliberately
+// shows the ledger as it stands.
+export function firstOpenStep(ledger: LedgerStep[]): number {
+  const open = ledger.find((s) => s.outcome === 'open' && s.status.state !== 'quiet')
+  return open?.n ?? 1
+}
+
+// forcedPastRecord is the exact line the amber button writes, quoted on
+// the button itself before it is pressed. The operator sees the record
+// they are about to create, which is the point: the record is the
+// feature, so it is never a surprise produced after the fact.
+//
+// `actor` is what the button quotes; the server resolves the real one
+// from the session when it writes, so a client that lied here would be
+// caught by its own audit entry disagreeing.
+export function forcedPastRecord(step: LedgerStep, actor: string, now: Date): string {
+  return `setup · step ${step.n} forced past · ${notObserved(step)} · ${actor || 'you'} · ${when(now.toISOString())}`
+}
+
+// notObserved is the "what was not observed" clause, in mikroview's own
+// words rather than a generic "check failed". A check that could not be
+// run is a different sentence from one that ran and saw nothing.
+export function notObserved(step: LedgerStep): string {
+  if (step.status.state === 'blocked') return 'the check could not run on mikroview’s side'
+  switch (step.n) {
+    case 1:
+      return 'no router has fetched /ca.crt'
+    case 2:
+      return 'no router has opened a syslog connection'
+    case 3:
+      return 'no events carrying a decoded action have arrived'
+    case 4:
+      return 'no pushed table has arrived'
+    default:
+      return 'nothing has arrived'
+  }
+}
+
+// finishHeadline reads the ledger back in one sentence, as the record
+// asks: what is true now, then how the five steps stand.
+export function finishHeadline(ledger: LedgerStep[]): string {
+  const opening = ledger[2] && arrived(ledger[2].status.state)
+    ? 'Logs are flowing.'
+    : ledger[1] && arrived(ledger[1].status.state)
+      ? 'The router is connected.'
+      : 'Nothing has arrived from a router yet.'
+
+  const evidence = ledger.filter((s) => s.outcome === 'done').length
+  const skipped = ledger.filter((s) => s.outcome === 'skipped').length
+  const forced = ledger.filter((s) => s.outcome === 'forced').length
+
+  const clauses: string[] = []
+  clauses.push(
+    evidence === 0
+      ? 'No step stands on evidence yet'
+      : `${count(evidence)} ${evidence === 1 ? 'step stands' : 'steps stand'} on evidence`,
+  )
+  if (skipped > 0) clauses.push(`${count(skipped)} ${skipped === 1 ? 'was' : 'were'} skipped`)
+  if (forced > 0) clauses.push(`${count(forced)} ${forced === 1 ? 'was' : 'were'} forced past`)
+  return `${opening} ${clauses.join('; ')}.`
+}
+
+// count words small numbers, because "Four steps stand on evidence"
+// reads as a sentence and "4 steps" reads as a readout.
+function count(n: number): string {
+  return ['zero', 'one', 'two', 'three', 'four', 'five'][n] ?? String(n)
+}
+
+// silenceExplanation is what a surface with nothing to show says about
+// why. It is the reach of "the record is the feature": the Stream's
+// empty state does not merely say it is empty, it names the step that
+// accounts for the silence and who decided it.
+//
+// Returns null when the ledger explains nothing -- an empty surface with
+// no decision behind it is simply empty, and inventing a cause for it
+// would be the opposite of this feature.
+export function silenceExplanation(marks: SetupMark[]): string | null {
+  const forced = marks.filter((m) => m.outcome === 'forced')
+  const skipped = marks.filter((m) => m.outcome === 'skipped')
+  const first = forced[0] ?? skipped[0]
+  if (!first) return null
+  const verb = first.outcome === 'forced' ? 'forced past' : 'skipped'
+  const note = first.note ? ` — ${first.note}` : ''
+  return `Setup step ${first.step} (${STEP_TITLES[first.step - 1] ?? 'unknown'}) was ${verb} by ${first.actor} on ${when(first.at)}${note}.`
+}
+
+// SKIP_CONSEQUENCES is what a skipped step costs, stated plainly in the
+// ledger's dashed row. The record is explicit that a skipped step is
+// never a reproach: it states its consequence, so the operator can see
+// what they chose rather than being told off for choosing it.
+export const SKIP_CONSEQUENCES = [
+  'the router will not trust this certificate, so its TLS connection will fail',
+  'no logs arrive, so the stream stays empty',
+  'events arrive without an action, so rows read "unknown"',
+  'the stream stays address-only — no names, no rule lookups, nothing to suggest from',
+  'routers stay identified by their address rather than a name',
+] as const
+
+// announceStep is what a screen reader is told when the step changes:
+// which step, its title, and where it stands. The record asks for
+// exactly this sentence -- "Step 4 of 5 — Push router state — waiting
+// for the first push" -- rather than the step title alone, which would
+// announce a move without announcing what was moved to.
+export function announceStep(step: LedgerStep): string {
+  return `Step ${step.n} of ${STEP_COUNT} — ${step.title} — ${step.status.detail}`
 }

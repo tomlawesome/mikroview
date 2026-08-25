@@ -764,4 +764,27 @@ export interface SetupStatus {
     pushedKinds?: Record<string, string>
   }[]
   pushKinds: string[]
+  // The claim ledger's own marks (#487) -- see SetupMark. Always
+  // present, empty when nothing has been skipped or forced past.
+  marks: SetupMark[]
+}
+
+// Mirrors internal/setup.Mark (#487): the operator's own statement about
+// a step that produced no evidence. The other half of the claim ledger,
+// and served alongside the evidence because the surfaces that need it
+// are not only the wizard -- an empty stream explains its own silence
+// with the forced-past line that accounts for it.
+export interface SetupMark {
+  // 1-5, matching the wizard's five steps.
+  step: number
+  // 'skipped' is quiet and moves on; 'forced' went past the heavy
+  // warning and is recorded loudly. There is no third outcome: a step
+  // with evidence needs no mark at all.
+  outcome: 'skipped' | 'forced'
+  // Resolved server-side from the session, never sent by the client.
+  actor: string
+  at: string
+  // What had not arrived when the decision was made, as the wizard's own
+  // observation line worded it.
+  note?: string
 }
