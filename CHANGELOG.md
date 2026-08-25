@@ -16,8 +16,33 @@ rewritten.
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-08-25
+
 ### Added
 
+- **Matches is a tab of Watchlist, and it is one list** (#584). Every
+  entry's matches in a single newest-first list, rather than hidden
+  behind a per-entry expander you had to open one at a time. Each row
+  says which entry it belongs to and which kind it is -- a port you
+  watch was reached, or a device went somewhere it should not -- because
+  the sentence to read differs and the entry name alone does not say
+  which. The newest hundred, with **load older** to go back, the same
+  way the live view pages. An empty tab distinguishes the two silences
+  that look identical and are not: if any watch you have enabled cannot
+  be checked because the rules it needs aren't logged, it says so and
+  names it, rather than reporting a clean sheet.
+- **A bounded query across every watch** (#586) --
+  `GET /api/matches?entries=all`, newest first. Until now every match
+  query needed a device identity, so asking "what has broken recently"
+  meant already knowing where to look. It also reaches evidence nothing
+  else could: a watch with no source set ("any source") had its matches
+  recorded but retrievable only by an identity nobody knew to ask for.
+- **The broken ring reaches the phone** (#583). A watch that has gone
+  blind was invisible at small widths -- the ring had nowhere to live
+  once the rail became a bottom bar. It now marks the group in the bar
+  and again the page inside the half-sheet, so the next tap tells you
+  which page carries the problem. A group is only marked where opening
+  it resolves which page is at fault.
 - **The NAT popup answers one of two different questions, and says which**
   (#445, design ratified 2026-08-22). RouterOS never states which NAT
   rule performed a translation -- but neither does it state which filter
