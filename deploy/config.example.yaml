@@ -283,6 +283,16 @@ store:
 # audit:
 #   storePath: /var/lib/mikroview/audit.json
 
+# The setup wizard's ledger (#487): which setup steps were skipped or
+# forced past, and by whom. Persisted because a forced-past decision is
+# what explains a silence elsewhere in the interface -- an empty stream
+# says which step accounts for it -- and that explanation has to survive
+# the restart an upgrade brings. storePath already defaults to
+# /var/lib/mikroview/setup.json; only uncomment this block to move that
+# path. See docs/configuration.md's "Setup wizard ledger" section.
+# setup:
+#   storePath: /var/lib/mikroview/setup.json
+
 # Local authentication. storePath already defaults to
 # /var/lib/mikroview/users.json (see deploy/docker-compose.yml for the
 # matching volume mount if you want it to survive container recreation,

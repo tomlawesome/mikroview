@@ -187,6 +187,20 @@ up() {
   done
   rm -rf "$MV_DIR"; mkdir -p "$MV_DIR/data"
   build
+  # ADDING A PERSISTED STORE TO MIKROVIEW? IT NEEDS A LINE IN THE CONFIG
+  # BELOW. Every store gets an explicit path under $MV_DIR/data, because
+  # a store left at its /var/lib/mikroview default cannot be written by
+  # this account -- and checkStoresUsable (storage_preflight.go) walks
+  # backedUpStores and refuses to start on the first unusable path
+  # (#536). So the moment a new store joins that list, this config has to
+  # name it or nothing boots here.
+  #
+  # That failure is invisible to every unit test, and it does not look
+  # like what it is. What you see is every scenario header followed by no
+  # RESULT: line at all, each one printing "MV_URL unset -- run: eval
+  # ..." -- because up() never got far enough to export MV_URL. #487's
+  # setup store landed exactly that way. When up() times out, read
+  # $MV_DIR/server.log first: the refusal names the store and the path.
   cat > "$MV_DIR/cfg.yaml" <<EOF
 listen: {syslogTls: "$SYSLOG_TLS_ADDR", http: "$MV_BIND:$HTTP_PORT", httpRedirect: ""}
 $TLS_BLOCK
@@ -202,15 +216,17 @@ flags:
   detectorSettingsStorePath: $MV_DIR/data/detector-settings.json
 entities: {storePath: $MV_DIR/data/entities.json}
 audit: {storePath: $MV_DIR/data/audit.json}
+setup: {storePath: $MV_DIR/data/setup.json}
 watchlist:
   storePath: $MV_DIR/data/watchlist.json
   matchLogPath: $MV_DIR/data/matchlog.jsonl
   suggestionsStorePath: $MV_DIR/data/suggestions.json
-# Every store, not most of them. The ones below used to be left at their
-# /var/lib/mikroview defaults, which no developer machine can write --
-# so the live check was exercising a deployment that silently failed to
-# persist half its state, which is precisely the condition #536 stops
-# mikroview booting in.
+# Every store, not most of them -- see scripts/live-env.sh's own comment
+# above this heredoc before adding one. The ones below used to be left
+# at their /var/lib/mikroview defaults, which no developer machine can
+# write -- so the live check was exercising a deployment that silently
+# failed to persist half its state, which is precisely the condition
+# #536 stops mikroview booting in.
 deviceMac: {storePath: $MV_DIR/data/mac-registry.json}
 engine:
   storePath: $MV_DIR/data/engine-state.json

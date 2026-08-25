@@ -82,6 +82,7 @@ services:
       # - MIKROVIEW_ENGINE_DEFINITIONS_STORE_PATH=/var/lib/mikroview/definitions.json
       # - MIKROVIEW_AUTH_TOKENS_STORE_PATH=/var/lib/mikroview/tokens.json
       # - MIKROVIEW_AUDIT_STORE_PATH=/var/lib/mikroview/audit.json
+      # - MIKROVIEW_SETUP_STORE_PATH=/var/lib/mikroview/setup.json
       # TLS is on by default and needs no configuration to work -- these
       # are only for customizing it.
       # - MIKROVIEW_TLS_STORE_PATH=/var/lib/mikroview/tls
