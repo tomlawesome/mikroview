@@ -137,21 +137,28 @@ type FilterRule struct {
 	OutInterface    string           `json:"outInterface"`
 }
 
-// NATRule mirrors one /ip/firewall/nat rule. Display-table shape only
-// (issue #186 step 4c: "NAT uses the second shape only") -- a log line
-// gives a translation result, never which rule performed it, so there is
-// no LogPrefix/event-resolution field here the way FilterRule has one.
-// That stays true with the fields below: none of them makes a rule
-// answerable for a translation, they only describe what a rule matches
-// and what it translates to.
+// NATRule mirrors one /ip/firewall/nat rule.
+//
+// #186 step 4c ruled that a NAT log line "gives a translation result,
+// never which rule performed it", and read that as meaning NAT could
+// only ever be a display table. #445 kept the observation and dropped
+// the conclusion. The line does not name the rule -- but neither does a
+// filter line, and filter events resolve anyway, through the log-prefix
+// the operator chose to put on the rule. LogPrefix is that same
+// operator-set join, and it says exactly as much for NAT as it does for
+// filter: the router did not identify the rule, the operator labelled
+// it. A rule with no LogPrefix stays unanswerable for a translation, and
+// #445's popup says so rather than guessing.
 //
 // Everything from ToAddresses down was added for issue #408 as #445's
-// stated prerequisite. #445 wants to partition the NAT table into rules
-// *consistent with* an event (chain, protocol, ports and interfaces that
-// do not exclude it) and dim the rest -- a partition the old
-// ordinal/chain/action/comment shape gives nothing to compute, since
-// every rule is equally consistent with everything. Nothing reads them
-// yet; the popup that does is #445.
+// stated prerequisite, and #445 now reads it: an *unlogged* translation
+// cannot name a rule, so the popup instead partitions the table by what
+// the event positively contradicts (wrong chain, wrong protocol, a port
+// outside dst-port, a disabled rule) and shows the reason against each
+// exclusion. The old ordinal/chain/action/comment shape gives that
+// nothing to compute, since every rule is equally consistent with
+// everything -- which is the state the popup's layer-3 floor detects and
+// says out loud.
 //
 // Shapes follow FilterRule's already-verified ones rather than fresh
 // assumptions, since these are the same RouterOS properties on a sibling
@@ -165,6 +172,7 @@ type NATRule struct {
 	Comment      string           `json:"comment"`
 	Chain        string           `json:"chain"`
 	Action       string           `json:"action"`
+	LogPrefix    string           `json:"logPrefix"`
 	ToAddresses  string           `json:"toAddresses"`
 	ToPorts      RouterOSPortSpec `json:"toPorts"`
 	DstPort      RouterOSPortSpec `json:"dstPort"`

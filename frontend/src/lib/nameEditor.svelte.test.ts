@@ -58,7 +58,10 @@ beforeEach(() => {
   vi.mocked(deleteEntity).mockReset().mockResolvedValue(null)
   nameEditorState.close()
   appState.autoscroll = true
-  appState.streamHolds = 0
+  // Drain any hold a previous test left, through the public API: the
+  // counter behind it is deliberately not reactive and not exposed (see
+  // state.svelte.ts), so it cannot be reset by assignment.
+  while (appState.streamHeld) appState.releaseStream()
   appState.events = []
   appState.frozenPool = null
 })
@@ -229,7 +232,8 @@ describe('holding the stream while open', () => {
 
     // A leaked hold freezes the live view permanently, with no control
     // anywhere that would release it.
-    expect(appState.streamHolds).toBe(0)
+    // With Autoscroll on, streamHeld can only be true if a hold leaked,
+    // so this is the whole assertion -- the count behind it is private.
     expect(appState.streamHeld).toBe(false)
   })
 })
