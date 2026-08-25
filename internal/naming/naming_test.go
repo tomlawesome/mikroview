@@ -169,11 +169,41 @@ type fakeRouterHosts map[string]string
 // TestRouterHostsAreScopedToTheDeviceThatPushedThem.
 func (f fakeRouterHosts) HostName(device, ip string) string { return f[ip] }
 
+// Reports every name as a DHCP lease -- the source only has to be a
+// router source for the precedence tests; which table it names is
+// exercised by sourcedRouterHosts below.
+func (f fakeRouterHosts) HostNameSource(device, ip string) (string, string) {
+	if v := f[ip]; v != "" {
+		return v, "dhcp-lease"
+	}
+	return "", ""
+}
+
 // scopedRouterHosts is keyed the way the real store is: a name belongs
 // to the device that pushed it.
 type scopedRouterHosts map[string]map[string]string
 
 func (f scopedRouterHosts) HostName(device, ip string) string { return f[device][ip] }
+
+func (f scopedRouterHosts) HostNameSource(device, ip string) (string, string) {
+	if v := f[device][ip]; v != "" {
+		return v, "dns-static"
+	}
+	return "", ""
+}
+
+// sourcedRouterHosts carries the pushed table each name came out of, so
+// the provenance tests can assert the editor is told *where* to go and
+// change a router-supplied name, not merely that it cannot be changed
+// here.
+type sourcedRouterHosts map[string][2]string
+
+func (f sourcedRouterHosts) HostName(device, ip string) string { return f[ip][0] }
+
+func (f sourcedRouterHosts) HostNameSource(device, ip string) (string, string) {
+	v := f[ip]
+	return v[0], v[1]
+}
 
 // The Resolver must not launder one router's pushed name onto another
 // router's traffic. This is the naming-layer half of the fix; see
@@ -219,5 +249,118 @@ func TestRouterHostsWinOverEverything(t *testing.T) {
 	}
 	if got := r.Host("router-1", "192.168.1.60"); got != "config-only host" {
 		t.Errorf("Host() = %q -- an address the router does not name must fall through untouched", got)
+	}
+}
+
+// TestHostProvenanceNamesTheRouterTableThatWon is #413's gate, at the
+// resolver: when RouterOS supplies the displayed name, the editor must
+// be able to say so plainly and name the router table to change it
+// instead of accepting a label that would never be shown. Asserting on
+// RouterWins alone would not catch a source that says only "the
+// router", which leaves an operator no better off than before.
+func TestHostProvenanceNamesTheRouterTableThatWon(t *testing.T) {
+	es, _ := entities.Open("")
+	if _, err := es.Upsert(entities.Entity{Type: entities.TypeHost, Key: "10.0.0.5", Label: "nas"}); err != nil {
+		t.Fatal(err)
+	}
+
+	r := Resolver{
+		Entities: es,
+		RouterHosts: sourcedRouterHosts{
+			"10.0.0.5": {"android-dhcp-1234", "dhcp-lease"},
+			"10.0.0.6": {"printer.lan", "dns-static"},
+			"10.0.0.7": {"branch office", "wireguard-peer"},
+			"10.0.0.8": {"mystery", "some-future-kind"},
+		},
+	}
+
+	for _, tc := range []struct {
+		ip     string
+		source string
+	}{
+		{"10.0.0.5", SourceRouterDHCPLease},
+		{"10.0.0.6", SourceRouterDNSStatic},
+		{"10.0.0.7", SourceRouterWireguardPeer},
+		{"10.0.0.8", SourceRouterUnknown},
+	} {
+		p := r.HostProvenance("router-1", tc.ip)
+		if p.Source != tc.source {
+			t.Errorf("HostProvenance(%q).Source = %q, want %q", tc.ip, p.Source, tc.source)
+		}
+		if !p.RouterWins() {
+			t.Errorf("HostProvenance(%q).RouterWins() = false -- a router-supplied name must gate the edit", tc.ip)
+		}
+	}
+
+	// The operator's own label is still reported even though it lost,
+	// so the editor can name what was overridden rather than pretending
+	// no label exists.
+	if p := r.HostProvenance("router-1", "10.0.0.5"); p.Label != "nas" {
+		t.Errorf("HostProvenance().Label = %q, want the shadowed entity label to still be reported", p.Label)
+	}
+	if p := r.HostProvenance("router-1", "10.0.0.5"); p.Name != "android-dhcp-1234" {
+		t.Errorf("HostProvenance().Name = %q, want the router-pushed name that is actually displayed", p.Name)
+	}
+}
+
+// The other side of the gate: with no router name in play, an edit
+// here does take effect, so the editor must not refuse it. A gate that
+// is stuck shut is as wrong as one that is stuck open.
+func TestHostProvenanceAllowsEditsTheRouterDoesNotName(t *testing.T) {
+	es, _ := entities.Open("")
+	if _, err := es.Upsert(entities.Entity{Type: entities.TypeHost, Key: "10.0.0.9", Label: "nas"}); err != nil {
+		t.Fatal(err)
+	}
+
+	r := Resolver{
+		Entities:    es,
+		Hosts:       map[string]string{"10.0.0.10": "from config"},
+		RouterHosts: sourcedRouterHosts{"10.0.0.5": {"android-dhcp-1234", "dhcp-lease"}},
+	}
+
+	for _, tc := range []struct {
+		ip     string
+		name   string
+		source string
+	}{
+		{"10.0.0.9", "nas", SourceEntity},
+		{"10.0.0.10", "from config", SourceConfig},
+		{"10.0.0.11", "", SourceNone},
+	} {
+		p := r.HostProvenance("router-1", tc.ip)
+		if p.Name != tc.name || p.Source != tc.source {
+			t.Errorf("HostProvenance(%q) = {%q, %q}, want {%q, %q}", tc.ip, p.Name, p.Source, tc.name, tc.source)
+		}
+		if p.RouterWins() {
+			t.Errorf("HostProvenance(%q).RouterWins() = true -- nothing router-supplied names this host", tc.ip)
+		}
+	}
+}
+
+// Rule and port labels have no router layer at all, so their
+// provenance can never gate an edit -- asserted rather than assumed,
+// because a shared "is this editable" helper that accidentally treated
+// every provenance the same way would disable three quarters of this
+// feature and still pass every host test above.
+func TestRuleAndPortProvenanceNeverLoseToARouter(t *testing.T) {
+	es, _ := entities.Open("")
+	if _, err := es.Upsert(entities.Entity{Type: entities.TypePort, Key: "8291", Label: "winbox"}); err != nil {
+		t.Fatal(err)
+	}
+
+	r := Resolver{
+		Entities:    es,
+		Rules:       map[string]string{"fw-fwd-drop-inv": "Forward: drop invalid"},
+		RouterHosts: sourcedRouterHosts{"10.0.0.5": {"android-dhcp-1234", "dhcp-lease"}},
+	}
+
+	if p := r.RuleProvenance("fw-fwd-drop-inv"); p.Source != SourceConfig || p.RouterWins() {
+		t.Errorf("RuleProvenance() = %+v, want a config source that does not gate the edit", p)
+	}
+	if p := r.PortProvenance(8291); p.Source != SourceEntity || p.Label != "winbox" || p.RouterWins() {
+		t.Errorf("PortProvenance() = %+v, want the entity label, ungated", p)
+	}
+	if p := r.PortProvenance(0); p.Source != SourceNone || p.RouterWins() {
+		t.Errorf("PortProvenance(0) = %+v, want none", p)
 	}
 }

@@ -1,8 +1,13 @@
 <script lang="ts">
   // SPDX-License-Identifier: AGPL-3.0-only
-  // Permanent flag exclusions, on their own page (issue #207) -- moved
-  // out of the bottom of Flags.svelte because reaching and reviewing
-  // exclusions underneath a list of hundreds of active flags was a pain.
+  // Permanent flag exclusions (issue #207), rendered inside Flags.svelte's
+  // admin-only "Exclusions" tab (#547) -- briefly its own page after
+  // #544 dropped its rail row, now folded back in per the ratified
+  // navigation record (docs/design/screens/navigation/DESIGN.md:
+  // "Exclusions is a tab of Flags"). Admin-only because the backend is:
+  // GET/DELETE /api/flags/exclusions both 403 a non-admin caller (see
+  // internal/api/authz_matrix_test.go), so Flags.svelte only mounts this
+  // tab at all when the signed-in account is an admin.
   //
   // Every (detector, target) pair permanently silenced via Flags.svelte's
   // "Permanently clear" action -- removing one here lets it raise
@@ -23,10 +28,9 @@
   // having worked.
   let error = $state<string | null>(null)
 
-  // Same labels Flags.svelte/FlagsChart.svelte use -- duplicated rather
-  // than shared, matching how ACTION_LABELS is already independently
-  // duplicated in both EventsChart.svelte and Dashboard.svelte in this
-  // codebase.
+  // Same labels Flags.svelte and lib/metricsSeries.ts use -- duplicated
+  // rather than shared, which is the long-standing convention for these
+  // two tables in this codebase.
   const TYPE_LABELS: Record<FlagType, string> = {
     port_scan: 'Port scan',
     activity_spike: 'Activity spike',

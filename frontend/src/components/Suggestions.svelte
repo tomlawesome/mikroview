@@ -3,8 +3,16 @@
   // Suggestions (#243 slice 5): watchlist entries suggested from data
   // RouterOS has already pushed (named DHCP leases, ports an existing
   // rule already blocks) -- so an operator doesn't have to already know
-  // what to watch before this feature is useful. Every candidate is one
-  // of three states, never a binary accept/reject:
+  // what to watch before this feature is useful. Rendered inside
+  // Watchlist.svelte's "Suggestions" tab (#547, per the ratified
+  // navigation record: "Suggestions is a tab of Watchlist") -- briefly
+  // its own page after #544 dropped its rail row, now folded back in.
+  // Watchlist.svelte only ever mounts for an admin (see navGroups.ts),
+  // so this carries no separate gate of its own; the backend agrees --
+  // every /api/suggestions* route 403s a non-admin caller (see
+  // internal/api/authz_matrix_test.go).
+  //
+  // Every candidate is one of three states, never a binary accept/reject:
   //
   //  - Off -- undecided. The default for every newly generated
   //    candidate, and the default view here.

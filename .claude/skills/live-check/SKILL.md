@@ -121,6 +121,11 @@ done()
 `check(ok, message)` records a failure without aborting, so one run
 reports everything rather than stopping at the first problem.
 
+- Playwright derives visibility from `getBoundingClientRect()`, which for
+  SVG returns the geometry box rather than the stroked one, so a plain
+  vertical or horizontal `<line>` resolves as hidden however clearly it is
+  drawn. Assert on geometry or a wrapping element instead.
+
 ## What it cannot cover -- check before assuming
 
 Be suspicious of "we cannot test that here". It was claimed about the
