@@ -15,7 +15,7 @@
   import { authState } from '../lib/auth.svelte'
   import { flagsState } from '../lib/flags.svelte'
   import { watchlistState } from '../lib/watchlist.svelte'
-  import { railPref, describe, spokenLabel, type RailDensity } from '../lib/rail.svelte'
+  import { railPref, describe, ringReason, spokenLabel, type RailDensity } from '../lib/rail.svelte'
   import { visibleGroups, type NavItem } from '../lib/navGroups'
   import AboutOverlay from './AboutOverlay.svelte'
   import RailIcon from './RailIcon.svelte'
@@ -53,18 +53,9 @@
     return item.ring === true && watchlistState.brokenCount > 0
   }
 
-  // The ring's whole meaning lives in this sentence -- it is a plain red
-  // outline and nothing else. Plain operator language naming the count
-  // and the cause, per the ratified wording: not "coverage is
-  // no-logging", which is vocabulary the operator never chose.
-  function ringReason(): string {
-    const n = watchlistState.brokenCount
-    return n === 1
-      ? `1 watch can't be checked: the firewall rules it needs aren't being logged`
-      : `${n} watches can't be checked: the firewall rules they need aren't being logged`
-  }
-
-  // What the row is called out loud. The count and the ring reason are
+  // What the row is called out loud. The ring's sentence itself lives in
+  // lib/rail.svelte.ts, shared with the bottom bar and its half-sheet
+  // (#583) so all three surfaces say the same thing about the same break. The count and the ring reason are
   // folded in because a badge or outline read on its own says nothing --
   // the record asks for "label+count in aria-labels", and the ratified
   // mockup words the count "Flags — 6 open". A count and a ring are
@@ -74,7 +65,7 @@
   function spoken(item: Item): string {
     const bits: string[] = []
     if (showCount(item)) bits.push(`${flagCount} open`)
-    if (showRing(item)) bits.push(ringReason())
+    if (showRing(item)) bits.push(ringReason(watchlistState.brokenCount))
     return spokenLabel(item.label, bits)
   }
 
