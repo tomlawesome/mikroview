@@ -332,7 +332,17 @@
       {:else}
         <span class="nat-value">→ {formatAddr(event.natIp, event.natPort)}</span>
       {/if}
-      <RouterRuleButton mode="nat" device={event.deviceId} />
+      <!-- #445: the trigger carries the event, and whether it stands for
+           a whole group, so the popup can say what it was evaluated
+           against. Group keys exclude the interfaces (lib/grouping.ts),
+           so a head row's answer is not automatically its members'. -->
+      <RouterRuleButton
+        mode="nat"
+        device={event.deviceId}
+        ruleLabel={event.ruleLabel}
+        {event}
+        evidence={count > 1 ? 'group-head' : 'row'}
+      />
     {:else}
       —
     {/if}
@@ -398,6 +408,17 @@
         <EditNameButton type="rule" value={event.ruleLabel} label={event.ruleLabel} />
       {/if}
       <RouterRuleButton mode="rule" device={event.deviceId} ruleLabel={event.ruleLabel} />
+      <!-- A NAT event's log-prefix names a rule in the NAT table, not in
+           the filter table, so the rule cell resolves against the same
+           table the NAT cell does (#445). Pointing it at the filter
+           table would report every logged translation as unresolvable. -->
+      <RouterRuleButton
+        mode={natFilterKey ? 'nat' : 'rule'}
+        device={event.deviceId}
+        ruleLabel={event.ruleLabel}
+        {event}
+        evidence={count > 1 ? 'group-head' : 'row'}
+      />
     </span>
   {:else}
     <span class="cell rule">—</span>
