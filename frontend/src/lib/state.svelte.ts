@@ -173,6 +173,41 @@ class AppState {
   // mutated in place.
   frozenPool = $state.raw<ClientEvent[] | null>(null)
 
+  // How many row-anchored surfaces are open right now (issue #413's
+  // "the stream holds while you edit", decided once for the inline
+  // editor, the lookup popovers and #445's NAT popup alike).
+  //
+  // Newest-at-top (#363) pushes rows *down* as events arrive, so a
+  // popover anchored to a row the stream is shoving around is hostile
+  // to use. Opening one therefore takes the same freeze Autoscroll
+  // already implements -- but transiently, without touching
+  // `autoscroll` itself: the toggle is a stated preference, and
+  // silently flipping it back and forth under the operator would leave
+  // the button lying about what it will do next time.
+  //
+  // A count rather than a boolean because two surfaces can legitimately
+  // overlap (a lookup popover open while the editor opens over it), and
+  // the first one to close must not release a hold the second still
+  // needs.
+  streamHolds = $state(0)
+
+  // True when the view must not move: either Autoscroll is off, or
+  // something is holding it open. The composition is here rather than
+  // in LiveTable so every reader gets the same answer -- and so "if the
+  // view is already frozen, the hold composes as a no-op" is a property
+  // of the expression rather than something each caller remembers.
+  get streamHeld(): boolean {
+    return !this.autoscroll || this.streamHolds > 0
+  }
+
+  holdStream() {
+    this.streamHolds++
+  }
+
+  releaseStream() {
+    if (this.streamHolds > 0) this.streamHolds--
+  }
+
   // Updated periodically by App.svelte (see tick()) so the age-based cutoff
   // in filteredEvents actually re-evaluates over time, not just when the
   // buffer itself changes.
@@ -410,6 +445,62 @@ class AppState {
       this.pruneRuleMatches()
       void this.classifyNew(resumed)
     }
+  }
+
+  // relabel rewrites the friendly name already stamped onto every
+  // buffered event for one raw value, so a rename taken in the live
+  // view visibly takes on the rows that are on screen when it is saved
+  // (#413: "a rename that does not visibly take reads as broken").
+  //
+  // Necessary because names are resolved once, at ingest, by
+  // internal/naming -- events already in this buffer carry the name
+  // that was true when they arrived and will never re-resolve on their
+  // own. Events arriving *after* the save need nothing from this: the
+  // server resolves them against the entity that now exists, for every
+  // connected session rather than just the one that made the edit.
+  //
+  // Deliberately a one-shot rewrite rather than a standing client-side
+  // overlay consulted at render. An overlay would keep applying to
+  // events that arrive later, including any whose name RouterOS starts
+  // supplying -- re-creating, on the client, exactly the shadowing this
+  // issue exists to prevent, and this time in the direction the owner
+  // ruled against. A rewrite of what is already here cannot outlive the
+  // buffer it edited.
+  //
+  // `label` is '' for a removed label, which restores the raw value --
+  // matching what the server will resolve for the next event, since the
+  // entity is gone.
+  relabel(type: 'host' | 'port' | 'rule', key: string, label: string) {
+    const name = label || undefined
+    const rewrite = (e: ClientEvent): ClientEvent => {
+      switch (type) {
+        case 'host': {
+          const src = e.srcIp === key
+          const dst = e.dstIp === key
+          if (!src && !dst) return e
+          return { ...e, ...(src && { srcHostName: name }), ...(dst && { dstHostName: name }) }
+        }
+        case 'port': {
+          const src = e.srcPort !== undefined && String(e.srcPort) === key
+          const dst = e.dstPort !== undefined && String(e.dstPort) === key
+          if (!src && !dst) return e
+          return { ...e, ...(src && { srcPortName: name }), ...(dst && { dstPortName: name }) }
+        }
+        case 'rule':
+          return e.ruleLabel === key ? { ...e, ruleName: name } : e
+      }
+    }
+
+    // Every buffer that can still reach the screen, not just `events`:
+    // a rename made while paused, or in the moment between a websocket
+    // batch landing and the next flush, would otherwise show the old
+    // name on rows that appear seconds later. frozenPool matters most
+    // of all -- with the stream held open for the editor (see
+    // streamHolds), it is the pool the rows on screen are drawn from.
+    this.events = this.events.map(rewrite)
+    if (this.frozenPool !== null) this.frozenPool = this.frozenPool.map(rewrite)
+    this.incomingBuffer = this.incomingBuffer.map(rewrite)
+    this.pendingBuffer = this.pendingBuffer.map(rewrite)
   }
 
   clearBuffer() {

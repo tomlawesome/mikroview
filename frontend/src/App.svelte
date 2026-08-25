@@ -29,6 +29,7 @@
   import IpLookupPopover from './components/IpLookupPopover.svelte'
   import PortLookupPopover from './components/PortLookupPopover.svelte'
   import RouterLookupPopover from './components/RouterLookupPopover.svelte'
+  import NameEditorPopover from './components/NameEditorPopover.svelte'
   import AuthSetup from './components/AuthSetup.svelte'
   import AuthLogin from './components/AuthLogin.svelte'
   import SSOLinkOverlay from './components/SSOLinkOverlay.svelte'
@@ -245,6 +246,7 @@
   <IpLookupPopover />
   <PortLookupPopover />
   <RouterLookupPopover />
+  <NameEditorPopover />
   <SSOLinkOverlay />
   <ChangePasswordOverlay />
   <SetupWizard />
