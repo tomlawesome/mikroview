@@ -18,6 +18,7 @@ import (
 	"github.com/tomlawesome/mikroview/internal/flags"
 	"github.com/tomlawesome/mikroview/internal/hub"
 	"github.com/tomlawesome/mikroview/internal/matchlog"
+	"github.com/tomlawesome/mikroview/internal/naming"
 	"github.com/tomlawesome/mikroview/internal/netclass"
 	"github.com/tomlawesome/mikroview/internal/oidc"
 	"github.com/tomlawesome/mikroview/internal/reputation"
@@ -58,6 +59,15 @@ type Server struct {
 	// Open("") returns a usable, empty, unpersisted store), same
 	// always-usable convention as Flags/Definitions above.
 	Entities *entities.Store
+	// Naming is the same resolver the ingest path uses to stamp friendly
+	// names onto events (see internal/naming and main.go, which builds
+	// one and hands it to both). Held here so GET /api/naming/provenance
+	// can answer with the precedence that actually applies, rather than
+	// re-deriving it from Entities alone and getting the router layer
+	// wrong -- which for issue #413's editor is the whole question. The
+	// zero value is usable and simply names nothing, so a test Server
+	// that leaves it unset still works.
+	Naming naming.Resolver
 	// MatchLog answers GET /api/matches, the query surface
 	// #243 section 3 exists for -- birdcage-style correlation by source
 	// IP over a time range. Unlike every store field above, this can be
@@ -280,6 +290,12 @@ func (s *Server) routes() []route {
 		{http.MethodPost, "/api/definitions/{id}/replay", s.handleDefinitionsReplay},
 		{http.MethodPost, "/api/definitions/{id}/promote", s.handleDefinitionsPromote},
 		{http.MethodPost, "/api/definitions/{id}/observing", s.handleDefinitionsSetObserving},
+
+		// Where the name shown for one row token comes from, and
+		// whether labelling it here would change anything (issue
+		// #413). Sits beside /api/entities because it is the question
+		// that has to be answered before writing one.
+		{http.MethodGet, "/api/naming/provenance", s.handleNameProvenance},
 
 		{http.MethodGet, "/api/entities", s.handleEntitiesList},
 		{http.MethodPost, "/api/entities", s.handleEntitiesUpsert},

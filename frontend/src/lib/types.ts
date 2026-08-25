@@ -424,6 +424,44 @@ export interface Entity {
   tags?: string[]
 }
 
+// Mirrors internal/api's nameProvenanceResponse (issue #413): where the
+// name currently shown for one row token comes from, and whether saving
+// a label for it here would change anything.
+//
+// `editable` is the field the inline editor is built around. The owner
+// ruled on 2026-08-22 that RouterOS keeps winning (#186 step 4c), so a
+// label saved for a host the router already names is stored and then
+// never displayed. POST /api/entities cannot tell the caller that -- the
+// write really did succeed -- so the editor asks this first and renders
+// an explanation instead of an input when the answer is false. `source`
+// says which pushed table holds the winning name and `router` says on
+// which device, because "change it on the router" is not actionable
+// without both.
+export type NameSource =
+  | 'none'
+  | 'entity'
+  | 'config'
+  | 'router-dns-static'
+  | 'router-dhcp-lease'
+  | 'router-wireguard-peer'
+  | 'router'
+
+export interface NameProvenance {
+  type: EntityType
+  key: string
+  device?: string
+  // name is what is displayed today, '' when nothing names the key.
+  name: string
+  source: NameSource
+  // label is the operator's own saved label for this key, reported even
+  // when a router-pushed name out-ranks it -- so the editor can say
+  // "your label is not what is shown" rather than presenting an empty
+  // field over the top of one that exists.
+  label: string
+  editable: boolean
+  router?: string
+}
+
 // Mirrors internal/audit.Entry's JSON tags (issue #112) -- one recorded
 // admin-privileged mutation (user created, entity upserted/deleted, API
 // token created/revoked, detector setting changed, flag exclusion

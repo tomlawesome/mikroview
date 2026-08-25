@@ -128,7 +128,10 @@
   // unrelated view would release the live view's freeze.
   $effect(() => {
     if (!honorAutoscroll) return
-    if (appState.autoscroll) {
+    // streamHeld, not autoscroll: #413 holds the stream transiently
+    // while a row-anchored surface is open, without touching the
+    // Autoscroll preference. See appState.streamHolds.
+    if (!appState.streamHeld) {
       appState.frozenPool = null
     } else if (appState.frozenPool === null) {
       appState.frozenPool = events ?? appState.ageFilteredEvents
@@ -145,7 +148,7 @@
   )
 
   const rendered = $derived(
-    honorAutoscroll && !appState.autoscroll ? (frozenRendered ?? liveRendered) : liveRendered,
+    honorAutoscroll && appState.streamHeld ? (frozenRendered ?? liveRendered) : liveRendered,
   )
 
   // Grouping (#341): collapse repeats of the same connection. Built
