@@ -184,10 +184,9 @@
     )
   }
 
-  // Same labels FlagsChart.svelte/Exclusions.svelte use -- duplicated
-  // rather than shared, matching how ACTION_LABELS is already
-  // independently duplicated in both EventsChart.svelte and
-  // Dashboard.svelte in this codebase.
+  // Same labels Exclusions.svelte and lib/metricsSeries.ts use --
+  // duplicated rather than shared, which is the long-standing convention
+  // for these two tables in this codebase.
   const TYPE_LABELS: Record<FlagType, string> = {
     port_scan: 'Port scan',
     activity_spike: 'Activity spike',

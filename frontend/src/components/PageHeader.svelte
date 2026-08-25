@@ -9,13 +9,27 @@
   // (Fleet -- see its own comment) can simply never pass it, instead of
   // this component showing a chip that names a distinction that page
   // doesn't have.
-  let { title, readOnly = false }: { title: string; readOnly?: boolean } = $props()
+  //
+  // `children` is the header slot the ratified metrics record (#488)
+  // needs -- "three views of one data set, chosen in the page header".
+  // Optional, so every page that already uses this renders exactly the
+  // header it rendered before.
+  import type { Snippet } from 'svelte'
+
+  let {
+    title,
+    readOnly = false,
+    children,
+  }: { title: string; readOnly?: boolean; children?: Snippet } = $props()
 </script>
 
 <header class="page-header">
   <h2>{title}</h2>
   {#if readOnly}
     <span class="chip">READ-ONLY — ADMINS EDIT</span>
+  {/if}
+  {#if children}
+    {@render children()}
   {/if}
 </header>
 
