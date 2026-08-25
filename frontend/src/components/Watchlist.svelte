@@ -66,8 +66,31 @@
     // back to -- the tab's promise is the recent list, and a stale deep
     // page is a worse thing to land on than a fresh shallow one.
     if (activeTab === 'watchlist') watchlistState.refresh()
-    else if (activeTab === 'matches') matchesState.load()
-    else suggestState.refresh()
+    else if (activeTab === 'matches') {
+      // Entries first, then the matches themselves. A row resolves its
+      // entry's name, its mode, and the empty state's coverage sentence
+      // from the entries list, so loading matches against a stale one
+      // renders "(entry removed)" over entries that exist -- an evidence
+      // surface calling a live entry deleted is the worst sentence this
+      // tab could say, and the one it would say silently.
+      //
+      // Not hypothetical, and not only a race at first paint: the page
+      // stays mounted, and nothing else refreshes the entries until
+      // App.svelte's own 60-second coverage interval comes round
+      // (WATCHLIST_COVERAGE_REFRESH_MS). An entry created, renamed or
+      // deleted anywhere else is misdescribed here for up to a minute.
+      // Caught by live-matches-tab.mjs, which found every row named
+      // "(entry removed)" while both entries existed.
+      //
+      // Chained rather than fired together so the names are in place by
+      // the time the rows are, and .catch so a failed entries fetch
+      // still lets the matches load -- a list with imperfect names beats
+      // no list at all.
+      watchlistState
+        .refresh()
+        .catch(() => {})
+        .then(() => matchesState.load())
+    } else suggestState.refresh()
   }
 
   // Following a match's entry name back to the entry itself (#584): the
