@@ -247,16 +247,19 @@ export interface RouterFilterRule {
   outInterface?: string
 }
 
-// The NAT record's full rule anatomy (#408, as #445's prerequisite):
-// what a rule matches and what it translates to. #445 is what will read
-// it -- partitioning the table into rules consistent with an event
-// rather than showing all of them equally -- so these stay optional and
-// unrendered until that lands.
+// The NAT record's full rule anatomy (#408) plus the operator-set
+// log-prefix (#445). The two feed the popup's two different answers:
+// logPrefix names the rule outright when the operator tagged it, and the
+// anatomy is what an *untagged* translation is narrowed against -- see
+// lib/natMatch.ts. Everything below `action` is optional because a push
+// script predating either change simply sends nothing, which the popup
+// reports as such rather than treating an absent field as a mismatch.
 export interface RouterNatRule {
   ordinal: number
   comment: string
   chain: string
   action: string
+  logPrefix?: string
   toAddresses?: string
   toPorts?: string
   dstPort?: string
