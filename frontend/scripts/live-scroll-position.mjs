@@ -32,6 +32,16 @@ await page.setViewportSize({ width: 1280, height: 720 })
 // scroll, hides the bottom of a step just as effectively. So this now
 // measures the modal, on the step whose body is genuinely long (step 4
 // carries the whole push script).
+//
+// The modal caps itself at 92vh, so at 720px its body still fits the
+// longest step and there would be nothing to scroll -- an assertion
+// that cannot fail is worse than none. A shorter window is not a
+// contrived condition either: it is a laptop with browser chrome, or a
+// window that is not full height, and it is exactly where a clipped
+// step body would bite. Restored to 1280x720 before the #384 half
+// below, which is the viewport that defect was reported at.
+await page.setViewportSize({ width: 1280, height: 460 })
+
 await page.click('.rail .item:has-text("Run setup…")')
 const wizard = page.locator('.setup-wizard')
 await wizard.waitFor({ state: 'visible' })
@@ -109,6 +119,7 @@ check(
 // through a focus trap.
 await page.keyboard.press('Escape')
 await wizard.waitFor({ state: 'detached' })
+await page.setViewportSize({ width: 1280, height: 720 })
 
 // --- #384: naming an entity leaves the operator where they were ---------
 // The workflow the defect punished is the one the view exists for:
