@@ -13,6 +13,7 @@
   import EventCardMobile from './EventCardMobile.svelte'
   import EventDetailSheet from './EventDetailSheet.svelte'
   import GhostRows from './GhostRows.svelte'
+  import { wizardState } from '../lib/wizard.svelte'
 
   // Both optional -- default to the live view's own state, so the
   // existing `<LiveTable />` call site (App.svelte's 'live' branch)
@@ -210,13 +211,18 @@
     // absent for viewers, never disabled, so the pointer only names it
     // for an admin who can actually reach it; a viewer is told who can.
     if (appState.devices.length === 0) {
-      return {
-        kind: 'text',
-        text:
-          authState.role === 'admin'
-            ? 'No devices have sent anything yet — Admin ▸ Run setup… to point a RouterOS device at mikroview.'
-            : 'No devices have sent anything yet. Ask an administrator to run setup.',
-      }
+      const base =
+        authState.role === 'admin'
+          ? 'No devices have sent anything yet — Admin ▸ Run setup… to point a RouterOS device at mikroview.'
+          : 'No devices have sent anything yet. Ask an administrator to run setup.'
+      // #487's "the record is the feature": where a setup step was
+      // skipped or forced past, this silence has a recorded cause, and
+      // the empty state names it rather than leaving the operator to
+      // wonder. Null when the ledger explains nothing -- an empty
+      // surface with no decision behind it is simply empty, and
+      // inventing a cause would be the opposite of the point.
+      const silence = wizardState.silence
+      return { kind: 'text', text: silence ? `${base} ${silence}` : base }
     }
     return { kind: 'text', text: 'Waiting for events…' }
   })

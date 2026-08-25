@@ -21,7 +21,6 @@
   import LiveTable from './components/LiveTable.svelte'
   import Metrics from './components/Metrics.svelte'
   import Watchlist from './components/Watchlist.svelte'
-  import Setup from './components/Setup.svelte'
   import Flags from './components/Flags.svelte'
   import EngineRoom from './components/EngineRoom.svelte'
   import Entities from './components/Entities.svelte'
@@ -36,6 +35,10 @@
   // Mounted here, not in the rail that triggers it: the rail is chrome
   // for authenticated pages, and this overlay outlives any one of them.
   import ChangePasswordOverlay from './components/ChangePasswordOverlay.svelte'
+  // The setup wizard is a modal over the shell, not a page (#487) -- so
+  // it is mounted here with the other overlays rather than reached
+  // through appState.view. The rail's "Run setup…" opens it.
+  import SetupWizard from './components/SetupWizard.svelte'
   // #439's "copied" confirmation -- see lib/toast.svelte.ts for why this
   // is new rather than reusing something that already existed.
   import Toast from './components/Toast.svelte'
@@ -219,8 +222,6 @@
       <LiveTable />
     {:else if appState.view === 'watchlist'}
       <Watchlist />
-    {:else if appState.view === 'setup'}
-      <Setup />
     {:else if appState.view === 'flags'}
       <Flags />
     {:else if appState.view === 'entities'}
@@ -246,6 +247,7 @@
   <RouterLookupPopover />
   <SSOLinkOverlay />
   <ChangePasswordOverlay />
+  <SetupWizard />
   <Toast />
 {/if}
 
