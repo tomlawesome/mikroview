@@ -20,6 +20,7 @@
   import { discoverHosts, discoverPorts, discoverRules } from '../lib/discoveredEntities'
   import { formatRelative } from '../lib/format'
   import type { Entity, RuleUsage } from '../lib/types'
+  import PageHeader from './PageHeader.svelte'
 
   // '' means "not currently editing" -- the add form and the edit form
   // are the same form (Upsert already treats create/replace as one
@@ -38,7 +39,7 @@
   // rulesUsage backs the "discovered rules" section -- GET /api/rules'
   // full history (issue #103's internal/rules.Store), fetched once per
   // panel open the same way entitiesState.refresh() is triggered by
-  // NavMenu's toggleEntities (this component is unmounted/remounted on
+  // the rail's Entities item (this component is unmounted/remounted on
   // every view toggle, so onMount firing once per open is exactly right).
   let rulesUsage = $state<RuleUsage[]>([])
   let rulesError = $state(false)
@@ -214,6 +215,12 @@
 {/snippet}
 
 <div class="page scrollbar">
+  <!-- No readOnly chip: this page stays admin-only in the rail (GET
+       /api/entities is server-gated the same way -- see
+       internal/api/entities.go's callerIsAdmin check), so a viewer never
+       reaches it -- see the #548 PR notes on the open question of
+       whether it should become viewer-readable per the design record. -->
+  <PageHeader title="Entities" />
   <p class="intro">
     Entities are shared, persisted labels/tags attached to a host, port, or firewall rule -- friendly names editable
     here instead of only in config.yaml. <strong>Discovered</strong> below lists hosts/rules/ports seen in live

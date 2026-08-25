@@ -1,0 +1,418 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mikroview metrics — round 1 — T: the counting house</title>
+<style>
+  /* ============================================================
+     DESIGN PASS (#518) — METRICS DENSITY (#488) — ROUND 1
+     T — THE COUNTING HOUSE
+
+     Small multiples at sparkline scale over the ratified shell.
+     The design idea: identity is the label, colour is meaning —
+     every tile names its series in ink, and only two chart inks
+     exist: traffic blue, and refused red for drop/reject. The two
+     overlay charts (7 and 16 series apiece) become a wall of
+     labelled multiples; the bar-list cards stay (owner decision).
+     Chart inks validated with the dataviz six-checks validator on
+     both surfaces — results in this round's README.
+     ============================================================ */
+  :root {
+    --canvas: #1b2340; --void: #06080e;
+    --glass: rgba(15, 20, 34, 0.66); --glass-2: rgba(8, 11, 20, 0.88);
+    --hair: rgba(160, 185, 230, 0.13); --hair-2: rgba(160, 185, 230, 0.26);
+    --ink: #e9eefb; --ink-2: #97a4c4; --ink-3: #55628a;
+    --accent: #9db8e8;
+    --ok: #37b364; --alarm: #ff5470; --now: #e8b05a;
+    --tile: #0d1220;                 /* chart surface (validated against) */
+    --traffic: #3987e5;              /* series ink: traffic */
+    --refused: #e66767;              /* series ink: refused (drop, reject) */
+    --sans: system-ui, -apple-system, "Segoe UI", sans-serif;
+    --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  }
+  * { box-sizing: border-box; margin: 0; }
+  html { scroll-behavior: smooth; }
+  body { background: var(--canvas); color: var(--ink); font: 13.5px/1.5 var(--sans); -webkit-font-smoothing: antialiased; }
+  .concept {
+    position: sticky; top: 0; z-index: 90; display: flex; gap: 16px; align-items: baseline;
+    padding: 8px 20px; background: rgba(2,3,7,0.95); border-bottom: 1px solid var(--hair);
+    font-size: 11px; color: var(--ink-3);
+  }
+  .concept b { color: var(--accent); letter-spacing: 0.1em; }
+  .concept a { color: var(--ink-2); text-decoration: none; margin-left: 12px; }
+  .scene { min-height: 100vh; position: relative; border-bottom: 1px solid var(--hair-2); overflow: hidden; padding-bottom: 30px; }
+  .scene-tag {
+    position: sticky; top: 33px; z-index: 80; text-align: center;
+    font-size: 10.5px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--ink-3);
+    padding: 6px 0; background: rgba(2,3,7,0.85);
+  }
+  .row { display: flex; gap: 24px; justify-content: center; align-items: stretch; margin: 26px auto 0; width: min(1460px, 97%); }
+  .frame { position: relative; border: 1px solid var(--hair-2); border-radius: 14px; overflow: hidden; background: var(--void); flex: 1; min-height: 640px; display: flex; }
+  .frame .cap { position: absolute; left: 0; right: 0; bottom: 0; z-index: 30; font-size: 10.5px; color: var(--ink-2); padding: 9px 14px; background: rgba(2,3,7,0.92); border-top: 1px solid var(--hair); }
+  .frame .cap b { color: var(--accent); }
+  .frame .rail { padding-bottom: 110px; }
+  .frame.wide { flex: none; width: min(1460px, 97%); margin: 26px auto 0; display: flex; min-height: 700px; }
+
+  /* ---- the ratified rail, carried forward verbatim ---- */
+  .rail {
+    width: 216px; flex: none; background: var(--glass-2); border-right: 1px solid var(--hair);
+    display: flex; flex-direction: column; padding: 14px 0 10px; position: relative; z-index: 10;
+    backdrop-filter: blur(10px);
+  }
+  .rail .wm { font-size: 11px; font-weight: 700; letter-spacing: 0.24em; color: var(--ink-3); padding: 0 16px 3px; }
+  .rail .wm em { color: var(--accent); font-style: normal; }
+  .rail .conn { font-size: 9.5px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--ink-3); padding: 0 16px 8px; }
+  .rail .conn i { display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: var(--ok); margin-right: 6px; animation: pulse 2s ease-in-out infinite; }
+  @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.3; } }
+  .gsec { font-size: 9px; letter-spacing: 0.16em; text-transform: uppercase; color: var(--ink-3); padding: 11px 16px 2px; font-weight: 650; }
+  .gpg { display: flex; align-items: center; gap: 9px; font-size: 12px; font-weight: 550; color: var(--ink-2); padding: 5px 16px 5px 14px; border-left: 2px solid transparent; text-decoration: none; cursor: default; position: relative; }
+  .gpg .ic { width: 15px; text-align: center; color: var(--ink-3); font-size: 12px; flex: none; }
+  .gpg.on { color: var(--ink); border-left-color: var(--accent); background: rgba(157,184,232,0.06); }
+  .gpg.on .ic { color: var(--accent); }
+  .gpg .ct { font-size: 9px; color: var(--void); background: var(--alarm); border-radius: 8px; padding: 1px 5px; margin-left: auto; font-weight: 700; }
+  .gpg.action { color: var(--accent); font-size: 11px; margin-top: 2px; }
+  .brokenring { display: inline-flex; align-items: center; gap: 9px; outline: 2px solid var(--alarm); outline-offset: 3px; border-radius: 6px; }
+  .rail .foot { margin-top: auto; padding: 10px 16px 0; border-top: 1px solid var(--hair); display: flex; align-items: center; gap: 7px; font-size: 11.5px; color: var(--ink-2); }
+  .role { font-size: 8.5px; font-weight: 700; letter-spacing: 0.12em; color: var(--ink-3); border: 1px solid var(--hair-2); border-radius: 8px; padding: 1px 6px; text-transform: uppercase; }
+  .rbtn { color: var(--ink-3); font-size: 12px; border: 1px solid var(--hair-2); border-radius: 6px; width: 22px; height: 22px; display: grid; place-items: center; flex: none; }
+  .rbtn.first { margin-left: auto; }
+
+  .main { flex: 1; position: relative; min-width: 0; padding: 0 24px 24px; }
+  .crumb { padding: 20px 0 0; }
+  .crumb .over { font-size: 10px; letter-spacing: 0.16em; text-transform: uppercase; color: var(--ink-3); }
+  .crumb h2 { font-size: 19px; font-weight: 550; margin-top: 2px; display: flex; align-items: baseline; gap: 12px; }
+  .crumb h2 .dim { color: var(--ink-3); font-weight: 400; font-size: 13px; }
+  .crumb .meaning { margin-left: auto; font-size: 10.5px; color: var(--ink-3); display: flex; gap: 14px; align-items: center; }
+  .meaning i { display: inline-block; width: 14px; height: 2px; vertical-align: middle; margin-right: 5px; }
+
+  /* ---- the multiples ---- */
+  .grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-top: 14px; }
+  .tile { background: var(--tile); border: 1px solid var(--hair); border-radius: 11px; padding: 10px 12px 8px; position: relative; }
+  .tile .tl { display: flex; align-items: baseline; gap: 8px; font-size: 11px; font-weight: 650; color: var(--ink-2); }
+  .tile .tl .nowv { margin-left: auto; font: 600 13px var(--mono); color: var(--ink); }
+  .tile .tl .unit { font-size: 9px; color: var(--ink-3); font-weight: 500; }
+  .tile svg { display: block; width: 100%; height: 46px; margin-top: 6px; }
+  .tile .mm { display: flex; justify-content: space-between; font: 9px var(--mono); color: var(--ink-3); margin-top: 3px; }
+  .tile.hero { display: flex; flex-direction: column; justify-content: center; }
+  .tile.hero .big { font: 650 30px/1.1 var(--mono); color: var(--ink); }
+  .tile.hero .big span { font-size: 12px; color: var(--ink-3); font-weight: 500; }
+  .tile.hero .sub { font-size: 10.5px; color: var(--ink-3); margin-top: 5px; }
+  .spark { fill: none; stroke: var(--traffic); stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
+  .spark.refused { stroke: var(--refused); }
+  .sparkfill { fill: rgba(57,135,229,0.10); stroke: none; }
+  .sparkfill.refused { fill: rgba(230,103,103,0.10); }
+  .peak { fill: var(--tile); stroke-width: 1.5; }
+  .peaklab { font: 8.5px var(--mono); fill: var(--ink-3); }
+  .gridline { stroke: rgba(160,185,230,0.07); stroke-width: 1; shape-rendering: crispEdges; }
+
+  .sectionlab { font-size: 10px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--ink-3); font-weight: 650; margin-top: 18px; display: flex; align-items: baseline; gap: 10px; }
+  .sectionlab .quiet { text-transform: none; letter-spacing: 0; font-weight: 500; font-size: 10.5px; }
+  .sectionlab .tbl { margin-left: auto; font-size: 10px; letter-spacing: 0; text-transform: none; color: var(--ink-2); border: 1px solid var(--hair-2); border-radius: 6px; padding: 2px 8px; font-weight: 500; }
+
+  /* ---- the retained cards ---- */
+  .cards { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-top: 14px; }
+  .card { background: var(--tile); border: 1px solid var(--hair); border-radius: 11px; padding: 10px 12px; }
+  .card h4 { font-size: 11px; font-weight: 650; color: var(--ink-2); }
+  .brow { display: flex; align-items: center; gap: 8px; margin-top: 7px; font-size: 10.5px; color: var(--ink-2); }
+  .brow .lab { width: 92px; flex: none; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .brow .bar { flex: 1; height: 6px; border-radius: 0 4px 4px 0; background: var(--traffic); opacity: 0.85; }
+  .brow .bar.refused { background: var(--refused); }
+  .brow .v { font: 10px var(--mono); color: var(--ink-3); width: 44px; text-align: right; flex: none; }
+
+  /* hover layer (s3) */
+  .xh { stroke: var(--now); stroke-width: 1; shape-rendering: crispEdges; }
+  .tip { position: absolute; z-index: 20; background: #0c111e; border: 1px solid var(--hair-2); border-radius: 7px; padding: 6px 10px; font-size: 10.5px; color: var(--ink); white-space: nowrap; box-shadow: 0 6px 18px rgba(0,0,0,0.5); }
+  .tip .tv { font-family: var(--mono); color: var(--accent); }
+  .zoom { background: rgba(13,18,32,0.5); border: 1px solid var(--hair); border-radius: 12px; padding: 18px; flex: 1; }
+  .zoom h3 { font-size: 11px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--ink-3); margin-bottom: 12px; font-weight: 650; }
+  .speclist { font-size: 11.5px; color: var(--ink-2); line-height: 1.75; }
+  .speclist b { color: var(--accent); font-weight: 650; }
+  .kbd { font: 10.5px var(--mono); color: var(--ink-2); border: 1px solid var(--hair-2); border-bottom-width: 2px; border-radius: 5px; padding: 1px 6px; }
+
+  .notes { display: flex; gap: 14px; align-items: stretch; margin: 14px auto 0; width: min(1460px, 97%); }
+  .anno { font-size: 11px; color: var(--ink-2); background: var(--glass-2); border: 1px solid var(--hair-2); border-left: 2px solid var(--accent); border-radius: 8px; padding: 9px 12px; flex: 1; }
+  .anno b { color: var(--accent); font-weight: 650; }
+  .specnote { margin: 22px auto 8px; width: min(1460px, 97%); font-size: 11.5px; color: var(--ink-2); }
+  .specnote b { color: var(--accent); }
+
+  /* ---- light — token swap for comparison shots only ---- */
+  body.light {
+    --canvas: #c3c9d4; --void: #eef1f7;
+    --glass: rgba(252, 253, 255, 0.72); --glass-2: rgba(244, 247, 252, 0.92);
+    --hair: rgba(28, 44, 84, 0.12); --hair-2: rgba(28, 44, 84, 0.26);
+    --ink: #17223c; --ink-2: #46536f; --ink-3: #7d89a6;
+    --accent: #3f66b0; --ok: #1e7f43; --alarm: #d63c5e; --now: #9a6b10;
+    --tile: #ffffff;
+    --traffic: #2a78d6; --refused: #e34948;
+  }
+  body.light .concept, body.light .scene-tag { background: rgba(244, 247, 252, 0.95); }
+  body.light .frame .cap { background: rgba(244, 247, 252, 0.95); }
+  body.light .gpg.on { background: rgba(63, 102, 176, 0.09); }
+  body.light .sparkfill { fill: rgba(42,120,214,0.10); }
+  body.light .sparkfill.refused { fill: rgba(227,73,72,0.10); }
+  body.light .tip { background: #ffffff; }
+  body.light .zoom { background: rgba(255,255,255,0.55); }
+  @media (prefers-reduced-motion: reduce) { * { animation: none !important; } }
+</style>
+</head>
+<body>
+
+<div class="concept"><b>ROUND 1 — T · THE COUNTING HOUSE</b> #488 under #518 · metrics density: small multiples at sparkline scale, cards retained · <a href="?theme=light" style="margin-left:0">light</a> · <a href="?" style="margin-left:4px">dark</a>
+  <span style="margin-left:auto"><a href="../../navigation/round-5/direction-q5-rail.html">shell: Q V</a><a href="index.html">index</a></span>
+</div>
+
+<!-- ================= SCENE 1 : THE PAGE ================= -->
+<section class="scene" id="s1">
+  <div class="scene-tag">Scene 1 — the metrics page: one hour, every series a labelled tile, the cards below. Identity is the label; colour is meaning.</div>
+  <div class="frame wide">
+    <aside class="rail" aria-label="Navigation">
+      <span class="wm">MIKRO<em>VIEW</em></span>
+      <span class="conn"><i></i>receiving</span>
+      <div class="gsec">Live</div>
+      <span class="gpg"><span class="ic">▿</span><span class="lab">The fall</span></span>
+      <span class="gpg"><span class="ic">≡</span><span class="lab">Stream</span></span>
+      <div class="gsec">Investigate</div>
+      <span class="gpg on"><span class="ic">∿</span><span class="lab">Metrics</span></span>
+      <span class="gpg"><span class="ic">¶</span><span class="lab">Audit log</span></span>
+      <div class="gsec">Detect</div>
+      <span class="gpg"><span class="ic">⚑</span><span class="lab">Flags</span><span class="ct">6</span></span>
+      <span class="gpg"><span class="ic">⚙</span><span class="lab">Detectors</span></span>
+      <div class="gsec">Expect</div>
+      <span class="gpg"><span class="brokenring"><span class="ic">◉</span><span class="lab">Watchlist</span></span></span>
+      <div class="gsec">Admin</div>
+      <span class="gpg"><span class="ic">§</span><span class="lab">Users</span></span>
+      <span class="gpg"><span class="ic">✱</span><span class="lab">Tokens</span></span>
+      <span class="gpg"><span class="ic">⌂</span><span class="lab">Fleet</span></span>
+      <span class="gpg"><span class="ic">⊞</span><span class="lab">Entities</span></span>
+      <span class="gpg action"><span class="ic">⟳</span><span class="lab">Run setup…</span></span>
+      <div class="foot"><span class="nm">tom</span><span class="role">admin</span><span class="rbtn first" title="Icons only">⇔</span><span class="rbtn" title="Dock the rail">⇤</span></div>
+    </aside>
+    <div class="main">
+      <div class="crumb">
+        <div class="over">Investigate</div>
+        <h2>Metrics <span class="dim">· last hour · 13:02 – 14:02</span>
+          <span class="meaning"><span><i style="background: var(--traffic)"></i>traffic</span><span><i style="background: var(--refused)"></i>refused</span></span>
+        </h2>
+      </div>
+      <div class="sectionlab">Events by action <span class="quiet">· per minute · one hour</span><span class="tbl">Table</span></div>
+      <div class="grid">
+        <div class="tile hero">
+          <div class="big">7.4 <span>events/s now</span></div>
+          <div class="sub">443/min · steady this hour</div>
+        </div>
+        <div class="tile"><div class="tl">accept<span class="nowv">421<span class="unit">/min</span></span></div>
+          <svg viewBox="0 0 200 46" preserveAspectRatio="none" aria-label="accept, last hour">
+            <line class="gridline" x1="0" y1="23" x2="200" y2="23"/>
+            <path class="sparkfill" d="M0,18 L20,16 L40,19 L60,15 L80,17 L100,14 L120,18 L140,13 L160,16 L180,12 L200,14 L200,46 L0,46 Z"/>
+            <path class="spark" d="M0,18 L20,16 L40,19 L60,15 L80,17 L100,14 L120,18 L140,13 L160,16 L180,12 L200,14"/>
+          </svg>
+          <div class="mm"><span>min 388</span><span>max 447</span></div>
+        </div>
+        <div class="tile"><div class="tl">drop<span class="nowv" style="color: var(--refused)">12<span class="unit">/min</span></span></div>
+          <svg viewBox="0 0 200 46" preserveAspectRatio="none" aria-label="drop, last hour — peak 88 at 13:52">
+            <line class="gridline" x1="0" y1="23" x2="200" y2="23"/>
+            <path class="sparkfill refused" d="M0,40 L20,41 L40,39 L60,40 L80,41 L100,40 L120,39 L140,41 L166,6 L172,28 L180,38 L200,39 L200,46 L0,46 Z"/>
+            <path class="spark refused" d="M0,40 L20,41 L40,39 L60,40 L80,41 L100,40 L120,39 L140,41 L166,6 L172,28 L180,38 L200,39"/>
+            <circle class="peak" cx="166" cy="6" r="3" stroke="var(--refused)"/>
+            <text class="peaklab" x="108" y="10">88 · 13:52</text>
+          </svg>
+          <div class="mm"><span>min 7</span><span>max 88</span></div>
+        </div>
+        <div class="tile"><div class="tl">reject<span class="nowv" style="color: var(--refused)">3<span class="unit">/min</span></span></div>
+          <svg viewBox="0 0 200 46" preserveAspectRatio="none" aria-label="reject, last hour">
+            <line class="gridline" x1="0" y1="23" x2="200" y2="23"/>
+            <path class="sparkfill refused" d="M0,42 L20,41 L40,42 L60,40 L80,42 L100,41 L120,42 L140,40 L160,41 L180,42 L200,41 L200,46 L0,46 Z"/>
+            <path class="spark refused" d="M0,42 L20,41 L40,42 L60,40 L80,42 L100,41 L120,42 L140,40 L160,41 L180,42 L200,41"/>
+          </svg>
+          <div class="mm"><span>min 1</span><span>max 5</span></div>
+        </div>
+        <div class="tile"><div class="tl">log<span class="nowv">143<span class="unit">/min</span></span></div>
+          <svg viewBox="0 0 200 46" preserveAspectRatio="none" aria-label="log, last hour">
+            <line class="gridline" x1="0" y1="23" x2="200" y2="23"/>
+            <path class="sparkfill" d="M0,25 L20,24 L40,26 L60,23 L80,25 L100,22 L120,24 L140,21 L160,23 L180,20 L200,22 L200,46 L0,46 Z"/>
+            <path class="spark" d="M0,25 L20,24 L40,26 L60,23 L80,25 L100,22 L120,24 L140,21 L160,23 L180,20 L200,22"/>
+          </svg>
+          <div class="mm"><span>min 118</span><span>max 151</span></div>
+        </div>
+        <div class="tile"><div class="tl">natted<span class="nowv">178<span class="unit">/min</span></span></div>
+          <svg viewBox="0 0 200 46" preserveAspectRatio="none" aria-label="natted, last hour">
+            <line class="gridline" x1="0" y1="23" x2="200" y2="23"/>
+            <path class="sparkfill" d="M0,22 L20,24 L40,21 L60,23 L80,20 L100,22 L120,19 L140,21 L160,18 L180,20 L200,19 L200,46 L0,46 Z"/>
+            <path class="spark" d="M0,22 L20,24 L40,21 L60,23 L80,20 L100,22 L120,19 L140,21 L160,18 L180,20 L200,19"/>
+          </svg>
+          <div class="mm"><span>min 149</span><span>max 189</span></div>
+        </div>
+        <div class="tile"><div class="tl">marked<span class="nowv">9<span class="unit">/min</span></span></div>
+          <svg viewBox="0 0 200 46" preserveAspectRatio="none" aria-label="marked, last hour">
+            <line class="gridline" x1="0" y1="23" x2="200" y2="23"/>
+            <path class="sparkfill" d="M0,38 L20,39 L40,37 L60,38 L80,36 L100,38 L120,37 L140,36 L160,38 L180,37 L200,38 L200,46 L0,46 Z"/>
+            <path class="spark" d="M0,38 L20,39 L40,37 L60,38 L80,36 L100,38 L120,37 L140,36 L160,38 L180,37 L200,38"/>
+          </svg>
+          <div class="mm"><span>min 5</span><span>max 12</span></div>
+        </div>
+        <div class="tile"><div class="tl">unknown<span class="nowv">1<span class="unit">/min</span></span></div>
+          <svg viewBox="0 0 200 46" preserveAspectRatio="none" aria-label="unknown, last hour">
+            <line class="gridline" x1="0" y1="23" x2="200" y2="23"/>
+            <path class="sparkfill" d="M0,44 L40,43 L80,44 L120,43 L160,44 L200,44 L200,46 L0,46 Z"/>
+            <path class="spark" d="M0,44 L40,43 L80,44 L120,43 L160,44 L200,44"/>
+          </svg>
+          <div class="mm"><span>min 0</span><span>max 2</span></div>
+        </div>
+      </div>
+      <div class="sectionlab">The cards <span class="quiet">· retained — magnitude, not time</span></div>
+      <div class="cards">
+        <div class="card"><h4>Top rules</h4>
+          <div class="brow"><span class="lab">fwd-drop</span><span class="bar refused" style="width: 100%"></span><span class="v">1 206</span></div>
+          <div class="brow"><span class="lab">wan-in</span><span class="bar" style="flex-grow: 0.62"></span><span class="v">748</span></div>
+          <div class="brow"><span class="lab">nat</span><span class="bar" style="flex-grow: 0.44"></span><span class="v">531</span></div>
+          <div class="brow"><span class="lab">lan-fwd</span><span class="bar" style="flex-grow: 0.21"></span><span class="v">255</span></div>
+        </div>
+        <div class="card"><h4>Top talkers</h4>
+          <div class="brow"><span class="lab">nas</span><span class="bar" style="flex-grow: 1"></span><span class="v">9 481</span></div>
+          <div class="brow"><span class="lab">cam-porch</span><span class="bar refused" style="flex-grow: 0.48"></span><span class="v">4 550</span></div>
+          <div class="brow"><span class="lab">laptop-tom</span><span class="bar" style="flex-grow: 0.33"></span><span class="v">3 129</span></div>
+          <div class="brow"><span class="lab">tv-lounge</span><span class="bar" style="flex-grow: 0.18"></span><span class="v">1 704</span></div>
+        </div>
+        <div class="card"><h4>By device</h4>
+          <div class="brow"><span class="lab">rb5009</span><span class="bar" style="flex-grow: 1"></span><span class="v">26 592</span></div>
+          <div class="brow"><span class="lab">hap-attic</span><span class="bar" style="flex-grow: 0.12"></span><span class="v">3 218</span></div>
+        </div>
+      </div>
+    </div>
+    <div class="cap"><b>Eight series on one screen, each its own labelled tile.</b> The hero number anchors (a stat tile, not a chart); every sparkline carries its now-value, quiet min/max, and one annotated peak where there is one — drop's 13:52 burst, the hour's only story, told in red. The cards keep the magnitude questions (which rule, who talks) the sparklines cannot answer.</div>
+  </div>
+  <div class="notes">
+    <div class="anno"><b>Identity is the label, colour is meaning.</b> Two chart inks only: traffic blue, refused red (drop · reject — the fall's own grammar). A tile never needs a legend (its title names its one series); the header's meaning key is the whole colour story. Validated with the dataviz six-checks on both surfaces — all pass; results in the README.</div>
+    <div class="anno"><b>Why multiples beat the 7-line overlay:</b> the old events chart cycled seven hues on one axis; accept (400/min) flattened drop (12/min) into the baseline, and the one thing worth seeing — the 13:52 burst — was invisible. Per-tile scale gives every series its own vertical room; the shared hour keeps them comparable in time.</div>
+    <div class="anno"><b>Text wears ink, never series colour</b> — values and labels stay in the text tokens; the mark beside them carries the meaning. The one exception is the now-value on refused tiles, which may wear red only because the mark it restates sits beside it.</div>
+  </div>
+</section>
+
+<!-- ================= SCENE 2 : FLAGS MULTIPLES, AND THE QUIET FOLD ================= -->
+<section class="scene" id="s2">
+  <div class="scene-tag">Scene 2 — flag episodes by type: tiles for the types that spoke this hour; one honest line for the silence.</div>
+  <div class="frame wide" style="min-height: 540px">
+    <div class="main" style="padding-top: 8px">
+      <div class="sectionlab" style="margin-top: 14px">Flag episodes by type <span class="quiet">· newly raised · one hour</span><span class="tbl">Table</span></div>
+      <div class="grid">
+        <div class="tile"><div class="tl">new device<span class="nowv" style="color: var(--refused)">1</span></div>
+          <svg viewBox="0 0 200 46" preserveAspectRatio="none" aria-label="new device episodes — 1, at 13:52">
+            <line class="gridline" x1="0" y1="23" x2="200" y2="23"/>
+            <path class="spark refused" d="M0,44 L160,44 L166,8 L172,44 L200,44"/>
+            <circle class="peak" cx="166" cy="8" r="3" stroke="var(--refused)"/>
+            <text class="peaklab" x="104" y="12">1 · 13:52</text>
+          </svg>
+          <div class="mm"><span>cam-porch → nas</span><span>13:52</span></div>
+        </div>
+        <div class="tile"><div class="tl">device silence<span class="nowv" style="color: var(--refused)">1</span></div>
+          <svg viewBox="0 0 200 46" preserveAspectRatio="none" aria-label="device silence episodes — 1, at 13:52">
+            <line class="gridline" x1="0" y1="23" x2="200" y2="23"/>
+            <path class="spark refused" d="M0,44 L160,44 L166,8 L172,44 L200,44"/>
+            <circle class="peak" cx="166" cy="8" r="3" stroke="var(--refused)"/>
+            <text class="peaklab" x="104" y="12">1 · 13:52</text>
+          </svg>
+          <div class="mm"><span>egress cadence broken</span><span>13:52</span></div>
+        </div>
+        <div class="tile"><div class="tl">activity spike<span class="nowv">2</span></div>
+          <svg viewBox="0 0 200 46" preserveAspectRatio="none" aria-label="activity spike episodes — 2 this hour">
+            <line class="gridline" x1="0" y1="23" x2="200" y2="23"/>
+            <path class="spark" d="M0,44 L96,44 L100,20 L104,44 L142,44 L146,26 L150,44 L200,44"/>
+          </svg>
+          <div class="mm"><span>wan · :8291 knocks</span><span>13:30 · 13:41</span></div>
+        </div>
+        <div class="tile"><div class="tl">repeated drops<span class="nowv">2</span></div>
+          <svg viewBox="0 0 200 46" preserveAspectRatio="none" aria-label="repeated drops episodes — 2 this hour">
+            <line class="gridline" x1="0" y1="23" x2="200" y2="23"/>
+            <path class="spark" d="M0,44 L56,44 L60,26 L64,44 L164,44 L168,20 L172,44 L200,44"/>
+          </svg>
+          <div class="mm"><span>cam-porch · tcp/445</span><span>13:19 · 13:53</span></div>
+        </div>
+      </div>
+      <div class="sectionlab" style="margin-top: 16px"><span class="quiet" style="font-size: 11px">— and <b style="color: var(--ink-2)">12 quiet types</b>: nothing newly raised this hour. Quiet types take no tiles — an empty sparkline is not information, and a wall of flat lines buries the four that spoke.</span></div>
+      <div class="sectionlab">Detector activity <span class="quiet">· retained card</span></div>
+      <div class="cards">
+        <div class="card"><h4>Episodes by type · hour</h4>
+          <div class="brow"><span class="lab">activity spike</span><span class="bar" style="flex-grow: 1"></span><span class="v">2</span></div>
+          <div class="brow"><span class="lab">repeated drops</span><span class="bar" style="flex-grow: 1"></span><span class="v">2</span></div>
+          <div class="brow"><span class="lab">new device</span><span class="bar refused" style="flex-grow: 0.5"></span><span class="v">1</span></div>
+          <div class="brow"><span class="lab">device silence</span><span class="bar refused" style="flex-grow: 0.5"></span><span class="v">1</span></div>
+        </div>
+        <div class="card" style="display:flex; flex-direction:column; justify-content:center">
+          <h4 style="color: var(--ink-3)">The count the rail already wears</h4>
+          <p style="font-size: 11px; color: var(--ink-2); margin-top: 6px">6 open flags — the alarm badge belongs to Flags, not to Metrics. These tiles count <b style="color:var(--accent)">episodes raised</b>, not open work; the two disagree whenever triage lags, and both are true.</p>
+        </div>
+        <div class="card" style="display:flex; flex-direction:column; justify-content:center">
+          <h4 style="color: var(--ink-3)">Red here means refused / raised</h4>
+          <p style="font-size: 11px; color: var(--ink-2); margin-top: 6px">A flag tile goes red only when its episodes opened flags that are still open — the same two inks, the same meaning, no third colour invented for flags.</p>
+        </div>
+      </div>
+    </div>
+    <div class="cap"><b>Four tiles, one sentence of silence.</b> Sixteen flag types would be sixteen tiles, twelve of them flat — the quiet fold keeps the wall honest: types that spoke get their sparkline and their receipt (who, when, in the min/max slot); types that did not get one line of prose, and no chart pretends otherwise.</div>
+  </div>
+  <div class="notes">
+    <div class="anno"><b>The receipt slot.</b> On flag tiles the min/max row becomes the receipt — the concrete who/when of the episodes, in the words the flags themselves use ("cam-porch → nas · 13:52"). A metrics tile that can name its story does; sparkline scale is not an excuse to go abstract.</div>
+    <div class="anno"><b>Sixteen types, two inks, zero cycled hues.</b> The old flags overlay assigned sixteen colours to sixteen types; here identity never touches colour, so the sixteenth type costs nothing. The per-type palette stays where it is load-bearing — the flag rows on the Flags page itself.</div>
+  </div>
+</section>
+
+<!-- ================= SCENE 3 : HOVER, SHARPNESS, TABLE ================= -->
+<section class="scene" id="s3">
+  <div class="scene-tag">Scene 3 — the hour under a finger: one cursor across every tile, device-pixel sharpness, and the table behind the Table button.</div>
+  <div class="row">
+    <div class="frame" style="min-height: 500px">
+      <div class="main" style="padding-top: 16px">
+        <div class="sectionlab">Events by action <span class="quiet">· hover at 13:52</span></div>
+        <div class="grid" style="grid-template-columns: 1fr 1fr">
+          <div class="tile"><div class="tl">accept<span class="nowv">421<span class="unit">/min</span></span></div>
+            <svg viewBox="0 0 200 46" preserveAspectRatio="none" aria-label="accept, cursor at 13:52">
+              <line class="gridline" x1="0" y1="23" x2="200" y2="23"/>
+              <path class="spark" d="M0,18 L20,16 L40,19 L60,15 L80,17 L100,14 L120,18 L140,13 L160,16 L180,12 L200,14"/>
+              <line class="xh" x1="166" y1="0" x2="166" y2="46"/>
+            </svg>
+            <div class="mm"><span>min 388</span><span>max 447</span></div>
+          </div>
+          <div class="tile"><div class="tl">drop<span class="nowv" style="color: var(--refused)">12<span class="unit">/min</span></span></div>
+            <svg viewBox="0 0 200 46" preserveAspectRatio="none" aria-label="drop, cursor at 13:52 — 88 per minute">
+              <line class="gridline" x1="0" y1="23" x2="200" y2="23"/>
+              <path class="spark refused" d="M0,40 L20,41 L40,39 L60,40 L80,41 L100,40 L120,39 L140,41 L166,6 L172,28 L180,38 L200,39"/>
+              <line class="xh" x1="166" y1="0" x2="166" y2="46"/>
+              <circle class="peak" cx="166" cy="6" r="3.5" stroke="var(--refused)"/>
+            </svg>
+            <div class="mm"><span>min 7</span><span>max 88</span></div>
+            <div class="tip" style="right: 10px; top: calc(100% + 6px)"><b>13:52</b> · drop <span class="tv">88/min</span> · cam-porch → nas · tcp/445</div>
+          </div>
+        </div>
+        <div class="specnote" style="width: auto; margin: 14px 0 0">
+          <b>One cursor, every tile.</b> Hovering any sparkline raises the same time cursor across all of them — the multiples answer "what else happened at 13:52" as one surface. The tooltip follows the hovered tile only and names what it can (the drop tile knows its burst's talker). <span class="kbd">←</span><span class="kbd">→</span> step the cursor by minute; <span class="kbd">Esc</span> clears it.
+        </div>
+      </div>
+      <div class="cap"><b>a · The linked cursor.</b> Amber (the brink's colour — a time marker, not a series), 1px, device-pixel aligned. Touch: press-drag scrubs; the tooltip pins above the finger.</div>
+    </div>
+    <div class="frame" style="min-height: 500px">
+      <div class="main" style="padding-top: 16px; display: flex; flex-direction: column; gap: 14px">
+        <div class="zoom" style="flex: none">
+          <h3>Device-pixel sharp — the #488 clause</h3>
+          <p class="speclist"><b>Lines land on the pixel grid:</b> sparklines render in a canvas-sized SVG whose width is measured in device pixels (no <code style="font: 10.5px var(--mono)">preserveAspectRatio</code> stretch in the build — the mockup cheats, the build must not); strokes are 2px at 1× and 1.5–2 device px at any DPR; gridlines and cursors take <b>crispEdges</b> and half-pixel offsets so a 1px rule is one row of pixels, not two grey ones. Bucket-per-pixel binning: one hour · 60 buckets maps one bucket to ≥ 3 device px before a line is drawn; below that the tile widens its bucket, never anti-aliases a mush.</p>
+        </div>
+        <div class="zoom" style="flex: none">
+          <h3>The table is a peer, not an apology</h3>
+          <p class="speclist"><b>Table</b> (top-right of each section) swaps the multiples for one table — series × minutes, the same numbers the tooltips speak, sortable, screen-reader-first. It is the identity-without-colour guarantee and the copy-paste surface; the toggle is per-section and remembered per user.</p>
+        </div>
+      </div>
+      <div class="cap"><b>b · Sharpness and the table.</b> Both are build requirements, recorded here so the round can ratify them: the sparkline that is "sharp on device pixels" is #488's done-when, and the table view is the accessibility floor for every chart surface.</div>
+    </div>
+  </div>
+  <div class="notes">
+    <div class="anno"><b>Reduced motion &amp; keyboard:</b> no animation lives in these charts at all (the only pulse on the page is the rail's receiving dot); the cursor steps by keyboard, tiles are focusable in reading order, and every SVG carries an aria-label that speaks its series, window and peak.</div>
+    <div class="anno"><b>Small screens:</b> the grid stacks to two columns, then one; the hero stat leads; cards follow the multiples. Nothing about a tile changes — it was already phone-sized on the desktop, which is the point of sparkline scale.</div>
+  </div>
+  <p class="specnote"><b>Carried forward, untouched:</b> the Q V shell (badge 6, the broken Watchlist ring), the two-ink meaning key, and the data story's mature afternoon — 13:02–14:02, the 13:52 first-in-41-days burst as the hour's one story, told identically here, in the fall, and on the Flags page.</p>
+</section>
+
+<script>
+  // light/dark for comparison shots: ?theme=light — a token swap, nothing else
+  if (new URLSearchParams(location.search).get('theme') === 'light') document.body.classList.add('light');
+</script>
+</body>
+</html>

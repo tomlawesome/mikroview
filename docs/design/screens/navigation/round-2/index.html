@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mikroview design pass — navigation (#486) — round 2</title>
+<style>
+  :root { --void:#06080e; --hair2:rgba(160,185,230,0.26); --ink:#e9eefb; --ink2:#97a4c4; --ink3:#55628a; --accent:#9db8e8; }
+  * { box-sizing: border-box; margin: 0; }
+  body { background: var(--void); color: var(--ink); font: 14px/1.55 system-ui, sans-serif; padding: 48px 24px; }
+  .wrap { max-width: 860px; margin: 0 auto; }
+  h1 { font-size: 19px; font-weight: 600; }
+  h1 b { color: var(--accent); letter-spacing: 0.18em; font-size: 13px; display: block; margin-bottom: 6px; }
+  p.lede { color: var(--ink2); margin: 12px 0 30px; font-size: 13px; }
+  a.card { display: block; border: 1px solid var(--accent); border-radius: 12px; padding: 16px 20px; margin-bottom: 14px; text-decoration: none; color: var(--ink); }
+  .card b { color: var(--accent); font-size: 12px; letter-spacing: 0.14em; }
+  .card .t { font-size: 15px; font-weight: 600; margin: 3px 0 4px; }
+  .card .d { font-size: 12.5px; color: var(--ink2); }
+  .note { font-size: 12px; color: var(--ink3); margin-top: 26px; }
+  .note a { color: var(--accent); }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1><b>DESIGN PASS · #518 · ROUND 2</b> Navigation (#486): the rail, answering the round-1 verdict.</h1>
+  <p class="lede">Round 1 closed: Q kept — "I like Q, the rail, but we need it so that there's a fully docked option (only a little symbol to pop it back out shows) and a way to have it show either icons only or icons and text." This round designs exactly that: three persistent states (full · icons · docked), the drawer flow from docked, the two controls that drive it, and a working page in icons mode. Everything else from Q carries forward verbatim.</p>
+  <a class="card" href="direction-q2-rail.html">
+    <b>Q II — THE RAIL, DOCKED &amp; IN TWO DENSITIES</b>
+    <div class="t">Four scenes: the three states · the drawer · the controls close up · a working page in icons mode</div>
+    <div class="d">Full 216px / icons 54px / docked 0px + a 26×44 handle that wears the alarm badge. From docked, » opens a drawer that dismisses itself on navigation; ⇥ pins it. Density is one preference, set anywhere it shows.</div>
+  </a>
+  <p class="note"><a href="../round-1/index.html">← round 1</a> · round 2 closed 2026-08-23: model stands; handle redesigned, drawer dropped (restore instead), light+dark added — <a href="../round-3/index.html" style="color:#9db8e8">round 3</a>. Record in README.md; verdict log on #518.</p>
+</div>
+</body>
+</html>

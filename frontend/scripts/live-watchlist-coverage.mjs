@@ -176,8 +176,7 @@ check(
 )
 
 async function openMenuView(label) {
-  await page.click('.nav-menu .trigger')
-  await page.click(`.nav-menu button:has-text("${label}")`)
+  await page.click(`.rail .item:has-text("${label}")`)
 }
 
 await page.reload({ waitUntil: 'networkidle' })

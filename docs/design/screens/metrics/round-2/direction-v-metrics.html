@@ -1,0 +1,535 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mikroview metrics — round 2 — V: the seismograph</title>
+<style>
+  /* ============================================================
+     DESIGN PASS (#518) — METRICS DENSITY (#488) — ROUND 2
+     V — THE SEISMOGRAPH  ·  every needle on one drum
+
+     The organising idea: metrics as a recording instrument, not a
+     dashboard. No tiles, no cards, no boxes at all — the page is
+     one full-bleed drum of horizon strips, every series a needle
+     trace on shared paper, the brink at the right edge where the
+     paper feeds. Horizon folding gives each strip three opacity
+     bands of ONE hue, so seven series (or sixteen flag types) fit
+     a screen at sparkline height with their shapes intact — the
+     highest-density answer to #488's done-when that still reads.
+
+     Chart inks unchanged and revalidated: traffic blue, refused
+     red; the folds are opacity steps of the same ink, never new
+     hues. Amber is the brink and the cursor — a time marker,
+     never a series. Results in this round's README.
+     ============================================================ */
+  :root {
+    --canvas: #1b2340; --void: #06080e;
+    --glass: rgba(15, 20, 34, 0.66); --glass-2: rgba(8, 11, 20, 0.88);
+    --hair: rgba(160, 185, 230, 0.13); --hair-2: rgba(160, 185, 230, 0.26);
+    --ink: #e9eefb; --ink-2: #97a4c4; --ink-3: #55628a;
+    --accent: #9db8e8;
+    --ok: #37b364; --alarm: #ff5470; --now: #e8b05a;
+    --traffic: #3987e5;
+    --refused: #e66767;
+    --sans: system-ui, -apple-system, "Segoe UI", sans-serif;
+    --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  }
+  * { box-sizing: border-box; margin: 0; }
+  html { scroll-behavior: smooth; }
+  body { background: var(--canvas); color: var(--ink); font: 13.5px/1.5 var(--sans); -webkit-font-smoothing: antialiased; }
+  .concept {
+    position: sticky; top: 0; z-index: 90; display: flex; gap: 16px; align-items: baseline;
+    padding: 8px 20px; background: rgba(2,3,7,0.95); border-bottom: 1px solid var(--hair);
+    font-size: 11px; color: var(--ink-3);
+  }
+  .concept b { color: var(--accent); letter-spacing: 0.1em; }
+  .concept a { color: var(--ink-2); text-decoration: none; margin-left: 12px; }
+  .scene { min-height: 100vh; position: relative; border-bottom: 1px solid var(--hair-2); overflow: hidden; padding-bottom: 30px; }
+  .scene-tag {
+    position: sticky; top: 33px; z-index: 80; text-align: center;
+    font-size: 10.5px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--ink-3);
+    padding: 6px 0; background: rgba(2,3,7,0.85);
+  }
+  .frame { position: relative; border: 1px solid var(--hair-2); border-radius: 14px; overflow: hidden; background: var(--void); flex: 1; display: flex; }
+  .frame .cap { position: absolute; left: 0; right: 0; bottom: 0; z-index: 30; font-size: 10.5px; color: var(--ink-2); padding: 9px 14px; background: rgba(2,3,7,0.92); border-top: 1px solid var(--hair); }
+  .frame .cap b { color: var(--accent); }
+  .frame .rail { padding-bottom: 110px; }
+  .frame.wide { flex: none; width: min(1460px, 97%); margin: 26px auto 0; display: flex; min-height: 700px; }
+
+  /* ---- the ratified rail (#486), carried forward verbatim ---- */
+  .rail {
+    width: 216px; flex: none; background: var(--glass-2); border-right: 1px solid var(--hair);
+    display: flex; flex-direction: column; padding: 14px 0 10px; position: relative; z-index: 10;
+    backdrop-filter: blur(10px);
+  }
+  .rail .wm { font-size: 11px; font-weight: 700; letter-spacing: 0.24em; color: var(--ink-3); padding: 0 16px 3px; }
+  .rail .wm em { color: var(--accent); font-style: normal; }
+  .rail .conn { font-size: 9.5px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--ink-3); padding: 0 16px 8px; }
+  .rail .conn i { display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: var(--ok); margin-right: 6px; animation: pulse 2s ease-in-out infinite; }
+  @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.3; } }
+  .gsec { font-size: 9px; letter-spacing: 0.16em; text-transform: uppercase; color: var(--ink-3); padding: 11px 16px 2px; font-weight: 650; }
+  .gpg { display: flex; align-items: center; gap: 9px; font-size: 12px; font-weight: 550; color: var(--ink-2); padding: 5px 16px 5px 14px; border-left: 2px solid transparent; text-decoration: none; cursor: default; position: relative; }
+  .gpg .ic { width: 15px; text-align: center; color: var(--ink-3); font-size: 12px; flex: none; }
+  .gpg.on { color: var(--ink); border-left-color: var(--accent); background: rgba(157,184,232,0.06); }
+  .gpg.on .ic { color: var(--accent); }
+  .gpg .ct { font-size: 9px; color: var(--void); background: var(--alarm); border-radius: 8px; padding: 1px 5px; margin-left: auto; font-weight: 700; }
+  .gpg.action { color: var(--accent); font-size: 11px; margin-top: 2px; }
+  .brokenring { display: inline-flex; align-items: center; gap: 9px; outline: 2px solid var(--alarm); outline-offset: 3px; border-radius: 6px; }
+  .rail .foot { margin-top: auto; padding: 10px 16px 0; border-top: 1px solid var(--hair); display: flex; align-items: center; gap: 7px; font-size: 11.5px; color: var(--ink-2); }
+  .role { font-size: 8.5px; font-weight: 700; letter-spacing: 0.12em; color: var(--ink-3); border: 1px solid var(--hair-2); border-radius: 8px; padding: 1px 6px; text-transform: uppercase; }
+  .rbtn { color: var(--ink-3); font-size: 12px; border: 1px solid var(--hair-2); border-radius: 6px; width: 22px; height: 22px; display: grid; place-items: center; flex: none; }
+  .rbtn.first { margin-left: auto; }
+
+  .main { flex: 1; position: relative; min-width: 0; padding: 0 22px 56px; display: flex; flex-direction: column; }
+  .crumb { padding: 18px 0 0; display: flex; align-items: baseline; gap: 12px; }
+  .crumb .over { font-size: 10px; letter-spacing: 0.16em; text-transform: uppercase; color: var(--ink-3); }
+  .crumb h2 { font-size: 19px; font-weight: 550; display: flex; align-items: baseline; gap: 10px; }
+  .crumb h2 .dim { color: var(--ink-3); font-weight: 400; font-size: 13px; }
+  .ctl { margin-left: auto; display: flex; gap: 8px; align-items: center; }
+  .ctl span { font-size: 10.5px; color: var(--ink-2); border: 1px solid var(--hair-2); border-radius: 6px; padding: 2px 9px; }
+  .ctl span.on { color: var(--ink); border-color: var(--accent); }
+
+  .hourline { display: flex; align-items: baseline; gap: 14px; margin-top: 12px; padding-bottom: 11px; border-bottom: 1px solid var(--hair); }
+  .hourline .big { font: 650 27px/1 var(--mono); color: var(--ink); letter-spacing: -0.01em; }
+  .hourline .big span { font-size: 11.5px; color: var(--ink-3); font-weight: 500; font-family: var(--sans); margin-left: 5px; }
+  .hourline .sep { color: var(--ink-3); opacity: 0.5; }
+  .hourline .fact { font-size: 11.5px; color: var(--ink-2); }
+  .hourline .fact b { color: var(--ink); font-weight: 600; font-family: var(--mono); font-size: 11.5px; }
+  .hourline .brinkmark { margin-left: auto; font: 10px var(--mono); color: var(--now); letter-spacing: 0.08em; }
+
+  /* ---- the drum ---- */
+  .drum { margin-top: 8px; flex: 1; min-height: 0; }
+  .drum svg { display: block; width: 100%; height: auto; }
+  .band-t-1 { fill: var(--traffic); opacity: 0.22; }
+  .band-t-2 { fill: var(--traffic); opacity: 0.5; }
+  .band-t-3 { fill: var(--traffic); opacity: 0.85; }
+  .band-r-1 { fill: var(--refused); opacity: 0.22; }
+  .band-r-2 { fill: var(--refused); opacity: 0.5; }
+  .band-r-3 { fill: var(--refused); opacity: 0.85; }
+  .strip-base { stroke: rgba(160,185,230,0.14); stroke-width: 1; shape-rendering: crispEdges; }
+  .minute10 { stroke: rgba(160,185,230,0.07); stroke-width: 1; shape-rendering: crispEdges; }
+  .brink { stroke: var(--now); stroke-width: 1; shape-rendering: crispEdges; }
+  .brinkglow { stroke: var(--now); stroke-width: 3; opacity: 0.16; animation: breathe 4s ease-in-out infinite; }
+  @keyframes breathe { 0%,100% { opacity: 0.16; } 50% { opacity: 0.05; } }
+  .sname { font: 600 11px var(--sans); fill: var(--ink-2); }
+  .snow { font: 600 14px var(--mono); fill: var(--ink); }
+  .snow.r { fill: var(--refused); }
+  .sunit { font: 8.5px var(--mono); fill: var(--ink-3); }
+  .sscale { font: 8.5px var(--mono); fill: var(--ink-3); }
+  .tlab { font: 9.5px var(--mono); fill: var(--ink-3); }
+  .tlab.now { fill: var(--now); }
+  .grouplab { font: 650 9px var(--sans); fill: var(--ink-3); letter-spacing: 0.16em; }
+  .noteline { stroke: var(--refused); stroke-width: 1; }
+  .notehead { font: 600 10.5px var(--mono); fill: var(--ink); }
+  .notebody { font: 10px var(--sans); fill: var(--ink-3); }
+  .burstdot { fill: var(--refused); }
+  .cursor { stroke: var(--now); stroke-width: 1; shape-rendering: crispEdges; }
+  .cursorband { fill: var(--now); opacity: 0.07; }
+  .mark { stroke-width: 3; stroke-linecap: round; }
+  .mark.t { stroke: var(--traffic); }
+  .mark.r { stroke: var(--refused); }
+  .vlab { font: 10px var(--sans); fill: var(--ink-2); }
+  .vlab.q { fill: var(--ink-3); opacity: 0.75; }
+  .xs-lab { font: 10px var(--sans); fill: var(--ink-3); }
+  .xs-val { font: 600 11px var(--mono); fill: var(--ink); }
+  .xs-val.r { fill: var(--refused); }
+
+  .quietnote { font-size: 11px; color: var(--ink-2); margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--hair); }
+  .quietnote b { color: var(--accent); font-weight: 650; }
+
+  .panels { display: flex; gap: 14px; margin: 14px auto 0; width: min(1460px, 97%); }
+  .zoom { background: rgba(13,18,32,0.5); border: 1px solid var(--hair); border-radius: 12px; padding: 16px 18px; flex: 1; }
+  .zoom h3 { font-size: 11px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--ink-3); margin-bottom: 10px; font-weight: 650; }
+  .speclist { font-size: 11.5px; color: var(--ink-2); line-height: 1.7; }
+  .speclist b { color: var(--accent); font-weight: 650; }
+  .kbd { font: 10.5px var(--mono); color: var(--ink-2); border: 1px solid var(--hair-2); border-bottom-width: 2px; border-radius: 5px; padding: 1px 6px; }
+
+  .notes { display: flex; gap: 14px; align-items: stretch; margin: 14px auto 0; width: min(1460px, 97%); }
+  .anno { font-size: 11px; color: var(--ink-2); background: var(--glass-2); border: 1px solid var(--hair-2); border-left: 2px solid var(--accent); border-radius: 8px; padding: 9px 12px; flex: 1; }
+  .anno b { color: var(--accent); font-weight: 650; }
+
+  /* ---- light — token swap for comparison shots only ---- */
+  body.light {
+    --canvas: #c3c9d4; --void: #eef1f7;
+    --glass: rgba(252, 253, 255, 0.72); --glass-2: rgba(244, 247, 252, 0.92);
+    --hair: rgba(28, 44, 84, 0.12); --hair-2: rgba(28, 44, 84, 0.26);
+    --ink: #17223c; --ink-2: #46536f; --ink-3: #7d89a6;
+    --accent: #3f66b0; --ok: #1e7f43; --alarm: #d63c5e; --now: #9a6b10;
+    --traffic: #2a78d6; --refused: #e34948;
+  }
+  body.light .concept, body.light .scene-tag { background: rgba(244, 247, 252, 0.95); }
+  body.light .frame .cap { background: rgba(244, 247, 252, 0.95); }
+  body.light .gpg.on { background: rgba(63, 102, 176, 0.09); }
+  body.light .zoom { background: rgba(255,255,255,0.55); }
+  body.light .strip-base { stroke: rgba(28,44,84,0.2); }
+  body.light .minute10 { stroke: rgba(28,44,84,0.08); }
+  body.light .band-t-1, body.light .band-r-1 { opacity: 0.18; }
+
+  @media (prefers-reduced-motion: reduce) { * { animation: none !important; } }
+</style>
+</head>
+<body>
+
+<div class="concept"><b>ROUND 2 — V · THE SEISMOGRAPH</b> #488 under #518 · every needle on one drum: horizon strips, no boxes · <a href="?theme=light" style="margin-left:0">light</a> · <a href="?" style="margin-left:4px">dark</a>
+  <span style="margin-left:auto"><a href="direction-u-metrics.html">U</a><a href="../../navigation/round-5/direction-q5-rail.html">shell: Q V</a><a href="index.html">index</a></span>
+</div>
+
+<!-- ================= SCENE 1 : THE PAGE ================= -->
+<section class="scene" id="s1">
+  <div class="scene-tag">Scene 1 — the metrics page as a recording drum: seven traces on shared paper, the brink at the right edge, no boxes anywhere.</div>
+  <div class="frame wide">
+    <aside class="rail" aria-label="Navigation">
+      <span class="wm">MIKRO<em>VIEW</em></span>
+      <span class="conn"><i></i>receiving</span>
+      <div class="gsec">Live</div>
+      <span class="gpg"><span class="ic">▿</span><span class="lab">The fall</span></span>
+      <span class="gpg"><span class="ic">≡</span><span class="lab">Stream</span></span>
+      <div class="gsec">Investigate</div>
+      <span class="gpg on"><span class="ic">∿</span><span class="lab">Metrics</span></span>
+      <span class="gpg"><span class="ic">¶</span><span class="lab">Audit log</span></span>
+      <div class="gsec">Detect</div>
+      <span class="gpg"><span class="ic">⚑</span><span class="lab">Flags</span><span class="ct">6</span></span>
+      <span class="gpg"><span class="ic">⚙</span><span class="lab">Detectors</span></span>
+      <div class="gsec">Expect</div>
+      <span class="gpg"><span class="brokenring"><span class="ic">◉</span><span class="lab">Watchlist</span></span></span>
+      <div class="gsec">Admin</div>
+      <span class="gpg"><span class="ic">§</span><span class="lab">Users</span></span>
+      <span class="gpg"><span class="ic">✱</span><span class="lab">Tokens</span></span>
+      <span class="gpg"><span class="ic">⌂</span><span class="lab">Fleet</span></span>
+      <span class="gpg"><span class="ic">⊞</span><span class="lab">Entities</span></span>
+      <span class="gpg action"><span class="ic">⟳</span><span class="lab">Run setup…</span></span>
+      <div class="foot"><span class="nm">tom</span><span class="role">admin</span><span class="rbtn first" title="Icons only">⇔</span><span class="rbtn" title="Dock the rail">⇤</span></div>
+    </aside>
+    <div class="main">
+      <div class="crumb">
+        <div>
+          <div class="over">Investigate</div>
+          <h2>Metrics <span class="dim">· the hour to 14:02</span></h2>
+        </div>
+        <div class="ctl"><span class="on">Drum</span><span>Table</span><span>last hour ▾</span></div>
+      </div>
+      <div class="hourline">
+        <div class="big">7.4<span>events/s now</span></div>
+        <span class="sep">·</span>
+        <div class="fact"><b>443</b>/min, steady</div>
+        <span class="sep">·</span>
+        <div class="fact"><b>26 592</b> events in the hour</div>
+        <span class="sep">·</span>
+        <div class="fact">one thing happened: <b>13:52</b></div>
+        <div class="brinkmark">the brink · 14:02:11 ▶</div>
+      </div>
+      <div class="drum" id="drum1"></div>
+      <div class="quietnote"><b>The drum owns time; totals live in the Table.</b> Which rule fired most, who talked loudest, per-device counts — the magnitude questions the old cards answered — are the Table view's opening section, one keypress away, where they are sortable and copyable instead of frozen in three boxes.</div>
+    </div>
+    <div class="cap"><b>Seven needles, no boxes.</b> Each strip folds its own scale into three opacity bands of one ink — tall stays legible at 56px without flattening the quiet — and the paper feeds from the right, so the newest minute always touches the amber brink. The 13:52 burst reads as what it is: one needle jumped, six did not.</div>
+  </div>
+  <div class="notes">
+    <div class="anno"><b>Why an instrument.</b> Round 1 died for dressing the current app in sparklines. This page stops imitating a dashboard: no tiles, no cards, no legend — one surface whose whole job is the hour. Identity is the row label at the needle's left; colour is meaning alone (traffic blue, refused red), so the drum survives greyscale.</div>
+    <div class="anno"><b>Horizon folding, declared.</b> A strip's shading folds height that will not fit: the deepest band is the top third of that series' own scale, printed at its left. Nothing shares an axis, nothing is squashed — drop's 88/min burst saturates its bands, and accept, which ran near its own ceiling all hour, draws as the solid uneventful bar that hour truthfully was.</div>
+    <div class="anno"><b>The brink is an edge, not a decoration.</b> Amber belongs to time: the feeding edge, the cursor, nothing else. A minute arrives at the right and pushes the hour leftward — under reduced motion the slide is instant, and the arrival is announced, not animated.</div>
+  </div>
+</section>
+
+<!-- ================= SCENE 2 : FLAGS ON THE DRUM ================= -->
+<section class="scene" id="s2">
+  <div class="scene-tag">Scene 2 — sixteen flag types on the same paper: episode ticks on live rows, silent rows kept as hairlines, nothing pretending.</div>
+  <div class="frame wide" style="min-height: 640px">
+    <aside class="rail" aria-label="Navigation">
+      <span class="wm">MIKRO<em>VIEW</em></span>
+      <span class="conn"><i></i>receiving</span>
+      <div class="gsec">Live</div>
+      <span class="gpg"><span class="ic">▿</span><span class="lab">The fall</span></span>
+      <span class="gpg"><span class="ic">≡</span><span class="lab">Stream</span></span>
+      <div class="gsec">Investigate</div>
+      <span class="gpg on"><span class="ic">∿</span><span class="lab">Metrics</span></span>
+      <span class="gpg"><span class="ic">¶</span><span class="lab">Audit log</span></span>
+      <div class="gsec">Detect</div>
+      <span class="gpg"><span class="ic">⚑</span><span class="lab">Flags</span><span class="ct">6</span></span>
+      <span class="gpg"><span class="ic">⚙</span><span class="lab">Detectors</span></span>
+      <div class="gsec">Expect</div>
+      <span class="gpg"><span class="brokenring"><span class="ic">◉</span><span class="lab">Watchlist</span></span></span>
+      <div class="gsec">Admin</div>
+      <span class="gpg"><span class="ic">§</span><span class="lab">Users</span></span>
+      <span class="gpg"><span class="ic">✱</span><span class="lab">Tokens</span></span>
+      <span class="gpg"><span class="ic">⌂</span><span class="lab">Fleet</span></span>
+      <span class="gpg"><span class="ic">⊞</span><span class="lab">Entities</span></span>
+      <span class="gpg action"><span class="ic">⟳</span><span class="lab">Run setup…</span></span>
+      <div class="foot"><span class="nm">tom</span><span class="role">admin</span><span class="rbtn first" title="Icons only">⇔</span><span class="rbtn" title="Dock the rail">⇤</span></div>
+    </aside>
+    <div class="main">
+      <div class="crumb">
+        <div>
+          <div class="over">Investigate</div>
+          <h2>Metrics <span class="dim">· the hour to 14:02 · flag episodes</span></h2>
+        </div>
+        <div class="ctl"><span>Traffic</span><span class="on">Flags</span><span>Table</span></div>
+      </div>
+      <div class="hourline">
+        <div class="big">6<span>episodes raised this hour</span></div>
+        <span class="sep">·</span>
+        <div class="fact"><b>4</b> of 16 types spoke</div>
+        <span class="sep">·</span>
+        <div class="fact">half of them in one minute: <b>13:52</b></div>
+        <div class="brinkmark">the brink · 14:02:11 ▶</div>
+      </div>
+      <div class="drum" id="drum2"></div>
+    </div>
+    <div class="cap"><b>Sixteen rows, four of them alive.</b> The types that spoke rise to the top with their ticks at the minute they fired; the silent twelve keep their hairline and their name, dimmed — running and quiet, visibly. An episode is discrete, so it earns a tick, not a curve; two in one minute wear an ×2 rather than pretending to be a trend.</div>
+  </div>
+  <div class="notes">
+    <div class="anno"><b>Live rows sort to the paper's top.</b> Activity floats up, silence sinks, order within each half is the detector registry's — so the eye meets news first, and a wall of sixteen never has to be scanned to find the four that matter.</div>
+    <div class="anno"><b>The same paper as scene 1.</b> Flags and traffic share the drum's coordinate space, so switching between them keeps 13:52 in the same place on the page. The drop burst and the three episodes it raised line up vertically across the two views — the correlation is spatial, not remembered.</div>
+    <div class="anno"><b>Counts, not colours, name the types.</b> Sixteen types with zero cycled hues: red means raised-on-refused-traffic, blue means the rest, and each row ends in its count. The per-type palette stays where it is load-bearing — the Flags page itself.</div>
+  </div>
+</section>
+
+<!-- ================= SCENE 3 : THE CURSOR AND THE TABLE ================= -->
+<section class="scene" id="s3">
+  <div class="scene-tag">Scene 3 — the cursor on the drum: one amber needle-lift across every strip, the minute read as a column, and the table as a peer.</div>
+  <div class="frame wide" style="min-height: 620px">
+    <aside class="rail" aria-label="Navigation">
+      <span class="wm">MIKRO<em>VIEW</em></span>
+      <span class="conn"><i></i>receiving</span>
+      <div class="gsec">Live</div>
+      <span class="gpg"><span class="ic">▿</span><span class="lab">The fall</span></span>
+      <span class="gpg"><span class="ic">≡</span><span class="lab">Stream</span></span>
+      <div class="gsec">Investigate</div>
+      <span class="gpg on"><span class="ic">∿</span><span class="lab">Metrics</span></span>
+      <span class="gpg"><span class="ic">¶</span><span class="lab">Audit log</span></span>
+      <div class="gsec">Detect</div>
+      <span class="gpg"><span class="ic">⚑</span><span class="lab">Flags</span><span class="ct">6</span></span>
+      <span class="gpg"><span class="ic">⚙</span><span class="lab">Detectors</span></span>
+      <div class="gsec">Expect</div>
+      <span class="gpg"><span class="brokenring"><span class="ic">◉</span><span class="lab">Watchlist</span></span></span>
+      <div class="gsec">Admin</div>
+      <span class="gpg"><span class="ic">§</span><span class="lab">Users</span></span>
+      <span class="gpg"><span class="ic">✱</span><span class="lab">Tokens</span></span>
+      <span class="gpg"><span class="ic">⌂</span><span class="lab">Fleet</span></span>
+      <span class="gpg"><span class="ic">⊞</span><span class="lab">Entities</span></span>
+      <span class="gpg action"><span class="ic">⟳</span><span class="lab">Run setup…</span></span>
+      <div class="foot"><span class="nm">tom</span><span class="role">admin</span><span class="rbtn first" title="Icons only">⇔</span><span class="rbtn" title="Dock the rail">⇤</span></div>
+    </aside>
+    <div class="main">
+      <div class="crumb">
+        <div>
+          <div class="over">Investigate</div>
+          <h2>Metrics <span class="dim">· the hour to 14:02 · reading 13:52</span></h2>
+        </div>
+        <div class="ctl"><span class="on">Drum</span><span>Table</span><span>last hour ▾</span></div>
+      </div>
+      <div class="hourline">
+        <div class="big">13:52<span>the minute under the cursor</span></div>
+        <span class="sep">·</span>
+        <div class="fact"><b>88</b> drops, against a median of <b>12</b></div>
+        <span class="sep">·</span>
+        <div class="fact">one source: <b>203.0.113.44</b></div>
+        <div class="brinkmark">←→ a minute · ⇧ ten · ⏎ opens the fall here</div>
+      </div>
+      <div class="drum" id="drum3"></div>
+    </div>
+    <div class="cap"><b>The cursor lifts every needle at once.</b> One amber line, seven readings in the gutter it opens — the whole minute as a column of figures beside the traces that made it. Nothing here was provoked: this is the traffic that arrived, at the minute it arrived.</div>
+  </div>
+  <div class="panels">
+    <div class="zoom">
+      <h3>The table, a peer view — identity without colour</h3>
+      <table style="width:100%; border-collapse:collapse; font: 10.5px var(--mono); color: var(--ink-2);" class="peerx" id="peertbl-wrap">
+        <thead><tr id="peerhead"></tr></thead>
+        <tbody id="peertbl"></tbody>
+      </table>
+      <div class="speclist" style="margin-top: 10px">Same data, same hour, sortable and copyable — and where the old cards' totals now live. The drum and the table are <b>two readings of one thing</b>; <span class="kbd">Table</span> in the header switches, and the cursor's minute stays selected across the switch.</div>
+    </div>
+    <div class="zoom" style="flex: 0 0 30%">
+      <h3>Sharp, and reachable</h3>
+      <div class="speclist">
+        <b>Device pixels.</b> Bands are filled paths on a whole-pixel grid; baselines and rules use <span class="kbd">shape-rendering: crispEdges</span>, so hairlines land on a device pixel instead of blurring across two. Redrawn on DPR change, never upscaled from a raster.<br>
+        <b>Keyboard.</b> <span class="kbd">←</span><span class="kbd">→</span> move the cursor a minute, <span class="kbd">⇧</span> ten, <span class="kbd">End</span> the brink. Each move announces the minute and its figures.<br>
+        <b>Reduced motion.</b> The brink's breath and the paper feed are the only motion; both become instant.
+      </div>
+    </div>
+  </div>
+</section>
+
+<script>
+  // ============================================================
+  // ONE DATA STORY, identical to direction U and carried from
+  // round 1: the hour 13:02–14:02, brink 14:02:11, 7.4 events/s
+  // (443/min, 26 592 in the hour), and one event — drop's 13:52
+  // burst, 88/min against a median of 12. Deterministic: no
+  // Math.random, so every capture draws the identical hour.
+  // ============================================================
+  const M = 60;
+  const rng = s => () => ((s = (s * 1664525 + 1013904223) >>> 0) / 4294967296);
+
+  const ACTIONS = [
+    { k: 'accept',  ink: 't', now: 421, lo: 388, hi: 447, seed: 11 },
+    { k: 'natted',  ink: 't', now: 178, lo: 149, hi: 189, seed: 23 },
+    { k: 'log',     ink: 't', now: 143, lo: 118, hi: 151, seed: 37 },
+    { k: 'marked',  ink: 't', now: 9,   lo: 5,   hi: 12,  seed: 41 },
+    { k: 'unknown', ink: 't', now: 1,   lo: 0,   hi: 2,   seed: 53 },
+    { k: 'drop',    ink: 'r', now: 12,  lo: 7,   hi: 88,  seed: 67, burst: true, quiethi: 16 },
+    { k: 'reject',  ink: 'r', now: 3,   lo: 1,   hi: 5,   seed: 79 },
+  ];
+
+  function values(d) {
+    const r = rng(d.seed), raw = [];
+    for (let m = 0; m <= M; m++) raw.push(0.5 + 0.5 * Math.sin(m / 6.5 + d.seed) + (r() - 0.5) * 1.15);
+    const sm = raw.map((x, i) => (raw[Math.max(0, i - 1)] + x + raw[Math.min(M, i + 1)]) / 3);
+    const mn = Math.min(...sm), mx = Math.max(...sm), hi = d.quiethi || d.hi;
+    const v = sm.map(x => d.lo + (x - mn) / (mx - mn) * (hi - d.lo));
+    v[0] = d.now;
+    if (d.burst) { v[8] = 17; v[9] = 44; v[10] = 88; v[11] = 57; v[12] = 21; v[13] = 14; }
+    return v;
+  }
+  ACTIONS.forEach(d => d.v = values(d));
+
+  const fmt = n => Math.round(n).toLocaleString('en-GB').replace(/,/g, ' ');
+
+  // ---- drum geometry: time x, minute 0 (now) at the right ----
+  const D = { x0: 148, x1: 1128, top: 34, sh: 56, gap: 14, w: 1200 };
+  const xOf = m => D.x1 - (m / M) * (D.x1 - D.x0);        // m minutes before the brink
+
+  // horizon fold: three bands of one ink, per-series scale
+  function horizon(v, scale, y0, h, ink) {
+    const third = scale / 3;
+    let s = '';
+    for (let b = 0; b < 3; b++) {
+      const pts = [];
+      for (let m = M; m >= 0; m--) {
+        const frac = Math.max(0, Math.min(third, v[m] - b * third)) / third;
+        pts.push(xOf(m).toFixed(1) + ',' + (y0 + h - frac * h).toFixed(1));
+      }
+      s += `<path class="band-${ink}-${b + 1}" d="M${xOf(M)},${y0 + h} L` + pts.join(' L') + ` L${xOf(0)},${y0 + h} Z"/>`;
+    }
+    return s;
+  }
+
+  function timeRow(y, withNow) {
+    let s = '';
+    for (let m = 0; m <= M; m += 10) {
+      const x = xOf(m);
+      const label = m === 0 ? '14:02' : (13 + Math.floor((62 - m) / 60)) + ':' + String((62 - m) % 60).padStart(2, '0');
+      s += `<text class="tlab${m === 0 && withNow ? ' now' : ''}" x="${x}" y="${y}" text-anchor="${m === 0 ? 'end' : 'middle'}">${label}</text>`;
+    }
+    return s;
+  }
+
+  function gridCols(top, bottom) {
+    let s = '';
+    for (let m = 10; m <= M; m += 10) {
+      s += `<line class="minute10" x1="${xOf(m)}" y1="${top}" x2="${xOf(m)}" y2="${bottom}"/>`;
+    }
+    return s;
+  }
+
+  function brinkEdge(top, bottom) {
+    return `<line class="brinkglow" x1="${D.x1}" y1="${top}" x2="${D.x1}" y2="${bottom}"/>
+            <line class="brink" x1="${D.x1}" y1="${top}" x2="${D.x1}" y2="${bottom}"/>`;
+  }
+
+  // ---- scene 1 + 3: the traffic drum -------------------------
+  function trafficDrum(opts) {
+    const bottom = D.top + ACTIONS.length * (D.sh + D.gap) - D.gap;
+    let s = timeRow(D.top - 12, true) + gridCols(D.top - 4, bottom + 4);
+
+    ACTIONS.forEach((d, i) => {
+      const y0 = D.top + i * (D.sh + D.gap);
+      const scale = Math.max(d.hi, 12);
+      s += `<line class="strip-base" x1="${D.x0}" y1="${y0 + D.sh}" x2="${D.x1}" y2="${y0 + D.sh}"/>`;
+      s += `<text class="sname" x="8" y="${y0 + 22}">${d.k}</text>`;
+      s += `<text class="snow${d.ink === 'r' ? ' r' : ''}" x="8" y="${y0 + 40}">${fmt(d.now)}<tspan class="sunit"> /min</tspan></text>`;
+      s += `<text class="sscale" x="8" y="${y0 + 53}">scale ${fmt(scale)}</text>`;
+      s += horizon(d.v, scale, y0, D.sh, d.ink);
+    });
+
+    s += brinkEdge(D.top - 4, bottom + 4);
+
+    if (opts.burstNote) {
+      const i = 5, y0 = D.top + i * (D.sh + D.gap), x = xOf(10);
+      s += `<circle class="burstdot" cx="${x}" cy="${y0 - 5}" r="2.6"/>`;
+      s += `<line class="noteline" x1="${x}" y1="${y0 - 3}" x2="${x}" y2="${y0 - 26}"/>`;
+      s += `<text class="notehead" x="${x - 10}" y="${y0 - 26}" text-anchor="end">13:52 · drop 88/min — 7× the median</text>`;
+      s += `<text class="notebody" x="${x - 10}" y="${y0 - 13}" text-anchor="end">one source, first in 41 days · accept never moved</text>`;
+    }
+
+    if (opts.cursor !== undefined) {
+      const m = opts.cursor, x = xOf(m);
+      s += `<rect class="cursorband" x="${x - 4}" y="${D.top - 4}" width="8" height="${bottom - D.top + 8}"/>`;
+      s += `<line class="cursor" x1="${x}" y1="${D.top - 4}" x2="${x}" y2="${bottom + 4}"/>`;
+      s += `<text class="tlab now" x="${x}" y="${bottom + 18}" text-anchor="middle" style="font-weight:700">13:52</text>`;
+      ACTIONS.forEach((d, i) => {
+        const y0 = D.top + i * (D.sh + D.gap);
+        s += `<text class="xs-val${d.ink === 'r' ? ' r' : ''}" x="${x + 10}" y="${y0 + 14}">${fmt(d.v[m])}</text>`;
+      });
+    }
+
+    return `<svg viewBox="0 0 ${D.w} ${bottom + 28}" role="img" aria-label="Seven traffic series for the hour to 14:02, horizon strips on one shared time axis, newest at the right">${s}</svg>`;
+  }
+
+  document.getElementById('drum1').innerHTML = trafficDrum({ burstNote: true });
+  document.getElementById('drum3').innerHTML = trafficDrum({ cursor: 10 });
+
+  // ---- scene 2: flags on the drum -----------------------------
+  const SPOKE = [
+    { k: 'repeated drops', ink: 'r', at: [[10, 2]], n: 2 },
+    { k: 'activity spike', ink: 'r', at: [[10, 1], [34, 1]], n: 2 },
+    { k: 'new device', ink: 't', at: [[27, 1]], n: 1 },
+    { k: 'device silence', ink: 't', at: [[46, 1]], n: 1 },
+  ];
+  // the twelve real detectors that stayed silent (types.ts FlagType)
+  const QUIET = ['port scan', 'critical-port attempts', 'network-wide spike', 'distributed brute-force',
+    'outbound anomaly', 'internal recon', 'rule hit-rate spike', 'low-and-slow scan',
+    'off-hours activity', 'stale rule', 'unexpected mail sender', 'known-bad IP'];
+
+  function flagDrum() {
+    const rh = 26, liveH = 4 * rh, top = D.top + 20;
+    const bottom = top + 16 * rh;
+    let s = timeRow(top - 16, true) + gridCols(top - 6, bottom);
+
+    SPOKE.forEach((f, i) => {
+      const y = top + i * rh + rh / 2;
+      s += `<line class="strip-base" x1="${D.x0}" y1="${y}" x2="${D.x1}" y2="${y}"/>`;
+      s += `<text class="vlab" x="8" y="${y + 3.5}">${f.k}</text>`;
+      s += `<text class="snow${f.ink === 'r' ? ' r' : ''}" x="${D.x1 + 14}" y="${y + 4}" style="font-size:12px">${f.n}</text>`;
+      f.at.forEach(([m, n]) => {
+        const x = xOf(m);
+        s += `<line class="mark ${f.ink}" x1="${x}" y1="${y - 7}" x2="${x}" y2="${y + 7}"/>`;
+        if (n > 1) s += `<text class="notebody" x="${x + 6}" y="${y - 6}">×${n}</text>`;
+      });
+    });
+    s += `<line class="minute10" x1="8" y1="${top + liveH + 2}" x2="${D.x1}" y2="${top + liveH + 2}" style="stroke: rgba(160,185,230,0.18)"/>`;
+    QUIET.forEach((q, j) => {
+      const y = top + (4 + j) * rh + rh / 2 + 6;
+      s += `<line class="strip-base" x1="${D.x0}" y1="${y}" x2="${D.x1}" y2="${y}" style="opacity:0.55"/>`;
+      s += `<text class="vlab q" x="8" y="${y + 3.5}">${q}</text>`;
+      s += `<text class="sscale" x="${D.x1 + 14}" y="${y + 3.5}">0</text>`;
+    });
+
+    s += brinkEdge(top - 6, bottom + 6);
+
+    const x = xOf(10);
+    s += `<rect class="cursorband" x="${x - 4}" y="${top - 6}" width="8" height="${liveH + 8}"/>`;
+    s += `<text class="notehead" x="${x - 8}" y="${top - 32}" text-anchor="end">13:52 · three episodes, the burst's minute</text>`;
+
+    return `<svg viewBox="0 0 ${D.w} ${bottom + 26}" role="img" aria-label="Sixteen flag types for the hour to 14:02; four raised episodes, twelve silent">${s}</svg>`;
+  }
+  document.getElementById('drum2').innerHTML = flagDrum();
+
+  // ---- the peer table (scene 3) -------------------------------
+  document.getElementById('peerhead').innerHTML =
+    '<th style="text-align:left; font-weight:600; color:var(--ink-3); padding:3px 7px; border-bottom:1px solid var(--hair-2); font-size:9.5px; letter-spacing:0.06em; text-transform:uppercase">minute</th>' +
+    ACTIONS.map(d => `<th style="text-align:right; font-weight:600; color:var(--ink-3); padding:3px 7px; border-bottom:1px solid var(--hair-2); font-size:9.5px; letter-spacing:0.06em; text-transform:uppercase">${d.k}</th>`).join('');
+  const rows = [10, 11, 12, 13, 14, 15];
+  document.getElementById('peertbl').innerHTML = rows.map(m => {
+    const label = '13:' + String(62 - m).padStart(2, '0');
+    const hi = m === 10;
+    const cells = ACTIONS.map(d =>
+      `<td style="text-align:right; padding:3px 7px; border-bottom:1px solid var(--hair);${d.ink === 'r' ? ' color:var(--refused);' : ''}${hi ? ' background:rgba(232,176,90,0.10); color:var(--ink);' : ''}">${fmt(d.v[m])}</td>`).join('');
+    return `<tr><td style="text-align:left; padding:3px 7px; border-bottom:1px solid var(--hair);${hi ? ' background:rgba(232,176,90,0.10); color:var(--ink);' : ''}">${label}</td>${cells}</tr>`;
+  }).join('');
+
+  // light/dark for comparison shots: ?theme=light — a token swap, nothing else
+  if (new URLSearchParams(location.search).get('theme') === 'light') document.body.classList.add('light');
+</script>
+</body>
+</html>

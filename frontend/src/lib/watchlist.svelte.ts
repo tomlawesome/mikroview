@@ -24,6 +24,20 @@ class WatchlistState {
   // derived from what routers have pushed rather than stored.
   coverage = $state<Record<string, WatchlistCoverage>>({})
 
+  // #546's broken ring: how many *enabled* expectations currently answer
+  // 'no-logging' -- the operator declared a watch and no pushed firewall
+  // rule can ever produce an event it would match. 'unknown' and
+  // 'out-of-scope' deliberately do not count (see the ratified decision
+  // on #546): 'unknown' means mikroview has no answer at all, and ringing
+  // on it would assert a problem it cannot see; 'out-of-scope' is a
+  // scoping fact, not a failure. A disabled entry does not count either
+  // -- switching a watch off is not promising mikroview can see it.
+  // #367's evidence-completeness guard already downgrades an
+  // under-evidenced 'no-logging'/'out-of-scope' to 'unknown' server-side
+  // (definitionCoverage, internal/api/definitions.go), so this inherits
+  // that honesty guarantee for free rather than needing to reimplement it.
+  brokenCount = $derived.by(() => this.entries.filter((e) => e.enabled && this.coverage[e.id] === 'no-logging').length)
+
   async refresh() {
     const { entries, coverage } = await fetchWatchlistEntries()
     this.entries = entries

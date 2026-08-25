@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 import { lookupIp } from './api'
+import { appState } from './state.svelte'
 import type { ReputationResult } from './types'
 
 interface Anchor {
@@ -23,6 +24,12 @@ class IpLookupState {
   private requestId = 0
 
   open(ip: string, rect: DOMRect) {
+  // Hold the stream while this is open (#413's "the stream holds while
+  // you edit", stated once for every row-anchored surface). Newest-at-top
+  // pushes rows down as events arrive, and a popover anchored to a row
+  // that keeps moving is hostile. Guarded on anchor so re-opening for a
+  // different token does not take a second hold it will never release.
+    if (this.anchor === null) appState.holdStream()
     this.anchor = { ip, x: rect.left, y: rect.bottom }
     this.result = null
     this.error = null
@@ -44,7 +51,9 @@ class IpLookupState {
   }
 
   close() {
+    if (this.anchor === null) return
     this.anchor = null
+    appState.releaseStream()
   }
 }
 

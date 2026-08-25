@@ -33,6 +33,19 @@ type Width = number | null
 
 const DEFAULT_WIDTHS: Width[] = [104, 150, 92, 88, null, 76, null, 76, null, 74, 160, null]
 const MIN_WIDTH = 56
+// Flexible columns used to be `minmax(0, 1fr)`, which lets them shrink to
+// nothing. An address cell holds its label plus a copy button and an
+// investigate button, both `flex: none` at 17px and 15px with 4px gaps --
+// so once the column falls under ~60px the buttons take everything and
+// the label collapses to width 0. It is still in the DOM, still
+// focusable, and invisible.
+//
+// This is not hypothetical: the left rail (#544) took 216px off the
+// content column, the address columns dropped to ~53px, and two live
+// scenarios failed on an element that existed but could not be seen or
+// clicked. A floor here costs a horizontal scrollbar in the narrowest
+// cases, which is the better failure.
+const FLEX_MIN_WIDTH = 96
 // v3: added the srcPort/dstPort columns (previously inline in the address
 // cells) -- bumped so anyone with a v2 width array saved just falls back
 // to the new defaults instead of applying stale widths to a different
@@ -62,7 +75,7 @@ class ColumnState {
   widths = $state<Width[]>(loadInitial())
 
   gridTemplate = $derived(
-    this.widths.map((w) => (w === null ? 'minmax(0, 1fr)' : `${w}px`)).join(' '),
+    this.widths.map((w) => (w === null ? `minmax(${FLEX_MIN_WIDTH}px, 1fr)` : `${w}px`)).join(' '),
   )
 
   isDefault = $derived(this.widths.every((w, i) => w === DEFAULT_WIDTHS[i]))

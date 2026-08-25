@@ -16,6 +16,336 @@ rewritten.
 
 ## [Unreleased]
 
+### Added
+
+- **The NAT popup answers one of two different questions, and says which**
+  (#445, design ratified 2026-08-22). RouterOS never states which NAT
+  rule performed a translation -- but neither does it state which filter
+  rule dropped a packet, and filter events resolve anyway, through the
+  `log-prefix` the operator chose to put on the rule. NAT rules take the
+  same tag, so tag one (`log=yes log-prefix="N|port-fwd|"`) and the "i"
+  beside a NAT cell now names **that rule**: header "NAT rule --
+  logged", a `logged` chip, the rule's ordinal, chain, action and
+  comment, and the same shared-prefix honesty filter rules already get
+  (two rules with one prefix show as two rules, never a pick). Leave it
+  untagged and the popup cannot name anything, so it does not pretend
+  to: header "NAT table -- *device*", a `not logged` chip, and the
+  pushed table split into **"Could have performed it -- 3 of 14"** and
+  **"Ruled out by this event -- 11"**, every exclusion carrying its
+  reason in one clause (`ruled out: protocol udp ≠ tcp`,
+  `ruled out: chain dstnat, event is srcnat`, `ruled out: disabled`).
+  The ruled-out half is dimmed but fully readable and stays in the
+  accessibility tree, because reading it is how you audit the split
+  rather than trust it. A rule is excluded only by positive
+  contradiction; anything mikroview cannot evaluate -- an address-list
+  name, say -- keeps its rule and is shown as `not evaluable here`.
+  There are no scores, no ranking and no "best match": RouterOS's own
+  order is preserved because first-match-wins is real evidence, and even
+  a sole survivor reads "1 of 14", never "this rule did it". The two
+  modes never share a rendering, and an untagged translation never gets
+  inline rule decoration on the row. Opening the popup holds the stream
+  while it is open, so the row it is anchored to does not slide away
+  under newest-at-top. Mobile gets the same thing as a section of the
+  event sheet, in the same words. A push script predating the NAT rule
+  anatomy shows the whole table and says so. Push your NAT table
+  (`docs/routeros-setup.md`, step 4c) for any of it to have data to
+  work with; nothing here contacts the router.
+- **Rename hosts, ports and rules from the live view itself** (#413).
+  The moment you recognise what a row is and the moment you label it are
+  now the same moment: hover a row (or tab into it) and a pencil appears
+  beside the copy glyph on the address, port and rule tokens, opening a
+  small editor anchored to the token you were looking at. Type a display
+  name, press Enter, and every row already on screen showing that same
+  raw value changes with it -- no navigating to Entities, no reload. The
+  raw value stays visible in the editor throughout and stays what
+  filters, groups and copies use; leaving the field empty removes the
+  name and shows the raw value again. Admins only, and a viewer sees no
+  pencil at all rather than one that cannot do anything. The stream holds
+  still while any row-anchored popover is open -- this editor and the
+  existing lookup popovers -- and lets go when it closes, without
+  changing what the Autoscroll button says it will do.
+
+  **It will not accept a rename that would do nothing.** RouterOS still
+  wins on host names (#186), so on a host your router already names --
+  from a DHCP lease, a DNS static entry or a WireGuard peer comment --
+  there is no text field at all. Instead the editor says which of those
+  supplies the name, names the router to go and change it on, and, if you
+  had already saved a name for that host, tells you it is saved but not
+  what is shown. Previously that name was accepted, confirmed, and then
+  silently never displayed.
+
+- **The setup wizard is a modal now, and it is a claim ledger** (#487).
+  Setup opens over whatever you were already looking at instead of
+  taking you to a page, and it auto-opens once on a first admin sign-in
+  with no router sending -- after the shell has painted, so you see the
+  real (empty) app first. Five steps, always five, each ending in
+  exactly one of three states: **done**, with its receipt (what arrived,
+  when, from where); **skipped**, quietly, with the consequence stated
+  rather than a telling-off; or **forced past**, in amber, recorded.
+  Mikroview still never connects to your router, so every check is an
+  observation of what arrived here -- which is why Next on a step that
+  is still waiting does not fail, it explains that nothing has arrived
+  and offers exactly two choices: keep waiting, or go on anyway with the
+  exact record quoted on the button before you press it. That record
+  reaches the audit log (`setup.step_forced`, `setup.step_skipped`) and
+  the setup status every other surface reads, so an empty stream can say
+  which decision accounts for its silence. If the evidence turns up
+  later the step simply goes green; the audit line stays as history.
+  Closing is explicit only -- ✕ or Esc, never a stray click outside --
+  and nothing is lost by closing, because the ledger is rebuilt from
+  what the server has observed every time you open it. **Admin ▸ Run
+  setup…** reopens it at the first step still waiting. On a phone it is
+  a full-bleed sheet with a button that flips between the step and the
+  ledger, and the commands come pre-broken so nothing scrolls sideways.
+
+  Those decisions **survive a restart**, in a new small JSON document at
+  `setup.storePath` (default `/var/lib/mikroview/setup.json`, or
+  `MIKROVIEW_SETUP_STORE_PATH`, or a row in Postgres where that is
+  configured) -- the same optional-persistence contract as
+  `audit.storePath`, and included in `-backup`. A restart is most likely
+  at upgrade, which is exactly when someone is looking for the
+  explanation, so an in-memory-only record would have gone missing at
+  the worst moment. What the wizard has *observed* is deliberately not
+  stored: that is re-made from arriving traffic every run.
+- **Metrics is three views of one hour** (#488, design ratified 2026-08-23,
+  `docs/design/screens/metrics/DESIGN.md`). The page now offers
+  **Seismograph** (the default), **Register** and **Table**, chosen in
+  the page header; the choice is a per-user preference, remembered and
+  applied before the page first paints, the same grammar the rail's
+  density already uses. All three read the same hour: seven traffic
+  series and all sixteen flag types share one time axis, each with its
+  own declared scale printed beside it and floored at 12/min, so a
+  series that whispered all hour draws as a thread rather than being
+  inflated to look busy. One cursor reads a whole minute across every
+  series at once, moves with the arrow keys (Shift for ten, Home and End
+  for the ends of the hour), and stays on the same minute when you
+  switch views. Colour carries meaning and nothing else: two chart inks,
+  traffic blue and refused red, with amber reserved for time -- the
+  brink and the cursor. Identity is always the label, so every view
+  survives greyscale and the Table proves it.
+
+- **The engine room replaces the settings pages** (#490). Settings are no
+  longer filed by noun: mikroview's own signal path is drawn as a live
+  vertical diagram -- the door (syslog listener), the store, the
+  watchers, the flags desk, the heralds -- with every setting on the
+  station it governs, and two side doors beside it for who may look in
+  and which machines may speak. Opening a station unfolds it in place
+  rather than navigating away, so what feeds it and what it feeds stay
+  on screen. Every number on the page is arrived traffic, not a chart:
+  events/s at the door, events held in the store, flags open on the
+  desk, so a setting is read against the thing it actually governs.
+  It lives under Admin and, for the first time, **a non-admin can read
+  it** -- the header declares READ-ONLY once and every verb is simply
+  absent rather than greyed out.
+
+### Changed
+
+- **Exclusions is now a tab of Flags, and Suggestions is now a tab of
+  Watchlist** (#547), closing the gap #544 opened when their own rail rows
+  disappeared. Both are reached by the house tablist (arrow keys move
+  between tabs) instead of a menu row or a page of their own, and the old
+  `exclusions`/`suggestions` routes are gone -- no alias, no redirect.
+  Exclusions carries a quiet, outlined count of the current permanent
+  exclusions on its tab, distinct from the rail's own red flag count,
+  which stays Flags' alone. Access is unchanged either way: Exclusions is
+  admin-only inside a Flags page a viewer can otherwise use, and
+  Suggestions is admin-only because the whole of Watchlist already is.
+
+### Removed
+
+- **The setup wizard page is gone** (#487), replaced wholesale by the
+  modal above. The `setup` route is removed outright -- no alias, no
+  redirect, nothing left that answers to it. Setup is reached from
+  **Admin ▸ Run setup…**, or by the modal opening itself on a first run.
+- **The metrics overlay charts and its three cards are gone** (#488),
+  wholesale. The two multi-line charts (event volume by action, flags
+  raised by type) and the ranked-count cards they sat above are removed
+  outright -- no alias, no stub. Their answers did not go with them: top
+  rules, top talkers, by device and by protocol are now the ledger,
+  carried under the Register and as the Table's opening section, where
+  they own magnitude and stop pretending to own time. The per-flag-type
+  chart palette went with the chart that was its only user; flag types
+  are named in words on every surface instead of cycled through sixteen
+  hues.
+
+- **The Users, Tokens and Detectors pages are gone** (#490), absorbed by
+  the engine room: Users and Tokens became its two side doors, and
+  Detectors became the watchers station's bench. Everything they did is
+  still there -- adding and removing accounts, minting and revoking
+  tokens with the same one-time secret banner, running and scoping
+  detectors -- but the rail rows and the `users`, `tokens` and
+  `detectors` routes are removed outright, with no alias and no
+  redirect. The Detect group now holds Flags alone, so on a small screen
+  tapping Detect goes straight to Flags instead of raising a half-sheet.
+
+### Security
+
+- **Three settings reads are now open to any signed-in user** (#490):
+  the token list, the detector definitions, and the setup status, each
+  widened deliberately and recorded as its own row in the route
+  authorization matrix. This is what makes the engine room readable by a
+  non-admin. **The account list is deliberately not among them** and
+  stays admin-only, so the people door is absent for a viewer rather
+  than read-only. No write changed: creating or deleting an account,
+  minting or revoking a token, and every definitions write still refuse
+  a non-admin. The raw value of a token still appears in exactly one
+  place, the response to minting it, and in no GET at all.
+
+### Added
+
+- **A bottom bar and half-sheets replace the rail at small widths** (#550).
+  The five groups render as a bar of buttons along the bottom of the
+  screen, flag badge intact; tapping a group with more than one page
+  raises a half-sheet listing them (focus-trapped, closed by Esc or the
+  browser's own Back button), and a single-page group goes straight to
+  its page. Dock and density stay pointer-width affordances — neither
+  renders on the bar in any form.
+
+- **Users, Tokens, Fleet and Entities are pages under Admin now** (#548),
+  reached the same way as every other row in the rail rather than through
+  a menu overlay. **Run setup…** stays an action, not a page -- since
+  #487 (above) it opens the setup modal, retiring the interim view
+  switch this shipped with.
+
+- **The live view's filter bar can now filter by everything the table
+  shows you** (#438). A few gaps, closed:
+
+  - **Chain** has a proper picker now (`Any chain`, the built-in RouterOS
+    chains, plus any custom one your rules use), and clicking a chain in
+    the table shows up in it — before this, clicking a chain cell quietly
+    applied a filter you had no way to see, change or clear.
+  - The single **"IP or CIDR"** box is now two: **Source** and
+    **Destination**, each next to its own internal/external switch. Type
+    a name, a bare address or a CIDR block into either — a name or
+    address fragment matches both the label you see and the underlying
+    address, live, so renaming a device updates what it matches. A small
+    **⇄** button between them swaps everything you've typed, scopes
+    included, for when you filter the wrong side.
+  - **Port** now also takes a service name (`https`, `ssh`, `mikrotik
+    api`...), not just a bare number.
+  - **Rule** now also matches the friendly name you gave a rule, not just
+    its raw label.
+  - The **NAT** translated address and the **interface** in/out pair are
+    click-to-filter now, the same as every other value in the table.
+  - The **country flag** next to an address is click-to-filter too, into
+    a new country picker (one per side). Where MikroView couldn't
+    determine a country, the row still shows and the picker offers an
+    **Unknown** entry to find those rows on purpose, rather than them
+    just being unreachable from the bar.
+
+  Saved filter presets and bookmarked filter links from before this
+  change lose whatever they had in the old IP box — it isn't carried
+  over into the new Source/Destination fields automatically, so double
+  check a preset that used it still does what you expect.
+
+### Changed
+
+- **The "known bad IP" flag now only fires on traffic your firewall let
+  through** (#555). It used to fire on every packet from a blocklisted
+  address, and since your firewall blocks most of that, the flag mostly
+  reported the firewall working correctly — burying the one case worth
+  your attention. A blocklisted address that got *in* still flags; one
+  that was dropped or rejected no longer does. Expect to see this flag
+  far less often, which is the point.
+
+  Two details. Lines from rules that only log or only tag a packet
+  (`L|` and `M|`) no longer flag either, because they do not say what
+  happened to the packet — the rule that actually decided does, and that
+  is the line now judged. And where MikroView cannot tell what happened,
+  including NAT rules and any rule without a log prefix, it still flags:
+  it would rather tell you about something that turned out to be blocked
+  than go quiet about something that got in. See "Log your accept and
+  drop rules" in `docs/routeros-setup.md`.
+
+  Unchanged: a blocklist match still strengthens other flags for the same
+  address — port scans and slow scans are built almost entirely from
+  blocked traffic, and that evidence is still counted.
+
+### Added
+
+- **The chrome now has its own connection-lost, loading and first-run
+  states** (#549). A dropped connection turns a small dot at the top of
+  the rail alarm-red, and a banner tops the content column and pushes it
+  down rather than covering it — navigation stays fully usable while
+  disconnected, and both clear the moment the connection recovers. Hide
+  the rail down to the edge tab and the banner alone carries the state;
+  the tab was never given a second job. A page whose data hasn't arrived
+  yet — the live view, the fleet table — now shows a few placeholder rows
+  instead of "Waiting…" text or a spinner, and a table that comes back
+  confirmed empty because no RouterOS device has ever sent anything
+  points you at **Admin ▸ Run setup…** (or, if you can't reach that
+  yourself, at whoever can) instead of leaving you guessing whether
+  something is broken.
+
+- **The rail now shows how many flags are waiting for you** (#546). A red
+  count sits on the Flags row whenever there are open flags, and
+  disappears once there are none left — so an empty count never sits
+  there looking like something to deal with. Flags that you cleared, and
+  ones whose detector and target you excluded permanently, are not
+  counted. Hiding the navigation does not hide the count: it moves to the
+  tab on the left edge of the window, so docking the rail never docks the
+  alarm. Screen readers hear the row as "Flags — 6 open" rather than a
+  word and a loose number.
+
+  Only Flags carries a count of this kind. That is deliberate: a red
+  count that appears in several places at once stops meaning "look here".
+
+- **Watchlist now wears a red outline when it can't do its job** (#546).
+  The ring appears the moment an enabled watch can't be checked — no
+  firewall rule you've pushed logs the traffic it needs — and names why:
+  "Watchlist — 3 watches can't be checked: the firewall rules they need
+  aren't being logged" (singular wording for one). It clears itself the
+  moment you log the missing rule; there is nothing to acknowledge or
+  dismiss. A watch mikroview simply has no evidence about, or one that's
+  out of scope for every rule that does log, never rings — only a
+  definite "this can't work" does. Switching a watch off takes it out of
+  the count too. Like the flag count beside it, hiding the navigation
+  down to icons only tightens the ring around the icon rather than
+  hiding it; unlike the flag count, the ring stays with the page and does
+  not follow the rail to the edge tab when navigation is hidden.
+
+- **The navigation rail can now be narrowed or hidden** (#545). It has
+  three states you choose from the two buttons at the bottom of the rail:
+  full width with icons and labels, a 54px strip of icons alone, or
+  hidden entirely. Hidden leaves a small tab on the left edge of the
+  window — click it, or press Tab twice from the top of the page and
+  Enter, and the rail comes back exactly as you left it. Your choice is
+  remembered per browser and applied before the page draws, so the rail
+  never flickers between states on load. New installs start at full width
+  on wide screens and icons-only on narrower ones; nothing is ever hidden
+  for you automatically.
+
+  Bringing the rail back with the edge tab is deliberately temporary: it
+  lasts for as long as you are on the page, and a reload returns to
+  hidden. Only the two buttons in the rail itself change what is
+  remembered. Every rail row also gained an icon, so the icons-only state
+  has something to show; hovering **or** keyboard-focusing a row names it.
+
+### Changed
+
+- **Navigation is now a permanent left rail instead of a hamburger menu**
+  (#544). Every view is one click away and always visible, grouped as
+  Live, Investigate, Detect, Expect and Admin. The menu's other contents
+  moved rather than disappearing: **Export to CSV** is now in the live
+  view's filter bar next to Clear filters, where it acts on exactly the
+  events you have filtered; **account actions** (change password,
+  connect SSO, sign out) and **About & licence** are in the rail's
+  footer; and on phones the **display duration** selector moved to the
+  filter bar too. The version number is no longer shown in the chrome --
+  it is in About & licence, `GET /api/healthz` and `mikroview -version`,
+  as before.
+
+### Removed
+
+- **The hamburger menu is gone** (#544), wholesale, along with its
+  overlay. Nothing is aliased or stubbed behind it; see the moves above
+  for where each of its contents now lives.
+
+- **The Users and Tokens account/token-management overlays are gone**
+  (#548), wholesale, along with the rail's account-actions-as-a-modal
+  pattern that opened them. Nothing is aliased or stubbed behind them —
+  see Added above for where the same management now lives.
+
 ## [0.3.1] - 2026-08-23
 
 ### Changed

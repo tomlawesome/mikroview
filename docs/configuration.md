@@ -597,7 +597,7 @@ threshold to tune and no scope narrower than "does this exact IP fall in
 a range on the list," so it has no matching entry there, the same
 precedent `new_device` already set. It *is* a definition the engine
 evaluates like any other, with its own confidence as a tunable
-parameter; it simply has no entry on the detector-toggles page yet.
+parameter; it simply has no entry on the watchers station yet.
 
 ```yaml
 blocklist:
@@ -825,9 +825,21 @@ only way a port ever gets a friendly name.
 
 Entities are managed via `GET`/`POST`/`DELETE /api/entities`
 (admin-gated the same way `POST /api/auth/users` is -- see
-[API reference](#api-reference)), or the **Entities** panel in the menu.
-That panel is also where you'd go to name something *without* already
-knowing its raw IP/rule label/port number: a **Discovered** section
+[API reference](#api-reference)), the **Entities** panel in the menu, or
+the pencil on any address, port or rule token in the live view -- which
+is usually where you want it, since it puts the naming at the moment you
+recognised what the row was.
+
+That pencil will not offer you a field for a host RouterOS already
+names. Router-pushed names win over anything set here, so a label saved
+for such a host would be stored and never displayed; instead the editor
+says which pushed table supplies the name -- a DHCP lease, a DNS static
+entry, a WireGuard peer comment -- and names the router to go and change
+it on. Rule and port labels have no router layer at all, so they are
+always editable.
+
+The Entities panel is also where you'd go to name something *without*
+already knowing its raw IP/rule label/port number: a **Discovered** section
 lists hosts, rules, and ports seen in live traffic that don't have a
 label yet (mirroring the auto-discovered-device pattern the **Fleet**
 view already uses for RouterOS sources), each with a one-click "Name it"
@@ -879,6 +891,41 @@ gate). Backed by `GET /api/audit`, a windowed query over the
 persisted log (see [API reference](#api-reference)) -- the same
 `since`/`until`/`limit` convention `GET /api/events` already uses, minus
 that endpoint's event-specific filters.
+
+## Setup wizard ledger (optional)
+
+The guided setup wizard (**Admin ▸ Run setup…**) keeps a ledger of its
+five steps. Most of what it shows is not stored anywhere: mikroview
+never connects to your router, so each step's check is simply an
+observation of what arrived here -- a certificate fetch, a syslog
+connection, events carrying a decoded log-prefix, a pushed table -- and
+those are re-made from arriving traffic every time mikroview starts.
+
+What *is* stored is the other half: the steps you **skipped** or
+**forced past**, each with who decided it and when. Those are decisions,
+not observations, and they are what lets the rest of the interface
+explain itself -- an empty live view can say which setup step accounts
+for the silence instead of just being empty. That explanation is most
+wanted right after a restart, which is when an upgrade happens, so it
+has to survive one.
+
+```yaml
+setup:
+  # Where the wizard's skipped/forced-past decisions are persisted, as a
+  # small JSON file. Same optional-persistence contract as
+  # audit.storePath: left unset, the wizard still works, the decisions
+  # just don't survive a restart. If you set this in the container,
+  # mount a volume for its parent directory -- see
+  # deploy/docker-compose.yml.
+  storePath: "/var/lib/mikroview/setup.json"
+```
+
+Each decision is also written to the [audit log](#audit-log-admin-action-accountability-optional)
+as `setup.step_skipped` or `setup.step_forced`. The two are not
+duplicates and neither replaces the other: the audit entry is history
+and stays there even after the evidence eventually arrives and the step
+turns green, while the ledger holds current state and clears itself the
+moment evidence outranks the decision.
 
 ## Watchlist (optional)
 
@@ -967,7 +1014,12 @@ cannot consume the capacity a genuinely novel match needs. Queried via
 open to any signed-in user and reachable via a read-only API token, the
 same tier as `/api/events`/`/api/flags`/`/api/stats`/`/api/devices`,
 since correlating a device against its recorded matches from an external
-tool is exactly what that log is for.
+tool is exactly what that log is for. That query asks about one device,
+by `mac` or `ip`; `entries=all` asks the other question -- the most
+recent matches across every entry, newest first -- for when you want to
+know what has broken recently without already knowing where to look. It
+is capped at 100 results by default and 5000 at most, so it is always a
+page of recent history rather than the whole log.
 
 **On Postgres** (see [Postgres](#postgres-optional) below), the match
 log is a dedicated, indexed table rather than a row in the shared
@@ -1637,9 +1689,12 @@ together:
 
 - **`config.yaml`** sets the *starting point* on boot (`flags.detectors`
   below).
-- **An admin-only UI** ("Detectors" in the toolbar, visible once signed
-  in as an admin) can override that starting point. A change persists to
-  the definitions store (`engine.definitionsStorePath`) and is what
+- **The watchers station** -- part of the engine room, in the navigation
+  rail's Admin group -- lets an admin override that starting point. Any
+  signed-in user can open the engine room and see the watchers station,
+  with a READ-ONLY marker in the header; the on/off switches and scope
+  fields simply aren't there unless you're the admin. A change persists
+  to the definitions store (`engine.definitionsStorePath`) and is what
   future restarts read -- `config.yaml`'s values are only ever consulted
   for a detector the definitions store does not already hold.
 
@@ -1682,8 +1737,8 @@ field at once. `hosts` entries accept a bare IP or a CIDR.
 The last five rows below are definitions that had no toggle at all
 before v0.3.0: they ran as always-on passes with no name, no switch and
 no scope. Giving every evaluated thing the same envelope made them
-configurable for the first time, and they appear on the Detectors page
-alongside the original twelve.
+configurable for the first time, and they appear on the watchers
+station alongside the original twelve.
 
 Not every field means something to every detector -- a detector only
 consults the axes relevant to how it's keyed:
@@ -1819,20 +1874,26 @@ file, where the alternative to "unchanged" is "locked out".
 
 ### Adding and removing people
 
-Open **Menu → Users**. Only the admin sees it.
+Open the engine room (Admin group in the navigation rail) and its
+**"who may look in"** door. Only the admin sees this door -- it's
+absent entirely for anyone else, not shown read-only.
 
-![The Users panel, showing the admin account and one ordinary user](screenshots/users-panel.png)
+![The engine room's people door, showing the admin account and one ordinary user](screenshots/engine-room-people-door.png)
 
-Type a username and password, press **Add**, and the account appears in
-the list. Everyone added here can see everything MikroView shows, but
-can't change settings, manage accounts, or create API tokens.
+Press **+ Let someone in**, type a username and password, press **Let
+them in**, and the account appears in the list. Everyone added here gets an ordinary account: admin-only
+pages are simply absent from their navigation, with one exception --
+they can open the engine room and read it, but every control there is
+missing rather than greyed out, so they still can't change settings,
+manage accounts, or create API tokens.
 
-**Delete** removes an account. That person is signed out straight away,
+**Remove** deletes an account. That person is signed out straight away,
 on any device, and any API tokens they created stop working at the same
 moment.
 
-The admin account has no Delete button. There is exactly one admin, and
-moving that role is a command-line step (see below) — so nobody who gets
+The admin account has no Remove button -- it is marked **console-only**
+instead. There is exactly one admin, and moving that role is a
+command-line step (see below) — so nobody who gets
 hold of an admin's browser session can take ownership of your
 deployment or lock you out of it.
 
@@ -2015,8 +2076,9 @@ no browser involved -- e.g. a companion OpenCanary-dashboard project
 cross-referencing incidents against mikroview's event/flag history -- a
 session cookie doesn't work: there's no login flow to hold one. API
 tokens are a long-lived bearer credential for exactly that case,
-admin-created from the "API tokens" panel in the menu's Account section
-(or directly via the API below).
+admin-created from the engine room's **"which machines may speak"**
+door (Admin group in the navigation rail), or directly via the API
+below.
 
 **Scope is deliberately narrow: read-only, five endpoints, nothing
 else.** A valid token grants `Authorization: Bearer <token>` access to:
@@ -2043,7 +2105,7 @@ string, well outside brute-forceable range). Losing the value means
 issuing a new token; there's no way to view an existing one again.
 
 There is no expiry -- like sessions and accounts, a token stays valid
-until explicitly revoked from the same panel (or `DELETE
+until explicitly revoked from the same door (or `DELETE
 /api/tokens/{id}`).
 
 ```sh
@@ -2524,6 +2586,7 @@ Override individual scalar settings without a mounted file:
 | `MIKROVIEW_AUTH_SESSION_TTL` | `auth.sessionTTL` |
 | `MIKROVIEW_ENTITIES_STORE_PATH` | `entities.storePath` (see [Entities](#entities-ui-managed-hostruleport-labels-and-tags-optional)) |
 | `MIKROVIEW_AUDIT_STORE_PATH` | `audit.storePath` (see [Audit log](#audit-log-admin-action-accountability-optional)) |
+| `MIKROVIEW_SETUP_STORE_PATH` | `setup.storePath` (see [Setup wizard ledger](#setup-wizard-ledger-optional)) |
 | `MIKROVIEW_WATCHLIST_STORE_PATH` | `watchlist.storePath` (see [Watchlist](#watchlist-optional)) |
 | `MIKROVIEW_WATCHLIST_MATCH_LOG_PATH` | `watchlist.matchLogPath` |
 | `MIKROVIEW_WATCHLIST_MATCH_LOG_CAPACITY` | `watchlist.matchLogCapacity` |
@@ -2804,7 +2867,7 @@ exits, rather than starting the server. See
 | `POST /api/flags/{id}/clear-permanent` | admin-only: clear one flag *and* permanently exclude its (detector, target) pair going forward. Audit-logged |
 | `GET /api/flags/exclusions` | admin-only: every currently-excluded (detector, target) pair |
 | `DELETE /api/flags/exclusions/{id}` | admin-only: remove one exclusion, letting that pair raise again |
-| `GET /api/definitions` | admin-only: every definition the engine evaluates -- shipped detectors and your own watchlist expectations alike -- each with its enabled state, scope, tuned params, param schema, provenance, replayability, and (for an expectation) its coverage answer. Replaced `GET /api/detectors` and `GET /api/watchlist/entries` in v0.3.0 |
+| `GET /api/definitions` | open to any signed-in user, not admin-gated (#490 -- the engine room's watchers station reads it, and a non-admin can read the room): every definition the engine evaluates -- shipped detectors and your own watchlist expectations alike -- each with its enabled state, scope, tuned params, param schema, provenance, replayability, and (for an expectation) its coverage answer. Replaced `GET /api/detectors` and `GET /api/watchlist/entries` in v0.3.0 |
 | `POST /api/definitions` | admin-only: create a custom definition. Declarative only -- `kind: "programmatic"` is refused, because programmatic logic is Go compiled into the binary rather than data. `intent: "detection"` is refused too, for now: a custom detector's match conditions have nowhere on the envelope to be stored yet, so accepting one would create a definition that lists and evaluates nothing. Only expectation definitions can be created here today; custom detector authoring is tracked in issue #502 |
 | `GET /api/definitions/schema` | admin-only: every definition's param schema, keyed by id, so a UI renders tuning controls from the server's own declaration |
 | `GET /api/definitions/{id}` | admin-only: one definition |
@@ -2818,8 +2881,9 @@ exits, rather than starting the server. See
 | `GET /api/entities` | admin-only (see [Entities](#entities-ui-managed-hostruleport-labels-and-tags-optional)): every persisted entity |
 | `POST /api/entities` | admin-only: create or replace (upsert) one entity, identified by `(type, key)` in the JSON body |
 | `DELETE /api/entities` | admin-only: remove the entity identified by `(type, key)` in the JSON body |
+| `GET /api/naming/provenance` | admin-only: where the name currently shown for one token comes from, given `type` (`host`/`rule`/`port`), `key` (the raw value) and, for a host, `device`. Answers `source` (`none`, `entity`, `config`, or one of `router-dns-static`/`router-dhcp-lease`/`router-wireguard-peer`), the `name` in use, your own saved `label` if any, and `editable` -- false when a router-pushed name would shadow anything saved here, which is what the live view's inline editor checks before offering a field |
 | `GET /api/audit` | admin-only: a windowed slice of the admin action audit log (see [Audit log](#audit-log-admin-action-accountability-optional)), newest activity last, accepting `since`/`until`/`limit` query params like `GET /api/events` |
-| `GET /api/matches` | a windowed query over the persisted match log, by `mac`/`ip`/`since`/`until`/`limit` -- open to any signed-in user and reachable via a read-only API token, same tier as `/api/events`/`/api/flags`/`/api/stats`/`/api/devices` |
+| `GET /api/matches` | a windowed query over the persisted match log, in one of two modes -- by device, with `mac` and/or `ip` (at least one required), or across every watchlist entry with `entries=all`, which returns the most recent matches anywhere in the log, newest first. `entries=all` may not be combined with `mac`/`ip`. Both modes take `since`/`until` (RFC 3339) and `limit`, and both are bounded: `limit` defaults to 100 and is capped at 5000 whatever the caller asks for. Open to any signed-in user and reachable via a read-only API token, same tier as `/api/events`/`/api/flags`/`/api/stats`/`/api/devices` |
 | `GET /api/suggestions` | admin-only: every suggested watchlist entry (see [Suggested watchlist entries](#suggested-watchlist-entries-issue-243)), optionally filtered with `?status=off\|on\|hide` |
 | `POST /api/suggestions/{id}/accept` | admin-only: accept an undecided suggestion, creating a real expectation definition |
 | `POST /api/suggestions/{id}/hide` | admin-only: decline an undecided suggestion |
@@ -2833,11 +2897,13 @@ exits, rather than starting the server. See
 | `POST /api/auth/users` | admin-only: create an additional account |
 | `DELETE /api/auth/users/{id}` | admin-only: remove an account |
 | `POST /api/tokens` | admin-only: create a read-only API token (see [API tokens](#api-tokens-read-only)) -- returns the raw value once |
-| `GET /api/tokens` | admin-only: list tokens (name/created/last-used, never the value or hash) |
+| `GET /api/tokens` | open to any signed-in user, not admin-gated (#490 -- the engine room's "which machines may speak" door reads it): list tokens (name/created/last-used, never the value or hash -- a token's raw value appears in the response that mints it and nowhere else, which is what makes widening this safe) |
 | `DELETE /api/tokens/{id}` | admin-only: revoke a token |
 | `GET /api/auth/oidc/login` | start the SSO flow -- a top-level browser redirect to the configured provider, only present when [OIDC](#single-sign-on-oidcsso) is configured |
 | `GET /api/auth/oidc/callback` | the provider's redirect target completing the SSO flow -- see [Single sign-on](#single-sign-on-oidcsso) |
 | `POST /api/auth/oidc/link` | connect the signed-in account to an SSO identity, so the same person can sign in either way -- see [Connecting your account to SSO](#single-sign-on-oidcsso) |
+| `GET /api/setup/status` | open to any signed-in user, not admin-gated (#490): what mikroview has observed of each router's setup -- CA fetches, syslog connections, decoded log-prefixes, pushed tables -- plus the setup wizard's ledger marks (#487), so a surface with a silence to explain can name the step that was skipped or forced past |
+| `POST /api/setup/mark` | admin-only: record that a setup step was skipped or forced past, from the setup wizard's footer. Writes the ledger mark and one audit entry (`setup.step_skipped` / `setup.step_forced`) |
 | `GET /api/config/problems` | admin-only: the same configuration warnings `-validate-config` reports, as the UI shows them -- see [Problem codes](#problem-codes) |
 
 Every route above `/api/auth/session`/`/register`/`/login`/`/logout` and

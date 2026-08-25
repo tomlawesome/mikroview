@@ -115,12 +115,38 @@ function npmPackages() {
     // may be hoisted to the top level or nested under whichever
     // dependency pulled it in, and which one is an npm implementation
     // detail that changes between installs.
+    const req = createRequire(path.join(REPO, 'frontend', 'package.json'))
     let dir
     try {
-      dir = path.dirname(
-        createRequire(path.join(REPO, 'frontend', 'package.json')).resolve(`${name}/package.json`),
-      )
+      dir = path.dirname(req.resolve(`${name}/package.json`))
     } catch {
+      // A package with a strict `exports` map need not expose
+      // ./package.json, and most modern ones do not -- clsx, pulled into
+      // the bundle by Svelte's class: directives, is the case that found
+      // this. The subpath is simply not exported, so the resolve above
+      // throws ERR_PACKAGE_PATH_NOT_EXPORTED even though the package is
+      // installed and its licence is sitting right there. Falling back
+      // to the entry point and walking up to the owning package.json
+      // reads the same metadata without going through the exports gate.
+      //
+      // The name check matters: the entry may live in dist/, and walking
+      // up blindly can reach a *parent* package's manifest, which would
+      // attribute the wrong licence -- worse than failing.
+      try {
+        let d = path.dirname(req.resolve(name))
+        while (d !== path.dirname(d)) {
+          const manifest = path.join(d, 'package.json')
+          if (existsSync(manifest) && JSON.parse(readFileSync(manifest, 'utf8')).name === name) {
+            dir = d
+            break
+          }
+          d = path.dirname(d)
+        }
+      } catch {
+        // fall through to the throw below
+      }
+    }
+    if (!dir) {
       throw new Error(
         `${name} contributes code to the shipped bundle but could not be resolved. ` +
           `Its licence cannot be attributed, and shipping it without attribution is an infringement.`,

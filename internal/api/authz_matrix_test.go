@@ -98,7 +98,10 @@ var authzMatrix = []routeExpectation{
 		"core read: the live firewall event feed"},
 	{http.MethodGet, "/api/devices", accessUser, "core read"},
 	{http.MethodGet, "/api/matches", accessUser,
-		"a read over already-collected evidence, same tier as events/flags/stats/devices above -- also reachable via a read-only API token (readOnlyRoutes), since birdcage-style external correlation by source is the reason internal/matchlog exists. Renamed from /api/watchlist/matches by #407 when the watchlist noun was retired; the access decision is unchanged"},
+		"a read over already-collected evidence, same tier as events/flags/stats/devices above -- also reachable via a read-only API token (readOnlyRoutes), since birdcage-style external correlation by source is the reason internal/matchlog exists. Renamed from /api/watchlist/matches by #407 when the watchlist noun was retired; the access decision is unchanged. " +
+			"WIDENED by #586, and the widening is the part to scrutinise: entries=all serves the most recent matches across every entry, so a caller no longer needs to know a mac or ip to read from this log, and that includes a read-only token holder. Kept on this tier deliberately rather than promoted to admin, for three reasons. " +
+			"The gate the issue asks for is the same gate the existing query carries. The mode learns nothing new in kind: a token that already reaches GET /api/events reads the live feed for every device, and a bounded page of matches is a strictly smaller view of the same traffic. And it is bounded by construction, not by the caller -- matchlog.RecentQuery clamps the limit to 5000 (100 by default) before either backend runs, which is the property that stops an all-entries read on an unrate-limited route being an arbitrarily large response. " +
+			"What did NOT change: the per-identity path still refuses an empty identity (matchlog.ErrEmptyIdentity), and entries=all refuses to be combined with mac/ip, so 'no identity' can never silently mean 'every device'"},
 	{http.MethodGet, "/api/rules", accessUser, "core read"},
 	{http.MethodGet, "/api/third-party-notices", accessUser,
 		"licence compliance: the copyright/licence texts of everything statically linked into this binary, which MIT/BSD/ISC/Apache-2.0 all require to accompany a binary distribution. Session-gated rather than public only because it is also a precise dependency-and-version inventory -- it withholds nothing, since the same file is in the public repo and the image"},
@@ -124,15 +127,14 @@ var authzMatrix = []routeExpectation{
 		"the review surface for permanent exclusions"},
 	{http.MethodDelete, "/api/flags/exclusions/{id}", accessAdmin,
 		"undoes an exclusion, re-arming detection"},
-	// The definitions surface (#407). Admin-only throughout, exactly
-	// matching what /api/detectors and /api/watchlist/entries each
-	// enforced before it replaced them. #385 records the owner decision
-	// that non-admins should eventually see settings surfaces read-only,
-	// but that is phase 2's RBAC work: shipping a read-open route now
-	// that phase 2 might have to narrow is worse than shipping it closed
-	// and widening it deliberately.
-	{http.MethodGet, "/api/definitions", accessAdmin,
-		"every definition's on/off state, scope and tuned params -- reveals exactly what this deployment is and isn't watching, and an operator's watchlist scope besides"},
+	// The definitions surface (#407), writes still strictly admin --
+	// exactly matching what /api/detectors and /api/watchlist/entries
+	// each enforced before it replaced them. #385 records the owner
+	// decision that non-admins should eventually see settings surfaces
+	// read-only; #490 is that phase 2's RBAC work, widening the list GET
+	// below one row at a time while leaving every mutation here closed.
+	{http.MethodGet, "/api/definitions", accessUser,
+		"widened for the viewer-readable settings page (#490): a signed-in non-admin can see every definition's on/off state, scope and tuned params, same as an admin -- the design record's authz-matrix clause widens this GET deliberately, one row at a time, while every write below it stays admin-only"},
 	{http.MethodPost, "/api/definitions", accessAdmin,
 		"creates a definition -- a non-admin should not be able to add new server-side traffic surveillance"},
 	{http.MethodGet, "/api/definitions/schema", accessAdmin,
@@ -153,6 +155,9 @@ var authzMatrix = []routeExpectation{
 		"changes what future traffic counts as expected for a device -- same weight as creating the definition"},
 	{http.MethodPost, "/api/definitions/{id}/observing", accessAdmin,
 		"same reasoning as promote"},
+	{http.MethodGet, "/api/naming/provenance", accessAdmin,
+		"says which layer supplies the name shown for one token, and whether a label saved here would be shadowed by a router-pushed one (#413). Admin for two reasons: the editor it serves gives viewers no pencil at all, so no viewer ever calls it; and the answer is a partial map of which router names which host, the same administrative metadata GET /api/entities is gated for"},
+
 	{http.MethodGet, "/api/entities", accessAdmin, "admin-managed labels/tags"},
 	{http.MethodPost, "/api/entities", accessAdmin, "admin-managed labels/tags"},
 	{http.MethodDelete, "/api/entities", accessAdmin, "admin-managed labels/tags"},
@@ -171,14 +176,17 @@ var authzMatrix = []routeExpectation{
 		"converts your OWN account to SSO-only; the target comes from the session, never the request, so a user can only ever affect themselves"},
 	{http.MethodPost, "/api/auth/users", accessAdmin, "account creation"},
 	{http.MethodGet, "/api/auth/users", accessAdmin,
-		"who holds an account, and which one is the admin -- that is the map of whose account is worth attacking"},
+		"who holds an account, and which one is the admin -- that is the map of whose account is worth attacking. #490 widened the other three settings GETs for the viewer-readable engine room and deliberately left this one closed: the owner's ruling, 2026-08-24, is that the account list stays admin-only, so the room's people door is absent for a viewer rather than read-only"},
 	{http.MethodDelete, "/api/auth/users/{id}", accessAdmin,
 		"removes an account and revokes its sessions and API tokens"},
 	{http.MethodPost, "/api/tokens", accessAdmin, "mints a bearer credential"},
-	{http.MethodGet, "/api/tokens", accessAdmin, "lists issued bearer credentials"},
+	{http.MethodGet, "/api/tokens", accessUser,
+		"widened for the viewer-readable settings page (#490): a signed-in non-admin can see issued bearer credentials' metadata, same as an admin -- safe because the raw value never appears here, only in the one-time mint response, and minting/revoking below stay admin-only"},
 	{http.MethodDelete, "/api/tokens/{id}", accessAdmin, "revokes a bearer credential"},
-	{http.MethodGet, "/api/setup/status", accessAdmin,
-		"enumerates every device, every source address that has connected or fetched the CA, and which tables each router pushes -- the same map of the deployment GET /api/auth/users is admin-gated for, and the wizard that reads it is an admin task anyway"},
+	{http.MethodGet, "/api/setup/status", accessUser,
+		"widened for the viewer-readable settings page (#490): a signed-in non-admin can see every device, source address and pushed table the setup wizard shows, same as an admin. It now also carries the ledger's marks (#487), for the same reason: an empty stream explains its own silence with the forced-past line that accounts for it, and a viewer looking at that stream needs the explanation as much as an admin does. The write side is a separate, admin-only route (POST /api/setup/mark)"},
+	{http.MethodPost, "/api/setup/mark", accessAdmin,
+		"writes to the setup wizard's claim ledger and to the audit log (#487) -- #490 keeps \"Run setup…\" absent for viewers and there is no read-only wizard, so a viewer has neither a way to reach this nor any business recording a decision under their own name"},
 	{http.MethodGet, "/api/audit", accessAdmin,
 		"the admin action trail; also the record an attacker would want to read to see whether they were noticed"},
 }

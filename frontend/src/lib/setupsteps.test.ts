@@ -2,19 +2,26 @@
 
 import { describe, expect, it } from 'vitest'
 import {
+  buildLedger,
   caStep,
   caTrustCommands,
   certificateCovers,
+  finishHeadline,
+  firstOpenStep,
+  forcedPastRecord,
   hostname,
+  nameStep,
+  notObserved,
   portOf,
   pushBlock,
   pushScript,
   pushStep,
   rulesStep,
+  silenceExplanation,
   syslogCommands,
   syslogStep,
 } from './setupsteps'
-import type { SetupStatus } from './types'
+import type { Device, SetupMark, SetupStatus } from './types'
 
 function status(over: Partial<SetupStatus> = {}): SetupStatus {
   return {
@@ -22,6 +29,7 @@ function status(over: Partial<SetupStatus> = {}): SetupStatus {
     sources: [],
     devices: [],
     pushKinds: ['filter-rule', 'address-list', 'dhcp-lease', 'arp'],
+    marks: [],
     ...over,
   }
 }
@@ -206,5 +214,212 @@ describe('step status', () => {
     expect(s.state).toBe('partial')
     expect(s.detail).toContain('address-list')
     expect(s.detail).toContain('dhcp-lease')
+  })
+})
+
+// --- The claim ledger (#487) -------------------------------------------
+
+function mark(step: number, outcome: 'skipped' | 'forced', over: Partial<SetupMark> = {}): SetupMark {
+  return { step, outcome, actor: 'tom', at: '2026-08-23T09:00:00Z', ...over }
+}
+
+function device(over: Partial<Device> = {}): Device {
+  return {
+    id: 'r1',
+    name: 'r1',
+    sourceIp: '192.0.2.1',
+    configured: false,
+    firstSeen: '2026-08-23T09:00:00Z',
+    lastSeen: '2026-08-23T09:00:00Z',
+    eventCount: 1,
+    status: 'live',
+    ...over,
+  }
+}
+
+describe('the claim ledger', () => {
+  // The count of five is stable whatever the state: the record is
+  // explicit that step 5's row always exists, marked "nothing to name"
+  // until a push surfaces an unnamed device. A ledger that grew and
+  // shrank would be a different promise every time it was opened.
+  it('always has exactly five steps', () => {
+    expect(buildLedger(status(), [], 'h').length).toBe(5)
+    expect(buildLedger(status({ sources: [{ source: '1.2.3.4', caFetchedAt: '2026-08-23T09:00:00Z' }] }), [device()], 'h').length).toBe(5)
+  })
+
+  it('reads a step with no evidence and no decision as open, with an honest gap', () => {
+    const ledger = buildLedger(status(), [], '192.0.2.10')
+    expect(ledger[0].outcome).toBe('open')
+    expect(ledger[0].flavour).toBe('waiting')
+    expect(ledger[0].receipt).toBe('')
+  })
+
+  // "arrived (green, dated, sourced)" -- a receipt says what arrived,
+  // when, and from where. A green tick with no receipt is the wizard
+  // asking to be believed rather than showing its evidence.
+  it('carries a dated, sourced receipt once evidence arrives', () => {
+    const ledger = buildLedger(
+      status({ sources: [{ source: '192.0.2.1', caFetchedAt: '2026-08-23T09:00:00Z' }] }),
+      [],
+      '192.0.2.10',
+    )
+    expect(ledger[0].outcome).toBe('done')
+    expect(ledger[0].flavour).toBe('arrived')
+    expect(ledger[0].receipt).toContain('192.0.2.1')
+    expect(ledger[0].receipt).toContain('ca.crt')
+  })
+
+  it('records a skip quietly, naming who and when', () => {
+    const ledger = buildLedger(status({ marks: [mark(1, 'skipped')] }), [], '192.0.2.10')
+    expect(ledger[0].outcome).toBe('skipped')
+    expect(ledger[0].receipt).toContain('skipped by tom')
+  })
+
+  // Forced is not failed. The record is explicit: if evidence later
+  // arrives the step flips to done and stops explaining anybody's
+  // silence -- the line stays in the audit log as history, not as a scar
+  // the interface keeps pointing at.
+  it('lets evidence outrank a forced-past mark', () => {
+    const forcedOnly = buildLedger(status({ marks: [mark(2, 'forced')] }), [], '192.0.2.10')
+    expect(forcedOnly[1].outcome).toBe('forced')
+
+    const thenArrived = buildLedger(
+      status({
+        marks: [mark(2, 'forced')],
+        sources: [{ source: '192.0.2.1', syslogFirstSeenAt: '2026-08-23T09:05:00Z' }],
+      }),
+      [],
+      '192.0.2.10',
+    )
+    expect(thenArrived[1].outcome).toBe('done')
+    expect(thenArrived[1].receipt).toContain('syslog connected')
+  })
+
+  // Step 3 counts and can only count upward, and step 5 has nothing to
+  // wait for -- Next is always free on both, so neither can raise the
+  // heavy warning.
+  it('marks only the steps with a waiting check as checkable', () => {
+    const ledger = buildLedger(status(), [], '192.0.2.10')
+    expect(ledger.map((s) => s.hasCheck)).toEqual([true, true, false, true, false])
+  })
+
+  it('reads a partially tagged rule set as counting, not as half-failed', () => {
+    const ledger = buildLedger(
+      status({ devices: [{ device: 'r', configured: true, sourceIp: '1.2.3.4', events: 10, decodedActions: 4 }] }),
+      [],
+      '192.0.2.10',
+    )
+    expect(ledger[2].flavour).toBe('counting')
+    expect(ledger[2].outcome).toBe('done')
+    expect(ledger[2].receipt).toContain('4 of 10')
+  })
+
+  // The mikroview-side check logic this design inherits (#371/#374) is
+  // not one of the four observation flavours: nothing is being waited
+  // for, because nothing router-side can work yet.
+  it('never dresses a mikroview-side problem up as patient waiting', () => {
+    const ledger = buildLedger(status(), [], '192.0.2.99:8080')
+    expect(ledger[0].status.state).toBe('blocked')
+    expect(ledger[0].flavour).toBe('attention')
+  })
+
+  it('says there is nothing to name until a push surfaces an unnamed device', () => {
+    expect(nameStep([]).detail).toContain('Nothing to name')
+    expect(nameStep([device({ configured: true })]).detail).toContain('Nothing to name')
+    const undeclared = nameStep([device({ configured: false, sourceIp: '192.0.2.44' })])
+    expect(undeclared.state).toBe('quiet')
+    expect(undeclared.detail).toContain('192.0.2.44')
+  })
+})
+
+describe('reopening the ledger', () => {
+  it('lands on the first step still waiting', () => {
+    const ledger = buildLedger(
+      status({
+        sources: [{ source: '1.2.3.4', caFetchedAt: '2026-08-23T09:00:00Z' }],
+        marks: [mark(2, 'skipped')],
+      }),
+      [],
+      '192.0.2.10',
+    )
+    // 1 has evidence, 2 was decided -- 3 is the first still waiting.
+    expect(firstOpenStep(ledger)).toBe(3)
+  })
+
+  it('falls back to the first step when nothing is left open', () => {
+    const ledger = buildLedger(
+      status({ marks: [1, 2, 3, 4, 5].map((n) => mark(n, 'skipped')) }),
+      [],
+      '192.0.2.10',
+    )
+    expect(firstOpenStep(ledger)).toBe(1)
+  })
+})
+
+describe('the forced-past record', () => {
+  // The amber button quotes the exact record it will write, before it is
+  // pressed. The record is the feature, so it is never a surprise
+  // produced after the fact.
+  it('quotes step, what was not observed, who and when', () => {
+    const ledger = buildLedger(status(), [], '192.0.2.10')
+    const line = forcedPastRecord(ledger[1], 'tom', new Date('2026-08-23T09:00:00Z'))
+    expect(line).toContain('setup · step 2 forced past')
+    expect(line).toContain('no router has opened a syslog connection')
+    expect(line).toContain('tom')
+  })
+
+  it('says the check could not run when the problem is on mikroview’s side', () => {
+    const ledger = buildLedger(status(), [], '192.0.2.99:8080')
+    expect(notObserved(ledger[0])).toContain('could not run')
+  })
+})
+
+describe('the finish', () => {
+  it('reads the ledger back, counting evidence separately from decisions', () => {
+    const ledger = buildLedger(
+      status({
+        sources: [
+          { source: '1.2.3.4', caFetchedAt: '2026-08-23T09:00:00Z', syslogFirstSeenAt: '2026-08-23T09:00:00Z' },
+        ],
+        devices: [{ device: 'r', configured: true, sourceIp: '1.2.3.4', events: 10, decodedActions: 10 }],
+        marks: [mark(4, 'skipped')],
+      }),
+      [],
+      '192.0.2.10',
+    )
+    const headline = finishHeadline(ledger)
+    expect(headline).toContain('Logs are flowing.')
+    expect(headline).toContain('three steps stand on evidence')
+    expect(headline).toContain('one was skipped')
+  })
+
+  it('does not claim anything is flowing when nothing has arrived', () => {
+    expect(finishHeadline(buildLedger(status(), [], '192.0.2.10'))).toContain('Nothing has arrived')
+  })
+})
+
+describe('explaining a silence elsewhere', () => {
+  // "The record is the feature": a forced-past line surfaces wherever a
+  // silence needs explaining. An empty surface with no decision behind
+  // it is simply empty -- inventing a cause for it would be the
+  // opposite of the point.
+  it('says nothing when the ledger explains nothing', () => {
+    expect(silenceExplanation([])).toBeNull()
+  })
+
+  it('names the step, the decision, who made it and what was not observed', () => {
+    const line = silenceExplanation([mark(2, 'forced', { note: 'no router has opened a syslog connection' })])
+    expect(line).toContain('step 2')
+    expect(line).toContain('Send logs')
+    expect(line).toContain('forced past')
+    expect(line).toContain('tom')
+    expect(line).toContain('no router has opened a syslog connection')
+  })
+
+  // Amber is loud and dashes are quiet -- when both exist, the loud one
+  // is the one a silence is explained by.
+  it('prefers a forced-past line over a skip', () => {
+    const line = silenceExplanation([mark(1, 'skipped'), mark(4, 'forced')])
+    expect(line).toContain('step 4')
   })
 })
