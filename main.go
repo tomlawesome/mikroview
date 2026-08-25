@@ -1302,6 +1302,7 @@ func main() {
 		Flags:             fs,
 		Definitions:       definitions,
 		Entities:          entityStore,
+		Naming:            names,
 		Rules:             ru,
 		Audit:             auditStore,
 		Suggest:           suggestStore,
