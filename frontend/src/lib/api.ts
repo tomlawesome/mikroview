@@ -632,6 +632,37 @@ export async function fetchWatchlistMatches(params: {
   return body.matches ?? []
 }
 
+// fetchRecentMatches asks the other question the match log answers: not
+// "what has this device done" but "what has broken recently" -- the most
+// recent matches across every entry, newest (by lastSeen) first (#586,
+// for the Matches tab of #584).
+//
+// Same route, a different mode: entries=all, which internal/api's
+// handleMatchesQuery refuses to combine with mac or ip (see its doc
+// comment -- "no identity" must never quietly become "every device").
+// So this is a separate function rather than another optional field on
+// fetchWatchlistMatches: the two parameter sets are mutually exclusive
+// server-side, and a single signature that can express an illegal
+// request is one a caller can send by accident.
+//
+// until is the paging cursor and filters on *firstSeen*, exclusively
+// (matchlog's file and Postgres backends both do: `first_seen < until`).
+// See matches.svelte.ts for what that means for "load older".
+export async function fetchRecentMatches(params: {
+  since?: string
+  until?: string
+  limit?: number
+}): Promise<WatchlistMatch[]> {
+  const q = new URLSearchParams({ entries: 'all' })
+  if (params.since) q.set('since', params.since)
+  if (params.until) q.set('until', params.until)
+  if (params.limit) q.set('limit', String(params.limit))
+  const res = await fetch(`/api/matches?${q.toString()}`)
+  if (!res.ok) throw new ApiError(`fetchRecentMatches: ${res.status}`, res.status)
+  const body = await res.json()
+  return body.matches ?? []
+}
+
 // Admin-only review surface over internal/suggest's candidate pool
 // (#243 slice 5) -- watchlist entries suggested from data RouterOS has
 // already pushed. Every candidate id routinely contains a raw NUL byte
