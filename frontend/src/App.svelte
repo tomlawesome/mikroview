@@ -19,7 +19,7 @@
   import ConfigProblemBanner from './components/ConfigProblemBanner.svelte'
   import FilterBar from './components/FilterBar.svelte'
   import LiveTable from './components/LiveTable.svelte'
-  import Dashboard from './components/Dashboard.svelte'
+  import Metrics from './components/Metrics.svelte'
   import Watchlist from './components/Watchlist.svelte'
   import Setup from './components/Setup.svelte'
   import Flags from './components/Flags.svelte'
@@ -232,7 +232,7 @@
     {:else if appState.view === 'engineroom'}
       <EngineRoom />
         {:else}
-          <Dashboard />
+          <Metrics />
         {/if}
       </main>
     </div>

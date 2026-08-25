@@ -132,7 +132,9 @@ await page.click('.bottom-bar .group-btn .label:text-is("Investigate")')
 await page.waitForSelector('[role="dialog"]', { timeout: 5000 })
 await page.click('.sheet .sheet-item .label:text-is("Metrics")')
 await page.waitForFunction(() => document.querySelector('[role="dialog"]') === null, null, { timeout: 5000 })
-await page.waitForSelector('.dashboard', { timeout: 5000 })
+// .metrics is the metrics page's root (Metrics.svelte). It was
+// .dashboard until #488 replaced that page wholesale.
+await page.waitForSelector('.metrics', { timeout: 5000 })
 const currentGroup = await page
   .$eval('.bottom-bar .group-btn.current .label', (e) => e.textContent.trim())
   .catch(() => null)

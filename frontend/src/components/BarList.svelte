@@ -1,10 +1,12 @@
 <script lang="ts">
   // SPDX-License-Identifier: AGPL-3.0-only
-  // Generic horizontal bar-list panel, shared by every ranked-count chart
-  // on the dashboard (top rules, action/protocol breakdown, top talkers,
-  // per-device volume). Extracted from what was TopRulesMenu's row markup
-  // so all five panels stay visually consistent instead of each hand-
-  // rolling their own bar/track/count layout.
+  // Generic horizontal bar-list panel: a bordered card carrying one
+  // ranked count. Originally extracted from TopRulesMenu's row markup for
+  // the dashboard's five fixed panels; #488 removed that page, and its
+  // ranked answers are now the metrics ledger, which draws its own bare
+  // rows (MetricsTotals.svelte) because cards are the thing that design
+  // removed. What still wants a card uses this: Flags' "Active flags by
+  // type" and each saved top-talkers widget.
   interface Row {
     label: string
     count: number

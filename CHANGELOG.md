@@ -18,6 +18,23 @@ rewritten.
 
 ### Added
 
+- **Metrics is three views of one hour** (#488, design ratified 2026-08-23,
+  `docs/design/screens/metrics/DESIGN.md`). The page now offers
+  **Seismograph** (the default), **Register** and **Table**, chosen in
+  the page header; the choice is a per-user preference, remembered and
+  applied before the page first paints, the same grammar the rail's
+  density already uses. All three read the same hour: seven traffic
+  series and all sixteen flag types share one time axis, each with its
+  own declared scale printed beside it and floored at 12/min, so a
+  series that whispered all hour draws as a thread rather than being
+  inflated to look busy. One cursor reads a whole minute across every
+  series at once, moves with the arrow keys (Shift for ten, Home and End
+  for the ends of the hour), and stays on the same minute when you
+  switch views. Colour carries meaning and nothing else: two chart inks,
+  traffic blue and refused red, with amber reserved for time -- the
+  brink and the cursor. Identity is always the label, so every view
+  survives greyscale and the Table proves it.
+
 - **The engine room replaces the settings pages** (#490). Settings are no
   longer filed by noun: mikroview's own signal path is drawn as a live
   vertical diagram -- the door (syslog listener), the store, the
@@ -46,6 +63,17 @@ rewritten.
   Suggestions is admin-only because the whole of Watchlist already is.
 
 ### Removed
+
+- **The metrics overlay charts and its three cards are gone** (#488),
+  wholesale. The two multi-line charts (event volume by action, flags
+  raised by type) and the ranked-count cards they sat above are removed
+  outright -- no alias, no stub. Their answers did not go with them: top
+  rules, top talkers, by device and by protocol are now the ledger,
+  carried under the Register and as the Table's opening section, where
+  they own magnitude and stop pretending to own time. The per-flag-type
+  chart palette went with the chart that was its only user; flag types
+  are named in words on every surface instead of cycled through sixteen
+  hues.
 
 - **The Users, Tokens and Detectors pages are gone** (#490), absorbed by
   the engine room: Users and Tokens became its two side doors, and
