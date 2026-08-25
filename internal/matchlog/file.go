@@ -230,11 +230,50 @@ func (s *FileStore) writeLineLocked(l fileLine) error {
 // alone. It costs a second read of a file the first pass had to read
 // whole anyway, and bounds what is *retained* by Limit rather than by
 // how much history the log holds. See #285.
+//
+// Both passes live in window below, shared with Recent (#586), which is
+// the same two passes without a source to narrow on.
 func (s *FileStore) Query(ctx context.Context, q Query, yield func(Record) bool) error {
 	if q.Source.Empty() {
 		return ErrEmptyIdentity
 	}
-	limit := clampLimit(q.Limit)
+	source := q.Source
+	return s.window(ctx, &source, q.Since, q.Until, q.Limit, yield)
+}
+
+// Recent implements Store.
+//
+// The same two passes Query documents above -- both call window below
+// -- with the source filter dropped -- there is no identity to narrow on, which is the entire
+// point of this mode (see RecentQuery). Sharing the implementation
+// rather than writing a second one is deliberate: the two-pass shape
+// exists to stop Limit-sized results costing history-sized memory, and a
+// second copy of that reasoning is a second place for it to be lost.
+//
+// What "bounded" means on this backend, precisely, since it is not the
+// same bound Postgres gets. Pass one still keeps ordering metadata --
+// an ID and three timestamps, tens of bytes -- for every record in the
+// log, because LastSeen is not final until the last line has been read
+// (a kindUpdate line arbitrarily far down moves it), so nothing can be
+// pruned early without dropping a record that a later update would have
+// promoted into the result. That peak is bounded by the store's own
+// capacity, the operator-set ceiling this backend already refuses to
+// grow past (ErrCapacityReached), and it is the same peak the existing
+// per-identity Query already pays whenever one identity owns most of
+// the log. What Limit bounds -- here as there -- is what is *retained*:
+// full Records, each carrying a whole store.Event with its unclamped Raw
+// line, are read in pass two for the chosen IDs alone. That is the
+// allocation an unbounded all-entries read would have made arbitrarily
+// large, and it is capped by clampLimit before pass two runs.
+func (s *FileStore) Recent(ctx context.Context, q RecentQuery, yield func(Record) bool) error {
+	return s.window(ctx, nil, q.Since, q.Until, q.Limit, yield)
+}
+
+// window is the body of both Query and Recent: source nil means every
+// entry's matches, source non-nil means only those matching it. Nothing
+// else differs between the two.
+func (s *FileStore) window(ctx context.Context, source *Identity, since, until time.Time, rawLimit int, yield func(Record) bool) error {
+	limit := clampLimit(rawLimit)
 
 	// Pass one: ordering metadata only.
 	type meta struct {
@@ -247,7 +286,7 @@ func (s *FileStore) Query(ctx context.Context, q Query, yield func(Record) bool)
 	err := s.scanLines(func(l *fileLine) {
 		switch l.Kind {
 		case kindRecord:
-			if !q.Source.MatchesSource(l.Tuple.Source) {
+			if source != nil && !source.MatchesSource(l.Tuple.Source) {
 				return
 			}
 			// FirstSeen is fixed when the record is created, so a record
@@ -255,7 +294,7 @@ func (s *FileStore) Query(ctx context.Context, q Query, yield func(Record) bool)
 			// rather than carried to the end. LastSeen cannot be
 			// filtered on yet -- a later update moves it forward, which
 			// is exactly how a long-running match stays visible.
-			if !q.Until.IsZero() && !l.FirstSeen.Before(q.Until) {
+			if !until.IsZero() && !l.FirstSeen.Before(until) {
 				return
 			}
 			acc[l.ID] = &meta{id: l.ID, firstSeen: l.FirstSeen, lastSeen: l.LastSeen, count: 1}
@@ -272,7 +311,7 @@ func (s *FileStore) Query(ctx context.Context, q Query, yield func(Record) bool)
 
 	selected := make([]*meta, 0, len(acc))
 	for _, m := range acc {
-		if m.lastSeen.Before(q.Since) {
+		if m.lastSeen.Before(since) {
 			continue // entirely before the window
 		}
 		selected = append(selected, m)

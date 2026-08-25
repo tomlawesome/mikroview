@@ -18,13 +18,94 @@
   // correlation), entry management itself is administrative
   // configuration about the network, the same tier as Entities/Audit/
   // Exclusions.
-  import { onMount } from 'svelte'
+  import { onMount, tick } from 'svelte'
   import { watchlistState } from '../lib/watchlist.svelte'
+  import { suggestState } from '../lib/suggest.svelte'
+  import { matchesState } from '../lib/matches.svelte'
+  import TabList from './TabList.svelte'
+  import Suggestions from './Suggestions.svelte'
+  import MatchesTab from './MatchesTab.svelte'
   import type { WatchlistEntry, WatchlistMatch, WatchlistPermittedDest } from '../lib/types'
 
   onMount(() => {
     watchlistState.refresh()
+    suggestState.refresh()
   })
+
+  // Suggestions is a tab of Watchlist (#547) and Matches is a third
+  // (#584), both per the ratified navigation record. No admin-gating
+  // needed on the tabs themselves -- Watchlist only ever mounts for an
+  // admin in the first place (see navGroups.ts's `admin: true` on the
+  // Watchlist row), and /api/suggestions* agrees server-side
+  // (internal/api/authz_matrix_test.go).
+  //
+  // Matches sits between the two: it is the evidence the entries beside
+  // it produced, where Suggestions is a separate feed of entries that do
+  // not exist yet.
+  const tabs = [
+    { id: 'watchlist', label: 'Watchlist' },
+    { id: 'matches', label: 'Matches' },
+    { id: 'suggestions', label: 'Suggestions' },
+  ]
+  type TabId = 'watchlist' | 'matches' | 'suggestions'
+  let activeTab = $state<TabId>('watchlist')
+
+  function selectTab(id: string) {
+    activeTab = id as TabId
+    // Before #547, Watchlist and Suggestions were two separate views
+    // that remounted -- and so refetched -- every time you navigated
+    // between them. All three now stay mounted (just hidden) once you
+    // switch away, which loses that free refetch-on-arrival -- most
+    // visibly for accepting a suggestion, which creates a real watchlist
+    // entry that the Watchlist tab would otherwise keep showing its
+    // pre-accept snapshot without. Refreshed here instead, on every
+    // switch, so no tab is ever more than one switch stale.
+    //
+    // For Matches that also means arriving always shows the newest 100
+    // rather than wherever a previous visit's "load older" had walked
+    // back to -- the tab's promise is the recent list, and a stale deep
+    // page is a worse thing to land on than a fresh shallow one.
+    if (activeTab === 'watchlist') watchlistState.refresh()
+    else if (activeTab === 'matches') {
+      // Entries first, then the matches themselves. A row resolves its
+      // entry's name, its mode, and the empty state's coverage sentence
+      // from the entries list, so loading matches against a stale one
+      // renders "(entry removed)" over entries that exist -- an evidence
+      // surface calling a live entry deleted is the worst sentence this
+      // tab could say, and the one it would say silently.
+      //
+      // Not hypothetical, and not only a race at first paint: the page
+      // stays mounted, and nothing else refreshes the entries until
+      // App.svelte's own 60-second coverage interval comes round
+      // (WATCHLIST_COVERAGE_REFRESH_MS). An entry created, renamed or
+      // deleted anywhere else is misdescribed here for up to a minute.
+      // Caught by live-matches-tab.mjs, which found every row named
+      // "(entry removed)" while both entries existed.
+      //
+      // Chained rather than fired together so the names are in place by
+      // the time the rows are, and .catch so a failed entries fetch
+      // still lets the matches load -- a list with imperfect names beats
+      // no list at all.
+      watchlistState
+        .refresh()
+        .catch(() => {})
+        .then(() => matchesState.load())
+    } else suggestState.refresh()
+  }
+
+  // Following a match's entry name back to the entry itself (#584): the
+  // Watchlist tab, that entry expanded, scrolled to. The scroll is
+  // deliberate -- the entry list can be long, and switching tabs to a
+  // row that is expanded somewhere off-screen looks like nothing
+  // happened.
+  async function openEntry(entryId: string) {
+    selectTab('watchlist')
+    expandedId = entryId
+    await tick()
+    // Optional-call rather than assumed: jsdom has no layout, so
+    // scrollIntoView is not implemented there.
+    document.getElementById(`entry-${entryId}`)?.scrollIntoView?.({ block: 'center' })
+  }
 
   // --- Add/edit form -----------------------------------------------
 
@@ -204,7 +285,16 @@
   }
 </script>
 
-<div class="page scrollbar">
+<div class="watchlist-page">
+  <TabList {tabs} selected={activeTab} onselect={selectTab} label="Watchlist views" />
+  <div
+    class="page scrollbar"
+    role="tabpanel"
+    id="panel-watchlist"
+    aria-labelledby="tab-watchlist"
+    tabindex="0"
+    hidden={activeTab !== 'watchlist'}
+  >
   <p class="intro">
     Watch attempts against specific ports (<strong>record</strong>), or flip an
     entry around to watch what one device does (<strong>invert</strong>): "this device should only ever reach X" --
@@ -281,7 +371,9 @@
     {:else}
       <ul class="list">
         {#each watchlistState.entries as e (e.id)}
-          <li class="card">
+          <!-- The id is the target a match row's entry name scrolls to
+               (openEntry, #584), not decoration. -->
+          <li class="card" id="entry-{e.id}">
             <button class="card-main" onclick={() => toggleExpand(e.id)}>
               <span class="name">{e.name || '(unnamed)'}</span>
               {#if e.invert}
@@ -398,9 +490,66 @@
       </ul>
     {/if}
   </section>
+  </div>
+
+  <div
+    class="tab-panel"
+    role="tabpanel"
+    id="panel-matches"
+    aria-labelledby="tab-matches"
+    tabindex="0"
+    hidden={activeTab !== 'matches'}
+  >
+    <MatchesTab entries={watchlistState.entries} coverage={watchlistState.coverage} onopenentry={openEntry} />
+  </div>
+
+  <div
+    class="tab-panel"
+    role="tabpanel"
+    id="panel-suggestions"
+    aria-labelledby="tab-suggestions"
+    tabindex="0"
+    hidden={activeTab !== 'suggestions'}
+  >
+    <Suggestions />
+  </div>
 </div>
 
 <style>
+  .watchlist-page {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+  }
+
+  /* Every non-Watchlist panel is a full-height column holding one
+     component -- one rule rather than one class per tab. */
+  .tab-panel {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+  }
+
+  /* The `hidden` attribute on each panel is not enough on its own. Its
+     `display: none` comes from the UA stylesheet, and *any* author
+     declaration outranks a UA one whatever its specificity -- so the
+     `display: flex` above (and on .page below) wins, and a "hidden"
+     panel renders anyway, stacked under the selected one. Confirmed in
+     Chromium, not deduced: a hidden element carrying a class with
+     `display: flex` computes to `flex` and Playwright reports it
+     visible.
+
+     Present since the tabs landed (#547) and invisible to the tests,
+     which assert on the `hidden` attribute rather than on what a browser
+     does with it. Fixed here rather than left, because a third panel
+     makes it three surfaces deep instead of two. */
+  .page[hidden],
+  .tab-panel[hidden] {
+    display: none;
+  }
+
   .page {
     flex: 1;
     min-height: 0;

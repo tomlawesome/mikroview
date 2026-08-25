@@ -379,6 +379,24 @@ type Audit struct {
 	StorePath string `yaml:"storePath"`
 }
 
+// Setup configures internal/setup's persisted setup-wizard ledger
+// (#487) -- the steps an operator skipped or forced past, each with who
+// decided it and when. Only those decisions are stored: what the wizard
+// has *observed* (a CA fetch, a syslog connection, decoded log-prefixes,
+// pushed tables) is re-made from arriving traffic every run.
+//
+// They are persisted because the design record makes the record the
+// feature: a forced-past line has to keep explaining the silence it
+// accounts for -- in the wizard's step list and in the empty states
+// elsewhere -- and a restart is most likely at upgrade, exactly when
+// somebody is looking for that explanation. StorePath left empty is a
+// fully supported, deliberate choice, same optional-persistence
+// contract as Audit.StorePath: the wizard still works, the decisions
+// just don't survive a restart.
+type Setup struct {
+	StorePath string `yaml:"storePath"`
+}
+
 // Watchlist configures internal/watchlist's entry store and its
 // internal/matchlog match log (#243) -- the persisted replacement for
 // Control Ports' single flat criticalPorts port list. StorePath (the
@@ -794,6 +812,7 @@ type Config struct {
 	Auth       Auth       `yaml:"auth"`
 	Entities   Entities   `yaml:"entities"`
 	Audit      Audit      `yaml:"audit"`
+	Setup      Setup      `yaml:"setup"`
 	Watchlist  Watchlist  `yaml:"watchlist"`
 	Notify     Notify     `yaml:"notify"`
 	TLS        TLS        `yaml:"tls"`
@@ -932,6 +951,9 @@ func defaults() Config {
 		},
 		Audit: Audit{
 			StorePath: DefaultDataDir + "/audit.json",
+		},
+		Setup: Setup{
+			StorePath: DefaultDataDir + "/setup.json",
 		},
 		Watchlist: Watchlist{
 			StorePath:            DefaultDataDir + "/watchlist.json",
@@ -1313,6 +1335,9 @@ func applyEnv(cfg *Config) {
 	}
 	if v := os.Getenv("MIKROVIEW_AUDIT_STORE_PATH"); v != "" {
 		cfg.Audit.StorePath = v
+	}
+	if v := os.Getenv("MIKROVIEW_SETUP_STORE_PATH"); v != "" {
+		cfg.Setup.StorePath = v
 	}
 	if v := os.Getenv("MIKROVIEW_WATCHLIST_STORE_PATH"); v != "" {
 		cfg.Watchlist.StorePath = v

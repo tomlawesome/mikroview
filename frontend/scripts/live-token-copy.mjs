@@ -159,7 +159,10 @@ if (box) {
 
   // Selecting text and clicking to filter are supposed to be mutually
   // exclusive -- the drag above must not also have applied the filter.
-  const ipDuringSelection = await page.inputValue('input[aria-label="IP address or CIDR"]')
+  // #438 split the old single "IP or CIDR" box into side-scoped Source/
+  // Destination boxes; this is the source address token, so it's the
+  // Source box now.
+  const ipDuringSelection = await page.inputValue('input[aria-label="Source — name, IP or CIDR"]')
   check(
     ipDuringSelection === '',
     `a drag that leaves a selection behind does not also apply the IP filter (got "${ipDuringSelection}")`,
@@ -212,12 +215,12 @@ await page.waitForSelector('.toast', { state: 'detached', timeout: 4000 })
 check(true, 'the "copied" toast auto-dismisses')
 
 // Clicking the copy glyph must not also have applied the filter.
-const ipAfterCopy = await page.inputValue('input[aria-label="IP address or CIDR"]')
+const ipAfterCopy = await page.inputValue('input[aria-label="Source — name, IP or CIDR"]')
 check(ipAfterCopy === '', `clicking the copy glyph does not apply the IP filter (got "${ipAfterCopy}")`)
 
 // --- A plain click (no drag) still filters, unchanged from before -------
 await addrBtn.click()
-const ipAfterClick = await waitForInputValue('input[aria-label="IP address or CIDR"]', HOST_IP)
+const ipAfterClick = await waitForInputValue('input[aria-label="Source — name, IP or CIDR"]', HOST_IP)
 check(ipAfterClick === HOST_IP, `a plain click still applies the IP filter (got "${ipAfterClick}")`)
 
 check(consoleErrors.length === 0, `no console errors (${consoleErrors.join('; ')})`)

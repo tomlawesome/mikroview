@@ -1,7 +1,7 @@
 <script lang="ts">
   // SPDX-License-Identifier: AGPL-3.0-only
   // Collapsed by default (just a "+" trigger card, same footprint as the
-  // other dashboard panels); expands into a small filter form -- a
+  // saved widgets beside it); expands into a small filter form -- a
   // purpose-built subset of FilterBar's fields bound to local draft state
   // rather than appState.filters, since a widget's filter is independent
   // of whatever's active in the live view.
@@ -71,7 +71,21 @@
       </select>
 
       <input type="text" placeholder="Protocol" bind:value={filters.protocol} aria-label="Protocol" />
-      <input type="text" placeholder="IP or CIDR" bind:value={filters.ip} aria-label="IP address or CIDR" />
+      <!-- #438 split the old single "IP or CIDR" box into side-scoped
+           Source/Destination fields on the live-view bar; mirrored here
+           since this widget shares the same Filters shape. -->
+      <input
+        type="text"
+        placeholder="Source — name, IP or CIDR"
+        bind:value={filters.srcQuery}
+        aria-label="Source — name, IP or CIDR"
+      />
+      <input
+        type="text"
+        placeholder="Destination — name, IP or CIDR"
+        bind:value={filters.dstQuery}
+        aria-label="Destination — name, IP or CIDR"
+      />
       <input type="text" inputmode="numeric" placeholder="Port" bind:value={filters.port} aria-label="Port" />
       <input type="text" placeholder="Interface" bind:value={filters.interface} aria-label="Interface" />
 

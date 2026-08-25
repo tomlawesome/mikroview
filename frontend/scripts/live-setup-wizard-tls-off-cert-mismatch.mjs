@@ -20,7 +20,14 @@
 // /api/setup/status response, with only the two fields the bug is
 // about (tlsEnabled, hosts) overridden to the mismatched shape from the
 // issue -- everything else (sources, devices, syslogPort, syslogEnabled,
-// pushKinds) is left exactly as the real server reported it.
+// pushKinds, marks) is left exactly as the real server reported it.
+//
+// #487 moved the wizard into a modal without touching this check logic,
+// which it inherits. What changed here is only where the answer is
+// read: the step's observation line, in the flavour reserved for a
+// problem on mikroview's own side. That flavour exists precisely so a
+// mikroview-side misconfiguration never borrows the patient,
+// nothing-is-wrong voice the waiting flavour is required to use.
 
 import { session, check, done } from './live-browser.mjs'
 
@@ -40,21 +47,48 @@ await page.route('**/api/setup/status', async (route) => {
   await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(body) })
 })
 
-await page.click('.nav-menu .trigger')
-await page.click('.nav-menu button:has-text("Connect a router")')
-await page.waitForSelector('.setup')
+await page.click('.rail .item:has-text("Run setup…")')
+const wizard = page.locator('.setup-wizard')
+await wizard.waitFor({ state: 'visible' })
 
-// The mismatch must surface as blocked, not be waved through because
-// HTTP TLS happens to be off.
-await page.waitForSelector('.setup section.blocked .state.blocked')
-const detail = await page.textContent('.setup section.blocked .state.blocked')
+// Step 1 explicitly, rather than relying on where the ledger reopens:
+// the modal lands on the first step still waiting, and a scenario that
+// ran before this one could have decided step 1 already.
+await page.locator('.setup-wizard .steps li:nth-child(1) .step-row').click()
+
+// The mismatch must surface as a mikroview-side problem, not be waved
+// through because HTTP TLS happens to be off -- and not dressed up as
+// patient waiting either.
+const observation = page.locator('.setup-wizard .observation.attention')
+await observation.waitFor({ state: 'visible' })
+const detail = await observation.textContent()
 check(!!detail && /does not cover/.test(detail), `step 1 reports the mismatch (${detail})`)
 check(!!detail && /name verification failed/.test(detail), 'the detail names the failure the router will show')
+check(
+  (await page.locator('.setup-wizard .observation.waiting').count()) === 0,
+  "a problem on mikroview's own side never reads as waiting for the router",
+)
 
 // And the command block for step 1 is withheld while blocked -- a
 // router told to run it would get a certificate it cannot verify.
-const commandVisible = await page.$('.setup section.blocked pre')
-check(!commandVisible, 'the CA-trust command is withheld while step 1 is blocked')
+check(
+  (await page.locator('.setup-wizard .body pre').count()) === 0,
+  'the CA-trust command is withheld while step 1 is blocked',
+)
+
+// Next must not walk past it either. There is nothing to force past
+// here: the check could not run, so the record says that rather than
+// claiming nothing has arrived.
+await page.click('.setup-wizard footer button.primary')
+const heavy = page.locator('.setup-wizard .heavy')
+await heavy.waitFor({ state: 'visible' })
+const quoted = ((await page.textContent('.setup-wizard .heavy .quote')) ?? '').trim()
+check(
+  /could not run/.test(quoted),
+  `forcing past a blocked step records that the check could not run, not that nothing arrived (${quoted})`,
+)
+await page.click('.setup-wizard .heavy button.primary')
+await heavy.waitFor({ state: 'detached' })
 
 check(consoleErrors.length === 0, `no console errors (${consoleErrors.join('; ')})`)
 done()

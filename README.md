@@ -2,6 +2,11 @@
 > **Development disclosure:** MikroView was coded by Claude under human
 > direction.
 
+> [!WARNING]
+> **Under heavy development:** MikroView is pre-1.0 and still changing
+> shape. Not every feature described below is finished, and some do not
+> yet work as intended.
+
 <p align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="brand/logo-lockup-dark.svg">
@@ -237,7 +242,7 @@ every restart) but not fatal.
   [docs/configuration.md](docs/configuration.md) for the API and the
   server/client filtering split.
 - **UI**: Svelte, no component framework, dark professional theme,
-  ~79KB of JavaScript over the wire (~260KB before compression). CI
+  ~92KB of JavaScript over the wire (~307KB before compression). CI
   gates the bundle at 200KB gzipped — headroom for the v0.4.0
   interface reshape, re-derived as measured+15% once it ships (see
   [docs/decisions/ui-framework.md](docs/decisions/ui-framework.md)).

@@ -140,7 +140,35 @@ function isUntrustedCertServiceWorkerError(text) {
 }
 
 /** session launches a browser and signs in, returning a live page. */
-export async function session({ waitForEvents = 0 } = {}) {
+/**
+ * dismissSetupWizard closes the setup modal if a fresh instance
+ * auto-launched it (#487).
+ *
+ * The modal opens on first admin sign-in with no router sending, which
+ * is exactly the state a freshly stood-up harness is in before any
+ * scenario has fed anything. It is a real focus trap over a real veil,
+ * so leaving it up makes every other scenario's first click fail an
+ * actionability check for a reason that has nothing to do with what it
+ * is testing.
+ *
+ * Gated on the server's own device list rather than a blind wait: with a
+ * device already known the modal cannot auto-launch, so there is nothing
+ * to wait for and no seconds to spend waiting for it. `waitFor` rather
+ * than `isVisible`, because isVisible answers immediately about a modal
+ * that is still one paint away.
+ */
+export async function dismissSetupWizard(page) {
+  const devices = await page.request.get(`${URL_BASE}/api/devices`).then((r) => r.json())
+  if (Array.isArray(devices) && devices.length > 0) return
+  const modal = page.locator('.setup-wizard')
+  await modal.waitFor({ state: 'visible', timeout: 10000 }).catch(() => {})
+  if (await modal.count()) {
+    await page.keyboard.press('Escape')
+    await modal.waitFor({ state: 'detached', timeout: 5000 })
+  }
+}
+
+export async function session({ waitForEvents = 0, dismissSetup = true } = {}) {
   browser = await chromium.launch()
   // ignoreHTTPSErrors, because the certificate under test is one
   // mikroview generated for itself seconds ago -- self-signed, with no
@@ -170,6 +198,11 @@ export async function session({ waitForEvents = 0 } = {}) {
   await page.fill('input[autocomplete="current-password"]', PASS)
   await page.click('button[type="submit"]')
   await page.waitForSelector('input.rule', { timeout: 15000 })
+
+  // Before anything else touches the page: a first-run instance layers
+  // the setup modal over the shell, and every scenario but the wizard's
+  // own wants it out of the way. See dismissSetupWizard.
+  if (dismissSetup) await dismissSetupWizard(page)
 
   if (waitForEvents > 0) {
     await page.waitForFunction(

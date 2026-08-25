@@ -19,13 +19,57 @@
   // CopyButton.svelte's own doc comment for why that's the default
   // rather than something this file has to turn back on.
   import CopyButton from './CopyButton.svelte'
+  // #445: mobile's NAT lookup. Desktop anchors it to the row's "i"
+  // button; there is no row to anchor to behind an open sheet and no
+  // hover to reveal anything, so the same lookup opens as a section of
+  // this sheet instead -- same store, same two modes, same wording.
+  import RouterNatLookup from './RouterNatLookup.svelte'
+  import { routerLookupState, natChip, natTitle } from '../lib/routerLookup.svelte'
+  import { natFactsFromEvent } from '../lib/natMatch'
+  // #413: mobile has no hover, so the pencil sits beside each copy
+  // button here as a permanently visible action (admins only -- see
+  // EditNameButton). It opens the same single editor the desktop
+  // pencil does; this sheet is stationary, so nothing anchored to it
+  // moves while it is open.
+  import EditNameButton from './EditNameButton.svelte'
 
   let { event, deviceName, onClose }: { event: FirewallEvent; deviceName: string; onClose: () => void } =
     $props()
 
+  function openNatLookup() {
+    routerLookupState.openNatInSheet(event.deviceId, {
+      ruleLabel: event.ruleLabel,
+      facts: natFactsFromEvent(event),
+      // A sheet is always opened from one tapped card, never from a
+      // group head, so the evaluation is always exactly this event's.
+      evidence: 'row',
+    })
+  }
+
+  // The section closes with the sheet, and with any change of the event
+  // it is about. The lookup store is a singleton, so without this the
+  // next sheet would come up already showing the previous event's
+  // answer -- an answer about a different translation, under a heading
+  // that says nothing about which one.
+  $effect(() => {
+    event.id
+    routerLookupState.close()
+    return () => routerLookupState.close()
+  })
+
   const srcFlag = $derived(countryFlag(event.srcCountry))
   const dstFlag = $derived(countryFlag(event.dstCountry))
-  const ifaces = $derived([event.inInterface, event.outInterface].filter(Boolean).join(' → ') || '—')
+
+  // Mirrors EventRow.svelte's natFilterKey exactly -- see that file's
+  // comment for why only the two dedicated NAT chains say which side was
+  // translated.
+  const natFilterKey = $derived(
+    event.chain?.toLowerCase() === 'srcnat'
+      ? 'srcQuery'
+      : event.chain?.toLowerCase() === 'dstnat'
+        ? 'dstQuery'
+        : null,
+  )
 
   // Same click-to-filter convention every other cell in the app uses
   // (see EventRow.svelte, Flags.svelte's target button) -- closes the
@@ -54,9 +98,23 @@
   </div>
 
   <p class="title">
-    {srcFlag ? `${srcFlag} ` : ''}{formatAddr(event.srcIp, event.srcPort)}
+    {#if srcFlag}
+      <button
+        class="flag-link"
+        onclick={() => filterAndClose('srcCountry', event.srcCountry ?? '')}
+        aria-label="Filter to source country: {event.srcCountry}"
+      >{srcFlag}</button>
+    {/if}
+    {formatAddr(event.srcIp, event.srcPort)}
     <span class="arrow">→</span>
-    {dstFlag ? `${dstFlag} ` : ''}{formatAddr(event.dstIp, event.dstPort)}
+    {#if dstFlag}
+      <button
+        class="flag-link"
+        onclick={() => filterAndClose('dstCountry', event.dstCountry ?? '')}
+        aria-label="Filter to destination country: {event.dstCountry}"
+      >{dstFlag}</button>
+    {/if}
+    {formatAddr(event.dstIp, event.dstPort)}
   </p>
 
   <div class="rows">
@@ -77,10 +135,11 @@
       <div class="row">
         <span class="k">Source</span>
         <span class="v-group">
-          <button class="v link" onclick={() => filterAndClose('ip', event.srcIp ?? '')}>
+          <button class="v link" onclick={() => filterAndClose('srcQuery', event.srcIp ?? '')}>
             {event.srcHostName || event.srcIp}
           </button>
           <CopyButton value={event.srcIp} label="source IP" />
+          <EditNameButton type="host" value={event.srcIp} device={event.deviceId} label={event.srcIp} />
           {#if isPublicIp(event.srcIp)}<IpInvestigateButton ip={event.srcIp} />{/if}
         </span>
       </div>
@@ -93,6 +152,7 @@
             {event.srcPortName || event.srcPort}
           </button>
           <CopyButton value={String(event.srcPort)} label="source port" />
+          <EditNameButton type="port" value={String(event.srcPort)} label="port {event.srcPort}" />
           {#if lookupPort(event.srcPort)}<PortInvestigateButton port={event.srcPort} />{/if}
         </span>
       </div>
@@ -101,10 +161,11 @@
       <div class="row">
         <span class="k">Destination</span>
         <span class="v-group">
-          <button class="v link" onclick={() => filterAndClose('ip', event.dstIp ?? '')}>
+          <button class="v link" onclick={() => filterAndClose('dstQuery', event.dstIp ?? '')}>
             {event.dstHostName || event.dstIp}
           </button>
           <CopyButton value={event.dstIp} label="destination IP" />
+          <EditNameButton type="host" value={event.dstIp} device={event.deviceId} label={event.dstIp} />
           {#if isPublicIp(event.dstIp)}<IpInvestigateButton ip={event.dstIp} />{/if}
         </span>
       </div>
@@ -117,6 +178,7 @@
             {event.dstPortName || event.dstPort}
           </button>
           <CopyButton value={String(event.dstPort)} label="destination port" />
+          <EditNameButton type="port" value={String(event.dstPort)} label="port {event.dstPort}" />
           {#if lookupPort(event.dstPort)}<PortInvestigateButton port={event.dstPort} />{/if}
         </span>
       </div>
@@ -124,8 +186,36 @@
     {#if event.natIp}
       <div class="row">
         <span class="k">NAT</span>
-        <span class="v accent">→ {formatAddr(event.natIp, event.natPort)}</span>
+        {#if natFilterKey}
+          <button
+            class="v accent link"
+            onclick={() => {
+              if (natFilterKey) filterAndClose(natFilterKey, event.natIp ?? '')
+            }}
+          >→ {formatAddr(event.natIp, event.natPort)}</button>
+        {:else}
+          <span class="v accent">→ {formatAddr(event.natIp, event.natPort)}</span>
+        {/if}
+        <button
+          class="natlookup"
+          onclick={openNatLookup}
+          aria-expanded={routerLookupState.sheetOpen}
+          aria-label={event.ruleLabel
+            ? `Look up the NAT rule logged as ${event.ruleLabel}`
+            : 'Narrow down which NAT rule did this'}
+        >i</button>
       </div>
+      {#if routerLookupState.sheetOpen}
+        <div class="natsection">
+          <div class="natsection-header">
+            <span class="natsection-title">{natTitle(deviceName, routerLookupState.natMode)}</span>
+            <span class="chip" class:logged={routerLookupState.natMode === 'logged'}>
+              {natChip(routerLookupState.natMode)}
+            </span>
+          </div>
+          <RouterNatLookup />
+        </div>
+      {/if}
     {/if}
     {#if event.protocol}
       <div class="row">
@@ -135,7 +225,18 @@
     {/if}
     <div class="row">
       <span class="k">Interfaces</span>
-      <span class="v">{ifaces}</span>
+      <span class="v-group">
+        {#if event.inInterface}
+          <button class="v link" onclick={() => filterAndClose('interface', event.inInterface ?? '')}>{event.inInterface}</button>
+        {/if}
+        {#if event.inInterface && event.outInterface}
+          <span class="v arrow">→</span>
+        {/if}
+        {#if event.outInterface}
+          <button class="v link" onclick={() => filterAndClose('interface', event.outInterface ?? '')}>{event.outInterface}</button>
+        {/if}
+        {#if !event.inInterface && !event.outInterface}<span class="v">—</span>{/if}
+      </span>
     </div>
     {#if event.ruleLabel}
       <div class="row">
@@ -151,6 +252,7 @@
             {event.ruleName || event.ruleLabel}
           </button>
           <CopyButton value={event.ruleLabel} label="rule label" />
+          <EditNameButton type="rule" value={event.ruleLabel} label={event.ruleLabel} />
         </span>
       </div>
     {/if}
@@ -228,6 +330,21 @@
     margin: 0 2px;
   }
 
+  /* #438: the country flag in the summary title is now a click-to-filter
+     token like every other -- plain inline button, no border/background,
+     so it still reads as part of the running text. */
+  .flag-link {
+    background: none;
+    border: none;
+    padding: 0;
+    font: inherit;
+    cursor: pointer;
+  }
+
+  .flag-link:hover {
+    text-decoration: underline;
+  }
+
   .rows {
     display: flex;
     flex-direction: column;
@@ -266,6 +383,66 @@
   .v.accent {
     color: var(--accent);
     font-weight: 600;
+  }
+
+  /* Mobile's NAT lookup trigger. Same glyph and same meaning as
+     RouterRuleButton's on desktop, sized to a real touch target rather
+     than to a hover-revealed 15px circle. */
+  .natlookup {
+    flex: none;
+    width: 30px;
+    height: 30px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+    font-family: var(--font-sans);
+    font-size: 13px;
+    font-weight: 700;
+    font-style: italic;
+    line-height: 1;
+    color: var(--accent);
+    background: transparent;
+    border: 1px solid var(--accent);
+    border-radius: 50%;
+  }
+
+  .natsection {
+    padding: 10px 0 12px;
+    border-bottom: 1px solid var(--border);
+    font-size: 13px;
+  }
+
+  .natsection-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 8px;
+  }
+
+  .natsection-title {
+    font-weight: 600;
+    color: var(--fg);
+  }
+
+  /* The mode announcement, in the same words the desktop popover uses.
+     Coloured in logged mode, but what it carries is the text. */
+  .chip {
+    flex: none;
+    margin-left: auto;
+    font-family: var(--font-mono);
+    font-size: 10px;
+    letter-spacing: 0.02em;
+    padding: 1px 6px;
+    border-radius: 4px;
+    color: var(--fg-muted);
+    border: 1px solid var(--border);
+    white-space: nowrap;
+  }
+
+  .chip.logged {
+    color: var(--accent);
+    border-color: var(--accent);
   }
 
   button.v {
