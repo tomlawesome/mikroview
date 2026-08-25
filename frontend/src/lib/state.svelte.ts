@@ -154,6 +154,56 @@ class AppState {
   pendingCount = $state(0)
   autoscroll = $state(true)
 
+  // Open row-anchored surfaces. Newest-at-top (#363) pushes rows *down*
+  // as events arrive, so a popover anchored to a row it is about would
+  // slide away from under itself; the decision taken once for #413,
+  // #439's lookup popovers and #445's NAT popup is that opening any of
+  // them holds the stream until it closes.
+  //
+  // A count rather than a flag because these surfaces are not
+  // necessarily exclusive, and a boolean would let the first one to
+  // close release a hold the second still needs.
+  //
+  // Deliberately separate from `autoscroll`: this is a transient hold,
+  // not a change to the operator's Autoscroll preference, so the toggle's
+  // own state and its button are untouched and the preference is exactly
+  // as they left it when the surface closes. Where the view is already
+  // frozen the hold composes as a no-op -- LiveTable freezes on either.
+  //
+  // The count is a plain field and only the boolean is reactive. That
+  // split is load-bearing, not tidiness: holders take the hold from
+  // inside an $effect (that is what makes the release survive an
+  // unmount), and `count++` *reads* the count before writing it. Had the
+  // count been $state, the read would have made the effect depend on a
+  // signal it was itself changing, so it would re-run, increment again,
+  // and re-run again -- Svelte aborts that with
+  // effect_update_depth_exceeded, which does not just break the hold: it
+  // stops the whole app re-rendering, so a popover sticks on "Loading…"
+  // and Esc silently does nothing. Found by running it; nothing in the
+  // type system or the test suite objects to the reactive version.
+  // Writing the boolean is safe because assigning the value it already
+  // holds notifies nobody.
+  private holds = 0
+
+  private heldOpen = $state(false)
+
+  // True when the view must not move: either Autoscroll is off, or
+  // something is holding it open. The composition lives here rather than
+  // in LiveTable so every reader gets the same answer.
+  get streamHeld(): boolean {
+    return !this.autoscroll || this.heldOpen
+  }
+
+  holdStream() {
+    this.holds++
+    this.heldOpen = true
+  }
+
+  releaseStream() {
+    if (this.holds > 0) this.holds--
+    this.heldOpen = this.holds > 0
+  }
+
   // The raw event pool captured the moment Autoscroll is switched off
   // (issue #232). Null means "not frozen"; cleared when Autoscroll goes
   // back on.
@@ -189,24 +239,6 @@ class AppState {
   // overlap (a lookup popover open while the editor opens over it), and
   // the first one to close must not release a hold the second still
   // needs.
-  streamHolds = $state(0)
-
-  // True when the view must not move: either Autoscroll is off, or
-  // something is holding it open. The composition is here rather than
-  // in LiveTable so every reader gets the same answer -- and so "if the
-  // view is already frozen, the hold composes as a no-op" is a property
-  // of the expression rather than something each caller remembers.
-  get streamHeld(): boolean {
-    return !this.autoscroll || this.streamHolds > 0
-  }
-
-  holdStream() {
-    this.streamHolds++
-  }
-
-  releaseStream() {
-    if (this.streamHolds > 0) this.streamHolds--
-  }
 
   // Updated periodically by App.svelte (see tick()) so the age-based cutoff
   // in filteredEvents actually re-evaluates over time, not just when the

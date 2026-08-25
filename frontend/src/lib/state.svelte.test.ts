@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
+import { flushSync } from 'svelte'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 // Mocked so loadInitial()/refetchWithFilters() below can be made to
@@ -324,3 +325,63 @@ describe('AppState.initialLoadDone (#549)', () => {
   })
 })
 
+
+// Hold-while-open (#445, sharing #413's decision). The interesting case
+// is not the arithmetic -- it is that holders take the hold from inside
+// an $effect, because that is what makes the release survive an unmount.
+// An earlier version counted in a $state field, so `count++` read the
+// signal it was about to write and the effect re-triggered itself
+// forever. Svelte aborts that with effect_update_depth_exceeded and
+// stops re-rendering the whole app: popovers stuck on "Loading…" and Esc
+// did nothing. Nothing in the type system or the rest of this suite
+// objected; it took running the app. So the test is written the way the
+// real caller behaves, from inside an effect, rather than by calling the
+// methods directly.
+describe('AppState stream hold (#445)', () => {
+  it('settles when taken and released from inside an effect', () => {
+    let open = $state(false)
+    let runs = 0
+
+    const stop = $effect.root(() => {
+      $effect(() => {
+        runs++
+        if (!open) return
+        appState.holdStream()
+        return () => appState.releaseStream()
+      })
+    })
+
+    flushSync()
+    const runsAfterMount = runs
+    expect(appState.streamHeld).toBe(false)
+
+    open = true
+    flushSync()
+    expect(appState.streamHeld).toBe(true)
+    // One further run for the change itself. Anything more means the
+    // effect is feeding itself.
+    expect(runs).toBe(runsAfterMount + 1)
+
+    open = false
+    flushSync()
+    expect(appState.streamHeld).toBe(false)
+
+    stop()
+  })
+
+  it('holds until the last holder releases', () => {
+    appState.holdStream()
+    appState.holdStream()
+    appState.releaseStream()
+    expect(appState.streamHeld).toBe(true)
+    appState.releaseStream()
+    expect(appState.streamHeld).toBe(false)
+    // Never goes negative, so a stray release cannot bank credit that
+    // silently swallows the next real hold.
+    appState.releaseStream()
+    appState.holdStream()
+    expect(appState.streamHeld).toBe(true)
+    appState.releaseStream()
+    expect(appState.streamHeld).toBe(false)
+  })
+})

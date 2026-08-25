@@ -109,7 +109,11 @@ function addressEquals(candidate: string, ip: ParsedAddress): boolean {
   return !!parsed && parsed.family === ip.family && parsed.value === ip.value
 }
 
-function addressInCidr(candidate: string, cidr: ParsedCidr): boolean {
+// Exported for lib/natMatch.ts, which asks the same containment question
+// of a NAT rule's src-address/dst-address that the filter boxes ask of a
+// typed CIDR -- same arithmetic, so the same function rather than a
+// second copy that could drift.
+export function addressInCidr(candidate: string, cidr: ParsedCidr): boolean {
   const parsed = parseAddress(candidate)
   if (!parsed || parsed.family !== cidr.family) return false
   const width = cidr.family === 4 ? 32n : 128n
