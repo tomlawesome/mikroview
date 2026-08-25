@@ -7,9 +7,8 @@ import type { Action } from './types'
  * the filter verdicts first, then the non-filter rule kinds, then
  * unknown last.
  *
- * It is also the order EventsChart draws its series in, which is the
- * adjacency app.css's palette note was checked against -- so reordering
- * this reorders the legend and changes which colors sit next to each
+ * It is the adjacency app.css's action-palette note was checked
+ * against -- so reordering this changes which colors sit next to each
  * other.
  */
 export const ACTIONS: readonly Action[] = [
