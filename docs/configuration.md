@@ -880,6 +880,41 @@ persisted log (see [API reference](#api-reference)) -- the same
 `since`/`until`/`limit` convention `GET /api/events` already uses, minus
 that endpoint's event-specific filters.
 
+## Setup wizard ledger (optional)
+
+The guided setup wizard (**Admin ▸ Run setup…**) keeps a ledger of its
+five steps. Most of what it shows is not stored anywhere: mikroview
+never connects to your router, so each step's check is simply an
+observation of what arrived here -- a certificate fetch, a syslog
+connection, events carrying a decoded log-prefix, a pushed table -- and
+those are re-made from arriving traffic every time mikroview starts.
+
+What *is* stored is the other half: the steps you **skipped** or
+**forced past**, each with who decided it and when. Those are decisions,
+not observations, and they are what lets the rest of the interface
+explain itself -- an empty live view can say which setup step accounts
+for the silence instead of just being empty. That explanation is most
+wanted right after a restart, which is when an upgrade happens, so it
+has to survive one.
+
+```yaml
+setup:
+  # Where the wizard's skipped/forced-past decisions are persisted, as a
+  # small JSON file. Same optional-persistence contract as
+  # audit.storePath: left unset, the wizard still works, the decisions
+  # just don't survive a restart. If you set this in the container,
+  # mount a volume for its parent directory -- see
+  # deploy/docker-compose.yml.
+  storePath: "/var/lib/mikroview/setup.json"
+```
+
+Each decision is also written to the [audit log](#audit-log-admin-action-accountability-optional)
+as `setup.step_skipped` or `setup.step_forced`. The two are not
+duplicates and neither replaces the other: the audit entry is history
+and stays there even after the evidence eventually arrives and the step
+turns green, while the ledger holds current state and clears itself the
+moment evidence outranks the decision.
+
 ## Watchlist (optional)
 
 Issue #243 grew the old Control Ports tab into a user-tuned watchlist:
@@ -2539,6 +2574,7 @@ Override individual scalar settings without a mounted file:
 | `MIKROVIEW_AUTH_SESSION_TTL` | `auth.sessionTTL` |
 | `MIKROVIEW_ENTITIES_STORE_PATH` | `entities.storePath` (see [Entities](#entities-ui-managed-hostruleport-labels-and-tags-optional)) |
 | `MIKROVIEW_AUDIT_STORE_PATH` | `audit.storePath` (see [Audit log](#audit-log-admin-action-accountability-optional)) |
+| `MIKROVIEW_SETUP_STORE_PATH` | `setup.storePath` (see [Setup wizard ledger](#setup-wizard-ledger-optional)) |
 | `MIKROVIEW_WATCHLIST_STORE_PATH` | `watchlist.storePath` (see [Watchlist](#watchlist-optional)) |
 | `MIKROVIEW_WATCHLIST_MATCH_LOG_PATH` | `watchlist.matchLogPath` |
 | `MIKROVIEW_WATCHLIST_MATCH_LOG_CAPACITY` | `watchlist.matchLogCapacity` |
@@ -2853,6 +2889,8 @@ exits, rather than starting the server. See
 | `GET /api/auth/oidc/login` | start the SSO flow -- a top-level browser redirect to the configured provider, only present when [OIDC](#single-sign-on-oidcsso) is configured |
 | `GET /api/auth/oidc/callback` | the provider's redirect target completing the SSO flow -- see [Single sign-on](#single-sign-on-oidcsso) |
 | `POST /api/auth/oidc/link` | connect the signed-in account to an SSO identity, so the same person can sign in either way -- see [Connecting your account to SSO](#single-sign-on-oidcsso) |
+| `GET /api/setup/status` | open to any signed-in user, not admin-gated (#490): what mikroview has observed of each router's setup -- CA fetches, syslog connections, decoded log-prefixes, pushed tables -- plus the setup wizard's ledger marks (#487), so a surface with a silence to explain can name the step that was skipped or forced past |
+| `POST /api/setup/mark` | admin-only: record that a setup step was skipped or forced past, from the setup wizard's footer. Writes the ledger mark and one audit entry (`setup.step_skipped` / `setup.step_forced`) |
 | `GET /api/config/problems` | admin-only: the same configuration warnings `-validate-config` reports, as the UI shows them -- see [Problem codes](#problem-codes) |
 
 Every route above `/api/auth/session`/`/register`/`/login`/`/logout` and

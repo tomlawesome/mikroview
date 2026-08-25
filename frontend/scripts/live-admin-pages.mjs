@@ -12,8 +12,9 @@
 //    component.
 //  - The three absorbed pages are gone with no alias: no rail row, and
 //    nothing that renders their old headers.
-//  - "Run setup…" launches the existing wizard page, per #548's interim
-//    call (it opens #487's modal once that ships).
+//  - "Run setup…" opens #487's setup modal over whatever page is showing,
+//    and does not navigate -- #548's interim view switch to the old
+//    wizard page retired with that page.
 //  - A viewer's rail follows the absent-never-disabled grammar, proved
 //    end to end with a real second account rather than a mocked
 //    authState.role.
@@ -66,15 +67,33 @@ check(
   'the engine room is what replaced them',
 )
 
-// --- Run setup… launches the existing wizard page, per #548's interim ---
+// --- Run setup… opens the modal, and is not a page (#487) --------------
+// The row before this one left the app on Entities, and it must still be
+// there underneath: an action does not navigate. Checked with the shell
+// visible behind the modal rather than by reading appState, because what
+// broke here before was App.svelte still mounting a retired component --
+// exactly the thing only a real browser can see.
 
 await page.click('.rail .item:has-text("Run setup")')
-await page.waitForFunction(
-  () => document.querySelector('.setup header h2')?.textContent.trim() === 'Connect a router',
-  null,
-  { timeout: 5000 },
+const wizard = page.locator('.setup-wizard')
+await wizard.waitFor({ state: 'visible', timeout: 5000 })
+check(true, 'Run setup… opens the setup modal')
+const stillCurrent = await page.$$eval('.rail .item[aria-current="page"]', (els) =>
+  els.map((e) => e.textContent.trim()),
 )
-check(true, 'Run setup… opens the existing setup wizard page')
+check(
+  stillCurrent.length === 1 && stillCurrent[0] === 'Entities',
+  `the page underneath is still the one the operator was on -- an action does not navigate (${JSON.stringify(stillCurrent)})`,
+)
+check(
+  !(await page.locator('main .setup').count()),
+  'no wizard page route survives -- the view was removed wholesale, not aliased',
+)
+
+// Explicit close, so the rest of this scenario is not driving the page
+// through a focus trap.
+await page.keyboard.press('Escape')
+await wizard.waitFor({ state: 'detached', timeout: 5000 })
 
 // --- A real viewer account, created the way an admin actually would ----
 // Through the engine room's people door now, which is where adding an

@@ -69,11 +69,14 @@ export type ConnState = 'connecting' | 'open' | 'closed'
 // 'exclusions' and 'suggestions' are deliberately not views any more:
 // #544 dropped their rail rows and #547 removed the routes themselves
 // wholesale (no aliases) once the tabs above existed to replace them.
+// 'setup' went the same way in #487: the guided wizard is a modal over
+// the shell now (see SetupWizard.svelte), not a page to navigate to, so
+// the route is gone rather than aliased or redirected -- "Run setup…"
+// opens the modal from wherever the operator already is.
 export type View =
   | 'live'
   | 'metrics'
   | 'watchlist'
-  | 'setup'
   | 'flags'
   | 'entities'
   | 'fleet'
