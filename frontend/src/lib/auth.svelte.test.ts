@@ -34,7 +34,6 @@ beforeEach(() => {
   authState.state = 'loading'
   authState.username = ''
   authState.role = ''
-  authState.showUsers = false
   authState.ssoAvailable = false
   authState.ssoError = null
   window.history.replaceState(null, '', '/')

@@ -4,8 +4,8 @@ import type { FirewallEvent } from './types'
 
 // Dimensions a custom top-talkers widget can rank by (see
 // lib/topTalkers.svelte.ts). Deliberately excludes 'device' -- that's
-// already its own fixed panel on the dashboard (Dashboard.svelte's
-// "Event volume by device"), and mapping a device id to its display name
+// already its own fixed ledger column on metrics (MetricsTotals.svelte's
+// "By device"), and mapping a device id to its display name
 // here would need appState.devices threaded through just for that one
 // case.
 export type GroupByField =

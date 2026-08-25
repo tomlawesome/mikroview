@@ -1067,10 +1067,23 @@ func main() {
 	// label for -- see naming.Resolver's doc comment and issue #107's
 	// migration/precedence design.
 	// What the guided setup wizard (#320) has actually observed of each
-	// router's setup. Hooked into the syslog accept path here rather
+	// router's setup, and the ledger decisions an operator recorded
+	// against it (#487). Hooked into the syslog accept path here rather
 	// than inside internal/syslog, which has no business knowing what a
 	// wizard is.
-	setupStore := setup.New()
+	//
+	// Only the decisions are persisted -- the observations are re-made
+	// from arriving traffic every run. Persistence itself is optional (a
+	// missing/unconfigured path just means a skipped or forced-past step
+	// stops explaining anything after a restart), but a document that
+	// exists and cannot be loaded is not that case; see mustOpenStore.
+	setupLog := logging.New("setup")
+	setupBackend, err := persistence.backendFor(bootCtx, "setup", cfg.Setup.StorePath)
+	if err != nil {
+		setupLog.Warn(err.Error())
+	}
+	setupStore, err := setup.OpenWithBackend(setupBackend)
+	mustOpenStore(setupLog, err)
 	syslog.SetOnConnection(func(host string) { setupStore.NoteSyslogConnection(host, time.Now()) })
 	names := naming.Resolver{Rules: cfg.RuleNames, Hosts: cfg.HostNames, Entities: entityStore, RouterHosts: routerState}
 
@@ -1289,6 +1302,7 @@ func main() {
 		Flags:             fs,
 		Definitions:       definitions,
 		Entities:          entityStore,
+		Naming:            names,
 		Rules:             ru,
 		Audit:             auditStore,
 		Suggest:           suggestStore,

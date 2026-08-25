@@ -1,0 +1,328 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mikroview wizard — round 2 — S II: the ledger completed</title>
+<style>
+  /* ============================================================
+     DESIGN PASS (#518) — WIZARD AS MODAL (#487) — ROUND 2
+     S II — THE LEDGER COMPLETED
+
+     Direction S accepted in round 1 ("wizard looks great") with a
+     size correction, applied there. This round carries S forward
+     verbatim at the accepted size and settles the three pieces
+     round 1 left undrawn: the bodies of steps 3 and 5, skip's
+     afterlife (via the finish screen), and the wizard on small
+     screens. Nothing already accepted is redrawn.
+     ============================================================ */
+  :root {
+    --canvas: #1b2340;   /* demo page behind the frames — navy, never the app surface */
+    --void: #06080e;
+    --glass: rgba(15, 20, 34, 0.66);
+    --glass-2: rgba(8, 11, 20, 0.88);
+    --hair: rgba(160, 185, 230, 0.13);
+    --hair-2: rgba(160, 185, 230, 0.26);
+    --ink: #e9eefb; --ink-2: #97a4c4; --ink-3: #55628a;
+    --accent: #9db8e8;
+    --lan: #3987e5; --srv: #199e70; --iot: #c98500; --guest: #d76a9e;
+    --ok: #37b364; --alarm: #ff5470;
+    --acc: #5aa7f0; --drop: #e05252; --nat: #a08df0; --now: #e8b05a;
+    --warn: #e8b05a;
+    --sans: system-ui, -apple-system, "Segoe UI", sans-serif;
+    --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  }
+  * { box-sizing: border-box; margin: 0; }
+  html { scroll-behavior: smooth; }
+  body { background: var(--canvas); color: var(--ink); font: 13.5px/1.5 var(--sans); -webkit-font-smoothing: antialiased; }
+  .concept {
+    position: sticky; top: 0; z-index: 90; display: flex; gap: 16px; align-items: baseline;
+    padding: 8px 20px; background: rgba(2,3,7,0.95); border-bottom: 1px solid var(--hair);
+    font-size: 11px; color: var(--ink-3);
+  }
+  .concept b { color: var(--accent); letter-spacing: 0.1em; }
+  .concept a { color: var(--ink-2); text-decoration: none; margin-left: 12px; }
+  .scene { min-height: 100vh; position: relative; border-bottom: 1px solid var(--hair-2); overflow: hidden; padding-bottom: 30px; }
+  .scene-tag {
+    position: sticky; top: 33px; z-index: 80; text-align: center;
+    font-size: 10.5px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--ink-3);
+    padding: 6px 0; background: rgba(2,3,7,0.85);
+  }
+
+  .row { display: flex; gap: 24px; justify-content: center; align-items: stretch; margin: 26px auto 0; width: min(1460px, 97%); }
+  .frame { position: relative; border: 1px solid var(--hair-2); border-radius: 14px; overflow: hidden; background: var(--void); flex: 1; min-height: 640px; display: flex; }
+  .frame .cap { position: absolute; left: 0; right: 0; bottom: 0; z-index: 30; font-size: 10.5px; color: var(--ink-2); padding: 9px 14px; background: rgba(2,3,7,0.92); border-top: 1px solid var(--hair); }
+  .frame .cap b { color: var(--accent); }
+  .frame.wide { flex: none; width: min(1460px, 97%); margin: 26px auto 0; display: flex; min-height: 680px; }
+  .main { flex: 1; position: relative; min-width: 0; }
+
+  /* ---- the modal, at the round-1-accepted size ---- */
+  .wiz {
+    position: absolute; z-index: 25; left: 50%; top: 50%; transform: translate(-50%, -50%);
+    width: min(940px, 94%); max-height: 92%; display: flex; flex-direction: column;
+    background: rgba(10, 14, 24, 0.97); border: 1px solid var(--hair-2); border-radius: 14px;
+    box-shadow: 0 30px 80px rgba(0,0,0,0.6);
+  }
+  .wiz .whead { display: flex; align-items: baseline; gap: 12px; padding: 18px 24px 12px; border-bottom: 1px solid var(--hair); }
+  .wiz .whead .step { font-size: 10.5px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--ink-3); font-weight: 650; }
+  .wiz .whead h3 { font-size: 17.5px; font-weight: 600; }
+  .wiz .whead .x { margin-left: auto; align-self: center; width: 24px; height: 24px; border: 1px solid var(--hair-2); border-radius: 7px; display: grid; place-items: center; color: var(--ink-2); font-size: 12px; }
+  .wbody { display: flex; min-height: 0; flex: 1; }
+  .wsteps { width: 224px; flex: none; border-right: 1px solid var(--hair); padding: 14px 0; }
+  .ws { display: flex; gap: 9px; align-items: baseline; padding: 8px 18px; font-size: 12.5px; color: var(--ink-3); border-left: 2px solid transparent; }
+  .ws .st { width: 13px; flex: none; text-align: center; font-size: 10px; }
+  .ws.done { color: var(--ink-2); } .ws.done .st { color: var(--ok); }
+  .ws.on { color: var(--ink); border-left-color: var(--accent); background: rgba(157,184,232,0.05); }
+  .ws.forced { color: var(--ink-2); } .ws.forced .st { color: var(--warn); }
+  .ws.skipped { color: var(--ink-3); } .ws.skipped .st { color: var(--ink-3); }
+  .ws .sub { display: block; font-size: 10px; color: var(--ink-3); margin-top: 1px; }
+  .ws.forced .sub { color: var(--warn); }
+  .wmain { flex: 1; padding: 20px 24px 18px; min-width: 0; overflow: hidden; }
+  .wmain .lead { font-size: 13.5px; color: var(--ink-2); }
+  .wmain .lead b { color: var(--ink); font-weight: 600; }
+  .cmd { font: 11.5px/1.65 var(--mono); color: var(--ink-2); background: rgba(4,6,11,0.9); border: 1px solid var(--hair); border-radius: 9px; padding: 12px 14px; margin-top: 12px; overflow-x: auto; white-space: pre; }
+  .cmd .cm { color: var(--ink-3); }
+  .cmd .hi { color: var(--accent); }
+  .copy { font-size: 10px; color: var(--ink-2); border: 1px solid var(--hair-2); border-radius: 6px; padding: 2px 8px; margin-top: 7px; display: inline-block; }
+  .obs { display: flex; gap: 10px; align-items: baseline; margin-top: 14px; padding: 11px 14px; border-radius: 9px; font-size: 12.5px; }
+  .obs .st { flex: none; font-size: 11px; }
+  .obs.waiting { border: 1px dashed var(--hair-2); color: var(--ink-2); }
+  .obs.waiting .st { color: var(--ink-3); animation: pulse 2s ease-in-out infinite; }
+  @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.3; } }
+  .obs.ok { border: 1px solid rgba(55,179,100,0.35); background: rgba(55,179,100,0.07); color: var(--ink-2); }
+  .obs.ok .st, .obs.ok b { color: var(--ok); }
+  .obs.quiet { border: 1px solid var(--hair); color: var(--ink-2); }
+  .obs.quiet .st { color: var(--ink-3); }
+  .obs .why { display: block; font-size: 10px; color: var(--ink-3); margin-top: 2px; }
+  .obs time { font-family: var(--mono); font-size: 10px; color: var(--ink-3); margin-left: auto; flex: none; }
+  .wfoot { display: flex; gap: 10px; align-items: center; padding: 14px 24px; border-top: 1px solid var(--hair); }
+  .btn { font-size: 12.5px; font-weight: 600; border-radius: 8px; padding: 8px 18px; border: 1px solid var(--hair-2); color: var(--ink-2); }
+  .btn.primary { background: var(--accent); color: var(--void); border-color: var(--accent); }
+  .btn.ghost { border-color: transparent; color: var(--ink-3); }
+  .wfoot .gap { margin-left: auto; }
+
+  /* finish screen: the ledger read back */
+  .fin { padding: 6px 0 0; }
+  .fin .headline { font-size: 16px; font-weight: 600; }
+  .fin .headline b { color: var(--ok); }
+  .finrow { display: flex; gap: 10px; align-items: baseline; padding: 9px 12px; border: 1px solid var(--hair); border-radius: 9px; margin-top: 8px; font-size: 12.5px; color: var(--ink-2); }
+  .finrow .st { width: 14px; flex: none; text-align: center; font-size: 11px; }
+  .finrow.done .st { color: var(--ok); }
+  .finrow.skipped { color: var(--ink-3); border-style: dashed; }
+  .finrow .receipt { margin-left: auto; font-family: var(--mono); font-size: 10.5px; color: var(--ink-3); text-align: right; }
+
+  /* ---- small screens: the sheet ---- */
+  .phone { position: relative; flex: none; width: 400px; min-height: 780px; border: 1px solid var(--hair-2); border-radius: 22px; overflow: hidden; background: var(--void); display: flex; flex-direction: column; }
+  .phone > .cap { position: static; margin-top: auto; }
+  .sheet { display: flex; flex-direction: column; flex: 1; background: rgba(10, 14, 24, 0.99); }
+  .sheet .shead { display: flex; align-items: center; gap: 10px; padding: 14px 16px 11px; border-bottom: 1px solid var(--hair); }
+  .sheet .shead .stepbtn { display: flex; align-items: baseline; gap: 6px; font-size: 10.5px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--ink-3); font-weight: 650; border: 1px solid var(--hair-2); border-radius: 7px; padding: 4px 8px; }
+  .sheet .shead .stepbtn .dis { color: var(--accent); font-size: 9px; }
+  .sheet .shead h3 { font-size: 14.5px; font-weight: 600; }
+  .sheet .shead .x { margin-left: auto; width: 24px; height: 24px; border: 1px solid var(--hair-2); border-radius: 7px; display: grid; place-items: center; color: var(--ink-2); font-size: 12px; flex: none; }
+  .sheet .sbody { flex: 1; padding: 16px; overflow: hidden; }
+  .sheet .sbody .lead { font-size: 12.5px; color: var(--ink-2); }
+  .sheet .sbody .lead b { color: var(--ink); font-weight: 600; }
+  .sheet .cmd { font-size: 10.5px; }
+  .sheet .obs { font-size: 11.5px; }
+  .sheet .sfoot { display: flex; gap: 8px; align-items: center; padding: 12px 16px; border-top: 1px solid var(--hair); }
+  .sheet .sfoot .gap { margin-left: auto; }
+  /* the ledger as its own phone view */
+  .sheet .ws { padding: 11px 16px; font-size: 13px; border-bottom: 1px solid var(--hair); border-left: none; }
+  .sheet .ws.on { border-left: none; background: rgba(157,184,232,0.05); }
+  .sheet .ws .sub { font-size: 10.5px; }
+  .sheet .lhead { font-size: 10.5px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--ink-3); font-weight: 650; padding: 14px 16px 6px; }
+
+  .notes { display: flex; gap: 14px; align-items: stretch; margin: 14px auto 0; width: min(1460px, 97%); }
+  .anno { font-size: 11px; color: var(--ink-2); background: var(--glass-2); border: 1px solid var(--hair-2); border-left: 2px solid var(--accent); border-radius: 8px; padding: 9px 12px; flex: 1; }
+  .anno b { color: var(--accent); font-weight: 650; }
+  .specnote { margin: 22px auto 8px; width: min(1460px, 97%); font-size: 11.5px; color: var(--ink-2); }
+  .specnote b { color: var(--accent); }
+
+  /* ---- light — a token swap for comparison shots only ---- */
+  body.light {
+    --canvas: #c3c9d4; --void: #eef1f7;
+    --glass: rgba(252, 253, 255, 0.72); --glass-2: rgba(244, 247, 252, 0.92);
+    --hair: rgba(28, 44, 84, 0.12); --hair-2: rgba(28, 44, 84, 0.26);
+    --ink: #17223c; --ink-2: #46536f; --ink-3: #7d89a6;
+    --accent: #3f66b0;
+    --lan: #2f77d3; --srv: #12855d; --iot: #a06a00; --guest: #c2508a;
+    --ok: #1e7f43; --alarm: #d63c5e;
+    --acc: #2f77d3; --drop: #c03636; --nat: #6a54c8; --now: #9a6b10; --warn: #9a6b10;
+  }
+  body.light .concept, body.light .scene-tag { background: rgba(244, 247, 252, 0.95); }
+  body.light .frame .cap { background: rgba(244, 247, 252, 0.95); }
+  body.light .wiz, body.light .sheet { background: rgba(252, 253, 255, 0.98); }
+  body.light .cmd { background: rgba(233, 238, 248, 0.9); }
+  @media (prefers-reduced-motion: reduce) { * { animation: none !important; } }
+</style>
+</head>
+<body>
+
+<div class="concept"><b>ROUND 2 — S II · THE LEDGER COMPLETED</b> #487 under #518 · steps 3 &amp; 5 · the finish &amp; skip's afterlife · small screens · <a href="?theme=light" style="margin-left:0">light</a> · <a href="?" style="margin-left:4px">dark</a>
+  <span style="margin-left:auto"><a href="../round-1/direction-s-wizard.html">← round 1: S</a><a href="index.html">index</a></span>
+</div>
+
+<!-- ================= SCENE 1 : STEPS 3 AND 5 ================= -->
+<section class="scene" id="s1">
+  <div class="scene-tag">Scene 1 — the two undrawn steps: the one that can only count upward, and the one that is only there when it is needed.</div>
+  <div class="row">
+    <div class="frame">
+      <div class="main">
+        <div class="wiz">
+          <div class="whead"><span class="step">Step 3 of 5</span><h3>Tag your firewall rules</h3><span class="x" role="button" aria-label="Close setup — finish later from Admin ▸ Run setup…">✕</span></div>
+          <div class="wbody">
+            <div class="wsteps">
+              <div class="ws done"><span class="st">✓</span><span>Trust the certificate<span class="sub">ca.crt fetched · 13:39</span></span></div>
+              <div class="ws done"><span class="st">✓</span><span>Send logs<span class="sub">arriving · 13:41</span></span></div>
+              <div class="ws on"><span class="st">3</span><span>Tag firewall rules</span></div>
+              <div class="ws"><span class="st">4</span><span>Push router state</span></div>
+              <div class="ws"><span class="st">5</span><span>Name your router</span></div>
+            </div>
+            <div class="wmain">
+              <p class="lead">Give each firewall rule a log prefix, and the stream can say <b>which rule spoke</b> instead of just that one did:</p>
+              <div class="cmd"><span class="cm"># one per rule you care about — e.g.</span>
+/ip firewall filter set [find comment="drop all else"] \
+    log=yes log-prefix="<span class="hi">fwd-drop</span>"</div>
+              <span class="copy">Copy</span>
+              <div class="obs ok"><span class="st">✓</span><span><b>3 rules decoding so far</b> — fwd-drop · wan-in · nat.<span class="why">This step only counts upward. Tag rules now or later, one or all — Next is always free.</span></span><time>13:42:26</time></div>
+            </div>
+          </div>
+          <div class="wfoot"><span class="btn ghost">Back</span><span class="btn ghost">Skip this step</span><span class="gap"></span><span class="btn primary">Next</span></div>
+        </div>
+      </div>
+      <div class="cap"><b>a · Step 3 — the pure observation.</b> No pass, no fail: a count that grows as tagged rules speak. The observation line is green from the first rule, and the receipt it leaves ("3 rules decoding") keeps counting after the wizard closes.</div>
+    </div>
+    <div class="frame">
+      <div class="main">
+        <div class="wiz">
+          <div class="whead"><span class="step">Step 5 of 5</span><h3>Name your router</h3><span class="x" role="button" aria-label="Close setup — finish later from Admin ▸ Run setup…">✕</span></div>
+          <div class="wbody">
+            <div class="wsteps">
+              <div class="ws done"><span class="st">✓</span><span>Trust the certificate<span class="sub">ca.crt fetched · 13:39</span></span></div>
+              <div class="ws done"><span class="st">✓</span><span>Send logs<span class="sub">arriving · 13:41</span></span></div>
+              <div class="ws done"><span class="st">✓</span><span>Tag firewall rules<span class="sub">3 rules decoding</span></span></div>
+              <div class="ws done"><span class="st">✓</span><span>Push router state<span class="sub">first push · 13:44</span></span></div>
+              <div class="ws on"><span class="st">5</span><span>Name your router</span></div>
+            </div>
+            <div class="wmain">
+              <p class="lead">The push named what it could. <b>One device is still just an address</b> — give it a name in MikroView's config file:</p>
+              <div class="cmd"><span class="cm"># mikroview config.yaml — devices:</span>
+  - address: <span class="hi">192.168.11.7</span>
+    name: <span class="hi">cam-porch</span>     <span class="cm"># seen via ARP · 13:44</span></div>
+              <span class="copy">Copy</span>
+              <div class="obs quiet"><span class="st">●</span><span>This is config-file work on the MikroView host — picked up on restart; nothing to wait for here.<span class="why">This step only exists while an unnamed device does. Every device named — no step 5.</span></span><time>13:45:02</time></div>
+            </div>
+          </div>
+          <div class="wfoot"><span class="btn ghost">Back</span><span class="btn ghost">Skip this step</span><span class="gap"></span><span class="btn primary">Finish</span></div>
+        </div>
+      </div>
+      <div class="cap"><b>b · Step 5 — conditional, informational.</b> The count of five is stable — with no unnamed device the row stays in the ledger marked "nothing to name", and only gains a body when there is work. No observation to await: the quiet line says so, and the primary is Finish, not Next.</div>
+    </div>
+  </div>
+  <div class="notes">
+    <div class="anno"><b>The anatomy survived both edge cases.</b> Step 3 is command + counting receipt; step 5 is a config stanza + a quiet line that owns "nothing to wait for". Neither invents new furniture — the ledger's grammar (do this · here · this is what arrived) stretches to cover them.</div>
+    <div class="anno"><b>Four flavours of observation line, total:</b> waiting (dashed, patient) · arrived (green, dated) · counting (green, growing) · quiet (plain, "nothing to wait for"). That is the complete set; the build needs no fifth.</div>
+  </div>
+</section>
+
+<!-- ================= SCENE 2 : THE FINISH, AND SKIP'S AFTERLIFE ================= -->
+<section class="scene" id="s2">
+  <div class="scene-tag">Scene 2 — Finish reads the ledger back: what arrived, what was skipped, and the one door that reopens it.</div>
+  <div class="frame wide">
+    <div class="main">
+      <div class="wiz">
+        <div class="whead"><span class="step">Setup</span><h3>The ledger, read back</h3><span class="x" role="button" aria-label="Close setup">✕</span></div>
+        <div class="wbody">
+          <div class="wmain">
+            <div class="fin">
+              <p class="headline"><b>Logs are flowing.</b> Four steps stand on evidence; one was skipped.</p>
+              <div class="finrow done"><span class="st">✓</span><span>Trust the certificate</span><span class="receipt">ca.crt fetched by 192.168.11.1 · 13:39</span></div>
+              <div class="finrow done"><span class="st">✓</span><span>Send logs</span><span class="receipt">TLS · 41 lines and counting · since 13:41</span></div>
+              <div class="finrow done"><span class="st">✓</span><span>Tag firewall rules</span><span class="receipt">3 rules decoding · fwd-drop · wan-in · nat</span></div>
+              <div class="finrow skipped"><span class="st">—</span><span>Push router state — skipped</span><span class="receipt">by tom · 13:44 · the stream stays address-only</span></div>
+              <div class="finrow done"><span class="st">✓</span><span>Name your router</span><span class="receipt">cam-porch named in config.yaml · 13:45</span></div>
+              <div class="obs quiet" style="margin-top: 14px"><span class="st">●</span><span>Skipped work keeps: <b>Admin ▸ Run setup…</b> reopens this ledger any time, lands on the first step still waiting, and counts whatever arrived meanwhile.</span></div>
+            </div>
+          </div>
+        </div>
+        <div class="wfoot"><span class="gap"></span><span class="btn primary">Go to the fall</span></div>
+      </div>
+    </div>
+    <div class="cap"><b>The finish is the ledger, not a fanfare.</b> Every row is a receipt or an honest gap; a skipped step states its consequence ("the stream stays address-only"), not a reproach. One primary action leads out — to the landing the nav record ratified. Closing with ✕ does exactly the same.</div>
+  </div>
+  <div class="notes">
+    <div class="anno"><b>Skip's afterlife, everywhere it shows:</b> a dashed row here, a quiet "skipped by tom · 13:44" sub-line in the step list, and — where the gap has a symptom — the affected surface's empty state naming it (round 1 scene 3's grammar, reused). Skipped and forced-past stay visually distinct: dashes are quiet, amber is loud.</div>
+    <div class="anno"><b>No terminal state.</b> "Finished" is not stored anywhere — the wizard is stateless beyond the evidence itself, so there is nothing to reset and nothing to desync. Run setup… always shows the ledger as it stands now.</div>
+  </div>
+</section>
+
+<!-- ================= SCENE 3 : SMALL SCREENS ================= -->
+<section class="scene" id="s3">
+  <div class="scene-tag">Scene 3 — small screens: the modal becomes the screen, and the step list becomes a view of its own.</div>
+  <div class="row">
+    <div class="phone">
+      <div class="sheet">
+        <div class="shead"><span class="stepbtn">Step 2 of 5 <span class="dis">▾</span></span><h3>Send logs</h3><span class="x" role="button" aria-label="Close setup — finish later from Admin ▸ Run setup…">✕</span></div>
+        <div class="sbody">
+          <p class="lead">Point the router's logging at this MikroView, TLS on:</p>
+          <div class="cmd">/system logging action add \
+    name=mikroview \
+    target=remote \
+    remote=<span class="hi">192.168.11.30</span> \
+    remote-port=<span class="hi">6514</span> tls=yes
+/system logging add \
+    topics=firewall \
+    action=mikroview</div>
+          <span class="copy">Copy</span>
+          <div class="obs waiting"><span class="st">●</span><span>Waiting for the router's first TLS hello.<span class="why">Arriving means arriving encrypted.</span></span><time>13:40</time></div>
+        </div>
+        <div class="sfoot"><span class="btn ghost">Back</span><span class="btn ghost">Skip</span><span class="gap"></span><span class="btn primary">Next</span></div>
+      </div>
+      <div class="cap"><b>a · The sheet.</b> Below the pointer-width breakpoint the modal is the screen — full-bleed, no veil, same explicit close. Header compresses to the step button · title · ✕; the footer keeps all three actions.</div>
+    </div>
+    <div class="phone">
+      <div class="sheet">
+        <div class="shead"><span class="stepbtn">Steps <span class="dis">▴</span></span><h3>Setup so far</h3><span class="x" role="button" aria-label="Close setup — finish later from Admin ▸ Run setup…">✕</span></div>
+        <div class="lhead">The ledger — tap a step to open it</div>
+        <div class="ws done"><span class="st">✓</span><span>Trust the certificate<span class="sub">ca.crt fetched · 13:39</span></span></div>
+        <div class="ws on"><span class="st">2</span><span>Send logs<span class="sub">waiting for the first TLS hello</span></span></div>
+        <div class="ws"><span class="st">3</span><span>Tag firewall rules</span></div>
+        <div class="ws"><span class="st">4</span><span>Push router state</span></div>
+        <div class="ws skipped"><span class="st">—</span><span>Name your router<span class="sub">nothing to name so far</span></span></div>
+        <div style="margin-top: auto"></div>
+      </div>
+      <div class="cap"><b>b · The step list is a view, not a column.</b> The header's step button flips between body and ledger — same receipts, same order, full width. Focus and back behave like the house half-sheet (trap, Esc/back closes the wizard from either view, explicitly).</div>
+    </div>
+    <div class="phone">
+      <div class="sheet">
+        <div class="shead"><span class="stepbtn">Setup</span><h3>The ledger, read back</h3><span class="x" role="button" aria-label="Close setup">✕</span></div>
+        <div class="sbody">
+          <div class="fin">
+            <p class="headline" style="font-size: 14.5px"><b>Logs are flowing.</b> Four on evidence; one skipped.</p>
+            <div class="finrow done"><span class="st">✓</span><span>Certificate<span class="receipt" style="display:block; margin-left:0; text-align:left">ca.crt fetched · 13:39</span></span></div>
+            <div class="finrow done"><span class="st">✓</span><span>Send logs<span class="receipt" style="display:block; margin-left:0; text-align:left">TLS · 41 lines · since 13:41</span></span></div>
+            <div class="finrow done"><span class="st">✓</span><span>Tag rules<span class="receipt" style="display:block; margin-left:0; text-align:left">3 rules decoding</span></span></div>
+            <div class="finrow skipped"><span class="st">—</span><span>Push state — skipped<span class="receipt" style="display:block; margin-left:0; text-align:left">by tom · 13:44</span></span></div>
+            <div class="finrow done"><span class="st">✓</span><span>Name your router<span class="receipt" style="display:block; margin-left:0; text-align:left">cam-porch · 13:45</span></span></div>
+          </div>
+        </div>
+        <div class="sfoot"><span class="gap"></span><span class="btn primary">Go to the fall</span></div>
+      </div>
+      <div class="cap"><b>c · The finish, phone-sized.</b> Receipts drop under their step names; nothing is cut. The one primary leads out, exactly as on the desktop.</div>
+    </div>
+  </div>
+  <div class="notes">
+    <div class="anno"><b>Auto-launch is unchanged on phones</b> — the sheet opens over the first-run shell exactly when the modal would. The bottom bar (nav record) sits behind it; closing lands on the current page with the same empty-state pointers.</div>
+    <div class="anno"><b>Commands on a phone are still commands.</b> Copy matters more here, not less — the operator reads on the phone and pastes in a RouterOS terminal elsewhere. Lines pre-broken to phone width so nothing scrolls sideways.</div>
+    <div class="anno"><b>Reduced motion &amp; keyboard:</b> the body⟷ledger flip is instant under reduced motion; on hardware keyboards Tab order is header → body → footer, and the step button is a real button ("Show setup steps" / "Show this step").</div>
+  </div>
+  <p class="specnote"><b>Carried forward, untouched:</b> everything round 1 accepted — the modal at its corrected size, the step anatomy, waiting/arrived, forced-past-and-recorded, explicit close, relaunch semantics, the Q V shell, and the day-one data story (rb5009 · 192.168.11.1 · MikroView at 192.168.11.30). Scene 2's skipped step-4 timeline is an alternate afternoon to scene 1's completed one — same clock, one choice different.</p>
+</section>
+
+<script>
+  // light/dark for comparison shots: ?theme=light — a token swap, nothing else
+  if (new URLSearchParams(location.search).get('theme') === 'light') document.body.classList.add('light');
+</script>
+</body>
+</html>

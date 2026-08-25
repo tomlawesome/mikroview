@@ -279,11 +279,12 @@ func definitionOrder(views []definitionView) {
 // detector's enabled flag and an entry's scope drift into two answers to
 // the same question. A caller wanting only detections filters on intent,
 // which is a client concern; the server's job is to have one answer.
+//
+// Open to any signed-in user (#490): the design record widens this GET
+// deliberately, ahead of the rest of the definitions surface which stays
+// admin-only -- see every write handler below and handleDefinitionsGet/
+// Schema, none of which move.
 func (s *Server) handleDefinitionsList(w http.ResponseWriter, r *http.Request) {
-	if !callerIsAdmin(r) {
-		http.Error(w, "admin role required", http.StatusForbidden)
-		return
-	}
 	rulesByDevice, evidence := s.definitionsCoverage()
 	stored := s.Definitions.List()
 	out := make([]definitionView, 0, len(stored))

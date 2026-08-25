@@ -132,6 +132,13 @@ Rules without a `log-prefix` (or without `log=yes` at all) still work —
 they show up with action "unknown" and no rule label, since MikroView has
 no way to know what RouterOS decided without one.
 
+**Log your accept and drop rules, not only bare `log` rules.** A rule
+with `action=log` writes a line and then hands the packet to the next
+rule, so it never says what happened in the end — and some flags are
+deliberately quiet about traffic your firewall blocked, which they can
+only tell from the rule that did the blocking. If the only rules you log
+are `L|` ones, those flags have nothing to go on and stay silent.
+
 ### If you're starting from a blank firewall
 
 The rules below are an *illustrative example*, not a universal script —
@@ -164,6 +171,14 @@ about:
 `N`, not `A`: a NAT rule translates an address, it does not decide
 whether the packet lives, so it gets its own action — `natted` — rather
 than borrowing a filter verdict it never made.
+
+**This is what buys you an exact answer.** RouterOS never says which NAT
+rule performed a translation, so a `log-prefix` you set is the only thing
+that can name one. Tag a rule and the "i" button beside a NAT cell shows
+you *that rule*. Leave it untagged and the same button can only show the
+table split into the rules the event could have come from and the rules
+it rules out, with the reason against each — useful, but not an answer.
+Push the NAT table too (step 4c) for either to have anything to show.
 
 Events from a NAT rule show up with `chain` set to `srcnat` or `dstnat`
 (whichever the rule belongs to). If RouterOS includes its translated-
@@ -221,7 +236,11 @@ follow from that:
   a DNS static entry, a DHCP lease, or a WireGuard peer comment.
 - **Rule and NAT lookup buttons.** Click the "i" beside a rule or NAT
   cell on an event row to see the full rule — its comment, chain,
-  action — not just the short `log-prefix` slug from step 3.
+  action — not just the short `log-prefix` slug from step 3. For a NAT
+  translation the button answers one of two different questions, and
+  says which: a rule you tagged with a `log-prefix` is named outright,
+  and an untagged one can only be narrowed down — see "NAT rules" above
+  for why tagging is worth the two minutes.
 - **Suggested watchlist entries.** Named devices and ports an existing
   rule already blocks show up as review-and-accept suggestions (Menu →
   Suggestions) instead of the watchlist starting as a blank page — see
@@ -447,7 +466,7 @@ to cover more than filter rules and DHCP/ARP:
 |---|---|---|
 | `address-list` | `/ip/firewall/address-list print as-value` | `list`, `address`, `comment`, `dynamic` |
 | `filter-rule` | `/ip/firewall/filter print as-value` | `ordinal` (loop index), `comment`, `chain`, `action`, `srcAddressList` ← `src-address-list`, `logPrefix` ← `log-prefix`, `dstPort` ← `dst-port`, `protocol`, `log`, `dstAddress` ← `dst-address`, `srcAddress` ← `src-address`, `connectionState` ← `connection-state` (a set — send it as-is), `inInterface` ← `in-interface`, `outInterface` ← `out-interface` |
-| `nat-rule` | `/ip/firewall/nat print as-value` | `ordinal` (loop index), `comment`, `chain`, `action`, `toAddresses` ← `to-addresses`, `toPorts` ← `to-ports`, `dstPort` ← `dst-port`, `protocol`, `inInterface` ← `in-interface`, `outInterface` ← `out-interface`, `srcAddress` ← `src-address`, `dstAddress` ← `dst-address`, `disabled`, `dynamic` |
+| `nat-rule` | `/ip/firewall/nat print as-value` | `ordinal` (loop index), `comment`, `chain`, `action`, `logPrefix` ← `log-prefix`, `toAddresses` ← `to-addresses`, `toPorts` ← `to-ports`, `dstPort` ← `dst-port`, `protocol`, `inInterface` ← `in-interface`, `outInterface` ← `out-interface`, `srcAddress` ← `src-address`, `dstAddress` ← `dst-address`, `disabled`, `dynamic` |
 | `dns-static` | `/ip/dns/static print as-value` | `name`, `address` |
 | `dhcp-lease` | `/ip/dhcp-server/lease print as-value` | `hostname` ← `host-name`, `mac` ← `mac-address`, `address` |
 | `arp` | `/ip/arp print as-value` | `address`, `mac` ← `mac-address` |

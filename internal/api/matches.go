@@ -29,61 +29,108 @@ func newDefinitionEntryID() string {
 	return hex.EncodeToString(b)
 }
 
-// handleMatchesQuery answers a windowed query over the
-// persisted match log for one source device -- the correlation surface
-// #243 section 3 exists for ("lookup by source IP over a time range is
-// the birdcage correlation case"). Reachable via a read-only API token
-// as well as a session (see readOnlyRoutes in auth.go), the same tier as
-// GET /api/events/flags/stats/devices: this is a read over evidence
-// already collected, not a mutation, and external correlation is the
-// point.
+// handleMatchesQuery answers a windowed query over the persisted match
+// log, in one of two modes.
 //
-// Query parameters: mac and/or ip (matchlog.Identity's own MAC-preferred
-// rule applies -- at least one is required, matchlog.ErrEmptyIdentity
-// otherwise), since/until (RFC 3339, both optional -- an empty until
-// means no upper bound), limit (optional, matchlog clamps it).
+// **By source device** (the default): the correlation surface #243
+// section 3 exists for ("lookup by source IP over a time range is the
+// birdcage correlation case"). Requires mac and/or ip --
+// matchlog.Identity's own MAC-preferred rule applies, and
+// matchlog.ErrEmptyIdentity (400) is the answer when neither is given.
+//
+// **Across every entry**, with entries=all: the most recent matches
+// anywhere in the log, newest first, which is how an operator asks
+// "what has broken recently" without already knowing which entry to ask
+// about (#586, for the Matches tab of #584). It also reaches evidence no
+// other request can: a non-inverted watchlist entry may have an empty
+// Source ("any source"), and its matches, though recorded normally, are
+// retrievable only by an identity nobody knows to ask for.
+//
+// entries=all is an explicit opt-in, and mac/ip may not accompany it,
+// for the reason matchlog.RecentQuery's own doc comment gives at length:
+// "no identity" must never quietly become "every device". A caller whose
+// mac parameter failed to arrive gets a 400, not the whole log. Passing
+// both is refused rather than resolved in one direction, on badQueryParam's
+// reasoning -- a caller who believes they filtered and did not is the
+// misreading that matters here.
+//
+// Both modes are bounded by matchlog's own clamp (0 -> 100, above 5000 ->
+// 5000); limit is passed through, never trusted. Both carry the same
+// gate: any signed-in user, and a read-only API token (see
+// readOnlyRoutes in auth.go), the same tier as
+// /api/events/flags/stats/devices. That is not a widening by accident --
+// it is stated on this route's row in the authorization matrix. This is a
+// read over evidence already collected, not a mutation, and a token that
+// can already read the whole live event feed learns nothing new in kind
+// from a bounded page of matches.
+//
+// Query parameters: entries (optional, "all" is the only accepted
+// value), mac and/or ip (required unless entries=all, refused with it),
+// since/until (RFC 3339, both optional -- an empty until means no upper
+// bound), limit (optional, matchlog clamps it).
 func (s *Server) handleMatchesQuery(w http.ResponseWriter, r *http.Request) {
 	if s.MatchLog == nil {
 		http.Error(w, "the match log is not available", http.StatusServiceUnavailable)
 		return
 	}
 
-	q := matchlog.Query{
-		Source: matchlog.Identity{MAC: r.URL.Query().Get("mac"), IP: r.URL.Query().Get("ip")},
-	}
-	if v := r.URL.Query().Get("since"); v != "" {
+	qs := r.URL.Query()
+	var since, until time.Time
+	if v := qs.Get("since"); v != "" {
 		t, err := time.Parse(time.RFC3339, v)
 		if err != nil {
 			http.Error(w, "since must be RFC 3339", http.StatusBadRequest)
 			return
 		}
-		q.Since = t
+		since = t
 	}
-	if v := r.URL.Query().Get("until"); v != "" {
+	if v := qs.Get("until"); v != "" {
 		t, err := time.Parse(time.RFC3339, v)
 		if err != nil {
 			http.Error(w, "until must be RFC 3339", http.StatusBadRequest)
 			return
 		}
-		q.Until = t
+		until = t
 	}
-	if v := r.URL.Query().Get("limit"); v != "" {
+	var limit int
+	if v := qs.Get("limit"); v != "" {
 		n, err := strconv.Atoi(v)
 		if err != nil {
 			http.Error(w, "limit must be an integer", http.StatusBadRequest)
 			return
 		}
-		q.Limit = n
+		limit = n
 	}
 
+	mac, ip := qs.Get("mac"), qs.Get("ip")
 	results := []matchlog.Record{}
-	err := s.MatchLog.Query(r.Context(), q, func(rec matchlog.Record) bool {
+	yield := func(rec matchlog.Record) bool {
 		results = append(results, rec)
 		return true
-	})
+	}
+
+	var err error
+	switch entries := qs.Get("entries"); entries {
+	case "":
+		err = s.MatchLog.Query(r.Context(), matchlog.Query{
+			Source: matchlog.Identity{MAC: mac, IP: ip},
+			Since:  since, Until: until, Limit: limit,
+		}, yield)
+	case "all":
+		if mac != "" || ip != "" {
+			http.Error(w, "entries=all queries every entry, so mac and ip must not be set -- drop entries=all to query one device", http.StatusBadRequest)
+			return
+		}
+		err = s.MatchLog.Recent(r.Context(), matchlog.RecentQuery{
+			Since: since, Until: until, Limit: limit,
+		}, yield)
+	default:
+		http.Error(w, `entries must be "all", or absent to query one device by mac/ip`, http.StatusBadRequest)
+		return
+	}
 	if err != nil {
 		if errors.Is(err, matchlog.ErrEmptyIdentity) {
-			http.Error(w, "mac or ip query parameter is required", http.StatusBadRequest)
+			http.Error(w, "mac or ip query parameter is required (or entries=all for every entry)", http.StatusBadRequest)
 			return
 		}
 		apiLog.Warn("match query failed: " + err.Error())
