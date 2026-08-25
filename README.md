@@ -2,6 +2,11 @@
 > **Development disclosure:** MikroView was coded by Claude under human
 > direction.
 
+> [!WARNING]
+> **Under heavy development:** MikroView is pre-1.0 and still changing
+> shape. Not every feature described below is finished, and some do not
+> yet work as intended.
+
 <p align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="brand/logo-lockup-dark.svg">
