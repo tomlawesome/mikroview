@@ -18,11 +18,13 @@
   // correlation), entry management itself is administrative
   // configuration about the network, the same tier as Entities/Audit/
   // Exclusions.
-  import { onMount } from 'svelte'
+  import { onMount, tick } from 'svelte'
   import { watchlistState } from '../lib/watchlist.svelte'
   import { suggestState } from '../lib/suggest.svelte'
+  import { matchesState } from '../lib/matches.svelte'
   import TabList from './TabList.svelte'
   import Suggestions from './Suggestions.svelte'
+  import MatchesTab from './MatchesTab.svelte'
   import type { WatchlistEntry, WatchlistMatch, WatchlistPermittedDest } from '../lib/types'
 
   onMount(() => {
@@ -30,29 +32,56 @@
     suggestState.refresh()
   })
 
-  // Suggestions is a tab of Watchlist (#547, per the ratified navigation
-  // record). No admin-gating needed on the tab itself -- Watchlist only
-  // ever mounts for an admin in the first place (see navGroups.ts's
-  // `admin: true` on the Watchlist row), and /api/suggestions* agrees
-  // server-side (internal/api/authz_matrix_test.go).
+  // Suggestions is a tab of Watchlist (#547) and Matches is a third
+  // (#584), both per the ratified navigation record. No admin-gating
+  // needed on the tabs themselves -- Watchlist only ever mounts for an
+  // admin in the first place (see navGroups.ts's `admin: true` on the
+  // Watchlist row), and /api/suggestions* agrees server-side
+  // (internal/api/authz_matrix_test.go).
+  //
+  // Matches sits between the two: it is the evidence the entries beside
+  // it produced, where Suggestions is a separate feed of entries that do
+  // not exist yet.
   const tabs = [
     { id: 'watchlist', label: 'Watchlist' },
+    { id: 'matches', label: 'Matches' },
     { id: 'suggestions', label: 'Suggestions' },
   ]
-  let activeTab = $state<'watchlist' | 'suggestions'>('watchlist')
+  type TabId = 'watchlist' | 'matches' | 'suggestions'
+  let activeTab = $state<TabId>('watchlist')
 
   function selectTab(id: string) {
-    activeTab = id as 'watchlist' | 'suggestions'
+    activeTab = id as TabId
     // Before #547, Watchlist and Suggestions were two separate views
     // that remounted -- and so refetched -- every time you navigated
-    // between them. Both now stay mounted (just hidden) once you switch
-    // away, which loses that free refetch-on-arrival -- most visibly for
-    // accepting a suggestion, which creates a real watchlist entry that
-    // the Watchlist tab would otherwise keep showing its pre-accept
-    // snapshot without. Refreshed here instead, on every switch, so
-    // either tab is never more than one switch stale.
+    // between them. All three now stay mounted (just hidden) once you
+    // switch away, which loses that free refetch-on-arrival -- most
+    // visibly for accepting a suggestion, which creates a real watchlist
+    // entry that the Watchlist tab would otherwise keep showing its
+    // pre-accept snapshot without. Refreshed here instead, on every
+    // switch, so no tab is ever more than one switch stale.
+    //
+    // For Matches that also means arriving always shows the newest 100
+    // rather than wherever a previous visit's "load older" had walked
+    // back to -- the tab's promise is the recent list, and a stale deep
+    // page is a worse thing to land on than a fresh shallow one.
     if (activeTab === 'watchlist') watchlistState.refresh()
+    else if (activeTab === 'matches') matchesState.load()
     else suggestState.refresh()
+  }
+
+  // Following a match's entry name back to the entry itself (#584): the
+  // Watchlist tab, that entry expanded, scrolled to. The scroll is
+  // deliberate -- the entry list can be long, and switching tabs to a
+  // row that is expanded somewhere off-screen looks like nothing
+  // happened.
+  async function openEntry(entryId: string) {
+    selectTab('watchlist')
+    expandedId = entryId
+    await tick()
+    // Optional-call rather than assumed: jsdom has no layout, so
+    // scrollIntoView is not implemented there.
+    document.getElementById(`entry-${entryId}`)?.scrollIntoView?.({ block: 'center' })
   }
 
   // --- Add/edit form -----------------------------------------------
@@ -319,7 +348,9 @@
     {:else}
       <ul class="list">
         {#each watchlistState.entries as e (e.id)}
-          <li class="card">
+          <!-- The id is the target a match row's entry name scrolls to
+               (openEntry, #584), not decoration. -->
+          <li class="card" id="entry-{e.id}">
             <button class="card-main" onclick={() => toggleExpand(e.id)}>
               <span class="name">{e.name || '(unnamed)'}</span>
               {#if e.invert}
@@ -439,7 +470,18 @@
   </div>
 
   <div
-    class="suggestions-panel"
+    class="tab-panel"
+    role="tabpanel"
+    id="panel-matches"
+    aria-labelledby="tab-matches"
+    tabindex="0"
+    hidden={activeTab !== 'matches'}
+  >
+    <MatchesTab entries={watchlistState.entries} coverage={watchlistState.coverage} onopenentry={openEntry} />
+  </div>
+
+  <div
+    class="tab-panel"
     role="tabpanel"
     id="panel-suggestions"
     aria-labelledby="tab-suggestions"
@@ -458,11 +500,31 @@
     flex-direction: column;
   }
 
-  .suggestions-panel {
+  /* Every non-Watchlist panel is a full-height column holding one
+     component -- one rule rather than one class per tab. */
+  .tab-panel {
     flex: 1;
     min-height: 0;
     display: flex;
     flex-direction: column;
+  }
+
+  /* The `hidden` attribute on each panel is not enough on its own. Its
+     `display: none` comes from the UA stylesheet, and *any* author
+     declaration outranks a UA one whatever its specificity -- so the
+     `display: flex` above (and on .page below) wins, and a "hidden"
+     panel renders anyway, stacked under the selected one. Confirmed in
+     Chromium, not deduced: a hidden element carrying a class with
+     `display: flex` computes to `flex` and Playwright reports it
+     visible.
+
+     Present since the tabs landed (#547) and invisible to the tests,
+     which assert on the `hidden` attribute rather than on what a browser
+     does with it. Fixed here rather than left, because a third panel
+     makes it three surfaces deep instead of two. */
+  .page[hidden],
+  .tab-panel[hidden] {
+    display: none;
   }
 
   .page {
