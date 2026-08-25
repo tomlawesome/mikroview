@@ -18,6 +18,38 @@ rewritten.
 
 ### Added
 
+- **The NAT popup answers one of two different questions, and says which**
+  (#445, design ratified 2026-08-22). RouterOS never states which NAT
+  rule performed a translation -- but neither does it state which filter
+  rule dropped a packet, and filter events resolve anyway, through the
+  `log-prefix` the operator chose to put on the rule. NAT rules take the
+  same tag, so tag one (`log=yes log-prefix="N|port-fwd|"`) and the "i"
+  beside a NAT cell now names **that rule**: header "NAT rule --
+  logged", a `logged` chip, the rule's ordinal, chain, action and
+  comment, and the same shared-prefix honesty filter rules already get
+  (two rules with one prefix show as two rules, never a pick). Leave it
+  untagged and the popup cannot name anything, so it does not pretend
+  to: header "NAT table -- *device*", a `not logged` chip, and the
+  pushed table split into **"Could have performed it -- 3 of 14"** and
+  **"Ruled out by this event -- 11"**, every exclusion carrying its
+  reason in one clause (`ruled out: protocol udp ≠ tcp`,
+  `ruled out: chain dstnat, event is srcnat`, `ruled out: disabled`).
+  The ruled-out half is dimmed but fully readable and stays in the
+  accessibility tree, because reading it is how you audit the split
+  rather than trust it. A rule is excluded only by positive
+  contradiction; anything mikroview cannot evaluate -- an address-list
+  name, say -- keeps its rule and is shown as `not evaluable here`.
+  There are no scores, no ranking and no "best match": RouterOS's own
+  order is preserved because first-match-wins is real evidence, and even
+  a sole survivor reads "1 of 14", never "this rule did it". The two
+  modes never share a rendering, and an untagged translation never gets
+  inline rule decoration on the row. Opening the popup holds the stream
+  while it is open, so the row it is anchored to does not slide away
+  under newest-at-top. Mobile gets the same thing as a section of the
+  event sheet, in the same words. A push script predating the NAT rule
+  anatomy shows the whole table and says so. Push your NAT table
+  (`docs/routeros-setup.md`, step 4c) for any of it to have data to
+  work with; nothing here contacts the router.
 - **The setup wizard is a modal now, and it is a claim ledger** (#487).
   Setup opens over whatever you were already looking at instead of
   taking you to a page, and it auto-opens once on a first admin sign-in

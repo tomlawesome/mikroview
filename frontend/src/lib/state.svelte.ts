@@ -154,6 +154,35 @@ class AppState {
   pendingCount = $state(0)
   autoscroll = $state(true)
 
+  // Open row-anchored surfaces. Newest-at-top (#363) pushes rows *down*
+  // as events arrive, so a popover anchored to a row it is about would
+  // slide away from under itself; the decision taken once for #413,
+  // #439's lookup popovers and #445's NAT popup is that opening any of
+  // them holds the stream until it closes.
+  //
+  // A count rather than a flag because these surfaces are not
+  // necessarily exclusive, and a boolean would let the first one to
+  // close release a hold the second still needs.
+  //
+  // Deliberately separate from `autoscroll`: this is a transient hold,
+  // not a change to the operator's Autoscroll preference, so the toggle's
+  // own state and its button are untouched and the preference is exactly
+  // as they left it when the surface closes. Where the view is already
+  // frozen the hold composes as a no-op -- LiveTable freezes on either.
+  streamHolds = $state(0)
+
+  get streamHeld(): boolean {
+    return this.streamHolds > 0
+  }
+
+  holdStream() {
+    this.streamHolds++
+  }
+
+  releaseStream() {
+    if (this.streamHolds > 0) this.streamHolds--
+  }
+
   // The raw event pool captured the moment Autoscroll is switched off
   // (issue #232). Null means "not frozen"; cleared when Autoscroll goes
   // back on.
