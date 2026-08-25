@@ -17,6 +17,7 @@
   import { watchlistState } from '../lib/watchlist.svelte'
   import { railPref, describe, ringReason, spokenLabel, type RailDensity } from '../lib/rail.svelte'
   import { visibleGroups, type NavItem } from '../lib/navGroups'
+  import { wizardState } from '../lib/wizard.svelte'
   import AboutOverlay from './AboutOverlay.svelte'
   import RailIcon from './RailIcon.svelte'
 
@@ -69,8 +70,15 @@
     return spokenLabel(item.label, bits)
   }
 
+  // A row is either a page or an action (#487's "Run setup…"): the
+  // action opens the setup modal over whatever is already on screen
+  // rather than navigating anywhere.
   function activate(item: Item) {
-    appState.view = item.view
+    if (item.action === 'run-setup') {
+      wizardState.launch()
+      return
+    }
+    if (item.view) appState.view = item.view
   }
 
   function isCurrent(item: Item): boolean {
