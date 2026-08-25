@@ -8,6 +8,12 @@
   import PortInvestigateButton from './PortInvestigateButton.svelte'
   import RouterRuleButton from './RouterRuleButton.svelte'
   import CopyButton from './CopyButton.svelte'
+  import EditNameButton from './EditNameButton.svelte'
+  // Asked per pencil below rather than left to EditNameButton's own
+  // guard: a viewer's row would otherwise still build five components
+  // that render nothing, and the live view renders up to
+  // MAX_RENDERED_ROWS of these rows.
+  import { nameEditorState } from '../lib/nameEditor.svelte'
   import { lookupPort } from '../lib/commonPorts'
 
   let {
@@ -218,6 +224,9 @@
         {event.srcHostName || event.srcIp}
       </span>
       <CopyButton value={event.srcIp} label="source IP" />
+      {#if nameEditorState.available}
+        <EditNameButton type="host" value={event.srcIp} device={event.deviceId} label={event.srcIp} />
+      {/if}
       {#if isPublicIp(event.srcIp)}
         <IpInvestigateButton ip={event.srcIp} />
       {/if}
@@ -240,6 +249,9 @@
         {event.srcPortName || event.srcPort}
       </span>
       <CopyButton value={String(event.srcPort)} label="source port" />
+      {#if nameEditorState.available}
+        <EditNameButton type="port" value={String(event.srcPort)} label="port {event.srcPort}" />
+      {/if}
       {#if lookupPort(event.srcPort)}
         <PortInvestigateButton port={event.srcPort} />
       {/if}
@@ -269,6 +281,9 @@
         {event.dstHostName || event.dstIp}
       </span>
       <CopyButton value={event.dstIp} label="destination IP" />
+      {#if nameEditorState.available}
+        <EditNameButton type="host" value={event.dstIp} device={event.deviceId} label={event.dstIp} />
+      {/if}
       {#if isPublicIp(event.dstIp)}
         <IpInvestigateButton ip={event.dstIp} />
       {/if}
@@ -291,6 +306,9 @@
         {event.dstPortName || event.dstPort}
       </span>
       <CopyButton value={String(event.dstPort)} label="destination port" />
+      {#if nameEditorState.available}
+        <EditNameButton type="port" value={String(event.dstPort)} label="port {event.dstPort}" />
+      {/if}
       {#if lookupPort(event.dstPort)}
         <PortInvestigateButton port={event.dstPort} />
       {/if}
@@ -376,6 +394,9 @@
         {event.ruleName || event.ruleLabel}
       </span>
       <CopyButton value={event.ruleLabel} label="rule label" />
+      {#if nameEditorState.available}
+        <EditNameButton type="rule" value={event.ruleLabel} label={event.ruleLabel} />
+      {/if}
       <RouterRuleButton mode="rule" device={event.deviceId} ruleLabel={event.ruleLabel} />
     </span>
   {:else}
@@ -733,17 +754,25 @@
      each `.cell`) to match hovering *anywhere* in the row revealing
      every token's glyph at once, not just the one directly under the
      pointer. */
-  :global(.copy-btn) {
+  /* #413's pencil rides in the same reveal, immediately after the copy
+     glyph -- the slot #439 reserved for it. Listed alongside rather
+     than given rules of its own so the two can never drift into
+     revealing at different moments. */
+  :global(.copy-btn),
+  :global(.edit-btn) {
     opacity: 0;
   }
 
   .row:hover :global(.copy-btn),
-  .row:focus-within :global(.copy-btn) {
+  .row:focus-within :global(.copy-btn),
+  .row:hover :global(.edit-btn),
+  .row:focus-within :global(.edit-btn) {
     opacity: 1;
   }
 
   @media (prefers-reduced-motion: no-preference) {
-    :global(.copy-btn) {
+    :global(.copy-btn),
+    :global(.edit-btn) {
       transition: opacity 0.12s ease;
     }
   }

@@ -59,6 +59,89 @@ type RouterHostLookup interface {
 	// the address, so one router's pushed names can never be applied to
 	// another router's traffic -- see routerstate.Store.HostName.
 	HostName(device, ip string) string
+	// HostNameSource is HostName plus which pushed table supplied the
+	// name (routerstate's HostSource* constants), or ("", "") for a
+	// miss. Only HostProvenance uses it -- the per-event hot path stays
+	// on HostName -- but it is on the same interface rather than a
+	// second optional one because a router-host lookup that cannot say
+	// where a name came from cannot answer the question #413 asks of it.
+	HostNameSource(device, ip string) (name, source string)
+}
+
+// Source values reported by Provenance.Source: which layer supplied the
+// name that is actually displayed.
+//
+// The router-* values all mean "RouterOS won" (see Resolver.Host), and
+// they are the ones #413's inline editor refuses to write under: a
+// mikroview-side label saved for such a host is stored faithfully and
+// then never shown, which is precisely the edit-with-no-effect that
+// issue exists to prevent. They name the specific pushed table rather
+// than just saying "the router", because an operator sent to go and fix
+// the name needs to know whether to look at dns-static, a DHCP lease or
+// a WireGuard peer comment.
+const (
+	// SourceNone: nothing names this key; the raw value is what shows.
+	SourceNone = "none"
+	// SourceEntity: an admin's own label, set here or in the Entities
+	// panel -- the only source #413's editor writes.
+	SourceEntity = "entity"
+	// SourceConfig: a config.yaml ruleNames/hostNames alias. Editable in
+	// the sense that an entity out-ranks it (see Rule/Host), so saving a
+	// label here does take effect.
+	SourceConfig = "config"
+
+	SourceRouterDNSStatic     = "router-dns-static"
+	SourceRouterDHCPLease     = "router-dhcp-lease"
+	SourceRouterWireguardPeer = "router-wireguard-peer"
+	// SourceRouterUnknown covers a router-supplied name whose table the
+	// lookup did not name. Nothing produces it today; it exists so a
+	// future identity-carrying kind cannot silently arrive looking like
+	// an editable name.
+	SourceRouterUnknown = "router"
+)
+
+// Provenance is where a displayed name came from, for one key.
+//
+// Name is what is displayed (empty when nothing names the key) and
+// Source says which layer produced it. Label is separate and is always
+// the operator's own entity label for the key, whether or not it is the
+// one that won -- so a caller can show "you already labelled this
+// 'nas', but the router's 'android-dhcp' is what everyone sees" rather
+// than having to choose between the two facts.
+type Provenance struct {
+	Name   string
+	Source string
+	Label  string
+}
+
+// RouterWins reports whether the displayed name came from RouterOS, and
+// therefore whether saving a mikroview-side label for this key would
+// have no visible effect. This is the gate #413's editor is built on:
+// true means show the operator where the name really comes from instead
+// of a writable field.
+func (p Provenance) RouterWins() bool {
+	switch p.Source {
+	case SourceRouterDNSStatic, SourceRouterDHCPLease, SourceRouterWireguardPeer, SourceRouterUnknown:
+		return true
+	}
+	return false
+}
+
+// routerSource maps routerstate's own source constant onto the
+// Source* value for it. Kept as a translation rather than sharing one
+// set of constants so internal/naming does not import
+// internal/routerstate -- the RouterHostLookup interface exists
+// precisely to keep that dependency out of the hot path.
+func routerSource(s string) string {
+	switch s {
+	case "dns-static":
+		return SourceRouterDNSStatic
+	case "dhcp-lease":
+		return SourceRouterDHCPLease
+	case "wireguard-peer":
+		return SourceRouterWireguardPeer
+	}
+	return SourceRouterUnknown
 }
 
 // Rule returns the friendly name for a raw rule label -- an
@@ -113,4 +196,74 @@ func (r Resolver) Port(port int) string {
 		return ""
 	}
 	return r.Entities.Label(entities.TypePort, strconv.Itoa(port))
+}
+
+// HostProvenance is Host with the reason attached: the same precedence,
+// the same answer, plus which layer produced it and what the operator's
+// own label for ip is.
+//
+// Deliberately a second method rather than a wider Host: Host is called
+// once per address per event on the ingest path, and this one is called
+// when a human opens an editor.
+func (r Resolver) HostProvenance(device, ip string) Provenance {
+	var p Provenance
+	if r.Entities != nil {
+		p.Label = r.Entities.Label(entities.TypeHost, ip)
+	}
+
+	if r.RouterHosts != nil {
+		if name, src := r.RouterHosts.HostNameSource(device, ip); name != "" {
+			p.Name, p.Source = name, routerSource(src)
+			return p
+		}
+	}
+	if p.Label != "" {
+		p.Name, p.Source = p.Label, SourceEntity
+		return p
+	}
+	if v := r.Hosts[ip]; v != "" {
+		p.Name, p.Source = v, SourceConfig
+		return p
+	}
+	p.Source = SourceNone
+	return p
+}
+
+// RuleProvenance is Rule with the reason attached. No router layer
+// exists for rule labels -- a pushed filter table carries comments and
+// log-prefixes, never a display alias for one -- so an entity label
+// always wins here and RouterWins is never true.
+func (r Resolver) RuleProvenance(label string) Provenance {
+	var p Provenance
+	if r.Entities != nil {
+		p.Label = r.Entities.Label(entities.TypeRule, label)
+	}
+	if p.Label != "" {
+		p.Name, p.Source = p.Label, SourceEntity
+		return p
+	}
+	if v := r.Rules[label]; v != "" {
+		p.Name, p.Source = v, SourceConfig
+		return p
+	}
+	p.Source = SourceNone
+	return p
+}
+
+// PortProvenance is Port with the reason attached. Ports have no
+// config.yaml fallback and no router layer (see Port), so the only two
+// answers are an entity label or nothing -- the well-known service name
+// a UI shows for an unlabelled port is the frontend's own table
+// (frontend/src/lib/commonPorts.ts), not something this resolver has.
+func (r Resolver) PortProvenance(port int) Provenance {
+	var p Provenance
+	if port > 0 && r.Entities != nil {
+		p.Label = r.Entities.Label(entities.TypePort, strconv.Itoa(port))
+	}
+	if p.Label != "" {
+		p.Name, p.Source = p.Label, SourceEntity
+		return p
+	}
+	p.Source = SourceNone
+	return p
 }

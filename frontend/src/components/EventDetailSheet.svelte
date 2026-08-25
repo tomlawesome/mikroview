@@ -19,6 +19,12 @@
   // CopyButton.svelte's own doc comment for why that's the default
   // rather than something this file has to turn back on.
   import CopyButton from './CopyButton.svelte'
+  // #413: mobile has no hover, so the pencil sits beside each copy
+  // button here as a permanently visible action (admins only -- see
+  // EditNameButton). It opens the same single editor the desktop
+  // pencil does; this sheet is stationary, so nothing anchored to it
+  // moves while it is open.
+  import EditNameButton from './EditNameButton.svelte'
 
   let { event, deviceName, onClose }: { event: FirewallEvent; deviceName: string; onClose: () => void } =
     $props()
@@ -105,6 +111,7 @@
             {event.srcHostName || event.srcIp}
           </button>
           <CopyButton value={event.srcIp} label="source IP" />
+          <EditNameButton type="host" value={event.srcIp} device={event.deviceId} label={event.srcIp} />
           {#if isPublicIp(event.srcIp)}<IpInvestigateButton ip={event.srcIp} />{/if}
         </span>
       </div>
@@ -117,6 +124,7 @@
             {event.srcPortName || event.srcPort}
           </button>
           <CopyButton value={String(event.srcPort)} label="source port" />
+          <EditNameButton type="port" value={String(event.srcPort)} label="port {event.srcPort}" />
           {#if lookupPort(event.srcPort)}<PortInvestigateButton port={event.srcPort} />{/if}
         </span>
       </div>
@@ -129,6 +137,7 @@
             {event.dstHostName || event.dstIp}
           </button>
           <CopyButton value={event.dstIp} label="destination IP" />
+          <EditNameButton type="host" value={event.dstIp} device={event.deviceId} label={event.dstIp} />
           {#if isPublicIp(event.dstIp)}<IpInvestigateButton ip={event.dstIp} />{/if}
         </span>
       </div>
@@ -141,6 +150,7 @@
             {event.dstPortName || event.dstPort}
           </button>
           <CopyButton value={String(event.dstPort)} label="destination port" />
+          <EditNameButton type="port" value={String(event.dstPort)} label="port {event.dstPort}" />
           {#if lookupPort(event.dstPort)}<PortInvestigateButton port={event.dstPort} />{/if}
         </span>
       </div>
@@ -195,6 +205,7 @@
             {event.ruleName || event.ruleLabel}
           </button>
           <CopyButton value={event.ruleLabel} label="rule label" />
+          <EditNameButton type="rule" value={event.ruleLabel} label={event.ruleLabel} />
         </span>
       </div>
     {/if}

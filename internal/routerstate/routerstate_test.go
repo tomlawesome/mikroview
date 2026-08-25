@@ -392,3 +392,46 @@ func TestDevicesAreIsolated(t *testing.T) {
 }
 
 func itoa(n int) string { return strconv.Itoa(n) }
+
+// TestHostNameSourceNamesThePushedTable is #413's requirement at the
+// store: an editor that must send an operator to the router to change a
+// name has to say which table holds it. "The router named this" leaves
+// them hunting through dns-static, the lease list and the peer comments
+// in turn.
+//
+// The same fixture as TestHostNamePrecedence above, deliberately: the
+// source must follow the name that actually won, not the last table
+// that mentioned the address.
+func TestHostNameSourceNamesThePushedTable(t *testing.T) {
+	s := New()
+	apply(t, s, "router-1", `{"kind":"dhcp-lease","page":1,"pages":1,"records":[`+
+		`{"hostname":"self-reported","mac":"aa:bb:cc:dd:ee:01","address":"192.168.1.20"},`+
+		`{"hostname":"laptop","mac":"aa:bb:cc:dd:ee:02","address":"192.168.1.50"}]}`)
+	apply(t, s, "router-1", `{"kind":"dns-static","page":1,"pages":1,"records":[{"name":"nas.lan","address":"192.168.1.20"}]}`)
+	apply(t, s, "router-1", `{"kind":"wireguard-peer","page":1,"pages":1,"records":[`+
+		`{"publicKey":"abc","allowedAddress":"10.10.0.0/24","endpointAddress":"","comment":"branch office"}]}`)
+
+	cases := []struct {
+		ip     string
+		name   string
+		source string
+	}{
+		{"192.168.1.20", "nas.lan", HostSourceDNSStatic},
+		{"192.168.1.50", "laptop", HostSourceDHCPLease},
+		{"10.10.0.9", "branch office", HostSourceWireguardPeer},
+		{"192.168.1.99", "", ""},
+	}
+	for _, tc := range cases {
+		name, source := s.HostNameSource("router-1", tc.ip)
+		if name != tc.name || source != tc.source {
+			t.Errorf("HostNameSource(%q) = (%q, %q), want (%q, %q)", tc.ip, name, source, tc.name, tc.source)
+		}
+	}
+
+	// Scoping is the property the whole accessor was rewritten for
+	// (#285/#283/#284) -- a new entry point onto the same index must
+	// not reopen it.
+	if name, source := s.HostNameSource("router-victim", "192.168.1.20"); name != "" || source != "" {
+		t.Errorf("HostNameSource(router-victim, ...) = (%q, %q) -- another device's pushed name leaked", name, source)
+	}
+}
