@@ -132,12 +132,12 @@ async function renderWatchlist(entries: WatchlistEntry[], coverage: Record<strin
   await settle()
 }
 
-// Two rounds of microtasks, then a flush: enough for a fetch that
-// resolves immediately and the effect that renders its result.
+// Several rounds of microtasks, then a flush. More than looks necessary
+// on purpose: opening Matches chains two fetches (entries, then the
+// matches that are named from them), so the rendered result is a few
+// hops further down the queue than a single await would reach.
 async function settle() {
-  await Promise.resolve()
-  await Promise.resolve()
-  await Promise.resolve()
+  for (let i = 0; i < 8; i++) await Promise.resolve()
   flushSync()
 }
 
@@ -228,6 +228,23 @@ describe('Watchlist Matches tab (#584)', () => {
     const panel = document.getElementById('panel-matches')
     expect(panel?.textContent).toContain('There is nothing to match yet.')
     expect(panel?.textContent).not.toContain('Nothing has broken.')
+  })
+
+  it('refreshes the entries on arrival, so a live entry is never named "(entry removed)"', async () => {
+    // The failure this pins down was found by live-matches-tab.mjs, not
+    // here: the page stays mounted, an entry created after it mounted is
+    // absent from the list the rows resolve names from, and nothing
+    // refreshed it until App.svelte's 60-second coverage interval. Every
+    // row said "(entry removed)" about an entry that existed.
+    await renderWatchlist([])
+    vi.mocked(fetchRecentMatches).mockResolvedValue([recordFor('m1', 'e1')])
+    vi.mocked(fetchWatchlistEntries).mockResolvedValue({ entries: [entry('e1', 'SSH watch')], coverage: {} })
+
+    await openMatches()
+
+    const panel = document.getElementById('panel-matches')
+    expect(panel?.textContent).toContain('SSH watch')
+    expect(panel?.textContent).not.toContain('(entry removed)')
   })
 
   it('offers "load older" only while older matches may remain', async () => {

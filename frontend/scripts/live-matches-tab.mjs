@@ -55,7 +55,12 @@ async function visible(locator, timeout = 20000) {
   try {
     await locator.waitFor({ state: 'visible', timeout })
     return true
-  } catch {
+  } catch (e) {
+    // The reason, not just the verdict: a bare "never became visible"
+    // is the least useful half of the answer (live-browser.mjs's
+    // waitForFlag makes the same argument). This is what told apart "the
+    // row is missing" from "the row is there under a different name".
+    console.log(`    (waited in vain: ${String(e).split('\n')[0]})`)
     return false
   }
 }
@@ -127,7 +132,15 @@ const portEntry = await api('POST', '/api/definitions', {
   expectation: { ports: [WATCHED_PORT] },
 })
 check(portEntry.status === 201, `an unscoped watched-port entry is created (${portEntry.status})`)
-check(!portEntry.body?.expectation?.source, 'that entry really is unscoped -- no match of it is reachable by mac or ip')
+// An unscoped entry comes back with `source: {}`, not with the key
+// absent -- so this reads the scope's own fields. Asserting the key was
+// missing tested the wire format, not the property that matters, and
+// passed nothing but a truthy empty object.
+const portScope = portEntry.body?.expectation?.source
+check(
+  !portScope?.mac && !portScope?.ip,
+  `that entry really is unscoped -- no match of it is reachable by mac or ip (scope ${JSON.stringify(portScope)})`,
+)
 
 const cameraEntry = await api('POST', '/api/definitions', {
   name: CAMERA_ENTRY,
