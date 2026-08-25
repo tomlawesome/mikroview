@@ -26,10 +26,19 @@ import { session, check, done, feedRaw, feedSyslog } from './live-browser.mjs'
 
 const URL_BASE = process.env.MV_URL
 
-// The unlogged translation's source, distinctive enough to filter the
-// live view down to this scenario's own row on an instance other
-// scenarios have already pushed hundreds of events through.
-const UNLOGGED_SRC = '192.0.2.77'
+// Every address below is unique to this scenario, checked against the
+// other live-*.mjs files rather than picked for looking plausible. They
+// all run against one shared instance, so an address two scenarios both
+// use is a coupling: this one first used 198.51.100.9, which is the
+// port-scan target live-routeros-ingest.mjs waits for a flag on, so a
+// failure there could no longer be told apart from the known #450 flag
+// race. Keep them unique, and keep the translated addresses outside
+// 203.0.113.0-249, which is the synthetic feeder's own source range.
+//
+// UNLOGGED_SRC also has to be distinctive enough to filter the live view
+// down to this scenario's own row on an instance other scenarios have
+// already pushed hundreds of events through.
+const UNLOGGED_SRC = '192.0.2.145'
 const LOGGED_SLUG = 'mv445-nat'
 const HOLD_SLUG = 'mv445-hold'
 
@@ -101,11 +110,11 @@ async function closePopover() {
 
 const unloggedLine =
   `firewall,info srcnat: in:bridge1 out:ether1, proto UDP, ` +
-  `${UNLOGGED_SRC}:51258->198.51.100.53:53, NAT (203.0.113.10:51258->198.51.100.53:53), len 73`
+  `${UNLOGGED_SRC}:51258->198.51.100.223:53, NAT (203.0.113.251:51258->198.51.100.223:53), len 73`
 
 const loggedLine =
   `firewall,info N|${LOGGED_SLUG}| dstnat: in:ether1 out:(unknown 0), proto TCP (SYN), ` +
-  `198.51.100.9:41000->203.0.113.30:8443, NAT 198.51.100.9:41000->(192.0.2.60:8443), len 60`
+  `198.51.100.221:41000->203.0.113.252:8443, NAT 198.51.100.221:41000->(192.0.2.146:8443), len 60`
 
 feedRaw(unloggedLine)
 feedRaw(loggedLine)
@@ -203,7 +212,7 @@ check(
         chain: 'dstnat',
         action: 'dst-nat',
         logPrefix: `N|${LOGGED_SLUG}|`,
-        toAddresses: '192.0.2.60',
+        toAddresses: '192.0.2.146',
         toPorts: 8443,
         dstPort: 8443,
         protocol: 'tcp',
