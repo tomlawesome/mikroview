@@ -29,6 +29,7 @@
   import { watchlistState } from '../lib/watchlist.svelte'
   import { ringReason, spokenLabel } from '../lib/rail.svelte'
   import { visibleGroups, type NavGroup, type NavItem } from '../lib/navGroups'
+  import { wizardState } from '../lib/wizard.svelte'
   import { trapFocus } from '../lib/focusTrap'
   import RailIcon from './RailIcon.svelte'
 
@@ -139,15 +140,26 @@
 
   function activateGroup(group: NavGroup) {
     if (group.items.length === 1) {
-      appState.view = group.items[0].view
+      runItem(group.items[0])
       return
     }
     raiseSheet(group.name)
   }
 
   function selectItem(item: NavItem) {
-    appState.view = item.view
+    runItem(item)
     closeSheet()
+  }
+
+  // A row is either a page or an action (#487's "Run setup…"): the
+  // action opens the setup modal over whatever is already on screen
+  // rather than navigating anywhere.
+  function runItem(item: NavItem) {
+    if (item.action === 'run-setup') {
+      wizardState.launch()
+      return
+    }
+    if (item.view) appState.view = item.view
   }
 
   function onKeydown(e: KeyboardEvent) {

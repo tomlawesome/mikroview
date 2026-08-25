@@ -12,12 +12,16 @@ vi.mock('../lib/api', () => ({
   clearAllFlags: vi.fn(),
   clearFlagPermanent: vi.fn(),
   logout: vi.fn(),
+  fetchSetupStatus: vi.fn(),
+  fetchDevices: vi.fn(),
+  markSetupStep: vi.fn(),
 }))
 
 import { appState } from '../lib/state.svelte'
 import { flagsState } from '../lib/flags.svelte'
 import { watchlistState } from '../lib/watchlist.svelte'
 import { authState } from '../lib/auth.svelte'
+import { wizardState } from '../lib/wizard.svelte'
 import type { Flag, WatchlistEntry } from '../lib/types'
 import NavRail from './NavRail.svelte'
 
@@ -258,6 +262,26 @@ describe('NavRail Admin group pages (#548/#490)', () => {
     flushSync()
     expect(appState.view).toBe('engineroom')
     expect(screen.getByRole('button', { name: 'The engine room' }).getAttribute('aria-current')).toBe('page')
+  })
+
+  // "Run setup…" is an action, not a page (#487): it opens the modal
+  // over whatever the operator is already looking at, and leaves the
+  // view alone. #548's interim mechanics -- a view switch to the old
+  // wizard page -- retired with the page itself.
+  it('opens the setup modal from Run setup… without navigating anywhere', () => {
+    authState.state = 'authenticated'
+    authState.role = 'admin'
+    appState.view = 'live'
+    render(NavRail)
+
+    const run = screen.getByRole('button', { name: 'Run setup…' })
+    expect(run.getAttribute('aria-current')).toBeNull()
+
+    run.click()
+    flushSync()
+    expect(wizardState.open).toBe(true)
+    expect(appState.view).toBe('live')
+    wizardState.close()
   })
 
   it('keeps Entities and Run setup… absent for a viewer, but shows The engine room, per #490s absent-never-disabled grammar', () => {

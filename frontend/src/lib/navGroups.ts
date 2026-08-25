@@ -9,12 +9,19 @@
 import type { View } from './state.svelte'
 import type { IconName } from '../components/RailIcon.svelte'
 
+// NavAction is a row that does something rather than going somewhere.
+// The record calls "Run setup…" an action, not a page, and since #487 it
+// is one: it opens the setup modal over whatever the operator is already
+// looking at.
+export type NavAction = 'run-setup'
+
 export type NavItem = {
   label: string
-  // Every row is a view the app already renders -- "Run setup…" reads as
-  // an action in the record, but its interim mechanics (#548) are the
-  // same view switch as any page.
-  view: View
+  // Most rows are a view the app renders. A row carrying `action`
+  // instead has no view of its own -- it is the action, and both nav
+  // surfaces run it rather than switching page.
+  view?: View
+  action?: NavAction
   admin?: boolean
   title: string
   icon: IconName
@@ -80,9 +87,11 @@ export const navGroups: NavGroup[] = [
   },
   {
     name: 'Admin',
-    // Fleet and Entities are pages (#548). "Run setup…" stays an action,
-    // not a page: interim, per #548's body, it opens the existing wizard
-    // page (view: 'setup') until #487's modal replaces the target.
+    // Fleet and Entities are pages (#548). "Run setup…" is an action,
+    // not a page, and now genuinely is one: #548's interim mechanics
+    // (a view switch to the old wizard page) retired with #487, which
+    // removed that page wholesale and made this row open the setup
+    // modal instead.
     //
     // Users and Tokens retired wholesale into the engine room (#490) --
     // see EngineRoomDoors.svelte -- along with Detectors (see the Detect
@@ -113,7 +122,7 @@ export const navGroups: NavGroup[] = [
         title: 'Every known RouterOS device: live/stale/never-seen status, last-seen, and event counts',
       },
       { label: 'Entities', view: 'entities', admin: true, icon: 'entities', title: 'Named hosts, ports and services' },
-      { label: 'Run setup…', view: 'setup', admin: true, icon: 'setup', title: 'Re-run the setup wizard' },
+      { label: 'Run setup…', action: 'run-setup', admin: true, icon: 'setup', title: 'Re-run the setup wizard' },
     ],
   },
 ]
