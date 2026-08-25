@@ -1002,7 +1002,12 @@ cannot consume the capacity a genuinely novel match needs. Queried via
 open to any signed-in user and reachable via a read-only API token, the
 same tier as `/api/events`/`/api/flags`/`/api/stats`/`/api/devices`,
 since correlating a device against its recorded matches from an external
-tool is exactly what that log is for.
+tool is exactly what that log is for. That query asks about one device,
+by `mac` or `ip`; `entries=all` asks the other question -- the most
+recent matches across every entry, newest first -- for when you want to
+know what has broken recently without already knowing where to look. It
+is capped at 100 results by default and 5000 at most, so it is always a
+page of recent history rather than the whole log.
 
 **On Postgres** (see [Postgres](#postgres-optional) below), the match
 log is a dedicated, indexed table rather than a row in the shared
@@ -2865,7 +2870,7 @@ exits, rather than starting the server. See
 | `POST /api/entities` | admin-only: create or replace (upsert) one entity, identified by `(type, key)` in the JSON body |
 | `DELETE /api/entities` | admin-only: remove the entity identified by `(type, key)` in the JSON body |
 | `GET /api/audit` | admin-only: a windowed slice of the admin action audit log (see [Audit log](#audit-log-admin-action-accountability-optional)), newest activity last, accepting `since`/`until`/`limit` query params like `GET /api/events` |
-| `GET /api/matches` | a windowed query over the persisted match log, by `mac`/`ip`/`since`/`until`/`limit` -- open to any signed-in user and reachable via a read-only API token, same tier as `/api/events`/`/api/flags`/`/api/stats`/`/api/devices` |
+| `GET /api/matches` | a windowed query over the persisted match log, in one of two modes -- by device, with `mac` and/or `ip` (at least one required), or across every watchlist entry with `entries=all`, which returns the most recent matches anywhere in the log, newest first. `entries=all` may not be combined with `mac`/`ip`. Both modes take `since`/`until` (RFC 3339) and `limit`, and both are bounded: `limit` defaults to 100 and is capped at 5000 whatever the caller asks for. Open to any signed-in user and reachable via a read-only API token, same tier as `/api/events`/`/api/flags`/`/api/stats`/`/api/devices` |
 | `GET /api/suggestions` | admin-only: every suggested watchlist entry (see [Suggested watchlist entries](#suggested-watchlist-entries-issue-243)), optionally filtered with `?status=off\|on\|hide` |
 | `POST /api/suggestions/{id}/accept` | admin-only: accept an undecided suggestion, creating a real expectation definition |
 | `POST /api/suggestions/{id}/hide` | admin-only: decline an undecided suggestion |

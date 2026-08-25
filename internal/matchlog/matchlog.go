@@ -178,6 +178,48 @@ type Query struct {
 	Limit int
 }
 
+// RecentQuery asks the other question a match log gets asked: not "what
+// has this device done", but "what has broken recently" -- the most
+// recent matches across *every* watchlist entry, newest (by LastSeen)
+// first (#586, the query the Matches tab of #584 is built on). Since
+// and Until are optional and mean exactly what Query's do.
+//
+// Deliberately its own type, and its own Store method, rather than a
+// Query whose Source is allowed to be empty. Two reasons, either
+// sufficient alone:
+//
+// An empty identity has no safe meaning in Query. ErrEmptyIdentity
+// exists precisely because "neither MAC nor IP" is a caller who does
+// not know the device, and reading that as "every device" turns a bug
+// -- an event whose source could not be resolved, a query parameter
+// that failed to arrive -- into a silent full-log read. That failure
+// mode is unchanged: Query still refuses an empty Source, and every
+// caller that means "all entries" has to say so in a type that cannot
+// be reached by accident.
+//
+// And the bound is the whole safety property, so it belongs in the
+// type. Expectations are capped at 10,000
+// (internal/engine/definitions_expectations.go), so an all-entries read
+// with no ceiling is an arbitrarily large response on a route a
+// read-only API token reaches with no rate limiter in front of it. Limit
+// is therefore clamped exactly as Query's is (0 -> DefaultLimit, above
+// MaxLimit -> MaxLimit): bounded by construction, not by the caller
+// remembering to bound it.
+//
+// It also reaches evidence nothing else can. A non-inverted entry may
+// have an empty Source -- "any source" (internal/watchlist.Entry) -- and
+// its matches are recorded normally under whatever identity the event
+// carried, but no per-identity query finds them unless the operator
+// already guesses that identity. This mode is how they become visible.
+type RecentQuery struct {
+	Since time.Time
+	Until time.Time
+	// Limit caps how many records Recent delivers, most recent first
+	// (by LastSeen). Zero means DefaultLimit; see the type's own doc
+	// comment for why this is not optional in spirit.
+	Limit int
+}
+
 // DefaultLimit/MaxLimit mirror internal/store's own clamp-not-trust
 // contract for a caller-supplied limit (see internal/store/limit_test.go)
 // -- an untrusted or programmatically-generated Limit must not be able to
@@ -261,6 +303,20 @@ type Store interface {
 	// reachable with a read-only API token and has no rate limiter, so
 	// "the caller left" needs to actually stop the work.
 	Query(ctx context.Context, q Query, yield func(Record) bool) error
+
+	// Recent streams the most recent matches across every entry within
+	// [q.Since, q.Until), newest (by LastSeen) first, up to q.Limit,
+	// calling yield for each. yield returning false stops delivery
+	// early. Unlike Query it takes no identity and must not need the
+	// identity-key index -- see RecentQuery for why that is a separate
+	// entry point rather than Query with an empty Source, and why the
+	// limit is not optional in spirit.
+	//
+	// ctx cancels the query, for the same reason Query's does: this is
+	// reachable with a read-only API token and has no rate limiter, so
+	// "the caller left" has to actually stop the work -- more so here,
+	// where the work is not narrowed by an identity first.
+	Recent(ctx context.Context, q RecentQuery, yield func(Record) bool) error
 
 	Stats() Stats
 	Close() error
