@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net"
 	"net/netip"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -432,6 +433,119 @@ func normaliseHost(host string) string {
 	return host
 }
 
+// rfc3164HeaderLen reports how many bytes at the start of data form a
+// valid RFC3164 header -- an optional "<PRI>" (validated 0-191 when
+// present, same range and same off-by-one-tolerant "<=4 chars between
+// the brackets" rule ParseEnvelope uses in envelope.go) followed by a
+// "MMM DD HH:MM:SS" timestamp with a real month name and in-range
+// digits (bsdTimeLayout, also from envelope.go) -- or -1 if data does
+// not begin with one. Deliberately the same shape ParseEnvelope parses,
+// so "is this a header" (here) and "how do we read one" (there) can't
+// drift apart.
+//
+// PRI is optional here for the same reason it's optional in
+// ParseEnvelope: nothing about finding a boundary requires it. In
+// practice every message #614's fix actually splits does carry one --
+// remote-log-format=syslog puts it there -- but a header-shaped split
+// point shouldn't stop working just because some future sender omits
+// it the way ParseEnvelope already tolerates.
+func rfc3164HeaderLen(data []byte) int {
+	if len(data) == 0 {
+		return -1
+	}
+	i := 0
+	if data[0] == '<' {
+		end := bytes.IndexByte(data, '>')
+		if end <= 0 || end > 4 {
+			return -1
+		}
+		pri, err := strconv.Atoi(string(data[1:end]))
+		if err != nil || pri < 0 || pri > 191 {
+			return -1
+		}
+		i = end + 1
+	} else if data[0] < 'A' || data[0] > 'Z' {
+		// Cheap reject before the structural check below: every month
+		// abbreviation bsdTimeLayout can match starts with an uppercase
+		// letter, so anything else here can never be a bare (no-PRI)
+		// header start.
+		return -1
+	}
+	if len(data)-i < len(bsdTimeLayout) {
+		return -1
+	}
+	if !looksLikeBSDTimestamp(data[i : i+len(bsdTimeLayout)]) {
+		return -1
+	}
+	if _, err := time.Parse(bsdTimeLayout, string(data[i:i+len(bsdTimeLayout)])); err != nil {
+		return -1
+	}
+	return i + len(bsdTimeLayout)
+}
+
+// looksLikeBSDTimestamp is a cheap, allocation-free structural
+// pre-check for the "MMM DD HH:MM:SS" shape bsdTimeLayout parses --
+// separator positions and digit-ness only, not real month names or
+// in-range digits (time.Parse still does that; this never rejects
+// anything time.Parse would accept). data must already be at least
+// len(bsdTimeLayout) bytes -- callers check that first.
+//
+// It exists because nextHeaderStart calls rfc3164HeaderLen at nearly
+// every byte offset in pending, and the single-byte "starts with an
+// uppercase letter" check above passes on a long run of any one
+// uppercase letter (a real body can contain one, and the oversized
+// path's own test fixture does) -- without this, every such position
+// paid for a string conversion and a full time.Parse attempt, turning
+// one read's scan into work proportional to pending's length instead
+// of to the read itself. Measured concretely: with only the one-byte
+// check, splitting the accumulation for a 64KB oversized message
+// across several small reads made the read loop fall far enough behind
+// the writer that reads coalesced past the message-size cap, and
+// TestTCPOversizedMessageFragmentedAcrossManyReadsStaysBounded failed.
+func looksLikeBSDTimestamp(data []byte) bool {
+	isDigit := func(b byte) bool { return b >= '0' && b <= '9' }
+	return data[1] >= 'a' && data[1] <= 'z' &&
+		data[2] >= 'a' && data[2] <= 'z' &&
+		data[3] == ' ' &&
+		(data[4] == ' ' || isDigit(data[4])) &&
+		isDigit(data[5]) &&
+		data[6] == ' ' &&
+		isDigit(data[7]) && isDigit(data[8]) &&
+		data[9] == ':' &&
+		isDigit(data[10]) && isDigit(data[11]) &&
+		data[12] == ':' &&
+		isDigit(data[13]) && isDigit(data[14])
+}
+
+// nextHeaderStart returns the offset of the next valid RFC3164 header
+// in data at or after from, or -1 if none is found. Linear in
+// len(data)-from: rfc3164HeaderLen's cheap first-byte reject only skips
+// the expensive time.Parse when the byte in question can't possibly
+// start a header at all (most of an ordinary firewall line), not when
+// it merely fails to -- a long run of uppercase letters, which any
+// legitimate message body can contain, still pays for a time.Parse
+// attempt at every one of them. handleTCPConn's caller is what keeps
+// this bounded overall: it advances `from` across reads instead of
+// rescanning pending's already-checked prefix each time (see
+// headerScanned in its own read loop), so a large message built from
+// many small reads is scanned once in total, not once per read.
+func nextHeaderStart(data []byte, from int) int {
+	for i := from; i < len(data); i++ {
+		if rfc3164HeaderLen(data[i:]) >= 0 {
+			return i
+		}
+	}
+	return -1
+}
+
+// rfc3164MaxHeaderBytes bounds how wide a valid RFC3164 header can be:
+// "<191>" (5 bytes, the widest legal PRI) plus bsdTimeLayout's 15-byte
+// timestamp. handleTCPConn's headerScanned watermark holds back this
+// many bytes from the end of what it marks "already scanned" -- a
+// header up to this wide could still be forming right at that edge,
+// waiting on a later read to complete it.
+const rfc3164MaxHeaderBytes = 5 + len(bsdTimeLayout)
+
 func handleTCPConn(ctx context.Context, conn net.Conn, out chan<- RawMessage) {
 	defer conn.Close()
 
@@ -521,6 +635,40 @@ func handleTCPConn(ctx context.Context, conn net.Conn, out chan<- RawMessage) {
 	// behaviour this has to keep working, and tcpQuiescence's own
 	// comment for the window itself.
 	//
+	// tcpQuiescence alone is not enough once several bare messages arrive
+	// close enough together that the gap between them, not just within
+	// one of them, falls inside its window -- a real burst, not
+	// fragmentation of a single message. #614: one traffic() call in the
+	// live CHR fixture logs an input line and a forward/NAT line for the
+	// same packet within the same short window, and on a real router
+	// several such pairs land close enough together that quiescence
+	// never separates them -- ~10 lines flushed as a single message.
+	// Downstream, the parser reads that whole blob as one string and its
+	// field extraction is a left-to-right scan, so whichever embedded
+	// line's fields are read last is what wins: a stored chain=input
+	// event ended up carrying a later forward-chain line's dstPort and
+	// NAT annotation, with its own srcPort not even present in its own
+	// (2KB-truncated) Raw text -- one coalescing cause, not two separate
+	// bugs.
+	//
+	// remote-log-format=syslog (see live-routeros.sh's setup() and
+	// docs/routeros-setup.md) is what makes a real fix possible: RouterOS
+	// then gives every message its own RFC3164 header ("<PRI>MMM DD
+	// HH:MM:SS HOSTNAME ", verified against a real CHR 7.23.3), so the
+	// arrival of the next header inside pending is itself proof the
+	// message before it is complete -- no need to wait on quiescence to
+	// find that boundary. rfc3164HeaderLen/nextHeaderStart below look for
+	// exactly that shape and split eagerly whenever it turns up after the
+	// first byte of pending (the header at position 0, if any, belongs to
+	// the message still accumulating, not to one that just ended).
+	//
+	// A sender left on the default remote-log-format has no header
+	// anywhere in what it sends -- nothing for this to find -- so it gets
+	// no benefit and falls back to exactly what it did before: waiting
+	// out tcpQuiescence to resolve the last message of a burst. That is
+	// the accepted residual (see the issue's decided-fix comment): there
+	// is nothing on that wire to frame on, so nothing here can.
+	//
 	// A message *larger* than the cap is the other case this has always
 	// had to handle: a write bigger than maxTCPMessageBytes with no
 	// newline in reach. The first maxTCPMessageBytes are delivered once,
@@ -551,6 +699,16 @@ func handleTCPConn(ctx context.Context, conn net.Conn, out chan<- RawMessage) {
 	// does turn up, per the discard branch below.
 	var pending []byte
 	oversized := false
+	// headerScanned is the #614 split loop's cross-read watermark: how
+	// far into pending it has already searched for a header with none
+	// found, so a message built from many small reads (the oversized
+	// path's own lead-up, or any large ordinary message with no header
+	// in it at all) is scanned once in total rather than once per read
+	// -- see nextHeaderStart's doc comment for why that re-scan cost is
+	// real. Reset to 0 anywhere pending's front moves for any reason: a
+	// boundary just resolved, so nothing learned about the old buffer's
+	// indexing still applies to the new one.
+	headerScanned := 0
 
 	emit := func(data []byte) {
 		data = bytes.TrimRight(data, "\r")
@@ -624,6 +782,56 @@ func handleTCPConn(ctx context.Context, conn net.Conn, out chan<- RawMessage) {
 				}
 				emit(pending[:idx])
 				pending = pending[idx+1:]
+				headerScanned = 0
+			}
+
+			// #614: eagerly split at each subsequent RFC3164 header found
+			// in what's left of pending (see the framing comment above
+			// handleTCPConn for why). A header at position 0 belongs to
+			// the message still accumulating -- it is not itself a
+			// boundary -- so only a *second* header turning up later in
+			// pending proves the first message actually ended.
+			//
+			// The search has to skip past that first header's *entire*
+			// span, not merely its first byte: a header's own timestamp
+			// text, taken on its own, independently re-matches as a
+			// valid bare (no-PRI) header a few bytes later -- "Aug 29
+			// 20:52:44" is a legitimate header start whether or not a
+			// "<30>" sits in front of it. Searching from offset 1 alone
+			// found exactly that false boundary inside the header
+			// currently anchoring pending, splitting a real header in
+			// two ("<30>" as one message, its own timestamp as the
+			// next). Skipping to the end of position 0's header, when it
+			// has one, is what keeps that header intact.
+			for {
+				skip := 1
+				if hl := rfc3164HeaderLen(pending); hl > skip {
+					skip = hl
+				}
+				from := skip
+				if headerScanned > from {
+					from = headerScanned
+				}
+				next := nextHeaderStart(pending, from)
+				if next < 0 {
+					// Nothing found from `from` on. Remember that, short
+					// of a trailing margin wide enough to hold a header
+					// that's only partially arrived and could still
+					// complete once more bytes are appended -- so the
+					// next read resumes the search there instead of
+					// re-scanning bytes this one already ruled out. This
+					// is what keeps a large, header-free message (the
+					// oversized path's lead-up, in particular) from being
+					// rescanned in full on every single read.
+					headerScanned = len(pending) - (rfc3164MaxHeaderBytes - 1)
+					if headerScanned < skip {
+						headerScanned = skip
+					}
+					break
+				}
+				emit(pending[:next])
+				pending = pending[next:]
+				headerScanned = 0
 			}
 
 			if len(pending) >= maxTCPMessageBytes {
@@ -637,6 +845,7 @@ func handleTCPConn(ctx context.Context, conn net.Conn, out chan<- RawMessage) {
 				emit(pending[:maxTCPMessageBytes])
 				pending = pending[:0]
 				oversized = true
+				headerScanned = 0
 			}
 		}
 
@@ -649,6 +858,7 @@ func handleTCPConn(ctx context.Context, conn net.Conn, out chan<- RawMessage) {
 			if ambiguous {
 				emit(pending)
 				pending = pending[:0]
+				headerScanned = 0
 			}
 			if ne, ok := err.(net.Error); ok && ne.Timeout() && ambiguous {
 				// This was tcpQuiescence's short deadline, not the

@@ -69,13 +69,21 @@ CA is presumably already trusted some other way.
 Then point the router's logging at MikroView:
 
 ```
-/system logging action add name=mikroview target=remote remote=203.0.113.10 remote-port=6514 remote-protocol=tls check-certificate=yes
+/system logging action add name=mikroview target=remote remote=203.0.113.10 remote-port=6514 remote-protocol=tls remote-log-format=syslog check-certificate=yes
 ```
 
 This does **not** authenticate the router to MikroView — RouterOS's
 logging action has no client-certificate option, so anything able to
 reach the port can still connect and inject log lines. The trust here
 is one-directional: the router verifying MikroView, not the reverse.
+
+`remote-log-format=syslog` gives every message its own standard header
+(timestamp and topic), so MikroView can tell where one firewall log line
+ends and the next begins even when several arrive at once — a burst of
+matching traffic, one connection attempt logged from two different rules
+— rather than only when RouterOS happens to send them far enough apart.
+Without it, a fast-enough burst can be read as a single garbled line and
+the traffic in it silently mismatched (#614).
 
 ## 2. Forward firewall log events to it
 
