@@ -262,7 +262,7 @@ store:
 #   192.168.1.50: "Living room NAS"
 
 # Optional: the live, UI-managed counterpart to ruleNames/hostNames
-# above (Menu -> Entities, admin-only) -- a label/tags record per
+# above (Admin -> Entities, admin-only) -- a label/tags record per
 # (type, key), editable with no restart, taking precedence over
 # ruleNames/hostNames for any key it has a label for. storePath already
 # defaults to /var/lib/mikroview/entities.json; only uncomment this
@@ -276,7 +276,7 @@ store:
 # Optional: the persisted, admin-only accountability log of every admin-
 # privileged mutation (user create, entity upsert/delete, token create/
 # revoke, detector setting change, flag exclusion removal) -- who did it
-# and when (Menu -> Audit log, admin-only). storePath already defaults to
+# and when (Investigate -> Audit log, admin-only). storePath already defaults to
 # /var/lib/mikroview/audit.json; only uncomment this block to move that
 # path. See docs/configuration.md's "Audit log" section, including which
 # flag actions are deliberately NOT logged here.
