@@ -268,6 +268,68 @@ func TestHandleDefinitionsCreateCustomDetection(t *testing.T) {
 	}
 }
 
+// A detector the operator wrote is theirs to rename, in place. The
+// alternative -- delete and re-create -- discards the id every flag it
+// already raised points at (#612).
+func TestHandleDefinitionsUpdateRenamesACustomDetection(t *testing.T) {
+	s, _ := newTestServer(t)
+	ts := httptest.NewServer(asAdmin(s.mux()))
+	defer ts.Close()
+
+	req := createDefinitionRequest{
+		Name:   "typoed naem",
+		Intent: engine.IntentDetection,
+		Detection: &detectionRequest{
+			Conditions: []engine.Condition{
+				{Field: engine.FieldDestinationPort, Operator: engine.OpEquals, Values: []string{"22"}},
+			},
+			Key:            engine.KeyPerSource,
+			Counting:       engine.CountingTotal,
+			DetailTemplate: "{Count} from {SourceAddress}",
+			Threshold:      5,
+			Window:         "60s",
+		},
+	}
+	resp := postJSON(t, &http.Client{}, ts.URL+"/api/definitions", req)
+	if resp.StatusCode != http.StatusCreated {
+		resp.Body.Close()
+		t.Fatalf("expected 201, got %d", resp.StatusCode)
+	}
+	created := mustDecodeDefinition(t, resp)
+
+	name := "corrected name"
+	renamed := putJSON(t, &http.Client{}, ts.URL+"/api/definitions/"+created.ID, updateDefinitionRequest{Name: &name})
+	if renamed.StatusCode != http.StatusOK {
+		renamed.Body.Close()
+		t.Fatalf("expected 200 renaming a custom detection, got %d", renamed.StatusCode)
+	}
+	got := mustDecodeDefinition(t, renamed)
+	if got.Name != name {
+		t.Errorf("Name = %q, want %q", got.Name, name)
+	}
+	if got.ID != created.ID {
+		t.Errorf("id changed on rename: %q -> %q", created.ID, got.ID)
+	}
+	if got.Detection == nil || got.Params["threshold"] != float64(5) {
+		t.Errorf("the rename disturbed the detector: detection=%+v params=%+v", got.Detection, got.Params)
+	}
+}
+
+// A shipped definition still refuses: its name comes from the binary
+// that ships the logic, not from the deployment.
+func TestHandleDefinitionsUpdateStillRefusesToRenameAShippedDefinition(t *testing.T) {
+	s, _ := newTestServer(t)
+	ts := httptest.NewServer(asAdmin(s.mux()))
+	defer ts.Close()
+
+	name := "my port scan"
+	resp := putJSON(t, &http.Client{}, ts.URL+"/api/definitions/port_scan", updateDefinitionRequest{Name: &name})
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("expected 400 renaming a shipped definition, got %d", resp.StatusCode)
+	}
+}
+
 // A detector whose conditions give the pre-index nothing to narrow on is
 // accepted -- watching one source address is a legitimate question --
 // but it is consulted on every event, and the definition says so rather

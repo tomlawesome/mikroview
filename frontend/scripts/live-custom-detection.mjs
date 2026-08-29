@@ -136,6 +136,30 @@ check(
   `a replay answers with exactly one of a receipt or a decline (${JSON.stringify(replay.body)})`,
 )
 
+// --- renaming, in place -------------------------------------------------
+
+// A detector the operator wrote is theirs to rename. The alternative --
+// delete and create again -- throws away the id every flag it already
+// raised points at, which the flag raised above makes concrete here
+// rather than hypothetical (#612).
+const RENAMED = 'live-custom-detection renamed'
+const renamed = await api('PUT', `/api/definitions/${encodeURIComponent(detectorID)}`, { name: RENAMED })
+check(renamed.status === 200, `a custom detection is renamed (${renamed.status} ${renamed.text.slice(0, 200)})`)
+check(renamed.body?.name === RENAMED, `the new name is what comes back (${JSON.stringify(renamed.body?.name)})`)
+check(renamed.body?.id === detectorID, 'the rename kept its id, so the flag it already raised still resolves')
+check(
+  renamed.body?.detection?.conditions?.[0]?.field === 'destinationPort' &&
+    renamed.body?.params?.threshold === 4,
+  `the rename left the detector itself alone (${JSON.stringify(renamed.body?.detection)} ${JSON.stringify(renamed.body?.params)})`,
+)
+
+const stillThere = await api('GET', `/api/definitions/${encodeURIComponent(detectorID)}`)
+check(stillThere.body?.name === RENAMED, 'the rename was stored, not just echoed back')
+
+// A shipped definition's name comes from the binary, so it still refuses.
+const shippedRename = await api('PUT', '/api/definitions/port_scan', { name: 'my port scan' })
+check(shippedRename.status === 400, `a shipped definition still refuses to be renamed (${shippedRename.status})`)
+
 // --- the refusals and the disclosure ------------------------------------
 
 // A template naming a placeholder this detector could never resolve is
