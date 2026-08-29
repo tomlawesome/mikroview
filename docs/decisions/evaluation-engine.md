@@ -233,3 +233,124 @@ names the engine contract that retires it.
    the running instance rather than estimates.
 3. **No API compatibility routes.** See Migration above -- wholesale,
    per AGENTS.md, sole-deployment reality acknowledged.
+
+## Addendum, 2026-08-29: custom detection definitions (#502)
+
+This is an addendum to the ADR above, not a new one. It implements
+the v2 the ADR already promised -- shipped declaratives "editable,
+cloneable, and joined by fully custom ones" -- and it does not
+outgrow structured conditions.
+
+### The DetectionSpec block
+
+A custom detection definition carries its structure in a new
+intent-specific block on the definition envelope, `Detection
+*DetectionSpec`, populated only for a definition that is all three
+of intent=detection, kind=declarative and provenance=custom. The
+block carries `Conditions []Condition`, `Key` (KeyMode), `Counting`
+(CountingMode), `DistinctField` and `DetailTemplate`.
+
+### One condition language, not two
+
+Detection reuses the existing condition language unchanged. There
+is no second condition language in this codebase; inventing a
+detection-only one would be the deviation, and the ADR's own "No
+DSL" line above forbids it. What differs between an expectation and
+a detection is not the conditions but the aggregation around them:
+an expectation pins key mode, threshold and window in Go, and a
+detection must be able to vary them.
+
+Supporting finding: none of the shipped detectors that are not
+declarative is blocked by condition expressiveness -- they are
+blocked by needing statistical baselines, absence-of-events, live
+external lookups, or cross-definition reinforcement, and all four
+are unreachable for a custom definition by construction, because
+provenance=custom implies kind=declarative.
+
+### Structure in the block, tunables in Params
+
+Threshold and window stay in Params with a generated ParamSchema,
+exactly as shipped declaratives already do. The reason: SetParams
+is the only door for changing a definition's matching-relevant
+numbers, so keeping them there means the existing params editor
+tunes a custom detector with no second editing path, and
+refuseIdentityChange's guarantees keep applying uniformly.
+Structure -- what the detector is -- changes by editing the
+definition; numbers -- how sensitive it is -- change by tuning a
+param.
+
+### Why not Params, and why not top-level fields
+
+Params is a typed key/value map validated against ParamSchema, and
+its surrounding machinery (reset-to-stock, provenance distance) is
+about tunables measured against a shipped default, which a custom
+definition has none of; ParamSchema also cannot describe a
+condition list. Top-level fields would exist and be meaningless on
+every expectation and every shipped definition, and Validate would
+have to police "empty unless custom detection" -- a rule better
+expressed by the field not existing.
+
+### Three binding constraints
+
+- **Deterministic serialisation.** Registry.Sync decides whether a
+  definition changed by byte-comparing its stored JSON, so
+  DetectionSpec uses ordered slices and strings only -- no maps, no
+  floats, and no durations (the window is a Param). An unstable
+  encoding would silently drop a detector's accumulated window
+  state on an unrelated save.
+- **The detail template is operator input rendered into the
+  interface.** Its placeholders are a closed set -- `{Count}` plus
+  the key-component tokens the chosen key mode supplies -- validated
+  when the definition is created rather than at emission time.
+  There is no expression evaluation: `text/template` is already a
+  forbidden sink in `injection_sinks_test.go`, and the substitution
+  is RenderEmission's existing hand-rolled one over a fixed field
+  set. Evidence tokens (`{Ports}`, `{Hosts}`, `{Labels}` and their
+  counts) are deliberately unavailable, because a DetectionSpec
+  declares no evidence categories and nothing would ever accumulate
+  them.
+- **An unbuildable stored detection degrades, it does not fail.** A
+  stored custom detection whose block names a condition field,
+  operator or key mode this binary does not know is marked
+  Available=false -- preserved byte-for-byte, listed, never
+  evaluated, refused for edit or delete -- the same treatment an
+  unrecognised Kind or Intent already gets. Without it, such a
+  definition would fail to build on every single sync.
+
+### Dispatch: accept, disclose, do not silently absorb
+
+A definition enters an index bucket only via a positive equals/
+inSet condition on destination port, chain, rule label or address
+classification; anything else is consulted on every event. A
+custom detector that cannot be narrowed is accepted rather than
+refused -- an operator watching one source address has asked a
+legitimate question, and refusing it to protect an ingest budget
+they may not care about is the wrong default for an observe-only
+tool.
+
+But it is disclosed: the create response and every later read of
+the definition carry a `dispatch` block saying it is evaluated
+against every event, and the dispatch index now names each such
+definition in its log rather than only warning when every
+definition landed there. No hard cap for now; the ingest benchmark
+is the regression gate, and a cap is a follow-up if the benchmark
+shows one is needed.
+
+### What this does not do
+
+The authoring UI is out of scope (it belongs to the interface phase
+that has not shaped the detector surface). Shipped builders keep
+hard-coding their spec in Go, deliberately; what was generalised is
+assembling a DeclarativeSpec, not the builders. Replayability comes
+free, because a custom detection produces a `*DeclarativeDefinition`,
+which already satisfies the replay contract.
+
+### Who decided it
+
+The schema decision above was made by Opus at extra-high reasoning
+effort on 2026-08-24, under explicit owner authorisation, departing
+from AGENTS.md's standing rule routing architecture calls to Fable
+5: Fable 5 had reached its account model limit, and the owner
+authorised Opus rather than wait for the reset. Worth recording
+here because the decision shapes persisted data -- definitions
+created under it will exist in the field.

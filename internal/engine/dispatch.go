@@ -163,13 +163,26 @@ func BuildDispatchIndex(defs []*DeclarativeDefinition) *DispatchIndex {
 			}
 		}
 	}
-	logDispatchIndexBuilt(len(defs), len(idx.global))
+	logDispatchIndexBuilt(len(defs), idx.global)
 	return idx
 }
 
-func logDispatchIndexBuilt(total, global int) {
-	logger.Info(fmt.Sprintf("declarative dispatch index built: %d definition(s), %d always-consulted (no discriminating field)", total, global))
-	if total > 0 && global == total {
+// logDispatchIndexBuilt reports what the index narrowed, and names every
+// definition it could not.
+//
+// Naming them is the point rather than a detail. An operator can now
+// author a detection whose conditions give the pre-index nothing to
+// narrow on (issue #502), and such a detector is accepted -- it is a
+// legitimate question to ask -- but it is consulted on every event, so
+// the cost lands on the ingest budget rather than on the operator who
+// chose it. The aggregate line alone could not say which definition to
+// look at, and "every definition" was the only case that warned at all.
+func logDispatchIndexBuilt(total int, global []*DeclarativeDefinition) {
+	logger.Info(fmt.Sprintf("declarative dispatch index built: %d definition(s), %d always-consulted (no discriminating field)", total, len(global)))
+	for _, d := range global {
+		logger.Info(fmt.Sprintf("declarative dispatch index: definition %q (%s) has no discriminating field, so it is consulted on every event", d.def.ID, d.def.Name))
+	}
+	if total > 0 && len(global) == total {
 		logger.Warn("declarative dispatch index: every definition landed in the always-consulted bucket -- the pre-index is providing no narrowing at all")
 	}
 }

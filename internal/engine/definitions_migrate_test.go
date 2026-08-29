@@ -339,6 +339,7 @@ func TestMigrateDefinitionsUnrecognizedDetectorNameIsPreservedUnavailable(t *tes
 		// reopen, confirm it is still there.
 		other := NewDefinition("unrelated", IntentDetection, KindDeclarative)
 		other.Provenance = Provenance{Origin: ProvenanceCustom}
+		other.Detection = testDetectionSpec()
 		if err := s.Upsert(other); err != nil {
 			t.Fatal(err)
 		}
