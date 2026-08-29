@@ -61,6 +61,17 @@ func BuildForInspection(def Definition) (Evaluated, error) {
 		return NewInvertedExpectations([]watchlist.Entry{e}, nil)
 	}
 	if def.Kind == KindDeclarative {
+		// Same discrimination Registry.build makes, and it has to stay
+		// the same: an operator-authored detector reads its whole shape
+		// from stored data, so the shipped builder -- keyed by shipped
+		// id -- has nothing to look up for it. Without this branch a
+		// custom detection would report its replayability as unknown
+		// and decline every replay, which is what makes the "a custom
+		// detection is replayable like any other declarative one" claim
+		// true rather than merely intended.
+		if def.Provenance.Origin == ProvenanceCustom {
+			return BuildCustomDetectionDefinition(def, nil)
+		}
 		return BuildShippedDeclarativeDefinition(def)
 	}
 	return BuildShippedProgrammaticDefinition(def, ShippedDeps{})

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/tomlawesome/mikroview/internal/engine"
@@ -78,6 +79,30 @@ type definitionView struct {
 	// watchlistInvertedParamSchema) are a storage detail no UI should
 	// have to decode.
 	Expectation *watchlist.Entry `json:"expectation,omitempty"`
+	// Detection is the operator-authored structure a custom detection
+	// carries -- its conditions and the aggregation around them. Absent
+	// for a shipped definition, whose structure is Go in this binary,
+	// and for an expectation, whose structure is fixed. See
+	// engine.DetectionSpec.
+	Detection *engine.DetectionSpec `json:"detection,omitempty"`
+	// Dispatch is what this definition costs the ingest path, and is set
+	// only where an operator chose the conditions that decide it.
+	Dispatch *dispatchView `json:"dispatch,omitempty"`
+}
+
+// dispatchView tells an operator whether the detector they authored can
+// be narrowed by the engine's pre-index, or is consulted on every event.
+//
+// Disclosed rather than refused. A detector that watches one source
+// address gives the pre-index nothing to narrow on, but it is a
+// legitimate question for an operator to ask, and refusing it to protect
+// an ingest budget they may not care about is the wrong default for an
+// observe-only tool. Absorbing the cost silently is the dishonest
+// option, so the answer travels with the definition -- on the create
+// response and on every later read of it.
+type dispatchView struct {
+	AlwaysConsulted bool   `json:"alwaysConsulted"`
+	Reason          string `json:"reason,omitempty"`
 }
 
 // replayabilityView is issue #403's contract on the wire: a definition
@@ -125,6 +150,13 @@ func definitionViewFor(sd engine.StoredDefinition, rulesByDevice map[string][]in
 	capable, reason, known := engine.ReplayabilityOf(d)
 	v.Replay = replayabilityView{Known: known, Capable: capable, Reason: reason}
 
+	if d.Detection != nil {
+		v.Detection = d.Detection
+		v.Dispatch = &dispatchView{AlwaysConsulted: !engine.CanNarrowDispatch(d.Detection.Conditions)}
+		if v.Dispatch.AlwaysConsulted {
+			v.Dispatch.Reason = alwaysConsultedReason
+		}
+	}
 	if d.Intent != engine.IntentExpectation {
 		return v
 	}
@@ -371,12 +403,39 @@ func (req expectationRequest) applyTo(e *watchlist.Entry) {
 	e.IncludeStructuralNoise = req.IncludeStructuralNoise
 }
 
+// detectionRequest is the wire shape for creating a custom detection --
+// the intent-specific block that mirrors expectationRequest above.
+//
+// Structure and tunables arrive together here because a definition is
+// created in one call, but they are stored apart: the conditions and
+// aggregation become the envelope's Detection block, while Threshold and
+// Window become ordinary Params. After creation the two are edited
+// through different doors -- the params editor tunes the numbers, and
+// nothing else in this API rewrites the structure. See
+// engine.DetectionSpec for why that line is drawn where it is.
+type detectionRequest struct {
+	Conditions    []engine.Condition  `json:"conditions"`
+	Key           engine.KeyMode      `json:"key"`
+	Counting      engine.CountingMode `json:"counting"`
+	DistinctField engine.Field        `json:"distinctField"`
+	// DetailTemplate is the sentence a raised flag shows. Its
+	// placeholders are a closed set, validated here at create time --
+	// see engine.ValidateDetectionDetailTemplate.
+	DetailTemplate string `json:"detailTemplate"`
+	// Window is a Go duration string ("60s", "5m"), the same
+	// representation every shipped detector's window param already
+	// stores.
+	Threshold int    `json:"threshold"`
+	Window    string `json:"window"`
+}
+
 // createDefinitionRequest is the wire shape for POST /api/definitions.
 type createDefinitionRequest struct {
 	Name        string              `json:"name"`
 	Intent      engine.Intent       `json:"intent"`
 	Kind        engine.Kind         `json:"kind"`
 	Expectation *expectationRequest `json:"expectation"`
+	Detection   *detectionRequest   `json:"detection"`
 }
 
 // ErrProgrammaticIsShippedOnly is the reasoning behind the one creation
@@ -384,10 +443,11 @@ type createDefinitionRequest struct {
 // quote the same sentence.
 const errProgrammaticIsShippedOnly = "kind=programmatic cannot be created: programmatic logic is Go compiled into this binary, not data, so only a shipped definition can have it (see engine.Kind). A custom definition is always declarative."
 
-// errCustomDetectionNotBuildable is the honest current limit on custom
-// definitions, stated at the validation boundary rather than accepted and
-// silently never evaluated.
-const errCustomDetectionNotBuildable = "intent=detection cannot be created yet: a custom detection definition needs its match conditions stored on the envelope, and the envelope has nowhere to carry them -- the only declarative logic this binary builds from stored data is an expectation's. Accepting one would create a definition that exists, lists, and evaluates nothing, which is the failure this refusal exists to avoid."
+// alwaysConsultedReason is what a definition's view says when its
+// conditions give the engine's dispatch pre-index nothing to narrow on.
+// Stated once so the create response, every later read, and the test
+// that pins the behaviour all quote the same sentence.
+const alwaysConsultedReason = "This detector's conditions give the engine nothing to pre-index on, so it is evaluated against every event rather than only the events that could match it. That is allowed -- it is a legitimate thing to watch for -- but it costs more of the ingest budget than a detector narrowed by destination port, chain, rule label or address classification."
 
 // handleDefinitionsCreate creates a custom definition with a
 // server-generated ID.
@@ -401,8 +461,11 @@ const errCustomDetectionNotBuildable = "intent=detection cannot be created yet: 
 //     shape may express a custom programmatic definition, and this is
 //     where that becomes a 400 rather than a validation error deeper
 //     down.
-//   - intent=detection is refused, for now, with its reason. See
-//     errCustomDetectionNotBuildable.
+//
+// Only one refusal remains. intent=detection was refused too, until the
+// envelope gained somewhere to carry a detector's match conditions
+// (engine.DetectionSpec, issue #502); it is now created by
+// createCustomDetection below.
 //
 // The stored definition's kind and provenance are decided by the server
 // from the expectation's own shape, never by the request: a non-inverted
@@ -431,7 +494,7 @@ func (s *Server) handleDefinitionsCreate(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	if req.Intent == engine.IntentDetection {
-		http.Error(w, errCustomDetectionNotBuildable, http.StatusBadRequest)
+		s.createCustomDetection(w, r, req)
 		return
 	}
 	if req.Expectation == nil {
@@ -450,6 +513,52 @@ func (s *Server) handleDefinitionsCreate(w http.ResponseWriter, r *http.Request)
 	}
 	s.Audit.Record(auditActor(r), "definition.create", e.ID, e.Name)
 	s.writeDefinition(w, http.StatusCreated, e.ID)
+}
+
+// createCustomDetection creates an operator-authored detector.
+//
+// Everything structural is validated before anything is stored, and it
+// is validated by the engine rather than restated here: the conditions,
+// key mode, counting mode and detail-template placeholders all go
+// through engine.DetectionSpec.Validate, so this handler and the store
+// and a rollback-era binary reading the same bytes all agree on what a
+// well-formed detection is. A refusal therefore names the actual
+// problem, and nothing half-valid reaches disk.
+//
+// The definition's kind and provenance are the server's, never the
+// request's -- the same rule the expectation path above follows.
+func (s *Server) createCustomDetection(w http.ResponseWriter, r *http.Request, req createDefinitionRequest) {
+	if req.Detection == nil {
+		http.Error(w, "a detection block is required: a custom detection is its conditions and the aggregation around them, and there is nothing to create without them", http.StatusBadRequest)
+		return
+	}
+	if strings.TrimSpace(req.Name) == "" {
+		http.Error(w, "a name is required", http.StatusBadRequest)
+		return
+	}
+
+	d := engine.NewDefinition(strings.TrimSpace(req.Name), engine.IntentDetection, engine.KindDeclarative)
+	d.Enabled = true
+	d.Provenance = engine.Provenance{Origin: engine.ProvenanceCustom}
+	d.ParamSchema = engine.CustomDetectionParamSchema()
+	d.Params = engine.Params{
+		"threshold": req.Detection.Threshold,
+		"window":    req.Detection.Window,
+	}
+	d.Detection = &engine.DetectionSpec{
+		Conditions:     req.Detection.Conditions,
+		Key:            req.Detection.Key,
+		Counting:       req.Detection.Counting,
+		DistinctField:  req.Detection.DistinctField,
+		DetailTemplate: req.Detection.DetailTemplate,
+	}
+
+	if err := s.Definitions.Upsert(d); err != nil {
+		writeDefinitionError(w, err)
+		return
+	}
+	s.Audit.Record(auditActor(r), "definition.create", d.ID, d.Name)
+	s.writeDefinition(w, http.StatusCreated, d.ID)
 }
 
 // updateDefinitionRequest is the wire shape for PUT
@@ -518,7 +627,12 @@ func (s *Server) handleDefinitionsUpdate(w http.ResponseWriter, r *http.Request)
 		http.Error(w, "only an expectation definition takes an expectation block", http.StatusBadRequest)
 		return
 	}
-	if req.Name != nil && !isExpectation {
+	// A shipped definition's name belongs to the binary that ships the
+	// logic, so it stays refused. A custom one is the operator's own and
+	// is renamed below (#612) -- this endpoint refused everything that
+	// was not an expectation only because, until #502, nothing could be
+	// both custom and not an expectation.
+	if req.Name != nil && !isExpectation && (!sd.Available || sd.Definition.Provenance.Origin != engine.ProvenanceCustom) {
 		http.Error(w, "a shipped definition's name is a property of this binary, not of the deployment, and cannot be renamed", http.StatusBadRequest)
 		return
 	}
@@ -576,7 +690,13 @@ func (s *Server) handleDefinitionsUpdate(w http.ResponseWriter, r *http.Request)
 			return
 		}
 	}
-	if req.Expectation != nil || req.Name != nil {
+	if req.Name != nil && !isExpectation {
+		if err := s.Definitions.SetName(id, *req.Name); err != nil {
+			writeDefinitionError(w, err)
+			return
+		}
+	}
+	if req.Expectation != nil || (req.Name != nil && isExpectation) {
 		// Switching a non-inverted expectation to inverted starts it
 		// Observing, the same rule create applies -- there is no
 		// meaningful permitted set yet, so nothing else is coherent.
