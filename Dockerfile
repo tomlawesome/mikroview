@@ -27,6 +27,16 @@ RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w -X main.version=
 # way to run `mkdir` itself -- this empty, correctly-owned directory is
 # just copied in below.
 RUN mkdir -p /var/lib/mikroview
+# The mount point `-migrate-data` copies *into* (#537), and it exists for
+# the same reason as the directory above: Docker seeds a fresh named
+# volume from whatever the image has at that path, ownership included, so
+# a volume mounted somewhere the image never created lands root-owned and
+# uid 65532 cannot write a byte to it. Confirmed rather than assumed --
+# `docker run --user 65532 -v newvol:/mnt/anywhere` gives a 0755 root:root
+# directory and "Permission denied". Migrating bind mount -> volume is
+# half of what #537 promises, so it needs a path where a brand new volume
+# arrives already owned by the runtime user.
+RUN mkdir -p /var/lib/mikroview-migrate
 
 # --- runtime ------------------------------------------------------------
 # distroless nonroot: uid 65532 can't bind ports <1024, which is why the
@@ -37,6 +47,7 @@ RUN mkdir -p /var/lib/mikroview
 FROM gcr.io/distroless/static-debian12:nonroot
 COPY --from=backend /out/mikroview /mikroview
 COPY --from=backend --chown=65532:65532 /var/lib/mikroview /var/lib/mikroview
+COPY --from=backend --chown=65532:65532 /var/lib/mikroview-migrate /var/lib/mikroview-migrate
 # Numeric, not the "nonroot" name. Same user either way -- distroless
 # resolves nonroot to 65532 -- but the number is verifiable without
 # reading the image's own /etc/passwd, which is what an orchestrator
