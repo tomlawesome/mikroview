@@ -36,6 +36,24 @@ rewritten.
   evaluated against every event instead. `POST /api/definitions`'s
   refusal of `intent=detection` is gone, since it is no longer true.
 
+### Fixed
+
+- **Watchlist matching against a real router could silently see nothing**
+  (#614). Against a real RouterOS device, several firewall lines logged
+  close together in a burst -- an input line and the forward/NAT line
+  for the same packet, for instance -- arrived on the TCP syslog
+  connection glued together with no delimiter, and got stored as one
+  garbled event whose fields came from whichever embedded line the
+  parser happened to read last. A watchlist entry scoped to a real
+  port or device could go through an entire burst without ever
+  recording a match, with nothing in the interface to explain why.
+  Recommending `remote-log-format=syslog` in the RouterOS setup steps
+  gives every message its own header, which the TCP listener now uses
+  to split a burst into its individual messages eagerly rather than
+  waiting on a quiet gap that a fast enough burst never has. A sender
+  left on the previous default format has no header to split on and
+  keeps the old behaviour.
+
 ## [0.4.0] - 2026-08-25
 
 ### Added
