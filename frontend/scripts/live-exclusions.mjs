@@ -21,11 +21,21 @@
 import { chromium } from 'playwright'
 import { session, check, done, feedPortScan, waitForFlag } from './live-browser.mjs'
 
+// Unused by every other scenario in this directory -- checked before
+// choosing it, because sharing one is what #590 is about.
+const SCAN_SOURCE = '198.51.100.85'
+
 const URL_BASE = process.env.MV_URL
 
 // A real port_scan flag: one source IP, 20 distinct destination ports
 // inside the default 60s/15-port threshold.
-feedPortScan(20)
+// Its own scan address, not portscan's default (#590). This scenario
+// permanently clears the flag it raises, and live-flags-clearing.mjs
+// runs next and feeds the same address expecting a fresh active one --
+// so on the default they collide, and the loser prints a diagnostic
+// naming a "(cleared)" flag that belongs to the other scenario
+// entirely. Two wrong diagnoses were built on that line.
+feedPortScan(20, SCAN_SOURCE)
 
 const { page } = await session()
 
@@ -42,7 +52,7 @@ async function openFlags() {
 // Confirm server-side before looking at the UI (#354). Without this the
 // scenario intermittently died on a bare locator timeout that could not
 // say whether the flag was missing or merely not rendered yet.
-const raised = await waitForFlag(page, '198.51.100.77')
+const raised = await waitForFlag(page, SCAN_SOURCE)
 check(raised.ok, raised.message)
 
 // Everything below -- clearing it, finding it on the Exclusions tab,
@@ -66,7 +76,7 @@ if (raised.ok) {
   // `.split-arrow` and permanently cleared whichever flag that was,
   // which is why every assertion below then failed against the
   // container.
-  const scanCard = page.locator('.card', { hasText: '198.51.100.77' }).first()
+  const scanCard = page.locator('.card', { hasText: SCAN_SOURCE }).first()
   await scanCard.waitFor({ timeout: 15000 })
   check(await scanCard.locator('.split-arrow').isVisible(), 'the port scan raised a real flag with the permanent-clear action visible')
 
@@ -90,7 +100,7 @@ if (raised.ok) {
     'the permanently-cleared flag shows up on the Exclusions tab',
   )
   check(
-    await page.isVisible('#panel-exclusions .card:has-text("198.51.100.77")'),
+    await page.isVisible(`#panel-exclusions .card:has-text("${SCAN_SOURCE}")`),
     'the exclusion card shows the correct target',
   )
 
@@ -98,7 +108,7 @@ if (raised.ok) {
   // (or All) must hide the one exclusion under test.
   await page.selectOption('#panel-exclusions .filter select', { label: 'Port scan' })
   check(
-    await page.isVisible('#panel-exclusions .card:has-text("198.51.100.77")'),
+    await page.isVisible(`#panel-exclusions .card:has-text("${SCAN_SOURCE}")`),
     'the type filter set to a match still shows the card',
   )
 
@@ -109,7 +119,7 @@ if (raised.ok) {
   if (otherType) {
     await page.selectOption('#panel-exclusions .filter select', { label: otherType })
     check(
-      !(await page.isVisible('#panel-exclusions .card:has-text("198.51.100.77")')),
+      !(await page.isVisible(`#panel-exclusions .card:has-text("${SCAN_SOURCE}")`)),
       `the type filter set to "${otherType}" hides the non-matching card`,
     )
   } else {
@@ -118,9 +128,9 @@ if (raised.ok) {
   await page.selectOption('#panel-exclusions .filter select', { label: 'All' })
 
   // Filter by target text.
-  await page.fill('#panel-exclusions .filter input[type="search"]', '198.51.100.77')
+  await page.fill('#panel-exclusions .filter input[type="search"]', SCAN_SOURCE)
   check(
-    await page.isVisible('#panel-exclusions .card:has-text("198.51.100.77")'),
+    await page.isVisible(`#panel-exclusions .card:has-text("${SCAN_SOURCE}")`),
     'the target filter matches the excluded IP',
   )
   await page.fill('#panel-exclusions .filter input[type="search"]', 'no-such-target-xyz')
@@ -135,7 +145,7 @@ if (raised.ok) {
   await page.click('#panel-exclusions button:has-text("Remove exclusion")')
   await page.waitForSelector('[role="tab"]:has-text("Exclusions")', { timeout: 5000 })
   check(
-    !(await page.isVisible('#panel-exclusions .card:has-text("198.51.100.77")')),
+    !(await page.isVisible(`#panel-exclusions .card:has-text("${SCAN_SOURCE}")`)),
     'removing the exclusion takes it off the tab immediately',
   )
   const exclusionsTabAfterRemove = page.locator('[role="tab"]', { hasText: 'Exclusions' })
@@ -149,7 +159,7 @@ if (raised.ok) {
   await page.click('[role="tab"]:has-text("Exclusions")')
   await page.waitForTimeout(500)
   check(
-    !(await page.isVisible('#panel-exclusions .card:has-text("198.51.100.77")')),
+    !(await page.isVisible(`#panel-exclusions .card:has-text("${SCAN_SOURCE}")`)),
     'the removal persisted -- the exclusion is gone after a reload, not just optimistically hidden',
   )
 } else {
