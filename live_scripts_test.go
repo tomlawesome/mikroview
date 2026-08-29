@@ -4,6 +4,7 @@ package main
 
 import (
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -134,6 +135,89 @@ func TestLiveScriptsUseTheSharedStoreBlock(t *testing.T) {
 		}
 		if !strings.Contains(string(b), "mv_store_block") {
 			t.Errorf("%s does not use mv_store_block from scripts/live-stores.sh -- an inline store list is what #595 was", name)
+		}
+	}
+}
+
+// TestEveryLiveCheckIsRun is #624's guard.
+//
+// Both runners find their checks by glob, so a new one is picked up
+// without a second edit -- that is what stops a check joining the
+// graveyard three standalone scripts sat in for months, unable to start
+// a server and producing no signal at all (#595).
+//
+// What the glob cannot protect is the exclusion lists. An exclusion is a
+// decision -- "this needs a router booted", "this is a helper, not a
+// check" -- and a list of them is exactly the thing that goes stale:
+// run-scenarios.sh's own comment says so about the copy-pasted loop it
+// replaced. So this test pins the exclusions. Adding one fails the build
+// until it is recorded here with a reason, and removing a file that is
+// still excluded fails too, rather than leaving dead config behind that
+// reads as deliberate.
+func TestEveryLiveCheckIsRun(t *testing.T) {
+	excluded := map[string]string{
+		"frontend/scripts/live-browser.mjs":       "the shared helper every scenario imports, not a scenario",
+		"frontend/scripts/live-routeros-real.mjs": "needs a real CHR booted; run by make live-routeros-container",
+		"scripts/live-env.sh":                     "the shared environment helper",
+		"scripts/live-container.sh":               "the shared environment helper, container flavour",
+		"scripts/live-stores.sh":                  "the shared store block, sourced not run",
+		"scripts/live-routeros.sh":                "boots the CHR; driven by make live-routeros-container",
+		"scripts/live-routeros-step0.sh":          "a probe driven by live-routeros.sh, not a standalone check",
+		"scripts/live-rule-coverage-probe.sh":     "a probe driven by live-routeros.sh, not a standalone check",
+	}
+
+	runners := map[string]string{
+		"frontend/scripts/live-*.mjs": "scripts/run-scenarios.sh",
+		"scripts/live-*.sh":           "scripts/run-live-scripts.sh",
+	}
+
+	seen := map[string]bool{}
+	for pattern, runner := range runners {
+		body, err := os.ReadFile(runner)
+		if err != nil {
+			t.Fatalf("reading %s: %v", runner, err)
+		}
+		files, err := filepath.Glob(pattern)
+		if err != nil {
+			t.Fatalf("globbing %s: %v", pattern, err)
+		}
+		if len(files) == 0 {
+			t.Errorf("%s matched nothing -- either the checks moved or this guard is looking in the wrong place", pattern)
+		}
+		for _, f := range files {
+			seen[f] = true
+			reason, isExcluded := excluded[f]
+			inRunner := strings.Contains(string(body), filepath.Base(f))
+			switch {
+			case isExcluded && reason == "":
+				t.Errorf("%s is excluded with no reason given", f)
+			case isExcluded && !inRunner:
+				t.Errorf("%s is recorded here as excluded (%s) but %s does not mention it, so nothing is actually skipping it", f, reason, runner)
+			case !isExcluded && inRunner:
+				t.Errorf("%s is named in %s but not recorded here. If it is being skipped, say why in this test; a silent exclusion is how a check stops running without anyone noticing", f, runner)
+			}
+		}
+	}
+
+	// A stale exclusion is dead config that reads as a decision.
+	for f := range excluded {
+		if !seen[f] {
+			t.Errorf("%s is excluded here but no longer exists -- remove the exclusion", f)
+		}
+	}
+}
+
+// Both phases have to actually be invoked, or the globbing above is
+// describing a runner nothing calls -- which is the original failure one
+// level up.
+func TestLiveCheckRunsBothPhases(t *testing.T) {
+	b, err := os.ReadFile("Makefile")
+	if err != nil {
+		t.Fatalf("reading Makefile: %v", err)
+	}
+	for _, runner := range []string{"scripts/run-scenarios.sh", "scripts/run-live-scripts.sh"} {
+		if !strings.Contains(string(b), runner) {
+			t.Errorf("make live-check does not run %s, so every check it finds is dead", runner)
 		}
 	}
 }
