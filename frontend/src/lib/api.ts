@@ -193,6 +193,29 @@ export async function fetchEvents(
   return res.json()
 }
 
+// fetchEventsWindow is fetchEvents' own since/until window (already
+// parsed server-side by internal/api/rest.go's parseQuery -- see
+// store.Query.Since/Until), kept separate from buildQuery/fetchEvents
+// rather than adding since/until to Filters: those params round-trip
+// through the URL for a bookmarked/shared filter set, and a time window
+// is not a filter a person sets and keeps -- it is the fall's (#616) own
+// SPAN control asking for a longer look than the client-buffered events
+// in appState.events cover.
+export async function fetchEventsWindow(params: {
+  since?: string
+  until?: string
+  limit?: number
+}): Promise<EventsResult> {
+  const qs = new URLSearchParams()
+  if (params.since) qs.set('since', params.since)
+  if (params.until) qs.set('until', params.until)
+  if (params.limit) qs.set('limit', String(params.limit))
+  const q = qs.toString()
+  const res = await fetch(`/api/events${q ? `?${q}` : ''}`)
+  if (!res.ok) throw new ApiError(`fetchEventsWindow: ${res.status}`, res.status)
+  return res.json()
+}
+
 export async function fetchDevices(): Promise<Device[]> {
   const res = await fetch('/api/devices')
   if (!res.ok) throw new ApiError(`fetchDevices: ${res.status}`, res.status)
@@ -240,6 +263,11 @@ export interface RouterFilterRule {
   action: string
   srcAddressList: string
   logPrefix: string
+  // Whether this rule logs at all -- internal/engine/coverage.go's own
+  // "only ever claim a definite answer" truth, reused by the fall (#616)
+  // to tell a dark (unlogged) boundary from a merely quiet one instead of
+  // guessing.
+  log: boolean
   // #408's schema fields. Optional here because a router whose push
   // script predates them sends nothing, and because nothing in the UI
   // reads them yet -- typed so the data is not lost on the way in, not

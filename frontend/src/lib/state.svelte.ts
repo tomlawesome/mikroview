@@ -31,8 +31,10 @@ function stamp(events: FirewallEvent[]): ClientEvent[] {
 
 export type ConnState = 'connecting' | 'open' | 'closed'
 
-// 'live' is the scrolling event table + filter bar; 'metrics' is the
-// metrics page (see Metrics.svelte); 'watchlist' (issue #243) is the
+// 'fall' (#616) is the ratified hero live view and landing page (see
+// Fall.svelte) -- a band per boundary, live spectrum on top, time
+// pouring down below it; 'live' is the scrolling event table + filter
+// bar (Stream, the fall's own click-through target); 'metrics' is the
 // admin-only watched-ports/watched-devices management tab (see
 // Watchlist.svelte, successor to the old Control Ports tab) -- it also
 // carries a Suggestions tab (#243 slice 5, merged in by #547) for
@@ -73,7 +75,13 @@ export type ConnState = 'connecting' | 'open' | 'closed'
 // the shell now (see SetupWizard.svelte), not a page to navigate to, so
 // the route is gone rather than aliased or redirected -- "Run setup…"
 // opens the modal from wherever the operator already is.
+//
+// 'fall' (#616) is the ratified hero live view and landing page -- see
+// Fall.svelte. It retires #544's interim ("Stream as landing") wholesale:
+// the default view below is 'fall', not 'live', and Stream keeps its own
+// Live-group row rather than being the entry point.
 export type View =
+  | 'fall'
   | 'live'
   | 'metrics'
   | 'watchlist'
@@ -96,7 +104,9 @@ export type View =
 // `events` with that server-filtered baseline, so the two layers
 // together cover both "instant" and "actually complete" filtering.
 class AppState {
-  view = $state<View>('live')
+  // #616: the fall is the landing page, replacing #544's interim
+  // ('live', i.e. Stream) default.
+  view = $state<View>('fall')
   // $state.raw, not $state: every write to this array replaces it whole
   // (setInitialEvents, appendUnseen and flushIncoming all reassign rather
   // than mutate), so the deep per-element proxy a plain $state would build

@@ -92,6 +92,33 @@
   --chart-traffic: #3987e5;
   --chart-refused: #e66767;
 
+  /* The fall's own third ink (#616): NAT, alongside the traffic/refused
+     pair above -- both already validated for exactly this surface, and
+     already named for it ("drop . reject -- the fall's grammar", the
+     comment above). Its own token rather than reusing --marked (also
+     violet, #a78bfa): that token means a mangle-mark rule everywhere
+     else in the app, and a NAT mark on the fall is a different fact.
+     --natted (teal) is the app's other existing NAT token, but the
+     record specifies violet for the fall specifically, so this mints
+     one rather than silently overriding a ratified colour choice with
+     the app's existing convention.
+
+     Validated with the dataviz six-checks validator, categorical, all
+     pairs, against --chart-traffic/--chart-refused on this app's real
+     surfaces:
+       dark  (#9b3fc9 on --bg #0b0e14): PASS with a CVD WARN (deutan
+              ΔE 6.4, in the 6-8 floor band) -- legal because the fall
+              never shows a NAT mark without its "nat" text label
+              (record: "always labelled", "no meaning by colour alone").
+              Normal-vision ΔE 19.5, contrast >=3:1.
+       light (#7e22ce on --bg #dedad2): PASS with the same CVD WARN
+              shape (deutan ΔE 6.9), normal-vision ΔE 18.9, contrast
+              >=3:1. Several brighter/lighter violets (#8b3fb8, #7c3aed,
+              #9333ea) were tried first and hard-FAILed CVD separation
+              from --chart-traffic under deutan; this is the value that
+              actually passes on this app's real surfaces. */
+  --fall-nat: #9b3fc9;
+
   /* Nudged toward the active colorway's --accent (see the [data-colorway]
      rules below) before being washed to a low-alpha row fill just below
      -- so the row backgrounds actually feel different per colorway,
@@ -166,6 +193,7 @@
   --now: #9a6b10;
   --chart-traffic: #2a78d6;
   --chart-refused: #d13a39;
+  --fall-nat: #7e22ce;
 
   /* Light mode uses its own darker/more saturated base tones here (a
      0.12-alpha wash of the dark-mode --accept reads too washed-out on a
@@ -214,6 +242,7 @@
     --now: #9a6b10;
     --chart-traffic: #2a78d6;
     --chart-refused: #d13a39;
+    --fall-nat: #7e22ce;
 
     --accept-tinted: color-mix(in srgb, #16a34a 85%, var(--accent) 15%);
     --drop-tinted: color-mix(in srgb, #d97706 85%, var(--accent) 15%);

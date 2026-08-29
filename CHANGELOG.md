@@ -18,6 +18,19 @@ rewritten.
 
 ### Added
 
+- **The fall is the landing page** (#616). A band per boundary --
+  currently the interface pair a pushed firewall rule or a live event
+  actually carries, since nothing yet names a network group
+  (LAN/SRV/GUEST/IOT) or a WAN interface for it to group by instead; see
+  the #616 PR for that deviation from the ratified "group-pair +
+  direction" design -- with a live spectrum on top (blue accepted, red
+  dropped, violet nat) and time pouring downward below a NOW line,
+  bucketed rather than one mark per event so it stays render-bounded at
+  real traffic volume. A dark (unlogged) boundary is drawn hatched and
+  says so in words, never colour alone; clicking a boundary opens Stream
+  filtered to it. Retires the interim landing from #544 -- Stream keeps
+  its own row, second in the Live group. Reduced-motion turns off the
+  NOW-line pulse.
 - **Custom detection definitions can now be created** (#502). An
   operator authors match conditions plus an aggregation -- key mode,
   counting mode, threshold and window -- and a detail sentence, and

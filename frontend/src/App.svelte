@@ -19,6 +19,7 @@
   import ConfigProblemBanner from './components/ConfigProblemBanner.svelte'
   import FilterBar from './components/FilterBar.svelte'
   import LiveTable from './components/LiveTable.svelte'
+  import Fall from './components/Fall.svelte'
   import Metrics from './components/Metrics.svelte'
   import Watchlist from './components/Watchlist.svelte'
   import Flags from './components/Flags.svelte'
@@ -218,7 +219,9 @@
       <ConnectionBanner />
       <ConfigProblemBanner />
       <main id="main-content">
-        {#if appState.view === 'live'}
+        {#if appState.view === 'fall'}
+      <Fall />
+    {:else if appState.view === 'live'}
       <FilterBar />
       <LiveTable />
     {:else if appState.view === 'watchlist'}
