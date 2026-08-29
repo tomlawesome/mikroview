@@ -16,6 +16,7 @@ set -euo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO"
+. "$REPO/scripts/live-stores.sh"
 
 DIR="$(mktemp -d)"
 cleanup() {
@@ -47,35 +48,7 @@ tls:
   enabled: true
   certFile: $DIR/live.crt
   keyFile: $DIR/live.key
-# Every store, not most of them. checkStoresUsable (storage_preflight.go,
-# #536) walks backedUpStores and refuses to start on the first path it
-# cannot write, so a config naming only some of them leaves the rest at
-# their /var/lib/mikroview defaults and the server exits before doing
-# anything -- it stopped on recovery_keys, which is early in that list
-# (#595). The same full block appears in scripts/live-env.sh and in the
-# other standalone live-* scripts; adding a store to config.Config means
-# adding it to all of them.
-auth:
-  storePath: $DIR/users.json
-  recoveryKeysPath: $DIR/recovery.json
-  recoveryPepperPath: $DIR/pepper
-  tokensStorePath: $DIR/tokens.json
-  secureCookie: true
-flags:
-  storePath: $DIR/flags.json
-  ruleUsageStorePath: $DIR/rule-usage.json
-  detectorSettingsStorePath: $DIR/detector-settings.json
-entities: {storePath: $DIR/entities.json}
-audit: {storePath: $DIR/audit.json}
-setup: {storePath: $DIR/setup.json}
-watchlist:
-  storePath: $DIR/watchlist.json
-  matchLogPath: $DIR/matchlog.jsonl
-  suggestionsStorePath: $DIR/suggestions.json
-deviceMac: {storePath: $DIR/mac-registry.json}
-engine:
-  storePath: $DIR/engine-state.json
-  definitionsStorePath: $DIR/definitions.json
+$(mv_store_block "$DIR" true)
 EOF
 
 ( cd frontend && npm run build >/dev/null 2>&1 )
