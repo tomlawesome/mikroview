@@ -791,7 +791,7 @@ different name in mikroview than the RouterOS comment.
 but changing one means editing `config.yaml` and restarting the
 container. **Entities** are the same idea (a label attached to a rule
 label, host IP, or -- issue #109 -- a port number), plus open-ended
-tags, managed live from the UI (**Menu → Entities**, admin-only) with no
+tags, managed live from the UI (**Admin ▸ Entities**, admin-only) with no
 restart needed -- the shared foundation two features build on (a
 mail-sender allowlist, and this IP/port/rule aliasing UI), so the record
 shape is deliberately generic (`type`, `key`, `label`, `tags`) rather
@@ -825,7 +825,7 @@ only way a port ever gets a friendly name.
 
 Entities are managed via `GET`/`POST`/`DELETE /api/entities`
 (admin-gated the same way `POST /api/auth/users` is -- see
-[API reference](#api-reference)), the **Entities** panel in the menu, or
+[API reference](#api-reference)), **Admin ▸ Entities**, or
 the pencil on any address, port or rule token in the live view -- which
 is usually where you want it, since it puts the naming at the moment you
 recognised what the row was.
@@ -886,7 +886,7 @@ open question about which flag actions belong here:
   do silently. Removing an exclusion
   (`DELETE /api/flags/exclusions/{id}`) is admin-gated and logged too.
 
-Reviewed from **Menu → Audit log** (admin-only, matching Entities' own
+Reviewed from **Investigate ▸ Audit log** (admin-only, matching Entities' own
 gate). Backed by `GET /api/audit`, a windowed query over the
 persisted log (see [API reference](#api-reference)) -- the same
 `since`/`until`/`limit` convention `GET /api/events` already uses, minus
@@ -960,7 +960,7 @@ Two kinds of entry, chosen per entry, not globally:
   (`includeStructuralNoise` opts back in) since it's rarely what anyone
   means by "did this device misbehave."
 
-Managed from **Menu → Watchlist** (admin-only, matching Entities/Audit's
+Managed from **Expect ▸ Watchlist** (admin-only, matching Entities/Audit's
 gate). Add,
 edit and remove entries there; for an inverted entry, the same page
 shows what's been promoted, what's waiting for review, and a toggle to
@@ -1050,7 +1050,7 @@ devices from your DHCP leases, and ports an existing firewall rule
 already drops or rejects -- so you have something to react to rather
 than something to invent.
 
-Managed from **Menu → Suggestions** (admin-only, same gate as the
+Managed from **Expect ▸ Watchlist ▸ Suggestions** (admin-only, same gate as the
 watchlist itself). Every suggestion is one of three states, never a
 plain accept/reject:
 
@@ -1339,7 +1339,7 @@ flags:
   which only fires on distinct-*destination-count* spread over a window
   — a single new SMTP connection to one destination wouldn't trip that.
   If you self-host your own outbound mail server, tag its host entity
-  `trusted-mail-sender` once (**Menu → Entities**, admin-only, or `POST
+  `trusted-mail-sender` once (**Admin ▸ Entities**, admin-only, or `POST
   /api/entities`) and mikroview never flags it for this again. Like
   stale-rule, this doesn't currently support the live enable/scope
   toggle described in [Per-detector
@@ -1554,11 +1554,12 @@ either re-fires once it expires (nothing was solved) or it doesn't
 (permanent exclusion was what was wanted all along), so there's no
 in-between "snooze" option. Because "permanent" shouldn't mean
 "unrecoverable by mistake," every current exclusion is listed (and can
-be removed, re-enabling that pair) on its own **Exclusions** page,
-reachable from the menu -- admin-only, same as every other admin-gated
-endpoint (see [Authentication](#authentication)). It was split out of
-the bottom of the Flags page (issue #207) because reviewing exclusions
-underneath a list of hundreds of active flags was a pain.
+be removed, re-enabling that pair) on its own **Exclusions** tab
+(**Detect ▸ Flags ▸ Exclusions**) -- admin-only, same as every other
+admin-gated endpoint (see [Authentication](#authentication)). It was
+split out of the bottom of the Flags page (issue #207) because
+reviewing exclusions underneath a list of hundreds of active flags was
+a pain.
 
 ## New-device detection (optional, on by default)
 
@@ -1900,7 +1901,8 @@ deployment or lock you out of it.
 ### Connecting your account to SSO
 
 If your deployment has SSO set up, you can switch your own account over
-to it: **Menu → Connect SSO**. You'll be sent to your identity provider
+to it: open the account menu at the bottom of the rail (click your
+username) and choose **Connect SSO**. You'll be sent to your identity provider
 to sign in, and when you come back the account uses SSO from then on.
 
 **This deletes your MikroView password, and can't be undone from
