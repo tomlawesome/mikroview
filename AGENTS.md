@@ -376,6 +376,14 @@ Where something genuinely cannot be exercised here (no RouterOS device, no
 external identity provider), say so plainly in the PR rather than letting
 "tested" imply more than was observed.
 
+### A scenario cannot be judged on its own
+
+Scenarios share one instance and run in filename order, so most depend on
+state an earlier one left -- `live-flags-clearing.mjs` alone raises no
+flags at all. To tell a regression from a pre-existing failure, run the
+whole `make live-check` on both trees, a worktree at `origin/dev` and the
+branch, never the one scenario twice.
+
 ### Match CI's exact commands, not the obvious equivalents
 
 Local verification is incomplete unless it used the same commands CI uses —

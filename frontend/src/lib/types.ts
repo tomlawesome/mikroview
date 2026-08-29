@@ -397,6 +397,43 @@ export interface Definition {
   // The operator-facing entry an expectation converts back to. Absent
   // for a detection definition.
   expectation?: WatchlistEntry
+  // The structure an operator-authored detector carries: its match
+  // conditions and the aggregation around them (#502). Absent for a
+  // shipped definition, whose structure is Go in the binary, and for an
+  // expectation, whose structure is fixed. Threshold and window are not
+  // here -- they are ordinary params, tuned through the same editor as
+  // every other definition's.
+  detection?: DefinitionDetection
+  // What this definition costs the ingest path. Set only where an
+  // operator chose the conditions that decide it.
+  dispatch?: DefinitionDispatch
+}
+
+// The condition language, unchanged from the one expectations and
+// shipped detectors already use -- there is no second one.
+export interface DefinitionCondition {
+  field: string
+  operator: string
+  values: string[]
+}
+
+export interface DefinitionDetection {
+  conditions: DefinitionCondition[]
+  key: string
+  counting: string
+  distinctField?: string
+  // The sentence a raised flag shows. Its placeholders are a closed set
+  // the server validates when the definition is created.
+  detailTemplate: string
+}
+
+// alwaysConsulted is true when the definition's conditions give the
+// engine's dispatch index nothing to narrow on, so it is evaluated
+// against every event rather than only the ones that could match. Such a
+// detector is accepted rather than refused -- reason says what it costs.
+export interface DefinitionDispatch {
+  alwaysConsulted: boolean
+  reason?: string
 }
 
 // What GET /api/definitions returns alongside the definitions: whether
