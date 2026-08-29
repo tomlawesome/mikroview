@@ -168,7 +168,16 @@ export async function dismissSetupWizard(page) {
   }
 }
 
-export async function session({ waitForEvents = 0, dismissSetup = true } = {}) {
+/**
+ * session's own landing default is 'stream' (#616 retired #544's interim
+ * -- the fall is the real landing page now, not Stream) so that every
+ * scenario written against the old landing keeps working unmodified:
+ * session() signs in, then navigates to Stream itself before returning,
+ * exactly where those scenarios already assume they start. Pass
+ * `landing: 'fall'` (live-fall.mjs's own case) to stay on the fall
+ * instead of being moved off it.
+ */
+export async function session({ waitForEvents = 0, dismissSetup = true, landing = 'stream' } = {}) {
   browser = await chromium.launch()
   // ignoreHTTPSErrors, because the certificate under test is one
   // mikroview generated for itself seconds ago -- self-signed, with no
@@ -197,12 +206,20 @@ export async function session({ waitForEvents = 0, dismissSetup = true } = {}) {
   await page.fill('input[autocomplete="username"]', USER)
   await page.fill('input[autocomplete="current-password"]', PASS)
   await page.click('button[type="submit"]')
-  await page.waitForSelector('input.rule', { timeout: 15000 })
+  // #main-content is the one marker present on every signed-in view
+  // (App.svelte wraps all of them in it) -- unlike the old `input.rule`
+  // wait, it does not assume which view is the landing page.
+  await page.waitForSelector('#main-content', { timeout: 15000 })
 
   // Before anything else touches the page: a first-run instance layers
   // the setup modal over the shell, and every scenario but the wizard's
   // own wants it out of the way. See dismissSetupWizard.
   if (dismissSetup) await dismissSetupWizard(page)
+
+  if (landing === 'stream') {
+    await page.click('.rail .item .label:text-is("Stream")')
+    await page.waitForSelector('input.rule', { timeout: 15000 })
+  }
 
   if (waitForEvents > 0) {
     await page.waitForFunction(
