@@ -1873,6 +1873,117 @@ file, where the alternative to "unchanged" is "locked out".
 > database with `pg_dump` or your provider's snapshots — see
 > [CHANGELOG.md](../CHANGELOG.md) and the migration section above.
 
+### Moving the data directory
+
+**Changed your mind about a bind mount versus a named Docker volume?**
+`-migrate-data` copies the data directory to wherever you point it —
+bind mount to volume, or volume to bind mount — so you don't hand-copy
+files and risk getting the ownership wrong.
+
+```sh
+mikroview -migrate-data <destination-directory> [--force]
+```
+
+**Stop mikroview first.** Then run the image with the old location
+mounted where it always is, the new one mounted at
+`/var/lib/mikroview-migrate`, and the config as usual:
+
+```sh
+# Named volume -> bind mount. /path/on/host/new-data must exist and be
+# owned by uid 65532 first -- see "Ownership" below.
+docker run --rm \
+  -v mikroview-data:/var/lib/mikroview \
+  -v /path/on/host/new-data:/var/lib/mikroview-migrate \
+  -v /path/to/config.yaml:/etc/mikroview/config.yaml:ro \
+  -e MIKROVIEW_CONFIG=/etc/mikroview/config.yaml \
+  ghcr.io/tomlawesome/mikroview:latest \
+  -migrate-data /var/lib/mikroview-migrate
+
+# Bind mount -> named volume, the other direction. mikroview-data-new
+# does not exist yet; Docker creates it, already owned correctly.
+docker run --rm \
+  -v /path/on/host/data:/var/lib/mikroview \
+  -v mikroview-data-new:/var/lib/mikroview-migrate \
+  -v /path/to/config.yaml:/etc/mikroview/config.yaml:ro \
+  -e MIKROVIEW_CONFIG=/etc/mikroview/config.yaml \
+  ghcr.io/tomlawesome/mikroview:latest \
+  -migrate-data /var/lib/mikroview-migrate
+```
+
+**Use `/var/lib/mikroview-migrate`, not a path of your own choosing.**
+The image ships that directory owned by uid 65532 for exactly this job.
+Docker copies a fresh named volume's ownership from whatever the image
+has at the mount point, so a new volume mounted anywhere else — `/mnt`,
+`/data`, anything the image never created — arrives owned by root, and
+mikroview cannot write a single byte into it.
+
+Once the copy is done, the destination becomes the deployment's normal
+`/var/lib/mikroview` mount: change the `volumes:` line in your compose
+file to name the new volume or host directory, and start mikroview
+again. Nothing in the running deployment ever mounts
+`/var/lib/mikroview-migrate`.
+
+**What moves.** Everything under the data directory — the same list as
+[backing up](#backing-up-and-restoring) — plus three things that section
+deliberately leaves out:
+
+- **The TLS store** (`tls.storePath`) — this is the same host keeping
+  the same identity, so there's no reason to make every browser and
+  every router re-trust a new certificate, the way there would be if the
+  data were landing on a different host.
+- **The recovery pepper** (`auth.recoveryPepperPath`) — leaving it
+  behind would silently invalidate every recovery key you've handed out.
+- **The Postgres adoption marker** — without it, a Postgres deployment
+  would come back up reading the empty JSON files and show a first-run
+  setup screen to whoever gets there first.
+
+Backing up excludes these because a backup travels to a different host,
+where the same certificate and pepper are the wrong thing to restore. A
+migration never leaves the host, so carrying them across is exactly
+right.
+
+**Ownership.** mikroview creates every file on the destination itself,
+so the copy ends up owned by the user mikroview runs as (uid `65532` in
+the shipped image) with no `chown` step afterwards. A named volume needs
+nothing — Docker hands it to the container on first use. A bind-mount
+destination on the host has to be writable by that uid *before* you run
+the command, or it refuses before copying anything, naming the uid, the
+directory's current owner, and the exact `chown` to run.
+
+**Nothing is deleted.** This is a copy — the source is untouched until
+you remove it yourself:
+
+1. Check the summary it prints.
+2. Stop mikroview.
+3. Point the deployment's mount at the new location.
+4. Start it, and sign in.
+5. Once you're satisfied, delete the old directory.
+
+The old directory still holds your accounts and recovery-key digests, so
+delete it once the move is confirmed rather than leaving it lying
+around.
+
+**Verification.** Every file is hashed as it's written, then re-read and
+re-hashed off the destination, and each store is opened to prove
+mikroview can actually read and write it there — not just that the bytes
+match. A failure at any point leaves the source untouched.
+
+`-migrate-data` refuses:
+
+- a destination that isn't empty, unless you pass `--force`
+- a destination inside the source directory, or the source inside the
+  destination
+- a symlink or other special file anywhere in the data directory
+- (a warning, not a refusal) a store configured outside the data
+  directory — it's on a different mount, so it is **not** moved, and the
+  new deployment needs it mounted there too
+
+> **Using Postgres?** Unlike `-backup`/`-restore`, this one doesn't
+> refuse. Most of what moves is unused on a Postgres deployment, but
+> it's still worth running for the TLS store, the recovery pepper and
+> the adoption marker, which live on the data directory whatever the
+> backend — the database itself is untouched.
+
 ### Adding and removing people
 
 Open the engine room (Admin group in the navigation rail) and its
