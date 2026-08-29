@@ -67,6 +67,10 @@ services:
       # the line above and uncomment this one instead (not both) -- see
       # README.md's "Persistent data" section for the permissions step
       # this needs first.
+      # Switching between this and the named volume later, either
+      # direction, is a supported move -- run `mikroview -migrate-data`
+      # rather than hand-copying files. See docs/configuration.md's
+      # "Moving the data directory" section.
       # - ./data:/var/lib/mikroview
     environment:
       - MIKROVIEW_CONFIG=/etc/mikroview/config.yaml
