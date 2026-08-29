@@ -623,6 +623,11 @@
     background: var(--border);
     border: 1px solid var(--border);
     border-radius: 6px;
+    /* The hero fills the viewport: the rig takes all remaining height so
+       the bands run the full page like the ratified scene, rather than
+       stopping at the waterfall's minimum and leaving dead page below. */
+    flex: 1;
+    min-height: 320px;
   }
 
   .band {
@@ -712,8 +717,8 @@
   .spectrum-line {
     fill: none;
     stroke: var(--fg-dim);
-    stroke-width: 0.6;
-    opacity: 0.6;
+    stroke-width: 1;
+    opacity: 0.85;
   }
   .mark.accept {
     fill: var(--chart-traffic);
