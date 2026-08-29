@@ -18,9 +18,13 @@ func TestVersionStanding(t *testing.T) {
 		{"older than the floor", "7.12.1", StandingBelowMinimum},
 		{"much older", "6.49.10", StandingBelowMinimum},
 		// Newer is not an error: it means nobody has read that release
-		// against these commands.
-		{"newer than reviewed", "7.24.1", StandingAheadOfReview},
-		{"newer major", "8.0", StandingAheadOfReview},
+		// against these commands. Deliberately far ahead of any real
+		// release, so bumping ReviewedVersion after a review does not
+		// turn this case into a lie -- an earlier version of this test
+		// pinned the then-current 7.24.1 here and broke the moment that
+		// release was reviewed, which is the wrong thing to have to fix.
+		{"newer than reviewed", "9.99.99", StandingAheadOfReview},
+		{"newer major", "99.0", StandingAheadOfReview},
 		// A pre-release drops its marker rather than being ordered
 		// against one -- 7.19beta2 is treated as 7.19.
 		{"beta inside the range", "7.19beta2", StandingReviewed},
@@ -40,17 +44,19 @@ func TestVersionStanding(t *testing.T) {
 // The freshness check calls this against whatever MikroTik publishes as
 // current stable, so its answer decides whether CI shouts.
 func TestCompareToReviewed(t *testing.T) {
+	// Expressed against ReviewedVersion rather than against whatever it
+	// happens to be today, so reviewing a release and bumping the marker
+	// does not require editing these expectations.
 	for _, tc := range []struct {
 		candidate string
 		wantNewer bool
 	}{
 		{ReviewedVersion, false},
-		{"7.24.1", true},
-		{"7.23.4", true},
-		{"7.23.3", false},
-		{"7.23.2", false},
-		{"7.23", false},
-		{"8.0", true},
+		{"9.99.99", true},
+		{"99.0", true},
+		// Older than any marker this project will hold.
+		{"7.0", false},
+		{"6.49.10", false},
 	} {
 		got, err := CompareToReviewed(tc.candidate)
 		if err != nil {
