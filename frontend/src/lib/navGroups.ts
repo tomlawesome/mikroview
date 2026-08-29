@@ -43,12 +43,16 @@ export type NavGroup = { name: string; items: NavItem[] }
 // than in the DOM: Map (v0.5.0) and Lookback (unbuilt) are deliberately
 // absent, not stubbed or disabled.
 //
-// Interim, per #544's body: the Live group carries Stream alone until the
-// fall ships, and Stream is the landing.
+// #616 retires #544's interim (Stream as landing) wholesale: the fall is
+// now the first Live row and the landing page (see state.svelte.ts's
+// AppState.view default); Stream keeps its own row, second.
 export const navGroups: NavGroup[] = [
   {
     name: 'Live',
-    items: [{ label: 'Stream', view: 'live', icon: 'stream', title: 'The live event stream' }],
+    items: [
+      { label: 'The fall', view: 'fall', icon: 'fall', title: 'The live receiver: a band per boundary, live spectrum, and time pouring down' },
+      { label: 'Stream', view: 'live', icon: 'stream', title: 'The live event stream' },
+    ],
   },
   {
     name: 'Investigate',
