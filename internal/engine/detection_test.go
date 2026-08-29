@@ -478,3 +478,68 @@ func TestCustomDetectionIsReplayable(t *testing.T) {
 		t.Errorf("a custom declarative detection should be replay-capable, got not capable (%s)", reason)
 	}
 }
+
+// A detector an operator authored is theirs to rename: the alternative
+// is deleting it and creating it again, which throws away the id every
+// flag it already raised points at (#612).
+func TestSetNameRenamesACustomDetection(t *testing.T) {
+	s, err := OpenDefinitionsStore("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	def := customDetection(&DetectionSpec{
+		Conditions:     []Condition{{Field: FieldDestinationPort, Operator: OpEquals, Values: []string{"22"}}},
+		Key:            KeyPerSource,
+		Counting:       CountingTotal,
+		DetailTemplate: "{Count} from {SourceAddress}",
+	}, 3, "60s")
+	def.Scope.Hosts = []string{"10.0.0.1"}
+	if err := s.Upsert(def); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := s.SetName(def.ID, "  renamed detector  "); err != nil {
+		t.Fatalf("SetName: %v", err)
+	}
+	got, ok := s.Get(def.ID)
+	if !ok {
+		t.Fatal("the definition vanished on rename")
+	}
+	if got.Definition.Name != "renamed detector" {
+		t.Errorf("Name = %q, want it renamed and trimmed", got.Definition.Name)
+	}
+
+	// A rename is a rename: nothing else about the detector moves, and
+	// in particular it keeps the id every raised flag refers to.
+	if got.Definition.ID != def.ID {
+		t.Errorf("id changed on rename: %q -> %q", def.ID, got.Definition.ID)
+	}
+	if got.Definition.Detection == nil || len(got.Definition.Detection.Conditions) != 1 {
+		t.Errorf("the detection block did not survive the rename: %+v", got.Definition.Detection)
+	}
+	// Through ValidateParams, because stored params come back in their
+	// JSON representation (a float64 for an int) until they are
+	// normalised -- comparing the raw map would be asserting on the
+	// encoding rather than on the value.
+	params, err := ValidateParams(got.Definition.ParamSchema, got.Definition.Params)
+	if err != nil {
+		t.Fatalf("params no longer validate after a rename: %v", err)
+	}
+	window, err := time.ParseDuration(params["window"].(string))
+	if err != nil {
+		t.Fatalf("window is no longer a duration after a rename: %v", err)
+	}
+	if params["threshold"] != 3 || window != time.Minute {
+		t.Errorf("params changed on rename: threshold=%v window=%s", params["threshold"], window)
+	}
+	if len(got.Definition.Scope.Hosts) != 1 || got.Definition.Scope.Hosts[0] != "10.0.0.1" {
+		t.Errorf("scope changed on rename: %+v", got.Definition.Scope)
+	}
+
+	if err := s.SetName(def.ID, "   "); err == nil {
+		t.Error("an empty name was accepted")
+	}
+	if after, _ := s.Get(def.ID); after.Definition.Name != "renamed detector" {
+		t.Errorf("the refused rename was applied anyway: %q", after.Definition.Name)
+	}
+}
