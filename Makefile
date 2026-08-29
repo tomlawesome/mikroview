@@ -51,11 +51,22 @@ clean:
 # Add a scenario per change: frontend/scripts/live-<thing>.mjs, importing
 # the helpers from live-browser.mjs. live-smoke.mjs is the baseline every
 # change runs.
+# Two phases, because the checks come in two shapes. The browser
+# scenarios drive one shared instance; the standalone scripts each stand
+# up and tear down their own server on fixed ports, so they cannot share
+# that instance and run after it is down.
+#
+# Both phases find their checks by glob. That is the point: adding
+# frontend/scripts/live-<thing>.mjs or scripts/live-<thing>.sh is
+# sufficient, and there is no second edit to forget. Three standalone
+# scripts had no runner at all and rotted into being unable to start a
+# server, silently, for months (#595, #624).
 live-check:
 	@eval "$$(scripts/live-env.sh up)"; \
 	  status=0; \
 	  scripts/run-scenarios.sh || status=1; \
 	  scripts/live-env.sh down; \
+	  scripts/run-live-scripts.sh || status=1; \
 	  exit $$status
 
 .PHONY: live-check
