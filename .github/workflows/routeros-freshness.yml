@@ -1,0 +1,34 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+#
+# Watches for a RouterOS stable release nobody has reviewed against the
+# commands mikroview asks operators to paste into their routers (#436).
+#
+# Scheduled rather than per-push: it is about the world changing, not
+# about the code changing, so a pull request cannot be the trigger. It
+# runs on its own so a red mark here reads as "a release shipped",
+# never as "the build is broken".
+name: RouterOS freshness
+
+on:
+  schedule:
+    # Weekly. RouterOS stable releases are weeks apart, so anything more
+    # frequent is noise that trains people to ignore the result.
+    - cron: '0 7 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  freshness:
+    name: A RouterOS release nobody has reviewed
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: '1.27.0'
+      # The script explains what to do on failure, and says plainly that
+      # bumping the marker without reading the release notes is the one
+      # wrong response.
+      - run: bash scripts/routeros-freshness.sh
