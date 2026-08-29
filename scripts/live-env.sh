@@ -156,7 +156,33 @@ with socket.create_connection((host, port), timeout=10) as sock:
 }
 
 build() {
-  ( cd frontend && npm run build >/dev/null 2>&1 )
+  # No /dev/null here, and the exit code is checked explicitly. `set -e`
+  # alone already aborted `up` here on a fresh checkout (no
+  # frontend/node_modules) -- but silently, because npm's own error was
+  # being thrown away with it, and because `up` is meant to be run as
+  # `eval "$(scripts/live-env.sh up)"` (the Makefile's live-check target):
+  # `eval "$(cmd)"` only ever sees cmd's captured *stdout*, so a cmd that
+  # dies before printing any `export ...` line leaves eval nothing to run
+  # but an empty string -- which eval treats as success, whatever cmd's
+  # real exit code was. The Makefile's own live-routeros-container comment
+  # names this same trap (#613); this was its second bite (#617). A
+  # message on stderr, printed here before returning control to a caller
+  # that can no longer see the exit code, is what survives it.
+  #
+  # 1>&2 on the subshell, not a bare call: npm's own build banner and
+  # vite's asset listing print to stdout, and stdout is exactly the
+  # stream `eval "$(scripts/live-env.sh up)"` captures and executes. Left
+  # unredirected that output becomes shell input the moment a build
+  # succeeds too -- "> vite build" read as a redirection into a command
+  # named "build" is how this was actually caught, as "eval: build: not
+  # found" once npm's own text stopped going to /dev/null with the error.
+  if ! ( cd frontend && npm run build ) 1>&2; then
+    echo "live-env: npm run build failed in frontend/ -- see the output above." >&2
+    if [ ! -d frontend/node_modules ]; then
+      echo "live-env: frontend/node_modules is missing -- run 'npm ci' in frontend/ first." >&2
+    fi
+    exit 1
+  fi
   # touch .gitkeep for the same reason the Makefile's frontend target
   # does: rm -rf takes the only tracked file in here with it, and a live
   # check should not leave the tree dirty (#353).
