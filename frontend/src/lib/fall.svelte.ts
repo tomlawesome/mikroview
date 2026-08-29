@@ -16,6 +16,27 @@
 // already has honestly: the interface pair a rule or event actually
 // carries. See the PR description for the deviation this records.
 //
+// Amended by Fable's 2026-08-29 review (#616 comment) after the base
+// version above shipped:
+//
+//   (a) A pushed rule's srcAddressList (e.g. "lan") is real,
+//       operator-assigned evidence of a named group -- unlike the WAN/
+//       guest/iot taxonomy, which nothing in mikroview names, this one
+//       sometimes IS pushed. Where present, it replaces the interface
+//       name on that side of the label. There is no dstAddressList in
+//       RouterOS's own schema (ingest.FilterRule only carries a
+//       src-side list name; the destination side is a raw address, not
+//       a named list) -- the review comment's "srcAddressList/
+//       dstAddressList" is read as "whichever address-list evidence
+//       exists", which today is only ever the source side.
+//   (b) Ordering is semantic, not alphabetical: input-chain/WAN-facing
+//       bands first, observed forward bands next, dark (and
+//       unknown-coverage) bands last, alphabetical within each class.
+//       "WAN-facing" is realised as RouterOS's own `chain === 'input'`
+//       (traffic addressed to the router itself) rather than guessing
+//       which interface is "the" WAN -- a real distinction already in
+//       the data, not an invented one.
+//
 // Coverage reuses internal/engine/coverage.go's own rule (mirrored here
 // client-side rather than added as a new endpoint): only ever claim a
 // definite answer. A boundary is 'dark' only when rules were pushed,
@@ -32,6 +53,12 @@ export interface FallBoundary {
   chain: string
   inInterface: string
   outInterface: string
+  // The evidence this boundary was named from, if any -- '' when no
+  // pushed rule for this boundary carried a src-address-list. Kept
+  // alongside inInterface/outInterface (not replacing them) so the UI
+  // can still say "ether1" in the aria-label/click-through even when the
+  // header shows "lan".
+  srcAddressList: string
   label: string
   coverage: BoundaryCoverage
 }
@@ -47,11 +74,23 @@ export function boundaryKeyOf(chain: string, inInterface: string | undefined, ou
   return `${chain}|${inInterface ?? ''}|${outInterface ?? ''}`
 }
 
-function boundaryLabel(chain: string, inIf: string, outIf: string): string {
-  if (inIf && outIf) return `${inIf} → ${outIf}`
-  if (inIf) return `${inIf} · ${chain}`
+function boundaryLabel(chain: string, inIf: string, outIf: string, srcAddressList: string): string {
+  const inSide = srcAddressList || inIf
+  if (inSide && outIf) return `${inSide} → ${outIf}`
+  if (inSide) return `${inSide} · ${chain}`
   if (outIf) return `${chain} · ${outIf}`
   return chain
+}
+
+// bandClass sorts input-chain/WAN-facing bands first, observed forward
+// (or output) bands next, and dark/unknown-coverage bands last -- the
+// review's ordering amendment (b). RouterOS's `input` chain is traffic
+// addressed to the router itself, a real distinction already in the
+// data; nothing here guesses which interface is "the" WAN.
+function bandClass(chain: string, coverage: BoundaryCoverage): 0 | 1 | 2 {
+  if (chain === 'input') return 0
+  if (coverage === 'observed') return 1
+  return 2
 }
 
 /**
@@ -64,7 +103,7 @@ function boundaryLabel(chain: string, inIf: string, outIf: string): string {
 export function boundariesFromRules(rules: RouterFilterRule[], anyRulesPushed: boolean): FallBoundary[] {
   const byKey = new Map<
     string,
-    { chain: string; inInterface: string; outInterface: string; sawLog: boolean }
+    { chain: string; inInterface: string; outInterface: string; sawLog: boolean; srcAddressList: string }
   >()
   for (const r of rules) {
     const inIf = r.inInterface ?? ''
@@ -72,10 +111,15 @@ export function boundariesFromRules(rules: RouterFilterRule[], anyRulesPushed: b
     const key = boundaryKeyOf(r.chain, inIf, outIf)
     let entry = byKey.get(key)
     if (!entry) {
-      entry = { chain: r.chain, inInterface: inIf, outInterface: outIf, sawLog: false }
+      entry = { chain: r.chain, inInterface: inIf, outInterface: outIf, sawLog: false, srcAddressList: '' }
       byKey.set(key, entry)
     }
     if (r.log) entry.sawLog = true
+    // First non-empty address-list name wins and sticks -- rules on the
+    // same boundary naming the same list is the expected case, and a
+    // real disagreement is rarer than a rule further down the table
+    // simply not bothering to repeat it.
+    if (!entry.srcAddressList && r.srcAddressList) entry.srcAddressList = r.srcAddressList
   }
   const list: FallBoundary[] = []
   for (const [key, e] of byKey) {
@@ -85,15 +129,17 @@ export function boundariesFromRules(rules: RouterFilterRule[], anyRulesPushed: b
       chain: e.chain,
       inInterface: e.inInterface,
       outInterface: e.outInterface,
-      label: boundaryLabel(e.chain, e.inInterface, e.outInterface),
+      srcAddressList: e.srcAddressList,
+      label: boundaryLabel(e.chain, e.inInterface, e.outInterface, e.srcAddressList),
       coverage,
     })
   }
-  // Alphabetical: deterministic, so it is stable across sessions and
-  // renders even though it is not the record's semantic "WAN inbound
-  // first, guarded/dark last" order -- that needs the network-role model
-  // #392 leaves undesigned (see this file's header comment).
-  list.sort((a, b) => a.label.localeCompare(b.label))
+  list.sort((a, b) => {
+    const ca = bandClass(a.chain, a.coverage)
+    const cb = bandClass(b.chain, b.coverage)
+    if (ca !== cb) return ca - cb
+    return a.label.localeCompare(b.label)
+  })
   return list
 }
 
