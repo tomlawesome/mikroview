@@ -309,12 +309,16 @@ check(
 // Back to Stream and back to a desk-width viewport, so the clearing below
 // is still the rail reading App.svelte's own poll rather than a page
 // refetch of its own.
+//
+// Live is a two-page group since #616 (The fall, then Stream), so
+// BottomBar's own single-page shortcut (group-btn aria-current="page")
+// no longer applies to it -- tapping "Live" now raises a half-sheet,
+// same as any other multi-page group, and Stream is picked from inside it.
 await page.click('.bottom-bar .group-btn .label:text-is("Live")')
-await page.waitForFunction(
-  () => document.querySelector('.bottom-bar .group-btn[aria-current="page"] .label')?.textContent.trim() === 'Live',
-  null,
-  { timeout: 5000 },
-)
+// The sheet (.sheet/.sheet-item) renders as a sibling of <nav
+// class="bottom-bar">, not nested inside it -- see BottomBar.svelte.
+await page.click('.sheet-item .label:text-is("Stream")')
+await page.waitForSelector('input.rule', { timeout: 5000 })
 await page.setViewportSize({ width: 1280, height: 720 })
 await watchlistItem.waitFor({ timeout: 5000 })
 
