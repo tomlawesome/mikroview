@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 
@@ -186,27 +187,185 @@ func TestHandleDefinitionsCreateRejectsProgrammaticKind(t *testing.T) {
 	}
 }
 
-// intent=detection has nowhere on the envelope to carry a custom
-// definition's match conditions today, so it is refused with its reason
-// rather than accepted and silently never evaluated. See
-// errCustomDetectionNotBuildable.
-func TestHandleDefinitionsCreateRejectsDetectionIntent(t *testing.T) {
+// A custom detection is created from its conditions and the aggregation
+// around them, and comes back carrying both -- the whole point of #502.
+func TestHandleDefinitionsCreateCustomDetection(t *testing.T) {
 	s, _ := newTestServer(t)
 	ts := httptest.NewServer(asAdmin(s.mux()))
 	defer ts.Close()
 
-	req := createDefinitionRequest{Name: "nope", Intent: engine.IntentDetection}
+	req := createDefinitionRequest{
+		Name:   "SSH hammering",
+		Intent: engine.IntentDetection,
+		Detection: &detectionRequest{
+			Conditions: []engine.Condition{
+				{Field: engine.FieldDestinationPort, Operator: engine.OpEquals, Values: []string{"22"}},
+			},
+			Key:            engine.KeyPerSource,
+			Counting:       engine.CountingTotal,
+			DetailTemplate: "{Count} attempts against port 22 from {SourceAddress}",
+			Threshold:      5,
+			Window:         "60s",
+		},
+	}
+	resp := postJSON(t, &http.Client{}, ts.URL+"/api/definitions", req)
+	if resp.StatusCode != http.StatusCreated {
+		resp.Body.Close()
+		t.Fatalf("expected 201, got %d", resp.StatusCode)
+	}
+	got := mustDecodeDefinition(t, resp)
+
+	if got.Intent != engine.IntentDetection || got.Kind != engine.KindDeclarative {
+		t.Errorf("intent/kind = %q/%q, want detection/declarative", got.Intent, got.Kind)
+	}
+	if got.Provenance.Origin != engine.ProvenanceCustom {
+		t.Errorf("provenance = %q, want custom", got.Provenance.Origin)
+	}
+	if got.Detection == nil {
+		t.Fatal("the created detection came back without its detection block")
+	}
+	if len(got.Detection.Conditions) != 1 || got.Detection.Conditions[0].Field != engine.FieldDestinationPort {
+		t.Errorf("conditions = %+v, want the one destination-port condition", got.Detection.Conditions)
+	}
+	if got.Detection.Key != engine.KeyPerSource || got.Detection.Counting != engine.CountingTotal {
+		t.Errorf("aggregation = %q/%q, want perSource/total", got.Detection.Key, got.Detection.Counting)
+	}
+
+	// Structure in the block, tunables in Params -- the split #502
+	// ratified. Threshold and window must be reachable by the same
+	// params editor that tunes every shipped detector, not by a second
+	// editing path of their own.
+	if got.Params["threshold"] != float64(5) {
+		t.Errorf("threshold param = %v (%T), want 5", got.Params["threshold"], got.Params["threshold"])
+	}
+	if got.Params["window"] != "60s" {
+		t.Errorf("window param = %v, want 60s", got.Params["window"])
+	}
+	if !slices.ContainsFunc(got.ParamSchema, func(p engine.ParamSchema) bool { return p.Name == "threshold" }) {
+		t.Errorf("a custom detection must declare its own param schema, got %+v", got.ParamSchema)
+	}
+
+	// Replayability comes free for a declarative definition -- but only
+	// if the inspection path can build this one.
+	if !got.Replay.Known || !got.Replay.Capable {
+		t.Errorf("replay = %+v, want a custom declarative detection to be replay-capable", got.Replay)
+	}
+
+	// Narrowable on destination port, so it is not in the
+	// always-consulted bucket and must not claim to be.
+	if got.Dispatch == nil || got.Dispatch.AlwaysConsulted {
+		t.Errorf("dispatch = %+v, want a detector narrowed by its destination-port condition", got.Dispatch)
+	}
+
+	// Persisted and buildable, not merely echoed: an unbuildable stored
+	// detection reports Available=false.
+	stored, ok := s.Definitions.Get(got.ID)
+	if !ok {
+		t.Fatal("the detection was not persisted to the store")
+	}
+	if !stored.Available {
+		t.Error("the stored detection is not available, so nothing would ever evaluate it")
+	}
+}
+
+// A detector whose conditions give the pre-index nothing to narrow on is
+// accepted -- watching one source address is a legitimate question --
+// but it is consulted on every event, and the definition says so rather
+// than absorbing the cost in silence.
+func TestHandleDefinitionsCreateDetectionDisclosesAlwaysConsulted(t *testing.T) {
+	s, _ := newTestServer(t)
+	ts := httptest.NewServer(asAdmin(s.mux()))
+	defer ts.Close()
+
+	req := createDefinitionRequest{
+		Name:   "one noisy host",
+		Intent: engine.IntentDetection,
+		Detection: &detectionRequest{
+			Conditions: []engine.Condition{
+				{Field: engine.FieldSourceAddress, Operator: engine.OpEquals, Values: []string{"198.51.100.7"}},
+			},
+			Key:            engine.KeyPerSource,
+			Counting:       engine.CountingTotal,
+			DetailTemplate: "{Count} events from {SourceAddress}",
+			Threshold:      3,
+			Window:         "30s",
+		},
+	}
+	resp := postJSON(t, &http.Client{}, ts.URL+"/api/definitions", req)
+	if resp.StatusCode != http.StatusCreated {
+		resp.Body.Close()
+		t.Fatalf("expected 201 -- an un-narrowable detector is disclosed, not refused -- got %d", resp.StatusCode)
+	}
+	got := mustDecodeDefinition(t, resp)
+	if got.Dispatch == nil || !got.Dispatch.AlwaysConsulted {
+		t.Fatalf("dispatch = %+v, want alwaysConsulted", got.Dispatch)
+	}
+	if got.Dispatch.Reason != alwaysConsultedReason {
+		t.Errorf("reason = %q, want the stated one", got.Dispatch.Reason)
+	}
+}
+
+// intent=detection with no detection block has nowhere to carry its
+// match conditions, which is the definition-that-evaluates-nothing this
+// feature had to avoid creating.
+func TestHandleDefinitionsCreateDetectionRequiresItsBlock(t *testing.T) {
+	s, _ := newTestServer(t)
+	ts := httptest.NewServer(asAdmin(s.mux()))
+	defer ts.Close()
+
+	req := createDefinitionRequest{Name: "nothing to match on", Intent: engine.IntentDetection}
 	resp := postJSON(t, &http.Client{}, ts.URL+"/api/definitions", req)
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusBadRequest {
-		t.Fatalf("expected 400 for intent=detection, got %d", resp.StatusCode)
+		t.Fatalf("expected 400 for a detection with no detection block, got %d", resp.StatusCode)
 	}
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(string(body), errCustomDetectionNotBuildable) {
-		t.Errorf("expected the refusal to state its reason, got %q", body)
+}
+
+// The detail template is operator input rendered into the interface, so
+// its placeholders are a closed set checked before anything is stored --
+// not at emission time, where the detector would already exist and would
+// fail the moment it should have fired.
+func TestHandleDefinitionsCreateDetectionRejectsUnresolvableTemplate(t *testing.T) {
+	s, _ := newTestServer(t)
+	ts := httptest.NewServer(asAdmin(s.mux()))
+	defer ts.Close()
+
+	for _, tc := range []struct {
+		name     string
+		template string
+	}{
+		// A custom detection declares no evidence categories, so an
+		// evidence token would never resolve.
+		{"evidence token", "{Count} attempts against {Ports}"},
+		// Supplied by a different key mode than this detector's.
+		{"wrong key token", "{Count} attempts against {DestinationAddress}"},
+		{"invented token", "{Count} attempts, {Whatever}"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			before := len(s.Definitions.List())
+			req := createDefinitionRequest{
+				Name:   "bad template",
+				Intent: engine.IntentDetection,
+				Detection: &detectionRequest{
+					Conditions: []engine.Condition{
+						{Field: engine.FieldDestinationPort, Operator: engine.OpEquals, Values: []string{"22"}},
+					},
+					Key:            engine.KeyPerSource,
+					Counting:       engine.CountingTotal,
+					DetailTemplate: tc.template,
+					Threshold:      5,
+					Window:         "60s",
+				},
+			}
+			resp := postJSON(t, &http.Client{}, ts.URL+"/api/definitions", req)
+			defer resp.Body.Close()
+			if resp.StatusCode != http.StatusBadRequest {
+				t.Fatalf("expected 400 for template %q, got %d", tc.template, resp.StatusCode)
+			}
+			if after := len(s.Definitions.List()); after != before {
+				t.Errorf("a refused template must leave nothing behind in the store (%d definitions before, %d after)", before, after)
+			}
+		})
 	}
 }
 
