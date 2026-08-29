@@ -2494,12 +2494,18 @@ able to reach the port can still connect and inject log lines. Point
 RouterOS at it with:
 
 ```
-/system logging action set 0 target=remote remote=<mikroview-host> remote-port=6514 remote-protocol=tls
+/system logging action set 0 target=remote remote=<mikroview-host> remote-port=6514 remote-protocol=tls remote-log-format=syslog
 ```
 
 and import mikroview's CA (`GET /ca.crt`) under
 `/certificate import` first, or the router will refuse the connection
 with `SSL: ssl: no trusted CA certificate found`.
+
+`remote-log-format=syslog` puts a standard header (timestamp and topic)
+on every message, which is how mikroview tells one firewall log line
+from the next when several arrive close together -- see
+[routeros-setup.md](routeros-setup.md#1-point-routeros-at-the-container-over-tls)
+for the full reasoning.
 
 ```yaml
 tls:
