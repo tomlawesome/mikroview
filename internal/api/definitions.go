@@ -627,18 +627,13 @@ func (s *Server) handleDefinitionsUpdate(w http.ResponseWriter, r *http.Request)
 		http.Error(w, "only an expectation definition takes an expectation block", http.StatusBadRequest)
 		return
 	}
-	if req.Name != nil && !isExpectation {
-		// Two different reasons, so two different sentences: a shipped
-		// definition's name belongs to the binary, while a custom
-		// detection's name is the operator's own and simply has no
-		// rename path yet -- this endpoint only ever renamed
-		// expectations. Saying the shipped sentence to someone who
-		// authored the detector themselves would be untrue.
-		msg := "a shipped definition's name is a property of this binary, not of the deployment, and cannot be renamed"
-		if sd.Available && sd.Definition.Provenance.Origin == engine.ProvenanceCustom {
-			msg = "renaming a custom detection is not supported yet -- delete it and create it again under the name you want"
-		}
-		http.Error(w, msg, http.StatusBadRequest)
+	// A shipped definition's name belongs to the binary that ships the
+	// logic, so it stays refused. A custom one is the operator's own and
+	// is renamed below (#612) -- this endpoint refused everything that
+	// was not an expectation only because, until #502, nothing could be
+	// both custom and not an expectation.
+	if req.Name != nil && !isExpectation && (!sd.Available || sd.Definition.Provenance.Origin != engine.ProvenanceCustom) {
+		http.Error(w, "a shipped definition's name is a property of this binary, not of the deployment, and cannot be renamed", http.StatusBadRequest)
 		return
 	}
 
@@ -695,7 +690,13 @@ func (s *Server) handleDefinitionsUpdate(w http.ResponseWriter, r *http.Request)
 			return
 		}
 	}
-	if req.Expectation != nil || req.Name != nil {
+	if req.Name != nil && !isExpectation {
+		if err := s.Definitions.SetName(id, *req.Name); err != nil {
+			writeDefinitionError(w, err)
+			return
+		}
+	}
+	if req.Expectation != nil || (req.Name != nil && isExpectation) {
 		// Switching a non-inverted expectation to inverted starts it
 		// Observing, the same rule create applies -- there is no
 		// meaningful permitted set yet, so nothing else is coherent.
