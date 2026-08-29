@@ -140,7 +140,11 @@ interface BlockSpec {
 }
 
 // blockSpecs mirrors docs/routeros-setup.md's table, which is itself
-// verified against a real RouterOS 7.23.3 router. The field renaming is
+// verified against a real RouterOS 7.23.3 router -- recorded in code as
+// routeros.ReviewedVersion (internal/routeros/versions.go), which is
+// what the scheduled freshness check compares against so a release
+// nobody has read cannot pass unnoticed (#436). Changing the commands
+// here without moving that marker leaves the two disagreeing. The field renaming is
 // the one place a typo silently breaks a feature without RouterOS
 // complaining, so it lives in exactly one place.
 const blockSpecs: Record<string, BlockSpec> = {
