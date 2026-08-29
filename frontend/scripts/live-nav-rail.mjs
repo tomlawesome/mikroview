@@ -16,7 +16,11 @@
 import { session, feedSyslog, check, responsive, done } from './live-browser.mjs'
 
 feedSyslog(120, 'nav-rail')
-const { page, consoleErrors } = await session({ waitForEvents: 100 })
+// landing: 'fall' -- stay on the real landing page (#616 retired #544's
+// interim Stream-as-landing) so the landing assertion below actually
+// observes it, rather than session()'s own default navigation to Stream
+// hiding what the app actually opens on.
+const { page, consoleErrors } = await session({ landing: 'fall' })
 
 // --- The geography, in the ratified order --------------------------------
 // The live check signs in as an admin, so every group is visible; a
@@ -55,7 +59,13 @@ check((await page.$$('.nav-menu, .hamburger')).length === 0, 'the hamburger menu
 const current = async () =>
   (await page.$$eval('.rail .item[aria-current="page"]', (els) => els.map((e) => e.textContent.trim())))[0]
 
-check((await current()) === 'Stream', `Stream is the landing -- got ${await current()}`)
+check((await current()) === 'The fall', `The fall is the landing (#616) -- got ${await current()}`)
+
+// Stream keeps its own row, second in Live, per #616's record.
+await page.click('.rail .item .label:text-is("Stream")')
+await page.waitForSelector('input.rule', { timeout: 5000 })
+check((await current()) === 'Stream', `Stream is still reachable from its own row -- got ${await current()}`)
+await page.waitForFunction(() => document.querySelectorAll('.grid .row').length >= 1, null, { timeout: 20000 })
 
 // Matching the label rather than the button: #545 gave each row an icon
 // and moved its text into a <span class="label">, and Playwright's text

@@ -31,6 +31,13 @@ const { page, consoleErrors } = await session({ waitForEvents: 100 })
 await page.setViewportSize({ width: 1440, height: 900 })
 await page.reload()
 await page.waitForSelector('.rail .item', { timeout: 10000 })
+// The reload lands back on the fall (#616's landing default), not
+// Stream -- this scenario's own current-item assertions below want
+// Stream specifically (it is what session() itself lands the caller on
+// before this reload), so re-select it explicitly rather than assume
+// what a fresh load opens on.
+await page.click('.rail .item .label:text-is("Stream")')
+await page.waitForSelector('input.rule', { timeout: 5000 })
 
 const railWidth = async () => {
   const box = await page.$eval('.rail', (el) => el.getBoundingClientRect().width).catch(() => null)
