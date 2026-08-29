@@ -127,6 +127,29 @@ with socket.create_connection((host, port), timeout=10) as sock:
             tls.sendall(line + b"\n")
             if i % 25 == 24:
                 time.sleep(0.01)
+        # Close cleanly, and only once the server has acknowledged the
+        # shutdown. Without this the last write is followed straight by
+        # the socket close and the tail of the burst is lost -- measured
+        # at 9 of 20, 11 of 24 and 46 of 49, with the listener reporting
+        # dropped=0 throughout, because the lines never reached it at
+        # all. It was intermittent rather than constant, and invisible
+        # for any burst that happened to be a multiple of 25: those got
+        # a pause from the pacing above after their final line, and
+        # delivered 100 percent every time. That is what made this look
+        # like detector flakiness for so long (issue #450) -- scenarios
+        # send a 20-port scan, port_scan needs 15 distinct ports, and
+        # the tail going missing put it either side of the threshold
+        # from one run to the next.
+        #
+        # unwrap() sends TLS close_notify and waits for the reply, so
+        # the server has read to EOF before the socket goes away. The
+        # sleep covers the parse the listener still has to do after
+        # that read.
+        time.sleep(0.05)
+        try:
+            tls.unwrap()
+        except OSError:
+            pass
 ' "$SYSLOG_TLS_HOST" "$SYSLOG_TLS_PORT"
 }
 
