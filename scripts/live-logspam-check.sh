@@ -18,6 +18,7 @@ set -euo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO"
+. "$REPO/scripts/live-stores.sh"
 
 DIR="$(mktemp -d)"
 cleanup() {
@@ -32,9 +33,7 @@ SYSLOG_PORT=19822
 cat > "$DIR/cfg.yaml" <<EOF
 listen: {http: "127.0.0.1:$HTTP_PORT", httpRedirect: "", syslogTls: "127.0.0.1:$SYSLOG_PORT"}
 tls: {enabled: true, storePath: $DIR/tls}
-auth: {storePath: $DIR/users.json, tokensStorePath: $DIR/tokens.json, secureCookie: true}
-flags: {storePath: $DIR/flags.json}
-watchlist: {storePath: $DIR/watchlist.json, matchLogPath: $DIR/matchlog.jsonl}
+$(mv_store_block "$DIR" true)
 EOF
 
 # The embedded frontend only needs to exist for the build; rebuild it

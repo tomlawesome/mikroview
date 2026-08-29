@@ -16,6 +16,7 @@ set -euo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO"
+. "$REPO/scripts/live-stores.sh"
 
 DIR="$(mktemp -d)"
 cleanup() {
@@ -29,9 +30,7 @@ PORT=19831
 cat > "$DIR/cfg.yaml" <<EOF
 listen: {http: "127.0.0.1:$PORT", httpRedirect: "", syslogTls: ""}
 tls: {enabled: true, storePath: $DIR/tls}
-auth: {storePath: $DIR/users.json, tokensStorePath: $DIR/tokens.json, secureCookie: true}
-flags: {storePath: $DIR/flags.json}
-watchlist: {storePath: $DIR/watchlist.json, matchLogPath: $DIR/matchlog.jsonl}
+$(mv_store_block "$DIR" true)
 EOF
 
 if [ ! -f web/dist/index.html ]; then
