@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -217,6 +218,20 @@ func decodeStored(id string, entry json.RawMessage) StoredDefinition {
 	default:
 		available = false
 	}
+	// A custom detection carries its own logic in its Detection block
+	// (issue #502), so "can this binary make sense of it" extends to
+	// that block: a condition field, an operator or a key mode from a
+	// newer build is exactly the downgrade case Available already
+	// exists for. Marking it unavailable shelves the one definition --
+	// preserved byte-for-byte, listed, never evaluated, and refused for
+	// edit or delete -- where leaving it available would instead have it
+	// fail to build on every single sync. Not logged: this runs on every
+	// Get and List.
+	if available && d.Provenance.Origin == ProvenanceCustom && d.Intent == IntentDetection {
+		if err := d.Detection.Validate(); err != nil {
+			available = false
+		}
+	}
 	return StoredDefinition{Definition: d, Available: available}
 }
 
@@ -289,6 +304,16 @@ func (s *DefinitionsStore) upsertLocking(d Definition) error {
 	}
 	if err := d.Validate(); err != nil {
 		return err
+	}
+	// A stored definition is rebuilt from its bytes alone, so a custom
+	// detection has to carry its own structure: without a Detection
+	// block there is nowhere for its match conditions to live, and it
+	// would store, list and evaluate nothing. Refused here rather than
+	// on the envelope because an in-process definition is handed its
+	// structure directly (see Definition.validateDetectionBlock), and
+	// persistence is what makes the block load-bearing.
+	if d.Provenance.Origin == ProvenanceCustom && d.Intent == IntentDetection && d.Detection == nil {
+		return fmt.Errorf("engine: definition %q: a stored custom detection requires a detection block to carry its match conditions", d.ID)
 	}
 
 	s.mu.Lock()
@@ -392,6 +417,41 @@ func (s *DefinitionsStore) SetSuppressions(id string, suppressions []Suppression
 // nothing to reset to -- a custom definition, which has no stock to diff
 // against (see Definition.Distance's own doc comment).
 var ErrNoShippedDefaults = errors.New("engine: this definition has no shipped defaults to reset to")
+
+// SetName renames a custom definition.
+//
+// The narrow door for the one field an operator owns on a definition they
+// authored themselves, in the same shape as SetEnabledAndScope: through
+// mutate, so it inherits the unavailable-definition refusal, the
+// identity-change refusal and the validate-before-write round trip rather
+// than re-implementing any of them.
+//
+// Refused for a shipped definition. Its display name is a property of the
+// binary that ships the logic, not of the deployment -- the same reasoning
+// that keeps kind, intent, schema and provenance untouchable there.
+//
+// An expectation has its own rename path (UpdateExpectation), because its
+// name lives on the watchlist entry it converts back to; this is for
+// everything else custom, which since issue #502 means operator-authored
+// detections.
+//
+// Note that renaming rebuilds the definition, so a detector's in-flight
+// counting window starts again: Registry.Sync carries live state forward
+// only for a definition whose stored bytes did not change. That is already
+// true of every other edit, tuning a threshold included.
+func (s *DefinitionsStore) SetName(id, name string) error {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return fmt.Errorf("engine: definition %q: a name may not be empty", id)
+	}
+	return s.mutate(id, func(d *Definition) error {
+		if d.Provenance.Origin != ProvenanceCustom {
+			return fmt.Errorf("%w: %q is shipped, and its name is a property of this binary rather than of the deployment", ErrDefinitionImmutable, id)
+		}
+		d.Name = name
+		return nil
+	})
+}
 
 // ResetParams puts a shipped definition's params back to exactly the
 // values it shipped with (Provenance.ShippedParams), which is what makes

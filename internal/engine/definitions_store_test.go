@@ -202,6 +202,19 @@ func TestDefinitionsStorePersistenceRoundTrip(t *testing.T) {
 	})
 }
 
+// testDetectionSpec is the smallest well-formed detection block, for
+// tests whose subject is the store rather than the detector. A stored
+// custom detection has to carry one (see upsertLocking): it is rebuilt
+// from its bytes alone, so without it there would be nothing to rebuild.
+func testDetectionSpec() *DetectionSpec {
+	return &DetectionSpec{
+		Conditions:     []Condition{{Field: FieldDestinationPort, Operator: OpEquals, Values: []string{"22"}}},
+		Key:            KeyPerSource,
+		Counting:       CountingTotal,
+		DetailTemplate: "{Count} events from {SourceAddress}",
+	}
+}
+
 func TestDefinitionsStoreGetIsADeepCopy(t *testing.T) {
 	s, err := OpenDefinitionsStore("")
 	if err != nil {
@@ -209,6 +222,7 @@ func TestDefinitionsStoreGetIsADeepCopy(t *testing.T) {
 	}
 	d := NewDefinition("mutate me", IntentDetection, KindDeclarative)
 	d.Provenance = Provenance{Origin: ProvenanceCustom}
+	d.Detection = testDetectionSpec()
 	d.Scope.Hosts = []string{"10.0.0.1"}
 	if err := s.Upsert(d); err != nil {
 		t.Fatal(err)
@@ -345,6 +359,7 @@ func TestDefinitionsStorePreservesUnknownDefinitionByteForByte(t *testing.T) {
 		// unknown entry.
 		other := NewDefinition("something else", IntentDetection, KindDeclarative)
 		other.Provenance = Provenance{Origin: ProvenanceCustom}
+		other.Detection = testDetectionSpec()
 		if err := s.Upsert(other); err != nil {
 			t.Fatal(err)
 		}
