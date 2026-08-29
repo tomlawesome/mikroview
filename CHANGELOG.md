@@ -19,18 +19,23 @@ rewritten.
 ### Added
 
 - **The fall is the landing page** (#616). A band per boundary --
-  currently the interface pair a pushed firewall rule or a live event
-  actually carries, since nothing yet names a network group
-  (LAN/SRV/GUEST/IOT) or a WAN interface for it to group by instead; see
-  the #616 PR for that deviation from the ratified "group-pair +
-  direction" design -- with a live spectrum on top (blue accepted, red
-  dropped, violet nat) and time pouring downward below a NOW line,
-  bucketed rather than one mark per event so it stays render-bounded at
-  real traffic volume. A dark (unlogged) boundary is drawn hatched and
-  says so in words, never colour alone; clicking a boundary opens Stream
-  filtered to it. Retires the interim landing from #544 -- Stream keeps
-  its own row, second in the Live group. Reduced-motion turns off the
-  NOW-line pulse.
+  interface pair by default, named from the pushed rule's own
+  src-address-list where a router provides one (e.g. "lan"), ordered
+  input-chain/WAN-facing first, observed next, dark last. Since nothing
+  yet names a full network-group taxonomy (LAN/SRV/GUEST/IOT) or a WAN
+  interface, that ordering and naming stay evidence-based rather than
+  invented -- see the #616 PR for the deviation from the ratified
+  "group-pair + direction" design. Above a NOW line, a live spectrum
+  strip positions a peak per carrier by port; below it, time pours
+  downward as a thin dashed carrier per (boundary, port) -- brightness
+  for accepted rate, red only for drops, violet for nat -- capped at the
+  8 most recently active carriers per band with a "+n quieter"
+  affordance, bucketed by span so a real cadence stays visible rather
+  than one mark per event. A dark (unlogged) boundary is drawn hatched
+  and says so in words, never colour alone; clicking a boundary or a
+  carrier opens Stream filtered to it. Retires the interim landing from
+  #544 -- Stream keeps its own row, second in the Live group.
+  Reduced-motion turns off the NOW-line pulse.
 - **Custom detection definitions can now be created** (#502). An
   operator authors match conditions plus an aggregation -- key mode,
   counting mode, threshold and window -- and a detail sentence, and
