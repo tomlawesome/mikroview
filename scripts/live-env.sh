@@ -24,6 +24,8 @@
 # the LAN -- which is the exact property MV_BIND gives up.
 set -euo pipefail
 
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/live-stores.sh"
+
 # Defaults are derived per checkout, not fixed, because two live checks
 # running at once used to destroy each other rather than merely clash.
 # `up` calls `down` and then `rm -rf "$MV_DIR"`, so a second run on the
@@ -227,33 +229,7 @@ up() {
   cat > "$MV_DIR/cfg.yaml" <<EOF
 listen: {syslogTls: "$SYSLOG_TLS_ADDR", http: "$MV_BIND:$HTTP_PORT", httpRedirect: ""}
 $TLS_BLOCK
-auth:
-  storePath: $MV_DIR/data/users.json
-  recoveryKeysPath: $MV_DIR/data/recovery.json
-  recoveryPepperPath: $MV_DIR/data/pepper
-  tokensStorePath: $MV_DIR/data/tokens.json
-  secureCookie: $SECURE_COOKIE
-flags:
-  storePath: $MV_DIR/data/flags.json
-  ruleUsageStorePath: $MV_DIR/data/rule-usage.json
-  detectorSettingsStorePath: $MV_DIR/data/detector-settings.json
-entities: {storePath: $MV_DIR/data/entities.json}
-audit: {storePath: $MV_DIR/data/audit.json}
-setup: {storePath: $MV_DIR/data/setup.json}
-watchlist:
-  storePath: $MV_DIR/data/watchlist.json
-  matchLogPath: $MV_DIR/data/matchlog.jsonl
-  suggestionsStorePath: $MV_DIR/data/suggestions.json
-# Every store, not most of them -- see scripts/live-env.sh's own comment
-# above this heredoc before adding one. The ones below used to be left
-# at their /var/lib/mikroview defaults, which no developer machine can
-# write -- so the live check was exercising a deployment that silently
-# failed to persist half its state, which is precisely the condition
-# #536 stops mikroview booting in.
-deviceMac: {storePath: $MV_DIR/data/mac-registry.json}
-engine:
-  storePath: $MV_DIR/data/engine-state.json
-  definitionsStorePath: $MV_DIR/data/definitions.json
+$(mv_store_block "$MV_DIR/data" "$SECURE_COOKIE")
 $DEVICES_BLOCK
 EOF
   MIKROVIEW_CONFIG="$MV_DIR/cfg.yaml" "$MV_DIR/mikroview" > "$MV_DIR/server.log" 2>&1 &
