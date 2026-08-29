@@ -16,6 +16,17 @@ rewritten.
 
 ## [Unreleased]
 
+### Added
+
+- **Custom detection definitions can now be created** (#502). An
+  operator authors match conditions plus an aggregation -- key mode,
+  counting mode, threshold and window -- and a detail sentence, and
+  the detector evaluates on the ingest path and raises flags like any
+  shipped one. Each definition's own view says whether the dispatch
+  index can narrow it to the events it might match, or whether it is
+  evaluated against every event instead. `POST /api/definitions`'s
+  refusal of `intent=detection` is gone, since it is no longer true.
+
 ## [0.4.0] - 2026-08-25
 
 ### Added

@@ -217,6 +217,20 @@ func decodeStored(id string, entry json.RawMessage) StoredDefinition {
 	default:
 		available = false
 	}
+	// A custom detection carries its own logic in its Detection block
+	// (issue #502), so "can this binary make sense of it" extends to
+	// that block: a condition field, an operator or a key mode from a
+	// newer build is exactly the downgrade case Available already
+	// exists for. Marking it unavailable shelves the one definition --
+	// preserved byte-for-byte, listed, never evaluated, and refused for
+	// edit or delete -- where leaving it available would instead have it
+	// fail to build on every single sync. Not logged: this runs on every
+	// Get and List.
+	if available && d.Provenance.Origin == ProvenanceCustom && d.Intent == IntentDetection {
+		if err := d.Detection.Validate(); err != nil {
+			available = false
+		}
+	}
 	return StoredDefinition{Definition: d, Available: available}
 }
 
@@ -289,6 +303,16 @@ func (s *DefinitionsStore) upsertLocking(d Definition) error {
 	}
 	if err := d.Validate(); err != nil {
 		return err
+	}
+	// A stored definition is rebuilt from its bytes alone, so a custom
+	// detection has to carry its own structure: without a Detection
+	// block there is nowhere for its match conditions to live, and it
+	// would store, list and evaluate nothing. Refused here rather than
+	// on the envelope because an in-process definition is handed its
+	// structure directly (see Definition.validateDetectionBlock), and
+	// persistence is what makes the block load-bearing.
+	if d.Provenance.Origin == ProvenanceCustom && d.Intent == IntentDetection && d.Detection == nil {
+		return fmt.Errorf("engine: definition %q: a stored custom detection requires a detection block to carry its match conditions", d.ID)
 	}
 
 	s.mu.Lock()

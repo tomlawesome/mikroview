@@ -251,6 +251,16 @@ type Definition struct {
 	// Suppressions are this definition's own scoped exclusions -- see
 	// Suppression's own doc comment.
 	Suppressions []Suppression `json:"suppressions,omitempty"`
+	// Detection is the structure an operator-authored detector needs and
+	// nothing else does: its conditions and the aggregation around them
+	// (issue #502). Set on exactly the definitions that are all three of
+	// intent=detection, kind=declarative and provenance=custom, and
+	// absent everywhere else -- Validate enforces both directions, which
+	// is why this is an intent-specific block rather than five top-level
+	// fields that would be meaningless on every other definition. See
+	// DetectionSpec for the structure/tunable split and why nothing in
+	// it serialises non-deterministically.
+	Detection *DetectionSpec `json:"detection,omitempty"`
 }
 
 // newDefinitionID returns a random 32-character hex string. Mirrors
@@ -295,6 +305,8 @@ func NewDefinition(name string, intent Intent, kind Kind) Definition {
 //   - Params and Provenance.ShippedParams (when set) both validate
 //     against ParamSchema -- malformed values are rejected here, never
 //     stored to be read as a zero value later.
+//   - A Detection block, where one is present, belongs to a custom
+//     detection and is itself well-formed -- see validateDetectionBlock.
 func (d Definition) Validate() error {
 	if err := ValidateScope(d.Scope); err != nil {
 		return fmt.Errorf("engine: definition %q: %w", d.ID, err)
@@ -312,6 +324,9 @@ func (d Definition) Validate() error {
 	if d.Provenance.Origin == ProvenanceCustom && d.Kind != KindDeclarative {
 		return fmt.Errorf("engine: definition %q: provenance=custom requires kind=declarative -- programmatic definitions are shipped-only (see Kind's doc comment); no request shape may express a custom programmatic definition", d.ID)
 	}
+	if err := d.validateDetectionBlock(); err != nil {
+		return err
+	}
 	if _, err := ValidateParams(d.ParamSchema, d.Params); err != nil {
 		return fmt.Errorf("engine: definition %q: %w", d.ID, err)
 	}
@@ -319,6 +334,35 @@ func (d Definition) Validate() error {
 		if _, err := ValidateParams(d.ParamSchema, d.Provenance.ShippedParams); err != nil {
 			return fmt.Errorf("engine: definition %q: shipped defaults: %w", d.ID, err)
 		}
+	}
+	return nil
+}
+
+// validateDetectionBlock checks who may carry a Detection block, and
+// that the one they carry is well-formed.
+//
+// Only a custom detection may: on a shipped definition the structure is
+// the Go builder's, and on an expectation it is fixed by
+// BuildExpectationDefinition, so a block on either would be data that
+// looked authoritative and was never read.
+//
+// The other direction -- that a custom detection *must* carry one -- is
+// deliberately not enforced here. It binds where a definition is stored
+// (DefinitionsStore.Upsert), not on the envelope, because a definition
+// built in-process is handed its structure directly as a DeclarativeSpec
+// and the block would be a second copy of it. What makes the block
+// mandatory is persistence: a stored definition is rebuilt from its
+// bytes alone, so a stored custom detection without one would list and
+// evaluate nothing.
+func (d Definition) validateDetectionBlock() error {
+	if d.Detection == nil {
+		return nil
+	}
+	if d.Provenance.Origin != ProvenanceCustom || d.Intent != IntentDetection {
+		return fmt.Errorf("engine: definition %q: a detection block belongs only to a custom detection definition, and this one is intent=%q provenance=%q", d.ID, d.Intent, d.Provenance.Origin)
+	}
+	if err := d.Detection.Validate(); err != nil {
+		return fmt.Errorf("engine: definition %q: %w", d.ID, err)
 	}
 	return nil
 }
