@@ -87,4 +87,52 @@ describe('boundariesFromRules', () => {
     )
     expect(bands).toHaveLength(2)
   })
+
+  // Amendment (a), Fable's 2026-08-29 review: a pushed rule's own
+  // srcAddressList is real evidence of an operator-named group, and
+  // replaces the interface name on that side of the label.
+  it('names the source side from srcAddressList when a pushed rule carries one', () => {
+    const bands = boundariesFromRules(
+      [rule({ inInterface: 'ether1', outInterface: 'bridge9', srcAddressList: 'lan', log: true })],
+      true,
+    )
+    expect(bands[0].label).toBe('lan → bridge9')
+    expect(bands[0].srcAddressList).toBe('lan')
+    // The raw interface is kept alongside, not discarded.
+    expect(bands[0].inInterface).toBe('ether1')
+  })
+
+  it('falls back to the interface name when no rule on this boundary names an address list', () => {
+    const bands = boundariesFromRules([rule({ inInterface: 'ether1', outInterface: 'bridge9' })], true)
+    expect(bands[0].label).toBe('ether1 → bridge9')
+    expect(bands[0].srcAddressList).toBe('')
+  })
+
+  // Amendment (b): semantic ordering -- input-chain/WAN-facing first,
+  // observed forward next, dark/unknown last, alphabetical within class.
+  it('orders input-chain bands before observed forward bands, and dark bands last', () => {
+    const bands = boundariesFromRules(
+      [
+        // forward, dark (no log) -- last class.
+        rule({ chain: 'forward', inInterface: 'z-dark', outInterface: 'bridge1', log: false }),
+        // forward, observed -- middle class.
+        rule({ chain: 'forward', inInterface: 'a-observed', outInterface: 'bridge1', log: true }),
+        // input chain -- first class, regardless of its own coverage.
+        rule({ chain: 'input', inInterface: 'zzz-wan', outInterface: '', log: true }),
+      ],
+      true,
+    )
+    expect(bands.map((b) => b.label)).toEqual(['zzz-wan · input', 'a-observed → bridge1', 'z-dark → bridge1'])
+  })
+
+  it('keeps alphabetical order within a class', () => {
+    const bands = boundariesFromRules(
+      [
+        rule({ chain: 'input', inInterface: 'z-wan', outInterface: '', log: true }),
+        rule({ chain: 'input', inInterface: 'a-wan', outInterface: '', log: true }),
+      ],
+      true,
+    )
+    expect(bands.map((b) => b.label)).toEqual(['a-wan · input', 'z-wan · input'])
+  })
 })
