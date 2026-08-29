@@ -561,3 +561,265 @@ func TestTCPOversizedMessageFragmentedAcrossManyReadsStaysBounded(t *testing.T) 
 		t.Error("the discarded continuation was not counted")
 	}
 }
+
+// --- #614: eager RFC3164-header splitting --------------------------------
+
+// rfc3164Msg builds a single verified-shape RouterOS syslog-format
+// message: "<PRI>MMM DD HH:MM:SS HOSTNAME body" -- the literal wire
+// shape confirmed against a real CHR 7.23.3 with remote-log-format=
+// syslog set (see live-routeros.sh's setup() and the #614 issue
+// comment recording the sample).
+func rfc3164Msg(ts time.Time, body string) string {
+	return "<30>" + ts.Format(bsdTimeLayout) + " CHR " + body
+}
+
+// TestTCPBurstSplitsOnRFC3164Headers is the core #614 regression test:
+// several bare RouterOS-shaped messages, each carrying its own RFC3164
+// header, glued together in a single write with no newline anywhere at
+// all -- exactly the shape a real CHR burst produces under
+// remote-log-format=syslog, and exactly what used to coalesce into one
+// stored event with fields read from whichever embedded line the
+// parser's left-to-right scan happened to read last.
+func TestTCPBurstSplitsOnRFC3164Headers(t *testing.T) {
+	out := make(chan RawMessage, 8)
+	addr, stop := serveTCPForTest(t, out)
+	defer stop()
+
+	conn, err := net.Dial("tcp", addr)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer conn.Close()
+
+	base := time.Date(2026, time.August, 29, 20, 52, 44, 0, time.UTC)
+	msgs := []string{
+		rfc3164Msg(base, "A|live-in| input: first message"),
+		rfc3164Msg(base.Add(time.Second), "A|lan-wan| forward: second message"),
+		rfc3164Msg(base.Add(2*time.Second), "A|live-in| input: third message"),
+	}
+	if _, err := conn.Write([]byte(strings.Join(msgs, ""))); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	// The first two split eagerly, the instant the next header proves the
+	// one before it is complete. The third has no following header to
+	// prove it, so it only resolves via tcpQuiescence once the burst goes
+	// quiet -- both paths are exercised by one write here.
+	var got []string
+	deadline := time.After(3 * time.Second)
+	for len(got) < len(msgs) {
+		select {
+		case m := <-out:
+			got = append(got, string(m.Data))
+		case <-deadline:
+			t.Fatalf("received %d/%d messages: %q", len(got), len(msgs), got)
+		}
+	}
+	for i, want := range msgs {
+		if got[i] != want {
+			t.Errorf("message %d = %q, want %q", i, got[i], want)
+		}
+	}
+}
+
+// TestTCPHeaderSplitAcrossReadsDoesNotSplitMidHeader proves the split
+// only fires once a header is fully present in pending, not the moment
+// its first bytes arrive. A header arriving split across two reads --
+// ordinary TCP/TLS segmentation, not a burst -- must not corrupt the
+// message still accumulating in front of it, and must not be mistaken
+// for a boundary until it is actually complete.
+func TestTCPHeaderSplitAcrossReadsDoesNotSplitMidHeader(t *testing.T) {
+	out := make(chan RawMessage, 8)
+	addr, stop := serveTCPForTest(t, out)
+	defer stop()
+
+	conn, err := net.Dial("tcp", addr)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer conn.Close()
+
+	base := time.Date(2026, time.August, 29, 20, 52, 44, 0, time.UTC)
+	first := rfc3164Msg(base, "A|live-in| input: first message")
+	second := rfc3164Msg(base.Add(time.Second), "A|lan-wan| forward: second message")
+	whole := first + second
+
+	// The first write ends partway through second's own timestamp --
+	// enough of a header to look like one is starting, not enough to
+	// confirm it.
+	splitAt := len(first) + len("<30>Aug 29 20:52:4")
+	if _, err := conn.Write([]byte(whole[:splitAt])); err != nil {
+		t.Fatalf("first write: %v", err)
+	}
+
+	// Give the server time to read and process the partial header. If it
+	// were (wrongly) treating an incomplete match as a boundary, first
+	// would already be sitting on out.
+	time.Sleep(50 * time.Millisecond)
+	select {
+	case m := <-out:
+		t.Fatalf("received a message before the second header was complete: %q", m.Data)
+	default:
+	}
+
+	if _, err := conn.Write([]byte(whole[splitAt:])); err != nil {
+		t.Fatalf("second write: %v", err)
+	}
+
+	var got []string
+	deadline := time.After(3 * time.Second)
+	for len(got) < 2 {
+		select {
+		case m := <-out:
+			got = append(got, string(m.Data))
+		case <-deadline:
+			t.Fatalf("received %d/2 messages: %q", len(got), got)
+		}
+	}
+	if got[0] != first {
+		t.Errorf("first message = %q, want %q", got[0], first)
+	}
+	if got[1] != second {
+		t.Errorf("second message = %q, want %q", got[1], second)
+	}
+}
+
+// TestTCPHeaderSplitOnHeaderLikeContentIsAcceptedHeuristic documents,
+// rather than guards against, a known false positive: this eager split
+// treats any RFC3164-shaped substring as a boundary, including one that
+// merely happens to appear inside a message's own body rather than
+// starting a new one. Real firewall log lines essentially never contain
+// date-like text of their own, so this is a deliberately accepted
+// trade -- the same shape of heuristic that RFC6587-style framing
+// techniques already carry -- rather than a defect to fix here. See the
+// #614 issue comment's decided-fix note.
+func TestTCPHeaderSplitOnHeaderLikeContentIsAcceptedHeuristic(t *testing.T) {
+	out := make(chan RawMessage, 8)
+	addr, stop := serveTCPForTest(t, out)
+	defer stop()
+
+	conn, err := net.Dial("tcp", addr)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer conn.Close()
+
+	base := time.Date(2026, time.August, 29, 20, 52, 44, 0, time.UTC)
+	// first's own body coincidentally contains a bare (no-PRI) date-like
+	// substring, shaped exactly like a header this split recognises.
+	const embedded = "Jan  5 10:00:00"
+	first := rfc3164Msg(base, "A|live-in| input: reported around "+embedded+" in an unrelated note")
+	second := rfc3164Msg(base.Add(time.Second), "A|lan-wan| forward: second message")
+
+	if _, err := conn.Write([]byte(first + second)); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	var got []string
+	deadline := time.After(3 * time.Second)
+	for len(got) < 3 {
+		select {
+		case m := <-out:
+			got = append(got, string(m.Data))
+		case <-deadline:
+			t.Fatalf("received %d/3 messages: %q", len(got), got)
+		}
+	}
+
+	idx := strings.Index(first, embedded)
+	wantFirstPart, wantSecondPart := first[:idx], first[idx:]
+	if got[0] != wantFirstPart {
+		t.Errorf("first fragment = %q, want %q -- the embedded date-like text should split first's own body in two", got[0], wantFirstPart)
+	}
+	if got[1] != wantSecondPart {
+		t.Errorf("second fragment = %q, want %q", got[1], wantSecondPart)
+	}
+	if got[2] != second {
+		t.Errorf("third message = %q, want %q", got[2], second)
+	}
+}
+
+// TestTCPHeaderSplitRejectsOutOfRangePRI proves an out-of-range PRI
+// (envelope.go's own bound: 0-191, the same one ParseEnvelope enforces)
+// is not treated as a header start, so text that merely begins with a
+// bracket and digits is not split on -- the whole blob stays one
+// message, same as before #614.
+func TestTCPHeaderSplitRejectsOutOfRangePRI(t *testing.T) {
+	out := make(chan RawMessage, 8)
+	addr, stop := serveTCPForTest(t, out)
+	defer stop()
+
+	conn, err := net.Dial("tcp", addr)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer conn.Close()
+
+	base := time.Date(2026, time.August, 29, 20, 52, 44, 0, time.UTC)
+	first := rfc3164Msg(base, "A|live-in| input: first message")
+	// A syslog PRI is 0-191 (24 facilities x 8 severities); 999 is out
+	// of range. No text after it forms a header of its own, so nothing
+	// here should be recognised as a boundary at any position.
+	whole := first + "<999>this is not a valid header, just text that starts with a bracket"
+
+	if _, err := conn.Write([]byte(whole)); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	select {
+	case m := <-out:
+		if string(m.Data) != whole {
+			t.Errorf("Data = %q, want the whole unsplit blob %q", m.Data, whole)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for the (unsplit) message")
+	}
+
+	select {
+	case extra := <-out:
+		t.Errorf("expected exactly one message, got a second: %q", extra.Data)
+	case <-time.After(200 * time.Millisecond):
+	}
+}
+
+// TestTCPHeaderSplitRejectsBogusMonth is the timestamp-side counterpart:
+// a syntactically PRI-valid header whose month abbreviation isn't real
+// must not be recognised either -- time.Parse itself is what enforces
+// "real month name", and nothing here should second-guess it into a
+// looser match.
+func TestTCPHeaderSplitRejectsBogusMonth(t *testing.T) {
+	out := make(chan RawMessage, 8)
+	addr, stop := serveTCPForTest(t, out)
+	defer stop()
+
+	conn, err := net.Dial("tcp", addr)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer conn.Close()
+
+	base := time.Date(2026, time.August, 29, 20, 52, 44, 0, time.UTC)
+	first := rfc3164Msg(base, "A|live-in| input: first message")
+	// "Xxx" is not a real month abbreviation -- time.Parse must reject
+	// it, and nothing else in this text forms a header either.
+	whole := first + "<30>Xxx 29 20:52:45 CHR A|lan-wan| forward: should not split here"
+
+	if _, err := conn.Write([]byte(whole)); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	select {
+	case m := <-out:
+		if string(m.Data) != whole {
+			t.Errorf("Data = %q, want the whole unsplit blob %q", m.Data, whole)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for the (unsplit) message")
+	}
+
+	select {
+	case extra := <-out:
+		t.Errorf("expected exactly one message, got a second: %q", extra.Data)
+	case <-time.After(200 * time.Millisecond):
+	}
+}
