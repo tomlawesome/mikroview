@@ -160,12 +160,28 @@ live-container-postgres:
 #
 # Slow by the standards of the other targets: a CHR boots under TCG here
 # (no usable /dev/kvm), and setup completes a real DHCP handshake.
+#
+# Each `up` is captured and then eval'd, rather than eval'd directly from
+# a command substitution. `eval "$(cmd)"` throws the exit status away --
+# a failing cmd produces no output and `eval ""` succeeds -- so a router
+# that never booted read as a router that booted fine, and the recipe
+# went on to drive its serial console. The operator then saw a Python
+# traceback and "connection refused" as the top of the log, four errors
+# below the line that actually mattered (#613). This target runs rarely,
+# by someone without recent context, so it misreporting its own failure
+# costs more than it would on a common one.
 live-routeros-container:
 	@MV_ENV_SCRIPT=scripts/live-container.sh; export MV_ENV_SCRIPT; \
 	  MV_BIND=$$(scripts/live-routeros.sh host-addr); export MV_BIND; \
-	  eval "$$(scripts/live-container.sh up)" || exit 1; \
+	  env_out=$$(scripts/live-container.sh up) || exit 1; \
+	  eval "$$env_out"; \
 	  test -n "$$MV_URL" || { echo "live-container.sh up produced no MV_URL" >&2; exit 1; }; \
-	  eval "$$(scripts/live-routeros.sh up)" || exit 1; \
+	  chr_out=$$(scripts/live-routeros.sh up) || { \
+	    echo "live-routeros.sh up failed -- stopping here rather than driving a router that never booted" >&2; \
+	    scripts/live-container.sh down >/dev/null 2>&1 || true; \
+	    exit 1; \
+	  }; \
+	  eval "$$chr_out"; \
 	  status=0; \
 	  scripts/live-routeros.sh setup "$$MV_URL" "$$MV_BIND" "$$MV_SYSLOG_TLS_PORT" || status=1; \
 	  if [ $$status -eq 0 ]; then \
