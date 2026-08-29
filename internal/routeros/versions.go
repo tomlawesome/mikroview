@@ -33,10 +33,29 @@ const (
 	// someone reviewed that release's notes for command-set changes --
 	// so bump it when that has been done, not when a release appears.
 	//
-	// 7.23.3 is where the current commands were verified: see
-	// frontend/src/lib/setupsteps.ts's blockSpecs comment and
-	// docs/routeros-setup.md, both written against a real 7.23.3 router.
-	ReviewedVersion = "7.23.3"
+	// Reviewed, not exercised. The commands were *verified against a
+	// real router* at 7.23.3 -- see setupsteps.ts's blockSpecs comment,
+	// docs/routeros-setup.md, and CHR_VERSION in
+	// scripts/live-routeros.sh, which still boots 7.23.3. This marker
+	// means someone has read the intervening release notes for changes
+	// affecting those commands, which is a weaker claim and the one the
+	// freshness check is actually about.
+	//
+	// Review log:
+	//   7.23.3 -- commands written and verified against a real router.
+	//   7.24, 7.24.1 -- read 2026-08-29. Nothing renames, removes or
+	//     changes the syntax of any command mikroview emits. The fetch
+	//     and scheduler changes are additive; the script fix concerns an
+	//     empty "policy", and mikroview always sets one.
+	//     Two things worth knowing rather than swallowing:
+	//       - 7.24 introduced a "find" command argument lookup bug,
+	//         fixed in 7.24.1. mikroview tags rules with
+	//         `/ip firewall filter set [find !dynamic ...]`, so 7.24.0
+	//         exactly is the one release where that step is suspect.
+	//       - 7.24 made the console "produce runtime errors for bad
+	//         command parameters". Nothing here relies on a parameter
+	//         being tolerated, but it raises the cost of any that did.
+	ReviewedVersion = "7.24.1"
 )
 
 // Standing is where a router's reported version sits relative to what
