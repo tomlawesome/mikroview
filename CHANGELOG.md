@@ -18,6 +18,15 @@ rewritten.
 
 ### Added
 
+- **A deployment's data can be moved between a bind mount and a named
+  volume**, in both directions (#537). `mikroview -migrate-data
+  <destination>` copies the whole data directory, verifies it by
+  re-hashing what landed, and leaves the source untouched -- so a failed
+  migration costs nothing but the copy. It carries the three things
+  `-backup` deliberately leaves out (the TLS store, the recovery pepper
+  and the Postgres adoption marker), because a backup travels to another
+  host and a migration does not.
+
 - **Custom detection definitions can now be created** (#502). An
   operator authors match conditions plus an aggregation -- key mode,
   counting mode, threshold and window -- and a detail sentence, and
