@@ -1,0 +1,415 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Round 8 · The stream: the box unfurls into the thin bar</title>
+<style>
+  /* ============================================================
+     ROUND 5 — THE GLUE. Direction R: the deck.
+
+     The owner's own read of this round, promoted to the design: the
+     scenes are full-viewport cards in a vertical deck with scroll
+     snap. There is no "which scene is home" — the deck plays in the
+     operator's own order, and sign-in lands on whatever card they
+     put first. The atlas stays the jump navigator, and gains the
+     deck-order editor. P and Q are superseded by this one file,
+     which carries every scene once.
+     ============================================================ */
+  :root {
+    --void: #06080e;
+    --raised: #0f1422;
+    --glass: rgba(15, 20, 34, 0.66);
+    --hair: rgba(160, 185, 230, 0.13);
+    --hair-2: rgba(160, 185, 230, 0.26);
+    --ink: #e9eefb;
+    --ink-2: #97a4c4;
+    --ink-3: #55628a;
+    --accent: #9db8e8;
+    --lan: #3987e5; --srv: #199e70; --iot: #c98500; --guest: #d76a9e;
+    --ok: #37b364;
+    --alarm: #ff5470;
+    --now: #e8b05a;
+    --accept: #3ecf7e; --drop: #f5a623; --nat: #2dd4bf;
+    --fall-accept: #5aa7f0; --fall-drop: #e05252;
+    --sans: system-ui, -apple-system, "Segoe UI", sans-serif;
+    --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  }
+  * { box-sizing: border-box; margin: 0; }
+  html { scroll-behavior: smooth; }
+  body {
+    background: radial-gradient(1100px 600px at 75% -15%, rgba(80, 115, 205, 0.07), transparent 60%), var(--void);
+    color: var(--ink); font: 13.5px/1.5 var(--sans); -webkit-font-smoothing: antialiased;
+  }
+  .concept {
+    display: flex; gap: 16px; align-items: baseline;
+    padding: 8px 20px; background: rgba(2, 3, 7, 0.95); border-bottom: 1px solid var(--hair);
+    font-size: 11px; color: var(--ink-3);
+  }
+  .concept b { color: var(--accent); letter-spacing: 0.1em; }
+  .concept a { color: var(--ink-2); text-decoration: none; margin-left: 12px; }
+
+  .scene { min-height: 100vh; position: relative; border-bottom: 1px solid var(--hair-2); overflow: hidden; }
+  .scene-tag {
+    position: absolute; top: 14px; right: 20px; z-index: 5; max-width: 420px; text-align: right;
+    font-size: 11px; color: var(--ink-3); pointer-events: none;
+  }
+
+  /* ---- the scene bar: every scene's own chrome, no rail, no toolbar ---- */
+  /* Free-floating chrome (owner, 2026-08-30: "I still don't like the
+     rigid top bar"): the same information, loose on the void — no
+     strip, no border, no glass. Each element floats where it reads. */
+  .scenebar { position: absolute; top: 0; left: 0; right: 0; z-index: 10; pointer-events: none; }
+  .scenebar > * { pointer-events: auto; }
+  .wordmark { position: absolute; top: 18px; left: 24px; font-weight: 800; font-size: 15px; letter-spacing: 0.04em; color: var(--ink); cursor: pointer; }
+  .wordmark em { font-style: normal; color: var(--accent); }
+  .wordmark .hintkey { font-size: 9px; color: var(--ink-3); font-weight: 400; margin-left: 6px; letter-spacing: 0.08em; }
+  .scname { position: absolute; top: 44px; left: 24px; font-size: 13px; font-weight: 650; color: var(--ink); white-space: nowrap; }
+  .scname .epi { font-weight: 400; color: var(--ink-3); margin-left: 8px; font-size: 11.5px; }
+  .scstatus { position: absolute; top: 20px; right: 24px; display: flex; gap: 16px; align-items: center; font-size: 11px; color: var(--ink-2); }
+  .scstatus .dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--ok); margin-right: 5px; vertical-align: 1px; }
+  .scstatus .flagchip { color: var(--void); background: var(--alarm); border-radius: 9px; padding: 0 7px; font-weight: 700; font-size: 10.5px; }
+  .scstatus .who { color: var(--ink-3); }
+
+  /* ---- scene 1: the door — one beat, then in ---- */
+  .door { display: flex; flex-direction: column; min-height: 100vh; position: relative; }
+  .door .beat { flex: 1; display: grid; place-items: center; position: relative; }
+  .door .stack { text-align: center; width: 300px; position: relative; z-index: 2; }
+  .door .wm {
+    display: inline-block; font-size: 34px; font-weight: 800; letter-spacing: 0.04em;
+    padding: 12px 30px; border: 1.5px solid var(--now); border-radius: 4px;
+    box-shadow: 0 0 14px rgba(232, 176, 90, 0.22), inset 0 0 10px rgba(232, 176, 90, 0.06);
+    animation: kindle 0.5s ease-out;
+  }
+  .door .wm em { font-style: normal; color: var(--accent); }
+  @keyframes kindle { from { box-shadow: none; border-color: rgba(232, 176, 90, 0); } }
+  .fullfall {
+    position: absolute; inset: 0; overflow: hidden; pointer-events: none;
+    /* The rain lives behind the door's elements, never across them: a
+       radial mask carves the centre out of the layer entirely. */
+    -webkit-mask: radial-gradient(ellipse 460px 380px at 50% 52%, transparent 62%, black 78%);
+    mask: radial-gradient(ellipse 460px 380px at 50% 52%, transparent 62%, black 78%);
+  }
+  .fullfall i {
+    position: absolute; top: -20px; width: 2.5px; height: 13px; border-radius: 2px;
+    background: var(--fall-accept); animation: fall 5.5s linear infinite;
+  }
+  .fullfall i.r { background: var(--fall-drop); }
+  .fullfall i.v { background: #a78bfa; }
+  @keyframes fall { to { transform: translateY(106vh); } }
+  .cred input {
+    display: block; width: 240px; margin: 10px auto 0; padding: 7px 4px;
+    background: transparent; border: 0; border-bottom: 1px solid var(--hair-2);
+    color: var(--ink); font: 13.5px var(--sans); text-align: center; outline: none;
+  }
+  .cred input::placeholder { color: var(--ink-3); }
+  .cred input:focus { border-bottom-color: var(--accent); }
+  .enter {
+    margin-top: 20px; padding: 7px 30px; font: 600 13px var(--sans); letter-spacing: 0.04em;
+    color: var(--accent); background: transparent; border: 1px solid var(--hair-2);
+    border-radius: 999px; cursor: pointer;
+  }
+  .enter:hover { border-color: var(--accent); }
+  .promise { position: absolute; bottom: 16px; left: 0; right: 0; text-align: center; font-size: 10.5px; color: var(--ink-3); }
+  .outboard { display: flex; border-top: 1px solid var(--hair); }
+  .outboard .frame { flex: 1; padding: 14px 18px 16px; text-align: center; font-size: 11px; color: var(--ink-2); border-right: 1px solid var(--hair); }
+  .outboard .frame:last-child { border-right: 0; }
+  .outboard .k { display: block; font-size: 9px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--ink-3); margin-bottom: 6px; }
+  .outboard svg { height: 26px; margin-bottom: 4px; }
+  .outboard .pill { display: inline-block; margin-left: 8px; padding: 1px 12px; border: 1px solid var(--hair-2); border-radius: 999px; color: var(--accent); font-size: 10.5px; }
+
+  /* ---- scene 2: the map (Atlas II refined, carried forward) ---- */
+  .lenses { display: flex; gap: 6px; padding: 88px 24px 0; position: relative; z-index: 4; }
+  .lens { font-size: 11px; color: var(--ink-3); border: 1px solid var(--hair); border-radius: 14px; padding: 3px 12px; }
+  .lens.on { color: var(--ink); border-color: var(--hair-2); background: var(--raised); }
+  .lens .ct { color: var(--void); background: var(--alarm); border-radius: 8px; padding: 0 6px; margin-left: 6px; font-weight: 700; font-size: 10px; }
+  .stage { position: absolute; inset: 132px 0 90px; }
+  .stage svg { width: 100%; height: 100%; }
+  .isl { fill: rgba(15, 20, 34, 0.72); stroke: var(--hair-2); }
+  .n-name { font: 650 15px var(--sans); fill: var(--ink); }
+  .n-cidr { font: 11px var(--mono); fill: var(--ink-3); }
+  .n-sub { font: 11px var(--sans); fill: var(--ink-3); }
+  .cov { font: 700 9px var(--mono); letter-spacing: 0.1em; }
+  .cov-l { fill: var(--ok); } .cov-q { fill: var(--ink-3); } .cov-d { fill: var(--alarm); }
+  .rib { fill: none; opacity: 0.5; }
+  .rib-ghost { fill: none; stroke: var(--ink-3); stroke-width: 1.2; stroke-dasharray: 3 6; opacity: 0.45; }
+  .rib-alarm { fill: none; stroke: var(--alarm); stroke-width: 2; filter: drop-shadow(0 0 6px rgba(255, 84, 112, 0.45)); }
+  .alarm-t { font: 700 10.5px var(--mono); fill: var(--alarm); }
+  .chip-t { font: 10.5px var(--mono); fill: var(--ink-2); }
+  .halo { animation: halo 2s ease-out infinite; }
+  @keyframes halo { from { opacity: 0.9; transform: scale(1); } to { opacity: 0; transform: scale(2.6); } }
+  @keyframes travel { from { offset-distance: 0%; } to { offset-distance: 100%; } }
+  .scrub {
+    position: absolute; left: 20px; bottom: 118px; width: 300px; z-index: 4;
+    background: var(--glass); border: 1px solid var(--hair); border-radius: 10px; padding: 8px 12px 6px;
+  }
+  .scrub .row { display: flex; justify-content: space-between; font-size: 10px; color: var(--ink-3); letter-spacing: 0.08em; text-transform: uppercase; }
+  .scrub .live { color: var(--ok); }
+  .scrub svg { width: 100%; height: 26px; }
+  .scrub polyline { fill: none; stroke: var(--accent); stroke-width: 1.4; opacity: 0.7; }
+  .scrub line { stroke: var(--now); stroke-width: 2; }
+  .ticker {
+    position: absolute; left: 0; right: 0; bottom: 0; z-index: 4;
+    background: rgba(4, 6, 11, 0.92); border-top: 1px solid var(--hair-2); padding: 8px 20px 10px;
+  }
+  .ticker .head { display: flex; justify-content: space-between; font-size: 10.5px; color: var(--ink-3); letter-spacing: 0.08em; text-transform: uppercase; margin-bottom: 6px; }
+  .ticker .head i { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--ok); margin-right: 6px; }
+  .ticker .lift { color: var(--accent); }
+  .trow { display: flex; gap: 12px; font: 11.5px var(--mono); color: var(--ink-2); padding: 2px 0; }
+  .trow .t { color: var(--ink-3); }
+  .badge { font: 700 10px var(--mono); border-radius: 4px; padding: 0 6px; letter-spacing: 0.06em; }
+  .b-drop { color: var(--drop); background: rgba(245, 166, 35, 0.12); }
+  .b-accept { color: var(--accept); background: rgba(62, 207, 126, 0.12); }
+  .b-nat { color: var(--nat); background: rgba(45, 212, 191, 0.12); }
+
+  /* ---- scene 2 (Q): the fall — the accepted live build, restated ---- */
+  .fallwrap { position: absolute; inset: 78px 0 0; display: flex; flex-direction: column; }
+  .fall-head { display: flex; gap: 10px; align-items: center; padding: 10px 20px 4px; }
+  .fall-chip { font: 600 10.5px var(--mono); letter-spacing: 0.05em; border-radius: 12px; padding: 3px 12px; border: 1px solid; }
+  .fc-alarm { color: var(--alarm); border-color: rgba(255, 84, 112, 0.5); }
+  .fc-dim { color: var(--ink-2); border-color: var(--hair-2); }
+  .fall-info { position: absolute; bottom: 10px; left: 14px; z-index: 6; }
+  .ibtn {
+    width: 18px; height: 18px; border-radius: 50%; border: 1px solid var(--hair-2);
+    background: transparent; color: var(--ink-3); font: italic 600 11px Georgia, serif;
+    cursor: pointer; line-height: 1;
+  }
+  .ibtn:hover { color: var(--accent); border-color: var(--accent); }
+  .fallcanvas { flex: 1; position: relative; }
+  .fallcanvas svg { position: absolute; inset: 0; width: 100%; height: 100%; }
+  .bh-name { font: 650 11px var(--mono); fill: var(--ink); }
+  .bh-epi { font: 9.5px var(--sans); fill: var(--ink-3); }
+  .bh-watch { font: 700 8px var(--mono); fill: var(--ok); letter-spacing: 0.08em; }
+  .bh-watch.bad { fill: var(--alarm); }
+  .bh-watch.dim { fill: var(--ink-3); }
+  .spec { fill: rgba(90, 167, 240, 0.18); stroke: var(--fall-accept); stroke-width: 1.2; }
+  .spec.r { fill: rgba(224, 82, 82, 0.16); stroke: var(--fall-drop); }
+  .peak-l { font: 9px var(--mono); fill: var(--ink-3); }
+  .nowline { stroke: var(--now); stroke-width: 1.6; }
+  .now-t { font: 10px var(--mono); fill: var(--now); }
+  .gut { font: 9.5px var(--mono); fill: var(--ink-3); }
+  .carrier { stroke-linecap: round; }
+  .flagline { stroke: var(--alarm); stroke-width: 0.7; stroke-dasharray: 2 5; opacity: 0.7; }
+  .flag-t { font: 700 9.5px var(--mono); fill: var(--alarm); }
+  .dark-t { font: 9.5px var(--mono); fill: var(--fall-drop); }
+  .port-l { font: 9px var(--mono); fill: var(--ink-3); }
+  .fall-legend { display: flex; gap: 24px; justify-content: center; padding: 8px 12px 12px; font-size: 11px; color: var(--ink-3); border-top: 1px solid var(--hair); flex-wrap: wrap; }
+  .fall-legend .b { color: var(--fall-accept); }
+  .fall-legend .r { color: var(--fall-drop); }
+  .fall-legend .v { color: #a78bfa; }
+
+  /* ---- the topography card: one place, two viewpoints, three depths ---- */
+  .modechip {
+    margin-left: 18px; font: 600 10.5px var(--mono); letter-spacing: 0.08em;
+    color: var(--accent); background: var(--raised); border: 1px solid var(--hair-2);
+    border-radius: 14px; padding: 3px 14px; cursor: pointer;
+  }
+  /* The depth control whispers (owner, round 6): centred at the foot
+     of the view, a thin line and two small words, nothing more. */
+  .depth {
+    position: absolute; bottom: 14px; left: 50%; transform: translateX(-50%);
+    display: flex; gap: 12px; align-items: center; z-index: 6;
+    font: 500 9px var(--mono); letter-spacing: 0.12em; color: var(--ink-3);
+    opacity: 0.55; transition: opacity 0.3s;
+  }
+  .depth:hover { opacity: 1; }
+  .depth input { width: 150px; height: 2px; accent-color: var(--accent); background: var(--hair-2); }
+  .depth .dlab { text-transform: uppercase; }
+  #topo { perspective: 1400px; }
+  #topo svg { transition: transform 0.8s cubic-bezier(0.6, 0, 0.2, 1); transform-origin: 50% 42%; }
+  #topo.survey svg { transform: rotateX(32deg) scale(0.88) translateY(-24px); }
+  #topo .isl-card, #topo .g-dot, #topo .detail, #topo .svc, #topo .cli { transition: opacity 0.55s ease; }
+  #topo .g-dot { opacity: 0; pointer-events: none; }
+  #topo.survey .g-dot { opacity: 1; }
+  #topo.survey .isl-card, #topo.survey .detail { opacity: 0; pointer-events: none; }
+  #topo[data-lvl="0"] .svc, #topo[data-lvl="0"] .cli { opacity: 0; }
+  #topo[data-lvl="1"] .cli { opacity: 0; }
+  .cli .c-dot { stroke: none; }
+  .cli .c-label { font: 9.5px var(--mono); fill: var(--ink-3); }
+  .cli .spoke { stroke-width: 0.8; opacity: 0.3; }
+  @media (prefers-reduced-motion: reduce) { #topo svg { transition: none; } }
+
+  /* ---- the deck: snap + the rail ---- */
+  html { scroll-snap-type: y mandatory; }
+  .scene { scroll-snap-align: start; scroll-snap-stop: always; }
+  .deckrail {
+    position: fixed; right: 14px; top: 50%; transform: translateY(-50%); z-index: 60;
+    display: flex; flex-direction: column; gap: 13px;
+  }
+  .deckrail a { display: flex; align-items: center; gap: 8px; flex-direction: row-reverse; text-decoration: none; color: var(--ink-3); font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase; }
+  .deckrail .dot { width: 8px; height: 8px; border-radius: 50%; border: 1.5px solid var(--hair-2); }
+  .deckrail a.on { color: var(--accent); }
+  .deckrail a.on .dot { background: var(--accent); border-color: var(--accent); }
+  /* ---- the atlas's deck-order editor ---- */
+  .heartdeck {
+    position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%);
+    display: flex; flex-direction: column; gap: 8px; font-size: 12.5px; color: var(--ink-2);
+    text-align: left; min-width: 240px;
+  }
+  .heartdeck .lab { font-size: 9.5px; letter-spacing: 0.16em; color: var(--ink-3); margin-bottom: 2px; text-align: center; }
+  .heartdeck .card { display: flex; gap: 8px; align-items: center; border: 1px solid var(--hair-2); border-radius: 8px; padding: 6px 14px; background: var(--raised); cursor: grab; }
+  .heartdeck .card .n { color: var(--ink-3); font-size: 10px; }
+  .heartdeck .card .grip { color: var(--ink-3); letter-spacing: -1px; }
+  .heartdeck .first { border-color: var(--accent); }
+  .heartdeck .first .tag { font-size: 8.5px; color: var(--accent); letter-spacing: 0.12em; margin-left: 4px; }
+  .heartdeck .hint { font-size: 9.5px; color: var(--ink-3); text-align: center; margin-top: 2px; }
+  .faro-orbit { stroke: var(--hair); }
+  .dest .dg { fill: var(--raised); stroke: var(--ink-3); stroke-width: 1.5; transform: rotate(45deg); }
+  .dest .dest-l { font: 600 12px var(--sans); fill: var(--ink-2); }
+  .dest .dest-b { font: 700 10px var(--mono); fill: var(--void); }
+  .dest:hover .dg { stroke: var(--accent); }
+  .dest:hover .dest-l { fill: var(--ink); }
+
+  /* ---- scene 3: the atlas overlay ---- */
+  .atlas { min-height: 100vh; display: flex; flex-direction: column; background: radial-gradient(900px 540px at 50% 30%, rgba(80, 115, 205, 0.08), transparent 65%), var(--void); }
+  .atlas .chart { flex: 1; position: relative; }
+  .atlas .chart svg { width: 100%; height: 100%; position: absolute; inset: 0; }
+  .orbit { fill: none; stroke: var(--hair-2); stroke-dasharray: 2 7; }
+  .zrib { stroke: var(--hair); stroke-width: 1; }
+  .station-ring { fill: none; stroke: var(--accent); stroke-opacity: 0.5; }
+  .station-core { fill: var(--accent); }
+  .station-label { font: 10.5px var(--mono); fill: var(--ink-3); letter-spacing: 0.1em; }
+  .zone-dot { fill: var(--raised); stroke-width: 2.5; }
+  .zone-label { font: 650 13.5px var(--sans); fill: var(--ink); }
+  .zone-epithet { font: 11px var(--sans); fill: var(--ink-3); }
+  .zone-state { font: 700 9px var(--mono); fill: var(--ink-3); letter-spacing: 0.1em; }
+  .zone-state.bad { fill: var(--alarm); }
+  .atlas .hint { text-align: center; font-size: 11px; color: var(--ink-3); padding: 6px 0 14px; }
+  .ports { display: flex; gap: 34px; justify-content: center; flex-wrap: wrap; padding: 16px 20px 10px; border-top: 1px solid var(--hair); }
+  .pgroup { min-width: 110px; }
+  .pname { display: block; font-size: 9.5px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--ink-3); margin-bottom: 6px; }
+  .port { display: block; font-size: 12.5px; color: var(--ink-2); padding: 2px 0; cursor: pointer; }
+  .port.on { color: var(--accent); font-weight: 650; }
+  .port .home { font-size: 9px; color: var(--ink-3); letter-spacing: 0.1em; margin-left: 6px; }
+  .port .badge { margin-left: 6px; }
+  .atlas .account { display: flex; gap: 22px; justify-content: center; font-size: 11px; color: var(--ink-3); padding: 8px 0 22px; }
+  .atlas .account b { color: var(--ink-2); font-weight: 600; }
+
+  /* ---- scene 4: the stream, columns squared ---- */
+  .controls { position: absolute; top: 50px; right: 24px; display: flex; gap: 10px; align-items: center; }
+  .controls .search {
+    width: 320px; padding: 5px 12px; font: 12px var(--mono); color: var(--ink-2);
+    background: rgba(6, 8, 14, 0.7); border: 1px solid var(--hair); border-radius: 7px;
+  }
+  .controls .search em { font-style: normal; color: var(--accent); }
+  .spans { display: flex; gap: 2px; font: 10.5px var(--mono); color: var(--ink-3); }
+  .spans span { padding: 3px 9px; border-radius: 6px; }
+  .spans .on { color: var(--ink); background: var(--raised); border: 1px solid var(--hair); }
+  table.stream { width: calc(100% - 40px); margin: 150px 20px 14px; border-collapse: collapse; font: 12px var(--mono); }
+  table.stream th {
+    text-align: left; font: 600 9.5px var(--mono); letter-spacing: 0.12em; text-transform: uppercase;
+    color: var(--ink-3); padding: 6px 10px; border-bottom: 1px solid var(--hair-2);
+  }
+  table.stream td { padding: 5px 10px; border-bottom: 1px solid var(--hair); color: var(--ink-2); font-variant-numeric: tabular-nums; }
+  table.stream .num { text-align: right; }
+  table.stream .host { color: var(--ink); }
+  table.stream .geo { color: var(--ink-3); font-size: 10.5px; }
+  table.stream tr.hl td { background: rgba(255, 84, 112, 0.05); }
+
+  .foot-legend {
+    position: absolute; bottom: 0; left: 0; right: 0; display: flex; gap: 26px; justify-content: center;
+    padding: 10px; font-size: 11px; color: var(--ink-3); border-top: 1px solid var(--hair);
+  }
+  .foot-legend .k { color: var(--ink-2); }
+
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { animation: none !important; transition: none !important; }
+  }
+</style>
+</head>
+<body>
+
+<div class="concept"><b>ROUND 8</b> The stream's filter — corrected: the box slides out to the LEFT as a thin bar, reminiscent of the old live view's filter strip.</div>
+<style>
+  /* The thin bar (owner, round 8): the box slides out to the left as a
+     single quiet strip — the old live view's filter bar, wearing the
+     Atlas identity. Traditional inputs, no boxes around them: dim
+     labels above hairline-underlined values. */
+  .filterbar {
+    position: absolute; top: 92px; left: 24px; right: 24px; z-index: 12;
+    display: flex; gap: 22px; align-items: flex-end; padding: 6px 10px 8px;
+    background: rgba(10, 14, 24, 0.55); backdrop-filter: blur(6px);
+    border-bottom: 1px solid var(--hair);
+    animation: unfurl 0.35s ease-out;
+    transform-origin: right center;
+  }
+  @keyframes unfurl { from { transform: scaleX(0.05); opacity: 0; } }
+  .fb-f { display: flex; flex-direction: column; gap: 2px; min-width: 60px; }
+  .fb-f .l { font: 500 8px var(--mono); letter-spacing: 0.14em; color: var(--ink-3); text-transform: uppercase; }
+  .fb-f .v {
+    font: 12px var(--mono); color: var(--ink); border-bottom: 1px solid var(--hair-2);
+    padding: 1px 2px 3px; min-width: 56px;
+  }
+  .fb-f .v.dim { color: var(--ink-3); }
+  .fb-f .v em { font-style: normal; color: var(--ink-3); font-size: 10px; }
+  .fb-f .v.hot { border-bottom-color: var(--drop); }
+  .fb-swap { align-self: center; color: var(--ink-3); font-size: 13px; cursor: pointer; padding: 0 2px; }
+  .fb-clear { align-self: center; color: var(--ink-3); font-size: 12px; cursor: pointer; margin-left: auto; }
+  .fb-clear:hover { color: var(--alarm); }
+  .fb-fold { align-self: center; color: var(--accent); font: 10.5px var(--mono); cursor: pointer; white-space: nowrap; }
+</style><!-- ============ SCENE 4 : THE STREAM, WEARING THE SAME CLOTHES ============ -->
+<section class="scene" id="s4" aria-label="The stream: columns squared, the toolbar's controls on the scene bar">
+  <div class="scene-tag" style="top:auto;bottom:56px">Round 8 — the correction. The box slides out to the LEFT as a thin bar: the old live view's filter strip, wearing the Atlas identity — dim labels, hairline underlines, the full traditional set (device · action · chain · proto · source ⇄ destination · port · interface · rule). Same filter as the typed grammar; fold slides it back into the box.</div>
+  <div class="scenebar">
+    <span class="wordmark">MIKRO<em>VIEW</em><span class="hintkey">M · ATLAS</span></span>
+    <span class="scname">Stream<span class="epi">every line, as it arrived</span></span>
+    <span class="controls">
+      <span class="search">action:<em>drop</em> boundary:<em>iot→lan</em> port:<em>445</em> host:<em>cam-porch</em>&nbsp; ◂ fold</span>
+      <span class="spans"><span class="on">15 m</span><span>1 h</span><span>24 h</span><span>14 d</span></span>
+    </span>
+    <span class="scstatus">
+      <span><span class="dot"></span>LIVE</span>
+      <span class="flagchip">6</span>
+      <span class="who">tom (admin)</span>
+    </span>
+  </div>
+  <table class="stream">
+    <thead>
+      <tr><th class="num">time</th><th>action</th><th>source</th><th class="num">address</th><th>destination</th><th class="num">address</th><th>proto</th><th class="num">port</th><th>rule</th></tr>
+    </thead>
+    <tbody>
+      <tr class="hl"><td class="num">14:02:11.482</td><td><span class="badge b-drop">DROP</span></td><td class="host">cam-porch</td><td class="num">10.0.20.11</td><td class="host">nas</td><td class="num">10.0.40.5</td><td>tcp</td><td class="num">445</td><td>iot-to-lan-drop</td></tr>
+      <tr><td class="num">14:02:11.407</td><td><span class="badge b-nat">NAT</span></td><td class="host">phone-tom</td><td class="num">10.0.10.23</td><td class="geo">142.250.187.206</td><td class="num">—</td><td>udp</td><td class="num">443</td><td>nat-wan</td></tr>
+      <tr><td class="num">14:02:10.951</td><td><span class="badge b-drop">DROP</span></td><td class="geo">185.220.101.34 DE</td><td class="num">—</td><td class="host">rb5009</td><td class="num">203.0.113.7</td><td>tcp</td><td class="num">8291</td><td>wan-in-drop</td></tr>
+      <tr><td class="num">14:02:10.512</td><td><span class="badge b-accept">ACCEPT</span></td><td class="host">tom-desktop</td><td class="num">10.0.10.2</td><td class="host">pihole</td><td class="num">10.0.40.3</td><td>udp</td><td class="num">53</td><td>lan-to-srv</td></tr>
+      <tr><td class="num">14:02:09.874</td><td><span class="badge b-accept">ACCEPT</span></td><td class="host">laptop-anna</td><td class="num">10.0.10.7</td><td class="host">nas</td><td class="num">10.0.40.5</td><td>tcp</td><td class="num">5001</td><td>lan-to-srv</td></tr>
+      <tr><td class="num">14:02:09.310</td><td><span class="badge b-drop">DROP</span></td><td class="geo">198.51.100.90 CN</td><td class="num">—</td><td class="host">rb5009</td><td class="num">203.0.113.7</td><td>tcp</td><td class="num">22</td><td>wan-in-drop</td></tr>
+      <tr class="hl"><td class="num">14:01:07.229</td><td><span class="badge b-drop">DROP</span></td><td class="host">cam-porch</td><td class="num">10.0.20.11</td><td class="host">nas</td><td class="num">10.0.40.5</td><td>tcp</td><td class="num">445</td><td>iot-to-lan-drop</td></tr>
+      <tr><td class="num">14:00:58.667</td><td><span class="badge b-accept">ACCEPT</span></td><td class="host">hue-bridge</td><td class="num">10.0.20.4</td><td class="geo">time.cloudflare.com</td><td class="num">—</td><td>udp</td><td class="num">123</td><td>iot-egress-ntp</td></tr>
+      <tr><td class="num">14:00:41.120</td><td><span class="badge b-nat">NAT</span></td><td class="host">tom-desktop</td><td class="num">10.0.10.2</td><td class="geo">140.82.121.4</td><td class="num">—</td><td>tcp</td><td class="num">443</td><td>nat-wan</td></tr>
+      <tr class="hl"><td class="num">14:00:03.155</td><td><span class="badge b-drop">DROP</span></td><td class="host">cam-porch</td><td class="num">10.0.20.11</td><td class="host">nas</td><td class="num">10.0.40.5</td><td>tcp</td><td class="num">445</td><td>iot-to-lan-drop</td></tr>
+      <tr><td class="num">13:59:52.089</td><td><span class="badge b-accept">ACCEPT</span></td><td class="host">unifi</td><td class="num">10.0.40.7</td><td class="host">tom-desktop</td><td class="num">10.0.10.2</td><td>tcp</td><td class="num">8443</td><td>srv-to-lan-mgmt</td></tr>
+      <tr><td class="num">13:59:31.844</td><td><span class="badge b-drop">DROP</span></td><td class="geo">203.0.113.199 RU</td><td class="num">—</td><td class="host">rb5009</td><td class="num">203.0.113.7</td><td>tcp</td><td class="num">443</td><td>wan-in-drop</td></tr>
+      <tr><td class="num">13:58:59.081</td><td><span class="badge b-drop">DROP</span></td><td class="host">cam-porch</td><td class="num">10.0.20.11</td><td class="host">nas</td><td class="num">10.0.40.5</td><td>tcp</td><td class="num">445</td><td>iot-to-lan-drop</td></tr>
+      <tr><td class="num">13:58:41.336</td><td><span class="badge b-accept">ACCEPT</span></td><td class="host">phone-tom</td><td class="num">10.0.10.23</td><td class="host">nas</td><td class="num">10.0.40.5</td><td>tcp</td><td class="num">5001</td><td>lan-to-srv</td></tr>
+      <tr><td class="num">13:58:22.510</td><td><span class="badge b-drop">DROP</span></td><td class="geo">45.155.205.11 NL</td><td class="num">—</td><td class="host">rb5009</td><td class="num">203.0.113.7</td><td>tcp</td><td class="num">8291</td><td>wan-in-drop</td></tr>
+      <tr><td class="num">13:58:03.902</td><td><span class="badge b-accept">ACCEPT</span></td><td class="host">tom-desktop</td><td class="num">10.0.10.2</td><td class="host">pihole</td><td class="num">10.0.40.3</td><td>udp</td><td class="num">53</td><td>lan-to-srv</td></tr>
+      <tr class="hl"><td class="num">13:57:55.007</td><td><span class="badge b-drop">DROP</span></td><td class="host">cam-porch</td><td class="num">10.0.20.11</td><td class="host">nas</td><td class="num">10.0.40.5</td><td>tcp</td><td class="num">445</td><td>iot-to-lan-drop</td></tr>
+      <tr><td class="num">13:57:36.184</td><td><span class="badge b-nat">NAT</span></td><td class="host">laptop-anna</td><td class="num">10.0.10.7</td><td class="geo">104.16.132.229</td><td class="num">—</td><td>tcp</td><td class="num">443</td><td>nat-wan</td></tr>
+      <tr><td class="num">13:57:12.660</td><td><span class="badge b-accept">ACCEPT</span></td><td class="host">thermostat</td><td class="num">10.0.20.9</td><td class="geo">time.cloudflare.com</td><td class="num">—</td><td>udp</td><td class="num">123</td><td>iot-egress-ntp</td></tr>
+      <tr class="hl"><td class="num">13:56:50.933</td><td><span class="badge b-drop">DROP</span></td><td class="host">cam-porch</td><td class="num">10.0.20.11</td><td class="host">nas</td><td class="num">10.0.40.5</td><td>tcp</td><td class="num">445</td><td>iot-to-lan-drop</td></tr>
+    </tbody>
+  </table>
+  <div class="foot-legend">
+    <span><span class="k">cam-porch → nas :445</span> — every ~64 s since 13:52:07 · 14 so far · flagged</span>
+    <span><span class="k">▲3.1×</span> wan drops since 13:30</span>
+    <span>guest → wan <span class="k">dark</span> — nothing logged, not nothing sent</span>
+  </div>
+  <div class="filterbar" aria-label="The filter bar — the box, slid out to the left; the old live view's strip under the Atlas identity">
+    <div class="fb-f"><span class="l">Device</span><span class="v dim">all ▾</span></div>
+    <div class="fb-f"><span class="l">Action</span><span class="v hot">drop ▾</span></div>
+    <div class="fb-f"><span class="l">Chain</span><span class="v dim">forward ▾</span></div>
+    <div class="fb-f"><span class="l">Proto</span><span class="v">tcp</span></div>
+    <div class="fb-f"><span class="l">Source</span><span class="v">lan▾ · cam-porch · <em>any country ▾</em></span></div>
+    <span class="fb-swap" title="Swap source and destination">⇄</span>
+    <div class="fb-f"><span class="l">Destination</span><span class="v">any▾ · nas · <em>—</em></span></div>
+    <div class="fb-f"><span class="l">Port</span><span class="v">445</span></div>
+    <div class="fb-f"><span class="l">Interface</span><span class="v dim">—</span></div>
+    <div class="fb-f"><span class="l">Rule</span><span class="v">iot-to-lan-drop</span></div>
+    <span class="fb-clear" title="Clear filters">× clear</span>
+    <span class="fb-fold">fold ▸</span>
+  </div>
+  </div>
+</section>
+</body>
+</html>

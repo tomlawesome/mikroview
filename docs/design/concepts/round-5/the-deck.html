@@ -1,0 +1,854 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Round 5 · Direction R — the deck</title>
+<style>
+  /* ============================================================
+     ROUND 5 — THE GLUE. Direction R: the deck.
+
+     The owner's own read of this round, promoted to the design: the
+     scenes are full-viewport cards in a vertical deck with scroll
+     snap. There is no "which scene is home" — the deck plays in the
+     operator's own order, and sign-in lands on whatever card they
+     put first. The atlas stays the jump navigator, and gains the
+     deck-order editor. P and Q are superseded by this one file,
+     which carries every scene once.
+     ============================================================ */
+  :root {
+    --void: #06080e;
+    --raised: #0f1422;
+    --glass: rgba(15, 20, 34, 0.66);
+    --hair: rgba(160, 185, 230, 0.13);
+    --hair-2: rgba(160, 185, 230, 0.26);
+    --ink: #e9eefb;
+    --ink-2: #97a4c4;
+    --ink-3: #55628a;
+    --accent: #9db8e8;
+    --lan: #3987e5; --srv: #199e70; --iot: #c98500; --guest: #d76a9e;
+    --ok: #37b364;
+    --alarm: #ff5470;
+    --now: #e8b05a;
+    --accept: #3ecf7e; --drop: #f5a623; --nat: #2dd4bf;
+    --fall-accept: #5aa7f0; --fall-drop: #e05252;
+    --sans: system-ui, -apple-system, "Segoe UI", sans-serif;
+    --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  }
+  * { box-sizing: border-box; margin: 0; }
+  html { scroll-behavior: smooth; }
+  body {
+    background: radial-gradient(1100px 600px at 75% -15%, rgba(80, 115, 205, 0.07), transparent 60%), var(--void);
+    color: var(--ink); font: 13.5px/1.5 var(--sans); -webkit-font-smoothing: antialiased;
+  }
+  .concept {
+    display: flex; gap: 16px; align-items: baseline;
+    padding: 8px 20px; background: rgba(2, 3, 7, 0.95); border-bottom: 1px solid var(--hair);
+    font-size: 11px; color: var(--ink-3);
+  }
+  .concept b { color: var(--accent); letter-spacing: 0.1em; }
+  .concept a { color: var(--ink-2); text-decoration: none; margin-left: 12px; }
+
+  .scene { min-height: 100vh; position: relative; border-bottom: 1px solid var(--hair-2); overflow: hidden; }
+  .scene-tag {
+    position: absolute; top: 14px; right: 20px; z-index: 5; max-width: 420px; text-align: right;
+    font-size: 11px; color: var(--ink-3); pointer-events: none;
+  }
+
+  /* ---- the scene bar: every scene's own chrome, no rail, no toolbar ---- */
+  /* Free-floating chrome (owner, 2026-08-30: "I still don't like the
+     rigid top bar"): the same information, loose on the void — no
+     strip, no border, no glass. Each element floats where it reads. */
+  .scenebar { position: absolute; top: 0; left: 0; right: 0; z-index: 10; pointer-events: none; }
+  .scenebar > * { pointer-events: auto; }
+  .wordmark { position: absolute; top: 18px; left: 24px; font-weight: 800; font-size: 15px; letter-spacing: 0.04em; color: var(--ink); cursor: pointer; }
+  .wordmark em { font-style: normal; color: var(--accent); }
+  .wordmark .hintkey { font-size: 9px; color: var(--ink-3); font-weight: 400; margin-left: 6px; letter-spacing: 0.08em; }
+  .scname { position: absolute; top: 44px; left: 24px; font-size: 13px; font-weight: 650; color: var(--ink); white-space: nowrap; }
+  .scname .epi { font-weight: 400; color: var(--ink-3); margin-left: 8px; font-size: 11.5px; }
+  .scstatus { position: absolute; top: 20px; right: 24px; display: flex; gap: 16px; align-items: center; font-size: 11px; color: var(--ink-2); }
+  .scstatus .dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--ok); margin-right: 5px; vertical-align: 1px; }
+  .scstatus .flagchip { color: var(--void); background: var(--alarm); border-radius: 9px; padding: 0 7px; font-weight: 700; font-size: 10.5px; }
+  .scstatus .who { color: var(--ink-3); }
+
+  /* ---- scene 1: the door — one beat, then in ---- */
+  .door { display: flex; flex-direction: column; min-height: 100vh; position: relative; }
+  .door .beat { flex: 1; display: grid; place-items: center; position: relative; }
+  .door .stack { text-align: center; width: 300px; position: relative; z-index: 2; }
+  .door .wm {
+    display: inline-block; font-size: 34px; font-weight: 800; letter-spacing: 0.04em;
+    padding: 12px 30px; border: 1.5px solid var(--now); border-radius: 4px;
+    box-shadow: 0 0 14px rgba(232, 176, 90, 0.22), inset 0 0 10px rgba(232, 176, 90, 0.06);
+    animation: kindle 0.5s ease-out;
+  }
+  .door .wm em { font-style: normal; color: var(--accent); }
+  @keyframes kindle { from { box-shadow: none; border-color: rgba(232, 176, 90, 0); } }
+  .fullfall {
+    position: absolute; inset: 0; overflow: hidden; pointer-events: none;
+    /* The rain lives behind the door's elements, never across them: a
+       radial mask carves the centre out of the layer entirely. */
+    -webkit-mask: radial-gradient(ellipse 460px 380px at 50% 52%, transparent 62%, black 78%);
+    mask: radial-gradient(ellipse 460px 380px at 50% 52%, transparent 62%, black 78%);
+  }
+  .fullfall i {
+    position: absolute; top: -20px; width: 2.5px; height: 13px; border-radius: 2px;
+    background: var(--fall-accept); animation: fall 5.5s linear infinite;
+  }
+  .fullfall i.r { background: var(--fall-drop); }
+  .fullfall i.v { background: #a78bfa; }
+  @keyframes fall { to { transform: translateY(106vh); } }
+  .cred input {
+    display: block; width: 240px; margin: 10px auto 0; padding: 7px 4px;
+    background: transparent; border: 0; border-bottom: 1px solid var(--hair-2);
+    color: var(--ink); font: 13.5px var(--sans); text-align: center; outline: none;
+  }
+  .cred input::placeholder { color: var(--ink-3); }
+  .cred input:focus { border-bottom-color: var(--accent); }
+  .enter {
+    margin-top: 20px; padding: 7px 30px; font: 600 13px var(--sans); letter-spacing: 0.04em;
+    color: var(--accent); background: transparent; border: 1px solid var(--hair-2);
+    border-radius: 999px; cursor: pointer;
+  }
+  .enter:hover { border-color: var(--accent); }
+  .promise { position: absolute; bottom: 16px; left: 0; right: 0; text-align: center; font-size: 10.5px; color: var(--ink-3); }
+  .outboard { display: flex; border-top: 1px solid var(--hair); }
+  .outboard .frame { flex: 1; padding: 14px 18px 16px; text-align: center; font-size: 11px; color: var(--ink-2); border-right: 1px solid var(--hair); }
+  .outboard .frame:last-child { border-right: 0; }
+  .outboard .k { display: block; font-size: 9px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--ink-3); margin-bottom: 6px; }
+  .outboard svg { height: 26px; margin-bottom: 4px; }
+  .outboard .pill { display: inline-block; margin-left: 8px; padding: 1px 12px; border: 1px solid var(--hair-2); border-radius: 999px; color: var(--accent); font-size: 10.5px; }
+
+  /* ---- scene 2: the map (Atlas II refined, carried forward) ---- */
+  .lenses { display: flex; gap: 6px; padding: 88px 24px 0; position: relative; z-index: 4; }
+  .lens { font-size: 11px; color: var(--ink-3); border: 1px solid var(--hair); border-radius: 14px; padding: 3px 12px; }
+  .lens.on { color: var(--ink); border-color: var(--hair-2); background: var(--raised); }
+  .lens .ct { color: var(--void); background: var(--alarm); border-radius: 8px; padding: 0 6px; margin-left: 6px; font-weight: 700; font-size: 10px; }
+  .stage { position: absolute; inset: 132px 0 90px; }
+  .stage svg { width: 100%; height: 100%; }
+  .isl { fill: rgba(15, 20, 34, 0.72); stroke: var(--hair-2); }
+  .n-name { font: 650 15px var(--sans); fill: var(--ink); }
+  .n-cidr { font: 11px var(--mono); fill: var(--ink-3); }
+  .n-sub { font: 11px var(--sans); fill: var(--ink-3); }
+  .cov { font: 700 9px var(--mono); letter-spacing: 0.1em; }
+  .cov-l { fill: var(--ok); } .cov-q { fill: var(--ink-3); } .cov-d { fill: var(--alarm); }
+  .rib { fill: none; opacity: 0.5; }
+  .rib-ghost { fill: none; stroke: var(--ink-3); stroke-width: 1.2; stroke-dasharray: 3 6; opacity: 0.45; }
+  .rib-alarm { fill: none; stroke: var(--alarm); stroke-width: 2; filter: drop-shadow(0 0 6px rgba(255, 84, 112, 0.45)); }
+  .alarm-t { font: 700 10.5px var(--mono); fill: var(--alarm); }
+  .chip-t { font: 10.5px var(--mono); fill: var(--ink-2); }
+  .halo { animation: halo 2s ease-out infinite; }
+  @keyframes halo { from { opacity: 0.9; transform: scale(1); } to { opacity: 0; transform: scale(2.6); } }
+  @keyframes travel { from { offset-distance: 0%; } to { offset-distance: 100%; } }
+  .scrub {
+    position: absolute; left: 20px; bottom: 118px; width: 300px; z-index: 4;
+    background: var(--glass); border: 1px solid var(--hair); border-radius: 10px; padding: 8px 12px 6px;
+  }
+  .scrub .row { display: flex; justify-content: space-between; font-size: 10px; color: var(--ink-3); letter-spacing: 0.08em; text-transform: uppercase; }
+  .scrub .live { color: var(--ok); }
+  .scrub svg { width: 100%; height: 26px; }
+  .scrub polyline { fill: none; stroke: var(--accent); stroke-width: 1.4; opacity: 0.7; }
+  .scrub line { stroke: var(--now); stroke-width: 2; }
+  .ticker {
+    position: absolute; left: 0; right: 0; bottom: 0; z-index: 4;
+    background: rgba(4, 6, 11, 0.92); border-top: 1px solid var(--hair-2); padding: 8px 20px 10px;
+  }
+  .ticker .head { display: flex; justify-content: space-between; font-size: 10.5px; color: var(--ink-3); letter-spacing: 0.08em; text-transform: uppercase; margin-bottom: 6px; }
+  .ticker .head i { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--ok); margin-right: 6px; }
+  .ticker .lift { color: var(--accent); }
+  .trow { display: flex; gap: 12px; font: 11.5px var(--mono); color: var(--ink-2); padding: 2px 0; }
+  .trow .t { color: var(--ink-3); }
+  .badge { font: 700 10px var(--mono); border-radius: 4px; padding: 0 6px; letter-spacing: 0.06em; }
+  .b-drop { color: var(--drop); background: rgba(245, 166, 35, 0.12); }
+  .b-accept { color: var(--accept); background: rgba(62, 207, 126, 0.12); }
+  .b-nat { color: var(--nat); background: rgba(45, 212, 191, 0.12); }
+
+  /* ---- scene 2 (Q): the fall — the accepted live build, restated ---- */
+  .fallwrap { position: absolute; inset: 78px 0 0; display: flex; flex-direction: column; }
+  .fall-head { display: flex; gap: 10px; align-items: center; padding: 10px 20px 4px; }
+  .fall-chip { font: 600 10.5px var(--mono); letter-spacing: 0.05em; border-radius: 12px; padding: 3px 12px; border: 1px solid; }
+  .fc-alarm { color: var(--alarm); border-color: rgba(255, 84, 112, 0.5); }
+  .fc-dim { color: var(--ink-2); border-color: var(--hair-2); }
+  .fall-info { position: absolute; bottom: 10px; left: 14px; z-index: 6; }
+  .ibtn {
+    width: 18px; height: 18px; border-radius: 50%; border: 1px solid var(--hair-2);
+    background: transparent; color: var(--ink-3); font: italic 600 11px Georgia, serif;
+    cursor: pointer; line-height: 1;
+  }
+  .ibtn:hover { color: var(--accent); border-color: var(--accent); }
+  .fallcanvas { flex: 1; position: relative; }
+  .fallcanvas svg { position: absolute; inset: 0; width: 100%; height: 100%; }
+  .bh-name { font: 650 11px var(--mono); fill: var(--ink); }
+  .bh-epi { font: 9.5px var(--sans); fill: var(--ink-3); }
+  .bh-watch { font: 700 8px var(--mono); fill: var(--ok); letter-spacing: 0.08em; }
+  .bh-watch.bad { fill: var(--alarm); }
+  .bh-watch.dim { fill: var(--ink-3); }
+  .spec { fill: rgba(90, 167, 240, 0.18); stroke: var(--fall-accept); stroke-width: 1.2; }
+  .spec.r { fill: rgba(224, 82, 82, 0.16); stroke: var(--fall-drop); }
+  .peak-l { font: 9px var(--mono); fill: var(--ink-3); }
+  .nowline { stroke: var(--now); stroke-width: 1.6; }
+  .now-t { font: 10px var(--mono); fill: var(--now); }
+  .gut { font: 9.5px var(--mono); fill: var(--ink-3); }
+  .carrier { stroke-linecap: round; }
+  .flagline { stroke: var(--alarm); stroke-width: 0.7; stroke-dasharray: 2 5; opacity: 0.7; }
+  .flag-t { font: 700 9.5px var(--mono); fill: var(--alarm); }
+  .dark-t { font: 9.5px var(--mono); fill: var(--fall-drop); }
+  .port-l { font: 9px var(--mono); fill: var(--ink-3); }
+  .fall-legend { display: flex; gap: 24px; justify-content: center; padding: 8px 12px 12px; font-size: 11px; color: var(--ink-3); border-top: 1px solid var(--hair); flex-wrap: wrap; }
+  .fall-legend .b { color: var(--fall-accept); }
+  .fall-legend .r { color: var(--fall-drop); }
+  .fall-legend .v { color: #a78bfa; }
+
+  /* ---- the topography card: one place, two viewpoints, three depths ---- */
+  .modechip {
+    margin-left: 18px; font: 600 10.5px var(--mono); letter-spacing: 0.08em;
+    color: var(--accent); background: var(--raised); border: 1px solid var(--hair-2);
+    border-radius: 14px; padding: 3px 14px; cursor: pointer;
+  }
+  .depth { margin-left: 18px; display: flex; gap: 10px; align-items: center; font: 600 9.5px var(--mono); letter-spacing: 0.1em; color: var(--ink-3); }
+  .depth input { width: 110px; accent-color: var(--accent); }
+  .depth .dlab { color: var(--ink-2); letter-spacing: 0.05em; }
+  #topo { perspective: 1400px; }
+  #topo svg { transition: transform 0.8s cubic-bezier(0.6, 0, 0.2, 1); transform-origin: 50% 42%; }
+  #topo.survey svg { transform: rotateX(32deg) scale(0.88) translateY(-24px); }
+  #topo .isl-card, #topo .g-dot, #topo .detail, #topo .svc, #topo .cli { transition: opacity 0.55s ease; }
+  #topo .g-dot { opacity: 0; pointer-events: none; }
+  #topo.survey .g-dot { opacity: 1; }
+  #topo.survey .isl-card, #topo.survey .detail { opacity: 0; pointer-events: none; }
+  #topo[data-lvl="0"] .svc, #topo[data-lvl="0"] .cli { opacity: 0; }
+  #topo[data-lvl="1"] .cli { opacity: 0; }
+  .cli .c-dot { stroke: none; }
+  .cli .c-label { font: 9.5px var(--mono); fill: var(--ink-3); }
+  .cli .spoke { stroke-width: 0.8; opacity: 0.3; }
+  @media (prefers-reduced-motion: reduce) { #topo svg { transition: none; } }
+
+  /* ---- the deck: snap + the rail ---- */
+  html { scroll-snap-type: y mandatory; }
+  .scene { scroll-snap-align: start; scroll-snap-stop: always; }
+  .deckrail {
+    position: fixed; right: 14px; top: 50%; transform: translateY(-50%); z-index: 60;
+    display: flex; flex-direction: column; gap: 13px;
+  }
+  .deckrail a { display: flex; align-items: center; gap: 8px; flex-direction: row-reverse; text-decoration: none; color: var(--ink-3); font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase; }
+  .deckrail .dot { width: 8px; height: 8px; border-radius: 50%; border: 1.5px solid var(--hair-2); }
+  .deckrail a.on { color: var(--accent); }
+  .deckrail a.on .dot { background: var(--accent); border-color: var(--accent); }
+  /* ---- the atlas's deck-order editor ---- */
+  .heartdeck {
+    position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%);
+    display: flex; flex-direction: column; gap: 8px; font-size: 12.5px; color: var(--ink-2);
+    text-align: left; min-width: 240px;
+  }
+  .heartdeck .lab { font-size: 9.5px; letter-spacing: 0.16em; color: var(--ink-3); margin-bottom: 2px; text-align: center; }
+  .heartdeck .card { display: flex; gap: 8px; align-items: center; border: 1px solid var(--hair-2); border-radius: 8px; padding: 6px 14px; background: var(--raised); cursor: grab; }
+  .heartdeck .card .n { color: var(--ink-3); font-size: 10px; }
+  .heartdeck .card .grip { color: var(--ink-3); letter-spacing: -1px; }
+  .heartdeck .first { border-color: var(--accent); }
+  .heartdeck .first .tag { font-size: 8.5px; color: var(--accent); letter-spacing: 0.12em; margin-left: 4px; }
+  .heartdeck .hint { font-size: 9.5px; color: var(--ink-3); text-align: center; margin-top: 2px; }
+  .faro-orbit { stroke: var(--hair); }
+  .dest .dg { fill: var(--raised); stroke: var(--ink-3); stroke-width: 1.5; transform: rotate(45deg); }
+  .dest .dest-l { font: 600 12px var(--sans); fill: var(--ink-2); }
+  .dest .dest-b { font: 700 10px var(--mono); fill: var(--void); }
+  .dest:hover .dg { stroke: var(--accent); }
+  .dest:hover .dest-l { fill: var(--ink); }
+
+  /* ---- scene 3: the atlas overlay ---- */
+  .atlas { min-height: 100vh; display: flex; flex-direction: column; background: radial-gradient(900px 540px at 50% 30%, rgba(80, 115, 205, 0.08), transparent 65%), var(--void); }
+  .atlas .chart { flex: 1; position: relative; }
+  .atlas .chart svg { width: 100%; height: 100%; position: absolute; inset: 0; }
+  .orbit { fill: none; stroke: var(--hair-2); stroke-dasharray: 2 7; }
+  .zrib { stroke: var(--hair); stroke-width: 1; }
+  .station-ring { fill: none; stroke: var(--accent); stroke-opacity: 0.5; }
+  .station-core { fill: var(--accent); }
+  .station-label { font: 10.5px var(--mono); fill: var(--ink-3); letter-spacing: 0.1em; }
+  .zone-dot { fill: var(--raised); stroke-width: 2.5; }
+  .zone-label { font: 650 13.5px var(--sans); fill: var(--ink); }
+  .zone-epithet { font: 11px var(--sans); fill: var(--ink-3); }
+  .zone-state { font: 700 9px var(--mono); fill: var(--ink-3); letter-spacing: 0.1em; }
+  .zone-state.bad { fill: var(--alarm); }
+  .atlas .hint { text-align: center; font-size: 11px; color: var(--ink-3); padding: 6px 0 14px; }
+  .ports { display: flex; gap: 34px; justify-content: center; flex-wrap: wrap; padding: 16px 20px 10px; border-top: 1px solid var(--hair); }
+  .pgroup { min-width: 110px; }
+  .pname { display: block; font-size: 9.5px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--ink-3); margin-bottom: 6px; }
+  .port { display: block; font-size: 12.5px; color: var(--ink-2); padding: 2px 0; cursor: pointer; }
+  .port.on { color: var(--accent); font-weight: 650; }
+  .port .home { font-size: 9px; color: var(--ink-3); letter-spacing: 0.1em; margin-left: 6px; }
+  .port .badge { margin-left: 6px; }
+  .atlas .account { display: flex; gap: 22px; justify-content: center; font-size: 11px; color: var(--ink-3); padding: 8px 0 22px; }
+  .atlas .account b { color: var(--ink-2); font-weight: 600; }
+
+  /* ---- scene 4: the stream, columns squared ---- */
+  .controls { position: absolute; top: 50px; right: 24px; display: flex; gap: 10px; align-items: center; }
+  .controls .search {
+    width: 320px; padding: 5px 12px; font: 12px var(--mono); color: var(--ink-2);
+    background: rgba(6, 8, 14, 0.7); border: 1px solid var(--hair); border-radius: 7px;
+  }
+  .controls .search em { font-style: normal; color: var(--accent); }
+  .spans { display: flex; gap: 2px; font: 10.5px var(--mono); color: var(--ink-3); }
+  .spans span { padding: 3px 9px; border-radius: 6px; }
+  .spans .on { color: var(--ink); background: var(--raised); border: 1px solid var(--hair); }
+  table.stream { width: calc(100% - 40px); margin: 100px 20px 14px; border-collapse: collapse; font: 12px var(--mono); }
+  table.stream th {
+    text-align: left; font: 600 9.5px var(--mono); letter-spacing: 0.12em; text-transform: uppercase;
+    color: var(--ink-3); padding: 6px 10px; border-bottom: 1px solid var(--hair-2);
+  }
+  table.stream td { padding: 5px 10px; border-bottom: 1px solid var(--hair); color: var(--ink-2); font-variant-numeric: tabular-nums; }
+  table.stream .num { text-align: right; }
+  table.stream .host { color: var(--ink); }
+  table.stream .geo { color: var(--ink-3); font-size: 10.5px; }
+  table.stream tr.hl td { background: rgba(255, 84, 112, 0.05); }
+
+  .foot-legend {
+    position: absolute; bottom: 0; left: 0; right: 0; display: flex; gap: 26px; justify-content: center;
+    padding: 10px; font-size: 11px; color: var(--ink-3); border-top: 1px solid var(--hair);
+  }
+  .foot-legend .k { color: var(--ink-2); }
+
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { animation: none !important; transition: none !important; }
+  }
+</style>
+</head>
+<body>
+
+<div class="concept">
+  <b>DIRECTION R</b> The deck — every scene a full-viewport card, scroll-snapped, in the order you choose; sign-in lands on your first card.
+  <span style="margin-left:auto">
+    <a href="#s1">door</a><a href="#s2">the fall</a><a href="#s3">topography</a><a href="#s4">stream</a><a href="#s5">the atlas</a>
+  </span>
+</div>
+
+<!-- ============ SCENE 1 : THE DOOR — ONE BEAT, THEN IN ============ -->
+<section class="scene door" id="s1" aria-label="Login: one beat — the brink lights, the fall begins, you enter">
+  <div class="scene-tag">Scene 1 — the door, redone to Orbit's speed standard: instant paint, one sub-second beat, no card, no chrome. The fall rains over the whole void; the brink frames the wordmark; you enter. Signing in lands on the first card of your deck. The strip below storyboards the way out.</div>
+  <div class="beat">
+    <div class="fullfall" aria-hidden="true">
+      <i style="left: 4%; animation-delay: 0.2s; opacity: 0.5"></i>
+      <i style="left: 9%; animation-delay: 3.1s; opacity: 0.3"></i>
+      <i class="r" style="left: 15%; animation-delay: 1.6s; opacity: 0.55"></i>
+      <i style="left: 21%; animation-delay: 4.4s; opacity: 0.4"></i>
+      <i style="left: 26%; animation-delay: 2.2s; opacity: 0.65"></i>
+      <i class="v" style="left: 33%; animation-delay: 5.0s; opacity: 0.45"></i>
+      <i style="left: 38%; animation-delay: 0.9s; opacity: 0.3"></i>
+      <i class="r" style="left: 45%; animation-delay: 3.7s; opacity: 0.4"></i>
+      <i style="left: 51%; animation-delay: 1.2s; opacity: 0.6"></i>
+      <i style="left: 57%; animation-delay: 4.8s; opacity: 0.35"></i>
+      <i style="left: 63%; animation-delay: 2.7s; opacity: 0.5"></i>
+      <i class="v" style="left: 69%; animation-delay: 0.5s; opacity: 0.4"></i>
+      <i class="r" style="left: 75%; animation-delay: 3.4s; opacity: 0.6"></i>
+      <i style="left: 81%; animation-delay: 1.9s; opacity: 0.35"></i>
+      <i style="left: 86%; animation-delay: 5.3s; opacity: 0.55"></i>
+      <i class="r" style="left: 91%; animation-delay: 2.4s; opacity: 0.35"></i>
+      <i style="left: 96%; animation-delay: 4.1s; opacity: 0.5"></i>
+    </div>
+    <div class="stack">
+      <div class="wm">MIKRO<em>VIEW</em></div>
+      <form class="cred" aria-label="Sign in">
+        <input type="text" placeholder="account" aria-label="Account">
+        <input type="password" placeholder="passphrase" aria-label="Passphrase">
+        <button class="enter" type="button">Enter</button>
+      </form>
+    </div>
+    <div class="promise">Your router pushes its logs here — MikroView never connects to your router.</div>
+  </div>
+  <div class="outboard" aria-label="The way out, storyboarded">
+    <div class="frame"><span class="k">Sign out · beat 1</span>
+      <svg viewBox="0 0 80 26"><line x1="20" y1="4" x2="20" y2="14" stroke="#5aa7f0" stroke-width="2" opacity="0.5"/><line x1="40" y1="8" x2="40" y2="16" stroke="#e05252" stroke-width="2" opacity="0.35"/><line x1="60" y1="2" x2="60" y2="10" stroke="#5aa7f0" stroke-width="2" opacity="0.2"/></svg>
+      the fall thins — nothing new is drawn
+    </div>
+    <div class="frame"><span class="k">Beat 2</span>
+      <svg viewBox="0 0 80 26"><line x1="10" y1="13" x2="70" y2="13" stroke="var(--now)" stroke-width="2" opacity="0.5"/><circle cx="40" cy="13" r="2.5" fill="var(--now)"/></svg>
+      the brink collapses to a point and goes out
+    </div>
+    <div class="frame"><span class="k">Beat 3 · signed out</span>
+      <svg viewBox="0 0 80 26"><circle cx="40" cy="13" r="1.6" fill="var(--ink-3)"/></svg>
+      your router's logs keep arriving<span class="pill">Enter again</span>
+    </div>
+  </div>
+</section>
+
+<!-- ============ SCENE 2 : ARRIVAL — THE FALL IS HOME ============ -->
+<section class="scene" id="s2" aria-label="Arrival: the fall, traffic pouring past every boundary">
+  <div class="scene-tag" style="top:66px">The fall card, exactly as accepted on the live build: a band per boundary, the live spectrum on the brink, time pouring downward into memory.</div>
+  <div class="scenebar">
+    <span class="wordmark">MIKRO<em>VIEW</em><span class="hintkey">M · ATLAS</span></span>
+    <span class="scname">The fall<span class="epi">a band per boundary · a carrier per port</span></span>
+    <span class="scstatus">
+      <span class="spans" style="display:flex;gap:2px"><span class="on" style="padding:3px 9px;border-radius:6px;background:var(--raised);border:1px solid var(--hair);color:var(--ink)">15 m</span><span style="padding:3px 9px">1 h</span><span style="padding:3px 9px">24 h</span><span style="padding:3px 9px">14 d</span></span>
+      <span><span class="dot"></span>LIVE · 34/s</span>
+      <span class="flagchip">6</span>
+      <span class="who">tom (admin)</span>
+    </span>
+  </div>
+  <div class="fallwrap">
+    <div class="fall-head">
+      <span class="fall-chip fc-alarm">● NEW CARRIER ×14 — 13:52 · iot → bridge1</span>
+      <span class="fall-chip fc-dim">○ 1 dark boundary — nothing logged</span>
+    </div>
+    <!-- Deep explanation never sits in the UI (owner, 2026-08-30):
+         a learned display explains itself once, in the docs. What
+         remains on-screen is a tiny (i), well out of the way. -->
+    <div class="fall-info"><button class="ibtn" title="How to read the fall — full explanation in the docs">i</button></div>
+    <div class="fallcanvas">
+      <svg viewBox="0 0 1400 560" preserveAspectRatio="xMidYMid meet"
+           aria-label="Nine boundary bands: live spectrum peaks at the brink, carriers falling into fifteen minutes of memory below; one new carrier born at 13:52 on a band blank for 41 days; the guest boundary hatched — dark, not quiet.">
+        <!-- band headers -->
+        <g>
+          <text x="120" y="26" text-anchor="middle" class="bh-name">ether1 · input</text>
+          <text x="120" y="40" text-anchor="middle" class="bh-epi">the weather</text>
+          <text x="120" y="53" text-anchor="middle" class="bh-watch">WATCH HOLDING ✓</text>
+          <line x1="70" y1="60" x2="170" y2="60" stroke="var(--accent)" stroke-width="2"/>
+
+          <text x="270" y="26" text-anchor="middle" class="bh-name">iot → bridge1</text>
+          <text x="270" y="40" text-anchor="middle" class="bh-epi">41 blank days</text>
+          <text x="270" y="53" text-anchor="middle" class="bh-watch bad">✱ NEW CARRIER</text>
+          <line x1="220" y1="60" x2="320" y2="60" stroke="var(--iot)" stroke-width="2"/>
+
+          <text x="420" y="26" text-anchor="middle" class="bh-name">iot → bridge2</text>
+          <text x="420" y="40" text-anchor="middle" class="bh-epi">dns · metronomic</text>
+          <text x="420" y="53" text-anchor="middle" class="bh-watch">WATCH HOLDING ✓</text>
+          <line x1="370" y1="60" x2="470" y2="60" stroke="var(--iot)" stroke-width="2"/>
+
+          <text x="570" y="26" text-anchor="middle" class="bh-name">iot → ether1</text>
+          <text x="570" y="40" text-anchor="middle" class="bh-epi">egress guarded</text>
+          <text x="570" y="53" text-anchor="middle" class="bh-watch">WATCH HOLDING ✓</text>
+          <line x1="520" y1="60" x2="620" y2="60" stroke="var(--iot)" stroke-width="2"/>
+
+          <text x="720" y="26" text-anchor="middle" class="bh-name">lan → bridge2</text>
+          <text x="720" y="40" text-anchor="middle" class="bh-epi">445 · 5001 · 53</text>
+          <text x="720" y="53" text-anchor="middle" class="bh-watch">WATCH HOLDING ✓</text>
+          <line x1="670" y1="60" x2="770" y2="60" stroke="var(--lan)" stroke-width="2"/>
+
+          <text x="870" y="26" text-anchor="middle" class="bh-name">lan → ether1</text>
+          <text x="870" y="40" text-anchor="middle" class="bh-epi">the household</text>
+          <text x="870" y="53" text-anchor="middle" class="bh-watch">WATCH HOLDING ✓</text>
+          <line x1="820" y1="60" x2="920" y2="60" stroke="var(--lan)" stroke-width="2"/>
+
+          <text x="1020" y="26" text-anchor="middle" class="bh-name">wg1 → bridge1</text>
+          <text x="1020" y="40" text-anchor="middle" class="bh-epi">quiet by choice</text>
+          <text x="1020" y="53" text-anchor="middle" class="bh-watch">WATCH HOLDING ✓</text>
+          <line x1="970" y1="60" x2="1070" y2="60" stroke="var(--ok)" stroke-width="2"/>
+
+          <text x="1170" y="26" text-anchor="middle" class="bh-name">guest → ether1</text>
+          <text x="1170" y="40" text-anchor="middle" class="bh-epi">unmetered</text>
+          <text x="1170" y="53" text-anchor="middle" class="bh-watch bad">DARK — NO LOG RULE</text>
+          <line x1="1120" y1="60" x2="1220" y2="60" stroke="var(--guest)" stroke-width="2"/>
+
+          <text x="1320" y="26" text-anchor="middle" class="bh-name">other traffic</text>
+          <text x="1320" y="40" text-anchor="middle" class="bh-epi">&nbsp;</text>
+          <text x="1320" y="53" text-anchor="middle" class="bh-watch dim">NOT IN A PUSHED TABLE</text>
+          <line x1="1270" y1="60" x2="1370" y2="60" stroke="var(--ink-3)" stroke-width="2"/>
+        </g>
+
+        <!-- live spectrum: energy arriving this instant -->
+        <g>
+          <path class="spec r" d="M96 128 L104 94 L112 128 Z"/><text x="104" y="88" text-anchor="middle" class="peak-l">:22 SSH</text>
+          <path class="spec r" d="M132 128 L140 78 L148 128 Z"/><text x="146" y="72" text-anchor="middle" class="peak-l">:8291 Winbox</text>
+          <path class="spec r" d="M262 128 L270 96 L278 128 Z"/><text x="270" y="90" text-anchor="middle" class="peak-l">:445 ✱</text>
+          <path class="spec" d="M412 128 L420 76 L428 128 Z"/><text x="420" y="70" text-anchor="middle" class="peak-l">:53 DNS</text>
+          <path class="spec" d="M562 128 L570 102 L578 128 Z"/><text x="570" y="96" text-anchor="middle" class="peak-l">:123 NTP</text>
+          <path class="spec" d="M694 128 L702 84 L710 128 Z"/><text x="700" y="78" text-anchor="middle" class="peak-l">:445 SMB</text>
+          <path class="spec" d="M732 128 L740 92 L748 128 Z"/><text x="746" y="86" text-anchor="middle" class="peak-l">:5001</text>
+          <path class="spec" d="M844 128 L852 80 L860 128 Z"/><text x="852" y="74" text-anchor="middle" class="peak-l">:443 HTTPS</text>
+          <path class="spec" d="M884 128 L892 100 L900 128 Z"/><text x="898" y="94" text-anchor="middle" class="peak-l">:853</text>
+          <text x="1170" y="100" text-anchor="middle" class="dark-t">nothing logged —</text>
+          <text x="1170" y="114" text-anchor="middle" class="dark-t">no trace, and no claim of one</text>
+          <path class="spec" d="M1306 128 L1314 108 L1322 128 Z" style="fill:rgba(167,139,250,0.16);stroke:#a78bfa"/>
+        </g>
+
+        <!-- NOW : the brink -->
+        <line class="nowline" x1="60" y1="136" x2="1390" y2="136"/>
+        <text x="64" y="150" class="now-t">NOW · 14:02:11 — the spectrum above is this instant; below, it falls into memory</text>
+
+        <!-- time gutter -->
+        <g>
+          <text x="52" y="170" text-anchor="end" class="gut">14:02</text>
+          <text x="52" y="245" text-anchor="end" class="gut">14:00</text>
+          <text x="52" y="330" text-anchor="end" class="gut">13:57</text>
+          <text x="52" y="400" text-anchor="end" class="gut">13:54</text>
+          <text x="52" y="428" text-anchor="end" class="gut" fill="var(--alarm)">13:52 ✱</text>
+          <text x="52" y="490" text-anchor="end" class="gut">13:49</text>
+          <text x="52" y="548" text-anchor="end" class="gut">13:47</text>
+        </g>
+
+        <!-- the fall: carriers into memory -->
+        <g>
+          <rect x="72" y="156" width="140" height="392" fill="rgba(224,82,82,0.05)"/>
+          <line class="carrier" x1="104" y1="160" x2="104" y2="544" stroke="var(--fall-drop)" stroke-width="2.4" stroke-dasharray="3 9"/>
+          <line class="carrier" x1="140" y1="156" x2="140" y2="548" stroke="var(--fall-drop)" stroke-width="3" stroke-dasharray="5 6"/>
+          <line class="carrier" x1="176" y1="200" x2="176" y2="500" stroke="var(--fall-drop)" stroke-width="1.6" stroke-dasharray="2 14"/>
+          <text x="104" y="558" text-anchor="middle" class="port-l">:22</text>
+          <text x="140" y="558" text-anchor="middle" class="port-l">:8291</text>
+
+          <line class="carrier" x1="270" y1="160" x2="270" y2="424" stroke="var(--fall-drop)" stroke-width="2.6" stroke-dasharray="4 25"/>
+          <text x="270" y="558" text-anchor="middle" class="port-l">:445</text>
+
+          <line class="carrier" x1="420" y1="156" x2="420" y2="548" stroke="var(--fall-accept)" stroke-width="2.2" stroke-dasharray="7 13"/>
+          <text x="420" y="558" text-anchor="middle" class="port-l">:53</text>
+
+          <line class="carrier" x1="570" y1="180" x2="570" y2="530" stroke="var(--fall-accept)" stroke-width="1.6" stroke-dasharray="3 42"/>
+          <text x="570" y="558" text-anchor="middle" class="port-l">:123</text>
+
+          <line class="carrier" x1="702" y1="156" x2="702" y2="548" stroke="var(--fall-accept)" stroke-width="2.6" stroke-dasharray="6 8"/>
+          <line class="carrier" x1="740" y1="164" x2="740" y2="540" stroke="var(--fall-accept)" stroke-width="2" stroke-dasharray="4 16"/>
+          <text x="702" y="558" text-anchor="middle" class="port-l">:445</text>
+          <text x="740" y="558" text-anchor="middle" class="port-l">:5001</text>
+
+          <line class="carrier" x1="852" y1="156" x2="852" y2="548" stroke="var(--fall-accept)" stroke-width="3" stroke-dasharray="8 6"/>
+          <line class="carrier" x1="892" y1="170" x2="892" y2="520" stroke="var(--fall-accept)" stroke-width="1.6" stroke-dasharray="3 20"/>
+          <rect x="846" y="156" width="12" height="392" fill="rgba(90,167,240,0.07)"/>
+          <text x="852" y="558" text-anchor="middle" class="port-l">:443</text>
+          <text x="892" y="558" text-anchor="middle" class="port-l">:853</text>
+
+          <line class="carrier" x1="1020" y1="300" x2="1020" y2="330" stroke="var(--fall-accept)" stroke-width="1.4" stroke-dasharray="2 26" opacity="0.6"/>
+          <text x="1020" y="558" text-anchor="middle" class="port-l">:51820</text>
+
+          <g fill="none" stroke="var(--ink-3)" stroke-width="0.7" opacity="0.5">
+            <path d="M1122 180 l96 -18 M1122 220 l96 -18 M1122 260 l96 -18 M1122 300 l96 -18 M1122 340 l96 -18 M1122 380 l96 -18 M1122 420 l96 -18 M1122 460 l96 -18 M1122 500 l96 -18 M1122 540 l96 -18"/>
+          </g>
+          <text x="1170" y="330" text-anchor="middle" class="dark-t">blank because nothing is logged</text>
+          <text x="1170" y="344" text-anchor="middle" class="dark-t">— not because nothing is sent</text>
+
+          <line class="carrier" x1="1314" y1="200" x2="1314" y2="500" stroke="#a78bfa" stroke-width="1.6" stroke-dasharray="3 30"/>
+          <text x="1314" y="558" text-anchor="middle" class="port-l">nat</text>
+        </g>
+
+        <!-- the flag, printed at its moment -->
+        <line class="flagline" x1="60" y1="424" x2="1390" y2="424"/>
+        <rect x="278" y="408" width="762" height="20" fill="#06080e" opacity="0.88" rx="4"/>
+        <circle cx="270" cy="424" r="4" fill="none" stroke="var(--alarm)" stroke-width="1.4" class="halo"/>
+        <circle cx="270" cy="424" r="1.8" fill="var(--alarm)"/>
+        <text x="284" y="420" class="flag-t">✱ new_talker · cam-porch → nas :445 · born 13:52 on a band blank for 41 days · ×14 · open ▸</text>
+      </svg>
+    </div>
+    <div class="fall-legend">
+      <span><span class="b">blue energy = accepted</span> (brightness = rate)</span>
+      <span><span class="r">red energy = dropped — red never means anything else</span></span>
+      <span><span class="v">violet = nat</span></span>
+      <span>a carrier = a steady talker · dash rhythm = its cadence</span>
+      <span>⫽ unlogged (≠ a quiet band)</span>
+      <span>✱ flag at its moment · click a carrier to open it in Stream</span>
+    </div>
+  </div>
+</section>
+
+<!-- ============ SCENE 3 : TOPOGRAPHY — ONE PLACE, TWO VIEWPOINTS, THREE DEPTHS ============ -->
+<section class="scene" id="s3" aria-label="Topography: one cartesian graph; the viewpoint and the depth are yours">
+  <div class="scene-tag" style="top:66px">The topography card. One cartesian graph — Internet above, router at the waist, lanes below — and it stays that graph everywhere: SURVEY just tilts the camera back, same layout, same major links. The DEPTH slider filters detail: zones, services, every client. All of it really works here — including the camera: mouse wheel zooms the graph, middle-button drag pans it.</div>
+  <div class="scenebar">
+    <span class="wordmark">MIKRO<em>VIEW</em><span class="hintkey">M · ATLAS</span></span>
+    <span class="scname">Topography<span class="epi">your network, drawn from its own rules</span></span>
+    <span class="scstatus">
+      <span><span class="dot"></span>LIVE · 34/s</span>
+      <span>rb5009 · RouterOS 7.20.1</span>
+      <span class="flagchip">6</span>
+      <span class="who">tom (admin)</span>
+    </span>
+  </div>
+  <div class="lenses">
+    <span class="lens on">Traffic</span><span class="lens">Policy</span><span class="lens">Coverage</span><span class="lens">Flags<span class="ct">6</span></span><span class="lens">Watch</span>
+    <button class="modechip" id="modechip" onclick="var t=document.getElementById('topo'); t.classList.toggle('survey'); this.textContent = t.classList.contains('survey') ? '◍ SURVEY — same map, from altitude · click for CLOSE' : '⊕ CLOSE — click for SURVEY'">⊕ CLOSE — click for SURVEY</button>
+    <label class="depth">DEPTH
+      <input type="range" min="0" max="2" value="1" aria-label="Detail depth: zones, services, clients"
+             oninput="document.getElementById('topo').dataset.lvl = this.value">
+      <span class="dlab">zones · services · clients</span>
+    </label>
+  </div>
+
+  <div class="stage" id="topo" data-lvl="1">
+    <svg viewBox="0 0 1400 720" preserveAspectRatio="xMidYMid meet" role="img"
+         aria-label="The network as one cartesian graph: internet above, router at the waist, lanes below, clients beneath their lanes. The survey viewpoint tilts the same graph; the depth slider adds services and clients.">
+      <g id="cam">
+      <path class="rib" d="M700 104 V 232" stroke="var(--accent)" stroke-width="3.5"/>
+      <path class="rib" d="M645 302 C 565 380, 355 410, 285 480" stroke="var(--lan)" stroke-width="3.5"/>
+      <path class="rib" d="M683 302 C 653 380, 595 420, 577 480" stroke="var(--srv)" stroke-width="2.4"/>
+      <path class="rib" d="M718 302 C 748 380, 818 420, 848 480" stroke="var(--iot)" stroke-width="1.7"/>
+      <path class="rib" d="M756 302 C 846 375, 1050 405, 1116 480" stroke="var(--guest)" stroke-width="1.7"/>
+      <path class="rib" d="M1080 158 C 990 196, 880 232, 830 252" stroke="var(--lan)" stroke-width="1.7"/>
+      <path class="rib-ghost" d="M1100 165 C 945 290, 705 380, 610 476"/>
+      <path class="rib-alarm" d="M828 486 C 725 385, 405 385, 302 486"/>
+
+      <g class="detail">
+        <g transform="translate(514 396)">
+          <rect x="-12" y="-15" width="234" height="40" rx="9" fill="#170a12" stroke="var(--alarm)" stroke-opacity="0.8"/>
+          <circle cx="2" cy="-2" r="3" fill="var(--alarm)"/>
+          <text x="14" y="1" class="alarm-t">UNPLANNED · iot → lan · tcp/445</text>
+          <text x="14" y="15" class="chip-t">caught by default drop · 14× · open ▸</text>
+        </g>
+        <g transform="translate(742 146)"><text class="alarm-t" x="0" y="0" style="font-size:9px">▲3.1× drops · wan-in</text></g>
+      </g>
+      <g class="svc">
+        <g transform="translate(600 448)"><text class="chip-t" x="0" y="0">445 5001 53</text></g>
+        <g transform="translate(238 384)"><text class="chip-t" x="0" y="0">any → wan · 9/s</text></g>
+        <g transform="translate(940 400)"><text class="chip-t" x="0" y="0">wan only · dark</text></g>
+        <g transform="translate(806 420)"><text class="chip-t" x="0" y="0">:53 :123 egress</text></g>
+      </g>
+
+      <g class="node" transform="translate(700 68)">
+        <g class="isl-card">
+          <rect class="isl" x="-100" y="-30" width="200" height="60" rx="12"/>
+          <text x="-82" y="-3" class="n-name">Internet</text>
+          <text x="-82" y="14" class="n-cidr">ether1 · 203.0.113.7</text>
+          <text x="48" y="-6" class="cov cov-l">LOGGED</text>
+        </g>
+        <g class="g-dot">
+          <circle r="8" class="zone-dot" style="stroke: var(--ink-3)"/>
+          <text x="16" y="4" class="zone-label">Internet</text>
+        </g>
+      </g>
+      <g class="node" transform="translate(700 268)">
+        <g class="isl-card">
+          <rect class="isl" x="-128" y="-34" width="256" height="68" rx="12" stroke="rgba(157,184,232,0.4)"/>
+          <text x="-110" y="-6" class="n-name">rb5009</text>
+          <text x="-110" y="12" class="n-sub">RouterOS 7.20.1 · the waist · 41 rules</text>
+        </g>
+        <g class="g-dot">
+          <circle r="22" class="station-ring"/>
+          <circle r="3" class="station-core"/>
+          <text x="34" y="4" class="station-label">rb5009</text>
+        </g>
+      </g>
+      <g class="node" transform="translate(1128 132)">
+        <g class="isl-card">
+          <rect class="isl" x="-84" y="-28" width="188" height="56" rx="12"/>
+          <text x="-66" y="-2" class="n-name" style="font-size:13px">WireGuard</text>
+          <text x="-66" y="14" class="n-cidr">wg0 · 10.99.0.0/24</text>
+          <text x="54" y="-4" class="cov cov-q">QUIET</text>
+        </g>
+        <g class="g-dot">
+          <circle r="8" class="zone-dot" style="stroke: var(--accent)"/>
+          <text x="-16" y="4" text-anchor="end" class="zone-label">WireGuard</text>
+        </g>
+      </g>
+      <g class="node" transform="translate(285 490)">
+        <g class="isl-card">
+          <rect class="isl" x="-108" y="0" width="216" height="106" rx="12"/>
+          <circle cx="-90" cy="22" r="3.5" fill="var(--lan)"/>
+          <text x="-79" y="26" class="n-name">LAN</text><text x="22" y="26" class="n-cidr">10.0.10.0/24</text>
+          <text x="-90" y="52" class="n-sub" style="font-size:10px">tom-desktop · phone-tom · laptop-anna · +9</text>
+          <text x="-90" y="86" class="cov cov-l">LOGGED BOTH WAYS</text>
+        </g>
+        <g class="g-dot">
+          <circle r="8" class="zone-dot" style="stroke: var(--lan)"/>
+          <text y="-16" text-anchor="middle" class="zone-label">LAN</text>
+        </g>
+      </g>
+      <g class="node" transform="translate(577 490)">
+        <g class="isl-card">
+          <rect class="isl" x="-108" y="0" width="216" height="106" rx="12"/>
+          <circle cx="-90" cy="22" r="3.5" fill="var(--srv)"/>
+          <text x="-79" y="26" class="n-name">Servers</text><text x="22" y="26" class="n-cidr">10.0.40.0/24</text>
+          <text x="-90" y="52" class="n-sub" style="font-size:10px">nas · pihole · unifi</text>
+          <text x="-90" y="86" class="cov cov-l">LOGGED BOTH WAYS</text>
+        </g>
+        <g class="g-dot">
+          <circle r="8" class="zone-dot" style="stroke: var(--srv)"/>
+          <text y="-16" text-anchor="middle" class="zone-label">Servers</text>
+        </g>
+      </g>
+      <g class="node" transform="translate(848 490)">
+        <g class="isl-card">
+          <rect class="isl" x="-108" y="0" width="216" height="106" rx="12"/>
+          <circle cx="-90" cy="22" r="3.5" fill="var(--iot)"/>
+          <text x="-79" y="26" class="n-name">IoT</text><text x="22" y="26" class="n-cidr">10.0.20.0/24</text>
+          <text x="-90" y="52" class="n-sub" style="font-size:10px">cam-porch · hue-bridge · thermostat · +4</text>
+          <text x="-90" y="86" class="cov cov-l">LOGGED BOTH WAYS</text>
+        </g>
+        <g class="g-dot">
+          <circle r="8" class="zone-dot" style="stroke: var(--iot)"/>
+          <circle r="13" fill="none" stroke="var(--alarm)" stroke-width="1.2" class="halo"/>
+          <text y="-16" text-anchor="middle" class="zone-label">IoT</text>
+        </g>
+      </g>
+      <g class="node" transform="translate(1116 490)">
+        <g class="isl-card">
+          <rect class="isl" x="-108" y="0" width="216" height="106" rx="12"/>
+          <circle cx="-90" cy="22" r="3.5" fill="var(--guest)"/>
+          <text x="-79" y="26" class="n-name">Guest</text><text x="22" y="26" class="n-cidr">10.0.30.0/24</text>
+          <text x="-90" y="52" class="n-sub" style="font-size:10px">guest-e8b2 · +2</text>
+          <text x="-90" y="74" class="cov cov-d">DARK TOWARD WAN</text>
+          <text x="-90" y="88" class="n-sub">no log rule on this boundary</text>
+        </g>
+        <g class="g-dot">
+          <circle r="8" class="zone-dot" style="stroke: var(--guest)"/>
+          <text y="-16" text-anchor="middle" class="zone-label">Guest</text>
+          <text y="-31" text-anchor="middle" class="zone-state bad">DARK</text>
+        </g>
+      </g>
+
+      <!-- depth 2: every client, hanging beneath its lane -->
+      <g class="cli">
+        <path class="spoke" d="M285 596 C 285 622, 215 622, 215 648" fill="none" stroke="var(--lan)"/>
+        <path class="spoke" d="M285 596 C 279 618, 291 630, 285 652" fill="none" stroke="var(--lan)"/>
+        <path class="spoke" d="M285 596 C 285 622, 355 622, 355 648" fill="none" stroke="var(--lan)"/>
+        <circle class="c-dot" cx="215" cy="652" r="3.5" fill="var(--lan)"/>
+        <circle class="c-dot" cx="285" cy="656" r="3.5" fill="var(--lan)"/>
+        <circle class="c-dot" cx="355" cy="652" r="3.5" fill="var(--lan)"/>
+        <text x="215" y="668" text-anchor="middle" class="c-label">tom-desktop</text>
+        <text x="285" y="682" text-anchor="middle" class="c-label">phone-tom</text>
+        <text x="355" y="668" text-anchor="middle" class="c-label">laptop-anna</text>
+        <text x="285" y="700" text-anchor="middle" class="c-label" style="fill: var(--ink-3)">+ 9 more</text>
+
+        <path class="spoke" d="M577 596 C 577 622, 517 622, 517 648" fill="none" stroke="var(--srv)"/>
+        <path class="spoke" d="M577 596 C 571 618, 583 630, 577 652" fill="none" stroke="var(--srv)"/>
+        <path class="spoke" d="M577 596 C 577 622, 637 622, 637 648" fill="none" stroke="var(--srv)"/>
+        <circle class="c-dot" cx="517" cy="652" r="3.5" fill="var(--srv)"/>
+        <circle class="c-dot" cx="577" cy="656" r="3.5" fill="var(--srv)"/>
+        <circle class="c-dot" cx="637" cy="652" r="3.5" fill="var(--srv)"/>
+        <text x="517" y="668" text-anchor="middle" class="c-label">nas</text>
+        <text x="577" y="682" text-anchor="middle" class="c-label">pihole</text>
+        <text x="637" y="668" text-anchor="middle" class="c-label">unifi</text>
+
+        <path class="spoke" d="M848 596 C 848 622, 788 622, 788 648" fill="none" stroke="var(--iot)"/>
+        <path class="spoke" d="M848 596 C 842 618, 854 630, 848 652" fill="none" stroke="var(--iot)"/>
+        <path class="spoke" d="M848 596 C 848 622, 908 622, 908 648" fill="none" stroke="var(--iot)"/>
+        <circle class="c-dot" cx="788" cy="652" r="3.5" fill="var(--iot)"/>
+        <circle class="c-dot" cx="788" cy="652" r="8" fill="none" stroke="var(--alarm)" stroke-width="1.2" class="halo"/>
+        <circle class="c-dot" cx="848" cy="656" r="3.5" fill="var(--iot)"/>
+        <circle class="c-dot" cx="908" cy="652" r="3.5" fill="var(--iot)"/>
+        <text x="788" y="668" text-anchor="middle" class="c-label" style="fill: var(--alarm)">cam-porch ✱</text>
+        <text x="848" y="682" text-anchor="middle" class="c-label">hue-bridge</text>
+        <text x="908" y="668" text-anchor="middle" class="c-label">thermostat</text>
+        <text x="848" y="700" text-anchor="middle" class="c-label" style="fill: var(--ink-3)">+ 4 more</text>
+
+        <path class="spoke" d="M1116 596 C 1110 620, 1122 630, 1116 652" fill="none" stroke="var(--guest)"/>
+        <circle class="c-dot" cx="1116" cy="656" r="3.5" fill="var(--guest)"/>
+        <text x="1116" y="682" text-anchor="middle" class="c-label">guest-e8b2 · +2</text>
+      </g>
+      </g>
+    </svg>
+  </div>
+</section>
+
+<!-- ============ SCENE 4 : THE STREAM, WEARING THE SAME CLOTHES ============ -->
+<section class="scene" id="s4" aria-label="The stream: columns squared, the toolbar's controls on the scene bar">
+  <div class="scene-tag" style="top:auto;bottom:56px">Scene 4 — the stream. The retired toolbar's controls live on the scene bar now, behaviour unchanged; columns squared per round 4 — the same kind of fact always under the eye.</div>
+  <div class="scenebar">
+    <span class="wordmark">MIKRO<em>VIEW</em><span class="hintkey">M · ATLAS</span></span>
+    <span class="scname">Stream<span class="epi">every line, as it arrived</span></span>
+    <span class="controls">
+      <span class="search">action:<em>drop</em> boundary:<em>iot→lan</em>&nbsp; ⌫</span>
+      <span class="spans"><span class="on">15 m</span><span>1 h</span><span>24 h</span><span>14 d</span></span>
+    </span>
+    <span class="scstatus">
+      <span><span class="dot"></span>LIVE</span>
+      <span class="flagchip">6</span>
+      <span class="who">tom (admin)</span>
+    </span>
+  </div>
+  <table class="stream">
+    <thead>
+      <tr><th class="num">time</th><th>action</th><th>source</th><th class="num">address</th><th>destination</th><th class="num">address</th><th>proto</th><th class="num">port</th><th>rule</th></tr>
+    </thead>
+    <tbody>
+      <tr class="hl"><td class="num">14:02:11.482</td><td><span class="badge b-drop">DROP</span></td><td class="host">cam-porch</td><td class="num">10.0.20.11</td><td class="host">nas</td><td class="num">10.0.40.5</td><td>tcp</td><td class="num">445</td><td>iot-to-lan-drop</td></tr>
+      <tr><td class="num">14:02:11.407</td><td><span class="badge b-nat">NAT</span></td><td class="host">phone-tom</td><td class="num">10.0.10.23</td><td class="geo">142.250.187.206</td><td class="num">—</td><td>udp</td><td class="num">443</td><td>nat-wan</td></tr>
+      <tr><td class="num">14:02:10.951</td><td><span class="badge b-drop">DROP</span></td><td class="geo">185.220.101.34 DE</td><td class="num">—</td><td class="host">rb5009</td><td class="num">203.0.113.7</td><td>tcp</td><td class="num">8291</td><td>wan-in-drop</td></tr>
+      <tr><td class="num">14:02:10.512</td><td><span class="badge b-accept">ACCEPT</span></td><td class="host">tom-desktop</td><td class="num">10.0.10.2</td><td class="host">pihole</td><td class="num">10.0.40.3</td><td>udp</td><td class="num">53</td><td>lan-to-srv</td></tr>
+      <tr><td class="num">14:02:09.874</td><td><span class="badge b-accept">ACCEPT</span></td><td class="host">laptop-anna</td><td class="num">10.0.10.7</td><td class="host">nas</td><td class="num">10.0.40.5</td><td>tcp</td><td class="num">5001</td><td>lan-to-srv</td></tr>
+      <tr><td class="num">14:02:09.310</td><td><span class="badge b-drop">DROP</span></td><td class="geo">198.51.100.90 CN</td><td class="num">—</td><td class="host">rb5009</td><td class="num">203.0.113.7</td><td>tcp</td><td class="num">22</td><td>wan-in-drop</td></tr>
+      <tr class="hl"><td class="num">14:01:07.229</td><td><span class="badge b-drop">DROP</span></td><td class="host">cam-porch</td><td class="num">10.0.20.11</td><td class="host">nas</td><td class="num">10.0.40.5</td><td>tcp</td><td class="num">445</td><td>iot-to-lan-drop</td></tr>
+      <tr><td class="num">14:00:58.667</td><td><span class="badge b-accept">ACCEPT</span></td><td class="host">hue-bridge</td><td class="num">10.0.20.4</td><td class="geo">time.cloudflare.com</td><td class="num">—</td><td>udp</td><td class="num">123</td><td>iot-egress-ntp</td></tr>
+      <tr><td class="num">14:00:41.120</td><td><span class="badge b-nat">NAT</span></td><td class="host">tom-desktop</td><td class="num">10.0.10.2</td><td class="geo">140.82.121.4</td><td class="num">—</td><td>tcp</td><td class="num">443</td><td>nat-wan</td></tr>
+      <tr class="hl"><td class="num">14:00:03.155</td><td><span class="badge b-drop">DROP</span></td><td class="host">cam-porch</td><td class="num">10.0.20.11</td><td class="host">nas</td><td class="num">10.0.40.5</td><td>tcp</td><td class="num">445</td><td>iot-to-lan-drop</td></tr>
+      <tr><td class="num">13:59:52.089</td><td><span class="badge b-accept">ACCEPT</span></td><td class="host">unifi</td><td class="num">10.0.40.7</td><td class="host">tom-desktop</td><td class="num">10.0.10.2</td><td>tcp</td><td class="num">8443</td><td>srv-to-lan-mgmt</td></tr>
+      <tr><td class="num">13:59:31.844</td><td><span class="badge b-drop">DROP</span></td><td class="geo">203.0.113.199 RU</td><td class="num">—</td><td class="host">rb5009</td><td class="num">203.0.113.7</td><td>tcp</td><td class="num">443</td><td>wan-in-drop</td></tr>
+      <tr><td class="num">13:58:59.081</td><td><span class="badge b-drop">DROP</span></td><td class="host">cam-porch</td><td class="num">10.0.20.11</td><td class="host">nas</td><td class="num">10.0.40.5</td><td>tcp</td><td class="num">445</td><td>iot-to-lan-drop</td></tr>
+      <tr><td class="num">13:58:41.336</td><td><span class="badge b-accept">ACCEPT</span></td><td class="host">phone-tom</td><td class="num">10.0.10.23</td><td class="host">nas</td><td class="num">10.0.40.5</td><td>tcp</td><td class="num">5001</td><td>lan-to-srv</td></tr>
+      <tr><td class="num">13:58:22.510</td><td><span class="badge b-drop">DROP</span></td><td class="geo">45.155.205.11 NL</td><td class="num">—</td><td class="host">rb5009</td><td class="num">203.0.113.7</td><td>tcp</td><td class="num">8291</td><td>wan-in-drop</td></tr>
+      <tr><td class="num">13:58:03.902</td><td><span class="badge b-accept">ACCEPT</span></td><td class="host">tom-desktop</td><td class="num">10.0.10.2</td><td class="host">pihole</td><td class="num">10.0.40.3</td><td>udp</td><td class="num">53</td><td>lan-to-srv</td></tr>
+      <tr class="hl"><td class="num">13:57:55.007</td><td><span class="badge b-drop">DROP</span></td><td class="host">cam-porch</td><td class="num">10.0.20.11</td><td class="host">nas</td><td class="num">10.0.40.5</td><td>tcp</td><td class="num">445</td><td>iot-to-lan-drop</td></tr>
+      <tr><td class="num">13:57:36.184</td><td><span class="badge b-nat">NAT</span></td><td class="host">laptop-anna</td><td class="num">10.0.10.7</td><td class="geo">104.16.132.229</td><td class="num">—</td><td>tcp</td><td class="num">443</td><td>nat-wan</td></tr>
+      <tr><td class="num">13:57:12.660</td><td><span class="badge b-accept">ACCEPT</span></td><td class="host">thermostat</td><td class="num">10.0.20.9</td><td class="geo">time.cloudflare.com</td><td class="num">—</td><td>udp</td><td class="num">123</td><td>iot-egress-ntp</td></tr>
+      <tr class="hl"><td class="num">13:56:50.933</td><td><span class="badge b-drop">DROP</span></td><td class="host">cam-porch</td><td class="num">10.0.20.11</td><td class="host">nas</td><td class="num">10.0.40.5</td><td>tcp</td><td class="num">445</td><td>iot-to-lan-drop</td></tr>
+    </tbody>
+  </table>
+  <div class="foot-legend">
+    <span><span class="k">cam-porch → nas :445</span> — every ~64 s since 13:52:07 · 14 so far · flagged</span>
+    <span><span class="k">▲3.1×</span> wan drops since 13:30</span>
+    <span>guest → wan <span class="k">dark</span> — nothing logged, not nothing sent</span>
+  </div>
+</section>
+
+<!-- ============ SCENE 3 : THE ATLAS — THE ONE NAVIGATOR ============ -->
+<section class="scene atlas" id="s5" aria-label="The atlas: a light navigation layer — your deck at the heart, every destination on the orbit">
+  <div class="scene-tag" style="top:66px">The atlas — not another map. A light layer summoned over whatever card you're on (wordmark or <b>m</b>): your deck at the heart — click to jump, drag to reorder, the first card is where sign-in lands — every other destination a body on the orbit, account at the foot. esc puts it away.</div>
+  <div class="scenebar">
+    <span class="wordmark">MIKRO<em>VIEW</em></span>
+    <span class="scstatus">
+      <span><span class="dot"></span>LIVE · 34/s</span>
+      <span>rb5009</span>
+      <span class="who">esc · close</span>
+    </span>
+  </div>
+  <div class="chart">
+    <svg viewBox="0 0 1400 560" preserveAspectRatio="xMidYMid meet"
+         aria-label="Destinations on the atlas orbit around your deck">
+      <ellipse class="orbit faro-orbit" cx="700" cy="280" rx="600" ry="248"/>
+      <g class="dest" transform="translate(350 72)"><rect class="dg" x="-5" y="-5" width="10" height="10"/><text x="-14" y="4" text-anchor="end" class="dest-l">Audit log</text></g>
+      <g class="dest" transform="translate(1050 72)"><rect class="dg" x="-5" y="-5" width="10" height="10"/><text x="14" y="4" class="dest-l">Flags</text><circle cx="58" cy="0" r="8" fill="var(--alarm)"/><text x="58" y="3.5" text-anchor="middle" class="dest-b">6</text></g>
+      <g class="dest" transform="translate(100 280)"><rect class="dg" x="-5" y="-5" width="10" height="10"/><text x="0" y="-14" text-anchor="middle" class="dest-l">Watchlist</text></g>
+      <g class="dest" transform="translate(1285 210)"><rect class="dg" x="-5" y="-5" width="10" height="10"/><text x="-14" y="4" text-anchor="end" class="dest-l">Run setup…</text></g>
+      <g class="dest" transform="translate(350 488)"><rect class="dg" x="-5" y="-5" width="10" height="10"/><text x="-14" y="4" text-anchor="end" class="dest-l">Metrics</text></g>
+      <g class="dest" transform="translate(1050 488)"><rect class="dg" x="-5" y="-5" width="10" height="10"/><text x="14" y="4" class="dest-l">Entities</text></g>
+      <g class="dest" transform="translate(178 152)"><rect class="dg" x="-5" y="-5" width="10" height="10"/><text x="-14" y="4" text-anchor="end" class="dest-l">Settings</text></g>
+      <g class="dest" transform="translate(1222 152)"><rect class="dg" x="-5" y="-5" width="10" height="10"/><text x="14" y="4" class="dest-l">Fleet</text></g>
+    </svg>
+    <div class="heartdeck" aria-label="Your deck, in your order">
+      <span class="lab">YOUR DECK</span>
+      <span class="card first"><span class="grip">⠿</span><span class="n">1</span>The fall<span class="tag">· SIGN-IN LANDS HERE</span></span>
+      <span class="card"><span class="grip">⠿</span><span class="n">2</span>Topography</span>
+      <span class="card"><span class="grip">⠿</span><span class="n">3</span>Stream</span>
+      <span class="card"><span class="grip">⠿</span><span class="n">4</span>Flags</span>
+      <span class="card"><span class="grip">⠿</span><span class="n">5</span>Metrics</span>
+      <span class="hint">click to jump · drag to reorder</span>
+    </div>
+  </div>
+  <div class="account"><b>tom (admin)</b><span>change passphrase</span><span>sign out</span><span>About &amp; licence</span></div>
+</section>
+
+
+<nav class="deckrail" aria-label="The deck">
+  <a href="#s2" class="on"><span class="dot"></span>The fall</a>
+  <a href="#s3"><span class="dot"></span>Topography</a>
+  <a href="#s4"><span class="dot"></span>Stream</a>
+  <a href="#s5"><span class="dot"></span>The atlas</a>
+</nav>
+<script>
+  // Round apparatus + the deck's one live behaviour: mark the card in view.
+  const links = [...document.querySelectorAll('.deckrail a')]
+  const byId = Object.fromEntries(links.map(a => [a.getAttribute('href').slice(1), a]))
+  // The topography owns the pointer over its card (owner, 2026-08-30):
+  // wheel zooms the graph, middle-button drag pans it. Deliberately
+  // captures the wheel from the deck snap while over the map.
+  {
+    const topo = document.getElementById('topo')
+    const cam = document.getElementById('cam')
+    let z = 1, tx = 0
+    const apply = () => cam.setAttribute('transform',
+      `translate(${700 * (1 - z) + tx} ${360 * (1 - z)}) scale(${z})`)
+    topo.addEventListener('wheel', (e) => {
+      e.preventDefault()
+      z = Math.min(3, Math.max(0.6, z * (e.deltaY < 0 ? 1.12 : 0.89)))
+      apply()
+    }, { passive: false })
+    topo.addEventListener('mousedown', (e) => {
+      if (e.button !== 1) return
+      e.preventDefault()
+      const x0 = e.clientX, t0 = tx
+      const mv = (ev) => { tx = t0 + (ev.clientX - x0) * (1400 / topo.clientWidth); apply() }
+      const up = () => { window.removeEventListener('mousemove', mv); window.removeEventListener('mouseup', up) }
+      window.addEventListener('mousemove', mv)
+      window.addEventListener('mouseup', up)
+    })
+  }
+  const io = new IntersectionObserver(es => es.forEach(e => {
+    if (e.isIntersecting && byId[e.target.id]) {
+      links.forEach(a => a.classList.remove('on'))
+      byId[e.target.id].classList.add('on')
+    }
+  }), { threshold: 0.6 })
+  document.querySelectorAll('.scene').forEach(s => io.observe(s))
+</script>
+</body>
+</html>
