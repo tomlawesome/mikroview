@@ -297,13 +297,19 @@ export interface RouterFilterRule {
   // to tell a dark (unlogged) boundary from a merely quiet one instead of
   // guessing.
   log: boolean
-  // #408's schema fields. Optional here because a router whose push
-  // script predates them sends nothing, and because nothing in the UI
-  // reads them yet -- typed so the data is not lost on the way in, not
-  // because a component depends on it.
+  // #408's schema fields. Optional because a router whose push script
+  // predates them sends nothing. The interfaces and dstPort/protocol
+  // feed the topography's policy edges (#628); the rest is typed so the
+  // data is not lost on the way in.
   connectionState?: string[]
   inInterface?: string
   outInterface?: string
+  // RouterOSPortSpec on the wire: a single port serialises as a JSON
+  // number, a list or range as the string RouterOS prints ("80,443").
+  dstPort?: number | string
+  protocol?: string
+  srcAddress?: string
+  dstAddress?: string
 }
 
 // The NAT record's full rule anatomy (#408) plus the operator-set
