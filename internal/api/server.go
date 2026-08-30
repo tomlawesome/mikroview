@@ -273,6 +273,10 @@ func (s *Server) routes() []route {
 		{http.MethodGet, "/api/routeros/{device}/nat", s.handleRouterOSNAT},
 		{http.MethodGet, "/api/routeros/{device}/addresses", s.handleRouterOSAddresses},
 		{http.MethodGet, "/api/stats", s.handleStats},
+		// #644 round 21's top port/top talker table columns -- see
+		// handleStatsTops' own doc comment for why this is a separate
+		// route rather than a field on /api/stats above.
+		{http.MethodGet, "/api/stats/tops", s.handleStatsTops},
 		{http.MethodGet, "/api/ws", s.handleWS},
 		{http.MethodGet, "/api/lookup/ip/{ip}", s.handleIPLookup},
 		{http.MethodGet, "/api/flags", s.handleFlagsList},

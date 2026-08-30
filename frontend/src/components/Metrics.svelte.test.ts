@@ -6,7 +6,13 @@ import { fireEvent } from '@testing-library/dom'
 
 // appState/flagsState reach the network only through their own refresh
 // methods, which nothing here calls -- the page reads whatever is
-// already in the stores, so no api mocking is needed.
+// already in the stores. Metrics.svelte itself does make one request of
+// its own (#644 round 21's top-port/top-talker poll), stubbed here so
+// rendering it under jsdom never reaches for the network.
+vi.mock('../lib/api', () => ({
+  fetchStatsTops: vi.fn(async () => []),
+}))
+
 import { appState } from '../lib/state.svelte'
 import { flagsState } from '../lib/flags.svelte'
 import { metricsPref } from '../lib/metrics.svelte'

@@ -41,6 +41,20 @@
     return series ? series.values[index] : 0
   }
 
+  // Top port/top talker (#644 round 21) aren't sortable columns: they're
+  // a label per minute, not a count, so there is nothing for a numeric
+  // sort to compare -- same reason 'minute' itself sorts on index rather
+  // than through valueAt. An em dash means "unknown," not "zero": either
+  // GET /api/stats/tops hasn't answered for this minute yet, or the ring
+  // buffer no longer holds every event from it (MinuteTop.complete is
+  // false) -- see lib/metricsSeries.ts's own doc comment on MinuteTop.
+  function topCell(index: number, field: 'talker' | 'port'): string {
+    const top = hour.tops[index]
+    if (!top || !top.complete) return '—'
+    const v = top[field]
+    return v && v.length > 0 ? v : '—'
+  }
+
   const order = $derived(
     Array.from({ length: hour.axis.length }, (_, i) => i).sort((a, b) => {
       const d = sortKey === 'minute' ? a - b : valueAt(a, sortKey) - valueAt(b, sortKey)
@@ -71,15 +85,23 @@
   // what they get, not a differently-ordered second answer.
   const copyText = $derived(
     [
-      ['minute', ...columns.map((c) => c.label), 'flag episodes'].join('\t'),
+      ['minute', ...columns.map((c) => c.label), 'flag episodes', 'top port', 'top talker'].join('\t'),
       ...order.map((i) =>
         [
           formatHM(hour.axis[i]),
           ...hour.traffic.map((s) => s.values[i]),
           hour.episodesPerMinute[i] ?? 0,
+          topCell(i, 'port'),
+          topCell(i, 'talker'),
         ].join('\t'),
       ),
-      ['hour total', ...hour.traffic.map((s) => s.total), episodesTotal].join('\t'),
+      // The hour-total row's own top port/talker would need the whole
+      // hour's raw counts, not just each minute's already-decided
+      // winner (the two are not the same statistic -- see
+      // internal/store/ring.go's HourTops doc comment) -- left blank
+      // rather than answering a different question than the column
+      // header claims.
+      ['hour total', ...hour.traffic.map((s) => s.total), episodesTotal, '—', '—'].join('\t'),
     ].join('\n'),
   )
 
@@ -118,6 +140,10 @@
               <th scope="col" aria-sort={ariaSort('flags')}>
                 <button onclick={() => sortBy('flags')}>Flag episodes</button>
               </th>
+              <!-- Not sortable -- a label per minute, not a count. See
+                   topCell's own comment. -->
+              <th scope="col">Top port</th>
+              <th scope="col">Top talker</th>
             </tr>
           </thead>
           <tbody>
@@ -130,6 +156,8 @@
                   <td class:refused={series.ink === 'refused'} class:natted={series.key === 'natted'}>{series.values[i]}</td>
                 {/each}
                 <td>{hour.episodesPerMinute[i] ?? 0}</td>
+                <td class="top">{topCell(i, 'port')}</td>
+                <td class="top">{topCell(i, 'talker')}</td>
               </tr>
             {/each}
           </tbody>
@@ -140,6 +168,11 @@
                 <td class:refused={series.ink === 'refused'} class:natted={series.key === 'natted'}>{series.total}</td>
               {/each}
               <td>{episodesTotal}</td>
+              <!-- Deliberately blank: see copyText's own comment on why
+                   the hour total isn't "whichever port/talker won the
+                   most individual minutes". -->
+              <td class="top">—</td>
+              <td class="top">—</td>
             </tr>
           </tfoot>
         </table>

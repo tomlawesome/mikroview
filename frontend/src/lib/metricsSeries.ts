@@ -11,7 +11,7 @@
 // timeSeries and GET /api/flags's timeSeries) -- no runes, no DOM -- so
 // the record's load-bearing rules are unit-testable without rendering
 // anything.
-import type { Action, FlagTimeBucket, FlagType, TimeBucket } from './types'
+import type { Action, FlagTimeBucket, FlagType, HourTopBucket, TimeBucket } from './types'
 import { ACTION_LABELS } from './actions'
 
 // The record's floor: "per-series scale, declared beside the series
@@ -145,6 +145,21 @@ export interface EpisodeSeries {
   spoke: boolean
 }
 
+/**
+ * One axis minute's top talker and top port (#644 round 21's table
+ * columns), read from GET /api/stats/tops. complete is false whenever
+ * that minute is unknown -- not yet fetched, or the server itself
+ * couldn't answer for it because the ring buffer no longer holds every
+ * event from that minute (see internal/store/ring.go's HourTop). Either
+ * way the table shows an honest em dash, never a number that might be
+ * short.
+ */
+export interface MinuteTop {
+  talker?: string
+  port?: string
+  complete: boolean
+}
+
 export interface MetricsHour {
   /** Minute-aligned ISO times, oldest first. Empty before first data. */
   axis: string[]
@@ -153,6 +168,8 @@ export interface MetricsHour {
   flags: EpisodeSeries[]
   /** Episodes raised in each axis minute, all types summed. */
   episodesPerMinute: number[]
+  /** One entry per axis minute -- see MinuteTop. */
+  tops: MinuteTop[]
   eventsInHour: number
   episodesInHour: number
   typesThatSpoke: number
@@ -209,7 +226,7 @@ export function minuteIndexOf(axis: string[], iso: string | null): number {
   return axis.findIndex((t) => minuteKey(t) === want)
 }
 
-export function buildHour(traffic: TimeBucket[], flags: FlagTimeBucket[]): MetricsHour {
+export function buildHour(traffic: TimeBucket[], flags: FlagTimeBucket[], tops: HourTopBucket[] = []): MetricsHour {
   const axis = buildAxis(traffic, flags)
   const slot = new Map<number, number>()
   axis.forEach((t, i) => {
@@ -277,11 +294,25 @@ export function buildHour(traffic: TimeBucket[], flags: FlagTimeBucket[]): Metri
   const episodesPerMinute = zeros()
   for (const s of flagSeries) s.values.forEach((v, i) => (episodesPerMinute[i] += v))
 
+  // Unmatched by default -- a minute GET /api/stats/tops hasn't answered
+  // for yet (not fetched, or aged off the tops payload's own axis) reads
+  // as unknown, the same honest blank a server-reported incomplete
+  // minute gets. Never left undefined: every axis minute gets an entry,
+  // matching every other per-minute array this hour carries.
+  const topsSeries: MinuteTop[] = axis.map(() => ({ complete: false }))
+  for (const bucket of tops) {
+    const k = minuteKey(bucket.time)
+    const i = k === null ? undefined : slot.get(k)
+    if (i === undefined) continue
+    topsSeries[i] = { talker: bucket.talker, port: bucket.port, complete: bucket.complete }
+  }
+
   return {
     axis,
     traffic: trafficSeries,
     flags: ordered,
     episodesPerMinute,
+    tops: topsSeries,
     eventsInHour: trafficSeries.reduce((a, s) => a + s.total, 0),
     episodesInHour: flagSeries.reduce((a, s) => a + s.total, 0),
     typesThatSpoke: flagSeries.filter((s) => s.spoke).length,

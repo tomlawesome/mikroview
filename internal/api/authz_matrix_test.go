@@ -106,6 +106,11 @@ var authzMatrix = []routeExpectation{
 	{http.MethodGet, "/api/third-party-notices", accessUser,
 		"licence compliance: the copyright/licence texts of everything statically linked into this binary, which MIT/BSD/ISC/Apache-2.0 all require to accompany a binary distribution. Session-gated rather than public only because it is also a precise dependency-and-version inventory -- it withholds nothing, since the same file is in the public repo and the image"},
 	{http.MethodGet, "/api/stats", accessUser, "core read"},
+	{http.MethodGet, "/api/stats/tops", accessUser,
+		"#644 round 21's per-minute top-port/top-talker columns -- the same tier as /api/stats above, since it is " +
+			"a per-minute breakdown of data that endpoint already exposes in aggregate (byAction), not a new class " +
+			"of read. Deliberately NOT in readOnlyRoutes: HourTops' backward scan is heavier than anything else a " +
+			"bearer token can already trigger on this tier, and nothing asked for that to be token-reachable"},
 	{http.MethodGet, "/api/ws", accessUser,
 		"live tail; additionally same-origin checked (see checkOrigin)"},
 	{http.MethodGet, "/api/lookup/ip/{ip}", accessUser,
