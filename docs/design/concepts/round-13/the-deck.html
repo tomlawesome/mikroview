@@ -786,13 +786,13 @@
 
 <!-- ============ SCENE 4 : METRICS — THE PAGE WE BUILT ============ -->
 <section class="scene" id="s4" aria-label="Metrics: seismograph, register, table — the page as built">
-  <div class="scene-tag" style="top:66px">The metrics card is the page we already built (#488): three views — seismograph (default), register, table — over one cursor and the hourline ledger. Here the drum wears the deck&#39;s clothes; nothing about the page&#39;s design changes.</div>
+  <div class="scene-tag" style="top:auto;bottom:56px">The metrics card is the page we already built (#488): three views — seismograph (default), register, table — over one cursor and the hourline ledger. Here the drum wears the deck&#39;s clothes; nothing about the page&#39;s design changes.</div>
   <div class="scenebar">
     <span class="wordmark">MIKRO<em>VIEW</em><span class="hintkey">M · ATLAS</span></span>
     <span class="scname">Metrics<span class="epi">the deep read</span></span>
     <span class="scstatus"><span><span class="dot"></span>LIVE · 34/s</span><span class="flagchip">6</span><span class="who">tom (admin)</span></span>
   </div>
-  <div class="mviews"><span class="on">seismograph</span><span>register</span><span>table</span></div>
+  <div class="mviews" id="mviews"><span class="on" data-v="seis">seismograph</span><span data-v="reg">register</span><span data-v="tab">table</span></div>
   <div class="hourline">
     <span class="big">13:52<span class="unit">the minute under the cursor</span></span><span class="sep">·</span>
     <span class="fact"><b>9</b> refused of <b>61</b> events</span><span class="sep">·</span>
@@ -803,7 +803,7 @@
     <span class="fact"><b>48 882</b> events in the hour</span><span class="sep">·</span>
     <span class="brinkmark">the brink · 14:02</span>
   </div>
-  <div class="drumwrap">
+  <div class="drumwrap mview on" id="mv-seis">
     <svg viewBox="0 0 1400 420" preserveAspectRatio="xMidYMid meet" aria-label="The seismograph: one stroke per minute, mirrored about the midline; refused traffic as the inner red ink; the cursor on 13:52; the brink at the right edge">
       <line x1="20" y1="210" x2="1380" y2="210" stroke="var(--hair-2)" stroke-width="0.75"/>
         <line x1="30" y1="192" x2="30" y2="228" stroke="var(--accent)" stroke-width="4" opacity="0.55" stroke-linecap="round"/>
@@ -1005,6 +1005,96 @@
       <text x="30" y="392" style="font: 9.5px var(--mono); fill: var(--ink-3)">12:26</text>
     </svg>
   </div>
+
+<div class="drumwrap mview" id="mv-reg" aria-label="The register: the hour read downward, the brink the top edge, minutes as shared rows; each series a vertical ribbon; flags as narrow columns at the right; the cursor's minute amber">
+  <svg viewBox="0 0 1400 620" preserveAspectRatio="xMidYMid meet">
+    <text x="650" y="66" text-anchor="middle" class="reg-head">accepted</text>
+    <text x="880" y="66" text-anchor="middle" class="reg-head" style="fill: var(--fall-drop)">refused</text>
+    <text x="1062.5" y="46" text-anchor="middle" class="reg-head" style="fill: var(--alarm)">flags</text>
+    <g transform="translate(1040 88) rotate(-60)"><text class="reg-flaglab">unplanned</text></g>
+    <g transform="translate(1085 88) rotate(-60)"><text class="reg-flaglab">ring broken</text></g>
+    <line x1="370" y1="90" x2="1160" y2="90" stroke="var(--now)" stroke-width="1" stroke-dasharray="3 5" opacity="0.6"/>
+    <text x="370" y="84" class="reg-brink">the brink · 14:02</text>
+    <text x="390" y="109" text-anchor="end" class="reg-min">14:00</text>
+      <text x="390" y="159" text-anchor="end" class="reg-min">13:50</text>
+      <text x="390" y="209" text-anchor="end" class="reg-min">13:40</text>
+      <text x="390" y="259" text-anchor="end" class="reg-min">13:30</text>
+      <text x="390" y="309" text-anchor="end" class="reg-min">13:20</text>
+      <text x="390" y="359" text-anchor="end" class="reg-min">13:10</text>
+      <text x="390" y="409" text-anchor="end" class="reg-min">13:00</text>
+      <text x="390" y="459" text-anchor="end" class="reg-min">12:50</text>
+      <text x="390" y="509" text-anchor="end" class="reg-min">12:40</text>
+      <text x="390" y="559" text-anchor="end" class="reg-min">12:30</text>
+    <path class="reg-acc" d="M 620.7 96 L 615.1 101 L 611.7 106 L 610.9 111 L 612.1 116 L 614.1 121 L 615.9 126 L 616.8 131 L 617.1 136 L 617.8 141 L 643.0 146 L 623.6 151 L 629.1 156 L 635.0 161 L 639.6 166 L 641.8 171 L 641.1 176 L 637.9 181 L 633.6 186 L 629.8 191 L 627.4 196 L 626.7 201 L 626.9 206 L 627.0 211 L 626.2 216 L 624.4 221 L 622.3 226 L 621.2 231 L 622.3 236 L 625.9 241 L 631.4 246 L 637.7 251 L 642.8 256 L 644.0 261 L 644.0 266 L 643.9 271 L 641.0 276 L 638.5 281 L 637.0 286 L 636.1 291 L 635.1 296 L 632.9 301 L 629.0 306 L 623.8 311 L 618.3 316 L 614.2 321 L 612.6 326 L 614.1 331 L 617.8 336 L 622.5 341 L 626.7 346 L 629.1 351 L 629.9 356 L 629.5 361 L 629.1 366 L 629.5 371 L 630.9 376 L 632.5 381 L 633.2 386 L 631.8 391 L 628.1 396 L 622.5 401 L 616.5 406 L 611.9 411 L 609.7 416 L 610.3 421 L 613.0 426 L 616.5 431 L 619.7 436 L 621.8 441 L 623.0 446 L 624.3 451 L 626.5 456 L 630.3 461 L 635.2 466 L 640.2 471 L 643.7 476 L 644.0 481 L 642.4 486 L 638.0 491 L 632.9 496 L 628.6 501 L 626.1 506 L 625.5 511 L 626.1 516 L 626.8 521 L 626.8 526 L 625.8 531 L 624.6 536 L 624.3 541 L 625.9 546 L 629.7 551 L 635.1 556 L 640.7 561 L 644.0 566 L 644.0 571 L 644.0 576 L 656.0 576 L 656.0 571 L 656.0 566 L 659.3 561 L 664.9 556 L 670.3 551 L 674.1 546 L 675.7 541 L 675.4 536 L 674.2 531 L 673.2 526 L 673.2 521 L 673.9 516 L 674.5 511 L 673.9 506 L 671.4 501 L 667.1 496 L 662.0 491 L 657.6 486 L 656.0 481 L 656.3 476 L 659.8 471 L 664.8 466 L 669.7 461 L 673.5 456 L 675.7 451 L 677.0 446 L 678.2 441 L 680.3 436 L 683.5 431 L 687.0 426 L 689.7 421 L 690.3 416 L 688.1 411 L 683.5 406 L 677.5 401 L 671.9 396 L 668.2 391 L 666.8 386 L 667.5 381 L 669.1 376 L 670.5 371 L 670.9 366 L 670.5 361 L 670.1 356 L 670.9 351 L 673.3 346 L 677.5 341 L 682.2 336 L 685.9 331 L 687.4 326 L 685.8 321 L 681.7 316 L 676.2 311 L 671.0 306 L 667.1 301 L 664.9 296 L 663.9 291 L 663.0 286 L 661.5 281 L 659.0 276 L 656.1 271 L 656.0 266 L 656.0 261 L 657.2 256 L 662.3 251 L 668.6 246 L 674.1 241 L 677.7 236 L 678.8 231 L 677.7 226 L 675.6 221 L 673.8 216 L 673.0 211 L 673.1 206 L 673.3 201 L 672.6 196 L 670.2 191 L 666.4 186 L 662.1 181 L 658.9 176 L 658.2 171 L 660.4 166 L 665.0 161 L 670.9 156 L 676.4 151 L 657.0 146 L 682.2 141 L 682.9 136 L 683.2 131 L 684.1 126 L 685.9 121 L 687.9 116 L 689.1 111 L 688.3 106 L 684.9 101 L 679.3 96 Z"/>
+    <path class="reg-ref" d="M 869.7 96 L 869.4 101 L 869.2 106 L 869.4 111 L 869.8 116 L 870.4 121 L 871.2 126 L 872.2 131 L 873.3 136 L 874.4 141 L 877.0 146 L 876.4 151 L 877.1 156 L 877.7 161 L 878.0 166 L 878.1 171 L 877.9 176 L 877.5 181 L 877.0 186 L 876.2 191 L 875.5 196 L 874.7 201 L 873.9 206 L 873.3 211 L 872.9 216 L 872.6 221 L 872.6 226 L 872.8 231 L 873.2 236 L 873.8 241 L 874.6 246 L 875.4 251 L 876.3 256 L 877.1 261 L 877.8 266 L 878.3 271 L 878.5 276 L 878.5 281 L 878.5 286 L 878.2 291 L 877.5 296 L 876.7 301 L 875.7 306 L 874.6 311 L 873.5 316 L 872.5 321 L 871.6 326 L 870.8 331 L 870.3 336 L 870.0 341 L 869.9 346 L 870.1 351 L 870.5 356 L 871.1 361 L 871.8 366 L 872.6 371 L 873.4 376 L 874.1 381 L 874.7 386 L 875.2 391 L 875.4 396 L 875.4 401 L 875.2 406 L 874.7 411 L 874.1 416 L 873.4 421 L 872.5 426 L 871.7 431 L 870.9 436 L 870.2 441 L 869.6 446 L 869.3 451 L 869.3 456 L 869.4 461 L 869.9 466 L 870.6 471 L 871.4 476 L 872.4 481 L 873.5 486 L 874.6 491 L 875.6 496 L 876.5 501 L 877.3 506 L 877.8 511 L 878.1 516 L 878.1 521 L 877.9 526 L 877.4 531 L 876.8 536 L 876.1 541 L 875.3 546 L 874.5 551 L 873.8 556 L 873.2 561 L 872.8 566 L 872.6 571 L 872.6 576 L 887.4 576 L 887.4 571 L 887.2 566 L 886.8 561 L 886.2 556 L 885.5 551 L 884.7 546 L 883.9 541 L 883.2 536 L 882.6 531 L 882.1 526 L 881.9 521 L 881.9 516 L 882.2 511 L 882.7 506 L 883.5 501 L 884.4 496 L 885.4 491 L 886.5 486 L 887.6 481 L 888.6 476 L 889.4 471 L 890.1 466 L 890.6 461 L 890.7 456 L 890.7 451 L 890.4 446 L 889.8 441 L 889.1 436 L 888.3 431 L 887.5 426 L 886.6 421 L 885.9 416 L 885.3 411 L 884.8 406 L 884.6 401 L 884.6 396 L 884.8 391 L 885.3 386 L 885.9 381 L 886.6 376 L 887.4 371 L 888.2 366 L 888.9 361 L 889.5 356 L 889.9 351 L 890.1 346 L 890.0 341 L 889.7 336 L 889.2 331 L 888.4 326 L 887.5 321 L 886.5 316 L 885.4 311 L 884.3 306 L 883.3 301 L 882.5 296 L 881.8 291 L 881.5 286 L 881.5 281 L 881.5 276 L 881.7 271 L 882.2 266 L 882.9 261 L 883.7 256 L 884.6 251 L 885.4 246 L 886.2 241 L 886.8 236 L 887.2 231 L 887.4 226 L 887.4 221 L 887.1 216 L 886.7 211 L 886.1 206 L 885.3 201 L 884.5 196 L 883.8 191 L 883.0 186 L 882.5 181 L 882.1 176 L 881.9 171 L 882.0 166 L 882.3 161 L 882.9 156 L 883.6 151 L 883.0 146 L 885.6 141 L 886.7 136 L 887.8 131 L 888.8 126 L 889.6 121 L 890.2 116 L 890.6 111 L 890.8 106 L 890.6 101 L 890.3 96 Z"/>
+    <rect x="1036" y="144" width="8" height="4" class="reg-flagmark"/>
+    <rect x="1081" y="144" width="8" height="4" class="reg-flagmark"/>
+    <rect x="1036" y="334" width="8" height="4" class="reg-flagmark"/>
+    <line x1="370" y1="146" x2="1160" y2="146" stroke="var(--now)" stroke-width="1.4"/>
+    <text x="362" y="149" text-anchor="end" class="reg-cursor">13:52</text>
+    <text x="390" y="592" text-anchor="end" class="reg-min">12:26</text>
+  </svg>
+</div>
+
+<div class="mview mtable" id="mv-tab" aria-label="The table: the same hour and the same totals, refused in refused ink, the cursor's minute held amber across the view switch">
+  <table>
+    <thead><tr><th scope="col">minute</th><th scope="col">accepted</th><th scope="col" class="ref">refused</th><th scope="col">flag episodes</th></tr></thead>
+    <tbody>
+        <tr><th scope="row">14:01</th><td>1 962</td><td class="ref">78</td><td></td></tr>
+        <tr><th scope="row">14:00</th><td>1 418</td><td class="ref">44</td><td></td></tr>
+        <tr><th scope="row">13:59</th><td>1 355</td><td class="ref">61</td><td></td></tr>
+        <tr><th scope="row">13:58</th><td>902</td><td class="ref">27</td><td></td></tr>
+        <tr><th scope="row">13:57</th><td>1 240</td><td class="ref">33</td><td></td></tr>
+        <tr><th scope="row">13:56</th><td>875</td><td class="ref">19</td><td></td></tr>
+        <tr><th scope="row">13:55</th><td>1 104</td><td class="ref">41</td><td></td></tr>
+        <tr><th scope="row">13:54</th><td>968</td><td class="ref">22</td><td></td></tr>
+        <tr><th scope="row">13:53</th><td>728</td><td class="ref">31</td><td></td></tr>
+        <tr class="sel"><th scope="row">13:52</th><td>52</td><td class="ref">9</td><td>2</td></tr>
+        <tr><th scope="row">13:51</th><td>611</td><td class="ref">18</td><td></td></tr>
+        <tr><th scope="row">13:50</th><td>843</td><td class="ref">26</td><td></td></tr>
+        <tr><th scope="row">13:49</th><td>1 037</td><td class="ref">35</td><td></td></tr>
+        <tr><th scope="row">13:48</th><td>913</td><td class="ref">24</td><td></td></tr>
+        <tr class="more"><th scope="row">⋯</th><td colspan="3">82 more minutes, back to 12:26</td></tr>
+    </tbody>
+    <tfoot><tr><th scope="row">hour total</th><td>45 120</td><td class="ref">3 762</td><td>3</td></tr></tfoot>
+  </table>
+</div>
+
+<style>
+  .mview:not(.on) { display: none; }
+  .reg-head { font: 600 9.5px var(--mono); letter-spacing: 0.14em; fill: var(--ink-3); text-transform: uppercase; }
+  .reg-min { font: 9.5px var(--mono); fill: var(--ink-3); }
+  .reg-brink { font: 9.5px var(--mono); fill: var(--now); opacity: 0.8; }
+  .reg-cursor { font: 600 10px var(--mono); fill: var(--now); }
+  .reg-flaglab { font: 600 8.5px var(--mono); fill: var(--alarm); letter-spacing: 0.08em; }
+  .reg-acc { fill: rgba(90, 167, 240, 0.30); stroke: var(--fall-accept); stroke-width: 0.8; }
+  .reg-ref { fill: rgba(224, 82, 82, 0.34); stroke: var(--fall-drop); stroke-width: 0.8; }
+  .reg-flagmark { fill: var(--alarm); rx: 1.5; }
+  .mtable { position: absolute; inset: 150px 24px 40px; display: flex; justify-content: center; align-items: flex-start; overflow: hidden; }
+  .mtable table { border-collapse: collapse; font: 12px var(--mono); min-width: 640px; }
+  .mtable th, .mtable td { padding: 5px 18px; font-variant-numeric: tabular-nums; }
+  .mtable thead th { text-align: right; font: 600 9.5px var(--mono); letter-spacing: 0.12em; text-transform: uppercase; color: var(--ink-3); border-bottom: 1px solid var(--hair-2); }
+  .mtable thead th:first-child { text-align: left; }
+  .mtable tbody th { text-align: left; font-weight: 400; color: var(--ink); border-bottom: 1px solid var(--hair); }
+  .mtable td { text-align: right; color: var(--ink-2); border-bottom: 1px solid var(--hair); }
+  .mtable .ref { color: var(--fall-drop); }
+  .mtable thead th.ref { color: var(--fall-drop); }
+  .mtable tr.sel th, .mtable tr.sel td { background: rgba(232, 176, 90, 0.13); }
+  .mtable tr.sel th { box-shadow: inset 2px 0 0 var(--now); color: var(--ink); font-weight: 600; }
+  .mtable tr.more th, .mtable tr.more td { color: var(--ink-3); text-align: center; font-size: 10.5px; }
+  .mtable tfoot th, .mtable tfoot td { border-top: 1px solid var(--hair-2); border-bottom: 0; color: var(--ink); font-weight: 600; }
+  .mtable tfoot th { font: 600 9.5px var(--mono); letter-spacing: 0.12em; text-transform: uppercase; color: var(--ink-3); }
+</style>
+<script>
+  document.querySelectorAll('#mviews span').forEach(function (s) {
+    s.addEventListener('click', function () {
+      document.querySelectorAll('#mviews span').forEach(function (x) { x.classList.toggle('on', x === s); });
+      ['seis', 'reg', 'tab'].forEach(function (k) {
+        document.getElementById('mv-' + k).classList.toggle('on', k === s.dataset.v);
+      });
+    });
+  });
+</script>
 </section>
 
 
