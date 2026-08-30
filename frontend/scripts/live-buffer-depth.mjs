@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 //
-// Issue #244: the toolbar now shows how full the server's event ring is,
+// Issue #244: the scene bar shows how full the server's event ring is,
 // and (once full) roughly how far back it reaches at the current rate --
 // previously invisible anywhere, including the one real instance whose
 // buffer had wrapped in under three minutes against a configured 24h
@@ -21,7 +21,7 @@ feedSyslog(100)
 const { page } = await session({ waitForEvents: 50 })
 
 const indicator = page.locator('.buffer-depth')
-check(await indicator.isVisible(), 'the buffer-depth indicator is visible in the toolbar')
+check(await indicator.isVisible(), 'the buffer-depth indicator is visible on the scene bar')
 
 const text = (await indicator.textContent())?.trim() ?? ''
 check(

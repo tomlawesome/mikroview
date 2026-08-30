@@ -3,63 +3,73 @@
   //
   // The fall (#616): the ratified hero live view, and the landing page.
   // Bounding record: issue #616's body, amended twice by Fable's
-  // 2026-08-29 review on #616 (deviation review, then a rendering-spec
-  // follow-up after the first cut's carriers read as solid blocks
-  // rather than a waterfall). Visual reference:
+  // 2026-08-29 review on #616. Visual reference:
   // docs/design/concepts/round-3/direction-o-waterfall.html, scene 1
-  // only (scenes 2-3 and round 4's water/space ambience were not kept as
-  // spec here) -- and docs/design/concepts/round-3/shots/o-s1.png for
-  // the actual pixel comparison.
-  //
-  // One column per boundary. Above a NOW line: the live spectrum, one
-  // peak per carrier positioned by port (amendment: "position within a
-  // band = port"). Below it: time pours downward, newest at the top --
-  // a carrier per (boundary, port) drawn as a THIN dash column (2-4 CSS
-  // px, not a fill spanning the band), a short dash only in a time
-  // bucket that actually had traffic so the gaps between dashes carry
-  // the cadence. Bucket count scales with the SPAN (finer at 15m, so a
-  // ~64s knock still reads as distinct dashes) rather than staying fixed
-  // regardless of window length. Capped at the 8 most recently active
-  // carriers per band, with a "+n quieter" affordance for the rest --
-  // the cap is what keeps this render-bounded at ~594 events/s, not
-  // flattening carriers into an aggregate lane heat (that first attempt
-  // was reviewed and rejected: "a band that has always been black
-  // growing a carrier is the thing this display exists to show").
+  // only. The rig below is that scene's own SVG — its coordinate
+  // system (a 76px time rail, 160px band pitch, spectrum baseline at
+  // y=170, NOW at y=186, the fall pouring y=196..760), its class
+  // vocabulary (.blab/.bsub/.plab/.spec/.anno/.tlab/.darkband/.horizon)
+  // and its CSS values move across from the mockup as-is; only the
+  // coordinates are computed from live data instead of being hand-drawn.
+  // Where the record's plain vocabulary contradicts the mockup's radio
+  // ambience ("no antenna"), the record wins: dark bands say "nothing is
+  // logged".
   //
   // What "boundary" means here is narrower than the ratified record asks
   // for, and that gap is deliberate and disclosed rather than invented
-  // silently -- see lib/fall.svelte.ts's header comment and the PR this
-  // shipped on.
+  // silently -- see lib/fall.svelte.ts's header comment and PR #620.
   import { appState } from '../lib/state.svelte'
-  import { fallState, boundaryKeyOf, type FallBoundary } from '../lib/fall.svelte'
-  import { fetchEventsWindow } from '../lib/api'
+  import { atlasNav } from '../lib/atlasNav.svelte'
+  import {
+    fallState,
+    boundaryKeyOf,
+    laneColors,
+    openBoundaryInStream as openInStream,
+    type FallBoundary,
+  } from '../lib/fall.svelte'
+  import { fetchEventsWindow, fetchFlags } from '../lib/api'
   import { formatHM } from '../lib/format'
   import { lookupPort } from '../lib/commonPorts'
-  import type { ClientEvent } from '../lib/types'
+  import type { ClientEvent, Flag } from '../lib/types'
+  import ConnectionIndicator from './ConnectionIndicator.svelte'
+  import UptimeBadge from './UptimeBadge.svelte'
+  import DeviceStatus from './DeviceStatus.svelte'
 
-  // buckets: the time resolution at this span. Fixed at 48 regardless of
-  // span (the first cut) made a 64s knocker (the record's own cadence
-  // example) invisible at spans wider than ~15m and coarse even there --
-  // 60 buckets at 15m is 15s/bucket, matching the review's own ask.
+  // The key is reference, not chrome: hidden until asked for.
+  let showKey = $state(false)
+
+  // Bucket counts scale with the span so a ~64s knock still reads as
+  // distinct dashes: 60 buckets at 15m is 15s/bucket. `railStep` is the
+  // time-rail gridline interval, in minutes.
   const SPANS = [
-    { id: '15m', label: '15 m', ms: 15 * 60 * 1000, buckets: 60 },
-    { id: '1h', label: '1 h', ms: 60 * 60 * 1000, buckets: 60 },
-    { id: '24h', label: '24 h', ms: 24 * 60 * 60 * 1000, buckets: 72 },
-    { id: '14d', label: '14 d', ms: 14 * 24 * 60 * 60 * 1000, buckets: 56 },
+    { id: '15m', label: '15 m', ms: 15 * 60 * 1000, buckets: 60, railStep: 3 },
+    { id: '1h', label: '1 h', ms: 60 * 60 * 1000, buckets: 60, railStep: 15 },
+    { id: '24h', label: '24 h', ms: 24 * 60 * 60 * 1000, buckets: 72, railStep: 360 },
+    { id: '14d', label: '14 d', ms: 14 * 24 * 60 * 60 * 1000, buckets: 56, railStep: 4320 },
   ] as const
   type SpanId = (typeof SPANS)[number]['id']
 
   const POLL_MS = 5000
-  // The review's own cap: the 8 most recently active carriers per band
-  // render as individual marks; the rest fold into a "+n quieter"
-  // affordance instead of growing the DOM per port.
+  // The review's cap: the 8 most recently active carriers per band render
+  // as individual marks; the rest fold into "+n quieter".
   const MAX_CARRIERS = 8
-  // The visible dash's width and the (wider, invisible) click/focus
-  // target's width, both in the waterfall SVG's 0-100 coordinate space.
-  const DASH_WIDTH = 3
-  const HIT_WIDTH = 10
+
+  // ── The mockup's own geometry, in its own units ─────────────────────
+  const RAIL = 76 // left time rail width
+  const BAND_W = 150 // a band's drawable width
+  const PITCH = 160 // band slot pitch (150 + 10 gutter)
+  const SPEC_TOP = 62 // spectrum strip top
+  const SPEC_BASE = 170 // spectrum baseline
+  const NOW_Y = 186 // the NOW line
+  const FALL_TOP = 196 // the fall's top edge
+  const FALL_BOT = 760 // the fall's floor
+  const PORTLAB_Y = 775 // port labels under the floor
+  const RIG_H = 800
+  const DASH_W = 2.4 // a carrier dash's width — thin, never a fill
+  const HIT_W = 14 // a carrier's invisible click/focus target width
 
   let span = $state<SpanId>('15m')
+  let flags = $state<Flag[]>([])
   let windowEvents = $state<ClientEvent[]>([])
   let windowHasMore = $state(false)
   let windowLoading = $state(true)
@@ -74,6 +84,12 @@
   async function loadWindow() {
     const end = Date.now()
     const start = end - spanMs
+    // Flags ride the same poll, non-fatally: the fall prints them at
+    // their moment on their band, but a flags fetch failing must never
+    // take the waterfall down with it.
+    fetchFlags()
+      .then((r) => (flags = r.flags))
+      .catch(() => {})
     try {
       const res = await fetchEventsWindow({ since: new Date(start).toISOString(), limit: 5000 })
       const receivedAt = Date.now()
@@ -91,8 +107,7 @@
 
   $effect(() => {
     // Polled, not fetched once: which boundaries exist can change while
-    // the fall is open (a router pushes a fresh rule table), and a
-    // reload-to-see-it landing page would fail its own "live" claim.
+    // the fall is open (a router pushes a fresh rule table).
     fallState.refresh()
     const id = setInterval(() => fallState.refresh(), POLL_MS)
     return () => clearInterval(id)
@@ -100,10 +115,8 @@
 
   $effect(() => {
     // Re-run whenever `span` (and so bucket count) changes, and every
-    // POLL_MS besides -- a poll-and-rebucket rather than consuming the
-    // WS tail event-by-event, which is the point: aggregation happens
-    // over a bounded server query, not over however many thousand
-    // events actually arrived.
+    // POLL_MS besides -- a poll-and-rebucket over a bounded server
+    // query, never one computation per arriving event.
     void span
     windowLoading = true
     loadWindow()
@@ -120,10 +133,6 @@
     return 'other'
   }
 
-  // The port a carrier is keyed by: the destination port is "the
-  // service", which is what the record's dial-position metaphor reads
-  // as port identity. 0 stands for "no port" (ICMP and the like) --
-  // still a real, honestly-labelled carrier, not dropped from the view.
   function portOf(e: ClientEvent): number {
     if (typeof e.dstPort === 'number' && e.dstPort > 0) return e.dstPort
     if (typeof e.srcPort === 'number' && e.srcPort > 0) return e.srcPort
@@ -164,25 +173,33 @@
     port: number
     buckets: Bucket[] // index 0 = most recent
     total: number
-    // Smallest bucket index with any activity -- 0 means "active right
-    // now", buckets.length means "never in this window". Used only to
-    // rank which carriers are the 8 most recently active.
     mostRecentActive: number
     maxBucketTotal: number
-    x: number // this carrier's position (0-100) in the shared band coordinate space -- "position = port"
+    activeBuckets: number
+    lane: Lane // the carrier's dominant lane over the whole window
+    x: number // 0-100 within the band -- "position = port"
+    hitW: number // click target width, shrunk where carriers crowd
+  }
+
+  interface FlagMark {
+    idx: number
+    type: string
+    hm: string
+    n: number // how many flags this mark stands for, clustered
   }
 
   interface BandView extends FallBoundary {
     carriers: Carrier[]
     quieterCount: number
     total: number
-    nowTotal: Bucket
-    nowMax: number // the busiest carrier's current-instant rate, for spectrum scaling
+    nowMax: number // busiest carrier's current-instant rate, for spectrum scaling
+    maxBucket: number // busiest single bucket on the band, for dash scaling
+    dropShare: number // 0-1 over the window, for the red ramp wash
+    deepestActive: number // deepest bucket with traffic -- below it the band is black
+    flagMarks: FlagMark[]
   }
 
-  // portX maps a set of carriers' ports onto [10, 90] linearly by port
-  // number -- "position within a band = port" -- with a single carrier
-  // centred rather than dividing by zero.
+  // portX maps carriers onto [10, 90] linearly by port number.
   function assignX(all: { port: number }[]): number[] {
     if (all.length === 0) return []
     if (all.length === 1) return [50]
@@ -193,13 +210,22 @@
     return ports.map((p) => 10 + ((p - lo) / (hi - lo)) * 80)
   }
 
+  function laneTotals(bl: Bucket[]): Bucket {
+    const t = emptyBucket()
+    for (const b of bl) {
+      t.accept += b.accept
+      t.drop += b.drop
+      t.nat += b.nat
+      t.other += b.other
+      t.total += b.total
+    }
+    return t
+  }
+
   // bands buckets every event in the current window, once, into
-  // buckets-per-(boundary, port) time slices -- O(events + distinct
-  // (boundary, port) pairs * buckets), never one DOM node or one
-  // reactive computation per event. Only the capped carrier set per
-  // band is ever rendered; the full per-port map stays a plain object
-  // computed once per re-derive.
-  const bandsData = $derived.by((): { known: BandView[]; unmatched: BandView | null } => {
+  // buckets-per-(boundary, port) slices -- O(events + pairs * buckets),
+  // never one DOM node per event.
+  const bandsData = $derived.by((): BandView[] => {
     const boundaries = fallState.boundaries
     const byKey = new Map<string, FallBoundary>()
     for (const b of boundaries) byKey.set(b.key, b)
@@ -208,17 +234,13 @@
     type PortMap = Map<number, Bucket[]>
     const portsByKey = new Map<string, PortMap>()
     const totalByKey = new Map<string, number>()
-    const nowByKey = new Map<string, Bucket>()
     const span2 = Math.max(windowEnd - windowStart, 1)
     const mkBuckets = () => Array.from({ length: bucketCount }, emptyBucket)
 
-    for (const b of boundaries) {
-      portsByKey.set(b.key, new Map())
-      nowByKey.set(b.key, emptyBucket())
-    }
+    for (const b of boundaries) portsByKey.set(b.key, new Map())
     let unmatchedPorts: PortMap | null = null
     let unmatchedTotal = 0
-    let unmatchedNow = emptyBucket()
+    const ipToKey = new Map<string, string>()
 
     for (const e of windowEvents) {
       const key = boundaryKeyOf(e.chain, e.inInterface, e.outInterface)
@@ -235,6 +257,13 @@
       }
       const t = new Date(e.time).getTime()
       if (Number.isNaN(t)) continue
+      // The flag join: a flag names only its target IP, so a flag is
+      // placed on the band its target actually appeared on this window
+      // -- an honest join, never a guess. First sighting wins.
+      if (!isUnmatched) {
+        if (e.srcIp && !ipToKey.has(e.srcIp)) ipToKey.set(e.srcIp, key)
+        if (e.dstIp && !ipToKey.has(e.dstIp)) ipToKey.set(e.dstIp, key)
+      }
       // Newest at the top: bucket 0 is the most recent slice.
       const age = windowEnd - t
       let idx = Math.floor((age / span2) * bucketCount)
@@ -251,55 +280,111 @@
       list[idx][lane]++
       list[idx].total++
 
-      if (isUnmatched) {
-        unmatchedTotal++
-        if (idx === 0) {
-          unmatchedNow[lane]++
-          unmatchedNow.total++
-        }
-      } else {
-        totalByKey.set(key, (totalByKey.get(key) ?? 0) + 1)
-        if (idx === 0) {
-          const now = nowByKey.get(key)!
-          now[lane]++
-          now.total++
-        }
-      }
+      if (isUnmatched) unmatchedTotal++
+      else totalByKey.set(key, (totalByKey.get(key) ?? 0) + 1)
     }
 
     function carriersFor(ports: PortMap): { carriers: Carrier[]; quieterCount: number } {
-      const all: Omit<Carrier, 'x'>[] = []
+      const all: Omit<Carrier, 'x' | 'hitW'>[] = []
       for (const [port, bucketList] of ports) {
         let total = 0
         let mostRecentActive: number = bucketCount
         let maxBucketTotal = 0
+        let activeBuckets = 0
         for (let i = 0; i < bucketList.length; i++) {
           total += bucketList[i].total
-          if (bucketList[i].total > 0 && mostRecentActive === bucketCount) mostRecentActive = i
+          if (bucketList[i].total > 0) {
+            activeBuckets++
+            if (mostRecentActive === bucketCount) mostRecentActive = i
+          }
           maxBucketTotal = Math.max(maxBucketTotal, bucketList[i].total)
         }
-        all.push({ port, buckets: bucketList, total, mostRecentActive, maxBucketTotal })
+        all.push({
+          port,
+          buckets: bucketList,
+          total,
+          mostRecentActive,
+          maxBucketTotal,
+          activeBuckets,
+          lane: dominantLane(laneTotals(bucketList)),
+        })
       }
       all.sort((a, b) => a.mostRecentActive - b.mostRecentActive || b.total - a.total)
       const shown = all.slice(0, MAX_CARRIERS)
-      // Positioned by port among the carriers actually shown -- adding
-      // a quieter port back into view later can reflow the others,
-      // which is honest (position is always relative to what's on
-      // screen) rather than reserving space for ports nobody sees yet.
       const xs = assignX(shown)
-      const withX: Carrier[] = shown.map((c, i) => ({ ...c, x: xs[i] }))
+      const withX: Carrier[] = shown.map((c, i) => {
+        let nearest = Infinity
+        for (let j = 0; j < xs.length; j++) if (j !== i) nearest = Math.min(nearest, Math.abs(xs[j] - xs[i]))
+        // 0-100 band space → band units happens at render; keep the
+        // target no wider than the gap to its neighbour so an overlapped
+        // target never steals its neighbour's clicks.
+        const hitW = Math.max(DASH_W + 1, Math.min(HIT_W, (nearest / 100) * BAND_W))
+        return { ...c, x: xs[i], hitW }
+      })
       return { carriers: withX, quieterCount: Math.max(0, all.length - MAX_CARRIERS) }
     }
 
-    function toView(b: FallBoundary, ports: PortMap, total: number, now: Bucket): BandView {
-      const { carriers, quieterCount } = carriersFor(ports)
-      const nowMax = Math.max(1, ...carriers.map((c) => c.buckets[0]?.total ?? 0))
-      return { ...b, carriers, quieterCount, total, nowTotal: now, nowMax }
+    // Flags at their moment: every uncleared flag whose target IP
+    // appeared on a band this window, bucketed by when it FIRED
+    // (firstSeen) -- "flag at its moment", not at its latest repeat.
+    // Flags of one type landing within a couple of buckets of each
+    // other on the same band cluster into one mark carrying a count,
+    // so a storm of near-simultaneous flags never prints as a stack of
+    // colliding rings and labels.
+    const flagsByKey = new Map<string, FlagMark[]>()
+    for (const f of flags) {
+      if (f.cleared) continue
+      const key = ipToKey.get(f.target)
+      if (!key) continue
+      const t = new Date(f.firstSeen).getTime()
+      if (Number.isNaN(t) || t < windowStart || t > windowEnd) continue
+      let idx = Math.floor(((windowEnd - t) / span2) * bucketCount)
+      if (idx < 0) idx = 0
+      if (idx >= bucketCount) idx = bucketCount - 1
+      const list = flagsByKey.get(key) ?? []
+      const near = list.find((m) => m.type === f.type && Math.abs(m.idx - idx) <= 2)
+      if (near) {
+        near.n++
+        if (idx < near.idx) {
+          near.idx = idx
+          near.hm = formatHM(f.firstSeen)
+        }
+      } else {
+        list.push({ idx, type: f.type, hm: formatHM(f.firstSeen), n: 1 })
+      }
+      flagsByKey.set(key, list)
     }
 
-    const known = boundaries.map((b) => toView(b, portsByKey.get(b.key)!, totalByKey.get(b.key) ?? 0, nowByKey.get(b.key)!))
-    const unmatched = unmatchedPorts
-      ? toView(
+    function toView(b: FallBoundary, ports: PortMap, total: number): BandView {
+      const { carriers, quieterCount } = carriersFor(ports)
+      const nowMax = Math.max(1, ...carriers.map((c) => c.buckets[0]?.total ?? 0))
+      const maxBucket = Math.max(1, ...carriers.map((c) => c.maxBucketTotal))
+      let drops = 0
+      let tot = 0
+      let deepestActive = 0
+      for (const [, bl] of ports)
+        for (let i = 0; i < bl.length; i++) {
+          drops += bl[i].drop
+          tot += bl[i].total
+          if (bl[i].total > 0 && i > deepestActive) deepestActive = i
+        }
+      return {
+        ...b,
+        carriers,
+        quieterCount,
+        total,
+        nowMax,
+        maxBucket,
+        dropShare: tot > 0 ? drops / tot : 0,
+        deepestActive,
+        flagMarks: flagsByKey.get(b.key) ?? [],
+      }
+    }
+
+    const known = boundaries.map((b) => toView(b, portsByKey.get(b.key)!, totalByKey.get(b.key) ?? 0))
+    if (unmatchedPorts)
+      known.push(
+        toView(
           {
             key: '__unmatched__',
             chain: '',
@@ -308,30 +393,162 @@
             srcAddressList: '',
             label: 'other traffic',
             coverage: 'unknown',
+            epithet: '',
           },
           unmatchedPorts,
           unmatchedTotal,
-          unmatchedNow,
-        )
-      : null
-    return { known, unmatched }
+        ),
+      )
+    return known
   })
 
-  const allBands = $derived([...bandsData.known, ...(bandsData.unmatched ? [bandsData.unmatched] : [])])
+  const allBands = $derived(bandsData)
   const darkBands = $derived(allBands.filter((b) => b.coverage === 'dark'))
   const isCalm = $derived(!windowLoading && !windowError && allBands.length > 0 && darkBands.length === 0)
 
-  function openInStream(b: FallBoundary, port?: number) {
-    appState.setFilter('interface', b.inInterface || b.outInterface || '')
-    appState.setFilter('chain', b.chain)
-    if (typeof port === 'number' && port > 0) appState.setFilter('port', String(port))
-    appState.view = 'live'
+  // ── Rig layout: every band gets the mockup's 160-unit slot ──────────
+  interface BandSlot {
+    band: BandView
+    bx: number // band's left edge in rig units
+    laneColor: string // header underline colour
   }
 
-  function carrierKey(e: KeyboardEvent, b: FallBoundary, port: number) {
+  const rig = $derived.by(() => {
+    const n = allBands.length
+    const width = RAIL + n * PITCH + 4
+    // One boundary, one colour, everywhere: the same lane map the atlas
+    // overlay's zones draw from.
+    const lanes = laneColors(allBands)
+    const slots: BandSlot[] = allBands.map((band, i) => ({
+      band,
+      bx: RAIL + i * PITCH,
+      laneColor: lanes.get(band.key) || 'var(--o-ink3)',
+    }))
+    return { width, slots }
+  })
+
+  // A carrier's x within the rig.
+  function cx(slot: BandSlot, c: Carrier): number {
+    return slot.bx + 10 + (c.x / 100) * (BAND_W - 20)
+  }
+
+  // ── The time rail: gridlines at the span's own step ─────────────────
+  const railLines = $derived.by(() => {
+    if (!windowStart || !windowEnd) return []
+    const stepMs = spanDef.railStep * 60 * 1000
+    const lines: { y: number; label: string }[] = []
+    const spanLen = windowEnd - windowStart
+    for (let t = Math.ceil(windowStart / stepMs) * stepMs; t < windowEnd - stepMs * 0.08; t += stepMs) {
+      const y = FALL_TOP + ((windowEnd - t) / spanLen) * (FALL_BOT - FALL_TOP)
+      if (y < FALL_TOP + 12 || y > FALL_BOT - 4) continue
+      const d = new Date(t)
+      const label =
+        span === '14d'
+          ? `${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+          : formatHM(d.toISOString())
+      lines.push({ y, label })
+    }
+    return lines
+  })
+
+  const bucketH = $derived((FALL_BOT - FALL_TOP) / buckets)
+
+  function bucketY(idx: number): number {
+    return FALL_TOP + idx * bucketH
+  }
+
+  // ── The spectrum: one needle per carrier arriving this instant ──────
+  interface Needle {
+    x: number
+    tipY: number
+    lane: Lane
+    port: number
+  }
+
+  function needlesFor(slot: BandSlot): Needle[] {
+    const b = slot.band
+    return b.carriers
+      .filter((c) => c.buckets[0].total > 0)
+      .map((c) => ({
+        x: cx(slot, c),
+        tipY: SPEC_BASE - (24 + (c.buckets[0].total / b.nowMax) * 72),
+        lane: dominantLane(c.buckets[0]),
+        port: c.port,
+      }))
+  }
+
+  // Peak labels, culled so neighbours never collide: strongest first,
+  // then any label whose text would overlap one already kept is dropped.
+  const peakLabels = $derived.by(() => {
+    const cands: { x: number; y: number; text: string; lane: Lane; h: number }[] = []
+    for (const slot of rig.slots) {
+      if (slot.band.coverage === 'dark') continue
+      for (const n of needlesFor(slot))
+        cands.push({ x: n.x, y: n.tipY - 8, text: portLabel(n.port), lane: n.lane, h: SPEC_BASE - n.tipY })
+    }
+    cands.sort((a, b) => b.h - a.h)
+    const kept: typeof cands = []
+    for (const c of cands) {
+      const w = c.text.length * 6.2
+      if (kept.some((k) => Math.abs(k.x - c.x) < (k.text.length * 6.2 + w) / 2 + 6 && Math.abs(k.y - c.y) < 11)) continue
+      kept.push(c)
+    }
+    return kept
+  })
+
+  // Port labels under the floor, culled the same way (heaviest carrier
+  // keeps its label; a crowded band folds the rest).
+  const portLabels = $derived.by(() => {
+    const cands: { x: number; text: string; lane: Lane; port: number; bandKey: string; w: number }[] = []
+    for (const slot of rig.slots) {
+      for (const c of slot.band.carriers) {
+        const text = portLabel(c.port)
+        cands.push({ x: cx(slot, c), text, lane: c.lane, port: c.port, bandKey: slot.band.key, w: c.total })
+      }
+    }
+    cands.sort((a, b) => b.w - a.w)
+    const kept: typeof cands = []
+    for (const c of cands) {
+      const w = c.text.length * 6.2
+      if (kept.some((k) => Math.abs(k.x - c.x) < (k.text.length * 6.2 + w) / 2 + 4)) continue
+      kept.push(c)
+    }
+    return kept
+  })
+
+  // Flag horizons: each flagged moment draws the mockup's dotted line
+  // through every band, its time on the rail, and its name on the band
+  // it joined to.
+  const flagHorizons = $derived.by(() => {
+    const list: { y: number; hm: string; type: string; bx: number; n: number }[] = []
+    for (const slot of rig.slots)
+      for (const m of slot.band.flagMarks)
+        list.push({ y: bucketY(m.idx) + bucketH / 2, hm: m.hm, type: m.type, bx: slot.bx, n: m.n })
+    return list
+  })
+
+  // The attention chips: one per flag type in the window, carrying the
+  // count and the most recent moment -- never one chip per flag.
+  const flagChips = $derived.by(() => {
+    const byType = new Map<string, { n: number; y: number; hm: string }>()
+    for (const f of flagHorizons) {
+      const cur = byType.get(f.type)
+      if (!cur) byType.set(f.type, { n: f.n, y: f.y, hm: f.hm })
+      else {
+        cur.n += f.n
+        if (f.y < cur.y) {
+          cur.y = f.y
+          cur.hm = f.hm
+        }
+      }
+    }
+    return [...byType.entries()].map(([type, v]) => ({ type, ...v }))
+  })
+
+  function keyActivate(e: KeyboardEvent, fn: () => void) {
     if (e.key === 'Enter' || e.key === ' ') {
       e.preventDefault()
-      openInStream(b, port)
+      fn()
     }
   }
 
@@ -341,7 +558,7 @@
     else if (b.coverage === 'dark') parts.push('dark -- blank because nothing is logged, not because nothing is sent')
     else if (b.coverage === 'unknown') parts.push('coverage unknown -- no router has pushed its rule table yet')
     if (b.total === 0) parts.push('no traffic in this window')
-    else parts.push(`${b.nowTotal.accept} accepted, ${b.nowTotal.drop} dropped, ${b.nowTotal.nat} nat in the most recent slice`)
+    else parts.push(`${b.total} events this window`)
     parts.push('activate to open in Stream, filtered to this boundary')
     return parts.join('. ')
   }
@@ -351,32 +568,43 @@
     const state = now.total > 0 ? `${now.accept} accepted, ${now.drop} dropped, ${now.nat} nat right now` : 'quiet right now'
     return `carrier ${portLabel(c.port)}, ${c.total} events this window, ${state}. Activate to open in Stream, filtered to this boundary and port.`
   }
+
+  function nowClock(): string {
+    return windowEnd ? new Date(windowEnd).toTimeString().slice(0, 8) : ''
+  }
 </script>
 
 <div class="fall">
-  <div class="fall-bar">
+  <div class="bar">
+    <button class="wm" onclick={() => atlasNav.toggle()} title="Open the atlas (m)" aria-label="Open the atlas — navigate">
+      MIKRO<em>VIEW</em>
+    </button>
     <h1>The fall</h1>
-    <p class="sub">
-      a band per boundary, a carrier per port · blue = accepted · red = dropped · violet = nat
-      {#if windowHasMore}<span class="truncated">— showing the most recent 5,000 events in this window; more exist</span>{/if}
-    </p>
+    <ConnectionIndicator />
+    <UptimeBadge />
+    <DeviceStatus />
+    <span class="attention" aria-live="polite">
+      {#each flagChips.slice(0, 3) as f, fi (fi)}
+        <button type="button" class="att alarm" onclick={() => (appState.view = 'flags')}>
+          <i></i>{f.type.replace(/_/g, ' ').toUpperCase()}{f.n > 1 ? ` ×${f.n}` : ''} — {f.hm}
+        </button>
+      {/each}
+      {#if darkBands.length > 0}
+        <button type="button" class="att dark" onclick={() => openInStream(darkBands[0])}>
+          <i></i>{darkBands.length} dark boundar{darkBands.length === 1 ? 'y' : 'ies'} — nothing logged
+        </button>
+      {:else if isCalm}
+        <span class="att calm"><i></i>every band sounds like itself</span>
+      {/if}
+    </span>
     <div class="span-control" role="group" aria-label="Time span">
+      <span class="lab">SPAN</span>
       {#each SPANS as s (s.id)}
-        <button type="button" class="span-btn" class:on={span === s.id} aria-pressed={span === s.id} onclick={() => (span = s.id)}>
+        <button type="button" class="rng" class:on={span === s.id} aria-pressed={span === s.id} onclick={() => (span = s.id)}>
           {s.label}
         </button>
       {/each}
     </div>
-  </div>
-
-  <div class="chips" aria-live="polite">
-    {#if darkBands.length > 0}
-      <button type="button" class="chip dark" onclick={() => openInStream(darkBands[0])}>
-        {darkBands.length} dark boundar{darkBands.length === 1 ? 'y' : 'ies'} — nothing logged
-      </button>
-    {:else if isCalm}
-      <span class="chip calm">every boundary reads clean</span>
-    {/if}
   </div>
 
   {#if fallState.loading}
@@ -389,373 +617,544 @@
       push.
     </p>
   {:else}
-    <p class="howto">
-      Each column is one boundary: an interface pair a firewall rule or a live event actually carries. Within a
-      band, each carrier is a port with real traffic, positioned left-to-right by port number. Click a boundary or a
-      carrier to open it in Stream, filtered.
-    </p>
-    <div class="rig scrollbar">
-      {#each allBands as b (b.key)}
-        <div class="band" class:dark={b.coverage === 'dark'}>
-          <button type="button" class="band-head" onclick={() => openInStream(b)} aria-label={bandHeadSummary(b)}>
-            <span class="band-label">{b.label}</span>
-            {#if b.key === '__unmatched__'}
-              <span class="band-caption quiet">events not yet in a pushed rule table</span>
-            {:else if b.coverage === 'dark'}
-              <span class="band-caption bad">dark — no log rule</span>
-            {:else if b.coverage === 'observed' && b.total === 0}
-              <span class="band-caption quiet">quiet</span>
-            {:else if b.coverage === 'observed'}
-              <span class="band-caption ok">watch holding ✓</span>
-            {/if}
-          </button>
+    <div class="rig">
+      <svg viewBox="0 0 {rig.width} {RIG_H}" style="max-width: {rig.width * 1.4}px">
+        <defs>
+          <pattern id="fall-hatch" width="8" height="8" patternTransform="rotate(45)" patternUnits="userSpaceOnUse">
+            <line x1="0" y1="0" x2="0" y2="8" class="hatch-line" />
+          </pattern>
+          <linearGradient id="fall-ramp" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0" class="ramp-hi" /><stop offset="1" class="ramp-lo" />
+          </linearGradient>
+        </defs>
 
-          {#if b.coverage === 'dark'}
-            <svg class="dark-fill" viewBox="0 0 100 200" preserveAspectRatio="none" aria-hidden="true">
-              <defs>
-                <pattern id="hatch-{b.key}" width="4" height="4" patternTransform="rotate(45)" patternUnits="userSpaceOnUse">
-                  <line x1="0" y1="0" x2="0" y2="4" class="hatch-line" />
-                </pattern>
-              </defs>
-              <rect x="0" y="0" width="100" height="200" fill="url(#hatch-{b.key})" />
-            </svg>
-            <span class="sr-only">blank because nothing is logged — not because nothing is sent</span>
-          {:else if b.carriers.length === 0}
-            <p class="band-empty">no traffic in this window</p>
-          {:else}
-            <div class="band-body">
-              <!-- The live spectrum: one peak per carrier, positioned by
-                   port, height = its current-instant rate. "What is
-                   arriving this instant." -->
-              <svg class="spectrum" viewBox="0 0 100 26" preserveAspectRatio="none" aria-hidden="true">
-                <polyline
-                  class="spectrum-line"
-                  points={b.carriers
-                    .map((c) => `${c.x},${26 - (c.buckets[0].total / b.nowMax) * 16}`)
-                    .join(' ')}
-                />
+        <!-- ══ the time rail (a flag's moment outranks a colliding
+             gridline or now label) ══ -->
+        {#if !flagHorizons.some((f) => Math.abs(f.y - (FALL_TOP + 4)) < 16)}
+          <text class="tlab now-t" x={RAIL - 14} y={FALL_TOP + 4} text-anchor="end">{formatHM(new Date(windowEnd || Date.now()).toISOString())}</text>
+        {/if}
+        {#each railLines as l (l.y)}
+          <line class="gridline" x1={RAIL} y1={l.y} x2={rig.width - 14} y2={l.y} />
+          {#if !flagHorizons.some((f) => Math.abs(f.y - l.y) < 12)}
+            <text class="tlab" x={RAIL - 14} y={l.y + 3} text-anchor="end">{l.label}</text>
+          {/if}
+        {/each}
+
+        <!-- ══ band separators ══ -->
+        {#each rig.slots.slice(1) as slot (slot.band.key)}
+          <line class="bandline" x1={slot.bx - 5} y1={FALL_TOP} x2={slot.bx - 5} y2={FALL_BOT} />
+        {/each}
+
+        {#each rig.slots as slot (slot.band.key)}
+          {@const b = slot.band}
+          <g class="band" class:dark={b.coverage === 'dark'}>
+            <!-- ══ the dial: this band's header ══ -->
+            <g
+              class="band-head"
+              role="button"
+              tabindex="0"
+              aria-label={bandHeadSummary(b)}
+              onclick={() => openInStream(b)}
+              onkeydown={(e) => keyActivate(e, () => openInStream(b))}
+            >
+              <rect class="head-hit" x={slot.bx} y="6" width={BAND_W} height="56" />
+              <text class="blab band-label" x={slot.bx + 6} y="22">{b.label}</text>
+              {#if b.epithet}<text class="bsub band-epithet" x={slot.bx + 6} y="36">{b.epithet}</text>{/if}
+              {#if b.key === '__unmatched__'}
+                <text class="chip ch-mut band-caption quiet" x={slot.bx + 6} y="50">NOT IN A PUSHED RULE TABLE</text>
+              {:else if b.coverage === 'dark'}
+                <text class="chip ch-bad band-caption bad" x={slot.bx + 6} y="50">DARK — NO LOG RULE</text>
+              {:else if b.coverage === 'unknown'}
+                <text class="chip ch-mut band-caption quiet" x={slot.bx + 6} y="50">COVERAGE UNKNOWN</text>
+              {:else if b.flagMarks.length > 0}
+                {@const fired = b.flagMarks.reduce((a, m) => (m.idx > a.idx ? m : a), b.flagMarks[0])}
+                <text class="chip ch-bad band-caption bad" x={slot.bx + 6} y="50">ALARM FIRED {fired.hm}</text>
+              {:else if b.total === 0}
+                <text class="chip ch-mut band-caption quiet" x={slot.bx + 6} y="50">QUIET</text>
+              {:else}
+                <text class="chip ch-ok band-caption ok" x={slot.bx + 6} y="50">WATCH HOLDING ✓</text>
+              {/if}
+              <rect x={slot.bx} y="56" width={BAND_W} height="3" rx="1.5" fill={slot.laneColor} />
+            </g>
+
+            <!-- ══ the panadapter: this band's live spectrum ══ -->
+            <g class="spectrum" aria-hidden="true">
+              {#if b.coverage === 'dark'}
+                <line x1={slot.bx} y1={SPEC_BASE} x2={slot.bx + BAND_W} y2={SPEC_BASE} class="dark-baseline" />
+                <text class="anno bad-anno" x={slot.bx + BAND_W / 2} y={SPEC_BASE - 32} text-anchor="middle"
+                  >nothing logged —</text>
+                <text class="anno bad-anno" x={slot.bx + BAND_W / 2} y={SPEC_BASE - 20} text-anchor="middle"
+                  >no trace, and no claim of one</text>
+              {:else}
+                {#each needlesFor(slot) as n (n.port)}
+                  <polygon
+                    class="peak {n.lane}"
+                    data-port={n.port}
+                    points="{n.x - 8},{SPEC_BASE} {n.x},{n.tipY} {n.x + 8},{SPEC_BASE}"
+                  />
+                  <polyline
+                    class="spec {n.lane}"
+                    points="{n.x - 8},{SPEC_BASE} {n.x},{n.tipY} {n.x + 8},{SPEC_BASE}"
+                  />
+                {/each}
+                {#if b.carriers.length > 0 && needlesFor(slot).length === 0}
+                  <line x1={slot.bx} y1={SPEC_BASE} x2={slot.bx + BAND_W} y2={SPEC_BASE} class="spec-floor" />
+                {/if}
+              {/if}
+            </g>
+
+            <!-- ══ this band's stretch of the fall ══ -->
+            <g class="waterfall">
+              {#if b.coverage === 'dark'}
+                <rect class="darkband" x={slot.bx} y={FALL_TOP} width={BAND_W} height={FALL_BOT - FALL_TOP} />
+                <text class="anno bad-anno strong" x={slot.bx + BAND_W / 2} y="420" text-anchor="middle"
+                  >blank because nothing is logged</text>
+                <text class="anno" x={slot.bx + BAND_W / 2} y="434" text-anchor="middle"
+                  >— not because nothing is sent</text>
+              {:else}
+                {#if b.dropShare > 0.5 && b.total > 0}
+                  <!-- the red tide: a drop-dominated band carries the
+                       mockup's top-heavy ramp behind its dashes -->
+                  <!-- the wash reaches only as deep as the traffic does:
+                       below the last active bucket the band is black to
+                       the floor, the way the ratified scene draws it -->
+                  <rect
+                    x={slot.bx}
+                    y={FALL_TOP}
+                    width={BAND_W}
+                    height={Math.min(FALL_BOT - FALL_TOP, (b.deepestActive + 2) * bucketH)}
+                    fill="url(#fall-ramp)"
+                    opacity={0.3 + 0.45 * b.dropShare}
+                  />
+                {/if}
                 {#each b.carriers as c (c.port)}
-                  {#if c.buckets[0].total > 0}
-                    {@const h = (c.buckets[0].total / b.nowMax) * 16}
-                    <circle cx={c.x} cy={26 - h} r="1.4" class="mark {dominantLane(c.buckets[0])}" data-port={c.port} />
+                  {#if c.lane === 'accept' && b.total > 0 && c.total / b.total >= 0.55 && c.activeBuckets >= buckets * 0.5}
+                    <!-- the broad warm carrier of the household -->
+                    <rect x={cx(slot, c) - 24} y={FALL_TOP} width="48" height={FALL_BOT - FALL_TOP} class="glow glow-outer" />
+                    <rect x={cx(slot, c) - 12} y={FALL_TOP} width="24" height={FALL_BOT - FALL_TOP} class="glow glow-inner" />
                   {/if}
                 {/each}
-              </svg>
-              <div class="now-line" aria-hidden="true"><span class="now-dot"></span></div>
-
-              <svg class="waterfall" viewBox="0 0 100 {buckets}" preserveAspectRatio="none" role="presentation">
                 {#each b.carriers as c (c.port)}
-                  <!-- Invisible, wider hit target -- keyboard and pointer
-                       both land here; the visible dash above (pointer-
-                       events: none) is decoration on top of it. -->
                   <rect
-                    x={c.x - HIT_WIDTH / 2}
-                    y="0"
-                    width={HIT_WIDTH}
-                    height={buckets}
                     class="carrier-hit"
                     data-port={c.port}
                     role="button"
                     tabindex="0"
                     aria-label={carrierSummary(c)}
+                    x={cx(slot, c) - c.hitW / 2}
+                    y={FALL_TOP}
+                    width={c.hitW}
+                    height={FALL_BOT - FALL_TOP}
                     onclick={() => openInStream(b, c.port)}
-                    onkeydown={(e) => carrierKey(e, b, c.port)}
+                    onkeydown={(e) => keyActivate(e, () => openInStream(b, c.port))}
                   />
                 {/each}
                 {#each b.carriers as c (c.port)}
                   {#each c.buckets as bucket, i (i)}
                     {#if bucket.total > 0}
-                      {@const rate = c.maxBucketTotal > 0 ? bucket.total / c.maxBucketTotal : 0}
+                      {@const rate = bucket.total / b.maxBucket}
+                      {@const dashH = Math.min(bucketH, 1.8 + rate * (bucketH - 1.8))}
                       <rect
-                        x={c.x - DASH_WIDTH / 2}
-                        y={i}
-                        width={DASH_WIDTH}
-                        height="1"
                         class="mark {dominantLane(bucket)}"
                         data-port={c.port}
-                        opacity={0.35 + rate * 0.65}
+                        x={cx(slot, c) - DASH_W / 2}
+                        y={bucketY(i) + (bucketH - dashH) / 2}
+                        width={DASH_W}
+                        height={dashH}
+                        opacity={0.45 + rate * 0.5}
                         pointer-events="none"
                       />
                     {/if}
                   {/each}
                 {/each}
-              </svg>
-
-              <div class="carrier-labels" aria-hidden="true">
-                {#each b.carriers as c (c.port)}
-                  <span class="carrier-label" data-port={c.port} style="left: {c.x}%">{portLabel(c.port)}</span>
-                {/each}
-              </div>
-
-              {#if b.quieterCount > 0}
-                <button
-                  type="button"
-                  class="quieter"
-                  onclick={() => openInStream(b)}
-                  aria-label="{b.quieterCount} quieter port{b.quieterCount === 1 ? '' : 's'} on {b.label}, folded out of the individual carriers above. Activate to open the whole boundary in Stream."
-                >
-                  +{b.quieterCount} quieter
-                </button>
+                {#if b.quieterCount > 0}
+                  <text
+                    class="quieter"
+                    role="button"
+                    tabindex="0"
+                    aria-label="{b.quieterCount} quieter port{b.quieterCount === 1 ? '' : 's'} on {b.label}, folded out of the individual carriers above. Activate to open the whole boundary in Stream."
+                    x={slot.bx + BAND_W / 2}
+                    y={FALL_BOT - 8}
+                    text-anchor="middle"
+                    onclick={() => openInStream(b)}
+                    onkeydown={(e) => keyActivate(e, () => openInStream(b))}>+{b.quieterCount} quieter</text>
+                {/if}
+                {#if b.carriers.length === 0 && b.total === 0}
+                  <text class="anno" x={slot.bx + BAND_W / 2} y="420" text-anchor="middle">no traffic in this window</text>
+                {/if}
               {/if}
-            </div>
-          {/if}
-        </div>
-      {/each}
+            </g>
+
+            <!-- flag annotations at their moment on this band -->
+            {#each b.flagMarks as m, mi (mi)}
+              {@const fy = bucketY(m.idx) + bucketH / 2}
+              <g class="flag-mark" aria-hidden="true">
+                <circle cx={slot.bx + 8} cy={fy} r="5" class="flag-ring" />
+                <circle cx={slot.bx + 8} cy={fy} r="1.8" class="flag-core" />
+                <text class="anno bad-anno" x={slot.bx + 18} y={fy - 5}
+                  >◉ {m.type}{m.n > 1 ? ` ×${m.n}` : ''} · {m.hm}</text>
+              </g>
+            {/each}
+          </g>
+        {/each}
+
+        <!-- ══ peak + port labels, collision-culled across the rig ══ -->
+        {#each peakLabels as p, pi (pi)}
+          <text class="plab {p.lane}" x={p.x} y={p.y} text-anchor="middle">{p.text}</text>
+        {/each}
+        {#each portLabels as p (p.bandKey + p.port)}
+          <text class="plab carrier-label {p.lane}" data-port={p.port} x={p.x} y={PORTLAB_Y} text-anchor="middle"
+            >{p.text}</text>
+        {/each}
+
+        <!-- ══ flag horizons: the line through every band ══ -->
+        {#each flagHorizons as f, fi (fi)}
+          <line class="horizon" x1={RAIL} y1={f.y} x2={rig.width - 14} y2={f.y} />
+          <text class="tlab flag-t" x={RAIL - 14} y={f.y + 3} text-anchor="end">{f.hm} ◉</text>
+        {/each}
+
+        <!-- ══ the NOW edge ══ -->
+        <text class="now-caption" x={RAIL} y={NOW_Y - 5}
+          >NOW · {nowClock()} — the spectrum above is this instant; below, it falls into memory</text>
+        <line class="nowline" x1={RAIL} y1={NOW_Y} x2={rig.width - 14} y2={NOW_Y} />
+        <circle class="now-dot" cx={rig.width - 18} cy={NOW_Y} r="2.5" />
+        <text class="anno" x={RAIL - 14} y={SPEC_TOP + 40} text-anchor="end">live</text>
+        <text class="anno" x={RAIL - 14} y={SPEC_BASE} text-anchor="end">floor</text>
+      </svg>
     </div>
+
+    {#if showKey}
+      <div class="legend">
+        <span class="k k-acc">blue energy = accepted (brightness = rate)</span>
+        <span class="k k-drop">red energy = dropped — red never means anything else</span>
+        <span class="k k-nat">violet = nat</span>
+        <span class="k">a carrier = a steady talker · dash rhythm = its cadence</span>
+        <span class="k">▨ unlogged (≠ a quiet band)</span>
+        <span class="k">◉ flag at its moment · click a carrier to open it in Stream</span>
+      </div>
+    {/if}
     <p class="window-caption">
-      {#if windowStart && windowEnd}{formatHM(new Date(windowStart).toISOString())} – {formatHM(
-          new Date(windowEnd).toISOString(),
-        )}, newest at the top{/if}
+      <button type="button" class="key-toggle" aria-expanded={showKey} onclick={() => (showKey = !showKey)}>
+        key {showKey ? '▾' : '▸'}
+      </button>
+      <span>
+        {#if windowHasMore}showing the most recent 5,000 events; more exist ·
+        {/if}{#if windowStart && windowEnd}{formatHM(new Date(windowStart).toISOString())} – {formatHM(
+            new Date(windowEnd).toISOString(),
+          )}, newest at the top{/if}
+      </span>
     </p>
   {/if}
 </div>
 
 <style>
+  /* The mockup's palette, routed through the theme tokens so the fall
+     keeps its identity in every theme block (#492 revisits). */
   .fall {
-    padding: 16px 20px 32px;
+    --o-ink: var(--fg);
+    --o-ink2: var(--fg-muted);
+    --o-ink3: var(--fg-dim);
+    --o-grid: color-mix(in srgb, var(--fg) 8%, transparent);
+    --o-grid2: color-mix(in srgb, var(--fg) 15%, transparent);
+    --o-acc: var(--fall-accept);
+    --o-drop: var(--fall-drop);
+    --o-nat: var(--fall-nat);
+    --o-other: var(--fall-other);
+    --o-ok: var(--accept);
+    padding: 14px 20px 20px;
     display: flex;
     flex-direction: column;
-    gap: 10px;
+    gap: 6px;
     overflow-y: auto;
     height: 100%;
+    background: var(--fall-canvas);
   }
 
-  .fall-bar {
+  /* ── the bar ─────────────────────────────────────────────────────── */
+  .bar {
     display: flex;
     align-items: baseline;
-    gap: 16px;
+    gap: 20px;
     flex-wrap: wrap;
   }
-  .fall-bar h1 {
-    font-size: 18px;
-    font-weight: 650;
+  .bar h1 {
+    font-size: 22px;
+    font-weight: 600;
     margin: 0;
-    color: var(--fg);
+    color: var(--o-ink);
   }
-  .sub {
-    margin: 0;
-    font-size: 12px;
-    color: var(--fg-dim);
+  .wm {
+    background: transparent;
+    border: none;
+    padding: 0;
+    font-size: 13px;
+    font-weight: 800;
+    letter-spacing: 0.22em;
+    color: var(--o-ink3);
+    cursor: pointer;
   }
-  .truncated {
-    color: var(--fg-muted);
+  .wm:hover {
+    color: var(--o-ink2);
   }
-
+  .wm em {
+    color: var(--now);
+    font-style: normal;
+  }
   .span-control {
     margin-left: auto;
     display: flex;
     gap: 2px;
-    border-bottom: 1px solid var(--border);
-    padding-bottom: 4px;
+    border-bottom: 1px solid var(--o-grid2);
+    padding-bottom: 5px;
   }
-  .span-btn {
+  .span-control .lab {
+    font-size: 10px;
+    letter-spacing: 0.12em;
+    color: var(--o-ink3);
+    align-self: center;
+    margin-right: 8px;
+  }
+  .rng {
     background: transparent;
     border: none;
-    color: var(--fg-dim);
-    font: inherit;
-    font-size: 12px;
-    padding: 3px 10px;
+    font-size: 13.5px;
+    font-weight: 550;
+    color: var(--o-ink3);
+    padding: 3px 12px;
     cursor: pointer;
-    border-radius: 3px;
+    font-family: var(--font-mono);
   }
-  .span-btn:hover {
-    background: var(--bg-hover);
-    color: var(--fg);
+  .rng:hover {
+    color: var(--o-ink);
   }
-  .span-btn.on {
-    color: var(--fg);
+  .rng.on {
+    color: var(--o-ink);
     border-bottom: 2px solid var(--now);
-    margin-bottom: -6px;
+    margin-bottom: -7px;
   }
 
-  .chips {
-    display: flex;
+  /* ── attention chips, riding the bar ─────────────────────────────── */
+  .attention {
+    display: inline-flex;
     gap: 8px;
+    align-items: center;
     flex-wrap: wrap;
-    min-height: 24px;
   }
-  .chip {
+  .att {
     display: inline-flex;
     align-items: center;
-    gap: 6px;
-    font-size: 11.5px;
-    font-weight: 600;
-    border: 1px solid var(--border);
+    gap: 7px;
+    font-size: 12.5px;
+    font-weight: 650;
+    font-family: inherit;
+    border: 1px solid var(--o-grid2);
     border-radius: 999px;
-    padding: 4px 12px;
-    color: var(--fg-muted);
+    padding: 4px 13px;
+    color: var(--o-ink2);
     background: transparent;
-    cursor: default;
   }
-  button.chip {
+  button.att {
     cursor: pointer;
   }
-  button.chip:hover {
+  button.att:hover {
     background: var(--bg-hover);
   }
-  .chip.dark {
-    border-color: color-mix(in srgb, var(--chart-refused) 55%, transparent);
-    color: var(--chart-refused);
+  .att i {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
   }
-  .chip.calm {
-    color: var(--accept);
+  .att.alarm {
+    border-color: color-mix(in srgb, var(--o-drop) 50%, transparent);
+    color: var(--o-drop);
+  }
+  .att.alarm i {
+    background: var(--o-drop);
+  }
+  @media (prefers-reduced-motion: no-preference) {
+    .att.alarm i {
+      animation: fall-pulse 1.6s ease-in-out infinite;
+    }
+  }
+  .att.dark {
+    color: var(--o-drop);
+  }
+  .att.dark i {
+    background: transparent;
+    border: 1px solid var(--o-drop);
+  }
+  .att.calm {
+    color: var(--o-ok);
+  }
+  .att.calm i {
+    background: var(--o-ok);
   }
 
   .state-msg {
-    color: var(--fg-muted);
-    font-size: 13px;
+    color: var(--o-ink2);
+    font-size: 14px;
     padding: 20px 0;
   }
   .state-msg.error {
-    color: var(--reject);
+    color: var(--o-drop);
   }
 
-  .howto {
-    margin: 0;
-    font-size: 11.5px;
-    color: var(--fg-dim);
-  }
-
+  /* ── the rig ─────────────────────────────────────────────────────── */
   .rig {
-    display: flex;
-    gap: 1px;
-    overflow-x: auto;
-    background: var(--border);
-    border: 1px solid var(--border);
-    border-radius: 6px;
-    /* The hero fills the viewport: the rig takes all remaining height so
-       the bands run the full page like the ratified scene, rather than
-       stopping at the waterfall's minimum and leaving dead page below. */
     flex: 1;
     min-height: 320px;
+    display: flex;
+    justify-content: center;
+  }
+  .rig svg {
+    width: 100%;
+    display: block;
+  }
+  .rig svg text {
+    font-family: var(--font-mono);
   }
 
-  .band {
-    flex: 1 0 220px;
-    min-width: 220px;
-    display: flex;
-    flex-direction: column;
-    background: var(--bg-elevated);
+  .tlab {
+    fill: var(--o-ink3);
+    font-size: 11.5px;
+  }
+  .tlab.now-t {
+    fill: var(--now);
+  }
+  .tlab.flag-t {
+    fill: var(--o-drop);
+    font-weight: 700;
+  }
+  .blab {
+    fill: var(--o-ink);
+    font-size: 13px;
+    font-weight: 700;
+    font-family: inherit;
+  }
+  .bsub {
+    fill: var(--o-ink3);
+    font-size: 10px;
+    font-family: inherit;
+  }
+  .chip {
+    font-size: 9.5px;
+    font-weight: 800;
+    letter-spacing: 0.07em;
+    font-family: inherit;
+  }
+  .ch-ok {
+    fill: var(--o-ok);
+  }
+  .ch-bad {
+    fill: var(--o-drop);
+  }
+  .ch-mut {
+    fill: var(--o-ink3);
+  }
+  .bandline {
+    stroke: var(--o-grid2);
+    stroke-width: 1;
+  }
+  .gridline {
+    stroke: var(--o-grid);
+    stroke-width: 1;
   }
 
   .band-head {
-    display: flex;
-    flex-direction: column;
-    gap: 2px;
-    padding: 10px 10px 6px;
-    border: none;
-    border-bottom: 1px solid var(--border);
-    background: transparent;
-    text-align: left;
     cursor: pointer;
-    color: inherit;
-    font: inherit;
   }
-  .band-head:hover {
-    background: var(--bg-hover);
+  .head-hit {
+    fill: transparent;
+  }
+  .band-head:hover .head-hit {
+    fill: color-mix(in srgb, var(--fg) 5%, transparent);
   }
   .band-head:focus-visible {
-    outline: 2px solid var(--accent);
-    outline-offset: -2px;
-    z-index: 1;
+    outline: none;
   }
-  .band-label {
-    font-size: 11.5px;
-    font-weight: 650;
-    color: var(--fg);
-    overflow-wrap: break-word;
-  }
-  .band-caption {
-    font-size: 9px;
-    font-weight: 800;
-    letter-spacing: 0.06em;
-    text-transform: uppercase;
-  }
-  .band-caption.ok {
-    color: var(--accept);
-  }
-  .band-caption.bad {
-    color: var(--chart-refused);
-  }
-  .band-caption.quiet {
-    color: var(--fg-dim);
-  }
-
-  .band-empty {
-    margin: 0;
-    padding: 16px 10px;
-    font-size: 11px;
-    color: var(--fg-dim);
-  }
-
-  .dark-fill {
-    flex: 1;
-    width: 100%;
-    display: block;
-    background: var(--bg);
-  }
-  .hatch-line {
-    stroke: var(--border);
+  .band-head:focus-visible .head-hit {
+    stroke: var(--accent);
     stroke-width: 1.5;
   }
 
-  .band-body {
-    flex: 1;
-    display: flex;
-    flex-direction: column;
-    min-height: 0;
-    position: relative;
-  }
-
-  .spectrum {
-    width: 100%;
-    height: 26px;
-    display: block;
-    flex: 0 0 26px;
-    background: var(--bg);
-  }
-  .spectrum-line {
+  /* ── spectrum ────────────────────────────────────────────────────── */
+  .spec {
     fill: none;
-    stroke: var(--fg-dim);
+    stroke-width: 1.4;
+  }
+  .spec.accept {
+    stroke: var(--o-acc);
+  }
+  .spec.drop {
+    stroke: var(--o-drop);
+  }
+  .spec.nat {
+    stroke: var(--o-nat);
+  }
+  .spec.other {
+    stroke: var(--o-other);
+  }
+  .peak {
+    stroke: none;
+  }
+  .peak.accept {
+    fill: color-mix(in srgb, var(--o-acc) 14%, transparent);
+  }
+  .peak.drop {
+    fill: color-mix(in srgb, var(--o-drop) 14%, transparent);
+  }
+  .peak.nat {
+    fill: color-mix(in srgb, var(--o-nat) 14%, transparent);
+  }
+  .peak.other {
+    fill: color-mix(in srgb, var(--o-other) 14%, transparent);
+  }
+  .spec-floor {
+    stroke: var(--o-grid2);
     stroke-width: 1;
-    opacity: 0.85;
   }
-  .mark.accept {
-    fill: var(--chart-traffic);
+  .dark-baseline {
+    stroke: var(--o-grid2);
+    stroke-width: 1;
+    stroke-dasharray: 2 4;
   }
-  .mark.drop {
-    fill: var(--chart-refused);
+  .plab {
+    fill: var(--o-ink2);
+    font-size: 10px;
   }
-  .mark.nat {
-    fill: var(--fall-nat);
+  .plab.accept {
+    fill: var(--o-acc);
   }
-  .mark.other {
-    fill: var(--fg-dim);
+  .plab.drop {
+    fill: var(--o-drop);
+  }
+  .plab.nat {
+    fill: var(--o-nat);
+  }
+  .plab.other {
+    fill: var(--o-ink2);
   }
 
-  .now-line {
-    height: 1px;
-    background: var(--now);
-    position: relative;
-    margin: 2px 0;
-    flex: 0 0 1px;
+  /* ── the NOW edge ────────────────────────────────────────────────── */
+  .nowline {
+    stroke: var(--now);
+    stroke-width: 1.6;
+  }
+  .now-caption {
+    fill: var(--now);
+    font-size: 12px;
+    font-weight: 700;
   }
   .now-dot {
-    position: absolute;
-    right: 2px;
-    top: -2px;
-    width: 5px;
-    height: 5px;
-    border-radius: 50%;
-    background: var(--now);
-    display: block;
+    fill: var(--now);
   }
   @media (prefers-reduced-motion: no-preference) {
+    .nowline,
     .now-dot {
-      animation: now-pulse 1.6s ease-in-out infinite;
+      animation: fall-pulse 1.4s ease-in-out infinite;
     }
   }
-  @keyframes now-pulse {
+  @keyframes fall-pulse {
     0%,
     100% {
       opacity: 1;
@@ -765,13 +1164,71 @@
     }
   }
 
-  .waterfall {
-    width: 100%;
-    flex: 1;
-    display: block;
-    min-height: 220px;
-    background: var(--bg);
+  /* ── the fall ────────────────────────────────────────────────────── */
+  .ramp-hi {
+    stop-color: color-mix(in srgb, var(--fall-drop) 16%, transparent);
   }
+  .ramp-lo {
+    stop-color: color-mix(in srgb, var(--fall-drop) 2%, transparent);
+  }
+  .glow-outer {
+    fill: color-mix(in srgb, var(--o-acc) 10%, transparent);
+  }
+  .glow-inner {
+    fill: color-mix(in srgb, var(--o-acc) 14%, transparent);
+  }
+  .mark.accept {
+    fill: var(--o-acc);
+    color: var(--o-acc);
+  }
+  .mark.drop {
+    fill: var(--o-drop);
+    color: var(--o-drop);
+  }
+  .mark.nat {
+    fill: var(--o-nat);
+    color: var(--o-nat);
+  }
+  .mark.other {
+    fill: var(--o-other);
+    color: var(--o-other);
+  }
+  .mark {
+    filter: drop-shadow(0 0 1.6px currentColor);
+  }
+  .darkband {
+    fill: url(#fall-hatch);
+    opacity: 0.45;
+  }
+  .hatch-line {
+    stroke: var(--o-grid2);
+    stroke-width: 1.5;
+  }
+  .anno {
+    fill: var(--o-ink3);
+    font-size: 10.5px;
+  }
+  .anno.bad-anno {
+    fill: var(--o-drop);
+  }
+  .anno.strong {
+    font-weight: 700;
+  }
+  .horizon {
+    stroke: var(--o-drop);
+    stroke-width: 1;
+    stroke-dasharray: 2 6;
+    opacity: 0.55;
+  }
+  .flag-ring {
+    fill: var(--fall-canvas);
+    stroke: var(--o-drop);
+    stroke-width: 1.4;
+  }
+  .flag-core {
+    fill: var(--o-drop);
+  }
+
   .carrier-hit {
     fill: transparent;
     cursor: pointer;
@@ -786,58 +1243,57 @@
     stroke-width: 1;
   }
 
-  .carrier-labels {
-    position: relative;
-    height: 16px;
-    flex: 0 0 16px;
-    border-top: 1px solid var(--border);
-  }
-  .carrier-label {
-    position: absolute;
-    top: 2px;
-    transform: translateX(-50%);
-    font-size: 8.5px;
-    font-family: var(--font-mono);
-    color: var(--fg-dim);
-    white-space: nowrap;
-  }
-
   .quieter {
-    flex: 0 0 auto;
-    background: var(--bg);
-    border: none;
-    border-top: 1px solid var(--border);
-    color: var(--fg-dim);
-    font-size: 10px;
-    padding: 4px 8px;
-    text-align: center;
+    fill: var(--o-ink3);
+    font-size: 10.5px;
     cursor: pointer;
-    width: 100%;
   }
   .quieter:hover {
-    background: var(--bg-hover);
-    color: var(--fg);
+    fill: var(--o-ink);
   }
   .quieter:focus-visible {
-    outline: 2px solid var(--accent);
-    outline-offset: -2px;
+    outline: none;
+    fill: var(--accent);
   }
 
+  /* ── legend + window caption ─────────────────────────────────────── */
+  .legend {
+    display: flex;
+    gap: 22px;
+    padding-top: 4px;
+    font-size: 12px;
+    color: var(--o-ink2);
+    flex-wrap: wrap;
+  }
+  .k-acc {
+    color: var(--o-acc);
+  }
+  .k-drop {
+    color: var(--o-drop);
+  }
+  .k-nat {
+    color: var(--o-nat);
+  }
   .window-caption {
     margin: 0;
-    font-size: 10.5px;
-    color: var(--fg-dim);
-    text-align: right;
+    font-size: 11.5px;
+    color: var(--o-ink3);
+    font-family: var(--font-mono);
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 12px;
   }
-
-  .sr-only {
-    position: absolute;
-    width: 1px;
-    height: 1px;
-    margin: -1px;
+  .key-toggle {
+    background: transparent;
+    border: none;
     padding: 0;
-    overflow: hidden;
-    clip-path: inset(50%);
-    white-space: nowrap;
+    color: var(--o-ink3);
+    font-size: 11.5px;
+    font-family: var(--font-mono);
+    cursor: pointer;
+  }
+  .key-toggle:hover {
+    color: var(--o-ink);
   }
 </style>

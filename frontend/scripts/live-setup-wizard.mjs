@@ -12,7 +12,7 @@
 // So every assertion here goes through a real browser against a real
 // server.
 
-import { session, check, done } from './live-browser.mjs'
+import { session, check, done, goTo } from './live-browser.mjs'
 
 const URL_BASE = process.env.MV_URL
 
@@ -31,10 +31,10 @@ if (await modal.count()) {
 // --- Run setup… opens the modal, over whatever page is showing --------
 // It is an action, not a page: the shell behind it stays mounted, which
 // is the whole difference from the view this replaced.
-await page.click('.rail .item:has-text("Run setup…")')
+await goTo(page, 'Run setup…')
 await modal.waitFor({ state: 'visible' })
 check(
-  await page.locator('.rail').isVisible(),
+  await page.locator('.scene-bar').isVisible(),
   'the shell is still there behind the modal — this is a modal, not a page',
 )
 check(!(await page.locator('main .setup').count()), 'no wizard page route remains — the view was removed wholesale')
@@ -259,7 +259,7 @@ await page.keyboard.press('Escape')
 await modal.waitFor({ state: 'detached' })
 check(true, 'Esc closes the modal')
 
-await page.click('.rail .item:has-text("Run setup…")')
+await goTo(page, 'Run setup…')
 await modal.waitFor({ state: 'visible' })
 const reopened =
   (await page.locator('.setup-wizard .steps li:nth-child(4) .step-row').getAttribute('class')) ?? ''

@@ -1,12 +1,21 @@
 :root {
-  --bg: #0b0e14;
-  --bg-elevated: #12161f;
-  --bg-hover: #171c27;
-  --border: #232a38;
-  --fg: #eceef2;
-  --fg-muted: #9aa3b2;
-  --fg-dim: #6b7686;
-  --accent: #4d9fff;
+  /* The Atlas II refined identity (owner ratification, 2026-08-29: the
+     app's common identity now, pulled forward from #492's theme rounds).
+     Values are direction-f-atlas2.html's own token block: the void
+     ground, blue-washed inks, hairline borders drawn from the same
+     160,185,230 wash, and the soft periwinkle accent. The semantic
+     verdict/action colors below are deliberately untouched -- they carry
+     traffic-state meaning and never shift with identity. */
+  --bg: #06080e;
+  --bg-elevated: #0f1422;
+  --bg-hover: rgba(160, 185, 230, 0.08);
+  --border: rgba(160, 185, 230, 0.13);
+  --hair-2: rgba(160, 185, 230, 0.26);
+  --glass: rgba(15, 20, 34, 0.66);
+  --fg: #e9eefb;
+  --fg-muted: #97a4c4;
+  --fg-dim: #55628a;
+  --accent: #9db8e8;
 
   /* The chrome's one alarm colour, from the ratified navigation record
      (docs/design/screens/navigation/DESIGN.md): the open-flag count badge
@@ -118,6 +127,18 @@
               from --chart-traffic under deutan; this is the value that
               actually passes on this app's real surfaces. */
   --fall-nat: #9b3fc9;
+  /* The fall's own heat identities and canvas, from round 3's validated
+     palette (docs/design/concepts/round-3/README.md: accept #5aa7f0 /
+     drop #e05252 pass at deltaE 22.1 deutan on the near-black surfaces).
+     Deliberately NOT the generic chart tokens: the fall is the hero and
+     was ratified against these exact colours on this exact ground. */
+  /* Under the Atlas identity the fall's canvas IS the void -- one
+     ground, no page-within-a-page. Round 3 validated the heat pair on
+     #08090c; the void is within a hair of it. */
+  --fall-canvas: #06080e;
+  --fall-accept: #5aa7f0;
+  --fall-drop: #e05252;
+  --fall-other: #6b7280;
 
   /* Nudged toward the active colorway's --accent (see the [data-colorway]
      rules below) before being washed to a low-alpha row fill just below
@@ -182,6 +203,11 @@
   --fg: #34312c;
   --fg-muted: #635e54;
   --fg-dim: #8c8677;
+  /* The Atlas accent, deepened to hold on the warm paper; the light
+     lane's own full identity pass is future work. */
+  --accent: #4a69a8;
+  --hair-2: #bfb9ac;
+  --glass: rgba(255, 253, 248, 0.66);
   color-scheme: light;
 
   /* The light lane's own alarm step, per the record: the dark-mode red is
@@ -194,6 +220,12 @@
   --chart-traffic: #2a78d6;
   --chart-refused: #d13a39;
   --fall-nat: #7e22ce;
+  /* The fall's light-theme ground and heat identities: same hues as the
+     dark ratified set, deepened to hold contrast on a light canvas. */
+  --fall-canvas: #f3f1ec;
+  --fall-accept: #2a78d6;
+  --fall-drop: #c43c3c;
+  --fall-other: #6b7280;
 
   /* Light mode uses its own darker/more saturated base tones here (a
      0.12-alpha wash of the dark-mode --accept reads too washed-out on a
@@ -236,6 +268,9 @@
     --fg: #34312c;
     --fg-muted: #635e54;
     --fg-dim: #8c8677;
+    --accent: #4a69a8;
+    --hair-2: #bfb9ac;
+    --glass: rgba(255, 253, 248, 0.66);
     color-scheme: light;
 
     --alarm: #d63c5e;
@@ -243,6 +278,10 @@
     --chart-traffic: #2a78d6;
     --chart-refused: #d13a39;
     --fall-nat: #7e22ce;
+    --fall-canvas: #f3f1ec;
+    --fall-accept: #2a78d6;
+    --fall-drop: #c43c3c;
+    --fall-other: #6b7280;
 
     --accept-tinted: color-mix(in srgb, #16a34a 85%, var(--accent) 15%);
     --drop-tinted: color-mix(in srgb, #d97706 85%, var(--accent) 15%);
@@ -303,7 +342,15 @@ body {
 
 body {
   font-family: var(--font-sans);
-  font-size: 14px;
+  font-size: 15px;
+  /* Atlas ambience: the faint blue glow high off the top-right of the
+     void, from the identity's own body background. */
+  background:
+    radial-gradient(1100px 600px at 75% -15%, rgba(80, 115, 205, 0.07), transparent 60%),
+    var(--bg);
+}
+:root[data-theme='light'] body {
+  background: var(--bg);
 }
 
 #app {
