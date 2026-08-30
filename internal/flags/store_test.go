@@ -1327,3 +1327,308 @@ func activeTargets(flags []Flag) []string {
 	}
 	return out
 }
+
+// -- #638: SetVerdict ------------------------------------------------
+
+// TestSetVerdictUnknownIDReturnsFalse mirrors
+// TestClearUnknownOrAlreadyClearedReturnsFalse's "unknown ID" half --
+// the handler maps this to 404.
+func TestSetVerdictUnknownIDReturnsFalse(t *testing.T) {
+	s, _ := Open("")
+	if _, ok := s.SetVerdict("nonexistent", VerdictReal, "alice", time.Now()); ok {
+		t.Error("SetVerdict() on an unknown ID should return false")
+	}
+}
+
+// TestSetVerdictExpectedClearsFlag and TestSetVerdictNoiseClearsFlag
+// cover #638's contract that expected/noise clear the flag, reusing the
+// same clearLocked path Clear itself uses (see the doc comment on
+// both).
+func TestSetVerdictExpectedClearsFlag(t *testing.T) {
+	s, _ := Open("")
+	now := time.Now()
+	s.Add(TypePortScan, "203.0.113.9", "d", now)
+	id := s.List()[0].ID
+
+	f, ok := s.SetVerdict(id, VerdictExpected, "alice", now)
+	if !ok {
+		t.Fatal("expected SetVerdict to find the flag")
+	}
+	if f.Verdict != VerdictExpected {
+		t.Errorf("Verdict = %q, want %q", f.Verdict, VerdictExpected)
+	}
+	if f.VerdictBy != "alice" {
+		t.Errorf("VerdictBy = %q, want alice", f.VerdictBy)
+	}
+	if f.VerdictAt.IsZero() {
+		t.Error("VerdictAt should be set")
+	}
+	if !f.Cleared {
+		t.Error("expected verdict should clear the flag")
+	}
+	if f.ClearedAt.IsZero() {
+		t.Error("expected verdict should set ClearedAt")
+	}
+}
+
+func TestSetVerdictNoiseClearsFlag(t *testing.T) {
+	s, _ := Open("")
+	now := time.Now()
+	s.Add(TypeActivitySpike, "203.0.113.10", "d", now)
+	id := s.List()[0].ID
+
+	f, ok := s.SetVerdict(id, VerdictNoise, "bob", now)
+	if !ok {
+		t.Fatal("expected SetVerdict to find the flag")
+	}
+	if f.Verdict != VerdictNoise {
+		t.Errorf("Verdict = %q, want %q", f.Verdict, VerdictNoise)
+	}
+	if !f.Cleared {
+		t.Error("noise verdict should clear the flag")
+	}
+}
+
+// TestSetVerdictRealLeavesFlagOpen is the invariant #638 exists to
+// establish: a real verdict records the judgement but must never clear
+// the flag.
+func TestSetVerdictRealLeavesFlagOpen(t *testing.T) {
+	s, _ := Open("")
+	now := time.Now()
+	s.Add(TypeCriticalPort, "203.0.113.11", "d", now)
+	id := s.List()[0].ID
+
+	f, ok := s.SetVerdict(id, VerdictReal, "carol", now)
+	if !ok {
+		t.Fatal("expected SetVerdict to find the flag")
+	}
+	if f.Verdict != VerdictReal {
+		t.Errorf("Verdict = %q, want %q", f.Verdict, VerdictReal)
+	}
+	if f.VerdictBy != "carol" {
+		t.Errorf("VerdictBy = %q, want carol", f.VerdictBy)
+	}
+	if f.Cleared {
+		t.Error("a real verdict must not clear the flag")
+	}
+	if !f.ClearedAt.IsZero() {
+		t.Error("a real verdict must not set ClearedAt")
+	}
+}
+
+// TestSetVerdictPersistsAndSurvivesReload is #638's "verify the store
+// round-trips it" requirement, the same shape as
+// TestAddProvisionalPersistsAndSurvivesReload for Flag.Provisional:
+// Verdict/VerdictBy/VerdictAt are additive JSON (omitempty/omitzero),
+// so this proves the round trip in practice, not just by inspection of
+// the struct tags.
+func TestSetVerdictPersistsAndSurvivesReload(t *testing.T) {
+	orig := persistMinInterval
+	persistMinInterval = 0
+	defer func() { persistMinInterval = orig }()
+
+	path := filepath.Join(t.TempDir(), "flags.json")
+	s1, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC().Truncate(time.Millisecond)
+	s1.Add(TypeGlobalSpike, "global", "d", now)
+	id := s1.List()[0].ID
+	if _, ok := s1.SetVerdict(id, VerdictReal, "dana", now); !ok {
+		t.Fatal("expected SetVerdict to find the flag")
+	}
+	flushForTest(t, s1)
+
+	s2, err := Open(path)
+	if err != nil {
+		t.Fatalf("re-opening the persisted store failed: %v", err)
+	}
+	list := s2.List()
+	if len(list) != 1 {
+		t.Fatalf("expected 1 persisted flag after reopening, got %d: %+v", len(list), list)
+	}
+	if list[0].Verdict != VerdictReal {
+		t.Errorf("Verdict = %q after reload, want %q", list[0].Verdict, VerdictReal)
+	}
+	if list[0].VerdictBy != "dana" {
+		t.Errorf("VerdictBy = %q after reload, want dana", list[0].VerdictBy)
+	}
+	if !list[0].VerdictAt.Equal(now) {
+		t.Errorf("VerdictAt = %v after reload, want %v", list[0].VerdictAt, now)
+	}
+}
+
+// TestSetVerdictOverwritesPreviousVerdict covers re-judging an
+// already-judged flag: the latest call wins, no history kept -- same
+// in-place-mutation convention as every other store field.
+func TestSetVerdictOverwritesPreviousVerdict(t *testing.T) {
+	s, _ := Open("")
+	now := time.Now()
+	s.Add(TypePortScan, "203.0.113.12", "d", now)
+	id := s.List()[0].ID
+
+	s.SetVerdict(id, VerdictReal, "alice", now)
+	f, ok := s.SetVerdict(id, VerdictNoise, "bob", now.Add(time.Minute))
+	if !ok {
+		t.Fatal("expected SetVerdict to find the flag")
+	}
+	if f.Verdict != VerdictNoise {
+		t.Errorf("Verdict = %q, want %q after re-judging", f.Verdict, VerdictNoise)
+	}
+	if f.VerdictBy != "bob" {
+		t.Errorf("VerdictBy = %q, want bob after re-judging", f.VerdictBy)
+	}
+	if !f.Cleared {
+		t.Error("the noise verdict from re-judging should still clear the flag")
+	}
+}
+
+// TestReviveResetsVerdict covers the store.go add() revival branch this
+// change touches: a flag cleared by an expected/noise verdict that then
+// re-fires as a new episode must not silently carry the old verdict
+// forward onto the new episode -- same reasoning already applied to
+// ReputationFloor/Reputation on revival.
+func TestReviveResetsVerdict(t *testing.T) {
+	s, _ := Open("")
+	now := time.Now()
+	s.Add(TypePortScan, "203.0.113.13", "d", now)
+	id := s.List()[0].ID
+	if _, ok := s.SetVerdict(id, VerdictNoise, "alice", now); !ok {
+		t.Fatal("expected SetVerdict to find the flag")
+	}
+
+	s.Add(TypePortScan, "203.0.113.13", "d again", now.Add(time.Hour))
+	f := s.List()[0]
+	if f.Verdict != "" {
+		t.Errorf("Verdict = %q after revival, want empty", f.Verdict)
+	}
+	if f.VerdictBy != "" {
+		t.Errorf("VerdictBy = %q after revival, want empty", f.VerdictBy)
+	}
+	if !f.VerdictAt.IsZero() {
+		t.Error("VerdictAt should be zero after revival")
+	}
+}
+
+// -- #638 follow-on: UndoVerdict --------------------------------------
+
+// TestUndoVerdictUnknownIDReturnsFalse mirrors SetVerdict's own unknown-
+// id case -- the handler maps this to 404.
+func TestUndoVerdictUnknownIDReturnsFalse(t *testing.T) {
+	s, _ := Open("")
+	if _, ok := s.UndoVerdict("nonexistent"); ok {
+		t.Error("UndoVerdict() on an unknown ID should return false")
+	}
+}
+
+// TestUndoVerdictReopensAFlagTheVerdictItselfCleared is the ordinary
+// case: judge an open flag expected/noise (which clears it via
+// clearLocked), then undo -- the flag must re-open, and clearedCount
+// must fall back to what it was before the verdict.
+func TestUndoVerdictReopensAFlagTheVerdictItselfCleared(t *testing.T) {
+	s, _ := Open("")
+	now := time.Now()
+	s.Add(TypePortScan, "203.0.113.20", "d", now)
+	id := s.List()[0].ID
+	before := s.clearedCount
+
+	f, ok := s.SetVerdict(id, VerdictNoise, "alice", now)
+	if !ok {
+		t.Fatal("expected SetVerdict to find the flag")
+	}
+	if !f.Cleared {
+		t.Fatal("setup: expected the noise verdict to clear the flag")
+	}
+	if got := s.clearedCount; got != before+1 {
+		t.Fatalf("clearedCount after judging = %d, want %d", got, before+1)
+	}
+
+	f, ok = s.UndoVerdict(id)
+	if !ok {
+		t.Fatal("expected UndoVerdict to find the flag")
+	}
+	if f.Cleared {
+		t.Error("undo should re-open a flag the verdict itself cleared")
+	}
+	if !f.ClearedAt.IsZero() {
+		t.Error("undo should reset ClearedAt")
+	}
+	if f.Verdict != "" || f.VerdictBy != "" || !f.VerdictAt.IsZero() {
+		t.Errorf("undo should reset every verdict field, got %+v", f)
+	}
+	if got := s.clearedCount; got != before {
+		t.Errorf("clearedCount after undo = %d, want %d (back to pre-verdict)", got, before)
+	}
+}
+
+// TestUndoVerdictLeavesAnAlreadyClearedFlagCleared is the subtlety
+// #638's follow-on exists to cover: judging an already-cleared flag
+// (expected/noise on a flag a plain Clear already closed) must not let
+// undo re-open it, because the verdict's own clearLocked call was a
+// no-op -- it wasn't what cleared the flag, so undoing the verdict has
+// no business touching Cleared.
+func TestUndoVerdictLeavesAnAlreadyClearedFlagCleared(t *testing.T) {
+	s, _ := Open("")
+	now := time.Now()
+	s.Add(TypePortScan, "203.0.113.21", "d", now)
+	id := s.List()[0].ID
+
+	if !s.Clear(id, now) {
+		t.Fatal("setup: expected the plain Clear to succeed")
+	}
+	before := s.clearedCount
+
+	f, ok := s.SetVerdict(id, VerdictExpected, "bob", now.Add(time.Minute))
+	if !ok {
+		t.Fatal("expected SetVerdict to find the flag")
+	}
+	if !f.Cleared {
+		t.Fatal("setup: the flag should still read cleared after judging it")
+	}
+	if got := s.clearedCount; got != before {
+		t.Fatalf("clearedCount after judging an already-cleared flag = %d, want unchanged %d", got, before)
+	}
+
+	f, ok = s.UndoVerdict(id)
+	if !ok {
+		t.Fatal("expected UndoVerdict to find the flag")
+	}
+	if !f.Cleared {
+		t.Error("undo must not re-open a flag that was already cleared before it was judged")
+	}
+	if f.Verdict != "" || f.VerdictBy != "" || !f.VerdictAt.IsZero() {
+		t.Errorf("undo should still reset every verdict field even when it doesn't re-open, got %+v", f)
+	}
+	if got := s.clearedCount; got != before {
+		t.Errorf("clearedCount after undo of an already-cleared flag = %d, want unchanged %d", got, before)
+	}
+}
+
+// TestUndoVerdictOnUnjudgedFlagIsANoOp documents the deliberate choice
+// for undoing a flag with no verdict recorded: succeed as a no-op
+// (same "no-op, not an error" reasoning as Clear on an unknown/already-
+// cleared id) rather than returning an error, since the caller may be a
+// stale undo affordance racing a page that already moved on and can't
+// always tell the two cases apart either.
+func TestUndoVerdictOnUnjudgedFlagIsANoOp(t *testing.T) {
+	s, _ := Open("")
+	now := time.Now()
+	s.Add(TypePortScan, "203.0.113.22", "d", now)
+	id := s.List()[0].ID
+	before := s.clearedCount
+
+	f, ok := s.UndoVerdict(id)
+	if !ok {
+		t.Fatal("expected UndoVerdict to find the flag")
+	}
+	if f.Cleared {
+		t.Error("undoing an unjudged, never-cleared flag must not clear it")
+	}
+	if f.Verdict != "" {
+		t.Errorf("Verdict = %q, want still empty", f.Verdict)
+	}
+	if got := s.clearedCount; got != before {
+		t.Errorf("clearedCount changed on a no-op undo: got %d, want unchanged %d", got, before)
+	}
+}
