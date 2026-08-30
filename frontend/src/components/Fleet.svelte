@@ -8,50 +8,22 @@
   // the richer, dedicated view the toolbar's small DeviceStatus dot-strip
   // was never meant to replace -- that one stays a glance-and-go
   // indicator (see its own doc comment); this one is where you'd actually
-  // come to check on a whole fleet.
+  // come to check on a whole fleet. The sort/status logic itself lives in
+  // lib/fleet.ts (#647): Entities.svelte's leading "routers" section
+  // reads the same module, now that the deck's Entities card is where
+  // this table leads rather than living on a card of its own.
   import { appState } from '../lib/state.svelte'
   import { authState } from '../lib/auth.svelte'
   import { flagsState } from '../lib/flags.svelte'
   import { formatRelative, formatHM } from '../lib/format'
-  import type { Device } from '../lib/types'
+  import { STATUS_LABEL, sortedDevices, recentCount as recentCountOf } from '../lib/fleet'
   import GhostRows from './GhostRows.svelte'
   import PageHeader from './PageHeader.svelte'
 
-  // How far back "recent activity" looks, client-side, from the live
-  // event buffer -- a rough per-device rate to complement the lifetime
-  // eventCount GET /api/devices already reports, without needing a new
-  // backend endpoint. 5 minutes mirrors globalSpikeCheckInterval's
-  // neighborhood of "recent enough to mean something, not so short it's
-  // noisy between polls."
-  const RECENT_WINDOW_MS = 5 * 60 * 1000
-
-  const STATUS_LABEL: Record<Device['status'], string> = {
-    live: 'Live',
-    stale: 'Stale',
-    never_seen: 'Never seen',
-  }
-
-  const rows = $derived(
-    [...appState.devices].sort((a, b) => {
-      // Configured devices first (an auto-discovered source is secondary
-      // information, not something you set out to monitor), then by
-      // status severity (stale/never-seen surfaced above live -- the
-      // whole point of a fleet view is spotting the ones that need a
-      // look), then alphabetically so the order is otherwise stable.
-      if (a.configured !== b.configured) return a.configured ? -1 : 1
-      const severity: Record<Device['status'], number> = { stale: 0, never_seen: 1, live: 2 }
-      if (severity[a.status] !== severity[b.status]) return severity[a.status] - severity[b.status]
-      return a.name.localeCompare(b.name)
-    }),
-  )
+  const rows = $derived(sortedDevices(appState.devices))
 
   function recentCount(deviceId: string): number {
-    const cutoff = appState.now - RECENT_WINDOW_MS
-    let n = 0
-    for (const e of appState.events) {
-      if (e.deviceId === deviceId && e.receivedAt >= cutoff) n++
-    }
-    return n
+    return recentCountOf(appState.events, deviceId, appState.now)
   }
 
   // True when this device has an active (unacknowledged) device_silence
