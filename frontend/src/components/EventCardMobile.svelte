@@ -19,14 +19,24 @@
   import type { FirewallEvent } from '../lib/types'
   import { formatTime, countryFlag, rawTooltip } from '../lib/format'
 
-  let { event, deviceName, onOpen }: { event: FirewallEvent; deviceName: string; onOpen: () => void } =
-    $props()
+  // dimmed: see EventRow.svelte's own doc comment (#644's whisper fence).
+  let {
+    event,
+    deviceName,
+    dimmed = false,
+    onOpen,
+  }: { event: FirewallEvent; deviceName: string; dimmed?: boolean; onOpen: () => void } = $props()
 
   const srcFlag = $derived(countryFlag(event.srcCountry))
   const ifaces = $derived([event.inInterface, event.outInterface].filter(Boolean).join(' → ') || '—')
 </script>
 
-<button class="card row-{event.action}" onclick={onOpen} title={rawTooltip(event.raw, event.rawTruncated)}>
+<button
+  class="card row-{event.action}"
+  class:dimmed
+  onclick={onOpen}
+  title={rawTooltip(event.raw, event.rawTruncated)}
+>
   <div class="line1">
     <span class="time">{formatTime(event.time)}</span>
     <ActionBadge action={event.action} />
@@ -90,6 +100,11 @@
   }
   .row-unknown {
     background: var(--row-unknown-bg);
+  }
+
+  /* #644's whisper fence -- see EventRow.svelte's matching rule. */
+  .dimmed {
+    opacity: 0.25;
   }
 
   .line1 {
