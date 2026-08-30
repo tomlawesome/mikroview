@@ -23,6 +23,13 @@
   import AuthSetup from './components/AuthSetup.svelte'
   import AuthLogin from './components/AuthLogin.svelte'
   import SSOLinkOverlay from './components/SSOLinkOverlay.svelte'
+  // The journey (#646): choreography over the shell below, not a page of
+  // its own. journeyState.begin() (AuthSetup.svelte) is the only trigger;
+  // outside it these three never render.
+  import { journeyState } from './lib/journey.svelte'
+  import JourneyAttach from './components/JourneyAttach.svelte'
+  import JourneyGlass from './components/JourneyGlass.svelte'
+  import JourneyTour from './components/JourneyTour.svelte'
   // Mounted here, not in the rail that triggers it: the rail is chrome
   // for authenticated pages, and this overlay outlives any one of them.
   import ChangePasswordOverlay from './components/ChangePasswordOverlay.svelte'
@@ -226,8 +233,10 @@
     <div class="content">
       <ConnectionBanner />
       <ConfigProblemBanner />
-      <main id="main-content" class:bare={inDeck}>
-        {#if inDeck}
+      <main id="main-content" class:bare={inDeck && journeyState.phase !== 'attach'}>
+        {#if journeyState.phase === 'attach'}
+          <JourneyAttach />
+        {:else if inDeck}
           <Deck />
         {:else}
           <SceneBar />
@@ -243,6 +252,16 @@
   <SSOLinkOverlay />
   <ChangePasswordOverlay />
   <SetupWizard />
+  <!-- Beats 4/5 (connecting, then the glass) float over the live fall;
+       beat 6 (the tour) rings the deck's own cards -- both stay mounted
+       alongside the shell above rather than replacing it, since the
+       whole point is that it plays out over the real, filling app. -->
+  {#if journeyState.phase === 'connecting' || journeyState.phase === 'glass'}
+    <JourneyGlass />
+  {/if}
+  {#if journeyState.phase === 'touring'}
+    <JourneyTour />
+  {/if}
   <Toast />
 {/if}
 
