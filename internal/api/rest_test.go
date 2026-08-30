@@ -441,6 +441,25 @@ func asAdmin(h http.Handler) http.Handler {
 	})
 }
 
+// asUser and asViewer are asAdmin's #653 counterparts, injecting a
+// stand-in identity at the user and viewer tiers respectively -- for
+// tests of a handler's own behavior (not the gate, which is
+// authzMatrix's job) that need a caller below admin to reach it, or to
+// pin that a caller below a handler's floor is refused.
+func asUser(h http.Handler) http.Handler {
+	user := &auth.User{ID: "test-user", Username: "user", Role: auth.RoleUser}
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		h.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), userContextKey, user)))
+	})
+}
+
+func asViewer(h http.Handler) http.Handler {
+	viewer := &auth.User{ID: "test-viewer", Username: "viewer", Role: auth.RoleViewer}
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		h.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), userContextKey, viewer)))
+	})
+}
+
 // newTestDefinitionsStore is an in-memory definitions store seeded with
 // the whole shipped catalogue at its defaults -- what a real boot
 // produces (see engine.SeedShippedDefinitions), and the replacement for

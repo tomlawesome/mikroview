@@ -37,6 +37,10 @@
   type StationId = 'door' | 'store' | 'watchers' | 'flags' | 'heralds'
 
   const isAdmin = $derived(authState.state === 'authenticated' && authState.role === 'admin')
+  // The watchers station's own tier (#653): running the detector bench
+  // is a normal operational action, open to user and admin alike --
+  // unlike the doors (tokens, users), which stay admin-only below.
+  const canEdit = $derived(authState.state === 'authenticated' && authState.canEdit)
 
   let status = $state<SetupStatus | null>(null)
   let expandedStation = $state<StationId | null>(null)
@@ -113,7 +117,10 @@
 </script>
 
 <div class="page scrollbar">
-  <PageHeader title="Settings" readOnly={!isAdmin} />
+  <!-- #653: the chip follows canEdit, not isAdmin. A user edits the
+       watchers station on this page, so telling them it is read-only was
+       wrong; the owner-level doors below stay gated on isAdmin. -->
+  <PageHeader title="Settings" readOnly={!canEdit} />
 
   {#if appState.stats}
     <p class="arrives">
@@ -192,7 +199,7 @@
         </button>
         {#if stationState('watchers') === 'open'}
           <div class="sbody" id="station-watchers-body">
-            <EngineRoomWatchers {isAdmin} />
+            <EngineRoomWatchers {canEdit} />
           </div>
         {:else if stationState('watchers') === 'rest'}
           <div class="sbody" id="station-watchers-body">

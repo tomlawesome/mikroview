@@ -143,7 +143,7 @@ const VIEWER_USER = 'live-viewer-rail'
 const VIEWER_PASS = 'live-viewer-rail-password'
 const createRes = await page.request.post(`${URL_BASE}/api/auth/users`, {
   headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'mikroview' },
-  data: { username: VIEWER_USER, password: VIEWER_PASS, role: 'user' },
+  data: { username: VIEWER_USER, password: VIEWER_PASS, role: 'viewer' },
 })
 check(createRes.status() === 201, `a viewer account is created (${createRes.status()})`)
 
