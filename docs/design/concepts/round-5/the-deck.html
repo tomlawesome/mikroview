@@ -56,16 +56,17 @@
   }
 
   /* ---- the scene bar: every scene's own chrome, no rail, no toolbar ---- */
-  .scenebar {
-    display: flex; align-items: center; gap: 18px; padding: 10px 20px;
-    border-bottom: 1px solid var(--hair); background: var(--glass); backdrop-filter: blur(6px);
-  }
-  .wordmark { font-weight: 800; font-size: 15px; letter-spacing: 0.04em; color: var(--ink); cursor: pointer; }
+  /* Free-floating chrome (owner, 2026-08-30: "I still don't like the
+     rigid top bar"): the same information, loose on the void — no
+     strip, no border, no glass. Each element floats where it reads. */
+  .scenebar { position: absolute; top: 0; left: 0; right: 0; z-index: 10; pointer-events: none; }
+  .scenebar > * { pointer-events: auto; }
+  .wordmark { position: absolute; top: 18px; left: 24px; font-weight: 800; font-size: 15px; letter-spacing: 0.04em; color: var(--ink); cursor: pointer; }
   .wordmark em { font-style: normal; color: var(--accent); }
   .wordmark .hintkey { font-size: 9px; color: var(--ink-3); font-weight: 400; margin-left: 6px; letter-spacing: 0.08em; }
-  .scname { font-size: 13px; font-weight: 650; color: var(--ink); }
+  .scname { position: absolute; top: 44px; left: 24px; font-size: 13px; font-weight: 650; color: var(--ink); white-space: nowrap; }
   .scname .epi { font-weight: 400; color: var(--ink-3); margin-left: 8px; font-size: 11.5px; }
-  .scstatus { margin-left: auto; display: flex; gap: 14px; align-items: center; font-size: 11px; color: var(--ink-2); }
+  .scstatus { position: absolute; top: 20px; right: 24px; display: flex; gap: 16px; align-items: center; font-size: 11px; color: var(--ink-2); }
   .scstatus .dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--ok); margin-right: 5px; vertical-align: 1px; }
   .scstatus .flagchip { color: var(--void); background: var(--alarm); border-radius: 9px; padding: 0 7px; font-weight: 700; font-size: 10.5px; }
   .scstatus .who { color: var(--ink-3); }
@@ -74,22 +75,22 @@
   .door { display: flex; flex-direction: column; min-height: 100vh; position: relative; }
   .door .beat { flex: 1; display: grid; place-items: center; position: relative; }
   .door .stack { text-align: center; width: 300px; }
-  .door .wm { font-size: 34px; font-weight: 800; letter-spacing: 0.04em; }
+  .door .wm {
+    display: inline-block; font-size: 34px; font-weight: 800; letter-spacing: 0.04em;
+    padding: 12px 30px; border: 1.5px solid var(--now); border-radius: 4px;
+    box-shadow: 0 0 14px rgba(232, 176, 90, 0.22), inset 0 0 10px rgba(232, 176, 90, 0.06);
+    animation: kindle 0.5s ease-out;
+  }
   .door .wm em { font-style: normal; color: var(--accent); }
-  .brink {
-    height: 2px; width: 0; margin: 16px auto 0; background: var(--now);
-    box-shadow: 0 0 10px rgba(232, 176, 90, 0.4);
-    animation: draw 0.45s ease-out forwards;
+  @keyframes kindle { from { box-shadow: none; border-color: rgba(232, 176, 90, 0); } }
+  .fullfall { position: absolute; inset: 0; overflow: hidden; pointer-events: none; }
+  .fullfall i {
+    position: absolute; top: -20px; width: 2.5px; height: 13px; border-radius: 2px;
+    background: var(--fall-accept); animation: fall 5.5s linear infinite;
   }
-  @keyframes draw { to { width: 300px; } }
-  .minifall { height: 110px; position: relative; overflow: hidden; }
-  .minifall i {
-    position: absolute; top: -14px; width: 2.5px; height: 12px; border-radius: 2px;
-    background: var(--fall-accept); animation: fall 1.7s linear infinite;
-  }
-  .minifall i.r { background: var(--fall-drop); }
-  .minifall i.v { background: #a78bfa; }
-  @keyframes fall { to { transform: translateY(130px); opacity: 0.05; } }
+  .fullfall i.r { background: var(--fall-drop); }
+  .fullfall i.v { background: #a78bfa; }
+  @keyframes fall { to { transform: translateY(106vh); } }
   .cred input {
     display: block; width: 240px; margin: 10px auto 0; padding: 7px 4px;
     background: transparent; border: 0; border-bottom: 1px solid var(--hair-2);
@@ -112,11 +113,11 @@
   .outboard .pill { display: inline-block; margin-left: 8px; padding: 1px 12px; border: 1px solid var(--hair-2); border-radius: 999px; color: var(--accent); font-size: 10.5px; }
 
   /* ---- scene 2: the map (Atlas II refined, carried forward) ---- */
-  .lenses { display: flex; gap: 6px; padding: 10px 20px 0; position: relative; z-index: 4; }
+  .lenses { display: flex; gap: 6px; padding: 88px 24px 0; position: relative; z-index: 4; }
   .lens { font-size: 11px; color: var(--ink-3); border: 1px solid var(--hair); border-radius: 14px; padding: 3px 12px; }
   .lens.on { color: var(--ink); border-color: var(--hair-2); background: var(--raised); }
   .lens .ct { color: var(--void); background: var(--alarm); border-radius: 8px; padding: 0 6px; margin-left: 6px; font-weight: 700; font-size: 10px; }
-  .stage { position: absolute; inset: 96px 0 150px; }
+  .stage { position: absolute; inset: 132px 0 90px; }
   .stage svg { width: 100%; height: 100%; }
   .isl { fill: rgba(15, 20, 34, 0.72); stroke: var(--hair-2); }
   .n-name { font: 650 15px var(--sans); fill: var(--ink); }
@@ -156,7 +157,7 @@
   .b-nat { color: var(--nat); background: rgba(45, 212, 191, 0.12); }
 
   /* ---- scene 2 (Q): the fall — the accepted live build, restated ---- */
-  .fallwrap { position: absolute; inset: 56px 0 0; display: flex; flex-direction: column; }
+  .fallwrap { position: absolute; inset: 78px 0 0; display: flex; flex-direction: column; }
   .fall-head { display: flex; gap: 10px; align-items: center; padding: 10px 20px 4px; }
   .fall-chip { font: 600 10.5px var(--mono); letter-spacing: 0.05em; border-radius: 12px; padding: 3px 12px; border: 1px solid; }
   .fc-alarm { color: var(--alarm); border-color: rgba(255, 84, 112, 0.5); }
@@ -213,7 +214,6 @@
   .deckrail .dot { width: 8px; height: 8px; border-radius: 50%; border: 1.5px solid var(--hair-2); }
   .deckrail a.on { color: var(--accent); }
   .deckrail a.on .dot { background: var(--accent); border-color: var(--accent); }
-  .deckhint { position: fixed; right: 14px; bottom: 14px; z-index: 60; font-size: 9.5px; color: var(--ink-3); letter-spacing: 0.06em; }
   /* ---- the atlas's deck-order editor ---- */
   .deckorder { display: flex; gap: 10px; justify-content: center; align-items: center; padding: 12px 0 0; font-size: 12px; color: var(--ink-2); }
   .deckorder .lab { font-size: 9.5px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--ink-3); margin-right: 8px; }
@@ -255,7 +255,7 @@
   .atlas .account b { color: var(--ink-2); font-weight: 600; }
 
   /* ---- scene 4: the stream, columns squared ---- */
-  .controls { display: flex; gap: 10px; align-items: center; }
+  .controls { position: absolute; top: 50px; right: 24px; display: flex; gap: 10px; align-items: center; }
   .controls .search {
     width: 320px; padding: 5px 12px; font: 12px var(--mono); color: var(--ink-2);
     background: rgba(6, 8, 14, 0.7); border: 1px solid var(--hair); border-radius: 7px;
@@ -264,7 +264,7 @@
   .spans { display: flex; gap: 2px; font: 10.5px var(--mono); color: var(--ink-3); }
   .spans span { padding: 3px 9px; border-radius: 6px; }
   .spans .on { color: var(--ink); background: var(--raised); border: 1px solid var(--hair); }
-  table.stream { width: calc(100% - 40px); margin: 14px 20px; border-collapse: collapse; font: 12px var(--mono); }
+  table.stream { width: calc(100% - 40px); margin: 100px 20px 14px; border-collapse: collapse; font: 12px var(--mono); }
   table.stream th {
     text-align: left; font: 600 9.5px var(--mono); letter-spacing: 0.12em; text-transform: uppercase;
     color: var(--ink-3); padding: 6px 10px; border-bottom: 1px solid var(--hair-2);
@@ -297,20 +297,29 @@
 
 <!-- ============ SCENE 1 : THE DOOR — ONE BEAT, THEN IN ============ -->
 <section class="scene door" id="s1" aria-label="Login: one beat — the brink lights, the fall begins, you enter">
-  <div class="scene-tag">Scene 1 — the door, redone to Orbit's speed standard: instant paint, one sub-second beat, no card, no chrome. The brink draws, the fall begins, you enter. Signing in lands on the first card of your deck. The strip below storyboards the way out.</div>
+  <div class="scene-tag">Scene 1 — the door, redone to Orbit's speed standard: instant paint, one sub-second beat, no card, no chrome. The fall rains over the whole void; the brink frames the wordmark; you enter. Signing in lands on the first card of your deck. The strip below storyboards the way out.</div>
   <div class="beat">
+    <div class="fullfall" aria-hidden="true">
+      <i style="left: 4%; animation-delay: 0.2s; opacity: 0.5"></i>
+      <i style="left: 9%; animation-delay: 3.1s; opacity: 0.3"></i>
+      <i class="r" style="left: 15%; animation-delay: 1.6s; opacity: 0.55"></i>
+      <i style="left: 21%; animation-delay: 4.4s; opacity: 0.4"></i>
+      <i style="left: 26%; animation-delay: 2.2s; opacity: 0.65"></i>
+      <i class="v" style="left: 33%; animation-delay: 5.0s; opacity: 0.45"></i>
+      <i style="left: 38%; animation-delay: 0.9s; opacity: 0.3"></i>
+      <i class="r" style="left: 45%; animation-delay: 3.7s; opacity: 0.4"></i>
+      <i style="left: 51%; animation-delay: 1.2s; opacity: 0.6"></i>
+      <i style="left: 57%; animation-delay: 4.8s; opacity: 0.35"></i>
+      <i style="left: 63%; animation-delay: 2.7s; opacity: 0.5"></i>
+      <i class="v" style="left: 69%; animation-delay: 0.5s; opacity: 0.4"></i>
+      <i class="r" style="left: 75%; animation-delay: 3.4s; opacity: 0.6"></i>
+      <i style="left: 81%; animation-delay: 1.9s; opacity: 0.35"></i>
+      <i style="left: 86%; animation-delay: 5.3s; opacity: 0.55"></i>
+      <i class="r" style="left: 91%; animation-delay: 2.4s; opacity: 0.35"></i>
+      <i style="left: 96%; animation-delay: 4.1s; opacity: 0.5"></i>
+    </div>
     <div class="stack">
       <div class="wm">MIKRO<em>VIEW</em></div>
-      <div class="brink" aria-hidden="true"></div>
-      <div class="minifall" aria-hidden="true">
-        <i style="left: 14%; animation-delay: 0.5s"></i>
-        <i style="left: 27%; animation-delay: 1.1s; opacity: 0.7"></i>
-        <i class="r" style="left: 41%; animation-delay: 0.7s"></i>
-        <i style="left: 55%; animation-delay: 1.4s"></i>
-        <i style="left: 66%; animation-delay: 0.9s; opacity: 0.6"></i>
-        <i class="v" style="left: 78%; animation-delay: 1.6s; opacity: 0.8"></i>
-        <i class="r" style="left: 89%; animation-delay: 1.2s; opacity: 0.7"></i>
-      </div>
       <form class="cred" aria-label="Sign in">
         <input type="text" placeholder="account" aria-label="Account">
         <input type="password" placeholder="passphrase" aria-label="Passphrase">
@@ -791,7 +800,6 @@
   <a href="#s4"><span class="dot"></span>Stream</a>
   <a href="#s5"><span class="dot"></span>The atlas</a>
 </nav>
-<div class="deckhint">wheel / swipe between cards · drag dots to reorder · m opens the atlas</div>
 <script>
   // Round apparatus + the deck's one live behaviour: mark the card in view.
   const links = [...document.querySelectorAll('.deckrail a')]
