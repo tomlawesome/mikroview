@@ -26,7 +26,7 @@
   import { deckCards } from '../lib/deckCards'
   import { deckOrderState } from '../lib/deckOrder.svelte'
   import { versionState } from '../lib/version.svelte'
-  import { FLAG_FAMILIES } from '../lib/flagPalette'
+  import { familyOf } from '../lib/flagPalette'
   import { fetchSetupStatus } from '../lib/api'
   import { formatEps, formatHM } from '../lib/format'
   import { portOf } from '../lib/setupsteps'
@@ -111,7 +111,7 @@
     }
     return [...counts.entries()].sort((a, b) => b[1] - a[1])
   })
-  const quietTypes = $derived(Object.keys(CHIP_LABELS).length - fired.length)
+  const quietTypes = $derived(Math.max(0, Object.keys(CHIP_LABELS).length - fired.length))
 
   const watchersRunning = $derived(detectorSettingsState.list.filter((d) => d.enabled).length)
   const watchersTotal = $derived(detectorSettingsState.list.length)
@@ -316,8 +316,8 @@
         <h3>detection</h3>
         <div class="stflags">
           {#each fired as [type, n] (type)}
-            <span class="stf" style="color: {FLAG_FAMILIES[type].ink}">
-              {FLAG_FAMILIES[type].mark} {CHIP_LABELS[type]} · {n}
+            <span class="stf" style="color: {familyOf(type).ink}">
+              {familyOf(type).mark} {CHIP_LABELS[type] ?? type} · {n}
             </span>
           {/each}
           {#if quietTypes > 0}
