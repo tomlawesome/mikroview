@@ -20,6 +20,7 @@
   import FilterBar from './FilterBar.svelte'
   import LiveTable from './LiveTable.svelte'
   import Docket from './Docket.svelte'
+  import Topography from './Topography.svelte'
 
   // The card table lives in lib/deckCards.ts, shared with the Settings
   // shelf; the order is the operator's own (#633 rounds 23-25, drag to
@@ -103,7 +104,9 @@
         {:else}
           <SceneBar scene={card.views.includes(appState.view) ? appState.view : card.views[0]} />
           <div class="card-body">
-            {#if card.key === 'metrics'}
+            {#if card.key === 'topography'}
+              <Topography />
+            {:else if card.key === 'metrics'}
               <Metrics />
             {:else if card.key === 'live'}
               <FilterBar />
