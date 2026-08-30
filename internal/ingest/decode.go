@@ -111,6 +111,7 @@ type Payload struct {
 	ARP                 []ARPEntry
 	WireguardInterfaces []WireguardInterface
 	WireguardPeers      []WireguardPeer
+	IPAddresses         []IPAddressEntry
 }
 
 // RecordCount returns how many records are in whichever slice matches
@@ -135,6 +136,8 @@ func (p Payload) RecordCount() int {
 		return len(p.WireguardInterfaces)
 	case KindWireguardPeer:
 		return len(p.WireguardPeers)
+	case KindIPAddress:
+		return len(p.IPAddresses)
 	default:
 		return 0
 	}
@@ -195,6 +198,8 @@ func DecodePayload(r io.Reader) (Payload, error) {
 		out.WireguardInterfaces, err = decodeRecords[WireguardInterface](wire.Records)
 	case KindWireguardPeer:
 		out.WireguardPeers, err = decodeRecords[WireguardPeer](wire.Records)
+	case KindIPAddress:
+		out.IPAddresses, err = decodeRecords[IPAddressEntry](wire.Records)
 	default:
 		return Payload{}, ErrUnknownKind
 	}
@@ -408,4 +413,17 @@ func (p WireguardPeer) validate() error {
 		return err
 	}
 	return validateFieldText("comment", p.Comment)
+}
+
+func (a IPAddressEntry) validate() error {
+	if err := validateFieldText("address", a.Address); err != nil {
+		return err
+	}
+	if err := validateFieldText("network", a.Network); err != nil {
+		return err
+	}
+	if err := validateFieldText("interface", a.Interface); err != nil {
+		return err
+	}
+	return validateFieldText("comment", a.Comment)
 }

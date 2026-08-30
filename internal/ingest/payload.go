@@ -37,6 +37,7 @@ const (
 	KindARP                Kind = "arp"
 	KindWireguardInterface Kind = "wireguard-interface"
 	KindWireguardPeer      Kind = "wireguard-peer"
+	KindIPAddress          Kind = "ip-address"
 )
 
 // AddressListEntry mirrors /ip/firewall/address-list. Dynamic separates
@@ -235,6 +236,20 @@ type WireguardPeer struct {
 	AllowedAddress  RouterOSList `json:"allowedAddress"`
 	EndpointAddress string       `json:"endpointAddress"`
 	Comment         string       `json:"comment"`
+}
+
+// IPAddressEntry mirrors one /ip/address entry -- issue #627: an
+// interface's own configured address, distinct from ARPEntry (what the
+// router has observed answering) and DHCPLease (what it handed out).
+// Address is the CIDR RouterOS shows (e.g. "192.168.1.1/24"); Network is
+// the address's own network property, not derived from it here, since
+// this package only decodes what a router says rather than recomputing
+// it.
+type IPAddressEntry struct {
+	Address   string `json:"address"`
+	Network   string `json:"network"`
+	Interface string `json:"interface"`
+	Comment   string `json:"comment"`
 }
 
 // RouterOSInt decodes an integer that RouterOS's :serialize to=json may

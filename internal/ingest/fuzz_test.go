@@ -52,6 +52,7 @@ func FuzzDecodePayload(f *testing.F) {
 	f.Add(`{"kind":"wireguard-peer","page":1,"pages":1,"records":[{"publicKey":"abc123","allowedAddress":["192.0.2.0/24","198.51.100.0/24"],"endpointAddress":null,"comment":"branch office"}]}`)
 	f.Add(`{"kind":"wireguard-peer","page":1,"pages":1,"records":[{"publicKey":"abc123","allowedAddress":[],"endpointAddress":"","comment":""}]}`)
 	f.Add(`{"kind":"wireguard-peer","page":1,"pages":1,"records":[{"publicKey":"abc123","allowedAddress":[1,2],"endpointAddress":"","comment":""}]}`) // a list of the wrong element type
+	f.Add(`{"kind":"ip-address","page":1,"pages":1,"records":[{"address":"192.168.1.1/24","network":"192.168.1.0","interface":"ether1","comment":"lan"}]}`)
 
 	// Shapes chosen to probe this package's own specific bounds and
 	// footguns, not generic JSON malformation (the stdlib decoder is
@@ -79,7 +80,7 @@ func FuzzDecodePayload(f *testing.F) {
 		if err != nil {
 			if p.Kind != "" || p.AddressList != nil || p.FilterRules != nil || p.NATRules != nil ||
 				p.DNSStatic != nil || p.DHCPLeases != nil || p.ARP != nil ||
-				p.WireguardInterfaces != nil || p.WireguardPeers != nil {
+				p.WireguardInterfaces != nil || p.WireguardPeers != nil || p.IPAddresses != nil {
 				t.Errorf("DecodePayload(%q) returned an error alongside a non-zero Payload %+v -- must return the zero value on any error", body, p)
 			}
 		}
