@@ -10,17 +10,11 @@
   import { buildQuery, ApiError } from './lib/api'
   import { filtersFromSearchParams } from './lib/types'
   import SceneBar from './components/SceneBar.svelte'
-  import AtlasNav from './components/AtlasNav.svelte'
+  import Deck from './components/Deck.svelte'
   import BottomBar from './components/BottomBar.svelte'
   import { viewportState } from './lib/viewport.svelte'
   import ConnectionBanner from './components/ConnectionBanner.svelte'
   import ConfigProblemBanner from './components/ConfigProblemBanner.svelte'
-  import FilterBar from './components/FilterBar.svelte'
-  import LiveTable from './components/LiveTable.svelte'
-  import Fall from './components/Fall.svelte'
-  import Metrics from './components/Metrics.svelte'
-  import Watchlist from './components/Watchlist.svelte'
-  import Flags from './components/Flags.svelte'
   import EngineRoom from './components/EngineRoom.svelte'
   import Entities from './components/Entities.svelte'
   import Fleet from './components/Fleet.svelte'
@@ -42,6 +36,11 @@
   // #439's "copied" confirmation -- see lib/toast.svelte.ts for why this
   // is new rather than reusing something that already existed.
   import Toast from './components/Toast.svelte'
+
+  // The deck's scenes (#633). Everything else is an operate page,
+  // reached from the account menu and rendered as a page of its own.
+  const DECK_VIEWS = new Set(['fall', 'metrics', 'live', 'flags', 'watchlist'])
+  const inDeck = $derived(DECK_VIEWS.has(appState.view))
 
   // Any polling call that fails with a 401 (an expired or reset-
   // invalidated session -- see internal/api's sessionUser) bounces to
@@ -202,47 +201,39 @@
        restores a rail state) mounts at all. -->
   <!-- Pages are the site (owner, 2026-08-29): no persistent chrome.
        The toolbar and the desktop nav rail are retired wholesale; each
-       scene carries its own bar, and the wordmark on it opens the atlas
-       overlay -- the app's one navigator. The phone-width BottomBar
-       stays until the atlas learns a small-screen shape. -->
+       scene carries its own bar. Navigation is the deck (#633): the
+       scenes are full-viewport snap cards with the roll rail as the
+       jump control, and the operate pages live on the scene bar's
+       account menu. The phone-width BottomBar stays until the deck
+       learns a small-screen shape. -->
   {#if viewportState.isMobile}
     <BottomBar />
   {/if}
   <div class="shell" class:with-bottom-bar={viewportState.isMobile}>
     <!-- The banner tops the content column and pushes content rather than
          overlaying it, per the ratified record; that is why the banners
-         live inside this column and not above the rail. -->
+         live inside this column and not above the deck. -->
     <div class="content">
       <ConnectionBanner />
       <ConfigProblemBanner />
-      <main id="main-content" class:bare={appState.view === 'fall'}>
-        {#if appState.view !== 'fall'}
-          <SceneBar />
-        {/if}
-        {#if appState.view === 'fall'}
-      <Fall />
-    {:else if appState.view === 'live'}
-      <FilterBar />
-      <LiveTable />
-    {:else if appState.view === 'watchlist'}
-      <Watchlist />
-    {:else if appState.view === 'flags'}
-      <Flags />
-    {:else if appState.view === 'entities'}
-      <Entities />
-    {:else if appState.view === 'fleet'}
-      <Fleet />
-    {:else if appState.view === 'audit'}
-      <AuditLog />
-    {:else if appState.view === 'engineroom'}
-      <EngineRoom />
+      <main id="main-content" class:bare={inDeck}>
+        {#if inDeck}
+          <Deck />
         {:else}
-          <Metrics />
+          <SceneBar />
+          {#if appState.view === 'entities'}
+            <Entities />
+          {:else if appState.view === 'fleet'}
+            <Fleet />
+          {:else if appState.view === 'audit'}
+            <AuditLog />
+          {:else}
+            <EngineRoom />
+          {/if}
         {/if}
       </main>
     </div>
   </div>
-  <AtlasNav />
   <IpLookupPopover />
   <PortLookupPopover />
   <RouterLookupPopover />
