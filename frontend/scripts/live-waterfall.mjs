@@ -208,8 +208,8 @@ check(
   `a carrier renders for the steady talker on port 443, labelled ":443 HTTPS" at the observed band's foot (got ${JSON.stringify(labelInObservedBand)})`,
 )
 check(
-  (await observedBand.locator('.spectrum .peak[data-port="443"]').count()) > 0,
-  'the live spectrum strip renders a peak for the port-443 carrier -- "what is arriving this instant"',
+  (await observedBand.locator('.spectrum .spec[data-port="443"]').count()) > 0,
+  'the live spectrum strip renders a wave for the port-443 carrier -- "what is arriving this instant"',
 )
 check(
   ((await page.locator('.fall .now-caption').textContent()) ?? '').includes('NOW ·'),
