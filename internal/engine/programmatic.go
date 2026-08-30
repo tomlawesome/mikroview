@@ -440,6 +440,31 @@ func (s *baselineSet) snapshot(key string, now time.Time) (Snapshot, bool) {
 	return kb.b.Snapshot(now), true
 }
 
+// learning reports this set's per-key progress toward its floor, as of
+// now -- iterate keyed.Snapshot, then Baseline.Snapshot(now) per key,
+// both already documented safe to call from any goroutine (see
+// Keyed.Snapshot, Baseline.Snapshot). The one aggregate method backing
+// every baseline-backed definition's LearningReporter (issue #639), so
+// that reduction logic lives once rather than five times -- see
+// learningStateFrom.
+func (s *baselineSet) learning(now time.Time) map[string]baselineLearning {
+	kbs := s.keyed.Snapshot(func(kb *keyedBaseline) *keyedBaseline {
+		// Only the *Baseline pointer is read here, never lastPersisted --
+		// see keyedBaseline's own field, and maybePersist's unlocked
+		// write to it from the evaluation goroutine. Cloning just the
+		// pointer (itself set once, before the key is ever visible in
+		// the map, and never reassigned) is what keeps this copy-on-read
+		// boundary honest without taking a lock this read path has no
+		// business needing.
+		return &keyedBaseline{b: kb.b}
+	})
+	out := make(map[string]baselineLearning, len(kbs))
+	for key, kb := range kbs {
+		out[key] = newBaselineLearning(now, kb.b.Snapshot(now))
+	}
+	return out
+}
+
 func (s *baselineSet) maybePersist(key string, kb *keyedBaseline, now time.Time) {
 	if s.state == nil {
 		return
