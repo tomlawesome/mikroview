@@ -90,6 +90,19 @@ describe('policyEdgesFromRules', () => {
     expect(e.comment).toBe('first')
   })
 
+  it('a pair logs if any answering rule logs, or a dedicated log rule names it', () => {
+    const edges = policyEdgesFromRules([
+      rule({ inInterface: 'a', outInterface: 'b' }),
+      rule({ ordinal: 1, inInterface: 'a', outInterface: 'b', action: 'drop', log: true }),
+      rule({ ordinal: 2, inInterface: 'c', outInterface: 'd' }),
+      rule({ ordinal: 3, inInterface: 'e', outInterface: 'f' }),
+      rule({ ordinal: 4, inInterface: 'e', outInterface: 'f', action: 'log' }),
+    ])
+    expect(edges.find((e) => e.key === 'a|b')!.logged).toBe(true)
+    expect(edges.find((e) => e.key === 'c|d')!.logged).toBe(false)
+    expect(edges.find((e) => e.key === 'e|f')!.logged).toBe(true)
+  })
+
   it('busiest pair sorts first', () => {
     const edges = policyEdgesFromRules([
       rule({ inInterface: 'a', outInterface: 'b' }),

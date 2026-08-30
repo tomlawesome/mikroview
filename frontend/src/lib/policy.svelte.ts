@@ -38,6 +38,10 @@ export interface PolicyEdge {
   /** First comment on the pair, table order -- the edge's epithet. */
   comment: string
   ruleCount: number
+  /** Whether anything on this pair logs (#630/#392's first source): an
+   * answering rule with log=yes, or a dedicated log-action rule. False
+   * means the boundary-direction is dark unless declared quiet. */
+  logged: boolean
 }
 
 // Actions that mean "may pass" / "may not". Everything else on the
@@ -74,14 +78,19 @@ function portTokens(spec: number | string | undefined): string[] {
 export function policyEdgesFromRules(rules: RouterFilterRule[]): PolicyEdge[] {
   const byPair = new Map<string, PolicyEdge>()
   const ordered = [...rules].sort((a, b) => a.ordinal - b.ordinal)
+  // Logging is tracked before the answering-action filter: a dedicated
+  // log-action rule makes its pair observed even though it draws no
+  // edge of its own (it answers nothing about passage).
+  const loggedPairs = new Set<string>()
   for (const r of ordered) {
     if (r.chain !== 'forward') continue
-    const accepted = ACCEPTS.has(r.action)
-    const refused = REFUSALS.has(r.action)
-    if (!accepted && !refused) continue
     const from = r.inInterface ?? ''
     const to = r.outInterface ?? ''
     const key = `${from}|${to}`
+    if (r.log || r.action === 'log') loggedPairs.add(key)
+    const accepted = ACCEPTS.has(r.action)
+    const refused = REFUSALS.has(r.action)
+    if (!accepted && !refused) continue
     let e = byPair.get(key)
     if (!e) {
       e = {
@@ -94,6 +103,7 @@ export function policyEdgesFromRules(rules: RouterFilterRule[]): PolicyEdge[] {
         refusePorts: [],
         comment: '',
         ruleCount: 0,
+        logged: false,
       }
       byPair.set(key, e)
     }
@@ -106,6 +116,7 @@ export function policyEdgesFromRules(rules: RouterFilterRule[]): PolicyEdge[] {
       if (!badges.includes(t)) badges.push(t)
     }
   }
+  for (const e of byPair.values()) e.logged = loggedPairs.has(e.key)
   return [...byPair.values()].sort((a, b) => b.ruleCount - a.ruleCount)
 }
 
