@@ -88,6 +88,88 @@ type definitionView struct {
 	// Dispatch is what this definition costs the ingest path, and is set
 	// only where an operator chose the conditions that decide it.
 	Dispatch *dispatchView `json:"dispatch,omitempty"`
+	// Learning is this definition's live baseline warm-up state (issue
+	// #639) -- set only for one of the five baseline-backed shipped
+	// definitions (activity_spike, global_spike, rule_spike, off_hours,
+	// low_slow_scan), and only when a live engine.Engine is wired
+	// (Server.Learning non-nil). Omitted entirely for a definition with
+	// no warm-up concept, following Coverage's own rule in this struct:
+	// silence rather than a value a caller could mistake for "definitely
+	// nothing to learn."
+	Learning *learningView `json:"learning,omitempty"`
+}
+
+// learningView is engine.LearningState on the wire -- durations as
+// integer seconds under names that say so, never a raw
+// time.Duration/nanosecond count and never a duration string, so a
+// frontend never has to know Go's own duration encoding to render this.
+//
+// Floor is always present when learningView itself is (including when
+// Keys is 0 -- the fresh-install case #639 exists for: the floor is
+// known statically, independent of anything having been observed yet).
+// Keys and Ready are always present alongside it. Nearest is omitted
+// when every observed key is ready, and also when no keys have been
+// observed at all -- see learningViewFor.
+type learningView struct {
+	Floor   baselineFloorView     `json:"floor"`
+	Keys    int                   `json:"keys"`
+	Ready   int                   `json:"ready"`
+	Nearest *learningProgressView `json:"nearest,omitempty"`
+}
+
+// baselineFloorView is engine.BaselineFloor on the wire. A dimension
+// this floor does not bind is omitted rather than sent as a
+// meaningless 0 an operator could misread as "zero required" -- the
+// same silence-over-guess rule learningView's own doc comment states.
+type baselineFloorView struct {
+	MinDurationSeconds int64 `json:"minDurationSeconds,omitempty"`
+	MinSamples         int   `json:"minSamples,omitempty"`
+}
+
+// learningProgressView is engine.LearningProgress on the wire: the
+// furthest-along not-yet-ready key's raw progress, in the floor's own
+// dimensions -- never a pre-baked percentage, so the frontend decides how
+// (or whether) to collapse "3 of 14 days" into a bar.
+type learningProgressView struct {
+	ObservedForSeconds int64 `json:"observedForSeconds"`
+	Samples            int   `json:"samples"`
+}
+
+// learningViewFor renders id's live learning state, or nil when there is
+// none to report -- no live engine wired (learn nil), an unknown id, or a
+// definition with no warm-up concept (engine.Engine.Learning's own ok
+// return, ultimately LearningReporter's).
+func learningViewFor(learn learningSource, id string, now time.Time) *learningView {
+	if learn == nil {
+		return nil
+	}
+	state, ok := learn.Learning(id, now)
+	if !ok {
+		return nil
+	}
+	v := &learningView{
+		Floor: baselineFloorView{
+			MinDurationSeconds: int64(state.Floor.MinDuration / time.Second),
+			MinSamples:         state.Floor.MinSamples,
+		},
+		Keys:  state.Keys,
+		Ready: state.Ready,
+	}
+	if state.Nearest != nil {
+		v.Nearest = &learningProgressView{
+			ObservedForSeconds: int64(state.Nearest.ObservedFor / time.Second),
+			Samples:            state.Nearest.Samples,
+		}
+	}
+	return v
+}
+
+// learningSource is Server.Learning's own shape, restated here so
+// learningViewFor takes the narrow interface rather than *Server --
+// keeping this file's one dependency on the live engine explicit and
+// swappable in a test.
+type learningSource interface {
+	Learning(id string, now time.Time) (engine.LearningState, bool)
 }
 
 // dispatchView tells an operator whether the detector they authored can
@@ -121,7 +203,10 @@ type replayabilityView struct {
 // definitionViewFor renders one stored definition. rulesByDevice is the
 // pushed filter tables coverage is answered from, read once per request
 // by the caller rather than per definition -- see definitionsCoverage.
-func definitionViewFor(sd engine.StoredDefinition, rulesByDevice map[string][]ingest.FilterRule, evidenceComplete bool) definitionView {
+// now is likewise read once per request by the caller (handler) rather
+// than once per definition, so every definition in one response answers
+// "learning" as of the same instant.
+func (s *Server) definitionViewFor(sd engine.StoredDefinition, rulesByDevice map[string][]ingest.FilterRule, evidenceComplete bool, now time.Time) definitionView {
 	d := sd.Definition
 	v := definitionView{
 		ID:           d.ID,
@@ -149,6 +234,7 @@ func definitionViewFor(sd engine.StoredDefinition, rulesByDevice map[string][]in
 	}
 	capable, reason, known := engine.ReplayabilityOf(d)
 	v.Replay = replayabilityView{Known: known, Capable: capable, Reason: reason}
+	v.Learning = learningViewFor(s.Learning, d.ID, now)
 
 	if d.Detection != nil {
 		v.Detection = d.Detection
@@ -318,10 +404,11 @@ func definitionOrder(views []definitionView) {
 // Schema, none of which move.
 func (s *Server) handleDefinitionsList(w http.ResponseWriter, r *http.Request) {
 	rulesByDevice, evidence := s.definitionsCoverage()
+	now := time.Now()
 	stored := s.Definitions.List()
 	out := make([]definitionView, 0, len(stored))
 	for _, sd := range stored {
-		out = append(out, definitionViewFor(sd, rulesByDevice, evidence.Complete))
+		out = append(out, s.definitionViewFor(sd, rulesByDevice, evidence.Complete, now))
 	}
 	definitionOrder(out)
 	writeJSON(w, http.StatusOK, map[string]any{
@@ -346,7 +433,7 @@ func (s *Server) handleDefinitionsGet(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	rulesByDevice, evidence := s.definitionsCoverage()
-	writeJSON(w, http.StatusOK, definitionViewFor(sd, rulesByDevice, evidence.Complete))
+	writeJSON(w, http.StatusOK, s.definitionViewFor(sd, rulesByDevice, evidence.Complete, time.Now()))
 }
 
 // handleDefinitionsSchema serves every param schema the definitions this
@@ -1124,7 +1211,7 @@ func (s *Server) writeDefinition(w http.ResponseWriter, status int, id string) {
 		return
 	}
 	rulesByDevice, evidence := s.definitionsCoverage()
-	writeJSON(w, status, definitionViewFor(sd, rulesByDevice, evidence.Complete))
+	writeJSON(w, status, s.definitionViewFor(sd, rulesByDevice, evidence.Complete, time.Now()))
 }
 
 // writeDefinitionError maps the definitions store's sentinel errors onto
