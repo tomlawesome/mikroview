@@ -26,4 +26,7 @@ value (`.cabtn { background }`).
 
 ## Owner verdicts
 
-- Pending: the bubble; round 27's journey (five beats).
+- The bubble (verbatim, 2026-08-30): **"60. outlined not filled
+  otherwise apporved"** — outlined bubble built as round 29.
+- Round 27's journey: approved (55–57, 59 yes; 58 yes with the
+  label-highlights correction — see round 27's README).
