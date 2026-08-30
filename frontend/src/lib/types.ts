@@ -560,6 +560,14 @@ export interface Exclusion {
   target: string
 }
 
+// An operator's triage judgement on a flag (issue #638) -- set once via
+// POST /api/flags/{id}/verdict and never re-asked afterward. 'expected'
+// (legitimate traffic) and 'noise' (real traffic, wrong threshold) both
+// clear the flag as a side effect of judging it; 'real' (genuine
+// concern) does not, and is the invariant that later auto-tune must
+// never contradict by suggesting a threshold that would have dropped it.
+export type Verdict = 'expected' | 'noise' | 'real'
+
 export interface Flag {
   id: string
   type: FlagType
@@ -586,6 +594,13 @@ export interface Flag {
   // Structured supporting evidence -- see Evidence's own doc comment.
   // Absent/empty for detectors with nothing beyond `detail` to show.
   evidence?: Evidence
+  // Verdict/verdictBy/verdictAt (#638): all three present together or
+  // all absent -- absent means never judged, not "judged with no
+  // opinion." verdictBy is the account that judged it; verdictAt is
+  // RFC3339.
+  verdict?: Verdict
+  verdictBy?: string
+  verdictAt?: string
 }
 
 // Mirrors internal/flags.FlagTimeBucket's JSON tags -- same shape
