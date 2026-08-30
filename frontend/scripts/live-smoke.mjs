@@ -9,17 +9,20 @@ import { session, feedSyslog, check, responsive, done } from './live-browser.mjs
 feedSyslog(200, 'smoke-rule')
 const { page, consoleErrors } = await session({ waitForEvents: 100 })
 
-const rows = await page.evaluate(() => document.querySelectorAll('.row').length)
+// Scoped to the Stream card: the deck (#616) keeps the neighbouring
+// cards mounted, and their scenes render .row elements of their own.
+const streamRows = () => page.evaluate(() => document.querySelectorAll('.card[data-view="live"] .row').length)
+const rows = await streamRows()
 check(rows >= 100, `live view rendered ${rows} events`)
 
 await page.fill('input.rule', 'smoke-rule')
 await page.waitForTimeout(600)
-const filtered = await page.evaluate(() => document.querySelectorAll('.row').length)
+const filtered = await streamRows()
 check(filtered > 0, `substring filter kept ${filtered} rows`)
 
 await page.fill('input.rule', 'definitely-not-a-rule-xyz')
 await page.waitForTimeout(600)
-const none = await page.evaluate(() => document.querySelectorAll('.row').length)
+const none = await streamRows()
 check(none === 0, 'a non-matching filter empties the table')
 
 await page.fill('input.rule', '')

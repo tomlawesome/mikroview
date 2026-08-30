@@ -178,28 +178,72 @@ export async function dismissSetupWizard(page) {
  * instead of being moved off it.
  */
 /**
- * openAtlas opens the atlas overlay -- the app's one navigator since
- * #633 retired the rail and toolbar. Every scene's bar carries the
- * wordmark button, and `m` works everywhere (guarded against inputs),
- * so the keyboard is the reliable route for scripts.
+ * SCENES maps the deck's visible names to their view keys (Deck.svelte's
+ * own table). Anything not in here is an operate page or account action,
+ * reached through the account chip's menu instead.
  */
-export async function openAtlas(page) {
-  if ((await page.locator('.atlas').count()) > 0) return
-  await page.keyboard.press('m')
-  await page.waitForSelector('.atlas', { timeout: 5000 })
+const SCENES = {
+  'The fall': 'fall',
+  Metrics: 'metrics',
+  Stream: 'live',
+  Flags: 'flags',
+  Watchlist: 'watchlist',
 }
 
 /**
- * goTo navigates by destination label exactly as an operator does:
- * open the atlas, click the destination. Labels are the atlas's own
- * ("The fall", "Stream", "Flags", "The engine room", ...). The overlay
- * closes itself on navigation; waiting for that keeps a scenario from
- * asserting against a page still under the dialog.
+ * openAccountMenu opens the scene bar's account chip menu -- where the
+ * operate pages and account actions live since #616's deck retired the
+ * atlas overlay.
+ *
+ * Scoped to the card that is actually centred: the deck mounts the
+ * active card *and its neighbours*, each carrying its own scene bar, so
+ * a bare `.chip` selector can resolve to an off-viewport neighbour --
+ * and clicking that would scroll the deck to it. Outside the deck (the
+ * operate pages) there is exactly one scene bar and no cards at all.
+ */
+export async function openAccountMenu(page) {
+  if ((await page.locator('.account .menu').count()) > 0) return
+  const inDeck = (await page.locator('.deck').count()) > 0
+  const chip = inDeck
+    ? page.locator('.card[aria-hidden="false"] .account button.chip')
+    : page.locator('.account button.chip')
+  await chip.click()
+  await page.waitForSelector('.account .menu', { timeout: 5000 })
+}
+
+/**
+ * goTo navigates by visible label exactly as an operator does. Deck
+ * scenes ("The fall", "Metrics", "Stream", "Flags", "Watchlist") go via
+ * the roll rail's name buttons; everything else ("Settings",
+ * "Fleet", "Entities", "Audit log", "Run setup…", ...) via the account
+ * chip's menu row of the same text.
+ *
+ * For a scene, waits until the card has actually rolled to centre --
+ * appState.view flips on click, but the smooth scroll runs ~700ms and a
+ * scenario reading geometry mid-roll would see a card in flight.
  */
 export async function goTo(page, label) {
-  await openAtlas(page)
-  await page.click(`.atlas .ports .port:text-is("${label}")`)
-  await page.waitForSelector('.atlas', { state: 'detached', timeout: 5000 })
+  const view = SCENES[label]
+  if (view) {
+    await page.click(`.roll-rail button.rail-name:text-is("${label}")`)
+    await page.waitForFunction(
+      (v) => {
+        const deck = document.querySelector('.deck')
+        const el = deck?.querySelector(`.card[data-view="${v}"]`)
+        if (!el) return false
+        // Bounding rects, not offsetTop vs scrollTop: offsetTop is
+        // measured from the offset parent, so anything above the deck
+        // (the connection banner, say) shifts it and the two never agree.
+        return Math.abs(el.getBoundingClientRect().top - deck.getBoundingClientRect().top) < 2
+      },
+      view,
+      { timeout: 10000 },
+    )
+  } else {
+    await openAccountMenu(page)
+    await page.click(`.account .menu button.row:text-is("${label}")`)
+    await page.waitForSelector('.account .menu', { state: 'detached', timeout: 5000 })
+  }
 }
 
 export async function session({ waitForEvents = 0, dismissSetup = true, landing = 'stream' } = {}) {
@@ -247,8 +291,11 @@ export async function session({ waitForEvents = 0, dismissSetup = true, landing 
   }
 
   if (waitForEvents > 0) {
+    // Scoped to the Stream card: the deck keeps neighbouring cards
+    // mounted, and their scenes render .row elements of their own, so a
+    // bare .row count can be satisfied before any event has rendered.
     await page.waitForFunction(
-      (n) => document.querySelectorAll('.row').length >= n,
+      (n) => document.querySelectorAll('.card[data-view="live"] .row').length >= n,
       waitForEvents,
       { timeout: 20000 },
     )
