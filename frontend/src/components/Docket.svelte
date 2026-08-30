@@ -62,6 +62,11 @@
 
 <div class="docket">
   <div class="tab-row" role="tablist" aria-label="The docket">
+    <!-- Counts sit beneath the labels (round 19): bare ink, tiny, and
+         only when they have something to say -- a permanent "0" is the
+         failure, not the goal. The broken watch is the small red ○
+         under "watchlist"; the healthy count wears the watchers'
+         purple. The row keeps its height when every count is silent. -->
     <button
       class="tab"
       class:on={tab === 'flags'}
@@ -69,8 +74,10 @@
       aria-selected={tab === 'flags'}
       onclick={() => (appState.view = 'flags')}
     >
-      flags
-      <span class="count">⚑ {flagsState.activeCount}</span>
+      <span class="tlabel">flags</span>
+      <span class="under">
+        {#if flagsState.activeCount > 0}<b class="ct">⚑ {flagsState.activeCount}</b>{/if}
+      </span>
     </button>
     {#if isAdmin}
       <button
@@ -80,8 +87,11 @@
         aria-selected={tab === 'watchlist'}
         onclick={() => (appState.view = 'watchlist')}
       >
-        watchlist
-        {#if watchlistState.brokenCount > 0}<span class="count broken">◉ {watchlistState.brokenCount} broken</span>{/if}
+        <span class="tlabel">watchlist</span>
+        <span class="under">
+          {#if watchlistState.entries.length > 0}<b class="wct">◉ {watchlistState.entries.length}</b>{/if}
+          {#if watchlistState.brokenCount > 0}<b class="bct">○ {watchlistState.brokenCount}</b>{/if}
+        </span>
       </button>
       <button
         class="tab"
@@ -90,7 +100,8 @@
         aria-selected={tab === 'audit'}
         onclick={() => (appState.view = 'audit')}
       >
-        audit log
+        <span class="tlabel">audit log</span>
+        <span class="under"></span>
       </button>
     {/if}
 
@@ -123,18 +134,22 @@
 
   .tab-row {
     display: flex;
-    align-items: baseline;
+    align-items: center;
     gap: 4px;
     padding: 0 6px 6px;
   }
 
   .tab {
+    display: inline-flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 1px;
     background: transparent;
     border: none;
     border-bottom: 2px solid transparent;
     color: var(--fg-dim);
     font-size: 13px;
-    padding: 4px 10px 6px;
+    padding: 4px 10px 4px;
     cursor: pointer;
   }
 
@@ -147,15 +162,29 @@
     border-bottom-color: var(--accent);
   }
 
-  .count {
-    margin-left: 6px;
-    font-size: 11px;
+  /* A fixed-height shelf under every label, so a count appearing or
+     clearing never shifts the row. */
+  .under {
+    display: flex;
+    align-items: baseline;
+    gap: 7px;
+    height: 13px;
     font-family: var(--font-mono);
-    color: var(--fg-dim);
+    font-size: 10px;
+    font-weight: 600;
   }
 
-  .count.broken {
+  .ct {
     color: var(--alarm);
+  }
+
+  .wct {
+    color: var(--marked);
+  }
+
+  .bct {
+    color: var(--alarm);
+    font-size: 9px;
   }
 
   /* The bubble (round 29): outlined, never filled. */
