@@ -477,6 +477,28 @@
       }))
   }
 
+  // A wave, not a tent (#650, round 21/22): a smooth mound with soft
+  // skirts that meets the baseline at both ends but never draws it --
+  // the two cubics climb from base to the shoulder of the peak, and a
+  // shallow quadratic caps it. No fill: the line is the only coloured
+  // bit (round 22, owner).
+  function wavePath(n: Needle): string {
+    const halfW = 8
+    const x0 = n.x - halfW
+    const x1 = n.x + halfW
+    const h = SPEC_BASE - n.tipY
+    const cap = halfW * 0.18
+    const overshoot = h * 0.1
+    const shoulderX = halfW * 0.55
+    const shoulderY = SPEC_BASE - h * 0.6
+    return (
+      `M ${x0},${SPEC_BASE} ` +
+      `C ${x0 + halfW * 0.41},${SPEC_BASE - 1} ${x0 + shoulderX},${shoulderY} ${n.x - cap},${n.tipY} ` +
+      `Q ${n.x},${n.tipY - overshoot} ${n.x + cap},${n.tipY} ` +
+      `C ${x1 - shoulderX},${shoulderY} ${x1 - halfW * 0.41},${SPEC_BASE - 1} ${x1},${SPEC_BASE}`
+    )
+  }
+
   // Peak labels, culled so neighbours never collide: strongest first,
   // then any label whose text would overlap one already kept is dropped.
   const peakLabels = $derived.by(() => {
@@ -691,15 +713,7 @@
                   >no trace, and no claim of one</text>
               {:else}
                 {#each needlesFor(slot) as n (n.port)}
-                  <polygon
-                    class="peak {n.lane}"
-                    data-port={n.port}
-                    points="{n.x - 8},{SPEC_BASE} {n.x},{n.tipY} {n.x + 8},{SPEC_BASE}"
-                  />
-                  <polyline
-                    class="spec {n.lane}"
-                    points="{n.x - 8},{SPEC_BASE} {n.x},{n.tipY} {n.x + 8},{SPEC_BASE}"
-                  />
+                  <path class="spec {n.lane}" data-port={n.port} d={wavePath(n)} />
                 {/each}
                 {#if b.carriers.length > 0 && needlesFor(slot).length === 0}
                   <line x1={slot.bx} y1={SPEC_BASE} x2={slot.bx + BAND_W} y2={SPEC_BASE} class="spec-floor" />
@@ -1109,21 +1123,6 @@
   }
   .spec.other {
     stroke: var(--o-other);
-  }
-  .peak {
-    stroke: none;
-  }
-  .peak.accept {
-    fill: color-mix(in srgb, var(--o-acc) 14%, transparent);
-  }
-  .peak.drop {
-    fill: color-mix(in srgb, var(--o-drop) 14%, transparent);
-  }
-  .peak.nat {
-    fill: color-mix(in srgb, var(--o-nat) 14%, transparent);
-  }
-  .peak.other {
-    fill: color-mix(in srgb, var(--o-other) 14%, transparent);
   }
   .spec-floor {
     stroke: var(--o-grid2);
