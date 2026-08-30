@@ -849,6 +849,40 @@ derived from the events currently loaded in your browser tab, so that
 list is only as complete as what's been seen there so far -- the entity
 itself, once named, is fully persisted regardless.
 
+## Coverage-gap declarations (issue #630/#392, optional)
+
+A "coverage gap" is a boundary-direction pair -- e.g. traffic from
+`ether1` to `bridge1` -- that no detector or expectation has anything to
+say about, because nothing pushed or configured actually watches it.
+Silence there is ambiguous on its own: it might mean "nothing is
+happening," or it might mean "nobody ever pointed a detector at this."
+**Coverage-gap declarations** let an admin say, on the record, which of
+those it is -- a deliberate note that a given pair is *intentionally*
+quiet (a link that legitimately carries nothing worth watching), not an
+unexplained hole.
+
+```yaml
+coverage:
+  # Where declarations are persisted, as a small JSON file. Same
+  # optional-persistence contract as entities.storePath: left unset,
+  # declarations still work, they just don't survive a restart. If you
+  # set this in the container, mount a volume for its parent directory --
+  # see deploy/docker-compose.yml.
+  storePath: "/var/lib/mikroview/coverage.json"
+```
+
+Declarations are managed via `GET`/`PUT`/`DELETE
+/api/coverage/declarations/{key}` (see [API reference](#api-reference)):
+`GET` is open to any signed-in user, same as `GET /api/definitions` --
+reading why a gap is explained is a viewer-tier read -- while `PUT` and
+`DELETE` are admin-only, since authoring or retracting that explanation
+carries the same weight as an entity label or a definition suppression.
+`key` is the boundary-direction pair itself, an opaque string this store
+does not parse or validate the shape of; `PUT`'s JSON body carries just
+`{"reason": "..."}`, capped at 400 characters, with `declaredBy` and
+`declaredAt` set server-side from the session and the clock rather than
+the request.
+
 ## Audit log: admin action accountability (optional)
 
 Every admin-privileged mutation -- creating a user, changing a detector's
@@ -2706,6 +2740,7 @@ Override individual scalar settings without a mounted file:
 | `MIKROVIEW_AUTH_SECURE_COOKIE` | `auth.secureCookie` |
 | `MIKROVIEW_AUTH_SESSION_TTL` | `auth.sessionTTL` |
 | `MIKROVIEW_ENTITIES_STORE_PATH` | `entities.storePath` (see [Entities](#entities-ui-managed-hostruleport-labels-and-tags-optional)) |
+| `MIKROVIEW_COVERAGE_STORE_PATH` | `coverage.storePath` (see [Coverage-gap declarations](#coverage-gap-declarations-issue-630392-optional)) |
 | `MIKROVIEW_AUDIT_STORE_PATH` | `audit.storePath` (see [Audit log](#audit-log-admin-action-accountability-optional)) |
 | `MIKROVIEW_SETUP_STORE_PATH` | `setup.storePath` (see [Setup wizard ledger](#setup-wizard-ledger-optional)) |
 | `MIKROVIEW_WATCHLIST_STORE_PATH` | `watchlist.storePath` (see [Watchlist](#watchlist-optional)) |
@@ -3002,6 +3037,9 @@ exits, rather than starting the server. See
 | `GET /api/entities` | admin-only (see [Entities](#entities-ui-managed-hostruleport-labels-and-tags-optional)): every persisted entity |
 | `POST /api/entities` | admin-only: create or replace (upsert) one entity, identified by `(type, key)` in the JSON body |
 | `DELETE /api/entities` | admin-only: remove the entity identified by `(type, key)` in the JSON body |
+| `GET /api/coverage/declarations` | open to any signed-in user (see [Coverage-gap declarations](#coverage-gap-declarations-issue-630392-optional)): every persisted coverage-gap declaration |
+| `PUT /api/coverage/declarations/{key}` | admin-only: create or replace (upsert) the declaration at `key`, taking `{"reason": "..."}` in the JSON body. `declaredBy`/`declaredAt` are set server-side. 400 on an empty/oversized key or reason |
+| `DELETE /api/coverage/declarations/{key}` | admin-only: remove the declaration at `key`. 404 if none exists there |
 | `GET /api/naming/provenance` | admin-only: where the name currently shown for one token comes from, given `type` (`host`/`rule`/`port`), `key` (the raw value) and, for a host, `device`. Answers `source` (`none`, `entity`, `config`, or one of `router-dns-static`/`router-dhcp-lease`/`router-wireguard-peer`), the `name` in use, your own saved `label` if any, and `editable` -- false when a router-pushed name would shadow anything saved here, which is what the live view's inline editor checks before offering a field |
 | `GET /api/audit` | admin-only: a windowed slice of the admin action audit log (see [Audit log](#audit-log-admin-action-accountability-optional)), newest activity last, accepting `since`/`until`/`limit` query params like `GET /api/events` |
 | `GET /api/matches` | a windowed query over the persisted match log, in one of two modes -- by device, with `mac` and/or `ip` (at least one required), or across every watchlist entry with `entries=all`, which returns the most recent matches anywhere in the log, newest first. `entries=all` may not be combined with `mac`/`ip`. Both modes take `since`/`until` (RFC 3339) and `limit`, and both are bounded: `limit` defaults to 100 and is capped at 5000 whatever the caller asks for. Open to any signed-in user and reachable via a read-only API token, same tier as `/api/events`/`/api/flags`/`/api/stats`/`/api/devices` |

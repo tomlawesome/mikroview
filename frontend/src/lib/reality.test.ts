@@ -35,6 +35,7 @@ function intent(over: Partial<PolicyEdge> = {}): PolicyEdge {
     refusePorts: [],
     comment: '',
     ruleCount: 1,
+    logged: false,
     ...over,
   }
 }

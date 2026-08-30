@@ -28,6 +28,7 @@ import (
 	"github.com/tomlawesome/mikroview/internal/auth"
 	"github.com/tomlawesome/mikroview/internal/blocklist"
 	"github.com/tomlawesome/mikroview/internal/config"
+	"github.com/tomlawesome/mikroview/internal/coverage"
 	"github.com/tomlawesome/mikroview/internal/device"
 	"github.com/tomlawesome/mikroview/internal/engine"
 	"github.com/tomlawesome/mikroview/internal/entities"
@@ -620,6 +621,19 @@ func main() {
 	if n := entityStore.Seed(cfg.RuleNames, cfg.HostNames); n > 0 {
 		entitiesLog.Info(fmt.Sprintf("imported %d entries from config.yaml's ruleNames/hostNames (now UI-editable)", n))
 	}
+
+	// Coverage-gap declarations (issue #630/#392): an admin's on-record
+	// statement that a given boundary-direction pair is intentionally,
+	// not accidentally, quiet -- backing GET/PUT/DELETE
+	// /api/coverage/declarations. Same optional-persistence contract as
+	// entities above.
+	coverageLog := logging.New("coverage")
+	coverageBackend, err := persistence.backendFor(bootCtx, "coverage", cfg.Coverage.StorePath)
+	if err != nil {
+		coverageLog.Warn(err.Error())
+	}
+	coverageStore, err := coverage.OpenWithBackend(coverageBackend)
+	mustOpenStore(coverageLog, err)
 
 	// Tokens (issue #101): read-only API bearer tokens for service-to-
 	// service access. Persistence itself is optional -- a missing/
@@ -1309,6 +1323,7 @@ func main() {
 		Flags:             fs,
 		Definitions:       definitions,
 		Entities:          entityStore,
+		Coverage:          coverageStore,
 		Naming:            names,
 		Rules:             ru,
 		Audit:             auditStore,

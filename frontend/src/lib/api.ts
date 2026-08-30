@@ -898,3 +898,44 @@ export async function markSetupStep(
   if (res.ok) return res.json()
   return (await res.text()) || `markSetupStep: ${res.status}`
 }
+
+// CoverageDeclaration mirrors internal/coverage.Declaration -- an
+// admin's on-record statement that a given boundary-direction pair
+// (`key`, e.g. "ether1|bridge1") is intentionally, not accidentally,
+// quiet (issue #630/#392). `declaredBy`/`declaredAt` are always
+// server-set, never sent by the client.
+export interface CoverageDeclaration {
+  key: string
+  reason: string
+  declaredBy: string
+  declaredAt: string
+}
+
+// fetchCoverageDeclarations/putCoverageDeclaration/deleteCoverageDeclaration:
+// CRUD over internal/coverage's persisted declaration store. Reading is
+// open to any signed-in user (same tier as fetchDefinitions); writing is
+// admin-only server-side, same gate as upsertEntity/deleteEntity above.
+export async function fetchCoverageDeclarations(): Promise<CoverageDeclaration[]> {
+  const res = await fetch('/api/coverage/declarations')
+  if (!res.ok) throw new ApiError(`fetchCoverageDeclarations: ${res.status}`, res.status)
+  const body = await res.json()
+  return body.declarations ?? []
+}
+
+// putCoverageDeclaration creates a new declaration, or replaces an
+// existing one in place, identified by key -- mirroring the server's own
+// single PUT-as-upsert primitive (see internal/api's handleCoveragePut).
+export async function putCoverageDeclaration(
+  key: string,
+  reason: string,
+): Promise<CoverageDeclaration | string> {
+  const res = await putJSON(`/api/coverage/declarations/${encodeURIComponent(key)}`, { reason })
+  if (res.ok) return res.json()
+  return (await res.text()) || `putCoverageDeclaration: ${res.status}`
+}
+
+export async function deleteCoverageDeclaration(key: string): Promise<string | null> {
+  const res = await deleteJSON(`/api/coverage/declarations/${encodeURIComponent(key)}`)
+  if (res.ok) return null
+  return (await res.text()) || `deleteCoverageDeclaration: ${res.status}`
+}

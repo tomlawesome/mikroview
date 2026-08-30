@@ -41,6 +41,7 @@ flags:
   ruleUsageStorePath: $dir/rule-usage.json
   detectorSettingsStorePath: $dir/detector-settings.json
 entities: {storePath: $dir/entities.json}
+coverage: {storePath: $dir/coverage.json}
 audit: {storePath: $dir/audit.json}
 setup: {storePath: $dir/setup.json}
 watchlist:

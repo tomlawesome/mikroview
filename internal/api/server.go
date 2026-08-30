@@ -12,6 +12,7 @@ import (
 
 	"github.com/tomlawesome/mikroview/internal/audit"
 	"github.com/tomlawesome/mikroview/internal/auth"
+	"github.com/tomlawesome/mikroview/internal/coverage"
 	"github.com/tomlawesome/mikroview/internal/device"
 	"github.com/tomlawesome/mikroview/internal/engine"
 	"github.com/tomlawesome/mikroview/internal/entities"
@@ -105,6 +106,14 @@ type Server struct {
 	// Open("") returns a usable, empty, unpersisted store), same
 	// always-usable convention as Entities/Flags/Definitions above.
 	Rules *rules.Store
+	// Coverage is the persisted set of coverage-gap declarations (issue
+	// #630/#392): an admin's on-record statement that a given boundary-
+	// direction pair is intentionally, not accidentally, quiet. Backs
+	// GET/PUT/DELETE /api/coverage/declarations (see coverage.go).
+	// Always non-nil (internal/coverage.Open("") returns a usable,
+	// empty, unpersisted store), same always-usable convention as
+	// Entities/Flags/Definitions above.
+	Coverage *coverage.Store
 	// Audit is the persisted, admin-only accountability log of every
 	// admin-privileged mutation (issue #112) -- who created a user,
 	// changed a detector setting, upserted/deleted an entity, created or
@@ -301,6 +310,11 @@ func (s *Server) routes() []route {
 		{http.MethodGet, "/api/entities", s.handleEntitiesList},
 		{http.MethodPost, "/api/entities", s.handleEntitiesUpsert},
 		{http.MethodDelete, "/api/entities", s.handleEntitiesDelete},
+
+		// Coverage-gap declarations (issue #630/#392) -- see coverage.go.
+		{http.MethodGet, "/api/coverage/declarations", s.handleCoverageList},
+		{http.MethodPut, "/api/coverage/declarations/{key}", s.handleCoveragePut},
+		{http.MethodDelete, "/api/coverage/declarations/{key}", s.handleCoverageDelete},
 
 		// The match log query -- a read over evidence already collected,
 		// and the one thing on the retired /api/watchlist prefix the
