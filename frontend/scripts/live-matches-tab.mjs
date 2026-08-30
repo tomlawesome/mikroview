@@ -35,7 +35,7 @@
 //    text instead of asking whether a box is visible.
 
 import { chromium } from 'playwright'
-import { session, feedRaw, check, done } from './live-browser.mjs'
+import { session, feedRaw, check, done, goTo } from './live-browser.mjs'
 
 const URL_BASE = process.env.MV_URL
 
@@ -104,7 +104,7 @@ async function openMatchesTab() {
   // Matching the label, not the row: NavRail moves each row's text into
   // a <span class="label">, and Playwright's text engine only matches an
   // element directly containing the text (see live-nav-rail.mjs).
-  await page.click('.rail .item .label:text-is("Watchlist")')
+  await goTo(page, 'Watchlist')
   const tab = page.locator('[role="tab"]:has-text("Matches")')
   if (!(await visible(tab))) {
     check(false, 'the Watchlist page carries a Matches tab')
@@ -272,12 +272,12 @@ await viewerPage.goto(URL_BASE, { waitUntil: 'networkidle' })
 await viewerPage.fill('input[autocomplete="username"]', VIEWER_USER)
 await viewerPage.fill('input[autocomplete="current-password"]', VIEWER_PASS)
 await viewerPage.click('button[type="submit"]')
-await viewerPage.locator('.rail .item').first().waitFor({ timeout: 15000 })
+await viewerPage.waitForSelector('.roll-rail .rail-name', { timeout: 15000 })
 
-const viewerLabels = await viewerPage.$$eval('.rail .item', (els) => els.map((e) => e.textContent.trim()))
+const viewerLabels = await viewerPage.$$eval('.roll-rail .rail-name', (els) => els.map((e) => e.textContent.trim()))
 check(
   !viewerLabels.includes('Watchlist'),
-  `Watchlist -- and the Matches tab inside it -- is absent from a viewer's rail, not disabled -- rail shows ${JSON.stringify(viewerLabels)}`,
+  `Watchlist -- and the Matches tab inside it -- is absent from a viewer's roll rail, not disabled -- the rail shows ${JSON.stringify(viewerLabels)}`,
 )
 check(
   (await viewerPage.locator('#panel-matches').count()) === 0,

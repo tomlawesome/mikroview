@@ -80,10 +80,14 @@ describe('BottomBar groups', () => {
 // page".
 describe('BottomBar single-page shortcut', () => {
   it('navigates straight to the page for a single-page group, no sheet', () => {
+    // Detect is single-page since #490 folded Detectors into the engine
+    // room (see lib/navGroups.ts) -- Live no longer is, since #616 gave
+    // it a second row (The fall, then Stream), so it moved to its own
+    // half-sheet case below instead of standing in for this one.
     render(BottomBar)
-    screen.getByRole('button', { name: 'Live' }).click()
+    screen.getByRole('button', { name: 'Detect' }).click()
     flushSync()
-    expect(appState.view).toBe('live')
+    expect(appState.view).toBe('flags')
     expect(screen.queryByRole('dialog')).toBeNull()
   })
 
@@ -101,6 +105,22 @@ describe('BottomBar single-page shortcut', () => {
 })
 
 describe('BottomBar half-sheet', () => {
+  it('raises a half-sheet for Live now that it carries two rows (#616)', () => {
+    render(BottomBar)
+    screen.getByRole('button', { name: 'Live' }).click()
+    flushSync()
+
+    const dialog = screen.getByRole('dialog')
+    expect(dialog).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'The fall' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Stream' })).toBeTruthy()
+
+    screen.getByRole('button', { name: 'Stream' }).click()
+    flushSync()
+    expect(appState.view).toBe('live')
+    expect(screen.queryByRole('dialog')).toBeNull()
+  })
+
   it('raises a half-sheet listing the pages of a multi-page group', () => {
     render(BottomBar)
     screen.getByRole('button', { name: 'Investigate' }).click()

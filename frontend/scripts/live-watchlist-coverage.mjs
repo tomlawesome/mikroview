@@ -30,7 +30,7 @@
 // re-reads the list and picks the one definition out, rather than
 // indexing a separate map.
 
-import { session, check, done, feedSyslog } from './live-browser.mjs'
+import { session, check, done, feedSyslog, goTo } from './live-browser.mjs'
 
 const URL_BASE = process.env.MV_URL
 
@@ -176,7 +176,7 @@ check(
 )
 
 async function openMenuView(label) {
-  await page.click(`.rail .item:has-text("${label}")`)
+  await goTo(page, label)
 }
 
 await page.reload({ waitUntil: 'networkidle' })

@@ -19,7 +19,7 @@
 // group's own admin-only rows.
 
 import { chromium } from 'playwright'
-import { session, check, done } from './live-browser.mjs'
+import { session, check, done, goTo } from './live-browser.mjs'
 
 const URL_BASE = process.env.MV_URL
 
@@ -48,7 +48,7 @@ async function openWatchlist() {
   // engine only matches an element that *directly* contains the text --
   // see live-nav-rail.mjs's own note on why `.item:text-is(...)` stopped
   // working once that landed.
-  await page.click('.rail .item .label:text-is("Watchlist")')
+  await goTo(page, 'Watchlist')
   await page.waitForSelector('#panel-watchlist', { timeout: 10000 })
 }
 
@@ -195,8 +195,8 @@ check(anonRes.status === 401, `an unauthenticated request to /api/suggestions is
 
 // --- The admin/read-only split #547 names explicitly ----------------------
 // Watchlist (and Suggestions within it) is admin-only end to end: the
-// row is absent from a viewer's rail entirely, never a page that loads
-// and then fails.
+// name is absent from a viewer's roll rail entirely, never a page that
+// loads and then fails.
 
 const VIEWER_USER = 'live-viewer-547-suggestions'
 const VIEWER_PASS = 'live-viewer-547-suggestions-password'
@@ -214,12 +214,12 @@ await viewerPage.goto(URL_BASE, { waitUntil: 'networkidle' })
 await viewerPage.fill('input[autocomplete="username"]', VIEWER_USER)
 await viewerPage.fill('input[autocomplete="current-password"]', VIEWER_PASS)
 await viewerPage.click('button[type="submit"]')
-await viewerPage.waitForSelector('.rail .item', { timeout: 15000 })
+await viewerPage.waitForSelector('.roll-rail .rail-name', { timeout: 15000 })
 
-const viewerLabels = await viewerPage.$$eval('.rail .item', (els) => els.map((e) => e.textContent.trim()))
+const viewerLabels = await viewerPage.$$eval('.roll-rail .rail-name', (els) => els.map((e) => e.textContent.trim()))
 check(
   !viewerLabels.includes('Watchlist'),
-  `Watchlist -- and Suggestions with it -- is absent from a viewer's rail, not disabled -- rail shows ${JSON.stringify(viewerLabels)}`,
+  `Watchlist -- and Suggestions with it -- is absent from a viewer's roll rail, not disabled -- the rail shows ${JSON.stringify(viewerLabels)}`,
 )
 
 await browser.close()

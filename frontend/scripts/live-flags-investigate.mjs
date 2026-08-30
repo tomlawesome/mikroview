@@ -11,7 +11,7 @@
 // control and shouldn't assert on.
 
 import { fileURLToPath } from 'url'
-import { session, check, done, feedPortScan, waitForFlag } from './live-browser.mjs'
+import { session, check, done, feedPortScan, waitForFlag, goTo } from './live-browser.mjs'
 
 
 
@@ -21,7 +21,7 @@ feedPortScan(20, TARGET_IP)
 const { page } = await session()
 
 async function openMenuView(label) {
-  await page.click(`.rail .item:has-text("${label}")`)
+  await goTo(page, label)
 }
 
 // Wait for the flag on the *server* before asking the UI about it

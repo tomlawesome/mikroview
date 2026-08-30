@@ -61,6 +61,23 @@ alongside another check deliberately, set `MV_DIR`, `MV_HTTP_PORT`,
 `MV_SYSLOG_PORT` and `MV_SYSLOG_TLS_PORT` — explicit values always win
 over the derived ones.
 
+### The standing lanes (owner, 2026-08-30)
+
+Use up to three lanes, one worktree each, and never share a worktree
+between concurrent agents — they share one git index, so one agent's
+commit sweeps another's staged files:
+
+1. **Suite lane** — the branch worktree, running `make live-check`.
+2. **Driving lane** — a detached worktree at the same commit, for
+   hand-driving and screenshots while the suite runs.
+3. **Baseline lane** — a worktree at `origin/dev`, for telling a
+   regression from a pre-existing failure.
+
+The server embeds the frontend at build time: rebuilding `frontend/dist`
+changes nothing a running server serves. To see a frontend change,
+`scripts/live-env.sh down` then `up` (it rebuilds), or you will verify
+against a stale bundle without noticing.
+
 ## Driving a real router
 
 `make live-routeros` boots MikroTik's own CHR image under QEMU, stands
