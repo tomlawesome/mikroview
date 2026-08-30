@@ -16,6 +16,7 @@
     DETECTORS,
     SCOPE_FIELDS,
     draftFrom,
+    learningSummary,
     parseList,
     parsePorts,
     scopeSummary,
@@ -74,6 +75,7 @@
   {#each detectorSettingsState.list as d (d.name)}
     {@const info = DETECTORS[d.name] ?? { label: d.label, explanation: d.description ?? '' }}
     {@const fields = SCOPE_FIELDS[d.name] ?? []}
+    {@const learning = learningSummary(d.learning)}
     <li class="row">
       <div class="line">
         {#if isAdmin}
@@ -103,6 +105,10 @@
           {saving[d.name] ? 'saving…' : d.enabled ? 'running' : 'paused'}
         </span>
       </div>
+
+      {#if learning}
+        <p class="learning">{learning}</p>
+      {/if}
 
       {#if errors[d.name]}
         <p class="error">{errors[d.name]}</p>
@@ -270,6 +276,16 @@
   .error {
     margin: 4px 0 0;
     color: var(--reject);
+    font-size: 11.5px;
+  }
+
+  /* No colour carries meaning here on its own (#639) -- the wording
+     already states which of the five states this is, so this is styled
+     identically to any other secondary fact line rather than given a
+     status colour that would just repeat the words. */
+  .learning {
+    margin: 4px 0 0;
+    color: var(--fg-muted);
     font-size: 11.5px;
   }
 
