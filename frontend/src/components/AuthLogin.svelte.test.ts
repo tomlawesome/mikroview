@@ -27,6 +27,7 @@ beforeEach(() => {
   authState.role = ''
   authState.ssoAvailable = false
   authState.ssoError = null
+  authState.justSignedOut = false
 })
 
 async function fillAndSubmit(username: string, password: string) {
@@ -86,5 +87,22 @@ describe('AuthLogin', () => {
     render(AuthLogin)
 
     expect(screen.queryByRole('link', { name: /sign in with sso/i })).toBeNull()
+  })
+
+  it('plays the way-out beat when this mount follows a sign-out, and consumes the flag', () => {
+    authState.justSignedOut = true
+
+    const { container } = render(AuthLogin)
+
+    expect(container.querySelector('.reverse')).toBeTruthy()
+    // One-shot: a second mount (e.g. a plain page refresh) must not
+    // replay it.
+    expect(authState.justSignedOut).toBe(false)
+  })
+
+  it('does not play the way-out beat on a plain page load', () => {
+    const { container } = render(AuthLogin)
+
+    expect(container.querySelector('.reverse')).toBeNull()
   })
 })
