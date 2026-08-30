@@ -29,9 +29,9 @@
   const TITLES: Record<string, string> = {
     live: 'Stream',
     metrics: 'Metrics',
-    audit: 'Audit log',
-    flags: 'Flags',
-    watchlist: 'Watchlist',
+    audit: 'The docket',
+    flags: 'The docket',
+    watchlist: 'The docket',
     engineroom: 'Settings',
     fleet: 'Fleet',
     entities: 'Entities',
