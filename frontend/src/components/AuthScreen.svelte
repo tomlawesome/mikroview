@@ -92,20 +92,25 @@
        the layer entirely (round 5 fourth batch). Fourteen strokes,
        transform-only, is the whole cost -- no particle system. -->
   <div class="fullfall" aria-hidden="true">
+    <!-- The round-29 scene's own seventeen, verbatim: eleven accepts,
+         four drops, two NAT marks. -->
     <i style="left: 4%; animation-delay: 0.2s; opacity: 0.5"></i>
-    <i style="left: 11%; animation-delay: 3.1s; opacity: 0.3"></i>
-    <i class="r" style="left: 18%; animation-delay: 1.6s; opacity: 0.55"></i>
-    <i style="left: 25%; animation-delay: 4.4s; opacity: 0.4"></i>
-    <i style="left: 32%; animation-delay: 2.2s; opacity: 0.65"></i>
-    <i class="v" style="left: 40%; animation-delay: 5.0s; opacity: 0.45"></i>
-    <i style="left: 47%; animation-delay: 0.9s; opacity: 0.3"></i>
-    <i class="r" style="left: 55%; animation-delay: 3.7s; opacity: 0.4"></i>
-    <i style="left: 62%; animation-delay: 1.2s; opacity: 0.6"></i>
-    <i style="left: 69%; animation-delay: 4.8s; opacity: 0.35"></i>
-    <i class="v" style="left: 76%; animation-delay: 2.7s; opacity: 0.4"></i>
-    <i class="r" style="left: 83%; animation-delay: 0.5s; opacity: 0.6"></i>
-    <i style="left: 90%; animation-delay: 3.4s; opacity: 0.35"></i>
-    <i style="left: 96%; animation-delay: 1.9s; opacity: 0.5"></i>
+    <i style="left: 9%; animation-delay: 3.1s; opacity: 0.3"></i>
+    <i class="r" style="left: 15%; animation-delay: 1.6s; opacity: 0.55"></i>
+    <i style="left: 21%; animation-delay: 4.4s; opacity: 0.4"></i>
+    <i style="left: 26%; animation-delay: 2.2s; opacity: 0.65"></i>
+    <i class="v" style="left: 33%; animation-delay: 5.0s; opacity: 0.45"></i>
+    <i style="left: 38%; animation-delay: 0.9s; opacity: 0.3"></i>
+    <i class="r" style="left: 45%; animation-delay: 3.7s; opacity: 0.4"></i>
+    <i style="left: 51%; animation-delay: 1.2s; opacity: 0.6"></i>
+    <i style="left: 57%; animation-delay: 4.8s; opacity: 0.35"></i>
+    <i style="left: 63%; animation-delay: 2.7s; opacity: 0.5"></i>
+    <i class="v" style="left: 69%; animation-delay: 0.5s; opacity: 0.4"></i>
+    <i class="r" style="left: 75%; animation-delay: 3.4s; opacity: 0.6"></i>
+    <i style="left: 81%; animation-delay: 1.9s; opacity: 0.35"></i>
+    <i style="left: 86%; animation-delay: 5.3s; opacity: 0.55"></i>
+    <i class="r" style="left: 91%; animation-delay: 2.4s; opacity: 0.35"></i>
+    <i style="left: 96%; animation-delay: 4.1s; opacity: 0.5"></i>
   </div>
 
   <div class="stack">
@@ -197,8 +202,8 @@
        wordmark or the form, whatever their combined height turns out to
        be (taller than the mockup's placeholder-only stack, since these
        fields keep their labels). */
-    -webkit-mask: radial-gradient(ellipse 520px 480px at 50% 50%, transparent 60%, black 78%);
-    mask: radial-gradient(ellipse 520px 480px at 50% 50%, transparent 60%, black 78%);
+    -webkit-mask: radial-gradient(ellipse 460px 380px at 50% 52%, transparent 62%, black 78%);
+    mask: radial-gradient(ellipse 460px 380px at 50% 52%, transparent 62%, black 78%);
   }
 
   .fullfall i {
@@ -245,7 +250,7 @@
   .wm-box {
     display: inline-block;
     margin: 0 auto 22px;
-    padding: 10px 26px;
+    padding: 12px 30px;
     border: 1.5px solid var(--now);
     border-radius: 4px;
     box-shadow:
@@ -255,7 +260,7 @@
   }
 
   .wm {
-    font-size: 26px;
+    font-size: 34px;
     font-weight: 800;
     letter-spacing: 0.04em;
     color: var(--fg);
@@ -323,7 +328,7 @@
 
   .col {
     width: 100%;
-    max-width: 300px;
+    max-width: 260px;
     display: flex;
     flex-direction: column;
     gap: 12px;
@@ -379,8 +384,8 @@
     border-bottom: 1px solid var(--border);
     color: var(--fg);
     border-radius: 0;
-    padding: 9px 2px;
-    font-size: 14px;
+    padding: 7px 4px;
+    font-size: 13.5px;
     text-align: center;
   }
 
@@ -401,15 +406,15 @@
      control defers to them. */
   .submit-btn {
     align-self: center;
-    margin-top: 10px;
-    min-width: 118px;
+    margin-top: 12px;
     background: transparent;
     border: 1px solid var(--hair-2);
-    color: var(--fg);
-    font-weight: 500;
+    color: var(--accent);
+    font-weight: 600;
+    letter-spacing: 0.04em;
     border-radius: 999px;
-    padding: 8px 30px;
-    font-size: 13.5px;
+    padding: 7px 30px;
+    font-size: 13px;
     cursor: pointer;
   }
 
