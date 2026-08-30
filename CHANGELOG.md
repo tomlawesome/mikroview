@@ -18,6 +18,21 @@ rewritten.
 
 ### Added
 
+- **Flags carry an operator's verdict** (#638). Every flag now offers
+  Expected, Noise and Real, and the old Clear demotes to a secondary
+  affordance beside them. Expected means legitimate traffic; Noise means
+  real traffic caught by too sensitive a threshold. Both clear the flag
+  on one press, with about five seconds to undo before anything is sent
+  -- and a verdict still inside that window is committed rather than
+  silently dropped if you navigate away, so the interface never claims a
+  judgement it did not record. Real does not clear, because a confirmed
+  concern is not something you have finished with. A judged flag shows
+  its verdict, who judged it and when, and is never presented as an open
+  question again; a flag that later re-fires as a genuinely new episode
+  starts unjudged rather than carrying the old badge forward. Noise
+  verdicts are recorded against the detector that raised the flag so
+  that receipted threshold suggestions (#640) can later reason from
+  them -- nothing tunes itself yet.
 - **The fall is the landing page** (#616). A band per boundary --
   interface pair by default, named from the pushed rule's own
   src-address-list where a router provides one (e.g. "lan"), ordered
