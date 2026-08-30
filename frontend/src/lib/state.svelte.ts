@@ -3,6 +3,8 @@
 import { fetchDevices, fetchEvents, fetchStats } from './api'
 import { matchesAddressQuery, type AddressCandidate } from './addressMatch'
 import { MAX_CLIENT_EVENTS } from './constants'
+import { LANDING_BY_CARD } from './deckCards'
+import { deckOrderState } from './deckOrder.svelte'
 import { matchesCountry, UNKNOWN_COUNTRY } from './countryMatch'
 import { countryFlag, isPublicIp } from './format'
 import { matchesPortQuery } from './portMatch'
@@ -82,6 +84,7 @@ export type ConnState = 'connecting' | 'open' | 'closed'
 // Live-group row rather than being the entry point.
 export type View =
   | 'fall'
+  | 'topography'
   | 'live'
   | 'metrics'
   | 'watchlist'
@@ -104,9 +107,11 @@ export type View =
 // `events` with that server-filtered baseline, so the two layers
 // together cover both "instant" and "actually complete" filtering.
 class AppState {
-  // #616: the fall is the landing page, replacing #544's interim
-  // ('live', i.e. Stream) default.
-  view = $state<View>('fall')
+  // #616: the fall is the ratified landing default; #633's Settings
+  // shelf lets the operator reorder the deck, and sign-in lands on
+  // whichever card they keep first (rounds 23-25). Every card's landing
+  // view is role-safe -- see LANDING_BY_CARD's own comment.
+  view = $state<View>(LANDING_BY_CARD[deckOrderState.order[0]] ?? 'fall')
   // $state.raw, not $state: every write to this array replaces it whole
   // (setInitialEvents, appendUnseen and flushIncoming all reassign rather
   // than mutate), so the deep per-element proxy a plain $state would build

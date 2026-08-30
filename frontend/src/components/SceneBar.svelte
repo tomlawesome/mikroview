@@ -27,11 +27,12 @@
   const view = $derived(scene ?? appState.view)
 
   const TITLES: Record<string, string> = {
+    topography: 'Topography',
     live: 'Stream',
     metrics: 'Metrics',
-    audit: 'Audit log',
-    flags: 'Flags',
-    watchlist: 'Watchlist',
+    audit: 'The docket',
+    flags: 'The docket',
+    watchlist: 'The docket',
     engineroom: 'Settings',
     fleet: 'Fleet',
     entities: 'Entities',
