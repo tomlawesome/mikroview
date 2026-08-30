@@ -286,7 +286,7 @@ describe('NavRail Admin group pages (#548/#490)', () => {
 
   it('keeps Entities and Run setup… absent for a viewer, but shows Settings, per #490s absent-never-disabled grammar', () => {
     authState.state = 'authenticated'
-    authState.role = 'user'
+    authState.role = 'viewer'
     render(NavRail)
 
     for (const label of ['Entities', 'Run setup…']) {
@@ -296,5 +296,16 @@ describe('NavRail Admin group pages (#548/#490)', () => {
     // viewer today.
     expect(screen.getByRole('button', { name: 'Fleet' })).toBeTruthy()
     expect(screen.getByRole('button', { name: 'Settings' })).toBeTruthy()
+  })
+
+  it('shows Entities to the user tier but still withholds Run setup…', () => {
+    // #653: Entities moved from admin to the user tier with the rest of
+    // the operational set; re-running setup stays owner-level.
+    authState.state = 'authenticated'
+    authState.role = 'user'
+    render(NavRail)
+
+    expect(screen.getByRole('button', { name: 'Entities' })).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Run setup…' })).toBeNull()
   })
 })

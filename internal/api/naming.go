@@ -53,18 +53,20 @@ type nameProvenanceResponse struct {
 
 // handleNameProvenance answers for one (type, key) token.
 //
-// Admin-gated, matching GET /api/entities and the editor it serves:
-// #413 gives viewers no pencil at all rather than a disabled one, so a
-// viewer has no reason to reach this, and the response is a partial map
-// of which router names which host -- the same administrative metadata
-// the entities list is gated for.
+// User-tier (#653), matching GET/POST/DELETE /api/entities and the
+// editor it serves: #413 gives a viewer role no pencil at all rather
+// than a disabled one, so a viewer has no reason to reach this, and the
+// response is a partial map of which router names which host -- the
+// same administrative metadata the entities list is gated for. Widened
+// from admin to user by #653's "watchers" bench ruling, same as the
+// entities surface it serves.
 //
 // Reads only what mikroview already holds (the entity store, the config
 // maps, and state the router pushed); nothing here contacts a device,
 // per AGENTS.md's observe-never-probe invariant.
 func (s *Server) handleNameProvenance(w http.ResponseWriter, r *http.Request) {
-	if !callerIsAdmin(r) {
-		http.Error(w, "admin role required", http.StatusForbidden)
+	if !callerIsUser(r) {
+		http.Error(w, "user role required", http.StatusForbidden)
 		return
 	}
 

@@ -12,16 +12,17 @@ import (
 )
 
 // handleSuggestionsList serves every suggestion candidate (#243 slice
-// 5), admin-gated the same as the watchlist itself -- a candidate's
-// Justification (which rule, which device) is the same class of
-// administrative network information as an entry's own scope. An
-// optional ?status= filter (off/on/hide) narrows the result to one of
-// the three review views; anything else (including no candidates
-// matching) returns an empty list, never a 400 -- filtering to nothing
-// is a valid, unremarkable answer.
+// 5), user-tier the same as the definitions surface it can become
+// (#653) -- a candidate's Justification (which rule, which device) is
+// the same class of administrative network information as an entry's
+// own scope, and #653's "watchers" bench ruling widened that whole
+// surface from admin to user. An optional ?status= filter (off/on/hide)
+// narrows the result to one of the three review views; anything else
+// (including no candidates matching) returns an empty list, never a
+// 400 -- filtering to nothing is a valid, unremarkable answer.
 func (s *Server) handleSuggestionsList(w http.ResponseWriter, r *http.Request) {
-	if !callerIsAdmin(r) {
-		http.Error(w, "admin role required", http.StatusForbidden)
+	if !callerIsUser(r) {
+		http.Error(w, "user role required", http.StatusForbidden)
 		return
 	}
 
@@ -53,9 +54,11 @@ func suggestErrorStatus(err error) int {
 // actually watches traffic (#243 slice 5: "every generated candidate is
 // one the operator reviews and explicitly acts on -- nothing here ever
 // creates a watchlist.Entry by itself", see internal/suggest's own doc
-// comment). Admin-gated at the same tier as creating a definition
-// directly (handleDefinitionsCreate): this is exactly that action, just
-// pre-filled from what the router already reported.
+// comment). Gated at the same tier as creating a definition directly
+// (handleDefinitionsCreate): this is exactly that action, just
+// pre-filled from what the router already reported. That tier is user,
+// not admin, since #653 widened definitions writes to the "watchers"
+// bench.
 //
 // A device candidate (KindDevice) always becomes an inverted entry that
 // starts Observing with an empty Permitted set -- the same safe,
@@ -69,8 +72,8 @@ func suggestErrorStatus(err error) int {
 // different from this default would be worse than not offering it, so
 // it's deferred until that data exists, not built half-right.
 func (s *Server) handleSuggestionsAccept(w http.ResponseWriter, r *http.Request) {
-	if !callerIsAdmin(r) {
-		http.Error(w, "admin role required", http.StatusForbidden)
+	if !callerIsUser(r) {
+		http.Error(w, "user role required", http.StatusForbidden)
 		return
 	}
 
@@ -138,11 +141,11 @@ func (s *Server) handleSuggestionsAccept(w http.ResponseWriter, r *http.Request)
 }
 
 // handleSuggestionsHide moves a candidate from Off to Hide -- see
-// suggest.Store.Hide. Admin-gated the same as accept: declining a
-// suggestion is the same tier of decision as accepting one.
+// suggest.Store.Hide. Gated the same as accept: declining a suggestion
+// is the same tier of decision as accepting one -- user, per #653.
 func (s *Server) handleSuggestionsHide(w http.ResponseWriter, r *http.Request) {
-	if !callerIsAdmin(r) {
-		http.Error(w, "admin role required", http.StatusForbidden)
+	if !callerIsUser(r) {
+		http.Error(w, "user role required", http.StatusForbidden)
 		return
 	}
 
@@ -159,9 +162,10 @@ func (s *Server) handleSuggestionsHide(w http.ResponseWriter, r *http.Request) {
 // handleSuggestionsUnhide moves a candidate from Hide back to Off -- the
 // only way a hidden candidate is ever seen again (see suggest.Store.
 // Unhide and this package's own doc comment on why that's deliberate).
+// User-tier (#653), same as hide/accept.
 func (s *Server) handleSuggestionsUnhide(w http.ResponseWriter, r *http.Request) {
-	if !callerIsAdmin(r) {
-		http.Error(w, "admin role required", http.StatusForbidden)
+	if !callerIsUser(r) {
+		http.Error(w, "user role required", http.StatusForbidden)
 		return
 	}
 
@@ -188,14 +192,22 @@ type suggestResetRequest struct {
 // separate from every other mutation in this file: this is the one
 // action in the whole feature that can destroy real, hand-tuned
 // operator work, so it requires an explicit confirm:true body in
-// addition to the admin gate every other handler here already enforces
-// -- a UI confirm dialog alone cannot guarantee that step actually
-// reached the server (#243 slice 5 design: "gated behind a real confirm
-// step and an unmistakably serious warning -- this is the one part of
-// the design that can destroy real, hand-tuned work").
+// addition to the gate every other handler here already enforces -- a UI
+// confirm dialog alone cannot guarantee that step actually reached the
+// server (#243 slice 5 design: "gated behind a real confirm step and an
+// unmistakably serious warning -- this is the one part of the design
+// that can destroy real, hand-tuned work").
+//
+// User-tier, not admin (#653): this was the one route in the whole
+// definitions/suggestions surface still called out as "strictly admin"
+// on the reasoning that it was the most dangerous single endpoint here.
+// #653's owner ruling widened the whole surface to the "watchers" bench
+// regardless, on the view that the confirm:true body above is the real
+// safeguard against an accidental call, not the role gate -- the same
+// safeguard a user and an admin are equally bound by.
 func (s *Server) handleSuggestionsReset(w http.ResponseWriter, r *http.Request) {
-	if !callerIsAdmin(r) {
-		http.Error(w, "admin role required", http.StatusForbidden)
+	if !callerIsUser(r) {
+		http.Error(w, "user role required", http.StatusForbidden)
 		return
 	}
 
