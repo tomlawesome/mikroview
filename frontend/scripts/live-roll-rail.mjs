@@ -1,113 +1,182 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 //
-// #544: the ratified left rail replaces the hamburger. Two things here
-// cannot be proved in jsdom and are the reason this scenario exists.
+// #616: the roll rail is the deck's jump control -- the scenes' names as
+// sideways text on the right edge, replacing #544's left rail wholesale.
+// What needs a real browser rather than a unit test:
 //
-// The reserved-slot rule ("no link renders for a surface that does not
-// exist") is a claim about the whole rendered document, not about one
-// component's props: a unit test asserting `groups` has no Map entry
-// would pass while some other component happily rendered one. This walks
-// the real DOM instead.
+// - The names are rendered from Deck.svelte's own card table, gated on
+//   the real signed-in role: a viewer's deck simply has no Watchlist
+//   card and no Watchlist name (#490's grammar: absent, never
+//   disabled), proved end to end with a real second account rather than
+//   a mocked authState.role.
+// - Clicking a name has to actually roll the card to centre and move
+//   the active state -- appState.view, the snap scroll, and the
+//   IntersectionObserver writing the view back all have to agree, which
+//   is exactly the wiring a mocked store hides.
+// - The retired chrome (toolbar, left rail, atlas overlay) must be
+//   genuinely gone from the rendered document, not merely unreferenced.
 //
-// And aria-current has to survive a real view switch. The rail sets it
-// from appState.view, which only actually changes when the app mounts a
-// different view component -- exactly the wiring a mocked store hides.
+// Sorted here (after live-newest-first, before live-router-lookup)
+// rather than at the old live-nav-rail slot: it pushes no filter table
+// (live-router-lookup's own "nothing pushed yet" baseline runs later
+// and is not disturbed) and leaves nothing behind but its syslog batch
+// and a viewer account it deletes again.
 
+import { chromium } from 'playwright'
 import { session, feedSyslog, check, responsive, done } from './live-browser.mjs'
 
-feedSyslog(120, 'nav-rail')
-// landing: 'fall' -- stay on the real landing page (#616 retired #544's
-// interim Stream-as-landing) so the landing assertion below actually
-// observes it, rather than session()'s own default navigation to Stream
-// hiding what the app actually opens on.
+const URL_BASE = process.env.MV_URL
+
+feedSyslog(120, 'roll-rail')
+// landing: 'fall' -- stay on the real landing page so the landing
+// assertion below actually observes it, rather than session()'s own
+// default navigation to Stream hiding what the app opens on.
 const { page, consoleErrors } = await session({ landing: 'fall' })
 
-// --- The geography, in the ratified order --------------------------------
-// The live check signs in as an admin, so every group is visible; a
-// viewer sees fewer, which is #490's grammar and not this scenario's job.
-const headings = await page.$$eval('.rail .group-heading', (els) => els.map((e) => e.textContent.trim()))
+// --- The deck's names, in the ratified order ------------------------------
+const names = await page.$$eval('.roll-rail .rail-name', (els) => els.map((e) => e.textContent.trim()))
 check(
-  JSON.stringify(headings) === JSON.stringify(['Live', 'Investigate', 'Detect', 'Expect', 'Admin']),
-  `rail groups in the ratified order -- got ${JSON.stringify(headings)}`,
+  JSON.stringify(names) === JSON.stringify(['The fall', 'Metrics', 'Stream', 'Flags', 'Watchlist']),
+  `an admin's roll rail carries the five scenes in deck order -- got ${JSON.stringify(names)}`,
 )
 
-// Headings are labels, never controls. The record is explicit, and the
-// obvious regression is someone making them collapse a group.
-const headingTags = await page.$$eval('.rail .group-heading', (els) => els.map((e) => e.tagName))
+// Absent, never disabled -- a disabled name would satisfy a presence
+// check while breaking the grammar.
+const disabled = await page.$$eval('.roll-rail .rail-name', (els) =>
+  els.filter((e) => e.disabled).map((e) => e.textContent.trim()),
+)
+check(disabled.length === 0, `no rail name is disabled -- got ${JSON.stringify(disabled)}`)
+
+// --- The retired chrome is really gone ------------------------------------
 check(
-  headingTags.every((t) => t !== 'BUTTON' && t !== 'A'),
-  `group headings are not controls -- got ${JSON.stringify(headingTags)}`,
+  (await page.$$('.toolbar, .rail, .atlas, .nav-menu, .hamburger')).length === 0,
+  'the toolbar, the left rail, the atlas overlay and the hamburger no longer render',
 )
 
-// --- Reserved slots: absent from the DOM, not disabled in it -------------
-const labels = await page.$$eval('.rail .item', (els) => els.map((e) => e.textContent.trim()))
-for (const absent of ['Map', 'Lookback']) {
-  check(
-    !labels.includes(absent),
-    `${absent} is reserved in the spec, not rendered -- rail shows ${JSON.stringify(labels)}`,
-  )
-}
-// A disabled stub would satisfy the check above while breaking the rule,
-// so prove nothing in the rail is disabled at all.
-const disabled = await page.$$eval('.rail .item', (els) => els.filter((e) => e.disabled).map((e) => e.textContent.trim()))
-check(disabled.length === 0, `no rail item is disabled (absent, never disabled) -- got ${JSON.stringify(disabled)}`)
-
-// --- The hamburger is gone -----------------------------------------------
-check((await page.$$('.nav-menu, .hamburger')).length === 0, 'the hamburger menu no longer renders')
-
-// --- Navigation actually navigates, and aria-current follows it ----------
+// --- The fall is the landing, and the active state is single --------------
 const current = async () =>
-  (await page.$$eval('.rail .item[aria-current="page"]', (els) => els.map((e) => e.textContent.trim())))[0]
+  (await page.$$eval('.roll-rail .rail-name[aria-current="page"]', (els) => els.map((e) => e.textContent.trim())))[0]
 
 check((await current()) === 'The fall', `The fall is the landing (#616) -- got ${await current()}`)
+check(
+  (await page.$$eval('.roll-rail .rail-name.on', (els) => els.length)) === 1,
+  'exactly one rail name is active at a time',
+)
 
-// Stream keeps its own row, second in Live, per #616's record.
-await page.click('.rail .item .label:text-is("Stream")')
-await page.waitForSelector('input.rule', { timeout: 5000 })
-check((await current()) === 'Stream', `Stream is still reachable from its own row -- got ${await current()}`)
-await page.waitForFunction(() => document.querySelectorAll('.grid .row').length >= 1, null, { timeout: 20000 })
-
-// Matching the label rather than the button: #545 gave each row an icon
-// and moved its text into a <span class="label">, and Playwright's text
-// engine only matches an element that *directly* contains the text, so
-// `.item:text-is(...)` stopped matching the button. Kept as an exact
-// match on the label rather than loosened to :has-text, which would also
-// match a row that merely contained the word.
-await page.click('.rail .item .label:text-is("Metrics")')
+// --- Clicking a name rolls its card to centre and moves the state ---------
+await page.click('.roll-rail .rail-name:text-is("Stream")')
 await page.waitForFunction(
-  () => document.querySelector('.rail .item[aria-current="page"]')?.textContent.trim() === 'Metrics',
+  () => document.querySelector('.roll-rail .rail-name[aria-current="page"]')?.textContent.trim() === 'Stream',
+  null,
+  { timeout: 5000 },
+)
+check((await current()) === 'Stream', 'clicking Stream moves aria-current to it')
+// The card itself must have rolled to centre -- the state moving while
+// the deck stays put is exactly the regression a snap-scroll rebuild
+// invites.
+await page.waitForFunction(
+  () => {
+    const deck = document.querySelector('.deck')
+    const el = deck?.querySelector('.card[data-view="live"]')
+    if (!el) return false
+    return Math.abs(el.getBoundingClientRect().top - deck.getBoundingClientRect().top) < 2
+  },
+  null,
+  { timeout: 10000 },
+)
+check(true, "and the Stream card is the one at the deck's scroll position")
+await page.waitForFunction(() => document.querySelectorAll('.grid .row').length >= 1, null, { timeout: 20000 })
+check(true, 'with the live table rendering real events')
+
+await page.click('.roll-rail .rail-name:text-is("Metrics")')
+await page.waitForFunction(
+  () => document.querySelector('.roll-rail .rail-name[aria-current="page"]')?.textContent.trim() === 'Metrics',
   null,
   { timeout: 5000 },
 )
 check((await current()) === 'Metrics', 'clicking Metrics moves aria-current to it')
 check(
-  (await page.$$eval('.rail .item[aria-current="page"]', (els) => els.length)) === 1,
-  'exactly one rail item is aria-current at a time',
+  (await page.$$eval('.roll-rail .rail-name.on', (els) => els.length)) === 1,
+  'still exactly one active name after switching',
+)
+check(
+  await page.$eval('.roll-rail .rail-name.on', (el) => el.getAttribute('aria-current') === 'page'),
+  'the .on class and aria-current="page" agree on which name is active',
 )
 
-await page.click('.rail .item .label:text-is("Stream")')
-await page.waitForSelector('.grid .row', { timeout: 5000 })
-check((await current()) === 'Stream', 'and back to Stream, with the live table rendered')
+await page.click('.roll-rail .rail-name:text-is("Stream")')
+await page.waitForFunction(
+  () => document.querySelector('.roll-rail .rail-name[aria-current="page"]')?.textContent.trim() === 'Stream',
+  null,
+  { timeout: 5000 },
+)
+check((await current()) === 'Stream', 'and back to Stream')
 
-// --- The skip-link is real, and first ------------------------------------
-// It is visually offscreen until focused, so "exists" is not enough --
-// tab once from the document and it must be what lands.
-//
-// Reloading, not blurring. blur() moves document.activeElement to the
-// body but leaves Chromium's sequential focus navigation starting point
-// on the element that had focus, so the next Tab continues from the rail
-// button clicked above and lands on the following rail item -- which
-// reads exactly like a missing skip-link. A fresh document is the only
-// reset that actually moves the starting point back to the top.
-await page.reload()
-await page.waitForSelector('.rail .item', { timeout: 10000 })
-await page.keyboard.press('Tab')
-const focused = await page.evaluate(() => {
+// --- The skip-link is real, and first -------------------------------------
+// A brand-new page in the same signed-in context, not blur() and not
+// reload(): blur() leaves Chromium's sequential focus starting point on
+// the last clicked element, and reload() restores the deck's scroll
+// position and anchors the starting point mid-deck with it -- both read
+// exactly like a missing skip-link. Only a document with no history of
+// its own starts tabbing from the top.
+// A separate browser carrying the same session cookie, because
+// session()'s page owns an implicit context Playwright refuses a second
+// newPage() on directly -- the same constraint live-ws-revocation.mjs
+// documents for its own second tab.
+const skipBrowser = await chromium.launch()
+const skipCtx = await skipBrowser.newContext({ ignoreHTTPSErrors: true })
+await skipCtx.addCookies(await page.context().cookies())
+const freshPage = await skipCtx.newPage()
+await freshPage.goto(process.env.MV_URL, { waitUntil: 'networkidle' })
+await freshPage.waitForSelector('.roll-rail .rail-name', { timeout: 10000 })
+await freshPage.keyboard.press('Tab')
+const focused = await freshPage.evaluate(() => {
   const el = document.activeElement
   return { cls: el?.className ?? '', text: el?.textContent?.trim() ?? '', visible: el?.getBoundingClientRect().left >= 0 }
 })
 check(focused.cls.includes('skip-link'), `first Tab lands on the skip-link -- got "${focused.text}"`)
-check(focused.visible, 'the skip-link becomes visible once focused')
+check(focused.visible && focused.cls.includes('skip-link'), 'the skip-link becomes visible once focused')
+await skipBrowser.close()
+
+// --- A viewer's deck has no Watchlist card and no Watchlist name ----------
+const VIEWER_USER = 'live-viewer-rail'
+const VIEWER_PASS = 'live-viewer-rail-password'
+const createRes = await page.request.post(`${URL_BASE}/api/auth/users`, {
+  headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'mikroview' },
+  data: { username: VIEWER_USER, password: VIEWER_PASS, role: 'user' },
+})
+check(createRes.status() === 201, `a viewer account is created (${createRes.status()})`)
+
+const browser = await chromium.launch()
+const viewerCtx = await browser.newContext({ ignoreHTTPSErrors: true })
+const viewerPage = await viewerCtx.newPage()
+await viewerPage.goto(URL_BASE, { waitUntil: 'networkidle' })
+await viewerPage.fill('input[autocomplete="username"]', VIEWER_USER)
+await viewerPage.fill('input[autocomplete="current-password"]', VIEWER_PASS)
+await viewerPage.click('button[type="submit"]')
+await viewerPage.waitForSelector('.roll-rail .rail-name', { timeout: 15000 })
+
+const viewerNames = await viewerPage.$$eval('.roll-rail .rail-name', (els) => els.map((e) => e.textContent.trim()))
+check(
+  JSON.stringify(viewerNames) === JSON.stringify(['The fall', 'Metrics', 'Stream', 'Flags']),
+  `a viewer's rail has four names and no Watchlist -- got ${JSON.stringify(viewerNames)}`,
+)
+check(
+  (await viewerPage.locator('.card[data-view="watchlist"]').count()) === 0,
+  'and no Watchlist card exists anywhere in the viewer deck -- absent, not hidden',
+)
+await browser.close()
+
+// --- Clean up: the account should not outlive the scenario ----------------
+const usersRes = await page.request.get(`${URL_BASE}/api/auth/users`)
+const users = usersRes.status() < 400 ? await usersRes.json() : []
+const viewerAccount = (Array.isArray(users) ? users : []).find((u) => u.username === VIEWER_USER)
+if (viewerAccount) {
+  const del = await page.request.delete(`${URL_BASE}/api/auth/users/${encodeURIComponent(viewerAccount.id)}`, {
+    headers: { 'X-Requested-With': 'mikroview' },
+  })
+  check(del.status() === 200 || del.status() === 204, `the viewer account is removed again (${del.status()})`)
+}
 
 check(await responsive(page), 'main thread responsive')
 check(consoleErrors.length === 0, `no console errors -- got ${JSON.stringify(consoleErrors)}`)

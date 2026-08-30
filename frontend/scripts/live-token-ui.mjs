@@ -28,9 +28,9 @@ const { page, consoleErrors } = await session()
 // be one badly-chosen token name away from clicking Remove on a person.
 const DOOR = '.door:has-text("Which machines may speak")'
 
-await goTo(page, 'The engine room')
+await goTo(page, 'Settings')
 await page.waitForFunction(
-  () => document.querySelector('.page-header h2')?.textContent.trim() === 'The engine room',
+  () => document.querySelector('.page-header h2')?.textContent.trim() === 'Settings',
   null,
   { timeout: 5000 },
 )
