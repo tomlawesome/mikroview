@@ -623,6 +623,35 @@ func (e *Engine) Faults() []Fault {
 	return out
 }
 
+// Learning answers id's learning-window state as of now (issue #639):
+// an e.mu-guarded lookup in the existing defs map, type-asserting
+// LearningReporter -- the same lookup-and-assert shape ClearFault uses,
+// not a new traversal. ok is false for an unknown/unregistered id and
+// for a definition with no warm-up concept (most of the catalogue),
+// which is what lets a caller (see api.Server's narrow Learning field)
+// omit the API field entirely rather than send a misleading zero value.
+//
+// No per-event cost: this is read only from admin API handlers, never
+// from evaluateEvent's own hot path. A nil *Engine answers ok=false,
+// same convention as Enqueue/Tick above, so a caller need not nil-check
+// before calling.
+func (e *Engine) Learning(id string, now time.Time) (LearningState, bool) {
+	if e == nil {
+		return LearningState{}, false
+	}
+	e.mu.Lock()
+	r, ok := e.defs[id]
+	e.mu.Unlock()
+	if !ok {
+		return LearningState{}, false
+	}
+	lr, ok := r.def.(LearningReporter)
+	if !ok {
+		return LearningState{}, false
+	}
+	return lr.Learning(now)
+}
+
 // ClearFault re-arms a faulted definition -- the only way a fault is
 // ever lifted, per #398's decided policy: explicit operator action (or a
 // definition edit that calls this) never a timer, so a deterministic

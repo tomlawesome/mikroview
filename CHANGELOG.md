@@ -18,6 +18,41 @@ rewritten.
 
 ### Added
 
+- **Per-hour top talker and top port, answered by the ring itself**
+  (#644). `Store.HourTops` computes each axis minute's winning source
+  and destination port from the events the ring actually holds, under
+  one RLock, walking backward and stopping at the hour's edge. A minute
+  is answered only while the buffer still holds every event it received
+  in that window -- once eviction reaches in, the minute reads as an
+  honest em dash, never a count of the survivors, and ties break on the
+  lower label so map order can't flap the answer. Served by its own
+  route, `GET /api/stats/tops`, fetched only by the Metrics page while
+  open rather than folded into the `/api/stats` poll every open tab
+  makes every five seconds. The metrics table gains the two columns as
+  plain, unsortable headers, with their hour-total footer cells staying
+  em dashes.
+- **The whisper commands the live stream, and the filter box folds to a
+  thin bar** (#644). The whisper is a quiet full-width strip above the
+  live table -- rate curve, drop share, top talker, top port -- that
+  commands the stream: clicking the curve seeks it, turning off
+  autoscroll and moving the stat line to the clicked minute, and a
+  fence toggle plus two clicks dims every row outside the picked range,
+  as a display lens rather than a second filter state beside
+  FilterBar's own. On desktop, the filter box now defaults folded
+  behind a "Filters ▸" trigger and slides out into one quiet row --
+  device, action, chain, proto, source/destination, port, interface,
+  rule -- with dim micro-labels over hairline underlines, a × to clear
+  and a fold back; it still writes only `appState.filters`, the same
+  grammar typing does.
+- **The drum: Metrics' seismograph is one mirrored stroke per minute**
+  (#644). The seismograph is rewritten from per-action horizon lanes
+  into the drum -- one mirrored stroke per minute, clickable paper to
+  select a minute -- where the outer half of each stroke is every event
+  that minute and the inner half its refused share, both on one shared
+  scale so a quiet minute's refused sliver can never draw taller than
+  its own total. Per-action detail lives on in the register and the
+  table, and the cursor's `aria-valuetext` still reads every action's
+  figure.
 - **Flags carry an operator's verdict** (#638). Every flag now offers
   Expected, Noise and Real, and the old Clear demotes to a secondary
   affordance beside them. Expected means legitimate traffic; Noise means
