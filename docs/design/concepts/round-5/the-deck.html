@@ -233,13 +233,18 @@
   .deckrail a.on { color: var(--accent); }
   .deckrail a.on .dot { background: var(--accent); border-color: var(--accent); }
   /* ---- the atlas's deck-order editor ---- */
-  .deckorder { display: flex; gap: 10px; justify-content: center; align-items: center; padding: 12px 0 0; font-size: 12px; color: var(--ink-2); }
-  .deckorder .lab { font-size: 9.5px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--ink-3); margin-right: 8px; }
-  .deckorder .card { display: flex; gap: 7px; align-items: center; border: 1px solid var(--hair-2); border-radius: 8px; padding: 4px 12px; background: var(--raised); cursor: grab; }
-  .deckorder .card .n { color: var(--ink-3); font-size: 10px; }
-  .deckorder .card .grip { color: var(--ink-3); letter-spacing: -1px; }
-  .deckorder .first { border-color: var(--accent); }
-  .deckorder .first .tag { font-size: 8.5px; color: var(--accent); letter-spacing: 0.12em; }
+  .heartdeck {
+    position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%);
+    display: flex; flex-direction: column; gap: 8px; font-size: 12.5px; color: var(--ink-2);
+    text-align: left; min-width: 240px;
+  }
+  .heartdeck .lab { font-size: 9.5px; letter-spacing: 0.16em; color: var(--ink-3); margin-bottom: 2px; text-align: center; }
+  .heartdeck .card { display: flex; gap: 8px; align-items: center; border: 1px solid var(--hair-2); border-radius: 8px; padding: 6px 14px; background: var(--raised); cursor: grab; }
+  .heartdeck .card .n { color: var(--ink-3); font-size: 10px; }
+  .heartdeck .card .grip { color: var(--ink-3); letter-spacing: -1px; }
+  .heartdeck .first { border-color: var(--accent); }
+  .heartdeck .first .tag { font-size: 8.5px; color: var(--accent); letter-spacing: 0.12em; margin-left: 4px; }
+  .heartdeck .hint { font-size: 9.5px; color: var(--ink-3); text-align: center; margin-top: 2px; }
   .faro-orbit { stroke: var(--hair); }
   .dest .dg { fill: var(--raised); stroke: var(--ink-3); stroke-width: 1.5; transform: rotate(45deg); }
   .dest .dest-l { font: 600 12px var(--sans); fill: var(--ink-2); }
@@ -529,7 +534,7 @@
 
 <!-- ============ SCENE 3 : TOPOGRAPHY — ONE PLACE, TWO VIEWPOINTS, THREE DEPTHS ============ -->
 <section class="scene" id="s3" aria-label="Topography: one cartesian graph; the viewpoint and the depth are yours">
-  <div class="scene-tag" style="top:66px">The topography card. One cartesian graph — Internet above, router at the waist, lanes below — and it stays that graph everywhere: SURVEY just tilts the camera back, same layout, same major links. The DEPTH slider filters detail: zones, services, every client. Both controls really work here.</div>
+  <div class="scene-tag" style="top:66px">The topography card. One cartesian graph — Internet above, router at the waist, lanes below — and it stays that graph everywhere: SURVEY just tilts the camera back, same layout, same major links. The DEPTH slider filters detail: zones, services, every client. All of it really works here — including the camera: mouse wheel zooms the graph, middle-button drag pans it.</div>
   <div class="scenebar">
     <span class="wordmark">MIKRO<em>VIEW</em><span class="hintkey">M · ATLAS</span></span>
     <span class="scname">Topography<span class="epi">your network, drawn from its own rules</span></span>
@@ -553,6 +558,7 @@
   <div class="stage" id="topo" data-lvl="1">
     <svg viewBox="0 0 1400 720" preserveAspectRatio="xMidYMid meet" role="img"
          aria-label="The network as one cartesian graph: internet above, router at the waist, lanes below, clients beneath their lanes. The survey viewpoint tilts the same graph; the depth slider adds services and clients.">
+      <g id="cam">
       <path class="rib" d="M700 104 V 232" stroke="var(--accent)" stroke-width="3.5"/>
       <path class="rib" d="M645 302 C 565 380, 355 410, 285 480" stroke="var(--lan)" stroke-width="3.5"/>
       <path class="rib" d="M683 302 C 653 380, 595 420, 577 480" stroke="var(--srv)" stroke-width="2.4"/>
@@ -672,9 +678,9 @@
 
       <!-- depth 2: every client, hanging beneath its lane -->
       <g class="cli">
-        <line class="spoke" x1="285" y1="596" x2="215" y2="648" stroke="var(--lan)"/>
-        <line class="spoke" x1="285" y1="596" x2="285" y2="652" stroke="var(--lan)"/>
-        <line class="spoke" x1="285" y1="596" x2="355" y2="648" stroke="var(--lan)"/>
+        <path class="spoke" d="M285 596 C 285 622, 215 622, 215 648" fill="none" stroke="var(--lan)"/>
+        <path class="spoke" d="M285 596 C 279 618, 291 630, 285 652" fill="none" stroke="var(--lan)"/>
+        <path class="spoke" d="M285 596 C 285 622, 355 622, 355 648" fill="none" stroke="var(--lan)"/>
         <circle class="c-dot" cx="215" cy="652" r="3.5" fill="var(--lan)"/>
         <circle class="c-dot" cx="285" cy="656" r="3.5" fill="var(--lan)"/>
         <circle class="c-dot" cx="355" cy="652" r="3.5" fill="var(--lan)"/>
@@ -683,9 +689,9 @@
         <text x="355" y="668" text-anchor="middle" class="c-label">laptop-anna</text>
         <text x="285" y="700" text-anchor="middle" class="c-label" style="fill: var(--ink-3)">+ 9 more</text>
 
-        <line class="spoke" x1="577" y1="596" x2="517" y2="648" stroke="var(--srv)"/>
-        <line class="spoke" x1="577" y1="596" x2="577" y2="652" stroke="var(--srv)"/>
-        <line class="spoke" x1="577" y1="596" x2="637" y2="648" stroke="var(--srv)"/>
+        <path class="spoke" d="M577 596 C 577 622, 517 622, 517 648" fill="none" stroke="var(--srv)"/>
+        <path class="spoke" d="M577 596 C 571 618, 583 630, 577 652" fill="none" stroke="var(--srv)"/>
+        <path class="spoke" d="M577 596 C 577 622, 637 622, 637 648" fill="none" stroke="var(--srv)"/>
         <circle class="c-dot" cx="517" cy="652" r="3.5" fill="var(--srv)"/>
         <circle class="c-dot" cx="577" cy="656" r="3.5" fill="var(--srv)"/>
         <circle class="c-dot" cx="637" cy="652" r="3.5" fill="var(--srv)"/>
@@ -693,9 +699,9 @@
         <text x="577" y="682" text-anchor="middle" class="c-label">pihole</text>
         <text x="637" y="668" text-anchor="middle" class="c-label">unifi</text>
 
-        <line class="spoke" x1="848" y1="596" x2="788" y2="648" stroke="var(--iot)"/>
-        <line class="spoke" x1="848" y1="596" x2="848" y2="652" stroke="var(--iot)"/>
-        <line class="spoke" x1="848" y1="596" x2="908" y2="648" stroke="var(--iot)"/>
+        <path class="spoke" d="M848 596 C 848 622, 788 622, 788 648" fill="none" stroke="var(--iot)"/>
+        <path class="spoke" d="M848 596 C 842 618, 854 630, 848 652" fill="none" stroke="var(--iot)"/>
+        <path class="spoke" d="M848 596 C 848 622, 908 622, 908 648" fill="none" stroke="var(--iot)"/>
         <circle class="c-dot" cx="788" cy="652" r="3.5" fill="var(--iot)"/>
         <circle class="c-dot" cx="788" cy="652" r="8" fill="none" stroke="var(--alarm)" stroke-width="1.2" class="halo"/>
         <circle class="c-dot" cx="848" cy="656" r="3.5" fill="var(--iot)"/>
@@ -705,9 +711,10 @@
         <text x="908" y="668" text-anchor="middle" class="c-label">thermostat</text>
         <text x="848" y="700" text-anchor="middle" class="c-label" style="fill: var(--ink-3)">+ 4 more</text>
 
-        <line class="spoke" x1="1116" y1="596" x2="1116" y2="652" stroke="var(--guest)"/>
+        <path class="spoke" d="M1116 596 C 1110 620, 1122 630, 1116 652" fill="none" stroke="var(--guest)"/>
         <circle class="c-dot" cx="1116" cy="656" r="3.5" fill="var(--guest)"/>
         <text x="1116" y="682" text-anchor="middle" class="c-label">guest-e8b2 · +2</text>
+      </g>
       </g>
     </svg>
   </div>
@@ -764,8 +771,8 @@
 </section>
 
 <!-- ============ SCENE 3 : THE ATLAS — THE ONE NAVIGATOR ============ -->
-<section class="scene atlas" id="s5" aria-label="The atlas overlay: the network on orbit, and everywhere the app goes">
-  <div class="scene-tag" style="top:66px">The atlas, opened by the wordmark or <b>m</b> from any card. One chart is the whole app: the topography itself at the centre, small — the same cartesian graph, never a different shape — and every destination a body on the far orbit around it. Click a zone to reach into its traffic; no link footer, no menu. The deck row below deals your card order; the first is where sign-in lands.</div>
+<section class="scene atlas" id="s5" aria-label="The atlas: a light navigation layer — your deck at the heart, every destination on the orbit">
+  <div class="scene-tag" style="top:66px">The atlas — not another map. A light layer summoned over whatever card you're on (wordmark or <b>m</b>): your deck at the heart — click to jump, drag to reorder, the first card is where sign-in lands — every other destination a body on the orbit, account at the foot. esc puts it away.</div>
   <div class="scenebar">
     <span class="wordmark">MIKRO<em>VIEW</em></span>
     <span class="scstatus">
@@ -776,47 +783,26 @@
   </div>
   <div class="chart">
     <svg viewBox="0 0 1400 560" preserveAspectRatio="xMidYMid meet"
-         aria-label="The same topography, small, at the centre of the atlas: internet above, router at the waist, lanes below; destinations on the far orbit around it.">
-      <g transform="translate(140 40) scale(0.8)" style="transform-origin: 700px 280px">
-        <path class="rib" d="M700 150 V 250" stroke="var(--accent)" stroke-width="3"/>
-        <path class="rib" d="M655 285 C 590 340, 480 360, 430 400" stroke="var(--lan)" stroke-width="3"/>
-        <path class="rib" d="M685 285 C 660 340, 630 365, 610 410" stroke="var(--srv)" stroke-width="2"/>
-        <path class="rib" d="M715 285 C 740 340, 770 365, 790 410" stroke="var(--iot)" stroke-width="1.6"/>
-        <path class="rib" d="M745 285 C 810 335, 910 360, 960 400" stroke="var(--guest)" stroke-width="1.6"/>
-        <path class="rib" d="M990 190 C 910 215, 830 240, 760 258" stroke="var(--lan)" stroke-width="1.6"/>
-        <path class="rib-alarm" d="M782 420 C 700 340, 510 340, 438 420"/>
-        <g><circle cx="700" cy="128" r="8" class="zone-dot" style="stroke: var(--ink-3)"/><text x="716" y="132" class="zone-label">Internet</text><text x="716" y="147" class="zone-epithet">the weather · ▲3.1× drops</text></g>
-        <g><circle cx="700" cy="268" r="20" class="station-ring"/><circle cx="700" cy="268" r="3" class="station-core"/><text x="700" y="304" text-anchor="middle" class="station-label">rb5009 · the router</text></g>
-        <g><circle cx="430" cy="415" r="8" class="zone-dot" style="stroke: var(--lan)"/><text x="430" y="446" text-anchor="middle" class="zone-label">LAN</text><text x="430" y="461" text-anchor="middle" class="zone-epithet">the household</text></g>
-        <g><circle cx="610" cy="425" r="8" class="zone-dot" style="stroke: var(--srv)"/><text x="610" y="456" text-anchor="middle" class="zone-label">Servers</text><text x="610" y="471" text-anchor="middle" class="zone-epithet">445 · 5001 · 53</text></g>
-        <g><circle cx="790" cy="425" r="8" class="zone-dot" style="stroke: var(--iot)"/><circle cx="790" cy="425" r="13" fill="none" stroke="var(--alarm)" stroke-width="1.2" class="halo"/><text x="790" y="456" text-anchor="middle" class="zone-label">IoT</text><text x="790" y="471" text-anchor="middle" class="zone-epithet">egress guarded</text></g>
-        <g><circle cx="960" cy="415" r="8" class="zone-dot" style="stroke: var(--guest)"/><text x="960" y="446" text-anchor="middle" class="zone-label">Guest</text><text x="960" y="461" text-anchor="middle" class="zone-state bad">DARK — NO LOG RULE</text></g>
-        <g><circle cx="1000" cy="178" r="8" class="zone-dot" style="stroke: var(--accent)"/><text x="1016" y="182" class="zone-label">WireGuard</text><text x="1016" y="197" class="zone-epithet">quiet by choice</text></g>
-      </g>
-      <!-- The far orbit: everywhere else the app goes. Not a footer of
-           links — destinations are bodies on the atlas's outermost
-           orbit, the same chart language as the zones they sit beyond. -->
-      <g class="faro" aria-label="Destinations, on the far orbit">
-        <ellipse class="orbit faro-orbit" cx="700" cy="280" rx="600" ry="268"/>
-        <g class="dest" transform="translate(350 60)"><rect class="dg" x="-5" y="-5" width="10" height="10"/><text x="-14" y="4" text-anchor="end" class="dest-l">Audit log</text></g>
-        <g class="dest" transform="translate(1050 60)"><rect class="dg" x="-5" y="-5" width="10" height="10"/><text x="14" y="4" class="dest-l">Flags</text><circle cx="58" cy="0" r="8" fill="var(--alarm)"/><text x="58" y="3.5" text-anchor="middle" class="dest-b">6</text></g>
-        <g class="dest" transform="translate(100 280)"><rect class="dg" x="-5" y="-5" width="10" height="10"/><text x="0" y="-14" text-anchor="middle" class="dest-l">Watchlist</text></g>
-        <g class="dest" transform="translate(1300 280)"><rect class="dg" x="-5" y="-5" width="10" height="10"/><text x="0" y="-14" text-anchor="middle" class="dest-l">Run setup…</text></g>
-        <g class="dest" transform="translate(350 500)"><rect class="dg" x="-5" y="-5" width="10" height="10"/><text x="-14" y="4" text-anchor="end" class="dest-l">Metrics</text></g>
-        <g class="dest" transform="translate(1050 500)"><rect class="dg" x="-5" y="-5" width="10" height="10"/><text x="14" y="4" class="dest-l">Entities</text></g>
-        <g class="dest" transform="translate(190 146)"><rect class="dg" x="-5" y="-5" width="10" height="10"/><text x="-14" y="4" text-anchor="end" class="dest-l">The engine room</text></g>
-        <g class="dest" transform="translate(1210 146)"><rect class="dg" x="-5" y="-5" width="10" height="10"/><text x="14" y="4" class="dest-l">Fleet</text></g>
-      </g>
+         aria-label="Destinations on the atlas orbit around your deck">
+      <ellipse class="orbit faro-orbit" cx="700" cy="280" rx="600" ry="248"/>
+      <g class="dest" transform="translate(350 72)"><rect class="dg" x="-5" y="-5" width="10" height="10"/><text x="-14" y="4" text-anchor="end" class="dest-l">Audit log</text></g>
+      <g class="dest" transform="translate(1050 72)"><rect class="dg" x="-5" y="-5" width="10" height="10"/><text x="14" y="4" class="dest-l">Flags</text><circle cx="58" cy="0" r="8" fill="var(--alarm)"/><text x="58" y="3.5" text-anchor="middle" class="dest-b">6</text></g>
+      <g class="dest" transform="translate(100 280)"><rect class="dg" x="-5" y="-5" width="10" height="10"/><text x="0" y="-14" text-anchor="middle" class="dest-l">Watchlist</text></g>
+      <g class="dest" transform="translate(1285 210)"><rect class="dg" x="-5" y="-5" width="10" height="10"/><text x="-14" y="4" text-anchor="end" class="dest-l">Run setup…</text></g>
+      <g class="dest" transform="translate(350 488)"><rect class="dg" x="-5" y="-5" width="10" height="10"/><text x="-14" y="4" text-anchor="end" class="dest-l">Metrics</text></g>
+      <g class="dest" transform="translate(1050 488)"><rect class="dg" x="-5" y="-5" width="10" height="10"/><text x="14" y="4" class="dest-l">Entities</text></g>
+      <g class="dest" transform="translate(178 152)"><rect class="dg" x="-5" y="-5" width="10" height="10"/><text x="-14" y="4" text-anchor="end" class="dest-l">Settings</text></g>
+      <g class="dest" transform="translate(1222 152)"><rect class="dg" x="-5" y="-5" width="10" height="10"/><text x="14" y="4" class="dest-l">Fleet</text></g>
     </svg>
-  </div>
-  <p class="hint">click a zone to reach into it — its traffic, filtered · esc closes</p>
-  <div class="deckorder" aria-label="Your deck, in your order">
-    <span class="lab">Your deck</span>
-    <span class="card first"><span class="grip">⠿</span><span class="n">1</span>The fall<span class="tag">· SIGN-IN LANDS HERE</span></span>
-    <span class="card"><span class="grip">⠿</span><span class="n">2</span>The map</span>
-    <span class="card"><span class="grip">⠿</span><span class="n">3</span>Stream</span>
-    <span class="card"><span class="grip">⠿</span><span class="n">4</span>Flags</span>
-    <span class="card"><span class="grip">⠿</span><span class="n">5</span>Metrics</span>
+    <div class="heartdeck" aria-label="Your deck, in your order">
+      <span class="lab">YOUR DECK</span>
+      <span class="card first"><span class="grip">⠿</span><span class="n">1</span>The fall<span class="tag">· SIGN-IN LANDS HERE</span></span>
+      <span class="card"><span class="grip">⠿</span><span class="n">2</span>Topography</span>
+      <span class="card"><span class="grip">⠿</span><span class="n">3</span>Stream</span>
+      <span class="card"><span class="grip">⠿</span><span class="n">4</span>Flags</span>
+      <span class="card"><span class="grip">⠿</span><span class="n">5</span>Metrics</span>
+      <span class="hint">click to jump · drag to reorder</span>
+    </div>
   </div>
   <div class="account"><b>tom (admin)</b><span>change passphrase</span><span>sign out</span><span>About &amp; licence</span></div>
 </section>
@@ -832,6 +818,30 @@
   // Round apparatus + the deck's one live behaviour: mark the card in view.
   const links = [...document.querySelectorAll('.deckrail a')]
   const byId = Object.fromEntries(links.map(a => [a.getAttribute('href').slice(1), a]))
+  // The topography owns the pointer over its card (owner, 2026-08-30):
+  // wheel zooms the graph, middle-button drag pans it. Deliberately
+  // captures the wheel from the deck snap while over the map.
+  {
+    const topo = document.getElementById('topo')
+    const cam = document.getElementById('cam')
+    let z = 1, tx = 0
+    const apply = () => cam.setAttribute('transform',
+      `translate(${700 * (1 - z) + tx} ${360 * (1 - z)}) scale(${z})`)
+    topo.addEventListener('wheel', (e) => {
+      e.preventDefault()
+      z = Math.min(3, Math.max(0.6, z * (e.deltaY < 0 ? 1.12 : 0.89)))
+      apply()
+    }, { passive: false })
+    topo.addEventListener('mousedown', (e) => {
+      if (e.button !== 1) return
+      e.preventDefault()
+      const x0 = e.clientX, t0 = tx
+      const mv = (ev) => { tx = t0 + (ev.clientX - x0) * (1400 / topo.clientWidth); apply() }
+      const up = () => { window.removeEventListener('mousemove', mv); window.removeEventListener('mouseup', up) }
+      window.addEventListener('mousemove', mv)
+      window.addEventListener('mouseup', up)
+    })
+  }
   const io = new IntersectionObserver(es => es.forEach(e => {
     if (e.isIntersecting && byId[e.target.id]) {
       links.forEach(a => a.classList.remove('on'))
