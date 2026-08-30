@@ -33,6 +33,11 @@
     onToggle,
     // member rows are the individual events shown under an opened group.
     member = false,
+    // dimmed (#644's whisper fence): true when this row's receipt time
+    // falls outside a drawn fence range. Visual only, same as the-whole.
+    // html's own .outside{opacity} treatment -- the row is still here,
+    // still filterable, just quiet.
+    dimmed = false,
   }: {
     event: FirewallEvent
     deviceName: string
@@ -42,6 +47,7 @@
     expanded?: boolean
     onToggle?: () => void
     member?: boolean
+    dimmed?: boolean
   } = $props()
 
   const srcFlag = $derived(countryFlag(event.srcCountry))
@@ -144,6 +150,7 @@
   class="row row-{event.action}"
   class:member
   class:expandable
+  class:dimmed
   title={rawTooltip(event.raw, event.rawTruncated)}
 >
   {#if expandable}
@@ -472,6 +479,13 @@
 
   .row.member :global(.cell) {
     opacity: 0.75;
+  }
+
+  /* #644's whisper fence: matches the-whole.html's own .outside{opacity}
+     rule exactly -- everything outside a drawn fence range dims, it
+     doesn't disappear (fencing is a display lens, not a filter). */
+  .row.dimmed :global(.cell) {
+    opacity: 0.25;
   }
 
   .cell {

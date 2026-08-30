@@ -19,6 +19,7 @@
   import Metrics from './Metrics.svelte'
   import FilterBar from './FilterBar.svelte'
   import LiveTable from './LiveTable.svelte'
+  import Whisper from './Whisper.svelte'
   import Docket from './Docket.svelte'
   import Topography from './Topography.svelte'
 
@@ -109,6 +110,7 @@
             {:else if card.key === 'metrics'}
               <Metrics />
             {:else if card.key === 'live'}
+              <Whisper />
               <FilterBar />
               <LiveTable />
             {:else if card.key === 'docket'}

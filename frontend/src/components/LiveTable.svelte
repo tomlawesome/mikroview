@@ -1,6 +1,7 @@
 <script lang="ts">
   // SPDX-License-Identifier: AGPL-3.0-only
   import { appState, applyFilters } from '../lib/state.svelte'
+  import { whisperState } from '../lib/whisper.svelte'
   import { authState } from '../lib/auth.svelte'
   import { MAX_RENDERED_ROWS } from '../lib/constants'
   import { COLUMNS, columnState } from '../lib/columns.svelte'
@@ -267,6 +268,14 @@
     return deviceNames.get(id) ?? id
   }
 
+  // applyFilters is declared FirewallEvent[] even though the objects
+  // flowing through it are always ClientEvents (see state.svelte.ts's
+  // own comment on filteredEvents) -- this reads the receivedAt every
+  // one of them actually carries, for the whisper's fence (#644).
+  function isDimmed(event: FirewallEvent): boolean {
+    return whisperState.dimmed((event as ClientEvent).receivedAt)
+  }
+
   function startResize(index: number, e: PointerEvent) {
     dragIndex = index
     dragStartX = e.clientX
@@ -320,7 +329,12 @@
   {#if viewportState.isMobile}
     <div class="body scrollbar">
       {#each displayRendered as event (event.id)}
-        <EventCardMobile {event} deviceName={deviceName(event.deviceId)} onOpen={() => (selectedEvent = event)} />
+        <EventCardMobile
+          {event}
+          deviceName={deviceName(event.deviceId)}
+          dimmed={isDimmed(event)}
+          onOpen={() => (selectedEvent = event)}
+        />
       {/each}
       {#if rendered.length === 0}
         {#if emptyState.kind === 'ghost'}
@@ -366,6 +380,7 @@
               deviceName={deviceName(group.head.deviceId)}
               count={group.count}
               flagged={flagged.has(group.head.srcIp ?? '')}
+              dimmed={isDimmed(group.head)}
               expandable={group.count > 1}
               expanded={openGroups.has(group.key)}
               onToggle={() => toggleGroup(group.key)}
@@ -386,6 +401,7 @@
                   event={member}
                   deviceName={deviceName(member.deviceId)}
                   flagged={flagged.has(member.srcIp ?? '')}
+                  dimmed={isDimmed(member)}
                   member
                 />
               {/each}
@@ -409,6 +425,7 @@
               {event}
               deviceName={deviceName(event.deviceId)}
               flagged={flagged.has(event.srcIp ?? '')}
+              dimmed={isDimmed(event)}
             />
           {/each}
         {/if}
