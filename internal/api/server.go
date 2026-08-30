@@ -262,6 +262,7 @@ func (s *Server) routes() []route {
 		// deliberately absent from this table.
 		{http.MethodGet, "/api/routeros/{device}/rules", s.handleRouterOSRules},
 		{http.MethodGet, "/api/routeros/{device}/nat", s.handleRouterOSNAT},
+		{http.MethodGet, "/api/routeros/{device}/addresses", s.handleRouterOSAddresses},
 		{http.MethodGet, "/api/stats", s.handleStats},
 		{http.MethodGet, "/api/ws", s.handleWS},
 		{http.MethodGet, "/api/lookup/ip/{ip}", s.handleIPLookup},

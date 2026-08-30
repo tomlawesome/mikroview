@@ -39,6 +39,7 @@ func TestDecodePayloadAcceptsEachKind(t *testing.T) {
 		{"arp", `{"kind":"arp","page":1,"pages":1,"records":[{"address":"192.168.1.50","mac":"aa:bb:cc:dd:ee:ff"}]}`},
 		{"wireguard-interface", `{"kind":"wireguard-interface","page":1,"pages":1,"records":[{"name":"wg0","comment":"site-to-site","publicKey":"abc123","listenPort":51820}]}`},
 		{"wireguard-peer", `{"kind":"wireguard-peer","page":1,"pages":1,"records":[{"publicKey":"abc123","allowedAddress":"10.10.0.0/24","endpointAddress":"203.0.113.5:51820","comment":"branch office"}]}`},
+		{"ip-address", `{"kind":"ip-address","page":1,"pages":1,"records":[{"address":"192.168.1.1/24","network":"192.168.1.0","interface":"ether1","comment":"lan"}]}`},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -525,6 +526,40 @@ func TestRouterOSListRejectsBadShapesAndOversizedSets(t *testing.T) {
 	}
 	b.WriteString(`],"endpointAddress":"","comment":"c"}]}`)
 	decodeErr(t, b.String())
+}
+
+// TestIPAddressRoundTripsFields is issue #627's own acceptance case: an
+// /ip/address entry, paged like any other kind (see
+// TestDecodePayloadRoundTripsFields's dhcp-lease case -- paging is an
+// envelope concern, not a per-kind one, so this only needs to pin that
+// nothing about this kind's fields is lost on the way through).
+func TestIPAddressRoundTripsFields(t *testing.T) {
+	p := decodeOK(t, `{"kind":"ip-address","page":2,"pages":3,"records":[{"address":"192.168.1.1/24","network":"192.168.1.0","interface":"ether1","comment":"lan"}]}`)
+	if p.Page != 2 || p.Pages != 3 {
+		t.Errorf("Page/Pages = %d/%d, want 2/3", p.Page, p.Pages)
+	}
+	if len(p.IPAddresses) != 1 {
+		t.Fatalf("len(IPAddresses) = %d, want 1", len(p.IPAddresses))
+	}
+	got := p.IPAddresses[0]
+	if got.Address != "192.168.1.1/24" || got.Network != "192.168.1.0" || got.Interface != "ether1" || got.Comment != "lan" {
+		t.Errorf("IPAddresses[0] = %+v, unexpected", got)
+	}
+}
+
+func TestIPAddressRejectsUnknownRecordField(t *testing.T) {
+	decodeErr(t, `{"kind":"ip-address","page":1,"pages":1,"records":[{"address":"192.168.1.1/24","network":"192.168.1.0","interface":"ether1","comment":"","disabled":false}]}`)
+}
+
+func TestIPAddressRejectsControlAndFormatCharacters(t *testing.T) {
+	// \u0007 (BEL) and \u202e (RIGHT-TO-LEFT OVERRIDE), the same two
+	// classes every other field in this package refuses -- see
+	// validateFieldText's doc comment -- written as JSON escapes so the
+	// decoder accepts them and validateFieldText gets a real rune to
+	// refuse, same as TestDecodePayloadRejectsControlCharacterInField and
+	// TestDecodePayloadRejectsFormatCharacterInField.
+	decodeErr(t, `{"kind":"ip-address","page":1,"pages":1,"records":[{"address":"192.168.1.1/24","network":"","interface":"","comment":"evil\u0007bell"}]}`)
+	decodeErr(t, `{"kind":"ip-address","page":1,"pages":1,"records":[{"address":"192.168.1.1/24\u202e","network":"","interface":"","comment":""}]}`)
 }
 
 // TestDecodeRealFilterRulePush decodes a payload captured verbatim from a

@@ -331,6 +331,16 @@ export interface RouterNatRule {
   dynamic?: boolean
 }
 
+// The pushed /ip/address table (issue #627) -- an interface's own
+// configured address, distinct from RouterFilterRule/RouterNatRule and
+// from the ARP/DHCP tables' observed-elsewhere addresses.
+export interface RouterIPAddress {
+  address: string
+  network: string
+  interface: string
+  comment: string
+}
+
 export interface RouterTable<T> {
   available: boolean
   updatedAt?: string
@@ -346,6 +356,12 @@ export async function fetchRouterRules(device: string): Promise<RouterTable<Rout
 export async function fetchRouterNat(device: string): Promise<RouterTable<RouterNatRule>> {
   const res = await fetch(`/api/routeros/${encodeURIComponent(device)}/nat`)
   if (!res.ok) throw new ApiError(`fetchRouterNat: ${res.status}`, res.status)
+  return res.json()
+}
+
+export async function fetchRouterAddresses(device: string): Promise<RouterTable<RouterIPAddress>> {
+  const res = await fetch(`/api/routeros/${encodeURIComponent(device)}/addresses`)
+  if (!res.ok) throw new ApiError(`fetchRouterAddresses: ${res.status}`, res.status)
   return res.json()
 }
 
