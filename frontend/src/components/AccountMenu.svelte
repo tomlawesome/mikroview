@@ -22,7 +22,7 @@
 
   type Row = { label: string; view?: View; action?: 'run-setup'; admin?: boolean }
   const operate: Row[] = [
-    { label: 'The engine room', view: 'engineroom' },
+    { label: 'Settings', view: 'engineroom' },
     { label: 'Fleet', view: 'fleet' },
     { label: 'Entities', view: 'entities', admin: true },
     { label: 'Audit log', view: 'audit', admin: true },
