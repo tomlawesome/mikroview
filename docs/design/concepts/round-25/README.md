@@ -44,5 +44,7 @@ serving.
 
 ## Owner verdicts
 
-- Pending: the settings development, the flags clear-all, the reach
-  dead zones.
+- Settings development: **"Settings approved"**.
+- Reach dead zones: **"Dead zone is perfect."**
+- Flags clear-all: **"This is truly a terrible implementation ...
+  wtf"** — rejected; redone properly in round 26.
