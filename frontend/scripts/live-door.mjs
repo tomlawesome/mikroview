@@ -59,9 +59,12 @@ check(
   `the amber draws as a thin box framing the wordmark (${frame.width} ${frame.style})`,
 )
 
+// No footer on the door (owner, 2026-08-30): the standing promise came
+// off it -- the door carries the brink, the fall and the way in, nothing
+// else. The promise still lives where it works, the wizard.
 check(
-  await page.isVisible('.promise'),
-  'the standing promise rides the door -- the router pushes, mikroview never connects',
+  (await page.locator('.promise').count()) === 0,
+  'the door carries no footer',
 )
 
 // The wording rule (round 15): the product says password, never
