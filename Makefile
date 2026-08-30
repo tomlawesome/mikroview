@@ -61,8 +61,30 @@ clean:
 # sufficient, and there is no second edit to forget. Three standalone
 # scripts had no runner at all and rotted into being unable to start a
 # server, silently, for months (#595, #624).
+#
+# The trap is load-bearing (#660). `live-env.sh up` detaches its instance
+# deliberately, and `down` is the only thing that stops it -- so without
+# a trap, a run interrupted before the `down` line (Ctrl-C, a killed
+# agent, a session ending mid-scenario) leaves that server holding its
+# slot's HTTP port for good. One such leak walled the standalone phase
+# for every checkout on the host until it was found by hand, because the
+# standalone scripts bind ports from the same range.
+#
+# EXIT alone is not enough: bash runs an EXIT trap on a normal exit, but
+# a SIGINT reaching this shell terminates it without one unless INT is
+# trapped too. Trapping both, then calling `down` explicitly between the
+# phases, means the instance goes away whether the run finishes, fails or
+# is killed. `down` is idempotent, so running it twice costs nothing.
+#
+# Armed AFTER `up`, never before, and that ordering matters. `down` ends
+# with `rm -rf "$$MV_DIR"`, and two checkouts that hash to the same slot
+# share that directory. `up` refuses to start when something already
+# holds the port precisely so it does not trample a stranger's instance
+# -- arming the trap first would have this recipe do exactly that on the
+# way out of the refusal it just respected.
 live-check:
 	@eval "$$(scripts/live-env.sh up)"; \
+	  trap 'scripts/live-env.sh down >/dev/null 2>&1 || true' EXIT INT TERM; \
 	  status=0; \
 	  scripts/run-scenarios.sh || status=1; \
 	  scripts/live-env.sh down; \
