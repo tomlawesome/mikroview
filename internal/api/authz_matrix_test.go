@@ -119,6 +119,14 @@ var authzMatrix = []routeExpectation{
 		"same reversibility as the per-flag clear below, at bulk -- regular clears only, never creates an exclusion"},
 	{http.MethodPost, "/api/flags/{id}/clear", accessUser,
 		"reversible: a cleared flag raises again on the next matching event, so any user may dismiss noise"},
+	{http.MethodPost, "/api/flags/{id}/verdict", accessUser,
+		"#638: expected/noise are exactly as reversible as the plain clear above (same clearLocked path, " +
+			"see flags.Store.SetVerdict), and real is reversible too -- it clears nothing and creates no " +
+			"exclusion, unlike the admin-only clear-permanent below"},
+	{http.MethodDelete, "/api/flags/verdict/{id}", accessUser,
+		"#638's undo affordance for the row above -- same tier as judging in the first place, since " +
+			"reversing a judgement is no more dangerous than making one. Not \"/{id}/verdict\": see the " +
+			"registration comment in server.go for why that shape can't be registered here"},
 
 	// -- Admin only ----------------------------------------------------
 	{http.MethodPost, "/api/flags/{id}/clear-permanent", accessAdmin,
