@@ -26,6 +26,8 @@
   import { zonesState } from '../lib/zones.svelte'
   import { policyState, type PolicyEdge } from '../lib/policy.svelte'
   import { realityEdges, unexercisedIntents, type RealityEdge } from '../lib/reality'
+  import { coverageState } from '../lib/coverage.svelte'
+  import { authState } from '../lib/auth.svelte'
   import { reachFor } from '../lib/reach'
   import { formatEps } from '../lib/format'
 
@@ -38,12 +40,15 @@
     if (appState.devices.length > 0) {
       zonesState.refresh()
       policyState.refresh()
+      coverageState.refresh()
     }
   })
 
+  const isAdmin = $derived(authState.role === 'admin')
+
   // Which lens repaints the fixed picture. Reach layers on top of
-  // either (#626: a mode, not a place).
-  let lens = $state<'traffic' | 'policy'>('traffic')
+  // any of them (#626: a mode, not a place).
+  let lens = $state<'traffic' | 'policy' | 'coverage'>('traffic')
 
   const zones = $derived(zonesState.zones)
   const eps = $derived(appState.stats?.eventsPerSecond ?? 0)
@@ -284,6 +289,103 @@
     return `${mark} ${ports ? `${ports} · ` : ''}${n}×`
   }
 
+  // --- the coverage paint (#630: layer 4, the #392 model) ------------------
+  // Per boundary and direction: observed (a rule logs) draws solid,
+  // dark (rules, none logging) draws dotted and is labelled dark --
+  // drawn, never omitted, because an edge's absence is information.
+  // Declared-quiet boundaries arrive with the declarations store.
+  const drawnCoverage = $derived.by((): { drawn: DrawnEdge[]; undrawn: number } => {
+    const drawn: DrawnEdge[] = []
+    let undrawn = 0
+    for (const e of policyState.edges) {
+      // Coverage is about the boundary-direction, not passage: every
+      // pair draws the full crossing, logged or dark.
+      const line = drawn.length < EDGE_CAP ? lineFor(e.from, e.to, true) : null
+      if (!line) {
+        undrawn++
+        continue
+      }
+      drawn.push({ edge: e, line })
+    }
+    return { drawn, undrawn }
+  })
+
+  type CoverageStateOf = 'observed' | 'quiet' | 'dark'
+
+  function coverageOf(e: PolicyEdge): CoverageStateOf {
+    if (e.logged) return 'observed'
+    return coverageState.byKey.has(e.key) ? 'quiet' : 'dark'
+  }
+
+  function pairName(from: string, to: string): string {
+    const name = (i: string) => (i === zonesState.wanInterface ? 'the internet' : i === '' ? 'any lane' : i)
+    return `${name(from)} → ${name(to)}`
+  }
+
+  function coverageLabel(e: PolicyEdge): string {
+    const st = coverageOf(e)
+    if (st === 'observed') return `${pairName(e.from, e.to)}: logged`
+    if (st === 'quiet') {
+      const d = coverageState.byKey.get(e.key)
+      return `${pairName(e.from, e.to)}: intentionally quiet — ${d?.reason ?? ''}`
+    }
+    return `${pairName(e.from, e.to)}: dark — no rule on this boundary-direction logs`
+  }
+
+  // The declare-a-gap interaction (#392: one acknowledgement, stored
+  // with its reason). Admin-only, per #490's grammar: for a viewer the
+  // affordance is absent, never disabled. Opened by clicking a dark or
+  // quiet edge in the Coverage lens.
+  let declarePanel = $state<{ key: string; from: string; to: string } | null>(null)
+  let declareReason = $state('')
+  let declareBusy = $state(false)
+
+  function openCoverage(e: PolicyEdge) {
+    if (!isAdmin || coverageOf(e) === 'observed') return
+    coverageState.error = null
+    declareReason = coverageState.byKey.get(e.key)?.reason ?? ''
+    declarePanel = { key: e.key, from: e.from, to: e.to }
+  }
+
+  async function submitDeclaration() {
+    if (!declarePanel || !declareReason.trim()) return
+    declareBusy = true
+    const ok = await coverageState.declare(declarePanel.key, declareReason.trim())
+    declareBusy = false
+    if (ok) declarePanel = null
+  }
+
+  async function removeDeclaration() {
+    if (!declarePanel) return
+    declareBusy = true
+    const ok = await coverageState.undeclare(declarePanel.key)
+    declareBusy = false
+    if (ok) declarePanel = null
+  }
+
+  // The zone card's coverage caption, kept on every lens (the shaped
+  // surface: the Coverage lens carries the full model, the others keep
+  // the captions). Toward/from the internet, per direction.
+  function zoneCaption(zoneId: string): string | null {
+    const wan = zonesState.wanInterface
+    if (!policyState.anyPushed || !wan) return null
+    const stateOf = (key: string): 'observed' | 'quiet' | 'dark' | 'none' => {
+      const e = policyState.edges.find((p) => p.key === key)
+      if (!e) return 'none'
+      if (e.logged) return 'observed'
+      return coverageState.byKey.has(key) ? 'quiet' : 'dark'
+    }
+    const out = stateOf(`${zoneId}|${wan}`)
+    const inward = stateOf(`${wan}|${zoneId}`)
+    const fine = (st: string) => st === 'observed' || st === 'quiet'
+    if (out === 'observed' && inward === 'observed') return 'LOGGED BOTH WAYS'
+    if (fine(out) && fine(inward)) return 'COVERED — logged or declared quiet'
+    if (out === 'quiet' && !fine(inward)) return 'DARK FROM WAN — quiet toward it by choice'
+    if (fine(out)) return 'DARK FROM WAN — no log rule inbound'
+    if (fine(inward)) return 'DARK TOWARD WAN — no log rule on this boundary'
+    return 'DARK BOTH WAYS — no log rule on this boundary'
+  }
+
   function realityLabel(r: RealityEdge): string {
     const name = (i: string) => (i === zonesState.wanInterface ? 'the internet' : i)
     const what =
@@ -413,8 +515,11 @@
 <svelte:window onkeydown={onKeydown} />
 
 <div class="topo">
-  <div class="crumb">
-    {#if reach}
+  <!-- The breadcrumb exists only descended: surfaced, the scene bar
+       already names the place, and a placeholder crumb was mockup
+       residue (owner, 2026-08-30). -->
+  {#if reach}
+    <div class="crumb">
       <div class="path">
         <button class="crumb-link" onclick={surface}>Network</button>
         <span class="sep">▸</span>
@@ -432,13 +537,8 @@
           {/if}
         </div>
       {/if}
-    {:else}
-      <div class="path">Network <span class="sep">▸</span> <span class="here">—</span></div>
-      {#if primaryDevice}
-        <div class="sub"><b>{primaryDevice.name}</b> pushes its log · mikroview never connects back</div>
-      {/if}
-    {/if}
-  </div>
+    </div>
+  {/if}
   <div class="lenses" role="tablist" aria-label="Map lenses">
     {#if reach}
       <span class="lens on" role="tab" aria-selected="true">Reach</span>
@@ -449,6 +549,9 @@
       </button>
       <button class="lens" class:on={lens === 'policy'} role="tab" aria-selected={lens === 'policy'} onclick={() => (lens = 'policy')}>
         Policy
+      </button>
+      <button class="lens" class:on={lens === 'coverage'} role="tab" aria-selected={lens === 'coverage'} onclick={() => (lens = 'coverage')}>
+        Coverage
       </button>
     {/if}
   </div>
@@ -538,6 +641,51 @@
         {/if}
         {#if drawnReality.undrawn > 0}
           <text x="1370" y="608" text-anchor="end" class="n-sub">+{drawnReality.undrawn} pair{drawnReality.undrawn === 1 ? '' : 's'} not drawn — off this map's islands, or beyond its {EDGE_CAP}-edge calm</text>
+        {/if}
+      {:else if lens === 'coverage'}
+        <!-- The coverage paint (#630): every boundary-direction with
+             rules, drawn by what it logs. Dark is drawn dark, never
+             omitted. -->
+        {#each drawnCoverage.drawn as d, di (d.edge.key)}
+          {@const badge = edgeBadgeAt(d.line, di)}
+          {@const st = coverageOf(d.edge)}
+          <g
+            class="cov-g"
+            class:actionable={isAdmin && st !== 'observed'}
+            {...isAdmin && st !== 'observed'
+              ? { role: 'button', tabindex: 0, 'aria-label': `Declare or review this gap: ${coverageLabel(d.edge)}` }
+              : {}}
+            onclick={() => openCoverage(d.edge)}
+            onkeydown={(e) => {
+              if (e.key === 'Enter') openCoverage(d.edge)
+            }}
+          >
+            <title>{coverageLabel(d.edge)}</title>
+            <path class="edge-hit" d={edgePath(d.line)} />
+            {#if st === 'observed'}
+              <path class="cedge observed" d={edgePath(d.line)} />
+            {:else if st === 'quiet'}
+              <path class="cedge quiet" d={edgePath(d.line)} />
+              <text class="edge-badge quiet-t" x={badge.x} y={badge.y} text-anchor="middle">
+                quiet · {(coverageState.byKey.get(d.edge.key)?.reason ?? '').slice(0, 28)}
+              </text>
+            {:else}
+              <path class="cedge dark" d={edgePath(d.line)} />
+              <text class="edge-badge dark-t" x={badge.x} y={badge.y} text-anchor="middle">dark</text>
+            {/if}
+          </g>
+        {/each}
+
+        {#if !policyState.anyPushed}
+          <g transform="translate(700 400)">
+            <text y="0" text-anchor="middle" class="n-sub">no rule table has been pushed yet — nothing is broken, this lens is waiting for data</text>
+            <text y="20" text-anchor="middle" class="n-sub">coverage is read from which pushed rules log; Settings → Run setup… prints the push script</text>
+          </g>
+        {:else if drawnCoverage.drawn.length === 0}
+          <text x="700" y="400" text-anchor="middle" class="n-sub">the pushed table has no forward rules — no boundary-direction to paint</text>
+        {/if}
+        {#if drawnCoverage.undrawn > 0}
+          <text x="1370" y="608" text-anchor="end" class="n-sub">+{drawnCoverage.undrawn} pair{drawnCoverage.undrawn === 1 ? '' : 's'} not drawn — off this map's islands, or beyond its {EDGE_CAP}-edge calm</text>
         {/if}
       {:else}
         <!-- Intended-policy edges (#628): what the pushed table says
@@ -664,6 +812,9 @@
             </text>
           {/if}
           <text x="-90" y="86" class="n-sub">{z.eventCount.toLocaleString()} events this window</text>
+          {#if zoneCaption(z.id)}
+            <text x="-90" y="70" class="n-cov" class:dark-t={zoneCaption(z.id)?.startsWith('DARK')}>{zoneCaption(z.id)}</text>
+          {/if}
         </g>
       {/each}
 
@@ -785,6 +936,34 @@
           <text x={MX} y={MY + 80} text-anchor="middle" class="n-sub">nothing observed this window</text>
         {/if}
       </svg>
+    </div>
+  {/if}
+
+  {#if declarePanel && lens === 'coverage' && !reach}
+    {@const existing = coverageState.byKey.get(declarePanel.key)}
+    <!-- The declare-a-gap panel (#392): one acknowledgement, with its
+         reason, on the record. Reached only by an admin clicking a
+         non-observed edge. -->
+    <div class="declare" role="dialog" aria-label="Declare this gap intentionally quiet">
+      <p class="d-pair">{pairName(declarePanel.from, declarePanel.to)}</p>
+      {#if existing}
+        <p class="d-meta">declared quiet by <b>{existing.declaredBy}</b> · {new Date(existing.declaredAt).toLocaleDateString()}</p>
+      {:else}
+        <p class="d-meta">dark — nothing on this boundary-direction logs. If that is a choice, say why once and it stays said.</p>
+      {/if}
+      <textarea rows="2" placeholder="why this gap is intentional…" bind:value={declareReason}></textarea>
+      {#if coverageState.error}
+        <p class="d-error">{coverageState.error}</p>
+      {/if}
+      <div class="d-row">
+        <button class="d-primary" disabled={declareBusy || !declareReason.trim()} onclick={submitDeclaration}>
+          {existing ? 'Update the reason' : 'Declare intentionally quiet'}
+        </button>
+        {#if existing}
+          <button class="d-danger" disabled={declareBusy} onclick={removeDeclaration}>Remove — it goes dark again</button>
+        {/if}
+        <button class="d-quiet" onclick={() => (declarePanel = null)}>Cancel</button>
+      </div>
     </div>
   {/if}
 
@@ -1028,6 +1207,151 @@
   .ghost-t {
     opacity: 0.75;
     font-style: italic;
+  }
+
+  /* --- the coverage paint (#630) ----------------------------------------- */
+  .cedge {
+    fill: none;
+    stroke-linecap: round;
+  }
+
+  .cedge.observed {
+    stroke: var(--fg-muted);
+    stroke-width: 2;
+    opacity: 0.6;
+  }
+
+  /* Dark is drawn dark: a dotted line in the darkest ink, labelled. */
+  .cedge.dark {
+    stroke: var(--fg);
+    stroke-width: 1.6;
+    stroke-dasharray: 2 5;
+    opacity: 0.7;
+  }
+
+  .dark-t {
+    fill: var(--fg);
+    opacity: 0.8;
+  }
+
+  .n-cov {
+    fill: var(--fg-dim);
+    font-size: 8px;
+    letter-spacing: 0.06em;
+  }
+
+  /* Intentionally quiet: muted and named -- calmer than dark, dimmer
+     than observed. */
+  .cedge.quiet {
+    stroke: var(--fg-dim);
+    stroke-width: 1.6;
+    stroke-dasharray: 6 4;
+    opacity: 0.5;
+  }
+
+  .quiet-t {
+    fill: var(--fg-dim);
+    font-style: italic;
+  }
+
+  .cov-g.actionable {
+    cursor: pointer;
+  }
+
+  .cov-g.actionable:hover .cedge,
+  .cov-g.actionable:focus-visible .cedge {
+    opacity: 1;
+  }
+
+  .cov-g:focus-visible {
+    outline: none;
+  }
+
+  .declare {
+    position: absolute;
+    left: 24px;
+    bottom: 34px;
+    z-index: 3;
+    width: 320px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    background: var(--bg-elevated);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 14px 16px;
+  }
+
+  .d-pair {
+    margin: 0;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--fg);
+  }
+
+  .d-meta {
+    margin: 0;
+    font-size: 11px;
+    color: var(--fg-dim);
+  }
+
+  .d-meta b {
+    color: var(--fg-muted);
+  }
+
+  .declare textarea {
+    resize: vertical;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    color: var(--fg);
+    font: inherit;
+    font-size: 12.5px;
+    padding: 8px 9px;
+  }
+
+  .declare textarea:focus {
+    outline: none;
+    border-color: var(--accent);
+  }
+
+  .d-error {
+    margin: 0;
+    font-size: 11.5px;
+    color: var(--reject);
+  }
+
+  .d-row {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+
+  .d-row button {
+    border-radius: 7px;
+    font-size: 11.5px;
+    padding: 6px 10px;
+    cursor: pointer;
+    border: 1px solid var(--border);
+    background: transparent;
+    color: var(--fg-muted);
+  }
+
+  .d-primary {
+    background: var(--accent) !important;
+    border-color: var(--accent) !important;
+    color: var(--bg) !important;
+    font-weight: 600;
+  }
+
+  .d-danger:hover {
+    color: var(--reject);
+    border-color: var(--reject);
+  }
+
+  .d-row button:disabled {
+    opacity: 0.5;
+    cursor: default;
   }
 
   .edge-bar.dim {
