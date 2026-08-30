@@ -74,7 +74,6 @@
 // afterward, as originally written, keeps that timer's first tick safely
 // after this run's events already exist.
 
-import { fileURLToPath } from 'url'
 import { request } from 'playwright'
 import { session, check, done, feedPortScan, waitForFlag, goTo } from './live-browser.mjs'
 
@@ -149,15 +148,21 @@ if (firstRaised.every((r) => r.ok)) {
   check(await cardFor(page, '198.51.100.78').isVisible(), 'the second port scan raised its own flag')
 
   // --- Split button: main segment behaves exactly like the old Clear ---
+  // The actions live in the drawer now (#633, rounds 18-19): the card's
+  // one affordance is the chevron, and Clear sits across the drawer's
+  // foot -- so every clear below opens the drawer first.
 
+  const first = cardFor(page, '198.51.100.77')
+  await first.locator('.openc').click()
+  await first.locator('.split-main').waitFor({ timeout: 5000 })
   check(
     !(await page.isVisible('button:has-text("Clear, never flag again")')),
     'the old two-button row is gone',
   )
-  check(await page.isVisible('.split-arrow'), 'the split-button arrow segment is present for an admin')
+  check(await page.isVisible('.split-arrow'), 'the split-button arrow segment is present for an admin, in the drawer')
 
   const before = await activeCount(page)
-  await cardFor(page, '198.51.100.77').locator('.split-main').click()
+  await first.locator('.split-main').click()
   await page.waitForTimeout(400)
   check(
     (await activeCount(page)) === before - 1 && !(await cardFor(page, '198.51.100.77').isVisible()),
@@ -167,6 +172,8 @@ if (firstRaised.every((r) => r.ok)) {
   // --- Split dropdown: keyboard accessibility, on the other scan's card ---
 
   const target = cardFor(page, '198.51.100.78')
+  await target.locator('.openc').click()
+  await target.locator('.split-arrow').waitFor({ timeout: 5000 })
   await target.locator('.split-arrow').focus()
   check(
     await page.evaluate(() => document.activeElement?.classList.contains('split-arrow')),
@@ -260,28 +267,28 @@ if (firstRaised.every((r) => r.ok)) {
       check(await cardFor(page, ip).isVisible(), `flag for ${ip} is active before Clear all`)
     }
 
-    check(!(await page.isVisible('button:has-text("Confirm")')), 'Clear all starts unarmed')
-    await page.click('button:has-text("Clear all")')
+    // Clear all is the docket tab row's outlined bubble now (rounds
+    // 28-29, owner-ratified): one click arms it alarm-red "confirm", a
+    // second click clears, and a click anywhere else disarms -- the
+    // hover-away and timeout disarms went with the old button.
+    check(!(await page.isVisible('.docket .bubble.armed')), 'the bubble starts unarmed')
+    await page.click('.docket .bubble:has-text("clear all")')
     await page.waitForTimeout(150)
-    check(await page.isVisible('button.clear-all.armed:has-text("Confirm")'), 'one click arms it -- red, and relabelled Confirm')
+    check(await page.isVisible('.docket .bubble.armed:has-text("confirm")'), 'one click arms it -- alarm-red, and relabelled confirm')
 
     const armedCount = await activeCount(page)
 
-    // Moving the pointer away disarms it without a second click.
-    await page.hover('h2:has-text("Active")')
-    await page.waitForTimeout(300)
-    check(!(await page.isVisible('button.clear-all.armed')), 'the pointer leaving the button disarms it')
-
-    // Re-arm and let the timeout do the disarming.
-    await page.click('button:has-text("Clear all")')
-    check(await page.isVisible('button.clear-all.armed'), 're-armed for the timeout check')
-    await page.waitForTimeout(4500)
-    check(!(await page.isVisible('button.clear-all.armed')), 'it disarms itself after the ~4s timeout with no second click')
+    // A click anywhere else disarms it without clearing, so an armed
+    // bubble cannot ambush a later stray click.
+    await page.click('h2:has-text("Active")')
+    await page.waitForTimeout(150)
+    check(!(await page.isVisible('.docket .bubble.armed')), 'a click anywhere else disarms it without a second click')
     check((await activeCount(page)) === armedCount, 'nothing was cleared by an arm that was never confirmed')
 
-    // The real thing: click, then click again while still hovering.
-    await page.click('button:has-text("Clear all")')
-    await page.click('button:has-text("Confirm")')
+    // The real thing: arm, then confirm.
+    await page.click('.docket .bubble:has-text("clear all")')
+    await page.waitForTimeout(150)
+    await page.click('.docket .bubble.armed:has-text("confirm")')
     await page.waitForTimeout(600)
 
     check((await activeCount(page)) === 0, 'the second click actually clears every active flag, including the extra rule_spike')
