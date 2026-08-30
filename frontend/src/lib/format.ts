@@ -6,6 +6,16 @@ export function formatTime(iso: string): string {
   return d.toLocaleTimeString(undefined, { hour12: false })
 }
 
+// The stream's time column (#644's squared columns). Milliseconds, not
+// just seconds: at real event rates several rows share a second, and the
+// order the table shows is decided below one -- whole-second stamps make
+// distinct arrivals read as simultaneous.
+export function formatTimeMs(iso: string): string {
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return iso
+  return `${d.toLocaleTimeString(undefined, { hour12: false })}.${String(d.getMilliseconds()).padStart(3, '0')}`
+}
+
 export function formatAddr(ip?: string, port?: number): string {
   if (!ip) return '—'
   return port ? `${ip}:${port}` : ip

@@ -108,9 +108,11 @@ check(
 // The untagged dstnat line has no rule label to search by, so it is
 // found here: under the natted filter, on the chain the inference keys
 // off. Two natted sources -- one declared, one inferred -- and this
-// asserts the inferred one arrived.
-const nattedChains = await page.$$eval('.grid .row .cell.chain', (els) =>
-  els.map((e) => e.textContent.trim()),
+// asserts the inferred one arrived. Read off each row's data-chain
+// attribute: #644's squared columns dropped the chain cell, and this
+// attribute is the hook EventRow carries in its place.
+const nattedChains = await page.$$eval('.grid .row[data-chain]', (els) =>
+  els.map((e) => e.dataset.chain),
 )
 check(
   nattedChains.includes('dstnat'),
@@ -126,8 +128,8 @@ check(
 // the way past.
 await page.selectOption('select[aria-label="Action"]', 'unknown')
 await page.waitForTimeout(900)
-const unknownChains = await page.$$eval('.grid .row .cell.chain', (els) =>
-  els.map((e) => e.textContent.trim()),
+const unknownChains = await page.$$eval('.grid .row[data-chain]', (els) =>
+  els.map((e) => e.dataset.chain),
 )
 check(
   unknownChains.includes('postrouting'),
