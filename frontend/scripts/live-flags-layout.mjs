@@ -6,7 +6,6 @@
 // trip via reload, and the responsive floor exercised by actually
 // resizing the viewport rather than asserting the media query exists.
 
-import { fileURLToPath } from 'url'
 import { session, check, done, feedPortScan, goTo } from './live-browser.mjs'
 
 
