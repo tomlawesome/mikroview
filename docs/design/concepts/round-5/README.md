@@ -110,6 +110,31 @@ apparatus, not design.
   status cluster floats top-right, stream controls float beneath it.
   The build's SceneBar.svelte follows once the round is ratified.
 
+## The owner's fourth batch (2026-08-30)
+
+- **Viewpoint, clarified**: not two projections — a break away from
+  the circular chart entirely. The topography is "more of a cartesian
+  XYZ layout", and the reduced view keeps that layout and its major
+  links: "We as the viewer just change our viewpoint." Built: CLOSE ⇄
+  SURVEY — one cartesian graph, the camera tilts back (rotateX), cards
+  collapse to dots at the same positions, links unchanged. The orbit
+  projection is gone from the topography, and the atlas's centre chart
+  is de-circled to the same cartesian shape, small, inside the
+  far-orbit destinations ring.
+- **Depth as a layers slider**: "show EVERYTHING, down to the client
+  level, but also filter it. Maybe with a slider? So that we get back
+  up to a top level view that's easy to click through." Built: DEPTH —
+  zones · services · clients; at clients, every host hangs beneath its
+  lane (cam-porch flagged); both controls live in the mockup.
+- **The door's rain stays behind**: the falling pattern must never
+  cross the login/logo elements — the rain layer is masked out of the
+  centre entirely.
+- **Deep explanation never sits in the UI** (general rule, recorded on
+  #616 for the shipped fall too): "How to read this" blocks hide
+  behind a tiny (i) well out of the way, with the depth in the docs —
+  "once a user has learned what it means, they never really need it
+  again."
+
 ## Owner verdicts
 
 - Door: v3 standing (v2 accepted + full-screen fall, boxed wordmark).
