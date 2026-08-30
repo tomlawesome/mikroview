@@ -232,3 +232,20 @@ func (s *Server) handleRouterOSNAT(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, resp)
 }
+
+// handleRouterOSAddresses is handleRouterOSRules for the pushed
+// /ip/address table (issue #627) -- an interface's own configured
+// address, distinct from the ARP/DHCP tables' observed-elsewhere
+// addresses.
+func (s *Server) handleRouterOSAddresses(w http.ResponseWriter, r *http.Request) {
+	device := r.PathValue("device")
+	addrs, updatedAt, ok := s.RouterState.IPAddresses(device)
+	resp := routerTableResponse{Available: ok, Rules: addrs}
+	if ok {
+		resp.UpdatedAt = &updatedAt
+	}
+	if addrs == nil {
+		resp.Rules = []ingest.IPAddressEntry{}
+	}
+	writeJSON(w, http.StatusOK, resp)
+}

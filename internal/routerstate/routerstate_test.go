@@ -71,6 +71,9 @@ func TestNoDataIsDistinctFromEmpty(t *testing.T) {
 	if _, _, ok := s.AddressLists("router-1"); ok {
 		t.Error("AddressLists reported ok for a device that never pushed")
 	}
+	if _, _, ok := s.IPAddresses("router-1"); ok {
+		t.Error("IPAddresses reported ok for a device that never pushed")
+	}
 }
 
 // TestDHCPLeasesARPAddressListsSortedAndAccessible is issue #243 slice
@@ -84,6 +87,7 @@ func TestDHCPLeasesARPAddressListsSortedAndAccessible(t *testing.T) {
 	apply(t, s, "router-1", `{"kind":"dhcp-lease","page":1,"pages":1,"records":[{"hostname":"zeta","mac":"aa:bb:cc:dd:ee:02","address":"192.168.1.2"},{"hostname":"alpha","mac":"aa:bb:cc:dd:ee:01","address":"192.168.1.1"}]}`)
 	apply(t, s, "router-1", `{"kind":"arp","page":1,"pages":1,"records":[{"address":"192.168.1.9","mac":"aa:bb:cc:dd:ee:09"},{"address":"192.168.1.5","mac":"aa:bb:cc:dd:ee:05"}]}`)
 	apply(t, s, "router-1", `{"kind":"address-list","page":1,"pages":1,"records":[{"list":"blocked","address":"198.51.100.9","comment":"","dynamic":false},{"list":"blocked","address":"198.51.100.1","comment":"","dynamic":false}]}`)
+	apply(t, s, "router-1", `{"kind":"ip-address","page":1,"pages":1,"records":[{"address":"192.168.1.9/24","network":"192.168.1.0","interface":"ether1","comment":""},{"address":"192.168.1.1/24","network":"192.168.1.0","interface":"ether1","comment":""}]}`)
 
 	leases, updatedAt, ok := s.DHCPLeases("router-1")
 	if !ok || updatedAt.IsZero() {
@@ -107,6 +111,14 @@ func TestDHCPLeasesARPAddressListsSortedAndAccessible(t *testing.T) {
 	}
 	if len(lists) != 2 || lists[0].Address != "198.51.100.1" || lists[1].Address != "198.51.100.9" {
 		t.Errorf("AddressLists = %+v, want sorted by (list, address)", lists)
+	}
+
+	addrs, _, ok := s.IPAddresses("router-1")
+	if !ok {
+		t.Fatal("IPAddresses reported no data after an applied page")
+	}
+	if len(addrs) != 2 || addrs[0].Address != "192.168.1.1/24" || addrs[1].Address != "192.168.1.9/24" {
+		t.Errorf("IPAddresses = %+v, want sorted by address", addrs)
 	}
 }
 

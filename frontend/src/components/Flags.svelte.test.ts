@@ -142,6 +142,43 @@ describe('Flags Exclusions tab (#547)', () => {
   })
 })
 
+// A custom detection's flag carries the definition's own name as its
+// type -- a string the sixteen-entry palette and label tables cannot
+// know. Indexing them directly crashed the render on the first custom
+// flag, and because the deck mounts every card, that one flag took down
+// every scene at once (caught by the whole live-check suite timing out
+// from live-definitions onward). familyOf/labelFor are the fix; this
+// pins the render surviving.
+describe('a custom detection type renders without crashing', () => {
+  beforeEach(() => {
+    vi.resetAllMocks()
+    vi.mocked(fetchExclusions).mockResolvedValue([])
+    exclusionsState.list = []
+    authState.role = 'admin'
+    flagsState.list = [
+      {
+        id: 'custom:198.51.100.9',
+        type: 'live-custom-detection watch' as never,
+        target: '198.51.100.9',
+        detail: 'an operator-authored detection fired',
+        count: 3,
+        firstSeen: new Date().toISOString(),
+        lastSeen: new Date().toISOString(),
+        cleared: false,
+      },
+    ]
+  })
+
+  it('shows the card with the author-named type as its label', () => {
+    render(Flags)
+    flushSync()
+    // Two homes, both honest: the card's own type line (wearing the
+    // custom family's advisory mark) and the by-type breakdown.
+    expect(screen.getAllByText(/live-custom-detection watch/).length).toBeGreaterThan(0)
+    expect(screen.getByText('▲ live-custom-detection watch')).toBeTruthy()
+  })
+})
+
 // The verdict row itself (issue #638): bare-labelled buttons, the
 // undo-on-clear flow for expected/noise, and the badge that replaces the
 // row (never re-presenting a judged flag as an open question) for real.
@@ -292,8 +329,13 @@ describe('Flags tiers (#653)', () => {
     flushSync()
 
     expect(screen.getByRole('group', { name: 'Judge this flag' })).toBeTruthy()
+
+    // Clear lives in the drawer since #633; Clear all left this
+    // component entirely for the docket's bubble (covered there).
+    await fireEvent.click(screen.getAllByRole('button', { name: /the drawer for this flag/ })[0])
+    flushSync()
+
     expect(screen.getByRole('button', { name: 'Clear' })).toBeTruthy()
-    expect(screen.getByRole('button', { name: 'Clear all' })).toBeTruthy()
     // The permanent-clear arrow stays admin-only -- a user gets the
     // plain Clear button with no split menu beside it.
     expect(screen.queryByRole('button', { name: 'More clear options for this flag' })).toBeNull()

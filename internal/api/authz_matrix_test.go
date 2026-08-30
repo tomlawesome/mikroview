@@ -147,6 +147,8 @@ var authzMatrix = []routeExpectation{
 		"the pushed firewall rule table (#186 step 4) -- same tier as the event stream it annotates: rule comments/chains are already visible in events, and the lookup button is a user-facing affordance"},
 	{http.MethodGet, "/api/routeros/{device}/nat", accessViewer,
 		"the pushed NAT table, same reasoning as the rules row above"},
+	{http.MethodGet, "/api/routeros/{device}/addresses", accessViewer,
+		"the pushed /ip/address table (#627), same tier as the rules/NAT rows above"},
 	{http.MethodGet, "/api/flags", accessViewer, "core read"},
 
 	// -- Operational writes (user tier) ---------------------------------
@@ -189,6 +191,8 @@ var authzMatrix = []routeExpectation{
 	// gave the whole surface -- reads and writes alike -- to the user
 	// tier (the "watchers" bench gets full access), leaving only the
 	// admin-only account/token/audit/config surfaces below untouched.
+	{http.MethodGet, "/api/coverage/declarations", accessViewer,
+		"a coverage-gap declaration (#630/#392) explains why a boundary-direction pair is intentionally quiet -- reading that explanation is the same viewer-tier read as GET /api/definitions below, not the user-tier write that authors one"},
 	{http.MethodGet, "/api/definitions", accessViewer,
 		"widened for the viewer-readable settings page (#490): a signed-in caller, even at the lowest tier, can see every definition's on/off state, scope and tuned params, same as an admin -- the design record's authz-matrix clause widens this GET deliberately. #653 went on to widen every write below it too, from admin to user tier, but left this one GET at viewer -- a viewer may see the whole surface, just not touch it"},
 	{http.MethodPost, "/api/definitions", accessUser,
@@ -217,6 +221,10 @@ var authzMatrix = []routeExpectation{
 	{http.MethodGet, "/api/entities", accessUser, "admin-managed labels/tags -- widened from admin to user tier by #653's \"watchers\" bench ruling"},
 	{http.MethodPost, "/api/entities", accessUser, "admin-managed labels/tags -- widened from admin to user tier by #653"},
 	{http.MethodDelete, "/api/entities", accessUser, "admin-managed labels/tags -- widened from admin to user tier by #653"},
+	{http.MethodPut, "/api/coverage/declarations/{key}", accessUser,
+		"declaring a boundary intentionally quiet is an on-record explanation, same weight as an entity label -- and #653 moved entity labels to the user tier, so this row followed the reasoning its own justification already rested on rather than staying admin beside a neighbour that moved"},
+	{http.MethodDelete, "/api/coverage/declarations/{key}", accessUser,
+		"undeclares a coverage gap, re-exposing it as unexplained -- same tier as creating it"},
 
 	{http.MethodGet, "/api/suggestions", accessUser,
 		"a suggestion's Justification names a specific rule/device -- same tier as the expectation definitions it can become. Widened from admin to user tier by #653, same as the definitions surface"},

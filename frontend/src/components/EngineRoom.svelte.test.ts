@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 //
-// #490: the engine room absorbs Users.svelte, Tokens.svelte and
-// Detectors.svelte wholesale -- see git history for their own retired
-// test files. This covers the room's own new behaviour: the five
-// stations, the zoom (opening one collapses the rest), and the
-// viewer/admin split the design record asks for (chip once, verbs
-// gated, facts identical).
+// #633 (rounds 23-25): Settings is the shelf -- five groups reporting
+// live truth, the deck's cards in the kept order with sign-in landing
+// on the first, and the watcher bench behind detection's tune row.
+// #490's absorbed pages (Users/Tokens/Detectors) live on behind the
+// doors and the bench; the viewer/admin split those tests carried is
+// unchanged (chip once, verbs gated, facts identical).
 
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { render, screen, fireEvent } from '@testing-library/svelte'
@@ -65,6 +65,7 @@ import { flagsState } from '../lib/flags.svelte'
 import { detectorSettingsState } from '../lib/detectorSettings.svelte'
 import { usersState } from '../lib/users.svelte'
 import { tokensState } from '../lib/tokens.svelte'
+import { deckOrderState } from '../lib/deckOrder.svelte'
 import type { Stats } from '../lib/types'
 import EngineRoom from './EngineRoom.svelte'
 
@@ -98,41 +99,63 @@ beforeEach(() => {
   usersState.list = []
   tokensState.list = []
   tokensState.justCreated = null
+  deckOrderState.set(['fall', 'metrics', 'live', 'docket'])
 })
 
-describe('The engine room (#490)', () => {
-  it('renders its five stations', async () => {
+describe('The settings shelf (#633)', () => {
+  it('renders the five groups and the deck in the kept order', async () => {
     authState.state = 'authenticated'
     authState.role = 'admin'
     render(EngineRoom)
     await settle()
 
-    for (const name of ['The door', 'The store', 'The watchers', 'The flags desk', 'The heralds']) {
+    for (const name of ['your deck', 'ingest', 'detection', 'memory', 'account']) {
       expect(screen.getByText(name)).toBeTruthy()
     }
+    for (const card of ['The fall', 'Metrics', 'Stream', 'The docket']) {
+      expect(screen.getByText(card)).toBeTruthy()
+    }
+    // Sign-in lands on the first card, and the shelf says so exactly once.
+    expect(screen.getAllByText('SIGN-IN LANDS HERE')).toHaveLength(1)
   })
 
-  it('opening a station collapses the others', async () => {
+  it('reordering a card moves the landing with it', async () => {
     authState.state = 'authenticated'
     authState.role = 'admin'
     render(EngineRoom)
     await settle()
 
-    // At rest, the store's subtitle is visible.
-    expect(screen.getByText('what is kept')).toBeTruthy()
-
-    await fireEvent.click(screen.getByRole('button', { name: /The door/ }))
+    // Arrow keys mirror what a drag does: pushing the first card right
+    // makes the second card first, and the landing marker follows.
+    const fall = screen.getByRole('button', { name: /The fall, position 1/ })
+    await fireEvent.keyDown(fall, { key: 'ArrowRight' })
     flushSync()
 
-    // Opening the door collapses the store to a slim title+number bar --
-    // its subtitle (only shown outside the collapsed state) disappears.
-    expect(screen.queryByText('what is kept')).toBeNull()
-    expect(screen.getByRole('button', { name: /The door/ }).getAttribute('aria-expanded')).toBe('true')
+    expect(deckOrderState.order[0]).toBe('metrics')
+    expect(screen.getByRole('button', { name: /Metrics, position 1/ })).toBeTruthy()
 
-    // Closing it again (same toggle) returns the room to rest.
-    await fireEvent.click(screen.getByRole('button', { name: /The door/ }))
+    // Back again, so the kept order is the ratified default for the
+    // other tests.
+    const metrics = screen.getByRole('button', { name: /The fall, position 2/ })
+    await fireEvent.keyDown(metrics, { key: 'ArrowLeft' })
     flushSync()
-    expect(screen.getByText('what is kept')).toBeTruthy()
+    expect(deckOrderState.order[0]).toBe('fall')
+  })
+
+  it("detection's tune row unfolds the watcher bench in place", async () => {
+    authState.state = 'authenticated'
+    authState.role = 'admin'
+    render(EngineRoom)
+    await settle()
+
+    // The bench (EngineRoomWatchers) is not mounted until asked for.
+    expect(screen.queryByText('Port scan')).toBeNull()
+
+    await fireEvent.click(screen.getByRole('button', { name: 'tune…' }))
+    await settle()
+
+    expect(screen.getByText('Port scan')).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'close the bench' })).toBeTruthy()
   })
 
   it('a viewer sees the chip, no verbs, and no admin-only users door', async () => {
@@ -196,7 +219,8 @@ describe('The engine room (#490)', () => {
     render(EngineRoom)
     await settle()
 
-    await fireEvent.click(screen.getByRole('button', { name: /The watchers/ }))
+    // #633 moved the bench behind the detection group's "tune…" link.
+    await fireEvent.click(screen.getByRole('button', { name: 'tune…' }))
     await settle()
 
     expect(screen.queryByRole('checkbox', { name: 'Port scan runs' })).toBeNull()
@@ -209,7 +233,7 @@ describe('The engine room (#490)', () => {
     render(EngineRoom)
     await settle()
 
-    await fireEvent.click(screen.getByRole('button', { name: /The watchers/ }))
+    await fireEvent.click(screen.getByRole('button', { name: 'tune…' }))
     await settle()
 
     expect(screen.getByRole('checkbox', { name: 'Port scan runs' })).toBeTruthy()

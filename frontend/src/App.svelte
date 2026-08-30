@@ -18,7 +18,6 @@
   import EngineRoom from './components/EngineRoom.svelte'
   import Entities from './components/Entities.svelte'
   import Fleet from './components/Fleet.svelte'
-  import AuditLog from './components/AuditLog.svelte'
   import IpLookupPopover from './components/IpLookupPopover.svelte'
   import PortLookupPopover from './components/PortLookupPopover.svelte'
   import RouterLookupPopover from './components/RouterLookupPopover.svelte'
@@ -39,7 +38,7 @@
 
   // The deck's scenes (#633). Everything else is an operate page,
   // reached from the account menu and rendered as a page of its own.
-  const DECK_VIEWS = new Set(['fall', 'metrics', 'live', 'flags', 'watchlist'])
+  const DECK_VIEWS = new Set(['fall', 'topography', 'metrics', 'live', 'flags', 'watchlist', 'audit'])
   const inDeck = $derived(DECK_VIEWS.has(appState.view))
 
   // Any polling call that fails with a 401 (an expired or reset-
@@ -225,8 +224,6 @@
             <Entities />
           {:else if appState.view === 'fleet'}
             <Fleet />
-          {:else if appState.view === 'audit'}
-            <AuditLog />
           {:else}
             <EngineRoom />
           {/if}

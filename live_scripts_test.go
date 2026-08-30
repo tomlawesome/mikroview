@@ -50,6 +50,7 @@ func TestLiveScriptsCoverEveryStore(t *testing.T) {
 		"rule_usage":        {"flags", "ruleUsageStorePath"},
 		"detector_settings": {"flags", "detectorSettingsStorePath"},
 		"entities":          {"entities", "storePath"},
+		"coverage":          {"coverage", "storePath"},
 		"mac_registry":      {"deviceMac", "storePath"},
 		"engine_state":      {"engine", "storePath"},
 		"definitions":       {"engine", "definitionsStorePath"},
