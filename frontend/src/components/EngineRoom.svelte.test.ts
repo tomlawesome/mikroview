@@ -8,7 +8,7 @@
 // unchanged (chip once, verbs gated, facts identical).
 
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { render, screen, fireEvent } from '@testing-library/svelte'
+import { render, screen, fireEvent, within } from '@testing-library/svelte'
 import { flushSync } from 'svelte'
 
 vi.mock('../lib/api', () => ({
@@ -99,11 +99,11 @@ beforeEach(() => {
   usersState.list = []
   tokensState.list = []
   tokensState.justCreated = null
-  deckOrderState.set(['fall', 'metrics', 'live', 'docket'])
+  deckOrderState.set(['fall', 'metrics', 'live', 'docket', 'entities', 'engineroom'])
 })
 
 describe('The settings shelf (#633)', () => {
-  it('renders the five groups and the deck in the kept order', async () => {
+  it('renders the five groups and the deck -- seven cards for an admin (#647) -- in the kept order', async () => {
     authState.state = 'authenticated'
     authState.role = 'admin'
     render(EngineRoom)
@@ -112,11 +112,25 @@ describe('The settings shelf (#633)', () => {
     for (const name of ['your deck', 'ingest', 'detection', 'memory', 'account']) {
       expect(screen.getByText(name)).toBeTruthy()
     }
-    for (const card of ['The fall', 'Metrics', 'Stream', 'The docket']) {
-      expect(screen.getByText(card)).toBeTruthy()
+    const shelf = document.querySelector<HTMLElement>('.stshelf')!
+    for (const card of ['The fall', 'Metrics', 'Stream', 'The docket', 'Entities', 'Settings']) {
+      expect(within(shelf).getByText(card)).toBeTruthy()
     }
+    expect(screen.getByText('7 cards in the order you keep them', { exact: false })).toBeTruthy()
     // Sign-in lands on the first card, and the shelf says so exactly once.
     expect(screen.getAllByText('SIGN-IN LANDS HERE')).toHaveLength(1)
+  })
+
+  it("a viewer's shelf carries six cards -- no Entities, absent rather than disabled", async () => {
+    authState.state = 'authenticated'
+    authState.role = 'user'
+    render(EngineRoom)
+    await settle()
+
+    expect(screen.getByText('6 cards in the order you keep them', { exact: false })).toBeTruthy()
+    const shelf = document.querySelector<HTMLElement>('.stshelf')!
+    expect(within(shelf).queryByText('Entities')).toBeNull()
+    expect(within(shelf).getByText('Settings')).toBeTruthy()
   })
 
   it('reordering a card moves the landing with it', async () => {

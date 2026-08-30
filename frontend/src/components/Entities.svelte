@@ -2,12 +2,18 @@
   // SPDX-License-Identifier: AGPL-3.0-only
   // Admin-only entity management (see internal/entities.Entity, issue
   // #107) -- persisted (type, key) -> label/tags records covering hosts,
-  // rules, and (issue #109) ports. Two halves:
+  // rules, and (issue #109) ports. Three sections:
   //
-  //  1. "Named entities": every persisted record, with the type/key/tags
+  //  1. "Routers": Fleet folded in here (#647, #634 round 23 -- "fleet
+  //     looks a bit lost", "entities is good but uses a tiny portion of
+  //     the screen"). Leads the page, reusing lib/fleet.ts's sort/status
+  //     logic -- the same module Fleet.svelte itself reads, so the two
+  //     tables can't drift. This surface never says "fleet"; the word
+  //     survives only in that module's name and comments.
+  //  2. "Named entities": every persisted record, with the type/key/tags
   //     add-or-edit form #107 shipped, plus inline label editing (click
   //     a label to rename it in place without opening the form).
-  //  2. "Discovered": hosts/rules/ports seen in live data that have no
+  //  3. "Discovered": hosts/rules/ports seen in live data that have no
   //     entity yet -- mirroring internal/device.Registry's own
   //     "auto-discovered, shown even before configured" pattern, so a
   //     user can name something without already knowing its raw IP/
@@ -16,11 +22,36 @@
   import { onMount } from 'svelte'
   import { entitiesState } from '../lib/entities.svelte'
   import { appState } from '../lib/state.svelte'
+  import { flagsState } from '../lib/flags.svelte'
   import { fetchRules } from '../lib/api'
   import { discoverHosts, discoverPorts, discoverRules } from '../lib/discoveredEntities'
-  import { formatRelative } from '../lib/format'
+  import { formatRelative, formatHM } from '../lib/format'
+  import { STATUS_LABEL, sortedDevices, recentCount as recentCountOf } from '../lib/fleet'
   import type { Entity, RuleUsage } from '../lib/types'
+  import GhostRows from './GhostRows.svelte'
   import PageHeader from './PageHeader.svelte'
+
+  // --- routers (folded in from Fleet, #647) ---------------------------
+  const routerRows = $derived(sortedDevices(appState.devices))
+
+  function recentCount(deviceId: string): number {
+    return recentCountOf(appState.events, deviceId, appState.now)
+  }
+
+  // Same active-flag check Fleet.svelte carries -- a "flagged" badge on
+  // a router whose device_silence flag is still open (see that file's
+  // own comment for why this differs from status === 'stale').
+  function hasActiveSilenceFlag(deviceId: string): boolean {
+    return flagsState.list.some((f) => f.type === 'device_silence' && f.target === deviceId && !f.cleared)
+  }
+
+  // Mirrors Fleet.svelte's own emptyState (#549) -- this page is
+  // admin-only throughout (its GET routes 403 for anyone else), so
+  // there is no viewer wording to carry, unlike Fleet's own copy.
+  const routersEmpty = $derived.by((): { kind: 'ghost' } | { kind: 'text'; text: string } => {
+    if (!appState.initialLoadDone) return { kind: 'ghost' }
+    return { kind: 'text', text: 'No RouterOS devices seen yet — Run setup… to point one at mikroview.' }
+  })
 
   // '' means "not currently editing" -- the add form and the edit form
   // are the same form (Upsert already treats create/replace as one
@@ -38,9 +69,13 @@
 
   // rulesUsage backs the "discovered rules" section -- GET /api/rules'
   // full history (issue #103's internal/rules.Store), fetched once per
-  // panel open the same way entitiesState.refresh() is triggered by
-  // the rail's Entities item (this component is unmounted/remounted on
-  // every view toggle, so onMount firing once per open is exactly right).
+  // panel open (this component is unmounted/remounted on every view
+  // toggle, so onMount firing once per open is exactly right).
+  // entitiesState.refresh() rides the same onMount -- the old nav rail
+  // used to trigger it on the way in, but that rail retired with #633's
+  // deck, leaving nothing to call it until a mutation happened to
+  // refresh the list as a side effect (see upsert()/remove()'s own
+  // comments). Caught here the same #647 found and fixed it.
   let rulesUsage = $state<RuleUsage[]>([])
   let rulesError = $state(false)
 
@@ -48,6 +83,10 @@
     fetchRules()
       .then((r) => (rulesUsage = r))
       .catch(() => (rulesError = true))
+    entitiesState.refresh().catch(() => {
+      // Named entities simply show empty until this resolves, same as
+      // the discovered-rules fetch above -- no page-wide error banner.
+    })
   })
 
   const discoveredRules = $derived(discoverRules(rulesUsage, entitiesState.list))
@@ -221,6 +260,61 @@
        reaches it -- see the #548 PR notes on the open question of
        whether it should become viewer-readable per the design record. -->
   <PageHeader title="Entities" />
+
+  <section class="section routers">
+    <h3 class="section-title">Routers</h3>
+    <p class="section-intro">
+      Every RouterOS device mikroview has seen syslog from, or that's configured in <code>devices</code> but hasn't
+      sent anything yet. A <strong>configured</strong> device that goes quiet for longer than the configured
+      staleness threshold also raises a flag (see the docket's flags tab).
+    </p>
+    {#if routerRows.length === 0}
+      {#if routersEmpty.kind === 'ghost'}
+        <GhostRows label="Loading devices…" rows={3} />
+      {:else}
+        <p class="empty">{routersEmpty.text}</p>
+      {/if}
+    {:else}
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Device</th>
+              <th>Status</th>
+              <th>Last seen</th>
+              <th>Source IP</th>
+              <th class="num">Events (total)</th>
+              <th class="num">Recent (5m)</th>
+            </tr>
+          </thead>
+          <tbody>
+            {#each routerRows as d (d.id)}
+              <tr class:row-stale={d.status === 'stale'} class:row-never={d.status === 'never_seen'}>
+                <td class="name-cell">
+                  <span class="rname">{d.name}</span>
+                  {#if !d.configured}<span class="badge badge-unregistered">unregistered</span>{/if}
+                  {#if hasActiveSilenceFlag(d.id)}<span class="badge badge-flag">flagged</span>{/if}
+                </td>
+                <td>
+                  <span class="rstatus rstatus-{d.status}">
+                    <span class="dot"></span>
+                    {STATUS_LABEL[d.status]}
+                  </span>
+                </td>
+                <td class="mono" title={d.lastSeen ? formatHM(d.lastSeen) : '—'}>
+                  {d.status === 'never_seen' ? '—' : formatRelative(d.lastSeen, appState.now)}
+                </td>
+                <td class="mono dim">{d.sourceIp}</td>
+                <td class="num mono">{d.eventCount}</td>
+                <td class="num mono">{recentCount(d.id)}</td>
+              </tr>
+            {/each}
+          </tbody>
+        </table>
+      </div>
+    {/if}
+  </section>
+
   <p class="intro">
     Entities are shared, persisted labels/tags attached to a host, port, or firewall rule -- friendly names editable
     here instead of only in config.yaml. <strong>Discovered</strong> below lists hosts/rules/ports seen in live
@@ -487,6 +581,134 @@
     margin: 0;
     font-size: 12px;
     color: var(--fg-muted);
+  }
+
+  /* --- routers, folded in from Fleet (#647) ------------------------------ */
+  .table-wrap {
+    background: var(--bg-elevated);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    overflow-x: auto;
+  }
+
+  .routers table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+  }
+
+  .routers th,
+  .routers td {
+    padding: 9px 14px;
+    text-align: left;
+    white-space: nowrap;
+  }
+
+  .routers th {
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--fg-muted);
+    border-bottom: 1px solid var(--border);
+  }
+
+  .routers th.num,
+  .routers td.num {
+    text-align: right;
+  }
+
+  .routers tbody tr {
+    border-bottom: 1px solid var(--border);
+  }
+
+  .routers tbody tr:last-child {
+    border-bottom: none;
+  }
+
+  .routers .row-stale {
+    background: color-mix(in srgb, var(--drop) 6%, transparent);
+  }
+
+  .routers .row-never {
+    background: color-mix(in srgb, var(--fg-dim) 6%, transparent);
+  }
+
+  .name-cell {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .rname {
+    color: var(--fg);
+    font-weight: 600;
+  }
+
+  .mono {
+    font-family: var(--font-mono);
+    color: var(--fg);
+  }
+
+  .mono.dim {
+    color: var(--fg-muted);
+  }
+
+  .badge {
+    font-size: 11px;
+    font-weight: 600;
+    border-radius: 3px;
+    padding: 1px 5px;
+    white-space: nowrap;
+  }
+
+  .badge-unregistered {
+    color: var(--drop);
+    border: 1px solid var(--drop);
+  }
+
+  .badge-flag {
+    color: var(--reject);
+    background: var(--reject-bg);
+  }
+
+  .rstatus {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .rstatus .dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    flex: none;
+  }
+
+  .rstatus-live .dot {
+    background: var(--accept);
+    box-shadow: 0 0 6px var(--accept);
+  }
+
+  .rstatus-live {
+    color: var(--accept);
+  }
+
+  .rstatus-stale .dot {
+    background: var(--drop);
+    box-shadow: 0 0 6px var(--drop);
+  }
+
+  .rstatus-stale {
+    color: var(--drop);
+  }
+
+  .rstatus-never_seen .dot {
+    background: var(--fg-dim);
+  }
+
+  .rstatus-never_seen {
+    color: var(--fg-dim);
   }
 
   .cancel,
