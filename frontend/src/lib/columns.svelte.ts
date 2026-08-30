@@ -8,18 +8,21 @@ export interface ColumnDef {
 // Order matches EventRow.svelte's cell order exactly -- both this array
 // and EventRow render cells positionally into the same CSS Grid, so the
 // two must stay in sync by index.
+// The ratified #644 column set ("the stream, columns squared", round-29
+// scene 4): the same kind of fact always under the eye. Source and
+// Destination each show the resolved name (or the bare address), with a
+// dim address column beside them; everything the old DEVICE / CHAIN /
+// SRC PORT / NAT / INTERFACES columns carried now lives in the row's
+// detail sheet instead of on the row.
 export const COLUMNS: ColumnDef[] = [
   { key: 'time', label: 'Time' },
-  { key: 'device', label: 'Device' },
   { key: 'action', label: 'Action' },
-  { key: 'chain', label: 'Chain' },
   { key: 'source', label: 'Source' },
-  { key: 'srcPort', label: 'Src port' },
+  { key: 'srcAddr', label: 'Address' },
   { key: 'destination', label: 'Destination' },
-  { key: 'dstPort', label: 'Dst port' },
-  { key: 'nat', label: 'NAT' },
+  { key: 'dstAddr', label: 'Address' },
   { key: 'proto', label: 'Proto' },
-  { key: 'iface', label: 'Interfaces' },
+  { key: 'port', label: 'Port' },
   { key: 'rule', label: 'Rule' },
 ]
 
@@ -31,7 +34,7 @@ export const COLUMNS: ColumnDef[] = [
 // it stops flexing and holds the size they chose.
 type Width = number | null
 
-const DEFAULT_WIDTHS: Width[] = [104, 150, 92, 88, null, 76, null, 76, null, 74, 160, null]
+const DEFAULT_WIDTHS: Width[] = [124, 92, null, 132, null, 132, 74, 76, null]
 const MIN_WIDTH = 56
 // Flexible columns used to be `minmax(0, 1fr)`, which lets them shrink to
 // nothing. An address cell holds its label plus a copy button and an
@@ -46,11 +49,11 @@ const MIN_WIDTH = 56
 // clicked. A floor here costs a horizontal scrollbar in the narrowest
 // cases, which is the better failure.
 const FLEX_MIN_WIDTH = 96
-// v3: added the srcPort/dstPort columns (previously inline in the address
-// cells) -- bumped so anyone with a v2 width array saved just falls back
-// to the new defaults instead of applying stale widths to a different
-// column set.
-const STORAGE_KEY = 'mikroview-column-widths-v3'
+// v4: #644's squared columns replaced the twelve-column set with nine --
+// bumped so anyone with a v3 width array saved just falls back to the
+// new defaults instead of applying stale widths to a different column
+// set.
+const STORAGE_KEY = 'mikroview-column-widths-v4'
 
 function loadInitial(): Width[] {
   try {
