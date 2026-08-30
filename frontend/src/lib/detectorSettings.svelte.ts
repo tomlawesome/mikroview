@@ -37,6 +37,7 @@ class DetectorSettingsState {
         description: d.description,
         enabled: d.enabled,
         scope: d.scope ?? {},
+        learning: d.learning,
       }))
   }
 
