@@ -325,6 +325,9 @@ export interface DetectorSettings {
   description?: string
   enabled: boolean
   scope: DetectorScope
+  // Carried through from Definition.learning (#639) -- see that field's
+  // doc comment.
+  learning?: LearningState
 }
 
 // Mirrors internal/api's definitionView (issue #407) -- one definition
@@ -407,6 +410,46 @@ export interface Definition {
   // What this definition costs the ingest path. Set only where an
   // operator chose the conditions that decide it.
   dispatch?: DefinitionDispatch
+  // Baseline warm-up state (#639) -- absent entirely for a definition
+  // with no warm-up concept (LearningReporter not implemented). See
+  // LearningState's own doc comment for what each field means and
+  // EngineRoomWatchers.svelte for the five states this renders as.
+  learning?: LearningState
+}
+
+// Mirrors internal/api's baselineFloorView JSON shape (#639) -- the
+// minimum history a baseline-backed definition needs before a key can be
+// trusted. Each field carries `omitempty` server-side: a dimension the
+// floor does not bind (BaselineFloor's own Go doc comment) is omitted
+// entirely rather than sent as a meaningless 0, so absent and 0 both
+// mean "no floor on this dimension" and must be treated identically.
+// MinDuration renders as days, MinSamples as samples, both together
+// where both bind (off_hours).
+export interface LearningFloor {
+  minDurationSeconds?: number
+  minSamples?: number
+}
+
+// Mirrors internal/engine.LearningProgress's JSON shape -- how far the
+// single furthest-along not-yet-ready key has gotten.
+export interface LearningProgress {
+  observedForSeconds: number
+  samples: number
+}
+
+// Mirrors internal/engine.LearningState's JSON shape (#639): one
+// definition's baseline warm-up status, aggregated live across every
+// key the running engine currently holds -- not a persisted, possibly
+// stale, view (see the issue's "ask the live engine" architecture
+// decision). floor is always present, including when keys is 0.
+// nearest is omitted both when every observed key is ready and when no
+// key has been observed at all, so a caller must check keys/ready
+// before treating an absent nearest as "everything is ready."
+export interface LearningState {
+  floor: LearningFloor
+  keys: number
+  ready: number
+  nearest?: LearningProgress
 }
 
 // The condition language, unchanged from the one expectations and

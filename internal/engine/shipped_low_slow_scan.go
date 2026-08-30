@@ -250,6 +250,14 @@ func (d *lowSlowScanDefinition) Evaluate(e store.Event) {
 	})
 }
 
+// Learning satisfies LearningReporter: one baseline per source, so Ready
+// answers how many sources have cleared minObservation -- see
+// baselineSet.learning and learningStateFrom for the shared read/reduce
+// this and every other baseline-backed shipped definition rely on.
+func (d *lowSlowScanDefinition) Learning(now time.Time) (LearningState, bool) {
+	return learningStateFrom(d.baselines.floor, d.baselines.learning(now)), true
+}
+
 // Replay satisfies Replayable: the same four-axis walk against fresh,
 // call-local state, touching none of this definition's live rings or
 // baselines.
