@@ -24,7 +24,9 @@ Under #634. Three threads from the owner's batch:
   stacked up, and I think watchers should be a purple or a cyan."
   → round 14 builds candidate C, with purple and cyan watcher
   variants to choose between.
-- The corrected metrics card: pending.
+- The corrected metrics card (chat, 2026-08-30): **accepted** — "Ok,
+  lets move on with the seismograph as it is in 13." The owner compared
+  it against the pre-rebuild dev seismograph live before ruling.
 
 ## Post-serve repairs (defects, not rework)
 
