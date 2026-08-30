@@ -24,6 +24,8 @@
 # the LAN -- which is the exact property MV_BIND gives up.
 set -euo pipefail
 
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/live-stores.sh"
+
 # Defaults are derived per checkout, not fixed, because two live checks
 # running at once used to destroy each other rather than merely clash.
 # `up` calls `down` and then `rm -rf "$MV_DIR"`, so a second run on the
@@ -127,11 +129,60 @@ with socket.create_connection((host, port), timeout=10) as sock:
             tls.sendall(line + b"\n")
             if i % 25 == 24:
                 time.sleep(0.01)
+        # Close cleanly, and only once the server has acknowledged the
+        # shutdown. Without this the last write is followed straight by
+        # the socket close and the tail of the burst is lost -- measured
+        # at 9 of 20, 11 of 24 and 46 of 49, with the listener reporting
+        # dropped=0 throughout, because the lines never reached it at
+        # all. It was intermittent rather than constant, and invisible
+        # for any burst that happened to be a multiple of 25: those got
+        # a pause from the pacing above after their final line, and
+        # delivered 100 percent every time. That is what made this look
+        # like detector flakiness for so long (issue #450) -- scenarios
+        # send a 20-port scan, port_scan needs 15 distinct ports, and
+        # the tail going missing put it either side of the threshold
+        # from one run to the next.
+        #
+        # unwrap() sends TLS close_notify and waits for the reply, so
+        # the server has read to EOF before the socket goes away. The
+        # sleep covers the parse the listener still has to do after
+        # that read.
+        time.sleep(0.05)
+        try:
+            tls.unwrap()
+        except OSError:
+            pass
 ' "$SYSLOG_TLS_HOST" "$SYSLOG_TLS_PORT"
 }
 
 build() {
-  ( cd frontend && npm run build >/dev/null 2>&1 )
+  # No /dev/null here, and the exit code is checked explicitly. `set -e`
+  # alone already aborted `up` here on a fresh checkout (no
+  # frontend/node_modules) -- but silently, because npm's own error was
+  # being thrown away with it, and because `up` is meant to be run as
+  # `eval "$(scripts/live-env.sh up)"` (the Makefile's live-check target):
+  # `eval "$(cmd)"` only ever sees cmd's captured *stdout*, so a cmd that
+  # dies before printing any `export ...` line leaves eval nothing to run
+  # but an empty string -- which eval treats as success, whatever cmd's
+  # real exit code was. The Makefile's own live-routeros-container comment
+  # names this same trap (#613); this was its second bite (#617). A
+  # message on stderr, printed here before returning control to a caller
+  # that can no longer see the exit code, is what survives it.
+  #
+  # 1>&2 on the subshell, not a bare call: npm's own build banner and
+  # vite's asset listing print to stdout, and stdout is exactly the
+  # stream `eval "$(scripts/live-env.sh up)"` captures and executes. Left
+  # unredirected that output becomes shell input the moment a build
+  # succeeds too -- "> vite build" read as a redirection into a command
+  # named "build" is how this was actually caught, as "eval: build: not
+  # found" once npm's own text stopped going to /dev/null with the error.
+  if ! ( cd frontend && npm run build ) 1>&2; then
+    echo "live-env: npm run build failed in frontend/ -- see the output above." >&2
+    if [ ! -d frontend/node_modules ]; then
+      echo "live-env: frontend/node_modules is missing -- run 'npm ci' in frontend/ first." >&2
+    fi
+    exit 1
+  fi
   # touch .gitkeep for the same reason the Makefile's frontend target
   # does: rm -rf takes the only tracked file in here with it, and a live
   # check should not leave the tree dirty (#353).
@@ -204,33 +255,7 @@ up() {
   cat > "$MV_DIR/cfg.yaml" <<EOF
 listen: {syslogTls: "$SYSLOG_TLS_ADDR", http: "$MV_BIND:$HTTP_PORT", httpRedirect: ""}
 $TLS_BLOCK
-auth:
-  storePath: $MV_DIR/data/users.json
-  recoveryKeysPath: $MV_DIR/data/recovery.json
-  recoveryPepperPath: $MV_DIR/data/pepper
-  tokensStorePath: $MV_DIR/data/tokens.json
-  secureCookie: $SECURE_COOKIE
-flags:
-  storePath: $MV_DIR/data/flags.json
-  ruleUsageStorePath: $MV_DIR/data/rule-usage.json
-  detectorSettingsStorePath: $MV_DIR/data/detector-settings.json
-entities: {storePath: $MV_DIR/data/entities.json}
-audit: {storePath: $MV_DIR/data/audit.json}
-setup: {storePath: $MV_DIR/data/setup.json}
-watchlist:
-  storePath: $MV_DIR/data/watchlist.json
-  matchLogPath: $MV_DIR/data/matchlog.jsonl
-  suggestionsStorePath: $MV_DIR/data/suggestions.json
-# Every store, not most of them -- see scripts/live-env.sh's own comment
-# above this heredoc before adding one. The ones below used to be left
-# at their /var/lib/mikroview defaults, which no developer machine can
-# write -- so the live check was exercising a deployment that silently
-# failed to persist half its state, which is precisely the condition
-# #536 stops mikroview booting in.
-deviceMac: {storePath: $MV_DIR/data/mac-registry.json}
-engine:
-  storePath: $MV_DIR/data/engine-state.json
-  definitionsStorePath: $MV_DIR/data/definitions.json
+$(mv_store_block "$MV_DIR/data" "$SECURE_COOKIE")
 $DEVICES_BLOCK
 EOF
   MIKROVIEW_CONFIG="$MV_DIR/cfg.yaml" "$MV_DIR/mikroview" > "$MV_DIR/server.log" 2>&1 &

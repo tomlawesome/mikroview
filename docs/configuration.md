@@ -791,7 +791,7 @@ different name in mikroview than the RouterOS comment.
 but changing one means editing `config.yaml` and restarting the
 container. **Entities** are the same idea (a label attached to a rule
 label, host IP, or -- issue #109 -- a port number), plus open-ended
-tags, managed live from the UI (**Menu → Entities**, admin-only) with no
+tags, managed live from the UI (**Admin ▸ Entities**, admin-only) with no
 restart needed -- the shared foundation two features build on (a
 mail-sender allowlist, and this IP/port/rule aliasing UI), so the record
 shape is deliberately generic (`type`, `key`, `label`, `tags`) rather
@@ -825,7 +825,7 @@ only way a port ever gets a friendly name.
 
 Entities are managed via `GET`/`POST`/`DELETE /api/entities`
 (admin-gated the same way `POST /api/auth/users` is -- see
-[API reference](#api-reference)), the **Entities** panel in the menu, or
+[API reference](#api-reference)), **Admin ▸ Entities**, or
 the pencil on any address, port or rule token in the live view -- which
 is usually where you want it, since it puts the naming at the moment you
 recognised what the row was.
@@ -886,7 +886,7 @@ open question about which flag actions belong here:
   do silently. Removing an exclusion
   (`DELETE /api/flags/exclusions/{id}`) is admin-gated and logged too.
 
-Reviewed from **Menu → Audit log** (admin-only, matching Entities' own
+Reviewed from **Investigate ▸ Audit log** (admin-only, matching Entities' own
 gate). Backed by `GET /api/audit`, a windowed query over the
 persisted log (see [API reference](#api-reference)) -- the same
 `since`/`until`/`limit` convention `GET /api/events` already uses, minus
@@ -960,7 +960,7 @@ Two kinds of entry, chosen per entry, not globally:
   (`includeStructuralNoise` opts back in) since it's rarely what anyone
   means by "did this device misbehave."
 
-Managed from **Menu → Watchlist** (admin-only, matching Entities/Audit's
+Managed from **Expect ▸ Watchlist** (admin-only, matching Entities/Audit's
 gate). Add,
 edit and remove entries there; for an inverted entry, the same page
 shows what's been promoted, what's waiting for review, and a toggle to
@@ -1050,7 +1050,7 @@ devices from your DHCP leases, and ports an existing firewall rule
 already drops or rejects -- so you have something to react to rather
 than something to invent.
 
-Managed from **Menu → Suggestions** (admin-only, same gate as the
+Managed from **Expect ▸ Watchlist ▸ Suggestions** (admin-only, same gate as the
 watchlist itself). Every suggestion is one of three states, never a
 plain accept/reject:
 
@@ -1339,7 +1339,7 @@ flags:
   which only fires on distinct-*destination-count* spread over a window
   — a single new SMTP connection to one destination wouldn't trip that.
   If you self-host your own outbound mail server, tag its host entity
-  `trusted-mail-sender` once (**Menu → Entities**, admin-only, or `POST
+  `trusted-mail-sender` once (**Admin ▸ Entities**, admin-only, or `POST
   /api/entities`) and mikroview never flags it for this again. Like
   stale-rule, this doesn't currently support the live enable/scope
   toggle described in [Per-detector
@@ -1554,11 +1554,12 @@ either re-fires once it expires (nothing was solved) or it doesn't
 (permanent exclusion was what was wanted all along), so there's no
 in-between "snooze" option. Because "permanent" shouldn't mean
 "unrecoverable by mistake," every current exclusion is listed (and can
-be removed, re-enabling that pair) on its own **Exclusions** page,
-reachable from the menu -- admin-only, same as every other admin-gated
-endpoint (see [Authentication](#authentication)). It was split out of
-the bottom of the Flags page (issue #207) because reviewing exclusions
-underneath a list of hundreds of active flags was a pain.
+be removed, re-enabling that pair) on its own **Exclusions** tab
+(**Detect ▸ Flags ▸ Exclusions**) -- admin-only, same as every other
+admin-gated endpoint (see [Authentication](#authentication)). It was
+split out of the bottom of the Flags page (issue #207) because
+reviewing exclusions underneath a list of hundreds of active flags was
+a pain.
 
 ## New-device detection (optional, on by default)
 
@@ -1872,6 +1873,117 @@ file, where the alternative to "unchanged" is "locked out".
 > database with `pg_dump` or your provider's snapshots — see
 > [CHANGELOG.md](../CHANGELOG.md) and the migration section above.
 
+### Moving the data directory
+
+**Changed your mind about a bind mount versus a named Docker volume?**
+`-migrate-data` copies the data directory to wherever you point it —
+bind mount to volume, or volume to bind mount — so you don't hand-copy
+files and risk getting the ownership wrong.
+
+```sh
+mikroview -migrate-data <destination-directory> [--force]
+```
+
+**Stop mikroview first.** Then run the image with the old location
+mounted where it always is, the new one mounted at
+`/var/lib/mikroview-migrate`, and the config as usual:
+
+```sh
+# Named volume -> bind mount. /path/on/host/new-data must exist and be
+# owned by uid 65532 first -- see "Ownership" below.
+docker run --rm \
+  -v mikroview-data:/var/lib/mikroview \
+  -v /path/on/host/new-data:/var/lib/mikroview-migrate \
+  -v /path/to/config.yaml:/etc/mikroview/config.yaml:ro \
+  -e MIKROVIEW_CONFIG=/etc/mikroview/config.yaml \
+  ghcr.io/tomlawesome/mikroview:latest \
+  -migrate-data /var/lib/mikroview-migrate
+
+# Bind mount -> named volume, the other direction. mikroview-data-new
+# does not exist yet; Docker creates it, already owned correctly.
+docker run --rm \
+  -v /path/on/host/data:/var/lib/mikroview \
+  -v mikroview-data-new:/var/lib/mikroview-migrate \
+  -v /path/to/config.yaml:/etc/mikroview/config.yaml:ro \
+  -e MIKROVIEW_CONFIG=/etc/mikroview/config.yaml \
+  ghcr.io/tomlawesome/mikroview:latest \
+  -migrate-data /var/lib/mikroview-migrate
+```
+
+**Use `/var/lib/mikroview-migrate`, not a path of your own choosing.**
+The image ships that directory owned by uid 65532 for exactly this job.
+Docker copies a fresh named volume's ownership from whatever the image
+has at the mount point, so a new volume mounted anywhere else — `/mnt`,
+`/data`, anything the image never created — arrives owned by root, and
+mikroview cannot write a single byte into it.
+
+Once the copy is done, the destination becomes the deployment's normal
+`/var/lib/mikroview` mount: change the `volumes:` line in your compose
+file to name the new volume or host directory, and start mikroview
+again. Nothing in the running deployment ever mounts
+`/var/lib/mikroview-migrate`.
+
+**What moves.** Everything under the data directory — the same list as
+[backing up](#backing-up-and-restoring) — plus three things that section
+deliberately leaves out:
+
+- **The TLS store** (`tls.storePath`) — this is the same host keeping
+  the same identity, so there's no reason to make every browser and
+  every router re-trust a new certificate, the way there would be if the
+  data were landing on a different host.
+- **The recovery pepper** (`auth.recoveryPepperPath`) — leaving it
+  behind would silently invalidate every recovery key you've handed out.
+- **The Postgres adoption marker** — without it, a Postgres deployment
+  would come back up reading the empty JSON files and show a first-run
+  setup screen to whoever gets there first.
+
+Backing up excludes these because a backup travels to a different host,
+where the same certificate and pepper are the wrong thing to restore. A
+migration never leaves the host, so carrying them across is exactly
+right.
+
+**Ownership.** mikroview creates every file on the destination itself,
+so the copy ends up owned by the user mikroview runs as (uid `65532` in
+the shipped image) with no `chown` step afterwards. A named volume needs
+nothing — Docker hands it to the container on first use. A bind-mount
+destination on the host has to be writable by that uid *before* you run
+the command, or it refuses before copying anything, naming the uid, the
+directory's current owner, and the exact `chown` to run.
+
+**Nothing is deleted.** This is a copy — the source is untouched until
+you remove it yourself:
+
+1. Check the summary it prints.
+2. Stop mikroview.
+3. Point the deployment's mount at the new location.
+4. Start it, and sign in.
+5. Once you're satisfied, delete the old directory.
+
+The old directory still holds your accounts and recovery-key digests, so
+delete it once the move is confirmed rather than leaving it lying
+around.
+
+**Verification.** Every file is hashed as it's written, then re-read and
+re-hashed off the destination, and each store is opened to prove
+mikroview can actually read and write it there — not just that the bytes
+match. A failure at any point leaves the source untouched.
+
+`-migrate-data` refuses:
+
+- a destination that isn't empty, unless you pass `--force`
+- a destination inside the source directory, or the source inside the
+  destination
+- a symlink or other special file anywhere in the data directory
+- (a warning, not a refusal) a store configured outside the data
+  directory — it's on a different mount, so it is **not** moved, and the
+  new deployment needs it mounted there too
+
+> **Using Postgres?** Unlike `-backup`/`-restore`, this one doesn't
+> refuse. Most of what moves is unused on a Postgres deployment, but
+> it's still worth running for the TLS store, the recovery pepper and
+> the adoption marker, which live on the data directory whatever the
+> backend — the database itself is untouched.
+
 ### Adding and removing people
 
 Open the engine room (Admin group in the navigation rail) and its
@@ -1900,7 +2012,8 @@ deployment or lock you out of it.
 ### Connecting your account to SSO
 
 If your deployment has SSO set up, you can switch your own account over
-to it: **Menu → Connect SSO**. You'll be sent to your identity provider
+to it: open the account menu at the bottom of the rail (click your
+username) and choose **Connect SSO**. You'll be sent to your identity provider
 to sign in, and when you come back the account uses SSO from then on.
 
 **This deletes your MikroView password, and can't be undone from
@@ -2381,12 +2494,18 @@ able to reach the port can still connect and inject log lines. Point
 RouterOS at it with:
 
 ```
-/system logging action set 0 target=remote remote=<mikroview-host> remote-port=6514 remote-protocol=tls
+/system logging action set 0 target=remote remote=<mikroview-host> remote-port=6514 remote-protocol=tls remote-log-format=syslog
 ```
 
 and import mikroview's CA (`GET /ca.crt`) under
 `/certificate import` first, or the router will refuse the connection
 with `SSL: ssl: no trusted CA certificate found`.
+
+`remote-log-format=syslog` puts a standard header (timestamp and topic)
+on every message, which is how mikroview tells one firewall log line
+from the next when several arrive close together -- see
+[routeros-setup.md](routeros-setup.md#1-point-routeros-at-the-container-over-tls)
+for the full reasoning.
 
 ```yaml
 tls:

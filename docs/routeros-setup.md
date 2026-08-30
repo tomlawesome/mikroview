@@ -1,7 +1,7 @@
 # RouterOS setup
 
 > **There is a guided version of this page inside MikroView.** Sign in as
-> an admin and open the menu → **Connect a router**. It generates every
+> an admin and open **Admin ▸ Run setup…**. It generates every
 > command below with your own address, port and a token it mints for you
 > — nothing to fill in — and tells you as each step lands, because each
 > one ends with your router arriving at MikroView.
@@ -69,13 +69,21 @@ CA is presumably already trusted some other way.
 Then point the router's logging at MikroView:
 
 ```
-/system logging action add name=mikroview target=remote remote=203.0.113.10 remote-port=6514 remote-protocol=tls check-certificate=yes
+/system logging action add name=mikroview target=remote remote=203.0.113.10 remote-port=6514 remote-protocol=tls remote-log-format=syslog check-certificate=yes
 ```
 
 This does **not** authenticate the router to MikroView — RouterOS's
 logging action has no client-certificate option, so anything able to
 reach the port can still connect and inject log lines. The trust here
 is one-directional: the router verifying MikroView, not the reverse.
+
+`remote-log-format=syslog` gives every message its own standard header
+(timestamp and topic), so MikroView can tell where one firewall log line
+ends and the next begins even when several arrive at once — a burst of
+matching traffic, one connection attempt logged from two different rules
+— rather than only when RouterOS happens to send them far enough apart.
+Without it, a fast-enough burst can be read as a single garbled line and
+the traffic in it silently mismatched (#614).
 
 ## 2. Forward firewall log events to it
 
@@ -242,8 +250,9 @@ follow from that:
   and an untagged one can only be narrowed down — see "NAT rules" above
   for why tagging is worth the two minutes.
 - **Suggested watchlist entries.** Named devices and ports an existing
-  rule already blocks show up as review-and-accept suggestions (Menu →
-  Suggestions) instead of the watchlist starting as a blank page — see
+  rule already blocks show up as review-and-accept suggestions
+  (**Expect ▸ Watchlist ▸ Suggestions**) instead of the watchlist
+  starting as a blank page — see
   4c-ii below and
   [configuration.md](configuration.md#suggested-watchlist-entries-issue-243).
   This is the one item on this list that needs more than the filter-rule
@@ -272,8 +281,9 @@ before step 1, go do that CA import now, then come back here.
 
 ### 4b. Mint an ingest token
 
-In MikroView, sign in as an admin, open the menu → **API tokens**, set
-the kind dropdown to **Ingest**, and pick the device the token speaks
+In MikroView, sign in as an admin, open **Admin ▸ The engine room**,
+find "Which machines may speak" among the side doors, set the kind
+dropdown to **Ingest**, and pick the device the token speaks
 for — this is what scopes it. The list offers every router MikroView
 knows about: those declared under `devices:` in `config.yaml`, and any
 that has simply sent syslog (marked *not in config.yaml*, identified by
@@ -409,7 +419,7 @@ Line by line:
 ### 4c-ii. DHCP leases and ARP -- what issue #243's suggestions feature needs
 
 MikroView's watchlist can *suggest* entries from named devices it
-already knows about (Menu → Suggestions -- see
+already knows about (**Expect ▸ Watchlist ▸ Suggestions** -- see
 [configuration.md](configuration.md#suggested-watchlist-entries-issue-243)),
 but only once it's actually been sent DHCP leases and ARP entries.
 Without this section pushed, that feature has nothing to suggest from --
@@ -608,7 +618,7 @@ way step 4a's own certificate check does, including the same
 untrusted-CA text if step 4a was skipped or the `<mikroview-host>`
 placeholder wasn't replaced consistently between the two.
 
-If you also set up 4c-ii, check **Menu → Suggestions**: a named device
+If you also set up 4c-ii, check **Expect ▸ Watchlist ▸ Suggestions**: a named device
 or an already-blocked port should show up under the Undecided filter
 within a few minutes of the push landing (suggestions regenerate in the
 background periodically, not instantly on push -- see

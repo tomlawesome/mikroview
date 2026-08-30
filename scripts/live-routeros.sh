@@ -235,7 +235,7 @@ setup() {
   trust "$url" >/dev/null
 
   run \
-    "/system logging action add name=mikroview target=remote remote=$syslog_host remote-port=$syslog_port remote-protocol=tls check-certificate=yes" \
+    "/system logging action add name=mikroview target=remote remote=$syslog_host remote-port=$syslog_port remote-protocol=tls remote-log-format=syslog check-certificate=yes" \
     '/system logging add topics=firewall,info action=mikroview' \
     "/ip firewall filter add chain=input protocol=tcp dst-port=$INPUT_PORT action=accept log=yes log-prefix=\"A|live-in|\"" \
     '/ip firewall filter add chain=forward action=accept log=yes log-prefix="A|lan-wan|"' \
