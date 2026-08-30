@@ -135,6 +135,24 @@ apparatus, not design.
   "once a user has learned what it means, they never really need it
   again."
 
+## The owner's fifth batch (2026-08-30)
+
+- **Straight lines rejected**: the client spokes clashed with the
+  organic links — redrawn as the same bezier language as the ribs.
+- **The camera is the operator's**: mouse wheel zooms the topography,
+  middle-button drag pans it; the map owns the wheel over its card.
+- **The atlas demystified**: the owner: "It's basically the same thing
+  as the map, but it has the added navigation pieces." Confusion
+  acknowledged as real duplication — the atlas drops its chart
+  entirely and becomes a light navigation layer: your deck at the
+  heart (click to jump, drag to reorder), every other destination on
+  the orbit, account at the foot.
+- **"The engine room" renamed "Settings"** (applies to the app, not
+  just the round).
+- **The theme control is unlabelled** — read as: the theme switcher
+  ships as a quiet control, no "Theme" text label (interpretation
+  pending owner confirmation).
+
 ## Owner verdicts
 
 - Door: v3 standing (v2 accepted + full-screen fall, boxed wordmark).
