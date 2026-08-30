@@ -22,6 +22,7 @@
   import { viewportState } from '../lib/viewport.svelte'
   import { trapFocus } from '../lib/focusTrap'
   import { wizardState, FINISH_PANE } from '../lib/wizard.svelte'
+  import { journeyState } from '../lib/journey.svelte'
   import {
     announceStep,
     caTrustCommands,
@@ -63,6 +64,13 @@
   $effect(() => {
     if (!isAdmin) return
     if (!appState.initialLoadDone) return
+    // The journey (#646) owns first-run launch timing on the path it
+    // covers -- right after a brand-new instance's admin account is
+    // made -- walking Attach, Connecting and the glass before it opens
+    // this itself. Deferring here keeps this check exactly as it was
+    // for every other path (a returning admin whose router still has
+    // nothing sent).
+    if (journeyState.active) return
     wizardState.maybeAutoLaunch(appState.devices.length > 0)
   })
 
@@ -183,13 +191,15 @@
     dismiss()
   }
 
-  // Leads out to the landing (the navigation record's "Stream is the
-  // landing" until the fall ships). Only from the finish, where the
+  // Leads out to the landing -- the fall, mikroview's real landing page
+  // since #616 (this read "Stream is the landing" until then; #646
+  // makes it explicit: the wizard ends by taking the operator back to
+  // the fall, whichever path opened it). Only from the finish, where the
   // record says the primary and the ✕ do the same thing -- closing
   // part-way through is a modal closing, and it leaves the operator on
   // the page they opened it from rather than moving them.
   function leaveToLanding() {
-    appState.view = 'live'
+    appState.view = 'fall'
     wizardState.close()
   }
 
@@ -472,7 +482,7 @@
               {step.n === STEP_COUNT ? 'Finish' : 'Next'}
             </button>
           {:else}
-            <button type="button" class="primary" onclick={leaveToLanding}>Take me to the stream</button>
+            <button type="button" class="primary" onclick={leaveToLanding}>Take me to the fall</button>
           {/if}
         </div>
       </footer>
