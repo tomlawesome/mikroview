@@ -36,5 +36,11 @@ operate/account surfaces; not applied here, awaiting the owner's view.
 
 ## Owner verdicts
 
-- Pending: the menu (grouping, contents, feel), and the
-  atlas-slimming recommendation above.
+- The menu (chat, 2026-08-30): **approved with two corrections** — "No
+  need for a change password field here, and the login should say
+  password, not passphrase because I'm not american. Approved
+  otherwise." → round 16 carries the corrected menu; "password, not
+  passphrase" is ratified as a wording rule for every surface (the
+  deck's door mockup said passphrase; the shipped app never did).
+- The atlas-slimming recommendation: owner did not follow the phrasing
+  ("No idea what you're on about here") — re-asked in plain words.
