@@ -27,6 +27,8 @@
   import { policyState, type PolicyEdge } from '../lib/policy.svelte'
   import { realityEdges, unexercisedIntents, type RealityEdge } from '../lib/reality'
   import { coverageState } from '../lib/coverage.svelte'
+  import { composeCommand, refusingCommentFor } from '../lib/compose'
+  import type { ReachStrand } from '../lib/reach'
   import { authState } from '../lib/auth.svelte'
   import { reachFor } from '../lib/reach'
   import { formatEps } from '../lib/format'
@@ -413,10 +415,91 @@
 
   function surface() {
     reach = null
+    compose = null
   }
 
   function onKeydown(e: KeyboardEvent) {
-    if (e.key === 'Escape' && reach) surface()
+    if (e.key === 'Escape') {
+      // Esc walks out one level: the composer first, then the reach.
+      if (compose) compose = null
+      else if (reach) surface()
+    }
+  }
+
+  // --- the composer (#626/#633, round 2 scene 4) ---------------------------
+  // A denial becomes a rule in two clicks: the port panel ranks what
+  // the host has been asking for, and the command card prints the
+  // RouterOS line for the operator to paste -- mikroview drafts, it
+  // never runs (the observes-never-connects invariant). Identical for
+  // viewer and admin, like the rest of the reach: nothing here mutates.
+  let compose = $state<ReachStrand | null>(null)
+  let composeMode = $state<'allow' | 'block'>('allow')
+  let composePort = $state<number | null>(null)
+  let composeFree = $state('')
+  let composeScope = $state<'host' | 'subnet'>('host')
+  let copied = $state(false)
+
+  function openCompose(s: ReachStrand) {
+    compose = s
+    composeMode = 'allow'
+    composePort = s.portHits[0]?.port ?? null
+    composeFree = ''
+    composeScope = 'host'
+    copied = false
+  }
+
+  const counterpartIface = $derived(
+    compose ? (compose.counterpart === 'internet' ? (zonesState.wanInterface ?? '') : compose.counterpart) : '',
+  )
+  const counterpartZone = $derived(compose && compose.counterpart !== 'internet' ? zones.find((z) => z.id === compose!.counterpart) : undefined)
+  const composePeerAddr = $derived(compose?.peerAddrs[0] ?? '')
+  const composePeerName = $derived(compose?.peers[0] ?? (compose?.counterpart === 'internet' ? 'the internet' : (compose?.counterpart ?? '')))
+  const chosenPort = $derived.by((): { port: number; proto: string } | null => {
+    const free = Number.parseInt(composeFree, 10)
+    if (!Number.isNaN(free) && free > 0 && free < 65536) return { port: free, proto: 'tcp' }
+    if (composePort === null) return null
+    const hit = compose?.portHits.find((h) => h.port === composePort)
+    return hit ? { port: hit.port, proto: hit.proto } : { port: composePort, proto: 'tcp' }
+  })
+
+  const composedCommand = $derived.by((): string | null => {
+    if (!reach || !compose || !chosenPort) return null
+    const target = composeScope === 'subnet' && counterpartZone?.cidr ? counterpartZone.cidr : composePeerAddr
+    if (!target) return null
+    const pairFrom = compose.direction === 'out' ? reach.zoneId : counterpartIface
+    const pairTo = compose.direction === 'out' ? counterpartIface : reach.zoneId
+    return composeCommand({
+      hostIp: reach.ip,
+      direction: compose.direction,
+      target,
+      port: chosenPort.port,
+      proto: chosenPort.proto,
+      mode: composeMode,
+      hostName: reach.host,
+      targetName: composeScope === 'subnet' ? (counterpartZone?.name ?? composePeerName) : composePeerName,
+      placeBefore: refusingCommentFor(policyState.edges, pairFrom, pairTo),
+    })
+  })
+
+  const composePlaceBefore = $derived(
+    reach && compose
+      ? refusingCommentFor(
+          policyState.edges,
+          compose.direction === 'out' ? reach.zoneId : counterpartIface,
+          compose.direction === 'out' ? counterpartIface : reach.zoneId,
+        )
+      : undefined,
+  )
+
+  async function copyCommand() {
+    if (!composedCommand) return
+    try {
+      await navigator.clipboard.writeText(composedCommand)
+      copied = true
+      setTimeout(() => (copied = false), 1600)
+    } catch {
+      // Clipboard can be refused; the text stays selectable by hand.
+    }
   }
 
   const reachSummary = $derived(reach ? reachFor(reach.ip, zonesState.wanInterface, appState.events) : null)
@@ -853,7 +936,26 @@
             </g>
             <!-- Labels stagger by direction and outcome so no two
                  strands of one crossing ever overprint. -->
-            <text x={p.x + 14} y={p.y + (s.direction === 'in' ? 30 : -22)} class="chip-t alarm-t">
+            <!-- The blocked label is the composer's door (scene 4): a
+                 denial becomes a rule in two clicks. -->
+            <text
+              x={p.x + 14}
+              y={p.y + (s.direction === 'in' ? 30 : -22)}
+              class="chip-t alarm-t strand-door"
+              role="button"
+              tabindex="0"
+              aria-label="Draft the rule: what may it say on this strand?"
+              onclick={(e) => {
+                e.stopPropagation()
+                openCompose(s)
+              }}
+              onkeydown={(e) => {
+                if (e.key === 'Enter') {
+                  e.stopPropagation()
+                  openCompose(s)
+                }
+              }}
+            >
               ⊣ {s.direction === 'out' ? 'dies at the membrane' : 'refused at the membrane'} · {portsLine(s.ports)} · {s.count}×{s.refusedBy
                 ? ` · ${s.refusedBy}`
                 : ''}
@@ -936,6 +1038,68 @@
           <text x={MX} y={MY + 80} text-anchor="middle" class="n-sub">nothing observed this window</text>
         {/if}
       </svg>
+    </div>
+  {/if}
+
+  {#if reach && compose}
+    <div class="composer" role="dialog" aria-label="Draft a rule for this strand">
+      <div class="portpanel">
+        <h4>
+          {compose.direction === 'out'
+            ? `What may ${reach.host} say to ${compose.counterpart === 'internet' ? 'the internet' : (counterpartZone?.name ?? compose.counterpart)}?`
+            : `What may ${compose.counterpart === 'internet' ? 'the internet' : (counterpartZone?.name ?? compose.counterpart)} say to ${reach.host}?`}
+        </h4>
+        <p class="q">the ports it has been asking for come first — a denial becomes a rule in two clicks</p>
+        {#each compose.portHits.slice(0, 3) as h (h.port)}
+          <button
+            class="pchip"
+            class:sel={chosenPort?.port === h.port && !composeFree}
+            onclick={() => {
+              composePort = h.port
+              composeFree = ''
+            }}
+          >
+            <b>{h.proto}/{h.port}</b>
+            <span class="why">it's been asking · {h.n}×</span>
+          </button>
+        {/each}
+        <input class="pfree" placeholder="or type a port…" bind:value={composeFree} />
+        {#if counterpartZone?.cidr}
+          <div class="scope">
+            to:
+            <button class="opt" class:sel={composeScope === 'host'} onclick={() => (composeScope = 'host')}>
+              just {composePeerName} · {composePeerAddr}
+            </button>
+            <button class="opt" class:sel={composeScope === 'subnet'} onclick={() => (composeScope = 'subnet')}>
+              the whole subnet {counterpartZone.cidr}
+            </button>
+          </div>
+        {/if}
+        <p class="statef">replies ride back — stateful, no return rule needed.</p>
+      </div>
+
+      <div class="cmdcard">
+        <div class="cmdtabs">
+          <button class="ctab" class:sel={composeMode === 'allow'} onclick={() => (composeMode = 'allow')}>Allow it</button>
+          <button class="ctab" class:sel={composeMode === 'block'} onclick={() => (composeMode = 'block')}>Name the block instead</button>
+          <button class="copy" onclick={copyCommand}>{copied ? '✓ copied' : '⧉ copy'}</button>
+        </div>
+        {#if composedCommand}
+          <pre class="cmd">{composedCommand}</pre>
+          <p class="cmdnote">
+            <b>Paste it in RouterOS yourself — mikroview never touches the router.</b>
+            {#if composeMode === 'allow'}
+              {composePlaceBefore ? `Placed before ${composePlaceBefore}, logged` : 'Logged'} and named, so the map
+              learns it: on the next rule push this strand turns green and the unplanned stamp retires itself.
+            {:else}
+              The denial stays, but logged and named — the anonymous drop retires, and the dark boundary lights up.
+            {/if}
+          </p>
+        {:else}
+          <p class="cmdnote">pick a port — the command drafts itself from what was observed</p>
+        {/if}
+        <button class="composer-close" onclick={() => (compose = null)}>Close</button>
+      </div>
     </div>
   {/if}
 
@@ -1352,6 +1516,204 @@
   .d-row button:disabled {
     opacity: 0.5;
     cursor: default;
+  }
+
+  /* --- the composer (round 2 scene 4) ------------------------------------ */
+  .strand-door {
+    pointer-events: auto;
+    cursor: pointer;
+  }
+
+  .strand-door:hover,
+  .strand-door:focus-visible {
+    text-decoration: underline;
+  }
+
+  .strand-door:focus,
+  .strand-door:focus-visible {
+    outline: none;
+  }
+
+  .composer {
+    position: absolute;
+    right: 24px;
+    top: 96px;
+    z-index: 4;
+    width: 330px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    max-height: calc(100% - 130px);
+    overflow-y: auto;
+  }
+
+  .portpanel,
+  .cmdcard {
+    background: var(--bg-elevated);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 14px 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .portpanel h4 {
+    margin: 0;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--fg);
+  }
+
+  .q,
+  .statef {
+    margin: 0;
+    font-size: 11px;
+    color: var(--fg-dim);
+  }
+
+  .pchip {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    text-align: left;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 7px 10px;
+    font-size: 12px;
+    color: var(--fg-muted);
+    cursor: pointer;
+  }
+
+  .pchip b {
+    font-family: var(--font-mono);
+    color: var(--fg);
+    font-weight: 600;
+  }
+
+  .pchip .why {
+    margin-left: auto;
+    font-size: 10.5px;
+    color: var(--fg-dim);
+  }
+
+  .pchip.sel {
+    border-color: var(--accent);
+  }
+
+  .pfree {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 7px 10px;
+    font-size: 12px;
+    color: var(--fg);
+  }
+
+  .pfree:focus {
+    outline: none;
+    border-color: var(--accent);
+  }
+
+  .scope {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 6px;
+    font-size: 11px;
+    color: var(--fg-dim);
+  }
+
+  .opt {
+    background: transparent;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    padding: 3px 10px;
+    font-size: 11px;
+    color: var(--fg-muted);
+    cursor: pointer;
+  }
+
+  .opt.sel {
+    border-color: var(--accent);
+    color: var(--fg);
+  }
+
+  .cmdtabs {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .ctab {
+    background: transparent;
+    border: 1px solid var(--border);
+    border-radius: 7px;
+    padding: 4px 10px;
+    font-size: 11.5px;
+    color: var(--fg-muted);
+    cursor: pointer;
+  }
+
+  .ctab.sel {
+    border-color: var(--accent);
+    color: var(--fg);
+    font-weight: 600;
+  }
+
+  .copy {
+    margin-left: auto;
+    background: transparent;
+    border: none;
+    color: var(--fg-dim);
+    font-size: 11px;
+    cursor: pointer;
+  }
+
+  .copy:hover {
+    color: var(--fg);
+  }
+
+  .cmd {
+    margin: 0;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 10px 12px;
+    font-family: var(--font-mono);
+    font-size: 11px;
+    line-height: 1.55;
+    color: var(--fg);
+    white-space: pre-wrap;
+    word-break: break-all;
+    user-select: all;
+  }
+
+  .cmdnote {
+    margin: 0;
+    font-size: 10.5px;
+    line-height: 1.5;
+    color: var(--fg-dim);
+  }
+
+  .cmdnote b {
+    color: var(--fg-muted);
+  }
+
+  .composer-close {
+    align-self: flex-end;
+    background: transparent;
+    border: 1px solid var(--border);
+    border-radius: 7px;
+    padding: 4px 12px;
+    font-size: 11px;
+    color: var(--fg-muted);
+    cursor: pointer;
+  }
+
+  .composer-close:hover {
+    color: var(--fg);
   }
 
   .edge-bar.dim {

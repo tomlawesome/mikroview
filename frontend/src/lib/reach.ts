@@ -18,8 +18,14 @@ export interface ReachStrand {
   direction: 'out' | 'in'
   /** Top far-side hosts (names where the events carry them). */
   peers: string[]
+  /** Top far-side raw addresses, same ranking -- what a printed rule
+   * targets (a name is display, never a match condition). */
+  peerAddrs: string[]
   /** Top destination ports knocked on this strand. */
   ports: number[]
+  /** The same ports with how often each was asked for and the protocol
+   * seen asking -- the compose panel's "it's been asking · 14×". */
+  portHits: { port: number; n: number; proto: string }[]
   count: number
   /** The rule that refused a blocked strand, from the events themselves. */
   refusedBy?: string
@@ -38,7 +44,15 @@ export interface ReachSummary {
 const ACCEPTED = new Set(['accept', 'nat', 'log'])
 
 export function reachFor(ip: string, wanInterface: string | null, events: FirewallEvent[]): ReachSummary {
-  const groups = new Map<string, ReachStrand & { peerCounts: Map<string, number>; portCounts: Map<number, number> }>()
+  const groups = new Map<
+    string,
+    ReachStrand & {
+      peerCounts: Map<string, number>
+      peerAddrCounts: Map<string, number>
+      portCounts: Map<number, number>
+      portProto: Map<number, string>
+    }
+  >()
 
   for (const e of events) {
     const out = e.srcIp === ip
@@ -60,17 +74,26 @@ export function reachFor(ip: string, wanInterface: string | null, events: Firewa
         outcome,
         direction,
         peers: [],
+        peerAddrs: [],
         ports: [],
+        portHits: [],
         count: 0,
         peerCounts: new Map(),
+        peerAddrCounts: new Map(),
         portCounts: new Map(),
+        portProto: new Map(),
       }
       groups.set(key, g)
     }
     g.count++
     const peer = out ? (e.dstHostName ?? e.dstIp) : (e.srcHostName ?? e.srcIp)
     if (peer) g.peerCounts.set(peer, (g.peerCounts.get(peer) ?? 0) + 1)
-    if (e.dstPort) g.portCounts.set(e.dstPort, (g.portCounts.get(e.dstPort) ?? 0) + 1)
+    const peerAddr = out ? e.dstIp : e.srcIp
+    if (peerAddr) g.peerAddrCounts.set(peerAddr, (g.peerAddrCounts.get(peerAddr) ?? 0) + 1)
+    if (e.dstPort) {
+      g.portCounts.set(e.dstPort, (g.portCounts.get(e.dstPort) ?? 0) + 1)
+      if (e.protocol && !g.portProto.has(e.dstPort)) g.portProto.set(e.dstPort, e.protocol.toLowerCase())
+    }
     if (outcome === 'blocked' && e.ruleLabel && !g.refusedBy) g.refusedBy = e.ruleLabel
   }
 
@@ -81,7 +104,11 @@ export function reachFor(ip: string, wanInterface: string | null, events: Firewa
       outcome: g.outcome,
       direction: g.direction,
       peers: [...g.peerCounts.entries()].sort((a, b) => b[1] - a[1]).map(([p]) => p),
+      peerAddrs: [...g.peerAddrCounts.entries()].sort((a, b) => b[1] - a[1]).map(([p]) => p),
       ports: [...g.portCounts.entries()].sort((a, b) => b[1] - a[1]).map(([p]) => p),
+      portHits: [...g.portCounts.entries()]
+        .sort((a, b) => b[1] - a[1])
+        .map(([port, n]) => ({ port, n, proto: g.portProto.get(port) ?? 'tcp' })),
       count: g.count,
       refusedBy: g.refusedBy,
     }))
