@@ -183,7 +183,7 @@ let sawManyKeyLearning = false
 let sawFloorlessCollapse = false
 
 for (const d of bench) {
-  const row = page.locator(`.st-open .bench .row:has(.id:text-is("${d.id}"))`)
+  const row = page.locator(`.bench .row:has(.id:text-is("${d.id}"))`)
   const rowCount = await row.count()
   check(rowCount === 1, `exactly one row renders for ${d.id} (${rowCount})`)
 
