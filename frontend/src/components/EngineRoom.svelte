@@ -1,259 +1,402 @@
 <script lang="ts">
   // SPDX-License-Identifier: AGPL-3.0-only
   //
-  // The engine room (#490): settings live on the machine. One page,
-  // in the rail's Admin group, visible to a viewer as well as an admin
-  // (see docs/design/screens/settings/DESIGN.md, the ratified record --
-  // where this file and the round-2 mockup disagree, the record wins).
+  // Settings as the shelf (#633, rounds 23-25, owner-approved): the
+  // page reports live truth and is not a form until you touch it. Five
+  // groups -- your deck (the cards in the order you keep them, drag to
+  // reorder, sign-in lands on the first), ingest (the one-way pathway),
+  // detection (what fired this hour, and the bench behind tune),
+  // memory (what the buffer holds, hour by hour), account. The deep
+  // admin surfaces live on: the watcher bench (EngineRoomWatchers)
+  // unfolds from detection's tune row, and the two doors
+  // (EngineRoomDoors: people and machine keys) keep their own place
+  // below the shelf.
   //
-  // The signal path (5 stations, top to bottom) on the left; the two
-  // side doors (who/what may come in) on the right. Absorbs three former
-  // pages wholesale -- Users.svelte, Tokens.svelte, Detectors.svelte --
-  // whose *logic* lives on here (usersState/tokensState/
-  // detectorSettingsState, EngineRoomDoors.svelte, EngineRoomWatchers.svelte)
-  // even though their pages do not.
-  //
-  // Opening a station zooms rather than navigates: the opened station
-  // unfolds in place, the others collapse to a slim title+number bar and
-  // dim, and the path itself never leaves the screen (see
-  // docs/design/screens/settings/round-2/direction-ac-engineroom.html
-  // Scene 2). expandedStation is the whole of that mechanic -- null is
-  // "the room at rest" (every station shows its full body), anything
-  // else is "this one is open, the rest are slim bars".
+  // This replaces #490's five-station signal path wholesale; the
+  // stations' facts survive inside the groups (the door -> ingest, the
+  // store -> memory, the watchers/flags desk -> detection), and the
+  // room's honesty rule is unchanged: the page never pretends a knob
+  // the server does not hold.
   import { onMount } from 'svelte'
   import { appState } from '../lib/state.svelte'
   import { authState } from '../lib/auth.svelte'
   import { flagsState } from '../lib/flags.svelte'
+  import { watchlistState } from '../lib/watchlist.svelte'
   import { detectorSettingsState } from '../lib/detectorSettings.svelte'
+  import { deckCards } from '../lib/deckCards'
+  import { deckOrderState } from '../lib/deckOrder.svelte'
+  import { versionState } from '../lib/version.svelte'
+  import { FLAG_FAMILIES } from '../lib/flagPalette'
   import { fetchSetupStatus } from '../lib/api'
-  import { formatEps } from '../lib/format'
+  import { formatEps, formatHM } from '../lib/format'
   import { portOf } from '../lib/setupsteps'
-  import { scopeSummary } from '../lib/detectorCopy'
-  import type { SetupStatus } from '../lib/types'
+  import type { SetupStatus, FlagType } from '../lib/types'
   import PageHeader from './PageHeader.svelte'
   import EngineRoomWatchers from './EngineRoomWatchers.svelte'
   import EngineRoomDoors from './EngineRoomDoors.svelte'
 
-  type StationId = 'door' | 'store' | 'watchers' | 'flags' | 'heralds'
-
   const isAdmin = $derived(authState.state === 'authenticated' && authState.role === 'admin')
 
   let status = $state<SetupStatus | null>(null)
-  let expandedStation = $state<StationId | null>(null)
+  let benchOpen = $state(false)
 
   onMount(() => {
     fetchSetupStatus()
       .then((s) => (status = s))
       .catch(() => {
-        // The door/store facts that come from config.yaml simply show
-        // nothing until this resolves -- see the `{#if status}` guards
-        // below -- rather than a page-wide error for one station's worth
-        // of context.
+        // The ingest facts that come from config.yaml simply show
+        // nothing until this resolves rather than a page-wide error.
       })
-    // Nothing else in the app calls this today (Detectors.svelte, which
-    // this replaces, never did either -- it relied on an edit's own
-    // update() to populate the list as a side effect). The watchers
-    // station needs a real "N of M running" number the moment the room
-    // is opened, not only after the first edit.
     detectorSettingsState.refresh().catch(() => {})
-  })
-
-  function toggleStation(id: StationId) {
-    expandedStation = expandedStation === id ? null : id
-  }
-
-  function stationState(id: StationId): 'rest' | 'open' | 'collapsed' {
-    if (expandedStation === null) return 'rest'
-    return expandedStation === id ? 'open' : 'collapsed'
-  }
-
-  // The caption names the device actually driving the numbers below it:
-  // whichever configured device has spoken most recently, falling back
-  // to any device at all. Purely a caption convenience -- the door
-  // station's own events/s figure is the network-wide total regardless
-  // of which single device is named here.
-  const primaryDevice = $derived.by(() => {
-    const list = appState.devices
-    if (list.length === 0) return null
-    const configured = list.filter((d) => d.configured)
-    const pool = configured.length > 0 ? configured : list
-    return [...pool].sort((a, b) => new Date(b.lastSeen).getTime() - new Date(a.lastSeen).getTime())[0]
+    versionState.ensureLoaded().catch(() => {})
   })
 
   const epsText = $derived(appState.stats ? formatEps(appState.stats.eventsPerSecond) : null)
 
-  // The store's retention fact -- read from GET /api/stats' windowSeconds
-  // (the server's own store.retention window), not amended here: there is
-  // no PUT endpoint for it. Per the ratified record, the knob is drawn
-  // "if and only if the server exposes it" -- it does not, so this is a
-  // fact with no knob, not a knob left unwired.
-  const retentionHours = $derived(
-    appState.stats ? Math.max(1, Math.round(appState.stats.windowSeconds / 3600)) : null,
-  )
+  // --- your deck -----------------------------------------------------------
+  const cards = $derived(deckOrderState.apply(deckCards(authState.role === 'admin')))
+
+  let dragKey = $state<string | null>(null)
+
+  function onDrop(targetKey: string) {
+    if (dragKey && dragKey !== targetKey) deckOrderState.move(dragKey, targetKey)
+    dragKey = null
+  }
+
+  // Keyboard route to the same reorder: a card's handle moves it one
+  // place left or right, mirroring what a drag does.
+  function onCardKey(e: KeyboardEvent, key: string) {
+    const order = cards.map((c) => c.key)
+    const i = order.indexOf(key)
+    if (e.key === 'ArrowLeft' && i > 0) {
+      e.preventDefault()
+      deckOrderState.move(key, order[i - 1])
+    } else if (e.key === 'ArrowRight' && i < order.length - 1) {
+      e.preventDefault()
+      deckOrderState.move(order[i + 1], key)
+    }
+  }
+
+  // --- detection -----------------------------------------------------------
+  // Short chip names, mockup-cased; the same deliberate duplication
+  // convention TYPE_LABELS follows elsewhere (see Flags.svelte).
+  const CHIP_LABELS: Record<FlagType, string> = {
+    port_scan: 'port scan',
+    activity_spike: 'activity spike',
+    critical_port: 'critical port',
+    global_spike: 'network surge',
+    distributed_brute_force: 'brute force',
+    outbound_anomaly: 'outbound',
+    internal_recon: 'internal recon',
+    rule_spike: 'rule spike',
+    repeated_drops: 'repeated drops',
+    low_slow_scan: 'low & slow scan',
+    off_hours_activity: 'off hours',
+    device_silence: 'gone quiet',
+    new_device: 'new device',
+    stale_rule: 'stale rule',
+    unexpected_mail_sender: 'mail sender',
+    known_bad_ip: 'known-bad IP',
+  }
+
+  // Newly-raised episodes this hour, by type -- flagsState.timeSeries is
+  // exactly that window (see fetchFlags' comment). Only types that fired
+  // wear a chip; the rest fold into one quiet count.
+  const fired = $derived.by(() => {
+    const counts = new Map<FlagType, number>()
+    for (const b of flagsState.timeSeries) {
+      for (const [t, n] of Object.entries(b.byType)) {
+        if (n) counts.set(t as FlagType, (counts.get(t as FlagType) ?? 0) + n)
+      }
+    }
+    return [...counts.entries()].sort((a, b) => b[1] - a[1])
+  })
+  const quietTypes = $derived(Object.keys(CHIP_LABELS).length - fired.length)
 
   const watchersRunning = $derived(detectorSettingsState.list.filter((d) => d.enabled).length)
   const watchersTotal = $derived(detectorSettingsState.list.length)
 
-  // A couple of detectors and their scope, for the watchers station's
-  // prose while it is not the open one -- "Open the station for the full
-  // bench" is the door to everything else. Prefers detectors that
-  // actually restrict something (the more interesting fact) before
-  // falling back to whatever else is available, so an unconfigured
-  // deployment still shows two real rows rather than nothing.
-  const watcherHighlights = $derived.by(() => {
-    const list = detectorSettingsState.list
-    const scoped = list.filter((d) => Object.keys(d.scope ?? {}).length > 0)
-    const rest = list.filter((d) => !scoped.includes(d))
-    return [...scoped, ...rest].slice(0, 2)
+  // --- memory --------------------------------------------------------------
+  // The buffer's own time series, folded into at most 24 ribbon slices,
+  // each shaded by how much of the buffer that stretch holds.
+  const memSlices = $derived.by(() => {
+    const series = appState.stats?.timeSeries ?? []
+    if (series.length === 0) return []
+    const SLICES = Math.min(24, series.length)
+    const per = Math.ceil(series.length / SLICES)
+    const sums: number[] = []
+    for (let i = 0; i < series.length; i += per) {
+      let v = 0
+      for (const b of series.slice(i, i + per)) {
+        v += Object.values(b.byAction).reduce((a, n) => a + (n ?? 0), 0)
+      }
+      sums.push(v)
+    }
+    const max = Math.max(...sums, 1)
+    return sums.map((v) => v / max)
   })
 
-  function watcherFact(d: (typeof detectorSettingsState.list)[number]): string {
-    return d.enabled ? `${d.label} ${scopeSummary(d.scope)}` : `${d.label} paused`
+  const oldestHeld = $derived.by(() => {
+    const series = appState.stats?.timeSeries ?? []
+    return series.length > 0 ? formatHM(series[0].time) : null
+  })
+
+  const retentionHours = $derived(
+    appState.stats ? Math.max(1, Math.round(appState.stats.windowSeconds / 3600)) : null,
+  )
+
+  // --- ingest --------------------------------------------------------------
+  const routers = $derived.by(() => {
+    const list = [...appState.devices].sort(
+      (a, b) => new Date(b.lastSeen).getTime() - new Date(a.lastSeen).getTime(),
+    )
+    return list.slice(0, 2)
+  })
+
+  function quietFor(lastSeen: string): string | null {
+    const days = Math.floor((Date.now() - new Date(lastSeen).getTime()) / 86400000)
+    return days >= 1 ? `quiet ${days} d — quiet is a fact, not a fault` : null
   }
 </script>
 
 <div class="page scrollbar">
   <PageHeader title="Settings" readOnly={!isAdmin} />
 
-  {#if appState.stats}
-    <p class="arrives">
-      the router speaks —
-      {#if primaryDevice}<span class="mono">{primaryDevice.name}</span> pushes its log,{/if}
-      <span class="mono">{epsText} events/s</span> this minute · mikroview never speaks back
+  <div class="og">
+    <h3>your deck</h3>
+    <p class="oghint">
+      {cards.length} cards in the order you keep them — drag (or arrow keys) to reorder; sign-in lands on the first
     </p>
-  {/if}
-
-  <div class="room">
-    <ul class="path" aria-label="The signal path, top to bottom">
-      <!-- The door -->
-      <li class="station st-{stationState('door')}">
-        <button
-          type="button"
-          class="shead"
-          aria-expanded={expandedStation === 'door'}
-          aria-controls="station-door-body"
-          onclick={() => toggleStation('door')}
+    <div class="stshelf">
+      {#each cards as card, i (card.key)}
+        <span
+          class="stcard"
+          class:first={i === 0}
+          class:dragging={dragKey === card.key}
+          draggable="true"
+          role="button"
+          tabindex="0"
+          aria-label="{card.name}, position {i + 1} of {cards.length} — arrow keys reorder"
+          ondragstart={() => (dragKey = card.key)}
+          ondragend={() => (dragKey = null)}
+          ondragover={(e) => e.preventDefault()}
+          ondrop={() => onDrop(card.key)}
+          onkeydown={(e) => onCardKey(e, card.key)}
         >
-          <span class="nm">The door</span>
-          {#if stationState('door') !== 'collapsed'}<span class="what">syslog listener</span>{/if}
-          <span class="live"><span class="dot"></span>{epsText ?? '—'}/s in</span>
-        </button>
-        {#if stationState('door') !== 'collapsed'}
-          <div class="sbody" id="station-door-body">
-            {#if status}
-              <p>
-                Syslog listener on <span class="mono">{portOf(status.instance.syslogPort)}</span>
-                {status.instance.tlsEnabled ? '(TLS)' : ''} —
-                <span class="yaml">set in config.yaml, read at start; the room shows what is, the file decides.</span>
-                Only holders of an <strong>ingest key</strong> may speak here (the machines' door, right).
-              </p>
-            {:else}
-              <p class="yaml">set in config.yaml — the room shows what is, the file decides.</p>
-            {/if}
+          <i aria-hidden="true">⠿</i>
+          {#if card.key === 'fall'}
+            <svg viewBox="0 0 76 40" aria-hidden="true">
+              <line x1="16" y1="6" x2="16" y2="22" stroke="var(--fall-accept)" stroke-width="2" opacity="0.55" />
+              <line x1="30" y1="12" x2="30" y2="24" stroke="var(--fall-drop)" stroke-width="2" opacity="0.4" />
+              <line x1="44" y1="4" x2="44" y2="16" stroke="var(--fall-accept)" stroke-width="2" opacity="0.3" />
+              <line x1="58" y1="10" x2="58" y2="28" stroke="var(--fall-accept)" stroke-width="2" opacity="0.5" />
+              <line x1="8" y1="34" x2="68" y2="34" stroke="var(--now)" stroke-width="1.4" opacity="0.6" />
+            </svg>
+          {:else if card.key === 'metrics'}
+            <svg viewBox="0 0 76 40" aria-hidden="true">
+              <polyline
+                points="6,26 16,22 24,28 32,12 40,24 48,18 56,27 70,20"
+                fill="none"
+                stroke="var(--accent)"
+                stroke-width="1.4"
+                opacity="0.8"
+              />
+              <line x1="6" y1="33" x2="70" y2="33" stroke="var(--border)" stroke-width="1" />
+            </svg>
+          {:else if card.key === 'live'}
+            <svg viewBox="0 0 76 40" aria-hidden="true">
+              <line x1="8" y1="9" x2="68" y2="9" stroke="var(--fg-dim)" stroke-width="1.2" opacity="0.7" />
+              <line x1="8" y1="17" x2="56" y2="17" stroke="var(--fg-dim)" stroke-width="1.2" opacity="0.5" />
+              <line x1="8" y1="25" x2="64" y2="25" stroke="var(--alarm)" stroke-width="1.2" opacity="0.6" />
+              <line x1="8" y1="33" x2="50" y2="33" stroke="var(--fg-dim)" stroke-width="1.2" opacity="0.4" />
+            </svg>
+          {:else}
+            <svg viewBox="0 0 76 40" aria-hidden="true">
+              <rect x="8" y="6" width="3" height="8" fill="#ff5470" />
+              <line x1="16" y1="10" x2="66" y2="10" stroke="var(--fg-dim)" stroke-width="1.2" opacity="0.6" />
+              <rect x="8" y="18" width="3" height="8" fill="#ff9e64" />
+              <line x1="16" y1="22" x2="58" y2="22" stroke="var(--fg-dim)" stroke-width="1.2" opacity="0.5" />
+              <rect x="8" y="30" width="3" height="8" fill="var(--marked)" />
+              <line x1="16" y1="34" x2="62" y2="34" stroke="var(--fg-dim)" stroke-width="1.2" opacity="0.5" />
+            </svg>
+          {/if}
+          <span class="nm">{card.name}</span>
+          {#if card.key === 'fall' && epsText}
+            <span class="lv">{epsText} events/s now</span>
+          {:else if card.key === 'docket'}
+            <span class="lv">
+              {#if flagsState.activeCount > 0}<b class="ct">⚑ {flagsState.activeCount}</b>{/if}
+              {#if isAdmin && watchlistState.entries.length > 0}
+                <b class="wct">◉ {watchlistState.entries.length}</b>
+                {#if watchlistState.brokenCount > 0}<b class="ct">○{watchlistState.brokenCount}</b>{/if}
+              {/if}
+            </span>
+          {/if}
+          {#if i === 0}<b class="lands">SIGN-IN LANDS HERE</b>{/if}
+        </span>
+      {/each}
+    </div>
+  </div>
+
+  <div class="stgrid">
+    <div class="stcol">
+      <div class="og">
+        <h3>ingest</h3>
+        <svg
+          class="stpath"
+          viewBox="0 0 520 92"
+          role="img"
+          aria-label="Routers push their logs one way into mikroview's listening port; nothing travels back"
+        >
+          {#if routers[0]}
+            <circle cx="52" cy="30" r="10" fill="none" stroke="var(--accent)" stroke-width="1.4" />
+            <circle cx="52" cy="30" r="2" fill="var(--accent)" />
+            <text x="52" y="54" text-anchor="middle" class="sp-n">{routers[0].name}</text>
+            <path d="M66 30 C 180 30, 260 38, 340 42" fill="none" stroke="var(--border)" stroke-width="1.4" />
+          {/if}
+          {#if routers[1]}
+            <circle cx="52" cy="74" r="6" fill="none" stroke="var(--fg-dim)" stroke-width="1.2" opacity="0.7" />
+            <text x="66" y="78" class="sp-n" opacity="0.7">
+              {routers[1].name}{quietFor(routers[1].lastSeen) ? ` · ${quietFor(routers[1].lastSeen)}` : ''}
+            </text>
+            <path
+              d="M60 70 C 180 64, 260 54, 340 48"
+              fill="none"
+              stroke="var(--border)"
+              stroke-width="1.2"
+              opacity="0.6"
+            />
+          {/if}
+          <path d="M334 37 L 345 44 L 333 50" fill="none" stroke="var(--fg-dim)" stroke-width="1.3" />
+          {#if routers[0] && appState.stats && appState.stats.eventsPerSecond > 0}
+            <!-- The arriving pulse travels the live router's line only
+                 (rounds 25: honesty in motion) -- a quiet router gets
+                 none. Hidden entirely under prefers-reduced-motion. -->
+            <circle class="sp-pulse" r="2.4" fill="var(--accent)" />
+          {/if}
+          <circle cx="372" cy="45" r="15" fill="none" stroke="var(--accent)" stroke-width="1.5" />
+          <circle cx="372" cy="45" r="4" fill="var(--accept)" />
+          {#if status}
+            <text x="396" y="41" class="sp-k">
+              {portOf(status.instance.syslogPort)}{status.instance.tlsEnabled ? ' · TLS' : ''} · listening
+            </text>
+          {/if}
+          {#if epsText}
+            <text x="396" y="57" class="sp-n">{epsText} events/s arriving now</text>
+          {/if}
+        </svg>
+        <p class="oghint">the logs travel one way — mikroview never connects to your router</p>
+        {#if status}
+          <div class="orow">
+            <span>syslog listener</span>
+            <span class="ov">
+              {portOf(status.instance.syslogPort)}{status.instance.tlsEnabled ? ' · TLS' : ''} ·
+              <span class="yaml">set in config.yaml; the page shows what is, the file decides</span>
+            </span>
           </div>
         {/if}
-      </li>
+        <div class="orow">
+          <span>who may speak</span>
+          <span class="ov">holders of an ingest key — the machines' door, below</span>
+        </div>
+      </div>
 
-      <!-- The store -->
-      <li class="station st-{stationState('store')}">
-        <button
-          type="button"
-          class="shead"
-          aria-expanded={expandedStation === 'store'}
-          aria-controls="station-store-body"
-          onclick={() => toggleStation('store')}
-        >
-          <span class="nm">The store</span>
-          {#if stationState('store') !== 'collapsed'}<span class="what">what is kept</span>{/if}
-          <span class="live"><span class="dot"></span>{appState.stats ? appState.stats.count.toLocaleString() : '—'} events held</span>
-        </button>
-        {#if stationState('store') !== 'collapsed'}
-          <div class="sbody" id="station-store-body">
-            <p>
-              Keeps <strong>{retentionHours !== null ? `${retentionHours} hours` : '—'}</strong> and lets the oldest fall
-              off the end. Everything below reads from here; nothing anywhere probes.
-            </p>
-          </div>
-        {/if}
-      </li>
-
-      <!-- The watchers -->
-      <li class="station st-{stationState('watchers')}">
-        <button
-          type="button"
-          class="shead"
-          aria-expanded={expandedStation === 'watchers'}
-          aria-controls="station-watchers-body"
-          onclick={() => toggleStation('watchers')}
-        >
-          <span class="nm">The watchers</span>
-          {#if stationState('watchers') !== 'collapsed'}<span class="what">detectors</span>{/if}
-          <span class="live"><span class="dot"></span>{watchersRunning} of {watchersTotal} running</span>
-        </button>
-        {#if stationState('watchers') === 'open'}
-          <div class="sbody" id="station-watchers-body">
+      <div class="og">
+        <h3>detection</h3>
+        <div class="stflags">
+          {#each fired as [type, n] (type)}
+            <span class="stf" style="color: {FLAG_FAMILIES[type].ink}">
+              {FLAG_FAMILIES[type].mark} {CHIP_LABELS[type]} · {n}
+            </span>
+          {/each}
+          {#if quietTypes > 0}
+            <span class="stf dim">
+              {fired.length > 0 ? `+ ${quietTypes} more · quiet this hour` : 'all quiet this hour'}
+            </span>
+          {/if}
+        </div>
+        <div class="orow">
+          <span>detectors</span>
+          <span class="ov">
+            {watchersRunning} of {watchersTotal} on ·
+            <button class="olink" onclick={() => (benchOpen = !benchOpen)}>
+              {benchOpen ? 'close the bench' : 'tune…'}
+            </button>
+          </span>
+        </div>
+        {#if benchOpen}
+          <div class="bench">
             <EngineRoomWatchers {isAdmin} />
           </div>
-        {:else if stationState('watchers') === 'rest'}
-          <div class="sbody" id="station-watchers-body">
-            <p>
-              {#each watcherHighlights as d, i (d.name)}{i > 0 ? '. ' : ''}{watcherFact(d)}{/each}{watcherHighlights.length > 0 ? '. ' : ''}
-              <button type="button" class="open-link" onclick={() => toggleStation('watchers')}>Open the station</button>
-              for the full bench.
-            </p>
+        {/if}
+      </div>
+    </div>
+
+    <div class="stcol">
+      <div class="og">
+        <h3>memory</h3>
+        {#if memSlices.length > 0}
+          <svg
+            class="stmem"
+            viewBox="0 0 520 40"
+            role="img"
+            aria-label="The event buffer, hour by hour; darker stretches held more, the oldest falls away as the newest arrives"
+          >
+            <rect x="8" y="14" width="500" height="10" rx="5" fill="var(--bg-hover)" />
+            {#each memSlices as v, i (i)}
+              <rect
+                x={8 + (500 / memSlices.length) * i}
+                y="14"
+                width={500 / memSlices.length}
+                height="10"
+                fill="var(--accent)"
+                opacity={0.05 + 0.25 * v}
+              />
+            {/each}
+            <rect x="504" y="9" width="3" height="20" rx="1.5" fill="var(--now)" />
+            {#if oldestHeld}
+              <text x="8" y="38" class="sp-n">{oldestHeld} — the oldest event still held</text>
+            {/if}
+            <text x="508" y="38" text-anchor="end" class="sp-k">now</text>
+          </svg>
+        {/if}
+        <p class="oghint">the oldest falls away as the newest arrives; darker stretches held more</p>
+        {#if appState.stats}
+          <div class="orow">
+            <span>event buffer</span>
+            <span class="ov">
+              {appState.stats.count.toLocaleString()} of {appState.stats.capacity.toLocaleString()} events
+              {#if retentionHours !== null}
+                · ~{retentionHours} h window
+              {/if}
+            </span>
           </div>
         {/if}
-      </li>
+        <div class="orow">
+          <span>what reads it</span>
+          <span class="ov">every scene below reads from here; nothing anywhere probes</span>
+        </div>
+      </div>
 
-      <!-- The flags desk -->
-      <li class="station st-{stationState('flags')}">
-        <button
-          type="button"
-          class="shead"
-          aria-expanded={expandedStation === 'flags'}
-          aria-controls="station-flags-body"
-          onclick={() => toggleStation('flags')}
-        >
-          <span class="nm">The flags desk</span>
-          {#if stationState('flags') !== 'collapsed'}<span class="what">what they raised</span>{/if}
-          <span class="live"><span class="dot"></span>{flagsState.activeCount} open</span>
-        </button>
-        {#if stationState('flags') !== 'collapsed'}
-          <div class="sbody" id="station-flags-body">
-            <p>
-              Raised flags wait here for a human; permanent clears become <strong>exclusions</strong>, kept on the
-              desk where anyone can read why something stays quiet.
-            </p>
-          </div>
-        {/if}
-      </li>
-
-      <!-- The heralds -->
-      <li class="station st-{stationState('heralds')}">
-        <button
-          type="button"
-          class="shead"
-          aria-expanded={expandedStation === 'heralds'}
-          aria-controls="station-heralds-body"
-          onclick={() => toggleStation('heralds')}
-        >
-          <span class="nm">The heralds</span>
-          {#if stationState('heralds') !== 'collapsed'}<span class="what">how word goes out</span>{/if}
-          <span class="live yaml">config.yaml</span>
-        </button>
-        {#if stationState('heralds') !== 'collapsed'}
-          <div class="sbody" id="station-heralds-body">
-            <p class="yaml">
-              Configured in config.yaml — stated here, amended there. The room never pretends a knob it does not
-              hold.
-            </p>
-          </div>
-        {/if}
-      </li>
-    </ul>
-
-    <EngineRoomDoors {isAdmin} />
+      <div class="og">
+        <h3>account</h3>
+        <div class="orow">
+          <span>signed in</span>
+          <span class="ov">{authState.username} ({authState.role})</span>
+        </div>
+        <div class="orow">
+          <span>password</span>
+          <span class="ov"><button class="olink" onclick={() => (authState.showChangePassword = true)}>change…</button></span>
+        </div>
+        <div class="orow">
+          <span>version</span>
+          <span class="ov dim">{versionState.version || '—'} · AGPL-3.0</span>
+        </div>
+      </div>
+    </div>
   </div>
+
+  <EngineRoomDoors {isAdmin} />
 </div>
 
 <style>
@@ -264,177 +407,248 @@
     padding: 14px 16px 24px;
     display: flex;
     flex-direction: column;
-    gap: 10px;
+    gap: 14px;
   }
 
-  .arrives {
-    margin: 0;
+  .og {
+    background: var(--bg-elevated);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 12px 14px;
+  }
+
+  .og h3 {
+    margin: 0 0 6px;
+    font-size: 10px;
+    font-weight: 650;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--fg-dim);
+  }
+
+  .oghint {
+    margin: 2px 0 8px;
     font-size: 11.5px;
     font-style: italic;
     color: var(--fg-dim);
   }
 
-  .mono {
-    font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
-    font-style: normal;
-    color: var(--fg-muted);
+  .stgrid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 14px;
+    align-items: start;
   }
 
-  .room {
+  .stcol {
     display: flex;
-    gap: 24px;
-    align-items: flex-start;
-    margin-top: 6px;
-  }
-
-  .path {
-    flex: 1.3;
+    flex-direction: column;
+    gap: 14px;
     min-width: 0;
-    list-style: none;
-    margin: 0;
-    padding: 0 0 0 20px;
-    position: relative;
-  }
-
-  /* The vertical spine and a node per station -- chrome, not a knob, so
-     it stays a neutral border colour for both roles rather than the
-     admin's accent ink (#490's colour grammar reserves accent for
-     amendable/interactive ink specifically). */
-  .path::before {
-    content: '';
-    position: absolute;
-    left: 6px;
-    top: 8px;
-    bottom: 8px;
-    width: 2px;
-    background: var(--border);
-  }
-
-  .station {
-    position: relative;
-    background: var(--bg-elevated);
-    border: 1px solid var(--border);
-    border-radius: 10px;
-    margin-bottom: 12px;
-    transition: opacity 0.15s ease;
-  }
-
-  .station::before {
-    content: '';
-    position: absolute;
-    left: -20px;
-    top: 16px;
-    width: 9px;
-    height: 9px;
-    border-radius: 50%;
-    background: var(--bg);
-    border: 2px solid var(--border);
-  }
-
-  .station.st-collapsed {
-    opacity: 0.5;
-  }
-
-  .shead {
-    width: 100%;
-    display: flex;
-    align-items: baseline;
-    gap: 10px;
-    padding: 10px 14px;
-    background: transparent;
-    border: none;
-    text-align: left;
-    color: var(--fg);
-    cursor: pointer;
-  }
-
-  .shead:hover {
-    background: var(--bg-hover);
-  }
-
-  .shead .nm {
-    font-size: 13px;
-    font-weight: 650;
-  }
-
-  .shead .what {
-    font-size: 10px;
-    letter-spacing: 0.08em;
-    text-transform: uppercase;
-    color: var(--fg-dim);
-  }
-
-  .shead .live {
-    margin-left: auto;
-    display: inline-flex;
-    align-items: center;
-    gap: 5px;
-    font-size: 11px;
-    font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
-    color: var(--fg-muted);
-    white-space: nowrap;
-  }
-
-  .shead .live.yaml {
-    font-style: italic;
-    color: var(--fg-dim);
-  }
-
-  .shead .live .dot {
-    width: 6px;
-    height: 6px;
-    border-radius: 50%;
-    background: var(--now);
-  }
-
-  .sbody {
-    padding: 0 14px 12px;
-    font-size: 12.5px;
-    color: var(--fg-muted);
-    line-height: 1.6;
-  }
-
-  .sbody p {
-    margin: 0;
-  }
-
-  .sbody strong {
-    color: var(--fg);
-    font-weight: 650;
-  }
-
-  .sbody .yaml {
-    color: var(--fg-dim);
-    font-style: italic;
-  }
-
-  /* A solid underline, not the dashed knob ink -- "Open the station" is
-     a read affordance available to a viewer too (zooming, not editing),
-     so it must not borrow the dashed underline #490 reserves for the
-     admin's amendable values. Identical for both roles, same as the
-     rest of the room at rest. */
-  .open-link {
-    color: var(--fg);
-    font-weight: 650;
-    /* The three other sides explicitly, not just the underline: app.css
-       resets a button's font but not its border, so leaving them out
-       kept Chromium's default button border and drew a grey box around
-       a control that reads as a word inside a sentence. */
-    border: none;
-    border-bottom: 1px solid var(--border);
-    background: transparent;
-    padding: 0;
-    font-size: inherit;
-  }
-
-  .open-link:hover {
-    color: var(--accent);
-    border-bottom-color: var(--accent);
   }
 
   @media (max-width: 900px) {
-    .room {
-      flex-direction: column;
+    .stgrid {
+      grid-template-columns: 1fr;
     }
+  }
+
+  /* --- your deck: the shelf ---------------------------------------------- */
+  .stshelf {
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
+  }
+
+  .stcard {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    width: 108px;
+    padding: 8px 10px;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    cursor: grab;
+    user-select: none;
+  }
+
+  .stcard.dragging {
+    opacity: 0.4;
+  }
+
+  .stcard.first {
+    border-color: var(--accent);
+  }
+
+  .stcard i {
+    position: absolute;
+    top: 6px;
+    right: 8px;
+    font-style: normal;
+    font-size: 10px;
+    color: var(--fg-dim);
+  }
+
+  .stcard svg {
+    width: 76px;
+    height: 40px;
+  }
+
+  .stcard .nm {
+    font-size: 9.5px;
+    font-weight: 650;
+    letter-spacing: 0.1em;
+    color: var(--fg-muted);
+  }
+
+  .stcard .lv {
+    font-family: var(--font-mono);
+    font-size: 9.5px;
+    color: var(--fg-dim);
+    min-height: 12px;
+    display: flex;
+    gap: 6px;
+  }
+
+  .stcard .lv .ct {
+    color: var(--alarm);
+  }
+
+  .stcard .lv .wct {
+    color: var(--marked);
+  }
+
+  .stcard .lands {
+    font-size: 8px;
+    font-weight: 700;
+    letter-spacing: 0.1em;
+    color: var(--accent);
+  }
+
+  /* --- the shared row grammar -------------------------------------------- */
+  .orow {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 14px;
+    padding: 5px 0;
+    border-top: 1px solid var(--border);
+    font-size: 12px;
+  }
+
+  .orow > span:first-child {
+    color: var(--fg-dim);
+    flex: none;
+  }
+
+  .orow .ov {
+    color: var(--fg-muted);
+    text-align: right;
+  }
+
+  .orow .ov.dim {
+    color: var(--fg-dim);
+  }
+
+  .yaml {
+    font-style: italic;
+    color: var(--fg-dim);
+  }
+
+  .olink {
+    background: none;
+    border: none;
+    padding: 0;
+    font-size: inherit;
+    color: var(--accent);
+    cursor: pointer;
+    text-decoration: underline;
+    text-decoration-color: transparent;
+  }
+
+  .olink:hover {
+    text-decoration-color: currentColor;
+  }
+
+  /* --- ingest ------------------------------------------------------------- */
+  .stpath {
+    width: 100%;
+    height: auto;
+    display: block;
+  }
+
+  .sp-n {
+    font-family: var(--font-mono);
+    font-size: 9.5px;
+    fill: var(--fg-dim);
+  }
+
+  .sp-k {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    fill: var(--fg-muted);
+  }
+
+  .sp-pulse {
+    offset-path: path('M66 30 C 180 30, 260 38, 340 42');
+    animation: travel 3.2s linear infinite;
+  }
+
+  @keyframes travel {
+    from {
+      offset-distance: 0%;
+      opacity: 0;
+    }
+    12% {
+      opacity: 1;
+    }
+    88% {
+      opacity: 1;
+    }
+    to {
+      offset-distance: 100%;
+      opacity: 0;
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .sp-pulse {
+      display: none;
+    }
+  }
+
+  /* --- detection ----------------------------------------------------------- */
+  .stflags {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px 12px;
+    margin-bottom: 8px;
+  }
+
+  .stf {
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    font-weight: 600;
+    white-space: nowrap;
+  }
+
+  .stf.dim {
+    color: var(--fg-dim);
+    font-weight: 400;
+  }
+
+  .bench {
+    margin-top: 8px;
+    padding-top: 8px;
+    border-top: 1px solid var(--border);
+  }
+
+  /* --- memory -------------------------------------------------------------- */
+  .stmem {
+    width: 100%;
+    height: auto;
+    display: block;
   }
 </style>
