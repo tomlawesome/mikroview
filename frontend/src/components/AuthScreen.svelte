@@ -96,24 +96,32 @@
        when its movement is declined. -->
   <div class="fullfall" aria-hidden="true">
     <!-- The round-29 scene's own seventeen, verbatim: eleven accepts,
-         four drops, two NAT marks. -->
-    <i style="left: 4%; animation-delay: 0.2s; --y: 8%; opacity: 0.5"></i>
-    <i style="left: 9%; animation-delay: 3.1s; --y: 64%; opacity: 0.3"></i>
-    <i class="r" style="left: 15%; animation-delay: 1.6s; --y: 31%; opacity: 0.55"></i>
-    <i style="left: 21%; animation-delay: 4.4s; --y: 78%; opacity: 0.4"></i>
-    <i style="left: 26%; animation-delay: 2.2s; --y: 15%; opacity: 0.65"></i>
-    <i class="v" style="left: 33%; animation-delay: 5.0s; --y: 52%; opacity: 0.45"></i>
-    <i style="left: 38%; animation-delay: 0.9s; --y: 88%; opacity: 0.3"></i>
-    <i class="r" style="left: 45%; animation-delay: 3.7s; --y: 24%; opacity: 0.4"></i>
-    <i style="left: 51%; animation-delay: 1.2s; --y: 70%; opacity: 0.6"></i>
-    <i style="left: 57%; animation-delay: 4.8s; --y: 41%; opacity: 0.35"></i>
-    <i style="left: 63%; animation-delay: 2.7s; --y: 95%; opacity: 0.5"></i>
-    <i class="v" style="left: 69%; animation-delay: 0.5s; --y: 58%; opacity: 0.4"></i>
-    <i class="r" style="left: 75%; animation-delay: 3.4s; --y: 12%; opacity: 0.6"></i>
-    <i style="left: 81%; animation-delay: 1.9s; --y: 83%; opacity: 0.35"></i>
-    <i style="left: 86%; animation-delay: 5.3s; --y: 36%; opacity: 0.55"></i>
-    <i class="r" style="left: 91%; animation-delay: 2.4s; --y: 67%; opacity: 0.35"></i>
-    <i style="left: 96%; animation-delay: 4.1s; --y: 47%; opacity: 0.5"></i>
+         four drops, two NAT marks. Their per-stroke left/delay/opacity
+         live in this component's stylesheet as nth-child rules, NOT in
+         style attributes: the app's CSP (default-src 'self') forbids
+         inline style attributes, and Firefox enforces that on statically
+         templated markup -- every stroke lost its position there and the
+         whole fall collapsed into one block at the layer's origin
+         (#645, owner report 2026-08-30). Chromium let the same markup
+         through, so no Chromium-driven check can see this class of
+         breakage. -->
+    <i></i>
+    <i></i>
+    <i class="r"></i>
+    <i></i>
+    <i></i>
+    <i class="v"></i>
+    <i></i>
+    <i class="r"></i>
+    <i></i>
+    <i></i>
+    <i></i>
+    <i class="v"></i>
+    <i class="r"></i>
+    <i></i>
+    <i></i>
+    <i class="r"></i>
+    <i></i>
   </div>
 
   <div class="stack">
@@ -227,6 +235,24 @@
   .fullfall i.v {
     background: var(--fall-nat);
   }
+
+  .fullfall i:nth-child(1) { left: 4%; animation-delay: 0.2s; --y: 8%; opacity: 0.5; }
+  .fullfall i:nth-child(2) { left: 9%; animation-delay: 3.1s; --y: 64%; opacity: 0.3; }
+  .fullfall i:nth-child(3) { left: 15%; animation-delay: 1.6s; --y: 31%; opacity: 0.55; }
+  .fullfall i:nth-child(4) { left: 21%; animation-delay: 4.4s; --y: 78%; opacity: 0.4; }
+  .fullfall i:nth-child(5) { left: 26%; animation-delay: 2.2s; --y: 15%; opacity: 0.65; }
+  .fullfall i:nth-child(6) { left: 33%; animation-delay: 5.0s; --y: 52%; opacity: 0.45; }
+  .fullfall i:nth-child(7) { left: 38%; animation-delay: 0.9s; --y: 88%; opacity: 0.3; }
+  .fullfall i:nth-child(8) { left: 45%; animation-delay: 3.7s; --y: 24%; opacity: 0.4; }
+  .fullfall i:nth-child(9) { left: 51%; animation-delay: 1.2s; --y: 70%; opacity: 0.6; }
+  .fullfall i:nth-child(10) { left: 57%; animation-delay: 4.8s; --y: 41%; opacity: 0.35; }
+  .fullfall i:nth-child(11) { left: 63%; animation-delay: 2.7s; --y: 95%; opacity: 0.5; }
+  .fullfall i:nth-child(12) { left: 69%; animation-delay: 0.5s; --y: 58%; opacity: 0.4; }
+  .fullfall i:nth-child(13) { left: 75%; animation-delay: 3.4s; --y: 12%; opacity: 0.6; }
+  .fullfall i:nth-child(14) { left: 81%; animation-delay: 1.9s; --y: 83%; opacity: 0.35; }
+  .fullfall i:nth-child(15) { left: 86%; animation-delay: 5.3s; --y: 36%; opacity: 0.55; }
+  .fullfall i:nth-child(16) { left: 91%; animation-delay: 2.4s; --y: 67%; opacity: 0.35; }
+  .fullfall i:nth-child(17) { left: 96%; animation-delay: 4.1s; --y: 47%; opacity: 0.5; }
 
   @keyframes fall {
     to {
