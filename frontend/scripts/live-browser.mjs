@@ -303,7 +303,7 @@ export async function session({ waitForEvents = 0, dismissSetup = true, landing 
     // mounted, and their scenes render .row elements of their own, so a
     // bare .row count can be satisfied before any event has rendered.
     await page.waitForFunction(
-      (n) => document.querySelectorAll('.card[data-view="live"] .row').length >= n,
+      (n) => document.querySelectorAll('.card[data-card="live"] .row').length >= n,
       waitForEvents,
       { timeout: 20000 },
     )
