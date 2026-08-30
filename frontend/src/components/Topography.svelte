@@ -25,6 +25,7 @@
   import { appState } from '../lib/state.svelte'
   import { zonesState } from '../lib/zones.svelte'
   import { policyState, type PolicyEdge } from '../lib/policy.svelte'
+  import { realityEdges, unexercisedIntents, type RealityEdge } from '../lib/reality'
   import { reachFor } from '../lib/reach'
   import { formatEps } from '../lib/format'
 
@@ -97,32 +98,47 @@
     return { x: laneX(i, zones.length), y: 484, kind: 'zone' }
   }
 
-  interface DrawnEdge {
-    edge: PolicyEdge
+  // A line between two anchors, shared by both lenses: the Policy lens
+  // draws intent along it, the Traffic lens draws what actually
+  // happened (#629). `crosses` is whether it arrives or dies at the
+  // waist.
+  interface Line {
     from: EdgeAnchor
     to: EdgeAnchor
     /** Perpendicular offset splitting the two directions of a pair. */
     off: { x: number; y: number }
+    crosses: boolean
+  }
+
+  function lineFor(fromIface: string, toIface: string, crosses: boolean): Line | null {
+    const from = anchorOf(fromIface)
+    const to = anchorOf(toIface)
+    // A pair whose boundary the map has no island for (no address push
+    // named it, nothing spoke on it) cannot be drawn honestly.
+    if (!from || !to || (from.kind === 'any' && to.kind === 'any')) return null
+    const dx = to.x - from.x
+    const dy = to.y - from.y
+    const len = Math.hypot(dx, dy) || 1
+    // A→B and B→A split to either side of the pair's shared line.
+    return { from, to, off: { x: (-dy / len) * 7, y: (dx / len) * 7 }, crosses }
+  }
+
+  interface DrawnEdge {
+    edge: PolicyEdge
+    line: Line
   }
 
   const drawnEdges = $derived.by((): { drawn: DrawnEdge[]; undrawn: number } => {
     const drawn: DrawnEdge[] = []
     let undrawn = 0
     for (const e of policyState.edges) {
-      const from = anchorOf(e.from)
-      const to = anchorOf(e.to)
-      // A pair whose boundary the map has no island for (no address
-      // push named it, nothing spoke on it) cannot be drawn honestly --
-      // it is counted and said, never silently dropped.
-      if (!from || !to || (from.kind === 'any' && to.kind === 'any') || drawn.length >= EDGE_CAP) {
+      const line = drawn.length < EDGE_CAP ? lineFor(e.from, e.to, e.accepted) : null
+      // Counted and said, never silently dropped.
+      if (!line) {
         undrawn++
         continue
       }
-      const dx = to.x - from.x
-      const dy = to.y - from.y
-      const len = Math.hypot(dx, dy) || 1
-      // A→B and B→A split to either side of the pair's shared line.
-      drawn.push({ edge: e, from, to, off: { x: (-dy / len) * 7, y: (dx / len) * 7 } })
+      drawn.push({ edge: e, line })
     }
     return { drawn, undrawn }
   })
@@ -130,41 +146,45 @@
   // A refusal dies on the waist's near side, so its bar is never behind
   // the island: arriving from the internet it dies at the top edge,
   // from a lane at the bottom.
-  function deathPoint(d: DrawnEdge): { x: number; y: number } {
-    return { x: WAIST.x + d.off.x, y: (d.from.y < 268 ? 226 : WAIST.y) + d.off.y }
+  function deathPoint(l: Line): { x: number; y: number } {
+    return { x: WAIST.x + l.off.x, y: (l.from.y < 268 ? 226 : WAIST.y) + l.off.y }
   }
 
-  // The visible line: a cubic pulled through the waist. A refused-only
-  // edge stops there instead of arriving.
-  function edgePath(d: DrawnEdge): string {
-    const { from, to, off } = d
+  // The visible line: a cubic pulled through the waist, or dying there.
+  function edgePath(l: Line): string {
+    const { from, to, off } = l
     const w = { x: WAIST.x + off.x, y: WAIST.y + off.y }
-    if (d.edge.accepted) {
+    if (l.crosses) {
       return `M ${from.x + off.x} ${from.y + off.y} C ${w.x} ${w.y}, ${w.x} ${w.y}, ${to.x + off.x} ${to.y + off.y}`
     }
-    const dp = deathPoint(d)
+    const dp = deathPoint(l)
     return `M ${from.x + off.x} ${from.y + off.y} Q ${(from.x + dp.x) / 2 + off.x} ${(from.y + dp.y) / 2 + off.y}, ${dp.x} ${dp.y}`
   }
 
-  // Where the ⊣ bar and the badges sit for an edge.
-  function edgeBarAt(d: DrawnEdge): { x: number; y: number; angle: number } {
-    const dp = deathPoint(d)
-    return { x: dp.x, y: dp.y, angle: (Math.atan2(dp.y - d.from.y, dp.x - d.from.x) * 180) / Math.PI + 90 }
+  // Where the ⊣ bar and the badges sit for a line.
+  function edgeBarAt(l: Line): { x: number; y: number; angle: number } {
+    const dp = deathPoint(l)
+    return { x: dp.x, y: dp.y, angle: (Math.atan2(dp.y - l.from.y, dp.x - l.from.x) * 180) / Math.PI + 90 }
   }
 
-  function edgeBadgeAt(d: DrawnEdge): { x: number; y: number } {
-    const { from, to, off } = d
-    if (!d.edge.accepted) {
+  // Badges near the internet corridor stack when several edges share
+  // it, so crossing badges stagger along their line by draw order.
+  const BADGE_FRACS = [0.55, 0.72, 0.42, 0.64, 0.48]
+
+  function edgeBadgeAt(l: Line, i = 0): { x: number; y: number } {
+    const { from, to, off } = l
+    if (!l.crosses) {
       // Beside the bar, pushed back toward the source and clear of the
       // opposite direction's line.
-      const dp = deathPoint(d)
+      const dp = deathPoint(l)
       const dx = from.x - dp.x
       const dy = from.y - dp.y
       const len = Math.hypot(dx, dy) || 1
       return { x: dp.x + (dx / len) * 26 + off.x * 4.2, y: dp.y + (dy / len) * 26 + off.y * 4.2 }
     }
     // Past the waist, toward the destination, on its own side.
-    return { x: WAIST.x + (to.x - WAIST.x) * 0.55 + off.x * 4.2, y: WAIST.y + (to.y - WAIST.y) * 0.55 + off.y * 4.2 }
+    const f = BADGE_FRACS[i % BADGE_FRACS.length]
+    return { x: WAIST.x + (to.x - WAIST.x) * f + off.x * 4.2, y: WAIST.y + (to.y - WAIST.y) * f + off.y * 4.2 }
   }
 
   function badgeLine(e: PolicyEdge): string {
@@ -189,21 +209,92 @@
   // side, the boundary name as the fallback. A single-port edge narrows
   // to it; a port *set* stays unnarrowed (the port filter takes one
   // query), declared on #628.
-  function openEdge(e: PolicyEdge) {
-    const from = anchorOf(e.from)
-    const to = anchorOf(e.to)
+  function openPair(fromIface: string, toIface: string, ports: string[]) {
+    const from = anchorOf(fromIface)
+    const to = anchorOf(toIface)
     appState.resetFilters()
-    const fromZone = zones.find((z) => z.id === e.from)
-    const toZone = zones.find((z) => z.id === e.to)
+    const fromZone = zones.find((z) => z.id === fromIface)
+    const toZone = zones.find((z) => z.id === toIface)
     if (from?.kind === 'internet') appState.setFilter('srcScope', 'external')
     else if (fromZone?.cidr) appState.setFilter('srcQuery', fromZone.cidr)
-    else if (e.from) appState.setFilter('interface', e.from)
+    else if (fromIface) appState.setFilter('interface', fromIface)
     if (to?.kind === 'internet') appState.setFilter('dstScope', 'external')
     else if (toZone?.cidr) appState.setFilter('dstQuery', toZone.cidr)
-    else if (e.to && !appState.filters.interface) appState.setFilter('interface', e.to)
-    const ports = e.accepted ? e.acceptPorts : e.refusePorts
+    else if (toIface && !appState.filters.interface) appState.setFilter('interface', toIface)
     if (ports.length === 1 && /^:\d+$/.test(ports[0])) appState.setFilter('port', ports[0].slice(1))
     appState.view = 'live'
+  }
+
+  function openEdge(e: PolicyEdge) {
+    openPair(e.from, e.to, e.accepted ? e.acceptPorts : e.refusePorts)
+  }
+
+  // --- the reality overlay (#629: layer 3, observed on intended) -----------
+  // The Traffic lens draws what actually happened, pair by pair, judged
+  // against the intended edges: unplanned traffic finally spends the
+  // reserved saturated colour. What happened is also the geometry --
+  // accepted traffic crosses, drops die at the waist whatever the
+  // verdict, and a pair carrying both draws the crossing with a ⊣ tick
+  // for its refused share.
+  const observed = $derived.by(() => realityEdges(appState.events, policyState.edges, policyState.anyPushed))
+
+  interface DrawnReality {
+    r: RealityEdge
+    line: Line
+  }
+
+  const drawnReality = $derived.by((): { drawn: DrawnReality[]; undrawn: number } => {
+    const drawn: DrawnReality[] = []
+    let undrawn = 0
+    for (const r of observed) {
+      const line = drawn.length < EDGE_CAP ? lineFor(r.from, r.to, r.accepts > 0) : null
+      if (!line) {
+        undrawn++
+        continue
+      }
+      drawn.push({ r, line })
+    }
+    return { drawn, undrawn }
+  })
+
+  // The second delta: accepting rules no packet has exercised, drawn as
+  // ghosts of the intent nothing arrived to fill.
+  const ghostIntents = $derived.by((): DrawnEdge[] => {
+    if (!policyState.anyPushed) return []
+    return unexercisedIntents(observed, policyState.edges)
+      .map((edge) => {
+        const line = lineFor(edge.from, edge.to, true)
+        return line ? { edge, line } : null
+      })
+      .filter((g): g is DrawnEdge => g !== null)
+      .slice(0, 4)
+  })
+
+  // Volume speaks through weight: 1 event is a hairline, thousands a
+  // firm stroke, never a shout.
+  function realityWidth(r: RealityEdge): number {
+    return Math.min(4.4, 1.3 + Math.log10(Math.max(1, r.events)))
+  }
+
+  function realityBadge(r: RealityEdge): string {
+    const ports = r.topPorts.slice(0, 3).join(' ')
+    const n = r.events.toLocaleString()
+    if (r.accepts === 0) return `⊣ ${n}× ${r.verdict === 'holding' ? 'held' : 'dropped'}`
+    const mark = r.verdict === 'unplanned' ? 'unplanned ·' : '→'
+    return `${mark} ${ports ? `${ports} · ` : ''}${n}×`
+  }
+
+  function realityLabel(r: RealityEdge): string {
+    const name = (i: string) => (i === zonesState.wanInterface ? 'the internet' : i)
+    const what =
+      r.verdict === 'unplanned'
+        ? 'unplanned by any pushed rule'
+        : r.verdict === 'holding'
+          ? 'held by policy'
+          : r.verdict === 'planned'
+            ? 'as intended'
+            : 'unjudged — no rule table pushed'
+    return `${name(r.from)} → ${name(r.to)}: ${r.events.toLocaleString()} events, ${what}`
   }
 
   // --- the reach (#626: a mode of this scene, not a place) -----------------
@@ -388,16 +479,73 @@
           <circle class="mote" r="2.5" fill="var(--accent)" />
         {/if}
 
-        {#each zones as z, i (z.id)}
-          <path class="rib" d={ribPath(i, zones.length)} stroke={LANE_INKS[i % LANE_INKS.length]} stroke-width="2.4" />
+        {#if drawnReality.drawn.length === 0}
+          <!-- Before pair-carrying traffic arrives, the lanes' simple
+               volume ribs keep the place alive. -->
+          {#each zones as z, i (z.id)}
+            <path class="rib" d={ribPath(i, zones.length)} stroke={LANE_INKS[i % LANE_INKS.length]} stroke-width="2.4" />
+          {/each}
+        {/if}
+
+        <!-- The reality overlay (#629): what actually happened, pair by
+             pair. Accepted traffic crosses; drops die at the waist
+             whatever the verdict; unplanned traffic spends the reserved
+             saturated colour. -->
+        {#each drawnReality.drawn as d, di (d.r.key)}
+          {@const badge = edgeBadgeAt(d.line, di)}
+          <g
+            class="edge-g"
+            role="button"
+            tabindex="0"
+            aria-label="Open the stream filtered to this pair: {realityLabel(d.r)}"
+            onclick={() => openPair(d.r.from, d.r.to, d.r.topPorts)}
+            onkeydown={(e) => {
+              if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault()
+                openPair(d.r.from, d.r.to, d.r.topPorts)
+              }
+            }}
+          >
+            <title>{realityLabel(d.r)}</title>
+            <path class="edge-hit" d={edgePath(d.line)} />
+            <path
+              class="redge"
+              class:alarm={d.r.verdict === 'unplanned'}
+              d={edgePath(d.line)}
+              style:stroke-width="{realityWidth(d.r)}px"
+            />
+            {#if d.r.drops > 0}
+              {@const bar = edgeBarAt(d.line)}
+              <g transform="translate({bar.x} {bar.y}) rotate({bar.angle})">
+                <line class="edge-bar" class:alarm-bar={d.r.verdict === 'unplanned'} x1="-7" y1="0" x2="7" y2="0" />
+              </g>
+            {/if}
+            <text class="edge-badge" class:alarm-t={d.r.verdict === 'unplanned'} x={badge.x} y={badge.y} text-anchor="middle">
+              {realityBadge(d.r)}
+            </text>
+          </g>
         {/each}
+
+        <!-- The second delta: intent nothing arrived to fill. -->
+        {#each ghostIntents as g, gi (g.edge.key)}
+          {@const badge = edgeBadgeAt(g.line, gi + 2)}
+          <path class="gedge" d={edgePath(g.line)} />
+          <text class="edge-badge ghost-t" x={badge.x} y={badge.y - 12} text-anchor="middle">never exercised</text>
+        {/each}
+
+        {#if drawnReality.drawn.length > 0 && !policyState.anyPushed}
+          <text x="700" y="596" text-anchor="middle" class="n-sub">unjudged — push the rule table and this lens says which of it was intended</text>
+        {/if}
+        {#if drawnReality.undrawn > 0}
+          <text x="1370" y="608" text-anchor="end" class="n-sub">+{drawnReality.undrawn} pair{drawnReality.undrawn === 1 ? '' : 's'} not drawn — off this map's islands, or beyond its {EDGE_CAP}-edge calm</text>
+        {/if}
       {:else}
         <!-- Intended-policy edges (#628): what the pushed table says
              may cross, refused where it says it may not. Drawn beneath
              the islands, like the ribs they replace. -->
-        {#each drawnEdges.drawn as d (d.edge.key)}
-          {@const bar = edgeBarAt(d)}
-          {@const badge = edgeBadgeAt(d)}
+        {#each drawnEdges.drawn as d, di (d.edge.key)}
+          {@const bar = edgeBarAt(d.line)}
+          {@const badge = edgeBadgeAt(d.line, di)}
           <g
             class="edge-g"
             role="button"
@@ -412,8 +560,8 @@
             }}
           >
             <title>{edgeLabel(d.edge)}</title>
-            <path class="edge-hit" d={edgePath(d)} />
-            <path class="edge" class:refused={!d.edge.accepted} d={edgePath(d)} />
+            <path class="edge-hit" d={edgePath(d.line)} />
+            <path class="edge" class:refused={!d.edge.accepted} d={edgePath(d.line)} />
             {#if !d.edge.accepted}
               <g transform="translate({bar.x} {bar.y}) rotate({bar.angle})">
                 <line class="edge-bar" x1="-7" y1="0" x2="7" y2="0" />
@@ -848,6 +996,38 @@
   .edge-bar {
     stroke: var(--fg-muted);
     stroke-width: 2.6;
+  }
+
+  /* --- the reality overlay (#629) ---------------------------------------- */
+  .redge {
+    fill: none;
+    stroke: var(--fg-muted);
+    stroke-linecap: round;
+    opacity: 0.65;
+  }
+
+  .redge.alarm {
+    stroke: var(--alarm);
+    opacity: 0.85;
+  }
+
+  .edge-bar.alarm-bar {
+    stroke: var(--alarm);
+  }
+
+  /* Intent nothing arrived to fill: fainter than any observed line. */
+  .gedge {
+    fill: none;
+    stroke: var(--fg-dim);
+    stroke-width: 1.1;
+    stroke-dasharray: 2 7;
+    stroke-linecap: round;
+    opacity: 0.55;
+  }
+
+  .ghost-t {
+    opacity: 0.75;
+    font-style: italic;
   }
 
   .edge-bar.dim {
