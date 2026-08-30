@@ -31,7 +31,11 @@
   // disabled. A group whose every item is admin-only disappears with
   // them rather than rendering an empty heading.
   const isAdmin = $derived(authState.state === 'authenticated' && authState.role === 'admin')
-  const visible = $derived(visibleGroups(isAdmin))
+  // #653: the user tier reaches Watchlist and Entities; the owner-level
+  // rows still need isAdmin. Both flags go to visibleGroups so the tier
+  // ordering stays in authState.
+  const canEdit = $derived(authState.state === 'authenticated' && authState.canEdit)
+  const visible = $derived(visibleGroups(isAdmin, canEdit))
 
   // "Open unexcluded flags" is exactly flagsState.activeCount, with no
   // exclusion filter needed on top: internal/flags.Store keeps the two in

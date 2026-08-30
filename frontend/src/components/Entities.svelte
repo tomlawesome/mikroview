@@ -215,11 +215,12 @@
 {/snippet}
 
 <div class="page scrollbar">
-  <!-- No readOnly chip: this page stays admin-only in the rail (GET
-       /api/entities is server-gated the same way -- see
-       internal/api/entities.go's callerIsAdmin check), so a viewer never
-       reaches it -- see the #548 PR notes on the open question of
-       whether it should become viewer-readable per the design record. -->
+  <!-- No readOnly chip: since #653 the rail shows this page from the
+       user tier up (navGroups.ts's `edit: true`) and GET /api/entities
+       is server-gated to match (internal/api/entities.go's callerIsUser
+       check), so everyone who reaches it can edit it. The #548 open
+       question of whether a viewer should get a read-only Entities page
+       is now #657's, along with the rest of what a viewer sees. -->
   <PageHeader title="Entities" />
   <p class="intro">
     Entities are shared, persisted labels/tags attached to a host, port, or firewall rule -- friendly names editable

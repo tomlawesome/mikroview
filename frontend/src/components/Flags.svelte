@@ -18,8 +18,15 @@
   import Exclusions from './Exclusions.svelte'
   import type { Flag, FlagType, Verdict } from '../lib/types'
 
-  // Same gate the rail uses for the engine room's watchers station.
+  // Same gate the engine room uses for its admin-only doors (tokens,
+  // users) -- the owner-level items #653 keeps at the top tier.
   const isAdminOrOpen = $derived(authState.state === 'authenticated' && authState.role === 'admin')
+
+  // #653's middle tier: judging/clearing a flag is a normal operational
+  // action, open to user and admin alike -- only a viewer is read-only
+  // here. isAdminOrOpen above stays admin-only for the permanent-clear
+  // arrow and the exclusions list, which are the owner-level items.
+  const canEdit = $derived(authState.state === 'authenticated' && authState.canEdit)
 
   // Exclusions is a tab of Flags (#547, per the ratified navigation
   // record) -- admin-only because GET/DELETE /api/flags/exclusions both
@@ -549,11 +556,13 @@
               <span class="verdict-judged-by">{judgedByLine(f)}</span>
             {/if}
           </div>
-        {:else}
+        {:else if canEdit}
           <!-- The three-button verdict row (issue #638) is the leading
                affordance now; Clear (below) demotes to secondary. Bare
                labels only -- the owner ruled out an explanatory second
-               line under any of these. -->
+               line under any of these. Absent rather than disabled for a
+               viewer (#653), same "hide, never disable" grammar as the
+               Clear buttons just below. -->
           <div class="verdict-row" role="group" aria-label="Judge this flag">
             <button class="verdict-btn verdict-btn-expected" onclick={() => judge(f.id, 'expected')}>
               Expected
@@ -567,12 +576,13 @@
                The arrow segment is admin-only, matching the backend's
                own gate on POST /api/flags/{id}/clear-permanent -- a
                permanent exclusion suppresses detection until someone
-               undoes it, unlike the plain Clear beside it. A non-admin
-               gets a plain Clear button with no arrow at all (below),
-               rather than a disabled one that would just advertise an
-               action they can't take (issue #198). Secondary now (#638)
-               -- still fully available, just no longer the leading
-               action on the card. -->
+               undoes it, unlike the plain Clear beside it. A user
+               (#653: below admin, above viewer) gets a plain Clear
+               button with no arrow at all (below), rather than a
+               disabled one that would just advertise an action they
+               can't take (issue #198); a viewer gets neither. Secondary
+               now (#638) -- still fully available, just no longer the
+               leading action on the card. -->
           <div class="split-clear secondary" class:menu-open={openClearMenuFor === f.id}>
             <button class="clear split-main" onclick={() => clear(f.id)}>Clear</button>
             <button
@@ -600,7 +610,7 @@
               </div>
             {/if}
           </div>
-        {:else}
+        {:else if canEdit}
           <button class="clear secondary" onclick={() => clear(f.id)}>Clear</button>
         {/if}
       </div>
@@ -630,13 +640,14 @@
             </button>
           {/each}
         </div>
-        {#if active.length > 0}
+        {#if active.length > 0 && canEdit}
           <!-- Click-again confirm, not a modal: the second click on this
                same now-red button is the confirmation, which is what
                makes a single accidental click harmless while still
                asserting real intent for the second one (issue #198).
                Regular clears only -- see flagsState.clearAll's doc
-               comment for why there is no permanent variant. -->
+               comment for why there is no permanent variant. Absent for
+               a viewer (#653), same as the plain Clear it batches. -->
           <button
             class="clear-all"
             class:armed={clearAllArmed}
@@ -751,7 +762,7 @@
     </div>
   {/if}
 
-  {#if flagsState.undoableVerdicts.length > 0}
+  {#if canEdit && flagsState.undoableVerdicts.length > 0}
     <!-- Issue #638's undo affordance: judgeAndClear() has already
          posted the verdict and cleared the card -- this is the window
          (VERDICT_UNDO_MS) during which undoVerdict() can still send a
@@ -759,7 +770,10 @@
          single, fade-away confirmation with pointer-events: none) this
          needs to be clickable and to hold more than one at a time,
          since Expected and Noise can each be pressed on a different
-         card before either window lapses. -->
+         card before either window lapses. The canEdit guard (#653) is
+         belt-and-braces -- a viewer can never judge a flag in the first
+         place, so this list is always empty for one -- but it keeps the
+         same "hide, never disable" grammar as the verdict row itself. -->
     <div class="verdict-undo-stack" role="status">
       {#each flagsState.undoableVerdicts as u (u.id)}
         <div class="verdict-undo">

@@ -137,11 +137,11 @@ describe('The engine room (#490)', () => {
 
   it('a viewer sees the chip, no verbs, and no admin-only users door', async () => {
     authState.state = 'authenticated'
-    authState.role = 'user'
+    authState.role = 'viewer'
     render(EngineRoom)
     await settle()
 
-    expect(screen.getByText('READ-ONLY — ADMINS EDIT')).toBeTruthy()
+    expect(screen.getByText('READ-ONLY')).toBeTruthy()
 
     // Tokens door is viewer-readable but its verbs are gated.
     expect(screen.getByText('rb5009-ingest')).toBeTruthy()
@@ -166,11 +166,54 @@ describe('The engine room (#490)', () => {
     render(EngineRoom)
     await settle()
 
-    expect(screen.queryByText('READ-ONLY — ADMINS EDIT')).toBeNull()
+    expect(screen.queryByText('READ-ONLY')).toBeNull()
     expect(screen.getByText('Who may look in')).toBeTruthy()
     expect(screen.getByRole('button', { name: '+ Let someone in' })).toBeTruthy()
     expect(screen.getByRole('button', { name: '+ Mint a key' })).toBeTruthy()
     expect(screen.getByRole('button', { name: 'Revoke' })).toBeTruthy()
+  })
+
+  it('shows a user no read-only chip: they edit the watchers station here', async () => {
+    // #653: the chip follows canEdit, not isAdmin. Telling a user this
+    // page is read-only was wrong -- the owner-level doors are gated,
+    // the page is not.
+    authState.state = 'authenticated'
+    authState.role = 'user'
+    render(EngineRoom)
+    await settle()
+
+    expect(screen.queryByText('READ-ONLY')).toBeNull()
+    // The owner-level door is still absent for them.
+    expect(screen.queryByText('Who may look in')).toBeNull()
+  })
+
+  // #653's three tiers: running the detector bench (enable/pause, edit
+  // scope) is a normal operational action, open to user and admin --
+  // unlike the tokens/users doors above, which stay admin-only.
+  it('a viewer opening the watchers station sees no run checkbox or scope knob', async () => {
+    authState.state = 'authenticated'
+    authState.role = 'viewer'
+    render(EngineRoom)
+    await settle()
+
+    await fireEvent.click(screen.getByRole('button', { name: /The watchers/ }))
+    await settle()
+
+    expect(screen.queryByRole('checkbox', { name: 'Port scan runs' })).toBeNull()
+    expect(document.querySelector('.scope-knob')).toBeNull()
+  })
+
+  it('a user opening the watchers station sees the run checkbox and scope knob', async () => {
+    authState.state = 'authenticated'
+    authState.role = 'user'
+    render(EngineRoom)
+    await settle()
+
+    await fireEvent.click(screen.getByRole('button', { name: /The watchers/ }))
+    await settle()
+
+    expect(screen.getByRole('checkbox', { name: 'Port scan runs' })).toBeTruthy()
+    expect(document.querySelector('.scope-knob')).toBeTruthy()
   })
 
   it('the mint banner appears once', async () => {

@@ -13,10 +13,15 @@ class UsersState {
     this.list = await fetchUsers()
   }
 
-  // No role argument -- see api.ts's createUser. Every account created
-  // here is an ordinary user.
-  async create(username: string, password: string): Promise<string | null> {
-    const err = await createUser(username, password)
+  // role defaults to 'user' so an existing caller creates exactly the
+  // account it always did -- see api.ts's createUser for why admin is
+  // not on offer.
+  async create(
+    username: string,
+    password: string,
+    role: 'user' | 'viewer' = 'user',
+  ): Promise<string | null> {
+    const err = await createUser(username, password, role)
     if (err) return err
     await this.refresh()
     return null
