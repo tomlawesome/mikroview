@@ -114,7 +114,7 @@ export const navGroups: NavGroup[] = [
     // page that loads and immediately fails, not a read-only one.
     items: [
       {
-        label: 'The engine room',
+        label: 'Settings',
         view: 'engineroom',
         icon: 'engineroom',
         title: "Mikroview's own signal path, live, with every setting on the station it governs",

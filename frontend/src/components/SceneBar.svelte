@@ -32,7 +32,7 @@
     audit: 'Audit log',
     flags: 'Flags',
     watchlist: 'Watchlist',
-    engineroom: 'The engine room',
+    engineroom: 'Settings',
     fleet: 'Fleet',
     entities: 'Entities',
   }
