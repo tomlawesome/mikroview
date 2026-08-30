@@ -4,12 +4,16 @@
   // The deck (#633, from the #634 rounds): the scenes are full-viewport
   // snap cards rolled vertically, and navigation between them is the
   // roll rail on the right edge -- the deck's names as sideways text,
-  // clicking one rolls that card to centre. The ratified default order
-  // is login -> the fall -> topography -> metrics -> stream; topography
-  // is unbuilt, so today's deck is the fall, metrics, stream, then the
-  // docket (flags · watchlist · audit as one card's tabs, rounds 17-19).
-  // Operate pages (settings, fleet, entities) are not cards: they live
-  // on the account menu and render as pages over the deck.
+  // clicking one rolls that card to centre. The ratified order is the
+  // fall, topography, metrics, stream, the docket (flags · watchlist ·
+  // audit as one card's tabs, rounds 17-19), then -- since #647 (round
+  // 23) -- Entities and Settings as the deck's last two cards: seven for
+  // an admin, six for a viewer (Entities keeps its own admin gate; see
+  // deckCards.ts). Run setup… and the account's own actions are all
+  // that is left on the account menu; every page-shaped operate surface
+  // now lives here. Fleet alone stays off the deck, absorbed into the
+  // Entities card (its "routers" section leads); the standalone Fleet
+  // page still exists for the phone-width bottom bar, per its own file.
   import { appState } from '../lib/state.svelte'
   import { authState } from '../lib/auth.svelte'
   import { deckCards, type DeckCard } from '../lib/deckCards'
@@ -21,6 +25,8 @@
   import LiveTable from './LiveTable.svelte'
   import Docket from './Docket.svelte'
   import Topography from './Topography.svelte'
+  import Entities from './Entities.svelte'
+  import EngineRoom from './EngineRoom.svelte'
 
   // The card table lives in lib/deckCards.ts, shared with the Settings
   // shelf; the order is the operator's own (#633 rounds 23-25, drag to
@@ -113,6 +119,10 @@
               <LiveTable />
             {:else if card.key === 'docket'}
               <Docket />
+            {:else if card.key === 'entities'}
+              <Entities />
+            {:else if card.key === 'engineroom'}
+              <EngineRoom />
             {/if}
           </div>
         {/if}
