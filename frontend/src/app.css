@@ -60,6 +60,16 @@
   --unknown: #838d9e;
   --unknown-bg: rgba(131, 141, 158, 0.12);
 
+  /* The topography's lane inks (#485/#627, ratified in the #634 round
+     palette): one per subnet lane, fixed data colours like the flag
+     families -- themes retune chrome, not lane identity. Never the
+     saturated alarm: that stays reserved for unplanned traffic and a
+     broken watch. */
+  --lane-lan: #3987e5;
+  --lane-srv: #199e70;
+  --lane-iot: #c98500;
+  --lane-guest: #d76a9e;
+
   /* The metrics record's two chart inks (#488, docs/design/screens/
      metrics/DESIGN.md): "Identity is the label, colour is meaning. Two
      chart inks only: traffic blue, refused red (drop . reject -- the

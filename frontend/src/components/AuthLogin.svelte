@@ -6,7 +6,6 @@
 
 <AuthScreen
   title="Sign in"
-  subtitle="Sign in to continue."
   submitLabel="Sign in"
   onsubmit={(username, password) => authState.login(username, password)}
   ssoAvailable={authState.ssoAvailable}

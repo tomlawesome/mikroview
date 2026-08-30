@@ -129,7 +129,7 @@ check(await page.isVisible('#panel-suggestions .card:has-text("live-camera")'), 
 
 // Confirm it actually created a real, inverted, observing watchlist entry --
 // not just flipped a status locally.
-await page.click('[role="tab"]:has-text("Watchlist")')
+await page.click('[role="tablist"][aria-label="Watchlist views"] [role="tab"]:has-text("Watchlist")')
 await page.waitForSelector('#panel-watchlist .card', { timeout: 15000 })
 check(await page.isVisible('#panel-watchlist .card:has-text("live-camera")'), 'accepting created a real watchlist entry')
 check(
@@ -176,7 +176,7 @@ await page.waitForTimeout(1500)
 await page.click('#panel-suggestions .filter:has-text("Accepted")')
 check(!(await page.isVisible('#panel-suggestions >> text=live-camera')), 'the nuke removed the previously-accepted candidate entirely')
 
-await page.click('[role="tab"]:has-text("Watchlist")')
+await page.click('[role="tablist"][aria-label="Watchlist views"] [role="tab"]:has-text("Watchlist")')
 await page.waitForTimeout(500)
 check(!(await page.isVisible('#panel-watchlist >> text=live-camera')), 'the nuke deleted the real watchlist entry it had created')
 

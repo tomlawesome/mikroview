@@ -154,7 +154,7 @@ check(
 // Chrome, not page content: the neighbouring Metrics card's bar carries
 // the same ring at the same moment, so no scene is blind to the alarm.
 check(
-  (await page.locator('.card[data-view="metrics"] .scene-bar .ring').count()) === 1,
+  (await page.locator('.card[data-card="metrics"] .scene-bar .ring').count()) === 1,
   "the Metrics card's bar rings too -- the alarm travels with the chrome",
 )
 
@@ -164,14 +164,14 @@ await page.click(RING)
 await page.waitForFunction(
   () => {
     const deck = document.querySelector('.deck')
-    const el = deck?.querySelector('.card[data-view="watchlist"]')
+    const el = deck?.querySelector('.card[data-card="docket"]')
     if (!el) return false
     return Math.abs(el.getBoundingClientRect().top - deck.getBoundingClientRect().top) < 2
   },
   null,
   { timeout: 10000 },
 )
-check(true, 'clicking the ring rolls the Watchlist card to centre')
+check(true, 'clicking the ring rolls the docket to centre, on its watchlist tab')
 
 // Back to Stream, so the small-screen leg and the clearing below stay
 // observations of the chrome rather than of the Watchlist page itself.
