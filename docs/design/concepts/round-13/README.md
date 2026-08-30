@@ -19,4 +19,21 @@ Under #634. Three threads from the owner's batch:
 ## Owner verdicts
 
 - Roll rail (round 11): accepted.
-- A vs B, and the corrected metrics card: pending.
+- A vs B (2026-08-30): neither taken as-is — "I think we need a C,
+  where the flags are their own boxes outside the main one, but
+  stacked up, and I think watchers should be a purple or a cyan."
+  → round 14 builds candidate C, with purple and cyan watcher
+  variants to choose between.
+- The corrected metrics card: pending.
+
+## Post-serve repairs (defects, not rework)
+
+The owner could not operate the metrics card as served (chat,
+2026-08-30: "The register/table links don't work") — the view
+switchers were dead spans and only the seismograph was ever drawn.
+Repaired in place so the review could continue: register and table
+views built (restated from the shipped `MetricsRegister.svelte` /
+`MetricsTable.svelte` — brink-at-top ribbons with flag columns; the
+sortable minutes table, refused ink, amber cursor row, hour-total
+footer), switchers wired, the scene description moved off the hourline
+ledger. Shots: `shots/metrics-{seismograph,register,table}.png`.
