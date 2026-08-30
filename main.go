@@ -442,6 +442,13 @@ func main() {
 	if len(os.Args) > 1 && os.Args[1] == "-restore" {
 		os.Exit(runRestore(os.Args[2:]))
 	}
+	// -migrate-data: move the data directory between a bind mount and a
+	// named volume, in either direction (#537). Run from inside the
+	// container with both mounted, so every file is created by the uid
+	// mikroview runs as and the ownership cannot come out wrong.
+	if len(os.Args) > 1 && os.Args[1] == "-migrate-data" {
+		os.Exit(runMigrateData(os.Args[2:]))
+	}
 	if len(os.Args) > 1 && os.Args[1] == "-transfer-admin" {
 		os.Exit(runTransferAdmin(os.Args[2:]))
 	}

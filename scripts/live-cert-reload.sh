@@ -16,6 +16,7 @@ set -euo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO"
+. "$REPO/scripts/live-stores.sh"
 
 DIR="$(mktemp -d)"
 cleanup() {
@@ -47,9 +48,7 @@ tls:
   enabled: true
   certFile: $DIR/live.crt
   keyFile: $DIR/live.key
-auth: {storePath: $DIR/users.json, tokensStorePath: $DIR/tokens.json, secureCookie: true}
-flags: {storePath: $DIR/flags.json}
-watchlist: {storePath: $DIR/watchlist.json, matchLogPath: $DIR/matchlog.jsonl}
+$(mv_store_block "$DIR" true)
 EOF
 
 ( cd frontend && npm run build >/dev/null 2>&1 )
