@@ -161,6 +161,23 @@ function rowFor(rule) {
   return page.locator('.row', { hasText: rule }).first()
 }
 
+// #644's squared columns dropped the chain, interface and NAT cells from
+// the rows -- their click-to-filter tokens live in the detail sheet each
+// row opens (EventDetailSheet, reached through the time cell). The sheet
+// closes itself as a token lands its filter (filterAndClose), so a
+// multi-token check reopens it between clicks.
+async function openSheetFor(rule) {
+  await rowFor(rule).locator('.time-btn').click()
+  await page.waitForSelector('.sheet[role="dialog"]', { timeout: 5000 })
+}
+
+// hasText as a regex, not a string: string matching is case-insensitive
+// substring, so 'NAT' would also match the Chain row reading 'srcnat'.
+// Every sheet row starts with its own label.
+function sheetRow(label) {
+  return page.locator('.sheet .row', { hasText: new RegExp(`^${label}`) })
+}
+
 // --- Direction 2, the issue's own worked example: the chain filter was --
 // --- already settable (EventRow's click handler) but had no bar control -
 await clearFilters()
@@ -173,11 +190,12 @@ if (chainRowVisible) {
     `the Chain select includes the custom chain observed in the buffer (saw: ${chainOptionValues.join(', ')})`,
   )
 
-  await rowFor(CHAIN_RULE).locator('.chain.cell-btn').click().catch(() => {})
+  await openSheetFor(CHAIN_RULE)
+  await sheetRow('Chain').locator('button.v').click().catch(() => {})
   const chainSelectValue = await waitForInputValue('select[aria-label="Chain"]', 'customchain')
   check(
     chainSelectValue === 'customchain',
-    `clicking the chain cell is reflected in the (previously nonexistent) Chain select -- the bidirectional-contract bug #438 names as its worked example (got "${chainSelectValue}")`,
+    `clicking the sheet's chain token is reflected in the (previously nonexistent) Chain select -- the bidirectional-contract bug #438 names as its worked example (got "${chainSelectValue}")`,
   )
 
   await page.selectOption('select[aria-label="Chain"]', '').catch(() => {})
@@ -186,12 +204,13 @@ if (chainRowVisible) {
 
   // --- Interface tokens: both in and out are independently click-to-filter
   await clearFilters()
-  const ifaceButtons = rowFor(CHAIN_RULE).locator('.iface-btn')
-  await ifaceButtons.nth(0).click().catch(() => {})
+  await openSheetFor(CHAIN_RULE)
+  await sheetRow('Interfaces').locator('button.v').nth(0).click().catch(() => {})
   const ifaceAfterIn = await waitForInputValue('input[aria-label="Interface"]', 'bridge1')
   check(ifaceAfterIn === 'bridge1', `clicking the "in" interface token filters to it (got "${ifaceAfterIn}")`)
 
-  await ifaceButtons.nth(1).click().catch(() => {})
+  await openSheetFor(CHAIN_RULE)
+  await sheetRow('Interfaces').locator('button.v').nth(1).click().catch(() => {})
   const ifaceAfterOut = await waitForInputValue('input[aria-label="Interface"]', 'ether1')
   check(ifaceAfterOut === 'ether1', `clicking the "out" interface token filters to it (got "${ifaceAfterOut}")`)
 } else {
@@ -202,7 +221,8 @@ if (chainRowVisible) {
 await clearFilters()
 const srcnatRowVisible = await waitUntil(() => rowFor(SRCNAT_RULE).isVisible())
 if (srcnatRowVisible) {
-  await rowFor(SRCNAT_RULE).locator('.nat-value').click().catch(() => {})
+  await openSheetFor(SRCNAT_RULE)
+  await sheetRow('NAT').locator('button.v').click().catch(() => {})
   const srcAfterNatClick = await waitForInputValue('input[aria-label="Source — name, IP or CIDR"]', '203.0.113.230')
   check(
     srcAfterNatClick === '203.0.113.230',
@@ -215,7 +235,8 @@ if (srcnatRowVisible) {
 await clearFilters()
 const dstnatRowVisible = await waitUntil(() => rowFor(DSTNAT_RULE).isVisible())
 if (dstnatRowVisible) {
-  await rowFor(DSTNAT_RULE).locator('.nat-value').click().catch(() => {})
+  await openSheetFor(DSTNAT_RULE)
+  await sheetRow('NAT').locator('button.v').click().catch(() => {})
   const dstAfterNatClick = await waitForInputValue('input[aria-label="Destination — name, IP or CIDR"]', '192.168.50.99')
   check(
     dstAfterNatClick === '192.168.50.99',

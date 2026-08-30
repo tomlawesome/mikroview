@@ -19,6 +19,13 @@
 // an anchored popover whose row slides out from under it while you read
 // it is only observable by watching it happen.
 //
+// #644's squared columns moved the *untagged* translation's entry point:
+// the NAT cell is gone from the rows, so its trigger now lives in the
+// detail sheet each row opens (EventDetailSheet's natlookup) -- same
+// store, same two modes, same wording, rendered by the same
+// RouterNatLookup the popover embeds. A tagged event keeps its trigger
+// in the rule cell, and with it the anchored popover.
+//
 // Every line and address below is synthetic, using documentation address
 // space (RFC 5737 / RFC 1918). Nothing here comes from a real deployment.
 
@@ -43,7 +50,7 @@ const LOGGED_SLUG = 'mv445-nat'
 const HOLD_SLUG = 'mv445-hold'
 
 const SOURCE_BOX = 'input[aria-label="Source — name, IP or CIDR"]'
-const UNLOGGED_TRIGGER = 'button[aria-label="Narrow down which NAT rule did this"]'
+const SHEET_NAT_TRIGGER = '.sheet .natlookup'
 const LOGGED_TRIGGER = `button[aria-label="Look up the NAT rule logged as ${LOGGED_SLUG}"]`
 
 const { page, consoleErrors } = await session()
@@ -75,10 +82,39 @@ async function push(payload) {
   return res.status
 }
 
-/** Narrows the live view to one address and waits for a trigger to exist. */
-async function isolate(query, trigger) {
+/** Narrows the live view to one address and opens that row's detail
+ * sheet, where the untagged lookup's trigger lives (#644). */
+async function openRowSheet(query) {
   await page.fill(SOURCE_BOX, query)
-  await page.waitForSelector(trigger, { timeout: 20000 })
+  const row = `.grid .row:has-text("${query}")`
+  await page.waitForSelector(`${row} .time-btn`, { timeout: 20000 })
+  await page.click(`${row} .time-btn`)
+  await page.waitForSelector(SHEET_NAT_TRIGGER, { timeout: 5000 })
+}
+
+/** Opens the sheet's NAT lookup section and returns the sheet's text.
+ *
+ * The sheet's mode chip renders with the section itself, before the
+ * lookup resolves -- unlike the popover's, which is the resolved signal
+ * openPopover waits on -- so this waits for the section body to move
+ * past Loading… instead.
+ */
+async function openSheetLookup() {
+  await page.click(SHEET_NAT_TRIGGER)
+  await page.waitForFunction(
+    () => {
+      const t = document.querySelector('.sheet .natsection')?.textContent ?? ''
+      return t !== '' && !t.includes('Loading…')
+    },
+    null,
+    { timeout: 15000 },
+  )
+  return page.textContent('.sheet')
+}
+
+async function closeSheet() {
+  await page.keyboard.press('Escape')
+  await page.locator('.sheet').waitFor({ state: 'hidden', timeout: 10000 })
 }
 
 /**
@@ -129,13 +165,13 @@ feedRaw(loggedLine)
     await page.request.get(`${URL_BASE}/api/routeros/${encodeURIComponent(DEVICE)}/nat`)
   ).json()
   if (!before.available) {
-    await isolate(UNLOGGED_SRC, UNLOGGED_TRIGGER)
-    const text = await openPopover(UNLOGGED_TRIGGER)
+    await openRowSheet(UNLOGGED_SRC)
+    const text = await openSheetLookup()
     check(
       text.includes('No NAT table pushed'),
-      'before any push, the popup says no table has been pushed -- not an empty table',
+      'before any push, the lookup says no table has been pushed -- not an empty table',
     )
-    await closePopover()
+    await closeSheet()
   }
 }
 
@@ -236,16 +272,16 @@ check(
 
 // --- Mode 1: not logged, so subtraction ---------------------------------
 
-await isolate(UNLOGGED_SRC, UNLOGGED_TRIGGER)
+await openRowSheet(UNLOGGED_SRC)
 {
-  const text = await openPopover(UNLOGGED_TRIGGER)
+  const text = await openSheetLookup()
 
   check(
     text.includes(`NAT table — ${DEVICE}`),
     'the unlogged mode is announced in the header, not left to be inferred',
   )
   check(
-    (await page.textContent('.popover .chip')).trim() === 'not logged',
+    (await page.textContent('.sheet .chip')).trim() === 'not logged',
     'the mode chip reads "not logged" -- text, so it survives any colour scheme',
   )
   check(
@@ -294,7 +330,7 @@ await isolate(UNLOGGED_SRC, UNLOGGED_TRIGGER)
   // `display:` declaration outranks the UA stylesheet's rule for
   // `hidden`, so a "hidden" element can render and a rendered one can be
   // marked hidden.
-  const out = page.locator('.popover .entry.out')
+  const out = page.locator('.sheet .entry.out')
   check((await out.count()) === 5, `all five ruled-out rules are still rendered (${await out.count()})`)
   await out.first().waitFor({ state: 'visible', timeout: 5000 })
   check(true, 'ruled-out entries stay visible and readable rather than being dropped')
@@ -307,7 +343,7 @@ await isolate(UNLOGGED_SRC, UNLOGGED_TRIGGER)
     `an unlogged NAT row gets no inline rule decoration (rule cell reads "${ruleCell}")`,
   )
 }
-await closePopover()
+await closeSheet()
 
 // --- Mode 2: logged, so the rule is named -------------------------------
 
@@ -343,9 +379,12 @@ await closePopover()
 
 await page.fill('input.rule', '')
 await page.fill(SOURCE_BOX, '')
-feedRaw(unloggedLine)
-await page.waitForSelector(UNLOGGED_TRIGGER, { timeout: 20000 })
-await openPopover(UNLOGGED_TRIGGER)
+// The hold belongs to the anchored popover (#413) -- the sheet is modal
+// and takes no hold -- and since #644 removed the untagged row trigger,
+// the tagged row's rule-cell trigger is the popover's entry point here.
+feedRaw(loggedLine)
+await page.waitForSelector(LOGGED_TRIGGER, { timeout: 20000 })
+await openPopover(LOGGED_TRIGGER)
 
 feedSyslog(30, HOLD_SLUG)
 await page.waitForTimeout(4000)
