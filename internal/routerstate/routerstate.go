@@ -519,6 +519,25 @@ func (s *Store) AddressLists(device string) (entries []ingest.AddressListEntry, 
 	return entries, ks.updatedAt, true
 }
 
+// IPAddresses returns device's pushed /ip/address table, sorted by
+// address -- issue #627, mirroring ARPEntries: an interface's own
+// configured address rather than what the router has observed answering
+// (ARP) or handed out (a DHCP lease).
+func (s *Store) IPAddresses(device string) (entries []ingest.IPAddressEntry, updatedAt time.Time, ok bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	ks, found := s.kindLocked(device, ingest.KindIPAddress)
+	if !found {
+		return nil, time.Time{}, false
+	}
+	for _, p := range ks.pages {
+		entries = append(entries, p.IPAddresses...)
+	}
+	sort.SliceStable(entries, func(i, j int) bool { return entries[i].Address < entries[j].Address })
+	return entries, ks.updatedAt, true
+}
+
 // Devices returns every device with at least one pushed page, sorted by
 // name -- the enumeration FilterRules/DHCPLeases/etc need a caller to
 // already have a device name, this is how a caller (e.g. the suggestions

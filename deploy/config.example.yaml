@@ -273,6 +273,15 @@ store:
 # entities:
 #   storePath: /var/lib/mikroview/entities.json
 
+# Optional: coverage-gap declarations (#630/#392) -- an admin's on-record
+# statement that a given boundary-direction pair (e.g. ether1 to
+# bridge1) is intentionally, not accidentally, quiet. storePath already
+# defaults to /var/lib/mikroview/coverage.json; only uncomment this
+# block to move that path. See docs/configuration.md's "Coverage-gap
+# declarations" section.
+# coverage:
+#   storePath: /var/lib/mikroview/coverage.json
+
 # Optional: the persisted, admin-only accountability log of every admin-
 # privileged mutation (user create, entity upsert/delete, token create/
 # revoke, detector setting change, flag exclusion removal) -- who did it

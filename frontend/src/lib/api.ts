@@ -217,6 +217,35 @@ export async function fetchEventsWindow(params: {
   return res.json()
 }
 
+// fetchFlagEpisode is the docket drawer's bounded look at a flag's own
+// events (#633): the #29 around+window lookback centred on the flag's
+// lastSeen, narrowed to whatever the flag's target maps onto (ip, port,
+// rule or device -- the same mapping Flags.svelte's open-in-stream
+// uses). global_spike and new_device pass no narrowing at all, which is
+// honest for both: a network-wide surge *is* everything in the window,
+// and a MAC target has no server-side match (see buildQuery's comment).
+export async function fetchFlagEpisode(params: {
+  ip?: string
+  port?: string
+  rule?: string
+  device?: string
+  around: string
+  window: string
+  limit?: number
+}): Promise<EventsResult> {
+  const qs = new URLSearchParams()
+  if (params.ip) qs.set('ip', params.ip)
+  if (params.port) qs.set('port', params.port)
+  if (params.rule) qs.set('rule', params.rule)
+  if (params.device) qs.set('device', params.device)
+  qs.set('around', params.around)
+  qs.set('window', params.window)
+  if (params.limit) qs.set('limit', String(params.limit))
+  const res = await fetch(`/api/events?${qs}`)
+  if (!res.ok) throw new ApiError(`fetchFlagEpisode: ${res.status}`, res.status)
+  return res.json()
+}
+
 export async function fetchDevices(): Promise<Device[]> {
   const res = await fetch('/api/devices')
   if (!res.ok) throw new ApiError(`fetchDevices: ${res.status}`, res.status)
@@ -269,13 +298,19 @@ export interface RouterFilterRule {
   // to tell a dark (unlogged) boundary from a merely quiet one instead of
   // guessing.
   log: boolean
-  // #408's schema fields. Optional here because a router whose push
-  // script predates them sends nothing, and because nothing in the UI
-  // reads them yet -- typed so the data is not lost on the way in, not
-  // because a component depends on it.
+  // #408's schema fields. Optional because a router whose push script
+  // predates them sends nothing. The interfaces and dstPort/protocol
+  // feed the topography's policy edges (#628); the rest is typed so the
+  // data is not lost on the way in.
   connectionState?: string[]
   inInterface?: string
   outInterface?: string
+  // RouterOSPortSpec on the wire: a single port serialises as a JSON
+  // number, a list or range as the string RouterOS prints ("80,443").
+  dstPort?: number | string
+  protocol?: string
+  srcAddress?: string
+  dstAddress?: string
 }
 
 // The NAT record's full rule anatomy (#408) plus the operator-set
@@ -303,6 +338,16 @@ export interface RouterNatRule {
   dynamic?: boolean
 }
 
+// The pushed /ip/address table (issue #627) -- an interface's own
+// configured address, distinct from RouterFilterRule/RouterNatRule and
+// from the ARP/DHCP tables' observed-elsewhere addresses.
+export interface RouterIPAddress {
+  address: string
+  network: string
+  interface: string
+  comment: string
+}
+
 export interface RouterTable<T> {
   available: boolean
   updatedAt?: string
@@ -318,6 +363,12 @@ export async function fetchRouterRules(device: string): Promise<RouterTable<Rout
 export async function fetchRouterNat(device: string): Promise<RouterTable<RouterNatRule>> {
   const res = await fetch(`/api/routeros/${encodeURIComponent(device)}/nat`)
   if (!res.ok) throw new ApiError(`fetchRouterNat: ${res.status}`, res.status)
+  return res.json()
+}
+
+export async function fetchRouterAddresses(device: string): Promise<RouterTable<RouterIPAddress>> {
+  const res = await fetch(`/api/routeros/${encodeURIComponent(device)}/addresses`)
+  if (!res.ok) throw new ApiError(`fetchRouterAddresses: ${res.status}`, res.status)
   return res.json()
 }
 
@@ -882,4 +933,45 @@ export async function markSetupStep(
   const res = await postJSON('/api/setup/mark', { step, outcome, note })
   if (res.ok) return res.json()
   return (await res.text()) || `markSetupStep: ${res.status}`
+}
+
+// CoverageDeclaration mirrors internal/coverage.Declaration -- an
+// admin's on-record statement that a given boundary-direction pair
+// (`key`, e.g. "ether1|bridge1") is intentionally, not accidentally,
+// quiet (issue #630/#392). `declaredBy`/`declaredAt` are always
+// server-set, never sent by the client.
+export interface CoverageDeclaration {
+  key: string
+  reason: string
+  declaredBy: string
+  declaredAt: string
+}
+
+// fetchCoverageDeclarations/putCoverageDeclaration/deleteCoverageDeclaration:
+// CRUD over internal/coverage's persisted declaration store. Reading is
+// open to any signed-in user (same tier as fetchDefinitions); writing is
+// admin-only server-side, same gate as upsertEntity/deleteEntity above.
+export async function fetchCoverageDeclarations(): Promise<CoverageDeclaration[]> {
+  const res = await fetch('/api/coverage/declarations')
+  if (!res.ok) throw new ApiError(`fetchCoverageDeclarations: ${res.status}`, res.status)
+  const body = await res.json()
+  return body.declarations ?? []
+}
+
+// putCoverageDeclaration creates a new declaration, or replaces an
+// existing one in place, identified by key -- mirroring the server's own
+// single PUT-as-upsert primitive (see internal/api's handleCoveragePut).
+export async function putCoverageDeclaration(
+  key: string,
+  reason: string,
+): Promise<CoverageDeclaration | string> {
+  const res = await putJSON(`/api/coverage/declarations/${encodeURIComponent(key)}`, { reason })
+  if (res.ok) return res.json()
+  return (await res.text()) || `putCoverageDeclaration: ${res.status}`
+}
+
+export async function deleteCoverageDeclaration(key: string): Promise<string | null> {
+  const res = await deleteJSON(`/api/coverage/declarations/${encodeURIComponent(key)}`)
+  if (res.ok) return null
+  return (await res.text()) || `deleteCoverageDeclaration: ${res.status}`
 }

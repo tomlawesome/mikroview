@@ -1,21 +1,20 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 //
-// The engine room (#490), driven in a real browser. Settings stopped
-// being filed by noun: one page draws mikroview's own signal path --
-// door, store, watchers, flags desk, heralds -- with two side doors
-// beside it, per docs/design/screens/settings/DESIGN.md.
+// Settings as the shelf (#633, rounds 23-25), driven in a real browser.
+// The five-station signal path (#490) is replaced wholesale: one page,
+// five groups -- your deck, ingest, detection, memory, account -- with
+// the two side doors keeping their own place below the shelf.
 //
-// Three claims in that record are only true if the running app makes
-// them true, and none of them is visible from the code or from a unit
-// test with a mocked store:
+// The room's claims survive the restyle, and none of them is visible
+// from the code or from a unit test with a mocked store:
 //
-//  1. "Every number on the room is arrived traffic" -- a component test
+//  1. "Every number on the page is arrived traffic" -- a component test
 //     renders whatever number it was handed, so it cannot tell a live
 //     figure from a placeholder. Feeding real syslog and watching the
-//     store's count climb can.
-//  2. "Opening a station zooms, not navigates" -- the page must still be
-//     the engine room afterwards, with the other stations collapsed
-//     rather than unmounted. A router-level test would pass either way.
+//     memory group's buffer count climb can.
+//  2. "Tuning unfolds, it does not navigate" -- the detector bench opens
+//     from detection's tune row and the page must still be Settings
+//     afterwards, the bench folded in place rather than routed to.
 //  3. The viewer grammar: chip declared once, affordances absent rather
 //     than disabled, the people door absent entirely -- and, the part no
 //     DOM assertion covers, a viewer's session never even *asks* for the
@@ -40,13 +39,13 @@ await page.waitForFunction(
   { timeout: 5000 },
 )
 
-// --- The room is the path, in order, with both doors beside it ----------
+// --- The page is the five groups, with both doors below the shelf -------
 
-const stationNames = await page.$$eval('.path .station .nm', (els) => els.map((e) => e.textContent.trim()))
+const groupNames = await page.$$eval('.og h3', (els) => els.map((e) => e.textContent.trim()))
 check(
-  JSON.stringify(stationNames) ===
-    JSON.stringify(['The door', 'The store', 'The watchers', 'The flags desk', 'The heralds']),
-  `the five stations render top to bottom in signal order -- got ${JSON.stringify(stationNames)}`,
+  JSON.stringify(groupNames) ===
+    JSON.stringify(['your deck', 'ingest', 'detection', 'memory', 'account']),
+  `the five groups render -- deck, ingest, detection, memory, account -- got ${JSON.stringify(groupNames)}`,
 )
 const doorNames = await page.$$eval('.doors .door .dname', (els) => els.map((e) => e.textContent.trim()))
 check(
@@ -54,93 +53,99 @@ check(
   `both side doors render for an admin -- got ${JSON.stringify(doorNames)}`,
 )
 
-// --- Claim 1: every number is arrived traffic ---------------------------
-// The store's count is the honest one to pin: it is a whole number the
-// server publishes, so a placeholder or a stale render is visible as a
-// number that does not move when 200 more events land.
+// The shelf holds the whole deck, whatever order an earlier scenario
+// left it in, and exactly one card wears the sign-in mark.
+const shelfNames = await page.$$eval('.stshelf .stcard .nm', (els) => els.map((e) => e.textContent.trim()))
+check(
+  shelfNames.length === 5 &&
+    ['The fall', 'Topography', 'Metrics', 'Stream', 'The docket'].every((n) => shelfNames.includes(n)),
+  `the shelf holds all five deck cards -- got ${JSON.stringify(shelfNames)}`,
+)
+check(
+  (await page.$$('.stshelf .stcard.first .lands')).length === 1,
+  'exactly one shelf card says sign-in lands on it, and it is the first',
+)
 
-const storeCount = () =>
-  page.$eval('.path .station:has-text("The store") .live', (el) => {
+// --- Claim 1: every number is arrived traffic ---------------------------
+// The memory group's buffer count is the honest one to pin: it is a
+// whole number the server publishes, so a placeholder or a stale render
+// is visible as a number that does not move when more events land.
+
+const BUFFER_ROW = '.og:has(h3:text-is("memory")) .orow:has-text("event buffer") .ov'
+
+const bufferCount = () =>
+  page.$eval(BUFFER_ROW, (el) => {
     const m = el.textContent.replace(/,/g, '').match(/(\d+)/)
     return m ? Number(m[1]) : null
   })
 
-const before = await storeCount()
-check(before !== null && before > 0, `the store says how many events it holds (got ${before})`)
+const before = await bufferCount()
+check(before !== null && before > 0, `memory says how many events the buffer holds (got ${before})`)
 
 feedSyslog(60, 'live-engine-room')
 const climbed = await page
   .waitForFunction(
     (was) => {
-      // Deliberately no fallback to "the first .live on the page": that
-      // is the door's events/s, which moves on its own, so a fallback
-      // would let this check pass without ever reading the store.
-      const station = [...document.querySelectorAll('.path .station')].find((s) =>
-        s.querySelector('.nm')?.textContent.trim() === 'The store',
+      // Plain DOM traversal, not BUFFER_ROW: this runs inside the page,
+      // where Playwright's :has-text/:text-is pseudo-selectors do not
+      // exist. And deliberately no fallback to "the first number on the
+      // page": the ingest group's events/s moves on its own, so a
+      // fallback would let this check pass without ever reading the
+      // buffer.
+      const og = [...document.querySelectorAll('.og')].find(
+        (g) => g.querySelector('h3')?.textContent.trim() === 'memory',
       )
-      const text = station?.querySelector('.live')?.textContent
-      if (text === undefined || text === null) return false
-      const m = text.replace(/,/g, '').match(/(\d+)/)
+      const row = og && [...og.querySelectorAll('.orow')].find((r) => r.textContent.includes('event buffer'))
+      const el = row?.querySelector('.ov')
+      if (!el) return false
+      const m = el.textContent.replace(/,/g, '').match(/(\d+)/)
       return m ? Number(m[1]) > was : false
     },
     before,
     { timeout: 20000 },
   )
   .then(() => true, () => false)
-check(climbed, `the store's count rises as events arrive -- it is live traffic, not a placeholder (was ${before})`)
+check(climbed, `the buffer count rises as events arrive -- it is live traffic, not a placeholder (was ${before})`)
 
-const doorLive = await page.textContent('.path .station:has-text("The door") .live')
+const ingestText = (await page.textContent('.og:has(h3:text-is("ingest"))')) ?? ''
 check(
-  /\d/.test(doorLive ?? ''),
-  `the door states a real events/s rate rather than an em-dash placeholder (got "${(doorLive ?? '').trim()}")`,
+  /listening/.test(ingestText),
+  'ingest names the listening port -- the pathway in is a stated fact',
+)
+check(
+  /[\d.]+\s*events\/s arriving now/.test(ingestText),
+  `ingest states a real events/s rate rather than a placeholder`,
 )
 
-// The watchers station's "N of M running" has to agree with the server's
-// own definitions list, whatever an earlier scenario left toggled.
-const watchersLive = (await page.textContent('.path .station:has-text("The watchers") .live'))?.trim() ?? ''
+// The detection group's "N of M on" has to agree with the server's own
+// definitions list, whatever an earlier scenario left toggled.
+const detectorsRow = (await page.textContent('.og:has(h3:text-is("detection")) .orow:has-text("detectors")'))?.trim() ?? ''
 const defs = await page.request
   .get(`${URL_BASE}/api/definitions`)
   .then(async (r) => (await r.json()).definitions ?? [])
 const running = defs.filter((d) => d.enabled).length
 check(
-  watchersLive.includes(`${running} of ${defs.length} running`),
-  `the watchers station counts what the server actually runs (ui "${watchersLive}", api ${running} of ${defs.length})`,
+  detectorsRow.includes(`${running} of ${defs.length} on`),
+  `detection counts what the server actually runs (ui "${detectorsRow}", api ${running} of ${defs.length})`,
 )
 
-// --- Claim 2: opening a station zooms, it does not navigate -------------
+// --- Claim 2: tuning unfolds in place, it does not navigate -------------
 
-await page.click('.path .station:has-text("The watchers") .shead')
-await page.waitForSelector('.path .station.st-open')
+await page.click('.olink:has-text("tune")')
+await page.waitForSelector('.bench .row')
 
-const opened = await page.$eval('.path .station.st-open .nm', (el) => el.textContent.trim())
-check(opened === 'The watchers', `the station clicked is the one that opens (got "${opened}")`)
-check(
-  (await page.$$('.path .station.st-collapsed')).length === 4,
-  'the other four stations collapse to slim bars rather than unmounting',
-)
 check(
   (await page.textContent('.page-header h2'))?.trim() === 'Settings',
-  'the page is still the engine room -- the station unfolded in place, it did not navigate away',
+  'the page is still Settings -- the bench unfolded in place, it did not navigate away',
 )
 check(
-  await page
-    .locator('.st-open .bench .row')
-    .first()
-    .waitFor({ timeout: 5000 })
-    .then(() => true, () => false),
-  'the open watchers station shows the detector bench',
-)
-check(
-  (await page.getAttribute('.path .station:has-text("The watchers") .shead', 'aria-expanded')) === 'true',
-  'the open station says so to a screen reader',
+  (await page.$$('.bench .row')).length > 0,
+  'the open bench shows the detectors',
 )
 
-await page.click('.path .station:has-text("The watchers") .shead')
-await page.waitForSelector('.path .station.st-open', { state: 'detached' })
-check(
-  (await page.$$('.path .station.st-rest')).length === 5,
-  'clicking the open station again returns the whole room to rest',
-)
+await page.click('.olink:has-text("close the bench")')
+await page.waitForSelector('.bench', { state: 'detached' })
+check(true, 'closing the bench folds it away and the page is whole again')
 
 // --- Claim 3: the viewer grammar ----------------------------------------
 
@@ -186,7 +191,7 @@ const viewerPage = await viewerCtx.newPage()
 
 // Attached before the first navigation, so it sees every request the
 // viewer's session makes from sign-in onwards -- not only the ones after
-// the room opens.
+// Settings opens.
 const viewerRequests = []
 viewerPage.on('request', (r) => viewerRequests.push(r.url()))
 
@@ -202,7 +207,7 @@ await viewerPage.waitForFunction(
   null,
   { timeout: 5000 },
 )
-check(true, 'a viewer can open the engine room -- the one Admin-group page that is readable')
+check(true, 'a viewer can open Settings -- the one Admin-group page that is readable')
 
 const chips = await viewerPage.$$eval('.page-header .chip', (els) => els.map((e) => e.textContent.trim()))
 check(
@@ -234,10 +239,10 @@ check(
 const viewerDisabled = await viewerPage.$$eval('.page button, .page input', (els) =>
   els.filter((e) => e.disabled).length,
 )
-check(viewerDisabled === 0, `nothing in the room is rendered disabled for a viewer -- got ${viewerDisabled}`)
+check(viewerDisabled === 0, `nothing on the page is rendered disabled for a viewer -- got ${viewerDisabled}`)
 
 // The facts survive without the handles: a viewer still reads which
-// machines may speak and what every watcher is doing, in words.
+// machines may speak and what every detector is doing, in words.
 check(
   await viewerPage
     .locator(`${MACHINES} .row:has-text("engine-room-door-read")`)
@@ -245,16 +250,16 @@ check(
     .then(() => true, () => false),
   'a viewer still reads which machines may speak -- the key is named, with its verbs gone',
 )
-await viewerPage.click('.path .station:has-text("The watchers") .shead')
-await viewerPage.waitForSelector('.st-open .bench .row')
-check((await viewerPage.$$('.st-open .bench .cbx')).length === 0, 'the run/pause checkboxes are absent for a viewer')
-check((await viewerPage.$$('.st-open .bench .scope-knob')).length === 0, 'the scope knobs are absent for a viewer')
-const states = await viewerPage.$$eval('.st-open .bench .state', (els) => els.map((e) => e.textContent.trim()))
+await viewerPage.click('.olink:has-text("tune")')
+await viewerPage.waitForSelector('.bench .row')
+check((await viewerPage.$$('.bench .cbx')).length === 0, 'the run/pause checkboxes are absent for a viewer')
+check((await viewerPage.$$('.bench .scope-knob')).length === 0, 'the scope knobs are absent for a viewer')
+const states = await viewerPage.$$eval('.bench .state', (els) => els.map((e) => e.textContent.trim()))
 check(
   states.length > 0 && states.every((s) => s === 'running' || s === 'paused'),
-  `every watcher's state survives as a word for a viewer -- got ${JSON.stringify(states.slice(0, 4))}`,
+  `every detector's state survives as a word for a viewer -- got ${JSON.stringify(states.slice(0, 4))}`,
 )
-const scopeFacts = await viewerPage.$$eval('.st-open .bench .scope-fact', (els) => els.length)
+const scopeFacts = await viewerPage.$$eval('.bench .scope-fact', (els) => els.length)
 check(scopeFacts > 0, 'a scope reads as a sentence for a viewer rather than vanishing with its knob')
 
 const viewerConsole = []

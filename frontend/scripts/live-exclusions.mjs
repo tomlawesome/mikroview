@@ -81,7 +81,11 @@ if (raised.ok) {
   // also hasText the IP, so a bare .card resolves to it first.
   const scanCard = page.locator('li.card', { hasText: SCAN_SOURCE }).first()
   await scanCard.waitFor({ timeout: 15000 })
-  check(await scanCard.locator('.split-arrow').isVisible(), 'the port scan raised a real flag with the permanent-clear action visible')
+  // The clear actions live in the card's drawer now (#633, rounds
+  // 18-19): open it from the chevron, the row's one affordance.
+  await scanCard.locator('.openc').click()
+  await scanCard.locator('.split-arrow').waitFor({ timeout: 5000 })
+  check(await scanCard.locator('.split-arrow').isVisible(), 'the port scan raised a real flag with the permanent-clear action in its drawer')
 
   // Permanently clear it -- this is what creates the exclusion under test.
   await scanCard.locator('.split-arrow').click()
@@ -195,12 +199,16 @@ await viewerPage.waitForSelector('#main-content', { timeout: 15000 })
 await goTo(viewerPage, 'Flags')
 await viewerPage.waitForSelector('.flags', { timeout: 10000 })
 check(true, 'a viewer reaches the Flags page')
+// The docket's own tab row is legitimately present for a viewer (its
+// flags tab is the whole card) -- the admin-only chrome is Flags' inner
+// "Flags views" tablist, whose only reason to exist is the Exclusions
+// tab.
 check(
-  (await viewerPage.$$('[role="tablist"]')).length === 0,
-  'no tablist renders for a viewer -- with only one tab visible, there is no tab chrome at all',
+  (await viewerPage.$$('[role="tablist"][aria-label="Flags views"]')).length === 0,
+  'no Flags-views tablist renders for a viewer -- with only one tab visible, there is no tab chrome at all',
 )
 check(
-  (await viewerPage.$$('[role="tab"]')).length === 0,
+  (await viewerPage.$$('[role="tab"]:has-text("Exclusions")')).length === 0,
   'the Exclusions tab specifically is absent for a viewer, not just unusable',
 )
 

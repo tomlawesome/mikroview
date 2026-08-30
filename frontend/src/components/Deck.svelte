@@ -6,39 +6,32 @@
   // roll rail on the right edge -- the deck's names as sideways text,
   // clicking one rolls that card to centre. The ratified default order
   // is login -> the fall -> topography -> metrics -> stream; topography
-  // and the docket are unbuilt, so today's deck is the fall, metrics,
-  // stream, then flags and watchlist holding the docket's future slot.
-  // Operate pages (engine room, fleet, entities, audit) are not cards:
-  // they live on the account menu and render as pages over the deck.
-  import { appState, type View } from '../lib/state.svelte'
+  // is unbuilt, so today's deck is the fall, metrics, stream, then the
+  // docket (flags · watchlist · audit as one card's tabs, rounds 17-19).
+  // Operate pages (settings, fleet, entities) are not cards: they live
+  // on the account menu and render as pages over the deck.
+  import { appState } from '../lib/state.svelte'
   import { authState } from '../lib/auth.svelte'
+  import { deckCards, type DeckCard } from '../lib/deckCards'
+  import { deckOrderState } from '../lib/deckOrder.svelte'
   import SceneBar from './SceneBar.svelte'
   import Fall from './Fall.svelte'
   import Metrics from './Metrics.svelte'
   import FilterBar from './FilterBar.svelte'
   import LiveTable from './LiveTable.svelte'
-  import Flags from './Flags.svelte'
-  import Watchlist from './Watchlist.svelte'
+  import Docket from './Docket.svelte'
+  import Topography from './Topography.svelte'
 
-  type Card = { view: View; name: string }
-  // Watchlist is admin-only throughout (#490's grammar: absent for
-  // viewers, never disabled), so a viewer's deck simply has four cards.
-  const cards = $derived.by((): Card[] => {
-    const deck: Card[] = [
-      { view: 'fall', name: 'The fall' },
-      { view: 'metrics', name: 'Metrics' },
-      { view: 'live', name: 'Stream' },
-      { view: 'flags', name: 'Flags' },
-    ]
-    if (authState.role === 'admin') deck.push({ view: 'watchlist', name: 'Watchlist' })
-    return deck
-  })
+  // The card table lives in lib/deckCards.ts, shared with the Settings
+  // shelf; the order is the operator's own (#633 rounds 23-25, drag to
+  // reorder there), applied here so the deck rolls in the kept order.
+  const cards = $derived(deckOrderState.apply(deckCards(authState.role === 'admin')))
 
-  const activeIndex = $derived(cards.findIndex((c) => c.view === appState.view))
+  const activeIndex = $derived(cards.findIndex((c) => c.views.includes(appState.view)))
 
   // Only the centred card and its neighbours mount their scene: the
   // scenes were built for single-mount (Metrics polls, LiveTable
-  // renders the buffer, the fall animates), and five of them running
+  // renders the buffer, the fall animates), and several running
   // off-screen would multiply that cost for nothing visible.
   function near(i: number): boolean {
     return Math.abs(i - activeIndex) <= 1
@@ -51,15 +44,16 @@
   let rolling = false
   let rollTimer: ReturnType<typeof setTimeout> | undefined
 
-  function rollTo(view: View) {
-    appState.view = view
+  function rollTo(card: DeckCard) {
+    if (!card.views.includes(appState.view)) appState.view = card.views[0]
   }
 
   // One effect owns the scroll position: any view change -- the rail,
   // the scene bar's flag badge, a deep link like openBoundaryInStream --
   // rolls its card to centre. The observer below is the other direction.
   $effect(() => {
-    const el = cardEls[appState.view]
+    const card = cards[activeIndex]
+    const el = card && cardEls[card.key]
     if (!el || !deckEl) return
     // Scroll the deck alone, never the window: scrollIntoView walks
     // every scrollable ancestor, and during load (a banner briefly
@@ -83,8 +77,9 @@
         if (rolling) return
         for (const entry of entries) {
           if (!entry.isIntersecting) continue
-          const view = (entry.target as HTMLElement).dataset.view as View
-          if (view && appState.view !== view) appState.view = view
+          const key = (entry.target as HTMLElement).dataset.card
+          const card = cards.find((c) => c.key === key)
+          if (card && !card.views.includes(appState.view)) appState.view = card.views[0]
         }
       },
       { root: deckEl, threshold: 0.6 },
@@ -95,29 +90,29 @@
 </script>
 
 <div class="deck" bind:this={deckEl}>
-  {#each cards as card, i (card.view)}
+  {#each cards as card, i (card.key)}
     <section
       class="card"
-      data-view={card.view}
-      bind:this={cardEls[card.view]}
+      data-card={card.key}
+      bind:this={cardEls[card.key]}
       aria-label={card.name}
-      aria-hidden={card.view !== appState.view}
+      aria-hidden={i !== activeIndex}
     >
       {#if near(i)}
-        {#if card.view === 'fall'}
+        {#if card.key === 'fall'}
           <Fall />
         {:else}
-          <SceneBar scene={card.view} />
+          <SceneBar scene={card.views.includes(appState.view) ? appState.view : card.views[0]} />
           <div class="card-body">
-            {#if card.view === 'metrics'}
+            {#if card.key === 'topography'}
+              <Topography />
+            {:else if card.key === 'metrics'}
               <Metrics />
-            {:else if card.view === 'live'}
+            {:else if card.key === 'live'}
               <FilterBar />
               <LiveTable />
-            {:else if card.view === 'flags'}
-              <Flags />
-            {:else if card.view === 'watchlist'}
-              <Watchlist />
+            {:else if card.key === 'docket'}
+              <Docket />
             {/if}
           </div>
         {/if}
@@ -131,12 +126,12 @@
      11). The in-view name grows and brightens in the same beat as the
      roll. -->
 <nav class="roll-rail" aria-label="The deck">
-  {#each cards as card (card.view)}
+  {#each cards as card, i (card.key)}
     <button
       class="rail-name"
-      class:on={card.view === appState.view}
-      onclick={() => rollTo(card.view)}
-      aria-current={card.view === appState.view ? 'page' : undefined}
+      class:on={i === activeIndex}
+      onclick={() => rollTo(card)}
+      aria-current={i === activeIndex ? 'page' : undefined}
     >
       {card.name}
     </button>

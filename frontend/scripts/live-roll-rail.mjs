@@ -36,7 +36,7 @@ const { page, consoleErrors } = await session({ landing: 'fall' })
 // --- The deck's names, in the ratified order ------------------------------
 const names = await page.$$eval('.roll-rail .rail-name', (els) => els.map((e) => e.textContent.trim()))
 check(
-  JSON.stringify(names) === JSON.stringify(['The fall', 'Metrics', 'Stream', 'Flags', 'Watchlist']),
+  JSON.stringify(names) === JSON.stringify(['The fall', 'Topography', 'Metrics', 'Stream', 'The docket']),
   `an admin's roll rail carries the five scenes in deck order -- got ${JSON.stringify(names)}`,
 )
 
@@ -77,7 +77,7 @@ check((await current()) === 'Stream', 'clicking Stream moves aria-current to it'
 await page.waitForFunction(
   () => {
     const deck = document.querySelector('.deck')
-    const el = deck?.querySelector('.card[data-view="live"]')
+    const el = deck?.querySelector('.card[data-card="live"]')
     if (!el) return false
     return Math.abs(el.getBoundingClientRect().top - deck.getBoundingClientRect().top) < 2
   },
@@ -138,7 +138,10 @@ check(focused.cls.includes('skip-link'), `first Tab lands on the skip-link -- go
 check(focused.visible && focused.cls.includes('skip-link'), 'the skip-link becomes visible once focused')
 await skipBrowser.close()
 
-// --- A viewer's deck has no Watchlist card and no Watchlist name ----------
+// --- A viewer's docket carries no watchlist tab ---------------------------
+// The deck itself is the same five cards for every role (#633): what is
+// admin-only is the docket's watchlist and audit tabs, absent for a
+// viewer rather than disabled.
 const VIEWER_USER = 'live-viewer-rail'
 const VIEWER_PASS = 'live-viewer-rail-password'
 const createRes = await page.request.post(`${URL_BASE}/api/auth/users`, {
@@ -158,12 +161,12 @@ await viewerPage.waitForSelector('.roll-rail .rail-name', { timeout: 15000 })
 
 const viewerNames = await viewerPage.$$eval('.roll-rail .rail-name', (els) => els.map((e) => e.textContent.trim()))
 check(
-  JSON.stringify(viewerNames) === JSON.stringify(['The fall', 'Metrics', 'Stream', 'Flags']),
-  `a viewer's rail has four names and no Watchlist -- got ${JSON.stringify(viewerNames)}`,
+  JSON.stringify(viewerNames) === JSON.stringify(['The fall', 'Topography', 'Metrics', 'Stream', 'The docket']),
+  `a viewer's rail carries the same five scenes -- the docket answers with its flags tab -- got ${JSON.stringify(viewerNames)}`,
 )
 check(
-  (await viewerPage.locator('.card[data-view="watchlist"]').count()) === 0,
-  'and no Watchlist card exists anywhere in the viewer deck -- absent, not hidden',
+  (await viewerPage.locator('.docket [role="tab"]:has-text("watchlist")').count()) === 0,
+  'and the docket carries no watchlist tab for a viewer -- absent, not hidden',
 )
 await browser.close()
 
