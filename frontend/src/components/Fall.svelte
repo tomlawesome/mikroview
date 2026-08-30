@@ -611,10 +611,15 @@
   {:else if fallState.error}
     <p class="state-msg error" role="alert">Could not read the pushed rule tables: {fallState.error}</p>
   {:else if allBands.length === 0 && !windowLoading}
-    <p class="state-msg">
-      No boundaries yet — waiting for a router to push its filter rules. See Settings → Run setup… to configure the
-      push.
-    </p>
+    <!-- Unmissable, mid-page: an empty fall must read as waiting, never
+         as broken or unbuilt (owner, 2026-08-30). -->
+    <div class="state-block">
+      <p class="state-msg">nothing has arrived yet — waiting for data, not broken</p>
+      <p class="state-sub">
+        the fall draws each boundary's log as it falls; it needs your router to push its filter rules.
+        Settings → Run setup… prints the script.
+      </p>
+    </div>
   {:else}
     <div class="rig">
       <svg viewBox="0 0 {rig.width} {RIG_H}" style="max-width: {rig.width * 1.4}px">
@@ -986,6 +991,25 @@
     color: var(--o-ink2);
     font-size: 14px;
     padding: 20px 0;
+  }
+  .state-block {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+    gap: 2px;
+  }
+  .state-block .state-msg {
+    padding: 0;
+    font-size: 15px;
+  }
+  .state-sub {
+    margin: 0;
+    max-width: 460px;
+    color: var(--o-ink3, var(--o-ink2));
+    font-size: 12.5px;
   }
   .state-msg.error {
     color: var(--o-drop);
