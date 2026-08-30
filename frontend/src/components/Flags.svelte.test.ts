@@ -12,15 +12,17 @@ vi.mock('../lib/api', () => ({
   clearFlag: vi.fn(),
   clearAllFlags: vi.fn(),
   clearFlagPermanent: vi.fn(),
+  setFlagVerdict: vi.fn(),
+  deleteFlagVerdict: vi.fn(),
   fetchExclusions: vi.fn(async () => []),
   removeExclusion: vi.fn(),
 }))
 
-import { fetchExclusions } from '../lib/api'
+import { deleteFlagVerdict, fetchExclusions, setFlagVerdict } from '../lib/api'
 import { flagsState } from '../lib/flags.svelte'
 import { exclusionsState } from '../lib/exclusions.svelte'
 import { authState } from '../lib/auth.svelte'
-import type { Exclusion } from '../lib/types'
+import type { Exclusion, Flag } from '../lib/types'
 
 // jsdom has no window.matchMedia -- Flags.svelte pulls in
 // lib/viewport.svelte.ts, whose ViewportState singleton calls it at
@@ -45,6 +47,20 @@ const { default: Flags } = await import('./Flags.svelte')
 
 function exclusion(id: string, target: string): Exclusion {
   return { id, type: 'port_scan', target }
+}
+
+function testFlag(overrides: Partial<Flag> = {}): Flag {
+  return {
+    id: 'f1',
+    type: 'port_scan',
+    target: '203.0.113.9',
+    detail: 'd',
+    count: 1,
+    firstSeen: '2026-01-01T00:00:00Z',
+    lastSeen: '2026-01-01T00:00:00Z',
+    cleared: false,
+    ...overrides,
+  }
 }
 
 // #547: Exclusions folded into Flags as a tab, admin-only (GET/DELETE
@@ -123,5 +139,121 @@ describe('Flags Exclusions tab (#547)', () => {
     expect(flagsPanel?.hasAttribute('hidden')).toBe(true)
     expect(exclusionsPanel?.hasAttribute('hidden')).toBe(false)
     expect(screen.getByText('198.51.100.1')).toBeTruthy()
+  })
+})
+
+// The verdict row itself (issue #638): bare-labelled buttons, the
+// undo-on-clear flow for expected/noise, and the badge that replaces the
+// row (never re-presenting a judged flag as an open question) for real.
+describe('Flags verdict row (#638)', () => {
+  beforeEach(() => {
+    vi.resetAllMocks()
+    vi.mocked(fetchExclusions).mockResolvedValue([])
+    flagsState.list = []
+    flagsState.undoableVerdicts = []
+    exclusionsState.list = []
+    authState.state = 'authenticated'
+    authState.role = 'admin'
+    authState.username = 'alice'
+  })
+
+  it('shows exactly three bare-labelled buttons for an unjudged flag -- no second line', async () => {
+    flagsState.list = [testFlag()]
+    render(Flags)
+    await Promise.resolve()
+    flushSync()
+
+    const row = screen.getByRole('group', { name: 'Judge this flag' })
+    const labels = Array.from(row.querySelectorAll('button')).map((b) => b.textContent?.trim())
+    expect(labels).toEqual(['Expected', 'Noise', 'Real'])
+  })
+
+  it('Expected posts at once and clears the card, with an undo affordance shown', async () => {
+    vi.mocked(setFlagVerdict).mockResolvedValue(
+      testFlag({ cleared: true, verdict: 'expected', verdictBy: 'alice', verdictAt: 't' }),
+    )
+    flagsState.list = [testFlag()]
+    render(Flags)
+    flushSync()
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Expected' }))
+    await Promise.resolve()
+    await Promise.resolve()
+    flushSync()
+
+    // Posted immediately, not deferred behind the undo window (issue
+    // #638's rework: a deferred version of this lost the verdict
+    // whenever the page was torn down inside the window).
+    expect(setFlagVerdict).toHaveBeenCalledWith('f1', 'expected')
+    expect(screen.queryByRole('button', { name: '203.0.113.9' })).toBeNull()
+    expect(screen.getByText('Cleared as Expected')).toBeTruthy()
+  })
+
+  it('the undo affordance disappears on its own once the window lapses, without any further request', async () => {
+    vi.useFakeTimers()
+    vi.mocked(setFlagVerdict).mockResolvedValue(
+      testFlag({ cleared: true, verdict: 'expected', verdictBy: 'alice', verdictAt: 't' }),
+    )
+    flagsState.list = [testFlag()]
+    render(Flags)
+    flushSync()
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Expected' }))
+    await Promise.resolve()
+    await Promise.resolve()
+    flushSync()
+    expect(screen.getByText('Cleared as Expected')).toBeTruthy()
+
+    await vi.advanceTimersByTimeAsync(5000)
+    flushSync()
+
+    expect(screen.queryByText('Cleared as Expected')).toBeNull()
+    expect(setFlagVerdict).toHaveBeenCalledTimes(1)
+    expect(deleteFlagVerdict).not.toHaveBeenCalled()
+    vi.useRealTimers()
+  })
+
+  it('Undo sends a real DELETE and restores the card, within the window', async () => {
+    vi.mocked(setFlagVerdict).mockResolvedValue(
+      testFlag({ cleared: true, verdict: 'noise', verdictBy: 'alice', verdictAt: 't' }),
+    )
+    vi.mocked(deleteFlagVerdict).mockResolvedValue(testFlag({ cleared: false }))
+    flagsState.list = [testFlag()]
+    render(Flags)
+    flushSync()
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Noise' }))
+    await Promise.resolve()
+    await Promise.resolve()
+    flushSync()
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Undo' }))
+    await Promise.resolve()
+    await Promise.resolve()
+    flushSync()
+
+    expect(deleteFlagVerdict).toHaveBeenCalledWith('f1')
+    expect(screen.getByRole('button', { name: '203.0.113.9' })).toBeTruthy()
+    expect(screen.queryByText('Cleared as Noise')).toBeNull()
+  })
+
+  it('Real records the verdict, keeps the card open, and replaces the button row with a badge', async () => {
+    vi.mocked(setFlagVerdict).mockResolvedValue(
+      testFlag({ verdict: 'real', verdictBy: 'alice', verdictAt: '2026-01-01T00:05:00Z' }),
+    )
+    flagsState.list = [testFlag()]
+    render(Flags)
+    flushSync()
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Real' }))
+    await Promise.resolve()
+    await Promise.resolve()
+    flushSync()
+
+    expect(setFlagVerdict).toHaveBeenCalledWith('f1', 'real')
+    expect(screen.getByRole('button', { name: '203.0.113.9' })).toBeTruthy()
+    expect(screen.queryByRole('group', { name: 'Judge this flag' })).toBeNull()
+    expect(document.querySelector('.verdict-badge.verdict-real')?.textContent).toBe('Real')
+    expect(document.querySelector('.verdict-judged-by')?.textContent).toContain('alice')
   })
 })

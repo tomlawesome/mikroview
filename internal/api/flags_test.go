@@ -3,6 +3,7 @@
 package api
 
 import (
+	"bytes"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -109,6 +110,255 @@ func TestHandleFlagsClearUnknownID(t *testing.T) {
 	}
 	if body.Cleared {
 		t.Error("expected cleared=false for an unknown ID")
+	}
+}
+
+// -- #638: POST /api/flags/{id}/verdict -----------------------------
+
+// postVerdict is postFlagsAction's shape for the one flags.go handler
+// that actually reads a body -- a bare {"verdict": "..."} object, no
+// CSRF header needed since these tests go through s.mux() (asAdmin),
+// not the real session-authenticated Routes().
+func postVerdict(t *testing.T, url, verdict string) *http.Response {
+	t.Helper()
+	body, err := json.Marshal(map[string]string{"verdict": verdict})
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := http.Post(url, "application/json", bytes.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return resp
+}
+
+// TestHandleFlagsVerdictExpectedClearsFlag and
+// TestHandleFlagsVerdictNoiseClearsFlag cover #638's contract that
+// expected/noise clear the flag, reusing the plain-clear path -- and
+// that the response is the updated flag itself (200 with verdict/
+// verdictBy/verdictAt set), not a {"cleared": bool} envelope like
+// handleFlagsClear's.
+func TestHandleFlagsVerdictExpectedClearsFlag(t *testing.T) {
+	s, _ := newTestServer(t)
+	s.Flags.Add(flags.TypePortScan, "203.0.113.9", "20 distinct ports in 60s", time.Now())
+	id := s.Flags.List()[0].ID
+
+	ts := httptest.NewServer(asAdmin(s.mux()))
+	defer ts.Close()
+
+	resp := postVerdict(t, ts.URL+"/api/flags/"+id+"/verdict", "expected")
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+
+	var f flags.Flag
+	if err := json.NewDecoder(resp.Body).Decode(&f); err != nil {
+		t.Fatal(err)
+	}
+	if f.Verdict != flags.VerdictExpected {
+		t.Errorf("response Verdict = %q, want %q", f.Verdict, flags.VerdictExpected)
+	}
+	if f.VerdictBy != "admin" {
+		t.Errorf("response VerdictBy = %q, want admin", f.VerdictBy)
+	}
+	if f.VerdictAt.IsZero() {
+		t.Error("response VerdictAt should be set")
+	}
+	if !f.Cleared {
+		t.Error("expected verdict should clear the flag")
+	}
+
+	list := s.Flags.List()
+	if len(list) != 1 || !list[0].Cleared || list[0].Verdict != flags.VerdictExpected {
+		t.Errorf("expected the flag to be cleared and verdict-marked in the store, got %+v", list)
+	}
+}
+
+func TestHandleFlagsVerdictNoiseClearsFlag(t *testing.T) {
+	s, _ := newTestServer(t)
+	s.Flags.Add(flags.TypeActivitySpike, "198.51.100.4", "500 events in 60s", time.Now())
+	id := s.Flags.List()[0].ID
+
+	ts := httptest.NewServer(asAdmin(s.mux()))
+	defer ts.Close()
+
+	resp := postVerdict(t, ts.URL+"/api/flags/"+id+"/verdict", "noise")
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+
+	list := s.Flags.List()
+	if len(list) != 1 || !list[0].Cleared || list[0].Verdict != flags.VerdictNoise {
+		t.Errorf("expected the flag to be cleared and verdict-marked noise, got %+v", list)
+	}
+}
+
+// TestHandleFlagsVerdictRealLeavesFlagOpen is the invariant #638 exists
+// to establish, exercised through the HTTP layer: a real verdict is
+// recorded but must never clear the flag.
+func TestHandleFlagsVerdictRealLeavesFlagOpen(t *testing.T) {
+	s, _ := newTestServer(t)
+	s.Flags.Add(flags.TypeCriticalPort, "203.0.113.11", "d", time.Now())
+	id := s.Flags.List()[0].ID
+
+	ts := httptest.NewServer(asAdmin(s.mux()))
+	defer ts.Close()
+
+	resp := postVerdict(t, ts.URL+"/api/flags/"+id+"/verdict", "real")
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+
+	list := s.Flags.List()
+	if len(list) != 1 || list[0].Cleared {
+		t.Errorf("a real verdict must not clear the flag, got %+v", list)
+	}
+	if list[0].Verdict != flags.VerdictReal {
+		t.Errorf("expected the flag's Verdict to be recorded as real, got %+v", list)
+	}
+}
+
+// TestHandleFlagsVerdictInvalidVerdictReturns400 covers the contract's
+// 400 case: a verdict outside the three recognised labels.
+func TestHandleFlagsVerdictInvalidVerdictReturns400(t *testing.T) {
+	s, _ := newTestServer(t)
+	s.Flags.Add(flags.TypePortScan, "203.0.113.12", "d", time.Now())
+	id := s.Flags.List()[0].ID
+
+	ts := httptest.NewServer(asAdmin(s.mux()))
+	defer ts.Close()
+
+	resp := postVerdict(t, ts.URL+"/api/flags/"+id+"/verdict", "bogus")
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 for an unrecognised verdict", resp.StatusCode)
+	}
+
+	list := s.Flags.List()
+	if list[0].Verdict != "" {
+		t.Errorf("an invalid verdict must not mutate the flag, got %+v", list)
+	}
+}
+
+// TestHandleFlagsVerdictUnknownIDReturns404 covers the contract's 404
+// case, unlike handleFlagsClear's "unknown ID is a no-op" 200: #638's
+// contract is explicit that an unknown flag id 404s here.
+func TestHandleFlagsVerdictUnknownIDReturns404(t *testing.T) {
+	s, _ := newTestServer(t)
+	ts := httptest.NewServer(asAdmin(s.mux()))
+	defer ts.Close()
+
+	resp := postVerdict(t, ts.URL+"/api/flags/does-not-exist/verdict", "real")
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404 for an unknown flag id", resp.StatusCode)
+	}
+}
+
+// -- #638 follow-on: DELETE /api/flags/{id}/verdict (undo) -----------
+
+// deleteVerdict issues the undo call -- no body, same shape as
+// postFlagsAction but with the DELETE verb the endpoint actually uses.
+func deleteVerdict(t *testing.T, url string) *http.Response {
+	t.Helper()
+	req, err := http.NewRequest(http.MethodDelete, url, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return resp
+}
+
+// TestHandleFlagsVerdictUndoReopensFlag covers the ordinary undo case
+// through the HTTP layer: judging an open flag clears it, and undoing
+// re-opens it with the verdict fields reset.
+func TestHandleFlagsVerdictUndoReopensFlag(t *testing.T) {
+	s, _ := newTestServer(t)
+	s.Flags.Add(flags.TypePortScan, "203.0.113.20", "d", time.Now())
+	id := s.Flags.List()[0].ID
+
+	ts := httptest.NewServer(asAdmin(s.mux()))
+	defer ts.Close()
+
+	resp := postVerdict(t, ts.URL+"/api/flags/"+id+"/verdict", "noise")
+	resp.Body.Close()
+	if !s.Flags.List()[0].Cleared {
+		t.Fatal("setup: expected the noise verdict to clear the flag")
+	}
+
+	resp = deleteVerdict(t, ts.URL+"/api/flags/verdict/"+id)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+
+	var f flags.Flag
+	if err := json.NewDecoder(resp.Body).Decode(&f); err != nil {
+		t.Fatal(err)
+	}
+	if f.Cleared {
+		t.Error("undo should re-open a flag the verdict itself cleared")
+	}
+	if f.Verdict != "" {
+		t.Errorf("response Verdict = %q, want empty after undo", f.Verdict)
+	}
+
+	list := s.Flags.List()
+	if len(list) != 1 || list[0].Cleared || list[0].Verdict != "" {
+		t.Errorf("expected the flag to be re-opened and un-judged in the store, got %+v", list)
+	}
+}
+
+// TestHandleFlagsVerdictUndoLeavesAlreadyClearedFlagCleared is #638's
+// central subtlety, exercised through the HTTP layer: judging a flag
+// that was already cleared before the verdict must not let undo re-open
+// it.
+func TestHandleFlagsVerdictUndoLeavesAlreadyClearedFlagCleared(t *testing.T) {
+	s, _ := newTestServer(t)
+	s.Flags.Add(flags.TypePortScan, "203.0.113.21", "d", time.Now())
+	id := s.Flags.List()[0].ID
+	if !s.Flags.Clear(id, time.Now()) {
+		t.Fatal("setup: expected the plain clear to succeed")
+	}
+
+	ts := httptest.NewServer(asAdmin(s.mux()))
+	defer ts.Close()
+
+	resp := postVerdict(t, ts.URL+"/api/flags/"+id+"/verdict", "expected")
+	resp.Body.Close()
+
+	resp = deleteVerdict(t, ts.URL+"/api/flags/verdict/"+id)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+
+	list := s.Flags.List()
+	if len(list) != 1 || !list[0].Cleared {
+		t.Errorf("undo must not re-open a flag that was already cleared before it was judged, got %+v", list)
+	}
+	if list[0].Verdict != "" {
+		t.Errorf("expected the verdict to still be cleared out, got %+v", list)
+	}
+}
+
+// TestHandleFlagsVerdictUndoUnknownIDReturns404 covers the contract's
+// 404 case, same as the POST side.
+func TestHandleFlagsVerdictUndoUnknownIDReturns404(t *testing.T) {
+	s, _ := newTestServer(t)
+	ts := httptest.NewServer(asAdmin(s.mux()))
+	defer ts.Close()
+
+	resp := deleteVerdict(t, ts.URL+"/api/flags/verdict/does-not-exist")
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404 for an unknown flag id", resp.StatusCode)
 	}
 }
 
