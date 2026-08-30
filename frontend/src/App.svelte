@@ -38,7 +38,7 @@
 
   // The deck's scenes (#633). Everything else is an operate page,
   // reached from the account menu and rendered as a page of its own.
-  const DECK_VIEWS = new Set(['fall', 'metrics', 'live', 'flags', 'watchlist', 'audit'])
+  const DECK_VIEWS = new Set(['fall', 'topography', 'metrics', 'live', 'flags', 'watchlist', 'audit'])
   const inDeck = $derived(DECK_VIEWS.has(appState.view))
 
   // Any polling call that fails with a 401 (an expired or reset-

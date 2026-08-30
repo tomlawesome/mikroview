@@ -20,6 +20,7 @@ export interface DeckCard {
 export function deckCards(admin: boolean): DeckCard[] {
   return [
     { key: 'fall', name: 'The fall', views: ['fall'] },
+    { key: 'topography', name: 'Topography', views: ['topography'] },
     { key: 'metrics', name: 'Metrics', views: ['metrics'] },
     { key: 'live', name: 'Stream', views: ['live'] },
     { key: 'docket', name: 'The docket', views: admin ? ['flags', 'watchlist', 'audit'] : ['flags'] },
@@ -31,6 +32,7 @@ export function deckCards(admin: boolean): DeckCard[] {
 // role (the docket's is flags, never its admin-only tabs).
 export const LANDING_BY_CARD: Record<string, View> = {
   fall: 'fall',
+  topography: 'topography',
   metrics: 'metrics',
   live: 'live',
   docket: 'flags',
