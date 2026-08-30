@@ -72,30 +72,46 @@
   .scstatus .flagchip { color: var(--void); background: var(--alarm); border-radius: 9px; padding: 0 7px; font-weight: 700; font-size: 10.5px; }
   .scstatus .who { color: var(--ink-3); }
 
-  /* ---- scene 1: the door ---- */
-  .door { display: grid; place-items: center; min-height: 100vh; position: relative; }
-  .door svg.orbits { position: absolute; inset: 0; width: 100%; height: 100%; }
-  .door .card {
-    position: relative; z-index: 2; width: 340px; padding: 30px 34px 26px;
-    background: var(--glass); border: 1px solid var(--hair-2); border-radius: 14px;
-    backdrop-filter: blur(8px);
-  }
-  .door .wm { font-size: 24px; font-weight: 800; letter-spacing: 0.04em; margin-bottom: 4px; }
+  /* ---- scene 1: the door — one beat, then in ---- */
+  .door { display: flex; flex-direction: column; min-height: 100vh; position: relative; }
+  .door .beat { flex: 1; display: grid; place-items: center; position: relative; }
+  .door .stack { text-align: center; width: 300px; }
+  .door .wm { font-size: 34px; font-weight: 800; letter-spacing: 0.04em; }
   .door .wm em { font-style: normal; color: var(--accent); }
-  .door .sub { font-size: 11.5px; color: var(--ink-3); margin-bottom: 24px; }
-  .door label { display: block; font-size: 10.5px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--ink-3); margin: 14px 0 5px; }
-  .door input {
-    width: 100%; padding: 9px 12px; font: 13px var(--sans); color: var(--ink);
-    background: rgba(6, 8, 14, 0.7); border: 1px solid var(--hair-2); border-radius: 8px; outline: none;
+  .brink {
+    height: 2px; width: 0; margin: 16px auto 0; background: var(--now);
+    box-shadow: 0 0 10px rgba(232, 176, 90, 0.4);
+    animation: draw 0.45s ease-out forwards;
   }
-  .door input:focus { border-color: var(--accent); }
-  .door button {
-    width: 100%; margin-top: 22px; padding: 10px; font: 600 13px var(--sans); letter-spacing: 0.03em;
-    color: var(--void); background: var(--accent); border: 0; border-radius: 8px; cursor: pointer;
+  @keyframes draw { to { width: 300px; } }
+  .minifall { height: 110px; position: relative; overflow: hidden; }
+  .minifall i {
+    position: absolute; top: -14px; width: 2.5px; height: 12px; border-radius: 2px;
+    background: var(--fall-accept); animation: fall 1.7s linear infinite;
   }
-  .door .foot { margin-top: 18px; font-size: 10.5px; color: var(--ink-3); line-height: 1.55; }
-  .orbit-l { fill: none; stroke: var(--hair); stroke-dasharray: 2 7; }
-  .orbit-dot { fill: var(--ink-3); opacity: 0.6; }
+  .minifall i.r { background: var(--fall-drop); }
+  .minifall i.v { background: #a78bfa; }
+  @keyframes fall { to { transform: translateY(130px); opacity: 0.05; } }
+  .cred input {
+    display: block; width: 240px; margin: 10px auto 0; padding: 7px 4px;
+    background: transparent; border: 0; border-bottom: 1px solid var(--hair-2);
+    color: var(--ink); font: 13.5px var(--sans); text-align: center; outline: none;
+  }
+  .cred input::placeholder { color: var(--ink-3); }
+  .cred input:focus { border-bottom-color: var(--accent); }
+  .enter {
+    margin-top: 20px; padding: 7px 30px; font: 600 13px var(--sans); letter-spacing: 0.04em;
+    color: var(--accent); background: transparent; border: 1px solid var(--hair-2);
+    border-radius: 999px; cursor: pointer;
+  }
+  .enter:hover { border-color: var(--accent); }
+  .promise { position: absolute; bottom: 16px; left: 0; right: 0; text-align: center; font-size: 10.5px; color: var(--ink-3); }
+  .outboard { display: flex; border-top: 1px solid var(--hair); }
+  .outboard .frame { flex: 1; padding: 14px 18px 16px; text-align: center; font-size: 11px; color: var(--ink-2); border-right: 1px solid var(--hair); }
+  .outboard .frame:last-child { border-right: 0; }
+  .outboard .k { display: block; font-size: 9px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--ink-3); margin-bottom: 6px; }
+  .outboard svg { height: 26px; margin-bottom: 4px; }
+  .outboard .pill { display: inline-block; margin-left: 8px; padding: 1px 12px; border: 1px solid var(--hair-2); border-radius: 999px; color: var(--accent); font-size: 10.5px; }
 
   /* ---- scene 2: the map (Atlas II refined, carried forward) ---- */
   .lenses { display: flex; gap: 6px; padding: 10px 20px 0; position: relative; z-index: 4; }
@@ -240,28 +256,43 @@
   </span>
 </div>
 
-<!-- ============ SCENE 1 : THE DOOR ============ -->
-<section class="scene door" id="s1" aria-label="Login: the same identity as everything behind it">
-  <div class="scene-tag">Scene 1 — the door. The identity starts before sign-in: the void, the orbits, the wordmark. Signing in lands on the fall.</div>
-  <svg class="orbits" viewBox="0 0 1600 1000" preserveAspectRatio="xMidYMid slice" aria-hidden="true">
-    <ellipse class="orbit-l" cx="800" cy="520" rx="430" ry="210"/>
-    <ellipse class="orbit-l" cx="800" cy="520" rx="620" ry="305"/>
-    <circle class="orbit-dot" cx="410" cy="430" r="2.5"/>
-    <circle class="orbit-dot" cx="1240" cy="480" r="2.5"/>
-    <circle class="orbit-dot" cx="640" cy="716" r="2.5"/>
-    <circle class="orbit-dot" cx="1030" cy="332" r="2.5"/>
-    <circle class="orbit-dot" cx="255" cy="600" r="2.5"/>
-    <circle class="orbit-dot" cx="1345" cy="640" r="2.5"/>
-  </svg>
-  <div class="card">
-    <div class="wm">MIKRO<em>VIEW</em></div>
-    <div class="sub">rb5009 · logs arriving · 41 rules held</div>
-    <label for="p-user">account</label>
-    <input id="p-user" type="text" value="tom" readonly>
-    <label for="p-pass">passphrase</label>
-    <input id="p-pass" type="password" value="••••••••••••" readonly>
-    <button type="button">Enter</button>
-    <div class="foot">Your router pushes its logs here.<br>MikroView never connects to your router.</div>
+<!-- ============ SCENE 1 : THE DOOR — ONE BEAT, THEN IN ============ -->
+<section class="scene door" id="s1" aria-label="Login: one beat — the brink lights, the fall begins, you enter">
+  <div class="scene-tag">Scene 1 — the door, redone to Orbit's speed standard: instant paint, one sub-second beat, no card, no chrome. The brink draws, the fall begins, you enter. Signing in lands on the fall. The strip below storyboards the way out.</div>
+  <div class="beat">
+    <div class="stack">
+      <div class="wm">MIKRO<em>VIEW</em></div>
+      <div class="brink" aria-hidden="true"></div>
+      <div class="minifall" aria-hidden="true">
+        <i style="left: 14%; animation-delay: 0.5s"></i>
+        <i style="left: 27%; animation-delay: 1.1s; opacity: 0.7"></i>
+        <i class="r" style="left: 41%; animation-delay: 0.7s"></i>
+        <i style="left: 55%; animation-delay: 1.4s"></i>
+        <i style="left: 66%; animation-delay: 0.9s; opacity: 0.6"></i>
+        <i class="v" style="left: 78%; animation-delay: 1.6s; opacity: 0.8"></i>
+        <i class="r" style="left: 89%; animation-delay: 1.2s; opacity: 0.7"></i>
+      </div>
+      <form class="cred" aria-label="Sign in">
+        <input type="text" placeholder="account" aria-label="Account">
+        <input type="password" placeholder="passphrase" aria-label="Passphrase">
+        <button class="enter" type="button">Enter</button>
+      </form>
+    </div>
+    <div class="promise">Your router pushes its logs here — MikroView never connects to your router.</div>
+  </div>
+  <div class="outboard" aria-label="The way out, storyboarded">
+    <div class="frame"><span class="k">Sign out · beat 1</span>
+      <svg viewBox="0 0 80 26"><line x1="20" y1="4" x2="20" y2="14" stroke="#5aa7f0" stroke-width="2" opacity="0.5"/><line x1="40" y1="8" x2="40" y2="16" stroke="#e05252" stroke-width="2" opacity="0.35"/><line x1="60" y1="2" x2="60" y2="10" stroke="#5aa7f0" stroke-width="2" opacity="0.2"/></svg>
+      the fall thins — nothing new is drawn
+    </div>
+    <div class="frame"><span class="k">Beat 2</span>
+      <svg viewBox="0 0 80 26"><line x1="10" y1="13" x2="70" y2="13" stroke="var(--now)" stroke-width="2" opacity="0.5"/><circle cx="40" cy="13" r="2.5" fill="var(--now)"/></svg>
+      the brink collapses to a point and goes out
+    </div>
+    <div class="frame"><span class="k">Beat 3 · signed out</span>
+      <svg viewBox="0 0 80 26"><circle cx="40" cy="13" r="1.6" fill="var(--ink-3)"/></svg>
+      your router's logs keep arriving<span class="pill">Enter again</span>
+    </div>
   </div>
 </section>
 
