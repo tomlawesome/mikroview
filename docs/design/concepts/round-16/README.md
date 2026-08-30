@@ -13,5 +13,11 @@ Sign out · About & licence. Everything else as approved in round 15.
 ## Owner verdicts
 
 - Pending: none for the menu (carries round-15 approval plus the
-  corrections). Open question: whether the operate pages should leave
-  the atlas's destination list now the menu also carries them.
+  corrections).
+- The atlas question dissolved (chat, 2026-08-30): "We dropped the
+  atlas entirely" — the overlay is gone from the ratified model, not
+  slimmed. Navigation is the deck + roll rail + this menu; deck
+  reordering lives in Settings ("Reorganising the deck belongs in
+  setting"); zones and the reach gesture live on the topography card.
+  Watchlist (formerly an atlas port) needs a home — next round
+  proposes the menu's operate group.
