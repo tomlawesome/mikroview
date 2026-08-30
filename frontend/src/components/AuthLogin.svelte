@@ -11,9 +11,10 @@
   const reverseBeat = authState.consumeJustSignedOut()
 </script>
 
+<!-- No title: on the door the framed wordmark is the title, and the
+     submit is the scene's own "Enter" (round-29 door, #645). -->
 <AuthScreen
-  title="Sign in"
-  submitLabel="Sign in"
+  submitLabel="Enter"
   onsubmit={(username, password) => authState.login(username, password)}
   ssoAvailable={authState.ssoAvailable}
   {reverseBeat}

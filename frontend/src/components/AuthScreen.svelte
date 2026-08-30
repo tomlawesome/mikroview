@@ -80,7 +80,13 @@
   }
 </script>
 
-<div class="screen" class:reverse={reverseBeat}>
+<!-- data-void: the door is always the void (#645). The ratified scene
+     -- round 29's door, "the fall rains over the whole void" -- was
+     accepted against the dark ground, and the sign-in is the one screen
+     whose job is that identity: night outside, the operator's own theme
+     once they enter. app.css's [data-void] rule re-declares the dark
+     token block on this subtree under any theme or colorway. -->
+<div class="screen" class:reverse={reverseBeat} data-void>
   <!-- The fall, rained across the whole void behind the door -- never
        over the login elements: a radial mask carves the centre out of
        the layer entirely (round 5 fourth batch). Fourteen strokes,
@@ -120,26 +126,34 @@
         {/if}
 
         <form class="form-body" onsubmit={handleSubmit}>
-          <h1>{title}</h1>
+          <!-- No heading on the door itself: the framed wordmark is the
+               title (the round-29 scene carries none). Setup still
+               passes one -- that form explains itself. -->
+          {#if title}
+            <h1>{title}</h1>
+          {/if}
           {#if subtitle}
             <p class="subtitle">{subtitle}</p>
-          {:else}
-            <div class="gap"></div>
           {/if}
 
+          <!-- "account" / "password" is the ratified scene's own copy
+               (round 15 amended its "passphrase"; "account" stood).
+               Labels stay real <label>s, quieted to the scene's idiom --
+               #645 builds on the Atlas restyle's accessible structure,
+               it does not revert it. -->
           <label>
-            <span>Username</span>
+            <span>account</span>
             <input type="text" autocomplete="username" bind:value={username} required />
           </label>
 
           <label>
-            <span>Password</span>
+            <span>password</span>
             <input type="password" autocomplete={confirmPassword ? 'new-password' : 'current-password'} bind:value={password} required />
           </label>
 
           {#if confirmPassword}
             <label>
-              <span>Confirm password</span>
+              <span>confirm password</span>
               <input type="password" autocomplete="new-password" bind:value={passwordConfirm} required />
             </label>
           {/if}
@@ -313,7 +327,7 @@
 
   .col {
     width: 100%;
-    max-width: 360px;
+    max-width: 300px;
     display: flex;
     flex-direction: column;
     gap: 12px;
@@ -335,10 +349,6 @@
     text-align: center;
   }
 
-  .gap {
-    height: 10px;
-  }
-
   .subtitle {
     margin: -6px 0 14px;
     font-size: 13px;
@@ -353,11 +363,14 @@
     gap: 6px;
   }
 
+  /* The scene's quiet idiom: lowercase, dim, centred over a centred
+     underline -- the round-29 door's composition, kept as a visible
+     label rather than the mockup's vanishing placeholder. */
   label span {
-    font-size: 10.5px;
-    letter-spacing: 0.08em;
-    text-transform: uppercase;
+    font-size: 12px;
+    letter-spacing: 0.02em;
     color: var(--fg-dim);
+    text-align: center;
   }
 
   /* Underline credential fields (round 5 v3, the app's input idiom
@@ -372,6 +385,7 @@
     border-radius: 0;
     padding: 9px 2px;
     font-size: 14px;
+    text-align: center;
   }
 
   input:focus {
@@ -386,21 +400,25 @@
     font-size: 13px;
   }
 
+  /* The round-29 scene's Enter: a quiet outlined pill, centred -- not a
+     filled bar. The door's weight lives in the brink and the fall; the
+     control defers to them. */
   .submit-btn {
-    width: 100%;
-    margin-top: 8px;
-    background: var(--accent);
-    border: 1px solid var(--accent);
-    color: var(--bg);
-    font-weight: 600;
-    border-radius: 8px;
-    padding: 11px;
-    font-size: 14px;
+    align-self: center;
+    margin-top: 10px;
+    min-width: 118px;
+    background: transparent;
+    border: 1px solid var(--hair-2);
+    color: var(--fg);
+    font-weight: 500;
+    border-radius: 999px;
+    padding: 8px 30px;
+    font-size: 13.5px;
     cursor: pointer;
   }
 
   .submit-btn:hover {
-    opacity: 0.9;
+    border-color: var(--accent);
   }
 
   .submit-btn:disabled {
