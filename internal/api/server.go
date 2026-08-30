@@ -77,6 +77,17 @@ type Server struct {
 	// would silently lose every match. Every handler that reads it must
 	// nil-check first.
 	MatchLog matchlog.Store
+	// Learning answers a definition's live baseline warm-up state (issue
+	// #639) -- purpose-named and narrow rather than a *engine.Engine
+	// field, following #407's own definitions-API precedent of never
+	// handing this package evaluation internals it does not need. Nil
+	// like MatchLog is a valid, common state (most tests, and any Server
+	// built before the engine exists): every reader treats a nil Learning
+	// exactly like a definition this method reports false for, so the
+	// "learning" field is simply omitted rather than requiring one.
+	Learning interface {
+		Learning(id string, now time.Time) (engine.LearningState, bool)
+	}
 	// Suggest is the persisted pool of watchlist entries suggested from
 	// data RouterOS has already pushed (#243 slice 5) -- backing GET/POST
 	// /api/suggestions/... (see suggest.go). Always non-nil
