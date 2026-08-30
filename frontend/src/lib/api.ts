@@ -19,6 +19,7 @@ import type {
   Flag,
   FlagTimeBucket,
   Healthz,
+  HourTopBucket,
   ReputationResult,
   RuleUsage,
   Stats,
@@ -273,6 +274,20 @@ export async function fetchStats(): Promise<Stats> {
   const res = await fetch('/api/stats')
   if (!res.ok) throw new ApiError(`fetchStats: ${res.status}`, res.status)
   return res.json()
+}
+
+// fetchStatsTops serves #644 round 21's top-port/top-talker table
+// columns (internal/api/rest.go's handleStatsTops) -- deliberately a
+// separate call from fetchStats, not folded into it: see that handler's
+// own doc comment for why. Fetched only by Metrics.svelte, on its own
+// interval scoped to while that page is open, rather than riding
+// App.svelte's global STATS_REFRESH_MS poll that runs regardless of
+// which page is showing.
+export async function fetchStatsTops(): Promise<HourTopBucket[]> {
+  const res = await fetch('/api/stats/tops')
+  if (!res.ok) throw new ApiError(`fetchStatsTops: ${res.status}`, res.status)
+  const body = await res.json()
+  return body.tops ?? []
 }
 
 export async function lookupIp(ip: string): Promise<ReputationResult> {

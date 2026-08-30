@@ -20,13 +20,45 @@
   import { flagsState } from '../lib/flags.svelte'
   import { metricsPref, METRICS_VIEWS } from '../lib/metrics.svelte'
   import { buildHour, minuteIndexOf, readMinute } from '../lib/metricsSeries'
+  import { fetchStatsTops } from '../lib/api'
   import { formatEps, formatHM } from '../lib/format'
   import PageHeader from './PageHeader.svelte'
   import MetricsSeismograph from './MetricsSeismograph.svelte'
   import MetricsRegister from './MetricsRegister.svelte'
   import MetricsTable from './MetricsTable.svelte'
+  import type { HourTopBucket } from '../lib/types'
 
-  const hour = $derived(buildHour(appState.stats?.timeSeries ?? [], flagsState.timeSeries))
+  // #644 round 21's top-port/top-talker columns: GET /api/stats/tops is
+  // its own poll, scoped to this page rather than riding App.svelte's
+  // global STATS_REFRESH_MS -- same reasoning, and the same POLL_MS
+  // pattern, as Fall.svelte's own per-page fetch. See fetchStatsTops'
+  // own doc comment for why this isn't folded into appState.stats.
+  const TOPS_POLL_MS = 5000
+  let tops = $state<HourTopBucket[]>([])
+
+  $effect(() => {
+    let cancelled = false
+    async function refresh() {
+      try {
+        const result = await fetchStatsTops()
+        if (!cancelled) tops = result
+      } catch {
+        // A failed poll leaves the previous tops in place -- the table
+        // then shows slightly stale (rather than blank) top port/talker
+        // columns until the next successful poll, matching how a failed
+        // appState.refreshDevicesAndStats() leaves the rest of the page
+        // showing its last-known figures instead of clearing them.
+      }
+    }
+    refresh()
+    const id = setInterval(refresh, TOPS_POLL_MS)
+    return () => {
+      cancelled = true
+      clearInterval(id)
+    }
+  })
+
+  const hour = $derived(buildHour(appState.stats?.timeSeries ?? [], flagsState.timeSeries, tops))
   const cursor = $derived(minuteIndexOf(hour.axis, metricsPref.minute))
   const reading = $derived(readMinute(hour, cursor))
 

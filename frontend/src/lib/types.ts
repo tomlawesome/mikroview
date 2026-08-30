@@ -108,6 +108,18 @@ export interface TimeBucket {
   byAction: Partial<Record<Action, number>>
 }
 
+// Mirrors internal/store/ring.go's HourTop (#644 round 21's top
+// port/top talker table columns, served by GET /api/stats/tops). talker
+// and port are absent exactly when complete is false, or when the
+// minute genuinely held nothing to count -- either way, the table shows
+// an em dash rather than treating an absent field as zero.
+export interface HourTopBucket {
+  time: string
+  talker?: string
+  port?: string
+  complete: boolean
+}
+
 // Mirrors internal/api/rest.go's handleHealthz response. version is the
 // build-time-stamped short commit SHA ("dev" for a plain local build) --
 // the same value `mikroview -version` prints, and the only place a
