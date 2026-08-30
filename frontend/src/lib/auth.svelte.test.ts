@@ -36,6 +36,7 @@ beforeEach(() => {
   authState.role = ''
   authState.ssoAvailable = false
   authState.ssoError = null
+  authState.justSignedOut = false
   window.history.replaceState(null, '', '/')
 })
 
@@ -145,6 +146,24 @@ describe('AuthState.logout', () => {
     expect(authState.username).toBe('')
     expect(authState.role).toBe('')
     expect(fetchAuthSession).not.toHaveBeenCalled()
+    // Set so AuthLogin's next mount plays the door's way-out beat
+    // (#645) -- consumeJustSignedOut() below is how it reads this.
+    expect(authState.justSignedOut).toBe(true)
+  })
+})
+
+describe('AuthState.consumeJustSignedOut', () => {
+  it('reads and clears the flag logout() sets', async () => {
+    vi.mocked(logout).mockResolvedValue(null)
+    await authState.logout()
+
+    expect(authState.consumeJustSignedOut()).toBe(true)
+    expect(authState.justSignedOut).toBe(false)
+    expect(authState.consumeJustSignedOut()).toBe(false)
+  })
+
+  it('is false when nobody signed out (a plain page load)', () => {
+    expect(authState.consumeJustSignedOut()).toBe(false)
   })
 })
 
