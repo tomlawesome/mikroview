@@ -35,5 +35,8 @@ No new data colours. Shot in `shots/`, reviewed.
 
 ## Owner verdicts
 
-- Pending: the journey (five beats), and round 26's clear-all
-  rebuild.
+- Round 26's clear-all rebuild (carried here unchanged): **"Clear
+  all is a no, make it the bubble, it's orange, 'clear all', click
+  once, it turns red 'confirm' click again to actually clear all."**
+  — built as round 28.
+- Pending: the journey (five beats).
