@@ -3,10 +3,15 @@
 // #630, map layer 4: the Coverage lens paints every boundary-direction
 // by what it logs -- observed solid, dark dotted and labelled dark,
 // drawn never omitted -- and the zone cards carry their coverage
-// captions on every lens. Runs after live-topography-reality.mjs, whose
-// pushed table it reads: ether1→bridge1 refusal logs (observed),
-// bridge1→ether1 and ether5→ether1 accepts do not (dark), so The LAN
-// reads DARK TOWARD WAN and the quiet lane DARK BOTH WAYS.
+// captions on every lens.
+//
+// Self-provisioned on purpose: this sorts BEFORE the other topography
+// scenarios, and the tables an earlier scenario happens to leave
+// (live-router-lookup's, on a full suite run) carry rules whose shape
+// this lens has nothing to say about. A push replaces its kind's whole
+// table, so pushing unconditionally is deterministic in both the suite
+// and a standalone run -- the third suite run failed exactly here, on
+// an inherited table that drew no coverage edges at all.
 
 import { session, check, done, feedSyslog as syslog } from './live-browser.mjs'
 
@@ -25,31 +30,51 @@ for (let i = 0; i < 40 && !DEVICE; i++) {
 }
 check(!!DEVICE, `the instance reports the device events arrive from (${DEVICE})`)
 
-const pre = await page.request.get(`${URL_BASE}/api/routeros/${DEVICE}/rules`)
-const havePush = pre.ok() && (await pre.json()).available
-if (!havePush) {
-  const tokenRes = await page.request.post(`${URL_BASE}/api/tokens`, {
-    headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'mikroview' },
-    data: { name: 'live-topo-coverage', kind: 'ingest', device: DEVICE },
-  })
-  const token = (await tokenRes.json()).value
+const tokenRes = await page.request.post(`${URL_BASE}/api/tokens`, {
+  headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'mikroview' },
+  data: { name: 'live-topo-coverage', kind: 'ingest', device: DEVICE },
+})
+const token = (await tokenRes.json()).value
+
+async function push(payload) {
   const res = await fetch(`${URL_BASE}/api/ingest/routeros`, {
     method: 'POST',
     headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      kind: 'filter-rule',
-      page: 1,
-      pages: 1,
-      routerosVersion: '7.23.3 (stable)',
-      records: [
-        { ordinal: 0, comment: 'LAN out to the web', chain: 'forward', action: 'accept', srcAddressList: '', logPrefix: '', inInterface: 'bridge1', outInterface: 'ether1', dstPort: 443, protocol: 'tcp' },
-        { ordinal: 1, comment: 'Nothing unsolicited comes in', chain: 'forward', action: 'drop', srcAddressList: '', logPrefix: 'D|forward-drop|', log: true, inInterface: 'ether1', outInterface: 'bridge1' },
-      ],
-    }),
+    body: JSON.stringify(payload),
   })
-  check(res.status === 200, 'a rule table is pushed for the standalone case')
-  await page.reload()
+  return res.status
 }
+
+// The zones the captions read, then the rules the paint judges -- both
+// whole tables, matching what the reality scenario pushes later so the
+// lane names stay stable across the suite.
+check(
+  (await push({
+    kind: 'ip-address',
+    page: 1,
+    pages: 1,
+    routerosVersion: '7.23.3 (stable)',
+    records: [
+      { address: '192.168.1.1/24', network: '192.168.1.0', interface: 'bridge1', comment: 'The LAN' },
+      { address: '10.9.0.1/24', network: '10.9.0.0', interface: 'ether5', comment: 'The quiet lane' },
+    ],
+  })) === 200,
+  'the zone table is pushed whole',
+)
+check(
+  (await push({
+    kind: 'filter-rule',
+    page: 1,
+    pages: 1,
+    routerosVersion: '7.23.3 (stable)',
+    records: [
+      { ordinal: 0, comment: 'LAN out to the web', chain: 'forward', action: 'accept', srcAddressList: '', logPrefix: '', inInterface: 'bridge1', outInterface: 'ether1', dstPort: 443, protocol: 'tcp' },
+      { ordinal: 1, comment: 'Nothing unsolicited comes in', chain: 'forward', action: 'drop', srcAddressList: '', logPrefix: 'D|forward-drop|', log: true, inInterface: 'ether1', outInterface: 'bridge1' },
+    ],
+  })) === 200,
+  'the rule table is pushed whole',
+)
+await page.reload()
 
 await page.click('.rail-name >> text=Topography')
 await page.waitForSelector('[data-card="topography"] .lenses', { timeout: 10000 })

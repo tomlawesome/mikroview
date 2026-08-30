@@ -73,9 +73,10 @@ check(
       { ordinal: 0, comment: 'LAN out to the web', chain: 'forward', action: 'accept', srcAddressList: '', logPrefix: '', inInterface: 'bridge1', outInterface: 'ether1', dstPort: 443, protocol: 'tcp' },
       { ordinal: 1, comment: 'Nothing unsolicited comes in', chain: 'forward', action: 'drop', srcAddressList: '', logPrefix: 'D|forward-drop|', log: true, inInterface: 'ether1', outInterface: 'bridge1' },
       { ordinal: 2, comment: 'quiet lane ssh out', chain: 'forward', action: 'accept', srcAddressList: '', logPrefix: '', inInterface: 'ether5', outInterface: 'ether1', dstPort: 22, protocol: 'tcp' },
+      { ordinal: 3, comment: 'the quiet lane may not reach the LAN', chain: 'forward', action: 'drop', srcAddressList: '', logPrefix: 'D|quiet-block|', log: true, inInterface: 'ether5', outInterface: 'bridge1' },
     ],
   })) === 200,
-  'the intended table is pushed whole, quiet-lane rule included',
+  'the intended table is pushed whole, quiet-lane rules included',
 )
 
 // The three realities, through the real syslog listener: planned
@@ -87,6 +88,15 @@ for (let i = 0; i < 6; i++) {
   feedRaw(`firewall,info D|forward-drop| forward: in:ether1 out:bridge1, connection-state:new, proto TCP (SYN), 198.51.100.${30 + i}:4${400 + i}->192.168.1.10:23, len 60`)
 }
 feedRaw('firewall,info A|mystery-accept| forward: in:ether1 out:ether5, connection-state:new, proto TCP (SYN), 203.0.113.66:41000->10.9.0.20:8443, len 60')
+// The held pair rides its own boundary, ether5→bridge1, which no other
+// scenario feeds: on a shared suite instance the ether1→bridge1 pair
+// has accepts from five earlier scenarios, so its verdict is unplanned
+// and its badge can never say held -- the refused-share check below
+// starved on exactly that. accepts stays 0 on this pair, so it reads
+// holding in the suite and standalone alike.
+for (let i = 0; i < 4; i++) {
+  feedRaw(`firewall,info D|quiet-block| forward: in:ether5 out:bridge1, connection-state:new, proto TCP (SYN), 10.9.0.${40 + i}:3${300 + i}->192.168.1.10:445, len 60`)
+}
 
 // Reload so the freshly pushed tables are re-fetched alongside the
 // freshly arrived events (same honest path the policy scenario takes).
