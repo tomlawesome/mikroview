@@ -38,4 +38,11 @@ colours. Shots in `shots/`, each reviewed.
 
 ## Owner verdicts
 
-- Pending: the clear-all rebuild, the first-hour storyboard.
+- The first hour: **"Love the first hour!"** — with a journey
+  correction, verbatim: **"the journey should also not be a huge
+  wall of setup. We should first just get data flowing in by
+  attaching the router, and then we should start a tour of
+  Mikroview, which ends in the Wizard launching. The tour should
+  start with a glass that gives a choice to do the full tour or
+  skip straight to the wizard."** Rebuilt as round 27.
+- Pending: the clear-all rebuild.
