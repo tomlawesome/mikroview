@@ -221,7 +221,7 @@
               <line x1="8" y1="25" x2="64" y2="25" stroke="var(--alarm)" stroke-width="1.2" opacity="0.6" />
               <line x1="8" y1="33" x2="50" y2="33" stroke="var(--fg-dim)" stroke-width="1.2" opacity="0.4" />
             </svg>
-          {:else}
+          {:else if card.key === 'docket'}
             <svg viewBox="0 0 76 40" aria-hidden="true">
               <rect x="8" y="6" width="3" height="8" fill="#ff5470" />
               <line x1="16" y1="10" x2="66" y2="10" stroke="var(--fg-dim)" stroke-width="1.2" opacity="0.6" />
@@ -229,6 +229,25 @@
               <line x1="16" y1="22" x2="58" y2="22" stroke="var(--fg-dim)" stroke-width="1.2" opacity="0.5" />
               <rect x="8" y="30" width="3" height="8" fill="var(--marked)" />
               <line x1="16" y1="34" x2="62" y2="34" stroke="var(--fg-dim)" stroke-width="1.2" opacity="0.5" />
+            </svg>
+          {:else if card.key === 'entities'}
+            <svg viewBox="0 0 76 40" aria-hidden="true">
+              <circle cx="14" cy="10" r="3.4" fill="none" stroke="var(--accent)" stroke-width="1.2" />
+              <circle cx="14" cy="10" r="1" fill="var(--accent)" />
+              <line x1="24" y1="10" x2="66" y2="10" stroke="var(--border)" stroke-width="1" />
+              <circle cx="14" cy="22" r="2.4" fill="var(--lane-lan)" />
+              <line x1="24" y1="22" x2="58" y2="22" stroke="var(--border)" stroke-width="1" />
+              <circle cx="14" cy="33" r="2.4" fill="var(--lane-iot)" />
+              <line x1="24" y1="33" x2="62" y2="33" stroke="var(--border)" stroke-width="1" />
+            </svg>
+          {:else}
+            <svg viewBox="0 0 76 40" aria-hidden="true">
+              <line x1="10" y1="10" x2="66" y2="10" stroke="var(--border)" stroke-width="1.2" />
+              <circle cx="46" cy="10" r="3" fill="var(--accent)" />
+              <line x1="10" y1="21" x2="66" y2="21" stroke="var(--border)" stroke-width="1.2" />
+              <circle cx="24" cy="21" r="3" fill="var(--fg-dim)" />
+              <line x1="10" y1="32" x2="66" y2="32" stroke="var(--border)" stroke-width="1.2" />
+              <circle cx="56" cy="32" r="3" fill="var(--fg-dim)" />
             </svg>
           {/if}
           <span class="nm">{card.name}</span>

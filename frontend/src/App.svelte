@@ -15,8 +15,6 @@
   import { viewportState } from './lib/viewport.svelte'
   import ConnectionBanner from './components/ConnectionBanner.svelte'
   import ConfigProblemBanner from './components/ConfigProblemBanner.svelte'
-  import EngineRoom from './components/EngineRoom.svelte'
-  import Entities from './components/Entities.svelte'
   import Fleet from './components/Fleet.svelte'
   import IpLookupPopover from './components/IpLookupPopover.svelte'
   import PortLookupPopover from './components/PortLookupPopover.svelte'
@@ -36,9 +34,20 @@
   // is new rather than reusing something that already existed.
   import Toast from './components/Toast.svelte'
 
-  // The deck's scenes (#633). Everything else is an operate page,
-  // reached from the account menu and rendered as a page of its own.
-  const DECK_VIEWS = new Set(['fall', 'topography', 'metrics', 'live', 'flags', 'watchlist', 'audit'])
+  // The deck's scenes (#633). Entities and Settings joined the deck in
+  // #647 (round 23); Fleet alone is left outside it, absorbed into the
+  // Entities card and reached only from the phone-width bottom bar now.
+  const DECK_VIEWS = new Set([
+    'fall',
+    'topography',
+    'metrics',
+    'live',
+    'flags',
+    'watchlist',
+    'audit',
+    'entities',
+    'engineroom',
+  ])
   const inDeck = $derived(DECK_VIEWS.has(appState.view))
 
   // Any polling call that fails with a 401 (an expired or reset-
@@ -200,11 +209,13 @@
        restores a rail state) mounts at all. -->
   <!-- Pages are the site (owner, 2026-08-29): no persistent chrome.
        The toolbar and the desktop nav rail are retired wholesale; each
-       scene carries its own bar. Navigation is the deck (#633): the
-       scenes are full-viewport snap cards with the roll rail as the
-       jump control, and the operate pages live on the scene bar's
-       account menu. The phone-width BottomBar stays until the deck
-       learns a small-screen shape. -->
+       scene carries its own bar. Navigation is the deck (#633, #647):
+       the scenes are full-viewport snap cards with the roll rail as the
+       jump control -- Entities and Settings among them since round 23,
+       so Fleet (folded into Entities' own card) is the one page left
+       outside it, reached only from the phone-width bottom bar. The
+       BottomBar itself stays until the deck learns a small-screen
+       shape. -->
   {#if viewportState.isMobile}
     <BottomBar />
   {/if}
@@ -220,13 +231,7 @@
           <Deck />
         {:else}
           <SceneBar />
-          {#if appState.view === 'entities'}
-            <Entities />
-          {:else if appState.view === 'fleet'}
-            <Fleet />
-          {:else}
-            <EngineRoom />
-          {/if}
+          <Fleet />
         {/if}
       </main>
     </div>
