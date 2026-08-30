@@ -34,4 +34,7 @@ Palette and tokens unchanged from round 5 (validated there on
 
 ## Owner verdicts
 
-Pending.
+- **T ratified** (2026-08-30): "Ok, I like T too. Lets go with that."
+  One altitude axis — clients · services · zones · survey on a single
+  quiet foot slider; the CLOSE/SURVEY toggle ceases to exist; lenses
+  as quiet words. S and U dropped.
