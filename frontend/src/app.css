@@ -1,11 +1,17 @@
-:root {
+:root,
+[data-void] {
   /* The Atlas II refined identity (owner ratification, 2026-08-29: the
      app's common identity now, pulled forward from #492's theme rounds).
      Values are direction-f-atlas2.html's own token block: the void
      ground, blue-washed inks, hairline borders drawn from the same
      160,185,230 wash, and the soft periwinkle accent. The semantic
      verdict/action colors below are deliberately untouched -- they carry
-     traffic-state meaning and never shift with identity. */
+     traffic-state meaning and never shift with identity.
+
+     [data-void] re-declares the whole block on that subtree, so a scene
+     that is always the void -- the door (#645): "the fall rains across
+     the whole screen", ratified against the dark ground -- keeps these
+     exact tokens under the light theme and under every colorway. */
   --bg: #06080e;
   --bg-elevated: #0f1422;
   --bg-hover: rgba(160, 185, 230, 0.08);

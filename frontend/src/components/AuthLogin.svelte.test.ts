@@ -31,9 +31,9 @@ beforeEach(() => {
 })
 
 async function fillAndSubmit(username: string, password: string) {
-  await fireEvent.input(screen.getByLabelText('Username'), { target: { value: username } })
-  await fireEvent.input(screen.getByLabelText('Password'), { target: { value: password } })
-  await fireEvent.click(screen.getByRole('button', { name: /sign in/i }))
+  await fireEvent.input(screen.getByLabelText('account'), { target: { value: username } })
+  await fireEvent.input(screen.getByLabelText('password'), { target: { value: password } })
+  await fireEvent.click(screen.getByRole('button', { name: /enter/i }))
 }
 
 describe('AuthLogin', () => {
@@ -69,7 +69,7 @@ describe('AuthLogin', () => {
     expect(fetchAuthSession).not.toHaveBeenCalled()
     // Still on the login screen -- the form's failure path never flips
     // authState.state, it only surfaces the error string.
-    expect(screen.getByRole('button', { name: /sign in/i })).toBeTruthy()
+    expect(screen.getByRole('button', { name: /enter/i })).toBeTruthy()
   })
 
   it('shows the SSO link only when the backend reports SSO is configured', async () => {
