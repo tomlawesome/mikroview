@@ -373,7 +373,16 @@
         {#each watchlistState.entries as e (e.id)}
           <!-- The id is the target a match row's entry name scrolls to
                (openEntry, #584), not decoration. -->
-          <li class="card" id="entry-{e.id}">
+          <!-- The watchlist wears the docket's stripe treatment too
+               (round 19): the watchers' purple for a healthy watch, the
+               alarm ink where the ring is broken (same condition as
+               watchlistState.brokenCount), nothing for a paused one. -->
+          <li
+            class="card"
+            class:watching={e.enabled && watchlistState.coverage[e.id] !== 'no-logging'}
+            class:ring-broken={e.enabled && watchlistState.coverage[e.id] === 'no-logging'}
+            id="entry-{e.id}"
+          >
             <button class="card-main" onclick={() => toggleExpand(e.id)}>
               <span class="name">{e.name || '(unnamed)'}</span>
               {#if e.invert}
@@ -695,7 +704,17 @@
     background: var(--bg-elevated);
     border: 1px solid var(--border);
     border-radius: 8px;
-    padding: 10px 12px;
+    padding: 10px 12px 10px 14px;
+  }
+
+  /* The stripe (round 19): one unbroken line at the card's left edge,
+     inset so it follows the rounded corner. */
+  .card.watching {
+    box-shadow: inset 3px 0 0 var(--marked);
+  }
+
+  .card.ring-broken {
+    box-shadow: inset 3px 0 0 var(--alarm);
   }
 
   .card-main {

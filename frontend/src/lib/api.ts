@@ -216,6 +216,35 @@ export async function fetchEventsWindow(params: {
   return res.json()
 }
 
+// fetchFlagEpisode is the docket drawer's bounded look at a flag's own
+// events (#633): the #29 around+window lookback centred on the flag's
+// lastSeen, narrowed to whatever the flag's target maps onto (ip, port,
+// rule or device -- the same mapping Flags.svelte's open-in-stream
+// uses). global_spike and new_device pass no narrowing at all, which is
+// honest for both: a network-wide surge *is* everything in the window,
+// and a MAC target has no server-side match (see buildQuery's comment).
+export async function fetchFlagEpisode(params: {
+  ip?: string
+  port?: string
+  rule?: string
+  device?: string
+  around: string
+  window: string
+  limit?: number
+}): Promise<EventsResult> {
+  const qs = new URLSearchParams()
+  if (params.ip) qs.set('ip', params.ip)
+  if (params.port) qs.set('port', params.port)
+  if (params.rule) qs.set('rule', params.rule)
+  if (params.device) qs.set('device', params.device)
+  qs.set('around', params.around)
+  qs.set('window', params.window)
+  if (params.limit) qs.set('limit', String(params.limit))
+  const res = await fetch(`/api/events?${qs}`)
+  if (!res.ok) throw new ApiError(`fetchFlagEpisode: ${res.status}`, res.status)
+  return res.json()
+}
+
 export async function fetchDevices(): Promise<Device[]> {
   const res = await fetch('/api/devices')
   if (!res.ok) throw new ApiError(`fetchDevices: ${res.status}`, res.status)
