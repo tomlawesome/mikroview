@@ -5,19 +5,18 @@
   // title, submit label, and what happens on submit. Not a modal: this
   // replaces App.svelte's entire main content, same as Metrics being an
   // independent view rather than an overlay.
-  import LogoLockup from './LogoLockup.svelte'
   import { authState } from '../lib/auth.svelte'
 
   let {
     title,
-    subtitle,
+    subtitle = '',
     submitLabel,
     onsubmit,
     confirmPassword = false,
     ssoAvailable = false,
   }: {
     title: string
-    subtitle: string
+    subtitle?: string
     submitLabel: string
     onsubmit: (username: string, password: string) => Promise<string | null>
     confirmPassword?: boolean
@@ -57,16 +56,24 @@
 </script>
 
 <div class="screen">
-  <div class="card">
-    <LogoLockup size={26} />
+  <!-- The identity constant: the wordmark exactly where every scene
+       writes it (SceneBar.svelte's own lockup). The pre-Atlas shield
+       card is gone -- this page is the atlas's cover, on the same
+       paper as the deck it opens onto (#633/#634, item 71). -->
+  <span class="wm">MIKRO<em>VIEW</em></span>
 
+  <div class="col">
     {#if authState.ssoError}
       <p class="error">{authState.ssoError}</p>
     {/if}
 
     <form class="form-body" onsubmit={handleSubmit}>
       <h1>{title}</h1>
-      <p class="subtitle">{subtitle}</p>
+      {#if subtitle}
+        <p class="subtitle">{subtitle}</p>
+      {:else}
+        <div class="gap"></div>
+      {/if}
 
       <label>
         <span>Username</span>
@@ -96,70 +103,90 @@
         <a class="sso-link" href="/api/auth/oidc/login">Sign in with SSO</a>
       {/if}
     </form>
-
   </div>
 </div>
 
 <style>
   .screen {
     flex: 1;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    padding: 20px;
-  }
-
-  .card {
-    width: 100%;
-    max-width: 340px;
+    position: relative;
     display: flex;
     flex-direction: column;
     align-items: center;
+    justify-content: center;
+    padding: 20px;
+    background: var(--bg);
+  }
+
+  /* SceneBar.svelte's lockup, verbatim: one identity, every surface. */
+  .wm {
+    position: absolute;
+    top: 20px;
+    left: 24px;
+    font-size: 13px;
+    font-weight: 800;
+    letter-spacing: 0.22em;
+    color: var(--fg-dim);
+  }
+
+  .wm em {
+    color: var(--accent);
+    font-style: normal;
+  }
+
+  .col {
+    width: 100%;
+    max-width: 360px;
+    display: flex;
+    flex-direction: column;
     gap: 12px;
-    background: var(--bg-elevated);
-    border: 1px solid var(--border);
-    border-radius: 10px;
-    padding: 32px 28px;
   }
 
   .form-body {
     width: 100%;
     display: flex;
     flex-direction: column;
-    align-items: center;
-    gap: 12px;
+    gap: 14px;
   }
 
   h1 {
-    margin: 4px 0 0;
-    font-size: 16px;
+    margin: 0;
+    font-size: 30px;
+    font-weight: 600;
+    letter-spacing: -0.01em;
     color: var(--fg);
   }
 
-  .subtitle {
-    margin: 0 0 8px;
-    font-size: 13px;
-    color: var(--fg-muted);
-    text-align: center;
+  .gap {
+    height: 10px;
   }
 
-
+  .subtitle {
+    margin: -6px 0 14px;
+    font-size: 13px;
+    color: var(--fg-dim);
+  }
 
   label {
     width: 100%;
     display: flex;
     flex-direction: column;
-    gap: 5px;
-    font-size: 12px;
-    color: var(--fg-muted);
+    gap: 6px;
+  }
+
+  label span {
+    font-size: 10.5px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--fg-dim);
   }
 
   input {
-    background: var(--bg);
+    background: var(--bg-elevated);
     border: 1px solid var(--border);
     color: var(--fg);
-    border-radius: 5px;
-    padding: 9px 10px;
+    border-radius: 8px;
+    padding: 11px 12px;
     font-size: 14px;
   }
 
@@ -177,14 +204,15 @@
 
   button {
     width: 100%;
-    margin-top: 6px;
+    margin-top: 8px;
     background: var(--accent);
     border: 1px solid var(--accent);
     color: var(--bg);
     font-weight: 600;
-    border-radius: 5px;
-    padding: 10px;
+    border-radius: 8px;
+    padding: 11px;
     font-size: 14px;
+    cursor: pointer;
   }
 
   button:hover {
@@ -195,7 +223,6 @@
     opacity: 0.5;
     cursor: default;
   }
-
 
   .divider {
     width: 100%;
@@ -224,7 +251,7 @@
     background: transparent;
     border: 1px solid var(--border);
     color: var(--fg-muted);
-    border-radius: 5px;
+    border-radius: 8px;
     padding: 10px;
     font-size: 14px;
     text-decoration: none;
@@ -234,9 +261,4 @@
     color: var(--fg);
     border-color: var(--fg-muted);
   }
-
-
-
-
-
 </style>
