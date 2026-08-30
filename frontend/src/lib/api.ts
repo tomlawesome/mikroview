@@ -27,6 +27,7 @@ import type {
   Suggestion,
   SuggestionStatus,
   UserSummary,
+  Verdict,
   WatchlistEntry,
   WatchlistCoverage,
   WatchlistIdentity,
@@ -359,6 +360,37 @@ export async function clearAllFlags(): Promise<number> {
 export async function clearFlagPermanent(id: string): Promise<void> {
   const res = await postJSON(`/api/flags/${encodeURIComponent(id)}/clear-permanent`)
   if (!res.ok) throw new ApiError(`clearFlagPermanent: ${res.status}`, res.status)
+}
+
+// setFlagVerdict (#638) records an operator's triage judgement --
+// 'expected'/'noise' clear the flag server-side as part of the same
+// request, 'real' does not (see internal/flags.Flag's Verdict doc
+// comment for the semantics). Returns the updated flag so the caller can
+// reconcile its optimistic guess (verdictBy in particular) against the
+// server's own canonical value, same reasoning as clearFlagPermanent
+// above returning nothing but this one needing the fresh flag back.
+//
+// Sent at once, not deferred behind Undo's window -- see
+// flagsState.judgeAndClear's own doc comment for why an earlier,
+// deferred version of this call lost verdicts silently on a reload.
+export async function setFlagVerdict(id: string, verdict: Verdict): Promise<Flag> {
+  const res = await postJSON(`/api/flags/${encodeURIComponent(id)}/verdict`, { verdict })
+  if (!res.ok) throw new ApiError(`setFlagVerdict: ${res.status}`, res.status)
+  return res.json()
+}
+
+// deleteFlagVerdict (#638) is Undo: removes the verdict and un-clears
+// the flag, same access tier as setFlagVerdict above. 404s on an unknown
+// id, same as every other per-flag endpoint in this file.
+// The path is "verdict/{id}", mirroring exclusions/definitions/tokens
+// rather than the POST above: net/http.ServeMux refuses to register
+// DELETE /api/flags/{id}/verdict alongside the existing DELETE
+// /api/flags/exclusions/{id}, because /api/flags/exclusions/verdict
+// matches both patterns and neither is more specific.
+export async function deleteFlagVerdict(id: string): Promise<Flag> {
+  const res = await deleteJSON(`/api/flags/verdict/${encodeURIComponent(id)}`)
+  if (!res.ok) throw new ApiError(`deleteFlagVerdict: ${res.status}`, res.status)
+  return res.json()
 }
 
 // fetchExclusions/removeExclusion: admin-only (see internal/api's

@@ -3,9 +3,12 @@
 package api
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"time"
+
+	"github.com/tomlawesome/mikroview/internal/flags"
 )
 
 // handleFlagsList serves every known flag, active and cleared -- the
@@ -30,6 +33,80 @@ func (s *Server) handleFlagsClear(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	cleared := s.Flags.Clear(id, time.Now())
 	writeJSON(w, http.StatusOK, map[string]any{"cleared": cleared})
+}
+
+// verdictRequest is POST /api/flags/{id}/verdict's body: one of the
+// three bare verdict labels the owner ratified on #638 (2026-08-30) --
+// "expected", "noise" or "real", no explanatory second line.
+type verdictRequest struct {
+	Verdict flags.Verdict `json:"verdict"`
+}
+
+// handleFlagsVerdict records an operator's judgement of one flag (#638).
+// Same access tier as handleFlagsClear above -- not admin-gated, unlike
+// handleFlagsClearPermanent -- because expected/noise are exactly as
+// reversible as a plain clear (see flags.Store.SetVerdict, which routes
+// them through the same clearLocked path Clear uses), and a real
+// verdict is reversible too: it neither clears anything nor creates a
+// permanent exclusion, so a mistaken "real" costs nothing an admin has
+// to undo.
+//
+// 400 for a body that doesn't parse or names anything other than the
+// three recognised verdicts (flags.Verdict.Valid()), checked before the
+// flag lookup so a malformed request never depends on the ID also being
+// real. 404 for an id SetVerdict doesn't recognise. 200 with the
+// updated flag otherwise -- verdict, verdictBy and verdictAt now set on
+// it (verdictBy from auditActor(r), the same actor-resolution every
+// other handler in this package uses).
+func (s *Server) handleFlagsVerdict(w http.ResponseWriter, r *http.Request) {
+	var req verdictRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+	if !req.Verdict.Valid() {
+		http.Error(w, fmt.Sprintf("unrecognised verdict %q", req.Verdict), http.StatusBadRequest)
+		return
+	}
+
+	id := r.PathValue("id")
+	f, ok := s.Flags.SetVerdict(id, req.Verdict, auditActor(r), time.Now())
+	if !ok {
+		http.Error(w, "flag not found", http.StatusNotFound)
+		return
+	}
+	writeJSON(w, http.StatusOK, f)
+}
+
+// handleFlagsVerdictUndo is the verdict row's undo affordance, and a
+// real server call rather than the deferred-timer trick undo used to
+// be -- see the #638 comment this replaces: a PWA service worker
+// re-issues every fetch through itself, which strips the keepalive
+// guarantee a deferred POST relied on to survive a reload, and
+// live-check proved it (0 of 6 judged-then-reloaded verdicts reached
+// the server). The verdict now POSTs immediately, so undo has to
+// reverse a real write instead of just cancelling a timer.
+//
+// Registered at DELETE /api/flags/verdict/{id} -- deliberately NOT
+// /api/flags/{id}/verdict, which would mirror handleFlagsVerdict's own
+// POST path but is structurally ambiguous against the existing DELETE
+// /api/flags/exclusions/{id} route under Go's net/http.ServeMux; see
+// the registration table in server.go for the full reasoning.
+//
+// Same access tier as handleFlagsVerdict/handleFlagsClear -- undoing is
+// no more dangerous than judging in the first place. 404 for an
+// unknown id, same as the POST. 200 with the updated flag otherwise;
+// see flags.Store.UndoVerdict's doc comment for the one subtlety --
+// undoing must not re-open a flag that was already cleared before it
+// was judged.
+func (s *Server) handleFlagsVerdictUndo(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	f, ok := s.Flags.UndoVerdict(id)
+	if !ok {
+		http.Error(w, "flag not found", http.StatusNotFound)
+		return
+	}
+	writeJSON(w, http.StatusOK, f)
 }
 
 // handleFlagsClearAll clears every currently-active flag in one request
