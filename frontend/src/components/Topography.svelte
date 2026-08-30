@@ -23,7 +23,7 @@
   // is a deck card (#633, rounds 20-29), and the reach (#626: a mode of
   // this scene, not a place) follows in its own change.
   import { appState } from '../lib/state.svelte'
-  import { zonesState } from '../lib/zones.svelte'
+  import { zonesState, type ZoneInfo } from '../lib/zones.svelte'
   import { policyState, type PolicyEdge } from '../lib/policy.svelte'
   import { realityEdges, unexercisedIntents, type RealityEdge } from '../lib/reality'
   import { coverageState } from '../lib/coverage.svelte'
@@ -32,6 +32,10 @@
   import { authState } from '../lib/auth.svelte'
   import { reachFor } from '../lib/reach'
   import { formatEps } from '../lib/format'
+  import { flagsState, extractSourceIp } from '../lib/flags.svelte'
+  import { watchlistState } from '../lib/watchlist.svelte'
+  import { familyOf, ADVISORY_INK } from '../lib/flagPalette'
+  import { parseCidr, addressInCidr } from '../lib/addressMatch'
 
   const LANE_INKS = ['var(--lane-lan)', 'var(--lane-srv)', 'var(--lane-iot)', 'var(--lane-guest)', 'var(--marked)']
 
@@ -420,8 +424,10 @@
 
   function onKeydown(e: KeyboardEvent) {
     if (e.key === 'Escape') {
-      // Esc walks out one level: the composer first, then the reach.
-      if (compose) compose = null
+      // Esc walks out one level: the node card first, then the composer,
+      // then the reach.
+      if (nodeCard) nodeCard = null
+      else if (compose) compose = null
       else if (reach) surface()
     }
   }
@@ -593,11 +599,214 @@
     const z = zones.find((zz) => zz.id === reach!.zoneId)
     return (z?.hosts ?? []).filter((h) => h.ip !== reach!.ip).slice(0, 2)
   })
+
+  // --- the altitude slider (#648, concept T -- round 6 ratified, round
+  // 14/24 amendments) -----------------------------------------------------
+  // One quiet axis at the map's foot: clients, services, zones, survey.
+  // No text, a tiny symbol per stop on the line itself (survey wears the
+  // atlas diamond), click anywhere on the line to jump to the nearest
+  // stop. "Zones" is today's map, unchanged, and stays the default; the
+  // other three stops are a camera framing of the same real map -- closer
+  // for clients, a little back for services, tilted overview for survey
+  // -- never a fabricated new layer of data this app does not have.
+  // Deliberately not reset by descend()/surface(): round 24's "keeps the
+  // level and zoom you left" falls out of that for free.
+  const ALTITUDE_LABELS = ['clients', 'services', 'zones', 'survey'] as const
+  let altitude = $state<0 | 1 | 2 | 3>(2)
+
+  function jumpAltitude(i: number) {
+    altitude = Math.max(0, Math.min(3, Math.round(i))) as 0 | 1 | 2 | 3
+  }
+
+  function onAltitudeInput(e: Event) {
+    jumpAltitude(Number((e.currentTarget as HTMLInputElement).value))
+  }
+
+  // --- the health dials (#648, rounds 19-20: "love the dials") -----------
+  // Two rings, top-right: flags splits by the mark grammar (✱ alarm /
+  // ▲ advisory), watchers splits by #546's broken ring (healthy / broken).
+  // Solid var(--accept) whenever there is nothing to report -- the "at
+  // rest" state -- and each ring's own symbol wears its ink regardless
+  // (the flag red, the eye the docket's own watcher purple). Both click
+  // through to the docket, the same door the scene bar's flag badge uses.
+  const activeFlags = $derived(flagsState.list.filter((f) => !f.cleared))
+  const alarmFlagCount = $derived(activeFlags.filter((f) => familyOf(f.type).mark === '✱').length)
+  const advisoryFlagCount = $derived(activeFlags.length - alarmFlagCount)
+  const watcherTotal = $derived(watchlistState.entries.length)
+  const watcherBroken = $derived(watchlistState.brokenCount)
+  const watcherHealthy = $derived(watcherTotal - watcherBroken)
+
+  const DIAL_R = 20
+  const DIAL_CIRC = 2 * Math.PI * DIAL_R
+
+  function ringArc(count: number, total: number, priorLen: number): { dasharray: string; offset: number } {
+    const len = total > 0 ? (count / total) * DIAL_CIRC : 0
+    return { dasharray: `${len} ${DIAL_CIRC - len}`, offset: -priorLen }
+  }
+
+  function openDocket(view: 'flags' | 'watchlist') {
+    appState.view = view
+  }
+
+  // --- the aggregate bar (#648, round 23: "LOVE this, this is what we
+  // needed" -- supersedes round-14's two-bar concept C) -------------------
+  // One bar per zone: absent when nothing is open or watched on it,
+  // purple-only, red-only, or split half red / half purple with a centre
+  // divider when both. Correlated by IP-in-CIDR against the zone's own
+  // pushed range, the same containment addressInCidr already answers for
+  // the filter boxes and NAT parity (lib/addressMatch.ts) -- a flag or
+  // watch counts toward a zone only when its address actually falls
+  // inside it, never a guess. A degraded zone (no CIDR pushed yet) has
+  // nothing to correlate against, so its bar stays absent rather than
+  // drawing a wrong one.
+  interface ZoneAggregate {
+    flagCount: number
+    watchCount: number
+    watchBroken: number
+  }
+
+  function zoneAggregate(z: ZoneInfo): ZoneAggregate | null {
+    if (!z.cidr) return null
+    const cidr = parseCidr(z.cidr)
+    if (!cidr) return null
+    const inZone = (ip: string | null | undefined) => !!ip && addressInCidr(ip, cidr)
+    const flagCount = activeFlags.filter((f) => inZone(extractSourceIp(f.target))).length
+    const touching = watchlistState.entries.filter((e) => inZone(e.source?.ip) || inZone(e.destIp))
+    const watchBroken = touching.filter((e) => e.enabled && watchlistState.coverage[e.id] === 'no-logging').length
+    return { flagCount, watchCount: touching.length, watchBroken }
+  }
+
+  function openZoneFlags(e: Event, z: ZoneInfo) {
+    e.stopPropagation()
+    appState.resetFilters()
+    appState.setFilter('interface', z.id)
+    appState.view = 'flags'
+  }
+
+  function openWatchlist(e: Event) {
+    e.stopPropagation()
+    appState.view = 'watchlist'
+  }
+
+  // A rounded-rect path for the bar's outer half(es) -- SVG's <rect> only
+  // takes one radius for all four corners, and the split bar needs one
+  // end square at the centre divider, so each half draws its own path.
+  function fullBarPath(x0: number, x1: number, h: number): string {
+    const r = h / 2
+    return `M ${x0 + r} 0 H ${x1 - r} A ${r} ${r} 0 0 1 ${x1} ${r} V ${h - r} A ${r} ${r} 0 0 1 ${x1 - r} ${h} H ${x0 + r} A ${r} ${r} 0 0 1 ${x0} ${h - r} V ${r} A ${r} ${r} 0 0 1 ${x0 + r} 0 Z`
+  }
+
+  function leftBarPath(x0: number, x1: number, h: number): string {
+    const r = h / 2
+    return `M ${x0 + r} 0 H ${x1} V ${h} H ${x0 + r} A ${r} ${r} 0 0 1 ${x0} ${h - r} V ${r} A ${r} ${r} 0 0 1 ${x0 + r} 0 Z`
+  }
+
+  function rightBarPath(x0: number, x1: number, h: number): string {
+    const r = h / 2
+    return `M ${x0} 0 H ${x1 - r} A ${r} ${r} 0 0 1 ${x1} ${r} V ${h - r} A ${r} ${r} 0 0 1 ${x1 - r} ${h} H ${x0} Z`
+  }
+
+  // --- node info cards (#648, rounds 22-23: "really good") ---------------
+  // A small glass card -- name, address, lane, open warnings, actions --
+  // for a node that has no single-purpose click of its own yet: the
+  // reach's counterpart clusters and its own centred host are inert
+  // today. A zone card's host link already does its most useful job on
+  // click (entering the reach, #626) and stays exactly that -- this is
+  // additive furniture, not a replacement for it.
+  interface NodeCard {
+    name: string
+    address: string | null
+    lane: string | null
+    flagCount: number
+    watchCount: number
+    x: number
+    y: number
+  }
+
+  let nodeCard = $state<NodeCard | null>(null)
+
+  function nodeWarnings(ip: string | null): { flagCount: number; watchCount: number } {
+    if (!ip) return { flagCount: 0, watchCount: 0 }
+    const flagCount = activeFlags.filter((f) => extractSourceIp(f.target) === ip).length
+    const watchCount = watchlistState.entries.filter((e) => e.source?.ip === ip || e.destIp === ip).length
+    return { flagCount, watchCount }
+  }
+
+  // Anchored to the pointer for a click; a keyboard activation carries no
+  // coordinates, so it falls back to the activated element's own centre.
+  function openNodeCard(e: MouseEvent | KeyboardEvent, name: string, address: string | null, lane: string | null) {
+    e.stopPropagation()
+    const w = nodeWarnings(address)
+    const rect = (e.currentTarget as Element).getBoundingClientRect()
+    const px = e instanceof MouseEvent ? e.clientX : rect.left + rect.width / 2
+    const py = e instanceof MouseEvent ? e.clientY : rect.top + rect.height / 2
+    nodeCard = {
+      name,
+      address,
+      lane,
+      flagCount: w.flagCount,
+      watchCount: w.watchCount,
+      x: Math.min(px + 14, window.innerWidth - 260),
+      y: Math.min(py + 10, window.innerHeight - 220),
+    }
+  }
+
+  function closeNodeCard() {
+    nodeCard = null
+  }
+
+  function onWindowClick() {
+    if (nodeCard) nodeCard = null
+  }
 </script>
 
-<svelte:window onkeydown={onKeydown} />
+<svelte:window onkeydown={onKeydown} onclick={onWindowClick} />
 
 <div class="topo">
+  <!-- The aggregate bar (#648, round 23): absent, purple-only, red-only,
+       or split with a centre divider -- reused under every zone island
+       and every reach counterpart cluster below. -->
+  {#snippet aggregateBar(agg: ZoneAggregate, x0: number, width: number, y: number, h: number, z: ZoneInfo)}
+    {@const x1 = x0 + width}
+    {@const mid = x0 + width / 2}
+    {@const both = agg.flagCount > 0 && agg.watchCount > 0}
+    {#if agg.watchCount > 0}
+      <g
+        class="hbar-g"
+        role="button"
+        tabindex="0"
+        aria-label="{agg.watchCount} watcher{agg.watchCount === 1 ? '' : 's'}{agg.watchBroken > 0 ? `, ${agg.watchBroken} broken` : ''} — open the watchlist"
+        onclick={openWatchlist}
+        onkeydown={(e) => {
+          if (e.key === 'Enter') openWatchlist(e)
+        }}
+      >
+        <path class="hb hb-w" d={both ? leftBarPath(x0, mid, h) : fullBarPath(x0, x1, h)} transform="translate(0 {y})" />
+        <text class="hbt wp" x={both ? x0 + width / 4 : mid} y={y + h / 2 + 3.5} text-anchor="middle">
+          ◉ {agg.watchCount}{agg.watchBroken > 0 ? ' ○' : ''}
+        </text>
+      </g>
+    {/if}
+    {#if agg.flagCount > 0}
+      <g
+        class="hbar-g"
+        role="button"
+        tabindex="0"
+        aria-label="{agg.flagCount} open flag{agg.flagCount === 1 ? '' : 's'} — open flags filtered to {z.name}"
+        onclick={(e) => openZoneFlags(e, z)}
+        onkeydown={(e) => {
+          if (e.key === 'Enter') openZoneFlags(e, z)
+        }}
+      >
+        <path class="hb hb-f" d={both ? rightBarPath(mid, x1, h) : fullBarPath(x0, x1, h)} transform="translate(0 {y})" />
+        <text class="hbt fchip" x={both ? x1 - width / 4 : mid} y={y + h / 2 + 3.5} text-anchor="middle">✱ {agg.flagCount}</text>
+      </g>
+    {/if}
+    {#if both}
+      <line class="hb-div" x1={mid} y1={y} x2={mid} y2={y + h} />
+    {/if}
+  {/snippet}
+
   <!-- The breadcrumb exists only descended: surfaced, the scene bar
        already names the place, and a placeholder crumb was mockup
        residue (owner, 2026-08-30). -->
@@ -642,6 +851,80 @@
     <button class="ascend" onclick={surface}>⌃ surface — the map, as you left it</button>
   {/if}
 
+  <!-- The health dials (#648, rounds 19-20): two rings, flags and
+       watchers, solid green whenever there is nothing to report. -->
+  <div class="dials">
+    <button
+      class="dial"
+      onclick={() => openDocket('flags')}
+      aria-label="{activeFlags.length} open flag{activeFlags.length === 1 ? '' : 's'} — open the docket"
+    >
+      <svg viewBox="0 0 56 56" aria-hidden="true">
+        {#if activeFlags.length === 0}
+          <circle class="dring d-rest" cx="28" cy="28" r={DIAL_R} transform="rotate(-90 28 28)" />
+        {:else}
+          {@const alarmArc = ringArc(alarmFlagCount, activeFlags.length, 0)}
+          {@const advisoryArc = ringArc(advisoryFlagCount, activeFlags.length, (alarmFlagCount / activeFlags.length) * DIAL_CIRC)}
+          <circle
+            class="dring d-alarm"
+            cx="28"
+            cy="28"
+            r={DIAL_R}
+            transform="rotate(-90 28 28)"
+            stroke-dasharray={alarmArc.dasharray}
+            stroke-dashoffset={alarmArc.offset}
+          />
+          <circle
+            class="dring"
+            cx="28"
+            cy="28"
+            r={DIAL_R}
+            stroke={ADVISORY_INK}
+            transform="rotate(-90 28 28)"
+            stroke-dasharray={advisoryArc.dasharray}
+            stroke-dashoffset={advisoryArc.offset}
+          />
+        {/if}
+        <text x="28" y="27" class="dnum" text-anchor="middle">{activeFlags.length}</text>
+        <text x="28" y="41" class="dsym flag-sym" text-anchor="middle">⚑</text>
+      </svg>
+    </button>
+    <button
+      class="dial"
+      onclick={() => openDocket('watchlist')}
+      aria-label="{watcherTotal} watcher{watcherTotal === 1 ? '' : 's'}{watcherBroken > 0 ? `, ${watcherBroken} broken` : ''} — open the docket"
+    >
+      <svg viewBox="0 0 56 56" aria-hidden="true">
+        {#if watcherTotal === 0}
+          <circle class="dring d-rest" cx="28" cy="28" r={DIAL_R} transform="rotate(-90 28 28)" />
+        {:else}
+          {@const healthyArc = ringArc(watcherHealthy, watcherTotal, 0)}
+          {@const brokenArc = ringArc(watcherBroken, watcherTotal, (watcherHealthy / watcherTotal) * DIAL_CIRC)}
+          <circle
+            class="dring d-healthy"
+            cx="28"
+            cy="28"
+            r={DIAL_R}
+            transform="rotate(-90 28 28)"
+            stroke-dasharray={healthyArc.dasharray}
+            stroke-dashoffset={healthyArc.offset}
+          />
+          <circle
+            class="dring d-broken"
+            cx="28"
+            cy="28"
+            r={DIAL_R}
+            transform="rotate(-90 28 28)"
+            stroke-dasharray={brokenArc.dasharray}
+            stroke-dashoffset={brokenArc.offset}
+          />
+        {/if}
+        <text x="28" y="27" class="dnum" text-anchor="middle">{watcherTotal}</text>
+        <text x="28" y="41" class="dsym watch-sym" text-anchor="middle">◉</text>
+      </svg>
+    </button>
+  </div>
+
   <!-- While descended, the map stays beneath as the reach's backdrop —
        blurred, at the level you left (round 24); clicking it surfaces
        exactly there. -->
@@ -658,6 +941,10 @@
       role="img"
       aria-label="The network map: internet above, the router at the waist, observed lanes below"
     >
+      <!-- The altitude's camera (#648, concept T): a framing of the same
+           real map, never a fabricated layer. "Zones" (index 2) is
+           unchanged from today's card. -->
+      <g class="camera" class:cam-clients={altitude === 0} class:cam-services={altitude === 1} class:cam-survey={altitude === 3}>
       {#if lens === 'traffic'}
         <!-- The one-way spine: internet into the waist. -->
         <path class="rib" d="M700 104 V 232" stroke="var(--accent)" stroke-width="3.5" />
@@ -850,6 +1137,7 @@
 
       <!-- The lanes -->
       {#each zones as z, i (z.id)}
+        {@const agg = zoneAggregate(z)}
         <g
           transform="translate({laneX(i, zones.length)} 490)"
           class="zone"
@@ -871,12 +1159,30 @@
             <text x="30" y="26" class="n-cidr">{z.cidr}</text>
           {/if}
           {#if z.hosts.length > 0}
-            <!-- Each host is the reach's door (#626): clicking one
-                 recentres on that node rather than opening the zone. -->
+            <!-- Each host is the reach's door (#626): clicking the name
+                 recentres on that node rather than opening the zone. The
+                 dot beside it (#648, round 23: "node symbols bigger")
+                 does the exact same thing -- the dot opens what the name
+                 opens, never a second, different affordance. -->
             <text x="-90" y="52" class="n-hosts">
               {#each z.hosts.slice(0, 3) as h, hi (h.ip)}
                 {#if hi > 0}<tspan> · </tspan>{/if}
                 <tspan
+                  class="host-dot"
+                  role="button"
+                  tabindex="0"
+                  aria-hidden="true"
+                  onclick={(e) => {
+                    e.stopPropagation()
+                    descend(z.id, h.label, h.ip)
+                  }}
+                  onkeydown={(e) => {
+                    if (e.key === 'Enter') {
+                      e.stopPropagation()
+                      descend(z.id, h.label, h.ip)
+                    }
+                  }}>●</tspan
+                ><tspan
                   class="host-link"
                   role="button"
                   tabindex="0"
@@ -894,9 +1200,12 @@
               {#if z.hostCount > 3}<tspan> · +{z.hostCount - 3}</tspan>{/if}
             </text>
           {/if}
-          <text x="-90" y="86" class="n-sub">{z.eventCount.toLocaleString()} events this window</text>
+          <text x="-90" y="72" class="n-sub">{z.eventCount.toLocaleString()} events this window</text>
           {#if zoneCaption(z.id)}
-            <text x="-90" y="70" class="n-cov" class:dark-t={zoneCaption(z.id)?.startsWith('DARK')}>{zoneCaption(z.id)}</text>
+            <text x="-90" y="62" class="n-cov" class:dark-t={zoneCaption(z.id)?.startsWith('DARK')}>{zoneCaption(z.id)}</text>
+          {/if}
+          {#if agg}
+            {@render aggregateBar(agg, -94, 188, 84, 12, z)}
           {/if}
         </g>
       {/each}
@@ -909,6 +1218,7 @@
           <text x="0" y="58" text-anchor="middle" class="n-sub">the map draws itself as traffic arrives; mikroview never draws a guess</text>
         </g>
       {/if}
+      </g>
     </svg>
   </div>
 
@@ -967,8 +1277,20 @@
           {/if}
         {/each}
 
-        <!-- the host, centred, with its lane-mates inside -->
-        <g transform="translate({MX} {MY})">
+        <!-- the host, centred, with its lane-mates inside. Its own node
+             card (#648, rounds 22-23) -- currently inert here otherwise,
+             so this is additive. -->
+        <g
+          transform="translate({MX} {MY})"
+          class="host-node"
+          role="button"
+          tabindex="0"
+          aria-label="{reach.host}'s information"
+          onclick={(e) => openNodeCard(e, reach!.host, reach!.ip, zones.find((z) => z.id === reach!.zoneId)?.name ?? null)}
+          onkeydown={(e) => {
+            if (e.key === 'Enter') openNodeCard(e, reach!.host, reach!.ip, zones.find((z) => z.id === reach!.zoneId)?.name ?? null)
+          }}
+        >
           <circle r="46" class="host-circle" style:stroke={reachZoneInk} />
           {#if reach.host !== reach.ip}
             <text y="-5" text-anchor="middle" class="n-name">{reach.host}</text>
@@ -1000,12 +1322,29 @@
           </g>
         {/each}
 
-        <!-- counterpart clusters -->
+        <!-- counterpart clusters. Each one's own node card (#648, rounds
+             22-23: "any client dot or name... in the descended view") --
+             currently inert here otherwise, so this is additive -- and
+             the same aggregate bar (round 23) the surfaced zone islands
+             carry, correlated the same way when the counterpart is
+             itself a real zone. -->
         {#each reachCounterparts as c, i (c)}
           {@const slot = SLOTS[i]}
           {@const strandsFor = reachSummary.strands.filter((s) => s.counterpart === c)}
-          <g transform="translate({slot.x} {slot.y})" class="cluster-g">
-            <rect class="cluster" x="0" y="0" width={slot.w} height="88" rx="12" />
+          {@const cZone = zones.find((z) => z.id === c)}
+          {@const agg = cZone ? zoneAggregate(cZone) : null}
+          <g
+            transform="translate({slot.x} {slot.y})"
+            class="cluster-g"
+            role="button"
+            tabindex="0"
+            aria-label="{c}'s information"
+            onclick={(e) => openNodeCard(e, c, cZone?.cidr ?? null, cZone?.name ?? (c === 'internet' ? 'the internet' : c))}
+            onkeydown={(e) => {
+              if (e.key === 'Enter') openNodeCard(e, c, cZone?.cidr ?? null, cZone?.name ?? (c === 'internet' ? 'the internet' : c))
+            }}
+          >
+            <rect class="cluster" x="0" y="0" width={slot.w} height={agg ? 96 : 88} rx="12" />
             <circle cx="20" cy="22" r="4" fill={LANE_INKS[Math.max(0, zoneIndex(c)) % LANE_INKS.length]} />
             <text x="32" y="27" class="n-name cluster-name">{c}</text>
             {#each strandsFor.slice(0, 2) as s (s.key)}
@@ -1015,6 +1354,9 @@
                 {s.peers.slice(0, 2).join(' · ')} {portsLine(s.ports)} · {s.count}×
               </text>
             {/each}
+            {#if agg && cZone}
+              {@render aggregateBar(agg, 10, slot.w - 20, 80, 12, cZone)}
+            {/if}
           </g>
         {/each}
 
@@ -1135,6 +1477,87 @@
     <p class="degraded">
       zones are boundary-derived — no <span class="mono">/ip address</span> table has been pushed; Run setup… adds it
     </p>
+  {/if}
+
+  <!-- The altitude slider (#648, concept T): one quiet axis at the
+       map's foot, no text, a tiny symbol per stop, click anywhere on the
+       line to jump. -->
+  <div class="altitude">
+    <!-- A real range input: native click-anywhere-to-jump and arrow-key
+         stepping for free, an implicit slider role, no hand-rolled a11y
+         to get wrong. The stops are a purely decorative overlay -- the
+         input underneath is what's operable. -->
+    <input
+      class="alt-range"
+      type="range"
+      min="0"
+      max="3"
+      step="1"
+      value={altitude}
+      oninput={onAltitudeInput}
+      aria-label="Altitude: clients, services, zones, survey"
+      aria-valuetext={ALTITUDE_LABELS[altitude]}
+    />
+    <div class="alt-ticks" aria-hidden="true">
+      {#each ALTITUDE_LABELS as label (label)}
+        <i class="tick" class:on={ALTITUDE_LABELS[altitude] === label} class:diamond={label === 'survey'}></i>
+      {/each}
+    </div>
+  </div>
+
+  {#if nodeCard}
+    <!-- The node info card (#648, rounds 22-23): a small glass card --
+         name, address, lane, open warnings, actions -- anchored to the
+         click, clamped inside the viewport. -->
+    <div class="node-card" role="dialog" aria-label="{nodeCard.name}'s information" style:left="{nodeCard.x}px" style:top="{nodeCard.y}px">
+      <button class="nc-close" onclick={closeNodeCard} aria-label="Close">✕</button>
+      <b class="nc-name">{nodeCard.name}</b>
+      {#if nodeCard.address}<span class="nc-addr">{nodeCard.address}</span>{/if}
+      {#if nodeCard.lane}<p class="nc-lane">{nodeCard.lane}</p>{/if}
+      {#if nodeCard.flagCount > 0}
+        <p class="nc-warn">✱ {nodeCard.flagCount} open flag{nodeCard.flagCount === 1 ? '' : 's'}</p>
+      {/if}
+      {#if nodeCard.watchCount > 0}
+        <p class="nc-watch">◉ watched</p>
+      {/if}
+      <div class="nc-acts">
+        {#if nodeCard.address}
+          <button
+            class="nc-act"
+            onclick={() => {
+              appState.resetFilters()
+              appState.setFilter('srcQuery', nodeCard!.address!)
+              appState.view = 'live'
+              closeNodeCard()
+            }}
+          >
+            open in stream ▸
+          </button>
+        {/if}
+        {#if nodeCard.flagCount > 0}
+          <button
+            class="nc-act"
+            onclick={() => {
+              appState.view = 'flags'
+              closeNodeCard()
+            }}
+          >
+            flags ▸
+          </button>
+        {/if}
+        {#if nodeCard.watchCount > 0}
+          <button
+            class="nc-act"
+            onclick={() => {
+              appState.view = 'watchlist'
+              closeNodeCard()
+            }}
+          >
+            watch ▸
+          </button>
+        {/if}
+      </div>
+    </div>
   {/if}
 </div>
 
@@ -1893,5 +2316,327 @@
   .degraded .mono {
     font-family: var(--font-mono);
     font-style: normal;
+  }
+
+  /* --- the health dials (#648, rounds 19-20) ----------------------------- */
+  .dials {
+    position: absolute;
+    top: 10px;
+    right: 172px;
+    z-index: 2;
+    display: flex;
+    gap: 8px;
+  }
+
+  .dial {
+    background: none;
+    border: none;
+    padding: 0;
+    cursor: pointer;
+    line-height: 0;
+  }
+
+  .dial svg {
+    width: 40px;
+    height: 40px;
+    display: block;
+  }
+
+  .dring {
+    fill: none;
+    stroke-width: 4;
+  }
+
+  .dring.d-rest,
+  .dring.d-healthy {
+    stroke: var(--accept);
+  }
+
+  .dring.d-alarm,
+  .dring.d-broken {
+    stroke: var(--alarm);
+  }
+
+  .dnum {
+    fill: var(--fg);
+    font-family: var(--font-mono);
+    font-size: 13px;
+    font-weight: 700;
+  }
+
+  .dsym {
+    font-size: 10px;
+  }
+
+  .flag-sym {
+    fill: var(--alarm);
+  }
+
+  .watch-sym {
+    fill: var(--marked);
+  }
+
+  .dial:hover .dnum,
+  .dial:focus-visible .dnum {
+    fill: var(--accent);
+  }
+
+  .dial:focus-visible {
+    outline: none;
+  }
+
+  /* --- the altitude's camera (#648, concept T) --------------------------- */
+  .camera {
+    transform-origin: 700px 310px;
+    transition: transform 0.35s ease;
+  }
+
+  .camera.cam-clients {
+    transform: scale(1.22);
+  }
+
+  .camera.cam-services {
+    transform: scale(1.1);
+  }
+
+  .camera.cam-survey {
+    transform: rotateX(26deg) scale(0.88) translateY(-14px);
+  }
+
+  .stage svg {
+    perspective: 900px;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .camera {
+      transition: none;
+    }
+  }
+
+  /* --- the altitude slider (#648, concept T) ----------------------------- */
+  .altitude {
+    position: absolute;
+    bottom: 12px;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 2;
+    width: 190px;
+    opacity: 0.6;
+    transition: opacity 0.25s;
+  }
+
+  .altitude:hover,
+  .altitude:focus-within {
+    opacity: 1;
+  }
+
+  .alt-range {
+    display: block;
+    width: 100%;
+    margin: 0;
+    height: 14px;
+    background: transparent;
+    accent-color: var(--accent);
+    cursor: pointer;
+  }
+
+  /* The stops: a purely decorative overlay -- aria-hidden, no pointer
+     events of their own -- so the range input beneath is what a click or
+     a screen reader actually sees. Evenly spaced by the flex row itself,
+     never a static per-stop offset. */
+  .alt-ticks {
+    position: absolute;
+    inset: 0 2px;
+    top: 6px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    pointer-events: none;
+  }
+
+  .tick {
+    width: 4px;
+    height: 4px;
+    border-radius: 50%;
+    background: var(--fg-dim);
+  }
+
+  .tick.on {
+    background: var(--accent);
+  }
+
+  .tick.diamond {
+    border-radius: 0;
+    background: transparent;
+    border: 1.2px solid var(--fg-dim);
+    transform: rotate(45deg);
+  }
+
+  .tick.diamond.on {
+    border-color: var(--accent);
+  }
+
+  /* --- the aggregate bar (#648, round 23) -------------------------------- */
+  .hbar-g {
+    cursor: pointer;
+  }
+
+  .hbar-g:focus-visible {
+    outline: none;
+  }
+
+  .hb {
+    stroke-width: 0.9;
+  }
+
+  .hb-w {
+    fill: color-mix(in srgb, var(--marked) 10%, transparent);
+    stroke: color-mix(in srgb, var(--marked) 40%, transparent);
+  }
+
+  .hb-f {
+    fill: color-mix(in srgb, var(--alarm) 10%, transparent);
+    stroke: color-mix(in srgb, var(--alarm) 45%, transparent);
+  }
+
+  .hbar-g:hover .hb,
+  .hbar-g:focus-visible .hb {
+    stroke-width: 1.4;
+  }
+
+  .hb-div {
+    stroke: var(--hair-2);
+    stroke-width: 1;
+  }
+
+  .hbt {
+    font-family: var(--font-mono);
+    font-size: 9.5px;
+    font-weight: 600;
+  }
+
+  .wp {
+    fill: var(--marked);
+  }
+
+  .fchip {
+    fill: var(--alarm);
+  }
+
+  /* --- node symbols (#648, round 23: "node symbols bigger") -------------- */
+  .host-dot {
+    fill: var(--fg-dim);
+    font-size: 13px;
+    cursor: pointer;
+  }
+
+  .host-dot:hover,
+  .host-dot:focus-visible {
+    fill: var(--accent);
+  }
+
+  /* --- node info cards (#648, rounds 22-23) ------------------------------ */
+  .host-node,
+  .cluster-g {
+    pointer-events: auto;
+    cursor: pointer;
+  }
+
+  .host-node:hover .host-circle,
+  .host-node:focus-visible .host-circle {
+    stroke-opacity: 0.9;
+  }
+
+  .cluster-g:hover .cluster,
+  .cluster-g:focus-visible .cluster {
+    stroke: var(--accent);
+  }
+
+  .host-node:focus-visible,
+  .cluster-g:focus-visible {
+    outline: none;
+  }
+
+  .node-card {
+    position: fixed;
+    z-index: 20;
+    min-width: 210px;
+    max-width: 250px;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    background: var(--glass);
+    backdrop-filter: blur(10px);
+    border: 1px solid var(--hair-2);
+    border-radius: 10px;
+    padding: 12px 14px;
+    box-shadow: 0 14px 36px rgba(0, 0, 0, 0.35);
+  }
+
+  .nc-close {
+    position: absolute;
+    top: 8px;
+    right: 10px;
+    background: none;
+    border: none;
+    color: var(--fg-dim);
+    font-size: 11px;
+    cursor: pointer;
+  }
+
+  .nc-close:hover {
+    color: var(--fg);
+  }
+
+  .nc-name {
+    font-size: 13px;
+    color: var(--fg);
+  }
+
+  .nc-addr {
+    margin-left: 8px;
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    color: var(--fg-dim);
+  }
+
+  .nc-lane {
+    margin: 0;
+    font-size: 11px;
+    color: var(--fg-muted);
+  }
+
+  .nc-warn {
+    margin: 0;
+    font-size: 11px;
+    color: var(--alarm);
+  }
+
+  .nc-watch {
+    margin: 0;
+    font-size: 11px;
+    color: var(--marked);
+  }
+
+  .nc-acts {
+    margin-top: 6px;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+
+  .nc-act {
+    background: none;
+    border: 1px solid var(--hair-2);
+    border-radius: 999px;
+    padding: 3px 10px;
+    font-size: 10.5px;
+    font-weight: 600;
+    color: var(--accent);
+    cursor: pointer;
+  }
+
+  .nc-act:hover {
+    border-color: var(--accent);
   }
 </style>
