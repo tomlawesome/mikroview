@@ -39,4 +39,8 @@ No new data colours. Shot in `shots/`, reviewed.
   all is a no, make it the bubble, it's orange, 'clear all', click
   once, it turns red 'confirm' click again to actually clear all."**
   — built as round 28.
-- Pending: the journey (five beats).
+- The journey (verbatim, 2026-08-30): beats 1–3 (attach · it
+  flows · the tour offers) — **"55,56,57 yes"**. Beat 4 (the tour)
+  — **"58, yes but it should highlight key handles/inputs/outputs"**
+  … **"and label/explain concisely"** — built as round 29. Beat 5
+  (the wizard) — **"59, yes"**.
