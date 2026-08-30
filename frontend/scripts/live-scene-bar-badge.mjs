@@ -80,7 +80,7 @@ if (raised.ok) {
     // It travels with the chrome: the neighbouring cards' bars carry the
     // same count, so no scene is blind to the alarm.
     const metricsBadge = await page
-      .$eval('.card[data-view="metrics"] .scene-bar .flag-badge', (el) => el.textContent.trim())
+      .$eval('.card[data-card="metrics"] .scene-bar .flag-badge', (el) => el.textContent.trim())
       .catch(() => null)
     check(
       metricsBadge === String(open),
@@ -92,17 +92,17 @@ if (raised.ok) {
     await page.waitForFunction(
       () => {
         const deck = document.querySelector('.deck')
-        const el = deck?.querySelector('.card[data-view="flags"]')
+        const el = deck?.querySelector('.card[data-card="docket"]')
         if (!el) return false
         return Math.abs(el.getBoundingClientRect().top - deck.getBoundingClientRect().top) < 2
       },
       null,
       { timeout: 10000 },
     )
-    check(true, 'clicking the badge rolls the Flags card to centre')
+    check(true, 'clicking the badge rolls the docket to centre, on its flags tab')
     check(
-      (await page.$eval('.roll-rail .rail-name.on', (el) => el.textContent.trim())) === 'Flags',
-      'and the roll rail agrees Flags is where we are',
+      (await page.$eval('.roll-rail .rail-name.on', (el) => el.textContent.trim())) === 'The docket',
+      'and the roll rail agrees the docket is where we are',
     )
     await page.waitForSelector('.flags-page', { timeout: 10000 })
     check(true, 'with the Flags scene actually mounted under it')
