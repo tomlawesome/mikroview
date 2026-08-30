@@ -14,4 +14,4 @@ the bar remain one filter.
 
 ## Owner verdicts
 
-Pending.
+- **Accepted** (2026-08-30): "Round 8, yeah much better!"
