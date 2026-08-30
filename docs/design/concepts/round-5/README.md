@@ -57,6 +57,29 @@ apparatus, not design.
 - Screenshots in `shots/`, regenerated with
   `cd frontend && node ../docs/design/concepts/round-5/capture.mjs`.
 
+## The owner's first batch (2026-08-30), and what it did to the round
+
+- **The door (v1) rejected in both directions**: "It needs to be much
+  nicer. I'd like a short snappy, fast to load across all platforms
+  login/logout like Orbit has, but more in tune with Mikroview's
+  purpose." Rebuilt as one sub-second beat: instant paint, the brink
+  draws, a miniature fall begins, underline credentials, no card, no
+  chrome; the way out storyboarded as three beats ending "your
+  router's logs keep arriving".
+- **The P/Q framing rejected**: "direction p and q are basically the
+  same except they're both missing some of the screens, when they both
+  need all those screens."
+- **The deck, from the owner's own read of the stacked format**: "a
+  vertical scroll and snap concept? I think the order no longer
+  matters — which is really cool, because the user can select their
+  OWN preferred order." Promoted to the design as **direction R
+  (`the-deck.html`)**, superseding P and Q: every scene a
+  full-viewport card in a scroll-snapped vertical deck, the operator's
+  own order, sign-in landing on their first card; the atlas stays the
+  jump navigator and gains the deck-order editor. The stacked-scene
+  format of rounds 1–5 was review apparatus; R adopts it deliberately
+  as the interaction model.
+
 ## Owner verdicts
 
-Pending.
+- Door v1: rejected (above). Door v2 and direction R: pending.
