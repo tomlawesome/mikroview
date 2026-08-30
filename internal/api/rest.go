@@ -129,6 +129,23 @@ func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// handleStatsTops serves #644 round 21's top-port/top-talker table
+// columns: store.Store.HourTops, computed fresh from whatever the ring
+// buffer currently holds. Deliberately its own endpoint rather than a
+// field folded into GET /api/stats above -- that one is polled by every
+// open browser tab every STATS_REFRESH_MS regardless of which page is
+// showing (App.svelte), and HourTops' backward scan of the last hour's
+// events is heavier than anything else Stats() returns, none of which
+// touches the buffer past its own O(1) rolling counters. Fetched only
+// by the Metrics page itself (Metrics.svelte), on the same cadence but
+// scoped to while that page is actually open -- the same pattern
+// Fall.svelte already uses for its own per-page poll. Same access tier
+// as GET /api/stats (see authzMatrix): a read over data that endpoint
+// already exposes in aggregate, just broken out per minute.
+func (s *Server) handleStatsTops(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]any{"tops": s.Store.HourTops()})
+}
+
 // badQueryParam is the one shape a malformed windowed-query parameter
 // takes across every endpoint that accepts one.
 //
