@@ -29,4 +29,5 @@ round 28. No new data colours.
 
 ## Owner verdicts
 
-- Pending: the outlined bubble; the labelled tour beat.
+- The outlined bubble (verbatim, 2026-08-30): **"61. perfect"**.
+- Pending: the labelled tour beat.
