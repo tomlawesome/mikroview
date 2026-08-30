@@ -19,7 +19,7 @@
 // group's own admin-only rows.
 
 import { chromium } from 'playwright'
-import { session, check, done } from './live-browser.mjs'
+import { session, check, done, goTo, openAtlas } from './live-browser.mjs'
 
 const URL_BASE = process.env.MV_URL
 
@@ -48,7 +48,7 @@ async function openWatchlist() {
   // engine only matches an element that *directly* contains the text --
   // see live-nav-rail.mjs's own note on why `.item:text-is(...)` stopped
   // working once that landed.
-  await page.click('.rail .item .label:text-is("Watchlist")')
+  await goTo(page, 'Watchlist')
   await page.waitForSelector('#panel-watchlist', { timeout: 10000 })
 }
 
@@ -214,12 +214,13 @@ await viewerPage.goto(URL_BASE, { waitUntil: 'networkidle' })
 await viewerPage.fill('input[autocomplete="username"]', VIEWER_USER)
 await viewerPage.fill('input[autocomplete="current-password"]', VIEWER_PASS)
 await viewerPage.click('button[type="submit"]')
-await viewerPage.waitForSelector('.rail .item', { timeout: 15000 })
+await viewerPage.waitForSelector('#main-content', { timeout: 15000 })
+await openAtlas(viewerPage)
 
-const viewerLabels = await viewerPage.$$eval('.rail .item', (els) => els.map((e) => e.textContent.trim()))
+const viewerLabels = await viewerPage.$$eval('.atlas .ports .port', (els) => els.map((e) => e.textContent.trim()))
 check(
   !viewerLabels.includes('Watchlist'),
-  `Watchlist -- and Suggestions with it -- is absent from a viewer's rail, not disabled -- rail shows ${JSON.stringify(viewerLabels)}`,
+  `Watchlist -- and Suggestions with it -- is absent from a viewer's atlas, not disabled -- atlas shows ${JSON.stringify(viewerLabels)}`,
 )
 
 await browser.close()

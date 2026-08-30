@@ -24,7 +24,7 @@
 //     loads and immediately 403s.
 
 import { chromium } from 'playwright'
-import { session, feedSyslog, check, done } from './live-browser.mjs'
+import { session, feedSyslog, check, done, goTo } from './live-browser.mjs'
 
 const URL_BASE = process.env.MV_URL
 
@@ -33,7 +33,7 @@ const { page, consoleErrors } = await session({ waitForEvents: 40 })
 const PEOPLE = '.door:has-text("Who may look in")'
 const MACHINES = '.door:has-text("Which machines may speak")'
 
-await page.click('.rail .item:has-text("The engine room")')
+await goTo(page, 'The engine room')
 await page.waitForFunction(
   () => document.querySelector('.page-header h2')?.textContent.trim() === 'The engine room',
   null,
@@ -185,9 +185,9 @@ await viewerPage.goto(URL_BASE, { waitUntil: 'networkidle' })
 await viewerPage.fill('input[autocomplete="username"]', VIEWER_USER)
 await viewerPage.fill('input[autocomplete="current-password"]', VIEWER_PASS)
 await viewerPage.click('button[type="submit"]')
-await viewerPage.waitForSelector('.rail .item', { timeout: 15000 })
+await viewerPage.waitForSelector('#main-content', { timeout: 15000 })
 
-await viewerPage.click('.rail .item:has-text("The engine room")')
+await goTo(viewerPage, 'The engine room')
 await viewerPage.waitForFunction(
   () => document.querySelector('.page-header h2')?.textContent.trim() === 'The engine room',
   null,

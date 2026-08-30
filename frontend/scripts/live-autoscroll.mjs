@@ -8,7 +8,7 @@
 // layout/scrolling, and the cross-view case only exists once a real
 // second view is actually mounted against the same running app.
 
-import { session, feedSyslog, check, done } from './live-browser.mjs'
+import { session, feedSyslog, check, done, goTo } from './live-browser.mjs'
 
 // Two labelled batches, comfortably past MAX_RENDERED_ROWS (800) between
 // them, so the freeze is exercised where the reported symptom actually
@@ -28,13 +28,13 @@ const { page } = await session({ waitForEvents: 400 })
 feedSyslog(450, 'batch-b')
 await page.waitForFunction(() => document.querySelectorAll('.row').length >= 800, null, { timeout: 30000 })
 
-const tooltipBefore = await page.getAttribute('header.toolbar button:has-text("Autoscroll")', 'title')
+const tooltipBefore = await page.getAttribute('.scene-bar button:has-text("Autoscroll")', 'title')
 check(/newest events/i.test(tooltipBefore ?? ''), `Autoscroll tooltip describes following new events (${tooltipBefore})`)
 
-await page.click('header.toolbar button:has-text("Autoscroll")')
+await page.click('.scene-bar button:has-text("Autoscroll")')
 await page.waitForTimeout(200)
 
-const tooltipAfter = await page.getAttribute('header.toolbar button:has-text("Autoscroll")', 'title')
+const tooltipAfter = await page.getAttribute('.scene-bar button:has-text("Autoscroll")', 'title')
 check(
   /stays put|hold/i.test(tooltipAfter ?? ''),
   `Autoscroll-off tooltip says the table stays put, not just "no auto-jump" (${tooltipAfter})`,
@@ -56,12 +56,12 @@ check((await page.locator('.row').count()) === frozenCount, `row count is unchan
 // Navigating away to another view and back must not disturb the freeze
 // -- LiveTable unmounts on every view switch, so this only proves
 // anything if appState.frozenPool genuinely outlives the component.
-await page.click('.rail .item:has-text("Metrics")')
+await goTo(page, 'Metrics')
 await page.waitForTimeout(300)
 
 // Back to the live view via its own rail item -- the rail has no
 // re-click-to-return-to-live behaviour the old menu trigger had.
-await page.click('.rail .item:has-text("Stream")')
+await goTo(page, 'Stream')
 await page.waitForTimeout(300)
 check(
   (await page.locator('.row[title*="after-freeze"]').count()) === 0,
@@ -91,7 +91,7 @@ check(
 )
 
 // Autoscroll back on releases the freeze.
-await page.click('header.toolbar button:has-text("Autoscroll")')
+await page.click('.scene-bar button:has-text("Autoscroll")')
 feedSyslog(20, 'resumed')
 await page.waitForFunction(() => document.querySelector('.row[title*="resumed"]') !== null, {
   timeout: 5000,

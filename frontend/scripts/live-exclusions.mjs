@@ -19,7 +19,7 @@
 // disabled, per #490's grammar.
 
 import { chromium } from 'playwright'
-import { session, check, done, feedPortScan, waitForFlag } from './live-browser.mjs'
+import { session, check, done, feedPortScan, waitForFlag, goTo } from './live-browser.mjs'
 
 const URL_BASE = process.env.MV_URL
 
@@ -35,7 +35,7 @@ async function openFlags() {
   // engine only matches an element that *directly* contains the text --
   // see live-nav-rail.mjs's own note on why `.item:text-is(...)` stopped
   // working once that landed.
-  await page.click('.rail .item .label:text-is("Flags")')
+  await goTo(page, 'Flags')
   await page.waitForSelector('#panel-flags', { timeout: 10000 })
 }
 
@@ -177,9 +177,9 @@ await viewerPage.goto(URL_BASE, { waitUntil: 'networkidle' })
 await viewerPage.fill('input[autocomplete="username"]', VIEWER_USER)
 await viewerPage.fill('input[autocomplete="current-password"]', VIEWER_PASS)
 await viewerPage.click('button[type="submit"]')
-await viewerPage.waitForSelector('.rail .item', { timeout: 15000 })
+await viewerPage.waitForSelector('#main-content', { timeout: 15000 })
 
-await viewerPage.click('.rail .item .label:text-is("Flags")')
+await goTo(viewerPage, 'Flags')
 await viewerPage.waitForSelector('.flags', { timeout: 10000 })
 check(true, 'a viewer reaches the Flags page')
 check(

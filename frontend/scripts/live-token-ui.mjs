@@ -17,7 +17,7 @@
 // is the secret shown exactly once, does revoking it stop the push --
 // asked at the new location rather than rewritten around it.
 
-import { session, check, done } from './live-browser.mjs'
+import { session, check, done, goTo } from './live-browser.mjs'
 
 const URL_BASE = process.env.MV_URL
 
@@ -28,7 +28,7 @@ const { page, consoleErrors } = await session()
 // be one badly-chosen token name away from clicking Remove on a person.
 const DOOR = '.door:has-text("Which machines may speak")'
 
-await page.click('.rail .item:has-text("The engine room")')
+await goTo(page, 'The engine room')
 await page.waitForFunction(
   () => document.querySelector('.page-header h2')?.textContent.trim() === 'The engine room',
   null,

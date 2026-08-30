@@ -177,6 +177,31 @@ export async function dismissSetupWizard(page) {
  * `landing: 'fall'` (live-fall.mjs's own case) to stay on the fall
  * instead of being moved off it.
  */
+/**
+ * openAtlas opens the atlas overlay -- the app's one navigator since
+ * #633 retired the rail and toolbar. Every scene's bar carries the
+ * wordmark button, and `m` works everywhere (guarded against inputs),
+ * so the keyboard is the reliable route for scripts.
+ */
+export async function openAtlas(page) {
+  if ((await page.locator('.atlas').count()) > 0) return
+  await page.keyboard.press('m')
+  await page.waitForSelector('.atlas', { timeout: 5000 })
+}
+
+/**
+ * goTo navigates by destination label exactly as an operator does:
+ * open the atlas, click the destination. Labels are the atlas's own
+ * ("The fall", "Stream", "Flags", "The engine room", ...). The overlay
+ * closes itself on navigation; waiting for that keeps a scenario from
+ * asserting against a page still under the dialog.
+ */
+export async function goTo(page, label) {
+  await openAtlas(page)
+  await page.click(`.atlas .ports .port:text-is("${label}")`)
+  await page.waitForSelector('.atlas', { state: 'detached', timeout: 5000 })
+}
+
 export async function session({ waitForEvents = 0, dismissSetup = true, landing = 'stream' } = {}) {
   browser = await chromium.launch()
   // ignoreHTTPSErrors, because the certificate under test is one
@@ -217,7 +242,7 @@ export async function session({ waitForEvents = 0, dismissSetup = true, landing 
   if (dismissSetup) await dismissSetupWizard(page)
 
   if (landing === 'stream') {
-    await page.click('.rail .item .label:text-is("Stream")')
+    await goTo(page, 'Stream')
     await page.waitForSelector('input.rule', { timeout: 15000 })
   }
 

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 //
-// The toolbar's uptime readout: present, plausible, and actually
+// The scene bar's uptime readout: present, plausible, and actually
 // counting. The counting assertion matters more than presence -- a badge
 // that renders once and never ticks would pass any static check while
 // being exactly the stale readout the feature exists to avoid.

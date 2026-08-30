@@ -45,6 +45,7 @@
 // silence rather than a guess.
 
 import { fetchDevices, fetchRouterRules, type RouterFilterRule } from './api'
+import { appState } from './state.svelte'
 
 export type BoundaryCoverage = 'unknown' | 'dark' | 'observed'
 
@@ -61,6 +62,10 @@ export interface FallBoundary {
   srcAddressList: string
   label: string
   coverage: BoundaryCoverage
+  // The band's epithet, from the pushed rules' own comments -- the
+  // logging rule's comment wins, else the first non-empty one. Real
+  // operator-written words ("household", "iot egress"), never invented.
+  epithet: string
 }
 
 /**
@@ -103,7 +108,15 @@ function bandClass(chain: string, coverage: BoundaryCoverage): 0 | 1 | 2 {
 export function boundariesFromRules(rules: RouterFilterRule[], anyRulesPushed: boolean): FallBoundary[] {
   const byKey = new Map<
     string,
-    { chain: string; inInterface: string; outInterface: string; sawLog: boolean; srcAddressList: string }
+    {
+      chain: string
+      inInterface: string
+      outInterface: string
+      sawLog: boolean
+      srcAddressList: string
+      epithet: string
+      epithetFromLog: boolean
+    }
   >()
   for (const r of rules) {
     const inIf = r.inInterface ?? ''
@@ -111,10 +124,22 @@ export function boundariesFromRules(rules: RouterFilterRule[], anyRulesPushed: b
     const key = boundaryKeyOf(r.chain, inIf, outIf)
     let entry = byKey.get(key)
     if (!entry) {
-      entry = { chain: r.chain, inInterface: inIf, outInterface: outIf, sawLog: false, srcAddressList: '' }
+      entry = {
+        chain: r.chain,
+        inInterface: inIf,
+        outInterface: outIf,
+        sawLog: false,
+        srcAddressList: '',
+        epithet: '',
+        epithetFromLog: false,
+      }
       byKey.set(key, entry)
     }
     if (r.log) entry.sawLog = true
+    if (r.comment && (!entry.epithet || (r.log && !entry.epithetFromLog))) {
+      entry.epithet = r.comment
+      entry.epithetFromLog = !!r.log
+    }
     // First non-empty address-list name wins and sticks -- rules on the
     // same boundary naming the same list is the expected case, and a
     // real disagreement is rarer than a rule further down the table
@@ -132,6 +157,7 @@ export function boundariesFromRules(rules: RouterFilterRule[], anyRulesPushed: b
       srcAddressList: e.srcAddressList,
       label: boundaryLabel(e.chain, e.inInterface, e.outInterface, e.srcAddressList),
       coverage,
+      epithet: e.epithet,
     })
   }
   list.sort((a, b) => {
@@ -141,6 +167,43 @@ export function boundariesFromRules(rules: RouterFilterRule[], anyRulesPushed: b
     return a.label.localeCompare(b.label)
   })
   return list
+}
+
+// Round 3's revalidated lane set (the record's starting palette; a
+// full theme pass revisits). Where a pushed rule names its address
+// list with one of the round's own network names, that boundary keeps
+// the round's colour for it; other observed boundaries take lanes in
+// adjacency order. Shared by the fall's band headers and the atlas
+// overlay's zones so one boundary wears one colour everywhere.
+export const FALL_LANES = ['#3987e5', '#199e70', '#d76a9e', '#c98500']
+export const FALL_LANE_BY_NAME: Record<string, string> = {
+  lan: '#3987e5',
+  srv: '#199e70',
+  guest: '#d76a9e',
+  iot: '#c98500',
+}
+
+/** laneColors maps boundary key → lane colour ('' for dark/unknown). */
+export function laneColors(boundaries: FallBoundary[]): Map<string, string> {
+  const m = new Map<string, string>()
+  let i = 0
+  for (const b of boundaries) {
+    if (b.coverage === 'observed') m.set(b.key, FALL_LANE_BY_NAME[b.srcAddressList] ?? FALL_LANES[i++ % FALL_LANES.length])
+    else m.set(b.key, '')
+  }
+  return m
+}
+
+/**
+ * The reach gesture, shared by the fall's bands and the atlas overlay's
+ * zones: open Stream with the filters filled by the act of clicking
+ * (#438's model). A port joins the filter set when the click named one.
+ */
+export function openBoundaryInStream(b: FallBoundary, port?: number) {
+  appState.setFilter('interface', b.inInterface || b.outInterface || '')
+  appState.setFilter('chain', b.chain)
+  if (typeof port === 'number' && port > 0) appState.setFilter('port', String(port))
+  appState.view = 'live'
 }
 
 class FallState {

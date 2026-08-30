@@ -35,7 +35,7 @@
 // means. Do not "fix" a hidden line by widening the timeout: it will
 // never become visible.
 
-import { session, feedSyslog, feedPortScan, waitForFlag, check, responsive, done } from './live-browser.mjs'
+import { session, feedSyslog, feedPortScan, waitForFlag, check, responsive, done, goTo } from './live-browser.mjs'
 
 // Enough traffic for several minutes of the hour to carry a rate, and a
 // scan so at least one flag type has an episode to draw a tick for.
@@ -90,7 +90,7 @@ async function cursorLine(page, root) {
   })
 }
 
-await page.click('.rail .item .label:text-is("Metrics")')
+await goTo(page, 'Metrics')
 
 // --- The default view, actually drawn -----------------------------------
 await page.locator(SEISMOGRAPH).waitFor({ state: 'visible', timeout: 10000 })
@@ -188,7 +188,7 @@ const stored = await page.evaluate(() => localStorage.getItem('mikroview-metrics
 check(stored === 'register', `the chosen view is persisted -- got ${JSON.stringify(stored)}`)
 
 await page.reload({ waitUntil: 'networkidle' })
-await page.click('.rail .item .label:text-is("Metrics")')
+await goTo(page, 'Metrics')
 // No click on a view button between the reload and this wait: if the
 // preference were applied after first paint, the seismograph would be
 // on screen here instead.

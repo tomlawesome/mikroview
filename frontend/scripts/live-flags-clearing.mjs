@@ -76,7 +76,7 @@
 
 import { fileURLToPath } from 'url'
 import { request } from 'playwright'
-import { session, check, done, feedPortScan, waitForFlag } from './live-browser.mjs'
+import { session, check, done, feedPortScan, waitForFlag, goTo } from './live-browser.mjs'
 
 const ACTIVE = 'section[aria-labelledby="active-heading"] .card'
 const PERMANENT_EXCLUSION_ID = 'port_scan:198.51.100.78'
@@ -123,7 +123,7 @@ feedPortScan(20, '198.51.100.78')
 const { page } = await session()
 
 async function openMenuView(label) {
-  await page.click(`.rail .item:has-text("${label}")`)
+  await goTo(page, label)
 }
 
 // Server-side first (#354): a locator timeout here cannot say whether

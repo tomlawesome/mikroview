@@ -23,7 +23,7 @@
 // clear of every existing ordering assumption instead of adding a new one
 // nothing else knows to avoid.
 
-import { session, feedSyslog, feedRaw, check, responsive, done } from './live-browser.mjs'
+import { session, feedSyslog, feedRaw, check, responsive, done, goTo } from './live-browser.mjs'
 
 const URL_BASE = process.env.MV_URL
 
@@ -90,6 +90,22 @@ check(
         inInterface: 'ether9',
         outInterface: 'bridge9',
       },
+      {
+        // The cap test's own boundary. ether1/bridge1 is feedSyslog's
+        // fixed template pair, shared by most of the suite, so a port
+        // count asserted there is whatever the rest of the run left
+        // behind (209 on one full run, not this scenario's 12). This
+        // pair is fed by nothing but the cap loop below.
+        ordinal: 2,
+        comment: 'cap lane',
+        chain: 'forward',
+        action: 'drop',
+        srcAddressList: '',
+        logPrefix: 'D|cap-test|',
+        log: true,
+        inInterface: 'ether6',
+        outInterface: 'bridge6',
+      },
     ],
   })) === 200,
   'the filter-rule table is accepted through the real ingest endpoint',
@@ -100,12 +116,14 @@ check(
 // carrier (port 443).
 feedSyslog(30, 'fall-cadence')
 
-// A further eleven distinct ports on the *same* boundary, one event
-// each -- enough to push its port count past MAX_CARRIERS (8) and
-// exercise the cap + "+n quieter" affordance the review asked for.
-for (let p = 6000; p < 6011; p++) {
+// Twelve distinct ports on the cap boundary (ether6/bridge6, fed by
+// nothing else in the suite), one event each -- enough to push its port
+// count past MAX_CARRIERS (8) and exercise the cap + "+n quieter"
+// affordance the review asked for, without the shared-instance port
+// pollution that made this count unassertable on ether1/bridge1.
+for (let p = 6000; p < 6012; p++) {
   feedRaw(
-    `firewall,info D|cap-test| forward: in:ether1 out:bridge1, connection-state:new, proto TCP (SYN), 203.0.113.50:5000->192.168.1.10:${p}, len 60`,
+    `firewall,info D|cap-test| forward: in:ether6 out:bridge6, connection-state:new, proto TCP (SYN), 203.0.113.50:5000->192.168.1.10:${p}, len 60`,
   )
 }
 
@@ -167,8 +185,16 @@ check(
   'a carrier renders for the steady talker on port 443, labelled at the band foot',
 )
 check(
-  (await observedBand.locator('.spectrum .mark[data-port="443"]').count()) > 0,
+  (await observedBand.locator('.spectrum .peak[data-port="443"]').count()) > 0,
   'the live spectrum strip renders a peak for the port-443 carrier -- "what is arriving this instant"',
+)
+check(
+  ((await page.locator('.fall .now-caption').textContent()) ?? '').includes('NOW ·'),
+  'the NOW line carries its labelled moment -- "the spectrum above is this instant"',
+)
+check(
+  (await observedBand.locator('.band-epithet').textContent())?.trim() === 'log the household',
+  "the band's epithet is the pushed rule's own comment, not an invented name",
 )
 const dashCount = await observedBand.locator('.waterfall .mark[data-port="443"]').count()
 check(dashCount > 0, 'the carrier draws bucketed dash marks below the NOW line, not an aggregate lane bar')
@@ -183,11 +209,14 @@ const dashWidth = await observedBand.locator('.waterfall .mark[data-port="443"]'
 check(Number(dashWidth) <= 4, `a carrier's dash is a thin strip, not a fill -- got width="${dashWidth}"`)
 
 // --- Cap + "+n quieter" affordance -----------------------------------------
-// 12 distinct ports landed on this boundary (443, plus 6000..6010); the
-// cap keeps only the 8 most recently active as individual carriers.
-const carrierCount = await observedBand.locator('.carrier-hit').count()
+// 12 distinct ports landed on the dedicated cap boundary (ether6/
+// bridge6, fed by nothing else in the suite); the cap keeps only the 8
+// most recently active as individual carriers.
+const capBand = page.locator('.fall .band').filter({ has: page.locator('.band-label:text-is("ether6 → bridge6")') })
+await capBand.waitFor({ timeout: 10000 })
+const carrierCount = await capBand.locator('.carrier-hit').count()
 check(carrierCount === 8, `at most 8 carriers render per band -- got ${carrierCount}`)
-const quieterText = await observedBand.locator('.quieter').textContent()
+const quieterText = await capBand.locator('.quieter').textContent()
 check(
   quieterText?.trim() === '+4 quieter',
   `the remaining 4 ports fold into a "+n quieter" affordance -- got "${quieterText}"`,
@@ -215,7 +244,7 @@ check(chainFilter === 'forward', `clicking the band fills Stream's chain filter 
 
 // Back to the fall, and this time click the carrier itself -- the port
 // should join the filter set too.
-await page.click('.rail .item .label:text-is("The fall")')
+await goTo(page, 'The fall')
 await page.waitForSelector('.fall .band', { timeout: 10000 })
 await page
   .locator('.fall .band')
@@ -228,7 +257,7 @@ check(portFilter === '443', `clicking a carrier also fills Stream's port filter 
 
 // --- prefers-reduced-motion disables the now-line pulse --------------------
 await page.emulateMedia({ reducedMotion: 'reduce' })
-await page.click('.rail .item .label:text-is("The fall")')
+await goTo(page, 'The fall')
 await page.waitForSelector('.fall .band', { timeout: 10000 })
 const animName = await page.$eval('.now-dot', (el) => getComputedStyle(el).animationName)
 check(animName === 'none', `reduced motion disables the now-line pulse -- got animation-name "${animName}"`)
