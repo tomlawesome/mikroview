@@ -25,6 +25,20 @@ for scenario in frontend/scripts/live-*.mjs; do
     *live-routeros-real.mjs) continue ;;
   esac
   echo "== $scenario"
-  ( cd frontend && node "../$scenario" ) || status=1
+  # A scenario that *throws* -- a stale selector, an import error -- dies
+  # before it can print its own RESULT line, so the log showed a header,
+  # some passing checks and then nothing. Reading a run by counting
+  # RESULT: PASS against RESULT: FAIL therefore showed a clean browser
+  # phase while a scenario was timing out in it, which is exactly what
+  # happened with #661 and went unnoticed across two full runs.
+  #
+  # The exit status was always right and `make live-check` always failed.
+  # What was missing was a line saying so where a reader looks for one.
+  if ( cd frontend && node "../$scenario" ); then
+    :
+  else
+    echo "RESULT: FAIL ($scenario exited $?, before printing its own result)"
+    status=1
+  fi
 done
 exit $status
