@@ -54,7 +54,11 @@ await page.waitForTimeout(200)
 check((await gridColumnCount()) === 3, 'the grid renders 3 columns')
 
 // The split button must still work at the narrowest density -- this is
-// the #198/#199 coordination the issue calls out by name.
+// the #198/#199 coordination the issue calls out by name. The clear
+// actions live in the card's drawer now (#633, rounds 18-19), so reach
+// them through the first card's chevron.
+await page.click('.openc >> nth=0')
+await page.waitForSelector('.split-arrow', { timeout: 5000 })
 await page.click('.split-arrow >> nth=0')
 check(await page.isVisible('.split-menu'), 'the split-button dropdown still opens at 3 columns')
 await page.keyboard.press('Escape')
