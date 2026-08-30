@@ -80,6 +80,25 @@ apparatus, not design.
   format of rounds 1–5 was review apparatus; R adopts it deliberately
   as the interaction model.
 
+## The owner's second batch (2026-08-30), and what it did to R
+
+- **Topography ⇄ atlas chart unified**: "should [the atlas chart] be
+  a reduced version of the Topography graph from a different viewing
+  angle? ... maybe it's not even its own screen, and we just have a
+  cool looking slider/click toggle that switches (with a cool
+  transition) between the graph and explore (map) views?" Built: the
+  deck's topography card carries an EXPLORE ⇄ ORBIT toggle — one SVG,
+  one node set, two coordinate systems; the nodes travel on toggle.
+  #485's Map and the atlas's chart become two angles of one graph.
+- **The destinations footer rejected**: "don't like the presentation
+  of the links at the bottom ... those do belong in some kind of menu
+  somewhere ... I don't want a cookie cutter boring menu." Built: the
+  far orbit — destinations drawn as diamond bodies on the atlas's
+  outermost orbit, same chart language as the zones; the footer grid
+  is gone. (Fallback candidate if this misses: a radial menu around
+  the router station.)
+
 ## Owner verdicts
 
-- Door v1: rejected (above). Door v2 and direction R: pending.
+- Door v1: rejected. P/Q framing: rejected, superseded by R.
+- Door v2, direction R, the topography toggle, the far orbit: pending.
