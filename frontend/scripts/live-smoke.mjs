@@ -11,7 +11,7 @@ const { page, consoleErrors } = await session({ waitForEvents: 100 })
 
 // Scoped to the Stream card: the deck (#616) keeps the neighbouring
 // cards mounted, and their scenes render .row elements of their own.
-const streamRows = () => page.evaluate(() => document.querySelectorAll('.card[data-view="live"] .row').length)
+const streamRows = () => page.evaluate(() => document.querySelectorAll('.card[data-card="live"] .row').length)
 const rows = await streamRows()
 check(rows >= 100, `live view rendered ${rows} events`)
 

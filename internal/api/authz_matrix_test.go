@@ -114,11 +114,15 @@ var authzMatrix = []routeExpectation{
 		"the pushed firewall rule table (#186 step 4) -- same tier as the event stream it annotates: rule comments/chains are already visible in events, and the lookup button is a user-facing affordance"},
 	{http.MethodGet, "/api/routeros/{device}/nat", accessUser,
 		"the pushed NAT table, same reasoning as the rules row above"},
+	{http.MethodGet, "/api/routeros/{device}/addresses", accessUser,
+		"the pushed /ip/address table (#627), same tier as the rules/NAT rows above"},
 	{http.MethodGet, "/api/flags", accessUser, "core read"},
 	{http.MethodPost, "/api/flags/clear-all", accessUser,
 		"same reversibility as the per-flag clear below, at bulk -- regular clears only, never creates an exclusion"},
 	{http.MethodPost, "/api/flags/{id}/clear", accessUser,
 		"reversible: a cleared flag raises again on the next matching event, so any user may dismiss noise"},
+	{http.MethodGet, "/api/coverage/declarations", accessUser,
+		"a coverage-gap declaration (#630/#392) explains why a boundary-direction pair is intentionally quiet -- reading that explanation is the same viewer-tier read as GET /api/definitions, not the admin-only write that creates one"},
 	{http.MethodPost, "/api/flags/{id}/verdict", accessUser,
 		"#638: expected/noise are exactly as reversible as the plain clear above (same clearLocked path, " +
 			"see flags.Store.SetVerdict), and real is reversible too -- it clears nothing and creates no " +
@@ -169,6 +173,10 @@ var authzMatrix = []routeExpectation{
 	{http.MethodGet, "/api/entities", accessAdmin, "admin-managed labels/tags"},
 	{http.MethodPost, "/api/entities", accessAdmin, "admin-managed labels/tags"},
 	{http.MethodDelete, "/api/entities", accessAdmin, "admin-managed labels/tags"},
+	{http.MethodPut, "/api/coverage/declarations/{key}", accessAdmin,
+		"declaring a boundary intentionally quiet is an on-record admin explanation, same weight as an entity label -- a non-admin should not be able to author it"},
+	{http.MethodDelete, "/api/coverage/declarations/{key}", accessAdmin,
+		"undeclares a coverage gap, re-exposing it as unexplained -- same tier as creating it"},
 
 	{http.MethodGet, "/api/suggestions", accessAdmin,
 		"a suggestion's Justification names a specific rule/device -- same tier as the expectation definitions it can become"},

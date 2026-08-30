@@ -18,6 +18,7 @@
 
   export type IconName =
     | 'fall'
+    | 'map'
     | 'stream'
     | 'metrics'
     | 'audit'
@@ -55,6 +56,16 @@
     <path d="M3 2.5v3M8 2.5v3M13 2.5v3" />
     <path d="M2 7h12" />
     <path d="M3 9v4.5M8 9v4.5M13 9v3" />
+  {:else if name === 'map'}
+    <!-- The topography's own shape: the router above, ribs down to the
+         lanes -- dots-and-ribs, matching the shelf's mini. -->
+    <circle cx="8" cy="3.5" r="2" />
+    <path d="M7 5.5 C 5 8.5, 3.5 9.5, 3 12" />
+    <path d="M8 5.5 V 12" />
+    <path d="M9 5.5 C 11 8.5, 12.5 9.5, 13 12" />
+    <circle cx="3" cy="13" r="1" />
+    <circle cx="8" cy="13" r="1" />
+    <circle cx="13" cy="13" r="1" />
   {:else if name === 'stream'}
     <path d="M2 4h12M2 8h8M2 12h10" />
   {:else if name === 'metrics'}

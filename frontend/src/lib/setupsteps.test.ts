@@ -148,6 +148,18 @@ describe('generated commands', () => {
   it('emits nothing for a kind it does not know', () => {
     expect(pushBlock('h', 't', 'not-a-kind')).toBe('')
   })
+
+  // #627: the pushed /ip/address table, same renaming contract as the
+  // filter-rule case above.
+  it('renames /ip/address fields to mikroview names', () => {
+    const block = pushBlock('h', 't', 'ip-address')
+    expect(block).toContain('/ip/address print as-value')
+    expect(block).toContain('"address"=($v->"address")')
+    expect(block).toContain('"network"=($v->"network")')
+    expect(block).toContain('"interface"=($v->"interface")')
+    expect(block).toContain('"comment"=($v->"comment")')
+    expect(block).toContain('{$rec}')
+  })
 })
 
 describe('step status', () => {

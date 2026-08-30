@@ -51,6 +51,8 @@ export const navGroups: NavGroup[] = [
     name: 'Live',
     items: [
       { label: 'The fall', view: 'fall', icon: 'fall', title: 'The live receiver: a band per boundary, live spectrum, and time pouring down' },
+      // The Map slot un-reserves (#627): topography exists now.
+      { label: 'Topography', view: 'topography', icon: 'map', title: 'The map of the place: internet above, router at the waist, your lanes below' },
       { label: 'Stream', view: 'live', icon: 'stream', title: 'The live event stream' },
     ],
   },
