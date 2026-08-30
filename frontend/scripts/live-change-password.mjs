@@ -16,7 +16,7 @@
 // did.
 
 import { chromium } from 'playwright'
-import { session, check, done } from './live-browser.mjs'
+import { session, check, done, openAccountMenu } from './live-browser.mjs'
 
 const URL_BASE = process.env.MV_URL
 const USER = process.env.MV_USER
@@ -97,15 +97,18 @@ check(reLogin.status === 401, 'the old password no longer signs in')
 const newLogin = await api(other.request, 'POST', '/api/auth/login', { username: USER, password: NEW_PASS })
 check(newLogin.status === 200, `the new password signs in (${newLogin.status})`)
 
-// --- The rail entry an operator actually uses ---------------------------
+// --- The menu entry an operator actually uses ---------------------------
+// The account actions live on the scene bar's account chip since #616's
+// deck retired the rail, the toolbar and the atlas overlay.
 
 await page.reload({ waitUntil: 'networkidle' })
-await page.click('.rail .account .footer-item')
+await page.waitForSelector('#main-content', { timeout: 15000 })
+await openAccountMenu(page)
 check(
-  await page.isVisible('.rail .popover-item:has-text("Change password")'),
-  'the account popover offers Change password',
+  await page.isVisible('.account .menu button.row:has-text("Change password")'),
+  'the account menu offers Change password',
 )
-await page.click('.rail .popover-item:has-text("Change password")')
+await page.click('.account .menu button.row:has-text("Change password")')
 check(await page.isVisible('[aria-label="Change password"]'), 'the dialog opens')
 check(
   await page.isVisible('text=signed out'),

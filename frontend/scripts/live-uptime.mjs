@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 //
-// The toolbar's uptime readout: present, plausible, and actually
+// The scene bar's uptime readout: present, plausible, and actually
 // counting. The counting assertion matters more than presence -- a badge
 // that renders once and never ticks would pass any static check while
 // being exactly the stale readout the feature exists to avoid.
@@ -9,7 +9,10 @@ import { session, check, done } from './live-browser.mjs'
 
 const { page, consoleErrors } = await session()
 
-const badge = page.locator('.uptime')
+// The active card's own badge: the deck (#616) mounts the neighbouring
+// cards too, each scene bar with an uptime readout of its own, so a
+// bare .uptime resolves to three elements and trips strict mode.
+const badge = page.locator('.card[aria-hidden="false"] .uptime')
 await badge.waitFor({ timeout: 10000 })
 const first = await badge.textContent()
 // [Nd Nh Nm NNs] -- all four units always shown, seconds zero-padded to

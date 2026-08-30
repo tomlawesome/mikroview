@@ -70,10 +70,16 @@ async function signedInPage(scheme) {
   await page.fill('input[autocomplete="username"]', USER)
   await page.fill('input[autocomplete="current-password"]', PASS)
   await page.click('button[type="submit"]')
-  await page.waitForSelector('.rail .item', { timeout: 15000 })
-  await page.click('.rail .item:has-text("The engine room")')
+  await page.waitForSelector('#main-content', { timeout: 15000 })
+  // The operate pages live on the scene bar's account chip since #616's
+  // deck retired the rail. Standalone here rather than importing
+  // live-browser.mjs's goTo(): this capture tool deliberately stays
+  // outside the scenario contract.
+  await page.click('.card[aria-hidden="false"] .account button.chip')
+  await page.waitForSelector('.account .menu', { timeout: 5000 })
+  await page.click('.account .menu button.row:text-is("Settings")')
   await page.waitForFunction(
-    () => document.querySelector('.page-header h2')?.textContent.trim() === 'The engine room',
+    () => document.querySelector('.page-header h2')?.textContent.trim() === 'Settings',
     null,
     { timeout: 10000 },
   )

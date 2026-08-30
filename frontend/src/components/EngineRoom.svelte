@@ -113,7 +113,7 @@
 </script>
 
 <div class="page scrollbar">
-  <PageHeader title="The engine room" readOnly={!isAdmin} />
+  <PageHeader title="Settings" readOnly={!isAdmin} />
 
   {#if appState.stats}
     <p class="arrives">

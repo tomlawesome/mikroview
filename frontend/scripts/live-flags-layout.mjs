@@ -7,7 +7,7 @@
 // resizing the viewport rather than asserting the media query exists.
 
 import { fileURLToPath } from 'url'
-import { session, check, done, feedPortScan } from './live-browser.mjs'
+import { session, check, done, feedPortScan, goTo } from './live-browser.mjs'
 
 
 
@@ -20,7 +20,7 @@ feedPortScan(20, '198.51.100.91')
 const { page } = await session()
 
 async function openMenuView(label) {
-  await page.click(`.rail .item:has-text("${label}")`)
+  await goTo(page, label)
 }
 
 await openMenuView('Flags')

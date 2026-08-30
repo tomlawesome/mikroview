@@ -17,6 +17,7 @@
   // a missing-export error rather than the union.
 
   export type IconName =
+    | 'fall'
     | 'stream'
     | 'metrics'
     | 'audit'
@@ -48,7 +49,13 @@
   aria-hidden="true"
   focusable="false"
 >
-  {#if name === 'stream'}
+  {#if name === 'fall'}
+    <!-- Time pouring downward past a band line -- the fall's own shape,
+         distinct from 'stream's horizontal rows. -->
+    <path d="M3 2.5v3M8 2.5v3M13 2.5v3" />
+    <path d="M2 7h12" />
+    <path d="M3 9v4.5M8 9v4.5M13 9v3" />
+  {:else if name === 'stream'}
     <path d="M2 4h12M2 8h8M2 12h10" />
   {:else if name === 'metrics'}
     <path d="M3 13.5V8M8 13.5V2.5M13 13.5V6" />

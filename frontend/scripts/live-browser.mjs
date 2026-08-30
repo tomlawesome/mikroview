@@ -168,7 +168,85 @@ export async function dismissSetupWizard(page) {
   }
 }
 
-export async function session({ waitForEvents = 0, dismissSetup = true } = {}) {
+/**
+ * session's own landing default is 'stream' (#616 retired #544's interim
+ * -- the fall is the real landing page now, not Stream) so that every
+ * scenario written against the old landing keeps working unmodified:
+ * session() signs in, then navigates to Stream itself before returning,
+ * exactly where those scenarios already assume they start. Pass
+ * `landing: 'fall'` (live-fall.mjs's own case) to stay on the fall
+ * instead of being moved off it.
+ */
+/**
+ * SCENES maps the deck's visible names to their view keys (Deck.svelte's
+ * own table). Anything not in here is an operate page or account action,
+ * reached through the account chip's menu instead.
+ */
+const SCENES = {
+  'The fall': 'fall',
+  Metrics: 'metrics',
+  Stream: 'live',
+  Flags: 'flags',
+  Watchlist: 'watchlist',
+}
+
+/**
+ * openAccountMenu opens the scene bar's account chip menu -- where the
+ * operate pages and account actions live since #616's deck retired the
+ * atlas overlay.
+ *
+ * Scoped to the card that is actually centred: the deck mounts the
+ * active card *and its neighbours*, each carrying its own scene bar, so
+ * a bare `.chip` selector can resolve to an off-viewport neighbour --
+ * and clicking that would scroll the deck to it. Outside the deck (the
+ * operate pages) there is exactly one scene bar and no cards at all.
+ */
+export async function openAccountMenu(page) {
+  if ((await page.locator('.account .menu').count()) > 0) return
+  const inDeck = (await page.locator('.deck').count()) > 0
+  const chip = inDeck
+    ? page.locator('.card[aria-hidden="false"] .account button.chip')
+    : page.locator('.account button.chip')
+  await chip.click()
+  await page.waitForSelector('.account .menu', { timeout: 5000 })
+}
+
+/**
+ * goTo navigates by visible label exactly as an operator does. Deck
+ * scenes ("The fall", "Metrics", "Stream", "Flags", "Watchlist") go via
+ * the roll rail's name buttons; everything else ("Settings",
+ * "Fleet", "Entities", "Audit log", "Run setup…", ...) via the account
+ * chip's menu row of the same text.
+ *
+ * For a scene, waits until the card has actually rolled to centre --
+ * appState.view flips on click, but the smooth scroll runs ~700ms and a
+ * scenario reading geometry mid-roll would see a card in flight.
+ */
+export async function goTo(page, label) {
+  const view = SCENES[label]
+  if (view) {
+    await page.click(`.roll-rail button.rail-name:text-is("${label}")`)
+    await page.waitForFunction(
+      (v) => {
+        const deck = document.querySelector('.deck')
+        const el = deck?.querySelector(`.card[data-view="${v}"]`)
+        if (!el) return false
+        // Bounding rects, not offsetTop vs scrollTop: offsetTop is
+        // measured from the offset parent, so anything above the deck
+        // (the connection banner, say) shifts it and the two never agree.
+        return Math.abs(el.getBoundingClientRect().top - deck.getBoundingClientRect().top) < 2
+      },
+      view,
+      { timeout: 10000 },
+    )
+  } else {
+    await openAccountMenu(page)
+    await page.click(`.account .menu button.row:text-is("${label}")`)
+    await page.waitForSelector('.account .menu', { state: 'detached', timeout: 5000 })
+  }
+}
+
+export async function session({ waitForEvents = 0, dismissSetup = true, landing = 'stream' } = {}) {
   browser = await chromium.launch()
   // ignoreHTTPSErrors, because the certificate under test is one
   // mikroview generated for itself seconds ago -- self-signed, with no
@@ -197,16 +275,27 @@ export async function session({ waitForEvents = 0, dismissSetup = true } = {}) {
   await page.fill('input[autocomplete="username"]', USER)
   await page.fill('input[autocomplete="current-password"]', PASS)
   await page.click('button[type="submit"]')
-  await page.waitForSelector('input.rule', { timeout: 15000 })
+  // #main-content is the one marker present on every signed-in view
+  // (App.svelte wraps all of them in it) -- unlike the old `input.rule`
+  // wait, it does not assume which view is the landing page.
+  await page.waitForSelector('#main-content', { timeout: 15000 })
 
   // Before anything else touches the page: a first-run instance layers
   // the setup modal over the shell, and every scenario but the wizard's
   // own wants it out of the way. See dismissSetupWizard.
   if (dismissSetup) await dismissSetupWizard(page)
 
+  if (landing === 'stream') {
+    await goTo(page, 'Stream')
+    await page.waitForSelector('input.rule', { timeout: 15000 })
+  }
+
   if (waitForEvents > 0) {
+    // Scoped to the Stream card: the deck keeps neighbouring cards
+    // mounted, and their scenes render .row elements of their own, so a
+    // bare .row count can be satisfied before any event has rendered.
     await page.waitForFunction(
-      (n) => document.querySelectorAll('.row').length >= n,
+      (n) => document.querySelectorAll('.card[data-view="live"] .row').length >= n,
       waitForEvents,
       { timeout: 20000 },
     )

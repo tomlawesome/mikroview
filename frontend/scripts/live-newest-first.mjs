@@ -63,7 +63,7 @@ check(
 )
 
 // --- The hard part: a scrolled-back reader's rows don't move ------------
-await page.click('header.toolbar button:has-text("Autoscroll")')
+await page.click('.scene-bar button:has-text("Autoscroll")')
 await page.waitForTimeout(200)
 
 // Scroll down and away from the top -- the reader is now looking at
@@ -110,7 +110,7 @@ check(
 )
 
 // --- Releasing the freeze resumes newest-at-top --------------------------
-await page.click('header.toolbar button:has-text("Autoscroll")')
+await page.click('.scene-bar button:has-text("Autoscroll")')
 await page.waitForTimeout(300)
 
 const scrollReleased = await page.$eval(bodySel, (el) => el.scrollTop)
