@@ -33,9 +33,9 @@ const { page, consoleErrors } = await session({ waitForEvents: 40 })
 const PEOPLE = '.door:has-text("Who may look in")'
 const MACHINES = '.door:has-text("Which machines may speak")'
 
-await goTo(page, 'The engine room')
+await goTo(page, 'Settings')
 await page.waitForFunction(
-  () => document.querySelector('.page-header h2')?.textContent.trim() === 'The engine room',
+  () => document.querySelector('.page-header h2')?.textContent.trim() === 'Settings',
   null,
   { timeout: 5000 },
 )
@@ -119,7 +119,7 @@ check(
   'the other four stations collapse to slim bars rather than unmounting',
 )
 check(
-  (await page.textContent('.page-header h2'))?.trim() === 'The engine room',
+  (await page.textContent('.page-header h2'))?.trim() === 'Settings',
   'the page is still the engine room -- the station unfolded in place, it did not navigate away',
 )
 check(
@@ -187,9 +187,9 @@ await viewerPage.fill('input[autocomplete="current-password"]', VIEWER_PASS)
 await viewerPage.click('button[type="submit"]')
 await viewerPage.waitForSelector('#main-content', { timeout: 15000 })
 
-await goTo(viewerPage, 'The engine room')
+await goTo(viewerPage, 'Settings')
 await viewerPage.waitForFunction(
-  () => document.querySelector('.page-header h2')?.textContent.trim() === 'The engine room',
+  () => document.querySelector('.page-header h2')?.textContent.trim() === 'Settings',
   null,
   { timeout: 5000 },
 )

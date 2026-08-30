@@ -1,76 +1,89 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 //
-// Issue #137: Appearance is a standalone toolbar control again, and
-// Export lives in the live view's filter bar (moved off the retired
-// hamburger menu by #544) on both breakpoints.
-//
-// Driven in a real browser at both widths because that is the whole of
-// what this change is -- a UI reorganisation has no unit-testable truth
-// beyond "the control renders where claimed and does what it did".
+// #616: the stream's controls moved from the retired toolbar onto the
+// Stream card's own scene bar, unchanged in behaviour, and only there --
+// Metrics and the other scenes carry a bare bar. A UI reorganisation has
+// no unit-testable truth beyond "the control renders where claimed and
+// does what it did", so this drives the real bar on the real deck.
 
-import { session, feedSyslog, check, done } from './live-browser.mjs'
+import { session, feedSyslog, check, goTo, done } from './live-browser.mjs'
 
-// Events in the buffer, so Export has something to be enabled for.
+// Events in the buffer, so the controls have something to act on and
+// Export has something to be enabled for.
 feedSyslog(100)
-const { page } = await session({ waitForEvents: 50 })
+const { page, consoleErrors } = await session({ waitForEvents: 50 })
 
-// --- Desktop ---------------------------------------------------------
+// The active card's bar -- the deck mounts the neighbouring cards too,
+// each with a scene bar of its own.
+const BAR = '.card[aria-hidden="false"] .scene-bar'
+const btn = (label) => `${BAR} .controls button:text-is("${label}")`
 
-check(await page.isVisible('.theme-menu .trigger'), 'the Theme control is standalone in the toolbar')
-
-// One click to open, one to apply -- the regression #137 records was
-// this taking two clicks through the menu.
-await page.click('.theme-menu .trigger')
-await page.click('.theme-menu button:has-text("Nebula")')
-const colorway = await page.getAttribute('html', 'data-colorway')
-check(colorway === 'nebula', `picking a colorway applies it (data-colorway=${colorway})`)
-
-await page.click('.theme-menu .trigger')
-await page.click('.theme-menu button:has-text("Light")')
-const theme = await page.getAttribute('html', 'data-theme')
-check(theme === 'light', `picking a mode applies it (data-theme=${theme})`)
-
-// Export is out of the toolbar...
+// --- The Stream card carries the stream's controls -------------------------
+for (const label of ['Autoscroll', 'Pause', 'Group', 'Clear']) {
+  check(await page.isVisible(btn(label)), `${label} is on the Stream card's scene bar`)
+}
 check(
-  !(await page.isVisible('header.toolbar > .controls > button:has-text("Export")')),
-  'no inline Export button on the desktop toolbar',
+  await page.isVisible(`${BAR} .controls select[aria-label="Display duration"]`),
+  'the display-duration select is there too',
+)
+check(await page.isVisible(`${BAR} .controls .account button.chip`), 'alongside the account chip')
+
+// --- And they still do what the toolbar's did ------------------------------
+// Autoscroll defaults on; one click turns it off, one turns it back.
+check(
+  await page.$eval(btn('Autoscroll'), (el) => el.classList.contains('active')),
+  'Autoscroll starts active',
+)
+await page.click(btn('Autoscroll'))
+check(
+  !(await page.$eval(btn('Autoscroll'), (el) => el.classList.contains('active'))),
+  'clicking Autoscroll turns it off',
+)
+await page.click(btn('Autoscroll'))
+check(
+  await page.$eval(btn('Autoscroll'), (el) => el.classList.contains('active')),
+  'and clicking again turns it back on',
 )
 
-// ...and in the live view's filter bar, where it must actually still export.
+// Pause renames itself to the way back, then resumes.
+await page.click(btn('Pause'))
 check(
-  await page.isVisible('.bar button:has-text("Export to CSV")'),
-  'Export to CSV is in the filter bar on desktop',
+  await page.isVisible(`${BAR} .controls button:has-text("Resume")`),
+  'Pause becomes Resume while paused',
+)
+await page.click(`${BAR} .controls button:has-text("Resume")`)
+check(await page.isVisible(btn('Pause')), 'and Resume goes back to Pause')
+
+// --- Export stayed in the live view's filter bar (#137) --------------------
+check(
+  await page.isVisible('.card[aria-hidden="false"] .bar button:has-text("Export to CSV")'),
+  'Export to CSV is in the filter bar, not the scene bar',
 )
 const [download] = await Promise.all([
   page.waitForEvent('download', { timeout: 10000 }),
-  page.click('.bar button:has-text("Export to CSV")'),
+  page.click('.card[aria-hidden="false"] .bar button:has-text("Export to CSV")'),
 ])
 check(
   (download.suggestedFilename() ?? '').endsWith('.csv'),
   `the filter bar entry downloads a CSV (${download.suggestedFilename()})`,
 )
 
-// --- Mobile ----------------------------------------------------------
-
-await page.setViewportSize({ width: 390, height: 844 })
-await page.waitForTimeout(400)
-
-check(await page.isVisible('.theme-menu .trigger'), 'the Theme control survives the mobile breakpoint')
-
-await page.click('.theme-menu .trigger')
+// --- Metrics carries a bare bar: no stream controls anywhere on it ---------
+await goTo(page, 'Metrics')
+for (const label of ['Autoscroll', 'Pause', 'Group', 'Clear']) {
+  check(
+    (await page.$$(btn(label))).length === 0,
+    `${label} is absent from the Metrics card's scene bar`,
+  )
+}
 check(
-  await page.isVisible('.theme-menu .menu.mobile-sheet'),
-  'at phone width the Theme menu is a bottom sheet, not a right-anchored dropdown',
+  (await page.$$(`${BAR} .controls select`)).length === 0,
+  'no display-duration select on Metrics either',
 )
-await page.click('.theme-menu .mobile-sheet button:has-text("Signal")')
-const mobileColorway = await page.getAttribute('html', 'data-colorway')
-check(mobileColorway === 'signal', `a colorway applies from the sheet (data-colorway=${mobileColorway})`)
-
-// Phone width puts the filter bar behind a drawer -- open it first.
-await page.click('.mobile-row .trigger')
 check(
-  await page.isVisible('.bar.drawer button:has-text("Export to CSV")'),
-  'Export to CSV is still in the filter bar on mobile',
+  await page.isVisible(`${BAR} .controls .account button.chip`),
+  'while the account chip is still there -- the chrome travels, the controls do not',
 )
 
+check(consoleErrors.length === 0, `no console errors -- got ${JSON.stringify(consoleErrors.slice(0, 3))}`)
 done()

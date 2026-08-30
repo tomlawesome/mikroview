@@ -76,7 +76,10 @@ if (raised.ok) {
   // `.split-arrow` and permanently cleared whichever flag that was,
   // which is why every assertion below then failed against the
   // container.
-  const scanCard = page.locator('.card', { hasText: SCAN_SOURCE }).first()
+  // li.card, not .card: the deck's own snap-scroll sections carry class
+  // "card" too (#616), and the section wrapping the whole Flags scene
+  // also hasText the IP, so a bare .card resolves to it first.
+  const scanCard = page.locator('li.card', { hasText: SCAN_SOURCE }).first()
   await scanCard.waitFor({ timeout: 15000 })
   check(await scanCard.locator('.split-arrow').isVisible(), 'the port scan raised a real flag with the permanent-clear action visible')
 

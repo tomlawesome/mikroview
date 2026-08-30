@@ -19,7 +19,7 @@
 // group's own admin-only rows.
 
 import { chromium } from 'playwright'
-import { session, check, done, goTo, openAtlas } from './live-browser.mjs'
+import { session, check, done, goTo } from './live-browser.mjs'
 
 const URL_BASE = process.env.MV_URL
 
@@ -195,8 +195,8 @@ check(anonRes.status === 401, `an unauthenticated request to /api/suggestions is
 
 // --- The admin/read-only split #547 names explicitly ----------------------
 // Watchlist (and Suggestions within it) is admin-only end to end: the
-// row is absent from a viewer's rail entirely, never a page that loads
-// and then fails.
+// name is absent from a viewer's roll rail entirely, never a page that
+// loads and then fails.
 
 const VIEWER_USER = 'live-viewer-547-suggestions'
 const VIEWER_PASS = 'live-viewer-547-suggestions-password'
@@ -214,13 +214,12 @@ await viewerPage.goto(URL_BASE, { waitUntil: 'networkidle' })
 await viewerPage.fill('input[autocomplete="username"]', VIEWER_USER)
 await viewerPage.fill('input[autocomplete="current-password"]', VIEWER_PASS)
 await viewerPage.click('button[type="submit"]')
-await viewerPage.waitForSelector('#main-content', { timeout: 15000 })
-await openAtlas(viewerPage)
+await viewerPage.waitForSelector('.roll-rail .rail-name', { timeout: 15000 })
 
-const viewerLabels = await viewerPage.$$eval('.atlas .ports .port', (els) => els.map((e) => e.textContent.trim()))
+const viewerLabels = await viewerPage.$$eval('.roll-rail .rail-name', (els) => els.map((e) => e.textContent.trim()))
 check(
   !viewerLabels.includes('Watchlist'),
-  `Watchlist -- and Suggestions with it -- is absent from a viewer's atlas, not disabled -- atlas shows ${JSON.stringify(viewerLabels)}`,
+  `Watchlist -- and Suggestions with it -- is absent from a viewer's roll rail, not disabled -- the rail shows ${JSON.stringify(viewerLabels)}`,
 )
 
 await browser.close()

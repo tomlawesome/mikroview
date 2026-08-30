@@ -168,9 +168,15 @@ check(
 )
 
 // --- Visible cadence on the observed boundary ------------------------------
+// Holding *or* alarm-fired, not holding alone: on the shared suite
+// instance, another scenario's port-scan flag can sit inside the fall's
+// window and flip this band's caption to ALARM FIRED. Both are the
+// observed side of the honesty distinction -- what this scenario must
+// rule out is the band reading quiet, dark or unknown.
+const observedCaption = (await observedBand.locator('.band-caption').first().textContent())?.trim() ?? ''
 check(
-  (await observedBand.locator('.band-caption.ok').count()) > 0,
-  'the observed boundary with real traffic reads as holding',
+  /WATCH HOLDING|ALARM FIRED/.test(observedCaption),
+  `the observed boundary with real traffic reads as observed -- got "${observedCaption}"`,
 )
 
 // --- Restored per-port carriers (Fable's 2026-08-29 review, twice: the
@@ -180,9 +186,26 @@ check(
 // A carrier renders for the steady talker (port 443): a label, a live
 // spectrum peak above the NOW line, and bucketed dash marks below it --
 // the whole point the aggregate-lane first cut lost.
+// The port labels render at rig level, not nested in each band's <g> --
+// they are collision-culled across the whole rig (Fall.svelte's
+// portLabels) -- so membership in the observed band is a geometry fact:
+// the label's x must land inside that band's own horizontal extent.
+await page.locator('.fall .carrier-label[data-port="443"]').first().waitFor({ timeout: 30000 })
+const labelInObservedBand = await page.evaluate(() => {
+  const band = [...document.querySelectorAll('.fall .band')].find((b) =>
+    b.querySelector('.band-label')?.textContent?.includes('ether1 → bridge1'),
+  )
+  if (!band) return 'no observed band'
+  const r = band.getBoundingClientRect()
+  return [...document.querySelectorAll('.fall .carrier-label[data-port="443"]')].some((l) => {
+    const lr = l.getBoundingClientRect()
+    const mid = lr.left + lr.width / 2
+    return l.textContent.trim() === ':443 HTTPS' && mid >= r.left && mid <= r.right
+  })
+})
 check(
-  (await observedBand.locator('.carrier-label[data-port="443"]').textContent())?.trim() === ':443 HTTPS',
-  'a carrier renders for the steady talker on port 443, labelled at the band foot',
+  labelInObservedBand === true,
+  `a carrier renders for the steady talker on port 443, labelled ":443 HTTPS" at the observed band's foot (got ${JSON.stringify(labelInObservedBand)})`,
 )
 check(
   (await observedBand.locator('.spectrum .peak[data-port="443"]').count()) > 0,
