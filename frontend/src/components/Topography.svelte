@@ -12,8 +12,11 @@
   // honest ("the map draws itself as traffic arrives" -- round 26's
   // first-hour beat), and while the /ip address table has not been
   // pushed the zones degrade to boundary-derived names with a caption
-  // naming the missing push. Lens row carries Traffic only: the other
-  // lenses are unbuilt surfaces, absent rather than disabled.
+  // naming the missing push. The lens row carries Traffic and Policy
+  // (#628, layer 2); the remaining lenses are unbuilt surfaces, absent
+  // rather than disabled. One fixed picture, tabs repaint it: the
+  // Policy lens keeps every island where Traffic put it and swaps the
+  // observed ribs for what the pushed rule table intends.
   //
   // Deviation from #627's letter, declared on the issue: "the Map page
   // in the Live group's reserved slot" predates the deck -- topography
@@ -21,16 +24,25 @@
   // this scene, not a place) follows in its own change.
   import { appState } from '../lib/state.svelte'
   import { zonesState } from '../lib/zones.svelte'
+  import { policyState, type PolicyEdge } from '../lib/policy.svelte'
   import { reachFor } from '../lib/reach'
   import { formatEps } from '../lib/format'
 
   const LANE_INKS = ['var(--lane-lan)', 'var(--lane-srv)', 'var(--lane-iot)', 'var(--lane-guest)', 'var(--marked)']
 
-  // The pushed /ip address table names the zones; refreshed whenever
-  // the device list itself changes (it loads after mount).
+  // The pushed /ip address table names the zones, the pushed rule
+  // table draws the policy edges; both refreshed whenever the device
+  // list itself changes (it loads after mount).
   $effect(() => {
-    if (appState.devices.length > 0) zonesState.refresh()
+    if (appState.devices.length > 0) {
+      zonesState.refresh()
+      policyState.refresh()
+    }
   })
+
+  // Which lens repaints the fixed picture. Reach layers on top of
+  // either (#626: a mode, not a place).
+  let lens = $state<'traffic' | 'policy'>('traffic')
 
   const zones = $derived(zonesState.zones)
   const eps = $derived(appState.stats?.eventsPerSecond ?? 0)
@@ -64,6 +76,133 @@
   // filtered to its boundary; the whole map never navigates on a miss.
   function openZone(id: string) {
     appState.setFilter('interface', id)
+    appState.view = 'live'
+  }
+
+  // --- the policy lens (#628: layer 2, intended-policy edges) --------------
+  // Every crossing passes the router, so every edge routes through the
+  // waist -- and an intended refusal dies there, ⊣, the same grammar the
+  // reach's membrane already taught. Calm ink throughout: an intended
+  // block is policy, not the alarm.
+  const WAIST = { x: 700, y: 312 }
+  const EDGE_CAP = 12
+
+  type EdgeAnchor = { x: number; y: number; kind: 'zone' | 'internet' | 'any' }
+
+  function anchorOf(iface: string): EdgeAnchor | null {
+    if (iface === '') return { ...WAIST, kind: 'any' }
+    if (iface === zonesState.wanInterface) return { x: 700, y: 104, kind: 'internet' }
+    const i = zones.findIndex((z) => z.id === iface)
+    if (i === -1) return null
+    return { x: laneX(i, zones.length), y: 484, kind: 'zone' }
+  }
+
+  interface DrawnEdge {
+    edge: PolicyEdge
+    from: EdgeAnchor
+    to: EdgeAnchor
+    /** Perpendicular offset splitting the two directions of a pair. */
+    off: { x: number; y: number }
+  }
+
+  const drawnEdges = $derived.by((): { drawn: DrawnEdge[]; undrawn: number } => {
+    const drawn: DrawnEdge[] = []
+    let undrawn = 0
+    for (const e of policyState.edges) {
+      const from = anchorOf(e.from)
+      const to = anchorOf(e.to)
+      // A pair whose boundary the map has no island for (no address
+      // push named it, nothing spoke on it) cannot be drawn honestly --
+      // it is counted and said, never silently dropped.
+      if (!from || !to || (from.kind === 'any' && to.kind === 'any') || drawn.length >= EDGE_CAP) {
+        undrawn++
+        continue
+      }
+      const dx = to.x - from.x
+      const dy = to.y - from.y
+      const len = Math.hypot(dx, dy) || 1
+      // A→B and B→A split to either side of the pair's shared line.
+      drawn.push({ edge: e, from, to, off: { x: (-dy / len) * 7, y: (dx / len) * 7 } })
+    }
+    return { drawn, undrawn }
+  })
+
+  // A refusal dies on the waist's near side, so its bar is never behind
+  // the island: arriving from the internet it dies at the top edge,
+  // from a lane at the bottom.
+  function deathPoint(d: DrawnEdge): { x: number; y: number } {
+    return { x: WAIST.x + d.off.x, y: (d.from.y < 268 ? 226 : WAIST.y) + d.off.y }
+  }
+
+  // The visible line: a cubic pulled through the waist. A refused-only
+  // edge stops there instead of arriving.
+  function edgePath(d: DrawnEdge): string {
+    const { from, to, off } = d
+    const w = { x: WAIST.x + off.x, y: WAIST.y + off.y }
+    if (d.edge.accepted) {
+      return `M ${from.x + off.x} ${from.y + off.y} C ${w.x} ${w.y}, ${w.x} ${w.y}, ${to.x + off.x} ${to.y + off.y}`
+    }
+    const dp = deathPoint(d)
+    return `M ${from.x + off.x} ${from.y + off.y} Q ${(from.x + dp.x) / 2 + off.x} ${(from.y + dp.y) / 2 + off.y}, ${dp.x} ${dp.y}`
+  }
+
+  // Where the ⊣ bar and the badges sit for an edge.
+  function edgeBarAt(d: DrawnEdge): { x: number; y: number; angle: number } {
+    const dp = deathPoint(d)
+    return { x: dp.x, y: dp.y, angle: (Math.atan2(dp.y - d.from.y, dp.x - d.from.x) * 180) / Math.PI + 90 }
+  }
+
+  function edgeBadgeAt(d: DrawnEdge): { x: number; y: number } {
+    const { from, to, off } = d
+    if (!d.edge.accepted) {
+      // Beside the bar, pushed back toward the source and clear of the
+      // opposite direction's line.
+      const dp = deathPoint(d)
+      const dx = from.x - dp.x
+      const dy = from.y - dp.y
+      const len = Math.hypot(dx, dy) || 1
+      return { x: dp.x + (dx / len) * 26 + off.x * 4.2, y: dp.y + (dy / len) * 26 + off.y * 4.2 }
+    }
+    // Past the waist, toward the destination, on its own side.
+    return { x: WAIST.x + (to.x - WAIST.x) * 0.55 + off.x * 4.2, y: WAIST.y + (to.y - WAIST.y) * 0.55 + off.y * 4.2 }
+  }
+
+  function badgeLine(e: PolicyEdge): string {
+    const ports = e.accepted ? e.acceptPorts : e.refusePorts
+    const shown = ports.slice(0, 3).join(' ')
+    const more = ports.length > 3 ? ` +${ports.length - 3}` : ''
+    const mark = e.accepted ? (e.refused ? '→ ⊣' : '→') : '⊣'
+    return ports.length > 0 ? `${mark} ${shown}${more}` : mark
+  }
+
+  function edgeLabel(e: PolicyEdge): string {
+    const name = (i: string, kind: string) => (kind === 'internet' ? 'the internet' : i === '' ? 'any lane' : i)
+    const from = anchorOf(e.from)
+    const to = anchorOf(e.to)
+    const what = e.accepted ? 'may reach' : 'is refused toward'
+    return `${name(e.from, from?.kind ?? 'zone')} ${what} ${name(e.to, to?.kind ?? 'zone')}${e.comment ? ` — ${e.comment}` : ''}`
+  }
+
+  // Click-through per the shaped surface: the pair and its direction,
+  // said in the filters the live view already speaks -- the zones' own
+  // CIDRs where the address push named them, scope for the internet
+  // side, the boundary name as the fallback. A single-port edge narrows
+  // to it; a port *set* stays unnarrowed (the port filter takes one
+  // query), declared on #628.
+  function openEdge(e: PolicyEdge) {
+    const from = anchorOf(e.from)
+    const to = anchorOf(e.to)
+    appState.resetFilters()
+    const fromZone = zones.find((z) => z.id === e.from)
+    const toZone = zones.find((z) => z.id === e.to)
+    if (from?.kind === 'internet') appState.setFilter('srcScope', 'external')
+    else if (fromZone?.cidr) appState.setFilter('srcQuery', fromZone.cidr)
+    else if (e.from) appState.setFilter('interface', e.from)
+    if (to?.kind === 'internet') appState.setFilter('dstScope', 'external')
+    else if (toZone?.cidr) appState.setFilter('dstQuery', toZone.cidr)
+    else if (e.to && !appState.filters.interface) appState.setFilter('interface', e.to)
+    const ports = e.accepted ? e.acceptPorts : e.refusePorts
+    if (ports.length === 1 && /^:\d+$/.test(ports[0])) appState.setFilter('port', ports[0].slice(1))
     appState.view = 'live'
   }
 
@@ -212,9 +351,14 @@
   <div class="lenses" role="tablist" aria-label="Map lenses">
     {#if reach}
       <span class="lens on" role="tab" aria-selected="true">Reach</span>
-      <span class="lens" role="tab" aria-selected="false">Traffic</span>
+      <span class="lens" role="tab" aria-selected="false">{lens === 'policy' ? 'Policy' : 'Traffic'}</span>
     {:else}
-      <span class="lens on" role="tab" aria-selected="true">Traffic</span>
+      <button class="lens" class:on={lens === 'traffic'} role="tab" aria-selected={lens === 'traffic'} onclick={() => (lens = 'traffic')}>
+        Traffic
+      </button>
+      <button class="lens" class:on={lens === 'policy'} role="tab" aria-selected={lens === 'policy'} onclick={() => (lens = 'policy')}>
+        Policy
+      </button>
     {/if}
   </div>
   {#if reach}
@@ -237,18 +381,75 @@
       role="img"
       aria-label="The network map: internet above, the router at the waist, observed lanes below"
     >
-      <!-- The one-way spine: internet into the waist. -->
-      <path class="rib" d="M700 104 V 232" stroke="var(--accent)" stroke-width="3.5" />
-      {#if eps > 0}
-        <circle class="mote" r="2.5" fill="var(--accent)" />
+      {#if lens === 'traffic'}
+        <!-- The one-way spine: internet into the waist. -->
+        <path class="rib" d="M700 104 V 232" stroke="var(--accent)" stroke-width="3.5" />
+        {#if eps > 0}
+          <circle class="mote" r="2.5" fill="var(--accent)" />
+        {/if}
+
+        {#each zones as z, i (z.id)}
+          <path class="rib" d={ribPath(i, zones.length)} stroke={LANE_INKS[i % LANE_INKS.length]} stroke-width="2.4" />
+        {/each}
+      {:else}
+        <!-- Intended-policy edges (#628): what the pushed table says
+             may cross, refused where it says it may not. Drawn beneath
+             the islands, like the ribs they replace. -->
+        {#each drawnEdges.drawn as d (d.edge.key)}
+          {@const bar = edgeBarAt(d)}
+          {@const badge = edgeBadgeAt(d)}
+          <g
+            class="edge-g"
+            role="button"
+            tabindex="0"
+            aria-label="Open the stream filtered to this pair: {edgeLabel(d.edge)}"
+            onclick={() => openEdge(d.edge)}
+            onkeydown={(e) => {
+              if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault()
+                openEdge(d.edge)
+              }
+            }}
+          >
+            <title>{edgeLabel(d.edge)}</title>
+            <path class="edge-hit" d={edgePath(d)} />
+            <path class="edge" class:refused={!d.edge.accepted} d={edgePath(d)} />
+            {#if !d.edge.accepted}
+              <g transform="translate({bar.x} {bar.y}) rotate({bar.angle})">
+                <line class="edge-bar" x1="-7" y1="0" x2="7" y2="0" />
+              </g>
+            {:else if d.edge.refused}
+              <!-- The pair also carries refusals: the crossing line
+                   stands, and the ⊣ tick beside the waist says some of
+                   it is turned away. -->
+              <g transform="translate({bar.x} {bar.y}) rotate({bar.angle})">
+                <line class="edge-bar dim" x1="-5" y1="0" x2="5" y2="0" />
+              </g>
+            {/if}
+            {#if d.edge.accepted || d.edge.refusePorts.length > 0}
+              <!-- A port-less refusal's badge would only repeat the bar. -->
+              <text class="edge-badge" x={badge.x} y={badge.y} text-anchor="middle">{badgeLine(d.edge)}</text>
+            {/if}
+          </g>
+        {/each}
+
+        {#if !policyState.anyPushed}
+          <!-- Waiting for data is a state, not a fault -- say so. -->
+          <g transform="translate(700 400)">
+            <text y="0" text-anchor="middle" class="n-sub">no rule table has been pushed yet — nothing is broken, this lens is waiting for data</text>
+            <text y="20" text-anchor="middle" class="n-sub">the policy layer draws what your router intends; Settings → Run setup… prints the push script</text>
+          </g>
+        {:else if drawnEdges.drawn.length === 0}
+          <text x="700" y="400" text-anchor="middle" class="n-sub">the pushed table has no forward rules — nothing crosses between lanes by intent</text>
+        {/if}
+        {#if drawnEdges.undrawn > 0}
+          <text x="1370" y="608" text-anchor="end" class="n-sub">+{drawnEdges.undrawn} pair{drawnEdges.undrawn === 1 ? '' : 's'} not drawn — off this map's islands, or beyond its {EDGE_CAP}-edge calm</text>
+        {/if}
       {/if}
 
-      {#each zones as z, i (z.id)}
-        <path class="rib" d={ribPath(i, zones.length)} stroke={LANE_INKS[i % LANE_INKS.length]} stroke-width="2.4" />
-      {/each}
-
-      <!-- Internet -->
-      <g transform="translate(700 68)">
+      <!-- Internet. Not interactive, and passive to the pointer, so a
+           policy edge arriving beneath it stays clickable. -->
+      <g transform="translate(700 68)" class="passive">
         <rect class="isl" x="-100" y="-30" width="200" height="60" rx="12" />
         <text x="-82" y="-3" class="n-name">Internet</text>
         {#if zonesState.wanInterface}
@@ -258,8 +459,9 @@
         {/if}
       </g>
 
-      <!-- The waist -->
-      <g transform="translate(700 268)">
+      <!-- The waist. Passive like the internet: every policy edge
+           routes through here, and the island must not eat their clicks. -->
+      <g transform="translate(700 268)" class="passive">
         <rect class="isl waist" x="-128" y="-34" width="256" height="68" rx="12" />
         <text x="-110" y="-6" class="n-name">{primaryDevice?.name ?? 'your router'}</text>
         <text x="-110" y="12" class="n-sub">
@@ -321,8 +523,8 @@
         <!-- The honest empty state: the place before the data. -->
         <g transform="translate(700 500)">
           <rect class="isl ghost" x="-108" y="0" width="216" height="106" rx="12" />
-          <text x="0" y="46" text-anchor="middle" class="n-sub">nothing observed yet</text>
-          <text x="0" y="64" text-anchor="middle" class="n-sub">the map draws itself as traffic arrives</text>
+          <text x="0" y="40" text-anchor="middle" class="n-sub">nothing has arrived yet — waiting for data, not broken</text>
+          <text x="0" y="58" text-anchor="middle" class="n-sub">the map draws itself as traffic arrives; mikroview never draws a guess</text>
         </g>
       {/if}
     </svg>
@@ -506,6 +708,18 @@
     color: var(--fg-dim);
     padding: 4px 13px;
     letter-spacing: 0.02em;
+    background: none;
+    border: none;
+    font-family: inherit;
+    cursor: pointer;
+  }
+
+  span.lens {
+    cursor: default;
+  }
+
+  button.lens:hover {
+    color: var(--fg-muted);
   }
 
   .lens.on {
@@ -574,6 +788,10 @@
     stroke-dasharray: 4 6;
   }
 
+  .passive {
+    pointer-events: none;
+  }
+
   .zone {
     cursor: pointer;
   }
@@ -591,6 +809,59 @@
     fill: none;
     stroke-linecap: round;
     opacity: 0.55;
+  }
+
+  /* --- the policy lens (#628) -------------------------------------------- */
+  .edge {
+    fill: none;
+    stroke: var(--fg-muted);
+    stroke-width: 1.8;
+    stroke-linecap: round;
+    opacity: 0.6;
+  }
+
+  .edge.refused {
+    stroke-dasharray: 5 5;
+  }
+
+  /* The invisible hit area a 1.8px line cannot be. */
+  .edge-hit {
+    fill: none;
+    stroke: transparent;
+    stroke-width: 14;
+  }
+
+  .edge-g {
+    cursor: pointer;
+  }
+
+  .edge-g:hover .edge,
+  .edge-g:focus-visible .edge {
+    stroke: var(--fg);
+    opacity: 0.95;
+  }
+
+  .edge-g:focus-visible {
+    outline: none;
+  }
+
+  .edge-bar {
+    stroke: var(--fg-muted);
+    stroke-width: 2.6;
+  }
+
+  .edge-bar.dim {
+    opacity: 0.55;
+  }
+
+  .edge-badge {
+    fill: var(--fg-dim);
+    font-family: var(--font-mono);
+    font-size: 9.5px;
+  }
+
+  .edge-g:hover .edge-badge {
+    fill: var(--fg-muted);
   }
 
   .mote {
