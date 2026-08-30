@@ -173,10 +173,6 @@
     {/if}
   </div>
 
-  <!-- The standing promise, part of the door since round 5's glue list
-       ("the void, faint orbits, glass card, and the standing promise"),
-       carried into every accepted revision through round 29. -->
-  <div class="promise">Your router pushes its logs here — MikroView never connects to your router.</div>
 </div>
 
 <style>
@@ -464,13 +460,4 @@
     border-color: var(--fg-muted);
   }
 
-  .promise {
-    position: absolute;
-    bottom: 16px;
-    left: 0;
-    right: 0;
-    text-align: center;
-    font-size: 10.5px;
-    color: var(--fg-dim);
-  }
 </style>
