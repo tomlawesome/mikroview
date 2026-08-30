@@ -182,12 +182,17 @@ export async function dismissSetupWizard(page) {
  * own table). Anything not in here is an operate page or account action,
  * reached through the account chip's menu instead.
  */
+// Each entry names the card the rail rolls to (Deck.svelte's data-card
+// key). The docket is one card whose tabs are the flags/watchlist/audit
+// views (#633), so those labels roll its card and then click the tab.
 const SCENES = {
-  'The fall': 'fall',
-  Metrics: 'metrics',
-  Stream: 'live',
-  Flags: 'flags',
-  Watchlist: 'watchlist',
+  'The fall': { rail: 'The fall', card: 'fall' },
+  Topography: { rail: 'Topography', card: 'topography' },
+  Metrics: { rail: 'Metrics', card: 'metrics' },
+  Stream: { rail: 'Stream', card: 'live' },
+  'The docket': { rail: 'The docket', card: 'docket' },
+  Flags: { rail: 'The docket', card: 'docket', tab: 'flags' },
+  Watchlist: { rail: 'The docket', card: 'docket', tab: 'watchlist' },
 }
 
 /**
@@ -223,22 +228,25 @@ export async function openAccountMenu(page) {
  * scenario reading geometry mid-roll would see a card in flight.
  */
 export async function goTo(page, label) {
-  const view = SCENES[label]
-  if (view) {
-    await page.click(`.roll-rail button.rail-name:text-is("${label}")`)
+  const scene = SCENES[label]
+  if (scene) {
+    await page.click(`.roll-rail button.rail-name:text-is("${scene.rail}")`)
     await page.waitForFunction(
-      (v) => {
+      (c) => {
         const deck = document.querySelector('.deck')
-        const el = deck?.querySelector(`.card[data-view="${v}"]`)
+        const el = deck?.querySelector(`.card[data-card="${c}"]`)
         if (!el) return false
         // Bounding rects, not offsetTop vs scrollTop: offsetTop is
         // measured from the offset parent, so anything above the deck
         // (the connection banner, say) shifts it and the two never agree.
         return Math.abs(el.getBoundingClientRect().top - deck.getBoundingClientRect().top) < 2
       },
-      view,
+      scene.card,
       { timeout: 10000 },
     )
+    if (scene.tab) {
+      await page.click(`.card[data-card="${scene.card}"] [role="tab"]:has(.tlabel:text-is("${scene.tab}"))`)
+    }
   } else {
     await openAccountMenu(page)
     await page.click(`.account .menu button.row:text-is("${label}")`)
