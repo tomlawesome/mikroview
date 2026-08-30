@@ -13,6 +13,12 @@
   // seismograph (lib/metricsSeries.ts owns all three); what differs is
   // the orientation and the ledger strip below, which carries the
   // magnitude answers the old cards used to hold.
+  //
+  // #634 round 21/22 verdicts: "the register needs to take up far more
+  // of the available screen space" -- ribbons spread across the frame
+  // and fill it, rather than sitting at a flat pixel width regardless of
+  // the card's own size. The column width is measured from the box, not
+  // assumed, the same way the drum measures its own.
   import type { MetricsHour, MinuteReading } from '../lib/metricsSeries'
   import { dprState, snapFill, snapLine } from '../lib/pixelGrid.svelte'
   import { formatHM } from '../lib/format'
@@ -36,17 +42,40 @@
   // than crossing them.
   const HEADER = 118
   const ROW_H = 8
-  const COL_W = 116
-  const HALF = 44
-  const FLAG_COL_W = 30
+  // Floors, not the drawn size: a column never shrinks below these, so a
+  // narrow card scrolls (the paper already does) rather than crushing a
+  // ribbon or a rotated flag label unreadable.
+  const COL_MIN = 90
+  const FLAG_COL_MIN = 26
   const GROUP_GAP = 14
   const BOTTOM = 26
 
   const dpr = $derived(dprState.value)
   const n = $derived(hour.axis.length)
 
+  // Measured, not assumed -- the register fills whatever the card gives
+  // it (#634 round 22), the same technique the drum uses for its own
+  // full-bleed width.
+  let boxWidth = $state(0)
+
+  const flagsWidth = $derived(hour.flags.length * FLAG_COL_MIN)
+  const dataMinWidth = $derived(GUTTER + hour.traffic.length * COL_MIN + GROUP_GAP + flagsWidth + 12)
+  const width = $derived(Math.max(dataMinWidth, boxWidth || dataMinWidth))
+
+  // Every traffic column grows to fill what the flag columns and gutter
+  // leave behind -- "columns spaced across the frame" (round 21). Flag
+  // columns stay narrow and rotated, as ratified; only the traffic
+  // ribbons spread.
+  const COL_W = $derived(
+    hour.traffic.length > 0 ? Math.max(COL_MIN, (width - GUTTER - GROUP_GAP - flagsWidth - 12) / hour.traffic.length) : COL_MIN,
+  )
+  const FLAG_COL_W = FLAG_COL_MIN
+  // A ribbon at "full breadth" (round 22) fills nearly its whole column
+  // at the series' own peak, with a hairline gutter left between
+  // neighbours so two maxed-out ribbons never touch.
+  const HALF = $derived(Math.max(30, COL_W / 2 - 8))
+
   const flagsX0 = $derived(GUTTER + hour.traffic.length * COL_W + GROUP_GAP)
-  const width = $derived(flagsX0 + hour.flags.length * FLAG_COL_W + 12)
   const height = $derived(HEADER + Math.max(1, n) * ROW_H + BOTTOM)
 
   const refusedFrom = $derived(hour.traffic.findIndex((s) => s.ink === 'refused'))
@@ -125,7 +154,7 @@
 </script>
 
 <div class="register">
-  <div class="paper scrollbar">
+  <div class="paper scrollbar" bind:clientWidth={boxWidth}>
     {#if n === 0}
       <p class="empty">No minutes recorded yet — the register starts as soon as events arrive.</p>
     {:else}
