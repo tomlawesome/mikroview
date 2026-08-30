@@ -7,7 +7,9 @@
   import { flagsState, extractSourceIp } from '../lib/flags.svelte'
   import { appState } from '../lib/state.svelte'
   import { authState } from '../lib/auth.svelte'
-  import { formatHM, countryFlag, isPublicIp } from '../lib/format'
+  import { fetchFlagEpisode } from '../lib/api'
+  import { FLAG_FAMILIES } from '../lib/flagPalette'
+  import { formatHM, formatTime, countryFlag, isPublicIp } from '../lib/format'
   import { flagLayoutState, type FlagColumns } from '../lib/flagLayout.svelte'
   import { viewportState } from '../lib/viewport.svelte'
   import { exclusionsState } from '../lib/exclusions.svelte'
@@ -16,7 +18,7 @@
   import IpInvestigateButton from './IpInvestigateButton.svelte'
   import TabList from './TabList.svelte'
   import Exclusions from './Exclusions.svelte'
-  import type { Flag, FlagType } from '../lib/types'
+  import type { Flag, FlagType, FirewallEvent } from '../lib/types'
 
   // Same gate the rail uses for the engine room's watchers station.
   const isAdminOrOpen = $derived(authState.state === 'authenticated' && authState.role === 'admin')
@@ -120,8 +122,86 @@
 
   let expandedId: string | null = $state(null)
 
-  function toggleExpanded(id: string) {
-    expandedId = expandedId === id ? null : id
+  function toggleExpanded(f: Flag) {
+    expandedId = expandedId === f.id ? null : f.id
+    if (expandedId === f.id) loadEpisode(f)
+  }
+
+  // The drawer's episode (#633, rounds 18-19): the flag's own events,
+  // fetched once per flag on first open via the #29 around+window
+  // lookback centred on lastSeen. Cached for the component's lifetime
+  // rather than refetched per open -- a drawer that redraws its episode
+  // differently each time it opens reads as noise, not evidence.
+  let episodes = $state<Record<string, FirewallEvent[] | 'loading' | 'error'>>({})
+
+  // The same target mapping filterToTarget uses, as query params: which
+  // server-side filter this flag's target actually is (see that
+  // function's own comment). Empty for global_spike (the surge is the
+  // whole window) and new_device (a MAC has no server-side match).
+  function episodeParams(f: Flag): { ip?: string; port?: string; rule?: string; device?: string } {
+    switch (f.type) {
+      case 'port_scan':
+      case 'activity_spike':
+      case 'critical_port':
+      case 'outbound_anomaly':
+      case 'internal_recon':
+      case 'low_slow_scan':
+      case 'off_hours_activity':
+      case 'unexpected_mail_sender':
+      case 'known_bad_ip':
+        return { ip: f.target }
+      case 'distributed_brute_force':
+        return { port: f.target.replace(/^port /, '') }
+      case 'rule_spike':
+      case 'stale_rule':
+        return { rule: f.target }
+      case 'repeated_drops':
+        return { ip: f.target.split(' -> ')[0] }
+      case 'device_silence':
+        return { device: f.target }
+      case 'global_spike':
+      case 'new_device':
+        return {}
+    }
+  }
+
+  async function loadEpisode(f: Flag) {
+    if (episodes[f.id]) return
+    episodes[f.id] = 'loading'
+    try {
+      const res = await fetchFlagEpisode({ ...episodeParams(f), around: f.lastSeen, window: '30m', limit: 120 })
+      episodes[f.id] = res.events
+    } catch {
+      episodes[f.id] = 'error'
+    }
+  }
+
+  // Tick positions for the episode strip, one per event, normalised
+  // across the fetched span (the record's own geometry: 260-wide
+  // viewBox, ticks inset 8px each side). A single event centres.
+  function episodeTicks(events: FirewallEvent[]): number[] {
+    const times = events
+      .map((e) => new Date(e.time).getTime())
+      .filter((t) => !Number.isNaN(t))
+      .sort((a, b) => a - b)
+    if (times.length === 0) return []
+    const t0 = times[0]
+    const span = times[times.length - 1] - t0
+    return times.map((t) => (span === 0 ? 130 : 8 + ((t - t0) / span) * 244))
+  }
+
+  // One matched line, composed from the structured event the same way
+  // the stream renders it -- raw lines are not retained, and composing
+  // beats showing nothing.
+  function eventLine(e: FirewallEvent): string {
+    const io = [e.inInterface ? `in:${e.inInterface}` : '', e.outInterface ? `out:${e.outInterface}` : '']
+      .filter(Boolean)
+      .join(' ')
+    const proto = e.protocol ? ` proto ${e.protocol.toUpperCase()}` : ''
+    const src = e.srcIp ? `${e.srcIp}${e.srcPort ? `:${e.srcPort}` : ''}` : ''
+    const dst = e.dstIp ? `${e.dstIp}${e.dstPort ? `:${e.dstPort}` : ''}` : ''
+    const flow = src && dst ? `, ${src}->${dst}` : ''
+    return `${formatTime(e.time)} ${e.action}|${e.ruleLabel}| ${e.chain}: ${io}${proto}${flow}`
   }
 
   // Which source IP's campaign card (see below) is currently expanded to
@@ -131,20 +211,6 @@
 
   function toggleGroup(sourceIp: string) {
     expandedGroup = expandedGroup === sourceIp ? null : sourceIp
-  }
-
-  // Only true when there's actually something beyond `detail` to show --
-  // avoids a dead "Details" button on flags with nothing extra (most
-  // global_spike/rule_spike flags, or any flag when no reputation key is
-  // configured).
-  function hasExpandableDetail(f: Flag): boolean {
-    return (
-      !!f.country ||
-      !!f.reputation ||
-      !!f.evidence?.ports?.length ||
-      !!f.evidence?.hosts?.length ||
-      !!f.evidence?.nat
-    )
   }
 
   // Same labels Exclusions.svelte and lib/metricsSeries.ts use --
@@ -183,6 +249,26 @@
       .sort((a, b) => new Date(b.firstSeen).getTime() - new Date(a.firstSeen).getTime()),
   )
   const cleared = $derived(flagsState.list.filter((f) => f.cleared).slice(0, 20))
+
+  // The honest cleared state (round 26): when nothing is open, say when
+  // the last clear happened rather than pretending nothing ever fired.
+  // Null when no flag has ever been cleared -- then "nothing open" is
+  // the whole truth and carries no timestamp.
+  const lastClearedAt = $derived.by((): string | null => {
+    let latest: string | null = null
+    for (const f of cleared) {
+      if (f.clearedAt && (!latest || new Date(f.clearedAt) > new Date(latest))) latest = f.clearedAt
+    }
+    return latest
+  })
+
+  function clearedWhen(iso: string): string {
+    const d = new Date(iso)
+    const now = new Date()
+    const sameDay =
+      d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth() && d.getDate() === now.getDate()
+    return sameDay ? `today at ${formatHM(iso)}` : formatTime(iso)
+  }
 
   // "One actor, several signals" (issue #106): active flags sharing a
   // normalized source IP (flagsState.groupedBySource -- see that
@@ -370,9 +456,10 @@
 
   {#snippet flagCard(f: Flag, compactCard: boolean = false)}
     {@const investigate = investigateIp(f)}
-    <li class="card" class:compact={compactCard}>
+    {@const family = FLAG_FAMILIES[f.type]}
+    <li class="card" class:compact={compactCard} class:open={expandedId === f.id} style="--ft: {family.ink}">
       <div class="card-main">
-        <span class="type">{TYPE_LABELS[f.type]}</span>
+        <span class="type">{family.mark} {TYPE_LABELS[f.type]}</span>
         {#if f.confidence != null}
           <span
             class="confidence confidence-{confidenceTier(f.confidence)}"
@@ -416,81 +503,129 @@
         {/if}
         <span>last seen {formatHM(f.lastSeen)}</span>
         <span>fired {f.count}×</span>
-        {#if hasExpandableDetail(f)}
-          <button class="details-toggle" onclick={() => toggleExpanded(f.id)}>
-            {expandedId === f.id ? 'Hide details' : 'Details'}
-          </button>
-        {/if}
       </div>
+      <!-- The whole row's one affordance (rounds 18-19): the chevron
+           opens the drawer; it rotates rather than swapping glyphs so
+           the open state reads at a glance down a striped list. -->
+      <button
+        class="openc"
+        aria-expanded={expandedId === f.id}
+        aria-label="{expandedId === f.id ? 'Close' : 'Open'} the drawer for this flag"
+        onclick={() => toggleExpanded(f)}
+      >
+        ▸
+      </button>
       {#if expandedId === f.id}
-        <div class="expanded">
-          {#if f.evidence?.ports?.length}
-            <div class="ev-row">
-              <span class="ev-label">Ports touched</span>
-              <span class="ev-value">{f.evidence.ports.join(', ')}</span>
-            </div>
-          {/if}
-          {#if f.evidence?.hosts?.length}
-            <div class="ev-row">
-              <span class="ev-label">Hosts involved</span>
-              <span class="ev-value">{f.evidence.hosts.join(', ')}</span>
-            </div>
-          {/if}
-          {#if f.evidence?.nat}
-            <div class="ev-row">
-              <span class="ev-label">NAT</span>
-              <span class="ev-value">
-                {f.evidence.nat.ip}{f.evidence.nat.port ? `:${f.evidence.nat.port}` : ''}
-                {#if f.evidence.nat.raw}<br /><span class="ev-raw">{f.evidence.nat.raw}</span>{/if}
-              </span>
-            </div>
-          {/if}
-          {#if f.reputation}
-            <ReputationDetails result={f.reputation} />
-          {/if}
-        </div>
-      {/if}
-      <div class="actions">
-        {#if isAdminOrOpen}
-          <!-- Split button: the main segment is exactly today's Clear.
-               The arrow segment is admin-only, matching the backend's
-               own gate on POST /api/flags/{id}/clear-permanent -- a
-               permanent exclusion suppresses detection until someone
-               undoes it, unlike the plain Clear beside it. A non-admin
-               gets a plain Clear button with no arrow at all (below),
-               rather than a disabled one that would just advertise an
-               action they can't take (issue #198). -->
-          <div class="split-clear" class:menu-open={openClearMenuFor === f.id}>
-            <button class="clear split-main" onclick={() => clear(f.id)}>Clear</button>
-            <button
-              class="clear split-arrow"
-              aria-haspopup="true"
-              aria-expanded={openClearMenuFor === f.id}
-              aria-label="More clear options for this flag"
-              onclick={() => toggleClearMenu(f.id)}
-            >
-              ▾
-            </button>
-            {#if openClearMenuFor === f.id}
-              <div class="split-menu" role="menu">
-                <button
-                  class="split-menu-item"
-                  role="menuitem"
-                  title="Clear this flag and permanently stop {TYPE_LABELS[f.type]} from ever raising again for {f.target} -- reversible from the Exclusions page (see the menu)."
-                  onclick={() => {
-                    openClearMenuFor = null
-                    clearPermanent(f.id)
-                  }}
-                >
-                  Permanently clear
-                </button>
+        {@const ep = episodes[f.id]}
+        <!-- The drawer (rounds 18-19): the evidence and matched lines on
+             the left, the episode's shape on the right, the actions
+             across the foot. The stripe runs through it unbroken -- the
+             card's own left edge, not a second indented border. -->
+        <div class="dwr">
+          <div class="dcol">
+            {#if f.evidence?.ports?.length}
+              <div class="ev-row">
+                <span class="ev-label">Ports touched</span>
+                <span class="ev-value">{f.evidence.ports.join(', ')}</span>
+              </div>
+            {/if}
+            {#if f.evidence?.hosts?.length}
+              <div class="ev-row">
+                <span class="ev-label">Hosts involved</span>
+                <span class="ev-value">{f.evidence.hosts.join(', ')}</span>
+              </div>
+            {/if}
+            {#if f.evidence?.nat}
+              <div class="ev-row">
+                <span class="ev-label">NAT</span>
+                <span class="ev-value">
+                  {f.evidence.nat.ip}{f.evidence.nat.port ? `:${f.evidence.nat.port}` : ''}
+                  {#if f.evidence.nat.raw}<br /><span class="ev-raw">{f.evidence.nat.raw}</span>{/if}
+                </span>
+              </div>
+            {/if}
+            {#if f.reputation}
+              <ReputationDetails result={f.reputation} />
+            {/if}
+            {#if Array.isArray(ep) && ep.length > 0}
+              <div class="lines">
+                {#each ep.slice(0, 3) as e (e.id)}
+                  <div>{eventLine(e)}</div>
+                {/each}
               </div>
             {/if}
           </div>
-        {:else}
-          <button class="clear" onclick={() => clear(f.id)}>Clear</button>
-        {/if}
-      </div>
+          <div class="side">
+            <span class="lab">the episode</span>
+            {#if ep === 'loading'}
+              <p class="ep-note">fetching the events…</p>
+            {:else if ep === 'error'}
+              <p class="ep-note">could not fetch the events</p>
+            {:else if Array.isArray(ep) && ep.length === 0}
+              <!-- Raw events are only retained in the buffer; an old
+                   flag honestly says the window has moved on rather
+                   than drawing an empty strip. -->
+              <p class="ep-note">no matching events still buffered</p>
+            {:else if Array.isArray(ep)}
+              <svg
+                viewBox="0 0 260 34"
+                preserveAspectRatio="none"
+                role="img"
+                aria-label="{ep.length} events, drawn on a strip of the half hour around last seen"
+              >
+                {#each episodeTicks(ep) as x, i (i)}
+                  <line x1={x} y1="6" x2={x} y2="28" stroke="var(--ft)" stroke-width="2.5" stroke-linecap="round" />
+                {/each}
+              </svg>
+              <span class="span">{ep.length} events · ±30 m around last seen</span>
+            {/if}
+          </div>
+          <div class="dwr-acts">
+            {#if isFilterable(f)}
+              <button class="act" onclick={() => filterToTarget(f)}>open in stream ▸</button>
+            {/if}
+            {#if isAdminOrOpen}
+              <!-- Split button: the main segment is exactly today's Clear.
+                   The arrow segment is admin-only, matching the backend's
+                   own gate on POST /api/flags/{id}/clear-permanent -- a
+                   permanent exclusion suppresses detection until someone
+                   undoes it, unlike the plain Clear beside it. A non-admin
+                   gets a plain Clear button with no arrow at all (below),
+                   rather than a disabled one that would just advertise an
+                   action they can't take (issue #198). -->
+              <div class="split-clear" class:menu-open={openClearMenuFor === f.id}>
+                <button class="clear split-main" onclick={() => clear(f.id)}>Clear</button>
+                <button
+                  class="clear split-arrow"
+                  aria-haspopup="true"
+                  aria-expanded={openClearMenuFor === f.id}
+                  aria-label="More clear options for this flag"
+                  onclick={() => toggleClearMenu(f.id)}
+                >
+                  ▾
+                </button>
+                {#if openClearMenuFor === f.id}
+                  <div class="split-menu" role="menu">
+                    <button
+                      class="split-menu-item"
+                      role="menuitem"
+                      title="Clear this flag and permanently stop {TYPE_LABELS[f.type]} from ever raising again for {f.target} -- reversible from the Exclusions page (see the menu)."
+                      onclick={() => {
+                        openClearMenuFor = null
+                        clearPermanent(f.id)
+                      }}
+                    >
+                      Permanently clear
+                    </button>
+                  </div>
+                {/if}
+              </div>
+            {:else}
+              <button class="clear" onclick={() => clear(f.id)}>Clear</button>
+            {/if}
+          </div>
+        </div>
+      {/if}
     </li>
   {/snippet}
 
@@ -523,14 +658,32 @@
       </div>
     </div>
     {#if active.length === 0}
-      <p class="empty">Nothing flagged right now.</p>
+      <!-- The honest cleared state (round 26): zero open is a fact with
+           a history, not a blank. When something was cleared, say when,
+           and stand by the audit-log promise the bubble makes. -->
+      <div class="caempty">
+        <span class="cae-mark">✓</span>
+        <div>
+          <b>Nothing open.</b>
+          {#if lastClearedAt}
+            Cleared {clearedWhen(lastClearedAt)} — cleared flags keep their place
+            below{#if isAdminOrOpen}&nbsp;and in the
+              <button class="olink" onclick={() => (appState.view = 'audit')}>audit log</button>{/if}.
+          {:else}
+            Nothing has been flagged yet.
+          {/if}
+        </div>
+      </div>
     {:else}
       <ul class="list card-grid" style="--flag-columns: {effectiveColumns}">
         {#each activeItems as item (item.kind === 'group' ? `group:${item.sourceIp}` : item.flag.id)}
           {#if item.kind === 'single'}
             {@render flagCard(item.flag, compact)}
           {:else}
-            <li class="card campaign-card">
+            <!-- The stripe wears the newest member's family ink -- a
+                 campaign has no single type, and the newest member is
+                 what put the card at this position in the list. -->
+            <li class="card campaign-card" style="--ft: {FLAG_FAMILIES[item.flags[0].type].ink}">
               <div class="campaign-header">
                 <button
                   class="campaign-toggle"
@@ -577,9 +730,9 @@
            preference for the whole page reads simpler than two. -->
       <ul class="list card-grid" style="--flag-columns: {effectiveColumns}">
         {#each cleared as f (f.id)}
-          <li class="card cleared-card" class:compact>
+          <li class="card cleared-card" class:compact style="--ft: {FLAG_FAMILIES[f.type].ink}">
             <div class="card-main">
-              <span class="type">{TYPE_LABELS[f.type]}</span>
+              <span class="type">{FLAG_FAMILIES[f.type].mark} {TYPE_LABELS[f.type]}</span>
               <span class="target">{f.target === 'global' ? 'network-wide' : f.target}</span>
             </div>
             <p class="detail">{f.detail}</p>
@@ -618,6 +771,15 @@
     min-height: 0;
     display: flex;
     flex-direction: column;
+  }
+
+  /* The explicit display rules above beat the browser's own [hidden]
+     handling, so without this the inactive panel rendered *below* the
+     active one -- the Exclusions blurb sat under the flags list.
+     Watchlist.svelte carries the same guard for the same reason. */
+  .flags[hidden],
+  .exclusions-panel[hidden] {
+    display: none;
   }
 
   .exclusions-panel {
@@ -682,21 +844,24 @@
     grid-template-columns: repeat(var(--flag-columns, 1), minmax(0, 1fr));
   }
 
+  /* The stripe (rounds 18-19): the flag's family ink as one unbroken
+     3px line down the card's own left edge, running through the drawer
+     when it opens -- an inset shadow rather than a border so it sits
+     inside the rounded corner without its own radius math. --ft is set
+     per-card from lib/flagPalette. The right padding reserves only the
+     chevron's corner now that the actions live in the drawer. */
   .card {
     position: relative;
     background: var(--bg-elevated);
     border: 1px solid var(--border);
     border-radius: 8px;
-    padding: 10px 150px 10px 12px;
+    padding: 10px 40px 10px 14px;
+    box-shadow: inset 3px 0 0 var(--ft, transparent);
   }
 
-  /* Compact (2/3 columns, issue #199). The 150px right-reserve above
-     exists only to make room for .actions floating in the corner --
-     narrower cards don't have that much spare width to give up, so
-     .actions moves into normal flow at the bottom instead (see below)
-     and the reserve is dropped along with it. */
+  /* Compact (2/3 columns, issue #199): tighter padding, same stripe. */
   .card.compact {
-    padding: 8px 10px;
+    padding: 8px 32px 8px 12px;
   }
 
   .cleared-card {
@@ -773,13 +938,17 @@
     flex-wrap: wrap;
   }
 
+  /* The mark wears the family ink (rounds 18-19): ✱ an alarm, ▲ an
+     advisory, coloured text rather than the old accent chip so the
+     type and its stripe read as one thing. */
   .type {
-    font-size: 12px;
-    font-weight: 600;
-    color: var(--accent);
-    background: var(--accent-bg);
-    border-radius: 4px;
-    padding: 2px 7px;
+    font-family: var(--font-mono);
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--ft, var(--accent));
+    white-space: nowrap;
   }
 
   .confidence {
@@ -846,27 +1015,149 @@
     color: var(--fg-dim);
   }
 
-  .details-toggle {
+  /* The row's one affordance: the chevron rotates open, per the
+     record's own idiom. */
+  .openc {
+    position: absolute;
+    top: 8px;
+    right: 8px;
     background: transparent;
     border: none;
     color: var(--accent);
+    font-size: 13px;
+    padding: 4px 8px;
+    cursor: pointer;
+    transition: transform 0.2s;
+  }
+
+  .card.open > .openc {
+    transform: rotate(90deg);
+  }
+
+  /* The drawer (rounds 18-19): evidence and matched lines left, the
+     episode's shape right, actions across the foot. No indented border
+     of its own -- the card's stripe is the one line (round 19). */
+  .dwr {
+    margin-top: 10px;
+    padding-top: 10px;
+    border-top: 1px solid var(--border);
+    display: grid;
+    grid-template-columns: 1.3fr 1fr;
+    gap: 10px 32px;
+  }
+
+  .card.compact .dwr {
+    grid-template-columns: 1fr;
+    gap: 8px;
+  }
+
+  .dcol {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    min-width: 0;
+  }
+
+  .side {
+    min-width: 0;
+  }
+
+  .side .lab {
+    display: block;
+    font-family: var(--font-mono);
+    font-size: 9px;
+    font-weight: 600;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--fg-dim);
+  }
+
+  .side svg {
+    display: block;
+    width: 100%;
+    height: 34px;
+    margin: 6px 0 2px;
+  }
+
+  .side .span,
+  .ep-note {
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    color: var(--fg-dim);
+  }
+
+  .ep-note {
+    margin: 8px 0 0;
+  }
+
+  .lines {
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    color: var(--fg-dim);
+    white-space: pre;
+    overflow: hidden;
+  }
+
+  .dwr-acts {
+    grid-column: 1 / -1;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-top: 2px;
+  }
+
+  .act {
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--accent);
+    background: transparent;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    padding: 4px 16px;
+    cursor: pointer;
+  }
+
+  .act:hover {
+    border-color: var(--accent);
+  }
+
+  /* The honest cleared state (round 26). */
+  .caempty {
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+    font-size: 13px;
+    color: var(--fg-muted);
+  }
+
+  .caempty b {
+    color: var(--fg);
+  }
+
+  .cae-mark {
+    color: var(--accept);
+    font-weight: 700;
+  }
+
+  .olink {
+    background: none;
+    border: none;
     padding: 0;
-    font-size: 12px;
+    font-size: inherit;
+    color: var(--accent);
+    cursor: pointer;
     text-decoration: underline;
     text-decoration-color: transparent;
   }
 
-  .details-toggle:hover {
+  .olink:hover {
     text-decoration-color: currentColor;
   }
 
-  .expanded {
-    margin-top: 8px;
-    padding-top: 8px;
-    border-top: 1px solid var(--border);
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
+  @media (prefers-reduced-motion: reduce) {
+    .openc {
+      transition: none;
+    }
   }
 
   .ev-row {
@@ -892,35 +1183,6 @@
   .ev-raw {
     font-size: 11px;
     color: var(--fg-dim);
-  }
-
-  .actions {
-    position: absolute;
-    top: 10px;
-    right: 12px;
-    display: flex;
-    flex-direction: column;
-    align-items: stretch;
-    gap: 6px;
-    width: 138px;
-  }
-
-  /* Flows below the card content instead of floating in the corner --
-     a fixed-width floating box is what the 150px reserve above was
-     for, and a compact card doesn't have that to spare. Full-width
-     here also means the split button (see .split-clear) always has
-     room regardless of how narrow the column gets, rather than needing
-     its own per-density size math. */
-  .card.compact .actions {
-    position: static;
-    width: auto;
-    flex-direction: row;
-    margin-top: 8px;
-  }
-
-  .card.compact .actions .split-clear,
-  .card.compact .actions > .clear {
-    flex: 1;
   }
 
   .clear {
@@ -1058,12 +1320,6 @@
     background: var(--accent-bg);
     font-weight: 600;
   }
-
-
-
-  /* Armed state: the button itself turns into the confirmation -- no
-     modal, because this red/"Confirm" state IS the second, deliberate
-     step (issue #198). */
 
 
 </style>
