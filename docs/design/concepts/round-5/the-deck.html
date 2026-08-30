@@ -74,7 +74,7 @@
   /* ---- scene 1: the door — one beat, then in ---- */
   .door { display: flex; flex-direction: column; min-height: 100vh; position: relative; }
   .door .beat { flex: 1; display: grid; place-items: center; position: relative; }
-  .door .stack { text-align: center; width: 300px; }
+  .door .stack { text-align: center; width: 300px; position: relative; z-index: 2; }
   .door .wm {
     display: inline-block; font-size: 34px; font-weight: 800; letter-spacing: 0.04em;
     padding: 12px 30px; border: 1.5px solid var(--now); border-radius: 4px;
@@ -83,7 +83,13 @@
   }
   .door .wm em { font-style: normal; color: var(--accent); }
   @keyframes kindle { from { box-shadow: none; border-color: rgba(232, 176, 90, 0); } }
-  .fullfall { position: absolute; inset: 0; overflow: hidden; pointer-events: none; }
+  .fullfall {
+    position: absolute; inset: 0; overflow: hidden; pointer-events: none;
+    /* The rain lives behind the door's elements, never across them: a
+       radial mask carves the centre out of the layer entirely. */
+    -webkit-mask: radial-gradient(ellipse 460px 380px at 50% 52%, transparent 62%, black 78%);
+    mask: radial-gradient(ellipse 460px 380px at 50% 52%, transparent 62%, black 78%);
+  }
   .fullfall i {
     position: absolute; top: -20px; width: 2.5px; height: 13px; border-radius: 2px;
     background: var(--fall-accept); animation: fall 5.5s linear infinite;
@@ -162,10 +168,13 @@
   .fall-chip { font: 600 10.5px var(--mono); letter-spacing: 0.05em; border-radius: 12px; padding: 3px 12px; border: 1px solid; }
   .fc-alarm { color: var(--alarm); border-color: rgba(255, 84, 112, 0.5); }
   .fc-dim { color: var(--ink-2); border-color: var(--hair-2); }
-  .fall-read { padding: 2px 20px 8px; font-size: 11.5px; color: var(--ink-3); max-width: 1080px; }
-  .fall-read b { color: var(--ink-2); font-weight: 600; }
-  .fall-read .r { color: var(--fall-drop); }
-  .fall-read .b { color: var(--fall-accept); }
+  .fall-info { position: absolute; bottom: 10px; left: 14px; z-index: 6; }
+  .ibtn {
+    width: 18px; height: 18px; border-radius: 50%; border: 1px solid var(--hair-2);
+    background: transparent; color: var(--ink-3); font: italic 600 11px Georgia, serif;
+    cursor: pointer; line-height: 1;
+  }
+  .ibtn:hover { color: var(--accent); border-color: var(--accent); }
   .fallcanvas { flex: 1; position: relative; }
   .fallcanvas svg { position: absolute; inset: 0; width: 100%; height: 100%; }
   .bh-name { font: 650 11px var(--mono); fill: var(--ink); }
@@ -189,19 +198,28 @@
   .fall-legend .r { color: var(--fall-drop); }
   .fall-legend .v { color: #a78bfa; }
 
-  /* ---- the topography card: one graph, two angles ---- */
+  /* ---- the topography card: one place, two viewpoints, three depths ---- */
   .modechip {
     margin-left: 18px; font: 600 10.5px var(--mono); letter-spacing: 0.08em;
     color: var(--accent); background: var(--raised); border: 1px solid var(--hair-2);
     border-radius: 14px; padding: 3px 14px; cursor: pointer;
   }
-  #topo .node { transition: transform 0.7s cubic-bezier(0.6, 0, 0.2, 1); transform: var(--ex); }
-  #topo.orbitmode .node { transform: var(--gr); }
-  #topo .isl-card, #topo .g-dot, #topo .exlayer, #topo .grlayer { transition: opacity 0.55s ease; }
-  #topo .g-dot, #topo .grlayer { opacity: 0; pointer-events: none; }
-  #topo.orbitmode .g-dot, #topo.orbitmode .grlayer { opacity: 1; }
-  #topo.orbitmode .isl-card, #topo.orbitmode .exlayer { opacity: 0; pointer-events: none; }
-  @media (prefers-reduced-motion: reduce) { #topo .node { transition: none; } }
+  .depth { margin-left: 18px; display: flex; gap: 10px; align-items: center; font: 600 9.5px var(--mono); letter-spacing: 0.1em; color: var(--ink-3); }
+  .depth input { width: 110px; accent-color: var(--accent); }
+  .depth .dlab { color: var(--ink-2); letter-spacing: 0.05em; }
+  #topo { perspective: 1400px; }
+  #topo svg { transition: transform 0.8s cubic-bezier(0.6, 0, 0.2, 1); transform-origin: 50% 42%; }
+  #topo.survey svg { transform: rotateX(32deg) scale(0.88) translateY(-24px); }
+  #topo .isl-card, #topo .g-dot, #topo .detail, #topo .svc, #topo .cli { transition: opacity 0.55s ease; }
+  #topo .g-dot { opacity: 0; pointer-events: none; }
+  #topo.survey .g-dot { opacity: 1; }
+  #topo.survey .isl-card, #topo.survey .detail { opacity: 0; pointer-events: none; }
+  #topo[data-lvl="0"] .svc, #topo[data-lvl="0"] .cli { opacity: 0; }
+  #topo[data-lvl="1"] .cli { opacity: 0; }
+  .cli .c-dot { stroke: none; }
+  .cli .c-label { font: 9.5px var(--mono); fill: var(--ink-3); }
+  .cli .spoke { stroke-width: 0.8; opacity: 0.3; }
+  @media (prefers-reduced-motion: reduce) { #topo svg { transition: none; } }
 
   /* ---- the deck: snap + the rail ---- */
   html { scroll-snap-type: y mandatory; }
@@ -362,7 +380,10 @@
       <span class="fall-chip fc-alarm">● NEW CARRIER ×14 — 13:52 · iot → bridge1</span>
       <span class="fall-chip fc-dim">○ 1 dark boundary — nothing logged</span>
     </div>
-    <div class="fall-read"><b>How to read this:</b> each band is one boundary; within a band, position is the port. The top strip is the live spectrum — energy arriving right now. Below it, time pours downward: a steady talker draws a carrier line; <span class="r">red energy is dropped traffic — red never means anything else</span>; <span class="b">blue energy was accepted</span>. A band that has always been black growing a carrier is the thing this display exists to show. Click any carrier to open it in Stream, filtered.</div>
+    <!-- Deep explanation never sits in the UI (owner, 2026-08-30):
+         a learned display explains itself once, in the docs. What
+         remains on-screen is a tiny (i), well out of the way. -->
+    <div class="fall-info"><button class="ibtn" title="How to read the fall — full explanation in the docs">i</button></div>
     <div class="fallcanvas">
       <svg viewBox="0 0 1400 560" preserveAspectRatio="xMidYMid meet"
            aria-label="Nine boundary bands: live spectrum peaks at the brink, carriers falling into fifteen minutes of memory below; one new carrier born at 13:52 on a band blank for 41 days; the guest boundary hatched — dark, not quiet.">
@@ -506,9 +527,9 @@
   </div>
 </section>
 
-<!-- ============ SCENE 3 : TOPOGRAPHY — ONE GRAPH, TWO ANGLES ============ -->
-<section class="scene" id="s3" aria-label="Topography: one graph, two angles — explore and orbit">
-  <div class="scene-tag" style="top:66px">The topography card: one graph, two viewing angles. EXPLORE is the drawn map; ORBIT is the same shape reduced — the atlas's own chart. The toggle really works here: click it and the nodes travel. Same nodes, same adjacency, one mental model.</div>
+<!-- ============ SCENE 3 : TOPOGRAPHY — ONE PLACE, TWO VIEWPOINTS, THREE DEPTHS ============ -->
+<section class="scene" id="s3" aria-label="Topography: one cartesian graph; the viewpoint and the depth are yours">
+  <div class="scene-tag" style="top:66px">The topography card. One cartesian graph — Internet above, router at the waist, lanes below — and it stays that graph everywhere: SURVEY just tilts the camera back, same layout, same major links. The DEPTH slider filters detail: zones, services, every client. Both controls really work here.</div>
   <div class="scenebar">
     <span class="wordmark">MIKRO<em>VIEW</em><span class="hintkey">M · ATLAS</span></span>
     <span class="scname">Topography<span class="epi">your network, drawn from its own rules</span></span>
@@ -521,31 +542,27 @@
   </div>
   <div class="lenses">
     <span class="lens on">Traffic</span><span class="lens">Policy</span><span class="lens">Coverage</span><span class="lens">Flags<span class="ct">6</span></span><span class="lens">Watch</span>
-    <button class="modechip" id="modechip" onclick="document.getElementById('topo').classList.toggle('orbitmode'); this.textContent = document.getElementById('topo').classList.contains('orbitmode') ? '◍ ORBIT — click for EXPLORE' : '⊕ EXPLORE — click for ORBIT'">⊕ EXPLORE — click for ORBIT</button>
+    <button class="modechip" id="modechip" onclick="var t=document.getElementById('topo'); t.classList.toggle('survey'); this.textContent = t.classList.contains('survey') ? '◍ SURVEY — same map, from altitude · click for CLOSE' : '⊕ CLOSE — click for SURVEY'">⊕ CLOSE — click for SURVEY</button>
+    <label class="depth">DEPTH
+      <input type="range" min="0" max="2" value="1" aria-label="Detail depth: zones, services, clients"
+             oninput="document.getElementById('topo').dataset.lvl = this.value">
+      <span class="dlab">zones · services · clients</span>
+    </label>
   </div>
 
-  <div class="stage" id="topo">
-    <svg viewBox="0 0 1400 620" preserveAspectRatio="xMidYMid meet" role="img"
-         aria-label="The network as one graph, in two angles: the drawn map, and the same shape reduced to orbits.">
-      <g class="grlayer" aria-hidden="true">
-        <ellipse class="orbit" cx="700" cy="300" rx="340" ry="150"/>
-        <ellipse class="orbit" cx="700" cy="300" rx="500" ry="228"/>
-        <line class="zrib" x1="700" y1="300" x2="420" y2="205"/>
-        <line class="zrib" x1="700" y1="300" x2="700" y2="150"/>
-        <line class="zrib" x1="700" y1="300" x2="980" y2="205"/>
-        <line class="zrib" x1="700" y1="300" x2="330" y2="420"/>
-        <line class="zrib" x1="700" y1="300" x2="1070" y2="420"/>
-        <line class="zrib" x1="700" y1="300" x2="700" y2="528"/>
-      </g>
-      <g class="exlayer">
-        <path class="rib" d="M700 104 V 232" stroke="var(--accent)" stroke-width="3.5"/>
-        <path class="rib" d="M645 302 C 565 380, 355 410, 285 480" stroke="var(--lan)" stroke-width="3.5"/>
-        <path class="rib" d="M683 302 C 653 380, 595 420, 577 480" stroke="var(--srv)" stroke-width="2.4"/>
-        <path class="rib" d="M718 302 C 748 380, 818 420, 848 480" stroke="var(--iot)" stroke-width="1.7"/>
-        <path class="rib" d="M756 302 C 846 375, 1050 405, 1116 480" stroke="var(--guest)" stroke-width="1.7"/>
-        <path class="rib" d="M1080 158 C 990 196, 880 232, 830 252" stroke="var(--lan)" stroke-width="1.7"/>
-        <path class="rib-ghost" d="M1100 165 C 945 290, 705 380, 610 476"/>
-        <path class="rib-alarm" d="M828 486 C 725 385, 405 385, 302 486"/>
+  <div class="stage" id="topo" data-lvl="1">
+    <svg viewBox="0 0 1400 720" preserveAspectRatio="xMidYMid meet" role="img"
+         aria-label="The network as one cartesian graph: internet above, router at the waist, lanes below, clients beneath their lanes. The survey viewpoint tilts the same graph; the depth slider adds services and clients.">
+      <path class="rib" d="M700 104 V 232" stroke="var(--accent)" stroke-width="3.5"/>
+      <path class="rib" d="M645 302 C 565 380, 355 410, 285 480" stroke="var(--lan)" stroke-width="3.5"/>
+      <path class="rib" d="M683 302 C 653 380, 595 420, 577 480" stroke="var(--srv)" stroke-width="2.4"/>
+      <path class="rib" d="M718 302 C 748 380, 818 420, 848 480" stroke="var(--iot)" stroke-width="1.7"/>
+      <path class="rib" d="M756 302 C 846 375, 1050 405, 1116 480" stroke="var(--guest)" stroke-width="1.7"/>
+      <path class="rib" d="M1080 158 C 990 196, 880 232, 830 252" stroke="var(--lan)" stroke-width="1.7"/>
+      <path class="rib-ghost" d="M1100 165 C 945 290, 705 380, 610 476"/>
+      <path class="rib-alarm" d="M828 486 C 725 385, 405 385, 302 486"/>
+
+      <g class="detail">
         <g transform="translate(514 396)">
           <rect x="-12" y="-15" width="234" height="40" rx="9" fill="#170a12" stroke="var(--alarm)" stroke-opacity="0.8"/>
           <circle cx="2" cy="-2" r="3" fill="var(--alarm)"/>
@@ -554,8 +571,14 @@
         </g>
         <g transform="translate(742 146)"><text class="alarm-t" x="0" y="0" style="font-size:9px">▲3.1× drops · wan-in</text></g>
       </g>
+      <g class="svc">
+        <g transform="translate(600 448)"><text class="chip-t" x="0" y="0">445 5001 53</text></g>
+        <g transform="translate(238 384)"><text class="chip-t" x="0" y="0">any → wan · 9/s</text></g>
+        <g transform="translate(940 400)"><text class="chip-t" x="0" y="0">wan only · dark</text></g>
+        <g transform="translate(806 420)"><text class="chip-t" x="0" y="0">:53 :123 egress</text></g>
+      </g>
 
-      <g class="node" style="--ex: translate(700px, 68px); --gr: translate(700px, 528px)">
+      <g class="node" transform="translate(700 68)">
         <g class="isl-card">
           <rect class="isl" x="-100" y="-30" width="200" height="60" rx="12"/>
           <text x="-82" y="-3" class="n-name">Internet</text>
@@ -563,24 +586,23 @@
           <text x="48" y="-6" class="cov cov-l">LOGGED</text>
         </g>
         <g class="g-dot">
-          <circle r="9" class="zone-dot" style="stroke: var(--ink-3)"/>
-          <text x="16" y="26" class="zone-label">Internet</text>
-          <text x="16" y="41" class="zone-epithet">the weather · ▲3.1× drops</text>
+          <circle r="8" class="zone-dot" style="stroke: var(--ink-3)"/>
+          <text x="16" y="4" class="zone-label">Internet</text>
         </g>
       </g>
-      <g class="node" style="--ex: translate(700px, 268px); --gr: translate(700px, 300px)">
+      <g class="node" transform="translate(700 268)">
         <g class="isl-card">
           <rect class="isl" x="-128" y="-34" width="256" height="68" rx="12" stroke="rgba(157,184,232,0.4)"/>
           <text x="-110" y="-6" class="n-name">rb5009</text>
           <text x="-110" y="12" class="n-sub">RouterOS 7.20.1 · the waist · 41 rules</text>
         </g>
         <g class="g-dot">
-          <circle r="30" class="station-ring"/>
+          <circle r="22" class="station-ring"/>
           <circle r="3" class="station-core"/>
-          <text y="48" text-anchor="middle" class="station-label">rb5009 · the router</text>
+          <text x="34" y="4" class="station-label">rb5009</text>
         </g>
       </g>
-      <g class="node" style="--ex: translate(1128px, 132px); --gr: translate(1070px, 420px)">
+      <g class="node" transform="translate(1128 132)">
         <g class="isl-card">
           <rect class="isl" x="-84" y="-28" width="188" height="56" rx="12"/>
           <text x="-66" y="-2" class="n-name" style="font-size:13px">WireGuard</text>
@@ -588,12 +610,11 @@
           <text x="54" y="-4" class="cov cov-q">QUIET</text>
         </g>
         <g class="g-dot">
-          <circle r="9" class="zone-dot" style="stroke: var(--accent)"/>
-          <text x="16" y="26" class="zone-label">WireGuard</text>
-          <text x="16" y="41" class="zone-epithet">quiet by choice</text>
+          <circle r="8" class="zone-dot" style="stroke: var(--accent)"/>
+          <text x="-16" y="4" text-anchor="end" class="zone-label">WireGuard</text>
         </g>
       </g>
-      <g class="node" style="--ex: translate(285px, 490px); --gr: translate(420px, 205px)">
+      <g class="node" transform="translate(285 490)">
         <g class="isl-card">
           <rect class="isl" x="-108" y="0" width="216" height="106" rx="12"/>
           <circle cx="-90" cy="22" r="3.5" fill="var(--lan)"/>
@@ -602,12 +623,11 @@
           <text x="-90" y="86" class="cov cov-l">LOGGED BOTH WAYS</text>
         </g>
         <g class="g-dot">
-          <circle r="9" class="zone-dot" style="stroke: var(--lan)"/>
-          <text x="-16" y="-18" text-anchor="end" class="zone-label">LAN</text>
-          <text x="-16" y="-33" text-anchor="end" class="zone-epithet">the household</text>
+          <circle r="8" class="zone-dot" style="stroke: var(--lan)"/>
+          <text y="-16" text-anchor="middle" class="zone-label">LAN</text>
         </g>
       </g>
-      <g class="node" style="--ex: translate(577px, 490px); --gr: translate(700px, 150px)">
+      <g class="node" transform="translate(577 490)">
         <g class="isl-card">
           <rect class="isl" x="-108" y="0" width="216" height="106" rx="12"/>
           <circle cx="-90" cy="22" r="3.5" fill="var(--srv)"/>
@@ -616,12 +636,11 @@
           <text x="-90" y="86" class="cov cov-l">LOGGED BOTH WAYS</text>
         </g>
         <g class="g-dot">
-          <circle r="9" class="zone-dot" style="stroke: var(--srv)"/>
-          <text x="16" y="-18" class="zone-label">Servers</text>
-          <text x="16" y="-33" class="zone-epithet">445 · 5001 · 53</text>
+          <circle r="8" class="zone-dot" style="stroke: var(--srv)"/>
+          <text y="-16" text-anchor="middle" class="zone-label">Servers</text>
         </g>
       </g>
-      <g class="node" style="--ex: translate(848px, 490px); --gr: translate(980px, 205px)">
+      <g class="node" transform="translate(848 490)">
         <g class="isl-card">
           <rect class="isl" x="-108" y="0" width="216" height="106" rx="12"/>
           <circle cx="-90" cy="22" r="3.5" fill="var(--iot)"/>
@@ -630,13 +649,12 @@
           <text x="-90" y="86" class="cov cov-l">LOGGED BOTH WAYS</text>
         </g>
         <g class="g-dot">
-          <circle r="9" class="zone-dot" style="stroke: var(--iot)"/>
-          <circle r="14" fill="none" stroke="var(--alarm)" stroke-width="1.2" class="halo"/>
-          <text x="16" y="-18" class="zone-label">IoT</text>
-          <text x="16" y="-33" class="zone-epithet">egress guarded</text>
+          <circle r="8" class="zone-dot" style="stroke: var(--iot)"/>
+          <circle r="13" fill="none" stroke="var(--alarm)" stroke-width="1.2" class="halo"/>
+          <text y="-16" text-anchor="middle" class="zone-label">IoT</text>
         </g>
       </g>
-      <g class="node" style="--ex: translate(1116px, 490px); --gr: translate(330px, 420px)">
+      <g class="node" transform="translate(1116 490)">
         <g class="isl-card">
           <rect class="isl" x="-108" y="0" width="216" height="106" rx="12"/>
           <circle cx="-90" cy="22" r="3.5" fill="var(--guest)"/>
@@ -646,11 +664,50 @@
           <text x="-90" y="88" class="n-sub">no log rule on this boundary</text>
         </g>
         <g class="g-dot">
-          <circle r="9" class="zone-dot" style="stroke: var(--guest)"/>
-          <text x="-16" y="26" text-anchor="end" class="zone-label">Guest</text>
-          <text x="-16" y="41" text-anchor="end" class="zone-epithet">unmetered</text>
-          <text x="-16" y="57" text-anchor="end" class="zone-state bad">DARK — NO LOG RULE</text>
+          <circle r="8" class="zone-dot" style="stroke: var(--guest)"/>
+          <text y="-16" text-anchor="middle" class="zone-label">Guest</text>
+          <text y="-31" text-anchor="middle" class="zone-state bad">DARK</text>
         </g>
+      </g>
+
+      <!-- depth 2: every client, hanging beneath its lane -->
+      <g class="cli">
+        <line class="spoke" x1="285" y1="596" x2="215" y2="648" stroke="var(--lan)"/>
+        <line class="spoke" x1="285" y1="596" x2="285" y2="652" stroke="var(--lan)"/>
+        <line class="spoke" x1="285" y1="596" x2="355" y2="648" stroke="var(--lan)"/>
+        <circle class="c-dot" cx="215" cy="652" r="3.5" fill="var(--lan)"/>
+        <circle class="c-dot" cx="285" cy="656" r="3.5" fill="var(--lan)"/>
+        <circle class="c-dot" cx="355" cy="652" r="3.5" fill="var(--lan)"/>
+        <text x="215" y="668" text-anchor="middle" class="c-label">tom-desktop</text>
+        <text x="285" y="682" text-anchor="middle" class="c-label">phone-tom</text>
+        <text x="355" y="668" text-anchor="middle" class="c-label">laptop-anna</text>
+        <text x="285" y="700" text-anchor="middle" class="c-label" style="fill: var(--ink-3)">+ 9 more</text>
+
+        <line class="spoke" x1="577" y1="596" x2="517" y2="648" stroke="var(--srv)"/>
+        <line class="spoke" x1="577" y1="596" x2="577" y2="652" stroke="var(--srv)"/>
+        <line class="spoke" x1="577" y1="596" x2="637" y2="648" stroke="var(--srv)"/>
+        <circle class="c-dot" cx="517" cy="652" r="3.5" fill="var(--srv)"/>
+        <circle class="c-dot" cx="577" cy="656" r="3.5" fill="var(--srv)"/>
+        <circle class="c-dot" cx="637" cy="652" r="3.5" fill="var(--srv)"/>
+        <text x="517" y="668" text-anchor="middle" class="c-label">nas</text>
+        <text x="577" y="682" text-anchor="middle" class="c-label">pihole</text>
+        <text x="637" y="668" text-anchor="middle" class="c-label">unifi</text>
+
+        <line class="spoke" x1="848" y1="596" x2="788" y2="648" stroke="var(--iot)"/>
+        <line class="spoke" x1="848" y1="596" x2="848" y2="652" stroke="var(--iot)"/>
+        <line class="spoke" x1="848" y1="596" x2="908" y2="648" stroke="var(--iot)"/>
+        <circle class="c-dot" cx="788" cy="652" r="3.5" fill="var(--iot)"/>
+        <circle class="c-dot" cx="788" cy="652" r="8" fill="none" stroke="var(--alarm)" stroke-width="1.2" class="halo"/>
+        <circle class="c-dot" cx="848" cy="656" r="3.5" fill="var(--iot)"/>
+        <circle class="c-dot" cx="908" cy="652" r="3.5" fill="var(--iot)"/>
+        <text x="788" y="668" text-anchor="middle" class="c-label" style="fill: var(--alarm)">cam-porch ✱</text>
+        <text x="848" y="682" text-anchor="middle" class="c-label">hue-bridge</text>
+        <text x="908" y="668" text-anchor="middle" class="c-label">thermostat</text>
+        <text x="848" y="700" text-anchor="middle" class="c-label" style="fill: var(--ink-3)">+ 4 more</text>
+
+        <line class="spoke" x1="1116" y1="596" x2="1116" y2="652" stroke="var(--guest)"/>
+        <circle class="c-dot" cx="1116" cy="656" r="3.5" fill="var(--guest)"/>
+        <text x="1116" y="682" text-anchor="middle" class="c-label">guest-e8b2 · +2</text>
       </g>
     </svg>
   </div>
@@ -708,7 +765,7 @@
 
 <!-- ============ SCENE 3 : THE ATLAS — THE ONE NAVIGATOR ============ -->
 <section class="scene atlas" id="s5" aria-label="The atlas overlay: the network on orbit, and everywhere the app goes">
-  <div class="scene-tag" style="top:66px">The atlas, opened by the wordmark or <b>m</b> from any card. One chart is the whole app: zones on the near orbits (click = reach into its traffic), every other destination a body on the far orbit — no link footer, no menu. The deck row below deals your card order; the first is where sign-in lands.</div>
+  <div class="scene-tag" style="top:66px">The atlas, opened by the wordmark or <b>m</b> from any card. One chart is the whole app: the topography itself at the centre, small — the same cartesian graph, never a different shape — and every destination a body on the far orbit around it. Click a zone to reach into its traffic; no link footer, no menu. The deck row below deals your card order; the first is where sign-in lands.</div>
   <div class="scenebar">
     <span class="wordmark">MIKRO<em>VIEW</em></span>
     <span class="scstatus">
@@ -719,51 +776,22 @@
   </div>
   <div class="chart">
     <svg viewBox="0 0 1400 560" preserveAspectRatio="xMidYMid meet"
-         aria-label="Zones on orbit around the router; activate one to reach into it">
-      <ellipse class="orbit" cx="700" cy="280" rx="340" ry="150"/>
-      <ellipse class="orbit" cx="700" cy="280" rx="500" ry="228"/>
-      <line class="zrib" x1="700" y1="280" x2="420" y2="212"/>
-      <line class="zrib" x1="700" y1="280" x2="700" y2="130"/>
-      <line class="zrib" x1="700" y1="280" x2="980" y2="216"/>
-      <line class="zrib" x1="700" y1="280" x2="330" y2="410"/>
-      <line class="zrib" x1="700" y1="280" x2="1060" y2="420"/>
-      <line class="zrib" x1="700" y1="280" x2="700" y2="508"/>
-      <g class="station">
-        <circle cx="700" cy="280" r="30" class="station-ring"/>
-        <circle cx="700" cy="280" r="3" class="station-core"/>
-        <text x="700" y="328" text-anchor="middle" class="station-label">rb5009 · the router</text>
-      </g>
-      <g>
-        <circle cx="420" cy="212" r="9" class="zone-dot" style="stroke: var(--lan)"/>
-        <text x="404" y="188" text-anchor="end" class="zone-label">LAN</text>
-        <text x="404" y="173" text-anchor="end" class="zone-epithet">the household</text>
-      </g>
-      <g>
-        <circle cx="700" cy="130" r="9" class="zone-dot" style="stroke: var(--srv)"/>
-        <text x="716" y="112" class="zone-label">Servers</text>
-        <text x="716" y="97" class="zone-epithet">445 · 5001 · 53</text>
-      </g>
-      <g>
-        <circle cx="980" cy="216" r="9" class="zone-dot" style="stroke: var(--iot)"/>
-        <text x="996" y="200" class="zone-label">IoT</text>
-        <text x="996" y="185" class="zone-epithet">egress guarded</text>
-        <circle cx="980" cy="216" r="14" fill="none" stroke="var(--alarm)" stroke-width="1.2" class="halo"/>
-      </g>
-      <g>
-        <circle cx="330" cy="410" r="9" class="zone-dot" style="stroke: var(--guest)"/>
-        <text x="314" y="436" text-anchor="end" class="zone-label">Guest</text>
-        <text x="314" y="451" text-anchor="end" class="zone-epithet">unmetered</text>
-        <text x="314" y="467" text-anchor="end" class="zone-state bad">DARK — NO LOG RULE</text>
-      </g>
-      <g>
-        <circle cx="1060" cy="420" r="9" class="zone-dot" style="stroke: var(--accent)"/>
-        <text x="1076" y="446" class="zone-label">WireGuard</text>
-        <text x="1076" y="461" class="zone-epithet">quiet by choice</text>
-      </g>
-      <g>
-        <circle cx="700" cy="508" r="9" class="zone-dot" style="stroke: var(--ink-3)"/>
-        <text x="716" y="534" class="zone-label">Internet</text>
-        <text x="716" y="549" class="zone-epithet">the weather · ▲3.1× drops</text>
+         aria-label="The same topography, small, at the centre of the atlas: internet above, router at the waist, lanes below; destinations on the far orbit around it.">
+      <g transform="translate(140 40) scale(0.8)" style="transform-origin: 700px 280px">
+        <path class="rib" d="M700 150 V 250" stroke="var(--accent)" stroke-width="3"/>
+        <path class="rib" d="M655 285 C 590 340, 480 360, 430 400" stroke="var(--lan)" stroke-width="3"/>
+        <path class="rib" d="M685 285 C 660 340, 630 365, 610 410" stroke="var(--srv)" stroke-width="2"/>
+        <path class="rib" d="M715 285 C 740 340, 770 365, 790 410" stroke="var(--iot)" stroke-width="1.6"/>
+        <path class="rib" d="M745 285 C 810 335, 910 360, 960 400" stroke="var(--guest)" stroke-width="1.6"/>
+        <path class="rib" d="M990 190 C 910 215, 830 240, 760 258" stroke="var(--lan)" stroke-width="1.6"/>
+        <path class="rib-alarm" d="M782 420 C 700 340, 510 340, 438 420"/>
+        <g><circle cx="700" cy="128" r="8" class="zone-dot" style="stroke: var(--ink-3)"/><text x="716" y="132" class="zone-label">Internet</text><text x="716" y="147" class="zone-epithet">the weather · ▲3.1× drops</text></g>
+        <g><circle cx="700" cy="268" r="20" class="station-ring"/><circle cx="700" cy="268" r="3" class="station-core"/><text x="700" y="304" text-anchor="middle" class="station-label">rb5009 · the router</text></g>
+        <g><circle cx="430" cy="415" r="8" class="zone-dot" style="stroke: var(--lan)"/><text x="430" y="446" text-anchor="middle" class="zone-label">LAN</text><text x="430" y="461" text-anchor="middle" class="zone-epithet">the household</text></g>
+        <g><circle cx="610" cy="425" r="8" class="zone-dot" style="stroke: var(--srv)"/><text x="610" y="456" text-anchor="middle" class="zone-label">Servers</text><text x="610" y="471" text-anchor="middle" class="zone-epithet">445 · 5001 · 53</text></g>
+        <g><circle cx="790" cy="425" r="8" class="zone-dot" style="stroke: var(--iot)"/><circle cx="790" cy="425" r="13" fill="none" stroke="var(--alarm)" stroke-width="1.2" class="halo"/><text x="790" y="456" text-anchor="middle" class="zone-label">IoT</text><text x="790" y="471" text-anchor="middle" class="zone-epithet">egress guarded</text></g>
+        <g><circle cx="960" cy="415" r="8" class="zone-dot" style="stroke: var(--guest)"/><text x="960" y="446" text-anchor="middle" class="zone-label">Guest</text><text x="960" y="461" text-anchor="middle" class="zone-state bad">DARK — NO LOG RULE</text></g>
+        <g><circle cx="1000" cy="178" r="8" class="zone-dot" style="stroke: var(--accent)"/><text x="1016" y="182" class="zone-label">WireGuard</text><text x="1016" y="197" class="zone-epithet">quiet by choice</text></g>
       </g>
       <!-- The far orbit: everywhere else the app goes. Not a footer of
            links — destinations are bodies on the atlas's outermost
