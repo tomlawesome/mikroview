@@ -173,6 +173,12 @@ const blockSpecs: Record<string, BlockSpec> = {
     source: '/ip/arp',
     record: '{"address"=($v->"address"); "mac"=($v->"mac-address")}',
   },
+  'ip-address': {
+    varName: 'addr',
+    source: '/ip/address',
+    record:
+      '{"address"=($v->"address"); "network"=($v->"network"); "interface"=($v->"interface"); "comment"=($v->"comment")}',
+  },
 }
 
 export function pushBlock(address: string, token: string, kind: string): string {

@@ -97,10 +97,16 @@ if (raised.every((r) => r.ok)) {
     labels.length === 3 && labels.join(', ') === 'Expected, Noise, Real',
     `the row shows exactly the three bare labels, in order, no second line (got: ${labels.join(' | ')})`,
   )
+  // Clear's demotion in the docket world (#633 rounds 18-19 × #638):
+  // it rides the drawer's foot rather than a secondary slot on the
+  // face -- present, one chevron away, never the leading act.
+  await realCard.locator('.openc').click()
+  await realCard.locator('.split-main').waitFor({ timeout: 5000 })
   check(
-    (await realCard.locator('.split-clear.secondary, .clear.secondary').count()) > 0,
-    'Clear is still present on the card, demoted to secondary rather than removed',
+    (await realCard.locator('.split-clear .split-main').count()) > 0,
+    'Clear is still present, demoted into the drawer rather than removed',
   )
+  await realCard.locator('.openc').click()
 
   // --- Real: judges without clearing, badge replaces the row ---
 

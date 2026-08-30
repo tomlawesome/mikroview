@@ -368,6 +368,17 @@ type Entities struct {
 	StorePath string `yaml:"storePath"`
 }
 
+// Coverage configures internal/coverage's persisted, admin-manageable
+// coverage-gap declaration store (issue #630/#392): an admin's on-record
+// statement that a given boundary-direction pair is intentionally, not
+// accidentally, quiet. StorePath left empty is a fully supported,
+// deliberate choice, same optional-persistence contract as
+// Entities.StorePath: the store still works, declarations just don't
+// survive a restart.
+type Coverage struct {
+	StorePath string `yaml:"storePath"`
+}
+
 // Audit configures internal/audit's persisted admin-action accountability
 // log (issue #112) -- who created a user, changed a detector setting,
 // upserted/deleted an entity, created or revoked an API token, or removed
@@ -811,6 +822,7 @@ type Config struct {
 	Flags      Flags      `yaml:"flags"`
 	Auth       Auth       `yaml:"auth"`
 	Entities   Entities   `yaml:"entities"`
+	Coverage   Coverage   `yaml:"coverage"`
 	Audit      Audit      `yaml:"audit"`
 	Setup      Setup      `yaml:"setup"`
 	Watchlist  Watchlist  `yaml:"watchlist"`
@@ -948,6 +960,9 @@ func defaults() Config {
 		},
 		Entities: Entities{
 			StorePath: DefaultDataDir + "/entities.json",
+		},
+		Coverage: Coverage{
+			StorePath: DefaultDataDir + "/coverage.json",
 		},
 		Audit: Audit{
 			StorePath: DefaultDataDir + "/audit.json",
@@ -1332,6 +1347,9 @@ func applyEnv(cfg *Config) {
 	}
 	if v := os.Getenv("MIKROVIEW_ENTITIES_STORE_PATH"); v != "" {
 		cfg.Entities.StorePath = v
+	}
+	if v := os.Getenv("MIKROVIEW_COVERAGE_STORE_PATH"); v != "" {
+		cfg.Coverage.StorePath = v
 	}
 	if v := os.Getenv("MIKROVIEW_AUDIT_STORE_PATH"); v != "" {
 		cfg.Audit.StorePath = v
