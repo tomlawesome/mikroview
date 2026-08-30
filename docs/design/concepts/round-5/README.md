@@ -98,7 +98,21 @@ apparatus, not design.
   is gone. (Fallback candidate if this misses: a radial menu around
   the router station.)
 
+## The owner's third batch (2026-08-30)
+
+- **Door v2 accepted** ("Congratulations on the new login, great
+  work") with two amendments, both applied as v3: the falling pattern
+  covers the whole screen behind the login, and the amber draws as a
+  thin box framing the wordmark (1.5px) instead of the underline.
+- **The rigid top bar rejected again in card form**: "can we have the
+  information presented in more of a free floating way?" Applied: no
+  strip, no border, no glass — wordmark and scene name float top-left,
+  status cluster floats top-right, stream controls float beneath it.
+  The build's SceneBar.svelte follows once the round is ratified.
+
 ## Owner verdicts
 
-- Door v1: rejected. P/Q framing: rejected, superseded by R.
-- Door v2, direction R, the topography toggle, the far orbit: pending.
+- Door: v3 standing (v2 accepted + full-screen fall, boxed wordmark).
+- P/Q framing: rejected, superseded by R (the deck).
+- Direction R, the topography toggle, the far orbit, floating chrome:
+  pending.
