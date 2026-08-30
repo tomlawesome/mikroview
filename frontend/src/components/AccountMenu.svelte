@@ -1,12 +1,15 @@
 <script lang="ts">
   // SPDX-License-Identifier: AGPL-3.0-only
   //
-  // The account menu (#633): the scene bar's account chip carries theme
-  // switching, the operate pages (the engine room, fleet, entities,
-  // audit log, run setup), sign out, and About & licence (AGPL 5(d)/13
-  // -- the licence must stay reachable from the running app). These
-  // rows lived on the retired atlas overlay; the chip is where they
-  // live now, so every scene bar reaches them.
+  // The account menu (#633, slimmed by #647 round 23): the scene bar's
+  // account chip carries theme switching, Run setup…, sign out, and
+  // About & licence (AGPL 5(d)/13 -- the licence must stay reachable
+  // from the running app). Settings, Entities and Audit log left the
+  // menu once each had somewhere better to live -- Settings and
+  // Entities joined the deck as cards of their own, and Audit log has
+  // lived on the docket's own tab since rounds 17-19 -- so the menu's
+  // only remaining page-shaped action is the one thing that opens a
+  // modal rather than going anywhere: Run setup….
   import { appState, type View } from '../lib/state.svelte'
   import { authState } from '../lib/auth.svelte'
   import { wizardState } from '../lib/wizard.svelte'
@@ -21,13 +24,7 @@
   const isAdmin = $derived(authState.role === 'admin')
 
   type Row = { label: string; view?: View; action?: 'run-setup'; admin?: boolean }
-  const operate: Row[] = [
-    { label: 'Settings', view: 'engineroom' },
-    { label: 'Fleet', view: 'fleet' },
-    { label: 'Entities', view: 'entities', admin: true },
-    { label: 'Audit log', view: 'audit', admin: true },
-    { label: 'Run setup…', action: 'run-setup', admin: true },
-  ]
+  const operate: Row[] = [{ label: 'Run setup…', action: 'run-setup', admin: true }]
 
   function go(row: Row) {
     if (row.action === 'run-setup') wizardState.launch()
