@@ -9,10 +9,12 @@
   import { authState } from '../lib/auth.svelte'
   import { fetchFlagEpisode } from '../lib/api'
   import { familyOf } from '../lib/flagPalette'
-  import { formatHM, formatTime, countryFlag, isPublicIp } from '../lib/format'
+  import { formatHM, formatTime, formatRelative, countryFlag, isPublicIp } from '../lib/format'
   import { flagLayoutState, type FlagColumns } from '../lib/flagLayout.svelte'
   import { viewportState } from '../lib/viewport.svelte'
   import { exclusionsState } from '../lib/exclusions.svelte'
+  import { compareNumeric, compareText, matchesFilter } from '../lib/sortFilter'
+  import type { SortDir } from '../lib/sortFilter'
   import ReputationDetails from './ReputationDetails.svelte'
   import BarList from './BarList.svelte'
   import IpInvestigateButton from './IpInvestigateButton.svelte'
@@ -274,21 +276,89 @@
     return sameDay ? `today at ${formatHM(iso)}` : formatTime(iso)
   }
 
+  // Every column sorts and filters (#649, round-18/19's ratified idiom):
+  // a quiet dashed row beneath the column labels narrows the Active
+  // list; clicking a label sorts by it, again to reverse. Age defaults
+  // to newest-first, reproducing the fixed order `active` used to be
+  // stuck with (see its own comment above) -- only now it's a starting
+  // point, not the only option.
+  type FlagSortKey = 'type' | 'where' | 'evidence' | 'count' | 'age'
+  let sortKey = $state<FlagSortKey>('age')
+  let sortDir = $state<SortDir>('asc')
+  let filters = $state({ type: '', where: '', evidence: '', count: '', age: '' })
+
+  function toggleSort(key: FlagSortKey) {
+    if (sortKey === key) {
+      sortDir = sortDir === 'asc' ? 'desc' : 'asc'
+    } else {
+      sortKey = key
+      sortDir = 'asc'
+    }
+  }
+
+  function dirGlyph(key: FlagSortKey): string {
+    if (sortKey !== key) return ''
+    return sortDir === 'asc' ? '▲' : '▼'
+  }
+
+  const hasActiveFilter = $derived(Object.values(filters).some((v) => v.trim() !== ''))
+
+  const filteredActive = $derived(
+    active.filter(
+      (f) =>
+        matchesFilter(labelFor(f.type), filters.type) &&
+        matchesFilter(f.target, filters.where) &&
+        matchesFilter(f.detail, filters.evidence) &&
+        matchesFilter(String(f.count), filters.count) &&
+        matchesFilter(formatRelative(f.lastSeen, appState.now), filters.age),
+    ),
+  )
+
+  const sortedActive = $derived.by((): Flag[] => {
+    const list = [...filteredActive]
+    list.sort((a, b) => {
+      switch (sortKey) {
+        case 'type':
+          return compareText(labelFor(a.type), labelFor(b.type), sortDir)
+        case 'where':
+          return compareText(a.target, b.target, sortDir)
+        case 'evidence':
+          return compareText(a.detail, b.detail, sortDir)
+        case 'count':
+          return compareNumeric(a.count, b.count, sortDir)
+        case 'age': {
+          // Elapsed time since firstSeen -- ascending means smallest
+          // elapsed (newest) first, the default that reproduces today's
+          // fixed order.
+          const ageA = appState.now - new Date(a.firstSeen).getTime()
+          const ageB = appState.now - new Date(b.firstSeen).getTime()
+          return compareNumeric(ageA, ageB, sortDir)
+        }
+      }
+    })
+    return list
+  })
+
   // "One actor, several signals" (issue #106): active flags sharing a
   // normalized source IP (flagsState.groupedBySource -- see that
   // derived's own doc comment for exactly which target shapes qualify)
-  // collapse into a single campaign card instead of N separate cards,
-  // in the same firstSeen-desc order `active` already uses. Each source
-  // IP is represented once, at the position of its most-recent flag;
-  // everything ungroupable (a lone flag from that source, or a target
-  // with no single source IP to correlate on at all) renders exactly as
-  // before.
+  // collapse into a single campaign card instead of N separate cards, in
+  // sortedActive's own order. Each source IP is represented once, at the
+  // position of its most-recent (by that order) flag; everything
+  // ungroupable (a lone flag from that source, or a target with no
+  // single source IP to correlate on at all) renders exactly as before.
+  //
+  // A filter narrows to specific flags, so grouping them back into a
+  // campaign card -- which would pull in sibling flags that don't match
+  // the filter at all -- would misreport what matched. Filtered results
+  // render flat instead, one card per matching flag.
   type ActiveItem = { kind: 'single'; flag: Flag } | { kind: 'group'; sourceIp: string; flags: Flag[] }
 
   const activeItems = $derived.by((): ActiveItem[] => {
+    if (hasActiveFilter) return sortedActive.map((flag): ActiveItem => ({ kind: 'single', flag }))
     const seen = new Set<string>()
     const items: ActiveItem[] = []
-    for (const f of active) {
+    for (const f of sortedActive) {
       const ip = extractSourceIp(f.target)
       const group = ip ? flagsState.groupedBySource.get(ip) : undefined
       if (ip && group) {
@@ -751,6 +821,35 @@
         </div>
       </div>
     {:else}
+      <!-- Every column sorts and filters (#649): a quiet dashed row
+           beneath the labels, matching round-18/19's ratified idiom. -->
+      <div class="sortbar" role="row">
+        <button class="sorth" class:on={sortKey === 'type'} onclick={() => toggleSort('type')}>
+          flag <span class="dir">{dirGlyph('type')}</span>
+        </button>
+        <button class="sorth" class:on={sortKey === 'where'} onclick={() => toggleSort('where')}>
+          where <span class="dir">{dirGlyph('where')}</span>
+        </button>
+        <button class="sorth" class:on={sortKey === 'evidence'} onclick={() => toggleSort('evidence')}>
+          evidence <span class="dir">{dirGlyph('evidence')}</span>
+        </button>
+        <button class="sorth" class:on={sortKey === 'count'} onclick={() => toggleSort('count')}>
+          count <span class="dir">{dirGlyph('count')}</span>
+        </button>
+        <button class="sorth" class:on={sortKey === 'age'} onclick={() => toggleSort('age')}>
+          age <span class="dir">{dirGlyph('age')}</span>
+        </button>
+      </div>
+      <div class="filterbar" role="row">
+        <input bind:value={filters.type} placeholder="filter flag…" aria-label="Filter by flag type" />
+        <input bind:value={filters.where} placeholder="filter where…" aria-label="Filter by where" />
+        <input bind:value={filters.evidence} placeholder="filter evidence…" aria-label="Filter by evidence" />
+        <input class="num" bind:value={filters.count} placeholder="filter count…" aria-label="Filter by count" />
+        <input class="num" bind:value={filters.age} placeholder="filter age…" aria-label="Filter by age" />
+      </div>
+      {#if activeItems.length === 0}
+        <p class="empty">No flags match these filters.</p>
+      {:else}
       <ul class="list card-grid" style="--flag-columns: {effectiveColumns}">
         {#each activeItems as item (item.kind === 'group' ? `group:${item.sourceIp}` : item.flag.id)}
           {#if item.kind === 'single'}
@@ -793,6 +892,7 @@
           {/if}
         {/each}
       </ul>
+      {/if}
     {/if}
   </section>
 
@@ -946,6 +1046,77 @@
   .card-grid {
     display: grid;
     grid-template-columns: repeat(var(--flag-columns, 1), minmax(0, 1fr));
+  }
+
+  /* Every column sorts and filters (#649): a sort toolbar standing in
+     for table column heads (the cards aren't a table), and beneath it
+     the quiet dashed filter row round-18/19 ratified -- same idiom as
+     docs/design/concepts/round-18/the-docket-opened.html's
+     `.panel tr.filters input`, translated onto a card list. */
+  .sortbar {
+    display: flex;
+    gap: 20px;
+    padding: 2px 4px 4px;
+  }
+
+  .sorth {
+    background: transparent;
+    border: none;
+    padding: 0;
+    font-family: var(--font-mono);
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--fg-dim);
+    cursor: pointer;
+  }
+
+  .sorth:hover {
+    color: var(--fg-muted);
+  }
+
+  .sorth.on {
+    color: var(--fg);
+  }
+
+  .sorth .dir {
+    display: inline-block;
+    min-width: 8px;
+    color: var(--accent);
+    font-size: 9px;
+  }
+
+  .filterbar {
+    display: flex;
+    gap: 20px;
+    padding: 0 4px 10px;
+  }
+
+  .filterbar input {
+    flex: 1;
+    min-width: 0;
+    background: transparent;
+    border: 0;
+    border-bottom: 1px dashed var(--border);
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--fg-muted);
+    padding: 2px 0;
+    outline: none;
+  }
+
+  .filterbar input.num {
+    flex: 0 0 90px;
+  }
+
+  .filterbar input::placeholder {
+    color: var(--fg-dim);
+    opacity: 0.7;
+  }
+
+  .filterbar input:focus {
+    border-bottom-color: var(--accent);
   }
 
   /* The stripe (rounds 18-19): the flag's family ink as one unbroken
