@@ -89,28 +89,31 @@
 <div class="screen" class:reverse={reverseBeat} data-void>
   <!-- The fall, rained across the whole void behind the door -- never
        over the login elements: a radial mask carves the centre out of
-       the layer entirely (round 5 fourth batch). Fourteen strokes,
-       transform-only, is the whole cost -- no particle system. -->
+       the layer entirely (round 5 fourth batch). Seventeen strokes,
+       transform-only, is the whole cost -- no particle system. Each
+       stroke's --y is its resting place under reduced motion: the rain
+       hangs still instead of vanishing, so the scene keeps its texture
+       when its movement is declined. -->
   <div class="fullfall" aria-hidden="true">
     <!-- The round-29 scene's own seventeen, verbatim: eleven accepts,
          four drops, two NAT marks. -->
-    <i style="left: 4%; animation-delay: 0.2s; opacity: 0.5"></i>
-    <i style="left: 9%; animation-delay: 3.1s; opacity: 0.3"></i>
-    <i class="r" style="left: 15%; animation-delay: 1.6s; opacity: 0.55"></i>
-    <i style="left: 21%; animation-delay: 4.4s; opacity: 0.4"></i>
-    <i style="left: 26%; animation-delay: 2.2s; opacity: 0.65"></i>
-    <i class="v" style="left: 33%; animation-delay: 5.0s; opacity: 0.45"></i>
-    <i style="left: 38%; animation-delay: 0.9s; opacity: 0.3"></i>
-    <i class="r" style="left: 45%; animation-delay: 3.7s; opacity: 0.4"></i>
-    <i style="left: 51%; animation-delay: 1.2s; opacity: 0.6"></i>
-    <i style="left: 57%; animation-delay: 4.8s; opacity: 0.35"></i>
-    <i style="left: 63%; animation-delay: 2.7s; opacity: 0.5"></i>
-    <i class="v" style="left: 69%; animation-delay: 0.5s; opacity: 0.4"></i>
-    <i class="r" style="left: 75%; animation-delay: 3.4s; opacity: 0.6"></i>
-    <i style="left: 81%; animation-delay: 1.9s; opacity: 0.35"></i>
-    <i style="left: 86%; animation-delay: 5.3s; opacity: 0.55"></i>
-    <i class="r" style="left: 91%; animation-delay: 2.4s; opacity: 0.35"></i>
-    <i style="left: 96%; animation-delay: 4.1s; opacity: 0.5"></i>
+    <i style="left: 4%; animation-delay: 0.2s; --y: 8%; opacity: 0.5"></i>
+    <i style="left: 9%; animation-delay: 3.1s; --y: 64%; opacity: 0.3"></i>
+    <i class="r" style="left: 15%; animation-delay: 1.6s; --y: 31%; opacity: 0.55"></i>
+    <i style="left: 21%; animation-delay: 4.4s; --y: 78%; opacity: 0.4"></i>
+    <i style="left: 26%; animation-delay: 2.2s; --y: 15%; opacity: 0.65"></i>
+    <i class="v" style="left: 33%; animation-delay: 5.0s; --y: 52%; opacity: 0.45"></i>
+    <i style="left: 38%; animation-delay: 0.9s; --y: 88%; opacity: 0.3"></i>
+    <i class="r" style="left: 45%; animation-delay: 3.7s; --y: 24%; opacity: 0.4"></i>
+    <i style="left: 51%; animation-delay: 1.2s; --y: 70%; opacity: 0.6"></i>
+    <i style="left: 57%; animation-delay: 4.8s; --y: 41%; opacity: 0.35"></i>
+    <i style="left: 63%; animation-delay: 2.7s; --y: 95%; opacity: 0.5"></i>
+    <i class="v" style="left: 69%; animation-delay: 0.5s; --y: 58%; opacity: 0.4"></i>
+    <i class="r" style="left: 75%; animation-delay: 3.4s; --y: 12%; opacity: 0.6"></i>
+    <i style="left: 81%; animation-delay: 1.9s; --y: 83%; opacity: 0.35"></i>
+    <i style="left: 86%; animation-delay: 5.3s; --y: 36%; opacity: 0.55"></i>
+    <i class="r" style="left: 91%; animation-delay: 2.4s; --y: 67%; opacity: 0.35"></i>
+    <i style="left: 96%; animation-delay: 4.1s; --y: 47%; opacity: 0.5"></i>
   </div>
 
   <div class="stack">
@@ -142,24 +145,25 @@
           {/if}
 
           <!-- "account" / "password" is the ratified scene's own copy
-               (round 15 amended its "passphrase"; "account" stood).
-               Labels stay real <label>s, quieted to the scene's idiom --
-               #645 builds on the Atlas restyle's accessible structure,
-               it does not revert it. -->
+               (round 15 amended its "passphrase"; "account" stood), and
+               it sits inside the field as the mockup draws it (owner,
+               2026-08-30). The <label> stays for assistive tech,
+               visually hidden -- the placeholder is presentation, not
+               the accessible name. -->
           <label>
-            <span>account</span>
-            <input type="text" autocomplete="username" bind:value={username} required />
+            <span class="sr-only">account</span>
+            <input type="text" autocomplete="username" placeholder="account" bind:value={username} required />
           </label>
 
           <label>
-            <span>password</span>
-            <input type="password" autocomplete={confirmPassword ? 'new-password' : 'current-password'} bind:value={password} required />
+            <span class="sr-only">password</span>
+            <input type="password" autocomplete={confirmPassword ? 'new-password' : 'current-password'} placeholder="password" bind:value={password} required />
           </label>
 
           {#if confirmPassword}
             <label>
-              <span>confirm password</span>
-              <input type="password" autocomplete="new-password" bind:value={passwordConfirm} required />
+              <span class="sr-only">confirm password</span>
+              <input type="password" autocomplete="new-password" placeholder="confirm password" bind:value={passwordConfirm} required />
             </label>
           {/if}
 
@@ -315,8 +319,13 @@
   }
 
   @media (prefers-reduced-motion: reduce) {
-    .fullfall {
-      display: none;
+    /* Still rain, not no rain: reduced motion declines the falling, not
+       the scene. Each stroke stops at its own --y instead of animating
+       from above the frame (where the animation's absence would
+       otherwise strand every stroke off-screen at top: -20px). */
+    .fullfall i {
+      animation: none;
+      top: var(--y, 50%);
     }
     .stack,
     .wm-box,
@@ -364,14 +373,22 @@
     gap: 6px;
   }
 
-  /* The scene's quiet idiom: lowercase, dim, centred over a centred
-     underline -- the round-29 door's composition, kept as a visible
-     label rather than the mockup's vanishing placeholder. */
-  label span {
-    font-size: 12px;
-    letter-spacing: 0.02em;
+  /* The label exists for assistive tech only; the field's visible word
+     is its placeholder, in the box as the round-29 scene draws it. */
+  .sr-only {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+
+  input::placeholder {
     color: var(--fg-dim);
-    text-align: center;
+    opacity: 1;
   }
 
   /* Underline credential fields (round 5 v3, the app's input idiom
