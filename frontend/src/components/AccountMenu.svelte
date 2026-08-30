@@ -68,7 +68,6 @@
   {#if open}
     <div class="menu" role="menu">
       <div class="row theme-row">
-        <span class="k">Theme</span>
         <ThemeMenu />
       </div>
       <div class="rule"></div>
