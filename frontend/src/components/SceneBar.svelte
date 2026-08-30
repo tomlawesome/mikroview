@@ -2,12 +2,16 @@
   // SPDX-License-Identifier: AGPL-3.0-only
   //
   // Every scene's own bar, under the Atlas identity (owner, 2026-08-29:
-  // pages are the site -- no persistent chrome). Carries the wordmark
-  // (the one navigation gesture: it opens the atlas), the scene's name,
-  // the live status cluster, and -- on the stream -- the controls the
-  // retired toolbar used to hold, unchanged in behaviour.
-  import { appState } from '../lib/state.svelte'
-  import { atlasNav } from '../lib/atlasNav.svelte'
+  // pages are the site -- no persistent chrome). Carries the wordmark,
+  // the scene's name, the live status cluster, the account chip (#633:
+  // navigation to the operate pages lives on its menu; the deck and
+  // roll rail cover the scenes), and -- on the stream -- the controls
+  // the retired toolbar used to hold, unchanged in behaviour.
+  //
+  // Inside the deck every card carries its own bar, so the scene named
+  // here is the card's own, passed as a prop; outside the deck (the
+  // operate pages) it defaults to the current view.
+  import { appState, type View } from '../lib/state.svelte'
   import { flagsState } from '../lib/flags.svelte'
   import { watchlistState } from '../lib/watchlist.svelte'
   import { groupModeState } from '../lib/groupMode.svelte'
@@ -17,7 +21,10 @@
   import ConnectionIndicator from './ConnectionIndicator.svelte'
   import DeviceStatus from './DeviceStatus.svelte'
   import UptimeBadge from './UptimeBadge.svelte'
-  import ThemeMenu from './ThemeMenu.svelte'
+  import AccountMenu from './AccountMenu.svelte'
+
+  let { scene = null }: { scene?: View | null } = $props()
+  const view = $derived(scene ?? appState.view)
 
   const TITLES: Record<string, string> = {
     live: 'Stream',
@@ -37,10 +44,8 @@
 </script>
 
 <div class="scene-bar">
-  <button class="wm" onclick={() => atlasNav.toggle()} title="Open the atlas (m)" aria-label="Open the atlas — navigate">
-    MIKRO<em>VIEW</em>
-  </button>
-  <h1>{TITLES[appState.view] ?? ''}</h1>
+  <span class="wm">MIKRO<em>VIEW</em></span>
+  <h1>{TITLES[view] ?? ''}</h1>
   <ConnectionIndicator />
   <UptimeBadge />
   <DeviceStatus />
@@ -63,7 +68,7 @@
   {/if}
 
   <div class="controls">
-    {#if appState.view === 'live'}
+    {#if view === 'live'}
       {#if appState.stats}
         <span class="eps" title="Events per second (10s rolling average)">
           {formatEps(appState.stats.eventsPerSecond)}/s
@@ -131,7 +136,7 @@
         Clear
       </button>
     {/if}
-    <ThemeMenu />
+    <AccountMenu />
   </div>
 </div>
 
@@ -144,16 +149,10 @@
     flex-wrap: wrap;
   }
   .wm {
-    background: transparent;
-    border: none;
-    padding: 0;
     font-size: 13px;
     font-weight: 800;
     letter-spacing: 0.22em;
     color: var(--fg-dim);
-  }
-  .wm:hover {
-    color: var(--fg-muted);
   }
   .wm em {
     color: var(--accent);

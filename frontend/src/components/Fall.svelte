@@ -19,7 +19,7 @@
   // for, and that gap is deliberate and disclosed rather than invented
   // silently -- see lib/fall.svelte.ts's header comment and PR #620.
   import { appState } from '../lib/state.svelte'
-  import { atlasNav } from '../lib/atlasNav.svelte'
+  import AccountMenu from './AccountMenu.svelte'
   import {
     fallState,
     boundaryKeyOf,
@@ -576,9 +576,7 @@
 
 <div class="fall">
   <div class="bar">
-    <button class="wm" onclick={() => atlasNav.toggle()} title="Open the atlas (m)" aria-label="Open the atlas — navigate">
-      MIKRO<em>VIEW</em>
-    </button>
+    <span class="wm">MIKRO<em>VIEW</em></span>
     <h1>The fall</h1>
     <ConnectionIndicator />
     <UptimeBadge />
@@ -605,6 +603,7 @@
         </button>
       {/each}
     </div>
+    <AccountMenu />
   </div>
 
   {#if fallState.loading}
@@ -884,17 +883,10 @@
     color: var(--o-ink);
   }
   .wm {
-    background: transparent;
-    border: none;
-    padding: 0;
     font-size: 13px;
     font-weight: 800;
     letter-spacing: 0.22em;
     color: var(--o-ink3);
-    cursor: pointer;
-  }
-  .wm:hover {
-    color: var(--o-ink2);
   }
   .wm em {
     color: var(--now);
