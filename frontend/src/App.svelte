@@ -9,11 +9,9 @@
   import { authState } from './lib/auth.svelte'
   import { buildQuery, ApiError } from './lib/api'
   import { filtersFromSearchParams } from './lib/types'
-  import Toolbar from './components/Toolbar.svelte'
-  import NavRail from './components/NavRail.svelte'
-  import NavHandle from './components/NavHandle.svelte'
+  import SceneBar from './components/SceneBar.svelte'
+  import AtlasNav from './components/AtlasNav.svelte'
   import BottomBar from './components/BottomBar.svelte'
-  import { railPref } from './lib/rail.svelte'
   import { viewportState } from './lib/viewport.svelte'
   import ConnectionBanner from './components/ConnectionBanner.svelte'
   import ConfigProblemBanner from './components/ConfigProblemBanner.svelte'
@@ -202,23 +200,25 @@
        screens"): at a small viewport the bottom bar is the whole of
        navigation, and neither NavRail nor NavHandle (which only ever
        restores a rail state) mounts at all. -->
+  <!-- Pages are the site (owner, 2026-08-29): no persistent chrome.
+       The toolbar and the desktop nav rail are retired wholesale; each
+       scene carries its own bar, and the wordmark on it opens the atlas
+       overlay -- the app's one navigator. The phone-width BottomBar
+       stays until the atlas learns a small-screen shape. -->
   {#if viewportState.isMobile}
     <BottomBar />
-  {:else if railPref.isDocked}
-    <NavHandle onrestore={() => railPref.restore()} />
   {/if}
-  <Toolbar />
   <div class="shell" class:with-bottom-bar={viewportState.isMobile}>
-    {#if !viewportState.isMobile && !railPref.isDocked}
-      <NavRail />
-    {/if}
     <!-- The banner tops the content column and pushes content rather than
          overlaying it, per the ratified record; that is why the banners
          live inside this column and not above the rail. -->
     <div class="content">
       <ConnectionBanner />
       <ConfigProblemBanner />
-      <main id="main-content">
+      <main id="main-content" class:bare={appState.view === 'fall'}>
+        {#if appState.view !== 'fall'}
+          <SceneBar />
+        {/if}
         {#if appState.view === 'fall'}
       <Fall />
     {:else if appState.view === 'live'}
@@ -242,10 +242,7 @@
       </main>
     </div>
   </div>
-  <!-- Outside the rail on purpose: docking unmounts the rail, so a region
-       living inside it would vanish in the same tick as the change it is
-       meant to announce. -->
-  <p class="sr-only" role="status">{railPref.announcement}</p>
+  <AtlasNav />
   <IpLookupPopover />
   <PortLookupPopover />
   <RouterLookupPopover />
@@ -257,20 +254,6 @@
 {/if}
 
 <style>
-  /* Clipped rather than display:none or hidden -- both remove the element
-     from the accessibility tree, which would silence the live region
-     this exists to carry. */
-  .sr-only {
-    position: absolute;
-    width: 1px;
-    height: 1px;
-    margin: -1px;
-    padding: 0;
-    overflow: hidden;
-    clip-path: inset(50%);
-    white-space: nowrap;
-  }
-
   .skip-link {
     position: absolute;
     left: -9999px;
@@ -316,5 +299,12 @@
     gap: 10px;
     padding: 10px 14px 14px;
     min-height: 0;
+  }
+
+  /* The fall bleeds to the edges: no gutter, no card -- its canvas is
+     the page ground. */
+  main.bare {
+    padding: 0;
+    gap: 0;
   }
 </style>

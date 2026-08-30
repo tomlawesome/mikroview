@@ -11,7 +11,7 @@
 // can I reach the bottom of the page, and am I still where I was -- and
 // not the mechanism, which is free to change.
 
-import { session, check, done } from './live-browser.mjs'
+import { session, check, done, goTo } from './live-browser.mjs'
 
 const { page, consoleErrors } = await session({ waitForEvents: 60 })
 
@@ -42,7 +42,7 @@ await page.setViewportSize({ width: 1280, height: 720 })
 // below, which is the viewport that defect was reported at.
 await page.setViewportSize({ width: 1280, height: 460 })
 
-await page.click('.rail .item:has-text("Run setup…")')
+await goTo(page, 'Run setup…')
 const wizard = page.locator('.setup-wizard')
 await wizard.waitFor({ state: 'visible' })
 
@@ -124,7 +124,7 @@ await page.setViewportSize({ width: 1280, height: 720 })
 // --- #384: naming an entity leaves the operator where they were ---------
 // The workflow the defect punished is the one the view exists for:
 // working down a long discovered list naming things one after another.
-await page.click('.rail .item:has-text("Entities")')
+await goTo(page, 'Entities')
 await page.waitForSelector('.page .row.discovered')
 
 const entities = await page.$eval('.page', (el) => ({

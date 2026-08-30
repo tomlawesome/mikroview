@@ -318,8 +318,12 @@ await page.click('.bottom-bar .group-btn .label:text-is("Live")')
 // The sheet (.sheet/.sheet-item) renders as a sibling of <nav
 // class="bottom-bar">, not nested inside it -- see BottomBar.svelte.
 await page.click('.sheet-item .label:text-is("Stream")')
-await page.waitForSelector('input.rule', { timeout: 5000 })
+// Resize back to desktop BEFORE waiting for input.rule: at mobile width
+// FilterBar's inputs sit behind a closed drawer
+// ({#if !viewportState.isMobile || drawerOpen}), so the selector can
+// never appear until the viewport is desktop again.
 await page.setViewportSize({ width: 1280, height: 720 })
+await page.waitForSelector('input.rule', { timeout: 5000 })
 await watchlistItem.waitFor({ timeout: 5000 })
 
 // --- Driven back out: covered, and the ring clears with no acknowledge ---
