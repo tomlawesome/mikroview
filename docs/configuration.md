@@ -2244,9 +2244,11 @@ hostname, or WireGuard peer comment pushed by the router names that
 address everywhere mikroview shows one -- and **RouterOS always wins**
 over a label set in mikroview for the same address, so manage
 router-known hosts in RouterOS; labels for anything the router doesn't
-name are untouched), and the pushed firewall rule and NAT tables,
-served read-only at `GET /api/routeros/{device}/rules` and `.../nat` in
-RouterOS's own display order. Pushed state is held in memory only --
+name are untouched), the pushed firewall rule and NAT tables, served
+read-only at `GET /api/routeros/{device}/rules` and `.../nat` in
+RouterOS's own display order, and the pushed `/ip address` table at
+`.../addresses`, sorted by address. Pushed state is held in memory only
+--
 never written to disk, never in a backup -- and re-arrives with the
 router's next scheduled push, so a mikroview restart costs at most one
 push interval of naming/table enrichment and nothing else. Pushed data
