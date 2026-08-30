@@ -162,13 +162,6 @@
     justify-content: space-between;
   }
 
-  .k {
-    font-size: 11px;
-    letter-spacing: 0.12em;
-    text-transform: uppercase;
-    color: var(--fg-dim);
-  }
-
   .rule {
     height: 1px;
     background: var(--border);
