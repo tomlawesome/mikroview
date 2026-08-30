@@ -34,5 +34,10 @@ good"**. Asks, all built here:
 
 - Whisper: accepted ("amazing!"). Node cards: accepted with the
   symbol corrections. Two-bar aggregate: superseded by the one bar.
-- Pending: the one-bar model, the click-throughs, the faded reach,
-  the deck tail (Entities · Settings), the slimmed menu.
+- One bar + click-throughs: **"LOVE this, this is what we needed."**
+- Entities: **"now great"** — visually never "fleet" (it stays an
+  internal name). Settings: needs a wholesale identity rebuild.
+- The reach: too faded; must hold the pre-dive level and surface back
+  to it; zoom locked while reached in.
+- All corrections built in round 24 — verbatim trail in
+  `../round-24/README.md`.
