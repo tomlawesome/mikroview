@@ -1330,6 +1330,7 @@ func main() {
 		Suggest:           suggestStore,
 		DefaultWatchPorts: cfg.Flags.CriticalPorts,
 		MatchLog:          matchLog,
+		Learning:          eng,
 		DeviceStaleAfter:  cfg.Flags.DeviceStaleAfter,
 		Auth:              authStore,
 		Sessions:          auth.NewSessionStoreWithMaxLifetime(cfg.Auth.SessionTTL, cfg.Auth.SessionMaxLifetime),

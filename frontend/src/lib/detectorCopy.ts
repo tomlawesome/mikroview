@@ -4,7 +4,7 @@
 // page (#548) when #490 folded it into the engine room's watchers station
 // (EngineRoomWatchers.svelte). Kept as its own module rather than inlined
 // there because it is pure data, independent of how the bench renders it.
-import type { DetectorScope, ListMode } from './types'
+import type { DetectorScope, LearningFloor, LearningState, ListMode } from './types'
 
 export interface DetectorInfo {
   label: string
@@ -235,4 +235,97 @@ export function draftFrom(scope: DetectorScope | undefined): DetectorDraft {
     rulesMode: sc.rulesMode ?? '',
     classification: sc.classification ?? '',
   }
+}
+
+const SECONDS_PER_DAY = 86400
+
+// NO_FLOOR_TEXT is Fable's ruling (2026-08-30) on a BaselineFloor that
+// binds neither dimension -- global_spike ships that way by default (no
+// baselineFloorDuration param set; see shipped_global_spike.go's
+// buildGlobalSpikeDefinition, window 0 into baselineFloorFromParams).
+// Deliberate on the engine side, not a bug: #405 was never licensed to
+// change when global_spike can fire, and its baseline primes on its
+// first reading with no separate firing floor, same as it always did in
+// internal/detect.
+//
+// "3 of 14 days" has no 14 to report when nothing binds, so this is
+// never faked with a dash or a zero -- it states the absence of a
+// requirement instead, and "starts evaluating" is the honest word for
+// it: unlike "Baselines established," it does not claim settledness,
+// because a key that clears no floor may still fire on its very first
+// reading. Covers both the fresh (Keys 0) and the observed-but-not-ready
+// (Ready 0, Keys > 0) cases identically: with no prime window and no
+// floor, a key that has been read at all is already past both gates, so
+// there is no meaningful partial state between the two to word
+// separately -- see learningSummary.
+const NO_FLOOR_TEXT =
+  'Learning — no traffic seen yet; starts evaluating from its first reading (no minimum history required)'
+
+// A floor's own dimensions, worded rather than collapsed into a
+// percentage (#639 design ruling). `need` rounds up -- a floor that
+// hasn't quite finished a day must still say the day it needs, never
+// one short of it -- while `have` (used by nearestPhrase below) rounds
+// down, so progress is never overstated. Both dimensions render when
+// both bind (off_hours' "distinct prior days" floor is inherently
+// both), one when only one does. Never called when neither dimension
+// binds -- learningSummary routes that case to NO_FLOOR_TEXT instead, so
+// this never has to render an empty phrase.
+function floorPhrase(floor: LearningFloor): string {
+  const parts: string[] = []
+  const minDurationSeconds = floor.minDurationSeconds ?? 0
+  const minSamples = floor.minSamples ?? 0
+  if (minDurationSeconds > 0) {
+    const days = Math.ceil(minDurationSeconds / SECONDS_PER_DAY)
+    parts.push(`${days} day${days === 1 ? '' : 's'}`)
+  }
+  if (minSamples > 0) {
+    parts.push(`${minSamples} sample${minSamples === 1 ? '' : 's'}`)
+  }
+  return parts.join(', ')
+}
+
+// The furthest-along not-yet-ready key's progress, in the same
+// dimensions floorPhrase uses -- "3 of 14 days" rather than a percentage.
+function nearestPhrase(floor: LearningFloor, observedForSeconds: number, samples: number): string {
+  const parts: string[] = []
+  const minDurationSeconds = floor.minDurationSeconds ?? 0
+  const minSamples = floor.minSamples ?? 0
+  if (minDurationSeconds > 0) {
+    const haveDays = Math.floor(observedForSeconds / SECONDS_PER_DAY)
+    const needDays = Math.ceil(minDurationSeconds / SECONDS_PER_DAY)
+    parts.push(`${haveDays} of ${needDays} days`)
+  }
+  if (minSamples > 0) {
+    parts.push(`${samples} of ${minSamples} samples`)
+  }
+  return parts.join(', ')
+}
+
+// The learning-window status line (#639) -- one of the five states the
+// issue rules on, worded so the text alone carries the full state (no
+// meaning is ever carried by colour alone). Returns null for "nothing to
+// show" (no warm-up concept at all), the only state EngineRoomWatchers
+// renders as no badge rather than a line of text.
+export function learningSummary(l: LearningState | undefined): string | null {
+  if (!l) return null
+  const { floor, keys, ready, nearest } = l
+  const floorless = (floor.minDurationSeconds ?? 0) === 0 && (floor.minSamples ?? 0) === 0
+
+  if (keys === 0) {
+    if (floorless) return NO_FLOOR_TEXT
+    return `Learning — no traffic seen yet; needs ${floorPhrase(floor)} of history per source`
+  }
+  if (ready === keys) {
+    return `Baselines established (${keys} source${keys === 1 ? '' : 's'})`
+  }
+  if (ready === 0) {
+    // See NO_FLOOR_TEXT's own comment: with no floor bound, this state
+    // and the Keys === 0 one above render identically -- there is no "3
+    // of X" to show either way.
+    if (floorless) return NO_FLOOR_TEXT
+    const progress = nearest ? nearestPhrase(floor, nearest.observedForSeconds, nearest.samples) : floorPhrase(floor)
+    if (keys === 1) return `Learning: ${progress}`
+    return `Learning — nearest source ${progress} (${ready} of ${keys} sources ready)`
+  }
+  return `Ready for ${ready} of ${keys} sources; ${keys - ready} still learning`
 }

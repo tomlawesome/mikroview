@@ -197,6 +197,25 @@ func (d *globalSpikeDefinition) maybePersistLocked(now time.Time) {
 	d.state.Set(d.def.ID, "global", d.baseline.State())
 }
 
+// Learning satisfies LearningReporter. Unlike the other four
+// baseline-backed shipped definitions, this one has no baselineSet --
+// see this type's own doc comment for why one global EMA, not a Keyed
+// set, is right here -- so there is at most one key ("global"), reported
+// only once this definition has ticked at least once since being
+// enabled. Tick discards the baseline entirely on disable, so
+// re-disabling makes this report zero keys again, exactly as an operator
+// would expect from a warm-up that restarts.
+func (d *globalSpikeDefinition) Learning(now time.Time) (LearningState, bool) {
+	d.mu.Lock()
+	b := d.baseline
+	d.mu.Unlock()
+	if b == nil {
+		return LearningState{Floor: d.floor}, true
+	}
+	keys := map[string]baselineLearning{"global": newBaselineLearning(now, b.Snapshot(now))}
+	return learningStateFrom(d.floor, keys), true
+}
+
 // Replay satisfies Replayable, and does so by reconstruction rather than
 // by re-running the live reading -- which is worth being precise about,
 // because the two are not the same thing.
