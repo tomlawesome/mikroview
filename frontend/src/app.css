@@ -338,6 +338,11 @@ html,
 body {
   margin: 0;
   height: 100%;
+  /* The app is full-viewport (#app is 100vh and manages its own
+     scrolling); the window itself must never scroll. Without this a
+     stray overflow (login's slight overrun surviving the view swap)
+     left the document scrolled and clipped the deck's first bar. */
+  overflow: hidden;
 }
 
 body {

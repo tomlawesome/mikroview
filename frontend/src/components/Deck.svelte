@@ -61,11 +61,16 @@
   $effect(() => {
     const el = cardEls[appState.view]
     if (!el || !deckEl) return
-    if (Math.abs(el.offsetTop - deckEl.scrollTop) < 2) return
+    // Scroll the deck alone, never the window: scrollIntoView walks
+    // every scrollable ancestor, and during load (a banner briefly
+    // holding height) that dragged the document itself down, clipping
+    // the top bar once the banner collapsed.
+    const top = el.getBoundingClientRect().top - deckEl.getBoundingClientRect().top + deckEl.scrollTop
+    if (Math.abs(top - deckEl.scrollTop) < 2) return
     rolling = true
     clearTimeout(rollTimer)
     const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches
-    el.scrollIntoView({ behavior: reduced ? 'auto' : 'smooth', block: 'start' })
+    deckEl.scrollTo({ top, behavior: reduced ? 'auto' : 'smooth' })
     rollTimer = setTimeout(() => (rolling = false), 700)
   })
 
