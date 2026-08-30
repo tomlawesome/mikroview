@@ -25,8 +25,13 @@ Under #634. Three threads from the owner's batch:
   → round 14 builds candidate C, with purple and cyan watcher
   variants to choose between.
 - The corrected metrics card (chat, 2026-08-30): **accepted** — "Ok,
-  lets move on with the seismograph as it is in 13." The owner compared
-  it against the pre-rebuild dev seismograph live before ruling.
+  lets move on with the seismograph as it is in 13", clarified: the
+  accepted look is THIS round's drum (one mirrored stroke per minute in
+  the deck's clothes), not the current dev page's per-series lanes,
+  which the owner viewed live before ruling. The page's three-view
+  model (seismograph · register · table, one cursor, hourline ledger)
+  carries over unchanged; the drum's rendering supersedes the lanes
+  when the deck lands.
 
 ## Post-serve repairs (defects, not rework)
 
