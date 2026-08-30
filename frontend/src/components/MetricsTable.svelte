@@ -27,7 +27,13 @@
   // Newest first, matching the fall (#363) and both drawn views' brink.
   let sortDir = $state<'asc' | 'desc'>('desc')
 
-  const columns = $derived(hour.traffic.map((s) => ({ key: s.key as string, label: s.label, ink: s.ink })))
+  // natted gets its own ink (#634 round 21: "natted (teal)") rather than
+  // riding the traffic/refused pair -- it's neither an accept nor a
+  // drop, and the app already has a token for exactly this fact
+  // (app.css's --natted, the same one the row backgrounds use).
+  const columns = $derived(
+    hour.traffic.map((s) => ({ key: s.key as string, label: s.label, ink: s.ink, natted: s.key === 'natted' })),
+  )
 
   function valueAt(index: number, key: SortKey): number {
     if (key === 'flags') return hour.episodesPerMinute[index] ?? 0
@@ -105,7 +111,7 @@
                 <button onclick={() => sortBy('minute')}>Minute</button>
               </th>
               {#each columns as column (column.key)}
-                <th scope="col" class:refused={column.ink === 'refused'} aria-sort={ariaSort(column.key)}>
+                <th scope="col" class:refused={column.ink === 'refused'} class:natted={column.natted} aria-sort={ariaSort(column.key)}>
                   <button onclick={() => sortBy(column.key)}>{column.label}</button>
                 </th>
               {/each}
@@ -121,7 +127,7 @@
                   <button class="minute" onclick={() => onselect(i)}>{formatHM(hour.axis[i])}</button>
                 </th>
                 {#each hour.traffic as series (series.key)}
-                  <td class:refused={series.ink === 'refused'}>{series.values[i]}</td>
+                  <td class:refused={series.ink === 'refused'} class:natted={series.key === 'natted'}>{series.values[i]}</td>
                 {/each}
                 <td>{hour.episodesPerMinute[i] ?? 0}</td>
               </tr>
@@ -131,7 +137,7 @@
             <tr>
               <th scope="row">Hour total</th>
               {#each hour.traffic as series (series.key)}
-                <td class:refused={series.ink === 'refused'}>{series.total}</td>
+                <td class:refused={series.ink === 'refused'} class:natted={series.key === 'natted'}>{series.total}</td>
               {/each}
               <td>{episodesTotal}</td>
             </tr>
@@ -299,6 +305,16 @@
 
   td.refused {
     color: var(--chart-refused);
+  }
+
+  /* natted's own ink (#634 round 21) -- neither accepted nor refused,
+     so it gets the app's existing NAT token rather than riding either. */
+  td.natted {
+    color: var(--natted);
+  }
+
+  thead th.natted button {
+    color: var(--natted);
   }
 
   tfoot th,
