@@ -84,6 +84,7 @@ export type ConnState = 'connecting' | 'open' | 'closed'
 // Live-group row rather than being the entry point.
 export type View =
   | 'fall'
+  | 'topography'
   | 'live'
   | 'metrics'
   | 'watchlist'

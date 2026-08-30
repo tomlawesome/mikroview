@@ -10,7 +10,7 @@ const STORAGE_KEY = 'mikroview-deck-order'
 // The ratified default order -- deckCards.ts renders from this module's
 // order, not the other way round, so this list is the one source of the
 // default (a bare string[] to keep this module import-free).
-const DEFAULT_ORDER = ['fall', 'metrics', 'live', 'docket']
+const DEFAULT_ORDER = ['fall', 'topography', 'metrics', 'live', 'docket']
 
 function loadInitial(): string[] {
   try {

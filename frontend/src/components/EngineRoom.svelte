@@ -192,6 +192,17 @@
               <line x1="58" y1="10" x2="58" y2="28" stroke="var(--fall-accept)" stroke-width="2" opacity="0.5" />
               <line x1="8" y1="34" x2="68" y2="34" stroke="var(--now)" stroke-width="1.4" opacity="0.6" />
             </svg>
+          {:else if card.key === 'topography'}
+            <svg viewBox="0 0 76 40" aria-hidden="true">
+              <circle cx="38" cy="10" r="5" fill="none" stroke="var(--accent)" stroke-width="1.3" />
+              <circle cx="38" cy="10" r="1.4" fill="var(--accent)" />
+              <path d="M35 14 C 26 22, 20 24, 16 30" fill="none" stroke="var(--lane-lan)" stroke-width="1.3" />
+              <path d="M38 15 V 30" fill="none" stroke="var(--lane-srv)" stroke-width="1.3" />
+              <path d="M41 14 C 50 22, 56 24, 60 30" fill="none" stroke="var(--lane-iot)" stroke-width="1.3" />
+              <circle cx="16" cy="32" r="2.6" fill="var(--lane-lan)" />
+              <circle cx="38" cy="32" r="2.6" fill="var(--lane-srv)" />
+              <circle cx="60" cy="32" r="2.6" fill="var(--lane-iot)" />
+            </svg>
           {:else if card.key === 'metrics'}
             <svg viewBox="0 0 76 40" aria-hidden="true">
               <polyline
