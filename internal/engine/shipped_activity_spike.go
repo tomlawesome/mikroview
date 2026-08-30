@@ -4,6 +4,7 @@ package engine
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/tomlawesome/mikroview/internal/store"
@@ -587,6 +588,56 @@ func (d *activitySpikeDefinition) emitBucketFiring(srcIP, country, iface string,
 		SourceIP:   srcIP,
 		EventTime:  now,
 	})
+}
+
+// Learning satisfies LearningReporter, merging this definition's two
+// baselineSets (see this file's own doc comment for why there are two)
+// into one per-*source* answer, as every other optional interface here
+// merges rather than exposing bucketKey/buckets separately.
+//
+// keys/ready are counted per source, not per (source, hour) bucket: the
+// bucket set's key space is an internal implementation detail (up to 24
+// keys per source) that would make "ready for 12 of 50 sources" actually
+// mean "ready for 12 of 1,200," which is not the question an operator is
+// asking. A source counts as ready the moment *either* representation
+// does, matching activitySpikeCheck's own useBucket rule (a mature hour
+// bucket is the applicable baseline the instant it clears its floor,
+// fallback otherwise) -- so this answers the same "could this source
+// actually fire today" question Fire itself would.
+//
+// The floor reported, and the one nearest's progress is measured
+// against, is always the fallback's: it is the one an operator's own
+// params actually tune (bucketFloor is a fixed structural constant, see
+// activityBucketMinDays), and the two floors' dimensions are not
+// comparable numbers to blend. A source with bucket-only progress (no
+// fallback entry yet) falls back to that bucket key's own progress as
+// the least-wrong stand-in; in practice every source acquires a fallback
+// entry before any bucket ever can (checkBaseline always folds the
+// fallback until useBucket first turns true), so this path is a
+// defensive fallback, not the common case.
+func (d *activitySpikeDefinition) Learning(now time.Time) (LearningState, bool) {
+	fallback := d.baselines.learning(now)
+	buckets := d.buckets.learning(now)
+
+	merged := make(map[string]baselineLearning, len(fallback))
+	for srcIP, bl := range fallback {
+		merged[srcIP] = bl
+	}
+	for key, bl := range buckets {
+		srcIP, _, ok := strings.Cut(key, "\x00")
+		if !ok {
+			continue
+		}
+		existing, has := merged[srcIP]
+		switch {
+		case !has:
+			merged[srcIP] = bl
+		case bl.ready && !existing.ready:
+			existing.ready = true
+			merged[srcIP] = existing
+		}
+	}
+	return learningStateFrom(d.baselines.floor, merged), true
 }
 
 // Replay satisfies Replayable: the same per-source count-and-baseline

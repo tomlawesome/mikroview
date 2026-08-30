@@ -5,6 +5,7 @@ package engine
 import (
 	"fmt"
 	"strconv"
+	"time"
 
 	"github.com/tomlawesome/mikroview/internal/store"
 )
@@ -210,6 +211,16 @@ func inOffHoursWindow(hour, start, end int) bool {
 		return hour >= start && hour < end
 	}
 	return hour >= start || hour < end
+}
+
+// Learning satisfies LearningReporter: one baseline per (source, hour)
+// key, so Ready answers how many of those keys have the
+// minSampleDays of same-hour history this definition's floor requires --
+// see baselineSet.learning and learningStateFrom for the shared
+// read/reduce this and every other baseline-backed shipped definition
+// rely on.
+func (d *offHoursDefinition) Learning(now time.Time) (LearningState, bool) {
+	return learningStateFrom(d.baselines.floor, d.baselines.learning(now)), true
 }
 
 // NonReplayableReason satisfies NonReplayable.

@@ -41,6 +41,13 @@ neighbouring tool also inherits its failure modes, its dependencies and
 its data licensing — see the next two sections for why the last of those
 is not free.
 
+## Why mikroview suggests, and why there is a wizard
+
+A real deployment's accept-rule logging was ~90% of volume, burying the deny
+signal; dropping it cut volume 97–99%
+([docs/routeros-setup.md](docs/routeros-setup.md)). Fixing what an operator
+logs is the product's opening argument, not onboarding decoration.
+
 ## mikroview observes; it never scans or connects
 
 Owner decision, ratified 2026-08-15, and a design invariant, not a
