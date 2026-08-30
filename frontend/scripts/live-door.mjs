@@ -82,16 +82,30 @@ check(
   'a plain load of the door never replays the way-out -- the flag is one-shot',
 )
 
-// --- prefers-reduced-motion: the rain stays home ------------------------
+// --- prefers-reduced-motion: still rain, not no rain --------------------
+//
+// The setting declines the falling, not the scene (#645, owner review
+// 2026-08-30: hiding the rain entirely read as "the rain doesn't
+// work"). Every stroke must still be on screen, parked at its own --y,
+// with its animation gone.
 
 const browser = await chromium.launch()
 const ctx = await browser.newContext({ ignoreHTTPSErrors: true, reducedMotion: 'reduce' })
 const still = await ctx.newPage()
 await still.goto(process.env.MV_URL, { waitUntil: 'networkidle' })
 await still.waitForSelector('.screen', { timeout: 10000 })
+const stillRain = await still
+  .$$eval('.fullfall i', (els) =>
+    els.map((el) => {
+      const s = getComputedStyle(el)
+      return { anim: s.animationName, top: parseFloat(s.top) }
+    }),
+  )
+  .catch(() => [])
 check(
-  await still.$eval('.fullfall', (el) => getComputedStyle(el).display === 'none').catch(() => false),
-  'under prefers-reduced-motion the rain does not render at all',
+  stillRain.length >= 10 &&
+    stillRain.every((r) => r.anim === 'none' && r.top >= 0),
+  `under prefers-reduced-motion the rain hangs still on screen -- ${stillRain.length} strokes, ${JSON.stringify(stillRain.slice(0, 2))}`,
 )
 await browser.close()
 
