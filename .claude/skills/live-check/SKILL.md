@@ -41,6 +41,40 @@ cd frontend && node scripts/live-smoke.mjs
 scripts/live-env.sh down
 ```
 
+## Reading a run
+
+Do not judge a run by counting `RESULT: PASS` against `RESULT: FAIL`. The
+RESULT line is printed by the scenario itself, so one that *throws* --
+a stale selector, an import error -- dies before printing anything, and
+the log shows a header, some passing checks, a stack trace, and no
+verdict. Counting verdicts cannot see it. That is #661, and it was read
+as a clean browser phase across two full runs.
+
+The check that cannot lie about it:
+
+```
+grep -c '^== ' run.log                      # scenarios started
+grep -cE '^RESULT: |^PASS: ' run.log        # scenarios that reported
+```
+
+Equal means every scenario reported. A shortfall is scenarios that died
+silently, and the difference is how many. `run-scenarios.sh` now also
+writes a `RESULT: FAIL (... without printing a result)` line for those,
+but the count comparison is what to reach for on any log, including older
+ones and other people's.
+
+The opposite error is as bad: an earlier version of that fix printed a
+synthesised failure on *every* non-zero exit, duplicating the verdict a
+scenario had already written for itself and denying it had written one.
+Over-reporting and under-reporting are the same defect -- a log that is
+not a faithful record of what happened.
+
+To tell a regression from a pre-existing failure, run the whole thing on
+both trees, a worktree at `origin/dev` and the branch, and take the set
+difference. Failures present on both are not yours. Never run the one
+scenario twice instead: scenarios share an instance and run in filename
+order, so most depend on state an earlier one left.
+
 ## Running two live checks at once
 
 Safe by default. `MV_DIR` and the three ports are derived from a hash of
