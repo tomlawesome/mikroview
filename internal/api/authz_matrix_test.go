@@ -114,6 +114,8 @@ var authzMatrix = []routeExpectation{
 		"the pushed firewall rule table (#186 step 4) -- same tier as the event stream it annotates: rule comments/chains are already visible in events, and the lookup button is a user-facing affordance"},
 	{http.MethodGet, "/api/routeros/{device}/nat", accessUser,
 		"the pushed NAT table, same reasoning as the rules row above"},
+	{http.MethodGet, "/api/routeros/{device}/addresses", accessUser,
+		"the pushed /ip/address table (#627), same tier as the rules/NAT rows above"},
 	{http.MethodGet, "/api/flags", accessUser, "core read"},
 	{http.MethodPost, "/api/flags/clear-all", accessUser,
 		"same reversibility as the per-flag clear below, at bulk -- regular clears only, never creates an exclusion"},
