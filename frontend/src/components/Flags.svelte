@@ -8,7 +8,7 @@
   import { appState } from '../lib/state.svelte'
   import { authState } from '../lib/auth.svelte'
   import { fetchFlagEpisode } from '../lib/api'
-  import { FLAG_FAMILIES } from '../lib/flagPalette'
+  import { familyOf } from '../lib/flagPalette'
   import { formatHM, formatTime, countryFlag, isPublicIp } from '../lib/format'
   import { flagLayoutState, type FlagColumns } from '../lib/flagLayout.svelte'
   import { viewportState } from '../lib/viewport.svelte'
@@ -235,6 +235,10 @@
     known_bad_ip: 'Known-bad IP (blocklist match)',
   }
 
+  // A custom detection's type is its author's own name for it -- the
+  // honest label, not a key the sixteen-entry table above could know.
+  const labelFor = (t: FlagType) => TYPE_LABELS[t] ?? t
+
   // Sorted by firstSeen (not the fetch response's lastSeen-desc order --
   // see internal/flags.Store.List()) so a flag's position is fixed the
   // moment it first appears. lastSeen updates on every re-fire, not just
@@ -299,7 +303,7 @@
   })
 
   function groupTypeLabels(flags: Flag[]): string {
-    return [...new Set(flags.map((f) => TYPE_LABELS[f.type]))].join(' · ')
+    return [...new Set(flags.map((f) => labelFor(f.type)))].join(' · ')
   }
 
   function groupFirstSeen(flags: Flag[]): string {
@@ -324,7 +328,7 @@
         return counts
       }, {}),
     )
-      .map(([type, count]) => ({ label: TYPE_LABELS[type as FlagType], count: count ?? 0 }))
+      .map(([type, count]) => ({ label: labelFor(type as FlagType), count: count ?? 0 }))
       .sort((a, b) => b.count - a.count),
   )
 
@@ -456,10 +460,10 @@
 
   {#snippet flagCard(f: Flag, compactCard: boolean = false)}
     {@const investigate = investigateIp(f)}
-    {@const family = FLAG_FAMILIES[f.type]}
+    {@const family = familyOf(f.type)}
     <li class="card" class:compact={compactCard} class:open={expandedId === f.id} style="--ft: {family.ink}">
       <div class="card-main">
-        <span class="type">{family.mark} {TYPE_LABELS[f.type]}</span>
+        <span class="type">{family.mark} {labelFor(f.type)}</span>
         {#if f.confidence != null}
           <span
             class="confidence confidence-{confidenceTier(f.confidence)}"
@@ -609,7 +613,7 @@
                     <button
                       class="split-menu-item"
                       role="menuitem"
-                      title="Clear this flag and permanently stop {TYPE_LABELS[f.type]} from ever raising again for {f.target} -- reversible from the Exclusions page (see the menu)."
+                      title="Clear this flag and permanently stop {labelFor(f.type)} from ever raising again for {f.target} -- reversible from the Exclusions page (see the menu)."
                       onclick={() => {
                         openClearMenuFor = null
                         clearPermanent(f.id)
@@ -683,7 +687,7 @@
             <!-- The stripe wears the newest member's family ink -- a
                  campaign has no single type, and the newest member is
                  what put the card at this position in the list. -->
-            <li class="card campaign-card" style="--ft: {FLAG_FAMILIES[item.flags[0].type].ink}">
+            <li class="card campaign-card" style="--ft: {familyOf(item.flags[0].type).ink}">
               <div class="campaign-header">
                 <button
                   class="campaign-toggle"
@@ -730,9 +734,9 @@
            preference for the whole page reads simpler than two. -->
       <ul class="list card-grid" style="--flag-columns: {effectiveColumns}">
         {#each cleared as f (f.id)}
-          <li class="card cleared-card" class:compact style="--ft: {FLAG_FAMILIES[f.type].ink}">
+          <li class="card cleared-card" class:compact style="--ft: {familyOf(f.type).ink}">
             <div class="card-main">
-              <span class="type">{FLAG_FAMILIES[f.type].mark} {TYPE_LABELS[f.type]}</span>
+              <span class="type">{familyOf(f.type).mark} {labelFor(f.type)}</span>
               <span class="target">{f.target === 'global' ? 'network-wide' : f.target}</span>
             </div>
             <p class="detail">{f.detail}</p>

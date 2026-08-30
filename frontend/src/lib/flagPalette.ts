@@ -26,6 +26,21 @@ const presence: FlagFamily = { ink: '#b8c56a', mark: '▲' }
 // breadth (orange), traffic leaving that shouldn't (pink), the same
 // refusal repeating (rust), volume against a baseline (amber), and a
 // device appearing or falling silent (olive).
+// An operator-authored detection wears the app's own accent rather
+// than one of the six family inks: the record's palette classifies the
+// sixteen built-ins by what each flag is about, and a custom
+// detection's subject is known only to its author. The advisory mark,
+// not the alarm -- severity is the author's call, and ▲ is the
+// palette's unopinionated grade. Looked up through familyOf below;
+// indexing FLAG_FAMILIES directly crashes the render the moment a
+// custom detector raises its first flag, and the deck mounts every
+// card, so that one flag took down every scene at once.
+const custom: FlagFamily = { ink: '#9db8e8', mark: '▲' }
+
+export function familyOf(type: string): FlagFamily {
+  return FLAG_FAMILIES[type as FlagType] ?? custom
+}
+
 export const FLAG_FAMILIES: Record<FlagType, FlagFamily> = {
   critical_port: hostile,
   known_bad_ip: hostile,
