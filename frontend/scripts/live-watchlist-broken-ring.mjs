@@ -14,12 +14,11 @@
 //   can make either pass. (The #583 leg below does open Watchlist once,
 //   deliberately and only after the ring has already appeared, to prove
 //   the group ring's claim is resolved by the next tap.)
-// - "hiding the label tightens the ring to the icon" is a layout claim:
-//   the outline is drawn outside the item's border box via
-//   outline-offset, inside a rail whose own overflow-y:auto forces
-//   overflow-x to clip too -- the same trap that clipped #545's tooltip
-//   and #546's own count badge. Only a real layout engine can say whether
-//   it survives.
+// - Since #616 the desktop chrome is each card's scene bar: the ring is
+//   SceneBar.svelte's .ring button, rendered only while something is
+//   actually broken (absent, never dimmed), and it has to appear on
+//   every mounted card's bar at once -- a claim about the deck's real
+//   DOM, not about one component's props.
 // - #583 put the same ring on the small-screen bottom bar, on the
 //   *group*. The breakpoint is a live matchMedia listener jsdom does not
 //   implement, so no unit test in this repo can tell a phone viewport
@@ -42,7 +41,7 @@
 // earlier scenarios have no logging rules" state that scenario documents
 // needing.
 
-import { session, feedSyslog, check, done } from './live-browser.mjs'
+import { session, feedSyslog, check, done, goTo } from './live-browser.mjs'
 
 const URL_BASE = process.env.MV_URL
 
@@ -93,8 +92,10 @@ const entry = await api('POST', '/api/definitions', {
 check(entry.status === 201, `an entry is created (${entry.status})`)
 const id = entry.body?.id
 
-const WATCHLIST_ITEM = '.rail .item:has(.label:text-is("Watchlist"))'
-const watchlistItem = page.locator(WATCHLIST_ITEM)
+// The active card's own scene bar -- the deck mounts the neighbouring
+// cards too, each with a bar (and, while broken, a ring) of its own.
+const RING = '.card[aria-hidden="false"] .scene-bar .ring'
+const ring = page.locator(RING)
 
 /**
  * Polls the ring's DOM state and the server's coverage answer together
@@ -116,7 +117,7 @@ async function settledRing(timeoutMs = 75000) {
   let last = null
   while (Date.now() < deadline) {
     const coverage = await coverageFor(id)
-    const broken = await watchlistItem.evaluate((el) => el.classList.contains('broken'))
+    const broken = (await ring.count()) > 0
     last = { coverage, broken }
     const expected = coverage === 'no-logging'
     if (broken === expected) return last
@@ -140,71 +141,41 @@ let settled = await settledRing()
 check(settled?.coverage === 'no-logging', `the server now says no-logging (got ${settled?.coverage})`)
 check(settled?.broken === true, 'the ring follows the server into no-logging')
 
-const spokenBroken = await watchlistItem.getAttribute('aria-label')
+const spokenBroken = await ring.getAttribute('aria-label')
 check(
-  spokenBroken === "Watchlist — 1 watch can't be checked: the firewall rules it needs aren't being logged",
-  `the ring names the count and the cause, singular, in plain operator language -- got ${JSON.stringify(spokenBroken)}`,
+  spokenBroken === 'A watch is broken — open the watchlist',
+  `the ring says what is wrong and where to go, in plain operator language -- got ${JSON.stringify(spokenBroken)}`,
 )
 check(
   !/coverage|no-logging/i.test(spokenBroken ?? ''),
   'the label never leaks the internal coverage vocabulary the operator never chose',
 )
 
-const ringStyle = await watchlistItem.evaluate((el) => {
-  const s = getComputedStyle(el)
-  return { style: s.outlineStyle, width: s.outlineWidth, offset: s.outlineOffset }
-})
+// Chrome, not page content: the neighbouring Metrics card's bar carries
+// the same ring at the same moment, so no scene is blind to the alarm.
 check(
-  ringStyle.style === 'solid' && ringStyle.width === '2px' && ringStyle.offset === '3px',
-  `the ring is a 2px outline at 3px offset, per the record -- got ${JSON.stringify(ringStyle)}`,
+  (await page.locator('.card[data-view="metrics"] .scene-bar .ring').count()) === 1,
+  "the Metrics card's bar rings too -- the alarm travels with the chrome",
 )
 
-// --- Icons density: the ring tightens to the icon, and stays inside the rail
-const fullWidth = await watchlistItem.evaluate((el) => el.getBoundingClientRect().width)
-await page.click('.state-btn[aria-label^="Show icons"]')
+// The ring's claim is resolved by the next tap: clicking it rolls the
+// Watchlist card -- the page that carries the break -- to centre.
+await page.click(RING)
 await page.waitForFunction(
-  () => Math.round(document.querySelector('.rail').getBoundingClientRect().width) === 54,
+  () => {
+    const deck = document.querySelector('.deck')
+    const el = deck?.querySelector('.card[data-view="watchlist"]')
+    if (!el) return false
+    return Math.abs(el.getBoundingClientRect().top - deck.getBoundingClientRect().top) < 2
+  },
   null,
-  { timeout: 5000 },
+  { timeout: 10000 },
 )
-const iconsWidth = await watchlistItem.evaluate((el) => el.getBoundingClientRect().width)
-check(
-  iconsWidth < fullWidth / 2,
-  `the row itself narrows at icons density (no extra CSS -- .rail.icons .label{display:none} does this) -- ${fullWidth}px -> ${iconsWidth}px`,
-)
+check(true, 'clicking the ring rolls the Watchlist card to centre')
 
-const iconsRingStyle = await watchlistItem.evaluate((el) => {
-  const s = getComputedStyle(el)
-  return { style: s.outlineStyle, width: s.outlineWidth, offset: s.outlineOffset }
-})
-check(
-  iconsRingStyle.style === 'solid' && iconsRingStyle.width === '2px' && iconsRingStyle.offset === '3px',
-  `the ring survives the switch to icons density -- got ${JSON.stringify(iconsRingStyle)}`,
-)
-
-// The rail scrolls on one axis, which clips the other regardless of what
-// overflow-x says -- exactly the trap that clipped #545's tooltip and the
-// count badge. The ring's outline extends 5px (2px width + 3px offset)
-// beyond the item's own border box, so this checks that extension lands
-// inside the rail rather than being cut off.
-const withinRail = await page.evaluate(() => {
-  const rail = document.querySelector('.rail').getBoundingClientRect()
-  const item = Array.from(document.querySelectorAll('.rail .item')).find(
-    (el) => el.querySelector('.label')?.textContent?.trim() === 'Watchlist',
-  )
-  const r = item.getBoundingClientRect()
-  const RING_EXTENT = 5
-  return r.left - RING_EXTENT >= rail.left && r.right + RING_EXTENT <= rail.right
-})
-check(withinRail, 'the ring is drawn inside the 54px rail rather than clipped by its own scroll container')
-
-const iconsLabel = await watchlistItem.getAttribute('aria-label')
-check(
-  iconsLabel === "Watchlist — 1 watch can't be checked: the firewall rules it needs aren't being logged",
-  `the reason still speaks at icons density, where the visible label is hidden -- got ${JSON.stringify(iconsLabel)}`,
-)
-
-await page.click('.state-btn[aria-label^="Show icons"]')
+// Back to Stream, so the small-screen leg and the clearing below stay
+// observations of the chrome rather than of the Watchlist page itself.
+await goTo(page, 'Stream')
 
 // --- Small screens (#583): the same alarm, on the bar of groups ----------
 // A phone-only operator is not a lesser operator: the ring's guarantee
@@ -222,7 +193,7 @@ await page.click('.state-btn[aria-label^="Show icons"]')
 await page.setViewportSize({ width: 390, height: 844 })
 const bar = page.locator('.bottom-bar')
 await bar.waitFor({ timeout: 5000 })
-check((await page.$$('.rail')).length === 0, 'at 390px the rail is gone and the bar is the whole of navigation')
+check((await bar.count()) === 1, 'at 390px the bottom bar of groups renders')
 
 const expectGroup = page.locator('.bottom-bar .group-btn:has(.label:text-is("Expect"))')
 const ringedIcon = expectGroup.locator('.icon-slot.broken')
@@ -307,16 +278,24 @@ check(
 )
 
 // Back to Stream and back to a desk-width viewport, so the clearing below
-// is still the rail reading App.svelte's own poll rather than a page
+// is still the chrome reading App.svelte's own poll rather than a page
 // refetch of its own.
+//
+// Live is a two-page group since #616 (The fall, then Stream), so
+// BottomBar's own single-page shortcut (group-btn aria-current="page")
+// no longer applies to it -- tapping "Live" now raises a half-sheet,
+// same as any other multi-page group, and Stream is picked from inside it.
 await page.click('.bottom-bar .group-btn .label:text-is("Live")')
-await page.waitForFunction(
-  () => document.querySelector('.bottom-bar .group-btn[aria-current="page"] .label')?.textContent.trim() === 'Live',
-  null,
-  { timeout: 5000 },
-)
+// The sheet (.sheet/.sheet-item) renders as a sibling of <nav
+// class="bottom-bar">, not nested inside it -- see BottomBar.svelte.
+await page.click('.sheet-item .label:text-is("Stream")')
+// Resize back to desktop BEFORE waiting for input.rule: at mobile width
+// FilterBar's inputs sit behind a closed drawer
+// ({#if !viewportState.isMobile || drawerOpen}), so the selector can
+// never appear until the viewport is desktop again.
 await page.setViewportSize({ width: 1280, height: 720 })
-await watchlistItem.waitFor({ timeout: 5000 })
+await page.waitForSelector('input.rule', { timeout: 5000 })
+await ring.waitFor({ timeout: 5000 })
 
 // --- Driven back out: covered, and the ring clears with no acknowledge ---
 check(
@@ -327,8 +306,8 @@ settled = await settledRing()
 check(settled?.coverage === 'covered', `the server now says covered (got ${settled?.coverage})`)
 check(settled?.broken === false, 'the ring clears the moment coverage recovers -- a live reading, not a record')
 check(
-  (await watchlistItem.getAttribute('aria-label')) === null,
-  'and the aria-label override drops with it, back to the plain row',
+  (await ring.count()) === 0,
+  'and it is gone from the bar entirely -- absent, never merely dimmed',
 )
 
 // The bar clears with it: same store, same live reading, no per-surface
@@ -337,7 +316,7 @@ await page.setViewportSize({ width: 390, height: 844 })
 await bar.waitFor({ timeout: 5000 })
 check(
   (await page.$$('.bottom-bar .icon-slot.broken')).length === 0,
-  'the bar drops its ring the moment coverage recovers, just as the rail does',
+  'the bar drops its ring the moment coverage recovers, just as the scene bars do',
 )
 check(
   (await expectGroup.getAttribute('aria-label')) === null,

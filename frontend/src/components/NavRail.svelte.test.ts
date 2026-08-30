@@ -249,19 +249,19 @@ describe('NavRail Admin group pages (#548/#490)', () => {
     watchlistState.coverage = {}
   })
 
-  it('renders The engine room as an ordinary view row for an admin', () => {
+  it('renders Settings as an ordinary view row for an admin', () => {
     authState.state = 'authenticated'
     authState.role = 'admin'
     appState.view = 'live'
     render(NavRail)
 
-    const room = screen.getByRole('button', { name: 'The engine room' })
+    const room = screen.getByRole('button', { name: 'Settings' })
     expect(room.getAttribute('aria-current')).toBeNull()
 
     room.click()
     flushSync()
     expect(appState.view).toBe('engineroom')
-    expect(screen.getByRole('button', { name: 'The engine room' }).getAttribute('aria-current')).toBe('page')
+    expect(screen.getByRole('button', { name: 'Settings' }).getAttribute('aria-current')).toBe('page')
   })
 
   // "Run setup…" is an action, not a page (#487): it opens the modal
@@ -284,7 +284,7 @@ describe('NavRail Admin group pages (#548/#490)', () => {
     wizardState.close()
   })
 
-  it('keeps Entities and Run setup… absent for a viewer, but shows The engine room, per #490s absent-never-disabled grammar', () => {
+  it('keeps Entities and Run setup… absent for a viewer, but shows Settings, per #490s absent-never-disabled grammar', () => {
     authState.state = 'authenticated'
     authState.role = 'user'
     render(NavRail)
@@ -295,6 +295,6 @@ describe('NavRail Admin group pages (#548/#490)', () => {
     // Fleet and The engine room have no admin gate -- both reach a
     // viewer today.
     expect(screen.getByRole('button', { name: 'Fleet' })).toBeTruthy()
-    expect(screen.getByRole('button', { name: 'The engine room' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Settings' })).toBeTruthy()
   })
 })

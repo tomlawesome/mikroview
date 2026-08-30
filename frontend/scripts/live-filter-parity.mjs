@@ -22,7 +22,7 @@
 // *names* for 192.0.2.0/24 and 198.51.100.0/24, which doesn't matter for
 // this check -- it's about the raw address, not the label).
 
-import { session, feedRaw, feedSyslog, check, done } from './live-browser.mjs'
+import { session, feedRaw, feedSyslog, check, done, goTo } from './live-browser.mjs'
 
 const URL_BASE = process.env.MV_URL
 
@@ -328,6 +328,12 @@ if (oldTrafficArrived) {
   let reloaded = true
   try {
     await page.goto(URL_BASE, { waitUntil: 'networkidle' })
+    // A fresh load lands on the fall (#616's landing default), not
+    // Stream -- this check is specifically about App.svelte's mount
+    // fetch on the live view, so navigate there explicitly rather than
+    // assume what a fresh load opens on.
+    await page.waitForSelector('#main-content', { timeout: 15000 })
+    await goTo(page, 'Stream')
     await page.waitForSelector('input.rule', { timeout: 15000 })
   } catch {
     reloaded = false

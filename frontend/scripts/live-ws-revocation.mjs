@@ -23,7 +23,7 @@
 // test faster, which is out of scope for this fix. The wait here is the
 // same bound an operator actually gets.
 
-import { session, feedSyslog, check, done } from './live-browser.mjs'
+import { session, feedSyslog, check, done, openAccountMenu } from './live-browser.mjs'
 
 const URL_BASE = process.env.MV_URL
 
@@ -71,16 +71,17 @@ check(beforeLogout > 0, `the raw socket received ${beforeLogout} events before l
 // on directly, so the cookie is copied across rather than sharing the
 // context object itself; the server sees the identical session either
 // way, which is what matters here). Its own liveSocket.disconnect() and
-// the rail's account popover are exercised too, since that is the
+// the account chip's Sign out row are exercised too, since that is the
 // interface an operator actually uses (mirroring live-change-password.mjs).
 const cookies = await page.context().cookies()
 const otherContext = await page.context().browser().newContext({ ignoreHTTPSErrors: true })
 await otherContext.addCookies(cookies)
 const other = await otherContext.newPage()
 await other.goto(URL_BASE, { waitUntil: 'networkidle' })
-await other.click('.rail .account .footer-item')
-check(await other.isVisible('.rail .popover-item:has-text("Sign out")'), 'the account popover offers Sign out')
-await other.click('.rail .popover-item:has-text("Sign out")')
+await other.waitForSelector('#main-content', { timeout: 15000 })
+await openAccountMenu(other)
+check(await other.isVisible('.account .menu button.row:has-text("Sign out")'), 'the account menu offers Sign out')
+await other.click('.account .menu button.row:has-text("Sign out")')
 await other.waitForSelector('input[autocomplete="username"]', { timeout: 10000 })
 await otherContext.close()
 
