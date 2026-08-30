@@ -10,8 +10,10 @@
   // docket (flags · watchlist · audit as one card's tabs, rounds 17-19).
   // Operate pages (settings, fleet, entities) are not cards: they live
   // on the account menu and render as pages over the deck.
-  import { appState, type View } from '../lib/state.svelte'
+  import { appState } from '../lib/state.svelte'
   import { authState } from '../lib/auth.svelte'
+  import { deckCards, type DeckCard } from '../lib/deckCards'
+  import { deckOrderState } from '../lib/deckOrder.svelte'
   import SceneBar from './SceneBar.svelte'
   import Fall from './Fall.svelte'
   import Metrics from './Metrics.svelte'
@@ -19,20 +21,10 @@
   import LiveTable from './LiveTable.svelte'
   import Docket from './Docket.svelte'
 
-  // A card can answer for several views: the docket is one card whose
-  // tabs are the flags, watchlist and audit views, so deep links to any
-  // of them land on it. Watchlist and audit are admin-only throughout
-  // (#490's grammar: absent for viewers, never disabled).
-  type Card = { key: string; name: string; views: View[] }
-  const cards = $derived.by((): Card[] => {
-    const admin = authState.role === 'admin'
-    return [
-      { key: 'fall', name: 'The fall', views: ['fall'] },
-      { key: 'metrics', name: 'Metrics', views: ['metrics'] },
-      { key: 'live', name: 'Stream', views: ['live'] },
-      { key: 'docket', name: 'The docket', views: admin ? ['flags', 'watchlist', 'audit'] : ['flags'] },
-    ]
-  })
+  // The card table lives in lib/deckCards.ts, shared with the Settings
+  // shelf; the order is the operator's own (#633 rounds 23-25, drag to
+  // reorder there), applied here so the deck rolls in the kept order.
+  const cards = $derived(deckOrderState.apply(deckCards(authState.role === 'admin')))
 
   const activeIndex = $derived(cards.findIndex((c) => c.views.includes(appState.view)))
 
@@ -51,7 +43,7 @@
   let rolling = false
   let rollTimer: ReturnType<typeof setTimeout> | undefined
 
-  function rollTo(card: Card) {
+  function rollTo(card: DeckCard) {
     if (!card.views.includes(appState.view)) appState.view = card.views[0]
   }
 
