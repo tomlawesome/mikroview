@@ -9,7 +9,10 @@ import { session, check, done } from './live-browser.mjs'
 
 const { page, consoleErrors } = await session()
 
-const badge = page.locator('.uptime')
+// The active card's own badge: the deck (#616) mounts the neighbouring
+// cards too, each scene bar with an uptime readout of its own, so a
+// bare .uptime resolves to three elements and trips strict mode.
+const badge = page.locator('.card[aria-hidden="false"] .uptime')
 await badge.waitFor({ timeout: 10000 })
 const first = await badge.textContent()
 // [Nd Nh Nm NNs] -- all four units always shown, seconds zero-padded to

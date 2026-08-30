@@ -103,7 +103,10 @@ check((await rowCount()) === normalRows, 'turning it off restores every row')
 await page.setViewportSize({ width: 480, height: 900 })
 await page.waitForTimeout(400)
 
-const mobileCards = await page.$$eval('.card', (els) => els.length)
+// button.card, not .card: the deck's own snap sections carry class
+// "card" too (#616), and counting those would let this pass with no
+// event cards at all.
+const mobileCards = await page.$$eval('button.card', (els) => els.length)
 check(mobileCards > 0, `phone width renders the card layout (${mobileCards} cards)`)
 check(
   !(await page.isVisible('button:text-is("Group")')),

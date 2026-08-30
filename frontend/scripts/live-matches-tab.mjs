@@ -35,7 +35,7 @@
 //    text instead of asking whether a box is visible.
 
 import { chromium } from 'playwright'
-import { session, feedRaw, check, done, goTo, openAtlas } from './live-browser.mjs'
+import { session, feedRaw, check, done, goTo } from './live-browser.mjs'
 
 const URL_BASE = process.env.MV_URL
 
@@ -272,13 +272,12 @@ await viewerPage.goto(URL_BASE, { waitUntil: 'networkidle' })
 await viewerPage.fill('input[autocomplete="username"]', VIEWER_USER)
 await viewerPage.fill('input[autocomplete="current-password"]', VIEWER_PASS)
 await viewerPage.click('button[type="submit"]')
-await viewerPage.waitForSelector('#main-content', { timeout: 15000 })
-await openAtlas(viewerPage)
+await viewerPage.waitForSelector('.roll-rail .rail-name', { timeout: 15000 })
 
-const viewerLabels = await viewerPage.$$eval('.atlas .ports .port', (els) => els.map((e) => e.textContent.trim()))
+const viewerLabels = await viewerPage.$$eval('.roll-rail .rail-name', (els) => els.map((e) => e.textContent.trim()))
 check(
   !viewerLabels.includes('Watchlist'),
-  `Watchlist -- and the Matches tab inside it -- is absent from a viewer's atlas, not disabled -- atlas shows ${JSON.stringify(viewerLabels)}`,
+  `Watchlist -- and the Matches tab inside it -- is absent from a viewer's roll rail, not disabled -- the rail shows ${JSON.stringify(viewerLabels)}`,
 )
 check(
   (await viewerPage.locator('#panel-matches').count()) === 0,

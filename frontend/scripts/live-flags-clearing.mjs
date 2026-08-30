@@ -195,7 +195,6 @@ if (firstRaised.every((r) => r.ok)) {
   // Permanently clear it via the menu item, keyboard-driven end to end:
   // focus the arrow, open with Enter, reach the item with Tab, activate
   // with Enter.
-  const beforePermanent = await activeCount(page)
   await target.locator('.split-arrow').focus()
   await page.keyboard.press('Enter')
   await page.waitForTimeout(200)
@@ -205,10 +204,15 @@ if (firstRaised.every((r) => r.ok)) {
     'Tab from the open arrow segment reaches the menu item',
   )
   await page.keyboard.press('Enter')
-  await page.waitForTimeout(500)
 
+  // The *card* must go, not the global count drop by exactly one: on the
+  // shared suite instance the 20-port scans' own late rule_spike flag
+  // can land in this same window and hold the count level, which failed
+  // this leg for a reason that had nothing to do with the keyboard path.
+  // The Exclusions-tab check below still proves the clear was permanent.
+  await target.waitFor({ state: 'hidden', timeout: 10000 }).catch(() => {})
   check(
-    (await activeCount(page)) === beforePermanent - 1 && !(await target.isVisible()),
+    !(await target.isVisible()),
     'the permanent-clear menu item still clears the flag, keyboard-driven',
   )
   // #547: the standalone Exclusions page (and its "Permanently-excluded"
