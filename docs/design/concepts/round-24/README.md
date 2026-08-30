@@ -53,5 +53,7 @@ in the reach and click-off surfacing.
 
 ## Owner verdicts
 
-- Pending: the settings rebuild, the reach corrections (fade level,
-  level-keeping, zoom lock), the annotation restyle.
+- Settings: **"Love this, develop it a little further, but its
+  good."** — developed in round 25.
+- The reach: **"This is now excellent."**
+- The storyboard note: **"Ok, fine I justwanted to check"**.
