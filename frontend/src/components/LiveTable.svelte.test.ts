@@ -596,3 +596,133 @@ describe('LiveTable Loading and first-run empty states (#549)', () => {
     expect(container.querySelector('.empty')?.textContent).toContain('Waiting for events…')
   })
 })
+
+// #644's squared columns: TIME · ACTION · SOURCE · address · DESTINATION ·
+// address · proto · port · RULE. The name columns show the resolved host
+// name where one exists and the bare address (dim, country code beside it)
+// where not; the address columns then show the raw IP only where the name
+// column is showing a name. Everything the retired columns carried
+// (device, chain, interfaces, src port, NAT, MAC) moved into the detail
+// sheet, which every desktop row now opens.
+describe('LiveTable squared columns (#644)', () => {
+  it('shows a bare external source dim in the name column, an em dash in its address column', () => {
+    const e = makeEvent('bare-source', {
+      srcIp: '185.220.101.34',
+      srcCountry: 'DE',
+      dstIp: '10.0.40.5',
+      dstHostName: 'nas',
+    })
+    const { container } = render(LiveTable, { props: { events: [e] } })
+    flushSync()
+
+    const nameCells = container.querySelectorAll('.cell.addr')
+    const ipCells = container.querySelectorAll('.cell.ip')
+
+    // Unnamed source: the address IS the name column's content (marked
+    // bare so it renders dim), the country code rides beside it, and the
+    // address column repeats nothing.
+    expect(nameCells[0]?.textContent).toContain('185.220.101.34')
+    expect(nameCells[0]?.textContent).toContain('DE')
+    expect(nameCells[0]?.querySelector('.addr-btn')?.classList.contains('bare')).toBe(true)
+    expect(ipCells[0]?.textContent?.trim()).toBe('—')
+
+    // Named destination: the other way round.
+    expect(nameCells[1]?.textContent).toContain('nas')
+    expect(nameCells[1]?.textContent).not.toContain('10.0.40.5')
+    expect(nameCells[1]?.querySelector('.addr-btn')?.classList.contains('bare')).toBe(false)
+    expect(ipCells[1]?.textContent?.trim()).toBe('10.0.40.5')
+  })
+
+  it('renders the destination port as the bare number, keeping any friendly name to the tooltip', () => {
+    const e = makeEvent('port-row', { dstIp: '10.0.40.5', dstPort: 445, dstPortName: 'smb' })
+    const { container } = render(LiveTable, { props: { events: [e] } })
+    flushSync()
+
+    const portCell = container.querySelector('.cell.port')
+    expect(portCell?.textContent?.trim()).toBe('445')
+    expect(portCell?.querySelector('.port-btn')?.getAttribute('title')).toContain('smb')
+  })
+
+  it('renders the timestamp with milliseconds', () => {
+    const e = makeEvent('ms-row', { time: '2026-08-08T12:00:00.482Z' })
+    const { container } = render(LiveTable, { props: { events: [e] } })
+    flushSync()
+
+    expect(container.querySelector('.cell.time')?.textContent).toMatch(/\.482/)
+  })
+
+  it('opens the detail sheet from the row, carrying the fields that no longer have columns', async () => {
+    const e = makeEvent('sheet-row', {
+      srcIp: '10.0.20.11',
+      srcPort: 49812,
+      srcMac: 'AA:BB:CC:DD:EE:FF',
+      dstIp: '10.0.40.5',
+      dstPort: 445,
+      protocol: 'tcp',
+      inInterface: 'bridge-iot',
+      outInterface: 'bridge1',
+    })
+    const { container } = render(LiveTable, { props: { events: [e] } })
+    flushSync()
+
+    expect(container.querySelector('[role="dialog"]')).toBeNull()
+
+    const timeBtn = container.querySelector('.time-btn') as HTMLElement
+    expect(timeBtn).toBeTruthy()
+    await fireEvent.mouseDown(timeBtn)
+    await fireEvent.mouseUp(timeBtn)
+
+    const sheet = container.querySelector('[role="dialog"]')
+    expect(sheet).toBeTruthy()
+    // makeEvent's default chain is 'input'; the device row resolves the
+    // id itself since no device list is loaded in these tests.
+    expect(sheet?.textContent).toContain('Chain')
+    expect(sheet?.textContent).toContain('input')
+    expect(sheet?.textContent).toContain('49812')
+    expect(sheet?.textContent).toContain('AA:BB:CC:DD:EE:FF')
+    expect(sheet?.textContent).toContain('bridge-iot')
+    expect(sheet?.textContent).toContain('bridge1')
+  })
+
+  // NAT used to be its own always-visible column (the translated
+  // address, plus a lookup trigger). #644 folds it into the action
+  // badge -- a natted event reads exactly like an accept/drop one, just
+  // with its own badge colour -- and moves the translated address into
+  // the detail sheet.
+  it('shows NAT as the action badge, not a separate column', () => {
+    const e = makeEvent('nat-row', {
+      action: 'natted',
+      chain: 'srcnat',
+      srcIp: '10.0.10.2',
+      natIp: '203.0.113.7',
+      natPort: 51512,
+    })
+    const { container } = render(LiveTable, { props: { events: [e] } })
+    flushSync()
+
+    expect(container.querySelector('.cell.action .badge-natted')).toBeTruthy()
+    expect(container.querySelector('.cell.nat')).toBeNull()
+  })
+
+  // #644's own text: "Per-cell ⓘ buttons are removed entirely." That is
+  // IpInvestigateButton (titled "Investigate {ip}") and
+  // PortInvestigateButton (titled "What is port {port}?") specifically --
+  // not RouterRuleButton, which keeps its rule-cell lookup trigger
+  // untouched (see EventRow.svelte's own comment on natFilterKey). A
+  // public source IP and a port with a commonPorts entry (443) are
+  // exactly the two conditions that used to grow one of the retired
+  // buttons.
+  it('carries no per-cell ⓘ investigate button for the source IP or the port', () => {
+    const e = makeEvent('no-investigate-row', {
+      srcIp: '203.0.113.50',
+      dstIp: '198.51.100.9',
+      dstPort: 443,
+    })
+    const { container } = render(LiveTable, { props: { events: [e] } })
+    flushSync()
+
+    const titles = Array.from(container.querySelectorAll('[title]')).map((el) => el.getAttribute('title') ?? '')
+    expect(titles.some((t) => t.startsWith('Investigate '))).toBe(false)
+    expect(titles.some((t) => /^What is port \d+\?$/.test(t))).toBe(false)
+  })
+})

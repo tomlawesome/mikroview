@@ -1,24 +1,20 @@
 <script lang="ts">
   // SPDX-License-Identifier: AGPL-3.0-only
   import type { FirewallEvent } from '../lib/types'
-  import { countryFlag, formatAddr, formatTime, isPublicIp, rawTooltip } from '../lib/format'
+  import { formatTimeMs, rawTooltip } from '../lib/format'
   import { appState } from '../lib/state.svelte'
   import ActionBadge from './ActionBadge.svelte'
-  import IpInvestigateButton from './IpInvestigateButton.svelte'
-  import PortInvestigateButton from './PortInvestigateButton.svelte'
   import RouterRuleButton from './RouterRuleButton.svelte'
   import CopyButton from './CopyButton.svelte'
   import EditNameButton from './EditNameButton.svelte'
   // Asked per pencil below rather than left to EditNameButton's own
-  // guard: a viewer's row would otherwise still build five components
-  // that render nothing, and the live view renders up to
+  // guard: a viewer's row would otherwise still build components that
+  // render nothing, and the live view renders up to
   // MAX_RENDERED_ROWS of these rows.
   import { nameEditorState } from '../lib/nameEditor.svelte'
-  import { lookupPort } from '../lib/commonPorts'
 
   let {
     event,
-    deviceName,
     // Grouping (#341). count > 1 means this row stands for several
     // identical connections and the time cell shows the count instead --
     // the time is the same second on every row at any real rate, so it
@@ -38,9 +34,18 @@
     // html's own .outside{opacity} treatment -- the row is still here,
     // still filterable, just quiet.
     dimmed = false,
+    // #644's squared columns retired the per-action row washes; alternate
+    // rows carry a faint band instead, decided by the caller from display
+    // order (a CSS nth-child can't see it: rows share their grid with
+    // header cells and drawer notes, and grouping shifts the parity).
+    banded = false,
+    // Opens the row's detail surface (EventDetailSheet). The columns this
+    // restyle dropped -- device, chain, interfaces, src port, NAT, MAC --
+    // live there now, so every row must be able to reach it, not just the
+    // mobile cards that always could.
+    onOpen,
   }: {
     event: FirewallEvent
-    deviceName: string
     count?: number
     flagged?: boolean
     expandable?: boolean
@@ -48,19 +53,19 @@
     onToggle?: () => void
     member?: boolean
     dimmed?: boolean
+    banded?: boolean
+    onOpen?: () => void
   } = $props()
-
-  const srcFlag = $derived(countryFlag(event.srcCountry))
-  const dstFlag = $derived(countryFlag(event.dstCountry))
 
   // Which Filters field (if either) a NAT token's translated address
   // belongs to (#438's NAT-parity section). Only the two dedicated NAT
   // chains say which side was rewritten -- see
   // internal/routeros/parser.go's isNATChain, mirrored exactly here and
-  // in lib/state.svelte.ts's srcCandidates/dstCandidates. A NAT
-  // annotation inherited onto some other chain (that file's parseNAT
-  // comment) has no such chain to read the direction off, so it stays
-  // inert rather than filtering the wrong side.
+  // in lib/state.svelte.ts's srcCandidates/dstCandidates. The NAT column
+  // itself is gone (#644), but the rule cell's lookup trigger still has
+  // to resolve against the same table the translation came from -- a NAT
+  // event's log-prefix names a rule in the NAT table, not the filter
+  // table (#445).
   const natFilterKey = $derived(
     event.chain?.toLowerCase() === 'srcnat'
       ? 'srcQuery'
@@ -69,14 +74,14 @@
         : null,
   )
 
-  // #439: row tokens (device, action, chain, addresses, ports, protocol,
-  // rule) used to be <button> elements. That's *why* row text couldn't be
-  // selected/copied before this -- every browser's UA stylesheet makes
-  // button content unselectable, independent of anything app.css did or
-  // didn't set (there was no explicit `user-select: none` anywhere to
-  // remove). They're plain elements with role="button" now, so their
-  // text is ordinary selectable content, and click-to-filter is wired up
-  // by hand below instead of coming for free from <button onclick>.
+  // #439: row tokens (action, addresses, port, protocol, rule) used to be
+  // <button> elements. That's *why* row text couldn't be selected/copied
+  // before this -- every browser's UA stylesheet makes button content
+  // unselectable, independent of anything app.css did or didn't set
+  // (there was no explicit `user-select: none` anywhere to remove).
+  // They're plain elements with role="button" now, so their text is
+  // ordinary selectable content, and click-to-filter is wired up by hand
+  // below instead of coming for free from <button onclick>.
   let rowEl: HTMLDivElement | undefined = $state()
 
   // Tracks which element a mouse press started on, so a release is only
@@ -147,10 +152,12 @@
 
 <div
   bind:this={rowEl}
-  class="row row-{event.action}"
+  class="row"
   class:member
   class:expandable
   class:dimmed
+  class:banded
+  data-chain={event.chain}
   title={rawTooltip(event.raw, event.rawTruncated)}
 >
   {#if expandable}
@@ -167,24 +174,17 @@
     </button>
   {:else}
     <span class="cell time">
-      {formatTime(event.time)}
+      <span
+        class="cell-btn time-btn"
+        role="button"
+        tabindex="0"
+        title="Show this event's details"
+        use:activate={() => onOpen?.()}
+      >{formatTimeMs(event.time)}</span>
       {#if flagged}<span class="flag-mark" title="This source has an active flag against it">⚑</span
         >{/if}
     </span>
   {/if}
-
-  <span class="cell device">
-    <span
-      class="cell-btn device-btn"
-      role="button"
-      tabindex="0"
-      title="Filter to device: {deviceName}"
-      use:activate={() => appState.setFilter('device', event.deviceId)}
-    >
-      {deviceName}
-    </span>
-    <CopyButton value={event.deviceId} label="device id" />
-  </span>
 
   <span
     class="cell action cell-btn"
@@ -196,164 +196,59 @@
     <ActionBadge action={event.action} />
   </span>
 
-  {#if event.chain}
-    <span
-      class="cell chain cell-btn"
-      role="button"
-      tabindex="0"
-      title="Filter to chain: {event.chain}"
-      use:activate={() => appState.setFilter('chain', event.chain)}
-    >
-      {event.chain}
-    </span>
-  {:else}
-    <span class="cell chain">—</span>
-  {/if}
-
+  <!-- Source and Destination each split into a name column and a dim
+       address column (#644): the name column shows the resolved host
+       name when one exists, otherwise the bare address itself (dim, with
+       the country code appended) -- and the address column then repeats
+       nothing, showing the raw IP only where the name column is showing
+       a name, an em dash otherwise. -->
   {#if event.srcIp}
     <span class="cell addr">
-      {#if srcFlag}
-        <span
-          class="cell-btn flag-btn"
-          role="button"
-          tabindex="0"
-          title="Filter to source country: {event.srcCountry}"
-          use:activate={() => appState.setFilter('srcCountry', event.srcCountry ?? '')}
-        >{srcFlag}</span>
-      {/if}
       <span
         class="cell-btn addr-btn"
+        class:bare={!event.srcHostName}
         role="button"
         tabindex="0"
         title={event.srcHostName ? `${event.srcHostName} — filter to source: ${event.srcIp}` : `Filter to source: ${event.srcIp}`}
         use:activate={() => appState.setFilter('srcQuery', event.srcIp ?? '')}
       >
-        {event.srcHostName || event.srcIp}
+        {event.srcHostName || event.srcIp}{#if !event.srcHostName && event.srcCountry}
+          <span class="geo">{event.srcCountry}</span>{/if}
       </span>
       <CopyButton value={event.srcIp} label="source IP" />
       {#if nameEditorState.available}
         <EditNameButton type="host" value={event.srcIp} device={event.deviceId} label={event.srcIp} />
       {/if}
-      {#if isPublicIp(event.srcIp)}
-        <IpInvestigateButton ip={event.srcIp} />
-      {/if}
     </span>
+    <span class="cell ip">{event.srcHostName ? event.srcIp : '—'}</span>
   {:else}
     <span class="cell addr">—</span>
-  {/if}
-
-  {#if event.srcPort}
-    <span class="cell port">
-      <span
-        class="cell-btn port-btn"
-        role="button"
-        tabindex="0"
-        title={event.srcPortName
-          ? `${event.srcPortName} — filter to port: ${event.srcPort}`
-          : `Filter to port: ${event.srcPort}`}
-        use:activate={() => appState.setFilter('port', String(event.srcPort))}
-      >
-        {event.srcPortName || event.srcPort}
-      </span>
-      <CopyButton value={String(event.srcPort)} label="source port" />
-      {#if nameEditorState.available}
-        <EditNameButton type="port" value={String(event.srcPort)} label="port {event.srcPort}" />
-      {/if}
-      {#if lookupPort(event.srcPort)}
-        <PortInvestigateButton port={event.srcPort} />
-      {/if}
-    </span>
-  {:else}
-    <span class="cell port">—</span>
+    <span class="cell ip">—</span>
   {/if}
 
   {#if event.dstIp}
     <span class="cell addr">
-      {#if dstFlag}
-        <span
-          class="cell-btn flag-btn"
-          role="button"
-          tabindex="0"
-          title="Filter to destination country: {event.dstCountry}"
-          use:activate={() => appState.setFilter('dstCountry', event.dstCountry ?? '')}
-        >{dstFlag}</span>
-      {/if}
       <span
         class="cell-btn addr-btn"
+        class:bare={!event.dstHostName}
         role="button"
         tabindex="0"
         title={event.dstHostName ? `${event.dstHostName} — filter to destination: ${event.dstIp}` : `Filter to destination: ${event.dstIp}`}
         use:activate={() => appState.setFilter('dstQuery', event.dstIp ?? '')}
       >
-        {event.dstHostName || event.dstIp}
+        {event.dstHostName || event.dstIp}{#if !event.dstHostName && event.dstCountry}
+          <span class="geo">{event.dstCountry}</span>{/if}
       </span>
       <CopyButton value={event.dstIp} label="destination IP" />
       {#if nameEditorState.available}
         <EditNameButton type="host" value={event.dstIp} device={event.deviceId} label={event.dstIp} />
       {/if}
-      {#if isPublicIp(event.dstIp)}
-        <IpInvestigateButton ip={event.dstIp} />
-      {/if}
     </span>
+    <span class="cell ip">{event.dstHostName ? event.dstIp : '—'}</span>
   {:else}
     <span class="cell addr">—</span>
+    <span class="cell ip">—</span>
   {/if}
-
-  {#if event.dstPort}
-    <span class="cell port">
-      <span
-        class="cell-btn port-btn"
-        role="button"
-        tabindex="0"
-        title={event.dstPortName
-          ? `${event.dstPortName} — filter to port: ${event.dstPort}`
-          : `Filter to port: ${event.dstPort}`}
-        use:activate={() => appState.setFilter('port', String(event.dstPort))}
-      >
-        {event.dstPortName || event.dstPort}
-      </span>
-      <CopyButton value={String(event.dstPort)} label="destination port" />
-      {#if nameEditorState.available}
-        <EditNameButton type="port" value={String(event.dstPort)} label="port {event.dstPort}" />
-      {/if}
-      {#if lookupPort(event.dstPort)}
-        <PortInvestigateButton port={event.dstPort} />
-      {/if}
-    </span>
-  {:else}
-    <span class="cell port">—</span>
-  {/if}
-
-  <span class="cell addr nat" class:has-value={!!event.natIp} title={event.natRaw}>
-    {#if event.natIp}
-      {#if natFilterKey}
-        <span
-          class="cell-btn nat-value"
-          role="button"
-          tabindex="0"
-          title="Filter to {natFilterKey === 'srcQuery' ? 'source' : 'destination'}: {event.natIp}"
-          use:activate={() => {
-            if (natFilterKey) appState.setFilter(natFilterKey, event.natIp ?? '')
-          }}
-        >→ {formatAddr(event.natIp, event.natPort)}</span>
-      {:else}
-        <span class="nat-value">→ {formatAddr(event.natIp, event.natPort)}</span>
-      {/if}
-      <!-- #445: the trigger carries the event, and whether it stands for
-           a whole group, so the popup can say what it was evaluated
-           against. Group keys exclude the interfaces (lib/grouping.ts),
-           so a head row's answer is not automatically its members'. -->
-      <RouterRuleButton
-        mode="nat"
-        device={event.deviceId}
-        ruleLabel={event.ruleLabel}
-        {event}
-        evidence={count > 1 ? 'group-head' : 'row'}
-      />
-    {:else}
-      —
-    {/if}
-  </span>
 
   {#if event.protocol}
     <span
@@ -369,35 +264,23 @@
     <span class="cell proto">—</span>
   {/if}
 
-  <!-- #438: the one cell that wasn't click-to-filter, despite the bar
-       already having an Interface box to receive it. Split into its two
-       tokens (in/out) so either can be clicked independently -- both
-       still write the same shared `interface` filter, which already
-       matches either side (unchanged). -->
-  <span class="cell iface">
-    {#if event.inInterface}
+  {#if event.dstPort}
+    <span class="cell port">
       <span
-        class="cell-btn iface-btn"
+        class="cell-btn port-btn"
         role="button"
         tabindex="0"
-        title="Filter to interface: {event.inInterface}"
-        use:activate={() => appState.setFilter('interface', event.inInterface ?? '')}
-      >{event.inInterface}</span>
-    {/if}
-    {#if event.inInterface && event.outInterface}
-      <span class="iface-sep">→</span>
-    {/if}
-    {#if event.outInterface}
-      <span
-        class="cell-btn iface-btn"
-        role="button"
-        tabindex="0"
-        title="Filter to interface: {event.outInterface}"
-        use:activate={() => appState.setFilter('interface', event.outInterface ?? '')}
-      >{event.outInterface}</span>
-    {/if}
-    {#if !event.inInterface && !event.outInterface}—{/if}
-  </span>
+        title={event.dstPortName
+          ? `${event.dstPortName} — filter to port: ${event.dstPort}`
+          : `Filter to port: ${event.dstPort}`}
+        use:activate={() => appState.setFilter('port', String(event.dstPort))}
+      >
+        {event.dstPort}
+      </span>
+    </span>
+  {:else}
+    <span class="cell port">—</span>
+  {/if}
 
   {#if event.ruleLabel}
     <span class="cell rule">
@@ -414,10 +297,9 @@
       {#if nameEditorState.available}
         <EditNameButton type="rule" value={event.ruleLabel} label={event.ruleLabel} />
       {/if}
-      <RouterRuleButton mode="rule" device={event.deviceId} ruleLabel={event.ruleLabel} />
       <!-- A NAT event's log-prefix names a rule in the NAT table, not in
            the filter table, so the rule cell resolves against the same
-           table the NAT cell does (#445). Pointing it at the filter
+           table the NAT cell used to (#445). Pointing it at the filter
            table would report every logged translation as unresolvable. -->
       <RouterRuleButton
         mode={natFilterKey ? 'nat' : 'rule'}
@@ -498,110 +380,22 @@
     line-height: 1.4;
   }
 
+  /* #644's squared columns: the per-action row washes are gone -- what a
+     row did is the badge's job -- and alternate rows carry a faint band
+     instead, mixed down from the hover token rather than introducing a
+     color of its own. Hover keeps the full-strength token; same
+     specificity, so source order lets it win over the band. */
+  .row.banded .cell {
+    background: color-mix(in srgb, var(--bg-hover) 55%, transparent);
+  }
+
   .row:hover .cell {
     background: var(--bg-hover);
   }
 
-  .row-accept .cell {
-    background: var(--row-accept-bg);
-  }
-  .row-drop .cell {
-    background: var(--row-drop-bg);
-  }
-  .row-reject .cell {
-    background: var(--row-reject-bg);
-  }
-  .row-log .cell {
-    background: var(--row-log-bg);
-  }
-  .row-marked .cell {
-    background: var(--row-marked-bg);
-  }
-  .row-natted .cell {
-    background: var(--row-natted-bg);
-  }
-  .row-unknown .cell {
-    background: var(--row-unknown-bg);
-  }
-
-  /* Same specificity as `.row:hover .cell` above; defined after it so
-     source order lets these win on hover instead of the plain --bg-hover. */
-  .row-accept:hover .cell {
-    background: var(--row-accept-bg-hover);
-  }
-  .row-drop:hover .cell {
-    background: var(--row-drop-bg-hover);
-  }
-  .row-reject:hover .cell {
-    background: var(--row-reject-bg-hover);
-  }
-  .row-log:hover .cell {
-    background: var(--row-log-bg-hover);
-  }
-  .row-marked:hover .cell {
-    background: var(--row-marked-bg-hover);
-  }
-  .row-natted:hover .cell {
-    background: var(--row-natted-bg-hover);
-  }
-  .row-unknown:hover .cell {
-    background: var(--row-unknown-bg-hover);
-  }
-
-  /* The row-tint backgrounds above are deliberately translucent (washed
-     over --bg-elevated), which is fine while every cell scrolls together
-     -- but .time stays pinned in place (see below) while later columns
-     scroll underneath it, so its translucent background would let their
-     text bleed through. A background shorthand only allows a plain color
-     in its *last* layer, so the tint is wrapped as a same-color-to-itself
-     gradient (a valid image layer) over an opaque --bg-elevated color
-     layer -- both painted within this cell's own box before the sticky
-     cell is composited over the page, flattening it to one opaque paint. */
-  .row-accept .time {
-    background: linear-gradient(var(--row-accept-bg), var(--row-accept-bg)), var(--bg-elevated);
-  }
-  .row-drop .time {
-    background: linear-gradient(var(--row-drop-bg), var(--row-drop-bg)), var(--bg-elevated);
-  }
-  .row-reject .time {
-    background: linear-gradient(var(--row-reject-bg), var(--row-reject-bg)), var(--bg-elevated);
-  }
-  .row-log .time {
-    background: linear-gradient(var(--row-log-bg), var(--row-log-bg)), var(--bg-elevated);
-  }
-  .row-marked .time {
-    background: linear-gradient(var(--row-marked-bg), var(--row-marked-bg)), var(--bg-elevated);
-  }
-  .row-natted .time {
-    background: linear-gradient(var(--row-natted-bg), var(--row-natted-bg)), var(--bg-elevated);
-  }
-  .row-unknown .time {
-    background: linear-gradient(var(--row-unknown-bg), var(--row-unknown-bg)), var(--bg-elevated);
-  }
-  .row-accept:hover .time {
-    background: linear-gradient(var(--row-accept-bg-hover), var(--row-accept-bg-hover)), var(--bg-elevated);
-  }
-  .row-drop:hover .time {
-    background: linear-gradient(var(--row-drop-bg-hover), var(--row-drop-bg-hover)), var(--bg-elevated);
-  }
-  .row-reject:hover .time {
-    background: linear-gradient(var(--row-reject-bg-hover), var(--row-reject-bg-hover)), var(--bg-elevated);
-  }
-  .row-log:hover .time {
-    background: linear-gradient(var(--row-log-bg-hover), var(--row-log-bg-hover)), var(--bg-elevated);
-  }
-  .row-marked:hover .time {
-    background: linear-gradient(var(--row-marked-bg-hover), var(--row-marked-bg-hover)), var(--bg-elevated);
-  }
-  .row-natted:hover .time {
-    background: linear-gradient(var(--row-natted-bg-hover), var(--row-natted-bg-hover)), var(--bg-elevated);
-  }
-  .row-unknown:hover .time {
-    background: linear-gradient(var(--row-unknown-bg-hover), var(--row-unknown-bg-hover)), var(--bg-elevated);
-  }
-
   .time,
   .addr,
+  .ip,
   .port,
   .proto {
     font-family: var(--font-mono);
@@ -611,41 +405,53 @@
   /* Keeps the timestamp in view while horizontally scrolling the table on
      narrow viewports, where the full column set no longer fits -- without
      it there's no fixed reference point tying a scrolled-out row back to
-     when it happened. Background comes from the existing .row-* rules
-     above (same specificity, .cell), so it stays opaque over the cells
-     scrolling underneath it. */
+     when it happened. Later columns scroll underneath it, so its
+     background must be opaque: the translucent band/hover washes are
+     wrapped as a same-color-to-itself gradient (a valid image layer) over
+     an opaque --bg-elevated color layer -- a background shorthand only
+     allows a plain color in its *last* layer -- flattening the cell to
+     one opaque paint before it is composited over the page. */
   .time {
     position: sticky;
     left: 0;
     z-index: 1;
+    background: var(--bg-elevated);
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 6px;
+    font-variant-numeric: tabular-nums;
   }
 
-  .addr {
-    color: var(--fg);
+  .row.banded .time {
+    background:
+      linear-gradient(
+        color-mix(in srgb, var(--bg-hover) 55%, transparent),
+        color-mix(in srgb, var(--bg-hover) 55%, transparent)
+      ),
+      var(--bg-elevated);
   }
 
-  .nat {
-    color: var(--fg-dim);
+  .row:hover .time {
+    background: linear-gradient(var(--bg-hover), var(--bg-hover)), var(--bg-elevated);
   }
 
-  .nat.has-value {
-    color: var(--accent);
-    font-weight: 600;
+  .time-btn {
+    flex: none;
+    width: auto;
   }
 
-  .device {
-    color: var(--fg-muted);
-  }
-
-  /* The device cell now holds the click-to-filter target plus its copy
-     button side by side -- same shape as .cell.addr below. */
-  .cell.device {
+  /* The name columns: a resolved host name reads bright; a bare address
+     standing in for one reads dim (the-whole.html's .host / .geo split),
+     with its country code dimmer and smaller beside it. */
+  .cell.addr {
     display: flex;
     align-items: center;
     gap: 4px;
+    color: var(--fg);
   }
 
-  .device-btn {
+  .addr-btn {
     flex: 1;
     min-width: 0;
     overflow: hidden;
@@ -653,14 +459,37 @@
     white-space: nowrap;
   }
 
+  .addr-btn.bare {
+    color: var(--fg-dim);
+  }
+
+  .geo {
+    color: var(--fg-dim);
+    font-size: 11px;
+  }
+
+  /* The dim address columns beside Source/Destination: the raw IP where
+     the name column shows a name, an em dash where the address is
+     already the name column's content. Right-aligned, never
+     interactive -- the name token beside it is the filter target. */
+  .ip {
+    text-align: right;
+    color: var(--fg-dim);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .proto {
+    text-transform: lowercase;
+  }
+
   .rule {
     font-family: var(--font-mono);
     color: var(--fg-muted);
   }
 
-  /* The rule cell holds the click-to-filter button, its copy button, and
-     the pushed-table lookup trigger side by side -- same layout the addr
-     cells use. */
+  /* The rule cell holds the click-to-filter button, its copy button, the
+     pencil, and the pushed-table lookup trigger side by side -- same
+     layout the name cells use. */
   .cell.rule {
     display: flex;
     align-items: center;
@@ -675,36 +504,18 @@
     white-space: nowrap;
   }
 
-  /* Same shape for the NAT cell: value plus the NAT-table trigger. No
-     copy button here -- NAT isn't one of #439's row-token categories
-     (addresses/ports/rules/device names), and unlike those it has no
-     resolved-label-vs-raw-value gap to bridge: what's shown already is
-     the raw address. */
-  .nat-value {
-    flex: 1;
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  /* #438: split into its in/out tokens (see the markup above), same
-     side-by-side shape as the other multi-part cells. */
-  .cell.iface {
+  /* Port stands alone, right-aligned since port numbers are numeric. */
+  .cell.port {
     display: flex;
     align-items: center;
+    justify-content: flex-end;
     gap: 4px;
-    color: var(--fg-muted);
-    font-size: 13px;
   }
 
-  .iface-btn {
+  .port-btn {
     flex: none;
     width: auto;
-  }
-
-  .iface-sep {
-    color: var(--fg-dim);
+    text-align: right;
   }
 
   /* Reset button chrome on click-to-filter cells so they read exactly
@@ -739,75 +550,41 @@
     border-radius: 2px;
   }
 
-  /* Address cells hold the IP filter button, its copy button, and (for
-     public IPs) the investigate trigger side by side -- overflow/ellipsis
-     moves from `.cell` (which now just lays them out) onto the filter
-     button itself, since that's the element with the actual long text.
-     Port is its own column now (see .port below), not crammed in here. */
-  .cell.addr {
-    display: flex;
-    align-items: center;
-    gap: 4px;
-  }
-
-  .addr-btn {
-    flex: 1;
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  /* #438: the country flag is now its own click-to-filter token (sets
-     Source/Destination country in the bar), separate from the address
-     token beside it -- a fixed-width emoji, no ellipsis needed. */
-  .flag-btn {
-    flex: none;
-    width: auto;
-  }
-
-  /* Same side-by-side shape as .cell.addr above (filter button + copy
-     button + optional investigate trigger), but right-aligned since port
-     numbers are numeric. */
-  .cell.port {
-    display: flex;
-    align-items: center;
-    justify-content: flex-end;
-    gap: 4px;
-  }
-
-  .port-btn {
-    flex: none;
-    width: auto;
-    text-align: right;
-  }
-
   /* #439: hover-revealed per-token copy glyph (CopyButton.svelte).
      Hidden by opacity (never display/visibility) so it stays in the tab
      order and reachable by keyboard -- :focus-within covers tabbing to
      it directly, without first hovering the row. Scoped to `.row` (not
      each `.cell`) to match hovering *anywhere* in the row revealing
      every token's glyph at once, not just the one directly under the
-     pointer. */
+     pointer -- and scoped to *this component's* rows at all, not bare
+     :global, because EventDetailSheet renders the same components
+     always-visible on a surface with no hover concept. */
   /* #413's pencil rides in the same reveal, immediately after the copy
-     glyph -- the slot #439 reserved for it. Listed alongside rather
-     than given rules of its own so the two can never drift into
+     glyph -- the slot #439 reserved for it. #644 adds the rule cell's
+     pushed-table lookup trigger: the quiet rows the restyle asks for
+     have no permanently-visible widgets, so it reveals on the same
+     terms rather than sitting on every row. All listed together rather
+     than given rules of their own so the three can never drift into
      revealing at different moments. */
-  :global(.copy-btn),
-  :global(.edit-btn) {
+  .row :global(.copy-btn),
+  .row :global(.edit-btn),
+  .row :global(.investigate) {
     opacity: 0;
   }
 
   .row:hover :global(.copy-btn),
   .row:focus-within :global(.copy-btn),
   .row:hover :global(.edit-btn),
-  .row:focus-within :global(.edit-btn) {
+  .row:focus-within :global(.edit-btn),
+  .row:hover :global(.investigate),
+  .row:focus-within :global(.investigate) {
     opacity: 1;
   }
 
   @media (prefers-reduced-motion: no-preference) {
-    :global(.copy-btn),
-    :global(.edit-btn) {
+    .row :global(.copy-btn),
+    .row :global(.edit-btn),
+    .row :global(.investigate) {
       transition: opacity 0.12s ease;
     }
   }

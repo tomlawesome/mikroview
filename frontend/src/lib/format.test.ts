@@ -1,7 +1,23 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 import { describe, expect, it } from 'vitest'
-import { formatRelative, formatDurationShort, formatUptimeFull, formatBufferDepth } from './format'
+import { formatRelative, formatDurationShort, formatTimeMs, formatUptimeFull, formatBufferDepth } from './format'
+
+describe('formatTimeMs', () => {
+  // Asserted on the tail only: the hour/minute/second part goes through
+  // toLocaleTimeString, whose exact rendering depends on the runner's
+  // locale and timezone -- the milliseconds suffix is what this function
+  // adds over formatTime, so it is what these tests pin.
+  it('appends the milliseconds, zero-padded to three digits', () => {
+    expect(formatTimeMs('2026-08-08T14:02:11.482Z')).toMatch(/:\d{2}\.482$/)
+    expect(formatTimeMs('2026-08-08T14:02:11.007Z')).toMatch(/:\d{2}\.007$/)
+    expect(formatTimeMs('2026-08-08T14:02:11.000Z')).toMatch(/:\d{2}\.000$/)
+  })
+
+  it('returns the original string unchanged for an unparseable value', () => {
+    expect(formatTimeMs('not-a-date')).toBe('not-a-date')
+  })
+})
 
 describe('formatRelative', () => {
   const now = new Date('2026-01-01T12:00:00.000Z').getTime()
