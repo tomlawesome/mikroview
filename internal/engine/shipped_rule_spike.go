@@ -182,6 +182,15 @@ func (d *ruleSpikeDefinition) Evaluate(e store.Event) {
 	})
 }
 
+// Learning satisfies LearningReporter: one baseline per rule label, so
+// Ready answers how many of those labels this definition has enough
+// history to judge -- see baselineSet.learning and learningStateFrom for
+// the shared read/reduce this and every other baseline-backed shipped
+// definition rely on.
+func (d *ruleSpikeDefinition) Learning(now time.Time) (LearningState, bool) {
+	return learningStateFrom(d.baselines.floor, d.baselines.learning(now)), true
+}
+
 // Replay satisfies Replayable: re-runs this definition's own logic over
 // the corpus against fresh, call-local state, never touching the live
 // rings or baselines. Candidate params override window/multiplier/minRate.
