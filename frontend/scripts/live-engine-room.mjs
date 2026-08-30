@@ -85,16 +85,23 @@ check(before !== null && before > 0, `memory says how many events the buffer hol
 feedSyslog(60, 'live-engine-room')
 const climbed = await page
   .waitForFunction(
-    ({ sel, was }) => {
-      // Deliberately no fallback to "the first number on the page": the
-      // ingest group's events/s moves on its own, so a fallback would
-      // let this check pass without ever reading the buffer.
-      const el = document.querySelector(sel)
+    (was) => {
+      // Plain DOM traversal, not BUFFER_ROW: this runs inside the page,
+      // where Playwright's :has-text/:text-is pseudo-selectors do not
+      // exist. And deliberately no fallback to "the first number on the
+      // page": the ingest group's events/s moves on its own, so a
+      // fallback would let this check pass without ever reading the
+      // buffer.
+      const og = [...document.querySelectorAll('.og')].find(
+        (g) => g.querySelector('h3')?.textContent.trim() === 'memory',
+      )
+      const row = og && [...og.querySelectorAll('.orow')].find((r) => r.textContent.includes('event buffer'))
+      const el = row?.querySelector('.ov')
       if (!el) return false
       const m = el.textContent.replace(/,/g, '').match(/(\d+)/)
       return m ? Number(m[1]) > was : false
     },
-    { sel: BUFFER_ROW, was: before },
+    before,
     { timeout: 20000 },
   )
   .then(() => true, () => false)
