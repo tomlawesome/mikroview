@@ -18,7 +18,7 @@
   import IpInvestigateButton from './IpInvestigateButton.svelte'
   import TabList from './TabList.svelte'
   import Exclusions from './Exclusions.svelte'
-  import type { Flag, FlagType, FirewallEvent } from '../lib/types'
+  import type { Flag, FlagType, FirewallEvent, Verdict } from '../lib/types'
 
   // Same gate the rail uses for the engine room's watchers station.
   const isAdminOrOpen = $derived(authState.state === 'authenticated' && authState.role === 'admin')
@@ -429,6 +429,55 @@
     }
   }
 
+  // Bare labels only (owner, 2026-08-30) -- no explanatory second line
+  // under any of the three buttons or the badge that replaces them once
+  // a flag is judged.
+  const VERDICT_LABELS: Record<Verdict, string> = {
+    expected: 'Expected',
+    noise: 'Noise',
+    real: 'Real',
+  }
+
+  // The three-button verdict row (issue #638). Every verdict posts at
+  // once and is awaited here, reported the same way clear()/
+  // clearPermanent() above report theirs -- 'expected'/'noise' additionally
+  // clear the flag as part of that same request (flagsState.judgeAndClear),
+  // 'real' does not (flagsState.judgeReal).
+  async function judge(id: string, verdict: Verdict) {
+    error = null
+    try {
+      if (verdict === 'real') {
+        await flagsState.judgeReal(id, authState.username)
+      } else {
+        await flagsState.judgeAndClear(id, verdict)
+      }
+    } catch (err) {
+      reportFailure('Could not record verdict', err)
+    }
+  }
+
+  // Undo (issue #638) is a real DELETE now, not a cancelled timer -- see
+  // flagsState.undoVerdict's own doc comment. Reported the same way as
+  // every other awaited mutation on this page.
+  async function undoVerdict(id: string) {
+    error = null
+    try {
+      await flagsState.undoVerdict(id)
+    } catch (err) {
+      reportFailure('Could not undo this verdict', err)
+    }
+  }
+
+  // "judged by X, HH:MM" -- the badge's own supporting line (issue
+  // #638's "who judged it and when"). verdictBy/verdictAt are only ever
+  // both present or both absent (see Flag's own doc comment), so falling
+  // back to just the account name if a timestamp were somehow missing is
+  // a defensive floor, not an expected path.
+  function judgedByLine(f: Flag): string {
+    if (!f.verdictBy) return ''
+    return f.verdictAt ? `${f.verdictBy} · ${formatHM(f.verdictAt)}` : f.verdictBy
+  }
+
   // Graded rather than a single color for every value -- a 12% confidence
   // score and a 95% one shouldn't read as equally worth attention at a
   // glance, mirroring the severity coloring ActionBadge already uses
@@ -507,6 +556,29 @@
         {/if}
         <span>last seen {formatHM(f.lastSeen)}</span>
         <span>fired {f.count}×</span>
+      </div>
+      <!-- The leading triage act (issue #638): judge, or the badge once
+           judged -- on the card's face rather than in the drawer,
+           because the verdict is the primary act and must not cost a
+           click to reach. Clear rides the drawer's foot with the rest
+           of the secondary actions. -->
+      <div class="verdict-slot">
+        {#if f.verdict}
+          <div class="verdict-status">
+            <span class="verdict-badge verdict-{f.verdict}">{VERDICT_LABELS[f.verdict]}</span>
+            {#if judgedByLine(f)}
+              <span class="verdict-judged-by">{judgedByLine(f)}</span>
+            {/if}
+          </div>
+        {:else}
+          <div class="verdict-row" role="group" aria-label="Judge this flag">
+            <button class="verdict-btn verdict-btn-expected" onclick={() => judge(f.id, 'expected')}>
+              Expected
+            </button>
+            <button class="verdict-btn verdict-btn-noise" onclick={() => judge(f.id, 'noise')}>Noise</button>
+            <button class="verdict-btn verdict-btn-real" onclick={() => judge(f.id, 'real')}>Real</button>
+          </div>
+        {/if}
       </div>
       <!-- The whole row's one affordance (rounds 18-19): the chevron
            opens the drawer; it rotates rather than swapping glyphs so
@@ -741,7 +813,16 @@
             </div>
             <p class="detail">{f.detail}</p>
             <div class="meta">
-              <span>cleared {f.clearedAt ? formatHM(f.clearedAt) : ''}</span>
+              {#if f.verdict}
+                <!-- Judged before it cleared (#638's 'expected'/'noise')
+                     -- the verdict is the more informative fact here, so
+                     it replaces the plain "cleared HH:MM" line rather
+                     than sitting alongside it. -->
+                <span class="verdict-badge verdict-{f.verdict}">{VERDICT_LABELS[f.verdict]}</span>
+                <span>{judgedByLine(f)}</span>
+              {:else}
+                <span>cleared {f.clearedAt ? formatHM(f.clearedAt) : ''}</span>
+              {/if}
             </div>
           </li>
         {/each}
@@ -765,6 +846,25 @@
       hidden={activeTab !== 'exclusions'}
     >
       <Exclusions />
+    </div>
+  {/if}
+
+  {#if flagsState.undoableVerdicts.length > 0}
+    <!-- Issue #638's undo affordance: judgeAndClear() has already
+         posted the verdict and cleared the card -- this is the window
+         (VERDICT_UNDO_MS) during which undoVerdict() can still send a
+         real DELETE to reverse it. Unlike Toast.svelte (a passive,
+         single, fade-away confirmation with pointer-events: none) this
+         needs to be clickable and to hold more than one at a time,
+         since Expected and Noise can each be pressed on a different
+         card before either window lapses. -->
+    <div class="verdict-undo-stack" role="status">
+      {#each flagsState.undoableVerdicts as u (u.id)}
+        <div class="verdict-undo">
+          <span>Cleared as {VERDICT_LABELS[u.verdict]}</span>
+          <button class="verdict-undo-btn" onclick={() => undoVerdict(u.id)}>Undo</button>
+        </div>
+      {/each}
     </div>
   {/if}
 </div>
@@ -1187,6 +1287,166 @@
   .ev-raw {
     font-size: 11px;
     color: var(--fg-dim);
+  }
+
+  /* The verdict lives on the card's face (issue #638: the primary
+     triage act), inline under the meta line -- the drawer carries the
+     clear actions. */
+  .verdict-slot {
+    margin-top: 8px;
+    max-width: 280px;
+  }
+
+  /* Issue #638: the leading verdict row, three bare-labelled buttons in
+     one line -- see VERDICT_LABELS' own doc comment for why there is no
+     second line under any of them. Colour is reinforcement only; the
+     label text is what carries the meaning (#616's "no meaning by
+     colour alone"). */
+  .verdict-row {
+    display: flex;
+    gap: 4px;
+  }
+
+  .verdict-btn {
+    flex: 1;
+    min-width: 0;
+    background: transparent;
+    border: 1px solid var(--border);
+    border-radius: 5px;
+    padding: 5px 4px;
+    font-size: 11px;
+    font-weight: 600;
+    white-space: nowrap;
+    color: var(--fg-muted);
+    cursor: pointer;
+  }
+
+  .verdict-btn:hover {
+    color: var(--fg);
+    border-color: var(--fg-muted);
+  }
+
+  .verdict-btn-expected {
+    color: var(--accept);
+    border-color: color-mix(in srgb, var(--accept) 35%, var(--border));
+  }
+
+  .verdict-btn-expected:hover {
+    background: var(--accept-bg);
+    border-color: var(--accept);
+  }
+
+  .verdict-btn-real {
+    color: var(--reject);
+    border-color: color-mix(in srgb, var(--reject) 35%, var(--border));
+  }
+
+  .verdict-btn-real:hover {
+    background: var(--reject-bg);
+    border-color: var(--reject);
+  }
+
+  /* A judged flag's badge + judged-by/when (issue #638) -- replaces the
+     verdict row entirely rather than sitting beside it, which is what
+     keeps a judged flag from ever reading as an open question again. */
+  .verdict-status {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+
+  .verdict-badge {
+    align-self: flex-start;
+    font-size: 11px;
+    font-weight: 700;
+    border-radius: 4px;
+    padding: 3px 8px;
+    white-space: nowrap;
+  }
+
+  .verdict-badge.verdict-expected {
+    color: var(--accept);
+    background: var(--accept-bg);
+  }
+
+  .verdict-badge.verdict-noise {
+    color: var(--fg-muted);
+    background: var(--bg-hover);
+  }
+
+  .verdict-badge.verdict-real {
+    color: var(--reject);
+    background: var(--reject-bg);
+  }
+
+  .verdict-judged-by {
+    font-size: 11px;
+    color: var(--fg-dim);
+  }
+
+  /* Clear/split-Clear demote to secondary (#638) -- still fully
+     available, one press away, just no longer the card's leading
+     affordance now that the verdict row is. Quieted with opacity alone
+     (not a smaller control, which would cost the split button's own
+     click target) and restored on hover/focus so the control never
+     becomes hard to find, only quiet to glance past. */
+  .clear.secondary,
+  .split-clear.secondary {
+    opacity: 0.72;
+  }
+
+  .clear.secondary:hover,
+  .clear.secondary:focus-visible,
+  .split-clear.secondary:hover,
+  .split-clear.secondary:focus-within {
+    opacity: 1;
+  }
+
+  /* The undo affordance for a just-judged 'expected'/'noise' verdict
+     (issue #638) -- see flagsState.undoVerdict's own doc comment for why
+     undoing is a real DELETE, not just cancelling a timer. Fixed rather
+     than inline: the card it refers to has already left the active list
+     by the time this renders, so there is nothing sensible to anchor it
+     to in flow. */
+  .verdict-undo-stack {
+    position: fixed;
+    left: 50%;
+    bottom: 28px;
+    transform: translateX(-50%);
+    z-index: 50;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    align-items: center;
+  }
+
+  .verdict-undo {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 8px 10px 8px 16px;
+    border-radius: 8px;
+    background: var(--bg-elevated);
+    color: var(--fg);
+    border: 1px solid var(--border);
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+    font-size: 13px;
+  }
+
+  .verdict-undo-btn {
+    background: transparent;
+    border: 1px solid var(--accent);
+    color: var(--accent);
+    border-radius: 5px;
+    padding: 4px 10px;
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+    white-space: nowrap;
+  }
+
+  .verdict-undo-btn:hover {
+    background: var(--accent-bg);
   }
 
   .clear {

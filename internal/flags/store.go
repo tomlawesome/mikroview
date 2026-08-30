@@ -227,6 +227,64 @@ type Flag struct {
 	// (additive, no migration needed) so the persisted shape and its
 	// round trip are proven ahead of anything setting it to true.
 	Provisional bool `json:"provisional,omitempty"`
+	// Verdict is an operator's judgement of this flag (#638): expected
+	// (legitimate traffic), noise (real traffic, wrong threshold) or
+	// real (genuine concern). Empty (omitted from JSON) means unjudged
+	// -- same "empty is the common, unset case" convention Provisional
+	// above follows. Set only through SetVerdict, which also owns
+	// VerdictBy/VerdictAt and, for expected/noise, reuses clearLocked
+	// rather than duplicating what Clear already does.
+	Verdict Verdict `json:"verdict,omitempty"`
+	// VerdictBy is the account that set Verdict -- empty exactly when
+	// Verdict is empty.
+	VerdictBy string `json:"verdictBy,omitempty"`
+	// VerdictAt is when Verdict was set -- zero (omitted, same
+	// omitzero convention as ClearedAt) exactly when Verdict is empty.
+	VerdictAt time.Time `json:"verdictAt,omitzero"`
+	// verdictCleared records whether the most recent SetVerdict call's
+	// own clearLocked call is what cleared this flag -- as opposed to
+	// the flag already being cleared beforehand (a plain Clear, or an
+	// earlier verdict). UndoVerdict reads this to decide whether
+	// undoing must re-open the flag: it must not, if the flag was
+	// already-cleared before the verdict it's undoing, since that
+	// clear wasn't the verdict's doing and undo has no business
+	// touching it.
+	//
+	// Deliberately unexported, so it carries no json tag and is simply
+	// skipped by encoding/json -- it does not survive a persist/reload
+	// round trip, and that is the right call, not an oversight. Its
+	// only reader is UndoVerdict, called (if at all) moments after
+	// SetVerdict, on the same running process and the same *Flag the
+	// map already holds -- persistence is rate-limited/best-effort
+	// even for the fields that IS json-tagged (see persist.WriteBehind),
+	// so leaning on it for a same-process, few-seconds-later decision
+	// would be building on ground shakier than just keeping the bit in
+	// memory. A restart in that narrow window already drops the
+	// undo affordance client-side along with everything else in
+	// flight; nothing here makes that worse, and persisting one more
+	// bit doesn't fix it either.
+	verdictCleared bool
+}
+
+// Verdict is an operator's judgement of a flag -- see Flag.Verdict.
+type Verdict string
+
+const (
+	VerdictExpected Verdict = "expected"
+	VerdictNoise    Verdict = "noise"
+	VerdictReal     Verdict = "real"
+)
+
+// Valid reports whether v is one of the three recognised verdicts --
+// used by the API handler to reject anything else with 400 before it
+// ever reaches the store.
+func (v Verdict) Valid() bool {
+	switch v {
+	case VerdictExpected, VerdictNoise, VerdictReal:
+		return true
+	default:
+		return false
+	}
 }
 
 // FlagTimeBucket is one point in Store.TimeSeries: counts of newly-raised
@@ -523,8 +581,12 @@ func (s *Store) add(t Type, target, detail string, confidence *int, evidence Evi
 		s.clearedCount--
 		f.ClearedAt = time.Time{}
 		f.Count = 0
-		f.ReputationFloor = nil // a revived flag starts its confidence history fresh
-		f.Reputation = nil      // ...and its detail history, including any stale reputation snapshot
+		f.ReputationFloor = nil   // a revived flag starts its confidence history fresh
+		f.Reputation = nil        // ...and its detail history, including any stale reputation snapshot
+		f.Verdict = ""            // ...and its judgement: a past "expected"/"noise" call was about the
+		f.VerdictBy = ""          // episode that just got cleared, not about this new one, so it
+		f.VerdictAt = time.Time{} // must not silently carry forward and suppress attention on a fresh firing
+		f.verdictCleared = false  // this Clear=false transition is the revival's doing, not any verdict's
 	}
 	f.Detail = detail
 	f.Confidence = mergeConfidence(confidence, f.ReputationFloor)
@@ -701,6 +763,45 @@ func (s *Store) ApplyReputationSnapshot(t Type, target string, snapshot reputati
 	s.persistLocked()
 }
 
+// clearLocked marks f cleared, if it isn't already -- the one place that
+// touches Cleared/ClearedAt/clearedCount, called under s.mu by both
+// Clear and SetVerdict (an expected/noise verdict clears via this same
+// path rather than a parallel one -- see SetVerdict's doc comment). A
+// no-op on an already-cleared flag, same as Clear's own contract.
+//
+// Reports whether it actually changed anything -- false on the no-op
+// path -- so a caller that needs to know whether *it* was the one that
+// cleared f (SetVerdict, for UndoVerdict's benefit) can tell that apart
+// from "f was already cleared by something else." unclearLocked is the
+// symmetric un-clear, and is the only place that decrements
+// clearedCount, for the same "one place touches the count" reason this
+// doc comment gives for clearLocked incrementing it.
+func (s *Store) clearLocked(f *Flag, now time.Time) bool {
+	if f.Cleared {
+		return false
+	}
+	f.Cleared = true
+	s.clearedCount++
+	f.ClearedAt = now
+	return true
+}
+
+// unclearLocked reverses clearLocked: re-opens f, if it's currently
+// cleared. A no-op otherwise, symmetric with clearLocked's own no-op
+// case. The only place clearedCount is decremented, matching
+// clearLocked as the only place it's incremented -- keeping both edges
+// of that counter's bookkeeping next to each other rather than letting
+// a future caller decrement it without the corresponding invariant
+// clearLocked's own callers already get for free.
+func (s *Store) unclearLocked(f *Flag) {
+	if !f.Cleared {
+		return
+	}
+	f.Cleared = false
+	f.ClearedAt = time.Time{}
+	s.clearedCount--
+}
+
 // Clear marks id as cleared. It reports whether an active flag with that
 // ID was found -- clearing an already-cleared or unknown ID is a no-op,
 // not an error, since the caller (a browser tab that might be showing a
@@ -713,11 +814,89 @@ func (s *Store) Clear(id string, now time.Time) bool {
 	if !ok || f.Cleared {
 		return false
 	}
-	f.Cleared = true
-	s.clearedCount++
-	f.ClearedAt = now
+	s.clearLocked(f, now)
 	s.persistLocked()
 	return true
+}
+
+// SetVerdict records an operator's judgement of id (#638) and reports
+// the updated flag plus whether id was known at all -- an unknown ID is
+// the one failure case (the handler maps it to 404); the caller is
+// expected to have already rejected an unrecognised Verdict value via
+// Verdict.Valid() before this is reached, so an invalid v here is a
+// programmer error, not a runtime one.
+//
+// expected and noise both clear the flag, via the exact same
+// clearLocked path Clear uses -- not a parallel clear -- so there is
+// only ever one place a flag transitions to Cleared. real records the
+// verdict and leaves Cleared untouched, per #638's contract: a real
+// verdict must never itself clear the flag.
+//
+// Re-judging an already-judged flag overwrites the previous verdict --
+// there's no history kept of a changed mind, same as every other
+// in-place mutation this store does. verdictCleared is recomputed on
+// every call (reset to false, then set only if this call's own
+// clearLocked reports a real change) rather than ever OR'd with its
+// previous value, so UndoVerdict always reflects whether the *current*
+// verdict is what's holding the flag cleared -- see verdictCleared's
+// own doc comment on Flag.
+func (s *Store) SetVerdict(id string, v Verdict, by string, now time.Time) (Flag, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	f, ok := s.byID[id]
+	if !ok {
+		return Flag{}, false
+	}
+	f.Verdict = v
+	f.VerdictBy = by
+	f.VerdictAt = now
+	f.verdictCleared = false
+	if v == VerdictExpected || v == VerdictNoise {
+		f.verdictCleared = s.clearLocked(f, now)
+	}
+	s.persistLocked()
+	return *f, true
+}
+
+// UndoVerdict reverses SetVerdict (#638's undo affordance, now a real
+// server call rather than a client-side deferred timer -- see the
+// issue comment on why: a PWA service worker re-issuing every request
+// through itself strips the keepalive guarantee a page-unload-time
+// POST relied on, so a verdict judged just before a reload could be
+// lost before it ever reached the server).
+//
+// Resets Verdict/VerdictBy/VerdictAt to their zero values, and re-opens
+// the flag only if the verdict being undone is what cleared it --
+// f.verdictCleared, set by SetVerdict -- never if the flag was already
+// cleared beforehand by something else (a plain Clear, or an earlier
+// verdict later overwritten by this one). That is the one subtlety
+// here: undo must not resurrect a flag that undoing the verdict had no
+// part in clearing.
+//
+// Reports whether id was known at all, same true/false contract as
+// every other id-keyed mutator here. Undoing an unjudged flag (empty
+// Verdict, verdictCleared false) is a deliberate no-op, not an error --
+// same "no-op, not an error" reasoning Clear's doc comment gives: the
+// caller may be a stale undo affordance racing a page that already
+// moved on, and it can't always know which is which either.
+func (s *Store) UndoVerdict(id string) (Flag, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	f, ok := s.byID[id]
+	if !ok {
+		return Flag{}, false
+	}
+	if f.verdictCleared {
+		s.unclearLocked(f)
+	}
+	f.Verdict = ""
+	f.VerdictBy = ""
+	f.VerdictAt = time.Time{}
+	f.verdictCleared = false
+	s.persistLocked()
+	return *f, true
 }
 
 // ClearAndExclude is the "Clear and never flag this again" action:
