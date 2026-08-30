@@ -42,9 +42,12 @@
 
   let bodyEl: HTMLDivElement | undefined = $state()
   let gridEl: HTMLDivElement | undefined = $state()
-  // Which event's EventDetailSheet.svelte is open (issue #85's mobile
-  // card layout) -- null means none. Desktop never sets this. Typed as
-  // FirewallEvent, not ClientEvent, to match EventRow/EventCardMobile's
+  // Which event's EventDetailSheet.svelte is open -- null means none.
+  // Originally issue #85's mobile card layout only; #644's squared
+  // columns made it every row's detail surface, since the sheet is where
+  // the dropped columns' data (device, chain, interfaces, src port, NAT,
+  // MAC) now lives. Typed as FirewallEvent, not ClientEvent, to match
+  // EventRow/EventCardMobile's
   // own prop type -- applyFilters's declared return type is
   // FirewallEvent[] even though the real objects flowing through it are
   // ClientEvents (see state.svelte.ts), so `rendered` below is typed
@@ -374,16 +377,17 @@
         </div>
 
         {#if groupModeState.enabled}
-          {#each displayGroups as group (group.key)}
+          {#each displayGroups as group, gi (group.key)}
             <EventRow
               event={group.head}
-              deviceName={deviceName(group.head.deviceId)}
               count={group.count}
               flagged={flagged.has(group.head.srcIp ?? '')}
               dimmed={isDimmed(group.head)}
+              banded={gi % 2 === 1}
               expandable={group.count > 1}
               expanded={openGroups.has(group.key)}
               onToggle={() => toggleGroup(group.key)}
+              onOpen={() => (selectedEvent = group.head)}
             />
             <!-- Gated on group.count > 1 as well as the open flag, matching
                  the `expandable` predicate on the toggle above. The two used
@@ -399,10 +403,10 @@
               {#each drawerEvents(group) as member (member.id)}
                 <EventRow
                   event={member}
-                  deviceName={deviceName(member.deviceId)}
                   flagged={flagged.has(member.srcIp ?? '')}
                   dimmed={isDimmed(member)}
                   member
+                  onOpen={() => (selectedEvent = member)}
                 />
               {/each}
               {#if hiddenInDrawer(group) > 0}
@@ -420,12 +424,13 @@
             {/if}
           {/each}
         {:else}
-          {#each displayRendered as event (event.id)}
+          {#each displayRendered as event, i (event.id)}
             <EventRow
               {event}
-              deviceName={deviceName(event.deviceId)}
               flagged={flagged.has(event.srcIp ?? '')}
               dimmed={isDimmed(event)}
+              banded={i % 2 === 1}
+              onOpen={() => (selectedEvent = event)}
             />
           {/each}
         {/if}
