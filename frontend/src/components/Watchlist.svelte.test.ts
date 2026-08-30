@@ -257,3 +257,55 @@ describe('Watchlist Matches tab (#584)', () => {
     expect(document.getElementById('panel-matches')?.textContent).toContain('Nothing older')
   })
 })
+
+// Issue #649: every column on the docket's three tabs sorts (click,
+// again to reverse) and filters (a quiet dashed row beneath the labels).
+// Watchlist entries render as cards, not a table, so the sortbar/
+// filterbar stand in for column heads.
+describe('Watchlist Entries sort and filter (#649)', () => {
+  beforeEach(() => {
+    vi.resetAllMocks()
+    vi.mocked(fetchSuggestions).mockResolvedValue([])
+    vi.mocked(fetchRecentMatches).mockResolvedValue([])
+    suggestState.candidates = []
+    matchesState.reset()
+  })
+
+  function entryNames() {
+    return Array.from(document.querySelectorAll('#panel-watchlist .card .name')).map((el) => el.textContent?.trim())
+  }
+
+  it('defaults to alphabetical by watch name', async () => {
+    await renderWatchlist([entry('e1', 'zebra watch'), entry('e2', 'alpha watch')])
+    expect(entryNames()).toEqual(['alpha watch', 'zebra watch'])
+  })
+
+  it('clicking a sort head (watch) reverses on a second click', async () => {
+    await renderWatchlist([entry('e1', 'zebra watch'), entry('e2', 'alpha watch')])
+
+    await fireEvent.click(screen.getByRole('button', { name: /^watch/ }))
+    flushSync()
+    expect(entryNames()).toEqual(['zebra watch', 'alpha watch'])
+  })
+
+  it('a filter on state narrows to entries in that state only', async () => {
+    await renderWatchlist(
+      [entry('e1', 'SSH watch'), entry('e2', 'broken watch')],
+      { e2: 'no-logging' },
+    )
+
+    await fireEvent.input(screen.getByLabelText('Filter by state'), { target: { value: 'broken' } })
+    flushSync()
+
+    expect(entryNames()).toEqual(['broken watch'])
+  })
+
+  it('says plainly when nothing matches the filters', async () => {
+    await renderWatchlist([entry('e1', 'SSH watch')])
+
+    await fireEvent.input(screen.getByLabelText('Filter by watch name'), { target: { value: 'nope' } })
+    flushSync()
+
+    expect(screen.getByText('No entries match these filters.')).toBeTruthy()
+  })
+})
