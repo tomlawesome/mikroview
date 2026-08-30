@@ -118,43 +118,6 @@
     }
   })
 
-  // "Clear all" (issue #198): first click arms it (red, "Confirm"); the
-  // second click on that same now-red button is the confirmation -- no
-  // modal, because the second click *is* the deliberate second action.
-  // Disarms itself after CLEAR_ALL_ARM_MS or when the pointer/focus
-  // leaves, so an armed-but-abandoned state can't be triggered later by
-  // an unrelated click landing back on the button.
-  const CLEAR_ALL_ARM_MS = 4000
-  let clearAllArmed = $state(false)
-  let clearAllArmTimer: ReturnType<typeof setTimeout> | null = null
-  let clearAllBusy = $state(false)
-
-  function disarmClearAll() {
-    clearAllArmed = false
-    if (clearAllArmTimer) {
-      clearTimeout(clearAllArmTimer)
-      clearAllArmTimer = null
-    }
-  }
-
-  async function onClearAllClick() {
-    if (!clearAllArmed) {
-      clearAllArmed = true
-      clearAllArmTimer = setTimeout(disarmClearAll, CLEAR_ALL_ARM_MS)
-      return
-    }
-    disarmClearAll()
-    clearAllBusy = true
-    error = null
-    try {
-      await flagsState.clearAll()
-    } catch (err) {
-      reportFailure('Could not clear all flags', err)
-    } finally {
-      clearAllBusy = false
-    }
-  }
-
   let expandedId: string | null = $state(null)
 
   function toggleExpanded(id: string) {
@@ -554,27 +517,9 @@
             </button>
           {/each}
         </div>
-        {#if active.length > 0}
-          <!-- Click-again confirm, not a modal: the second click on this
-               same now-red button is the confirmation, which is what
-               makes a single accidental click harmless while still
-               asserting real intent for the second one (issue #198).
-               Regular clears only -- see flagsState.clearAll's doc
-               comment for why there is no permanent variant. -->
-          <button
-            class="clear-all"
-            class:armed={clearAllArmed}
-            disabled={clearAllBusy}
-            onclick={onClearAllClick}
-            onblur={disarmClearAll}
-            onpointerleave={disarmClearAll}
-            title={clearAllArmed
-              ? 'Click again to clear every active flag'
-              : 'Clear every active flag -- regular clears only, click again to confirm'}
-          >
-            {clearAllArmed ? 'Confirm' : 'Clear all'}
-          </button>
-        {/if}
+        <!-- Clear-all moved to the docket's tab row as the bubble
+             (#633 round 29) -- one control, not two. Its click-again
+             confirm interaction (#198) travelled with it. -->
       </div>
     </div>
     {#if active.length === 0}
@@ -1114,34 +1059,11 @@
     font-weight: 600;
   }
 
-  .clear-all {
-    background: transparent;
-    border: 1px solid var(--border);
-    color: var(--fg-muted);
-    border-radius: 5px;
-    padding: 6px 12px;
-    font-size: 12px;
-    white-space: nowrap;
-  }
 
-  .clear-all:hover {
-    color: var(--fg);
-    border-color: var(--fg-muted);
-  }
 
   /* Armed state: the button itself turns into the confirmation -- no
      modal, because this red/"Confirm" state IS the second, deliberate
      step (issue #198). */
-  .clear-all.armed {
-    background: var(--drop-bg);
-    color: var(--drop);
-    border-color: var(--drop);
-    font-weight: 600;
-  }
 
-  .clear-all:disabled {
-    opacity: 0.6;
-    cursor: default;
-  }
 
 </style>

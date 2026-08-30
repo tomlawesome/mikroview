@@ -29,15 +29,28 @@
   })
 
   let armed = $state(false)
+  let busy = $state(false)
+  let error = $state<string | null>(null)
 
-  function onClearAll(e: MouseEvent) {
+  // flagsState.clearAll() optimistically updates, then rolls back and
+  // rethrows on failure (see its doc comment) -- caught here so a
+  // transient failure reads as an error, not a button that did nothing.
+  async function onClearAll(e: MouseEvent) {
     e.stopPropagation()
     if (!armed) {
       armed = true
       return
     }
     armed = false
-    flagsState.clearAll()
+    busy = true
+    error = null
+    try {
+      await flagsState.clearAll()
+    } catch (err) {
+      error = err instanceof Error ? `Could not clear all flags: ${err.message}` : 'Could not clear all flags'
+    } finally {
+      busy = false
+    }
   }
 
   function onWindowClick() {
@@ -82,10 +95,11 @@
     {/if}
 
     {#if tab === 'flags' && flagsState.activeCount > 0}
-      <button class="bubble" class:armed onclick={onClearAll} title="They keep their place in the audit log">
+      <button class="bubble" class:armed disabled={busy} onclick={onClearAll} title="They keep their place in the audit log">
         {armed ? 'confirm' : `clear all ${flagsState.activeCount}`}
       </button>
     {/if}
+    {#if error}<span class="err" role="alert">{error}</span>{/if}
   </div>
 
   <div class="pane">
@@ -173,6 +187,17 @@
 
   .bubble.armed:hover {
     background: color-mix(in srgb, var(--alarm) 8%, transparent);
+  }
+
+  .bubble:disabled {
+    opacity: 0.5;
+    cursor: default;
+  }
+
+  .err {
+    margin-left: 10px;
+    font-size: 12px;
+    color: var(--alarm);
   }
 
   @media (prefers-reduced-motion: reduce) {
