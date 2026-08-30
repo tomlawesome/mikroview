@@ -294,3 +294,84 @@ describe('Flags verdict row (#638)', () => {
     expect(document.querySelector('.verdict-judged-by')?.textContent).toContain('alice')
   })
 })
+
+// Issue #649: every column on the docket's three tabs sorts (click,
+// again to reverse) and filters (a quiet dashed row beneath the labels).
+// Flags renders as a card grid, not a table, so the sortbar/filterbar
+// stand in for column heads -- these assert the same guarantee: the
+// Active list narrows and reorders on demand.
+describe('Flags Active list sort and filter (#649)', () => {
+  beforeEach(() => {
+    vi.resetAllMocks()
+    vi.mocked(fetchExclusions).mockResolvedValue([])
+    exclusionsState.list = []
+    authState.state = 'authenticated'
+    authState.role = 'admin'
+    flagsState.list = [
+      testFlag({
+        id: 'f1',
+        type: 'port_scan',
+        target: '198.51.100.1',
+        detail: 'twenty ports',
+        count: 20,
+        firstSeen: '2026-01-01T00:00:00Z',
+        lastSeen: '2026-01-01T00:00:00Z',
+      }),
+      testFlag({
+        id: 'f2',
+        type: 'outbound_anomaly',
+        target: '198.51.100.2',
+        detail: 'mail server',
+        count: 3,
+        firstSeen: '2026-01-01T00:10:00Z',
+        lastSeen: '2026-01-01T00:10:00Z',
+      }),
+    ]
+  })
+
+  function cardTargets() {
+    return Array.from(document.querySelectorAll('section[aria-labelledby="active-heading"] .card .target')).map(
+      (el) => el.textContent?.trim(),
+    )
+  }
+
+  it('defaults to newest first (age ascending), matching the order this replaces', () => {
+    render(Flags)
+    flushSync()
+    expect(cardTargets()).toEqual(['198.51.100.2', '198.51.100.1'])
+  })
+
+  it('clicking a sort head (count) sorts by it, and again reverses', async () => {
+    render(Flags)
+    flushSync()
+
+    await fireEvent.click(screen.getByRole('button', { name: /^count/ }))
+    flushSync()
+    expect(cardTargets()).toEqual(['198.51.100.2', '198.51.100.1'])
+
+    await fireEvent.click(screen.getByRole('button', { name: /^count/ }))
+    flushSync()
+    expect(cardTargets()).toEqual(['198.51.100.1', '198.51.100.2'])
+  })
+
+  it('a filter on evidence narrows the Active list to matching flags only', async () => {
+    render(Flags)
+    flushSync()
+
+    await fireEvent.input(screen.getByLabelText('Filter by evidence'), { target: { value: 'mail' } })
+    flushSync()
+
+    expect(cardTargets()).toEqual(['198.51.100.2'])
+  })
+
+  it('says plainly when nothing matches the filters, rather than the "nothing open" empty state', async () => {
+    render(Flags)
+    flushSync()
+
+    await fireEvent.input(screen.getByLabelText('Filter by where'), { target: { value: 'nobody-home' } })
+    flushSync()
+
+    expect(screen.getByText('No flags match these filters.')).toBeTruthy()
+    expect(screen.queryByText('Nothing open.')).toBeNull()
+  })
+})
