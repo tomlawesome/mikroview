@@ -1,173 +1,124 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 //
-// #545: the rail's three persistent states and the handle. What needs a
-// real browser rather than a unit test:
+// #616: the account chip's menu is where the operate pages and account
+// actions live since the deck retired the toolbar, the left rail and
+// the atlas overlay. What needs a real browser rather than a unit test:
 //
-// - The states are widths and mounted/unmounted DOM, not a store value.
-//   Asserting railPref.effective === 'docked' would pass while the rail
-//   still occupied 216px, which is the actual regression worth catching.
-// - "The handle never writes the preference" is only observable across a
-//   real page load: restore, reload, and the rail must come back docked.
-//   Nothing short of a reload distinguishes it from a permanent undock.
-// - Focus moves between two components that are never mounted at the same
-//   time (rail -> handle on dock, handle -> rail on restore). A mocked
-//   store hides exactly that wiring.
-// - The tooltip is required on focus as well as hover, and a `title`
-//   attribute silently satisfies neither in a way a test can see.
+// - The rows are gated on the real signed-in role. A viewer's menu has
+//   no Entities, Audit log or Run setup… row at all (#490's grammar:
+//   absent, never disabled), proved with a real second account rather
+//   than a mocked authState.role.
+// - Escape and click-away close the menu through a real window listener
+//   -- a jsdom keydown on a detached component proves nothing about
+//   which element actually owns the key.
+// - About & licence must stay reachable from the running app (AGPL
+//   5(d)/13), so its row has to really open the overlay, not merely
+//   exist.
+//
+// Sorted before live-admin-pages deliberately: it reads the menu and
+// opens one overlay, feeds nothing, and deletes the viewer account it
+// creates, so nothing downstream inherits anything from it.
 
-import { session, feedSyslog, check, responsive, done } from './live-browser.mjs'
+import { chromium } from 'playwright'
+import { session, check, responsive, openAccountMenu, done } from './live-browser.mjs'
 
-feedSyslog(120, 'nav-states')
-const { page, consoleErrors } = await session({ waitForEvents: 100 })
+const URL_BASE = process.env.MV_URL
 
-// Explicit rather than inherited: the default full/icons split is at
-// 1280px and Playwright's default viewport is exactly 1280 wide, so the
-// baseline would sit on the knife edge of its own boundary condition.
-// Reloaded after resizing, not merely resized: the default is worked out
-// once at module load and then never revisited ("never changed by the app
-// on its own"), so without the reload this would still be asserting the
-// default that Playwright's 1280px viewport produced -- exactly the
-// boundary value the rule turns on.
-await page.setViewportSize({ width: 1440, height: 900 })
-await page.reload()
-await page.waitForSelector('.rail .item', { timeout: 10000 })
-// The reload lands back on the fall (#616's landing default), not
-// Stream -- this scenario's own current-item assertions below want
-// Stream specifically (it is what session() itself lands the caller on
-// before this reload), so re-select it explicitly rather than assume
-// what a fresh load opens on.
-await page.click('.rail .item .label:text-is("Stream")')
-await page.waitForSelector('input.rule', { timeout: 5000 })
+const { page, consoleErrors } = await session()
 
-const railWidth = async () => {
-  const box = await page.$eval('.rail', (el) => el.getBoundingClientRect().width).catch(() => null)
-  return box === null ? null : Math.round(box)
+// --- The chip names the account, and opens the menu -----------------------
+const chip = page.locator('.card[aria-hidden="false"] .account button.chip')
+const chipText = (await chip.textContent())?.trim()
+check(
+  chipText?.startsWith(process.env.MV_USER ?? '') && chipText?.includes('(admin)'),
+  `the chip carries the username and the admin marker -- got ${JSON.stringify(chipText)}`,
+)
+
+await openAccountMenu(page)
+const rows = await page.$$eval('.account .menu button.row', (els) => els.map((e) => e.textContent.trim()))
+for (const expected of [
+  'Settings',
+  'Fleet',
+  'Entities',
+  'Audit log',
+  'Run setup…',
+  'Change password',
+  'Sign out',
+  'About & licence',
+]) {
+  check(rows.includes(expected), `an admin's menu offers ${expected} -- got ${JSON.stringify(rows)}`)
 }
-const DENSITY = '.state-btn[aria-label^="Show icons"]'
-const DOCK = '.state-btn[aria-label^="Dock the navigation"]'
 
-// --- Default: full, because the viewport is over 1280 --------------------
-check((await railWidth()) === 216, `full density by default above 1280px -- got ${await railWidth()}px`)
+// --- Escape closes it ------------------------------------------------------
+await page.keyboard.press('Escape')
+await page.waitForSelector('.account .menu', { state: 'detached', timeout: 5000 })
+check(true, 'Escape closes the menu')
+
+// --- Click-away closes it too ----------------------------------------------
+await openAccountMenu(page)
+// The scene title is inert -- clicking it can only exercise the menu's
+// own click-away listener, not open something else underneath.
+await page.click('.card[aria-hidden="false"] .scene-bar h1')
+await page.waitForSelector('.account .menu', { state: 'detached', timeout: 5000 })
+check(true, 'clicking away closes the menu')
+
+// --- About & licence opens, and the licence is really in it ----------------
+await openAccountMenu(page)
+await page.click('.account .menu button.row:text-is("About & licence")')
+const about = page.locator('[role="dialog"][aria-label="About MikroView"]')
+await about.waitFor({ state: 'visible', timeout: 5000 })
+check(true, 'About & licence opens the about overlay')
 check(
-  await page.$eval('.rail .item .label', (el) => el.getBoundingClientRect().width > 0),
-  'labels are visible at full density',
+  (await about.textContent())?.includes('AGPL'),
+  'the overlay names the licence -- reachable from the running app, per AGPL 5(d)/13',
 )
+await page.keyboard.press('Escape')
+await about.waitFor({ state: 'detached', timeout: 5000 })
+check(true, 'Escape closes the overlay again')
 
-// The record asks the control to name its destination, not its current
-// state -- "Show icons only" while full, the reverse once switched.
-check(
-  (await page.getAttribute(DENSITY, 'aria-label')) === 'Show icons only',
-  `the density control names where it goes -- got "${await page.getAttribute(DENSITY, 'aria-label')}"`,
-)
-
-// --- Full -> icons -------------------------------------------------------
-await page.click(DENSITY)
-await page.waitForFunction(() => Math.round(document.querySelector('.rail').getBoundingClientRect().width) === 54, null, {
-  timeout: 5000,
+// --- A viewer's menu: admin rows absent, never disabled --------------------
+const VIEWER_USER = 'live-viewer-menu'
+const VIEWER_PASS = 'live-viewer-menu-password'
+const createRes = await page.request.post(`${URL_BASE}/api/auth/users`, {
+  headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'mikroview' },
+  data: { username: VIEWER_USER, password: VIEWER_PASS, role: 'user' },
 })
-check((await railWidth()) === 54, `the density control switches to 54px -- got ${await railWidth()}px`)
-check(
-  (await page.getAttribute(DENSITY, 'aria-label')) === 'Show icons and text',
-  'and the control now offers the way back',
+check(createRes.status() === 201, `a viewer account is created (${createRes.status()})`)
+
+const browser = await chromium.launch()
+const viewerCtx = await browser.newContext({ ignoreHTTPSErrors: true })
+const viewerPage = await viewerCtx.newPage()
+await viewerPage.goto(URL_BASE, { waitUntil: 'networkidle' })
+await viewerPage.fill('input[autocomplete="username"]', VIEWER_USER)
+await viewerPage.fill('input[autocomplete="current-password"]', VIEWER_PASS)
+await viewerPage.click('button[type="submit"]')
+await viewerPage.waitForSelector('#main-content', { timeout: 15000 })
+
+await openAccountMenu(viewerPage)
+const viewerRows = await viewerPage.$$eval('.account .menu button.row', (els) => els.map((e) => e.textContent.trim()))
+for (const absent of ['Entities', 'Audit log', 'Run setup…']) {
+  check(!viewerRows.includes(absent), `${absent} is absent from a viewer's menu -- got ${JSON.stringify(viewerRows)}`)
+}
+check(viewerRows.includes('Settings'), 'Settings (the engine room) is there for a viewer -- deliberately viewer-readable')
+check(viewerRows.includes('Fleet'), 'Fleet -- the operate page with no admin gate -- is there too')
+check(viewerRows.includes('Sign out'), 'a viewer can still sign out')
+check(viewerRows.includes('About & licence'), 'and still reach the licence')
+const viewerDisabled = await viewerPage.$$eval('.account .menu button.row', (els) =>
+  els.filter((e) => e.disabled).map((e) => e.textContent.trim()),
 )
-check(
-  await page.$eval('.rail .item .label', (el) => el.getBoundingClientRect().width === 0),
-  'labels are not rendered at icons density',
-)
-// "Icons density keeps full labels ... label+count in aria-labels."
-check(
-  (await page.getAttribute('.rail .item[aria-current="page"]', 'aria-label')) === 'Stream',
-  'the current item still carries its label in aria at icons density',
-)
+check(viewerDisabled.length === 0, `no menu row is disabled for a viewer -- got ${JSON.stringify(viewerDisabled)}`)
+await browser.close()
 
-// --- The tooltip answers focus, not only hover ---------------------------
-// A `title` attribute would look correct in the markup and never appear
-// for a keyboard user, which is the failure this checks for.
-await page.focus('.rail .item[aria-current="page"]')
-const tipText = await page
-  .waitForSelector('.tip', { timeout: 2000 })
-  .then((el) => el.textContent())
-  .catch(() => null)
-check(tipText === 'Stream', `focusing a rail item shows its tooltip, not hover-only -- got ${JSON.stringify(tipText)}`)
-
-// It must also not be clipped by the 54px rail it hangs off, which is
-// what an absolutely-positioned tooltip inside a scrolling rail would be.
-const tipClear = await page.$eval('.tip', (el) => el.getBoundingClientRect().left >= 54)
-check(tipClear, 'the tooltip clears the rail rather than being clipped inside it')
-
-// --- Dock ----------------------------------------------------------------
-await page.click(DOCK)
-await page.waitForSelector('.handle', { timeout: 5000 })
-check((await page.$$('.rail')).length === 0, 'docking unmounts the rail rather than leaving a 0px one in the tab order')
-check((await page.$$('.handle')).length === 1, 'the handle takes its place')
-
-// "Docking returns focus to the handle."
-check(
-  await page.evaluate(() => document.activeElement?.classList.contains('handle')),
-  'docking moves focus to the handle',
-)
-
-// The handle is centred on the viewport, always -- not on the document,
-// and not on the content column's height.
-const centred = await page.evaluate(() => {
-  const r = document.querySelector('.handle').getBoundingClientRect()
-  return Math.abs(r.top + r.height / 2 - window.innerHeight / 2) < 2
-})
-check(centred, 'the handle is vertically centred on the viewport')
-
-check(
-  (await page.textContent('[role="status"].sr-only'))?.includes('docked'),
-  'docking is announced',
-)
-
-// --- Restore, and the density it comes back at ---------------------------
-await page.click('.handle')
-await page.waitForSelector('.rail', { timeout: 5000 })
-check((await railWidth()) === 54, `restoring returns the same density it was docked from -- got ${await railWidth()}px`)
-check((await page.$$('.handle')).length === 0, 'and the handle goes away with it')
-
-// "Restoring lands focus on the current page."
-check(
-  await page.evaluate(() => document.activeElement?.getAttribute('aria-current') === 'page'),
-  'restoring lands focus on the current page item',
-)
-
-// --- The handle never writes the preference ------------------------------
-// The whole point of the distinction: restoring is not a state change, so
-// a reload must come back docked. If this fails, the handle has quietly
-// become a permanent undock and the footer is no longer the only place a
-// state is selected.
-await page.reload()
-await page.waitForSelector('.handle', { timeout: 10000 })
-check((await page.$$('.rail')).length === 0, 'a reload after restoring comes back docked -- the handle never wrote the preference')
-
-// --- Keyboard-only: skip-link, then the handle ---------------------------
-// The record puts the handle first in tab order after the skip-link. A
-// docked rail is unreachable otherwise, so this is the one path that has
-// to work without a pointer.
-await page.keyboard.press('Tab')
-check(
-  await page.evaluate(() => document.activeElement?.className?.includes('skip-link')),
-  'first Tab still lands on the skip-link',
-)
-await page.keyboard.press('Tab')
-check(
-  await page.evaluate(() => document.activeElement?.classList.contains('handle')),
-  'the handle is next after it',
-)
-await page.keyboard.press('Enter')
-await page.waitForSelector('.rail', { timeout: 5000 })
-check((await railWidth()) === 54, 'Enter on the handle restores the rail')
-
-// --- A selected state does persist ---------------------------------------
-// The mirror of the check above: the footer writes, so this survives.
-await page.click(DENSITY)
-await page.waitForFunction(() => Math.round(document.querySelector('.rail').getBoundingClientRect().width) === 216, null, {
-  timeout: 5000,
-})
-await page.reload()
-await page.waitForSelector('.rail', { timeout: 10000 })
-check((await railWidth()) === 216, `choosing a density in the footer persists across a reload -- got ${await railWidth()}px`)
+// --- Clean up ---------------------------------------------------------------
+const usersRes = await page.request.get(`${URL_BASE}/api/auth/users`)
+const users = usersRes.status() < 400 ? await usersRes.json() : []
+const viewerAccount = (Array.isArray(users) ? users : []).find((u) => u.username === VIEWER_USER)
+if (viewerAccount) {
+  const del = await page.request.delete(`${URL_BASE}/api/auth/users/${encodeURIComponent(viewerAccount.id)}`, {
+    headers: { 'X-Requested-With': 'mikroview' },
+  })
+  check(del.status() === 200 || del.status() === 204, `the viewer account is removed again (${del.status()})`)
+}
 
 check(await responsive(page), 'main thread responsive')
 check(consoleErrors.length === 0, `no console errors -- got ${JSON.stringify(consoleErrors)}`)

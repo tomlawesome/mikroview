@@ -34,7 +34,7 @@ if (await modal.count()) {
 await goTo(page, 'Run setup…')
 await modal.waitFor({ state: 'visible' })
 check(
-  await page.locator('.scene-bar').isVisible(),
+  await page.locator('.card[aria-hidden="false"] .scene-bar').isVisible(),
   'the shell is still there behind the modal — this is a modal, not a page',
 )
 check(!(await page.locator('main .setup').count()), 'no wizard page route remains — the view was removed wholesale')
