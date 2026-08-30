@@ -38,5 +38,6 @@ slider targeted the same wrong id.
   width, equally sized** is the shape (verbatim above).
 - Watcher colour: **purple, ratified**.
 - Slider stop marks + click-to-jump: owner-specified, built.
-- Still pending: the corrected scene itself (`aggregates-under.html`),
-  and round 13's corrected metrics card.
+- C as corrected: **APPROVED** ("Yes, finally C is approved.",
+  chat, 2026-08-30).
+- Still pending: round 13's corrected metrics card.
