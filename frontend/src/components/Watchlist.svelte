@@ -22,6 +22,8 @@
   import { watchlistState } from '../lib/watchlist.svelte'
   import { suggestState } from '../lib/suggest.svelte'
   import { matchesState } from '../lib/matches.svelte'
+  import { compareText, matchesFilter } from '../lib/sortFilter'
+  import type { SortDir } from '../lib/sortFilter'
   import TabList from './TabList.svelte'
   import Suggestions from './Suggestions.svelte'
   import MatchesTab from './MatchesTab.svelte'
@@ -283,6 +285,72 @@
     if (e.source?.ip) return e.source.ip
     return 'any source'
   }
+
+  // The state a card's own stripe already shows by colour (round 19: the
+  // watchers' purple for healthy, the alarm ink where the ring is
+  // broken) -- named here too, as text, so it sorts and filters.
+  function stateLabel(e: WatchlistEntry): string {
+    if (!e.enabled) return 'paused'
+    if (e.enabled && watchlistState.coverage[e.id] === 'no-logging') return 'ring broken'
+    return 'watching'
+  }
+
+  function detailLabel(e: WatchlistEntry): string {
+    return e.invert
+      ? `${(e.permitted ?? []).length} permitted, ${(e.observed ?? []).length} to review`
+      : `ports ${(e.ports ?? []).join(', ')}${e.destIp ? ` → ${e.destIp}` : ''}`
+  }
+
+  // Every column sorts and filters (#649, round-18/19's ratified idiom):
+  // a quiet dashed row beneath the labels; clicking a label sorts by it,
+  // again to reverse. There is no fixed "the record's own order" to
+  // preserve here (entries render in whatever order the API returns),
+  // so name is a reasonable, stable default.
+  type WatchSortKey = 'watch' | 'boundary' | 'state' | 'detail'
+  let sortKey = $state<WatchSortKey>('watch')
+  let sortDir = $state<SortDir>('asc')
+  let filters = $state({ watch: '', boundary: '', state: '', detail: '' })
+
+  function toggleSort(key: WatchSortKey) {
+    if (sortKey === key) {
+      sortDir = sortDir === 'asc' ? 'desc' : 'asc'
+    } else {
+      sortKey = key
+      sortDir = 'asc'
+    }
+  }
+
+  function dirGlyph(key: WatchSortKey): string {
+    if (sortKey !== key) return ''
+    return sortDir === 'asc' ? '▲' : '▼'
+  }
+
+  const filteredEntries = $derived(
+    watchlistState.entries.filter(
+      (e) =>
+        matchesFilter(e.name || '(unnamed)', filters.watch) &&
+        matchesFilter(sourceLabel(e), filters.boundary) &&
+        matchesFilter(stateLabel(e), filters.state) &&
+        matchesFilter(detailLabel(e), filters.detail),
+    ),
+  )
+
+  const sortedEntries = $derived.by((): WatchlistEntry[] => {
+    const list = [...filteredEntries]
+    list.sort((a, b) => {
+      switch (sortKey) {
+        case 'watch':
+          return compareText(a.name || '(unnamed)', b.name || '(unnamed)', sortDir)
+        case 'boundary':
+          return compareText(sourceLabel(a), sourceLabel(b), sortDir)
+        case 'state':
+          return compareText(stateLabel(a), stateLabel(b), sortDir)
+        case 'detail':
+          return compareText(detailLabel(a), detailLabel(b), sortDir)
+      }
+    })
+    return list
+  })
 </script>
 
 <div class="watchlist-page">
@@ -369,8 +437,33 @@
     {#if watchlistState.entries.length === 0}
       <p class="empty">No watchlist entries yet -- add one above.</p>
     {:else}
+      <!-- Every column sorts and filters (#649): a quiet dashed row
+           beneath the labels, matching round-18/19's ratified idiom. -->
+      <div class="sortbar" role="row">
+        <button class="sorth" class:on={sortKey === 'watch'} onclick={() => toggleSort('watch')}>
+          watch <span class="dir">{dirGlyph('watch')}</span>
+        </button>
+        <button class="sorth" class:on={sortKey === 'boundary'} onclick={() => toggleSort('boundary')}>
+          boundary <span class="dir">{dirGlyph('boundary')}</span>
+        </button>
+        <button class="sorth" class:on={sortKey === 'state'} onclick={() => toggleSort('state')}>
+          state <span class="dir">{dirGlyph('state')}</span>
+        </button>
+        <button class="sorth" class:on={sortKey === 'detail'} onclick={() => toggleSort('detail')}>
+          detail <span class="dir">{dirGlyph('detail')}</span>
+        </button>
+      </div>
+      <div class="filterbar" role="row">
+        <input bind:value={filters.watch} placeholder="filter watch…" aria-label="Filter by watch name" />
+        <input bind:value={filters.boundary} placeholder="filter boundary…" aria-label="Filter by boundary" />
+        <input bind:value={filters.state} placeholder="filter state…" aria-label="Filter by state" />
+        <input bind:value={filters.detail} placeholder="filter detail…" aria-label="Filter by detail" />
+      </div>
+      {#if sortedEntries.length === 0}
+        <p class="empty">No entries match these filters.</p>
+      {:else}
       <ul class="list">
-        {#each watchlistState.entries as e (e.id)}
+        {#each sortedEntries as e (e.id)}
           <!-- The id is the target a match row's entry name scrolls to
                (openEntry, #584), not decoration. -->
           <!-- The watchlist wears the docket's stripe treatment too
@@ -497,6 +590,7 @@
           </li>
         {/each}
       </ul>
+      {/if}
     {/if}
   </section>
   </div>
@@ -693,6 +787,73 @@
     display: flex;
     flex-direction: column;
     gap: 8px;
+  }
+
+  /* Every column sorts and filters (#649): a sort toolbar standing in
+     for table column heads (the entries are cards, not a table), and
+     beneath it the quiet dashed filter row round-18/19 ratified -- same
+     idiom as docs/design/concepts/round-18/the-docket-opened.html's
+     `.panel tr.filters input`, translated onto a card list. */
+  .sortbar {
+    display: flex;
+    gap: 20px;
+    padding: 2px 4px 4px;
+  }
+
+  .sorth {
+    background: transparent;
+    border: none;
+    padding: 0;
+    font-family: var(--font-mono);
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--fg-dim);
+    cursor: pointer;
+  }
+
+  .sorth:hover {
+    color: var(--fg-muted);
+  }
+
+  .sorth.on {
+    color: var(--fg);
+  }
+
+  .sorth .dir {
+    display: inline-block;
+    min-width: 8px;
+    color: var(--accent);
+    font-size: 9px;
+  }
+
+  .filterbar {
+    display: flex;
+    gap: 20px;
+    padding: 0 4px 10px;
+  }
+
+  .filterbar input {
+    flex: 1;
+    min-width: 0;
+    background: transparent;
+    border: 0;
+    border-bottom: 1px dashed var(--border);
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--fg-muted);
+    padding: 2px 0;
+    outline: none;
+  }
+
+  .filterbar input::placeholder {
+    color: var(--fg-dim);
+    opacity: 0.7;
+  }
+
+  .filterbar input:focus {
+    border-bottom-color: var(--accent);
   }
 
   .card {
