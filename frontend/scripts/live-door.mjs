@@ -36,6 +36,14 @@ check(
 
 // --- The door's own furniture, on the signed-out page -------------------
 
+// Distinct computed lefts, not just a count: under the app's CSP
+// (default-src 'self') Firefox rejects inline style attributes, which
+// once collapsed all seventeen strokes onto one spot at the layer's
+// origin -- their geometry now lives in the stylesheet, and this pins
+// that. (Chromium tolerated the attributes, so the count alone passed
+// while Firefox showed one block.)
+const strokeLefts = await page.$$eval('.fullfall i', (els) => new Set(els.map((el) => getComputedStyle(el).left)).size)
+check(strokeLefts >= 10, `the strokes spread across the frame -- ${strokeLefts} distinct positions`)
 check(
   (await page.locator('.fullfall i').count()) >= 10,
   'the fall rains across the door -- a handful of strokes, present behind the form',
