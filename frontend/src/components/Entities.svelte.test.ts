@@ -6,22 +6,34 @@
 // rules/-ports sections and the "Fleet absorbed" framing are gone, per
 // the ratified scene, which has exactly one table and no other CRUD
 // surface (see this file's own component for the reasoning).
+//
+// #681 adds a tab strip -- hosts/rules/ports -- back over that one
+// table, so the suite below gained its own describe blocks for the two
+// new tabs; the hosts-tab tests above are otherwise untouched (hosts
+// stays the default tab, unchanged).
 
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { render, fireEvent } from '@testing-library/svelte'
 import { flushSync } from 'svelte'
-import type { Entity } from '../lib/types'
+import type { Entity, RuleUsage } from '../lib/types'
+import type { RouterFilterRule } from '../lib/api'
 
 const fetchEntities = vi.fn(async (): Promise<Entity[]> => [])
 const upsertEntity = vi.fn(async (_e: Entity): Promise<string | null> => null)
+const fetchRules = vi.fn(async (): Promise<RuleUsage[]> => [])
+const fetchRouterRules = vi.fn(async (): Promise<{ available: boolean; rules: RouterFilterRule[] }> => ({
+  available: false,
+  rules: [],
+}))
 
 vi.mock('../lib/api', () => ({
   fetchEntities: () => fetchEntities(),
   upsertEntity: (e: Entity) => upsertEntity(e),
   deleteEntity: vi.fn(),
   fetchDeviceMACs: vi.fn(async () => []),
-  fetchRouterRules: vi.fn(async () => ({ available: false, rules: [] })),
+  fetchRouterRules: () => fetchRouterRules(),
   fetchRouterAddresses: vi.fn(async () => ({ available: false, rules: [] })),
+  fetchRules: () => fetchRules(),
   fetchSetupStatus: vi.fn(
     async () =>
       ({
@@ -48,6 +60,8 @@ beforeEach(() => {
   vi.clearAllMocks()
   fetchEntities.mockResolvedValue([])
   upsertEntity.mockResolvedValue(null)
+  fetchRules.mockResolvedValue([])
+  fetchRouterRules.mockResolvedValue({ available: false, rules: [] })
   appState.devices = []
   appState.events = []
   appState.initialLoadDone = true
@@ -57,6 +71,23 @@ beforeEach(() => {
   watchlistState.coverage = {}
   zonesState.pushed = []
 })
+
+// A pushed rule: comment is the operator-facing label RouterOS shows,
+// logPrefix is the "<ACTION>|<slug>|" convention mikroview's own ingest
+// decodes -- the slug (not comment) is the rule's entity key throughout
+// this suite, matching ruleLabelFromLogPrefix (lib/routerLookup.svelte.ts).
+function filterRule(over: Partial<RouterFilterRule> = {}): RouterFilterRule {
+  return {
+    ordinal: 0,
+    comment: 'a filter rule',
+    chain: 'forward',
+    action: 'accept',
+    srcAddressList: '',
+    logPrefix: 'A|lan-wan|',
+    log: true,
+    ...over,
+  }
+}
 
 describe('Entities router cards (#675)', () => {
   it('renders one card per router, its live state and RouterOS version', async () => {
@@ -301,5 +332,157 @@ describe('Entities named-things table (#675)', () => {
     expect(container.querySelector('.table-hint')?.textContent).toContain(
       "a name is yours to give — click one to rename it; the router's own names arrive with its pushes",
     )
+  })
+})
+
+describe('Entities tab strip (#681)', () => {
+  it('defaults to the hosts tab and switches on click', async () => {
+    const { container, getByRole } = render(Entities)
+    await settle()
+
+    expect(getByRole('tab', { name: 'hosts' }).className).toContain('on')
+    expect(container.querySelector('.etable th')?.textContent).toBe('name')
+
+    await fireEvent.click(getByRole('tab', { name: 'rules' }))
+    await settle()
+    expect(getByRole('tab', { name: 'rules' }).className).toContain('on')
+    expect([...container.querySelectorAll('.etable th')].map((th) => th.textContent)).toEqual([
+      'name',
+      'chain',
+      'action',
+      'last fired',
+    ])
+
+    await fireEvent.click(getByRole('tab', { name: 'ports' }))
+    await settle()
+    expect([...container.querySelectorAll('.etable th')].map((th) => th.textContent)).toEqual(['name', 'port', 'last seen'])
+  })
+})
+
+describe('Entities rules tab (#681)', () => {
+  it('lists a rule that has been pushed but has never fired as its own row, reading as never-fired rather than blank', async () => {
+    appState.devices = [
+      { id: 'rb5009', name: 'rb5009', configured: true, status: 'live', lastSeen: new Date().toISOString(), sourceIp: '10.0.0.1', eventCount: 0 },
+    ] as unknown as (typeof appState)['devices']
+    fetchRouterRules.mockResolvedValue({
+      available: true,
+      rules: [filterRule({ chain: 'forward', action: 'drop', logPrefix: 'D|guest-block|' })],
+    })
+    fetchRules.mockResolvedValue([]) // nothing has ever fired
+
+    const { container, getByRole } = render(Entities)
+    await settle()
+    await fireEvent.click(getByRole('tab', { name: 'rules' }))
+    await settle()
+
+    const row = [...container.querySelectorAll('.etable tbody tr')].find((tr) => tr.textContent?.includes('guest-block'))
+    expect(row).toBeTruthy()
+    expect(row?.textContent).toContain('forward')
+    expect(row?.textContent).toContain('drop')
+    expect(row?.textContent).toContain('has not fired')
+  })
+
+  it('shows a fired rule\'s last-fired time and folds in its saved name', async () => {
+    appState.devices = [
+      { id: 'rb5009', name: 'rb5009', configured: true, status: 'live', lastSeen: new Date().toISOString(), sourceIp: '10.0.0.1', eventCount: 1 },
+    ] as unknown as (typeof appState)['devices']
+    fetchRouterRules.mockResolvedValue({
+      available: true,
+      rules: [filterRule({ chain: 'input', action: 'accept', logPrefix: 'A|lan-wan|' })],
+    })
+    const lastSeen = new Date(Date.now() - 5 * 60_000).toISOString()
+    fetchRules.mockResolvedValue([{ rule: 'lan-wan', firstSeen: lastSeen, lastSeen, count: 12 }])
+    fetchEntities.mockResolvedValue([{ type: 'rule', key: 'lan-wan', label: 'LAN to WAN', tags: [] }])
+
+    const { container, getByRole } = render(Entities)
+    await settle()
+    await fireEvent.click(getByRole('tab', { name: 'rules' }))
+    await settle()
+
+    const row = [...container.querySelectorAll('.etable tbody tr')].find((tr) => tr.textContent?.includes('LAN to WAN'))
+    expect(row).toBeTruthy()
+    expect(row?.textContent).toMatch(/[45]m ago/)
+    expect(row?.textContent).not.toContain('has not fired')
+  })
+
+  it('renames a never-fired rule inline, the same store and behaviour as a host', async () => {
+    appState.devices = [
+      { id: 'rb5009', name: 'rb5009', configured: true, status: 'live', lastSeen: new Date().toISOString(), sourceIp: '10.0.0.1', eventCount: 0 },
+    ] as unknown as (typeof appState)['devices']
+    fetchRouterRules.mockResolvedValue({ available: true, rules: [filterRule({ logPrefix: 'A|lan-wan|' })] })
+
+    const { container, getByRole, getByText } = render(Entities)
+    await settle()
+    await fireEvent.click(getByRole('tab', { name: 'rules' }))
+    await settle()
+
+    await fireEvent.click(getByText('lan-wan'))
+    await settle()
+    const input = container.querySelector('.rename-input') as HTMLInputElement
+    expect(input).toBeTruthy()
+    await fireEvent.input(input, { target: { value: 'LAN to WAN' } })
+    await fireEvent.keyDown(input, { key: 'Enter' })
+    await settle()
+
+    expect(upsertEntity).toHaveBeenCalledWith({ type: 'rule', key: 'lan-wan', label: 'LAN to WAN', tags: [] })
+  })
+
+  it('states a true, specific empty state when no router has pushed a rule table yet', async () => {
+    const { container, getByRole } = render(Entities)
+    await settle()
+    await fireEvent.click(getByRole('tab', { name: 'rules' }))
+    await settle()
+
+    expect(container.querySelector('.etable tbody')?.textContent).toContain(
+      'No router has pushed a rule table yet — once one does, every rule it carries appears here, fired or not.',
+    )
+  })
+
+  it('leaves an unlogged rule off the tab -- it can never fire under a label, so naming it would be a dead end', async () => {
+    appState.devices = [
+      { id: 'rb5009', name: 'rb5009', configured: true, status: 'live', lastSeen: new Date().toISOString(), sourceIp: '10.0.0.1', eventCount: 0 },
+    ] as unknown as (typeof appState)['devices']
+    fetchRouterRules.mockResolvedValue({
+      available: true,
+      rules: [filterRule({ log: false, logPrefix: '', comment: 'no logging on this one' })],
+    })
+
+    const { container, getByRole } = render(Entities)
+    await settle()
+    await fireEvent.click(getByRole('tab', { name: 'rules' }))
+    await settle()
+
+    expect(container.textContent).not.toContain('no logging on this one')
+    expect(container.querySelector('.etable tbody')?.textContent).toContain('No router has pushed a rule table yet')
+  })
+})
+
+describe('Entities ports tab (#681)', () => {
+  it('folds a discovered-but-unnamed port into the ports tab', async () => {
+    appState.events = [
+      { srcIp: '10.0.10.9', dstIp: '10.0.10.1', srcPort: 51413, dstPort: 443, time: new Date().toISOString(), receivedAt: Date.now() },
+    ] as unknown as (typeof appState)['events']
+
+    const { container, getByRole } = render(Entities)
+    await settle()
+    await fireEvent.click(getByRole('tab', { name: 'ports' }))
+    await settle()
+
+    expect(container.textContent).toContain('51413')
+    expect(container.textContent).toContain('443')
+    expect(container.textContent).toContain('— click to name —')
+  })
+
+  it('shows an already-named port by its label', async () => {
+    fetchEntities.mockResolvedValue([{ type: 'port', key: '8384', label: 'syncthing', tags: [] }])
+
+    const { container, getByRole } = render(Entities)
+    await settle()
+    await fireEvent.click(getByRole('tab', { name: 'ports' }))
+    await settle()
+
+    const row = [...container.querySelectorAll('.etable tbody tr')].find((tr) => tr.textContent?.includes('syncthing'))
+    expect(row).toBeTruthy()
+    expect(row?.textContent).toContain('8384')
   })
 })
