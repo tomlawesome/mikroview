@@ -98,6 +98,32 @@ else
   DEVICES_BLOCK=''
 fi
 
+# MV_DEMO_DEVICES=1 declares the estate scripts/seed-demo.py feeds, which
+# is the only way its pushed tables can ever be read back (#709).
+#
+# A pushed rule/NAT/address table is keyed by *device id*. seed-demo.py
+# mints its ingest tokens against the router names below and then streams
+# syslog from one loopback address per router, so unless those addresses
+# are declared here the registry invents a discovered device per source
+# IP -- "127.0.0.1" and friends -- and the pushed tables sit under ids no
+# device has. Both halves report success and never meet: the topography
+# draws an unnamed waist card and boundary-derived zones, and the fall's
+# bands read "not in a pushed rule table". seed-demo.py was written
+# expecting this block to exist; its own comment calls guest-ap
+# "declared in cfg.yaml", and nothing declared it.
+#
+# Opt-in, and set after both branches above deliberately: the gate's
+# scenarios read devices[0], and internal/device.Registry.List is
+# map-ordered, so declaring four devices unconditionally would make that
+# nondeterministic. Unset, every existing caller behaves exactly as
+# before.
+#
+# guest-ap is declared and never fed on purpose -- a router that has
+# said nothing is part of the story the demo tells (#687).
+if [ "${MV_DEMO_DEVICES:-}" = "1" ]; then
+  DEVICES_BLOCK='devices: [{id: border-rb5009, name: border-rb5009, sourceIp: 127.0.0.1}, {id: office-hex, name: office-hex, sourceIp: 127.0.0.2}, {id: lab-crs, name: lab-crs, sourceIp: 127.0.0.3}, {id: guest-ap, name: guest-ap, sourceIp: 127.0.0.4}]'
+fi
+
 # The host half of SYSLOG_TLS_ADDR, for the feeders below to dial.
 SYSLOG_TLS_HOST="${SYSLOG_TLS_ADDR%:*}"
 
