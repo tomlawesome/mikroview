@@ -23,6 +23,11 @@ export type NavItem = {
   view?: View
   action?: NavAction
   admin?: boolean
+  // #653: a row the user tier may reach, but a viewer may not. Distinct
+  // from `admin`, which is the owner-level set (accounts, tokens, the
+  // audit trail, re-running setup). A row carrying neither is open to
+  // every signed-in session.
+  edit?: boolean
   title: string
   icon: IconName
   // The record's "one count on the rail": Flags carries it and nothing
@@ -84,7 +89,7 @@ export const navGroups: NavGroup[] = [
       {
         label: 'Watchlist',
         view: 'watchlist',
-        admin: true,
+        edit: true,
         icon: 'watchlist',
         ring: true,
         title: 'Hosts and ports you expect to see',
@@ -111,9 +116,10 @@ export const navGroups: NavGroup[] = [
     // look in" door stays admin-only *within* an otherwise
     // viewer-readable page (see EngineRoomDoors.svelte).
     //
-    // Entities keeps `admin: true` -- the backend still 403s its GET
-    // route for a non-admin, so rendering it for a viewer would be a
-    // page that loads and immediately fails, not a read-only one.
+    // Entities carries `edit: true` since #653: the backend widened its
+    // GET route from admin to the user tier, so a user gets a page that
+    // works, while a viewer would still get one that loads and
+    // immediately fails -- which is why the row is not simply opened.
     items: [
       {
         label: 'Settings',
@@ -127,18 +133,26 @@ export const navGroups: NavGroup[] = [
         icon: 'fleet',
         title: 'Every known RouterOS device: live/stale/never-seen status, last-seen, and event counts',
       },
-      { label: 'Entities', view: 'entities', admin: true, icon: 'entities', title: 'Named hosts, ports and services' },
+      { label: 'Entities', view: 'entities', edit: true, icon: 'entities', title: 'Named hosts, ports and services' },
       { label: 'Run setup…', action: 'run-setup', admin: true, icon: 'setup', title: 'Re-run the setup wizard' },
     ],
   },
 ]
 
-// #490's grammar: admin-only rows are absent for viewers, never disabled.
-// A group whose every item is admin-only disappears with them rather
+// #490's grammar: rows a caller cannot use are absent, never disabled.
+// A group whose every item is gated away disappears with them rather
 // than rendering an empty heading. Shared by both nav surfaces so a
 // viewer sees the same geography on a phone as on a desk.
-export function visibleGroups(isAdmin: boolean): NavGroup[] {
+//
+// #653 made the gate two-level. `admin` rows need the owner-level tier;
+// `edit` rows need the user tier, which admin includes. Callers pass
+// both flags rather than a role string so the tier ordering lives in one
+// place (authState) instead of being re-derived per nav surface.
+export function visibleGroups(isAdmin: boolean, canEdit: boolean = isAdmin): NavGroup[] {
   return navGroups
-    .map((g) => ({ ...g, items: g.items.filter((i) => !i.admin || isAdmin) }))
+    .map((g) => ({
+      ...g,
+      items: g.items.filter((i) => (!i.admin || isAdmin) && (!i.edit || canEdit)),
+    }))
     .filter((g) => g.items.length > 0)
 }

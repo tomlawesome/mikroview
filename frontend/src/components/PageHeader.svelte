@@ -4,7 +4,12 @@
   // (docs/design/screens/navigation/DESIGN.md, "States of the chrome" ->
   // Viewer) says read-only is declared *once*, in words, in the page
   // header -- not by disabling every control on the page, and not
-  // repeated anywhere else. `readOnly` is passed in by the page rather
+  // repeated anywhere else. It names no tier since #653: with three of
+  // them, "ADMINS EDIT" was wrong in both directions -- a user edits the
+  // watchers station on Settings, and an admin edits everything -- and
+  // the chip only ever renders for someone who cannot edit the page
+  // anyway, so who can is not the useful half of the sentence.
+  // `readOnly` is passed in by the page rather
   // than derived here from authState, so a page with nothing to gate
   // (Fleet -- see its own comment) can simply never pass it, instead of
   // this component showing a chip that names a distinction that page
@@ -26,7 +31,7 @@
 <header class="page-header">
   <h2>{title}</h2>
   {#if readOnly}
-    <span class="chip">READ-ONLY — ADMINS EDIT</span>
+    <span class="chip">READ-ONLY</span>
   {/if}
   {#if children}
     {@render children()}

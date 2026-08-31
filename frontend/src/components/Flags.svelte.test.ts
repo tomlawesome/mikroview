@@ -294,3 +294,145 @@ describe('Flags verdict row (#638)', () => {
     expect(document.querySelector('.verdict-judged-by')?.textContent).toContain('alice')
   })
 })
+
+// #653's three tiers: judging/clearing a flag is a normal operational
+// action (user tier), not an owner-level one -- only a viewer, the
+// tier below user, must see none of it. Hidden, never disabled (issue
+// #198's own reasoning, now applied one tier lower).
+describe('Flags tiers (#653)', () => {
+  beforeEach(() => {
+    vi.resetAllMocks()
+    vi.mocked(fetchExclusions).mockResolvedValue([])
+    flagsState.list = [testFlag()]
+    flagsState.undoableVerdicts = []
+    exclusionsState.list = []
+    authState.username = 'kai'
+  })
+
+  it('a viewer sees no verdict row, no Clear, and no Clear all', async () => {
+    authState.state = 'authenticated'
+    authState.role = 'viewer'
+    render(Flags)
+    await Promise.resolve()
+    flushSync()
+
+    expect(screen.queryByRole('group', { name: 'Judge this flag' })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Clear' })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Clear all' })).toBeNull()
+  })
+
+  it('a user sees the verdict row, a plain Clear, and Clear all', async () => {
+    authState.state = 'authenticated'
+    authState.role = 'user'
+    render(Flags)
+    await Promise.resolve()
+    flushSync()
+
+    expect(screen.getByRole('group', { name: 'Judge this flag' })).toBeTruthy()
+
+    // Clear lives in the drawer since #633; Clear all left this
+    // component entirely for the docket's bubble (covered there).
+    await fireEvent.click(screen.getAllByRole('button', { name: /the drawer for this flag/ })[0])
+    flushSync()
+
+    expect(screen.getByRole('button', { name: 'Clear' })).toBeTruthy()
+    // The permanent-clear arrow stays admin-only -- a user gets the
+    // plain Clear button with no split menu beside it.
+    expect(screen.queryByRole('button', { name: 'More clear options for this flag' })).toBeNull()
+  })
+})
+
+// #654: the drawer's evidence panel groups pairs by host and states a
+// truncation cap rather than letting a capped list read as complete --
+// the owner-recorded design decisions this issue implements. The pure
+// grouping/truncation logic itself is unit-tested directly in
+// lib/evidencePairs.test.ts; these two prove Flags.svelte actually wires
+// that logic into what a reviewer sees when they open the drawer.
+describe('Flags evidence panel (#654)', () => {
+  beforeEach(() => {
+    vi.resetAllMocks()
+    vi.mocked(fetchExclusions).mockResolvedValue([])
+    exclusionsState.list = []
+    authState.state = 'authenticated'
+    authState.role = 'user'
+  })
+
+  it('groups host:port pairs by host, one row per host, never a flat list', async () => {
+    flagsState.list = [
+      testFlag({
+        type: 'critical_port',
+        evidence: {
+          pairs: [
+            { host: '192.168.1.10', port: 22 },
+            { host: '192.168.1.11', port: 23 },
+            { host: '192.168.1.10', port: 443 },
+          ],
+        },
+      }),
+    ]
+    render(Flags)
+    flushSync()
+
+    await fireEvent.click(screen.getByRole('button', { name: /the drawer for this flag/ }))
+    flushSync()
+
+    // One row per host, each carrying only the ports actually seen with
+    // it -- .10 shows 22 and 443 together, .11 shows only 23, and
+    // nothing implies .11 was ever tried on 22 or 443.
+    expect(screen.getByText('192.168.1.10')).toBeTruthy()
+    expect(screen.getByText('22, 443')).toBeTruthy()
+    expect(screen.getByText('192.168.1.11')).toBeTruthy()
+    expect(screen.getByText('23')).toBeTruthy()
+  })
+
+  it('states the exact truncation count instead of showing a short list that reads as complete', async () => {
+    const pairs = Array.from({ length: 50 }, (_, i) => ({ host: `10.0.0.${i}`, port: 22 }))
+    flagsState.list = [testFlag({ type: 'critical_port', evidence: { pairs, pairsTotal: 214 } })]
+    render(Flags)
+    flushSync()
+
+    await fireEvent.click(screen.getByRole('button', { name: /the drawer for this flag/ }))
+    flushSync()
+
+    expect(screen.getByText('(showing 50 of 214)')).toBeTruthy()
+  })
+
+  // #654's owner correction: pairsTotal is itself bounded
+  // (internal/engine's maxEvidencePairsTracked), so once the backend
+  // reports pairsTotalIsFloor the panel must say "at least this many"
+  // rather than a flat number that would look exactly as precise as the
+  // exact-count case above. Pinned as its own test, distinctly from it,
+  // so a regression that dropped the "+" suffix (or applied it to the
+  // exact case) would show up as a text-content mismatch, not just a
+  // missing element.
+  it('marks a floor total with a "+", distinctly from an exact total', async () => {
+    const pairs = Array.from({ length: 50 }, (_, i) => ({ host: `10.0.0.${i}`, port: 22 }))
+    flagsState.list = [
+      testFlag({ type: 'critical_port', evidence: { pairs, pairsTotal: 200, pairsTotalIsFloor: true } }),
+    ]
+    render(Flags)
+    flushSync()
+
+    await fireEvent.click(screen.getByRole('button', { name: /the drawer for this flag/ }))
+    flushSync()
+
+    expect(screen.getByText('(showing 50 of 200+)')).toBeTruthy()
+    expect(screen.queryByText('(showing 50 of 200)')).toBeNull()
+  })
+
+  it('shows no truncation notice when the pair list is already complete', async () => {
+    flagsState.list = [
+      testFlag({
+        type: 'critical_port',
+        evidence: { pairs: [{ host: '192.168.1.10', port: 22 }] },
+      }),
+    ]
+    render(Flags)
+    flushSync()
+
+    await fireEvent.click(screen.getByRole('button', { name: /the drawer for this flag/ }))
+    flushSync()
+
+    expect(screen.queryByText(/showing \d+ of \d+/)).toBeNull()
+  })
+})

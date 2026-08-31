@@ -54,6 +54,17 @@ describe('AuthState.check', () => {
   })
 
 
+  it('applies a viewer session (#653s third role)', async () => {
+    vi.mocked(fetchAuthSession).mockResolvedValue(
+      session({ authenticated: true, username: 'kai', role: 'viewer', ssoAvailable: false }),
+    )
+
+    await authState.check()
+
+    expect(authState.state).toBe('authenticated')
+    expect(authState.role).toBe('viewer')
+  })
+
   it('reports setup-required when no accounts exist yet', async () => {
     vi.mocked(fetchAuthSession).mockResolvedValue(session({ setupRequired: true }))
 
@@ -187,5 +198,34 @@ describe('AuthState.consumeSSOErrorFromURL', () => {
 
     expect(authState.ssoError).toBeNull()
     expect(location.search).toBe('?foo=bar')
+  })
+})
+
+// #653's three tiers (admin ⊇ user ⊇ viewer): isAdmin/canEdit are the
+// two derived checks every control-gating call site reads instead of
+// comparing authState.role directly.
+describe('AuthState.isAdmin / canEdit', () => {
+  it('admin is both', () => {
+    authState.role = 'admin'
+    expect(authState.isAdmin).toBe(true)
+    expect(authState.canEdit).toBe(true)
+  })
+
+  it('user can edit but is not admin', () => {
+    authState.role = 'user'
+    expect(authState.isAdmin).toBe(false)
+    expect(authState.canEdit).toBe(true)
+  })
+
+  it('viewer is neither', () => {
+    authState.role = 'viewer'
+    expect(authState.isAdmin).toBe(false)
+    expect(authState.canEdit).toBe(false)
+  })
+
+  it('an empty (unknown/signed-out) role is treated as the lowest tier', () => {
+    authState.role = ''
+    expect(authState.isAdmin).toBe(false)
+    expect(authState.canEdit).toBe(false)
   })
 })

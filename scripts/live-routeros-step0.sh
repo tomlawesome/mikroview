@@ -22,9 +22,21 @@ set -euo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 MV_URL="${MV_URL:?run scripts/live-env.sh up first, with MV_BIND set to the host address}"
-SINK_PORT="${MVCHR_SINK_PORT:-19899}"
+# These two used to default to 19899 and 19822. 19822 is slot 22's HTTP
+# port, so this fixture claimed a port live-env.sh hands out -- the same
+# defect #660 fixed in the four standalone checks, in a script that is
+# opt-in and therefore was not what surfaced it. 19899 sits one below the
+# allocator's standalone band and is a port rootless Docker has been seen
+# publishing on this host, which would fail the same way.
+#
+# Both now come from live-slot.sh's own band for this fixture, derived
+# from the checkout slot like everything else. An explicit
+# MVCHR_SINK_PORT/MVCHR_SFTP_PORT still wins, since a RouterOS container
+# reaching the host may need a port the operator chose.
+. "$REPO/scripts/live-slot.sh"
+SINK_PORT="${MVCHR_SINK_PORT:-$MV_ROUTEROS_SINK_PORT}"
 SINK_LOG="${MVCHR_SINK_LOG:-/tmp/mikroview-chr/sink.log}"
-SFTP_PORT="${MVCHR_SFTP_PORT:-19822}"
+SFTP_PORT="${MVCHR_SFTP_PORT:-$MV_ROUTEROS_SFTP_PORT}"
 SFTP_CONTAINER="${MVCHR_SFTP_CONTAINER:-mv-sftp-probe}"
 HOST_ADDR="$("$REPO/scripts/live-routeros.sh" host-addr)"
 SINK_URL="http://$HOST_ADDR:$SINK_PORT"
