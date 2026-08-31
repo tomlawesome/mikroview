@@ -221,6 +221,9 @@ a flow, so its beat labels are the sequence, not commentary on it.
 - The two ratified rules round 29 was still breaking: **"Great catches."**
 - Settings and the apparatus removal: asked for and built this round
   (verbatim above); no verdict yet.
+- What the apparatus sweep kept — the #445 honesty statements, the
+  stream's foot line, the journey's beat labels (verbatim, 2026-08-31):
+  **"correct, these are part of the UI."**
 - Everything else: pending — he is reading the round now.
 
 ## Known, and not fixed here
