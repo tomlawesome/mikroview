@@ -100,11 +100,16 @@
     position: relative;
   }
 
+  /* Round 30's `.scstatus .who`, ported field-for-field: plain text at
+     rest -- no border, no fill -- with the pill's border and a
+     brighter ink appearing only on hover (or while the menu the chip
+     opens is itself open). The build used to draw the border at all
+     times, turning a text label into a permanent button. */
   .chip {
     background: transparent;
-    border: 1px solid var(--border);
+    border: 1px solid transparent;
     border-radius: 999px;
-    color: var(--fg-muted);
+    color: var(--fg-dim);
     font-size: 13px;
     padding: 4px 12px;
     cursor: pointer;
@@ -112,8 +117,8 @@
 
   .chip:hover,
   .chip.open {
-    color: var(--fg);
-    background: var(--bg-hover);
+    color: var(--fg-muted);
+    border-color: var(--border);
   }
 
   .menu {

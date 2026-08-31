@@ -169,9 +169,11 @@
 </div>
 
 <!-- The roll rail: the deck's names as vertical sideways text hugging
-     the right edge, top of the letters to the right (owner, #634 round
-     11). The in-view name grows and brightens in the same beat as the
-     roll. -->
+     the right edge, top of the letters to the LEFT -- round 30's
+     `.deckrail a { writing-mode: sideways-lr }`, ported field-for-field
+     (the build had drawn `vertical-rl` here, rotating the letters the
+     opposite way round). The in-view name grows and brightens in the
+     same beat as the roll. -->
 <nav class="roll-rail" aria-label="The deck">
   {#each cards as card, i (card.key)}
     <button
@@ -242,7 +244,7 @@
   }
 
   .rail-name {
-    writing-mode: vertical-rl;
+    writing-mode: sideways-lr;
     background: transparent;
     border: none;
     padding: 2px;
