@@ -143,9 +143,11 @@ describe('The settings shelf (#633)', () => {
     for (const card of ['The fall', 'Metrics', 'Stream', 'The docket', 'Entities', 'Settings']) {
       expect(within(shelf).getByText(card)).toBeTruthy()
     }
-    expect(
-      screen.getByText('seven cards, in the order you keep them', { exact: false }),
-    ).toBeTruthy()
+    // #735: the "seven cards, in the order you keep them" caption is
+    // gone -- its purpose (the owner: "obvious") was redundant with the
+    // cards' own drag handle and position aria-label. Seven cards for
+    // an admin is now checked by counting them directly.
+    expect(within(shelf).getAllByRole('button')).toHaveLength(7)
     // Sign-in lands on the first card, and the shelf says so exactly once.
     expect(screen.getAllByText('SIGN-IN LANDS HERE')).toHaveLength(1)
   })
@@ -156,8 +158,8 @@ describe('The settings shelf (#633)', () => {
     render(EngineRoom)
     await settle()
 
-    expect(screen.getByText('6 cards, in the order you keep them', { exact: false })).toBeTruthy()
     const shelf = document.querySelector<HTMLElement>('.stshelf')!
+    expect(within(shelf).getAllByRole('button')).toHaveLength(6)
     expect(within(shelf).queryByText('Entities')).toBeNull()
     expect(within(shelf).getByText('Settings')).toBeTruthy()
   })
