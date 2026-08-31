@@ -25,6 +25,11 @@
 set -euo pipefail
 
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/live-stores.sh"
+# The slot and every port derived from it live in one place since #660.
+# They used to be computed here and hardcoded, differently, in the four
+# standalone scripts -- two allocators handing out overlapping ranges,
+# which collided by construction rather than by luck.
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/live-slot.sh"
 
 # Defaults are derived per checkout, not fixed, because two live checks
 # running at once used to destroy each other rather than merely clash.
@@ -43,16 +48,14 @@ set -euo pipefail
 # 64 slots is not a guarantee: two checkouts can hash to the same one.
 # That is what the bind check in `up` is for -- it turns a residual
 # collision into a named error instead of a silent trampling.
-MV_SLOT="$(printf '%s' "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)" | cksum | awk '{print $1 % 64}')"
+#
+# MV_SLOT and the port bands come from live-slot.sh, sourced above.
 
 MV_DIR="${MV_DIR:-/tmp/mikroview-live-$MV_SLOT}"
 MV_BIND="${MV_BIND:-127.0.0.1}"
-# Distinct bands so the three never overlap across slots: HTTP occupies
-# 19800-19863, syslog the even ports 16800-16926, syslog-TLS the odd
-# ports 16801-16927.
-HTTP_PORT="${MV_HTTP_PORT:-$((19800 + MV_SLOT))}"
-SYSLOG_PORT="${MV_SYSLOG_PORT:-$((16800 + MV_SLOT * 2))}"
-SYSLOG_TLS_PORT="${MV_SYSLOG_TLS_PORT:-$((16801 + MV_SLOT * 2))}"
+HTTP_PORT="${MV_HTTP_PORT:-$MV_SLOT_HTTP_PORT}"
+SYSLOG_PORT="${MV_SYSLOG_PORT:-$MV_SLOT_SYSLOG_PORT}"
+SYSLOG_TLS_PORT="${MV_SYSLOG_TLS_PORT:-$MV_SLOT_SYSLOG_TLS_PORT}"
 MV_USER="live-admin"
 MV_PASS="live-password-123"
 
@@ -198,15 +201,6 @@ build() {
 # True if anything is listening on the given TCP port on this host.
 # Prefers ss; falls back to a bash /dev/tcp connect probe where it is
 # absent (the container images used by live-container have no iproute2).
-port_in_use() {
-  if command -v ss >/dev/null 2>&1; then
-    ss -ltnH "sport = :$1" 2>/dev/null | grep -q .
-  else
-    (exec 3<>"/dev/tcp/127.0.0.1/$1") 2>/dev/null && exec 3>&- && return 0
-    return 1
-  fi
-}
-
 up() {
   # Always start from nothing. Without this an earlier instance keeps the
   # port, the new binary fails to bind, and the admin registration lands
@@ -229,7 +223,7 @@ up() {
   # slot, or an unrelated process. Both cases need a human choice, and
   # the destructive step is the very next line.
   for port in "$HTTP_PORT" "$SYSLOG_TLS_PORT"; do
-    if port_in_use "$port"; then
+    if mv_port_in_use "$port"; then
       echo "live-env: port $port is still in use after teardown." >&2
       echo "live-env: another live check is probably running from a different checkout." >&2
       echo "live-env: set MV_DIR and MV_HTTP_PORT/MV_SYSLOG_PORT/MV_SYSLOG_TLS_PORT to run alongside it." >&2
