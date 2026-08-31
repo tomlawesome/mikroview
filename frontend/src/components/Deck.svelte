@@ -226,7 +226,16 @@
     display: flex;
     flex-direction: column;
     gap: 10px;
-    padding: 0 14px 14px;
+    /* #721: six reports across four scenes turned out to be one missing
+       constraint (content crowding .roll-rail below), fixed per-scene by
+       hand or not at all. Reserved here instead, once, for every card's
+       content -- see app.css's --deck-rail-gutter for where its value
+       comes from. Every scene's own component (Metrics*, LiveTable,
+       Flags/Docket) fills this box with ordinary flow width, no
+       `position: absolute` escaping to the card's own edge (see
+       LiveTable.svelte's .table-wrap comment), so this padding reaches
+       all of them without any of them needing their own copy. */
+    padding: 0 var(--deck-rail-gutter, 36px) 14px 14px;
     min-height: 0;
   }
 
