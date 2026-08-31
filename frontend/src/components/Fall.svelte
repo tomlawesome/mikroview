@@ -933,6 +933,16 @@
     <p class="state-msg">Reading pushed firewall rules…</p>
   {:else if fallState.error}
     <p class="state-msg error" role="alert">Could not read the pushed rule tables: {fallState.error}</p>
+  {:else if windowError && windowEvents.length === 0}
+    <!-- #737: a failed window load is not a quiet one. Without this, a
+         fetchEventsWindow failure left every band's traffic at zero,
+         which read exactly like the empty-window state below and like a
+         quiet-but-covered band ("WATCH HOLDING ✓") -- an absence of ours
+         presented as a fact about the network. Only takes over while
+         there is no window data at all: once a load has ever succeeded,
+         a later transient failure still has real (if ageing) events to
+         draw instead of hiding them behind this message. -->
+    <p class="state-msg error" role="alert">Could not load the window: {windowError}</p>
   {:else if allBands.length === 0 && !windowLoading}
     <!-- Unmissable, mid-page: an empty fall must read as waiting, never
          as broken or unbuilt (owner, 2026-08-30). -->

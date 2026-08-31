@@ -308,6 +308,21 @@ function rigSvgWidth(container: HTMLElement): number {
   return Number(container.querySelector('.rig svg')?.getAttribute('width') ?? NaN)
 }
 
+describe('a failed window load says so, not that nothing happened (#737)', () => {
+  it('renders the load error, and not the empty-window wording, when fetchEventsWindow rejects', async () => {
+    vi.mocked(fetchEventsWindow).mockRejectedValue(new Error('network unreachable'))
+    vi.mocked(fetchFlags).mockResolvedValue({ flags: [], timeSeries: [] })
+    const { container } = render(Fall)
+    await waitFor(() => expect(fallState.loading).toBe(false))
+    fallState.boundaries = [boundary()]
+    flushSync()
+    await waitFor(() => {
+      expect(container.textContent).toContain('Could not load the window: network unreachable')
+    })
+    expect(container.textContent).not.toContain('nothing has arrived yet')
+  })
+})
+
 describe('band width policy (#722): ideal, elastic within limits, paginated beyond them', () => {
   it('stretches a lone boundary, but caps it at MAX_PITCH rather than filling the frame', async () => {
     const { container } = await renderFall({ boundaries: makeBoundaries(1) })
