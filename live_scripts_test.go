@@ -162,6 +162,7 @@ func TestEveryLiveCheckIsRun(t *testing.T) {
 		"scripts/live-env.sh":                     "the shared environment helper",
 		"scripts/live-container.sh":               "the shared environment helper, container flavour",
 		"scripts/live-stores.sh":                  "the shared store block, sourced not run",
+		"scripts/live-slot.sh":                    "the shared port allocator, sourced not run (#660)",
 		"scripts/live-routeros.sh":                "boots the CHR; driven by make live-routeros-container",
 		"scripts/live-routeros-step0.sh":          "a probe driven by live-routeros.sh, not a standalone check",
 		"scripts/live-rule-coverage-probe.sh":     "a probe driven by live-routeros.sh, not a standalone check",
