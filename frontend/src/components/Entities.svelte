@@ -351,7 +351,21 @@
   // vocabulary (Docket.svelte) over this page's one table, not a new
   // kind of furniture. hosts is the default -- the ratified scene's own
   // table, unchanged. -------------------------------------------------
+  //
+  // Off for round-30 fidelity: round 30's #ent draws the entities table
+  // directly under the router cards, one table of named things, with no
+  // tab strip -- the tabs are unmounted, not deleted (#700, #691). Typed
+  // rather than inferred so the block stays reachable to the type
+  // checker -- a bare `false` narrows to `never` and reports it as
+  // unreachable. Same pattern as LiveTable's RESIZE_HANDLES_ENABLED,
+  // MetricsRegister's LEDGER_ENABLED and Topography's
+  // DEGRADED_NOTE_ENABLED. activeTab stays 'hosts' and is never changed
+  // while the strip is unmounted, so the hosts table -- the ratified
+  // round-29/round-30 table -- is what always renders; naming rules and
+  // ports in context is real work tracked on #681, not lost, and
+  // remounting the strip is all #691 needs to do to bring it back.
   type Tab = 'hosts' | 'rules' | 'ports'
+  const TABS_ENABLED: boolean = false
   let activeTab = $state<Tab>('hosts')
 
   // ---- inline rename (issue #675: rename lives in the table, not a
@@ -471,17 +485,21 @@
         </div>
     </div>
 
-    <div class="tab-row" role="tablist" aria-label="Entities">
-      <button class="tab" class:on={activeTab === 'hosts'} role="tab" aria-selected={activeTab === 'hosts'} onclick={() => (activeTab = 'hosts')}>
-        hosts
-      </button>
-      <button class="tab" class:on={activeTab === 'rules'} role="tab" aria-selected={activeTab === 'rules'} onclick={() => (activeTab = 'rules')}>
-        rules
-      </button>
-      <button class="tab" class:on={activeTab === 'ports'} role="tab" aria-selected={activeTab === 'ports'} onclick={() => (activeTab = 'ports')}>
-        ports
-      </button>
-    </div>
+    {#if TABS_ENABLED}
+      <!-- Unmounted for round-30 fidelity -- see the comment on
+           TABS_ENABLED above. Not deleted: tracked on #691/#681. -->
+      <div class="tab-row" role="tablist" aria-label="Entities">
+        <button class="tab" class:on={activeTab === 'hosts'} role="tab" aria-selected={activeTab === 'hosts'} onclick={() => (activeTab = 'hosts')}>
+          hosts
+        </button>
+        <button class="tab" class:on={activeTab === 'rules'} role="tab" aria-selected={activeTab === 'rules'} onclick={() => (activeTab = 'rules')}>
+          rules
+        </button>
+        <button class="tab" class:on={activeTab === 'ports'} role="tab" aria-selected={activeTab === 'ports'} onclick={() => (activeTab = 'ports')}>
+          ports
+        </button>
+      </div>
+    {/if}
 
     {#if activeTab === 'hosts'}
       <table class="etable">
