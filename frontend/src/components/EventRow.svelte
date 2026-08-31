@@ -22,7 +22,9 @@
     count = 1,
     // flagged means "this row's source has an active flag against it",
     // not "this event caused that flag": a flag records what it was
-    // raised about, not which events evidenced it (#341).
+    // raised about, not which events evidenced it (#341). Drives a
+    // full-row wash (the-whole.html's tr.hl), not a per-cell glyph --
+    // #685 found a ⚑ mark here where round 29 draws none.
     flagged = false,
     expandable = false,
     expanded = false,
@@ -157,6 +159,7 @@
   class:expandable
   class:dimmed
   class:banded
+  class:flagged
   data-chain={event.chain}
   title={rawTooltip(event.raw, event.rawTruncated)}
 >
@@ -168,8 +171,6 @@
       title={expanded ? 'Hide these events' : `Show the ${count} events in this group`}
     >
       <span class="count">{count}</span>
-      {#if flagged}<span class="flag-mark" title="This source has an active flag against it">⚑</span
-        >{/if}
       <span class="chev" class:open={expanded}>›</span>
     </button>
   {:else}
@@ -181,8 +182,6 @@
         title="Show this event's details"
         use:activate={() => onOpen?.()}
       >{formatTimeMs(event.time)}</span>
-      {#if flagged}<span class="flag-mark" title="This source has an active flag against it">⚑</span
-        >{/if}
     </span>
   {/if}
 
@@ -347,11 +346,6 @@
     transform: rotate(90deg);
   }
 
-  .flag-mark {
-    color: var(--reject);
-    font-size: 12px;
-  }
-
   /* An individual event inside an opened group. Indented and dimmed so
      the group's own row still reads as the thing on the page. */
   .row.member > :global(.cell:first-child) {
@@ -387,6 +381,17 @@
      specificity, so source order lets it win over the band. */
   .row.banded .cell {
     background: color-mix(in srgb, var(--bg-hover) 55%, transparent);
+  }
+
+  /* #685: built as drawn, not as a per-row glyph -- the-whole.html marks
+     a row on a flagged pathway with a full-row wash (`table.stream
+     tr.hl td { background: rgba(255, 84, 112, 0.05); }`, its rgb triplet
+     is var(--alarm)) rather than an icon in any cell. Declared after
+     .banded so it wins when a flagged row also happens to fall on a
+     banded stripe -- the design shows one wash per row, not two layered
+     -- and before :hover so hovering still shows the full-strength token. */
+  .row.flagged .cell {
+    background: color-mix(in srgb, var(--alarm) 5%, transparent);
   }
 
   .row:hover .cell {
@@ -428,6 +433,18 @@
       linear-gradient(
         color-mix(in srgb, var(--bg-hover) 55%, transparent),
         color-mix(in srgb, var(--bg-hover) 55%, transparent)
+      ),
+      var(--bg-elevated);
+  }
+
+  /* Same wash, same opaque-flattening trick as .banded's -- the sticky
+     time cell needs its own paint so later columns scrolling underneath
+     it don't show through. */
+  .row.flagged .time {
+    background:
+      linear-gradient(
+        color-mix(in srgb, var(--alarm) 5%, transparent),
+        color-mix(in srgb, var(--alarm) 5%, transparent)
       ),
       var(--bg-elevated);
   }
