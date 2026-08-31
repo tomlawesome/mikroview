@@ -3,8 +3,19 @@
   //
   // Every scene's own bar, under the Atlas identity (owner, 2026-08-29:
   // pages are the site -- no persistent chrome). Carries the wordmark,
-  // the scene's name, its strap, the live+rate reading, the flag/watch
-  // markers and the account chip -- round 29's ratified content (#683),
+  // the page's view switcher, the live+rate reading, the flag/watch
+  // markers and the account chip -- round 30's ratified content (#683,
+  // #700). No scene name and no strap: the owner struck both on every
+  // deck in turn and then ratified it in words (#697, 2026-08-31, "I
+  // meant all... No page heading, no strap"), and round 30 deleted
+  // `.scname`/`.epi` from its own stylesheet so nobody restores them
+  // from it. The rail names the card you are on; the bar does not.
+  //
+  // Where the heading stood, the switchers ride instead: metrics'
+  // seismograph/register/table and the docket's flags/watchlist/audit
+  // log. Round 30 draws them absolutely positioned at the bar's own
+  // line, just right of the wordmark; here the bar is a real flex row,
+  // so they simply follow the wordmark and land in the same place.
   // ported field-for-field from docs/design/concepts/round-29/the-
   // whole.html rather than approximated. On the stream, also the active
   // filter as chips: the one piece of the retired toolbar #s5 actually
@@ -17,6 +28,10 @@
   // here is the card's own, passed as a prop; outside the deck (the
   // operate pages) it defaults to the current view.
   import { appState, type View } from '../lib/state.svelte'
+  import { authState } from '../lib/auth.svelte'
+  import { METRICS_VIEWS, metricsPref } from '../lib/metrics.svelte'
+  import { retentionState } from '../lib/retention.svelte'
+  import { SPANS, describeReach, reachSeconds, spanAvailable, unavailableReason } from '../lib/spans'
   import { buildFilterChips } from '../lib/filterChips'
   import ConnectionIndicator from './ConnectionIndicator.svelte'
   import AlarmCluster from './AlarmCluster.svelte'
@@ -25,42 +40,80 @@
   let { scene = null }: { scene?: View | null } = $props()
   const view = $derived(scene ?? appState.view)
 
-  const TITLES: Record<string, string> = {
-    topography: 'Topography',
-    live: 'Stream',
-    metrics: 'Metrics',
-    audit: 'The docket',
-    flags: 'The docket',
-    watchlist: 'The docket',
-    engineroom: 'Settings',
-    fleet: 'Fleet',
-    entities: 'Entities',
-  }
-
-  // The page's own strap, in the page's voice -- taken verbatim from
-  // round 29's mockup (docs/design/concepts/round-29/the-whole.html),
-  // one per scene. Fleet carries none: it is outside the seven ratified
-  // deck scenes (#633/#647's standalone phone-width page).
-  const STRAPS: Record<string, string> = {
-    topography: 'aggregates — click a card to descend',
-    live: 'every line, as it arrived',
-    metrics: 'the deep read',
-    audit: 'what was flagged · what you watch · what changed',
-    flags: 'what was flagged · what you watch · what changed',
-    watchlist: 'what was flagged · what you watch · what changed',
-    engineroom: 'the app, arranged your way',
-    entities: 'the routers that push here, and the named things behind them',
-  }
+  // The docket's three tabs, mirroring Docket.svelte's own derivation so
+  // the bar and the pane can never disagree about which tab is on: an
+  // absent tier falls back to flags rather than showing a tab nobody can
+  // reach (#653 -- absent, not disabled, as everywhere else).
+  const isAdmin = $derived(authState.role === 'admin')
+  const canEdit = $derived(authState.canEdit)
+  const isDocket = $derived(view === 'flags' || view === 'watchlist' || view === 'audit')
+  const docketTab = $derived.by(() => {
+    if (appState.view === 'watchlist' && canEdit) return 'watchlist'
+    if (appState.view === 'audit' && isAdmin) return 'audit'
+    return 'flags'
+  })
 
   const filterChips = $derived(buildFilterChips(appState.filters, appState.devices))
+
+  // The stream's SPAN control (#703). It sets the same display window
+  // the mobile drawer's duration selector sets, so the two can never
+  // disagree about what the table is showing; a span reads as active
+  // only when the window matches it exactly, so a duration chosen in the
+  // drawer leaves every pill quiet rather than lighting the nearest one.
+  //
+  // Availability comes from the buffer's own reach, never from the
+  // configured retention: offering a fortnight over nine hours of buffer
+  // would answer with nine hours and call thirteen days quiet.
+  const reach = $derived(reachSeconds(appState.stats?.oldestHeld, appState.now))
+  const reachWords = $derived(describeReach(reach))
 </script>
 
 <div class="scene-bar">
   <span class="wm">MIKRO<em>VIEW</em></span>
-  <span class="scname">
-    <h1>{TITLES[view] ?? ''}</h1>
-    {#if STRAPS[view]}<span class="epi">{STRAPS[view]}</span>{/if}
-  </span>
+  {#if view === 'metrics'}
+    <span class="switch" role="group" aria-label="Metrics view">
+      {#each METRICS_VIEWS as option (option.value)}
+        <button
+          class="sw"
+          class:on={metricsPref.view === option.value}
+          aria-pressed={metricsPref.view === option.value}
+          title={option.title}
+          onclick={() => metricsPref.setView(option.value)}>{option.label}</button
+        >
+      {/each}
+    </span>
+  {:else if isDocket}
+    <!-- No counts under these labels (round 30): they were tried inline
+         and beneath and both were called clumsy, and the counts already
+         live in this same bar's flag and watcher marks. -->
+    <span class="switch" role="tablist" aria-label="The docket">
+      <button
+        class="sw"
+        class:on={docketTab === 'flags'}
+        role="tab"
+        aria-selected={docketTab === 'flags'}
+        onclick={() => (appState.view = 'flags')}>flags</button
+      >
+      {#if canEdit}
+        <button
+          class="sw"
+          class:on={docketTab === 'watchlist'}
+          role="tab"
+          aria-selected={docketTab === 'watchlist'}
+          onclick={() => (appState.view = 'watchlist')}>watchlist</button
+        >
+      {/if}
+      {#if isAdmin}
+        <button
+          class="sw"
+          class:on={docketTab === 'audit'}
+          role="tab"
+          aria-selected={docketTab === 'audit'}
+          onclick={() => (appState.view = 'audit')}>audit log</button
+        >
+      {/if}
+    </span>
+  {/if}
 
   {#if view === 'live' && filterChips.length > 0}
     <!-- The stream's own control, exactly as #s5 draws it: one search-
@@ -84,6 +137,28 @@
       >
         ⌫
       </button>
+    </span>
+  {/if}
+
+  {#if view === 'live'}
+    <span class="spans" role="group" aria-label="How far back the stream shows — {reachWords}">
+      {#each SPANS as span (span.key)}
+        {@const available = spanAvailable(span, reach)}
+        <button
+          type="button"
+          class="span"
+          class:on={retentionState.maxAgeSeconds === span.seconds}
+          disabled={!available}
+          aria-pressed={retentionState.maxAgeSeconds === span.seconds}
+          title={available ? `Show the last ${span.label}` : unavailableReason(span, reach)}
+          onclick={() => retentionState.set(span.seconds)}>{span.label}</button
+        >
+      {/each}
+      <!-- What the buffer really holds, beside the control it qualifies.
+           Not a description of the interface (round 30 struck those) but
+           the same fact the unavailable spans turn on, said once in
+           words instead of only on hover. -->
+      <span class="reach">{reachWords}</span>
     </span>
   {/if}
 
@@ -112,22 +187,62 @@
     color: var(--accent);
     font-style: normal;
   }
-  h1 {
-    margin: 0;
-    font-size: 22px;
-    font-weight: 600;
+  /* The switchers, from round 30's `.dtabs`/`.mviews`: quiet sans
+     labels, the active one in full ink over an accent rule. */
+  .switch {
+    display: flex;
+    gap: 16px;
+    align-items: baseline;
+  }
+  .sw {
+    background: transparent;
+    border: none;
+    padding: 0 0 2px;
+    font: 500 11px var(--font-sans);
+    color: var(--fg-dim);
+    cursor: pointer;
+    border-bottom: 1px solid transparent;
+  }
+  .sw:hover {
     color: var(--fg);
   }
+  .sw.on {
+    color: var(--fg);
+    border-bottom-color: var(--accent);
+  }
 
-  .scname {
+  /* Round 30's `.spans`: quiet pills, the chosen one in full ink. A
+     span the buffer cannot cover is dimmed and unclickable rather than
+     hidden -- the operator should see that a fortnight exists and is
+     not held, not wonder where it went. */
+  .spans {
     display: flex;
     align-items: baseline;
-    gap: 8px;
+    gap: 10px;
   }
-  .epi {
-    font-weight: 400;
+  .span {
+    background: transparent;
+    border: none;
+    padding: 0;
+    font: 500 11px var(--font-sans);
     color: var(--fg-dim);
-    font-size: 12px;
+    cursor: pointer;
+  }
+  .span:hover:not(:disabled) {
+    color: var(--fg);
+  }
+  .span.on {
+    color: var(--fg);
+  }
+  .span:disabled {
+    color: var(--fg-dim);
+    opacity: 0.4;
+    cursor: not-allowed;
+  }
+  .reach {
+    font: 400 10.5px var(--font-sans);
+    color: var(--fg-dim);
+    margin-left: 2px;
   }
 
   .status-cluster {

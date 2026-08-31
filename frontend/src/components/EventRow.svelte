@@ -22,9 +22,14 @@
     count = 1,
     // flagged means "this row's source has an active flag against it",
     // not "this event caused that flag": a flag records what it was
-    // raised about, not which events evidenced it (#341). Drives a
-    // full-row wash (the-whole.html's tr.hl), not a per-cell glyph --
-    // #685 found a ⚑ mark here where round 29 draws none.
+    // raised about, not which events evidenced it (#341). Drives the
+    // full-row wash (the-whole.html's tr.hl) *and* a ⚑ after the time
+    // (its .rmk): round 30 draws both, and the mark annotates the wash
+    // rather than replacing it. Round 29 drew no mark, which is why #685
+    // took one out; that ruling is superseded (#691's round-30 audit).
+    // The mark rides after the time, never before it -- ahead of the
+    // figures it pushes the first digit right and breaks the left edge
+    // the tabular numerals line up on.
     flagged = false,
     expandable = false,
     expanded = false,
@@ -181,7 +186,10 @@
         tabindex="0"
         title="Show this event's details"
         use:activate={() => onOpen?.()}
-      >{formatTimeMs(event.time)}</span>
+      >{formatTimeMs(event.time)}</span>{#if flagged}<i
+          class="rmk"
+          title="this row's source has an open flag against it"
+          aria-hidden="true">&#9873;</i>{/if}
     </span>
   {/if}
 
@@ -392,6 +400,16 @@
      -- and before :hover so hovering still shows the full-strength token. */
   .row.flagged .cell {
     background: color-mix(in srgb, var(--alarm) 5%, transparent);
+  }
+
+  /* The mark that annotates that wash (the-whole.html's .rmk). Sized and
+     coloured from the scene: alarm ink, a step down from the row's text,
+     and set clear of the time so the figures keep their own edge. */
+  .rmk {
+    font-style: normal;
+    color: var(--alarm);
+    margin-left: 8px;
+    font-size: 11px;
   }
 
   .row:hover .cell {

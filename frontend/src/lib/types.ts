@@ -160,6 +160,11 @@ export interface Stats {
   capacity: number
   count: number
   windowSeconds: number
+  // How far back the buffer actually reaches, as opposed to how far back
+  // it was configured to: null when it holds nothing. Not the same as a
+  // query's windowStart, which is the configured retention -- capacity
+  // eviction moves this one and leaves that one alone (#703).
+  oldestHeld: string | null
   connectedClients: number
   // Syslog listener saturation -- mirrors internal/syslog.ListenerStats.
   // Optional so an older server (or a test fixture) that does not send

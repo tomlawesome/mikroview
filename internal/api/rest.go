@@ -142,6 +142,17 @@ func deviceStatus(info device.Info, staleAfter time.Duration, now time.Time) str
 	return "live"
 }
 
+// oldestHeldJSON renders the buffer's reach for the wire: an RFC3339
+// instant, or null when the buffer holds nothing. Marshalling the zero
+// time directly would put "0001-01-01T00:00:00Z" on the wire, which a
+// client can only mistake for a real reach of two thousand years.
+func oldestHeldJSON(t time.Time) any {
+	if t.IsZero() {
+		return nil
+	}
+	return t.UTC()
+}
+
 func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 	stats := s.Store.Stats()
 	writeJSON(w, http.StatusOK, map[string]any{
@@ -153,6 +164,11 @@ func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 		"capacity":         stats.Capacity,
 		"count":            stats.Count,
 		"windowSeconds":    int(stats.Window.Seconds()),
+		// How far back the buffer actually reaches, as opposed to how far
+		// back it was configured to. Null rather than a zero timestamp
+		// when nothing is held, so the client reads "no reach yet" and
+		// not "reaches back to the year 1" (#703).
+		"oldestHeld": oldestHeldJSON(stats.OldestHeld),
 		"connectedClients": s.Hub.ClientCount(),
 		// Syslog listener saturation. Included here rather than behind
 		// its own endpoint because the condition it reports -- mikroview

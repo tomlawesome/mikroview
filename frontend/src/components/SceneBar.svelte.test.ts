@@ -1,15 +1,18 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 //
-// The scene bar to round 29's ratified content (#683):
-// MIKROVIEW · <page> · <strap> · <page's own controls> · LIVE · rate ·
-// ⚑ N · ◉ held ○ broken · account. Covers what #683 changed: the strap
-// per page, the merged live+rate reading, the always-shown flag/watch
-// markers, the stream's filter chips, and the retired toolbar's
-// controls (moved here, unchanged) -- not the account menu's own
-// content, which AccountMenu.svelte.test.ts already covers.
+// The scene bar to round 30's ratified content (#683, #700):
+// MIKROVIEW · <the page's own switcher> · <page's own controls> ·
+// LIVE · rate · ⚑ N · ◉ held ○ broken · account. No page name and no
+// strap -- struck on every deck and ratified in words (#697). Where
+// they stood, the switchers ride: metrics' three views and the
+// docket's three tabs. Covers that, the merged live+rate reading, the
+// always-shown flag/watch markers and the stream's filter chips -- not
+// the account menu's own content, which AccountMenu.svelte.test.ts
+// already covers.
 
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { render, screen } from '@testing-library/svelte'
+import { fireEvent, render, screen } from '@testing-library/svelte'
+import { flushSync } from 'svelte'
 
 vi.mock('../lib/api', () => ({
   fetchAuthSession: vi.fn(),
@@ -22,6 +25,8 @@ import { appState } from '../lib/state.svelte'
 import { authState } from '../lib/auth.svelte'
 import { flagsState } from '../lib/flags.svelte'
 import { watchlistState } from '../lib/watchlist.svelte'
+import { metricsPref } from '../lib/metrics.svelte'
+import { retentionState } from '../lib/retention.svelte'
 import { emptyFilters } from '../lib/types'
 
 // jsdom has no window.matchMedia -- AccountMenu (mounted by SceneBar)
@@ -62,19 +67,155 @@ beforeEach(() => {
   watchlistState.coverage = {}
 })
 
-describe('SceneBar (#683, ratified round 29)', () => {
-  it("carries each page's own strap, in the page's voice", () => {
-    render(SceneBar, { scene: 'topography' })
-    expect(screen.getByText('Topography')).toBeTruthy()
-    expect(screen.getByText('aggregates — click a card to descend')).toBeTruthy()
-  })
-
-  it('carries the docket strap for all three of its tabs', () => {
-    for (const scene of ['flags', 'watchlist', 'audit'] as const) {
+describe('SceneBar (#683, ratified round 30)', () => {
+  // #697, owner verbatim: "I meant all... No page heading, no strap."
+  // Round 30 deleted the rules that drew them, so this pins that the
+  // app does not draw them either -- on a scene that used to carry a
+  // long strap and on one whose three tabs shared one.
+  it('carries no page name and no strap on any scene', () => {
+    for (const [scene, name, strap] of [
+      ['topography', 'Topography', 'aggregates — click a card to descend'],
+      ['live', 'Stream', 'every line, as it arrived'],
+      ['flags', 'The docket', 'what was flagged · what you watch · what changed'],
+    ] as const) {
       const { unmount } = render(SceneBar, { scene })
-      expect(screen.getByText('what was flagged · what you watch · what changed')).toBeTruthy()
+      expect(screen.queryByText(name)).toBeNull()
+      expect(screen.queryByText(strap)).toBeNull()
+      expect(screen.queryByRole('heading')).toBeNull()
       unmount()
     }
+  })
+
+  // Moved here from Metrics.svelte.test.ts with the switcher itself
+  // (#700): round 30 rides it on the bar, beside the wordmark, where
+  // the heading used to be.
+  it("rides metrics' three views, with the seismograph selected by default", () => {
+    render(SceneBar, { scene: 'metrics' })
+    for (const name of ['Seismograph', 'Register', 'Table']) {
+      expect(screen.getByRole('button', { name })).toBeTruthy()
+    }
+    expect(screen.getByRole('button', { name: 'Seismograph' }).getAttribute('aria-pressed')).toBe('true')
+  })
+
+  it('switches the metrics view from the bar', async () => {
+    render(SceneBar, { scene: 'metrics' })
+    await fireEvent.click(screen.getByRole('button', { name: 'Register' }))
+    flushSync()
+    expect(metricsPref.view).toBe('register')
+    expect(screen.getByRole('button', { name: 'Register' }).getAttribute('aria-pressed')).toBe('true')
+    // Persisted, so a reload applies it before first paint (#488).
+    expect(localStorage.getItem('mikroview-metrics-view')).toBe('register')
+  })
+
+  // Moved here from Docket.svelte.test.ts with the tab row (#700). The
+  // tier rule is unchanged: absent, never disabled (#653).
+  it('rides only the docket tabs the signed-in tier can reach', async () => {
+    for (const [role, watchlist, audit] of [
+      ['viewer', false, false],
+      ['user', true, false],
+      ['admin', true, true],
+    ] as const) {
+      authState.role = role
+      const { unmount } = render(SceneBar, { scene: 'flags' })
+      flushSync()
+      expect(screen.getByRole('tab', { name: 'flags' })).toBeTruthy()
+      expect(screen.queryByRole('tab', { name: 'watchlist' }) !== null).toBe(watchlist)
+      expect(screen.queryByRole('tab', { name: 'audit log' }) !== null).toBe(audit)
+      unmount()
+    }
+  })
+
+  // Round 30: "No counts on the docket's tabs" -- tried inline and
+  // beneath, both called clumsy; they live in this bar's own ⚑ and eye
+  // marks instead, which the marker tests below cover.
+  it('puts no count under a docket tab', async () => {
+    authState.role = 'admin'
+    flagsState.list = [
+      {
+        id: 'f1',
+        type: 'port_scan',
+        target: '203.0.113.9',
+        detail: '',
+        count: 1,
+        firstSeen: '2026-01-01T00:00:00Z',
+        lastSeen: '2026-01-01T00:00:00Z',
+        cleared: false,
+      },
+    ]
+    render(SceneBar, { scene: 'flags' })
+    flushSync()
+    expect(screen.getByRole('tab', { name: 'flags' }).textContent?.trim()).toBe('flags')
+  })
+
+  // #703: the control is only honest if a span the buffer cannot cover
+  // is visibly not on offer. These pin that, and that choosing one sets
+  // the same display window the mobile drawer sets.
+  describe("the stream's span control", () => {
+    function statsHolding(oldestHeld: string | null) {
+      appState.stats = {
+        total: 0,
+        byAction: {},
+        topRules: [],
+        timeSeries: [],
+        eventsPerSecond: 34,
+        capacity: 100000,
+        count: 10,
+        windowSeconds: 3600,
+        oldestHeld,
+        connectedClients: 1,
+      }
+    }
+
+    it('offers every span the buffer reaches back far enough to answer', () => {
+      statsHolding(new Date(appState.now - 2 * 86400 * 1000).toISOString())
+      render(SceneBar, { scene: 'live' })
+      flushSync()
+
+      for (const label of ['15 m', '1 h', '24 h']) {
+        expect(screen.getByRole('button', { name: label }).hasAttribute('disabled')).toBe(false)
+      }
+    })
+
+    it('withholds a fortnight from a buffer holding nine hours, and says what it holds', () => {
+      statsHolding(new Date(appState.now - 9 * 3600 * 1000).toISOString())
+      render(SceneBar, { scene: 'live' })
+      flushSync()
+
+      expect(screen.getByRole('button', { name: '1 h' }).hasAttribute('disabled')).toBe(false)
+      expect(screen.getByRole('button', { name: '24 h' }).hasAttribute('disabled')).toBe(true)
+      expect(screen.getByRole('button', { name: '14 d' }).hasAttribute('disabled')).toBe(true)
+      expect(screen.getByText('holding 9 h')).toBeTruthy()
+    })
+
+    it('offers only the shortest span while the buffer holds nothing', () => {
+      statsHolding(null)
+      render(SceneBar, { scene: 'live' })
+      flushSync()
+
+      expect(screen.getByRole('button', { name: '15 m' }).hasAttribute('disabled')).toBe(false)
+      for (const label of ['1 h', '24 h', '14 d']) {
+        expect(screen.getByRole('button', { name: label }).hasAttribute('disabled')).toBe(true)
+      }
+      expect(screen.getByText('nothing held yet')).toBeTruthy()
+    })
+
+    it('sets the display window when a span is chosen', async () => {
+      statsHolding(new Date(appState.now - 2 * 3600 * 1000).toISOString())
+      render(SceneBar, { scene: 'live' })
+      flushSync()
+
+      await fireEvent.click(screen.getByRole('button', { name: '1 h' }))
+      expect(retentionState.maxAgeSeconds).toBe(3600)
+      expect(screen.getByRole('button', { name: '1 h' }).getAttribute('aria-pressed')).toBe('true')
+    })
+
+    it('draws no span control away from the stream', () => {
+      statsHolding(new Date(appState.now - 2 * 3600 * 1000).toISOString())
+      render(SceneBar, { scene: 'metrics' })
+      flushSync()
+
+      expect(screen.queryByRole('button', { name: '15 m' })).toBeNull()
+    })
   })
 
   it('shows LIVE merged with the arriving rate as one reading, not two', () => {

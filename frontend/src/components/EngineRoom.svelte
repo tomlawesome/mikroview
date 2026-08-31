@@ -32,7 +32,6 @@
   import { formatEps, formatHM, parseGoDurationSeconds, formatDaysSince } from '../lib/format'
   import { portOf } from '../lib/setupsteps'
   import type { SetupStatus, FlagType } from '../lib/types'
-  import PageHeader from './PageHeader.svelte'
   import EngineRoomWatchers from './EngineRoomWatchers.svelte'
   import EngineRoomDoors from './EngineRoomDoors.svelte'
 
@@ -249,10 +248,13 @@
 </script>
 
 <div class="page scrollbar">
-  <!-- #653: the chip follows canEdit, not isAdmin. A user edits the
-       watchers station on this page, so telling them it is read-only was
-       wrong; the owner-level doors below stay gated on isAdmin. -->
-  <PageHeader title="Settings" readOnly={!canEdit} />
+  <!-- No page heading (#697/#700), which takes the READ-ONLY chip off
+       this page with it: the chip lived in the header, and round 30
+       draws no replacement anywhere. #548's grammar -- read-only
+       declared once, in words, never by disabling every control -- now
+       has nowhere to be said, recorded as a gap on #691 rather than
+       quietly dropped. The owner-level doors below stay gated on
+       isAdmin either way. -->
 
   <div class="og">
     <h3>your deck</h3>
