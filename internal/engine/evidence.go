@@ -26,6 +26,62 @@ const (
 	maxEvidencePorts  = 50
 	maxEvidenceHosts  = 20
 	maxEvidenceLabels = 20
+	// maxEvidencePairs shares maxEvidencePorts rather than getting its own
+	// constant -- issue #654's owner-recorded decision, and deliberately
+	// not maxEvidenceHosts's 20. A pair is at least as specific as a port
+	// (it names the port *and* which host it was seen with), so capping
+	// it below the port cap would make a flag's pairs list name *fewer
+	// distinct hosts* than its own Hosts list already does today --
+	// making the panel more precise about combinations at the cost of
+	// being less informative overall, which is the one outcome #654
+	// flagged as worth avoiding. This is the *display* cap: how many
+	// pairs Pairs() ever hands back. See maxEvidencePairsTracked below
+	// for the separate, larger cap on how many distinct pairs
+	// AddPair/PairsTotal are willing to count in the first place.
+	maxEvidencePairs = maxEvidencePorts
+	// maxEvidencePairsTracked bounds the *storage* AddPair grows, not
+	// just what Pairs() displays -- deliberately different from every
+	// other category in this file, which all cap storage and display at
+	// the same number. Ports/Hosts/Labels can get away with that because
+	// nothing downstream needs their exact count past the display cap
+	// (RenderEmission's {PortCount}/{HostCount} are already just
+	// len(capped-slice)). Pairs is different: PairsTotal exists
+	// specifically so a truncated display can state the true count
+	// (#654's "50 of 214 pairs, never a silent short list"), which means
+	// AddPair has to keep counting past the 50-item display cap to have
+	// a true count worth stating.
+	//
+	// "Keep counting" cannot mean "without limit," though. Every
+	// EvidenceSet here lives for one definition-key's whole window (up
+	// to hours for some shipped detectors), and the traffic that raises
+	// critical_port in the first place -- the definition EvidencePairs
+	// is declared on -- is exactly the traffic capable of producing an
+	// enormous distinct-pair count: a scanner sweeping ports across a
+	// handful of internal hosts, replicated across every source key the
+	// definition is tracking concurrently. An attacker choosing how many
+	// distinct (host, port) combinations to generate would otherwise be
+	// choosing how much memory this process holds open for them. That is
+	// a resource risk this package does not accept anywhere else (every
+	// other Add* here caps storage precisely to avoid it), and Pairs
+	// wanting an honest count is not a good enough reason to make it the
+	// one exception.
+	//
+	// So AddPair stops inserting at this ceiling, exactly like every
+	// other category's cap -- it is simply set higher (4x the 50-item
+	// display cap) so PairsTotal stays exact across the overwhelming
+	// majority of real windows, and only degrades to "at least
+	// maxEvidencePairsTracked" (see EvidenceSet.PairsTotalIsFloor) once a
+	// window's true breadth actually exceeds it. That degrade is
+	// deliberate and load-bearing, not a bug to fix by raising this
+	// constant: an unbounded map sized by attacker-chosen traffic is
+	// worse than an approximate count that says so, which is why
+	// PairsTotalIsFloor exists and why the frontend must render "50 of
+	// 200+" rather than a flat, precise-looking "50 of 200" once it's
+	// true. Whoever next considers raising this number should re-read
+	// this comment first: the ceiling is not arbitrary, it is the
+	// deliberate boundary between "an evidence sample" and "a resource
+	// an attacker gets to size."
+	maxEvidencePairsTracked = maxEvidencePairs * 4
 )
 
 // EvidenceSet accumulates the distinct ports, hosts and rule labels
@@ -67,6 +123,34 @@ type EvidenceSet struct {
 	// nat is the last NAT translation detail recorded -- see SetNAT for
 	// why this one category is last-writer-wins rather than a set.
 	nat *NATInfo
+
+	// pairs is #654's addition: distinct (host, port) combinations
+	// actually seen together on one event, as opposed to Ports and Hosts
+	// above, which independently record "every port seen" and "every
+	// host seen" with no memory of which went with which. Capped at
+	// insertion like every other category, just at maxEvidencePairsTracked
+	// rather than maxEvidencePairs -- see AddPair and that constant's own
+	// doc comment for why the two caps differ.
+	pairs map[HostPort]struct{}
+	// pairsTotalIsFloor records whether AddPair has ever turned away a
+	// genuinely new pair because pairs was already at
+	// maxEvidencePairsTracked -- see PairsTotalIsFloor.
+	pairsTotalIsFloor bool
+
+	// srcMAC is the last source MAC address recorded -- see SetSrcMAC for
+	// why this, like nat, is last-writer-wins rather than a set (a given
+	// per-source/per-source-port key's events all share one device, so
+	// there is nothing to accumulate a *set* of).
+	srcMAC string
+}
+
+// HostPort is one (destination host, destination port) combination
+// actually observed together on a single event -- #654's fix for
+// Evidence.Ports and Evidence.Hosts being independent sets that
+// together cannot say which port went with which host. See AddPair.
+type HostPort struct {
+	Host string
+	Port int
 }
 
 // NewEvidenceSet constructs an empty EvidenceSet.
@@ -168,6 +252,92 @@ func (s *EvidenceSet) touched() (ports, hosts, labels bool) {
 	return s.portsSeen, s.hostsSeen, s.labelsSeen
 }
 
+// AddPair records hp as seen, capped at maxEvidencePairsTracked -- a
+// higher ceiling than AddPort/AddHost/AddLabel's maxEvidencePorts/Hosts/
+// Labels, but a ceiling all the same, and for the same reason theirs
+// exist: this map lives for one definition-key's whole window, and nothing
+// about the traffic that grows it is trusted. See maxEvidencePairsTracked's
+// own doc comment for why storage is capped higher than the display cap
+// (Pairs()) rather than not capped at all.
+//
+// Once at the ceiling, a genuinely new pair (one not already in the map)
+// is dropped and pairsTotalIsFloor latches true -- see PairsTotalIsFloor.
+// A duplicate of an already-tracked pair is checked for and returned on
+// early, both below and above the ceiling, so re-seeing the same pair
+// many times (the common case: one port getting hit repeatedly against
+// the same host) never itself trips the floor.
+//
+// No template token references this category (see RenderEmission's own
+// doc comment for the fixed set that exists), so there is no "was this
+// ever Add-ed to" gate to maintain the way portsSeen/hostsSeen/labelsSeen
+// do -- Pairs()/PairsTotal()/PairsTotalIsFloor() simply read whatever is
+// in the map, empty or not.
+func (s *EvidenceSet) AddPair(hp HostPort) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.pairs == nil {
+		s.pairs = make(map[HostPort]struct{})
+	}
+	if _, ok := s.pairs[hp]; ok {
+		return
+	}
+	if len(s.pairs) >= maxEvidencePairsTracked {
+		s.pairsTotalIsFloor = true
+		return
+	}
+	s.pairs[hp] = struct{}{}
+}
+
+// Pairs returns the distinct pairs accumulated so far, sorted by host
+// then port, capped at maxEvidencePairs (the smaller, display-only cap)
+// -- the same copy-on-read boundary as Ports/Hosts/Labels, and the same
+// illustrative-sample contract: PairsTotal/PairsTotalIsFloor are what
+// state the true count, and whether it's exact, when this cap bites.
+func (s *EvidenceSet) Pairs() []HostPort {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]HostPort, 0, len(s.pairs))
+	for p := range s.pairs {
+		out = append(out, p)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Host != out[j].Host {
+			return out[i].Host < out[j].Host
+		}
+		return out[i].Port < out[j].Port
+	})
+	if len(out) > maxEvidencePairs {
+		out = out[:maxEvidencePairs]
+	}
+	return out
+}
+
+// PairsTotal is the number of distinct pairs this window has seen,
+// independent of the maxEvidencePairs display cap Pairs() applies -- what
+// lets a caller state "50 of 214 pairs" instead of showing 50 and letting
+// the list read as complete. Exact while PairsTotalIsFloor is false;
+// pinned at maxEvidencePairsTracked (and a lower bound, not the true
+// value) once it's true -- a caller must check PairsTotalIsFloor before
+// presenting this number as precise.
+func (s *EvidenceSet) PairsTotal() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return len(s.pairs)
+}
+
+// PairsTotalIsFloor reports whether PairsTotal has stopped being exact --
+// true once AddPair has turned away at least one genuinely new pair
+// because storage was already at maxEvidencePairsTracked. A caller must
+// render this case as "at least N", e.g. "50 of 200+", never a flat "50
+// of 200": the latter reads as precise and is not (see
+// maxEvidencePairsTracked's own doc comment for why exactness was traded
+// away here at all).
+func (s *EvidenceSet) PairsTotalIsFloor() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.pairsTotalIsFloor
+}
+
 // NATInfo is one event's NAT translation detail -- store.Event's
 // NatIP/NatPort/NatRaw, carried through an Emission so a detection-intent
 // route can populate flags.Evidence.NAT (see routeToFlag, router.go).
@@ -212,6 +382,38 @@ func (s *EvidenceSet) NAT() *NATInfo {
 	}
 	out := *s.nat
 	return &out
+}
+
+// SetSrcMAC records the triggering event's source MAC address, replacing
+// whatever a previous event set -- #654's fix for a flag identifying a
+// device by IP alone, which stops matching the device the moment its
+// DHCP lease changes (the same MAC-preferred identity
+// matchlog.Identity.MatchesSource already relies on, per that type's own
+// doc comment). Last-writer-wins for the same reason SetNAT is: within
+// one key's window every event shares one source, so there is no set to
+// accumulate, only a single value that keeps being reconfirmed.
+//
+// The caller (recordEvidence, declarative.go) is what enforces "only
+// where the event has one and the source is local" -- this method
+// itself just records whatever mac it is given, empty or not, the same
+// division of responsibility SetNAT has (SetNAT's own zero-value check
+// is about the *shape* of "nothing to record", not about whether NAT was
+// the right category to record at all).
+func (s *EvidenceSet) SetSrcMAC(mac string) {
+	if mac == "" {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.srcMAC = mac
+}
+
+// SrcMAC returns the last recorded source MAC address, or "" if none was
+// ever recorded.
+func (s *EvidenceSet) SrcMAC() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.srcMAC
 }
 
 // sortedPortsCapped/sortedHostsCapped are

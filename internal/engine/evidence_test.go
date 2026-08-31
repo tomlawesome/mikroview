@@ -128,3 +128,146 @@ func TestEvidenceSetReadRaceSafeAgainstConcurrentAdds(t *testing.T) {
 	close(stop)
 	wg.Wait()
 }
+
+// --- #654: Pairs/SrcMAC ---
+
+func TestEvidenceSetAddPairAccumulatesDistinctPairs(t *testing.T) {
+	s := NewEvidenceSet()
+	s.AddPair(HostPort{Host: "10.0.0.1", Port: 22})
+	s.AddPair(HostPort{Host: "10.0.0.1", Port: 22}) // duplicate
+	s.AddPair(HostPort{Host: "10.0.0.1", Port: 23}) // same host, different port
+	s.AddPair(HostPort{Host: "10.0.0.2", Port: 22}) // same port, different host
+
+	got := s.Pairs()
+	if len(got) != 3 {
+		t.Fatalf("Pairs() = %v, want 3 distinct pairs", got)
+	}
+	if total := s.PairsTotal(); total != 3 {
+		t.Errorf("PairsTotal() = %d, want 3", total)
+	}
+}
+
+// TestEvidenceSetPairsSortedByHostThenPort pins Pairs()'s ordering --
+// the evidence panel groups by host (#654's owner decision), which only
+// reads as one coherent list if hosts and, within a host, ports both
+// come out in a stable, predictable order.
+func TestEvidenceSetPairsSortedByHostThenPort(t *testing.T) {
+	s := NewEvidenceSet()
+	for _, hp := range []HostPort{
+		{Host: "10.0.0.2", Port: 22},
+		{Host: "10.0.0.1", Port: 443},
+		{Host: "10.0.0.1", Port: 22},
+	} {
+		s.AddPair(hp)
+	}
+	want := []HostPort{
+		{Host: "10.0.0.1", Port: 22},
+		{Host: "10.0.0.1", Port: 443},
+		{Host: "10.0.0.2", Port: 22},
+	}
+	got := s.Pairs()
+	if len(got) != len(want) {
+		t.Fatalf("Pairs() = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("Pairs() = %v, want %v", got, want)
+		}
+	}
+}
+
+// TestEvidenceSetPairsTotalExactBelowTrackingCeiling pins #654's cap
+// trade-off below maxEvidencePairsTracked: Pairs() (the small display
+// sample) stops growing at maxEvidencePairs, but PairsTotal() keeps
+// counting every distinct pair exactly and PairsTotalIsFloor stays
+// false, right up to the point storage itself would otherwise have to
+// grow without bound.
+func TestEvidenceSetPairsTotalExactBelowTrackingCeiling(t *testing.T) {
+	s := NewEvidenceSet()
+	const extra = 25 // maxEvidencePairs+extra must stay under maxEvidencePairsTracked
+	for i := 0; i < maxEvidencePairs+extra; i++ {
+		s.AddPair(HostPort{Host: fmt.Sprintf("10.0.0.%d", i), Port: 22})
+	}
+	if got := len(s.Pairs()); got != maxEvidencePairs {
+		t.Errorf("len(Pairs()) = %d, want display cap %d", got, maxEvidencePairs)
+	}
+	if got := s.PairsTotal(); got != maxEvidencePairs+extra {
+		t.Errorf("PairsTotal() = %d, want the exact count %d", got, maxEvidencePairs+extra)
+	}
+	if s.PairsTotalIsFloor() {
+		t.Error("PairsTotalIsFloor() = true, want false: nowhere near maxEvidencePairsTracked yet")
+	}
+}
+
+// TestEvidenceSetPairsTotalBecomesFloorAtTrackingCeiling is the memory-
+// safety half of the same trade-off: once genuinely distinct pairs keep
+// arriving past maxEvidencePairsTracked, AddPair stops inserting
+// (bounding storage against attacker-chosen traffic -- see that
+// constant's own doc comment for why this ceiling exists at all),
+// PairsTotal pins at the ceiling rather than continuing to grow, and
+// PairsTotalIsFloor flips true so a caller knows the number is a lower
+// bound, not an exact count.
+func TestEvidenceSetPairsTotalBecomesFloorAtTrackingCeiling(t *testing.T) {
+	s := NewEvidenceSet()
+	const overflow = 40
+	for i := 0; i < maxEvidencePairsTracked+overflow; i++ {
+		s.AddPair(HostPort{Host: fmt.Sprintf("10.0.%d.%d", i/256, i%256), Port: 22})
+	}
+	if got := len(s.Pairs()); got != maxEvidencePairs {
+		t.Errorf("len(Pairs()) = %d, want display cap %d", got, maxEvidencePairs)
+	}
+	if got := s.PairsTotal(); got != maxEvidencePairsTracked {
+		t.Errorf("PairsTotal() = %d, want it pinned at the tracking ceiling %d", got, maxEvidencePairsTracked)
+	}
+	if !s.PairsTotalIsFloor() {
+		t.Error("PairsTotalIsFloor() = false, want true once distinct pairs exceeded maxEvidencePairsTracked")
+	}
+}
+
+// TestEvidenceSetAddPairDuplicateAtCeilingDoesNotFlipFloor pins that
+// re-seeing an already-tracked pair -- the common case, one host:port
+// combination getting hit repeatedly -- never itself trips
+// PairsTotalIsFloor, even once storage is completely full. Only a
+// genuinely new pair being turned away means the count has stopped
+// being exact.
+func TestEvidenceSetAddPairDuplicateAtCeilingDoesNotFlipFloor(t *testing.T) {
+	s := NewEvidenceSet()
+	for i := 0; i < maxEvidencePairsTracked; i++ {
+		s.AddPair(HostPort{Host: fmt.Sprintf("10.0.%d.%d", i/256, i%256), Port: 22})
+	}
+	if s.PairsTotalIsFloor() {
+		t.Fatal("PairsTotalIsFloor() = true after filling exactly to the ceiling, want false: nothing new was ever turned away")
+	}
+
+	s.AddPair(HostPort{Host: "10.0.0.0", Port: 22}) // already tracked above
+	if s.PairsTotalIsFloor() {
+		t.Error("PairsTotalIsFloor() = true after re-adding an already-tracked pair at capacity, want false")
+	}
+	if got := s.PairsTotal(); got != maxEvidencePairsTracked {
+		t.Errorf("PairsTotal() = %d, want unchanged at %d", got, maxEvidencePairsTracked)
+	}
+}
+
+func TestEvidenceSetSrcMACLastWriterWins(t *testing.T) {
+	s := NewEvidenceSet()
+	if got := s.SrcMAC(); got != "" {
+		t.Fatalf("SrcMAC() on a fresh EvidenceSet = %q, want empty", got)
+	}
+	s.SetSrcMAC("aa:bb:cc:dd:ee:01")
+	s.SetSrcMAC("aa:bb:cc:dd:ee:02")
+	if got := s.SrcMAC(); got != "aa:bb:cc:dd:ee:02" {
+		t.Errorf("SrcMAC() = %q, want the last value written", got)
+	}
+}
+
+// TestEvidenceSetSetSrcMACIgnoresEmpty mirrors SetNAT's own zero-value
+// guard: an event with no MAC must never overwrite an already-recorded
+// one with "".
+func TestEvidenceSetSetSrcMACIgnoresEmpty(t *testing.T) {
+	s := NewEvidenceSet()
+	s.SetSrcMAC("aa:bb:cc:dd:ee:01")
+	s.SetSrcMAC("")
+	if got := s.SrcMAC(); got != "aa:bb:cc:dd:ee:01" {
+		t.Errorf("SrcMAC() after SetSrcMAC(\"\") = %q, want the earlier value preserved", got)
+	}
+}
