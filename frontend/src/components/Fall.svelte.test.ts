@@ -13,6 +13,7 @@
 
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { render, waitFor } from '@testing-library/svelte'
+import { fireEvent } from '@testing-library/dom'
 import { flushSync } from 'svelte'
 import type { ClientEvent, Flag, FlagType } from '../lib/types'
 
@@ -54,6 +55,19 @@ if (!window.matchMedia) {
       dispatchEvent: () => false,
     }) as unknown as MediaQueryList
 }
+
+// jsdom implements no ResizeObserver, and `bind:clientWidth` on `.rig`
+// (#722 -- the sizing policy needs to know its own real pixel width) is
+// compiled to one. A no-op stub is all this needs: jsdom reports every
+// box as zero-sized regardless, so the rig falls back to its own
+// DEFAULT_FRAME_W (1600, this issue's own verification width) in every
+// test below.
+class ResizeObserverStub {
+  observe() {}
+  unobserve() {}
+  disconnect() {}
+}
+vi.stubGlobal('ResizeObserver', ResizeObserverStub)
 
 const { default: Fall } = await import('./Fall.svelte')
 
@@ -100,6 +114,20 @@ function boundary(overrides: Partial<FallBoundary> = {}): FallBoundary {
     epithet: '',
     ...overrides,
   }
+}
+
+// n distinct, uniquely-keyed boundaries -- enough to drive the band
+// sizing policy (#722) at whatever count a test wants, without every
+// boundary colliding on the same (chain, inInterface, outInterface).
+function makeBoundaries(n: number): FallBoundary[] {
+  return Array.from({ length: n }, (_, i) =>
+    boundary({
+      key: `forward|b${i}|x`,
+      inInterface: `b${i}`,
+      outInterface: 'x',
+      label: `b${i} → x`,
+    }),
+  )
 }
 
 // Renders Fall with the given boundaries/events/flags already resolved,
@@ -164,8 +192,13 @@ describe('the bottom-right timestamp is unmounted, not deleted (#700 fault 3)', 
   })
 })
 
-describe('the rig fills its frame edge to edge (#700 faults 4 and 10)', () => {
-  it('draws the rig svg with no max-width cap that would letterbox it', async () => {
+describe('the rig draws no inline width cap of its own (#700 faults 4 and 10)', () => {
+  // #722 gave a single boundary its own reason not to fill the frame
+  // (capped at MAX_PITCH -- see the band width policy tests below), so
+  // this no longer claims the rig always spans edge to edge; it still
+  // guards against a regression of the original #700 fault, an inline
+  // style cap fighting the sizing policy's own width/height attributes.
+  it('draws the rig svg with no inline max-width style', async () => {
     const { container } = await renderFall({ boundaries: [boundary()] })
     const svg = container.querySelector('.rig svg')
     expect(svg?.getAttribute('style') ?? '').not.toContain('max-width')
@@ -253,5 +286,123 @@ describe('port labels along the foot cover every band (#700 fault 8)', () => {
     expect(text).toContain(':22')
     expect(text).toContain(':8291')
     expect(text).toContain(':51820')
+  })
+})
+
+// The band sizing policy (#722): an ideal width, elastic within limits,
+// and pages beyond them. The ResizeObserver stub above means `.rig`
+// always reports a 0 clientWidth under jsdom, so every case here runs
+// against Fall.svelte's own DEFAULT_FRAME_W (1600px) fallback -- the same
+// 1600×1000 frame the issue's own verification uses. With that width,
+// RAIL (76) and the rig's 4px margin fixed, the bands actually have
+// 1520px to share (`bandsAreaW`), and MIN_PITCH (150) caps a single page
+// at floor(1520/150) = 10 boundaries before the policy paginates.
+function headHitBoxes(container: HTMLElement): { x: number; width: number }[] {
+  return [...container.querySelectorAll('.head-hit')].map((el) => ({
+    x: Number(el.getAttribute('x')),
+    width: Number(el.getAttribute('width')),
+  }))
+}
+
+function rigSvgWidth(container: HTMLElement): number {
+  return Number(container.querySelector('.rig svg')?.getAttribute('width') ?? NaN)
+}
+
+describe('band width policy (#722): ideal, elastic within limits, paginated beyond them', () => {
+  it('stretches a lone boundary, but caps it at MAX_PITCH rather than filling the frame', async () => {
+    const { container } = await renderFall({ boundaries: makeBoundaries(1) })
+    const boxes = headHitBoxes(container)
+    expect(boxes).toHaveLength(1)
+    // MAX_PITCH (340) minus the 10px gutter -- capped, not the ~1520px
+    // a single "divide available width by count" column would draw.
+    expect(boxes[0].width).toBe(330)
+    expect(rigSvgWidth(container)).toBe(76 + 1 * 340 + 4)
+    expect(container.querySelector('.pager')).toBeNull()
+  })
+
+  it('caps two boundaries at the same MAX_PITCH -- not two comically wide columns', async () => {
+    const { container } = await renderFall({ boundaries: makeBoundaries(2) })
+    const boxes = headHitBoxes(container)
+    expect(boxes).toHaveLength(2)
+    for (const b of boxes) expect(b.width).toBe(330)
+    // Capped well short of the 1520px bands area: plenty of empty space
+    // either side, per the owner's "not comically large with few".
+    expect(rigSvgWidth(container)).toBeLessThan(900)
+    expect(container.querySelector('.pager')).toBeNull()
+  })
+
+  it('draws close to IDEAL_PITCH near the mockup’s own comfortable count', async () => {
+    // 1520 / 8 = 190px/band -- a mild stretch just past the 171px ideal,
+    // the same "comfortable" region the round-30 mockup itself draws
+    // (nine bands filling the frame).
+    const { container } = await renderFall({ boundaries: makeBoundaries(8) })
+    const boxes = headHitBoxes(container)
+    expect(boxes).toHaveLength(8)
+    for (const b of boxes) expect(b.width).toBe(180) // 190 - GUTTER(10)
+    expect(container.querySelector('.pager')).toBeNull()
+  })
+
+  it('shrinks by only a small amount when slightly over the ideal count, still on one page', async () => {
+    // 10 boundaries is exactly this frame's per-page ceiling
+    // (floor(1520/150) = 10): 1520/10 = 152px/band, just above the
+    // MIN_PITCH (150) floor -- a small shrink, not a crush, and no
+    // pagination yet.
+    const { container } = await renderFall({ boundaries: makeBoundaries(10) })
+    const boxes = headHitBoxes(container)
+    expect(boxes).toHaveLength(10)
+    for (const b of boxes) expect(b.width).toBe(142) // 152 - GUTTER(10)
+    expect(container.querySelector('.pager')).toBeNull()
+  })
+
+  it('stops shrinking and paginates once the count exceeds what MIN_PITCH can fit', async () => {
+    // 16 boundaries: the exact count #709's seeding took the live fall
+    // to, and the overlap this issue was filed over. floor(1520/150) is
+    // 10, so 16 must paginate: ceil(16/10) = 2 pages, spread evenly as
+    // ceil(16/2) = 8 + 8 -- never a lopsided 15-and-1 split.
+    const { container } = await renderFall({ boundaries: makeBoundaries(16) })
+    expect(container.querySelector('.pager')).toBeTruthy()
+    expect(container.querySelector('.pgnum')?.textContent?.trim()).toBe('1 / 2')
+
+    let boxes = headHitBoxes(container)
+    expect(boxes).toHaveLength(8)
+    // Every page renders bands at the same pitch (derived from the
+    // 8-per-page count, not each page's own size), so flipping pages
+    // never jumps band width.
+    for (const b of boxes) expect(b.width).toBe(180) // 190 (1520/8) - GUTTER(10)
+    expect(container.textContent).toContain('b0 → x')
+    expect(container.textContent).not.toContain('b8 → x')
+
+    const nextBtn = container.querySelector<HTMLButtonElement>('.pgbtn[aria-label="Next page of boundaries"]')!
+    const prevBtn = container.querySelector<HTMLButtonElement>('.pgbtn[aria-label="Previous page of boundaries"]')!
+    expect(prevBtn.disabled).toBe(true)
+    expect(nextBtn.disabled).toBe(false)
+
+    await fireEvent.click(nextBtn)
+    flushSync()
+    expect(container.querySelector('.pgnum')?.textContent?.trim()).toBe('2 / 2')
+    boxes = headHitBoxes(container)
+    expect(boxes).toHaveLength(8)
+    expect(container.textContent).toContain('b8 → x')
+    expect(container.textContent).not.toContain('b0 → x')
+    expect(nextBtn.disabled).toBe(true)
+  })
+
+  it('distributes an uneven remainder within one boundary of even, never lopsided', async () => {
+    // 17 boundaries: ceil(17/10) = 2 pages, ceil(17/2) = 9 per page --
+    // 9 then 8, differing by one, not 16-and-1 or similar.
+    const { container } = await renderFall({ boundaries: makeBoundaries(17) })
+    expect(container.querySelector('.pgnum')?.textContent?.trim()).toBe('1 / 2')
+    expect(headHitBoxes(container)).toHaveLength(9)
+
+    const nextBtn = container.querySelector<HTMLButtonElement>('.pgbtn[aria-label="Next page of boundaries"]')!
+    await fireEvent.click(nextBtn)
+    flushSync()
+    expect(headHitBoxes(container)).toHaveLength(8)
+  })
+
+  it('never renders a pager when everything fits on one page', async () => {
+    const { container } = await renderFall({ boundaries: makeBoundaries(10) })
+    expect(container.querySelector('.pager')).toBeNull()
+    expect(container.querySelector('.pgnum')).toBeNull()
   })
 })
