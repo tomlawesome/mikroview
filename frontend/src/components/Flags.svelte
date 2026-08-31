@@ -29,7 +29,7 @@
   import { authState } from '../lib/auth.svelte'
   import { fetchFlagEpisode } from '../lib/api'
   import { familyOf } from '../lib/flagPalette'
-  import { formatHM, formatTime, formatRelative } from '../lib/format'
+  import { formatHM, formatTime } from '../lib/format'
   import { compareNumeric, compareText, matchesFilter } from '../lib/sortFilter'
   import type { SortDir } from '../lib/sortFilter'
   import { headlineFor, storyFor } from '../lib/flagNarrative'
@@ -195,6 +195,29 @@
     return latest
   })
 
+  // The age column (#688, round 29/30's `#s7`): the record writes a bare
+  // "<number> <unit>" -- no "ago" suffix, and no seconds unit ever
+  // appears there (its youngest flag is `6 m`). That is the same
+  // spaced-letter idiom the record uses for every other duration on the
+  // scene (the scene-bar's own `15 m`/`1 h`/`24 h`/`14 d` span picker),
+  // so seconds gets the same "N s" shape rather than "just now" or a
+  // borrowed "Xs ago" -- sub-minute is still a number, not a phrase.
+  // Local rather than a shared lib/format.ts helper: formatRelative is
+  // the "ago" phrasing other views (Fleet's last-seen) still want.
+  function formatFlagAge(iso: string, nowMs: number): string {
+    const t = new Date(iso).getTime()
+    if (Number.isNaN(t)) return iso
+    const deltaMs = Math.max(0, nowMs - t)
+    const s = Math.floor(deltaMs / 1000)
+    if (s < 60) return `${s} s`
+    const m = Math.floor(s / 60)
+    if (m < 60) return `${m} m`
+    const h = Math.floor(m / 60)
+    if (h < 24) return `${h} h`
+    const d = Math.floor(h / 24)
+    return `${d} d`
+  }
+
   function clearedWhen(iso: string): string {
     const d = new Date(iso)
     const now = new Date()
@@ -234,7 +257,7 @@
         matchesFilter(f.target, filters.where) &&
         matchesFilter(f.detail, filters.evidence) &&
         matchesFilter(String(f.count), filters.count) &&
-        matchesFilter(formatRelative(f.lastSeen, appState.now), filters.age),
+        matchesFilter(formatFlagAge(f.lastSeen, appState.now), filters.age),
     ),
   )
 
@@ -470,7 +493,7 @@
                 </td>
                 <td>{f.detail}</td>
                 <td class="num">{f.count}×</td>
-                <td class="t">{formatRelative(f.lastSeen, appState.now)}</td>
+                <td class="t">{formatFlagAge(f.lastSeen, appState.now)}</td>
                 <td class="disc">
                   <!-- The row's one affordance (rounds 18-19/29): the
                        chevron rotates rather than swapping glyphs, so the
@@ -755,6 +778,17 @@
     font-weight: 700;
     white-space: nowrap;
     text-transform: uppercase;
+  }
+
+  /* `.ftable tbody td` above sets the muted body ink at higher CSS
+     specificity (class+type+type) than a bare `.fmark` (class alone)
+     can beat, which is why the label text was landing on --fg-muted
+     instead of its family ink even though --ft was already wired
+     through onto the row. Round 30's label wears the flag's own
+     severity colour (the record's `.ft-* .fmark` rule), matching the
+     ratified six-hex palette in lib/flagPalette.ts -- only the
+     selector's specificity needed fixing, not the colour source. */
+  .ftable tbody td.fmark {
     color: var(--ft);
   }
 
