@@ -3,6 +3,16 @@
   import type { FirewallEvent } from '../lib/types'
   import { formatAddr, formatTimeMs, rawTooltip } from '../lib/format'
   import { appState } from '../lib/state.svelte'
+  // #729: LiveTable and this component share one flat CSS Grid (`.row` is
+  // `display: contents`, so these cells become direct grid items, not
+  // children of a row element the grid can reason about on its own) --
+  // the header renders columnState.visibleColumns, so every optional cell
+  // below is gated on the same columnState.isColumnVisible(key) call. A
+  // column left out here but still counted in the header (or vice versa)
+  // would not just look wrong on that one row -- it would shift every
+  // subsequent cell in the grid by one track, since the grid has no other
+  // way to tell where one row's cells end and the next one's begin.
+  import { columnState } from '../lib/columns.svelte'
   import ActionBadge from './ActionBadge.svelte'
   import RouterRuleButton from './RouterRuleButton.svelte'
   import CopyButton from './CopyButton.svelte'
@@ -202,45 +212,65 @@
     </span>
   {/if}
 
-  <!-- #717: restored, in its pre-#644 spot right after Time -- see
-       columns.svelte.ts's own comment. Only a copy button beside it,
-       no pencil: there is no device-name entity type for
-       EditNameButton to open (see nameEditor.svelte.ts). -->
-  <span class="cell device">
+  <!-- #729: each optional column's markup is a snippet, defined once,
+       rather than thirteen separate {#if columnState.isColumnVisible(...)}
+       blocks inline -- when nothing is hidden (columnState.allVisible,
+       the shipped default), the block below takes the plain-render branch
+       and just invokes every snippet unconditionally, so the ordinary row
+       costs what it always did: no per-cell reactive gate to evaluate.
+       Only once a reader has actually turned something off does it fall
+       to the second branch, which checks columnState.isColumnVisible(key)
+       per optional cell -- and by then the row has genuinely fewer cells
+       to make up for the extra checks. #728 already put this render path
+       (810 rows on MAX_RENDERED_ROWS) within reach of vitest's timeout at
+       nine cells fewer than this component draws today; duplicating the
+       thirteen {#if} checks onto the common case would have made that
+       worse for every reader, not just the ones who use the chooser. -->
+  {#snippet deviceCell()}
+    <!-- #717: restored, in its pre-#644 spot right after Time -- see
+         columns.svelte.ts's own comment. Only a copy button beside it,
+         no pencil: there is no device-name entity type for
+         EditNameButton to open (see nameEditor.svelte.ts). -->
+    <span class="cell device">
+      <span
+        class="cell-btn device-btn"
+        role="button"
+        tabindex="0"
+        title="Filter to device: {deviceName || event.deviceId}"
+        use:activate={() => appState.setFilter('device', event.deviceId)}
+      >{deviceName || event.deviceId}</span>
+      <CopyButton value={event.deviceId} label="device id" />
+    </span>
+  {/snippet}
+
+  {#snippet actionCell()}
     <span
-      class="cell-btn device-btn"
+      class="cell action cell-btn"
       role="button"
       tabindex="0"
-      title="Filter to device: {deviceName || event.deviceId}"
-      use:activate={() => appState.setFilter('device', event.deviceId)}
-    >{deviceName || event.deviceId}</span>
-    <CopyButton value={event.deviceId} label="device id" />
-  </span>
+      title="Filter to action: {event.action}"
+      use:activate={() => appState.setFilter('action', event.action)}
+    >
+      <ActionBadge action={event.action} />
+    </span>
+  {/snippet}
 
-  <span
-    class="cell action cell-btn"
-    role="button"
-    tabindex="0"
-    title="Filter to action: {event.action}"
-    use:activate={() => appState.setFilter('action', event.action)}
-  >
-    <ActionBadge action={event.action} />
-  </span>
-
-  <!-- #717: restored, in its pre-#644 spot right after Action -- see
-       columns.svelte.ts's own comment. Plain click-to-filter text, no
-       buttons, same treatment Proto gets. -->
-  {#if event.chain}
-    <span
-      class="cell chain cell-btn"
-      role="button"
-      tabindex="0"
-      title="Filter to chain: {event.chain}"
-      use:activate={() => appState.setFilter('chain', event.chain)}
-    >{event.chain}</span>
-  {:else}
-    <span class="cell chain">—</span>
-  {/if}
+  {#snippet chainCell()}
+    <!-- #717: restored, in its pre-#644 spot right after Action -- see
+         columns.svelte.ts's own comment. Plain click-to-filter text, no
+         buttons, same treatment Proto gets. -->
+    {#if event.chain}
+      <span
+        class="cell chain cell-btn"
+        role="button"
+        tabindex="0"
+        title="Filter to chain: {event.chain}"
+        use:activate={() => appState.setFilter('chain', event.chain)}
+      >{event.chain}</span>
+    {:else}
+      <span class="cell chain">—</span>
+    {/if}
+  {/snippet}
 
   <!-- Source and Destination each split into a name column and a dim
        address column (#644): the name column shows the resolved host
@@ -248,50 +278,55 @@
        the country code appended) -- and the address column then repeats
        nothing, showing the raw IP only where the name column is showing
        a name, an em dash otherwise. -->
-  {#if event.srcIp}
-    <span class="cell addr">
-      <span
-        class="cell-btn addr-btn"
-        class:bare={!event.srcHostName}
-        role="button"
-        tabindex="0"
-        title={event.srcHostName ? `${event.srcHostName} — filter to source: ${event.srcIp}` : `Filter to source: ${event.srcIp}`}
-        use:activate={() => appState.setFilter('srcQuery', event.srcIp ?? '')}
-      >
-        {event.srcHostName || event.srcIp}{#if !event.srcHostName && event.srcCountry}
-          <span class="geo">{event.srcCountry}</span>{/if}
+  {#snippet sourceAddrCell()}
+    {#if event.srcIp}
+      <span class="cell addr">
+        <span
+          class="cell-btn addr-btn"
+          class:bare={!event.srcHostName}
+          role="button"
+          tabindex="0"
+          title={event.srcHostName ? `${event.srcHostName} — filter to source: ${event.srcIp}` : `Filter to source: ${event.srcIp}`}
+          use:activate={() => appState.setFilter('srcQuery', event.srcIp ?? '')}
+        >
+          {event.srcHostName || event.srcIp}{#if !event.srcHostName && event.srcCountry}
+            <span class="geo">{event.srcCountry}</span>{/if}
+        </span>
+        <CopyButton value={event.srcIp} label="source IP" />
+        {#if nameEditorState.available}
+          <EditNameButton type="host" value={event.srcIp} device={event.deviceId} label={event.srcIp} />
+        {/if}
       </span>
-      <CopyButton value={event.srcIp} label="source IP" />
-      {#if nameEditorState.available}
-        <EditNameButton type="host" value={event.srcIp} device={event.deviceId} label={event.srcIp} />
-      {/if}
-    </span>
-    <span class="cell ip">{event.srcHostName ? event.srcIp : '—'}</span>
-  {:else}
-    <span class="cell addr">—</span>
-    <span class="cell ip">—</span>
-  {/if}
+    {:else}
+      <span class="cell addr">—</span>
+    {/if}
+  {/snippet}
+  {#snippet sourceIpCell()}
+    <span class="cell ip">{event.srcIp && event.srcHostName ? event.srcIp : '—'}</span>
+  {/snippet}
 
   <!-- #717: restored, riding beside Source's own facts (its
        pre-#644 neighbour was Destination -- see columns.svelte.ts).
        Same minimal treatment as the existing dst Port column: the bare
        number, no copy/edit/investigate chrome, friendly name (if any)
        in the tooltip only. -->
-  {#if event.srcPort}
-    <span class="cell port srcport">
-      <span
-        class="cell-btn port-btn"
-        role="button"
-        tabindex="0"
-        title={event.srcPortName
-          ? `${event.srcPortName} — filter to port: ${event.srcPort}`
-          : `Filter to port: ${event.srcPort}`}
-        use:activate={() => appState.setFilter('port', String(event.srcPort))}
-      >{event.srcPort}</span>
-    </span>
-  {:else}
-    <span class="cell port srcport">—</span>
-  {/if}
+  {#snippet srcPortCell()}
+    {#if event.srcPort}
+      <span class="cell port srcport">
+        <span
+          class="cell-btn port-btn"
+          role="button"
+          tabindex="0"
+          title={event.srcPortName
+            ? `${event.srcPortName} — filter to port: ${event.srcPort}`
+            : `Filter to port: ${event.srcPort}`}
+          use:activate={() => appState.setFilter('port', String(event.srcPort))}
+        >{event.srcPort}</span>
+      </span>
+    {:else}
+      <span class="cell port srcport">—</span>
+    {/if}
+  {/snippet}
 
   <!-- #717: restored. Plain text, not click-to-filter -- no Filters
        field takes a MAC (see EventDetailSheet.svelte's own comment on
@@ -300,92 +335,103 @@
        same field the sheet's Src MAC row already reads -- RouterOS
        includes src-mac on some chains/firmwares and not others (see
        internal/routeros/parser.go), never a separate per-row lookup. -->
-  <span class="cell mac">{event.srcMac || '—'}</span>
+  {#snippet macCell()}
+    <span class="cell mac">{event.srcMac || '—'}</span>
+  {/snippet}
 
-  {#if event.dstIp}
-    <span class="cell addr">
+  {#snippet destAddrCell()}
+    {#if event.dstIp}
+      <span class="cell addr">
+        <span
+          class="cell-btn addr-btn"
+          class:bare={!event.dstHostName}
+          role="button"
+          tabindex="0"
+          title={event.dstHostName ? `${event.dstHostName} — filter to destination: ${event.dstIp}` : `Filter to destination: ${event.dstIp}`}
+          use:activate={() => appState.setFilter('dstQuery', event.dstIp ?? '')}
+        >
+          {event.dstHostName || event.dstIp}{#if !event.dstHostName && event.dstCountry}
+            <span class="geo">{event.dstCountry}</span>{/if}
+        </span>
+        <CopyButton value={event.dstIp} label="destination IP" />
+        {#if nameEditorState.available}
+          <EditNameButton type="host" value={event.dstIp} device={event.deviceId} label={event.dstIp} />
+        {/if}
+      </span>
+    {:else}
+      <span class="cell addr">—</span>
+    {/if}
+  {/snippet}
+  {#snippet destIpCell()}
+    <span class="cell ip">{event.dstIp && event.dstHostName ? event.dstIp : '—'}</span>
+  {/snippet}
+
+  {#snippet protoCell()}
+    {#if event.protocol}
       <span
-        class="cell-btn addr-btn"
-        class:bare={!event.dstHostName}
+        class="cell proto cell-btn"
         role="button"
         tabindex="0"
-        title={event.dstHostName ? `${event.dstHostName} — filter to destination: ${event.dstIp}` : `Filter to destination: ${event.dstIp}`}
-        use:activate={() => appState.setFilter('dstQuery', event.dstIp ?? '')}
+        title="Filter to protocol: {event.protocol}"
+        use:activate={() => appState.setFilter('protocol', event.protocol ?? '')}
       >
-        {event.dstHostName || event.dstIp}{#if !event.dstHostName && event.dstCountry}
-          <span class="geo">{event.dstCountry}</span>{/if}
+        {event.protocol}
       </span>
-      <CopyButton value={event.dstIp} label="destination IP" />
-      {#if nameEditorState.available}
-        <EditNameButton type="host" value={event.dstIp} device={event.deviceId} label={event.dstIp} />
-      {/if}
-    </span>
-    <span class="cell ip">{event.dstHostName ? event.dstIp : '—'}</span>
-  {:else}
-    <span class="cell addr">—</span>
-    <span class="cell ip">—</span>
-  {/if}
-
-  {#if event.protocol}
-    <span
-      class="cell proto cell-btn"
-      role="button"
-      tabindex="0"
-      title="Filter to protocol: {event.protocol}"
-      use:activate={() => appState.setFilter('protocol', event.protocol ?? '')}
-    >
-      {event.protocol}
-    </span>
-  {:else}
-    <span class="cell proto">—</span>
-  {/if}
+    {:else}
+      <span class="cell proto">—</span>
+    {/if}
+  {/snippet}
 
   <!-- #717: restored, in its pre-#644 spot right after Proto -- see
        columns.svelte.ts's own comment. Split into its two tokens (in/
        out) so either can be clicked independently; both write the same
        shared `interface` filter (matches either side). -->
-  <span class="cell iface">
-    {#if event.inInterface}
-      <span
-        class="cell-btn iface-btn"
-        role="button"
-        tabindex="0"
-        title="Filter to interface: {event.inInterface}"
-        use:activate={() => appState.setFilter('interface', event.inInterface ?? '')}
-      >{event.inInterface}</span>
-    {/if}
-    {#if event.inInterface && event.outInterface}
-      <span class="iface-sep">→</span>
-    {/if}
-    {#if event.outInterface}
-      <span
-        class="cell-btn iface-btn"
-        role="button"
-        tabindex="0"
-        title="Filter to interface: {event.outInterface}"
-        use:activate={() => appState.setFilter('interface', event.outInterface ?? '')}
-      >{event.outInterface}</span>
-    {/if}
-    {#if !event.inInterface && !event.outInterface}—{/if}
-  </span>
-
-  {#if event.dstPort}
-    <span class="cell port">
-      <span
-        class="cell-btn port-btn"
-        role="button"
-        tabindex="0"
-        title={event.dstPortName
-          ? `${event.dstPortName} — filter to port: ${event.dstPort}`
-          : `Filter to port: ${event.dstPort}`}
-        use:activate={() => appState.setFilter('port', String(event.dstPort))}
-      >
-        {event.dstPort}
-      </span>
+  {#snippet ifaceCell()}
+    <span class="cell iface">
+      {#if event.inInterface}
+        <span
+          class="cell-btn iface-btn"
+          role="button"
+          tabindex="0"
+          title="Filter to interface: {event.inInterface}"
+          use:activate={() => appState.setFilter('interface', event.inInterface ?? '')}
+        >{event.inInterface}</span>
+      {/if}
+      {#if event.inInterface && event.outInterface}
+        <span class="iface-sep">→</span>
+      {/if}
+      {#if event.outInterface}
+        <span
+          class="cell-btn iface-btn"
+          role="button"
+          tabindex="0"
+          title="Filter to interface: {event.outInterface}"
+          use:activate={() => appState.setFilter('interface', event.outInterface ?? '')}
+        >{event.outInterface}</span>
+      {/if}
+      {#if !event.inInterface && !event.outInterface}—{/if}
     </span>
-  {:else}
-    <span class="cell port">—</span>
-  {/if}
+  {/snippet}
+
+  {#snippet dstPortCell()}
+    {#if event.dstPort}
+      <span class="cell port">
+        <span
+          class="cell-btn port-btn"
+          role="button"
+          tabindex="0"
+          title={event.dstPortName
+            ? `${event.dstPortName} — filter to port: ${event.dstPort}`
+            : `Filter to port: ${event.dstPort}`}
+          use:activate={() => appState.setFilter('port', String(event.dstPort))}
+        >
+          {event.dstPort}
+        </span>
+      </span>
+    {:else}
+      <span class="cell port">—</span>
+    {/if}
+  {/snippet}
 
   <!-- #717: restored, beside Port, its pre-#644 neighbour -- see
        columns.svelte.ts's own comment on why it lands after Proto/
@@ -394,25 +440,235 @@
        this" trigger stays exactly where it already lived, in the Rule
        cell's RouterRuleButton above, since #644's own commit message
        records fixing a duplicate of that same button once already. -->
-  <span class="cell nat" class:has-value={!!event.natIp} title={event.natRaw}>
-    {#if event.natIp}
-      {#if natFilterKey}
+  {#snippet natCell()}
+    <span class="cell nat" class:has-value={!!event.natIp} title={event.natRaw}>
+      {#if event.natIp}
+        {#if natFilterKey}
+          <span
+            class="cell-btn nat-value"
+            role="button"
+            tabindex="0"
+            title="Filter to {natFilterKey === 'srcQuery' ? 'source' : 'destination'}: {event.natIp}"
+            use:activate={() => {
+              if (natFilterKey) appState.setFilter(natFilterKey, event.natIp ?? '')
+            }}
+          >→ {formatAddr(event.natIp, event.natPort)}</span>
+        {:else}
+          <span class="nat-value">→ {formatAddr(event.natIp, event.natPort)}</span>
+        {/if}
+      {:else}
+        —
+      {/if}
+    </span>
+  {/snippet}
+
+  {#if columnState.allVisible}
+    <!-- This block and the {#snippet} copies above must be edited
+         together -- LiveTable.svelte.test.ts's "keeps every optional
+         column's markup identical whether or not another column happens
+         to be hidden" (describe: "the two render paths stay identical
+         (#729)") fails the moment the two drift apart.
+
+         The default (all fifteen columns) renders the same raw markup
+         #729 found here, unconditionally -- not the snippets above, and
+         not gated on columnState.isColumnVisible per cell. Deliberate
+         duplication, not drift: a Svelte snippet costs measurably more
+         per invocation than an inlined block does at this row count
+         (810 rows on MAX_RENDERED_ROWS), enough on its own to push #728's
+         already-borderline render-cost test over vitest's timeout even
+         with every column showing -- benchmarked directly against this
+         file's own case. The snippets stay the single source of truth for
+         the *gated* path below, which only ever runs once a reader has
+         actually turned a column off; keep the two copies of each cell in
+         step by hand if either changes. -->
+    <span class="cell device">
+      <span
+        class="cell-btn device-btn"
+        role="button"
+        tabindex="0"
+        title="Filter to device: {deviceName || event.deviceId}"
+        use:activate={() => appState.setFilter('device', event.deviceId)}
+      >{deviceName || event.deviceId}</span>
+      <CopyButton value={event.deviceId} label="device id" />
+    </span>
+
+    <span
+      class="cell action cell-btn"
+      role="button"
+      tabindex="0"
+      title="Filter to action: {event.action}"
+      use:activate={() => appState.setFilter('action', event.action)}
+    >
+      <ActionBadge action={event.action} />
+    </span>
+
+    {#if event.chain}
+      <span
+        class="cell chain cell-btn"
+        role="button"
+        tabindex="0"
+        title="Filter to chain: {event.chain}"
+        use:activate={() => appState.setFilter('chain', event.chain)}
+      >{event.chain}</span>
+    {:else}
+      <span class="cell chain">—</span>
+    {/if}
+
+    {#if event.srcIp}
+      <span class="cell addr">
         <span
-          class="cell-btn nat-value"
+          class="cell-btn addr-btn"
+          class:bare={!event.srcHostName}
           role="button"
           tabindex="0"
-          title="Filter to {natFilterKey === 'srcQuery' ? 'source' : 'destination'}: {event.natIp}"
-          use:activate={() => {
-            if (natFilterKey) appState.setFilter(natFilterKey, event.natIp ?? '')
-          }}
-        >→ {formatAddr(event.natIp, event.natPort)}</span>
-      {:else}
-        <span class="nat-value">→ {formatAddr(event.natIp, event.natPort)}</span>
-      {/if}
+          title={event.srcHostName ? `${event.srcHostName} — filter to source: ${event.srcIp}` : `Filter to source: ${event.srcIp}`}
+          use:activate={() => appState.setFilter('srcQuery', event.srcIp ?? '')}
+        >
+          {event.srcHostName || event.srcIp}{#if !event.srcHostName && event.srcCountry}
+            <span class="geo">{event.srcCountry}</span>{/if}
+        </span>
+        <CopyButton value={event.srcIp} label="source IP" />
+        {#if nameEditorState.available}
+          <EditNameButton type="host" value={event.srcIp} device={event.deviceId} label={event.srcIp} />
+        {/if}
+      </span>
     {:else}
-      —
+      <span class="cell addr">—</span>
     {/if}
-  </span>
+    <span class="cell ip">{event.srcIp && event.srcHostName ? event.srcIp : '—'}</span>
+
+    {#if event.srcPort}
+      <span class="cell port srcport">
+        <span
+          class="cell-btn port-btn"
+          role="button"
+          tabindex="0"
+          title={event.srcPortName
+            ? `${event.srcPortName} — filter to port: ${event.srcPort}`
+            : `Filter to port: ${event.srcPort}`}
+          use:activate={() => appState.setFilter('port', String(event.srcPort))}
+        >{event.srcPort}</span>
+      </span>
+    {:else}
+      <span class="cell port srcport">—</span>
+    {/if}
+
+    <span class="cell mac">{event.srcMac || '—'}</span>
+
+    {#if event.dstIp}
+      <span class="cell addr">
+        <span
+          class="cell-btn addr-btn"
+          class:bare={!event.dstHostName}
+          role="button"
+          tabindex="0"
+          title={event.dstHostName ? `${event.dstHostName} — filter to destination: ${event.dstIp}` : `Filter to destination: ${event.dstIp}`}
+          use:activate={() => appState.setFilter('dstQuery', event.dstIp ?? '')}
+        >
+          {event.dstHostName || event.dstIp}{#if !event.dstHostName && event.dstCountry}
+            <span class="geo">{event.dstCountry}</span>{/if}
+        </span>
+        <CopyButton value={event.dstIp} label="destination IP" />
+        {#if nameEditorState.available}
+          <EditNameButton type="host" value={event.dstIp} device={event.deviceId} label={event.dstIp} />
+        {/if}
+      </span>
+    {:else}
+      <span class="cell addr">—</span>
+    {/if}
+    <span class="cell ip">{event.dstIp && event.dstHostName ? event.dstIp : '—'}</span>
+
+    {#if event.protocol}
+      <span
+        class="cell proto cell-btn"
+        role="button"
+        tabindex="0"
+        title="Filter to protocol: {event.protocol}"
+        use:activate={() => appState.setFilter('protocol', event.protocol ?? '')}
+      >
+        {event.protocol}
+      </span>
+    {:else}
+      <span class="cell proto">—</span>
+    {/if}
+
+    <span class="cell iface">
+      {#if event.inInterface}
+        <span
+          class="cell-btn iface-btn"
+          role="button"
+          tabindex="0"
+          title="Filter to interface: {event.inInterface}"
+          use:activate={() => appState.setFilter('interface', event.inInterface ?? '')}
+        >{event.inInterface}</span>
+      {/if}
+      {#if event.inInterface && event.outInterface}
+        <span class="iface-sep">→</span>
+      {/if}
+      {#if event.outInterface}
+        <span
+          class="cell-btn iface-btn"
+          role="button"
+          tabindex="0"
+          title="Filter to interface: {event.outInterface}"
+          use:activate={() => appState.setFilter('interface', event.outInterface ?? '')}
+        >{event.outInterface}</span>
+      {/if}
+      {#if !event.inInterface && !event.outInterface}—{/if}
+    </span>
+
+    {#if event.dstPort}
+      <span class="cell port">
+        <span
+          class="cell-btn port-btn"
+          role="button"
+          tabindex="0"
+          title={event.dstPortName
+            ? `${event.dstPortName} — filter to port: ${event.dstPort}`
+            : `Filter to port: ${event.dstPort}`}
+          use:activate={() => appState.setFilter('port', String(event.dstPort))}
+        >
+          {event.dstPort}
+        </span>
+      </span>
+    {:else}
+      <span class="cell port">—</span>
+    {/if}
+
+    <span class="cell nat" class:has-value={!!event.natIp} title={event.natRaw}>
+      {#if event.natIp}
+        {#if natFilterKey}
+          <span
+            class="cell-btn nat-value"
+            role="button"
+            tabindex="0"
+            title="Filter to {natFilterKey === 'srcQuery' ? 'source' : 'destination'}: {event.natIp}"
+            use:activate={() => {
+              if (natFilterKey) appState.setFilter(natFilterKey, event.natIp ?? '')
+            }}
+          >→ {formatAddr(event.natIp, event.natPort)}</span>
+        {:else}
+          <span class="nat-value">→ {formatAddr(event.natIp, event.natPort)}</span>
+        {/if}
+      {:else}
+        —
+      {/if}
+    </span>
+  {:else}
+    {#if columnState.isColumnVisible('device')}{@render deviceCell()}{/if}
+    {#if columnState.isColumnVisible('action')}{@render actionCell()}{/if}
+    {#if columnState.isColumnVisible('chain')}{@render chainCell()}{/if}
+    {#if columnState.isColumnVisible('source')}{@render sourceAddrCell()}{/if}
+    {#if columnState.isColumnVisible('srcAddr')}{@render sourceIpCell()}{/if}
+    {#if columnState.isColumnVisible('srcPort')}{@render srcPortCell()}{/if}
+    {#if columnState.isColumnVisible('mac')}{@render macCell()}{/if}
+    {#if columnState.isColumnVisible('destination')}{@render destAddrCell()}{/if}
+    {#if columnState.isColumnVisible('dstAddr')}{@render destIpCell()}{/if}
+    {#if columnState.isColumnVisible('proto')}{@render protoCell()}{/if}
+    {#if columnState.isColumnVisible('iface')}{@render ifaceCell()}{/if}
+    {#if columnState.isColumnVisible('port')}{@render dstPortCell()}{/if}
+    {#if columnState.isColumnVisible('nat')}{@render natCell()}{/if}
+  {/if}
 
   {#if event.ruleLabel}
     <span class="cell rule">

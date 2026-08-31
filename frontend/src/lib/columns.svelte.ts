@@ -27,6 +27,16 @@ export interface ColumnDef {
 // six also stay in EventDetailSheet.svelte: the sheet is not just an
 // overflow bin for facts with no column, it is still the row's one
 // full-detail surface (raw line, MAC lookup, etc.).
+// #729: the chooser's two pinned columns -- always shown, never offered as a
+// toggle. Time is the row's one temporal anchor (and the sticky column the
+// header mirrors); Rule is the one field #685 already ruled has no real
+// ceiling and carries the row's own investigate/edit affordances. Every
+// other column is a reader's preference, on by default (see DEFAULT_VISIBLE
+// below) -- the owner's ruling on #729 keeps the shipped default at all
+// fifteen; turning one off is something a reader chooses, not a repair for
+// the table's width.
+export const PINNED_COLUMNS: ReadonlySet<string> = new Set(['time', 'rule'])
+
 export const COLUMNS: ColumnDef[] = [
   { key: 'time', label: 'Time' },
   { key: 'device', label: 'Device' },
@@ -159,15 +169,80 @@ function loadInitial(): Width[] {
   return [...DEFAULT_WIDTHS]
 }
 
-// Column widths for the live table, user-resizable via drag handles in
-// LiveTable.svelte and persisted across sessions. Both the sticky header
-// row and the event rows below it live in the same CSS Grid container, so
-// a single template string here drives both.
+// Keyed by column key rather than shadowing widths' index-positional shape:
+// EventRow.svelte (#729) calls isColumnVisible(key) once per optional cell,
+// per row -- up to 13 times across 810 rows on the live view's own
+// MAX_RENDERED_ROWS ceiling. #728 already put that render path within
+// reach of vitest's timeout at nine cells fewer; an index lookup would mean
+// COLUMNS.findIndex (a linear scan) on every one of those calls, so this is
+// a plain object for O(1) property access instead.
+type Visibility = Record<string, boolean>
+
+// #729: every column defaults to visible -- the owner's ruling keeps the
+// shipped default at all fifteen, so this is what a reader who has never
+// touched the chooser sees.
+const DEFAULT_VISIBLE: Visibility = Object.fromEntries(COLUMNS.map((c) => [c.key, true]))
+
+// Same reader-preference mechanism the widths above already use (a plain
+// localStorage entry, versioned key bumped whenever the shape it was
+// measured against changes) -- not a second mechanism invented for this
+// issue. A separate key from STORAGE_KEY: widths and visibility are
+// independent choices, and giving them one combined value would force a
+// version bump (and a reset to defaults) on every reader's saved widths the
+// day visibility shipped, for no reason tied to widths at all.
+const VISIBILITY_STORAGE_KEY = 'mikroview-column-visibility-v1'
+
+function loadInitialVisibility(): Visibility {
+  try {
+    const raw = localStorage.getItem(VISIBILITY_STORAGE_KEY)
+    if (raw) {
+      const parsed = JSON.parse(raw)
+      if (parsed && typeof parsed === 'object') {
+        const next: Visibility = {}
+        for (const col of COLUMNS) {
+          // A pinned column reads as visible regardless of what was saved --
+          // guards against a stored value from a build that let it be
+          // hidden, or hand-edited storage, either of which would otherwise
+          // drop Time or Rule off the table with no way back short of
+          // clearing storage. A key missing from an older saved value (one
+          // written before a new column existed) defaults to visible too,
+          // matching "every column defaults to visible".
+          next[col.key] = PINNED_COLUMNS.has(col.key) ? true : Boolean(parsed[col.key] ?? true)
+        }
+        return next
+      }
+    }
+  } catch {
+    // ignore malformed/unavailable storage, fall through to defaults
+  }
+  return { ...DEFAULT_VISIBLE }
+}
+
+// Column widths and visibility for the live table. Widths are
+// user-resizable via drag handles in LiveTable.svelte; visibility is
+// user-chosen via the chooser in FilterBar.svelte (#729). Both persist
+// across sessions the same way, and both feed the one `gridTemplate`
+// string that drives the sticky header row and the event rows below it,
+// since both live in the same CSS Grid container.
 class ColumnState {
   widths = $state<Width[]>(loadInitial())
+  visible = $state<Visibility>(loadInitialVisibility())
+
+  visibleColumns = $derived(COLUMNS.filter((c) => this.visible[c.key]))
+
+  // Computed once per columnState.visible change (COLUMNS has 15 entries),
+  // not once per row -- EventRow.svelte reads this to take a fast,
+  // unconditional path when nothing is hidden (the shipped default), so
+  // the ordinary case costs the same as before the chooser existed rather
+  // than paying for thirteen per-cell {#if} checks it doesn't need. See
+  // that component's own comment on why this matters for #728.
+  allVisible = $derived(COLUMNS.every((c) => this.visible[c.key]))
 
   gridTemplate = $derived(
-    this.widths.map((w) => (w === null ? `minmax(${FLEX_MIN_WIDTH}px, 1fr)` : `${w}px`)).join(' '),
+    this.widths
+      .filter((_, i) => this.visible[COLUMNS[i].key])
+      .map((w) => (w === null ? `minmax(${FLEX_MIN_WIDTH}px, 1fr)` : `${w}px`))
+      .join(' '),
   )
 
   isDefault = $derived(this.widths.every((w, i) => w === DEFAULT_WIDTHS[i]))
@@ -184,11 +259,32 @@ class ColumnState {
     this.persist()
   }
 
+  isColumnVisible(key: string): boolean {
+    return this.visible[key] ?? true
+  }
+
+  // No-op on a pinned column (Time, Rule) -- the chooser in FilterBar
+  // never renders a checkbox for one, but this guards the state itself
+  // rather than trusting every caller to check PINNED_COLUMNS first.
+  toggleColumn(key: string) {
+    if (PINNED_COLUMNS.has(key)) return
+    this.visible = { ...this.visible, [key]: !this.visible[key] }
+    this.persistVisibility()
+  }
+
   private persist() {
     try {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(this.widths))
     } catch {
       // storage unavailable -- widths just won't persist across reloads
+    }
+  }
+
+  private persistVisibility() {
+    try {
+      localStorage.setItem(VISIBILITY_STORAGE_KEY, JSON.stringify(this.visible))
+    } catch {
+      // storage unavailable -- the choice just won't persist across reloads
     }
   }
 }
