@@ -37,6 +37,7 @@ function minute(n: number): string {
 }
 
 const stats: Stats = {
+  oldestHeld: null,
   total: 3,
   byAction: { accept: 1231, drop: 109, reject: 2 },
   topRules: [{ rule: 'fwd-drop', count: 109 }],
