@@ -54,12 +54,15 @@
   let newPassword = $state('')
   let userError = $state<string | null>(null)
   let addingUser = $state(false)
+  // #653: which tier the new account gets. Defaults to the one every
+  // account created here used to get, so the quick path is unchanged.
+  let newUserRole = $state<'user' | 'viewer'>('user')
 
   async function submitAddUser(e: Event) {
     e.preventDefault()
     userError = null
     addingUser = true
-    const err = await usersState.create(newUsername, newPassword)
+    const err = await usersState.create(newUsername, newPassword, newUserRole)
     addingUser = false
     if (err) {
       userError = err
@@ -67,6 +70,7 @@
     }
     newUsername = ''
     newPassword = ''
+    newUserRole = 'user'
     showAddUser = false
   }
 
@@ -147,6 +151,11 @@
           <li class="row">
             <span class="who">{user.username}</span>
             {#if user.role === 'admin'}<span class="chip admin">admin</span>{/if}
+            <!-- #653: a viewer and a user look identical otherwise, and
+                 which one someone is is the fact an admin came here to
+                 check. Only the read-only tier is marked -- "can change
+                 things" is the ordinary case and needs no label. -->
+            {#if user.role === 'viewer'}<span class="chip">view only</span>{/if}
             {#if user.sso}<span class="chip sso">sso</span>{/if}
             <span class="fact">
               <span class="tick"></span>
@@ -167,6 +176,13 @@
         <form class="inline-form" onsubmit={submitAddUser}>
           <input type="text" placeholder="Username" autocomplete="off" bind:value={newUsername} required />
           <input type="password" placeholder="Password" autocomplete="new-password" bind:value={newPassword} required />
+          <!-- #653: without this the viewer tier has no way in from the
+               UI at all. Worded as what they may do rather than as a
+               role name, the same way the key kind above is. -->
+          <select bind:value={newUserRole} aria-label="What they may do">
+            <option value="user">Can change things</option>
+            <option value="viewer">Can only look</option>
+          </select>
           <div class="form-actions">
             <button type="button" class="cancel" onclick={() => (showAddUser = false)}>Cancel</button>
             <button type="submit" class="verb save" disabled={addingUser}>{addingUser ? 'saving…' : 'Let them in'}</button>

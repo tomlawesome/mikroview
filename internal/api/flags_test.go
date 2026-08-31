@@ -683,11 +683,13 @@ func TestHandleFlagsClearAll(t *testing.T) {
 	}
 }
 
-// TestHandleFlagsClearAllAvailableToAnyUser mirrors
-// TestHandleFlagsClearIsAvailableToAnyUser -- same access level as the
-// per-flag clear, since clear-all is just that action applied in bulk
-// and carries the same reversibility.
-func TestHandleFlagsClearAllAvailableToAnyUser(t *testing.T) {
+// TestHandleFlagsClearAllAvailableToUserNotViewer pins #653's tightening
+// of clear-all (and, by the same reasoning, the other three flag writes
+// below it -- see TestHandleFlagsWritesRefuseViewer): a plain user may
+// still call it, same as before viewer existed to exclude, but a viewer
+// -- who must not change anything that affects the instance -- may not,
+// even though the action is reversible.
+func TestHandleFlagsClearAllAvailableToUserNotViewer(t *testing.T) {
 	s := newAuthTestServer(t)
 	s.Flags.Add(flags.TypePortScan, "203.0.113.9", "port scan", time.Now())
 	ts := httptest.NewServer(s.Routes())
@@ -695,20 +697,122 @@ func TestHandleFlagsClearAllAvailableToAnyUser(t *testing.T) {
 
 	adminClient := &http.Client{Jar: mustCookieJar(t)}
 	postJSON(t, adminClient, ts.URL+"/api/auth/register", credentialsRequest{Username: "admin", Password: "password123"}).Body.Close()
-	postJSON(t, adminClient, ts.URL+"/api/auth/users", createUserRequest{Username: "viewer", Password: "password456", Role: "user"}).Body.Close()
+	postJSON(t, adminClient, ts.URL+"/api/auth/users", createUserRequest{Username: "operator", Password: "password456", Role: "user"}).Body.Close()
+	postJSON(t, adminClient, ts.URL+"/api/auth/users", createUserRequest{Username: "watcher", Password: "password789", Role: "viewer"}).Body.Close()
+
+	userClient := &http.Client{Jar: mustCookieJar(t)}
+	postJSON(t, userClient, ts.URL+"/api/auth/login", credentialsRequest{Username: "operator", Password: "password456"}).Body.Close()
 
 	viewerClient := &http.Client{Jar: mustCookieJar(t)}
-	postJSON(t, viewerClient, ts.URL+"/api/auth/login", credentialsRequest{Username: "viewer", Password: "password456"}).Body.Close()
+	postJSON(t, viewerClient, ts.URL+"/api/auth/login", credentialsRequest{Username: "watcher", Password: "password789"}).Body.Close()
 
-	req, _ := http.NewRequest(http.MethodPost, ts.URL+"/api/flags/clear-all", nil)
-	req.Header.Set(csrfHeaderName, csrfHeaderValue)
-	resp, err := viewerClient.Do(req)
+	viewerReq, _ := http.NewRequest(http.MethodPost, ts.URL+"/api/flags/clear-all", nil)
+	viewerReq.Header.Set(csrfHeaderName, csrfHeaderValue)
+	viewerResp, err := viewerClient.Do(viewerReq)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		t.Errorf("expected a non-admin clear-all to succeed, got %d", resp.StatusCode)
+	defer viewerResp.Body.Close()
+	if viewerResp.StatusCode != http.StatusForbidden {
+		t.Errorf("expected a viewer clear-all to be forbidden (#653), got %d", viewerResp.StatusCode)
+	}
+	if got := s.Flags.List(); len(got) != 1 || got[0].Cleared {
+		t.Errorf("a refused clear-all must have no effect, got %+v", got)
+	}
+
+	userReq, _ := http.NewRequest(http.MethodPost, ts.URL+"/api/flags/clear-all", nil)
+	userReq.Header.Set(csrfHeaderName, csrfHeaderValue)
+	userResp, err := userClient.Do(userReq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer userResp.Body.Close()
+	if userResp.StatusCode != http.StatusOK {
+		t.Errorf("expected a user clear-all to succeed, got %d", userResp.StatusCode)
+	}
+}
+
+// TestHandleFlagsWritesRefuseViewer covers the remaining three flag
+// writes #653 tightened from "any signed-in session" to user tier:
+// clear, verdict, and verdict's undo. A viewer is refused all three; a
+// user succeeds at all three. TestHandleFlagsClearAllAvailableToUserNotViewer
+// above covers the fourth (clear-all) with the same shape.
+func TestHandleFlagsWritesRefuseViewer(t *testing.T) {
+	s := newAuthTestServer(t)
+	s.Flags.Add(flags.TypePortScan, "203.0.113.9", "port scan", time.Now())
+	flagID := s.Flags.List()[0].ID
+	ts := httptest.NewServer(s.Routes())
+	defer ts.Close()
+
+	adminClient := &http.Client{Jar: mustCookieJar(t)}
+	postJSON(t, adminClient, ts.URL+"/api/auth/register", credentialsRequest{Username: "admin", Password: "password123"}).Body.Close()
+	postJSON(t, adminClient, ts.URL+"/api/auth/users", createUserRequest{Username: "operator", Password: "password456", Role: "user"}).Body.Close()
+	postJSON(t, adminClient, ts.URL+"/api/auth/users", createUserRequest{Username: "watcher", Password: "password789", Role: "viewer"}).Body.Close()
+
+	userClient := &http.Client{Jar: mustCookieJar(t)}
+	postJSON(t, userClient, ts.URL+"/api/auth/login", credentialsRequest{Username: "operator", Password: "password456"}).Body.Close()
+
+	viewerClient := &http.Client{Jar: mustCookieJar(t)}
+	postJSON(t, viewerClient, ts.URL+"/api/auth/login", credentialsRequest{Username: "watcher", Password: "password789"}).Body.Close()
+
+	// Viewer: refused all three.
+	viewerClearResp := postJSON(t, viewerClient, ts.URL+"/api/flags/"+flagID+"/clear", nil)
+	viewerClearResp.Body.Close()
+	if viewerClearResp.StatusCode != http.StatusForbidden {
+		t.Errorf("expected a viewer clear to be forbidden, got %d", viewerClearResp.StatusCode)
+	}
+
+	viewerVerdictResp := postJSON(t, viewerClient, ts.URL+"/api/flags/"+flagID+"/verdict", verdictRequest{Verdict: flags.VerdictNoise})
+	viewerVerdictResp.Body.Close()
+	if viewerVerdictResp.StatusCode != http.StatusForbidden {
+		t.Errorf("expected a viewer verdict to be forbidden, got %d", viewerVerdictResp.StatusCode)
+	}
+
+	viewerUndoReq, _ := http.NewRequest(http.MethodDelete, ts.URL+"/api/flags/verdict/"+flagID, nil)
+	viewerUndoReq.Header.Set(csrfHeaderName, csrfHeaderValue)
+	viewerUndoResp, err := viewerClient.Do(viewerUndoReq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	viewerUndoResp.Body.Close()
+	if viewerUndoResp.StatusCode != http.StatusForbidden {
+		t.Errorf("expected a viewer verdict-undo to be forbidden, got %d", viewerUndoResp.StatusCode)
+	}
+
+	if got := s.Flags.List(); len(got) != 1 || got[0].Cleared || got[0].Verdict != "" {
+		t.Errorf("every refused viewer write must have no effect, got %+v", got)
+	}
+
+	// User: succeeds at all three -- verdict then its own undo, then a
+	// plain clear, each checked against real store state, not just the
+	// status code.
+	userVerdictResp := postJSON(t, userClient, ts.URL+"/api/flags/"+flagID+"/verdict", verdictRequest{Verdict: flags.VerdictNoise})
+	userVerdictResp.Body.Close()
+	if userVerdictResp.StatusCode != http.StatusOK {
+		t.Errorf("expected a user verdict to succeed, got %d", userVerdictResp.StatusCode)
+	}
+	if got := s.Flags.List()[0]; got.Verdict != flags.VerdictNoise {
+		t.Errorf("expected the verdict to be recorded, got %+v", got)
+	}
+
+	userUndoReq, _ := http.NewRequest(http.MethodDelete, ts.URL+"/api/flags/verdict/"+flagID, nil)
+	userUndoReq.Header.Set(csrfHeaderName, csrfHeaderValue)
+	userUndoResp, err := userClient.Do(userUndoReq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	userUndoResp.Body.Close()
+	if userUndoResp.StatusCode != http.StatusOK {
+		t.Errorf("expected a user verdict-undo to succeed, got %d", userUndoResp.StatusCode)
+	}
+
+	userClearResp := postJSON(t, userClient, ts.URL+"/api/flags/"+flagID+"/clear", nil)
+	userClearResp.Body.Close()
+	if userClearResp.StatusCode != http.StatusOK {
+		t.Errorf("expected a user clear to succeed, got %d", userClearResp.StatusCode)
+	}
+	if got := s.Flags.List()[0]; !got.Cleared {
+		t.Errorf("expected the flag to be cleared, got %+v", got)
 	}
 }
 

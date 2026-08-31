@@ -77,9 +77,11 @@ accepted "for now" and will be revisited (“we'll change it later”).*
 - **Viewer (#490 grammar)**: the Admin group renders for viewers, and so
   do the pages in it a viewer may actually read — today Fleet alone.
   Read-only is declared once, in words, in the page header chip
-  ("READ-ONLY — ADMINS EDIT"); edit affordances and admin-only rows
-  (Run setup…) are **absent, never disabled**. Users, Tokens and
-  Entities stay admin-only and the grammar does not reach them: their
+  ("READ-ONLY" — it named a tier until #653 gave the product three, at
+  which point "ADMINS EDIT" was wrong in both directions); edit
+  affordances and admin-only rows (Run setup…) are **absent, never
+  disabled**. Users and Tokens stay admin-only and the grammar does not
+  reach them; Entities moved to the user tier with #653. Their
   data is gated server-side for reasons recorded in
   `internal/api/authz_matrix_test.go` — `GET /api/auth/users` is "the map
   of whose account is worth attacking", and `GET /api/tokens` "lists

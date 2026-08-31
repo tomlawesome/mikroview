@@ -7,10 +7,13 @@
   // Watchlist.svelte's "Suggestions" tab (#547, per the ratified
   // navigation record: "Suggestions is a tab of Watchlist") -- briefly
   // its own page after #544 dropped its rail row, now folded back in.
-  // Watchlist.svelte only ever mounts for an admin (see navGroups.ts),
-  // so this carries no separate gate of its own; the backend agrees --
-  // every /api/suggestions* route 403s a non-admin caller (see
-  // internal/api/authz_matrix_test.go).
+  // Watchlist.svelte's own nav entry stays admin-gated for now (#657's
+  // job to widen, not this file's) -- but accept/hide/unhide are #653's
+  // normal operational actions (user tier, not owner-level), so this
+  // page gates those three itself rather than inheriting whatever tier
+  // its host page ends up reachable at. Reset-everything below stays
+  // admin-only, same tier as before -- it is destructive across the
+  // whole watchlist, not a single candidate's own decision.
   //
   // Every candidate is one of three states, never a binary accept/reject:
   //
@@ -28,16 +31,21 @@
   // doc comment for why a separate soft-refresh control would be
   // redundant.
   //
-  // Admin-only throughout, same tier as Watchlist.svelte itself -- a
-  // candidate's justification names a specific rule or device, the same
-  // class of administrative network information.
+  // Accept/hide/unhide need can-edit (user or admin, #653); Reset
+  // everything below stays admin-only.
   import { onMount } from 'svelte'
+  import { authState } from '../lib/auth.svelte'
   import { suggestState } from '../lib/suggest.svelte'
   import type { Suggestion, SuggestionStatus } from '../lib/types'
 
   onMount(() => {
     suggestState.refresh()
   })
+
+  // See the doc comment above: accept/hide/unhide need can-edit,
+  // reset-everything stays admin-only.
+  const canEdit = $derived(authState.state === 'authenticated' && authState.canEdit)
+  const isAdmin = $derived(authState.state === 'authenticated' && authState.role === 'admin')
 
   let filter = $state<SuggestionStatus>('off')
 
@@ -154,9 +162,11 @@
         </button>
       {/each}
     </div>
-    <button class="nuke" disabled={resetting} onclick={resetEverything}>
-      {resetting ? 'Resetting…' : 'Reset everything (cannot be undone)'}
-    </button>
+    {#if isAdmin}
+      <button class="nuke" disabled={resetting} onclick={resetEverything}>
+        {resetting ? 'Resetting…' : 'Reset everything (cannot be undone)'}
+      </button>
+    {/if}
   </div>
 
   {#if actionError}
@@ -190,14 +200,14 @@
               <span class="device">via {c.routerDevice}</span>
             </div>
             <span class="row-actions">
-              {#if filter === 'off'}
+              {#if canEdit && filter === 'off'}
                 <button class="accept" disabled={acceptingId === c.id} onclick={() => accept(c)}>
                   {acceptingId === c.id ? 'Accepting…' : 'Accept'}
                 </button>
                 <button class="hide" disabled={hidingId === c.id} onclick={() => hide(c)}>
                   {hidingId === c.id ? 'Hiding…' : 'Hide'}
                 </button>
-              {:else if filter === 'hide'}
+              {:else if canEdit && filter === 'hide'}
                 <button class="unhide" disabled={unhidingId === c.id} onclick={() => unhide(c)}>
                   {unhidingId === c.id ? 'Unhiding…' : 'Unhide'}
                 </button>
