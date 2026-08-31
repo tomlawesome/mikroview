@@ -181,6 +181,18 @@
   --font-sans: -apple-system, 'Segoe UI', system-ui, Roboto, sans-serif;
   --font-mono: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
 
+  /* #721: the deck's roll rail (Deck.svelte's `.roll-rail`) is fixed
+     over the right edge of every scene; every card's content needs to
+     stay clear of it. One token, applied once in Deck.svelte's
+     `.card-body`, rather than each scene padding itself by hand (the
+     bug the issue was filed against). Value ported from round 30's own
+     gutter for this exact clearance -- docs/design/concepts/round-30/
+     the-whole.html's `.panel { inset: 100px 36px 40px }`, the docket's
+     flags/watchlist pane -- rather than invented; see Deck.svelte's
+     .card-body comment for why that scene's figure is the one to carry
+     forward for all of them. */
+  --deck-rail-gutter: 36px;
+
   color-scheme: dark;
   color: var(--fg);
   background: var(--bg);
