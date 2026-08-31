@@ -21,9 +21,14 @@ set -euo pipefail
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 cd "$REPO"
 . "$REPO/scripts/live-stores.sh"
+. "$REPO/scripts/live-slot.sh"
 
 DIR="$(mktemp -d)"
-PORT=19821
+# Port comes from the shared standalone allocator (live-slot.sh), not a
+# hardcoded value: that used to sit inside live-env.sh's per-checkout
+# band and collide with it (#660).
+PORT=$MV_STANDALONE_HTTP_PORT
+mv_require_free_port "$PORT" "the migrate-data check's server"
 SRC="$DIR/src"
 DST="$DIR/dst"
 PID=""

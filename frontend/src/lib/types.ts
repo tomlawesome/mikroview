@@ -172,7 +172,7 @@ export interface AuthSession {
   setupRequired: boolean
   authenticated: boolean
   username?: string
-  role?: 'admin' | 'user'
+  role?: 'admin' | 'user' | 'viewer'
   // False once the account signs in only through the identity provider.
   // Gates whether "Connect SSO" is offered -- there is nothing left to
   // convert otherwise.
@@ -186,7 +186,7 @@ export interface AuthSession {
 export interface UserSummary {
   id: string
   username: string
-  role: 'admin' | 'user'
+  role: 'admin' | 'user' | 'viewer'
   createdAt: string
   lastLogin?: string
   hasLocalPassword: boolean

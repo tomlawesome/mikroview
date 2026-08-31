@@ -95,7 +95,7 @@ describe('BottomBar single-page shortcut', () => {
     // Investigate is Metrics + admin-only Audit log -- a viewer sees only
     // Metrics, so tapping the group must go straight there rather than
     // raising a one-item sheet.
-    authState.role = 'user'
+    authState.role = 'viewer'
     render(BottomBar)
     screen.getByRole('button', { name: 'Investigate' }).click()
     flushSync()
@@ -200,7 +200,7 @@ describe('BottomBar half-sheet', () => {
 // #490's absent-never-disabled grammar, carried forward from NavRail.
 describe('BottomBar admin gating (#490)', () => {
   it('keeps admin-only groups/pages absent for a viewer rather than disabled', () => {
-    authState.role = 'user'
+    authState.role = 'viewer'
     render(BottomBar)
 
     // Investigate's only viewer-visible page is Metrics (Audit log is
@@ -211,10 +211,11 @@ describe('BottomBar admin gating (#490)', () => {
     expect(buttons.some((b) => b.hasAttribute('disabled'))).toBe(false)
   })
 
-  it('drops a group entirely once every one of its pages is admin-only', () => {
-    // Expect holds only Watchlist (admin: true) -- a viewer loses the
-    // whole group rather than seeing an empty heading or a disabled row.
-    authState.role = 'user'
+  it('drops a group entirely once every one of its pages is gated away', () => {
+    // Expect holds only Watchlist (edit: true since #653) -- a viewer
+    // loses the whole group rather than seeing an empty heading or a
+    // disabled row. The user tier still has it: see the #653 test below.
+    authState.role = 'viewer'
     render(BottomBar)
     expect(screen.queryByRole('button', { name: 'Expect' })).toBeNull()
   })
@@ -339,7 +340,7 @@ describe('BottomBar broken ring on the group', () => {
 
   it('shows no ring to a viewer, who has no Watchlist page for it to point at', () => {
     breakOne()
-    authState.role = 'user'
+    authState.role = 'viewer'
     const { container } = render(BottomBar)
     expect(screen.queryByRole('button', { name: 'Expect' })).toBeNull()
     expect(container.querySelector('.icon-slot.broken')).toBeNull()
