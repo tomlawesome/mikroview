@@ -1,9 +1,23 @@
 <script lang="ts">
   // SPDX-License-Identifier: AGPL-3.0-only
+  //
+  // Round 30's stream filter (#697, #700/#691): "one filter, two hands".
+  // The box (`.fbox`) carries the full typed grammar and is ALWAYS on
+  // screen -- clear every term and it says so instead of vanishing, so
+  // there is always a way in and no second filter control needs to
+  // exist. `bar ▸`/`◂ bar`, welded to the box's own left edge, unfurls
+  // round 8's thin strip out of that edge -- the same filter as named
+  // fields. Editing either writes the same appState.filters; clicking a
+  // value in a row (EventRow's own gesture) writes both. The span pills
+  // (15 m/1 h/24 h/14 d, #703) and the "holding N" reach words ride the
+  // right end of this same filter line -- moved here from SceneBar's
+  // top chrome, not duplicated (see SceneBar.svelte's own comment).
   import { appState } from '../lib/state.svelte'
   import { ACTION_FILTER_OPTIONS } from '../lib/actions'
   import { viewportState } from '../lib/viewport.svelte'
   import { retentionState, MAX_AGE_OPTIONS } from '../lib/retention.svelte'
+  import { buildFilterChips, type FilterChip } from '../lib/filterChips'
+  import { SPANS, describeReach, reachSeconds, spanAvailable, unavailableReason } from '../lib/spans'
 
   // Presets and Export to CSV are later additions round 29's ratified
   // filter row does not draw (#683 correction, 2026-08-31: "anything the
@@ -31,13 +45,13 @@
   let drawerOpen = $state(false)
 
   // Desktop's own fold state (#644, round 8 "accepted -- yeah much
-  // better!", round 23: "the filter row stays"). The box defaults
-  // folded and slides out into the thin bar on demand -- the round-7
-  // always-open fat panel this replaces was rejected verbatim ("no, you
-  // ignored my instruction, sliding out to the left, as a thin bar").
-  // A separate flag from drawerOpen: the two breakpoints render
-  // different chrome (a bottom-sheet drawer vs. an inline thin row) and
-  // must be independently togglable.
+  // better!", round 23: "the filter row stays"). The strip defaults
+  // folded back into the box and unfurls out of the box's own left edge
+  // on demand -- the round-7 always-open fat panel this replaces was
+  // rejected verbatim ("no, you ignored my instruction, sliding out to
+  // the left, as a thin bar"). A separate flag from drawerOpen: the two
+  // breakpoints render different chrome (a bottom-sheet drawer vs. an
+  // inline thin row) and must be independently togglable.
   let expanded = $state(false)
 
   function onKeydown(e: KeyboardEvent) {
@@ -45,6 +59,73 @@
     if (drawerOpen) drawerOpen = false
     if (expanded) expanded = false
   }
+
+  // The box's own chip summary (ported from SceneBar's retired `.search`,
+  // #697/#700): the same appState.filters, read as chips, always on
+  // screen rather than only while a filter existed -- see the comment on
+  // FILTERS_TRIGGER_ENABLED below for what that replaced.
+  const filterChips = $derived(buildFilterChips(appState.filters, appState.devices))
+
+  // Removes one chip's own term(s), leaving the rest of the filter
+  // untouched -- the mockup's own per-chip ⌫ ("drop this term"), not one
+  // combined clear-everything glyph. A compound chip (source/destination)
+  // clears every field it summarises together, so the chip and the field
+  // group it mirrors always agree on being empty or not.
+  function clearChip(chip: FilterChip) {
+    switch (chip.key) {
+      case 'device':
+        appState.setFilter('device', '')
+        break
+      case 'action':
+        appState.setFilter('action', '')
+        break
+      case 'chain':
+        appState.setFilter('chain', '')
+        break
+      case 'proto':
+        appState.setFilter('protocol', '')
+        break
+      case 'source':
+        appState.setFilter('srcQuery', '')
+        appState.setFilter('srcScope', '')
+        appState.setFilter('srcCountry', '')
+        break
+      case 'destination':
+        appState.setFilter('dstQuery', '')
+        appState.setFilter('dstScope', '')
+        appState.setFilter('dstCountry', '')
+        break
+      case 'port':
+        appState.setFilter('port', '')
+        break
+      case 'interface':
+        appState.setFilter('interface', '')
+        break
+      case 'rule':
+        appState.setFilter('rule', '')
+        break
+    }
+  }
+
+  // The stream's SPAN control (#703). It sets the same display window
+  // the mobile drawer's duration selector sets, so the two can never
+  // disagree about what the table is showing; a span reads as active
+  // only when the window matches it exactly, so a duration chosen in the
+  // drawer leaves every pill quiet rather than lighting the nearest one.
+  //
+  // Availability comes from the buffer's own reach, never from the
+  // configured retention: offering a fortnight over nine hours of buffer
+  // would answer with nine hours and call thirteen days quiet.
+  const reach = $derived(reachSeconds(appState.stats?.oldestHeld, appState.now))
+  const reachWords = $derived(describeReach(reach))
+
+  // The old standalone "Filters ▸" trigger this replaced (#697): round
+  // 29's box only ever displayed a filter and offered no way to make
+  // one, so the build kept this control mounted beside it as the only
+  // way in. Round 30's box is always on screen (see `.filterline`
+  // below), so there is always a way in and this second control has
+  // nothing left to do -- unmounted, not deleted, per #700/#691.
+  const FILTERS_TRIGGER_ENABLED: boolean = false
 </script>
 
 <svelte:window onkeydown={onKeydown} />
@@ -64,26 +145,95 @@
       <button class="clear" onclick={() => appState.resetFilters()}>Clear filters</button>
     {/if}
   </div>
-{:else if !expanded}
-  <!-- The folded box (#644): a quiet trigger standing in for the whole
-       bar, matching the mobile trigger's own "dot means something's
-       active" convention rather than inventing a second one. -->
-  <button
-    class="fold-trigger"
-    onclick={() => (expanded = true)}
-    aria-haspopup="true"
-    aria-expanded={expanded}
-  >
-    Filters ▸
-    {#if appState.hasActiveFilters}<span class="dot" aria-label="Filters active"></span>{/if}
-  </button>
+{:else}
+  <!-- Round 30's filter line (#697, #s5 `.filterline`): the toggle
+       welded to the box's own left edge, the box itself (always on
+       screen, never conditional on a filter existing), and the span
+       pills at the line's right end. This is the one way in to the
+       strip below -- FILTERS_TRIGGER_ENABLED's old second control is
+       retired, not duplicated beside this. -->
+  <div class="filterline">
+    <button
+      class="fb-open"
+      class:on={expanded}
+      onclick={() => (expanded = !expanded)}
+      aria-haspopup="true"
+      aria-expanded={expanded}
+      aria-controls="filterbar-strip"
+      title="The same filter, as named fields — slides out of the box's left edge"
+    >
+      {expanded ? '◂ bar' : 'bar ▸'}
+    </button>
+    <div class="fbox" class:empty={filterChips.length === 0} role="group" aria-label="The filter, as typed grammar">
+      {#if filterChips.length > 0}
+        <span class="fchips">
+          {#each filterChips as chip (chip.key)}
+            <span class="chip"
+              >{chip.label}:<em>{chip.value}</em><button
+                type="button"
+                class="chip-x"
+                onclick={() => clearChip(chip)}
+                title="drop this term"
+                aria-label="Remove the {chip.label} filter"
+              >
+                ⌫
+              </button></span
+            >
+          {/each}
+        </span>
+        <span class="fbtype">type a term, or click a value in a row</span>
+      {:else}
+        <span class="fbtype">no filter — every line, as it arrived. type a term, or click a value in a row</span>
+      {/if}
+    </div>
+    <span class="spans" role="group" aria-label="How far back the stream shows — {reachWords}">
+      {#each SPANS as span (span.key)}
+        {@const available = spanAvailable(span, reach)}
+        <button
+          type="button"
+          class="span"
+          class:on={retentionState.maxAgeSeconds === span.seconds}
+          disabled={!available}
+          aria-pressed={retentionState.maxAgeSeconds === span.seconds}
+          title={available ? `Show the last ${span.label}` : unavailableReason(span, reach)}
+          onclick={() => retentionState.set(span.seconds)}>{span.label}</button
+        >
+      {/each}
+      <!-- What the buffer really holds, beside the control it qualifies.
+           Not a description of the interface (round 30 struck those) but
+           the same fact the unavailable spans turn on, said once in
+           words instead of only on hover. -->
+      <span class="reach">{reachWords}</span>
+    </span>
+  </div>
+
+  {#if FILTERS_TRIGGER_ENABLED && !expanded}
+    <!-- The pre-round-30 folded box (#644): a quiet trigger standing in
+         for the whole bar. Retired by #697 -- the box above is always on
+         screen now, so this second way in is unmounted (see
+         FILTERS_TRIGGER_ENABLED's own comment), never deleted. -->
+    <button
+      class="fold-trigger"
+      onclick={() => (expanded = true)}
+      aria-haspopup="true"
+      aria-expanded={expanded}
+    >
+      Filters ▸
+      {#if appState.hasActiveFilters}<span class="dot" aria-label="Filters active"></span>{/if}
+    </button>
+  {/if}
 {/if}
 
 {#if (viewportState.isMobile && drawerOpen) || (!viewportState.isMobile && expanded)}
   {#if viewportState.isMobile}
     <div class="scrim" onclick={() => (drawerOpen = false)} role="presentation"></div>
   {/if}
-  <div class="bar" class:drawer={viewportState.isMobile} class:thin={!viewportState.isMobile}>
+  <div
+    class="bar"
+    id="filterbar-strip"
+    class:drawer={viewportState.isMobile}
+    class:thin={!viewportState.isMobile}
+  >
     {#if viewportState.isMobile}
       <div class="handle"></div>
       <div class="drawer-header">
@@ -262,7 +412,7 @@
     </div>
 
     {#if appState.hasActiveFilters && !viewportState.isMobile}
-      <button class="tf-clear" onclick={() => appState.resetFilters()} aria-label="Clear all filters" title="Clear all filters">×</button>
+      <button class="tf-clear" onclick={() => appState.resetFilters()} aria-label="Clear all filters" title="Clear every term">× clear</button>
     {/if}
 
     <!-- Also moved off the retired hamburger (#544). Phone-width only:
@@ -286,12 +436,155 @@
       <!-- Fold slides the bar back into the box (#644, round 8) -- the
            typed grammar/click model stays appState.filters either way,
            so nothing here is lost by folding, only hidden. -->
-      <button class="tf-fold" onclick={() => (expanded = false)} aria-label="Fold filters back into the box" title="Fold filters back into the box">▸</button>
+      <button class="tf-fold" onclick={() => (expanded = false)} aria-label="Fold filters back into the box" title="Fold filters back into the box">fold ▸</button>
     {/if}
   </div>
 {/if}
 
 <style>
+  /* Deck.svelte mounts the stream's own card-body as `<Whisper />
+     <FilterBar /> <LiveTable />`, in that document order (untouched
+     here -- Deck.svelte is out of scope for this fidelity pass). Round
+     30's own order is filter line -> bar -> whisper -> table (#697, "the
+     top is a flow column"), so every top-level element this component
+     renders sits ahead of Whisper's own root in the shared
+     `.card-body` flex column via `order` -- Whisper (unordered, default
+     0) then keeps its place ahead of LiveTable (also default 0) purely
+     from DOM order, so nothing there needs to change either. */
+  .filterline,
+  .fold-trigger,
+  .bar,
+  .mobile-row {
+    order: -1;
+  }
+
+  /* Round 30's filter line (#697, #s5 `.filterline`): the toggle, the
+     always-on box, and the span pills, left-to-right on one row. */
+  .filterline {
+    display: flex;
+    gap: 18px;
+    align-items: center;
+  }
+
+  /* Welded to the box's own left edge, so the strip visibly slides out
+     of the box rather than appearing beside it. */
+  .fb-open {
+    flex: none;
+    font: 600 10.5px var(--font-mono);
+    letter-spacing: 0.06em;
+    color: var(--accent);
+    background: transparent;
+    border: 1px solid var(--border);
+    border-right: 0;
+    border-radius: 7px 0 0 7px;
+    padding: 6px 11px;
+    cursor: pointer;
+    white-space: nowrap;
+  }
+
+  .fb-open:hover {
+    border-color: var(--fg-muted);
+    color: var(--fg);
+  }
+
+  .fb-open.on {
+    color: var(--fg);
+    background: var(--bg-elevated);
+  }
+
+  .fbox {
+    flex: 1;
+    display: flex;
+    gap: 12px;
+    align-items: center;
+    flex-wrap: wrap;
+    min-height: 28px;
+    padding: 4px 12px;
+    background: var(--bg-elevated);
+    border: 1px solid var(--border);
+    border-radius: 0 7px 7px 0;
+    font: 12px var(--font-mono);
+    color: var(--fg-muted);
+  }
+
+  .fchips {
+    display: flex;
+    gap: 12px;
+    flex-wrap: wrap;
+  }
+
+  .chip {
+    display: inline-flex;
+    gap: 5px;
+    align-items: baseline;
+    white-space: nowrap;
+  }
+
+  .chip em {
+    font-style: normal;
+    color: var(--accent);
+  }
+
+  .chip-x {
+    background: transparent;
+    border: none;
+    color: var(--fg-dim);
+    font-size: 12px;
+    cursor: pointer;
+    padding: 0;
+  }
+
+  .chip-x:hover {
+    color: var(--alarm);
+  }
+
+  /* The empty box still says what it is (#697) -- round 29's box only
+     rendered once a filter existed, which is exactly why the build kept
+     a second "Filters ▸" control alive beside it. */
+  .fbtype {
+    color: var(--fg-dim);
+  }
+
+  /* Round 30's `.spans`: quiet pills, the chosen one in full ink. A span
+     the buffer cannot cover is dimmed and unclickable rather than
+     hidden -- the operator should see that a fortnight exists and is
+     not held, not wonder where it went. */
+  .spans {
+    flex: none;
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+  }
+
+  .span {
+    background: transparent;
+    border: none;
+    padding: 0;
+    font: 500 11px var(--font-sans);
+    color: var(--fg-dim);
+    cursor: pointer;
+  }
+
+  .span:hover:not(:disabled) {
+    color: var(--fg);
+  }
+
+  .span.on {
+    color: var(--fg);
+  }
+
+  .span:disabled {
+    color: var(--fg-dim);
+    opacity: 0.4;
+    cursor: not-allowed;
+  }
+
+  .reach {
+    font: 400 10.5px var(--font-sans);
+    color: var(--fg-dim);
+    margin-left: 2px;
+  }
+
   .mobile-row {
     display: flex;
     align-items: center;
