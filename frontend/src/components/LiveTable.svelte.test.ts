@@ -11,6 +11,15 @@ import { groupModeState } from '../lib/groupMode.svelte'
 import { flagsState } from '../lib/flags.svelte'
 import { fallState } from '../lib/fall.svelte'
 import { MAX_RENDERED_ROWS } from '../lib/constants'
+// Vite's `?raw` import, the same device Topography.svelte.test.ts uses
+// for its own CSS-token assertions -- not a Node fs read, so this stays
+// type-checkable under the browser-only app tsconfig. Needed below
+// because vitest.config.ts leaves `test.css` at its default `false`:
+// jsdom never applies this component's stylesheet, so a
+// getComputedStyle() assertion on position/overflow would pass no
+// matter what the rule actually said. Reading the source text is the
+// only way to prove the sticky head's supporting CSS, not just assume it.
+import componentSource from './LiveTable.svelte?raw'
 
 // jsdom (unlike a real browser) has no window.matchMedia -- LiveTable
 // pulls in lib/viewport.svelte.ts, whose ViewportState singleton calls
@@ -1047,5 +1056,45 @@ describe('the foot line', () => {
     flushSync()
 
     expect(container.querySelector('.foot-legend')).toBeNull()
+  })
+})
+
+describe('the stream is the scene, not a boxed widget (#733)', () => {
+  it('drops the card look from .table-wrap: no border, no radius, no separate panel tint', () => {
+    const rule = componentSource.match(/\.table-wrap\s*\{([^}]*)\}/)
+    expect(rule).toBeTruthy()
+    const decls = rule![1]
+    expect(decls).not.toMatch(/border(?!-box):/)
+    expect(decls).not.toMatch(/border-radius/)
+    expect(decls).not.toMatch(/--bg-elevated/)
+    expect(decls).toMatch(/background:\s*var\(--bg\)/)
+  })
+
+  it('leaves .body -- not .table-wrap -- as the only overflow ancestor between the head and its scroll range', () => {
+    // position: sticky tracks the nearest ancestor whose own overflow is
+    // not visible. That has to stay .body: it's the real, intentional
+    // scroll container for the sideways scroll of the table's 1622px of
+    // fixed columns (#729), and it's also the container the sticky
+    // header cells actually stick against. Giving .table-wrap (an
+    // ancestor of .body) any overflow other than visible again would add
+    // a second, pointless clip outside the real scrollport -- the same
+    // way the metrics head lost its stick earlier this round (see
+    // MetricsTable.svelte's own .table-wrap comment).
+    const wrapRule = componentSource.match(/\.table-wrap\s*\{([^}]*)\}/)
+    const bodyRule = componentSource.match(/\n\s*\.body\s*\{([^}]*)\}/)
+    expect(wrapRule).toBeTruthy()
+    expect(bodyRule).toBeTruthy()
+    expect(wrapRule![1]).not.toMatch(/overflow\s*:/)
+    expect(bodyRule![1]).toMatch(/overflow:\s*auto/)
+  })
+
+  it('keeps the header cell sticky and opaque, against the scene\'s own ground rather than a panel tint', () => {
+    const headerRule = componentSource.match(/\.header-cell\s*\{([^}]*)\}/)
+    expect(headerRule).toBeTruthy()
+    const decls = headerRule![1]
+    expect(decls).toMatch(/position:\s*sticky/)
+    expect(decls).toMatch(/top:\s*0/)
+    expect(decls).toMatch(/background:\s*var\(--bg\)/)
+    expect(decls).not.toMatch(/--bg-elevated/)
   })
 })
