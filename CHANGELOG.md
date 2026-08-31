@@ -312,6 +312,30 @@ rewritten.
 
 ### Changed
 
+- **The docket's flags tab is the ratified round-29 table, not a card
+  grid** (#688). One row per open flag -- flag · where · evidence ·
+  count · age -- each wearing its flag type's own family ink as a left
+  stripe and mark, and each opening as a drawer directly beneath itself
+  rather than expanding a card. The drawer holds the plain-English
+  headline and story, the episode's shape drawn as a tick strip, the
+  matched log lines, and the two ratified actions: open in stream, and
+  clear with a note. Every column still sorts by its head and filters
+  from the quiet dashed row beneath it, and `where` still opens the
+  topography at its sensible level. Two earlier passes put ratified
+  language inside the old card instead of building the row-and-drawer
+  structure the record draws; this ports the record's own markup and CSS,
+  so the flags and watchlist tabs now read as one surface.
+
+  Things the round-29 scene draws no home for have been taken off this
+  tab rather than squeezed into it, and are recorded on #688 to be
+  placed one at a time: the Expected/Noise/Real verdict row and its
+  undo, per-flag confidence, the Exclusions tab (and the "permanently
+  clear" action that fed it), campaign grouping of flags sharing a
+  source, the 1/2/3-column density picker, the "Recently cleared" list,
+  the "Active flags by type" summary, the per-flag abuse check, the
+  reputation panel and the ports/hosts/NAT evidence rows. None of the
+  code, API or stores behind them changed -- only what this tab shows.
+
 - **The live table now shows the ratified nine columns, and NAT stopped
   being one of them** (#644). Stream's table is rebuilt around time
   (with milliseconds), action, source name, source address, destination
