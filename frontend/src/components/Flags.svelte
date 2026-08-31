@@ -15,6 +15,11 @@
   import { exclusionsState } from '../lib/exclusions.svelte'
   import { compareNumeric, compareText, matchesFilter } from '../lib/sortFilter'
   import type { SortDir } from '../lib/sortFilter'
+  import { headlineFor, storyFor } from '../lib/flagNarrative'
+  import { episodeShapeFor } from '../lib/episodeShape'
+  import { zonesState } from '../lib/zones.svelte'
+  import { parseCidr, addressInCidr } from '../lib/addressMatch'
+  import { topologyNavState } from '../lib/topologyNav.svelte'
   import ReputationDetails from './ReputationDetails.svelte'
   import BarList from './BarList.svelte'
   import IpInvestigateButton from './IpInvestigateButton.svelte'
@@ -472,10 +477,63 @@
     appState.view = 'live'
   }
 
-  async function clear(id: string) {
+  // "where" (#678): every named where is a link into the topography at
+  // its sensible level, not the stream -- filterToTarget above is what
+  // "open in stream" still uses. extractSourceIp already knows which
+  // target shapes are a single IP (see its own doc comment); when one
+  // resolves to a zone mikroview has actually observed, this hands that
+  // zone/host off to Topography.svelte's own reach (see
+  // topologyNav.svelte.ts) so the map opens straight into it. A target
+  // with no resolvable IP (a rule label, "global", a MAC, a port) or one
+  // outside every known zone still lands on the map itself -- the map's
+  // own "degrades honestly" stance, never a wrong guess.
+  function openWhere(f: Flag) {
+    const ip = extractSourceIp(f.target)
+    if (ip) {
+      const zone = zonesState.zones.find((z) => {
+        if (!z.cidr) return false
+        const cidr = parseCidr(z.cidr)
+        return cidr ? addressInCidr(ip, cidr) : false
+      })
+      if (zone) {
+        const host = zone.hosts.find((h) => h.ip === ip)?.label ?? ip
+        topologyNavState.requestHost(zone.id, host, ip)
+      }
+    }
+    appState.view = 'topography'
+  }
+
+  // "clear with a note" (#678): the note is the reason the clear
+  // happened, and #679's ruling put it in the existing admin-mutation
+  // audit log rather than a second record -- Clear now opens this
+  // one-at-a-time inline capture (same "at most one open" shape
+  // openClearMenuFor above already uses) instead of clearing
+  // immediately.
+  let noteFor: string | null = $state(null)
+  let noteDraft = $state('')
+
+  function openNote(id: string) {
+    noteFor = id
+    noteDraft = ''
+    openClearMenuFor = null
+  }
+
+  function cancelNote() {
+    noteFor = null
+    noteDraft = ''
+  }
+
+  function confirmClear(id: string) {
+    const note = noteDraft.trim()
+    noteFor = null
+    noteDraft = ''
+    clear(id, note || undefined)
+  }
+
+  async function clear(id: string, note?: string) {
     error = null
     try {
-      await flagsState.clear(id)
+      await flagsState.clear(id, note)
     } catch (err) {
       reportFailure('Could not clear this flag', err)
     }
@@ -597,7 +655,7 @@
           </span>
         {/if}
         {#if isFilterable(f)}
-          <button class="target" onclick={() => filterToTarget(f)} title="Filter the live view to {f.target}">
+          <button class="target" onclick={() => openWhere(f)} title="Open {f.target} in the topography">
             {f.target}
           </button>
         {:else}
@@ -677,6 +735,13 @@
              card's own left edge, not a second indented border. -->
         <div class="dwr">
           <div class="dcol">
+            <!-- The headline and story (#678): plain-English writing
+                 generated per flag type from the evidence the flag
+                 already carries, not the raw evidence itself -- the
+                 headline stands alone as the drawer's first line, the
+                 story beneath it in sentences. See flagNarrative.ts. -->
+            <p class="headline">{headlineFor(f)}</p>
+            <p class="story">{storyFor(f)}</p>
             {#if f.evidence?.ports?.length}
               <div class="ev-row">
                 <span class="ev-label">Ports touched</span>
@@ -711,16 +776,7 @@
           </div>
           <div class="side">
             <span class="lab">the episode</span>
-            {#if ep === 'loading'}
-              <p class="ep-note">fetching the events…</p>
-            {:else if ep === 'error'}
-              <p class="ep-note">could not fetch the events</p>
-            {:else if Array.isArray(ep) && ep.length === 0}
-              <!-- Raw events are only retained in the buffer; an old
-                   flag honestly says the window has moved on rather
-                   than drawing an empty strip. -->
-              <p class="ep-note">no matching events still buffered</p>
-            {:else if Array.isArray(ep)}
+            {#if Array.isArray(ep) && ep.length > 0}
               <svg
                 viewBox="0 0 260 34"
                 preserveAspectRatio="none"
@@ -731,23 +787,60 @@
                   <line x1={x} y1="6" x2={x} y2="28" stroke="var(--ft)" stroke-width="2.5" stroke-linecap="round" />
                 {/each}
               </svg>
-              <span class="span">{ep.length} events · ±30 m around last seen</span>
+            {/if}
+            <!-- The episode's shape (#678): still arriving, stopped, or
+                 intermittent -- derived from the flag's own timestamps
+                 (the richer per-event episode once it's fetched, the
+                 flag's firstSeen/lastSeen before then). See
+                 episodeShape.ts. -->
+            <span class="span">{episodeShapeFor(f, ep, appState.now)}</span>
+            {#if ep === 'loading'}
+              <p class="ep-note">fetching the events…</p>
+            {:else if ep === 'error'}
+              <p class="ep-note">could not fetch the events</p>
+            {:else if Array.isArray(ep) && ep.length === 0}
+              <!-- Raw events are only retained in the buffer; an old
+                   flag honestly says the window has moved on rather
+                   than drawing an empty strip. -->
+              <p class="ep-note">no matching events still buffered</p>
             {/if}
           </div>
           <div class="dwr-acts">
             {#if isFilterable(f)}
               <button class="act" onclick={() => filterToTarget(f)}>open in stream ▸</button>
             {/if}
-            {#if isAdminOrOpen}
-              <!-- Split button: the main segment is exactly today's Clear.
-                   The arrow segment is admin-only, matching the backend's
-                   own gate on POST /api/flags/{id}/clear-permanent -- a
-                   permanent exclusion suppresses detection until someone
-                   undoes it, unlike the plain Clear beside it. See the
-                   user-tier branch below for what a user gets, and #653
-                   for why a viewer gets nothing here. -->
+            {#if noteFor === f.id}
+              <!-- "clear with a note" (#678): the note is the reason the
+                   clear happened, recorded on the same admin-mutation
+                   audit entry the clear itself writes (#679's ruling).
+                   Optional -- Clear with an empty note is exactly
+                   today's plain clear. -->
+              <div class="clear-note" role="group" aria-label="Clear with a note">
+                <input
+                  type="text"
+                  class="clear-note-input"
+                  placeholder="add a note (optional)"
+                  aria-label="Note for clearing this flag"
+                  bind:value={noteDraft}
+                  onkeydown={(e) => {
+                    if (e.key === 'Enter') confirmClear(f.id)
+                    if (e.key === 'Escape') cancelNote()
+                  }}
+                />
+                <button class="act" onclick={() => confirmClear(f.id)}>Clear</button>
+                <button class="act quiet-act" onclick={cancelNote}>Cancel</button>
+              </div>
+            {:else if isAdminOrOpen}
+              <!-- Split button: the main segment opens the note capture
+                   above. The arrow segment is admin-only, matching the
+                   backend's own gate on POST /api/flags/{id}/clear-
+                   permanent -- a permanent exclusion suppresses
+                   detection until someone undoes it, unlike the plain
+                   Clear beside it. See the user-tier branch below for
+                   what a user gets, and #653 for why a viewer gets
+                   nothing here. -->
               <div class="split-clear" class:menu-open={openClearMenuFor === f.id}>
-                <button class="clear split-main" onclick={() => clear(f.id)}>Clear</button>
+                <button class="clear split-main" onclick={() => openNote(f.id)}>Clear</button>
                 <button
                   class="clear split-arrow"
                   aria-haspopup="true"
@@ -778,7 +871,7 @@
                    Clear with no arrow, rather than a disabled one that
                    advertises an action they cannot take (#198). A viewer
                    gets neither. -->
-              <button class="clear" onclick={() => clear(f.id)}>Clear</button>
+              <button class="clear" onclick={() => openNote(f.id)}>Clear</button>
             {/if}
           </div>
         </div>
@@ -1344,6 +1437,25 @@
     min-width: 0;
   }
 
+  /* The headline (#678): stands alone as the drawer's first line --
+     bolder and a touch larger than the story beneath it, but still the
+     card's own body colour, never the accent (the stripe already marks
+     this as belonging to its flag type). */
+  .headline {
+    margin: 0;
+    font-size: 14px;
+    font-weight: 700;
+    color: var(--fg);
+  }
+
+  /* The story (#678): the prose beneath the headline, in sentences. */
+  .story {
+    margin: 0;
+    font-size: 13px;
+    line-height: 1.45;
+    color: var(--fg-muted);
+  }
+
   .side {
     min-width: 0;
   }
@@ -1370,6 +1482,15 @@
     font-family: var(--font-mono);
     font-size: 10.5px;
     color: var(--fg-dim);
+  }
+
+  /* The episode's shape (#678) is the .side column's own headline text
+     -- shown whether or not the tick strip above it has anything to
+     draw, so it needs its own top space rather than relying on the
+     svg's margin (which is absent while ep hasn't resolved yet). */
+  .side .span {
+    display: block;
+    margin-top: 6px;
   }
 
   .ep-note {
@@ -1405,6 +1526,37 @@
 
   .act:hover {
     border-color: var(--accent);
+  }
+
+  /* "clear with a note" (#678): the inline capture that replaces the
+     Clear/split-Clear button once opened -- one row, sized to sit in
+     the same .dwr-acts foot the buttons it replaces already live in. */
+  .clear-note {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex: 1;
+    min-width: 180px;
+  }
+
+  .clear-note-input {
+    flex: 1;
+    min-width: 0;
+    background: transparent;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    padding: 4px 12px;
+    font-size: 12px;
+    color: var(--fg);
+    outline: none;
+  }
+
+  .clear-note-input:focus {
+    border-color: var(--accent);
+  }
+
+  .quiet-act {
+    color: var(--fg-muted);
   }
 
   /* The honest cleared state (round 26). */

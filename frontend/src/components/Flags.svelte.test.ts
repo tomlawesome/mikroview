@@ -16,12 +16,14 @@ vi.mock('../lib/api', () => ({
   deleteFlagVerdict: vi.fn(),
   fetchExclusions: vi.fn(async () => []),
   removeExclusion: vi.fn(),
+  fetchFlagEpisode: vi.fn(async () => ({ events: [], hasMore: false, windowStart: '2026-01-01T00:00:00Z', serverTime: '2026-01-01T00:00:00Z' })),
 }))
 
-import { deleteFlagVerdict, fetchExclusions, setFlagVerdict } from '../lib/api'
+import { clearFlag, deleteFlagVerdict, fetchExclusions, fetchFlagEpisode, setFlagVerdict } from '../lib/api'
 import { flagsState } from '../lib/flags.svelte'
 import { exclusionsState } from '../lib/exclusions.svelte'
 import { authState } from '../lib/auth.svelte'
+import { appState } from '../lib/state.svelte'
 import type { Exclusion, Flag } from '../lib/types'
 
 // jsdom has no window.matchMedia -- Flags.svelte pulls in
@@ -420,5 +422,176 @@ describe('Flags tiers (#653)', () => {
     // The permanent-clear arrow stays admin-only -- a user gets the
     // plain Clear button with no split menu beside it.
     expect(screen.queryByRole('button', { name: 'More clear options for this flag' })).toBeNull()
+  })
+})
+
+// #678: the drawer's headline, story and episode shape -- generated per
+// flag type from the evidence the flag already carries (flagNarrative.ts,
+// episodeShape.ts each have their own direct unit tests; these confirm
+// the component actually wires them in, not just that the functions work
+// in isolation).
+describe('the drawer: headline, story and episode shape (#678)', () => {
+  beforeEach(() => {
+    vi.resetAllMocks()
+    vi.mocked(fetchExclusions).mockResolvedValue([])
+    vi.mocked(fetchFlagEpisode).mockResolvedValue({ events: [], hasMore: false, windowStart: '2026-01-01T00:00:00Z', serverTime: '2026-01-01T00:00:00Z' })
+    exclusionsState.list = []
+    authState.state = 'authenticated'
+    authState.role = 'admin'
+    flagsState.list = [
+      testFlag({
+        type: 'port_scan',
+        target: '198.51.100.77',
+        evidence: { ports: [1000, 1001, 1002] },
+        firstSeen: '2026-01-01T13:41:00Z',
+        lastSeen: '2026-01-01T13:41:40Z',
+      }),
+    ]
+  })
+
+  async function openDrawer() {
+    render(Flags)
+    flushSync()
+    await fireEvent.click(screen.getByRole('button', { name: /the drawer for this flag/ }))
+    await Promise.resolve()
+    flushSync()
+  }
+
+  it('shows the generated headline and story, not just the raw evidence line', async () => {
+    await openDrawer()
+
+    expect(document.querySelector('.headline')?.textContent).toBe('One source, three doors.')
+    expect(document.querySelector('.story')?.textContent).toContain('198.51.100.77')
+  })
+
+  it('shows a non-empty episode shape derived from the flag before the episode fetch resolves richer data', async () => {
+    await openDrawer()
+
+    const shape = document.querySelector('.side .span')?.textContent ?? ''
+    expect(shape.length).toBeGreaterThan(0)
+  })
+
+  it('once the real episode resolves, the shape reflects its actual per-event timestamps', async () => {
+    // Five events inside a forty-second window -- port_scan's own
+    // shape (see episodeShape.test.ts): short burst, second precision.
+    vi.mocked(fetchFlagEpisode).mockResolvedValue({
+      events: [0, 8, 16, 24, 40].map((s, i) => ({
+        id: i,
+        time: `2026-01-01T13:41:${String(s).padStart(2, '0')}Z`,
+        deviceId: 'd1',
+        sourceIp: '198.51.100.77',
+        action: 'drop' as const,
+        ruleLabel: 'wan-in-drop',
+        chain: 'input',
+        raw: '',
+      })),
+      hasMore: false,
+      windowStart: '2026-01-01T13:40:00Z',
+      serverTime: '2026-01-01T13:42:00Z',
+    })
+    await openDrawer()
+    await Promise.resolve()
+    flushSync()
+
+    expect(document.querySelector('.side .span')?.textContent).toMatch(/→/)
+  })
+})
+
+// #678's third item: "where" is a link into the topography at its
+// sensible level, not the live stream -- filterToTarget/appState.view =
+// 'live' (still used by "open in stream" in the drawer) is no longer
+// what the where value itself does.
+describe('"where" links into the topography, not the stream (#678)', () => {
+  beforeEach(() => {
+    vi.resetAllMocks()
+    vi.mocked(fetchExclusions).mockResolvedValue([])
+    exclusionsState.list = []
+    authState.state = 'authenticated'
+    authState.role = 'admin'
+    flagsState.list = [testFlag({ target: '198.51.100.77' })]
+    appState.view = 'flags'
+  })
+
+  it('clicking the where value opens the topography rather than the live stream', async () => {
+    render(Flags)
+    flushSync()
+
+    await fireEvent.click(screen.getByRole('button', { name: '198.51.100.77' }))
+    flushSync()
+
+    expect(appState.view).toBe('topography')
+  })
+})
+
+// #678/#679: the note is the reason the clear happened, and rides along
+// on the same clearFlag call the audit log now records it from (see
+// internal/api's handleFlagsClear).
+describe('clear with a note (#678)', () => {
+  beforeEach(() => {
+    vi.resetAllMocks()
+    vi.mocked(fetchExclusions).mockResolvedValue([])
+    vi.mocked(fetchFlagEpisode).mockResolvedValue({ events: [], hasMore: false, windowStart: '2026-01-01T00:00:00Z', serverTime: '2026-01-01T00:00:00Z' })
+    exclusionsState.list = []
+    authState.state = 'authenticated'
+    authState.role = 'user'
+    flagsState.list = [testFlag()]
+  })
+
+  async function openDrawer() {
+    render(Flags)
+    flushSync()
+    await fireEvent.click(screen.getByRole('button', { name: /the drawer for this flag/ }))
+    await Promise.resolve()
+    flushSync()
+  }
+
+  it('clicking Clear opens a note field instead of clearing immediately', async () => {
+    await openDrawer()
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Clear' }))
+    flushSync()
+
+    expect(screen.getByLabelText('Note for clearing this flag')).toBeTruthy()
+    expect(clearFlag).not.toHaveBeenCalled()
+  })
+
+  it('typing a note and confirming clears with that note', async () => {
+    await openDrawer()
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Clear' }))
+    flushSync()
+    await fireEvent.input(screen.getByLabelText('Note for clearing this flag'), {
+      target: { value: 'expected, speed test' },
+    })
+    await fireEvent.click(screen.getByRole('button', { name: 'Clear' }))
+    await Promise.resolve()
+    flushSync()
+
+    expect(clearFlag).toHaveBeenCalledWith('f1', 'expected, speed test')
+  })
+
+  it('confirming with an empty note still clears, with no note recorded', async () => {
+    await openDrawer()
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Clear' }))
+    flushSync()
+    await fireEvent.click(screen.getByRole('button', { name: 'Clear' }))
+    await Promise.resolve()
+    flushSync()
+
+    expect(clearFlag).toHaveBeenCalledWith('f1', undefined)
+  })
+
+  it('Cancel discards the note and leaves the flag open, uncleared', async () => {
+    await openDrawer()
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Clear' }))
+    flushSync()
+    await fireEvent.input(screen.getByLabelText('Note for clearing this flag'), { target: { value: 'nope' } })
+    await fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+    flushSync()
+
+    expect(clearFlag).not.toHaveBeenCalled()
+    expect(screen.getByRole('button', { name: 'Clear' })).toBeTruthy()
   })
 })
