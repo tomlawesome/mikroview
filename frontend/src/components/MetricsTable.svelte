@@ -189,11 +189,45 @@
 </div>
 
 <style>
+  /* #732: the totals column moves down the left side, the table taking
+     the remaining width, so reading the scene stays one vertical
+     motion (the fall, the stream and the docket all scroll the same
+     way). The column is a plain grid item, not `position: sticky` --
+     it scrolls with the page, which is the owner's own reason for
+     asking. Below the breakpoint it falls back to stacking above the
+     table, same as before this issue. */
   .table-view {
-    display: flex;
-    flex-direction: column;
+    display: grid;
+    grid-template-columns: minmax(280px, 320px) 1fr;
+    align-items: start;
     gap: 18px;
     min-width: 0;
+  }
+
+  .totals {
+    grid-column: 1;
+    min-width: 0;
+  }
+
+  .figures {
+    grid-column: 2;
+    min-width: 0;
+  }
+
+  .saved {
+    grid-column: 1 / -1;
+  }
+
+  @media (max-width: 860px) {
+    .table-view {
+      grid-template-columns: 1fr;
+    }
+
+    .totals,
+    .figures,
+    .saved {
+      grid-column: 1;
+    }
   }
 
   h3 {
