@@ -403,7 +403,6 @@
 
   const allBands = $derived(bandsData)
   const darkBands = $derived(allBands.filter((b) => b.coverage === 'dark'))
-  const isCalm = $derived(!windowLoading && !windowError && allBands.length > 0 && darkBands.length === 0)
 
   // ── Rig layout: every band gets the mockup's 160-unit slot ──────────
   interface BandSlot {
@@ -632,8 +631,6 @@
       <button type="button" class="att dark" onclick={() => openInStream(darkBands[0])}>
         <i></i>{darkBands.length} dark boundar{darkBands.length === 1 ? 'y' : 'ies'} — nothing logged
       </button>
-    {:else if isCalm}
-      <span class="att calm"><i></i>every band sounds like itself</span>
     {/if}
   </span>
 
@@ -1002,12 +999,6 @@
   .att.dark i {
     background: transparent;
     border: 1px solid var(--o-drop);
-  }
-  .att.calm {
-    color: var(--o-ok);
-  }
-  .att.calm i {
-    background: var(--o-ok);
   }
 
   .state-msg {
