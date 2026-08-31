@@ -23,6 +23,17 @@ import (
 	"sync"
 	"syscall"
 	"time"
+	// The IANA zone database, compiled in as a fallback (#680). A watch
+	// window is stored as a zone name, and Go only falls back to this copy
+	// when the host has no zoneinfo of its own -- so where tzdata exists
+	// (including the distroless image this ships in) nothing changes.
+	//
+	// It is here because of what the alternative failure looks like: a
+	// window whose zone will not load records no nights at all, silently.
+	// The watch would keep saying "watching" while its nightly memory
+	// quietly stopped filling, which is precisely the shape of failure
+	// this project refuses -- an absence of ours that reads as calm.
+	_ "time/tzdata"
 
 	"github.com/tomlawesome/mikroview/internal/api"
 	"github.com/tomlawesome/mikroview/internal/audit"
@@ -1008,8 +1019,11 @@ func main() {
 			State:    engineState,
 		},
 		Expectations: engine.ExpectationDeps{
-			Members:      routerState,
-			Sink:         engine.MatchlogSink(matchLog),
+			Members: routerState,
+			// The night recorder is the definitions store itself: a
+			// match that reaches the log marks the watch night it landed
+			// in as kept, on the entry (#680).
+			Sink:         engine.MatchlogSinkWithNights(matchLog, definitions),
 			Observations: definitions,
 		},
 		Flags:      fs,

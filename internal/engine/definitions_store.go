@@ -81,6 +81,13 @@ type DefinitionsStore struct {
 	// this layer stores bytes rather than decoded Definition values.
 	raw map[string]json.RawMessage
 
+	// watchingSince is when this process opened the store, and so the
+	// earliest watch window it could have observed end to end. Read by
+	// the nightly fill (definitions_nights.go) to keep a night nobody was
+	// running for out of the "empty" bucket -- see
+	// watchlist.Observation.
+	watchingSince time.Time
+
 	// onChange is notified after any change to what this store's
 	// definitions evaluate -- see SetOnChange
 	// (definitions_expectations.go). Guarded by mu for writes, read under
@@ -111,7 +118,7 @@ func OpenDefinitionsStore(path string) (*DefinitionsStore, error) {
 // this store is ever opened for the first time -- see that function's
 // own doc comment for why the two are kept separate.
 func OpenDefinitionsStoreWithBackend(b persist.Backend) (*DefinitionsStore, error) {
-	s := &DefinitionsStore{raw: make(map[string]json.RawMessage)}
+	s := &DefinitionsStore{raw: make(map[string]json.RawMessage), watchingSince: time.Now()}
 
 	wb, _, err := persist.OpenWriteBehind(context.Background(), b, "the definitions store", persist.WriteBehindOptions{
 		MinInterval: definitionsPersistMinInterval,
