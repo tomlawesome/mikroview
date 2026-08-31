@@ -57,6 +57,19 @@
   // FirewallEvent[] too.
   let selectedEvent: FirewallEvent | null = $state(null)
   let headerEls: (HTMLDivElement | undefined)[] = $state([])
+
+  // Column-resize affordance (handles/tick marks over the header) is
+  // implemented below (measureOffsets, handleOffsets, startResize,
+  // onResizeMove, endResize, and the `.resize-overlay`/`.resizer` styles)
+  // but unmounted for round-30 fidelity: the ratified mockup
+  // (docs/design/concepts/round-30/shots/stream.png and
+  // stream-bar-out.png) draws no resize handle, tick mark, or drag
+  // target anywhere on the stream's header. Round 30 builds to the
+  // mockup first (#700); the gap is tracked on #691 for a future round
+  // to remount. Do not delete this implementation -- flip
+  // RESIZE_HANDLES_ENABLED and restore the template block in the markup
+  // below when #691 is picked up.
+  const RESIZE_HANDLES_ENABLED: boolean = false
   let dragIndex = $state<number | null>(null)
   let dragStartX = 0
   let dragStartWidth = 0
@@ -394,20 +407,24 @@
           </div>
         {/each}
 
-        <div class="resize-overlay" style="height: {headerHeight}px">
-          {#each COLUMNS.slice(0, -1) as col, i (col.key)}
-            <span
-              class="resizer"
-              class:active={dragIndex === i}
-              style="left: {(handleOffsets[i] ?? 0) - 5}px"
-              onpointerdown={(e) => startResize(i, e)}
-              ondblclick={() => columnState.reset()}
-              role="separator"
-              aria-orientation="vertical"
-              aria-label="Resize {col.label} column"
-            ></span>
-          {/each}
-        </div>
+        {#if RESIZE_HANDLES_ENABLED}
+          <!-- Unmounted for round-30 fidelity -- see the comment on
+               RESIZE_HANDLES_ENABLED above. Not deleted: tracked on #691. -->
+          <div class="resize-overlay" style="height: {headerHeight}px">
+            {#each COLUMNS.slice(0, -1) as col, i (col.key)}
+              <span
+                class="resizer"
+                class:active={dragIndex === i}
+                style="left: {(handleOffsets[i] ?? 0) - 5}px"
+                onpointerdown={(e) => startResize(i, e)}
+                ondblclick={() => columnState.reset()}
+                role="separator"
+                aria-orientation="vertical"
+                aria-label="Resize {col.label} column"
+              ></span>
+            {/each}
+          </div>
+        {/if}
 
         {#if groupModeState.enabled}
           {#each displayGroups as group, gi (group.key)}
