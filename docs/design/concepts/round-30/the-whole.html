@@ -104,7 +104,6 @@
     border-radius: 999px; cursor: pointer;
   }
   .enter:hover { border-color: var(--accent); }
-  .promise { position: absolute; bottom: 16px; left: 0; right: 0; text-align: center; font-size: 10.5px; color: var(--ink-3); }
 
   /* ---- scene 2: the map (Atlas II refined, carried forward) ---- */
   .lenses { display: flex; gap: 6px; padding: 88px 24px 0; position: relative; z-index: 4; }
@@ -289,11 +288,16 @@
   table.stream .geo { color: var(--ink-3); font-size: 10.5px; }
   table.stream tr.hl td { background: rgba(255, 84, 112, 0.05); }
 
+  /* The three facts of the day, and the reason you would look at the
+     stream at all -- they were set at the same weight as a caption.
+     Lifted to the ticker's own footing: a real band, ink-2 body, the
+     salient token in full ink. */
   .foot-legend {
-    position: absolute; bottom: 0; left: 0; right: 0; display: flex; gap: 26px; justify-content: center;
-    padding: 10px; font-size: 11px; color: var(--ink-3); border-top: 1px solid var(--hair);
+    position: absolute; bottom: 0; left: 0; right: 0; display: flex; gap: 44px; justify-content: center;
+    padding: 12px 20px 13px; font-size: 12.5px; color: var(--ink-2);
+    background: rgba(4, 6, 11, 0.92); border-top: 1px solid var(--hair-2);
   }
-  .foot-legend .k { color: var(--ink-2); }
+  .foot-legend .k { color: var(--ink); font-weight: 600; }
 
   @media (prefers-reduced-motion: reduce) {
     *, *::before, *::after { animation: none !important; transition: none !important; }
@@ -646,7 +650,6 @@
         <button class="enter" type="button">Enter</button>
       </form>
     </div>
-    <div class="promise">Your router pushes its logs here — MikroView never connects to your router.</div>
   </div>
 </section>
 
@@ -2464,6 +2467,33 @@
     });
     retype();
   })();
+</script>
+<style>
+  /* Nothing sits on a line as text only (owner, 2026-08-31). A label
+     over the map's ribs or the fall's rules needs something behind it:
+     a backdrop-coloured halo holds over empty ground but not over a
+     bright edge, which is the same fault the build hit and fixed. Each
+     plate is sized from the label's own box, so no font assumption and
+     no measuring pass. */
+  .plate { fill: rgba(6, 8, 14, 0.94); stroke: var(--hair); stroke-width: 0.8; }
+</style>
+<script>
+  window.addEventListener('load', function () {
+    var SEL = '#s3 .chip-t, #s3 .alarm-t, #s2 .flag-t, #s2 .dark-t, #s2 .now-t';
+    document.querySelectorAll(SEL).forEach(function (t) {
+      var b;
+      try { b = t.getBBox(); } catch (e) { return; }
+      if (!b.width) return;
+      var r = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+      r.setAttribute('x', b.x - 7);
+      r.setAttribute('y', b.y - 4);
+      r.setAttribute('width', b.width + 14);
+      r.setAttribute('height', b.height + 8);
+      r.setAttribute('rx', 5);
+      r.setAttribute('class', 'plate');
+      t.parentNode.insertBefore(r, t);
+    });
+  });
 </script>
 </body>
 </html>
