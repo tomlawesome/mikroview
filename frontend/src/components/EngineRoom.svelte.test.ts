@@ -27,6 +27,7 @@ vi.mock('../lib/api', () => ({
         kind: 'declarative',
         enabled: true,
         scope: { hosts: ['203.0.113.9'], hostsMode: 'deny' },
+        params: { threshold: 15, window: '1m0s' },
         provenance: { origin: 'shipped' },
         available: true,
         replay: { known: true, capable: true },
@@ -57,6 +58,15 @@ vi.mock('../lib/api', () => ({
   createToken: vi.fn(),
   revokeToken: vi.fn(),
   fetchDevices: vi.fn(async () => []),
+  signOutEverywhere: vi.fn(async () => null),
+  fetchAuthSession: vi.fn(async () => ({
+    setupRequired: false,
+    authenticated: true,
+    username: 'admin',
+    role: 'admin',
+    ssoAvailable: false,
+    signedInSince: new Date().toISOString(),
+  })),
 }))
 
 import { appState } from '../lib/state.svelte'
@@ -99,6 +109,7 @@ beforeEach(() => {
   usersState.list = []
   tokensState.list = []
   tokensState.justCreated = null
+  authState.signedInSince = ''
   deckOrderState.set(['fall', 'metrics', 'live', 'docket', 'entities', 'engineroom'])
 })
 
@@ -269,5 +280,67 @@ describe('The settings shelf (#633)', () => {
 
     expect(screen.getAllByText('mv1_4c21secret9b0d')).toHaveLength(1)
     expect(screen.getAllByText(/Copy it now/)).toHaveLength(1)
+  })
+
+  // #677: the three previously-unbuilt rows.
+  it("detection's port-scan window states the live threshold, editable for a user", async () => {
+    authState.state = 'authenticated'
+    authState.role = 'user'
+    render(EngineRoom)
+    await settle()
+
+    const knob = screen.getByRole('button', { name: '15 ports / 60 s' })
+    await fireEvent.click(knob)
+    await settle()
+
+    const portsInput = screen.getByLabelText('distinct ports') as HTMLInputElement
+    const windowInput = screen.getByLabelText('window in seconds') as HTMLInputElement
+    expect(portsInput.value).toBe('15')
+    expect(windowInput.value).toBe('60')
+
+    await fireEvent.input(portsInput, { target: { value: '25' } })
+    await fireEvent.input(windowInput, { target: { value: '90' } })
+    await fireEvent.click(screen.getByRole('button', { name: 'save' }))
+    await settle()
+
+    const { updateDefinition } = await import('../lib/api')
+    expect(updateDefinition).toHaveBeenCalledWith('port_scan', { params: { threshold: 25, window: '90s' } })
+  })
+
+  it('a viewer sees the port-scan window as a fact, not a knob', async () => {
+    authState.state = 'authenticated'
+    authState.role = 'viewer'
+    render(EngineRoom)
+    await settle()
+
+    expect(screen.getByText('15 ports / 60 s')).toBeTruthy()
+    expect(screen.queryByRole('button', { name: '15 ports / 60 s' })).toBeNull()
+  })
+
+  it('memory states persistence live truth -- events are in-memory only, not a fabricated retention', async () => {
+    authState.state = 'authenticated'
+    authState.role = 'admin'
+    render(EngineRoom)
+    await settle()
+
+    expect(screen.getByText('persistence')).toBeTruthy()
+    expect(screen.getByText(/in-memory only/)).toBeTruthy()
+  })
+
+  it('the sessions row states this device and can sign out everywhere', async () => {
+    authState.state = 'authenticated'
+    authState.role = 'admin'
+    authState.signedInSince = new Date(Date.now() - 4.5 * 86_400_000).toISOString()
+    render(EngineRoom)
+    await settle()
+
+    expect(screen.getByText(/this device, signed in 4 d/)).toBeTruthy()
+
+    const { signOutEverywhere } = await import('../lib/api')
+    await fireEvent.click(screen.getByRole('button', { name: 'sign out everywhere' }))
+    await settle()
+
+    expect(signOutEverywhere).toHaveBeenCalled()
+    expect(screen.getByText(/every other session has been ended/)).toBeTruthy()
   })
 })

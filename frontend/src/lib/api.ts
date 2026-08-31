@@ -518,6 +518,16 @@ export async function logout(): Promise<string | null> {
   return (await res.text()) || `logout: ${res.status}`
 }
 
+// signOutEverywhere is #677's sessions row -- ends every session the
+// caller holds, on every device, and the server immediately issues this
+// tab a fresh one (see internal/api.handleAuthLogoutAll), so unlike
+// logout() above this does not leave the caller signed out.
+export async function signOutEverywhere(): Promise<string | null> {
+  const res = await postJSON('/api/auth/logout-all')
+  if (res.ok) return null
+  return (await res.text()) || `signOutEverywhere: ${res.status}`
+}
+
 // role chooses between the two tiers this call can create (#653).
 // Admin is still not among them: mikroview has one, and the server
 // refuses a request for a second (see auth.ErrSingleAdmin). Moving that

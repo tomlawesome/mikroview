@@ -178,6 +178,10 @@ export interface AuthSession {
   // convert otherwise.
   hasLocalPassword?: boolean
   ssoAvailable: boolean
+  // This session's own start (#677's sessions row: "signed in 4 d") --
+  // when this login happened, not when the account was created. Absent
+  // while unauthenticated, and on an older server that predates it.
+  signedInSince?: string
 }
 
 // Mirrors internal/api's userSummary. Deliberately not the server's
@@ -340,6 +344,12 @@ export interface DetectorSettings {
   // Carried through from Definition.learning (#639) -- see that field's
   // doc comment.
   learning?: LearningState
+  // Carried through from Definition.params/paramSchema (#677's
+  // port-scan window row, the detector's own numeric tuning -- distinct
+  // from scope above, which restricts what the detector *watches*
+  // rather than the threshold it fires at).
+  params?: Record<string, unknown>
+  paramSchema?: DefinitionParamSchema[]
 }
 
 // Mirrors internal/api's definitionView (issue #407) -- one definition

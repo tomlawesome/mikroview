@@ -95,6 +95,47 @@ export function formatUptimeFull(totalSeconds: number): string {
   return `${days}d ${hours}h ${minutes}m ${String(seconds).padStart(2, '0')}s`
 }
 
+// parseGoDurationSeconds reads a Go time.Duration.String() value (the
+// wire format internal/engine's ValidateParams normalizes a "duration"
+// param to -- see validateDurationParam's `d.String()` -- e.g. "1m0s",
+// "500ms", "1h30m0s") into whole seconds. Used by the port-scan window
+// row (#677) to show/edit a definition's window param as a plain
+// second count ("60 s") rather than Go's compound notation.
+export function parseGoDurationSeconds(s: string): number {
+  const re = /(\d+(?:\.\d+)?)(h|ms|m|s)/g
+  let total = 0
+  let m: RegExpExecArray | null
+  while ((m = re.exec(s))) {
+    const v = parseFloat(m[1])
+    switch (m[2]) {
+      case 'h':
+        total += v * 3600
+        break
+      case 'm':
+        total += v * 60
+        break
+      case 's':
+        total += v
+        break
+      case 'ms':
+        total += v / 1000
+        break
+    }
+  }
+  return total
+}
+
+// formatDaysSince renders how long ago iso was as a whole-day count --
+// "4 d", or "under a day" for anything still inside the first 24h.
+// Mirrors EngineRoom.svelte's own quietFor day-count convention (same
+// Math.floor-of-whole-days reasoning: "quiet 3 d" there, "signed in 4
+// d" here for #677's sessions row) rather than introducing a second way
+// to say the same kind of thing.
+export function formatDaysSince(iso: string): string {
+  const days = Math.floor((Date.now() - new Date(iso).getTime()) / 86_400_000)
+  return days >= 1 ? `${days} d` : 'under a day'
+}
+
 // formatBufferDepth summarizes how full the server's in-memory event ring
 // (store.maxEvents) is and, once full, roughly how far back it reaches at
 // the current rate -- the two facts an operator needs to tell "the ring
