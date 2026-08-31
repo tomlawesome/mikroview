@@ -362,6 +362,21 @@ rewritten.
   no fill and no baseline, so the spectrum strip reads as a line rather
   than a row of solid tents.
 
+### Removed
+
+- **The `system` and `light` themes are gone** (#708), wholesale. Round
+  30 -- the ratified design -- is dark throughout, and dark stops being
+  a preference and becomes what the stylesheet simply is. The light/dark
+  auto mode picker is removed from the theme menu; the `mikroview-theme`
+  storage key, the `ThemePref` type, `cycle()` and the `system` fallback
+  in `lib/theme.svelte.ts` are removed outright along with the file
+  itself; and every light-mode CSS variable override and the
+  `prefers-color-scheme` media query are removed from `app.css`. No
+  alias maps `system` or `light` onto dark, and no stored preference is
+  read even to migrate it -- a browser with an old `mikroview-theme`
+  value in local storage now simply has an unread key. The colourway
+  picker (Signal/Pulse/Nebula/Frequency/Mono) is unaffected.
+
 ### Fixed
 
 - **Pages could scroll far past their own content into empty space**

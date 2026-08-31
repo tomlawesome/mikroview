@@ -904,12 +904,6 @@
     gap: 20px;
     flex-wrap: wrap;
   }
-  .bar h1 {
-    font-size: 22px;
-    font-weight: 600;
-    margin: 0;
-    color: var(--o-ink);
-  }
   .scname {
     display: flex;
     align-items: baseline;
