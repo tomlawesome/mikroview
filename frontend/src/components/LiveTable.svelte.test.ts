@@ -622,9 +622,12 @@ describe('LiveTable Loading and first-run empty states (#549)', () => {
 // address · proto · port · RULE. The name columns show the resolved host
 // name where one exists and the bare address (dim, country code beside it)
 // where not; the address columns then show the raw IP only where the name
-// column is showing a name. Everything the retired columns carried
-// (device, chain, interfaces, src port, NAT, MAC) moved into the detail
-// sheet, which every desktop row now opens.
+// column is showing a name. #644 moved device, chain, interfaces, src
+// port, NAT and MAC into the detail sheet and off the row entirely; #717
+// (owner ruling, 2026-08-31) restores all six as columns of their own
+// (see columns.svelte.ts), so this describe block now covers fifteen
+// columns, not nine -- the nine above are unchanged, and the restored
+// six get their own describe block below.
 describe('LiveTable squared columns (#644)', () => {
   it('shows a bare external source dim in the name column, an em dash in its address column', () => {
     const e = makeEvent('bare-source', {
@@ -691,7 +694,11 @@ describe('LiveTable squared columns (#644)', () => {
     const { container } = render(LiveTable, { props: { events: [e] } })
     flushSync()
 
-    const portCell = container.querySelector('.cell.port')
+    // #717 restored Src port beside Source's own facts, ahead of
+    // Destination -- both it and the destination Port column share the
+    // .cell.port class (same font/layout treatment), so `:not(.srcport)`
+    // is what actually picks out this row's *destination* port cell.
+    const portCell = container.querySelector('.cell.port:not(.srcport)')
     expect(portCell?.textContent?.trim()).toBe('445')
     expect(portCell?.querySelector('.port-btn')?.getAttribute('title')).toContain('smb')
   })
@@ -704,7 +711,12 @@ describe('LiveTable squared columns (#644)', () => {
     expect(container.querySelector('.cell.time')?.textContent).toMatch(/\.482/)
   })
 
-  it('opens the detail sheet from the row, carrying the fields that no longer have columns', async () => {
+  // #717 restored device/chain/src-port/MAC as columns too (see the
+  // describe block below), but the sheet stays the row's one full-detail
+  // surface regardless -- this pins that opening it still works and
+  // still carries these fields, independent of whatever the row's own
+  // columns show.
+  it('opens the detail sheet from the row, still carrying device/chain/src-port/MAC/interfaces', async () => {
     const e = makeEvent('sheet-row', {
       srcIp: '10.0.20.11',
       srcPort: 49812,
@@ -737,12 +749,12 @@ describe('LiveTable squared columns (#644)', () => {
     expect(sheet?.textContent).toContain('bridge1')
   })
 
-  // NAT used to be its own always-visible column (the translated
-  // address, plus a lookup trigger). #644 folds it into the action
-  // badge -- a natted event reads exactly like an accept/drop one, just
-  // with its own badge colour -- and moves the translated address into
-  // the detail sheet.
-  it('shows NAT as the action badge, not a separate column', () => {
+  // NAT still reads on the action badge (#644) -- a natted event reads
+  // exactly like an accept/drop one, just with its own badge colour --
+  // *and*, since #717, also gets its own column with the translated
+  // address (see the describe block below for that column's own
+  // coverage). This only pins the badge half of that pair.
+  it('shows NAT as the action badge', () => {
     const e = makeEvent('nat-row', {
       action: 'natted',
       chain: 'srcnat',
@@ -754,7 +766,6 @@ describe('LiveTable squared columns (#644)', () => {
     flushSync()
 
     expect(container.querySelector('.cell.action .badge-natted')).toBeTruthy()
-    expect(container.querySelector('.cell.nat')).toBeNull()
   })
 
   // #644's own text: "Per-cell ⓘ buttons are removed entirely." That is
@@ -777,6 +788,136 @@ describe('LiveTable squared columns (#644)', () => {
     const titles = Array.from(container.querySelectorAll('[title]')).map((el) => el.getAttribute('title') ?? '')
     expect(titles.some((t) => t.startsWith('Investigate '))).toBe(false)
     expect(titles.some((t) => /^What is port \d+\?$/.test(t))).toBe(false)
+  })
+})
+
+// #717 (owner ruling, 2026-08-31): the six columns #644 folded into
+// EventDetailSheet -- device, chain, src port, MAC, interfaces, NAT --
+// come back as columns of their own, threaded in beside the fact each
+// belongs with (see columns.svelte.ts's own comment for where and why).
+// The existing nine keep the coverage above unchanged; this covers only
+// the six restored ones -- that each renders, reads off the same field
+// the sheet already uses, and shows the table's em dash when the fact
+// is absent.
+describe('LiveTable restored columns (#717)', () => {
+  it('shows the resolved device name in its own column, filtering to the device id on click', async () => {
+    const e = makeEvent('device-row', { deviceId: 'router1' })
+    appState.devices = [
+      { id: 'router1', name: 'office-router', configured: true, status: 'live', lastSeen: null, sourceIp: '10.0.0.1', eventCount: 1 },
+    ] as unknown as (typeof appState)['devices']
+
+    const { container } = render(LiveTable, { props: { events: [e] } })
+    flushSync()
+
+    const deviceCell = container.querySelector('.cell.device')
+    expect(deviceCell?.textContent).toContain('office-router')
+
+    const deviceBtn = deviceCell?.querySelector('.device-btn') as HTMLElement
+    await fireEvent.mouseDown(deviceBtn)
+    await fireEvent.mouseUp(deviceBtn)
+    expect(appState.filters.device).toBe('router1')
+  })
+
+  it('falls back to the device id when no device list has resolved a name for it', () => {
+    const e = makeEvent('device-fallback-row', { deviceId: 'router9' })
+    appState.devices = []
+
+    const { container } = render(LiveTable, { props: { events: [e] } })
+    flushSync()
+
+    expect(container.querySelector('.cell.device')?.textContent).toContain('router9')
+  })
+
+  it('shows the chain in its own column, filtering to it on click, and an em dash when absent', async () => {
+    const e = makeEvent('chain-row', { chain: 'srcnat' })
+    const { container } = render(LiveTable, { props: { events: [e] } })
+    flushSync()
+
+    const chainCell = container.querySelector('.cell.chain') as HTMLElement
+    expect(chainCell?.textContent?.trim()).toBe('srcnat')
+    await fireEvent.mouseDown(chainCell)
+    await fireEvent.mouseUp(chainCell)
+    expect(appState.filters.chain).toBe('srcnat')
+
+    const noChain = makeEvent('no-chain-row', { chain: '' })
+    const { container: container2 } = render(LiveTable, { props: { events: [noChain] } })
+    flushSync()
+    expect(container2.querySelector('.cell.chain')?.textContent?.trim()).toBe('—')
+  })
+
+  it("shows the source's own port beside its address, distinct from the destination Port column", () => {
+    const e = makeEvent('srcport-row', { srcIp: '10.0.10.2', srcPort: 51234, dstIp: '10.0.40.5', dstPort: 443 })
+    const { container } = render(LiveTable, { props: { events: [e] } })
+    flushSync()
+
+    const srcPortCell = container.querySelector('.cell.port.srcport')
+    expect(srcPortCell?.textContent?.trim()).toBe('51234')
+    const dstPortCell = container.querySelector('.cell.port:not(.srcport)')
+    expect(dstPortCell?.textContent?.trim()).toBe('443')
+  })
+
+  it('shows an em dash in the Src port column when the event has no source port', () => {
+    const e = makeEvent('no-srcport-row', { srcIp: '10.0.10.2' })
+    const { container } = render(LiveTable, { props: { events: [e] } })
+    flushSync()
+
+    expect(container.querySelector('.cell.port.srcport')?.textContent?.trim()).toBe('—')
+  })
+
+  it("shows the event's own srcMac in the MAC column, plain (not click-to-filter), and an em dash when absent", () => {
+    const e = makeEvent('mac-row', { srcMac: 'AA:BB:CC:DD:EE:FF' })
+    const { container } = render(LiveTable, { props: { events: [e] } })
+    flushSync()
+
+    const macCell = container.querySelector('.cell.mac')
+    expect(macCell?.textContent?.trim()).toBe('AA:BB:CC:DD:EE:FF')
+    expect(macCell?.getAttribute('role')).not.toBe('button')
+
+    const noMac = makeEvent('no-mac-row', {})
+    const { container: container2 } = render(LiveTable, { props: { events: [noMac] } })
+    flushSync()
+    expect(container2.querySelector('.cell.mac')?.textContent?.trim()).toBe('—')
+  })
+
+  it('shows both interfaces joined by an arrow, and an em dash when neither is set', () => {
+    const e = makeEvent('iface-row', { inInterface: 'bridge-iot', outInterface: 'bridge1' })
+    const { container } = render(LiveTable, { props: { events: [e] } })
+    flushSync()
+
+    const ifaceCell = container.querySelector('.cell.iface')
+    expect(ifaceCell?.textContent).toContain('bridge-iot')
+    expect(ifaceCell?.textContent).toContain('bridge1')
+
+    const noIface = makeEvent('no-iface-row', {})
+    const { container: container2 } = render(LiveTable, { props: { events: [noIface] } })
+    flushSync()
+    expect(container2.querySelector('.cell.iface')?.textContent?.trim()).toBe('—')
+  })
+
+  it('shows the translated address in its own NAT column, reading from natIp/natPort like the detail sheet does', () => {
+    const e = makeEvent('nat-col-row', {
+      action: 'natted',
+      chain: 'srcnat',
+      srcIp: '10.0.10.2',
+      natIp: '203.0.113.7',
+      natPort: 51512,
+    })
+    const { container } = render(LiveTable, { props: { events: [e] } })
+    flushSync()
+
+    const natCell = container.querySelector('.cell.nat')
+    expect(natCell?.textContent).toContain('203.0.113.7:51512')
+    expect(natCell?.classList.contains('has-value')).toBe(true)
+  })
+
+  it('shows an em dash in the NAT column when the event was not translated', () => {
+    const e = makeEvent('no-nat-row', {})
+    const { container } = render(LiveTable, { props: { events: [e] } })
+    flushSync()
+
+    const natCell = container.querySelector('.cell.nat')
+    expect(natCell?.textContent?.trim()).toBe('—')
+    expect(natCell?.classList.contains('has-value')).toBe(false)
   })
 })
 
