@@ -742,8 +742,29 @@
     white-space: nowrap;
   }
 
+  /* #717: a bare `border: none` does not stop a real <select> drawing
+     its own native dropdown arrow -- Chromium and friends render that
+     glyph regardless of author CSS unless appearance is reset too, so
+     without this the control still reads as "an unstyled browser form
+     field" even though the box chrome above is already gone. Two small
+     gradients stand in for the mockup's own dim inline "▾" character
+     (the-whole.html #s5), sized and coloured to match it rather than
+     the browser's bold default triangle. */
   .thin select {
     width: 72px;
+    appearance: none;
+    -webkit-appearance: none;
+    -moz-appearance: none;
+    cursor: pointer;
+    padding-right: 13px;
+    background-image:
+      linear-gradient(45deg, transparent 50%, var(--fg-dim) 50%),
+      linear-gradient(135deg, var(--fg-dim) 50%, transparent 50%);
+    background-position:
+      calc(100% - 8px) 55%,
+      calc(100% - 4px) 55%;
+    background-size: 4px 4px, 4px 4px;
+    background-repeat: no-repeat;
   }
 
   .thin input[type='text'] {
@@ -903,10 +924,17 @@
     color: var(--danger, #c0392b);
   }
 
+  /* No flex-basis here: .fb-field is a column flex container (its own
+     rule above), so a basis set on this its lone row-flex child would
+     be read along .fb-field's main axis -- vertical, not horizontal --
+     ballooning this field's height to ~200px and pushing it and
+     everything after it (fold ▸) up out of the row. That is the "RULE
+     and fold have come loose, floating above the row" glitch (#717).
+     .rule below already carries its own horizontal flex-basis correctly
+     (it is *its* row-flex parent, .rule-group, that is row-direction). */
   .rule-group {
     display: flex;
     gap: 4px;
-    flex: 1 1 200px;
   }
 
   .rule {

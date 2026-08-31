@@ -264,6 +264,15 @@
   // for what each one is and when each one is absent -- an empty array
   // means the band itself does not render, never an empty strip.
   //
+  // Owner ruling, 2026-08-31 (#717 review of build 0.4.0+g65bf3b0):
+  // "Bottom bar with the messages, dark, which server, last etc, I hate
+  // it, remove it." This supersedes the earlier #691/#700 ask for round
+  // 30's own three centred facts here -- the band goes entirely, not
+  // just restyled. Unmounted, not deleted, matching RESIZE_HANDLES_ENABLED
+  // above: the facts still compute below in case a future round wants
+  // them somewhere else, but nothing renders them.
+  const FOOT_LEGEND_ENABLED: boolean = false
+
   // Derived from the whole buffer and the whole flag list, not from
   // `rendered`: these are facts about the deployment, the same
   // relationship the whisper strip directly above this table already
@@ -497,8 +506,10 @@
 
   <!-- Absent entirely when there is nothing true to put in it, and one
        or two facts wide when only one or two of the three have data --
-       the band never holds a placeholder for a fact it does not have. -->
-  {#if footFacts.length > 0}
+       the band never holds a placeholder for a fact it does not have.
+       Unmounted outright behind FOOT_LEGEND_ENABLED (#717) -- see that
+       flag's own comment above. -->
+  {#if FOOT_LEGEND_ENABLED && footFacts.length > 0}
     <div class="foot-legend" aria-label="What the stream is showing">
       {#each footFacts as fact (fact.key)}
         <!-- Each fact lays its own three pieces out with a gap rather
