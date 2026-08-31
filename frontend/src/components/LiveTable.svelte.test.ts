@@ -763,14 +763,14 @@ describe('LiveTable squared columns (#644)', () => {
   })
 })
 
-// #685: the ratified round-29 table marks a row on a flagged pathway with
-// a full-row wash (the-whole.html's `tr.hl`), not a per-cell glyph -- the
-// shipped table put a ⚑ mark in the time cell instead, which #685's
-// coordinator ruled a defect (round 29 draws an answer; build it as
-// drawn) rather than a gap. This pins the corrected rendering: the row
-// element itself carries the wash class exactly when its source has an
-// active, uncleared flag against it.
-describe('Flagged pathway row wash (#685)', () => {
+// #685, superseded by #691's round-30 audit: a row on a flagged pathway
+// carries *both* the full-row wash (the-whole.html's `tr.hl`) and a ⚑
+// mark after the time (its `.rmk`). Round 29 drew only the wash, so #685
+// took the shipped mark out; round 30 draws both, and the mark annotates
+// the wash rather than replacing it. This pins the pair, and that the
+// mark follows the time rather than preceding it -- ahead of the figures
+// it breaks the left edge the tabular numerals line up on.
+describe('Flagged pathway row wash and mark (#685, #691)', () => {
   function activeFlag(target: string): Flag {
     return {
       id: 'f1',
@@ -797,8 +797,16 @@ describe('Flagged pathway row wash (#685)', () => {
     expect(flaggedRow?.classList.contains('flagged')).toBe(true)
     expect(ordinaryRow?.classList.contains('flagged')).toBe(false)
 
-    // The glyph this replaced must actually be gone, not just moved.
-    expect(container.querySelector('.flag-mark')).toBeNull()
+    // The mark rides with the wash, and only on the flagged row.
+    const mark = flaggedRow?.querySelector('.rmk')
+    expect(mark).not.toBeNull()
+    expect(mark?.textContent).toBe('\u2691')
+    expect(ordinaryRow?.querySelector('.rmk')).toBeNull()
+
+    // ...and it follows the time, rather than pushing the figures right.
+    const timeCell = flaggedRow?.querySelector('.cell.time')
+    expect(timeCell?.textContent?.trimStart().startsWith('\u2691')).toBe(false)
+    expect(timeCell?.textContent?.trimEnd().endsWith('\u2691')).toBe(true)
   })
 
   it('does not mark a row whose flag has been cleared', () => {

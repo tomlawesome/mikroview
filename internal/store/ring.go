@@ -227,6 +227,16 @@ type Stats struct {
 	Capacity        int               `json:"capacity"`
 	Count           int               `json:"count"`
 	Window          time.Duration     `json:"windowNs"`
+	// OldestHeld is the receipt time of the oldest event the ring still
+	// holds, or the zero time when it holds none. It is deliberately not
+	// the same thing as a query's WindowStart: that is now-minus-window,
+	// the retention the operator configured, while this is how far back
+	// the buffer actually reaches after capacity eviction has had its
+	// say. On a busy day the two are far apart, and only this one can
+	// answer "how much history is really here" -- #703's span control
+	// offers a span from this and would otherwise claim a day of quiet
+	// that was really an evicted buffer.
+	OldestHeld time.Time `json:"oldestHeld"`
 }
 
 // Stats returns current totals and a rolling events/sec rate averaged over
@@ -275,6 +285,21 @@ func (s *Store) Stats() Stats {
 		timeSeries[i] = TimeBucket{Time: time.Unix(minute*60, 0).UTC(), ByAction: byAction}
 	}
 
+	// The ring's own oldest currently-held event, by the same indexing
+	// hourTops uses below: index 0 while the buffer has not filled yet,
+	// or s.head once it has, that being the next slot Insert overwrites
+	// and so the oldest survivor. Zero time when nothing is held, which
+	// is a real answer -- an empty buffer reaches back no distance at
+	// all -- and not a missing one.
+	var oldestHeld time.Time
+	if s.count > 0 {
+		oldestIdx := 0
+		if s.count == s.capacity {
+			oldestIdx = s.head
+		}
+		oldestHeld = s.buf[oldestIdx].ReceivedAt
+	}
+
 	out := Stats{
 		Total:           s.total,
 		ByAction:        byAction,
@@ -283,6 +308,7 @@ func (s *Store) Stats() Stats {
 		Capacity:        s.capacity,
 		Count:           s.count,
 		Window:          s.window,
+		OldestHeld:      oldestHeld,
 	}
 	s.mu.RUnlock()
 
