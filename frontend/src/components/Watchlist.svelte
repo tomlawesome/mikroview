@@ -602,73 +602,116 @@
     })
     return list
   })
+
+  // --- Round-30 fidelity flags (#700, #691) --------------------------
+  //
+  // The ratified mockup (docs/design/concepts/round-30/shots/
+  // docket-watchlist.png, the-whole.html #s7's `#p-watch` panel) draws
+  // one flat watch table under the docket's tabs -- watch / boundary /
+  // window / state / last event, one header row, one filter row
+  // directly beneath it, nothing else. Everything below that the
+  // ratified design does not draw -- the Watchlist/Matches/Suggestions
+  // sub-tab row, the "Watches" page heading (round 30: "no page heading
+  // and no strap, anywhere" -- owner, 2026-08-31), the "Manage entries"
+  // explanatory prose, the add/edit form, and the second "Entries" card
+  // list -- is real, shipped capability (#243, #547, #584, #649, #676)
+  // that the ratified design simply doesn't describe. Per the
+  // build-to-the-mockup-first policy (#700) none of it is deleted; each
+  // surface is unmounted behind its own typed flag (explicit boolean,
+  // not inferred -- a bare `false` narrows to `never` and the type
+  // checker reports the guarded block as unreachable), same pattern as
+  // LiveTable's RESIZE_HANDLES_ENABLED, MetricsRegister's LEDGER_ENABLED
+  // and Topography's DEGRADED_NOTE_ENABLED. Bringing any one back is
+  // tracked on #691, independently of the others.
+  const WATCHLIST_SUBTABS_ENABLED: boolean = false
+  const WATCH_HEADING_ENABLED: boolean = false
+  const MANAGE_ENTRIES_INTRO_ENABLED: boolean = false
+  const ADD_ENTRY_FORM_ENABLED: boolean = false
+  const ENTRIES_TABLE_ENABLED: boolean = false
 </script>
 
 <div class="watchlist-page">
-  <TabList {tabs} selected={activeTab} onselect={selectTab} label="Watchlist views" />
+  {#if WATCHLIST_SUBTABS_ENABLED}
+    <TabList {tabs} selected={activeTab} onselect={selectTab} label="Watchlist views" />
+  {/if}
+  <!-- svelte-ignore a11y_no_noninteractive_tabindex -- role and tabindex
+       both turn on together with WATCHLIST_SUBTABS_ENABLED (undefined/
+       undefined when off, 'tabpanel'/0 when on); the checker can't
+       follow that they're tied to the same flag. -->
   <div
     class="page scrollbar"
-    role="tabpanel"
+    role={WATCHLIST_SUBTABS_ENABLED ? 'tabpanel' : undefined}
     id="panel-watchlist"
-    aria-labelledby="tab-watchlist"
-    tabindex="0"
-    hidden={activeTab !== 'watchlist'}
+    aria-labelledby={WATCHLIST_SUBTABS_ENABLED ? 'tab-watchlist' : undefined}
+    tabindex={WATCHLIST_SUBTABS_ENABLED ? 0 : undefined}
+    hidden={WATCHLIST_SUBTABS_ENABLED && activeTab !== 'watchlist'}
   >
   <!-- The ratified table (#676, round 29's docket scene: watch ·
        boundary · window · state · last event, rows opening as drawers
        like the flags tab). Reads the same entries the "Manage entries"
        section below edits -- see the script's own section comment for
        what "window" and the seven-night strip could not honestly carry,
-       and why. -->
-  <section class="section watch-table-section" aria-labelledby="watch-heading">
-    <h3 id="watch-heading" class="section-title">Watches</h3>
+       and why.
+
+       Header + filter (round 30, the-whole.html #s7 `.panel thead`):
+       one <thead> carrying both the clickable column heads (click to
+       sort, again to reverse) and the filter row directly beneath them
+       -- not a standalone sort/filter toolbar floating above a second,
+       non-interactive <thead>, which is what this used to render (two
+       header rows for one table). -->
+  <section class="section watch-table-section" aria-label="Watches">
+    {#if WATCH_HEADING_ENABLED}
+      <h3 id="watch-heading" class="section-title">Watches</h3>
+    {/if}
     {#if wtError}<p class="error" role="alert">{wtError}</p>{/if}
     {#if watchlistState.entries.length === 0}
-      <p class="empty">No watches yet -- add one below.</p>
+      <p class="empty">{ADD_ENTRY_FORM_ENABLED ? 'No watches yet -- add one below.' : 'No watches yet.'}</p>
     {:else}
-      <div class="sortbar" role="row">
-        <button class="sorth" class:on={wtSortKey === 'watch'} onclick={() => wtToggleSort('watch')}>
-          watch <span class="dir">{wtDirGlyph('watch')}</span>
-        </button>
-        <button class="sorth" class:on={wtSortKey === 'boundary'} onclick={() => wtToggleSort('boundary')}>
-          boundary <span class="dir">{wtDirGlyph('boundary')}</span>
-        </button>
-        <button class="sorth" class:on={wtSortKey === 'window'} onclick={() => wtToggleSort('window')}>
-          window <span class="dir">{wtDirGlyph('window')}</span>
-        </button>
-        <button class="sorth" class:on={wtSortKey === 'state'} onclick={() => wtToggleSort('state')}>
-          state <span class="dir">{wtDirGlyph('state')}</span>
-        </button>
-        <button class="sorth" class:on={wtSortKey === 'lastEvent'} onclick={() => wtToggleSort('lastEvent')}>
-          last event <span class="dir">{wtDirGlyph('lastEvent')}</span>
-        </button>
-      </div>
-      <div class="filterbar" role="row">
-        <input bind:value={wtFilters.watch} placeholder="filter watch…" aria-label="Filter watches by watch name" />
-        <input bind:value={wtFilters.boundary} placeholder="filter boundary…" aria-label="Filter watches by boundary" />
-        <input bind:value={wtFilters.window} placeholder="filter window…" aria-label="Filter watches by window" />
-        <input bind:value={wtFilters.state} placeholder="filter state…" aria-label="Filter watches by state" />
-        <input
-          bind:value={wtFilters.lastEvent}
-          placeholder="filter last event…"
-          aria-label="Filter watches by last event"
-        />
-      </div>
-      {#if sortedWatchRows.length === 0}
-        <p class="empty">No watches match these filters.</p>
-      {:else}
-        <table class="watch-table">
-          <thead>
-            <tr>
-              <th>watch</th>
-              <th>boundary</th>
-              <th>window</th>
-              <th>state</th>
-              <th>last event</th>
-              <th></th>
-            </tr>
-          </thead>
-          <tbody>
+      <table class="watch-table">
+        <thead>
+          <tr>
+            <th>
+              <button type="button" class="th-sort" class:on={wtSortKey === 'watch'} onclick={() => wtToggleSort('watch')}>
+                watch <span class="dir">{wtDirGlyph('watch')}</span>
+              </button>
+            </th>
+            <th>
+              <button type="button" class="th-sort" class:on={wtSortKey === 'boundary'} onclick={() => wtToggleSort('boundary')}>
+                boundary <span class="dir">{wtDirGlyph('boundary')}</span>
+              </button>
+            </th>
+            <th>
+              <button type="button" class="th-sort" class:on={wtSortKey === 'window'} onclick={() => wtToggleSort('window')}>
+                window <span class="dir">{wtDirGlyph('window')}</span>
+              </button>
+            </th>
+            <th>
+              <button type="button" class="th-sort" class:on={wtSortKey === 'state'} onclick={() => wtToggleSort('state')}>
+                state <span class="dir">{wtDirGlyph('state')}</span>
+              </button>
+            </th>
+            <th>
+              <button type="button" class="th-sort" class:on={wtSortKey === 'lastEvent'} onclick={() => wtToggleSort('lastEvent')}>
+                last event <span class="dir">{wtDirGlyph('lastEvent')}</span>
+              </button>
+            </th>
+            <th></th>
+          </tr>
+          <tr class="filters">
+            <td><input bind:value={wtFilters.watch} placeholder="filter" aria-label="Filter watches by watch name" /></td>
+            <td><input bind:value={wtFilters.boundary} placeholder="filter" aria-label="Filter watches by boundary" /></td>
+            <td><input bind:value={wtFilters.window} placeholder="filter" aria-label="Filter watches by window" /></td>
+            <td><input bind:value={wtFilters.state} placeholder="filter" aria-label="Filter watches by state" /></td>
+            <td>
+              <input bind:value={wtFilters.lastEvent} placeholder="filter" aria-label="Filter watches by last event" />
+            </td>
+            <td></td>
+          </tr>
+        </thead>
+        <tbody>
+          {#if sortedWatchRows.length === 0}
+            <tr><td class="empty-row" colspan="6">No watches match these filters.</td></tr>
+          {:else}
             {#each sortedWatchRows as row (row.entry.id)}
               {@const story = watchStory(row.entry, row.lastMatch)}
               {@const nights = nightlySummary(row.entry.nights)}
@@ -727,21 +770,33 @@
                 </tr>
               {/if}
             {/each}
-          </tbody>
-        </table>
-      {/if}
+          {/if}
+        </tbody>
+      </table>
     {/if}
   </section>
 
-  <h3 class="section-title manage-heading">Manage entries</h3>
-  <p class="intro">
-    Watch attempts against specific ports (<strong>record</strong>), or flip an
-    entry around to watch what one device does (<strong>invert</strong>): "this device should only ever reach X" --
-    everything else it touches gets recorded. A new inverted entry starts <strong>observing</strong>: nothing fires
-    until you review what it actually saw and promote the destinations that are expected. Matches are recorded to
-    disk and survive a restart, unlike the live view's own volatile buffer.
-  </p>
+  <!-- "Manage entries" (#676's second surface: the add/edit/invert/
+       observe/promote workflow this component pre-dates the ratified
+       table with). Round 30 draws none of it -- see the flags' own
+       comment above the script's watch-window section. Kept reachable,
+       not deleted, per #700; the heading covers all three sub-surfaces
+       so restoring any one of them still gets it back. -->
+  {#if MANAGE_ENTRIES_INTRO_ENABLED || ADD_ENTRY_FORM_ENABLED || ENTRIES_TABLE_ENABLED}
+    <h3 class="section-title manage-heading">Manage entries</h3>
+  {/if}
 
+  {#if MANAGE_ENTRIES_INTRO_ENABLED}
+    <p class="intro">
+      Watch attempts against specific ports (<strong>record</strong>), or flip an
+      entry around to watch what one device does (<strong>invert</strong>): "this device should only ever reach X" --
+      everything else it touches gets recorded. A new inverted entry starts <strong>observing</strong>: nothing fires
+      until you review what it actually saw and promote the destinations that are expected. Matches are recorded to
+      disk and survive a restart, unlike the live view's own volatile buffer.
+    </p>
+  {/if}
+
+  {#if ADD_ENTRY_FORM_ENABLED}
   <form class="form" onsubmit={submit}>
     <div class="form-title">{editingId ? 'Editing entry' : 'Add entry'}</div>
     <div class="form-row">
@@ -802,7 +857,9 @@
       </button>
     </div>
   </form>
+  {/if}
 
+  {#if ENTRIES_TABLE_ENABLED}
   <section class="section" id="entries-section">
     <h3 class="section-title">Entries</h3>
     {#if watchlistState.entries.length === 0}
@@ -964,29 +1021,32 @@
       {/if}
     {/if}
   </section>
+  {/if}
   </div>
 
-  <div
-    class="tab-panel"
-    role="tabpanel"
-    id="panel-matches"
-    aria-labelledby="tab-matches"
-    tabindex="0"
-    hidden={activeTab !== 'matches'}
-  >
-    <MatchesTab entries={watchlistState.entries} coverage={watchlistState.coverage} onopenentry={openEntry} />
-  </div>
+  {#if WATCHLIST_SUBTABS_ENABLED}
+    <div
+      class="tab-panel"
+      role="tabpanel"
+      id="panel-matches"
+      aria-labelledby="tab-matches"
+      tabindex="0"
+      hidden={activeTab !== 'matches'}
+    >
+      <MatchesTab entries={watchlistState.entries} coverage={watchlistState.coverage} onopenentry={openEntry} />
+    </div>
 
-  <div
-    class="tab-panel"
-    role="tabpanel"
-    id="panel-suggestions"
-    aria-labelledby="tab-suggestions"
-    tabindex="0"
-    hidden={activeTab !== 'suggestions'}
-  >
-    <Suggestions />
-  </div>
+    <div
+      class="tab-panel"
+      role="tabpanel"
+      id="panel-suggestions"
+      aria-labelledby="tab-suggestions"
+      tabindex="0"
+      hidden={activeTab !== 'suggestions'}
+    >
+      <Suggestions />
+    </div>
+  {/if}
 </div>
 
 <style>
@@ -1460,12 +1520,80 @@
     color: var(--fg-dim);
   }
 
+  /* Round 30's own idiom (the-whole.html #s7 `.panel thead th`): the
+     column head itself is the sort control -- click it, again to
+     reverse -- rather than a separate toolbar of buttons floating above
+     a plain, non-interactive <th>. `all: unset` inherits color/font from
+     the <th> around it (both are inherited properties), so the button
+     reads identically to plain header text until it is hovered, active,
+     or focused. */
+  .watch-table thead th .th-sort {
+    all: unset;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    cursor: pointer;
+  }
+
+  .watch-table thead th .th-sort:hover {
+    color: var(--fg-muted);
+  }
+
+  .watch-table thead th .th-sort.on {
+    color: var(--fg);
+  }
+
+  .watch-table thead th .th-sort .dir {
+    display: inline-block;
+    min-width: 8px;
+    color: var(--accent);
+    font-size: 9px;
+  }
+
+  /* The filter row (round 30, the-whole.html #s7): a second <tr> inside
+     the same <thead>, directly beneath the column heads -- one header
+     row, one filter row, not a standalone filter block ahead of the
+     table's own heading. Same quiet-dashed-input idiom as .filterbar
+     below, scoped to this table instead. */
+  .watch-table thead tr.filters td {
+    padding: 2px 12px 8px;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .watch-table thead tr.filters input {
+    width: 100%;
+    background: transparent;
+    border: 0;
+    border-bottom: 1px dashed var(--border);
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--fg-muted);
+    padding: 2px 0;
+    outline: none;
+  }
+
+  .watch-table thead tr.filters input::placeholder {
+    color: var(--fg-dim);
+    opacity: 0.7;
+  }
+
+  .watch-table thead tr.filters input:focus {
+    border-bottom-color: var(--accent);
+  }
+
   .watch-table td.k {
     color: var(--fg);
   }
 
   .watch-table td.t {
     color: var(--fg-dim);
+  }
+
+  .watch-table td.empty-row {
+    color: var(--fg-dim);
+    font-family: var(--font-sans);
+    font-size: 13px;
+    border-bottom: none;
   }
 
   .wt-row {
