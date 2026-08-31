@@ -13,6 +13,7 @@
   import { flagLayoutState, type FlagColumns } from '../lib/flagLayout.svelte'
   import { viewportState } from '../lib/viewport.svelte'
   import { exclusionsState } from '../lib/exclusions.svelte'
+  import { groupPairsByHost, pairsTruncated, pairsTruncationLabel } from '../lib/evidencePairs'
   import ReputationDetails from './ReputationDetails.svelte'
   import BarList from './BarList.svelte'
   import IpInvestigateButton from './IpInvestigateButton.svelte'
@@ -617,6 +618,40 @@
               <div class="ev-row">
                 <span class="ev-label">Hosts involved</span>
                 <span class="ev-value">{f.evidence.hosts.join(', ')}</span>
+              </div>
+            {/if}
+            {#if f.evidence?.pairs?.length}
+              <!-- #654: grouped by host -- one row per host with the
+                   ports actually seen with it, never a flat host:port
+                   list and never crossed against Hosts/Ports above,
+                   which would silently claim combinations no event ever
+                   produced. The cap is stated, not hidden: a truncated
+                   sample says so rather than reading as complete. -->
+              <div class="ev-row">
+                <span class="ev-label">
+                  Host:port pairs
+                  {#if pairsTruncated(f.evidence.pairs, f.evidence.pairsTotal)}
+                    <span class="ev-truncated"
+                      >(showing {pairsTruncationLabel(
+                        f.evidence.pairs.length,
+                        f.evidence.pairsTotal ?? 0,
+                        f.evidence.pairsTotalIsFloor,
+                      )})</span
+                    >
+                  {/if}
+                </span>
+              </div>
+              {#each groupPairsByHost(f.evidence.pairs) as g (g.host)}
+                <div class="ev-row ev-pair-row">
+                  <span class="ev-label">{g.host}</span>
+                  <span class="ev-value">{g.ports.join(', ')}</span>
+                </div>
+              {/each}
+            {/if}
+            {#if f.evidence?.srcMac}
+              <div class="ev-row">
+                <span class="ev-label">Source MAC</span>
+                <span class="ev-value">{f.evidence.srcMac}</span>
               </div>
             {/if}
             {#if f.evidence?.nat}
@@ -1298,6 +1333,24 @@
   .ev-raw {
     font-size: 11px;
     color: var(--fg-dim);
+  }
+
+  /* #654: the pair cap's truncation notice -- quiet (fg-dim, no icon)
+     because it's a footnote on the header row above, not a warning; the
+     point is only that it's never silent, not that it's loud. */
+  .ev-truncated {
+    font-size: 11px;
+    color: var(--fg-dim);
+    font-weight: normal;
+  }
+
+  /* One row per host group (#654) -- same ev-row/ev-label/ev-value
+     shape as every other evidence line, just indented slightly so a
+     multi-host pairs list visually nests under its own "Host:port
+     pairs" header row rather than reading as a sibling of Ports
+     touched/Hosts involved. */
+  .ev-pair-row {
+    padding-left: 10px;
   }
 
   /* The verdict lives on the card's face (issue #638: the primary
