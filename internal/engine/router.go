@@ -110,9 +110,22 @@ func Route(def Definition, em Emission) (RoutedEmission, error) {
 }
 
 func routeToFlag(em Emission) *flags.Flag {
-	ev := flags.Evidence{Ports: em.Ports, Hosts: em.Hosts}
+	ev := flags.Evidence{Ports: em.Ports, Hosts: em.Hosts, SrcMAC: em.SrcMAC}
 	if em.NAT != nil {
 		ev.NAT = &flags.NATInfo{IP: em.NAT.IP, Port: em.NAT.Port, Raw: em.NAT.Raw}
+	}
+	if len(em.Pairs) > 0 {
+		ev.Pairs = make([]flags.HostPort, len(em.Pairs))
+		for i, p := range em.Pairs {
+			ev.Pairs[i] = flags.HostPort{Host: p.Host, Port: p.Port}
+		}
+		ev.PairsTotal = em.PairsTotal
+		// PairsTotalIsFloor rides along with PairsTotal, not
+		// independently: it only ever means something in relation to a
+		// stated total, so there's nothing to carry when there are no
+		// Pairs to begin with (see Emission.PairsTotalIsFloor's own doc
+		// comment).
+		ev.PairsTotalIsFloor = em.PairsTotalIsFloor
 	}
 	return &flags.Flag{
 		Type:        flags.Type(em.DefinitionID),

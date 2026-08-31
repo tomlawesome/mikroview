@@ -110,11 +110,40 @@ const (
 	// event -- last-writer-wins rather than a set, see
 	// EvidenceSet.SetNAT for why this one category works that way.
 	EvidenceNAT EvidenceField = "nat"
+	// EvidencePairs accumulates the (destination host, destination port)
+	// combination of every matching event, always from e.DstIP/e.DstPort
+	// regardless of KeyMode -- unlike EvidenceHosts, whose asymmetry is
+	// about *whose* address a per-source vs. per-target definition
+	// records (see recordEvidence's own doc comment), a pair is always
+	// about what got touched, which is the destination side by
+	// definition. #654: declared only where both a destination address
+	// and a destination port are independently meaningful for this
+	// definition -- port_scan (ports without a meaningful destination
+	// set) and dest_spread (destinations without ports) never declare
+	// this, and neither does any definition whose KeyMode already fixes
+	// the destination port for the whole window (repeated_drops,
+	// distributed_brute_force), since a pair there would just repeat the
+	// key's own port against each host, adding nothing Hosts and the
+	// Target don't already say together.
+	EvidencePairs EvidenceField = "pairs"
+	// EvidenceMAC records the matching event's source MAC address,
+	// last-writer-wins (see EvidenceSet.SetSrcMAC) and only when the
+	// source is a local device -- recordEvidence enforces both the
+	// presence check and the locality check, not this declaration.
+	// #654: a MAC-identified device survives a DHCP lease change an
+	// IP-identified one would silently stop matching (the same
+	// MAC-preferred identity matchlog.Identity already uses, see
+	// eventIdentity in router.go). Declared only for definitions whose
+	// source can genuinely be local -- never for critical_port or
+	// distributed_brute_force, both of which condition on
+	// sourceAddress matchesClassification "external", so their source
+	// MAC would never pass the locality check anyway.
+	EvidenceMAC EvidenceField = "mac"
 )
 
 func validateEvidenceField(f EvidenceField) error {
 	switch f {
-	case EvidencePorts, EvidenceHosts, EvidenceLabels, EvidenceNAT:
+	case EvidencePorts, EvidenceHosts, EvidenceLabels, EvidenceNAT, EvidencePairs, EvidenceMAC:
 		return nil
 	default:
 		return fmt.Errorf("engine: invalid evidence field %q", f)
@@ -164,13 +193,15 @@ type DeclarativeDefinition struct {
 	detailTemplate string
 	targetTemplate string
 	carryCountry   bool
-	// evidencePorts/Hosts/Labels/NAT are DeclarativeSpec.Evidence
+	// evidencePorts/Hosts/Labels/NAT/Pairs/MAC are DeclarativeSpec.Evidence
 	// resolved to booleans once, at construction, so recordEvidence's
 	// per-event path is a few field reads rather than a slice scan.
 	evidencePorts  bool
 	evidenceHosts  bool
 	evidenceLabels bool
 	evidenceNAT    bool
+	evidencePairs  bool
+	evidenceMAC    bool
 
 	members AddressListMembership
 
@@ -321,6 +352,10 @@ func NewDeclarativeDefinition(def Definition, spec DeclarativeSpec) (*Declarativ
 			d.evidenceLabels = true
 		case EvidenceNAT:
 			d.evidenceNAT = true
+		case EvidencePairs:
+			d.evidencePairs = true
+		case EvidenceMAC:
+			d.evidenceMAC = true
 		}
 	}
 	if err := d.validateKeyTokens("detailTemplate", spec.DetailTemplate); err != nil {
@@ -478,6 +513,24 @@ func (d *DeclarativeDefinition) recordEvidence(st *declState, e store.Event) {
 	}
 	if d.evidenceNAT {
 		st.evidence.SetNAT(NATInfo{IP: e.NatIP, Port: e.NatPort, Raw: e.NatRaw})
+	}
+	// #654: pairs and MAC each have their own event fields and their own
+	// gate, independent of evidenceHosts below -- a definition can (and
+	// critical_port does) want the destination pair without wanting the
+	// standalone Hosts set, and MAC has no relationship to KeyMode at
+	// all. Neither reads d.evidenceHosts.
+	if d.evidencePairs && e.DstIP != "" && e.DstPort != 0 {
+		st.evidence.AddPair(HostPort{Host: e.DstIP, Port: e.DstPort})
+	}
+	// isPublicIPAddress(e.SrcIP) is the same classification
+	// OpMatchesClassification's "external"/"internal" conditions use
+	// (conditions.go) -- a MAC only ever accompanies a frame RouterOS
+	// captured off a local L2 segment, so an external source's SrcMAC is
+	// either empty or the router's own upstream-facing MAC, and #654's
+	// design explicitly calls carrying either "worse than useless": it
+	// would look like a device identity but silently misidentify one.
+	if d.evidenceMAC && e.SrcMAC != "" && !isPublicIPAddress(e.SrcIP) {
+		st.evidence.SetSrcMAC(e.SrcMAC)
 	}
 	if !d.evidenceHosts {
 		return
