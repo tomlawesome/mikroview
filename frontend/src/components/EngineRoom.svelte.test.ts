@@ -6,6 +6,13 @@
 // #490's absorbed pages (Users/Tokens/Detectors) live on behind the
 // doors and the bench; the viewer/admin split those tests carried is
 // unchanged (chip once, verbs gated, facts identical).
+//
+// Round 30 (#700/#691): the side doors (EngineRoomDoors' "who may look
+// in" and "which machines may speak") are unmounted, not deleted --
+// round 30's own settings page draws exactly four groups and fits
+// without scrolling. USERS_DOOR_ENABLED/TOKENS_DOOR_ENABLED are both
+// false, so every assertion below about the doors checks that they are
+// absent for every role, admin included.
 
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { render, screen, fireEvent, within } from '@testing-library/svelte'
@@ -136,7 +143,9 @@ describe('The settings shelf (#633)', () => {
     for (const card of ['The fall', 'Metrics', 'Stream', 'The docket', 'Entities', 'Settings']) {
       expect(within(shelf).getByText(card)).toBeTruthy()
     }
-    expect(screen.getByText('7 cards in the order you keep them', { exact: false })).toBeTruthy()
+    expect(
+      screen.getByText('seven cards, in the order you keep them', { exact: false }),
+    ).toBeTruthy()
     // Sign-in lands on the first card, and the shelf says so exactly once.
     expect(screen.getAllByText('SIGN-IN LANDS HERE')).toHaveLength(1)
   })
@@ -147,7 +156,7 @@ describe('The settings shelf (#633)', () => {
     render(EngineRoom)
     await settle()
 
-    expect(screen.getByText('6 cards in the order you keep them', { exact: false })).toBeTruthy()
+    expect(screen.getByText('6 cards, in the order you keep them', { exact: false })).toBeTruthy()
     const shelf = document.querySelector<HTMLElement>('.stshelf')!
     expect(within(shelf).queryByText('Entities')).toBeNull()
     expect(within(shelf).getByText('Settings')).toBeTruthy()
@@ -192,7 +201,7 @@ describe('The settings shelf (#633)', () => {
     expect(screen.getByRole('button', { name: 'close the bench' })).toBeTruthy()
   })
 
-  it('a viewer sees the chip, no verbs, and no admin-only users door', async () => {
+  it('a viewer sees the chip, no verbs, and no side doors at all', async () => {
     authState.state = 'authenticated'
     authState.role = 'viewer'
     render(EngineRoom)
@@ -207,34 +216,34 @@ describe('The settings shelf (#633)', () => {
     // pins the present truth so the gap cannot be mistaken for done.
     expect(screen.queryByText('READ-ONLY')).toBeNull()
 
-    // Tokens door is viewer-readable but its verbs are gated.
-    expect(screen.getByText('rb5009-ingest')).toBeTruthy()
-
-    // An ingest key names the device it speaks for, not just its kind:
-    // with two routers pushing, "ingest" alone does not say which key
-    // belongs to which, and that is the fact an admin revokes on. The
-    // old Tokens page carried it and the door has to as well.
-    expect(screen.getByText(/ingest: rb5009/)).toBeTruthy()
+    // Round 30 (#700/#691): neither side door is mounted for any role,
+    // so a viewer sees no tokens door and no users door -- not the old
+    // "tokens readable, users admin-only" split. TOKENS_DOOR_ENABLED /
+    // USERS_DOOR_ENABLED are both false in EngineRoomDoors.svelte.
+    expect(screen.queryByText('rb5009-ingest')).toBeNull()
+    expect(screen.queryByText(/ingest: rb5009/)).toBeNull()
     expect(screen.queryByRole('button', { name: 'Revoke' })).toBeNull()
     expect(screen.queryByRole('button', { name: '+ Mint a key' })).toBeNull()
-
-    // The users door stayed admin-only (mid-build owner override) --
-    // absent entirely for a viewer, not shown empty or explained.
     expect(screen.queryByText('Who may look in')).toBeNull()
+    expect(screen.queryByText('Which machines may speak')).toBeNull()
+    expect(screen.queryByText('The side doors — who and what may come in')).toBeNull()
     expect(screen.queryByRole('button', { name: '+ Let someone in' })).toBeNull()
   })
 
-  it('an admin sees the verbs', async () => {
+  it('an admin sees no side doors either -- round 30 draws none (#700/#691)', async () => {
     authState.state = 'authenticated'
     authState.role = 'admin'
     render(EngineRoom)
     await settle()
 
     expect(screen.queryByText('READ-ONLY')).toBeNull()
-    expect(screen.getByText('Who may look in')).toBeTruthy()
-    expect(screen.getByRole('button', { name: '+ Let someone in' })).toBeTruthy()
-    expect(screen.getByRole('button', { name: '+ Mint a key' })).toBeTruthy()
-    expect(screen.getByRole('button', { name: 'Revoke' })).toBeTruthy()
+    // Unmounted, not deleted: an admin gets the same absence a viewer
+    // does, even though usersState/tokensState still hold the admin's
+    // own data underneath (see the mint-banner test below).
+    expect(screen.queryByText('Who may look in')).toBeNull()
+    expect(screen.queryByRole('button', { name: '+ Let someone in' })).toBeNull()
+    expect(screen.queryByRole('button', { name: '+ Mint a key' })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Revoke' })).toBeNull()
   })
 
   it('shows a user no read-only chip: they edit the watchers station here', async () => {
@@ -281,7 +290,13 @@ describe('The settings shelf (#633)', () => {
     expect(document.querySelector('.scope-knob')).toBeTruthy()
   })
 
-  it('the mint banner appears once', async () => {
+  it('the mint banner has nowhere to show while the tokens door is unmounted (#700/#691)', async () => {
+    // Before round 30, this asserted the just-minted secret's banner
+    // rendered exactly once. TOKENS_DOOR_ENABLED is now false, and the
+    // banner lives inside that door's own markup, so it renders zero
+    // times rather than once -- a tracked gap (#691), not silent data
+    // loss: tokensState.justCreated itself is untouched, and the banner
+    // reappears the moment the flag flips back.
     authState.state = 'authenticated'
     authState.role = 'admin'
     tokensState.justCreated = {
@@ -294,8 +309,9 @@ describe('The settings shelf (#633)', () => {
     render(EngineRoom)
     await settle()
 
-    expect(screen.getAllByText('mv1_4c21secret9b0d')).toHaveLength(1)
-    expect(screen.getAllByText(/Copy it now/)).toHaveLength(1)
+    expect(screen.queryAllByText('mv1_4c21secret9b0d')).toHaveLength(0)
+    expect(screen.queryAllByText(/Copy it now/)).toHaveLength(0)
+    expect(tokensState.justCreated?.value).toBe('mv1_4c21secret9b0d')
   })
 
   // #677: the three previously-unbuilt rows.

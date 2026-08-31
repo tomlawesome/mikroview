@@ -256,302 +256,312 @@
        quietly dropped. The owner-level doors below stay gated on
        isAdmin either way. -->
 
-  <div class="og">
-    <h3>your deck</h3>
-    <p class="oghint">
-      {cards.length} cards in the order you keep them — drag (or arrow keys) to reorder; sign-in lands on the first
-    </p>
-    <div class="stshelf">
-      {#each cards as card, i (card.key)}
-        <span
-          class="stcard"
-          class:first={i === 0}
-          class:dragging={dragKey === card.key}
-          draggable="true"
-          role="button"
-          tabindex="0"
-          aria-label="{card.name}, position {i + 1} of {cards.length} — arrow keys reorder"
-          ondragstart={() => (dragKey = card.key)}
-          ondragend={() => (dragKey = null)}
-          ondragover={(e) => e.preventDefault()}
-          ondrop={() => onDrop(card.key)}
-          onkeydown={(e) => onCardKey(e, card.key)}
-        >
-          <i aria-hidden="true">⠿</i>
-          {#if card.key === 'fall'}
-            <svg viewBox="0 0 76 40" aria-hidden="true">
-              <line x1="16" y1="6" x2="16" y2="22" stroke="var(--fall-accept)" stroke-width="2" opacity="0.55" />
-              <line x1="30" y1="12" x2="30" y2="24" stroke="var(--fall-drop)" stroke-width="2" opacity="0.4" />
-              <line x1="44" y1="4" x2="44" y2="16" stroke="var(--fall-accept)" stroke-width="2" opacity="0.3" />
-              <line x1="58" y1="10" x2="58" y2="28" stroke="var(--fall-accept)" stroke-width="2" opacity="0.5" />
-              <line x1="8" y1="34" x2="68" y2="34" stroke="var(--now)" stroke-width="1.4" opacity="0.6" />
-            </svg>
-          {:else if card.key === 'topography'}
-            <svg viewBox="0 0 76 40" aria-hidden="true">
-              <circle cx="38" cy="10" r="5" fill="none" stroke="var(--accent)" stroke-width="1.3" />
-              <circle cx="38" cy="10" r="1.4" fill="var(--accent)" />
-              <path d="M35 14 C 26 22, 20 24, 16 30" fill="none" stroke="var(--lane-lan)" stroke-width="1.3" />
-              <path d="M38 15 V 30" fill="none" stroke="var(--lane-srv)" stroke-width="1.3" />
-              <path d="M41 14 C 50 22, 56 24, 60 30" fill="none" stroke="var(--lane-iot)" stroke-width="1.3" />
-              <circle cx="16" cy="32" r="2.6" fill="var(--lane-lan)" />
-              <circle cx="38" cy="32" r="2.6" fill="var(--lane-srv)" />
-              <circle cx="60" cy="32" r="2.6" fill="var(--lane-iot)" />
-            </svg>
-          {:else if card.key === 'metrics'}
-            <svg viewBox="0 0 76 40" aria-hidden="true">
-              <polyline
-                points="6,26 16,22 24,28 32,12 40,24 48,18 56,27 70,20"
-                fill="none"
-                stroke="var(--accent)"
-                stroke-width="1.4"
-                opacity="0.8"
-              />
-              <line x1="6" y1="33" x2="70" y2="33" stroke="var(--border)" stroke-width="1" />
-            </svg>
-          {:else if card.key === 'live'}
-            <svg viewBox="0 0 76 40" aria-hidden="true">
-              <line x1="8" y1="9" x2="68" y2="9" stroke="var(--fg-dim)" stroke-width="1.2" opacity="0.7" />
-              <line x1="8" y1="17" x2="56" y2="17" stroke="var(--fg-dim)" stroke-width="1.2" opacity="0.5" />
-              <line x1="8" y1="25" x2="64" y2="25" stroke="var(--alarm)" stroke-width="1.2" opacity="0.6" />
-              <line x1="8" y1="33" x2="50" y2="33" stroke="var(--fg-dim)" stroke-width="1.2" opacity="0.4" />
-            </svg>
-          {:else if card.key === 'docket'}
-            <svg viewBox="0 0 76 40" aria-hidden="true">
-              <rect x="8" y="6" width="3" height="8" fill="#ff5470" />
-              <line x1="16" y1="10" x2="66" y2="10" stroke="var(--fg-dim)" stroke-width="1.2" opacity="0.6" />
-              <rect x="8" y="18" width="3" height="8" fill="#ff9e64" />
-              <line x1="16" y1="22" x2="58" y2="22" stroke="var(--fg-dim)" stroke-width="1.2" opacity="0.5" />
-              <rect x="8" y="30" width="3" height="8" fill="var(--marked)" />
-              <line x1="16" y1="34" x2="62" y2="34" stroke="var(--fg-dim)" stroke-width="1.2" opacity="0.5" />
-            </svg>
-          {:else if card.key === 'entities'}
-            <svg viewBox="0 0 76 40" aria-hidden="true">
-              <circle cx="14" cy="10" r="3.4" fill="none" stroke="var(--accent)" stroke-width="1.2" />
-              <circle cx="14" cy="10" r="1" fill="var(--accent)" />
-              <line x1="24" y1="10" x2="66" y2="10" stroke="var(--border)" stroke-width="1" />
-              <circle cx="14" cy="22" r="2.4" fill="var(--lane-lan)" />
-              <line x1="24" y1="22" x2="58" y2="22" stroke="var(--border)" stroke-width="1" />
-              <circle cx="14" cy="33" r="2.4" fill="var(--lane-iot)" />
-              <line x1="24" y1="33" x2="62" y2="33" stroke="var(--border)" stroke-width="1" />
-            </svg>
-          {:else}
-            <svg viewBox="0 0 76 40" aria-hidden="true">
-              <line x1="10" y1="10" x2="66" y2="10" stroke="var(--border)" stroke-width="1.2" />
-              <circle cx="46" cy="10" r="3" fill="var(--accent)" />
-              <line x1="10" y1="21" x2="66" y2="21" stroke="var(--border)" stroke-width="1.2" />
-              <circle cx="24" cy="21" r="3" fill="var(--fg-dim)" />
-              <line x1="10" y1="32" x2="66" y2="32" stroke="var(--border)" stroke-width="1.2" />
-              <circle cx="56" cy="32" r="3" fill="var(--fg-dim)" />
-            </svg>
-          {/if}
-          <span class="nm">{card.name}</span>
-          {#if card.key === 'fall' && epsText}
-            <span class="lv">{epsText} events/s now</span>
-          {:else if card.key === 'docket'}
-            <span class="lv">
-              {#if flagsState.activeCount > 0}<b class="ct">⚑ {flagsState.activeCount}</b>{/if}
-              {#if isAdmin && watchlistState.entries.length > 0}
-                <b class="wct">◉ {watchlistState.entries.length}</b>
-                {#if watchlistState.brokenCount > 0}<b class="ct">○{watchlistState.brokenCount}</b>{/if}
-              {/if}
-            </span>
-          {/if}
-          {#if i === 0}<b class="lands">SIGN-IN LANDS HERE</b>{/if}
-        </span>
-      {/each}
-    </div>
-  </div>
-
-  <div class="stgrid">
-    <div class="stcol">
-      <div class="og">
-        <h3>ingest</h3>
-        <svg
-          class="stpath"
-          viewBox="0 0 520 92"
-          role="img"
-          aria-label="Routers push their logs one way into mikroview's listening port; nothing travels back"
-        >
-          {#if routers[0]}
-            <circle cx="52" cy="30" r="10" fill="none" stroke="var(--accent)" stroke-width="1.4" />
-            <circle cx="52" cy="30" r="2" fill="var(--accent)" />
-            <text x="52" y="54" text-anchor="middle" class="sp-n">{routers[0].name}</text>
-            <path d="M66 30 C 180 30, 260 38, 340 42" fill="none" stroke="var(--border)" stroke-width="1.4" />
-          {/if}
-          {#if routers[1]}
-            <circle cx="52" cy="74" r="6" fill="none" stroke="var(--fg-dim)" stroke-width="1.2" opacity="0.7" />
-            <text x="66" y="78" class="sp-n" opacity="0.7">
-              {routers[1].name}{quietFor(routers[1].lastSeen) ? ` · ${quietFor(routers[1].lastSeen)}` : ''}
-            </text>
-            <path
-              d="M60 70 C 180 64, 260 54, 340 48"
-              fill="none"
-              stroke="var(--border)"
-              stroke-width="1.2"
-              opacity="0.6"
-            />
-          {/if}
-          <path d="M334 37 L 345 44 L 333 50" fill="none" stroke="var(--fg-dim)" stroke-width="1.3" />
-          {#if routers[0] && appState.stats && appState.stats.eventsPerSecond > 0}
-            <!-- The arriving pulse travels the live router's line only
-                 (rounds 25: honesty in motion) -- a quiet router gets
-                 none. Hidden entirely under prefers-reduced-motion. -->
-            <circle class="sp-pulse" r="2.4" fill="var(--accent)" />
-          {/if}
-          <circle cx="372" cy="45" r="15" fill="none" stroke="var(--accent)" stroke-width="1.5" />
-          <circle cx="372" cy="45" r="4" fill="var(--accept)" />
-          {#if status}
-            <text x="396" y="41" class="sp-k">
-              {portOf(status.instance.syslogPort)}{status.instance.tlsEnabled ? ' · TLS' : ''} · listening
-            </text>
-          {/if}
-          {#if epsText}
-            <text x="396" y="57" class="sp-n">{epsText} events/s arriving now</text>
-          {/if}
-        </svg>
-        <p class="oghint">the logs travel one way — mikroview never connects to your router</p>
-        {#if status}
-          <div class="orow">
-            <span>syslog listener</span>
-            <span class="ov">
-              {portOf(status.instance.syslogPort)}{status.instance.tlsEnabled ? ' · TLS' : ''} ·
-              <span class="yaml">set in config.yaml; the page shows what is, the file decides</span>
-            </span>
-          </div>
-        {/if}
-        <div class="orow">
-          <span>who may speak</span>
-          <span class="ov">holders of an ingest key — the machines' door, below</span>
-        </div>
-      </div>
-
-      <div class="og">
-        <h3>detection</h3>
-        <div class="stflags">
-          {#each fired as [type, n] (type)}
-            <span class="stf" style="color: {familyOf(type).ink}">
-              {familyOf(type).mark} {CHIP_LABELS[type] ?? type} · {n}
-            </span>
-          {/each}
-          {#if quietTypes > 0}
-            <span class="stf dim">
-              {fired.length > 0 ? `+ ${quietTypes} more · quiet this hour` : 'all quiet this hour'}
-            </span>
-          {/if}
-        </div>
-        <div class="orow">
-          <span>detectors</span>
-          <span class="ov">
-            {watchersRunning} of {watchersTotal} on ·
-            <button class="olink" onclick={() => (benchOpen = !benchOpen)}>
-              {benchOpen ? 'close the bench' : 'tune…'}
-            </button>
-          </span>
-        </div>
-        {#if benchOpen}
-          <div class="bench">
-            <EngineRoomWatchers {canEdit} />
-          </div>
-        {/if}
-        {#if portScan}
-          <div class="orow">
-            <span>port-scan window</span>
-            <span class="ov">
-              {#if psEditing}
-                <span class="pswform">
-                  <input
-                    type="number"
-                    min="1"
-                    step="1"
-                    class="psn"
-                    aria-label="distinct ports"
-                    disabled={psSaving}
-                    bind:value={psThreshold}
-                  /> ports /
-                  <input
-                    type="number"
-                    min="1"
-                    step="1"
-                    class="psn"
-                    aria-label="window in seconds"
-                    disabled={psSaving}
-                    bind:value={psWindowSeconds}
-                  /> s
-                  <button class="olink" disabled={psSaving} onclick={savePortScanWindow}>
-                    {psSaving ? 'saving…' : 'save'}
-                  </button>
-                  <button class="olink" disabled={psSaving} onclick={() => (psEditing = false)}>cancel</button>
-                </span>
-              {:else if canEdit && portScanSummary}
-                <button class="pswknob" onclick={openPortScanEdit}>{portScanSummary}</button>
-              {:else}
-                {portScanSummary ?? '—'}
-              {/if}
-            </span>
-          </div>
-          {#if psError}
-            <p class="oghint err">{psError}</p>
-          {/if}
-        {/if}
-      </div>
-    </div>
-
-    <div class="stcol">
-      <div class="og">
-        <h3>memory</h3>
-        {#if memSlices.length > 0}
-          <svg
-            class="stmem"
-            viewBox="0 0 520 40"
-            role="img"
-            aria-label="The event buffer, hour by hour; darker stretches held more, the oldest falls away as the newest arrives"
+  <div class="setlay">
+    <div class="og deckcol">
+      <h3>your deck</h3>
+      <p class="oghint">
+        {cards.length === 7 ? 'seven' : cards.length} cards, in the order you keep them — drag to reorder; sign-in lands on the first
+      </p>
+      <div class="stshelf">
+        {#each cards as card, i (card.key)}
+          <span
+            class="stcard"
+            class:first={i === 0}
+            class:dragging={dragKey === card.key}
+            draggable="true"
+            role="button"
+            tabindex="0"
+            aria-label="{card.name}, position {i + 1} of {cards.length} — arrow keys reorder"
+            ondragstart={() => (dragKey = card.key)}
+            ondragend={() => (dragKey = null)}
+            ondragover={(e) => e.preventDefault()}
+            ondrop={() => onDrop(card.key)}
+            onkeydown={(e) => onCardKey(e, card.key)}
           >
-            <rect x="8" y="14" width="500" height="10" rx="5" fill="var(--bg-hover)" />
-            {#each memSlices as v, i (i)}
-              <rect
-                x={8 + (500 / memSlices.length) * i}
-                y="14"
-                width={500 / memSlices.length}
-                height="10"
-                fill="var(--accent)"
-                opacity={0.05 + 0.25 * v}
-              />
-            {/each}
-            <rect x="504" y="9" width="3" height="20" rx="1.5" fill="var(--now)" />
-            {#if oldestHeld}
-              <text x="8" y="38" class="sp-n">{oldestHeld} — the oldest event still held</text>
+            <i aria-hidden="true">⠿</i>
+            {#if card.key === 'fall'}
+              <svg viewBox="0 0 76 40" aria-hidden="true">
+                <line x1="16" y1="6" x2="16" y2="22" stroke="var(--fall-accept)" stroke-width="2" opacity="0.55" />
+                <line x1="30" y1="12" x2="30" y2="24" stroke="var(--fall-drop)" stroke-width="2" opacity="0.4" />
+                <line x1="44" y1="4" x2="44" y2="16" stroke="var(--fall-accept)" stroke-width="2" opacity="0.3" />
+                <line x1="58" y1="10" x2="58" y2="28" stroke="var(--fall-accept)" stroke-width="2" opacity="0.5" />
+                <line x1="8" y1="34" x2="68" y2="34" stroke="var(--now)" stroke-width="1.4" opacity="0.6" />
+              </svg>
+            {:else if card.key === 'topography'}
+              <svg viewBox="0 0 76 40" aria-hidden="true">
+                <circle cx="38" cy="10" r="5" fill="none" stroke="var(--accent)" stroke-width="1.3" />
+                <circle cx="38" cy="10" r="1.4" fill="var(--accent)" />
+                <path d="M35 14 C 26 22, 20 24, 16 30" fill="none" stroke="var(--lane-lan)" stroke-width="1.3" />
+                <path d="M38 15 V 30" fill="none" stroke="var(--lane-srv)" stroke-width="1.3" />
+                <path d="M41 14 C 50 22, 56 24, 60 30" fill="none" stroke="var(--lane-iot)" stroke-width="1.3" />
+                <circle cx="16" cy="32" r="2.6" fill="var(--lane-lan)" />
+                <circle cx="38" cy="32" r="2.6" fill="var(--lane-srv)" />
+                <circle cx="60" cy="32" r="2.6" fill="var(--lane-iot)" />
+              </svg>
+            {:else if card.key === 'metrics'}
+              <svg viewBox="0 0 76 40" aria-hidden="true">
+                <polyline
+                  points="6,26 16,22 24,28 32,12 40,24 48,18 56,27 70,20"
+                  fill="none"
+                  stroke="var(--accent)"
+                  stroke-width="1.4"
+                  opacity="0.8"
+                />
+                <line x1="6" y1="33" x2="70" y2="33" stroke="var(--border)" stroke-width="1" />
+              </svg>
+            {:else if card.key === 'live'}
+              <svg viewBox="0 0 76 40" aria-hidden="true">
+                <line x1="8" y1="9" x2="68" y2="9" stroke="var(--fg-dim)" stroke-width="1.2" opacity="0.7" />
+                <line x1="8" y1="17" x2="56" y2="17" stroke="var(--fg-dim)" stroke-width="1.2" opacity="0.5" />
+                <line x1="8" y1="25" x2="64" y2="25" stroke="var(--alarm)" stroke-width="1.2" opacity="0.6" />
+                <line x1="8" y1="33" x2="50" y2="33" stroke="var(--fg-dim)" stroke-width="1.2" opacity="0.4" />
+              </svg>
+            {:else if card.key === 'docket'}
+              <svg viewBox="0 0 76 40" aria-hidden="true">
+                <rect x="8" y="6" width="3" height="8" fill="#ff5470" />
+                <line x1="16" y1="10" x2="66" y2="10" stroke="var(--fg-dim)" stroke-width="1.2" opacity="0.6" />
+                <rect x="8" y="18" width="3" height="8" fill="#ff9e64" />
+                <line x1="16" y1="22" x2="58" y2="22" stroke="var(--fg-dim)" stroke-width="1.2" opacity="0.5" />
+                <rect x="8" y="30" width="3" height="8" fill="var(--marked)" />
+                <line x1="16" y1="34" x2="62" y2="34" stroke="var(--fg-dim)" stroke-width="1.2" opacity="0.5" />
+              </svg>
+            {:else if card.key === 'entities'}
+              <svg viewBox="0 0 76 40" aria-hidden="true">
+                <circle cx="14" cy="10" r="3.4" fill="none" stroke="var(--accent)" stroke-width="1.2" />
+                <circle cx="14" cy="10" r="1" fill="var(--accent)" />
+                <line x1="24" y1="10" x2="66" y2="10" stroke="var(--border)" stroke-width="1" />
+                <circle cx="14" cy="22" r="2.4" fill="var(--lane-lan)" />
+                <line x1="24" y1="22" x2="58" y2="22" stroke="var(--border)" stroke-width="1" />
+                <circle cx="14" cy="33" r="2.4" fill="var(--lane-iot)" />
+                <line x1="24" y1="33" x2="62" y2="33" stroke="var(--border)" stroke-width="1" />
+              </svg>
+            {:else}
+              <svg viewBox="0 0 76 40" aria-hidden="true">
+                <line x1="10" y1="10" x2="66" y2="10" stroke="var(--border)" stroke-width="1.2" />
+                <circle cx="46" cy="10" r="3" fill="var(--accent)" />
+                <line x1="10" y1="21" x2="66" y2="21" stroke="var(--border)" stroke-width="1.2" />
+                <circle cx="24" cy="21" r="3" fill="var(--fg-dim)" />
+                <line x1="10" y1="32" x2="66" y2="32" stroke="var(--border)" stroke-width="1.2" />
+                <circle cx="56" cy="32" r="3" fill="var(--fg-dim)" />
+              </svg>
             {/if}
-            <text x="508" y="38" text-anchor="end" class="sp-k">now</text>
+            <span class="nm">{card.name}</span>
+            {#if card.key === 'fall' && epsText}
+              <span class="lv">{epsText} events/s now</span>
+            {:else if card.key === 'docket'}
+              <span class="lv">
+                {#if flagsState.activeCount > 0}<b class="ct">⚑ {flagsState.activeCount}</b>{/if}
+                {#if isAdmin && watchlistState.entries.length > 0}
+                  <b class="wct">◉ {watchlistState.entries.length}</b>
+                  {#if watchlistState.brokenCount > 0}<b class="ct">○{watchlistState.brokenCount}</b>{/if}
+                {/if}
+              </span>
+            {/if}
+            {#if i === 0}<b class="lands">SIGN-IN LANDS HERE</b>{/if}
+          </span>
+        {/each}
+      </div>
+    </div>
+
+    <div class="stgrid">
+      <div class="og wide">
+        <h3>ingest</h3>
+        <div class="wleft">
+          <svg
+            class="stpath"
+            viewBox="0 0 520 92"
+            role="img"
+            aria-label="Routers push their logs one way into mikroview's listening port; nothing travels back"
+          >
+            {#if routers[0]}
+              <circle cx="52" cy="30" r="10" fill="none" stroke="var(--accent)" stroke-width="1.4" />
+              <circle cx="52" cy="30" r="2" fill="var(--accent)" />
+              <text x="52" y="54" text-anchor="middle" class="sp-n">{routers[0].name}</text>
+              <path d="M66 30 C 180 30, 260 38, 340 42" fill="none" stroke="var(--border)" stroke-width="1.4" />
+            {/if}
+            {#if routers[1]}
+              <circle cx="52" cy="74" r="6" fill="none" stroke="var(--fg-dim)" stroke-width="1.2" opacity="0.7" />
+              <text x="66" y="78" class="sp-n" opacity="0.7">
+                {routers[1].name}{quietFor(routers[1].lastSeen) ? ` · ${quietFor(routers[1].lastSeen)}` : ''}
+              </text>
+              <path
+                d="M60 70 C 180 64, 260 54, 340 48"
+                fill="none"
+                stroke="var(--border)"
+                stroke-width="1.2"
+                opacity="0.6"
+              />
+            {/if}
+            <path d="M334 37 L 345 44 L 333 50" fill="none" stroke="var(--fg-dim)" stroke-width="1.3" />
+            {#if routers[0] && appState.stats && appState.stats.eventsPerSecond > 0}
+              <!-- The arriving pulse travels the live router's line only
+                   (rounds 25: honesty in motion) -- a quiet router gets
+                   none. Hidden entirely under prefers-reduced-motion. -->
+              <circle class="sp-pulse" r="2.4" fill="var(--accent)" />
+            {/if}
+            <circle cx="372" cy="45" r="15" fill="none" stroke="var(--accent)" stroke-width="1.5" />
+            <circle cx="372" cy="45" r="4" fill="var(--accept)" />
+            {#if status}
+              <text x="396" y="41" class="sp-k">
+                {portOf(status.instance.syslogPort)}{status.instance.tlsEnabled ? ' · TLS' : ''} · listening
+              </text>
+            {/if}
+            {#if epsText}
+              <text x="396" y="57" class="sp-n">{epsText} events/s arriving now</text>
+            {/if}
           </svg>
-        {/if}
-        <p class="oghint">the oldest falls away as the newest arrives; darker stretches held more</p>
-        {#if appState.stats}
+          <p class="oghint">the logs travel one way — mikroview never connects to your router</p>
+        </div>
+        <div class="wrows">
+          {#if status}
+            <div class="orow">
+              <span>syslog listener</span>
+              <span class="ov">
+                {portOf(status.instance.syslogPort)}{status.instance.tlsEnabled ? ' · TLS' : ''} ·
+                <span class="yaml">set in config.yaml; the page shows what is, the file decides</span>
+              </span>
+            </div>
+          {/if}
           <div class="orow">
-            <span>event buffer</span>
+            <span>who may speak</span>
+            <span class="ov">holders of an ingest key — the machines' door, below</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="og wide">
+        <h3>detection</h3>
+        <div class="wleft">
+          <div class="stflags">
+            {#each fired as [type, n] (type)}
+              <span class="stf" style="color: {familyOf(type).ink}">
+                {familyOf(type).mark} {CHIP_LABELS[type] ?? type} · {n}
+              </span>
+            {/each}
+            {#if quietTypes > 0}
+              <span class="stf dim">
+                {fired.length > 0 ? `+ ${quietTypes} more · quiet this hour` : 'all quiet this hour'}
+              </span>
+            {/if}
+          </div>
+        </div>
+        <div class="wrows">
+          <div class="orow">
+            <span>detectors</span>
             <span class="ov">
-              {appState.stats.count.toLocaleString()} of {appState.stats.capacity.toLocaleString()} events
-              {#if retentionHours !== null}
-                · ~{retentionHours} h window
-              {/if}
+              {watchersRunning} of {watchersTotal} on ·
+              <button class="olink" onclick={() => (benchOpen = !benchOpen)}>
+                {benchOpen ? 'close the bench' : 'tune…'}
+              </button>
             </span>
           </div>
-        {/if}
-        <div class="orow">
-          <span>what reads it</span>
-          <span class="ov">every scene below reads from here; nothing anywhere probes</span>
+          {#if benchOpen}
+            <div class="bench">
+              <EngineRoomWatchers {canEdit} />
+            </div>
+          {/if}
+          {#if portScan}
+            <div class="orow">
+              <span>port-scan window</span>
+              <span class="ov">
+                {#if psEditing}
+                  <span class="pswform">
+                    <input
+                      type="number"
+                      min="1"
+                      step="1"
+                      class="psn"
+                      aria-label="distinct ports"
+                      disabled={psSaving}
+                      bind:value={psThreshold}
+                    /> ports /
+                    <input
+                      type="number"
+                      min="1"
+                      step="1"
+                      class="psn"
+                      aria-label="window in seconds"
+                      disabled={psSaving}
+                      bind:value={psWindowSeconds}
+                    /> s
+                    <button class="olink" disabled={psSaving} onclick={savePortScanWindow}>
+                      {psSaving ? 'saving…' : 'save'}
+                    </button>
+                    <button class="olink" disabled={psSaving} onclick={() => (psEditing = false)}>cancel</button>
+                  </span>
+                {:else if canEdit && portScanSummary}
+                  <button class="pswknob" onclick={openPortScanEdit}>{portScanSummary}</button>
+                {:else}
+                  {portScanSummary ?? '—'}
+                {/if}
+              </span>
+            </div>
+            {#if psError}
+              <p class="oghint err">{psError}</p>
+            {/if}
+          {/if}
         </div>
-        <!-- #677: "persistence — JSON store · 14 d" was the ratified
-             copy, but no event store with a day-based retention exists
-             -- internal/persist's own package doc calls the live event
-             stream the one deliberate in-memory-only exception, with no
-             config path that changes it. internal/persist IS real,
-             though, and backs flags/definitions/watchlist/entities/
-             tokens -- persistenceSummary states which backend it
-             actually uses (see persistenceState) alongside the buffer
-             fact, rather than only the negative half. -->
-        <div class="orow">
-          <span>persistence</span>
-          <span class="ov dim">{persistenceSummary}</span>
+      </div>
+
+      <div class="og wide">
+        <h3>memory</h3>
+        <div class="wleft">
+          {#if memSlices.length > 0}
+            <svg
+              class="stmem"
+              viewBox="0 0 520 40"
+              role="img"
+              aria-label="The event buffer, hour by hour; darker stretches held more, the oldest falls away as the newest arrives"
+            >
+              <rect x="8" y="14" width="500" height="10" rx="5" fill="var(--bg-hover)" />
+              {#each memSlices as v, i (i)}
+                <rect
+                  x={8 + (500 / memSlices.length) * i}
+                  y="14"
+                  width={500 / memSlices.length}
+                  height="10"
+                  fill="var(--accent)"
+                  opacity={0.05 + 0.25 * v}
+                />
+              {/each}
+              <rect x="504" y="9" width="3" height="20" rx="1.5" fill="var(--now)" />
+              {#if oldestHeld}
+                <text x="8" y="38" class="sp-n">{oldestHeld} — the oldest event still held</text>
+              {/if}
+              <text x="508" y="38" text-anchor="end" class="sp-k">now</text>
+            </svg>
+          {/if}
+          <p class="oghint">the oldest falls away as the newest arrives; darker stretches held more</p>
+        </div>
+        <div class="wrows">
+          {#if appState.stats}
+            <div class="orow">
+              <span>event buffer</span>
+              <span class="ov">
+                {appState.stats.count.toLocaleString()} of {appState.stats.capacity.toLocaleString()} events
+                {#if retentionHours !== null}
+                  · ~{retentionHours} h window
+                {/if}
+              </span>
+            </div>
+          {/if}
+          <div class="orow">
+            <span>what reads it</span>
+            <span class="ov">every scene below reads from here; nothing anywhere probes</span>
+          </div>
+          <!-- #677: "persistence — JSON store · 14 d" was the ratified
+               copy, but no event store with a day-based retention exists
+               -- internal/persist's own package doc calls the live event
+               stream the one deliberate in-memory-only exception, with no
+               config path that changes it. internal/persist IS real,
+               though, and backs flags/definitions/watchlist/entities/
+               tokens -- persistenceSummary states which backend it
+               actually uses (see persistenceState) alongside the buffer
+               fact, rather than only the negative half. -->
+          <div class="orow">
+            <span>persistence</span>
+            <span class="ov dim">{persistenceSummary}</span>
+          </div>
         </div>
       </div>
 
@@ -630,14 +640,69 @@
     color: var(--fg-dim);
   }
 
-  .stgrid {
+  /* Round 30: ingest, detection and memory each split into a fixed
+     560px left column (the diagram and its caption) and a right column
+     of rows, side by side (owner, 2026-08-31) -- see the round's own
+     #set .og.wide rule. account has no diagram, so it stays a plain
+     .og of stacked rows. */
+  .og.wide {
     display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 14px;
+    grid-template-columns: 560px 1fr;
+    column-gap: 40px;
     align-items: start;
   }
 
-  .stcol {
+  .og.wide > h3 {
+    grid-column: 1 / -1;
+  }
+
+  .og.wide > .wleft {
+    grid-column: 1;
+    min-width: 0;
+  }
+
+  .og.wide > .wrows {
+    grid-column: 2;
+    min-width: 0;
+  }
+
+  .og.wide .wrows .orow:first-child {
+    border-top: 0;
+  }
+
+  .og.wide .wleft .oghint {
+    margin-bottom: 0;
+  }
+
+  @media (max-width: 1100px) {
+    .og.wide {
+      grid-template-columns: 1fr;
+    }
+
+    .og.wide > .wleft,
+    .og.wide > .wrows {
+      grid-column: 1;
+    }
+  }
+
+  /* Round 30: the deck stands as a narrow left column beside settings,
+     not a shelf above them (owner, 2026-08-31) -- 224px, same
+     proportion as the round's own #set .setlay rule. */
+  .setlay {
+    display: grid;
+    grid-template-columns: 224px 1fr;
+    gap: 22px;
+    align-items: start;
+  }
+
+  .deckcol {
+    margin-bottom: 0;
+  }
+
+  /* Two columns and no more: the deck on the left, everything else
+     stacked down the right at full width (owner, 2026-08-31) -- see the
+     round's own comment on #set .stgrid. */
+  .stgrid {
     display: flex;
     flex-direction: column;
     gap: 14px;
@@ -645,16 +710,21 @@
   }
 
   @media (max-width: 900px) {
-    .stgrid {
+    .setlay {
       grid-template-columns: 1fr;
     }
   }
 
   /* --- your deck: the shelf ---------------------------------------------- */
-  .stshelf {
+  .deckcol .stshelf {
     display: flex;
-    gap: 10px;
-    flex-wrap: wrap;
+    flex-direction: column;
+    flex-wrap: nowrap;
+    gap: 6px;
+  }
+
+  .deckcol .stcard {
+    width: 100%;
   }
 
   .stcard {
