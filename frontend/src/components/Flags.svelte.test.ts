@@ -341,3 +341,98 @@ describe('Flags tiers (#653)', () => {
     expect(screen.queryByRole('button', { name: 'More clear options for this flag' })).toBeNull()
   })
 })
+
+// #654: the drawer's evidence panel groups pairs by host and states a
+// truncation cap rather than letting a capped list read as complete --
+// the owner-recorded design decisions this issue implements. The pure
+// grouping/truncation logic itself is unit-tested directly in
+// lib/evidencePairs.test.ts; these two prove Flags.svelte actually wires
+// that logic into what a reviewer sees when they open the drawer.
+describe('Flags evidence panel (#654)', () => {
+  beforeEach(() => {
+    vi.resetAllMocks()
+    vi.mocked(fetchExclusions).mockResolvedValue([])
+    exclusionsState.list = []
+    authState.state = 'authenticated'
+    authState.role = 'user'
+  })
+
+  it('groups host:port pairs by host, one row per host, never a flat list', async () => {
+    flagsState.list = [
+      testFlag({
+        type: 'critical_port',
+        evidence: {
+          pairs: [
+            { host: '192.168.1.10', port: 22 },
+            { host: '192.168.1.11', port: 23 },
+            { host: '192.168.1.10', port: 443 },
+          ],
+        },
+      }),
+    ]
+    render(Flags)
+    flushSync()
+
+    await fireEvent.click(screen.getByRole('button', { name: /the drawer for this flag/ }))
+    flushSync()
+
+    // One row per host, each carrying only the ports actually seen with
+    // it -- .10 shows 22 and 443 together, .11 shows only 23, and
+    // nothing implies .11 was ever tried on 22 or 443.
+    expect(screen.getByText('192.168.1.10')).toBeTruthy()
+    expect(screen.getByText('22, 443')).toBeTruthy()
+    expect(screen.getByText('192.168.1.11')).toBeTruthy()
+    expect(screen.getByText('23')).toBeTruthy()
+  })
+
+  it('states the exact truncation count instead of showing a short list that reads as complete', async () => {
+    const pairs = Array.from({ length: 50 }, (_, i) => ({ host: `10.0.0.${i}`, port: 22 }))
+    flagsState.list = [testFlag({ type: 'critical_port', evidence: { pairs, pairsTotal: 214 } })]
+    render(Flags)
+    flushSync()
+
+    await fireEvent.click(screen.getByRole('button', { name: /the drawer for this flag/ }))
+    flushSync()
+
+    expect(screen.getByText('(showing 50 of 214)')).toBeTruthy()
+  })
+
+  // #654's owner correction: pairsTotal is itself bounded
+  // (internal/engine's maxEvidencePairsTracked), so once the backend
+  // reports pairsTotalIsFloor the panel must say "at least this many"
+  // rather than a flat number that would look exactly as precise as the
+  // exact-count case above. Pinned as its own test, distinctly from it,
+  // so a regression that dropped the "+" suffix (or applied it to the
+  // exact case) would show up as a text-content mismatch, not just a
+  // missing element.
+  it('marks a floor total with a "+", distinctly from an exact total', async () => {
+    const pairs = Array.from({ length: 50 }, (_, i) => ({ host: `10.0.0.${i}`, port: 22 }))
+    flagsState.list = [
+      testFlag({ type: 'critical_port', evidence: { pairs, pairsTotal: 200, pairsTotalIsFloor: true } }),
+    ]
+    render(Flags)
+    flushSync()
+
+    await fireEvent.click(screen.getByRole('button', { name: /the drawer for this flag/ }))
+    flushSync()
+
+    expect(screen.getByText('(showing 50 of 200+)')).toBeTruthy()
+    expect(screen.queryByText('(showing 50 of 200)')).toBeNull()
+  })
+
+  it('shows no truncation notice when the pair list is already complete', async () => {
+    flagsState.list = [
+      testFlag({
+        type: 'critical_port',
+        evidence: { pairs: [{ host: '192.168.1.10', port: 22 }] },
+      }),
+    ]
+    render(Flags)
+    flushSync()
+
+    await fireEvent.click(screen.getByRole('button', { name: /the drawer for this flag/ }))
+    flushSync()
+
+    expect(screen.queryByText(/showing \d+ of \d+/)).toBeNull()
+  })
+})

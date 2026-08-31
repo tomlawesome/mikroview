@@ -1232,7 +1232,11 @@ flags:
   different well-known ports once each is one incident, not five), so
   the alert names every critical port that source touched within the
   window and carries them as evidence — not just the one port that
-  happened to trip the threshold.
+  happened to trip the threshold. It also carries, separately, exactly
+  which (destination host, port) combinations were actually seen
+  together — not every port crossed with every host it touched, which
+  would overstate what happened whenever the source reached more than
+  one internal destination.
 - **Global volume spike** — current events/sec vs. a slow-moving
   baseline of itself (an exponential moving average, not a fixed
   number), so it adapts to your network's real traffic level over time
