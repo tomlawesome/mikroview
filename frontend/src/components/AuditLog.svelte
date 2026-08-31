@@ -206,44 +206,42 @@
   {/if}
 
   {#if auditState.list.length === 0}
-    <div class="empty">No admin actions recorded yet.</div>
+    <p class="empty">No admin actions recorded yet.</p>
   {:else}
-    <div class="table-wrap">
-      <table>
-        <thead>
-          <tr>
-            <th onclick={() => toggleSort('time')} aria-sort={sortKey === 'time' ? (sortDir === 'asc' ? 'ascending' : 'descending') : 'none'}>
-              When <span class="dir">{dirGlyph('time')}</span>
-            </th>
-            <th onclick={() => toggleSort('actor')} aria-sort={sortKey === 'actor' ? (sortDir === 'asc' ? 'ascending' : 'descending') : 'none'}>
-              Who <span class="dir">{dirGlyph('actor')}</span>
-            </th>
-            <th onclick={() => toggleSort('what')} aria-sort={sortKey === 'what' ? (sortDir === 'asc' ? 'ascending' : 'descending') : 'none'}>
-              What <span class="dir">{dirGlyph('what')}</span>
-            </th>
-          </tr>
-          <tr class="filters">
-            <td><input bind:value={filters.time} placeholder="filter…" aria-label="Filter by time" /></td>
-            <td><input bind:value={filters.actor} placeholder="filter…" aria-label="Filter by actor" /></td>
-            <td><input bind:value={filters.what} placeholder="filter…" aria-label="Filter by what" /></td>
-          </tr>
-        </thead>
-        <tbody>
-          {#if rows.length === 0}
-            <tr><td colspan="3" class="empty-filtered">No entries match these filters.</td></tr>
-          {:else}
-            {#each rows as e (e.id)}
-              {@const w = describeEntry(e)}
-              <tr>
-                <td class="mono when" title={formatHM(e.timestamp)}>{formatWhen(e.timestamp, appState.now)}</td>
-                <td class="actor">{e.actor}</td>
-                <td class="what">{w.lead}{#if w.key}<span class="k">{w.key}</span>{/if}{w.tail}</td>
-              </tr>
-            {/each}
-          {/if}
-        </tbody>
-      </table>
-    </div>
+    <table>
+      <thead>
+        <tr>
+          <th onclick={() => toggleSort('time')} aria-sort={sortKey === 'time' ? (sortDir === 'asc' ? 'ascending' : 'descending') : 'none'}>
+            When <span class="dir">{dirGlyph('time')}</span>
+          </th>
+          <th onclick={() => toggleSort('actor')} aria-sort={sortKey === 'actor' ? (sortDir === 'asc' ? 'ascending' : 'descending') : 'none'}>
+            Who <span class="dir">{dirGlyph('actor')}</span>
+          </th>
+          <th onclick={() => toggleSort('what')} aria-sort={sortKey === 'what' ? (sortDir === 'asc' ? 'ascending' : 'descending') : 'none'}>
+            What <span class="dir">{dirGlyph('what')}</span>
+          </th>
+        </tr>
+        <tr class="filters">
+          <td><input bind:value={filters.time} placeholder="filter…" aria-label="Filter by time" /></td>
+          <td><input bind:value={filters.actor} placeholder="filter…" aria-label="Filter by actor" /></td>
+          <td><input bind:value={filters.what} placeholder="filter…" aria-label="Filter by what" /></td>
+        </tr>
+      </thead>
+      <tbody>
+        {#if rows.length === 0}
+          <tr><td colspan="3" class="empty-filtered">No entries match these filters.</td></tr>
+        {:else}
+          {#each rows as e (e.id)}
+            {@const w = describeEntry(e)}
+            <tr>
+              <td class="mono when" title={formatHM(e.timestamp)}>{formatWhen(e.timestamp, appState.now)}</td>
+              <td class="actor">{e.actor}</td>
+              <td class="what">{w.lead}{#if w.key}<span class="k">{w.key}</span>{/if}{w.tail}</td>
+            </tr>
+          {/each}
+        {/if}
+      </tbody>
+    </table>
   {/if}
 </div>
 
@@ -274,44 +272,44 @@
   }
 
   .empty {
+    margin: 0;
     color: var(--fg-dim);
     font-size: 13px;
     padding: 10px 0;
   }
 
-  .table-wrap {
-    background: var(--bg-elevated);
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    overflow-x: auto;
-  }
-
+  /* Flags.svelte's `.ftable` and Watchlist.svelte's `.watch-table`
+     treatment (both round 29/30, `#s7`): a bare table, no elevated
+     outer card -- the "heavy card, rounded corners" look the owner
+     called out (#719) came from wrapping this same table in one. Mono
+     throughout, matching the density both siblings draw. */
   table {
     width: 100%;
     border-collapse: collapse;
-    font-size: 13px;
+    font-family: var(--font-mono);
+    font-size: 12px;
   }
 
   th,
   td {
-    padding: 9px 14px;
+    padding: 8px 12px;
     text-align: left;
     white-space: nowrap;
   }
 
   th {
-    font-size: 11px;
+    font-size: 9.5px;
     font-weight: 600;
     text-transform: uppercase;
-    letter-spacing: 0.04em;
-    color: var(--fg-muted);
+    letter-spacing: 0.1em;
+    color: var(--fg-dim);
     border-bottom: 1px solid var(--border);
     cursor: pointer;
     user-select: none;
   }
 
   th:hover {
-    color: var(--fg);
+    color: var(--fg-muted);
   }
 
   th .dir {
@@ -325,7 +323,7 @@
      round-18's idiom (docs/design/concepts/round-18/the-docket-opened.html):
      no border of its own, a dashed underline per input, dim until focused. */
   tr.filters td {
-    padding: 2px 14px 8px;
+    padding: 2px 12px 8px;
     border-bottom: 1px solid var(--border);
   }
 
@@ -350,19 +348,25 @@
     border-bottom-color: var(--accent);
   }
 
+  /* Matches Watchlist's `.empty-row`: a colspan message reads as plain
+     prose, not a dense-mono log line, and carries no border of its own. */
   .empty-filtered {
     color: var(--fg-dim);
+    font-family: var(--font-sans);
     font-size: 13px;
     padding: 14px;
     white-space: normal;
+    border-bottom: none;
   }
 
   tbody tr {
     border-bottom: 1px solid var(--border);
   }
 
-  tbody tr:last-child {
-    border-bottom: none;
+  /* Same hover as `.frow`/`.wt-row`: a plain highlight, not zebra
+     striping -- neither sibling stripes its rows. */
+  tbody tr:hover td {
+    background: var(--bg-hover);
   }
 
   .mono {
@@ -373,6 +377,18 @@
   .actor {
     color: var(--fg);
     font-weight: 600;
+  }
+
+  /* When and Who hug their content so What -- the only column with a
+     sentence in it -- takes the slack. Without this the auto layout
+     spreads three columns evenly and the log reads as mostly gutter,
+     which is half of why the owner called it "dropped in from another
+     project" (#719). */
+  th:nth-child(1),
+  th:nth-child(2),
+  .when,
+  .actor {
+    width: 1%;
   }
 
   .when {
