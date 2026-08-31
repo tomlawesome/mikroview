@@ -177,6 +177,67 @@ broke a test for a reason that had nothing to do with the code — worth
 checking for similar defaults mismatches before assuming a GitLab-only
 failure is a real regression.
 
+## The second host live-check runs on
+
+Live-check is slow and it holds the workstation while it runs, which is
+the bottleneck #673 set out to relieve: its image exists so `make
+live-check` can run somewhere other than the machine you are working on.
+Somewhere else and local -- **not** in CI. No pipeline on either host
+runs the gate, and none should; a job proposing to was closed unmerged
+(#704, #705) once that was clear.
+
+The second host is the box that also serves the GitLab runner. It has a
+dedicated unprivileged account, `mvagent`, provisioned by the owner on
+2026-08-31.
+
+Reach it as **`mikroview-runner`** — an ssh config entry on the agent
+host, key `~/.ssh/mikroview_runner`, key-only, no passphrase. The
+hostname is deliberately not written here: this file already refuses to
+carry network topology (see the GitLab section above), and the address
+lives in the agent's own ssh config where it is needed. Ask the owner if
+it is missing rather than guessing.
+
+**What the account can do.** Run containers under its own rootless
+Docker — its own daemon on its own socket
+(`/run/user/1001/docker.sock`, `DOCKER_HOST` set in its `.bashrc`),
+separate from the runner's. That is enough to build
+`live-check.Dockerfile` and run `make live-check` inside it, which is
+the whole job.
+
+**Build the image, never pull it.** The published
+`ghcr.io/tomlawesome/mikroview/live-check` is private, and a registry
+credential on that host would be a secret nobody is watching. Building
+from the Dockerfile needs none and tests the same thing. The repository
+is private too, so copy the working tree over rather than cloning it
+there.
+
+**What it deliberately cannot do**, and none of it should be worked
+around: no sudo; no read access to `/etc/gitlab-runner/config.toml`; no
+SSH forwarding of any kind, so the account cannot be used as a route
+into the rest of the network. It also holds no registry credential, so
+it cannot pull the private gate image — build from the Dockerfile
+instead, which needs no credential and tests the same thing.
+
+**Never put a token on that host**, for a pull or a clone or anything
+else. If a step seems to need one, the step is wrong.
+
+Two traps met while setting this up, recorded so the next person does
+not:
+
+- `adduser` assigns a subordinate UID/GID range of its own. Adding a
+  second with `usermod --add-subuids` gives the account two ranges, and
+  rootless Docker then fails at `newuidmap` with an unhelpful map dump.
+  One range only.
+- `usermod` refuses while any process of that user is alive, and with
+  lingering enabled `systemd --user` restarts faster than
+  `loginctl terminate-user` returns. Editing the single line out of
+  `/etc/subuid` and `/etc/subgid` avoids the fight entirely.
+
+Unrelated to mikroview but observed on that host: `gitlab-runner` and
+`tom` are assigned the *same* subordinate range in both files, so the
+isolation between those two accounts' containers is thinner than it
+looks. Reported to the owner; not an agent's to change.
+
 ## Security by design
 
 New features are researched before they are designed, including an
