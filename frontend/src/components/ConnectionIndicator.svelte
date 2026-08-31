@@ -37,8 +37,9 @@
     display: inline-flex;
     align-items: center;
     gap: 6px;
-    font-size: 13px;
-    font-weight: 500;
+    font-size: 11px;
+    font-weight: 400;
+    color: var(--fg-muted);
   }
 
   .dot {
@@ -47,25 +48,15 @@
     border-radius: 50%;
   }
 
-  .conn-open {
-    color: var(--accept-tinted);
-  }
   .conn-open .dot {
     background: var(--accept-tinted);
-    box-shadow: 0 0 6px var(--accept-tinted);
   }
 
-  .conn-connecting {
-    color: var(--drop-tinted);
-  }
   .conn-connecting .dot {
     background: var(--drop-tinted);
     animation: pulse 1s ease-in-out infinite;
   }
 
-  .conn-closed {
-    color: var(--reject-tinted);
-  }
   .conn-closed .dot {
     background: var(--reject-tinted);
   }
