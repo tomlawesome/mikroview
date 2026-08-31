@@ -125,7 +125,7 @@
     {#if hour.axis.length === 0}
       <p class="empty">No minutes recorded yet.</p>
     {:else}
-      <div class="table-wrap scrollbar">
+      <div class="table-wrap">
         <table>
           <thead>
             <tr>
@@ -252,11 +252,13 @@
     overflow: hidden;
   }
 
-  /* Sized from its own content rather than stretched to the frame: at
-     width:100% the columns spread until the last one runs under the
-     page's scrollbar. Round 30 sets a floor and lets it centre. */
+  /* Round 30's override block (the-whole.html, ~line 1978) supersedes
+     the first draft's fixed 640px floor: the table spans its container
+     instead of sitting as a narrow column in a wide scene (#716). */
   table {
-    min-width: 640px;
+    width: 92%;
+    max-width: 1480px;
+    min-width: 0;
     border-collapse: collapse;
     font-family: var(--font-mono);
     font-size: 12px;
@@ -275,38 +277,49 @@
     font-family: var(--font-mono);
   }
 
+  /* Every header cell gets the same small-caps treatment whether or not
+     it holds a sort button -- Top port/Top talker aren't sortable but
+     must still read like the rest of the row instead of falling back to
+     the browser's default th styling (#716). */
   thead th {
-    position: sticky;
-    top: 0;
-    z-index: 1;
-    background: var(--bg-elevated);
-    border-bottom: 1px solid var(--border);
-    padding: 0;
+    border-bottom: 1px solid var(--hair-2);
+    text-align: right;
+    font-size: 9.5px;
+    font-weight: 600;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--fg-dim);
   }
 
   thead th button {
+    all: unset;
+    display: block;
     width: 100%;
-    background: transparent;
-    border: none;
-    color: var(--fg-dim);
-    font-size: 10px;
-    font-weight: 650;
-    letter-spacing: 0.04em;
-    text-transform: uppercase;
-    text-align: right;
-    padding: 6px 10px;
+    cursor: pointer;
+    text-align: inherit;
   }
 
   thead th button:hover {
     color: var(--fg);
   }
 
-  thead th.refused button {
+  /* `all: unset` above drops the UA focus ring; these headers are
+     keyboard-reachable sort controls, so put it back in the app's own
+     focus ink rather than leaving them silently unfocusable. */
+  thead th button:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: -2px;
+  }
+
+  thead th.refused {
     color: var(--chart-refused);
   }
 
-  thead th:first-child button,
-  tbody th button {
+  thead th.natted {
+    color: var(--natted);
+  }
+
+  thead th:first-child {
     text-align: left;
   }
 
@@ -314,6 +327,7 @@
     padding: 0;
     text-align: left;
     font-weight: 400;
+    border-bottom: 1px solid var(--border);
   }
 
   tbody th button.minute {
@@ -327,15 +341,16 @@
     text-align: left;
   }
 
-  tbody tr:nth-child(even) {
-    background: var(--bg-hover);
+  /* Round 30 drops the zebra striping and the sticky elevated header
+     band for a hairline under every row (#716). */
+  tbody td {
+    border-bottom: 1px solid var(--border);
   }
 
   /* Amber is time: the cursor's minute, the same colour it wears on the
      drum and the register, so the three views agree about which minute
      is selected. */
-  tbody tr.selected,
-  tbody tr.selected:nth-child(even) {
+  tbody tr.selected {
     background: color-mix(in srgb, var(--now) 16%, transparent);
     box-shadow: inset 2px 0 0 var(--now);
   }
@@ -355,22 +370,24 @@
     color: var(--natted);
   }
 
-  thead th.natted button {
-    color: var(--natted);
+  /* Top port/top talker: a label per minute, not a count, so it reads
+     left-aligned under a right-aligned header, per the mockup's td.t
+     override (#716). */
+  td.top {
+    text-align: left;
   }
 
   tfoot th,
   tfoot td {
-    border-top: 1px solid var(--border);
-    background: var(--bg-elevated);
+    border-top: 1px solid var(--hair-2);
     font-weight: 600;
     color: var(--fg);
   }
 
   tfoot th {
     text-align: left;
-    font-size: 10px;
-    letter-spacing: 0.04em;
+    font-size: 9.5px;
+    letter-spacing: 0.12em;
     text-transform: uppercase;
     color: var(--fg-dim);
   }
