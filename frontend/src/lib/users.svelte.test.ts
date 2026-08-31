@@ -39,8 +39,18 @@ describe('UsersState.create', () => {
     const result = await usersState.create('carol', 'password456')
 
     expect(result).toBeNull()
-    expect(createUser).toHaveBeenCalledWith('carol', 'password456')
+    expect(createUser).toHaveBeenCalledWith('carol', 'password456', 'user')
     expect(usersState.list).toHaveLength(2)
+  })
+
+  it('passes the viewer tier through when asked for one (#653)', async () => {
+    vi.mocked(createUser).mockResolvedValue(null)
+    vi.mocked(fetchUsers).mockResolvedValue([user()])
+
+    const result = await usersState.create('dana', 'password456', 'viewer')
+
+    expect(result).toBeNull()
+    expect(createUser).toHaveBeenCalledWith('dana', 'password456', 'viewer')
   })
 
   it('surfaces the error and does not refresh when the create is refused', async () => {

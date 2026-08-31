@@ -1149,20 +1149,25 @@ func TestBearerTokenCannotReachDefinitions(t *testing.T) {
 }
 
 // TestDefinitionsListOpenToViewer pins the viewer-readable settings
-// widening (#490) for GET /api/definitions: a signed-in non-admin now
-// gets 200, a signed-out caller is still refused, and creating a
-// definition -- the write that sits right beside this GET -- stays
-// admin-only.
+// widening (#490) for GET /api/definitions: a signed-in caller at any
+// tier, including viewer (#653), gets 200; a signed-out caller is still
+// refused. It also pins #653's own widening of the write beside this
+// GET: creating a definition, admin-only until #653, is now open to the
+// user tier and refused only for a viewer.
 func TestDefinitionsListOpenToViewer(t *testing.T) {
 	s := newAuthTestServer(t)
 	ts := httptest.NewServer(s.Routes())
 	defer ts.Close()
 
 	adminClient := setUpAdmin(t, ts)
-	postJSON(t, adminClient, ts.URL+"/api/auth/users", createUserRequest{Username: "viewer", Password: "password456", Role: "user"}).Body.Close()
+	postJSON(t, adminClient, ts.URL+"/api/auth/users", createUserRequest{Username: "operator", Password: "password456", Role: "user"}).Body.Close()
+	postJSON(t, adminClient, ts.URL+"/api/auth/users", createUserRequest{Username: "watcher", Password: "password789", Role: "viewer"}).Body.Close()
+
+	userClient := &http.Client{Jar: mustCookieJar(t)}
+	postJSON(t, userClient, ts.URL+"/api/auth/login", credentialsRequest{Username: "operator", Password: "password456"}).Body.Close()
 
 	viewerClient := &http.Client{Jar: mustCookieJar(t)}
-	postJSON(t, viewerClient, ts.URL+"/api/auth/login", credentialsRequest{Username: "viewer", Password: "password456"}).Body.Close()
+	postJSON(t, viewerClient, ts.URL+"/api/auth/login", credentialsRequest{Username: "watcher", Password: "password789"}).Body.Close()
 
 	resp, err := viewerClient.Get(ts.URL + "/api/definitions")
 	if err != nil {
@@ -1182,10 +1187,17 @@ func TestDefinitionsListOpenToViewer(t *testing.T) {
 		t.Errorf("expected a signed-out caller to still be refused, got %d", anonResp.StatusCode)
 	}
 
-	writeResp := postJSON(t, viewerClient, ts.URL+"/api/definitions",
+	viewerWriteResp := postJSON(t, viewerClient, ts.URL+"/api/definitions",
 		createDefinitionRequest{Name: "should-fail", Expectation: &expectationRequest{Ports: []int{22}}})
-	defer writeResp.Body.Close()
-	if writeResp.StatusCode != http.StatusForbidden {
-		t.Errorf("expected definition creation to stay admin-only, got %d", writeResp.StatusCode)
+	defer viewerWriteResp.Body.Close()
+	if viewerWriteResp.StatusCode != http.StatusForbidden {
+		t.Errorf("expected definition creation to refuse a viewer (#653), got %d", viewerWriteResp.StatusCode)
+	}
+
+	userWriteResp := postJSON(t, userClient, ts.URL+"/api/definitions",
+		createDefinitionRequest{Name: "should-succeed", Expectation: &expectationRequest{Ports: []int{22}}})
+	defer userWriteResp.Body.Close()
+	if userWriteResp.StatusCode != http.StatusCreated {
+		t.Errorf("expected definition creation to succeed for a user (#653 widened this from admin-only), got %d", userWriteResp.StatusCode)
 	}
 }

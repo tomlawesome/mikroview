@@ -370,6 +370,7 @@ var authErrorMessages = map[error]string{
 	auth.ErrPasswordTooShort:   auth.ErrPasswordTooShort.Error(), // already phrased for an end user
 	auth.ErrUsernameInvalid:    "that username contains characters that aren't allowed -- no control characters, and no leading or trailing spaces",
 	auth.ErrUsernameLength:     auth.ErrUsernameLength.Error(), // already phrased for an end user
+	auth.ErrInvalidRole:        `role must be "user" or "viewer"`,
 }
 
 // writeAuthError translates err into a safe, user-facing message via
@@ -594,6 +595,22 @@ type createUserRequest struct {
 	Role     string `json:"role"`
 }
 
+// callerAtLeast reports whether r's authenticated caller holds a role at
+// or above min (auth.Role.AtLeast's stacked tiers: admin ⊇ user ⊇
+// viewer). callerIsAdmin below is this specialized to RoleAdmin -- every
+// gate in this package, admin or user tier, is defined in terms of this
+// one function, so there is a single implementation of "who is allowed
+// to reach this" rather than an admin check and a separately-maintained
+// user check that could drift apart.
+//
+// While no account exists, caller is nil, so this returns false without
+// needing to know why Count() is 0 -- see callerIsAdmin's doc comment
+// for why that property matters.
+func callerAtLeast(r *http.Request, min auth.Role) bool {
+	caller := userFromContext(r)
+	return caller != nil && caller.Role.AtLeast(min)
+}
+
 // callerIsAdmin reports whether r's authenticated caller is an admin --
 // the strict check every admin-only mutation of *account-equivalent*
 // state (user management, and internal/entities' admin-gated CRUD) uses.
@@ -611,8 +628,18 @@ type createUserRequest struct {
 // While no account exists, caller is nil, so this returns false without
 // needing to know why Count() is 0.
 func callerIsAdmin(r *http.Request) bool {
-	caller := userFromContext(r)
-	return caller != nil && caller.Role == auth.RoleAdmin
+	return callerAtLeast(r, auth.RoleAdmin)
+}
+
+// callerIsUser reports whether r's authenticated caller holds at least
+// the user role -- the gate for #653's operational tier: the writes that
+// affect what mikroview is watching or clearing (flag judgement/clearing,
+// and every /api/definitions, /api/entities, /api/naming/provenance and
+// /api/suggestions route), open to "user" and "admin" alike but not
+// "viewer". See callerAtLeast for the shared nil-caller/no-bypass
+// reasoning.
+func callerIsUser(r *http.Request) bool {
+	return callerAtLeast(r, auth.RoleUser)
 }
 
 // handleAuthCreateUser lets an existing admin add another account -- the
@@ -630,7 +657,7 @@ func (s *Server) handleAuthCreateUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// A request for an admin is refused outright rather than quietly
-	// downgraded to a user: the caller asked for something this
+	// downgraded to a lesser role: the caller asked for something this
 	// deployment does not have, and silently creating a lesser account
 	// under the name they chose is worse than telling them. auth.Store
 	// refuses it too -- this exists to give a usable status and message
@@ -639,14 +666,30 @@ func (s *Server) handleAuthCreateUser(w http.ResponseWriter, r *http.Request) {
 		writeAuthError(w, r, auth.ErrSingleAdmin, http.StatusBadRequest)
 		return
 	}
+	// Empty defaults to RoleUser (#653) -- the pre-existing behavior for
+	// every caller of this endpoint before viewer existed, preserved so
+	// an unmodified admin UI/script keeps creating the same accounts it
+	// always did. Anything other than "", "user" or "viewer" is a request
+	// for a role this deployment does not recognize, refused the same way
+	// "admin" is above rather than silently coerced.
+	role := auth.RoleUser
+	switch req.Role {
+	case "", string(auth.RoleUser):
+		role = auth.RoleUser
+	case string(auth.RoleViewer):
+		role = auth.RoleViewer
+	default:
+		writeAuthError(w, r, auth.ErrInvalidRole, http.StatusBadRequest)
+		return
+	}
 
-	user, err := s.Auth.CreateUser(req.Username, req.Password, auth.RoleUser, time.Now())
+	user, err := s.Auth.CreateUser(req.Username, req.Password, role, time.Now())
 	if err != nil {
 		status := http.StatusInternalServerError
 		switch err {
 		case auth.ErrUsernameTaken:
 			status = http.StatusConflict
-		case auth.ErrPasswordTooShort, auth.ErrSingleAdmin, auth.ErrUsernameInvalid, auth.ErrUsernameLength:
+		case auth.ErrPasswordTooShort, auth.ErrSingleAdmin, auth.ErrInvalidRole, auth.ErrUsernameInvalid, auth.ErrUsernameLength:
 			status = http.StatusBadRequest
 		}
 		writeAuthError(w, r, err, status)
