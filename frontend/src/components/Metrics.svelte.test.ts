@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 import { describe, expect, it, beforeEach, vi } from 'vitest'
+import { flushSync } from 'svelte'
 import { render, screen } from '@testing-library/svelte'
 import { fireEvent } from '@testing-library/dom'
 
@@ -65,34 +66,31 @@ describe('Metrics', () => {
     localStorage.clear()
   })
 
-  it('offers all three views in the page header, with the seismograph selected', () => {
-    render(Metrics)
-    for (const name of ['Seismograph', 'Register', 'Table']) {
-      expect(screen.getByRole('button', { name })).toBeTruthy()
-    }
-    expect(screen.getByRole('button', { name: 'Seismograph' }).getAttribute('aria-pressed')).toBe('true')
-  })
-
-  it('persists the chosen view, so a reload applies it before first paint', async () => {
-    render(Metrics)
-    await fireEvent.click(screen.getByRole('button', { name: 'Register' }))
-    expect(metricsPref.view).toBe('register')
-    expect(localStorage.getItem('mikroview-metrics-view')).toBe('register')
-  })
+  // The three-view switcher moved to the scene bar (#700), where round
+  // 30 rides it beside the wordmark. Its controls, its default and its
+  // persistence are covered in SceneBar.svelte.test.ts; what stays this
+  // page's business is that the chosen view is the one it renders, and
+  // that the cursor survives the switch.
 
   it('keeps the cursor on the same minute across a view switch', async () => {
     render(Metrics)
     // The table is the one view whose minutes are named controls, so it
-    // is where a click can select a minute without geometry.
-    await fireEvent.click(screen.getByRole('button', { name: 'Table' }))
+    // is where a click can select a minute without geometry. The view
+    // is chosen through the store rather than a button since #700 moved
+    // the switcher to the bar -- this page renders whatever it is set
+    // to, which is the half being tested here.
+    metricsPref.setView('table')
+    flushSync()
     const rows = screen.getAllByRole('button', { name: /^\d\d:\d\d$/ })
     await fireEvent.click(rows[0])
     const selected = metricsPref.minute
     expect(selected).not.toBeNull()
 
-    await fireEvent.click(screen.getByRole('button', { name: 'Seismograph' }))
+    metricsPref.setView('seismograph')
+    flushSync()
     expect(metricsPref.minute).toBe(selected)
-    await fireEvent.click(screen.getByRole('button', { name: 'Register' }))
+    metricsPref.setView('register')
+    flushSync()
     expect(metricsPref.minute).toBe(selected)
   })
 

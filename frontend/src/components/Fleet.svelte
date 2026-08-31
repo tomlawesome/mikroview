@@ -18,7 +18,6 @@
   import { formatRelative, formatHM } from '../lib/format'
   import { STATUS_LABEL, sortedDevices, recentCount as recentCountOf } from '../lib/fleet'
   import GhostRows from './GhostRows.svelte'
-  import PageHeader from './PageHeader.svelte'
 
   const rows = $derived(sortedDevices(appState.devices))
 
@@ -56,10 +55,9 @@
 </script>
 
 <div class="page scrollbar">
-  <!-- No readOnly chip (#548/#490's grammar): this table has no edit
-       affordance for anyone, admin included, so there is no
-       admin-vs-viewer distinction here for a chip to declare. -->
-  <PageHeader title="Fleet" />
+  <!-- No page heading (#697/#700). Fleet never carried a readOnly chip
+       either (#548/#490's grammar): the table has no edit affordance for
+       anyone, admin included, so there is no distinction to declare. -->
   <p class="intro">
     Every RouterOS device mikroview has seen syslog from, or that's configured in <code>devices</code> but hasn't
     sent anything yet. A <strong>configured</strong> device that goes quiet for longer than the configured staleness

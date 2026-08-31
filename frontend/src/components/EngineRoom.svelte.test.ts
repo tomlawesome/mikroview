@@ -197,7 +197,14 @@ describe('The settings shelf (#633)', () => {
     render(EngineRoom)
     await settle()
 
-    expect(screen.getByText('READ-ONLY')).toBeTruthy()
+    // The READ-ONLY chip is gone with the page heading it lived in
+    // (#700): round 30 draws no heading on any deck and no replacement
+    // chip anywhere, so #548's grammar -- read-only declared once, in
+    // words -- currently has nowhere to be said. That is recorded as a
+    // gap on #691, not a decision that viewers stop being told; the
+    // component and its own test are untouched and still pass. This
+    // pins the present truth so the gap cannot be mistaken for done.
+    expect(screen.queryByText('READ-ONLY')).toBeNull()
 
     // Tokens door is viewer-readable but its verbs are gated.
     expect(screen.getByText('rb5009-ingest')).toBeTruthy()
