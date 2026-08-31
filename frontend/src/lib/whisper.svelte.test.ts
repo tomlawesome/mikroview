@@ -7,58 +7,53 @@ import { appState } from './state.svelte'
 const MIN = 60_000
 
 beforeEach(() => {
-  whisperState.fenceOn = false
-  whisperState.fenceFirst = null
   whisperState.fenceRange = null
   whisperState.seekMs = null
   appState.autoscroll = true
 })
 
-describe('whisperState.clickMinute -- plain (non-fence) mode', () => {
+describe('whisperState.seek', () => {
   it('records the clicked minute and turns autoscroll off (round 22: "click to seek... autoscroll off")', () => {
-    whisperState.clickMinute(10 * MIN)
+    whisperState.seek(10 * MIN)
     expect(whisperState.seekMs).toBe(10 * MIN)
     expect(appState.autoscroll).toBe(false)
   })
 
-  it('reseeks on every click without needing a second one', () => {
-    whisperState.clickMinute(10 * MIN)
-    whisperState.clickMinute(11 * MIN)
+  it('reseeks on every call without needing a second one', () => {
+    whisperState.seek(10 * MIN)
+    whisperState.seek(11 * MIN)
     expect(whisperState.seekMs).toBe(11 * MIN)
+  })
+
+  it('clears a drawn fence -- #717\'s whole "clearing" story is a click that also seeks', () => {
+    whisperState.setFenceRange(1 * MIN, 2 * MIN)
+    expect(whisperState.fenceRange).not.toBeNull()
+
+    whisperState.seek(5 * MIN)
+    expect(whisperState.fenceRange).toBeNull()
   })
 })
 
-describe('whisperState.toggleFence / clickMinute -- fence mode', () => {
-  it('takes two clicks to close a range, order-independent', () => {
-    whisperState.toggleFence()
-    expect(whisperState.fenceOn).toBe(true)
-
-    whisperState.clickMinute(12 * MIN)
-    expect(whisperState.fenceRange).toBeNull()
-    expect(whisperState.fenceFirst).toBe(12 * MIN)
-
-    whisperState.clickMinute(10 * MIN)
-    expect(whisperState.fenceRange).toEqual({ start: 10 * MIN, end: 12 * MIN + MIN })
-    expect(whisperState.fenceFirst).toBeNull()
+describe('whisperState.setFenceRange', () => {
+  it('closes a range, order-independent', () => {
+    whisperState.setFenceRange(12 * MIN, 10 * MIN)
+    expect(whisperState.fenceRange).toEqual({ start: 10 * MIN, end: 12 * MIN })
   })
 
-  it('turning the fence off clears the drawn range rather than leaving it dimmed and un-editable', () => {
-    whisperState.toggleFence()
-    whisperState.clickMinute(1 * MIN)
-    whisperState.clickMinute(2 * MIN)
+  it('does not touch Autoscroll on its own -- only a plain seek does that', () => {
+    appState.autoscroll = true
+    whisperState.setFenceRange(1 * MIN, 2 * MIN)
+    expect(appState.autoscroll).toBe(true)
+  })
+})
+
+describe('whisperState.clearFence', () => {
+  it('drops the range rather than leaving it dimmed and un-editable', () => {
+    whisperState.setFenceRange(1 * MIN, 2 * MIN)
     expect(whisperState.fenceRange).not.toBeNull()
 
-    whisperState.toggleFence()
-    expect(whisperState.fenceOn).toBe(false)
+    whisperState.clearFence()
     expect(whisperState.fenceRange).toBeNull()
-  })
-
-  it('does not touch Autoscroll on its own -- only a plain seek click does that', () => {
-    appState.autoscroll = true
-    whisperState.toggleFence()
-    whisperState.clickMinute(1 * MIN)
-    whisperState.clickMinute(2 * MIN)
-    expect(appState.autoscroll).toBe(true)
   })
 })
 

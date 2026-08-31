@@ -1,61 +1,54 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 //
-// Reactive state behind the whisper's click-to-seek and fence controls
-// (issue #644, round-22/round-29's ratified "the whisper commands the
-// stream"). Deliberately not part of appState.filters: neither seeking
-// nor fencing is a filter -- both are display-only lenses over the same
-// buffer, the same relationship appState.frozenPool/streamHeld already
-// has to Autoscroll-off. A module singleton, not component-local state,
-// so it survives the Stream card unmounting when the deck rolls to
-// another scene (Deck.svelte only mounts the centred card and its
-// neighbours).
+// Reactive state behind the whisper's click-to-seek and drag-to-fence
+// controls (issue #644, elegant-fence redraw #717). Deliberately not
+// part of appState.filters: neither seeking nor fencing is a filter --
+// both are display-only lenses over the same buffer, the same
+// relationship appState.frozenPool/streamHeld already has to
+// Autoscroll-off. A module singleton, not component-local state, so it
+// survives the Stream card unmounting when the deck rolls to another
+// scene (Deck.svelte only mounts the centred card and its neighbours).
+//
+// #717 replaced the old "arm with a button, then two clicks" fence with
+// "click seeks, drag fences" -- the gesture and the bucket-index math it
+// needs live in Whisper.svelte (it alone knows where the curve's pixels
+// fall), so this file keeps only the two facts anything downstream
+// needs: the seeked minute and the closed fence range.
 import { appState } from './state.svelte'
 
 class WhisperState {
-  fenceOn = $state(false)
-  // The first of the fence's two clicks, in ms -- null once idle, or
-  // once the second click has closed a range.
-  fenceFirst = $state<number | null>(null)
   // The closed fence range, in ms, end-exclusive -- null means "no
   // fence applied", the one thing LiveTable/EventRow need to decide
   // what to dim.
   fenceRange = $state<{ start: number; end: number } | null>(null)
   // The single minute (bucket start, ms) the whisper's stat line
-  // reports from a plain, non-fence click -- null means "the rolling
-  // window", the default.
+  // reports from a plain click -- null means "the rolling window", the
+  // default.
   seekMs = $state<number | null>(null)
 
-  // fenceOn flips the mode; a fence already drawn is cleared with it --
-  // turning fencing off is "back to the rolling window", not "keep the
-  // last range dimmed but stop being able to redraw it".
-  toggleFence() {
-    this.fenceOn = !this.fenceOn
-    this.fenceFirst = null
-    if (!this.fenceOn) this.fenceRange = null
-  }
-
-  // One call per curve click, at the minute (bucket start, ms) actually
-  // hit. Fencing consumes two calls per range; plain mode seeks on
-  // every call.
-  clickMinute(minuteMs: number) {
-    if (this.fenceOn) {
-      if (this.fenceFirst === null) {
-        this.fenceFirst = minuteMs
-        this.fenceRange = null
-      } else {
-        const start = Math.min(this.fenceFirst, minuteMs)
-        const end = Math.max(this.fenceFirst, minuteMs) + 60_000
-        this.fenceRange = { start, end }
-        this.fenceFirst = null
-      }
-      return
-    }
+  // A plain click on the curve: seeks to that minute, and cancels any
+  // fence already drawn -- fencing and seeking are mutually exclusive,
+  // and a click clearing a stale fence (rather than requiring a
+  // separate "clear" control) is the whole of #717's clearing story.
+  seek(minuteMs: number) {
     this.seekMs = minuteMs
+    this.fenceRange = null
     // Round 22's own ratified line: "click to seek... autoscroll off" --
     // flips the real toggle rather than a copy of its state, so the
     // scene bar's own Autoscroll button stays the single source of
     // truth for whether the stream is held.
     appState.autoscroll = false
+  }
+
+  // A closed range, from either a mouse drag or the keyboard's two
+  // Enter presses. Order-independent -- the caller need not know which
+  // edge came first.
+  setFenceRange(aMs: number, bMs: number) {
+    this.fenceRange = { start: Math.min(aMs, bMs), end: Math.max(aMs, bMs) }
+  }
+
+  clearFence() {
+    this.fenceRange = null
   }
 
   // Whether a row's receipt time falls outside the active fence --
