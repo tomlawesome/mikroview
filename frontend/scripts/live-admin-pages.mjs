@@ -23,8 +23,7 @@
 // The room's own read-only grammar is live-engine-room.mjs's job. This
 // scenario stops at the menu and the group's page-level facts.
 
-import { chromium } from 'playwright'
-import { session, check, done, goTo, openAccountMenu } from './live-browser.mjs'
+import { session, check, done, goTo, openAccountMenu, launchBrowser } from './live-browser.mjs'
 
 const URL_BASE = process.env.MV_URL
 
@@ -121,7 +120,7 @@ check(true, `the viewer account "${VIEWER_USER}" is created from the engine room
 
 // --- Viewer: absent, never disabled -------------------------------------
 
-const browser = await chromium.launch()
+const browser = await launchBrowser()
 const viewerCtx = await browser.newContext({ ignoreHTTPSErrors: true })
 const viewerPage = await viewerCtx.newPage()
 await viewerPage.goto(URL_BASE, { waitUntil: 'networkidle' })

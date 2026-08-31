@@ -22,8 +22,7 @@
 //     ruling of 2026-08-24, so a viewer issuing it would be a page that
 //     loads and immediately 403s.
 
-import { chromium } from 'playwright'
-import { session, feedSyslog, check, done, goTo } from './live-browser.mjs'
+import { session, feedSyslog, check, done, goTo, launchBrowser } from './live-browser.mjs'
 
 const URL_BASE = process.env.MV_URL
 
@@ -176,7 +175,7 @@ await page.fill(`${PEOPLE} .inline-form input[type="password"]`, VIEWER_PASS)
 await page.click(`${PEOPLE} .inline-form .save`)
 await page.waitForSelector(`${PEOPLE} .row:has-text("${VIEWER_USER}")`)
 
-const browser = await chromium.launch()
+const browser = await launchBrowser()
 const viewerCtx = await browser.newContext({ ignoreHTTPSErrors: true })
 const viewerPage = await viewerCtx.newPage()
 

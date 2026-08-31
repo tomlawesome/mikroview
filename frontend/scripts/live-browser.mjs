@@ -11,7 +11,7 @@
 //   ...
 //   done()
 
-import { chromium } from 'playwright'
+import { chromium, firefox, webkit } from 'playwright'
 import { execFileSync } from 'child_process'
 import { setGlobalDispatcher, Agent } from 'undici'
 import { fileURLToPath } from 'url'
@@ -25,6 +25,64 @@ const PASS = process.env.MV_PASS
 if (!URL_BASE) {
   console.error('MV_URL unset -- run: eval "$(scripts/live-env.sh up)"')
   process.exit(2)
+}
+
+/**
+ * MV_BROWSER picks the engine every scenario runs under: chromium (the
+ * default, and the only engine the gate has ever driven), firefox, or
+ * webkit.
+ *
+ * It exists because "every scenario is Chromium" was itself the gate's
+ * biggest blind spot. #659 was a static style="..." attribute that
+ * Chromium tolerates and this app's CSP-conscious Firefox refuses --
+ * and it shipped green through live-check, vitest and every screenshot,
+ * because nothing in the gate had ever asked a second engine. Scenarios
+ * do not read this directly; resolving it once here, and handing every
+ * browser launch (this file's own session() and the handful of
+ * scenarios that open a second browser for a second signed-in tab)
+ * through launchBrowser() below, is what makes "run the suite under
+ * Firefox" mean the whole suite rather than most of it.
+ *
+ * An unrecognised value exits rather than falling back to chromium.
+ * Silently substituting the default would produce a run that reports
+ * PASS believing it exercised Firefox when it never left Chromium --
+ * which is a worse outcome than the run simply refusing to start, since
+ * a green result then gets cited as coverage that was never taken.
+ */
+const ENGINES = { chromium, firefox, webkit }
+const BROWSER_NAME = process.env.MV_BROWSER || 'chromium'
+if (!(BROWSER_NAME in ENGINES)) {
+  console.error(
+    `MV_BROWSER=${JSON.stringify(process.env.MV_BROWSER)} is not a recognised engine -- ` +
+      `choose one of: ${Object.keys(ENGINES).join(', ')}`,
+  )
+  process.exit(2)
+}
+
+/**
+ * launchBrowser is chromium.launch() (or firefox's, or webkit's)
+ * with one difference: a missing browser binary says so in the one
+ * sentence that matters -- which engine, and the exact command that
+ * fixes it -- instead of Playwright's own multi-line "Looks like
+ * Playwright was just installed or updated" block, which names a path
+ * under ~/.cache and never says `npx playwright install <engine>`.
+ *
+ * Only that specific failure is rewritten. Anything else (a real crash,
+ * missing system libraries, ...) is rethrown as Playwright reported it,
+ * because guessing a friendlier message for a failure this function
+ * does not understand risks hiding what actually went wrong.
+ */
+export async function launchBrowser() {
+  try {
+    return await ENGINES[BROWSER_NAME].launch()
+  } catch (e) {
+    const message = String(e?.message ?? e)
+    if (/Executable doesn't exist/.test(message)) {
+      console.error(`${BROWSER_NAME}'s browser binary is not installed -- run: npx playwright install ${BROWSER_NAME}`)
+      process.exit(2)
+    }
+    throw e
+  }
 }
 
 let failed = false
@@ -255,7 +313,7 @@ export async function goTo(page, label) {
 }
 
 export async function session({ waitForEvents = 0, dismissSetup = true, landing = 'stream' } = {}) {
-  browser = await chromium.launch()
+  browser = await launchBrowser()
   // ignoreHTTPSErrors, because the certificate under test is one
   // mikroview generated for itself seconds ago -- self-signed, with no
   // chain to verify against.

@@ -15,8 +15,7 @@
 // fail. It changes it back at the end regardless, and asserts that it
 // did.
 
-import { chromium } from 'playwright'
-import { session, check, done, openAccountMenu } from './live-browser.mjs'
+import { session, check, done, openAccountMenu, launchBrowser } from './live-browser.mjs'
 
 const URL_BASE = process.env.MV_URL
 const USER = process.env.MV_USER
@@ -36,7 +35,7 @@ async function api(client, method, path_, body) {
 
 // A second signed-in browser, genuinely separate: its own context, its
 // own cookie jar. This is the session that must not survive.
-const browser = await chromium.launch()
+const browser = await launchBrowser()
 const otherCtx = await browser.newContext({ ignoreHTTPSErrors: true })
 const other = await otherCtx.newPage()
 await other.goto(URL_BASE, { waitUntil: 'networkidle' })
