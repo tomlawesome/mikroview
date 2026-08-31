@@ -120,6 +120,61 @@ test:frontend:
     - npm test
 
 # ---------------------------------------------------------------------------
+# GATE — the live check, in a real browser, in the image #673 built for it.
+# ---------------------------------------------------------------------------
+
+gate:live-check:
+  stage: test
+  # The toolchain image published by .github/workflows/live-check-image.yml:
+  # Go, Node and Playwright's three browsers, prebuilt so a run does not spend
+  # its first ten minutes installing them. Built on GitHub because that is
+  # where the Dockerfile's pushes land; pulled here because this is where a
+  # runner with time to spare lives.
+  #
+  # ghcr.io is private for this repo, so the pull needs credentials. GitLab
+  # takes them as a DOCKER_AUTH_CONFIG CI/CD variable, not as a login step:
+  # the pull happens before any script runs. It is not set yet -- see the
+  # issue this job was added on. Until it is, this job fails at pull with
+  # "no basic auth credentials", which is a missing credential and not a
+  # failing gate.
+  image: ghcr.io/tomlawesome/mikroview/live-check:latest
+  <<: *dev_or_mr
+  variables:
+    # The reason #673 exists. The gate has only ever driven Chromium, and
+    # that is how #659 shipped: a static style attribute Chromium tolerates
+    # and Firefox refuses under this app's CSP passed live-check, vitest and
+    # every screenshot, and was found by the owner opening the app. Driving
+    # the engine we do not otherwise drive is the whole value of running the
+    # gate somewhere with room for it.
+    MV_BROWSER: firefox
+  # Same non-root drop as test:go above, for the same reason: GitLab's docker
+  # executor runs as root, GitHub's runner does not, and mikroview's own
+  # container is USER nonroot:nonroot. Here it matters more than for unit
+  # tests -- this stands up the real binary, and one of the defects this gate
+  # exists to catch was a recovery key reaching the log through a TTY check
+  # that a Docker pty satisfies. See
+  # docs/decisions/gitlab-ci-root-in-container-test-failure.md.
+  script:
+    - useradd -m -u 10001 ci-gate
+    - chown -R ci-gate:ci-gate "$CI_PROJECT_DIR"
+    - su ci-gate -c "cd '$CI_PROJECT_DIR' && HOME=/home/ci-gate MV_BROWSER=$MV_BROWSER make live-check" 2>&1 | tee run.log
+    # Do not judge this run by counting PASS against FAIL. A scenario that
+    # throws -- a stale selector, an import error -- dies before printing any
+    # verdict, so counting verdicts cannot see it. That is #661, and it was
+    # read as a clean browser phase across two full runs. The honest check is
+    # scenarios started against scenarios that reported: equal means every one
+    # of them spoke.
+    - started=$(grep -c '^== ' run.log || true)
+    - "reported=$(grep -cE '^RESULT: |^PASS: ' run.log || true)"
+    - echo "scenarios started:$started reported:$reported"
+    - test "$started" -eq "$reported"
+  artifacts:
+    when: always
+    expire_in: 1 week
+    paths:
+      - run.log
+
+# ---------------------------------------------------------------------------
 # SECURITY — parallel jobs, diff-scoped Semgrep on MRs, full scan on dev.
 # ---------------------------------------------------------------------------
 
