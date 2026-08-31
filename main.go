@@ -1316,6 +1316,7 @@ func main() {
 	srv := &api.Server{
 		Store:             st,
 		Devices:           devices,
+		MACRegistry:       macRegistry,
 		Setup:             setupStore,
 		Hub:               h,
 		Reputation:        rep,
@@ -2280,12 +2281,20 @@ func ingestOneRecovered(logger *slog.Logger, rm syslog.RawMessage, st *store.Sto
 	// scored" contract as Flag.Confidence's nil case. The target is a
 	// MAC, not an IP, so -- same as TypeRuleSpike's rule-label target --
 	// there's no meaningful Country to attach either.
-	if parsed.SrcMAC != "" && macRegistry.Seen(parsed.SrcMAC, rm.RecvTime) {
-		detail := fmt.Sprintf("first traffic seen from MAC %s", parsed.SrcMAC)
-		if parsed.SrcIP != "" {
-			detail = fmt.Sprintf("first traffic seen from MAC %s (source IP %s)", parsed.SrcMAC, parsed.SrcIP)
+	if parsed.SrcMAC != "" {
+		if macRegistry.Seen(parsed.SrcMAC, rm.RecvTime) {
+			detail := fmt.Sprintf("first traffic seen from MAC %s", parsed.SrcMAC)
+			if parsed.SrcIP != "" {
+				detail = fmt.Sprintf("first traffic seen from MAC %s (source IP %s)", parsed.SrcMAC, parsed.SrcIP)
+			}
+			fs.Add(flags.TypeNewDevice, parsed.SrcMAC, detail, rm.RecvTime)
 		}
-		fs.Add(flags.TypeNewDevice, parsed.SrcMAC, detail, rm.RecvTime)
+		// Pairs this MAC with the IP it's currently answering to (issue
+		// #675) -- orthogonal to the new-device check above, so it runs
+		// on every event carrying a MAC, not just the first one ever seen.
+		if parsed.SrcIP != "" {
+			macRegistry.NoteIP(parsed.SrcMAC, parsed.SrcIP)
+		}
 	}
 
 	e := store.Event{
