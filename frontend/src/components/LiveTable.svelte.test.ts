@@ -161,7 +161,14 @@ describe('LiveTable autoscroll-off freezing (issue #232)', () => {
     expect(container.querySelector('[title="initial-10"]')).toBeTruthy()
     expect(container.querySelector('[title="overflow-0"]')).toBeNull()
     expect(container.querySelector('[title="overflow-49"]')).toBeNull()
-  })
+    // 20s, not vitest's default 5s (#598). This renders MAX_RENDERED_ROWS + 10
+    // real rows through the real component and then pushes 50 more, which takes
+    // ~6s here and longer on a busy CI worker. The timeout is not a threshold
+    // this test is asserting against -- the assertions above are about which
+    // rows are evicted, and none of them get weaker by allowing more time. The
+    // fixture cannot shrink instead: below MAX_RENDERED_ROWS nothing evicts, so
+    // a smaller one would stop testing #232's symptom altogether.
+  }, 20000)
 
   it('re-derives the frozen snapshot when the filter set changes, within what was already frozen', () => {
     const matching = makeEvent('matches-filter', { action: 'accept' })
