@@ -158,7 +158,7 @@ describe('The settings shelf (#633)', () => {
     expect(screen.getByRole('button', { name: 'close the bench' })).toBeTruthy()
   })
 
-  it('a viewer sees the chip, no verbs, and no admin-only users door', async () => {
+  it('a viewer sees the chip and neither door', async () => {
     authState.state = 'authenticated'
     authState.role = 'viewer'
     render(EngineRoom)
@@ -166,21 +166,31 @@ describe('The settings shelf (#633)', () => {
 
     expect(screen.getByText('READ-ONLY')).toBeTruthy()
 
-    // Tokens door is viewer-readable but its verbs are gated.
-    expect(screen.getByText('rb5009-ingest')).toBeTruthy()
-
-    // An ingest key names the device it speaks for, not just its kind:
-    // with two routers pushing, "ingest" alone does not say which key
-    // belongs to which, and that is the fact an admin revokes on. The
-    // old Tokens page carried it and the door has to as well.
-    expect(screen.getByText(/ingest: rb5009/)).toBeTruthy()
+    // #657: both doors are admin-only now. The tokens door used to be
+    // viewer-readable with only its verbs gated (#490); that widening
+    // existed to serve a viewer-readable settings page, and this issue
+    // removed the page from a viewer's navigation entirely.
+    expect(screen.queryByText('rb5009-ingest')).toBeNull()
+    expect(screen.queryByText(/ingest: rb5009/)).toBeNull()
     expect(screen.queryByRole('button', { name: 'Revoke' })).toBeNull()
     expect(screen.queryByRole('button', { name: '+ Mint a key' })).toBeNull()
 
-    // The users door stayed admin-only (mid-build owner override) --
-    // absent entirely for a viewer, not shown empty or explained.
     expect(screen.queryByText('Who may look in')).toBeNull()
     expect(screen.queryByRole('button', { name: '+ Let someone in' })).toBeNull()
+  })
+
+  // The tier that actually lost something to #657. A user could read
+  // token metadata before it; issuing keys was ruled a setup task rather
+  // than using the product (owner, 2026-08-31), so the door went with the
+  // users door rather than staying half-open.
+  it('a user no longer sees the tokens door either', async () => {
+    authState.state = 'authenticated'
+    authState.role = 'user'
+    render(EngineRoom)
+    await settle()
+
+    expect(screen.queryByText('rb5009-ingest')).toBeNull()
+    expect(screen.queryByText('Which machines may speak')).toBeNull()
   })
 
   it('an admin sees the verbs', async () => {
