@@ -16,9 +16,11 @@
 //  - "Run setup…" opens #487's setup modal over whatever page is showing,
 //    and does not navigate -- #548's interim view switch to the old
 //    wizard page retired with that page.
-//  - A viewer's menu follows the absent-never-disabled grammar, proved
+//  - A user's menu (the people door's default tier -- see below) follows
+//    the absent-never-disabled grammar for the owner-level rows, proved
 //    end to end with a real second account rather than a mocked
-//    authState.role.
+//    authState.role. A genuine viewer account is covered end to end in
+//    live-viewer-surfaces.mjs, which this file predates.
 //
 // The room's own read-only grammar is live-engine-room.mjs's job. This
 // scenario stops at the menu and the group's page-level facts.
@@ -102,61 +104,74 @@ check(
 await page.keyboard.press('Escape')
 await wizard.waitFor({ state: 'detached', timeout: 5000 })
 
-// --- A real viewer account, created the way an admin actually would ----
+// --- A real user account, created the way an admin actually would ------
 // Through the engine room's people door now, which is where adding an
-// account lives since #490.
+// account lives since #490. No role is picked here -- the door defaults
+// to "Can change things", the `user` tier -- which is exactly what this
+// section tests: the owner-level rows stay gated, the user-level rows
+// (Entities, Settings) do not. It is not a viewer account despite the
+// name this scenario used to give it; a genuine viewer's menu is covered
+// end to end in live-viewer-surfaces.mjs.
 
-const VIEWER_USER = 'live-viewer-548'
-const VIEWER_PASS = 'live-viewer-548-password'
+const USER_USER = 'live-user-548'
+const USER_PASS = 'live-user-548-password'
 const PEOPLE = '.door:has-text("Who may look in")'
 
 await openAndCheck('Settings', 'Settings')
 await page.click(`${PEOPLE} .footer-action`)
 await page.waitForSelector(`${PEOPLE} .inline-form`)
-await page.fill(`${PEOPLE} .inline-form input[type="text"]`, VIEWER_USER)
-await page.fill(`${PEOPLE} .inline-form input[type="password"]`, VIEWER_PASS)
+await page.fill(`${PEOPLE} .inline-form input[type="text"]`, USER_USER)
+await page.fill(`${PEOPLE} .inline-form input[type="password"]`, USER_PASS)
 await page.click(`${PEOPLE} .inline-form .save`)
-await page.waitForSelector(`${PEOPLE} .row:has-text("${VIEWER_USER}")`)
-check(true, `the viewer account "${VIEWER_USER}" is created from the engine room's people door`)
+await page.waitForSelector(`${PEOPLE} .row:has-text("${USER_USER}")`)
+check(true, `the user account "${USER_USER}" is created from the engine room's people door`)
 
-// --- Viewer: absent, never disabled -------------------------------------
+// --- A user's menu: owner-level rows absent, user-level rows present, --
+// --- never disabled ------------------------------------------------------
 
 const browser = await chromium.launch()
-const viewerCtx = await browser.newContext({ ignoreHTTPSErrors: true })
-const viewerPage = await viewerCtx.newPage()
-await viewerPage.goto(URL_BASE, { waitUntil: 'networkidle' })
-await viewerPage.fill('input[autocomplete="username"]', VIEWER_USER)
-await viewerPage.fill('input[autocomplete="current-password"]', VIEWER_PASS)
-await viewerPage.click('button[type="submit"]')
-await viewerPage.waitForSelector('#main-content', { timeout: 15000 })
+const userCtx = await browser.newContext({ ignoreHTTPSErrors: true })
+const userPage = await userCtx.newPage()
+await userPage.goto(URL_BASE, { waitUntil: 'networkidle' })
+await userPage.fill('input[autocomplete="username"]', USER_USER)
+await userPage.fill('input[autocomplete="current-password"]', USER_PASS)
+await userPage.click('button[type="submit"]')
+await userPage.waitForSelector('#main-content', { timeout: 15000 })
 
-await openAccountMenu(viewerPage)
-const viewerLabels = await viewerPage.$$eval('.account .menu button.row', (els) => els.map((e) => e.textContent.trim()))
-for (const absent of ['Users', 'Tokens', 'Detectors', 'Entities', 'Run setup…']) {
+await openAccountMenu(userPage)
+const userLabels = await userPage.$$eval('.account .menu button.row', (els) => els.map((e) => e.textContent.trim()))
+// Users, Tokens and Detectors have no row of their own for anyone (#490).
+// Audit log and Run setup… are the owner-level rows #657 leaves gated to
+// admin.
+for (const absent of ['Users', 'Tokens', 'Detectors', 'Audit log', 'Run setup…']) {
   check(
-    !viewerLabels.some((l) => l === absent),
-    `${absent} is absent from a viewer's menu -- the menu shows ${JSON.stringify(viewerLabels)}`,
+    !userLabels.some((l) => l === absent),
+    `${absent} is absent from a user's menu -- the menu shows ${JSON.stringify(userLabels)}`,
   )
 }
-check(viewerLabels.includes('Fleet'), 'Fleet -- an Admin-group row with no admin gate -- is still there')
+check(userLabels.includes('Fleet'), 'Fleet -- an Admin-group row with no admin gate -- is still there')
 check(
-  viewerLabels.some((l) => l.includes('Settings')),
-  'Settings is in a viewer\'s menu too -- the one Admin destination that is deliberately viewer-readable',
+  userLabels.includes('Entities'),
+  `Entities is in a user's menu -- #653 widened it to the user tier -- got ${JSON.stringify(userLabels)}`,
+)
+check(
+  userLabels.some((l) => l.includes('Settings')),
+  `Settings is in a user's menu too -- #657 gave the engine room to the user tier, not a viewer -- got ${JSON.stringify(userLabels)}`,
 )
 
 // A disabled stub would satisfy "absent" in spirit while breaking the
-// letter of it -- prove nothing in the viewer's menu is disabled either.
-const viewerDisabled = await viewerPage.$$eval('.account .menu button.row', (els) =>
+// letter of it -- prove nothing in the user's menu is disabled either.
+const userDisabled = await userPage.$$eval('.account .menu button.row', (els) =>
   els.filter((e) => e.disabled).map((e) => e.textContent.trim()),
 )
-check(viewerDisabled.length === 0, `no menu row is disabled for a viewer -- got ${JSON.stringify(viewerDisabled)}`)
-check((await viewerPage.$$('.modal')).length === 0, 'no modal renders for a viewer either')
+check(userDisabled.length === 0, `no menu row is disabled for a user -- got ${JSON.stringify(userDisabled)}`)
+check((await userPage.$$('.modal')).length === 0, 'no modal renders for a user either')
 
-await goTo(viewerPage, 'Fleet')
-await viewerPage.waitForFunction(() => document.querySelector('.page-header h2')?.textContent.trim() === 'Fleet', null, {
+await goTo(userPage, 'Fleet')
+await userPage.waitForFunction(() => document.querySelector('.page-header h2')?.textContent.trim() === 'Fleet', null, {
   timeout: 5000,
 })
-check(true, 'Fleet renders for a viewer')
+check(true, 'Fleet renders for a user')
 
 await browser.close()
 
@@ -164,9 +179,9 @@ await browser.close()
 
 await openAndCheck('Settings', 'Settings')
 page.on('dialog', (d) => d.accept())
-await page.click(`${PEOPLE} .row:has-text("${VIEWER_USER}") .verb`)
-await page.waitForSelector(`${PEOPLE} .row:has-text("${VIEWER_USER}")`, { state: 'detached' })
-check(true, `the viewer account "${VIEWER_USER}" is removed again`)
+await page.click(`${PEOPLE} .row:has-text("${USER_USER}") .verb`)
+await page.waitForSelector(`${PEOPLE} .row:has-text("${USER_USER}")`, { state: 'detached' })
+check(true, `the user account "${USER_USER}" is removed again`)
 
 check(consoleErrors.length === 0, `no console errors -- got ${JSON.stringify(consoleErrors)}`)
 done()

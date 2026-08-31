@@ -7,9 +7,10 @@
   // -- the licence must stay reachable from the running app). These
   // rows lived on the retired atlas overlay; the chip is where they
   // live now, so every scene bar reaches them.
-  import { appState, type View } from '../lib/state.svelte'
+  import { appState } from '../lib/state.svelte'
   import { authState } from '../lib/auth.svelte'
   import { wizardState } from '../lib/wizard.svelte'
+  import { visibleGroups, type NavItem } from '../lib/navGroups'
   import ThemeMenu from './ThemeMenu.svelte'
   import AboutOverlay from './AboutOverlay.svelte'
 
@@ -18,16 +19,32 @@
   let logoutError = $state<string | null>(null)
   let menuEl: HTMLElement | undefined
 
-  const isAdmin = $derived(authState.role === 'admin')
+  const isAdmin = $derived(authState.isAdmin)
 
-  type Row = { label: string; view?: View; action?: 'run-setup'; admin?: boolean }
-  const operate: Row[] = [
-    { label: 'Settings', view: 'engineroom' },
-    { label: 'Fleet', view: 'fleet' },
-    { label: 'Entities', view: 'entities', admin: true },
-    { label: 'Audit log', view: 'audit', admin: true },
-    { label: 'Run setup…', action: 'run-setup', admin: true },
-  ]
+  // The menu's rows come from navGroups.ts, filtered by the same
+  // visibleGroups() call the rail and the bottom bar use (#657).
+  //
+  // This menu used to carry its own copy of the table, with a binary
+  // `admin` flag predating #653's three tiers. It drifted exactly as
+  // navGroups.ts's own header warns a second copy would: after #657 a
+  // viewer was still offered Settings here -- the headline example of
+  // the very thing that issue removes -- while a user was still denied
+  // Entities, which the rail had already given them. The rail and the
+  // small-screen bar were both right; only this menu was wrong, so it
+  // was invisible to any test that read the table.
+  //
+  // The selection is still the menu's own -- it shows the operate pages
+  // and not the Live/Detect ones -- but which of them a tier may reach
+  // is no longer decided here.
+  type Row = NavItem
+  const MENU_ORDER: string[] = ['engineroom', 'fleet', 'entities', 'audit', 'run-setup']
+  const key = (i: NavItem) => i.action ?? i.view ?? ''
+  const operate: Row[] = $derived(
+    visibleGroups(authState.isAdmin, authState.canEdit)
+      .flatMap((g) => g.items)
+      .filter((i) => MENU_ORDER.includes(key(i)))
+      .sort((a, b) => MENU_ORDER.indexOf(key(a)) - MENU_ORDER.indexOf(key(b))),
+  )
 
   function go(row: Row) {
     if (row.action === 'run-setup') wizardState.launch()
@@ -71,7 +88,7 @@
         <ThemeMenu />
       </div>
       <div class="rule"></div>
-      {#each operate.filter((r) => !r.admin || isAdmin) as row (row.label)}
+      {#each operate as row (row.label)}
         <button class="row" role="menuitem" class:on={row.view === appState.view} onclick={() => go(row)}>
           {row.label}
         </button>
