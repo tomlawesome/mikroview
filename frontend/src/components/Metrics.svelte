@@ -180,11 +180,10 @@
     {/if}
   </div>
 
-  <p class="keys">
-    Click a minute to read it across every series · <kbd>←</kbd><kbd>→</kbd> a minute · <kbd>Shift</kbd> ten ·
-    <kbd>Home</kbd>/<kbd>End</kbd> the ends of the hour · <kbd>Esc</kbd> clears the cursor
-  </p>
-
+  <!-- No keyboard hint printed on the page (#697/#700 -- round 30 draws
+       no aids to understanding anywhere, and the surface keeps every
+       one of those keys working regardless; the slider announces itself
+       to a screen reader through its own aria-valuetext). -->
   <p class="sr-only" role="status">{metricsPref.announcement}</p>
 </div>
 
@@ -257,22 +256,6 @@
     outline: 2px solid var(--accent);
     outline-offset: 4px;
     border-radius: 4px;
-  }
-
-  .keys {
-    margin: 0;
-    font-size: 10.5px;
-    color: var(--fg-dim);
-  }
-
-  kbd {
-    font-family: var(--font-mono);
-    font-size: 10px;
-    border: 1px solid var(--border);
-    border-bottom-width: 2px;
-    border-radius: 4px;
-    padding: 0 4px;
-    margin: 0 1px;
   }
 
   /* Clipped rather than hidden -- display:none would remove the live

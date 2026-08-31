@@ -598,19 +598,20 @@
 <div class="fall">
   <div class="bar">
     <span class="wm">MIKRO<em>VIEW</em></span>
-    <span class="scname">
-      <h1>The fall</h1>
-      <span class="epi">a band per boundary · a carrier per port</span>
-    </span>
-    <div class="span-control" role="group" aria-label="Time span">
-      <span class="lab">SPAN</span>
-      {#each SPANS as s (s.id)}
-        <button type="button" class="rng" class:on={span === s.id} aria-pressed={span === s.id} onclick={() => (span = s.id)}>
-          {s.label}
-        </button>
-      {/each}
-    </div>
+    <!-- No name and no strap (#697/#700, owner verbatim: "I meant all...
+         No page heading, no strap"). This bar drew its own rather than
+         going through SceneBar, which is how it survived the first
+         sweep. The rail says which card you are on. -->
     <div class="status-cluster">
+      <!-- The fall's spans ride the status cluster, ahead of LIVE
+           (round 30's README §4), not mid-bar under a SPAN label. -->
+      <div class="span-control" role="group" aria-label="Time span">
+        {#each SPANS as s (s.id)}
+          <button type="button" class="rng" class:on={span === s.id} aria-pressed={span === s.id} onclick={() => (span = s.id)}>
+            {s.label}
+          </button>
+        {/each}
+      </div>
       <ConnectionIndicator />
       <AlarmCluster />
       <AccountMenu />
@@ -940,13 +941,6 @@
     gap: 2px;
     border-bottom: 1px solid var(--o-grid2);
     padding-bottom: 5px;
-  }
-  .span-control .lab {
-    font-size: 10px;
-    letter-spacing: 0.12em;
-    color: var(--o-ink3);
-    align-self: center;
-    margin-right: 8px;
   }
   .rng {
     background: transparent;
