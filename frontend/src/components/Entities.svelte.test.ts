@@ -123,6 +123,71 @@ describe('Entities router cards (#675)', () => {
     expect(card?.textContent).toContain('RouterOS 7.20.1 (stable)')
   })
 
+  it('keeps a space after the middot on the push-rate line, same as the rule/zone line above it (#718)', async () => {
+    appState.devices = [
+      {
+        id: 'rb5009',
+        name: 'rb5009',
+        configured: true,
+        status: 'live',
+        lastSeen: new Date().toISOString(),
+        sourceIp: '10.0.0.1',
+        eventCount: 3,
+      },
+    ] as unknown as (typeof appState)['devices']
+    fetchRouterRules.mockResolvedValue({
+      available: true,
+      rules: [filterRule()],
+      updatedAt: new Date().toISOString(),
+    } as unknown as { available: boolean; rules: ReturnType<typeof filterRule>[] })
+    const { container } = render(Entities)
+    await settle()
+
+    const card = container.querySelector('.fcard.live')
+    expect(card?.textContent).toContain('last push')
+    expect(card?.textContent).not.toMatch(/·\d/)
+    expect(card?.textContent).toMatch(/· \d/)
+  })
+
+  it('renders every router card\'s events/s figure at the same one-decimal precision, never a bare whole number (#718)', async () => {
+    const now = Date.now()
+    appState.now = now
+    appState.devices = [
+      {
+        id: 'quiet-rate',
+        name: 'quiet-rate',
+        configured: true,
+        status: 'live',
+        lastSeen: new Date(now).toISOString(),
+        sourceIp: '10.0.0.1',
+        eventCount: 3,
+      },
+      {
+        id: 'busy-rate',
+        name: 'busy-rate',
+        configured: true,
+        status: 'live',
+        lastSeen: new Date(now).toISOString(),
+        sourceIp: '10.0.0.2',
+        eventCount: 600,
+      },
+    ] as unknown as (typeof appState)['devices']
+    appState.events = [
+      ...Array.from({ length: 3 }, (_, i) => ({ deviceId: 'quiet-rate', receivedAt: now - i })),
+      ...Array.from({ length: 600 }, (_, i) => ({ deviceId: 'busy-rate', receivedAt: now - i })),
+    ] as unknown as (typeof appState)['events']
+
+    const { container } = render(Entities)
+    await settle()
+
+    const cards = [...container.querySelectorAll('.fcard.live')]
+    const quiet = cards.find((c) => c.textContent?.includes('quiet-rate'))
+    const busy = cards.find((c) => c.textContent?.includes('busy-rate'))
+    expect(quiet?.textContent).toMatch(/\d\.\d events\/s now/)
+    expect(busy?.textContent).toContain('2.0 events/s now')
+    expect(busy?.textContent).not.toContain('2 events/s now')
+  })
+
   it('states a quiet router as a fact, not a fault', async () => {
     appState.devices = [
       {
@@ -142,25 +207,52 @@ describe('Entities router cards (#675)', () => {
     expect(container.textContent).toContain('quiet is a fact, not a fault')
   })
 
-  it('carries the standing promise and never implies mikroview connects out', async () => {
-    const { container } = render(Entities)
-    await settle()
-
-    expect(container.textContent).toContain('Routers push to mikroview — it never connects to them.')
-    expect(container.textContent).not.toMatch(/mikroview (connects|reaches out|polls)/i)
-  })
-
-  it('discloses the real RouterOS syslog lines to paste on request', async () => {
+  it('keeps the add-router explanation and commands off the page until the button is clicked (#718)', async () => {
     const { container, getByText } = render(Entities)
     await settle()
 
+    expect(container.textContent).not.toContain('Routers push to mikroview')
     expect(container.querySelector('.paste')).toBeNull()
-    await fireEvent.click(getByText(/show the RouterOS lines to paste/))
+    expect(getByText('+ add router')).toBeTruthy()
+  })
+
+  it('reveals the port, the paste-able RouterOS lines and the never-connects assurance from the add router button (#718)', async () => {
+    const { container, getByText, getByRole } = render(Entities)
     await settle()
+
+    await fireEvent.click(getByText('+ add router'))
+    await settle()
+
+    expect(getByRole('dialog', { name: 'Add a router' })).toBeTruthy()
+    expect(container.textContent).toContain(':16893')
+    expect(container.textContent).toContain('Routers push to mikroview — it never connects to them.')
+    expect(container.textContent).not.toMatch(/mikroview (connects|reaches out|polls)/i)
 
     const pre = container.querySelector('.paste')
     expect(pre?.textContent).toContain('remote-port=16893')
     expect(pre?.textContent).toContain('remote-protocol=tls')
+  })
+
+  it('closes the add-router dialog on Escape', async () => {
+    const { container, getByText } = render(Entities)
+    await settle()
+
+    await fireEvent.click(getByText('+ add router'))
+    await settle()
+    expect(container.querySelector('.modal')).toBeTruthy()
+
+    await fireEvent.keyDown(window, { key: 'Escape' })
+    await settle()
+    expect(container.querySelector('.modal')).toBeNull()
+  })
+
+  it('replaces the dashed "another router?" card with the add-router button (#718)', async () => {
+    const { container } = render(Entities)
+    await settle()
+
+    expect(container.querySelector('.fcard.add')).toBeNull()
+    expect(container.textContent).not.toContain('another router?')
+    expect(container.querySelector('.add-router-btn')).toBeTruthy()
   })
 })
 
@@ -334,6 +426,37 @@ describe('Entities named-things table (#675)', () => {
     const row = [...container.querySelectorAll('.etable tbody tr')].find((tr) => tr.textContent?.includes('cam-porch'))
     expect(row?.textContent).toContain('✱ flagged')
     expect(row?.className).toContain('warn')
+  })
+
+  it('marks a host carrying two open alarm-family flags with the same single ✱, not a doubled one (#718)', async () => {
+    fetchEntities.mockResolvedValue([{ type: 'host', key: '10.0.20.14', label: 'cam-porch', tags: [] }])
+    flagsState.list = [
+      {
+        id: 'f2',
+        type: 'critical_port',
+        target: '10.0.20.14',
+        detail: '',
+        count: 1,
+        firstSeen: new Date().toISOString(),
+        lastSeen: new Date().toISOString(),
+        cleared: false,
+      },
+      {
+        id: 'f3',
+        type: 'known_bad_ip',
+        target: '10.0.20.14',
+        detail: '',
+        count: 1,
+        firstSeen: new Date().toISOString(),
+        lastSeen: new Date().toISOString(),
+        cleared: false,
+      },
+    ]
+    const { container } = render(Entities)
+    await settle()
+
+    const row = [...container.querySelectorAll('.etable tbody tr')].find((tr) => tr.textContent?.includes('cam-porch'))
+    expect(row?.querySelector('.mk-flagged')?.textContent).toBe('✱ flagged')
   })
 
   it('states the rename affordance in the footer', async () => {
