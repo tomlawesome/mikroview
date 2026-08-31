@@ -1,17 +1,32 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 //
-// Two scroll defects the v0.2.0 preview pass turned up, pinned against a
-// real browser at a real viewport (#383, #384).
+// Three scroll defects, pinned against a real browser at a real
+// viewport: #383 and #384 from the v0.2.0 preview pass, #689 from the
+// deck rebuild.
 //
-// Neither was visible from the code, and one of them is actively
-// misleading there: the Entities jump reads like a re-render problem,
-// and the CSS and the keyed {#each} blocks both look correct. It is a
-// focus() call on a row that should never have existed. So both
-// assertions here measure the thing the operator actually experiences --
-// can I reach the bottom of the page, and am I still where I was -- and
+// None was visible from the code. #384 is actively misleading there:
+// the Entities jump reads like a re-render problem, and the CSS and the
+// keyed {#each} blocks both look correct -- it is a focus() call on a
+// row that should never have existed. #689 is the same shape one layer
+// up: Metrics.svelte's own sr-only live region is `position: absolute`
+// with no offset of its own, and nothing between it and <html> used to
+// be positioned, so the browser fell back to its CSS "static position"
+// -- computed from the *unclipped* flow height of everything before it,
+// ignoring every overflow:hidden/auto ancestor on the way. With no
+// positioned ancestor that became real document coordinates: the
+// operator could scroll the whole page away, leaving nothing on screen
+// but the deck's fixed roll rail. Deck.svelte's `.card` is now
+// `position: relative`, so this checks every rail destination rather
+// than Metrics alone -- the gap it closed was shared chrome, not one
+// page's mistake, and only measuring Metrics would leave the other six
+// scenes' own version of the same defect uncaught.
+//
+// So every assertion here measures the thing the operator actually
+// experiences -- can I reach the bottom of the page, am I still where I
+// was, does the document itself ever scroll past its own content -- and
 // not the mechanism, which is free to change.
 
-import { session, check, done, goTo } from './live-browser.mjs'
+import { session, check, done, goTo, feedSyslog } from './live-browser.mjs'
 
 const { page, consoleErrors } = await session({ waitForEvents: 60 })
 
@@ -182,6 +197,33 @@ check(
   drift <= 120,
   `naming an entity leaves the operator where they were (scrollTop ${before} -> ${after}, drift ${drift}px)`,
 )
+
+// --- #689: the document itself never scrolls past its own content --------
+// Reproduced by loading every deck scene at least once with Metrics
+// mounted somewhere in the near() window (it is a neighbour of
+// Topography, Metrics and Stream, and near() mounts the centred card
+// plus one on each side) and measuring the *document's* own scrollable
+// height against the viewport it is standing in for -- not any one
+// scene's internal scroll container, which was never the defect. Before
+// the fix this was double the viewport on Topography, Metrics and
+// Stream alike (Metrics mounted on all three) and exactly the viewport
+// everywhere Metrics was not near -- proof the escape was Metrics' own
+// sr-only region, not the deck's per-scene clipping.
+feedSyslog(60, 'live-scroll-position-689')
+await page.setViewportSize({ width: 1280, height: 720 })
+for (const label of ['The fall', 'Topography', 'Metrics', 'Stream', 'The docket', 'Entities', 'Settings']) {
+  await goTo(page, label)
+  const doc = await page.evaluate(() => ({
+    scrollHeight: document.scrollingElement.scrollHeight,
+    innerHeight: window.innerHeight,
+  }))
+  // A couple of px of tolerance for subpixel layout, and no more --
+  // the defect was not a few pixels, it was the viewport doubling.
+  check(
+    doc.scrollHeight <= doc.innerHeight + 2,
+    `${label}: the document never scrolls past the viewport (scrollHeight ${doc.scrollHeight} vs ${doc.innerHeight})`,
+  )
+}
 
 check(consoleErrors.length === 0, `no console errors (${consoleErrors.join('; ')})`)
 done()
