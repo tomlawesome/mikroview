@@ -6,11 +6,14 @@
   // 2026-08-29 review on #616. Visual reference:
   // docs/design/concepts/round-3/direction-o-waterfall.html, scene 1
   // only. The rig below is that scene's own SVG — its coordinate
-  // system (a 76px time rail, 160px band pitch, spectrum baseline at
-  // y=170, NOW at y=186, the fall pouring y=196..760), its class
-  // vocabulary (.blab/.bsub/.plab/.spec/.anno/.tlab/.darkband/.horizon)
-  // and its CSS values move across from the mockup as-is; only the
-  // coordinates are computed from live data instead of being hand-drawn.
+  // system (a 76px time rail, spectrum baseline at y=170, NOW at y=186,
+  // the fall pouring y=196..760), its class vocabulary (.blab/.bsub/
+  // .plab/.spec/.anno/.tlab/.darkband/.horizon) and its CSS values move
+  // across from the mockup as-is; only the coordinates are computed from
+  // live data instead of being hand-drawn. The band pitch that scene's
+  // own SVG used (a fixed 160 units) is no longer fixed -- #722 gives it
+  // a sizing policy instead, read from round 30's own mockup; see the
+  // "Band sizing policy" comment below.
   // Where the record's plain vocabulary contradicts the mockup's radio
   // ambience ("no antenna"), the record wins: dark bands say "nothing is
   // logged".
@@ -65,8 +68,6 @@
 
   // ── The mockup's own geometry, in its own units ─────────────────────
   const RAIL = 76 // left time rail width
-  const BAND_W = 150 // a band's drawable width
-  const PITCH = 160 // band slot pitch (150 + 10 gutter)
   const SPEC_TOP = 62 // spectrum strip top
   const SPEC_BASE = 170 // spectrum baseline
   const NOW_Y = 186 // the NOW line
@@ -76,6 +77,50 @@
   const RIG_H = 800
   const DASH_W = 2.4 // a carrier dash's width — thin, never a fill
   const HIT_W = 14 // a carrier's invisible click/focus target width
+
+  // ── Band sizing policy (#722): an ideal width, elastic within limits,
+  // and pages beyond them ─────────────────────────────────────────────
+  // Before this, the rig gave every band a fixed 160-unit slot but drew
+  // its svg at `width: 100%` -- so the viewBox (which grows with the
+  // band count) always got rescaled to fit the same pixel width, which
+  // is exactly "divide the available width by however many there are"
+  // in disguise. At 16 boundaries the titles overlapped outright
+  // (#709's seeding took the fall from 3 bands to 16). The fix below
+  // gives the svg an intrinsic pixel size (see `rig`'s `width`/`height`
+  // attributes in the template) so a band's width is chosen on purpose,
+  // never a side effect of how many neighbours it has.
+  //
+  // Read off round 30's own mockup (docs/design/concepts/round-30/
+  // shots/fall.png; markup the-whole.html section #s2), which draws the
+  // comfortable case: nine bands across the frame. That mockup's own rig
+  // is a 1400×560 viewBox rendered into a 1600px-wide frame (scale
+  // 1600/1400 = 8/7); its nine band headers sit on a 150-unit pitch --
+  // compare consecutive `.bh-name` label x's: 120, 270, 420, … 1320,
+  // each 150 apart. Scaled to the real frame that pitch is the
+  // "comfortable" figure below.
+  const IDEAL_PITCH = 171 // 150 × 8/7 ≈ 171.4 -- the mockup's own 9-band pitch at 1600px wide
+  // Too few to fill the frame: bands may stretch past the ideal, but
+  // capped so two (or one) boundaries never draw two comically wide
+  // columns (owner's own wording). The mockup has no few-boundary scene
+  // to measure, so this is chosen rather than read: roughly double the
+  // ideal, wide enough to look deliberate without reading as a poster.
+  const MAX_PITCH = 340
+  // Slightly too many: shrink by "a very small amount" (owner) before
+  // giving up and paginating -- about 88% of the ideal, enough give to
+  // fit a couple more boundaries onto one page without the scene
+  // reading cramped. Below this floor the policy stops shrinking and
+  // pages instead.
+  const MIN_PITCH = 150
+  const GUTTER = 10 // the shipped rig's own band-to-band gutter -- unchanged, not part of this issue
+  // Only used to size a carrier's invisible click target (below) before
+  // the render pass has counted this page's bands and settled on a real
+  // pitch; imprecision here only affects a hit-target's width slightly,
+  // never anything drawn.
+  const NOMINAL_BAND_W = IDEAL_PITCH - GUTTER
+  // jsdom (tests) and the very first paint report a 0 clientWidth before
+  // layout has run; 1600 is both this issue's own verification width and
+  // a reasonable fallback meanwhile.
+  const DEFAULT_FRAME_W = 1600
 
   let span = $state<SpanId>('15m')
   let flags = $state<Flag[]>([])
@@ -327,7 +372,7 @@
         // 0-100 band space → band units happens at render; keep the
         // target no wider than the gap to its neighbour so an overlapped
         // target never steals its neighbour's clicks.
-        const hitW = Math.max(DASH_W + 1, Math.min(HIT_W, (nearest / 100) * BAND_W))
+        const hitW = Math.max(DASH_W + 1, Math.min(HIT_W, (nearest / 100) * NOMINAL_BAND_W))
         return { ...c, x: xs[i], hitW }
       })
       return { carriers: withX, quieterCount: Math.max(0, all.length - MAX_CARRIERS) }
@@ -414,7 +459,55 @@
   const allBands = $derived(bandsData)
   const darkBands = $derived(allBands.filter((b) => b.coverage === 'dark'))
 
-  // ── Rig layout: every band gets the mockup's 160-unit slot ──────────
+  // ── Pagination: apply the sizing policy above ───────────────────────
+  // `.rig`'s own measured width (see `bind:clientWidth` in the template)
+  // -- the real budget the policy divides up, falling back to
+  // DEFAULT_FRAME_W before the first layout pass (or under jsdom).
+  let rigW = $state(0)
+  const containerWidth = $derived(rigW || DEFAULT_FRAME_W)
+  const bandsAreaW = $derived(Math.max(0, containerWidth - RAIL - 4))
+
+  // The most boundaries a single page can hold, packed as tight as the
+  // shrink floor (MIN_PITCH) allows -- past this count the policy stops
+  // shrinking and pages instead.
+  const maxPerPage = $derived(Math.max(1, Math.floor(bandsAreaW / MIN_PITCH)))
+  const totalPages = $derived(allBands.length === 0 ? 1 : Math.max(1, Math.ceil(allBands.length / maxPerPage)))
+  // Bands per page, spread evenly across `totalPages` (never the
+  // lopsided "15 on page one, 1 on page two" the owner ruled out) --
+  // pages differ by at most one boundary when the count doesn't divide
+  // exactly.
+  const perPage = $derived(allBands.length === 0 ? 0 : Math.ceil(allBands.length / totalPages))
+
+  let page = $state(0)
+  $effect(() => {
+    // Clamp when the boundary count (or the window, changing
+    // maxPerPage) shrinks the page count out from under the current
+    // page -- never reads or sets `page` when it's already in range, so
+    // this can't loop.
+    if (page > 0 && page >= totalPages) page = Math.max(0, totalPages - 1)
+  })
+
+  const pageBands = $derived.by(() => {
+    if (allBands.length === 0) return []
+    const start = page * perPage
+    return allBands.slice(start, start + perPage)
+  })
+
+  // The pitch this page actually renders at: stretch toward MAX_PITCH
+  // when there's slack, sit at IDEAL_PITCH (or above) when the count is
+  // comfortable, or give a little (down to MIN_PITCH) when it's
+  // slightly over -- `perPage`, not the page's own possibly-smaller
+  // last-page count, so every page in a paginated fall draws its bands
+  // at the same size.
+  const pitch = $derived.by(() => {
+    const n = perPage || 1
+    const natural = bandsAreaW / n
+    if (natural >= IDEAL_PITCH) return Math.min(MAX_PITCH, natural)
+    return Math.max(MIN_PITCH, natural)
+  })
+  const bandW = $derived(Math.max(20, pitch - GUTTER))
+
+  // ── Rig layout: every band on this page gets its own pitch-wide slot ─
   interface BandSlot {
     band: BandView
     bx: number // band's left edge in rig units
@@ -422,14 +515,16 @@
   }
 
   const rig = $derived.by(() => {
-    const n = allBands.length
-    const width = RAIL + n * PITCH + 4
-    // One boundary, one colour, everywhere: the same lane map the atlas
-    // overlay's zones draw from.
+    const slotsSource = pageBands
+    const n = slotsSource.length
+    const width = RAIL + n * pitch + 4
+    // One boundary, one colour, everywhere, on every page: keyed off the
+    // full boundary set (not just this page's), the same lane map the
+    // atlas overlay's zones draw from.
     const lanes = laneColors(allBands)
-    const slots: BandSlot[] = allBands.map((band, i) => ({
+    const slots: BandSlot[] = slotsSource.map((band, i) => ({
       band,
-      bx: RAIL + i * PITCH,
+      bx: RAIL + i * pitch,
       laneColor: lanes.get(band.key) || 'var(--o-ink3)',
     }))
     return { width, slots }
@@ -437,7 +532,7 @@
 
   // A carrier's x within the rig.
   function cx(slot: BandSlot, c: Carrier): number {
-    return slot.bx + 10 + (c.x / 100) * (BAND_W - 20)
+    return slot.bx + 10 + (c.x / 100) * (bandW - 20)
   }
 
   // ── The time rail: gridlines at the span's own step ─────────────────
@@ -539,7 +634,8 @@
   // against another candidate on the *same* band (#700). Comparing
   // across bands let a heavy carrier on one boundary silently suppress
   // a lighter one several bands away whenever the two candidates'
-  // absolute x (adjacent bands sit only PITCH-BAND_W apart) happened to
+  // absolute x (adjacent bands sit only pitch-bandW apart, i.e. one
+  // gutter) happened to
   // fall inside the text-width gap, which is how the build ended up
   // labelling only a couple of ports total instead of every band along
   // the foot.
@@ -723,8 +819,16 @@
       </p>
     </div>
   {:else}
-    <div class="rig">
-      <svg viewBox="0 0 {rig.width} {RIG_H}">
+    <div class="rig" bind:clientWidth={rigW}>
+      <!-- Explicit pixel width/height, not `width: 100%`: this is what
+           actually fixes #722 -- the svg renders at its own chosen size
+           (1 viewBox unit = 1px) instead of being rescaled to fit
+           whatever the container happens to be, which is what silently
+           divided the available width by the band count before. `.rig`'s
+           own `justify-content: center` (below) centres it, leaving
+           empty space on either side when the policy stretch-caps a
+           small estate rather than filling the frame. -->
+      <svg viewBox="0 0 {rig.width} {RIG_H}" width={rig.width} height={RIG_H}>
         <defs>
           <pattern id="fall-hatch" width="8" height="8" patternTransform="rotate(45)" patternUnits="userSpaceOnUse">
             <line x1="0" y1="0" x2="0" y2="8" class="hatch-line" />
@@ -759,7 +863,7 @@
               onclick={() => openInStream(b)}
               onkeydown={(e) => keyActivate(e, () => openInStream(b))}
             >
-              <rect class="head-hit" x={slot.bx} y="6" width={BAND_W} height="56" />
+              <rect class="head-hit" x={slot.bx} y="6" width={bandW} height="56" />
               <text class="blab band-label" x={slot.bx + 6} y="22">{b.label}</text>
               {#if b.epithet}<text class="bsub band-epithet" x={slot.bx + 6} y="36">{b.epithet}</text>{/if}
               {#if b.key === '__unmatched__'}
@@ -780,23 +884,23 @@
                      separate QUIET caption. -->
                 <text class="chip ch-ok band-caption ok" x={slot.bx + 6} y="50">WATCH HOLDING ✓</text>
               {/if}
-              <rect x={slot.bx} y="56" width={BAND_W} height="3" rx="1.5" fill={slot.laneColor} />
+              <rect x={slot.bx} y="56" width={bandW} height="3" rx="1.5" fill={slot.laneColor} />
             </g>
 
             <!-- ══ the panadapter: this band's live spectrum ══ -->
             <g class="spectrum" aria-hidden="true">
               {#if b.coverage === 'dark'}
-                <line x1={slot.bx} y1={SPEC_BASE} x2={slot.bx + BAND_W} y2={SPEC_BASE} class="dark-baseline" />
-                <text class="anno bad-anno" x={slot.bx + BAND_W / 2} y={SPEC_BASE - 32} text-anchor="middle"
+                <line x1={slot.bx} y1={SPEC_BASE} x2={slot.bx + bandW} y2={SPEC_BASE} class="dark-baseline" />
+                <text class="anno bad-anno" x={slot.bx + bandW / 2} y={SPEC_BASE - 32} text-anchor="middle"
                   >nothing logged —</text>
-                <text class="anno bad-anno" x={slot.bx + BAND_W / 2} y={SPEC_BASE - 20} text-anchor="middle"
+                <text class="anno bad-anno" x={slot.bx + bandW / 2} y={SPEC_BASE - 20} text-anchor="middle"
                   >no trace, and no claim of one</text>
               {:else}
                 {#each needlesFor(slot) as n (n.port)}
                   <path class="spec {n.lane}" data-port={n.port} d={wavePath(n)} />
                 {/each}
                 {#if b.carriers.length > 0 && needlesFor(slot).length === 0}
-                  <line x1={slot.bx} y1={SPEC_BASE} x2={slot.bx + BAND_W} y2={SPEC_BASE} class="spec-floor" />
+                  <line x1={slot.bx} y1={SPEC_BASE} x2={slot.bx + bandW} y2={SPEC_BASE} class="spec-floor" />
                 {/if}
               {/if}
             </g>
@@ -804,10 +908,10 @@
             <!-- ══ this band's stretch of the fall ══ -->
             <g class="waterfall">
               {#if b.coverage === 'dark'}
-                <rect class="darkband" x={slot.bx} y={FALL_TOP} width={BAND_W} height={FALL_BOT - FALL_TOP} />
-                <text class="anno bad-anno strong" x={slot.bx + BAND_W / 2} y="420" text-anchor="middle"
+                <rect class="darkband" x={slot.bx} y={FALL_TOP} width={bandW} height={FALL_BOT - FALL_TOP} />
+                <text class="anno bad-anno strong" x={slot.bx + bandW / 2} y="420" text-anchor="middle"
                   >blank because nothing is logged</text>
-                <text class="anno" x={slot.bx + BAND_W / 2} y="434" text-anchor="middle"
+                <text class="anno" x={slot.bx + bandW / 2} y="434" text-anchor="middle"
                   >— not because nothing is sent</text>
               {:else}
                 {#if b.dropShare > 0.5 && b.total > 0}
@@ -819,7 +923,7 @@
                   <rect
                     x={slot.bx}
                     y={FALL_TOP}
-                    width={BAND_W}
+                    width={bandW}
                     height={Math.min(FALL_BOT - FALL_TOP, (b.deepestActive + 2) * bucketH)}
                     fill="url(#fall-ramp)"
                     opacity={0.3 + 0.45 * b.dropShare}
@@ -871,14 +975,14 @@
                     role="button"
                     tabindex="0"
                     aria-label="{b.quieterCount} quieter port{b.quieterCount === 1 ? '' : 's'} on {b.label}, folded out of the individual carriers above. Activate to open the whole boundary in Stream."
-                    x={slot.bx + BAND_W / 2}
+                    x={slot.bx + bandW / 2}
                     y={FALL_BOT - 8}
                     text-anchor="middle"
                     onclick={() => openInStream(b)}
                     onkeydown={(e) => keyActivate(e, () => openInStream(b))}>+{b.quieterCount} quieter</text>
                 {/if}
                 {#if EMPTY_BAND_CAPTION_ENABLED && b.carriers.length === 0 && b.total === 0}
-                  <text class="anno" x={slot.bx + BAND_W / 2} y="420" text-anchor="middle">no traffic in this window</text>
+                  <text class="anno" x={slot.bx + bandW / 2} y="420" text-anchor="middle">no traffic in this window</text>
                 {/if}
               {/if}
             </g>
@@ -947,6 +1051,28 @@
          had grown, which round 30 never draws. -->
     <div class="fall-foot">
       <button type="button" class="ibtn" title="How to read the fall — full explanation in the docs">i</button>
+      <!-- The pager (#722): only drawn once there's more than one page --
+           an estate that fits on one page never shows back/next arrows
+           it has no use for. -->
+      {#if totalPages > 1}
+        <div class="pager" aria-label="Fall pages">
+          <button
+            type="button"
+            class="pgbtn"
+            aria-label="Previous page of boundaries"
+            disabled={page === 0}
+            onclick={() => (page = Math.max(0, page - 1))}>‹</button
+          >
+          <span class="pgnum">{page + 1} / {totalPages}</span>
+          <button
+            type="button"
+            class="pgbtn"
+            aria-label="Next page of boundaries"
+            disabled={page === totalPages - 1}
+            onclick={() => (page = Math.min(totalPages - 1, page + 1))}>›</button
+          >
+        </div>
+      {/if}
       {#if WINDOW_RANGE_CAPTION_ENABLED}
         <span class="window-caption">
           {#if windowHasMore}showing the most recent 5,000 events; more exist ·
@@ -1144,8 +1270,13 @@
     justify-content: center;
   }
   .rig svg {
-    width: 100%;
+    /* No width: 100% here (#722) -- the svg's own width/height
+       attributes (set in the template from the sizing policy above) are
+       its real size; `justify-content: center` on `.rig` centres it,
+       which is how a stretch-capped small estate gets to leave empty
+       space either side instead of being rescaled to fill the frame. */
     display: block;
+    max-width: 100%;
   }
   .rig svg text {
     font-family: var(--font-mono);
@@ -1365,12 +1496,53 @@
     fill: var(--accent);
   }
 
-  /* ── the foot: the (i) and (when enabled) the window caption ─────── */
+  /* ── the foot: the (i), the pager, and (when enabled) the window
+     caption ──────────────────────────────────────────────────────────── */
   .fall-foot {
     display: flex;
     justify-content: space-between;
     align-items: center;
     gap: 12px;
+  }
+  /* The pager (#722): "a small back arrow and next arrow ... with an
+     elegant page number between them" (owner, verbatim) -- `margin: 0
+     auto` keeps it centred in the foot row regardless of whether the
+     (i) button or the window caption either side of it are present. */
+  .pager {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin: 0 auto;
+  }
+  .pgbtn {
+    width: 20px;
+    height: 20px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 50%;
+    border: 1px solid var(--o-grid2);
+    background: transparent;
+    color: var(--o-ink3);
+    font-size: 13px;
+    line-height: 1;
+    padding: 0;
+    cursor: pointer;
+  }
+  .pgbtn:hover:not(:disabled) {
+    color: var(--accent);
+    border-color: var(--accent);
+  }
+  .pgbtn:disabled {
+    opacity: 0.35;
+    cursor: default;
+  }
+  .pgnum {
+    font: 11px var(--font-mono);
+    letter-spacing: 0.04em;
+    color: var(--o-ink3);
+    min-width: 34px;
+    text-align: center;
   }
   .ibtn {
     width: 18px;
