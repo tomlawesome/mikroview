@@ -135,6 +135,26 @@ type Entry struct {
 	// full. Unused for a non-inverted entry.
 	Observed []ObservedDest `json:"observed,omitempty"`
 
+	// Window is when this entry is expected to see traffic: a daily
+	// clock range, days of the week, and the IANA zone those clock times
+	// are read in (#680). Zero means no window -- the entry is watched at
+	// every hour, which is what a row renders as "always". See Window,
+	// and window.go's file comment for why the zone exists at all when
+	// every other timestamp in this codebase is UTC.
+	Window Window `json:"window,omitzero"`
+	// Nights is the last MaxNights occurrences of Window and what
+	// happened in each: kept, empty, or not observed. Recorded, not
+	// derived -- matchlog keeps 48 hours by default, so deriving seven
+	// nights from it would report a healthy watch as five empty nights
+	// and look like it had worked. Bounded, so it rides inside the
+	// existing definitions blob without growing. See Night.
+	Nights []Night `json:"nights,omitempty"`
+	// Ring is the recorded break in this entry's run of kept nights,
+	// written at the moment it breaks. The coverage-derived break (no
+	// rule is logging this pathway) is a different kind of broken and
+	// stays computed on read from router state -- see Ring.
+	Ring Ring `json:"ring,omitzero"`
+
 	CreatedAt time.Time `json:"createdAt"`
 }
 
@@ -218,6 +238,12 @@ func ValidateEntry(e Entry) error {
 		if !validText(text) {
 			return ErrInvalidText
 		}
+	}
+	if !validText(e.Window.Zone) {
+		return ErrInvalidText
+	}
+	if err := e.Window.Validate(); err != nil {
+		return err
 	}
 	return nil
 }

@@ -38,6 +38,7 @@
   import { compareNumeric, compareText, matchesFilter } from '../lib/sortFilter'
   import type { SortDir } from '../lib/sortFilter'
   import { formatRelative } from '../lib/format'
+  import { nightlySummary, windowLabel } from '../lib/watchWindow'
   import TabList from './TabList.svelte'
   import Suggestions from './Suggestions.svelte'
   import MatchesTab from './MatchesTab.svelte'
@@ -310,9 +311,13 @@
   // The state a card's own stripe already shows by colour (round 19: the
   // watchers' purple for healthy, the alarm ink where the ring is
   // broken) -- named here too, as text, so it sorts and filters.
+  // paused > no logging visible > ring broken > watching (#680). The
+  // order matters: a watch no rule logs cannot be judged on nightly
+  // presence at all, so coverage outranks the recorded ring.
   function stateLabel(e: WatchlistEntry): string {
     if (!e.enabled) return 'paused'
-    if (e.enabled && watchlistState.coverage[e.id] === 'no-logging') return 'ring broken'
+    if (watchlistState.coverage[e.id] === 'no-logging') return 'ring broken'
+    if (e.ring?.broken) return 'ring broken'
     return 'watching'
   }
 
@@ -384,19 +389,20 @@
   // reachable rather than folding or deleting it. See this component's
   // own module comment and the issue for the full account.
   //
-  // "window" has no answer: no watchlist entry carries a time-of-day
-  // schedule today, so every row honestly reads "always" rather than a
-  // fabricated range. The seven-night strip the record also shows is
-  // not built for the same reason, one level deeper -- matchlog
-  // collapses repeats of the same (entry, destination, port) into one
-  // record spanning firstSeen..lastSeen (see internal/matchlog's own
-  // doc comment), so there is no per-night presence/absence to read
-  // back, only "it matched somewhere in this span." Answering "five
-  // kept nights, two empty" honestly would need a new persisted nightly
-  // counter (and a schedule to call "night" against), which is a data
-  // model decision, not a rendering one -- reported on #676 rather than
-  // invented here. Likewise "mend — widen window" has nothing to widen
-  // without a window, so it is not offered.
+  // "window" and the nightly summary are both real now (#680): an entry
+  // carries a Window (clock range, days, IANA zone) and up to seven
+  // recorded Nights against it. A row with no window still reads
+  // "always", which is the honest answer for one that has none, and an
+  // entry with no nights recorded yet gets no summary line at all rather
+  // than a zeroed one -- see ../lib/watchWindow.ts.
+  //
+  // The nightly history is recorded on the entry, never derived from
+  // matchlog: matchlog keeps 48 hours by default and collapses repeats
+  // of the same (entry, destination, port) into one record spanning
+  // firstSeen..lastSeen, so reading seven nights back out of it would
+  // report a healthy watch as five empty nights and look like it had
+  // worked. "mend — widen window" is still not offered: what widening
+  // should propose is an interface question the issue leaves open.
 
   // Most recent match for one entry, from matchesState's own bulk
   // "recent across every entry" feed (loaded in onMount above) --
@@ -414,16 +420,24 @@
     return best
   }
 
-  // The ratified vocabulary (◉ watching / ○ ring broken), grounded in
-  // what this entry can actually be said about today -- enabled and
-  // coverage, the same two facts stateLabel() above already reads. The
-  // reason text for a broken ring is the truth mikroview has (no rule is
-  // logging this pathway), not the record's own window-silence wording,
-  // which requires a schedule this entry doesn't have.
+  // The ratified vocabulary (◉ watching / ○ ring broken), in the
+  // precedence #680 settled: paused > no logging visible > ring broken >
+  // watching.
+  //
+  // Coverage outranks the recorded ring because they are different kinds
+  // of broken. "No logging visible" is a fact about mikroview's own
+  // sight, read live from router state; a broken ring is a fact about the
+  // network, read from nights that were actually watched. A watch nothing
+  // logs has no nightly presence to judge -- its nights are recorded "not
+  // observed" precisely so they cannot be mistaken for silence -- so the
+  // sight problem is what an operator needs told first.
   function watchState(e: WatchlistEntry): { glyph: string; text: string; broken: boolean } {
     if (!e.enabled) return { glyph: '○', text: 'paused', broken: false }
     if (watchlistState.coverage[e.id] === 'no-logging') {
       return { glyph: '○', text: 'ring broken — no logging visible', broken: true }
+    }
+    if (e.ring?.broken) {
+      return { glyph: '○', text: 'ring broken — nothing in the window', broken: true }
     }
     return { glyph: '◉', text: 'watching', broken: false }
   }
@@ -449,6 +463,17 @@
       return {
         headline: 'The ring is broken.',
         body: 'No firewall rule mikroview can see is logging this pathway, so nothing here can be recorded until a rule that covers it turns logging on.',
+      }
+    }
+    if (e.ring?.broken) {
+      // The recorded break, which knows *which* window closed empty --
+      // that is why it is written down at the break rather than worked
+      // out here (#680). The since clause is dropped rather than guessed
+      // if the record does not carry one.
+      const since = e.ring.since ? ` since ${formatRelative(e.ring.since, appState.now)}` : ''
+      return {
+        headline: 'The ring is broken.',
+        body: `Nothing has matched inside this watch's window${since}. Nights mikroview could not watch are not counted against it.`,
       }
     }
     if (lastMatch) {
@@ -533,9 +558,9 @@
       return {
         entry: e,
         boundary: boundaryLabel(e),
-        // No entry carries a schedule today -- see the section comment
-        // above for why this is an honest constant, not a placeholder.
-        window: 'always',
+        // "always" for an entry with no window; the clock range, days and
+        // zone for one that has (#680).
+        window: windowLabel(e),
         stateGlyph: st.glyph,
         stateText: st.text,
         broken: st.broken,
@@ -646,6 +671,7 @@
           <tbody>
             {#each sortedWatchRows as row (row.entry.id)}
               {@const story = watchStory(row.entry, row.lastMatch)}
+              {@const nights = nightlySummary(row.entry.nights)}
               <tr
                 class="wt-row"
                 class:watching={!row.broken && row.entry.enabled}
@@ -683,6 +709,10 @@
                       <div class="side">
                         <span class="lab">the pathway</span>
                         <p class="ep-note">{detailLabel(row.entry)}</p>
+                        {#if nights}
+                          <span class="lab">the last seven nights</span>
+                          <p class="ep-note">{nights}</p>
+                        {/if}
                       </div>
                       <div class="dwr-acts">
                         <button class="act" disabled={pausingId === row.entry.id} onclick={() => togglePause(row.entry)}>

@@ -721,6 +721,56 @@ export interface WatchlistObservedDest {
   count: number
 }
 
+// Mirrors internal/watchlist.Window's JSON tags (#680): when an entry is
+// expected to see traffic.
+//
+// start/end are "HH:MM" clock times, and both carry `omitzero`
+// server-side -- 00:00 is the zero value, so a midnight-to-six window
+// arrives as `{end: "06:00"}` with no start at all. A missing one means
+// 00:00; never read absence as "no window".
+//
+// end <= start means the window runs into the following date, which is
+// the normal case rather than the edge: 22:00-06:00 is one night across
+// two dates. days is empty for "every day", 0 = Sunday, and filters on
+// the date the window *opened*. zone is an IANA name, empty meaning UTC,
+// and is the only local-time concept anywhere in mikroview -- every other
+// timestamp in this file is UTC.
+export interface WatchWindow {
+  start?: string
+  end?: string
+  days?: number[]
+  zone?: string
+}
+
+// Mirrors internal/watchlist.NightState. Three states, and the third is
+// the point: "not observed" is a night mikroview was down for, or one
+// where no rule was logging the pathway. It must never be rendered as
+// "empty" -- that would present an absence of ours as a fact about the
+// network.
+export type WatchNightState = 'kept' | 'empty' | 'not observed'
+
+// Mirrors internal/watchlist.Night's JSON tags -- one occurrence of the
+// window and what happened in it. first/count carry `omitzero`/`omitempty`
+// server-side and are only meaningful on a kept night.
+export interface WatchNight {
+  opened: string
+  state: WatchNightState
+  first?: string
+  count?: number
+}
+
+// Mirrors internal/watchlist.Ring's JSON tags -- the recorded break in a
+// run of kept nights, written at the moment it broke. Absent entirely
+// when the ring is intact. `since` is the close of the first empty window
+// in the current run. The coverage-derived break (no rule logs this
+// pathway) is a different kind of broken and is not this: it comes from
+// live router state and arrives on the definition's own `coverage`.
+export interface WatchRing {
+  broken?: boolean
+  since?: string
+  reason?: string
+}
+
 // Mirrors internal/watchlist.Entry's JSON tags (#243) -- see that type's
 // own doc comment for the full non-inverted/inverted matching rules.
 // ports/invert/includeStructuralNoise/observing/permitted/observed all
@@ -749,6 +799,12 @@ export interface WatchlistEntry {
   includeStructuralNoise?: boolean
   permitted?: WatchlistPermittedDest[]
   observed?: WatchlistObservedDest[]
+  // The watch window and its nightly memory (#680). All three carry
+  // `omitzero`/`omitempty` server-side: an entry with no window has none
+  // of them, which is what a row renders as "always".
+  window?: WatchWindow
+  nights?: WatchNight[]
+  ring?: WatchRing
   createdAt: string
 }
 
