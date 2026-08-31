@@ -317,7 +317,7 @@ describe('band width policy (#722): ideal, elastic within limits, paginated beyo
     // a single "divide available width by count" column would draw.
     expect(boxes[0].width).toBe(330)
     expect(rigSvgWidth(container)).toBe(76 + 1 * 340 + 4)
-    expect(container.querySelector('.pager')).toBeNull()
+    expect(container.querySelector('.ovstrip')).toBeNull()
   })
 
   it('caps two boundaries at the same MAX_PITCH -- not two comically wide columns', async () => {
@@ -328,7 +328,7 @@ describe('band width policy (#722): ideal, elastic within limits, paginated beyo
     // Capped well short of the 1520px bands area: plenty of empty space
     // either side, per the owner's "not comically large with few".
     expect(rigSvgWidth(container)).toBeLessThan(900)
-    expect(container.querySelector('.pager')).toBeNull()
+    expect(container.querySelector('.ovstrip')).toBeNull()
   })
 
   it('draws close to IDEAL_PITCH near the mockup’s own comfortable count', async () => {
@@ -339,70 +339,153 @@ describe('band width policy (#722): ideal, elastic within limits, paginated beyo
     const boxes = headHitBoxes(container)
     expect(boxes).toHaveLength(8)
     for (const b of boxes) expect(b.width).toBe(180) // 190 - GUTTER(10)
-    expect(container.querySelector('.pager')).toBeNull()
+    expect(container.querySelector('.ovstrip')).toBeNull()
   })
 
-  it('shrinks by only a small amount when slightly over the ideal count, still on one page', async () => {
-    // 10 boundaries is exactly this frame's per-page ceiling
+  it('shrinks by only a small amount when slightly over the ideal count, still one window', async () => {
+    // 10 boundaries is exactly this frame's per-window ceiling
     // (floor(1520/150) = 10): 1520/10 = 152px/band, just above the
     // MIN_PITCH (150) floor -- a small shrink, not a crush, and no
-    // pagination yet.
+    // second window to pan to yet.
     const { container } = await renderFall({ boundaries: makeBoundaries(10) })
     const boxes = headHitBoxes(container)
     expect(boxes).toHaveLength(10)
     for (const b of boxes) expect(b.width).toBe(142) // 152 - GUTTER(10)
-    expect(container.querySelector('.pager')).toBeNull()
+    expect(container.querySelector('.ovstrip')).toBeNull()
   })
 
-  it('stops shrinking and paginates once the count exceeds what MIN_PITCH can fit', async () => {
+  it('stops shrinking and windows once the count exceeds what MIN_PITCH can fit', async () => {
     // 16 boundaries: the exact count #709's seeding took the live fall
     // to, and the overlap this issue was filed over. floor(1520/150) is
-    // 10, so 16 must paginate: ceil(16/10) = 2 pages, spread evenly as
-    // ceil(16/2) = 8 + 8 -- never a lopsided 15-and-1 split.
+    // 10, so 16 must window: ceil(16/10) = 2 windows' worth, spread
+    // evenly as ceil(16/2) = 8 -- never a lopsided 15-and-1 split.
     const { container } = await renderFall({ boundaries: makeBoundaries(16) })
-    expect(container.querySelector('.pager')).toBeTruthy()
-    expect(container.querySelector('.pgnum')?.textContent?.trim()).toBe('1 / 2')
+    const strip = container.querySelector<HTMLElement>('.ovstrip')
+    expect(strip).toBeTruthy()
+    expect(strip!.getAttribute('aria-valuemax')).toBe('8') // maxStart = 16 - perPage(8)
 
     let boxes = headHitBoxes(container)
     expect(boxes).toHaveLength(8)
-    // Every page renders bands at the same pitch (derived from the
-    // 8-per-page count, not each page's own size), so flipping pages
+    // Every window renders bands at the same pitch (derived from
+    // perPage, not the window's own possibly-smaller tail), so panning
     // never jumps band width.
     for (const b of boxes) expect(b.width).toBe(180) // 190 (1520/8) - GUTTER(10)
     expect(container.textContent).toContain('b0 → x')
     expect(container.textContent).not.toContain('b8 → x')
 
-    const nextBtn = container.querySelector<HTMLButtonElement>('.pgbtn[aria-label="Next page of boundaries"]')!
-    const prevBtn = container.querySelector<HTMLButtonElement>('.pgbtn[aria-label="Previous page of boundaries"]')!
-    expect(prevBtn.disabled).toBe(true)
-    expect(nextBtn.disabled).toBe(false)
-
-    await fireEvent.click(nextBtn)
+    await fireEvent.keyDown(strip!, { key: 'End' })
     flushSync()
-    expect(container.querySelector('.pgnum')?.textContent?.trim()).toBe('2 / 2')
+    expect(strip!.getAttribute('aria-valuenow')).toBe('8')
     boxes = headHitBoxes(container)
     expect(boxes).toHaveLength(8)
-    expect(container.textContent).toContain('b8 → x')
+    expect(container.textContent).toContain('b15 → x')
     expect(container.textContent).not.toContain('b0 → x')
-    expect(nextBtn.disabled).toBe(true)
   })
 
-  it('distributes an uneven remainder within one boundary of even, never lopsided', async () => {
-    // 17 boundaries: ceil(17/10) = 2 pages, ceil(17/2) = 9 per page --
-    // 9 then 8, differing by one, not 16-and-1 or similar.
+  it('a freely positioned window is always the full perPage width, never a lopsided remainder', async () => {
+    // 17 boundaries: ceil(17/10) = 2 windows' worth, perPage =
+    // ceil(17/2) = 9. Unlike the old discrete pager (which split 17 as
+    // 9-then-8, a lopsided last page), a continuously-slidable window
+    // always shows exactly perPage boundaries, at the start of the
+    // estate and at the far end alike.
     const { container } = await renderFall({ boundaries: makeBoundaries(17) })
-    expect(container.querySelector('.pgnum')?.textContent?.trim()).toBe('1 / 2')
+    const strip = container.querySelector<HTMLElement>('.ovstrip')!
     expect(headHitBoxes(container)).toHaveLength(9)
 
-    const nextBtn = container.querySelector<HTMLButtonElement>('.pgbtn[aria-label="Next page of boundaries"]')!
-    await fireEvent.click(nextBtn)
+    await fireEvent.keyDown(strip, { key: 'End' })
     flushSync()
-    expect(headHitBoxes(container)).toHaveLength(8)
+    expect(headHitBoxes(container)).toHaveLength(9)
+    expect(container.textContent).toContain('b16 → x')
   })
 
-  it('never renders a pager when everything fits on one page', async () => {
+  it('never renders the overview strip when everything already fits in one window', async () => {
     const { container } = await renderFall({ boundaries: makeBoundaries(10) })
-    expect(container.querySelector('.pager')).toBeNull()
-    expect(container.querySelector('.pgnum')).toBeNull()
+    expect(container.querySelector('.ovstrip')).toBeNull()
+    expect(container.querySelectorAll('.ovtick')).toHaveLength(0)
+  })
+})
+
+describe('the overview strip (#722 amendment, 2026-08-31): replaces the pager', () => {
+  it('carries one tick per boundary in the whole estate, not just the visible slice', async () => {
+    const { container } = await renderFall({ boundaries: makeBoundaries(16) })
+    expect(container.querySelectorAll('.ovtick')).toHaveLength(16)
+    // Exactly perPage (8) of them are the lit, contiguous "in window" run.
+    expect(container.querySelectorAll('.ovtick.inwin')).toHaveLength(8)
+  })
+
+  it('draws no page numbers, arrows or other words -- round 30 README §5', async () => {
+    const { container } = await renderFall({ boundaries: makeBoundaries(16) })
+    const strip = container.querySelector('.ovstrip')!
+    expect(strip.textContent?.trim()).toBe('')
+  })
+
+  it('is focusable and announces the visible range for a screen reader', async () => {
+    const { container } = await renderFall({ boundaries: makeBoundaries(16) })
+    const strip = container.querySelector<HTMLElement>('.ovstrip')!
+    expect(strip.getAttribute('role')).toBe('slider')
+    expect(strip.getAttribute('tabindex')).toBe('0')
+    expect(strip.getAttribute('aria-valuetext')).toBe('showing boundaries 1 to 8 of 16')
+  })
+
+  it('pans the window with the left/right arrow keys, and Home/End reach the ends', async () => {
+    const { container } = await renderFall({ boundaries: makeBoundaries(16) })
+    const strip = container.querySelector<HTMLElement>('.ovstrip')!
+    expect(container.textContent).toContain('b0 → x')
+
+    await fireEvent.keyDown(strip, { key: 'ArrowRight' })
+    flushSync()
+    // Sliding by one boundary: the window drops b0 and picks up b8.
+    expect(container.textContent).not.toContain('b0 → x')
+    expect(container.textContent).toContain('b8 → x')
+
+    await fireEvent.keyDown(strip, { key: 'ArrowLeft' })
+    flushSync()
+    expect(container.textContent).toContain('b0 → x')
+    expect(container.textContent).not.toContain('b8 → x')
+
+    await fireEvent.keyDown(strip, { key: 'End' })
+    flushSync()
+    expect(strip.getAttribute('aria-valuenow')).toBe('8')
+    expect(container.textContent).toContain('b15 → x')
+
+    await fireEvent.keyDown(strip, { key: 'Home' })
+    flushSync()
+    expect(strip.getAttribute('aria-valuenow')).toBe('0')
+    expect(container.textContent).toContain('b0 → x')
+  })
+
+  it('clamps the window into range when the estate shrinks under it', async () => {
+    const { container } = await renderFall({ boundaries: makeBoundaries(16) })
+    const strip = container.querySelector<HTMLElement>('.ovstrip')!
+
+    await fireEvent.keyDown(strip, { key: 'End' })
+    flushSync()
+    expect(strip.getAttribute('aria-valuenow')).toBe('8') // maxStart at 16 boundaries
+
+    // Shrink the estate to 12: maxPerPage is still 10, so this still
+    // windows (ceil(12/10) = 2 windows' worth, perPage = ceil(12/2) =
+    // 6, maxStart = 12 - 6 = 6) -- windowStart (8) is now out of range
+    // and must clamp to 6, not throw or render an empty slice.
+    fallState.boundaries = makeBoundaries(12)
+    flushSync()
+    await waitFor(() => expect(headHitBoxes(container)).toHaveLength(6))
+    const strip2 = container.querySelector<HTMLElement>('.ovstrip')!
+    expect(strip2.getAttribute('aria-valuenow')).toBe('6')
+    expect(container.textContent).toContain('b11 → x') // last of the shrunk estate, still reachable
+  })
+
+  it('moving the pointer down on the strip jumps the window to that position', async () => {
+    const { container } = await renderFall({ boundaries: makeBoundaries(16) })
+    const strip = container.querySelector<HTMLElement>('.ovstrip')!
+    // jsdom reports every box as zero-sized (no ResizeObserver/layout),
+    // so getBoundingClientRect() on the strip itself is also all zeros;
+    // stub it to a real 800px track so the pointer math has something
+    // to divide by.
+    strip.getBoundingClientRect = () => ({ left: 0, right: 800, width: 800, top: 0, bottom: 6, height: 6, x: 0, y: 0, toJSON() {} }) as DOMRect
+
+    await fireEvent.pointerDown(strip, { clientX: 800 }) // far right edge
+    flushSync()
+    expect(strip.getAttribute('aria-valuenow')).toBe('8') // clamped to maxStart
+    expect(container.textContent).toContain('b15 → x')
   })
 })

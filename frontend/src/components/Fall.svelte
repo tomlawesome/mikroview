@@ -458,8 +458,13 @@
 
   const allBands = $derived(bandsData)
   const darkBands = $derived(allBands.filter((b) => b.coverage === 'dark'))
+  // One boundary, one colour, everywhere: shared by the rig's band-head
+  // underlines and the overview strip's ticks below, the same lane map
+  // the atlas overlay's zones draw from (fall.svelte.ts's laneColors) --
+  // computed once here rather than separately in each consumer.
+  const laneMap = $derived(laneColors(allBands))
 
-  // ── Pagination: apply the sizing policy above ───────────────────────
+  // ── Sizing policy budget: apply the policy above ────────────────────
   // `.rig`'s own measured width (see `bind:clientWidth` in the template)
   // -- the real budget the policy divides up, falling back to
   // DEFAULT_FRAME_W before the first layout pass (or under jsdom).
@@ -467,31 +472,133 @@
   const containerWidth = $derived(rigW || DEFAULT_FRAME_W)
   const bandsAreaW = $derived(Math.max(0, containerWidth - RAIL - 4))
 
-  // The most boundaries a single page can hold, packed as tight as the
+  // The most boundaries a single window can hold, packed as tight as the
   // shrink floor (MIN_PITCH) allows -- past this count the policy stops
-  // shrinking and pages instead.
+  // shrinking and windows instead.
   const maxPerPage = $derived(Math.max(1, Math.floor(bandsAreaW / MIN_PITCH)))
   const totalPages = $derived(allBands.length === 0 ? 1 : Math.max(1, Math.ceil(allBands.length / maxPerPage)))
-  // Bands per page, spread evenly across `totalPages` (never the
-  // lopsided "15 on page one, 1 on page two" the owner ruled out) --
-  // pages differ by at most one boundary when the count doesn't divide
-  // exactly.
+  // Boundaries per window, spread evenly across `totalPages` (never the
+  // lopsided "15 in the first window, 1 in the second" the owner ruled
+  // out) -- unchanged from #722: this still decides the window's size
+  // and the pitch below, only how the window's *position* moves is new
+  // (see "The window" below).
   const perPage = $derived(allBands.length === 0 ? 0 : Math.ceil(allBands.length / totalPages))
 
-  let page = $state(0)
+  // ── The window: which contiguous slice of the estate is drawn ───────
+  // #722 gave the fall a pager that flipped between whole, non-
+  // overlapping pages. The owner ruled that out (2026-08-31, issue
+  // #722 amendment: "We need a better way to switch between pages
+  // anyway as I dont like it") for a single freely positioned window:
+  // `viewStart` is the index of the first boundary currently drawn,
+  // not a page number, and can sit anywhere from 0 to `maxStart` rather
+  // than jumping in whole `perPage` steps. This is the one place the
+  // windowing maths above had to change: `pageBands` no longer
+  // partitions the estate into non-overlapping `perPage`-sized chunks
+  // (which is what made the old last page lopsided when the count
+  // didn't divide evenly) -- it always slices exactly `perPage`
+  // boundaries starting at `viewStart`, so every reachable window is
+  // the same width, never a shrunken remainder. `maxPerPage`,
+  // `totalPages` and `perPage` themselves are untouched.
+  const maxStart = $derived(Math.max(0, allBands.length - perPage))
+
+  let viewStart = $state(0)
   $effect(() => {
-    // Clamp when the boundary count (or the window, changing
-    // maxPerPage) shrinks the page count out from under the current
-    // page -- never reads or sets `page` when it's already in range, so
-    // this can't loop.
-    if (page > 0 && page >= totalPages) page = Math.max(0, totalPages - 1)
+    // Clamp when the estate shrinks (or the frame narrows, shrinking
+    // maxPerPage) pulls maxStart below the current viewStart -- the
+    // same job the old pager's page-clamp effect did. Never reads or
+    // sets viewStart when it's already in range, so this can't loop.
+    if (viewStart > 0 && viewStart > maxStart) viewStart = maxStart
   })
 
   const pageBands = $derived.by(() => {
     if (allBands.length === 0) return []
-    const start = page * perPage
-    return allBands.slice(start, start + perPage)
+    return allBands.slice(viewStart, viewStart + perPage)
   })
+
+  function clampStart(n: number): number {
+    return Math.min(maxStart, Math.max(0, n))
+  }
+
+  // The strip's own value text: the one place a screen reader learns
+  // which boundaries are actually drawn, since the strip itself carries
+  // no visible words (round 30 README §5, "no apparatus ... anywhere").
+  const stripValueText = $derived.by(() => {
+    if (allBands.length === 0) return ''
+    const from = viewStart + 1
+    const to = Math.min(allBands.length, viewStart + perPage)
+    return `showing boundaries ${from} to ${to} of ${allBands.length}`
+  })
+
+  let stripEl = $state<HTMLDivElement | undefined>()
+  const STRIP_WHEEL_STEP_PX = 60 // sideways scroll distance that shifts the window by one boundary
+  let wheelCarry = 0
+
+  // A drag and a plain click land in the same place: the lit segment
+  // centres on the pointer immediately (satisfying "click anywhere
+  // moves the window there"), and staying down and moving keeps
+  // recentring it underneath the pointer (the drag).
+  function viewStartFromClientX(clientX: number): number {
+    if (!stripEl || maxStart <= 0) return 0
+    const rect = stripEl.getBoundingClientRect()
+    const trackW = Math.max(1, rect.width)
+    const thumbFrac = Math.min(1, (perPage || 1) / Math.max(1, allBands.length))
+    const thumbPx = trackW * thumbFrac
+    const maxLeft = Math.max(1, trackW - thumbPx)
+    const desiredLeft = clientX - rect.left - thumbPx / 2
+    const frac = Math.min(1, Math.max(0, desiredLeft / maxLeft))
+    return clampStart(Math.round(frac * maxStart))
+  }
+
+  function onStripPointerMove(e: PointerEvent) {
+    viewStart = viewStartFromClientX(e.clientX)
+  }
+  function onStripPointerUp() {
+    window.removeEventListener('pointermove', onStripPointerMove)
+    window.removeEventListener('pointerup', onStripPointerUp)
+  }
+  function onStripPointerDown(e: PointerEvent) {
+    if (maxStart <= 0) return
+    stripEl?.focus()
+    viewStart = viewStartFromClientX(e.clientX)
+    window.addEventListener('pointermove', onStripPointerMove)
+    window.addEventListener('pointerup', onStripPointerUp, { once: true })
+    e.preventDefault()
+  }
+
+  function onStripKeydown(e: KeyboardEvent) {
+    if (e.key === 'ArrowLeft') {
+      e.preventDefault()
+      viewStart = clampStart(viewStart - 1)
+    } else if (e.key === 'ArrowRight') {
+      e.preventDefault()
+      viewStart = clampStart(viewStart + 1)
+    } else if (e.key === 'Home') {
+      e.preventDefault()
+      viewStart = 0
+    } else if (e.key === 'End') {
+      e.preventDefault()
+      viewStart = maxStart
+    }
+  }
+
+  // Sideways scroll over the rig pans the window too -- but only once
+  // there is somewhere to pan (maxStart > 0), and only in the direction
+  // that still has room: at either edge a further swipe the same way is
+  // left alone, so the browser's own back/forward swipe gesture still
+  // fires there instead of being eaten by this control.
+  function onRigWheel(e: WheelEvent) {
+    if (maxStart <= 0) return
+    if (Math.abs(e.deltaX) <= Math.abs(e.deltaY)) return
+    const dir = e.deltaX > 0 ? 1 : -1
+    if ((dir > 0 && viewStart >= maxStart) || (dir < 0 && viewStart <= 0)) return
+    e.preventDefault()
+    wheelCarry += e.deltaX
+    while (Math.abs(wheelCarry) >= STRIP_WHEEL_STEP_PX) {
+      const step = wheelCarry > 0 ? 1 : -1
+      viewStart = clampStart(viewStart + step)
+      wheelCarry -= step * STRIP_WHEEL_STEP_PX
+    }
+  }
 
   // The pitch this page actually renders at: stretch toward MAX_PITCH
   // when there's slack, sit at IDEAL_PITCH (or above) when the count is
@@ -518,14 +625,10 @@
     const slotsSource = pageBands
     const n = slotsSource.length
     const width = RAIL + n * pitch + 4
-    // One boundary, one colour, everywhere, on every page: keyed off the
-    // full boundary set (not just this page's), the same lane map the
-    // atlas overlay's zones draw from.
-    const lanes = laneColors(allBands)
     const slots: BandSlot[] = slotsSource.map((band, i) => ({
       band,
       bx: RAIL + i * pitch,
-      laneColor: lanes.get(band.key) || 'var(--o-ink3)',
+      laneColor: laneMap.get(band.key) || 'var(--o-ink3)',
     }))
     return { width, slots }
   })
@@ -834,7 +937,46 @@
       </p>
     </div>
   {:else}
-    <div class="rig" bind:clientWidth={rigW}>
+    <!-- The overview strip (#722 amendment, 2026-08-31): replaces the
+         pager. One tick per boundary in the whole estate -- every one
+         of them, not just the ones currently drawn -- in that
+         boundary's own lane colour; the contiguous run actually drawn
+         (`viewStart` .. `viewStart + perPage`) sits bright, the
+         rest dim. Drag or click anywhere on it to move the window;
+         left/right arrow keys (and Home/End) do the same by keyboard.
+         Along the top of the scene, not the middle, so the fall's own
+         dashed band edges never run through it the way the old pager's
+         arrows did. Never drawn once everything already fits
+         (maxStart === 0), exactly as the old pager never drew when
+         totalPages === 1. No page numbers, no arrows, no words -- round
+         30 README §5, "no apparatus, anywhere" -- the visible range
+         reaches a screen reader only through aria-valuetext. -->
+    {#if maxStart > 0}
+      <div
+        class="ovstrip"
+        role="slider"
+        tabindex="0"
+        aria-label="Boundaries shown"
+        aria-orientation="horizontal"
+        aria-valuemin="0"
+        aria-valuemax={maxStart}
+        aria-valuenow={viewStart}
+        aria-valuetext={stripValueText}
+        bind:this={stripEl}
+        onpointerdown={onStripPointerDown}
+        onkeydown={onStripKeydown}
+      >
+        {#each allBands as b, i (b.key)}
+          <span
+            class="ovtick"
+            class:inwin={i >= viewStart && i < viewStart + perPage}
+            style:background-color={laneMap.get(b.key) || 'var(--o-ink3)'}
+            aria-hidden="true"
+          ></span>
+        {/each}
+      </div>
+    {/if}
+    <div class="rig" bind:clientWidth={rigW} onwheel={onRigWheel}>
       <!-- Explicit pixel width/height, not `width: 100%`: this is what
            actually fixes #722 -- the svg renders at its own chosen size
            (1 viewBox unit = 1px) instead of being rescaled to fit
@@ -1066,28 +1208,6 @@
          had grown, which round 30 never draws. -->
     <div class="fall-foot">
       <button type="button" class="ibtn" title="How to read the fall — full explanation in the docs">i</button>
-      <!-- The pager (#722): only drawn once there's more than one page --
-           an estate that fits on one page never shows back/next arrows
-           it has no use for. -->
-      {#if totalPages > 1}
-        <div class="pager" aria-label="Fall pages">
-          <button
-            type="button"
-            class="pgbtn"
-            aria-label="Previous page of boundaries"
-            disabled={page === 0}
-            onclick={() => (page = Math.max(0, page - 1))}>‹</button
-          >
-          <span class="pgnum">{page + 1} / {totalPages}</span>
-          <button
-            type="button"
-            class="pgbtn"
-            aria-label="Next page of boundaries"
-            disabled={page === totalPages - 1}
-            onclick={() => (page = Math.min(totalPages - 1, page + 1))}>›</button
-          >
-        </div>
-      {/if}
       {#if WINDOW_RANGE_CAPTION_ENABLED}
         <span class="window-caption">
           {#if windowHasMore}showing the most recent 5,000 events; more exist ·
@@ -1511,53 +1631,41 @@
     fill: var(--accent);
   }
 
-  /* ── the foot: the (i), the pager, and (when enabled) the window
-     caption ──────────────────────────────────────────────────────────── */
+  /* ── the overview strip (#722 amendment, 2026-08-31): replaces the
+     pager -- see the template comment above the `{#if maxStart > 0}`
+     block for what it is. Thin and along the top of the scene, not the
+     middle, and carries no visible text of its own (round 30 README
+     §5). */
+  .ovstrip {
+    display: flex;
+    align-items: stretch;
+    gap: 1px;
+    height: 6px;
+    margin: 2px 0 10px;
+    border-radius: 3px;
+    cursor: pointer;
+    touch-action: none;
+  }
+  .ovstrip:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+  }
+  .ovtick {
+    flex: 1;
+    min-width: 1px;
+    border-radius: 1px;
+    opacity: 0.32;
+  }
+  .ovtick.inwin {
+    opacity: 1;
+  }
+
+  /* ── the foot: the (i), and (when enabled) the window caption ────── */
   .fall-foot {
     display: flex;
     justify-content: space-between;
     align-items: center;
     gap: 12px;
-  }
-  /* The pager (#722): "a small back arrow and next arrow ... with an
-     elegant page number between them" (owner, verbatim) -- `margin: 0
-     auto` keeps it centred in the foot row regardless of whether the
-     (i) button or the window caption either side of it are present. */
-  .pager {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    margin: 0 auto;
-  }
-  .pgbtn {
-    width: 20px;
-    height: 20px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    border-radius: 50%;
-    border: 1px solid var(--o-grid2);
-    background: transparent;
-    color: var(--o-ink3);
-    font-size: 13px;
-    line-height: 1;
-    padding: 0;
-    cursor: pointer;
-  }
-  .pgbtn:hover:not(:disabled) {
-    color: var(--accent);
-    border-color: var(--accent);
-  }
-  .pgbtn:disabled {
-    opacity: 0.35;
-    cursor: default;
-  }
-  .pgnum {
-    font: 11px var(--font-mono);
-    letter-spacing: 0.04em;
-    color: var(--o-ink3);
-    min-width: 34px;
-    text-align: center;
   }
   .ibtn {
     width: 18px;
