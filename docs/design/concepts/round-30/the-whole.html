@@ -41,19 +41,8 @@
     background: radial-gradient(1100px 600px at 75% -15%, rgba(80, 115, 205, 0.07), transparent 60%), var(--void);
     color: var(--ink); font: 13.5px/1.5 var(--sans); -webkit-font-smoothing: antialiased;
   }
-  .concept {
-    display: flex; gap: 16px; align-items: baseline;
-    padding: 8px 20px; background: rgba(2, 3, 7, 0.95); border-bottom: 1px solid var(--hair);
-    font-size: 11px; color: var(--ink-3);
-  }
-  .concept b { color: var(--accent); letter-spacing: 0.1em; }
-  .concept a { color: var(--ink-2); text-decoration: none; margin-left: 12px; }
 
   .scene { min-height: 100vh; position: relative; border-bottom: 1px solid var(--hair-2); overflow: hidden; }
-  .scene-tag {
-    position: absolute; top: 14px; right: 20px; z-index: 5; max-width: 420px; text-align: right;
-    font-size: 11px; color: var(--ink-3); pointer-events: none;
-  }
 
   /* ---- the scene bar: every scene's own chrome, no rail, no toolbar ---- */
   /* Free-floating chrome (owner, 2026-08-30: "I still don't like the
@@ -116,13 +105,6 @@
   }
   .enter:hover { border-color: var(--accent); }
   .promise { position: absolute; bottom: 16px; left: 0; right: 0; text-align: center; font-size: 10.5px; color: var(--ink-3); }
-  .outboard { display: flex; border-top: 1px dashed var(--hair-2); position: relative; padding-top: 12px; opacity: 0.75; }
-  .outboard .obnote { position: absolute; top: -8px; left: 50%; transform: translateX(-50%); background: var(--void); padding: 0 14px; font: italic 10px var(--sans); color: var(--ink-3); white-space: nowrap; }
-  .outboard .frame { flex: 1; padding: 14px 18px 16px; text-align: center; font-size: 11px; color: var(--ink-2); border-right: 1px solid var(--hair); }
-  .outboard .frame:last-child { border-right: 0; }
-  .outboard .k { display: block; font-size: 9px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--ink-3); margin-bottom: 6px; }
-  .outboard svg { height: 26px; margin-bottom: 4px; }
-  .outboard .pill { display: inline-block; margin-left: 8px; padding: 1px 12px; border: 1px solid var(--hair-2); border-radius: 999px; color: var(--accent); font-size: 10.5px; }
 
   /* ---- scene 2: the map (Atlas II refined, carried forward) ---- */
   .lenses { display: flex; gap: 6px; padding: 88px 24px 0; position: relative; z-index: 4; }
@@ -501,9 +483,6 @@
   .dial { color: var(--ink-3); }
   .dial .dnum { font: 700 13px var(--mono); fill: var(--ink); }
   .dial .dsym { font: 10px var(--sans); fill: currentColor; }
-  .dials-rest { position: absolute; top: 178px; right: 26px; z-index: 6; display: flex; gap: 8px; align-items: center; opacity: 0.55; }
-  .dials-rest .dial svg { width: 34px; height: 34px; }
-  .dials-rest .cap { font: 9.5px var(--sans); color: var(--ink-3); max-width: 90px; text-align: right; }
 
 </style>
 <style>
@@ -600,7 +579,29 @@
      (owner, 2026-08-31). Same seven cards, same signature marks, same
      drag-to-reorder; they simply stand in their own column beside the
      settings proper instead of pushing them down the page. */
-  #set .setlay { display: grid; grid-template-columns: 208px 1fr; gap: 26px; align-items: start; }
+  /* Two columns and no more: the deck on the left, everything else
+     stacked down the right at full width (owner, 2026-08-31). The
+     settings groups were paired into a 1fr 1fr sub-grid, which made
+     four narrow boxes out of a screen that had room for wide ones. */
+  #set .stgrid { grid-template-columns: 1fr; gap: 12px; }
+  #set .stcol { gap: 12px; }
+  /* the two drawings inside are viewBox-scaled, so a full-width column
+     would blow them up to a few hundred pixels tall — they keep their
+     own reading size and sit left */
+  #set .stpath, #set .stmem { max-width: 100%; }
+  /* Stacked full-width groups would just be wide whitespace with the
+     rows hugging the right edge, and the two viewBox drawings would
+     blow up to a few hundred pixels tall. So a group with a drawing
+     splits: the drawing and its caption on the left, its rows on the
+     right. The width buys a shorter page instead of a longer one. */
+  #set .og.wide { display: grid; grid-template-columns: 560px 1fr; column-gap: 40px; align-items: start; }
+  #set .og.wide > h3 { grid-column: 1 / -1; }
+  #set .og.wide > .wleft { grid-column: 1; }
+  #set .og.wide > .wrows { grid-column: 2; }
+  #set .og.wide .orow:first-child { border-top: 0; }
+  #set .og.wide .stflags { padding: 4px 0 0; }
+  #set .og.wide .oghint { margin-bottom: 0; }
+  #set .setlay { display: grid; grid-template-columns: 224px 1fr; gap: 22px; align-items: start; }
   #set .deckcol { margin-bottom: 0; }
   #set .deckcol .stshelf { flex-direction: column; flex-wrap: nowrap; gap: 6px; padding: 4px 0 0; }
   #set .deckcol .stcard { width: 100%; padding: 8px 12px 7px; }
@@ -610,16 +611,9 @@
 </head>
 <body>
 
-<div class="concept">
-  <b>ROUND 30</b> Every ratified surface from rounds 1&ndash;29 in one file, plus the two things round 29 was missing: the stream&rsquo;s filter (round 8&rsquo;s thin bar, sliding out of the box&rsquo;s left edge) and an ordered top for the stream. The chrome the owner struck on 2026-08-31 is struck here too. This ribbon and the amber notes are round apparatus, never interface.
-  <span style="margin-left:auto">
-    <a href="#s5">the filter</a><a href="#s7">the docket</a><a href="#firsthour">the journey</a>
-  </span>
-</div>
 
 <!-- ============ SCENE 1 : THE DOOR — ONE BEAT, THEN IN ============ -->
 <section class="scene door" id="s1" aria-label="Login: one beat — the brink lights, the fall begins, you enter">
-  <div class="scene-tag">Scene 1 — the door, redone to Orbit's speed standard: instant paint, one sub-second beat, no card, no chrome. The fall rains over the whole void; the brink frames the wordmark; you enter. Signing in lands on the first card of your deck. The dashed strip below is a mockup note storyboarding the sign-out motion — none of it exists in the interface.</div>
   <div class="beat">
     <div class="fullfall" aria-hidden="true">
       <i style="left: 4%; animation-delay: 0.2s; opacity: 0.5"></i>
@@ -654,25 +648,10 @@
     </div>
     <div class="promise">Your router pushes its logs here — MikroView never connects to your router.</div>
   </div>
-  <div class="outboard" aria-label="Mockup note: the sign-out motion, storyboarded"><span class="obnote">mockup note — the sign-out motion, storyboarded; this strip is not part of the interface</span>
-    <div class="frame"><span class="k">Sign out · beat 1</span>
-      <svg viewBox="0 0 80 26"><line x1="20" y1="4" x2="20" y2="14" stroke="#5aa7f0" stroke-width="2" opacity="0.5"/><line x1="40" y1="8" x2="40" y2="16" stroke="#e05252" stroke-width="2" opacity="0.35"/><line x1="60" y1="2" x2="60" y2="10" stroke="#5aa7f0" stroke-width="2" opacity="0.2"/></svg>
-      the fall thins — nothing new is drawn
-    </div>
-    <div class="frame"><span class="k">Beat 2</span>
-      <svg viewBox="0 0 80 26"><line x1="10" y1="13" x2="70" y2="13" stroke="var(--now)" stroke-width="2" opacity="0.5"/><circle cx="40" cy="13" r="2.5" fill="var(--now)"/></svg>
-      the brink collapses to a point and goes out
-    </div>
-    <div class="frame"><span class="k">Beat 3 · signed out</span>
-      <svg viewBox="0 0 80 26"><circle cx="40" cy="13" r="1.6" fill="var(--ink-3)"/></svg>
-      your router's logs keep arriving<span class="pill">Enter again</span>
-    </div>
-  </div>
 </section>
 
 <!-- ============ THE FIRST HOUR — THE JOURNEY (ROUND 27) ============ -->
 <section class="scene" id="firsthour" aria-label="Storyboard: the first hour — attach, watch it flow, take the tour, end at the wizard">
-  <div class="scene-tag">Round 27 — the journey reordered per the verdict: never a wall of setup. Attach the router and data flows first; the tour offers itself on a glass — take it, or skip straight to the wizard; it walks the deck and ends by launching the wizard.</div>
   <div class="fhhead"><span class="fhtitle">THE FIRST HOUR</span><span class="fhsub">attach · it flows · the tour offers · the tour · the wizard</span></div>
   <div class="fh">
     <div class="fhframe">
@@ -708,7 +687,6 @@
         <button class="fhbtn">begin the tour</button>
         <a class="fhskip">skip straight to the wizard ▸</a>
       </div>
-      <div class="fhstory dim">one glass, one choice — over the live fall, never a modal maze</div>
     </div>
     <div class="fhframe">
       <span class="fhk">Beat 4 · the tour</span>
@@ -732,7 +710,7 @@
         <text x="16" y="152" class="fhprogsm">THE FALL · 1 OF 6 · NEXT ▸</text>
       </svg>
       <div class="fhstory">The tour walks the deck: each card's key handles ringed, each ring explained in a few plain words, on the data that just arrived.</div>
-      <div class="fhstory dim">a ring and a sentence — never over the top; leave any time</div>
+      <div class="fhstory dim">leave any time</div>
     </div>
     <div class="fhframe">
       <span class="fhk">Beat 5 · it ends at the wizard</span>
@@ -750,7 +728,6 @@
 
 <!-- ============ SCENE 2 : ARRIVAL — THE FALL IS HOME ============ -->
 <section class="scene" id="s2" aria-label="Arrival: the fall, traffic pouring past every boundary">
-  <div class="scene-tag" style="top:66px">The fall card, exactly as accepted on the live build: a band per boundary, the live spectrum on the brink, time pouring downward into memory.</div>
   <div class="scenebar">
     <span class="wordmark" title="home — whichever card you keep first">MIKRO<em>VIEW</em></span>
     <span class="scstatus">
@@ -838,7 +815,7 @@
 
         <!-- NOW : the brink -->
         <line class="nowline" x1="60" y1="136" x2="1390" y2="136"/>
-        <text x="64" y="150" class="now-t">NOW · 14:02:11 — the spectrum above is this instant; below, it falls into memory</text>
+        <text x="64" y="150" class="now-t">NOW · 14:02:11</text>
 
         <!-- time gutter -->
         <g>
@@ -901,20 +878,11 @@
         <text x="284" y="420" class="flag-t">✱ new_talker · cam-porch → nas :445 · born 13:52 on a band blank for 41 days · ×14 · open ▸</text>
       </svg>
     </div>
-    <div class="fall-legend">
-      <span><span class="b">blue energy = accepted</span> (brightness = rate)</span>
-      <span><span class="r">red energy = dropped — red never means anything else</span></span>
-      <span><span class="v">violet = nat</span></span>
-      <span>a carrier = a steady talker · dash rhythm = its cadence</span>
-      <span>⫽ unlogged (≠ a quiet band)</span>
-      <span>✱ flag at its moment · click a carrier to open it in Stream</span>
-    </div>
   </div>
 </section>
 
 <!-- ============ SCENE 3 : TOPOGRAPHY (round-19 C + dials) ============ -->
 <section class="scene" id="s3" aria-label="The topography map wearing the flags and watch lenses">
-  <div class="scene-tag" style="top:auto;bottom:20px">The health dials ride the topography's chrome: one circle for flags (⚑ beneath the number), one for watchers (the eye beneath), the ring split by the colours of healthy · unhealthy · advisory. Green when there is nothing to report — the dimmer pair shows rest. Reaching in keeps the map behind you at whatever level and zoom you left — dimmed, still present — and zoom sleeps until you click off and surface exactly there.</div>
   <div class="scenebar">
     <span class="wordmark" title="home — whichever card you keep first">MIKRO<em>VIEW</em></span>
     <span class="scstatus"><span><span class="dot"></span>LIVE · 34/s</span><a class="fmk" href="#s7" title="6 open flags — 4 alarms, 2 advisories">⚑ 6</a><a class="wmk" href="#s7" title="7 watchers — 6 healthy, 1 broken"><svg viewBox="0 0 14 10" width="13" height="10" aria-hidden="true"><path d="M1 5 Q7 -0.5 13 5 Q7 10.5 1 5 Z" fill="none" stroke="currentColor" stroke-width="1.1"/><circle cx="7" cy="5" r="1.8" fill="currentColor"/></svg> 7 <b title="one watch broken">○1</b></a><button class="who">tom (admin)</button></span>
@@ -935,24 +903,6 @@
       stroke-dasharray="107.7 18.0" stroke-dashoffset="0.0"
       transform="rotate(-90 28 28)" stroke-linecap="butt"/><circle cx="28" cy="28" r="20" fill="none" stroke="var(--alarm)" stroke-width="4"
       stroke-dasharray="18.0 107.7" stroke-dashoffset="-107.7"
-      transform="rotate(-90 28 28)" stroke-linecap="butt"/>
-      <text x="28" y="27" text-anchor="middle" class="dnum">7</text>
-      <g transform="translate(28 36)"><path d="M-6 0 Q0 -4.6 6 0 Q0 4.6 -6 0 Z" fill="none" stroke="currentColor" stroke-width="1.1"/><circle r="1.7" fill="currentColor"/></g>
-    </svg>
-  </span>
-  </div>
-  <div class="dials-rest" aria-hidden="true"><span class="cap">at rest — all green, nothing to report</span>
-    <span class="dial" style="color:#ff5470" title="no open flags" aria-label="no open flags">
-    <svg viewBox="0 0 56 56" width="56" height="56"><circle cx="28" cy="28" r="20" fill="none" stroke="var(--ok)" stroke-width="4"
-      stroke-dasharray="125.7 0.0" stroke-dashoffset="0.0"
-      transform="rotate(-90 28 28)" stroke-linecap="butt"/>
-      <text x="28" y="27" text-anchor="middle" class="dnum">0</text>
-      <text x="28" y="40" text-anchor="middle" class="dsym">⚑</text>
-    </svg>
-  </span>
-    <span class="dial" style="color:#a78bfa" title="all watchers healthy" aria-label="all watchers healthy">
-    <svg viewBox="0 0 56 56" width="56" height="56"><circle cx="28" cy="28" r="20" fill="none" stroke="var(--ok)" stroke-width="4"
-      stroke-dasharray="125.7 0.0" stroke-dashoffset="0.0"
       transform="rotate(-90 28 28)" stroke-linecap="butt"/>
       <text x="28" y="27" text-anchor="middle" class="dnum">7</text>
       <g transform="translate(28 36)"><path d="M-6 0 Q0 -4.6 6 0 Q0 4.6 -6 0 Z" fill="none" stroke="currentColor" stroke-width="1.1"/><circle r="1.7" fill="currentColor"/></g>
@@ -1219,7 +1169,6 @@
 
 <!-- ============ SCENE 4 : METRICS — THE PAGE WE BUILT ============ -->
 <section class="scene" id="s4" aria-label="Metrics: seismograph, register, table — the page as built">
-  <div class="scene-tag" style="top:auto;bottom:56px">The metrics card is the page we already built (#488): three views — seismograph (default), register, table — over one cursor and the hourline ledger. Here the drum wears the deck&#39;s clothes; nothing about the page&#39;s design changes.</div>
   <div class="scenebar">
     <span class="wordmark" title="home — whichever card you keep first">MIKRO<em>VIEW</em></span>
     <span class="scstatus"><span><span class="dot"></span>LIVE · 34/s</span><a class="fmk" href="#s7" title="6 open flags — 4 alarms, 2 advisories">⚑ 6</a><a class="wmk" href="#s7" title="7 watchers — 6 healthy, 1 broken"><svg viewBox="0 0 14 10" width="13" height="10" aria-hidden="true"><path d="M1 5 Q7 -0.5 13 5 Q7 10.5 1 5 Z" fill="none" stroke="currentColor" stroke-width="1.1"/><circle cx="7" cy="5" r="1.8" fill="currentColor"/></svg> 7 <b title="one watch broken">○1</b></a><button class="who">tom (admin)</button></span>
@@ -1558,7 +1507,6 @@
      rejected ("you ignored my instruction, sliding out to the left, as
      a thin bar") and round 8's bar is the accepted answer. -->
 <section class="scene" id="s5" aria-label="The stream: an ordered top — the filter, the bar, the whisper, then the lines">
-  <div class="scene-tag" style="top:auto;bottom:56px">The stream's top, ordered: the filter line, then the whisper, then the lines — nothing drawn over anything else. The box is always there, so there is always a way in; <b style="color:var(--accent)">◂ bar</b> slides round 8's thin strip out of its left edge. Clear the chips and the box says so rather than vanishing.</div>
   <div class="scenebar">
     <span class="wordmark" title="home — whichever card you keep first">MIKRO<em>VIEW</em></span>
     <span class="scstatus">
@@ -1643,7 +1591,6 @@
   </div>
 </section>
 <section class="scene" id="s7" aria-label="The docket: flags, watchlist and the audit log on one card">
-  <div class="scene-tag" style="top:auto;bottom:20px">Round-17 verdict applied: rows open as drawers with the story, the matched lines, the episode's shape and the actions; each flag type wears its own colour (stripe + mark); every named where is a link into the topography at its sensible level.</div>
   <div class="scenebar">
     <span class="wordmark" title="home — whichever card you keep first">MIKRO<em>VIEW</em></span>
     <span class="scstatus"><span><span class="dot"></span>LIVE · 34/s</span><a class="fmk" href="#s7" title="6 open flags — 4 alarms, 2 advisories">⚑ 6</a><a class="wmk" href="#s7" title="7 watchers — 6 healthy, 1 broken"><svg viewBox="0 0 14 10" width="13" height="10" aria-hidden="true"><path d="M1 5 Q7 -0.5 13 5 Q7 10.5 1 5 Z" fill="none" stroke="currentColor" stroke-width="1.1"/><circle cx="7" cy="5" r="1.8" fill="currentColor"/></svg> 7 <b title="one watch broken">○1</b></a><button class="who" style="background:transparent;border:1px solid var(--hair);border-radius:999px;padding:2px 10px;font:inherit;color:var(--ink-3);cursor:pointer">tom (admin)</button></span>
@@ -1728,7 +1675,7 @@
         </div></div></td></tr>
       </tbody>
     </table>
-    <div class="caempty" id="caempty"><div class="cae-in"><span class="cae-mark">✓</span><b>Nothing open.</b><br>Cleared today at 13:58 — all six keep their place in the <a class="olink">audit log</a>.<div class="cae-app">round apparatus — <a id="carestore">bring the six back</a></div></div></div>
+    <div class="caempty" id="caempty"><div class="cae-in"><span class="cae-mark">✓</span><b>Nothing open.</b><br>Cleared today at 13:58 — all six keep their place in the <a class="olink">audit log</a>.</div></div>
   </div>
 
   <div class="panel" id="p-watch" aria-label="The watchlist">
@@ -1945,7 +1892,6 @@
   .scstatus .who:hover { color: var(--ink-2); border-color: var(--hair); }
   /* dials: bigger, symbols in their own inks, and they go somewhere */
   .dial svg { width: 68px; height: 68px; }
-  .dials-rest .dial svg { width: 38px; height: 38px; }
   .dial { cursor: pointer; }
   .dial .dsym { fill: currentColor; }
   /* the flagged client holds a steady ring now, not a pulse */
@@ -2116,8 +2062,9 @@
 
     <div class="stgrid">
     <div class="stcol">
-    <div class="og">
+    <div class="og wide">
       <h3>ingest</h3>
+      <div class="wleft">
       <svg class="stpath" viewBox="0 0 520 92" role="img" aria-label="Two routers push their logs one way into mikroview's listening port; nothing travels back">
         <circle cx="52" cy="30" r="10" fill="none" stroke="var(--accent)" stroke-width="1.4"/><circle cx="52" cy="30" r="2" fill="var(--accent)"/>
         <text x="52" y="54" text-anchor="middle" class="sp-n">rb5009</text>
@@ -2133,12 +2080,16 @@
         <text x="396" y="57" class="sp-n">34 events/s arriving now</text>
       </svg>
       <p class="oghint">the logs travel one way — mikroview never connects to your router</p>
+      </div>
+      <div class="wrows">
       <div class="orow"><span>plain syslog</span><span class="ov dim">off — loopback only</span></div>
       <div class="orow"><span>certificate</span><span class="ov">local CA · 7efd…03a4 · <a class="olink">download /ca.crt</a></span></div>
       <div class="orow"><span>router state</span><span class="ov">pushed hourly, alongside the logs</span></div>
+      </div>
     </div>
-    <div class="og">
+    <div class="og wide">
       <h3>detection</h3>
+      <div class="wleft">
       <div class="stflags">
         <span class="stf" style="color:#ff5470">✱ unplanned · 1</span>
         <span class="stf" style="color:#ff9e64">✱ port scan · 1</span>
@@ -2148,13 +2099,17 @@
         <span class="stf" style="color:#b8c56a">▲ new talker · 1</span>
         <span class="stf dim">+ 10 more · quiet today</span>
       </div>
+      </div>
+      <div class="wrows">
       <div class="orow"><span>flag types</span><span class="ov">16 of 16 on · <a class="olink">tune…</a></span></div>
       <div class="orow"><span>port-scan window</span><span class="ov">20 ports / 60 s</span></div>
+      </div>
     </div>
     </div>
     <div class="stcol">
-    <div class="og">
+    <div class="og wide">
       <h3>memory</h3>
+      <div class="wleft">
       <svg class="stmem" viewBox="0 0 520 58" role="img" aria-label="The event buffer holds about nine hours of events; the oldest hour falls away as the newest arrives">
         <clipPath id="memclip"><rect x="8" y="20" width="500" height="10" rx="5"/></clipPath>
         <rect x="8" y="20" width="500" height="10" rx="5" fill="rgba(157,184,232,0.10)"/>
@@ -2167,8 +2122,11 @@
         <text x="508" y="50" text-anchor="end" class="sp-k">now</text>
       </svg>
       <p class="oghint">the oldest hour falls away as the newest arrives; darker hours held more</p>
+      </div>
+      <div class="wrows">
       <div class="orow"><span>event buffer</span><span class="ov">120 MiB · ~201 000 events · ~9 h at today's rate</span></div>
       <div class="orow"><span>persistence</span><span class="ov">JSON store · 14 d</span></div>
+      </div>
     </div>
     <div class="og">
       <h3>account</h3>
@@ -2180,7 +2138,6 @@
     </div>
     </div>
   </div></div>
-  <div class="scene-tag" style="top:auto;bottom:20px">Round 25 — settings developed further: the shelf now reports live truth (the rate, the split bar, the docket's marks, the named count), the memory ribbon shades each hour by how much it held, the pathway carries the arriving pulse, detection counts today's fires. Still not a form until you touch it.</div>
 </section>
 <style>
   /* whisper, full width */
@@ -2355,7 +2312,7 @@
   #ent .etable td { padding: 10px 18px; font-size: 12.5px; }
   #ent .og { margin-bottom: 20px; }
   /* settings, rebuilt in the app's own clothes (round 24) */
-  #set .opanel { max-width: 1240px; }
+  #set .opanel { max-width: none; }
   .stgrid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; align-items: start; }
   .stcol { display: flex; flex-direction: column; gap: 14px; }
   .stgrid .og { margin-bottom: 0; }
@@ -2386,8 +2343,6 @@
   .caempty.on { display: flex; }
   .cae-in { text-align: center; font: 13px var(--sans); color: var(--ink-2); line-height: 1.7; }
   .cae-mark { display: block; font-size: 20px; color: var(--ok); margin-bottom: 6px; }
-  .cae-app { margin-top: 18px; font: italic 10.5px var(--sans); color: var(--ink-3); }
-  .cae-app a { cursor: pointer; text-decoration: underline; }
   /* the first hour, storyboarded (round 26) */
   .fhhead { position: absolute; top: 86px; left: 44px; }
   .fhtitle { font: 600 12px var(--mono); letter-spacing: 0.22em; color: var(--ink-2); }
@@ -2466,12 +2421,6 @@
       document.querySelectorAll('.fmk').forEach(function (m) { m.dataset.was = m.innerHTML; m.innerHTML = '⚑ 0'; m.style.color = 'var(--ok)'; m.title = 'no open flags'; });
     });
     document.addEventListener('click', function () { if (btn.classList.contains('armed')) disarm(); });
-    document.getElementById('carestore').addEventListener('click', function () {
-      empty.classList.remove('on');
-      tbl.style.display = '';
-      wrap.style.display = '';
-      document.querySelectorAll('.fmk').forEach(function (m) { if (m.dataset.was) { m.innerHTML = m.dataset.was; m.style.color = ''; m.title = '6 open flags — 4 alarms, 2 advisories'; } });
-    });
   })();
   // the op cards joined the deck after the rail's observer ran — observe them too
   document.querySelectorAll('.scene').forEach(function (s) { io.observe(s); });

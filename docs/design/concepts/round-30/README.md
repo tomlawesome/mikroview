@@ -103,8 +103,13 @@ would silently undo every one.
   wash stays; the mark annotates it. A row with no country code gets no
   glyph and no guess, and the two-letter code always stays beside the
   flag, so the meaning never rests on the glyph alone.
-- **"Your deck" is a column of Settings**, to the left of the settings
-  proper — same seven cards, same signature marks, same drag-to-reorder.
+- **Settings is two columns**: "your deck" on the left, everything else
+  stacked down the right at full width (owner, 2026-08-31: *"make it two
+  columns, one for the deck layout and stack the others vertically, and
+  make them a lot wider"*). A group with a drawing splits inside itself —
+  the drawing and its caption left, its rows right — so the width buys a
+  shorter page rather than wide whitespace, and the four groups fit the
+  card without scrolling.
 - **The wordmark is the way home** — to whichever card the operator
   keeps first, so reordering the deck moves it too.
 
@@ -167,19 +172,56 @@ counts in every form.
   always direct-labelled and never colour-alone); the flag family inks
   from round 18; watchers `#a78bfa` from round 14; the fall's heat pair
   from round 3. Nothing to re-validate.
-- **Every scene screenshot and looked at** — `shots/`, regenerated with
+- **Every scene screenshot and looked at** — 15 shots in `shots/`,
+  regenerated with
   `cd frontend && node ../docs/design/concepts/round-30/capture.mjs`.
   The register's crossing labels and the door's wording were both caught
   in this pass, not in the markup.
 - `prefers-reduced-motion` disables all animation, including the bar's
   unfurl.
-- The concept ribbon, the amber scene notes and the door's dashed
-  sign-out strip are round apparatus and say so; none of it is
-  interface.
+- **No apparatus at all** — see below.
+
+## 5. No apparatus, anywhere
+
+Owner, 2026-08-31, verbatim: **"Ok, well remove ALL deescriptions
+intended just for mock ups please. A final mock up shou;d be the visual
+source of truth free of any mock up descriptions of aids to understand."**
+
+Every round from 1 to 29 carried explanatory furniture. All of it is
+gone from round 30, markup and stylesheet both, so nothing invites it
+back:
+
+- the round ribbon at the top of the file
+- all seven amber scene notes
+- the door's dashed sign-out storyboard strip and its "mockup note" label
+- the topography's dimmed "at rest — all green, nothing to report" pair
+- the docket's "round apparatus — bring the six back" restore link
+- **the fall's how-to-read key**, which round 5 had already ruled against:
+  *"deep explanation never sits in the UI … 'How to read this' blocks hide
+  behind a tiny (i) well out of the way, with the depth in the docs."*
+  The fall has that (i); it never needed the key beneath it.
+- the fall's now-line, which explained itself — it reads `NOW · 14:02:11`
+- two journey captions that described the design rather than spoke in it
+
+**What was kept, and why it is not apparatus:** the honesty statements
+(`nothing logged — no trace, and no claim of one`; `blank because nothing
+is logged — not because nothing is sent`; `quiet is a fact, not a fault`)
+are #445's never-guess ethos, ratified as interface in round 3 and stated
+on every surface that can be silent; the stream's foot line reports the
+day's three facts, not a key; and the journey is a five-beat storyboard of
+a flow, so its beat labels are the sequence, not commentary on it.
 
 ## Owner verdicts
 
-Pending — nothing in this round is ratified yet.
+- The filter, as round 30 builds it (verbatim, 2026-08-31): **"ok, i love
+  it as it is in round 30 now."** and, on whether round 8 supersedes
+  round 7: **"Not sure what this pertains to, if it's the filter bar, I
+  like it as it now is in round 30."** — round 8's bar stands; #697's
+  request for round 7's panel is closed as stale.
+- The two ratified rules round 29 was still breaking: **"Great catches."**
+- Settings and the apparatus removal: asked for and built this round
+  (verbatim above); no verdict yet.
+- Everything else: pending — he is reading the round now.
 
 ## Known, and not fixed here
 
