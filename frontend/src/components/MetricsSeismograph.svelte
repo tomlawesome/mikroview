@@ -33,9 +33,6 @@
 
   let { hour, cursor, onselect }: { hour: MetricsHour; cursor: number; onselect: (index: number) => void } = $props()
 
-  // Half the drum's own drawable band: how far the outer stroke reaches
-  // above/below the midline for a minute at the hour's own scale.
-  const DRUM_HALF = 130
   // The floor that keeps a near-silent minute a visible mark rather than
   // a gap in the paper -- one stroke per minute means every minute draws
   // something, the same "honest thread" rule the record puts on a
@@ -49,21 +46,34 @@
   const LEFT = 30
   const RIGHT = 18
   const MIN_WIDTH = 420
+  // Round 30's drum is full-bleed both ways (`.drumwrap { position:
+  // absolute; inset: 108px 24px 30px }`, `svg { width: 100%; height:
+  // 100% }`) -- it fills whatever vertical room the scene gives it
+  // rather than the fixed short band this used to draw. This floor
+  // only keeps a cramped viewport at that previous height rather than
+  // squashing the trace unreadably thin.
+  const MIN_HEIGHT = 320
 
-  // Measured, not assumed: the drum is full-bleed, so its width is
-  // whatever the content column gives it after the rail's own state.
+  // Measured, not assumed: the drum is full-bleed, so its width and
+  // height are whatever the content column gives it after the rail's
+  // own state.
   let boxWidth = $state(0)
+  let boxHeight = $state(0)
 
   const width = $derived(Math.max(MIN_WIDTH, boxWidth || MIN_WIDTH))
+  const height = $derived(Math.max(MIN_HEIGHT, boxHeight || MIN_HEIGHT))
   const dpr = $derived(dprState.value)
 
   const n = $derived(hour.axis.length)
   const plotX0 = $derived(LEFT)
   const plotX1 = $derived(width - RIGHT)
 
-  const midlineY = TOP + DRUM_HALF
-  const drumBottom = TOP + DRUM_HALF * 2
-  const height = $derived(drumBottom + BOTTOM)
+  // Half the drum's own drawable band: how far the outer stroke reaches
+  // above/below the midline for a minute at the hour's own scale. Now
+  // grows with the measured height, so the trace fills the scene
+  // instead of stopping at a fixed band.
+  const drumHalf = $derived((height - TOP - BOTTOM) / 2)
+  const midlineY = $derived(TOP + drumHalf)
 
   // One shared scale for both halves of every stroke: refused traffic is
   // always a subset of the minute's total, so the inner half has to read
@@ -83,7 +93,7 @@
   const scale = $derived(scaleFor(totals))
 
   function halfOf(value: number): number {
-    return Math.max(MIN_HALF, (value / scale) * DRUM_HALF)
+    return Math.max(MIN_HALF, (value / scale) * drumHalf)
   }
 
   function xOf(i: number): number {
@@ -116,7 +126,7 @@
   )
 </script>
 
-<div class="drum" bind:clientWidth={boxWidth}>
+<div class="drum" bind:clientWidth={boxWidth} bind:clientHeight={boxHeight}>
   {#if n === 0}
     <p class="empty">No minutes recorded yet — the drum starts as soon as events arrive.</p>
   {:else}
@@ -178,8 +188,10 @@
 <style>
   .drum {
     width: 100%;
+    height: 100%;
     min-width: 0;
-    overflow-x: auto;
+    min-height: 0;
+    overflow: auto;
   }
 
   .drum svg {
