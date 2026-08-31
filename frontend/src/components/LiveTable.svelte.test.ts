@@ -9,6 +9,7 @@ import { appState } from '../lib/state.svelte'
 import { authState } from '../lib/auth.svelte'
 import { groupModeState } from '../lib/groupMode.svelte'
 import { flagsState } from '../lib/flags.svelte'
+import { fallState } from '../lib/fall.svelte'
 import { MAX_RENDERED_ROWS } from '../lib/constants'
 
 // jsdom (unlike a real browser) has no window.matchMedia -- LiveTable
@@ -87,6 +88,22 @@ beforeEach(() => {
   // flagsState is a module-level singleton -- would otherwise leak a
   // flag from one test's fixture into the next's unflagged-row assertion.
   flagsState.list = []
+  // Same for fallState, which the foot line's dark-boundary fact reads
+  // (#691). Seeded with one boundary so LiveTable's own mount-time
+  // "fetch the rule tables if nobody has" never fires in jsdom -- the
+  // reactive read is what these tests are about, not the fetch.
+  fallState.boundaries = [
+    {
+      key: 'forward|lan|wan',
+      chain: 'forward',
+      inInterface: 'lan',
+      outInterface: 'wan',
+      srcAddressList: 'lan',
+      label: 'lan → wan',
+      coverage: 'observed',
+      epithet: '',
+    },
+  ]
 })
 
 describe('LiveTable autoscroll-off freezing (issue #232)', () => {
@@ -817,5 +834,84 @@ describe('Flagged pathway row wash and mark (#685, #691)', () => {
     flushSync()
 
     expect(container.querySelector('[title="cleared-flag-row"]')?.classList.contains('flagged')).toBe(false)
+  })
+})
+
+// The foot line (#691, round 30's .foot-legend): three computed facts
+// on the stream's own footing. What matters most here is that it is
+// absent whenever its facts are -- the band must never draw a strip
+// with a placeholder in it, and must not draw at all with nothing to
+// say.
+describe('the foot line', () => {
+  const darkBoundary = {
+    key: 'forward|guest|wan',
+    chain: 'forward',
+    inInterface: 'guest',
+    outInterface: 'wan',
+    srcAddressList: 'guest',
+    label: 'guest → wan',
+    coverage: 'dark' as const,
+    epithet: '',
+  }
+
+  function repeatedDrops(): Flag {
+    return {
+      id: 'rd1',
+      type: 'repeated_drops',
+      target: '10.0.20.11 -> port 445',
+      detail: '',
+      count: 14,
+      firstSeen: new Date(Date.now() - 10 * 60_000).toISOString(),
+      lastSeen: new Date(Date.now() - 60_000).toISOString(),
+      cleared: false,
+      evidence: { hosts: ['10.0.40.5'] },
+    }
+  }
+
+  it('does not render at all when none of the three facts has data', () => {
+    const { container } = render(LiveTable, { props: { events: [makeEvent('row')] } })
+    flushSync()
+
+    expect(container.querySelector('.foot-legend')).toBeNull()
+  })
+
+  it('renders the facts that do have data, and nothing in place of the ones that do not', () => {
+    fallState.boundaries = [darkBoundary]
+    flagsState.list = [repeatedDrops()]
+    appState.events = [
+      makeEvent('drop-row', {
+        action: 'drop',
+        srcIp: '10.0.20.11',
+        srcHostName: 'cam-porch',
+        dstIp: '10.0.40.5',
+        dstHostName: 'nas',
+        dstPort: 445,
+      }),
+    ]
+
+    const { container } = render(LiveTable, { props: { events: appState.events } })
+    flushSync()
+
+    const band = container.querySelector('.foot-legend')
+    expect(band).not.toBeNull()
+    const facts = band!.querySelectorAll('.fact')
+    // Two, not three: no spike flag is open, so the surge slot is
+    // simply not there -- no dash, no zero, no example.
+    expect(facts.length).toBe(2)
+    expect(facts[0].textContent).toContain('cam-porch → nas :445')
+    expect(facts[0].textContent).toContain('14 so far')
+    expect(facts[1].textContent).toContain('guest → wan')
+    expect(facts[1].textContent).toContain('nothing logged, not nothing sent')
+    expect(band!.querySelectorAll('.k')[1].textContent).toBe('dark')
+  })
+
+  it('drops a fact again once its flag is cleared', () => {
+    flagsState.list = [{ ...repeatedDrops(), cleared: true }]
+    appState.events = [makeEvent('drop-row', { srcIp: '10.0.20.11', dstPort: 445, action: 'drop' })]
+
+    const { container } = render(LiveTable, { props: { events: appState.events } })
+    flushSync()
+
+    expect(container.querySelector('.foot-legend')).toBeNull()
   })
 })
