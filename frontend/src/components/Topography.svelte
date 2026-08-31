@@ -876,15 +876,12 @@
       {/if}
     </div>
   {/if}
-  <!-- The dials and lens tabs share one chrome row (#682): beside each
-       other, never stacked, and inset clear of the deck's roll rail on
-       the right edge. -->
-  <div class="topo-chrome">
-    <!-- The health dials (#648, rounds 19-20; repositioned #682): two
-         rings, flags and watchers, solid green whenever there is
-         nothing to report. Each ring's own symbol (⚑ / ◉, the docket's
-         own watcher glyph) sits beneath its count as the ring's legend. -->
-    <div class="dials">
+  <!-- The health dials (#648, rounds 19-20; repositioned #682 clear of
+       the lens tabs and the deck's roll rail): two rings, flags and
+       watchers, solid green whenever there is nothing to report. Each
+       ring's own symbol (⚑ / the eye) sits beneath its count as the
+       ring's legend. -->
+  <div class="dials">
       <button
         class="dial"
         onclick={() => openDocket('flags')}
@@ -951,30 +948,36 @@
             />
           {/if}
           <text x="28" y="27" class="dnum" text-anchor="middle">{watcherTotal}</text>
-          <text x="28" y="41" class="dsym watch-sym" text-anchor="middle">◉</text>
+          <!-- The docket's own eye (#682, ported from the scene's dial
+               markup) -- not the "◉" text glyph, which is the aggregate
+               bar's own mark, not the ring's legend. -->
+          <g class="dsym watch-sym" transform="translate(28 36)">
+            <path d="M-6 0 Q0 -4.6 6 0 Q0 4.6 -6 0 Z" fill="none" stroke="currentColor" stroke-width="1.1" />
+            <circle r="1.7" fill="currentColor" />
+          </g>
         </svg>
       </button>
     </div>
-    <div class="lenses" role="tablist" aria-label="Map lenses">
-      {#if reach}
-        <span class="lens on" role="tab" aria-selected="true">Reach</span>
-        <span class="lens" role="tab" aria-selected="false">{lens === 'policy' ? 'Policy' : 'Traffic'}</span>
-      {:else}
-        <button class="lens" class:on={lens === 'traffic'} role="tab" aria-selected={lens === 'traffic'} onclick={() => (lens = 'traffic')}>
-          Traffic
-        </button>
-        <button class="lens" class:on={lens === 'policy'} role="tab" aria-selected={lens === 'policy'} onclick={() => (lens = 'policy')}>
-          Policy
-        </button>
-        <button class="lens" class:on={lens === 'coverage'} role="tab" aria-selected={lens === 'coverage'} onclick={() => (lens = 'coverage')}>
-          Coverage
-        </button>
-      {/if}
-    </div>
+
+  <!-- The lens selector (#682, ported from the scene's `.wlens2`): the
+       bottom-left bar, not a top-right tab strip -- round 29 has no
+       such strip beside the dials. -->
+  <div class="wlens2" role="tablist" aria-label="Map lenses">
+    {#if reach}
+      <span class="on" role="tab" aria-selected="true">reach</span>
+      <span role="tab" aria-selected="false">{lens === 'policy' ? 'policy' : 'traffic'}</span>
+    {:else}
+      <button class:on={lens === 'traffic'} role="tab" aria-selected={lens === 'traffic'} onclick={() => (lens = 'traffic')}>
+        traffic
+      </button>
+      <button class:on={lens === 'policy'} role="tab" aria-selected={lens === 'policy'} onclick={() => (lens = 'policy')}>
+        policy
+      </button>
+      <button class:on={lens === 'coverage'} role="tab" aria-selected={lens === 'coverage'} onclick={() => (lens = 'coverage')}>
+        coverage
+      </button>
+    {/if}
   </div>
-  {#if reach}
-    <button class="ascend" onclick={surface}>⌃ surface — the map, as you left it</button>
-  {/if}
 
   <!-- While descended, the map stays beneath as the reach's backdrop —
        blurred, at the level you left (round 24); clicking it surfaces
@@ -1251,13 +1254,26 @@
               {#if z.hostCount > 3}<tspan> · +{z.hostCount - 3}</tspan>{/if}
             </text>
           {/if}
-          <text x="-90" y="72" class="n-sub">{z.eventCount.toLocaleString()} events this window</text>
           {#if zoneCaption(z.id)}
             {@const capt = zoneCaption(z.id) ?? ''}
-            <text x="-90" y="64" class="n-cov {covClass(capt)}">{capt}</text>
+            {@const [badge, detail] = capt.split(' — ')}
+            <!-- Two lines, badge over detail (#682, ratified round-29):
+                 collapsing them into one crammed sentence was the
+                 defect, not a design choice -- the badge's own y moves
+                 down 4px when a detail line follows it, matching the
+                 scene's own Guest card exactly. -->
+            <text x="-90" y={detail ? 74 : 70} class="n-cov {covClass(capt)}">{badge}</text>
+            {#if detail}
+              <text x="-90" y="88" class="n-sub">{detail}</text>
+            {/if}
           {/if}
+          <text x="-90" y="100" class="n-sub">{z.eventCount.toLocaleString()} events this window</text>
           {#if agg}
-            {@render aggregateBar(agg, -94, 188, 84, 12, z)}
+            <!-- The aggregate bar sits below the card's own rect (#682,
+                 ratified round-29: y=110 against a 106-tall island) --
+                 giving the coverage caption room for its second line
+                 regardless of whether a bar is also present. -->
+            {@render aggregateBar(agg, -94, 188, 110, 12, z)}
           {/if}
         </g>
       {/each}
@@ -1272,6 +1288,20 @@
       {/if}
       </g>
     </svg>
+    {#if reach}
+      <!-- The ascend control (#682, ported from the scene): inside the
+           map's own flow, top-left of the stage -- not a fixed pill
+           floating over the whole card. -->
+      <button
+        class="ascend"
+        onclick={(e) => {
+          e.stopPropagation()
+          surface()
+        }}
+      >
+        ⌃ surface — the map, as you left it
+      </button>
+    {/if}
   </div>
 
   {#if reach && reachSummary}
@@ -1666,54 +1696,40 @@
     font-weight: 550;
   }
 
-  /* The dials and lens tabs share this row (#682): laid out by flex so
-     they can never overlap each other regardless of content width, and
-     inset far enough from the viewport edge to clear the deck's roll
-     rail, which the previous fixed offsets did not. */
-  .topo-chrome {
+  /* The lens selector (#682, ported from the scene's `.wlens2`): the
+     bottom-left bar, exact position and type from round 29 -- not an
+     approximation of it as a top-right tab strip. */
+  .wlens2 {
     position: absolute;
-    top: 14px;
-    right: 40px;
+    bottom: 12px;
+    left: 26px;
     z-index: 2;
     display: flex;
-    align-items: center;
-    gap: 18px;
-  }
-
-  .lenses {
-    display: flex;
-    gap: 2px;
-    border-bottom: 1px solid var(--border);
-    padding-bottom: 6px;
-  }
-
-  .lens {
-    font-size: 12px;
-    font-weight: 550;
+    gap: 14px;
+    font: 500 10.5px var(--font-sans);
     color: var(--fg-dim);
-    padding: 4px 13px;
-    letter-spacing: 0.02em;
+    opacity: 0.8;
+  }
+
+  .wlens2 button {
     background: none;
     border: none;
-    font-family: inherit;
+    padding: 0;
+    font: inherit;
+    color: inherit;
     cursor: pointer;
   }
 
-  span.lens {
+  .wlens2 span {
     cursor: default;
   }
 
-  button.lens:hover {
-    color: var(--fg-muted);
-  }
-
-  .lens.on {
+  .wlens2 .on {
     color: var(--fg);
-    border-bottom: 2px solid var(--accent);
-    margin-bottom: -7px;
   }
 
   .stage {
+    position: relative;
     flex: 1;
     min-height: 0;
   }
@@ -2368,23 +2384,24 @@
     color: var(--alarm);
   }
 
+  /* Ported from the scene (#682): inside the map's own flow, top-left
+     of the stage, a plain text link -- not a bordered pill floating
+     over the whole card. */
   .ascend {
     position: absolute;
-    top: 64px;
-    right: 24px;
+    top: 8px;
+    left: 4px;
     z-index: 3;
     background: none;
-    border: 1px solid var(--border);
-    border-radius: 999px;
-    padding: 4px 14px;
-    font-size: 11px;
-    color: var(--fg-muted);
+    border: none;
+    padding: 0;
+    font: 500 11px var(--font-sans);
+    color: var(--accent);
     cursor: pointer;
   }
 
   .ascend:hover {
-    color: var(--fg);
-    border-color: var(--hair-2);
+    text-decoration: underline;
   }
 
   .host-link {
@@ -2398,7 +2415,10 @@
 
   .degraded {
     position: absolute;
-    bottom: 12px;
+    /* Stacked above the wlens2 lens row (#682) rather than sharing its
+       bottom-left corner -- both are chrome now, so they take turns
+       rather than colliding. */
+    bottom: 38px;
     left: 24px;
     z-index: 2;
     margin: 0;
@@ -2468,8 +2488,10 @@
     fill: var(--alarm);
   }
 
+  /* The eye icon (#682) is a path + circle using currentColor, not
+     text with its own fill -- color is what currentColor reads. */
   .watch-sym {
-    fill: var(--marked);
+    color: var(--marked);
   }
 
   .dial:hover .dnum,

@@ -293,10 +293,15 @@ describe('the zone card coverage badge (#682, ratified round-29)', () => {
     const { container } = render(Topography)
     flushSync()
 
+    // Two lines, badge over detail (#682, ratified round-29) -- not one
+    // sentence crammed into the badge itself.
     const badge = container.querySelector('.n-cov')
-    expect(badge?.textContent).toBe('DARK BOTH WAYS — no log rule on this boundary')
+    expect(badge?.textContent).toBe('DARK BOTH WAYS')
     expect(badge?.classList.contains('cov-d')).toBe(true)
     expect(badge?.classList.contains('cov-l')).toBe(false)
+
+    const zoneTexts = [...container.querySelectorAll('.n-sub')].map((n) => n.textContent)
+    expect(zoneTexts).toContain('no log rule on this boundary')
   })
 })
 
@@ -318,5 +323,55 @@ describe('degrading honestly without a pushed address table (#682, data gap #687
     // subnet, no fabricated coverage badge.
     expect(container.querySelector('.n-cidr')).toBeNull()
     expect(container.querySelector('.n-cov')).toBeNull()
+  })
+})
+
+describe('the lens selector, ported to the scene\'s own bottom-left bar (#682)', () => {
+  it('renders the three lenses as .wlens2, not a top-right tab strip, and switches on click', () => {
+    const { container } = render(Topography)
+    flushSync()
+
+    expect(container.querySelector('.lenses')).toBeNull() // the old top-right strip is gone
+    const bar = container.querySelector('.wlens2')
+    expect(bar).not.toBeNull()
+
+    const labels = [...bar!.querySelectorAll('button')].map((b) => b.textContent?.trim())
+    expect(labels).toEqual(['traffic', 'policy', 'coverage'])
+
+    const policyTab = [...bar!.querySelectorAll('button')].find((b) => b.textContent?.trim() === 'policy')!
+    expect(policyTab.classList.contains('on')).toBe(false)
+    policyTab.click()
+    flushSync()
+    expect(policyTab.classList.contains('on')).toBe(true)
+  })
+})
+
+describe('the watcher dial\'s eye (#682, ported from the scene)', () => {
+  it('draws the eye as a path and pupil, not the aggregate bar\'s "◉" text glyph', () => {
+    const { container } = render(Topography)
+    flushSync()
+
+    const eye = container.querySelector('g.watch-sym')
+    expect(eye).not.toBeNull()
+    expect(eye?.querySelector('path')).not.toBeNull()
+    expect(eye?.querySelector('circle')).not.toBeNull()
+    expect(container.querySelector('text.watch-sym')).toBeNull()
+  })
+})
+
+describe('the ascend control, ported inside the map\'s own flow (#682)', () => {
+  it('renders inside .stage, not as a fixed pill over the whole card', () => {
+    zonesState.pushed = [{ address: '192.168.1.1/24', network: '192.168.1.0', interface: 'bridge1', comment: 'The LAN' }]
+    appState.events = [event({ inInterface: 'bridge1', srcIp: '192.168.1.50', srcHostName: 'desk' })]
+    const { container } = render(Topography)
+    flushSync()
+
+    container.querySelector<SVGTSpanElement>('.host-link')!.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    flushSync()
+
+    const stage = container.querySelector('.stage')
+    expect(stage).not.toBeNull()
+    const ascend = stage!.querySelector('.ascend')
+    expect(ascend).not.toBeNull() // inside .stage, not a sibling of it
   })
 })
