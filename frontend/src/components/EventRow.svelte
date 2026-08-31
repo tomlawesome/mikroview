@@ -1,7 +1,7 @@
 <script lang="ts">
   // SPDX-License-Identifier: AGPL-3.0-only
   import type { FirewallEvent } from '../lib/types'
-  import { formatTimeMs, rawTooltip } from '../lib/format'
+  import { formatAddr, formatTimeMs, rawTooltip } from '../lib/format'
   import { appState } from '../lib/state.svelte'
   import ActionBadge from './ActionBadge.svelte'
   import RouterRuleButton from './RouterRuleButton.svelte'
@@ -15,6 +15,11 @@
 
   let {
     event,
+    // The resolved friendly name for event.deviceId (falls back to the
+    // id itself, same convention as EventCardMobile/EventDetailSheet's
+    // own deviceName prop) -- #717 restores Device as a column, so every
+    // row needs it, not just the mobile card and the sheet.
+    deviceName = '',
     // Grouping (#341). count > 1 means this row stands for several
     // identical connections and the time cell shows the count instead --
     // the time is the same second on every row at any real rate, so it
@@ -46,13 +51,17 @@
     // order (a CSS nth-child can't see it: rows share their grid with
     // header cells and drawer notes, and grouping shifts the parity).
     banded = false,
-    // Opens the row's detail surface (EventDetailSheet). The columns this
-    // restyle dropped -- device, chain, interfaces, src port, NAT, MAC --
-    // live there now, so every row must be able to reach it, not just the
-    // mobile cards that always could.
+    // Opens the row's detail surface (EventDetailSheet) -- the raw line,
+    // NAT lookup and MAC lookup live there, and every row must be able
+    // to reach it, not just the mobile cards that always could. Device,
+    // chain, interfaces, src port, NAT and MAC are no longer exclusive
+    // to the sheet (#717 restores them as columns too, see
+    // columns.svelte.ts), but the sheet stays the one place for the
+    // rest of a row's detail.
     onOpen,
   }: {
     event: FirewallEvent
+    deviceName?: string
     count?: number
     flagged?: boolean
     expandable?: boolean
@@ -193,6 +202,21 @@
     </span>
   {/if}
 
+  <!-- #717: restored, in its pre-#644 spot right after Time -- see
+       columns.svelte.ts's own comment. Only a copy button beside it,
+       no pencil: there is no device-name entity type for
+       EditNameButton to open (see nameEditor.svelte.ts). -->
+  <span class="cell device">
+    <span
+      class="cell-btn device-btn"
+      role="button"
+      tabindex="0"
+      title="Filter to device: {deviceName || event.deviceId}"
+      use:activate={() => appState.setFilter('device', event.deviceId)}
+    >{deviceName || event.deviceId}</span>
+    <CopyButton value={event.deviceId} label="device id" />
+  </span>
+
   <span
     class="cell action cell-btn"
     role="button"
@@ -202,6 +226,21 @@
   >
     <ActionBadge action={event.action} />
   </span>
+
+  <!-- #717: restored, in its pre-#644 spot right after Action -- see
+       columns.svelte.ts's own comment. Plain click-to-filter text, no
+       buttons, same treatment Proto gets. -->
+  {#if event.chain}
+    <span
+      class="cell chain cell-btn"
+      role="button"
+      tabindex="0"
+      title="Filter to chain: {event.chain}"
+      use:activate={() => appState.setFilter('chain', event.chain)}
+    >{event.chain}</span>
+  {:else}
+    <span class="cell chain">—</span>
+  {/if}
 
   <!-- Source and Destination each split into a name column and a dim
        address column (#644): the name column shows the resolved host
@@ -232,6 +271,36 @@
     <span class="cell addr">—</span>
     <span class="cell ip">—</span>
   {/if}
+
+  <!-- #717: restored, riding beside Source's own facts (its
+       pre-#644 neighbour was Destination -- see columns.svelte.ts).
+       Same minimal treatment as the existing dst Port column: the bare
+       number, no copy/edit/investigate chrome, friendly name (if any)
+       in the tooltip only. -->
+  {#if event.srcPort}
+    <span class="cell port srcport">
+      <span
+        class="cell-btn port-btn"
+        role="button"
+        tabindex="0"
+        title={event.srcPortName
+          ? `${event.srcPortName} — filter to port: ${event.srcPort}`
+          : `Filter to port: ${event.srcPort}`}
+        use:activate={() => appState.setFilter('port', String(event.srcPort))}
+      >{event.srcPort}</span>
+    </span>
+  {:else}
+    <span class="cell port srcport">—</span>
+  {/if}
+
+  <!-- #717: restored. Plain text, not click-to-filter -- no Filters
+       field takes a MAC (see EventDetailSheet.svelte's own comment on
+       its Src MAC row), so a link that filtered to nothing would be a
+       promise the bar can't keep. Sourced straight off the event, the
+       same field the sheet's Src MAC row already reads -- RouterOS
+       includes src-mac on some chains/firmwares and not others (see
+       internal/routeros/parser.go), never a separate per-row lookup. -->
+  <span class="cell mac">{event.srcMac || '—'}</span>
 
   {#if event.dstIp}
     <span class="cell addr">
@@ -271,6 +340,35 @@
     <span class="cell proto">—</span>
   {/if}
 
+  <!-- #717: restored, in its pre-#644 spot right after Proto -- see
+       columns.svelte.ts's own comment. Split into its two tokens (in/
+       out) so either can be clicked independently; both write the same
+       shared `interface` filter (matches either side). -->
+  <span class="cell iface">
+    {#if event.inInterface}
+      <span
+        class="cell-btn iface-btn"
+        role="button"
+        tabindex="0"
+        title="Filter to interface: {event.inInterface}"
+        use:activate={() => appState.setFilter('interface', event.inInterface ?? '')}
+      >{event.inInterface}</span>
+    {/if}
+    {#if event.inInterface && event.outInterface}
+      <span class="iface-sep">→</span>
+    {/if}
+    {#if event.outInterface}
+      <span
+        class="cell-btn iface-btn"
+        role="button"
+        tabindex="0"
+        title="Filter to interface: {event.outInterface}"
+        use:activate={() => appState.setFilter('interface', event.outInterface ?? '')}
+      >{event.outInterface}</span>
+    {/if}
+    {#if !event.inInterface && !event.outInterface}—{/if}
+  </span>
+
   {#if event.dstPort}
     <span class="cell port">
       <span
@@ -288,6 +386,33 @@
   {:else}
     <span class="cell port">—</span>
   {/if}
+
+  <!-- #717: restored, beside Port, its pre-#644 neighbour -- see
+       columns.svelte.ts's own comment on why it lands after Proto/
+       Interfaces rather than before them. The translated address only
+       (no lookup trigger here): the pushed-table "which NAT rule did
+       this" trigger stays exactly where it already lived, in the Rule
+       cell's RouterRuleButton above, since #644's own commit message
+       records fixing a duplicate of that same button once already. -->
+  <span class="cell nat" class:has-value={!!event.natIp} title={event.natRaw}>
+    {#if event.natIp}
+      {#if natFilterKey}
+        <span
+          class="cell-btn nat-value"
+          role="button"
+          tabindex="0"
+          title="Filter to {natFilterKey === 'srcQuery' ? 'source' : 'destination'}: {event.natIp}"
+          use:activate={() => {
+            if (natFilterKey) appState.setFilter(natFilterKey, event.natIp ?? '')
+          }}
+        >→ {formatAddr(event.natIp, event.natPort)}</span>
+      {:else}
+        <span class="nat-value">→ {formatAddr(event.natIp, event.natPort)}</span>
+      {/if}
+    {:else}
+      —
+    {/if}
+  </span>
 
   {#if event.ruleLabel}
     <span class="cell rule">
@@ -420,7 +545,12 @@
   .addr,
   .ip,
   .port,
-  .proto {
+  .proto,
+  .device,
+  .chain,
+  .mac,
+  .iface,
+  .nat {
     font-family: var(--font-mono);
     color: var(--fg-muted);
   }
@@ -517,6 +647,27 @@
     text-transform: lowercase;
   }
 
+  /* #717: Device restored -- same click-to-filter-button-plus-copy-button
+     shape as .cell.addr above, but its own rule rather than sharing that
+     class: reusing "addr" here would put Device into the same
+     querySelectorAll('.cell.addr') list Source/Destination's name
+     columns are indexed by. Stays muted (the shared rule above), not
+     bright like a name column -- it is context for the row, not the row's
+     subject. */
+  .cell.device {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+  }
+
+  .device-btn {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
   .rule {
     font-family: var(--font-mono);
     color: var(--fg-muted);
@@ -551,6 +702,47 @@
     flex: none;
     width: auto;
     text-align: right;
+  }
+
+  /* #717: Interfaces restored, split into its in/out tokens same as it
+     was pre-#644. */
+  .cell.iface {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+  }
+
+  .iface-btn {
+    flex: none;
+    width: auto;
+  }
+
+  .iface-sep {
+    color: var(--fg-dim);
+  }
+
+  /* #717: NAT restored. Dim until there is a translated address to show,
+     then reads in the accent color -- the same "this is worth noticing"
+     treatment EventDetailSheet.svelte's own NAT row (.v.accent) already
+     gives it. No copy button: unlike the address/port/rule tokens, its
+     value is never a resolved label standing in for a different raw
+     value, so there's no gap for a copy button to bridge (#439). */
+  .cell.nat {
+    display: flex;
+    align-items: center;
+  }
+
+  .cell.nat.has-value {
+    color: var(--accent);
+    font-weight: 600;
+  }
+
+  .nat-value {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   /* Reset button chrome on click-to-filter cells so they read exactly

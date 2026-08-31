@@ -9,20 +9,39 @@ export interface ColumnDef {
 // and EventRow render cells positionally into the same CSS Grid, so the
 // two must stay in sync by index.
 // The ratified #644 column set ("the stream, columns squared", round-29
-// scene 4): the same kind of fact always under the eye. Source and
-// Destination each show the resolved name (or the bare address), with a
-// dim address column beside them; everything the old DEVICE / CHAIN /
-// SRC PORT / NAT / INTERFACES columns carried now lives in the row's
-// detail sheet instead of on the row.
+// scene 4) kept nine columns: the same kind of fact always under the eye,
+// Source and Destination each showing the resolved name (or the bare
+// address) with a dim address column beside them. #644 dropped DEVICE,
+// CHAIN, SRC PORT, NAT, INTERFACES and MAC to the row's detail sheet
+// entirely. #717 (owner ruling, 2026-08-31: "I didn't quibble before,
+// because... I knew we could add back the missing columns... It's now
+// later") restores all six as columns here, threaded in beside the fact
+// each belongs with rather than appended after Rule -- Device and Chain
+// frame the row up front (their pre-#644 position, see git history at
+// a03d486^); Src port and MAC ride with Source's own facts; Interfaces
+// keeps its pre-#644 place right after Proto; NAT (a translated address,
+// not fixed to either side -- see EventRow's natFilterKey) sits beside
+// Port, its pre-#644 neighbour, just after Proto/Interfaces rather than
+// before them, since Proto still has to stay ahead of Port here (that
+// relative order belongs to the original nine and does not move). All
+// six also stay in EventDetailSheet.svelte: the sheet is not just an
+// overflow bin for facts with no column, it is still the row's one
+// full-detail surface (raw line, MAC lookup, etc.).
 export const COLUMNS: ColumnDef[] = [
   { key: 'time', label: 'Time' },
+  { key: 'device', label: 'Device' },
   { key: 'action', label: 'Action' },
+  { key: 'chain', label: 'Chain' },
   { key: 'source', label: 'Source' },
   { key: 'srcAddr', label: 'Address' },
+  { key: 'srcPort', label: 'Src port' },
+  { key: 'mac', label: 'MAC' },
   { key: 'destination', label: 'Destination' },
   { key: 'dstAddr', label: 'Address' },
   { key: 'proto', label: 'Proto' },
+  { key: 'iface', label: 'Interfaces' },
   { key: 'port', label: 'Port' },
+  { key: 'nat', label: 'NAT' },
   { key: 'rule', label: 'Rule' },
 ]
 
@@ -62,7 +81,37 @@ type Width = number | null
 // reported bug (source "given roughly a third of the table for a short
 // IP") -- and the address columns' 132px was more than an em dash or a
 // ten-character IP ever needs, reading as empty rather than measured.
-const DEFAULT_WIDTHS: Width[] = [124, 80, 160, 104, 160, 104, 60, 60, null]
+//
+// #717 restores six columns (see COLUMNS' own comment above). None of
+// them get `null`: each is fixed and sized to its content by the same
+// by-hand method as the nine above, because a seventh/eighth flexible
+// column would go straight back to the reported bug this measure was
+// built to fix, and because Rule is the one field the owner and #685
+// have already agreed has no real ceiling -- these six do:
+//   device    a configured friendly name, or (unconfigured) the
+//             device's own source IP -- <=15 chars either way, one
+//             copy button (no edit affordance: there is no
+//             device-name entity type, see nameEditor.svelte.ts)
+//   chain     a RouterOS chain word, <=11 chars ("postrouting"),
+//             plain click-to-filter text, no buttons
+//   src port  mirrors Port exactly (up to 4 digits, bare number, no
+//             buttons) -- the same fact, just the other side of the
+//             connection
+//   mac       always exactly 17 characters ("AA:BB:CC:DD:EE:FF") --
+//             the one column with a harder bound than a timestamp,
+//             plain text, no buttons (no Filters field takes a MAC,
+//             see EventDetailSheet.svelte's own comment on its MAC row)
+//   interfaces  two interface names joined by "→" -- RouterOS defaults
+//             (ether1, bridge1, wlan2) are short, but custom VLAN/
+//             bridge names run longer with no fixed ceiling the way
+//             Rule doesn't either; fixed and ellipsis-truncated rather
+//             than flexible, since Rule stays the only column that
+//             gets to claim leftover width
+//   nat       a translated address, `formatAddr`'s "ip:port" shape --
+//             bounded like an IPv4 address plus ":" plus up to 5
+//             digits, click-to-filter when the chain says which side
+//             it is (mirrors EventRow's natFilterKey), otherwise plain
+const DEFAULT_WIDTHS: Width[] = [124, 150, 80, 90, 160, 104, 60, 150, 160, 104, 60, 170, 60, 150, null]
 const MIN_WIDTH = 56
 // Flexible columns used to be `minmax(0, 1fr)`, which lets them shrink to
 // nothing. An address cell holds its label plus a copy button and an
@@ -87,7 +136,13 @@ const FLEX_MIN_WIDTH = 140
 // now the sole flexible column -- so a v4 array (three equal flex
 // columns) would apply that stale shape to columns that no longer work
 // that way. Bumped so it falls back to the new defaults instead.
-const STORAGE_KEY = 'mikroview-column-widths-v5'
+// v6 (#717): six columns restored (nine -> fifteen). The length guard
+// in loadInitial below would already reject a saved 9-entry v5 array,
+// but the key is still bumped, matching the convention every prior
+// shape change here has followed -- a stored width array and the
+// column set it was measured against should always be nameably the
+// same version, not just accidentally the same length.
+const STORAGE_KEY = 'mikroview-column-widths-v6'
 
 function loadInitial(): Width[] {
   try {
