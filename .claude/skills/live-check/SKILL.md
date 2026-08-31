@@ -77,10 +77,21 @@ order, so most depend on state an earlier one left.
 
 ## Running two live checks at once
 
-Safe by default. `MV_DIR` and the three ports are derived from a hash of
-the checkout path, so each `git worktree` gets its own data directory and
-its own port block, and repeated runs in the same tree stay on the same
-slot.
+Safe by default. `MV_DIR` and every port are derived from a hash of the
+checkout path, so each `git worktree` gets its own data directory and its
+own port block, and repeated runs in the same tree stay on the same slot.
+
+It was not safe until #660, and the way it failed is worth knowing. This
+said "safe by default" while it was only true of the browser phase: the
+standalone scripts hardcoded ports that sat inside the band `live-env.sh`
+hands out, so whichever checkout hashed to slot 21 owned a port two of
+them also claimed. `scripts/live-slot.sh` is now the single allocator for
+both phases, and this claim is true of the whole gate.
+
+**A new check that binds a port takes it from `live-slot.sh`.** Source it
+and use one of its variables, or add a band there with a comment. Never
+write a number into the script -- that is precisely how the two-allocator
+bug happened, and nothing but this line stops it happening again.
 
 This matters because the collision used to be destructive, not noisy:
 `up` runs `down` and then `rm -rf "$MV_DIR"`, so a second live check on
@@ -90,10 +101,20 @@ scenario timeout and nothing in its own log to account for it.
 
 Two checkouts can still hash to the same slot. `up` therefore refuses to
 start if either port is held after its own teardown, naming the ports and
-telling you to override, rather than proceeding into the `rm -rf`. To run
-alongside another check deliberately, set `MV_DIR`, `MV_HTTP_PORT`,
-`MV_SYSLOG_PORT` and `MV_SYSLOG_TLS_PORT` — explicit values always win
-over the derived ones.
+telling you to override, rather than proceeding into the `rm -rf`. The
+standalone scripts now refuse the same way, naming the port and the
+process holding it; before #660 they said only "server never came up",
+and one collision surfaced as five failures across two scripts that
+mentioned no port at all. To run alongside another check deliberately,
+set `MV_DIR`, `MV_HTTP_PORT`, `MV_SYSLOG_PORT` and `MV_SYSLOG_TLS_PORT` —
+explicit values always win over the derived ones.
+
+An interrupted run used to leave its instance behind for good: `up`
+detaches deliberately and `down` is the only thing that stops it, so a
+run killed mid-scenario held its slot's port until someone found the
+process by hand. The `live-check` recipe now traps INT and TERM. If you
+drive `live-env.sh up` yourself rather than through `make live-check`,
+that trap is yours to set.
 
 ### The standing lanes (owner, 2026-08-30)
 
