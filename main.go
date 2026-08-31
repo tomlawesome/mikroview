@@ -16,6 +16,7 @@ import (
 	"net/netip"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
@@ -1313,6 +1314,22 @@ func main() {
 		})
 	}
 
+	// persistenceInfo (issue #677's settings persistence row) states
+	// which backend the storage decision above (persistence.pool) actually
+	// resolved to, rather than re-deriving a guess from cfg.Postgres.DSNFile
+	// independently. Dir is internal/auth's own configured StorePath's
+	// directory: accounts are the one store mikroview insists on
+	// persisting (see cfg.Auth.StorePath's validation above), so it is
+	// non-empty whenever the file backend is actually in use, unlike
+	// e.g. Flags.StorePath, which is deliberately optional.
+	persistenceInfo := api.PersistenceInfo{Backend: "postgres"}
+	if persistence.pool == nil {
+		persistenceInfo.Backend = "file"
+		if cfg.Auth.StorePath != "" {
+			persistenceInfo.Dir = filepath.Dir(cfg.Auth.StorePath)
+		}
+	}
+
 	srv := &api.Server{
 		Store:             st,
 		Devices:           devices,
@@ -1353,6 +1370,7 @@ func main() {
 		Version:           version,
 		ThirdPartyNotices: thirdPartyNotices,
 		ConfigProblems:    configProblems,
+		Persistence:       persistenceInfo,
 	}
 
 	rootMux := http.NewServeMux()

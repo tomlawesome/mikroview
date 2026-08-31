@@ -20,6 +20,7 @@ import type {
   FlagTimeBucket,
   Healthz,
   HourTopBucket,
+  PersistenceInfo,
   ReputationResult,
   RuleUsage,
   Stats,
@@ -938,6 +939,18 @@ export async function startSSOLink(): Promise<{ url: string } | string> {
 export async function fetchSetupStatus(): Promise<SetupStatus> {
   const res = await fetch('/api/setup/status')
   if (!res.ok) throw new ApiError(`fetchSetupStatus: ${res.status}`, res.status)
+  return res.json()
+}
+
+// fetchPersistence is #677's settings persistence row: which backend
+// (file directory, or Postgres) this deployment's persisted stores
+// actually use. Admin-gated server-side, same reasoning as
+// /api/config/problems -- a non-admin's 403 surfaces as a thrown
+// ApiError here, same as every other admin-only GET this file wraps
+// (see fetchTokens/fetchUsers above), for the caller to swallow.
+export async function fetchPersistence(): Promise<PersistenceInfo> {
+  const res = await fetch('/api/persistence')
+  if (!res.ok) throw new ApiError(`fetchPersistence: ${res.status}`, res.status)
   return res.json()
 }
 

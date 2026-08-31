@@ -132,6 +132,8 @@ var authzMatrix = []routeExpectation{
 
 	{http.MethodGet, "/api/config/problems", accessAdmin,
 		"config key names, filesystem paths, the OIDC issuer URL and SMTP hosts are an infrastructure map; a non-admin gets an empty list rather than a 403, since whether problems exist is itself information"},
+	{http.MethodGet, "/api/persistence", accessAdmin,
+		"reports which backend (a JSON store's directory, or Postgres) this deployment's persisted state actually uses (#677's settings persistence row) -- a filesystem path is the same infrastructure-map disclosure /api/config/problems above is admin-gated for, so this follows it rather than defaulting to viewer the way most of Settings' other reads do"},
 
 	// -- Any authenticated session (viewer tier) ------------------------
 	{http.MethodGet, "/api/events", accessViewer,
