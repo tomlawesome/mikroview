@@ -167,6 +167,21 @@
     flex-direction: column;
     min-height: 0;
     overflow: hidden;
+    /* #689: a positioning context, not just a clip. Without this, a
+       descendant that is `position: absolute` with no offset of its own
+       (an sr-only live region, say) falls back to its CSS "static
+       position" -- computed from the full *unclipped* flow height of
+       whatever comes before it, ignoring every overflow:hidden/auto
+       ancestor on the way. With no positioned ancestor between here and
+       <html>, that static position becomes real document coordinates,
+       so a scene whose content wants to be much taller than the
+       viewport (a chart, a long table) before it is clipped stretches
+       document.scrollingElement.scrollHeight to match -- the deck's own
+       rail stays fixed and visible while everything else scrolls away
+       under it, exactly the "nothing but the rail" defect reported.
+       This is the one wrapper every scene shares, so it is the one
+       place to close the gap rather than chasing it per scene. */
+    position: relative;
   }
 
   .card-body {
