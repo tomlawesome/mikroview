@@ -146,69 +146,95 @@ SCANNER_ONE_OFF = "89.248.165.100"     # fires once, never again -- "stopped"
 # engine/coverage.go) means something: a rule with no port restriction
 # covers everything trivially, which would make a genuine "broken ring"
 # entry impossible to construct.
+# Every rule below carries the inInterface/outInterface pair the fall's
+# boundary bands (#616) group by -- see frontend/src/lib/fall.svelte.ts's
+# boundaryKeyOf, which keys a pushed rule and a live event on the exact
+# same (chain, inInterface, outInterface) triple. An input-chain rule
+# omits outInterface entirely (terminates at the router, no far side);
+# every other chain carries both, using the estate's own interface names
+# from ROUTERS above -- never invented ones.
 FILTER_RULES = {
     "border-rb5009": [
         dict(ordinal=0, comment="LAN to WAN egress", chain="forward", action="accept",
-             logPrefix="lan-to-wan", log=True, dstPort="80,443", protocol="tcp", fires=True),
+             logPrefix="lan-to-wan", log=True, dstPort="80,443", protocol="tcp", fires=True,
+             inInterface="vlan10", outInterface="ether1"),
         dict(ordinal=1, comment="Drop unsolicited WAN inbound", chain="input", action="drop",
-             logPrefix="wan-in-drop", log=True, dstPort="22,23,3389,445", protocol="tcp", fires=True),
+             logPrefix="wan-in-drop", log=True, dstPort="22,23,3389,445", protocol="tcp", fires=True,
+             inInterface="ether1"),
         dict(ordinal=2, comment="IoT to LAN quarantine", chain="forward", action="drop",
-             logPrefix="iot-quarantine", log=True, dstPort=445, protocol="tcp", fires=True),
+             logPrefix="iot-quarantine", log=True, dstPort=445, protocol="tcp", fires=True,
+             inInterface="vlan20", outInterface="vlan10"),
         dict(ordinal=3, comment="Guest VLAN isolation", chain="forward", action="drop",
-             logPrefix="guest-isolate", log=True, dstPort=445, protocol="tcp", fires=True),
+             logPrefix="guest-isolate", log=True, dstPort=445, protocol="tcp", fires=True,
+             inInterface="vlan30", outInterface="bridge1"),
         dict(ordinal=4, comment="Allow outbound ICMP", chain="forward", action="accept",
-             logPrefix="icmp-out", log=False, protocol="icmp", fires=True),
+             logPrefix="icmp-out", log=False, protocol="icmp", fires=True,
+             inInterface="bridge1", outInterface="ether1"),
         dict(ordinal=5, comment="Reject invalid state", chain="forward", action="reject",
-             logPrefix="invalid-drop", log=False, connectionState=["invalid"], fires=True),
+             logPrefix="invalid-drop", log=False, connectionState=["invalid"], fires=True,
+             inInterface="bridge1", outInterface="ether1"),
         dict(ordinal=6, comment="Legacy PPTP VPN allow (pending removal)", chain="input", action="accept",
-             logPrefix="legacy-vpn-allow", log=True, dstPort=1723, protocol="tcp", fires=False),
+             logPrefix="legacy-vpn-allow", log=True, dstPort=1723, protocol="tcp", fires=False,
+             inInterface="ether1"),
         dict(ordinal=7, comment="Old DMZ segment drop (decommissioned)", chain="forward", action="drop",
              logPrefix="old-dmz-rule", log=True, dstPort=139, protocol="tcp",
-             dstAddress="192.168.99.0/24", fires=False),
+             dstAddress="192.168.99.0/24", fires=False,
+             inInterface="ether1", outInterface="bridge1"),
     ],
     "office-hex": [
         dict(ordinal=0, comment="Office LAN egress", chain="forward", action="accept",
-             logPrefix="office-out", log=True, dstPort="80,443", protocol="tcp", fires=True),
+             logPrefix="office-out", log=True, dstPort="80,443", protocol="tcp", fires=True,
+             inInterface="vlan40", outInterface="ether1"),
         dict(ordinal=1, comment="VoIP priority egress", chain="forward", action="accept",
-             logPrefix="voip-priority", log=True, dstPort=5060, protocol="udp", fires=True),
+             logPrefix="voip-priority", log=True, dstPort=5060, protocol="udp", fires=True,
+             inInterface="vlan50", outInterface="ether1"),
         dict(ordinal=2, comment="Guest wifi to LAN drop", chain="forward", action="drop",
-             logPrefix="wifi-guest-drop", log=True, dstPort=445, protocol="tcp", fires=True),
+             logPrefix="wifi-guest-drop", log=True, dstPort=445, protocol="tcp", fires=True,
+             inInterface="wlan1", outInterface="vlan40"),
         dict(ordinal=3, comment="Block SMB off-net", chain="forward", action="drop",
-             logPrefix="smb-block", log=True, dstPort=445, protocol="tcp", fires=True),
+             logPrefix="smb-block", log=True, dstPort=445, protocol="tcp", fires=True,
+             inInterface="vlan40", outInterface="ether1"),
         dict(ordinal=4, comment="Drop unsolicited WAN inbound", chain="input", action="drop",
-             logPrefix="wan-in-drop", log=True, dstPort="22,3389", protocol="tcp", fires=True),
+             logPrefix="wan-in-drop", log=True, dstPort="22,3389", protocol="tcp", fires=True,
+             inInterface="ether1"),
         dict(ordinal=5, comment="Stale ICMP diagnostic allow", chain="input", action="accept",
-             logPrefix="stale-icmp-allow", log=False, protocol="icmp", fires=False),
+             logPrefix="stale-icmp-allow", log=False, protocol="icmp", fires=False,
+             inInterface="ether1"),
     ],
     "lab-crs": [
         dict(ordinal=0, comment="Mgmt VLAN egress", chain="forward", action="accept",
-             logPrefix="mgmt-only", log=True, dstPort="22,443", protocol="tcp", fires=True),
+             logPrefix="mgmt-only", log=True, dstPort="22,443", protocol="tcp", fires=True,
+             inInterface="vlan99", outInterface="sfp-sfpplus1"),
         dict(ordinal=1, comment="Servers egress allow", chain="forward", action="accept",
-             logPrefix="srv-allow", log=True, dstPort="80,443,3000", protocol="tcp", fires=True),
+             logPrefix="srv-allow", log=True, dstPort="80,443,3000", protocol="tcp", fires=True,
+             inInterface="bridge-srv", outInterface="sfp-sfpplus1"),
         dict(ordinal=2, comment="Lab general drop", chain="forward", action="drop",
-             logPrefix="lab-drop", log=True, dstPort=445, protocol="tcp", fires=True),
+             logPrefix="lab-drop", log=True, dstPort=445, protocol="tcp", fires=True,
+             inInterface="bridge-srv", outInterface="vlan99"),
         dict(ordinal=3, comment="Mgmt SSH inbound", chain="input", action="accept",
-             logPrefix="mgmt-ssh-in", log=True, dstPort=22, protocol="tcp", fires=True),
+             logPrefix="mgmt-ssh-in", log=True, dstPort=22, protocol="tcp", fires=True,
+             inInterface="sfp-sfpplus1"),
         dict(ordinal=4, comment="Legacy SNMP monitoring allow (unused)", chain="input", action="accept",
-             logPrefix="old-snmp-rule", log=True, dstPort=161, protocol="udp", fires=False),
+             logPrefix="old-snmp-rule", log=True, dstPort=161, protocol="udp", fires=False,
+             inInterface="sfp-sfpplus1"),
     ],
 }
 
 NAT_RULES = {
     "border-rb5009": [
         dict(ordinal=0, comment="Masquerade WAN egress", chain="srcnat", action="masquerade",
-             logPrefix="masq-wan"),
+             logPrefix="masq-wan", inInterface="bridge1", outInterface="ether1"),
         dict(ordinal=1, comment="Port-forward web", chain="dstnat", action="dst-nat",
              logPrefix="port-fwd-web", dstPort=8080, toAddresses="192.168.11.10", toPorts=8080,
-             protocol="tcp"),
+             protocol="tcp", inInterface="ether1", outInterface="bridge1"),
     ],
     "office-hex": [
         dict(ordinal=0, comment="Masquerade office WAN egress", chain="srcnat", action="masquerade",
-             logPrefix="masq-office"),
+             logPrefix="masq-office", inInterface="vlan40", outInterface="ether1"),
     ],
     "lab-crs": [
         dict(ordinal=0, comment="Masquerade lab WAN egress", chain="srcnat", action="masquerade",
-             logPrefix="masq-lab"),
+             logPrefix="masq-lab", inInterface="bridge-srv", outInterface="sfp-sfpplus1"),
     ],
 }
 
@@ -330,62 +356,102 @@ def lines_for_router(router, elapsed, tick):
     # Ordinary egress on the router's LAN-egress rule, one of its own
     # covered ports (matching FILTER_RULES' dstPort exactly, so a rule
     # pushed as "covers 22,443" never shows a live hit on 80), carrying
-    # the host's own MAC.
+    # the host's own MAC. Restricted to the one zone the rule's own
+    # inInterface names -- FILTER_RULES and the fall's boundary bands
+    # (#616, frontend/src/lib/fall.svelte.ts) key on the exact (chain,
+    # inInterface, outInterface) triple, so egress from a different zone
+    # would light a boundary this rule never declared.
     egress = "lan-to-wan" if router == "border-rb5009" else (
         "office-out" if router == "office-hex" else "mgmt-only")
+    egress_zone = {"border-rb5009": "staff", "office-hex": "office", "lab-crs": "mgmt"}[router]
     egress_ports = {"lan-to-wan": [80, 443], "office-out": [80, 443], "mgmt-only": [22, 443]}[egress]
-    for _ in range(random.randint(2, 4)):
-        h = pick_host()
-        ip = full_ip(h)
-        pub = random.choice(PUBLIC)
-        port = random.choice(egress_ports)
-        if egress not in rules:
-            continue
-        out.append(f"firewall,info A|{egress}| forward: in:{zone_iface(router, h[1])} out:{wan}, "
-                    f"connection-state:new src-mac {h[3]}, proto TCP (SYN), "
-                    f"{ip}:{random.randint(1024, 65000)}->{pub}:{port}, len 60")
-
-    # A router-specific drop rule, continuously, so the fall has a
-    # band per boundary that never goes quiet -- one of #687's own
-    # "still arriving" episode shapes.
-    drop_by_router = {"border-rb5009": "iot-quarantine", "office-hex": "smb-block", "lab-crs": "lab-drop"}
-    drop = drop_by_router[router]
-    if drop in rules:
-        for _ in range(random.randint(1, 3)):
-            h = pick_host()
+    egress_hosts = [h for h in hosts if h[1] == egress_zone]
+    if egress in rules and egress_hosts:
+        for _ in range(random.randint(2, 4)):
+            h = random.choice(egress_hosts)
             ip = full_ip(h)
-            other_zone = random.choice([z for _i, _s, z in cfg["zones"] if z != h[1]] or [h[1]])
-            victim = f"{zone_subnet(router, other_zone)}.{random.randint(60, 99)}"
-            out.append(f"firewall,info D|{drop}| forward: in:{zone_iface(router, h[1])} "
-                        f"out:{zone_iface(router, other_zone)}, connection-state:new src-mac {h[3]}, "
+            pub = random.choice(PUBLIC)
+            port = random.choice(egress_ports)
+            out.append(f"firewall,info A|{egress}| forward: in:{zone_iface(router, egress_zone)} out:{wan}, "
+                        f"connection-state:new src-mac {h[3]}, proto TCP (SYN), "
+                        f"{ip}:{random.randint(1024, 65000)}->{pub}:{port}, len 60")
+
+    # A router-specific cross-zone drop rule, continuously, so the fall
+    # has a band per boundary that never goes quiet -- one of #687's own
+    # "still arriving" episode shapes. Each pair is fixed (not a random
+    # zone every tick) so the live in/out always matches the one
+    # boundary the pushed rule itself declares.
+    drop_pairs = {
+        "border-rb5009": ("iot-quarantine", "iot", "staff"),
+        "office-hex": ("wifi-guest-drop", "wifi", "office"),
+        "lab-crs": ("lab-drop", "servers", "mgmt"),
+    }
+    drop, drop_src_zone, drop_dst_zone = drop_pairs[router]
+    drop_hosts = [h for h in hosts if h[1] == drop_src_zone]
+    if drop in rules and drop_hosts:
+        for _ in range(random.randint(1, 3)):
+            h = random.choice(drop_hosts)
+            ip = full_ip(h)
+            victim = f"{zone_subnet(router, drop_dst_zone)}.{random.randint(60, 99)}"
+            out.append(f"firewall,info D|{drop}| forward: in:{zone_iface(router, drop_src_zone)} "
+                        f"out:{zone_iface(router, drop_dst_zone)}, connection-state:new src-mac {h[3]}, "
                         f"proto TCP (SYN), {ip}:{random.randint(1024, 65000)}->{victim}:445, len 60")
 
     # WAN-inbound drop -- unsolicited traffic aimed at the router, no
     # local src-mac (matches real RouterOS: input chain from the WAN
-    # side carries no LAN MAC).
+    # side carries no LAN MAC). No "out:" token at all -- one of the two
+    # real shapes RouterOS emits for input-chain lines (the other is
+    # "out:(unknown 0)"; see internal/routeros/parser_test.go) -- so the
+    # parsed OutInterface stays "", matching wan-in-drop's own pushed
+    # outInterface (omitted, since an input rule has no far side) rather
+    # than mismatching into the fall's unmatched "other traffic" band.
     if "wan-in-drop" in rules and random.random() < 0.6:
         h = pick_host()
         ip = full_ip(h)
         wan_ports = {"border-rb5009": [22, 23, 3389, 445], "office-hex": [22, 3389]}[router]
-        out.append(f"firewall,info D|wan-in-drop| input: in:{wan} out:(none), "
+        out.append(f"firewall,info D|wan-in-drop| input: in:{wan}, "
                     f"connection-state:new, proto TCP (SYN), "
                     f"{random.choice(PUBLIC)}:{random.randint(1024, 65000)}->{ip}:{random.choice(wan_ports)}, len 60")
 
     # Masquerade -- one line per router per tick, so the NAT chip and
-    # the pushed NAT table tell the same story.
+    # the pushed NAT table tell the same story. Restricted to the one
+    # zone the pushed masq rule's inInterface names, for the same
+    # boundary-matching reason as egress above.
     masq = {"border-rb5009": "masq-wan", "office-hex": "masq-office", "lab-crs": "masq-lab"}[router]
-    h = pick_host()
-    ip = full_ip(h)
-    pub = random.choice(PUBLIC)
-    out.append(f"firewall,info A|{masq}| srcnat: in:{zone_iface(router, h[1])} out:{wan}, proto TCP, "
-                f"{ip}:{random.randint(1024, 65000)}->{pub}:443, NAT ({pub}:12345->{pub}:443), len 73")
+    masq_zone = {"border-rb5009": "core", "office-hex": "office", "lab-crs": "servers"}[router]
+    masq_hosts = [h for h in hosts if h[1] == masq_zone]
+    if masq_hosts:
+        h = random.choice(masq_hosts)
+        ip = full_ip(h)
+        pub = random.choice(PUBLIC)
+        out.append(f"firewall,info A|{masq}| srcnat: in:{zone_iface(router, masq_zone)} out:{wan}, proto TCP, "
+                    f"{ip}:{random.randint(1024, 65000)}->{pub}:443, NAT ({pub}:12345->{pub}:443), len 73")
 
     # Router-specific extras.
     if router == "border-rb5009" and random.random() < 0.3:
-        h = pick_host()
-        out.append(f"firewall,info A|port-fwd-web| dstnat: in:{wan} out:{zone_iface(router, h[1])}, "
-                    f"proto TCP (SYN), {random.choice(PUBLIC)}:{random.randint(1024, 65000)}"
-                    f"->192.168.11.1:8080, NAT ->({full_ip(h)}:8080), len 60")
+        # port-fwd-web's toAddresses is fixed to 192.168.11.10 (core-
+        # switch's own address, HOSTS octet 10) -- picking any host here
+        # would DNAT-translate to an address the pushed NAT rule never
+        # names, so this is core-switch specifically, not pick_host().
+        core_switch = next((x for x in hosts if x[1] == "core" and x[2] == 10), None)
+        if core_switch:
+            out.append(f"firewall,info A|port-fwd-web| dstnat: in:{wan} out:{zone_iface(router, 'core')}, "
+                        f"proto TCP (SYN), {random.choice(PUBLIC)}:{random.randint(1024, 65000)}"
+                        f"->192.168.11.1:8080, NAT ->({full_ip(core_switch)}:8080), len 60")
+    if router == "border-rb5009" and "guest-isolate" in rules and random.random() < 0.4:
+        h = next((x for x in hosts if x[1] == "guest"), None)
+        if h:
+            victim = f"{zone_subnet(router, 'core')}.{random.randint(60, 99)}"
+            out.append(f"firewall,info D|guest-isolate| forward: in:{zone_iface(router, 'guest')} "
+                        f"out:{zone_iface(router, 'core')}, connection-state:new src-mac {h[3]}, "
+                        f"proto TCP (SYN), {full_ip(h)}:{random.randint(1024, 65000)}->{victim}:445, len 60")
+    if router == "lab-crs" and "srv-allow" in rules and random.random() < 0.4:
+        h = next((x for x in hosts if x[1] == "servers"), None)
+        if h:
+            out.append(f"firewall,info A|srv-allow| forward: in:{zone_iface(router, 'servers')} out:{wan}, "
+                        f"connection-state:new src-mac {h[3]}, proto TCP (SYN), "
+                        f"{full_ip(h)}:{random.randint(1024, 65000)}->{random.choice(PUBLIC)}:"
+                        f"{random.choice([80, 443, 3000])}, len 60")
     if router == "office-hex" and "voip-priority" in rules and random.random() < 0.5:
         h = next((x for x in hosts if x[1] == "voip"), None)
         if h:
@@ -395,7 +461,7 @@ def lines_for_router(router, elapsed, tick):
     if router == "lab-crs" and "mgmt-ssh-in" in rules and random.random() < 0.2:
         h = next((x for x in hosts if x[1] == "mgmt"), None)
         if h:
-            out.append(f"firewall,info A|mgmt-ssh-in| input: in:{wan} out:(none), "
+            out.append(f"firewall,info A|mgmt-ssh-in| input: in:{wan}, "
                         f"connection-state:new, proto TCP (SYN), "
                         f"{random.choice(PUBLIC)}:{random.randint(1024, 65000)}->{full_ip(h)}:22, len 60")
 
@@ -405,7 +471,7 @@ def lines_for_router(router, elapsed, tick):
     if router == "office-hex" and tick == 0:
         victim = full_ip(next(x for x in hosts if x[1] == "office"))
         for p in random.sample(range(20, 9000), 22):
-            out.append(f"firewall,info D|wan-in-drop| input: in:{wan} out:(none), "
+            out.append(f"firewall,info D|wan-in-drop| input: in:{wan}, "
                         f"connection-state:new, proto TCP (SYN), "
                         f"{SCANNER_ONE_OFF}:{random.randint(40000, 60000)}->{victim}:{p}, len 60")
 
@@ -415,7 +481,7 @@ def lines_for_router(router, elapsed, tick):
     if router == "border-rb5009" and random.random() < 0.04:
         victim = full_ip(next(x for x in hosts if x[1] == "core"))
         for p in random.sample(range(20, 9000), random.randint(16, 24)):
-            out.append(f"firewall,info D|wan-in-drop| input: in:{wan} out:(none), "
+            out.append(f"firewall,info D|wan-in-drop| input: in:{wan}, "
                         f"connection-state:new, proto TCP (SYN), "
                         f"{SCANNER_RECURRING}:{random.randint(40000, 60000)}->{victim}:{p}, len 60")
 
