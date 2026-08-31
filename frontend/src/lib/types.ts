@@ -583,6 +583,18 @@ export interface NATInfo {
   raw?: string
 }
 
+// Mirrors internal/flags.HostPort's JSON tags -- one (destination host,
+// destination port) combination actually observed together on a single
+// event (issue #654). Never build this by crossing Evidence.hosts against
+// Evidence.ports: those are independent sets, and pairing every host with
+// every port implies combinations that were never seen (see #654 -- the
+// motivating case is a future watchlist draft that would otherwise offer
+// to permit connections the device never made).
+export interface HostPort {
+  host: string
+  port: number
+}
+
 // Mirrors internal/flags.Evidence's JSON tags -- structured supporting
 // detail beyond a flag's free-text `detail` string. Which fields a given
 // flag actually has depends on its type; see internal/detect.Scope's
@@ -591,6 +603,33 @@ export interface Evidence {
   ports?: number[]
   hosts?: string[]
   nat?: NATInfo
+  // pairs/pairsTotal/pairsTotalIsFloor (#654): currently only
+  // critical_port. pairs is capped the same way ports/hosts are (see
+  // internal/engine's maxEvidencePairs); pairsTotal is the distinct-pair
+  // count before that display cap, present only when the cap actually
+  // truncated the list -- absent (undefined) means pairs is already the
+  // complete set. A consumer must check pairsTotal, not just
+  // pairs.length, before treating the list as complete (issue #654's
+  // "never silently truncate" requirement).
+  //
+  // pairsTotal is itself bounded (internal/engine's
+  // maxEvidencePairsTracked, a resource-safety cap independent of the
+  // display cap -- see that constant's own doc comment for why an
+  // exact count isn't worth an unbounded map): past that second
+  // ceiling, pairsTotal stops growing and pairsTotalIsFloor is true,
+  // meaning pairsTotal is a lower bound ("at least this many"), not the
+  // real count. A consumer must render that case as "50 of 200+", never
+  // a flat "50 of 200" -- see pairsTruncated/pairsTruncationLabel in
+  // lib/evidencePairs.ts.
+  pairs?: HostPort[]
+  pairsTotal?: number
+  pairsTotalIsFloor?: boolean
+  // srcMac (#654): currently only port_scan and repeated_drops, and only
+  // when the triggering event's source was a local device -- absent for
+  // every other detector and for an external source. Lets a consumer
+  // identify the device by MAC (stable across a DHCP lease change)
+  // instead of by IP.
+  srcMac?: string
 }
 
 // Mirrors internal/flags.Exclusion's JSON tags -- one permanently-
