@@ -363,8 +363,8 @@
       </div>
     </div>
 
-    <div class="stgrid">
-      <div class="og wide">
+    <div class="og stgrid">
+      <div class="stsection wide">
         <h3>ingest</h3>
         <div class="wleft">
           <svg
@@ -429,7 +429,7 @@
         </div>
       </div>
 
-      <div class="og wide">
+      <div class="stsection wide">
         <h3>detection</h3>
         <div class="wleft">
           <div class="stflags">
@@ -503,7 +503,7 @@
         </div>
       </div>
 
-      <div class="og wide">
+      <div class="stsection wide">
         <h3>memory</h3>
         <div class="wleft">
           {#if memSlices.length > 0}
@@ -565,7 +565,7 @@
         </div>
       </div>
 
-      <div class="og">
+      <div class="stsection">
         <h3>account</h3>
         <div class="orow">
           <span>signed in</span>
@@ -640,47 +640,60 @@
     color: var(--fg-dim);
   }
 
-  /* Round 30: ingest, detection and memory each split into a fixed
-     560px left column (the diagram and its caption) and a right column
-     of rows, side by side (owner, 2026-08-31) -- see the round's own
-     #set .og.wide rule. account has no diagram, so it stays a plain
-     .og of stacked rows. */
-  .og.wide {
+  /* The right column is one .og panel, same treatment as the deck's on
+     the left -- not four separately-bordered cards. ingest, detection,
+     memory and account are .stsection children of it, divided by a
+     hairline rather than each drawing its own box; a lone wrapper per
+     column is what makes "same top edge, same border/radius/padding/
+     background" actually hold, and stops either box drawing more than
+     it holds (owner: the boxes didn't line up). */
+  .stsection + .stsection {
+    margin-top: 14px;
+    padding-top: 14px;
+    border-top: 1px solid var(--border);
+  }
+
+  /* ingest, detection and memory each split into a fixed 560px left
+     column (the diagram and its caption) and a right column of rows,
+     side by side (owner, 2026-08-31) -- see the round's own #set
+     .og.wide rule. account has no diagram, so it stays a plain
+     .stsection of stacked rows. */
+  .stsection.wide {
     display: grid;
     grid-template-columns: 560px 1fr;
     column-gap: 40px;
     align-items: start;
   }
 
-  .og.wide > h3 {
+  .stsection.wide > h3 {
     grid-column: 1 / -1;
   }
 
-  .og.wide > .wleft {
+  .stsection.wide > .wleft {
     grid-column: 1;
     min-width: 0;
   }
 
-  .og.wide > .wrows {
+  .stsection.wide > .wrows {
     grid-column: 2;
     min-width: 0;
   }
 
-  .og.wide .wrows .orow:first-child {
+  .stsection.wide .wrows .orow:first-child {
     border-top: 0;
   }
 
-  .og.wide .wleft .oghint {
+  .stsection.wide .wleft .oghint {
     margin-bottom: 0;
   }
 
   @media (max-width: 1100px) {
-    .og.wide {
+    .stsection.wide {
       grid-template-columns: 1fr;
     }
 
-    .og.wide > .wleft,
-    .og.wide > .wrows {
+    .stsection.wide > .wleft,
+    .stsection.wide > .wrows {
       grid-column: 1;
     }
   }
@@ -705,7 +718,6 @@
   .stgrid {
     display: flex;
     flex-direction: column;
-    gap: 14px;
     min-width: 0;
   }
 
