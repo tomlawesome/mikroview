@@ -582,15 +582,26 @@
     border-bottom: 1px solid var(--border);
   }
 
+  /* #733: the stream is the scene, not a card dropped on it -- no
+     border, no corner radius, and the ground is the page's own
+     (var(--bg)), not the elevated panel tint. The shared deck padding
+     (Deck.svelte) already runs this flush to the scene's margins, so
+     nothing here needs its own inset.
+
+     No `overflow` here, deliberately, matching MetricsTable.svelte's
+     own .table-wrap comment: .body below is the real, intentional
+     scroll container (it needs its own scrollbar for the 1622px of
+     fixed columns, #729), and .header-cell's `position: sticky` holds
+     against .body's scrollport regardless of what this wrapper does --
+     but giving this wrapper any overflow other than visible has no
+     upside now that there's no border-radius left to clip, and it's
+     one fewer ancestor to reason about if sticky ever moves. */
   .table-wrap {
     flex: 1;
     display: flex;
     flex-direction: column;
     min-height: 0;
-    background: var(--bg-elevated);
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    overflow: hidden;
+    background: var(--bg);
   }
 
   .body {
@@ -609,7 +620,10 @@
     position: sticky;
     top: 0;
     z-index: 2;
-    background: var(--bg-elevated);
+    /* Opaque so rows scrolling underneath don't show through, but the
+       scene's own ground (#733) now that .table-wrap carries no
+       separate panel tint for this to stand apart from. */
+    background: var(--bg);
     padding: 10px;
     font-size: 12px;
     text-transform: uppercase;
