@@ -71,11 +71,12 @@ class NameEditorState {
 
   private requestId = 0
 
-  // Whether this operator gets a pencil at all. Admins only, and the
-  // control is absent rather than disabled for everyone else: #439
-  // named a control that cannot act the lying-affordance class, which
-  // is the same failure this editor exists to remove, so shipping one
-  // on every row of a viewer's screen would be self-defeating.
+  // Whether this operator gets a pencil at all. Admin or user tier
+  // (#653's three roles), not a viewer's -- and the control is absent
+  // rather than disabled for everyone else: #439 named a control that
+  // cannot act the lying-affordance class, which is the same failure
+  // this editor exists to remove, so shipping one on every row of a
+  // viewer's screen would be self-defeating.
   //
   // Lives here rather than in EditNameButton so the callers that must
   // skip building the button at all can ask the same question the
@@ -84,7 +85,7 @@ class NameEditorState {
   // not the same as "costs nothing" -- for every session that never
   // sees a pencil, the component is now never created either.
   get available(): boolean {
-    return authState.state === 'authenticated' && authState.role === 'admin'
+    return authState.state === 'authenticated' && authState.canEdit
   }
 
   get title(): string {

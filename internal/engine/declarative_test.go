@@ -3,9 +3,11 @@
 package engine
 
 import (
+	"fmt"
 	"testing"
 	"time"
 
+	"github.com/tomlawesome/mikroview/internal/flags"
 	"github.com/tomlawesome/mikroview/internal/store"
 )
 
@@ -385,5 +387,148 @@ func TestDeclarativeDefinitionKeyPerSourcePort(t *testing.T) {
 	}
 	if targets[0] == targets[1] {
 		t.Errorf("both emissions used the same target %q, want distinct per-port keys", targets[0])
+	}
+}
+
+// --- #654: recordEvidence's Pairs/MAC switches ---
+
+// macEvtAt is evtAt plus a source MAC -- the one field evtAt itself
+// leaves zero, since every test above it predates #654.
+func macEvtAt(srcIP, srcMAC, dstIP string, dstPort int, when time.Time) store.Event {
+	e := evtAt(srcIP, dstIP, dstPort, when)
+	e.SrcMAC = srcMAC
+	return e
+}
+
+// pairsMACTestDef builds a DeclarativeDefinition matching every drop
+// event from one source, keyed per-source, declaring exactly the
+// Evidence fields the test asks for -- the minimal fixture recordEvidence's
+// own opt-in gates need to be exercised directly, independent of any one
+// shipped detector's own choice of which fields to declare.
+func pairsMACTestDef(t *testing.T, fields []EvidenceField) *DeclarativeDefinition {
+	t.Helper()
+	def := declTestDef(IntentDetection)
+	conds := []Condition{{Field: FieldAction, Operator: OpEquals, Values: []string{string(store.ActionDrop)}}}
+	dd, err := NewDeclarativeDefinition(def, DeclarativeSpec{
+		Conditions:     conds,
+		Key:            KeyPerSource,
+		Window:         time.Minute,
+		Threshold:      1,
+		CountingMode:   CountingTotal,
+		DetailTemplate: "{Count} hits",
+		Evidence:       fields,
+	})
+	if err != nil {
+		t.Fatalf("NewDeclarativeDefinition: %v", err)
+	}
+	return dd
+}
+
+// TestRecordEvidencePairsCombinesHostAndPortFromTheSameEvent is the
+// direct proof of #654's core fix: two events sharing a destination
+// port but touching different hosts, and vice versa, must not blur into
+// "any host with any port" -- each pair is exactly what one event
+// actually carried.
+func TestRecordEvidencePairsCombinesHostAndPortFromTheSameEvent(t *testing.T) {
+	dd := pairsMACTestDef(t, []EvidenceField{EvidencePairs})
+	var got *flags.Flag
+	dd.OnRoutedEmission = func(r RoutedEmission) { got = r.Detection }
+
+	now := time.Now()
+	dd.Evaluate(evtAt("198.51.100.1", "10.0.0.1", 22, now))
+	dd.Evaluate(evtAt("198.51.100.1", "10.0.0.1", 443, now.Add(time.Second)))
+	dd.Evaluate(evtAt("198.51.100.1", "10.0.0.2", 22, now.Add(2*time.Second)))
+
+	if got == nil {
+		t.Fatal("expected a flag")
+	}
+	want := []flags.HostPort{{Host: "10.0.0.1", Port: 22}, {Host: "10.0.0.1", Port: 443}, {Host: "10.0.0.2", Port: 22}}
+	if fmt.Sprint(got.Evidence.Pairs) != fmt.Sprint(want) {
+		t.Errorf("Evidence.Pairs = %v, want %v (never {10.0.0.2, 443}, which no event ever carried)", got.Evidence.Pairs, want)
+	}
+	if len(got.Evidence.Ports) != 0 || len(got.Evidence.Hosts) != 0 {
+		t.Errorf("Evidence.Ports/Hosts = %v/%v, want both empty: this definition never declared EvidencePorts/EvidenceHosts",
+			got.Evidence.Ports, got.Evidence.Hosts)
+	}
+}
+
+// TestRecordEvidencePairsIgnoresPortlessEvents mirrors
+// TestShippedRepeatedDropsIgnoresPortlessEvents: a pair needs both a
+// host and a port, so an event missing either contributes nothing.
+func TestRecordEvidencePairsIgnoresPortlessEvents(t *testing.T) {
+	dd := pairsMACTestDef(t, []EvidenceField{EvidencePairs})
+	var got *flags.Flag
+	dd.OnRoutedEmission = func(r RoutedEmission) { got = r.Detection }
+
+	dd.Evaluate(evtAt("198.51.100.1", "10.0.0.1", 0, time.Now()))
+	if got == nil {
+		t.Fatal("expected a flag (threshold=1, the event still counts)")
+	}
+	if len(got.Evidence.Pairs) != 0 {
+		t.Errorf("Evidence.Pairs = %v, want empty for a port-less event", got.Evidence.Pairs)
+	}
+}
+
+// TestRecordEvidencePairsNotPopulatedWhenNotDeclared pins the per-
+// detector opt-in: a definition that never lists EvidencePairs must
+// never populate Evidence.Pairs, exactly as port_scan and dest_spread
+// (#654) never do.
+func TestRecordEvidencePairsNotPopulatedWhenNotDeclared(t *testing.T) {
+	dd := pairsMACTestDef(t, []EvidenceField{EvidencePorts})
+	var got *flags.Flag
+	dd.OnRoutedEmission = func(r RoutedEmission) { got = r.Detection }
+
+	dd.Evaluate(evtAt("198.51.100.1", "10.0.0.1", 22, time.Now()))
+	if got == nil {
+		t.Fatal("expected a flag")
+	}
+	if len(got.Evidence.Pairs) != 0 {
+		t.Errorf("Evidence.Pairs = %v, want empty: this definition never declared EvidencePairs", got.Evidence.Pairs)
+	}
+}
+
+// TestRecordEvidenceMACCarriedOnlyForLocalSource is #654's other half:
+// a source MAC is recorded when the event has one and the source is a
+// local (non-public) address, and withheld otherwise -- "for an external
+// source it is absent or is the router's own, and carrying it would be
+// worse than useless" (issue #654).
+func TestRecordEvidenceMACCarriedOnlyForLocalSource(t *testing.T) {
+	local := pairsMACTestDef(t, []EvidenceField{EvidenceMAC})
+	var gotLocal *flags.Flag
+	local.OnRoutedEmission = func(r RoutedEmission) { gotLocal = r.Detection }
+	local.Evaluate(macEvtAt("10.0.0.9", "aa:bb:cc:dd:ee:01", "10.0.0.1", 22, time.Now()))
+	if gotLocal == nil {
+		t.Fatal("expected a flag")
+	}
+	if gotLocal.Evidence.SrcMAC != "aa:bb:cc:dd:ee:01" {
+		t.Errorf("Evidence.SrcMAC = %q, want the local source's MAC", gotLocal.Evidence.SrcMAC)
+	}
+
+	external := pairsMACTestDef(t, []EvidenceField{EvidenceMAC})
+	var gotExternal *flags.Flag
+	external.OnRoutedEmission = func(r RoutedEmission) { gotExternal = r.Detection }
+	external.Evaluate(macEvtAt("198.51.100.1", "aa:bb:cc:dd:ee:02", "10.0.0.1", 22, time.Now()))
+	if gotExternal == nil {
+		t.Fatal("expected a flag")
+	}
+	if gotExternal.Evidence.SrcMAC != "" {
+		t.Errorf("Evidence.SrcMAC = %q, want empty: an external source's MAC must never be recorded", gotExternal.Evidence.SrcMAC)
+	}
+}
+
+// TestRecordEvidenceMACNotPopulatedWhenNotDeclared is EvidenceMAC's own
+// per-detector opt-in pin, matching
+// TestRecordEvidencePairsNotPopulatedWhenNotDeclared above.
+func TestRecordEvidenceMACNotPopulatedWhenNotDeclared(t *testing.T) {
+	dd := pairsMACTestDef(t, []EvidenceField{EvidencePorts})
+	var got *flags.Flag
+	dd.OnRoutedEmission = func(r RoutedEmission) { got = r.Detection }
+
+	dd.Evaluate(macEvtAt("10.0.0.9", "aa:bb:cc:dd:ee:01", "10.0.0.1", 22, time.Now()))
+	if got == nil {
+		t.Fatal("expected a flag")
+	}
+	if got.Evidence.SrcMAC != "" {
+		t.Errorf("Evidence.SrcMAC = %q, want empty: this definition never declared EvidenceMAC", got.Evidence.SrcMAC)
 	}
 }

@@ -102,6 +102,23 @@ test:go:
     paths:
       - coverage.out
 
+test:frontend:
+  stage: test
+  image: node:22-alpine
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+      exists: ["frontend/package.json"]
+    - if: $CI_COMMIT_BRANCH == "dev"
+      exists: ["frontend/package.json"]
+  # The other half of #684. lint:frontend above proves the frontend compiles;
+  # nothing here proved it behaves, so this lane had the same hole GitHub did
+  # and 542 real assertions gated nothing on either. jsdom, so no browser and
+  # no runner image beyond the one lint:frontend already uses.
+  script:
+    - cd frontend
+    - npm ci
+    - npm test
+
 # ---------------------------------------------------------------------------
 # SECURITY — parallel jobs, diff-scoped Semgrep on MRs, full scan on dev.
 # ---------------------------------------------------------------------------
