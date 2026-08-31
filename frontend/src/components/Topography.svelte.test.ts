@@ -198,8 +198,8 @@ describe('the aggregate bar (#648)', () => {
   })
 })
 
-describe('the altitude slider (#648)', () => {
-  it('renders one range input and four stop symbols, no text labels', () => {
+describe('the altitude slider (#648, named ends #682)', () => {
+  it('renders one range input, four stop symbols, and its two named ends', () => {
     const { container } = render(Topography)
     flushSync()
 
@@ -212,7 +212,11 @@ describe('the altitude slider (#648)', () => {
     const ticks = container.querySelectorAll('.tick')
     expect(ticks.length).toBe(4)
     expect(container.querySelector('.tick.diamond')).not.toBeNull() // survey's atlas diamond
-    expect(container.querySelector('.altitude')?.textContent?.trim()).toBe('')
+
+    // Ratified round-29: the two extremes are named, the middle stops
+    // stay tick-only symbols -- never a full text label per stop.
+    const ends = [...container.querySelectorAll('.alt-end')].map((n) => n.textContent?.trim())
+    expect(ends).toEqual(['clients', 'survey'])
   })
 
   it('moving the slider reframes the map camera, including the survey tilt', () => {
@@ -252,5 +256,67 @@ describe('node info cards (#648)', () => {
     expect(card).not.toBeNull()
     expect(card?.textContent).toContain('desk')
     expect(card?.textContent).toContain('The LAN')
+  })
+})
+
+describe('the zone card coverage badge (#682, ratified round-29)', () => {
+  it('reads LOGGED BOTH WAYS in the healthy colour when both directions log', () => {
+    zonesState.pushed = [{ address: '192.168.1.1/24', network: '192.168.1.0', interface: 'bridge1', comment: 'The LAN' }]
+    appState.events = [
+      event({ inInterface: 'bridge1', srcIp: '192.168.1.50' }),
+      event({ inInterface: 'wan1', srcIp: '8.8.8.8' }), // resolves wan1 as the WAN boundary
+    ]
+    policyState.anyPushed = true
+    policyState.edges = [
+      { key: 'bridge1|wan1', from: 'bridge1', to: 'wan1', accepted: true, refused: false, acceptPorts: [], refusePorts: [], comment: '', ruleCount: 1, logged: true },
+      { key: 'wan1|bridge1', from: 'wan1', to: 'bridge1', accepted: true, refused: false, acceptPorts: [], refusePorts: [], comment: '', ruleCount: 1, logged: true },
+    ]
+    const { container } = render(Topography)
+    flushSync()
+
+    const badge = container.querySelector('.n-cov')
+    expect(badge?.textContent).toBe('LOGGED BOTH WAYS')
+    expect(badge?.classList.contains('cov-l')).toBe(true)
+  })
+
+  it('reads a DARK boundary in the alarm colour, not the healthy one', () => {
+    zonesState.pushed = [{ address: '10.0.30.1/24', network: '10.0.30.0', interface: 'bridge2', comment: 'Guest' }]
+    appState.events = [
+      event({ inInterface: 'bridge2', srcIp: '10.0.30.9' }),
+      event({ inInterface: 'wan1', srcIp: '8.8.8.8' }),
+    ]
+    policyState.anyPushed = true
+    policyState.edges = [
+      { key: 'bridge2|wan1', from: 'bridge2', to: 'wan1', accepted: true, refused: false, acceptPorts: [], refusePorts: [], comment: '', ruleCount: 1, logged: false },
+      { key: 'wan1|bridge2', from: 'wan1', to: 'bridge2', accepted: true, refused: false, acceptPorts: [], refusePorts: [], comment: '', ruleCount: 1, logged: false },
+    ]
+    const { container } = render(Topography)
+    flushSync()
+
+    const badge = container.querySelector('.n-cov')
+    expect(badge?.textContent).toBe('DARK BOTH WAYS — no log rule on this boundary')
+    expect(badge?.classList.contains('cov-d')).toBe(true)
+    expect(badge?.classList.contains('cov-l')).toBe(false)
+  })
+})
+
+describe('degrading honestly without a pushed address table (#682, data gap #687)', () => {
+  it('puts the boundary-derived note in the scene chrome, and never invents a subnet or a coverage verdict', () => {
+    zonesState.pushed = [] // no /ip address table pushed -- #687's data gap, not a rendering bug
+    appState.events = [event({ inInterface: 'bridge1', srcIp: '192.168.1.50' })]
+    policyState.anyPushed = false
+    const { container } = render(Topography)
+    flushSync()
+
+    // The note is chrome (a bounded, backed pill), not loose text
+    // floating over the map's corner.
+    const note = container.querySelector('.degraded')
+    expect(note).not.toBeNull()
+    expect(note?.textContent).toContain('boundary-derived')
+
+    // The zone card itself: a boundary name only -- no fabricated
+    // subnet, no fabricated coverage badge.
+    expect(container.querySelector('.n-cidr')).toBeNull()
+    expect(container.querySelector('.n-cov')).toBeNull()
   })
 })
