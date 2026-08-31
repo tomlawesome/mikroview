@@ -198,8 +198,8 @@ describe('the aggregate bar (#648)', () => {
   })
 })
 
-describe('the altitude slider (#648)', () => {
-  it('renders one range input and four stop symbols, no text labels', () => {
+describe('the altitude slider (#648, named ends #682)', () => {
+  it('renders one range input, four stop symbols, and its two named ends', () => {
     const { container } = render(Topography)
     flushSync()
 
@@ -212,7 +212,11 @@ describe('the altitude slider (#648)', () => {
     const ticks = container.querySelectorAll('.tick')
     expect(ticks.length).toBe(4)
     expect(container.querySelector('.tick.diamond')).not.toBeNull() // survey's atlas diamond
-    expect(container.querySelector('.altitude')?.textContent?.trim()).toBe('')
+
+    // Ratified round-29: the two extremes are named, the middle stops
+    // stay tick-only symbols -- never a full text label per stop.
+    const ends = [...container.querySelectorAll('.alt-end')].map((n) => n.textContent?.trim())
+    expect(ends).toEqual(['clients', 'survey'])
   })
 
   it('moving the slider reframes the map camera, including the survey tilt', () => {
@@ -252,5 +256,122 @@ describe('node info cards (#648)', () => {
     expect(card).not.toBeNull()
     expect(card?.textContent).toContain('desk')
     expect(card?.textContent).toContain('The LAN')
+  })
+})
+
+describe('the zone card coverage badge (#682, ratified round-29)', () => {
+  it('reads LOGGED BOTH WAYS in the healthy colour when both directions log', () => {
+    zonesState.pushed = [{ address: '192.168.1.1/24', network: '192.168.1.0', interface: 'bridge1', comment: 'The LAN' }]
+    appState.events = [
+      event({ inInterface: 'bridge1', srcIp: '192.168.1.50' }),
+      event({ inInterface: 'wan1', srcIp: '8.8.8.8' }), // resolves wan1 as the WAN boundary
+    ]
+    policyState.anyPushed = true
+    policyState.edges = [
+      { key: 'bridge1|wan1', from: 'bridge1', to: 'wan1', accepted: true, refused: false, acceptPorts: [], refusePorts: [], comment: '', ruleCount: 1, logged: true },
+      { key: 'wan1|bridge1', from: 'wan1', to: 'bridge1', accepted: true, refused: false, acceptPorts: [], refusePorts: [], comment: '', ruleCount: 1, logged: true },
+    ]
+    const { container } = render(Topography)
+    flushSync()
+
+    const badge = container.querySelector('.n-cov')
+    expect(badge?.textContent).toBe('LOGGED BOTH WAYS')
+    expect(badge?.classList.contains('cov-l')).toBe(true)
+  })
+
+  it('reads a DARK boundary in the alarm colour, not the healthy one', () => {
+    zonesState.pushed = [{ address: '10.0.30.1/24', network: '10.0.30.0', interface: 'bridge2', comment: 'Guest' }]
+    appState.events = [
+      event({ inInterface: 'bridge2', srcIp: '10.0.30.9' }),
+      event({ inInterface: 'wan1', srcIp: '8.8.8.8' }),
+    ]
+    policyState.anyPushed = true
+    policyState.edges = [
+      { key: 'bridge2|wan1', from: 'bridge2', to: 'wan1', accepted: true, refused: false, acceptPorts: [], refusePorts: [], comment: '', ruleCount: 1, logged: false },
+      { key: 'wan1|bridge2', from: 'wan1', to: 'bridge2', accepted: true, refused: false, acceptPorts: [], refusePorts: [], comment: '', ruleCount: 1, logged: false },
+    ]
+    const { container } = render(Topography)
+    flushSync()
+
+    // Two lines, badge over detail (#682, ratified round-29) -- not one
+    // sentence crammed into the badge itself.
+    const badge = container.querySelector('.n-cov')
+    expect(badge?.textContent).toBe('DARK BOTH WAYS')
+    expect(badge?.classList.contains('cov-d')).toBe(true)
+    expect(badge?.classList.contains('cov-l')).toBe(false)
+
+    const zoneTexts = [...container.querySelectorAll('.n-sub')].map((n) => n.textContent)
+    expect(zoneTexts).toContain('no log rule on this boundary')
+  })
+})
+
+describe('degrading honestly without a pushed address table (#682, data gap #687)', () => {
+  it('puts the boundary-derived note in the scene chrome, and never invents a subnet or a coverage verdict', () => {
+    zonesState.pushed = [] // no /ip address table pushed -- #687's data gap, not a rendering bug
+    appState.events = [event({ inInterface: 'bridge1', srcIp: '192.168.1.50' })]
+    policyState.anyPushed = false
+    const { container } = render(Topography)
+    flushSync()
+
+    // The note is chrome (a bounded, backed pill), not loose text
+    // floating over the map's corner.
+    const note = container.querySelector('.degraded')
+    expect(note).not.toBeNull()
+    expect(note?.textContent).toContain('boundary-derived')
+
+    // The zone card itself: a boundary name only -- no fabricated
+    // subnet, no fabricated coverage badge.
+    expect(container.querySelector('.n-cidr')).toBeNull()
+    expect(container.querySelector('.n-cov')).toBeNull()
+  })
+})
+
+describe('the lens selector, ported to the scene\'s own bottom-left bar (#682)', () => {
+  it('renders the three lenses as .wlens2, not a top-right tab strip, and switches on click', () => {
+    const { container } = render(Topography)
+    flushSync()
+
+    expect(container.querySelector('.lenses')).toBeNull() // the old top-right strip is gone
+    const bar = container.querySelector('.wlens2')
+    expect(bar).not.toBeNull()
+
+    const labels = [...bar!.querySelectorAll('button')].map((b) => b.textContent?.trim())
+    expect(labels).toEqual(['traffic', 'policy', 'coverage'])
+
+    const policyTab = [...bar!.querySelectorAll('button')].find((b) => b.textContent?.trim() === 'policy')!
+    expect(policyTab.classList.contains('on')).toBe(false)
+    policyTab.click()
+    flushSync()
+    expect(policyTab.classList.contains('on')).toBe(true)
+  })
+})
+
+describe('the watcher dial\'s eye (#682, ported from the scene)', () => {
+  it('draws the eye as a path and pupil, not the aggregate bar\'s "◉" text glyph', () => {
+    const { container } = render(Topography)
+    flushSync()
+
+    const eye = container.querySelector('g.watch-sym')
+    expect(eye).not.toBeNull()
+    expect(eye?.querySelector('path')).not.toBeNull()
+    expect(eye?.querySelector('circle')).not.toBeNull()
+    expect(container.querySelector('text.watch-sym')).toBeNull()
+  })
+})
+
+describe('the ascend control, ported inside the map\'s own flow (#682)', () => {
+  it('renders inside .stage, not as a fixed pill over the whole card', () => {
+    zonesState.pushed = [{ address: '192.168.1.1/24', network: '192.168.1.0', interface: 'bridge1', comment: 'The LAN' }]
+    appState.events = [event({ inInterface: 'bridge1', srcIp: '192.168.1.50', srcHostName: 'desk' })]
+    const { container } = render(Topography)
+    flushSync()
+
+    container.querySelector<SVGTSpanElement>('.host-link')!.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    flushSync()
+
+    const stage = container.querySelector('.stage')
+    expect(stage).not.toBeNull()
+    const ascend = stage!.querySelector('.ascend')
+    expect(ascend).not.toBeNull() // inside .stage, not a sibling of it
   })
 })
