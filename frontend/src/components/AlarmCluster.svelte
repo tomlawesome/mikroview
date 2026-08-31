@@ -61,8 +61,11 @@
     color: var(--ok, var(--accept-tinted));
   }
 
+  /* Purple, not muted grey: round 30 draws `.scstatus .wmk` at #a78bfa
+     on every scene, which is --marked here. The eye is the watchlist's
+     colour wherever it appears. */
   .wmk {
-    color: var(--fg-muted);
+    color: var(--marked);
   }
 
   .wmk b {

@@ -373,8 +373,11 @@
       <p class="mutation-error" role="alert">{error}</p>
     {/if}
 
-    <section aria-labelledby="active-heading">
-      <h2 id="active-heading">Active ({active.length})</h2>
+    <!-- No heading over the table (#697/#700): round 30 draws the flags
+         panel as a bare table under the bar, and the count already
+         lives in the bar's own ⚑ mark. The name survives for screen
+         readers, where it is not competing for space. -->
+    <section aria-label="Active flags ({active.length})">
       {#if active.length === 0}
         <!-- The honest cleared state (round 26, drawn as `.caempty` in
              round 29's scene): zero open is a fact with a history, not a
