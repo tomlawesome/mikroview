@@ -23,13 +23,19 @@ rewritten.
   types ... tune..."), reading and writing the port_scan definition's
   own `threshold`/`window` params through the exact PUT
   `/api/definitions/{id}` the watcher bench already uses -- no second
-  store. Memory gains a persistence row: the ratified copy read `JSON
-  store · 14 d`, but no such feature exists (`internal/persist`'s own
-  package doc calls the live event stream the one deliberate exception
-  left in-memory-only), so the row states that live truth instead of a
-  fabricated retention. Account gains a sessions row -- "this device,
-  signed in 4 d · sign out everywhere" -- backed by a new
-  self-serve `POST /api/auth/logout-all`
+  store. Memory gains a persistence row stating live truth on both
+  halves: the ratified copy read `JSON store · 14 d`, but no event
+  store with a day-based retention exists (`internal/persist`'s own
+  package doc calls the live event stream the one deliberate
+  in-memory-only exception) -- `internal/persist` *is* real, though,
+  and backs flags/definitions/watchlist entries/entities/tokens, so the
+  row instead states which backend is actually live (file, with its
+  directory, or Postgres) via a new admin-gated `GET /api/persistence`
+  (admin-tier for the same reason `GET /api/config/problems` already
+  is -- a filesystem path is infrastructure detail), alongside the fact
+  that the event buffer above it stays memory-only regardless. Account
+  gains a sessions row -- "this device, signed in 4 d · sign out
+  everywhere" -- backed by a new self-serve `POST /api/auth/logout-all`
   (`SessionStore.RevokeAllForUser` against the caller's own account,
   then a fresh session so the calling tab stays signed in, the same
   revoke-then-recreate shape `POST /api/auth/password` already uses),
