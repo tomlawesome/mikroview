@@ -295,6 +295,12 @@ export async function session({ waitForEvents = 0, dismissSetup = true, landing 
 
   if (landing === 'stream') {
     await goTo(page, 'Stream')
+    // #644 folded the filter away behind a quiet trigger; it used to be
+    // always open, which is the shape every scenario below was written
+    // against. Unfold it here rather than in each of them. The mobile
+    // drawer has its own trigger and no fold-trigger, hence the guard.
+    const fold = page.locator('button.fold-trigger')
+    if (await fold.count()) await fold.click()
     await page.waitForSelector('input.rule', { timeout: 15000 })
   }
 
