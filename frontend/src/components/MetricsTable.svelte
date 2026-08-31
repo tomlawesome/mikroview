@@ -240,22 +240,31 @@
     color: var(--fg-dim);
   }
 
+  /* Round 30's `.mtable`: the hour's figures sit centred and whole, with
+     no scroller of their own and no box around them. It is one hour of
+     minutes -- it fits, and a table that scrolls inside a page that
+     also scrolls gives the operator two scrollbars and a guess about
+     which one moves what. */
   .table-wrap {
-    overflow: auto;
-    max-height: 60vh;
-    border: 1px solid var(--border);
-    border-radius: 8px;
+    display: flex;
+    justify-content: center;
+    align-items: flex-start;
+    overflow: hidden;
   }
 
+  /* Sized from its own content rather than stretched to the frame: at
+     width:100% the columns spread until the last one runs under the
+     page's scrollbar. Round 30 sets a floor and lets it centre. */
   table {
-    width: 100%;
+    min-width: 640px;
     border-collapse: collapse;
+    font-family: var(--font-mono);
     font-size: 12px;
   }
 
   th,
   td {
-    padding: 4px 10px;
+    padding: 5px 18px;
     text-align: right;
     white-space: nowrap;
     font-variant-numeric: tabular-nums;
