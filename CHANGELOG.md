@@ -272,26 +272,35 @@ rewritten.
 ### Fixed
 
 - **The topography's furniture, landed against its ratified round-29
-  scene** (#682). #648 built the dials, the zone cards, the edge labels
-  and the altitude control; on screen none of it read as designed. The
-  health dials sat on top of the Traffic lens tab, unreadable, and the
-  deck's vertical roll rail crowded the same corner -- both now share
-  one flex row, inset clear of the rail. Zone cards' coverage badges
-  (`LOGGED BOTH WAYS`, `DARK TOWARD WAN`) rendered in the same flat grey
-  as everything else; they now carry the ratified three-way colour --
-  green logged, red dark, dim otherwise -- the same read the map's own
-  edges give a zone's colour. Edge labels sat directly across the lines
-  they annotated; they now sit off to the side, with a backdrop-matched
-  halo for the cases still crossing something. The altitude control was
-  a bare browser range input; it now wears a custom thin track and
-  diamond thumb with its two extremes named ("clients" ... "survey",
-  the middle stops staying tick-only). The boundary-derived note that
-  used to float half off the map's bottom-left corner is now a bounded,
-  backed pill inset from every edge, in the scene's own chrome rather
-  than over the drawing. Degrading honestly when the `/ip` address
-  table hasn't been pushed (#687) was already correct and stays
-  untouched -- these fixes change how the furniture reads, not what it
-  invents when data is missing.
+  scene** (#682). #648 built the dials, the lens selector, the zone
+  cards, the edge labels, the altitude control and the ascend link; on
+  screen none of it read as designed. The health dials sat on top of a
+  top-right Traffic/Policy/Coverage tab strip that round 29 never
+  draws there -- the strip is now the scene's own bottom-left bar,
+  merged with the same typography the map's other chrome wears, and
+  the dials sit alone, inset clear of the deck's roll rail. The
+  watcher dial's ring wore a "◉" text glyph for its legend; it now
+  draws the scene's own eye (a path and a pupil, ported from the
+  mockup's dial markup). Zone cards' coverage badges (`LOGGED BOTH
+  WAYS`, `DARK TOWARD WAN`) rendered in flat grey, one crammed
+  sentence; they now carry the ratified three-way colour -- green
+  logged, red dark, dim otherwise -- as two lines, badge over detail,
+  with the aggregate bar moved below the card's own edge (as round 29
+  draws it) so the second line never collides with it. Edge labels sat
+  directly across the lines they annotated; they now sit off to the
+  side, with a backdrop-matched halo for the cases still crossing
+  something. The altitude control was a bare browser range input; it
+  now wears a custom thin track and diamond thumb with its two
+  extremes named ("clients" ... "survey", the middle stops staying
+  tick-only). The ascend link floated as a bordered pill over the
+  whole card; it now sits inside the map's own flow, top-left of the
+  stage, as plain text. The boundary-derived note that used to float
+  half off the map's bottom-left corner is now a bounded, backed pill
+  stacked above the relocated lens bar, in the scene's own chrome
+  rather than over the drawing. Degrading honestly when the `/ip`
+  address table hasn't been pushed (#687) was already correct and
+  stays untouched -- these fixes change how the furniture reads, not
+  what it invents when data is missing.
 - **Finishing the setup wizard could land you on a dead view** (#646).
   Its exit still pointed at the stream-as-landing-page arrangement that
   #616 retired once the fall took over as the real landing page, so
