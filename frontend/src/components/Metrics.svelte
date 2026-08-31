@@ -22,7 +22,6 @@
   import { buildHour, minuteIndexOf, readMinute } from '../lib/metricsSeries'
   import { fetchStatsTops } from '../lib/api'
   import { formatEps, formatHM } from '../lib/format'
-  import PageHeader from './PageHeader.svelte'
   import MetricsSeismograph from './MetricsSeismograph.svelte'
   import MetricsRegister from './MetricsRegister.svelte'
   import MetricsTable from './MetricsTable.svelte'
@@ -129,20 +128,10 @@
 </script>
 
 <div class="metrics scrollbar" onkeydown={onkeydown} role="presentation">
-  <PageHeader title="Metrics">
-    <div class="views" role="group" aria-label="Metrics view">
-      {#each METRICS_VIEWS as option (option.value)}
-        <button
-          class="view"
-          class:on={metricsPref.view === option.value}
-          aria-pressed={metricsPref.view === option.value}
-          title={option.title}
-          onclick={() => metricsPref.setView(option.value)}>{option.label}</button
-        >
-      {/each}
-    </div>
-  </PageHeader>
-
+  <!-- No page heading (#697/#700), and the view switcher rides the
+       scene bar where it used to sit -- round 30 puts it beside the
+       wordmark, and #488's "three views of one data set" is satisfied
+       there. -->
   <div class="hourline">
     {#if reading}
       <span class="big">{formatHM(reading.time)}<span class="unit">the minute under the cursor</span></span>
@@ -209,32 +198,6 @@
     gap: 12px;
     overflow-y: auto;
     padding-bottom: 10px;
-  }
-
-  .views {
-    display: flex;
-    gap: 6px;
-    margin-left: auto;
-  }
-
-  .view {
-    background: transparent;
-    border: 1px solid var(--border);
-    border-radius: 6px;
-    color: var(--fg-muted);
-    font-size: 11.5px;
-    padding: 3px 10px;
-  }
-
-  .view:hover {
-    color: var(--fg);
-    border-color: var(--fg-dim);
-  }
-
-  .view.on {
-    color: var(--fg);
-    border-color: var(--accent);
-    background: var(--accent-bg);
   }
 
   .hourline {
