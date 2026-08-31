@@ -17,14 +17,19 @@
   //     receives, never connects out -- and a disclosure with the real
   //     RouterOS lines to paste (lib/setupsteps.ts, the same generator
   //     the setup wizard uses).
-  //  2. One table of named things: every host entity plus every
-  //     discovered-but-unnamed host, one row each, lane/address/mac/
-  //     first+last seen/marks, name renamed inline (click it, Enter
-  //     saves, Esc cancels). The old page's separate add-entity form and
-  //     discovered-rules/-ports sections are gone: the ratified scene
-  //     has exactly one table, host-shaped (lane/mac make no sense for a
-  //     rule or a port), and no add-entity affordance beyond naming what
-  //     has actually arrived -- see #675's own report for this reading.
+  //  2. A tab strip -- hosts / rules / ports (#681, a deliberate
+  //     departure from the ratified round-29 scene, recorded on that
+  //     issue rather than smuggled in) -- over one table per tab, the
+  //     docket's own tab vocabulary (Docket.svelte) reused rather than
+  //     inventing new furniture. hosts is the ratified table exactly as
+  //     #675 built it and stays the default. rules and ports exist
+  //     because naming in context has nowhere to happen: a rule that is
+  //     in a router's pushed rule table but has never fired has no row
+  //     anywhere else to click (#681's owner decision), so it needs its
+  //     own surface, whether or not it has ever fired. The old page's
+  //     separate add-entity form is still gone -- these tabs name what
+  //     has actually arrived (fired) or been pushed (a rule), never a
+  //     blank invented row.
   //
   // mac/first-seen/last-seen have no existing source (the entity store
   // only ever held label/tags, and the client event buffer is far too
@@ -33,6 +38,22 @@
   // inventing the numbers, reusing the MAC registry that already existed
   // for the new-device detector. Lane reuses zones.svelte.ts unchanged
   // (the same boundary-derived zones the topography map draws).
+  //
+  // The rules tab's chain/action/last-fired columns are its own join,
+  // not GET /api/rules alone: that endpoint (internal/rules.Store) only
+  // ever holds a rule label once it has fired, so a never-fired rule is
+  // simply absent from it, not present with a zero count -- the exact
+  // case #681 exists for. The full pushed-rule table (fetchRouterRules,
+  // already loaded per router below for the router cards' rule count)
+  // carries chain/action/log-prefix for every rule regardless of firing,
+  // keyed by lib/routerLookup.svelte.ts's own "<ACTION>|<slug>|"
+  // log-prefix convention (ruleLabelFromLogPrefix, added for this tab as
+  // that file's prefixMatchesLabel's inverse) -- the same convention
+  // #445's router-lookup popup already decodes the other direction. A
+  // rule with no log-prefix, or one that doesn't follow the convention,
+  // can never produce a firing event carrying a label either (payload.go
+  // -- "an unlogged rule must stay unnameable"), so it is left off this
+  // tab rather than shown as an unnameable dead end.
   import { onMount } from 'svelte'
   import { entitiesState } from '../lib/entities.svelte'
   import { appState } from '../lib/state.svelte'
@@ -40,12 +61,20 @@
   import { watchlistState } from '../lib/watchlist.svelte'
   import { zonesState } from '../lib/zones.svelte'
   import { familyOf } from '../lib/flagPalette'
-  import { fetchDeviceMACs, fetchRouterRules, fetchRouterAddresses, fetchSetupStatus } from '../lib/api'
-  import { discoverHosts } from '../lib/discoveredEntities'
+  import {
+    fetchDeviceMACs,
+    fetchRouterRules,
+    fetchRouterAddresses,
+    fetchRules,
+    fetchSetupStatus,
+    type RouterFilterRule,
+  } from '../lib/api'
+  import { discoverHosts, discoverPorts } from '../lib/discoveredEntities'
+  import { ruleLabelFromLogPrefix } from '../lib/routerLookup.svelte'
   import { formatRelative, formatHM, formatEps } from '../lib/format'
   import { STATUS_LABEL, sortedDevices, recentCount as recentCountOf, RECENT_WINDOW_MS } from '../lib/fleet'
   import { syslogCommands, instanceAddress, portOf } from '../lib/setupsteps'
-  import type { MACRegistryEntry, SetupStatus } from '../lib/types'
+  import type { EntityType, MACRegistryEntry, RuleUsage, SetupStatus } from '../lib/types'
 
   // --- routers (folded in from Fleet, #647; cards since #675) ---------
   const routerRows = $derived(sortedDevices(appState.devices))
@@ -73,6 +102,12 @@
   }
   let routerDetail = $state<Record<string, RouterDetail>>({})
 
+  // The rules tab's source table (#681): kept alongside routerDetail's
+  // ruleCount rather than re-fetched, since fetchRouterRules(deviceId)
+  // already runs once per router below -- the count and the rows it is
+  // counted from come from the same response.
+  let routerRulesRaw = $state<Record<string, RouterFilterRule[]>>({})
+
   async function loadRouterDetail(deviceId: string) {
     const [rules, addrs] = await Promise.all([
       fetchRouterRules(deviceId).catch(() => null),
@@ -83,6 +118,7 @@
       zoneCount: addrs?.available ? new Set(addrs.rules.map((a) => a.interface)).size : null,
       lastPush: rules?.updatedAt ?? addrs?.updatedAt ?? null,
     }
+    routerRulesRaw[deviceId] = rules?.available ? rules.rules : []
   }
 
   // Fetches detail for any router this page hasn't asked about yet --
@@ -219,6 +255,72 @@
     return row.mac ? formatRelative(row.mac.firstSeen, appState.now) : '—'
   }
 
+  // --- rules tab: every pushed rule, named or not, fired or not (#681)
+  // ---------------------------------------------------------------------
+  let rulesUsage = $state<RuleUsage[]>([])
+  const usageByRule = $derived.by(() => new Map(rulesUsage.map((u) => [u.rule, u])))
+  const ruleEntities = $derived(entitiesState.list.filter((e) => e.type === 'rule'))
+
+  // One row per distinct rule slug pushed by any router, deduped on the
+  // slug itself: if two routers push a same-named rule (the operator's
+  // own convention, not something mikroview enforces -- see
+  // RulesForLogPrefix's doc), the later device in routerRows order wins
+  // the displayed chain/action. A single-router fleet, by far the common
+  // case, never hits this.
+  const pushedRules = $derived.by(() => {
+    const m = new Map<string, { chain: string; action: string }>()
+    for (const d of routerRows) {
+      for (const r of routerRulesRaw[d.id] ?? []) {
+        const slug = ruleLabelFromLogPrefix(r.logPrefix)
+        if (slug) m.set(slug, { chain: r.chain, action: r.action })
+      }
+    }
+    return m
+  })
+
+  interface RuleRow {
+    key: string // the rule slug -- the entity key
+    label: string
+    chain: string | null
+    action: string | null
+    lastFired: string | null // usage.lastSeen -- null means never fired
+  }
+
+  const ruleRows = $derived.by((): RuleRow[] => {
+    const keys = new Set<string>([...pushedRules.keys(), ...ruleEntities.map((e) => e.key), ...rulesUsage.map((u) => u.rule)])
+    return [...keys]
+      .map((key): RuleRow => {
+        const pushed = pushedRules.get(key) ?? null
+        const usage = usageByRule.get(key) ?? null
+        const entity = ruleEntities.find((e) => e.key === key)
+        return {
+          key,
+          label: entity?.label ?? '',
+          chain: pushed?.chain ?? null,
+          action: pushed?.action ?? null,
+          lastFired: usage?.lastSeen ?? null,
+        }
+      })
+      .sort((a, b) => (a.label || a.key).localeCompare(b.label || b.key))
+  })
+
+  // --- ports tab: every port named, plus every port seen in traffic
+  // that isn't yet (#681) --------------------------------------------
+  const portEntities = $derived(entitiesState.list.filter((e) => e.type === 'port'))
+  const discoveredPorts = $derived(discoverPorts(appState.events, entitiesState.list))
+
+  interface PortRow {
+    key: string
+    label: string
+    lastSeen: string | null
+  }
+
+  const portRows = $derived.by((): PortRow[] => {
+    const rows: PortRow[] = portEntities.map((e) => ({ key: e.key, label: e.label ?? '', lastSeen: null }))
+    for (const d of discoveredPorts) rows.push({ key: d.key, label: '', lastSeen: d.lastSeen })
+    return rows.sort((a, b) => Number(a.key) - Number(b.key))
+  })
+
   onMount(() => {
     entitiesState.refresh().catch(() => {
       // The table simply shows fewer named rows until this resolves.
@@ -237,18 +339,37 @@
         // The "add a third router" card's paste-lines disclosure simply
         // has nothing to show until this resolves.
       })
+    fetchRules()
+      .then((r) => (rulesUsage = r))
+      .catch(() => {
+        // The rules tab simply shows every pushed rule as never-fired
+        // until this resolves -- true of what's loaded, not a guess.
+      })
   })
 
+  // --- tab strip (#681): hosts / rules / ports, the docket's own tab
+  // vocabulary (Docket.svelte) over this page's one table, not a new
+  // kind of furniture. hosts is the default -- the ratified scene's own
+  // table, unchanged. -------------------------------------------------
+  type Tab = 'hosts' | 'rules' | 'ports'
+  let activeTab = $state<Tab>('hosts')
+
   // ---- inline rename (issue #675: rename lives in the table, not a
-  // separate form) -----------------------------------------------------
-  let renamingKey = $state<string | null>(null)
+  // separate form; #681 generalizes it across all three tabs -- same
+  // store, same EntityType, same Enter-saves/Esc-cancels/blur-saves
+  // behaviour, one rename path rather than three) ----------------------
+  let renamingKey = $state<{ type: EntityType; key: string } | null>(null)
   let renameDraft = $state('')
   let renameSaving = $state(false)
   let renameError = $state<string | null>(null)
 
-  function startRename(row: Row) {
-    renamingKey = row.key
-    renameDraft = row.label
+  function isRenaming(type: EntityType, key: string): boolean {
+    return renamingKey?.type === type && renamingKey.key === key
+  }
+
+  function startRename(type: EntityType, key: string, label: string) {
+    renamingKey = { type, key }
+    renameDraft = label
     renameError = null
   }
 
@@ -257,14 +378,14 @@
     renameError = null
   }
 
-  async function saveRename(key: string) {
+  async function saveRename(type: EntityType, key: string) {
     renameError = null
     renameSaving = true
-    const existing = hostEntities.find((e) => e.key === key)
+    const existing = entitiesState.list.find((e) => e.type === type && e.key === key)
     const wasRenaming = renamingKey
     renamingKey = null
     const err = await entitiesState.upsert({
-      type: 'host',
+      type,
       key,
       label: renameDraft.trim(),
       tags: existing?.tags ?? [],
@@ -276,10 +397,10 @@
     }
   }
 
-  function onRenameKeydown(e: KeyboardEvent, key: string) {
+  function onRenameKeydown(e: KeyboardEvent, type: EntityType, key: string) {
     if (e.key === 'Enter') {
       e.preventDefault()
-      saveRename(key)
+      saveRename(type, key)
     } else if (e.key === 'Escape') {
       cancelRename()
     }
@@ -291,8 +412,8 @@
   // so that trailing blur never re-saves (Enter) or overrides a cancel
   // with the stale draft (Escape). jsdom doesn't reproduce this blur, so
   // nothing in the test suite would have caught it without the guard.
-  function onRenameBlur(key: string) {
-    if (renamingKey === key) saveRename(key)
+  function onRenameBlur(type: EntityType, key: string) {
+    if (isRenaming(type, key)) saveRename(type, key)
   }
 
   function focusOnMount(node: HTMLInputElement) {
@@ -350,68 +471,176 @@
         </div>
     </div>
 
-    <table class="etable">
-      <thead>
-        <tr>
-          <th>name</th>
-          <th>lane</th>
-          <th>address</th>
-          <th>mac</th>
-          <th>first seen</th>
-          <th>last seen</th>
-          <th>marks</th>
-        </tr>
-      </thead>
-      <tbody>
-        {#each rows as row (row.key)}
-          <tr class:warn={row.marks.alarmCount > 0}>
-            <td class="k">
-              {#if renamingKey === row.key}
-                <input
-                  class="rename-input"
-                  type="text"
-                  placeholder="friendly name"
-                  bind:value={renameDraft}
-                  use:focusOnMount
-                  onkeydown={(e) => onRenameKeydown(e, row.key)}
-                  onblur={() => onRenameBlur(row.key)}
-                  disabled={renameSaving}
-                />
-              {:else}
-                <button type="button" class="rename-btn" onclick={() => startRename(row)} title="Click to rename">
-                  {row.label || '— click to name —'}
-                </button>
-              {/if}
-            </td>
-            <td>
-              {#if row.lane}<i class="lz" style="background:{row.lane.ink}"></i>{row.lane.name}{:else}<span class="dim">—</span>{/if}
-            </td>
-            <td>{row.key}</td>
-            <td class="dim">{row.mac ? elideMac(row.mac.mac) : 'private'}</td>
-            <td class="dim">{firstSeenOf(row)}</td>
-            <td>{lastSeenOf(row)}</td>
-            <td>
-              {#if row.marks.newTalker}<span class="mk" style="color:{NEW_TALKER_INK}">▲ new talker</span>{/if}
-              {#if row.marks.watched}<span class="mk mk-watched"
-                >◉ watched{row.marks.ringBroken ? ' · ○ ring broken' : ''}</span
-              >{/if}
-              {#if row.marks.alarmCount > 0}<span class="mk mk-flagged"
-                >{'✱'.repeat(Math.min(row.marks.alarmCount, 3))} flagged</span
-              >{/if}
-            </td>
+    <div class="tab-row" role="tablist" aria-label="Entities">
+      <button class="tab" class:on={activeTab === 'hosts'} role="tab" aria-selected={activeTab === 'hosts'} onclick={() => (activeTab = 'hosts')}>
+        hosts
+      </button>
+      <button class="tab" class:on={activeTab === 'rules'} role="tab" aria-selected={activeTab === 'rules'} onclick={() => (activeTab = 'rules')}>
+        rules
+      </button>
+      <button class="tab" class:on={activeTab === 'ports'} role="tab" aria-selected={activeTab === 'ports'} onclick={() => (activeTab = 'ports')}>
+        ports
+      </button>
+    </div>
+
+    {#if activeTab === 'hosts'}
+      <table class="etable">
+        <thead>
+          <tr>
+            <th>name</th>
+            <th>lane</th>
+            <th>address</th>
+            <th>mac</th>
+            <th>first seen</th>
+            <th>last seen</th>
+            <th>marks</th>
           </tr>
-          {#if renamingKey === row.key && renameError}
-            <tr><td colspan="7" class="rename-error">{renameError}</td></tr>
+        </thead>
+        <tbody>
+          {#each rows as row (row.key)}
+            <tr class:warn={row.marks.alarmCount > 0}>
+              <td class="k">
+                {#if isRenaming('host', row.key)}
+                  <input
+                    class="rename-input"
+                    type="text"
+                    placeholder="friendly name"
+                    bind:value={renameDraft}
+                    use:focusOnMount
+                    onkeydown={(e) => onRenameKeydown(e, 'host', row.key)}
+                    onblur={() => onRenameBlur('host', row.key)}
+                    disabled={renameSaving}
+                  />
+                {:else}
+                  <button type="button" class="rename-btn" onclick={() => startRename('host', row.key, row.label)} title="Click to rename">
+                    {row.label || '— click to name —'}
+                  </button>
+                {/if}
+              </td>
+              <td>
+                {#if row.lane}<i class="lz" style="background:{row.lane.ink}"></i>{row.lane.name}{:else}<span class="dim">—</span>{/if}
+              </td>
+              <td>{row.key}</td>
+              <td class="dim">{row.mac ? elideMac(row.mac.mac) : 'private'}</td>
+              <td class="dim">{firstSeenOf(row)}</td>
+              <td>{lastSeenOf(row)}</td>
+              <td>
+                {#if row.marks.newTalker}<span class="mk" style="color:{NEW_TALKER_INK}">▲ new talker</span>{/if}
+                {#if row.marks.watched}<span class="mk mk-watched"
+                  >◉ watched{row.marks.ringBroken ? ' · ○ ring broken' : ''}</span
+                >{/if}
+                {#if row.marks.alarmCount > 0}<span class="mk mk-flagged"
+                  >{'✱'.repeat(Math.min(row.marks.alarmCount, 3))} flagged</span
+                >{/if}
+              </td>
+            </tr>
+            {#if isRenaming('host', row.key) && renameError}
+              <tr><td colspan="7" class="rename-error">{renameError}</td></tr>
+            {/if}
+          {/each}
+          {#if rows.length === 0}
+            <tr><td colspan="7" class="dim">Nothing seen yet.</td></tr>
           {/if}
-        {/each}
-        {#if rows.length === 0}
-          <tr><td colspan="7" class="dim">Nothing seen yet.</td></tr>
-        {/if}
-      </tbody>
-    </table>
-    <p class="oghint table-hint">
-      a name is yours to give — click one to rename it; the router's own names arrive with its pushes
-    </p>
+        </tbody>
+      </table>
+      <p class="oghint table-hint">
+        a name is yours to give — click one to rename it; the router's own names arrive with its pushes
+      </p>
+    {:else if activeTab === 'rules'}
+      <table class="etable">
+        <thead>
+          <tr>
+            <th>name</th>
+            <th>chain</th>
+            <th>action</th>
+            <th>last fired</th>
+          </tr>
+        </thead>
+        <tbody>
+          {#each ruleRows as row (row.key)}
+            <tr>
+              <td class="k">
+                {#if isRenaming('rule', row.key)}
+                  <input
+                    class="rename-input"
+                    type="text"
+                    placeholder="friendly name"
+                    bind:value={renameDraft}
+                    use:focusOnMount
+                    onkeydown={(e) => onRenameKeydown(e, 'rule', row.key)}
+                    onblur={() => onRenameBlur('rule', row.key)}
+                    disabled={renameSaving}
+                  />
+                {:else}
+                  <button type="button" class="rename-btn" onclick={() => startRename('rule', row.key, row.label)} title="Click to rename">
+                    {row.label || row.key}
+                  </button>
+                {/if}
+              </td>
+              <td class="dim">{row.chain ?? '—'}</td>
+              <td class="dim">{row.action ?? '—'}</td>
+              <td class={row.lastFired ? '' : 'dim'}>
+                {row.lastFired ? formatRelative(row.lastFired, appState.now) : 'has not fired'}
+              </td>
+            </tr>
+            {#if isRenaming('rule', row.key) && renameError}
+              <tr><td colspan="4" class="rename-error">{renameError}</td></tr>
+            {/if}
+          {/each}
+          {#if ruleRows.length === 0}
+            <tr><td colspan="4" class="dim">No router has pushed a rule table yet — once one does, every rule it carries appears here, fired or not.</td></tr>
+          {/if}
+        </tbody>
+      </table>
+      <p class="oghint table-hint">
+        a name is yours to give — click one to rename it; a rule that has never fired still gets a row, not silence
+      </p>
+    {:else}
+      <table class="etable">
+        <thead>
+          <tr>
+            <th>name</th>
+            <th>port</th>
+            <th>last seen</th>
+          </tr>
+        </thead>
+        <tbody>
+          {#each portRows as row (row.key)}
+            <tr>
+              <td class="k">
+                {#if isRenaming('port', row.key)}
+                  <input
+                    class="rename-input"
+                    type="text"
+                    placeholder="friendly name"
+                    bind:value={renameDraft}
+                    use:focusOnMount
+                    onkeydown={(e) => onRenameKeydown(e, 'port', row.key)}
+                    onblur={() => onRenameBlur('port', row.key)}
+                    disabled={renameSaving}
+                  />
+                {:else}
+                  <button type="button" class="rename-btn" onclick={() => startRename('port', row.key, row.label)} title="Click to rename">
+                    {row.label || '— click to name —'}
+                  </button>
+                {/if}
+              </td>
+              <td>{row.key}</td>
+              <td class={row.lastSeen ? '' : 'dim'}>{row.lastSeen ? formatRelative(row.lastSeen, appState.now) : '—'}</td>
+            </tr>
+            {#if isRenaming('port', row.key) && renameError}
+              <tr><td colspan="3" class="rename-error">{renameError}</td></tr>
+            {/if}
+          {/each}
+          {#if portRows.length === 0}
+            <tr><td colspan="3" class="dim">No port has shown up in traffic yet, and none has been named ahead of time.</td></tr>
+          {/if}
+        </tbody>
+      </table>
+      <p class="oghint table-hint">
+        a name is yours to give — click one to rename it; a port earns its row by showing up in traffic
+      </p>
+    {/if}
   </div></div>
 </div>
 
@@ -448,6 +677,34 @@
     letter-spacing: 0.14em;
     text-transform: uppercase;
     color: var(--fg-dim);
+  }
+
+  /* --- the tab strip (#681): the docket's own tab vocabulary
+     (Docket.svelte's .tab-row/.tab), reused rather than reinvented. --- */
+  .tab-row {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    margin-bottom: 10px;
+  }
+
+  .tab {
+    background: transparent;
+    border: none;
+    border-bottom: 2px solid transparent;
+    color: var(--fg-dim);
+    font-size: 13px;
+    padding: 4px 10px 6px;
+    cursor: pointer;
+  }
+
+  .tab:hover {
+    color: var(--fg-muted);
+  }
+
+  .tab.on {
+    color: var(--fg);
+    border-bottom-color: var(--accent);
   }
 
   .oghint {
