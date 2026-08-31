@@ -298,6 +298,19 @@ rewritten.
 
 ### Fixed
 
+- **Pages could scroll far past their own content into empty space**
+  (#689). Metrics' own sr-only screen-reader region is `position:
+  absolute` with no offset of its own, and none of the deck's wrappers
+  established a positioning context, so the browser fell back to the
+  region's CSS "static position" -- computed from the full, unclipped
+  flow height of everything before it, ignoring every
+  overflow:hidden/auto ancestor on the way. With nothing positioned
+  between it and `<html>`, that became real document coordinates:
+  scrolling far enough down left nothing on screen but the deck's fixed
+  roll rail, on any scene sharing a card with Metrics (it is a snap
+  neighbour of Topography and Stream as well as itself). Deck.svelte's
+  `.card` is now `position: relative`, closing the gap for every scene
+  that sits inside it rather than papering over Metrics' own case.
 - **Finishing the setup wizard could land you on a dead view** (#646).
   Its exit still pointed at the stream-as-landing-page arrangement that
   #616 retired once the fall took over as the real landing page, so
