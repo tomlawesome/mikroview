@@ -18,65 +18,131 @@
   // asked for.
   import { appState } from '../lib/state.svelte'
   import { topNBy } from '../lib/topN'
+  import { zonesState } from '../lib/zones.svelte'
+  import { familyOf } from '../lib/flagPalette'
   import type { MetricsHour } from '../lib/metricsSeries'
 
   let { hour }: { hour: MetricsHour } = $props()
 
   const TOP_N = 8
 
-  type Row = { label: string; count: number; refused?: boolean }
+  type Row = { label: string; count: number; ink?: string }
 
   const topRules = $derived<Row[]>(
     (appState.stats?.topRules ?? []).slice(0, TOP_N).map((r) => ({ label: r.rule, count: r.count })),
   )
+  // The server itself caps Stats.TopRules (internal/store/ring.go's
+  // topRulesLimit), so this is what the client knows exists, not
+  // necessarily the whole ruleset -- the honest floor for the "how much
+  // of the whole" caption below, never inflated past what we were sent.
+  const topRulesKnown = $derived(appState.stats?.topRules?.length ?? 0)
 
   const topTalkers = $derived<Row[]>(topNBy(appState.filteredEvents, (e) => e.srcIp, TOP_N))
+  const talkersKnown = $derived(new Set(appState.filteredEvents.map((e) => e.srcIp).filter(Boolean)).size)
 
   const byProtocol = $derived<Row[]>(topNBy(appState.filteredEvents, (e) => e.protocol?.toUpperCase(), TOP_N))
+  const protocolsKnown = $derived(
+    new Set(appState.filteredEvents.map((e) => e.protocol?.toUpperCase()).filter(Boolean)).size,
+  )
+
+  // Devices take their lane colours (#732): the same rank-ordered lane
+  // ink Topography.svelte and Entities.svelte already assign each
+  // observed zone, read from the shared zonesState rather than a second
+  // classification of the same boundaries. Read-only, like Flags.svelte's
+  // own use of zonesState -- whichever scene loads first populates it,
+  // and a metrics-first session just shows the plain default ink until
+  // one does, the same degrade every other zonesState reader accepts.
+  const LANE_INKS = ['var(--lane-lan)', 'var(--lane-srv)', 'var(--lane-iot)', 'var(--lane-guest)', 'var(--marked)']
+  const laneByIp = $derived.by(() => {
+    const m = new Map<string, string>()
+    zonesState.zones.forEach((z, rank) => {
+      for (const h of z.hosts) m.set(h.ip, LANE_INKS[rank % LANE_INKS.length])
+    })
+    return m
+  })
 
   const byDevice = $derived<Row[]>(
     [...appState.devices]
       .sort((a, b) => b.eventCount - a.eventCount)
       .slice(0, TOP_N)
-      .map((d) => ({ label: d.name, count: d.eventCount })),
+      .map((d) => ({ label: d.name, count: d.eventCount, ink: laneByIp.get(d.sourceIp) })),
   )
 
   // The hour's own refused total, from the same series the drum drew --
   // not a second count of the same thing from a different source.
+  // Action keeps accept-green and drop-red (#732): --accept is the same
+  // green every accept badge already wears; --chart-refused is the red
+  // this card already used for the refused half before this change.
   const byAction = $derived<Row[]>(
     [...hour.traffic]
       .filter((s) => s.total > 0)
       .sort((a, b) => b.total - a.total)
-      .map((s) => ({ label: s.label, count: s.total, refused: s.ink === 'refused' })),
+      .map((s) => ({ label: s.label, count: s.total, ink: s.ink === 'refused' ? 'var(--chart-refused)' : 'var(--accept)' })),
   )
 
+  // Flag types take the flag ink (#732): the same family ink the
+  // docket, Flags.svelte and Entities.svelte already stripe each type
+  // with (lib/flagPalette.ts), keyed by the same FlagType the series
+  // already carries.
   const byFlagType = $derived<Row[]>(
-    hour.flags.filter((s) => s.spoke).map((s) => ({ label: s.label, count: s.total })),
+    hour.flags.filter((s) => s.spoke).map((s) => ({ label: s.label, count: s.total, ink: familyOf(s.key).ink })),
   )
 
+  // Rankings (rules, talkers, devices, flag types) stay ranked bars.
+  // Proportions (action, protocol) draw as one split bar instead of a
+  // list of bars sized against their own max -- a single-row ranking is
+  // always 100% of itself, which says nothing; a single-row proportion
+  // is honestly 100% of the whole (#732).
   const columns = $derived([
-    { title: 'Top rules', rows: topRules, empty: 'No labeled rules seen yet' },
-    { title: 'Top talkers', rows: topTalkers, empty: 'No source addresses yet' },
-    { title: 'By device', rows: byDevice, empty: 'No devices seen yet' },
-    { title: 'By protocol', rows: byProtocol, empty: 'No protocols seen yet' },
-    { title: 'The hour by action', rows: byAction, empty: 'No events in the hour' },
-    { title: 'Episodes by flag type', rows: byFlagType, empty: 'Nothing raised this hour' },
+    { title: 'Top rules', rows: topRules, empty: 'No labeled rules seen yet', kind: 'ranked' as const, known: topRulesKnown },
+    { title: 'Top talkers', rows: topTalkers, empty: 'No source addresses yet', kind: 'ranked' as const, known: talkersKnown },
+    {
+      title: 'By device',
+      rows: byDevice,
+      empty: 'No devices seen yet',
+      kind: 'ranked' as const,
+      known: appState.devices.length,
+    },
+    { title: 'By protocol', rows: byProtocol, empty: 'No protocols seen yet', kind: 'split' as const, known: protocolsKnown },
+    { title: 'The hour by action', rows: byAction, empty: 'No events in the hour', kind: 'split' as const, known: undefined },
+    { title: 'Episodes by flag type', rows: byFlagType, empty: 'Nothing raised this hour', kind: 'ranked' as const, known: undefined },
   ])
 </script>
 
 <div class="ledger-strip">
   {#each columns as column (column.title)}
-    {@const max = column.rows.reduce((m, r) => Math.max(m, r.count), 0)}
     <section class="column">
-      <h4>{column.title}</h4>
+      <h4>
+        {column.title}{column.known !== undefined && column.known > column.rows.length
+          ? ` · top ${column.rows.length} of ${column.known}`
+          : ''}
+      </h4>
       {#if column.rows.length === 0}
         <p class="empty">{column.empty}</p>
+      {:else if column.kind === 'split'}
+        {@const sum = column.rows.reduce((s, r) => s + r.count, 0)}
+        <div class="split-track">
+          {#each column.rows as row (row.label)}
+            <span class="segment" style="flex: {sum ? row.count : 0} 0 0%; background: {row.ink ?? 'var(--chart-traffic)'}"
+            ></span>
+          {/each}
+        </div>
+        {#each column.rows as row (row.label)}
+          <div class="row split-row">
+            <span class="label" title={row.label}>{row.label}</span>
+            <span class="count">{row.count}</span>
+          </div>
+        {/each}
       {:else}
+        {@const max = column.rows.reduce((m, r) => Math.max(m, r.count), 0)}
         {#each column.rows as row (row.label)}
           <div class="row">
             <span class="label" title={row.label}>{row.label}</span>
             <span class="track">
-              <span class="bar" class:refused={row.refused} style="width: {max ? (row.count / max) * 100 : 0}%"></span>
+              <span
+                class="bar"
+                style="width: {max ? (row.count / max) * 100 : 0}%; {row.ink ? `background: ${row.ink};` : ''}"
+              ></span>
             </span>
             <span class="count">{row.count}</span>
           </div>
@@ -160,15 +226,38 @@
     background: var(--chart-traffic);
   }
 
-  .bar.refused {
-    background: var(--chart-refused);
-  }
-
   .count {
     flex: none;
     font-family: var(--font-mono);
     font-size: 11px;
     font-variant-numeric: tabular-nums;
     color: var(--fg);
+  }
+
+  /* The proportion mark (#732): one track shared by every row instead
+     of one track per row, each segment's width its share of the
+     column's own total -- "two totals in proportion", not two rankings
+     each measured against itself. */
+  .split-track {
+    display: flex;
+    gap: 2px;
+    height: 6px;
+    border-radius: 3px;
+    overflow: hidden;
+    background: var(--bg-hover);
+    margin-bottom: 6px;
+  }
+
+  .segment {
+    display: block;
+    height: 100%;
+  }
+
+  .row.split-row {
+    justify-content: space-between;
+  }
+
+  .row.split-row .label {
+    max-width: 70%;
   }
 </style>
