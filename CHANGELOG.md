@@ -53,6 +53,37 @@ rewritten.
   its own total. Per-action detail lives on in the register and the
   table, and the cursor's `aria-valuetext` still reads every action's
   figure.
+- **The topography map grows a floor, two health dials, an aggregate bar
+  per card, and node information cards** (#648). An altitude slider at
+  the foot of the map steps between clients, services, zones and survey.
+  Two health dials sit top-right for flags and watchers, and clicking
+  either one takes you straight to the docket. Each card also carries
+  one aggregate bar, clicking through to the watchlist or to a
+  pre-filtered view of flags depending on which card it belongs to. And
+  a node's information card now opens the same way wherever that node
+  appears on the map, rather than only from one place.
+- **Every column on the docket now sorts and filters, across all three
+  tabs** (#649). Flags, watchlist and audit log all gained the same
+  behaviour: click a column to sort by it, click again to reverse, and a
+  quiet filter sits under the heading. Flags and watchlist are card
+  grids rather than tables, so there the same sorting and filtering
+  appears as a toolbar over the same columns instead of column heads
+  themselves. Filtering the flags list also renders it flat rather than
+  grouped by campaign, so a match is never left hidden inside a
+  collapsed group it happens to belong to.
+- **A brand-new instance now has a first-run journey, choreographed door
+  to wizard** (#646). Where an empty instance used to greet you with the
+  ordinary sign-in form, it now opens on a door that offers Enter instead
+  of a login box. From there the journey walks you through creating the
+  first admin account, an attach step that shows the two commands the
+  router needs, a held beat while that connection comes alive, and then
+  a choice: skip the tour and go straight to the wizard, or take a
+  card-by-card tour of the deck first. Most of what it walks through
+  already existed as its own surface -- the journey is what strings them
+  together into one continuous first hour, rather than adding a page of
+  its own. Either path leads to the same place, the setup wizard, which
+  now finishes by taking you to the fall, its landing page, instead of
+  leaving you somewhere else.
 - **Flags carry an operator's verdict** (#638). Every flag now offers
   Expected, Noise and Real, and the old Clear demotes to a secondary
   affordance beside them. Expected means legitimate traffic; Noise means
@@ -104,8 +135,42 @@ rewritten.
   evaluated against every event instead. `POST /api/definitions`'s
   refusal of `intent=detection` is gone, since it is no longer true.
 
+### Changed
+
+- **The live table now shows the ratified nine columns, and NAT stopped
+  being one of them** (#644). Stream's table is rebuilt around time
+  (with milliseconds), action, source name, source address, destination
+  name, destination address, proto, port and rule -- a name now carries
+  the identity and its address sits dim and right-aligned beside it, and
+  an unnamed external address shows bare, with its country code standing
+  in for a name it doesn't have. NAT is no longer a column of its own; a
+  NAT'd row carries an action badge instead. Rows have gone quiet too --
+  no more full-row colour washes, a subtle band instead -- and the
+  per-cell information buttons are gone, with that same detail now
+  living in the row's own detail sheet, opened from the time cell and
+  reachable by keyboard. The filter bar folds away behind a quiet
+  trigger too, rather than sitting permanently open.
+- **Entities and Settings join the deck, and Fleet's routers move in with
+  them** (#647). The card deck now runs to seven: Entities and Settings
+  take the two final places, and Fleet's routers table folds into
+  Entities rather than staying a page of its own -- Fleet stops being
+  where you go for them. The account menu, now that each of those has a
+  home of its own, slims down to theme, Run setup, Sign out, and About
+  and licence.
+- **The fall's port spectra are stroke-only waves now, not filled
+  triangles** (#650). Each carrier's live-spectrum peak used to draw as
+  a small filled triangle; it now draws as a single stroked wave, with
+  no fill and no baseline, so the spectrum strip reads as a line rather
+  than a row of solid tents.
+
 ### Fixed
 
+- **Finishing the setup wizard could land you on a dead view** (#646).
+  Its exit still pointed at the stream-as-landing-page arrangement that
+  #616 retired once the fall took over as the real landing page, so
+  every wizard exit -- not only the new journey's -- closed onto a view
+  that no longer served that role. It now closes onto the fall instead,
+  on every path into the wizard.
 - **Watchlist matching against a real router could silently see nothing**
   (#614). Against a real RouterOS device, several firewall lines logged
   close together in a burst -- an input line and the forward/NAT line
