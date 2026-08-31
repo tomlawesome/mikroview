@@ -73,7 +73,7 @@
   <div class="clear-row">
     {#if tab === 'flags' && flagsState.activeCount > 0 && canEdit}
       <button class="bubble" class:armed disabled={busy} onclick={onClearAll} title="They keep their place in the audit log">
-        {armed ? 'confirm' : `clear all ${flagsState.activeCount}`}
+        {armed ? 'confirm' : 'clear all'}
       </button>
     {/if}
     {#if error}<span class="err" role="alert">{error}</span>{/if}
