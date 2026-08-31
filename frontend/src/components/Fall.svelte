@@ -32,8 +32,7 @@
   import { lookupPort } from '../lib/commonPorts'
   import type { ClientEvent, Flag } from '../lib/types'
   import ConnectionIndicator from './ConnectionIndicator.svelte'
-  import UptimeBadge from './UptimeBadge.svelte'
-  import DeviceStatus from './DeviceStatus.svelte'
+  import AlarmCluster from './AlarmCluster.svelte'
 
   // The key is reference, not chrome: hidden until asked for.
   let showKey = $state(false)
@@ -599,23 +598,9 @@
 <div class="fall">
   <div class="bar">
     <span class="wm">MIKRO<em>VIEW</em></span>
-    <h1>The fall</h1>
-    <ConnectionIndicator />
-    <UptimeBadge />
-    <DeviceStatus />
-    <span class="attention" aria-live="polite">
-      {#each flagChips.slice(0, 3) as f, fi (fi)}
-        <button type="button" class="att alarm" onclick={() => (appState.view = 'flags')}>
-          <i></i>{f.type.replace(/_/g, ' ').toUpperCase()}{f.n > 1 ? ` ×${f.n}` : ''} — {f.hm}
-        </button>
-      {/each}
-      {#if darkBands.length > 0}
-        <button type="button" class="att dark" onclick={() => openInStream(darkBands[0])}>
-          <i></i>{darkBands.length} dark boundar{darkBands.length === 1 ? 'y' : 'ies'} — nothing logged
-        </button>
-      {:else if isCalm}
-        <span class="att calm"><i></i>every band sounds like itself</span>
-      {/if}
+    <span class="scname">
+      <h1>The fall</h1>
+      <span class="epi">a band per boundary · a carrier per port</span>
     </span>
     <div class="span-control" role="group" aria-label="Time span">
       <span class="lab">SPAN</span>
@@ -625,8 +610,31 @@
         </button>
       {/each}
     </div>
-    <AccountMenu />
+    <div class="status-cluster">
+      <ConnectionIndicator />
+      <AlarmCluster />
+      <AccountMenu />
+    </div>
   </div>
+
+  <!-- Below the bar, not riding it (#683, round 29: the bar carries only
+       wordmark · name · strap · the page's own control · LIVE·rate ·
+       ⚑ · ◉○ · account -- these per-boundary alerts are the fall's own
+       content, same as .fallwrap's fall-head in the mockup). -->
+  <span class="attention" aria-live="polite">
+    {#each flagChips.slice(0, 3) as f, fi (fi)}
+      <button type="button" class="att alarm" onclick={() => (appState.view = 'flags')}>
+        <i></i>{f.type.replace(/_/g, ' ').toUpperCase()}{f.n > 1 ? ` ×${f.n}` : ''} — {f.hm}
+      </button>
+    {/each}
+    {#if darkBands.length > 0}
+      <button type="button" class="att dark" onclick={() => openInStream(darkBands[0])}>
+        <i></i>{darkBands.length} dark boundar{darkBands.length === 1 ? 'y' : 'ies'} — nothing logged
+      </button>
+    {:else if isCalm}
+      <span class="att calm"><i></i>every band sounds like itself</span>
+    {/if}
+  </span>
 
   {#if fallState.loading}
     <p class="state-msg">Reading pushed firewall rules…</p>
@@ -901,6 +909,22 @@
     margin: 0;
     color: var(--o-ink);
   }
+  .scname {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+  }
+  .epi {
+    font-weight: 400;
+    color: var(--o-ink3);
+    font-size: 12px;
+  }
+  .status-cluster {
+    margin-left: auto;
+    display: flex;
+    gap: 16px;
+    align-items: center;
+  }
   .wm {
     font-size: 13px;
     font-weight: 800;
@@ -912,7 +936,6 @@
     font-style: normal;
   }
   .span-control {
-    margin-left: auto;
     display: flex;
     gap: 2px;
     border-bottom: 1px solid var(--o-grid2);
