@@ -37,6 +37,23 @@ rewritten.
   `GET /api/devices/macs`; `GET /api/devices` gained each device's
   reported RouterOS version. Lane reuses the topography's own
   boundary-derived zones unchanged.
+- **Entities gets a tab strip back -- hosts, rules and ports** (#681).
+  Naming a rule or a port in context turned out to have nowhere to
+  happen: a rule the router has pushed but that has never fired has no
+  row anywhere to click. The owner ruled naming-in-context out and asked
+  for a tab strip over the one table instead, reusing the docket's own
+  three-tab vocabulary rather than new furniture. hosts is the ratified
+  table exactly as #675 built it, and stays the default. rules lists
+  every rule in a router's pushed filter-rule table -- name, chain,
+  action, last fired -- whether or not it has ever fired; a never-fired
+  rule reads as "has not fired," never as a blank. That join needed a
+  rule's log-prefix decoded into the slug an event from it would carry
+  (`ruleLabelFromLogPrefix`, `lib/routerLookup.svelte.ts`, the inverse of
+  the router-lookup popup's own `prefixMatchesLabel`), since `GET
+  /api/rules` only ever holds a rule once it has fired. ports lists every
+  port seen in traffic plus any already named. Inline rename is one path
+  across all three tabs, same store, same `EntityType`, same
+  Enter-saves/Esc-cancels/blur-saves behaviour #675 built.
 - **Per-hour top talker and top port, answered by the ring itself**
   (#644). `Store.HourTops` computes each axis minute's winning source
   and destination port from the events the ring actually holds, under
