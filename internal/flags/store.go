@@ -152,15 +152,69 @@ const flagTimeSeriesMinutes = 60
 //     (capped, see internal/detect's maxEvidenceHosts).
 //   - NAT: repeated_drops' triggering event's NAT translation info,
 //     when present.
+//   - Pairs/PairsTotal/PairsTotalIsFloor (#654): critical_port's distinct
+//     (destination host, destination port) combinations actually seen
+//     together, capped for display at internal/engine's maxEvidencePairs
+//     (== maxEvidencePorts, see that constant's own doc comment for why).
+//     Ports and Hosts above are independent sets -- crossing them implies
+//     every combination was seen, which for a detector recording many of
+//     each is almost never true (this is the #641 watchlist-draft problem
+//     the issue names: 20 hosts x 50 ports reading as up to 1000
+//     permitted connections a device never made). Pairs is what a caller
+//     should build a "permit exactly this" draft from instead of
+//     Ports x Hosts. PairsTotal is the distinct-pair count before the
+//     display cap, present whenever Pairs is truncated by it, so a
+//     caller can say "50 of 214 pairs" rather than showing 50 and
+//     reading as complete -- the same "never silently truncate" rule
+//     #379 already established for a wrong Detail sentence, applied
+//     here to a structured list instead. That count itself is bounded
+//     for the same resource-safety reason the display list is
+//     (internal/engine's maxEvidencePairsTracked -- attacker-controlled
+//     traffic must never size an unbounded map), so past that second,
+//     larger ceiling PairsTotal stops being exact and PairsTotalIsFloor
+//     is true; a caller must then render it as a lower bound ("50 of
+//     200+"), never as the precise-looking flat number it would
+//     otherwise look like.
+//   - SrcMAC (#654): the triggering event's source MAC address, present
+//     only where the detector declared it (currently port_scan and
+//     repeated_drops -- see internal/engine's EvidenceMAC) and the
+//     source was a local device. A flag identifying its subject only by
+//     IP silently stops matching that device the moment its DHCP lease
+//     changes; SrcMAC lets a consumer key on the same MAC-preferred
+//     identity matchlog.Identity already uses instead.
 //
 // Zero value (all fields empty/nil) is valid and common -- most
-// detectors (critical_port, activity_spike, rule_spike, global_spike,
-// stale_rule, unexpected_mail_sender) have nothing here at all, since
-// their Detail string already says everything there is to say.
+// detectors (activity_spike, rule_spike, global_spike, stale_rule,
+// unexpected_mail_sender) have nothing here at all, since their Detail
+// string already says everything there is to say.
+//
+// Pairs, PairsTotal, PairsTotalIsFloor and SrcMAC are additive fields,
+// following Provisional's own precedent on Flag (see that field's doc
+// comment): they round-trip through JSON like every other field here,
+// need no migration, and are simply absent (the Go zero value) on a flag
+// persisted before #654 -- there is nothing to backfill, since Evidence
+// is always overwritten wholesale on a re-fire (see add(), "f.Evidence =
+// evidence") rather than accumulated, so no existing flag's evidence is
+// retroactively wrong for lacking values #654 didn't exist to record yet.
 type Evidence struct {
-	Ports []int    `json:"ports,omitempty"`
-	Hosts []string `json:"hosts,omitempty"`
-	NAT   *NATInfo `json:"nat,omitempty"`
+	Ports             []int      `json:"ports,omitempty"`
+	Hosts             []string   `json:"hosts,omitempty"`
+	NAT               *NATInfo   `json:"nat,omitempty"`
+	Pairs             []HostPort `json:"pairs,omitempty"`
+	PairsTotal        int        `json:"pairsTotal,omitempty"`
+	PairsTotalIsFloor bool       `json:"pairsTotalIsFloor,omitempty"`
+	SrcMAC            string     `json:"srcMac,omitempty"`
+}
+
+// HostPort mirrors internal/engine.HostPort's shape (one destination
+// host/port combination actually observed together) -- kept as this
+// package's own type rather than importing the engine one, the same
+// reason NATInfo just below is its own copy rather than
+// internal/engine.NATInfo: the store's persisted shape belongs to this
+// package, not to whichever evaluator happens to produce it today.
+type HostPort struct {
+	Host string `json:"host"`
+	Port int    `json:"port"`
 }
 
 // NATInfo is one event's NAT translation detail (store.Event's

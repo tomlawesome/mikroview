@@ -604,9 +604,13 @@ func TestAddWithDetailPersistsEvidenceAndCountry(t *testing.T) {
 	now := time.Now()
 
 	evidence := Evidence{
-		Ports: []int{22, 3389},
-		Hosts: []string{"192.168.1.5"},
-		NAT:   &NATInfo{IP: "10.0.0.5", Port: 8080, Raw: "NAT (10.0.0.5:8080->192.168.1.5:80)"},
+		Ports:             []int{22, 3389},
+		Hosts:             []string{"192.168.1.5"},
+		NAT:               &NATInfo{IP: "10.0.0.5", Port: 8080, Raw: "NAT (10.0.0.5:8080->192.168.1.5:80)"},
+		Pairs:             []HostPort{{Host: "192.168.1.5", Port: 22}},
+		PairsTotal:        214,
+		PairsTotalIsFloor: true,
+		SrcMAC:            "aa:bb:cc:dd:ee:ff",
 	}
 	s.AddWithDetail(TypePortScan, "203.0.113.9", "detail", 42, evidence, "US", now)
 
@@ -620,12 +624,33 @@ func TestAddWithDetailPersistsEvidenceAndCountry(t *testing.T) {
 	if f.Evidence.NAT.IP != "10.0.0.5" || f.Evidence.NAT.Port != 8080 {
 		t.Errorf("expected NAT detail to round-trip, got %+v", f.Evidence.NAT)
 	}
+	// #654: Pairs/PairsTotal/PairsTotalIsFloor/SrcMAC round-trip the same
+	// way every other Evidence field above already does -- additive
+	// fields, no special handling anywhere in the store.
+	if len(f.Evidence.Pairs) != 1 || f.Evidence.Pairs[0] != (HostPort{Host: "192.168.1.5", Port: 22}) {
+		t.Errorf("expected Pairs to be persisted, got %+v", f.Evidence.Pairs)
+	}
+	if f.Evidence.PairsTotal != 214 {
+		t.Errorf("expected PairsTotal to be persisted, got %d", f.Evidence.PairsTotal)
+	}
+	if !f.Evidence.PairsTotalIsFloor {
+		t.Error("expected PairsTotalIsFloor to be persisted as true")
+	}
+	if f.Evidence.SrcMAC != "aa:bb:cc:dd:ee:ff" {
+		t.Errorf("expected SrcMAC to be persisted, got %q", f.Evidence.SrcMAC)
+	}
 
-	// A plain re-fire recomputes evidence fresh, same as Detail already does.
+	// A plain re-fire recomputes evidence fresh, same as Detail already
+	// does -- #654's own "prospective only" requirement: Pairs/SrcMAC
+	// from the earlier call must not linger once a re-fire's evidence
+	// doesn't carry them.
 	s.AddWithDetail(TypePortScan, "203.0.113.9", "detail", 42, Evidence{Ports: []int{22}}, "US", now.Add(time.Second))
 	f = s.List()[0]
 	if len(f.Evidence.Ports) != 1 || len(f.Evidence.Hosts) != 0 {
 		t.Errorf("expected evidence to reflect the latest call, got %+v", f.Evidence)
+	}
+	if len(f.Evidence.Pairs) != 0 || f.Evidence.PairsTotal != 0 || f.Evidence.PairsTotalIsFloor || f.Evidence.SrcMAC != "" {
+		t.Errorf("expected Pairs/PairsTotal/PairsTotalIsFloor/SrcMAC to be overwritten (not accumulated) by the re-fire, got %+v", f.Evidence)
 	}
 }
 

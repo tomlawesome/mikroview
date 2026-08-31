@@ -613,3 +613,11 @@ describe('opening a flag drawer from the topography dial (#724)', () => {
     expect(document.querySelector('tr.drawer')).toBeNull()
   })
 })
+
+// #654's evidence panel is not tested here any more, and that is
+// deliberate rather than an oversight. Round 30's drawer shows the
+// generated narrative, the episode's shape and the matched lines -- not
+// the raw evidence the old panel listed -- so the host:port pairs #654
+// added have no surface in this component to assert against. The
+// backend work is untouched and the grouping logic keeps its own tests
+// in lib/evidencePairs.test.ts. The missing home is recorded on #691.

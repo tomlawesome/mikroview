@@ -252,6 +252,30 @@ func TestShippedPortScanScope_Classification(t *testing.T) {
 	}
 }
 
+// TestShippedPortScan_EvidenceCarriesLocalSourceMAC is #654's pin for
+// port_scan's new EvidenceMAC declaration: a scanning source with no
+// classification restriction is at least as plausibly a local device as
+// an external one, so its MAC (when RouterOS logged one) is carried
+// through to the raised flag.
+func TestShippedPortScan_EvidenceCarriesLocalSourceMAC(t *testing.T) {
+	fs := newTestFlagsStore(t)
+	dd := newShippedPortScanDefinition(t, fs, Scope{})
+	now := time.Now()
+
+	for port := 1; port <= 15; port++ {
+		e := psEvt("192.168.1.77", port, now.Add(time.Duration(port)*time.Second))
+		e.SrcMAC = "aa:bb:cc:dd:ee:ff"
+		dd.Evaluate(e)
+	}
+	f := psFlagOfType(fs)
+	if f == nil {
+		t.Fatal("expected a flag at threshold")
+	}
+	if f.Evidence.SrcMAC != "aa:bb:cc:dd:ee:ff" {
+		t.Errorf("Evidence.SrcMAC = %q, want the local source's MAC", f.Evidence.SrcMAC)
+	}
+}
+
 // ---------------------------------------------------------------------------
 // critical_port (issue #405)
 // ---------------------------------------------------------------------------
@@ -420,6 +444,39 @@ func TestShippedCriticalPort_DetailNamesTheSetOfPortsTouched(t *testing.T) {
 	}
 	if fmt.Sprint(f.Evidence.Ports) != fmt.Sprint([]int{22, 23}) {
 		t.Errorf("Evidence.Ports = %v, want [22 23]", f.Evidence.Ports)
+	}
+}
+
+// TestShippedCriticalPort_EvidenceCapturesDestinationPairs is #654's own
+// motivating scenario for critical_port: one external source hitting two
+// critical ports across two different internal hosts must not let
+// Evidence.Ports x Evidence.Hosts be read as "every combination of the
+// two was tried" -- only Evidence.Pairs states what was actually seen.
+func TestShippedCriticalPort_EvidenceCapturesDestinationPairs(t *testing.T) {
+	fs := newTestFlagsStore(t)
+	dd := newShippedCriticalPortDefinition(t, fs, []int{22, 23}, 4, 5*time.Minute, Scope{})
+	ip := "198.51.100.9"
+	t0 := time.Now()
+
+	evt := func(dstIP string, dstPort int, at time.Time) store.Event {
+		return store.Event{SrcIP: ip, DstIP: dstIP, DstPort: dstPort, ConnState: "new", ReceivedAt: at}
+	}
+	// .10:22 and .11:23 are each hit once; .10:23 is never tried at all --
+	// the pair that would appear if a caller naively crossed Ports
+	// {22,23} against a Hosts set {.10,.11}.
+	dd.Evaluate(evt("192.168.1.10", 22, t0))
+	dd.Evaluate(evt("192.168.1.10", 22, t0.Add(time.Second)))
+	dd.Evaluate(evt("192.168.1.11", 23, t0.Add(2*time.Second)))
+	dd.Evaluate(evt("192.168.1.11", 23, t0.Add(3*time.Second)))
+
+	f := cpFlagOfType(fs)
+	if f == nil {
+		t.Fatal("expected a flag once the combined count reaches the threshold")
+	}
+	want := []flags.HostPort{{Host: "192.168.1.10", Port: 22}, {Host: "192.168.1.11", Port: 23}}
+	if fmt.Sprint(f.Evidence.Pairs) != fmt.Sprint(want) {
+		t.Errorf("Evidence.Pairs = %v, want %v (never {192.168.1.10, 23} or {192.168.1.11, 22}, which were never tried)",
+			f.Evidence.Pairs, want)
 	}
 }
 
@@ -843,6 +900,31 @@ func TestShippedRepeatedDrops_EvidenceCapturesNAT(t *testing.T) {
 	}
 	if f.Evidence.NAT.IP != "10.0.0.5" || f.Evidence.NAT.Port != 51820 || f.Evidence.NAT.Raw != "dst-nat(10.0.0.5:51820)" {
 		t.Errorf("Evidence.NAT = %+v, want {IP:10.0.0.5 Port:51820 Raw:dst-nat(10.0.0.5:51820)}", f.Evidence.NAT)
+	}
+}
+
+// TestShippedRepeatedDrops_EvidenceCarriesLocalSourceMAC is #654's pin
+// for repeated_drops' new EvidenceMAC declaration: the source is
+// unrestricted by classification (only the destination must be
+// internal), so a local device repeatedly hitting another local host's
+// closed port has its MAC carried through, exactly like port_scan's own
+// pin above.
+func TestShippedRepeatedDrops_EvidenceCarriesLocalSourceMAC(t *testing.T) {
+	fs := newTestFlagsStore(t)
+	dd := newShippedRepeatedDropsDefinition(t, fs, 2, 15*time.Minute, Scope{})
+	t0 := time.Now()
+
+	for i := 0; i < 2; i++ {
+		e := rdEvt("192.168.1.50", "192.168.1.1", 8080, t0.Add(time.Duration(i)*time.Minute))
+		e.SrcMAC = "11:22:33:44:55:66"
+		dd.Evaluate(e)
+	}
+	f := rdFlagOfType(fs)
+	if f == nil {
+		t.Fatal("expected a flag")
+	}
+	if f.Evidence.SrcMAC != "11:22:33:44:55:66" {
+		t.Errorf("Evidence.SrcMAC = %q, want the local source's MAC", f.Evidence.SrcMAC)
 	}
 }
 
