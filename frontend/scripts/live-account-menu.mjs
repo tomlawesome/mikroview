@@ -19,8 +19,7 @@
 // opens one overlay, feeds nothing, and deletes the viewer account it
 // creates, so nothing downstream inherits anything from it.
 
-import { chromium } from 'playwright'
-import { session, check, responsive, openAccountMenu, done } from './live-browser.mjs'
+import { session, check, responsive, openAccountMenu, done, launchBrowser } from './live-browser.mjs'
 
 const URL_BASE = process.env.MV_URL
 
@@ -85,7 +84,7 @@ const createRes = await page.request.post(`${URL_BASE}/api/auth/users`, {
 })
 check(createRes.status() === 201, `a viewer account is created (${createRes.status()})`)
 
-const browser = await chromium.launch()
+const browser = await launchBrowser()
 const viewerCtx = await browser.newContext({ ignoreHTTPSErrors: true })
 const viewerPage = await viewerCtx.newPage()
 await viewerPage.goto(URL_BASE, { waitUntil: 'networkidle' })

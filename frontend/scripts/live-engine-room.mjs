@@ -22,8 +22,7 @@
 //     ruling of 2026-08-24, so a viewer issuing it would be a page that
 //     loads and immediately 403s.
 
-import { chromium } from 'playwright'
-import { session, feedSyslog, check, done, goTo } from './live-browser.mjs'
+import { session, feedSyslog, check, done, goTo, launchBrowser } from './live-browser.mjs'
 
 const URL_BASE = process.env.MV_URL
 
@@ -185,7 +184,7 @@ check(
   'the people door marks the new account as read-only',
 )
 
-const browser = await chromium.launch()
+const browser = await launchBrowser()
 const viewerCtx = await browser.newContext({ ignoreHTTPSErrors: true })
 const viewerPage = await viewerCtx.newPage()
 
