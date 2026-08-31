@@ -684,7 +684,15 @@
   <!-- Below the bar, not riding it (#683, round 29: the bar carries only
        wordmark · name · strap · the page's own control · LIVE·rate ·
        ⚑ · ◉○ · account -- these per-boundary alerts are the fall's own
-       content, same as .fallwrap's fall-head in the mockup). -->
+       content, same as .fallwrap's fall-head in the mockup).
+
+       Centred, not left-aligned: the mockup's own `.fall-head` example
+       packs its two chips against the left edge, but the owner asked
+       for the row to sit centred on the scene and fan outward in both
+       directions as chips are added, rather than growing rightward from
+       a fixed left start -- ratified in session on 2026-08-31, beyond
+       what the mockup itself shows. `justify-content: center` on this
+       row (below) is that instruction, not a mockup value. -->
   <span class="attention" aria-live="polite">
     {#each flagChips.slice(0, 3) as f, fi (fi)}
       <button type="button" class="att alarm" onclick={() => (appState.view = 'flags')}>
@@ -913,7 +921,15 @@
         <!-- ══ flag horizons: the line through every band ══ -->
         {#each flagHorizons as f, fi (fi)}
           <line class="horizon" x1={RAIL} y1={f.y} x2={rig.width - 14} y2={f.y} />
-          <text class="tlab flag-t" x={RAIL - 14} y={f.y + 3} text-anchor="end">{f.hm} ◉</text>
+          <!-- Round 30 draws every gutter time in the same quiet dim ink
+               (the-whole.html #s2's `.gut`) -- no per-minute colouring
+               and no mark beside a flagged minute's label, even though
+               the horizon line through the bands still shows where it
+               fired. This label used to ride `.flag-t` (alarm-coloured,
+               bold, with a trailing ◉) as a leftover of the pre-round-30
+               build; that read as if some minutes were flagged red/pink
+               and others weren't, which round 30 never draws. -->
+          <text class="tlab" x={RAIL - 14} y={f.y + 3} text-anchor="end">{f.hm}</text>
         {/each}
 
         <!-- ══ the NOW edge ══ -->
@@ -988,58 +1004,76 @@
     gap: 16px;
     align-items: center;
   }
+  /* Round 30's `.wordmark`, ported field-for-field (same fix as
+     SceneBar.svelte's `.wm`/`.wm em`, #683/#700): MIKRO in the bar's own
+     near-white ink, not dimmed, with VIEW carrying the accent -- this
+     bar draws its own wordmark instead of going through SceneBar (that
+     is how it missed the shared fix the first time), so the values are
+     restated here rather than dimly wide-tracked. */
   .wm {
-    font-size: 13px;
+    font-size: 15px;
     font-weight: 800;
-    letter-spacing: 0.22em;
-    color: var(--o-ink3);
+    letter-spacing: 0.04em;
+    color: var(--fg);
   }
   .wm em {
-    color: var(--now);
+    color: var(--accent);
     font-style: normal;
   }
   .span-control {
     display: flex;
     gap: 2px;
-    border-bottom: 1px solid var(--o-grid2);
-    padding-bottom: 5px;
   }
+  /* Round 30's `.spans`/`.spans span`/`.spans .on` (the-whole.html #s2):
+     a compact quiet cluster, the active one lifted only by a subtle
+     filled pill -- not the oversized, wide-spaced buttons with a heavy
+     amber underline this bar drew before (same class of miss as the
+     wordmark above: its own control, not routed through the shared
+     switcher). */
   .rng {
     background: transparent;
-    border: none;
-    font-size: 13.5px;
-    font-weight: 550;
+    border: 1px solid transparent;
+    font: 10.5px var(--font-mono);
     color: var(--o-ink3);
-    padding: 3px 12px;
+    padding: 3px 9px;
+    border-radius: 6px;
     cursor: pointer;
-    font-family: var(--font-mono);
   }
   .rng:hover {
     color: var(--o-ink);
   }
   .rng.on {
     color: var(--o-ink);
-    border-bottom: 2px solid var(--now);
-    margin-bottom: -7px;
+    background: var(--bg-elevated);
+    border-color: var(--border);
   }
 
   /* ── attention chips, riding the bar ─────────────────────────────── */
+  /* Centred and fanning outward as chips are added (owner, ratified
+     2026-08-31 -- see the template comment above): a full-width flex
+     row with justify-content: center, not the inline/left-packed row
+     the mockup's own two-chip example draws. */
   .attention {
-    display: inline-flex;
-    gap: 8px;
+    display: flex;
+    justify-content: center;
+    gap: 10px;
     align-items: center;
     flex-wrap: wrap;
   }
+  /* Sized to the mockup's `.fall-chip` (the-whole.html #s2): font,
+     padding and pill height brought down from the oversized, loosely
+     spaced pills this bar drew before (owner: "comically oversized"). */
   .att {
     display: inline-flex;
     align-items: center;
     gap: 7px;
-    font-size: 12.5px;
-    font-weight: 650;
+    font-size: 10.5px;
+    font-weight: 600;
+    letter-spacing: 0.05em;
     font-family: inherit;
     border: 1px solid var(--o-grid2);
-    border-radius: 999px;
-    padding: 4px 13px;
+    border-radius: 12px;
+    padding: 3px 12px;
     color: var(--o-ink2);
     background: transparent;
   }
@@ -1123,10 +1157,6 @@
   }
   .tlab.now-t {
     fill: var(--now);
-  }
-  .tlab.flag-t {
-    fill: var(--o-drop);
-    font-weight: 700;
   }
   .blab {
     fill: var(--o-ink);
