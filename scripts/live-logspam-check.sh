@@ -19,6 +19,7 @@ set -euo pipefail
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO"
 . "$REPO/scripts/live-stores.sh"
+. "$REPO/scripts/live-slot.sh"
 
 DIR="$(mktemp -d)"
 cleanup() {
@@ -27,8 +28,14 @@ cleanup() {
 }
 trap cleanup EXIT
 
-HTTP_PORT=19821
-SYSLOG_PORT=19822
+# Ports come from the shared standalone allocator (live-slot.sh), not a
+# hardcoded value: those used to sit inside live-env.sh's per-checkout
+# band and collide with it (#660). SYSLOG_PORT is this script's name for
+# what the allocator calls the syslog-TLS port.
+HTTP_PORT=$MV_STANDALONE_HTTP_PORT
+SYSLOG_PORT=$MV_STANDALONE_SYSLOG_TLS_PORT
+mv_require_free_port "$HTTP_PORT" "the log-throttling check's server"
+mv_require_free_port "$SYSLOG_PORT" "the log-throttling check's syslog-TLS listener"
 
 cat > "$DIR/cfg.yaml" <<EOF
 listen: {http: "127.0.0.1:$HTTP_PORT", httpRedirect: "", syslogTls: "127.0.0.1:$SYSLOG_PORT"}

@@ -518,12 +518,16 @@ export async function logout(): Promise<string | null> {
   return (await res.text()) || `logout: ${res.status}`
 }
 
-// No role argument: mikroview has one admin, and the server refuses a
-// request for a second (see auth.ErrSingleAdmin). Moving the role is
-// CLI-only and recovery-key gated (`mikroview -transfer-admin`), so
-// there is nothing for this call to choose between.
-export async function createUser(username: string, password: string): Promise<string | null> {
-  const res = await postJSON('/api/auth/users', { username, password, role: 'user' })
+// role chooses between the two tiers this call can create (#653).
+// Admin is still not among them: mikroview has one, and the server
+// refuses a request for a second (see auth.ErrSingleAdmin). Moving that
+// role is CLI-only and recovery-key gated (`mikroview -transfer-admin`).
+export async function createUser(
+  username: string,
+  password: string,
+  role: 'user' | 'viewer' = 'user',
+): Promise<string | null> {
+  const res = await postJSON('/api/auth/users', { username, password, role })
   if (res.ok) return null
   return (await res.text()) || `createUser: ${res.status}`
 }

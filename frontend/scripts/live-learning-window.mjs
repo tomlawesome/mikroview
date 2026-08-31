@@ -164,8 +164,12 @@ await page.waitForFunction(
   null,
   { timeout: 5000 },
 )
-await page.click('.path .station:has-text("The watchers") .shead')
-await page.waitForSelector('.st-open .bench .row')
+// #633 moved the bench: it is no longer a station on a path, it opens
+// from the detection group's own "tune..." link. #661 -- this selector
+// outlived the markup and the scenario timed out on it for both the
+// branch that changed the page and dev itself.
+await page.click('.olink:has-text("tune")')
+await page.waitForSelector('.bench .row')
 
 // The bench only lists detection definitions this binary can build --
 // the same filter detectorSettings.svelte.ts applies -- so that is the
@@ -179,7 +183,7 @@ let sawManyKeyLearning = false
 let sawFloorlessCollapse = false
 
 for (const d of bench) {
-  const row = page.locator(`.st-open .bench .row:has(.id:text-is("${d.id}"))`)
+  const row = page.locator(`.bench .row:has(.id:text-is("${d.id}"))`)
   const rowCount = await row.count()
   check(rowCount === 1, `exactly one row renders for ${d.id} (${rowCount})`)
 

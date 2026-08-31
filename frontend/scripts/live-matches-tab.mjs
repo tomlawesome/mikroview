@@ -262,7 +262,7 @@ check(expandedText.includes('Permitted'), 'the expanded entry shows its own deta
 const VIEWER_USER = 'live-viewer-584-matches'
 const VIEWER_PASS = 'live-viewer-584-matches-password'
 
-const createRes = await api('POST', '/api/auth/users', { username: VIEWER_USER, password: VIEWER_PASS, role: 'user' })
+const createRes = await api('POST', '/api/auth/users', { username: VIEWER_USER, password: VIEWER_PASS, role: 'viewer' })
 check(createRes.status === 201, `a viewer account is created (${createRes.status})`)
 
 const browser = await chromium.launch()

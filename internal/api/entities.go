@@ -21,13 +21,14 @@ type entityRequest struct {
 	Tags  []string `json:"tags"`
 }
 
-// handleEntitiesList serves every persisted entity -- admin-gated the
-// same way user management is (see callerIsAdmin's doc comment):
-// aliases/tags are administrative metadata about the network, not
-// something every signed-in viewer needs to see or edit.
+// handleEntitiesList serves every persisted entity -- user-tier (#653),
+// the same tier as the rest of the "watchers" bench definitions/
+// suggestions surface: aliases/tags are administrative metadata about the
+// network, which a user may see and edit, but a viewer -- who may not
+// change anything that affects the instance -- may not.
 func (s *Server) handleEntitiesList(w http.ResponseWriter, r *http.Request) {
-	if !callerIsAdmin(r) {
-		http.Error(w, "admin role required", http.StatusForbidden)
+	if !callerIsUser(r) {
+		http.Error(w, "user role required", http.StatusForbidden)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"entities": s.Entities.List()})
@@ -35,9 +36,10 @@ func (s *Server) handleEntitiesList(w http.ResponseWriter, r *http.Request) {
 
 // handleEntitiesUpsert creates a new entity, or replaces an existing one
 // in place, identified by (type, key) -- see entities.Store.Upsert.
+// User-tier (#653), same as handleEntitiesList.
 func (s *Server) handleEntitiesUpsert(w http.ResponseWriter, r *http.Request) {
-	if !callerIsAdmin(r) {
-		http.Error(w, "admin role required", http.StatusForbidden)
+	if !callerIsUser(r) {
+		http.Error(w, "user role required", http.StatusForbidden)
 		return
 	}
 
@@ -73,10 +75,10 @@ func (s *Server) handleEntitiesUpsert(w http.ResponseWriter, r *http.Request) {
 // supplied as a JSON body (like POST, not a path/query parameter) so an
 // arbitrary Key -- which might contain characters awkward to URL-encode
 // reliably across every client -- never has to round-trip through a URL
-// at all.
+// at all. User-tier (#653), same as handleEntitiesList.
 func (s *Server) handleEntitiesDelete(w http.ResponseWriter, r *http.Request) {
-	if !callerIsAdmin(r) {
-		http.Error(w, "admin role required", http.StatusForbidden)
+	if !callerIsUser(r) {
+		http.Error(w, "user role required", http.StatusForbidden)
 		return
 	}
 
