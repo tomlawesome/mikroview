@@ -615,14 +615,6 @@
     font-size: 12px;
   }
 
-  h2 {
-    margin: 0 0 10px;
-    font-size: 13px;
-    font-weight: 600;
-    color: var(--fg-muted);
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
-  }
 
   /* The ratified table (round 29, `#s7`'s `.panel table`): the record's
      own geometry and inks, with this app's theme variables standing in

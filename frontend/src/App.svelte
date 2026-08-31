@@ -2,7 +2,6 @@
   // SPDX-License-Identifier: AGPL-3.0-only
   import { appState } from './lib/state.svelte'
   import { liveSocket } from './lib/ws'
-  import { themeState } from './lib/theme.svelte'
   import { colorwayState } from './lib/colorway.svelte'
   import { flagsState } from './lib/flags.svelte'
   import { watchlistState } from './lib/watchlist.svelte'
@@ -99,10 +98,6 @@
   // internal/api/oidc.go's redirectWithSSOError).
   authState.consumeSSOErrorFromURL()
   authState.consumeSSOLinkedFromURL()
-
-  $effect(() => {
-    themeState.apply()
-  })
 
   $effect(() => {
     colorwayState.apply()
