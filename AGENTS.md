@@ -76,6 +76,14 @@ run it. A feature that needs mikroview itself to touch the network is
 either redesigned around pushed or passive data, or it belongs in a
 different tool.
 
+## Building a ratified design
+
+Port the mockup's markup and CSS; never build from an impression of it. Drawn
+but built differently is a **defect** -- build it as drawn. Something the app
+does that the design draws nowhere is a **gap** -- leave it off, keep its code,
+write it down, never invent a home mid-build. Fidelity work goes to a top-tier
+model.
+
 ## A stale origin/dev incident
 
 **This is not hypothetical.** In this same repo, a branch was cut with
