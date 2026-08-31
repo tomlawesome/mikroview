@@ -54,7 +54,10 @@ async function populatedMinutes(page) {
 
 feedSyslog(120, 'stream-interiors')
 
-const { page, consoleErrors } = await session({ waitForEvents: 60 })
+// unfoldFilter: false -- this scenario owns the fold. session() opens the
+// stream's filter for every other scenario, which would leave the two
+// checks below asserting against a box already unfolded (#667).
+const { page, consoleErrors } = await session({ waitForEvents: 60, unfoldFilter: false })
 
 const autoscrollBtn = page.locator(`${CARD} .scene-bar button:text-is("Autoscroll")`)
 const isAutoscrollOn = () => autoscrollBtn.evaluate((el) => el.classList.contains('active'))
