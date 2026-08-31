@@ -229,6 +229,21 @@ export async function openAccountMenu(page) {
 }
 
 /**
+ * unfoldStreamFilter opens the stream's folded filter box (#644, round
+ * 8), which replaced the always-open panel every scenario below was
+ * written against.
+ *
+ * Idempotent: the trigger only exists while the box is folded, so an
+ * already-open filter is a no-op rather than a click that closes it. The
+ * mobile drawer has its own trigger and no fold-trigger, hence the
+ * count guard rather than a bare click.
+ */
+export async function unfoldStreamFilter(page) {
+  const fold = page.locator('button.fold-trigger')
+  if (await fold.count()) await fold.click()
+}
+
+/**
  * goTo navigates by visible label exactly as an operator does. Deck
  * scenes go via the roll rail's name buttons; everything still living
  * in the account chip's menu ("Run setup…", ...) via its menu row of
@@ -243,7 +258,7 @@ export async function openAccountMenu(page) {
  * appState.view flips on click, but the smooth scroll runs ~700ms and a
  * scenario reading geometry mid-roll would see a card in flight.
  */
-export async function goTo(page, label) {
+export async function goTo(page, label, { unfold = true } = {}) {
   const scene = SCENES[label]
   if (scene) {
     await page.click(`.roll-rail button.rail-name:text-is("${scene.rail}")`)
@@ -263,6 +278,14 @@ export async function goTo(page, label) {
     if (scene.tab) {
       await page.click(`.card[data-card="${scene.card}"] [role="tab"]:has(.tlabel:text-is("${scene.tab}"))`)
     }
+    // Every arrival at the stream, not just the first. FilterBar's
+    // `expanded` is component-local $state(false), so the card comes back
+    // folded each time the deck rolls away and back -- it does not
+    // remember how the last visit left it. #662 unfolded once in
+    // session(), which left live-connection-states and live-waterfall
+    // timing out on `input.rule` after navigating away and returning
+    // (#667).
+    if (scene.card === 'live' && unfold) await unfoldStreamFilter(page)
   } else {
     await openAccountMenu(page)
     // Say which label is missing, and what the menu does hold, rather
@@ -285,7 +308,7 @@ export async function goTo(page, label) {
   }
 }
 
-export async function session({ waitForEvents = 0, dismissSetup = true, landing = 'stream' } = {}) {
+export async function session({ waitForEvents = 0, dismissSetup = true, landing = 'stream', unfoldFilter = true } = {}) {
   browser = await chromium.launch()
   // ignoreHTTPSErrors, because the certificate under test is one
   // mikroview generated for itself seconds ago -- self-signed, with no
@@ -325,14 +348,12 @@ export async function session({ waitForEvents = 0, dismissSetup = true, landing 
   if (dismissSetup) await dismissSetupWizard(page)
 
   if (landing === 'stream') {
-    await goTo(page, 'Stream')
-    // #644 folded the filter away behind a quiet trigger; it used to be
-    // always open, which is the shape every scenario below was written
-    // against. Unfold it here rather than in each of them. The mobile
-    // drawer has its own trigger and no fold-trigger, hence the guard.
-    const fold = page.locator('button.fold-trigger')
-    if (await fold.count()) await fold.click()
-    await page.waitForSelector('input.rule', { timeout: 15000 })
+    await goTo(page, 'Stream', { unfold: unfoldFilter })
+    // Wait for whichever shape was asked for. A scenario that opted out
+    // is testing the fold itself (live-stream-interiors asserts "the
+    // filter row starts folded"), so waiting for input.rule would both
+    // time out and destroy the state under test.
+    await page.waitForSelector(unfoldFilter ? 'input.rule' : 'button.fold-trigger', { timeout: 15000 })
   }
 
   if (waitForEvents > 0) {
