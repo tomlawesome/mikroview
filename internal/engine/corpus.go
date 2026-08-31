@@ -23,10 +23,18 @@ import (
 //
 // Deployment reality every implementation of this interface must be
 // honest about: the corpus is whatever this process currently has, and
-// for the in-memory implementation that is short. At mikroview's
-// measured ~594 events/sec daily average, the default 120MiB event ring
-// (~201,649 events, see internal/config.assumedBytesPerEvent) holds
-// roughly 4-6 minutes of history, not hours and never days. A Receipt
+// for the in-memory implementation that is short -- but how short is
+// set by what the operator's router is told to log, which moves it by
+// two orders of magnitude. Two measurements from one deployment,
+// recorded 2026-08-16 in docs/routeros-setup.md's "Recommended logging
+// posture" section: ~594 events/sec while two broad accept rules logged
+// established traffic, and ~12-14 events/sec across the days after that
+// logging was removed. So the default 120MiB event ring (~201,649
+// events, see internal/config.assumedBytesPerEvent) holds roughly 4-6
+// minutes under the noisy posture and about four hours under the
+// recommended one -- hours at best, never days. Both are dated
+// measurements, not constants: check the setup guide before relying on
+// either. A Receipt
 // states exactly the window it covered (see Window) so a caller never
 // has to guess this; nothing in this package rounds a five-minute
 // sample up to a daily estimate.

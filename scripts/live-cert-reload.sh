@@ -17,6 +17,7 @@ set -euo pipefail
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO"
 . "$REPO/scripts/live-stores.sh"
+. "$REPO/scripts/live-slot.sh"
 
 DIR="$(mktemp -d)"
 cleanup() {
@@ -25,8 +26,14 @@ cleanup() {
 }
 trap cleanup EXIT
 
-HTTP_PORT=19811
-SYSLOG_PORT=19812
+# Ports come from the shared standalone allocator (live-slot.sh), not a
+# hardcoded value: those used to sit inside live-env.sh's per-checkout
+# band and collide with it (#660). SYSLOG_PORT is this script's name for
+# what the allocator calls the syslog-TLS port.
+HTTP_PORT=$MV_STANDALONE_HTTP_PORT
+SYSLOG_PORT=$MV_STANDALONE_SYSLOG_TLS_PORT
+mv_require_free_port "$HTTP_PORT" "the cert-reload check's server"
+mv_require_free_port "$SYSLOG_PORT" "the cert-reload check's syslog-TLS listener"
 
 # An operator-supplied certificate, which is the case that matters:
 # mikroview's own generated one has no external renewal to pick up.
