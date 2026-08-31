@@ -39,6 +39,7 @@
   import type { SortDir } from '../lib/sortFilter'
   import { formatRelative } from '../lib/format'
   import { nightlySummary, windowLabel } from '../lib/watchWindow'
+  import { topologyNavState } from '../lib/topologyNav.svelte'
   import TabList from './TabList.svelte'
   import Suggestions from './Suggestions.svelte'
   import MatchesTab from './MatchesTab.svelte'
@@ -495,6 +496,23 @@
   function toggleWatchDrawer(id: string) {
     watchDrawerId = watchDrawerId === id ? null : id
   }
+
+  // #724's second click: a dial panel row's own destination, not just the
+  // right tab. Consumed (cleared) the instant it's read -- same idiom as
+  // topologyNavState.pendingDescend's own consumer in Topography.svelte --
+  // so a later manual visit to this tab doesn't silently reopen a stale
+  // drawer. Matched against watchlistState.entries (every entry, not
+  // sortedWatchRows) so a filter box left over from an earlier visit
+  // can't hide the very row the dial just promised to open; a watch
+  // removed between the click and landing here has nothing to match, so
+  // nothing opens -- never an error, never a blank drawer.
+  $effect(() => {
+    const id = topologyNavState.pendingWatchId
+    if (id === null) return
+    topologyNavState.pendingWatchId = null
+    const exists = watchlistState.entries.some((e) => e.id === id)
+    watchDrawerId = exists ? id : null
+  })
 
   // "pause watch" / "resume watch" (#676): the plain enable toggle the
   // add/edit form never exposed on its own -- see

@@ -10,6 +10,7 @@ import { policyState } from '../lib/policy.svelte'
 import { coverageState } from '../lib/coverage.svelte'
 import { flagsState } from '../lib/flags.svelte'
 import { watchlistState } from '../lib/watchlist.svelte'
+import { topologyNavState } from '../lib/topologyNav.svelte'
 import { emptyFilters, type ClientEvent, type Flag, type FlagType, type WatchlistEntry } from '../lib/types'
 import Topography from './Topography.svelte'
 // Vite's own `?raw` import (typed by vite/client, already in this
@@ -83,6 +84,8 @@ beforeEach(() => {
   flagsState.list = []
   watchlistState.entries = []
   watchlistState.coverage = {}
+  topologyNavState.pendingFlagId = null
+  topologyNavState.pendingWatchId = null
   nextEventId = 1
   nextFlagId = 1
   nextEntryId = 1
@@ -211,6 +214,25 @@ describe("the dials' condensed panel (#724)", () => {
     expect(appState.view).toBe('flags')
   })
 
+  // #724: "the second click takes you to the thing you clicked on, in the
+  // expansion" -- a flag row's click has to hand off *which* flag, not
+  // just which tab, so Flags.svelte can open that flag's own drawer
+  // (topologyNav.svelte.ts's pendingFlagId).
+  it('a flag row click stashes that flag\'s id for the flags tab to open', () => {
+    flagsState.list = [flag('critical_port', '203.0.113.5'), flag('critical_port', '203.0.113.6')]
+    const { container } = render(Topography)
+    flushSync()
+
+    const flagsDial = container.querySelector<HTMLButtonElement>('.dial')!
+    flagsDial.click()
+    flushSync()
+
+    const rows = container.querySelectorAll<HTMLButtonElement>('.dp-row')
+    rows[1].click()
+    flushSync()
+    expect(topologyNavState.pendingFlagId).toBe('f2')
+  })
+
   it('a watch row click navigates to the watchlist tab', () => {
     watchlistState.entries = [watchEntry({ source: { ip: '192.168.1.9' } })]
     const { container } = render(Topography)
@@ -224,6 +246,23 @@ describe("the dials' condensed panel (#724)", () => {
     row.click()
     flushSync()
     expect(appState.view).toBe('watchlist')
+  })
+
+  // Same handoff as the flag row above, mirrored for pendingWatchId.
+  it('a watch row click stashes that watch\'s id for the watchlist tab to open', () => {
+    const entries = [watchEntry({ source: { ip: '192.168.1.9' } }), watchEntry({ source: { ip: '192.168.1.10' } })]
+    watchlistState.entries = entries
+    const { container } = render(Topography)
+    flushSync()
+
+    const watchDial = container.querySelectorAll<HTMLButtonElement>('.dial')[1]
+    watchDial.click()
+    flushSync()
+
+    const rows = container.querySelectorAll<HTMLButtonElement>('.dp-row')
+    rows[1].click()
+    flushSync()
+    expect(topologyNavState.pendingWatchId).toBe(entries[1].id)
   })
 
   it('the "and N more" row opens the tab with filters reset rather than any one row', () => {
@@ -241,6 +280,24 @@ describe("the dials' condensed panel (#724)", () => {
     flushSync()
     expect(appState.view).toBe('flags')
     expect(appState.filters.interface).toBe('')
+  })
+
+  // Owner's ruling (#724): "the 'and N more' row opens the tab itself,
+  // with nothing selected" -- it must never stash a pending id, or the
+  // flags tab would open some arbitrary row's drawer instead of none.
+  it('the "and N more" row leaves no pending selection behind', () => {
+    flagsState.list = Array.from({ length: 7 }, (_, i) => flag('critical_port', `203.0.113.${i}`))
+    const { container } = render(Topography)
+    flushSync()
+
+    const flagsDial = container.querySelector<HTMLButtonElement>('.dial')!
+    flagsDial.click()
+    flushSync()
+
+    const more = container.querySelector<HTMLButtonElement>('.dp-more')!
+    more.click()
+    flushSync()
+    expect(topologyNavState.pendingFlagId).toBeNull()
   })
 
   it('clicking the dial again collapses the panel', () => {

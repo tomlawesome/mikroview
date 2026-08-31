@@ -113,6 +113,27 @@
     }
   }
 
+  // #724's second click: a dial panel row's own destination, not just the
+  // right tab. Consumed (cleared) the instant it's read -- same idiom as
+  // topologyNavState.pendingDescend's own consumer in Topography.svelte --
+  // so a later manual visit to this tab doesn't silently reopen a stale
+  // drawer. Opens through loadEpisode directly, not a bare expandedId
+  // assignment, since the row's drawer needs the same episode fetch a
+  // click on the row itself triggers (Care, #724). Matched against
+  // `active` (every open flag, not the filtered/sorted view) so a filter
+  // box left over from an earlier visit can't hide the very row the dial
+  // just promised to open; a flag cleared between the click and landing
+  // here has nothing to match, so nothing opens -- never an error, never
+  // a blank drawer.
+  $effect(() => {
+    const id = topologyNavState.pendingFlagId
+    if (id === null) return
+    topologyNavState.pendingFlagId = null
+    const f = active.find((x) => x.id === id)
+    expandedId = f?.id ?? null
+    if (f) loadEpisode(f)
+  })
+
   // Tick positions for the episode strip, one per event, normalised
   // across the fetched span (the record's own geometry: 260-wide
   // viewBox, ticks inset 8px each side). A single event centres.

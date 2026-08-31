@@ -29,6 +29,7 @@ import { watchlistState } from '../lib/watchlist.svelte'
 import { suggestState } from '../lib/suggest.svelte'
 import { matchesState } from '../lib/matches.svelte'
 import { appState } from '../lib/state.svelte'
+import { topologyNavState } from '../lib/topologyNav.svelte'
 import type { Suggestion, WatchNight, WatchlistCoverage, WatchlistEntry, WatchlistMatch } from '../lib/types'
 import Watchlist from './Watchlist.svelte'
 
@@ -98,8 +99,9 @@ function recordFor(id: string, entryId: string, overrides: Partial<WatchlistMatc
 // a moment later.
 async function renderWatchlist(entries: WatchlistEntry[], coverage: Record<string, WatchlistCoverage> = {}) {
   vi.mocked(fetchWatchlistEntries).mockResolvedValue({ entries, coverage })
-  render(Watchlist)
+  const result = render(Watchlist)
   await settle()
+  return result
 }
 
 // Several rounds of microtasks, then a flush. More than looks necessary
@@ -520,5 +522,83 @@ describe('The watch window and its nightly memory (#680)', () => {
     )
     expect(watchTable().textContent).toContain('○ paused')
     expect(watchTable().textContent).not.toContain('ring broken')
+  })
+})
+
+// #724's second click: a dial panel row on the topography hands off which
+// watch it was through topologyNavState.pendingWatchId
+// (topologyNav.svelte.ts) rather than just switching the view -- this is
+// the tab side that consumes it.
+describe('opening a watch drawer from the topography dial (#724)', () => {
+  function watchTable(): HTMLElement {
+    return document.querySelector('.watch-table-section') as HTMLElement
+  }
+
+  beforeEach(() => {
+    vi.resetAllMocks()
+    vi.mocked(fetchSuggestions).mockResolvedValue([])
+    vi.mocked(fetchRecentMatches).mockResolvedValue([])
+    suggestState.candidates = []
+    matchesState.reset()
+    topologyNavState.pendingWatchId = null
+  })
+
+  it("opens that watch's drawer on arrival and clears the pending selection", async () => {
+    const entries = [
+      entry('e1', 'SSH watch', { source: { mac: 'aa:bb:cc:dd:ee:ff' } }),
+      entry('e2', 'NAS watch', { source: { mac: '11:22:33:44:55:66' } }),
+    ]
+    // In real use, watchlistState.entries is already populated by
+    // App.svelte's own app-wide poll well before a dial row exists to be
+    // clicked -- Watchlist.svelte's own onMount refresh only ever
+    // confirms/replaces that with the same data, never starts the tab
+    // from an empty list. Set directly so the test's timing matches.
+    watchlistState.entries = entries
+    topologyNavState.pendingWatchId = 'e2'
+    await renderWatchlist(entries)
+
+    const drawers = watchTable().querySelectorAll('.wt-drawer')
+    expect(drawers.length).toBe(1)
+    // The drawer sits directly beneath the row it belongs to -- the NAS
+    // watch's row, not the SSH watch's.
+    const rows = watchTable().querySelectorAll('tbody tr')
+    const nasRowIndex = Array.from(rows).findIndex((r) => r.textContent?.includes('NAS watch'))
+    expect(rows[nasRowIndex + 1]?.classList.contains('wt-drawer')).toBe(true)
+    expect(topologyNavState.pendingWatchId).toBeNull()
+  })
+
+  it('a pending id that matches nothing lands on the tab with no drawer open and no error', async () => {
+    const entries = [entry('e1', 'SSH watch', { source: { mac: 'aa:bb:cc:dd:ee:ff' } })]
+    watchlistState.entries = entries
+    topologyNavState.pendingWatchId = 'no-such-watch'
+    await renderWatchlist(entries)
+
+    expect(watchTable().querySelector('.wt-drawer')).toBeNull()
+    expect(topologyNavState.pendingWatchId).toBeNull()
+  })
+
+  // The part that rots if it's missed (#724's own Care note): once the
+  // dial's row has been followed and its drawer opened, a later, ordinary
+  // visit to this tab -- not through the dial -- must not silently reopen
+  // it. Simulated the same way the deck's own keep-alive card lifecycle
+  // would produce it: the tab's component is torn down when the docket
+  // scrolls out of view, and freshly built again on a later visit.
+  it('does not reopen a drawer on a later, unrelated visit to the tab', async () => {
+    const entries = [entry('e1', 'SSH watch', { source: { mac: 'aa:bb:cc:dd:ee:ff' } })]
+    watchlistState.entries = entries
+    topologyNavState.pendingWatchId = 'e1'
+    const { unmount } = await renderWatchlist(entries)
+    expect(watchTable().querySelector('.wt-drawer')).toBeTruthy()
+    expect(topologyNavState.pendingWatchId).toBeNull()
+
+    unmount()
+
+    // A plain, later visit to the watchlist tab -- nothing pending this
+    // time. entries set directly again first, same reasoning as above:
+    // real app state doesn't start this second mount from empty either.
+    watchlistState.entries = entries
+    await renderWatchlist(entries)
+
+    expect(watchTable().querySelector('.wt-drawer')).toBeNull()
   })
 })
