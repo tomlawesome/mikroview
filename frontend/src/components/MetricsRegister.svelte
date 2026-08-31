@@ -73,6 +73,15 @@
   // deleted (#700, #691). Typed rather than inferred so the block stays
   // reachable to the type checker.
   const LEDGER_ENABLED: boolean = false
+
+  // Same treatment for the cross-section panel. Round 30's register draws
+  // no side panel: the minute under the cursor is read from the scene's
+  // own header line, not from an aside, and the panel's empty state
+  // ("Pick a minute on the register to read it across every series") is
+  // the printed instruction the round struck everywhere (README section
+  // "No apparatus, anywhere") -- the same text the owner objected to on
+  // the seismograph. Unmounted, not deleted; tracked on #691.
+  const CROSS_SECTION_ENABLED: boolean = false
   // No flag columns at all -- 0 fired this hour -- means no group gap to
   // reserve either, so the traffic ribbons get the space back instead of
   // leaving a blank strip.
@@ -251,6 +260,7 @@
     {/if}
   </div>
 
+  {#if CROSS_SECTION_ENABLED}
   <aside class="cross-section" aria-label="The selected minute">
     {#if reading}
       <h3>The minute {formatHM(reading.time)}</h3>
@@ -274,6 +284,7 @@
       <p class="hint">Pick a minute on the register to read it across every series.</p>
     {/if}
   </aside>
+  {/if}
 </div>
 
 <!-- ROUND 30 FIDELITY: none of the three ratified metrics views (seismograph,
