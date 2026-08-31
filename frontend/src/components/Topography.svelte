@@ -1291,10 +1291,20 @@
         <!-- The reality overlay (#629): what actually happened, pair by
              pair. Accepted traffic crosses; drops die at the waist
              whatever the verdict; unplanned traffic spends the reserved
-             saturated colour. -->
+             saturated colour.
+
+             Lines first, every label after (#723: "lines draw over the
+             chips"). Each pair used to draw its own line then its own
+             plate together, one <g> per pair -- but the pairs are
+             siblings, so a later pair's line still painted (document
+             order is paint order) over an *earlier* pair's plate
+             whenever the two crossed near it. Splitting into two passes
+             over the same drawnReality/ghostIntents arrays -- every line
+             in this lens, then every label in it -- means no line can
+             land after any plate, whatever the pairs' own routing does
+             (that routing, the "lines overlapping each other" report, is
+             a separate job -- see the code comment on ghostIntents). -->
         {#each drawnReality.drawn as d, di (d.r.key)}
-          {@const badge = trafficBadges[di]}
-          {@const rb = realityBadge(d.r)}
           <g
             class="edge-g"
             role="button"
@@ -1323,19 +1333,42 @@
                 <line class="edge-bar" class:alarm-bar={d.r.verdict === 'unplanned'} x1="-7" y1="0" x2="7" y2="0" />
               </g>
             {/if}
-            <g class="detail">
-              <rect class="edge-plate" x={badge.x - badge.w / 2} y={badge.y - 10} width={badge.w} height="14" rx="4" />
-              <text class="edge-badge" class:alarm-t={d.r.verdict === 'unplanned'} x={badge.x} y={badge.y} text-anchor="middle">
-                {rb}
-              </text>
-            </g>
           </g>
         {/each}
 
         <!-- The second delta: intent nothing arrived to fill. -->
         {#each ghostIntents as g, gi (g.edge.key)}
-          {@const badge = trafficBadges[drawnReality.drawn.length + gi]}
           <path class="gedge" d={edgePath(g.line)} />
+        {/each}
+
+        <!-- Every label this lens draws, now that every line above it is
+             down. The click/keydown here duplicate the line's own (the
+             plate is a real, sizeable target and deserves to be one) --
+             see this file's own report on what that costs the tab order. -->
+        {#each drawnReality.drawn as d, di (d.r.key)}
+          {@const badge = trafficBadges[di]}
+          <g
+            class="detail"
+            role="button"
+            tabindex="0"
+            aria-label="Open the stream filtered to this pair: {realityLabel(d.r)}"
+            onclick={() => openPair(d.r.from, d.r.to, d.r.topPorts)}
+            onkeydown={(e) => {
+              if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault()
+                openPair(d.r.from, d.r.to, d.r.topPorts)
+              }
+            }}
+          >
+            <title>{realityLabel(d.r)}</title>
+            <rect class="edge-plate" x={badge.x - badge.w / 2} y={badge.y - 10} width={badge.w} height="14" rx="4" />
+            <text class="edge-badge" class:alarm-t={d.r.verdict === 'unplanned'} x={badge.x} y={badge.y} text-anchor="middle">
+              {realityBadge(d.r)}
+            </text>
+          </g>
+        {/each}
+        {#each ghostIntents as g, gi (g.edge.key)}
+          {@const badge = trafficBadges[drawnReality.drawn.length + gi]}
           <g class="detail">
             <rect class="edge-plate" x={badge.x - badge.w / 2} y={badge.y - 10} width={badge.w} height="14" rx="4" />
             <text class="edge-badge ghost-t" x={badge.x} y={badge.y} text-anchor="middle">never exercised</text>
@@ -1345,9 +1378,9 @@
       {:else if lens === 'coverage'}
         <!-- The coverage paint (#630): every boundary-direction with
              rules, drawn by what it logs. Dark is drawn dark, never
-             omitted. -->
+             omitted. Lines first, labels last -- same two-pass split as
+             the traffic lens above, same reason (#723). -->
         {#each drawnCoverage.drawn as d, di (d.edge.key)}
-          {@const badge = coverageBadges[di]}
           {@const st = coverageOf(d.edge)}
           <g
             class="cov-g"
@@ -1365,20 +1398,33 @@
             {#if st === 'observed'}
               <path class="cedge observed" d={edgePath(d.line)} />
             {:else if st === 'quiet'}
-              {@const qt = coverageBadgeText(d.edge)}
               <path class="cedge quiet" d={edgePath(d.line)} />
-              <g class="detail">
-                <rect class="edge-plate" x={badge.x - badge.w / 2} y={badge.y - 10} width={badge.w} height="14" rx="4" />
-                <text class="edge-badge quiet-t" x={badge.x} y={badge.y} text-anchor="middle">{qt}</text>
-              </g>
             {:else}
               <path class="cedge dark" d={edgePath(d.line)} />
-              <g class="detail">
-                <rect class="edge-plate" x={badge.x - badge.w / 2} y={badge.y - 10} width={badge.w} height="14" rx="4" />
-                <text class="edge-badge dark-t" x={badge.x} y={badge.y} text-anchor="middle">dark</text>
-              </g>
             {/if}
           </g>
+        {/each}
+
+        {#each drawnCoverage.drawn as d, di (d.edge.key)}
+          {@const st = coverageOf(d.edge)}
+          {#if st !== 'observed'}
+            {@const badge = coverageBadges[di]}
+            <g
+              class="detail"
+              class:actionable={isAdmin}
+              {...isAdmin ? { role: 'button', tabindex: 0, 'aria-label': `Declare or review this gap: ${coverageLabel(d.edge)}` } : {}}
+              onclick={() => openCoverage(d.edge)}
+              onkeydown={(e) => {
+                if (e.key === 'Enter') openCoverage(d.edge)
+              }}
+            >
+              <title>{coverageLabel(d.edge)}</title>
+              <rect class="edge-plate" x={badge.x - badge.w / 2} y={badge.y - 10} width={badge.w} height="14" rx="4" />
+              <text class="edge-badge {st === 'dark' ? 'dark-t' : 'quiet-t'}" x={badge.x} y={badge.y} text-anchor="middle">
+                {coverageBadgeText(d.edge)}
+              </text>
+            </g>
+          {/if}
         {/each}
 
         {#if !policyState.anyPushed}
@@ -1392,10 +1438,10 @@
       {:else}
         <!-- Intended-policy edges (#628): what the pushed table says
              may cross, refused where it says it may not. Drawn beneath
-             the islands, like the ribs they replace. -->
+             the islands, like the ribs they replace. Lines first, labels
+             last -- same two-pass split as the two lenses above (#723). -->
         {#each drawnEdges.drawn as d, di (d.edge.key)}
           {@const bar = edgeBarAt(d.line)}
-          {@const badge = policyBadges[di]}
           <g
             class="edge-g"
             role="button"
@@ -1424,15 +1470,31 @@
                 <line class="edge-bar dim" x1="-5" y1="0" x2="5" y2="0" />
               </g>
             {/if}
-            {#if d.edge.accepted || d.edge.refusePorts.length > 0}
-              <!-- A port-less refusal's badge would only repeat the bar. -->
-              {@const bl = badgeLine(d.edge)}
-              <g class="detail">
-                <rect class="edge-plate" x={badge.x - badge.w / 2} y={badge.y - 10} width={badge.w} height="14" rx="4" />
-                <text class="edge-badge" x={badge.x} y={badge.y} text-anchor="middle">{bl}</text>
-              </g>
-            {/if}
           </g>
+        {/each}
+
+        {#each drawnEdges.drawn as d, di (d.edge.key)}
+          {#if d.edge.accepted || d.edge.refusePorts.length > 0}
+            <!-- A port-less refusal's badge would only repeat the bar. -->
+            {@const badge = policyBadges[di]}
+            <g
+              class="detail"
+              role="button"
+              tabindex="0"
+              aria-label="Open the stream filtered to this pair: {edgeLabel(d.edge)}"
+              onclick={() => openEdge(d.edge)}
+              onkeydown={(e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                  e.preventDefault()
+                  openEdge(d.edge)
+                }
+              }}
+            >
+              <title>{edgeLabel(d.edge)}</title>
+              <rect class="edge-plate" x={badge.x - badge.w / 2} y={badge.y - 10} width={badge.w} height="14" rx="4" />
+              <text class="edge-badge" x={badge.x} y={badge.y} text-anchor="middle">{badgeLine(d.edge)}</text>
+            </g>
+          {/if}
         {/each}
 
         {#if !policyState.anyPushed}
@@ -1541,7 +1603,8 @@
                       descend(z.id, h.label, h.ip)
                     }}
                     onkeydown={(e) => {
-                      if (e.key === 'Enter') {
+                      if (e.key === 'Enter' || e.key === ' ') {
+                        e.preventDefault()
                         e.stopPropagation()
                         descend(z.id, h.label, h.ip)
                       }
@@ -1555,7 +1618,8 @@
                       descend(z.id, h.label, h.ip)
                     }}
                     onkeydown={(e) => {
-                      if (e.key === 'Enter') {
+                      if (e.key === 'Enter' || e.key === ' ') {
+                        e.preventDefault()
                         e.stopPropagation()
                         descend(z.id, h.label, h.ip)
                       }
@@ -1617,7 +1681,14 @@
         {#each zones as z, i (z.id)}
           {@const svc = laneServices(z)}
           {#if svc}
-            <text x={laneX(i, zones.length)} y="466" text-anchor="middle" class="svc-t">{svc}</text>
+            <!-- "Ports floating in the wind" (owner, #723): the port list
+                 named nothing it sat above -- a 24-unit gap to the card
+                 with no line, no plate, nothing between them. Pulled in
+                 to a small, proximate gap and given a leader tick down to
+                 the card's own top edge (y=490), the tie every other
+                 label on this map already has via its plate or its line. -->
+            <text x={laneX(i, zones.length)} y="472" text-anchor="middle" class="svc-t">{svc}</text>
+            <line class="svc-leader" x1={laneX(i, zones.length)} y1="477" x2={laneX(i, zones.length)} y2="489" />
           {/if}
         {/each}
       </g>
@@ -1630,18 +1701,106 @@
           {#each drawn as h, hi (h.ip)}
             {@const dx = (hi - (drawn.length - 1) / 2) * spread}
             {@const x = cx + dx}
+            <!-- Each client is the reach's door too, same as its own name
+                 in the card above (#723): the mockup wires its own
+                 .c-dot/.c-label to open that host's information
+                 (the-whole.html:2238), which this build never carried
+                 over -- these sat inert, so a click meant for a client
+                 icon fell through to whatever was behind it. Vertical
+                 span compressed from the old 636→716 (which put "+n more"
+                 4px off the stage's own 720 floor, "nodes clash with
+                 bottom", #723) down to 636→696, comfortably clear at
+                 every altitude stop. -->
             {#if Math.abs(dx) < 0.5}
-              <path class="cli-spoke" d="M{cx} 636 C {cx - 6} 656, {cx + 6} 664, {cx} 678" stroke={ink} />
-              <circle class="c-dot" cx={cx} cy="681" r="5" fill={ink} />
-              <text x={cx} y="704" text-anchor="middle" class="c-label">{h.label}</text>
+              <path class="cli-spoke" d="M{cx} 636 C {cx - 6} 644, {cx + 6} 647, {cx} 655" stroke={ink} />
+              <circle
+                class="c-dot"
+                cx={cx}
+                cy="659"
+                r="5"
+                fill={ink}
+                role="button"
+                tabindex="0"
+                aria-label="Recentre on {h.label}"
+                onclick={(e) => {
+                  e.stopPropagation()
+                  descend(z.id, h.label, h.ip)
+                }}
+                onkeydown={(e) => {
+                  if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault()
+                    e.stopPropagation()
+                    descend(z.id, h.label, h.ip)
+                  }
+                }}
+              />
+              <text
+                x={cx}
+                y="680"
+                text-anchor="middle"
+                class="c-label"
+                role="button"
+                tabindex="0"
+                aria-label="Recentre on {h.label}"
+                onclick={(e) => {
+                  e.stopPropagation()
+                  descend(z.id, h.label, h.ip)
+                }}
+                onkeydown={(e) => {
+                  if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault()
+                    e.stopPropagation()
+                    descend(z.id, h.label, h.ip)
+                  }
+                }}>{h.label}</text
+              >
             {:else}
-              <path class="cli-spoke" d="M{cx} 636 C {cx} 658, {x} 658, {x} 674" stroke={ink} />
-              <circle class="c-dot" cx={x} cy="678" r="5" fill={ink} />
-              <text x={x} y="692" text-anchor="middle" class="c-label">{h.label}</text>
+              <path class="cli-spoke" d="M{cx} 636 C {cx} 644, {x} 644, {x} 650" stroke={ink} />
+              <circle
+                class="c-dot"
+                cx={x}
+                cy="654"
+                r="5"
+                fill={ink}
+                role="button"
+                tabindex="0"
+                aria-label="Recentre on {h.label}"
+                onclick={(e) => {
+                  e.stopPropagation()
+                  descend(z.id, h.label, h.ip)
+                }}
+                onkeydown={(e) => {
+                  if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault()
+                    e.stopPropagation()
+                    descend(z.id, h.label, h.ip)
+                  }
+                }}
+              />
+              <text
+                x={x}
+                y="666"
+                text-anchor="middle"
+                class="c-label"
+                role="button"
+                tabindex="0"
+                aria-label="Recentre on {h.label}"
+                onclick={(e) => {
+                  e.stopPropagation()
+                  descend(z.id, h.label, h.ip)
+                }}
+                onkeydown={(e) => {
+                  if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault()
+                    e.stopPropagation()
+                    descend(z.id, h.label, h.ip)
+                  }
+                }}>{h.label}</text
+              >
             {/if}
           {/each}
           {#if z.hostCount > drawn.length}
-            <text x={cx} y="716" text-anchor="middle" class="c-label more">+ {z.hostCount - drawn.length} more</text>
+            <text x={cx} y="696" text-anchor="middle" class="c-label more">+ {z.hostCount - drawn.length} more</text>
           {/if}
         {/each}
       </g>
@@ -2623,23 +2782,35 @@
   /* The plate every edge label sits on (#699, round 30's ratified rule:
      nothing sits on a line as text only, without a box). #682's
      backdrop-coloured halo holds over empty map but not over a bright
-     edge, where the label reads as ink scattered across the line. */
+     edge, where the label reads as ink scattered across the line.
+     Round 30's own plate is near-opaque and matches this scene deliberately
+     for that reason -- but a fill identical to --bg is a *different*
+     thing: it is not near-opaque, it is the void itself, so the plate
+     gives the eye nothing to land on and the (already dark) fill-behind
+     line reads straight through. The owner overruled fidelity here
+     (2026-08-31, #715 follow-up): --bg-elevated is opaque -- no line can
+     show through it, coloured or not -- and pairs with --hair-2 for the
+     hairline, the app's own pairing for "an elevated surface over the
+     page" (see app.css). Measured var(--fg) on var(--bg-elevated):
+     ~15.8:1, comfortably past the 4.5:1 floor. */
   .edge-plate {
-    fill: var(--bg);
-    stroke: var(--border);
+    fill: var(--bg-elevated);
+    stroke: var(--hair-2);
     stroke-width: 1;
   }
 
   .edge-badge {
-    /* fg-dim on the edge-plate's --bg reads ~3.3:1 -- the "dark text on
-       a dark fill" complaint (#715). fg-muted clears 4.5:1 at ~8:1. */
-    fill: var(--fg-muted);
+    /* The figures are what the plate exists to say, so they carry the
+       brightest ink on it -- --fg, not --fg-muted (#715's own fix, which
+       cleared contrast but was never meant to be the final word once the
+       plate itself became legible). */
+    fill: var(--fg);
     font-family: var(--font-mono);
     font-size: 9.5px;
   }
 
   .edge-g:hover .edge-badge {
-    fill: var(--fg);
+    fill: var(--accent);
   }
 
   .mote {
@@ -2821,10 +2992,21 @@
   /* --- the health dials (#648, rounds 19-20; #699) ---------------------- */
   /* Round 30 hangs them in the stage's top-right corner (the-whole.html
      :486), not in the card's top-left flow, and draws them at their own
-     56-unit geometry rather than half-size. */
+     56-unit geometry rather than half-size. The mockup's own `top: 108px`
+     was measured from #s3's own top edge, where the scene bar is a
+     `position: absolute` overlay and the stage itself is inset a further
+     132px to clear it -- the 108px sits inside that reserved gutter, a
+     modest step below the bar. This build's SceneBar is a normal flow
+     sibling above `.topo` (Deck.svelte), so `.topo`'s own top edge
+     already IS the bar's bottom edge -- carrying the mockup's raw number
+     unadjusted stacked a second, much bigger gap on top of the first,
+     landing the dials well down the card (owner, 2026-08-31: "well below
+     it"). 14px -- this file's own close-to-an-edge rhythm, `.card-body`'s
+     padding in Deck.svelte -- clears the bar without crowding it, #721's
+     concern for any fixed chrome. */
   .dials {
     position: absolute;
-    top: 108px;
+    top: 14px;
     right: 26px;
     z-index: 6;
     display: flex;
@@ -2916,9 +3098,21 @@
   }
 
   .camera.cam-services .svc,
-  .camera.cam-clients .svc,
+  .camera.cam-clients .svc {
+    opacity: 1;
+  }
+
+  /* The client tier is the mockup's own `.c-dot`/`.c-label`/`.c-hit`
+     (the-whole.html:2173, 2238): every one of them wired to open that
+     host's own information, cursor:pointer included. The build carried
+     the geometry over without the wiring or the reveal -- pointer-events
+     stayed none even once opacity returned to 1, so a revealed client
+     node was visible but inert, and a click meant for it fell through to
+     whatever was behind (owner, #723: "goes to the stream instead").
+     Restored here alongside real onclick/onkeydown handlers below. */
   .camera.cam-clients .cli {
     opacity: 1;
+    pointer-events: auto;
   }
 
   /* The survey (the-whole.html:376-380): the cards go, a dot per zone
@@ -2944,8 +3138,16 @@
     transform: rotateX(32deg) scale(0.88) translateY(-24px);
   }
 
+  /* Ratified round 30 (the-whole.html:194, :374) uses 1400px here, on
+     both #topo and .stage -- this file had drifted to 900px, a smaller
+     distance that makes the very same rotateX/scale/translateY read as a
+     *stronger* tilt (perspective's foreshortening grows as this number
+     shrinks), pushing the survey dots further than the mockup ever
+     intended and toward the stage's own bottom edge (owner, #723-adjacent
+     "nodes clash with bottom"). Restored to the mockup's own figure
+     rather than picked fresh. */
   .stage svg {
-    perspective: 900px;
+    perspective: 1400px;
   }
 
   @media (prefers-reduced-motion: reduce) {
@@ -3082,13 +3284,21 @@
     stroke-width: 0.9;
   }
 
+  /* Mixed against --bg-elevated, not transparent (owner, 2026-08-31): a
+     10%-into-transparent fill is 90% see-through, so a crossing edge
+     line -- which round 30's own coloured ribs (#715) can now paint in
+     any lane's saturated ink -- reads straight through the pill and its
+     count. Document order already draws this bar after every edge (see
+     the lens template's own two-pass ordering); the fix here is opacity,
+     not stacking. Measured: --marked on this fill ~5.1:1, --alarm on its
+     own ~4.6:1 -- both past the 4.5:1 floor. */
   .hb-w {
-    fill: color-mix(in srgb, var(--marked) 10%, transparent);
+    fill: color-mix(in srgb, var(--marked) 18%, var(--bg-elevated));
     stroke: color-mix(in srgb, var(--marked) 40%, transparent);
   }
 
   .hb-f {
-    fill: color-mix(in srgb, var(--alarm) 10%, transparent);
+    fill: color-mix(in srgb, var(--alarm) 18%, var(--bg-elevated));
     stroke: color-mix(in srgb, var(--alarm) 45%, transparent);
   }
 
@@ -3174,16 +3384,39 @@
     font-size: 10.5px;
   }
 
+  .svc-leader {
+    stroke: var(--hair-2);
+    stroke-width: 1;
+    stroke-dasharray: 2 2;
+  }
+
   .cli-spoke {
     fill: none;
     stroke-width: 0.8;
     opacity: 0.3;
   }
 
+  .c-label,
+  .c-dot {
+    cursor: pointer;
+  }
+
   .c-label {
     fill: var(--fg-muted);
     font-family: var(--font-mono);
     font-size: 9.5px;
+  }
+
+  .c-label:hover,
+  .c-label:focus-visible,
+  .camera .c-dot:hover,
+  .camera .c-dot:focus-visible {
+    fill: var(--fg);
+  }
+
+  .c-dot:focus-visible,
+  .c-label:focus-visible {
+    outline: none;
   }
 
   .c-label.more {
