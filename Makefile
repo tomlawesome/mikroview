@@ -208,3 +208,16 @@ engines-check:
 	  mcr.microsoft.com/playwright:v1.62.0-noble node scripts/live-door-engines.mjs
 
 .PHONY: engines-check
+
+# fidelity: photograph the built app and its ratified mockup at the same
+# viewport and compare per pixel (#658, ported from Orbit). Catches the
+# thing neither the suite nor live-check can see -- a surface that works
+# but is not the one that was ratified.
+#
+# Needs a running instance and the design host. Both are overridable:
+#   FIDELITY_APP=... FIDELITY_MOCKUPS=... make fidelity
+# Baselines move only deliberately: UPDATE_BASELINE=1 make fidelity
+fidelity:
+	@cd frontend && node tests/fidelity/screens.mjs
+
+.PHONY: fidelity
