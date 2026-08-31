@@ -306,18 +306,17 @@ describe('the zone card coverage badge (#682, ratified round-29)', () => {
 })
 
 describe('degrading honestly without a pushed address table (#682, data gap #687)', () => {
-  it('puts the boundary-derived note in the scene chrome, and never invents a subnet or a coverage verdict', () => {
+  it('never invents a subnet or a coverage verdict, and draws no explanatory note (round 30 draws none anywhere -- unmounted behind DEGRADED_NOTE_ENABLED, gap tracked on #691)', () => {
     zonesState.pushed = [] // no /ip address table pushed -- #687's data gap, not a rendering bug
     appState.events = [event({ inInterface: 'bridge1', srcIp: '192.168.1.50' })]
     policyState.anyPushed = false
     const { container } = render(Topography)
     flushSync()
 
-    // The note is chrome (a bounded, backed pill), not loose text
-    // floating over the map's corner.
-    const note = container.querySelector('.degraded')
-    expect(note).not.toBeNull()
-    expect(note?.textContent).toContain('boundary-derived')
+    // The boundary-derived note was chrome under round 29; round 30 draws
+    // no explanatory apparatus anywhere on the topography, so it stays
+    // unmounted (see the DEGRADED_NOTE_ENABLED comment in Topography.svelte).
+    expect(container.querySelector('.degraded')).toBeNull()
 
     // The zone card itself: a boundary name only -- no fabricated
     // subnet, no fabricated coverage badge.

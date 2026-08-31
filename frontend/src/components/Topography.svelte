@@ -1042,6 +1042,18 @@
   function onWindowClick() {
     if (nodeCard) nodeCard = null
   }
+
+  // Off for round-30 fidelity: round 30 draws no explanatory box anywhere
+  // on the topography (docs/design/concepts/round-30/README.md, "No
+  // apparatus, anywhere") -- this "zones are boundary-derived" note is
+  // exactly that apparatus. Per the project's build-to-the-mockup-first
+  // policy (#700) this stays implemented rather than deleted; it is just
+  // unmounted here so nothing renders. Re-mounting it (or replacing it) is
+  // tracked as a gap on #691. Typed rather than inferred so the block
+  // stays reachable to the type checker -- a bare `false` narrows to
+  // `never` and reports it as unreachable. Same pattern as LiveTable's
+  // RESIZE_HANDLES_ENABLED and MetricsRegister's LEDGER_ENABLED.
+  const DEGRADED_NOTE_ENABLED: boolean = false
 </script>
 
 <svelte:window onkeydown={onKeydown} onclick={onWindowClick} />
@@ -1894,7 +1906,7 @@
     </div>
   {/if}
 
-  {#if zonesState.degraded && zones.length > 0 && !reach}
+  {#if DEGRADED_NOTE_ENABLED && zonesState.degraded && zones.length > 0 && !reach}
     <!-- The sentence is worth saying, but round 29 puts explanatory
          notes in the scene's own chrome, not floating loose over the
          drawing (#682): a bounded, backed pill, inset from every edge
