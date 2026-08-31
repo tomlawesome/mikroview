@@ -156,19 +156,19 @@ func oldestHeldJSON(t time.Time) any {
 func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 	stats := s.Store.Stats()
 	writeJSON(w, http.StatusOK, map[string]any{
-		"total":            stats.Total,
-		"byAction":         stats.ByAction,
-		"topRules":         stats.TopRules,
-		"timeSeries":       stats.TimeSeries,
-		"eventsPerSecond":  stats.EventsPerSecond,
-		"capacity":         stats.Capacity,
-		"count":            stats.Count,
-		"windowSeconds":    int(stats.Window.Seconds()),
+		"total":           stats.Total,
+		"byAction":        stats.ByAction,
+		"topRules":        stats.TopRules,
+		"timeSeries":      stats.TimeSeries,
+		"eventsPerSecond": stats.EventsPerSecond,
+		"capacity":        stats.Capacity,
+		"count":           stats.Count,
+		"windowSeconds":   int(stats.Window.Seconds()),
 		// How far back the buffer actually reaches, as opposed to how far
 		// back it was configured to. Null rather than a zero timestamp
 		// when nothing is held, so the client reads "no reach yet" and
 		// not "reaches back to the year 1" (#703).
-		"oldestHeld": oldestHeldJSON(stats.OldestHeld),
+		"oldestHeld":       oldestHeldJSON(stats.OldestHeld),
 		"connectedClients": s.Hub.ClientCount(),
 		// Syslog listener saturation. Included here rather than behind
 		// its own endpoint because the condition it reports -- mikroview
