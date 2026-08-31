@@ -87,19 +87,38 @@
 </div>
 
 <style>
+  /* Same grid as MetricsTable's `.saved .widgets` -- one arrangement for
+     both card areas on this scene rather than two different grids
+     (#716: "cards arrange around it careless"). */
   .ledger-strip {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
-    gap: 22px;
+    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+    gap: 14px;
   }
 
+  /* Each column gets a visible boundary so it reads as its own box,
+     rather than blurring into the next one across a bare 22px gap
+     (#716). Ported from BarList's card treatment (BarList.svelte's
+     `.bar-list`) -- the app's existing bordered-card look -- rather
+     than inventing a second one. */
+  .column {
+    background: var(--bg-elevated);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 14px 16px;
+  }
+
+  /* #716: 9px at --fg-dim was too faint to find at a glance. Bumped to
+     the same size/weight/colour as this scene's other section
+     headings (MetricsTable.svelte's h3), keeping the small-caps
+     treatment but with less crushed letter-spacing. */
   .column h4 {
     margin: 0 0 7px;
-    font-size: 9px;
+    font-size: 11px;
     font-weight: 650;
-    letter-spacing: 0.14em;
+    letter-spacing: 0.08em;
     text-transform: uppercase;
-    color: var(--fg-dim);
+    color: var(--fg-muted);
   }
 
   .empty {

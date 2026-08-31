@@ -218,8 +218,11 @@
     margin-bottom: 10px;
   }
 
+  /* #716: was `margin-left: auto`, pushing this button to the far right
+     of the row where it read as detached from anything. It belongs to
+     the "Every minute" heading beside it, so it now just sits next in
+     the flex row, spaced by .figures-head's own gap. */
   .copy {
-    margin-left: auto;
     margin-bottom: 10px;
     background: transparent;
     border: 1px solid var(--border);
@@ -240,16 +243,22 @@
     color: var(--fg-dim);
   }
 
-  /* Round 30's `.mtable`: the hour's figures sit centred and whole, with
-     no scroller of their own and no box around them. It is one hour of
-     minutes -- it fits, and a table that scrolls inside a page that
+  /* The hour's figures sit centred and whole, with no scroller of their
+     own and no box around them: a table that scrolls inside a page that
      also scrolls gives the operator two scrollbars and a guess about
-     which one moves what. */
+     which one moves what.
+
+     No `overflow` here, deliberately. Any value other than `visible`
+     makes this the scroll container for the sticky head below, and a
+     container that never scrolls gives sticky no range to work in --
+     the head would silently stop sticking to the page. The mockup's own
+     .mtable clips, but the mockup draws 14 rows and no sticky head, so
+     it never had to choose between the two. We keep every minute, so we
+     keep the head. */
   .table-wrap {
     display: flex;
     justify-content: center;
     align-items: flex-start;
-    overflow: hidden;
   }
 
   /* Round 30's override block (the-whole.html, ~line 1978) supersedes
@@ -281,7 +290,16 @@
      it holds a sort button -- Top port/Top talker aren't sortable but
      must still read like the rest of the row instead of falling back to
      the browser's default th styling (#716). */
+  /* Sticky again (#716): the table runs the full ~90-minute hour against
+     the page's own scroll, so the column heads have to hold. This works
+     only because .table-wrap sets no overflow -- see its comment.
+     Opaque background so scrolled-under rows don't show through, the
+     same token LiveTable.svelte's own sticky header cells use. */
   thead th {
+    position: sticky;
+    top: 0;
+    z-index: 1;
+    background: var(--bg-elevated);
     border-bottom: 1px solid var(--hair-2);
     text-align: right;
     font-size: 9.5px;
