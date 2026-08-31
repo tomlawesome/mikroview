@@ -14,10 +14,12 @@
   // now lives here. Fleet alone stays off the deck, absorbed into the
   // Entities card (its "routers" section leads); the standalone Fleet
   // page still exists for the phone-width bottom bar, per its own file.
+  import { SvelteSet } from 'svelte/reactivity'
   import { appState } from '../lib/state.svelte'
   import { authState } from '../lib/auth.svelte'
   import { deckCards, type DeckCard } from '../lib/deckCards'
   import { deckOrderState } from '../lib/deckOrder.svelte'
+  import { deckCardMounted } from '../lib/deckMount'
   import SceneBar from './SceneBar.svelte'
   import Fall from './Fall.svelte'
   import Metrics from './Metrics.svelte'
@@ -36,12 +38,20 @@
 
   const activeIndex = $derived(cards.findIndex((c) => c.views.includes(appState.view)))
 
-  // Only the centred card and its neighbours mount their scene: the
+  // Only the visited card mounts its scene, plus whichever neighbour the
+  // deck is physically rolling it into or out of view (#690): the
   // scenes were built for single-mount (Metrics polls, LiveTable
-  // renders the buffer, the fall animates), and several running
-  // off-screen would multiply that cost for nothing visible.
-  function near(i: number): boolean {
-    return Math.abs(i - activeIndex) <= 1
+  // renders the buffer, the fall animates), so several mounted at once
+  // multiplies that cost for nothing visible -- worst on the docket's
+  // unvirtualised Flags list, which used to mount a card early and tear
+  // down a card late for no reason but sitting next to the active one.
+  // visibleKeys is kept by the low-threshold observer below; the rule
+  // itself lives in lib/deckMount.ts so it's unit-testable without
+  // mounting a component.
+  let visibleKeys = new SvelteSet<string>()
+
+  function mounted(i: number): boolean {
+    return deckCardMounted(i, activeIndex, cards[i]?.key, visibleKeys)
   }
 
   let deckEl: HTMLElement | undefined
@@ -94,6 +104,31 @@
     for (const el of Object.values(cardEls)) if (el) observer.observe(el)
     return () => observer.disconnect()
   })
+
+  // Mount-only observer (#690): tracks which cards are actually on
+  // screen, independent of the 0.6 "you've arrived" threshold above --
+  // a low threshold plus a lookahead margin so a neighbour the roll is
+  // carrying toward view mounts a little ahead of being visible (no
+  // pop-in), but a card sitting untouched a full card away never enters
+  // this set at all. Not gated on `rolling`: a programmatic roll should
+  // mount whatever it's visibly passing through exactly like a wheel
+  // scroll does.
+  $effect(() => {
+    void cards
+    const observer = new IntersectionObserver(
+      (entries) => {
+        for (const entry of entries) {
+          const key = (entry.target as HTMLElement).dataset.card
+          if (!key) continue
+          if (entry.isIntersecting) visibleKeys.add(key)
+          else visibleKeys.delete(key)
+        }
+      },
+      { root: deckEl, threshold: 0, rootMargin: '25% 0px' },
+    )
+    for (const el of Object.values(cardEls)) if (el) observer.observe(el)
+    return () => observer.disconnect()
+  })
 </script>
 
 <div class="deck" bind:this={deckEl}>
@@ -105,7 +140,7 @@
       aria-label={card.name}
       aria-hidden={i !== activeIndex}
     >
-      {#if near(i)}
+      {#if mounted(i)}
         {#if card.key === 'fall'}
           <Fall />
         {:else}
