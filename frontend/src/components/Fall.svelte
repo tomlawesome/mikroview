@@ -696,7 +696,7 @@
               <text class="blab band-label" x={slot.bx + 6} y="22">{b.label}</text>
               {#if b.epithet}<text class="bsub band-epithet" x={slot.bx + 6} y="36">{b.epithet}</text>{/if}
               {#if b.key === '__unmatched__'}
-                <text class="chip ch-mut band-caption quiet" x={slot.bx + 6} y="50">NOT IN A PUSHED RULE TABLE</text>
+                <text class="chip ch-mut band-caption quiet" x={slot.bx + 6} y="50">NOT IN A PUSHED TABLE</text>
               {:else if b.coverage === 'dark'}
                 <text class="chip ch-bad band-caption bad" x={slot.bx + 6} y="50">DARK — NO LOG RULE</text>
               {:else if b.coverage === 'unknown'}
@@ -842,11 +842,9 @@
 
         <!-- ══ the NOW edge ══ -->
         <text class="now-caption" x={RAIL} y={NOW_Y - 5}
-          >NOW · {nowClock()} — the spectrum above is this instant; below, it falls into memory</text>
+          >NOW · {nowClock()}</text>
         <line class="nowline" x1={RAIL} y1={NOW_Y} x2={rig.width - 14} y2={NOW_Y} />
         <circle class="now-dot" cx={rig.width - 18} cy={NOW_Y} r="2.5" />
-        <text class="anno" x={RAIL - 14} y={SPEC_TOP + 40} text-anchor="end">live</text>
-        <text class="anno" x={RAIL - 14} y={SPEC_BASE} text-anchor="end">floor</text>
       </svg>
     </div>
 
