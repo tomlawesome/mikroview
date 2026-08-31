@@ -125,7 +125,12 @@ describe('the health dials (#648)', () => {
     expect(container.querySelectorAll('.dring.d-healthy').length).toBe(1)
   })
 
-  it('clicking either dial opens the docket', () => {
+  // #724 replaces "one click leaves for the docket" with a two-step
+  // control: this used to assert dials[0].click() went straight to
+  // appState.view === 'flags'. That is now the *old* behaviour -- see
+  // "the dials' condensed panel (#724)" below for what a click does
+  // instead (expands a panel) and how a row gets you to the docket.
+  it('clicking a dial no longer leaves the scene by itself -- it only expands the panel', () => {
     flagsState.list = [flag('critical_port', '203.0.113.5')]
     watchlistState.entries = [watchEntry()]
     const { container } = render(Topography)
@@ -135,10 +140,194 @@ describe('the health dials (#648)', () => {
     expect(dials.length).toBe(2)
 
     dials[0].click()
-    expect(appState.view).toBe('flags')
+    flushSync()
+    expect(appState.view).toBe('topography')
+    expect(dials[0].getAttribute('aria-expanded')).toBe('true')
 
+    // Clicking the *other* dial while a panel is open counts as
+    // "somewhere else on the page" for the click-away rule: it closes
+    // the flags panel rather than also opening the watchers one, since
+    // the click-away click must not also trigger whatever was under the
+    // pointer (#724's own "Care" note).
     dials[1].click()
+    flushSync()
+    expect(appState.view).toBe('topography')
+    expect(dials[0].getAttribute('aria-expanded')).toBe('false')
+    expect(dials[1].getAttribute('aria-expanded')).toBe('false')
+
+    // A second, real click on the watchers dial does open its own panel.
+    dials[1].click()
+    flushSync()
+    expect(appState.view).toBe('topography')
+    expect(dials[1].getAttribute('aria-expanded')).toBe('true')
+  })
+})
+
+describe("the dials' condensed panel (#724)", () => {
+  it('first click opens the panel, worst first, capped at five rows plus "and N more"', () => {
+    flagsState.list = [
+      flag('activity_spike', '203.0.113.1', { lastSeen: '2026-01-01T01:00:00Z' }), // advisory
+      flag('critical_port', '203.0.113.2', { lastSeen: '2026-01-01T02:00:00Z' }), // alarm, older
+      flag('critical_port', '203.0.113.3', { lastSeen: '2026-01-01T03:00:00Z' }), // alarm, newest
+      flag('critical_port', '203.0.113.4'),
+      flag('critical_port', '203.0.113.5'),
+      flag('critical_port', '203.0.113.6'),
+    ]
+    const { container } = render(Topography)
+    flushSync()
+
+    const flagsDial = container.querySelector<HTMLButtonElement>('.dial')!
+    flagsDial.click()
+    flushSync()
+
+    const panel = container.querySelector('#' + flagsDial.getAttribute('aria-controls'))
+    expect(panel).not.toBeNull()
+    const rows = panel!.querySelectorAll('.dp-row')
+    // 5 flag rows + the "and N more" row
+    expect(rows.length).toBe(6)
+    expect(rows[rows.length - 1].textContent).toContain('and 1 more')
+
+    // Worst first: the two alarm (✱) critical_port flags sort ahead of
+    // the advisory activity_spike, and the newer alarm sorts ahead of
+    // the older one.
+    expect(rows[0].getAttribute('aria-label')).toContain('Alarm')
+    expect(rows[0].getAttribute('aria-label')).toContain('203.0.113.3')
+    expect(rows[1].getAttribute('aria-label')).toContain('203.0.113.2')
+  })
+
+  it('a row click navigates to that flag/watch\'s tab; the dial itself never navigates once open', () => {
+    flagsState.list = [flag('critical_port', '203.0.113.5')]
+    const { container } = render(Topography)
+    flushSync()
+
+    const flagsDial = container.querySelector<HTMLButtonElement>('.dial')!
+    flagsDial.click()
+    flushSync()
+    expect(appState.view).toBe('topography')
+
+    const row = container.querySelector<HTMLButtonElement>('.dp-row')!
+    row.click()
+    flushSync()
+    expect(appState.view).toBe('flags')
+  })
+
+  it('a watch row click navigates to the watchlist tab', () => {
+    watchlistState.entries = [watchEntry({ source: { ip: '192.168.1.9' } })]
+    const { container } = render(Topography)
+    flushSync()
+
+    const watchDial = container.querySelectorAll<HTMLButtonElement>('.dial')[1]
+    watchDial.click()
+    flushSync()
+
+    const row = container.querySelector<HTMLButtonElement>('.dp-row')!
+    row.click()
+    flushSync()
     expect(appState.view).toBe('watchlist')
+  })
+
+  it('the "and N more" row opens the tab with filters reset rather than any one row', () => {
+    flagsState.list = Array.from({ length: 7 }, (_, i) => flag('critical_port', `203.0.113.${i}`))
+    appState.setFilter('interface', 'bridge1')
+    const { container } = render(Topography)
+    flushSync()
+
+    const flagsDial = container.querySelector<HTMLButtonElement>('.dial')!
+    flagsDial.click()
+    flushSync()
+
+    const more = container.querySelector<HTMLButtonElement>('.dp-more')!
+    more.click()
+    flushSync()
+    expect(appState.view).toBe('flags')
+    expect(appState.filters.interface).toBe('')
+  })
+
+  it('clicking the dial again collapses the panel', () => {
+    flagsState.list = [flag('critical_port', '203.0.113.5')]
+    const { container } = render(Topography)
+    flushSync()
+
+    const flagsDial = container.querySelector<HTMLButtonElement>('.dial')!
+    flagsDial.click()
+    flushSync()
+    expect(container.querySelector('.dial-panel')).not.toBeNull()
+
+    flagsDial.click()
+    flushSync()
+    expect(container.querySelector('.dial-panel')).toBeNull()
+    expect(flagsDial.getAttribute('aria-expanded')).toBe('false')
+  })
+
+  it('a click anywhere else on the page dismisses the panel without triggering what was under the pointer', () => {
+    flagsState.list = [flag('critical_port', '203.0.113.5')]
+    const { container } = render(Topography)
+    flushSync()
+
+    const flagsDial = container.querySelector<HTMLButtonElement>('.dial')!
+    flagsDial.click()
+    flushSync()
+    expect(container.querySelector('.dial-panel')).not.toBeNull()
+
+    let elsewhereClicked = 0
+    const elsewhere = document.createElement('button')
+    elsewhere.addEventListener('click', () => elsewhereClicked++)
+    document.body.appendChild(elsewhere)
+
+    elsewhere.click()
+    flushSync()
+
+    expect(container.querySelector('.dial-panel')).toBeNull()
+    // The click was spent on dismissal -- it never reached elsewhere's
+    // own handler.
+    expect(elsewhereClicked).toBe(0)
+
+    document.body.removeChild(elsewhere)
+  })
+
+  it('Escape closes the panel and returns focus to the dial that opened it', () => {
+    flagsState.list = [flag('critical_port', '203.0.113.5')]
+    const { container } = render(Topography)
+    flushSync()
+
+    const flagsDial = container.querySelector<HTMLButtonElement>('.dial')!
+    flagsDial.click()
+    flushSync()
+
+    const row = container.querySelector<HTMLButtonElement>('.dp-row')!
+    expect(document.activeElement).toBe(row)
+
+    row.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+    flushSync()
+
+    expect(container.querySelector('.dial-panel')).toBeNull()
+    expect(document.activeElement).toBe(flagsDial)
+  })
+
+  it('at a count of zero, the panel still opens and says so in one line', () => {
+    const { container } = render(Topography)
+    flushSync()
+
+    const flagsDial = container.querySelector<HTMLButtonElement>('.dial')!
+    flagsDial.click()
+    flushSync()
+
+    const zero = container.querySelector('.dp-zero')
+    expect(zero).not.toBeNull()
+    expect(zero!.textContent).toContain('no open flags')
+    expect(container.querySelectorAll('.dp-row').length).toBe(0)
+  })
+
+  it('the zero line names the last-cleared time when a flag has actually been cleared', () => {
+    flagsState.list = [flag('critical_port', '203.0.113.5', { cleared: true, clearedAt: '2026-01-01T14:02:00Z' })]
+    const { container } = render(Topography)
+    flushSync()
+
+    const flagsDial = container.querySelector<HTMLButtonElement>('.dial')!
+    flagsDial.click()
+    flushSync()
+
+    expect(container.querySelector('.dp-zero')?.textContent).toContain('the last cleared at')
   })
 })
 
