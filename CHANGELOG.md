@@ -311,6 +311,30 @@ rewritten.
   neighbour of Topography and Stream as well as itself). Deck.svelte's
   `.card` is now `position: relative`, closing the gap for every scene
   that sits inside it rather than papering over Metrics' own case.
+- **The stream's table had the ratified nine columns but not the
+  ratified measure** (#685). #644 built the columns; this is the rest of
+  round 29's stream scene, which the branch that built them never
+  touched. Source, destination and rule were three equal flexible
+  columns sharing leftover width evenly regardless of what each held --
+  on a wide viewport that gave source roughly a third of the table for
+  a short IP, while proto/port/rule were pushed toward (and sometimes
+  past) the right edge. Rule is now the only flexible column; the rest
+  hold fixed widths sized to what they actually carry (worked out by
+  hand against the mockup's own rows, since `the-whole.html`'s table
+  sets no widths at all and relies on plain browser auto-layout).
+  Action badges shrink to the mockup's own small-flat numbers (`10px`
+  font, `0 6px` padding, `0.06em` tracking, was `12.5px`/`3px 8px`/
+  `0.03em`) -- the colors already matched. The thin vertical strokes
+  floating over the header turned out to be the column resize handles:
+  their tick mark had an explicit height with no `align-items` to
+  center it, so it pinned to the top of the header instead of centering
+  in it. Persisted column widths from before this change are
+  discarded (`mikroview-column-widths-v4` → `-v5`) since three of the
+  nine columns changed from flexible to fixed. A row on a flagged
+  pathway carried a ⚑ mark in the time cell where the ratified table
+  draws a full-row wash instead (`tr.hl`, `var(--alarm)` at 5%) --
+  built as drawn, glyph removed. The name/address pairing and the row
+  banding were already built to spec and are untouched.
 - **Finishing the setup wizard could land you on a dead view** (#646).
   Its exit still pointed at the stream-as-landing-page arrangement that
   #616 retired once the fall took over as the real landing page, so

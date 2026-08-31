@@ -545,6 +545,14 @@
     touch-action: none;
     display: flex;
     justify-content: center;
+    /* #685: missing on purpose nowhere -- without it, a flex item with an
+       explicit cross-size (::after's height: 60% below) does not stretch
+       and falls back to flex-start (top), so the tick pinned itself to
+       the header's top edge instead of centering in it. That read as an
+       unexplained stroke hovering over the column label rather than a
+       column-boundary divider, which is what it actually is: the drag
+       handle for this column's resize. */
+    align-items: center;
   }
 
   /* A clearly-visible divider line at rest, so the resize affordance is
