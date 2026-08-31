@@ -186,6 +186,19 @@ Somewhere else and local -- **not** in CI. No pipeline on either host
 runs the gate, and none should; a job proposing to was closed unmerged
 (#704, #705) once that was clear.
 
+The image carries **all three engines**, and `MV_BROWSER` picks one --
+`chromium` (the default), `firefox` or `webkit`. That is the second half
+of what it is for: a suite any of the three can be driven against,
+whenever a change warrants it, rather than a box dedicated to one of
+them. Chromium is not the safe choice merely because it is the default:
+#659 shipped a static `style` attribute Chromium tolerates and Firefox
+refuses under this app's CSP, past live-check, vitest and every
+screenshot, found by the owner opening the app.
+
+So the two hosts are interchangeable for a run. If the workstation is
+already busy with one, run the next one here instead -- that is the
+point of it existing.
+
 The second host is the box that also serves the GitLab runner. It has a
 dedicated unprivileged account, `mvagent`, provisioned by the owner on
 2026-08-31.
