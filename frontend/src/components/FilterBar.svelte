@@ -68,10 +68,10 @@
   // inside the open drawer never closes the thing being used.
   let fboxEl: HTMLDivElement | undefined = $state()
   let barEl: HTMLDivElement | undefined = $state()
-  // The hint inside the box is the real button (see its comment in the
+  // The hint inside the box is the real input (see its comment in the
   // markup), so it -- not the box div, which has no tabstop -- is where
   // keyboard focus goes back to on close.
-  let hintEl: HTMLButtonElement | undefined = $state()
+  let hintEl: HTMLInputElement | undefined = $state()
 
   function onKeydown(e: KeyboardEvent) {
     if (e.key !== 'Escape') return
@@ -85,9 +85,9 @@
   }
 
   // The box is a click-to-open target for the pointer; the keyboard's
-  // way in is the real button inside it, where Enter and Space are
-  // native. See the markup comment on .fbox for why the role does not
-  // sit on the box itself.
+  // way in is the real input inside it, which takes text natively. See
+  // the markup comment on .fbox for why the role does not sit on the
+  // box itself.
   // "Clicking away from the box closes it" (owner, 2026-08-31) -- away
   // from the open strip too, not just the box itself. Bound via
   // <svelte:window> below, which Svelte itself adds on mount and
@@ -201,10 +201,12 @@
          buttons -- each chip's own ⌫ -- and a screen reader flattens the
          content of anything with role="button", which would have taken
          the chip removers out of reach. Instead the always-present
-         .fbtype hint below is a real button and carries the expanded
-         state, so the keyboard path and the announcement live on a
-         genuine control while the whole box stays clickable by pointer.
-         Hence the two ignores: the keyboard route is that button, not
+         .fbtype input below is the genuine control and carries the
+         expanded state, so the keyboard path and the announcement live
+         there while the whole box stays clickable by pointer -- a click
+         anywhere in the box (including empty space or a chip's own
+         text) focuses that input, same as clicking the input directly.
+         Hence the two ignores: the keyboard route is that input, not
          this div. -->
     <!-- svelte-ignore a11y_no_static_element_interactions -->
     <!-- svelte-ignore a11y_click_events_have_key_events -->
@@ -213,7 +215,10 @@
       class:empty={filterChips.length === 0}
       class:open={expanded}
       bind:this={fboxEl}
-      onclick={() => (expanded = true)}
+      onclick={() => {
+        expanded = true
+        hintEl?.focus()
+      }}
     >
       {#if filterChips.length > 0}
         <span class="fchips">
@@ -237,27 +242,43 @@
             >
           {/each}
         </span>
-        <button
-          type="button"
-          class="fbtype"
-          aria-haspopup="true"
-          aria-expanded={expanded}
-          aria-controls="filterbar-strip"
-          bind:this={hintEl}
-          onclick={() => (expanded = true)}>type a term, or click a value in a row</button
-        >
-      {:else}
-        <button
-          type="button"
-          class="fbtype"
-          aria-haspopup="true"
-          aria-expanded={expanded}
-          aria-controls="filterbar-strip"
-          bind:this={hintEl}
-          onclick={() => (expanded = true)}
-          >no filter — every line, as it arrived. type a term, or click a value in a row</button
-        >
       {/if}
+      <!-- #734: the always-visible free-text term. It reads/writes the
+           same appState.filters.rule the strip's own Rule field below
+           does (label/raw/name substring search, lib/state.svelte.ts's
+           applyFilters) -- "editing either writes the same
+           appState.filters" per the top-of-file comment, not a second
+           field. The old button's wording moves here unchanged, as the
+           placeholder. -->
+      <!-- aria-expanded/aria-haspopup aren't part of the textbox role's
+           supported set (the linter is right to flag them), but there is
+           no combobox listbox here to justify that role instead -- this
+           is a plain text field that happens to also disclose the strip
+           below, and dropping the state announcement would leave a
+           screen reader user unable to tell the strip opened at all. -->
+      <!-- svelte-ignore a11y_role_supports_aria_props_implicit -->
+      <input
+        type="text"
+        class="fbtype"
+        placeholder={filterChips.length > 0
+          ? 'type a term, or click a value in a row'
+          : 'no filter — every line, as it arrived. type a term, or click a value in a row'}
+        aria-label={filterChips.length > 0
+          ? 'type a term, or click a value in a row'
+          : 'no filter — every line, as it arrived. type a term, or click a value in a row'}
+        aria-haspopup="true"
+        aria-expanded={expanded}
+        aria-controls="filterbar-strip"
+        bind:this={hintEl}
+        bind:value={appState.filters.rule}
+        onkeydown={(e) => {
+          // The button this replaces opened natively on Enter or Space;
+          // Space must stay a literal space while typing a term, but
+          // Enter carries no other meaning here (there is no form to
+          // submit), so it keeps the keyboard's way into the strip.
+          if (e.key === 'Enter') expanded = true
+        }}
+      />
     </div>
     <span class="spans" role="group" aria-label="How far back the stream shows — {reachWords}">
       {#each SPANS as span (span.key)}
@@ -617,10 +638,14 @@
   /* The empty box still says what it is (#697) -- round 29's box only
      rendered once a filter existed, which is exactly why the build kept
      a second "Filters ▸" control alive beside it. */
-  /* A real button, so Enter and Space open the drawer natively and a
-     screen reader hears the expanded state -- reset to read as the quiet
-     hint it looks like, but keeping the focus ring the app uses
-     everywhere else, since this is now the keyboard's way in. */
+  /* #734: a real text input, so it actually takes keystrokes -- reset to
+     read as the quiet hint it looks like (no color of its own; the
+     shared `input, select` rule below gives it the same ink every other
+     field's typed text has, and `input::placeholder` dims the hint text
+     until something is typed), but keeping the focus ring the app uses
+     everywhere else, since this is the keyboard's way in. flex:1 lets it
+     take up whatever width the chips don't, so the whole box stays one
+     click/type target. */
   .fbtype {
     appearance: none;
     background: none;
@@ -628,8 +653,9 @@
     padding: 0;
     font: inherit;
     text-align: left;
-    cursor: pointer;
-    color: var(--fg-dim);
+    cursor: text;
+    flex: 1;
+    min-width: 60px;
   }
 
   .fbtype:focus-visible {
