@@ -20,6 +20,7 @@
 import { beforeEach, describe, expect, it } from 'vitest'
 import { render, screen, fireEvent } from '@testing-library/svelte'
 import { flushSync } from 'svelte'
+import type { FirewallEvent } from '../lib/types'
 
 // jsdom has no window.matchMedia -- viewport.svelte.ts's ViewportState
 // singleton calls it at module-load time (same fix used throughout this
@@ -45,10 +46,11 @@ const { retentionState } = await import('../lib/retention.svelte')
 
 // The box div carries no role -- it holds the chips' own remove buttons,
 // and a screen reader flattens the contents of anything with
-// role="button". The hint inside it is the real control and carries the
+// role="button". The hint inside it is the real control -- a text
+// input, #734, so it can actually be typed into -- and carries the
 // expanded state, so that is what these tests drive.
 function getBox() {
-  return screen.getByRole('button', { name: /type a term/ })
+  return screen.getByRole('textbox', { name: /type a term/ })
 }
 
 // Opens the desktop strip the same way an owner-specified click does --
@@ -56,6 +58,22 @@ function getBox() {
 async function expandRow() {
   await fireEvent.click(getBox())
   flushSync()
+}
+
+// Minimal event fixture, mirroring lib/state.svelte.test.ts's own evt() --
+// only the fields applyFilters' rule branch reads.
+function evt(overrides: Partial<FirewallEvent> = {}): FirewallEvent {
+  return {
+    id: 1,
+    time: '2026-01-01T00:00:00Z',
+    deviceId: 'core',
+    sourceIp: '10.0.0.1',
+    action: 'accept',
+    ruleLabel: 'lan-wan',
+    chain: 'forward',
+    raw: 'A|lan-wan|forward: ...',
+    ...overrides,
+  }
 }
 
 beforeEach(() => {
@@ -83,15 +101,32 @@ describe('FilterBar, the filter line (#697, ratified round 30)', () => {
 
   it('says so when no term is set, rather than vanishing', () => {
     render(FilterBar)
-    expect(screen.getByText('no filter — every line, as it arrived. type a term, or click a value in a row')).toBeTruthy()
+    expect(
+      screen.getByPlaceholderText('no filter — every line, as it arrived. type a term, or click a value in a row'),
+    ).toBeTruthy()
   })
 
   it('shows every active term as a chip, with an invitation to add more', () => {
     appState.filters = { ...emptyFilters(), action: 'drop', port: '445' }
     render(FilterBar)
     const box = document.querySelector('.fbox')
-    expect(box?.textContent?.replace(/\s+/g, ' ').trim()).toBe('action:drop⌫port:445⌫ type a term, or click a value in a row')
-    expect(screen.getByText('type a term, or click a value in a row')).toBeTruthy()
+    expect(box?.textContent?.replace(/\s+/g, ' ').trim()).toBe('action:drop⌫port:445⌫')
+    expect(screen.getByPlaceholderText('type a term, or click a value in a row')).toBeTruthy()
+  })
+
+  it('actually takes keystrokes -- typing in the box writes the same free-text filter the strip\'s Rule field does, and narrows the stream (#734)', async () => {
+    appState.events = [evt({ id: 1, ruleLabel: 'wan-block-scan' }), evt({ id: 2, ruleLabel: 'lan-internal' })] as unknown as (typeof appState)['events']
+    render(FilterBar)
+    const box = getBox()
+    expect(appState.filters.rule).toBe('')
+    expect(appState.filteredEvents.map((e) => e.id)).toEqual([1, 2])
+
+    await fireEvent.input(box, { target: { value: 'block' } })
+    flushSync()
+
+    expect(appState.filters.rule).toBe('block')
+    expect((box as HTMLInputElement).value).toBe('block')
+    expect(appState.filteredEvents.map((e) => e.id)).toEqual([1])
   })
 
   it('drops one term at a time from its own chip, leaving the rest of the filter alone', async () => {
@@ -158,16 +193,26 @@ describe('FilterBar, the filter line (#697, ratified round 30)', () => {
     expect(box.getAttribute('aria-expanded')).toBe('false')
   })
 
-  it('gives the keyboard a real button inside the box, so Enter and Space are native', async () => {
+  it('gives the keyboard a real input inside the box, so keystrokes land as text (#734)', async () => {
     render(FilterBar)
     const box = getBox()
-    // A native <button>: the browser turns Enter and Space into a click,
-    // which jsdom does not synthesise, so assert the element rather than
-    // simulate a keystroke the environment cannot deliver.
-    expect(box.tagName).toBe('BUTTON')
-    expect(box.getAttribute('type')).toBe('button')
+    // A native <input>, not the button it used to be -- so Space types a
+    // literal space rather than activating a control.
+    expect(box.tagName).toBe('INPUT')
+    expect(box.getAttribute('type')).toBe('text')
 
     await fireEvent.click(box)
+    flushSync()
+    expect(box.getAttribute('aria-expanded')).toBe('true')
+    expect(screen.getByLabelText('Device')).toBeTruthy()
+  })
+
+  it('still gives the keyboard a way into the strip without a mouse: Enter in the box opens it (#734)', async () => {
+    render(FilterBar)
+    const box = getBox()
+    expect(box.getAttribute('aria-expanded')).toBe('false')
+
+    await fireEvent.keyDown(box, { key: 'Enter' })
     flushSync()
     expect(box.getAttribute('aria-expanded')).toBe('true')
     expect(screen.getByLabelText('Device')).toBeTruthy()
