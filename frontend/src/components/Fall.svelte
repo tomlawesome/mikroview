@@ -561,6 +561,21 @@
   }
 
   // ── The spectrum: one needle per carrier arriving this instant ──────
+  // A needle's climb is capped so even the busiest carrier's peak (and
+  // its label, and the curve's own overshoot past its tip -- see
+  // wavePath) never reaches into the band head above: SPEC_TOP is the
+  // head's own bottom edge, and its coloured bar (the `rect` at
+  // y=56..59 in the template) sits just inside it. peakLabels puts a
+  // label's baseline 8px above the tip; a label has no descenders here
+  // (port labels are digits and capitals) but its own ascender still
+  // runs another ~8px above that baseline. Reserving 20 units of
+  // headroom above SPEC_TOP for the tallest possible tip clears both
+  // the label's own rendered top and the curve's overshoot, with a
+  // margin to spare. Not compared against the mockup's own peak heights:
+  // #s2 draws its spectra on a 128 baseline, a different frame from this
+  // scene's 170, so its raw coordinates say nothing about ours.
+  const SPEC_CLIMB_MIN = 24 // a barely-active carrier's needle
+  const SPEC_CLIMB_MAX = SPEC_BASE - (SPEC_TOP + 20) // the busiest carrier's needle
   interface Needle {
     x: number
     tipY: number
@@ -574,7 +589,7 @@
       .filter((c) => c.buckets[0].total > 0)
       .map((c) => ({
         x: cx(slot, c),
-        tipY: SPEC_BASE - (24 + (c.buckets[0].total / b.nowMax) * 72),
+        tipY: SPEC_BASE - (SPEC_CLIMB_MIN + (c.buckets[0].total / b.nowMax) * (SPEC_CLIMB_MAX - SPEC_CLIMB_MIN)),
         lane: dominantLane(c.buckets[0]),
         port: c.port,
       }))
