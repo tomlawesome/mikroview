@@ -37,9 +37,11 @@
   } = $props()
 
   const GUTTER = 66
-  // Deep enough that a rotated flag-type label (up to ~67px of vertical
-  // reach at -60 degrees) clears the group labels at the very top rather
-  // than crossing them.
+  // Deep enough for the stacked traffic column header (group label, name,
+  // value, scale) to clear before the axis starts. Round 30: the flag-type
+  // label used to need extra reach here for its rotation; now it is flat,
+  // one line, 10px above the axis (see `HEADER - 10` below), so it fits
+  // inside this same allowance.
   const HEADER = 118
   const ROW_H = 8
   // Floors, not the drawn size: a column never shrinks below these, so a
@@ -58,16 +60,32 @@
   // full-bleed width.
   let boxWidth = $state(0)
 
-  const flagsWidth = $derived(hour.flags.length * FLAG_COL_MIN)
-  const dataMinWidth = $derived(GUTTER + hour.traffic.length * COL_MIN + GROUP_GAP + flagsWidth + 12)
+  // Round 30: only the flag types that actually fired this hour get a
+  // column -- the mockup draws a column per fired type, not one for every
+  // registered type (docs/design/concepts/round-30/the-whole.html #s4 draws
+  // two flag columns, "unplanned" and "ring broken", not all sixteen).
+  // hour.flags still carries every registered type (spoke-first, then
+  // silent) so the cross-section and other views keep the full picture;
+  // the register itself just doesn't draw a column for a silent one.
+  const firedFlags = $derived(hour.flags.filter((s) => s.spoke))
+
+  // Off for round-30 fidelity: the ledger strip below is unmounted, not
+  // deleted (#700, #691). Typed rather than inferred so the block stays
+  // reachable to the type checker.
+  const LEDGER_ENABLED: boolean = false
+  // No flag columns at all -- 0 fired this hour -- means no group gap to
+  // reserve either, so the traffic ribbons get the space back instead of
+  // leaving a blank strip.
+  const flagGap = $derived(firedFlags.length > 0 ? GROUP_GAP : 0)
+  const flagsWidth = $derived(firedFlags.length * FLAG_COL_MIN)
+  const dataMinWidth = $derived(GUTTER + hour.traffic.length * COL_MIN + flagGap + flagsWidth + 12)
   const width = $derived(Math.max(dataMinWidth, boxWidth || dataMinWidth))
 
   // Every traffic column grows to fill what the flag columns and gutter
   // leave behind -- "columns spaced across the frame" (round 21). Flag
-  // columns stay narrow and rotated, as ratified; only the traffic
-  // ribbons spread.
+  // columns stay narrow, as ratified; only the traffic ribbons spread.
   const COL_W = $derived(
-    hour.traffic.length > 0 ? Math.max(COL_MIN, (width - GUTTER - GROUP_GAP - flagsWidth - 12) / hour.traffic.length) : COL_MIN,
+    hour.traffic.length > 0 ? Math.max(COL_MIN, (width - GUTTER - flagGap - flagsWidth - 12) / hour.traffic.length) : COL_MIN,
   )
   const FLAG_COL_W = FLAG_COL_MIN
   // A ribbon at "full breadth" (round 22) fills nearly its whole column
@@ -75,7 +93,7 @@
   // neighbours so two maxed-out ribbons never touch.
   const HALF = $derived(Math.max(30, COL_W / 2 - 8))
 
-  const flagsX0 = $derived(GUTTER + hour.traffic.length * COL_W + GROUP_GAP)
+  const flagsX0 = $derived(GUTTER + hour.traffic.length * COL_W + flagGap)
   const height = $derived(HEADER + Math.max(1, n) * ROW_H + BOTTOM)
 
   const refusedFrom = $derived(hour.traffic.findIndex((s) => s.ink === 'refused'))
@@ -148,7 +166,7 @@
   }
 
   const label = $derived(
-    `Register: ${hour.traffic.length} traffic series and ${hour.flags.length} flag types for the hour to ` +
+    `Register: ${hour.traffic.length} traffic series and ${firedFlags.length} flag types for the hour to ` +
       `${hour.brink ? formatHM(hour.brink) : 'now'}, vertical ribbons on shared minute-rows, newest at the top`,
   )
 </script>
@@ -163,7 +181,9 @@
         {#if refusedFrom >= 0}
           <text class="group" x={colX(refusedFrom) - HALF} y="16">REFUSED</text>
         {/if}
-        <text class="group" x={flagsX0} y="16">FLAG EPISODES</text>
+        {#if firedFlags.length > 0}
+          <text class="group" x={flagsX0} y="16">FLAG EPISODES</text>
+        {/if}
 
         {#each timeTicks as i (i)}
           <text class="time" class:brink={i === n - 1} x={GUTTER - 8} y={snapFill(yOf(i), dpr) + 3.5} text-anchor="end"
@@ -185,15 +205,15 @@
           <path class="ribbon ink-{series.ink}" d={ribbon(series.values, cx, series.scale)} />
         {/each}
 
-        {#each hour.flags as series, i (series.key)}
+        {#each firedFlags as series, i (series.key)}
           {@const cx = flagX(i)}
-          <text
-            class="f-name"
-            class:quiet={!series.spoke}
-            x={cx}
-            y={HEADER - 10}
-            text-anchor="end"
-            transform="rotate(-60 {cx} {HEADER - 10})">{series.short}</text
+          <!-- ROUND 30: the register's oldest fault. Rotated at -60deg
+               these labels started 2px above the brink rule and swept down
+               across it -- a longer name dipped further still. Rotation
+               was never carrying anything the flat form couldn't: written
+               flat, above the line, centred on the column it names. -->
+          <text class="f-name" class:quiet={!series.spoke} x={cx} y={HEADER - 10} text-anchor="middle"
+            >{series.short}</text
           >
           <line
             class="axis"
@@ -256,10 +276,22 @@
   </aside>
 </div>
 
-<div class="ledger">
-  <h3 class="ledger-head">The ledger <span>· the same hour in totals — magnitude, not time</span></h3>
-  <MetricsTotals {hour} />
-</div>
+<!-- ROUND 30 FIDELITY: none of the three ratified metrics views (seismograph,
+     register, table -- docs/design/concepts/round-30/the-whole.html #s4)
+     draws a ledger strip. Per the project's build-to-the-mockup-first
+     policy (#700) this stays implemented rather than deleted; it is just
+     unmounted here so nothing renders. Re-mounting it (or replacing it) is
+     tracked as a gap on #691. Guarded by a flag rather than an HTML comment
+     so MetricsTotals and its {hour} usage stay live code and the type check
+     keeps covering them; a plain {#if false} does the same job but narrows
+     to never, which reports the block as unreachable. Same pattern as
+     LiveTable's RESIZE_HANDLES_ENABLED. -->
+{#if LEDGER_ENABLED}
+  <div class="ledger">
+    <h3 class="ledger-head">The ledger <span>· the same hour in totals — magnitude, not time</span></h3>
+    <MetricsTotals {hour} />
+  </div>
+{/if}
 
 <style>
   .register {
