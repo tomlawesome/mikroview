@@ -47,6 +47,34 @@ describe('MetricsSeismograph', () => {
     expect(container.querySelectorAll('.stroke.inner').length).toBe(hour.axis.length)
   })
 
+  // #644: the ratified drum (round 13, and every round 20-29 mockup of
+  // it) carries no per-flag-type panel -- flag detail lives only in the
+  // register's flag columns and the table's flag-episodes column. This
+  // file used to keep a FLAG EPISODES row per detector type left over
+  // from the pre-#644 build; pinned here so it cannot silently return.
+  it('draws no per-flag-type rows even when flag episodes were raised', () => {
+    const hour = buildHour(
+      [{ time: minute(0), byAction: { accept: 400, drop: 9 } }],
+      [{ time: minute(0), byType: { port_scan: 2, new_device: 1 } }],
+    )
+    const { container } = render(MetricsSeismograph, { hour, cursor: -1, onselect: () => {} })
+    expect(container.querySelector('.f-name')).toBeNull()
+    expect(container.querySelector('.tick')).toBeNull()
+    expect(screen.queryByText('FLAG EPISODES')).toBeNull()
+  })
+
+  it("does not grow the drum's height with the number of flag types", () => {
+    const noFlags = buildHour([{ time: minute(0), byAction: { accept: 400 } }], [])
+    const withFlags = buildHour(
+      [{ time: minute(0), byAction: { accept: 400 } }],
+      [{ time: minute(0), byType: { port_scan: 2 } }],
+    )
+    expect(withFlags.flags.length).toBeGreaterThan(0)
+    const { container: a } = render(MetricsSeismograph, { hour: noFlags, cursor: -1, onselect: () => {} })
+    const { container: b } = render(MetricsSeismograph, { hour: withFlags, cursor: -1, onselect: () => {} })
+    expect(a.querySelector('svg')?.getAttribute('height')).toBe(b.querySelector('svg')?.getAttribute('height'))
+  })
+
   it('draws the cursor only once a minute is selected', () => {
     const hour = buildHour(
       [

@@ -53,6 +53,15 @@ rewritten.
   its own total. Per-action detail lives on in the register and the
   table, and the cursor's `aria-valuetext` still reads every action's
   figure.
+- **The drum drops its leftover per-flag-type panel** (#644). The
+  round-13 rewrite replaced the seismograph's per-action lanes with the
+  mirrored stroke but left a FLAG EPISODES row per detector type
+  underneath, inherited unchanged from the pre-drum `#488` build --
+  something no round-13 through round-29 mockup of the seismograph ever
+  drew. Removed; flag detail still reads from the register's flag
+  columns, the table's flag-episodes column, and the cursor's own "N
+  flag episodes" fact. The drum's left margin, which existed only to
+  hold that panel's labels, now matches its right margin.
 - **The topography map grows a floor, two health dials, an aggregate bar
   per card, and node information cards** (#648). An altitude slider at
   the foot of the map steps between clients, services, zones and survey.

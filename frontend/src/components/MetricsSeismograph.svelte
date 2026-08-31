@@ -13,6 +13,14 @@
   // action's own figure for a screen-reader user regardless of which
   // view is on screen.
   //
+  // Flags carry the same way: no round of the ratified deck
+  // (docs/design/concepts/round-{13,20..29}) draws a per-flag-type row
+  // under the drum -- flag detail lives in the register's narrow flag
+  // columns, the table's flag-episodes column, and the hourline
+  // cursor's own "N flag episodes" fact (#644). This file used to keep
+  // a FLAG EPISODES panel here from the pre-#644 build; removed rather
+  // than restyled, since the ratified drum has none.
+  //
   // Hand-rolled SVG, like every other chart this project has ever
   // shipped -- AGENTS.md's dependency rules make a charting library a
   // licence question before it is a size one, and nothing here needs
@@ -33,10 +41,12 @@
   // something, the same "honest thread" rule the record puts on a
   // series that whispered all hour.
   const MIN_HALF = 3
-  const FLAG_ROW_H = 26
-  const GROUP_GAP = 22
   const TOP = 34
   const BOTTOM = 26
+  // Left and right plot margins are equal now that no flag column reads
+  // off the left gutter (the ratified drum's own margins, round 20-29,
+  // are symmetric too) -- just enough for the oldest tick's time label.
+  const LEFT = 30
   const RIGHT = 18
   const MIN_WIDTH = 420
 
@@ -44,21 +54,16 @@
   // whatever the content column gives it after the rail's own state.
   let boxWidth = $state(0)
 
-  // Only the flag column needs a left gutter now that per-action strips
-  // are gone -- the same widths the lane build used for its own flag
-  // names/totals, unchanged by the rewrite.
-  const gutter = $derived(boxWidth < 620 ? 112 : 132)
   const width = $derived(Math.max(MIN_WIDTH, boxWidth || MIN_WIDTH))
   const dpr = $derived(dprState.value)
 
   const n = $derived(hour.axis.length)
-  const plotX0 = $derived(gutter)
+  const plotX0 = $derived(LEFT)
   const plotX1 = $derived(width - RIGHT)
 
   const midlineY = TOP + DRUM_HALF
   const drumBottom = TOP + DRUM_HALF * 2
-  const flagsTop = $derived(drumBottom + GROUP_GAP + 16)
-  const height = $derived(flagsTop + hour.flags.length * FLAG_ROW_H + BOTTOM)
+  const height = $derived(drumBottom + BOTTOM)
 
   // One shared scale for both halves of every stroke: refused traffic is
   // always a subset of the minute's total, so the inner half has to read
@@ -86,10 +91,6 @@
     return plotX0 + (i / (n - 1)) * (plotX1 - plotX0)
   }
 
-  function flagY(i: number): number {
-    return flagsTop + i * FLAG_ROW_H + FLAG_ROW_H / 2
-  }
-
   // Every tenth minute, plus the brink -- enough to place the hour
   // without a ruled grid competing with the strokes.
   const timeTicks = $derived(
@@ -111,7 +112,7 @@
   const label = $derived(
     `Seismograph: one stroke per minute, mirrored about the midline, for the hour to ` +
       `${hour.brink ? formatHM(hour.brink) : 'now'} -- the outer half every event, the inner half refused ` +
-      `traffic, ${hour.flags.length} flag types below, newest at the right`,
+      `traffic, newest at the right`,
   )
 </script>
 
@@ -156,32 +157,6 @@
         {@const inner = halfOf(refused[i])}
         <line class="stroke outer" x1={x} x2={x} y1={midlineY - outer} y2={midlineY + outer} />
         <line class="stroke inner" x1={x} x2={x} y1={midlineY - inner} y2={midlineY + inner} />
-      {/each}
-
-      <!-- flags: episodes are ticks, silence is a labelled hairline -->
-      <text class="group" x="8" y={flagsTop - 14}>FLAG EPISODES</text>
-      {#each hour.flags as series, i (series.key)}
-        {@const y = flagY(i)}
-        <line
-          class="hairline"
-          class:quiet={!series.spoke}
-          x1={plotX0}
-          x2={plotX1}
-          y1={snapLine(y, dpr)}
-          y2={snapLine(y, dpr)}
-        />
-        <text class="f-name" class:quiet={!series.spoke} x="8" y={y + 3.5}>{series.short}</text>
-        <text class="f-total" class:quiet={!series.spoke} x={gutter - 10} y={y + 3.5} text-anchor="end"
-          >{series.total}</text
-        >
-        {#each series.values as v, mi (mi)}
-          {#if v > 0}
-            <line class="tick" x1={snapLine(xOf(mi), dpr)} x2={snapLine(xOf(mi), dpr)} y1={y - 8} y2={y + 8} />
-            {#if v > 1}
-              <text class="tick-n" x={snapFill(xOf(mi), dpr) + 5} y={y - 6}>×{v}</text>
-            {/if}
-          {/if}
-        {/each}
       {/each}
 
       <!-- amber is time: the brink edge the paper feeds from -->
@@ -240,21 +215,6 @@
     stroke: var(--chart-refused);
   }
 
-  /* "The silent types keep a labelled hairline each -- running and
-     quiet, visibly." --border is too close to the page on the dark
-     theme for that to be true, so a flag row's rule is drawn from the
-     text ramp instead, washed rather than faded out of existence. */
-  .hairline {
-    stroke: var(--fg-dim);
-    stroke-width: 1;
-    opacity: 0.55;
-    shape-rendering: crispEdges;
-  }
-
-  .hairline.quiet {
-    opacity: 0.3;
-  }
-
   .decade {
     stroke: var(--border);
     stroke-width: 1;
@@ -276,41 +236,6 @@
      than guessing at DOM order among the axis labels. */
   .time.cursor-label {
     font-weight: 700;
-  }
-
-  .group {
-    fill: var(--fg-dim);
-    font-size: 9px;
-    font-weight: 650;
-    letter-spacing: 0.16em;
-  }
-
-  .f-name {
-    fill: var(--fg-muted);
-    font-size: 10px;
-  }
-
-  .f-name.quiet,
-  .f-total.quiet {
-    fill: var(--fg-dim);
-    opacity: 0.75;
-  }
-
-  .f-total {
-    fill: var(--fg-muted);
-    font-family: var(--font-mono);
-    font-size: 10px;
-  }
-
-  .tick {
-    stroke: var(--chart-traffic);
-    stroke-width: 3;
-    stroke-linecap: round;
-  }
-
-  .tick-n {
-    fill: var(--fg-dim);
-    font-size: 9px;
   }
 
   .brink-edge {
