@@ -22,7 +22,13 @@ export type AuthViewState =
 class AuthState {
   state = $state<AuthViewState>("loading");
   username = $state("");
-  role = $state<"admin" | "user" | "">("");
+  role = $state<"admin" | "user" | "viewer" | "">("");
+  // Tier checks (issue #653's three roles: admin ⊇ user ⊇ viewer). An
+  // unknown or empty role -- not yet checked, or signed out -- lands in
+  // neither, the same "lowest tier, no edit rights" default the pencil
+  // gate below already used for a non-admin.
+  isAdmin = $derived(this.role === "admin");
+  canEdit = $derived(this.role === "admin" || this.role === "user");
   // Whether the backend has OIDC/SSO configured at all -- gates
   // rendering the "Sign in with SSO" link (see AuthLogin.svelte/
   // AuthSetup.svelte). Independent of state above: SSO can be
@@ -135,7 +141,7 @@ class AuthState {
     } else if (session.authenticated) {
       this.state = "authenticated";
       this.username = session.username ?? "";
-      this.role = (session.role as "admin" | "user") ?? "";
+      this.role = (session.role as "admin" | "user" | "viewer") ?? "";
       // Absent on an older server: treated as "has one", which only
       // ever offers a link that the server would then refuse -- the
       // safe direction to be wrong in.
