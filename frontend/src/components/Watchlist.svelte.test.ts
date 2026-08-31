@@ -29,7 +29,7 @@ import { watchlistState } from '../lib/watchlist.svelte'
 import { suggestState } from '../lib/suggest.svelte'
 import { matchesState } from '../lib/matches.svelte'
 import { appState } from '../lib/state.svelte'
-import type { Suggestion, WatchlistCoverage, WatchlistEntry, WatchlistMatch } from '../lib/types'
+import type { Suggestion, WatchNight, WatchlistCoverage, WatchlistEntry, WatchlistMatch } from '../lib/types'
 import Watchlist from './Watchlist.svelte'
 
 function deviceSuggestion(id: string, name: string): Suggestion {
@@ -337,7 +337,7 @@ describe('The ratified watch table (#676)', () => {
     appState.now = new Date('2026-08-24T10:05:00Z').getTime()
   })
 
-  it('renders watch, boundary, window and state for every entry -- window always reads "always"', async () => {
+  it('renders watch, boundary, window and state for every entry -- window reads "always" without one', async () => {
     await renderWatchlist(
       [
         entry('e1', 'SSH watch', { source: { mac: 'aa:bb:cc:dd:ee:ff' }, destIp: '10.0.0.9', ports: [22] }),
@@ -354,9 +354,9 @@ describe('The ratified watch table (#676)', () => {
     expect(table.textContent).toContain('192.168.1.50 → any destination')
     expect(table.textContent).toContain('○ ring broken')
     expect(table.textContent).toContain('paused watch')
-    // No entry carries a schedule -- see Watchlist.svelte's own comment
-    // on why every row honestly reads "always" rather than a fabricated
-    // window.
+    // None of these three carries a window, so "always" is the honest
+    // answer for each -- see the #680 block at the end of this file for
+    // what a row with one reads instead.
     expect(table.querySelectorAll('td.t').length).toBeGreaterThan(0)
     expect(table.textContent?.match(/always/g)?.length).toBe(3)
   })
@@ -483,5 +483,160 @@ describe('The ratified watch table (#676)', () => {
     })
     flushSync()
     expect(watchNames()).toEqual(['alpha watch'])
+  })
+})
+
+// #680: the window and the seven nights of memory behind it. Two
+// surfaces, and one rule that outranks both -- a night mikroview did not
+// observe is never reported as empty.
+describe('The watch window and its nightly memory (#680)', () => {
+  function watchTable(): HTMLElement {
+    return document.querySelector('.watch-table-section') as HTMLElement
+  }
+
+  function nights(...states: WatchNight[]['0']['state'][]): WatchNight[] {
+    return states.map((state, i) => ({
+      opened: `2026-08-${String(17 + i).padStart(2, '0')}T21:00:00Z`,
+      state,
+    }))
+  }
+
+  const quietHours = { start: '22:00', end: '06:00', zone: 'Europe/London' }
+
+  beforeEach(() => {
+    vi.resetAllMocks()
+    vi.mocked(fetchSuggestions).mockResolvedValue([])
+    vi.mocked(fetchRecentMatches).mockResolvedValue([])
+    suggestState.candidates = []
+    matchesState.reset()
+    appState.now = new Date('2026-08-24T10:05:00Z').getTime()
+  })
+
+  it("renders the entry's window in the window column, zone and all", async () => {
+    await renderWatchlist([entry('e1', 'the nas', { window: quietHours })])
+    expect(watchTable().textContent).toContain('22:00–06:00 Europe/London')
+    expect(watchTable().textContent).not.toContain('always')
+  })
+
+  it('still reads "always" for an entry with no window', async () => {
+    await renderWatchlist([entry('e1', 'the nas')])
+    expect(watchTable().textContent).toContain('always')
+  })
+
+  it('filters and sorts on the rendered window', async () => {
+    await renderWatchlist([
+      entry('e1', 'the nas', { window: quietHours }),
+      entry('e2', 'the camera' ),
+    ])
+    await fireEvent.input(within(watchTable()).getByLabelText('Filter watches by window'), {
+      target: { value: '22:00' },
+    })
+    flushSync()
+    const names = Array.from(watchTable().querySelectorAll('tbody tr.wt-row td.k')).map((el) =>
+      el.textContent?.trim(),
+    )
+    expect(names).toEqual(['the nas'])
+  })
+
+  it("shows the drawer's nightly summary in the ratified wording", async () => {
+    await renderWatchlist([
+      entry('e1', 'the nas', {
+        window: quietHours,
+        nights: nights('kept', 'kept', 'kept', 'kept', 'kept', 'empty', 'empty'),
+      }),
+    ])
+    await fireEvent.click(watchTable().querySelector('tr.wt-row') as HTMLElement)
+    flushSync()
+    const drawer = watchTable().querySelector('.wt-drawer') as HTMLElement
+    expect(drawer.textContent).toContain('the last seven nights')
+    expect(drawer.textContent).toContain('five kept nights · two empty')
+  })
+
+  it('grows the third clause only when a night could not be observed', async () => {
+    await renderWatchlist([
+      entry('e1', 'the nas', {
+        window: quietHours,
+        nights: nights('kept', 'kept', 'kept', 'kept', 'kept', 'empty', 'not observed'),
+      }),
+    ])
+    await fireEvent.click(watchTable().querySelector('tr.wt-row') as HTMLElement)
+    flushSync()
+    const drawer = watchTable().querySelector('.wt-drawer') as HTMLElement
+    expect(drawer.textContent).toContain('five kept nights · one empty · one not observed')
+  })
+
+  it('never words an unobserved night as empty', async () => {
+    await renderWatchlist([
+      entry('e1', 'the nas', {
+        window: quietHours,
+        nights: nights('not observed', 'not observed', 'not observed'),
+      }),
+    ])
+    await fireEvent.click(watchTable().querySelector('tr.wt-row') as HTMLElement)
+    flushSync()
+    const drawer = watchTable().querySelector('.wt-drawer') as HTMLElement
+    expect(drawer.textContent).toContain('three nights not observed')
+    expect(drawer.textContent).not.toContain('empty')
+  })
+
+  it('shows no nightly line at all for a watch with no nights recorded yet', async () => {
+    await renderWatchlist([entry('e1', 'the nas', { window: quietHours })])
+    await fireEvent.click(watchTable().querySelector('tr.wt-row') as HTMLElement)
+    flushSync()
+    const drawer = watchTable().querySelector('.wt-drawer') as HTMLElement
+    expect(drawer.textContent).not.toContain('the last seven nights')
+  })
+
+  it('shows a recorded ring break as ring broken, with the window as the reason', async () => {
+    await renderWatchlist([
+      entry('e1', 'the nas', {
+        window: quietHours,
+        nights: nights('kept', 'empty', 'empty'),
+        ring: { broken: true, since: '2026-08-23T05:00:00Z', reason: 'no-match-in-window' },
+      }),
+    ])
+    expect(watchTable().textContent).toContain('○ ring broken — nothing in the window')
+
+    await fireEvent.click(watchTable().querySelector('tr.wt-row') as HTMLElement)
+    flushSync()
+    const drawer = watchTable().querySelector('.wt-drawer') as HTMLElement
+    expect(drawer.textContent).toContain('The ring is broken.')
+    expect(drawer.textContent).toContain("Nothing has matched inside this watch's window")
+    // The recorded break knows which window closed empty, which is why it
+    // is written down at the break rather than worked out on read.
+    expect(drawer.textContent).toContain('since 1d ago')
+    expect(drawer.textContent).toContain('Nights mikroview could not watch are not counted against it.')
+  })
+
+  // paused > no logging visible > ring broken > watching. A watch no rule
+  // logs cannot be judged on nightly presence at all, so coverage wins
+  // over the recorded ring; a paused watch wins over both.
+  it('ranks no-logging above a recorded ring break', async () => {
+    await renderWatchlist(
+      [
+        entry('e1', 'dark watch', {
+          window: quietHours,
+          ring: { broken: true, since: '2026-08-23T05:00:00Z', reason: 'no-match-in-window' },
+        }),
+      ],
+      { e1: 'no-logging' },
+    )
+    expect(watchTable().textContent).toContain('○ ring broken — no logging visible')
+    expect(watchTable().textContent).not.toContain('nothing in the window')
+  })
+
+  it('ranks paused above everything', async () => {
+    await renderWatchlist(
+      [
+        entry('e1', 'paused watch', {
+          enabled: false,
+          window: quietHours,
+          ring: { broken: true, since: '2026-08-23T05:00:00Z', reason: 'no-match-in-window' },
+        }),
+      ],
+      { e1: 'no-logging' },
+    )
+    expect(watchTable().textContent).toContain('○ paused')
+    expect(watchTable().textContent).not.toContain('ring broken')
   })
 })
