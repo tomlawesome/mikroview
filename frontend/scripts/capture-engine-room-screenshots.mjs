@@ -117,11 +117,12 @@ for (const scheme of ['light', 'dark']) {
     console.log('captured engine-room-people-door.png')
   }
 
-  // The watchers station opened, which is the only place the record's
+  // The bench opened, which is the only place the record's
   // dashed-underline knobs are on screen -- worth a shot of its own,
-  // since a station at rest cannot show them.
-  await page.click('.path .station:has-text("The watchers") .shead')
-  await page.waitForSelector('.st-open .bench .row')
+  // since a closed bench cannot show them. Opened from the detection
+  // group's "tune..." link since #633 rewrote this page (#661).
+  await page.click('.olink:has-text("tune")')
+  await page.waitForSelector('.bench .row')
   await page.waitForTimeout(400)
   await page.screenshot({ path: path.join(BUILT, `ac-s2-${scheme}.png`) })
   console.log(`captured built/ac-s2-${scheme}.png`)

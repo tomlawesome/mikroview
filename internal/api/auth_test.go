@@ -396,6 +396,89 @@ func TestAdminCanCreateAdditionalUsers(t *testing.T) {
 	}
 }
 
+// TestAdminCanCreateViewerAndSessionReportsIt pins two things #653 adds:
+// handleAuthCreateUser accepts role "viewer", and GET /api/auth/session
+// -- which already reported "admin"/"user" -- reports "viewer" for such
+// an account correctly too, since sessionResponse.Role is just
+// string(user.Role) with no role-specific casing to miss.
+func TestAdminCanCreateViewerAndSessionReportsIt(t *testing.T) {
+	s := newAuthTestServer(t)
+	ts := httptest.NewServer(s.Routes())
+	defer ts.Close()
+
+	adminClient := &http.Client{Jar: mustCookieJar(t)}
+	postJSON(t, adminClient, ts.URL+"/api/auth/register", credentialsRequest{Username: "admin", Password: "password123"}).Body.Close()
+
+	resp := postJSON(t, adminClient, ts.URL+"/api/auth/users", createUserRequest{Username: "watcher", Password: "password456", Role: "viewer"})
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("expected an admin to be able to create a viewer, got %d", resp.StatusCode)
+	}
+
+	viewerClient := &http.Client{Jar: mustCookieJar(t)}
+	postJSON(t, viewerClient, ts.URL+"/api/auth/login", credentialsRequest{Username: "watcher", Password: "password456"}).Body.Close()
+
+	sessResp, err := viewerClient.Get(ts.URL + "/api/auth/session")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sessResp.Body.Close()
+	var body sessionResponse
+	json.NewDecoder(sessResp.Body).Decode(&body)
+	if !body.Authenticated || body.Role != string(auth.RoleViewer) {
+		t.Errorf("expected an authenticated viewer session reporting role %q, got %+v", auth.RoleViewer, body)
+	}
+}
+
+// TestCreateUserDefaultsToUserRole pins handleAuthCreateUser's
+// pre-#653 default (an empty role means "user"), preserved so an
+// unmodified admin UI/script that never sends a role field keeps
+// creating the same accounts it always did.
+func TestCreateUserDefaultsToUserRole(t *testing.T) {
+	s := newAuthTestServer(t)
+	ts := httptest.NewServer(s.Routes())
+	defer ts.Close()
+
+	adminClient := &http.Client{Jar: mustCookieJar(t)}
+	postJSON(t, adminClient, ts.URL+"/api/auth/register", credentialsRequest{Username: "admin", Password: "password123"}).Body.Close()
+
+	resp := postJSON(t, adminClient, ts.URL+"/api/auth/users", createUserRequest{Username: "operator", Password: "password456"})
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("expected creation with no role field to succeed, got %d", resp.StatusCode)
+	}
+
+	u, ok := s.Auth.ByUsername("operator")
+	if !ok {
+		t.Fatal("expected the account to exist")
+	}
+	if u.Role != auth.RoleUser {
+		t.Errorf("expected an empty role field to default to RoleUser, got %v", u.Role)
+	}
+}
+
+// TestCreateUserRejectsUnrecognizedRole pins the 400 for a role this
+// deployment doesn't have -- "admin" is refused separately (see
+// TestAdminCannotCreateASecondAdmin), so this covers what's left:
+// anything that isn't "", "user" or "viewer".
+func TestCreateUserRejectsUnrecognizedRole(t *testing.T) {
+	s := newAuthTestServer(t)
+	ts := httptest.NewServer(s.Routes())
+	defer ts.Close()
+
+	adminClient := &http.Client{Jar: mustCookieJar(t)}
+	postJSON(t, adminClient, ts.URL+"/api/auth/register", credentialsRequest{Username: "admin", Password: "password123"}).Body.Close()
+
+	resp := postJSON(t, adminClient, ts.URL+"/api/auth/users", createUserRequest{Username: "someone", Password: "password456", Role: "owner"})
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("expected 400 for an unrecognized role, got %d", resp.StatusCode)
+	}
+	if _, ok := s.Auth.ByUsername("someone"); ok {
+		t.Error("expected the account to not have been created")
+	}
+}
+
 func TestNonAdminCannotCreateUsers(t *testing.T) {
 	s := newAuthTestServer(t)
 	ts := httptest.NewServer(s.Routes())
@@ -479,8 +562,16 @@ func TestMutatingRequestWithoutCSRFHeaderIsRejectedOnceAuthActive(t *testing.T) 
 func TestMutatingRequestWithoutCSRFHeaderAllowedWhileAuthInactive(t *testing.T) {
 	// Zero users -- must behave exactly like before this feature existed,
 	// including for mutating requests (see requireAuth's doc comment).
+	//
+	// s.mux() is the raw handler set with requireAuth (and its CSRF
+	// check) deliberately out of the picture -- that is what "no CSRF
+	// header" means to test here. But handleFlagsClear has its own gate
+	// now (#653: user tier, not admin), unrelated to CSRF, which a nil
+	// caller would trip and turn into an unrelated 403 -- so this needs
+	// asUser to supply the identity requireAuth would have, the same way
+	// every admin-gated handler's direct-mux test already uses asAdmin.
 	s, _ := newTestServer(t)
-	ts := httptest.NewServer(s.mux())
+	ts := httptest.NewServer(asUser(s.mux()))
 	defer ts.Close()
 
 	req, err := http.NewRequest(http.MethodPost, ts.URL+"/api/flags/does-not-exist/clear", nil)

@@ -12,12 +12,14 @@
   //    can review real evidence and promote what's expected before
   //    anything is treated as a violation.
   //
-  // Admin-only throughout, matching GET /api/watchlist/entries' own gate
-  // (see internal/api's authzMatrix) -- unlike the match query API
-  // (accessUser, and reachable via a read-only token for external
-  // correlation), entry management itself is administrative
-  // configuration about the network, the same tier as Entities/Audit/
-  // Exclusions.
+  // User tier and above throughout since #653, which is what unblocks
+  // #641: judging a flag Expected and saving the expectation it drafts
+  // now sit at the same tier, instead of the first being open and the
+  // second 403ing. A viewer never reaches this page at all -- the nav
+  // row carries `edit: true` (navGroups.ts) -- so the controls below
+  // need no gate of their own, the same argument the tab comment makes.
+  // The owner-level neighbours it used to sit beside, Audit and
+  // Exclusions, stay admin.
   import { onMount, tick } from 'svelte'
   import { watchlistState } from '../lib/watchlist.svelte'
   import { suggestState } from '../lib/suggest.svelte'
@@ -34,9 +36,10 @@
 
   // Suggestions is a tab of Watchlist (#547) and Matches is a third
   // (#584), both per the ratified navigation record. No admin-gating
-  // needed on the tabs themselves -- Watchlist only ever mounts for an
-  // admin in the first place (see navGroups.ts's `admin: true` on the
-  // Watchlist row), and /api/suggestions* agrees server-side
+  // needed on the tabs themselves -- Watchlist only ever mounts for the
+  // user tier or better in the first place (see navGroups.ts's
+  // `edit: true` on the Watchlist row), and /api/suggestions* agrees
+  // server-side
   // (internal/api/authz_matrix_test.go).
   //
   // Matches sits between the two: it is the evidence the entries beside

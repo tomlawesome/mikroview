@@ -87,7 +87,7 @@ question.
 
 ## Shared grammar
 
-- **Viewer (#490):** READ-ONLY — ADMINS EDIT declared once in the
+- **Viewer (#490, wording since #653):** READ-ONLY declared once in the
   header chip; Name it, Edit, Remove, + Add entity, Begin the
   sitting — absent, never disabled; the ledger and its facts
   unchanged. A viewer's page has no sitting to enter; "N not yet
