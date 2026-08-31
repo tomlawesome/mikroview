@@ -18,6 +18,33 @@ rewritten.
 
 ### Added
 
+- **A demo seeder that exercises the whole interface, not just syslog**
+  (#687). Every UI review this project has run was hampered by a demo
+  that only ever sent syslog: one lane on the fall, no pushed rule/NAT/
+  address tables, every stream row on the unnamed-host fallback,
+  nothing named on Entities, an empty watchlist, a flat metrics
+  hourline -- all read as UI defects when they were data gaps.
+  `scripts/seed-demo.py` is a seeder against a running instance, in the
+  repo rather than rebuilt from memory in `/tmp` each session: it pushes
+  filter/NAT/address tables (with log prefixes, and two rules per
+  router that are pushed but never fire) over `POST /api/ingest/
+  routeros`, names hosts/rules/ports, creates four watchlist entries
+  (two healthy, one paused, one with a genuinely broken ring --
+  `internal/engine/coverage.go`'s `out-of-scope`), a user- and a
+  viewer-tier account alongside the admin, and drives three admin
+  mutations (a cleared flag with a note, an entity rename, a definition
+  edit) so the audit log has rows. Its own `feed` subcommand replaces
+  the ad hoc `/tmp` traffic generator with one that gives every host in
+  its small, consistent estate a single stable MAC for the run --
+  the earlier per-line-random-MAC version read as thousands of
+  first-ever devices (measured: 4,025 `new_device` episodes from about
+  8,000 events), which is what was making the docket, not the traffic,
+  laggy. A fourth router is declared and never touched, so Entities'
+  "quiet is a fact, not a fault" card is real. Country-flag data needs
+  an operator-supplied MaxMind GeoLite2 database (`geoip.dbPath`) that
+  this demo instance does not have configured; the seeder picks real,
+  geolocatable public addresses so that flag is real the moment one is.
+
 - **The docket's watchlist tab built to its ratified round-29 design**
   (#676). A table -- watch · boundary · window · state · last event --
   sits above the existing add/edit/invert/observe/promote workflow
