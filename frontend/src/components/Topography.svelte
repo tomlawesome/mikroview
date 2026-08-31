@@ -34,6 +34,7 @@
   import { formatEps } from '../lib/format'
   import { flagsState, extractSourceIp } from '../lib/flags.svelte'
   import { watchlistState } from '../lib/watchlist.svelte'
+  import { topologyNavState } from '../lib/topologyNav.svelte'
   import { familyOf, ADVISORY_INK } from '../lib/flagPalette'
   import { parseCidr, addressInCidr } from '../lib/addressMatch'
 
@@ -421,6 +422,19 @@
     reach = null
     compose = null
   }
+
+  // A flag's own "where" link (#678) hands off a host to descend into
+  // rather than navigating here directly -- see topologyNav.svelte.ts's
+  // own doc comment for why a shared slot, not a route param. Consumed
+  // (cleared) the instant it's read, so arriving here a second time
+  // without a fresh request just shows the plain map.
+  $effect(() => {
+    const pending = topologyNavState.pendingDescend
+    if (pending) {
+      descend(pending.zoneId, pending.host, pending.ip)
+      topologyNavState.pendingDescend = null
+    }
+  })
 
   function onKeydown(e: KeyboardEvent) {
     if (e.key === 'Escape') {
