@@ -18,6 +18,24 @@ rewritten.
 
 ### Added
 
+- **The docket's watchlist tab built to its ratified round-29 design**
+  (#676). A table -- watch · boundary · window · state · last event --
+  sits above the existing add/edit/invert/observe/promote workflow
+  (now headed "Manage entries"), reading the same entries rather than
+  replacing them. Rows open as drawers, matching the flags tab's own
+  grammar: a plain-English story with a standalone headline, the
+  entry's verbatim last matching line (from the persisted match log's
+  own event, not composed), a detail panel, and pause/resume-watch plus
+  open-in-stream actions. Pausing reuses the definition's existing
+  `enabled` flag through the generic definition PUT (`setWatchlistEnabled`)
+  -- no new route. Two ratified pieces are not built: a per-entry
+  time-of-day "window" (every row honestly reads "always," since no
+  entry carries a schedule) and the seven-night strip ("five kept
+  nights · two empty"), which would need a new persisted nightly
+  history and a schedule to call "night" against -- a data-model
+  decision left to the issue, not invented here. "Mend — widen window"
+  is withheld for the same reason: there is no window to widen.
+
 - **Per-hour top talker and top port, answered by the ring itself**
   (#644). `Store.HourTops` computes each axis minute's winning source
   and destination port from the events the ring actually holds, under

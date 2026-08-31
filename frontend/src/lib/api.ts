@@ -759,6 +759,19 @@ export async function setWatchlistObserving(id: string, observing: boolean): Pro
   return (await res.text()) || `setWatchlistObserving: ${res.status}`
 }
 
+// setWatchlistEnabled pauses or resumes a watchlist entry (#676's
+// ratified "pause watch"/"resume watch" drawer actions) -- the
+// definition's own `enabled` flag (already read back as
+// WatchlistEntry.enabled, see its own doc comment), sent through the
+// same generic PUT every other definition edit uses. Unlike Observing,
+// pausing has no entry-specific side effect, so no dedicated route
+// exists or is needed here.
+export async function setWatchlistEnabled(id: string, enabled: boolean): Promise<WatchlistEntry | string> {
+  const result = await updateDefinition(id, { enabled })
+  if (typeof result === 'string') return result
+  return definitionEntry(result)
+}
+
 // fetchWatchlistMatches answers a windowed query over the persisted
 // match log for one source device (internal/matchlog's own query
 // contract) -- mac and/or ip identify the source; at least one is
