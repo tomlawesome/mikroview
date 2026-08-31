@@ -533,6 +533,11 @@
   const STRIP_WHEEL_STEP_PX = 60 // sideways scroll distance that shifts the window by one boundary
   let wheelCarry = 0
 
+  // #731: the only state the affordance work needs -- whether a drag is
+  // currently in progress, so the cursor can read "grabbing" instead of
+  // "grab" while it is. Nothing else about the drag logic below changes.
+  let stripDragging = $state(false)
+
   // A drag and a plain click land in the same place: the lit segment
   // centres on the pointer immediately (satisfying "click anywhere
   // moves the window there"), and staying down and moving keeps
@@ -553,12 +558,14 @@
     viewStart = viewStartFromClientX(e.clientX)
   }
   function onStripPointerUp() {
+    stripDragging = false
     window.removeEventListener('pointermove', onStripPointerMove)
     window.removeEventListener('pointerup', onStripPointerUp)
   }
   function onStripPointerDown(e: PointerEvent) {
     if (maxStart <= 0) return
     stripEl?.focus()
+    stripDragging = true
     viewStart = viewStartFromClientX(e.clientX)
     window.addEventListener('pointermove', onStripPointerMove)
     window.addEventListener('pointerup', onStripPointerUp, { once: true })
@@ -950,10 +957,16 @@
          (maxStart === 0), exactly as the old pager never drew when
          totalPages === 1. No page numbers, no arrows, no words -- round
          30 README §5, "no apparatus, anywhere" -- the visible range
-         reaches a screen reader only through aria-valuetext. -->
+         reaches a screen reader only through aria-valuetext. #731 gave
+         it a control's look without adding any of that back: a recessed
+         rail behind the ticks, a light edge on the two ends of the lit
+         run (so the run reads as one thumb, not several bright ticks),
+         a hover response, and a grab/grabbing cursor -- all CSS/state,
+         no new text or markup semantics. -->
     {#if maxStart > 0}
       <div
         class="ovstrip"
+        class:dragging={stripDragging}
         role="slider"
         tabindex="0"
         aria-label="Boundaries shown"
@@ -970,6 +983,8 @@
           <span
             class="ovtick"
             class:inwin={i >= viewStart && i < viewStart + perPage}
+            class:inwin-start={i === viewStart}
+            class:inwin-end={i === viewStart + perPage - 1}
             style:background-color={laneMap.get(b.key) || 'var(--o-ink3)'}
             aria-hidden="true"
           ></span>
@@ -1635,16 +1650,37 @@
      pager -- see the template comment above the `{#if maxStart > 0}`
      block for what it is. Thin and along the top of the scene, not the
      middle, and carries no visible text of its own (round 30 README
-     §5). */
+     §5).
+     #731: it worked but didn't read as a control, so it now sits in a
+     faint recessed rail (background + hairline border, built from the
+     same --o-grid2 tint used for borders elsewhere in this file -- no
+     new colours), the lit run's two ends get a light bracket so the
+     run reads as one thumb rather than several bright ticks, hovering
+     grows the rail by 3px while margin-bottom shrinks by the same
+     amount (the box `.ovstrip` + its margin occupies stays fixed, so
+     `.rig` below never moves), and the cursor is grab/grabbing instead
+     of a plain pointer. Still no text, numbers or arrows (round 30
+     README §5) -- purely a look-and-feel change. */
   .ovstrip {
     display: flex;
     align-items: stretch;
     gap: 1px;
     height: 6px;
     margin: 2px 0 10px;
+    padding: 1px;
     border-radius: 3px;
-    cursor: pointer;
+    background: var(--o-grid2);
+    border: 1px solid var(--o-grid2);
+    cursor: grab;
     touch-action: none;
+    transition: height 150ms ease, margin-bottom 150ms ease;
+  }
+  .ovstrip:hover {
+    height: 9px;
+    margin-bottom: 7px;
+  }
+  .ovstrip.dragging {
+    cursor: grabbing;
   }
   .ovstrip:focus-visible {
     outline: 2px solid var(--accent);
@@ -1655,9 +1691,36 @@
     min-width: 1px;
     border-radius: 1px;
     opacity: 0.32;
+    transition: opacity 150ms ease;
+  }
+  .ovstrip:hover .ovtick {
+    opacity: 0.55;
   }
   .ovtick.inwin {
     opacity: 1;
+  }
+  .ovtick.inwin-start {
+    box-shadow:
+      inset 1px 0 0 var(--o-ink),
+      inset 0 1px 0 var(--o-ink),
+      inset 0 -1px 0 var(--o-ink);
+  }
+  .ovtick.inwin-end {
+    box-shadow:
+      inset -1px 0 0 var(--o-ink),
+      inset 0 1px 0 var(--o-ink),
+      inset 0 -1px 0 var(--o-ink);
+  }
+  /* perPage === 1: the run's first and last tick are the same element,
+     so it needs both outer edges rather than whichever of the two
+     rules above happens to win. Three classes outranks two, so this
+     always applies over them when both match. */
+  .ovtick.inwin-start.inwin-end {
+    box-shadow:
+      inset 1px 0 0 var(--o-ink),
+      inset -1px 0 0 var(--o-ink),
+      inset 0 1px 0 var(--o-ink),
+      inset 0 -1px 0 var(--o-ink);
   }
 
   /* ── the foot: the (i), and (when enabled) the window caption ────── */
