@@ -47,10 +47,11 @@
   let gridEl: HTMLDivElement | undefined = $state()
   // Which event's EventDetailSheet.svelte is open -- null means none.
   // Originally issue #85's mobile card layout only; #644's squared
-  // columns made it every row's detail surface, since the sheet is where
-  // the dropped columns' data (device, chain, interfaces, src port, NAT,
-  // MAC) now lives. Typed as FirewallEvent, not ClientEvent, to match
-  // EventRow/EventCardMobile's
+  // columns made it every row's detail surface, since the sheet is the
+  // one place a row's full detail lives -- raw line, MAC/NAT lookups,
+  // and (#717 restored these as columns too, but the sheet still has
+  // them) device, chain, interfaces, src port, NAT, MAC. Typed as
+  // FirewallEvent, not ClientEvent, to match EventRow/EventCardMobile's
   // own prop type -- applyFilters's declared return type is
   // FirewallEvent[] even though the real objects flowing through it are
   // ClientEvents (see state.svelte.ts), so `rendered` below is typed
@@ -439,6 +440,7 @@
           {#each displayGroups as group, gi (group.key)}
             <EventRow
               event={group.head}
+              deviceName={deviceName(group.head.deviceId)}
               count={group.count}
               flagged={flagged.has(group.head.srcIp ?? '')}
               dimmed={isDimmed(group.head)}
@@ -462,6 +464,7 @@
               {#each drawerEvents(group) as member (member.id)}
                 <EventRow
                   event={member}
+                  deviceName={deviceName(member.deviceId)}
                   flagged={flagged.has(member.srcIp ?? '')}
                   dimmed={isDimmed(member)}
                   member
@@ -486,6 +489,7 @@
           {#each displayRendered as event, i (event.id)}
             <EventRow
               {event}
+              deviceName={deviceName(event.deviceId)}
               flagged={flagged.has(event.srcIp ?? '')}
               dimmed={isDimmed(event)}
               banded={i % 2 === 1}
