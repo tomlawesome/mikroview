@@ -31,12 +31,15 @@
   import type { ReachStrand } from '../lib/reach'
   import { authState } from '../lib/auth.svelte'
   import { reachFor } from '../lib/reach'
-  import { formatEps, isPublicIp } from '../lib/format'
+  import { formatEps, isPublicIp, formatHM, formatRelative } from '../lib/format'
   import { flagsState, extractSourceIp } from '../lib/flags.svelte'
   import { watchlistState } from '../lib/watchlist.svelte'
   import { topologyNavState } from '../lib/topologyNav.svelte'
   import { familyOf, ADVISORY_INK } from '../lib/flagPalette'
   import { parseCidr, addressInCidr } from '../lib/addressMatch'
+  import { FLAG_TYPE_LABELS } from '../lib/metricsSeries'
+  import { nightlySummary } from '../lib/watchWindow'
+  import type { Flag, WatchlistEntry } from '../lib/types'
 
   const LANE_INKS = ['var(--lane-lan)', 'var(--lane-srv)', 'var(--lane-iot)', 'var(--lane-guest)', 'var(--marked)']
 
@@ -932,6 +935,286 @@
     appState.view = view
   }
 
+  // --- the dials' condensed panel (#724: "clicking on the dial once
+  // expands a small condensed view of the issues. Second click takes you
+  // to the appropriate pages.") ------------------------------------------
+  // A dial is now a two-step control: first click expands a small panel
+  // beneath it, worst first, capped at five rows plus an "and N more"
+  // row; a second click on a *row* is what leaves for the docket -- the
+  // dial itself only ever opens or closes the panel, never navigates.
+  //
+  // Note on scope (2026-08-31): the row's own destination is only "the
+  // right tab" here (appState.view). Actually landing on that one flag's
+  // or watch's own drawer needs a small pending-selection consumed by
+  // Flags.svelte/Watchlist.svelte, the same shape topologyNavState
+  // already gives the reverse direction (docket -> topography host).
+  // This change's file scope is this component alone, so that consumer
+  // side isn't built yet -- see the issue thread for the follow-up.
+  type DialKind = 'flags' | 'watchlist'
+  const PANEL_ROW_CAP = 5
+
+  let expandedDial = $state<DialKind | null>(null)
+  let flagsDialEl: HTMLButtonElement | undefined = $state()
+  let watchDialEl: HTMLButtonElement | undefined = $state()
+  let flagsWrapEl: HTMLDivElement | undefined = $state()
+  let watchWrapEl: HTMLDivElement | undefined = $state()
+  // Shared by whichever panel is actually rendered -- only one is ever
+  // open at a time, so there is never a stale array to confuse with a
+  // live one.
+  let panelRowEls: (HTMLButtonElement | undefined)[] = $state([])
+  let panelZeroEl: HTMLParagraphElement | undefined = $state()
+
+  function toggleDialPanel(which: DialKind) {
+    expandedDial = expandedDial === which ? null : which
+  }
+
+  function closeDialPanel() {
+    expandedDial = null
+  }
+
+  // Escape is the keyboard user's way out (owner-approved #724 keyboard
+  // section): closes the panel *and* hands focus back to the dial that
+  // opened it, since destroying the panel alone would drop focus to the
+  // document body.
+  function closeDialPanelToTrigger(which: DialKind) {
+    expandedDial = null
+    ;(which === 'flags' ? flagsDialEl : watchDialEl)?.focus()
+  }
+
+  // Wired up as a window listener (below), not a template `onkeydown` on
+  // the panel div: that div deliberately carries no role (Care, #724),
+  // and Svelte's own a11y check flags a keydown handler on a roleless
+  // static element, so the handler lives in script instead of markup.
+  function onPanelKeydown(e: KeyboardEvent, which: DialKind) {
+    if (e.key === 'Escape') {
+      e.stopPropagation()
+      closeDialPanelToTrigger(which)
+      return
+    }
+    if (e.key === 'Tab') {
+      // Deliberately not trapped (unlike lib/focusTrap.ts's sheets):
+      // Tab leaves the panel and closes it behind you, letting the
+      // browser's own default action carry focus onward.
+      closeDialPanel()
+      return
+    }
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      const rows = panelRowEls.filter((el): el is HTMLButtonElement => !!el)
+      if (rows.length === 0) return
+      e.preventDefault()
+      const at = rows.indexOf(document.activeElement as HTMLButtonElement)
+      const next = e.key === 'ArrowDown' ? (at + 1) % rows.length : (at - 1 + rows.length) % rows.length
+      rows[next]?.focus()
+    }
+  }
+
+  // Moves focus into the panel exactly once, on the open transition --
+  // guarded by a plain (non-reactive) local rather than re-running on
+  // every later change to the row list, which would otherwise yank
+  // keyboard focus back to row one on a live update while the operator
+  // is still reading it.
+  let focusedForDial: DialKind | null = null
+  $effect(() => {
+    const which = expandedDial
+    if (which && which !== focusedForDial) {
+      ;(panelRowEls.find((el): el is HTMLButtonElement => !!el) ?? panelZeroEl)?.focus()
+    }
+    focusedForDial = which
+  })
+
+  // Click-away (owner: "just click somewhere else on the page"): a
+  // capturing listener on window sees the click before the element under
+  // the pointer does, so closing here and stopping propagation spends
+  // the click on dismissal alone -- it never also reaches whatever was
+  // underneath. Clicking the *other* dial while a panel is open counts
+  // as "somewhere else" by the same rule: it closes the open panel
+  // rather than also opening the other one, which the click-away rule
+  // above requires as a direct consequence.
+  $effect(() => {
+    if (!expandedDial) return
+    const wrap = expandedDial === 'flags' ? flagsWrapEl : watchWrapEl
+    function onClickAway(e: MouseEvent) {
+      if (wrap && e.target instanceof Node && wrap.contains(e.target)) return
+      expandedDial = null
+      e.stopPropagation()
+      e.preventDefault()
+    }
+    window.addEventListener('click', onClickAway, true)
+    return () => window.removeEventListener('click', onClickAway, true)
+  })
+
+  // Escape/Tab/Up/Down (#724's keyboard section), scoped to keydowns
+  // that land inside this dial's own wrap (its trigger or its panel) so
+  // pressing Escape somewhere unrelated on the page while the panel
+  // happens to be open doesn't steal focus back to the dial.
+  $effect(() => {
+    if (!expandedDial) return
+    const which = expandedDial
+    const wrap = which === 'flags' ? flagsWrapEl : watchWrapEl
+    function onKeydown(e: KeyboardEvent) {
+      if (!(wrap && e.target instanceof Node && wrap.contains(e.target))) return
+      onPanelKeydown(e, which)
+    }
+    window.addEventListener('keydown', onKeydown)
+    return () => window.removeEventListener('keydown', onKeydown)
+  })
+
+  function familyName(mark: string): string {
+    return mark === '✱' ? 'Alarm' : 'Advisory'
+  }
+
+  interface FlagPanelRow {
+    key: string
+    mark: string
+    ink: string
+    label: string
+    time: string
+    count: number
+    ariaLabel: string
+  }
+
+  // Worst first: alarms before advisories, most recently fired within
+  // each -- the docket's own default read (age, newest first).
+  const sortedActiveFlags = $derived(
+    [...activeFlags].sort((a, b) => {
+      const am = familyOf(a.type).mark === '✱' ? 0 : 1
+      const bm = familyOf(b.type).mark === '✱' ? 0 : 1
+      return am !== bm ? am - bm : new Date(b.lastSeen).getTime() - new Date(a.lastSeen).getTime()
+    }),
+  )
+
+  // The row's own words are the docket flag row's own words -- mark,
+  // type label, target, count -- not the drawer's prose headline, which
+  // a glance at the panel has not earned yet (nothing learned here has
+  // to be unlearned there).
+  const flagPanelRows = $derived(
+    sortedActiveFlags.slice(0, PANEL_ROW_CAP).map((f: Flag): FlagPanelRow => {
+      const fam = familyOf(f.type)
+      const label = FLAG_TYPE_LABELS[f.type] ?? f.type
+      const time = formatHM(f.lastSeen)
+      return {
+        key: f.id,
+        mark: fam.mark,
+        ink: fam.ink,
+        label,
+        time,
+        count: f.count,
+        ariaLabel: `${familyName(fam.mark)}: ${label}, ×${f.count}, ${time}, ${f.target}. Opens this flag in the docket.`,
+      }
+    }),
+  )
+
+  const flagPanelMoreCount = $derived(Math.max(0, sortedActiveFlags.length - PANEL_ROW_CAP))
+
+  const lastClearedFlag = $derived.by((): Flag | null => {
+    let best: Flag | null = null
+    for (const f of flagsState.list) {
+      if (!f.cleared || !f.clearedAt) continue
+      if (!best?.clearedAt || new Date(f.clearedAt) > new Date(best.clearedAt)) best = f
+    }
+    return best
+  })
+
+  // At rest, the panel still opens and says so (#724) -- honest about
+  // "nothing is open" rather than a click that silently does nothing.
+  // No invented clear time when nothing has ever been cleared.
+  const flagsZeroLine = $derived(
+    lastClearedFlag?.clearedAt ? `no open flags · the last cleared at ${formatHM(lastClearedFlag.clearedAt)}` : 'no open flags',
+  )
+
+  const flagPanelGroupLabel = $derived(
+    activeFlags.length === 0
+      ? 'no open flags'
+      : `${activeFlags.length} open flag${activeFlags.length === 1 ? '' : 's'}, worst first`,
+  )
+
+  function activateFlagRow() {
+    closeDialPanel()
+    openDocket('flags')
+  }
+
+  function activateFlagMore() {
+    closeDialPanel()
+    appState.resetFilters()
+    openDocket('flags')
+  }
+
+  interface WatchPanelRow {
+    key: string
+    glyph: string
+    broken: boolean
+    name: string
+    boundary: string
+    detail: string
+    ariaLabel: string
+  }
+
+  function watchIsBroken(e: WatchlistEntry): boolean {
+    return e.enabled && (watchlistState.coverage[e.id] === 'no-logging' || !!e.ring?.broken)
+  }
+
+  function watchBoundary(e: WatchlistEntry): string {
+    const source = e.source?.mac ?? e.source?.ip ?? 'any source'
+    const dest = e.destIp ? e.destIp : e.invert ? 'its observed destinations' : 'any destination'
+    return `${source} → ${dest}`
+  }
+
+  // Either the nights summary (lib/watchWindow.ts's own ratified copy,
+  // "five kept nights · two empty") or, for a broken ring, why it broke
+  // -- no-logging read live from router state, or a recorded break read
+  // as a duration since the first empty window.
+  function watchDetail(e: WatchlistEntry): string {
+    if (watchlistState.coverage[e.id] === 'no-logging') return 'no logging visible'
+    if (e.ring?.broken) {
+      if (e.ring.since) return `no events for ${formatRelative(e.ring.since, appState.now).replace(/ ago$/, '')}`
+      return 'no events recorded'
+    }
+    return nightlySummary(e.nights) ?? 'watching'
+  }
+
+  // Broken ones first (#724); stable otherwise, so a row doesn't hop
+  // around the panel on every poll.
+  const sortedWatchEntries = $derived(
+    [...watchlistState.entries].sort((a, b) => Number(watchIsBroken(b)) - Number(watchIsBroken(a))),
+  )
+
+  const watchPanelRows = $derived(
+    sortedWatchEntries.slice(0, PANEL_ROW_CAP).map((e: WatchlistEntry): WatchPanelRow => {
+      const broken = watchIsBroken(e)
+      const name = e.name || '(unnamed)'
+      const boundary = watchBoundary(e)
+      const detail = watchDetail(e)
+      return {
+        key: e.id,
+        glyph: broken ? '○' : '◉',
+        broken,
+        name,
+        boundary,
+        detail,
+        ariaLabel: `${broken ? 'Ring broken' : 'Watching'}: ${name}, ${boundary}, ${detail}. Opens this watch in the docket.`,
+      }
+    }),
+  )
+
+  const watchPanelMoreCount = $derived(Math.max(0, sortedWatchEntries.length - PANEL_ROW_CAP))
+
+  const watchesZeroLine = 'no watches yet'
+
+  const watchPanelGroupLabel = $derived(
+    watcherTotal === 0 ? 'no watches' : `${watcherTotal} watcher${watcherTotal === 1 ? '' : 's'}, broken first`,
+  )
+
+  function activateWatchRow() {
+    closeDialPanel()
+    openDocket('watchlist')
+  }
+
+  function activateWatchMore() {
+    closeDialPanel()
+    appState.resetFilters()
+    openDocket('watchlist')
+  }
+
   // --- the aggregate bar (#648, round 23: "LOVE this, this is what we
   // needed" -- supersedes round-14's two-bar concept C) -------------------
   // One bar per zone: absent when nothing is open or watched on it,
@@ -1144,86 +1427,181 @@
     </div>
   {/if}
   <!-- The health dials (#648, rounds 19-20; repositioned #682 clear of
-       the lens tabs and the deck's roll rail): two rings, flags and
-       watchers, solid green whenever there is nothing to report. Each
-       ring's own symbol (⚑ / the eye) sits beneath its count as the
-       ring's legend. -->
+       the lens tabs and the deck's roll rail; #724 makes each a two-step
+       control): two rings, flags and watchers, solid green whenever
+       there is nothing to report. Each ring's own symbol (⚑ / the eye)
+       sits beneath its count as the ring's legend. First click expands
+       the condensed panel beneath the dial it belongs to; a second
+       dial click collapses it -- navigation now belongs to the panel's
+       own rows (see the script's "dials' condensed panel" section). -->
   <div class="dials">
-      <button
-        class="dial"
-        onclick={() => openDocket('flags')}
-        aria-label="{activeFlags.length} open flag{activeFlags.length === 1 ? '' : 's'} — open the docket"
-      >
-        <svg viewBox="0 0 56 56" aria-hidden="true">
-          {#if activeFlags.length === 0}
-            <circle class="dring d-rest" cx="28" cy="28" r={DIAL_R} transform="rotate(-90 28 28)" />
-          {:else}
-            {@const alarmArc = ringArc(alarmFlagCount, activeFlags.length, 0)}
-            {@const advisoryArc = ringArc(advisoryFlagCount, activeFlags.length, (alarmFlagCount / activeFlags.length) * DIAL_CIRC)}
-            <circle
-              class="dring d-alarm"
-              cx="28"
-              cy="28"
-              r={DIAL_R}
-              transform="rotate(-90 28 28)"
-              stroke-dasharray={alarmArc.dasharray}
-              stroke-dashoffset={alarmArc.offset}
-            />
-            <circle
-              class="dring"
-              cx="28"
-              cy="28"
-              r={DIAL_R}
-              stroke={ADVISORY_INK}
-              transform="rotate(-90 28 28)"
-              stroke-dasharray={advisoryArc.dasharray}
-              stroke-dashoffset={advisoryArc.offset}
-            />
-          {/if}
-          <text x="28" y="27" class="dnum" text-anchor="middle">{activeFlags.length}</text>
-          <text x="28" y="41" class="dsym flag-sym" text-anchor="middle">⚑</text>
-        </svg>
-      </button>
-      <button
-        class="dial"
-        onclick={() => openDocket('watchlist')}
-        aria-label="{watcherTotal} watcher{watcherTotal === 1 ? '' : 's'}{watcherBroken > 0 ? `, ${watcherBroken} broken` : ''} — open the docket"
-      >
-        <svg viewBox="0 0 56 56" aria-hidden="true">
-          {#if watcherTotal === 0}
-            <circle class="dring d-rest" cx="28" cy="28" r={DIAL_R} transform="rotate(-90 28 28)" />
-          {:else}
-            {@const healthyArc = ringArc(watcherHealthy, watcherTotal, 0)}
-            {@const brokenArc = ringArc(watcherBroken, watcherTotal, (watcherHealthy / watcherTotal) * DIAL_CIRC)}
-            <circle
-              class="dring d-healthy"
-              cx="28"
-              cy="28"
-              r={DIAL_R}
-              transform="rotate(-90 28 28)"
-              stroke-dasharray={healthyArc.dasharray}
-              stroke-dashoffset={healthyArc.offset}
-            />
-            <circle
-              class="dring d-broken"
-              cx="28"
-              cy="28"
-              r={DIAL_R}
-              transform="rotate(-90 28 28)"
-              stroke-dasharray={brokenArc.dasharray}
-              stroke-dashoffset={brokenArc.offset}
-            />
-          {/if}
-          <text x="28" y="27" class="dnum" text-anchor="middle">{watcherTotal}</text>
-          <!-- The docket's own eye (#682, ported from the scene's dial
-               markup) -- not the "◉" text glyph, which is the aggregate
-               bar's own mark, not the ring's legend. -->
-          <g class="dsym watch-sym" transform="translate(28 36)">
-            <path d="M-6 0 Q0 -4.6 6 0 Q0 4.6 -6 0 Z" fill="none" stroke="currentColor" stroke-width="1.1" />
-            <circle r="1.7" fill="currentColor" />
-          </g>
-        </svg>
-      </button>
+      <div class="dial-wrap" bind:this={flagsWrapEl}>
+        <button
+          class="dial"
+          bind:this={flagsDialEl}
+          aria-expanded={expandedDial === 'flags'}
+          aria-controls="{uid}-flags-panel"
+          onclick={() => toggleDialPanel('flags')}
+          aria-label="{activeFlags.length} open flag{activeFlags.length === 1 ? '' : 's'} — open the summary"
+        >
+          <svg viewBox="0 0 56 56" aria-hidden="true">
+            {#if activeFlags.length === 0}
+              <circle class="dring d-rest" cx="28" cy="28" r={DIAL_R} transform="rotate(-90 28 28)" />
+            {:else}
+              {@const alarmArc = ringArc(alarmFlagCount, activeFlags.length, 0)}
+              {@const advisoryArc = ringArc(advisoryFlagCount, activeFlags.length, (alarmFlagCount / activeFlags.length) * DIAL_CIRC)}
+              <circle
+                class="dring d-alarm"
+                cx="28"
+                cy="28"
+                r={DIAL_R}
+                transform="rotate(-90 28 28)"
+                stroke-dasharray={alarmArc.dasharray}
+                stroke-dashoffset={alarmArc.offset}
+              />
+              <circle
+                class="dring"
+                cx="28"
+                cy="28"
+                r={DIAL_R}
+                stroke={ADVISORY_INK}
+                transform="rotate(-90 28 28)"
+                stroke-dasharray={advisoryArc.dasharray}
+                stroke-dashoffset={advisoryArc.offset}
+              />
+            {/if}
+            <text x="28" y="27" class="dnum" text-anchor="middle">{activeFlags.length}</text>
+            <text x="28" y="41" class="dsym flag-sym" text-anchor="middle">⚑</text>
+          </svg>
+        </button>
+        {#if expandedDial === 'flags'}
+          <!-- No role on this div at all (Care, #724): an explicit
+               role="group" would satisfy "a group named for what it
+               holds", but any container role here also hides the row
+               buttons inside it from a screen reader. aria-label alone
+               keeps the div in the accessibility tree with that name,
+               without adding a role. -->
+          <div
+            id="{uid}-flags-panel"
+            class="dial-panel"
+            aria-label={flagPanelGroupLabel}
+          >
+            {#if flagPanelRows.length === 0}
+              <p class="dp-zero" tabindex="-1" bind:this={panelZeroEl}>{flagsZeroLine}</p>
+            {:else}
+              {#each flagPanelRows as row, i (row.key)}
+                <button
+                  type="button"
+                  class="dp-row"
+                  bind:this={panelRowEls[i]}
+                  onclick={activateFlagRow}
+                  aria-label={row.ariaLabel}
+                >
+                  <span class="dp-mark" style="color: {row.ink}" aria-hidden="true">{row.mark}</span>
+                  <span class="dp-label">{row.label}</span>
+                  <span class="dp-time">{row.time}</span>
+                  <span class="dp-count">×{row.count}</span>
+                </button>
+              {/each}
+              {#if flagPanelMoreCount > 0}
+                <button
+                  type="button"
+                  class="dp-row dp-more"
+                  bind:this={panelRowEls[flagPanelRows.length]}
+                  onclick={activateFlagMore}
+                  aria-label="and {flagPanelMoreCount} more. Opens the flags tab."
+                >
+                  and {flagPanelMoreCount} more
+                </button>
+              {/if}
+            {/if}
+          </div>
+        {/if}
+      </div>
+      <div class="dial-wrap" bind:this={watchWrapEl}>
+        <button
+          class="dial"
+          bind:this={watchDialEl}
+          aria-expanded={expandedDial === 'watchlist'}
+          aria-controls="{uid}-watch-panel"
+          onclick={() => toggleDialPanel('watchlist')}
+          aria-label="{watcherTotal} watcher{watcherTotal === 1 ? '' : 's'}{watcherBroken > 0 ? `, ${watcherBroken} broken` : ''} — open the summary"
+        >
+          <svg viewBox="0 0 56 56" aria-hidden="true">
+            {#if watcherTotal === 0}
+              <circle class="dring d-rest" cx="28" cy="28" r={DIAL_R} transform="rotate(-90 28 28)" />
+            {:else}
+              {@const healthyArc = ringArc(watcherHealthy, watcherTotal, 0)}
+              {@const brokenArc = ringArc(watcherBroken, watcherTotal, (watcherHealthy / watcherTotal) * DIAL_CIRC)}
+              <circle
+                class="dring d-healthy"
+                cx="28"
+                cy="28"
+                r={DIAL_R}
+                transform="rotate(-90 28 28)"
+                stroke-dasharray={healthyArc.dasharray}
+                stroke-dashoffset={healthyArc.offset}
+              />
+              <circle
+                class="dring d-broken"
+                cx="28"
+                cy="28"
+                r={DIAL_R}
+                transform="rotate(-90 28 28)"
+                stroke-dasharray={brokenArc.dasharray}
+                stroke-dashoffset={brokenArc.offset}
+              />
+            {/if}
+            <text x="28" y="27" class="dnum" text-anchor="middle">{watcherTotal}</text>
+            <!-- The docket's own eye (#682, ported from the scene's dial
+                 markup) -- not the "◉" text glyph, which is the aggregate
+                 bar's own mark, not the ring's legend. -->
+            <g class="dsym watch-sym" transform="translate(28 36)">
+              <path d="M-6 0 Q0 -4.6 6 0 Q0 4.6 -6 0 Z" fill="none" stroke="currentColor" stroke-width="1.1" />
+              <circle r="1.7" fill="currentColor" />
+            </g>
+          </svg>
+        </button>
+        {#if expandedDial === 'watchlist'}
+          <!-- Same "no container role" reasoning as the flags panel
+               above. -->
+          <div
+            id="{uid}-watch-panel"
+            class="dial-panel"
+            aria-label={watchPanelGroupLabel}
+          >
+            {#if watchPanelRows.length === 0}
+              <p class="dp-zero" tabindex="-1" bind:this={panelZeroEl}>{watchesZeroLine}</p>
+            {:else}
+              {#each watchPanelRows as row, i (row.key)}
+                <button
+                  type="button"
+                  class="dp-row"
+                  bind:this={panelRowEls[i]}
+                  onclick={activateWatchRow}
+                  aria-label={row.ariaLabel}
+                >
+                  <span class="dp-mark dp-watch-mark" class:broken={row.broken} aria-hidden="true">{row.glyph}</span>
+                  <span class="dp-label">{row.name}</span>
+                  <span class="dp-boundary">{row.boundary}</span>
+                  <span class="dp-detail">{row.detail}</span>
+                </button>
+              {/each}
+              {#if watchPanelMoreCount > 0}
+                <button
+                  type="button"
+                  class="dp-row dp-more"
+                  bind:this={panelRowEls[watchPanelRows.length]}
+                  onclick={activateWatchMore}
+                  aria-label="and {watchPanelMoreCount} more. Opens the watchlist tab."
+                >
+                  and {watchPanelMoreCount} more
+                </button>
+              {/if}
+            {/if}
+          </div>
+        {/if}
+      </div>
     </div>
 
   <!-- The lens selector (#682, ported from the scene's `.wlens2`): the
@@ -3070,6 +3448,110 @@
 
   .dial:focus-visible {
     outline: none;
+  }
+
+  /* The dial's own wrapper (#724) exists only so the panel can anchor
+     "beneath itself" per-dial rather than under the whole `.dials` row,
+     and so the click-away listener has one element per dial to test
+     against. */
+  .dial-wrap {
+    position: relative;
+  }
+
+  /* The condensed panel sits over the map, so it needs an opaque plate
+     -- the same fix the edge chips needed in #715 -- or the strands
+     underneath read straight through it. --bg-elevated is that opaque
+     ground everywhere else in this file already uses for the same
+     reason (see the edge-plate rule above); .node-card's --glass +
+     backdrop-filter is deliberately not reused here, since a blur still
+     lets shapes and motion read through at the panel's edges. */
+  .dial-panel {
+    position: absolute;
+    top: 100%;
+    right: 0;
+    margin-top: 6px;
+    z-index: 7;
+    min-width: 220px;
+    max-width: 320px;
+    display: flex;
+    flex-direction: column;
+    background: var(--bg-elevated);
+    border: 1px solid var(--hair-2);
+    border-radius: 10px;
+    box-shadow: 0 14px 36px rgba(0, 0, 0, 0.35);
+    padding: 4px;
+  }
+
+  .dp-zero {
+    margin: 0;
+    padding: 10px 12px;
+    font-size: 11.5px;
+    color: var(--fg-muted);
+  }
+
+  /* Rows are buttons, not the panel (Care, #724) -- a wrapping
+     role/listbox semantic here would hide them from a screen reader. */
+  .dp-row {
+    display: flex;
+    align-items: baseline;
+    gap: 6px;
+    width: 100%;
+    background: none;
+    border: none;
+    border-radius: 6px;
+    padding: 6px 8px;
+    font-size: 11.5px;
+    color: var(--fg);
+    text-align: left;
+    cursor: pointer;
+  }
+
+  .dp-row:hover {
+    background: color-mix(in srgb, var(--fg) 8%, transparent);
+  }
+
+  /* Never `all: unset` -- this is the one focus ring convention every
+     plain HTML control in this file (as opposed to the SVG-embedded
+     dial/edge/host controls, which draw their own ink-based focus
+     signal) is expected to carry. */
+  .dp-row:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: -2px;
+  }
+
+  .dp-mark {
+    font-size: 12px;
+  }
+
+  .dp-watch-mark {
+    color: var(--marked);
+  }
+
+  .dp-watch-mark.broken {
+    color: var(--alarm);
+  }
+
+  .dp-label {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .dp-time,
+  .dp-count,
+  .dp-boundary,
+  .dp-detail {
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    color: var(--fg-dim);
+    white-space: nowrap;
+  }
+
+  .dp-more {
+    color: var(--fg-muted);
+    justify-content: center;
   }
 
   /* --- the altitude's camera (#648, concept T) --------------------------- */
