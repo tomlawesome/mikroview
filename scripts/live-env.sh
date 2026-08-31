@@ -195,7 +195,21 @@ build() {
   # stamp. Stamping it also fails outright in a linked git worktree --
   # "error obtaining VCS status: exit status 128" -- which took the whole
   # live check down for anyone not working in a plain clone (#348).
-  go build -buildvcs=false -o "$MV_DIR/mikroview" .
+  # Stamp the binary so the running instance can say which build it is.
+  # Without this every demo called itself "dev:local" (main.go's no-ldflags
+  # fallback), so an instance built before a fix was indistinguishable in
+  # the browser from one built after it -- which is how round 30 lost a
+  # day to the owner reviewing a stale build and finding faults that were
+  # already fixed in the tree. AGENTS.md carries the rule; this is what
+  # makes it true. -buildvcs=false stays: it is what stops `go build`
+  # dying in a linked worktree (#348), and the sha below is read from git
+  # explicitly instead.
+  mv_sha="$(git rev-parse --short HEAD 2>/dev/null || echo nogit)"
+  mv_dirty=""
+  git diff --quiet HEAD 2>/dev/null || mv_dirty="-dirty"
+  mv_stamp="$(cat VERSION 2>/dev/null || echo 0.0.0)+g${mv_sha}${mv_dirty}.$(date -u +%Y%m%dT%H%M%SZ)"
+  go build -buildvcs=false -ldflags "-X main.version=$mv_stamp" -o "$MV_DIR/mikroview" .
+  echo "live-env: built $mv_stamp" >&2
 }
 
 # True if anything is listening on the given TCP port on this host.
