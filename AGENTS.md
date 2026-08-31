@@ -431,6 +431,16 @@ entry, a held one and a deliberately broken ring. One estate throughout,
 so a name on the stream is the same thing on the topography and in
 Entities.
 
+**Bring the instance up with `MV_DEMO_DEVICES=1`**, or the seeding is
+half-wasted. A pushed rule/NAT/address table is keyed by device id;
+`seed-demo.py` mints its tokens against router names and streams syslog
+from one loopback address per router. Unless `live-env.sh` declares those
+addresses, the registry invents a discovered device per source IP and the
+pushed tables sit under ids no device has. Both halves report success and
+never meet (#709).
+
+    MV_DEMO_DEVICES=1 MV_BIND=<addr> scripts/live-env.sh up
+
     export MV_URL=... MV_USER=... MV_PASS=...
     export MV_SYSLOG_HOST=<the bind address> MV_SYSLOG_PORT=<tls port>
     scripts/seed-demo.py all      # push, entities, accounts, watchlist
