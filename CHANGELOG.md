@@ -18,6 +18,49 @@ rewritten.
 
 ### Added
 
+- **The scene bar built to its ratified round-29 design, the stream's
+  retired toolbar folded into it, and the filter row rebuilt as one
+  quiet row** (#683). Every scene's bar now reads MIKROVIEW · page ·
+  strap · LIVE·rate (bare `LIVE` on the stream, whose whisper line
+  already carries the rate) · `⚑ N` (docket) · the mockup's own
+  eye-glyph watch marker, `N ○M` (watchlist) · account, ported field-
+  for-field from `docs/design/concepts/round-29/the-whole.html` rather
+  than approximated -- including on the fall, which hand-rolls its own
+  bar rather than sharing `SceneBar.svelte`. The retired `[0d 0h 3m
+  55s]` uptime counter and the per-router chips (`border (RB5009)` etc)
+  are off every bar; round 29 draws neither. The previously-bare pink
+  flag count (no `⚑`, no title, hidden at zero) now carries the
+  ratified glyph, an accurate title, and shows even at zero
+  ("no open flags", ok-coloured) -- the mockup's own "clear all" demo
+  state, not invented. The stream's active filter now also shows on the
+  bar as one bordered box (`action:drop boundary:iot→lan ⌫`), matching
+  `.controls .search` exactly rather than as separate chip pills.
+  `lib/watchlist.svelte.ts` gained `heldCount` (the same "enabled and
+  not ring-broken" predicate `Watchlist.svelte`'s own `class:watching`
+  already used) so the bar's count can never disagree with the page's.
+
+  The filter row (`FilterBar.svelte`) is one quiet row on desktop --
+  device · action · chain · proto · source ⇄ destination (scope,
+  address and country) · port · interface · rule -- as dim micro-labels
+  over hairline underlines, no boxes, no placeholder prose, a single
+  `×` to clear and `▸` to fold back, fitting one line well inside
+  1600px. `Presets` and `Export to CSV` are off the row: round 29 draws
+  neither, so they are not homed here -- `FilterPresetsMenu.svelte` and
+  `lib/export.ts` are untouched and still work, just unmounted.
+
+  Two ratified pieces are not built, on the owner's explicit
+  instruction not to invent a home for anything round 29 does not
+  draw: the stream bar's own SPAN control (`15 m · 1 h · 24 h · 14 d`,
+  the same pattern as the fall's), since the app has no existing
+  time-window concept matching those four buckets; and the retired
+  toolbar's other controls (`17/s`, `2% of buffer used`, `No limit ▾`,
+  Autoscroll, Pause, Group, Clear) -- round 29's own `#s5` bar markup
+  does not draw any of them, only the filter summary and (unbuilt) SPAN
+  control, so building them onto the bar would have been inventing a
+  home for them. All are recorded on the issue as gaps, each with what
+  it does today and the nearest ratified thing, for the owner to work
+  through one by one.
+
 - **The docket's watchlist tab built to its ratified round-29 design**
   (#676). A table -- watch · boundary · window · state · last event --
   sits above the existing add/edit/invert/observe/promote workflow

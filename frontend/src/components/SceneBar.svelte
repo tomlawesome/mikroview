@@ -3,24 +3,23 @@
   //
   // Every scene's own bar, under the Atlas identity (owner, 2026-08-29:
   // pages are the site -- no persistent chrome). Carries the wordmark,
-  // the scene's name, the live status cluster, the account chip (#633:
-  // navigation to the operate pages lives on its menu; the deck and
-  // roll rail cover the scenes), and -- on the stream -- the controls
-  // the retired toolbar used to hold, unchanged in behaviour.
+  // the scene's name, its strap, the live+rate reading, the flag/watch
+  // markers and the account chip -- round 29's ratified content (#683),
+  // ported field-for-field from docs/design/concepts/round-29/the-
+  // whole.html rather than approximated. On the stream, also the active
+  // filter as chips: the one piece of the retired toolbar #s5 actually
+  // draws on the bar. Everything else the old toolbar held (eps,
+  // buffer%, the max-age selector, Autoscroll/Pause/Group/Clear) is off
+  // the bar -- the mockup's own `.scenebar` markup for #s5 does not draw
+  // them, so they are gaps, recorded on the issue, not homed here.
   //
   // Inside the deck every card carries its own bar, so the scene named
   // here is the card's own, passed as a prop; outside the deck (the
   // operate pages) it defaults to the current view.
   import { appState, type View } from '../lib/state.svelte'
-  import { flagsState } from '../lib/flags.svelte'
-  import { watchlistState } from '../lib/watchlist.svelte'
-  import { groupModeState } from '../lib/groupMode.svelte'
-  import { formatEps, formatBufferDepth } from '../lib/format'
-  import { retentionState, MAX_AGE_OPTIONS } from '../lib/retention.svelte'
-  import { viewportState } from '../lib/viewport.svelte'
+  import { buildFilterChips } from '../lib/filterChips'
   import ConnectionIndicator from './ConnectionIndicator.svelte'
-  import DeviceStatus from './DeviceStatus.svelte'
-  import UptimeBadge from './UptimeBadge.svelte'
+  import AlarmCluster from './AlarmCluster.svelte'
   import AccountMenu from './AccountMenu.svelte'
 
   let { scene = null }: { scene?: View | null } = $props()
@@ -38,105 +37,59 @@
     entities: 'Entities',
   }
 
-  function onMaxAgeChange(e: Event) {
-    const raw = (e.target as HTMLSelectElement).value
-    retentionState.set(raw === 'null' ? null : Number(raw))
+  // The page's own strap, in the page's voice -- taken verbatim from
+  // round 29's mockup (docs/design/concepts/round-29/the-whole.html),
+  // one per scene. Fleet carries none: it is outside the seven ratified
+  // deck scenes (#633/#647's standalone phone-width page).
+  const STRAPS: Record<string, string> = {
+    topography: 'aggregates — click a card to descend',
+    live: 'every line, as it arrived',
+    metrics: 'the deep read',
+    audit: 'what was flagged · what you watch · what changed',
+    flags: 'what was flagged · what you watch · what changed',
+    watchlist: 'what was flagged · what you watch · what changed',
+    engineroom: 'the app, arranged your way',
+    entities: 'the routers that push here, and the named things behind them',
   }
+
+  const filterChips = $derived(buildFilterChips(appState.filters, appState.devices))
 </script>
 
 <div class="scene-bar">
   <span class="wm">MIKRO<em>VIEW</em></span>
-  <h1>{TITLES[view] ?? ''}</h1>
-  <ConnectionIndicator />
-  <UptimeBadge />
-  <DeviceStatus />
-  <!-- The chrome's alarm pair, per the ratified navigation record: the
-       open-flag count badge and the broken ring are the two signals an
-       operator must see without opening anything. They lived on the
-       rail; with the rail retired (#633) the scene bar is the chrome. -->
-  {#if flagsState.activeCount > 0}
-    <button class="flag-badge" onclick={() => (appState.view = 'flags')} title="Open flags">
-      {flagsState.activeCount}
-    </button>
-  {/if}
-  {#if watchlistState.brokenCount > 0}
-    <button
-      class="ring"
-      onclick={() => (appState.view = 'watchlist')}
-      title="A watch is broken"
-      aria-label="A watch is broken — open the watchlist"
-    ></button>
-  {/if}
+  <span class="scname">
+    <h1>{TITLES[view] ?? ''}</h1>
+    {#if STRAPS[view]}<span class="epi">{STRAPS[view]}</span>{/if}
+  </span>
 
-  <div class="controls">
-    {#if view === 'live'}
-      {#if appState.stats}
-        <span class="eps" title="Events per second (10s rolling average)">
-          {formatEps(appState.stats.eventsPerSecond)}/s
-        </span>
-        <span
-          class="buffer-depth"
-          title="The server's event buffer holds up to {appState.stats.capacity.toLocaleString()} events. Once full, each new event overwrites the oldest -- this is how far back it actually reaches at the current rate, not the configured retention window."
-        >
-          {formatBufferDepth(appState.stats.capacity, appState.stats.count, appState.stats.eventsPerSecond)}
-        </span>
-        {#if appState.stats.syslog && appState.stats.syslog.rejectedConfigured > 0}
-          <span
-            class="syslog-blocked"
-            title="MikroView has turned away {appState.stats.syslog.rejectedConfigured} connection attempt(s) from a router listed in your config, because its syslog connection slots were full ({appState.stats.syslog.inUse} of {appState.stats.syslog.capacity} in use). Those log lines never arrived. This usually means something is opening a lot of connections to the syslog port."
-          >
-            ⚠ syslog full
-          </span>
-        {/if}
-      {/if}
-
-      {#if !viewportState.isMobile}
-        <select
-          value={retentionState.maxAgeSeconds === null ? 'null' : String(retentionState.maxAgeSeconds)}
-          onchange={onMaxAgeChange}
-          title="How long events stay visible in the live view"
-          aria-label="Display duration"
-        >
-          {#each MAX_AGE_OPTIONS as opt (opt.value)}
-            <option value={opt.value === null ? 'null' : String(opt.value)}>{opt.label}</option>
-          {/each}
-        </select>
-      {/if}
-
+  {#if view === 'live' && filterChips.length > 0}
+    <!-- The stream's own control, exactly as #s5 draws it: one search-
+         style box reading "label:<em>value</em> label:<em>value</em> ⌫"
+         -- ported from `.scenebar .controls .search` in round 29's
+         mockup (bordered box, accented values, single trailing ⌫), not
+         approximated as separate chip pills. The mockup also draws a
+         SPAN control here (15 m · 1 h · 24 h · 14 d, the same pattern
+         as the fall's) -- left off pending a product decision, see the
+         issue's gap list: the app has no existing capability those four
+         buckets clearly belong to, and guessing one would be inventing
+         behaviour, not styling it. -->
+    <span class="search">
+      {#each filterChips as chip, i (chip.key)}{i > 0 ? ' ' : ''}{chip.label}:<em>{chip.value}</em>{/each}
       <button
-        class:active={appState.autoscroll}
-        onclick={() => (appState.autoscroll = !appState.autoscroll)}
-        title={appState.autoscroll
-          ? 'Auto-scroll to newest events'
-          : 'Hold the current view -- new events keep arriving but the table stays put'}
+        type="button"
+        class="chip-clear"
+        onclick={() => appState.resetFilters()}
+        title="Clear all filters"
+        aria-label="Clear all filters"
       >
-        Autoscroll
+        ⌫
       </button>
+    </span>
+  {/if}
 
-      <button
-        class:active={appState.paused}
-        onclick={() => appState.togglePause()}
-        title={appState.paused ? 'Resume live updates' : 'Pause live updates'}
-      >
-        {appState.paused ? `Resume${appState.pendingCount ? ` (${appState.pendingCount})` : ''}` : 'Pause'}
-      </button>
-
-      {#if !viewportState.isMobile}
-        <button
-          class:active={groupModeState.enabled}
-          onclick={() => groupModeState.toggle()}
-          title={groupModeState.enabled
-            ? 'Show every event on its own row'
-            : 'Collapse repeats of the same connection into one row with a count'}
-        >
-          Group
-        </button>
-      {/if}
-
-      <button onclick={() => appState.clearBuffer()} title="Clear the local event buffer">
-        Clear
-      </button>
-    {/if}
+  <div class="status-cluster">
+    <ConnectionIndicator showRate={view !== 'live'} />
+    <AlarmCluster />
     <AccountMenu />
   </div>
 </div>
@@ -166,59 +119,52 @@
     color: var(--fg);
   }
 
-  .controls {
+  .scname {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+  }
+  .epi {
+    font-weight: 400;
+    color: var(--fg-dim);
+    font-size: 12px;
+  }
+
+  .status-cluster {
     margin-left: auto;
     display: flex;
-    gap: 8px;
-    align-items: baseline;
+    gap: 16px;
+    align-items: center;
   }
-  .eps,
-  .buffer-depth {
-    font-size: 12px;
-    color: var(--fg-dim);
-    font-family: var(--font-mono);
-  }
-  .syslog-blocked {
-    font-size: 12px;
-    color: var(--alarm);
-  }
-  .controls select,
-  .controls button {
-    background: transparent;
-    border: 1px solid var(--border);
-    border-radius: 999px;
+
+  /* Ported from round 29's `.controls .search` (the-whole.html):
+     a single bordered box, not separate chip pills. */
+  .search {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    max-width: 320px;
+    padding: 5px 12px;
+    font: 12px var(--font-mono);
     color: var(--fg-muted);
-    font-size: 13px;
-    padding: 4px 12px;
+    background: var(--bg-elevated);
+    border: 1px solid var(--border);
+    border-radius: 7px;
   }
-  .controls select:hover,
-  .controls button:hover {
-    color: var(--fg);
-    background: var(--bg-hover);
+  .search em {
+    font-style: normal;
+    color: var(--accent);
   }
-  .controls button.active {
-    color: var(--fg);
-    border-color: var(--accent);
-    background: var(--accent-bg);
-  }
-  .flag-badge {
-    background: var(--alarm);
-    color: var(--bg);
-    border: none;
-    border-radius: 999px;
-    font-size: 11px;
-    font-weight: 700;
-    padding: 0 8px;
-    line-height: 17px;
-    cursor: pointer;
-  }
-  .ring {
-    width: 8px;
-    height: 8px;
-    border-radius: 50%;
-    border: 2px solid var(--alarm);
+  .chip-clear {
     background: transparent;
-    padding: 0;
+    border: none;
+    color: var(--fg-dim);
+    font-size: 13px;
     cursor: pointer;
+    padding: 0 2px;
+    margin-left: 4px;
+  }
+  .chip-clear:hover {
+    color: var(--alarm);
   }
 </style>

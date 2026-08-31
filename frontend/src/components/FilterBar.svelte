@@ -2,10 +2,15 @@
   // SPDX-License-Identifier: AGPL-3.0-only
   import { appState } from '../lib/state.svelte'
   import { ACTION_FILTER_OPTIONS } from '../lib/actions'
-  import FilterPresetsMenu from './FilterPresetsMenu.svelte'
   import { viewportState } from '../lib/viewport.svelte'
-  import { downloadEventsCsv } from '../lib/export'
   import { retentionState, MAX_AGE_OPTIONS } from '../lib/retention.svelte'
+
+  // Presets and Export to CSV are later additions round 29's ratified
+  // filter row does not draw (#683 correction, 2026-08-31: "anything the
+  // ratified scene does not draw at all ... does not get a home
+  // invented for it"). Their own code and tests are untouched --
+  // FilterPresetsMenu.svelte and lib/export.ts still work, just aren't
+  // mounted here; see the issue's gap list for where they go next.
 
   // Phone-width only, mirroring what the retired hamburger did (#544):
   // Toolbar.svelte:64 already carries this control at desktop width, so
@@ -87,16 +92,19 @@
       </div>
     {/if}
 
-    <FilterPresetsMenu />
-
     <!-- fb-label spans below are visible on the desktop thin bar only
          (.thin .fb-label; hidden in the mobile drawer, which already
          names each field via its placeholder/aria-label -- see round 8's
-         "dim micro-labels over hairline-underlined values, no boxes"). -->
+         "dim micro-labels over hairline-underlined values, no boxes").
+         The desktop thin row additionally drops the "Any X"/placeholder
+         prose the mobile drawer still shows (#683, round 29: "no
+         placeholder prose inside the fields") -- the fb-label above
+         already names the field there, so the empty state is just the
+         hairline with nothing on it. -->
     <div class="fb-field">
       <span class="fb-label">Device</span>
       <select bind:value={appState.filters.device} aria-label="Device">
-        <option value="">Any device</option>
+        <option value="">{viewportState.isMobile ? 'Any device' : '—'}</option>
         {#each appState.devices as d (d.id)}
           <option value={d.id}>{d.name}</option>
         {/each}
@@ -107,7 +115,7 @@
       <span class="fb-label">Action</span>
       <select bind:value={appState.filters.action} aria-label="Action">
         {#each actions as a (a.value)}
-          <option value={a.value}>{a.label}</option>
+          <option value={a.value}>{viewportState.isMobile || a.value !== '' ? a.label : '—'}</option>
         {/each}
       </select>
     </div>
@@ -121,7 +129,7 @@
     <div class="fb-field">
       <span class="fb-label">Chain</span>
       <select bind:value={appState.filters.chain} aria-label="Chain">
-        <option value="">Any chain</option>
+        <option value="">{viewportState.isMobile ? 'Any chain' : '—'}</option>
         {#each appState.chainOptions as c (c)}
           <option value={c}>{c}</option>
         {/each}
@@ -132,7 +140,7 @@
       <span class="fb-label">Proto</span>
       <input
         type="text"
-        placeholder="Protocol (tcp, udp, icmp…)"
+        placeholder={viewportState.isMobile ? 'Protocol (tcp, udp, icmp…)' : ''}
         bind:value={appState.filters.protocol}
         aria-label="Protocol"
       />
@@ -143,23 +151,26 @@
          pairing its query box with the existing scope select and a new
          country select -- matching, label or IP or CIDR, lives in
          lib/addressMatch.ts. The swap button between them answers "clicked
-         the wrong side" in two clicks instead of retyping. -->
+         the wrong side" in two clicks instead of retyping. Ratified as
+         "source ⇄ destination (scope + country)" -- the free-text query
+         stays too (#683: "do not delete working features"), just folded
+         into the same compact group rather than dropped. -->
     <div class="fb-field">
       <span class="fb-label">Source</span>
       <div class="addr-group">
         <select bind:value={appState.filters.srcScope} aria-label="Source scope" title="Restrict by whether the source is on your LAN">
-          <option value="">Any source</option>
-          <option value="internal">Internal source</option>
-          <option value="external">External source</option>
+          <option value="">{viewportState.isMobile ? 'Any source' : '—'}</option>
+          <option value="internal">Internal</option>
+          <option value="external">External</option>
         </select>
         <input
           type="text"
-          placeholder="Source — name, IP or CIDR"
+          placeholder={viewportState.isMobile ? 'Source — name, IP or CIDR' : ''}
           bind:value={appState.filters.srcQuery}
           aria-label="Source — name, IP or CIDR"
         />
         <select bind:value={appState.filters.srcCountry} aria-label="Source country">
-          <option value="">Any country</option>
+          <option value="">{viewportState.isMobile ? 'Any country' : '—'}</option>
           {#each appState.srcCountryOptions as opt (opt.value)}
             <option value={opt.value}>{opt.label}</option>
           {/each}
@@ -180,18 +191,18 @@
       <span class="fb-label">Destination</span>
       <div class="addr-group">
         <select bind:value={appState.filters.dstScope} aria-label="Destination scope" title="Restrict by whether the destination is on your LAN">
-          <option value="">Any destination</option>
-          <option value="internal">Internal destination</option>
-          <option value="external">External destination</option>
+          <option value="">{viewportState.isMobile ? 'Any destination' : '—'}</option>
+          <option value="internal">Internal</option>
+          <option value="external">External</option>
         </select>
         <input
           type="text"
-          placeholder="Destination — name, IP or CIDR"
+          placeholder={viewportState.isMobile ? 'Destination — name, IP or CIDR' : ''}
           bind:value={appState.filters.dstQuery}
           aria-label="Destination — name, IP or CIDR"
         />
         <select bind:value={appState.filters.dstCountry} aria-label="Destination country">
-          <option value="">Any country</option>
+          <option value="">{viewportState.isMobile ? 'Any country' : '—'}</option>
           {#each appState.dstCountryOptions as opt (opt.value)}
             <option value={opt.value}>{opt.label}</option>
           {/each}
@@ -207,7 +218,7 @@
       <span class="fb-label">Port</span>
       <input
         type="text"
-        placeholder="Port — number or service"
+        placeholder={viewportState.isMobile ? 'Port — number or service' : ''}
         bind:value={appState.filters.port}
         aria-label="Port — number or service"
       />
@@ -217,7 +228,7 @@
       <span class="fb-label">Interface</span>
       <input
         type="text"
-        placeholder="Interface"
+        placeholder={viewportState.isMobile ? 'Interface' : ''}
         bind:value={appState.filters.interface}
         aria-label="Interface"
       />
@@ -228,7 +239,7 @@
       <div class="rule-group">
         <input
           type="text"
-          placeholder={appState.filters.ruleRegex ? 'Rule / raw line regex…' : 'Rule / label contains…'}
+          placeholder={viewportState.isMobile ? (appState.filters.ruleRegex ? 'Rule / raw line regex…' : 'Rule / label contains…') : ''}
           bind:value={appState.filters.rule}
           class="rule"
           aria-label={appState.filters.ruleRegex ? 'Rule/raw line regex search' : 'Rule label search'}
@@ -251,7 +262,7 @@
     </div>
 
     {#if appState.hasActiveFilters && !viewportState.isMobile}
-      <button class="tf-clear" onclick={() => appState.resetFilters()}>× clear</button>
+      <button class="tf-clear" onclick={() => appState.resetFilters()} aria-label="Clear all filters" title="Clear all filters">×</button>
     {/if}
 
     <!-- Also moved off the retired hamburger (#544). Phone-width only:
@@ -271,25 +282,11 @@
       </label>
     {/if}
 
-    <!-- Moved here from the retired hamburger menu (#544). It acts on the
-         events this bar has filtered, so it belongs to the live view
-         rather than to the chrome. Deliberately one entry, not one per
-         format: #94 defers additional formats, and when they land this
-         becomes a submenu rather than a flat item each. -->
-    <button
-      class="export"
-      onclick={() => downloadEventsCsv(appState.filteredEvents)}
-      disabled={appState.filteredEvents.length === 0}
-      title="Export the currently shown/filtered events to a CSV file"
-    >
-      Export to CSV
-    </button>
-
     {#if !viewportState.isMobile}
       <!-- Fold slides the bar back into the box (#644, round 8) -- the
            typed grammar/click model stays appState.filters either way,
            so nothing here is lost by folding, only hidden. -->
-      <button class="tf-fold" onclick={() => (expanded = false)}>fold ▸</button>
+      <button class="tf-fold" onclick={() => (expanded = false)} aria-label="Fold filters back into the box" title="Fold filters back into the box">▸</button>
     {/if}
   </div>
 {/if}
@@ -393,6 +390,7 @@
     border-bottom: 1px solid var(--border);
     border-radius: 0;
     padding: 6px 4px 8px;
+    gap: 6px;
     align-items: flex-end;
     animation: unfurl 0.35s ease-out;
     transform-origin: right center;
@@ -441,14 +439,30 @@
     border-radius: 0;
     padding: 1px 2px 3px;
     font: 12px var(--font-mono);
+    /* Compact by design (#683, round 29's "one quiet row ... fits on one
+       line at 1600px wide") -- a filled field shows its own short value
+       (a device name, "drop", "DE"), not prose, so a value that's still
+       too long to fit is clipped rather than allowed to reflow the row. */
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .thin select {
+    width: 72px;
   }
 
   .thin input[type='text'] {
-    width: 100px;
+    width: 80px;
+  }
+
+  .thin .addr-group select {
+    width: 58px;
   }
 
   .thin .rule {
-    width: 160px;
+    width: 130px;
   }
 
   .thin input:focus,
@@ -534,6 +548,10 @@
   .addr-group {
     display: flex;
     gap: 8px;
+  }
+
+  .thin .addr-group {
+    gap: 4px;
   }
 
   .drawer .addr-group {
@@ -625,6 +643,27 @@
     background: var(--accent-bg);
   }
 
+  /* Matches .thin .swap's own rule above: a plain glyph riding the
+     hairline row, no button-box chrome. */
+  .thin .regex-toggle {
+    background: none;
+    border: none;
+    border-bottom: 1px solid var(--hair-2);
+    border-radius: 0;
+    padding: 1px 2px 3px;
+    font-size: 11px;
+    width: auto;
+  }
+
+  .thin .regex-toggle.active {
+    background: none;
+    border-bottom-color: var(--accent);
+  }
+
+  .thin .regex-toggle.refused {
+    border-bottom-color: var(--danger, #c0392b);
+  }
+
   .clear {
     background: transparent;
     border: 1px solid var(--border);
@@ -668,25 +707,6 @@
     color: var(--accent);
     font-family: var(--font-mono);
     font-size: 10.5px;
-  }
-
-  .export {
-    background: transparent;
-    border: 1px solid var(--border);
-    color: var(--fg-muted);
-    border-radius: 5px;
-    padding: 8px 14px;
-    font-size: 14px;
-  }
-
-  .export:hover:not(:disabled) {
-    color: var(--fg);
-    border-color: var(--fg-muted);
-  }
-
-  .export:disabled {
-    opacity: 0.5;
-    cursor: not-allowed;
   }
 
   .duration {
