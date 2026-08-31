@@ -888,6 +888,17 @@ export function filtersFromSearchParams(params: URLSearchParams): Filters {
 // silence.
 export type WatchlistCoverage = 'unknown' | 'covered' | 'no-logging' | 'out-of-scope'
 
+// Mirrors internal/api's PersistenceInfo (#677's settings persistence
+// row) -- which backend this deployment's persisted stores (flags,
+// definitions, watchlist entries, entities, tokens/accounts) actually
+// use right now.
+export interface PersistenceInfo {
+  backend: 'file' | 'postgres'
+  // The directory the JSON documents live under -- absent for postgres,
+  // which has no filesystem path to report.
+  dir?: string
+}
+
 // Mirrors internal/api's setupStatus (#320). Everything here is an
 // observation mikroview made on its own side -- it never connects to a
 // router, so "did that step work" is answered by what arrived, not by

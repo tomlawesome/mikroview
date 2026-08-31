@@ -26,6 +26,7 @@
   import { deckCards } from '../lib/deckCards'
   import { deckOrderState } from '../lib/deckOrder.svelte'
   import { versionState } from '../lib/version.svelte'
+  import { persistenceState } from '../lib/persistence.svelte'
   import { familyOf } from '../lib/flagPalette'
   import { fetchSetupStatus } from '../lib/api'
   import { formatEps, formatHM, parseGoDurationSeconds, formatDaysSince } from '../lib/format'
@@ -53,6 +54,10 @@
       })
     detectorSettingsState.refresh().catch(() => {})
     versionState.ensureLoaded().catch(() => {})
+    // 403s for a non-admin (see persistenceState's own doc comment) --
+    // the persistence row below just states less for that caller,
+    // same swallow-and-degrade shape as fetchSetupStatus above.
+    persistenceState.ensureLoaded().catch(() => {})
   })
 
   const epsText = $derived(appState.stats ? formatEps(appState.stats.eventsPerSecond) : null)
@@ -210,6 +215,24 @@
   const retentionHours = $derived(
     appState.stats ? Math.max(1, Math.round(appState.stats.windowSeconds / 3600)) : null,
   )
+
+  // --- memory: persistence (#677) -------------------------------------
+  // Two halves, both live truth rather than the ratified copy's "JSON
+  // store · 14 d" (no such event-retention feature exists -- see
+  // internal/persist's own package doc): which backend the stores it
+  // does cover (flags, definitions, watchlist entries, entities,
+  // tokens/accounts) actually use, from persistenceState -- absent
+  // entirely for a non-admin, the same absent-not-disabled grammar the
+  // rest of Settings' admin-only facts already follow -- plus the one
+  // fact that holds regardless of role or config: the event buffer
+  // above is memory-only.
+  const persistenceSummary = $derived.by(() => {
+    const bufferFact = 'the event buffer above is memory-only and clears on restart'
+    const info = persistenceState.info
+    if (!info) return bufferFact
+    const backend = info.backend === 'postgres' ? 'Postgres' : `file store · ${info.dir ?? '—'}`
+    return `${backend} — holds flags, definitions, watchlist entries, entities and tokens; ${bufferFact}`
+  })
 
   // --- ingest --------------------------------------------------------------
   const routers = $derived.by(() => {
@@ -516,14 +539,17 @@
           <span class="ov">every scene below reads from here; nothing anywhere probes</span>
         </div>
         <!-- #677: "persistence — JSON store · 14 d" was the ratified
-             copy, but no such store exists -- internal/persist's own
-             package doc calls out the live event stream as the one
-             deliberate exception left in-memory-only (SECURITY.md);
-             there is no config path that changes that. Stating that
-             truth instead of a day count nothing on the server tracks. -->
+             copy, but no event store with a day-based retention exists
+             -- internal/persist's own package doc calls the live event
+             stream the one deliberate in-memory-only exception, with no
+             config path that changes it. internal/persist IS real,
+             though, and backs flags/definitions/watchlist/entities/
+             tokens -- persistenceSummary states which backend it
+             actually uses (see persistenceState) alongside the buffer
+             fact, rather than only the negative half. -->
         <div class="orow">
           <span>persistence</span>
-          <span class="ov dim">in-memory only — no disk copy; a restart clears the buffer above</span>
+          <span class="ov dim">{persistenceSummary}</span>
         </div>
       </div>
 

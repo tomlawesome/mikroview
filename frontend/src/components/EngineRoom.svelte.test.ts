@@ -59,6 +59,7 @@ vi.mock('../lib/api', () => ({
   revokeToken: vi.fn(),
   fetchDevices: vi.fn(async () => []),
   signOutEverywhere: vi.fn(async () => null),
+  fetchPersistence: vi.fn(async () => ({ backend: 'file', dir: '/var/lib/mikroview' })),
   fetchAuthSession: vi.fn(async () => ({
     setupRequired: false,
     authenticated: true,
@@ -76,6 +77,7 @@ import { detectorSettingsState } from '../lib/detectorSettings.svelte'
 import { usersState } from '../lib/users.svelte'
 import { tokensState } from '../lib/tokens.svelte'
 import { deckOrderState } from '../lib/deckOrder.svelte'
+import { persistenceState } from '../lib/persistence.svelte'
 import type { Stats } from '../lib/types'
 import EngineRoom from './EngineRoom.svelte'
 
@@ -110,6 +112,12 @@ beforeEach(() => {
   tokensState.list = []
   tokensState.justCreated = null
   authState.signedInSince = ''
+  // persistenceState.ensureLoaded() only ever fetches once (see its own
+  // doc comment), so across a whole test file its cache would otherwise
+  // leak from whichever test rendered EngineRoom first -- reset the
+  // seeded value directly instead of relying on the mocked fetch, same
+  // as detectorSettingsState.list/flagsState.list above.
+  persistenceState.info = null
   deckOrderState.set(['fall', 'metrics', 'live', 'docket', 'entities', 'engineroom'])
 })
 
@@ -317,14 +325,46 @@ describe('The settings shelf (#633)', () => {
     expect(screen.queryByRole('button', { name: '15 ports / 60 s' })).toBeNull()
   })
 
-  it('memory states persistence live truth -- events are in-memory only, not a fabricated retention', async () => {
+  it('memory states persistence live truth: the file backend and its directory, and that the buffer is memory-only', async () => {
     authState.state = 'authenticated'
     authState.role = 'admin'
+    persistenceState.info = { backend: 'file', dir: '/var/lib/mikroview' }
     render(EngineRoom)
     await settle()
 
     expect(screen.getByText('persistence')).toBeTruthy()
-    expect(screen.getByText(/in-memory only/)).toBeTruthy()
+    expect(screen.getByText(/file store · \/var\/lib\/mikroview/)).toBeTruthy()
+    expect(
+      screen.getByText(/holds flags, definitions, watchlist entries, entities and tokens/),
+    ).toBeTruthy()
+    expect(screen.getByText(/the event buffer above is memory-only and clears on restart/)).toBeTruthy()
+  })
+
+  it('states Postgres, not a file path, when that backend is live', async () => {
+    authState.state = 'authenticated'
+    authState.role = 'admin'
+    persistenceState.info = { backend: 'postgres' }
+    render(EngineRoom)
+    await settle()
+
+    expect(screen.getByText(/^Postgres —/)).toBeTruthy()
+    expect(screen.queryByText(/file store/)).toBeNull()
+  })
+
+  it('a viewer without access to GET /api/persistence sees only the buffer fact, not a fabricated backend', async () => {
+    // #677: the route is admin-gated (a directory is infrastructure
+    // detail, same reasoning /api/config/problems already applies), so
+    // persistenceState.info stays null for anyone else -- absent, not
+    // disabled, the same grammar the rest of Settings' admin-only facts
+    // already follow.
+    authState.state = 'authenticated'
+    authState.role = 'viewer'
+    render(EngineRoom)
+    await settle()
+
+    expect(screen.getByText('the event buffer above is memory-only and clears on restart')).toBeTruthy()
+    expect(screen.queryByText(/file store/)).toBeNull()
+    expect(screen.queryByText(/Postgres/)).toBeNull()
   })
 
   it('the sessions row states this device and can sign out everywhere', async () => {

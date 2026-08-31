@@ -169,6 +169,12 @@ type Server struct {
 	// is not good enough for a setting the operator believes is in
 	// effect. See config_problems.go.
 	ConfigProblems []ConfigProblem
+	// Persistence reports which backend this deployment's persisted
+	// stores (flags, definitions, watchlist entries, entities, tokens/
+	// accounts -- internal/persist's own package doc) actually use right
+	// now -- set once at boot from main.go's storage decision. See
+	// persistence.go.
+	Persistence PersistenceInfo
 
 	// Auth/Sessions/LoginLimiter/SecureCookie: see auth.go. Auth is
 	// always non-nil (internal/auth.Open("") returns a usable, empty,
@@ -370,6 +376,7 @@ func (s *Server) routes() []route {
 		// past. Admin-only, matching the modal it is written from.
 		{http.MethodPost, "/api/setup/mark", s.handleSetupMark},
 		{http.MethodGet, "/api/config/problems", s.handleConfigProblems},
+		{http.MethodGet, "/api/persistence", s.handlePersistence},
 
 		{http.MethodGet, "/api/auth/session", s.handleAuthSession},
 		{http.MethodPost, "/api/auth/register", s.handleAuthRegister},
