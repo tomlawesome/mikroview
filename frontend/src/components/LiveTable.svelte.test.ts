@@ -838,10 +838,13 @@ describe('Flagged pathway row wash and mark (#685, #691)', () => {
 })
 
 // The foot line (#691, round 30's .foot-legend): three computed facts
-// on the stream's own footing. What matters most here is that it is
-// absent whenever its facts are -- the band must never draw a strip
-// with a placeholder in it, and must not draw at all with nothing to
-// say.
+// on the stream's own footing. Unmounted outright behind
+// FOOT_LEGEND_ENABLED per the owner's 2026-08-31 #717 ruling ("I hate
+// it, remove it") -- these pin that it never draws, even with facts to
+// show, matching RESIZE_HANDLES_ENABLED's own pattern. The fact
+// computation itself (footLineFacts) keeps its own coverage in
+// footLine.test.ts; what matters here is only that this component does
+// not render it.
 describe('the foot line', () => {
   const darkBoundary = {
     key: 'forward|guest|wan',
@@ -875,7 +878,7 @@ describe('the foot line', () => {
     expect(container.querySelector('.foot-legend')).toBeNull()
   })
 
-  it('renders the facts that do have data, and nothing in place of the ones that do not', () => {
+  it('stays unmounted even when all three facts have data (#717)', () => {
     fallState.boundaries = [darkBoundary]
     flagsState.list = [repeatedDrops()]
     appState.events = [
@@ -892,20 +895,10 @@ describe('the foot line', () => {
     const { container } = render(LiveTable, { props: { events: appState.events } })
     flushSync()
 
-    const band = container.querySelector('.foot-legend')
-    expect(band).not.toBeNull()
-    const facts = band!.querySelectorAll('.fact')
-    // Two, not three: no spike flag is open, so the surge slot is
-    // simply not there -- no dash, no zero, no example.
-    expect(facts.length).toBe(2)
-    expect(facts[0].textContent).toContain('cam-porch → nas :445')
-    expect(facts[0].textContent).toContain('14 so far')
-    expect(facts[1].textContent).toContain('guest → wan')
-    expect(facts[1].textContent).toContain('nothing logged, not nothing sent')
-    expect(band!.querySelectorAll('.k')[1].textContent).toBe('dark')
+    expect(container.querySelector('.foot-legend')).toBeNull()
   })
 
-  it('drops a fact again once its flag is cleared', () => {
+  it('stays unmounted with a cleared flag too', () => {
     flagsState.list = [{ ...repeatedDrops(), cleared: true }]
     appState.events = [makeEvent('drop-row', { srcIp: '10.0.20.11', dstPort: 445, action: 'drop' })]
 
