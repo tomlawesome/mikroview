@@ -11,6 +11,17 @@
 // table, so the suite below gained its own describe blocks for the two
 // new tabs; the hosts-tab tests above are otherwise untouched (hosts
 // stays the default tab, unchanged).
+//
+// Round 30's #ent draws no tab strip at all: the entities table follows
+// the router cards directly, one table of named things, exactly as #675
+// first built it. The strip is unmounted behind TABS_ENABLED (see the
+// comment on that flag in Entities.svelte), not deleted -- #691 tracks
+// remounting it. The tab-strip describe block below now asserts the
+// strip's absence and that hosts renders by default with no way to
+// switch away from it; the rules-tab and ports-tab describe blocks are
+// skipped rather than deleted, since every one of their tests reaches
+// its table by clicking a tab button that round 30 does not render --
+// un-skip them when #691 remounts the strip.
 
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { render, fireEvent } from '@testing-library/svelte'
@@ -335,31 +346,26 @@ describe('Entities named-things table (#675)', () => {
   })
 })
 
-describe('Entities tab strip (#681)', () => {
-  it('defaults to the hosts tab and switches on click', async () => {
-    const { container, getByRole } = render(Entities)
+describe('Entities tab strip (#681, unmounted for round-30 fidelity)', () => {
+  it('draws no tab strip -- the entities table follows the router cards directly, and hosts (the ratified table) is what renders since there is no button left to switch away from it (TABS_ENABLED, #691)', async () => {
+    const { container, queryByRole } = render(Entities)
     await settle()
 
-    expect(getByRole('tab', { name: 'hosts' }).className).toContain('on')
-    expect(container.querySelector('.etable th')?.textContent).toBe('name')
-
-    await fireEvent.click(getByRole('tab', { name: 'rules' }))
-    await settle()
-    expect(getByRole('tab', { name: 'rules' }).className).toContain('on')
+    expect(queryByRole('tablist')).toBeNull()
+    expect(container.querySelectorAll('.tab').length).toBe(0)
     expect([...container.querySelectorAll('.etable th')].map((th) => th.textContent)).toEqual([
       'name',
-      'chain',
-      'action',
-      'last fired',
+      'lane',
+      'address',
+      'mac',
+      'first seen',
+      'last seen',
+      'marks',
     ])
-
-    await fireEvent.click(getByRole('tab', { name: 'ports' }))
-    await settle()
-    expect([...container.querySelectorAll('.etable th')].map((th) => th.textContent)).toEqual(['name', 'port', 'last seen'])
   })
 })
 
-describe('Entities rules tab (#681)', () => {
+describe.skip('Entities rules tab (#681) -- skipped while the tab strip is unmounted for round-30 fidelity (TABS_ENABLED, #691): every test below reaches the rules table by clicking a tab button that round 30 does not render. The rules table and its rename path are still implemented in Entities.svelte; un-skip this block when #691 remounts the strip.', () => {
   it('lists a rule that has been pushed but has never fired as its own row, reading as never-fired rather than blank', async () => {
     appState.devices = [
       { id: 'rb5009', name: 'rb5009', configured: true, status: 'live', lastSeen: new Date().toISOString(), sourceIp: '10.0.0.1', eventCount: 0 },
@@ -457,7 +463,7 @@ describe('Entities rules tab (#681)', () => {
   })
 })
 
-describe('Entities ports tab (#681)', () => {
+describe.skip('Entities ports tab (#681) -- skipped while the tab strip is unmounted for round-30 fidelity (TABS_ENABLED, #691): every test below reaches the ports table by clicking a tab button that round 30 does not render. The ports table and its rename path are still implemented in Entities.svelte; un-skip this block when #691 remounts the strip.', () => {
   it('folds a discovered-but-unnamed port into the ports tab', async () => {
     appState.events = [
       { srcIp: '10.0.10.9', dstIp: '10.0.10.1', srcPort: 51413, dstPort: 443, time: new Date().toISOString(), receivedAt: Date.now() },
