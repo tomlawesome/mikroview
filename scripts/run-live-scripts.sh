@@ -25,8 +25,10 @@ status=0
 for script in scripts/live-*.sh; do
   case "$script" in
     # Not checks: the shared environment helpers the checks and the
-    # scenarios both use.
-    scripts/live-env.sh|scripts/live-container.sh|scripts/live-stores.sh) continue ;;
+    # scenarios both use. live-slot.sh is sourced, never run -- executed
+    # as a check it defines its variables in a subshell, exits 0 and
+    # reports nothing, which reads as a check that passed.
+    scripts/live-env.sh|scripts/live-container.sh|scripts/live-stores.sh|scripts/live-slot.sh) continue ;;
     # Needs a real RouterOS CHR booted alongside the instance. Run by
     # `make live-routeros-container`.
     scripts/live-routeros.sh) continue ;;

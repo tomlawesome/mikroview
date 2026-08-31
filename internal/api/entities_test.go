@@ -213,16 +213,25 @@ func TestDeleteEntitiesUnknownReturnsNotFound(t *testing.T) {
 	}
 }
 
+// TestNonAdminCannotManageEntities pins #653's widening of the entities
+// surface from admin-only to user tier: a viewer is refused all three
+// routes (viewer may not change anything that affects the instance), but
+// a plain user -- the "watchers" bench the owner's ruling granted full
+// access here -- succeeds at all three.
 func TestNonAdminCannotManageEntities(t *testing.T) {
 	s := newAuthTestServer(t)
 	ts := httptest.NewServer(s.Routes())
 	defer ts.Close()
 
 	adminClient := registerAdmin(t, ts)
-	postJSON(t, adminClient, ts.URL+"/api/auth/users", createUserRequest{Username: "viewer", Password: "password456", Role: "user"}).Body.Close()
+	postJSON(t, adminClient, ts.URL+"/api/auth/users", createUserRequest{Username: "watcher", Password: "password456", Role: "viewer"}).Body.Close()
+	postJSON(t, adminClient, ts.URL+"/api/auth/users", createUserRequest{Username: "operator", Password: "password789", Role: "user"}).Body.Close()
 
 	viewerClient := &http.Client{Jar: mustCookieJar(t)}
-	postJSON(t, viewerClient, ts.URL+"/api/auth/login", credentialsRequest{Username: "viewer", Password: "password456"}).Body.Close()
+	postJSON(t, viewerClient, ts.URL+"/api/auth/login", credentialsRequest{Username: "watcher", Password: "password456"}).Body.Close()
+
+	userClient := &http.Client{Jar: mustCookieJar(t)}
+	postJSON(t, userClient, ts.URL+"/api/auth/login", credentialsRequest{Username: "operator", Password: "password789"}).Body.Close()
 
 	getResp, err := viewerClient.Get(ts.URL + "/api/entities")
 	if err != nil {
@@ -230,18 +239,39 @@ func TestNonAdminCannotManageEntities(t *testing.T) {
 	}
 	defer getResp.Body.Close()
 	if getResp.StatusCode != http.StatusForbidden {
-		t.Errorf("expected a non-admin GET /api/entities to be forbidden, got %d", getResp.StatusCode)
+		t.Errorf("expected a viewer GET /api/entities to be forbidden, got %d", getResp.StatusCode)
 	}
 
 	postResp := postJSON(t, viewerClient, ts.URL+"/api/entities", entityRequest{Type: entities.TypeHost, Key: "1.2.3.4"})
 	defer postResp.Body.Close()
 	if postResp.StatusCode != http.StatusForbidden {
-		t.Errorf("expected a non-admin POST /api/entities to be forbidden, got %d", postResp.StatusCode)
+		t.Errorf("expected a viewer POST /api/entities to be forbidden, got %d", postResp.StatusCode)
 	}
 
 	delResp := deleteJSON(t, viewerClient, ts.URL+"/api/entities", entityRequest{Type: entities.TypeHost, Key: "1.2.3.4"})
 	defer delResp.Body.Close()
 	if delResp.StatusCode != http.StatusForbidden {
-		t.Errorf("expected a non-admin DELETE /api/entities to be forbidden, got %d", delResp.StatusCode)
+		t.Errorf("expected a viewer DELETE /api/entities to be forbidden, got %d", delResp.StatusCode)
+	}
+
+	userGetResp, err := userClient.Get(ts.URL + "/api/entities")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer userGetResp.Body.Close()
+	if userGetResp.StatusCode != http.StatusOK {
+		t.Errorf("expected a user GET /api/entities to succeed (#653), got %d", userGetResp.StatusCode)
+	}
+
+	userPostResp := postJSON(t, userClient, ts.URL+"/api/entities", entityRequest{Type: entities.TypeHost, Key: "1.2.3.4"})
+	defer userPostResp.Body.Close()
+	if userPostResp.StatusCode != http.StatusCreated {
+		t.Errorf("expected a user POST /api/entities to succeed (#653), got %d", userPostResp.StatusCode)
+	}
+
+	userDelResp := deleteJSON(t, userClient, ts.URL+"/api/entities", entityRequest{Type: entities.TypeHost, Key: "1.2.3.4"})
+	defer userDelResp.Body.Close()
+	if userDelResp.StatusCode != http.StatusOK {
+		t.Errorf("expected a user DELETE /api/entities to succeed (#653), got %d", userDelResp.StatusCode)
 	}
 }

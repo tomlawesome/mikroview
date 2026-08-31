@@ -17,13 +17,16 @@
   import AuditLog from './AuditLog.svelte'
 
   const isAdmin = $derived(authState.role === 'admin')
+  // #653: watchlist and clearing flags are user-tier; the audit log
+  // stays owner-level. Absent rather than disabled, as everywhere else.
+  const canEdit = $derived(authState.canEdit)
 
   // The docket's tab follows the app view, so a deep link (the scene
   // bar's flag badge, the broken ring, the menu's Audit log row) lands
   // on the right tab; clicking a tab is just a view change.
   type Tab = 'flags' | 'watchlist' | 'audit'
   const tab = $derived.by((): Tab => {
-    if (appState.view === 'watchlist' && isAdmin) return 'watchlist'
+    if (appState.view === 'watchlist' && canEdit) return 'watchlist'
     if (appState.view === 'audit' && isAdmin) return 'audit'
     return 'flags'
   })
@@ -79,7 +82,7 @@
         {#if flagsState.activeCount > 0}<b class="ct">⚑ {flagsState.activeCount}</b>{/if}
       </span>
     </button>
-    {#if isAdmin}
+    {#if canEdit}
       <button
         class="tab"
         class:on={tab === 'watchlist'}
@@ -93,6 +96,8 @@
           {#if watchlistState.brokenCount > 0}<b class="bct">○ {watchlistState.brokenCount}</b>{/if}
         </span>
       </button>
+    {/if}
+    {#if isAdmin}
       <button
         class="tab"
         class:on={tab === 'audit'}
@@ -105,7 +110,7 @@
       </button>
     {/if}
 
-    {#if tab === 'flags' && flagsState.activeCount > 0}
+    {#if tab === 'flags' && flagsState.activeCount > 0 && canEdit}
       <button class="bubble" class:armed disabled={busy} onclick={onClearAll} title="They keep their place in the audit log">
         {armed ? 'confirm' : `clear all ${flagsState.activeCount}`}
       </button>

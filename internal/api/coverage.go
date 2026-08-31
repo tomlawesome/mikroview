@@ -30,14 +30,17 @@ func (s *Server) handleCoverageList(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleCoveragePut creates or replaces the coverage-gap declaration at
-// {key}, admin-only: declaring a boundary intentionally quiet changes
-// how a human reads an absence of detection there, so the decision
-// carries the same weight as any other admin-authored explanation
+// {key}, user tier and above: declaring a boundary intentionally quiet
+// changes how a human reads an absence of detection there, so the
+// decision carries the same weight as any other authored explanation
 // (entities' labels, a definition's suppression) and is audit-logged the
-// same way.
+// same way. Those neighbours are exactly why this is no longer
+// admin-only -- #653 moved entity labels and the whole definitions
+// surface to the user tier, and this row followed the reasoning it
+// already rested on rather than being left behind alone.
 func (s *Server) handleCoveragePut(w http.ResponseWriter, r *http.Request) {
-	if !callerIsAdmin(r) {
-		http.Error(w, "admin role required", http.StatusForbidden)
+	if !callerIsUser(r) {
+		http.Error(w, "user role required", http.StatusForbidden)
 		return
 	}
 
@@ -59,7 +62,7 @@ func (s *Server) handleCoveragePut(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleCoverageDelete removes the coverage-gap declaration at {key},
-// admin-only, same gate as handleCoveragePut. 404 when no declaration
+// User tier and above, same gate as handleCoveragePut (#653). 404 when no declaration
 // exists at that key -- unlike flags.Store.Clear/entities.Store.Delete's
 // "unknown ID is a no-op" convention (a caller with a stale list can't
 // always tell which case applied), a coverage-gap key is something the
@@ -67,8 +70,8 @@ func (s *Server) handleCoveragePut(w http.ResponseWriter, r *http.Request) {
 // so a 404 here is a meaningful, actionable signal rather than routine
 // noise.
 func (s *Server) handleCoverageDelete(w http.ResponseWriter, r *http.Request) {
-	if !callerIsAdmin(r) {
-		http.Error(w, "admin role required", http.StatusForbidden)
+	if !callerIsUser(r) {
+		http.Error(w, "user role required", http.StatusForbidden)
 		return
 	}
 
