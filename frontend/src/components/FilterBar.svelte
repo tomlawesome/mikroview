@@ -1,17 +1,24 @@
 <script lang="ts">
   // SPDX-License-Identifier: AGPL-3.0-only
   //
-  // Round 30's stream filter (#697, #700/#691): "one filter, two hands".
-  // The box (`.fbox`) carries the full typed grammar and is ALWAYS on
-  // screen -- clear every term and it says so instead of vanishing, so
-  // there is always a way in and no second filter control needs to
-  // exist. `bar ▸`/`◂ bar`, welded to the box's own left edge, unfurls
-  // round 8's thin strip out of that edge -- the same filter as named
-  // fields. Editing either writes the same appState.filters; clicking a
-  // value in a row (EventRow's own gesture) writes both. The span pills
-  // (15 m/1 h/24 h/14 d, #703) and the "holding N" reach words ride the
-  // right end of this same filter line -- moved here from SceneBar's
-  // top chrome, not duplicated (see SceneBar.svelte's own comment).
+  // Round 30 shipped a "bar ▸"/"◂ bar" toggle welded to the filter box's
+  // left edge (#697). Owner correction, 2026-08-31: "Remove the bar
+  // button entirely, and the filter bar instead folds out of the search
+  // box as a drawer" -- "clicking in the box opens it, clicking away
+  // from the box closes it." That toggle is gone; there is no button.
+  // The box (`.fbox`) is itself the drawer's disclosure: a click inside
+  // it opens the strip below, a click away from both the box and the
+  // open strip closes it again (Escape does too, for a keyboard user
+  // with no "click away" to press -- see onWindowClick/onWindowKeydown
+  // below). "One filter, two hands" stands as before: the box carries
+  // the full typed grammar and is ALWAYS on screen -- clear every term
+  // and it says so instead of vanishing -- while the strip is the same
+  // filter as named fields. Editing either writes the same
+  // appState.filters; clicking a value in a row (EventRow's own
+  // gesture) writes both. The span pills (15 m/1 h/24 h/14 d, #703) and
+  // the "holding N" reach words ride the right end of this same filter
+  // line -- moved here from SceneBar's top chrome, not duplicated (see
+  // SceneBar.svelte's own comment).
   import { appState } from '../lib/state.svelte'
   import { ACTION_FILTER_OPTIONS } from '../lib/actions'
   import { viewportState } from '../lib/viewport.svelte'
@@ -44,20 +51,52 @@
   // once the way FilterPresetsMenu's saved presets do.
   let drawerOpen = $state(false)
 
-  // Desktop's own fold state (#644, round 8 "accepted -- yeah much
-  // better!", round 23: "the filter row stays"). The strip defaults
-  // folded back into the box and unfurls out of the box's own left edge
-  // on demand -- the round-7 always-open fat panel this replaces was
-  // rejected verbatim ("no, you ignored my instruction, sliding out to
-  // the left, as a thin bar"). A separate flag from drawerOpen: the two
-  // breakpoints render different chrome (a bottom-sheet drawer vs. an
-  // inline thin row) and must be independently togglable.
+  // Desktop's own fold state (#697, owner 2026-08-31: "the bar goes,
+  // the filter folds out of the search box"). Opens on a click inside
+  // `.fbox` (or Enter/Space while it holds keyboard focus, since a
+  // keyboard user has no "click inside" to press); closes on a click
+  // away from both the box and the open strip, or Escape. Not tied to
+  // whether a filter is active -- it opens and closes from that gesture
+  // alone. A separate flag from drawerOpen: the two breakpoints render
+  // different chrome (a bottom-sheet drawer vs. an inline thin row) and
+  // must be independently togglable.
   let expanded = $state(false)
+
+  // DOM refs for the outside-click close below: a click only counts as
+  // "away from the box" once it lands outside both the trigger
+  // (`.fbox`) and the strip it opens (`.bar.thin`), so picking a value
+  // inside the open drawer never closes the thing being used.
+  let fboxEl: HTMLDivElement | undefined = $state()
+  let barEl: HTMLDivElement | undefined = $state()
+  // The hint inside the box is the real button (see its comment in the
+  // markup), so it -- not the box div, which has no tabstop -- is where
+  // keyboard focus goes back to on close.
+  let hintEl: HTMLButtonElement | undefined = $state()
 
   function onKeydown(e: KeyboardEvent) {
     if (e.key !== 'Escape') return
     if (drawerOpen) drawerOpen = false
-    if (expanded) expanded = false
+    if (expanded) {
+      expanded = false
+      // Keyboard close returns focus to the control that opened it,
+      // same as any other disclosure widget in this app.
+      hintEl?.focus()
+    }
+  }
+
+  // The box is a click-to-open target for the pointer; the keyboard's
+  // way in is the real button inside it, where Enter and Space are
+  // native. See the markup comment on .fbox for why the role does not
+  // sit on the box itself.
+  // "Clicking away from the box closes it" (owner, 2026-08-31) -- away
+  // from the open strip too, not just the box itself. Bound via
+  // <svelte:window> below, which Svelte itself adds on mount and
+  // removes on destroy, so there is nothing here to tear down by hand.
+  function onWindowClick(e: MouseEvent) {
+    if (viewportState.isMobile || !expanded) return
+    const target = e.target as Node
+    if (fboxEl?.contains(target) || barEl?.contains(target)) return
+    expanded = false
   }
 
   // The box's own chip summary (ported from SceneBar's retired `.search`,
@@ -128,7 +167,7 @@
   const FILTERS_TRIGGER_ENABLED: boolean = false
 </script>
 
-<svelte:window onkeydown={onKeydown} />
+<svelte:window onkeydown={onKeydown} onclick={onWindowClick} />
 
 {#if viewportState.isMobile}
   <div class="mobile-row">
@@ -146,25 +185,36 @@
     {/if}
   </div>
 {:else}
-  <!-- Round 30's filter line (#697, #s5 `.filterline`): the toggle
-       welded to the box's own left edge, the box itself (always on
-       screen, never conditional on a filter existing), and the span
-       pills at the line's right end. This is the one way in to the
-       strip below -- FILTERS_TRIGGER_ENABLED's old second control is
-       retired, not duplicated beside this. -->
+  <!-- Round 30's filter line (#697, #s5 `.filterline`), rebuilt per the
+       owner's 2026-08-31 correction: no separate button reaches the
+       strip below any more -- the box itself (always on screen, never
+       conditional on a filter existing) is the disclosure, and the span
+       pills still ride the line's right end. FILTERS_TRIGGER_ENABLED's
+       old second control stays retired, not duplicated beside this. -->
   <div class="filterline">
-    <button
-      class="fb-open"
-      class:on={expanded}
-      onclick={() => (expanded = !expanded)}
-      aria-haspopup="true"
-      aria-expanded={expanded}
-      aria-controls="filterbar-strip"
-      title="The same filter, as named fields — slides out of the box's left edge"
+    <!-- A click anywhere inside opens the strip (owner: "Clicking in the
+         box opens it. Clicking away from the box closes it"), and
+         onWindowClick above closes it on a click away from both this box
+         and the open strip.
+
+         The box itself carries no ARIA role. It holds real nested
+         buttons -- each chip's own ⌫ -- and a screen reader flattens the
+         content of anything with role="button", which would have taken
+         the chip removers out of reach. Instead the always-present
+         .fbtype hint below is a real button and carries the expanded
+         state, so the keyboard path and the announcement live on a
+         genuine control while the whole box stays clickable by pointer.
+         Hence the two ignores: the keyboard route is that button, not
+         this div. -->
+    <!-- svelte-ignore a11y_no_static_element_interactions -->
+    <!-- svelte-ignore a11y_click_events_have_key_events -->
+    <div
+      class="fbox"
+      class:empty={filterChips.length === 0}
+      class:open={expanded}
+      bind:this={fboxEl}
+      onclick={() => (expanded = true)}
     >
-      {expanded ? '◂ bar' : 'bar ▸'}
-    </button>
-    <div class="fbox" class:empty={filterChips.length === 0} role="group" aria-label="The filter, as typed grammar">
       {#if filterChips.length > 0}
         <span class="fchips">
           {#each filterChips as chip (chip.key)}
@@ -172,7 +222,13 @@
               >{chip.label}:<em>{chip.value}</em><button
                 type="button"
                 class="chip-x"
-                onclick={() => clearChip(chip)}
+                onclick={(e) => {
+                  // Removing a chip is not "click inside the box to open
+                  // it" -- stop the click reaching the box's own
+                  // onclick above so it doesn't also (re)open the strip.
+                  e.stopPropagation()
+                  clearChip(chip)
+                }}
                 title="drop this term"
                 aria-label="Remove the {chip.label} filter"
               >
@@ -181,9 +237,26 @@
             >
           {/each}
         </span>
-        <span class="fbtype">type a term, or click a value in a row</span>
+        <button
+          type="button"
+          class="fbtype"
+          aria-haspopup="true"
+          aria-expanded={expanded}
+          aria-controls="filterbar-strip"
+          bind:this={hintEl}
+          onclick={() => (expanded = true)}>type a term, or click a value in a row</button
+        >
       {:else}
-        <span class="fbtype">no filter — every line, as it arrived. type a term, or click a value in a row</span>
+        <button
+          type="button"
+          class="fbtype"
+          aria-haspopup="true"
+          aria-expanded={expanded}
+          aria-controls="filterbar-strip"
+          bind:this={hintEl}
+          onclick={() => (expanded = true)}
+          >no filter — every line, as it arrived. type a term, or click a value in a row</button
+        >
       {/if}
     </div>
     <span class="spans" role="group" aria-label="How far back the stream shows — {reachWords}">
@@ -233,6 +306,7 @@
     id="filterbar-strip"
     class:drawer={viewportState.isMobile}
     class:thin={!viewportState.isMobile}
+    bind:this={barEl}
   >
     {#if viewportState.isMobile}
       <div class="handle"></div>
@@ -436,7 +510,15 @@
       <!-- Fold slides the bar back into the box (#644, round 8) -- the
            typed grammar/click model stays appState.filters either way,
            so nothing here is lost by folding, only hidden. -->
-      <button class="tf-fold" onclick={() => (expanded = false)} aria-label="Fold filters back into the box" title="Fold filters back into the box">fold ▸</button>
+      <button
+        class="tf-fold"
+        onclick={() => {
+          expanded = false
+          hintEl?.focus()
+        }}
+        aria-label="Fold filters back into the box"
+        title="Fold filters back into the box">fold ▸</button
+      >
     {/if}
   </div>
 {/if}
@@ -466,32 +548,10 @@
     align-items: center;
   }
 
-  /* Welded to the box's own left edge, so the strip visibly slides out
-     of the box rather than appearing beside it. */
-  .fb-open {
-    flex: none;
-    font: 600 10.5px var(--font-mono);
-    letter-spacing: 0.06em;
-    color: var(--accent);
-    background: transparent;
-    border: 1px solid var(--border);
-    border-right: 0;
-    border-radius: 7px 0 0 7px;
-    padding: 6px 11px;
-    cursor: pointer;
-    white-space: nowrap;
-  }
-
-  .fb-open:hover {
-    border-color: var(--fg-muted);
-    color: var(--fg);
-  }
-
-  .fb-open.on {
-    color: var(--fg);
-    background: var(--bg-elevated);
-  }
-
+  /* #697: no button is welded to this any more -- the box is its own
+     disclosure. Full border-radius now that nothing sits flush against
+     its left edge, plus the pointer/hover/focus affordance the removed
+     `.fb-open` button used to carry. */
   .fbox {
     flex: 1;
     display: flex;
@@ -502,9 +562,25 @@
     padding: 4px 12px;
     background: var(--bg-elevated);
     border: 1px solid var(--border);
-    border-radius: 0 7px 7px 0;
+    border-radius: 7px;
     font: 12px var(--font-mono);
     color: var(--fg-muted);
+    cursor: pointer;
+  }
+
+  .fbox:hover {
+    border-color: var(--fg-muted);
+  }
+
+  .fbox:focus-visible {
+    outline: none;
+    border-color: var(--accent);
+  }
+
+  /* While the strip is open, matching how `.fb-open.on` used to mark
+     the toggle. */
+  .fbox.open {
+    border-color: var(--accent);
   }
 
   .fchips {
@@ -541,8 +617,24 @@
   /* The empty box still says what it is (#697) -- round 29's box only
      rendered once a filter existed, which is exactly why the build kept
      a second "Filters ▸" control alive beside it. */
+  /* A real button, so Enter and Space open the drawer natively and a
+     screen reader hears the expanded state -- reset to read as the quiet
+     hint it looks like, but keeping the focus ring the app uses
+     everywhere else, since this is now the keyboard's way in. */
   .fbtype {
+    appearance: none;
+    background: none;
+    border: 0;
+    padding: 0;
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
     color: var(--fg-dim);
+  }
+
+  .fbtype:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
   }
 
   /* Round 30's `.spans`: quiet pills, the chosen one in full ink. A span
