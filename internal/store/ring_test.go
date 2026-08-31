@@ -458,3 +458,51 @@ func BenchmarkEventsPerSecondVsStats(b *testing.B) {
 		}
 	})
 }
+
+// #703: the span control offers a span only when the buffer really
+// reaches back that far, so Stats has to report the buffer's own reach
+// rather than the retention it was configured with. These pin the
+// difference, because the two agree until eviction bites -- which is
+// exactly when an operator would be misled.
+func TestStatsOldestHeldIsZeroWhenNothingIsHeld(t *testing.T) {
+	s := New(10, time.Hour)
+	if got := s.Stats().OldestHeld; !got.IsZero() {
+		t.Errorf("OldestHeld = %v on an empty store; want the zero time", got)
+	}
+}
+
+func TestStatsOldestHeldIsTheOldestEventBeforeTheBufferFills(t *testing.T) {
+	s := New(10, time.Hour)
+	now := time.Now()
+	for i := 0; i < 3; i++ {
+		s.Insert(mkEvent(now.Add(time.Duration(i)*time.Second), "core", ActionAccept))
+	}
+
+	if got := s.Stats().OldestHeld; !got.Equal(now) {
+		t.Errorf("OldestHeld = %v; want the first event's receipt time %v", got, now)
+	}
+}
+
+func TestStatsOldestHeldFollowsCapacityEvictionNotRetention(t *testing.T) {
+	// A one-hour retention window and a buffer of three. Five events a
+	// minute apart all fall inside the window, so retention evicts
+	// nothing and capacity evicts two.
+	s := New(3, time.Hour)
+	now := time.Now()
+	for i := 0; i < 5; i++ {
+		s.Insert(mkEvent(now.Add(time.Duration(i)*time.Minute), "core", ActionAccept))
+	}
+
+	want := now.Add(2 * time.Minute) // the third event: the oldest survivor
+	got := s.Stats().OldestHeld
+	if !got.Equal(want) {
+		t.Errorf("OldestHeld = %v; want the oldest surviving event %v", got, want)
+	}
+
+	// The configured window still says an hour. Reporting that as the
+	// reach is the failure this test exists to prevent: it would offer a
+	// span covering four minutes of evicted history as if it held them.
+	if reach := now.Add(4 * time.Minute).Sub(got); reach > 3*time.Minute {
+		t.Errorf("buffer reach %v exceeds what three minutely events can hold", reach)
+	}
+}
