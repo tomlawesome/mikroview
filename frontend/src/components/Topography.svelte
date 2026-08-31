@@ -183,20 +183,41 @@
   // it, so crossing badges stagger along their line by draw order.
   const BADGE_FRACS = [0.55, 0.72, 0.42, 0.64, 0.48]
 
+  // The unit vector perpendicular to (dx, dy): pushes a badge off to
+  // the side of the line it annotates rather than centred on top of
+  // it (#682 -- labels were reading as if printed across their own
+  // edges).
+  function perp(dx: number, dy: number): { x: number; y: number } {
+    const len = Math.hypot(dx, dy) || 1
+    return { x: -dy / len, y: dx / len }
+  }
+
+  const BADGE_CLEAR = 11
+
   function edgeBadgeAt(l: Line, i = 0): { x: number; y: number } {
     const { from, to, off } = l
+    const side = off.x !== 0 || off.y !== 0 ? Math.sign(off.x || off.y) : 1
     if (!l.crosses) {
       // Beside the bar, pushed back toward the source and clear of the
-      // opposite direction's line.
+      // opposite direction's line -- then off the line itself.
       const dp = deathPoint(l)
       const dx = from.x - dp.x
       const dy = from.y - dp.y
       const len = Math.hypot(dx, dy) || 1
-      return { x: dp.x + (dx / len) * 26 + off.x * 4.2, y: dp.y + (dy / len) * 26 + off.y * 4.2 }
+      const p = perp(dx, dy)
+      return {
+        x: dp.x + (dx / len) * 26 + off.x * 4.2 + p.x * BADGE_CLEAR * side,
+        y: dp.y + (dy / len) * 26 + off.y * 4.2 + p.y * BADGE_CLEAR * side,
+      }
     }
-    // Past the waist, toward the destination, on its own side.
+    // Past the waist, toward the destination, on its own side -- and
+    // off the line itself.
     const f = BADGE_FRACS[i % BADGE_FRACS.length]
-    return { x: WAIST.x + (to.x - WAIST.x) * f + off.x * 4.2, y: WAIST.y + (to.y - WAIST.y) * f + off.y * 4.2 }
+    const p = perp(to.x - WAIST.x, to.y - WAIST.y)
+    return {
+      x: WAIST.x + (to.x - WAIST.x) * f + off.x * 4.2 + p.x * BADGE_CLEAR * side,
+      y: WAIST.y + (to.y - WAIST.y) * f + off.y * 4.2 + p.y * BADGE_CLEAR * side,
+    }
   }
 
   function badgeLine(e: PolicyEdge): string {
@@ -391,6 +412,16 @@
     if (fine(out)) return 'DARK FROM WAN — no log rule inbound'
     if (fine(inward)) return 'DARK TOWARD WAN — no log rule on this boundary'
     return 'DARK BOTH WAYS — no log rule on this boundary'
+  }
+
+  // The coverage badge's own colour (#682): logged reads healthy green,
+  // dark reads alarm red, anything else (quiet, or logged-or-declared-
+  // quiet) stays the calm dim ink -- the same three-way split the
+  // ratified round-29 card wears, per zoneCaption's own vocabulary.
+  function covClass(caption: string): 'cov-l' | 'cov-d' | 'cov-q' {
+    if (caption.startsWith('DARK')) return 'cov-d'
+    if (caption.startsWith('LOGGED')) return 'cov-l'
+    return 'cov-q'
   }
 
   function realityLabel(r: RealityEdge): string {
@@ -845,98 +876,107 @@
       {/if}
     </div>
   {/if}
-  <div class="lenses" role="tablist" aria-label="Map lenses">
+  <!-- The health dials (#648, rounds 19-20; repositioned #682 clear of
+       the lens tabs and the deck's roll rail): two rings, flags and
+       watchers, solid green whenever there is nothing to report. Each
+       ring's own symbol (⚑ / the eye) sits beneath its count as the
+       ring's legend. -->
+  <div class="dials">
+      <button
+        class="dial"
+        onclick={() => openDocket('flags')}
+        aria-label="{activeFlags.length} open flag{activeFlags.length === 1 ? '' : 's'} — open the docket"
+      >
+        <svg viewBox="0 0 56 56" aria-hidden="true">
+          {#if activeFlags.length === 0}
+            <circle class="dring d-rest" cx="28" cy="28" r={DIAL_R} transform="rotate(-90 28 28)" />
+          {:else}
+            {@const alarmArc = ringArc(alarmFlagCount, activeFlags.length, 0)}
+            {@const advisoryArc = ringArc(advisoryFlagCount, activeFlags.length, (alarmFlagCount / activeFlags.length) * DIAL_CIRC)}
+            <circle
+              class="dring d-alarm"
+              cx="28"
+              cy="28"
+              r={DIAL_R}
+              transform="rotate(-90 28 28)"
+              stroke-dasharray={alarmArc.dasharray}
+              stroke-dashoffset={alarmArc.offset}
+            />
+            <circle
+              class="dring"
+              cx="28"
+              cy="28"
+              r={DIAL_R}
+              stroke={ADVISORY_INK}
+              transform="rotate(-90 28 28)"
+              stroke-dasharray={advisoryArc.dasharray}
+              stroke-dashoffset={advisoryArc.offset}
+            />
+          {/if}
+          <text x="28" y="27" class="dnum" text-anchor="middle">{activeFlags.length}</text>
+          <text x="28" y="41" class="dsym flag-sym" text-anchor="middle">⚑</text>
+        </svg>
+      </button>
+      <button
+        class="dial"
+        onclick={() => openDocket('watchlist')}
+        aria-label="{watcherTotal} watcher{watcherTotal === 1 ? '' : 's'}{watcherBroken > 0 ? `, ${watcherBroken} broken` : ''} — open the docket"
+      >
+        <svg viewBox="0 0 56 56" aria-hidden="true">
+          {#if watcherTotal === 0}
+            <circle class="dring d-rest" cx="28" cy="28" r={DIAL_R} transform="rotate(-90 28 28)" />
+          {:else}
+            {@const healthyArc = ringArc(watcherHealthy, watcherTotal, 0)}
+            {@const brokenArc = ringArc(watcherBroken, watcherTotal, (watcherHealthy / watcherTotal) * DIAL_CIRC)}
+            <circle
+              class="dring d-healthy"
+              cx="28"
+              cy="28"
+              r={DIAL_R}
+              transform="rotate(-90 28 28)"
+              stroke-dasharray={healthyArc.dasharray}
+              stroke-dashoffset={healthyArc.offset}
+            />
+            <circle
+              class="dring d-broken"
+              cx="28"
+              cy="28"
+              r={DIAL_R}
+              transform="rotate(-90 28 28)"
+              stroke-dasharray={brokenArc.dasharray}
+              stroke-dashoffset={brokenArc.offset}
+            />
+          {/if}
+          <text x="28" y="27" class="dnum" text-anchor="middle">{watcherTotal}</text>
+          <!-- The docket's own eye (#682, ported from the scene's dial
+               markup) -- not the "◉" text glyph, which is the aggregate
+               bar's own mark, not the ring's legend. -->
+          <g class="dsym watch-sym" transform="translate(28 36)">
+            <path d="M-6 0 Q0 -4.6 6 0 Q0 4.6 -6 0 Z" fill="none" stroke="currentColor" stroke-width="1.1" />
+            <circle r="1.7" fill="currentColor" />
+          </g>
+        </svg>
+      </button>
+    </div>
+
+  <!-- The lens selector (#682, ported from the scene's `.wlens2`): the
+       bottom-left bar, not a top-right tab strip -- round 29 has no
+       such strip beside the dials. -->
+  <div class="wlens2" role="tablist" aria-label="Map lenses">
     {#if reach}
-      <span class="lens on" role="tab" aria-selected="true">Reach</span>
-      <span class="lens" role="tab" aria-selected="false">{lens === 'policy' ? 'Policy' : 'Traffic'}</span>
+      <span class="on" role="tab" aria-selected="true">reach</span>
+      <span role="tab" aria-selected="false">{lens === 'policy' ? 'policy' : 'traffic'}</span>
     {:else}
-      <button class="lens" class:on={lens === 'traffic'} role="tab" aria-selected={lens === 'traffic'} onclick={() => (lens = 'traffic')}>
-        Traffic
+      <button class:on={lens === 'traffic'} role="tab" aria-selected={lens === 'traffic'} onclick={() => (lens = 'traffic')}>
+        traffic
       </button>
-      <button class="lens" class:on={lens === 'policy'} role="tab" aria-selected={lens === 'policy'} onclick={() => (lens = 'policy')}>
-        Policy
+      <button class:on={lens === 'policy'} role="tab" aria-selected={lens === 'policy'} onclick={() => (lens = 'policy')}>
+        policy
       </button>
-      <button class="lens" class:on={lens === 'coverage'} role="tab" aria-selected={lens === 'coverage'} onclick={() => (lens = 'coverage')}>
-        Coverage
+      <button class:on={lens === 'coverage'} role="tab" aria-selected={lens === 'coverage'} onclick={() => (lens = 'coverage')}>
+        coverage
       </button>
     {/if}
-  </div>
-  {#if reach}
-    <button class="ascend" onclick={surface}>⌃ surface — the map, as you left it</button>
-  {/if}
-
-  <!-- The health dials (#648, rounds 19-20): two rings, flags and
-       watchers, solid green whenever there is nothing to report. -->
-  <div class="dials">
-    <button
-      class="dial"
-      onclick={() => openDocket('flags')}
-      aria-label="{activeFlags.length} open flag{activeFlags.length === 1 ? '' : 's'} — open the docket"
-    >
-      <svg viewBox="0 0 56 56" aria-hidden="true">
-        {#if activeFlags.length === 0}
-          <circle class="dring d-rest" cx="28" cy="28" r={DIAL_R} transform="rotate(-90 28 28)" />
-        {:else}
-          {@const alarmArc = ringArc(alarmFlagCount, activeFlags.length, 0)}
-          {@const advisoryArc = ringArc(advisoryFlagCount, activeFlags.length, (alarmFlagCount / activeFlags.length) * DIAL_CIRC)}
-          <circle
-            class="dring d-alarm"
-            cx="28"
-            cy="28"
-            r={DIAL_R}
-            transform="rotate(-90 28 28)"
-            stroke-dasharray={alarmArc.dasharray}
-            stroke-dashoffset={alarmArc.offset}
-          />
-          <circle
-            class="dring"
-            cx="28"
-            cy="28"
-            r={DIAL_R}
-            stroke={ADVISORY_INK}
-            transform="rotate(-90 28 28)"
-            stroke-dasharray={advisoryArc.dasharray}
-            stroke-dashoffset={advisoryArc.offset}
-          />
-        {/if}
-        <text x="28" y="27" class="dnum" text-anchor="middle">{activeFlags.length}</text>
-        <text x="28" y="41" class="dsym flag-sym" text-anchor="middle">⚑</text>
-      </svg>
-    </button>
-    <button
-      class="dial"
-      onclick={() => openDocket('watchlist')}
-      aria-label="{watcherTotal} watcher{watcherTotal === 1 ? '' : 's'}{watcherBroken > 0 ? `, ${watcherBroken} broken` : ''} — open the docket"
-    >
-      <svg viewBox="0 0 56 56" aria-hidden="true">
-        {#if watcherTotal === 0}
-          <circle class="dring d-rest" cx="28" cy="28" r={DIAL_R} transform="rotate(-90 28 28)" />
-        {:else}
-          {@const healthyArc = ringArc(watcherHealthy, watcherTotal, 0)}
-          {@const brokenArc = ringArc(watcherBroken, watcherTotal, (watcherHealthy / watcherTotal) * DIAL_CIRC)}
-          <circle
-            class="dring d-healthy"
-            cx="28"
-            cy="28"
-            r={DIAL_R}
-            transform="rotate(-90 28 28)"
-            stroke-dasharray={healthyArc.dasharray}
-            stroke-dashoffset={healthyArc.offset}
-          />
-          <circle
-            class="dring d-broken"
-            cx="28"
-            cy="28"
-            r={DIAL_R}
-            transform="rotate(-90 28 28)"
-            stroke-dasharray={brokenArc.dasharray}
-            stroke-dashoffset={brokenArc.offset}
-          />
-        {/if}
-        <text x="28" y="27" class="dnum" text-anchor="middle">{watcherTotal}</text>
-        <text x="28" y="41" class="dsym watch-sym" text-anchor="middle">◉</text>
-      </svg>
-    </button>
   </div>
 
   <!-- While descended, the map stays beneath as the reach's backdrop —
@@ -1214,12 +1254,26 @@
               {#if z.hostCount > 3}<tspan> · +{z.hostCount - 3}</tspan>{/if}
             </text>
           {/if}
-          <text x="-90" y="72" class="n-sub">{z.eventCount.toLocaleString()} events this window</text>
           {#if zoneCaption(z.id)}
-            <text x="-90" y="62" class="n-cov" class:dark-t={zoneCaption(z.id)?.startsWith('DARK')}>{zoneCaption(z.id)}</text>
+            {@const capt = zoneCaption(z.id) ?? ''}
+            {@const [badge, detail] = capt.split(' — ')}
+            <!-- Two lines, badge over detail (#682, ratified round-29):
+                 collapsing them into one crammed sentence was the
+                 defect, not a design choice -- the badge's own y moves
+                 down 4px when a detail line follows it, matching the
+                 scene's own Guest card exactly. -->
+            <text x="-90" y={detail ? 74 : 70} class="n-cov {covClass(capt)}">{badge}</text>
+            {#if detail}
+              <text x="-90" y="88" class="n-sub">{detail}</text>
+            {/if}
           {/if}
+          <text x="-90" y="100" class="n-sub">{z.eventCount.toLocaleString()} events this window</text>
           {#if agg}
-            {@render aggregateBar(agg, -94, 188, 84, 12, z)}
+            <!-- The aggregate bar sits below the card's own rect (#682,
+                 ratified round-29: y=110 against a 106-tall island) --
+                 giving the coverage caption room for its second line
+                 regardless of whether a bar is also present. -->
+            {@render aggregateBar(agg, -94, 188, 110, 12, z)}
           {/if}
         </g>
       {/each}
@@ -1234,6 +1288,20 @@
       {/if}
       </g>
     </svg>
+    {#if reach}
+      <!-- The ascend control (#682, ported from the scene): inside the
+           map's own flow, top-left of the stage -- not a fixed pill
+           floating over the whole card. -->
+      <button
+        class="ascend"
+        onclick={(e) => {
+          e.stopPropagation()
+          surface()
+        }}
+      >
+        ⌃ surface — the map, as you left it
+      </button>
+    {/if}
   </div>
 
   {#if reach && reachSummary}
@@ -1488,35 +1556,44 @@
   {/if}
 
   {#if zonesState.degraded && zones.length > 0 && !reach}
+    <!-- The sentence is worth saying, but round 29 puts explanatory
+         notes in the scene's own chrome, not floating loose over the
+         drawing (#682): a bounded, backed pill, inset from every edge
+         like the rest of this card's furniture. -->
     <p class="degraded">
       zones are boundary-derived — no <span class="mono">/ip address</span> table has been pushed; Run setup… adds it
     </p>
   {/if}
 
-  <!-- The altitude slider (#648, concept T): one quiet axis at the
-       map's foot, no text, a tiny symbol per stop, click anywhere on the
-       line to jump. -->
+  <!-- The altitude slider (#648, concept T; named ends #682): one quiet
+       axis at the map's foot, its two extremes named ("clients" ...
+       "survey", ratified round-29), a tiny symbol per stop between
+       them, click anywhere on the line to jump. -->
   <div class="altitude">
-    <!-- A real range input: native click-anywhere-to-jump and arrow-key
-         stepping for free, an implicit slider role, no hand-rolled a11y
-         to get wrong. The stops are a purely decorative overlay -- the
-         input underneath is what's operable. -->
-    <input
-      class="alt-range"
-      type="range"
-      min="0"
-      max="3"
-      step="1"
-      value={altitude}
-      oninput={onAltitudeInput}
-      aria-label="Altitude: clients, services, zones, survey"
-      aria-valuetext={ALTITUDE_LABELS[altitude]}
-    />
-    <div class="alt-ticks" aria-hidden="true">
-      {#each ALTITUDE_LABELS as label (label)}
-        <i class="tick" class:on={ALTITUDE_LABELS[altitude] === label} class:diamond={label === 'survey'}></i>
-      {/each}
-    </div>
+    <span class="alt-end">clients</span>
+    <span class="alt-track">
+      <!-- A real range input: native click-anywhere-to-jump and arrow-key
+           stepping for free, an implicit slider role, no hand-rolled a11y
+           to get wrong. The stops are a purely decorative overlay -- the
+           input underneath is what's operable. -->
+      <input
+        class="alt-range"
+        type="range"
+        min="0"
+        max="3"
+        step="1"
+        value={altitude}
+        oninput={onAltitudeInput}
+        aria-label="Altitude: clients, services, zones, survey"
+        aria-valuetext={ALTITUDE_LABELS[altitude]}
+      />
+      <div class="alt-ticks" aria-hidden="true">
+        {#each ALTITUDE_LABELS as label (label)}
+          <i class="tick" class:on={ALTITUDE_LABELS[altitude] === label} class:diamond={label === 'survey'}></i>
+        {/each}
+      </div>
+    </span>
+    <span class="alt-end">survey</span>
   </div>
 
   {#if nodeCard}
@@ -1619,44 +1696,40 @@
     font-weight: 550;
   }
 
-  .lenses {
+  /* The lens selector (#682, ported from the scene's `.wlens2`): the
+     bottom-left bar, exact position and type from round 29 -- not an
+     approximation of it as a top-right tab strip. */
+  .wlens2 {
     position: absolute;
-    top: 18px;
-    right: 24px;
+    bottom: 12px;
+    left: 26px;
     z-index: 2;
     display: flex;
-    gap: 2px;
-    border-bottom: 1px solid var(--border);
-    padding-bottom: 6px;
+    gap: 14px;
+    font: 500 10.5px var(--font-sans);
+    color: var(--fg-dim);
+    opacity: 0.8;
   }
 
-  .lens {
-    font-size: 12px;
-    font-weight: 550;
-    color: var(--fg-dim);
-    padding: 4px 13px;
-    letter-spacing: 0.02em;
+  .wlens2 button {
     background: none;
     border: none;
-    font-family: inherit;
+    padding: 0;
+    font: inherit;
+    color: inherit;
     cursor: pointer;
   }
 
-  span.lens {
+  .wlens2 span {
     cursor: default;
   }
 
-  button.lens:hover {
-    color: var(--fg-muted);
-  }
-
-  .lens.on {
+  .wlens2 .on {
     color: var(--fg);
-    border-bottom: 2px solid var(--accent);
-    margin-bottom: -7px;
   }
 
   .stage {
+    position: relative;
     flex: 1;
     min-height: 0;
   }
@@ -1836,9 +1909,24 @@
   }
 
   .n-cov {
+    font-family: var(--font-mono);
+    font-size: 9px;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+  }
+
+  /* The coverage badge's colour is not decoration -- it is the same
+     read as the zone's edges on the map (#682, ratified round-29). */
+  .n-cov.cov-l {
+    fill: var(--accept);
+  }
+
+  .n-cov.cov-q {
     fill: var(--fg-dim);
-    font-size: 8px;
-    letter-spacing: 0.06em;
+  }
+
+  .n-cov.cov-d {
+    fill: var(--alarm);
   }
 
   /* Intentionally quiet: muted and named -- calmer than dark, dimmer
@@ -2161,6 +2249,13 @@
     fill: var(--fg-dim);
     font-family: var(--font-mono);
     font-size: 9.5px;
+    /* A halo in the map's own backdrop colour, not a line's stroke
+       (#682): keeps the label legible when it still passes near an
+       edge without needing to know that edge's exact geometry. */
+    paint-order: stroke;
+    stroke: var(--bg);
+    stroke-width: 3px;
+    stroke-linejoin: round;
   }
 
   .edge-g:hover .edge-badge {
@@ -2289,23 +2384,24 @@
     color: var(--alarm);
   }
 
+  /* Ported from the scene (#682): inside the map's own flow, top-left
+     of the stage, a plain text link -- not a bordered pill floating
+     over the whole card. */
   .ascend {
     position: absolute;
-    top: 64px;
-    right: 24px;
+    top: 8px;
+    left: 4px;
     z-index: 3;
     background: none;
-    border: 1px solid var(--border);
-    border-radius: 999px;
-    padding: 4px 14px;
-    font-size: 11px;
-    color: var(--fg-muted);
+    border: none;
+    padding: 0;
+    font: 500 11px var(--font-sans);
+    color: var(--accent);
     cursor: pointer;
   }
 
   .ascend:hover {
-    color: var(--fg);
-    border-color: var(--hair-2);
+    text-decoration: underline;
   }
 
   .host-link {
@@ -2319,12 +2415,22 @@
 
   .degraded {
     position: absolute;
-    bottom: 10px;
+    /* Stacked above the wlens2 lens row (#682) rather than sharing its
+       bottom-left corner -- both are chrome now, so they take turns
+       rather than colliding. */
+    bottom: 38px;
     left: 24px;
+    z-index: 2;
     margin: 0;
-    font-size: 11px;
+    padding: 5px 11px;
+    width: max-content;
+    max-width: 320px;
+    font-size: 10.5px;
     font-style: italic;
     color: var(--fg-dim);
+    background: var(--glass);
+    border: 1px solid var(--border);
+    border-radius: 8px;
   }
 
   .degraded .mono {
@@ -2332,12 +2438,8 @@
     font-style: normal;
   }
 
-  /* --- the health dials (#648, rounds 19-20) ----------------------------- */
+  /* --- the health dials (#648, rounds 19-20; repositioned #682) --------- */
   .dials {
-    position: absolute;
-    top: 10px;
-    right: 172px;
-    z-index: 2;
     display: flex;
     gap: 8px;
   }
@@ -2386,8 +2488,10 @@
     fill: var(--alarm);
   }
 
+  /* The eye icon (#682) is a path + circle using currentColor, not
+     text with its own fill -- color is what currentColor reads. */
   .watch-sym {
-    fill: var(--marked);
+    color: var(--marked);
   }
 
   .dial:hover .dnum,
@@ -2427,14 +2531,20 @@
     }
   }
 
-  /* --- the altitude slider (#648, concept T) ----------------------------- */
+  /* --- the altitude slider (#648, concept T; named ends #682) ----------- */
   .altitude {
     position: absolute;
     bottom: 12px;
     left: 50%;
     transform: translateX(-50%);
     z-index: 2;
-    width: 190px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font: 500 9px var(--font-mono);
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--fg-dim);
     opacity: 0.6;
     transition: opacity 0.25s;
   }
@@ -2444,13 +2554,59 @@
     opacity: 1;
   }
 
+  .alt-track {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    width: 170px;
+  }
+
+  /* A custom track and diamond thumb (#682): the native range input
+     rendered as browser-default chrome under the map, unlike anything
+     else this card wears. */
   .alt-range {
     display: block;
     width: 100%;
     margin: 0;
     height: 14px;
     background: transparent;
-    accent-color: var(--accent);
+    cursor: pointer;
+    -webkit-appearance: none;
+    appearance: none;
+  }
+
+  .alt-range::-webkit-slider-runnable-track {
+    height: 2px;
+    background: var(--hair-2);
+    border-radius: 1px;
+  }
+
+  .alt-range::-moz-range-track {
+    height: 2px;
+    background: var(--hair-2);
+    border-radius: 1px;
+  }
+
+  .alt-range::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 9px;
+    height: 9px;
+    margin-top: -4px;
+    background: var(--bg);
+    border: 1.5px solid var(--accent);
+    border-radius: 2px;
+    transform: rotate(45deg);
+    cursor: pointer;
+  }
+
+  .alt-range::-moz-range-thumb {
+    width: 9px;
+    height: 9px;
+    background: var(--bg);
+    border: 1.5px solid var(--accent);
+    border-radius: 2px;
+    transform: rotate(45deg);
     cursor: pointer;
   }
 
