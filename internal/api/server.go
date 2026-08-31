@@ -376,6 +376,7 @@ func (s *Server) routes() []route {
 		{http.MethodPost, "/api/auth/login", s.handleAuthLogin},
 		{http.MethodPost, "/api/auth/password", s.handleAuthChangePassword},
 		{http.MethodPost, "/api/auth/logout", s.handleAuthLogout},
+		{http.MethodPost, "/api/auth/logout-all", s.handleAuthLogoutAll},
 		{http.MethodPost, "/api/auth/users", s.handleAuthCreateUser},
 		{http.MethodGet, "/api/auth/users", s.handleAuthListUsers},
 		{http.MethodDelete, "/api/auth/users/{id}", s.handleAuthDeleteUser},

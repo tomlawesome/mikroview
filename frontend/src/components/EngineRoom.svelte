@@ -28,7 +28,7 @@
   import { versionState } from '../lib/version.svelte'
   import { familyOf } from '../lib/flagPalette'
   import { fetchSetupStatus } from '../lib/api'
-  import { formatEps, formatHM } from '../lib/format'
+  import { formatEps, formatHM, parseGoDurationSeconds, formatDaysSince } from '../lib/format'
   import { portOf } from '../lib/setupsteps'
   import type { SetupStatus, FlagType } from '../lib/types'
   import PageHeader from './PageHeader.svelte'
@@ -56,6 +56,26 @@
   })
 
   const epsText = $derived(appState.stats ? formatEps(appState.stats.eventsPerSecond) : null)
+
+  // --- account: sessions (#677) ----------------------------------------
+  // "this device" is a plain fact, not a fabricated device name: nothing
+  // in internal/auth tracks a hostname or user-agent per session (see
+  // auth.Session -- just ID/UserID/IssuedAt/ExpiresAt), so the row states
+  // only what's real -- that this is one signed-in session among however
+  // many -- rather than inventing a label like the mockup's "tom-desktop".
+  let soSaving = $state(false)
+  let soError = $state<string | null>(null)
+  let soDone = $state(false)
+
+  async function doSignOutEverywhere() {
+    soSaving = true
+    soError = null
+    soDone = false
+    const err = await authState.signOutEverywhere()
+    soSaving = false
+    if (err) soError = err
+    else soDone = true
+  }
 
   // --- your deck -----------------------------------------------------------
   const cards = $derived(deckOrderState.apply(deckCards(authState.role === 'admin')))
@@ -119,6 +139,48 @@
 
   const watchersRunning = $derived(detectorSettingsState.list.filter((d) => d.enabled).length)
   const watchersTotal = $derived(detectorSettingsState.list.length)
+
+  // --- detection: port-scan window (#677) -----------------------------
+  // The detector's own numeric tuning -- threshold/window -- read and
+  // written through the exact same GET/PUT /api/definitions the bench
+  // above uses for enabled/scope (see detectorSettingsState.updateParams).
+  // Deliberately not a second source of truth: this is
+  // detectorSettingsState.list's port_scan entry, same list the bench
+  // renders from. Distinct from that entry's *scope* (which restricts
+  // which hosts/ports it watches) -- this is the count/window it fires
+  // at, carried through Definition.params.
+  const portScan = $derived(detectorSettingsState.list.find((d) => d.name === 'port_scan'))
+  const portScanSummary = $derived.by(() => {
+    const p = portScan?.params
+    if (!p || typeof p.threshold !== 'number' || typeof p.window !== 'string') return null
+    return `${p.threshold} ports / ${Math.round(parseGoDurationSeconds(p.window))} s`
+  })
+
+  let psEditing = $state(false)
+  let psThreshold = $state(1)
+  let psWindowSeconds = $state(1)
+  let psSaving = $state(false)
+  let psError = $state<string | null>(null)
+
+  function openPortScanEdit() {
+    const p = portScan?.params
+    if (!p || typeof p.threshold !== 'number' || typeof p.window !== 'string') return
+    psThreshold = p.threshold
+    psWindowSeconds = Math.round(parseGoDurationSeconds(p.window))
+    psError = null
+    psEditing = true
+  }
+
+  async function savePortScanWindow() {
+    psSaving = true
+    const err = await detectorSettingsState.updateParams('port_scan', {
+      threshold: psThreshold,
+      window: `${psWindowSeconds}s`,
+    })
+    psSaving = false
+    psError = err
+    if (!err) psEditing = false
+  }
 
   // --- memory --------------------------------------------------------------
   // The buffer's own time series, folded into at most 24 ribbon slices,
@@ -366,6 +428,46 @@
             <EngineRoomWatchers {canEdit} />
           </div>
         {/if}
+        {#if portScan}
+          <div class="orow">
+            <span>port-scan window</span>
+            <span class="ov">
+              {#if psEditing}
+                <span class="pswform">
+                  <input
+                    type="number"
+                    min="1"
+                    step="1"
+                    class="psn"
+                    aria-label="distinct ports"
+                    disabled={psSaving}
+                    bind:value={psThreshold}
+                  /> ports /
+                  <input
+                    type="number"
+                    min="1"
+                    step="1"
+                    class="psn"
+                    aria-label="window in seconds"
+                    disabled={psSaving}
+                    bind:value={psWindowSeconds}
+                  /> s
+                  <button class="olink" disabled={psSaving} onclick={savePortScanWindow}>
+                    {psSaving ? 'saving…' : 'save'}
+                  </button>
+                  <button class="olink" disabled={psSaving} onclick={() => (psEditing = false)}>cancel</button>
+                </span>
+              {:else if canEdit && portScanSummary}
+                <button class="pswknob" onclick={openPortScanEdit}>{portScanSummary}</button>
+              {:else}
+                {portScanSummary ?? '—'}
+              {/if}
+            </span>
+          </div>
+          {#if psError}
+            <p class="oghint err">{psError}</p>
+          {/if}
+        {/if}
       </div>
     </div>
 
@@ -413,6 +515,16 @@
           <span>what reads it</span>
           <span class="ov">every scene below reads from here; nothing anywhere probes</span>
         </div>
+        <!-- #677: "persistence — JSON store · 14 d" was the ratified
+             copy, but no such store exists -- internal/persist's own
+             package doc calls out the live event stream as the one
+             deliberate exception left in-memory-only (SECURITY.md);
+             there is no config path that changes that. Stating that
+             truth instead of a day count nothing on the server tracks. -->
+        <div class="orow">
+          <span>persistence</span>
+          <span class="ov dim">in-memory only — no disk copy; a restart clears the buffer above</span>
+        </div>
       </div>
 
       <div class="og">
@@ -425,6 +537,26 @@
           <span>password</span>
           <span class="ov"><button class="olink" onclick={() => (authState.showChangePassword = true)}>change…</button></span>
         </div>
+        <!-- #677: "tom-desktop" in the ratified copy was a mockup
+             placeholder -- internal/auth's Session carries no device
+             name or user-agent (just ID/UserID/IssuedAt/ExpiresAt), so
+             "this device" states what's real (one session among
+             however many) without inventing a label. -->
+        <div class="orow">
+          <span>sessions</span>
+          <span class="ov">
+            this device{authState.signedInSince ? `, signed in ${formatDaysSince(authState.signedInSince)}` : ''} ·
+            <button class="olink" disabled={soSaving} onclick={doSignOutEverywhere}>
+              {soSaving ? 'signing out…' : 'sign out everywhere'}
+            </button>
+          </span>
+        </div>
+        {#if soError}
+          <p class="oghint err">{soError}</p>
+        {/if}
+        {#if soDone}
+          <p class="oghint">done — every other session has been ended</p>
+        {/if}
         <div class="orow">
           <span>version</span>
           <span class="ov dim">{versionState.version || '—'} · AGPL-3.0</span>
@@ -680,6 +812,47 @@
     margin-top: 8px;
     padding-top: 8px;
     border-top: 1px solid var(--border);
+  }
+
+  /* The port-scan window's own dashed-underline handle -- same "a
+     control is a fact wearing a handle" convention as
+     EngineRoomWatchers' .scope-knob, so the value itself is what you
+     click rather than a separate "edit" word next to it. */
+  .pswknob {
+    color: var(--fg);
+    font-weight: 600;
+    border: none;
+    border-bottom: 1px dashed var(--accent);
+    background: transparent;
+    padding: 0;
+    font: inherit;
+  }
+
+  .pswknob:hover {
+    color: var(--accent);
+  }
+
+  .pswform {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    flex-wrap: wrap;
+  }
+
+  .psn {
+    width: 3.4em;
+    background: var(--bg-elevated);
+    border: 1px solid var(--border);
+    color: var(--fg);
+    border-radius: 5px;
+    padding: 3px 5px;
+    font-size: 12px;
+    font-family: var(--font-mono);
+  }
+
+  .oghint.err {
+    color: var(--reject);
+    font-style: normal;
   }
 
   /* --- memory -------------------------------------------------------------- */
