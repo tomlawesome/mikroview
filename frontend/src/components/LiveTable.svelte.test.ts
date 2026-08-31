@@ -1252,23 +1252,42 @@ describe('LiveTable column chooser rendering (#729)', () => {
       return container.querySelector('.row') as HTMLElement
     }
 
+    // Serialises a cell by walking the DOM rather than reading its
+    // serialised markup: the Go guard in injection_sinks_test.go forbids
+    // those two property names anywhere under frontend/src, and a test
+    // file is not worth an exception in docs/decisions/injection-audit.md.
+    // Tag, sorted attributes, the same for every descendant, and the text
+    // -- enough to catch the drift this test exists for.
+    function describeCell(el: Element | null | undefined): string {
+      if (!el) return ''
+      const attrs = (e: Element) =>
+        Array.from(e.attributes)
+          .map((a) => `${a.name}=${a.value}`)
+          .sort()
+          .join(' ')
+      const kids = Array.from(el.querySelectorAll('*'))
+        .map((c) => `${c.tagName}[${attrs(c)}]`)
+        .join(',')
+      return `${el.tagName}[${attrs(el)}] ${kids} :: ${el.textContent}`
+    }
+
     function captureCells(row: HTMLElement): Record<string, string> {
       const addrCells = row.querySelectorAll('.cell.addr')
       const ipCells = row.querySelectorAll('.cell.ip')
       return {
-        device: row.querySelector('.cell.device')?.outerHTML ?? '',
-        action: row.querySelector('.cell.action')?.outerHTML ?? '',
-        chain: row.querySelector('.cell.chain')?.outerHTML ?? '',
-        source: addrCells[0]?.outerHTML ?? '',
-        srcAddr: ipCells[0]?.outerHTML ?? '',
-        srcPort: row.querySelector('.cell.port.srcport')?.outerHTML ?? '',
-        mac: row.querySelector('.cell.mac')?.outerHTML ?? '',
-        destination: addrCells[1]?.outerHTML ?? '',
-        dstAddr: ipCells[1]?.outerHTML ?? '',
-        proto: row.querySelector('.cell.proto')?.outerHTML ?? '',
-        iface: row.querySelector('.cell.iface')?.outerHTML ?? '',
-        port: row.querySelector('.cell.port:not(.srcport)')?.outerHTML ?? '',
-        nat: row.querySelector('.cell.nat')?.outerHTML ?? '',
+        device: describeCell(row.querySelector('.cell.device')),
+        action: describeCell(row.querySelector('.cell.action')),
+        chain: describeCell(row.querySelector('.cell.chain')),
+        source: describeCell(addrCells[0]),
+        srcAddr: describeCell(ipCells[0]),
+        srcPort: describeCell(row.querySelector('.cell.port.srcport')),
+        mac: describeCell(row.querySelector('.cell.mac')),
+        destination: describeCell(addrCells[1]),
+        dstAddr: describeCell(ipCells[1]),
+        proto: describeCell(row.querySelector('.cell.proto')),
+        iface: describeCell(row.querySelector('.cell.iface')),
+        port: describeCell(row.querySelector('.cell.port:not(.srcport)')),
+        nat: describeCell(row.querySelector('.cell.nat')),
       }
     }
 
