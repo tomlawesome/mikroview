@@ -91,18 +91,18 @@ describe('SceneBar (#683, ratified round 30)', () => {
   // the heading used to be.
   it("rides metrics' three views, with the seismograph selected by default", () => {
     render(SceneBar, { scene: 'metrics' })
-    for (const name of ['Seismograph', 'Register', 'Table']) {
+    for (const name of ['seismograph', 'register', 'table']) {
       expect(screen.getByRole('button', { name })).toBeTruthy()
     }
-    expect(screen.getByRole('button', { name: 'Seismograph' }).getAttribute('aria-pressed')).toBe('true')
+    expect(screen.getByRole('button', { name: 'seismograph' }).getAttribute('aria-pressed')).toBe('true')
   })
 
   it('switches the metrics view from the bar', async () => {
     render(SceneBar, { scene: 'metrics' })
-    await fireEvent.click(screen.getByRole('button', { name: 'Register' }))
+    await fireEvent.click(screen.getByRole('button', { name: 'register' }))
     flushSync()
     expect(metricsPref.view).toBe('register')
-    expect(screen.getByRole('button', { name: 'Register' }).getAttribute('aria-pressed')).toBe('true')
+    expect(screen.getByRole('button', { name: 'register' }).getAttribute('aria-pressed')).toBe('true')
     // Persisted, so a reload applies it before first paint (#488).
     expect(localStorage.getItem('mikroview-metrics-view')).toBe('register')
   })

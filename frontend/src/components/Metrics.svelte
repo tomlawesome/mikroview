@@ -132,6 +132,11 @@
        scene bar where it used to sit -- round 30 puts it beside the
        wordmark, and #488's "three views of one data set" is satisfied
        there. -->
+  <!-- Round 30's arrangement (#s4): the minute under the cursor and its
+       own facts on the left, the hour's rate facts pinned to the right
+       by `.rate`'s own margin-left:auto -- the reverse of what this
+       used to draw (rate on the left, nothing meaningful on the
+       right). -->
   <div class="hourline">
     {#if reading}
       <span class="big">{formatHM(reading.time)}<span class="unit">the minute under the cursor</span></span>
@@ -139,20 +144,18 @@
       <span class="fact"><b>{refusedAtCursor}</b> refused of <b>{eventsAtCursor}</b> events</span>
       <span class="sep">·</span>
       <span class="fact"><b>{reading.episodeTotal}</b> flag episodes</span>
-    {:else}
+    {/if}
+    <span class="rate">
       <span class="big">{formatEps(appState.stats?.eventsPerSecond ?? 0)}<span class="unit">events/s now</span></span>
       <span class="sep">·</span>
       <span class="fact"><b>{perMinuteNow}</b>/min</span>
       <span class="sep">·</span>
       <span class="fact"><b>{hour.eventsInHour}</b> events in the hour</span>
-      <span class="sep">·</span>
-      <span class="fact"
-        ><b>{hour.episodesInHour}</b> episodes raised, from <b>{hour.typesThatSpoke}</b> of {hour.flags.length} types</span
-      >
-    {/if}
-    {#if hour.brink}
-      <span class="brinkmark">the brink · {formatHM(hour.brink)}</span>
-    {/if}
+      {#if hour.brink}
+        <span class="sep">·</span>
+        <span class="brinkmark">the brink · {formatHM(hour.brink)}</span>
+      {/if}
+    </span>
   </div>
 
   <!-- A slider is what this actually is: one value moving along the
@@ -240,8 +243,19 @@
     font-weight: 600;
   }
 
-  .brinkmark {
+  /* The right-hand rate group (round 30's `.hourline .gap { flex: 1 }`
+     spacer, folded into the group itself since it is the only thing
+     that ever sits on this side): pinned to the far right regardless
+     of whether the left-hand cursor group is present. */
+  .rate {
     margin-left: auto;
+    display: flex;
+    align-items: baseline;
+    flex-wrap: wrap;
+    gap: 10px;
+  }
+
+  .brinkmark {
     font-family: var(--font-mono);
     font-size: 10px;
     letter-spacing: 0.08em;
@@ -249,7 +263,9 @@
   }
 
   .surface {
+    flex: 1;
     min-width: 0;
+    min-height: 0;
   }
 
   .surface:focus-visible {
