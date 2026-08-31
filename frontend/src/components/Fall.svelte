@@ -34,9 +34,6 @@
   import ConnectionIndicator from './ConnectionIndicator.svelte'
   import AlarmCluster from './AlarmCluster.svelte'
 
-  // The key is reference, not chrome: hidden until asked for.
-  let showKey = $state(false)
-
   // Bucket counts scale with the span so a ~64s knock still reads as
   // distinct dashes: 60 buckets at 15m is 15s/bucket. `railStep` is the
   // time-rail gridline interval, in minutes.
@@ -52,6 +49,19 @@
   // The review's cap: the 8 most recently active carriers per band render
   // as individual marks; the rest fold into "+n quieter".
   const MAX_CARRIERS = 8
+
+  // The following three surfaces are implemented and load-bearing (the
+  // data behind them is real), but the ratified round-30 mockup
+  // (docs/design/concepts/round-30/shots/fall.png, the-whole.html #s2)
+  // draws none of them anywhere on the fall -- an empty band is simply
+  // empty, a quiet carrier count folds silently, and the window range
+  // is not printed in the bottom-right corner. Round 30 builds to the
+  // mockup first (#700); each gap is tracked on #691 for a future round
+  // to remount. Do not delete these -- flip the relevant const and
+  // restore the markup below when #691 is picked up.
+  const EMPTY_BAND_CAPTION_ENABLED: boolean = false
+  const QUIETER_COUNT_ENABLED: boolean = false
+  const WINDOW_RANGE_CAPTION_ENABLED: boolean = false
 
   // ── The mockup's own geometry, in its own units ─────────────────────
   const RAIL = 76 // left time rail width
@@ -510,14 +520,29 @@
     const kept: typeof cands = []
     for (const c of cands) {
       const w = c.text.length * 6.2
-      if (kept.some((k) => Math.abs(k.x - c.x) < (k.text.length * 6.2 + w) / 2 + 6 && Math.abs(k.y - c.y) < 11)) continue
+      // Round 30 places one label above each curve, never stacked on
+      // another (#700) -- the build's own 11-unit vertical tolerance was
+      // tight enough that two peaks differing in height by just over
+      // that still rendered close enough for a 10px label (which draws
+      // roughly a full line's height either side of its baseline) to
+      // visibly overlap. Widened to a margin that actually clears a
+      // label's own rendered height, alongside a slightly wider
+      // horizontal gap.
+      if (kept.some((k) => Math.abs(k.x - c.x) < (k.text.length * 6.2 + w) / 2 + 8 && Math.abs(k.y - c.y) < 15)) continue
       kept.push(c)
     }
     return kept
   })
 
   // Port labels under the floor, culled the same way (heaviest carrier
-  // keeps its label; a crowded band folds the rest).
+  // keeps its label; a crowded band folds the rest) -- but only ever
+  // against another candidate on the *same* band (#700). Comparing
+  // across bands let a heavy carrier on one boundary silently suppress
+  // a lighter one several bands away whenever the two candidates'
+  // absolute x (adjacent bands sit only PITCH-BAND_W apart) happened to
+  // fall inside the text-width gap, which is how the build ended up
+  // labelling only a couple of ports total instead of every band along
+  // the foot.
   const portLabels = $derived.by(() => {
     const cands: { x: number; text: string; lane: Lane; port: number; bandKey: string; w: number }[] = []
     for (const slot of rig.slots) {
@@ -530,7 +555,7 @@
     const kept: typeof cands = []
     for (const c of cands) {
       const w = c.text.length * 6.2
-      if (kept.some((k) => Math.abs(k.x - c.x) < (k.text.length * 6.2 + w) / 2 + 4)) continue
+      if (kept.some((k) => k.bandKey === c.bandKey && Math.abs(k.x - c.x) < (k.text.length * 6.2 + w) / 2 + 4)) continue
       kept.push(c)
     }
     return kept
@@ -547,22 +572,61 @@
     return list
   })
 
-  // The attention chips: one per flag type in the window, carrying the
-  // count and the most recent moment -- never one chip per flag.
+  // The same identity join bandsData's own flagsByKey uses (a flag names
+  // only its target IP; the boundary it belongs to is whichever band
+  // that IP actually appeared on this window) -- kept as its own
+  // derived, independent of the per-bucket pass above, so flagChips can
+  // resolve a boundary label without being tied to bandsData's window
+  // gating.
+  const ipToBoundaryKey = $derived.by(() => {
+    const knownKeys = new Set(fallState.boundaries.map((b) => b.key))
+    const m = new Map<string, string>()
+    for (const e of windowEvents) {
+      const key = boundaryKeyOf(e.chain, e.inInterface, e.outInterface)
+      if (!knownKeys.has(key)) continue
+      if (e.srcIp && !m.has(e.srcIp)) m.set(e.srcIp, key)
+      if (e.dstIp && !m.has(e.dstIp)) m.set(e.dstIp, key)
+    }
+    return m
+  })
+
+  // The attention chips: one per flag type among every currently open
+  // (uncleared) flag -- deliberately independent of the visible span.
+  // Round 30's own defect (#700): the build derived these from
+  // flagHorizons, which only ever carries flags whose firstSeen falls
+  // inside the current window AND whose target IP happened to appear in
+  // that same window's events -- so a flag raised more than one span ago
+  // (a `15 m` default is a common case) silently dropped off every chip,
+  // even though the header's own flag count (⚑) is span-independent and
+  // kept counting it. The chips are the fall's restatement of that same
+  // current state, not a narrower one, so they read straight off `flags`
+  // instead. The boundary label (", iot → bridge1") is still
+  // window-scoped best-effort via ipToBoundaryKey above -- omitted, not
+  // guessed, when the flagged IP hasn't produced a matching event in the
+  // window currently loaded.
   const flagChips = $derived.by(() => {
-    const byType = new Map<string, { n: number; y: number; hm: string }>()
-    for (const f of flagHorizons) {
+    const byKeyLabel = new Map(fallState.boundaries.map((b) => [b.key, b.label]))
+    const byType = new Map<string, { n: number; t: number; hm: string; boundaryLabel?: string }>()
+    for (const f of flags) {
+      if (f.cleared) continue
+      const t = new Date(f.firstSeen).getTime()
+      if (Number.isNaN(t)) continue
+      const boundaryKey = ipToBoundaryKey.get(f.target)
+      const boundaryLabel = boundaryKey ? byKeyLabel.get(boundaryKey) : undefined
       const cur = byType.get(f.type)
-      if (!cur) byType.set(f.type, { n: f.n, y: f.y, hm: f.hm })
+      if (!cur) byType.set(f.type, { n: 1, t, hm: formatHM(f.firstSeen), boundaryLabel })
       else {
-        cur.n += f.n
-        if (f.y < cur.y) {
-          cur.y = f.y
-          cur.hm = f.hm
+        cur.n++
+        if (t > cur.t) {
+          cur.t = t
+          cur.hm = formatHM(f.firstSeen)
+          if (boundaryLabel) cur.boundaryLabel = boundaryLabel
         }
       }
     }
-    return [...byType.entries()].map(([type, v]) => ({ type, ...v }))
+    return [...byType.entries()]
+      .sort((a, b) => b[1].t - a[1].t)
+      .map(([type, v]) => ({ type, n: v.n, hm: v.hm, boundaryLabel: v.boundaryLabel }))
   })
 
   function keyActivate(e: KeyboardEvent, fn: () => void) {
@@ -624,7 +688,9 @@
   <span class="attention" aria-live="polite">
     {#each flagChips.slice(0, 3) as f, fi (fi)}
       <button type="button" class="att alarm" onclick={() => (appState.view = 'flags')}>
-        <i></i>{f.type.replace(/_/g, ' ').toUpperCase()}{f.n > 1 ? ` ×${f.n}` : ''} — {f.hm}
+        <i></i>{f.type.replace(/_/g, ' ').toUpperCase()}{f.n > 1 ? ` ×${f.n}` : ''} — {f.hm}{f.boundaryLabel
+          ? ` · ${f.boundaryLabel}`
+          : ''}
       </button>
     {/each}
     {#if darkBands.length > 0}
@@ -650,7 +716,7 @@
     </div>
   {:else}
     <div class="rig">
-      <svg viewBox="0 0 {rig.width} {RIG_H}" style="max-width: {rig.width * 1.4}px">
+      <svg viewBox="0 0 {rig.width} {RIG_H}">
         <defs>
           <pattern id="fall-hatch" width="8" height="8" patternTransform="rotate(45)" patternUnits="userSpaceOnUse">
             <line x1="0" y1="0" x2="0" y2="8" class="hatch-line" />
@@ -660,21 +726,17 @@
           </linearGradient>
         </defs>
 
-        <!-- ══ the time rail (a flag's moment outranks a colliding
-             gridline or now label) ══ -->
+        <!-- ══ the time gutter (a flag's moment outranks a colliding
+             time label or now label) -- round 30 draws no grid at all,
+             here or between bands: the labels are the only marks in
+             this margin (#700). ══ -->
         {#if !flagHorizons.some((f) => Math.abs(f.y - (FALL_TOP + 4)) < 16)}
           <text class="tlab now-t" x={RAIL - 14} y={FALL_TOP + 4} text-anchor="end">{formatHM(new Date(windowEnd || Date.now()).toISOString())}</text>
         {/if}
         {#each railLines as l (l.y)}
-          <line class="gridline" x1={RAIL} y1={l.y} x2={rig.width - 14} y2={l.y} />
           {#if !flagHorizons.some((f) => Math.abs(f.y - l.y) < 12)}
             <text class="tlab" x={RAIL - 14} y={l.y + 3} text-anchor="end">{l.label}</text>
           {/if}
-        {/each}
-
-        <!-- ══ band separators ══ -->
-        {#each rig.slots.slice(1) as slot (slot.band.key)}
-          <line class="bandline" x1={slot.bx - 5} y1={FALL_TOP} x2={slot.bx - 5} y2={FALL_BOT} />
         {/each}
 
         {#each rig.slots as slot (slot.band.key)}
@@ -700,10 +762,14 @@
                 <text class="chip ch-mut band-caption quiet" x={slot.bx + 6} y="50">COVERAGE UNKNOWN</text>
               {:else if b.flagMarks.length > 0}
                 {@const fired = b.flagMarks.reduce((a, m) => (m.idx > a.idx ? m : a), b.flagMarks[0])}
-                <text class="chip ch-bad band-caption bad" x={slot.bx + 6} y="50">ALARM FIRED {fired.hm}</text>
-              {:else if b.total === 0}
-                <text class="chip ch-mut band-caption quiet" x={slot.bx + 6} y="50">QUIET</text>
+                <text class="chip ch-bad band-caption bad" x={slot.bx + 6} y="50"
+                  >✱ {fired.type.replace(/_/g, ' ').toUpperCase()}</text
+                >
               {:else}
+                <!-- Round 30 reads a quiet-but-covered band the same as
+                     a busy one: the watch holds either way (README
+                     "quiet is a fact, not a fault") -- there is no
+                     separate QUIET caption. -->
                 <text class="chip ch-ok band-caption ok" x={slot.bx + 6} y="50">WATCH HOLDING ✓</text>
               {/if}
               <rect x={slot.bx} y="56" width={BAND_W} height="3" rx="1.5" fill={slot.laneColor} />
@@ -791,7 +857,7 @@
                     {/if}
                   {/each}
                 {/each}
-                {#if b.quieterCount > 0}
+                {#if QUIETER_COUNT_ENABLED && b.quieterCount > 0}
                   <text
                     class="quieter"
                     role="button"
@@ -803,13 +869,26 @@
                     onclick={() => openInStream(b)}
                     onkeydown={(e) => keyActivate(e, () => openInStream(b))}>+{b.quieterCount} quieter</text>
                 {/if}
-                {#if b.carriers.length === 0 && b.total === 0}
+                {#if EMPTY_BAND_CAPTION_ENABLED && b.carriers.length === 0 && b.total === 0}
                   <text class="anno" x={slot.bx + BAND_W / 2} y="420" text-anchor="middle">no traffic in this window</text>
                 {/if}
               {/if}
             </g>
 
-            <!-- flag annotations at their moment on this band -->
+            <!-- flag annotations at their moment on this band. The
+                 mockup's single wide "new_talker" callout (a red band
+                 across the full rig width -- "✳ new_talker · cam-porch
+                 → nas :445 · born 13:52 on a band blank for 41 days ·
+                 ×14 · open ▸") has no counterpart here: `new_talker`
+                 is not a FlagType this codebase raises (see
+                 lib/types.ts's FlagType union -- the closest existing
+                 detector, `new_device`, answers "has this device ever
+                 been seen at all", not "has this device ever used this
+                 boundary/port before"), so there is no evidence to draw
+                 the callout from, not a styling gap. Tracked for #700
+                 follow-up: a new detector and FlagType would need to
+                 land server-side (internal/detect, internal/flags)
+                 before this callout can be built here. -->
             {#each b.flagMarks as m, mi (mi)}
               {@const fy = bucketY(m.idx) + bucketH / 2}
               <g class="flag-mark" aria-hidden="true">
@@ -845,27 +924,22 @@
       </svg>
     </div>
 
-    {#if showKey}
-      <div class="legend">
-        <span class="k k-acc">blue energy = accepted (brightness = rate)</span>
-        <span class="k k-drop">red energy = dropped — red never means anything else</span>
-        <span class="k k-nat">violet = nat</span>
-        <span class="k">a carrier = a steady talker · dash rhythm = its cadence</span>
-        <span class="k">▨ unlogged (≠ a quiet band)</span>
-        <span class="k">◉ flag at its moment · click a carrier to open it in Stream</span>
-      </div>
-    {/if}
-    <p class="window-caption">
-      <button type="button" class="key-toggle" aria-expanded={showKey} onclick={() => (showKey = !showKey)}>
-        key {showKey ? '▾' : '▸'}
-      </button>
-      <span>
-        {#if windowHasMore}showing the most recent 5,000 events; more exist ·
-        {/if}{#if windowStart && windowEnd}{formatHM(new Date(windowStart).toISOString())} – {formatHM(
-            new Date(windowEnd).toISOString(),
-          )}, newest at the top{/if}
-      </span>
-    </p>
+    <!-- Deep explanation never sits in the UI (round 30 README §5, itself
+         restating round 5's ruling): a learned display explains itself
+         once, in the docs. What remains on-screen is a tiny (i), well
+         out of the way -- not the toggleable key-plus-legend the build
+         had grown, which round 30 never draws. -->
+    <div class="fall-foot">
+      <button type="button" class="ibtn" title="How to read the fall — full explanation in the docs">i</button>
+      {#if WINDOW_RANGE_CAPTION_ENABLED}
+        <span class="window-caption">
+          {#if windowHasMore}showing the most recent 5,000 events; more exist ·
+          {/if}{#if windowStart && windowEnd}{formatHM(new Date(windowStart).toISOString())} – {formatHM(
+              new Date(windowEnd).toISOString(),
+            )}, newest at the top{/if}
+        </span>
+      {/if}
+    </div>
   {/if}
 </div>
 
@@ -876,7 +950,6 @@
     --o-ink: var(--fg);
     --o-ink2: var(--fg-muted);
     --o-ink3: var(--fg-dim);
-    --o-grid: color-mix(in srgb, var(--fg) 8%, transparent);
     --o-grid2: color-mix(in srgb, var(--fg) 15%, transparent);
     --o-acc: var(--fall-accept);
     --o-drop: var(--fall-drop);
@@ -1081,15 +1154,6 @@
   .ch-mut {
     fill: var(--o-ink3);
   }
-  .bandline {
-    stroke: var(--o-grid2);
-    stroke-width: 1;
-  }
-  .gridline {
-    stroke: var(--o-grid);
-    stroke-width: 1;
-  }
-
   .band-head {
     cursor: pointer;
   }
@@ -1271,44 +1335,33 @@
     fill: var(--accent);
   }
 
-  /* ── legend + window caption ─────────────────────────────────────── */
-  .legend {
+  /* ── the foot: the (i) and (when enabled) the window caption ─────── */
+  .fall-foot {
     display: flex;
-    gap: 22px;
-    padding-top: 4px;
-    font-size: 12px;
-    color: var(--o-ink2);
-    flex-wrap: wrap;
+    justify-content: space-between;
+    align-items: center;
+    gap: 12px;
   }
-  .k-acc {
-    color: var(--o-acc);
+  .ibtn {
+    width: 18px;
+    height: 18px;
+    border-radius: 50%;
+    border: 1px solid var(--o-grid2);
+    background: transparent;
+    color: var(--o-ink3);
+    font: italic 600 11px Georgia, serif;
+    padding: 0;
+    cursor: pointer;
+    line-height: 1;
   }
-  .k-drop {
-    color: var(--o-drop);
-  }
-  .k-nat {
-    color: var(--o-nat);
+  .ibtn:hover {
+    color: var(--accent);
+    border-color: var(--accent);
   }
   .window-caption {
     margin: 0;
     font-size: 11.5px;
     color: var(--o-ink3);
     font-family: var(--font-mono);
-    display: flex;
-    justify-content: space-between;
-    align-items: baseline;
-    gap: 12px;
-  }
-  .key-toggle {
-    background: transparent;
-    border: none;
-    padding: 0;
-    color: var(--o-ink3);
-    font-size: 11.5px;
-    font-family: var(--font-mono);
-    cursor: pointer;
-  }
-  .key-toggle:hover {
-    color: var(--o-ink);
   }
 </style>
