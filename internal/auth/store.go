@@ -39,7 +39,40 @@ type Role string
 const (
 	RoleAdmin Role = "admin"
 	RoleUser  Role = "user"
+	// RoleViewer is the third, lowest tier (#653): read access to
+	// everything an operator sees, but nothing that changes the
+	// instance. Stacks below RoleUser, which stacks below RoleAdmin --
+	// see Role.AtLeast.
+	RoleViewer Role = "viewer"
 )
+
+// rank orders roles from lowest privilege to highest, backing
+// Role.AtLeast. An unrecognized Role -- including the zero value -- ranks
+// below RoleViewer, so it is refused everything AtLeast ever gates for a
+// legitimate min. A value can only reach that state by being constructed
+// outside this package (every path inside it produces one of the three
+// named constants); applyLoaded's migration below additionally makes
+// sure the empty string specifically never reaches a live User.Role.
+func (r Role) rank() int {
+	switch r {
+	case RoleAdmin:
+		return 3
+	case RoleUser:
+		return 2
+	case RoleViewer:
+		return 1
+	default:
+		return 0
+	}
+}
+
+// AtLeast reports whether r's tier is at or above min, per mikroview's
+// stacked access tiers: admin ⊇ user ⊇ viewer. internal/api's gates are
+// all built on this rather than comparing Role values directly, so
+// there is exactly one place "who outranks whom" is decided.
+func (r Role) AtLeast(min Role) bool {
+	return r.rank() >= min.rank()
+}
 
 // User is one local account. PasswordHash is never exposed outside this
 // package/its JSON persistence -- internal/api must never serialize a
@@ -128,6 +161,11 @@ var (
 	// mikroview holds exactly one admin; handover is TransferAdmin, not
 	// creating a second one.
 	ErrSingleAdmin = errors.New("auth: mikroview has a single admin account -- transfer the role instead of creating another admin")
+	// ErrInvalidRole is returned by CreateUser for any role other than
+	// RoleUser or RoleViewer. RoleAdmin is refused separately, as
+	// ErrSingleAdmin above -- that failure means something different to a
+	// caller (a deployment invariant) than an unrecognized value does.
+	ErrInvalidRole = errors.New(`auth: role must be "user" or "viewer"`)
 	// ErrCannotDeleteAdmin is returned by DeleteUser for the admin
 	// account. Transfer the role first if the intent is to remove the
 	// person currently holding it.
@@ -275,6 +313,18 @@ func (s *Store) applyLoaded(file storeFile, version int64) {
 		// catch it.
 		if u == nil {
 			continue
+		}
+		// An account persisted before roles existed at all has no Role in
+		// the file, which unmarshals to the zero value (""), not RoleUser
+		// -- and rank() above treats that as lower than RoleViewer,
+		// denying it everything. #653's decision 1 is that an upgrade
+		// costs an existing deployment no ability, so it is normalized to
+		// RoleUser here, on load, the same place migrateHasLocalPassword
+		// used to run before the legacy-format fallbacks were deleted.
+		// RoleChangedAt is deliberately left untouched: this is a read-
+		// time default, not an admin action.
+		if u.Role == "" {
+			u.Role = RoleUser
 		}
 		s.byID[u.ID] = u
 		s.byName[strings.ToLower(u.Username)] = u.ID
@@ -476,6 +526,12 @@ func registrationOpenGuard(s *Store) error {
 // recovery tooling. No guard: unlike Register, this is deliberately
 // callable at any time, and its "who may call this" question is
 // answered a layer up.
+//
+// role must be RoleUser or RoleViewer (#653). Anything else is refused:
+// RoleAdmin specifically as ErrSingleAdmin (see below), any other value
+// as ErrInvalidRole -- neither is silently coerced to a lesser role,
+// since that would create an account under the name the caller chose
+// with a privilege they did not ask for.
 func (s *Store) CreateUser(username, password string, role Role, now time.Time) (*User, error) {
 	if !s.Persisted() {
 		return nil, ErrNotPersisted
@@ -485,6 +541,9 @@ func (s *Store) CreateUser(username, password string, role Role, now time.Time) 
 	// inherit the invariant instead of each remembering it.
 	if role == RoleAdmin {
 		return nil, ErrSingleAdmin
+	}
+	if role != RoleUser && role != RoleViewer {
+		return nil, ErrInvalidRole
 	}
 	return s.createLocked(username, password, role, now, nil)
 }

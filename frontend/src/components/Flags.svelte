@@ -13,6 +13,7 @@
   import { flagLayoutState, type FlagColumns } from '../lib/flagLayout.svelte'
   import { viewportState } from '../lib/viewport.svelte'
   import { exclusionsState } from '../lib/exclusions.svelte'
+  import { groupPairsByHost, pairsTruncated, pairsTruncationLabel } from '../lib/evidencePairs'
   import ReputationDetails from './ReputationDetails.svelte'
   import BarList from './BarList.svelte'
   import IpInvestigateButton from './IpInvestigateButton.svelte'
@@ -22,6 +23,11 @@
 
   // Same gate the rail uses for the engine room's watchers station.
   const isAdminOrOpen = $derived(authState.state === 'authenticated' && authState.role === 'admin')
+  // #653: judging and clearing a flag are user-tier actions -- a viewer
+  // may watch what mikroview is seeing but not change what it shows.
+  // Absent rather than disabled, the same grammar the split button below
+  // already uses for the admin-only permanent clear.
+  const canEdit = $derived(authState.state === 'authenticated' && authState.canEdit)
 
   // Exclusions is a tab of Flags (#547, per the ratified navigation
   // record) -- admin-only because GET/DELETE /api/flags/exclusions both
@@ -570,7 +576,10 @@
               <span class="verdict-judged-by">{judgedByLine(f)}</span>
             {/if}
           </div>
-        {:else}
+        {:else if canEdit}
+          <!-- The three-button verdict row (#638) is the leading
+               affordance; Clear demotes to secondary. Absent for a
+               viewer (#653), never disabled. -->
           <div class="verdict-row" role="group" aria-label="Judge this flag">
             <button class="verdict-btn verdict-btn-expected" onclick={() => judge(f.id, 'expected')}>
               Expected
@@ -609,6 +618,40 @@
               <div class="ev-row">
                 <span class="ev-label">Hosts involved</span>
                 <span class="ev-value">{f.evidence.hosts.join(', ')}</span>
+              </div>
+            {/if}
+            {#if f.evidence?.pairs?.length}
+              <!-- #654: grouped by host -- one row per host with the
+                   ports actually seen with it, never a flat host:port
+                   list and never crossed against Hosts/Ports above,
+                   which would silently claim combinations no event ever
+                   produced. The cap is stated, not hidden: a truncated
+                   sample says so rather than reading as complete. -->
+              <div class="ev-row">
+                <span class="ev-label">
+                  Host:port pairs
+                  {#if pairsTruncated(f.evidence.pairs, f.evidence.pairsTotal)}
+                    <span class="ev-truncated"
+                      >(showing {pairsTruncationLabel(
+                        f.evidence.pairs.length,
+                        f.evidence.pairsTotal ?? 0,
+                        f.evidence.pairsTotalIsFloor,
+                      )})</span
+                    >
+                  {/if}
+                </span>
+              </div>
+              {#each groupPairsByHost(f.evidence.pairs) as g (g.host)}
+                <div class="ev-row ev-pair-row">
+                  <span class="ev-label">{g.host}</span>
+                  <span class="ev-value">{g.ports.join(', ')}</span>
+                </div>
+              {/each}
+            {/if}
+            {#if f.evidence?.srcMac}
+              <div class="ev-row">
+                <span class="ev-label">Source MAC</span>
+                <span class="ev-value">{f.evidence.srcMac}</span>
               </div>
             {/if}
             {#if f.evidence?.nat}
@@ -665,10 +708,9 @@
                    The arrow segment is admin-only, matching the backend's
                    own gate on POST /api/flags/{id}/clear-permanent -- a
                    permanent exclusion suppresses detection until someone
-                   undoes it, unlike the plain Clear beside it. A non-admin
-                   gets a plain Clear button with no arrow at all (below),
-                   rather than a disabled one that would just advertise an
-                   action they can't take (issue #198). -->
+                   undoes it, unlike the plain Clear beside it. See the
+                   user-tier branch below for what a user gets, and #653
+                   for why a viewer gets nothing here. -->
               <div class="split-clear" class:menu-open={openClearMenuFor === f.id}>
                 <button class="clear split-main" onclick={() => clear(f.id)}>Clear</button>
                 <button
@@ -696,7 +738,11 @@
                   </div>
                 {/if}
               </div>
-            {:else}
+            {:else if canEdit}
+              <!-- A user (#653: below admin, above viewer) gets a plain
+                   Clear with no arrow, rather than a disabled one that
+                   advertises an action they cannot take (#198). A viewer
+                   gets neither. -->
               <button class="clear" onclick={() => clear(f.id)}>Clear</button>
             {/if}
           </div>
@@ -1287,6 +1333,24 @@
   .ev-raw {
     font-size: 11px;
     color: var(--fg-dim);
+  }
+
+  /* #654: the pair cap's truncation notice -- quiet (fg-dim, no icon)
+     because it's a footnote on the header row above, not a warning; the
+     point is only that it's never silent, not that it's loud. */
+  .ev-truncated {
+    font-size: 11px;
+    color: var(--fg-dim);
+    font-weight: normal;
+  }
+
+  /* One row per host group (#654) -- same ev-row/ev-label/ev-value
+     shape as every other evidence line, just indented slightly so a
+     multi-host pairs list visually nests under its own "Host:port
+     pairs" header row rather than reading as a sibling of Ports
+     touched/Hosts involved. */
+  .ev-pair-row {
+    padding-left: 10px;
   }
 
   /* The verdict lives on the card's face (issue #638: the primary
