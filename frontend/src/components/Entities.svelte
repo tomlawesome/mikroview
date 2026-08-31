@@ -17,12 +17,19 @@
   //     (mikroview only ever receives, never connects out) and the real
   //     RouterOS lines to paste as instructional prose on the page. The
   //     owner's round-30 review (#718) called that apparatus, not
-  //     content -- it is now a single "add router" button that opens a
-  //     small dialog with the same port, lines (lib/setupsteps.ts, the
-  //     same generator the setup wizard uses) and assurance, on demand
-  //     rather than always printed. The row's own bordered panel went
-  //     the same way (#718's "boxes in boxes"): the label stays, the
-  //     frame around already-bordered cards does not.
+  //     content -- it became a single "add router" pill button that
+  //     opened a small dialog with the same port, lines
+  //     (lib/setupsteps.ts, the same generator the setup wizard uses) and
+  //     assurance, on demand rather than always printed. A further
+  //     review ("can we do something cooler for this button?") called
+  //     the pill itself "a conventional web button on a screen built to
+  //     look like an instrument" -- it is now the empty berth: one more
+  //     card at the end of the router row, the same size and shape as a
+  //     real one but empty, that unfolds in place into those same
+  //     commands (Design: the add-router control, Option 1, #718). The
+  //     row's own bordered panel went the same way (#718's "boxes in
+  //     boxes"): the label stays, the frame around already-bordered
+  //     cards does not.
   //  2. A tab strip -- hosts / rules / ports (#681, a deliberate
   //     departure from the ratified round-29 scene, recorded on that
   //     issue rather than smuggled in) -- over one table per tab, the
@@ -60,7 +67,7 @@
   // can never produce a firing event carrying a label either (payload.go
   // -- "an unlogged rule must stay unnameable"), so it is left off this
   // tab rather than shown as an unnameable dead end.
-  import { onMount } from 'svelte'
+  import { onMount, tick } from 'svelte'
   import { entitiesState } from '../lib/entities.svelte'
   import { appState } from '../lib/state.svelte'
   import { flagsState } from '../lib/flags.svelte'
@@ -87,28 +94,38 @@
 
   let status = $state<SetupStatus | null>(null)
 
-  // The "add a router" explanation and paste-able commands used to sit
-  // printed on the page as a dashed card (issue #675's own "another
-  // router?" invite) -- the owner's round-30 review (#718) called that
-  // apparatus, not content: "just have an add router button that
-  // displays the commands." showAddRouter gates a small dialog instead,
-  // same backdrop-plus-modal shape AboutOverlay.svelte already uses
-  // (mounted locally rather than at the app root, since nothing else
-  // needs to open this one). The port, the paste lines and the "it
-  // never connects to them" assurance all move inside it unchanged --
-  // a relocation, not a deletion.
-  let showAddRouter = $state(false)
+  // The empty berth (#718): one more card at the end of the router row,
+  // the same size and shape as a real one but empty -- an outline with
+  // nothing in it. Activating it (click, Enter or Space -- a native
+  // <button>, so both keys work for free) swaps that outline for a panel
+  // holding the same port, paste lines and "never connects to them"
+  // assurance the old pill's dialog carried; Escape or the panel's own
+  // close button folds it back. The panel is positioned over the berth's
+  // own footprint rather than growing it, so opening never changes the
+  // row's height and the table below never moves (see .berth-panel).
+  let berthOpen = $state(false)
+  let berthTrigger = $state<HTMLButtonElement | null>(null)
 
-  function closeAddRouter() {
-    showAddRouter = false
+  function openBerth() {
+    berthOpen = true
   }
 
-  function onAddRouterKeydown(e: KeyboardEvent) {
-    if (e.key === 'Escape') closeAddRouter()
+  // Returns focus to the trigger so a keyboard user who opened the berth
+  // and dismissed it lands back where they started, not at the top of
+  // the page -- awaits a tick because the trigger button doesn't exist
+  // in the DOM again until the {#if} below re-renders it.
+  async function closeBerth() {
+    berthOpen = false
+    await tick()
+    berthTrigger?.focus()
   }
 
-  function onAddRouterBackdropClick(e: MouseEvent) {
-    if (e.target === e.currentTarget) closeAddRouter()
+  function onBerthKeydown(e: KeyboardEvent) {
+    if (e.key === 'Escape' && berthOpen) closeBerth()
+  }
+
+  function focusOnOpen(node: HTMLButtonElement) {
+    node.focus()
   }
 
   // Per-router enrichment beyond what GET /api/devices already carries
@@ -464,7 +481,7 @@
   }
 </script>
 
-<svelte:window onkeydown={onAddRouterKeydown} />
+<svelte:window onkeydown={onBerthKeydown} />
 
 <div class="page scrollbar op-page">
   <div class="opwrap"><div class="opanel">
@@ -497,32 +514,33 @@
               <div class="frow dim">syslog{status?.instance.tlsEnabled ? ' TLS' : ''} · state pushed every 20 min</div>
             </div>
           {/each}
-        </div>
-        <button type="button" class="add-router-btn" onclick={() => (showAddRouter = true)}>+ add router</button>
-    </div>
-
-    {#if showAddRouter}
-      <div class="backdrop" onclick={onAddRouterBackdropClick} role="presentation">
-        <div class="modal" role="dialog" aria-modal="true" aria-label="Add a router" tabindex="-1">
-          <div class="modal-header">
-            <span class="title">Add a router</span>
-            <button type="button" class="close" onclick={closeAddRouter} aria-label="Close">✕</button>
-          </div>
-          <div class="body">
-            <p>
-              Point its syslog at {status ? `:${portOf(status.instance.syslogPort)}` : 'mikroview’s syslog port'} and
-              it appears here.
-            </p>
-            <p>Routers push to mikroview — it never connects to them.</p>
-            {#if status}
-              <pre class="paste">{syslogCommands(instanceAddress({ host: location.host }), status.instance.syslogPort)}</pre>
+          <div class="fcard berth" class:open={berthOpen}>
+            {#if berthOpen}
+              <div class="berth-panel" role="group" aria-label="Add a router">
+                <button type="button" class="berth-close" use:focusOnOpen onclick={closeBerth} aria-label="Close">✕</button>
+                <p>
+                  Point its syslog at {status ? `:${portOf(status.instance.syslogPort)}` : 'mikroview’s syslog port'} and
+                  it appears here.
+                </p>
+                <p>Routers push to mikroview — it never connects to them.</p>
+                {#if status}
+                  <pre class="paste">{syslogCommands(instanceAddress({ host: location.host }), status.instance.syslogPort)}</pre>
+                {:else}
+                  <p class="dim">Loading the commands to paste…</p>
+                {/if}
+              </div>
             {:else}
-              <p class="dim">Loading the commands to paste…</p>
+              <button
+                type="button"
+                class="berth-trigger"
+                bind:this={berthTrigger}
+                onclick={openBerth}
+                aria-label="Add a router"
+              ></button>
             {/if}
           </div>
         </div>
-      </div>
-    {/if}
+    </div>
 
     {#if TABS_ENABLED}
       <!-- Unmounted for round-30 fidelity -- see the comment on
@@ -793,23 +811,115 @@
     border-color: var(--hair-2);
   }
 
-  /* The add-router trigger (#718): a plain button, not a dashed card --
-     the point of this round of feedback was one fewer box, not another
-     one shaped like a button. */
-  .add-router-btn {
-    margin-top: 14px;
-    background: none;
-    border: 1px solid var(--accent);
-    border-radius: 8px;
-    padding: 7px 14px;
-    font: inherit;
-    font-size: 12.5px;
-    color: var(--accent);
-    cursor: pointer;
+  /* The empty berth (#718): a further grid cell in .fcards, same
+     minmax(280px, 1fr) track as a real router card, so with no routers
+     at all it alone fills the row -- the correct first-run read. Closed,
+     it borrows .fcard's radius and (transparent, dashed) its border
+     rather than inventing a second card style; its min-height is a
+     plain layout number, not a colour, chosen to read like a real card's
+     footprint rather than a sliver when it's the only cell in its row. */
+  .fcard.berth {
+    position: relative;
+    padding: 0;
+    min-height: 96px;
+    background: transparent;
+    border-style: dashed;
+    border-color: var(--border);
   }
 
-  .add-router-btn:hover {
-    background: var(--accent-bg);
+  .fcard.berth:hover,
+  .fcard.berth:focus-within {
+    border-color: var(--accent);
+  }
+
+  /* The whole card is the trigger -- no icon, no "+", no label: the
+     empty shape in a row of full ones is the affordance (#718's
+     "Design: the add-router control", Option 1). The accessible name
+     that a sighted operator never sees is set via aria-label in the
+     markup. */
+  .berth-trigger {
+    all: unset;
+    box-sizing: border-box;
+    display: block;
+    width: 100%;
+    height: 100%;
+    min-height: inherit;
+    cursor: pointer;
+    border-radius: inherit;
+  }
+
+  .berth-trigger:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+  }
+
+  /* Unfolded, the berth becomes a panel positioned over its own closed
+     footprint (inset: 0 against the .fcard.berth it fills) rather than
+     growing that footprint -- the grid row's height never changes, so
+     the table below never moves. Same background/border/radius as a
+     real .fcard: this is that treatment, filled in and given room to
+     hold the paste commands, not a second card style. */
+  .berth-panel {
+    /* top/left/right only -- no "bottom" -- so the box grows downward
+       to fit its content instead of being stretched to exactly the
+       closed card's height (which is what a full "inset: 0" would do). */
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    z-index: 5;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    min-height: 100%;
+    padding: 16px 20px;
+    /* --bg-elevated, not the --glass a resting .fcard wears: glass is
+       66% opaque, which is fine for a card sitting on the page but not
+       for a panel that opens downward over the table below it -- the
+       rows would read straight through the paste commands. Same hue,
+       fully opaque. */
+    background: var(--bg-elevated);
+    border: 1px solid var(--accent);
+    border-radius: 12px;
+    font-size: 12.5px;
+    color: var(--fg-muted);
+    animation: berth-unfold 0.12s ease-out;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .berth-panel {
+      animation: none;
+    }
+  }
+
+  @keyframes berth-unfold {
+    from {
+      opacity: 0;
+      transform: scaleY(0.94);
+    }
+    to {
+      opacity: 1;
+      transform: scaleY(1);
+    }
+  }
+
+  .berth-panel p {
+    margin: 0;
+  }
+
+  .berth-close {
+    align-self: flex-end;
+    background: none;
+    border: none;
+    color: var(--fg-muted);
+    cursor: pointer;
+    font-size: 1rem;
+    padding: 0.25rem;
+    margin: -0.25rem -0.25rem 0 0;
+  }
+
+  .berth-close:hover {
+    color: var(--fg);
   }
 
   .fhead {
@@ -843,68 +953,6 @@
 
   .fcard .frow {
     padding: 3px 0;
-  }
-
-  /* --- the add-router dialog (#718): same backdrop-plus-modal shape as
-     AboutOverlay.svelte, reused rather than a new kind of surface --
-     mounted locally here since nothing else needs to open it. --- */
-  .backdrop {
-    position: fixed;
-    inset: 0;
-    background: rgba(0, 0, 0, 0.5);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    z-index: 100;
-  }
-
-  .modal {
-    background: var(--bg-elevated, var(--bg));
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    max-width: 30rem;
-    width: calc(100% - 2rem);
-    max-height: calc(100vh - 4rem);
-    overflow-y: auto;
-  }
-
-  .modal-header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    padding: 0.75rem 1rem;
-    border-bottom: 1px solid var(--border);
-  }
-
-  .modal-header .title {
-    font-weight: 600;
-  }
-
-  .modal .close {
-    background: none;
-    border: none;
-    color: var(--fg-muted);
-    cursor: pointer;
-    font-size: 1rem;
-    padding: 0.25rem;
-  }
-
-  .modal .close:hover {
-    color: var(--fg);
-  }
-
-  .modal .body {
-    padding: 1rem;
-    font-size: 13px;
-    line-height: 1.5;
-  }
-
-  .modal .body p {
-    margin: 0 0 0.75rem;
-  }
-
-  .modal .body p:last-of-type {
-    margin-bottom: 0;
   }
 
   .paste {

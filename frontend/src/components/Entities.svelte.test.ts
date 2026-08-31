@@ -207,23 +207,50 @@ describe('Entities router cards (#675)', () => {
     expect(container.textContent).toContain('quiet is a fact, not a fault')
   })
 
-  it('keeps the add-router explanation and commands off the page until the button is clicked (#718)', async () => {
-    const { container, getByText } = render(Entities)
+  it('draws the empty berth as one more card at the end of the router row, with no visible label (#718)', async () => {
+    appState.devices = [
+      { id: 'rb5009', name: 'rb5009', configured: true, status: 'live', lastSeen: new Date().toISOString(), sourceIp: '10.0.0.1', eventCount: 3 },
+    ] as unknown as (typeof appState)['devices']
+    const { container } = render(Entities)
+    await settle()
+
+    const cards = [...container.querySelectorAll('.fcards > .fcard')]
+    expect(cards.length).toBe(2) // one router card, one berth
+    expect(cards.at(-1)?.className).toContain('berth')
+    expect(cards.at(-1)?.textContent?.trim()).toBe('') // the shape is the affordance, no words
+  })
+
+  it('is the whole row when there are no routers at all -- the correct first-run state (#718)', async () => {
+    const { container } = render(Entities)
+    await settle()
+
+    const cards = [...container.querySelectorAll('.fcards > .fcard')]
+    expect(cards.length).toBe(1)
+    expect(cards[0].className).toContain('berth')
+  })
+
+  it('names itself to a screen reader even though the visual carries no words (#718)', async () => {
+    const { getByRole } = render(Entities)
+    await settle()
+
+    expect(getByRole('button', { name: 'Add a router' })).toBeTruthy()
+  })
+
+  it('keeps the add-router explanation and commands off the page until the berth is activated (#718)', async () => {
+    const { container } = render(Entities)
     await settle()
 
     expect(container.textContent).not.toContain('Routers push to mikroview')
     expect(container.querySelector('.paste')).toBeNull()
-    expect(getByText('+ add router')).toBeTruthy()
   })
 
-  it('reveals the port, the paste-able RouterOS lines and the never-connects assurance from the add router button (#718)', async () => {
-    const { container, getByText, getByRole } = render(Entities)
+  it('reveals the port, the paste-able RouterOS lines and the never-connects assurance when the berth is clicked (#718)', async () => {
+    const { container, getByRole } = render(Entities)
     await settle()
 
-    await fireEvent.click(getByText('+ add router'))
+    await fireEvent.click(getByRole('button', { name: 'Add a router' }))
     await settle()
 
-    expect(getByRole('dialog', { name: 'Add a router' })).toBeTruthy()
     expect(container.textContent).toContain(':16893')
     expect(container.textContent).toContain('Routers push to mikroview — it never connects to them.')
     expect(container.textContent).not.toMatch(/mikroview (connects|reaches out|polls)/i)
@@ -233,26 +260,59 @@ describe('Entities router cards (#675)', () => {
     expect(pre?.textContent).toContain('remote-protocol=tls')
   })
 
-  it('closes the add-router dialog on Escape', async () => {
-    const { container, getByText } = render(Entities)
+  it('is a real <button> element, focusable and Enter/Space-activatable for free under HTML\'s own semantics (#718)', async () => {
+    // jsdom does not implement a real browser's default action of firing
+    // a click from Enter/Space on a <button> (that behaviour lives in the
+    // browser's event loop, not in JS a test can trigger), so the
+    // meaningful assertion here is the element itself: a native <button>
+    // gets Enter/Space activation and focusability without any key
+    // handler of this component's own -- a <div role="button"> would not.
+    const { container, getByRole } = render(Entities)
     await settle()
 
-    await fireEvent.click(getByText('+ add router'))
+    const trigger = getByRole('button', { name: 'Add a router' })
+    expect(trigger).toBe(container.querySelector('.berth-trigger'))
+    expect(trigger.tagName).toBe('BUTTON')
+    expect(trigger.getAttribute('tabindex')).toBeNull() // native focusability, not a synthetic tabindex
+  })
+
+  it('closes the unfolded berth on Escape and returns focus to the trigger, without moving the table (#718)', async () => {
+    const { container, getByRole } = render(Entities)
     await settle()
-    expect(container.querySelector('.modal')).toBeTruthy()
+
+    await fireEvent.click(getByRole('button', { name: 'Add a router' }))
+    await settle()
+    expect(container.querySelector('.berth-panel')).toBeTruthy()
 
     await fireEvent.keyDown(window, { key: 'Escape' })
     await settle()
-    expect(container.querySelector('.modal')).toBeNull()
+
+    expect(container.querySelector('.berth-panel')).toBeNull()
+    expect(container.querySelector('.etable')).toBeTruthy()
+    expect(document.activeElement).toBe(container.querySelector('.berth-trigger'))
   })
 
-  it('replaces the dashed "another router?" card with the add-router button (#718)', async () => {
+  it('closes the unfolded berth from its own close control', async () => {
+    const { container, getByRole } = render(Entities)
+    await settle()
+
+    await fireEvent.click(getByRole('button', { name: 'Add a router' }))
+    await settle()
+
+    await fireEvent.click(getByRole('button', { name: 'Close' }))
+    await settle()
+
+    expect(container.querySelector('.berth-panel')).toBeNull()
+  })
+
+  it('replaces the dashed "another router?" card and the old pill with the empty berth (#718)', async () => {
     const { container } = render(Entities)
     await settle()
 
     expect(container.querySelector('.fcard.add')).toBeNull()
     expect(container.textContent).not.toContain('another router?')
-    expect(container.querySelector('.add-router-btn')).toBeTruthy()
+    expect(container.querySelector('.add-router-btn')).toBeNull()
+    expect(container.querySelector('.fcard.berth')).toBeTruthy()
   })
 })
 
