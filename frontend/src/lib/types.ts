@@ -195,6 +195,10 @@ export interface AuthSession {
   // convert otherwise.
   hasLocalPassword?: boolean
   ssoAvailable: boolean
+  // This session's own start (#677's sessions row: "signed in 4 d") --
+  // when this login happened, not when the account was created. Absent
+  // while unauthenticated, and on an older server that predates it.
+  signedInSince?: string
 }
 
 // Mirrors internal/api's userSummary. Deliberately not the server's
@@ -357,6 +361,12 @@ export interface DetectorSettings {
   // Carried through from Definition.learning (#639) -- see that field's
   // doc comment.
   learning?: LearningState
+  // Carried through from Definition.params/paramSchema (#677's
+  // port-scan window row, the detector's own numeric tuning -- distinct
+  // from scope above, which restricts what the detector *watches*
+  // rather than the threshold it fires at).
+  params?: Record<string, unknown>
+  paramSchema?: DefinitionParamSchema[]
 }
 
 // Mirrors internal/api's definitionView (issue #407) -- one definition
@@ -894,6 +904,17 @@ export function filtersFromSearchParams(params: URLSearchParams): Filters {
 // worth an operator's attention, and a false one of those is worse than
 // silence.
 export type WatchlistCoverage = 'unknown' | 'covered' | 'no-logging' | 'out-of-scope'
+
+// Mirrors internal/api's PersistenceInfo (#677's settings persistence
+// row) -- which backend this deployment's persisted stores (flags,
+// definitions, watchlist entries, entities, tokens/accounts) actually
+// use right now.
+export interface PersistenceInfo {
+  backend: 'file' | 'postgres'
+  // The directory the JSON documents live under -- absent for postgres,
+  // which has no filesystem path to report.
+  dir?: string
+}
 
 // Mirrors internal/api's setupStatus (#320). Everything here is an
 // observation mikroview made on its own side -- it never connects to a

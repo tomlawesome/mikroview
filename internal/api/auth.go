@@ -334,6 +334,11 @@ type sessionResponse struct {
 	// with SSO" link at all -- true whenever s.OIDC is configured,
 	// regardless of the other fields above.
 	SSOAvailable bool `json:"ssoAvailable"`
+	// SignedInSince is this session's own auth.Session.IssuedAt (issue
+	// #677's sessions row: "signed in 4 d"), RFC3339 -- when *this*
+	// login happened, not when the account was created. Empty when
+	// unauthenticated.
+	SignedInSince string `json:"signedInSince,omitempty"`
 }
 
 // handleAuthSession always returns 200 -- it reports state, it doesn't
@@ -341,15 +346,26 @@ type sessionResponse struct {
 // frontend calls this once on load to decide whether to render the
 // first-run choice screen, a login form, or the live app.
 func (s *Server) handleAuthSession(w http.ResponseWriter, r *http.Request) {
+	now := time.Now()
 	resp := sessionResponse{
 		SetupRequired: s.Auth.Count() == 0,
 		SSOAvailable:  s.OIDC != nil,
 	}
-	if user, ok := s.sessionUser(r, time.Now()); ok {
+	if user, ok := s.sessionUser(r, now); ok {
 		resp.Authenticated = true
 		resp.Username = user.Username
 		resp.Role = string(user.Role)
 		resp.HasLocalPassword = user.LocalPassword()
+		// sessionUser already validated the cookie once (that is how
+		// user was resolved); re-reading it here just for IssuedAt
+		// rather than widening sessionUser's own signature, which
+		// requireAuth and every other caller would then have to carry
+		// too for a field only this endpoint needs.
+		if cookie, err := r.Cookie(sessionCookieName); err == nil {
+			if sess, ok := s.Sessions.Validate(cookie.Value, now); ok {
+				resp.SignedInSince = sess.IssuedAt.Format(time.RFC3339)
+			}
+		}
 	}
 	writeJSON(w, http.StatusOK, resp)
 }
@@ -587,6 +603,36 @@ func (s *Server) handleAuthLogout(w http.ResponseWriter, r *http.Request) {
 	}
 	s.clearSessionCookie(w)
 	writeJSON(w, http.StatusOK, map[string]any{"loggedOut": true})
+}
+
+// handleAuthLogoutAll is the settings page's "sign out everywhere"
+// (issue #677): every session the caller holds, on every device, ends
+// at once. It then issues the caller a fresh session and cookie so the
+// tab the button was clicked from is not itself logged out by the call
+// it just made -- the identical revoke-then-recreate shape
+// handleAuthChangePassword already uses below, which is where
+// SessionStore.RevokeAllForUser was introduced.
+//
+// User-tier (#653's viewer floor, same reasoning as POST
+// /api/auth/password -- see authzMatrix's row for it): this acts only
+// on the caller's own sessions, resolved from the session cookie, never
+// from a body field naming someone else, so there is nothing here an
+// admin-only gate would be protecting. Ending another account's
+// sessions stays admin-only, via handleAuthDeleteUser.
+func (s *Server) handleAuthLogoutAll(w http.ResponseWriter, r *http.Request) {
+	now := time.Now()
+	user, ok := s.sessionUser(r, now)
+	if !ok {
+		http.Error(w, "sign in first", http.StatusUnauthorized)
+		return
+	}
+
+	s.Sessions.RevokeAllForUser(user.ID)
+	s.Audit.Record(user.Username, "account.sessions_ended", user.Username, "sessions ended: all, via sign out everywhere")
+
+	sess := s.Sessions.Create(user.ID, now)
+	s.setSessionCookie(w, sess.ID)
+	writeJSON(w, http.StatusOK, map[string]any{"signedOutEverywhere": true})
 }
 
 type createUserRequest struct {

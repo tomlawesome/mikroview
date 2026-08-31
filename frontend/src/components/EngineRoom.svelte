@@ -26,9 +26,10 @@
   import { deckCards } from '../lib/deckCards'
   import { deckOrderState } from '../lib/deckOrder.svelte'
   import { versionState } from '../lib/version.svelte'
+  import { persistenceState } from '../lib/persistence.svelte'
   import { familyOf } from '../lib/flagPalette'
   import { fetchSetupStatus } from '../lib/api'
-  import { formatEps, formatHM } from '../lib/format'
+  import { formatEps, formatHM, parseGoDurationSeconds, formatDaysSince } from '../lib/format'
   import { portOf } from '../lib/setupsteps'
   import type { SetupStatus, FlagType } from '../lib/types'
   import PageHeader from './PageHeader.svelte'
@@ -53,9 +54,33 @@
       })
     detectorSettingsState.refresh().catch(() => {})
     versionState.ensureLoaded().catch(() => {})
+    // 403s for a non-admin (see persistenceState's own doc comment) --
+    // the persistence row below just states less for that caller,
+    // same swallow-and-degrade shape as fetchSetupStatus above.
+    persistenceState.ensureLoaded().catch(() => {})
   })
 
   const epsText = $derived(appState.stats ? formatEps(appState.stats.eventsPerSecond) : null)
+
+  // --- account: sessions (#677) ----------------------------------------
+  // "this device" is a plain fact, not a fabricated device name: nothing
+  // in internal/auth tracks a hostname or user-agent per session (see
+  // auth.Session -- just ID/UserID/IssuedAt/ExpiresAt), so the row states
+  // only what's real -- that this is one signed-in session among however
+  // many -- rather than inventing a label like the mockup's "tom-desktop".
+  let soSaving = $state(false)
+  let soError = $state<string | null>(null)
+  let soDone = $state(false)
+
+  async function doSignOutEverywhere() {
+    soSaving = true
+    soError = null
+    soDone = false
+    const err = await authState.signOutEverywhere()
+    soSaving = false
+    if (err) soError = err
+    else soDone = true
+  }
 
   // --- your deck -----------------------------------------------------------
   const cards = $derived(deckOrderState.apply(deckCards(authState.role === 'admin')))
@@ -120,6 +145,48 @@
   const watchersRunning = $derived(detectorSettingsState.list.filter((d) => d.enabled).length)
   const watchersTotal = $derived(detectorSettingsState.list.length)
 
+  // --- detection: port-scan window (#677) -----------------------------
+  // The detector's own numeric tuning -- threshold/window -- read and
+  // written through the exact same GET/PUT /api/definitions the bench
+  // above uses for enabled/scope (see detectorSettingsState.updateParams).
+  // Deliberately not a second source of truth: this is
+  // detectorSettingsState.list's port_scan entry, same list the bench
+  // renders from. Distinct from that entry's *scope* (which restricts
+  // which hosts/ports it watches) -- this is the count/window it fires
+  // at, carried through Definition.params.
+  const portScan = $derived(detectorSettingsState.list.find((d) => d.name === 'port_scan'))
+  const portScanSummary = $derived.by(() => {
+    const p = portScan?.params
+    if (!p || typeof p.threshold !== 'number' || typeof p.window !== 'string') return null
+    return `${p.threshold} ports / ${Math.round(parseGoDurationSeconds(p.window))} s`
+  })
+
+  let psEditing = $state(false)
+  let psThreshold = $state(1)
+  let psWindowSeconds = $state(1)
+  let psSaving = $state(false)
+  let psError = $state<string | null>(null)
+
+  function openPortScanEdit() {
+    const p = portScan?.params
+    if (!p || typeof p.threshold !== 'number' || typeof p.window !== 'string') return
+    psThreshold = p.threshold
+    psWindowSeconds = Math.round(parseGoDurationSeconds(p.window))
+    psError = null
+    psEditing = true
+  }
+
+  async function savePortScanWindow() {
+    psSaving = true
+    const err = await detectorSettingsState.updateParams('port_scan', {
+      threshold: psThreshold,
+      window: `${psWindowSeconds}s`,
+    })
+    psSaving = false
+    psError = err
+    if (!err) psEditing = false
+  }
+
   // --- memory --------------------------------------------------------------
   // The buffer's own time series, folded into at most 24 ribbon slices,
   // each shaded by how much of the buffer that stretch holds.
@@ -148,6 +215,24 @@
   const retentionHours = $derived(
     appState.stats ? Math.max(1, Math.round(appState.stats.windowSeconds / 3600)) : null,
   )
+
+  // --- memory: persistence (#677) -------------------------------------
+  // Two halves, both live truth rather than the ratified copy's "JSON
+  // store · 14 d" (no such event-retention feature exists -- see
+  // internal/persist's own package doc): which backend the stores it
+  // does cover (flags, definitions, watchlist entries, entities,
+  // tokens/accounts) actually use, from persistenceState -- absent
+  // entirely for a non-admin, the same absent-not-disabled grammar the
+  // rest of Settings' admin-only facts already follow -- plus the one
+  // fact that holds regardless of role or config: the event buffer
+  // above is memory-only.
+  const persistenceSummary = $derived.by(() => {
+    const bufferFact = 'the event buffer above is memory-only and clears on restart'
+    const info = persistenceState.info
+    if (!info) return bufferFact
+    const backend = info.backend === 'postgres' ? 'Postgres' : `file store · ${info.dir ?? '—'}`
+    return `${backend} — holds flags, definitions, watchlist entries, entities and tokens; ${bufferFact}`
+  })
 
   // --- ingest --------------------------------------------------------------
   const routers = $derived.by(() => {
@@ -366,6 +451,46 @@
             <EngineRoomWatchers {canEdit} />
           </div>
         {/if}
+        {#if portScan}
+          <div class="orow">
+            <span>port-scan window</span>
+            <span class="ov">
+              {#if psEditing}
+                <span class="pswform">
+                  <input
+                    type="number"
+                    min="1"
+                    step="1"
+                    class="psn"
+                    aria-label="distinct ports"
+                    disabled={psSaving}
+                    bind:value={psThreshold}
+                  /> ports /
+                  <input
+                    type="number"
+                    min="1"
+                    step="1"
+                    class="psn"
+                    aria-label="window in seconds"
+                    disabled={psSaving}
+                    bind:value={psWindowSeconds}
+                  /> s
+                  <button class="olink" disabled={psSaving} onclick={savePortScanWindow}>
+                    {psSaving ? 'saving…' : 'save'}
+                  </button>
+                  <button class="olink" disabled={psSaving} onclick={() => (psEditing = false)}>cancel</button>
+                </span>
+              {:else if canEdit && portScanSummary}
+                <button class="pswknob" onclick={openPortScanEdit}>{portScanSummary}</button>
+              {:else}
+                {portScanSummary ?? '—'}
+              {/if}
+            </span>
+          </div>
+          {#if psError}
+            <p class="oghint err">{psError}</p>
+          {/if}
+        {/if}
       </div>
     </div>
 
@@ -413,6 +538,19 @@
           <span>what reads it</span>
           <span class="ov">every scene below reads from here; nothing anywhere probes</span>
         </div>
+        <!-- #677: "persistence — JSON store · 14 d" was the ratified
+             copy, but no event store with a day-based retention exists
+             -- internal/persist's own package doc calls the live event
+             stream the one deliberate in-memory-only exception, with no
+             config path that changes it. internal/persist IS real,
+             though, and backs flags/definitions/watchlist/entities/
+             tokens -- persistenceSummary states which backend it
+             actually uses (see persistenceState) alongside the buffer
+             fact, rather than only the negative half. -->
+        <div class="orow">
+          <span>persistence</span>
+          <span class="ov dim">{persistenceSummary}</span>
+        </div>
       </div>
 
       <div class="og">
@@ -425,6 +563,26 @@
           <span>password</span>
           <span class="ov"><button class="olink" onclick={() => (authState.showChangePassword = true)}>change…</button></span>
         </div>
+        <!-- #677: "tom-desktop" in the ratified copy was a mockup
+             placeholder -- internal/auth's Session carries no device
+             name or user-agent (just ID/UserID/IssuedAt/ExpiresAt), so
+             "this device" states what's real (one session among
+             however many) without inventing a label. -->
+        <div class="orow">
+          <span>sessions</span>
+          <span class="ov">
+            this device{authState.signedInSince ? `, signed in ${formatDaysSince(authState.signedInSince)}` : ''} ·
+            <button class="olink" disabled={soSaving} onclick={doSignOutEverywhere}>
+              {soSaving ? 'signing out…' : 'sign out everywhere'}
+            </button>
+          </span>
+        </div>
+        {#if soError}
+          <p class="oghint err">{soError}</p>
+        {/if}
+        {#if soDone}
+          <p class="oghint">done — every other session has been ended</p>
+        {/if}
         <div class="orow">
           <span>version</span>
           <span class="ov dim">{versionState.version || '—'} · AGPL-3.0</span>
@@ -680,6 +838,47 @@
     margin-top: 8px;
     padding-top: 8px;
     border-top: 1px solid var(--border);
+  }
+
+  /* The port-scan window's own dashed-underline handle -- same "a
+     control is a fact wearing a handle" convention as
+     EngineRoomWatchers' .scope-knob, so the value itself is what you
+     click rather than a separate "edit" word next to it. */
+  .pswknob {
+    color: var(--fg);
+    font-weight: 600;
+    border: none;
+    border-bottom: 1px dashed var(--accent);
+    background: transparent;
+    padding: 0;
+    font: inherit;
+  }
+
+  .pswknob:hover {
+    color: var(--accent);
+  }
+
+  .pswform {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    flex-wrap: wrap;
+  }
+
+  .psn {
+    width: 3.4em;
+    background: var(--bg-elevated);
+    border: 1px solid var(--border);
+    color: var(--fg);
+    border-radius: 5px;
+    padding: 3px 5px;
+    font-size: 12px;
+    font-family: var(--font-mono);
+  }
+
+  .oghint.err {
+    color: var(--reject);
+    font-style: normal;
   }
 
   /* --- memory -------------------------------------------------------------- */

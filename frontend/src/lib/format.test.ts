@@ -1,7 +1,15 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 import { describe, expect, it } from 'vitest'
-import { formatRelative, formatDurationShort, formatTimeMs, formatUptimeFull, formatBufferDepth } from './format'
+import {
+  formatRelative,
+  formatDurationShort,
+  formatTimeMs,
+  formatUptimeFull,
+  formatBufferDepth,
+  parseGoDurationSeconds,
+  formatDaysSince,
+} from './format'
 
 describe('formatTimeMs', () => {
   // Asserted on the tail only: the hour/minute/second part goes through
@@ -119,5 +127,36 @@ describe('formatBufferDepth', () => {
   it('returns nothing for a zero or negative capacity rather than dividing by it', () => {
     expect(formatBufferDepth(0, 0, 10)).toBe('')
     expect(formatBufferDepth(-1, 0, 10)).toBe('')
+  })
+})
+
+// #677's port-scan window row reads a definition's "window" param back
+// as Go's time.Duration.String() output (see internal/engine/params.go's
+// validateDurationParam) and needs it as plain seconds.
+describe('parseGoDurationSeconds', () => {
+  it('parses a bare seconds value', () => {
+    expect(parseGoDurationSeconds('60s')).toBe(60)
+  })
+
+  it('parses Go\'s compound minutes+seconds notation', () => {
+    expect(parseGoDurationSeconds('1m0s')).toBe(60)
+    expect(parseGoDurationSeconds('1m30s')).toBe(90)
+  })
+
+  it('parses hours and sub-second units', () => {
+    expect(parseGoDurationSeconds('1h30m0s')).toBe(5400)
+    expect(parseGoDurationSeconds('500ms')).toBe(0.5)
+  })
+})
+
+describe('formatDaysSince', () => {
+  it('renders a whole-day count', () => {
+    const fourDaysAgo = new Date(Date.now() - 4.5 * 86_400_000).toISOString()
+    expect(formatDaysSince(fourDaysAgo)).toBe('4 d')
+  })
+
+  it('says "under a day" inside the first 24h rather than "0 d"', () => {
+    const anHourAgo = new Date(Date.now() - 3600_000).toISOString()
+    expect(formatDaysSince(anHourAgo)).toBe('under a day')
   })
 })

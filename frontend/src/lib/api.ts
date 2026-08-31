@@ -21,6 +21,7 @@ import type {
   Healthz,
   HourTopBucket,
   MACRegistryEntry,
+  PersistenceInfo,
   ReputationResult,
   RuleUsage,
   Stats,
@@ -531,6 +532,16 @@ export async function logout(): Promise<string | null> {
   return (await res.text()) || `logout: ${res.status}`
 }
 
+// signOutEverywhere is #677's sessions row -- ends every session the
+// caller holds, on every device, and the server immediately issues this
+// tab a fresh one (see internal/api.handleAuthLogoutAll), so unlike
+// logout() above this does not leave the caller signed out.
+export async function signOutEverywhere(): Promise<string | null> {
+  const res = await postJSON('/api/auth/logout-all')
+  if (res.ok) return null
+  return (await res.text()) || `signOutEverywhere: ${res.status}`
+}
+
 // role chooses between the two tiers this call can create (#653).
 // Admin is still not among them: mikroview has one, and the server
 // refuses a request for a second (see auth.ErrSingleAdmin). Moving that
@@ -954,6 +965,18 @@ export async function startSSOLink(): Promise<{ url: string } | string> {
 export async function fetchSetupStatus(): Promise<SetupStatus> {
   const res = await fetch('/api/setup/status')
   if (!res.ok) throw new ApiError(`fetchSetupStatus: ${res.status}`, res.status)
+  return res.json()
+}
+
+// fetchPersistence is #677's settings persistence row: which backend
+// (file directory, or Postgres) this deployment's persisted stores
+// actually use. Admin-gated server-side, same reasoning as
+// /api/config/problems -- a non-admin's 403 surfaces as a thrown
+// ApiError here, same as every other admin-only GET this file wraps
+// (see fetchTokens/fetchUsers above), for the caller to swallow.
+export async function fetchPersistence(): Promise<PersistenceInfo> {
+  const res = await fetch('/api/persistence')
+  if (!res.ok) throw new ApiError(`fetchPersistence: ${res.status}`, res.status)
   return res.json()
 }
 

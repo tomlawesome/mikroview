@@ -38,11 +38,28 @@ class DetectorSettingsState {
         enabled: d.enabled,
         scope: d.scope ?? {},
         learning: d.learning,
+        params: d.params,
+        paramSchema: d.paramSchema,
       }))
   }
 
   async update(name: string, enabled: boolean, scope: DetectorScope): Promise<string | null> {
     const result = await updateDefinition(name, { enabled, scope })
+    if (typeof result === 'string') return result
+    await this.refresh()
+    return null
+  }
+
+  // updateParams writes a definition's numeric tuning (#677's port-scan
+  // window row: threshold/window) through the same PUT /api/definitions/
+  // {id} the bench's enabled/scope editing above already uses --
+  // deliberately not a second store or endpoint, since these are the
+  // same underlying definition. The server validates against the
+  // definition's own paramSchema (engine.DefinitionsStore.SetParams),
+  // so an out-of-range value comes back as the returned error string
+  // rather than silently clamping.
+  async updateParams(name: string, params: Record<string, unknown>): Promise<string | null> {
+    const result = await updateDefinition(name, { params })
     if (typeof result === 'string') return result
     await this.refresh()
     return null

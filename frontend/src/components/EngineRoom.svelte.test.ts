@@ -27,6 +27,7 @@ vi.mock('../lib/api', () => ({
         kind: 'declarative',
         enabled: true,
         scope: { hosts: ['203.0.113.9'], hostsMode: 'deny' },
+        params: { threshold: 15, window: '1m0s' },
         provenance: { origin: 'shipped' },
         available: true,
         replay: { known: true, capable: true },
@@ -57,6 +58,16 @@ vi.mock('../lib/api', () => ({
   createToken: vi.fn(),
   revokeToken: vi.fn(),
   fetchDevices: vi.fn(async () => []),
+  signOutEverywhere: vi.fn(async () => null),
+  fetchPersistence: vi.fn(async () => ({ backend: 'file', dir: '/var/lib/mikroview' })),
+  fetchAuthSession: vi.fn(async () => ({
+    setupRequired: false,
+    authenticated: true,
+    username: 'admin',
+    role: 'admin',
+    ssoAvailable: false,
+    signedInSince: new Date().toISOString(),
+  })),
 }))
 
 import { appState } from '../lib/state.svelte'
@@ -66,6 +77,7 @@ import { detectorSettingsState } from '../lib/detectorSettings.svelte'
 import { usersState } from '../lib/users.svelte'
 import { tokensState } from '../lib/tokens.svelte'
 import { deckOrderState } from '../lib/deckOrder.svelte'
+import { persistenceState } from '../lib/persistence.svelte'
 import type { Stats } from '../lib/types'
 import EngineRoom from './EngineRoom.svelte'
 
@@ -99,6 +111,13 @@ beforeEach(() => {
   usersState.list = []
   tokensState.list = []
   tokensState.justCreated = null
+  authState.signedInSince = ''
+  // persistenceState.ensureLoaded() only ever fetches once (see its own
+  // doc comment), so across a whole test file its cache would otherwise
+  // leak from whichever test rendered EngineRoom first -- reset the
+  // seeded value directly instead of relying on the mocked fetch, same
+  // as detectorSettingsState.list/flagsState.list above.
+  persistenceState.info = null
   deckOrderState.set(['fall', 'metrics', 'live', 'docket', 'entities', 'engineroom'])
 })
 
@@ -269,5 +288,99 @@ describe('The settings shelf (#633)', () => {
 
     expect(screen.getAllByText('mv1_4c21secret9b0d')).toHaveLength(1)
     expect(screen.getAllByText(/Copy it now/)).toHaveLength(1)
+  })
+
+  // #677: the three previously-unbuilt rows.
+  it("detection's port-scan window states the live threshold, editable for a user", async () => {
+    authState.state = 'authenticated'
+    authState.role = 'user'
+    render(EngineRoom)
+    await settle()
+
+    const knob = screen.getByRole('button', { name: '15 ports / 60 s' })
+    await fireEvent.click(knob)
+    await settle()
+
+    const portsInput = screen.getByLabelText('distinct ports') as HTMLInputElement
+    const windowInput = screen.getByLabelText('window in seconds') as HTMLInputElement
+    expect(portsInput.value).toBe('15')
+    expect(windowInput.value).toBe('60')
+
+    await fireEvent.input(portsInput, { target: { value: '25' } })
+    await fireEvent.input(windowInput, { target: { value: '90' } })
+    await fireEvent.click(screen.getByRole('button', { name: 'save' }))
+    await settle()
+
+    const { updateDefinition } = await import('../lib/api')
+    expect(updateDefinition).toHaveBeenCalledWith('port_scan', { params: { threshold: 25, window: '90s' } })
+  })
+
+  it('a viewer sees the port-scan window as a fact, not a knob', async () => {
+    authState.state = 'authenticated'
+    authState.role = 'viewer'
+    render(EngineRoom)
+    await settle()
+
+    expect(screen.getByText('15 ports / 60 s')).toBeTruthy()
+    expect(screen.queryByRole('button', { name: '15 ports / 60 s' })).toBeNull()
+  })
+
+  it('memory states persistence live truth: the file backend and its directory, and that the buffer is memory-only', async () => {
+    authState.state = 'authenticated'
+    authState.role = 'admin'
+    persistenceState.info = { backend: 'file', dir: '/var/lib/mikroview' }
+    render(EngineRoom)
+    await settle()
+
+    expect(screen.getByText('persistence')).toBeTruthy()
+    expect(screen.getByText(/file store · \/var\/lib\/mikroview/)).toBeTruthy()
+    expect(
+      screen.getByText(/holds flags, definitions, watchlist entries, entities and tokens/),
+    ).toBeTruthy()
+    expect(screen.getByText(/the event buffer above is memory-only and clears on restart/)).toBeTruthy()
+  })
+
+  it('states Postgres, not a file path, when that backend is live', async () => {
+    authState.state = 'authenticated'
+    authState.role = 'admin'
+    persistenceState.info = { backend: 'postgres' }
+    render(EngineRoom)
+    await settle()
+
+    expect(screen.getByText(/^Postgres —/)).toBeTruthy()
+    expect(screen.queryByText(/file store/)).toBeNull()
+  })
+
+  it('a viewer without access to GET /api/persistence sees only the buffer fact, not a fabricated backend', async () => {
+    // #677: the route is admin-gated (a directory is infrastructure
+    // detail, same reasoning /api/config/problems already applies), so
+    // persistenceState.info stays null for anyone else -- absent, not
+    // disabled, the same grammar the rest of Settings' admin-only facts
+    // already follow.
+    authState.state = 'authenticated'
+    authState.role = 'viewer'
+    render(EngineRoom)
+    await settle()
+
+    expect(screen.getByText('the event buffer above is memory-only and clears on restart')).toBeTruthy()
+    expect(screen.queryByText(/file store/)).toBeNull()
+    expect(screen.queryByText(/Postgres/)).toBeNull()
+  })
+
+  it('the sessions row states this device and can sign out everywhere', async () => {
+    authState.state = 'authenticated'
+    authState.role = 'admin'
+    authState.signedInSince = new Date(Date.now() - 4.5 * 86_400_000).toISOString()
+    render(EngineRoom)
+    await settle()
+
+    expect(screen.getByText(/this device, signed in 4 d/)).toBeTruthy()
+
+    const { signOutEverywhere } = await import('../lib/api')
+    await fireEvent.click(screen.getByRole('button', { name: 'sign out everywhere' }))
+    await settle()
+
+    expect(signOutEverywhere).toHaveBeenCalled()
+    expect(screen.getByText(/every other session has been ended/)).toBeTruthy()
   })
 })
