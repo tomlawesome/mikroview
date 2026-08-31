@@ -25,6 +25,14 @@ func (s *Server) handleFlagsList(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// clearRequest is POST /api/flags/{id}/clear's optional body: the
+// operator's reason for clearing, if they gave one (#678's "clear with a
+// note"). Absent/empty means "cleared, no note" -- same observable
+// result every clear had before this field existed.
+type clearRequest struct {
+	Note string `json:"note"`
+}
+
 // handleFlagsClear marks one flag as cleared. Clearing an unknown or
 // already-cleared ID is not an error (see flags.Store.Clear's doc
 // comment) -- it just reports which case applied, so the frontend can
@@ -34,13 +42,27 @@ func (s *Server) handleFlagsList(w http.ResponseWriter, r *http.Request) {
 // seeing but must not be able to change what it is showing, and clearing
 // a flag -- reversible as it is -- does that. Was open to any signed-in
 // caller before viewer existed to exclude.
+//
+// Audit-logged as of #678/#679: the owner's ruling on #679 settled that
+// clearing a flag is an admin-privileged mutation like any other, so the
+// note belongs in the existing log rather than a second record -- same
+// actor/action/target/detail shape every other handler in this file
+// already writes, with the note (if any) as Detail. A malformed or
+// missing body must not block the clear itself (the note is optional
+// context, not the action), so decode errors are swallowed rather than
+// rejected -- req.Note simply stays "".
 func (s *Server) handleFlagsClear(w http.ResponseWriter, r *http.Request) {
 	if !callerIsUser(r) {
 		http.Error(w, "user role required", http.StatusForbidden)
 		return
 	}
+	var req clearRequest
+	_ = json.NewDecoder(r.Body).Decode(&req)
 	id := r.PathValue("id")
 	cleared := s.Flags.Clear(id, time.Now())
+	if cleared {
+		s.Audit.Record(auditActor(r), "flag.clear", id, req.Note)
+	}
 	writeJSON(w, http.StatusOK, map[string]any{"cleared": cleared})
 }
 

@@ -403,8 +403,12 @@ export async function fetchFlags(): Promise<FlagsResponse> {
   return { flags: body.flags ?? [], timeSeries: body.timeSeries ?? [] }
 }
 
-export async function clearFlag(id: string): Promise<void> {
-  const res = await postJSON(`/api/flags/${encodeURIComponent(id)}/clear`)
+// note (#678's "clear with a note") is the operator's reason for
+// clearing, if they gave one -- recorded server-side as the audit
+// entry's Detail (see internal/api's handleFlagsClear doc comment for
+// why the log, not a new field on the flag itself, is where it lives).
+export async function clearFlag(id: string, note?: string): Promise<void> {
+  const res = await postJSON(`/api/flags/${encodeURIComponent(id)}/clear`, note ? { note } : {})
   if (!res.ok) throw new ApiError(`clearFlag: ${res.status}`, res.status)
 }
 
