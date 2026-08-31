@@ -12,11 +12,17 @@
   //     table, folded into cards: lib/fleet.ts's sort/status logic still
   //     backs it, so this and the standalone Fleet.svelte can't drift).
   //     A live card carries its current push rate; a quiet one states
-  //     that fact without alarm; a final dashed "add a third router"
-  //     card carries the standing promise -- mikroview only ever
-  //     receives, never connects out -- and a disclosure with the real
-  //     RouterOS lines to paste (lib/setupsteps.ts, the same generator
-  //     the setup wizard uses).
+  //     that fact without alarm. Adding a router used to be a further
+  //     dashed card printed in the row, carrying the standing promise
+  //     (mikroview only ever receives, never connects out) and the real
+  //     RouterOS lines to paste as instructional prose on the page. The
+  //     owner's round-30 review (#718) called that apparatus, not
+  //     content -- it is now a single "add router" button that opens a
+  //     small dialog with the same port, lines (lib/setupsteps.ts, the
+  //     same generator the setup wizard uses) and assurance, on demand
+  //     rather than always printed. The row's own bordered panel went
+  //     the same way (#718's "boxes in boxes"): the label stays, the
+  //     frame around already-bordered cards does not.
   //  2. A tab strip -- hosts / rules / ports (#681, a deliberate
   //     departure from the ratified round-29 scene, recorded on that
   //     issue rather than smuggled in) -- over one table per tab, the
@@ -71,7 +77,7 @@
   } from '../lib/api'
   import { discoverHosts, discoverPorts } from '../lib/discoveredEntities'
   import { ruleLabelFromLogPrefix } from '../lib/routerLookup.svelte'
-  import { formatRelative, formatHM, formatEps } from '../lib/format'
+  import { formatRelative, formatHM } from '../lib/format'
   import { STATUS_LABEL, sortedDevices, recentCount as recentCountOf, RECENT_WINDOW_MS } from '../lib/fleet'
   import { syslogCommands, instanceAddress, portOf } from '../lib/setupsteps'
   import type { EntityType, MACRegistryEntry, RuleUsage, SetupStatus } from '../lib/types'
@@ -80,15 +86,30 @@
   const routerRows = $derived(sortedDevices(appState.devices))
 
   let status = $state<SetupStatus | null>(null)
-  let showPasteLines = $state(false)
 
-  // The invite card's own heading stays honest about which router it
-  // would be -- the mockup's "a third router?" is the two-router
-  // example's own count, not fixed copy.
-  const ORDINAL = ['a', 'a second', 'a third'] as const
-  const nextRouterInvite = $derived(
-    routerRows.length < ORDINAL.length ? `${ORDINAL[routerRows.length]} router?` : 'another router?',
-  )
+  // The "add a router" explanation and paste-able commands used to sit
+  // printed on the page as a dashed card (issue #675's own "another
+  // router?" invite) -- the owner's round-30 review (#718) called that
+  // apparatus, not content: "just have an add router button that
+  // displays the commands." showAddRouter gates a small dialog instead,
+  // same backdrop-plus-modal shape AboutOverlay.svelte already uses
+  // (mounted locally rather than at the app root, since nothing else
+  // needs to open this one). The port, the paste lines and the "it
+  // never connects to them" assurance all move inside it unchanged --
+  // a relocation, not a deletion.
+  let showAddRouter = $state(false)
+
+  function closeAddRouter() {
+    showAddRouter = false
+  }
+
+  function onAddRouterKeydown(e: KeyboardEvent) {
+    if (e.key === 'Escape') closeAddRouter()
+  }
+
+  function onAddRouterBackdropClick(e: MouseEvent) {
+    if (e.target === e.currentTarget) closeAddRouter()
+  }
 
   // Per-router enrichment beyond what GET /api/devices already carries
   // (rule/zone counts, last push): the same pushed tables Topography's
@@ -137,9 +158,16 @@
     return { mark: '◌', cls: 'quiet', text: `QUIET${days >= 1 ? ` · ${days} d` : ''}` }
   }
 
+  // Fixed to one decimal rather than lib/format's formatEps (whole
+  // number at >=1 events/s, one decimal below it): two router cards
+  // showing "1" and "1.0" side by side read as inconsistent even though
+  // each is individually correct under formatEps's own rule (#718).
+  // formatEps is shared by several other pages' own single-number
+  // readouts, so the fix stays local to this page's per-card metric
+  // rather than changing that shared rule.
   function routerRate(deviceId: string): string {
     const n = recentCountOf(appState.events, deviceId, appState.now)
-    return formatEps(n / (RECENT_WINDOW_MS / 1000))
+    return (n / (RECENT_WINDOW_MS / 1000)).toFixed(1)
   }
 
   // --- named things: entity hosts + discovered-but-unnamed hosts, one
@@ -436,6 +464,8 @@
   }
 </script>
 
+<svelte:window onkeydown={onAddRouterKeydown} />
+
 <div class="page scrollbar op-page">
   <div class="opwrap"><div class="opanel">
     <div class="og">
@@ -457,7 +487,7 @@
               </div>
               {#if d.status === 'live'}
                 <div class="frow">
-                  {#if detail?.lastPush}last push {formatHM(detail.lastPush)} · {/if}{routerRate(d.id)} events/s now
+                  {#if detail?.lastPush}last push {formatHM(detail.lastPush)} ·{/if} {routerRate(d.id)} events/s now
                 </div>
               {:else if d.status === 'never_seen'}
                 <div class="frow dim">never heard from yet</div>
@@ -467,23 +497,32 @@
               <div class="frow dim">syslog{status?.instance.tlsEnabled ? ' TLS' : ''} · state pushed every 20 min</div>
             </div>
           {/each}
-          <div class="fcard add">
-            <div class="fhead"><b>{nextRouterInvite}</b></div>
-            <div class="frow dim">
-              point its syslog at {status ? `:${portOf(status.instance.syslogPort)}` : 'mikroview’s syslog port'} and it appears
-              here.<br />Routers push to mikroview — it never connects to them.
-            </div>
-            <div class="frow">
-              <button type="button" class="olink" onclick={() => (showPasteLines = !showPasteLines)}>
-                {showPasteLines ? 'hide the RouterOS lines' : 'show the RouterOS lines to paste'} ▸
-              </button>
-            </div>
-            {#if showPasteLines && status}
+        </div>
+        <button type="button" class="add-router-btn" onclick={() => (showAddRouter = true)}>+ add router</button>
+    </div>
+
+    {#if showAddRouter}
+      <div class="backdrop" onclick={onAddRouterBackdropClick} role="presentation">
+        <div class="modal" role="dialog" aria-modal="true" aria-label="Add a router" tabindex="-1">
+          <div class="modal-header">
+            <span class="title">Add a router</span>
+            <button type="button" class="close" onclick={closeAddRouter} aria-label="Close">✕</button>
+          </div>
+          <div class="body">
+            <p>
+              Point its syslog at {status ? `:${portOf(status.instance.syslogPort)}` : 'mikroview’s syslog port'} and
+              it appears here.
+            </p>
+            <p>Routers push to mikroview — it never connects to them.</p>
+            {#if status}
               <pre class="paste">{syslogCommands(instanceAddress({ host: location.host }), status.instance.syslogPort)}</pre>
+            {:else}
+              <p class="dim">Loading the commands to paste…</p>
             {/if}
           </div>
         </div>
-    </div>
+      </div>
+    {/if}
 
     {#if TABS_ENABLED}
       <!-- Unmounted for round-30 fidelity -- see the comment on
@@ -547,9 +586,7 @@
                 {#if row.marks.watched}<span class="mk mk-watched"
                   >◉ watched{row.marks.ringBroken ? ' · ○ ring broken' : ''}</span
                 >{/if}
-                {#if row.marks.alarmCount > 0}<span class="mk mk-flagged"
-                  >{'✱'.repeat(Math.min(row.marks.alarmCount, 3))} flagged</span
-                >{/if}
+                {#if row.marks.alarmCount > 0}<span class="mk mk-flagged">✱ flagged</span>{/if}
               </td>
             </tr>
             {#if isRenaming('host', row.key) && renameError}
@@ -680,11 +717,11 @@
     max-width: 1500px;
   }
 
+  /* No border/background here (#718): a bordered panel around a row of
+     already-bordered router cards was a box inside a box. The label
+     stays -- round 30 still names the row -- the frame around it does
+     not. */
   .og {
-    background: var(--bg-elevated);
-    border: 1px solid var(--border);
-    border-radius: 10px;
-    padding: 12px 14px;
     margin-bottom: 20px;
   }
 
@@ -756,8 +793,23 @@
     border-color: var(--hair-2);
   }
 
-  .fcard.add {
-    border-style: dashed;
+  /* The add-router trigger (#718): a plain button, not a dashed card --
+     the point of this round of feedback was one fewer box, not another
+     one shaped like a button. */
+  .add-router-btn {
+    margin-top: 14px;
+    background: none;
+    border: 1px solid var(--accent);
+    border-radius: 8px;
+    padding: 7px 14px;
+    font: inherit;
+    font-size: 12.5px;
+    color: var(--accent);
+    cursor: pointer;
+  }
+
+  .add-router-btn:hover {
+    background: var(--accent-bg);
   }
 
   .fhead {
@@ -793,19 +845,66 @@
     padding: 3px 0;
   }
 
-  .fcard .olink {
-    background: none;
-    border: none;
-    padding: 0;
-    font: inherit;
-    color: var(--accent);
-    cursor: pointer;
-    text-decoration: underline;
-    text-decoration-color: transparent;
+  /* --- the add-router dialog (#718): same backdrop-plus-modal shape as
+     AboutOverlay.svelte, reused rather than a new kind of surface --
+     mounted locally here since nothing else needs to open it. --- */
+  .backdrop {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.5);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 100;
   }
 
-  .fcard .olink:hover {
-    text-decoration-color: currentColor;
+  .modal {
+    background: var(--bg-elevated, var(--bg));
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    max-width: 30rem;
+    width: calc(100% - 2rem);
+    max-height: calc(100vh - 4rem);
+    overflow-y: auto;
+  }
+
+  .modal-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0.75rem 1rem;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .modal-header .title {
+    font-weight: 600;
+  }
+
+  .modal .close {
+    background: none;
+    border: none;
+    color: var(--fg-muted);
+    cursor: pointer;
+    font-size: 1rem;
+    padding: 0.25rem;
+  }
+
+  .modal .close:hover {
+    color: var(--fg);
+  }
+
+  .modal .body {
+    padding: 1rem;
+    font-size: 13px;
+    line-height: 1.5;
+  }
+
+  .modal .body p {
+    margin: 0 0 0.75rem;
+  }
+
+  .modal .body p:last-of-type {
+    margin-bottom: 0;
   }
 
   .paste {
