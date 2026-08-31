@@ -12,6 +12,13 @@ import { flagsState } from '../lib/flags.svelte'
 import { watchlistState } from '../lib/watchlist.svelte'
 import { emptyFilters, type ClientEvent, type Flag, type FlagType, type WatchlistEntry } from '../lib/types'
 import Topography from './Topography.svelte'
+// Vite's own `?raw` import (typed by vite/client, already in this
+// project's tsconfig) -- not a Node fs read -- so the handful of
+// assertions below that care about a raw CSS value or a stylesheet's own
+// token can read the component's source text without pulling `node:fs`
+// into a file svelte-check type-checks under the browser-only app
+// tsconfig (no `node` types there).
+import componentSource from './Topography.svelte?raw'
 
 // Topography's own $effect only reaches the network (zonesState.refresh
 // etc.) once appState.devices is non-empty (see the component's doc
@@ -659,5 +666,230 @@ describe('the round-30 layout (#699)', () => {
     const line = container.querySelector('.redge.alarm')
     expect(line).not.toBeNull()
     expect(line?.getAttribute('style') ?? '').not.toContain('stroke:')
+  })
+})
+
+
+describe('#723: nodes stop clashing with the scene\'s own floor at the altitude extremes', () => {
+  function pushOneLaneWithHosts(n: number) {
+    zonesState.pushed = [{ address: '10.0.1.1/24', network: '10.0.1.0', interface: 'bridge1', comment: 'Lane 1' }]
+    appState.events = Array.from({ length: n }, (_, i) =>
+      event({ inInterface: 'bridge1', srcIp: `10.0.1.${20 + i}`, srcHostName: `host-${i}` }),
+    )
+  }
+
+  it('keeps every client-tier dot and label, including "+n more", well clear of the 720 floor', () => {
+    // Five hosts: three drawn plus "+2 more" -- the worst case, since
+    // "+n more" sat lowest of everything in the tier (baseline 716
+    // against a 720 floor before this fix).
+    pushOneLaneWithHosts(5)
+    const { container } = render(Topography)
+    flushSync()
+
+    const range = container.querySelector<HTMLInputElement>('.alt-range')!
+    range.value = '0' // "clients" -- the tier's own altitude
+    range.dispatchEvent(new Event('input', { bubbles: true }))
+    flushSync()
+
+    const labelYs = [...container.querySelectorAll('.cli .c-label')].map((n) => Number(n.getAttribute('y')))
+    expect(labelYs.length).toBeGreaterThan(0)
+    for (const y of labelYs) expect(y).toBeLessThanOrEqual(700)
+
+    const dotBottoms = [...container.querySelectorAll('.cli .c-dot')].map(
+      (n) => Number(n.getAttribute('cy')) + Number(n.getAttribute('r')),
+    )
+    expect(dotBottoms.length).toBeGreaterThan(0)
+    for (const bottom of dotBottoms) expect(bottom).toBeLessThanOrEqual(700)
+  })
+
+  it('restores the survey tilt\'s own perspective to round 30\'s ratified 1400px, not the drifted 900px', () => {
+    // The rotateX/scale/translateY triple is unchanged from the mockup;
+    // only the perspective distance had drifted smaller, which makes the
+    // very same tilt read as stronger (foreshortening grows as this
+    // number shrinks) -- see the .stage svg comment in the component.
+    expect(componentSource).toMatch(/\.stage svg\s*{\s*perspective:\s*1400px;/)
+    expect(componentSource).not.toMatch(/perspective:\s*900px/)
+  })
+})
+
+describe('#723: a lane\'s port list gets a visible tie to its own card ("ports floating in the wind")', () => {
+  it('draws a leader from every services-tier label down to the card it describes', () => {
+    zonesState.pushed = [{ address: '10.0.1.1/24', network: '10.0.1.0', interface: 'bridge1', comment: 'Lane 1' }]
+    appState.events = [event({ inInterface: 'bridge1', outInterface: 'ether1', srcIp: '10.0.1.20', dstPort: 443, action: 'accept' })]
+    const { container } = render(Topography)
+    flushSync()
+
+    const labels = [...container.querySelectorAll('.svc .svc-t')]
+    expect(labels.length).toBeGreaterThan(0)
+    const leaders = [...container.querySelectorAll('.svc .svc-leader')]
+    expect(leaders.length).toBe(labels.length)
+
+    for (const leader of leaders) {
+      // The leader's far end lands right at the card's own top edge
+      // (y=490 in this scene's fixed geometry), not floating mid-air.
+      expect(Number(leader.getAttribute('y2'))).toBeCloseTo(489, 0)
+      expect(leader.getAttribute('x1')).toBe(leader.getAttribute('x2'))
+    }
+  })
+})
+
+describe('#723: the dials sit just under the top bar rather than well below it', () => {
+  it('keeps the dials\' own offset small enough to read as "just under", not a floating pair', () => {
+    const m = componentSource.match(/\.dials\s*{[^}]*top:\s*([\d.]+)px/)
+    expect(m).not.toBeNull()
+    const top = Number(m![1])
+    // Was 108px (the mockup's own figure, measured from a differently-
+    // structured layout -- see the component's own comment). Clear of 0
+    // (#721's own concern: don't crowd the bar) but nowhere near the old
+    // value.
+    expect(top).toBeGreaterThan(0)
+    expect(top).toBeLessThanOrEqual(24)
+  })
+})
+
+describe('#723: clicking (or keying into) a node opens the reach, not the stream', () => {
+  it('opens the membrane when a client-tier node is activated, at the clients altitude', () => {
+    zonesState.pushed = [{ address: '10.0.1.1/24', network: '10.0.1.0', interface: 'bridge1', comment: 'Lane 1' }]
+    appState.events = [event({ inInterface: 'bridge1', srcIp: '10.0.1.20', srcHostName: 'desk' })]
+    const { container } = render(Topography)
+    flushSync()
+
+    const range = container.querySelector<HTMLInputElement>('.alt-range')!
+    range.value = '0'
+    range.dispatchEvent(new Event('input', { bubbles: true }))
+    flushSync()
+
+    const dot = container.querySelector<SVGCircleElement>('.cli .c-dot')
+    expect(dot).not.toBeNull()
+    dot!.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    flushSync()
+
+    expect(container.querySelector('.membrane-layer')).not.toBeNull()
+    expect(appState.view).toBe('topography') // never resolved to the stream
+  })
+
+  it('sends Space on a card host-link to the same place Enter and the pointer already go', () => {
+    zonesState.pushed = [{ address: '192.168.1.1/24', network: '192.168.1.0', interface: 'bridge1', comment: 'The LAN' }]
+    appState.events = [event({ inInterface: 'bridge1', srcIp: '192.168.1.50', srcHostName: 'desk' })]
+    const { container } = render(Topography)
+    flushSync()
+
+    const hostLink = container.querySelector<SVGTSpanElement>('.host-link')
+    expect(hostLink).not.toBeNull()
+    hostLink!.dispatchEvent(new KeyboardEvent('keydown', { key: ' ', bubbles: true, cancelable: true }))
+    flushSync()
+
+    expect(container.querySelector('.membrane-layer')).not.toBeNull()
+    expect(appState.view).toBe('topography')
+  })
+})
+
+describe('#715 follow-up: the edge-plate reads over any lane\'s ink, not just the empty map', () => {
+  it('backs the plate with an elevated surface rather than the scene background itself', () => {
+    zonesState.pushed = [{ address: '10.0.1.1/24', network: '10.0.1.0', interface: 'bridge1', comment: 'Lane 1' }]
+    appState.events = [event({ inInterface: 'bridge1', outInterface: 'ether1', srcIp: '10.0.1.20', dstPort: 443, action: 'accept' })]
+    const { container } = render(Topography)
+    flushSync()
+
+    expect(container.querySelector('.edge-plate')).not.toBeNull()
+    // The regression this guards: a plate whose fill token is the same
+    // as the page's own background is not a plate at all -- it is the
+    // void, and anything behind it (a coloured lane's own line, since
+    // #715 gave observed edges that ink) reads straight through.
+    const plateRule = componentSource.match(/\.edge-plate\s*{([^}]*)}/)
+    expect(plateRule).not.toBeNull()
+    expect(plateRule![1]).not.toMatch(/fill:\s*var\(--bg\);/)
+    expect(plateRule![1]).toMatch(/fill:\s*var\(--bg-elevated\)/)
+  })
+
+  it('gives the aggregate flag/watch chip enough of an opaque backing that a crossing line cannot show through it', () => {
+    // #715 already ordered this bar after every edge line (document
+    // order = paint order); its own defect was a 10%-into-transparent
+    // fill, not stacking -- 90% see-through lets whatever is underneath
+    // bleed straight through the count it is meant to carry.
+    const hbRule = componentSource.match(/\.hb-f\s*{([^}]*)}/)
+    expect(hbRule).not.toBeNull()
+    const fillLine = hbRule![1].match(/fill:\s*[^;]+;/)?.[0] ?? ''
+    expect(fillLine).not.toMatch(/,\s*transparent\)/)
+    expect(fillLine).toMatch(/var\(--bg-elevated\)/)
+  })
+})
+
+describe('#723: lines are painted before labels in every lens, so a line can never cover one', () => {
+  function linesComeBeforeEveryPlate(container: HTMLElement, lineSelector: string) {
+    const lines = [...container.querySelectorAll(lineSelector)]
+    const plates = [...container.querySelectorAll('.edge-plate')]
+    expect(lines.length).toBeGreaterThan(1)
+    expect(plates.length).toBeGreaterThan(1)
+    for (const line of lines) {
+      for (const plate of plates) {
+        // DOCUMENT_POSITION_FOLLOWING (4): plate comes after line.
+        expect(line.compareDocumentPosition(plate) & 4).toBeTruthy()
+      }
+    }
+  }
+
+  it('holds for the traffic lens, two crossing pairs with badges', () => {
+    zonesState.pushed = [
+      { address: '10.0.1.1/24', network: '10.0.1.0', interface: 'bridge1', comment: 'Lane 1' },
+      { address: '10.0.2.1/24', network: '10.0.2.0', interface: 'bridge2', comment: 'Lane 2' },
+    ]
+    appState.events = [
+      event({ inInterface: 'bridge1', outInterface: 'ether1', srcIp: '10.0.1.20', dstPort: 443, action: 'accept' }),
+      event({ inInterface: 'bridge2', outInterface: 'ether1', srcIp: '10.0.2.20', dstPort: 80, action: 'accept' }),
+    ]
+    const { container } = render(Topography)
+    flushSync()
+
+    linesComeBeforeEveryPlate(container, '.redge')
+  })
+
+  it('holds for the policy lens, two accepted pairs with port badges', () => {
+    zonesState.pushed = [
+      { address: '10.0.1.1/24', network: '10.0.1.0', interface: 'bridge1', comment: 'Lane 1' },
+      { address: '10.0.2.1/24', network: '10.0.2.0', interface: 'bridge2', comment: 'Lane 2' },
+    ]
+    appState.events = [
+      event({ inInterface: 'bridge1', srcIp: '10.0.1.20' }),
+      event({ inInterface: 'bridge2', srcIp: '10.0.2.20' }),
+      event({ inInterface: 'ether1', srcIp: '8.8.8.8' }), // resolves ether1 as the WAN boundary
+    ]
+    policyState.anyPushed = true
+    policyState.edges = [
+      { key: 'bridge1|ether1', from: 'bridge1', to: 'ether1', accepted: true, refused: false, acceptPorts: [':443'], refusePorts: [], comment: '', ruleCount: 1, logged: true },
+      { key: 'bridge2|ether1', from: 'bridge2', to: 'ether1', accepted: true, refused: false, acceptPorts: [':80'], refusePorts: [], comment: '', ruleCount: 1, logged: true },
+    ]
+    const { container } = render(Topography)
+    flushSync()
+    const policyTab = [...container.querySelectorAll<HTMLButtonElement>('.wlens2 button')].find((b) => b.textContent?.trim() === 'policy')
+    policyTab!.click()
+    flushSync()
+
+    linesComeBeforeEveryPlate(container, '.edge')
+  })
+
+  it('holds for the coverage lens, two dark boundary-directions', () => {
+    zonesState.pushed = [
+      { address: '10.0.1.1/24', network: '10.0.1.0', interface: 'bridge1', comment: 'Lane 1' },
+      { address: '10.0.2.1/24', network: '10.0.2.0', interface: 'bridge2', comment: 'Lane 2' },
+    ]
+    appState.events = [
+      event({ inInterface: 'bridge1', srcIp: '10.0.1.20' }),
+      event({ inInterface: 'bridge2', srcIp: '10.0.2.20' }),
+      event({ inInterface: 'ether1', srcIp: '8.8.8.8' }), // resolves ether1 as the WAN boundary
+    ]
+    policyState.anyPushed = true
+    policyState.edges = [
+      { key: 'bridge1|ether1', from: 'bridge1', to: 'ether1', accepted: true, refused: false, acceptPorts: [':443'], refusePorts: [], comment: '', ruleCount: 1, logged: false },
+      { key: 'bridge2|ether1', from: 'bridge2', to: 'ether1', accepted: true, refused: false, acceptPorts: [':80'], refusePorts: [], comment: '', ruleCount: 1, logged: false },
+    ]
+    const { container } = render(Topography)
+    flushSync()
+
+    const coverageTab = [...container.querySelectorAll<HTMLButtonElement>('.wlens2 button')].find((b) => b.textContent?.trim() === 'coverage')
+    coverageTab!.click()
+    flushSync()
+
+    linesComeBeforeEveryPlate(container, '.cedge')
   })
 })
