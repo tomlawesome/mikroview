@@ -582,4 +582,82 @@ describe('the round-30 layout (#699)', () => {
       }
     }
   })
+
+  it('holds no-overlap even at the 12-edge cap with mixed accept/drop pairs converging on a shared lane', () => {
+    // #715: the owner saw traffic chips stacking on the running build.
+    // Stress the placement pass at its real ceiling -- five lanes,
+    // several source lanes all crossing to the same destination lane
+    // (the zone-side analogue of the internet corridor), and a mix of
+    // accepted/dropped verdicts -- to confirm the corridor and the
+    // freestanding push-down pass still hold together at scale.
+    zonesState.pushed = Array.from({ length: 5 }, (_, i) => ({
+      address: `10.0.${i + 1}.1/24`,
+      network: `10.0.${i + 1}.0`,
+      interface: `bridge${i + 1}`,
+      comment: `Lane ${i + 1}`,
+    }))
+    appState.events = [
+      event({ inInterface: 'ether1', outInterface: 'bridge1', srcIp: '203.0.113.5', dstPort: 443, action: 'accept' }),
+      ...Array.from({ length: 300 }, () => event({ inInterface: 'bridge2', outInterface: 'bridge1', srcIp: '10.0.2.20', dstPort: 443, action: 'accept' })),
+      ...Array.from({ length: 250 }, () => event({ inInterface: 'bridge3', outInterface: 'bridge1', srcIp: '10.0.3.20', dstPort: 80, action: 'accept' })),
+      ...Array.from({ length: 200 }, () => event({ inInterface: 'bridge4', outInterface: 'bridge1', srcIp: '10.0.4.20', dstPort: 22, action: 'accept' })),
+      ...Array.from({ length: 150 }, () => event({ inInterface: 'bridge5', outInterface: 'bridge1', srcIp: '10.0.5.20', dstPort: 3389, action: 'drop' })),
+      ...Array.from({ length: 100 }, () => event({ inInterface: 'bridge1', outInterface: 'bridge2', srcIp: '10.0.1.20', dstPort: 8080, action: 'accept' })),
+    ]
+    const { container } = render(Topography)
+    flushSync()
+
+    const plates = [...container.querySelectorAll('.edge-plate')].map((p) => ({
+      x: Number(p.getAttribute('x')),
+      y: Number(p.getAttribute('y')),
+      w: Number(p.getAttribute('width')),
+      h: Number(p.getAttribute('height')),
+    }))
+    expect(plates.length).toBeGreaterThan(2)
+    for (let a = 0; a < plates.length; a++) {
+      for (let b = a + 1; b < plates.length; b++) {
+        const p1 = plates[a]
+        const p2 = plates[b]
+        const overlaps = p1.x < p2.x + p2.w && p2.x < p1.x + p1.w && p1.y < p2.y + p2.h && p2.y < p1.y + p1.h
+        expect(overlaps).toBe(false)
+      }
+    }
+  })
+
+  it('colours a planned traffic edge with the lane it touches, not one shared grey (#715)', () => {
+    zonesState.pushed = [{ address: '10.0.1.1/24', network: '10.0.1.0', interface: 'bridge1', comment: 'Lane 1' }]
+    appState.events = [event({ inInterface: 'bridge1', outInterface: 'ether1', srcIp: '10.0.1.20', dstPort: 443, action: 'accept' })]
+    const { container } = render(Topography)
+    flushSync()
+
+    const line = container.querySelector('.redge')
+    expect(line).not.toBeNull()
+    expect(line?.getAttribute('style')).toContain('stroke: var(--lane-lan)')
+  })
+
+  it('keeps the reserved alarm colour on an unplanned traffic edge rather than a lane ink (#715)', () => {
+    zonesState.pushed = [{ address: '10.0.1.1/24', network: '10.0.1.0', interface: 'bridge1', comment: 'Lane 1' }]
+    policyState.anyPushed = true
+    policyState.edges = [
+      {
+        key: 'bridge1|ether1',
+        from: 'bridge1',
+        to: 'ether1',
+        accepted: false,
+        refused: true,
+        acceptPorts: [],
+        refusePorts: [':445'],
+        comment: '',
+        ruleCount: 1,
+        logged: true,
+      },
+    ]
+    appState.events = [event({ inInterface: 'bridge1', outInterface: 'ether1', srcIp: '10.0.1.20', dstPort: 445, action: 'accept' })]
+    const { container } = render(Topography)
+    flushSync()
+
+    const line = container.querySelector('.redge.alarm')
+    expect(line).not.toBeNull()
+    expect(line?.getAttribute('style') ?? '').not.toContain('stroke:')
+  })
 })

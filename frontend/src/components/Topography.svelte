@@ -488,6 +488,22 @@
     return Math.min(4.4, 1.3 + Math.log10(Math.max(1, r.events)))
   }
 
+  // Round 30's own ribs carry the lane's ink even once they stop being
+  // the placeholder volume line and become a real observed pair (the-
+  // whole.html:930-935: `.rib` is stroked var(--lan)/var(--srv)/etc, not
+  // one shared grey, whichever zone it touches). A pair not touching any
+  // recognised lane (internet-to-waist, or a boundary the address push
+  // has not named) has no lane ink to borrow, so it keeps the calm
+  // shared one -- never a fabricated colour. The one saturated colour
+  // stays alarm's alone: callers skip this for an unplanned pair.
+  function laneInkFor(fromIface: string, toIface: string): string {
+    const i = zones.findIndex((z) => z.id === fromIface)
+    if (i !== -1) return LANE_INKS[i % LANE_INKS.length]
+    const j = zones.findIndex((z) => z.id === toIface)
+    if (j !== -1) return LANE_INKS[j % LANE_INKS.length]
+    return 'var(--fg-muted)'
+  }
+
   function realityBadge(r: RealityEdge): string {
     const ports = r.topPorts.slice(0, 3).join(' ')
     const n = r.events.toLocaleString()
@@ -1299,6 +1315,7 @@
               class:alarm={d.r.verdict === 'unplanned'}
               d={edgePath(d.line)}
               style:stroke-width="{realityWidth(d.r)}px"
+              style:stroke={d.r.verdict === 'unplanned' ? undefined : laneInkFor(d.r.from, d.r.to)}
             />
             {#if d.r.drops > 0}
               {@const bar = edgeBarAt(d.line)}
@@ -2102,7 +2119,10 @@
   }
 
   .n-sub {
-    fill: var(--fg-dim);
+    /* fg-dim on this scene's two grounds (--bg and --bg-elevated) reads
+       at ~3.1-3.3:1 -- under the 4.5:1 small-text floor, i.e. dark text
+       on a dark fill (#715). fg-muted clears both (~7.4:1 / ~8:1). */
+    fill: var(--fg-muted);
     font-size: 9.5px;
   }
 
@@ -2273,7 +2293,9 @@
   }
 
   .n-cov.cov-q {
-    fill: var(--fg-dim);
+    /* fg-dim on the card's --bg-elevated reads ~3.1:1 (#715); fg-muted
+       clears the 4.5:1 floor at ~7.4:1. */
+    fill: var(--fg-muted);
   }
 
   .n-cov.cov-d {
@@ -2290,7 +2312,9 @@
   }
 
   .quiet-t {
-    fill: var(--fg-dim);
+    /* fg-dim on the edge-plate's --bg reads ~3.3:1 (#715); fg-muted
+       clears the 4.5:1 floor at ~8:1. */
+    fill: var(--fg-muted);
     font-style: italic;
   }
 
@@ -2607,13 +2631,15 @@
   }
 
   .edge-badge {
-    fill: var(--fg-dim);
+    /* fg-dim on the edge-plate's --bg reads ~3.3:1 -- the "dark text on
+       a dark fill" complaint (#715). fg-muted clears 4.5:1 at ~8:1. */
+    fill: var(--fg-muted);
     font-family: var(--font-mono);
     font-size: 9.5px;
   }
 
   .edge-g:hover .edge-badge {
-    fill: var(--fg-muted);
+    fill: var(--fg);
   }
 
   .mote {
@@ -3161,7 +3187,9 @@
   }
 
   .c-label.more {
-    fill: var(--fg-dim);
+    /* fg-dim directly on the void (--bg) reads ~3.3:1 (#715); fg-muted
+       clears 4.5:1 at ~8:1. */
+    fill: var(--fg-muted);
   }
 
   /* An island passive to the pointer still owes its aggregate bar its
