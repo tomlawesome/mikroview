@@ -4,8 +4,13 @@
 // "one filter, two hands". The box (`.fbox`) is ALWAYS on screen, carries
 // the typed grammar as chips, and says so when empty instead of
 // vanishing -- so there is no second "Filters ▸" control left to exist.
-// `bar ▸`/`◂ bar`, welded to the box's own left edge, unfurls round 8's
-// thin strip -- device · action · chain · proto · source ⇄ destination
+//
+// Owner correction, 2026-08-31: the "bar ▸"/"◂ bar" toggle that used to
+// be welded to the box's left edge is gone -- "remove the bar button
+// entirely, and the filter bar instead folds out of the search box as a
+// drawer... clicking in the box opens it, clicking away from the box
+// closes it." The box itself is now the disclosure for round 8's thin
+// strip -- device · action · chain · proto · source ⇄ destination
 // (scope + country) · port · interface · rule -- as dim micro-labels
 // over hairline-underlined values, no boxes, no placeholder prose, with
 // `× clear` and `fold ▸` at its end. The span pills (15 m/1 h/24 h/14 d,
@@ -38,8 +43,18 @@ const { appState } = await import('../lib/state.svelte')
 const { emptyFilters } = await import('../lib/types')
 const { retentionState } = await import('../lib/retention.svelte')
 
+// The box div carries no role -- it holds the chips' own remove buttons,
+// and a screen reader flattens the contents of anything with
+// role="button". The hint inside it is the real control and carries the
+// expanded state, so that is what these tests drive.
+function getBox() {
+  return screen.getByRole('button', { name: /type a term/ })
+}
+
+// Opens the desktop strip the same way an owner-specified click does --
+// there is no button any more, so this clicks the box itself.
 async function expandRow() {
-  await fireEvent.click(screen.getByRole('button', { name: /bar/ }))
+  await fireEvent.click(getBox())
   flushSync()
 }
 
@@ -52,10 +67,12 @@ beforeEach(() => {
 })
 
 describe('FilterBar, the filter line (#697, ratified round 30)', () => {
-  it('is always on screen, folded by default, welded to a "bar ▸" toggle', () => {
+  it('is always on screen, folded by default, with no separate button to reach the drawer', () => {
     render(FilterBar)
-    expect(document.querySelector('.fbox')).toBeTruthy()
-    expect(screen.getByRole('button', { name: 'bar ▸' })).toBeTruthy()
+    const box = getBox()
+    expect(box).toBeTruthy()
+    expect(box.getAttribute('aria-expanded')).toBe('false')
+    expect(screen.queryByRole('button', { name: /bar/i })).toBeNull()
     expect(screen.queryByLabelText('Device')).toBeNull()
   })
 
@@ -96,16 +113,82 @@ describe('FilterBar, the filter line (#697, ratified round 30)', () => {
     expect(appState.filters.srcCountry).toBe('')
   })
 
-  it('toggles the handle\'s own text and unfurls the named-field strip', async () => {
+  it('opens the named-field strip on a click inside the box (owner, 2026-08-31)', async () => {
     render(FilterBar)
-    const open = screen.getByRole('button', { name: 'bar ▸' })
-    expect(open.getAttribute('aria-expanded')).toBe('false')
+    const box = getBox()
+    expect(box.getAttribute('aria-expanded')).toBe('false')
 
-    await fireEvent.click(open)
+    await fireEvent.click(box)
     flushSync()
-    expect(screen.getByRole('button', { name: '◂ bar' })).toBeTruthy()
-    expect(screen.getByRole('button', { name: '◂ bar' }).getAttribute('aria-expanded')).toBe('true')
+    expect(box.getAttribute('aria-expanded')).toBe('true')
     expect(screen.getByLabelText('Device')).toBeTruthy()
+  })
+
+  it('closes the strip on a click away from both the box and the strip', async () => {
+    render(FilterBar)
+    const box = getBox()
+    await expandRow()
+    expect(screen.getByLabelText('Device')).toBeTruthy()
+
+    await fireEvent.click(document.body)
+    flushSync()
+    expect(box.getAttribute('aria-expanded')).toBe('false')
+    expect(screen.queryByLabelText('Device')).toBeNull()
+  })
+
+  it('does not close when the click lands inside the open strip itself', async () => {
+    render(FilterBar)
+    const box = getBox()
+    await expandRow()
+
+    await fireEvent.click(screen.getByLabelText('Device'))
+    flushSync()
+    expect(box.getAttribute('aria-expanded')).toBe('true')
+    expect(screen.getByLabelText('Device')).toBeTruthy()
+  })
+
+  it('does not open (or close) when removing a chip -- that click stops at the chip', async () => {
+    appState.filters = { ...emptyFilters(), action: 'drop' }
+    render(FilterBar)
+    const box = getBox()
+    expect(box.getAttribute('aria-expanded')).toBe('false')
+
+    await fireEvent.click(screen.getByLabelText('Remove the action filter'))
+    flushSync()
+    expect(box.getAttribute('aria-expanded')).toBe('false')
+  })
+
+  it('gives the keyboard a real button inside the box, so Enter and Space are native', async () => {
+    render(FilterBar)
+    const box = getBox()
+    // A native <button>: the browser turns Enter and Space into a click,
+    // which jsdom does not synthesise, so assert the element rather than
+    // simulate a keystroke the environment cannot deliver.
+    expect(box.tagName).toBe('BUTTON')
+    expect(box.getAttribute('type')).toBe('button')
+
+    await fireEvent.click(box)
+    flushSync()
+    expect(box.getAttribute('aria-expanded')).toBe('true')
+    expect(screen.getByLabelText('Device')).toBeTruthy()
+  })
+
+  it('leaves each chip\'s own remove button reachable -- the box takes no role that would flatten them', () => {
+    appState.filters = { ...emptyFilters(), action: 'drop' }
+    render(FilterBar)
+    expect(screen.getByLabelText('Remove the action filter').tagName).toBe('BUTTON')
+  })
+
+  it('closes on Escape and returns focus to the box -- the keyboard equivalent of "click away"', async () => {
+    render(FilterBar)
+    const box = getBox()
+    await expandRow()
+
+    await fireEvent.keyDown(window, { key: 'Escape' })
+    flushSync()
+    expect(box.getAttribute('aria-expanded')).toBe('false')
+    expect(screen.queryByLabelText('Device')).toBeNull()
+    expect(document.activeElement).toBe(box)
   })
 
   // #703: the control is only honest if a span the buffer cannot cover is
@@ -217,13 +300,15 @@ describe('FilterBar, expanded desktop row (#683/#697, ratified round 30)', () =>
     expect(screen.queryByLabelText('Clear all filters')).toBeNull()
   })
 
-  it('folds the strip back into the box, leaving the toggle reading "bar ▸" again', async () => {
+  it('folds the strip back into the box via "fold ▸", returning focus to the box', async () => {
     render(FilterBar)
+    const box = getBox()
     await expandRow()
     await fireEvent.click(screen.getByLabelText('Fold filters back into the box'))
     flushSync()
 
-    expect(screen.getByRole('button', { name: 'bar ▸' })).toBeTruthy()
+    expect(box.getAttribute('aria-expanded')).toBe('false')
     expect(screen.queryByLabelText('Device')).toBeNull()
+    expect(document.activeElement).toBe(box)
   })
 })
