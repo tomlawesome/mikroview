@@ -290,9 +290,12 @@ rewritten.
   center it, so it pinned to the top of the header instead of centering
   in it. Persisted column widths from before this change are
   discarded (`mikroview-column-widths-v4` → `-v5`) since three of the
-  nine columns changed from flexible to fixed. The name/address
-  pairing and the row banding were already built to spec and are
-  untouched.
+  nine columns changed from flexible to fixed. A row on a flagged
+  pathway carried a ⚑ mark in the time cell where the ratified table
+  draws a full-row wash instead (`tr.hl`, `var(--alarm)` at 5%) --
+  built as drawn, glyph removed. The name/address pairing and the row
+  banding were already built to spec and are untouched.
+- **Finishing the setup wizard could land you on a dead view** (#646).
   Its exit still pointed at the stream-as-landing-page arrangement that
   #616 retired once the fall took over as the real landing page, so
   every wizard exit -- not only the new journey's -- closed onto a view
