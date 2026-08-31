@@ -90,6 +90,7 @@ function stats(overrides: Partial<Stats> = {}): Stats {
     eventsPerSecond: 7.4,
     capacity: 100000,
     count: 41208,
+    oldestHeld: null,
     windowSeconds: 72 * 3600,
     connectedClients: 1,
     ...overrides,

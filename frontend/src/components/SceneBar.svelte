@@ -30,6 +30,8 @@
   import { appState, type View } from '../lib/state.svelte'
   import { authState } from '../lib/auth.svelte'
   import { METRICS_VIEWS, metricsPref } from '../lib/metrics.svelte'
+  import { retentionState } from '../lib/retention.svelte'
+  import { SPANS, describeReach, reachSeconds, spanAvailable, unavailableReason } from '../lib/spans'
   import { buildFilterChips } from '../lib/filterChips'
   import ConnectionIndicator from './ConnectionIndicator.svelte'
   import AlarmCluster from './AlarmCluster.svelte'
@@ -52,6 +54,18 @@
   })
 
   const filterChips = $derived(buildFilterChips(appState.filters, appState.devices))
+
+  // The stream's SPAN control (#703). It sets the same display window
+  // the mobile drawer's duration selector sets, so the two can never
+  // disagree about what the table is showing; a span reads as active
+  // only when the window matches it exactly, so a duration chosen in the
+  // drawer leaves every pill quiet rather than lighting the nearest one.
+  //
+  // Availability comes from the buffer's own reach, never from the
+  // configured retention: offering a fortnight over nine hours of buffer
+  // would answer with nine hours and call thirteen days quiet.
+  const reach = $derived(reachSeconds(appState.stats?.oldestHeld, appState.now))
+  const reachWords = $derived(describeReach(reach))
 </script>
 
 <div class="scene-bar">
@@ -126,6 +140,28 @@
     </span>
   {/if}
 
+  {#if view === 'live'}
+    <span class="spans" role="group" aria-label="How far back the stream shows — {reachWords}">
+      {#each SPANS as span (span.key)}
+        {@const available = spanAvailable(span, reach)}
+        <button
+          type="button"
+          class="span"
+          class:on={retentionState.maxAgeSeconds === span.seconds}
+          disabled={!available}
+          aria-pressed={retentionState.maxAgeSeconds === span.seconds}
+          title={available ? `Show the last ${span.label}` : unavailableReason(span, reach)}
+          onclick={() => retentionState.set(span.seconds)}>{span.label}</button
+        >
+      {/each}
+      <!-- What the buffer really holds, beside the control it qualifies.
+           Not a description of the interface (round 30 struck those) but
+           the same fact the unavailable spans turn on, said once in
+           words instead of only on hover. -->
+      <span class="reach">{reachWords}</span>
+    </span>
+  {/if}
+
   <div class="status-cluster">
     <ConnectionIndicator showRate={view !== 'live'} />
     <AlarmCluster />
@@ -173,6 +209,40 @@
   .sw.on {
     color: var(--fg);
     border-bottom-color: var(--accent);
+  }
+
+  /* Round 30's `.spans`: quiet pills, the chosen one in full ink. A
+     span the buffer cannot cover is dimmed and unclickable rather than
+     hidden -- the operator should see that a fortnight exists and is
+     not held, not wonder where it went. */
+  .spans {
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+  }
+  .span {
+    background: transparent;
+    border: none;
+    padding: 0;
+    font: 500 11px var(--font-sans);
+    color: var(--fg-dim);
+    cursor: pointer;
+  }
+  .span:hover:not(:disabled) {
+    color: var(--fg);
+  }
+  .span.on {
+    color: var(--fg);
+  }
+  .span:disabled {
+    color: var(--fg-dim);
+    opacity: 0.4;
+    cursor: not-allowed;
+  }
+  .reach {
+    font: 400 10.5px var(--font-sans);
+    color: var(--fg-dim);
+    margin-left: 2px;
   }
 
   .status-cluster {
