@@ -39,6 +39,14 @@ class WatchlistState {
   // that honesty guarantee for free rather than needing to reimplement it.
   brokenCount = $derived.by(() => this.entries.filter((e) => e.enabled && this.coverage[e.id] === 'no-logging').length)
 
+  // The scene bar's "◉ 7 ○ 1" (#683, ratified round 29): watchers
+  // actually holding, i.e. enabled and not ring-broken -- the same
+  // predicate Watchlist.svelte's own class:watching already uses, so
+  // the bar's count and the page's own per-row marker never disagree.
+  heldCount = $derived.by(
+    () => this.entries.filter((e) => e.enabled && this.coverage[e.id] !== 'no-logging').length,
+  )
+
   async refresh() {
     const { entries, coverage } = await fetchWatchlistEntries()
     this.entries = entries
