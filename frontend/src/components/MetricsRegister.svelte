@@ -19,7 +19,7 @@
   // and fill it, rather than sitting at a flat pixel width regardless of
   // the card's own size. The column width is measured from the box, not
   // assumed, the same way the drum measures its own.
-  import type { MetricsHour, MinuteReading } from '../lib/metricsSeries'
+  import { FLAG_TYPE_SHORT_LABELS, type MetricsHour, type MinuteReading } from '../lib/metricsSeries'
   import { dprState, snapFill, snapLine } from '../lib/pixelGrid.svelte'
   import { formatHM } from '../lib/format'
   import MetricsTotals from './MetricsTotals.svelte'
@@ -37,18 +37,52 @@
   } = $props()
 
   const GUTTER = 66
-  // Deep enough for the stacked traffic column header (group label, name,
-  // value, scale) to clear before the axis starts. Round 30: the flag-type
-  // label used to need extra reach here for its rotation; now it is flat,
-  // one line, 10px above the axis (see `HEADER - 10` below), so it fits
-  // inside this same allowance.
-  const HEADER = 118
   const ROW_H = 8
   // Floors, not the drawn size: a column never shrinks below these, so a
   // narrow card scrolls (the paper already does) rather than crushing a
   // ribbon or a rotated flag label unreadable.
   const COL_MIN = 90
-  const FLAG_COL_MIN = 26
+
+  // #716 reverses 778203f: the owner ruled the flag-type labels' *rotation*
+  // was never the fault -- they collided with the brink rule because the
+  // anchor sat only 10px above the axis, so a rotated label's tail swept
+  // down across the rule before it, further for a longer name. Restored to
+  // -60deg / text-anchor="end", with the anchor point and header depth now
+  // sized from the geometry instead of guessed -- checked against the
+  // *longest* registered flag-type name, not whichever happens to fire this
+  // hour, so a long name that only starts firing later never collides.
+  const FLAG_ROTATE_DEG = 60
+  // Average advance per character for the app's system-sans stack
+  // (--font-sans) at .f-name's 10px size -- not measured per-glyph,
+  // deliberately generous so the estimate only ever errs toward more
+  // clearance, never less.
+  const FLAG_LABEL_CHAR_W = 6
+  const LONGEST_FLAG_LABEL = Object.values(FLAG_TYPE_SHORT_LABELS).reduce(
+    (longest, name) => (name.length > longest.length ? name : longest),
+    '',
+  )
+  const FLAG_LABEL_RAD = (FLAG_ROTATE_DEG * Math.PI) / 180
+  const FLAG_LABEL_WIDTH = LONGEST_FLAG_LABEL.length * FLAG_LABEL_CHAR_W
+  // How far the rotated label's tail swings below its own anchor (decides
+  // the header's depth) and how far it reaches left of its own column's
+  // centre (decides the flag columns' minimum width).
+  const FLAG_LABEL_DROP = Math.sin(FLAG_LABEL_RAD) * FLAG_LABEL_WIDTH
+  const FLAG_LABEL_REACH = Math.cos(FLAG_LABEL_RAD) * FLAG_LABEL_WIDTH
+  // The anchor -- text-anchor="end", so the label's *last* character --
+  // sits this far below the FLAG EPISODES group label: clear of it, high
+  // enough in the header that the sweep below still clears the axis.
+  const FLAG_LABEL_TOP = 34
+  // The label's tail, its lowest/leftmost point once rotated, stops this
+  // far above the brink/axis line rather than sweeping across it.
+  const FLAG_LABEL_CLEARANCE = 8
+
+  // Deep enough for the stacked traffic column header (group label, name,
+  // value, scale) *and* for the longest rotated flag-type label's full
+  // sweep to clear the axis, whichever needs more room.
+  const HEADER = Math.max(118, Math.ceil(FLAG_LABEL_TOP + FLAG_LABEL_DROP + FLAG_LABEL_CLEARANCE))
+  // Wide enough that one column's rotated label doesn't sweep into its
+  // neighbour's -- the reach above, plus a margin.
+  const FLAG_COL_MIN = Math.ceil(FLAG_LABEL_REACH) + 14
   const GROUP_GAP = 14
   const BOTTOM = 26
 
@@ -216,13 +250,17 @@
 
         {#each firedFlags as series, i (series.key)}
           {@const cx = flagX(i)}
-          <!-- ROUND 30: the register's oldest fault. Rotated at -60deg
-               these labels started 2px above the brink rule and swept down
-               across it -- a longer name dipped further still. Rotation
-               was never carrying anything the flat form couldn't: written
-               flat, above the line, centred on the column it names. -->
-          <text class="f-name" class:quiet={!series.spoke} x={cx} y={HEADER - 10} text-anchor="middle"
-            >{series.short}</text
+          <!-- Diagonal, per the owner's #716 reversal of 778203f: the
+               anchor sits near the top of the header (FLAG_LABEL_TOP), and
+               the label sweeps down-left from there, its tail clearing the
+               axis by FLAG_LABEL_CLEARANCE -- see the constants above. -->
+          <text
+            class="f-name"
+            class:quiet={!series.spoke}
+            x={cx}
+            y={FLAG_LABEL_TOP}
+            text-anchor="end"
+            transform="rotate(-{FLAG_ROTATE_DEG} {cx} {FLAG_LABEL_TOP})">{series.short}</text
           >
           <line
             class="axis"
