@@ -633,6 +633,38 @@ describe('LiveTable squared columns (#644)', () => {
     expect(ipCells[1]?.textContent?.trim()).toBe('10.0.40.5')
   })
 
+  // #685: the demo this issue was filed against has nothing named, so
+  // every row shows the unnamed-fallback path the test above already
+  // covers -- that data gap is #687's, not this one's. What #685 must
+  // not do is touch the pairing logic itself, so this pins the *named*
+  // side on both columns at once: a named host reads bright with its
+  // address dim and right-aligned beside it, on source and destination
+  // together, the way a real deployment with resolved names would
+  // actually render.
+  it('shows a named source and a named destination bright, each with its raw address dim beside it', () => {
+    const e = makeEvent('named-pair', {
+      srcIp: '10.0.10.2',
+      srcHostName: 'tom-desktop',
+      dstIp: '10.0.40.3',
+      dstHostName: 'pihole',
+    })
+    const { container } = render(LiveTable, { props: { events: [e] } })
+    flushSync()
+
+    const nameCells = container.querySelectorAll('.cell.addr')
+    const ipCells = container.querySelectorAll('.cell.ip')
+
+    expect(nameCells[0]?.textContent).toContain('tom-desktop')
+    expect(nameCells[0]?.textContent).not.toContain('10.0.10.2')
+    expect(nameCells[0]?.querySelector('.addr-btn')?.classList.contains('bare')).toBe(false)
+    expect(ipCells[0]?.textContent?.trim()).toBe('10.0.10.2')
+
+    expect(nameCells[1]?.textContent).toContain('pihole')
+    expect(nameCells[1]?.textContent).not.toContain('10.0.40.3')
+    expect(nameCells[1]?.querySelector('.addr-btn')?.classList.contains('bare')).toBe(false)
+    expect(ipCells[1]?.textContent?.trim()).toBe('10.0.40.3')
+  })
+
   it('renders the destination port as the bare number, keeping any friendly name to the tooltip', () => {
     const e = makeEvent('port-row', { dstIp: '10.0.40.5', dstPort: 445, dstPortName: 'smb' })
     const { container } = render(LiveTable, { props: { events: [e] } })

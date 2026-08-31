@@ -27,14 +27,42 @@ export const COLUMNS: ColumnDef[] = [
 ]
 
 // null = flexible (shares remaining width with other flexible columns,
-// via `minmax(0, 1fr)`) -- the default for anything whose content length
-// varies a lot (addresses, rule labels). A number is a fixed px width,
-// used for naturally-bounded content (timestamps, badges, protocol) and
-// for any column once the user has actually dragged it, at which point
-// it stops flexing and holds the size they chose.
+// via `minmax(FLEX_MIN_WIDTH, 1fr)`) -- the default for anything whose
+// content length varies enough that no fixed number reads right. A
+// number is a fixed px width, used for naturally-bounded content
+// (timestamps, badges, protocol, ports, addresses) and for any column
+// once the user has actually dragged it, at which point it stops
+// flexing and holds the size they chose.
 type Width = number | null
 
-const DEFAULT_WIDTHS: Width[] = [124, 92, null, 132, null, 132, 74, 76, null]
+// #685: the ratified round-29 table (the-whole.html, #s5) sets no
+// explicit column widths at all -- it is a plain `<table>` with
+// `border-collapse: collapse` and no `table-layout: fixed`, so the
+// browser's own auto layout sizes every column to its content across
+// the whole scene. There is nothing to lift a percentage from; the
+// measure below is that same content-driven sizing, worked out by hand
+// against the scene's own rows (docs/design/concepts/round-29's data,
+// mirrored in /tmp/r29/stream.txt) since this is a CSS Grid, not a
+// table, and grid has no auto-layout algorithm to defer to:
+//   time      12 chars ("14:02:11.482")
+//   action    a small flat badge (<=6 letters: ACCEPT/REJECT/MARKED/NATTED)
+//   source    a name (<=11 chars typically) or a bare geo IP + country
+//             (<=18 chars) plus its copy/edit buttons
+//   address   a bare IP (<=10 chars) or an em dash, no buttons
+//   destination/address  mirror source/address
+//   proto     3 chars ("tcp"/"udp")
+//   port      up to 4 digits
+//   rule      the one genuinely unbounded field (up to ~15 chars seen,
+//             no real ceiling) plus its copy/edit/investigate buttons --
+//             the sole flexible column, so extra width goes where it is
+//             actually needed instead of split three ways.
+// Before this, source/destination/rule were three *equal* flexible
+// columns: on a wide viewport each 1fr got the same large share of
+// leftover space regardless of what it held, which is exactly the
+// reported bug (source "given roughly a third of the table for a short
+// IP") -- and the address columns' 132px was more than an em dash or a
+// ten-character IP ever needs, reading as empty rather than measured.
+const DEFAULT_WIDTHS: Width[] = [124, 80, 160, 104, 160, 104, 60, 60, null]
 const MIN_WIDTH = 56
 // Flexible columns used to be `minmax(0, 1fr)`, which lets them shrink to
 // nothing. An address cell holds its label plus a copy button and an
@@ -48,12 +76,18 @@ const MIN_WIDTH = 56
 // scenarios failed on an element that existed but could not be seen or
 // clicked. A floor here costs a horizontal scrollbar in the narrowest
 // cases, which is the better failure.
-const FLEX_MIN_WIDTH = 96
-// v4: #644's squared columns replaced the twelve-column set with nine --
-// bumped so anyone with a v3 width array saved just falls back to the
-// new defaults instead of applying stale widths to a different column
-// set.
-const STORAGE_KEY = 'mikroview-column-widths-v4'
+//
+// #685: rule is now the only flexible column and carries three buttons
+// (copy, edit, the pushed-table lookup trigger) beside its text -- the
+// generic 96px floor left it pinched at the edge of usability, so it
+// gets a taller floor of its own.
+const FLEX_MIN_WIDTH = 140
+// v5 (#685): the column measure changed shape, not just its numbers --
+// source/destination/address went from flexible to fixed and rule is
+// now the sole flexible column -- so a v4 array (three equal flex
+// columns) would apply that stale shape to columns that no longer work
+// that way. Bumped so it falls back to the new defaults instead.
+const STORAGE_KEY = 'mikroview-column-widths-v5'
 
 function loadInitial(): Width[] {
   try {
