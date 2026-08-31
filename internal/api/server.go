@@ -35,6 +35,16 @@ type Server struct {
 	Devices    *device.Registry
 	Hub        *hub.Hub
 	Reputation *reputation.Client
+	// MACRegistry is the persisted MAC-address first/last-seen history
+	// (internal/device.MACRegistry) that already backs the new-device
+	// detector -- read-only here, for GET /api/devices/macs (issue #675):
+	// the Entities page's named-things table joins a host entity (keyed
+	// on IP) against this by MACEntry.LastIP to show its MAC and how long
+	// mikroview has known it, without inventing a second persisted
+	// per-host store. Nil-guarded in handleDeviceMACs like Reputation/
+	// NetClass above -- a Server built without one (an older test) simply
+	// answers an empty list rather than panicking.
+	MACRegistry *device.MACRegistry
 	// NetClass attributes an IP to a Tor exit / VPN / datacenter /
 	// privacy relay for the manual lookup popover (issue #114). Nil means
 	// no sources were enabled, and every use is nil-guarded -- the same
@@ -275,6 +285,7 @@ func (s *Server) routes() []route {
 		{http.MethodGet, "/api/healthz", s.handleHealthz},
 		{http.MethodGet, "/api/events", s.handleEvents},
 		{http.MethodGet, "/api/devices", s.handleDevices},
+		{http.MethodGet, "/api/devices/macs", s.handleDeviceMACs},
 		{http.MethodGet, "/api/rules", s.handleRules},
 		// The pushed rule/NAT tables (issue #186 step 4) -- session-gated
 		// reads over RouterState, entirely separate from the push

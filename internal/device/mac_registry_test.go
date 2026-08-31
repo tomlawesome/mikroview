@@ -184,6 +184,55 @@ func TestSeenEmptyMACIsNoOp(t *testing.T) {
 	}
 }
 
+// TestNoteIPPairsAnExistingMACWithAnIP covers issue #675's join: the
+// Entities page's named-things table finds a host's MAC (and its
+// first/last-seen history) by matching the entity's own IP key against
+// MACEntry.LastIP, so NoteIP has to actually land on the entry Seen
+// already created for that MAC.
+func TestNoteIPPairsAnExistingMACWithAnIP(t *testing.T) {
+	r, _ := OpenMACRegistry("")
+	r.Seen("aa:bb:cc:dd:ee:ff", time.Now())
+	r.NoteIP("aa:bb:cc:dd:ee:ff", "10.0.10.2")
+
+	list := r.List()
+	if len(list) != 1 || list[0].LastIP != "10.0.10.2" {
+		t.Fatalf("unexpected registry state: %+v", list)
+	}
+
+	// A later pairing with a different IP (a DHCP lease changing) simply
+	// overwrites -- LastIP is "where to find it now," not history.
+	r.NoteIP("aa:bb:cc:dd:ee:ff", "10.0.10.9")
+	list = r.List()
+	if list[0].LastIP != "10.0.10.9" {
+		t.Errorf("LastIP = %q, want the newer pairing", list[0].LastIP)
+	}
+}
+
+// TestNoteIPWithoutASeenMACIsNoOp covers the case NoteIP's own doc
+// comment states: it never creates an entry by itself, since an IP
+// alone (no prior Seen) has no MAC-registry identity to attach to.
+func TestNoteIPWithoutASeenMACIsNoOp(t *testing.T) {
+	r, _ := OpenMACRegistry("")
+	r.NoteIP("aa:bb:cc:dd:ee:ff", "10.0.10.2")
+	if len(r.List()) != 0 {
+		t.Errorf("expected NoteIP against an unseen MAC to create nothing, got %+v", r.List())
+	}
+}
+
+// TestNoteIPEmptyArgsAreNoOps covers the same defensive-empty-string
+// contract Seen's own TestSeenEmptyMACIsNoOp establishes.
+func TestNoteIPEmptyArgsAreNoOps(t *testing.T) {
+	r, _ := OpenMACRegistry("")
+	r.Seen("aa:bb:cc:dd:ee:ff", time.Now())
+
+	r.NoteIP("", "10.0.10.2")
+	r.NoteIP("aa:bb:cc:dd:ee:ff", "")
+
+	if r.List()[0].LastIP != "" {
+		t.Errorf("expected LastIP to stay empty against an empty mac/ip call, got %q", r.List()[0].LastIP)
+	}
+}
+
 func TestSeenTracksFirstAndLastSeen(t *testing.T) {
 	r, _ := OpenMACRegistry("")
 	t0 := time.Now()

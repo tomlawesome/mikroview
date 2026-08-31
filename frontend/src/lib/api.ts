@@ -20,6 +20,7 @@ import type {
   FlagTimeBucket,
   Healthz,
   HourTopBucket,
+  MACRegistryEntry,
   ReputationResult,
   RuleUsage,
   Stats,
@@ -252,6 +253,18 @@ export async function fetchDevices(): Promise<Device[]> {
   if (!res.ok) throw new ApiError(`fetchDevices: ${res.status}`, res.status)
   const body = await res.json()
   return body.devices ?? []
+}
+
+// fetchDeviceMACs serves the persisted MAC-registry history (issue #675:
+// internal/device.MACRegistry via GET /api/devices/macs) -- the source
+// for the Entities page's named-things table's mac/first-seen/last-seen
+// columns, joined client-side against a host entity's own IP key by
+// MACRegistryEntry.lastIp.
+export async function fetchDeviceMACs(): Promise<MACRegistryEntry[]> {
+  const res = await fetch('/api/devices/macs')
+  if (!res.ok) throw new ApiError(`fetchDeviceMACs: ${res.status}`, res.status)
+  const body = await res.json()
+  return body.macs ?? []
 }
 
 // fetchRules serves every rule label mikroview has ever seen fire (issue
