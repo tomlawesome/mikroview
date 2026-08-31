@@ -2,7 +2,11 @@
 
 package engine
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/tomlawesome/mikroview/internal/flags"
+)
 
 func intPtr(v int) *int { return &v }
 
@@ -96,6 +100,96 @@ func TestRouteDetectionPopulatesFlagFields(t *testing.T) {
 	}
 	if len(flag.Evidence.Ports) != 2 || len(flag.Evidence.Hosts) != 1 {
 		t.Errorf("flag.Evidence = %+v, evidence did not carry through", flag.Evidence)
+	}
+}
+
+// TestRouteDetectionCarriesExactPairsTotalAndSrcMAC is #654's routeToFlag
+// pin for the exact-count case: Emission.Pairs/PairsTotal/SrcMAC convert
+// into flags.Evidence.Pairs/PairsTotal/SrcMAC (a distinct flags.HostPort
+// type from engine.HostPort -- see routeToFlag's own conversion, and
+// flags.HostPort's doc comment for why it is its own copy rather than an
+// import of the engine type), and PairsTotalIsFloor stays false: this is
+// the "50 of 214 pairs" case, not the "50 of 200+" one below.
+func TestRouteDetectionCarriesExactPairsTotalAndSrcMAC(t *testing.T) {
+	def := NewDefinition("Critical port", IntentDetection, KindDeclarative)
+	em := Emission{
+		DefinitionID: def.ID,
+		Target:       "203.0.113.5",
+		Detail:       "4 attempts",
+		Pairs:        []HostPort{{Host: "192.168.1.10", Port: 22}},
+		PairsTotal:   214,
+		SrcMAC:       "aa:bb:cc:dd:ee:ff",
+	}
+
+	routed, err := Route(def, em)
+	if err != nil {
+		t.Fatalf("Route: %v", err)
+	}
+	ev := routed.Detection.Evidence
+	want := flags.HostPort{Host: "192.168.1.10", Port: 22}
+	if len(ev.Pairs) != 1 || ev.Pairs[0] != want {
+		t.Errorf("flag.Evidence.Pairs = %v, want [%v]", ev.Pairs, want)
+	}
+	if ev.PairsTotal != 214 {
+		t.Errorf("flag.Evidence.PairsTotal = %d, want 214 (the exact count, independent of the capped Pairs sample)", ev.PairsTotal)
+	}
+	if ev.PairsTotalIsFloor {
+		t.Error("flag.Evidence.PairsTotalIsFloor = true, want false: this emission's total is exact")
+	}
+	if ev.SrcMAC != "aa:bb:cc:dd:ee:ff" {
+		t.Errorf("flag.Evidence.SrcMAC = %q, want %q", ev.SrcMAC, "aa:bb:cc:dd:ee:ff")
+	}
+}
+
+// TestRouteDetectionCarriesPairsTotalIsFloor is
+// TestRouteDetectionCarriesExactPairsTotalAndSrcMAC's counterpart for
+// the "at least this many" case (EvidenceSet.PairsTotalIsFloor, once
+// AddPair's maxEvidencePairsTracked ceiling has turned away a genuinely
+// new pair) -- pinned as its own test, distinctly from the exact case
+// above, because the two must render differently downstream ("50 of
+// 200+" vs "50 of 214") and a single test asserting only PairsTotal's
+// number would not catch a routeToFlag that forgot to carry the flag
+// through.
+func TestRouteDetectionCarriesPairsTotalIsFloor(t *testing.T) {
+	def := NewDefinition("Critical port", IntentDetection, KindDeclarative)
+	em := Emission{
+		DefinitionID:      def.ID,
+		Target:            "203.0.113.5",
+		Detail:            "4 attempts",
+		Pairs:             []HostPort{{Host: "192.168.1.10", Port: 22}},
+		PairsTotal:        200,
+		PairsTotalIsFloor: true,
+	}
+
+	routed, err := Route(def, em)
+	if err != nil {
+		t.Fatalf("Route: %v", err)
+	}
+	ev := routed.Detection.Evidence
+	if ev.PairsTotal != 200 {
+		t.Errorf("flag.Evidence.PairsTotal = %d, want 200", ev.PairsTotal)
+	}
+	if !ev.PairsTotalIsFloor {
+		t.Error("flag.Evidence.PairsTotalIsFloor = false, want true: the emission marked this total as a lower bound")
+	}
+}
+
+// TestRouteDetectionOmitsPairsTotalWhenThereAreNoPairs pins routeToFlag's
+// own "nothing to say" convention: an emission with no Pairs at all
+// leaves flags.Evidence.Pairs/PairsTotal/PairsTotalIsFloor at their zero
+// values, the same "empty is the common, unset case" convention every
+// other Evidence field already follows.
+func TestRouteDetectionOmitsPairsTotalWhenThereAreNoPairs(t *testing.T) {
+	def := NewDefinition("Critical port", IntentDetection, KindDeclarative)
+	em := Emission{DefinitionID: def.ID, Target: "203.0.113.5", Detail: "x"}
+
+	routed, err := Route(def, em)
+	if err != nil {
+		t.Fatalf("Route: %v", err)
+	}
+	ev := routed.Detection.Evidence
+	if ev.Pairs != nil || ev.PairsTotal != 0 || ev.PairsTotalIsFloor {
+		t.Errorf("flag.Evidence = %+v, want zero Pairs/PairsTotal/PairsTotalIsFloor when the emission carried none", ev)
 	}
 }
 

@@ -70,6 +70,16 @@ jobs:
           npm ci
           npx svelte-check --tsconfig ./tsconfig.app.json
 
+      # The frontend unit suite (#684). It ran nowhere in CI until this step
+      # existed, so every one of its assertions gated nothing and a test could
+      # fail on dev indefinitely without anyone finding out -- which is exactly
+      # what #598 did. Type checking is not a substitute: svelte-check above
+      # proves the code compiles, not that it behaves.
+      - name: Frontend unit tests
+        run: |
+          cd frontend
+          npm test
+
       # Real build, not a proxy for one -- the size budget just below
       # measures this output, and a stale or missing dist/ would make
       # that check either fail for the wrong reason or, worse, silently

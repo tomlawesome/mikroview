@@ -17,6 +17,6 @@ describe('PageHeader', () => {
 
   it('declares read-only once, in the ratified wording, when asked to', () => {
     render(PageHeader, { title: 'Users', readOnly: true })
-    expect(screen.getByText('READ-ONLY — ADMINS EDIT')).toBeTruthy()
+    expect(screen.getByText('READ-ONLY')).toBeTruthy()
   })
 })

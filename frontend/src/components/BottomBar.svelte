@@ -34,7 +34,11 @@
   import RailIcon from './RailIcon.svelte'
 
   const isAdmin = $derived(authState.state === 'authenticated' && authState.role === 'admin')
-  const groups = $derived(visibleGroups(isAdmin))
+  // #653: the user tier reaches Watchlist and Entities; the owner-level
+  // rows still need isAdmin. Both flags go to visibleGroups so the tier
+  // ordering stays in authState.
+  const canEdit = $derived(authState.state === 'authenticated' && authState.canEdit)
+  const groups = $derived(visibleGroups(isAdmin, canEdit))
 
   // Same store, same wording as NavRail's Flags row -- see that
   // component's comment for why activeCount is already "open
