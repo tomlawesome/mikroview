@@ -375,3 +375,212 @@ describe('the ascend control, ported inside the map\'s own flow (#682)', () => {
     expect(ascend).not.toBeNull() // inside .stage, not a sibling of it
   })
 })
+
+describe('the round-30 layout (#699)', () => {
+  // The lanes come from a pushed /ip address table plus observed
+  // traffic, the same way the real map builds them.
+  function pushLanes(n: number, hostName = (i: number) => `host-${i}`) {
+    zonesState.pushed = Array.from({ length: n }, (_, i) => ({
+      address: `10.0.${i + 1}.1/24`,
+      network: `10.0.${i + 1}.0`,
+      interface: `bridge${i + 1}`,
+      comment: `Lane ${i + 1}`,
+    }))
+    appState.events = Array.from({ length: n }, (_, i) =>
+      event({ inInterface: `bridge${i + 1}`, srcIp: `10.0.${i + 1}.20`, srcHostName: hostName(i) }),
+    )
+  }
+
+  function cards(container: HTMLElement) {
+    return [...container.querySelectorAll('.zone .isl')].map((r) => ({
+      x: Number(r.getAttribute('x')),
+      w: Number(r.getAttribute('width')),
+      cx: Number(
+        (r.closest('.zone')?.getAttribute('transform') ?? 'translate(0 0)').replace(/translate\(([-\d.]+).*/, '$1'),
+      ),
+    }))
+  }
+
+  // The defect: laneX() spread N lanes between two fixed x values, so
+  // the pitch fell below the card's own width once there were five.
+  // Five is also as many lanes as the map ever draws (zones.svelte.ts
+  // caps the list), which is exactly the case that used to overlap.
+  for (const n of [2, 3, 4, 5]) {
+    it(`lays ${n} lanes out without the cards overlapping`, () => {
+      pushLanes(n)
+      const { container } = render(Topography)
+      flushSync()
+
+      const laid = cards(container)
+      expect(laid.length).toBe(n)
+      const edges = laid.map((c) => ({ l: c.cx + c.x, r: c.cx + c.x + c.w })).sort((a, b) => a.l - b.l)
+      for (let i = 1; i < edges.length; i++) expect(edges[i].l).toBeGreaterThanOrEqual(edges[i - 1].r)
+      // and the whole row stays on the 1400-unit stage
+      expect(edges[0].l).toBeGreaterThanOrEqual(0)
+      expect(edges[edges.length - 1].r).toBeLessThanOrEqual(1400)
+    })
+  }
+
+  it('keeps round 30’s own pitch and card while the row fits', () => {
+    pushLanes(4)
+    const { container } = render(Topography)
+    flushSync()
+
+    const laid = cards(container).sort((a, b) => a.cx - b.cx)
+    expect(laid.every((c) => c.w === 216)).toBe(true)
+    expect(laid[1].cx - laid[0].cx).toBeCloseTo(271, 5)
+    // centred on the waist, like the drawing's own 285..1116 row
+    expect((laid[0].cx + laid[3].cx) / 2).toBeCloseTo(700, 5)
+  })
+
+  it('budgets the host row to the card rather than always drawing three', () => {
+    pushLanes(2, () => 'a-really-long-workstation-hostname')
+    zonesState.pushed = [
+      { address: '10.0.1.1/24', network: '10.0.1.0', interface: 'bridge1', comment: 'Lane 1' },
+      { address: '10.0.2.1/24', network: '10.0.2.0', interface: 'bridge2', comment: 'Lane 2' },
+    ]
+    appState.events = ['aa', 'bb', 'cc'].map((s, i) =>
+      event({ inInterface: 'bridge1', srcIp: `10.0.1.${20 + i}`, srcHostName: `${s}-a-really-long-workstation-hostname` }),
+    )
+    const { container } = render(Topography)
+    flushSync()
+
+    const row = container.querySelector('.zone .n-hosts')
+    expect(row).not.toBeNull()
+    // one name fits a 216-wide card at that length; the rest become +N,
+    // and the clip is the backstop behind the estimate.
+    expect(row?.querySelectorAll('.host-link').length).toBe(1)
+    expect(row?.textContent).toContain('+2')
+    expect(row?.getAttribute('clip-path')).toMatch(/^url\(#.+-hosts\)$/)
+  })
+
+  it('draws the aggregate bar flush with the card, 16 tall', () => {
+    pushLanes(1)
+    flagsState.list = [flag('port_scan', '10.0.1.20')]
+    const { container } = render(Topography)
+    flushSync()
+
+    const bar = container.querySelector('.zone .hb')
+    expect(bar).not.toBeNull()
+    // fullBarPath starts at x0 + h/2 with h = 16 against a -108 edge
+    expect(bar?.getAttribute('d')).toMatch(/^M -100 0 H 100 /)
+    expect(bar?.getAttribute('transform')).toBe('translate(0 110)')
+  })
+
+  it('draws no floating "not drawn" or "unjudged" caption on the map', () => {
+    // Both captions need their trigger present: observed pairs with no
+    // rule table pushed ("unjudged"), and more pairs than the 12-edge
+    // calm draws ("+N pairs not drawn").
+    pushLanes(5)
+    const ifaces = ['bridge1', 'bridge2', 'bridge3', 'bridge4', 'bridge5', 'ether1']
+    const pairs: ClientEvent[] = []
+    for (const from of ifaces) {
+      for (const to of ifaces) {
+        if (from === to) continue
+        pairs.push(event({ inInterface: from, outInterface: to, srcIp: '10.0.1.20', dstPort: 443, action: 'accept' }))
+      }
+    }
+    appState.events = [...appState.events, ...pairs]
+    expect(policyState.anyPushed).toBe(false)
+    const { container } = render(Topography)
+    flushSync()
+
+    expect(container.querySelectorAll('.edge-g').length).toBeGreaterThan(0)
+
+    const texts = [...container.querySelectorAll('.stage svg text')].map((t) => t.textContent ?? '')
+    expect(texts.some((t) => /pairs? not drawn/.test(t))).toBe(false)
+    expect(texts.some((t) => /^unjudged — push the rule table/.test(t))).toBe(false)
+  })
+
+  it('puts every edge label on a plate rather than bare on its line', () => {
+    zonesState.pushed = [{ address: '10.0.1.1/24', network: '10.0.1.0', interface: 'bridge1', comment: 'Lane 1' }]
+    appState.events = [
+      event({ inInterface: 'bridge1', outInterface: 'ether1', srcIp: '10.0.1.20', dstPort: 443, action: 'accept' }),
+      event({ inInterface: 'ether1', outInterface: 'bridge1', srcIp: '203.0.113.9', dstPort: 445, action: 'drop' }),
+    ]
+    const { container } = render(Topography)
+    flushSync()
+
+    const badges = [...container.querySelectorAll('.edge-badge')]
+    expect(badges.length).toBeGreaterThan(0)
+    for (const b of badges) {
+      const plate = b.parentElement?.querySelector('.edge-plate')
+      expect(plate).not.toBeNull()
+      expect(Number(plate?.getAttribute('width'))).toBeGreaterThan(0)
+    }
+  })
+
+  it('reveals a zone dot per lane at survey instead of tilting the cards', () => {
+    pushLanes(3)
+    const { container } = render(Topography)
+    flushSync()
+
+    // The dots exist at every altitude; the stylesheet is what hides
+    // them, so assert the structure the survey rule keys off.
+    expect(container.querySelectorAll('.zone .isl-card').length).toBe(3)
+    expect(container.querySelectorAll('.zone .g-dot .zone-dot').length).toBe(3)
+    expect(container.querySelectorAll('.zone .g-dot .zone-label').length).toBe(3)
+  })
+
+  it('adds a services layer and a client tier rather than scaling the map up', () => {
+    zonesState.pushed = [{ address: '10.0.1.1/24', network: '10.0.1.0', interface: 'bridge1', comment: 'Lane 1' }]
+    appState.events = [
+      event({ inInterface: 'bridge1', outInterface: 'ether1', srcIp: '10.0.1.20', srcHostName: 'desk', dstPort: 443, action: 'accept' }),
+    ]
+    const { container } = render(Topography)
+    flushSync()
+
+    expect(container.querySelector('.camera .svc')).not.toBeNull()
+    expect(container.querySelector('.camera .cli')).not.toBeNull()
+    expect(container.querySelectorAll('.cli .c-label').length).toBeGreaterThan(0)
+    expect(container.querySelector('.svc .svc-t')?.textContent).toContain(':443')
+  })
+
+  it('gives the internet island an aggregate bar, from public addresses only', () => {
+    zonesState.pushed = [{ address: '10.0.1.1/24', network: '10.0.1.0', interface: 'bridge1', comment: 'Lane 1' }]
+    appState.events = [event({ inInterface: 'bridge1', srcIp: '10.0.1.20' })]
+    flagsState.list = [flag('port_scan', '203.0.113.77'), flag('port_scan', '10.0.1.20')]
+    const { container } = render(Topography)
+    flushSync()
+
+    const island = container.querySelector('.passive .hbar-g .hb')
+    expect(island).not.toBeNull()
+    // one flag is public, one is inside a lane -- the island counts only
+    // the public one, and never "whatever no lane claimed".
+    const label = island?.closest('.hbar-g')?.getAttribute('aria-label') ?? ''
+    expect(label).toMatch(/1 open flag/)
+  })
+
+  it('never lets two edge-label plates cover each other', () => {
+    // Five lanes all talking to the internet put five labels in one
+    // corridor: staggering alone cannot separate them, so the placement
+    // pass has to.
+    zonesState.pushed = Array.from({ length: 5 }, (_, i) => ({
+      address: `10.0.${i + 1}.1/24`,
+      network: `10.0.${i + 1}.0`,
+      interface: `bridge${i + 1}`,
+      comment: `Lane ${i + 1}`,
+    }))
+    appState.events = Array.from({ length: 5 }, (_, i) =>
+      event({ inInterface: `bridge${i + 1}`, outInterface: 'ether1', srcIp: `10.0.${i + 1}.20`, dstPort: 443, action: 'accept' }),
+    )
+    const { container } = render(Topography)
+    flushSync()
+
+    const plates = [...container.querySelectorAll('.edge-plate')].map((p) => ({
+      x: Number(p.getAttribute('x')),
+      y: Number(p.getAttribute('y')),
+      w: Number(p.getAttribute('width')),
+      h: Number(p.getAttribute('height')),
+    }))
+    expect(plates.length).toBeGreaterThan(1)
+    for (let a = 0; a < plates.length; a++) {
+      for (let b = a + 1; b < plates.length; b++) {
+        const p1 = plates[a]
+        const p2 = plates[b]
+        const overlaps = p1.x < p2.x + p2.w && p2.x < p1.x + p1.w && p1.y < p2.y + p2.h && p2.y < p1.y + p1.h
+        expect(overlaps).toBe(false)
+      }
+    }
+  })
+})
