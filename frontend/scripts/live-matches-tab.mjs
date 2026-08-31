@@ -34,8 +34,7 @@
 //    "did the entry open" assertion below counts elements and reads
 //    text instead of asking whether a box is visible.
 
-import { chromium } from 'playwright'
-import { session, feedRaw, check, done, goTo } from './live-browser.mjs'
+import { session, feedRaw, check, done, goTo, launchBrowser } from './live-browser.mjs'
 
 const URL_BASE = process.env.MV_URL
 
@@ -265,7 +264,7 @@ const VIEWER_PASS = 'live-viewer-584-matches-password'
 const createRes = await api('POST', '/api/auth/users', { username: VIEWER_USER, password: VIEWER_PASS, role: 'viewer' })
 check(createRes.status === 201, `a viewer account is created (${createRes.status})`)
 
-const browser = await chromium.launch()
+const browser = await launchBrowser()
 const viewerCtx = await browser.newContext({ ignoreHTTPSErrors: true })
 const viewerPage = await viewerCtx.newPage()
 await viewerPage.goto(URL_BASE, { waitUntil: 'networkidle' })
