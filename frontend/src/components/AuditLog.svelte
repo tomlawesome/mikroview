@@ -156,6 +156,33 @@
     return `${w.lead}${w.key}${w.tail}`
   }
 
+  // #736 (corrected 2026-08-31): the backend's action set is almost
+  // entirely mutations -- definition.*, detector.update, entity.*,
+  // coverage.*, flag.clear, store.retention, token.*, user.*, plus
+  // exactly ingest.routeros(.refused) -- so a mutation/refusal/routine
+  // split left one bucket holding ~95% of rows and the log one colour
+  // again. Classify by subject family instead, since that is what
+  // actually varies down the page. Refusal outranks its family: a
+  // refused push is a refusal first, checked before any family prefix.
+  // ingest.routeros and anything this classifier has never seen both
+  // fall through to 'routine' -- unstyled, quiet body ink -- rather
+  // than guessing an unrecognised action into another family's meaning.
+  // Colour is never the only channel: describeEntry's own lead verb
+  // ("revoked", "refused ingest from", "ingested from") already states
+  // the distinction in words, so a colourblind reader or a monochrome
+  // screenshot loses nothing.
+  type EventKind = 'refusal' | 'identity' | 'engine' | 'naming' | 'flag' | 'retention' | 'routine'
+
+  function entryKind(action: string): EventKind {
+    if (action.endsWith('.refused')) return 'refusal'
+    if (action.startsWith('token.') || action.startsWith('user.')) return 'identity'
+    if (action.startsWith('definition.') || action.startsWith('detector.')) return 'engine'
+    if (action.startsWith('entity.') || action.startsWith('coverage.')) return 'naming'
+    if (action === 'flag.clear') return 'flag'
+    if (action === 'store.retention') return 'retention'
+    return 'routine'
+  }
+
   const filtered = $derived(
     auditState.list.filter(
       (e) =>
@@ -233,10 +260,10 @@
         {:else}
           {#each rows as e (e.id)}
             {@const w = describeEntry(e)}
-            <tr>
+            <tr class="row-{entryKind(e.action)}">
               <td class="mono when" title={formatHM(e.timestamp)}>{formatWhen(e.timestamp, appState.now)}</td>
               <td class="actor">{e.actor}</td>
-              <td class="what">{w.lead}{#if w.key}<span class="k">{w.key}</span>{/if}{w.tail}</td>
+              <td class="what"><span class="action">{w.lead}{#if w.key}<span class="k">{w.key}</span>{/if}</span>{#if w.tail}<span class="detail">{w.tail}</span>{/if}</td>
             </tr>
           {/each}
         {/if}
@@ -408,6 +435,58 @@
   .what .k {
     color: var(--fg);
     font-weight: 600;
+  }
+
+  /* #736 (corrected 2026-08-31): the detail/quote a describeEntry tail
+     carries (e.g. "· expected, speed test") stays body ink regardless of
+     the row's family -- only the action (lead verb + subject) takes the
+     ink below, so the log doesn't trade one uniform page for a
+     rainbow-coloured one. A plain rule directly on .detail always wins
+     over the inherited family colour from .what, no matter the family
+     selector's own specificity. */
+  .what .detail {
+    color: var(--fg-muted);
+  }
+
+  /* Colour the action by its subject family, not by mutation/refusal/
+     routine -- the backend's action set is almost entirely mutations
+     (definition.*, detector.update, entity.*, coverage.*, flag.clear,
+     store.retention, token.*, user.*), so that split left one bucket
+     holding ~95% of rows and the log one colour again (see entryKind's
+     comment). Reuses the app's existing action-badge inks, no audit-only
+     palette. Refusal outranks its family and is checked first in
+     entryKind. ingest.routeros and any action this classifier has never
+     seen fall through to unstyled routine -- quiet body ink, per the
+     .what/.what .k rules above -- rather than borrowing another
+     family's meaning. */
+  tr.row-refusal .what .action,
+  tr.row-refusal .what .action .k {
+    color: var(--reject);
+  }
+
+  tr.row-identity .what .action,
+  tr.row-identity .what .action .k {
+    color: var(--marked);
+  }
+
+  tr.row-engine .what .action,
+  tr.row-engine .what .action .k {
+    color: var(--log);
+  }
+
+  tr.row-naming .what .action,
+  tr.row-naming .what .action .k {
+    color: var(--natted);
+  }
+
+  tr.row-flag .what .action,
+  tr.row-flag .what .action .k {
+    color: var(--now);
+  }
+
+  tr.row-retention .what .action,
+  tr.row-retention .what .action .k {
+    color: var(--accent);
   }
 
   @media (max-width: 700px) {
