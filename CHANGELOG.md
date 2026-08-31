@@ -81,6 +81,23 @@ rewritten.
   ("tom-desktop") was mockup placeholder text -- `auth.Session` tracks
   no device/user-agent -- so the row says "this device" rather than
   inventing one.
+- **The docket's flag drawer explains itself: a headline, a story, the
+  episode's shape, a note on clear** (#678). Round 29's drawer gains the
+  plain-English headline and prose story the mockup ratified -- "One
+  source, twenty doors.", "A camera asking for a mail server." --
+  generated per flag type from the evidence the flag already carries
+  (`lib/flagNarrative.ts`), and the episode's shape -- still arriving,
+  stopped, or intermittent, e.g. "first 13:46 · last 13:52 · still
+  arriving" or "every ~2 m since 13:28" -- derived purely from the
+  flag's own timestamps (`lib/episodeShape.ts`). Clear now opens an
+  inline note field before clearing; the note travels to
+  `POST /api/flags/{id}/clear` and lands on the same admin-mutation
+  audit entry the clear itself already writes (#679's ruling that a
+  clear's note belongs in the existing log, not a second one). The
+  where value in a flag's collapsed row now opens the topography at the
+  host it resolves to, rather than the live stream -- "watch this
+  pathway"/"watch this source" is deliberately not part of this change;
+  it depends on the watchlist tab #676 is still building.
 - **Per-hour top talker and top port, answered by the ring itself**
   (#644). `Store.HourTops` computes each axis minute's winning source
   and destination port from the events the ring actually holds, under
