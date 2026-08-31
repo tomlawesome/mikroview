@@ -65,6 +65,13 @@ type deviceView struct {
 	// never-contacted device is never flagged even though it's also not
 	// "live" here.
 	Status string `json:"status"`
+	// RouterOSVersion is what this device last reported on a routerstate
+	// push (issue #675's router cards -- "RouterOS 7.20.1 ... "), empty
+	// until its first push arrives. Read from RouterState rather than
+	// held on device.Info itself: routerstate is the one store that
+	// already tracks it (main.go wires the same push into both), and
+	// duplicating it into a second store risks the two disagreeing.
+	RouterOSVersion string `json:"routerosVersion,omitempty"`
 }
 
 func (s *Server) handleDevices(w http.ResponseWriter, r *http.Request) {
@@ -72,9 +79,36 @@ func (s *Server) handleDevices(w http.ResponseWriter, r *http.Request) {
 	infos := s.Devices.List()
 	views := make([]deviceView, 0, len(infos))
 	for _, info := range infos {
-		views = append(views, deviceView{Info: info, Status: deviceStatus(info, s.DeviceStaleAfter, now)})
+		v := deviceView{Info: info, Status: deviceStatus(info, s.DeviceStaleAfter, now)}
+		if s.RouterState != nil {
+			if version, _, ok := s.RouterState.RouterOSVersion(info.ID); ok {
+				v.RouterOSVersion = version
+			}
+		}
+		views = append(views, v)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"devices": views})
+}
+
+// handleDeviceMACs serves the persisted MAC-registry history (issue
+// #675): every MAC mikroview has ever seen, its first/last-seen times,
+// and the IP it was last paired with (device.MACRegistry.NoteIP). Same
+// tier and same "read-only usage data" reasoning as handleRules above --
+// this is the registry that already exists to answer "is this MAC new,"
+// exposed for the Entities page to join a named host entity (keyed on
+// IP) against its MAC and how long mikroview has known it. A nil
+// MACRegistry (a Server built without one) answers an empty list rather
+// than panicking, same convention as Reputation/NetClass elsewhere on
+// this struct.
+func (s *Server) handleDeviceMACs(w http.ResponseWriter, r *http.Request) {
+	var macs []device.MACEntry
+	if s.MACRegistry != nil {
+		macs = s.MACRegistry.List()
+	}
+	if macs == nil {
+		macs = []device.MACEntry{}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"macs": macs})
 }
 
 // handleRules serves every rule label mikroview has ever seen fire

@@ -86,6 +86,23 @@ export interface Device {
   // server-side, read-time, on every GET /api/devices -- always fresh,
   // never a value this client itself has to derive or keep in sync.
   status: 'live' | 'stale' | 'never_seen'
+  // routerosVersion (issue #675's router cards) is what this device last
+  // reported on a routerstate push -- empty until its first push
+  // arrives, same absence-is-not-evidence convention as everything else
+  // routerstate-derived.
+  routerosVersion?: string
+}
+
+// Mirrors internal/device.MACEntry's JSON shape (GET /api/devices/macs,
+// issue #675) -- one persisted MAC address' first/last-seen history and
+// the IP it was last paired with. lastIp is what the Entities page's
+// named-things table joins against a host entity's own IP key; absent
+// when this MAC has never been paired with one.
+export interface MACRegistryEntry {
+  mac: string
+  firstSeen: string
+  lastSeen: string
+  lastIp?: string
 }
 
 // Mirrors internal/store/query.go's Result.
