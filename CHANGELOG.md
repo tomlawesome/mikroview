@@ -18,6 +18,26 @@ rewritten.
 
 ### Added
 
+- **Settings' three previously-unbuilt rows** (#677). Detection gains a
+  tunable port-scan window (`20 ports / 60 s`, editable next to "flag
+  types ... tune..."), reading and writing the port_scan definition's
+  own `threshold`/`window` params through the exact PUT
+  `/api/definitions/{id}` the watcher bench already uses -- no second
+  store. Memory gains a persistence row: the ratified copy read `JSON
+  store · 14 d`, but no such feature exists (`internal/persist`'s own
+  package doc calls the live event stream the one deliberate exception
+  left in-memory-only), so the row states that live truth instead of a
+  fabricated retention. Account gains a sessions row -- "this device,
+  signed in 4 d · sign out everywhere" -- backed by a new
+  self-serve `POST /api/auth/logout-all`
+  (`SessionStore.RevokeAllForUser` against the caller's own account,
+  then a fresh session so the calling tab stays signed in, the same
+  revoke-then-recreate shape `POST /api/auth/password` already uses),
+  and `GET /api/auth/session` now threads the session's own `IssuedAt`
+  through as `signedInSince`. The device name in the ratified copy
+  ("tom-desktop") was mockup placeholder text -- `auth.Session` tracks
+  no device/user-agent -- so the row says "this device" rather than
+  inventing one.
 - **Per-hour top talker and top port, answered by the ring itself**
   (#644). `Store.HourTops` computes each axis minute's winning source
   and destination port from the events the ring actually holds, under

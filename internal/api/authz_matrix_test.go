@@ -116,6 +116,13 @@ var authzMatrix = []routeExpectation{
 			"way /api/auth/oidc/link takes its target from the session rather than the request. #653 introduced the " +
 			"viewer tier below user, and this stays open to it for the same reason -- even the lowest tier must be " +
 			"able to change its own credential"},
+	{http.MethodPost, "/api/auth/logout-all", accessViewer,
+		"ends every session the caller holds, everywhere, then re-establishes the caller's own -- the settings " +
+			"page's 'sign out everywhere' (#677). Same reasoning as /api/auth/password directly above: it acts only " +
+			"on the session's own account (SessionStore.RevokeAllForUser(user.ID), the ID coming from the session, " +
+			"never a request body), so there is nothing an admin-only gate would add, and the viewer tier must be " +
+			"able to end its own stolen or forgotten sessions same as any other tier. Ending someone *else's* " +
+			"sessions stays admin-only, via DELETE /api/auth/users/{id} below"},
 	{http.MethodGet, "/api/auth/oidc/login", accessPublic,
 		"starts the SSO redirect; a login must work before a session exists"},
 	{http.MethodGet, "/api/auth/oidc/callback", accessPublic,
