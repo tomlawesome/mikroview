@@ -76,6 +76,12 @@ clean:
 # phases, means the instance goes away whether the run finishes, fails or
 # is killed. `down` is idempotent, so running it twice costs nothing.
 #
+# The INT/TERM handler ends in `exit`, and that is not decoration: bash
+# resumes the script where it left off once a signal handler returns, so
+# a handler that only cleans up leaves Ctrl-C aborting the browser phase
+# and then running the whole standalone phase anyway -- minutes of work
+# after the operator asked it to stop, observed while verifying #660.
+#
 # Armed AFTER `up`, never before, and that ordering matters. `down` ends
 # with `rm -rf "$$MV_DIR"`, and two checkouts that hash to the same slot
 # share that directory. `up` refuses to start when something already
@@ -84,7 +90,8 @@ clean:
 # way out of the refusal it just respected.
 live-check:
 	@eval "$$(scripts/live-env.sh up)"; \
-	  trap 'scripts/live-env.sh down >/dev/null 2>&1 || true' EXIT INT TERM; \
+	  trap 'scripts/live-env.sh down >/dev/null 2>&1 || true' EXIT; \
+	  trap 'scripts/live-env.sh down >/dev/null 2>&1 || true; exit 130' INT TERM; \
 	  status=0; \
 	  scripts/run-scenarios.sh || status=1; \
 	  scripts/live-env.sh down; \
