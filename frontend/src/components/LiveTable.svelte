@@ -8,6 +8,8 @@
   import { groupModeState } from '../lib/groupMode.svelte'
   import { flaggedSources, groupEvents, drawerEvents, hiddenInDrawer } from '../lib/grouping'
   import { flagsState } from '../lib/flags.svelte'
+  import { fallState } from '../lib/fall.svelte'
+  import { footLineFacts } from '../lib/footLine'
   import { viewportState } from '../lib/viewport.svelte'
   import type { ClientEvent, FirewallEvent } from '../lib/types'
   import EventRow from './EventRow.svelte'
@@ -15,6 +17,7 @@
   import EventDetailSheet from './EventDetailSheet.svelte'
   import GhostRows from './GhostRows.svelte'
   import { wizardState } from '../lib/wizard.svelte'
+  import { onMount } from 'svelte'
 
   // Both optional -- default to the live view's own state, so the
   // existing `<LiveTable />` call site (App.svelte's 'live' branch)
@@ -243,6 +246,36 @@
   // one lookup per rendered row.
   const flagged = $derived(flaggedSources(flagsState.list))
 
+  // The foot line (#691, round 30's .foot-legend): the three facts of
+  // the day, along the bottom edge of the stream. See lib/footLine.ts
+  // for what each one is and when each one is absent -- an empty array
+  // means the band itself does not render, never an empty strip.
+  //
+  // Derived from the whole buffer and the whole flag list, not from
+  // `rendered`: these are facts about the deployment, the same
+  // relationship the whisper strip directly above this table already
+  // has to it. A filter narrows which rows you are looking at; it does
+  // not make a repeating refusal or a dark boundary stop being true.
+  const footFacts = $derived(
+    footLineFacts({
+      flags: flagsState.list,
+      events: appState.events,
+      boundaries: fallState.boundaries,
+      nowMs: appState.now,
+    }),
+  )
+
+  // The dark-boundary fact reads the pushed rule tables through
+  // fallState, which today only the Fall card ever fetches -- and the
+  // deck mounts just the centred card and its neighbours, so the Stream
+  // can be open with fallState still holding nothing. One read on
+  // mount, and only when it is empty: rule tables change on a push, not
+  // per second, and Fall.svelte's own poll keeps them fresh whenever
+  // that card is the one in view.
+  onMount(() => {
+    if (fallState.boundaries.length === 0) void fallState.refresh()
+  })
+
   // Which groups are open. Keyed by the group key rather than by index,
   // so an open drawer stays with its group as new events arrive.
   let openGroups = $state(new Set<string>())
@@ -444,6 +477,25 @@
       {/if}
     </div>
   {/if}
+
+  <!-- Absent entirely when there is nothing true to put in it, and one
+       or two facts wide when only one or two of the three have data --
+       the band never holds a placeholder for a fact it does not have. -->
+  {#if footFacts.length > 0}
+    <div class="foot-legend" aria-label="What the stream is showing">
+      {#each footFacts as fact (fact.key)}
+        <!-- Each fact lays its own three pieces out with a gap rather
+             than relying on literal spaces in the strings: the salient
+             token is an element, and whitespace either side of an
+             expression is not something to leave to markup formatting. -->
+        <span class="fact">
+          {#if fact.lead}<span>{fact.lead}</span>{/if}
+          <span class="k">{fact.salient}</span>
+          {#if fact.tail}<span>{fact.tail}</span>{/if}
+        </span>
+      {/each}
+    </div>
+  {/if}
 </div>
 
 {#if selectedEvent}
@@ -455,6 +507,39 @@
 {/if}
 
 <style>
+  /* The foot line (#691, round 30's .foot-legend): a real band on the
+     stream's own footing, not a caption -- muted body ink with the one
+     salient token per fact in full ink, centred, with the drawing's
+     wide gap between facts. It sits as the last flex child of
+     .table-wrap rather than absolutely positioned as in the mockup: the
+     scrolling body above it already flexes, so the band takes its own
+     height and the rows get the rest, with no overlap to manage. */
+  .foot-legend {
+    flex: none;
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 10px 44px;
+    padding: 12px 20px 13px;
+    font-size: 12.5px;
+    line-height: 1.4;
+    color: var(--fg-muted);
+    background: var(--bg-elevated);
+    border-top: 1px solid var(--border);
+  }
+
+  .foot-legend .fact {
+    display: inline-flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 0.35em;
+  }
+
+  .foot-legend .k {
+    color: var(--fg);
+    font-weight: 600;
+  }
+
   /* Spans every column: it is about the group, not about a field. */
   .drawer-note {
     grid-column: 1 / -1;
