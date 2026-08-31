@@ -130,6 +130,11 @@ var authzMatrix = []routeExpectation{
 	{http.MethodGet, "/api/events", accessViewer,
 		"core read: the live firewall event feed"},
 	{http.MethodGet, "/api/devices", accessViewer, "core read"},
+	{http.MethodGet, "/api/devices/macs", accessViewer,
+		"core read, same tier as /api/devices which it complements -- the persisted MAC-registry history " +
+			"(first/last-seen, last-paired IP) backing the Entities page's named-things table (#675). No more " +
+			"sensitive than the source IPs a viewer already reads off /api/events; it's a LAN client's MAC, not " +
+			"credentials or config"},
 	{http.MethodGet, "/api/matches", accessViewer,
 		"a read over already-collected evidence, same tier as events/flags/stats/devices above -- also reachable via a read-only API token (readOnlyRoutes), since birdcage-style external correlation by source is the reason internal/matchlog exists. Renamed from /api/watchlist/matches by #407 when the watchlist noun was retired; the access decision is unchanged. " +
 			"WIDENED by #586, and the widening is the part to scrutinise: entries=all serves the most recent matches across every entry, so a caller no longer needs to know a mac or ip to read from this log, and that includes a read-only token holder. Kept on this tier deliberately rather than promoted to admin, for three reasons. " +
