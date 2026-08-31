@@ -24,8 +24,7 @@
 // and is not disturbed) and leaves nothing behind but its syslog batch
 // and a viewer account it deletes again.
 
-import { chromium } from 'playwright'
-import { session, feedSyslog, check, responsive, done } from './live-browser.mjs'
+import { session, feedSyslog, check, responsive, done, launchBrowser } from './live-browser.mjs'
 
 const URL_BASE = process.env.MV_URL
 
@@ -126,7 +125,7 @@ check((await current()) === 'Stream', 'and back to Stream')
 // session()'s page owns an implicit context Playwright refuses a second
 // newPage() on directly -- the same constraint live-ws-revocation.mjs
 // documents for its own second tab.
-const skipBrowser = await chromium.launch()
+const skipBrowser = await launchBrowser()
 const skipCtx = await skipBrowser.newContext({ ignoreHTTPSErrors: true })
 await skipCtx.addCookies(await page.context().cookies())
 const freshPage = await skipCtx.newPage()
@@ -154,7 +153,7 @@ const createRes = await page.request.post(`${URL_BASE}/api/auth/users`, {
 })
 check(createRes.status() === 201, `a viewer account is created (${createRes.status()})`)
 
-const browser = await chromium.launch()
+const browser = await launchBrowser()
 const viewerCtx = await browser.newContext({ ignoreHTTPSErrors: true })
 const viewerPage = await viewerCtx.newPage()
 await viewerPage.goto(URL_BASE, { waitUntil: 'networkidle' })
