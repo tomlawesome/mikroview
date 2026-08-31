@@ -5,10 +5,10 @@
 // LIVE · rate · ⚑ N · ◉ held ○ broken · account. No page name and no
 // strap -- struck on every deck and ratified in words (#697). Where
 // they stood, the switchers ride: metrics' three views and the
-// docket's three tabs. Covers that, the merged live+rate reading, the
-// always-shown flag/watch markers and the stream's filter chips -- not
-// the account menu's own content, which AccountMenu.svelte.test.ts
-// already covers.
+// docket's three tabs. Covers that, the merged live+rate reading and
+// the always-shown flag/watch markers -- not the account menu's own
+// content (AccountMenu.svelte.test.ts) and not the stream's own filter
+// line/box/spans, which moved to FilterBar.svelte.test.ts under #697.
 
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { fireEvent, render, screen } from '@testing-library/svelte'
@@ -26,7 +26,6 @@ import { authState } from '../lib/auth.svelte'
 import { flagsState } from '../lib/flags.svelte'
 import { watchlistState } from '../lib/watchlist.svelte'
 import { metricsPref } from '../lib/metrics.svelte'
-import { retentionState } from '../lib/retention.svelte'
 import { emptyFilters } from '../lib/types'
 
 // jsdom has no window.matchMedia -- AccountMenu (mounted by SceneBar)
@@ -147,75 +146,14 @@ describe('SceneBar (#683, ratified round 30)', () => {
     expect(screen.getByRole('tab', { name: 'flags' }).textContent?.trim()).toBe('flags')
   })
 
-  // #703: the control is only honest if a span the buffer cannot cover
-  // is visibly not on offer. These pin that, and that choosing one sets
-  // the same display window the mobile drawer sets.
-  describe("the stream's span control", () => {
-    function statsHolding(oldestHeld: string | null) {
-      appState.stats = {
-        total: 0,
-        byAction: {},
-        topRules: [],
-        timeSeries: [],
-        eventsPerSecond: 34,
-        capacity: 100000,
-        count: 10,
-        windowSeconds: 3600,
-        oldestHeld,
-        connectedClients: 1,
-      }
-    }
-
-    it('offers every span the buffer reaches back far enough to answer', () => {
-      statsHolding(new Date(appState.now - 2 * 86400 * 1000).toISOString())
-      render(SceneBar, { scene: 'live' })
-      flushSync()
-
-      for (const label of ['15 m', '1 h', '24 h']) {
-        expect(screen.getByRole('button', { name: label }).hasAttribute('disabled')).toBe(false)
-      }
-    })
-
-    it('withholds a fortnight from a buffer holding nine hours, and says what it holds', () => {
-      statsHolding(new Date(appState.now - 9 * 3600 * 1000).toISOString())
-      render(SceneBar, { scene: 'live' })
-      flushSync()
-
-      expect(screen.getByRole('button', { name: '1 h' }).hasAttribute('disabled')).toBe(false)
-      expect(screen.getByRole('button', { name: '24 h' }).hasAttribute('disabled')).toBe(true)
-      expect(screen.getByRole('button', { name: '14 d' }).hasAttribute('disabled')).toBe(true)
-      expect(screen.getByText('holding 9 h')).toBeTruthy()
-    })
-
-    it('offers only the shortest span while the buffer holds nothing', () => {
-      statsHolding(null)
-      render(SceneBar, { scene: 'live' })
-      flushSync()
-
-      expect(screen.getByRole('button', { name: '15 m' }).hasAttribute('disabled')).toBe(false)
-      for (const label of ['1 h', '24 h', '14 d']) {
-        expect(screen.getByRole('button', { name: label }).hasAttribute('disabled')).toBe(true)
-      }
-      expect(screen.getByText('nothing held yet')).toBeTruthy()
-    })
-
-    it('sets the display window when a span is chosen', async () => {
-      statsHolding(new Date(appState.now - 2 * 3600 * 1000).toISOString())
-      render(SceneBar, { scene: 'live' })
-      flushSync()
-
-      await fireEvent.click(screen.getByRole('button', { name: '1 h' }))
-      expect(retentionState.maxAgeSeconds).toBe(3600)
-      expect(screen.getByRole('button', { name: '1 h' }).getAttribute('aria-pressed')).toBe('true')
-    })
-
-    it('draws no span control away from the stream', () => {
-      statsHolding(new Date(appState.now - 2 * 3600 * 1000).toISOString())
-      render(SceneBar, { scene: 'metrics' })
-      flushSync()
-
-      expect(screen.queryByRole('button', { name: '15 m' })).toBeNull()
-    })
+  // #697/#703: the span control and the reach words moved to FilterBar's
+  // own filter line (see FilterBar.svelte.test.ts's "span control, moved
+  // from the bar" describe block for the coverage this used to carry) --
+  // this pins that SceneBar itself draws none of it any more.
+  it("draws no span control on its own bar -- moved to the stream's filter line (#697)", () => {
+    render(SceneBar, { scene: 'live' })
+    expect(screen.queryByRole('button', { name: '15 m' })).toBeNull()
+    expect(screen.queryByText(/^holding /)).toBeNull()
   })
 
   it('shows LIVE merged with the arriving rate as one reading, not two', () => {
@@ -302,18 +240,14 @@ describe('SceneBar (#683, ratified round 30)', () => {
     expect(screen.queryByText('Clear')).toBeNull()
   })
 
-  it('shows an active filter on the bar as "label:value", with one ⌫ to clear it', () => {
+  // #697: the active-filter summary moved off this bar entirely, into
+  // FilterBar's own always-on box (see FilterBar.svelte.test.ts's "the
+  // filter line" describe block) -- round 30's `.filterline` sits on the
+  // stream's own top, not folded into the scene bar's wordmark row.
+  it("draws no filter box on its own bar -- moved to the stream's filter line (#697)", () => {
     appState.filters = { ...emptyFilters(), action: 'drop' }
     render(SceneBar, { scene: 'live' })
-    const search = document.querySelector('.search')
-    expect(search?.textContent?.replace(/\s+/g, ' ').trim()).toBe('action:drop ⌫')
-    expect(search?.querySelector('em')?.textContent).toBe('drop')
-    expect(screen.getByTitle('Clear all filters')).toBeTruthy()
-  })
-
-  it('shows no filter summary when no filter is active', () => {
-    render(SceneBar, { scene: 'live' })
-    expect(document.querySelector('.search')).toBeNull()
+    expect(document.querySelector('.fbox')).toBeNull()
     expect(screen.queryByTitle('Clear all filters')).toBeNull()
   })
 })

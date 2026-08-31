@@ -17,12 +17,17 @@
   // line, just right of the wordmark; here the bar is a real flex row,
   // so they simply follow the wordmark and land in the same place.
   // ported field-for-field from docs/design/concepts/round-29/the-
-  // whole.html rather than approximated. On the stream, also the active
-  // filter as chips: the one piece of the retired toolbar #s5 actually
-  // draws on the bar. Everything else the old toolbar held (eps,
-  // buffer%, the max-age selector, Autoscroll/Pause/Group/Clear) is off
-  // the bar -- the mockup's own `.scenebar` markup for #s5 does not draw
-  // them, so they are gaps, recorded on the issue, not homed here.
+  // whole.html rather than approximated.
+  //
+  // The stream's own filter box/spans (#s5's `.filterline`) do NOT ride
+  // here (#697, round 30's "the top is a flow column": chrome, then the
+  // filter, then the bar, then the whisper, then the lines -- each its
+  // own row, not folded into this one). They moved to FilterBar.svelte,
+  // which sits below this bar for the stream -- see #700/#691. Everything
+  // else the old toolbar held (eps, buffer%, the max-age selector,
+  // Autoscroll/Pause/Group/Clear) is off the bar entirely -- the
+  // mockup's own `.scenebar` markup for #s5 does not draw them, so they
+  // are gaps, recorded on the issue, not homed here.
   //
   // Inside the deck every card carries its own bar, so the scene named
   // here is the card's own, passed as a prop; outside the deck (the
@@ -30,9 +35,6 @@
   import { appState, type View } from '../lib/state.svelte'
   import { authState } from '../lib/auth.svelte'
   import { METRICS_VIEWS, metricsPref } from '../lib/metrics.svelte'
-  import { retentionState } from '../lib/retention.svelte'
-  import { SPANS, describeReach, reachSeconds, spanAvailable, unavailableReason } from '../lib/spans'
-  import { buildFilterChips } from '../lib/filterChips'
   import ConnectionIndicator from './ConnectionIndicator.svelte'
   import AlarmCluster from './AlarmCluster.svelte'
   import AccountMenu from './AccountMenu.svelte'
@@ -52,20 +54,6 @@
     if (appState.view === 'audit' && isAdmin) return 'audit'
     return 'flags'
   })
-
-  const filterChips = $derived(buildFilterChips(appState.filters, appState.devices))
-
-  // The stream's SPAN control (#703). It sets the same display window
-  // the mobile drawer's duration selector sets, so the two can never
-  // disagree about what the table is showing; a span reads as active
-  // only when the window matches it exactly, so a duration chosen in the
-  // drawer leaves every pill quiet rather than lighting the nearest one.
-  //
-  // Availability comes from the buffer's own reach, never from the
-  // configured retention: offering a fortnight over nine hours of buffer
-  // would answer with nine hours and call thirteen days quiet.
-  const reach = $derived(reachSeconds(appState.stats?.oldestHeld, appState.now))
-  const reachWords = $derived(describeReach(reach))
 </script>
 
 <div class="scene-bar">
@@ -112,53 +100,6 @@
           onclick={() => (appState.view = 'audit')}>audit log</button
         >
       {/if}
-    </span>
-  {/if}
-
-  {#if view === 'live' && filterChips.length > 0}
-    <!-- The stream's own control, exactly as #s5 draws it: one search-
-         style box reading "label:<em>value</em> label:<em>value</em> ⌫"
-         -- ported from `.scenebar .controls .search` in round 29's
-         mockup (bordered box, accented values, single trailing ⌫), not
-         approximated as separate chip pills. The mockup also draws a
-         SPAN control here (15 m · 1 h · 24 h · 14 d, the same pattern
-         as the fall's) -- left off pending a product decision, see the
-         issue's gap list: the app has no existing capability those four
-         buckets clearly belong to, and guessing one would be inventing
-         behaviour, not styling it. -->
-    <span class="search">
-      {#each filterChips as chip, i (chip.key)}{i > 0 ? ' ' : ''}{chip.label}:<em>{chip.value}</em>{/each}
-      <button
-        type="button"
-        class="chip-clear"
-        onclick={() => appState.resetFilters()}
-        title="Clear all filters"
-        aria-label="Clear all filters"
-      >
-        ⌫
-      </button>
-    </span>
-  {/if}
-
-  {#if view === 'live'}
-    <span class="spans" role="group" aria-label="How far back the stream shows — {reachWords}">
-      {#each SPANS as span (span.key)}
-        {@const available = spanAvailable(span, reach)}
-        <button
-          type="button"
-          class="span"
-          class:on={retentionState.maxAgeSeconds === span.seconds}
-          disabled={!available}
-          aria-pressed={retentionState.maxAgeSeconds === span.seconds}
-          title={available ? `Show the last ${span.label}` : unavailableReason(span, reach)}
-          onclick={() => retentionState.set(span.seconds)}>{span.label}</button
-        >
-      {/each}
-      <!-- What the buffer really holds, beside the control it qualifies.
-           Not a description of the interface (round 30 struck those) but
-           the same fact the unavailable spans turn on, said once in
-           words instead of only on hover. -->
-      <span class="reach">{reachWords}</span>
     </span>
   {/if}
 
@@ -211,75 +152,10 @@
     border-bottom-color: var(--accent);
   }
 
-  /* Round 30's `.spans`: quiet pills, the chosen one in full ink. A
-     span the buffer cannot cover is dimmed and unclickable rather than
-     hidden -- the operator should see that a fortnight exists and is
-     not held, not wonder where it went. */
-  .spans {
-    display: flex;
-    align-items: baseline;
-    gap: 10px;
-  }
-  .span {
-    background: transparent;
-    border: none;
-    padding: 0;
-    font: 500 11px var(--font-sans);
-    color: var(--fg-dim);
-    cursor: pointer;
-  }
-  .span:hover:not(:disabled) {
-    color: var(--fg);
-  }
-  .span.on {
-    color: var(--fg);
-  }
-  .span:disabled {
-    color: var(--fg-dim);
-    opacity: 0.4;
-    cursor: not-allowed;
-  }
-  .reach {
-    font: 400 10.5px var(--font-sans);
-    color: var(--fg-dim);
-    margin-left: 2px;
-  }
-
   .status-cluster {
     margin-left: auto;
     display: flex;
     gap: 16px;
     align-items: center;
-  }
-
-  /* Ported from round 29's `.controls .search` (the-whole.html):
-     a single bordered box, not separate chip pills. */
-  .search {
-    display: inline-flex;
-    align-items: center;
-    gap: 4px;
-    max-width: 320px;
-    padding: 5px 12px;
-    font: 12px var(--font-mono);
-    color: var(--fg-muted);
-    background: var(--bg-elevated);
-    border: 1px solid var(--border);
-    border-radius: 7px;
-  }
-  .search em {
-    font-style: normal;
-    color: var(--accent);
-  }
-  .chip-clear {
-    background: transparent;
-    border: none;
-    color: var(--fg-dim);
-    font-size: 13px;
-    cursor: pointer;
-    padding: 0 2px;
-    margin-left: 4px;
-  }
-  .chip-clear:hover {
-    color: var(--alarm);
   }
 </style>
