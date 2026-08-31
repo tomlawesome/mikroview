@@ -18,8 +18,7 @@
 // checked below the same way live-admin-pages.mjs checks the Admin
 // group's own admin-only rows.
 
-import { chromium } from 'playwright'
-import { session, check, done, goTo } from './live-browser.mjs'
+import { session, check, done, goTo, launchBrowser } from './live-browser.mjs'
 
 const URL_BASE = process.env.MV_URL
 
@@ -207,7 +206,7 @@ const createRes = await page.request.post(`${URL_BASE}/api/auth/users`, {
 })
 check(createRes.status() === 201, `a viewer account is created (${createRes.status()})`)
 
-const browser = await chromium.launch()
+const browser = await launchBrowser()
 const viewerCtx = await browser.newContext({ ignoreHTTPSErrors: true })
 const viewerPage = await viewerCtx.newPage()
 await viewerPage.goto(URL_BASE, { waitUntil: 'networkidle' })

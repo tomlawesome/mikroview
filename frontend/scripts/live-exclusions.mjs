@@ -18,8 +18,7 @@
 // Flags but never sees the Exclusions tab at all, absent rather than
 // disabled, per #490's grammar.
 
-import { chromium } from 'playwright'
-import { session, check, done, feedPortScan, waitForFlag, goTo } from './live-browser.mjs'
+import { session, check, done, feedPortScan, waitForFlag, goTo, launchBrowser } from './live-browser.mjs'
 
 // Unused by every other scenario in this directory -- checked before
 // choosing it, because sharing one is what #590 is about.
@@ -187,7 +186,7 @@ const createRes = await page.request.post(`${URL_BASE}/api/auth/users`, {
 })
 check(createRes.status() === 201, `a viewer account is created (${createRes.status()})`)
 
-const browser = await chromium.launch()
+const browser = await launchBrowser()
 const viewerCtx = await browser.newContext({ ignoreHTTPSErrors: true })
 const viewerPage = await viewerCtx.newPage()
 await viewerPage.goto(URL_BASE, { waitUntil: 'networkidle' })
