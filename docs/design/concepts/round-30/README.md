@@ -211,6 +211,22 @@ on every surface that can be silent; the stream's foot line reports the
 day's three facts, not a key; and the journey is a five-beat storyboard of
 a flow, so its beat labels are the sequence, not commentary on it.
 
+## 6. Three corrections from reading the round
+
+- **Nothing sits on a line as text only** (owner, verbatim): *"NOTHING
+  sits on a line as text only without a box."* Raised against the
+  topography's edge labels, where `wan only · dark` had a link running
+  through it. Every label that overlays the map's ribs or the fall's
+  rules is now on a plate sized from its own box — the same fault, and
+  the same fix, the build reached in `a04b880`. The client names under
+  the spokes are left bare: they sit on empty ground, not on a line.
+- **The stream's foot line was set like a caption** and carries the day's
+  three facts. Lifted to the ticker's own footing: a real band, body in
+  `--ink-2`, the salient token in full ink.
+- **The door's standing promise is gone from the door.** It still stands
+  where setup happens — the journey's attach beat and Settings' ingest
+  pathway both say it.
+
 ## Owner verdicts
 
 - The filter, as round 30 builds it (verbatim, 2026-08-31): **"ok, i love
@@ -224,7 +240,9 @@ a flow, so its beat labels are the sequence, not commentary on it.
 - What the apparatus sweep kept — the #445 honesty statements, the
   stream's foot line, the journey's beat labels (verbatim, 2026-08-31):
   **"correct, these are part of the UI."**
-- Everything else: pending — he is reading the round now.
+- The round as a whole, after those three corrections (verbatim,
+  2026-08-31): **"The mock up is otherwise improved"**.
+- Everything else: pending.
 
 ## Known, and not fixed here
 
