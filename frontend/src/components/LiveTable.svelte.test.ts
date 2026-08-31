@@ -11,6 +11,7 @@ import { groupModeState } from '../lib/groupMode.svelte'
 import { flagsState } from '../lib/flags.svelte'
 import { fallState } from '../lib/fall.svelte'
 import { MAX_RENDERED_ROWS } from '../lib/constants'
+import { COLUMNS, PINNED_COLUMNS, columnState } from '../lib/columns.svelte'
 // Vite's `?raw` import, the same device Topography.svelte.test.ts uses
 // for its own CSS-token assertions -- not a Node fs read, so this stays
 // type-checkable under the browser-only app tsconfig. Needed below
@@ -113,6 +114,12 @@ beforeEach(() => {
       epithet: '',
     },
   ]
+  // columnState is a module-level singleton, shared with
+  // columns.svelte.test.ts and FilterBar.svelte.test.ts -- reset to the
+  // shipped default (#729: all fifteen visible) so a toggle from one test
+  // can't leak into the next, the same hygiene groupModeState/flagsState
+  // above already get.
+  columnState.visible = Object.fromEntries(COLUMNS.map((c) => [c.key, true]))
 })
 
 describe('LiveTable autoscroll-off freezing (issue #232)', () => {
@@ -1096,5 +1103,225 @@ describe('the stream is the scene, not a boxed widget (#733)', () => {
     expect(decls).toMatch(/top:\s*0/)
     expect(decls).toMatch(/background:\s*var\(--bg\)/)
     expect(decls).not.toMatch(/--bg-elevated/)
+  })
+})
+
+// #729: the column chooser (built in FilterBar.svelte, state in
+// columns.svelte.ts) narrows which of the fifteen columns this table
+// actually renders. Default stays all fifteen (the file's own beforeEach
+// resets columnState.visible before every test here) -- these cover what
+// happens once a reader has turned some off: the header and the body
+// must never disagree about which columns are showing, since both read
+// off one shared CSS Grid template (`.row` is `display: contents`, so a
+// mismatch would not just look wrong on one row -- every following cell
+// in the grid would shift by a track).
+describe('LiveTable column chooser rendering (#729)', () => {
+  it('renders one header cell per visible column when the reader has hidden some', () => {
+    columnState.toggleColumn('device')
+    columnState.toggleColumn('mac')
+    columnState.toggleColumn('nat')
+
+    const { container } = render(LiveTable, { props: { events: [] } })
+    flushSync()
+
+    const headerLabels = Array.from(container.querySelectorAll('.header-cell .label-text')).map((el) => el.textContent)
+    expect(container.querySelectorAll('.header-cell').length).toBe(COLUMNS.length - 3)
+    expect(headerLabels).not.toContain('Device')
+  })
+
+  it('renders exactly as many body cells as header cells -- the head and the body can never disagree', () => {
+    columnState.toggleColumn('device')
+    columnState.toggleColumn('mac')
+    columnState.toggleColumn('nat')
+
+    const e = makeEvent('agree-row', {
+      deviceId: 'router1',
+      chain: 'forward',
+      srcIp: '10.0.0.1',
+      srcPort: 51000,
+      srcMac: 'AA:BB:CC:DD:EE:FF',
+      dstIp: '10.0.0.2',
+      dstPort: 443,
+      protocol: 'tcp',
+      inInterface: 'lan',
+      outInterface: 'wan',
+      natIp: '203.0.113.5',
+      natPort: 51512,
+      ruleLabel: 'lan-wan',
+    })
+    const { container } = render(LiveTable, { props: { events: [e] } })
+    flushSync()
+
+    const headerCount = container.querySelectorAll('.header-cell').length
+    const row = container.querySelector('.row') as HTMLElement
+    const bodyCellCount = row.querySelectorAll(':scope > .cell').length
+
+    expect(headerCount).toBe(COLUMNS.length - 3)
+    expect(bodyCellCount).toBe(headerCount)
+    // The three turned off above are genuinely absent, not just hidden --
+    // no .cell.device/.cell.mac/.cell.nat node exists in this row at all.
+    expect(row.querySelector(':scope > .cell.device')).toBeNull()
+    expect(row.querySelector(':scope > .cell.mac')).toBeNull()
+    expect(row.querySelector(':scope > .cell.nat')).toBeNull()
+  })
+
+  it('keeps the grid template in step with the header when a subset is hidden', () => {
+    columnState.toggleColumn('device')
+    columnState.toggleColumn('chain')
+
+    const { container } = render(LiveTable, { props: { events: [] } })
+    flushSync()
+
+    // A flexible column's own token ("minmax(140px, 1fr)") contains a
+    // space, so counting tracks via a naive split(' ') would overcount it
+    // by one -- this counts CSS tracks instead (a bare px length, or a
+    // whole minmax(...) call).
+    const grid = container.querySelector('.grid') as HTMLElement
+    const trackCount = (grid.style.gridTemplateColumns.match(/\d+px|minmax\([^)]*\)/g) ?? []).length
+    const headerCount = container.querySelectorAll('.header-cell').length
+
+    expect(trackCount).toBe(headerCount)
+    expect(trackCount).toBe(COLUMNS.length - 2)
+    // Rule stays the sole flexible track regardless of which fixed
+    // columns are on or off (#685) -- the sideways scroll and the fixed
+    // widths both still have to work with an arbitrary subset.
+    expect(grid.style.gridTemplateColumns).toMatch(/minmax\(140px,\s*1fr\)/)
+  })
+
+  it('leaves a usable table -- just Time and Rule -- when every optional column is turned off', () => {
+    for (const col of COLUMNS) {
+      if (!PINNED_COLUMNS.has(col.key)) columnState.toggleColumn(col.key)
+    }
+
+    const e = makeEvent('minimal-row', { ruleLabel: 'lan-wan' })
+    const { container } = render(LiveTable, { props: { events: [e] } })
+    flushSync()
+
+    expect(container.querySelectorAll('.header-cell').length).toBe(PINNED_COLUMNS.size)
+    const row = container.querySelector('.row') as HTMLElement
+    expect(row.querySelectorAll(':scope > .cell').length).toBe(PINNED_COLUMNS.size)
+    expect(row.querySelector(':scope > .cell.time')).toBeTruthy()
+    expect(row.querySelector(':scope > .cell.rule')).toBeTruthy()
+  })
+
+  // EventRow.svelte's default (all-visible) path renders these thirteen
+  // optional cells as plain, unconditional markup; the moment a reader
+  // hides any one column, every *remaining* optional cell switches to
+  // rendering from the {#snippet} copies of that same markup instead (see
+  // that file's own comment on why the raw path is duplicated rather than
+  // always going through snippets -- a snippet costs measurably more per
+  // invocation than inlined markup at 810 rows, enough on its own to push
+  // #728's already-borderline render-cost test over vitest's timeout).
+  // columnState.allVisible only ever reads real visibility, so there is no
+  // way to force the snippet path while every column is genuinely visible
+  // -- this instead compares each optional column's own rendered cell
+  // between a row with everything visible (raw path) and a row with some
+  // *other* column hidden (snippet path, this column still visible). If
+  // either copy of a cell's markup drifts from the other, this fails.
+  describe('the two render paths stay identical (#729)', () => {
+    function fullEvent(): ClientEvent {
+      return makeEvent('compare-row', {
+        deviceId: 'router1',
+        chain: 'forward',
+        srcIp: '10.0.0.1',
+        srcHostName: 'workstation',
+        srcCountry: 'DE',
+        srcPort: 51000,
+        srcMac: 'AA:BB:CC:DD:EE:FF',
+        dstIp: '10.0.0.2',
+        dstHostName: 'server',
+        dstCountry: 'US',
+        dstPort: 443,
+        protocol: 'tcp',
+        inInterface: 'lan',
+        outInterface: 'wan',
+        natIp: '203.0.113.5',
+        natPort: 51512,
+        ruleLabel: 'lan-wan',
+      })
+    }
+
+    // Renders one fresh row (a brand-new LiveTable instance, own
+    // container) and returns it. Each optional cell has a selector below;
+    // .cell.addr/.cell.ip are shared between Source and Destination, so
+    // those two read by position (0 = source, 1 = destination) rather
+    // than by class alone.
+    function renderRow(): HTMLElement {
+      const { container } = render(LiveTable, { props: { events: [fullEvent()] } })
+      flushSync()
+      return container.querySelector('.row') as HTMLElement
+    }
+
+    function captureCells(row: HTMLElement): Record<string, string> {
+      const addrCells = row.querySelectorAll('.cell.addr')
+      const ipCells = row.querySelectorAll('.cell.ip')
+      return {
+        device: row.querySelector('.cell.device')?.outerHTML ?? '',
+        action: row.querySelector('.cell.action')?.outerHTML ?? '',
+        chain: row.querySelector('.cell.chain')?.outerHTML ?? '',
+        source: addrCells[0]?.outerHTML ?? '',
+        srcAddr: ipCells[0]?.outerHTML ?? '',
+        srcPort: row.querySelector('.cell.port.srcport')?.outerHTML ?? '',
+        mac: row.querySelector('.cell.mac')?.outerHTML ?? '',
+        destination: addrCells[1]?.outerHTML ?? '',
+        dstAddr: ipCells[1]?.outerHTML ?? '',
+        proto: row.querySelector('.cell.proto')?.outerHTML ?? '',
+        iface: row.querySelector('.cell.iface')?.outerHTML ?? '',
+        port: row.querySelector('.cell.port:not(.srcport)')?.outerHTML ?? '',
+        nat: row.querySelector('.cell.nat')?.outerHTML ?? '',
+      }
+    }
+
+    it("keeps every optional column's markup identical whether or not another column happens to be hidden", () => {
+      const raw = captureCells(renderRow())
+
+      // Hiding 'nat' forces columnState.allVisible false (the snippet
+      // path) without disturbing any other column's position -- nat sits
+      // last and shares no CSS class with anything else, so this reads
+      // every other optional column's snippet-path rendering unchanged.
+      columnState.toggleColumn('nat')
+      const gatedByNat = captureCells(renderRow())
+      columnState.toggleColumn('nat')
+
+      // nat itself needs a *different* column hidden to reach the snippet
+      // path while nat stays visible -- device, hidden here, shares no
+      // class with .cell.nat and sits well before the addr/ip pairs, so
+      // it disturbs nothing this test reads.
+      columnState.toggleColumn('device')
+      const gatedByDevice = captureCells(renderRow())
+      columnState.toggleColumn('device')
+
+      const comparedViaGatedByNat = [
+        'device',
+        'action',
+        'chain',
+        'source',
+        'srcAddr',
+        'srcPort',
+        'mac',
+        'destination',
+        'dstAddr',
+        'proto',
+        'iface',
+        'port',
+      ]
+      for (const key of comparedViaGatedByNat) {
+        expect(raw[key], `raw path produced no markup for ${key}`).not.toBe('')
+        expect(gatedByNat[key], `${key} identical between the raw and snippet paths`).toBe(raw[key])
+      }
+
+      expect(raw.nat).not.toBe('')
+      expect(gatedByDevice.nat).toBe(raw.nat)
+    })
+  })
+
+  it('still shows every column, in order, when nothing has been turned off (the shipped default)', () => {
+    const e = makeEvent('default-row', { ruleLabel: 'lan-wan' })
+    const { container } = render(LiveTable, { props: { events: [e] } })
+    flushSync()
+
+    expect(container.querySelectorAll('.header-cell').length).toBe(COLUMNS.length)
+    const row = container.querySelector('.row') as HTMLElement
+    expect(row.querySelectorAll(':scope > .cell').length).toBe(COLUMNS.length)
   })
 })
