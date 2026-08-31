@@ -259,9 +259,6 @@
   <div class="setlay">
     <div class="og deckcol">
       <h3>your deck</h3>
-      <p class="oghint">
-        {cards.length === 7 ? 'seven' : cards.length} cards, in the order you keep them — drag to reorder; sign-in lands on the first
-      </p>
       <div class="stshelf">
         {#each cards as card, i (card.key)}
           <span
@@ -640,11 +637,11 @@
     color: var(--fg-dim);
   }
 
-  /* The right column is one .og panel, same treatment as the deck's on
-     the left -- not four separately-bordered cards. ingest, detection,
-     memory and account are .stsection children of it, divided by a
-     hairline rather than each drawing its own box; a lone wrapper per
-     column is what makes "same top edge, same border/radius/padding/
+  /* The settings card is one .og panel, same treatment as the deck
+     band above it -- not four separately-bordered cards. ingest,
+     detection, memory and account are .stsection children of it; a
+     divider between them (not inside them -- see .orow below, #735)
+     is what makes "same top edge, same border/radius/padding/
      background" actually hold, and stops either box drawing more than
      it holds (owner: the boxes didn't line up). */
   .stsection + .stsection {
@@ -679,10 +676,6 @@
     min-width: 0;
   }
 
-  .stsection.wide .wrows .orow:first-child {
-    border-top: 0;
-  }
-
   .stsection.wide .wleft .oghint {
     margin-bottom: 0;
   }
@@ -698,45 +691,28 @@
     }
   }
 
-  /* Round 30: the deck stands as a narrow left column beside settings,
-     not a shelf above them (owner, 2026-08-31) -- 224px, same
-     proportion as the round's own #set .setlay rule. */
+  /* Round 30 (#735): the deck goes back to a full-width horizontal band
+     across the top, the settings card below it (owner, 2026-08-31) --
+     this partially reverses the narrow-left-column layout #725 landed;
+     #725's own substance (one settings panel, not four) is untouched. */
   .setlay {
-    display: grid;
-    grid-template-columns: 224px 1fr;
+    display: flex;
+    flex-direction: column;
     gap: 22px;
-    align-items: start;
   }
 
-  .deckcol {
-    margin-bottom: 0;
-  }
-
-  /* Two columns and no more: the deck on the left, everything else
-     stacked down the right at full width (owner, 2026-08-31) -- see the
-     round's own comment on #set .stgrid. */
   .stgrid {
     display: flex;
     flex-direction: column;
     min-width: 0;
   }
 
-  @media (max-width: 900px) {
-    .setlay {
-      grid-template-columns: 1fr;
-    }
-  }
-
   /* --- your deck: the shelf ---------------------------------------------- */
   .deckcol .stshelf {
     display: flex;
-    flex-direction: column;
-    flex-wrap: nowrap;
+    flex-direction: row;
+    flex-wrap: wrap;
     gap: 6px;
-  }
-
-  .deckcol .stcard {
-    width: 100%;
   }
 
   .stcard {
@@ -807,14 +783,21 @@
   }
 
   /* --- the shared row grammar -------------------------------------------- */
+  /* Round 30 (#735): the row hairline made a settings page read as a
+     ruled ledger (owner, 2026-08-31) -- rows separate on space and the
+     label/value alignment alone now. Group headings keep their own
+     divider (see .stsection + .stsection above); rows do not. */
   .orow {
     display: flex;
     align-items: baseline;
     justify-content: space-between;
     gap: 14px;
-    padding: 5px 0;
-    border-top: 1px solid var(--border);
+    padding: 7px 0;
     font-size: 12px;
+  }
+
+  .orow + .orow {
+    margin-top: 3px;
   }
 
   .orow > span:first-child {
