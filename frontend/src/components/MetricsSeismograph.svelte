@@ -46,22 +46,31 @@
   const LEFT = 30
   const RIGHT = 18
   const MIN_WIDTH = 420
-  // Round 30's drum is full-bleed both ways (`.drumwrap { position:
-  // absolute; inset: 108px 24px 30px }`, `svg { width: 100%; height:
-  // 100% }`) -- it fills whatever vertical room the scene gives it
-  // rather than the fixed short band this used to draw. This floor
-  // only keeps a cramped viewport at that previous height rather than
+  // This floor keeps a cramped viewport at a readable height rather than
   // squashing the trace unreadably thin.
   const MIN_HEIGHT = 320
+  // #716: measuring the container's full height and filling it (as this
+  // used to) overcorrected -- the owner's review called the result
+  // "comically oversized". Round 30's own mockup (metrics-seismograph.png)
+  // draws the trace as a band through the vertical middle of the scene,
+  // width:height roughly 3:1, with generous room above and below it, not
+  // stretched to every pixel the card happens to have. This ceiling keeps
+  // the drum at that band's proportions even inside a tall card.
+  const ASPECT = 3.05
+  const MAX_HEIGHT = 620
 
-  // Measured, not assumed: the drum is full-bleed, so its width and
-  // height are whatever the content column gives it after the rail's
-  // own state.
+  // Measured, not assumed: the drum's width still fills whatever the
+  // content column gives it after the rail's own state; its height no
+  // longer does (see ASPECT above) -- boxHeight now only clamps the ideal
+  // height down for a container shorter than the band would otherwise be.
   let boxWidth = $state(0)
   let boxHeight = $state(0)
 
   const width = $derived(Math.max(MIN_WIDTH, boxWidth || MIN_WIDTH))
-  const height = $derived(Math.max(MIN_HEIGHT, boxHeight || MIN_HEIGHT))
+  const idealHeight = $derived(width / ASPECT)
+  const height = $derived(
+    Math.min(MAX_HEIGHT, Math.max(MIN_HEIGHT, Math.min(idealHeight, boxHeight || idealHeight))),
+  )
   const dpr = $derived(dprState.value)
 
   const n = $derived(hour.axis.length)
@@ -187,6 +196,9 @@
 
 <style>
   .drum {
+    display: flex;
+    align-items: center;
+    justify-content: center;
     width: 100%;
     height: 100%;
     min-width: 0;
