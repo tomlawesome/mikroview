@@ -25,6 +25,7 @@
   import { retentionState, MAX_AGE_OPTIONS } from '../lib/retention.svelte'
   import { buildFilterChips, type FilterChip } from '../lib/filterChips'
   import { SPANS, describeReach, reachSeconds, spanAvailable, unavailableReason } from '../lib/spans'
+  import { COLUMNS, PINNED_COLUMNS, columnState } from '../lib/columns.svelte'
 
   // Presets and Export to CSV are later additions round 29's ratified
   // filter row does not draw (#683 correction, 2026-08-31: "anything the
@@ -503,6 +504,39 @@
         >
           .*
         </button>
+      </div>
+    </div>
+
+    <!-- #729: the stream's column chooser. Lives here, with the rest of
+         the filter fold-out's controls -- not a new bar, not a button
+         beside the search box. A reader's own preference, not a fix for
+         the table's width: the owner likes the sideways scroll and it
+         stays (see this issue's last comment), so the shipped default
+         is every column on, and this only ever narrows from there. Time
+         and Rule are pinned -- no checkbox for either, since neither is
+         ever offered as a toggle. -->
+    <div class="fb-field columns-field">
+      <span class="fb-label">Columns</span>
+      <div class="col-toggles" role="group" aria-label="Choose which columns the stream shows">
+        {#each COLUMNS as col (col.key)}
+          {#if !PINNED_COLUMNS.has(col.key)}
+            <!-- The visible text reads "{label} column", not the bare
+                 column name -- several of these (Device, Chain, Proto,
+                 Port, Interface) are also the exact visible name of an
+                 existing field elsewhere in this same strip, and giving a
+                 checkbox and an unrelated select the identical accessible
+                 name would leave a screen-reader or voice-control user
+                 unable to tell them apart. -->
+            <label class="col-toggle">
+              <input
+                type="checkbox"
+                checked={columnState.isColumnVisible(col.key)}
+                onchange={() => columnState.toggleColumn(col.key)}
+              />
+              {col.label} column
+            </label>
+          {/if}
+        {/each}
       </div>
     </div>
 
@@ -1146,6 +1180,52 @@
     color: var(--accent);
     font-family: var(--font-mono);
     font-size: 10.5px;
+  }
+
+  /* #729: the column chooser. Same fb-field/fb-label shape every other
+     control in this strip already uses -- a row of checkboxes, not a new
+     kind of control, since round 30 allows no new apparatus beyond the
+     control itself. */
+  .columns-field {
+    flex-basis: 100%;
+  }
+
+  .col-toggles {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px 14px;
+  }
+
+  .col-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    font: 12px var(--font-mono);
+    color: var(--fg-muted);
+    cursor: pointer;
+    white-space: nowrap;
+  }
+
+  .col-toggle:hover {
+    color: var(--fg);
+  }
+
+  .col-toggle input[type='checkbox'] {
+    cursor: pointer;
+  }
+
+  .col-toggle input[type='checkbox']:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+  }
+
+  /* The drawer's own 44px touch-target convention (issue #85) -- applies
+     to the whole label, not just the checkbox glyph, so the tap target is
+     the full "checkbox + column name" row rather than the ~16px box. */
+  .drawer .col-toggle {
+    min-height: 44px;
+    font: 14px var(--font-sans);
+    color: var(--fg);
   }
 
   .duration {

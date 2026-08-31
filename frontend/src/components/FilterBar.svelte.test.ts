@@ -17,10 +17,11 @@
 // #703) and the "holding N" reach words ride the filter line's own right
 // end (moved here from SceneBar.svelte.test.ts under the same issue).
 
-import { beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { render, screen, fireEvent } from '@testing-library/svelte'
 import { flushSync } from 'svelte'
 import type { FirewallEvent } from '../lib/types'
+import { COLUMNS, PINNED_COLUMNS, columnState } from '../lib/columns.svelte'
 
 // jsdom has no window.matchMedia -- viewport.svelte.ts's ViewportState
 // singleton calls it at module-load time (same fix used throughout this
@@ -306,8 +307,23 @@ describe('FilterBar, expanded desktop row (#683/#697, ratified round 30)', () =>
     render(FilterBar)
     await expandRow()
 
+    // #729 (owner ruling, built on top of this ratified round-30 row):
+    // "Columns" is the one field added since -- the chooser lives here,
+    // with the rest of the strip's controls, so it is the one addition to
+    // this otherwise-frozen list.
     const labels = Array.from(document.querySelectorAll('.fb-label')).map((el) => el.textContent)
-    expect(labels).toEqual(['Device', 'Action', 'Chain', 'Proto', 'Source', 'Destination', 'Port', 'Interface', 'Rule'])
+    expect(labels).toEqual([
+      'Device',
+      'Action',
+      'Chain',
+      'Proto',
+      'Source',
+      'Destination',
+      'Port',
+      'Interface',
+      'Rule',
+      'Columns',
+    ])
   })
 
   it('does not draw Presets or Export to CSV -- later additions round 29 does not draw', async () => {
@@ -355,5 +371,62 @@ describe('FilterBar, expanded desktop row (#683/#697, ratified round 30)', () =>
     expect(box.getAttribute('aria-expanded')).toBe('false')
     expect(screen.queryByLabelText('Device')).toBeNull()
     expect(document.activeElement).toBe(box)
+  })
+})
+
+// #729: the column chooser rides in the same fold-out strip as the rest
+// of the filter fields -- no new bar, no new button beside the search
+// box. columnState is a module-level singleton (shared with
+// columns.svelte.test.ts and LiveTable.svelte.test.ts), so every test
+// below restores it rather than leaking a toggle into whichever test
+// runs next.
+describe('FilterBar, the column chooser (#729)', () => {
+  beforeEach(() => {
+    columnState.visible = Object.fromEntries(COLUMNS.map((c) => [c.key, true]))
+  })
+
+  afterEach(() => {
+    columnState.visible = Object.fromEntries(COLUMNS.map((c) => [c.key, true]))
+  })
+
+  it('offers a checkbox for every optional column, and none for the pinned two', async () => {
+    render(FilterBar)
+    await expandRow()
+
+    // Time and Rule are each a unique label in this list -- a plain
+    // queryByRole miss proves no checkbox exists for either. (Address and
+    // Port repeat between source/destination and are checked separately
+    // below via a count, since a name lookup on a repeated label throws.)
+    for (const key of PINNED_COLUMNS) {
+      const label = COLUMNS.find((c) => c.key === key)?.label as string
+      expect(screen.queryByRole('checkbox', { name: `${label} column` })).toBeNull()
+    }
+
+    // 15 columns, 2 pinned -- 13 checkboxes total, regardless of how many
+    // labels repeat.
+    expect(screen.getAllByRole('checkbox').length).toBe(COLUMNS.length - PINNED_COLUMNS.size)
+
+    // Spot-check a couple of ordinary columns with unique labels.
+    expect(screen.getByRole('checkbox', { name: 'Device column' })).toBeTruthy()
+    expect(screen.getByRole('checkbox', { name: 'Chain column' })).toBeTruthy()
+  })
+
+  it('defaults every checkbox to checked -- the shipped default stays all fifteen columns', async () => {
+    render(FilterBar)
+    await expandRow()
+
+    expect(screen.getByRole('checkbox', { name: 'Device column' })).toHaveProperty('checked', true)
+  })
+
+  it('unchecking a column writes through to columnState, and is a reader preference -- not tied to any filter term', async () => {
+    render(FilterBar)
+    await expandRow()
+
+    const device = screen.getByRole('checkbox', { name: 'Device column' })
+    await fireEvent.click(device)
+    flushSync()
+
+    expect(columnState.isColumnVisible('device')).toBe(false)
+    expect(appState.hasActiveFilters).toBe(false)
   })
 })

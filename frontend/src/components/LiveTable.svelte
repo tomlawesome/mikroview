@@ -406,7 +406,13 @@
   {:else}
     <div class="body scrollbar" bind:this={bodyEl}>
       <div class="grid" bind:this={gridEl} style="grid-template-columns: {columnState.gridTemplate}">
-        {#each COLUMNS as col, i (col.key)}
+        <!-- #729: the reader's chosen subset, not the fixed fifteen --
+             columnState.visibleColumns already carries Time and Rule
+             (pinned, always in it) plus whatever else the chooser in
+             FilterBar left on. EventRow's own cells are gated on the same
+             columnState.isColumnVisible(key) calls, column by column, so
+             the two can never disagree about which columns are showing. -->
+        {#each columnState.visibleColumns as col, i (col.key)}
           <div
             class="header-cell"
             class:sticky-col={col.key === 'time'}
