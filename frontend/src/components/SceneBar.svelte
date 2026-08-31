@@ -118,11 +118,15 @@
     padding: 12px 20px 4px;
     flex-wrap: wrap;
   }
+  /* Round 30's `.wordmark`, ported field-for-field: MIKRO tight in the
+     bar's own ink (not dimmed) with VIEW carrying the accent -- not the
+     wide-tracked, uniformly dim reading a stale letter-spacing value
+     drew here before. */
   .wm {
-    font-size: 13px;
+    font-size: 15px;
     font-weight: 800;
-    letter-spacing: 0.22em;
-    color: var(--fg-dim);
+    letter-spacing: 0.04em;
+    color: var(--fg);
   }
   .wm em {
     color: var(--accent);
