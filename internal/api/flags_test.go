@@ -113,6 +113,74 @@ func TestHandleFlagsClearUnknownID(t *testing.T) {
 	}
 }
 
+// TestHandleFlagsClearIsAuditLoggedWithNote covers #678/#679: clearing a
+// flag is an admin-privileged mutation like any other, and the note the
+// operator gives (if any) rides along as the entry's Detail -- the same
+// slot every other handler in this file already uses for free-text
+// context.
+func TestHandleFlagsClearIsAuditLoggedWithNote(t *testing.T) {
+	s := newAuthTestServer(t)
+	s.Flags.Add(flags.TypeActivitySpike, "198.51.100.4", "500 events in 60s", time.Now())
+	flagID := s.Flags.List()[0].ID
+	ts := httptest.NewServer(s.Routes())
+	defer ts.Close()
+
+	client := &http.Client{Jar: mustCookieJar(t)}
+	postJSON(t, client, ts.URL+"/api/auth/register", credentialsRequest{Username: "tom", Password: "password123"}).Body.Close()
+
+	resp := postJSON(t, client, ts.URL+"/api/flags/"+flagID+"/clear", clearRequest{Note: "expected, speed test"})
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected the clear to succeed, got %d", resp.StatusCode)
+	}
+
+	var found bool
+	for _, e := range s.Audit.Query(audit.Query{}).Entries {
+		if e.Action == "flag.clear" && e.Target == flagID {
+			found = true
+			if e.Actor != "tom" {
+				t.Errorf("audit entry actor = %q, want tom", e.Actor)
+			}
+			if e.Detail != "expected, speed test" {
+				t.Errorf("audit entry detail = %q, want the clear's note", e.Detail)
+			}
+		}
+	}
+	if !found {
+		t.Errorf("expected a flag.clear audit entry for %s, got: %+v", flagID, s.Audit.Query(audit.Query{}).Entries)
+	}
+}
+
+// TestHandleFlagsClearWithoutNoteIsStillAuditLogged: a plain clear (no
+// note given) still belongs in the log -- the note is optional context
+// on the mutation, not the reason it gets recorded at all.
+func TestHandleFlagsClearWithoutNoteIsStillAuditLogged(t *testing.T) {
+	s := newAuthTestServer(t)
+	s.Flags.Add(flags.TypePortScan, "203.0.113.9", "20 distinct ports in 60s", time.Now())
+	flagID := s.Flags.List()[0].ID
+	ts := httptest.NewServer(s.Routes())
+	defer ts.Close()
+
+	client := &http.Client{Jar: mustCookieJar(t)}
+	postJSON(t, client, ts.URL+"/api/auth/register", credentialsRequest{Username: "tom", Password: "password123"}).Body.Close()
+
+	resp := postJSON(t, client, ts.URL+"/api/flags/"+flagID+"/clear", clearRequest{})
+	defer resp.Body.Close()
+
+	var found bool
+	for _, e := range s.Audit.Query(audit.Query{}).Entries {
+		if e.Action == "flag.clear" && e.Target == flagID {
+			found = true
+			if e.Detail != "" {
+				t.Errorf("audit entry detail = %q, want empty for a note-less clear", e.Detail)
+			}
+		}
+	}
+	if !found {
+		t.Errorf("expected a flag.clear audit entry for %s even without a note, got: %+v", flagID, s.Audit.Query(audit.Query{}).Entries)
+	}
+}
+
 // -- #638: POST /api/flags/{id}/verdict -----------------------------
 
 // postVerdict is postFlagsAction's shape for the one flags.go handler
