@@ -271,6 +271,20 @@ rewritten.
 
 ### Fixed
 
+- **The deck mounted a card's scene a card early and tore it down a
+  card late, worst on the docket** (#690). `Deck.svelte` used to mount
+  any card within one index of the active one, always -- so sitting on
+  Stream paid a full mount of the docket's unvirtualised Flags list,
+  and sitting on Entities or Settings paid its teardown, neither ever
+  seen. A card's scene now mounts once it's the one actually visited,
+  plus whichever neighbour the deck is physically rolling it into or
+  out of view (tracked by a low-threshold `IntersectionObserver` with a
+  lookahead margin, `lib/deckMount.ts`), so the roll still shows real
+  content mid-transit without paying for a neighbour nobody scrolled
+  toward. Measured against the live demo: the stream roll dropped from
+  ~11 s to under 1 s, the docket's own roll from ~50 s to under 2 s,
+  Entities from ~20 s to under 1 s, and Settings from ~14 s to under
+  0.5 s.
 - **Finishing the setup wizard could land you on a dead view** (#646).
   Its exit still pointed at the stream-as-landing-page arrangement that
   #616 retired once the fall took over as the real landing page, so
