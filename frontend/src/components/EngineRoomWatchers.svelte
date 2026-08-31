@@ -24,12 +24,17 @@
   } from '../lib/detectorCopy'
   import type { DetectorScope } from '../lib/types'
 
-  let { isAdmin }: { isAdmin: boolean } = $props()
+  // canEdit (#653's middle tier): running the detector bench -- enabling
+  // or pausing a detector, editing its scope -- is a normal operational
+  // action open to user and admin alike, not an owner-level one. A
+  // viewer gets the same read-only facts admin/user see, just no
+  // checkbox or scope-knob to change them (hide, never disable).
+  let { canEdit }: { canEdit: boolean } = $props()
 
   // Which detector's scope form is open, if any -- independent of which
   // station is open (EngineRoom.svelte's own expandedStation), since a
   // viewer never reaches this at all (no knob ink, see below) and an
-  // admin can only ever be editing one detector's scope at a time.
+  // editor can only ever be editing one detector's scope at a time.
   let editingScope = $state<string | null>(null)
   let drafts = $state<Record<string, DetectorDraft>>({})
   let errors = $state<Partial<Record<string, string>>>({})
@@ -78,7 +83,7 @@
     {@const learning = learningSummary(d.learning)}
     <li class="row">
       <div class="line">
-        {#if isAdmin}
+        {#if canEdit}
           <input
             type="checkbox"
             class="cbx"
@@ -93,7 +98,7 @@
         <span class="dash">—</span>
         {#if fields.length === 0}
           <span class="scope-fact">{scopeSummary(d.scope)}</span>
-        {:else if isAdmin}
+        {:else if canEdit}
           <button type="button" class="scope-knob" onclick={() => toggleScopeForm(d.name, d.scope)}>
             {scopeSummary(d.scope)}
           </button>
@@ -114,7 +119,7 @@
         <p class="error">{errors[d.name]}</p>
       {/if}
 
-      {#if isAdmin && editingScope === d.name}
+      {#if canEdit && editingScope === d.name}
         <div class="scope-form">
           {#if info.scopeNote}
             <p class="note"><strong>What this restricts:</strong> {info.scopeNote}</p>

@@ -294,3 +294,50 @@ describe('Flags verdict row (#638)', () => {
     expect(document.querySelector('.verdict-judged-by')?.textContent).toContain('alice')
   })
 })
+
+// #653's three tiers: judging/clearing a flag is a normal operational
+// action (user tier), not an owner-level one -- only a viewer, the
+// tier below user, must see none of it. Hidden, never disabled (issue
+// #198's own reasoning, now applied one tier lower).
+describe('Flags tiers (#653)', () => {
+  beforeEach(() => {
+    vi.resetAllMocks()
+    vi.mocked(fetchExclusions).mockResolvedValue([])
+    flagsState.list = [testFlag()]
+    flagsState.undoableVerdicts = []
+    exclusionsState.list = []
+    authState.username = 'kai'
+  })
+
+  it('a viewer sees no verdict row, no Clear, and no Clear all', async () => {
+    authState.state = 'authenticated'
+    authState.role = 'viewer'
+    render(Flags)
+    await Promise.resolve()
+    flushSync()
+
+    expect(screen.queryByRole('group', { name: 'Judge this flag' })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Clear' })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Clear all' })).toBeNull()
+  })
+
+  it('a user sees the verdict row, a plain Clear, and Clear all', async () => {
+    authState.state = 'authenticated'
+    authState.role = 'user'
+    render(Flags)
+    await Promise.resolve()
+    flushSync()
+
+    expect(screen.getByRole('group', { name: 'Judge this flag' })).toBeTruthy()
+
+    // Clear lives in the drawer since #633; Clear all left this
+    // component entirely for the docket's bubble (covered there).
+    await fireEvent.click(screen.getAllByRole('button', { name: /the drawer for this flag/ })[0])
+    flushSync()
+
+    expect(screen.getByRole('button', { name: 'Clear' })).toBeTruthy()
+    // The permanent-clear arrow stays admin-only -- a user gets the
+    // plain Clear button with no split menu beside it.
+    expect(screen.queryByRole('button', { name: 'More clear options for this flag' })).toBeNull()
+  })
+})

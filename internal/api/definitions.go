@@ -398,10 +398,12 @@ func definitionOrder(views []definitionView) {
 // the same question. A caller wanting only detections filters on intent,
 // which is a client concern; the server's job is to have one answer.
 //
-// Open to any signed-in user (#490): the design record widens this GET
-// deliberately, ahead of the rest of the definitions surface which stays
-// admin-only -- see every write handler below and handleDefinitionsGet/
-// Schema, none of which move.
+// Open to any signed-in user (#490), including viewer (#653): the design
+// record widens this GET deliberately. #653 went on to widen the rest of
+// the definitions surface too -- every handler below, both reads and
+// writes, moved from admin to user tier (the owner's ruling on #653: the
+// "watchers" bench gets full access here) -- so this GET is now the one
+// definitions route open below user tier, not the first of several.
 func (s *Server) handleDefinitionsList(w http.ResponseWriter, r *http.Request) {
 	rulesByDevice, evidence := s.definitionsCoverage()
 	now := time.Now()
@@ -421,10 +423,12 @@ func (s *Server) handleDefinitionsList(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// handleDefinitionsGet serves one definition by id.
+// handleDefinitionsGet serves one definition by id. User-tier (#653),
+// same as the rest of the definitions surface -- see handleDefinitionsList's
+// doc comment.
 func (s *Server) handleDefinitionsGet(w http.ResponseWriter, r *http.Request) {
-	if !callerIsAdmin(r) {
-		http.Error(w, "admin role required", http.StatusForbidden)
+	if !callerIsUser(r) {
+		http.Error(w, "user role required", http.StatusForbidden)
 		return
 	}
 	sd, ok := s.Definitions.Get(r.PathValue("id"))
@@ -448,9 +452,12 @@ func (s *Server) handleDefinitionsGet(w http.ResponseWriter, r *http.Request) {
 // response; this endpoint exists so a caller that only wants to render
 // controls does not have to fetch every definition's current state and
 // coverage to get them.
+//
+// User-tier (#653), same as the rest of the definitions surface -- see
+// handleDefinitionsList's doc comment.
 func (s *Server) handleDefinitionsSchema(w http.ResponseWriter, r *http.Request) {
-	if !callerIsAdmin(r) {
-		http.Error(w, "admin role required", http.StatusForbidden)
+	if !callerIsUser(r) {
+		http.Error(w, "user role required", http.StatusForbidden)
 		return
 	}
 	schemas := make(map[string][]engine.ParamSchema)
@@ -539,6 +546,9 @@ const alwaysConsultedReason = "This detector's conditions give the engine nothin
 // handleDefinitionsCreate creates a custom definition with a
 // server-generated ID.
 //
+// User-tier (#653), same as the rest of the definitions surface -- see
+// handleDefinitionsList's doc comment.
+//
 // Two refusals here are the API surface of invariants recorded on #401,
 // and both are stated rather than silently coerced:
 //
@@ -567,8 +577,8 @@ const alwaysConsultedReason = "This detector's conditions give the engine nothin
 // since starting anywhere else would mean shipping traffic decisions
 // before the operator has seen any evidence.
 func (s *Server) handleDefinitionsCreate(w http.ResponseWriter, r *http.Request) {
-	if !callerIsAdmin(r) {
-		http.Error(w, "admin role required", http.StatusForbidden)
+	if !callerIsUser(r) {
+		http.Error(w, "user role required", http.StatusForbidden)
 		return
 	}
 	var req createDefinitionRequest
@@ -687,9 +697,12 @@ type updateDefinitionRequest struct {
 // registerDefinitions and engine.DefinitionsStore.SetOnChange). That is
 // #407's first handover -- detector toggles became restart-effective as
 // #405 ported each detector, and this is where next-event effect returns.
+//
+// User-tier (#653), same as the rest of the definitions surface -- see
+// handleDefinitionsList's doc comment.
 func (s *Server) handleDefinitionsUpdate(w http.ResponseWriter, r *http.Request) {
-	if !callerIsAdmin(r) {
-		http.Error(w, "admin role required", http.StatusForbidden)
+	if !callerIsUser(r) {
+		http.Error(w, "user role required", http.StatusForbidden)
 		return
 	}
 	id := r.PathValue("id")
@@ -872,9 +885,12 @@ func joinComma(parts []string) string {
 // want this," not "reconsider me later" (settled in #243's slice 5 design
 // conversation). A no-op when no candidate tracks this definition, which
 // is the common case.
+//
+// User-tier (#653), same as the rest of the definitions surface -- see
+// handleDefinitionsList's doc comment.
 func (s *Server) handleDefinitionsDelete(w http.ResponseWriter, r *http.Request) {
-	if !callerIsAdmin(r) {
-		http.Error(w, "admin role required", http.StatusForbidden)
+	if !callerIsUser(r) {
+		http.Error(w, "user role required", http.StatusForbidden)
 		return
 	}
 	id := r.PathValue("id")
@@ -917,9 +933,12 @@ type cloneRequest struct {
 // (PUT) is the operation that actually exists for those, and the refusal
 // says so rather than leaving an operator to discover the clone never
 // fires.
+//
+// User-tier (#653), same as the rest of the definitions surface -- see
+// handleDefinitionsList's doc comment.
 func (s *Server) handleDefinitionsClone(w http.ResponseWriter, r *http.Request) {
-	if !callerIsAdmin(r) {
-		http.Error(w, "admin role required", http.StatusForbidden)
+	if !callerIsUser(r) {
+		http.Error(w, "user role required", http.StatusForbidden)
 		return
 	}
 	id := r.PathValue("id")
@@ -972,9 +991,12 @@ func (s *Server) handleDefinitionsClone(w http.ResponseWriter, r *http.Request) 
 // default" are the same state, not two operations that have to be kept in
 // sync -- see engine.Definition.Distance, which reports an empty map
 // afterwards.
+//
+// User-tier (#653), same as the rest of the definitions surface -- see
+// handleDefinitionsList's doc comment.
 func (s *Server) handleDefinitionsReset(w http.ResponseWriter, r *http.Request) {
-	if !callerIsAdmin(r) {
-		http.Error(w, "admin role required", http.StatusForbidden)
+	if !callerIsUser(r) {
+		http.Error(w, "user role required", http.StatusForbidden)
 		return
 	}
 	id := r.PathValue("id")
@@ -1049,9 +1071,12 @@ type declineView struct {
 // times" and "this question cannot honestly be asked of this definition"
 // are different answers, and collapsing them is the overclaim #403's
 // contract exists to rule out.
+//
+// User-tier (#653), same as the rest of the definitions surface -- see
+// handleDefinitionsList's doc comment.
 func (s *Server) handleDefinitionsReplay(w http.ResponseWriter, r *http.Request) {
-	if !callerIsAdmin(r) {
-		http.Error(w, "admin role required", http.StatusForbidden)
+	if !callerIsUser(r) {
+		http.Error(w, "user role required", http.StatusForbidden)
 		return
 	}
 	sd, ok := s.Definitions.Get(r.PathValue("id"))
@@ -1131,11 +1156,13 @@ type promoteRequest struct {
 // allow-list -- the inverted-expectation action carried over from the
 // watchlist, re-expressed against a definition id.
 //
-// Admin-gated at the same tier as creating the definition: this changes
-// what future traffic is treated as expected for a device.
+// Gated at the same tier as creating the definition: this changes what
+// future traffic is treated as expected for a device. That tier moved
+// from admin to user in #653, same as the rest of the definitions
+// surface -- see handleDefinitionsList's doc comment.
 func (s *Server) handleDefinitionsPromote(w http.ResponseWriter, r *http.Request) {
-	if !callerIsAdmin(r) {
-		http.Error(w, "admin role required", http.StatusForbidden)
+	if !callerIsUser(r) {
+		http.Error(w, "user role required", http.StatusForbidden)
 		return
 	}
 	id := r.PathValue("id")
@@ -1169,9 +1196,12 @@ type setObservingRequest struct {
 // in observe mode -- the raw mechanism only: this package (like the
 // matching rules themselves) makes no judgement about when an operator
 // should call it, #243 open question 3.
+//
+// User-tier (#653), same as the rest of the definitions surface -- see
+// handleDefinitionsList's doc comment.
 func (s *Server) handleDefinitionsSetObserving(w http.ResponseWriter, r *http.Request) {
-	if !callerIsAdmin(r) {
-		http.Error(w, "admin role required", http.StatusForbidden)
+	if !callerIsUser(r) {
+		http.Error(w, "user role required", http.StatusForbidden)
 		return
 	}
 	id := r.PathValue("id")

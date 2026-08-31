@@ -29,7 +29,16 @@ func (s *Server) handleFlagsList(w http.ResponseWriter, r *http.Request) {
 // already-cleared ID is not an error (see flags.Store.Clear's doc
 // comment) -- it just reports which case applied, so the frontend can
 // still refresh its view either way.
+//
+// User-tier, not viewer (#653): a viewer may watch what mikroview is
+// seeing but must not be able to change what it is showing, and clearing
+// a flag -- reversible as it is -- does that. Was open to any signed-in
+// caller before viewer existed to exclude.
 func (s *Server) handleFlagsClear(w http.ResponseWriter, r *http.Request) {
+	if !callerIsUser(r) {
+		http.Error(w, "user role required", http.StatusForbidden)
+		return
+	}
 	id := r.PathValue("id")
 	cleared := s.Flags.Clear(id, time.Now())
 	writeJSON(w, http.StatusOK, map[string]any{"cleared": cleared})
@@ -51,6 +60,10 @@ type verdictRequest struct {
 // permanent exclusion, so a mistaken "real" costs nothing an admin has
 // to undo.
 //
+// User-tier, not viewer (#653), same reasoning as handleFlagsClear: a
+// judgement is a change to what mikroview is showing, even though it's a
+// reversible one, so a viewer may not make it.
+//
 // 400 for a body that doesn't parse or names anything other than the
 // three recognised verdicts (flags.Verdict.Valid()), checked before the
 // flag lookup so a malformed request never depends on the ID also being
@@ -59,6 +72,10 @@ type verdictRequest struct {
 // it (verdictBy from auditActor(r), the same actor-resolution every
 // other handler in this package uses).
 func (s *Server) handleFlagsVerdict(w http.ResponseWriter, r *http.Request) {
+	if !callerIsUser(r) {
+		http.Error(w, "user role required", http.StatusForbidden)
+		return
+	}
 	var req verdictRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "invalid request body", http.StatusBadRequest)
@@ -94,12 +111,17 @@ func (s *Server) handleFlagsVerdict(w http.ResponseWriter, r *http.Request) {
 // the registration table in server.go for the full reasoning.
 //
 // Same access tier as handleFlagsVerdict/handleFlagsClear -- undoing is
-// no more dangerous than judging in the first place. 404 for an
-// unknown id, same as the POST. 200 with the updated flag otherwise;
-// see flags.Store.UndoVerdict's doc comment for the one subtlety --
-// undoing must not re-open a flag that was already cleared before it
-// was judged.
+// no more dangerous than judging in the first place, and user-tier for
+// the same #653 reason: it changes what mikroview is showing, so a
+// viewer may not do it. 404 for an unknown id, same as the POST. 200
+// with the updated flag otherwise; see flags.Store.UndoVerdict's doc
+// comment for the one subtlety -- undoing must not re-open a flag that
+// was already cleared before it was judged.
 func (s *Server) handleFlagsVerdictUndo(w http.ResponseWriter, r *http.Request) {
+	if !callerIsUser(r) {
+		http.Error(w, "user role required", http.StatusForbidden)
+		return
+	}
 	id := r.PathValue("id")
 	f, ok := s.Flags.UndoVerdict(id)
 	if !ok {
@@ -113,9 +135,11 @@ func (s *Server) handleFlagsVerdictUndo(w http.ResponseWriter, r *http.Request) 
 // (issue #198's "Clear all", with the frontend's click-again confirm as
 // the safeguard against an accidental single click). Same access level
 // as the per-flag handleFlagsClear -- authzMatrix's own comment already
-// explains why that one is open to any authenticated user rather than
-// admin-only: a plain clear is reversible, unlike the permanent variant
-// below.
+// explains why that one is user-tier rather than admin-only: a plain
+// clear is reversible, unlike the permanent variant below. User-tier
+// rather than viewer for the same #653 reason as the per-flag handlers:
+// this is a bulk version of the same change to what mikroview is
+// showing.
 //
 // One audit entry for the whole call, not one per flag: "cleared N
 // flags" is the meaningful record here, and N individual entries would
@@ -124,6 +148,10 @@ func (s *Server) handleFlagsVerdictUndo(w http.ResponseWriter, r *http.Request) 
 // flags.Store.ClearAll's own doc comment for why a bulk permanent
 // variant does not exist and is not planned.
 func (s *Server) handleFlagsClearAll(w http.ResponseWriter, r *http.Request) {
+	if !callerIsUser(r) {
+		http.Error(w, "user role required", http.StatusForbidden)
+		return
+	}
 	n := s.Flags.ClearAll(time.Now())
 	if n > 0 {
 		s.Audit.Record(auditActor(r), "flag.clear_all", "", fmt.Sprintf("cleared %d flags", n))

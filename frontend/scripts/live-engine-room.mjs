@@ -173,8 +173,17 @@ await page.click(`${PEOPLE} .footer-action`)
 await page.waitForSelector(`${PEOPLE} .inline-form`)
 await page.fill(`${PEOPLE} .inline-form input[type="text"]`, VIEWER_USER)
 await page.fill(`${PEOPLE} .inline-form input[type="password"]`, VIEWER_PASS)
+// #653: the door creates a "can change things" account by default, so
+// the read-only tier this claim is about has to be chosen explicitly --
+// which also drives the selector itself, since without it the viewer
+// tier has no route in from the UI at all.
+await page.selectOption(`${PEOPLE} .inline-form select`, 'viewer')
 await page.click(`${PEOPLE} .inline-form .save`)
 await page.waitForSelector(`${PEOPLE} .row:has-text("${VIEWER_USER}")`)
+check(
+  await page.isVisible(`${PEOPLE} .row:has-text("${VIEWER_USER}") .chip:has-text("view only")`),
+  'the people door marks the new account as read-only',
+)
 
 const browser = await chromium.launch()
 const viewerCtx = await browser.newContext({ ignoreHTTPSErrors: true })
@@ -202,7 +211,10 @@ check(true, 'a viewer can open Settings -- the one Admin-group page that is read
 
 const chips = await viewerPage.$$eval('.page-header .chip', (els) => els.map((e) => e.textContent.trim()))
 check(
-  JSON.stringify(chips) === JSON.stringify(['READ-ONLY — ADMINS EDIT']),
+  // #653: the chip names no tier any more -- with three of them,
+  // "ADMINS EDIT" was wrong in both directions, and it only ever renders
+  // for someone who cannot edit the page anyway.
+  JSON.stringify(chips) === JSON.stringify(['READ-ONLY']),
   `read-only is declared exactly once, in the page header -- got ${JSON.stringify(chips)}`,
 )
 

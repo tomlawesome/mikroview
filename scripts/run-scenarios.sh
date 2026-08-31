@@ -25,6 +25,38 @@ for scenario in frontend/scripts/live-*.mjs; do
     *live-routeros-real.mjs) continue ;;
   esac
   echo "== $scenario"
-  ( cd frontend && node "../$scenario" ) || status=1
+  # A scenario that *throws* -- a stale selector, an import error -- dies
+  # before printing its own RESULT line. The log then showed a header,
+  # some passing checks and a stack trace, with no RESULT anywhere, so
+  # reading a run by counting RESULT: PASS against RESULT: FAIL reported
+  # a clean browser phase while a scenario was timing out in it. That is
+  # #661, and it went unnoticed across two full runs.
+  #
+  # The exit status was always right and `make live-check` always failed.
+  # What was missing was a line saying so where a reader looks for one.
+  # So: capture the output to tell "failed and said so" from "died
+  # without saying anything", while still streaming it, because a silent
+  # forty minutes is its own problem. tee is a pipeline and this is
+  # /bin/sh with no PIPESTATUS, hence the exit code going via a file.
+  log="$(mktemp)"; rc_file="$log.rc"
+  # The && / || is not style: under `set -e` a bare failing command in
+  # the brace group kills the subshell before the exit code is recorded,
+  # so the rc file is never written. A condition context suppresses that.
+  { ( cd frontend && node "../$scenario" ) 2>&1 && echo 0 > "$rc_file" \
+      || echo $? > "$rc_file"; } | tee "$log"
+  rc="$(cat "$rc_file")"
+  if [ "$rc" -ne 0 ]; then
+    status=1
+    # Only when the scenario never got as far as its own verdict. A
+    # scenario that throws -- a stale selector, an import error -- dies
+    # before printing one, so the log showed a header, some passing
+    # checks, a stack trace, and no RESULT line anywhere. Reading a run
+    # by counting RESULT: PASS against RESULT: FAIL therefore showed a
+    # clean browser phase while a scenario was timing out in it (#661,
+    # missed across two full runs that way).
+    grep -q '^RESULT: ' "$log" || \
+      echo "RESULT: FAIL ($scenario exited $rc without printing a result)"
+  fi
+  rm -f "$log" "$rc_file"
 done
 exit $status
