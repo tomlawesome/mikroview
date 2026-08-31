@@ -1128,8 +1128,14 @@
       : `${activeFlags.length} open flag${activeFlags.length === 1 ? '' : 's'}, worst first`,
   )
 
-  function activateFlagRow() {
+  // #724's second click: the row's own destination, not just the right
+  // tab. requestFlag stashes which flag this row was so Flags.svelte can
+  // open that flag's drawer on arrival (topologyNav.svelte.ts) -- the
+  // "and N more" row below deliberately never calls this, since the
+  // owner's ruling has it land with nothing selected.
+  function activateFlagRow(id: string) {
     closeDialPanel()
+    topologyNavState.requestFlag(id)
     openDocket('flags')
   }
 
@@ -1204,8 +1210,10 @@
     watcherTotal === 0 ? 'no watches' : `${watcherTotal} watcher${watcherTotal === 1 ? '' : 's'}, broken first`,
   )
 
-  function activateWatchRow() {
+  // Same handoff as activateFlagRow above, for the watchlist tab.
+  function activateWatchRow(id: string) {
     closeDialPanel()
+    topologyNavState.requestWatch(id)
     openDocket('watchlist')
   }
 
@@ -1494,7 +1502,7 @@
                   type="button"
                   class="dp-row"
                   bind:this={panelRowEls[i]}
-                  onclick={activateFlagRow}
+                  onclick={() => activateFlagRow(row.key)}
                   aria-label={row.ariaLabel}
                 >
                   <span class="dp-mark" style="color: {row.ink}" aria-hidden="true">{row.mark}</span>
@@ -1578,7 +1586,7 @@
                   type="button"
                   class="dp-row"
                   bind:this={panelRowEls[i]}
-                  onclick={activateWatchRow}
+                  onclick={() => activateWatchRow(row.key)}
                   aria-label={row.ariaLabel}
                 >
                   <span class="dp-mark dp-watch-mark" class:broken={row.broken} aria-hidden="true">{row.glyph}</span>

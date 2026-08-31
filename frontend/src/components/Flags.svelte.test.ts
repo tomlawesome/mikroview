@@ -23,6 +23,7 @@ import { clearFlag, fetchFlagEpisode } from '../lib/api'
 import { flagsState } from '../lib/flags.svelte'
 import { authState } from '../lib/auth.svelte'
 import { appState } from '../lib/state.svelte'
+import { topologyNavState } from '../lib/topologyNav.svelte'
 import type { Flag } from '../lib/types'
 
 // jsdom has no window.matchMedia -- polyfilled before the dynamic import
@@ -542,5 +543,73 @@ describe('the empty state (round 26/29)', () => {
 
     expect(screen.getByText('Nothing open.')).toBeTruthy()
     expect(screen.getByRole('button', { name: 'audit log' })).toBeTruthy()
+  })
+})
+
+// #724's second click: a dial panel row on the topography hands off which
+// flag it was through topologyNavState.pendingFlagId (topologyNav.svelte.ts)
+// rather than just switching the view -- this is the tab side that
+// consumes it.
+describe('opening a flag drawer from the topography dial (#724)', () => {
+  beforeEach(() => {
+    vi.resetAllMocks()
+    vi.mocked(fetchFlagEpisode).mockResolvedValue({
+      events: [],
+      hasMore: false,
+      windowStart: '2026-01-01T00:00:00Z',
+      serverTime: '2026-01-01T00:00:00Z',
+    })
+    authState.state = 'authenticated'
+    authState.role = 'admin'
+    flagsState.list = [testFlag({ id: 'f1', target: '198.51.100.1' }), testFlag({ id: 'f2', target: '198.51.100.2' })]
+    topologyNavState.pendingFlagId = null
+  })
+
+  it("opens that flag's drawer on arrival, through the same episode-fetch path a click on the row would use, and clears the pending selection", async () => {
+    topologyNavState.pendingFlagId = 'f2'
+    render(Flags)
+    flushSync()
+    await Promise.resolve()
+    flushSync()
+
+    const rows = document.querySelectorAll('tr.frow')
+    expect(rows[1].classList.contains('open')).toBe(true)
+    expect(rows[0].classList.contains('open')).toBe(false)
+    expect(rows[1].nextElementSibling?.classList.contains('drawer')).toBe(true)
+    expect(fetchFlagEpisode).toHaveBeenCalledWith(expect.objectContaining({ ip: '198.51.100.2' }))
+    expect(topologyNavState.pendingFlagId).toBeNull()
+  })
+
+  it('a pending id that matches nothing lands on the tab with no drawer open and no error', () => {
+    topologyNavState.pendingFlagId = 'no-such-flag'
+    render(Flags)
+    flushSync()
+
+    expect(document.querySelector('tr.drawer')).toBeNull()
+    expect(topologyNavState.pendingFlagId).toBeNull()
+  })
+
+  // The part that rots if it's missed (#724's own Care note): once the
+  // dial's row has been followed and its drawer opened, a later, ordinary
+  // visit to this tab -- not through the dial -- must not silently reopen
+  // it. Simulated here the same way the deck's own keep-alive card
+  // lifecycle would produce it: the tab's component is torn down when the
+  // docket scrolls out of view, and freshly built again on a later visit.
+  it('does not reopen a drawer on a later, unrelated visit to the tab', async () => {
+    topologyNavState.pendingFlagId = 'f1'
+    const { unmount } = render(Flags)
+    flushSync()
+    await Promise.resolve()
+    flushSync()
+    expect(document.querySelector('tr.drawer')).toBeTruthy()
+    expect(topologyNavState.pendingFlagId).toBeNull()
+
+    unmount()
+
+    // A plain, later visit to the flags tab -- nothing pending this time.
+    render(Flags)
+    flushSync()
+
+    expect(document.querySelector('tr.drawer')).toBeNull()
   })
 })
